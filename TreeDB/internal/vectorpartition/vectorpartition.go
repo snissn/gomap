@@ -567,14 +567,15 @@ func maxGraphDegree(g Graph) int {
 	return max
 }
 func partitionWorkExceeded(n, parts, degree int) bool {
-	// Account for the initial degree sort plus each node's partition scan,
-	// candidate-mark pass, and affinity scans. Scratch indexing removes hidden
-	// duplicate-search/sort work from the candidate path.
+	// Account for validateGraph and maxGraphDegree scans (two degree scans),
+	// the initial degree sort (provable O(n log2 n) comparison ceiling), and
+	// each node's partition scan, candidate-mark pass, and affinity scans.
+	// Scratch indexing removes hidden duplicate-search/sort work.
 	logN := int64(0)
 	for x := n; x > 1; x = (x + 1) / 2 {
 		logN++
 	}
-	perNode := int64(parts) + int64(degree) + int64(degree)*int64(degree+1) + logN
+	perNode := 2*int64(degree+1) + int64(parts) + int64(degree) + int64(degree)*int64(degree+1) + logN
 	return exceedsProduct(maxPartitionWork, int64(n), perNode)
 }
 func exceedsProduct(limit int64, values ...int64) bool {

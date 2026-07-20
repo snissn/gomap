@@ -279,14 +279,24 @@ func run(args []string, stdout io.Writer) (runErr error) {
 	if err := validateFixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes); err != nil {
 		return err
 	}
-	if cfg.topK > fixture.Vectors {
-		return errors.New("top-k cannot exceed fixture vectors")
-	}
 	if cfg.partitions > fixture.Vectors {
 		return errors.New("partitions cannot exceed fixture vectors")
 	}
 	if cfg.seed != fixture.Seed {
 		return fmt.Errorf("-seed %d does not match fixture seed %d", cfg.seed, fixture.Seed)
+	}
+	if cfg.stage == "partition" {
+		// The partition builder owns only the frozen vector corpus and its own
+		// graph controls. Simulation probes, overlaps, stages, top-k and memory
+		// planning are intentionally irrelevant here.
+		vectors, queries := deterministicFixture(fixture)
+		if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
+			return errors.New("fixture checksum does not match generated vector/query/truth stream")
+		}
+		return runPartitionStage(cfg, fixture, vectors, stdout)
+	}
+	if cfg.topK > fixture.Vectors {
+		return errors.New("top-k cannot exceed fixture vectors")
 	}
 	if _, err := validateBenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits); err != nil {
 		return err
@@ -301,9 +311,6 @@ func run(args []string, stdout io.Writer) (runErr error) {
 	vectors, queries := deterministicFixture(fixture)
 	if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 		return errors.New("fixture checksum does not match generated vector/query/truth stream")
-	}
-	if cfg.stage == "partition" {
-		return runPartitionStage(cfg, fixture, vectors, stdout)
 	}
 	if cfg.stages["treedb_partition_local_hnsw"] {
 		cfg.hnsw, err = newTreeDBPartitionHNSW(vectors, cfg.partitions)

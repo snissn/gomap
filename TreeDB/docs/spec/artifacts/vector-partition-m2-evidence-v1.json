@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "kind": "treedb_vector_partition_m2_reproduction_evidence",
+  "note": "Compact reviewer-accessible evidence. Generated artifacts remain host-local; commands and digests reproduce and verify them.",
+  "runs": [
+    {
+      "name": "10k",
+      "docs": 10000,
+      "queries": 16,
+      "dimensions": 64,
+      "dataset_manifest_sha256": "ea980008813897107cd1a150b96e2ef497ec4d26b815dbbc5f9b8d6ddef6ed58",
+      "source_checksum": "64bc8b935db050e2cb126f6e1bca6e4378d56464b0141128726b3445d4a34b62",
+      "artifact_sha256": "c270226154a4e7410bb4140d63abfe36bebc0d0de9cdbf7c894298225d76c935",
+      "report_sha256": "bdf23beae34a8b7cabb1551c7e6cbe8f0626f8238e2b96932fe2700ba3e2bb2e"
+    },
+    {
+      "name": "100k",
+      "docs": 100000,
+      "queries": 8,
+      "dimensions": 16,
+      "dataset_manifest_sha256": "04ab185b349d794b034550b117d9cbc20dff8131bb1c1986e63d52191240c2ec",
+      "source_checksum": "e56afe5df826acc8ab2bea01b09c3676a7ccf2cbf2743a46a0f63ce741ffd0c3",
+      "artifact_sha256": "627778e026d177320e4aace2f32883aa1656c1d36f9f5005d1d9e41f55fdc3ae",
+      "report_sha256": "caf95d82c8664f4c3f47fa0e6a9375934b66f50f5cbc339ff1f28eae82a646ac"
+    },
+    {
+      "name": "1m",
+      "docs": 1000000,
+      "queries": 1,
+      "dimensions": 16,
+      "dataset_manifest_sha256": "a7814b879e2e5d49c9038502fe7c7eb26fa5b2917af72b87d2d1321f66ab2f5b",
+      "source_checksum": "b6f7ce2ab91728cd869139672d8e902618f792e4cb10a8679bfc6612146f7f42",
+      "artifact_sha256": "f76fba39db8a51fb11b669962b92a97d64956f75a76137cea0e80cbe42d42413",
+      "report_sha256": "87b425892a5e62befcee67951451ee9f1980abceba7d3eabc1537d14fc11f794"
+    }
+  ]
+}

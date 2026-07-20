@@ -85,6 +85,8 @@ The exact handoff artifacts (artifact then compact report) were:
 These paths are host-local handoff locations, while the manifest/source digest,
 exact commands, and compact report fields make the run reproducible without
 committing a 45 MB generated artifact.
+The durable reviewer-accessible digest ledger is
+`TreeDB/docs/spec/artifacts/vector-partition-m2-evidence-v1.json`.
 
 The 1M artifact was
 `/tmp/treedb_m2_final1m6_IqbC/vector_partition_f76fba39db8a51fb.json`
@@ -93,6 +95,8 @@ the matching report sits beside it. Its deterministic source corpus is
 `/tmp/treedb_m2_export1m_rHdo`, generated with:
 
 ```sh
+DATASET=$(mktemp -d /tmp/treedb_m2_dataset1m_XXXXXX)
+OUT=$(mktemp -d /tmp/treedb_m2_out1m_XXXXXX)
 GOWORK=off go run ./cmd/treedb_vector_dataset_export \
   -out "$DATASET" -docs 1000000 -queries 1 -dims 16 -truth-queries 0
 GOWORK=off go run ./cmd/treedb_vector_partition_build \
@@ -103,11 +107,15 @@ GOWORK=off go run ./cmd/treedb_vector_partition_build \
 The other exact runs were:
 
 ```sh
+DATASET_10K=$(mktemp -d /tmp/treedb_m2_dataset10k_XXXXXX)
+OUT_10K=$(mktemp -d /tmp/treedb_m2_out10k_XXXXXX)
 GOWORK=off go run ./cmd/treedb_vector_dataset_export \
   -out "$DATASET_10K" -docs 10000 -queries 16 -dims 64 -truth-queries 0
 GOWORK=off go run ./cmd/treedb_vector_partition_build \
   -dataset "$DATASET_10K" -out "$OUT_10K" -partitions 16 -probes 2 -seed 1 \
   -repetitions 4 -degree 16 -max-leaf-bucket 128
+DATASET_100K=$(mktemp -d /tmp/treedb_m2_dataset100k_XXXXXX)
+OUT_100K=$(mktemp -d /tmp/treedb_m2_out100k_XXXXXX)
 GOWORK=off go run ./cmd/treedb_vector_dataset_export \
   -out "$DATASET_100K" -docs 100000 -queries 8 -dims 16 -truth-queries 0
 GOWORK=off go run ./cmd/treedb_vector_partition_build \

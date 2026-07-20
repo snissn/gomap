@@ -156,8 +156,19 @@ func TestCheckedIn10kFixtureGraphCutBeatsStableHash(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatal(err)
 	}
-	if report.Dataset.Checksum == "" || report.Metrics.EdgeCut >= report.Metrics.StableIDHashEdgeCut {
-		t.Fatalf("checked-in 10k graph cut=%d hash=%d checksum=%s", report.Metrics.EdgeCut, report.Metrics.StableIDHashEdgeCut, report.Dataset.Checksum)
+	if report.Dataset.Checksum != "2413ef7c2f65a4b5ce8ecc3846f473fd85d337a87511538f962af7cdf6aec291" || report.Source.Checksum != "6515025f540b955d453de99cf13f1efc002fd91135b2745b722c19e8d736e386" || report.ArtifactSHA256 != "32a5b5cf2dc13f800040661c88d5602322478276e197433a95eaa1fe1effad98" || report.Metrics.EdgeCut != 5184 || report.Metrics.StableIDHashEdgeCut != 149877 {
+		t.Fatalf("frozen 10k regression changed: report=%+v", report)
+	}
+}
+func TestPartitionStageSkipsSimulationOnlyValidation(t *testing.T) {
+	args := []string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-probes", "16", "-overlap", "1", "-top-k", "10001", "-stages", "treedb_partition_local_hnsw", "-stage", "partition", "-partition-repetitions", "1", "-partition-pivots", "2", "-partition-max-leaf-bucket", "64", "-partition-degree", "4"}
+	var stdout bytes.Buffer
+	if err := runWithHermeticProvenance(t, args, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	var report partitionRun
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil || report.ArtifactPath == "" {
+		t.Fatalf("partition artifact missing: report=%+v err=%v", report, err)
 	}
 }
 
