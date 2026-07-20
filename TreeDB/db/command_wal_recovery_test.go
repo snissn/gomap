@@ -415,6 +415,66 @@ func TestCommandWALRawSetReplayRePointersWhenThresholdDrops(t *testing.T) {
 	}
 }
 
+func TestCommandWALReplayAllocatesAbovePendingMaterializedRIDs(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	bootstrap := openCommandWALDB(t, dir)
+	if err := bootstrap.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+
+	legacyValue := strings.Repeat("legacy-externalized-", 8)
+	writeCommandWALRawKVFrame(t, dir, 1, 1, []commitlog.RawKVOperation{{
+		Op: commitlog.RawKVOpSet, Key: []byte("legacy"), Value: []byte(legacyValue),
+	}})
+	writeCommandWALRawKVFrameWithFormat(t, dir, 2, 2, commitlog.PayloadFormatRawKVBatchV2, []commitlog.RawKVOperation{{
+		Op: commitlog.RawKVOpSetMaterializedRID, Key: []byte("materialized"), RID: 1, Value: []byte("exact-rid-one"),
+	}})
+
+	recovered, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open mixed V1/V2 recovery: %v", err)
+	}
+	assertDBValue(t, recovered, "legacy", legacyValue)
+	assertDBValue(t, recovered, "materialized", "exact-rid-one")
+	if err := recovered.Close(); err != nil {
+		t.Fatalf("Close mixed V1/V2 recovery: %v", err)
+	}
+
+	reopened, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Reopen mixed V1/V2 recovery: %v", err)
+	}
+	defer reopened.Close()
+	assertDBValue(t, reopened, "legacy", legacyValue)
+	assertDBValue(t, reopened, "materialized", "exact-rid-one")
+
+	segments, err := listSegmentsInDir(ValueLogDirPath(dir))
+	if err != nil {
+		t.Fatalf("list value-log segments: %v", err)
+	}
+	ridMap, err := scanValueLogSegments(segments, nil)
+	if err != nil {
+		t.Fatalf("scan value-log segments: %v", err)
+	}
+	if len(ridMap) != 2 {
+		t.Fatalf("recovered RID count=%d, want exact RID plus replay allocation", len(ridMap))
+	}
+	if _, ok := ridMap[1]; !ok {
+		t.Fatalf("pending materialized RID 1 missing after replay: %+v", ridMap)
+	}
+}
+
 func TestCommandWALRawSetNeedsReplayValueLogMatchesBatchSet(t *testing.T) {
 	db, err := Open(Options{
 		Dir: t.TempDir(),
