@@ -4,7 +4,11 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -211,7 +215,7 @@ func TestRaftSnapshotV1InstallPreservesVectorPartitionManifestNamespace(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest := raftSnapshotVectorPartitionManifestForTest()
+	manifest := raftSnapshotVectorPartitionManifestForTest(t, sourceDB)
 	if err := store.Publish(manifest); err != nil {
 		t.Fatal(err)
 	}
@@ -236,6 +240,20 @@ func TestRaftSnapshotV1InstallPreservesVectorPartitionManifestNamespace(t *testi
 	}
 	if got.Generation != manifest.Generation || got.ReadySetDigest != manifest.ReadySetDigest {
 		t.Fatalf("restored vector partition manifest=%+v, want generation=%d digest=%s", got, manifest.Generation, manifest.ReadySetDigest)
+	}
+	for _, asset := range append(append([]collections.VectorPartitionAssetV1(nil), manifest.Assets...), manifest.RouterAsset) {
+		path := filepath.Join(targetDB.ColumnAssetRootDir(), asset.Ref.Namespace, "assets", "segments", fmt.Sprintf("segment-%06d.tca", asset.Ref.FileID))
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("restored partition asset %q: %v", asset.ID, err)
+		}
+		if crc32.ChecksumIEEE(raw) != asset.Ref.Checksum {
+			t.Fatalf("restored partition asset %q checksum mismatch", asset.ID)
+		}
+		sum := sha256.Sum256(raw)
+		if hex.EncodeToString(sum[:]) != asset.Checksum {
+			t.Fatalf("restored partition asset %q digest mismatch", asset.ID)
+		}
 	}
 }
 
@@ -269,10 +287,23 @@ func TestRaftSnapshotV1ExportWaitsForVectorPartitionStorageBarrier(t *testing.T)
 	}
 }
 
-func raftSnapshotVectorPartitionManifestForTest() collections.VectorPartitionManifestV1 {
-	ref := func(partID uint64, fileID uint32, length int64) collections.ColumnAssetRef {
-		return collections.ColumnAssetRef{Kind: collections.ColumnAssetKindTCS1PartImage, Namespace: "snapshot-test", Generation: 4, PartID: partID, FileID: fileID, Length: length}
+func raftSnapshotVectorPartitionManifestForTest(t *testing.T, database *backenddb.DB) collections.VectorPartitionManifestV1 {
+	t.Helper()
+	asset := func(partID uint64, fileID uint32, raw []byte) collections.VectorPartitionAssetV1 {
+		path := filepath.Join(database.ColumnAssetRootDir(), "snapshot-test", "assets", "segments", fmt.Sprintf("segment-%06d.tca", fileID))
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(raw)
+		return collections.VectorPartitionAssetV1{ID: fmt.Sprintf("asset/%d", fileID), Checksum: hex.EncodeToString(sum[:]), Bytes: uint64(len(raw)), Ref: collections.ColumnAssetRef{Kind: collections.ColumnAssetKindTCS1PartImage, Namespace: "snapshot-test", Generation: 4, PartID: partID, FileID: fileID, Length: int64(len(raw)), Checksum: crc32.ChecksumIEEE(raw)}}
 	}
+	partition := asset(1, 1, []byte("partition-data"))
+	partition.ID = "partition/0"
+	router := asset(2, 2, []byte("router-payload"))
+	router.ID = "router"
 	manifest := collections.VectorPartitionManifestV1{
 		State:                 "ready",
 		Collection:            "docs",
@@ -288,8 +319,8 @@ func raftSnapshotVectorPartitionManifestForTest() collections.VectorPartitionMan
 		BalancePolicy:         "disjoint_v1",
 		Placements:            []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}},
 		Memberships:           []collections.VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}},
-		Assets:                []collections.VectorPartitionAssetV1{{ID: "partition/0", Checksum: strings.Repeat("b", 64), Bytes: 12, Ref: ref(1, 1, 12)}},
-		RouterAsset:           collections.VectorPartitionAssetV1{ID: "router", Checksum: strings.Repeat("c", 64), Bytes: 14, Ref: ref(2, 2, 14)},
+		Assets:                []collections.VectorPartitionAssetV1{partition},
+		RouterAsset:           router,
 	}
 	manifest.Canonicalize()
 	return manifest
