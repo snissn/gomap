@@ -1015,9 +1015,9 @@ func RunExternalJSONForSource(ctx context.Context, command []string, input []byt
 	return Artifact{}, errors.New("external backend requires requested artifact binding")
 }
 
-// RunExternalJSONForSourceWithLimits runs an optional backend with separately
-// bounded request and response files. It is for callers that need a smaller
-// request cap than the M2-derived default without weakening the output cap.
+// RunExternalJSONForSourceWithLimits fails closed without running a backend:
+// source-only binding cannot prove an output used the requested graph. Use
+// RunExternalJSONForRequestWithLimits with the exact requested artifact.
 func RunExternalJSONForSourceWithLimits(ctx context.Context, command []string, input []byte, limits ExternalJSONLimits, expected Source) (Artifact, error) {
 	if err := validateExpectedSource(expected); err != nil {
 		return Artifact{}, err

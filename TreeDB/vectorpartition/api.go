@@ -47,6 +47,9 @@ func RunExternalJSON(ctx context.Context, command []string, input []byte, maxOut
 func RunExternalJSONForSource(ctx context.Context, command []string, input []byte, maxOutput int, source Source) (Artifact, error) {
 	return internal.RunExternalJSONForSource(ctx, command, input, maxOutput, source)
 }
+
+// RunExternalJSONForSourceWithLimits fails closed without running a backend.
+// Use RunExternalJSONForRequestWithLimits for a fully bound request.
 func RunExternalJSONForSourceWithLimits(ctx context.Context, command []string, input []byte, limits ExternalJSONLimits, source Source) (Artifact, error) {
 	return internal.RunExternalJSONForSourceWithLimits(ctx, command, input, limits, source)
 }

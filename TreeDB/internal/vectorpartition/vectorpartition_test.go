@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -484,12 +485,18 @@ func TestGraphPartitionBeatsStableIDHashOnDeterministic10kClusters(t *testing.T)
 
 func TestExternalBackendCancellationCleansPrivateTemp(t *testing.T) {
 	root := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "started")
 	t.Setenv("TMPDIR", root)
+	t.Setenv("TREE_DB_START_MARKER", marker)
+	request, input := externalBackendRequest(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	cancel()
-	_, err := RunExternalJSONForSource(ctx, []string{"sh", "-c", "sleep 1"}, []byte("{}"), 1024, Source{SourceID: "expected", Checksum: strings.Repeat("0", 64), Vectors: 1, Dimensions: 1, Metric: "cosine"})
+	_, err := RunExternalJSONForRequestWithLimits(ctx, []string{"sh", "-c", ": > \"$TREE_DB_START_MARKER\"; sleep 1"}, input, ExternalJSONLimits{MaxInput: len(input), MaxOutput: 1024}, request)
 	if err == nil {
 		t.Fatal("cancelled backend accepted")
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cancelled context started backend: %v", err)
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -503,12 +510,18 @@ func TestExternalBackendCancellationCleansPrivateTemp(t *testing.T) {
 }
 func TestExternalBackendStartedCancellationCleansPrivateTemp(t *testing.T) {
 	root := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "started")
 	t.Setenv("TMPDIR", root)
+	t.Setenv("TREE_DB_START_MARKER", marker)
+	request, input := externalBackendRequest(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	_, err := RunExternalJSONForSource(ctx, []string{"sh", "-c", "printf '{' > \"$1\"; sleep 1"}, []byte("{}"), 1024, Source{SourceID: "expected", Checksum: strings.Repeat("0", 64), Vectors: 1, Dimensions: 1, Metric: "cosine"})
+	_, err := RunExternalJSONForRequestWithLimits(ctx, []string{"sh", "-c", ": > \"$TREE_DB_START_MARKER\"; printf '{' > \"$1\"; sleep 1"}, input, ExternalJSONLimits{MaxInput: len(input), MaxOutput: 1024}, request)
 	if err == nil {
 		t.Fatal("started backend cancellation accepted")
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("cancellation test backend did not start: %v", err)
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -520,13 +533,19 @@ func TestExternalBackendStartedCancellationCleansPrivateTemp(t *testing.T) {
 }
 func TestExternalBackendDeadlineKillsPipeHoldingDescendant(t *testing.T) {
 	root := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "started")
 	t.Setenv("TMPDIR", root)
+	t.Setenv("TREE_DB_START_MARKER", marker)
+	request, input := externalBackendRequest(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	_, err := RunExternalJSONForSource(ctx, []string{"sh", "-c", "printf '{' > \"$1\"; (sleep 5) & wait"}, []byte("{}"), 1024, Source{SourceID: "expected", Checksum: strings.Repeat("0", 64), Vectors: 1, Dimensions: 1, Metric: "cosine"})
+	_, err := RunExternalJSONForRequestWithLimits(ctx, []string{"sh", "-c", ": > \"$TREE_DB_START_MARKER\"; printf '{' > \"$1\"; (sleep 5) & wait"}, input, ExternalJSONLimits{MaxInput: len(input), MaxOutput: 1024}, request)
 	if err == nil {
 		t.Fatal("pipe-holding descendant accepted")
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("deadline test backend did not start: %v", err)
 	}
 	if elapsed := time.Since(started); elapsed > 750*time.Millisecond {
 		t.Fatalf("deadline return too slow: %s", elapsed)
@@ -541,16 +560,22 @@ func TestExternalBackendDeadlineKillsPipeHoldingDescendant(t *testing.T) {
 }
 func TestExternalBackendRootExitStillCleansPipeHoldingDescendant(t *testing.T) {
 	root := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "started")
 	t.Setenv("TMPDIR", root)
+	t.Setenv("TREE_DB_START_MARKER", marker)
 	// The shell exits successfully immediately, leaving sleep with the command's
 	// inherited stderr pipe. CommandContext does not invoke Cancel in this case;
 	// post-Wait process-group cleanup must do so.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
+	request, input := externalBackendRequest(t)
 	started := time.Now()
-	_, err := RunExternalJSONForSource(ctx, []string{"sh", "-c", "printf '{' > \"$1\"; (sleep 5) & exit 0"}, []byte("{}"), 1024, Source{SourceID: "expected", Checksum: strings.Repeat("0", 64), Vectors: 1, Dimensions: 1, Metric: "cosine"})
+	_, err := RunExternalJSONForRequestWithLimits(ctx, []string{"sh", "-c", ": > \"$TREE_DB_START_MARKER\"; printf '{' > \"$1\"; (sleep 5) & exit 0"}, input, ExternalJSONLimits{MaxInput: len(input), MaxOutput: 1024}, request)
 	if err == nil {
 		t.Fatal("root-exited pipe-holding descendant accepted")
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("root-exit test backend did not start: %v", err)
 	}
 	if elapsed := time.Since(started); elapsed > 750*time.Millisecond {
 		t.Fatalf("root-exited descendant return too slow: %s", elapsed)
@@ -564,9 +589,28 @@ func TestExternalBackendRootExitStillCleansPipeHoldingDescendant(t *testing.T) {
 	}
 }
 func TestExternalBackendRequiresDeadline(t *testing.T) {
-	if _, err := RunExternalJSON(context.Background(), []string{"true"}, []byte("{}"), 1024); err == nil {
+	marker := filepath.Join(t.TempDir(), "started")
+	t.Setenv("TREE_DB_START_MARKER", marker)
+	request, input := externalBackendRequest(t)
+	if _, err := RunExternalJSONForRequestWithLimits(context.Background(), []string{"sh", "-c", ": > \"$TREE_DB_START_MARKER\""}, input, ExternalJSONLimits{MaxInput: len(input), MaxOutput: 1024}, request); err == nil || !strings.Contains(err.Error(), "requires context deadline") {
 		t.Fatal("deadline-less backend accepted")
 	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deadline-less request started backend: %v", err)
+	}
+}
+
+func externalBackendRequest(t *testing.T) (Artifact, []byte) {
+	t.Helper()
+	request, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := CanonicalJSON(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return request, input
 }
 
 func TestExternalBackendSeparatesInputAndOutputCaps(t *testing.T) {
@@ -673,6 +717,15 @@ func TestExternalBackendRejectsUnboundExpectedSourceBeforeExecution(t *testing.T
 		if _, err := RunExternalJSONForSource(ctx, []string{"definitely-not-an-executable"}, []byte("{}"), 1024, source); err == nil || !strings.Contains(err.Error(), "invalid expected source binding") {
 			t.Fatalf("unbound expected source reached backend: source=%+v err=%v", source, err)
 		}
+	}
+	request, input := externalBackendRequest(t)
+	marker := filepath.Join(t.TempDir(), "started")
+	t.Setenv("TREE_DB_START_MARKER", marker)
+	if _, err := RunExternalJSONForSourceWithLimits(ctx, []string{"sh", "-c", ": > \"$TREE_DB_START_MARKER\""}, input, ExternalJSONLimits{MaxInput: len(input), MaxOutput: 1024}, request.Source); err == nil || !strings.Contains(err.Error(), "requires requested artifact binding") {
+		t.Fatalf("source-only backend did not fail closed: %v", err)
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("source-only adapter started backend: %v", err)
 	}
 }
 
