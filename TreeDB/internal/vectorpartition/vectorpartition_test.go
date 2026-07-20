@@ -416,13 +416,13 @@ func TestPartitionWorkCountsAllPassesAtEmptyGraphBoundary(t *testing.T) {
 	// guards against silently accepting an allocation shape above the declared
 	// work cap merely because it has degree zero.
 	const n = 1_000_000
-	if work, overflow := partitionWorkUnits(n, 238, 0); overflow || work != 249_000_717 || work > maxPartitionWork {
+	if work, overflow := partitionWorkUnits(n, 237, 0); overflow || work != 249_000_716 || work > maxPartitionWork {
 		t.Fatalf("accepted boundary miscounted: work=%d overflow=%v", work, overflow)
 	}
-	if work, overflow := partitionWorkUnits(n, 239, 0); overflow || work != 250_000_720 || work <= maxPartitionWork {
+	if work, overflow := partitionWorkUnits(n, 238, 0); overflow || work != 250_000_719 || work <= maxPartitionWork {
 		t.Fatalf("rejected boundary miscounted: work=%d overflow=%v", work, overflow)
 	}
-	if !partitionWorkExceeded(n, 239, 0) {
+	if !partitionWorkExceeded(n, 238, 0) {
 		t.Fatal("empty-graph work above cap accepted")
 	}
 }

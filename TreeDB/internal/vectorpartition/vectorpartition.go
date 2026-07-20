@@ -494,8 +494,17 @@ func (ReferencePartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
 	}
 	// Degree is bounded, so bucket ordering is a deterministic O(n+degree)
 	// replacement for comparison sorting: each ordinal enters exactly one bucket
-	// and ascending insertion order supplies the ordinal tie-break.
+	// and ascending insertion order supplies the ordinal tie-break. Count first
+	// so every bucket has exact backing capacity: this avoids Go slice-growth
+	// copies and makes the pre-allocation work contract structural.
+	degreeCounts := make([]int, degree+1)
+	for _, ns := range g.Neighbors {
+		degreeCounts[len(ns)]++
+	}
 	buckets := make([][]int, degree+1)
+	for d, count := range degreeCounts {
+		buckets[d] = make([]int, 0, count)
+	}
 	for node, ns := range g.Neighbors {
 		buckets[len(ns)] = append(buckets[len(ns)], node)
 	}
@@ -573,21 +582,20 @@ func partitionWorkUnits(n, parts, degree int) (int64, bool) {
 		return 0, true
 	}
 	// Deliberately overcount every loop/allocation family. Per-node work charges
-	// validation (degree+1); bucket append plus amortized backing growth (2);
-	// order backing zeroing plus append (2); output backing zeroing plus -1
-	// initialization (2); candidate reset (1); assignment/load update (1); the
-	// partition scan; candidate construction including the least-loaded choice
-	// (degree+1); its outer scoring iteration (degree+1); and affinity rescans.
-	// Global setup covers zeroing loads and marks, the reserve pass, and
-	// initialization/iteration/allocation for degree buckets and candidate
-	// backing. An accepted shape therefore stays below this conservative declared
-	// cap even if a future implementation detail adds constant work.
-	perNode := int64(degree+1) + 8 + int64(parts) + 2*int64(degree+1) + int64(degree)*int64(degree+1)
+	// validation (degree+1); the degree-frequency pass (1); exact bucket backing
+	// zeroing and fill (2); order backing zeroing plus append (2); output backing
+	// zeroing plus -1 initialization (2); candidate reset (1); assignment/load
+	// update (1); the partition scan; candidate construction including the
+	// least-loaded choice (degree+1); its outer scoring iteration (degree+1);
+	// and affinity rescans. Global setup covers loads/marks zeroing, reserve,
+	// and degree-count/bucket/order/candidate slice initialization or iteration.
+	// Exact bucket capacities eliminate runtime-dependent slice-growth copies.
+	perNode := int64(degree+1) + 9 + int64(parts) + 2*int64(degree+1) + int64(degree)*int64(degree+1)
 	if int64(n) != 0 && perNode > math.MaxInt64/int64(n) {
 		return 0, true
 	}
 	work := int64(n) * perNode
-	global := 3*int64(parts) + 3*int64(degree+1)
+	global := 3*int64(parts) + 5*int64(degree+1)
 	if global < 0 || work > math.MaxInt64-global {
 		return 0, true
 	}
