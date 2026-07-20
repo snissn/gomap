@@ -58,6 +58,7 @@ func TestPowerLossCertificationStaleBuildBasePublicReopen(t *testing.T) {
 	requireStaleBuildSelector(t)
 	metaSyncs := 0
 	frozen := false
+	checkpointArmed := false
 	var observeMu sync.Mutex
 	restoreCut := durabilitycut.Install(func(event durabilitycut.Event) error {
 		observeMu.Lock()
@@ -68,7 +69,7 @@ func TestPowerLossCertificationStaleBuildBasePublicReopen(t *testing.T) {
 		if err := model.Observe(dir, event); err != nil {
 			return err
 		}
-		if event.Point == durabilitycut.AfterMetaSync {
+		if checkpointArmed && event.Point == durabilitycut.AfterMetaSync {
 			metaSyncs++
 			frozen = true
 		}
@@ -148,6 +149,9 @@ func TestPowerLossCertificationStaleBuildBasePublicReopen(t *testing.T) {
 		restoreCut()
 		t.Fatalf("successor retry: %v", err)
 	}
+	observeMu.Lock()
+	checkpointArmed = true
+	observeMu.Unlock()
 	if err := backend.Checkpoint(); err != nil {
 		restoreCut()
 		t.Fatalf("checkpoint predecessor and retry: %v", err)
