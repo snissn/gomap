@@ -981,13 +981,6 @@ func BenchmarkVectorPartitionStoreV1WarmOpen(b *testing.B) {
 			}
 		}
 	})
-	b.Run("active", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			if _, err := s.OpenActive(m.Collection, m.IndexName); err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
 }
 
 // BenchmarkVectorPartitionStatusV1Warm measures the public status path after a
