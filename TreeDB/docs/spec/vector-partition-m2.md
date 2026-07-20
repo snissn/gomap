@@ -27,7 +27,11 @@ only; the unbound `RunExternalJSON` deliberately errors. It receives
 an explicit command, private input/output paths, context cancellation, a
 fully bound expected source snapshot, and an output-byte cap. It removes the
 entire private temporary directory on command failure, cancellation, timeout,
-malformed output, or success. No external partitioner is currently selected or
+malformed output, or success. On Unix it also kills the dedicated process group
+after `Wait`, including when the root exits normally while a same-group child
+holds an inherited pipe. A child that deliberately calls `setsid` escapes that
+OS process-group boundary; the portable Go adapter cannot claim containment of
+such hostile descendants. No external partitioner is currently selected or
 required.
 
 ## Reproducible M0 fixture invocation
@@ -70,38 +74,43 @@ host. They are offline quality/resource evidence, not a server speed claim:
 
 | corpus and builder configuration | wall | peak RSS | artifact bytes/vector | graph recall sample | partition recall@10 / hash | cap/balance |
 |---|---:|---:|---:|---:|---:|---:|
-| 10k x 64, r4/d16/leaf128, 16 parts, 2 probes | build 4.271s / total 4.485s, build/total CPU 4.104/4.296s | 34.2 MB | 95.59 | 0.809 (64 samples) | 0.863 / 0.413 | 1.0512 |
-| 100k x 16, r2/d8/leaf64, 16 parts, 4 probes | build 4.517s / total 5.065s, build/total CPU 4.569/5.133s | 105.1 MB | 64.62 | 0.759 (64 samples) | 1.000 / 0.588 | 1.00608 |
-| 1M x 16, r1/d4/leaf32, 16 parts, 4 probes | build 21.766s / total 25.325s, build/total CPU 22.228/25.862s | 1.123 GB | 44.67 | 0.394 (64 samples) | 1.000 / 0.700 | 1.000000 |
+| 10k x 64, r4/d16/leaf128, 16 parts, 2 probes | build 3.794s / total 3.921s, build/total CPU 3.796/3.928s | 34.6 MB | 95.59 | 0.809 (64 samples) | 0.863 / 0.413 | 1.0512 |
+| 100k x 16, r2/d8/leaf64, 16 parts, 4 probes | build 4.427s / total 4.970s, build/total CPU 4.473/5.029s | 102.5 MB | 64.62 | 0.759 (64 samples) | 1.000 / 0.588 | 1.00608 |
+| 1M x 16, r1/d4/leaf32, 16 parts, 4 probes | build 22.401s / total 27.450s, build/total CPU 22.567/27.283s | 1.220 GB | 44.67 | 0.394 (64 samples) | 1.000 / 0.700 | 1.000000 |
 
 The exact handoff artifacts (artifact then compact report) were:
 
 | corpus | artifact path and SHA-256 | report path |
 |---|---|---|
-| 10k | `/tmp/treedb_m2_final10k4_q8zh/vector_partition_c270226154a4e741.json` `c270226154a4e7410bb4140d63abfe36bebc0d0de9cdbf7c894298225d76c935` | `/tmp/treedb_m2_final10k4_q8zh/vector_partition_report_c270226154a4e741.json` |
-| 100k | `/tmp/treedb_m2_final100k4_FPsO/vector_partition_627778e026d17732.json` `627778e026d177320e4aace2f32883aa1656c1d36f9f5005d1d9e41f55fdc3ae` | `/tmp/treedb_m2_final100k4_FPsO/vector_partition_report_627778e026d17732.json` |
-| 1M | `/tmp/treedb_m2_final1m6_IqbC/vector_partition_f76fba39db8a51fb.json` `f76fba39db8a51fb11b669962b92a97d64956f75a76137cea0e80cbe42d42413` | `/tmp/treedb_m2_final1m6_IqbC/vector_partition_report_f76fba39db8a51fb.json` |
+| 10k | `/tmp/treedb_m2_out10k_final2_a9i1NQ/vector_partition_c270226154a4e741.json` `c270226154a4e7410bb4140d63abfe36bebc0d0de9cdbf7c894298225d76c935` | `/tmp/treedb_m2_out10k_final2_a9i1NQ/vector_partition_report_c270226154a4e741.json` |
+| 100k | `/tmp/treedb_m2_out100k_final2_QEWiPc/vector_partition_627778e026d17732.json` `627778e026d177320e4aace2f32883aa1656c1d36f9f5005d1d9e41f55fdc3ae` | `/tmp/treedb_m2_out100k_final2_QEWiPc/vector_partition_report_627778e026d17732.json` |
+| 1M | `/tmp/treedb_m2_out1m_final2_nJ3Cq0/vector_partition_f76fba39db8a51fb.json` `f76fba39db8a51fb11b669962b92a97d64956f75a76137cea0e80cbe42d42413` | `/tmp/treedb_m2_out1m_final2_nJ3Cq0/vector_partition_report_f76fba39db8a51fb.json` |
 
-These paths are host-local handoff locations, while the manifest/source digest,
+These paths are host-local handoff locations, while the canonical manifest/source digest,
 exact commands, and compact report fields make the run reproducible without
 committing a 45 MB generated artifact.
 The durable reviewer-accessible digest ledger is
 `TreeDB/docs/spec/artifacts/vector-partition-m2-evidence-v1.json`.
+Its `canonical_manifest_digest` is the SHA-256 of `json.Marshal` on the
+decoded typed exporter manifest (including its canonically ordered file map),
+which is the logical manifest binding used in `source_id`; it is explicitly
+not the raw `manifest.json` file-byte hash. The manifest itself lists the raw
+SHA-256 and byte count for every exported corpus file.
 
 The 1M artifact was
-`/tmp/treedb_m2_final1m6_IqbC/vector_partition_f76fba39db8a51fb.json`
+`/tmp/treedb_m2_out1m_final2_nJ3Cq0/vector_partition_f76fba39db8a51fb.json`
 (SHA-256 `f76fba39db8a51fb11b669962b92a97d64956f75a76137cea0e80cbe42d42413`);
 the matching report sits beside it. Its deterministic source corpus is
-`/tmp/treedb_m2_export1m_rHdo`, generated with:
+`/tmp/treedb_m2_dataset1m_final2_1gEVgP`, generated with:
 
 ```sh
 DATASET=$(mktemp -d /tmp/treedb_m2_dataset1m_XXXXXX)
 OUT=$(mktemp -d /tmp/treedb_m2_out1m_XXXXXX)
 GOWORK=off go run ./cmd/treedb_vector_dataset_export \
-  -out "$DATASET" -docs 1000000 -queries 1 -dims 16 -truth-queries 0
+  -out "$DATASET" -docs 1000000 -queries 1 -dims 16 -top-k 10 -truth-queries 0 -json=false
 GOWORK=off go run ./cmd/treedb_vector_partition_build \
   -dataset "$DATASET" -out "$OUT" -partitions 16 -probes 4 -seed 1 \
-  -repetitions 1 -degree 4 -max-leaf-bucket 32
+  -repetitions 1 -pivots 8 -degree 4 -max-leaf-bucket 32 -imbalance 0.05
 ```
 
 The other exact runs were:
@@ -110,17 +119,17 @@ The other exact runs were:
 DATASET_10K=$(mktemp -d /tmp/treedb_m2_dataset10k_XXXXXX)
 OUT_10K=$(mktemp -d /tmp/treedb_m2_out10k_XXXXXX)
 GOWORK=off go run ./cmd/treedb_vector_dataset_export \
-  -out "$DATASET_10K" -docs 10000 -queries 16 -dims 64 -truth-queries 0
+  -out "$DATASET_10K" -docs 10000 -queries 16 -dims 64 -top-k 10 -truth-queries 0 -json=false
 GOWORK=off go run ./cmd/treedb_vector_partition_build \
   -dataset "$DATASET_10K" -out "$OUT_10K" -partitions 16 -probes 2 -seed 1 \
-  -repetitions 4 -degree 16 -max-leaf-bucket 128
+  -repetitions 4 -pivots 8 -degree 16 -max-leaf-bucket 128 -imbalance 0.05
 DATASET_100K=$(mktemp -d /tmp/treedb_m2_dataset100k_XXXXXX)
 OUT_100K=$(mktemp -d /tmp/treedb_m2_out100k_XXXXXX)
 GOWORK=off go run ./cmd/treedb_vector_dataset_export \
-  -out "$DATASET_100K" -docs 100000 -queries 8 -dims 16 -truth-queries 0
+  -out "$DATASET_100K" -docs 100000 -queries 8 -dims 16 -top-k 10 -truth-queries 0 -json=false
 GOWORK=off go run ./cmd/treedb_vector_partition_build \
   -dataset "$DATASET_100K" -out "$OUT_100K" -partitions 16 -probes 4 -seed 1 \
-  -repetitions 2 -degree 8 -max-leaf-bucket 64
+  -repetitions 2 -pivots 8 -degree 8 -max-leaf-bucket 64 -imbalance 0.05
 ```
 
 The reported recall is a true M2 partition oracle: global exact top-10 first
@@ -138,9 +147,9 @@ quality row is therefore scoped to that declared one-query fixed-budget corpus,
 not a population-level claim. The 10k and 100k rows use 16 and 8 deterministic
 query vectors respectively. `FinalBytes` is artifact plus compact provenance
 report bytes; reports no longer embed or print a duplicate artifact payload.
-The final 1M report records load 0.338s, graph build 19.185s, backend
-partition 0.271s, validation 0.812s, quality 1.113s, temporary disk 0 bytes,
-artifact 44,672,391 bytes, report 2,545 bytes, and final output 44,674,936
+The final 1M report records load 0.427s, graph build 19.371s, backend
+partition 0.104s, validation 1.428s, quality 1.096s, temporary disk 0 bytes,
+artifact 44,672,391 bytes, report 2,552 bytes, and final output 44,674,943
 bytes.
 
 Peak RSS is `/proc/self/status` `VmHWM` for the builder process. It includes
