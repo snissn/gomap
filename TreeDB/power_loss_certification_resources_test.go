@@ -119,6 +119,8 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 		}
 		return nil
 	})
+	restoreObserver := sync.OnceFunc(restore)
+	defer restoreObserver()
 
 	// Capture precedes every collection, dictionary, column, and vector write so
 	// the model must earn those bytes and names through observed production
@@ -134,11 +136,11 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 	boundaryKey := []byte("certification/authoritative-resource-boundary")
 	boundaryValue := []byte("stable")
 	if err := database.SetSync(boundaryKey, boundaryValue); err != nil {
-		restore()
+		restoreObserver()
 		t.Fatalf("write authoritative resource boundary: %v", err)
 	}
 	err = database.Checkpoint()
-	restore()
+	restoreObserver()
 	if !errors.Is(err, cutErr) {
 		t.Fatalf("checkpoint cut error=%v want=%v", err, cutErr)
 	}

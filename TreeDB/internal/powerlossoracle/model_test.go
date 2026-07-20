@@ -578,6 +578,75 @@ func TestRenameOverwritePreservesInodeUntilDestinationDirectorySync(t *testing.T
 	}
 }
 
+func TestObservedRenameRecoversSourceDetachedByEarlierOverlay(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "health.json")
+	if err := os.WriteFile(target, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	model, err := Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tmp := filepath.Join(root, "health.json.tmp.1")
+	if err := os.WriteFile(tmp, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Observe(root, durabilitycut.Event{
+		Namespace: durabilitycut.NamespaceCreate,
+		NewPath:   tmp,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tmp, []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Observe(root, durabilitycut.Event{
+		Point: durabilitycut.AfterDependencyFileSync,
+		Path:  tmp,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, target); err != nil {
+		t.Fatal(err)
+	}
+
+	// A callback from another concurrent producer can observe the physical
+	// post-rename namespace before this rename's own callback is serialized.
+	if err := model.Observe(root, durabilitycut.Event{Point: durabilitycut.BeforeUserspaceFlush}); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Observe(root, durabilitycut.Event{
+		Namespace: durabilitycut.NamespaceRename,
+		OldPath:   tmp,
+		NewPath:   target,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	before := t.TempDir()
+	if err := model.MaterializeStable(before); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(before, "health.json")); err != nil || string(got) != "old" {
+		t.Fatalf("pre-directory-sync target=%q err=%v want old", got, err)
+	}
+	if err := model.Observe(root, durabilitycut.Event{
+		Point: durabilitycut.AfterNewFileDirectorySync,
+		Path:  root,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after := t.TempDir()
+	if err := model.MaterializeStable(after); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(after, "health.json")); err != nil || string(got) != "new" {
+		t.Fatalf("post-directory-sync target=%q err=%v want new", got, err)
+	}
+}
+
 func TestCrossDirectoryRenameNeedsBothDirectorySyncs(t *testing.T) {
 	model := newModel()
 	if err := model.Create("from/value", []byte("payload")); err != nil {

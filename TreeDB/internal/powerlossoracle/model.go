@@ -85,11 +85,18 @@ type ByteRange struct{ Offset, Length int64 }
 // names that survive power loss. Names reference inode identities so that file
 // sync followed by rename and directory sync has realistic semantics.
 type Model struct {
-	nextID           uint64
-	nextDirID        uint64
-	inodes           map[uint64]*inode
-	volatile         map[string]uint64
-	stable           map[string]uint64
+	nextID    uint64
+	nextDirID uint64
+	inodes    map[uint64]*inode
+	volatile  map[string]uint64
+	stable    map[string]uint64
+	// overlayDetached retains the inode behind a process-visible name that a
+	// post-operation scan no longer sees. Concurrent producers can complete a
+	// rename before their synchronous observation callbacks acquire the test's
+	// serialization lock; a different callback may therefore overlay the
+	// destination first. Keeping the detached source lets the later explicit
+	// rename preserve prior file-sync state instead of inventing a new inode.
+	overlayDetached  map[string]uint64
 	volatileDirs     map[string]rootpublication.StableIdentity
 	stableDirs       map[string]rootpublication.StableIdentity
 	excludeLockFiles bool
@@ -179,12 +186,13 @@ func capture(root string, excludeLockFiles bool, excluded []string) (*Model, err
 func newModel() *Model {
 	rootIdentity := syntheticDirectoryIdentity(1)
 	return &Model{
-		nextDirID:    1,
-		inodes:       make(map[uint64]*inode),
-		volatile:     make(map[string]uint64),
-		stable:       make(map[string]uint64),
-		volatileDirs: map[string]rootpublication.StableIdentity{".": rootIdentity},
-		stableDirs:   map[string]rootpublication.StableIdentity{".": rootIdentity},
+		nextDirID:       1,
+		inodes:          make(map[uint64]*inode),
+		volatile:        make(map[string]uint64),
+		stable:          make(map[string]uint64),
+		overlayDetached: make(map[string]uint64),
+		volatileDirs:    map[string]rootpublication.StableIdentity{".": rootIdentity},
+		stableDirs:      map[string]rootpublication.StableIdentity{".": rootIdentity},
 	}
 }
 
@@ -220,6 +228,9 @@ func (m *Model) Clone() *Model {
 	}
 	for path, id := range m.stable {
 		out.stable[path] = id
+	}
+	for path, id := range m.overlayDetached {
+		out.overlayDetached[path] = id
 	}
 	for path, identity := range m.volatileDirs {
 		out.volatileDirs[path] = identity
@@ -317,6 +328,7 @@ func (m *Model) Overlay(root string) error {
 	}
 	for path := range m.volatile {
 		if _, ok := seenFiles[path]; !ok {
+			m.overlayDetached[path] = m.volatile[path]
 			delete(m.volatile, path)
 		}
 	}
@@ -617,10 +629,14 @@ func (m *Model) Rename(oldPath, newPath string) error {
 	}
 	id, ok := m.volatile[oldPath]
 	if !ok {
-		return fmt.Errorf("powerlossoracle: rename missing file %q", oldPath)
+		id, ok = m.overlayDetached[oldPath]
+		if !ok {
+			return fmt.Errorf("powerlossoracle: rename missing file %q", oldPath)
+		}
 	}
 	m.ensureVolatileParents(newPath)
 	delete(m.volatile, oldPath)
+	delete(m.overlayDetached, oldPath)
 	m.volatile[newPath] = id
 	m.trace = append(m.trace, "rename:"+oldPath+"->"+newPath)
 	return nil
@@ -635,7 +651,13 @@ func (m *Model) Unlink(path string) error {
 	}
 	if _, ok := m.volatile[path]; ok {
 		delete(m.volatile, path)
+		delete(m.overlayDetached, path)
 		m.trace = append(m.trace, "unlink:"+path)
+		return nil
+	}
+	if _, ok := m.overlayDetached[path]; ok {
+		delete(m.overlayDetached, path)
+		m.trace = append(m.trace, "unlink-detached:"+path)
 		return nil
 	}
 	if path == "." {
@@ -761,6 +783,7 @@ func (m *Model) Crash() {
 		m.inodes[id].volatile = clone(m.inodes[id].stable)
 	}
 	m.volatileDirs = make(map[string]rootpublication.StableIdentity, len(reachableDirs))
+	m.overlayDetached = make(map[string]uint64)
 	for dir, identity := range reachableDirs {
 		m.volatileDirs[dir] = identity
 	}
