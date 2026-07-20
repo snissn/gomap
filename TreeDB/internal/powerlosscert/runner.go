@@ -437,7 +437,7 @@ func requirePullRequestProvenance(repoRoot, repositorySHA string, pullRequests [
 				if len(parents) != 2 {
 					return fmt.Errorf("%s head_sha=%s is not a non-first merge parent and does not produce the exact squash merge tree for merge_sha=%s", prefix, pr.HeadSHA, pr.MergeSHA)
 				}
-				prospectiveTree, err := commandOutputWithEnvironment(repoRoot, gitEnvironment, gitBinary, "merge-tree", "--write-tree", parents[1], pr.HeadSHA)
+				prospectiveTree, err := prospectiveSquashMergeTree(repoRoot, gitEnvironment, gitBinary, parents[1], pr.HeadSHA)
 				if err != nil {
 					return fmt.Errorf("%s compute exact squash merge tree from head_sha=%s: %w", prefix, pr.HeadSHA, err)
 				}
@@ -450,6 +450,53 @@ func requirePullRequestProvenance(repoRoot, repositorySHA string, pullRequests [
 		previousMergeSHA = pr.MergeSHA
 	}
 	return nil
+}
+
+// prospectiveSquashMergeTree computes the tree produced by applying head to
+// parent without committing it. Git 2.38 added merge-tree --write-tree; older
+// trusted system Git versions use an isolated clone so certification keeps the
+// same exact-tree provenance gate without mutating the candidate repository.
+func prospectiveSquashMergeTree(repoRoot string, gitEnvironment []string, gitBinary, parent, head string) (string, error) {
+	prospectiveTree, fastErr := commandOutputWithEnvironment(repoRoot, gitEnvironment, gitBinary, "merge-tree", "--write-tree", parent, head)
+	if fastErr == nil {
+		return prospectiveTree, nil
+	}
+	prospectiveTree, err := prospectiveSquashMergeTreeFallback(repoRoot, gitEnvironment, gitBinary, parent, head)
+	if err != nil {
+		return "", fmt.Errorf("fast merge-tree failed (%v); isolated fallback failed: %w", fastErr, err)
+	}
+	return prospectiveTree, nil
+}
+
+func prospectiveSquashMergeTreeFallback(repoRoot string, gitEnvironment []string, gitBinary, parent, head string) (string, error) {
+	privateRoot, err := os.MkdirTemp("", "treedb-power-loss-cert-merge-tree-*")
+	if err != nil {
+		return "", fmt.Errorf("create isolated merge-tree checkout: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(privateRoot) }()
+	checkout := filepath.Join(privateRoot, "checkout")
+	if _, err := commandOutputWithEnvironment("", gitEnvironment, gitBinary, "clone", "--no-checkout", "--shared", "--", repoRoot, checkout); err != nil {
+		return "", fmt.Errorf("clone isolated merge-tree checkout: %w", err)
+	}
+	if _, err := commandOutputWithEnvironment(checkout, gitEnvironment, gitBinary, "checkout", "--detach", parent); err != nil {
+		return "", fmt.Errorf("checkout merge parent %s: %w", parent, err)
+	}
+	if _, err := commandOutputWithEnvironment(
+		checkout,
+		gitEnvironment,
+		gitBinary,
+		"-c", "user.name=TreeDB power-loss certification",
+		"-c", "user.email=powerlosscert@example.invalid",
+		"-c", "commit.gpgSign=false",
+		"merge", "--no-commit", "--no-ff", head,
+	); err != nil {
+		return "", fmt.Errorf("merge head %s: %w", head, err)
+	}
+	prospectiveTree, err := commandOutputWithEnvironment(checkout, gitEnvironment, gitBinary, "write-tree")
+	if err != nil {
+		return "", fmt.Errorf("write isolated prospective tree: %w", err)
+	}
+	return prospectiveTree, nil
 }
 
 func requireEmptyOutputRoot(root string) error {
@@ -867,8 +914,12 @@ func validateExecutedRecovery(runCase RunCase, trace operationTraceArtifact, rec
 		return fmt.Errorf("%s recovery read_only=%t want=%t", prefix, recovery.ReadOnly, wantReadOnly)
 	}
 	want := runCase.ExpectedRecovery
-	if recovery.Rejected != want.Rejected || recovery.ErrorType != want.ErrorType || recovery.CommitSeq != want.CommitSeq || recovery.AppliedLSN != want.AppliedLSN {
-		return fmt.Errorf("%s recovery=(rejected=%t error_type=%q commit=%d applied=%d) want=(rejected=%t error_type=%q commit=%d applied=%d)", prefix, recovery.Rejected, recovery.ErrorType, recovery.CommitSeq, recovery.AppliedLSN, want.Rejected, want.ErrorType, want.CommitSeq, want.AppliedLSN)
+	wantDir, err := normalizeRecoveryDir(want.Dir)
+	if err != nil {
+		return fmt.Errorf("%s: %w", prefix, err)
+	}
+	if recovery.Dir != wantDir || recovery.Rejected != want.Rejected || recovery.ErrorType != want.ErrorType || recovery.CommitSeq != want.CommitSeq || recovery.AppliedLSN != want.AppliedLSN {
+		return fmt.Errorf("%s recovery=(dir=%q rejected=%t error_type=%q commit=%d applied=%d) want=(dir=%q rejected=%t error_type=%q commit=%d applied=%d)", prefix, recovery.Dir, recovery.Rejected, recovery.ErrorType, recovery.CommitSeq, recovery.AppliedLSN, wantDir, want.Rejected, want.ErrorType, want.CommitSeq, want.AppliedLSN)
 	}
 	if recovery.Rejected && recovery.Error == "" {
 		return fmt.Errorf("%s rejected recovery has no error text", prefix)
@@ -941,6 +992,10 @@ func buildChildManifest(plan RunPlan, outputRoot string, binaries map[string]Art
 		if err != nil {
 			return ChildManifest{}, err
 		}
+		expectedRecoveryDir, err := normalizeRecoveryDir(runCase.ExpectedRecovery.Dir)
+		if err != nil {
+			return ChildManifest{}, fmt.Errorf("powerlosscert: case %q: %w", runCase.ID, err)
+		}
 		witness := Witness{
 			ID:                     runCase.ID,
 			EvidenceTier:           EvidenceTierModeledCrash,
@@ -955,6 +1010,7 @@ func buildChildManifest(plan RunPlan, outputRoot string, binaries map[string]Art
 			ExpectedOutcome:        runCase.ExpectedOutcome,
 			ActualOutcome:          runCase.ExpectedOutcome,
 			TypedError:             runCase.ExpectedTypedError,
+			ExpectedRecoveryDir:    expectedRecoveryDir,
 			State:                  observedWitnessState(result.recovery),
 			CounterexampleID:       runCase.CounterexampleID,
 			NegativeControlID:      runCase.NegativeControlID,

@@ -238,6 +238,68 @@ func TestRequirePullRequestProvenanceBindsClaimsToCertifiedGraph(t *testing.T) {
 	}
 }
 
+func TestProspectiveSquashMergeTreeFallbackMatchesCommittedTree(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	writeSource := func(contents string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(repo, "tracked.go"), []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	runGit("init", "-b", "main")
+	runGit("config", "user.email", "powerlosscert@example.invalid")
+	runGit("config", "user.name", "powerlosscert test")
+	writeSource("package fixture\n")
+	runGit("add", "tracked.go")
+	runGit("commit", "-m", "base")
+	baseSHA := runGit("rev-parse", "HEAD")
+	runGit("checkout", "-b", "feature")
+	writeSource("package fixture\n\nconst Feature = true\n")
+	runGit("add", "tracked.go")
+	runGit("commit", "-m", "feature head")
+	headSHA := runGit("rev-parse", "HEAD")
+	runGit("checkout", "main")
+	if err := os.WriteFile(filepath.Join(repo, "main_only.go"), []byte("package fixture\n\nconst MainOnly = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "main_only.go")
+	runGit("commit", "-m", "advance main before squash")
+	parentSHA := runGit("rev-parse", "HEAD")
+	runGit("merge", "--squash", "feature")
+	runGit("commit", "-m", "Feature (#42)")
+	wantTree := runGit("rev-parse", "HEAD^{tree}")
+
+	gitBinary, err := resolveGitBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotTree, err := prospectiveSquashMergeTreeFallback(repo, certificationGitEnvironment(), gitBinary, parentSHA, headSHA)
+	if err != nil {
+		t.Fatalf("prospectiveSquashMergeTreeFallback: %v", err)
+	}
+	if strings.TrimSpace(gotTree) != wantTree {
+		t.Fatalf("fallback tree=%q, want committed squash tree %q", strings.TrimSpace(gotTree), wantTree)
+	}
+	unrelatedTree, err := prospectiveSquashMergeTreeFallback(repo, certificationGitEnvironment(), gitBinary, parentSHA, baseSHA)
+	if err != nil {
+		t.Fatalf("prospectiveSquashMergeTreeFallback(unrelated): %v", err)
+	}
+	if strings.TrimSpace(unrelatedTree) == wantTree {
+		t.Fatalf("unrelated head unexpectedly produced certified tree %q", wantTree)
+	}
+}
+
 func TestCertificationExecutableResolutionIgnoresInheritedPATH(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell executable shadow fixture is Unix-specific")
@@ -536,7 +598,7 @@ func TestValidateExecutedRecoveryMatchesFrozenExpectation(t *testing.T) {
 		ObservedEventCount: 3,
 	}
 	recovery := recoveryTraceArtifact{
-		ReadOnly: true, CommitSeq: 11, AppliedLSN: 7,
+		Dir: defaultRecoveryDir, ReadOnly: true, CommitSeq: 11, AppliedLSN: 7,
 		Stats: map[string]string{
 			"treedb.profile.resolved":                 "command_wal_durable",
 			"treedb.commit_seq":                       "11",
@@ -574,9 +636,70 @@ func TestValidateExecutedRecoveryRejectsPostHocOutcomeChange(t *testing.T) {
 		DeclaredCutPoint:   runCase.CutPoint,
 		ObservedEventCount: 1,
 	}
-	recovery := recoveryTraceArtifact{Rejected: false}
+	recovery := recoveryTraceArtifact{Dir: defaultRecoveryDir, Rejected: false}
 	err := validateExecutedRecovery(runCase, trace, recovery)
-	if err == nil || !strings.Contains(err.Error(), "want=(rejected=true") {
+	if err == nil || !strings.Contains(err.Error(), "rejected=true") {
 		t.Fatalf("validateExecutedRecovery error=%v", err)
+	}
+}
+
+func TestValidateExecutedRecoveryRequiresFrozenChildDirectory(t *testing.T) {
+	runCase := RunCase{
+		ID: "fresh-composite-layout", Profile: "command_wal_durable", Seed: 3684,
+		CutID: "cut/layout/after-directory-sync/000", CutPoint: "after-directory-sync", VariantID: "variant/fresh",
+		ReopenMode: powerLossReopenModeReadOnly, ExpectedRecovery: RecoveryExpectation{Dir: "recovery-input/db"},
+	}
+	trace := operationTraceArtifact{
+		CutID: runCase.CutID, VariantID: runCase.VariantID, Seed: "3684",
+		DeclaredCutPoint: runCase.CutPoint, ObservedEventCount: 1,
+	}
+	recovery := recoveryTraceArtifact{
+		Dir: "recovery-input/db", ReadOnly: true,
+		Stats: map[string]string{
+			"treedb.profile.resolved": "command_wal_durable", "treedb.commit_seq": "0",
+			"treedb.applied_command_lsn": "0", "treedb.durable_root.selected_slot": "0",
+			"treedb.durable_root.commit_seq": "0", "treedb.durable_root.durable_seq": "0",
+			"treedb.durable_root.freelist.generation": "0", "treedb.durable_root.manifest.entries": "0",
+			"treedb.durable_root.slot0.commit_seq": "0", "treedb.durable_root.slot1.commit_seq": "0",
+			"treedb.command_wal.durable_wal_lsn": "0",
+		},
+	}
+	runCase.State = observedWitnessState(recovery)
+	if err := validateExecutedRecovery(runCase, trace, recovery); err != nil {
+		t.Fatal(err)
+	}
+	recovery.Dir = defaultRecoveryDir
+	if err := validateExecutedRecovery(runCase, trace, recovery); err == nil || !strings.Contains(err.Error(), `dir="recovery-input"`) {
+		t.Fatalf("validateExecutedRecovery mismatched dir error=%v", err)
+	}
+}
+
+func TestBuildChildManifestFreezesNormalizedRecoveryDirectory(t *testing.T) {
+	for _, expected := range []struct {
+		name string
+		dir  string
+		want string
+	}{{name: "legacy-default", want: defaultRecoveryDir}, {name: "child", dir: "recovery-input/db", want: "recovery-input/db"}} {
+		t.Run(expected.name, func(t *testing.T) {
+			root := t.TempDir()
+			plan := testRunPlan()
+			plan.Cases[0].ExpectedRecovery.Dir = expected.dir
+			for _, name := range modeledArtifactNames {
+				path := filepath.Join(root, "evidence", plan.Cases[0].ID, name)
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(name), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			manifest, err := buildChildManifest(plan, root, nil, []executedCase{{runCase: plan.Cases[0]}}, strings.Repeat("f", 64))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := manifest.Witnesses[0].ExpectedRecoveryDir; got != expected.want {
+				t.Fatalf("ExpectedRecoveryDir=%q want=%q", got, expected.want)
+			}
+		})
 	}
 }

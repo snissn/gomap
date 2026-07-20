@@ -6,7 +6,10 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"syscall"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
 
 func TestLayoutPaths_DefaultSplitDirs(t *testing.T) {
@@ -115,6 +118,79 @@ func TestEnsureStorageLayoutDirsSyncsRootForColumnAssetsM12A(t *testing.T) {
 		}
 	}
 	t.Fatalf("new storage layout dirs did not sync DB root %q; synced=%v", dir, synced)
+}
+
+func TestSyncStorageLayoutDirRequiredEmitsModeledNamespaceBarrier(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("generic parent-directory sync is unsupported on Windows")
+	}
+	dir := t.TempDir()
+	var events []durabilitycut.Event
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		events = append(events, event)
+		return nil
+	})
+	defer restore()
+
+	if err := syncStorageLayoutDirRequired(dir); err != nil {
+		t.Fatalf("syncStorageLayoutDirRequired: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("namespace barrier events=%v, want before and after", events)
+	}
+	for i, want := range []durabilitycut.Point{
+		durabilitycut.BeforeNewFileDirectorySync,
+		durabilitycut.AfterNewFileDirectorySync,
+	} {
+		if events[i].Point != want || events[i].Resource != durabilitycut.ResourceAuxiliary || events[i].Path != dir {
+			t.Fatalf("namespace barrier event[%d]=%+v, want point=%s resource=%s path=%q", i, events[i], want, durabilitycut.ResourceAuxiliary, dir)
+		}
+	}
+}
+
+func TestSyncStorageLayoutDirRequiredFailsClosedAfterModeledBarrier(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("generic parent-directory sync is unsupported on Windows")
+	}
+	dir := t.TempDir()
+	wantErr := errors.New("injected post-directory-sync cut")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point == durabilitycut.AfterNewFileDirectorySync {
+			return wantErr
+		}
+		return nil
+	})
+	defer restore()
+
+	err := syncStorageLayoutDirRequired(dir)
+	if !errors.Is(err, wantErr) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("syncStorageLayoutDirRequired error=%v, want injected error joined with ErrRecoveryRequired", err)
+	}
+}
+
+func TestSyncStorageLayoutDirRequiredClassifiesUnsupportedSync(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("generic parent-directory sync is unsupported on Windows")
+	}
+	dir := t.TempDir()
+	previous := syncStorageLayoutDirHandle
+	syncStorageLayoutDirHandle = func(string) error { return syscall.EINVAL }
+	t.Cleanup(func() { syncStorageLayoutDirHandle = previous })
+
+	var events []durabilitycut.Event
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		events = append(events, event)
+		return nil
+	})
+	defer restore()
+
+	err := syncStorageLayoutDirRequired(dir)
+	if !errors.Is(err, ErrNamespacePersistenceUnsupported) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("syncStorageLayoutDirRequired error=%v, want unsupported and recovery-required", err)
+	}
+	if len(events) != 1 || events[0].Point != durabilitycut.BeforeNewFileDirectorySync {
+		t.Fatalf("namespace barrier events=%v, want only before-sync", events)
+	}
 }
 
 func TestEnsureStorageLayoutDirsSyncsFreshNamespaceBottomUp(t *testing.T) {

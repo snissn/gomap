@@ -2,12 +2,13 @@ package powerlosscert
 
 import (
 	"fmt"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
 )
 
-const RunPlanSchemaVersion = "treedb-power-loss-run-plan/v2"
+const RunPlanSchemaVersion = "treedb-power-loss-run-plan/v3"
 
 const CertifiedRepositoryRef = "refs/remotes/origin/main"
 
@@ -24,6 +25,23 @@ type RecoveryExpectation struct {
 	ErrorType  string `json:"error_type"`
 	CommitSeq  uint64 `json:"commit_seq"`
 	AppliedLSN uint64 `json:"applied_lsn"`
+	Dir        string `json:"dir,omitempty"`
+}
+
+const defaultRecoveryDir = "recovery-input"
+
+// normalizeRecoveryDir validates the logical, slash-separated path recorded in
+// portable certification artifacts. An omitted path preserves the legacy
+// public-open root used by pre-directory-contract plans.
+func normalizeRecoveryDir(dir string) (string, error) {
+	if dir == "" {
+		return defaultRecoveryDir, nil
+	}
+	if strings.Contains(dir, `\`) || path.IsAbs(dir) || path.Clean(dir) != dir ||
+		(dir != defaultRecoveryDir && !strings.HasPrefix(dir, defaultRecoveryDir+"/")) {
+		return "", fmt.Errorf("unsafe or non-canonical recovery directory %q", dir)
+	}
+	return dir, nil
 }
 
 // RunCase is the immutable semantic contract for one exact replay. Runtime
@@ -181,6 +199,10 @@ func validateRunCase(inventory RiskInventory, runCase RunCase) error {
 	if runCase.ReopenMode != powerLossReopenModeReadWrite && runCase.ReopenMode != powerLossReopenModeReadOnly {
 		return fmt.Errorf("%s has invalid reopen mode %q", prefix, runCase.ReopenMode)
 	}
+	expectedRecoveryDir, err := normalizeRecoveryDir(runCase.ExpectedRecovery.Dir)
+	if err != nil {
+		return fmt.Errorf("%s: %w", prefix, err)
+	}
 	class := modeledOutcomeClass(runCase.ExpectedOutcome)
 	if runCase.ExpectedRecovery.Rejected {
 		if class != "rejected" || runCase.ExpectedTypedError == "" || runCase.ExpectedTypedError == "none" || runCase.ExpectedRecovery.ErrorType != runCase.ExpectedTypedError {
@@ -219,6 +241,7 @@ func validateRunCase(inventory RiskInventory, runCase RunCase) error {
 		ExpectedOutcome:        runCase.ExpectedOutcome,
 		ActualOutcome:          runCase.ExpectedOutcome,
 		TypedError:             runCase.ExpectedTypedError,
+		ExpectedRecoveryDir:    expectedRecoveryDir,
 		State:                  runCase.State,
 		CounterexampleID:       runCase.CounterexampleID,
 		NegativeControlID:      runCase.NegativeControlID,

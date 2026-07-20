@@ -25,7 +25,7 @@ func TestCommittedRiskInventoryIsValid(t *testing.T) {
 }
 
 func TestParseChildManifestRejectsUnknownFields(t *testing.T) {
-	data := []byte(`{"schema_version":"treedb-power-loss-child/v1","unexpected":true}`)
+	data := []byte(`{"schema_version":"treedb-power-loss-child/v2","unexpected":true}`)
 	if _, err := ParseChildManifest(data); err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("ParseChildManifest error=%v, want unknown-field rejection", err)
 	}
@@ -120,6 +120,23 @@ func TestValidateBundleRequiresModeledReopenMode(t *testing.T) {
 		manifest.Witnesses[0].Command.Env[powerLossReopenModeEnv] = mode
 		if err := ValidateBundle(testRepositorySHA, inventory, []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), powerLossReopenModeEnv) {
 			t.Fatalf("ValidateBundle reopen mode=%q error=%v", mode, err)
+		}
+	}
+}
+
+func TestValidateBundleRecoveryDirectoryContract(t *testing.T) {
+	for _, dir := range []string{"", "recovery-input", "recovery-input/db"} {
+		manifest := testChildManifest("witness-a")
+		manifest.Witnesses[0].ExpectedRecoveryDir = dir
+		if err := ValidateBundle(testRepositorySHA, testRiskInventory(), []ChildManifest{manifest}); err != nil {
+			t.Fatalf("ValidateBundle dir=%q: %v", dir, err)
+		}
+	}
+	for _, dir := range []string{"/recovery-input/db", "../db", "recovery-input/../db", "recovery-input//db", `recovery-input\db`, "other/db"} {
+		manifest := testChildManifest("witness-a")
+		manifest.Witnesses[0].ExpectedRecoveryDir = dir
+		if err := ValidateBundle(testRepositorySHA, testRiskInventory(), []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), "recovery directory") {
+			t.Fatalf("ValidateBundle dir=%q error=%v", dir, err)
 		}
 	}
 }

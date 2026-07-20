@@ -1,5 +1,5 @@
 {
-  "schema_version": "treedb-power-loss-witness-contracts/v2",
+  "schema_version": "treedb-power-loss-witness-contracts/v3",
   "issue": 3684,
   "required_pull_requests": [
     3706,
