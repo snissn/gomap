@@ -150,6 +150,7 @@ var retainedPowerLossCounterexamples = []string{
 	"relaxed-command-frame-before-rid",
 	"chunked-sync-intermediate-root",
 	"older-meta-live-page-reused",
+	"stale-build-base-root-publication",
 }
 
 type observedPowerLossCommandFrame struct {
@@ -1078,6 +1079,14 @@ func powerLossLedgerGeneratedVariants(t *testing.T) map[string][]powerlossoracle
 		}
 		generated[coverage.CutID] = variants
 	}
+	const staleBuildCutID = "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000"
+	generated[staleBuildCutID] = []powerlossoracle.Variant{{
+		CutID:    staleBuildCutID,
+		ID:       "public-stale-build-base-retry-stable-image",
+		Family:   powerlossoracle.VariantFullWriteback,
+		Seed:     3674,
+		Expected: powerlossoracle.ExpectedNewRoot,
+	}}
 	return generated
 }
 
