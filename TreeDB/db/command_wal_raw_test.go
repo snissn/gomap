@@ -819,6 +819,29 @@ func TestRawKVCommandWALMixedMaterializedAndSetRIDPreservesExternalDependency(t 
 func TestRawKVCommandWALMaterializedRIDSelectionRequiresDurableModeAndBounds(t *testing.T) {
 	materializedValue := bytes.Repeat([]byte("materialized-mode-value|"), 16)
 
+	t.Run("inline-only-reuses-first-plan", func(t *testing.T) {
+		d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, Durability: DurabilityWALOnRelaxed, DisableBackgroundPrune: true})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer func() { _ = d.Close() }()
+		scans := 0
+		intent, err := d.newRawKVCommandWALIntentFromEntryScanWithHint(func(emit func(batchpkg.Entry) error) error {
+			scans++
+			return emit(batchpkg.Entry{Type: batchpkg.OpPut, Key: []byte("inline"), Value: []byte("value")})
+		}, 1, true)
+		if err != nil {
+			t.Fatalf("newRawKVCommandWALIntentFromEntryScanWithHint: %v", err)
+		}
+		defer releaseUnassignedCommandWALIntent(intent)
+		if scans != 1 {
+			t.Fatalf("planning scans=%d, want 1 for an already-correct inline V1 plan", scans)
+		}
+		if intent == nil || intent.payloadFormat != commitlog.PayloadFormatRawKVBatchV1 || intent.externalRefs {
+			t.Fatalf("inline intent=%+v, want dependency-free RawKVBatchV1", intent)
+		}
+	})
+
 	t.Run("reusable-intent-falls-back", func(t *testing.T) {
 		d, external := openCommandWALPointerDependencyTestDB(t)
 		defer func() { _ = d.Close() }()

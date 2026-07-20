@@ -1348,16 +1348,20 @@ func (db *DB) newRawKVCommandWALIntentFromEntryScanWithHint(scanEntries func(fun
 			}
 			return emit(entry)
 		})
-	}, &ridCache, &externalRefs, &externalRefFileIDs, opHint, materialize)
+	}, &ridCache, &externalRefs, &externalRefFileIDs, opHint, materialize, true)
 	plan, err := commitlog.PlanRawKVBatchPayloadScan(planScan)
 	if err != nil {
 		return nil, err
 	}
-	if materialize && (!materializedRefs || !materializedEligible || !db.rawKVCommandWALMaterializedRIDPlanFits(plan)) {
+	if materialize && !materializedRefs {
+		// The optimistic scan already produced the exact V1 plan: without a
+		// retained pointer value, materialization changes no operation.
+		materialize = false
+	} else if materialize && (!materializedEligible || !db.rawKVCommandWALMaterializedRIDPlanFits(plan)) {
 		materialize = false
 		externalRefs = false
 		externalRefFileIDs = externalRefFileIDs[:0]
-		fallbackScan := db.rawKVCommandWALOperationScannerFromEntryScan(scanEntries, &ridCache, &externalRefs, &externalRefFileIDs, opHint, false)
+		fallbackScan := db.rawKVCommandWALOperationScannerFromEntryScan(scanEntries, &ridCache, &externalRefs, &externalRefFileIDs, opHint, false, false)
 		plan, err = commitlog.PlanRawKVBatchPayloadScan(fallbackScan)
 		if err != nil {
 			return nil, err
@@ -1366,7 +1370,9 @@ func (db *DB) newRawKVCommandWALIntentFromEntryScanWithHint(scanEntries func(fun
 	if plan.Count == 0 {
 		return nil, nil
 	}
-	writeScan := db.rawKVCommandWALOperationScannerFromEntryScan(scanEntries, &ridCache, nil, nil, opHint, materialize)
+	// The successful planning scan already validated every retained pointer
+	// value while the caller-owned entry buffers were immutable.
+	writeScan := db.rawKVCommandWALOperationScannerFromEntryScan(scanEntries, &ridCache, nil, nil, opHint, materialize, false)
 	payloadFormat := commitlog.PayloadFormatRawKVBatchV1
 	if materialize {
 		payloadFormat = commitlog.PayloadFormatRawKVBatchV2
@@ -1592,16 +1598,16 @@ func (db *DB) rawKVCommandWALOperationScannerWithHint(entries []batchpkg.Entry, 
 			}
 		}
 		return nil
-	}, ridCache, externalRefs, nil, opHint, materialize)
+	}, ridCache, externalRefs, nil, opHint, materialize, true)
 }
 
-func (db *DB) rawKVCommandWALOperationScannerFromEntryScan(scanEntries func(func(batchpkg.Entry) error) error, ridCache **rawKVCommandWALRIDCache, externalRefs *bool, externalRefFileIDs *[]uint32, opHint int, materialize bool) commitlog.RawKVBatchOperationScanner {
+func (db *DB) rawKVCommandWALOperationScannerFromEntryScan(scanEntries func(func(batchpkg.Entry) error) error, ridCache **rawKVCommandWALRIDCache, externalRefs *bool, externalRefFileIDs *[]uint32, opHint int, materialize, validateRetainedValues bool) commitlog.RawKVBatchOperationScanner {
 	return func(emit func(commitlog.RawKVOperation) error) error {
 		if scanEntries == nil {
 			return nil
 		}
 		return scanEntries(func(entry batchpkg.Entry) error {
-			op, ok, err := db.rawKVCommandWALOperationFromEntry(entry, ridCache, externalRefs, externalRefFileIDs, opHint, materialize)
+			op, ok, err := db.rawKVCommandWALOperationFromEntry(entry, ridCache, externalRefs, externalRefFileIDs, opHint, materialize, validateRetainedValues)
 			if err != nil {
 				return err
 			}
@@ -1613,7 +1619,7 @@ func (db *DB) rawKVCommandWALOperationScannerFromEntryScan(scanEntries func(func
 	}
 }
 
-func (db *DB) rawKVCommandWALOperationFromEntry(entry batchpkg.Entry, ridCache **rawKVCommandWALRIDCache, externalRefs *bool, externalRefFileIDs *[]uint32, opHint int, materializePointers bool) (commitlog.RawKVOperation, bool, error) {
+func (db *DB) rawKVCommandWALOperationFromEntry(entry batchpkg.Entry, ridCache **rawKVCommandWALRIDCache, externalRefs *bool, externalRefFileIDs *[]uint32, opHint int, materializePointers, validateRetainedValues bool) (commitlog.RawKVOperation, bool, error) {
 	switch entry.Type {
 	case batchpkg.OpDeleteRange:
 		if batchpkg.IsDeleteRangeNoop(entry.Key, entry.Value) {
@@ -1636,7 +1642,7 @@ func (db *DB) rawKVCommandWALOperationFromEntry(entry batchpkg.Entry, ridCache *
 			if err != nil {
 				return commitlog.RawKVOperation{}, false, err
 			}
-			if hasRetainedValue {
+			if hasRetainedValue && validateRetainedValues {
 				persisted, err := db.valueLogManager.Read(entry.ValuePtr)
 				if isCommandWALRIDLookupVisibilityError(err) {
 					if flushErr := db.flushCommandWALExternalRefs([]uint32{entry.ValuePtr.FileID}); flushErr != nil {
