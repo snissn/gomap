@@ -184,7 +184,6 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	cap := art.Metrics.Cap
 	bal := float64(art.Metrics.MaxPartitionSize) * float64(partitions) / float64(len(vs))
 	peakRSSBytes, peakRSSAvailable := peakRSS()
 	var peakRSSValue *int64
@@ -238,7 +237,6 @@ func run(args []string) error {
 		return errors.New("report byte accounting mismatch")
 	}
 	fmt.Printf("partition artifact=%s report=%s digest=%s final_bytes=%d oracle_recall_at_10=%.4f hash_recall_at_10=%.4f\n", path, reportPath, digest, r.FinalBytes, pr, hr)
-	_ = cap
 	return nil
 }
 
