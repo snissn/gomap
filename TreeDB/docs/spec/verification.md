@@ -942,6 +942,12 @@ PR3 implementation evidence:
 - Raw KV `SetRID` command entries preserve the existing value-log RID fence by
   requiring the referenced RID to be present in scanned value-log segments
   before recovery can publish the command.
+- `RawKVBatchV2` materialized-RID entries carry exact RID plus value bytes.
+  Codec tests reject them under V1; recovery tests prove exact creation,
+  crash/retry reuse, matching existing-RID reuse, conflict failure, and
+  checkpoint/reopen readability. Bounded forced-pointer `Batch.WriteSync`
+  proves one command-WAL file sync and zero value-log file syncs, while the
+  frame-cap case proves the `SetRID` fallback and its dependency fence.
 - Pointer-backed raw KV command writes resolve the source RID directly from
   value-log pointer metadata instead of scanning whole value-log segments.
 - Inline-only raw KV replay does not depend on value-log RID scanning. Recovery

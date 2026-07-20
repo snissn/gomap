@@ -501,6 +501,10 @@ type commandWALPublicRevisionAssigner interface {
 	AssignExternalCommandWALPointRevisions() page.EntryRevision
 }
 
+type commandWALPublicEntryScanSelector interface {
+	ExternalCommandWALRequiresEntryScan() bool
+}
+
 type commandWALPublicInnerSetViewValidated interface {
 	SetViewValidated(key, value []byte) error
 }
@@ -1359,7 +1363,11 @@ func (b *commandWALPublicBatch) appendCommandWAL(sync bool) error {
 	if b == nil || b.inner == nil {
 		return ErrClosed
 	}
-	if !b.payloadBypass && b.payload.Count() == b.opCount && b.payload.Count() > 0 {
+	entryScanRequired := false
+	if selector, ok := b.inner.(commandWALPublicEntryScanSelector); ok {
+		entryScanRequired = selector.ExternalCommandWALRequiresEntryScan()
+	}
+	if !entryScanRequired && !b.payloadBypass && b.payload.Count() == b.opCount && b.payload.Count() > 0 {
 		return b.db.appendPublicRawKVCommandPayloadPrepared(func() ([]byte, error) {
 			if err := b.assignCommandWALPointRevisions(); err != nil {
 				return nil, err
@@ -1377,7 +1385,11 @@ func (b *commandWALPublicBatch) appendCommandWALMeasured(sync bool) (db.CommandW
 	if b == nil || b.inner == nil || b.db == nil {
 		return timing, ErrClosed
 	}
-	if !b.payloadBypass && b.payload.Count() == b.opCount && b.payload.Count() > 0 {
+	entryScanRequired := false
+	if selector, ok := b.inner.(commandWALPublicEntryScanSelector); ok {
+		entryScanRequired = selector.ExternalCommandWALRequiresEntryScan()
+	}
+	if !entryScanRequired && !b.payloadBypass && b.payload.Count() == b.opCount && b.payload.Count() > 0 {
 		var preparation time.Duration
 		timing, err := b.db.appendPublicRawKVCommandPayloadPreparedMeasured(func() ([]byte, error) {
 			preparationStart := time.Now()

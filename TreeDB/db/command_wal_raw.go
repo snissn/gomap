@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -227,6 +228,7 @@ func (timing *CommandWALPublishTiming) Add(other CommandWALPublishTiming) {
 }
 
 var ErrCommandWALMissingValueLogRID = errors.New("treedb: command wal missing value-log rid")
+var ErrCommandWALConflictingValueLogRID = errors.New("treedb: command wal conflicting value-log rid")
 
 // AssignedLSN returns the command LSN already assigned to this intent. Replay
 // intents use this to finalize durable command coverage without appending a
@@ -1203,6 +1205,7 @@ func (db *DB) newRawKVCommandWALIntentFromEntryScan(scanEntries func(func(batchp
 
 func (db *DB) newRawKVCommandWALIntentFromEntryScanWithHint(scanEntries func(func(batchpkg.Entry) error) error, opHint int) (*commandWALBatchIntent, error) {
 	externalRefs := false
+	materializedRefs := false
 	var ridCache *rawKVCommandWALRIDCache
 	var externalRefFileIDs []uint32
 	maxEntryRevision := page.LegacyEntryRevision
@@ -1213,6 +1216,9 @@ func (db *DB) newRawKVCommandWALIntentFromEntryScanWithHint(scanEntries func(fun
 		return scanEntries(func(entry batchpkg.Entry) error {
 			if entry.Type != batchpkg.OpDeleteRange && entry.Revision > maxEntryRevision {
 				maxEntryRevision = entry.Revision
+			}
+			if entry.Type == batchpkg.OpPut && entry.IsPtr && entry.Value != nil {
+				materializedRefs = true
 			}
 			return emit(entry)
 		})
@@ -1225,10 +1231,14 @@ func (db *DB) newRawKVCommandWALIntentFromEntryScanWithHint(scanEntries func(fun
 		return nil, nil
 	}
 	writeScan := db.rawKVCommandWALOperationScannerFromEntryScan(scanEntries, &ridCache, nil, nil, opHint)
+	payloadFormat := commitlog.PayloadFormatRawKVBatchV1
+	if materializedRefs {
+		payloadFormat = commitlog.PayloadFormatRawKVBatchV2
+	}
 	return &commandWALBatchIntent{
 		kind:               commitlog.CommandKindRawKVBatch,
 		scope:              commitlog.CommandScopeRawKV,
-		payloadFormat:      commitlog.PayloadFormatRawKVBatchV1,
+		payloadFormat:      payloadFormat,
 		rawKVScan:          writeScan,
 		rawKVPlan:          plan,
 		rawKVRIDCache:      ridCache,
@@ -1263,10 +1273,17 @@ func (db *DB) newRawKVCommandWALPayloadIntentFromEntries(entries []batchpkg.Entr
 	if externalRefs {
 		externalRefFileIDs = rawKVCommandWALExternalRefFileIDs(entries)
 	}
+	payloadFormat := commitlog.PayloadFormatRawKVBatchV1
+	for i := range entries {
+		if entries[i].Type == batchpkg.OpPut && entries[i].IsPtr && entries[i].Value != nil {
+			payloadFormat = commitlog.PayloadFormatRawKVBatchV2
+			break
+		}
+	}
 	return &commandWALBatchIntent{
 		kind:               commitlog.CommandKindRawKVBatch,
 		scope:              commitlog.CommandScopeRawKV,
-		payloadFormat:      commitlog.PayloadFormatRawKVBatchV1,
+		payloadFormat:      payloadFormat,
 		payload:            payload,
 		rawKVRIDCache:      ridCache,
 		externalRefs:       externalRefs,
@@ -1309,6 +1326,32 @@ func (db *DB) captureCommandWALExternalDependencies(intent *commandWALBatchInten
 	entries := intent.rawKVRIDCache.snapshot()
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("%w: command WAL external-RID payload has an empty producer closure", rootpublication.ErrUnresolvedResource)
+	}
+	if intent.payloadFormat == commitlog.PayloadFormatRawKVBatchV2 {
+		// A V2 intent may also cache self-contained materialized RIDs. Keep
+		// those out of the external dependency closure. V1 is all-SetRID here,
+		// so retaining its lower-allocation snapshot path avoids regressing the
+		// conservative fallback.
+		operations, err := commitlog.DecodeRawKVBatchPayload(intent.payload)
+		if err != nil {
+			return nil, err
+		}
+		requiredRIDs := make(map[uint64]struct{}, fence.Count)
+		for i := range operations {
+			if operations[i].Op == commitlog.RawKVOpSetRID {
+				requiredRIDs[operations[i].RID] = struct{}{}
+			}
+		}
+		filtered := entries[:0]
+		for i := range entries {
+			if _, ok := requiredRIDs[entries[i].rid]; ok {
+				filtered = append(filtered, entries[i])
+			}
+		}
+		entries = filtered
+		if len(entries) == 0 {
+			return nil, fmt.Errorf("%w: command WAL external-RID payload has no matching producer closure", rootpublication.ErrUnresolvedResource)
+		}
 	}
 	fileIDs := make([]uint32, 0)
 	for _, entry := range entries {
@@ -1393,7 +1436,8 @@ func maxEntryRevisionFromEntries(entries []batchpkg.Entry) page.EntryRevision {
 }
 
 func maxEntryRevisionFromCommandWALPayload(kind commitlog.CommandKind, scope commitlog.CommandScope, payloadFormat commitlog.PayloadFormat, payload []byte) (page.EntryRevision, error) {
-	if kind != commitlog.CommandKindRawKVBatch || scope != commitlog.CommandScopeRawKV || payloadFormat != commitlog.PayloadFormatRawKVBatchV1 {
+	if kind != commitlog.CommandKindRawKVBatch || scope != commitlog.CommandScopeRawKV ||
+		(payloadFormat != commitlog.PayloadFormatRawKVBatchV1 && payloadFormat != commitlog.PayloadFormatRawKVBatchV2) {
 		return page.LegacyEntryRevision, nil
 	}
 	maxRevision := page.LegacyEntryRevision
@@ -1457,12 +1501,7 @@ func (db *DB) rawKVCommandWALOperationFromEntry(entry batchpkg.Entry, ridCache *
 		return commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: entry.Key, Revision: uint64(entry.Revision)}, true, nil
 	case batchpkg.OpPut:
 		if entry.IsPtr {
-			if externalRefs != nil {
-				*externalRefs = true
-			}
-			if externalRefFileIDs != nil {
-				appendRawKVCommandWALExternalRefFileID(externalRefFileIDs, entry.ValuePtr.FileID)
-			}
+			materialized := entry.Value != nil
 			if ridCache == nil {
 				return commitlog.RawKVOperation{}, false, fmt.Errorf("treedb: command wal raw kv rid cache unavailable")
 			}
@@ -1472,6 +1511,34 @@ func (db *DB) rawKVCommandWALOperationFromEntry(entry batchpkg.Entry, ridCache *
 			rid, err := db.lookupCommandWALValueLogRID(entry.ValuePtr, *ridCache)
 			if err != nil {
 				return commitlog.RawKVOperation{}, false, err
+			}
+			if materialized {
+				persisted, err := db.valueLogManager.Read(entry.ValuePtr)
+				if isCommandWALRIDLookupVisibilityError(err) {
+					if flushErr := db.flushCommandWALExternalRefs([]uint32{entry.ValuePtr.FileID}); flushErr != nil {
+						return commitlog.RawKVOperation{}, false, flushErr
+					}
+					persisted, err = db.valueLogManager.Read(entry.ValuePtr)
+				}
+				if err != nil {
+					return commitlog.RawKVOperation{}, false, err
+				}
+				if !bytes.Equal(persisted, entry.Value) {
+					return commitlog.RawKVOperation{}, false, fmt.Errorf("%w: rid=%d", ErrCommandWALConflictingValueLogRID, rid)
+				}
+				return commitlog.RawKVOperation{
+					Op:       commitlog.RawKVOpSetMaterializedRID,
+					Key:      entry.Key,
+					Value:    entry.Value,
+					RID:      rid,
+					Revision: uint64(entry.Revision),
+				}, true, nil
+			}
+			if externalRefs != nil {
+				*externalRefs = true
+			}
+			if externalRefFileIDs != nil {
+				appendRawKVCommandWALExternalRefFileID(externalRefFileIDs, entry.ValuePtr.FileID)
 			}
 			return commitlog.RawKVOperation{Op: commitlog.RawKVOpSetRID, Key: entry.Key, RID: rid, Revision: uint64(entry.Revision)}, true, nil
 		}
@@ -1492,7 +1559,7 @@ func rawKVCommandWALExternalRefFileIDs(entries []batchpkg.Entry) []uint32 {
 	var ids []uint32
 	for i := range entries {
 		entry := entries[i]
-		if entry.Type != batchpkg.OpPut || !entry.IsPtr || entry.ValuePtr.FileID == 0 {
+		if entry.Type != batchpkg.OpPut || !entry.IsPtr || entry.Value != nil || entry.ValuePtr.FileID == 0 {
 			continue
 		}
 		appendRawKVCommandWALExternalRefFileID(&ids, entry.ValuePtr.FileID)
@@ -1708,8 +1775,8 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 		return 0, err
 	}
 	defer unlockCommandWALPublish()
-	if op.Op == commitlog.RawKVOpSetRID {
-		return 0, fmt.Errorf("%w: public single-op command WAL cannot carry external refs", ErrCommandWALUnsupported)
+	if op.Op == commitlog.RawKVOpSetRID || op.Op == commitlog.RawKVOpSetMaterializedRID {
+		return 0, fmt.Errorf("%w: public single-op command WAL cannot carry RID-bearing operations", ErrCommandWALUnsupported)
 	}
 	if db.closing.Load() {
 		return 0, ErrClosed
@@ -1759,6 +1826,9 @@ func (db *DB) AppendRawKVPointCommandWALTrustedWithPreparedRevision(op commitlog
 	if db.durability == DurabilityWALOffRelaxed {
 		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
 	}
+	if op == commitlog.RawKVOpSetMaterializedRID {
+		return 0, fmt.Errorf("%w: point command WAL cannot carry a materialized RID", ErrCommandWALUnsupported)
+	}
 	if assignRevision == nil {
 		return 0, fmt.Errorf("%w: missing command wal revision allocator", ErrCommandWALRejected)
 	}
@@ -1799,6 +1869,9 @@ func (db *DB) appendRawKVPointCommandWALTrustedWithRevision(op commitlog.RawKVOp
 	}
 	if db.durability == DurabilityWALOffRelaxed {
 		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	if op == commitlog.RawKVOpSetMaterializedRID {
+		return 0, fmt.Errorf("%w: point command WAL cannot carry a materialized RID", ErrCommandWALUnsupported)
 	}
 	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
 	if err != nil {
@@ -2305,7 +2378,8 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 	if db == nil {
 		return fmt.Errorf("treedb: command wal recovery missing db")
 	}
-	if env.Kind != commitlog.CommandKindRawKVBatch || env.Scope != commitlog.CommandScopeRawKV || env.PayloadFormat != commitlog.PayloadFormatRawKVBatchV1 {
+	if env.Kind != commitlog.CommandKindRawKVBatch || env.Scope != commitlog.CommandScopeRawKV ||
+		(env.PayloadFormat != commitlog.PayloadFormatRawKVBatchV1 && env.PayloadFormat != commitlog.PayloadFormatRawKVBatchV2) {
 		return commitlog.ErrCommandWALUnsupportedKind
 	}
 	ops, err := commitlog.DecodeRawKVBatchPayload(env.Payload)
@@ -2326,6 +2400,7 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 	}
 	b := db.NewBatch().(*Batch)
 	defer func() { _ = b.Close() }()
+	var materializedThisFrame map[uint64][]byte
 	for i := range ops {
 		entry := ops[i]
 		revision := page.EntryRevision(entry.Revision)
@@ -2388,6 +2463,57 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 			}
 			if err := db.registerReplayValueLogPointer(ptr); err != nil {
 				return err
+			}
+			if err := b.SetPointerWithRevision(entry.Key, ptr, revision); err != nil {
+				return err
+			}
+		case commitlog.RawKVOpSetMaterializedRID:
+			if env.PayloadFormat != commitlog.PayloadFormatRawKVBatchV2 {
+				return commitlog.ErrCorrupt
+			}
+			if inlineAppender == nil || ridMap == nil {
+				if ensureReplayLogSupport == nil {
+					return fmt.Errorf("treedb: command wal replay log support unavailable")
+				}
+				var err error
+				ridMap, inlineAppender, err = ensureReplayLogSupport()
+				if err != nil {
+					return err
+				}
+			}
+			if inlineAppender == nil || ridMap == nil {
+				return fmt.Errorf("treedb: command wal missing replay value-log appender")
+			}
+			ptr, ok := ridMap[entry.RID]
+			if ok {
+				got, producedThisFrame := materializedThisFrame[entry.RID]
+				if !producedThisFrame {
+					if err := db.registerReplayValueLogPointer(ptr); err != nil {
+						return err
+					}
+					var err error
+					got, err = db.valueLogManager.Read(ptr)
+					if err != nil {
+						return err
+					}
+				}
+				if !bytes.Equal(got, entry.Value) {
+					return errors.Join(
+						commitlog.ErrCorrupt,
+						fmt.Errorf("%w: rid=%d", ErrCommandWALConflictingValueLogRID, entry.RID),
+					)
+				}
+			} else {
+				var err error
+				ptr, err = inlineAppender.appendExactRID(entry.RID, entry.Value)
+				if err != nil {
+					return err
+				}
+				ridMap[entry.RID] = ptr
+				if materializedThisFrame == nil {
+					materializedThisFrame = make(map[uint64][]byte)
+				}
+				materializedThisFrame[entry.RID] = entry.Value
 			}
 			if err := b.SetPointerWithRevision(entry.Key, ptr, revision); err != nil {
 				return err

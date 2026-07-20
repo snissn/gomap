@@ -75,6 +75,14 @@ truncating, rewriting, or moving value-log bytes. The first implementation must
 skip value-log records protected only by command WAL rather than patching WAL
 records in place.
 
+A `RawKVBatchV2` `SetMaterializedRID` is not an external-ref retention root:
+the complete command frame contains the exact RID and value bytes needed to
+recreate a missing record. Before apply it is protected by retaining the command
+frame itself; after apply, the recreated or reused pointer participates in the
+ordinary published-root and cached-memtable reachability rules. `SetRID` entries,
+including those sharing the same V2 frame, retain the external-ref protections
+above.
+
 Command-WAL-only protection may be released only after the command frame is covered by a
 durable `AppliedLSN`, the root descriptors containing the refs are durable, and
 the value-log reachability tracker has incorporated those published roots or a

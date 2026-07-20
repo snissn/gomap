@@ -15,6 +15,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -1702,6 +1703,288 @@ func TestCommandWALRIDFencePreservedForRawKVBatch(t *testing.T) {
 	}
 }
 
+func TestCommandWALMaterializedRIDRecoveryCreatesExactRIDAndSurvivesCheckpointReopen(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	bootstrap := openCommandWALDB(t, dir)
+	if err := bootstrap.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	writeCommandWALRawKVFrameWithFormat(t, dir, 1, 1, commitlog.PayloadFormatRawKVBatchV2, []commitlog.RawKVOperation{{
+		Op: commitlog.RawKVOpSetMaterializedRID, Key: []byte("k"), RID: 42, Value: []byte("materialized"),
+	}})
+
+	_, err := Open(Options{Dir: dir, testCommandWALRecoveryFailAfterLSN: 1})
+	if !errors.Is(err, errTestFinalizeCommitFailpoint) {
+		t.Fatalf("Open after materialized RID replay error=%v, want post-publication failpoint", err)
+	}
+
+	reopen := openCommandWALDB(t, dir)
+	assertDBValue(t, reopen, "k", "materialized")
+	if err := reopen.Checkpoint(); err != nil {
+		_ = reopen.Close()
+		t.Fatalf("Checkpoint materialized RID replay: %v", err)
+	}
+	if err := reopen.Close(); err != nil {
+		t.Fatalf("Close materialized RID replay: %v", err)
+	}
+
+	segments, err := listSegmentsInDir(ValueLogDirPath(dir))
+	if err != nil {
+		t.Fatalf("list value-log segments: %v", err)
+	}
+	ridMap, err := scanValueLogSegments(segments, nil)
+	if err != nil {
+		t.Fatalf("scanValueLogSegments: %v", err)
+	}
+	if len(ridMap) != 1 {
+		t.Fatalf("materialized recovery RID count=%d, want exactly 1 after replay retry", len(ridMap))
+	}
+	sourcePtr, ok := ridMap[42]
+	if !ok {
+		t.Fatalf("materialized recovery did not preserve exact RID 42: %+v", ridMap)
+	}
+
+	final := openCommandWALDB(t, dir)
+	assertDBValue(t, final, "k", "materialized")
+	if got := final.State().AppliedCommandLSN; got != 1 {
+		_ = final.Close()
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+	appender, ok := final.currentValueLogAppender().(*replayInlineAppender)
+	if !ok {
+		_ = final.Close()
+		t.Fatalf("value-log appender type=%T, want replayInlineAppender", final.currentValueLogAppender())
+	}
+	appender.mu.Lock()
+	nextRID := appender.nextRID
+	appender.mu.Unlock()
+	if nextRID <= 42 {
+		_ = final.Close()
+		t.Fatalf("next value-log RID=%d, want allocator advanced past recovered RID 42", nextRID)
+	}
+	rewriteStats, err := final.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs: []uint32{sourcePtr.FileID},
+		BatchSize:     1,
+	})
+	if err != nil {
+		_ = final.Close()
+		t.Fatalf("ValueLogRewriteOnline after materialized RID recovery: %v", err)
+	}
+	if rewriteStats.RecordsCopied != 1 {
+		_ = final.Close()
+		t.Fatalf("materialized RID rewrite records copied=%d, want 1 (stats=%+v)", rewriteStats.RecordsCopied, rewriteStats)
+	}
+	if _, err := final.ValueLogGC(context.Background(), ValueLogGCOptions{}); err != nil {
+		_ = final.Close()
+		t.Fatalf("ValueLogGC after materialized RID recovery: %v", err)
+	}
+	assertDBValue(t, final, "k", "materialized")
+	if err := final.Close(); err != nil {
+		t.Fatalf("Close after materialized RID rewrite/GC: %v", err)
+	}
+
+	afterGC := openCommandWALDB(t, dir)
+	defer afterGC.Close()
+	assertDBValue(t, afterGC, "k", "materialized")
+}
+
+func TestCommandWALMaterializedRIDRecoveryReusesMatchingRID(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	bootstrap := openCommandWALDB(t, dir)
+	if err := bootstrap.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	writeValueLogRID(t, dir, 42, []byte("materialized"))
+	writeCommandWALRawKVFrameWithFormat(t, dir, 1, 1, commitlog.PayloadFormatRawKVBatchV2, []commitlog.RawKVOperation{{
+		Op: commitlog.RawKVOpSetMaterializedRID, Key: []byte("k"), RID: 42, Value: []byte("materialized"),
+	}})
+
+	reopen := openCommandWALDB(t, dir)
+	defer reopen.Close()
+	assertDBValue(t, reopen, "k", "materialized")
+
+	segments, err := listSegmentsInDir(ValueLogDirPath(dir))
+	if err != nil {
+		t.Fatalf("list value-log segments: %v", err)
+	}
+	ridMap, err := scanValueLogSegments(segments, nil)
+	if err != nil {
+		t.Fatalf("scanValueLogSegments: %v", err)
+	}
+	if len(ridMap) != 1 {
+		t.Fatalf("matching materialized recovery RID count=%d, want no duplicate", len(ridMap))
+	}
+}
+
+func TestCommandWALMaterializedRIDRecoveryDuplicateRIDWithinFrame(t *testing.T) {
+	t.Run("matching", func(t *testing.T) {
+		dir := t.TempDir()
+		enableCommandWALFormat(t, dir)
+		bootstrap := openCommandWALDB(t, dir)
+		if err := bootstrap.Close(); err != nil {
+			t.Fatalf("Close bootstrap db: %v", err)
+		}
+		writeCommandWALRawKVFrameWithFormat(t, dir, 1, 1, commitlog.PayloadFormatRawKVBatchV2, []commitlog.RawKVOperation{
+			{Op: commitlog.RawKVOpSetMaterializedRID, Key: []byte("a"), RID: 42, Value: []byte("materialized")},
+			{Op: commitlog.RawKVOpSetMaterializedRID, Key: []byte("b"), RID: 42, Value: []byte("materialized")},
+		})
+
+		reopen := openCommandWALDB(t, dir)
+		defer reopen.Close()
+		assertDBValue(t, reopen, "a", "materialized")
+		assertDBValue(t, reopen, "b", "materialized")
+		segments, err := listSegmentsInDir(ValueLogDirPath(dir))
+		if err != nil {
+			t.Fatalf("list value-log segments: %v", err)
+		}
+		ridMap, err := scanValueLogSegments(segments, nil)
+		if err != nil {
+			t.Fatalf("scanValueLogSegments: %v", err)
+		}
+		if len(ridMap) != 1 {
+			t.Fatalf("matching duplicate RID count=%d, want one physical record", len(ridMap))
+		}
+	})
+
+	t.Run("conflicting", func(t *testing.T) {
+		dir := t.TempDir()
+		enableCommandWALFormat(t, dir)
+		bootstrap := openCommandWALDB(t, dir)
+		if err := bootstrap.Close(); err != nil {
+			t.Fatalf("Close bootstrap db: %v", err)
+		}
+		writeCommandWALRawKVFrameWithFormat(t, dir, 1, 1, commitlog.PayloadFormatRawKVBatchV2, []commitlog.RawKVOperation{
+			{Op: commitlog.RawKVOpSetMaterializedRID, Key: []byte("a"), RID: 42, Value: []byte("first")},
+			{Op: commitlog.RawKVOpSetMaterializedRID, Key: []byte("b"), RID: 42, Value: []byte("second")},
+		})
+
+		_, err := Open(Options{Dir: dir})
+		if !errors.Is(err, ErrCommandWALConflictingValueLogRID) || !errors.Is(err, commitlog.ErrCorrupt) {
+			t.Fatalf("Open conflicting duplicate RID error=%v, want conflict plus corruption", err)
+		}
+	})
+}
+
+func TestCommandWALMaterializedRIDRecoveryRejectsConflictingRID(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	bootstrap := openCommandWALDB(t, dir)
+	if err := bootstrap.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	writeValueLogRID(t, dir, 42, []byte("other"))
+	writeCommandWALRawKVFrameWithFormat(t, dir, 1, 1, commitlog.PayloadFormatRawKVBatchV2, []commitlog.RawKVOperation{{
+		Op: commitlog.RawKVOpSetMaterializedRID, Key: []byte("k"), RID: 42, Value: []byte("materialized"),
+	}})
+
+	_, err := Open(Options{Dir: dir})
+	if !errors.Is(err, ErrCommandWALConflictingValueLogRID) {
+		t.Fatalf("Open conflicting materialized RID error=%v, want %v", err, ErrCommandWALConflictingValueLogRID)
+	}
+	if !errors.Is(err, commitlog.ErrCorrupt) {
+		t.Fatalf("Open conflicting materialized RID error=%v, want corruption classification", err)
+	}
+}
+
+func TestCommandWALMaterializedRIDRecoveryReplacesTruncatedTail(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	bootstrap := openCommandWALDB(t, dir)
+	if err := bootstrap.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	writeValueLogRID(t, dir, 42, []byte("partial-materialization"))
+	valueLogPath := filepath.Join(ValueLogDirPath(dir), "value-l0-000001.log")
+	info, err := os.Stat(valueLogPath)
+	if err != nil {
+		t.Fatalf("Stat value-log segment: %v", err)
+	}
+	if err := os.Truncate(valueLogPath, info.Size()-4); err != nil {
+		t.Fatalf("Truncate value-log tail: %v", err)
+	}
+	writeCommandWALRawKVFrameWithFormat(t, dir, 1, 1, commitlog.PayloadFormatRawKVBatchV2, []commitlog.RawKVOperation{{
+		Op: commitlog.RawKVOpSetMaterializedRID, Key: []byte("k"), RID: 42, Value: []byte("materialized"),
+	}})
+
+	reopen := openCommandWALDB(t, dir)
+	defer reopen.Close()
+	assertDBValue(t, reopen, "k", "materialized")
+}
+
+func TestCommandWALMaterializedRIDRecoveryRejectsChecksumMismatch(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	bootstrap := openCommandWALDB(t, dir)
+	if err := bootstrap.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	writeValueLogRID(t, dir, 42, []byte("materialized"))
+	valueLogPath := filepath.Join(ValueLogDirPath(dir), "value-l0-000001.log")
+	f, err := os.OpenFile(valueLogPath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("OpenFile value-log segment: %v", err)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		t.Fatalf("Stat value-log segment: %v", err)
+	}
+	var last [1]byte
+	if _, err := f.ReadAt(last[:], info.Size()-1); err != nil {
+		_ = f.Close()
+		t.Fatalf("ReadAt value-log tail: %v", err)
+	}
+	last[0] ^= 0xff
+	if _, err := f.WriteAt(last[:], info.Size()-1); err != nil {
+		_ = f.Close()
+		t.Fatalf("WriteAt value-log tail: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close corrupted value-log segment: %v", err)
+	}
+	writeCommandWALRawKVFrameWithFormat(t, dir, 1, 1, commitlog.PayloadFormatRawKVBatchV2, []commitlog.RawKVOperation{{
+		Op: commitlog.RawKVOpSetMaterializedRID, Key: []byte("k"), RID: 42, Value: []byte("materialized"),
+	}})
+
+	if _, err := Open(Options{Dir: dir}); !errors.Is(err, valuelog.ErrCorrupt) {
+		t.Fatalf("Open checksum-mismatched materialized RID error=%v, want %v", err, valuelog.ErrCorrupt)
+	}
+}
+
+func TestCommandWALMaterializedRIDRecoveryMixedV1V2AndDelete(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	bootstrap := openCommandWALDB(t, dir)
+	if err := bootstrap.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	writeCommandWALRawKVFrame(t, dir, 1, 1, []commitlog.RawKVOperation{
+		{Op: commitlog.RawKVOpSet, Key: []byte("pointer"), Value: []byte("old")},
+		{Op: commitlog.RawKVOpSet, Key: []byte("legacy"), Value: []byte("v1")},
+	})
+	writeCommandWALRawKVFrameWithFormat(t, dir, 2, 2, commitlog.PayloadFormatRawKVBatchV2, []commitlog.RawKVOperation{
+		{Op: commitlog.RawKVOpSetMaterializedRID, Key: []byte("pointer"), RID: 42, Value: []byte("v2")},
+		{Op: commitlog.RawKVOpSetMaterializedRID, Key: []byte("doomed"), RID: 43, Value: []byte("gone")},
+		{Op: commitlog.RawKVOpDelete, Key: []byte("doomed")},
+		{Op: commitlog.RawKVOpDelete, Key: []byte("legacy")},
+	})
+
+	reopen := openCommandWALDB(t, dir)
+	defer reopen.Close()
+	assertDBValue(t, reopen, "pointer", "v2")
+	if has, err := reopen.Has([]byte("legacy")); err != nil || has {
+		t.Fatalf("Has(legacy)=(%t,%v), want false,nil after mixed V1/V2 delete", has, err)
+	}
+	if has, err := reopen.Has([]byte("doomed")); err != nil || has {
+		t.Fatalf("Has(doomed)=(%t,%v), want false,nil after materialized V2 delete", has, err)
+	}
+	if got := reopen.State().AppliedCommandLSN; got != 2 {
+		t.Fatalf("AppliedCommandLSN=%d, want 2", got)
+	}
+}
+
 func TestCommandWALRelaxedRIDReplaySyncsDependenciesBeforeRootPublication(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
@@ -2197,6 +2480,11 @@ func writeCommandWALRawKVFrame(t testing.TB, dir string, segmentSeq uint64, lsn 
 	writeCommandWALRawKVFrameWithDurability(t, dir, segmentSeq, lsn, commitlog.CommandDurabilityDurable, ops)
 }
 
+func writeCommandWALRawKVFrameWithFormat(t testing.TB, dir string, segmentSeq uint64, lsn uint64, format commitlog.PayloadFormat, ops []commitlog.RawKVOperation) {
+	t.Helper()
+	writeCommandWALRawKVFrameForLaneWithDurabilityAndFormat(t, dir, 0, segmentSeq, lsn, commitlog.CommandDurabilityDurable, format, ops)
+}
+
 func writeCommandWALRawKVFrameWithDurability(t testing.TB, dir string, segmentSeq uint64, lsn uint64, durability commitlog.CommandDurabilityClass, ops []commitlog.RawKVOperation) {
 	t.Helper()
 	writeCommandWALRawKVFrameForLaneWithDurability(t, dir, 0, segmentSeq, lsn, durability, ops)
@@ -2208,6 +2496,11 @@ func writeCommandWALRawKVFrameForLane(t testing.TB, dir string, lane int, segmen
 }
 
 func writeCommandWALRawKVFrameForLaneWithDurability(t testing.TB, dir string, lane int, segmentSeq uint64, lsn uint64, durability commitlog.CommandDurabilityClass, ops []commitlog.RawKVOperation) {
+	t.Helper()
+	writeCommandWALRawKVFrameForLaneWithDurabilityAndFormat(t, dir, lane, segmentSeq, lsn, durability, commitlog.PayloadFormatRawKVBatchV1, ops)
+}
+
+func writeCommandWALRawKVFrameForLaneWithDurabilityAndFormat(t testing.TB, dir string, lane int, segmentSeq uint64, lsn uint64, durability commitlog.CommandDurabilityClass, format commitlog.PayloadFormat, ops []commitlog.RawKVOperation) {
 	t.Helper()
 	walDir := WALDirPath(dir)
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
@@ -2228,7 +2521,7 @@ func writeCommandWALRawKVFrameForLaneWithDurability(t testing.TB, dir string, la
 		LSN:             lsn,
 		Kind:            commitlog.CommandKindRawKVBatch,
 		Scope:           commitlog.CommandScopeRawKV,
-		PayloadFormat:   commitlog.PayloadFormatRawKVBatchV1,
+		PayloadFormat:   format,
 		Payload:         payload,
 	}); err != nil {
 		_ = w.Close()

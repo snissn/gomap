@@ -24,6 +24,46 @@ func TestSyncCommandWALDependenciesThroughNoDebtIsAllocationFree(t *testing.T) {
 	}
 }
 
+func TestRawKVPointCommandWALRejectsMaterializedRIDBeforeRevisionAllocation(t *testing.T) {
+	d, err := Open(Options{
+		Dir:                    t.TempDir(),
+		CommandWAL:             true,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	assigned := false
+	_, err = d.AppendRawKVPointCommandWALTrustedWithPreparedRevision(
+		commitlog.RawKVOpSetMaterializedRID,
+		[]byte("key"),
+		[]byte("value"),
+		func() page.EntryRevision {
+			assigned = true
+			return page.EntryRevision(1)
+		},
+		false,
+	)
+	if !errors.Is(err, ErrCommandWALUnsupported) {
+		t.Fatalf("prepared materialized RID error=%v, want %v", err, ErrCommandWALUnsupported)
+	}
+	if assigned {
+		t.Fatal("materialized RID rejection consumed a prepared revision")
+	}
+
+	if _, err := d.AppendRawKVPointCommandWALTrustedWithRevision(
+		commitlog.RawKVOpSetMaterializedRID,
+		[]byte("key"),
+		[]byte("value"),
+		page.EntryRevision(1),
+		false,
+	); !errors.Is(err, ErrCommandWALUnsupported) {
+		t.Fatalf("revision materialized RID error=%v, want %v", err, ErrCommandWALUnsupported)
+	}
+}
+
 type commandWALCountingValueLogAppender struct {
 	inner   ValueLogAppender
 	flushes int
@@ -710,6 +750,70 @@ func TestRawKVCommandWALPreAppendFailureRetainsReusableDependenciesForRetry(t *t
 	}
 }
 
+func TestRawKVCommandWALMixedMaterializedAndSetRIDPreservesExternalDependency(t *testing.T) {
+	d, external := openCommandWALPointerDependencyTestDB(t)
+	defer func() { _ = d.Close() }()
+
+	conflicting := external
+	conflicting.Value = []byte("wrong-materialization")
+	if _, err := d.NewRawKVCommandWALIntentFromOrderedEntries([]batchpkg.Entry{conflicting}); !errors.Is(err, ErrCommandWALConflictingValueLogRID) {
+		t.Fatalf("conflicting live materialization error=%v, want %v", err, ErrCommandWALConflictingValueLogRID)
+	}
+
+	materializedValue := bytes.Repeat([]byte("materialized-command-value|"), 16)
+	materializedPtrs, err := d.AppendValueLogValues([][]byte{materializedValue})
+	if err != nil {
+		t.Fatalf("AppendValueLogValues materialized: %v", err)
+	}
+	if len(materializedPtrs) != 1 {
+		t.Fatalf("AppendValueLogValues materialized returned %d pointers, want 1", len(materializedPtrs))
+	}
+	path, fileID, ok := d.currentValueLogAppender().CurrentValueLogSegment()
+	if !ok || path == "" || fileID != materializedPtrs[0].FileID {
+		t.Fatalf("CurrentValueLogSegment materialized=(%q,%d,%t), pointer file_id=%d", path, fileID, ok, materializedPtrs[0].FileID)
+	}
+	if err := d.RegisterValueLogSegment(path, fileID); err != nil {
+		t.Fatalf("RegisterValueLogSegment materialized: %v", err)
+	}
+
+	materialized := external
+	materialized.Key = []byte("materialized")
+	materialized.Value = materializedValue
+	materialized.ValuePtr = materializedPtrs[0]
+	intent, err := d.NewRawKVCommandWALIntentFromOrderedEntries([]batchpkg.Entry{materialized, external})
+	if err != nil {
+		t.Fatalf("NewRawKVCommandWALIntentFromOrderedEntries: %v", err)
+	}
+	if intent == nil || intent.inner.payloadFormat != commitlog.PayloadFormatRawKVBatchV2 || !intent.inner.externalRefs {
+		t.Fatalf("mixed intent=%+v, want RawKVBatchV2 with external refs", intent)
+	}
+	lsn, err := d.AppendCommandWALIntent(intent, true)
+	if err != nil {
+		t.Fatalf("AppendCommandWALIntent mixed materialized/SetRID: %v", err)
+	}
+	if lsn == 0 {
+		t.Fatal("AppendCommandWALIntent mixed materialized/SetRID lsn=0")
+	}
+	if intent.inner.dependencyResources != nil {
+		t.Fatal("mixed materialized/SetRID dependency resources retained after durable append")
+	}
+	ops, err := commitlog.DecodeRawKVBatchPayload(intent.inner.payload)
+	if err != nil {
+		t.Fatalf("DecodeRawKVBatchPayload mixed materialized/SetRID: %v", err)
+	}
+	if len(ops) != 2 || ops[0].Op != commitlog.RawKVOpSetMaterializedRID || ops[1].Op != commitlog.RawKVOpSetRID ||
+		ops[0].RID == 0 || ops[1].RID == 0 || ops[0].RID == ops[1].RID {
+		t.Fatalf("mixed materialized/SetRID ops=%+v", ops)
+	}
+	fence, err := commitlog.ExternalRefFenceV1FromRawKVPayload(intent.inner.payload)
+	if err != nil {
+		t.Fatalf("ExternalRefFenceV1FromRawKVPayload: %v", err)
+	}
+	if fence.Count != 1 {
+		t.Fatalf("mixed materialized/SetRID fence count=%d, want only SetRID dependency", fence.Count)
+	}
+}
+
 func openCommandWALPointerDependencyTestDB(t *testing.T) (*DB, batchpkg.Entry) {
 	t.Helper()
 	d, err := Open(Options{
@@ -749,7 +853,7 @@ func openCommandWALPointerDependencyTestDB(t *testing.T) (*DB, batchpkg.Entry) {
 
 func rawKVOpTypeForTest(op commitlog.RawKVOp) batchpkg.OpType {
 	switch op {
-	case commitlog.RawKVOpSet, commitlog.RawKVOpSetRID:
+	case commitlog.RawKVOpSet, commitlog.RawKVOpSetRID, commitlog.RawKVOpSetMaterializedRID:
 		return batchpkg.OpPut
 	case commitlog.RawKVOpDelete:
 		return batchpkg.OpDelete

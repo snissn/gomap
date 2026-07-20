@@ -635,7 +635,8 @@ func commandWALReplayFramesNeedLogSupport(db *DB, frames []commandWALReplayFrame
 		hasUnappliedRawKVBatch = true
 		needsLogSupport := false
 		if err := commitlog.ScanRawKVBatchPayload(frame.env.Payload, func(op commitlog.RawKVOp, key, value []byte) error {
-			if op == commitlog.RawKVOpSet && commandWALRawSetNeedsReplayValueLog(db, key, value) {
+			if op == commitlog.RawKVOpSetMaterializedRID ||
+				(op == commitlog.RawKVOpSet && commandWALRawSetNeedsReplayValueLog(db, key, value)) {
 				needsLogSupport = true
 			}
 			return nil
@@ -1074,6 +1075,35 @@ func (a *replayInlineAppender) appendLocked(value []byte) (page.ValuePtr, error)
 	}
 	if err := a.registerProducedPointerLocked(ptr); err != nil {
 		return page.ValuePtr{}, err
+	}
+	a.dirty = true
+	return ptr, nil
+}
+
+func (a *replayInlineAppender) appendExactRID(rid uint64, value []byte) (page.ValuePtr, error) {
+	if a == nil {
+		return page.ValuePtr{}, fmt.Errorf("commitlog: replay value-log appender unavailable")
+	}
+	if rid == 0 {
+		return page.ValuePtr{}, fmt.Errorf("value-log rid must be non-zero")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.writer == nil {
+		return page.ValuePtr{}, fmt.Errorf("commitlog: replay value-log appender unavailable")
+	}
+	if rid >= a.nextRID && rid == ^uint64(0) {
+		return page.ValuePtr{}, fmt.Errorf("value-log rid space exhausted")
+	}
+	ptr, err := a.writer.appendValue(rid, value)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	if err := a.registerProducedPointerLocked(ptr); err != nil {
+		return page.ValuePtr{}, err
+	}
+	if rid >= a.nextRID {
+		a.nextRID = rid + 1
 	}
 	a.dirty = true
 	return ptr, nil
