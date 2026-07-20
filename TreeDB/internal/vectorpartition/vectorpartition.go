@@ -485,17 +485,21 @@ func (ReferencePartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
 	if err := validateGraph(g, n, maxVectors); err != nil {
 		return nil, err
 	}
-	if partitionWorkExceeded(n, parts, maxGraphDegree(g)) {
+	degree := maxGraphDegree(g)
+	if partitionWorkExceeded(n, parts, degree) {
 		return nil, errors.New("partition work bound exceeded before allocation")
 	}
-	order := make([]int, n)
-	for i := range order {
-		order[i] = i
+	// Degree is bounded, so bucket ordering is a deterministic O(n+degree)
+	// replacement for comparison sorting: each ordinal enters exactly one bucket
+	// and ascending insertion order supplies the ordinal tie-break.
+	buckets := make([][]int, degree+1)
+	for node, ns := range g.Neighbors {
+		buckets[len(ns)] = append(buckets[len(ns)], node)
 	}
-	sort.Slice(order, func(i, j int) bool {
-		a, b := order[i], order[j]
-		return len(g.Neighbors[a]) > len(g.Neighbors[b]) || len(g.Neighbors[a]) == len(g.Neighbors[b]) && a < b
-	})
+	order := make([]int, 0, n)
+	for d := degree; d >= 0; d-- {
+		order = append(order, buckets[d]...)
+	}
 	out := make([]int, n)
 	for i := range out {
 		out[i] = -1
@@ -568,14 +572,10 @@ func maxGraphDegree(g Graph) int {
 }
 func partitionWorkExceeded(n, parts, degree int) bool {
 	// Account for validateGraph and maxGraphDegree scans (two degree scans),
-	// the initial degree sort (provable O(n log2 n) comparison ceiling), and
-	// each node's partition scan, candidate-mark pass, and affinity scans.
-	// Scratch indexing removes hidden duplicate-search/sort work.
-	logN := int64(0)
-	for x := n; x > 1; x = (x + 1) / 2 {
-		logN++
-	}
-	perNode := 2*int64(degree+1) + int64(parts) + int64(degree) + int64(degree)*int64(degree+1) + logN
+	// bounded degree-bucket construction/order (two node operations), and each
+	// node's partition scan, candidate-mark pass, and affinity scans. No
+	// comparison sort remains, so every charged term is an explicit loop bound.
+	perNode := 2*int64(degree+1) + 2 + int64(parts) + int64(degree) + int64(degree)*int64(degree+1)
 	return exceedsProduct(maxPartitionWork, int64(n), perNode)
 }
 func exceedsProduct(limit int64, values ...int64) bool {

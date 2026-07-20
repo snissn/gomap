@@ -386,6 +386,19 @@ func TestReferencePartitionerRejectsExcessiveWork(t *testing.T) {
 		t.Fatal("unbounded partition work accepted")
 	}
 }
+func TestPartitionWorkAccountsForValidatorAndOrderingPasses(t *testing.T) {
+	// The former estimate charged only parts+d+d*(d+1)+log2(n), which would
+	// accept this shape (249,681,744 units) while omitting validator and ordering
+	// passes. Degree buckets make the new exact loop bound reject it.
+	const n, parts, degree = 234, 16_384, 1_024
+	oldPerNode := int64(parts + degree + degree*(degree+1) + 8)
+	if oldPerNode*int64(n) > maxPartitionWork {
+		t.Fatal("test no longer distinguishes old accounting")
+	}
+	if !partitionWorkExceeded(n, parts, degree) {
+		t.Fatal("validator/order work omitted from cap")
+	}
+}
 func TestLeafNearestTieBreaksByOrdinal(t *testing.T) {
 	v := []Vector{{"a", []float64{1, 0}}, {"b", []float64{0, 1}}, {"c", []float64{0, -1}}, {"d", []float64{-1, 0}}}
 	got, err := nearest(v, []int{0, 1, 2, 3}, 0, 2, &distanceBudget{remaining: 100})
