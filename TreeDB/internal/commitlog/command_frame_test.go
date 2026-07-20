@@ -2025,6 +2025,52 @@ func TestCommandWALRawKVBatchMaterializedRIDV2RoundTripAndFormatGate(t *testing.
 	if err != nil {
 		t.Fatalf("EncodeRawKVBatchPayload materialized RID: %v", err)
 	}
+	legacyV2Envelope := CommandEnvelope{
+		LSN:           1,
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV2,
+		Payload:       payload,
+	}
+	if _, err := EncodeCommandFrame(legacyV2Envelope); !errors.Is(err, ErrCommandWALUnsupportedVersion) {
+		t.Fatalf("legacy frame with V2 payload error=%v, want ErrCommandWALUnsupportedVersion", err)
+	}
+
+	legacyPath := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	legacy, err := NewWriter(legacyPath)
+	if err != nil {
+		t.Fatalf("NewWriter legacy V2 payload: %v", err)
+	}
+	if err := legacy.AppendCommand(legacyV2Envelope); !errors.Is(err, ErrCommandWALUnsupportedVersion) {
+		_ = legacy.Close()
+		t.Fatalf("AppendCommand legacy V2 payload error=%v, want ErrCommandWALUnsupportedVersion", err)
+	}
+	if err := legacy.AppendCommand(CommandEnvelope{
+		LSN:           2,
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	}); err != nil {
+		_ = legacy.Close()
+		t.Fatalf("AppendCommand valid V1 after rejected V2 payload: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("Close legacy V2 payload writer: %v", err)
+	}
+
+	legacyFrame, err := EncodeCommandFrame(CommandEnvelope{
+		LSN:           3,
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatalf("EncodeCommandFrame legacy fixture: %v", err)
+	}
+	binary.LittleEndian.PutUint16(legacyFrame[52:54], uint16(PayloadFormatRawKVBatchV2))
+	if _, err := DecodeCommandFrame(legacyFrame); !errors.Is(err, ErrCommandWALUnsupportedVersion) {
+		t.Fatalf("DecodeCommandFrame legacy V2 payload error=%v, want ErrCommandWALUnsupportedVersion", err)
+	}
 
 	if _, err := EncodeCommandFrameV2(CommandEnvelope{
 		Version:         CommandFrameVersionV2,

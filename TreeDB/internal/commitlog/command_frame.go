@@ -2139,6 +2139,13 @@ func validateCommandEnvelopeIdentity(env CommandEnvelope) error {
 			(env.PayloadFormat != PayloadFormatRawKVBatchV1 && env.PayloadFormat != PayloadFormatRawKVBatchV2) {
 			return ErrCorrupt
 		}
+		// RawKVBatchV2 is coupled to the V2 frame's persisted durability
+		// class and external-reference fence. Never allow a legacy V1 frame
+		// (including a zero-version caller that defaults to V1) to carry the
+		// V2 payload identity and bypass those checks.
+		if env.PayloadFormat == PayloadFormatRawKVBatchV2 && env.Version != CommandFrameVersionV2 {
+			return ErrCommandWALUnsupportedVersion
+		}
 	case CommandKindCollectionInsertBatchByID:
 		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionInsertBatchByIDV1 {
 			return ErrCorrupt
