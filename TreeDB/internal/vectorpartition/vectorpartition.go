@@ -482,10 +482,13 @@ func (ReferencePartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
 	if parts < 1 || cap < 1 || n < parts {
 		return nil, errors.New("invalid partition request")
 	}
-	if err := validateGraph(g, n, maxVectors); err != nil {
+	if n > maxVectors {
+		return nil, errors.New("partition vector bound exceeded before allocation")
+	}
+	degree, err := validateGraphAndDegree(g, n, maxDegree)
+	if err != nil {
 		return nil, err
 	}
-	degree := maxGraphDegree(g)
 	if partitionWorkExceeded(n, parts, degree) {
 		return nil, errors.New("partition work bound exceeded before allocation")
 	}
@@ -506,7 +509,7 @@ func (ReferencePartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
 	}
 	loads := make([]int, parts)
 	marks := make([]int, parts)
-	candidates := make([]int, 0, maxGraphDegree(g)+1)
+	candidates := make([]int, 0, degree+1)
 	// Reserve one ordinal for each partition before affinity scoring. This
 	// matches ValidateArtifact's exact-coverage invariant even on graphs whose
 	// edges all prefer a small subset of partitions.
@@ -561,22 +564,31 @@ func (ReferencePartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
 	}
 	return out, nil
 }
-func maxGraphDegree(g Graph) int {
-	max := 0
-	for _, ns := range g.Neighbors {
-		if len(ns) > max {
-			max = len(ns)
-		}
-	}
-	return max
-}
 func partitionWorkExceeded(n, parts, degree int) bool {
-	// Account for validateGraph and maxGraphDegree scans (two degree scans),
-	// bounded degree-bucket construction/order (two node operations), and each
-	// node's partition scan, candidate-mark pass, and affinity scans. No
-	// comparison sort remains, so every charged term is an explicit loop bound.
-	perNode := 2*int64(degree+1) + 2 + int64(parts) + int64(degree) + int64(degree)*int64(degree+1)
-	return exceedsProduct(maxPartitionWork, int64(n), perNode)
+	work, overflow := partitionWorkUnits(n, parts, degree)
+	return overflow || work > maxPartitionWork
+}
+func partitionWorkUnits(n, parts, degree int) (int64, bool) {
+	if n < 0 || parts < 0 || degree < 0 {
+		return 0, true
+	}
+	// Deliberately overcount every loop/allocation family. Per-node work covers
+	// validation (degree+1), bucket fill/order, output zeroing/initialization,
+	// candidate reset/assignment, the partition scan, neighbor marking, and
+	// affinity rescans. Global setup covers zeroing loads and marks, the reserve
+	// pass, and initialization/iteration/allocation for degree buckets and the
+	// candidate buffer. An accepted shape therefore stays below this conservative
+	// declared cap even if a future implementation detail adds constant work.
+	perNode := int64(degree+1) + 6 + int64(parts) + int64(degree) + int64(degree)*int64(degree+1)
+	if int64(n) != 0 && perNode > math.MaxInt64/int64(n) {
+		return 0, true
+	}
+	work := int64(n) * perNode
+	global := 3*int64(parts) + 3*int64(degree+1)
+	if global < 0 || work > math.MaxInt64-global {
+		return 0, true
+	}
+	return work + global, false
 }
 func exceedsProduct(limit int64, values ...int64) bool {
 	p := int64(1)
@@ -705,22 +717,30 @@ func validateArtifactConfig(ids []string, c Config) error {
 	return nil
 }
 func validateGraph(g Graph, n, degree int) error {
+	_, err := validateGraphAndDegree(g, n, degree)
+	return err
+}
+func validateGraphAndDegree(g Graph, n, degree int) (int, error) {
 	if len(g.Neighbors) != n {
-		return errors.New("graph node count mismatch")
+		return 0, errors.New("graph node count mismatch")
 	}
+	maxObservedDegree := 0
 	for i, ns := range g.Neighbors {
 		if len(ns) > degree {
-			return errors.New("degree cap exceeded")
+			return 0, errors.New("degree cap exceeded")
+		}
+		if len(ns) > maxObservedDegree {
+			maxObservedDegree = len(ns)
 		}
 		previous := -1
 		for _, j := range ns {
 			if j < 0 || j >= n || j == i || j <= previous {
-				return errors.New("invalid graph edge")
+				return 0, errors.New("invalid graph edge")
 			}
 			previous = j
 		}
 	}
-	return nil
+	return maxObservedDegree, nil
 }
 
 func CanonicalJSON(a Artifact) ([]byte, error) {
@@ -806,7 +826,12 @@ func RunExternalJSONForSource(ctx context.Context, command []string, input []byt
 	configureExternalCommand(cmd)
 	stderr := &cappedBuffer{limit: maxOutput}
 	cmd.Stderr = stderr
-	if e := cmd.Run(); e != nil {
+	e := cmd.Run()
+	// CommandContext only invokes Cancel while the root process is running.
+	// Always clear the private process group after Wait as well, so a root that
+	// exits normally cannot leave a pipe-holding child behind.
+	cleanupExternalCommand(cmd)
+	if e != nil {
 		return Artifact{}, fmt.Errorf("external partition backend: %w: %s", e, bytes.TrimSpace(stderr.Bytes()))
 	}
 	if stderr.exceeded {

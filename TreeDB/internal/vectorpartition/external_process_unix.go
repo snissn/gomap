@@ -9,7 +9,7 @@ import (
 )
 
 // configureExternalCommand places the backend in its own process group. A
-// context timeout therefore terminates descendants which retain inherited I/O
+// context timeout terminates members of that group which retain inherited I/O
 // pipes, while WaitDelay bounds any remaining pipe-drain wait.
 func configureExternalCommand(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

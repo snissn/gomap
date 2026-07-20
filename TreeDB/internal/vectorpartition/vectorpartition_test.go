@@ -275,6 +275,30 @@ func TestExternalBackendDeadlineKillsPipeHoldingDescendant(t *testing.T) {
 		t.Fatalf("descendant temp cleanup leaked: %v", entries)
 	}
 }
+func TestExternalBackendRootExitStillCleansPipeHoldingDescendant(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("TMPDIR", root)
+	// The shell exits successfully immediately, leaving sleep with the command's
+	// inherited stderr pipe. CommandContext does not invoke Cancel in this case;
+	// post-Wait process-group cleanup must do so.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	started := time.Now()
+	_, err := RunExternalJSONForSource(ctx, []string{"sh", "-c", "printf '{' > \"$1\"; (sleep 5) & exit 0"}, []byte("{}"), 1024, Source{SourceID: "expected", Checksum: strings.Repeat("0", 64), Vectors: 1, Dimensions: 1, Metric: "cosine"})
+	if err == nil {
+		t.Fatal("root-exited pipe-holding descendant accepted")
+	}
+	if elapsed := time.Since(started); elapsed > 750*time.Millisecond {
+		t.Fatalf("root-exited descendant return too slow: %s", elapsed)
+	}
+	entries, readErr := os.ReadDir(root)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("root-exited descendant temp cleanup leaked: %v", entries)
+	}
+}
 func TestExternalBackendRequiresDeadline(t *testing.T) {
 	if _, err := RunExternalJSON(context.Background(), []string{"true"}, []byte("{}"), 1024); err == nil {
 		t.Fatal("deadline-less backend accepted")
@@ -386,17 +410,23 @@ func TestReferencePartitionerRejectsExcessiveWork(t *testing.T) {
 		t.Fatal("unbounded partition work accepted")
 	}
 }
-func TestPartitionWorkAccountsForValidatorAndOrderingPasses(t *testing.T) {
-	// The former estimate charged only parts+d+d*(d+1)+log2(n), which would
-	// accept this shape (249,681,744 units) while omitting validator and ordering
-	// passes. Degree buckets make the new exact loop bound reject it.
-	const n, parts, degree = 234, 16_384, 1_024
-	oldPerNode := int64(parts + degree + degree*(degree+1) + 8)
-	if oldPerNode*int64(n) > maxPartitionWork {
-		t.Fatal("test no longer distinguishes old accounting")
+func TestPartitionWorkCountsAllPassesAtEmptyGraphBoundary(t *testing.T) {
+	// On an empty graph, the capacity boundary is determined entirely by the
+	// full-node initialization, partition scan, and global slice setup. This
+	// guards against silently accepting an allocation shape above the declared
+	// work cap merely because it has degree zero.
+	const n = 1_000_000
+	if work, overflow := partitionWorkUnits(n, 242, 0); overflow || work > maxPartitionWork {
+		t.Fatalf("accepted boundary miscounted: work=%d overflow=%v", work, overflow)
 	}
-	if !partitionWorkExceeded(n, parts, degree) {
-		t.Fatal("validator/order work omitted from cap")
+	if !partitionWorkExceeded(n, 243, 0) {
+		t.Fatal("empty-graph work above cap accepted")
+	}
+}
+func TestReferencePartitionerRejectsVectorBoundBeforeInternalAllocation(t *testing.T) {
+	g := Graph{Neighbors: make([][]int, maxVectors+1)}
+	if _, err := (ReferencePartitioner{}).Partition(g, 1, maxVectors+1); err == nil {
+		t.Fatal("partitioner accepted graph above direct vector bound")
 	}
 }
 func TestLeafNearestTieBreaksByOrdinal(t *testing.T) {
