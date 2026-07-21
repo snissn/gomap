@@ -524,7 +524,7 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 		capability,
 		retirements,
 		0,
-		freelist.NewMemoryPageStoreV1(),
+		freelist.NewCandidatePageSinkV1(),
 	)
 	if timing != nil {
 		timing.FinalizeCandidateCOWPrepare += time.Since(cowPrepareStart)
@@ -553,13 +553,11 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 		return nil, errors.New("visible root COW candidate has no generation")
 	}
 	if indexBytes == 0 {
-		for _, image := range prepared.Candidate().Pages() {
-			bytes := uint64(len(image.Data))
-			if ^uint64(0)-indexBytes < bytes {
-				indexBytes = ^uint64(0)
-				break
-			}
-			indexBytes += bytes
+		pageCount := uint64(prepared.Candidate().PageCount())
+		if pageCount > ^uint64(0)/page.PageSize {
+			indexBytes = ^uint64(0)
+		} else {
+			indexBytes = pageCount * page.PageSize
 		}
 	}
 	next.TotalPages = generation.HighWater()
@@ -994,7 +992,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 		capability,
 		retirements,
 		auxiliaryCount,
-		freelist.NewMemoryPageStoreV1(),
+		freelist.NewCandidatePageSinkV1(),
 	)
 	if err != nil {
 		return fmt.Errorf("prepare root-publication seal generation: %w", err)
@@ -1096,10 +1094,8 @@ func (runtime *rootPublicationRuntimeV1) materializeSeal(seal *rootPublicationSe
 		if prepared == nil || prepared.Candidate() == nil {
 			return errors.New("root-publication prefix contains no COW candidate")
 		}
-		for _, image := range prepared.Candidate().Pages() {
-			if err := seal.idx.pager.Write(image.PageID, image.Data); err != nil {
-				return fmt.Errorf("write root-publication COW page %d: %w", image.PageID, err)
-			}
+		if err := prepared.Candidate().WritePagesToV1(durablePagerSinkV1{pager: seal.idx.pager}); err != nil {
+			return fmt.Errorf("write root-publication COW pages: %w", err)
 		}
 	}
 	auxiliary := seal.prepared.AuxiliaryPageIDs()
