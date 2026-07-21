@@ -9,6 +9,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func backgroundIndexVacuumShouldReport(err error) bool {
@@ -17,6 +18,7 @@ func backgroundIndexVacuumShouldReport(err error) bool {
 		!errors.Is(err, backenddb.ErrVacuumRecoverableRootSetRequired) &&
 		!errors.Is(err, backenddb.ErrRecoverableRootSetStale) &&
 		!errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) &&
+		!errors.Is(err, rootpublication.ErrResourcePinned) &&
 		!errors.Is(err, backenddb.ErrVacuumUnsupported) &&
 		!errors.Is(err, context.Canceled)
 }
@@ -36,6 +38,7 @@ const (
 	backgroundIndexVacuumRetryReasonConcurrentMutation             = "concurrent_mutation"
 	backgroundIndexVacuumRetryReasonRecoverableRootSet             = "recoverable_root_set"
 	backgroundIndexVacuumRetryReasonCheckpointCleanup              = "checkpoint_cleanup"
+	backgroundIndexVacuumRetryReasonResourcePinned                 = "resource_pinned"
 	backgroundIndexVacuumOutcomeNone                               = "none"
 	backgroundIndexVacuumOutcomeBacklogSkip                        = "backlog_skip"
 	backgroundIndexVacuumOutcomeUnchanged                          = "unchanged"
@@ -118,6 +121,7 @@ type bgIndexVacuumWorker struct {
 	retryConcurrentMutationTotal atomic.Uint64
 	retryRecoverableRootSetTotal atomic.Uint64
 	retryCheckpointCleanupTotal  atomic.Uint64
+	retryResourcePinnedTotal     atomic.Uint64
 	unsupportedTotal             atomic.Uint64
 	permanentFailuresTotal       atomic.Uint64
 
@@ -464,6 +468,11 @@ func (w *bgIndexVacuumWorker) recordVacuumError(err error) {
 		w.retryCheckpointCleanupTotal.Add(1)
 		w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonCheckpointCleanup)
 		w.lastOutcome.Store(backgroundIndexVacuumOutcomeRetry)
+	case errors.Is(err, rootpublication.ErrResourcePinned):
+		w.retryProbe = true
+		w.retryResourcePinnedTotal.Add(1)
+		w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonResourcePinned)
+		w.lastOutcome.Store(backgroundIndexVacuumOutcomeRetry)
 	default:
 		w.retryProbe = false
 		w.permanentFailuresTotal.Add(1)
@@ -607,6 +616,7 @@ type bgIndexVacuumStats struct {
 	RetryConcurrentMutationTotal uint64
 	RetryRecoverableRootSetTotal uint64
 	RetryCheckpointCleanupTotal  uint64
+	RetryResourcePinnedTotal     uint64
 	UnsupportedTotal             uint64
 	PermanentFailuresTotal       uint64
 
@@ -642,6 +652,7 @@ func (w *bgIndexVacuumWorker) Stats() bgIndexVacuumStats {
 		RetryConcurrentMutationTotal: w.retryConcurrentMutationTotal.Load(),
 		RetryRecoverableRootSetTotal: w.retryRecoverableRootSetTotal.Load(),
 		RetryCheckpointCleanupTotal:  w.retryCheckpointCleanupTotal.Load(),
+		RetryResourcePinnedTotal:     w.retryResourcePinnedTotal.Load(),
 		UnsupportedTotal:             w.unsupportedTotal.Load(),
 		PermanentFailuresTotal:       w.permanentFailuresTotal.Load(),
 		LastFreelistReclaimablePages: w.lastFreelistReclaimablePages.Load(),
@@ -689,6 +700,7 @@ func bgIndexVacuumStatsInto(out map[string]string, w *bgIndexVacuumWorker) {
 	out["treedb.bg_vacuum.retry_concurrent_mutation_total"] = fmt.Sprintf("%d", stats.RetryConcurrentMutationTotal)
 	out["treedb.bg_vacuum.retry_recoverable_root_set_total"] = fmt.Sprintf("%d", stats.RetryRecoverableRootSetTotal)
 	out["treedb.bg_vacuum.retry_checkpoint_cleanup_total"] = fmt.Sprintf("%d", stats.RetryCheckpointCleanupTotal)
+	out["treedb.bg_vacuum.retry_resource_pinned_total"] = fmt.Sprintf("%d", stats.RetryResourcePinnedTotal)
 	out["treedb.bg_vacuum.unsupported_total"] = fmt.Sprintf("%d", stats.UnsupportedTotal)
 	out["treedb.bg_vacuum.permanent_failures_total"] = fmt.Sprintf("%d", stats.PermanentFailuresTotal)
 	out["treedb.bg_vacuum.last_retry_reason"] = stats.LastRetryReason

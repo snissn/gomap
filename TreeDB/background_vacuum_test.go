@@ -12,6 +12,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestBackgroundIndexVacuumConcurrentMutationIsRetryOnly(t *testing.T) {
@@ -33,6 +34,9 @@ func TestBackgroundIndexVacuumConcurrentMutationIsRetryOnly(t *testing.T) {
 	}
 	if backgroundIndexVacuumShouldReport(backenddb.ErrDurableWALCleanupProofStale) {
 		t.Fatal("stale checkpoint-cleanup proof classified as permanent background error")
+	}
+	if backgroundIndexVacuumShouldReport(rootpublication.ErrResourcePinned) {
+		t.Fatal("pinned stable resource classified as permanent background error")
 	}
 }
 
@@ -514,6 +518,7 @@ func TestBackgroundIndexVacuumErrorOutcomes(t *testing.T) {
 		wantConcurrent        uint64
 		wantRecoverableRoots  uint64
 		wantCheckpointCleanup uint64
+		wantResourcePinned    uint64
 		wantUnsupported       uint64
 		wantPermanent         uint64
 		wantReports           int64
@@ -538,6 +543,13 @@ func TestBackgroundIndexVacuumErrorOutcomes(t *testing.T) {
 			wantRetryReason:       backgroundIndexVacuumRetryReasonCheckpointCleanup,
 			wantOutcome:           backgroundIndexVacuumOutcomeRetry,
 			wantCheckpointCleanup: 1,
+		},
+		{
+			name:               "pinned stable resource",
+			err:                rootpublication.ErrResourcePinned,
+			wantRetryReason:    backgroundIndexVacuumRetryReasonResourcePinned,
+			wantOutcome:        backgroundIndexVacuumOutcomeRetry,
+			wantResourcePinned: 1,
 		},
 		{
 			name:            "unsupported",
@@ -585,6 +597,7 @@ func TestBackgroundIndexVacuumErrorOutcomes(t *testing.T) {
 			if stats.RetryConcurrentMutationTotal != tc.wantConcurrent ||
 				stats.RetryRecoverableRootSetTotal != tc.wantRecoverableRoots ||
 				stats.RetryCheckpointCleanupTotal != tc.wantCheckpointCleanup ||
+				stats.RetryResourcePinnedTotal != tc.wantResourcePinned ||
 				stats.UnsupportedTotal != tc.wantUnsupported ||
 				stats.PermanentFailuresTotal != tc.wantPermanent {
 				t.Fatalf("unexpected counters: %+v", stats)
@@ -599,6 +612,9 @@ func TestBackgroundIndexVacuumErrorOutcomes(t *testing.T) {
 			if got := publicStats["treedb.bg_vacuum.last_outcome"]; got != tc.wantOutcome {
 				t.Fatalf("public last outcome=%q want %q", got, tc.wantOutcome)
 			}
+			if got := publicStats["treedb.bg_vacuum.retry_resource_pinned_total"]; got != fmt.Sprint(tc.wantResourcePinned) {
+				t.Fatalf("public pinned retry total=%q want %d", got, tc.wantResourcePinned)
+			}
 
 			if tc.wantUnsupported != 0 || tc.wantPermanent != 0 {
 				d.bgVac.runOnce(d)
@@ -610,6 +626,14 @@ func TestBackgroundIndexVacuumErrorOutcomes(t *testing.T) {
 				}
 				if got := d.bgVac.Stats().LastErr; got != tc.err.Error() {
 					t.Fatalf("retained last error=%q want %q", got, tc.err.Error())
+				}
+			} else if tc.wantResourcePinned != 0 {
+				d.bgVac.runOnce(d)
+				if got := calls.Load(); got != 2 {
+					t.Fatalf("vacuum calls after pinned retry=%d want 2", got)
+				}
+				if got := reports.Load(); got != 0 {
+					t.Fatalf("NotifyError calls after pinned retry=%d want 0", got)
 				}
 			}
 		})

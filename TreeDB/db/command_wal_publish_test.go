@@ -1723,6 +1723,16 @@ func TestCommandWALCleanupAdvancesJournalNamespaceGeneration(t *testing.T) {
 	}
 }
 
+func TestNormalizeCommandWALCheckpointCleanupErrorPrefersStaleOverUnavailable(t *testing.T) {
+	err := normalizeCommandWALCheckpointCleanupError(errors.Join(
+		errDurableWALCleanupProofUnavailable,
+		errDurableWALCleanupProofStale,
+	))
+	if !errors.Is(err, ErrDurableWALCleanupProofStale) {
+		t.Fatalf("checkpoint cleanup error=%v, want durable cleanup retry sentinel", err)
+	}
+}
+
 func TestCommandWALCleanupRejectsSnapshotAfterDurableRootAdvance(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)

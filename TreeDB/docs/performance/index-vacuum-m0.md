@@ -21,7 +21,8 @@ and foreground p99 each have a coefficient of variation at most 10%. Backend
 rows must be uniform across all ten samples: either explicitly unavailable with
 `vacuum-unsupported/op = 1`, `foreground-exposure-misses/op = 1`, zero
 foreground overlap, and zero retry/unexpected-error metrics, or available with
-zero unsupported/retry/error/exposure-miss metrics and positive foreground overlap.
+zero unsupported/unexpected-error/exposure-miss metrics, only typed transient
+retries, positive overlap in every sample, and at least one successful sample.
 Mixed or ambiguous status fails closed. The available classification is backend
 evidence only; top-level cached/public routing remains M2-owned. Legacy rows
 must report zero concurrent aborts, so an aborted run cannot become a timing

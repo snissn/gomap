@@ -152,6 +152,9 @@ func TestCachingDB_CanceledCheckpointDoesNotLeaveWriteWaiter(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
+	// Checkpointing is published immediately before the contended write-lock
+	// path. Give the waiter time to enter that path before cancellation.
+	time.Sleep(10 * time.Millisecond)
 	cancel()
 	select {
 	case err := <-done:
