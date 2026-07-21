@@ -176,7 +176,10 @@ func (s *Store) CommitGroupAt(groups []CommitGroup, mode CommitMode) error {
 	}
 
 	staged := make([]stagedMutation, 0, total)
-	seen := make(map[string]struct{}, total)
+	var seen map[string]struct{}
+	if total > 1 {
+		seen = make(map[string]struct{}, total)
+	}
 	for groupIndex := range groups {
 		group := &groups[groupIndex]
 		for keyIndex := range group.Mutations {
@@ -188,11 +191,13 @@ func (s *Store) CommitGroupAt(groups []CommitGroup, mode CommitMode) error {
 			// The physical encoding contains both logical key and timestamp. This
 			// simultaneously catches duplicates within one commit and across
 			// groups, without rejecting distinct versions of the same logical key.
-			identity := string(physical)
-			if _, exists := seen[identity]; exists {
-				return fmt.Errorf("%w at group index %d key index %d", ErrDuplicateKey, groupIndex, keyIndex)
+			if seen != nil {
+				identity := string(physical)
+				if _, exists := seen[identity]; exists {
+					return fmt.Errorf("%w at group index %d key index %d", ErrDuplicateKey, groupIndex, keyIndex)
+				}
+				seen[identity] = struct{}{}
 			}
-			seen[identity] = struct{}{}
 
 			entry := stagedMutation{physical: physical, timestamp: group.Timestamp, group: groupIndex, key: keyIndex}
 			if mutation.Delete {
