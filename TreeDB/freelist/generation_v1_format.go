@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
 )
 
 const (
@@ -48,6 +49,19 @@ func (view CandidatePageViewV1) CopyTo(dst []byte) error {
 	}
 	copy(dst, view.data)
 	return nil
+}
+
+// WriteCandidatePageToPagerV1 copies an opaque candidate page directly into
+// pager-owned mmap storage. Pager.Write holds the pager lock for the complete
+// copy, preventing a concurrent Sync from draining a partially populated page.
+func WriteCandidatePageToPagerV1(dst *pager.Pager, pageID uint64, view CandidatePageViewV1) error {
+	if dst == nil {
+		return fmt.Errorf("%w: missing candidate pager", ErrGenerationFormat)
+	}
+	if len(view.data) != page.PageSize {
+		return fmt.Errorf("%w: invalid candidate page copy", ErrGenerationFormat)
+	}
+	return dst.Write(pageID, view.data)
 }
 
 // CandidatePageWriterV1 receives an opaque read-only page view. It may retain

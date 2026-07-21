@@ -49,7 +49,7 @@ func (sink durablePagerSinkV1) WriteCandidatePageV1(pageID uint64, view freelist
 	if sink.pager == nil {
 		return errors.New("missing durable pager")
 	}
-	return sink.pager.WritePageFrom(pageID, view)
+	return freelist.WriteCandidatePageToPagerV1(sink.pager, pageID, view)
 }
 
 type durableRootRuntimeV1 struct {

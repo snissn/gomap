@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"path/filepath"
 	"slices"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
 )
 
 func TestFreelistGenerationV1_OlderGenerationAndPagesRemainImmutable(t *testing.T) {
@@ -354,6 +356,34 @@ func TestCandidatePageSinkV1_ValidatesSizeAndDuplicateWithoutRetainingBytes(t *t
 	view := CandidatePageViewV1{data: pageImage}
 	if err := view.CopyTo(make([]byte, len(pageImage)-1)); !errors.Is(err, ErrGenerationFormat) {
 		t.Fatalf("short destination error=%v, want generation format error", err)
+	}
+}
+
+func TestWriteCandidatePageToPagerV1CopiesWithoutRetainingCandidateBytes(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	pageID, err := p.Alloc(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := make([]byte, page.PageSize)
+	for i := range data {
+		data[i] = byte(i)
+	}
+	want := bytes.Clone(data)
+	if err := WriteCandidatePageToPagerV1(p, pageID, CandidatePageViewV1{data: data}); err != nil {
+		t.Fatal(err)
+	}
+	clear(data)
+	got, err := p.ReadPage(pageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("pager retained an alias instead of completing the locked copy")
 	}
 }
 
