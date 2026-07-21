@@ -33,8 +33,12 @@ func TestCompactStorageIndexVacuumPlanReportsDebtWithoutMutation(t *testing.T) {
 	assertNoCompactStorageVacuumArtifacts(t, dir)
 
 	phase := compactStorageIndexVacuumPhase(t, plan)
-	if !phase.Required || phase.Status != CompactStoragePhaseStatusPlanned {
-		t.Fatalf("plan index vacuum phase=%+v, want required/planned without attempt", phase)
+	wantStatus := CompactStoragePhaseStatusPlanned
+	if runtime.GOOS == "windows" {
+		wantStatus = CompactStoragePhaseStatusUnsupported
+	}
+	if !phase.Required || phase.Status != wantStatus {
+		t.Fatalf("plan index vacuum phase=%+v, want required/%s without attempt", phase, wantStatus)
 	}
 	debt := plan.RemainingDebt
 	if !debt.IndexVacuumRequired || debt.IndexVacuumFreelistReclaimablePages == 0 || debt.IndexVacuumTotalPages == 0 {
