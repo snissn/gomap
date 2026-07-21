@@ -59,7 +59,15 @@ class VacuumM0SummarizeTest(unittest.TestCase):
         self.assertTrue(gates["legacy_cv_at_most_10_percent"])
         self.assertTrue(gates["public_status_explicit"])
 
+        public["vacuum-unsupported/op"]["samples"] = [0] * 10
+        public["foreground-exposure-misses/op"]["samples"] = [0] * 10
+        public["foreground-overlap-samples/op"]["samples"] = [160] * 10
         public["vacuum-concurrent-retries/op"]["samples"][4] = 1
+        gates = MODULE.evaluate_gates(legacy, public)
+        self.assertTrue(gates["public_status_explicit"])
+        self.assertEqual(MODULE.classify_public_status(public), "production-index-vacuum-available")
+
+        public["vacuum-concurrent-retries/op"]["samples"] = [1] * 10
         gates = MODULE.evaluate_gates(legacy, public)
         self.assertFalse(gates["public_status_explicit"])
         self.assertEqual(MODULE.classify_public_status(public), "production-index-vacuum-ambiguous")

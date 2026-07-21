@@ -42,10 +42,11 @@ func BenchmarkPL06ExternalVacuumCollectionForegroundChurn(b *testing.B) {
 				case vacuumErr == nil:
 				case errors.Is(vacuumErr, dbpkg.ErrVacuumRecoverableRootSetRequired), errors.Is(vacuumErr, dbpkg.ErrVacuumUnsupported):
 					unsupported++
-				case errors.Is(vacuumErr, dbpkg.ErrVacuumConcurrentMutation):
+				case pl06PublicVacuumConcurrentRetry(vacuumErr):
 					concurrentRetries++
 				default:
 					unexpected++
+					b.Logf("unexpected vacuum error: %T: %v", vacuumErr, vacuumErr)
 				}
 				if exposureMiss {
 					exposureMisses++
@@ -78,6 +79,27 @@ func BenchmarkPL06ExternalVacuumCollectionForegroundChurn(b *testing.B) {
 			b.ReportMetric(float64(concurrentRetries)/float64(b.N), "vacuum-concurrent-retries/op")
 			b.ReportMetric(float64(unexpected)/float64(b.N), "vacuum-unexpected-errors/op")
 		})
+	}
+}
+
+func pl06PublicVacuumConcurrentRetry(err error) bool {
+	return errors.Is(err, dbpkg.ErrVacuumConcurrentMutation) ||
+		errors.Is(err, dbpkg.ErrRecoverableRootSetStale) ||
+		errors.Is(err, dbpkg.ErrDurableWALCleanupProofStale)
+}
+
+func TestPL06PublicVacuumRetryClassification(t *testing.T) {
+	for _, err := range []error{
+		dbpkg.ErrVacuumConcurrentMutation,
+		dbpkg.ErrRecoverableRootSetStale,
+		dbpkg.ErrDurableWALCleanupProofStale,
+	} {
+		if !pl06PublicVacuumConcurrentRetry(err) {
+			t.Fatalf("error %v was not classified as a concurrent retry", err)
+		}
+	}
+	if pl06PublicVacuumConcurrentRetry(errors.New("I/O failure")) {
+		t.Fatal("permanent error was classified as a concurrent retry")
 	}
 }
 
