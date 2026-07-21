@@ -129,6 +129,65 @@ func InNamespace(physical []byte) bool {
 	return bytes.HasPrefix(physical, namespaceV1[:])
 }
 
+// VersionAffinityPrefix returns the allocation-free physical prefix through
+// the encoded logical-key terminator. Unlike VersionPrefix, it deliberately
+// accepts a malformed or incomplete timestamp suffix. This keeps every key
+// that can sort inside one logical key's version range on the same in-memory
+// shard, so an exact-version read cannot hide malformed reserved-namespace
+// records that the MVCC layer must reject fail-closed.
+func VersionAffinityPrefix(physical []byte) (prefix []byte, ok bool) {
+	if len(physical) > MaxEncodedKeySize || !bytes.HasPrefix(physical, namespaceV1[:]) {
+		return nil, false
+	}
+	for i := len(namespaceV1); i < len(physical); {
+		if physical[i] != 0 {
+			i++
+			continue
+		}
+		if i+1 >= len(physical) {
+			return nil, false
+		}
+		switch physical[i+1] {
+		case 0xff:
+			i += 2
+		case 0x00:
+			return physical[:i+2], true
+		default:
+			return nil, false
+		}
+	}
+	return nil, false
+}
+
+// VersionPrefix returns the allocation-free physical prefix shared by every
+// encoded version of one logical key. The returned slice aliases physical.
+// Malformed and non-MVCC keys return ok=false so generic callers retain their
+// existing full-key behavior.
+func VersionPrefix(physical []byte) (prefix []byte, ok bool) {
+	if len(physical) > MaxEncodedKeySize || !bytes.HasPrefix(physical, namespaceV1[:]) {
+		return nil, false
+	}
+	bodyEnd, _, _, err := inspect(physical)
+	if err != nil || bodyEnd+2+TimestampSize != len(physical) {
+		return nil, false
+	}
+	return physical[:bodyEnd+2], true
+}
+
+// ExactVersionRange reports whether [start,end) is the canonical range from
+// one encoded version lower bound through the exclusive upper bound of all
+// versions of that same logical key. The returned prefix aliases start.
+func ExactVersionRange(start, end []byte) (prefix []byte, ok bool) {
+	prefix, ok = VersionPrefix(start)
+	if !ok || len(end) != len(prefix) || len(prefix) == 0 || prefix[len(prefix)-1] != 0 {
+		return nil, false
+	}
+	if !bytes.Equal(prefix[:len(prefix)-1], end[:len(end)-1]) || end[len(end)-1] != 1 {
+		return nil, false
+	}
+	return prefix, true
+}
+
 // AppendNamespaceLower appends the inclusive lower bound of the v1 namespace.
 func AppendNamespaceLower(dst []byte) []byte {
 	return append(dst, namespaceV1[:]...)

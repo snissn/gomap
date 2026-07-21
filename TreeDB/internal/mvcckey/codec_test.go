@@ -260,6 +260,58 @@ func TestTimestampExtremesSortNewestFirst(t *testing.T) {
 	}
 }
 
+func TestVersionPrefixAndExactVersionRange(t *testing.T) {
+	logical := []byte{'a', 0, 'b'}
+	first, err := Encode(logical, 1)
+	if err != nil {
+		t.Fatalf("Encode first: %v", err)
+	}
+	second, err := Encode(logical, 99)
+	if err != nil {
+		t.Fatalf("Encode second: %v", err)
+	}
+	firstPrefix, ok := VersionPrefix(first)
+	if !ok {
+		t.Fatal("VersionPrefix(first) rejected valid key")
+	}
+	secondPrefix, ok := VersionPrefix(second)
+	if !ok || !bytes.Equal(firstPrefix, secondPrefix) {
+		t.Fatalf("version prefixes differ: %x vs %x", firstPrefix, secondPrefix)
+	}
+	if affinityPrefix, ok := VersionAffinityPrefix(first); !ok || !bytes.Equal(affinityPrefix, firstPrefix) {
+		t.Fatalf("VersionAffinityPrefix(first)=(%x,%t), want %x,true", affinityPrefix, ok, firstPrefix)
+	}
+	upper, err := AppendKeyVersionsUpper(nil, logical)
+	if err != nil {
+		t.Fatalf("AppendKeyVersionsUpper: %v", err)
+	}
+	gotPrefix, ok := ExactVersionRange(second, upper)
+	if !ok || !bytes.Equal(gotPrefix, secondPrefix) {
+		t.Fatalf("ExactVersionRange prefix=%x ok=%t want %x,true", gotPrefix, ok, secondPrefix)
+	}
+
+	malformedSuffix := append(append([]byte(nil), first...), 0)
+	if affinityPrefix, ok := VersionAffinityPrefix(malformedSuffix); !ok || !bytes.Equal(affinityPrefix, firstPrefix) {
+		t.Fatalf("VersionAffinityPrefix(malformed suffix)=(%x,%t), want %x,true", affinityPrefix, ok, firstPrefix)
+	}
+	for _, malformed := range [][]byte{
+		nil,
+		[]byte("raw"),
+		append([]byte("raw-key"), 0, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe),
+		append([]byte(nil), first[:len(first)-1]...),
+		malformedSuffix,
+	} {
+		if prefix, ok := VersionPrefix(malformed); ok || prefix != nil {
+			t.Fatalf("VersionPrefix(%x)=(%x,%t), want nil,false", malformed, prefix, ok)
+		}
+	}
+	badUpper := append([]byte(nil), upper...)
+	badUpper[len(badUpper)-1]++
+	if prefix, ok := ExactVersionRange(second, badUpper); ok || prefix != nil {
+		t.Fatalf("ExactVersionRange accepted noncanonical upper %x", badUpper)
+	}
+}
+
 func allBytes() []byte {
 	out := make([]byte, 256)
 	for i := range out {
