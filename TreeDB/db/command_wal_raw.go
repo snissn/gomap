@@ -2215,6 +2215,9 @@ func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	if builder != nil {
 		defer builder.Release()
 	}
+	if hook := db.testCommandWALAfterBuilderAcquireHook; hook != nil {
+		hook()
+	}
 	durablePublishLocked := false
 	releaseDurablePublish := func() {
 		if durablePublishLocked {

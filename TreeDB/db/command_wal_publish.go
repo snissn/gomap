@@ -134,6 +134,9 @@ func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64,
 	if builder != nil {
 		defer builder.Release()
 	}
+	if hook := db.testCommandWALAfterBuilderAcquireHook; hook != nil {
+		hook()
+	}
 	durablePublishLocked := false
 	releaseDurablePublish := func() {
 		if durablePublishLocked {
