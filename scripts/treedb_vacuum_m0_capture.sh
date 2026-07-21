@@ -6,6 +6,8 @@ set -euo pipefail
 ROOT=$(git rev-parse --show-toplevel)
 RUN_DIR=${RUN_DIR:-"$ROOT/artifacts/treedb-vacuum-m0/$(date +%Y%m%d_%H%M%S)"}
 SHA=$(git rev-parse HEAD)
+mkdir -p "$RUN_DIR"
+RUN_DIR=$(cd "$RUN_DIR" && pwd -P)
 mkdir -p "$RUN_DIR/raw"
 
 default_cpu_set() {

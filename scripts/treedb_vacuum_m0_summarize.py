@@ -31,7 +31,7 @@ def parse_benchmark(path: Path) -> dict[str, float]:
         if len(fields) < 4 or len(fields[2:]) % 2:
             raise ValueError(f"malformed benchmark row in {path}: {line}")
         metrics = {}
-        for value, unit in zip(fields[2::2], fields[3::2]):
+        for value, unit in zip(fields[2::2], fields[3::2], strict=True):
             metrics[unit] = float(value)
         rows.append(metrics)
     if len(rows) != 1:
