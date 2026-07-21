@@ -349,9 +349,15 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 		return
 	}
 
-	rep, err := db.backend.IndexVacuumTriggerReport()
+	rep, err := db.backend.IndexVacuumTriggerReportContext(ctx)
 	w.probes.Add(1)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			w.retryProbe = false
+			w.lastOutcome.Store(backgroundIndexVacuumOutcomeCanceled)
+			w.finishRun(now, err.Error())
+			return
+		}
 		w.retryProbe = false
 		w.permanentFailuresTotal.Add(1)
 		w.lastOutcome.Store(backgroundIndexVacuumOutcomePermanentFailure)
