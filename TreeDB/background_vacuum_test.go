@@ -757,6 +757,50 @@ func TestVacuumIndexOnlineContextCancelsWhileWaitingForMaintenance(t *testing.T)
 	}
 }
 
+func TestVacuumIndexOnlineDoesNotHoldLifecycleWhileWaitingForMaintenance(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	d.maintenance.mu.Lock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	vacuumDone := make(chan error, 1)
+	go func() { vacuumDone <- d.VacuumIndexOnline(ctx) }()
+	time.Sleep(25 * time.Millisecond)
+
+	lifecycleAcquired := make(chan struct{})
+	releaseLifecycle := make(chan struct{})
+	go func() {
+		d.lifecycleMu.Lock()
+		close(lifecycleAcquired)
+		<-releaseLifecycle
+		d.lifecycleMu.Unlock()
+	}()
+	select {
+	case <-lifecycleAcquired:
+	case <-time.After(100 * time.Millisecond):
+		cancel()
+		d.maintenance.mu.Unlock()
+		<-lifecycleAcquired
+		close(releaseLifecycle)
+		<-vacuumDone
+		t.Fatal("lifecycle writer blocked behind vacuum waiting for maintenance")
+	}
+
+	cancel()
+	close(releaseLifecycle)
+	d.maintenance.mu.Unlock()
+	select {
+	case err := <-vacuumDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("VacuumIndexOnline error=%v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("vacuum did not cancel after maintenance released")
+	}
+}
+
 func BenchmarkBackgroundIndexVacuumBacklog(b *testing.B) {
 	d := openBackgroundVacuumTestDB(b, Options{BackgroundIndexVacuumInterval: -1})
 	seedBackgroundVacuumUserPages(b, d, 128)
