@@ -216,7 +216,7 @@ type vacuumCollectionForegroundResult struct {
 }
 
 func vacuumCollectionForegroundWriter(db *DB, start, stop <-chan struct{}, warmed chan<- struct{}, done chan<- vacuumCollectionForegroundResult) {
-	const warmOperations = 1024
+	const warmOperations = 4096
 	<-start
 	result := vacuumCollectionForegroundResult{latencies: make([]time.Duration, 0, warmOperations*2)}
 	var warmOnce sync.Once

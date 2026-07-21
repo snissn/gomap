@@ -26,7 +26,9 @@ The legacy benchmark catalog includes 131,072 deterministic ordinary metadata
 entries plus one live collection root. The entries bypass collection-root
 cloning and enlarge only the production system-tree rewrite inside the cutover
 lock, giving the maximum-pause stability gate enough real work. No synthetic
-delay is included in the timing.
+delay is included in the timing. Each sample also includes 4,096 fixed
+foreground point/range operations, providing a stable p99 population while the
+coalesced tail remains below the production cutover cap.
 
 `fixture.json` records the SHA, Go platform, command, logical digest, index and
 value-log bytes, live/reclaimable pages, collection-root span, and offline
