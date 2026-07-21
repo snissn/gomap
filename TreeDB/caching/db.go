@@ -90,6 +90,11 @@ const (
 
 var iteratorDebugEnabled atomic.Bool
 
+// pointSuccessorDebugEnabled gates timestamp-based point-read attribution.
+// Counters remain available in production, but wall-clock probes are opt-in so
+// a diagnostic seam never charges every Dgraph point read.
+var pointSuccessorDebugEnabled atomic.Bool
+
 var valueLogEligiblePool sync.Pool                  // stores []int
 var valueLogKeyPool sync.Pool                       // stores [][]byte
 var batchArenaPools [batchArenaClassCount]sync.Pool // stores []byte
@@ -2459,6 +2464,12 @@ const (
 // intended for benchmarking/diagnostics and is disabled by default.
 func SetIteratorDebug(enabled bool) {
 	iteratorDebugEnabled.Store(enabled)
+}
+
+// SetPointSuccessorDebug toggles timestamp attribution for SeekGE. It is for
+// benchmarks and diagnostics only; normal point reads do no clock sampling.
+func SetPointSuccessorDebug(enabled bool) {
+	pointSuccessorDebugEnabled.Store(enabled)
 }
 
 func envBool(name string) bool {
@@ -9035,12 +9046,19 @@ type DB struct {
 	iteratorQueueLenMax                                          atomic.Uint64
 	pointSuccessorCallsTotal                                     atomic.Uint64
 	pointSuccessorHitsTotal                                      atomic.Uint64
+	pointSuccessorMutableHitsTotal                               atomic.Uint64
+	pointSuccessorQueueHitsTotal                                 atomic.Uint64
+	pointSuccessorBackendHitsTotal                               atomic.Uint64
 	pointSuccessorMutableProbesTotal                             atomic.Uint64
 	pointSuccessorQueueProbesTotal                               atomic.Uint64
 	pointSuccessorBackendProbesTotal                             atomic.Uint64
 	pointSuccessorSourcesTotal                                   atomic.Uint64
 	pointSuccessorSourcesMax                                     atomic.Uint64
 	pointSuccessorGeneralMergeIteratorsTotal                     atomic.Uint64
+	pointSuccessorSelectionNsTotal                               atomic.Uint64
+	pointSuccessorMaterializeNsTotal                             atomic.Uint64
+	pointSuccessorSelectionTimingSamplesTotal                    atomic.Uint64
+	pointSuccessorMaterializeTimingSamplesTotal                  atomic.Uint64
 	checkpointTotalNs                                            atomic.Uint64
 	checkpointMaxNs                                              atomic.Uint64
 	checkpointNoopSkips                                          atomic.Uint64
@@ -30341,11 +30359,18 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.iterator.queue_len_max"] = fmt.Sprintf("%d", db.iteratorQueueLenMax.Load())
 	stats["treedb.cache.point_successor.calls_total"] = fmt.Sprintf("%d", db.pointSuccessorCallsTotal.Load())
 	stats["treedb.cache.point_successor.hits_total"] = fmt.Sprintf("%d", db.pointSuccessorHitsTotal.Load())
+	stats["treedb.cache.point_successor.mutable_hits_total"] = fmt.Sprintf("%d", db.pointSuccessorMutableHitsTotal.Load())
+	stats["treedb.cache.point_successor.queue_hits_total"] = fmt.Sprintf("%d", db.pointSuccessorQueueHitsTotal.Load())
+	stats["treedb.cache.point_successor.backend_hits_total"] = fmt.Sprintf("%d", db.pointSuccessorBackendHitsTotal.Load())
 	stats["treedb.cache.point_successor.mutable_probes_total"] = fmt.Sprintf("%d", db.pointSuccessorMutableProbesTotal.Load())
 	stats["treedb.cache.point_successor.queue_probes_total"] = fmt.Sprintf("%d", db.pointSuccessorQueueProbesTotal.Load())
 	stats["treedb.cache.point_successor.backend_probes_total"] = fmt.Sprintf("%d", db.pointSuccessorBackendProbesTotal.Load())
 	stats["treedb.cache.point_successor.sources_total"] = fmt.Sprintf("%d", db.pointSuccessorSourcesTotal.Load())
 	stats["treedb.cache.point_successor.sources_max"] = fmt.Sprintf("%d", db.pointSuccessorSourcesMax.Load())
+	stats["treedb.cache.point_successor.selection_ns_total"] = fmt.Sprintf("%d", db.pointSuccessorSelectionNsTotal.Load())
+	stats["treedb.cache.point_successor.materialize_ns_total"] = fmt.Sprintf("%d", db.pointSuccessorMaterializeNsTotal.Load())
+	stats["treedb.cache.point_successor.selection_timing_samples_total"] = fmt.Sprintf("%d", db.pointSuccessorSelectionTimingSamplesTotal.Load())
+	stats["treedb.cache.point_successor.materialize_timing_samples_total"] = fmt.Sprintf("%d", db.pointSuccessorMaterializeTimingSamplesTotal.Load())
 	// This metric is an invariant sentinel for SeekGE, not a global iterator
 	// construction counter. It must stay zero because the point-successor path
 	// has no general-merge fallback; any future fallback must increment it at

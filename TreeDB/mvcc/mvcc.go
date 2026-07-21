@@ -36,6 +36,15 @@ type Mutation struct {
 	Delete bool
 }
 
+// CommitGroup is one caller-assigned timestamp and its mutations. CommitGroupAt
+// publishes every non-empty group in its input through one TreeDB batch, so it
+// is useful when an external MVCC coordinator has already formed several
+// commits that must be made visible together.
+type CommitGroup struct {
+	Timestamp uint64
+	Mutations []Mutation
+}
+
 // ReadState identifies the visibility result returned by GetAt.
 type ReadState uint8
 
@@ -120,61 +129,96 @@ func newStore(db treeDB) *Store {
 // A returned storage error can be commit-ambiguous, but visibility is always
 // whole-batch: readers may see all mutations or none, never a prefix.
 func (s *Store) CommitAt(timestamp uint64, mutations []Mutation, mode CommitMode) error {
+	// Preserve the established CommitAt validation precedence for callers that
+	// distinguish the reserved timestamp from a later mode/store failure.
 	if timestamp == 0 {
 		return ErrZeroTimestamp
 	}
+	return s.CommitGroupAt([]CommitGroup{{Timestamp: timestamp, Mutations: mutations}}, mode)
+}
+
+// CommitGroupAt validates and atomically publishes timestamped mutation groups
+// through exactly one TreeDB Batch.Write or Batch.WriteSync call. Every group
+// is validated before a batch is created: timestamps must be non-zero and
+// above the discard floor, keys must fit the MVCC codec, and no physical MVCC
+// key may occur twice. Thus the same logical key at distinct timestamps is
+// allowed, while duplicate logical keys at the same timestamp are rejected
+// even when they arrive in different groups.
+//
+// Empty groups are validated for timestamp and contribute no record. An empty
+// group list (or a list containing only empty groups) is a no-op after Store
+// and mode validation. As with CommitAt, a storage error can be commit
+// ambiguous; group visibility is nevertheless all-or-none, never a prefix.
+func (s *Store) CommitGroupAt(groups []CommitGroup, mode CommitMode) error {
 	if mode != CommitRelaxed && mode != CommitDurable {
 		return ErrInvalidCommitMode
 	}
 	if s == nil || s.db == nil {
 		return storageError("create batch", treedb.ErrClosed)
 	}
-	if len(mutations) == 0 {
+	type stagedMutation struct {
+		physical  []byte
+		record    []byte
+		timestamp uint64
+		group     int
+		key       int
+	}
+	total := 0
+	for groupIndex := range groups {
+		group := &groups[groupIndex]
+		if group.Timestamp == 0 {
+			return fmt.Errorf("%w at group index %d", ErrZeroTimestamp, groupIndex)
+		}
+		total += len(group.Mutations)
+	}
+	if total == 0 {
 		return nil
 	}
-	type stagedMutation struct {
-		physical []byte
-		record   []byte
-	}
-	staged := make([]stagedMutation, len(mutations))
-	var seen map[string]struct{}
-	if len(mutations) > 1 {
-		seen = make(map[string]struct{}, len(mutations))
-	}
-	for i := range mutations {
-		mutation := &mutations[i]
-		physical, err := mvcckey.Encode(mutation.Key, timestamp)
-		if err != nil {
-			return fmt.Errorf("%w at key index %d: %w", ErrInvalidKey, i, err)
-		}
-		if seen != nil {
-			// Encode validates the bounded codec envelope before the caller key is
-			// copied into duplicate-detection state. Reuse physical below so this
-			// validation does not introduce a second encoding pass.
-			identity := string(mutation.Key)
-			if _, exists := seen[identity]; exists {
-				return fmt.Errorf("%w: key index %d", ErrDuplicateKey, i)
-			}
-			seen[identity] = struct{}{}
-		}
 
-		staged[i].physical = physical
-		if mutation.Delete {
-			staged[i].record = []byte{recordTombstoneV1}
-			continue
+	staged := make([]stagedMutation, 0, total)
+	var seen map[string]struct{}
+	if total > 1 {
+		seen = make(map[string]struct{}, total)
+	}
+	for groupIndex := range groups {
+		group := &groups[groupIndex]
+		for keyIndex := range group.Mutations {
+			mutation := &group.Mutations[keyIndex]
+			physical, err := mvcckey.Encode(mutation.Key, group.Timestamp)
+			if err != nil {
+				return fmt.Errorf("%w at group index %d key index %d: %w", ErrInvalidKey, groupIndex, keyIndex, err)
+			}
+			// The physical encoding contains both logical key and timestamp. This
+			// simultaneously catches duplicates within one commit and across
+			// groups, without rejecting distinct versions of the same logical key.
+			if seen != nil {
+				identity := string(physical)
+				if _, exists := seen[identity]; exists {
+					return fmt.Errorf("%w at group index %d key index %d", ErrDuplicateKey, groupIndex, keyIndex)
+				}
+				seen[identity] = struct{}{}
+			}
+
+			entry := stagedMutation{physical: physical, timestamp: group.Timestamp, group: groupIndex, key: keyIndex}
+			if mutation.Delete {
+				entry.record = []byte{recordTombstoneV1}
+			} else {
+				entry.record = make([]byte, 1+len(mutation.Value))
+				entry.record[0] = recordValueV1
+				copy(entry.record[1:], mutation.Value)
+			}
+			staged = append(staged, entry)
 		}
-		record := make([]byte, 1+len(mutation.Value))
-		record[0] = recordValueV1
-		copy(record[1:], mutation.Value)
-		staged[i].record = record
 	}
 	if err := s.lockDiscardFloorRead(); err != nil {
 		return err
 	}
 	defer s.mu.RUnlock()
 	floor := s.discardFloor
-	if timestamp <= floor {
-		return fmt.Errorf("%w: commit timestamp %d is not above floor %d", ErrVersionBelowDiscardFloor, timestamp, floor)
+	for _, entry := range staged {
+		if entry.timestamp <= floor {
+			return fmt.Errorf("%w: group index %d timestamp %d is not above floor %d", ErrVersionBelowDiscardFloor, entry.group, entry.timestamp, floor)
+		}
 	}
 
 	batch := s.db.NewBatchWithSize(len(staged))
@@ -183,7 +227,7 @@ func (s *Store) CommitAt(timestamp uint64, mutations []Mutation, mode CommitMode
 	}
 	for i := range staged {
 		if err := batch.Set(staged[i].physical, staged[i].record); err != nil {
-			stageErr := storageError(fmt.Sprintf("stage key index %d", i), err)
+			stageErr := storageError(fmt.Sprintf("stage group index %d key index %d", staged[i].group, staged[i].key), err)
 			return errors.Join(stageErr, storageError("close batch", batch.Close()))
 		}
 	}
