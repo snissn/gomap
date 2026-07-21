@@ -62,15 +62,28 @@ func TestRenderColumnStoreInsertStatsMarkdownIncludesLaterColumnPublishSubphaseM
 func TestColumnStoreInsertStatsReportingIncludesOrderedRootFinalizeSubphases3903(t *testing.T) {
 	var aggregate collections.CollectionInsertStats
 	columnStoreAddCollectionInsertStats(&aggregate, collections.CollectionInsertStats{
-		Documents:                              2,
-		ColumnPublishWriteLockWait:             time.Millisecond,
-		ColumnPublishPreflight:                 2 * time.Millisecond,
-		ColumnPublishCommandWALAppend:          3 * time.Millisecond,
-		ColumnPublishOrderedRootApply:          4 * time.Millisecond,
-		ColumnPublishSystemRootApply:           5 * time.Millisecond,
-		ColumnPublishFinalize:                  6 * time.Millisecond,
-		ColumnPublishFinalizePrepareDurability: 7 * time.Millisecond,
-		ColumnPublishFinalizeCandidateBuild:    8 * time.Millisecond,
+		Documents:                                      2,
+		ColumnPublishWriteLockWait:                     time.Millisecond,
+		ColumnPublishPreflight:                         2 * time.Millisecond,
+		ColumnPublishCommandWALAppend:                  3 * time.Millisecond,
+		ColumnPublishOrderedRootApply:                  4 * time.Millisecond,
+		ColumnPublishSystemRootApply:                   5 * time.Millisecond,
+		ColumnPublishFinalize:                          6 * time.Millisecond,
+		ColumnPublishFinalizePrepareDurability:         7 * time.Millisecond,
+		ColumnPublishFinalizeCandidateBuild:            8 * time.Millisecond,
+		ColumnPublishFinalizeCandidateVisibleBaseClone: time.Millisecond,
+		ColumnPublishFinalizeCandidateInheritedFilter:  time.Millisecond,
+		ColumnPublishFinalizeCandidateFreshCapture:     time.Millisecond,
+		ColumnPublishFinalizeCandidateClosureAssemble:  time.Millisecond,
+		ColumnPublishFinalizeCandidateVisibleClone:     time.Millisecond,
+		ColumnPublishFinalizeCandidateCOWPrepare:       time.Millisecond,
+		ColumnPublishFinalizeCandidateOther:            2 * time.Millisecond,
+		ColumnPublishFinalizeCandidateResourceWork: collections.ColumnPublishCandidateResourceWork{
+			SourceEntriesInspected: 3, SourceObligationsInspected: 4,
+			PhysicalHandleCopies: 2, RetainedIndexNodeVisits: 5,
+			RetainedIndexNodeCopies: 5, NewlyAdmittedObligations: 1,
+			AppendOnlyFastPath: 1,
+		},
 		ColumnPublishFinalizeEnqueueActivation: 9 * time.Millisecond,
 		ColumnPublishFinalizeAdmissionWait:     10 * time.Millisecond,
 		ColumnPublishFinalizeDurabilityWait:    11 * time.Millisecond,
@@ -80,18 +93,21 @@ func TestColumnStoreInsertStatsReportingIncludesOrderedRootFinalizeSubphases3903
 	if metric.ColumnPublishOrderedRootApplyDurationMS != 4 || metric.ColumnPublishFinalizeDurabilityWaitDurationMS != 11 || !columnStoreInsertStatsHasColumnPublishSubphase(metric) {
 		t.Fatalf("ordered-root/finalize metrics=%+v", metric)
 	}
+	if got := metric.ColumnPublishCandidateVisibleBaseCloneMS + metric.ColumnPublishCandidateInheritedFilterMS + metric.ColumnPublishCandidateFreshCaptureMS + metric.ColumnPublishCandidateClosureAssembleMS + metric.ColumnPublishCandidateVisibleCloneMS + metric.ColumnPublishCandidateCOWPrepareMS + metric.ColumnPublishCandidateOtherMS; got != metric.ColumnPublishFinalizeCandidateBuildDurationMS {
+		t.Fatalf("candidate child phases=%vms want additive total=%vms", got, metric.ColumnPublishFinalizeCandidateBuildDurationMS)
+	}
 	data, err := json.Marshal(metric)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"column_publish_ordered_root_apply_duration_ms", "column_publish_finalize_durability_wait_duration_ms", "column_publish_post_finalize_duration_ms"} {
+	for _, want := range []string{"column_publish_ordered_root_apply_duration_ms", "column_publish_finalize_durability_wait_duration_ms", "column_publish_candidate_visible_base_clone_duration_ms", "retained_index_node_visits", "column_publish_post_finalize_duration_ms"} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Fatalf("JSON missing %q: %s", want, data)
 		}
 	}
 	var sb strings.Builder
 	renderColumnStoreInsertStatsMarkdown(&sb, metric)
-	for _, want := range []string{"ordered_root_apply", "finalize_prepare_durability", "finalize_candidate_build", "finalize_enqueue_activation", "finalize_admission_wait", "finalize_durability_wait", "post_finalize"} {
+	for _, want := range []string{"ordered_root_apply", "finalize_prepare_durability", "finalize_candidate_build", "candidate_visible_base_clone", "candidate_inherited_filter", "retained_index_node_visits", "append_only_fast_path", "finalize_enqueue_activation", "finalize_admission_wait", "finalize_durability_wait", "post_finalize"} {
 		if !strings.Contains(sb.String(), want) {
 			t.Fatalf("markdown missing %q:\n%s", want, sb.String())
 		}

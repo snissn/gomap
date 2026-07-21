@@ -120,19 +120,26 @@ func (db *DB) acquireRootPublicationBuilderV1() (*rootpublication.BuilderToken, 
 }
 
 func (runtime *rootPublicationRuntimeV1) cloneVisibleResources() (*rootpublication.StableResourceSet, error) {
+	resources, _, err := runtime.cloneVisibleResourcesWithWork()
+	return resources, err
+}
+
+func (runtime *rootPublicationRuntimeV1) cloneVisibleResourcesWithWork() (*rootpublication.StableResourceSet, rootpublication.StableResourceClosureWork, error) {
 	if runtime == nil {
-		return nil, errors.New("missing root-publication runtime")
+		return nil, rootpublication.StableResourceClosureWork{}, errors.New("missing root-publication runtime")
 	}
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	if runtime.poison != nil {
-		return nil, runtime.poison
+		return nil, rootpublication.StableResourceClosureWork{}, runtime.poison
 	}
-	resources, err := rootpublication.CloneStableResourceSetExcludingKinds(runtime.visibleResources)
+	resources, work, err := rootpublication.CloneStableResourceSetForLogicalObligationsWithWork(
+		runtime.visibleResources, rootpublication.StableLogicalObligationRequirements{},
+	)
 	if err != nil {
-		return nil, fmt.Errorf("clone visible root resources: %w", err)
+		return nil, work, fmt.Errorf("clone visible root resources: %w", err)
 	}
-	return resources, nil
+	return resources, work, nil
 }
 
 func (seal *rootPublicationSealV1) release() {
@@ -410,11 +417,19 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 	install *rootPublicationVisibleInstallV1,
 	dependencyBytes uint64,
 	indexBytes uint64,
+	timing *CommandWALPublishTiming,
 ) (_ *rootpublication.PreparedRootCandidate, err error) {
 	if runtime == nil || runtime.db == nil || runtime.idx == nil || install == nil {
 		return nil, errors.New("missing visible root candidate input")
 	}
-	visibleResources, err := rootpublication.CloneStableResourceSetExcludingKinds(resources)
+	visibleCloneStart := time.Now()
+	visibleResources, visibleWork, err := rootpublication.CloneStableResourceSetForLogicalObligationsWithWork(
+		resources, rootpublication.StableLogicalObligationRequirements{},
+	)
+	if timing != nil {
+		timing.FinalizeCandidateVisibleClone += time.Since(visibleCloneStart)
+		timing.FinalizeCandidateResourceWork.Add(visibleWork)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("clone visible root resource closure: %w", err)
 	}
@@ -440,6 +455,7 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 			PageIDs: retired, LastReachableCommitSeq: next.CommitSeq - 1,
 		})
 	}
+	cowPrepareStart := time.Now()
 	prepared, err := runtime.idx.allocator.PrepareCOWCandidateRetiringV1(
 		generationID,
 		next.CommitSeq,
@@ -449,6 +465,9 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 		0,
 		freelist.NewMemoryPageStoreV1(),
 	)
+	if timing != nil {
+		timing.FinalizeCandidateCOWPrepare += time.Since(cowPrepareStart)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("prepare visible root COW generation: %w", err)
 	}
@@ -595,19 +614,24 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	releaseDurablePublish func(),
 ) (finalizeCommitPost, error) {
 	candidateBuildStart := time.Now()
+	var candidateTiming CommandWALPublishTiming
 	prePublishErr := func(err error) error { return wrapFinalizeCommitError(err, true) }
 	if runtime == nil || runtime.coordinator == nil || builder == nil || idx == nil || releaseDurablePublish == nil {
 		return post, prePublishErr(errors.New("incomplete queued root-publication handoff"))
 	}
-	visibleBase, err := runtime.cloneVisibleResources()
+	visibleBaseCloneStart := time.Now()
+	visibleBase, visibleBaseWork, err := runtime.cloneVisibleResourcesWithWork()
+	candidateTiming.FinalizeCandidateVisibleBaseClone += time.Since(visibleBaseCloneStart)
+	candidateTiming.FinalizeCandidateResourceWork.Add(visibleBaseWork)
 	if err != nil {
-		return post, err
+		return post, prePublishErr(err)
 	}
 	defer visibleBase.Release()
 
 	resources, err := db.captureDurableRootResourcesFromBaseV1(
 		idx, next, vlogRefDelta, visibleBase, opts.durableResources,
-		opts.durableResourceRequirements, opts.valueLogPublicationLocked,
+		opts.durableResourceRequirements, opts.durableResourceMutation, opts.valueLogPublicationLocked,
+		&candidateTiming,
 	)
 	if err != nil {
 		return post, prePublishErr(fmt.Errorf("capture queued root dependencies: %w", err))
@@ -656,7 +680,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	}
 	candidate, err := runtime.prepareVisibleCandidate(
 		next, retired, resources, install,
-		dependencyBytes, 0,
+		dependencyBytes, 0, &candidateTiming,
 	)
 	if err != nil {
 		return post, prePublishErr(err)
@@ -680,7 +704,17 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		hook()
 	}
 	if opts.publishTiming != nil {
-		opts.publishTiming.FinalizeCandidateBuild += time.Since(candidateBuildStart)
+		candidateTiming.FinalizeCandidateBuild = time.Since(candidateBuildStart)
+		accounted := candidateTiming.FinalizeCandidateVisibleBaseClone +
+			candidateTiming.FinalizeCandidateInheritedFilter +
+			candidateTiming.FinalizeCandidateFreshCapture +
+			candidateTiming.FinalizeCandidateClosureAssemble +
+			candidateTiming.FinalizeCandidateVisibleClone +
+			candidateTiming.FinalizeCandidateCOWPrepare
+		if candidateTiming.FinalizeCandidateBuild > accounted {
+			candidateTiming.FinalizeCandidateOther = candidateTiming.FinalizeCandidateBuild - accounted
+		}
+		opts.publishTiming.Add(candidateTiming)
 	}
 
 	enqueueStart := time.Now()

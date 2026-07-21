@@ -546,6 +546,10 @@ func TestColumnStoreMutationAssetsPublishAndReopenM12C(t *testing.T) {
 	if deletedRows != 1 {
 		t.Fatalf("DeleteBatch deleted=%d, want 1", deletedRows)
 	}
+	deleteWork := col.LastInsertStats().ColumnPublishFinalizeCandidateResourceWork
+	if deleteWork.AppendOnlyFastPath == 0 || deleteWork.RemovedObligations != 0 || deleteWork.FullClosureValidations != 0 {
+		t.Fatalf("delete tombstone publication work=%+v want append-only tombstone admission", deleteWork)
+	}
 	deleteLSN := d.State().AppliedCommandLSN
 	if deleteLSN <= updateLSN {
 		t.Fatalf("delete AppliedCommandLSN=%d, want greater than update LSN %d", deleteLSN, updateLSN)

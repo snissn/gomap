@@ -261,6 +261,7 @@ type ColumnPublishPlan struct {
 	StageMetrics                           ColumnPublishStageMetrics
 	stableResources                        *rootpublication.StableResourceSet
 	durableResourceRequirements            rootpublication.StableLogicalObligationRequirements
+	durableResourceMutation                rootpublication.StableLogicalObligationMutation
 }
 
 // ColumnManifestRootDelta is the ordered-root publish descriptor for the
@@ -484,6 +485,13 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 	if err != nil {
 		return ColumnPublishPlan{}, fmt.Errorf("collections: derive durable column resource closure: %w", err)
 	}
+	var durableResourceMutation rootpublication.StableLogicalObligationMutation
+	if rootDelta.MutationDelta {
+		durableResourceMutation, err = stableColumnManifestDurableMutation(input.CurrentManifestRecords, rootDelta.Mutations, manifest.Identity.Generation, cfg.AssetManager.Namespace)
+		if err != nil {
+			return ColumnPublishPlan{}, fmt.Errorf("collections: derive durable column resource mutation: %w", err)
+		}
+	}
 
 	preparedBytes, err := checkedSumColumnPreparedAssetBytes(manifestPrepared.Assets)
 	if err != nil {
@@ -522,6 +530,7 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 		StageMetrics:                metrics,
 		stableResources:             stableResources,
 		durableResourceRequirements: durableResourceRequirements,
+		durableResourceMutation:     durableResourceMutation,
 	}
 
 	if input.Hooks.BuildSystemDelta != nil {

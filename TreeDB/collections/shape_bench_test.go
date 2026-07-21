@@ -64,6 +64,14 @@ func addCollectionInsertStats(dst *collections.CollectionInsertStats, src collec
 	dst.ColumnPublishFinalize += src.ColumnPublishFinalize
 	dst.ColumnPublishFinalizePrepareDurability += src.ColumnPublishFinalizePrepareDurability
 	dst.ColumnPublishFinalizeCandidateBuild += src.ColumnPublishFinalizeCandidateBuild
+	dst.ColumnPublishFinalizeCandidateVisibleBaseClone += src.ColumnPublishFinalizeCandidateVisibleBaseClone
+	dst.ColumnPublishFinalizeCandidateInheritedFilter += src.ColumnPublishFinalizeCandidateInheritedFilter
+	dst.ColumnPublishFinalizeCandidateFreshCapture += src.ColumnPublishFinalizeCandidateFreshCapture
+	dst.ColumnPublishFinalizeCandidateClosureAssemble += src.ColumnPublishFinalizeCandidateClosureAssemble
+	dst.ColumnPublishFinalizeCandidateVisibleClone += src.ColumnPublishFinalizeCandidateVisibleClone
+	dst.ColumnPublishFinalizeCandidateCOWPrepare += src.ColumnPublishFinalizeCandidateCOWPrepare
+	dst.ColumnPublishFinalizeCandidateOther += src.ColumnPublishFinalizeCandidateOther
+	dst.ColumnPublishFinalizeCandidateResourceWork.Add(src.ColumnPublishFinalizeCandidateResourceWork)
 	dst.ColumnPublishFinalizeEnqueueActivation += src.ColumnPublishFinalizeEnqueueActivation
 	dst.ColumnPublishFinalizeAdmissionWait += src.ColumnPublishFinalizeAdmissionWait
 	dst.ColumnPublishFinalizeDurabilityWait += src.ColumnPublishFinalizeDurabilityWait
@@ -172,6 +180,13 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 	reportDuration("column_publish_finalize_ns/doc", stats.ColumnPublishFinalize)
 	reportDuration("column_publish_finalize_prepare_durability_ns/doc", stats.ColumnPublishFinalizePrepareDurability)
 	reportDuration("column_publish_finalize_candidate_build_ns/doc", stats.ColumnPublishFinalizeCandidateBuild)
+	reportDuration("column_publish_candidate_visible_base_clone_ns/doc", stats.ColumnPublishFinalizeCandidateVisibleBaseClone)
+	reportDuration("column_publish_candidate_inherited_filter_ns/doc", stats.ColumnPublishFinalizeCandidateInheritedFilter)
+	reportDuration("column_publish_candidate_fresh_capture_ns/doc", stats.ColumnPublishFinalizeCandidateFreshCapture)
+	reportDuration("column_publish_candidate_closure_assemble_ns/doc", stats.ColumnPublishFinalizeCandidateClosureAssemble)
+	reportDuration("column_publish_candidate_visible_clone_ns/doc", stats.ColumnPublishFinalizeCandidateVisibleClone)
+	reportDuration("column_publish_candidate_cow_prepare_ns/doc", stats.ColumnPublishFinalizeCandidateCOWPrepare)
+	reportDuration("column_publish_candidate_other_ns/doc", stats.ColumnPublishFinalizeCandidateOther)
 	reportDuration("column_publish_finalize_enqueue_activation_ns/doc", stats.ColumnPublishFinalizeEnqueueActivation)
 	reportDuration("column_publish_finalize_admission_wait_ns/doc", stats.ColumnPublishFinalizeAdmissionWait)
 	reportDuration("column_publish_finalize_durability_wait_ns/doc", stats.ColumnPublishFinalizeDurabilityWait)

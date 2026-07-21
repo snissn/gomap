@@ -251,6 +251,16 @@ type columnStoreInsertPhaseMetric struct {
 	ColumnPublishFinalizeDurationMS                  float64 `json:"column_publish_finalize_duration_ms,omitempty"`
 	ColumnPublishFinalizePrepareDurabilityDurationMS float64 `json:"column_publish_finalize_prepare_durability_duration_ms,omitempty"`
 	ColumnPublishFinalizeCandidateBuildDurationMS    float64 `json:"column_publish_finalize_candidate_build_duration_ms,omitempty"`
+
+	ColumnPublishCandidateVisibleBaseCloneMS float64                                `json:"column_publish_candidate_visible_base_clone_duration_ms,omitempty"`
+	ColumnPublishCandidateInheritedFilterMS  float64                                `json:"column_publish_candidate_inherited_filter_duration_ms,omitempty"`
+	ColumnPublishCandidateFreshCaptureMS     float64                                `json:"column_publish_candidate_fresh_capture_duration_ms,omitempty"`
+	ColumnPublishCandidateClosureAssembleMS  float64                                `json:"column_publish_candidate_closure_assemble_duration_ms,omitempty"`
+	ColumnPublishCandidateVisibleCloneMS     float64                                `json:"column_publish_candidate_visible_clone_duration_ms,omitempty"`
+	ColumnPublishCandidateCOWPrepareMS       float64                                `json:"column_publish_candidate_cow_prepare_duration_ms,omitempty"`
+	ColumnPublishCandidateOtherMS            float64                                `json:"column_publish_candidate_other_duration_ms,omitempty"`
+	ColumnPublishCandidateResourceWork       columnStoreCandidateResourceWorkMetric `json:"column_publish_candidate_resource_work"`
+
 	ColumnPublishFinalizeEnqueueActivationDurationMS float64 `json:"column_publish_finalize_enqueue_activation_duration_ms,omitempty"`
 	ColumnPublishFinalizeAdmissionWaitDurationMS     float64 `json:"column_publish_finalize_admission_wait_duration_ms,omitempty"`
 	ColumnPublishFinalizeDurabilityWaitDurationMS    float64 `json:"column_publish_finalize_durability_wait_duration_ms,omitempty"`
@@ -322,6 +332,33 @@ type columnStoreInsertPhaseMetric struct {
 	PublishNsPerRow                           float64 `json:"publish_ns_per_row,omitempty"`
 	ColumnStoreDeclaredRowReuseCoverageRatio  float64 `json:"column_store_declared_row_reuse_coverage_ratio,omitempty"`
 	RetainedPayloadSemanticStreamBlocksPerRun float64 `json:"retained_payload_semantic_stream_blocks_per_run,omitempty"`
+}
+
+type columnStoreCandidateResourceWorkMetric struct {
+	CloneOperations                 uint64 `json:"clone_operations,omitempty"`
+	FreezeOperations                uint64 `json:"freeze_operations,omitempty"`
+	RequirementFieldsInspected      uint64 `json:"requirement_fields_inspected,omitempty"`
+	RequirementObligationsInspected uint64 `json:"requirement_obligations_inspected,omitempty"`
+	SourceEntriesInspected          uint64 `json:"source_entries_inspected,omitempty"`
+	SourceObligationsInspected      uint64 `json:"source_obligations_inspected,omitempty"`
+	RetainedEntries                 uint64 `json:"retained_entries,omitempty"`
+	RetainedObligations             uint64 `json:"retained_obligations,omitempty"`
+	DroppedEntries                  uint64 `json:"dropped_entries,omitempty"`
+	DroppedObligations              uint64 `json:"dropped_obligations,omitempty"`
+	CopiedEntries                   uint64 `json:"copied_entries,omitempty"`
+	CopiedObligations               uint64 `json:"copied_obligations,omitempty"`
+	PhysicalHandleCopies            uint64 `json:"physical_handle_copies,omitempty"`
+	LogicalObligationNormalizations uint64 `json:"logical_obligation_normalizations,omitempty"`
+	RetainedIndexNodeVisits         uint64 `json:"retained_index_node_visits,omitempty"`
+	RetainedIndexNodeCopies         uint64 `json:"retained_index_node_copies,omitempty"`
+	LogicalIndexNodesAdmitted       uint64 `json:"logical_index_nodes_admitted,omitempty"`
+	NewlyAdmittedEntries            uint64 `json:"newly_admitted_entries,omitempty"`
+	NewlyAdmittedObligations        uint64 `json:"newly_admitted_obligations,omitempty"`
+	RemovedObligations              uint64 `json:"removed_obligations,omitempty"`
+	AppendOnlyFastPath              uint64 `json:"append_only_fast_path,omitempty"`
+	AppendOnlyFallbacks             uint64 `json:"append_only_fallbacks,omitempty"`
+	DestructiveFallbacks            uint64 `json:"destructive_fallbacks,omitempty"`
+	FullClosureValidations          uint64 `json:"full_closure_validations,omitempty"`
 }
 
 type columnStoreQueryMetric struct {
@@ -1659,6 +1696,14 @@ func columnStoreAddCollectionInsertStats(dst *collections.CollectionInsertStats,
 	dst.ColumnPublishFinalize += src.ColumnPublishFinalize
 	dst.ColumnPublishFinalizePrepareDurability += src.ColumnPublishFinalizePrepareDurability
 	dst.ColumnPublishFinalizeCandidateBuild += src.ColumnPublishFinalizeCandidateBuild
+	dst.ColumnPublishFinalizeCandidateVisibleBaseClone += src.ColumnPublishFinalizeCandidateVisibleBaseClone
+	dst.ColumnPublishFinalizeCandidateInheritedFilter += src.ColumnPublishFinalizeCandidateInheritedFilter
+	dst.ColumnPublishFinalizeCandidateFreshCapture += src.ColumnPublishFinalizeCandidateFreshCapture
+	dst.ColumnPublishFinalizeCandidateClosureAssemble += src.ColumnPublishFinalizeCandidateClosureAssemble
+	dst.ColumnPublishFinalizeCandidateVisibleClone += src.ColumnPublishFinalizeCandidateVisibleClone
+	dst.ColumnPublishFinalizeCandidateCOWPrepare += src.ColumnPublishFinalizeCandidateCOWPrepare
+	dst.ColumnPublishFinalizeCandidateOther += src.ColumnPublishFinalizeCandidateOther
+	dst.ColumnPublishFinalizeCandidateResourceWork.Add(src.ColumnPublishFinalizeCandidateResourceWork)
 	dst.ColumnPublishFinalizeEnqueueActivation += src.ColumnPublishFinalizeEnqueueActivation
 	dst.ColumnPublishFinalizeAdmissionWait += src.ColumnPublishFinalizeAdmissionWait
 	dst.ColumnPublishFinalizeDurabilityWait += src.ColumnPublishFinalizeDurabilityWait
@@ -1735,49 +1780,84 @@ func columnStoreAddCollectionInsertStats(dst *collections.CollectionInsertStats,
 func columnStoreInsertPhaseMetricFromStats(stats collections.CollectionInsertStats, batches int) columnStoreInsertPhaseMetric {
 	rows := stats.Documents
 	out := columnStoreInsertPhaseMetric{
-		Documents:                                          rows,
-		Batches:                                            batches,
-		Runs:                                               stats.Runs,
-		PrepareDocumentsDurationMS:                         durationMS(stats.PrepareDocuments),
-		PrepareDocumentsNsPerRow:                           nsPerRow(stats.PrepareDocuments, rows),
-		DuplicateDocumentPreflightDurationMS:               durationMS(stats.DuplicateDocumentPreflight),
-		DuplicateDocumentPreflightNsPerRow:                 nsPerRow(stats.DuplicateDocumentPreflight, rows),
-		RetainedPayloadPrepareDurationMS:                   durationMS(stats.RetainedPayloadPrepare),
-		RetainedPayloadPrepareNsPerRow:                     nsPerRow(stats.RetainedPayloadPrepare, rows),
-		RetainedPayloadRows:                                stats.RetainedPayloadRows,
-		RetainedPayloadDeclaredRows:                        stats.RetainedPayloadDeclaredRows,
-		RetainedPayloadSemanticStreamBlocks:                stats.RetainedPayloadSemanticStreamBlocks,
-		RetainedPayloadSemanticStreamWorkers:               stats.RetainedPayloadSemanticStreamWorkerCount,
-		RetainedPayloadSemanticStreamDeclaredMS:            durationMS(stats.RetainedPayloadSemanticStreamDeclaredRowPrepare),
-		RetainedPayloadSemanticStreamBlockWallMS:           durationMS(stats.RetainedPayloadSemanticStreamBlockPrepareWall),
-		RetainedPayloadSemanticStreamCollectMS:             durationMS(stats.RetainedPayloadSemanticStreamBlockCollect),
-		RetainedPayloadSemanticStreamEncoderMS:             durationMS(stats.RetainedPayloadSemanticStreamBlockEncoderSetup),
-		RetainedPayloadSemanticStreamRawEncodeMS:           durationMS(stats.RetainedPayloadSemanticStreamBlockRawEncode),
-		RetainedPayloadSemanticStreamStoreEncodeMS:         durationMS(stats.RetainedPayloadSemanticStreamBlockStoredEncode),
-		RetainedPayloadSemanticStreamFinalizeMS:            durationMS(stats.RetainedPayloadSemanticStreamBlockFinalize),
-		RetainedPayloadSemanticStreamTableBuildMS:          durationMS(stats.RetainedPayloadSemanticStreamTableBuild),
-		RetainedPayloadValueLogPointerizeMS:                durationMS(stats.RetainedPayloadValueLogPointerize),
-		RetainedPayloadValueLogPointerizeNsPerRow:          nsPerRow(stats.RetainedPayloadValueLogPointerize, rows),
-		RetainedPayloadValueLogValues:                      stats.RetainedPayloadValueLogValues,
-		RetainedPayloadValueLogBytes:                       stats.RetainedPayloadValueLogBytes,
-		RetainedStreamValueLogPointerizeMS:                 durationMS(stats.RetainedStreamValueLogPointerize),
-		RetainedStreamValueLogPointerizeNsPerRow:           nsPerRow(stats.RetainedStreamValueLogPointerize, rows),
-		RetainedStreamValueLogValues:                       stats.RetainedStreamValueLogValues,
-		RetainedStreamValueLogBytes:                        stats.RetainedStreamValueLogBytes,
-		ColumnPublishBuildColumnDeltaDurationMS:            durationMS(stats.ColumnPublishBuildColumnDelta),
-		ColumnPublishBuildColumnDeltaNsPerRow:              nsPerRow(stats.ColumnPublishBuildColumnDelta, rows),
-		ColumnPublishBuildSystemDeltaDurationMS:            durationMS(stats.ColumnPublishBuildSystemDelta),
-		ColumnPublishBuildSystemDeltaNsPerRow:              nsPerRow(stats.ColumnPublishBuildSystemDelta, rows),
-		ColumnPublishCommitDurationMS:                      durationMS(stats.ColumnPublishCommit),
-		ColumnPublishCommitNsPerRow:                        nsPerRow(stats.ColumnPublishCommit, rows),
-		ColumnPublishWriteLockWaitDurationMS:               durationMS(stats.ColumnPublishWriteLockWait),
-		ColumnPublishPreflightDurationMS:                   durationMS(stats.ColumnPublishPreflight),
-		ColumnPublishCommandWALAppendDurationMS:            durationMS(stats.ColumnPublishCommandWALAppend),
-		ColumnPublishOrderedRootApplyDurationMS:            durationMS(stats.ColumnPublishOrderedRootApply),
-		ColumnPublishSystemRootApplyDurationMS:             durationMS(stats.ColumnPublishSystemRootApply),
-		ColumnPublishFinalizeDurationMS:                    durationMS(stats.ColumnPublishFinalize),
-		ColumnPublishFinalizePrepareDurabilityDurationMS:   durationMS(stats.ColumnPublishFinalizePrepareDurability),
-		ColumnPublishFinalizeCandidateBuildDurationMS:      durationMS(stats.ColumnPublishFinalizeCandidateBuild),
+		Documents:                                        rows,
+		Batches:                                          batches,
+		Runs:                                             stats.Runs,
+		PrepareDocumentsDurationMS:                       durationMS(stats.PrepareDocuments),
+		PrepareDocumentsNsPerRow:                         nsPerRow(stats.PrepareDocuments, rows),
+		DuplicateDocumentPreflightDurationMS:             durationMS(stats.DuplicateDocumentPreflight),
+		DuplicateDocumentPreflightNsPerRow:               nsPerRow(stats.DuplicateDocumentPreflight, rows),
+		RetainedPayloadPrepareDurationMS:                 durationMS(stats.RetainedPayloadPrepare),
+		RetainedPayloadPrepareNsPerRow:                   nsPerRow(stats.RetainedPayloadPrepare, rows),
+		RetainedPayloadRows:                              stats.RetainedPayloadRows,
+		RetainedPayloadDeclaredRows:                      stats.RetainedPayloadDeclaredRows,
+		RetainedPayloadSemanticStreamBlocks:              stats.RetainedPayloadSemanticStreamBlocks,
+		RetainedPayloadSemanticStreamWorkers:             stats.RetainedPayloadSemanticStreamWorkerCount,
+		RetainedPayloadSemanticStreamDeclaredMS:          durationMS(stats.RetainedPayloadSemanticStreamDeclaredRowPrepare),
+		RetainedPayloadSemanticStreamBlockWallMS:         durationMS(stats.RetainedPayloadSemanticStreamBlockPrepareWall),
+		RetainedPayloadSemanticStreamCollectMS:           durationMS(stats.RetainedPayloadSemanticStreamBlockCollect),
+		RetainedPayloadSemanticStreamEncoderMS:           durationMS(stats.RetainedPayloadSemanticStreamBlockEncoderSetup),
+		RetainedPayloadSemanticStreamRawEncodeMS:         durationMS(stats.RetainedPayloadSemanticStreamBlockRawEncode),
+		RetainedPayloadSemanticStreamStoreEncodeMS:       durationMS(stats.RetainedPayloadSemanticStreamBlockStoredEncode),
+		RetainedPayloadSemanticStreamFinalizeMS:          durationMS(stats.RetainedPayloadSemanticStreamBlockFinalize),
+		RetainedPayloadSemanticStreamTableBuildMS:        durationMS(stats.RetainedPayloadSemanticStreamTableBuild),
+		RetainedPayloadValueLogPointerizeMS:              durationMS(stats.RetainedPayloadValueLogPointerize),
+		RetainedPayloadValueLogPointerizeNsPerRow:        nsPerRow(stats.RetainedPayloadValueLogPointerize, rows),
+		RetainedPayloadValueLogValues:                    stats.RetainedPayloadValueLogValues,
+		RetainedPayloadValueLogBytes:                     stats.RetainedPayloadValueLogBytes,
+		RetainedStreamValueLogPointerizeMS:               durationMS(stats.RetainedStreamValueLogPointerize),
+		RetainedStreamValueLogPointerizeNsPerRow:         nsPerRow(stats.RetainedStreamValueLogPointerize, rows),
+		RetainedStreamValueLogValues:                     stats.RetainedStreamValueLogValues,
+		RetainedStreamValueLogBytes:                      stats.RetainedStreamValueLogBytes,
+		ColumnPublishBuildColumnDeltaDurationMS:          durationMS(stats.ColumnPublishBuildColumnDelta),
+		ColumnPublishBuildColumnDeltaNsPerRow:            nsPerRow(stats.ColumnPublishBuildColumnDelta, rows),
+		ColumnPublishBuildSystemDeltaDurationMS:          durationMS(stats.ColumnPublishBuildSystemDelta),
+		ColumnPublishBuildSystemDeltaNsPerRow:            nsPerRow(stats.ColumnPublishBuildSystemDelta, rows),
+		ColumnPublishCommitDurationMS:                    durationMS(stats.ColumnPublishCommit),
+		ColumnPublishCommitNsPerRow:                      nsPerRow(stats.ColumnPublishCommit, rows),
+		ColumnPublishWriteLockWaitDurationMS:             durationMS(stats.ColumnPublishWriteLockWait),
+		ColumnPublishPreflightDurationMS:                 durationMS(stats.ColumnPublishPreflight),
+		ColumnPublishCommandWALAppendDurationMS:          durationMS(stats.ColumnPublishCommandWALAppend),
+		ColumnPublishOrderedRootApplyDurationMS:          durationMS(stats.ColumnPublishOrderedRootApply),
+		ColumnPublishSystemRootApplyDurationMS:           durationMS(stats.ColumnPublishSystemRootApply),
+		ColumnPublishFinalizeDurationMS:                  durationMS(stats.ColumnPublishFinalize),
+		ColumnPublishFinalizePrepareDurabilityDurationMS: durationMS(stats.ColumnPublishFinalizePrepareDurability),
+		ColumnPublishFinalizeCandidateBuildDurationMS:    durationMS(stats.ColumnPublishFinalizeCandidateBuild),
+
+		ColumnPublishCandidateVisibleBaseCloneMS: durationMS(stats.ColumnPublishFinalizeCandidateVisibleBaseClone),
+		ColumnPublishCandidateInheritedFilterMS:  durationMS(stats.ColumnPublishFinalizeCandidateInheritedFilter),
+		ColumnPublishCandidateFreshCaptureMS:     durationMS(stats.ColumnPublishFinalizeCandidateFreshCapture),
+		ColumnPublishCandidateClosureAssembleMS:  durationMS(stats.ColumnPublishFinalizeCandidateClosureAssemble),
+		ColumnPublishCandidateVisibleCloneMS:     durationMS(stats.ColumnPublishFinalizeCandidateVisibleClone),
+		ColumnPublishCandidateCOWPrepareMS:       durationMS(stats.ColumnPublishFinalizeCandidateCOWPrepare),
+		ColumnPublishCandidateOtherMS:            durationMS(stats.ColumnPublishFinalizeCandidateOther),
+		ColumnPublishCandidateResourceWork: columnStoreCandidateResourceWorkMetric{
+			CloneOperations:                 stats.ColumnPublishFinalizeCandidateResourceWork.CloneOperations,
+			FreezeOperations:                stats.ColumnPublishFinalizeCandidateResourceWork.FreezeOperations,
+			RequirementFieldsInspected:      stats.ColumnPublishFinalizeCandidateResourceWork.RequirementFieldsInspected,
+			RequirementObligationsInspected: stats.ColumnPublishFinalizeCandidateResourceWork.RequirementObligationsInspected,
+			SourceEntriesInspected:          stats.ColumnPublishFinalizeCandidateResourceWork.SourceEntriesInspected,
+			SourceObligationsInspected:      stats.ColumnPublishFinalizeCandidateResourceWork.SourceObligationsInspected,
+			RetainedEntries:                 stats.ColumnPublishFinalizeCandidateResourceWork.RetainedEntries,
+			RetainedObligations:             stats.ColumnPublishFinalizeCandidateResourceWork.RetainedObligations,
+			DroppedEntries:                  stats.ColumnPublishFinalizeCandidateResourceWork.DroppedEntries,
+			DroppedObligations:              stats.ColumnPublishFinalizeCandidateResourceWork.DroppedObligations,
+			CopiedEntries:                   stats.ColumnPublishFinalizeCandidateResourceWork.CopiedEntries,
+			CopiedObligations:               stats.ColumnPublishFinalizeCandidateResourceWork.CopiedObligations,
+			PhysicalHandleCopies:            stats.ColumnPublishFinalizeCandidateResourceWork.PhysicalHandleCopies,
+			LogicalObligationNormalizations: stats.ColumnPublishFinalizeCandidateResourceWork.LogicalObligationNormalizations,
+			RetainedIndexNodeVisits:         stats.ColumnPublishFinalizeCandidateResourceWork.RetainedIndexNodeVisits,
+			RetainedIndexNodeCopies:         stats.ColumnPublishFinalizeCandidateResourceWork.RetainedIndexNodeCopies,
+			LogicalIndexNodesAdmitted:       stats.ColumnPublishFinalizeCandidateResourceWork.LogicalIndexNodesAdmitted,
+			NewlyAdmittedEntries:            stats.ColumnPublishFinalizeCandidateResourceWork.NewlyAdmittedEntries,
+			NewlyAdmittedObligations:        stats.ColumnPublishFinalizeCandidateResourceWork.NewlyAdmittedObligations,
+			RemovedObligations:              stats.ColumnPublishFinalizeCandidateResourceWork.RemovedObligations,
+			AppendOnlyFastPath:              stats.ColumnPublishFinalizeCandidateResourceWork.AppendOnlyFastPath,
+			AppendOnlyFallbacks:             stats.ColumnPublishFinalizeCandidateResourceWork.AppendOnlyFallbacks,
+			DestructiveFallbacks:            stats.ColumnPublishFinalizeCandidateResourceWork.DestructiveFallbacks,
+			FullClosureValidations:          stats.ColumnPublishFinalizeCandidateResourceWork.FullClosureValidations,
+		},
+
 		ColumnPublishFinalizeEnqueueActivationDurationMS:   durationMS(stats.ColumnPublishFinalizeEnqueueActivation),
 		ColumnPublishFinalizeAdmissionWaitDurationMS:       durationMS(stats.ColumnPublishFinalizeAdmissionWait),
 		ColumnPublishFinalizeDurabilityWaitDurationMS:      durationMS(stats.ColumnPublishFinalizeDurabilityWait),
@@ -4947,6 +5027,13 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 		sb.WriteString(fmt.Sprintf("| `finalize` | %.3f |  |\n", stats.ColumnPublishFinalizeDurationMS))
 		sb.WriteString(fmt.Sprintf("| `finalize_prepare_durability` | %.3f |  |\n", stats.ColumnPublishFinalizePrepareDurabilityDurationMS))
 		sb.WriteString(fmt.Sprintf("| `finalize_candidate_build` | %.3f |  |\n", stats.ColumnPublishFinalizeCandidateBuildDurationMS))
+		sb.WriteString(fmt.Sprintf("| `candidate_visible_base_clone` | %.3f |  |\n", stats.ColumnPublishCandidateVisibleBaseCloneMS))
+		sb.WriteString(fmt.Sprintf("| `candidate_inherited_filter` | %.3f |  |\n", stats.ColumnPublishCandidateInheritedFilterMS))
+		sb.WriteString(fmt.Sprintf("| `candidate_fresh_capture` | %.3f |  |\n", stats.ColumnPublishCandidateFreshCaptureMS))
+		sb.WriteString(fmt.Sprintf("| `candidate_closure_assemble` | %.3f |  |\n", stats.ColumnPublishCandidateClosureAssembleMS))
+		sb.WriteString(fmt.Sprintf("| `candidate_visible_clone` | %.3f |  |\n", stats.ColumnPublishCandidateVisibleCloneMS))
+		sb.WriteString(fmt.Sprintf("| `candidate_cow_prepare` | %.3f |  |\n", stats.ColumnPublishCandidateCOWPrepareMS))
+		sb.WriteString(fmt.Sprintf("| `candidate_other` | %.3f |  |\n", stats.ColumnPublishCandidateOtherMS))
 		sb.WriteString(fmt.Sprintf("| `finalize_enqueue_activation` | %.3f |  |\n", stats.ColumnPublishFinalizeEnqueueActivationDurationMS))
 		sb.WriteString(fmt.Sprintf("| `finalize_admission_wait` | %.3f |  |\n", stats.ColumnPublishFinalizeAdmissionWaitDurationMS))
 		sb.WriteString(fmt.Sprintf("| `finalize_durability_wait` | %.3f |  |\n", stats.ColumnPublishFinalizeDurabilityWaitDurationMS))
@@ -4977,6 +5064,24 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 		sb.WriteString(fmt.Sprintf("| `root_delta_construction` | %.3f |  |\n", stats.ColumnPublishRootDeltaDurationMS))
 		sb.WriteString(fmt.Sprintf("| `root_delta_materialization` | %.3f |  |\n", stats.ColumnPublishRootDeltaMaterializeMS))
 		sb.WriteString(fmt.Sprintf("| `system_delta_construction` | %.3f |  |\n\n", stats.ColumnPublishSystemDeltaDurationMS))
+		work := stats.ColumnPublishCandidateResourceWork
+		sb.WriteString("| candidate resource closure counter | total |\n")
+		sb.WriteString("|---|---:|\n")
+		sb.WriteString(fmt.Sprintf("| `source_entries_inspected` | %d |\n", work.SourceEntriesInspected))
+		sb.WriteString(fmt.Sprintf("| `source_obligations_inspected` | %d |\n", work.SourceObligationsInspected))
+		sb.WriteString(fmt.Sprintf("| `copied_entries` | %d |\n", work.CopiedEntries))
+		sb.WriteString(fmt.Sprintf("| `copied_obligations` | %d |\n", work.CopiedObligations))
+		sb.WriteString(fmt.Sprintf("| `physical_handle_copies` | %d |\n", work.PhysicalHandleCopies))
+		sb.WriteString(fmt.Sprintf("| `logical_obligation_normalizations` | %d |\n", work.LogicalObligationNormalizations))
+		sb.WriteString(fmt.Sprintf("| `retained_index_node_visits` | %d |\n", work.RetainedIndexNodeVisits))
+		sb.WriteString(fmt.Sprintf("| `retained_index_node_copies` | %d |\n", work.RetainedIndexNodeCopies))
+		sb.WriteString(fmt.Sprintf("| `logical_index_nodes_admitted` | %d |\n", work.LogicalIndexNodesAdmitted))
+		sb.WriteString(fmt.Sprintf("| `newly_admitted_obligations` | %d |\n", work.NewlyAdmittedObligations))
+		sb.WriteString(fmt.Sprintf("| `removed_obligations` | %d |\n", work.RemovedObligations))
+		sb.WriteString(fmt.Sprintf("| `append_only_fast_path` | %d |\n", work.AppendOnlyFastPath))
+		sb.WriteString(fmt.Sprintf("| `append_only_fallbacks` | %d |\n", work.AppendOnlyFallbacks))
+		sb.WriteString(fmt.Sprintf("| `destructive_fallbacks` | %d |\n", work.DestructiveFallbacks))
+		sb.WriteString(fmt.Sprintf("| `full_closure_validations` | %d |\n\n", work.FullClosureValidations))
 	}
 }
 
@@ -5003,6 +5108,13 @@ func columnStoreInsertStatsHasColumnPublishSubphase(stats columnStoreInsertPhase
 		stats.ColumnPublishFinalizeDurationMS > 0 ||
 		stats.ColumnPublishFinalizePrepareDurabilityDurationMS > 0 ||
 		stats.ColumnPublishFinalizeCandidateBuildDurationMS > 0 ||
+		stats.ColumnPublishCandidateVisibleBaseCloneMS > 0 ||
+		stats.ColumnPublishCandidateInheritedFilterMS > 0 ||
+		stats.ColumnPublishCandidateFreshCaptureMS > 0 ||
+		stats.ColumnPublishCandidateClosureAssembleMS > 0 ||
+		stats.ColumnPublishCandidateVisibleCloneMS > 0 ||
+		stats.ColumnPublishCandidateCOWPrepareMS > 0 ||
+		stats.ColumnPublishCandidateOtherMS > 0 ||
 		stats.ColumnPublishFinalizeEnqueueActivationDurationMS > 0 ||
 		stats.ColumnPublishFinalizeAdmissionWaitDurationMS > 0 ||
 		stats.ColumnPublishFinalizeDurabilityWaitDurationMS > 0 ||
