@@ -9057,6 +9057,8 @@ type DB struct {
 	pointSuccessorGeneralMergeIteratorsTotal                     atomic.Uint64
 	pointSuccessorSelectionNsTotal                               atomic.Uint64
 	pointSuccessorMaterializeNsTotal                             atomic.Uint64
+	pointSuccessorSelectionTimingSamplesTotal                    atomic.Uint64
+	pointSuccessorMaterializeTimingSamplesTotal                  atomic.Uint64
 	checkpointTotalNs                                            atomic.Uint64
 	checkpointMaxNs                                              atomic.Uint64
 	checkpointNoopSkips                                          atomic.Uint64
@@ -30367,6 +30369,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.point_successor.sources_max"] = fmt.Sprintf("%d", db.pointSuccessorSourcesMax.Load())
 	stats["treedb.cache.point_successor.selection_ns_total"] = fmt.Sprintf("%d", db.pointSuccessorSelectionNsTotal.Load())
 	stats["treedb.cache.point_successor.materialize_ns_total"] = fmt.Sprintf("%d", db.pointSuccessorMaterializeNsTotal.Load())
+	stats["treedb.cache.point_successor.selection_timing_samples_total"] = fmt.Sprintf("%d", db.pointSuccessorSelectionTimingSamplesTotal.Load())
+	stats["treedb.cache.point_successor.materialize_timing_samples_total"] = fmt.Sprintf("%d", db.pointSuccessorMaterializeTimingSamplesTotal.Load())
 	// This metric is an invariant sentinel for SeekGE, not a global iterator
 	// construction counter. It must stay zero because the point-successor path
 	// has no general-merge fallback; any future fallback must increment it at

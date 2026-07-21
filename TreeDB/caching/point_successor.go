@@ -187,6 +187,7 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 	recordSelection := func() {
 		if debugTiming && !selectionRecorded {
 			db.pointSuccessorSelectionNsTotal.Add(uint64(time.Since(selectionStarted).Nanoseconds()))
+			db.pointSuccessorSelectionTimingSamplesTotal.Add(1)
 			selectionRecorded = true
 		}
 	}
@@ -312,7 +313,10 @@ func (db *DB) materializePointSuccessor(candidate pointSuccessorCandidate) ([]by
 	var materializeStarted time.Time
 	if debugTiming {
 		materializeStarted = time.Now()
-		defer func() { db.pointSuccessorMaterializeNsTotal.Add(uint64(time.Since(materializeStarted).Nanoseconds())) }()
+		defer func() {
+			db.pointSuccessorMaterializeNsTotal.Add(uint64(time.Since(materializeStarted).Nanoseconds()))
+			db.pointSuccessorMaterializeTimingSamplesTotal.Add(1)
+		}()
 	}
 	if !candidate.found || candidate.flags&node.FlagTombstone != 0 {
 		return nil, nil, false, nil

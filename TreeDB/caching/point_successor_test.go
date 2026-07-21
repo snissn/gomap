@@ -356,8 +356,8 @@ func TestSeekGE_AttributionPartitionsWinningSource(t *testing.T) {
 			t.Fatalf("%s delta=%d want %d", tc.name, got, tc.want)
 		}
 	}
-	if got := parse(t, after, "treedb.cache.point_successor.selection_ns_total") - parse(t, before, "treedb.cache.point_successor.selection_ns_total"); got == 0 {
-		t.Fatal("point-successor selection timing did not advance")
+	if got := parse(t, after, "treedb.cache.point_successor.selection_timing_samples_total") - parse(t, before, "treedb.cache.point_successor.selection_timing_samples_total"); got == 0 {
+		t.Fatal("point-successor selection timing was not sampled")
 	}
 
 	publishedOnlyBackend := NewMockBackend()
@@ -383,6 +383,8 @@ func TestSeekGE_TimingAttributionIsOptIn(t *testing.T) {
 	for _, name := range []string{
 		"treedb.cache.point_successor.selection_ns_total",
 		"treedb.cache.point_successor.materialize_ns_total",
+		"treedb.cache.point_successor.selection_timing_samples_total",
+		"treedb.cache.point_successor.materialize_timing_samples_total",
 	} {
 		if after[name] != before[name] {
 			t.Fatalf("disabled %s changed from %s to %s", name, before[name], after[name])
