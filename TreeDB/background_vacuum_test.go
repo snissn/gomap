@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -779,6 +780,41 @@ func TestVacuumIndexOnlineContextCancelsWhileWaitingForMaintenance(t *testing.T)
 	case <-time.After(2 * time.Second):
 		t.Fatal("VacuumIndexOnline did not cancel while waiting for maintenance")
 	}
+}
+
+func TestLockFullScanMaintenanceContextCancellationLeavesNoWaiters(t *testing.T) {
+	var mu sync.Mutex
+	mu.Lock()
+	baselineGoroutines := runtime.NumGoroutine()
+
+	const waiters = 64
+	contexts := make([]context.CancelFunc, waiters)
+	done := make(chan error, waiters)
+	for i := range contexts {
+		ctx, cancel := context.WithCancel(context.Background())
+		contexts[i] = cancel
+		go func() { done <- lockFullScanMaintenanceContext(ctx, &mu) }()
+	}
+	time.Sleep(20 * time.Millisecond)
+	for _, cancel := range contexts {
+		cancel()
+	}
+	for range contexts {
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("lock wait error=%v, want context.Canceled", err)
+		}
+	}
+
+	runtime.Gosched()
+	blockedGoroutines := runtime.NumGoroutine()
+	mu.Unlock()
+	if blockedGoroutines > baselineGoroutines+waiters/4 {
+		t.Fatalf("goroutines after cancellation=%d baseline=%d; canceled lock waiters remain parked", blockedGoroutines, baselineGoroutines)
+	}
+	if !mu.TryLock() {
+		t.Fatal("canceled maintenance lock calls left queued mutex waiters")
+	}
+	mu.Unlock()
 }
 
 func TestVacuumIndexOnlineDoesNotHoldLifecycleWhileWaitingForMaintenance(t *testing.T) {

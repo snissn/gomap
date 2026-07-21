@@ -604,25 +604,17 @@ func lockFullScanMaintenanceContext(ctx context.Context, mu *sync.Mutex) error {
 		mu.Lock()
 		return nil
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	acquired := make(chan struct{})
-	abandon := make(chan struct{})
-	go func() {
-		mu.Lock()
-		select {
-		case acquired <- struct{}{}:
-		case <-abandon:
-			mu.Unlock()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if mu.TryLock() {
+			return nil
 		}
-	}()
-	select {
-	case <-acquired:
-		return nil
-	case <-ctx.Done():
-		close(abandon)
-		return ctx.Err()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
 	}
 }
 
