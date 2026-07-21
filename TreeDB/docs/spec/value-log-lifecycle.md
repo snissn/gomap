@@ -356,6 +356,18 @@ storage. It composes:
 
 Applied full storage compaction holds backend maintenance serialization for the
 whole sequence. Plan mode computes the same debt model without mutating storage.
+The plan records index page/span/freelist debt and a typed `index-vacuum`
+disposition. Full mode uses the bounded production thresholds; Exhaustive runs
+for any measured reclaimable index debt. Apply re-probes immediately before the
+phase, invokes the RecoverableRootSet-fenced online replacement on supported
+writable platforms, and checkpoints only after a successful replacement.
+One bounded settle replacement runs when later GC/checkpoint phases create new
+policy debt; completion is based on the audit after that settle pass.
+Transient stale/mutation races are `deferred`, Windows is `unsupported`, and
+permanent errors fail compaction. Deferred or unsupported required work keeps
+all completion flags false. `PolicyFullyCompacted` means selected planner debt
+converged; `ByteMinimized` additionally requires every Exhaustive byte phase to
+complete.
 
 Each cold debt audit performs at most one page-granular reachability walk over a
 coherent snapshot of the user, system, collection, and protected roots. The

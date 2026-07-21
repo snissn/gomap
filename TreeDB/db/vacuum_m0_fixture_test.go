@@ -237,14 +237,14 @@ func vacuumM0Options(dir string) Options {
 	return Options{Dir: dir, ChunkSize: 64 << 10, KeepRecent: 1, DisableBackgroundPrune: true, ValueLog: ValueLogOptions{PointerThreshold: 512}}
 }
 
-func openVacuumM0Fixture(tb *testing.T, opts Options) (*DB, vacuumM0Fixture) {
+func openVacuumM0Fixture(tb testing.TB, opts Options) (*DB, vacuumM0Fixture) {
 	tb.Helper()
 	d, err := Open(opts)
 	if err != nil {
 		tb.Fatalf("open fixture: %v", err)
 	}
 	for generation := 0; generation < 3; generation++ {
-		ptrs := appendPointersInNewSegment(tb, opts.Dir, 0, uint32(generation+1), uint64(100_000+generation*1_000), 192, func(key int) []byte {
+		ptrs := appendPointersInNewSegmentBench(tb, opts.Dir, 0, uint32(generation+1), uint64(100_000+generation*1_000), 192, func(key int) []byte {
 			return bytes.Repeat([]byte{byte(generation + key%251)}, 2048)
 		})
 		batch, ok := d.NewBatch().(*Batch)

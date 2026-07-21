@@ -70,6 +70,21 @@ type CompactStorageDebt = treedbdb.CompactStorageDebt
 // CompactStoragePhaseStats records one phase in a full compaction run.
 type CompactStoragePhaseStats = treedbdb.CompactStoragePhaseStats
 
+type CompactStoragePhaseStatus = treedbdb.CompactStoragePhaseStatus
+
+// VacuumOnlineStats records the production index replacement's phase and pause
+// timings when CompactStorage runs index vacuum.
+type VacuumOnlineStats = treedbdb.VacuumOnlineStats
+
+const (
+	CompactStoragePhaseStatusPlanned     = treedbdb.CompactStoragePhaseStatusPlanned
+	CompactStoragePhaseStatusNotRequired = treedbdb.CompactStoragePhaseStatusNotRequired
+	CompactStoragePhaseStatusSucceeded   = treedbdb.CompactStoragePhaseStatusSucceeded
+	CompactStoragePhaseStatusDeferred    = treedbdb.CompactStoragePhaseStatusDeferred
+	CompactStoragePhaseStatusUnsupported = treedbdb.CompactStoragePhaseStatusUnsupported
+	CompactStoragePhaseStatusFailed      = treedbdb.CompactStoragePhaseStatusFailed
+)
+
 // CompactStorageAuditStats records shared reachability work and reuse decisions.
 type CompactStorageAuditStats = treedbdb.CompactStorageAuditStats
 

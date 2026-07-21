@@ -79,15 +79,26 @@ type auditSummaryCompactPlan struct {
 }
 
 type auditSummaryDebt struct {
-	ValueLogRewriteSegments int   `json:"value_log_rewrite_segments"`
-	ValueLogRewriteBytes    int64 `json:"value_log_rewrite_bytes"`
-	ValueLogGCSegments      int   `json:"value_log_gc_segments"`
-	ValueLogGCBytes         int64 `json:"value_log_gc_bytes"`
-	LeafPackGenerations     int   `json:"leaf_pack_generations"`
-	LeafPackBytes           int64 `json:"leaf_pack_bytes"`
-	LeafGCGenerations       int   `json:"leaf_gc_generations"`
-	LeafGCBytes             int64 `json:"leaf_gc_bytes"`
-	ZeroByteValueLogFiles   int   `json:"zero_byte_value_log_files"`
+	ValueLogRewriteSegments                int    `json:"value_log_rewrite_segments"`
+	ValueLogRewriteBytes                   int64  `json:"value_log_rewrite_bytes"`
+	ValueLogGCSegments                     int    `json:"value_log_gc_segments"`
+	ValueLogGCBytes                        int64  `json:"value_log_gc_bytes"`
+	LeafPackGenerations                    int    `json:"leaf_pack_generations"`
+	LeafPackBytes                          int64  `json:"leaf_pack_bytes"`
+	LeafGCGenerations                      int    `json:"leaf_gc_generations"`
+	LeafGCBytes                            int64  `json:"leaf_gc_bytes"`
+	ZeroByteValueLogFiles                  int    `json:"zero_byte_value_log_files"`
+	IndexVacuumRequired                    bool   `json:"index_vacuum_required"`
+	IndexVacuumReason                      string `json:"index_vacuum_reason"`
+	IndexVacuumTotalPages                  uint64 `json:"index_vacuum_total_pages"`
+	IndexVacuumUserPages                   uint64 `json:"index_vacuum_user_pages"`
+	IndexVacuumUserSpan                    uint64 `json:"index_vacuum_user_span"`
+	IndexVacuumUserSpanRatioPPM            uint64 `json:"index_vacuum_user_span_ratio_ppm"`
+	IndexVacuumFreelistReclaimablePages    uint64 `json:"index_vacuum_freelist_reclaimable_pages"`
+	IndexVacuumFreelistReclaimableRatioPPM uint64 `json:"index_vacuum_freelist_reclaimable_ratio_ppm"`
+	IndexVacuumCollectionRootPages         uint64 `json:"index_vacuum_collection_root_pages"`
+	IndexVacuumCollectionRootSpan          uint64 `json:"index_vacuum_collection_root_span"`
+	IndexVacuumCollectionRootSpanRatioPPM  uint64 `json:"index_vacuum_collection_root_span_ratio_ppm"`
 }
 
 type auditSummaryValueLog struct {
@@ -509,15 +520,26 @@ func compactUsageExists(usage treedbdb.CompactStorageUsage) bool {
 
 func summarizeAuditDebt(debt treedbdb.CompactStorageDebt) auditSummaryDebt {
 	return auditSummaryDebt{
-		ValueLogRewriteSegments: debt.ValueLogRewriteSegments,
-		ValueLogRewriteBytes:    debt.ValueLogRewriteBytes,
-		ValueLogGCSegments:      debt.ValueLogGCSegments,
-		ValueLogGCBytes:         debt.ValueLogGCBytes,
-		LeafPackGenerations:     debt.LeafPackGenerations,
-		LeafPackBytes:           debt.LeafPackBytes,
-		LeafGCGenerations:       debt.LeafGCGenerations,
-		LeafGCBytes:             debt.LeafGCBytes,
-		ZeroByteValueLogFiles:   debt.ZeroByteValueLogFiles,
+		ValueLogRewriteSegments:                debt.ValueLogRewriteSegments,
+		ValueLogRewriteBytes:                   debt.ValueLogRewriteBytes,
+		ValueLogGCSegments:                     debt.ValueLogGCSegments,
+		ValueLogGCBytes:                        debt.ValueLogGCBytes,
+		LeafPackGenerations:                    debt.LeafPackGenerations,
+		LeafPackBytes:                          debt.LeafPackBytes,
+		LeafGCGenerations:                      debt.LeafGCGenerations,
+		LeafGCBytes:                            debt.LeafGCBytes,
+		ZeroByteValueLogFiles:                  debt.ZeroByteValueLogFiles,
+		IndexVacuumRequired:                    debt.IndexVacuumRequired,
+		IndexVacuumReason:                      debt.IndexVacuumReason,
+		IndexVacuumTotalPages:                  debt.IndexVacuumTotalPages,
+		IndexVacuumUserPages:                   debt.IndexVacuumUserPages,
+		IndexVacuumUserSpan:                    debt.IndexVacuumUserSpan,
+		IndexVacuumUserSpanRatioPPM:            debt.IndexVacuumUserSpanRatioPPM,
+		IndexVacuumFreelistReclaimablePages:    debt.IndexVacuumFreelistReclaimablePages,
+		IndexVacuumFreelistReclaimableRatioPPM: debt.IndexVacuumFreelistReclaimableRatioPPM,
+		IndexVacuumCollectionRootPages:         debt.IndexVacuumCollectionRootPages,
+		IndexVacuumCollectionRootSpan:          debt.IndexVacuumCollectionRootSpan,
+		IndexVacuumCollectionRootSpanRatioPPM:  debt.IndexVacuumCollectionRootSpanRatioPPM,
 	}
 }
 

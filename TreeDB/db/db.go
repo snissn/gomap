@@ -107,8 +107,9 @@ type DB struct {
 	pruner                         pruneWorker
 	leafGenerationPins             leafGenerationPinTracker
 	// Test hooks used for exact compaction phase-boundary coordination.
-	compactStorageBeforePhase func(string)
-	compactStorageAfterPhase  func(string)
+	compactStorageBeforePhase           func(string)
+	compactStorageAfterPhase            func(string)
+	compactStorageVacuumIndexOnlineHook func(context.Context, bool) error
 	// Test hook used to observe whether fenced value-log reclaim resolved
 	// referenced segments through the tracker or the full-scan fallback.
 	compactStorageFencedValueLogRefHook func(compactStorageFencedValueLogRefEvent)

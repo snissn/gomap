@@ -18,13 +18,14 @@ import (
 )
 
 type compactStorageM0FixtureSpec struct {
-	metadata        compactStorageMeasurementFixture
-	open            func(*testing.B) *DB
-	options         CompactStorageOptions
-	minPackRuns     int
-	expectRewrite   bool
-	expectVacuumRun bool
-	foreground      bool
+	metadata               compactStorageMeasurementFixture
+	open                   func(*testing.B) *DB
+	options                CompactStorageOptions
+	minPackRuns            int
+	expectRewrite          bool
+	expectVacuumRun        bool
+	minIndexShrinkRatioPPM uint64
+	foreground             bool
 }
 
 var compactStorageM0FixtureSpecs = []compactStorageM0FixtureSpec{
@@ -40,7 +41,8 @@ var compactStorageM0FixtureSpecs = []compactStorageM0FixtureSpec{
 			Mode: CompactStorageFull, LeafPackMaxPasses: 4,
 			LeafPackMaxGenerationsPerPass: 1, LeafPackMinReclaimPerCopyPPM: 1,
 		},
-		minPackRuns: 3,
+		minPackRuns:     3,
+		expectVacuumRun: true,
 	},
 	{
 		metadata: compactStorageMeasurementFixture{
@@ -49,16 +51,17 @@ var compactStorageM0FixtureSpecs = []compactStorageM0FixtureSpec{
 			ValueDistribution: "fixed-256", ValueLogPointerThreshold: page.DefaultInlineThreshold,
 			WALMode: "off-relaxed", ExpectedMaintenanceWork: "default Full generation-unbounded leaf-pack with 1GiB byte cap",
 		},
-		open:        func(b *testing.B) *DB { return openCompactStorageLeafPackBenchmarkFixture(b) },
-		options:     CompactStorageOptions{Mode: CompactStorageFull},
-		minPackRuns: 1,
+		open:            func(b *testing.B) *DB { return openCompactStorageLeafPackBenchmarkFixture(b) },
+		options:         CompactStorageOptions{Mode: CompactStorageFull},
+		minPackRuns:     1,
+		expectVacuumRun: true,
 	},
 	{
 		metadata: compactStorageMeasurementFixture{
 			Name: "full-low-debt", Seed: 3733003,
 			KeyDistribution:   "2047-live-1-stale-value-log-records",
 			ValueDistribution: "fixed-1024", ValueLogPointerThreshold: 1,
-			WALMode: "default", ExpectedMaintenanceWork: "Full audit with no value-log rewrite selected and unsupported index vacuum recorded",
+			WALMode: "default", ExpectedMaintenanceWork: "Full audit with no value-log rewrite or index vacuum selected",
 		},
 		open: func(b *testing.B) *DB { return openCompactStorageRewritePolicyBenchmarkFixture(b, 2047, 1, 1024) },
 		options: CompactStorageOptions{
@@ -68,15 +71,19 @@ var compactStorageM0FixtureSpecs = []compactStorageM0FixtureSpec{
 	{
 		metadata: compactStorageMeasurementFixture{
 			Name: "full-high-debt", Seed: 3733004,
-			KeyDistribution:   "1024-live-2048-stale-value-log-records",
-			ValueDistribution: "fixed-1024", ValueLogPointerThreshold: 1,
-			WALMode: "default", ExpectedMaintenanceWork: "Full value-log rewrite with deterministic stale-byte copy opportunity",
+			KeyDistribution:   "vacuum-m0 user and collection generations with retired index pages",
+			ValueDistribution: "mixed-inline-and-2048-byte-pointers", ValueLogPointerThreshold: 512,
+			WALMode: "default", ExpectedMaintenanceWork: "Full production index vacuum with at least 40 percent index.db shrink",
 		},
-		open: func(b *testing.B) *DB { return openCompactStorageRewritePolicyBenchmarkFixture(b, 1024, 2048, 1024) },
+		open: func(b *testing.B) *DB {
+			d, _ := openVacuumM0Fixture(b, vacuumM0Options(b.TempDir()))
+			return d
+		},
 		options: CompactStorageOptions{
 			Mode: CompactStorageFull, DisableZeroByteValueLogCleanup: true,
 		},
-		expectRewrite: true,
+		expectVacuumRun:        true,
+		minIndexShrinkRatioPPM: 400_000,
 	},
 	{
 		metadata: compactStorageMeasurementFixture{
@@ -85,9 +92,10 @@ var compactStorageM0FixtureSpecs = []compactStorageM0FixtureSpec{
 			ValueDistribution: "fixed-256", ValueLogPointerThreshold: page.DefaultInlineThreshold,
 			WALMode: "off-relaxed", ExpectedMaintenanceWork: "Exhaustive mode processes all eligible leaf generations",
 		},
-		open:        func(b *testing.B) *DB { return openCompactStorageLeafPackBenchmarkFixture(b) },
-		options:     CompactStorageOptions{Mode: CompactStorageExhaustive},
-		minPackRuns: 1,
+		open:            func(b *testing.B) *DB { return openCompactStorageLeafPackBenchmarkFixture(b) },
+		options:         CompactStorageOptions{Mode: CompactStorageExhaustive},
+		minPackRuns:     1,
+		expectVacuumRun: true,
 	},
 	{
 		metadata: compactStorageMeasurementFixture{
@@ -102,8 +110,9 @@ var compactStorageM0FixtureSpecs = []compactStorageM0FixtureSpec{
 		options: CompactStorageOptions{
 			Mode: CompactStorageFull, DisableZeroByteValueLogCleanup: true,
 		},
-		expectRewrite: true,
-		foreground:    true,
+		expectRewrite:   true,
+		expectVacuumRun: true,
+		foreground:      true,
 	},
 }
 
@@ -121,6 +130,24 @@ func BenchmarkCompactStorageM0(b *testing.B) {
 		b.Run(spec.metadata.Name, func(b *testing.B) {
 			benchmarkCompactStorageM0Fixture(b, spec)
 		})
+	}
+}
+
+func BenchmarkCompactStorageIndexVacuumDecisionNoDebt(b *testing.B) {
+	db := openCompactStorageRewritePolicyBenchmarkFixture(b, 2047, 1, 1024)
+	b.Cleanup(func() { _ = db.Close() })
+	opts := CompactStorageOptions{Mode: CompactStorageFull}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		debt, err := db.compactStorageIndexVacuumDebt(ctx, opts)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if debt.IndexVacuumRequired {
+			b.Fatalf("unexpected no-debt vacuum plan: %+v", debt)
+		}
 	}
 }
 
@@ -281,6 +308,10 @@ func benchmarkCompactStorageM0Fixture(b *testing.B, spec compactStorageM0Fixture
 			AllocationObjects: afterMem.Mallocs - beforeMem.Mallocs,
 			HeapAllocBefore:   beforeMem.HeapAlloc,
 			HeapAllocAfter:    afterMem.HeapAlloc,
+			HeapInuseBefore:   beforeMem.HeapInuse,
+			HeapInuseAfter:    afterMem.HeapInuse,
+			HeapSysBefore:     beforeMem.HeapSys,
+			HeapSysAfter:      afterMem.HeapSys,
 		}
 		measurement.ForegroundWrites = compactStorageMeasurementLatencyFor(foregroundResult.latencies)
 		measurement.IdleWrites = compactStorageMeasurementLatencyFor(idleLatencies)
@@ -290,7 +321,7 @@ func benchmarkCompactStorageM0Fixture(b *testing.B, spec compactStorageM0Fixture
 		}
 		totalWall += measurement.TotalWallTimeNanos
 		applyWall += measurement.ApplyWallTimeNanos
-		reclaimedBytes += measurement.LeafPack.ReclaimedBytes + measurement.ValueLog.GCBytesDeleted
+		reclaimedBytes += measurement.LeafPack.ReclaimedBytes + measurement.ValueLog.GCBytesDeleted + measurement.Vacuum.ReclaimedBytes
 		if recorder != nil {
 			stableCalls += int64(recorder.totalCalls())
 		}
@@ -423,19 +454,32 @@ func validateCompactStorageM0Work(spec compactStorageM0FixtureSpec, stats Compac
 		return fmt.Errorf("%s: unexpected value-log rewrite selected %d source segments",
 			spec.metadata.Name, stats.ValueLogRewrite.SourceSegmentsRequested)
 	}
+	if spec.minIndexShrinkRatioPPM > 0 {
+		before := compactStorageMeasurementUsageBytes(stats.Before, "index")
+		after := compactStorageMeasurementUsageBytes(stats.After, "index")
+		if before <= 0 || after < 0 || after > before {
+			return fmt.Errorf("%s: invalid index shrink boundary before=%d after=%d", spec.metadata.Name, before, after)
+		}
+		ratioPPM := uint64(before-after) * 1_000_000 / uint64(before)
+		if ratioPPM < spec.minIndexShrinkRatioPPM {
+			return fmt.Errorf("%s: index shrink ratio=%dppm want >=%dppm (before=%d after=%d)",
+				spec.metadata.Name, ratioPPM, spec.minIndexShrinkRatioPPM, before, after)
+		}
+	}
 	for _, phase := range stats.Phases {
 		if phase.Name != "index-vacuum" {
 			continue
 		}
-		vacuumRan := !phase.Skipped
-		if vacuumRan != spec.expectVacuumRun {
-			if spec.expectVacuumRun {
-				return fmt.Errorf("%s: expected index vacuum did not run: %s", spec.metadata.Name, phase.SkipReason)
+		if spec.expectVacuumRun {
+			if phase.Status != CompactStoragePhaseStatusSucceeded || !phase.Required || phase.Skipped {
+				return fmt.Errorf("%s: expected successful required index vacuum, got status=%q required=%t skipped=%t reason=%q",
+					spec.metadata.Name, phase.Status, phase.Required, phase.Skipped, phase.Reason)
 			}
-			return fmt.Errorf("%s: unexpected index vacuum run", spec.metadata.Name)
+			return nil
 		}
-		if phase.Skipped && phase.SkipReason == "" {
-			return fmt.Errorf("%s: skipped index vacuum has no disposition reason", spec.metadata.Name)
+		if phase.Status != CompactStoragePhaseStatusNotRequired || phase.Required || !phase.Skipped || phase.SkipReason == "" {
+			return fmt.Errorf("%s: expected not-required index vacuum, got status=%q required=%t skipped=%t reason=%q",
+				spec.metadata.Name, phase.Status, phase.Required, phase.Skipped, phase.Reason)
 		}
 		return nil
 	}

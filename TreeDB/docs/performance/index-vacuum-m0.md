@@ -55,8 +55,8 @@ reopen digest parity.
 | `background_vacuum_test.go` disabled success tests and `bg_vacuum.go` classification | M2 (#3945) | Enable only after M1 succeeds; retain backoff and explicit unsupported/error accounting. |
 | `public.go` public/close-time calls, `caching/db.go` wrappers, and `collections/api_test.go` assertions | M2 (#3945) | Route every public and cached entry through the production seam with actionable status. |
 | top-level/cached external vacuum benchmarks and `collections/bench_test.go` | M2 (#3945) | Require zero unsupported/unexpected errors, positive overlap, and exact fixed work on supported platforms. |
-| `db/compact_storage.go`, `db/compact_storage_test.go`, and M0 maintenance measurement/reporting | M3 (#3946) | Execute the fenced phase and report success/retry/error plus byte convergence truthfully. |
-| Offline `VacuumIndexOffline` operator semantics | M3 (#3946) | Keep offline byte minimization as the ceiling; do not conflate it with online eligibility. |
+| `db/compact_storage.go`, `db/compact_storage_test.go`, and M0 maintenance measurement/reporting | M3 (#3946) | Active: the bounded planner executes the fenced phase and reports `not_required`, `succeeded`, `deferred`, `unsupported`, or `failed` without overstating convergence. |
+| Offline `VacuumIndexOffline` operator semantics | M3 (#3946) | Retained as the exclusive-open byte-minimization fallback and parity ceiling; online eligibility remains separately reported. |
 
 The M0 test-first exception was deliberate: its original unsupported result
 remains a valid frozen pre-M1 classification, while M1 adds the verified-success

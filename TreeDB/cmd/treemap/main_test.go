@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -182,9 +183,23 @@ func TestCompactCommandsExposeFullStoragePath(t *testing.T) {
 	})
 	if !strings.Contains(planOut, "compact-storage (plan):") ||
 		!strings.Contains(planOut, "remaining-debt:") ||
+		!strings.Contains(planOut, "index_vacuum_required=") ||
+		!strings.Contains(planOut, "phase: name=index-vacuum status=") ||
 		!strings.Contains(planOut, "storage-domain-before: name=value_vlog") ||
 		!strings.Contains(planOut, "storage-domain: name=value_vlog") {
 		t.Fatalf("compact-plan output missing full-storage report:\n%s", planOut)
+	}
+	planJSON := captureStdout(t, func() {
+		runCompactPlan(dir, []string{"-json"})
+	})
+	var planStats treedb.CompactStorageStats
+	if err := json.Unmarshal([]byte(planJSON), &planStats); err != nil {
+		t.Fatalf("decode compact-plan json: %v\n%s", err, planJSON)
+	}
+	planPhase := compactStorageIndexVacuumPhase(planStats.Phases)
+	if planPhase == nil || planPhase.Status == "" || planPhase.Reason == "" ||
+		planPhase.Required != planStats.RemainingDebt.IndexVacuumRequired {
+		t.Fatalf("compact-plan JSON index disposition does not match debt: phase=%+v debt=%+v", planPhase, planStats.RemainingDebt)
 	}
 
 	compactOut := captureStdout(t, func() {
@@ -192,10 +207,21 @@ func TestCompactCommandsExposeFullStoragePath(t *testing.T) {
 	})
 	if !strings.Contains(compactOut, "compact-storage (applied):") ||
 		!strings.Contains(compactOut, "remaining-debt:") ||
+		!strings.Contains(compactOut, "index_vacuum_required=") ||
+		!strings.Contains(compactOut, "phase: name=index-vacuum status=") ||
 		!strings.Contains(compactOut, "storage-domain-before: name=value_vlog") ||
 		!strings.Contains(compactOut, "storage-domain: name=value_vlog") {
 		t.Fatalf("compact output missing full-storage report:\n%s", compactOut)
 	}
+}
+
+func compactStorageIndexVacuumPhase(phases []treedb.CompactStoragePhaseStats) *treedb.CompactStoragePhaseStats {
+	for i := range phases {
+		if phases[i].Name == "index-vacuum" {
+			return &phases[i]
+		}
+	}
+	return nil
 }
 
 func TestCompactCommandReplaysCommandWALBeforeCompaction(t *testing.T) {

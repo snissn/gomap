@@ -609,7 +609,7 @@ func printCompactStorageStats(stats treedb.CompactStorageStats, jsonOut bool) {
 		beforeTotal,
 		afterTotal,
 	)
-	fmt.Printf("remaining-debt: value_rewrite_segments=%d value_rewrite_bytes=%d value_gc_segments=%d value_gc_bytes=%d leaf_pack_generations=%d leaf_pack_bytes=%d leaf_gc_generations=%d leaf_gc_bytes=%d zero_byte_value_log_files=%d\n",
+	fmt.Printf("remaining-debt: value_rewrite_segments=%d value_rewrite_bytes=%d value_gc_segments=%d value_gc_bytes=%d leaf_pack_generations=%d leaf_pack_bytes=%d leaf_gc_generations=%d leaf_gc_bytes=%d zero_byte_value_log_files=%d index_vacuum_required=%t index_vacuum_reason=%s index_total_pages=%d index_user_pages=%d index_user_span_ratio_ppm=%d index_freelist_reclaimable_pages=%d index_freelist_reclaimable_ratio_ppm=%d index_collection_root_pages=%d index_collection_root_span_ratio_ppm=%d\n",
 		stats.RemainingDebt.ValueLogRewriteSegments,
 		stats.RemainingDebt.ValueLogRewriteBytes,
 		stats.RemainingDebt.ValueLogGCSegments,
@@ -619,7 +619,28 @@ func printCompactStorageStats(stats treedb.CompactStorageStats, jsonOut bool) {
 		stats.RemainingDebt.LeafGCGenerations,
 		stats.RemainingDebt.LeafGCBytes,
 		stats.RemainingDebt.ZeroByteValueLogFiles,
+		stats.RemainingDebt.IndexVacuumRequired,
+		stats.RemainingDebt.IndexVacuumReason,
+		stats.RemainingDebt.IndexVacuumTotalPages,
+		stats.RemainingDebt.IndexVacuumUserPages,
+		stats.RemainingDebt.IndexVacuumUserSpanRatioPPM,
+		stats.RemainingDebt.IndexVacuumFreelistReclaimablePages,
+		stats.RemainingDebt.IndexVacuumFreelistReclaimableRatioPPM,
+		stats.RemainingDebt.IndexVacuumCollectionRootPages,
+		stats.RemainingDebt.IndexVacuumCollectionRootSpanRatioPPM,
 	)
+	for _, phase := range stats.Phases {
+		if !strings.HasPrefix(phase.Name, "index-vacuum") {
+			continue
+		}
+		fmt.Printf("phase: name=%s status=%s required=%t reason=%q wall_time_nanos=%d\n",
+			phase.Name,
+			phase.Status,
+			phase.Required,
+			phase.Reason,
+			phase.WallTimeNanos,
+		)
+	}
 	if !stats.FullyCompacted {
 		if stats.DryRun {
 			fmt.Fprintln(os.Stderr, "warning: compact storage plan found remaining debt; inspect remaining-debt")

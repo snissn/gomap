@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestCompactStorageM0FixtureCatalogHasStableRequiredFields(t *testing.T) {
@@ -41,7 +42,14 @@ func TestCompactStorageM0FixtureCatalogHasStableRequiredFields(t *testing.T) {
 
 func TestNewCompactStorageMeasurementSeparatesTimedApplyAndWorkCounters(t *testing.T) {
 	stats := CompactStorageStats{
-		Audit: CompactStorageAuditStats{SharedScans: 2},
+		Audit:  CompactStorageAuditStats{SharedScans: 2},
+		Before: []CompactStorageUsage{{Name: "index", Bytes: 16 * int64(page.PageSize)}},
+		After:  []CompactStorageUsage{{Name: "index", Bytes: 4 * int64(page.PageSize)}},
+		IndexVacuum: VacuumOnlineStats{
+			PrecloneTraversalPages: 3, RecloneTraversalPages: 2, CutoverCloneTraversalPages: 1,
+			TotalDuration: 19 * time.Nanosecond, CutoverDuration: 7 * time.Nanosecond,
+			MaxWriterPause: 5 * time.Nanosecond,
+		},
 		LeafGenerationPacks: []LeafGenerationPackRunOnceStats{{
 			Ran:       true,
 			Selection: LeafGenerationPackSelection{GenerationIDs: []uint64{1}, BytesToCopy: 90},
@@ -54,7 +62,11 @@ func TestNewCompactStorageMeasurementSeparatesTimedApplyAndWorkCounters(t *testi
 		LeafGenerationGC: LeafGenerationGCStats{GenerationsDeleted: 1, BytesDeleted: 100},
 		Phases: []CompactStoragePhaseStats{
 			{Name: "leaf-generation-pack-1", WallTimeNanos: 17},
-			{Name: "index-vacuum", Skipped: true, SkipReason: "unsupported", WallTimeNanos: 5},
+			{
+				Name: "index-vacuum", Status: CompactStoragePhaseStatusUnsupported,
+				Required: true, Reason: "unsupported", Skipped: true,
+				SkipReason: "unsupported", WallTimeNanos: 5,
+			},
 		},
 	}
 	m := newCompactStorageMeasurement(compactStorageM0Fixtures[0], "artifact", 123, stats, nil)
@@ -68,10 +80,19 @@ func TestNewCompactStorageMeasurementSeparatesTimedApplyAndWorkCounters(t *testi
 		m.LeafPack.BytesPlanned != 90 || m.LeafPack.ReclaimedBytes != 100 {
 		t.Fatalf("leaf pack=%+v", m.LeafPack)
 	}
-	if !m.Vacuum.Attempted || m.Vacuum.Ran || m.Vacuum.SkipReason != "unsupported" ||
+	if m.Vacuum.Status != CompactStoragePhaseStatusUnsupported || !m.Vacuum.Required ||
+		!m.Vacuum.Attempted || m.Vacuum.Ran || m.Vacuum.PlanReason != "unsupported" || m.Vacuum.SkipReason != "unsupported" ||
 		m.Vacuum.Availability != compactStorageMeasurementObserved ||
 		m.Vacuum.StableCallCounter != compactStorageMeasurementUnavailable {
 		t.Fatalf("vacuum=%+v", m.Vacuum)
+	}
+	if m.Vacuum.ClonePages != 6 || m.Vacuum.CloneBytes != 6*int64(page.PageSize) ||
+		m.Vacuum.RewritePages != 4 || m.Vacuum.RewriteBytes != 4*int64(page.PageSize) ||
+		m.Vacuum.ReclaimedPages != 12 || m.Vacuum.ReclaimedBytes != 12*int64(page.PageSize) {
+		t.Fatalf("vacuum storage accounting=%+v", m.Vacuum)
+	}
+	if m.Vacuum.TotalWallTimeNanos != 19 || m.Vacuum.CutoverTimeNanos != 7 || m.Vacuum.MaxWriterPauseNanos != 5 {
+		t.Fatalf("vacuum timing accounting=%+v", m.Vacuum)
 	}
 	withRecorder := newCompactStorageMeasurement(
 		compactStorageM0Fixtures[0], "artifact", 123, stats, newCompactStorageM0StableRecorder(nil),
@@ -333,7 +354,7 @@ func TestCompactStorageM0ProfileScriptUsesPortableTempRoot(t *testing.T) {
 		"mktemp -d \"$TMP_ROOT/compact_storage_m0_XXXXXX\"",
 		"allowed=$(awk '/^Cpus_allowed_list:",
 		"CPU_SET=${CPU_SET:-$(default_cpu_set)}",
-		"ARTIFACT_SCHEMA_VERSION=2",
+		"ARTIFACT_SCHEMA_VERSION=3",
 		".schema_version == $want",
 	} {
 		if !strings.Contains(script, want) {
@@ -429,7 +450,7 @@ func TestValidateCompactStorageM0WorkRequiresExactRewriteDisposition(t *testing.
 		t.Fatal("missing value-log rewrite was accepted")
 	}
 	unexpected.Phases = []CompactStoragePhaseStats{{
-		Name: "index-vacuum", Skipped: true, SkipReason: "production-index-vacuum-unavailable",
+		Name: "index-vacuum", Status: CompactStoragePhaseStatusNotRequired, Skipped: true, SkipReason: "no index vacuum policy debt",
 	}}
 	if err := validateCompactStorageM0Work(expectRewrite, unexpected); err != nil {
 		t.Fatalf("expected value-log rewrite rejected: %v", err)
@@ -441,7 +462,7 @@ func TestValidateCompactStorageM0WorkRequiresExactVacuumDisposition(t *testing.T
 		metadata: compactStorageMeasurementFixture{Name: "vacuum-skipped"},
 	}
 	skipped := CompactStorageStats{Phases: []CompactStoragePhaseStats{{
-		Name: "index-vacuum", Skipped: true, SkipReason: "production-index-vacuum-unavailable",
+		Name: "index-vacuum", Status: CompactStoragePhaseStatusNotRequired, Skipped: true, SkipReason: "no index vacuum policy debt",
 	}}}
 	if err := validateCompactStorageM0Work(spec, skipped); err != nil {
 		t.Fatalf("declared skipped vacuum rejected: %v", err)
@@ -449,7 +470,9 @@ func TestValidateCompactStorageM0WorkRequiresExactVacuumDisposition(t *testing.T
 	if err := validateCompactStorageM0Work(spec, CompactStorageStats{}); err == nil {
 		t.Fatal("missing index-vacuum disposition was accepted")
 	}
-	ran := CompactStorageStats{Phases: []CompactStoragePhaseStats{{Name: "index-vacuum"}}}
+	ran := CompactStorageStats{Phases: []CompactStoragePhaseStats{{
+		Name: "index-vacuum", Status: CompactStoragePhaseStatusSucceeded, Required: true,
+	}}}
 	if err := validateCompactStorageM0Work(spec, ran); err == nil {
 		t.Fatal("unexpected index-vacuum run was accepted")
 	}
