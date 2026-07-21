@@ -82,6 +82,14 @@ func BenchmarkVacuumIndexOnlineCollection(b *testing.B) {
 }
 
 func BenchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B) {
+	benchmarkVacuumIndexOnlineCollectionForegroundChurn(b, true)
+}
+
+func BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn(b *testing.B) {
+	benchmarkVacuumIndexOnlineCollectionForegroundChurn(b, false)
+}
+
+func benchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B, legacy bool) {
 	for _, tc := range []struct {
 		name      string
 		valueSize int
@@ -92,10 +100,13 @@ func BenchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B) {
 		b.Run(tc.name, func(b *testing.B) {
 			db := openVacuumCollectionBenchmarkDB(b, tc.valueSize)
 			defer func() { _ = db.Close() }()
-			disableRootPublicationForLegacyVacuumBenchmark(b, db)
+			if legacy {
+				disableRootPublicationForLegacyVacuumBenchmark(b, db)
+			}
 			var total VacuumOnlineStats
 			var foregroundLatencies []time.Duration
 			var foregroundPoints, foregroundRanges uint64
+			var vacuumErrors uint64
 
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -117,7 +128,12 @@ func BenchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B) {
 						<-warmed
 					})
 				}
-				vacuumErr := db.vacuumIndexOnlineLegacyForTest(context.Background())
+				var vacuumErr error
+				if legacy {
+					vacuumErr = db.vacuumIndexOnlineLegacyForTest(context.Background())
+				} else {
+					vacuumErr = db.VacuumIndexOnline(context.Background())
+				}
 				db.vacuumPagerSyncHook = nil
 				startOnce.Do(func() { close(start) })
 				close(stop)
@@ -125,8 +141,11 @@ func BenchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B) {
 				if foreground.err != nil {
 					b.Fatalf("foreground churn: %v", foreground.err)
 				}
-				if vacuumErr != nil && !errors.Is(vacuumErr, ErrVacuumConcurrentMutation) {
-					b.Fatalf("vacuum: %v", vacuumErr)
+				if vacuumErr != nil {
+					vacuumErrors++
+					if !legacy || !errors.Is(vacuumErr, ErrVacuumConcurrentMutation) {
+						b.Fatalf("vacuum: %v", vacuumErr)
+					}
 				}
 				foregroundLatencies = append(foregroundLatencies, foreground.latencies...)
 				foregroundPoints += foreground.points
@@ -156,6 +175,7 @@ func BenchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B) {
 				total.ConcurrentMutationAborts += stats.ConcurrentMutationAborts
 			}
 			b.StopTimer()
+			exposureMisses := verifyVacuumCollectionForegroundPoints(b, db)
 
 			b.ReportMetric(float64(total.TotalDuration.Nanoseconds())/float64(b.N), "vacuum-total-ns/op")
 			b.ReportMetric(float64(total.UserTreeDuration.Nanoseconds())/float64(b.N), "user-tree-ns/op")
@@ -171,6 +191,9 @@ func BenchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B) {
 			b.ReportMetric(float64(vacuumCollectionLatencyPercentile(foregroundLatencies, 99).Nanoseconds()), "foreground-p99-ns/op")
 			b.ReportMetric(float64(foregroundPoints)/float64(b.N), "foreground-points/op")
 			b.ReportMetric(float64(foregroundRanges)/float64(b.N), "foreground-ranges/op")
+			b.ReportMetric(float64(len(foregroundLatencies))/float64(b.N), "foreground-overlap-samples/op")
+			b.ReportMetric(float64(exposureMisses)/float64(b.N), "foreground-exposure-misses/op")
+			b.ReportMetric(float64(vacuumErrors)/float64(b.N), "vacuum-errors/op")
 			b.ReportMetric(float64(total.PrecloneTraversalPages)/float64(b.N), "preclone-pages/op")
 			b.ReportMetric(float64(total.RecloneTraversalPages)/float64(b.N), "reclone-pages/op")
 			b.ReportMetric(float64(total.CutoverCloneTraversalPages)/float64(b.N), "cutover-clone-pages/op")
@@ -254,11 +277,30 @@ func vacuumCollectionForegroundWriter(db *DB, start, stop <-chan struct{}, warme
 		result.latencies = append(result.latencies, time.Since(started))
 		if len(result.latencies) >= warmOperations {
 			warmOnce.Do(func() { close(warmed) })
+			return
 		}
 		if result.err != nil {
 			return
 		}
 	}
+}
+
+func verifyVacuumCollectionForegroundPoints(tb testing.TB, db *DB) uint64 {
+	tb.Helper()
+	var misses uint64
+	for point := 0; point < 256; point += 2 {
+		lastOperation := point
+		for lastOperation+256 < 4096 {
+			lastOperation += 256
+		}
+		key := []byte(fmt.Sprintf("foreground/point/%06d", point))
+		want := fmt.Sprintf("value/%06d", lastOperation)
+		got, err := db.Get(key)
+		if err != nil || string(got) != want {
+			misses++
+		}
+	}
+	return misses
 }
 
 func vacuumCollectionLatencyPercentile(latencies []time.Duration, percentile int) time.Duration {
