@@ -651,6 +651,9 @@ func (db *DB) cleanupCommandWALCoveredSegmentsAtCheckpointV1(maintenanceAlreadyH
 	if errors.Is(err, errDurableWALCleanupProofUnavailable) {
 		return nil
 	}
+	if errors.Is(err, errDurableWALCleanupProofStale) || errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
+		return errors.Join(ErrDurableWALCleanupProofStale, err)
+	}
 	return err
 }
 
