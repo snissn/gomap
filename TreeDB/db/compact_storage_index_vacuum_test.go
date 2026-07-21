@@ -316,6 +316,9 @@ func compactStorageNamespaceFingerprint(t *testing.T, root string) map[string]st
 		if err != nil {
 			return err
 		}
+		if filepath.ToSlash(rel) == "LOCK" {
+			return nil
+		}
 		file, err := os.Open(path)
 		if err != nil {
 			return err

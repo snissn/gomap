@@ -2856,6 +2856,16 @@ func TestCompactStoragePlanSkipsLowYieldLeafPackDebtByDefault(t *testing.T) {
 	if len(stats.LeafGenerationPacks) == 0 || stats.LeafGenerationPacks[0].Ran {
 		t.Fatalf("expected low-yield leaf pack to skip, packs=%+v", stats.LeafGenerationPacks)
 	}
+	if runtime.GOOS == "windows" {
+		phase := compactStorageIndexVacuumPhase(t, stats)
+		if !phase.Required || phase.Status != CompactStoragePhaseStatusUnsupported {
+			t.Fatalf("windows index-vacuum phase=%+v want required unsupported", phase)
+		}
+		if stats.FullyCompacted || !stats.RemainingDebt.IndexVacuumRequired {
+			t.Fatalf("windows unsupported vacuum overstated convergence: %+v", stats)
+		}
+		return
+	}
 	if !stats.FullyCompacted {
 		t.Fatalf("FullyCompacted=false for low-yield residual, remaining debt=%+v", stats.RemainingDebt)
 	}
