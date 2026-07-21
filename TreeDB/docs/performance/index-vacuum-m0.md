@@ -19,6 +19,12 @@ and foreground p99 each have a coefficient of variation at most 10%. Public
 rows must report `vacuum-unsupported/op = 1` and zero unexpected errors; that
 status is never a successful or fast vacuum result.
 
+The capture pins `GOMAXPROCS=2`, `GOMEMLIMIT=8GiB`, and `GOGC=off`. Disabling
+the percentage-triggered collector keeps GC phase from randomly landing inside
+the short cutover lock interval; the fixed memory limit remains a hard bound,
+and allocation volume is still reported. This is an algorithmic baseline, not
+an end-to-end production latency claim under the default runtime policy.
+
 `fixture.json` records the SHA, Go platform, command, logical digest, index and
 value-log bytes, live/reclaimable pages, collection-root span, and offline
 ceiling. The focused contract requires three deterministic fixture builds, at

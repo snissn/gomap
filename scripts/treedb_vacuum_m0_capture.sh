@@ -33,6 +33,7 @@ default_cpu_set() {
 export CPU_SET=${CPU_SET:-$(default_cpu_set)}
 export GOMAXPROCS=${GOMAXPROCS:-2}
 export GOMEMLIMIT=${GOMEMLIMIT:-8GiB}
+export GOGC=${GOGC:-off}
 DIRTY_STATE=clean
 if [[ -n $(git status --porcelain) ]]; then
   DIRTY_STATE=dirty
@@ -41,8 +42,8 @@ read -r DEVICE FILESYSTEM < <(df -PT "$RUN_DIR" | awk 'NR == 2 {print $1, $2}')
 
 LEGACY_BENCH='^BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x$'
 PUBLIC_BENCH='^BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x$'
-LEGACY_COMMAND="GOWORK=off GOMAXPROCS=$GOMAXPROCS GOMEMLIMIT=$GOMEMLIMIT taskset -c $CPU_SET go test ./TreeDB/db -run '^$' -bench '$LEGACY_BENCH' -benchtime=1x -count=1 -benchmem"
-PUBLIC_COMMAND="GOWORK=off GOMAXPROCS=$GOMAXPROCS GOMEMLIMIT=$GOMEMLIMIT taskset -c $CPU_SET go test ./TreeDB/db -run '^$' -bench '$PUBLIC_BENCH' -benchtime=1x -count=1 -benchmem"
+LEGACY_COMMAND="GOWORK=off GOMAXPROCS=$GOMAXPROCS GOMEMLIMIT=$GOMEMLIMIT GOGC=$GOGC taskset -c $CPU_SET go test ./TreeDB/db -run '^$' -bench '$LEGACY_BENCH' -benchtime=1x -count=1 -benchmem"
+PUBLIC_COMMAND="GOWORK=off GOMAXPROCS=$GOMAXPROCS GOMEMLIMIT=$GOMEMLIMIT GOGC=$GOGC taskset -c $CPU_SET go test ./TreeDB/db -run '^$' -bench '$PUBLIC_BENCH' -benchtime=1x -count=1 -benchmem"
 printf '%s\n%s\n' "$LEGACY_COMMAND" "$PUBLIC_COMMAND" >"$RUN_DIR/commands.txt"
 
 run_go_test() {
