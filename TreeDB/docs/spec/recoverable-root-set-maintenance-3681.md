@@ -113,8 +113,8 @@ and generation-retirement semantics are not implemented there.
 
 The background worker preserves unchanged-commit probe suppression and the
 user-page, freelist, collection-root, and bounded-backlog triggers. Concurrent
-mutation and stale recoverable-root-set results are retry outcomes and do not
-invoke `NotifyError`. An unsupported result quiesces the worker without a retry
+mutation, stale recoverable-root-set results, and stale command-WAL cleanup
+proofs are retry outcomes and do not invoke `NotifyError`. An unsupported result quiesces the worker without a retry
 loop. Permanent failures invoke `NotifyError` once for the unchanged state and
 remain in `treedb.bg_vacuum.last_err`; retry class and terminal outcome are
 separately exposed by `last_retry_reason`, `last_outcome`, and their cumulative

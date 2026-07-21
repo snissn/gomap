@@ -31,6 +31,9 @@ func TestBackgroundIndexVacuumConcurrentMutationIsRetryOnly(t *testing.T) {
 	if backgroundIndexVacuumShouldReport(backenddb.ErrVacuumUnsupported) {
 		t.Fatal("unsupported capability classified as permanent background error")
 	}
+	if backgroundIndexVacuumShouldReport(backenddb.ErrDurableWALCleanupProofStale) {
+		t.Fatal("stale checkpoint-cleanup proof classified as permanent background error")
+	}
 }
 
 func TestBackgroundIndexVacuumIdleUnchangedCommitSkipsStructuralWalks(t *testing.T) {
@@ -504,15 +507,16 @@ func TestBackgroundIndexVacuumErrorOutcomes(t *testing.T) {
 		t.Skip("online vacuum not supported on windows")
 	}
 	tests := []struct {
-		name                 string
-		err                  error
-		wantRetryReason      string
-		wantOutcome          string
-		wantConcurrent       uint64
-		wantRecoverableRoots uint64
-		wantUnsupported      uint64
-		wantPermanent        uint64
-		wantReports          int64
+		name                  string
+		err                   error
+		wantRetryReason       string
+		wantOutcome           string
+		wantConcurrent        uint64
+		wantRecoverableRoots  uint64
+		wantCheckpointCleanup uint64
+		wantUnsupported       uint64
+		wantPermanent         uint64
+		wantReports           int64
 	}{
 		{
 			name:            "concurrent mutation",
@@ -527,6 +531,13 @@ func TestBackgroundIndexVacuumErrorOutcomes(t *testing.T) {
 			wantRetryReason:      backgroundIndexVacuumRetryReasonRecoverableRootSet,
 			wantOutcome:          backgroundIndexVacuumOutcomeRetry,
 			wantRecoverableRoots: 1,
+		},
+		{
+			name:                  "stale checkpoint cleanup",
+			err:                   backenddb.ErrDurableWALCleanupProofStale,
+			wantRetryReason:       backgroundIndexVacuumRetryReasonCheckpointCleanup,
+			wantOutcome:           backgroundIndexVacuumOutcomeRetry,
+			wantCheckpointCleanup: 1,
 		},
 		{
 			name:            "unsupported",
@@ -573,6 +584,7 @@ func TestBackgroundIndexVacuumErrorOutcomes(t *testing.T) {
 			}
 			if stats.RetryConcurrentMutationTotal != tc.wantConcurrent ||
 				stats.RetryRecoverableRootSetTotal != tc.wantRecoverableRoots ||
+				stats.RetryCheckpointCleanupTotal != tc.wantCheckpointCleanup ||
 				stats.UnsupportedTotal != tc.wantUnsupported ||
 				stats.PermanentFailuresTotal != tc.wantPermanent {
 				t.Fatalf("unexpected counters: %+v", stats)

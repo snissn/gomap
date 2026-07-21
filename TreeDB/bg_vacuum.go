@@ -16,6 +16,7 @@ func backgroundIndexVacuumShouldReport(err error) bool {
 		!errors.Is(err, backenddb.ErrVacuumConcurrentMutation) &&
 		!errors.Is(err, backenddb.ErrVacuumRecoverableRootSetRequired) &&
 		!errors.Is(err, backenddb.ErrRecoverableRootSetStale) &&
+		!errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) &&
 		!errors.Is(err, backenddb.ErrVacuumUnsupported) &&
 		!errors.Is(err, context.Canceled)
 }
@@ -34,6 +35,7 @@ const (
 	backgroundIndexVacuumRetryReasonNone                           = "none"
 	backgroundIndexVacuumRetryReasonConcurrentMutation             = "concurrent_mutation"
 	backgroundIndexVacuumRetryReasonRecoverableRootSet             = "recoverable_root_set"
+	backgroundIndexVacuumRetryReasonCheckpointCleanup              = "checkpoint_cleanup"
 	backgroundIndexVacuumOutcomeNone                               = "none"
 	backgroundIndexVacuumOutcomeBacklogSkip                        = "backlog_skip"
 	backgroundIndexVacuumOutcomeUnchanged                          = "unchanged"
@@ -115,6 +117,7 @@ type bgIndexVacuumWorker struct {
 	lastOutcome                  atomic.Value // string
 	retryConcurrentMutationTotal atomic.Uint64
 	retryRecoverableRootSetTotal atomic.Uint64
+	retryCheckpointCleanupTotal  atomic.Uint64
 	unsupportedTotal             atomic.Uint64
 	permanentFailuresTotal       atomic.Uint64
 
@@ -416,6 +419,11 @@ func (w *bgIndexVacuumWorker) recordVacuumError(err error) {
 		w.retryRecoverableRootSetTotal.Add(1)
 		w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonRecoverableRootSet)
 		w.lastOutcome.Store(backgroundIndexVacuumOutcomeRetry)
+	case errors.Is(err, backenddb.ErrDurableWALCleanupProofStale):
+		w.retryProbe = true
+		w.retryCheckpointCleanupTotal.Add(1)
+		w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonCheckpointCleanup)
+		w.lastOutcome.Store(backgroundIndexVacuumOutcomeRetry)
 	default:
 		w.retryProbe = false
 		w.permanentFailuresTotal.Add(1)
@@ -558,6 +566,7 @@ type bgIndexVacuumStats struct {
 
 	RetryConcurrentMutationTotal uint64
 	RetryRecoverableRootSetTotal uint64
+	RetryCheckpointCleanupTotal  uint64
 	UnsupportedTotal             uint64
 	PermanentFailuresTotal       uint64
 
@@ -592,6 +601,7 @@ func (w *bgIndexVacuumWorker) Stats() bgIndexVacuumStats {
 		LastPages:                    w.lastPages.Load(),
 		RetryConcurrentMutationTotal: w.retryConcurrentMutationTotal.Load(),
 		RetryRecoverableRootSetTotal: w.retryRecoverableRootSetTotal.Load(),
+		RetryCheckpointCleanupTotal:  w.retryCheckpointCleanupTotal.Load(),
 		UnsupportedTotal:             w.unsupportedTotal.Load(),
 		PermanentFailuresTotal:       w.permanentFailuresTotal.Load(),
 		LastFreelistReclaimablePages: w.lastFreelistReclaimablePages.Load(),
@@ -638,6 +648,7 @@ func bgIndexVacuumStatsInto(out map[string]string, w *bgIndexVacuumWorker) {
 	out["treedb.bg_vacuum.vacuums"] = fmt.Sprintf("%d", stats.Vacuums)
 	out["treedb.bg_vacuum.retry_concurrent_mutation_total"] = fmt.Sprintf("%d", stats.RetryConcurrentMutationTotal)
 	out["treedb.bg_vacuum.retry_recoverable_root_set_total"] = fmt.Sprintf("%d", stats.RetryRecoverableRootSetTotal)
+	out["treedb.bg_vacuum.retry_checkpoint_cleanup_total"] = fmt.Sprintf("%d", stats.RetryCheckpointCleanupTotal)
 	out["treedb.bg_vacuum.unsupported_total"] = fmt.Sprintf("%d", stats.UnsupportedTotal)
 	out["treedb.bg_vacuum.permanent_failures_total"] = fmt.Sprintf("%d", stats.PermanentFailuresTotal)
 	out["treedb.bg_vacuum.last_retry_reason"] = stats.LastRetryReason
