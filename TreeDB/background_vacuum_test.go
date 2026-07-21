@@ -1,6 +1,7 @@
 package treedb
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -495,6 +496,181 @@ func TestBackgroundIndexVacuumDisabledIntervalStartsNoWorker(t *testing.T) {
 	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("close: %v", err)
+	}
+}
+
+func TestBackgroundIndexVacuumErrorOutcomes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	tests := []struct {
+		name                 string
+		err                  error
+		wantRetryReason      string
+		wantOutcome          string
+		wantConcurrent       uint64
+		wantRecoverableRoots uint64
+		wantUnsupported      uint64
+		wantPermanent        uint64
+		wantReports          int64
+	}{
+		{
+			name:            "concurrent mutation",
+			err:             backenddb.ErrVacuumConcurrentMutation,
+			wantRetryReason: backgroundIndexVacuumRetryReasonConcurrentMutation,
+			wantOutcome:     backgroundIndexVacuumOutcomeRetry,
+			wantConcurrent:  1,
+		},
+		{
+			name:                 "stale recoverable roots",
+			err:                  backenddb.ErrRecoverableRootSetStale,
+			wantRetryReason:      backgroundIndexVacuumRetryReasonRecoverableRootSet,
+			wantOutcome:          backgroundIndexVacuumOutcomeRetry,
+			wantRecoverableRoots: 1,
+		},
+		{
+			name:            "unsupported",
+			err:             backenddb.ErrVacuumUnsupported,
+			wantRetryReason: backgroundIndexVacuumRetryReasonNone,
+			wantOutcome:     backgroundIndexVacuumOutcomeUnsupported,
+			wantUnsupported: 1,
+		},
+		{
+			name:            "permanent",
+			err:             errors.New("vacuum I/O failure"),
+			wantRetryReason: backgroundIndexVacuumRetryReasonNone,
+			wantOutcome:     backgroundIndexVacuumOutcomePermanentFailure,
+			wantPermanent:   1,
+			wantReports:     1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var reports atomic.Int64
+			d := openBackgroundVacuumTestDB(t, Options{
+				BackgroundIndexVacuumInterval: -1,
+				NotifyError: func(error) {
+					reports.Add(1)
+				},
+			})
+			seedBackgroundVacuumUserPages(t, d, 64)
+			d.bgVac.spanRatioPPM = 1
+			d.bgVac.freelistReclaimablePages = ^uint64(0)
+			d.bgVac.collectionRootPages = ^uint64(0)
+
+			var calls atomic.Int64
+			restore := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) error {
+				calls.Add(1)
+				return tc.err
+			})
+			defer restore()
+
+			d.bgVac.runOnce(d)
+			stats := d.bgVac.Stats()
+			if stats.LastRetryReason != tc.wantRetryReason || stats.LastOutcome != tc.wantOutcome {
+				t.Fatalf("retry=%q outcome=%q want retry=%q outcome=%q", stats.LastRetryReason, stats.LastOutcome, tc.wantRetryReason, tc.wantOutcome)
+			}
+			if stats.RetryConcurrentMutationTotal != tc.wantConcurrent ||
+				stats.RetryRecoverableRootSetTotal != tc.wantRecoverableRoots ||
+				stats.UnsupportedTotal != tc.wantUnsupported ||
+				stats.PermanentFailuresTotal != tc.wantPermanent {
+				t.Fatalf("unexpected counters: %+v", stats)
+			}
+			if got := reports.Load(); got != tc.wantReports {
+				t.Fatalf("NotifyError calls=%d want %d", got, tc.wantReports)
+			}
+			publicStats := d.Stats()
+			if got := publicStats["treedb.bg_vacuum.last_retry_reason"]; got != tc.wantRetryReason {
+				t.Fatalf("public last retry reason=%q want %q", got, tc.wantRetryReason)
+			}
+			if got := publicStats["treedb.bg_vacuum.last_outcome"]; got != tc.wantOutcome {
+				t.Fatalf("public last outcome=%q want %q", got, tc.wantOutcome)
+			}
+
+			if tc.wantUnsupported != 0 || tc.wantPermanent != 0 {
+				d.bgVac.runOnce(d)
+				if got := calls.Load(); got != 1 {
+					t.Fatalf("vacuum calls after terminal unchanged outcome=%d want 1", got)
+				}
+				if got := reports.Load(); got != tc.wantReports {
+					t.Fatalf("NotifyError calls after unchanged tick=%d want %d", got, tc.wantReports)
+				}
+				if got := d.bgVac.Stats().LastErr; got != tc.err.Error() {
+					t.Fatalf("retained last error=%q want %q", got, tc.err.Error())
+				}
+			}
+		})
+	}
+}
+
+func TestBackgroundIndexVacuumReadOnlyStartsNoWorker(t *testing.T) {
+	dir := t.TempDir()
+	writable, err := Open(Options{Dir: dir, BackgroundIndexVacuumInterval: -1})
+	if err != nil {
+		t.Fatalf("open writable fixture: %v", err)
+	}
+	if err := writable.Set([]byte("key"), []byte("value")); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := writable.Close(); err != nil {
+		t.Fatalf("close writable fixture: %v", err)
+	}
+
+	readOnly, err := Open(Options{
+		Dir:                           dir,
+		ReadOnly:                      true,
+		BackgroundIndexVacuumInterval: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("open read-only: %v", err)
+	}
+	if got := readOnly.Stats()["treedb.bg_vacuum.enabled"]; got != "false" {
+		t.Fatalf("read-only background vacuum enabled=%q want false", got)
+	}
+	if err := readOnly.Close(); err != nil {
+		t.Fatalf("close read-only: %v", err)
+	}
+}
+
+func TestBackgroundIndexVacuumCloseCancelsActivePass(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d, err := Open(Options{
+		Dir:                               t.TempDir(),
+		BackgroundIndexVacuumInterval:     time.Hour,
+		BackgroundIndexVacuumSpanRatioPPM: 1,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	seedBackgroundVacuumUserPages(t, d, 64)
+
+	started := make(chan struct{})
+	restore := setBackgroundIndexVacuumRunHookForTest(func(_ *DB, ctx context.Context) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	defer restore()
+
+	d.bgVac.Kick()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("background vacuum did not start")
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- d.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not cancel active background vacuum")
 	}
 }
 

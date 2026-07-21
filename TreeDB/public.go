@@ -30,6 +30,8 @@ import (
 // Options configures TreeDB. It is re-exported from TreeDB/db for convenience.
 type Options = db.Options
 
+var errVacuumUnsupported = db.ErrVacuumUnsupported
+
 // EntryRevision is TreeDB's native per-entry revision metadata. Revision zero is
 // reserved for legacy entries that do not carry revision metadata.
 type EntryRevision = page.EntryRevision
@@ -64,11 +66,6 @@ const (
 	FlushAdmissionPolicyOff      = db.FlushAdmissionPolicyOff
 	FlushAdmissionPolicyAuto     = db.FlushAdmissionPolicyAuto
 )
-
-var errVacuumUnsupported = db.ErrVacuumUnsupported
-var errVacuumRecoverableRootSetRequired = db.ErrVacuumRecoverableRootSetRequired
-
-func publicOnlineVacuumEnabledV1() bool { return false }
 
 // ErrNamespacePersistenceUnsupported reports that the active platform or
 // filesystem cannot persist a directory creation required by a successful
@@ -1139,10 +1136,24 @@ func openResolved(opts Options) (*DB, error) {
 		cached.StartAutoCheckpoint(autoInterval, maxWALBytes, idleInterval)
 	}
 
-	// #3681 owns RecoverableRootSet convergence for destructive maintenance.
-	// Until that fence is available, do not launch a worker whose only online
-	// operation is deliberately unsupported. Explicit VacuumIndexOnline calls
-	// still fail closed with ErrVacuumRecoverableRootSetRequired.
+	vacuumInterval := opts.BackgroundIndexVacuumInterval
+	if vacuumInterval == 0 {
+		vacuumInterval = 30 * time.Second
+	}
+	if vacuumInterval < 0 {
+		vacuumInterval = 0
+	}
+	if vacuumInterval > 0 && !opts.ReadOnly && runtime.GOOS != "windows" {
+		out.bgVac.Start(out, bgIndexVacuumConfig{
+			Interval:                    vacuumInterval,
+			SpanRatioPPM:                opts.BackgroundIndexVacuumSpanRatioPPM,
+			MaxBacklogSkips:             opts.BackgroundIndexVacuumMaxBacklogSkips,
+			FreelistReclaimableRatioPPM: opts.BackgroundIndexVacuumFreelistReclaimableRatioPPM,
+			FreelistReclaimablePages:    opts.BackgroundIndexVacuumFreelistReclaimablePages,
+			CollectionRootSpanRatioPPM:  opts.BackgroundIndexVacuumCollectionRootSpanRatioPPM,
+			CollectionRootPages:         opts.BackgroundIndexVacuumCollectionRootPages,
+		})
+	}
 	cached.SetStatsHook(out.publicCachedExpvarStatsInto)
 
 	return out, nil
@@ -2486,13 +2497,6 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	if db.backend == nil {
 		return ErrClosed
 	}
-	// The backend replacement is production-capable, but public and cached
-	// routing, reporting, and background policy are activated together by #3945.
-	if !publicOnlineVacuumEnabledV1() {
-		return errors.Join(errVacuumUnsupported, errVacuumRecoverableRootSetRequired)
-	}
-
-	// #3945 removes the staged fence above and activates this block.
 	_, finishMaintenance := db.beginFullScanMaintenance("vacuum")
 	success := false
 	defer func() { finishMaintenance(success) }()

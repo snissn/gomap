@@ -60,7 +60,8 @@ reopen digest parity.
 The M0 test-first exception was deliberate: its original unsupported result
 remains a valid frozen pre-M1 classification, while M1 adds the verified-success
 classification for the internal DB-minted backend. Public/background routing
-remains owned by M2. M0 continues to assert disabled background behavior,
+is activated by M2 while this M0 artifact remains a frozen pre-activation
+baseline. M0 continues to assert disabled background behavior,
 deterministic fixture debt, offline parity, and artifact schema completeness.
 
 The legacy timing baseline explicitly drains and disables the current
