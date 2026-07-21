@@ -127,15 +127,12 @@ func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64,
 		db.teardownMu.RLock()
 		defer db.teardownMu.RUnlock()
 	}
-	builder, err := db.acquireRootPublicationBuilderV1()
+	builder, err := db.acquireCommandWALPublicationBuilderV1()
 	if err != nil {
 		return err
 	}
 	if builder != nil {
 		defer builder.Release()
-	}
-	if hook := db.testCommandWALAfterBuilderAcquireHook; hook != nil {
-		hook()
 	}
 	durablePublishLocked := false
 	releaseDurablePublish := func() {
@@ -145,12 +142,6 @@ func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64,
 		}
 	}
 	defer releaseDurablePublish()
-	db.writeMu.Lock()
-	if err := db.checkWriteAdmissionLocked(); err != nil {
-		db.writeMu.Unlock()
-		return err
-	}
-
 	var (
 		baseSeq        uint64
 		rootsUnchanged bool

@@ -114,15 +114,47 @@ func (db *DB) acquireRootPublicationBuilderV1() (*rootpublication.BuilderToken, 
 }
 
 func (db *DB) acquireRootPublicationBuilderForRuntimeV1() (*rootPublicationRuntimeV1, *rootpublication.BuilderToken, error) {
-	if db == nil || db.rootPublication == nil || db.rootPublication.coordinator == nil {
+	if db == nil || db.rootPublication == nil {
 		return nil, nil, nil
 	}
 	runtime := db.rootPublication
+	if runtime.coordinator == nil {
+		return runtime, nil, nil
+	}
 	builder, err := runtime.coordinator.AcquireBuilder(context.Background())
 	if err != nil {
 		return nil, nil, fmt.Errorf("acquire root-publication builder: %w", publicRootPublicationErrorV1(err))
 	}
 	return runtime, builder, nil
+}
+
+// acquireCommandWALPublicationBuilderV1 returns with writeMu held and the
+// builder bound to the runtime that is still live under that lock.
+func (db *DB) acquireCommandWALPublicationBuilderV1() (*rootpublication.BuilderToken, error) {
+	for {
+		runtime, builder, err := db.acquireRootPublicationBuilderForRuntimeV1()
+		if err != nil {
+			return nil, err
+		}
+		if hook := db.testCommandWALAfterBuilderAcquireHook; hook != nil {
+			hook()
+		}
+		db.writeMu.Lock()
+		if err := db.checkWriteAdmissionLocked(); err != nil {
+			db.writeMu.Unlock()
+			if builder != nil {
+				builder.Release()
+			}
+			return nil, err
+		}
+		if db.rootPublication == runtime {
+			return builder, nil
+		}
+		db.writeMu.Unlock()
+		if builder != nil {
+			builder.Release()
+		}
+	}
 }
 
 func (runtime *rootPublicationRuntimeV1) cloneVisibleResources() (*rootpublication.StableResourceSet, error) {
