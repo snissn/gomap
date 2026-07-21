@@ -18,13 +18,14 @@ import (
 )
 
 type compactStorageM0FixtureSpec struct {
-	metadata        compactStorageMeasurementFixture
-	open            func(*testing.B) *DB
-	options         CompactStorageOptions
-	minPackRuns     int
-	expectRewrite   bool
-	expectVacuumRun bool
-	foreground      bool
+	metadata               compactStorageMeasurementFixture
+	open                   func(*testing.B) *DB
+	options                CompactStorageOptions
+	minPackRuns            int
+	expectRewrite          bool
+	expectVacuumRun        bool
+	minIndexShrinkRatioPPM uint64
+	foreground             bool
 }
 
 var compactStorageM0FixtureSpecs = []compactStorageM0FixtureSpec{
@@ -70,16 +71,19 @@ var compactStorageM0FixtureSpecs = []compactStorageM0FixtureSpec{
 	{
 		metadata: compactStorageMeasurementFixture{
 			Name: "full-high-debt", Seed: 3733004,
-			KeyDistribution:   "1024-live-2048-stale-value-log-records",
-			ValueDistribution: "fixed-1024", ValueLogPointerThreshold: 1,
-			WALMode: "default", ExpectedMaintenanceWork: "Full value-log rewrite with deterministic stale-byte copy opportunity",
+			KeyDistribution:   "vacuum-m0 user and collection generations with retired index pages",
+			ValueDistribution: "mixed-inline-and-2048-byte-pointers", ValueLogPointerThreshold: 512,
+			WALMode: "default", ExpectedMaintenanceWork: "Full production index vacuum with at least 40 percent index.db shrink",
 		},
-		open: func(b *testing.B) *DB { return openCompactStorageRewritePolicyBenchmarkFixture(b, 1024, 2048, 1024) },
+		open: func(b *testing.B) *DB {
+			d, _ := openVacuumM0Fixture(b, vacuumM0Options(b.TempDir()))
+			return d
+		},
 		options: CompactStorageOptions{
 			Mode: CompactStorageFull, DisableZeroByteValueLogCleanup: true,
 		},
-		expectRewrite:   true,
-		expectVacuumRun: true,
+		expectVacuumRun:        true,
+		minIndexShrinkRatioPPM: 400_000,
 	},
 	{
 		metadata: compactStorageMeasurementFixture{
@@ -448,6 +452,18 @@ func validateCompactStorageM0Work(spec compactStorageM0FixtureSpec, stats Compac
 		}
 		return fmt.Errorf("%s: unexpected value-log rewrite selected %d source segments",
 			spec.metadata.Name, stats.ValueLogRewrite.SourceSegmentsRequested)
+	}
+	if spec.minIndexShrinkRatioPPM > 0 {
+		before := compactStorageMeasurementUsageBytes(stats.Before, "index")
+		after := compactStorageMeasurementUsageBytes(stats.After, "index")
+		if before <= 0 || after < 0 || after > before {
+			return fmt.Errorf("%s: invalid index shrink boundary before=%d after=%d", spec.metadata.Name, before, after)
+		}
+		ratioPPM := uint64(before-after) * 1_000_000 / uint64(before)
+		if ratioPPM < spec.minIndexShrinkRatioPPM {
+			return fmt.Errorf("%s: index shrink ratio=%dppm want >=%dppm (before=%d after=%d)",
+				spec.metadata.Name, ratioPPM, spec.minIndexShrinkRatioPPM, before, after)
+		}
 	}
 	for _, phase := range stats.Phases {
 		if phase.Name != "index-vacuum" {
