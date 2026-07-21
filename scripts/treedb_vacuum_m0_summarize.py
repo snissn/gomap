@@ -64,15 +64,18 @@ def summarize(paths: list[Path]) -> dict[str, dict[str, object]]:
 
 def classify_public_status(public: dict[str, dict[str, object]]) -> str:
     unsupported = public.get("vacuum-unsupported/op", {}).get("samples", [])
-    unexpected = public.get("vacuum-unexpected-errors/op", {}).get("samples", [])
-    if len(unsupported) == 10 and len(unexpected) == 10:
-        if all(value == 1 for value in unsupported) and all(value == 0 for value in unexpected):
-            return "production-index-vacuum-unavailable"
-
     retries = public.get("vacuum-concurrent-retries/op", {}).get("samples", [])
+    unexpected = public.get("vacuum-unexpected-errors/op", {}).get("samples", [])
     misses = public.get("foreground-exposure-misses/op", {}).get("samples", [])
     overlap = public.get("foreground-overlap-samples/op", {}).get("samples", [])
     if all(len(samples) == 10 for samples in (unsupported, retries, unexpected, misses, overlap)):
+        if (
+            all(value == 1 for value in unsupported)
+            and all(value == 0 for value in retries)
+            and all(value == 0 for value in unexpected)
+            and all(value == 0 for value in misses)
+        ):
+            return "production-index-vacuum-unavailable"
         if (
             all(value == 0 for value in unsupported)
             and all(value == 0 for value in retries)
