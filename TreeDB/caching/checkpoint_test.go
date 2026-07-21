@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,6 +40,47 @@ func TestCachingDB_CheckpointContextCancelsWhileWaitingForFlushOwnership(t *test
 	case <-time.After(withRaceTimeout(2 * time.Second)):
 		t.Fatal("CheckpointContext did not cancel while waiting for flush ownership")
 	}
+}
+
+func TestLockCheckpointMutexContextCancellationLeavesNoWaiters(t *testing.T) {
+	var mu sync.Mutex
+	mu.Lock()
+	baselineGoroutines := runtime.NumGoroutine()
+
+	const waiters = 64
+	contexts := make([]context.CancelFunc, waiters)
+	done := make(chan error, waiters)
+	var callers sync.WaitGroup
+	for i := range contexts {
+		ctx, cancel := context.WithCancel(context.Background())
+		contexts[i] = cancel
+		callers.Add(1)
+		go func() {
+			defer callers.Done()
+			done <- lockCheckpointMutexContext(ctx, &mu)
+		}()
+	}
+	time.Sleep(20 * time.Millisecond)
+	for _, cancel := range contexts {
+		cancel()
+	}
+	for range contexts {
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("lock wait error=%v, want context.Canceled", err)
+		}
+	}
+	callers.Wait()
+
+	runtime.Gosched()
+	blockedGoroutines := runtime.NumGoroutine()
+	mu.Unlock()
+	if blockedGoroutines > baselineGoroutines+waiters/4 {
+		t.Fatalf("goroutines after cancellation=%d baseline=%d; canceled flush waiters remain parked", blockedGoroutines, baselineGoroutines)
+	}
+	if !mu.TryLock() {
+		t.Fatal("canceled checkpoint lock calls left queued mutex waiters")
+	}
+	mu.Unlock()
 }
 
 func TestCachingDB_CheckpointContextCancelsBeforeFrontierDrain(t *testing.T) {

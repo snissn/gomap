@@ -790,10 +790,15 @@ func TestLockFullScanMaintenanceContextCancellationLeavesNoWaiters(t *testing.T)
 	const waiters = 64
 	contexts := make([]context.CancelFunc, waiters)
 	done := make(chan error, waiters)
+	var callers sync.WaitGroup
 	for i := range contexts {
 		ctx, cancel := context.WithCancel(context.Background())
 		contexts[i] = cancel
-		go func() { done <- lockFullScanMaintenanceContext(ctx, &mu) }()
+		callers.Add(1)
+		go func() {
+			defer callers.Done()
+			done <- lockFullScanMaintenanceContext(ctx, &mu)
+		}()
 	}
 	time.Sleep(20 * time.Millisecond)
 	for _, cancel := range contexts {
@@ -804,6 +809,7 @@ func TestLockFullScanMaintenanceContextCancellationLeavesNoWaiters(t *testing.T)
 			t.Fatalf("lock wait error=%v, want context.Canceled", err)
 		}
 	}
+	callers.Wait()
 
 	runtime.Gosched()
 	blockedGoroutines := runtime.NumGoroutine()
