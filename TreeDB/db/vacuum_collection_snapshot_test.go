@@ -265,9 +265,8 @@ func TestVacuumIndexOnlinePagerSyncRunsOutsideWriteMu(t *testing.T) {
 		t.Fatalf("publish collection: %v", err)
 	}
 	// The helper publishes through the activated coordinator. Drain that exact
-	// root before entering the legacy vacuum test seam so an outstanding stable
-	// index pin cannot race the direct legacy replacement below. Production
-	// vacuum exercises the RecoverableRootSet path in the production tests.
+	// root before invoking production VacuumIndexOnline so an outstanding stable
+	// index pin cannot race the RecoverableRootSet-fenced replacement below.
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint collection: %v", err)
 	}
