@@ -3,6 +3,7 @@ package db_test
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -24,11 +25,23 @@ func BenchmarkPL06ExternalVacuumCollection(b *testing.B) {
 			defer func() { _ = database.Close() }()
 			b.ReportAllocs()
 			b.ResetTimer()
+			var unsupported, concurrentRetries, unexpected uint64
 			for i := 0; i < b.N; i++ {
-				if err := database.VacuumIndexOnline(context.Background()); err != nil {
-					b.Fatalf("vacuum: %v", err)
+				err := database.VacuumIndexOnline(context.Background())
+				switch {
+				case err == nil:
+					// A successful run is reported by the absence of each error class.
+				case errors.Is(err, dbpkg.ErrVacuumRecoverableRootSetRequired), errors.Is(err, dbpkg.ErrVacuumUnsupported):
+					unsupported++
+				case errors.Is(err, dbpkg.ErrVacuumConcurrentMutation):
+					concurrentRetries++
+				default:
+					unexpected++
 				}
 			}
+			b.ReportMetric(float64(unsupported)/float64(b.N), "vacuum-unsupported/op")
+			b.ReportMetric(float64(concurrentRetries)/float64(b.N), "vacuum-concurrent-retries/op")
+			b.ReportMetric(float64(unexpected)/float64(b.N), "vacuum-unexpected-errors/op")
 		})
 	}
 }
