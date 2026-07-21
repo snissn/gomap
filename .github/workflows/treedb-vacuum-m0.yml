@@ -29,6 +29,7 @@ jobs:
       - name: Checkout exact head
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
       - name: Setup Go
@@ -44,6 +45,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: treedb-vacuum-m0-${{ github.sha }}
+          name: treedb-vacuum-m0-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/treedb-vacuum-m0
           if-no-files-found: error
