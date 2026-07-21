@@ -47,12 +47,40 @@ type staleOnceDictStoreForPublishTest struct {
 	putCalls int
 }
 
+type staleKOnceDictStoreForPublishTest struct {
+	*legacyDictStoreForClassPublishTest
+	putCalls  int
+	setKCalls int
+	kByID     map[uint64]int
+}
+
 func (s *staleOnceDictStoreForPublishTest) PutDictBytes(ctx context.Context, dict []byte) (uint64, error) {
 	s.putCalls++
 	if s.putCalls == 1 {
 		return 0, db.ErrDurableWALCleanupProofStale
 	}
 	return s.legacyDictStoreForClassPublishTest.PutDictBytes(ctx, dict)
+}
+
+func (s *staleKOnceDictStoreForPublishTest) PutDictBytes(ctx context.Context, dict []byte) (uint64, error) {
+	s.putCalls++
+	return s.legacyDictStoreForClassPublishTest.PutDictBytes(ctx, dict)
+}
+
+func (s *staleKOnceDictStoreForPublishTest) SetK(_ context.Context, dictID uint64, k int) error {
+	s.setKCalls++
+	if s.setKCalls == 1 {
+		return db.ErrDurableWALCleanupProofStale
+	}
+	if s.kByID == nil {
+		s.kByID = make(map[uint64]int)
+	}
+	s.kByID[dictID] = k
+	return nil
+}
+
+func (s *staleKOnceDictStoreForPublishTest) GetK(_ context.Context, dictID uint64) (int, error) {
+	return s.kByID[dictID], nil
 }
 
 func newBlockingDictStoreForConcurrentPublishTest() *blockingDictStoreForConcurrentPublishTest {
@@ -350,6 +378,54 @@ func TestApplyValueLogDictProfileForClass_RetriesStaleCleanupWithoutBackgroundEr
 	}
 	if got := database.valueLogDictLastAppliedDictHashByClass[vlogDictClassSingleValue].Load(); got != dictHash {
 		t.Fatalf("retried dictionary hash=%x want %x", got, dictHash)
+	}
+}
+
+func TestApplyValueLogDictProfileForClass_RetriesStaleKWithoutApplyingProfile(t *testing.T) {
+	tr := &compression.Trainer{}
+	dictBytes := []byte("retryable-dictionary-k")
+	dictHash := xxhash.Sum64(dictBytes)
+	tr.AcceptProfile(&compression.ActiveProfile{
+		DictHash:     dictHash,
+		DictBytes:    len(dictBytes),
+		Dict:         dictBytes,
+		K:            8,
+		PayloadRatio: 0.6,
+		TotalRatio:   0.6,
+		Timestamp:    time.Now(),
+	})
+
+	store := &staleKOnceDictStoreForPublishTest{
+		legacyDictStoreForClassPublishTest: &legacyDictStoreForClassPublishTest{
+			dicts: make(map[uint64][]byte),
+		},
+	}
+	notifications := 0
+	database := &DB{
+		dictStore: store,
+		notifyError: func(error) {
+			notifications++
+		},
+	}
+	database.valueLogDictTrainerByClass[vlogDictClassSingleValue] = tr
+
+	database.applyValueLogDictProfileForClass(vlogDictClassSingleValue)
+	if notifications != 0 || database.backgroundError() != nil {
+		t.Fatalf("stale K cleanup poisoned background state: notifications=%d err=%v", notifications, database.backgroundError())
+	}
+	if got := database.valueLogDictLastAppliedDictHashByClass[vlogDictClassSingleValue].Load(); got != 0 {
+		t.Fatalf("stale K cleanup applied candidate hash=%x want 0", got)
+	}
+
+	database.applyValueLogDictProfileForClass(vlogDictClassSingleValue)
+	if store.putCalls != 2 || store.setKCalls != 2 {
+		t.Fatalf("publish calls PutDictBytes=%d SetK=%d want 2 each", store.putCalls, store.setKCalls)
+	}
+	if got := database.valueLogDictLastAppliedDictHashByClass[vlogDictClassSingleValue].Load(); got != dictHash {
+		t.Fatalf("retried dictionary hash=%x want %x", got, dictHash)
+	}
+	if got := store.kByID[store.currentID]; got != 8 {
+		t.Fatalf("persisted K for current dictionary=%d want 8", got)
 	}
 }
 

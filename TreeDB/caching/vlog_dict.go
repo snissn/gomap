@@ -1139,6 +1139,15 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 		db.reportValueLogDictPublishError(err)
 		return
 	}
+	// Persist the dictionary's compression parameter before publishing its
+	// current marker. A retryable metadata failure must leave the old profile
+	// current so a later publisher pass can retry the complete operation.
+	if ks, ok := store.(dictStoreK); ok {
+		if err := ks.SetK(ctx, dictID, profileK); err != nil {
+			db.reportValueLogDictPublishError(err)
+			return
+		}
+	}
 	classMode := db.dictClassMode()
 	publishedViaGlobalCurrent := false
 	if classMode == vlogDictClassModeSplitOuterLeaf {
@@ -1182,11 +1191,6 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 	if class == vlogDictClassSingleValue || classMode != vlogDictClassModeSplitOuterLeaf || publishedViaGlobalCurrent {
 		db.dictCurrentCached.Store(dictID)
 		db.dictCurrentOps.Store(0)
-	}
-	if ks, ok := store.(dictStoreK); ok {
-		if err := ks.SetK(ctx, dictID, profileK); err != nil {
-			db.reportValueLogDictPublishError(err)
-		}
 	}
 	db.valueLogDictLastAppliedDictHashByClass[class].Store(profile.DictHash)
 	db.valueLogDictLastAppliedDictIDByClass[class].Store(dictID)
