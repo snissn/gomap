@@ -561,7 +561,6 @@ func TestCaptureTemplateResourcesRejectsEachMissingPointerChild(t *testing.T) {
 }
 
 func TestCaptureTemplateResourcesBlocksVacuumUntilRelease(t *testing.T) {
-	t.Skip("deferred to #3681: online vacuum pin precedence requires RecoverableRootSet convergence")
 	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), ChunkSize: 64 * 1024})
 	if err != nil {
 		t.Fatalf("open: %v", err)

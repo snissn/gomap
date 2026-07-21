@@ -336,7 +336,6 @@ func (l *countingLeafPageLog) Flush() error { return l.inner.Flush() }
 func (l *countingLeafPageLog) Sync() error  { return l.inner.Sync() }
 
 func TestVacuumIndexOnline_ShrinksAndPreservesData(t *testing.T) {
-	skipLegacyOnlineVacuumRuntimeIntegration(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum not supported on windows")
 	}
@@ -394,7 +393,7 @@ func TestVacuumIndexOnline_ShrinksAndPreservesData(t *testing.T) {
 	}
 	defer func() { testHookVacuumAfterBaseSnapshot = nil }()
 	vacuumDone := make(chan error, 1)
-	go func() { vacuumDone <- d.vacuumIndexOnlineLegacyForTest(ctx) }()
+	go func() { vacuumDone <- d.VacuumIndexOnline(ctx) }()
 	select {
 	case <-snapshotReady:
 	case err := <-vacuumDone:
@@ -417,6 +416,9 @@ func TestVacuumIndexOnline_ShrinksAndPreservesData(t *testing.T) {
 	}
 	if err := <-vacuumDone; err != nil {
 		t.Fatalf("vacuum: %v", err)
+	}
+	if got := d.stableIndexCaptures.Load(); got != 0 {
+		t.Fatalf("recoverable-root recapture leaked stable index pins: %d", got)
 	}
 	if got := freeManyChecksumUpdates.Load(); got == 0 {
 		t.Fatal("online vacuum did not batch retired pages through FreeMany")

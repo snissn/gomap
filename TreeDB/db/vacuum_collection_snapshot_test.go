@@ -843,8 +843,6 @@ func TestPublishMalformedCollectionDescriptorAbortsBeforeVacuumArtifacts(t *test
 }
 
 func TestVacuumIndexOnlineSerializesCloseThroughMaintenance(t *testing.T) {
-	t.Skip("deferred to #3681: successful online vacuum requires RecoverableRootSet convergence")
-
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on windows")
 	}
@@ -878,7 +876,7 @@ func TestVacuumIndexOnlineSerializesCloseThroughMaintenance(t *testing.T) {
 		}
 	}
 	vacuumErr := make(chan error, 1)
-	go func() { vacuumErr <- db.vacuumIndexOnlineLegacyForTest(context.Background()) }()
+	go func() { vacuumErr <- db.VacuumIndexOnline(context.Background()) }()
 	waitVacuumTestSignal(t, reached, "vacuum precutover sync")
 
 	closeHookRan := make(chan struct{})

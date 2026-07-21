@@ -214,7 +214,6 @@ func TestCaptureDictionaryResourcesRejectsEachMissingPointerChild(t *testing.T) 
 }
 
 func TestCaptureDictionaryResourcesBlocksOnlineIndexVacuumUntilRelease(t *testing.T) {
-	t.Skip("deferred to #3681: online vacuum pin precedence requires RecoverableRootSet convergence")
 	store, err := Open(t.TempDir(), db.Options{ChunkSize: 64 * 1024})
 	if err != nil {
 		t.Fatalf("open: %v", err)
