@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"sync/atomic"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -126,6 +127,95 @@ func TestCommitGroupAtUsesOneWritePerMode(t *testing.T) {
 	}
 }
 
+func TestCommitGroupAtRoutesSingletonToPointWriter(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		mode      CommitMode
+		wantSet   int64
+		wantBatch int64
+	}{
+		{name: "relaxed", mode: CommitRelaxed, wantSet: 1},
+		{name: "durable", mode: CommitDurable, wantBatch: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := openTestDB(t, t.TempDir(), treedb.DurabilityWALOnRelaxed)
+			defer db.Close()
+			spy := &pointRouteSpyDB{DB: db}
+			store := newStore(spy)
+			if err := store.CommitAt(7, []Mutation{{Key: []byte("key"), Value: []byte("value")}}, tc.mode); err != nil {
+				t.Fatalf("CommitAt: %v", err)
+			}
+			if got := spy.setCalls.Load(); got != tc.wantSet {
+				t.Fatalf("Set calls=%d want %d", got, tc.wantSet)
+			}
+			if got := spy.setSyncCalls.Load(); got != 0 {
+				t.Fatalf("SetSync calls=%d want 0", got)
+			}
+			if got := spy.batchCalls.Load(); got != tc.wantBatch {
+				t.Fatalf("batch creations=%d want %d", got, tc.wantBatch)
+			}
+			requireResult(t, store, []byte("key"), 7, Present, 7, []byte("value"))
+		})
+	}
+}
+
+func TestCommitGroupAtSingletonPointWriterFailureIsStorageError(t *testing.T) {
+	db := openTestDB(t, t.TempDir(), treedb.DurabilityDurable)
+	defer db.Close()
+	injected := errors.New("injected point failure")
+	spy := &pointRouteSpyDB{DB: db, pointErr: injected}
+	err := newStore(spy).CommitAt(8, []Mutation{{Key: []byte("key"), Delete: true}}, CommitRelaxed)
+	if !errors.Is(err, ErrStorage) || !errors.Is(err, injected) {
+		t.Fatalf("CommitAt error=%v want ErrStorage and injected error", err)
+	}
+	if got := spy.setCalls.Load(); got != 1 {
+		t.Fatalf("Set calls=%d want 1", got)
+	}
+	if got := spy.batchCalls.Load(); got != 0 {
+		t.Fatalf("batch creations=%d want 0", got)
+	}
+}
+
+func TestCommitGroupAtCommandWALSingletonUsesPointFrame(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, t.TempDir())
+	opts.DisableSideStores = true
+	opts.BackgroundCheckpointInterval = -1
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	store := New(db)
+
+	before := db.Stats()
+	if err := store.CommitAt(9, []Mutation{{Key: []byte("single"), Value: []byte("value")}}, CommitRelaxed); err != nil {
+		t.Fatalf("singleton CommitAt: %v", err)
+	}
+	afterPoint := db.Stats()
+	requireMVCCStatDelta(t, before, afterPoint, "treedb.command_wal.append.count_total", 1)
+	requireMVCCStatDelta(t, before, afterPoint, "treedb.command_wal.append.point.count_total", 1)
+	requireMVCCStatDelta(t, before, afterPoint, "treedb.command_wal.append.payload.count_total", 0)
+	requireMVCCStatDelta(t, before, afterPoint, "treedb.command_wal.flush.count_total", 1)
+	requireMVCCStatDelta(t, before, afterPoint, "treedb.command_wal.write.syscalls_total", 1)
+	requireMVCCStatDelta(t, before, afterPoint, "treedb.command_wal.file_sync.calls_total", 0)
+	requireMVCCStatDelta(t, before, afterPoint, "treedb.public.batch.write.calls_total", 0)
+
+	if err := store.CommitAt(10, []Mutation{
+		{Key: []byte("multi-a"), Value: []byte("A")},
+		{Key: []byte("multi-b"), Delete: true},
+	}, CommitRelaxed); err != nil {
+		t.Fatalf("multi CommitAt: %v", err)
+	}
+	afterBatch := db.Stats()
+	requireMVCCStatDelta(t, afterPoint, afterBatch, "treedb.command_wal.append.count_total", 1)
+	requireMVCCStatDelta(t, afterPoint, afterBatch, "treedb.command_wal.append.point.count_total", 0)
+	requireMVCCStatDelta(t, afterPoint, afterBatch, "treedb.command_wal.append.payload.count_total", 1)
+	requireMVCCStatDelta(t, afterPoint, afterBatch, "treedb.command_wal.flush.count_total", 1)
+	requireMVCCStatDelta(t, afterPoint, afterBatch, "treedb.command_wal.write.syscalls_total", 1)
+	requireMVCCStatDelta(t, afterPoint, afterBatch, "treedb.command_wal.file_sync.calls_total", 0)
+	requireMVCCStatDelta(t, afterPoint, afterBatch, "treedb.public.batch.write.calls_total", 1)
+}
+
 func TestCommitGroupAtEmptyGroupsAreNoOp(t *testing.T) {
 	db := openTestDB(t, t.TempDir(), treedb.DurabilityDurable)
 	defer db.Close()
@@ -221,3 +311,50 @@ func mvccTestStat(t *testing.T, db *treedb.DB, name string) uint64 {
 	}
 	return value
 }
+
+func requireMVCCStatDelta(t *testing.T, before, after map[string]string, name string, want uint64) {
+	t.Helper()
+	parse := func(stats map[string]string) uint64 {
+		value, err := strconv.ParseUint(stats[name], 10, 64)
+		if err != nil {
+			t.Fatalf("parse %s=%q: %v", name, stats[name], err)
+		}
+		return value
+	}
+	start, finish := parse(before), parse(after)
+	if finish < start || finish-start != want {
+		t.Fatalf("%s delta=%d want %d (before=%d after=%d)", name, finish-start, want, start, finish)
+	}
+}
+
+type pointRouteSpyDB struct {
+	*treedb.DB
+	pointErr     error
+	setCalls     atomic.Int64
+	setSyncCalls atomic.Int64
+	batchCalls   atomic.Int64
+}
+
+func (db *pointRouteSpyDB) Set(key, value []byte) error {
+	db.setCalls.Add(1)
+	if db.pointErr != nil {
+		return db.pointErr
+	}
+	return db.DB.Set(key, value)
+}
+
+func (db *pointRouteSpyDB) SetSync(key, value []byte) error {
+	db.setSyncCalls.Add(1)
+	if db.pointErr != nil {
+		return db.pointErr
+	}
+	return db.DB.SetSync(key, value)
+}
+
+func (db *pointRouteSpyDB) NewBatchWithSize(size int) treedb.Batch {
+	db.batchCalls.Add(1)
+	return db.DB.NewBatchWithSize(size)
+}
+
+var _ treeDB = (*pointRouteSpyDB)(nil)
+var _ pointWriter = (*pointRouteSpyDB)(nil)
