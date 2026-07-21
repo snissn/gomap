@@ -8,6 +8,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -207,12 +208,20 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 	var mutables []memtable.Table
 	var queue []memtable.Table
 	var spans [][]batch.DeleteRange
+	pointShard := -1
 	if view != nil {
 		mutables = view.mutables
 		queue = view.queue
 		spans = view.queueRangeSpans
 		if snap, ok := liveIteratorRootDomainSnapshot(view); ok && len(snap.immutables) > 0 {
 			queue = snap.immutables
+		}
+		if _, ok := mvcckey.ExactVersionRange(start, end); ok && !memtableViewHasRangeSpans(view) {
+			pointShard = db.shardIndex(start)
+			if pointShard >= 0 && pointShard < len(view.rootPointShards) {
+				queue = view.rootPointShards[pointShard].immutables
+				spans = nil
+			}
 		}
 	}
 	var callSources uint64
@@ -250,7 +259,10 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 		best := pointSuccessorCandidate{}
 		priority := 0
 		if len(mutables) > 0 {
-			target := db.shardIndex(lower)
+			target := pointShard
+			if target < 0 {
+				target = db.shardIndex(lower)
+			}
 			if target >= 0 && target < len(mutables) {
 				candidate := initialCandidate
 				if target != initialTarget || !bytes.Equal(lower, start) {
@@ -267,6 +279,9 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 				}
 			}
 			for i, mt := range mutables {
+				if pointShard >= 0 {
+					break
+				}
 				if i == target {
 					continue
 				}

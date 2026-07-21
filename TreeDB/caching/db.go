@@ -35,6 +35,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/merging"
+	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -7977,6 +7978,9 @@ func (db *DB) advanceValueLogWriterPastObservedSeq(l *lane, observedMaxSeq int) 
 }
 
 func hashKey(key []byte) uint64 {
+	if prefix, ok := mvcckey.VersionAffinityPrefix(key); ok {
+		key = prefix
+	}
 	return xxhash.Sum64(key)
 }
 
