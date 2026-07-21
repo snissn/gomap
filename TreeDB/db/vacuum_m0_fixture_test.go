@@ -100,6 +100,9 @@ func TestVacuumM0FixtureDeterministicDebtAndOfflineCeiling(t *testing.T) {
 }
 
 func TestVacuumM0ProductionOnlineVacuumIsSupported(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
 	dir := t.TempDir()
 	opts := vacuumM0Options(dir)
 	d, fixture := openVacuumM0Fixture(t, opts)
