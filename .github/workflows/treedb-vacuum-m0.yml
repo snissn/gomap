@@ -3,10 +3,14 @@ name: "TreeDB: index-vacuum M0 evidence"
 on:
   pull_request:
     paths:
-      - "TreeDB/db/vacuum_collection_bench_test.go"
-      - "TreeDB/db/vacuum_collection_external_bench_test.go"
-      - "TreeDB/db/vacuum_collection_latency_external_bench_test.go"
-      - "TreeDB/db/vacuum_m0_fixture_test.go"
+      - "TreeDB/db/vacuum*.go"
+      - "TreeDB/db/recoverable_root_set.go"
+      - "TreeDB/db/durable_root*.go"
+      - "TreeDB/db/root_publication*.go"
+      - "TreeDB/db/ordered_root_publish.go"
+      - "TreeDB/db/stable_resource.go"
+      - "TreeDB/db/db.go"
+      - "TreeDB/public.go"
       - "scripts/treedb_vacuum_m0_capture.sh"
       - "scripts/treedb_vacuum_m0_summarize.py"
       - "scripts/treedb_vacuum_m0_summarize_test.py"
