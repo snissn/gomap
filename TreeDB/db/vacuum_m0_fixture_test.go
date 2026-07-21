@@ -100,10 +100,39 @@ func TestVacuumM0FixtureDeterministicDebtAndOfflineCeiling(t *testing.T) {
 }
 
 func TestVacuumM0ProductionOnlineVacuumIsSupported(t *testing.T) {
-	d, _ := openVacuumM0Fixture(t, vacuumM0Options(t.TempDir()))
-	defer func() { _ = d.Close() }()
+	dir := t.TempDir()
+	opts := vacuumM0Options(dir)
+	d, fixture := openVacuumM0Fixture(t, opts)
 	if err := d.VacuumIndexOnline(context.Background()); err != nil {
+		_ = d.Close()
 		t.Fatalf("production online vacuum: %v", err)
+	}
+	if after := vacuumM0FileBytes(t, vacuumM0IndexPath(dir)); after*100 > fixture.IndexBytes*60 {
+		_ = d.Close()
+		t.Fatalf("online shrink index before=%d after=%d want >=40%%", fixture.IndexBytes, after)
+	}
+	if after := vacuumM0DirBytes(t, vacuumM0StoragePath(dir, "value_vlog")); after != fixture.ValueLogBytes {
+		_ = d.Close()
+		t.Fatalf("online vacuum rewrote persistent value log: before=%d after=%d", fixture.ValueLogBytes, after)
+	}
+	if after := vacuumM0DirBytes(t, vacuumM0StoragePath(dir, "leaf_vlog")); after != fixture.LeafLogBytes {
+		_ = d.Close()
+		t.Fatalf("online vacuum rewrote persistent leaf log: before=%d after=%d", fixture.LeafLogBytes, after)
+	}
+	if got := vacuumM0Digest(t, d); got != fixture.LogicalDigest {
+		_ = d.Close()
+		t.Fatalf("online digest=%s want %s", got, fixture.LogicalDigest)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close after online vacuum: %v", err)
+	}
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen after online vacuum: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if got := vacuumM0Digest(t, reopened); got != fixture.LogicalDigest {
+		t.Fatalf("reopen digest=%s want %s", got, fixture.LogicalDigest)
 	}
 }
 
