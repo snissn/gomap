@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -258,6 +259,12 @@ func TestFreelistTxn_GenericSinkCannotMutateOrRetainCandidatePages(t *testing.T)
 	}
 	if got, want := candidate.Pages(), reference.Pages(); !pageImagesEqual(got, want) {
 		t.Fatal("generic sink mutation changed candidate-owned page bytes")
+	}
+	if got, want := candidate.GenerationRef(), reference.GenerationRef(); got != want {
+		t.Fatalf("generation ref changed by sink isolation: got %+v want %+v", got, want)
+	}
+	if got, want := candidate.DirtyPageIDs(), reference.DirtyPageIDs(); !slices.Equal(got, want) {
+		t.Fatalf("dirty page IDs changed by sink isolation: got %v want %v", got, want)
 	}
 	for _, image := range mutating.pages {
 		clear(image.Data)
