@@ -24091,6 +24091,7 @@ func (db *DB) CheckpointContext(ctx context.Context) error {
 type checkpointTryLocker interface {
 	Lock()
 	TryLock() bool
+	Unlock()
 }
 
 func lockCheckpointMutexContext(ctx context.Context, mu checkpointTryLocker) error {
@@ -24098,22 +24099,29 @@ func lockCheckpointMutexContext(ctx context.Context, mu checkpointTryLocker) err
 		mu.Lock()
 		return nil
 	}
-	for {
-		if mu.TryLock() {
-			return nil
-		}
-		timer := time.NewTimer(time.Millisecond)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if mu.TryLock() {
+		return nil
+	}
+
+	acquired := make(chan struct{})
+	abandon := make(chan struct{})
+	go func() {
+		mu.Lock()
 		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			return ctx.Err()
-		case <-timer.C:
+		case acquired <- struct{}{}:
+		case <-abandon:
+			mu.Unlock()
 		}
+	}()
+	select {
+	case <-acquired:
+		return nil
+	case <-ctx.Done():
+		close(abandon)
+		return ctx.Err()
 	}
 }
 
