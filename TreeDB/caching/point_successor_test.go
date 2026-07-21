@@ -3,6 +3,7 @@ package caching
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"strconv"
 	"sync"
 	"testing"
@@ -303,6 +304,134 @@ func TestSeekGE_CompetingVersionsAcrossMutableQueuedAndPublishedSources(t *testi
 		t.Fatalf("Delete mutable: %v", err)
 	}
 	requireSeekGE(t, db, []byte("k"), nil, []byte("z"), []byte("published-z"))
+}
+
+// This is the deterministic mixed read/write attribution seam used by the
+// Dgraph-shaped investigation.  It proves that the counters distinguish the
+// winning source rather than merely counting every source consulted.
+func TestSeekGE_AttributionPartitionsWinningSource(t *testing.T) {
+	parse := func(t *testing.T, stats map[string]string, name string) uint64 {
+		t.Helper()
+		value, err := strconv.ParseUint(stats[name], 10, 64)
+		if err != nil {
+			t.Fatalf("parse %s=%q: %v", name, stats[name], err)
+		}
+		return value
+	}
+	backend := NewMockBackend()
+	backend.Set([]byte("k"), []byte("published"))
+	db := openPointSuccessorTestDB(t, backend)
+
+	before := db.Stats()
+	if err := db.Set([]byte("k"), []byte("queued")); err != nil {
+		t.Fatalf("Set queued: %v", err)
+	}
+	rotatePointSuccessorMemtables(t, db)
+	requireSeekGE(t, db, []byte("k"), nil, []byte("k"), []byte("queued"))
+	if err := db.Set([]byte("k"), []byte("mutable")); err != nil {
+		t.Fatalf("Set mutable: %v", err)
+	}
+	requireSeekGE(t, db, []byte("k"), nil, []byte("k"), []byte("mutable"))
+	if err := db.Delete([]byte("k")); err != nil {
+		t.Fatalf("Delete mutable: %v", err)
+	}
+	// The visible tombstone removes the queued and published versions; the
+	// layer counters must not turn probes into false hits.
+	if key, value, found, err := db.SeekGE([]byte("k"), nil); err != nil || found || key != nil || value != nil {
+		t.Fatalf("SeekGE tombstoned key = key=%q value=%q found=%t err=%v, want not found", key, value, found, err)
+	}
+	after := db.Stats()
+
+	for _, tc := range []struct {
+		name string
+		want uint64
+	}{
+		{"treedb.cache.point_successor.mutable_hits_total", 1},
+		{"treedb.cache.point_successor.queue_hits_total", 1},
+		{"treedb.cache.point_successor.backend_hits_total", 0},
+	} {
+		if got := parse(t, after, tc.name) - parse(t, before, tc.name); got != tc.want {
+			t.Fatalf("%s delta=%d want %d", tc.name, got, tc.want)
+		}
+	}
+	if got := parse(t, after, "treedb.cache.point_successor.selection_ns_total") - parse(t, before, "treedb.cache.point_successor.selection_ns_total"); got == 0 {
+		t.Fatal("point-successor selection timing did not advance")
+	}
+
+	publishedOnlyBackend := NewMockBackend()
+	publishedOnlyBackend.Set([]byte("p"), []byte("published"))
+	publishedOnly := openPointSuccessorTestDB(t, publishedOnlyBackend)
+	publishedBefore := publishedOnly.Stats()
+	requireSeekGE(t, publishedOnly, []byte("p"), nil, []byte("p"), []byte("published"))
+	publishedAfter := publishedOnly.Stats()
+	if got := parse(t, publishedAfter, "treedb.cache.point_successor.backend_hits_total") - parse(t, publishedBefore, "treedb.cache.point_successor.backend_hits_total"); got != 1 {
+		t.Fatalf("backend hit delta=%d want 1", got)
+	}
+}
+
+// BenchmarkSeekGEQueuedFanIn is a deterministic engine-only analogue of the
+// Dgraph mixed workload: an older key remains visible while newer immutable
+// sources contain later keys.  The lookup must inspect every newer source to
+// prove that the old key is the successor.  It intentionally holds flush so
+// the source set is stable for before/after comparisons.
+func BenchmarkSeekGEQueuedFanIn(b *testing.B) {
+	const queuedSources = 32
+	backend := NewMockBackend()
+	db, err := Open(b.TempDir(), backend, Options{
+		FlushThreshold:     1 << 30,
+		MemtableShards:     1,
+		MaxQueuedMemtables: -1,
+		AllowUnsafe:        true,
+	})
+	if err != nil {
+		b.Fatalf("Open: %v", err)
+	}
+	b.Cleanup(func() { _ = db.Close() })
+	db.flushMu.Lock()
+	b.Cleanup(db.flushMu.Unlock)
+	if err := db.Set([]byte("k"), []byte("visible")); err != nil {
+		b.Fatalf("Set visible: %v", err)
+	}
+	rotate := func() {
+		db.mu.Lock()
+		err := db.rotateMemtableLocked(false)
+		db.mu.Unlock()
+		if err != nil {
+			b.Fatalf("rotateMemtableLocked: %v", err)
+		}
+	}
+	rotate()
+	for i := 0; i < queuedSources-1; i++ {
+		key := []byte(fmt.Sprintf("z%03d", i))
+		if err := db.Set(key, []byte("later")); err != nil {
+			b.Fatalf("Set %q: %v", key, err)
+		}
+		rotate()
+	}
+	before := db.Stats()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		key, value, found, err := db.SeekGE([]byte("k"), nil)
+		if err != nil || !found || !bytes.Equal(key, []byte("k")) || !bytes.Equal(value, []byte("visible")) {
+			b.Fatalf("SeekGE: key=%q value=%q found=%t err=%v", key, value, found, err)
+		}
+	}
+	b.StopTimer()
+	after := db.Stats()
+	reportPointSuccessorBenchCounter(b, before, after, "treedb.cache.point_successor.sources_total", "sources/op")
+	reportPointSuccessorBenchCounter(b, before, after, "treedb.cache.point_successor.queue_probes_total", "queue_probes/op")
+	reportPointSuccessorBenchCounter(b, before, after, "treedb.cache.point_successor.selection_ns_total", "selection_ns/op")
+	reportPointSuccessorBenchCounter(b, before, after, "treedb.cache.point_successor.materialize_ns_total", "materialize_ns/op")
+}
+
+func reportPointSuccessorBenchCounter(b *testing.B, before, after map[string]string, key, name string) {
+	b.Helper()
+	start, startErr := strconv.ParseUint(before[key], 10, 64)
+	end, endErr := strconv.ParseUint(after[key], 10, 64)
+	if startErr == nil && endErr == nil && end >= start && b.N > 0 {
+		b.ReportMetric(float64(end-start)/float64(b.N), name)
+	}
 }
 
 func TestSeekGE_FlushPublicationPreservesAnswer(t *testing.T) {
