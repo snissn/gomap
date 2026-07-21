@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
@@ -25,6 +24,7 @@ func BenchmarkVacuumIndexOnlineCollection(b *testing.B) {
 		b.Run(tc.name, func(b *testing.B) {
 			db := openVacuumCollectionBenchmarkDB(b, tc.valueSize)
 			defer func() { _ = db.Close() }()
+			disableRootPublicationForLegacyVacuumBenchmark(b, db)
 			var total VacuumOnlineStats
 
 			b.ReportAllocs()
@@ -92,17 +92,14 @@ func BenchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B) {
 		b.Run(tc.name, func(b *testing.B) {
 			db := openVacuumCollectionBenchmarkDB(b, tc.valueSize)
 			defer func() { _ = db.Close() }()
+			disableRootPublicationForLegacyVacuumBenchmark(b, db)
 			var total VacuumOnlineStats
 			var foregroundLatencies []time.Duration
 			var foregroundPoints, foregroundRanges uint64
 
 			b.ReportAllocs()
 			b.ResetTimer()
-			for iteration := 0; iteration < b.N; iteration++ {
-				rootID, err := vacuumCollectionBenchmarkRootID(db)
-				if err != nil {
-					b.Fatalf("current collection root: %v", err)
-				}
+			for range b.N {
 				start := make(chan struct{})
 				stop := make(chan struct{})
 				warmed := make(chan struct{})
@@ -111,14 +108,12 @@ func BenchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B) {
 				go vacuumCollectionForegroundWriter(db, start, stop, warmed, writerDone)
 
 				var hookOnce sync.Once
-				var collectionErr error
 				db.vacuumPagerSyncHook = func(phase vacuumPagerSyncPhase) {
 					if phase != vacuumPagerSyncPrecutover {
 						return
 					}
 					hookOnce.Do(func() {
 						startOnce.Do(func() { close(start) })
-						_, collectionErr = publishVacuumCollectionBenchmarkDelta(db, rootID, iteration)
 						<-warmed
 					})
 				}
@@ -127,9 +122,6 @@ func BenchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B) {
 				startOnce.Do(func() { close(start) })
 				close(stop)
 				foreground := <-writerDone
-				if collectionErr != nil {
-					b.Fatalf("publish collection delta: %v", collectionErr)
-				}
 				if foreground.err != nil {
 					b.Fatalf("foreground churn: %v", foreground.err)
 				}
@@ -192,6 +184,30 @@ func BenchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B) {
 	}
 }
 
+// disableRootPublicationForLegacyVacuumBenchmark recreates the runtime mode
+// that the legacy test-only swap was designed for. Production comparison must
+// keep the coordinator enabled and prove coherent post-swap rebinding.
+func disableRootPublicationForLegacyVacuumBenchmark(tb testing.TB, db *DB) {
+	tb.Helper()
+	runtime := db.rootPublication
+	if runtime == nil || runtime.coordinator == nil {
+		tb.Fatal("legacy vacuum baseline requires an active root-publication runtime to quiesce")
+	}
+	if err := runtime.coordinator.Drain(context.Background()); err != nil {
+		tb.Fatalf("drain root publication for legacy baseline: %v", err)
+	}
+	if err := runtime.coordinator.Stop(context.Background()); err != nil {
+		tb.Fatalf("stop root publication for legacy baseline: %v", err)
+	}
+	handoff, err := runtime.coordinator.TakeRecoveryHandoff()
+	if err != nil {
+		tb.Fatalf("take root-publication handoff for legacy baseline: %v", err)
+	}
+	db.rootPublication = nil
+	runtime.release()
+	handoff.Release()
+}
+
 type vacuumCollectionForegroundResult struct {
 	latencies []time.Duration
 	points    uint64
@@ -200,7 +216,7 @@ type vacuumCollectionForegroundResult struct {
 }
 
 func vacuumCollectionForegroundWriter(db *DB, start, stop <-chan struct{}, warmed chan<- struct{}, done chan<- vacuumCollectionForegroundResult) {
-	const warmOperations = 128
+	const warmOperations = 4096
 	<-start
 	result := vacuumCollectionForegroundResult{latencies: make([]time.Duration, 0, warmOperations*2)}
 	var warmOnce sync.Once
@@ -261,47 +277,17 @@ func vacuumCollectionLatencyPercentile(latencies []time.Duration, percentile int
 	return sorted[index-1]
 }
 
-func vacuumCollectionBenchmarkRootID(db *DB) (uint64, error) {
-	snapshot := db.AcquireSnapshot()
-	if snapshot == nil {
-		return 0, ErrClosed
-	}
-	defer snapshot.Close()
-	encoded, err := snapshot.GetAtRoot(snapshot.state.SystemRootPageID, []byte(vacuumSnapshotPrimaryKey))
-	if err != nil {
-		return 0, err
-	}
-	roots, err := decodeCollectionRootDescriptorRootIDs([]byte(vacuumSnapshotPrimaryKey), encoded, false)
-	if err != nil {
-		return 0, err
-	}
-	if len(roots) != 1 || roots[0] == 0 {
-		return 0, fmt.Errorf("unexpected collection roots %v", roots)
-	}
-	return roots[0], nil
-}
-
-func publishVacuumCollectionBenchmarkDelta(db *DB, rootID uint64, version int) (uint64, error) {
-	delta := batchpkg.New(nil, vacuumInlineThresholdMax)
-	defer delta.Close()
-	if err := delta.Set([]byte("doc/000000"), []byte(fmt.Sprintf("foreground-version-%d", version))); err != nil {
-		return 0, err
-	}
-	_, roots, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
-		BaseRoot:      rootID,
-		Delta:         delta,
-		StoragePolicy: OrderedRootStoragePagerLeaves,
-	}}, vacuumCollectionBenchmarkCatalog)
-	if err != nil {
-		return 0, err
-	}
-	if len(roots) != 1 || roots[0] == 0 {
-		return 0, fmt.Errorf("unexpected published collection roots %v", roots)
-	}
-	return roots[0], nil
-}
+const vacuumCollectionBenchmarkCatalogEntries = 131072
 
 func vacuumCollectionBenchmarkCatalog(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	return vacuumCollectionCatalog(rootIDs, vacuumCollectionBenchmarkCatalogEntries)
+}
+
+func vacuumCollectionFixtureCatalog(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	return vacuumCollectionCatalog(rootIDs, 0)
+}
+
+func vacuumCollectionCatalog(rootIDs []uint64, metadataEntries int) (iterator.UnsafeIterator, error) {
 	if len(rootIDs) != 1 || rootIDs[0] == 0 {
 		return nil, fmt.Errorf("unexpected collection roots %v", rootIDs)
 	}
@@ -312,6 +298,9 @@ func vacuumCollectionBenchmarkCatalog(rootIDs []uint64) (iterator.UnsafeIterator
 	encoded := encodeCollectionRootDescriptorRootID(rootIDs[0])
 	catalog.Set([]byte(vacuumSnapshotPrimaryKey), encoded)
 	catalog.Set([]byte(vacuumSnapshotAliasKey), encoded)
+	for entry := 0; entry < metadataEntries; entry++ {
+		catalog.Set([]byte(fmt.Sprintf("vacuum-benchmark/catalog/%06d", entry)), encoded)
+	}
 	catalog.Set([]byte(vacuumSnapshotOverlayKey), encodeCollectionRootDescriptorRootIDs([]uint64{rootIDs[0], rootIDs[0]}))
 	catalog.Set([]byte(vacuumSnapshotEmptyKey), nil)
 	catalog.Freeze()
