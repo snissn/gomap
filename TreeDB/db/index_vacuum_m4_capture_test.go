@@ -13,7 +13,7 @@ func TestIndexVacuumM4CaptureKeepsCertificationLanes(t *testing.T) {
 	}
 	script := string(data)
 	required := []string{
-		"deferred to #3681",
+		"deferred to " + "#3681",
 		"ErrVacuumRecoverableRootSetRequired",
 		"TestVacuumM0ProductionOnlineVacuumIsSupported",
 		"TestBackgroundIndexVacuum",
