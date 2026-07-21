@@ -215,6 +215,137 @@ func (failingPageSinkV1) WritePage(uint64, []byte) error {
 	return errors.New("injected page write failure")
 }
 
+type mutatingRetainingPageSinkV1 struct {
+	pages []PageImageV1
+}
+
+func (s *mutatingRetainingPageSinkV1) WritePage(id uint64, data []byte) error {
+	if len(data) != 0 {
+		data[0] ^= 0xff
+	}
+	s.pages = append(s.pages, PageImageV1{PageID: id, Data: data})
+	return nil
+}
+
+type borrowedRecordingPageSinkV1 struct {
+	pages []PageImageV1
+	err   error
+}
+
+func (*borrowedRecordingPageSinkV1) AcceptsBorrowedCandidatePagesV1() {}
+
+func (s *borrowedRecordingPageSinkV1) WritePage(id uint64, data []byte) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.pages = append(s.pages, PageImageV1{PageID: id, Data: data})
+	return nil
+}
+
+func TestFreelistTxn_GenericSinkCannotMutateOrRetainCandidatePages(t *testing.T) {
+	base := MustNewFreelistGenerationV1(1, 64, []uint64{2, 9, 33}, nil)
+	candidateID := candidateIDFromString("generic-sink-isolation")
+	reference, err := NewFreelistTxn(base, NewReservationLedger()).MaterializeCandidate(
+		2, 2, candidateID, NewCandidatePageSinkV1(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutating := &mutatingRetainingPageSinkV1{}
+	candidate, err := NewFreelistTxn(base, NewReservationLedger()).MaterializeCandidate(2, 2, candidateID, mutating)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := candidate.Pages(), reference.Pages(); !pageImagesEqual(got, want) {
+		t.Fatal("generic sink mutation changed candidate-owned page bytes")
+	}
+	for _, image := range mutating.pages {
+		clear(image.Data)
+	}
+	if got, want := candidate.Pages(), reference.Pages(); !pageImagesEqual(got, want) {
+		t.Fatal("generic sink retained an alias to candidate-owned page bytes")
+	}
+}
+
+func TestFreelistCandidateV1_WritePagesBorrowedUsesOwnedBytesAndStopsOnError(t *testing.T) {
+	candidate, err := NewFreelistTxn(
+		MustNewFreelistGenerationV1(1, 64, []uint64{2, 9, 33}, nil), NewReservationLedger(),
+	).MaterializeCandidate(2, 2, candidateIDFromString("borrowed-pages"), NewCandidatePageSinkV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &borrowedRecordingPageSinkV1{}
+	if err := candidate.WritePagesBorrowedV1(sink); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.pages) != len(candidate.pages) {
+		t.Fatalf("borrowed pages=%d, want %d", len(sink.pages), len(candidate.pages))
+	}
+	for i := range sink.pages {
+		if sink.pages[i].PageID != candidate.pages[i].PageID || &sink.pages[i].Data[0] != &candidate.pages[i].Data[0] {
+			t.Fatalf("page %d was copied instead of borrowed", i)
+		}
+	}
+	detached := candidate.Pages()
+	detached[0].Data[0] ^= 0xff
+	if bytes.Equal(detached[0].Data, candidate.Pages()[0].Data) {
+		t.Fatal("public Pages returned an alias instead of a defensive copy")
+	}
+	wantErr := errors.New("injected borrowed-page write failure")
+	failing := &borrowedRecordingPageSinkV1{err: wantErr}
+	if err := candidate.WritePagesBorrowedV1(failing); !errors.Is(err, wantErr) {
+		t.Fatalf("borrowed write error=%v, want %v", err, wantErr)
+	}
+}
+
+func TestFreelistTxn_CandidateSinkEliminatesIsolationCopies(t *testing.T) {
+	base := MustNewFreelistGenerationV1(1, 64, []uint64{2, 9, 33}, nil)
+	optimizedTxn := NewFreelistTxn(base, NewReservationLedger())
+	optimized, err := optimizedTxn.MaterializeCandidate(2, 2, candidateIDFromString("optimized-copy-count"), NewCandidatePageSinkV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	optimizedStats := optimizedTxn.Stats()
+	if optimizedStats.CandidatePageIsolationCopies != 0 || optimizedStats.CandidatePageIsolationBytes != 0 {
+		t.Fatalf("optimized isolation copies=%d bytes=%d, want zero", optimizedStats.CandidatePageIsolationCopies, optimizedStats.CandidatePageIsolationBytes)
+	}
+	genericTxn := NewFreelistTxn(base, NewReservationLedger())
+	if _, err := genericTxn.MaterializeCandidate(2, 2, candidateIDFromString("generic-copy-count"), NewMemoryPageStoreV1()); err != nil {
+		t.Fatal(err)
+	}
+	genericStats := genericTxn.Stats()
+	if genericStats.CandidatePageIsolationCopies != uint64(optimized.PageCount()) || genericStats.CandidatePageIsolationBytes != uint64(optimized.PageCount())*page.PageSize {
+		t.Fatalf("generic isolation copies=%d bytes=%d, want %d pages", genericStats.CandidatePageIsolationCopies, genericStats.CandidatePageIsolationBytes, optimized.PageCount())
+	}
+}
+
+func TestCandidatePageSinkV1_ValidatesSizeAndDuplicateWithoutRetainingBytes(t *testing.T) {
+	var sink CandidatePageSinkV1
+	pageImage := make([]byte, page.PageSize)
+	if err := sink.WritePage(7, pageImage); err != nil {
+		t.Fatal(err)
+	}
+	clear(pageImage)
+	if err := sink.WritePage(7, pageImage); !errors.Is(err, ErrGenerationFormat) {
+		t.Fatalf("duplicate page error=%v, want generation format error", err)
+	}
+	if err := sink.WritePage(8, pageImage[:len(pageImage)-1]); !errors.Is(err, ErrGenerationFormat) {
+		t.Fatalf("short page error=%v, want generation format error", err)
+	}
+}
+
+func pageImagesEqual(got, want []PageImageV1) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i].PageID != want[i].PageID || !bytes.Equal(got[i].Data, want[i].Data) {
+			return false
+		}
+	}
+	return true
+}
+
 type failAfterPageSinkV1 struct {
 	store     *MemoryPageStoreV1
 	remaining int
@@ -664,6 +795,37 @@ func BenchmarkFreelistGenerationV1_RetirementMutation(b *testing.B) {
 				stats := txn.Stats()
 				b.ReportMetric(float64(stats.StateMutationPaths), "mutation-paths/op")
 				b.ReportMetric(float64(stats.StateMutationItems), "mutation-items/op")
+			}
+		})
+	}
+}
+
+func BenchmarkFreelistGenerationV1_CandidatePageOwnership(b *testing.B) {
+	base := MustNewFreelistGenerationV1(1, 1024, nil, nil)
+	retired := make([]retiredPage, 0, 200)
+	for id := uint64(2); id < 202; id++ {
+		retired = append(retired, retiredPage{id: id, lastReachableCommitSeq: 1})
+	}
+	for _, row := range []struct {
+		name string
+		sink func() AppendPageSink
+	}{
+		{name: "generic-memory-store", sink: func() AppendPageSink { return NewMemoryPageStoreV1() }},
+		{name: "candidate-owned", sink: func() AppendPageSink { return NewCandidatePageSinkV1() }},
+	} {
+		b.Run(row.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				txn := NewFreelistTxn(base, NewReservationLedger())
+				txn.retireMany(retired)
+				candidate, err := txn.MaterializeCandidate(2, 2, candidateIDFromString("candidate-page-ownership-bench"), row.sink())
+				if err != nil {
+					b.Fatal(err)
+				}
+				stats := txn.Stats()
+				b.ReportMetric(float64(candidate.PageCount()), "candidate-pages/op")
+				b.ReportMetric(float64(stats.CandidatePageIsolationCopies), "isolation-copies/op")
+				b.ReportMetric(float64(stats.CandidatePageIsolationBytes), "isolation-copy-bytes/op")
 			}
 		})
 	}

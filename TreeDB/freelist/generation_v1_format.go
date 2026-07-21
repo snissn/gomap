@@ -34,6 +34,15 @@ type AppendPageSink interface {
 	WritePage(pageID uint64, data []byte) error
 }
 
+// BorrowedCandidatePageSinkV1 accepts immutable candidate-owned page bytes for
+// the duration of WritePage. Implementations must not mutate or retain data.
+// The explicit opt-in keeps arbitrary AppendPageSink implementations on the
+// isolated copy path.
+type BorrowedCandidatePageSinkV1 interface {
+	AppendPageSink
+	AcceptsBorrowedCandidatePagesV1()
+}
+
 type GenerationRefV1 struct {
 	HeaderPageID uint64
 	GenerationID uint64
@@ -54,6 +63,33 @@ type MemoryPageStoreV1 struct {
 
 func NewMemoryPageStoreV1() *MemoryPageStoreV1 {
 	return &MemoryPageStoreV1{Pages: make(map[uint64][]byte)}
+}
+
+// CandidatePageSinkV1 validates production candidate writes without retaining
+// their bytes. It allows the materialized candidate to take ownership of each
+// freshly encoded page instead of making a validation-store copy.
+type CandidatePageSinkV1 struct {
+	pageIDs map[uint64]struct{}
+}
+
+func NewCandidatePageSinkV1() *CandidatePageSinkV1 {
+	return &CandidatePageSinkV1{pageIDs: make(map[uint64]struct{})}
+}
+
+func (*CandidatePageSinkV1) AcceptsBorrowedCandidatePagesV1() {}
+
+func (s *CandidatePageSinkV1) WritePage(id uint64, data []byte) error {
+	if s == nil || len(data) != page.PageSize {
+		return fmt.Errorf("%w: invalid candidate page write", ErrGenerationFormat)
+	}
+	if s.pageIDs == nil {
+		s.pageIDs = make(map[uint64]struct{})
+	}
+	if _, exists := s.pageIDs[id]; exists {
+		return fmt.Errorf("%w: page %d rewritten", ErrGenerationFormat, id)
+	}
+	s.pageIDs[id] = struct{}{}
+	return nil
 }
 
 func (s *MemoryPageStoreV1) WritePage(id uint64, data []byte) error {
