@@ -14,15 +14,18 @@ RUN_DIR=/tmp/treedb-vacuum-m0 scripts/treedb_vacuum_m0_capture.sh
 
 The capture emits `fixture.json`, `results.json`, `summary.md`, the raw
 `benchstat` input, and ten interleaved raw samples for the legacy test-only path
-and the public fail-closed path. The legacy rows
+and the `db.DB` production-backend path. The legacy rows
 include `ns/op`, `max-writer-pause-ns`, foreground p95/p99, `B/op`, and
 `allocs/op`. The summarizer fails unless total vacuum time, maximum writer pause,
-and foreground p99 each have a coefficient of variation at most 10%. Public
-rows must report `vacuum-unsupported/op = 1` and zero unexpected errors; that
-status is never a successful or fast vacuum result. Legacy rows must report
-zero concurrent aborts, so an aborted run cannot become a timing baseline. The
-capture runs the three-build determinism, debt, shrink, and reopen gate before
-writing `fixture.json`.
+and foreground p99 each have a coefficient of variation at most 10%. Backend
+rows must be uniform across all ten samples: either explicitly unavailable with
+`vacuum-unsupported/op = 1` and zero unexpected errors, or available with zero
+unsupported/retry/error/exposure-miss metrics and positive foreground overlap.
+Mixed or ambiguous status fails closed. The available classification is backend
+evidence only; top-level cached/public routing remains M2-owned. Legacy rows
+must report zero concurrent aborts, so an aborted run cannot become a timing
+baseline. The capture runs the three-build determinism, debt, shrink, and reopen
+gate before writing `fixture.json`.
 
 The legacy benchmark catalog includes 131,072 deterministic ordinary metadata
 entries plus one live collection root. The entries bypass collection-root
@@ -49,15 +52,15 @@ reopen digest parity.
 | `db/close_hooks_test.go` fail-closed assertion | M1 (#3944) | Serialize close through maintenance and preserve a coherent replacement runtime. |
 | `background_vacuum_test.go` disabled success tests and `bg_vacuum.go` classification | M2 (#3945) | Enable only after M1 succeeds; retain backoff and explicit unsupported/error accounting. |
 | `public.go` public/close-time calls, `caching/db.go` wrappers, and `collections/api_test.go` assertions | M2 (#3945) | Route every public and cached entry through the production seam with actionable status. |
-| `db/vacuum_collection_external_bench_test.go`, `db/vacuum_collection_latency_external_bench_test.go`, and `collections/bench_test.go` | M2 (#3945) | Require zero unsupported/unexpected errors, positive overlap, and exact fixed work on supported platforms. |
+| top-level/cached external vacuum benchmarks and `collections/bench_test.go` | M2 (#3945) | Require zero unsupported/unexpected errors, positive overlap, and exact fixed work on supported platforms. |
 | `db/compact_storage.go`, `db/compact_storage_test.go`, and M0 maintenance measurement/reporting | M3 (#3946) | Execute the fenced phase and report success/retry/error plus byte convergence truthfully. |
 | Offline `VacuumIndexOffline` operator semantics | M3 (#3946) | Keep offline byte minimization as the ceiling; do not conflate it with online eligibility. |
 
-The M0 test-first exception was deliberate: its public success assertions stay
-as the frozen pre-M1 baseline. M1 enables the internal DB-minted backend only;
-public/background routing remains owned by M2. M0 continues to assert disabled
-background behavior, deterministic fixture debt, offline parity, and artifact
-schema completeness.
+The M0 test-first exception was deliberate: its original unsupported result
+remains a valid frozen pre-M1 classification, while M1 adds the verified-success
+classification for the internal DB-minted backend. Public/background routing
+remains owned by M2. M0 continues to assert disabled background behavior,
+deterministic fixture debt, offline parity, and artifact schema completeness.
 
 The legacy timing baseline explicitly drains and disables the current
 root-publication coordinator on its private benchmark DB before authorizing the
