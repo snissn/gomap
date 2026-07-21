@@ -2,15 +2,27 @@ package caching
 
 import (
 	"context"
+	"errors"
 	"log"
 	"math/bits"
 	"time"
 
 	"github.com/snissn/compress/zstd"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
+
+func (db *DB) reportValueLogDictPublishError(err error) {
+	// Dictionary publication is retried from the unchanged active profile. A
+	// stale cleanup proof means the durable write raced another command-WAL
+	// append; cleanup retained the WAL and a later pass can safely converge.
+	if errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) {
+		return
+	}
+	db.reportError(err)
+}
 
 const (
 	// Scale trainer sampling by payload bytes so large batches of small values
@@ -1089,7 +1101,7 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := ks.SetK(ctx, dictID, profileK); err != nil {
-				db.reportError(err)
+				db.reportValueLogDictPublishError(err)
 				return
 			}
 			db.valueLogDictCurrentKByClass[class].Store(uint32(profileK))
@@ -1124,7 +1136,7 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 	defer cancel()
 	dictID, err := writer.PutDictBytes(ctx, profile.Dict)
 	if err != nil {
-		db.reportError(err)
+		db.reportValueLogDictPublishError(err)
 		return
 	}
 	classMode := db.dictClassMode()
@@ -1134,26 +1146,26 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 		_, hasClassReader := store.(dictStoreCurrentByClass)
 		if hasClassWriter && hasClassReader {
 			if err := byClassWriter.SetCurrentForClass(ctx, vlogDictClassSuffix(class), dictID); err != nil {
-				db.reportError(err)
+				db.reportValueLogDictPublishError(err)
 				return
 			}
 			if class == vlogDictClassSingleValue {
 				// Keep legacy global current in sync for mode switches/reopen paths
 				// that read only the global marker.
 				if err := writer.SetCurrent(ctx, dictID); err != nil {
-					db.reportError(err)
+					db.reportValueLogDictPublishError(err)
 					return
 				}
 				publishedViaGlobalCurrent = true
 			}
 		} else if err := writer.SetCurrent(ctx, dictID); err != nil {
-			db.reportError(err)
+			db.reportValueLogDictPublishError(err)
 			return
 		} else {
 			publishedViaGlobalCurrent = true
 		}
 	} else if err := writer.SetCurrent(ctx, dictID); err != nil {
-		db.reportError(err)
+		db.reportValueLogDictPublishError(err)
 		return
 	} else {
 		publishedViaGlobalCurrent = true
@@ -1173,7 +1185,7 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 	}
 	if ks, ok := store.(dictStoreK); ok {
 		if err := ks.SetK(ctx, dictID, profileK); err != nil {
-			db.reportError(err)
+			db.reportValueLogDictPublishError(err)
 		}
 	}
 	db.valueLogDictLastAppliedDictHashByClass[class].Store(profile.DictHash)

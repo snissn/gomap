@@ -42,6 +42,19 @@ type blockingDictStoreForConcurrentPublishTest struct {
 	releaseFirst  chan struct{}
 }
 
+type staleOnceDictStoreForPublishTest struct {
+	*legacyDictStoreForClassPublishTest
+	putCalls int
+}
+
+func (s *staleOnceDictStoreForPublishTest) PutDictBytes(ctx context.Context, dict []byte) (uint64, error) {
+	s.putCalls++
+	if s.putCalls == 1 {
+		return 0, db.ErrDurableWALCleanupProofStale
+	}
+	return s.legacyDictStoreForClassPublishTest.PutDictBytes(ctx, dict)
+}
+
 func newBlockingDictStoreForConcurrentPublishTest() *blockingDictStoreForConcurrentPublishTest {
 	return &blockingDictStoreForConcurrentPublishTest{
 		dicts:         make(map[uint64][]byte),
@@ -292,6 +305,51 @@ func TestApplyValueLogDictProfileForClass_SerializesConcurrentPublishers(t *test
 	}
 	if got := database.valueLogDictLastAppliedDictHashByClass[vlogDictClassSingleValue].Load(); got != dictHash {
 		t.Fatalf("last applied dictionary hash=%x want %x", got, dictHash)
+	}
+}
+
+func TestApplyValueLogDictProfileForClass_RetriesStaleCleanupWithoutBackgroundError(t *testing.T) {
+	tr := &compression.Trainer{}
+	dictBytes := []byte("retryable-dictionary")
+	dictHash := xxhash.Sum64(dictBytes)
+	tr.AcceptProfile(&compression.ActiveProfile{
+		DictHash:     dictHash,
+		DictBytes:    len(dictBytes),
+		Dict:         dictBytes,
+		K:            8,
+		PayloadRatio: 0.6,
+		TotalRatio:   0.6,
+		Timestamp:    time.Now(),
+	})
+
+	store := &staleOnceDictStoreForPublishTest{
+		legacyDictStoreForClassPublishTest: &legacyDictStoreForClassPublishTest{
+			dicts: make(map[uint64][]byte),
+		},
+	}
+	notifications := 0
+	database := &DB{
+		dictStore: store,
+		notifyError: func(error) {
+			notifications++
+		},
+	}
+	database.valueLogDictTrainerByClass[vlogDictClassSingleValue] = tr
+
+	database.applyValueLogDictProfileForClass(vlogDictClassSingleValue)
+	if notifications != 0 || database.backgroundError() != nil {
+		t.Fatalf("stale cleanup poisoned background state: notifications=%d err=%v", notifications, database.backgroundError())
+	}
+	if got := database.valueLogDictLastAppliedDictHashByClass[vlogDictClassSingleValue].Load(); got != 0 {
+		t.Fatalf("stale cleanup consumed candidate hash=%x want 0", got)
+	}
+
+	database.applyValueLogDictProfileForClass(vlogDictClassSingleValue)
+	if store.putCalls != 2 {
+		t.Fatalf("dictionary PutDictBytes calls=%d want 2", store.putCalls)
+	}
+	if got := database.valueLogDictLastAppliedDictHashByClass[vlogDictClassSingleValue].Load(); got != dictHash {
+		t.Fatalf("retried dictionary hash=%x want %x", got, dictHash)
 	}
 }
 

@@ -823,6 +823,29 @@ func TestLockFullScanMaintenanceContextCancellationLeavesNoWaiters(t *testing.T)
 	mu.Unlock()
 }
 
+func TestLockFullScanMaintenanceContextRejectsCanceledContextBeforeIdleLock(t *testing.T) {
+	var mu sync.Mutex
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := lockFullScanMaintenanceContext(ctx, &mu); !errors.Is(err, context.Canceled) {
+		t.Fatalf("lock error=%v, want context.Canceled", err)
+	}
+	if !mu.TryLock() {
+		t.Fatal("canceled maintenance lock call retained idle mutex")
+	}
+	mu.Unlock()
+
+	d := &DB{}
+	if _, _, err := d.beginFullScanMaintenanceContext(ctx, "vacuum"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("begin maintenance error=%v, want context.Canceled", err)
+	}
+	if !d.maintenance.mu.TryLock() {
+		t.Fatal("canceled maintenance fast path retained mutex")
+	}
+	d.maintenance.mu.Unlock()
+}
+
 func TestVacuumIndexOnlineDoesNotHoldLifecycleWhileWaitingForMaintenance(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum not supported on windows")

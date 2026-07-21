@@ -604,10 +604,17 @@ func lockFullScanMaintenanceContext(ctx context.Context, mu *sync.Mutex) error {
 		mu.Lock()
 		return nil
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
 	for {
 		if mu.TryLock() {
+			if err := ctx.Err(); err != nil {
+				mu.Unlock()
+				return err
+			}
 			return nil
 		}
 		select {
@@ -623,8 +630,14 @@ func (db *DB) beginFullScanMaintenanceContext(ctx context.Context, op string) (t
 		return 0, func(bool) {}, nil
 	}
 	wait := time.Duration(0)
+	if err := ctx.Err(); err != nil {
+		return wait, func(bool) {}, err
+	}
 	if db.maintenance.mu.TryLock() {
-		// uncontended fast path
+		if err := ctx.Err(); err != nil {
+			db.maintenance.mu.Unlock()
+			return wait, func(bool) {}, err
+		}
 	} else {
 		waitStart := time.Now()
 		err := lockFullScanMaintenanceContext(ctx, &db.maintenance.mu)
