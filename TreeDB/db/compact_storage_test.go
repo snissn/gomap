@@ -1084,6 +1084,16 @@ func TestCompactStorageExhaustiveRewriteSelectsAnyStaleValueLogSegment(t *testin
 	if err != nil {
 		t.Fatalf("CompactStorage exhaustive after durable horizon advance: %v", err)
 	}
+	if runtime.GOOS == "windows" {
+		phase := compactStorageIndexVacuumPhase(t, converged)
+		if phase.Status != CompactStoragePhaseStatusUnsupported || !phase.Required {
+			t.Fatalf("windows index-vacuum phase=%+v want required unsupported", phase)
+		}
+		if converged.FullyCompacted || converged.PolicyFullyCompacted || converged.ByteMinimized || !converged.RemainingDebt.IndexVacuumRequired {
+			t.Fatalf("windows unsupported vacuum overstated convergence: flags fully=%t policy=%t byte=%t debt=%+v", converged.FullyCompacted, converged.PolicyFullyCompacted, converged.ByteMinimized, converged.RemainingDebt)
+		}
+		return
+	}
 	if !converged.FullyCompacted || !converged.PolicyFullyCompacted || !converged.ByteMinimized {
 		t.Fatalf("exhaustive converged flags fully=%t policy=%t byte=%t debt=%+v", converged.FullyCompacted, converged.PolicyFullyCompacted, converged.ByteMinimized, converged.RemainingDebt)
 	}
