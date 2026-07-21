@@ -156,6 +156,11 @@ var bgIndexVacuumRunHook struct {
 	fn func(*DB, context.Context) error
 }
 
+var bgIndexVacuumTriggerReportHook struct {
+	mu sync.RWMutex
+	fn func(*DB, context.Context) (backenddb.IndexVacuumTriggerReport, error)
+}
+
 func setBackgroundIndexVacuumBacklogBytesHookForTest(fn func(*DB) int64) func() {
 	bgIndexVacuumBacklogBytesHook.mu.Lock()
 	prev := bgIndexVacuumBacklogBytesHook.fn
@@ -190,6 +195,28 @@ func setBackgroundIndexVacuumRunHookForTest(fn func(*DB, context.Context) error)
 		bgIndexVacuumRunHook.fn = prev
 		bgIndexVacuumRunHook.mu.Unlock()
 	}
+}
+
+func setBackgroundIndexVacuumTriggerReportHookForTest(fn func(*DB, context.Context) (backenddb.IndexVacuumTriggerReport, error)) func() {
+	bgIndexVacuumTriggerReportHook.mu.Lock()
+	prev := bgIndexVacuumTriggerReportHook.fn
+	bgIndexVacuumTriggerReportHook.fn = fn
+	bgIndexVacuumTriggerReportHook.mu.Unlock()
+	return func() {
+		bgIndexVacuumTriggerReportHook.mu.Lock()
+		bgIndexVacuumTriggerReportHook.fn = prev
+		bgIndexVacuumTriggerReportHook.mu.Unlock()
+	}
+}
+
+func backgroundIndexVacuumTriggerReport(db *DB, ctx context.Context) (backenddb.IndexVacuumTriggerReport, error) {
+	bgIndexVacuumTriggerReportHook.mu.RLock()
+	hook := bgIndexVacuumTriggerReportHook.fn
+	bgIndexVacuumTriggerReportHook.mu.RUnlock()
+	if hook != nil {
+		return hook(db, ctx)
+	}
+	return db.backend.IndexVacuumTriggerReportContext(ctx)
 }
 
 func backgroundIndexVacuumRun(db *DB, ctx context.Context) error {
@@ -349,7 +376,7 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 		return
 	}
 
-	rep, err := db.backend.IndexVacuumTriggerReportContext(ctx)
+	rep, err := backgroundIndexVacuumTriggerReport(db, ctx)
 	w.probes.Add(1)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -359,6 +386,13 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 			return
 		}
 		w.retryProbe = false
+		w.lastProbeCommitSeq = state.CommitSeq
+		if snap, ok := backgroundIndexVacuumFreelistDebtSnapshot(db); ok {
+			w.lastProbeFreelistReclaimable = snap.FreelistReclaimable
+			w.lastProbeFreelistReclaimablePPM = snap.FreelistReclaimablePPM
+			w.lastProbeFreelistValid = snap.FreelistReclaimableValid
+		}
+		w.lastProbeValid = true
 		w.permanentFailuresTotal.Add(1)
 		w.lastOutcome.Store(backgroundIndexVacuumOutcomePermanentFailure)
 		w.finishRun(now, err.Error())

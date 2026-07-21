@@ -734,6 +734,29 @@ func TestBackgroundIndexVacuumCloseCancelsActivePass(t *testing.T) {
 	}
 }
 
+func TestVacuumIndexOnlineContextCancelsWhileWaitingForMaintenance(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	d.maintenance.mu.Lock()
+	defer d.maintenance.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- d.VacuumIndexOnline(ctx) }()
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("VacuumIndexOnline error=%v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("VacuumIndexOnline did not cancel while waiting for maintenance")
+	}
+}
+
 func BenchmarkBackgroundIndexVacuumBacklog(b *testing.B) {
 	d := openBackgroundVacuumTestDB(b, Options{BackgroundIndexVacuumInterval: -1})
 	seedBackgroundVacuumUserPages(b, d, 128)

@@ -595,15 +595,37 @@ func (db *DB) beginPublicOperation() error {
 }
 
 func (db *DB) beginFullScanMaintenance(op string) (time.Duration, func(success bool)) {
+	wait, finish, _ := db.beginFullScanMaintenanceContext(context.Background(), op)
+	return wait, finish
+}
+
+func (db *DB) beginFullScanMaintenanceContext(ctx context.Context, op string) (time.Duration, func(success bool), error) {
 	if db == nil {
-		return 0, func(bool) {}
+		return 0, func(bool) {}, nil
 	}
 	wait := time.Duration(0)
 	if db.maintenance.mu.TryLock() {
 		// uncontended fast path
 	} else {
 		waitStart := time.Now()
-		db.maintenance.mu.Lock()
+		for !db.maintenance.mu.TryLock() {
+			timer := time.NewTimer(time.Millisecond)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				wait = time.Since(waitStart)
+				db.maintenance.deferrals.Add(1)
+				db.maintenance.waitTotal.Add(wait.Nanoseconds())
+				atomicStoreMaxInt64(&db.maintenance.waitMax, wait.Nanoseconds())
+				return wait, func(bool) {}, ctx.Err()
+			case <-timer.C:
+			}
+		}
 		wait = time.Since(waitStart)
 		db.maintenance.deferrals.Add(1)
 		db.maintenance.waitTotal.Add(wait.Nanoseconds())
@@ -628,7 +650,7 @@ func (db *DB) beginFullScanMaintenance(op string) (time.Duration, func(success b
 		}
 		db.maintenance.active.Store(maintenanceOpNone)
 		db.maintenance.mu.Unlock()
-	}
+	}, nil
 }
 
 func maintenanceStatsInto(stats map[string]string, m *maintenanceCoordinator) {
@@ -2491,13 +2513,23 @@ func (db *DB) CompactIndex() error {
 // a short writer pause. Disk space from the old index is reclaimed once any old
 // snapshots/iterators drain.
 func (db *DB) VacuumIndexOnline(ctx context.Context) error {
-	if err := db.ensureOpen(); err != nil {
+	if err := db.beginPublicOperation(); err != nil {
 		return err
 	}
+	defer db.lifecycleMu.RUnlock()
 	if db.backend == nil {
 		return ErrClosed
 	}
-	_, finishMaintenance := db.beginFullScanMaintenance("vacuum")
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, finishMaintenance, err := db.beginFullScanMaintenanceContext(ctx, "vacuum")
+	if err != nil {
+		return err
+	}
 	success := false
 	defer func() { finishMaintenance(success) }()
 
@@ -2506,9 +2538,12 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	// that temporarily "forgets" keys that only existed in memtables/WAL, which
 	// can break higher layers that assume a stable durable boundary.
 	if db.cached != nil {
-		if err := db.cached.Checkpoint(); err != nil {
+		if err := db.cached.CheckpointContext(ctx); err != nil {
 			return err
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	if err := db.reconcileCachedBackendMaintenance(db.backend.VacuumIndexOnline(ctx)); err != nil {

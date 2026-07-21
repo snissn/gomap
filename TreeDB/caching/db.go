@@ -24075,11 +24075,88 @@ func (db *DB) observePublishWatermarkLagDrift(backlogBytes int64, now time.Time)
 //   - forces a backend sync boundary (even if the queue is empty),
 //   - removes all older WAL segments (keeping only the currently-open one).
 func (db *DB) Checkpoint() error {
+	return db.checkpointContext(context.Background())
+}
+
+// CheckpointContext is Checkpoint with cooperative cancellation while waiting
+// for checkpoint ownership and between durability stages. An in-flight storage
+// syscall is allowed to complete before cancellation is observed.
+func (db *DB) CheckpointContext(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return db.checkpointContext(ctx)
+}
+
+type checkpointTryLocker interface {
+	Lock()
+	TryLock() bool
+}
+
+func lockCheckpointMutexContext(ctx context.Context, mu checkpointTryLocker) error {
+	if ctx.Done() == nil {
+		mu.Lock()
+		return nil
+	}
+	for {
+		if mu.TryLock() {
+			return nil
+		}
+		timer := time.NewTimer(time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (db *DB) waitForActiveCheckpointContext(ctx context.Context) error {
+	if ctx.Done() == nil {
+		db.checkpointMu.Lock()
+		for db.checkpointing.Load() {
+			db.checkpointCond.Wait()
+		}
+		db.checkpointMu.Unlock()
+		return nil
+	}
+	for {
+		db.checkpointMu.Lock()
+		active := db.checkpointing.Load()
+		db.checkpointMu.Unlock()
+		if !active {
+			return nil
+		}
+		timer := time.NewTimer(time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (db *DB) checkpointContext(ctx context.Context) error {
 	if db == nil {
 		return nil
 	}
 	if db.closing.Load() {
 		return errDBClosing
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	start := time.Now()
 	defer func() {
@@ -24122,7 +24199,9 @@ func (db *DB) Checkpoint() error {
 	defer addAtomicInt64FloorZero(&db.checkpointFlushPreemptActive, -1)
 	barrierWaitStart := time.Now()
 	flushMuWaitStart := barrierWaitStart
-	db.flushMu.Lock()
+	if err := lockCheckpointMutexContext(ctx, &db.flushMu); err != nil {
+		return err
+	}
 	flushMuWaitDur := time.Since(flushMuWaitStart)
 	barrierWaitDur := time.Since(barrierWaitStart)
 	db.observeCheckpointBarrierWait(barrierWaitDur)
@@ -24137,11 +24216,14 @@ func (db *DB) Checkpoint() error {
 			db.flushMu.Unlock()
 		}
 	}
-	lockFlushMu := func() {
+	lockFlushMu := func() error {
 		if !flushMuHeld {
-			db.flushMu.Lock()
+			if err := lockCheckpointMutexContext(ctx, &db.flushMu); err != nil {
+				return err
+			}
 			flushMuHeld = true
 		}
+		return nil
 	}
 	defer unlockFlushMu()
 
@@ -24156,12 +24238,12 @@ func (db *DB) Checkpoint() error {
 		}
 		db.checkpointMu.Unlock()
 		unlockFlushMu()
-		db.checkpointMu.Lock()
-		for db.checkpointing.Load() {
-			db.checkpointCond.Wait()
+		if err := db.waitForActiveCheckpointContext(ctx); err != nil {
+			return err
 		}
-		db.checkpointMu.Unlock()
-		lockFlushMu()
+		if err := lockFlushMu(); err != nil {
+			return err
+		}
 	}
 
 	db.resetCheckpointFlushAllLastStats()
@@ -24182,7 +24264,9 @@ func (db *DB) Checkpoint() error {
 		db.checkpointMu.Unlock()
 	}
 
-	db.writeMu.Lock()
+	if err := lockCheckpointMutexContext(ctx, &db.writeMu); err != nil {
+		return err
+	}
 	cutoverStart := time.Now()
 	releaseWriteMu := func() {
 		d := time.Since(cutoverStart)
@@ -24192,6 +24276,11 @@ func (db *DB) Checkpoint() error {
 	}
 	if hook := db.testBeforeCheckpointFrontierCapture; hook != nil {
 		hook()
+	}
+	if err := ctx.Err(); err != nil {
+		releaseWriteMu()
+		endWriteCutover()
+		return err
 	}
 
 	// Rotate mutable into the flush queue and ensure future writes land in a fresh
@@ -24222,6 +24311,9 @@ func (db *DB) Checkpoint() error {
 		db.mu.Unlock()
 		releaseWriteMu()
 		endWriteCutover()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		backendBoundaryStart := time.Now()
 		err := backendSyncBoundary(db.backend)
 		recordCheckpointStageSince(&db.checkpointStageBackendBoundary, backendBoundaryStart)
@@ -24251,12 +24343,18 @@ func (db *DB) Checkpoint() error {
 			if hook := db.testAfterCheckpointFrontierCapture; hook != nil {
 				hook()
 			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if publishHook := db.loadCommandWALCheckpointPublishHook(); publishHook != nil {
 				commandWALAppliedLSN, commandWALRanges, err := publishHook(true)
 				if err != nil {
 					return err
 				}
 				if _, err := db.publishCommandWALCheckpointApplied(commandWALAppliedLSN, commandWALRanges); err != nil {
+					return err
+				}
+				if err := ctx.Err(); err != nil {
 					return err
 				}
 				backendBoundaryStart := time.Now()
@@ -24310,6 +24408,9 @@ func (db *DB) Checkpoint() error {
 	if hook := db.testAfterCheckpointFrontierCapture; hook != nil {
 		hook()
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	walRotateStart := time.Now()
 	errCh := make(chan error, len(rotateLaneIDs))
@@ -24332,10 +24433,16 @@ func (db *DB) Checkpoint() error {
 		}
 	}
 	recordCheckpointStageSince(&db.checkpointStageWALRotate, walRotateStart)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	wroteDuringWALRotate := db.nextRID.Load() != ridBeforeWALRotate
 	valueLogFlushStart := time.Now()
 	if err := db.checkpointFlushValueLogLanes(); err != nil {
 		recordCheckpointStageSince(&db.checkpointStageValueLogFlush, valueLogFlushStart)
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	valueLogFlushDur := time.Since(valueLogFlushStart)
@@ -24365,6 +24472,9 @@ func (db *DB) Checkpoint() error {
 	// Flush all queued memtables with backend sync.
 	if hook := db.testBeforeCheckpointFrontierDrain; hook != nil {
 		hook()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	leafLogAppendWaitBefore := db.flushApplyLeafLogAppendWaitNs.Load()
 	reducerPublishBefore := db.backendFlushApplyReducerPublishNs()
@@ -24404,7 +24514,10 @@ func (db *DB) Checkpoint() error {
 		ownedDrainStart := time.Now()
 		db.flushCheckpointFrontierLocked(true, nil, frontier)
 		ownedDrainDur = time.Since(ownedDrainStart)
-		lockFlushMu()
+		if err := lockFlushMu(); err != nil {
+			db.clearActiveCheckpointFrontier()
+			return err
+		}
 		db.clearActiveCheckpointFrontier()
 		db.observeCheckpointSharedDrainWait(time.Since(flushAllStart))
 	}
@@ -24422,6 +24535,9 @@ func (db *DB) Checkpoint() error {
 		db.mu.RUnlock()
 	}
 	recordCheckpointStageSince(&db.checkpointStageFlushAll, flushAllStart)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	leafLogAppendWaitAfter := db.flushApplyLeafLogAppendWaitNs.Load()
 	leafValueLogSyncNs := uint64(valueLogFlushDur.Nanoseconds()) + saturatingSubUint64(leafLogAppendWaitAfter, leafLogAppendWaitBefore)
 	db.checkpointStageLeafValueLogSync.record(time.Duration(leafValueLogSyncNs))
@@ -24469,6 +24585,9 @@ func (db *DB) Checkpoint() error {
 	// WriteSync only proves the command-WAL prefix when command WAL is enabled,
 	// and relaxed publication may only enqueue a root candidate, so explicitly
 	// wait through the backend checkpoint before trimming the command WAL.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	backendBoundaryStart := time.Now()
 	commitErr := backendSyncBoundary(db.backend)
 	recordCheckpointStageSince(&db.checkpointStageBackendBoundary, backendBoundaryStart)
