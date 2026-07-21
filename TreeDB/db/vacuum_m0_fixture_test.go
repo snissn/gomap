@@ -8,13 +8,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"testing"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
@@ -24,26 +27,31 @@ const vacuumM0ArtifactSchemaVersion = 1
 // debt shape for M1 without granting the legacy online implementation any
 // production authority.
 type vacuumM0Fixture struct {
-	SchemaVersion          int     `json:"schema_version"`
-	Status                 string  `json:"status"`
-	Fixture                string  `json:"fixture"`
-	LogicalDigest          string  `json:"logical_digest"`
-	KeyCount               int     `json:"key_count"`
-	CollectionRootSpan     int     `json:"collection_root_span"`
-	IndexBytes             int64   `json:"index_bytes"`
-	OfflineIndexBytes      int64   `json:"offline_index_bytes,omitempty"`
-	ValueLogBytes          int64   `json:"value_log_bytes"`
-	LeafLogBytes           int64   `json:"leaf_log_bytes"`
-	LivePages              uint64  `json:"live_pages"`
-	ReclaimablePages       uint64  `json:"reclaimable_pages"`
-	ReclaimablePagePercent float64 `json:"reclaimable_page_percent"`
+	SchemaVersion          int            `json:"schema_version"`
+	Status                 string         `json:"status"`
+	Fixture                string         `json:"fixture"`
+	Parameters             map[string]int `json:"parameters"`
+	LogicalDigest          string         `json:"logical_digest"`
+	KeyCount               int            `json:"key_count"`
+	CollectionRootSpan     int            `json:"collection_root_span"`
+	IndexBytes             int64          `json:"index_bytes"`
+	OfflineIndexBytes      int64          `json:"offline_index_bytes,omitempty"`
+	ValueLogBytes          int64          `json:"value_log_bytes"`
+	OfflineValueLogBytes   int64          `json:"offline_value_log_bytes,omitempty"`
+	LeafLogBytes           int64          `json:"leaf_log_bytes"`
+	OfflineLeafLogBytes    int64          `json:"offline_leaf_log_bytes,omitempty"`
+	LivePages              uint64         `json:"live_pages"`
+	ReclaimablePages       uint64         `json:"reclaimable_pages"`
+	ReclaimablePagePercent float64        `json:"reclaimable_page_percent"`
 }
 
 type vacuumM0Artifact struct {
-	SchemaVersion int               `json:"schema_version"`
-	Status        string            `json:"status"`
-	Fixture       vacuumM0Fixture   `json:"fixture"`
-	Environment   map[string]string `json:"environment"`
+	SchemaVersion  int               `json:"schema_version"`
+	Status         string            `json:"status"`
+	TimingBoundary string            `json:"timing_boundary"`
+	Repetitions    int               `json:"repetitions"`
+	Fixture        vacuumM0Fixture   `json:"fixture"`
+	Environment    map[string]string `json:"environment"`
 }
 
 func TestVacuumM0FixtureDeterministicDebtAndOfflineCeiling(t *testing.T) {
@@ -60,7 +68,7 @@ func TestVacuumM0FixtureDeterministicDebtAndOfflineCeiling(t *testing.T) {
 		}
 		if build == 0 {
 			first = fixture
-		} else if fixture.LogicalDigest != first.LogicalDigest || fixture.KeyCount != first.KeyCount || fixture.CollectionRootSpan != first.CollectionRootSpan || fixture.ReclaimablePages != first.ReclaimablePages || fixture.LivePages != first.LivePages {
+		} else if !reflect.DeepEqual(fixture, first) {
 			t.Fatalf("build %d fixture drift\n got=%+v\nwant=%+v", build, fixture, first)
 		}
 
@@ -68,8 +76,13 @@ func TestVacuumM0FixtureDeterministicDebtAndOfflineCeiling(t *testing.T) {
 			t.Fatalf("build %d offline vacuum: %v", build, err)
 		}
 		afterIndexBytes := vacuumM0FileBytes(t, vacuumM0IndexPath(dir))
+		afterValueLogBytes := vacuumM0DirBytes(t, vacuumM0StoragePath(dir, "value_vlog"))
+		afterLeafLogBytes := vacuumM0DirBytes(t, vacuumM0StoragePath(dir, "leaf_vlog"))
 		if afterIndexBytes*100 > fixture.IndexBytes*60 {
 			t.Fatalf("build %d offline shrink index before=%d after=%d want >=40%%", build, fixture.IndexBytes, afterIndexBytes)
+		}
+		if afterValueLogBytes != fixture.ValueLogBytes || afterLeafLogBytes != fixture.LeafLogBytes {
+			t.Fatalf("build %d index-only vacuum rewrote persistent logs: value=%d->%d leaf=%d->%d", build, fixture.ValueLogBytes, afterValueLogBytes, fixture.LeafLogBytes, afterLeafLogBytes)
 		}
 		reopened, err := Open(opts)
 		if err != nil {
@@ -96,10 +109,12 @@ func TestVacuumM0PublicOnlineVacuumIsExplicitlyUnsupported(t *testing.T) {
 
 func TestVacuumM0ArtifactValidationRejectsIncompleteEvidence(t *testing.T) {
 	valid := vacuumM0Artifact{
-		SchemaVersion: vacuumM0ArtifactSchemaVersion,
-		Status:        "production-index-vacuum-unavailable",
-		Fixture:       vacuumM0Fixture{SchemaVersion: vacuumM0ArtifactSchemaVersion, Status: "offline-ceiling", Fixture: "m0-index-debt", LogicalDigest: "digest", KeyCount: 1, IndexBytes: 1, LivePages: 1},
-		Environment:   map[string]string{"git_sha": "98a3372", "command": "go test"},
+		SchemaVersion:  vacuumM0ArtifactSchemaVersion,
+		Status:         "production-index-vacuum-unavailable",
+		TimingBoundary: "one fixed-work vacuum operation",
+		Repetitions:    10,
+		Fixture:        vacuumM0Fixture{SchemaVersion: vacuumM0ArtifactSchemaVersion, Status: "offline-ceiling", Fixture: "m0-index-debt", Parameters: map[string]int{"user_keys": 1}, LogicalDigest: "digest", KeyCount: 1, IndexBytes: 2, OfflineIndexBytes: 1, ValueLogBytes: 1, OfflineValueLogBytes: 1, LivePages: 1},
+		Environment:    map[string]string{"git_sha": "98a3372", "dirty_state": "clean", "command": "go test", "go_version": "go1.26", "goos": "linux", "goarch": "amd64", "filesystem": "ext4", "device": "/dev/test"},
 	}
 	if err := valid.validate(); err != nil {
 		t.Fatalf("valid artifact: %v", err)
@@ -107,11 +122,14 @@ func TestVacuumM0ArtifactValidationRejectsIncompleteEvidence(t *testing.T) {
 	for _, mutate := range []func(*vacuumM0Artifact){
 		func(a *vacuumM0Artifact) { a.Environment = nil },
 		func(a *vacuumM0Artifact) { a.Environment["git_sha"] = "" },
+		func(a *vacuumM0Artifact) { a.TimingBoundary = "" },
+		func(a *vacuumM0Artifact) { a.Repetitions = 0 },
 		func(a *vacuumM0Artifact) { a.Status = "" },
 		func(a *vacuumM0Artifact) { a.Fixture.LogicalDigest = "" },
+		func(a *vacuumM0Artifact) { a.Fixture.OfflineIndexBytes = 0 },
 	} {
 		candidate := valid
-		candidate.Environment = map[string]string{"git_sha": "98a3372", "command": "go test"}
+		candidate.Environment = map[string]string{"git_sha": "98a3372", "dirty_state": "clean", "command": "go test", "go_version": "go1.26", "goos": "linux", "goarch": "amd64", "filesystem": "ext4", "device": "/dev/test"}
 		mutate(&candidate)
 		if err := candidate.validate(); err == nil {
 			t.Fatalf("accepted incomplete artifact %+v", candidate)
@@ -120,7 +138,7 @@ func TestVacuumM0ArtifactValidationRejectsIncompleteEvidence(t *testing.T) {
 }
 
 func TestVacuumM0ArtifactJSONIsDeterministic(t *testing.T) {
-	artifact := vacuumM0Artifact{SchemaVersion: vacuumM0ArtifactSchemaVersion, Status: "production-index-vacuum-unavailable", Fixture: vacuumM0Fixture{SchemaVersion: vacuumM0ArtifactSchemaVersion, Status: "offline-ceiling", Fixture: "m0-index-debt", LogicalDigest: "digest", KeyCount: 1, IndexBytes: 1, LivePages: 1}, Environment: map[string]string{"command": "go test", "git_sha": "98a3372"}}
+	artifact := vacuumM0Artifact{SchemaVersion: vacuumM0ArtifactSchemaVersion, Status: "production-index-vacuum-unavailable", TimingBoundary: "one fixed-work vacuum operation", Repetitions: 10, Fixture: vacuumM0Fixture{SchemaVersion: vacuumM0ArtifactSchemaVersion, Status: "offline-ceiling", Fixture: "m0-index-debt", Parameters: map[string]int{"user_keys": 1}, LogicalDigest: "digest", KeyCount: 1, IndexBytes: 2, OfflineIndexBytes: 1, ValueLogBytes: 1, OfflineValueLogBytes: 1, LivePages: 1}, Environment: map[string]string{"command": "go test", "git_sha": "98a3372"}}
 	first, err := json.Marshal(artifact)
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +167,9 @@ func TestVacuumM0WriteArtifact(t *testing.T) {
 		t.Fatalf("offline ceiling: %v", err)
 	}
 	fixture.OfflineIndexBytes = vacuumM0FileBytes(t, vacuumM0IndexPath(dir))
-	artifact := vacuumM0Artifact{SchemaVersion: vacuumM0ArtifactSchemaVersion, Status: "production-index-vacuum-unavailable", Fixture: fixture, Environment: vacuumM0Environment(os.Getenv("TREEDB_VACUUM_M0_COMMAND"))}
+	fixture.OfflineValueLogBytes = vacuumM0DirBytes(t, vacuumM0StoragePath(dir, "value_vlog"))
+	fixture.OfflineLeafLogBytes = vacuumM0DirBytes(t, vacuumM0StoragePath(dir, "leaf_vlog"))
+	artifact := vacuumM0Artifact{SchemaVersion: vacuumM0ArtifactSchemaVersion, Status: "production-index-vacuum-unavailable", TimingBoundary: os.Getenv("TREEDB_VACUUM_M0_TIMING_BOUNDARY"), Repetitions: 10, Fixture: fixture, Environment: vacuumM0Environment(os.Getenv("TREEDB_VACUUM_M0_COMMAND"))}
 	artifact.Environment["git_sha"] = os.Getenv("TREEDB_VACUUM_M0_GIT_SHA")
 	if err := artifact.validate(); err != nil {
 		t.Fatal(err)
@@ -167,11 +187,16 @@ func TestVacuumM0WriteArtifact(t *testing.T) {
 }
 
 func (a vacuumM0Artifact) validate() error {
-	if a.SchemaVersion != vacuumM0ArtifactSchemaVersion || a.Status == "" || a.Fixture.SchemaVersion != vacuumM0ArtifactSchemaVersion || a.Fixture.Status == "" || a.Fixture.Fixture == "" || a.Fixture.LogicalDigest == "" || a.Fixture.KeyCount == 0 || a.Fixture.IndexBytes == 0 || a.Fixture.LivePages == 0 {
+	if a.SchemaVersion != vacuumM0ArtifactSchemaVersion || a.Status == "" || a.TimingBoundary == "" || a.Repetitions != 10 || a.Fixture.SchemaVersion != vacuumM0ArtifactSchemaVersion || a.Fixture.Status == "" || a.Fixture.Fixture == "" || len(a.Fixture.Parameters) == 0 || a.Fixture.LogicalDigest == "" || a.Fixture.KeyCount == 0 || a.Fixture.IndexBytes == 0 || a.Fixture.OfflineIndexBytes == 0 || a.Fixture.ValueLogBytes == 0 || a.Fixture.LivePages == 0 {
 		return errors.New("vacuum M0 artifact has missing schema, fixture, or timing-status fields")
 	}
-	if a.Environment == nil || a.Environment["git_sha"] == "" || a.Environment["command"] == "" {
-		return errors.New("vacuum M0 artifact has missing execution environment")
+	for _, field := range []string{"git_sha", "dirty_state", "command", "go_version", "goos", "goarch", "filesystem", "device"} {
+		if a.Environment == nil || a.Environment[field] == "" {
+			return fmt.Errorf("vacuum M0 artifact has missing execution environment field %q", field)
+		}
+	}
+	if a.Fixture.ValueLogBytes != a.Fixture.OfflineValueLogBytes || a.Fixture.LeafLogBytes != a.Fixture.OfflineLeafLogBytes {
+		return errors.New("vacuum M0 artifact reports persistent log byte drift")
 	}
 	return nil
 }
@@ -279,7 +304,7 @@ func openVacuumM0Fixture(tb *testing.T, opts Options) (*DB, vacuumM0Fixture) {
 		_ = d.Close()
 		tb.Fatalf("freelist stats: %v", err)
 	}
-	fixture := vacuumM0Fixture{SchemaVersion: vacuumM0ArtifactSchemaVersion, Status: "offline-ceiling", Fixture: "m0-index-debt", LogicalDigest: vacuumM0Digest(tb, d), KeyCount: 512, CollectionRootSpan: len(roots), IndexBytes: vacuumM0FileBytes(tb, vacuumM0IndexPath(opts.Dir)), ValueLogBytes: vacuumM0DirBytes(tb, vacuumM0StoragePath(opts.Dir, "value_vlog")), LeafLogBytes: vacuumM0DirBytes(tb, vacuumM0StoragePath(opts.Dir, "leaf_vlog")), LivePages: pages - free.FreeIDs, ReclaimablePages: free.FreeIDs}
+	fixture := vacuumM0Fixture{SchemaVersion: vacuumM0ArtifactSchemaVersion, Status: "offline-ceiling", Fixture: "m0-index-debt", Parameters: map[string]int{"chunk_size": int(opts.ChunkSize), "pointer_threshold": opts.ValueLog.PointerThreshold, "user_keys": 384, "collection_documents": 128, "user_generations": 3, "collection_generations": 3}, LogicalDigest: vacuumM0Digest(tb, d), KeyCount: 512, CollectionRootSpan: len(roots), IndexBytes: vacuumM0FileBytes(tb, vacuumM0IndexPath(opts.Dir)), ValueLogBytes: vacuumM0DirBytes(tb, vacuumM0StoragePath(opts.Dir, "value_vlog")), LeafLogBytes: vacuumM0DirBytes(tb, vacuumM0StoragePath(opts.Dir, "leaf_vlog")), LivePages: pages - free.FreeIDs, ReclaimablePages: free.FreeIDs}
 	if pages > 0 {
 		fixture.ReclaimablePagePercent = float64(free.FreeIDs) * 100 / float64(pages)
 	}
@@ -304,7 +329,36 @@ func vacuumM0Digest(tb testing.TB, d *DB) string {
 	if err != nil {
 		tb.Fatalf("digest iterator: %v", err)
 	}
+	vacuumM0HashIterator(tb, h, "user", it)
+
+	snapshot := d.AcquireSnapshot()
+	if snapshot == nil {
+		tb.Fatal("acquire digest snapshot")
+	}
+	defer snapshot.Close()
+	encoded, err := snapshot.GetAtRoot(snapshot.state.SystemRootPageID, []byte(vacuumSnapshotPrimaryKey))
+	if err != nil {
+		tb.Fatalf("read digest collection descriptor: %v", err)
+	}
+	roots, err := decodeCollectionRootDescriptorRootIDs([]byte(vacuumSnapshotPrimaryKey), encoded, false)
+	if err != nil {
+		tb.Fatalf("decode digest collection descriptor: %v", err)
+	}
+	for index, root := range roots {
+		collection, iterErr := snapshot.IteratorAtRoot(root, nil, nil)
+		if iterErr != nil {
+			tb.Fatalf("collection digest iterator %d: %v", index, iterErr)
+		}
+		vacuumM0HashIterator(tb, h, fmt.Sprintf("collection/%d", index), collection)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func vacuumM0HashIterator(tb testing.TB, h hash.Hash, domain string, it iterator.UnsafeIterator) {
+	tb.Helper()
 	defer func() { _ = it.Close() }()
+	_, _ = h.Write([]byte(domain))
+	_, _ = h.Write([]byte{0})
 	for it.Valid() {
 		key, value := it.UnsafeKey(), it.UnsafeValue()
 		_, _ = h.Write(key)
@@ -314,9 +368,8 @@ func vacuumM0Digest(tb testing.TB, d *DB) string {
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
-		tb.Fatalf("digest iterator: %v", err)
+		tb.Fatalf("%s digest iterator: %v", domain, err)
 	}
-	return hex.EncodeToString(h.Sum(nil))
 }
 
 func vacuumM0IndexPath(root string) string { return vacuumM0StoragePath(root, indexFileName) }
@@ -360,5 +413,8 @@ func vacuumM0DirBytes(tb testing.TB, root string) int64 {
 }
 
 func vacuumM0Environment(command string) map[string]string {
-	return map[string]string{"command": command, "goos": runtime.GOOS, "goarch": runtime.GOARCH, "go_version": runtime.Version()}
+	return map[string]string{
+		"command": command, "goos": runtime.GOOS, "goarch": runtime.GOARCH, "go_version": runtime.Version(),
+		"dirty_state": os.Getenv("TREEDB_VACUUM_M0_DIRTY_STATE"), "filesystem": os.Getenv("TREEDB_VACUUM_M0_FILESYSTEM"), "device": os.Getenv("TREEDB_VACUUM_M0_DEVICE"),
+	}
 }
