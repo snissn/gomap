@@ -73,7 +73,6 @@ def environment(repo: Path, run_dir: Path) -> dict[str, object]:
         "cpu_set": os.environ.get("CPU_SET", "unknown"),
         "gomaxprocs": os.environ.get("GOMAXPROCS", "unknown"),
         "gomemlimit": os.environ.get("GOMEMLIMIT", "unknown"),
-        "gogc": os.environ.get("GOGC", "unknown"),
         "repetitions": 10,
         "commands": (run_dir / "commands.txt").read_text().splitlines(),
         "artifact_paths": [

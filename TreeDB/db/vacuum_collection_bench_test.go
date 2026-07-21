@@ -277,7 +277,17 @@ func vacuumCollectionLatencyPercentile(latencies []time.Duration, percentile int
 	return sorted[index-1]
 }
 
+const vacuumCollectionBenchmarkCatalogEntries = 65536
+
 func vacuumCollectionBenchmarkCatalog(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	return vacuumCollectionCatalog(rootIDs, vacuumCollectionBenchmarkCatalogEntries)
+}
+
+func vacuumCollectionFixtureCatalog(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	return vacuumCollectionCatalog(rootIDs, 0)
+}
+
+func vacuumCollectionCatalog(rootIDs []uint64, metadataEntries int) (iterator.UnsafeIterator, error) {
 	if len(rootIDs) != 1 || rootIDs[0] == 0 {
 		return nil, fmt.Errorf("unexpected collection roots %v", rootIDs)
 	}
@@ -288,6 +298,9 @@ func vacuumCollectionBenchmarkCatalog(rootIDs []uint64) (iterator.UnsafeIterator
 	encoded := encodeCollectionRootDescriptorRootID(rootIDs[0])
 	catalog.Set([]byte(vacuumSnapshotPrimaryKey), encoded)
 	catalog.Set([]byte(vacuumSnapshotAliasKey), encoded)
+	for entry := 0; entry < metadataEntries; entry++ {
+		catalog.Set([]byte(fmt.Sprintf("vacuum-benchmark/catalog/%06d", entry)), encoded)
+	}
 	catalog.Set([]byte(vacuumSnapshotOverlayKey), encodeCollectionRootDescriptorRootIDs([]uint64{rootIDs[0], rootIDs[0]}))
 	catalog.Set([]byte(vacuumSnapshotEmptyKey), nil)
 	catalog.Freeze()

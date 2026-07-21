@@ -270,14 +270,14 @@ func openVacuumM0Fixture(tb *testing.T, opts Options) (*DB, vacuumM0Fixture) {
 		collection.Set([]byte(fmt.Sprintf("m0/doc/%04d", key)), bytes.Repeat([]byte{byte(key)}, 128))
 	}
 	collection.Freeze()
-	_, roots, err := d.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{BaseRoot: 0, Iter: collection.NewIterator(nil, nil), StoragePolicy: OrderedRootStoragePagerLeaves}}, vacuumCollectionBenchmarkCatalog)
+	_, roots, err := d.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{BaseRoot: 0, Iter: collection.NewIterator(nil, nil), StoragePolicy: OrderedRootStoragePagerLeaves}}, vacuumCollectionFixtureCatalog)
 	if err != nil || len(roots) != 1 {
 		_ = d.Close()
 		tb.Fatalf("publish collection root roots=%v err=%v", roots, err)
 	}
 	for generation := 0; generation < 2; generation++ {
 		delta := newVacuumM0Delta(tb, generation)
-		_, roots, err = d.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{BaseRoot: roots[0], Delta: delta, StoragePolicy: OrderedRootStoragePagerLeaves}}, vacuumCollectionBenchmarkCatalog)
+		_, roots, err = d.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{BaseRoot: roots[0], Delta: delta, StoragePolicy: OrderedRootStoragePagerLeaves}}, vacuumCollectionFixtureCatalog)
 		_ = delta.Close()
 		if err != nil || len(roots) != 1 {
 			_ = d.Close()
