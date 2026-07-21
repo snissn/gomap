@@ -53,7 +53,7 @@ func TestVacuumIndexOnline_PreservesCollectionRootFromPointerBackedDescriptor(t 
 	assertVacuumCollectionRootDescriptorPointerBacked(t, d, vacuumTestCollectionRootKey)
 	verifyVacuumCollectionRootDescriptor(t, d, vacuumTestCollectionRootKey)
 
-	if err := d.vacuumIndexOnlineLegacyForTest(context.Background()); err != nil {
+	if err := d.VacuumIndexOnline(context.Background()); err != nil {
 		t.Fatalf("vacuum online: %v", err)
 	}
 	verifyVacuumCollectionRootDescriptor(t, d, vacuumTestCollectionRootKey)

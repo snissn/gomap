@@ -1,8 +1,10 @@
 # Index Vacuum M0 Baseline
 
-Issue #3943 freezes the current fail-closed production contract before M1
-changes online-vacuum behavior. The fixture and capture script are test-only
-characterization tools; they do not authorize `VacuumIndexOnline`.
+Issue #3943 froze the fail-closed production contract before M1 changed the
+internal online-vacuum backend. The fixture and capture script remain
+characterization tools: their legacy path is a same-head performance comparator
+and never authorizes production maintenance. Production correctness and
+performance certification belong to #3944 and its captured evidence.
 
 Run:
 
@@ -51,8 +53,9 @@ reopen digest parity.
 | `db/compact_storage.go`, `db/compact_storage_test.go`, and M0 maintenance measurement/reporting | M3 (#3946) | Execute the fenced phase and report success/retry/error plus byte convergence truthfully. |
 | Offline `VacuumIndexOffline` operator semantics | M3 (#3946) | Keep offline byte minimization as the ceiling; do not conflate it with online eligibility. |
 
-The M0 test-first exception is deliberate: production success assertions remain
-red until M1. M0 instead asserts the current fail-closed result, disabled
+The M0 test-first exception was deliberate: its public success assertions stay
+as the frozen pre-M1 baseline. M1 enables the internal DB-minted backend only;
+public/background routing remains owned by M2. M0 continues to assert disabled
 background behavior, deterministic fixture debt, offline parity, and artifact
 schema completeness.
 

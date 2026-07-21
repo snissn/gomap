@@ -266,8 +266,8 @@ func TestVacuumIndexOnlinePagerSyncRunsOutsideWriteMu(t *testing.T) {
 	}
 	// The helper publishes through the activated coordinator. Drain that exact
 	// root before entering the legacy vacuum test seam so an outstanding stable
-	// index pin cannot race the direct index replacement below. Production
-	// online vacuum remains fenced pending RecoverableRootSet integration.
+	// index pin cannot race the direct legacy replacement below. Production
+	// vacuum exercises the RecoverableRootSet path in the production tests.
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint collection: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestVacuumIndexOnlinePagerSyncRunsOutsideWriteMu(t *testing.T) {
 		}
 	}
 
-	if err := db.vacuumIndexOnlineLegacyForTest(context.Background()); err != nil {
+	if err := db.VacuumIndexOnline(context.Background()); err != nil {
 		t.Fatalf("vacuum: %v", err)
 	}
 	if hookErr != nil {
@@ -316,7 +316,6 @@ func TestVacuumIndexOnlinePagerSyncRunsOutsideWriteMu(t *testing.T) {
 }
 
 func TestVacuumIndexOnlineFinalSyncGateWaitsWriterAndPublishesItAfterCutover(t *testing.T) {
-	skipLegacyOnlineVacuumRuntimeIntegration(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on windows")
 	}
@@ -343,7 +342,7 @@ func TestVacuumIndexOnlineFinalSyncGateWaitsWriterAndPublishesItAfterCutover(t *
 		}
 	}
 	vacuumErr := make(chan error, 1)
-	go func() { vacuumErr <- db.vacuumIndexOnlineLegacyForTest(context.Background()) }()
+	go func() { vacuumErr <- db.VacuumIndexOnline(context.Background()) }()
 	waitVacuumTestSignal(t, reached, "vacuum final sync")
 
 	writeErr := make(chan error, 1)
@@ -407,7 +406,7 @@ func TestVacuumIndexOnlinePreflushFailureLeavesOldIndexAuthoritative(t *testing.
 		calls.Add(1)
 		return preflushErr
 	}
-	if err := db.vacuumIndexOnlineLegacyForTest(context.Background()); !errors.Is(err, preflushErr) {
+	if err := db.VacuumIndexOnline(context.Background()); !errors.Is(err, preflushErr) {
 		_ = db.Close()
 		t.Fatalf("vacuum error=%v, want %v", err, preflushErr)
 	}
@@ -435,7 +434,6 @@ func TestVacuumIndexOnlinePreflushFailureLeavesOldIndexAuthoritative(t *testing.
 }
 
 func TestVacuumIndexOnlineCollectionPrecloneAllowsMutationAndReopens(t *testing.T) {
-	skipLegacyOnlineVacuumRuntimeIntegration(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on windows")
 	}
@@ -465,7 +463,7 @@ func TestVacuumIndexOnlineCollectionPrecloneAllowsMutationAndReopens(t *testing.
 	}
 
 	vacuumErr := make(chan error, 1)
-	go func() { vacuumErr <- db.vacuumIndexOnlineLegacyForTest(context.Background()) }()
+	go func() { vacuumErr <- db.VacuumIndexOnline(context.Background()) }()
 	waitVacuumTestSignal(t, reached, "collection preclone")
 
 	publishDone := make(chan error, 1)
@@ -551,7 +549,7 @@ func TestVacuumIndexOnlineCollectionRecloneAllowsMutation(t *testing.T) {
 	}
 
 	vacuumErr := make(chan error, 1)
-	go func() { vacuumErr <- db.vacuumIndexOnlineLegacyForTest(context.Background()) }()
+	go func() { vacuumErr <- db.VacuumIndexOnline(context.Background()) }()
 	waitVacuumTestSignal(t, reached, "collection reclone")
 	publishDone := make(chan error, 1)
 	go func() {
@@ -613,7 +611,7 @@ func TestVacuumIndexOnlineDefersRangeOnlyTailOverLimit(t *testing.T) {
 			db.vacuum.RecordApplyPlan(nil, ranges)
 		})
 	}
-	if err := db.vacuumIndexOnlineLegacyForTest(context.Background()); err != nil {
+	if err := db.VacuumIndexOnline(context.Background()); err != nil {
 		t.Fatalf("vacuum: %v", err)
 	}
 	stats := db.vacuumOnlineStatsSnapshot()
@@ -626,7 +624,6 @@ func TestVacuumIndexOnlineDefersRangeOnlyTailOverLimit(t *testing.T) {
 }
 
 func TestVacuumIndexOnlineReplaysProductionRangeMutation(t *testing.T) {
-	skipLegacyOnlineVacuumRuntimeIntegration(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on windows")
 	}
@@ -662,7 +659,7 @@ func TestVacuumIndexOnlineReplaysProductionRangeMutation(t *testing.T) {
 			rangeErr = mutation.Write()
 		})
 	}
-	if err := db.vacuumIndexOnlineLegacyForTest(context.Background()); err != nil {
+	if err := db.VacuumIndexOnline(context.Background()); err != nil {
 		t.Fatalf("vacuum: %v", err)
 	}
 	if rangeErr != nil {
@@ -731,7 +728,7 @@ func TestVacuumIndexOnlineCollectionChurnExhaustsRetriesBeforeRename(t *testing.
 		version++
 		rootID, hookErr = publishVacuumSnapshotCollectionVersion(db, rootID, version, 0)
 	}
-	err = db.vacuumIndexOnlineLegacyForTest(context.Background())
+	err = db.VacuumIndexOnline(context.Background())
 	if !errors.Is(err, ErrVacuumConcurrentMutation) {
 		t.Fatalf("vacuum err=%v want %v", err, ErrVacuumConcurrentMutation)
 	}
@@ -763,7 +760,6 @@ func TestVacuumIndexOnlineCollectionChurnExhaustsRetriesBeforeRename(t *testing.
 }
 
 func TestVacuumIndexOnlineCollectionCatalogTransitionsAreExact(t *testing.T) {
-	skipLegacyOnlineVacuumRuntimeIntegration(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on windows")
 	}
@@ -785,7 +781,7 @@ func TestVacuumIndexOnlineCollectionCatalogTransitionsAreExact(t *testing.T) {
 			rootID, publishErr = publishVacuumSnapshotCollectionTransition(db, rootID, 1)
 		})
 	}
-	if err := db.vacuumIndexOnlineLegacyForTest(context.Background()); err != nil {
+	if err := db.VacuumIndexOnline(context.Background()); err != nil {
 		t.Fatalf("vacuum: %v", err)
 	}
 	if publishErr != nil {

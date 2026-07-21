@@ -102,15 +102,22 @@ type vacuumCollectionAllocator interface {
 }
 
 type vacuumRecordingAllocator struct {
-	base        vacuumAllocator
+	base        vacuumCollectionAllocator
 	pages       []uint64
 	inlinePages [16]uint64
 }
 
-func newVacuumRecordingAllocator(base vacuumAllocator) *vacuumRecordingAllocator {
+func newVacuumRecordingAllocator(base vacuumCollectionAllocator) *vacuumRecordingAllocator {
 	a := &vacuumRecordingAllocator{base: base}
 	a.pages = a.inlinePages[:0]
 	return a
+}
+
+func (a *vacuumRecordingAllocator) Free(id uint64) error {
+	if a == nil || a.base == nil {
+		return errors.New("vacuum: missing recording allocator")
+	}
+	return a.base.Free(id)
 }
 
 func (a *vacuumRecordingAllocator) Alloc(hint uint64) (uint64, error) {

@@ -29,7 +29,7 @@ resource-specific reachability projection.
 | Raw and packed outer-leaf generations | `TreeDB/db/leaf_generation_gc.go` | scans raw leaf FileIDs from every captured root, resolves them through every retained leaf-generation manifest, preserves FileID reuse/ABA generations, and revalidates before zombie publication | active |
 | Leaf pack/rewrite sources | `TreeDB/db/leaf_generation_pack.go`, `TreeDB/db/compact_storage.go` | replacement output is stabilized and published first; physical retirement is exclusively owned by capability-backed leaf-generation GC | active |
 | Column, dictionary, template, typed-column, vector-graph, text, and query-ready assets | `TreeDB/collections/column_asset_gc.go` and `column_asset_rewrite.go` | scans each captured collection catalog/manifest, pins exact referenced segment identities, protects published generations replayable from an older durable WAL frontier, and revalidates before `BeginDeleteAt`. Current query-ready base/delta/consolidated assets remain rebuildable and non-authoritative, but share the same exact-identity retirement gate | active |
-| Online index vacuum/replacement | `TreeDB/db/vacuum_online.go` | production entry remains fail-closed with `ErrVacuumRecoverableRootSetRequired`; the legacy replacement path is test-only until it can publish a durable replacement and prove the old index identity unreachable | fenced |
+| Online index vacuum/replacement | `TreeDB/db/vacuum_online.go` | the internal production entry captures a DB-minted capability, rebuilds both durable slots and their per-root resource closure, revalidates before namespace mutation, and atomically rebinds the live publication runtime; the legacy capability remains test-only | active backend; public/background routing is owned by #3945 and `CompactStorage` policy by #3946 |
 | Offline `CompactIndex` | `TreeDB/db/db.go` | appends and publishes new pages in the same index namespace; it does not unlink or replace the index file. Page eligibility is governed by the page rule below | no external unlink |
 | Graveyard extraction and page/freelist reuse | COW allocator and root-reuse paths from #3678 | `RecoverableRootSet` registers the oldest captured commit sequence and holds the root-reuse read fence; actual page eligibility remains the #3678 generation rule | delegated to #3678 |
 | Stable unlink/rename instrumentation | `TreeDB/db/namespace_mutation.go`, `TreeDB/internal/valuelog/stable_resource.go`, and collection stable deleters | exact identity, namespace lease, unlink observation, and directory-sync failure handling remain the PR #3706 contract; #3681 adds root authority before those operations | inherited from PR #3706 |
@@ -65,6 +65,49 @@ recovery state and therefore do not consume the capability:
 - Namespace deletion is successful only after its owning directory has been
   made durable. An unlink followed by directory-sync failure is recovery
   required, never reported as clean success.
+
+## Online index replacement contract
+
+The production `db.DB.VacuumIndexOnline` backend is authorized only by a
+`RecoverableRootSet` minted by the same live DB. It rebuilds the older durable
+slot's user, system, and collection closure first, then rebuilds the latest
+visible closure as its consecutive successor. Each replacement slot carries
+the original root's stable-resource manifest and command-WAL frontier; the
+replacement index is therefore independently complete for either recovery
+selection.
+
+The replacement pager, durable-root state, snapshot view, allocator/freelist,
+and root-publication runtime are constructed and stabilized before namespace
+publication. Final publication drains pending root debt outside `writeMu`,
+revalidates the capability, writes the ready marker, and performs this ordered
+namespace transition:
+
+1. rename `index.db` to `index.db.bak`;
+2. rename the stabilized replacement to `index.db`;
+3. remove the ready marker and obsolete backup;
+4. sync the parent directory.
+
+An ambiguous rename or directory-sync result poisons publication and returns
+`ErrRecoveryRequired`; destructive maintenance remains blocked until reopen
+reconciles the marker and namespace. Before the first rename, cancellation or
+revalidation failure leaves `index.db` authoritative and removes only
+unpublished replacement artifacts. After the first rename, recovery rather
+than cancellation owns convergence.
+
+Once namespace publication is durable, the DB installs the replacement pager,
+durable slots, state token, snapshot, and publication runtime as one coherent
+in-process generation. A writer that released `writeMu` while waiting for the
+cutover rechecks the runtime and acquires a builder from the replacement
+generation. The retired coordinator is stopped, drained, and its recovery
+handoff released. Existing snapshots, iterators, and stable-resource captures
+continue to pin old-generation handles until they close; physical cleanup is
+deferred until those references drain.
+
+This backend contract does not activate the public/background entry points or
+change `CompactStorage` completion policy. Those staged integrations remain
+fail-closed until #3945 and #3946 respectively. Windows remains explicitly
+unsupported because the required open-file rename and generation-retirement
+semantics are not implemented there.
 
 ## Verification map
 

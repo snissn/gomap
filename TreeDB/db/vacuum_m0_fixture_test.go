@@ -99,12 +99,11 @@ func TestVacuumM0FixtureDeterministicDebtAndOfflineCeiling(t *testing.T) {
 	}
 }
 
-func TestVacuumM0PublicOnlineVacuumIsExplicitlyUnsupported(t *testing.T) {
+func TestVacuumM0ProductionOnlineVacuumIsSupported(t *testing.T) {
 	d, _ := openVacuumM0Fixture(t, vacuumM0Options(t.TempDir()))
 	defer func() { _ = d.Close() }()
-	err := d.VacuumIndexOnline(context.Background())
-	if !errors.Is(err, ErrVacuumRecoverableRootSetRequired) {
-		t.Fatalf("public online vacuum error=%v want ErrVacuumRecoverableRootSetRequired", err)
+	if err := d.VacuumIndexOnline(context.Background()); err != nil {
+		t.Fatalf("production online vacuum: %v", err)
 	}
 }
 

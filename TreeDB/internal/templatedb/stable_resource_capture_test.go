@@ -461,8 +461,8 @@ func TestCaptureTemplateResourcesMultiIDCoalescesSharedPhysicalClosureDeterminis
 			t.Fatalf("descriptor count grew from %d to %d after %d multi-ID merges", len(beforeFDs), len(afterFDs), iterations)
 		}
 	}
-	if err := backend.VacuumIndexOnline(context.Background()); !errors.Is(err, backenddb.ErrVacuumRecoverableRootSetRequired) {
-		t.Fatalf("multi-ID release vacuum err=%v want recoverable-root-set fence", err)
+	if err := backend.VacuumIndexOnline(context.Background()); err != nil {
+		t.Fatalf("multi-ID release vacuum: %v", err)
 	}
 }
 
@@ -668,8 +668,8 @@ func TestCaptureTemplateResourcesDedupeDoesNotGrowPinsOrDescriptors(t *testing.T
 			t.Fatalf("descriptor count grew from %d to %d after %d captures", len(beforeFDs), len(afterFDs), iterations)
 		}
 	}
-	if err := backend.VacuumIndexOnline(context.Background()); !errors.Is(err, backenddb.ErrVacuumRecoverableRootSetRequired) {
-		t.Fatalf("dedupe release vacuum err=%v want recoverable-root-set fence", err)
+	if err := backend.VacuumIndexOnline(context.Background()); err != nil {
+		t.Fatalf("dedupe release vacuum: %v", err)
 	}
 }
 

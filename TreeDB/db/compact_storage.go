@@ -600,7 +600,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	if err := db.runCompactStoragePhase(&stats, "index-vacuum", func() error {
 		indexVacuumSkipped = false
 		indexVacuumSkipReason = ""
-		err := db.vacuumIndexOnline(ctx, !maintenanceLocked)
+		err := db.compactStorageVacuumIndexOnline(ctx, !maintenanceLocked)
 		if errors.Is(err, ErrVacuumUnsupported) {
 			indexVacuumSkipped = true
 			indexVacuumSkipReason = err.Error()
@@ -689,6 +689,13 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	cleanupLeafLogDone = true
 	stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized = compactStorageCompactionFlags(opts, stats.RemainingDebt)
 	return stats, nil
+}
+
+// compactStorageVacuumIndexOnline remains fenced until CompactStorage owns the
+// production phase status and completion semantics. The production backend is
+// enabled independently by VacuumIndexOnline.
+func (db *DB) compactStorageVacuumIndexOnline(context.Context, bool) error {
+	return errors.Join(ErrVacuumUnsupported, ErrVacuumRecoverableRootSetRequired)
 }
 
 func compactStorageCompactionFlags(opts CompactStorageOptions, debt CompactStorageDebt) (fullyCompacted bool, policyFullyCompacted bool, byteMinimized bool) {
