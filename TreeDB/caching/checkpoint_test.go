@@ -2,6 +2,7 @@ package caching
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,66 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
+
+func TestCachingDB_CheckpointContextCancelsWhileWaitingForFlushOwnership(t *testing.T) {
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- db.CheckpointContext(ctx) }()
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("CheckpointContext error=%v, want context.Canceled", err)
+		}
+	case <-time.After(withRaceTimeout(2 * time.Second)):
+		t.Fatal("CheckpointContext did not cancel while waiting for flush ownership")
+	}
+}
+
+func TestCachingDB_CheckpointContextCancelsBeforeFrontierDrain(t *testing.T) {
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{FlushThreshold: 1 << 30})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if err := db.Set([]byte("key"), []byte("value")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	reached := make(chan struct{})
+	release := make(chan struct{})
+	db.testBeforeCheckpointFrontierDrain = func() {
+		close(reached)
+		<-release
+	}
+	defer func() { db.testBeforeCheckpointFrontierDrain = nil }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- db.CheckpointContext(ctx) }()
+	awaitCheckpointTestSignal(t, reached, "checkpoint frontier drain")
+	cancel()
+	close(release)
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("CheckpointContext error=%v, want context.Canceled", err)
+		}
+	case <-time.After(withRaceTimeout(2 * time.Second)):
+		t.Fatal("CheckpointContext did not cancel before draining the frontier")
+	}
+}
 
 func countCommitLogFiles(entries []os.DirEntry) int {
 	n := 0

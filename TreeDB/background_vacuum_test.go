@@ -616,6 +616,54 @@ func TestBackgroundIndexVacuumErrorOutcomes(t *testing.T) {
 	}
 }
 
+func TestBackgroundIndexVacuumPermanentProbeErrorReportedOncePerState(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	var reports atomic.Int64
+	d := openBackgroundVacuumTestDB(t, Options{
+		BackgroundIndexVacuumInterval: -1,
+		NotifyError: func(error) {
+			reports.Add(1)
+		},
+	})
+
+	probeErr := errors.New("trigger report I/O failure")
+	var probes atomic.Int64
+	restore := setBackgroundIndexVacuumTriggerReportHookForTest(func(*DB, context.Context) (backenddb.IndexVacuumTriggerReport, error) {
+		probes.Add(1)
+		return backenddb.IndexVacuumTriggerReport{}, probeErr
+	})
+	defer restore()
+
+	d.bgVac.runOnce(d)
+	d.bgVac.runOnce(d)
+	if got := probes.Load(); got != 1 {
+		t.Fatalf("unchanged-state trigger probes=%d want 1", got)
+	}
+	if got := reports.Load(); got != 1 {
+		t.Fatalf("unchanged-state NotifyError calls=%d want 1", got)
+	}
+	stats := d.bgVac.Stats()
+	if stats.PermanentFailuresTotal != 1 || stats.LastOutcome != backgroundIndexVacuumOutcomeUnchanged || stats.LastErr != probeErr.Error() {
+		t.Fatalf("unexpected unchanged-state stats: %+v", stats)
+	}
+
+	if err := d.Set([]byte("new-state"), []byte("value")); err != nil {
+		t.Fatalf("mutate state: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint new state: %v", err)
+	}
+	d.bgVac.runOnce(d)
+	if got := probes.Load(); got != 2 {
+		t.Fatalf("changed-state trigger probes=%d want 2", got)
+	}
+	if got := reports.Load(); got != 2 {
+		t.Fatalf("changed-state NotifyError calls=%d want 2", got)
+	}
+}
+
 func TestBackgroundIndexVacuumReadOnlyStartsNoWorker(t *testing.T) {
 	dir := t.TempDir()
 	writable, err := Open(Options{Dir: dir, BackgroundIndexVacuumInterval: -1})
