@@ -1,6 +1,7 @@
 package freelist
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"testing"
@@ -543,6 +544,128 @@ func TestFreelistGenerationV1_OneChunkDeltaEmitsOnlyOnePath(t *testing.T) {
 	}
 	if stats.COWBytes != stats.COWPages*4096 {
 		t.Fatalf("bytes=%d pages=%d", stats.COWBytes, stats.COWPages)
+	}
+}
+
+func TestFreelistGenerationV1_BatchedRetirementMutatesEachChunkOnce(t *testing.T) {
+	base := MustNewFreelistGenerationV1(1, 1024, nil, nil)
+	txn := NewFreelistTxn(base, NewReservationLedger())
+	retired := make([]retiredPage, 0, 200)
+	for id := uint64(2); id < 202; id++ {
+		retired = append(retired, retiredPage{id: id, lastReachableCommitSeq: 1})
+	}
+	txn.retireMany(retired)
+
+	stats := txn.Stats()
+	if stats.StateMutationPaths != 1 || stats.StateMutationItems != uint64(len(retired)) {
+		t.Fatalf("batched retirement mutation work: paths=%d items=%d want 1/%d",
+			stats.StateMutationPaths, stats.StateMutationItems, len(retired))
+	}
+	candidate, err := txn.MaterializeCandidate(2, 2, candidateIDFromString("batched-retirement"), NewMemoryPageStoreV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := candidate.Generation().RetiredCount(); got != uint64(len(retired)) {
+		t.Fatalf("retired count=%d want %d", got, len(retired))
+	}
+}
+
+func TestFreelistGenerationV1_BatchedPruneMutatesEachChunkOnce(t *testing.T) {
+	retired := make(map[uint64]uint64, 200)
+	for id := uint64(2); id < 202; id++ {
+		retired[id] = 1
+	}
+	base := MustNewFreelistGenerationV1(1, 1024, nil, retired)
+	txn := NewFreelistTxn(base, NewReservationLedger())
+	capability, err := NewReuseCapability(2, 2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txn.PruneWithCapability(capability)
+
+	stats := txn.Stats()
+	if stats.StateMutationPaths != 1 || stats.StateMutationItems != uint64(len(retired)) {
+		t.Fatalf("batched prune mutation work: paths=%d items=%d want 1/%d",
+			stats.StateMutationPaths, stats.StateMutationItems, len(retired))
+	}
+	candidate, err := txn.MaterializeCandidate(2, 2, candidateIDFromString("batched-prune"), NewMemoryPageStoreV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := candidate.Generation().FreeCount(); got != uint64(len(retired)) {
+		t.Fatalf("free count=%d want %d", got, len(retired))
+	}
+}
+
+func TestFreelistGenerationV1_BatchedRetirementMatchesPerPageBytes(t *testing.T) {
+	base := materializeTestGeneration(t,
+		MustNewFreelistGenerationV1(1, 1024, []uint64{2, 300, 301, 700}, nil),
+		2, NewMemoryPageStoreV1(),
+	)
+	retired := []retiredPage{
+		{id: 300, lastReachableCommitSeq: 1},
+		{id: 2, lastReachableCommitSeq: 1},
+		{id: 301, lastReachableCommitSeq: 2},
+		{id: 2, lastReachableCommitSeq: 3},
+		{id: 700, lastReachableCommitSeq: 2},
+	}
+	legacy := NewFreelistTxn(base, NewReservationLedger())
+	for _, item := range retired {
+		legacy.retire(item.id, item.lastReachableCommitSeq)
+	}
+	batched := NewFreelistTxn(base, NewReservationLedger())
+	batched.retireMany(retired)
+
+	candidateID := candidateIDFromString("batched-byte-equivalence")
+	legacyCandidate, err := legacy.MaterializeCandidate(3, 3, candidateID, NewMemoryPageStoreV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	batchedCandidate, err := batched.MaterializeCandidate(3, 3, candidateID, NewMemoryPageStoreV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := batchedCandidate.GenerationRef(), legacyCandidate.GenerationRef(); got != want {
+		t.Fatalf("batched generation ref=%+v want per-page %+v", got, want)
+	}
+	gotPages, wantPages := batchedCandidate.Pages(), legacyCandidate.Pages()
+	if len(gotPages) != len(wantPages) {
+		t.Fatalf("batched pages=%d want per-page %d", len(gotPages), len(wantPages))
+	}
+	for i := range wantPages {
+		if gotPages[i].PageID != wantPages[i].PageID || !bytes.Equal(gotPages[i].Data, wantPages[i].Data) {
+			t.Fatalf("batched page %d differs from per-page materialization", i)
+		}
+	}
+}
+
+func BenchmarkFreelistGenerationV1_RetirementMutation(b *testing.B) {
+	base := MustNewFreelistGenerationV1(1, 1024, nil, nil)
+	retired := make([]retiredPage, 0, 200)
+	for id := uint64(2); id < 202; id++ {
+		retired = append(retired, retiredPage{id: id, lastReachableCommitSeq: 1})
+	}
+	for _, row := range []struct {
+		name  string
+		apply func(*FreelistTxn)
+	}{
+		{name: "per-page-control", apply: func(txn *FreelistTxn) {
+			for _, item := range retired {
+				txn.retire(item.id, item.lastReachableCommitSeq)
+			}
+		}},
+		{name: "batched", apply: func(txn *FreelistTxn) { txn.retireMany(retired) }},
+	} {
+		b.Run(row.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				txn := NewFreelistTxn(base, NewReservationLedger())
+				row.apply(txn)
+				stats := txn.Stats()
+				b.ReportMetric(float64(stats.StateMutationPaths), "mutation-paths/op")
+				b.ReportMetric(float64(stats.StateMutationItems), "mutation-items/op")
+			}
+		})
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"sort"
 
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -166,6 +167,7 @@ func (h RecoveryHorizon) capability() ReuseCapability {
 
 type FreelistTxnStats struct {
 	COWChunks, COWPages, COWBytes, LogicalDelta            uint64
+	StateMutationPaths, StateMutationItems                 uint64
 	AppendAllocations, ReuseAllocations, Reservations      uint64
 	FreeIDs, RetiredIDs, ReuseLag, PageVisits              uint64
 	GenerationID, ReservationRecords                       uint64
@@ -231,9 +233,7 @@ func BeginCandidateV1(base *FreelistGenerationV1, expectedParent GenerationRefV1
 	for _, id := range base.record.pageIDs {
 		t.replacedMetadata[id] = struct{}{}
 	}
-	for _, pending := range base.record.pendingMetadata() {
-		t.retire(pending.id, pending.lastReachableCommitSeq)
-	}
+	t.retireMany(base.record.pendingMetadata())
 	return t, nil
 }
 
@@ -273,10 +273,16 @@ func (t *FreelistTxn) markReplacedPath(chunkNo uint64) {
 	}
 }
 
-func (t *FreelistTxn) mutate(chunkNo uint64, f func(*stateChunk)) {
+func (t *FreelistTxn) mutateMany(chunkNo, items uint64, f func(*stateChunk)) {
 	t.markReplacedPath(chunkNo)
 	t.root = mutateChunk(t.root, chunkNo, 0, f)
 	t.changedChunks[chunkNo] = struct{}{}
+	t.stats.StateMutationPaths++
+	t.stats.StateMutationItems += items
+}
+
+func (t *FreelistTxn) mutate(chunkNo uint64, f func(*stateChunk)) {
+	t.mutateMany(chunkNo, 1, f)
 }
 
 func (t *FreelistTxn) Allocate(regionHint uint64) (uint64, error) {
@@ -402,6 +408,51 @@ func (t *FreelistTxn) retire(id, seq uint64) {
 	t.mutate(id>>freelistChunkShift, func(c *stateChunk) { c.setFree(offset, false); c.retired[offset] = seq })
 }
 
+// retireMany applies all retirements for one state chunk through a single
+// persistent-tree mutation. The previous one-ID-at-a-time path cloned the
+// same chunk and its full trie path repeatedly when a commit retired adjacent
+// index or allocator-metadata pages.
+func (t *FreelistTxn) retireMany(retired []retiredPage) {
+	if t == nil || t.consumed || len(retired) == 0 {
+		return
+	}
+	valid := retired[:0]
+	for _, item := range retired {
+		if item.id < 2 || item.id >= t.highWater || item.lastReachableCommitSeq == 0 {
+			continue
+		}
+		valid = append(valid, item)
+	}
+	if len(valid) == 0 {
+		return
+	}
+	if len(valid) == 1 {
+		t.retire(valid[0].id, valid[0].lastReachableCommitSeq)
+		return
+	}
+	// Stable ordering preserves last-writer behavior for duplicate IDs with
+	// different retirement sequences while making every chunk one run.
+	sort.SliceStable(valid, func(i, j int) bool {
+		return valid[i].id>>freelistChunkShift < valid[j].id>>freelistChunkShift
+	})
+	for start := 0; start < len(valid); {
+		chunkNo := valid[start].id >> freelistChunkShift
+		end := start + 1
+		for end < len(valid) && valid[end].id>>freelistChunkShift == chunkNo {
+			end++
+		}
+		items := valid[start:end]
+		t.mutateMany(chunkNo, uint64(len(items)), func(c *stateChunk) {
+			for _, item := range items {
+				offset := item.id & (freelistChunkSize - 1)
+				c.setFree(offset, false)
+				c.retired[offset] = item.lastReachableCommitSeq
+			}
+		})
+		start = end
+	}
+}
+
 func (t *FreelistTxn) Retire(id, seq uint64) {
 	if t != nil {
 		t.retire(id, seq)
@@ -446,11 +497,37 @@ func (t *FreelistTxn) PruneWithCapability(cap ReuseCapability) {
 	var promote []retiredPage
 	collectPrunable(t.root, 0, cap, &promote, &t.stats.PageVisits)
 	for _, retired := range promote {
-		offset := retired.id & (freelistChunkSize - 1)
-		t.mutate(retired.id>>freelistChunkShift, func(c *stateChunk) { c.retired[offset] = 0; c.setFree(offset, true) })
 		if lag := cap.oldestRecoverableCommitSeq - retired.lastReachableCommitSeq; lag > t.stats.ReuseLag {
 			t.stats.ReuseLag = lag
 		}
+	}
+	if len(promote) == 1 {
+		item := promote[0]
+		offset := item.id & (freelistChunkSize - 1)
+		t.mutate(item.id>>freelistChunkShift, func(c *stateChunk) {
+			c.retired[offset] = 0
+			c.setFree(offset, true)
+		})
+		return
+	}
+	sort.SliceStable(promote, func(i, j int) bool {
+		return promote[i].id>>freelistChunkShift < promote[j].id>>freelistChunkShift
+	})
+	for start := 0; start < len(promote); {
+		chunkNo := promote[start].id >> freelistChunkShift
+		end := start + 1
+		for end < len(promote) && promote[end].id>>freelistChunkShift == chunkNo {
+			end++
+		}
+		items := promote[start:end]
+		t.mutateMany(chunkNo, uint64(len(items)), func(c *stateChunk) {
+			for _, item := range items {
+				offset := item.id & (freelistChunkSize - 1)
+				c.retired[offset] = 0
+				c.setFree(offset, true)
+			}
+		})
+		start = end
 	}
 }
 
