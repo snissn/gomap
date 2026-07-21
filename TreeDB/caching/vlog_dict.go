@@ -1020,8 +1020,13 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 	if db == nil {
 		return
 	}
-	db.valueLogDictApplyMu.RLock()
-	defer db.valueLogDictApplyMu.RUnlock()
+	// Profile application is a check-then-publish transaction: the applied hash
+	// is checked before the dictionary and current marker are persisted, then the
+	// hash is advanced only after publication succeeds. Serialize callers so the
+	// trainer callback and periodic publisher cannot both observe the old hash
+	// and persist the same accepted profile twice.
+	db.valueLogDictApplyMu.Lock()
+	defer db.valueLogDictApplyMu.Unlock()
 	if db.closing.Load() {
 		return
 	}

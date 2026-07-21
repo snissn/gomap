@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	operationTraceSchemaVersion = "treedb-power-loss-operation-trace/v1"
+	operationTraceSchemaVersion = "treedb-power-loss-operation-trace/v2"
 	imageTreeSchemaVersion      = "treedb-power-loss-image-tree/v1"
 	recoveryTraceSchemaVersion  = "treedb-power-loss-recovery-trace/v2"
 	metricsSchemaVersion        = "treedb-power-loss-metrics/v1"
@@ -28,6 +28,7 @@ type operationTraceArtifact struct {
 	VariantID          string   `json:"variant_id"`
 	Seed               string   `json:"seed"`
 	DeclaredCutPoint   string   `json:"declared_cut_point"`
+	ReplayWindow       string   `json:"replay_window,omitempty"`
 	ObservedEventCount int      `json:"observed_event_count"`
 	Events             []string `json:"events"`
 }
@@ -398,12 +399,15 @@ func verifyOperationTrace(root, manifestID string, witness Witness, traceArtifac
 	if trace.VariantID == "" {
 		return operationTraceArtifact{}, fmt.Errorf("%s has empty variant_id", prefix)
 	}
-	matchingEvents := 0
-	cutPrefix := "cut:" + witness.CutPoint + ":"
-	for _, event := range trace.Events {
-		if strings.HasPrefix(event, cutPrefix) {
-			matchingEvents++
-		}
+	if trace.ReplayWindow != witness.ReplayWindow {
+		return operationTraceArtifact{}, fmt.Errorf("%s replay_window=%q want=%q", prefix, trace.ReplayWindow, witness.ReplayWindow)
+	}
+	if trace.ReplayWindow != "" && trace.ReplayWindow != trace.VariantID {
+		return operationTraceArtifact{}, fmt.Errorf("%s replay_window=%q does not match variant_id=%q", prefix, trace.ReplayWindow, trace.VariantID)
+	}
+	matchingEvents, err := replayWindowCutCount(trace.Events, witness.CutPoint, trace.ReplayWindow)
+	if err != nil {
+		return operationTraceArtifact{}, fmt.Errorf("%s: %w", prefix, err)
 	}
 	if trace.ObservedEventCount != matchingEvents || trace.ObservedEventCount != witness.ObservedEventCount {
 		return operationTraceArtifact{}, fmt.Errorf("%s observed_event_count=%d matching_events=%d witness=%d", prefix, trace.ObservedEventCount, matchingEvents, witness.ObservedEventCount)
@@ -417,6 +421,11 @@ func verifyOperationTrace(root, manifestID string, witness Witness, traceArtifac
 		"TREEDB_POWERLOSS_SEED":             wantSeed,
 		"TREEDB_POWERLOSS_EXPECT_CUT_POINT": witness.CutPoint,
 	}
+	if witness.ReplayWindow != "" {
+		wantEnv[powerLossReplayWindowEnv] = witness.ReplayWindow
+	} else if got := witness.Command.Env[powerLossReplayWindowEnv]; got != "" {
+		return operationTraceArtifact{}, fmt.Errorf("%s command env %s=%q want empty", prefix, powerLossReplayWindowEnv, got)
+	}
 	for name, want := range wantEnv {
 		if got := witness.Command.Env[name]; got != want {
 			return operationTraceArtifact{}, fmt.Errorf("%s command env %s=%q want=%q", prefix, name, got, want)
@@ -426,6 +435,40 @@ func verifyOperationTrace(root, manifestID string, witness Witness, traceArtifac
 		return operationTraceArtifact{}, fmt.Errorf("%s command env TREEDB_POWERLOSS_EVIDENCE_DIR is empty", prefix)
 	}
 	return trace, nil
+}
+
+func replayWindowCutCount(events []string, cutPoint, replayWindow string) (int, error) {
+	cutPrefix := "cut:" + cutPoint + ":"
+	windowMarker := "replay-window:" + replayWindow
+	matching := 0
+	markerCount := 0
+	inWindow := replayWindow == ""
+	for _, event := range events {
+		if strings.HasPrefix(event, "replay-window:") {
+			if replayWindow == "" {
+				return 0, fmt.Errorf("operation trace contains replay-window marker without a declared replay window")
+			}
+			if event != windowMarker {
+				return 0, fmt.Errorf("operation trace replay-window marker %q does not match declared replay window %q", event, replayWindow)
+			}
+			markerCount++
+			if markerCount > 1 {
+				return 0, fmt.Errorf("operation trace requires exactly one replay-window marker %q; found %d", windowMarker, markerCount)
+			}
+			inWindow = true
+			continue
+		}
+		if inWindow && strings.HasPrefix(event, cutPrefix) {
+			matching++
+		}
+	}
+	if replayWindow != "" && markerCount != 1 {
+		return 0, fmt.Errorf("operation trace requires exactly one replay-window marker %q; found %d", windowMarker, markerCount)
+	}
+	if replayWindow != "" && matching == 0 {
+		return 0, fmt.Errorf("operation trace replay-window marker %q does not precede a matching cut %q", windowMarker, cutPoint)
+	}
+	return matching, nil
 }
 
 func verifyImageTree(root, evidenceDir, manifestID, witnessID string, artifact Artifact, kind string) (imageTreeArtifact, error) {
@@ -600,7 +643,11 @@ func verifyRecoveryTrace(root, evidenceDir, manifestID string, witness Witness, 
 	if err := validateRecoveryStats(recovery, witness.Command.Env[powerLossProfileEnv]); err != nil {
 		return recoveryTraceArtifact{}, fmt.Errorf("%s: %w", prefix, err)
 	}
-	if got := observedWitnessState(recovery); got != witness.State {
+	got, err := observedWitnessStateForComparison(recovery, witness.StateComparison)
+	if err != nil {
+		return recoveryTraceArtifact{}, fmt.Errorf("%s: %w", prefix, err)
+	}
+	if got != witness.State {
 		return recoveryTraceArtifact{}, fmt.Errorf("%s observed state=%+v does not match manifest state=%+v", prefix, got, witness.State)
 	}
 	recoveryDir := filepath.Join(root, filepath.FromSlash(evidenceDir), recovery.Dir)

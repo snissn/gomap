@@ -8860,7 +8860,7 @@ type DB struct {
 	valueLogDictMetricsPauseBytes  int
 
 	valueLogDictTrainerMu      sync.RWMutex
-	valueLogDictApplyMu        sync.RWMutex
+	valueLogDictApplyMu        sync.Mutex
 	valueLogDictTrainer        *compression.Trainer
 	valueLogDictTrainerByClass [vlogDictClassCount]*compression.Trainer
 	valueLogDictKickCh         chan struct{}

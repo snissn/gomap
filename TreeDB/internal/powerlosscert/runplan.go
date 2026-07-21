@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const RunPlanSchemaVersion = "treedb-power-loss-run-plan/v3"
+const RunPlanSchemaVersion = "treedb-power-loss-run-plan/v4"
 
 const CertifiedRepositoryRef = "refs/remotes/origin/main"
 
@@ -62,6 +62,7 @@ type RunCase struct {
 	ExpectedOutcome        string              `json:"expected_outcome"`
 	ExpectedTypedError     string              `json:"expected_typed_error"`
 	State                  WitnessState        `json:"state"`
+	StateComparison        string              `json:"state_comparison,omitempty"`
 	CounterexampleID       string              `json:"counterexample_id,omitempty"`
 	NegativeControlID      string              `json:"negative_control_id,omitempty"`
 	Seed                   uint64              `json:"seed"`
@@ -69,9 +70,15 @@ type RunCase struct {
 	VariantID              string              `json:"variant_id"`
 	CutPoint               string              `json:"cut_point"`
 	ReopenMode             string              `json:"reopen_mode"`
+	ReplayWindow           string              `json:"replay_window,omitempty"`
 	ExpectedRecovery       RecoveryExpectation `json:"expected_recovery"`
 	ClaimBoundary          string              `json:"claim_boundary"`
 }
+
+const (
+	stateComparisonExact          = ""
+	stateComparisonLogicalHorizon = "logical_horizon"
+)
 
 // RunPlan freezes repository provenance and the exact modeled cases before
 // execution. PullRequests includes every implementation/review merge whose
@@ -199,6 +206,12 @@ func validateRunCase(inventory RiskInventory, runCase RunCase) error {
 	if runCase.ReopenMode != powerLossReopenModeReadWrite && runCase.ReopenMode != powerLossReopenModeReadOnly {
 		return fmt.Errorf("%s has invalid reopen mode %q", prefix, runCase.ReopenMode)
 	}
+	if runCase.ReplayWindow != "" && runCase.ReplayWindow != runCase.VariantID {
+		return fmt.Errorf("%s replay window=%q does not match variant id=%q", prefix, runCase.ReplayWindow, runCase.VariantID)
+	}
+	if runCase.StateComparison != stateComparisonExact && runCase.StateComparison != stateComparisonLogicalHorizon {
+		return fmt.Errorf("%s has invalid state comparison %q", prefix, runCase.StateComparison)
+	}
 	expectedRecoveryDir, err := normalizeRecoveryDir(runCase.ExpectedRecovery.Dir)
 	if err != nil {
 		return fmt.Errorf("%s: %w", prefix, err)
@@ -227,6 +240,9 @@ func validateRunCase(inventory RiskInventory, runCase RunCase) error {
 		powerLossReopenModeEnv:              runCase.ReopenMode,
 		powerLossProfileEnv:                 runCase.Profile,
 	}
+	if runCase.ReplayWindow != "" {
+		env[powerLossReplayWindowEnv] = runCase.ReplayWindow
+	}
 	witness := Witness{
 		ID:                     runCase.ID,
 		EvidenceTier:           EvidenceTierModeledCrash,
@@ -243,6 +259,8 @@ func validateRunCase(inventory RiskInventory, runCase RunCase) error {
 		TypedError:             runCase.ExpectedTypedError,
 		ExpectedRecoveryDir:    expectedRecoveryDir,
 		State:                  runCase.State,
+		StateComparison:        runCase.StateComparison,
+		ReplayWindow:           runCase.ReplayWindow,
 		CounterexampleID:       runCase.CounterexampleID,
 		NegativeControlID:      runCase.NegativeControlID,
 		Seed:                   runCase.Seed,

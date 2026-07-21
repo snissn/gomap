@@ -619,6 +619,37 @@ func TestValidateExecutedRecoveryMatchesFrozenExpectation(t *testing.T) {
 	}
 }
 
+func TestObservedWitnessStateLogicalHorizonIgnoresSlotParityAndGenerationCounters(t *testing.T) {
+	recovery := func(selectedSlot, slot0, slot1, generation, durableSeq string) recoveryTraceArtifact {
+		return recoveryTraceArtifact{Stats: map[string]string{
+			"treedb.profile.resolved":                 "command_wal_durable",
+			"treedb.applied_command_lsn":              "19",
+			"treedb.durable_root.selected_slot":       selectedSlot,
+			"treedb.durable_root.commit_seq":          "13",
+			"treedb.durable_root.durable_seq":         durableSeq,
+			"treedb.durable_root.freelist.generation": generation,
+			"treedb.durable_root.manifest.entries":    "9",
+			"treedb.durable_root.slot0.commit_seq":    slot0,
+			"treedb.durable_root.slot1.commit_seq":    slot1,
+			"treedb.command_wal.durable_wal_lsn":      "0",
+		}}
+	}
+	first, err := observedWitnessStateForComparison(recovery("1", "12", "13", "23", "10"), stateComparisonLogicalHorizon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := observedWitnessStateForComparison(recovery("0", "13", "12", "24", "11"), stateComparisonLogicalHorizon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatalf("logical states differ across equivalent slot/generation layouts:\nfirst=%+v\nsecond=%+v", first, second)
+	}
+	if first.RootMetaGeneration != "selected_commit_seq=13 fallback_commit_seq=12" || first.FreelistGeneration != "generation=persisted" || first.DurableLSN != "durable_wal_lsn=0 durable_root_commit_seq=13" {
+		t.Fatalf("unexpected logical state: %+v", first)
+	}
+}
+
 func TestValidateExecutedRecoveryRejectsPostHocOutcomeChange(t *testing.T) {
 	runCase := RunCase{
 		ID:               "rejected-read-write",

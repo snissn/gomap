@@ -15,20 +15,22 @@ import (
 )
 
 const (
-	EnvEvidenceDir        = "TREEDB_POWERLOSS_EVIDENCE_DIR"
-	EnvEvidenceCutPoint   = "TREEDB_POWERLOSS_EXPECT_CUT_POINT"
-	EnvEvidenceReopenMode = "TREEDB_POWERLOSS_REOPEN_MODE"
+	EnvEvidenceDir          = "TREEDB_POWERLOSS_EVIDENCE_DIR"
+	EnvEvidenceCutPoint     = "TREEDB_POWERLOSS_EXPECT_CUT_POINT"
+	EnvEvidenceReopenMode   = "TREEDB_POWERLOSS_REOPEN_MODE"
+	EnvEvidenceReplayWindow = "TREEDB_POWERLOSS_REPLAY_WINDOW"
 
 	EvidenceReopenReadWrite = "read-write"
 	EvidenceReopenReadOnly  = "read-only"
 )
 
 type EvidenceRequest struct {
-	Root       string
-	CutPoint   string
-	Selector   ReplaySelector
-	Occurrence int
-	ReopenMode string
+	Root         string
+	CutPoint     string
+	Selector     ReplaySelector
+	Occurrence   int
+	ReopenMode   string
+	ReplayWindow string
 }
 
 func (request EvidenceRequest) Enabled() bool {
@@ -53,6 +55,7 @@ type evidenceTrace struct {
 	VariantID          string   `json:"variant_id"`
 	Seed               string   `json:"seed"`
 	DeclaredCutPoint   string   `json:"declared_cut_point"`
+	ReplayWindow       string   `json:"replay_window,omitempty"`
 	ObservedEventCount int      `json:"observed_event_count"`
 	Events             []string `json:"events"`
 }
@@ -85,7 +88,8 @@ func EvidenceRequestFromEnv() (EvidenceRequest, error) {
 	root := os.Getenv(EnvEvidenceDir)
 	cutPoint := os.Getenv(EnvEvidenceCutPoint)
 	reopenMode := os.Getenv(EnvEvidenceReopenMode)
-	if root == "" && cutPoint == "" && reopenMode == "" {
+	replayWindow := os.Getenv(EnvEvidenceReplayWindow)
+	if root == "" && cutPoint == "" && reopenMode == "" && replayWindow == "" {
 		return EvidenceRequest{}, nil
 	}
 	if root == "" || cutPoint == "" || reopenMode == "" {
@@ -108,12 +112,16 @@ func EvidenceRequestFromEnv() (EvidenceRequest, error) {
 	if replayCutPoint != cutPoint {
 		return EvidenceRequest{}, errorsf("replay cut point %q does not match declared cut point %q", replayCutPoint, cutPoint)
 	}
+	if replayWindow != "" && replayWindow != selector.VariantID {
+		return EvidenceRequest{}, errorsf("evidence replay window %q does not match replay variant %q", replayWindow, selector.VariantID)
+	}
 	return EvidenceRequest{
-		Root:       root,
-		CutPoint:   cutPoint,
-		Selector:   selector,
-		Occurrence: replayOccurrence,
-		ReopenMode: reopenMode,
+		Root:         root,
+		CutPoint:     cutPoint,
+		Selector:     selector,
+		Occurrence:   replayOccurrence,
+		ReopenMode:   reopenMode,
+		ReplayWindow: replayWindow,
 	}, nil
 }
 
@@ -132,12 +140,9 @@ func BeginEvidenceFromEnv(model *Model, readOnly bool) (*EvidenceSession, error)
 		return nil, err
 	}
 	trace := portableEvidenceTrace(model.Trace())
-	cutPrefix := "cut:" + request.CutPoint + ":"
-	observed := 0
-	for _, event := range trace {
-		if strings.HasPrefix(event, cutPrefix) {
-			observed++
-		}
+	observed, err := replayWindowCutCount(trace, request.CutPoint, request.ReplayWindow)
+	if err != nil {
+		return nil, err
 	}
 	if observed == 0 {
 		return nil, errorsf("declared cut point %q was not observed", request.CutPoint)
@@ -173,11 +178,12 @@ func BeginEvidenceFromEnv(model *Model, readOnly bool) (*EvidenceSession, error)
 		return nil, err
 	}
 	if err := writeEvidenceJSON(filepath.Join(request.Root, "operation_trace.json"), evidenceTrace{
-		SchemaVersion:      "treedb-power-loss-operation-trace/v1",
+		SchemaVersion:      "treedb-power-loss-operation-trace/v2",
 		CutID:              request.Selector.CutID,
 		VariantID:          request.Selector.VariantID,
 		Seed:               strconv.FormatUint(request.Selector.Seed, 10),
 		DeclaredCutPoint:   request.CutPoint,
+		ReplayWindow:       request.ReplayWindow,
 		ObservedEventCount: observed,
 		Events:             trace,
 	}); err != nil {
@@ -212,6 +218,40 @@ func BeginEvidenceFromEnv(model *Model, readOnly bool) (*EvidenceSession, error)
 		stableTreeSHA256:   stableTreeSHA256,
 		stableFingerprint:  model.StableFingerprint(),
 	}, nil
+}
+
+func replayWindowCutCount(trace []string, cutPoint, replayWindow string) (int, error) {
+	cutPrefix := "cut:" + cutPoint + ":"
+	windowMarker := replayWindowMarker(replayWindow)
+	observed := 0
+	markerCount := 0
+	inWindow := replayWindow == ""
+	for _, event := range trace {
+		if strings.HasPrefix(event, "replay-window:") {
+			if replayWindow == "" {
+				return 0, errorsf("operation trace contains replay-window marker without a declared replay window")
+			}
+			if event != windowMarker {
+				return 0, errorsf("operation trace replay-window marker %q does not match declared replay window %q", event, replayWindow)
+			}
+			markerCount++
+			if markerCount > 1 {
+				return 0, errorsf("operation trace requires exactly one replay-window marker %q; found %d", windowMarker, markerCount)
+			}
+			inWindow = true
+			continue
+		}
+		if inWindow && strings.HasPrefix(event, cutPrefix) {
+			observed++
+		}
+	}
+	if replayWindow != "" && markerCount != 1 {
+		return 0, errorsf("operation trace requires exactly one replay-window marker %q; found %d", windowMarker, markerCount)
+	}
+	if replayWindow != "" && observed == 0 {
+		return 0, errorsf("operation trace replay-window marker %q does not precede a matching cut %q", windowMarker, cutPoint)
+	}
+	return observed, nil
 }
 
 func portableEvidenceTrace(trace []string) []string {
