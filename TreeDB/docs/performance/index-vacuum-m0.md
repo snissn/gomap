@@ -22,7 +22,7 @@ zero concurrent aborts, so an aborted run cannot become a timing baseline. The
 capture runs the three-build determinism, debt, shrink, and reopen gate before
 writing `fixture.json`.
 
-The legacy benchmark catalog includes 65,536 deterministic ordinary metadata
+The legacy benchmark catalog includes 131,072 deterministic ordinary metadata
 entries plus one live collection root. The entries bypass collection-root
 cloning and enlarge only the production system-tree rewrite inside the cutover
 lock, giving the maximum-pause stability gate enough real work. No synthetic

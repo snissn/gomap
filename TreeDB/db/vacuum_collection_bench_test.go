@@ -277,7 +277,7 @@ func vacuumCollectionLatencyPercentile(latencies []time.Duration, percentile int
 	return sorted[index-1]
 }
 
-const vacuumCollectionBenchmarkCatalogEntries = 65536
+const vacuumCollectionBenchmarkCatalogEntries = 131072
 
 func vacuumCollectionBenchmarkCatalog(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 	return vacuumCollectionCatalog(rootIDs, vacuumCollectionBenchmarkCatalogEntries)
