@@ -24,6 +24,12 @@ func TestBackgroundIndexVacuumConcurrentMutationIsRetryOnly(t *testing.T) {
 	if backgroundIndexVacuumShouldReport(backenddb.ErrVacuumRecoverableRootSetRequired) {
 		t.Fatal("recoverable-root-set fence classified as permanent background error")
 	}
+	if backgroundIndexVacuumShouldReport(backenddb.ErrRecoverableRootSetStale) {
+		t.Fatal("stale recoverable-root-set classified as permanent background error")
+	}
+	if backgroundIndexVacuumShouldReport(backenddb.ErrVacuumUnsupported) {
+		t.Fatal("unsupported capability classified as permanent background error")
+	}
 }
 
 func TestBackgroundIndexVacuumIdleUnchangedCommitSkipsStructuralWalks(t *testing.T) {
@@ -331,7 +337,6 @@ func TestBackgroundIndexVacuumTriggerPredicatesIndependentDebt(t *testing.T) {
 }
 
 func TestBackgroundIndexVacuumFreelistDebtTriggersVacuum(t *testing.T) {
-	t.Skip("deferred to #3681: successful online vacuum requires RecoverableRootSet convergence")
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum not supported on windows")
 	}
@@ -366,12 +371,13 @@ func TestBackgroundIndexVacuumFreelistDebtTriggersVacuum(t *testing.T) {
 }
 
 func TestBackgroundIndexVacuumCollectionRootDebtTriggersVacuum(t *testing.T) {
-	t.Skip("deferred to #3681: successful online vacuum requires RecoverableRootSet convergence")
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum not supported on windows")
 	}
 	d := openBackgroundVacuumTestDB(t, Options{
 		KeepRecent:                    1,
+		Durability:                    DurabilityWALOffRelaxed,
+		ResolvedProfile:               backenddb.ProfileNoWALFast,
 		BackgroundIndexVacuumInterval: -1,
 	})
 	seedBackgroundVacuumCollectionRootDebt(t, d)
@@ -440,13 +446,16 @@ func assertNoBackgroundVacuumFullFragmentationWalks(t *testing.T, counts map[bac
 	}
 }
 
-func TestBackgroundIndexVacuumRemainsDisabledUntilRecoverableRootSetFenced(t *testing.T) {
+func TestBackgroundIndexVacuumStartsWhenConfigured(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
 	dir := t.TempDir()
 
 	d, err := Open(Options{
 		Dir:                               dir,
 		KeepRecent:                        1,
-		BackgroundIndexVacuumInterval:     5 * time.Millisecond,
+		BackgroundIndexVacuumInterval:     time.Hour,
 		BackgroundIndexVacuumSpanRatioPPM: 1,
 	})
 	if err != nil {
@@ -454,13 +463,36 @@ func TestBackgroundIndexVacuumRemainsDisabledUntilRecoverableRootSetFenced(t *te
 	}
 
 	stats := d.Stats()
-	if got := stats["treedb.bg_vacuum.enabled"]; got != "false" {
-		t.Fatalf("background vacuum enabled=%q want false pending #3681", got)
+	if got := stats["treedb.bg_vacuum.enabled"]; got != "true" {
+		t.Fatalf("background vacuum enabled=%q want true", got)
 	}
 	if got := stats["treedb.bg_vacuum.vacuums"]; got != "0" {
-		t.Fatalf("background vacuum runs=%q want 0 pending #3681", got)
+		t.Fatalf("background vacuum runs=%q want 0 before first tick", got)
 	}
 
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}
+
+func TestBackgroundIndexVacuumDisabledIntervalStartsNoWorker(t *testing.T) {
+	d, err := Open(Options{
+		Dir:                           t.TempDir(),
+		BackgroundIndexVacuumInterval: -1,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	stats := d.Stats()
+	if got := stats["treedb.bg_vacuum.enabled"]; got != "false" {
+		t.Fatalf("background vacuum enabled=%q want false", got)
+	}
+	if got := stats["treedb.bg_vacuum.runs"]; got != "0" {
+		t.Fatalf("background vacuum runs=%q want 0", got)
+	}
+	if got := stats["treedb.bg_vacuum.trigger_probes"]; got != "0" {
+		t.Fatalf("background vacuum probes=%q want 0", got)
+	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
