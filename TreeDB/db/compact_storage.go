@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
@@ -265,6 +267,18 @@ type CompactStorageDebt struct {
 	LeafGCGenerations       int   `json:"leaf_gc_generations"`
 	LeafGCBytes             int64 `json:"leaf_gc_bytes"`
 	ZeroByteValueLogFiles   int   `json:"zero_byte_value_log_files"`
+
+	IndexVacuumRequired                    bool   `json:"index_vacuum_required"`
+	IndexVacuumReason                      string `json:"index_vacuum_reason"`
+	IndexVacuumTotalPages                  uint64 `json:"index_vacuum_total_pages"`
+	IndexVacuumUserPages                   uint64 `json:"index_vacuum_user_pages"`
+	IndexVacuumUserSpan                    uint64 `json:"index_vacuum_user_span"`
+	IndexVacuumUserSpanRatioPPM            uint64 `json:"index_vacuum_user_span_ratio_ppm"`
+	IndexVacuumFreelistReclaimablePages    uint64 `json:"index_vacuum_freelist_reclaimable_pages"`
+	IndexVacuumFreelistReclaimableRatioPPM uint64 `json:"index_vacuum_freelist_reclaimable_ratio_ppm"`
+	IndexVacuumCollectionRootPages         uint64 `json:"index_vacuum_collection_root_pages"`
+	IndexVacuumCollectionRootSpan          uint64 `json:"index_vacuum_collection_root_span"`
+	IndexVacuumCollectionRootSpanRatioPPM  uint64 `json:"index_vacuum_collection_root_span_ratio_ppm"`
 }
 
 // Empty reports whether the storage audit found no meaningful compaction debt.
@@ -277,15 +291,33 @@ func (d CompactStorageDebt) Empty() bool {
 		d.LeafPackBytes == 0 &&
 		d.LeafGCGenerations == 0 &&
 		d.LeafGCBytes == 0 &&
-		d.ZeroByteValueLogFiles == 0
+		d.ZeroByteValueLogFiles == 0 &&
+		!d.IndexVacuumRequired
 }
+
+// CompactStoragePhaseStatus identifies the terminal decision for a compaction
+// phase. Empty is retained for older phase records that do not need a policy
+// disposition.
+type CompactStoragePhaseStatus string
+
+const (
+	CompactStoragePhaseStatusPlanned     CompactStoragePhaseStatus = "planned"
+	CompactStoragePhaseStatusNotRequired CompactStoragePhaseStatus = "not_required"
+	CompactStoragePhaseStatusSucceeded   CompactStoragePhaseStatus = "succeeded"
+	CompactStoragePhaseStatusDeferred    CompactStoragePhaseStatus = "deferred"
+	CompactStoragePhaseStatusUnsupported CompactStoragePhaseStatus = "unsupported"
+	CompactStoragePhaseStatusFailed      CompactStoragePhaseStatus = "failed"
+)
 
 // CompactStoragePhaseStats records one phase in a full compaction run.
 type CompactStoragePhaseStats struct {
-	Name          string `json:"name"`
-	Skipped       bool   `json:"skipped,omitempty"`
-	SkipReason    string `json:"skip_reason,omitempty"`
-	WallTimeNanos int64  `json:"wall_time_nanos"`
+	Name          string                    `json:"name"`
+	Status        CompactStoragePhaseStatus `json:"status,omitempty"`
+	Required      bool                      `json:"required,omitempty"`
+	Reason        string                    `json:"reason,omitempty"`
+	Skipped       bool                      `json:"skipped,omitempty"`
+	SkipReason    string                    `json:"skip_reason,omitempty"`
+	WallTimeNanos int64                     `json:"wall_time_nanos"`
 }
 
 // CompactStorageAuditStats records shared reachability work and structural
@@ -322,6 +354,7 @@ type CompactStorageStats struct {
 	LeafGenerationPlan  LeafGenerationPlan               `json:"leaf_generation_plan"`
 	LeafGenerationPacks []LeafGenerationPackRunOnceStats `json:"leaf_generation_packs,omitempty"`
 	LeafGenerationGC    LeafGenerationGCStats            `json:"leaf_generation_gc"`
+	IndexVacuum         VacuumOnlineStats                `json:"index_vacuum"`
 
 	ZeroByteValueLogFilesDeleted int `json:"zero_byte_value_log_files_deleted,omitempty"`
 
@@ -419,8 +452,18 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	if err != nil {
 		return stats, err
 	}
+	initialIndexDebt, err := db.compactStorageIndexVacuumDebt(ctx, opts)
+	if err != nil {
+		return stats, err
+	}
+	mergeCompactStorageIndexDebt(&initialDebt, initialIndexDebt)
+	if !initialDebt.IndexVacuumRequired && stats.LeafGenerationGC.GenerationsRetiring > 0 {
+		initialDebt.IndexVacuumRequired = true
+		initialDebt.IndexVacuumReason = "leaf_generation"
+	}
 	stats.RemainingDebt = initialDebt
 	if opts.DryRun {
+		stats.Phases = append(stats.Phases, compactStorageIndexVacuumPlanPhase(initialDebt))
 		stats.After = before
 		stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized = compactStorageCompactionFlags(opts, initialDebt)
 		return stats, nil
@@ -595,32 +638,70 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 		return stats, err
 	}
 
-	indexVacuumSkipped := false
-	indexVacuumSkipReason := ""
-	if err := db.runCompactStoragePhase(&stats, "index-vacuum", func() error {
-		indexVacuumSkipped = false
-		indexVacuumSkipReason = ""
-		err := db.compactStorageVacuumIndexOnline(ctx, !maintenanceLocked)
-		if errors.Is(err, ErrVacuumUnsupported) {
-			indexVacuumSkipped = true
-			indexVacuumSkipReason = err.Error()
-			return nil
-		}
-		return err
-	}); err != nil {
-		return stats, err
+	indexDebt, err := db.compactStorageIndexVacuumDebt(ctx, opts)
+	if err != nil {
+		stats.Phases = append(stats.Phases, CompactStoragePhaseStats{
+			Name:       "index-vacuum",
+			Status:     CompactStoragePhaseStatusFailed,
+			Reason:     err.Error(),
+			Skipped:    true,
+			SkipReason: err.Error(),
+		})
+		return stats, fmt.Errorf("index-vacuum-plan: %w", err)
 	}
-	if indexVacuumSkipped {
-		if len(stats.Phases) > 0 {
-			stats.Phases[len(stats.Phases)-1].Skipped = true
-			stats.Phases[len(stats.Phases)-1].SkipReason = indexVacuumSkipReason
-		}
-	} else if err := db.runCompactStoragePhase(&stats, "checkpoint-after-index-vacuum", func() error {
-		return db.checkpoint(maintenanceLocked)
-	}); err != nil {
-		return stats, err
+	if !indexDebt.IndexVacuumRequired && stats.LeafGenerationGC.GenerationsRetiring > 0 {
+		indexDebt.IndexVacuumRequired = true
+		indexDebt.IndexVacuumReason = "leaf_generation"
 	}
-	if !indexVacuumSkipped {
+	indexVacuumCompleted := false
+	indexVacuumRetainedGuard := false
+	if !indexDebt.IndexVacuumRequired {
+		indexVacuumRetainedGuard = true
+		stats.Phases = append(stats.Phases, CompactStoragePhaseStats{
+			Name:       "index-vacuum",
+			Status:     CompactStoragePhaseStatusNotRequired,
+			Reason:     indexDebt.IndexVacuumReason,
+			Skipped:    true,
+			SkipReason: "no index vacuum policy debt",
+		})
+	} else {
+		vacuumErr := db.runCompactStoragePhase(&stats, "index-vacuum", func() error {
+			return db.compactStorageVacuumIndexOnline(ctx, !maintenanceLocked)
+		})
+		phase := &stats.Phases[len(stats.Phases)-1]
+		phase.Required = true
+		phase.Reason = indexDebt.IndexVacuumReason
+		switch {
+		case vacuumErr == nil:
+			phase.Status = CompactStoragePhaseStatusSucceeded
+			stats.IndexVacuum = db.vacuumOnlineStatsSnapshot()
+			indexVacuumCompleted = true
+		case errors.Is(vacuumErr, ErrVacuumUnsupported):
+			phase.Status = CompactStoragePhaseStatusUnsupported
+			phase.Reason = vacuumErr.Error()
+			phase.Skipped = true
+			phase.SkipReason = vacuumErr.Error()
+			indexVacuumRetainedGuard = true
+		case compactStorageIndexVacuumTransient(vacuumErr):
+			phase.Status = CompactStoragePhaseStatusDeferred
+			phase.Reason = vacuumErr.Error()
+			phase.Skipped = true
+			phase.SkipReason = vacuumErr.Error()
+			indexVacuumRetainedGuard = true
+		default:
+			phase.Status = CompactStoragePhaseStatusFailed
+			phase.Reason = vacuumErr.Error()
+			return stats, vacuumErr
+		}
+	}
+	if indexVacuumCompleted {
+		if err := db.runCompactStoragePhase(&stats, "checkpoint-after-index-vacuum", func() error {
+			return db.checkpoint(maintenanceLocked)
+		}); err != nil {
+			return stats, err
+		}
+	}
+	if !indexVacuumRetainedGuard {
 		if err := releaseIndexVacuumLeafGuard(); err != nil {
 			return stats, err
 		}
@@ -630,10 +711,16 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	if err := db.settleCompactStorageGC(ctx, opts, &stats, !maintenanceLocked, compactLeafLog, compactLeafPackCreatedFileIDs, leafPackPassesRemaining, auditSession, &compactLeafPackPlanState); err != nil {
 		return stats, err
 	}
+	if indexVacuumRetainedGuard && !indexDebt.IndexVacuumRequired {
+		if err := releaseIndexVacuumLeafGuard(); err != nil {
+			return stats, err
+		}
+		indexVacuumRetainedGuard = false
+	}
 	// If index vacuum was unsupported, keep leaf-generation pins through final
 	// audit, but drop the unrelated value-log set pin before value-log cleanup so
 	// zero-byte value_vlog segments are not kept alive by this guard.
-	if indexVacuumSkipped {
+	if indexVacuumRetainedGuard {
 		if err := releaseIndexVacuumLeafGuardValueLogPin(); err != nil {
 			return stats, err
 		}
@@ -655,17 +742,66 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 		}
 	}
 
+	var finalAudit CompactStorageStats
+	var finalDebt CompactStorageDebt
+	refreshFinalAudit := func() error {
+		finalAudit = CompactStorageStats{}
+		auditSession.valid = false
+		var auditErr error
+		finalDebt, auditErr = db.populateCompactStorageAudit(ctx, opts, &finalAudit, !maintenanceLocked, nil, compactLeafPackCreatedFileIDs, auditSession)
+		if auditErr != nil {
+			return auditErr
+		}
+		finalIndexDebt, auditErr := db.compactStorageIndexVacuumDebt(ctx, opts)
+		if auditErr != nil {
+			return auditErr
+		}
+		mergeCompactStorageIndexDebt(&finalDebt, finalIndexDebt)
+		return nil
+	}
+	if err := refreshFinalAudit(); err != nil {
+		return stats, err
+	}
+	if !indexVacuumRetainedGuard && finalDebt.IndexVacuumRequired {
+		vacuumErr := db.runCompactStoragePhase(&stats, "index-vacuum-settle", func() error {
+			return db.compactStorageVacuumIndexOnline(ctx, !maintenanceLocked)
+		})
+		phase := &stats.Phases[len(stats.Phases)-1]
+		phase.Required = true
+		phase.Reason = finalDebt.IndexVacuumReason
+		switch {
+		case vacuumErr == nil:
+			phase.Status = CompactStoragePhaseStatusSucceeded
+			stats.IndexVacuum = db.vacuumOnlineStatsSnapshot()
+			if err := db.runCompactStoragePhase(&stats, "checkpoint-after-index-vacuum-settle", func() error {
+				return db.checkpoint(maintenanceLocked)
+			}); err != nil {
+				return stats, err
+			}
+			if err := refreshFinalAudit(); err != nil {
+				return stats, err
+			}
+		case errors.Is(vacuumErr, ErrVacuumUnsupported):
+			phase.Status = CompactStoragePhaseStatusUnsupported
+			phase.Reason = vacuumErr.Error()
+			phase.Skipped = true
+			phase.SkipReason = vacuumErr.Error()
+		case compactStorageIndexVacuumTransient(vacuumErr):
+			phase.Status = CompactStoragePhaseStatusDeferred
+			phase.Reason = vacuumErr.Error()
+			phase.Skipped = true
+			phase.SkipReason = vacuumErr.Error()
+		default:
+			phase.Status = CompactStoragePhaseStatusFailed
+			phase.Reason = vacuumErr.Error()
+			return stats, vacuumErr
+		}
+	}
 	after, err := compactStorageUsage(db.dir)
 	if err != nil {
 		return stats, err
 	}
 	stats.After = after
-
-	var finalAudit CompactStorageStats
-	finalDebt, err := db.populateCompactStorageAudit(ctx, opts, &finalAudit, !maintenanceLocked, nil, compactLeafPackCreatedFileIDs, auditSession)
-	if err != nil {
-		return stats, err
-	}
 	stats.ValueLogRewritePlan = finalAudit.ValueLogRewritePlan
 	stats.LeafGenerationPlan = finalAudit.LeafGenerationPlan
 	addCompactStorageAuditStats(&stats.Audit, finalAudit.Audit)
@@ -691,11 +827,49 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	return stats, nil
 }
 
-// compactStorageVacuumIndexOnline remains fenced until CompactStorage owns the
-// production phase status and completion semantics. The production backend is
-// enabled independently by VacuumIndexOnline.
-func (db *DB) compactStorageVacuumIndexOnline(context.Context, bool) error {
-	return errors.Join(ErrVacuumUnsupported, ErrVacuumRecoverableRootSetRequired)
+func compactStorageIndexVacuumPlanPhase(debt CompactStorageDebt) CompactStoragePhaseStats {
+	phase := CompactStoragePhaseStats{Name: "index-vacuum", Reason: debt.IndexVacuumReason}
+	if !debt.IndexVacuumRequired {
+		phase.Status = CompactStoragePhaseStatusNotRequired
+		phase.Skipped = true
+		phase.SkipReason = "no index vacuum policy debt"
+		return phase
+	}
+	phase.Required = true
+	if runtime.GOOS == "windows" {
+		phase.Status = CompactStoragePhaseStatusUnsupported
+		phase.Reason = ErrVacuumUnsupported.Error()
+		phase.Skipped = true
+		phase.SkipReason = ErrVacuumUnsupported.Error()
+		return phase
+	}
+	phase.Status = CompactStoragePhaseStatusPlanned
+	return phase
+}
+
+func (db *DB) compactStorageIndexVacuumDebt(ctx context.Context, opts CompactStorageOptions) (CompactStorageDebt, error) {
+	report, err := db.IndexVacuumTriggerReportContext(ctx)
+	if err != nil {
+		return CompactStorageDebt{}, err
+	}
+	var debt CompactStorageDebt
+	populateCompactStorageIndexDebt(opts, report, &debt)
+	return debt, nil
+}
+
+func compactStorageIndexVacuumTransient(err error) bool {
+	return errors.Is(err, ErrVacuumConcurrentMutation) ||
+		errors.Is(err, ErrVacuumInProgress) ||
+		errors.Is(err, ErrRecoverableRootSetStale) ||
+		errors.Is(err, ErrDurableWALCleanupProofStale) ||
+		errors.Is(err, rootpublication.ErrResourcePinned)
+}
+
+func (db *DB) compactStorageVacuumIndexOnline(ctx context.Context, lockMaintenance bool) error {
+	if db != nil && db.compactStorageVacuumIndexOnlineHook != nil {
+		return db.compactStorageVacuumIndexOnlineHook(ctx, lockMaintenance)
+	}
+	return db.vacuumIndexOnline(ctx, lockMaintenance)
 }
 
 func compactStorageCompactionFlags(opts CompactStorageOptions, debt CompactStorageDebt) (fullyCompacted bool, policyFullyCompacted bool, byteMinimized bool) {
@@ -1296,6 +1470,78 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 		debt.ZeroByteValueLogFiles = zeroBytes
 	}
 	return debt, nil
+}
+
+const (
+	compactStorageIndexUserSpanRatioPPM           uint64 = 1_200_000
+	compactStorageIndexFreelistReclaimablePages   uint64 = 64
+	compactStorageIndexFreelistReclaimablePPM     uint64 = 250_000
+	compactStorageIndexCollectionRootPages        uint64 = 16
+	compactStorageIndexCollectionRootSpanRatioPPM uint64 = 1_200_000
+)
+
+func populateCompactStorageIndexDebt(opts CompactStorageOptions, report IndexVacuumTriggerReport, debt *CompactStorageDebt) {
+	if debt == nil {
+		return
+	}
+	debt.IndexVacuumReason = "none"
+	debt.IndexVacuumTotalPages = report.TotalPages
+	debt.IndexVacuumUserPages = report.UserPages
+	debt.IndexVacuumUserSpan = report.UserSpan
+	debt.IndexVacuumUserSpanRatioPPM = report.UserSpanRatioPPM
+	debt.IndexVacuumFreelistReclaimablePages = report.FreelistReclaimablePages
+	debt.IndexVacuumFreelistReclaimableRatioPPM = report.FreelistReclaimableRatioPPM
+	debt.IndexVacuumCollectionRootPages = report.CollectionRootPages
+	debt.IndexVacuumCollectionRootSpan = report.CollectionRootSpan
+	debt.IndexVacuumCollectionRootSpanRatioPPM = report.CollectionRootSpanRatioPPM
+
+	if opts.Mode == CompactStorageExhaustive {
+		switch {
+		case report.FreelistReclaimablePages > 0:
+			debt.IndexVacuumRequired = true
+			debt.IndexVacuumReason = "freelist"
+		case report.UserPages > 0 && report.UserSpan > report.UserPages:
+			debt.IndexVacuumRequired = true
+			debt.IndexVacuumReason = "user"
+		case report.CollectionRootPages > 0 && report.CollectionRootSpan > report.CollectionRootPages:
+			debt.IndexVacuumRequired = true
+			debt.IndexVacuumReason = "collection_roots"
+		}
+		return
+	}
+
+	switch {
+	case report.UserPages > 0 && report.UserSpanRatioPPM >= compactStorageIndexUserSpanRatioPPM:
+		debt.IndexVacuumRequired = true
+		debt.IndexVacuumReason = "user"
+	case report.FreelistReclaimableValid &&
+		report.FreelistReclaimablePages >= compactStorageIndexFreelistReclaimablePages &&
+		report.FreelistReclaimableRatioPPM >= compactStorageIndexFreelistReclaimablePPM:
+		debt.IndexVacuumRequired = true
+		debt.IndexVacuumReason = "freelist"
+	case report.CollectionRootSpanRatioValid &&
+		report.CollectionRootPages >= compactStorageIndexCollectionRootPages &&
+		report.CollectionRootSpanRatioPPM >= compactStorageIndexCollectionRootSpanRatioPPM:
+		debt.IndexVacuumRequired = true
+		debt.IndexVacuumReason = "collection_roots"
+	}
+}
+
+func mergeCompactStorageIndexDebt(dst *CompactStorageDebt, src CompactStorageDebt) {
+	if dst == nil {
+		return
+	}
+	dst.IndexVacuumRequired = src.IndexVacuumRequired
+	dst.IndexVacuumReason = src.IndexVacuumReason
+	dst.IndexVacuumTotalPages = src.IndexVacuumTotalPages
+	dst.IndexVacuumUserPages = src.IndexVacuumUserPages
+	dst.IndexVacuumUserSpan = src.IndexVacuumUserSpan
+	dst.IndexVacuumUserSpanRatioPPM = src.IndexVacuumUserSpanRatioPPM
+	dst.IndexVacuumFreelistReclaimablePages = src.IndexVacuumFreelistReclaimablePages
+	dst.IndexVacuumFreelistReclaimableRatioPPM = src.IndexVacuumFreelistReclaimableRatioPPM
+	dst.IndexVacuumCollectionRootPages = src.IndexVacuumCollectionRootPages
+	dst.IndexVacuumCollectionRootSpan = src.IndexVacuumCollectionRootSpan
+	dst.IndexVacuumCollectionRootSpanRatioPPM = src.IndexVacuumCollectionRootSpanRatioPPM
 }
 
 func (db *DB) compactStorageFencedUnreferencedValueLogIDs(ctx context.Context, opts CompactStorageOptions) ([]uint32, int64, error) {

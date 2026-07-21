@@ -121,8 +121,8 @@ func TestCompactStorageFullPacksLeafGenerationDebtOffline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompactStorage: %v", err)
 	}
-	if !stats.FullyCompacted {
-		t.Fatalf("FullyCompacted=false remaining debt=%+v", stats.RemainingDebt)
+	if stats.FullyCompacted || stats.PolicyFullyCompacted || stats.ByteMinimized || stats.RemainingDebt.LeafGCGenerations == 0 {
+		t.Fatalf("retained leaf generation overstated completion: %+v", stats)
 	}
 	if len(stats.LeafGenerationPacks) == 0 || !stats.LeafGenerationPacks[0].Ran {
 		t.Fatalf("expected at least one leaf-generation pack run, packs=%+v", stats.LeafGenerationPacks)

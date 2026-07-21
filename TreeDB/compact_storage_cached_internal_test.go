@@ -578,8 +578,8 @@ func TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters(t *testing
 	if err != nil {
 		t.Fatalf("CompactStorage: %v", err)
 	}
-	if !compact.FullyCompacted {
-		t.Fatalf("CompactStorage reported remaining debt before close: %+v", compact.RemainingDebt)
+	if compact.FullyCompacted || compact.PolicyFullyCompacted || compact.ByteMinimized || compact.RemainingDebt.LeafGCGenerations == 0 {
+		t.Fatalf("retained leaf generation overstated completion: %+v", compact)
 	}
 	if err := compactor.Close(); err != nil {
 		t.Fatalf("close compactor: %v", err)

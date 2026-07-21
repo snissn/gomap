@@ -2541,7 +2541,7 @@ func TestCompactStorageHoldsMaintenanceLockAcrossPhases(t *testing.T) {
 	}
 }
 
-func TestCompactStorageKeepsRetiringLeafGenerationWhenIndexVacuumIsFenced(t *testing.T) {
+func TestCompactStorageReportsRetiringLeafGenerationAfterIndexVacuum(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("index vacuum is unsupported on Windows; skipped-vacuum guard intentionally keeps leaf sources pinned")
 	}
@@ -2583,11 +2583,15 @@ func TestCompactStorageKeepsRetiringLeafGenerationWhenIndexVacuumIsFenced(t *tes
 	if !closedPinned {
 		t.Fatal("phase hook did not close pinned snapshot")
 	}
-	if !stats.FullyCompacted {
-		t.Fatalf("FullyCompacted=false remaining debt=%+v", stats.RemainingDebt)
+	if stats.FullyCompacted || stats.PolicyFullyCompacted || stats.ByteMinimized {
+		t.Fatalf("retiring leaf generation overstated completion: %+v", stats)
 	}
-	if !compactStoragePhaseSkippedWithReason(stats.Phases, "index-vacuum", ErrVacuumRecoverableRootSetRequired.Error()) {
-		t.Fatalf("recoverable-root-set index vacuum fence missing: %+v", stats.Phases)
+	phase := compactStorageIndexVacuumPhase(t, stats)
+	if phase.Status != CompactStoragePhaseStatusSucceeded || !phase.Required || phase.Reason != "leaf_generation" {
+		t.Fatalf("index vacuum phase=%+v want required leaf-generation success", phase)
+	}
+	if stats.RemainingDebt.LeafGCGenerations == 0 {
+		t.Fatalf("retiring leaf generation missing from final debt: %+v", stats.RemainingDebt)
 	}
 	if _, err := os.Stat(path1); err != nil {
 		t.Fatalf("retiring leaf source removed while index vacuum is fenced: %v", err)
@@ -2637,8 +2641,8 @@ func TestCompactStorageKeepsPackedLeafSourcesUntilIndexVacuum(t *testing.T) {
 	if !sawLeafGC {
 		t.Fatal("leaf-generation-gc phase hook did not run")
 	}
-	if !stats.FullyCompacted {
-		t.Fatalf("FullyCompacted=false debt=%+v", stats.RemainingDebt)
+	if stats.FullyCompacted || stats.PolicyFullyCompacted || stats.RemainingDebt.LeafGCGenerations == 0 {
+		t.Fatalf("retained packed source must remain reported debt: %+v", stats)
 	}
 }
 
@@ -2803,8 +2807,8 @@ func TestCompactStorageReportsAndCompactsSelectableLeafPackDebt(t *testing.T) {
 	if stats.RemainingDebt.LeafPackGenerations != 0 || stats.RemainingDebt.LeafPackBytes != 0 {
 		t.Fatalf("remaining leaf-pack debt=%+v, want none", stats.RemainingDebt)
 	}
-	if !stats.FullyCompacted {
-		t.Fatalf("FullyCompacted=false remaining debt=%+v", stats.RemainingDebt)
+	if stats.FullyCompacted || stats.PolicyFullyCompacted || stats.RemainingDebt.LeafGCGenerations == 0 {
+		t.Fatalf("retained source must remain reported leaf-GC debt: %+v", stats)
 	}
 }
 
@@ -2962,8 +2966,11 @@ func TestCompactStorageStopsLeafPackOnLowYieldResidualWithinPassBudget(t *testin
 	if len(stats.LeafGenerationPacks) > 2 {
 		t.Fatalf("leaf pack did not stop after low-yield residual, packs=%+v", stats.LeafGenerationPacks)
 	}
-	if !stats.FullyCompacted || stats.RemainingDebt.LeafPackGenerations != 0 || stats.RemainingDebt.LeafPackBytes != 0 {
-		t.Fatalf("expected bounded full compaction after low-yield residual, fully=%t debt=%+v", stats.FullyCompacted, stats.RemainingDebt)
+	if stats.RemainingDebt.LeafPackGenerations != 0 || stats.RemainingDebt.LeafPackBytes != 0 {
+		t.Fatalf("expected bounded leaf-pack policy convergence, debt=%+v", stats.RemainingDebt)
+	}
+	if stats.FullyCompacted || stats.PolicyFullyCompacted || stats.RemainingDebt.LeafGCGenerations == 0 {
+		t.Fatalf("retained leaf-GC debt must keep completion false: %+v", stats)
 	}
 }
 
@@ -3330,8 +3337,8 @@ func TestCompactStorageExhaustiveSealsCurrentLeafGeneration(t *testing.T) {
 	if !compactStoragePhaseSeen(stats.Phases, "seal-current-leaf-generation") {
 		t.Fatalf("missing seal-current-leaf-generation phase: %+v", stats.Phases)
 	}
-	if !stats.ByteMinimized || !stats.FullyCompacted || !stats.PolicyFullyCompacted {
-		t.Fatalf("unexpected compacted flags: byte=%t fully=%t policy=%t debt=%+v", stats.ByteMinimized, stats.FullyCompacted, stats.PolicyFullyCompacted, stats.RemainingDebt)
+	if stats.ByteMinimized || stats.FullyCompacted || stats.PolicyFullyCompacted || stats.RemainingDebt.LeafGCGenerations == 0 {
+		t.Fatalf("exhaustive retained source overstated completion: byte=%t fully=%t policy=%t debt=%+v", stats.ByteMinimized, stats.FullyCompacted, stats.PolicyFullyCompacted, stats.RemainingDebt)
 	}
 	if len(stats.LeafGenerationPacks) == 0 || !stats.LeafGenerationPacks[0].Ran {
 		t.Fatalf("expected exhaustive leaf pack to run after sealing current generation: %+v", stats.LeafGenerationPacks)

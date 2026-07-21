@@ -3,9 +3,11 @@ package db
 import (
 	"sort"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
-const compactStorageMeasurementSchemaVersion = 2
+const compactStorageMeasurementSchemaVersion = 3
 
 type compactStorageMeasurementFixture struct {
 	Name                      string `json:"name"`
@@ -33,10 +35,13 @@ const (
 )
 
 type compactStorageMeasurementPhase struct {
-	Name          string `json:"name"`
-	Skipped       bool   `json:"skipped"`
-	SkipReason    string `json:"skip_reason"`
-	WallTimeNanos int64  `json:"wall_time_nanos"`
+	Name          string                    `json:"name"`
+	Status        CompactStoragePhaseStatus `json:"status"`
+	Required      bool                      `json:"required"`
+	Reason        string                    `json:"reason"`
+	Skipped       bool                      `json:"skipped"`
+	SkipReason    string                    `json:"skip_reason"`
+	WallTimeNanos int64                     `json:"wall_time_nanos"`
 }
 
 type compactStorageMeasurementStableCall struct {
@@ -94,19 +99,31 @@ type compactStorageMeasurementValueLog struct {
 }
 
 type compactStorageMeasurementVacuum struct {
-	Availability      compactStorageMeasurementAvailability `json:"availability"`
-	Attempted         bool                                  `json:"attempted"`
-	Ran               bool                                  `json:"ran"`
-	PlanReason        string                                `json:"plan_reason"`
-	SkipReason        string                                `json:"skip_reason"`
-	ClonePages        uint64                                `json:"clone_pages"`
-	RewritePages      uint64                                `json:"rewrite_pages"`
-	CloneBytes        int64                                 `json:"clone_bytes"`
-	RewriteBytes      int64                                 `json:"rewrite_bytes"`
-	ReclaimedPages    int                                   `json:"reclaimed_pages"`
-	ReclaimedBytes    int64                                 `json:"reclaimed_bytes"`
-	StableCalls       uint64                                `json:"stable_calls"`
-	StableCallCounter compactStorageMeasurementAvailability `json:"stable_call_counter"`
+	Availability             compactStorageMeasurementAvailability `json:"availability"`
+	Status                   CompactStoragePhaseStatus             `json:"status"`
+	Required                 bool                                  `json:"required"`
+	Attempted                bool                                  `json:"attempted"`
+	Ran                      bool                                  `json:"ran"`
+	PlanReason               string                                `json:"plan_reason"`
+	SkipReason               string                                `json:"skip_reason"`
+	ClonePages               uint64                                `json:"clone_pages"`
+	RewritePages             uint64                                `json:"rewrite_pages"`
+	CloneBytes               int64                                 `json:"clone_bytes"`
+	RewriteBytes             int64                                 `json:"rewrite_bytes"`
+	ReclaimedPages           int                                   `json:"reclaimed_pages"`
+	ReclaimedBytes           int64                                 `json:"reclaimed_bytes"`
+	StableCalls              uint64                                `json:"stable_calls"`
+	StableCallCounter        compactStorageMeasurementAvailability `json:"stable_call_counter"`
+	TotalWallTimeNanos       int64                                 `json:"total_wall_time_nanos"`
+	UserTreeTimeNanos        int64                                 `json:"user_tree_time_nanos"`
+	SystemReserveTimeNanos   int64                                 `json:"system_reserve_time_nanos"`
+	CollectionBasisTimeNanos int64                                 `json:"collection_basis_time_nanos"`
+	PreflushTimeNanos        int64                                 `json:"preflush_time_nanos"`
+	CutoverTimeNanos         int64                                 `json:"cutover_time_nanos"`
+	SystemTreeTimeNanos      int64                                 `json:"system_tree_time_nanos"`
+	FinalPagerSyncTimeNanos  int64                                 `json:"final_pager_sync_time_nanos"`
+	SwapPublishTimeNanos     int64                                 `json:"swap_publish_time_nanos"`
+	MaxWriterPauseNanos      int64                                 `json:"max_writer_pause_nanos"`
 }
 
 type compactStorageMeasurementCheckpoint struct {
@@ -137,6 +154,10 @@ type compactStorageMeasurementAllocation struct {
 	AllocationObjects uint64 `json:"allocation_objects"`
 	HeapAllocBefore   uint64 `json:"heap_alloc_before"`
 	HeapAllocAfter    uint64 `json:"heap_alloc_after"`
+	HeapInuseBefore   uint64 `json:"heap_inuse_before"`
+	HeapInuseAfter    uint64 `json:"heap_inuse_after"`
+	HeapSysBefore     uint64 `json:"heap_sys_before"`
+	HeapSysAfter      uint64 `json:"heap_sys_after"`
 }
 
 type compactStorageMeasurement struct {
@@ -191,18 +212,42 @@ func newCompactStorageMeasurementWithPlan(
 	}
 	for _, phase := range stats.Phases {
 		m.Phases = append(m.Phases, compactStorageMeasurementPhase{
-			Name: phase.Name, Skipped: phase.Skipped, SkipReason: phase.SkipReason, WallTimeNanos: phase.WallTimeNanos,
+			Name: phase.Name, Status: phase.Status, Required: phase.Required, Reason: phase.Reason,
+			Skipped: phase.Skipped, SkipReason: phase.SkipReason, WallTimeNanos: phase.WallTimeNanos,
 		})
 		m.ApplyWallTimeNanos += phase.WallTimeNanos
-		if phase.Name == "index-vacuum" {
-			m.Vacuum.Attempted = true
-			m.Vacuum.Ran = !phase.Skipped
+		if phase.Name == "index-vacuum" || phase.Name == "index-vacuum-settle" {
+			m.Vacuum.Status = phase.Status
+			m.Vacuum.Required = phase.Required
+			m.Vacuum.Attempted = phase.Required && phase.Status != CompactStoragePhaseStatusPlanned
+			m.Vacuum.Ran = phase.Status == CompactStoragePhaseStatusSucceeded
+			m.Vacuum.PlanReason = phase.Reason
 			m.Vacuum.SkipReason = phase.SkipReason
-			if phase.Skipped {
-				m.Vacuum.PlanReason = "production-index-vacuum-unavailable"
-			}
 		}
 	}
+	m.Vacuum.ClonePages = stats.IndexVacuum.PrecloneTraversalPages +
+		stats.IndexVacuum.RecloneTraversalPages + stats.IndexVacuum.CutoverCloneTraversalPages
+	m.Vacuum.CloneBytes = int64(m.Vacuum.ClonePages) * int64(page.PageSize)
+	beforeIndexBytes := compactStorageMeasurementUsageBytes(stats.Before, "index")
+	afterIndexBytes := compactStorageMeasurementUsageBytes(stats.After, "index")
+	if afterIndexBytes > 0 {
+		m.Vacuum.RewriteBytes = afterIndexBytes
+		m.Vacuum.RewritePages = uint64((afterIndexBytes + int64(page.PageSize) - 1) / int64(page.PageSize))
+	}
+	if beforeIndexBytes > afterIndexBytes {
+		m.Vacuum.ReclaimedBytes = beforeIndexBytes - afterIndexBytes
+		m.Vacuum.ReclaimedPages = int(m.Vacuum.ReclaimedBytes / int64(page.PageSize))
+	}
+	m.Vacuum.TotalWallTimeNanos = stats.IndexVacuum.TotalDuration.Nanoseconds()
+	m.Vacuum.UserTreeTimeNanos = stats.IndexVacuum.UserTreeDuration.Nanoseconds()
+	m.Vacuum.SystemReserveTimeNanos = stats.IndexVacuum.SystemReserveDuration.Nanoseconds()
+	m.Vacuum.CollectionBasisTimeNanos = stats.IndexVacuum.CollectionBasisDuration.Nanoseconds()
+	m.Vacuum.PreflushTimeNanos = stats.IndexVacuum.PreflushDuration.Nanoseconds()
+	m.Vacuum.CutoverTimeNanos = stats.IndexVacuum.CutoverDuration.Nanoseconds()
+	m.Vacuum.SystemTreeTimeNanos = stats.IndexVacuum.SystemTreeDuration.Nanoseconds()
+	m.Vacuum.FinalPagerSyncTimeNanos = stats.IndexVacuum.FinalPagerSyncDuration.Nanoseconds()
+	m.Vacuum.SwapPublishTimeNanos = stats.IndexVacuum.SwapPublishDuration.Nanoseconds()
+	m.Vacuum.MaxWriterPauseNanos = stats.IndexVacuum.MaxWriterPause.Nanoseconds()
 	for _, run := range stats.LeafGenerationPacks {
 		m.LeafPack.Attempts++
 		m.LeafPack.GenerationsPlanned += len(run.Selection.GenerationIDs)
@@ -251,10 +296,19 @@ func newCompactStorageMeasurementWithPlan(
 	if recorder != nil {
 		m.StableCalls = recorder.measurements()
 		m.Checkpoints = recorder.checkpointMeasurements(stats.Phases)
-		m.Vacuum.StableCalls = recorder.phaseCallCount("index-vacuum")
+		m.Vacuum.StableCalls = recorder.phaseCallCount("index-vacuum") + recorder.phaseCallCount("index-vacuum-settle")
 		m.Vacuum.StableCallCounter = compactStorageMeasurementObserved
 	}
 	return m
+}
+
+func compactStorageMeasurementUsageBytes(usages []CompactStorageUsage, name string) int64 {
+	for _, usage := range usages {
+		if usage.Name == name {
+			return usage.Bytes
+		}
+	}
+	return 0
 }
 
 func compactStorageMeasurementLatencyFor(values []time.Duration) compactStorageMeasurementLatency {

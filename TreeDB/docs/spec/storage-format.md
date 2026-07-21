@@ -2494,6 +2494,18 @@ Applied compaction is serialized with other backend maintenance for the full
 multi-phase sequence. Planning mode reports debt without mutating storage and is
 safe for read-only opens.
 
+Index-vacuum planning uses bounded pager metadata: total/user page span,
+freelist reclaimable pages, and collection-root span. The phase report is one of
+`planned`, `not_required`, `succeeded`, `deferred`, `unsupported`, or `failed`
+and carries whether work was required plus its reason. A successful online
+replacement rebuilds every recovery-selectable root under one
+`RecoverableRootSet`, atomically rebinds the live runtime, and is followed by a
+checkpoint. Index-only replacement does not rewrite or retire persistent value
+or leaf-log files. Completion flags remain false while required index or other
+storage-domain debt remains. After releasing the leaf-generation guard,
+CompactStorage performs one bounded leaf-GC settle and one debt-driven final
+index replacement so work created by earlier maintenance phases is not hidden.
+
 In cached mode, public maintenance wrappers checkpoint first, protect cached
 value-log paths, reserve rewrite RIDs from the live cached allocator, and
 reconcile cached split value-log writers after backend maintenance so later

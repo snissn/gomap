@@ -29,7 +29,7 @@ resource-specific reachability projection.
 | Raw and packed outer-leaf generations | `TreeDB/db/leaf_generation_gc.go` | scans raw leaf FileIDs from every captured root, resolves them through every retained leaf-generation manifest, preserves FileID reuse/ABA generations, and revalidates before zombie publication | active |
 | Leaf pack/rewrite sources | `TreeDB/db/leaf_generation_pack.go`, `TreeDB/db/compact_storage.go` | replacement output is stabilized and published first; physical retirement is exclusively owned by capability-backed leaf-generation GC | active |
 | Column, dictionary, template, typed-column, vector-graph, text, and query-ready assets | `TreeDB/collections/column_asset_gc.go` and `column_asset_rewrite.go` | scans each captured collection catalog/manifest, pins exact referenced segment identities, protects published generations replayable from an older durable WAL frontier, and revalidates before `BeginDeleteAt`. Current query-ready base/delta/consolidated assets remain rebuildable and non-authoritative, but share the same exact-identity retirement gate | active |
-| Online index vacuum/replacement | `TreeDB/db/vacuum_online.go`, `TreeDB/public.go`, and `TreeDB/bg_vacuum.go` | the production entry captures a DB-minted capability, rebuilds both durable slots and their per-root resource closure, revalidates before namespace mutation, and atomically rebinds the live publication runtime; the public wrapper checkpoints cached state before replacement and reconciles it afterward | active on supported writable opens; `CompactStorage` policy remains owned by #3946 |
+| Online index vacuum/replacement | `TreeDB/db/vacuum_online.go`, `TreeDB/public.go`, `TreeDB/bg_vacuum.go`, and `TreeDB/db/compact_storage.go` | the production entry captures a DB-minted capability, rebuilds both durable slots and their per-root resource closure, revalidates before namespace mutation, and atomically rebinds the live publication runtime; public and CompactStorage wrappers checkpoint cached state around successful replacement and reconcile it afterward | active on supported writable opens; CompactStorage reports typed policy outcomes |
 | Offline `CompactIndex` | `TreeDB/db/db.go` | appends and publishes new pages in the same index namespace; it does not unlink or replace the index file. Page eligibility is governed by the page rule below | no external unlink |
 | Graveyard extraction and page/freelist reuse | COW allocator and root-reuse paths from #3678 | `RecoverableRootSet` registers the oldest captured commit sequence and holds the root-reuse read fence; actual page eligibility remains the #3678 generation rule | delegated to #3678 |
 | Stable unlink/rename instrumentation | `TreeDB/db/namespace_mutation.go`, `TreeDB/internal/valuelog/stable_resource.go`, and collection stable deleters | exact identity, namespace lease, unlink observation, and directory-sync failure handling remain the PR #3706 contract; #3681 adds root authority before those operations | inherited from PR #3706 |
@@ -121,8 +121,9 @@ separately exposed by `last_retry_reason`, `last_outcome`, and their cumulative
 counters. `Close` cancels an active pass and waits for the worker before closing
 maintenance or storage resources.
 
-This activation does not change `CompactStorage` completion policy, which
-remains owned by #3946.
+`CompactStorage` consumes this production path when its bounded index-debt
+planner selects work. Transient capability invalidation is reported as deferred
+debt; it is never converted into successful compaction.
 
 ## Verification map
 

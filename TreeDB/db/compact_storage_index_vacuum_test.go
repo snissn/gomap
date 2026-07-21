@@ -152,6 +152,10 @@ func TestCompactStorageIndexVacuumHighDebtUsesProductionAndReportsFinalAudit(t *
 				_ = d.Close()
 				t.Fatalf("successful index vacuum phase=%+v", phase)
 			}
+			if stats.IndexVacuum.TotalDuration <= 0 || stats.IndexVacuum.PrecloneTraversalPages == 0 {
+				_ = d.Close()
+				t.Fatalf("successful index vacuum omitted production timing/work stats: %+v", stats.IndexVacuum)
+			}
 			if stats.RemainingDebt.IndexVacuumRequired || stats.RemainingDebt.IndexVacuumFreelistReclaimablePages != 0 {
 				_ = d.Close()
 				t.Fatalf("successful final audit is not truthful: %+v", stats.RemainingDebt)
@@ -208,25 +212,30 @@ func TestCompactStorageIndexVacuumPermanentFailureIsReported(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("online index replacement is unsupported on Windows")
 	}
-	dir := t.TempDir()
-	d, fixture := openVacuumM0Fixture(t, vacuumM0Options(dir))
-	defer func() { _ = d.Close() }()
-	wantErr := errors.New("injected permanent index vacuum failure")
-	d.compactStorageVacuumIndexOnlineHook = func(context.Context, bool) error { return wantErr }
-	t.Cleanup(func() { d.compactStorageVacuumIndexOnlineHook = nil })
+	for _, wantErr := range []error{
+		errors.New("injected permanent index vacuum failure"),
+		ErrVacuumRecoverableRootSetRequired,
+	} {
+		t.Run(wantErr.Error(), func(t *testing.T) {
+			dir := t.TempDir()
+			d, fixture := openVacuumM0Fixture(t, vacuumM0Options(dir))
+			defer func() { _ = d.Close() }()
+			d.compactStorageVacuumIndexOnlineHook = func(context.Context, bool) error { return wantErr }
 
-	stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{Mode: CompactStorageFull})
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("CompactStorage error=%v want permanent cause %v", err, wantErr)
+			stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{Mode: CompactStorageFull})
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("CompactStorage error=%v want permanent cause %v", err, wantErr)
+			}
+			phase := compactStorageIndexVacuumPhase(t, stats)
+			if !phase.Required || phase.Status != CompactStoragePhaseStatusFailed {
+				t.Fatalf("permanent index vacuum phase=%+v", phase)
+			}
+			if !strings.Contains(phase.Reason, wantErr.Error()) {
+				t.Fatalf("permanent reason=%q want %q", phase.Reason, wantErr)
+			}
+			assertCompactStorageIndexDebtIncomplete(t, stats, fixture)
+		})
 	}
-	phase := compactStorageIndexVacuumPhase(t, stats)
-	if !phase.Required || phase.Status != CompactStoragePhaseStatusFailed {
-		t.Fatalf("permanent index vacuum phase=%+v", phase)
-	}
-	if !strings.Contains(phase.Reason, wantErr.Error()) {
-		t.Fatalf("permanent reason=%q want %q", phase.Reason, wantErr)
-	}
-	assertCompactStorageIndexDebtIncomplete(t, stats, fixture)
 }
 
 func TestCompactStorageIndexVacuumUnsupportedIsReported(t *testing.T) {
