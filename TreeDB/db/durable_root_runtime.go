@@ -883,6 +883,14 @@ func (db *DB) captureRegisteredDurableValueLogResourcesV1(references map[uint32]
 // reference. This is maintenance-only and deliberately does not publish a
 // snapshot or mutate the live DB generation.
 func (db *DB) captureRebuiltIndexDurableResourcesV1(p *pager.Pager, meta page.MetaPageBody) (*rootpublication.StableResourceSet, error) {
+	var inherited *rootpublication.StableResourceSet
+	if db != nil {
+		inherited = db.durableRoot.slotResources[db.durableRoot.slot]
+	}
+	return db.captureRebuiltIndexDurableResourcesFromV1(p, meta, inherited)
+}
+
+func (db *DB) captureRebuiltIndexDurableResourcesFromV1(p *pager.Pager, meta page.MetaPageBody, source *rootpublication.StableResourceSet) (*rootpublication.StableResourceSet, error) {
 	if db == nil || db.valueLogManager == nil || p == nil || meta.UserRootPageID < 2 || meta.SystemRootPageID < 2 {
 		return nil, fmt.Errorf("%w: rebuilt index dependency scanner unavailable", rootpublication.ErrUnresolvedResource)
 	}
@@ -903,9 +911,8 @@ func (db *DB) captureRebuiltIndexDurableResourcesV1(p *pager.Pager, meta page.Me
 	if scanErr != nil || closeErr != nil {
 		return nil, errors.Join(scanErr, closeErr)
 	}
-	selected := db.durableRoot.slotResources[db.durableRoot.slot]
 	exactPackedFileIDs := make(map[uint32]struct{})
-	for _, descriptor := range selected.Descriptors() {
+	for _, descriptor := range source.Descriptors() {
 		if descriptor.Kind() == rootpublication.ResourceOuterLeafPack && descriptor.Generation() <= uint64(^uint32(0)) {
 			exactPackedFileIDs[uint32(descriptor.Generation())] = struct{}{}
 		}
@@ -915,7 +922,7 @@ func (db *DB) captureRebuiltIndexDurableResourcesV1(p *pager.Pager, meta page.Me
 	}
 
 	inherited, err := rootpublication.CloneStableResourceSetExcludingKinds(
-		selected,
+		source,
 		rootpublication.ResourceValueLog,
 		rootpublication.ResourceOuterLeafLog,
 	)
@@ -1774,12 +1781,121 @@ func writeRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, meta page.
 	return err
 }
 
-func (db *DB) installDurableRootSelectionV1(selected durableRootSelectionV1) {
-	db.durableRoot = durableRootRuntimeV1{
-		meta: selected.Meta, record: selected.Record, manifest: selected.Manifest,
-		slot: selected.Slot, slotCommit: selected.SlotCommits, slotResources: selected.SlotResources,
-		slotMeta: selected.SlotMetas, slotRecord: selected.SlotRecords,
+type rebuiltDurableRootV1 struct {
+	meta      page.MetaPageBody
+	resources *rootpublication.StableResourceSet
+	pages     []uint64
+}
+
+func writeRebuiltDurableRootsV1(dir, indexPath string, p *pager.Pager, roots []rebuiltDurableRootV1) error {
+	if len(roots) != 2 || roots[0].meta.CommitSeq == 0 || roots[1].meta.CommitSeq <= roots[0].meta.CommitSeq {
+		return errors.New("invalid rebuilt durable-root pair")
 	}
+	if err := writeRebuiltDurableRootV1(dir, indexPath, p, roots[0].meta, roots[0].resources); err != nil {
+		return err
+	}
+	selected, err := selectDurableRootV1(p, p.PageCount(), nil)
+	if err != nil {
+		return err
+	}
+	return appendRebuiltDurableRootV1(dir, indexPath, p, selected, roots[1])
+}
+
+func appendRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, current durableRootSelectionV1, next rebuiltDurableRootV1) error {
+	meta := next.meta
+	if p == nil || current.Record.CommitSeq == 0 || meta.CommitSeq <= current.Record.CommitSeq ||
+		meta.UserRootPageID < 2 || meta.SystemRootPageID < 2 ||
+		meta.UserRootPageID >= p.PageCount() || meta.SystemRootPageID >= p.PageCount() {
+		return errors.New("invalid rebuilt durable-root successor")
+	}
+	manifest, err := durableManifestFromResourcesV1(next.resources)
+	if err != nil {
+		return err
+	}
+	allocator := freelist.New(p, 0)
+	if err := allocator.EnableCOWV1(current.Freelist, freelist.NewReservationLedger()); err != nil {
+		return err
+	}
+	capability, err := freelist.NewReuseCapability(current.Record.CommitSeq, current.Record.CommitSeq, 0)
+	if err != nil {
+		return err
+	}
+	var candidateID freelist.CandidateIDV1
+	binary.LittleEndian.PutUint64(candidateID[:8], meta.CommitSeq)
+	binary.LittleEndian.PutUint64(candidateID[8:], meta.UserRootPageID^meta.SystemRootPageID^uint64(MetaPage1ID))
+	prepared, err := allocator.PrepareCOWCandidateV1(
+		current.Freelist.GenerationID()+1,
+		meta.CommitSeq,
+		candidateID,
+		capability,
+		int(manifest.PageCount())+1,
+		freelist.NewMemoryPageStoreV1(),
+	)
+	if err != nil {
+		return err
+	}
+	generation := prepared.Candidate().Generation()
+	auxiliary := prepared.AuxiliaryPageIDs()
+	if generation == nil || len(auxiliary) != int(manifest.PageCount())+1 {
+		return errors.New("incomplete rebuilt durable-root successor COW generation")
+	}
+	if err := p.Truncate(generation.HighWater()); err != nil {
+		return err
+	}
+	for _, image := range prepared.Candidate().Pages() {
+		if err := p.Write(image.PageID, image.Data); err != nil {
+			return fmt.Errorf("write rebuilt successor COW page %d: %w", image.PageID, err)
+		}
+	}
+	sink := durablePagerSinkV1{pager: p}
+	manifestRef, err := manifest.Materialize(auxiliary[0], sink)
+	if err != nil {
+		return err
+	}
+	recordPageID := auxiliary[len(auxiliary)-1]
+	meta.TotalPages = generation.HighWater()
+	meta.FreelistHeadID = 0
+	durableSeq := current.Record.DurableSeq + 1
+	if durableSeq > meta.CommitSeq {
+		return errors.New("rebuilt durable-root successor sequence exceeds commit frontier")
+	}
+	record := rootpublication.DurableRootRecordV1{
+		CommitSeq: meta.CommitSeq, DurableSeq: durableSeq,
+		UserRootPageID: meta.UserRootPageID, SystemRootPageID: meta.SystemRootPageID,
+		TotalPages: meta.TotalPages, MaxEntryRevision: meta.MaxEntryRevision,
+		AppliedCommandLSN: meta.AppliedCommandLSN, LastCommitHeight: meta.LastCommitHeight,
+		Freelist: generation.GenerationRef(), FreelistFreeCount: generation.FreeCount(), FreelistRetiredCount: generation.RetiredCount(),
+		Manifest:           manifestRef,
+		ParentRecordPageID: current.Meta.RootRecordPageID, ParentCommitSeq: current.Meta.CommitSeq,
+		ParentRecordDigest:   current.Meta.RootRecordDigest,
+		MetaProjectionDigest: page.DurableMetaProjectionDigestV1(meta.CommitSeq, durableSeq, recordPageID),
+	}
+	recordImage, recordDigest, err := record.EncodePage(recordPageID)
+	if err != nil {
+		return err
+	}
+	if err := p.Write(recordPageID, recordImage); err != nil {
+		return err
+	}
+	durableMeta, err := page.NewDurableMetaV1(meta.CommitSeq, durableSeq, recordPageID, recordDigest)
+	if err != nil {
+		return err
+	}
+	_, err = executeDurableRootStorageTransactionV1(durableRootStorageTransactionV1{
+		resources: next.resources,
+		syncIndex: p.Sync,
+		sink:      sink,
+		target:    MetaPage1ID,
+		meta:      durableMeta,
+		syncMeta:  func() error { return p.SyncPages([]uint64{MetaPage1ID}) },
+		dir:       dir,
+		indexPath: indexPath,
+	})
+	return err
+}
+
+func (db *DB) installDurableRootSelectionV1(selected durableRootSelectionV1) {
+	db.durableRoot = durableRootRuntimeFromSelectionV1(selected)
 	db.meta = page.MetaPageBody{
 		CommitSeq: selected.Record.CommitSeq, UserRootPageID: selected.Record.UserRootPageID,
 		SystemRootPageID: selected.Record.SystemRootPageID, TotalPages: selected.Record.TotalPages,
@@ -1787,6 +1903,14 @@ func (db *DB) installDurableRootSelectionV1(selected durableRootSelectionV1) {
 		MaxEntryRevision: selected.Record.MaxEntryRevision,
 	}
 	db.metaPageID = selected.Slot
+}
+
+func durableRootRuntimeFromSelectionV1(selected durableRootSelectionV1) durableRootRuntimeV1 {
+	return durableRootRuntimeV1{
+		meta: selected.Meta, record: selected.Record, manifest: selected.Manifest,
+		slot: selected.Slot, slotCommit: selected.SlotCommits, slotResources: selected.SlotResources,
+		slotMeta: selected.SlotMetas, slotRecord: selected.SlotRecords,
+	}
 }
 
 // registerDurableManifestValueLogSegmentsV1 resolves only exact value-log and

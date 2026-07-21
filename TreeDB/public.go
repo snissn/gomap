@@ -66,6 +66,9 @@ const (
 )
 
 var errVacuumUnsupported = db.ErrVacuumUnsupported
+var errVacuumRecoverableRootSetRequired = db.ErrVacuumRecoverableRootSetRequired
+
+func publicOnlineVacuumEnabledV1() bool { return false }
 
 // ErrNamespacePersistenceUnsupported reports that the active platform or
 // filesystem cannot persist a directory creation required by a successful
@@ -2483,6 +2486,13 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	if db.backend == nil {
 		return ErrClosed
 	}
+	// The backend replacement is production-capable, but public and cached
+	// routing, reporting, and background policy are activated together by #3945.
+	if !publicOnlineVacuumEnabledV1() {
+		return errors.Join(errVacuumUnsupported, errVacuumRecoverableRootSetRequired)
+	}
+
+	// #3945 removes the staged fence above and activates this block.
 	_, finishMaintenance := db.beginFullScanMaintenance("vacuum")
 	success := false
 	defer func() { finishMaintenance(success) }()

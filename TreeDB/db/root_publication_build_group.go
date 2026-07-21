@@ -82,21 +82,34 @@ func (db *DB) BeginRootPublicationBuildGroup() (_ *RootPublicationBuildGroup, re
 	if err := db.publicationPoisonedError(); err != nil {
 		return nil, err
 	}
-	runtime := db.rootPublication
-	if runtime == nil || runtime.coordinator == nil {
-		return nil, errors.New("missing root publication coordinator")
-	}
-	group.coordinator = runtime.coordinator
-	builder, err := runtime.coordinator.AcquireBuilder(context.Background())
-	if err != nil {
-		return nil, publicRootPublicationErrorV1(err)
-	}
-	group.builder = builder
+	for {
+		runtime := db.rootPublication
+		if runtime == nil || runtime.coordinator == nil {
+			return nil, errors.New("missing root publication coordinator")
+		}
+		builder, err := runtime.coordinator.AcquireBuilder(context.Background())
+		if err != nil {
+			return nil, publicRootPublicationErrorV1(err)
+		}
 
-	db.writeMu.Lock()
-	group.writeLocked = true
-	if err := db.checkWriteAdmissionLocked(); err != nil {
-		return nil, err
+		db.writeMu.Lock()
+		if err := db.checkWriteAdmissionLocked(); err != nil {
+			db.writeMu.Unlock()
+			builder.Release()
+			return nil, err
+		}
+		if db.rootPublication != runtime {
+			db.writeMu.Unlock()
+			builder.Release()
+			if db.closing.Load() {
+				return nil, ErrClosed
+			}
+			continue
+		}
+		group.coordinator = runtime.coordinator
+		group.builder = builder
+		group.writeLocked = true
+		break
 	}
 	db.durablePublishMu.Lock()
 	group.durablePublishLocked = true

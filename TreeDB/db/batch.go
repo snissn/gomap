@@ -643,12 +643,12 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent, maxEntryRevision page.EntryRevision, conditional *ConditionalTxn) error {
 	touchedValueLogSegments := b.batch.TouchedValueLogSegments()
 	rawSpanPlan := b.rawSpanNativeBatchPlan()
-	builder, err := b.db.acquireRootPublicationBuilderV1()
+	rootRuntime, builder, err := b.db.acquireRootPublicationBuilderForRuntimeV1()
 	if err != nil {
 		return err
 	}
 	if builder != nil {
-		defer builder.Release()
+		defer func() { builder.Release() }()
 	}
 
 	durablePublishLocked := false
@@ -670,6 +670,13 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 	}()
 	if err := b.db.checkWriteAdmissionLocked(); err != nil {
 		return err
+	}
+	if b.db.rootPublication != rootRuntime {
+		builder.Release()
+		rootRuntime, builder, err = b.db.acquireRootPublicationBuilderForRuntimeV1()
+		if err != nil {
+			return err
+		}
 	}
 	// Serialized fallback must join durable publication before it snapshots its
 	// base generation. A preceding publisher may have released writeMu while it

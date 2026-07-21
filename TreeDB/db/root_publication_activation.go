@@ -109,14 +109,52 @@ func publicRootPublicationErrorV1(err error) error {
 }
 
 func (db *DB) acquireRootPublicationBuilderV1() (*rootpublication.BuilderToken, error) {
-	if db == nil || db.rootPublication == nil || db.rootPublication.coordinator == nil {
-		return nil, nil
+	_, builder, err := db.acquireRootPublicationBuilderForRuntimeV1()
+	return builder, err
+}
+
+func (db *DB) acquireRootPublicationBuilderForRuntimeV1() (*rootPublicationRuntimeV1, *rootpublication.BuilderToken, error) {
+	if db == nil || db.rootPublication == nil {
+		return nil, nil, nil
 	}
-	builder, err := db.rootPublication.coordinator.AcquireBuilder(context.Background())
+	runtime := db.rootPublication
+	if runtime.coordinator == nil {
+		return runtime, nil, nil
+	}
+	builder, err := runtime.coordinator.AcquireBuilder(context.Background())
 	if err != nil {
-		return nil, fmt.Errorf("acquire root-publication builder: %w", publicRootPublicationErrorV1(err))
+		return nil, nil, fmt.Errorf("acquire root-publication builder: %w", publicRootPublicationErrorV1(err))
 	}
-	return builder, nil
+	return runtime, builder, nil
+}
+
+// acquireCommandWALPublicationBuilderV1 returns with writeMu held and the
+// builder bound to the runtime that is still live under that lock.
+func (db *DB) acquireCommandWALPublicationBuilderV1() (*rootpublication.BuilderToken, error) {
+	for {
+		runtime, builder, err := db.acquireRootPublicationBuilderForRuntimeV1()
+		if err != nil {
+			return nil, err
+		}
+		if hook := db.testCommandWALAfterBuilderAcquireHook; hook != nil {
+			hook()
+		}
+		db.writeMu.Lock()
+		if err := db.checkWriteAdmissionLocked(); err != nil {
+			db.writeMu.Unlock()
+			if builder != nil {
+				builder.Release()
+			}
+			return nil, err
+		}
+		if db.rootPublication == runtime {
+			return builder, nil
+		}
+		db.writeMu.Unlock()
+		if builder != nil {
+			builder.Release()
+		}
+	}
 }
 
 func (runtime *rootPublicationRuntimeV1) cloneVisibleResources() (*rootpublication.StableResourceSet, error) {
@@ -155,13 +193,13 @@ func (seal *rootPublicationSealV1) release() {
 	}
 }
 
-func rootPublicationLineageIDV1(db *DB, idx *indexGen) rootpublication.DurableRootLineageID {
+func rootPublicationLineageIDV1(db *DB, idx *indexGen, durable durableRootRuntimeV1) rootpublication.DurableRootLineageID {
 	var material [80]byte
 	if db != nil {
-		binary.LittleEndian.PutUint64(material[0:8], db.durableRoot.record.CommitSeq)
-		binary.LittleEndian.PutUint64(material[8:16], db.durableRoot.record.Freelist.GenerationID)
-		binary.LittleEndian.PutUint64(material[16:24], db.durableRoot.record.Freelist.HighWater)
-		copy(material[24:56], db.durableRoot.meta.RootRecordDigest[:])
+		binary.LittleEndian.PutUint64(material[0:8], durable.record.CommitSeq)
+		binary.LittleEndian.PutUint64(material[8:16], durable.record.Freelist.GenerationID)
+		binary.LittleEndian.PutUint64(material[16:24], durable.record.Freelist.HighWater)
+		copy(material[24:56], durable.meta.RootRecordDigest[:])
 		copy(material[56:72], []byte(db.dir))
 	}
 	if idx != nil {
@@ -190,37 +228,60 @@ func (db *DB) initializeRootPublicationRuntimeV1(idx *indexGen) error {
 	if db == nil || idx == nil || db.durableRoot.record.CommitSeq == 0 {
 		return errors.New("missing root-publication durable base")
 	}
+	runtime, err := newRootPublicationRuntimeV1(db, idx, db.durableRoot, db.meta)
+	if err != nil {
+		return err
+	}
+	db.rootPublication = runtime
+	return nil
+}
+
+func newRootPublicationRuntimeV1(db *DB, idx *indexGen, durable durableRootRuntimeV1, visible page.MetaPageBody) (*rootPublicationRuntimeV1, error) {
+	if db == nil || idx == nil || durable.record.CommitSeq == 0 {
+		return nil, errors.New("missing root-publication durable base")
+	}
 	baseResources, err := rootpublication.CloneStableResourceSetExcludingKinds(
-		db.durableRoot.slotResources[db.durableRoot.slot],
+		durable.slotResources[durable.slot],
 	)
 	if err != nil {
-		return fmt.Errorf("clone initial visible root resources: %w", err)
+		return nil, fmt.Errorf("clone initial visible root resources: %w", err)
 	}
 	runtime := &rootPublicationRuntimeV1{
-		db: db, idx: idx, lineage: rootPublicationLineageIDV1(db, idx),
+		db: db, idx: idx, lineage: rootPublicationLineageIDV1(db, idx, durable),
 		visibleResources: baseResources,
 		visibleMembers:   make(map[uint64]*rootPublicationVisibleMemberV1),
 	}
-	oldest, err := oldestRecoverableSlotCommitV1(db.durableRoot.slotCommit)
+	oldest, err := oldestRecoverableSlotCommitV1(durable.slotCommit)
 	if err != nil {
 		baseResources.Release()
-		return err
+		return nil, err
 	}
 	coordinator, err := rootpublication.New(rootpublication.Options{
 		Publisher:                  runtime,
 		FixedPublishDelay:          db.rootPublicationFixedDelay,
-		InitialDurableFrontier:     rootPublicationFrontierV1(db.meta),
+		InitialDurableFrontier:     rootPublicationFrontierV1(visible),
 		OldestRecoverableCommitSeq: oldest,
 		DurableRootLineage:         runtime.lineage,
-		DurableRootSequence:        db.durableRoot.record.CommitSeq,
+		DurableRootSequence:        durable.record.CommitSeq,
 	})
 	if err != nil {
 		baseResources.Release()
-		return err
+		return nil, err
 	}
 	runtime.coordinator = coordinator
-	db.rootPublication = runtime
-	return nil
+	return runtime, nil
+}
+
+func stopRootPublicationRuntimeV1(runtime *rootPublicationRuntimeV1) (*rootpublication.RecoveryResourceHandoff, error) {
+	if runtime == nil || runtime.coordinator == nil {
+		return nil, nil
+	}
+	stopErr := runtime.coordinator.Stop(context.Background())
+	handoff, handoffErr := runtime.coordinator.TakeRecoveryHandoff()
+	if stopErr != nil || handoffErr != nil {
+		return handoff, errors.Join(publicRootPublicationErrorV1(stopErr), publicRootPublicationErrorV1(handoffErr))
+	}
+	return handoff, nil
 }
 
 func rootPublicationLogicalCandidateIDV1(lineage rootpublication.DurableRootLineageID, generationID uint64, next page.MetaPageBody) freelist.CandidateIDV1 {

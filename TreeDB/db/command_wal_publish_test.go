@@ -252,6 +252,70 @@ func TestCommandWALAppliedLSNOnlyPublishRebindsRootsAfterDurableGateWait(t *test
 	}
 }
 
+func TestCommandWALPublicationRebindsBuilderAfterRuntimeSwap(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	for _, tc := range []struct {
+		name    string
+		publish func(*testing.T, *DB) error
+	}{
+		{
+			name: "applied_lsn",
+			publish: func(_ *testing.T, db *DB) error {
+				return db.PublishCommandWALAppliedLSN(1, []CommandWALLSNRange{{First: 1, Last: 1}}, true)
+			},
+		},
+		{
+			name: "noop",
+			publish: func(t *testing.T, db *DB) error {
+				payload, err := commitlog.EncodeRawKVBatchPayload(nil)
+				if err != nil {
+					t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+				}
+				intent, err := db.NewTrustedCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
+				if err != nil {
+					t.Fatalf("NewTrustedCommandWALIntent: %v", err)
+				}
+				return db.PublishCommandWALNoop(intent, true)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			oldRuntime := db.rootPublication
+			replacement, err := newRootPublicationRuntimeV1(db, db.idx.Load(), db.durableRoot, db.meta)
+			if err != nil {
+				t.Fatalf("new replacement runtime: %v", err)
+			}
+			var once sync.Once
+			db.testCommandWALAfterBuilderAcquireHook = func() {
+				once.Do(func() {
+					db.writeMu.Lock()
+					db.rootPublication = replacement
+					db.writeMu.Unlock()
+				})
+			}
+
+			if err := tc.publish(t, db); err != nil {
+				t.Fatalf("publish after runtime swap: %v", err)
+			}
+			db.testCommandWALAfterBuilderAcquireHook = nil
+			handoff, err := stopRootPublicationRuntimeV1(oldRuntime)
+			if err != nil {
+				t.Fatalf("stop old runtime: %v", err)
+			}
+			handoff.Release()
+			oldRuntime.release()
+		})
+	}
+}
+
 func TestCommandWALAppliedLSNOnlyPublishRechecksPoisonAfterDurableGateWait(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
 	if err != nil {

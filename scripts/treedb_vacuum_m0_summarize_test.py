@@ -46,7 +46,10 @@ class VacuumM0SummarizeTest(unittest.TestCase):
         legacy["concurrent-aborts/op"] = {"samples": [0] * 10}
         public = {
             "vacuum-unsupported/op": {"samples": [1] * 10},
+            "vacuum-concurrent-retries/op": {"samples": [0] * 10},
             "vacuum-unexpected-errors/op": {"samples": [0] * 10},
+            "foreground-exposure-misses/op": {"samples": [1] * 10},
+            "foreground-overlap-samples/op": {"samples": [0] * 10},
         }
         self.assertTrue(all(MODULE.evaluate_gates(legacy, public).values()))
 
@@ -55,6 +58,65 @@ class VacuumM0SummarizeTest(unittest.TestCase):
         self.assertFalse(gates["legacy_completed_without_abort"])
         self.assertTrue(gates["legacy_cv_at_most_10_percent"])
         self.assertTrue(gates["public_status_explicit"])
+
+        public["vacuum-concurrent-retries/op"]["samples"][4] = 1
+        gates = MODULE.evaluate_gates(legacy, public)
+        self.assertFalse(gates["public_status_explicit"])
+        self.assertEqual(MODULE.classify_public_status(public), "production-index-vacuum-ambiguous")
+
+    def test_evaluate_gates_rejects_unsupported_with_foreground_overlap(self):
+        legacy = {
+            metric: {"cv": 0.01, "samples": [1] * 10}
+            for metric in MODULE.REQUIRED_CV_METRICS
+        }
+        legacy["concurrent-aborts/op"] = {"samples": [0] * 10}
+        public = {
+            "vacuum-unsupported/op": {"samples": [1] * 10},
+            "vacuum-concurrent-retries/op": {"samples": [0] * 10},
+            "vacuum-unexpected-errors/op": {"samples": [0] * 10},
+            "foreground-exposure-misses/op": {"samples": [1] * 10},
+            "foreground-overlap-samples/op": {"samples": [0] * 9 + [1]},
+        }
+
+        gates = MODULE.evaluate_gates(legacy, public)
+        self.assertFalse(gates["public_status_explicit"])
+        self.assertEqual(MODULE.classify_public_status(public), "production-index-vacuum-ambiguous")
+
+    def test_evaluate_gates_accepts_verified_production_success(self):
+        legacy = {
+            metric: {"cv": 0.01, "samples": [1] * 10}
+            for metric in MODULE.REQUIRED_CV_METRICS
+        }
+        legacy["concurrent-aborts/op"] = {"samples": [0] * 10}
+        public = {
+            "vacuum-unsupported/op": {"samples": [0] * 10},
+            "vacuum-concurrent-retries/op": {"samples": [0] * 10},
+            "vacuum-unexpected-errors/op": {"samples": [0] * 10},
+            "foreground-exposure-misses/op": {"samples": [0] * 10},
+            "foreground-overlap-samples/op": {"samples": [160] * 10},
+        }
+
+        gates = MODULE.evaluate_gates(legacy, public)
+        self.assertTrue(gates["public_status_explicit"])
+        self.assertEqual(MODULE.classify_public_status(public), "production-index-vacuum-available")
+
+    def test_evaluate_gates_rejects_mixed_public_status(self):
+        legacy = {
+            metric: {"cv": 0.01, "samples": [1] * 10}
+            for metric in MODULE.REQUIRED_CV_METRICS
+        }
+        legacy["concurrent-aborts/op"] = {"samples": [0] * 10}
+        public = {
+            "vacuum-unsupported/op": {"samples": [1, 0] * 5},
+            "vacuum-concurrent-retries/op": {"samples": [0] * 10},
+            "vacuum-unexpected-errors/op": {"samples": [0] * 10},
+            "foreground-exposure-misses/op": {"samples": [0] * 10},
+            "foreground-overlap-samples/op": {"samples": [0, 160] * 5},
+        }
+
+        gates = MODULE.evaluate_gates(legacy, public)
+        self.assertFalse(gates["public_status_explicit"])
+        self.assertEqual(MODULE.classify_public_status(public), "production-index-vacuum-ambiguous")
 
 
 if __name__ == "__main__":

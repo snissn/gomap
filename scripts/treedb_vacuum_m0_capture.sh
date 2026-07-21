@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Capture M0's fail-closed public status, offline shrink ceiling, and ten
-# legacy-only online samples. This script never enables production vacuum.
+# Capture the public vacuum status, offline shrink ceiling, and ten
+# interleaved legacy/public samples across the M0-to-M1 transition.
 ROOT=$(git rev-parse --show-toplevel)
 RUN_DIR=${RUN_DIR:-"$ROOT/artifacts/treedb-vacuum-m0/$(date +%Y%m%d_%H%M%S)"}
 SHA=$(git rev-parse HEAD)

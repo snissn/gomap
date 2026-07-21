@@ -62,6 +62,32 @@ def summarize(paths: list[Path]) -> dict[str, dict[str, object]]:
     return result
 
 
+def classify_public_status(public: dict[str, dict[str, object]]) -> str:
+    unsupported = public.get("vacuum-unsupported/op", {}).get("samples", [])
+    retries = public.get("vacuum-concurrent-retries/op", {}).get("samples", [])
+    unexpected = public.get("vacuum-unexpected-errors/op", {}).get("samples", [])
+    misses = public.get("foreground-exposure-misses/op", {}).get("samples", [])
+    overlap = public.get("foreground-overlap-samples/op", {}).get("samples", [])
+    if all(len(samples) == 10 for samples in (unsupported, retries, unexpected, misses, overlap)):
+        if (
+            all(value == 1 for value in unsupported)
+            and all(value == 0 for value in retries)
+            and all(value == 0 for value in unexpected)
+            and all(value == 1 for value in misses)
+            and all(value == 0 for value in overlap)
+        ):
+            return "production-index-vacuum-unavailable"
+        if (
+            all(value == 0 for value in unsupported)
+            and all(value == 0 for value in retries)
+            and all(value == 0 for value in unexpected)
+            and all(value == 0 for value in misses)
+            and all(value > 0 for value in overlap)
+        ):
+            return "production-index-vacuum-available"
+    return "production-index-vacuum-ambiguous"
+
+
 def evaluate_gates(
     legacy: dict[str, dict[str, object]], public: dict[str, dict[str, object]]
 ) -> dict[str, bool]:
@@ -76,12 +102,8 @@ def evaluate_gates(
             "concurrent-aborts/op" in legacy
             and all(value == 0 for value in legacy["concurrent-aborts/op"]["samples"])
         ),
-        "public_status_explicit": (
-            "vacuum-unsupported/op" in public
-            and "vacuum-unexpected-errors/op" in public
-            and all(value == 1 for value in public["vacuum-unsupported/op"]["samples"])
-            and all(value == 0 for value in public["vacuum-unexpected-errors/op"]["samples"])
-        ),
+        "public_status_explicit": classify_public_status(public)
+        != "production-index-vacuum-ambiguous",
     }
 
 
@@ -127,7 +149,7 @@ def render_markdown(result: dict[str, object]) -> str:
         f"- Storage: `{env['device']}` (`{env['filesystem']}`)",
         f"- Timing boundary: `{result['fixture']['timing_boundary']}`",
         "- Repetitions: `10` interleaved legacy/public runs",
-        "- Status: `production-index-vacuum-unavailable`",
+        f"- Status: `{result['public_status']}`",
         "",
         "## Fixture",
         "",
@@ -157,7 +179,8 @@ def render_markdown(result: dict[str, object]) -> str:
             "",
             f"- `vacuum-unsupported/op`: median `{public['vacuum-unsupported/op']['median']:.3f}`",
             f"- `vacuum-unexpected-errors/op`: median `{public['vacuum-unexpected-errors/op']['median']:.3f}`",
-            "- Unsupported samples are classification evidence, not successful vacuum measurements.",
+            "- Unavailable status requires one unsupported result and one exposure miss with zero retries, unexpected errors, and foreground overlap in every sample.",
+            "- Available status requires zero retries, errors, and exposure misses plus positive foreground overlap in every sample.",
             "",
             "## Commands",
             "",
@@ -184,11 +207,13 @@ def main() -> int:
     public = summarize(sorted((run_dir / "raw").glob("public-*.txt")))
 
     gates = evaluate_gates(legacy, public)
+    public_status = classify_public_status(public)
     result = {
         "schema_version": 1,
         "environment": environment(repo, run_dir),
         "fixture": fixture,
         "metrics": {"legacy": legacy, "public": public},
+        "public_status": public_status,
         "gates": gates,
     }
     (run_dir / "results.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")

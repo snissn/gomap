@@ -2208,7 +2208,7 @@ func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 		return ErrCommandWALUnsupported
 	}
 	sync = commandWALIntentPublishSync(intent, sync)
-	builder, err := db.acquireRootPublicationBuilderV1()
+	builder, err := db.acquireCommandWALPublicationBuilderV1()
 	if err != nil {
 		return err
 	}
@@ -2223,11 +2223,6 @@ func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 		}
 	}
 	defer releaseDurablePublish()
-	db.writeMu.Lock()
-	if err := db.checkWriteAdmissionLocked(); err != nil {
-		db.writeMu.Unlock()
-		return err
-	}
 	db.commitMu.Lock()
 	if _, err := db.appendPublicCommandWALIntent(intent, sync); err != nil {
 		db.commitMu.Unlock()

@@ -224,6 +224,7 @@ type DB struct {
 	vacuumBeforeRecorderFenceHook func()
 	vacuumPagerSyncHook           func(vacuumPagerSyncPhase)
 	vacuumPreflushHook            func() error
+	vacuumReplacementRuntimeHook  func(*rootPublicationRuntimeV1) error
 	meta                          page.MetaPageBody
 	metaPageID                    uint64
 	durableRoot                   durableRootRuntimeV1
@@ -547,6 +548,7 @@ type DB struct {
 	testAfterOptimisticBaseCaptureHook             func()
 	testAfterOptimisticApplyHook                   func()
 	testAfterOptimisticPublishPrepareHook          func()
+	testCommandWALAfterBuilderAcquireHook          func()
 	testCommandWALBeforeDurablePublishLockHook     func()
 	testCommandWALCleanupAfterScanHook             func()
 	testBeforeFinalizeCommitHook                   func()

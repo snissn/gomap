@@ -78,7 +78,7 @@ func TestVacuumIndexOnlineRefreshFailureLeavesOldIndexAuthoritative(t *testing.T
 		t.Fatalf("install refresh failure fixture: %v", err)
 	}
 
-	vacuumErr := d.vacuumIndexOnlineLegacyForTest(context.Background())
+	vacuumErr := d.VacuumIndexOnline(context.Background())
 	removeErr := os.Remove(vlogDir)
 	restoreErr := os.Rename(parkedVlogDir, vlogDir)
 	if removeErr != nil || restoreErr != nil {
@@ -168,7 +168,7 @@ func TestVacuumIndexOnline_PostOldIndexRenameCutStopsNamespaceCleanup(t *testing
 		return nil
 	})
 	defer restore()
-	err = d.vacuumIndexOnlineLegacyForTest(context.Background())
+	err = d.VacuumIndexOnline(context.Background())
 
 	if !errors.Is(err, cutErr) || !errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("VacuumIndexOnline error=%v, want injected cut and ErrRecoveryRequired", err)
@@ -183,7 +183,7 @@ func TestVacuumIndexOnline_PostOldIndexRenameCutStopsNamespaceCleanup(t *testing
 		t.Fatalf("last namespace event=%#v, want old-index rename as final mutation", got)
 	}
 	eventsAtCut := len(namespaceEvents)
-	if retryErr := d.vacuumIndexOnlineLegacyForTest(context.Background()); !errors.Is(retryErr, ErrRecoveryRequired) {
+	if retryErr := d.VacuumIndexOnline(context.Background()); !errors.Is(retryErr, ErrRecoveryRequired) {
 		t.Fatalf("VacuumIndexOnline retry error=%v, want ErrRecoveryRequired", retryErr)
 	}
 	if len(namespaceEvents) != eventsAtCut {
@@ -336,7 +336,6 @@ func (l *countingLeafPageLog) Flush() error { return l.inner.Flush() }
 func (l *countingLeafPageLog) Sync() error  { return l.inner.Sync() }
 
 func TestVacuumIndexOnline_ShrinksAndPreservesData(t *testing.T) {
-	skipLegacyOnlineVacuumRuntimeIntegration(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum not supported on windows")
 	}
@@ -394,7 +393,7 @@ func TestVacuumIndexOnline_ShrinksAndPreservesData(t *testing.T) {
 	}
 	defer func() { testHookVacuumAfterBaseSnapshot = nil }()
 	vacuumDone := make(chan error, 1)
-	go func() { vacuumDone <- d.vacuumIndexOnlineLegacyForTest(ctx) }()
+	go func() { vacuumDone <- d.VacuumIndexOnline(ctx) }()
 	select {
 	case <-snapshotReady:
 	case err := <-vacuumDone:
@@ -417,6 +416,9 @@ func TestVacuumIndexOnline_ShrinksAndPreservesData(t *testing.T) {
 	}
 	if err := <-vacuumDone; err != nil {
 		t.Fatalf("vacuum: %v", err)
+	}
+	if got := d.stableIndexCaptures.Load(); got != 0 {
+		t.Fatalf("recoverable-root recapture leaked stable index pins: %d", got)
 	}
 	if got := freeManyChecksumUpdates.Load(); got == 0 {
 		t.Fatal("online vacuum did not batch retired pages through FreeMany")
@@ -495,7 +497,7 @@ func TestVacuumIndexOnline_OuterLeavesInValueLog_DoesNotRewriteLeafPages(t *test
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := d.vacuumIndexOnlineLegacyForTest(ctx); err != nil {
+	if err := d.VacuumIndexOnline(ctx); err != nil {
 		t.Fatalf("vacuum: %v", err)
 	}
 	if got := leafLog.appends.Load(); got != 0 {
@@ -560,7 +562,7 @@ func TestVacuumIndexOnline_AllowsSnapshotAcrossSwap(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := d.vacuumIndexOnlineLegacyForTest(ctx); err != nil {
+	if err := d.VacuumIndexOnline(ctx); err != nil {
 		t.Fatalf("vacuum: %v", err)
 	}
 
@@ -602,7 +604,6 @@ func TestVacuumIndexOnline_AllowsSnapshotAcrossSwap(t *testing.T) {
 }
 
 func TestVacuumIndexOnline_RepeatWhileSnapshotPinned(t *testing.T) {
-	skipLegacyOnlineVacuumRuntimeIntegration(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum not supported on windows")
 	}
@@ -631,7 +632,7 @@ func TestVacuumIndexOnline_RepeatWhileSnapshotPinned(t *testing.T) {
 	if err := d.SetSync([]byte("k"), []byte("v2")); err != nil {
 		t.Fatalf("set v2: %v", err)
 	}
-	if err := d.vacuumIndexOnlineLegacyForTest(ctx); err != nil {
+	if err := d.VacuumIndexOnline(ctx); err != nil {
 		t.Fatalf("vacuum 1: %v", err)
 	}
 
@@ -645,7 +646,7 @@ func TestVacuumIndexOnline_RepeatWhileSnapshotPinned(t *testing.T) {
 	if err := d.SetSync([]byte("k"), []byte("v3")); err != nil {
 		t.Fatalf("set v3: %v", err)
 	}
-	if err := d.vacuumIndexOnlineLegacyForTest(ctx); err != nil {
+	if err := d.VacuumIndexOnline(ctx); err != nil {
 		t.Fatalf("vacuum 2: %v", err)
 	}
 
@@ -755,7 +756,7 @@ func TestVacuumIndexOnline_RebuildsPackedInternalTreeForLeafRefs(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := d.vacuumIndexOnlineLegacyForTest(ctx); err != nil {
+	if err := d.VacuumIndexOnline(ctx); err != nil {
 		t.Fatalf("vacuum: %v", err)
 	}
 
@@ -830,7 +831,7 @@ func TestVacuumIndexOnline_PreservesOuterLeafRefsAndDataWhenOuterLeavesInValueLo
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := d.vacuumIndexOnlineLegacyForTest(ctx); err != nil {
+	if err := d.VacuumIndexOnline(ctx); err != nil {
 		t.Fatalf("vacuum: %v", err)
 	}
 
@@ -889,7 +890,7 @@ func TestVacuumIndexOnline_StampsPendingLeafGenerationSegments(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := db.vacuumIndexOnlineLegacyForTest(ctx); err != nil {
+	if err := db.VacuumIndexOnline(ctx); err != nil {
 		t.Fatalf("vacuum: %v", err)
 	}
 
