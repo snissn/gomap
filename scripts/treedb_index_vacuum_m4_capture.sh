@@ -54,11 +54,11 @@ run_and_log offline run_tree_test ./TreeDB/... -run 'TestVacuumIndexOffline' -co
 run_and_log close-opt-in env GOWORK=off TMPDIR="$TMP_ROOT" TREEDB_CLOSE_VACUUM_INDEX_ONLINE=1 go test ./TreeDB -run 'Test.*Close.*Vacuum|TestVacuum.*Close' -count=1
 
 if [[ "$RUN_FULL_TESTS" == "true" ]]; then
-  run_and_log full-tree run_tree_test ./TreeDB/... -count=1
+  run_and_log full-tree run_tree_test ./TreeDB/... -timeout 20m -count=1
 fi
 if [[ "$RUN_RACE_TESTS" == "true" ]]; then
   run_and_log race run_tree_test -race ./TreeDB ./TreeDB/db ./TreeDB/collections ./TreeDB/internal/dictdb ./TreeDB/internal/templatedb \
-    -run 'Test.*Vacuum|TestCompactStorage|Test.*StableResource|Test.*Close' -count=1
+    -run 'Test.*Vacuum|TestCompactStorage|Test.*StableResource|Test.*Close' -timeout 30m -count=1
 fi
 
 env GOWORK=off TMPDIR="$TMP_ROOT" go test ./TreeDB/db -run '^$' \

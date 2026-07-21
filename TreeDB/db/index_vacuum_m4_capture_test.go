@@ -25,6 +25,8 @@ func TestIndexVacuumM4CaptureKeepsCertificationLanes(t *testing.T) {
 		"treedb_vacuum_m0_capture.sh",
 		"compact_storage_m0_profile.sh",
 		"-race",
+		"-timeout 20m",
+		"-timeout 30m",
 		"-cpuprofile",
 		"-memprofile",
 		"-mutexprofile",
