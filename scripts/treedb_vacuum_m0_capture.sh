@@ -62,6 +62,7 @@ capture_fixture() {
 }
 
 cd "$ROOT"
+run_go_test -run '^TestVacuumM0FixtureDeterministicDebtAndOfflineCeiling$' -count=1
 capture_fixture "scripts/treedb_vacuum_m0_capture.sh"
 
 for sample in $(seq 1 10); do

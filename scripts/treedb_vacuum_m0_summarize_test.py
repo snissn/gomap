@@ -38,6 +38,24 @@ class VacuumM0SummarizeTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "expected one benchmark row"):
                 MODULE.parse_benchmark(path)
 
+    def test_evaluate_gates_requires_completed_legacy_samples(self):
+        legacy = {
+            metric: {"cv": 0.01, "samples": [1] * 10}
+            for metric in MODULE.REQUIRED_CV_METRICS
+        }
+        legacy["concurrent-aborts/op"] = {"samples": [0] * 10}
+        public = {
+            "vacuum-unsupported/op": {"samples": [1] * 10},
+            "vacuum-unexpected-errors/op": {"samples": [0] * 10},
+        }
+        self.assertTrue(all(MODULE.evaluate_gates(legacy, public).values()))
+
+        legacy["concurrent-aborts/op"]["samples"][4] = 1
+        gates = MODULE.evaluate_gates(legacy, public)
+        self.assertFalse(gates["legacy_completed_without_abort"])
+        self.assertTrue(gates["legacy_cv_at_most_10_percent"])
+        self.assertTrue(gates["public_status_explicit"])
+
 
 if __name__ == "__main__":
     unittest.main()

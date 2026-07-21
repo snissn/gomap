@@ -59,6 +59,29 @@ def summarize(paths: list[Path]) -> dict[str, dict[str, object]]:
     return result
 
 
+def evaluate_gates(
+    legacy: dict[str, dict[str, object]], public: dict[str, dict[str, object]]
+) -> dict[str, bool]:
+    missing = [metric for metric in REQUIRED_CV_METRICS if metric not in legacy]
+    if missing:
+        raise ValueError(f"legacy samples missing stability metrics: {missing}")
+    return {
+        "legacy_cv_at_most_10_percent": all(
+            legacy[metric]["cv"] <= 0.10 for metric in REQUIRED_CV_METRICS
+        ),
+        "legacy_completed_without_abort": (
+            "concurrent-aborts/op" in legacy
+            and all(value == 0 for value in legacy["concurrent-aborts/op"]["samples"])
+        ),
+        "public_status_explicit": (
+            "vacuum-unsupported/op" in public
+            and "vacuum-unexpected-errors/op" in public
+            and all(value == 1 for value in public["vacuum-unsupported/op"]["samples"])
+            and all(value == 0 for value in public["vacuum-unexpected-errors/op"]["samples"])
+        ),
+    }
+
+
 def environment(repo: Path, run_dir: Path) -> dict[str, object]:
     status = command("git", "status", "--porcelain", cwd=repo)
     df = command("df", "-PT", str(run_dir), cwd=repo).splitlines()[-1].split()
@@ -123,6 +146,10 @@ def render_markdown(result: dict[str, object]) -> str:
     lines.extend(
         [
             "",
+            "## Legacy Completion",
+            "",
+            f"- `concurrent-aborts/op`: median `{legacy['concurrent-aborts/op']['median']:.3f}`",
+            "",
             "## Public Classification",
             "",
             f"- `vacuum-unsupported/op`: median `{public['vacuum-unsupported/op']['median']:.3f}`",
@@ -153,26 +180,17 @@ def main() -> int:
     legacy = summarize(sorted((run_dir / "raw").glob("legacy-*.txt")))
     public = summarize(sorted((run_dir / "raw").glob("public-*.txt")))
 
-    missing = [metric for metric in REQUIRED_CV_METRICS if metric not in legacy]
-    if missing:
-        raise ValueError(f"legacy samples missing stability metrics: {missing}")
-    cv_pass = all(legacy[metric]["cv"] <= 0.10 for metric in REQUIRED_CV_METRICS)
-    public_pass = (
-        "vacuum-unsupported/op" in public
-        and "vacuum-unexpected-errors/op" in public
-        and all(value == 1 for value in public["vacuum-unsupported/op"]["samples"])
-        and all(value == 0 for value in public["vacuum-unexpected-errors/op"]["samples"])
-    )
+    gates = evaluate_gates(legacy, public)
     result = {
         "schema_version": 1,
         "environment": environment(repo, run_dir),
         "fixture": fixture,
         "metrics": {"legacy": legacy, "public": public},
-        "gates": {"legacy_cv_at_most_10_percent": cv_pass, "public_status_explicit": public_pass},
+        "gates": gates,
     }
     (run_dir / "results.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     (run_dir / "summary.md").write_text(render_markdown(result))
-    return 0 if cv_pass and public_pass else 1
+    return 0 if all(gates.values()) else 1
 
 
 if __name__ == "__main__":

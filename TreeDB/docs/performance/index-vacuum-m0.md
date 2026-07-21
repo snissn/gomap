@@ -17,7 +17,10 @@ include `ns/op`, `max-writer-pause-ns`, foreground p95/p99, `B/op`, and
 `allocs/op`. The summarizer fails unless total vacuum time, maximum writer pause,
 and foreground p99 each have a coefficient of variation at most 10%. Public
 rows must report `vacuum-unsupported/op = 1` and zero unexpected errors; that
-status is never a successful or fast vacuum result.
+status is never a successful or fast vacuum result. Legacy rows must report
+zero concurrent aborts, so an aborted run cannot become a timing baseline. The
+capture runs the three-build determinism, debt, shrink, and reopen gate before
+writing `fixture.json`.
 
 The legacy benchmark catalog includes 65,536 deterministic ordinary metadata
 entries plus one live collection root. The entries bypass collection-root
