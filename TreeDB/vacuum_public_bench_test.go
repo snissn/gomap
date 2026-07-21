@@ -60,6 +60,7 @@ func TestCloseOptInVacuumIndexOnlineShrinksAndReopens(t *testing.T) {
 	if err := d.Close(); err != nil {
 		t.Fatalf("close with online vacuum: %v", err)
 	}
+	t.Setenv(envCloseVacuumIndexOnline, "0")
 
 	afterBytes := publicVacuumIndexBytes(t, dir)
 	if afterBytes*100 > beforeBytes*60 {

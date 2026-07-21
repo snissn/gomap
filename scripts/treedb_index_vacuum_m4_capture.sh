@@ -7,6 +7,7 @@ RUN_DIR=${RUN_DIR:-$(mktemp -d "$TMP_ROOT/treedb_index_vacuum_m4_XXXXXX")}
 COUNT=${COUNT:-10}
 RUN_FULL_TESTS=${RUN_FULL_TESTS:-true}
 RUN_RACE_TESTS=${RUN_RACE_TESTS:-true}
+M0_PACKET_DIR=${M0_PACKET_DIR:-}
 
 mkdir -p "$RUN_DIR"/{tests,benchmarks,profiles,m0,compact-storage}
 RUN_DIR=$(cd "$RUN_DIR" && pwd -P)
@@ -37,6 +38,7 @@ run_and_log() {
   printf 'count=%s\n' "$COUNT"
   printf 'run_full_tests=%s\n' "$RUN_FULL_TESTS"
   printf 'run_race_tests=%s\n' "$RUN_RACE_TESTS"
+  printf 'm0_packet_dir=%s\n' "$M0_PACKET_DIR"
 } >"$RUN_DIR/environment.txt"
 : >"$RUN_DIR/commands.txt"
 
@@ -46,10 +48,14 @@ if rg -n 'deferred to #3681' TreeDB >"$RUN_DIR/deferred-3681.txt"; then
 fi
 rg -n 'ErrVacuumRecoverableRootSetRequired' TreeDB >"$RUN_DIR/recoverable-root-required-inventory.txt" || true
 
-run_and_log backend run_tree_test ./TreeDB/db -run 'TestVacuumM0ProductionOnlineVacuumIsSupported|TestVacuumIndexOnline_.*(Preserves|Reopen|Collection|Stable)|TestCapture.*BlocksVacuum' -count=1
+run_and_log matrix env GOWORK=off TMPDIR="$TMP_ROOT" \
+  TREEDB_INDEX_VACUUM_M4_MATRIX_OUT="$RUN_DIR/tests/index_vacuum_m4_matrix.json" \
+  go test ./TreeDB -run '^(TestIndexVacuumM4CertificationMatrix|TestIndexVacuumM4MatrixHarnessContract)$' \
+  -count=1 -timeout 20m
+run_and_log backend run_tree_test ./TreeDB/db -run 'TestVacuumM0ProductionOnlineVacuumIsSupported|TestVacuumIndexOnline|TestCapture.*(Blocks|Vacuum)' -count=1
 run_and_log public run_tree_test ./TreeDB -run 'TestVacuumIndexOnline|TestPublicVacuum|TestCached.*Vacuum' -count=1
 run_and_log background run_tree_test ./TreeDB -run 'TestBackgroundIndexVacuum' -count=1
-run_and_log compact-storage run_tree_test ./TreeDB/... -run 'TestCompactStorage(IndexVacuum|Full|Cached)' -count=1
+run_and_log compact-storage run_tree_test ./TreeDB/... -run 'TestCompactStorage(IndexVacuum|Full|Exhaustive|Cached)' -count=1
 run_and_log offline run_tree_test ./TreeDB/... -run 'TestVacuumIndexOffline' -count=1
 run_and_log close-opt-in env GOWORK=off TMPDIR="$TMP_ROOT" TREEDB_CLOSE_VACUUM_INDEX_ONLINE=1 go test ./TreeDB \
   -run '^TestCloseOptInVacuumIndexOnlineShrinksAndReopens$' -v -count=1
@@ -70,7 +76,21 @@ env GOWORK=off TMPDIR="$TMP_ROOT" go test ./TreeDB/db -run '^$' \
   -bench 'BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn|BenchmarkPL06ExternalVacuumCollectionForegroundChurn' \
   -count="$COUNT" -benchtime=1x -benchmem | tee "$RUN_DIR/benchmarks/production.txt"
 
-RUN_DIR="$RUN_DIR/m0" COUNT="$COUNT" scripts/treedb_vacuum_m0_capture.sh
+if [[ -n "$M0_PACKET_DIR" ]]; then
+  M0_PACKET_DIR=$(cd "$M0_PACKET_DIR" && pwd -P)
+  source_sha=$(git rev-parse HEAD)
+  if ! jq -e --arg sha "$source_sha" \
+    '.environment.git_sha == $sha and (.gates | to_entries | all(.value == true))' \
+    "$M0_PACKET_DIR/results.json" >/dev/null; then
+    printf 'reused M0 packet is not an exact-head all-gates-pass packet\n' >&2
+    exit 1
+  fi
+  rm -rf "$RUN_DIR/m0"
+  cp -a "$M0_PACKET_DIR" "$RUN_DIR/m0"
+  printf 'reuse M0_PACKET_DIR=%q\n' "$M0_PACKET_DIR" >>"$RUN_DIR/commands.txt"
+else
+  RUN_DIR="$RUN_DIR/m0" COUNT="$COUNT" scripts/treedb_vacuum_m0_capture.sh
+fi
 RUN_DIR="$RUN_DIR/compact-storage" COUNT="$COUNT" scripts/compact_storage_m0_profile.sh
 
 PROFILE_BENCH='^BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x$'
