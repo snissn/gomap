@@ -7,6 +7,7 @@ on:
       - "TreeDB/db/recoverable_root_set.go"
       - "TreeDB/db/durable_root*.go"
       - "TreeDB/db/root_publication*.go"
+      - "TreeDB/internal/rootpublication/**"
       - "TreeDB/db/ordered_root_publish.go"
       - "TreeDB/db/stable_resource.go"
       - "TreeDB/db/db.go"
