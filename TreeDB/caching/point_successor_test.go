@@ -310,6 +310,8 @@ func TestSeekGE_CompetingVersionsAcrossMutableQueuedAndPublishedSources(t *testi
 // Dgraph-shaped investigation.  It proves that the counters distinguish the
 // winning source rather than merely counting every source consulted.
 func TestSeekGE_AttributionPartitionsWinningSource(t *testing.T) {
+	SetPointSuccessorDebug(true)
+	t.Cleanup(func() { SetPointSuccessorDebug(false) })
 	parse := func(t *testing.T, stats map[string]string, name string) uint64 {
 		t.Helper()
 		value, err := strconv.ParseUint(stats[name], 10, 64)
@@ -369,12 +371,36 @@ func TestSeekGE_AttributionPartitionsWinningSource(t *testing.T) {
 	}
 }
 
+func TestSeekGE_TimingAttributionIsOptIn(t *testing.T) {
+	SetPointSuccessorDebug(false)
+	backend := NewMockBackend()
+	backend.Set([]byte("k"), []byte("value"))
+	db := openPointSuccessorTestDB(t, backend)
+	before := db.Stats()
+	requireSeekGE(t, db, []byte("k"), nil, []byte("k"), []byte("value"))
+	after := db.Stats()
+
+	for _, name := range []string{
+		"treedb.cache.point_successor.selection_ns_total",
+		"treedb.cache.point_successor.materialize_ns_total",
+	} {
+		if after[name] != before[name] {
+			t.Fatalf("disabled %s changed from %s to %s", name, before[name], after[name])
+		}
+	}
+	if after["treedb.cache.point_successor.backend_hits_total"] == before["treedb.cache.point_successor.backend_hits_total"] {
+		t.Fatal("winning-layer attribution did not remain active with timing disabled")
+	}
+}
+
 // BenchmarkSeekGEQueuedFanIn is a deterministic engine-only analogue of the
 // Dgraph mixed workload: an older key remains visible while newer immutable
 // sources contain later keys.  The lookup must inspect every newer source to
 // prove that the old key is the successor.  It intentionally holds flush so
 // the source set is stable for before/after comparisons.
 func BenchmarkSeekGEQueuedFanIn(b *testing.B) {
+	SetPointSuccessorDebug(true)
+	b.Cleanup(func() { SetPointSuccessorDebug(false) })
 	const queuedSources = 32
 	backend := NewMockBackend()
 	db, err := Open(b.TempDir(), backend, Options{

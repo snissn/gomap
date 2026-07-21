@@ -90,6 +90,11 @@ const (
 
 var iteratorDebugEnabled atomic.Bool
 
+// pointSuccessorDebugEnabled gates timestamp-based point-read attribution.
+// Counters remain available in production, but wall-clock probes are opt-in so
+// a diagnostic seam never charges every Dgraph point read.
+var pointSuccessorDebugEnabled atomic.Bool
+
 var valueLogEligiblePool sync.Pool                  // stores []int
 var valueLogKeyPool sync.Pool                       // stores [][]byte
 var batchArenaPools [batchArenaClassCount]sync.Pool // stores []byte
@@ -2459,6 +2464,12 @@ const (
 // intended for benchmarking/diagnostics and is disabled by default.
 func SetIteratorDebug(enabled bool) {
 	iteratorDebugEnabled.Store(enabled)
+}
+
+// SetPointSuccessorDebug toggles timestamp attribution for SeekGE. It is for
+// benchmarks and diagnostics only; normal point reads do no clock sampling.
+func SetPointSuccessorDebug(enabled bool) {
+	pointSuccessorDebugEnabled.Store(enabled)
 }
 
 func envBool(name string) bool {

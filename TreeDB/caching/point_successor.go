@@ -178,10 +178,14 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 		return nil, nil, false, nil
 	}
 	db.pointSuccessorCallsTotal.Add(1)
-	selectionStarted := time.Now()
+	debugTiming := pointSuccessorDebugEnabled.Load()
+	var selectionStarted time.Time
+	if debugTiming {
+		selectionStarted = time.Now()
+	}
 	selectionRecorded := false
 	recordSelection := func() {
-		if !selectionRecorded {
+		if debugTiming && !selectionRecorded {
 			db.pointSuccessorSelectionNsTotal.Add(uint64(time.Since(selectionStarted).Nanoseconds()))
 			selectionRecorded = true
 		}
@@ -304,8 +308,12 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 }
 
 func (db *DB) materializePointSuccessor(candidate pointSuccessorCandidate) ([]byte, []byte, bool, error) {
-	materializeStarted := time.Now()
-	defer func() { db.pointSuccessorMaterializeNsTotal.Add(uint64(time.Since(materializeStarted).Nanoseconds())) }()
+	debugTiming := pointSuccessorDebugEnabled.Load()
+	var materializeStarted time.Time
+	if debugTiming {
+		materializeStarted = time.Now()
+		defer func() { db.pointSuccessorMaterializeNsTotal.Add(uint64(time.Since(materializeStarted).Nanoseconds())) }()
+	}
 	if !candidate.found || candidate.flags&node.FlagTombstone != 0 {
 		return nil, nil, false, nil
 	}
