@@ -457,10 +457,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 		return stats, err
 	}
 	mergeCompactStorageIndexDebt(&initialDebt, initialIndexDebt)
-	if !initialDebt.IndexVacuumRequired && stats.LeafGenerationGC.GenerationsRetiring > 0 {
-		initialDebt.IndexVacuumRequired = true
-		initialDebt.IndexVacuumReason = "leaf_generation"
-	}
+	compactStorageApplyLeafGenerationIndexDebt(&initialDebt, stats.LeafGenerationGC)
 	stats.RemainingDebt = initialDebt
 	if opts.DryRun {
 		stats.Phases = append(stats.Phases, compactStorageIndexVacuumPlanPhase(initialDebt))
@@ -649,10 +646,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 		})
 		return stats, fmt.Errorf("index-vacuum-plan: %w", err)
 	}
-	if !indexDebt.IndexVacuumRequired && stats.LeafGenerationGC.GenerationsRetiring > 0 {
-		indexDebt.IndexVacuumRequired = true
-		indexDebt.IndexVacuumReason = "leaf_generation"
-	}
+	compactStorageApplyLeafGenerationIndexDebt(&indexDebt, stats.LeafGenerationGC)
 	indexVacuumCompleted := false
 	indexVacuumRetainedGuard := false
 	if !indexDebt.IndexVacuumRequired {
@@ -717,9 +711,9 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 		}
 		indexVacuumRetainedGuard = false
 	}
-	// If index vacuum was unsupported, keep leaf-generation pins through final
-	// audit, but drop the unrelated value-log set pin before value-log cleanup so
-	// zero-byte value_vlog segments are not kept alive by this guard.
+	// If index vacuum was unsupported or deferred, keep leaf-generation pins
+	// through final audit, but drop the unrelated value-log set pin before
+	// value-log cleanup so zero-byte value_vlog segments are not kept alive.
 	if indexVacuumRetainedGuard {
 		if err := releaseIndexVacuumLeafGuardValueLogPin(); err != nil {
 			return stats, err
@@ -757,6 +751,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 			return auditErr
 		}
 		mergeCompactStorageIndexDebt(&finalDebt, finalIndexDebt)
+		compactStorageApplyLeafGenerationIndexDebt(&finalDebt, finalAudit.LeafGenerationGC)
 		return nil
 	}
 	if err := refreshFinalAudit(); err != nil {
@@ -1542,6 +1537,13 @@ func mergeCompactStorageIndexDebt(dst *CompactStorageDebt, src CompactStorageDeb
 	dst.IndexVacuumCollectionRootPages = src.IndexVacuumCollectionRootPages
 	dst.IndexVacuumCollectionRootSpan = src.IndexVacuumCollectionRootSpan
 	dst.IndexVacuumCollectionRootSpanRatioPPM = src.IndexVacuumCollectionRootSpanRatioPPM
+}
+
+func compactStorageApplyLeafGenerationIndexDebt(debt *CompactStorageDebt, leafGC LeafGenerationGCStats) {
+	if !debt.IndexVacuumRequired && leafGC.GenerationsRetiring > 0 {
+		debt.IndexVacuumRequired = true
+		debt.IndexVacuumReason = "leaf_generation"
+	}
 }
 
 func (db *DB) compactStorageFencedUnreferencedValueLogIDs(ctx context.Context, opts CompactStorageOptions) ([]uint32, int64, error) {

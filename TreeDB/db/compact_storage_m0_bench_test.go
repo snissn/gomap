@@ -135,6 +135,7 @@ func BenchmarkCompactStorageM0(b *testing.B) {
 
 func BenchmarkCompactStorageIndexVacuumDecisionNoDebt(b *testing.B) {
 	db := openCompactStorageRewritePolicyBenchmarkFixture(b, 2047, 1, 1024)
+	b.Cleanup(func() { _ = db.Close() })
 	opts := CompactStorageOptions{Mode: CompactStorageFull}
 	ctx := context.Background()
 	b.ReportAllocs()

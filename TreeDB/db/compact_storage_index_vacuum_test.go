@@ -260,6 +260,14 @@ func TestCompactStorageIndexVacuumUnsupportedIsReported(t *testing.T) {
 	assertCompactStorageIndexDebtIncomplete(t, stats, fixture)
 }
 
+func TestCompactStorageIndexVacuumDebtIncludesRetiringLeafGeneration(t *testing.T) {
+	debt := CompactStorageDebt{}
+	compactStorageApplyLeafGenerationIndexDebt(&debt, LeafGenerationGCStats{GenerationsRetiring: 1})
+	if !debt.IndexVacuumRequired || debt.IndexVacuumReason != "leaf_generation" {
+		t.Fatalf("debt=%+v want required leaf-generation vacuum", debt)
+	}
+}
+
 func compactStorageIndexVacuumPhase(t *testing.T, stats CompactStorageStats) CompactStoragePhaseStats {
 	t.Helper()
 	for _, phase := range stats.Phases {
