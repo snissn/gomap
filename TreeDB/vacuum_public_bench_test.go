@@ -49,6 +49,32 @@ func TestPublicVacuumIndexOnlineHighDebtShrinkAndReopen(t *testing.T) {
 	}
 }
 
+func TestCloseOptInVacuumIndexOnlineShrinksAndReopens(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d, beforeBytes, beforeDigest := openPublicVacuumComparisonFixture(t)
+	dir := d.dir
+	t.Setenv(envCloseVacuumIndexOnline, "1")
+	t.Setenv(envCloseVacuumTimeout, "2m")
+	if err := d.Close(); err != nil {
+		t.Fatalf("close with online vacuum: %v", err)
+	}
+
+	afterBytes := publicVacuumIndexBytes(t, dir)
+	if afterBytes*100 > beforeBytes*60 {
+		t.Fatalf("close online vacuum shrink before=%d after=%d want >=40%%", beforeBytes, afterBytes)
+	}
+	reopened, err := Open(publicVacuumComparisonOptions(dir))
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	if got := publicVacuumDigest(t, reopened); got != beforeDigest {
+		t.Fatalf("reopen digest after close vacuum=%x want %x", got, beforeDigest)
+	}
+}
+
 func BenchmarkPublicVacuumVsDirectBackend(b *testing.B) {
 	if runtime.GOOS == "windows" {
 		b.Skip("online vacuum not supported on windows")

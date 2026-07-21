@@ -51,7 +51,12 @@ run_and_log public run_tree_test ./TreeDB -run 'TestVacuumIndexOnline|TestPublic
 run_and_log background run_tree_test ./TreeDB -run 'TestBackgroundIndexVacuum' -count=1
 run_and_log compact-storage run_tree_test ./TreeDB/... -run 'TestCompactStorage(IndexVacuum|Full|Cached)' -count=1
 run_and_log offline run_tree_test ./TreeDB/... -run 'TestVacuumIndexOffline' -count=1
-run_and_log close-opt-in env GOWORK=off TMPDIR="$TMP_ROOT" TREEDB_CLOSE_VACUUM_INDEX_ONLINE=1 go test ./TreeDB -run 'Test.*Close.*Vacuum|TestVacuum.*Close' -count=1
+run_and_log close-opt-in env GOWORK=off TMPDIR="$TMP_ROOT" TREEDB_CLOSE_VACUUM_INDEX_ONLINE=1 go test ./TreeDB \
+  -run '^TestCloseOptInVacuumIndexOnlineShrinksAndReopens$' -v -count=1
+if ! rg -q '^--- PASS: TestCloseOptInVacuumIndexOnlineShrinksAndReopens' "$RUN_DIR/tests/close-opt-in.txt"; then
+  printf 'close opt-in certification test did not execute successfully\n' >&2
+  exit 1
+fi
 
 if [[ "$RUN_FULL_TESTS" == "true" ]]; then
   run_and_log full-tree run_tree_test ./TreeDB/... -timeout 20m -count=1

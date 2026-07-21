@@ -20,6 +20,8 @@ func TestIndexVacuumM4CaptureKeepsCertificationLanes(t *testing.T) {
 		"TestCompactStorage",
 		"TestVacuumIndexOffline",
 		"TREEDB_CLOSE_VACUUM_INDEX_ONLINE=1",
+		"TestCloseOptInVacuumIndexOnlineShrinksAndReopens",
+		"close opt-in certification test did not execute successfully",
 		"BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn",
 		"BenchmarkPL06ExternalVacuumCollectionForegroundChurn",
 		"treedb_vacuum_m0_capture.sh",
