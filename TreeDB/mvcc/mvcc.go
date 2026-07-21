@@ -84,6 +84,13 @@ type treeDB interface {
 	NewBatchWithSize(size int) treedb.Batch
 }
 
+// pointWriter is an optional optimization implemented by the public TreeDB
+// handle. Keeping it separate from treeDB preserves the narrow test and
+// maintenance adapters that intentionally support only the batch contract.
+type pointWriter interface {
+	Set(key, value []byte) error
+}
+
 type pointSuccessorDB interface {
 	SeekGE(start, end []byte) (key, value []byte, found bool, err error)
 }
@@ -137,9 +144,11 @@ func (s *Store) CommitAt(timestamp uint64, mutations []Mutation, mode CommitMode
 	return s.CommitGroupAt([]CommitGroup{{Timestamp: timestamp, Mutations: mutations}}, mode)
 }
 
-// CommitGroupAt validates and atomically publishes timestamped mutation groups
-// through exactly one TreeDB Batch.Write or Batch.WriteSync call. Every group
-// is validated before a batch is created: timestamps must be non-zero and
+// CommitGroupAt validates and atomically publishes timestamped mutation groups.
+// A single relaxed physical record uses TreeDB's equivalent point-write path
+// when the handle supports it; durable and larger publications use exactly one
+// TreeDB Batch.Write or Batch.WriteSync call. Every group is validated before
+// storage is accessed: timestamps must be non-zero and
 // above the discard floor, keys must fit the MVCC codec, and no physical MVCC
 // key may occur twice. Thus the same logical key at distinct timestamps is
 // allowed, while duplicate logical keys at the same timestamp are rejected
@@ -218,6 +227,14 @@ func (s *Store) CommitGroupAt(groups []CommitGroup, mode CommitMode) error {
 	for _, entry := range staged {
 		if entry.timestamp <= floor {
 			return fmt.Errorf("%w: group index %d timestamp %d is not above floor %d", ErrVersionBelowDiscardFloor, entry.group, entry.timestamp, floor)
+		}
+	}
+	if mode == CommitRelaxed && len(staged) == 1 {
+		if writer, ok := s.db.(pointWriter); ok {
+			if err := writer.Set(staged[0].physical, staged[0].record); err != nil {
+				return storageError("commit point", err)
+			}
+			return nil
 		}
 	}
 
