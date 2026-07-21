@@ -81,6 +81,82 @@ func BenchmarkCommitAt(b *testing.B) {
 	}
 }
 
+// BenchmarkCommitGroupAtDgraphShape models the c4 external-MVCC publication
+// wedge: four independently timestamped caller commits, each with a small
+// mutation batch. The grouped row must issue one public TreeDB batch write per
+// four commits, while the baseline preserves the existing CommitAt boundary.
+func BenchmarkCommitGroupAtDgraphShape(b *testing.B) {
+	const commitsPerPublication = 4
+	for _, grouped := range []bool{false, true} {
+		name := "CommitAt_x4"
+		if grouped {
+			name = "CommitGroupAt_x4"
+		}
+		b.Run(name, func(b *testing.B) {
+			db := openBenchDB(b)
+			countingDB := &benchmarkBatchCounterDB{DB: db}
+			store := newStore(countingDB)
+			groups := make([]CommitGroup, commitsPerPublication)
+			for groupIndex := range groups {
+				groups[groupIndex].Mutations = []Mutation{{
+					Key:   []byte(fmt.Sprintf("dgraph-submission-%d", groupIndex)),
+					Value: []byte("posting-list-delta"),
+				}}
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				firstTimestamp := uint64(i*commitsPerPublication + 1)
+				for groupIndex := range groups {
+					groups[groupIndex].Timestamp = firstTimestamp + uint64(groupIndex)
+				}
+				if grouped {
+					if err := store.CommitGroupAt(groups, CommitRelaxed); err != nil {
+						b.Fatal(err)
+					}
+					continue
+				}
+				for groupIndex := range groups {
+					if err := store.CommitAt(groups[groupIndex].Timestamp, groups[groupIndex].Mutations, CommitRelaxed); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(countingDB.writes)/float64(b.N), "public_batch_writes/publication")
+		})
+	}
+}
+
+// benchmarkBatchCounterDB observes calls at TreeDB's public Batch surface,
+// rather than relying on optional runtime statistics in a benchmark profile.
+type benchmarkBatchCounterDB struct {
+	*treedb.DB
+	writes uint64
+}
+
+func (db *benchmarkBatchCounterDB) NewBatchWithSize(size int) treedb.Batch {
+	return &benchmarkBatchCounter{Batch: db.DB.NewBatchWithSize(size), db: db}
+}
+
+type benchmarkBatchCounter struct {
+	treedb.Batch
+	db *benchmarkBatchCounterDB
+}
+
+func (b *benchmarkBatchCounter) Write() error {
+	b.db.writes++
+	return b.Batch.Write()
+}
+
+func (b *benchmarkBatchCounter) WriteSync() error {
+	b.db.writes++
+	return b.Batch.WriteSync()
+}
+
+var _ treeDB = (*benchmarkBatchCounterDB)(nil)
+var _ treedb.Batch = (*benchmarkBatchCounter)(nil)
+
 func BenchmarkGetAt(b *testing.B) {
 	for _, depth := range []int{1, 8, 64} {
 		b.Run(fmt.Sprintf("DirectSeek/%d", depth), func(b *testing.B) {
