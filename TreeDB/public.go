@@ -2537,6 +2537,11 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// Reject unsupported platforms before maintenance acquisition or cached
+	// checkpointing so this API remains non-mutating when it cannot run.
+	if runtime.GOOS == "windows" {
+		return errVacuumUnsupported
+	}
 	_, finishMaintenance, err := db.beginFullScanMaintenanceContext(ctx, "vacuum")
 	if err != nil {
 		return err
