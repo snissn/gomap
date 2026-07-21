@@ -24125,6 +24125,28 @@ func lockCheckpointMutexContext(ctx context.Context, mu checkpointTryLocker) err
 	}
 }
 
+func lockCheckpointWriteMutexContext(ctx context.Context, mu *sync.RWMutex) error {
+	if ctx.Done() == nil {
+		mu.Lock()
+		return nil
+	}
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if mu.TryLock() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
 func (db *DB) waitForActiveCheckpointContext(ctx context.Context) error {
 	if ctx.Done() == nil {
 		db.checkpointMu.Lock()
@@ -24262,7 +24284,10 @@ func (db *DB) checkpointContext(ctx context.Context) error {
 		db.checkpointMu.Unlock()
 	}
 
-	if err := lockCheckpointMutexContext(ctx, &db.writeMu); err != nil {
+	// checkpointing and checkpointWriteCutoverActive already stop new cached
+	// writers at admission. Poll here so cancellation cannot leave an orphaned
+	// RWMutex writer that continues blocking readers after this call returns.
+	if err := lockCheckpointWriteMutexContext(ctx, &db.writeMu); err != nil {
 		return err
 	}
 	cutoverStart := time.Now()
