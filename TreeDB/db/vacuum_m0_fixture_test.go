@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -336,14 +337,39 @@ func vacuumM0Digest(tb testing.TB, d *DB) string {
 		tb.Fatal("acquire digest snapshot")
 	}
 	defer snapshot.Close()
-	encoded, err := snapshot.GetAtRoot(snapshot.state.SystemRootPageID, []byte(vacuumSnapshotPrimaryKey))
+	descriptors, err := snapshot.IteratorAtRoot(snapshot.state.SystemRootPageID, nil, nil)
 	if err != nil {
-		tb.Fatalf("read digest collection descriptor: %v", err)
+		tb.Fatalf("collection descriptor digest iterator: %v", err)
 	}
-	roots, err := decodeCollectionRootDescriptorRootIDs([]byte(vacuumSnapshotPrimaryKey), encoded, false)
-	if err != nil {
-		tb.Fatalf("decode digest collection descriptor: %v", err)
+	var descriptorEntries []vacuumM0DescriptorDigestEntry
+	for descriptors.Valid() {
+		key, value := descriptors.UnsafeKey(), descriptors.UnsafeValue()
+		allowList := false
+		switch {
+		case bytes.HasPrefix(key, vacuumCollectionRootOverlayDescriptorPrefixBytes):
+			allowList = true
+		case bytes.HasPrefix(key, vacuumCollectionRootDescriptorPrefixBytes):
+		default:
+			descriptors.Next()
+			continue
+		}
+		rootIDs, decodeErr := decodeCollectionRootDescriptorRootIDs(key, value, allowList)
+		if decodeErr != nil {
+			tb.Fatalf("decode digest collection descriptor %q: %v", key, decodeErr)
+		}
+		descriptorEntries = append(descriptorEntries, vacuumM0DescriptorDigestEntry{
+			key:     append([]byte(nil), key...),
+			rootIDs: append([]uint64(nil), rootIDs...),
+		})
+		descriptors.Next()
 	}
+	if err := descriptors.Error(); err != nil {
+		tb.Fatalf("collection descriptor digest iterator: %v", err)
+	}
+	if err := descriptors.Close(); err != nil {
+		tb.Fatalf("close collection descriptor digest iterator: %v", err)
+	}
+	roots := vacuumM0HashDescriptorEntries(h, descriptorEntries)
 	for index, root := range roots {
 		collection, iterErr := snapshot.IteratorAtRoot(root, nil, nil)
 		if iterErr != nil {
@@ -352,6 +378,66 @@ func vacuumM0Digest(tb testing.TB, d *DB) string {
 		vacuumM0HashIterator(tb, h, fmt.Sprintf("collection/%d", index), collection)
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+type vacuumM0DescriptorDigestEntry struct {
+	key     []byte
+	rootIDs []uint64
+}
+
+func vacuumM0HashDescriptorEntries(h hash.Hash, entries []vacuumM0DescriptorDigestEntry) []uint64 {
+	ordinals := make(map[uint64]uint64)
+	var roots []uint64
+	var encoded [8]byte
+	for _, entry := range entries {
+		_, _ = h.Write([]byte("descriptor"))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write(entry.key)
+		_, _ = h.Write([]byte{0})
+		binary.BigEndian.PutUint64(encoded[:], uint64(len(entry.rootIDs)))
+		_, _ = h.Write(encoded[:])
+		for _, rootID := range entry.rootIDs {
+			ordinal, ok := ordinals[rootID]
+			if !ok {
+				ordinal = uint64(len(roots))
+				ordinals[rootID] = ordinal
+				roots = append(roots, rootID)
+			}
+			binary.BigEndian.PutUint64(encoded[:], ordinal)
+			_, _ = h.Write(encoded[:])
+		}
+	}
+	return roots
+}
+
+func TestVacuumM0DescriptorDigestCanonicalizesPhysicalRootIDs(t *testing.T) {
+	digest := func(entries []vacuumM0DescriptorDigestEntry) string {
+		h := sha256.New()
+		vacuumM0HashDescriptorEntries(h, entries)
+		return hex.EncodeToString(h.Sum(nil))
+	}
+	shape := func(root uint64) []vacuumM0DescriptorDigestEntry {
+		return []vacuumM0DescriptorDigestEntry{
+			{key: []byte(vacuumSnapshotPrimaryKey), rootIDs: []uint64{root}},
+			{key: []byte(vacuumSnapshotAliasKey), rootIDs: []uint64{root}},
+			{key: []byte(vacuumSnapshotEmptyKey)},
+			{key: []byte(vacuumSnapshotOverlayKey), rootIDs: []uint64{root, root}},
+		}
+	}
+	baseline := digest(shape(7))
+	if got := digest(shape(70)); got != baseline {
+		t.Fatalf("physical root remap changed descriptor digest: got %s want %s", got, baseline)
+	}
+	withoutAlias := shape(7)
+	withoutAlias = append(withoutAlias[:1], withoutAlias[2:]...)
+	if got := digest(withoutAlias); got == baseline {
+		t.Fatal("dropping alias did not change descriptor digest")
+	}
+	changedOverlay := shape(7)
+	changedOverlay[3].rootIDs = []uint64{7, 8}
+	if got := digest(changedOverlay); got == baseline {
+		t.Fatal("changing overlay root relationship did not change descriptor digest")
+	}
 }
 
 func vacuumM0HashIterator(tb testing.TB, h hash.Hash, domain string, it iterator.UnsafeIterator) {
