@@ -2,10 +2,35 @@ package db
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"testing"
 )
+
+func TestIndexVacuumTriggerReportContextCanceledBeforeProbe(t *testing.T) {
+	d := openFragmentationTriggerFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := d.IndexVacuumTriggerReportContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("trigger report error=%v want context canceled", err)
+	}
+}
+
+func TestIndexVacuumTriggerReportContextCancelsCollectionWalk(t *testing.T) {
+	d := openFragmentationTriggerFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	restore := SetFragmentationProbeHookForTest(func(event FragmentationProbeEvent) {
+		if event == FragmentationProbeEventTriggerCollectionRootWalk {
+			cancel()
+		}
+	})
+	defer restore()
+	if _, err := d.IndexVacuumTriggerReportContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("trigger report error=%v want context canceled", err)
+	}
+}
 
 func TestIndexVacuumTriggerReportMatchesFragmentationSpan(t *testing.T) {
 	d := openFragmentationTriggerFixture(t)

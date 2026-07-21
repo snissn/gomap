@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"sync"
@@ -150,6 +151,18 @@ func (db *DB) IndexVacuumFreelistDebtSnapshot() (IndexVacuumFreelistDebtSnapshot
 // full-report map parsing; freelist reclaimable debt uses seeded incremental
 // counters rather than walking the on-disk freelist chain.
 func (db *DB) IndexVacuumTriggerReport() (IndexVacuumTriggerReport, error) {
+	return db.IndexVacuumTriggerReportContext(context.Background())
+}
+
+// IndexVacuumTriggerReportContext returns the automatic-vacuum trigger report
+// and stops its user and collection tree walks when ctx is canceled.
+func (db *DB) IndexVacuumTriggerReportContext(ctx context.Context) (IndexVacuumTriggerReport, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return IndexVacuumTriggerReport{}, err
+	}
 	emitFragmentationProbeEvent(FragmentationProbeEventTriggerReport)
 
 	snap := db.AcquireSnapshot()
@@ -168,6 +181,9 @@ func (db *DB) IndexVacuumTriggerReport() (IndexVacuumTriggerReport, error) {
 
 	emitFragmentationProbeEvent(FragmentationProbeEventTriggerUserTreeWalk)
 	err := snap.tree.WalkPages(func(pageID uint64, _ node.Node) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if out.UserPages == 0 {
 			out.UserMinPageID = pageID
 			out.UserMaxPageID = pageID
@@ -208,7 +224,7 @@ func (db *DB) IndexVacuumTriggerReport() (IndexVacuumTriggerReport, error) {
 	}
 
 	emitFragmentationProbeEvent(FragmentationProbeEventTriggerCollectionRootWalk)
-	if collection, err := collectionRootFragmentationStats(snap.idx, snap.state); err == nil {
+	if collection, err := collectionRootFragmentationStatsWithContext(ctx, snap.idx, snap.state); err == nil {
 		out.CollectionRootCount = collection.roots
 		out.CollectionRootPagerRoots = collection.pagerRoots
 		out.CollectionRootPages = collection.pages
@@ -224,6 +240,8 @@ func (db *DB) IndexVacuumTriggerReport() (IndexVacuumTriggerReport, error) {
 				out.CollectionRootSpanRatioValid = true
 			}
 		}
+	} else if ctx.Err() != nil {
+		return out, ctx.Err()
 	}
 	return out, nil
 }
@@ -375,17 +393,30 @@ type collectionRootFragmentation struct {
 }
 
 func collectionRootFragmentationStats(idx *indexGen, state *DBState) (collectionRootFragmentation, error) {
+	return collectionRootFragmentationStatsWithContext(context.Background(), idx, state)
+}
+
+func collectionRootFragmentationStatsWithContext(ctx context.Context, idx *indexGen, state *DBState) (collectionRootFragmentation, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return collectionRootFragmentation{}, err
+	}
 	out := collectionRootFragmentation{uniquePageIDs: make(map[uint64]struct{})}
 	if idx == nil || idx.pager == nil || state == nil || state.SystemRootPageID == 0 {
 		return out, nil
 	}
 	reader := newValueReader(state.ValueLogSet)
-	descriptors, err := vacuumCollectCollectionRootDescriptors(idx.pager, reader, state.SystemRootPageID)
+	descriptors, err := vacuumCollectCollectionRootDescriptorsWithContext(ctx, idx.pager, reader, state.SystemRootPageID)
 	if err != nil {
 		return out, err
 	}
 	out.roots = uint64(len(descriptors))
 	for _, descriptor := range descriptors {
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
 		rootID := descriptor.rootID
 		if rootID == 0 {
 			continue
@@ -393,6 +424,9 @@ func collectionRootFragmentationStats(idx *indexGen, state *DBState) (collection
 		out.pagerRoots++
 		tr := tree.New(idx.pager, reader, rootID)
 		if err := tr.WalkPages(func(pageID uint64, n node.Node) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if _, seen := out.uniquePageIDs[pageID]; seen {
 				out.duplicatePages++
 				return nil

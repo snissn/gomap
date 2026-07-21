@@ -11,7 +11,10 @@ import (
 
 var (
 	errDurableWALCleanupProofUnavailable = errors.New("durable WAL cleanup proof unavailable")
-	errDurableWALCleanupProofStale       = errors.New("durable WAL cleanup proof stale")
+	// ErrDurableWALCleanupProofStale reports that command-WAL cleanup authority
+	// changed before deletion. Callers may retry from a fresh checkpoint cut.
+	ErrDurableWALCleanupProofStale = errors.New("durable WAL cleanup proof stale")
+	errDurableWALCleanupProofStale = ErrDurableWALCleanupProofStale
 )
 
 type durableWALCleanupRootV1 struct {

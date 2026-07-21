@@ -1,16 +1,19 @@
 package treedb
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestBackgroundIndexVacuumConcurrentMutationIsRetryOnly(t *testing.T) {
@@ -23,6 +26,18 @@ func TestBackgroundIndexVacuumConcurrentMutationIsRetryOnly(t *testing.T) {
 	}
 	if backgroundIndexVacuumShouldReport(backenddb.ErrVacuumRecoverableRootSetRequired) {
 		t.Fatal("recoverable-root-set fence classified as permanent background error")
+	}
+	if backgroundIndexVacuumShouldReport(backenddb.ErrRecoverableRootSetStale) {
+		t.Fatal("stale recoverable-root-set classified as permanent background error")
+	}
+	if backgroundIndexVacuumShouldReport(backenddb.ErrVacuumUnsupported) {
+		t.Fatal("unsupported capability classified as permanent background error")
+	}
+	if backgroundIndexVacuumShouldReport(backenddb.ErrDurableWALCleanupProofStale) {
+		t.Fatal("stale checkpoint-cleanup proof classified as permanent background error")
+	}
+	if backgroundIndexVacuumShouldReport(rootpublication.ErrResourcePinned) {
+		t.Fatal("pinned stable resource classified as permanent background error")
 	}
 }
 
@@ -331,7 +346,6 @@ func TestBackgroundIndexVacuumTriggerPredicatesIndependentDebt(t *testing.T) {
 }
 
 func TestBackgroundIndexVacuumFreelistDebtTriggersVacuum(t *testing.T) {
-	t.Skip("deferred to #3681: successful online vacuum requires RecoverableRootSet convergence")
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum not supported on windows")
 	}
@@ -366,12 +380,13 @@ func TestBackgroundIndexVacuumFreelistDebtTriggersVacuum(t *testing.T) {
 }
 
 func TestBackgroundIndexVacuumCollectionRootDebtTriggersVacuum(t *testing.T) {
-	t.Skip("deferred to #3681: successful online vacuum requires RecoverableRootSet convergence")
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum not supported on windows")
 	}
 	d := openBackgroundVacuumTestDB(t, Options{
 		KeepRecent:                    1,
+		Durability:                    DurabilityWALOffRelaxed,
+		ResolvedProfile:               backenddb.ProfileNoWALFast,
 		BackgroundIndexVacuumInterval: -1,
 	})
 	seedBackgroundVacuumCollectionRootDebt(t, d)
@@ -440,13 +455,16 @@ func assertNoBackgroundVacuumFullFragmentationWalks(t *testing.T, counts map[bac
 	}
 }
 
-func TestBackgroundIndexVacuumRemainsDisabledUntilRecoverableRootSetFenced(t *testing.T) {
+func TestBackgroundIndexVacuumStartsWhenConfigured(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
 	dir := t.TempDir()
 
 	d, err := Open(Options{
 		Dir:                               dir,
 		KeepRecent:                        1,
-		BackgroundIndexVacuumInterval:     5 * time.Millisecond,
+		BackgroundIndexVacuumInterval:     time.Hour,
 		BackgroundIndexVacuumSpanRatioPPM: 1,
 	})
 	if err != nil {
@@ -454,15 +472,421 @@ func TestBackgroundIndexVacuumRemainsDisabledUntilRecoverableRootSetFenced(t *te
 	}
 
 	stats := d.Stats()
-	if got := stats["treedb.bg_vacuum.enabled"]; got != "false" {
-		t.Fatalf("background vacuum enabled=%q want false pending #3681", got)
+	if got := stats["treedb.bg_vacuum.enabled"]; got != "true" {
+		t.Fatalf("background vacuum enabled=%q want true", got)
 	}
 	if got := stats["treedb.bg_vacuum.vacuums"]; got != "0" {
-		t.Fatalf("background vacuum runs=%q want 0 pending #3681", got)
+		t.Fatalf("background vacuum runs=%q want 0 before first tick", got)
 	}
 
 	if err := d.Close(); err != nil {
 		t.Fatalf("close: %v", err)
+	}
+}
+
+func TestBackgroundIndexVacuumDisabledIntervalStartsNoWorker(t *testing.T) {
+	d, err := Open(Options{
+		Dir:                           t.TempDir(),
+		BackgroundIndexVacuumInterval: -1,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	stats := d.Stats()
+	if got := stats["treedb.bg_vacuum.enabled"]; got != "false" {
+		t.Fatalf("background vacuum enabled=%q want false", got)
+	}
+	if got := stats["treedb.bg_vacuum.runs"]; got != "0" {
+		t.Fatalf("background vacuum runs=%q want 0", got)
+	}
+	if got := stats["treedb.bg_vacuum.trigger_probes"]; got != "0" {
+		t.Fatalf("background vacuum probes=%q want 0", got)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}
+
+func TestBackgroundIndexVacuumErrorOutcomes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	tests := []struct {
+		name                  string
+		err                   error
+		wantRetryReason       string
+		wantOutcome           string
+		wantConcurrent        uint64
+		wantRecoverableRoots  uint64
+		wantCheckpointCleanup uint64
+		wantResourcePinned    uint64
+		wantUnsupported       uint64
+		wantPermanent         uint64
+		wantReports           int64
+	}{
+		{
+			name:            "concurrent mutation",
+			err:             backenddb.ErrVacuumConcurrentMutation,
+			wantRetryReason: backgroundIndexVacuumRetryReasonConcurrentMutation,
+			wantOutcome:     backgroundIndexVacuumOutcomeRetry,
+			wantConcurrent:  1,
+		},
+		{
+			name:                 "stale recoverable roots",
+			err:                  backenddb.ErrRecoverableRootSetStale,
+			wantRetryReason:      backgroundIndexVacuumRetryReasonRecoverableRootSet,
+			wantOutcome:          backgroundIndexVacuumOutcomeRetry,
+			wantRecoverableRoots: 1,
+		},
+		{
+			name:                  "stale checkpoint cleanup",
+			err:                   backenddb.ErrDurableWALCleanupProofStale,
+			wantRetryReason:       backgroundIndexVacuumRetryReasonCheckpointCleanup,
+			wantOutcome:           backgroundIndexVacuumOutcomeRetry,
+			wantCheckpointCleanup: 1,
+		},
+		{
+			name:               "pinned stable resource",
+			err:                rootpublication.ErrResourcePinned,
+			wantRetryReason:    backgroundIndexVacuumRetryReasonResourcePinned,
+			wantOutcome:        backgroundIndexVacuumOutcomeRetry,
+			wantResourcePinned: 1,
+		},
+		{
+			name:            "unsupported",
+			err:             backenddb.ErrVacuumUnsupported,
+			wantRetryReason: backgroundIndexVacuumRetryReasonNone,
+			wantOutcome:     backgroundIndexVacuumOutcomeUnsupported,
+			wantUnsupported: 1,
+		},
+		{
+			name:            "permanent",
+			err:             errors.New("vacuum I/O failure"),
+			wantRetryReason: backgroundIndexVacuumRetryReasonNone,
+			wantOutcome:     backgroundIndexVacuumOutcomePermanentFailure,
+			wantPermanent:   1,
+			wantReports:     1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var reports atomic.Int64
+			d := openBackgroundVacuumTestDB(t, Options{
+				BackgroundIndexVacuumInterval: -1,
+				NotifyError: func(error) {
+					reports.Add(1)
+				},
+			})
+			seedBackgroundVacuumUserPages(t, d, 64)
+			d.bgVac.spanRatioPPM = 1
+			d.bgVac.freelistReclaimablePages = ^uint64(0)
+			d.bgVac.collectionRootPages = ^uint64(0)
+
+			var calls atomic.Int64
+			restore := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) error {
+				calls.Add(1)
+				return tc.err
+			})
+			defer restore()
+
+			d.bgVac.runOnce(d)
+			stats := d.bgVac.Stats()
+			if stats.LastRetryReason != tc.wantRetryReason || stats.LastOutcome != tc.wantOutcome {
+				t.Fatalf("retry=%q outcome=%q want retry=%q outcome=%q", stats.LastRetryReason, stats.LastOutcome, tc.wantRetryReason, tc.wantOutcome)
+			}
+			if stats.RetryConcurrentMutationTotal != tc.wantConcurrent ||
+				stats.RetryRecoverableRootSetTotal != tc.wantRecoverableRoots ||
+				stats.RetryCheckpointCleanupTotal != tc.wantCheckpointCleanup ||
+				stats.RetryResourcePinnedTotal != tc.wantResourcePinned ||
+				stats.UnsupportedTotal != tc.wantUnsupported ||
+				stats.PermanentFailuresTotal != tc.wantPermanent {
+				t.Fatalf("unexpected counters: %+v", stats)
+			}
+			if got := reports.Load(); got != tc.wantReports {
+				t.Fatalf("NotifyError calls=%d want %d", got, tc.wantReports)
+			}
+			publicStats := d.Stats()
+			if got := publicStats["treedb.bg_vacuum.last_retry_reason"]; got != tc.wantRetryReason {
+				t.Fatalf("public last retry reason=%q want %q", got, tc.wantRetryReason)
+			}
+			if got := publicStats["treedb.bg_vacuum.last_outcome"]; got != tc.wantOutcome {
+				t.Fatalf("public last outcome=%q want %q", got, tc.wantOutcome)
+			}
+			if got := publicStats["treedb.bg_vacuum.retry_resource_pinned_total"]; got != fmt.Sprint(tc.wantResourcePinned) {
+				t.Fatalf("public pinned retry total=%q want %d", got, tc.wantResourcePinned)
+			}
+
+			if tc.wantUnsupported != 0 || tc.wantPermanent != 0 {
+				d.bgVac.runOnce(d)
+				if got := calls.Load(); got != 1 {
+					t.Fatalf("vacuum calls after terminal unchanged outcome=%d want 1", got)
+				}
+				if got := reports.Load(); got != tc.wantReports {
+					t.Fatalf("NotifyError calls after unchanged tick=%d want %d", got, tc.wantReports)
+				}
+				if got := d.bgVac.Stats().LastErr; got != tc.err.Error() {
+					t.Fatalf("retained last error=%q want %q", got, tc.err.Error())
+				}
+			} else if tc.wantResourcePinned != 0 {
+				d.bgVac.runOnce(d)
+				if got := calls.Load(); got != 2 {
+					t.Fatalf("vacuum calls after pinned retry=%d want 2", got)
+				}
+				if got := reports.Load(); got != 0 {
+					t.Fatalf("NotifyError calls after pinned retry=%d want 0", got)
+				}
+			}
+		})
+	}
+}
+
+func TestBackgroundIndexVacuumPermanentProbeErrorReportedOncePerState(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	var reports atomic.Int64
+	d := openBackgroundVacuumTestDB(t, Options{
+		BackgroundIndexVacuumInterval: -1,
+		NotifyError: func(error) {
+			reports.Add(1)
+		},
+	})
+
+	probeErr := errors.New("trigger report I/O failure")
+	var probes atomic.Int64
+	restore := setBackgroundIndexVacuumTriggerReportHookForTest(func(*DB, context.Context) (backenddb.IndexVacuumTriggerReport, error) {
+		probes.Add(1)
+		return backenddb.IndexVacuumTriggerReport{}, probeErr
+	})
+	defer restore()
+
+	d.bgVac.runOnce(d)
+	d.bgVac.runOnce(d)
+	if got := probes.Load(); got != 1 {
+		t.Fatalf("unchanged-state trigger probes=%d want 1", got)
+	}
+	if got := reports.Load(); got != 1 {
+		t.Fatalf("unchanged-state NotifyError calls=%d want 1", got)
+	}
+	stats := d.bgVac.Stats()
+	if stats.PermanentFailuresTotal != 1 || stats.LastOutcome != backgroundIndexVacuumOutcomeUnchanged || stats.LastErr != probeErr.Error() {
+		t.Fatalf("unexpected unchanged-state stats: %+v", stats)
+	}
+
+	if err := d.Set([]byte("new-state"), []byte("value")); err != nil {
+		t.Fatalf("mutate state: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint new state: %v", err)
+	}
+	d.bgVac.runOnce(d)
+	if got := probes.Load(); got != 2 {
+		t.Fatalf("changed-state trigger probes=%d want 2", got)
+	}
+	if got := reports.Load(); got != 2 {
+		t.Fatalf("changed-state NotifyError calls=%d want 2", got)
+	}
+}
+
+func TestBackgroundIndexVacuumReadOnlyStartsNoWorker(t *testing.T) {
+	dir := t.TempDir()
+	writable, err := Open(Options{Dir: dir, BackgroundIndexVacuumInterval: -1})
+	if err != nil {
+		t.Fatalf("open writable fixture: %v", err)
+	}
+	if err := writable.Set([]byte("key"), []byte("value")); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := writable.Close(); err != nil {
+		t.Fatalf("close writable fixture: %v", err)
+	}
+
+	readOnly, err := Open(Options{
+		Dir:                           dir,
+		ReadOnly:                      true,
+		BackgroundIndexVacuumInterval: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("open read-only: %v", err)
+	}
+	if got := readOnly.Stats()["treedb.bg_vacuum.enabled"]; got != "false" {
+		t.Fatalf("read-only background vacuum enabled=%q want false", got)
+	}
+	if err := readOnly.Close(); err != nil {
+		t.Fatalf("close read-only: %v", err)
+	}
+}
+
+func TestBackgroundIndexVacuumCloseCancelsActivePass(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d, err := Open(Options{
+		Dir:                               t.TempDir(),
+		BackgroundIndexVacuumInterval:     time.Hour,
+		BackgroundIndexVacuumSpanRatioPPM: 1,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	seedBackgroundVacuumUserPages(t, d, 64)
+
+	started := make(chan struct{})
+	restore := setBackgroundIndexVacuumRunHookForTest(func(_ *DB, ctx context.Context) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	defer restore()
+
+	d.bgVac.Kick()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("background vacuum did not start")
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- d.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not cancel active background vacuum")
+	}
+}
+
+func TestVacuumIndexOnlineContextCancelsWhileWaitingForMaintenance(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	d.maintenance.mu.Lock()
+	defer d.maintenance.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- d.VacuumIndexOnline(ctx) }()
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("VacuumIndexOnline error=%v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("VacuumIndexOnline did not cancel while waiting for maintenance")
+	}
+}
+
+func TestLockFullScanMaintenanceContextCancellationLeavesNoWaiters(t *testing.T) {
+	var mu sync.Mutex
+	mu.Lock()
+	baselineGoroutines := runtime.NumGoroutine()
+
+	const waiters = 64
+	contexts := make([]context.CancelFunc, waiters)
+	done := make(chan error, waiters)
+	var callers sync.WaitGroup
+	for i := range contexts {
+		ctx, cancel := context.WithCancel(context.Background())
+		contexts[i] = cancel
+		callers.Add(1)
+		go func() {
+			defer callers.Done()
+			done <- lockFullScanMaintenanceContext(ctx, &mu)
+		}()
+	}
+	time.Sleep(20 * time.Millisecond)
+	for _, cancel := range contexts {
+		cancel()
+	}
+	for range contexts {
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("lock wait error=%v, want context.Canceled", err)
+		}
+	}
+	callers.Wait()
+
+	runtime.Gosched()
+	blockedGoroutines := runtime.NumGoroutine()
+	mu.Unlock()
+	if blockedGoroutines > baselineGoroutines+waiters/4 {
+		t.Fatalf("goroutines after cancellation=%d baseline=%d; canceled lock waiters remain parked", blockedGoroutines, baselineGoroutines)
+	}
+	if !mu.TryLock() {
+		t.Fatal("canceled maintenance lock calls left queued mutex waiters")
+	}
+	mu.Unlock()
+}
+
+func TestLockFullScanMaintenanceContextRejectsCanceledContextBeforeIdleLock(t *testing.T) {
+	var mu sync.Mutex
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := lockFullScanMaintenanceContext(ctx, &mu); !errors.Is(err, context.Canceled) {
+		t.Fatalf("lock error=%v, want context.Canceled", err)
+	}
+	if !mu.TryLock() {
+		t.Fatal("canceled maintenance lock call retained idle mutex")
+	}
+	mu.Unlock()
+
+	d := &DB{}
+	if _, _, err := d.beginFullScanMaintenanceContext(ctx, "vacuum"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("begin maintenance error=%v, want context.Canceled", err)
+	}
+	if !d.maintenance.mu.TryLock() {
+		t.Fatal("canceled maintenance fast path retained mutex")
+	}
+	d.maintenance.mu.Unlock()
+}
+
+func TestVacuumIndexOnlineDoesNotHoldLifecycleWhileWaitingForMaintenance(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	d.maintenance.mu.Lock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	vacuumDone := make(chan error, 1)
+	go func() { vacuumDone <- d.VacuumIndexOnline(ctx) }()
+	time.Sleep(25 * time.Millisecond)
+
+	lifecycleAcquired := make(chan struct{})
+	releaseLifecycle := make(chan struct{})
+	go func() {
+		d.lifecycleMu.Lock()
+		close(lifecycleAcquired)
+		<-releaseLifecycle
+		d.lifecycleMu.Unlock()
+	}()
+	select {
+	case <-lifecycleAcquired:
+	case <-time.After(100 * time.Millisecond):
+		cancel()
+		d.maintenance.mu.Unlock()
+		<-lifecycleAcquired
+		close(releaseLifecycle)
+		<-vacuumDone
+		t.Fatal("lifecycle writer blocked behind vacuum waiting for maintenance")
+	}
+
+	cancel()
+	close(releaseLifecycle)
+	d.maintenance.mu.Unlock()
+	select {
+	case err := <-vacuumDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("VacuumIndexOnline error=%v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("vacuum did not cancel after maintenance released")
 	}
 }
 

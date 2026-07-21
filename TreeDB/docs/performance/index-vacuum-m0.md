@@ -21,7 +21,8 @@ and foreground p99 each have a coefficient of variation at most 10%. Backend
 rows must be uniform across all ten samples: either explicitly unavailable with
 `vacuum-unsupported/op = 1`, `foreground-exposure-misses/op = 1`, zero
 foreground overlap, and zero retry/unexpected-error metrics, or available with
-zero unsupported/retry/error/exposure-miss metrics and positive foreground overlap.
+zero unsupported/unexpected-error/exposure-miss metrics, only typed transient
+retries, positive overlap in every sample, and at least one successful sample.
 Mixed or ambiguous status fails closed. The available classification is backend
 evidence only; top-level cached/public routing remains M2-owned. Legacy rows
 must report zero concurrent aborts, so an aborted run cannot become a timing
@@ -60,7 +61,8 @@ reopen digest parity.
 The M0 test-first exception was deliberate: its original unsupported result
 remains a valid frozen pre-M1 classification, while M1 adds the verified-success
 classification for the internal DB-minted backend. Public/background routing
-remains owned by M2. M0 continues to assert disabled background behavior,
+is activated by M2 while this M0 artifact remains a frozen pre-activation
+baseline. M0 continues to assert disabled background behavior,
 deterministic fixture debt, offline parity, and artifact schema completeness.
 
 The legacy timing baseline explicitly drains and disables the current

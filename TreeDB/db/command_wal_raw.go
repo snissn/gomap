@@ -648,6 +648,13 @@ func (db *DB) cleanupCommandWALCoveredSegmentsAtCheckpointV1(maintenanceAlreadyH
 	} else {
 		err = db.CleanupCommandWALCoveredSegments(false)
 	}
+	return normalizeCommandWALCheckpointCleanupError(err)
+}
+
+func normalizeCommandWALCheckpointCleanupError(err error) error {
+	if errors.Is(err, errDurableWALCleanupProofStale) || errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
+		return errors.Join(ErrDurableWALCleanupProofStale, err)
+	}
 	if errors.Is(err, errDurableWALCleanupProofUnavailable) {
 		return nil
 	}
