@@ -75,6 +75,55 @@ func TestCachingDB_CheckpointContextCancelsBeforeFrontierDrain(t *testing.T) {
 	}
 }
 
+func TestCachingDB_CheckpointContextQueuesBehindActiveReaders(t *testing.T) {
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.writeMu.RLock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- db.CheckpointContext(ctx) }()
+	deadline := time.Now().Add(withRaceTimeout(2 * time.Second))
+	for !db.checkpointing.Load() {
+		if time.Now().After(deadline) {
+			db.writeMu.RUnlock()
+			t.Fatal("checkpoint did not reach write ownership wait")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// Allow the checkpoint waiter to enter RWMutex.Lock after publishing the
+	// checkpoint state observed above.
+	time.Sleep(withRaceTimeout(10 * time.Millisecond))
+
+	lateReader := make(chan struct{})
+	go func() {
+		db.writeMu.RLock()
+		close(lateReader)
+		db.writeMu.RUnlock()
+	}()
+	select {
+	case <-lateReader:
+		db.writeMu.RUnlock()
+		t.Fatal("later reader bypassed queued checkpoint writer")
+	case <-time.After(withRaceTimeout(25 * time.Millisecond)):
+	}
+
+	db.writeMu.RUnlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("CheckpointContext: %v", err)
+		}
+	case <-time.After(withRaceTimeout(2 * time.Second)):
+		t.Fatal("queued checkpoint did not finish after reader released")
+	}
+	awaitCheckpointTestSignal(t, lateReader, "late reader after checkpoint")
+}
+
 func countCommitLogFiles(entries []os.DirEntry) int {
 	n := 0
 	for _, ent := range entries {
