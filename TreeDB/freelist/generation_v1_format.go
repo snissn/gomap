@@ -34,13 +34,26 @@ type AppendPageSink interface {
 	WritePage(pageID uint64, data []byte) error
 }
 
-// BorrowedCandidatePageSinkV1 accepts immutable candidate-owned page bytes for
-// the duration of WritePage. Implementations must not mutate or retain data.
-// The explicit opt-in keeps arbitrary AppendPageSink implementations on the
-// isolated copy path.
-type BorrowedCandidatePageSinkV1 interface {
-	AppendPageSink
-	AcceptsBorrowedCandidatePagesV1()
+// CandidatePageViewV1 is a read-only view of one candidate-owned page. It can
+// copy into caller-owned storage without exposing the candidate's byte slice.
+type CandidatePageViewV1 struct {
+	data []byte
+}
+
+func (view CandidatePageViewV1) Len() int { return len(view.data) }
+
+func (view CandidatePageViewV1) CopyTo(dst []byte) error {
+	if len(view.data) != page.PageSize || len(dst) != len(view.data) {
+		return fmt.Errorf("%w: invalid candidate page copy", ErrGenerationFormat)
+	}
+	copy(dst, view.data)
+	return nil
+}
+
+// CandidatePageWriterV1 receives an opaque read-only page view. It may retain
+// the view, but cannot mutate or alias candidate-owned bytes through this API.
+type CandidatePageWriterV1 interface {
+	WriteCandidatePageV1(pageID uint64, view CandidatePageViewV1) error
 }
 
 type GenerationRefV1 struct {
@@ -75,8 +88,6 @@ type CandidatePageSinkV1 struct {
 func NewCandidatePageSinkV1() *CandidatePageSinkV1 {
 	return &CandidatePageSinkV1{pageIDs: make(map[uint64]struct{})}
 }
-
-func (*CandidatePageSinkV1) AcceptsBorrowedCandidatePagesV1() {}
 
 func (s *CandidatePageSinkV1) WritePage(id uint64, data []byte) error {
 	if s == nil || len(data) != page.PageSize {

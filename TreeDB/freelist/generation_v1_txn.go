@@ -574,15 +574,16 @@ func (c *FreelistCandidateV1) PageCount() int {
 	return len(c.pages)
 }
 
-// WritePagesBorrowedV1 visits immutable candidate-owned pages without copying
-// them. The sink's explicit contract forbids mutation or retention of data.
-func (c *FreelistCandidateV1) WritePagesBorrowedV1(sink BorrowedCandidatePageSinkV1) error {
-	if c == nil || sink == nil {
+// WritePagesToV1 visits candidate-owned pages through opaque read-only views,
+// allowing a writer to copy directly into its final destination.
+func (c *FreelistCandidateV1) WritePagesToV1(writer CandidatePageWriterV1) error {
+	if c == nil || writer == nil {
 		return ErrGenerationFormat
 	}
 	for i := range c.pages {
-		if err := sink.WritePage(c.pages[i].PageID, c.pages[i].Data); err != nil {
-			return fmt.Errorf("write borrowed candidate page %d: %w", c.pages[i].PageID, err)
+		view := CandidatePageViewV1{data: c.pages[i].Data}
+		if err := writer.WriteCandidatePageV1(c.pages[i].PageID, view); err != nil {
+			return fmt.Errorf("write candidate page %d: %w", c.pages[i].PageID, err)
 		}
 	}
 	return nil
@@ -605,7 +606,7 @@ func (s *recordingSink) write(id uint64, data []byte) error {
 		s.writeStarted = true
 	}
 	sinkData := data
-	if _, borrowed := s.sink.(BorrowedCandidatePageSinkV1); !borrowed {
+	if _, ownsCandidateBytes := s.sink.(*CandidatePageSinkV1); !ownsCandidateBytes {
 		// Arbitrary sinks may retain or mutate their input. Give them an
 		// isolated copy while the candidate keeps the fresh encoded buffer.
 		sinkData = append([]byte(nil), data...)
@@ -815,7 +816,7 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 	t.stats.COWChunks = uint64(len(t.changedChunks))
 	t.stats.COWPages = uint64(len(recorded.pages))
 	t.stats.COWBytes = t.stats.COWPages * page.PageSize
-	if _, borrowed := sink.(BorrowedCandidatePageSinkV1); !borrowed {
+	if _, ownsCandidateBytes := sink.(*CandidatePageSinkV1); !ownsCandidateBytes {
 		t.stats.CandidatePageIsolationCopies = t.stats.COWPages
 		t.stats.CandidatePageIsolationBytes = t.stats.COWBytes
 	}

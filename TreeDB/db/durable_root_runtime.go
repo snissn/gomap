@@ -29,9 +29,7 @@ import (
 
 type durablePagerSinkV1 struct{ pager *pager.Pager }
 
-func (durablePagerSinkV1) AcceptsBorrowedCandidatePagesV1() {}
-
-var _ freelist.BorrowedCandidatePageSinkV1 = durablePagerSinkV1{}
+var _ freelist.CandidatePageWriterV1 = durablePagerSinkV1{}
 
 var (
 	errDurableRootCandidateStale               = errors.New("durable-root candidate base changed")
@@ -45,6 +43,17 @@ func (sink durablePagerSinkV1) WritePage(pageID uint64, image []byte) error {
 		return errors.New("missing durable pager")
 	}
 	return sink.pager.Write(pageID, image)
+}
+
+func (sink durablePagerSinkV1) WriteCandidatePageV1(pageID uint64, view freelist.CandidatePageViewV1) error {
+	if sink.pager == nil {
+		return errors.New("missing durable pager")
+	}
+	dst, err := sink.pager.GetForWrite(pageID)
+	if err != nil {
+		return err
+	}
+	return view.CopyTo(dst)
 }
 
 type durableRootRuntimeV1 struct {
@@ -1137,7 +1146,7 @@ func (db *DB) materializeDurableRootCandidateV1(candidate *durableRootPublishCan
 	if err := candidate.idx.pager.Truncate(generation.HighWater()); err != nil {
 		return fmt.Errorf("extend durable index: %w", err)
 	}
-	if err := candidate.prepared.Candidate().WritePagesBorrowedV1(durablePagerSinkV1{pager: candidate.idx.pager}); err != nil {
+	if err := candidate.prepared.Candidate().WritePagesToV1(durablePagerSinkV1{pager: candidate.idx.pager}); err != nil {
 		return fmt.Errorf("write durable-root COW pages: %w", err)
 	}
 	auxiliary := candidate.prepared.AuxiliaryPageIDs()
@@ -1619,7 +1628,7 @@ func (db *DB) initializeDurableRootV1(idx *indexGen) error {
 	if err := p.Truncate(generation.HighWater()); err != nil {
 		return err
 	}
-	if err := prepared.Candidate().WritePagesBorrowedV1(durablePagerSinkV1{pager: p}); err != nil {
+	if err := prepared.Candidate().WritePagesToV1(durablePagerSinkV1{pager: p}); err != nil {
 		return fmt.Errorf("write initial COW freelist pages: %w", err)
 	}
 	sink := durablePagerSinkV1{pager: p}
@@ -1724,7 +1733,7 @@ func writeRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, meta page.
 	if err := p.Truncate(generation.HighWater()); err != nil {
 		return err
 	}
-	if err := prepared.Candidate().WritePagesBorrowedV1(durablePagerSinkV1{pager: p}); err != nil {
+	if err := prepared.Candidate().WritePagesToV1(durablePagerSinkV1{pager: p}); err != nil {
 		return fmt.Errorf("write rebuilt COW pages: %w", err)
 	}
 	sink := durablePagerSinkV1{pager: p}

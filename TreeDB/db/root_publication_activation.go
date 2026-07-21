@@ -1033,7 +1033,7 @@ func (runtime *rootPublicationRuntimeV1) materializeSeal(seal *rootPublicationSe
 		if prepared == nil || prepared.Candidate() == nil {
 			return errors.New("root-publication prefix contains no COW candidate")
 		}
-		if err := prepared.Candidate().WritePagesBorrowedV1(durablePagerSinkV1{pager: seal.idx.pager}); err != nil {
+		if err := prepared.Candidate().WritePagesToV1(durablePagerSinkV1{pager: seal.idx.pager}); err != nil {
 			return fmt.Errorf("write root-publication COW pages: %w", err)
 		}
 	}

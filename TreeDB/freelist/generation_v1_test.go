@@ -228,18 +228,22 @@ func (s *mutatingRetainingPageSinkV1) WritePage(id uint64, data []byte) error {
 	return nil
 }
 
-type borrowedRecordingPageSinkV1 struct {
+type candidatePageRecordingWriterV1 struct {
 	pages []PageImageV1
+	views []CandidatePageViewV1
 	err   error
 }
 
-func (*borrowedRecordingPageSinkV1) AcceptsBorrowedCandidatePagesV1() {}
-
-func (s *borrowedRecordingPageSinkV1) WritePage(id uint64, data []byte) error {
+func (s *candidatePageRecordingWriterV1) WriteCandidatePageV1(id uint64, view CandidatePageViewV1) error {
 	if s.err != nil {
 		return s.err
 	}
+	data := make([]byte, view.Len())
+	if err := view.CopyTo(data); err != nil {
+		return err
+	}
 	s.pages = append(s.pages, PageImageV1{PageID: id, Data: data})
+	s.views = append(s.views, view)
 	return nil
 }
 
@@ -274,24 +278,32 @@ func TestFreelistTxn_GenericSinkCannotMutateOrRetainCandidatePages(t *testing.T)
 	}
 }
 
-func TestFreelistCandidateV1_WritePagesBorrowedUsesOwnedBytesAndStopsOnError(t *testing.T) {
+func TestFreelistCandidateV1_WritePagesToUsesOpaqueViewsAndStopsOnError(t *testing.T) {
 	candidate, err := NewFreelistTxn(
 		MustNewFreelistGenerationV1(1, 64, []uint64{2, 9, 33}, nil), NewReservationLedger(),
 	).MaterializeCandidate(2, 2, candidateIDFromString("borrowed-pages"), NewCandidatePageSinkV1())
 	if err != nil {
 		t.Fatal(err)
 	}
-	sink := &borrowedRecordingPageSinkV1{}
-	if err := candidate.WritePagesBorrowedV1(sink); err != nil {
+	writer := &candidatePageRecordingWriterV1{}
+	if err := candidate.WritePagesToV1(writer); err != nil {
 		t.Fatal(err)
 	}
-	if len(sink.pages) != len(candidate.pages) {
-		t.Fatalf("borrowed pages=%d, want %d", len(sink.pages), len(candidate.pages))
+	if len(writer.pages) != len(candidate.pages) {
+		t.Fatalf("written pages=%d, want %d", len(writer.pages), len(candidate.pages))
 	}
-	for i := range sink.pages {
-		if sink.pages[i].PageID != candidate.pages[i].PageID || &sink.pages[i].Data[0] != &candidate.pages[i].Data[0] {
-			t.Fatalf("page %d was copied instead of borrowed", i)
+	for i := range writer.pages {
+		if writer.pages[i].PageID != candidate.pages[i].PageID || !bytes.Equal(writer.pages[i].Data, candidate.pages[i].Data) {
+			t.Fatalf("page %d differs after opaque copy", i)
 		}
+	}
+	clear(writer.pages[0].Data)
+	retainedCopy := make([]byte, writer.views[0].Len())
+	if err := writer.views[0].CopyTo(retainedCopy); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(retainedCopy, candidate.pages[0].Data) {
+		t.Fatal("retained opaque view did not preserve read-only candidate bytes")
 	}
 	detached := candidate.Pages()
 	detached[0].Data[0] ^= 0xff
@@ -299,9 +311,9 @@ func TestFreelistCandidateV1_WritePagesBorrowedUsesOwnedBytesAndStopsOnError(t *
 		t.Fatal("public Pages returned an alias instead of a defensive copy")
 	}
 	wantErr := errors.New("injected borrowed-page write failure")
-	failing := &borrowedRecordingPageSinkV1{err: wantErr}
-	if err := candidate.WritePagesBorrowedV1(failing); !errors.Is(err, wantErr) {
-		t.Fatalf("borrowed write error=%v, want %v", err, wantErr)
+	failing := &candidatePageRecordingWriterV1{err: wantErr}
+	if err := candidate.WritePagesToV1(failing); !errors.Is(err, wantErr) {
+		t.Fatalf("candidate write error=%v, want %v", err, wantErr)
 	}
 }
 
@@ -338,6 +350,10 @@ func TestCandidatePageSinkV1_ValidatesSizeAndDuplicateWithoutRetainingBytes(t *t
 	}
 	if err := sink.WritePage(8, pageImage[:len(pageImage)-1]); !errors.Is(err, ErrGenerationFormat) {
 		t.Fatalf("short page error=%v, want generation format error", err)
+	}
+	view := CandidatePageViewV1{data: pageImage}
+	if err := view.CopyTo(make([]byte, len(pageImage)-1)); !errors.Is(err, ErrGenerationFormat) {
+		t.Fatalf("short destination error=%v, want generation format error", err)
 	}
 }
 
