@@ -778,6 +778,45 @@ func (p *Pager) Write(pageID uint64, data []byte) error {
 	return nil
 }
 
+// PageCopySource copies one complete page into pager-owned storage. CopyTo is
+// called while the pager write lock is held, so a concurrent Sync cannot drain
+// the dirty chunk until the page image is complete. Implementations must not
+// retain dst after CopyTo returns.
+type PageCopySource interface {
+	CopyTo(dst []byte) error
+}
+
+// WritePageFrom copies a page from source directly into its mmap destination
+// while holding the pager write lock for the entire copy.
+func (p *Pager) WritePageFrom(pageID uint64, source PageCopySource) error {
+	if p.readOnly {
+		return ErrReadOnly
+	}
+	if source == nil {
+		return errors.New("pager: nil page copy source")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	localID, local := p.localPageID(pageID)
+	if !local || pageID >= p.numPages.Load() {
+		return ErrPageOutOfBounds
+	}
+
+	p.markUnverifiedLocked(localID)
+
+	byteOffset := int64(localID) * int64(page.PageSize)
+	chunkIdx := byteOffset / p.chunkSize
+	offsetInChunk := byteOffset % p.chunkSize
+	if int(chunkIdx) >= len(p.chunks) {
+		return ErrPageOutOfBounds
+	}
+
+	p.dirtyChunks[int(chunkIdx)] = struct{}{}
+	dst := p.chunks[chunkIdx][offsetInChunk : offsetInChunk+page.PageSize]
+	return source.CopyTo(dst)
+}
+
 // FlushDirtyChunksFrom synchronously writes dirty memory-map chunks at or
 // above firstChunk to the backing file without issuing a file sync. Lower
 // chunks remain dirty for a later Sync at the durability boundary.

@@ -11,6 +11,56 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+type blockingPageCopySource struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (source *blockingPageCopySource) CopyTo(dst []byte) error {
+	close(source.entered)
+	<-source.release
+	clear(dst)
+	return nil
+}
+
+func TestWritePageFromHoldsPagerLockAcrossCopy(t *testing.T) {
+	dir := t.TempDir()
+	chunkSize := mmapOffsetGranularity()
+	if chunkSize < int64(page.PageSize) {
+		chunkSize = int64(page.PageSize)
+	}
+	p, err := Open(filepath.Join(dir, "index.db"), chunkSize)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	pageID, err := p.Alloc(1)
+	if err != nil {
+		t.Fatalf("Alloc: %v", err)
+	}
+
+	source := &blockingPageCopySource{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	writeDone := make(chan error, 1)
+	go func() { writeDone <- p.WritePageFrom(pageID, source) }()
+	<-source.entered
+
+	if p.mu.TryLock() {
+		p.mu.Unlock()
+		t.Fatal("pager write lock was not held across page copy")
+	}
+
+	close(source.release)
+	if err := <-writeDone; err != nil {
+		t.Fatalf("WritePageFrom: %v", err)
+	}
+	if err := p.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+}
+
 func TestPagerLifecycle(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "index.db")
