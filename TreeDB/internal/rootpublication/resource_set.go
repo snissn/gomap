@@ -874,6 +874,16 @@ func (builder *StableResourceSetBuilder) MergeAppendOnlyLogicalObligations(child
 	}
 	seen := make(map[StableLogicalObligation]struct{}, len(desired))
 	for _, entry := range child.entries {
+		for field := range entry.reachability {
+			if _, applies := scoped[field]; !applies {
+				continue
+			}
+			if entry.logicalObligations.commitments[field].count == 0 {
+				child.mu.Unlock()
+				builder.mu.Unlock()
+				return work, fmt.Errorf("%w: scoped reachability field %q has no logical obligations", ErrUnresolvedResource, field)
+			}
+		}
 		entry.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
 			work.SourceObligationsInspected++
 			if _, applies := scoped[obligation.Reachability]; !applies {

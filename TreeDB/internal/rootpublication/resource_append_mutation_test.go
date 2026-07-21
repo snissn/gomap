@@ -2,6 +2,7 @@ package rootpublication
 
 import (
 	"crypto/sha256"
+	"errors"
 	"testing"
 )
 
@@ -117,6 +118,30 @@ func TestStableLogicalObligationAppendPreservesImmutableCommitments(t *testing.T
 		if next.commitments[field] != commitment {
 			t.Fatalf("next commitment[%q]=%+v want %+v", field, next.commitments[field], commitment)
 		}
+	}
+}
+
+func TestMergeAppendOnlyLogicalObligationsRejectsScopedEntryWithoutObligations(t *testing.T) {
+	dir := t.TempDir()
+	producerBuilder := NewStableResourceSetBuilder()
+	if err := producerBuilder.Add(stableTokenFixture(
+		t, dir, "empty-scoped.bin", 1, 8, ReachabilityColumnManifest, "empty-scoped",
+	)); err != nil {
+		t.Fatal(err)
+	}
+	producer, err := producerBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer producer.Release()
+
+	candidateBuilder := NewStableResourceSetBuilder()
+	defer candidateBuilder.Abandon()
+	_, err = candidateBuilder.MergeAppendOnlyLogicalObligations(producer, StableLogicalObligationMutation{
+		ScopedFields: []ReachabilityField{ReachabilityColumnManifest},
+	})
+	if !errors.Is(err, ErrUnresolvedResource) {
+		t.Fatalf("empty scoped producer entry error=%v want %v", err, ErrUnresolvedResource)
 	}
 }
 
