@@ -599,6 +599,33 @@ func (db *DB) beginFullScanMaintenance(op string) (time.Duration, func(success b
 	return wait, finish
 }
 
+func lockFullScanMaintenanceContext(ctx context.Context, mu *sync.Mutex) error {
+	if ctx.Done() == nil {
+		mu.Lock()
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	acquired := make(chan struct{})
+	abandon := make(chan struct{})
+	go func() {
+		mu.Lock()
+		select {
+		case acquired <- struct{}{}:
+		case <-abandon:
+			mu.Unlock()
+		}
+	}()
+	select {
+	case <-acquired:
+		return nil
+	case <-ctx.Done():
+		close(abandon)
+		return ctx.Err()
+	}
+}
+
 func (db *DB) beginFullScanMaintenanceContext(ctx context.Context, op string) (time.Duration, func(success bool), error) {
 	if db == nil {
 		return 0, func(bool) {}, nil
@@ -608,28 +635,14 @@ func (db *DB) beginFullScanMaintenanceContext(ctx context.Context, op string) (t
 		// uncontended fast path
 	} else {
 		waitStart := time.Now()
-		for !db.maintenance.mu.TryLock() {
-			timer := time.NewTimer(time.Millisecond)
-			select {
-			case <-ctx.Done():
-				if !timer.Stop() {
-					select {
-					case <-timer.C:
-					default:
-					}
-				}
-				wait = time.Since(waitStart)
-				db.maintenance.deferrals.Add(1)
-				db.maintenance.waitTotal.Add(wait.Nanoseconds())
-				atomicStoreMaxInt64(&db.maintenance.waitMax, wait.Nanoseconds())
-				return wait, func(bool) {}, ctx.Err()
-			case <-timer.C:
-			}
-		}
+		err := lockFullScanMaintenanceContext(ctx, &db.maintenance.mu)
 		wait = time.Since(waitStart)
 		db.maintenance.deferrals.Add(1)
 		db.maintenance.waitTotal.Add(wait.Nanoseconds())
 		atomicStoreMaxInt64(&db.maintenance.waitMax, wait.Nanoseconds())
+		if err != nil {
+			return wait, func(bool) {}, err
+		}
 	}
 	db.maintenance.active.Store(maintenanceOpCode(op))
 
@@ -2513,13 +2526,6 @@ func (db *DB) CompactIndex() error {
 // a short writer pause. Disk space from the old index is reclaimed once any old
 // snapshots/iterators drain.
 func (db *DB) VacuumIndexOnline(ctx context.Context) error {
-	if err := db.beginPublicOperation(); err != nil {
-		return err
-	}
-	defer db.lifecycleMu.RUnlock()
-	if db.backend == nil {
-		return ErrClosed
-	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -2532,6 +2538,13 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	}
 	success := false
 	defer func() { finishMaintenance(success) }()
+	if err := db.beginPublicOperation(); err != nil {
+		return err
+	}
+	defer db.lifecycleMu.RUnlock()
+	if db.backend == nil {
+		return ErrClosed
+	}
 
 	// In cached mode, ensure the backend reflects all buffered writes before
 	// rebuilding/switching the index file. This avoids exposing a backend state

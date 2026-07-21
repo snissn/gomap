@@ -24134,26 +24134,16 @@ func (db *DB) waitForActiveCheckpointContext(ctx context.Context) error {
 		db.checkpointMu.Unlock()
 		return nil
 	}
-	for {
-		db.checkpointMu.Lock()
-		active := db.checkpointing.Load()
-		db.checkpointMu.Unlock()
-		if !active {
-			return nil
-		}
-		timer := time.NewTimer(time.Millisecond)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for db.checkpointing.Load() {
 		select {
 		case <-ctx.Done():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
 			return ctx.Err()
-		case <-timer.C:
+		case <-ticker.C:
 		}
 	}
+	return nil
 }
 
 func (db *DB) checkpointContext(ctx context.Context) error {
