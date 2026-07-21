@@ -73,7 +73,8 @@ def classify_public_status(public: dict[str, dict[str, object]]) -> str:
             all(value == 1 for value in unsupported)
             and all(value == 0 for value in retries)
             and all(value == 0 for value in unexpected)
-            and all(value == 0 for value in misses)
+            and all(value == 1 for value in misses)
+            and all(value == 0 for value in overlap)
         ):
             return "production-index-vacuum-unavailable"
         if (
@@ -178,6 +179,7 @@ def render_markdown(result: dict[str, object]) -> str:
             "",
             f"- `vacuum-unsupported/op`: median `{public['vacuum-unsupported/op']['median']:.3f}`",
             f"- `vacuum-unexpected-errors/op`: median `{public['vacuum-unexpected-errors/op']['median']:.3f}`",
+            "- Unavailable status requires one unsupported result and one exposure miss with zero retries, unexpected errors, and foreground overlap in every sample.",
             "- Available status requires zero retries, errors, and exposure misses plus positive foreground overlap in every sample.",
             "",
             "## Commands",
