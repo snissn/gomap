@@ -1677,6 +1677,10 @@ func TestCommandWALCleanupRejectsSnapshotAfterAppend(t *testing.T) {
 	if !errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
 		t.Fatalf("CleanupCommandWALCoveredSegments error=%v, want cleanup snapshot stale", err)
 	}
+	err = db.CleanupCommandWALCoveredSegmentsAtCheckpoint(false)
+	if !errors.Is(err, ErrDurableWALCleanupProofStale) {
+		t.Fatalf("checkpoint cleanup error=%v, want durable cleanup retry sentinel", err)
+	}
 	if _, statErr := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); statErr != nil {
 		t.Fatalf("covered segment removed under stale append snapshot: %v", statErr)
 	}
