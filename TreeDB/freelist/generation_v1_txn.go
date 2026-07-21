@@ -166,14 +166,15 @@ func (h RecoveryHorizon) capability() ReuseCapability {
 }
 
 type FreelistTxnStats struct {
-	COWChunks, COWPages, COWBytes, LogicalDelta            uint64
-	StateMutationPaths, StateMutationItems                 uint64
-	AppendAllocations, ReuseAllocations, Reservations      uint64
-	FreeIDs, RetiredIDs, ReuseLag, PageVisits              uint64
-	GenerationID, ReservationRecords                       uint64
-	PendingMetadataRetirements                             uint64
-	OldestRecoverableCommitSeq, MinPinnedSnapshotCommitSeq uint64
-	HistoryFloorCommitSeq                                  uint64
+	COWChunks, COWPages, COWBytes, LogicalDelta               uint64
+	StateMutationPaths, StateMutationItems                    uint64
+	AppendAllocations, ReuseAllocations, Reservations         uint64
+	FreeIDs, RetiredIDs, ReuseLag, PageVisits                 uint64
+	GenerationID, ReservationRecords                          uint64
+	PendingMetadataRetirements                                uint64
+	CandidatePageIsolationCopies, CandidatePageIsolationBytes uint64
+	OldestRecoverableCommitSeq, MinPinnedSnapshotCommitSeq    uint64
+	HistoryFloorCommitSeq                                     uint64
 }
 
 type allocatedPage struct {
@@ -566,6 +567,28 @@ func (c *FreelistCandidateV1) Pages() []PageImageV1 {
 	return out
 }
 
+func (c *FreelistCandidateV1) PageCount() int {
+	if c == nil {
+		return 0
+	}
+	return len(c.pages)
+}
+
+// WritePagesToV1 visits candidate-owned pages through opaque read-only views,
+// allowing a writer to copy directly into its final destination.
+func (c *FreelistCandidateV1) WritePagesToV1(writer CandidatePageWriterV1) error {
+	if c == nil || writer == nil {
+		return ErrGenerationFormat
+	}
+	for i := range c.pages {
+		view := CandidatePageViewV1{data: c.pages[i].Data}
+		if err := writer.WriteCandidatePageV1(c.pages[i].PageID, view); err != nil {
+			return fmt.Errorf("write candidate page %d: %w", c.pages[i].PageID, err)
+		}
+	}
+	return nil
+}
+
 type recordingSink struct {
 	sink             AppendPageSink
 	pages            []PageImageV1
@@ -582,10 +605,16 @@ func (s *recordingSink) write(id uint64, data []byte) error {
 		}
 		s.writeStarted = true
 	}
-	if err := s.sink.WritePage(id, data); err != nil {
+	sinkData := data
+	if _, ownsCandidateBytes := s.sink.(*CandidatePageSinkV1); !ownsCandidateBytes {
+		// Arbitrary sinks may retain or mutate their input. Give them an
+		// isolated copy while the candidate keeps the fresh encoded buffer.
+		sinkData = append([]byte(nil), data...)
+	}
+	if err := s.sink.WritePage(id, sinkData); err != nil {
 		return err
 	}
-	s.pages = append(s.pages, PageImageV1{id, append([]byte(nil), data...)})
+	s.pages = append(s.pages, PageImageV1{id, data})
 	return nil
 }
 
@@ -787,6 +816,10 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 	t.stats.COWChunks = uint64(len(t.changedChunks))
 	t.stats.COWPages = uint64(len(recorded.pages))
 	t.stats.COWBytes = t.stats.COWPages * page.PageSize
+	if _, ownsCandidateBytes := sink.(*CandidatePageSinkV1); !ownsCandidateBytes {
+		t.stats.CandidatePageIsolationCopies = t.stats.COWPages
+		t.stats.CandidatePageIsolationBytes = t.stats.COWBytes
+	}
 	t.stats.FreeIDs, t.stats.RetiredIDs = g.root.freeCount, g.root.retiredCount
 	t.stats.GenerationID = generationID
 	t.stats.ReservationRecords = uint64(len(record.pageIDs))

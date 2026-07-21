@@ -29,6 +29,8 @@ import (
 
 type durablePagerSinkV1 struct{ pager *pager.Pager }
 
+var _ freelist.CandidatePageWriterV1 = durablePagerSinkV1{}
+
 var (
 	errDurableRootCandidateStale               = errors.New("durable-root candidate base changed")
 	errDurableRootDependencyProjectionRequired = errors.New("durable-root dependency projection required")
@@ -41,6 +43,13 @@ func (sink durablePagerSinkV1) WritePage(pageID uint64, image []byte) error {
 		return errors.New("missing durable pager")
 	}
 	return sink.pager.Write(pageID, image)
+}
+
+func (sink durablePagerSinkV1) WriteCandidatePageV1(pageID uint64, view freelist.CandidatePageViewV1) error {
+	if sink.pager == nil {
+		return errors.New("missing durable pager")
+	}
+	return freelist.WriteCandidatePageToPagerV1(sink.pager, pageID, view)
 }
 
 type durableRootRuntimeV1 struct {
@@ -1016,7 +1025,7 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 			{PageIDs: retired, LastReachableCommitSeq: current.record.CommitSeq},
 		},
 		auxiliaryCount,
-		freelist.NewMemoryPageStoreV1(),
+		freelist.NewCandidatePageSinkV1(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("prepare COW generation: %w", err)
@@ -1133,10 +1142,8 @@ func (db *DB) materializeDurableRootCandidateV1(candidate *durableRootPublishCan
 	if err := candidate.idx.pager.Truncate(generation.HighWater()); err != nil {
 		return fmt.Errorf("extend durable index: %w", err)
 	}
-	for _, image := range candidate.prepared.Candidate().Pages() {
-		if err := candidate.idx.pager.Write(image.PageID, image.Data); err != nil {
-			return fmt.Errorf("write COW page %d: %w", image.PageID, err)
-		}
+	if err := candidate.prepared.Candidate().WritePagesToV1(durablePagerSinkV1{pager: candidate.idx.pager}); err != nil {
+		return fmt.Errorf("write durable-root COW pages: %w", err)
 	}
 	auxiliary := candidate.prepared.AuxiliaryPageIDs()
 	if _, err := candidate.manifest.Materialize(auxiliary[0], durablePagerSinkV1{pager: candidate.idx.pager}); err != nil {
@@ -1603,10 +1610,9 @@ func (db *DB) initializeDurableRootV1(idx *indexGen) error {
 	if err != nil {
 		return err
 	}
-	store := freelist.NewMemoryPageStoreV1()
 	var candidateID freelist.CandidateIDV1
 	binary.LittleEndian.PutUint64(candidateID[:8], 1)
-	prepared, err := idx.allocator.PrepareCOWCandidateV1(2, 1, candidateID, capability, 2, store)
+	prepared, err := idx.allocator.PrepareCOWCandidateV1(2, 1, candidateID, capability, 2, freelist.NewCandidatePageSinkV1())
 	if err != nil {
 		return err
 	}
@@ -1618,10 +1624,8 @@ func (db *DB) initializeDurableRootV1(idx *indexGen) error {
 	if err := p.Truncate(generation.HighWater()); err != nil {
 		return err
 	}
-	for _, image := range prepared.Candidate().Pages() {
-		if err := p.Write(image.PageID, image.Data); err != nil {
-			return fmt.Errorf("write initial COW freelist page %d: %w", image.PageID, err)
-		}
+	if err := prepared.Candidate().WritePagesToV1(durablePagerSinkV1{pager: p}); err != nil {
+		return fmt.Errorf("write initial COW freelist pages: %w", err)
 	}
 	sink := durablePagerSinkV1{pager: p}
 	manifestRef, err := manifest.Materialize(auxiliary[0], sink)
@@ -1713,7 +1717,7 @@ func writeRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, meta page.
 	var candidateID freelist.CandidateIDV1
 	binary.LittleEndian.PutUint64(candidateID[:8], meta.CommitSeq)
 	binary.LittleEndian.PutUint64(candidateID[8:], meta.UserRootPageID^meta.SystemRootPageID)
-	prepared, err := allocator.PrepareCOWCandidateV1(2, meta.CommitSeq, candidateID, capability, int(manifest.PageCount())+1, freelist.NewMemoryPageStoreV1())
+	prepared, err := allocator.PrepareCOWCandidateV1(2, meta.CommitSeq, candidateID, capability, int(manifest.PageCount())+1, freelist.NewCandidatePageSinkV1())
 	if err != nil {
 		return err
 	}
@@ -1725,10 +1729,8 @@ func writeRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, meta page.
 	if err := p.Truncate(generation.HighWater()); err != nil {
 		return err
 	}
-	for _, image := range prepared.Candidate().Pages() {
-		if err := p.Write(image.PageID, image.Data); err != nil {
-			return fmt.Errorf("write rebuilt COW page %d: %w", image.PageID, err)
-		}
+	if err := prepared.Candidate().WritePagesToV1(durablePagerSinkV1{pager: p}); err != nil {
+		return fmt.Errorf("write rebuilt COW pages: %w", err)
 	}
 	sink := durablePagerSinkV1{pager: p}
 	manifestRef, err := manifest.Materialize(auxiliary[0], sink)
