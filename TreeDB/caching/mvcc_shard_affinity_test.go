@@ -134,6 +134,40 @@ func TestSeekGEExactMVCCRangeDoesNotHideMalformedSuffix(t *testing.T) {
 	}
 }
 
+func TestSeekGEExactMVCCRangeDoesNotHideOversizedMalformedSuffix(t *testing.T) {
+	logical := []byte("oversized-malformed-record")
+	lower, err := mvcckey.Encode(logical, 9)
+	if err != nil {
+		t.Fatalf("Encode lower: %v", err)
+	}
+	upper, err := mvcckey.AppendKeyVersionsUpper(nil, logical)
+	if err != nil {
+		t.Fatalf("AppendKeyVersionsUpper: %v", err)
+	}
+	malformed := append(append([]byte(nil), lower...), bytes.Repeat([]byte{0xa5}, mvcckey.MaxEncodedKeySize-len(lower)+1)...)
+	if len(malformed) <= mvcckey.MaxEncodedKeySize {
+		t.Fatalf("malformed length=%d want > %d", len(malformed), mvcckey.MaxEncodedKeySize)
+	}
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{
+		DisableWAL:         true,
+		FlushThreshold:     1 << 30,
+		MemtableShards:     16,
+		MaxQueuedMemtables: -1,
+		AllowUnsafe:        true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Set(malformed, []byte("corrupt")); err != nil {
+		t.Fatalf("Set oversized malformed suffix: %v", err)
+	}
+	key, value, found, err := db.SeekGE(lower, upper)
+	if err != nil || !found || !bytes.Equal(key, malformed) || !bytes.Equal(value, []byte("corrupt")) {
+		t.Fatalf("SeekGE oversized malformed suffix: key_len=%d value=%q found=%t err=%v", len(key), value, found, err)
+	}
+}
+
 func TestSeekGEExactMVCCRangeUsesSameShardImmutablePrecedence(t *testing.T) {
 	logical := []byte("queued-version")
 	version, err := mvcckey.Encode(logical, 20)

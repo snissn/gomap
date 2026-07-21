@@ -134,9 +134,11 @@ func InNamespace(physical []byte) bool {
 // accepts a malformed or incomplete timestamp suffix. This keeps every key
 // that can sort inside one logical key's version range on the same in-memory
 // shard, so an exact-version read cannot hide malformed reserved-namespace
-// records that the MVCC layer must reject fail-closed.
+// records that the MVCC layer must reject fail-closed. The total physical
+// length is intentionally not bounded: an oversized malformed suffix still
+// sorts in that range and must retain the logical prefix's affinity.
 func VersionAffinityPrefix(physical []byte) (prefix []byte, ok bool) {
-	if len(physical) > MaxEncodedKeySize || !bytes.HasPrefix(physical, namespaceV1[:]) {
+	if !bytes.HasPrefix(physical, namespaceV1[:]) {
 		return nil, false
 	}
 	for i := len(namespaceV1); i < len(physical); {

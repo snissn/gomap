@@ -294,6 +294,13 @@ func TestVersionPrefixAndExactVersionRange(t *testing.T) {
 	if affinityPrefix, ok := VersionAffinityPrefix(malformedSuffix); !ok || !bytes.Equal(affinityPrefix, firstPrefix) {
 		t.Fatalf("VersionAffinityPrefix(malformed suffix)=(%x,%t), want %x,true", affinityPrefix, ok, firstPrefix)
 	}
+	oversizedMalformedSuffix := append(append([]byte(nil), first...), bytes.Repeat([]byte{0xa5}, MaxEncodedKeySize-len(first)+1)...)
+	if len(oversizedMalformedSuffix) <= MaxEncodedKeySize {
+		t.Fatalf("oversized malformed suffix length=%d want > %d", len(oversizedMalformedSuffix), MaxEncodedKeySize)
+	}
+	if affinityPrefix, ok := VersionAffinityPrefix(oversizedMalformedSuffix); !ok || !bytes.Equal(affinityPrefix, firstPrefix) {
+		t.Fatalf("VersionAffinityPrefix(oversized malformed suffix)=(%x,%t), want %x,true", affinityPrefix, ok, firstPrefix)
+	}
 	for _, malformed := range [][]byte{
 		nil,
 		[]byte("raw"),
