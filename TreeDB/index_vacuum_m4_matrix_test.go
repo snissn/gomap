@@ -339,7 +339,7 @@ func indexVacuumM4Options(dir string) Options {
 	return Options{
 		Dir:                           dir,
 		DisableSideStores:             true,
-		ChunkSize:                     32 << 10,
+		ChunkSize:                     64 << 10,
 		KeepRecent:                    1,
 		PreferAppendAlloc:             true,
 		DisableBackgroundPrune:        true,
