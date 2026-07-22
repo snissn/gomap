@@ -139,6 +139,29 @@ func TestIndexVacuumM4PlatformSupportsLane(t *testing.T) {
 	}
 }
 
+func TestIndexVacuumM4UnsupportedLaneResultAccepted(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		supported   bool
+		expectedErr bool
+		status      string
+		err         error
+		want        bool
+	}{
+		{name: "supported lane", supported: true, want: true},
+		{name: "expected typed boundary", expectedErr: true, err: ErrNamespacePersistenceUnsupported, want: true},
+		{name: "platform error", err: backenddb.ErrVacuumUnsupported, want: true},
+		{name: "platform status", status: string(CompactStoragePhaseStatusUnsupported), want: true},
+		{name: "unexpected result", status: "missing-phase", err: errors.New("unexpected")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := indexVacuumM4UnsupportedLaneResultAccepted(test.supported, test.expectedErr, test.status, test.err); got != test.want {
+				t.Fatalf("accepted=%v want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestIndexVacuumM4CertificationMatrix(t *testing.T) {
 	fixtures := []indexVacuumM4Fixture{
 		{
@@ -282,7 +305,7 @@ func runIndexVacuumM4MatrixCell(t *testing.T, fixture indexVacuumM4Fixture, lane
 	if supported && runErr != nil && !expectedErr {
 		t.Fatalf("supported lane error: %v", runErr)
 	}
-	if !supported && !errors.Is(runErr, backenddb.ErrVacuumUnsupported) && status != string(CompactStoragePhaseStatusUnsupported) {
+	if !indexVacuumM4UnsupportedLaneResultAccepted(supported, expectedErr, status, runErr) {
 		t.Fatalf("unsupported lane status=%q error=%v", status, runErr)
 	}
 	cell.Verdicts["no_unexpected_retries_errors"] = retries == 0 && (runErr == nil || expectedErr || !supported && errors.Is(runErr, backenddb.ErrVacuumUnsupported))
@@ -516,6 +539,10 @@ func runIndexVacuumM4Lane(t *testing.T, database *DB, opts Options, fixture inde
 
 func indexVacuumM4PlatformSupportsLane(goos string, lane indexVacuumM4Lane) bool {
 	return !lane.expectsOnlineSwap || goos != "windows"
+}
+
+func indexVacuumM4UnsupportedLaneResultAccepted(supported, expectedErr bool, status string, err error) bool {
+	return supported || expectedErr || errors.Is(err, backenddb.ErrVacuumUnsupported) || status == string(CompactStoragePhaseStatusUnsupported)
 }
 
 func indexVacuumM4ExpectedLaneError(fixture indexVacuumM4Fixture, lane indexVacuumM4Lane, err error) bool {
