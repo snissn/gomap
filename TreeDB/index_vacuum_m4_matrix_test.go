@@ -290,7 +290,10 @@ func runIndexVacuumM4MatrixCell(t *testing.T, fixture indexVacuumM4Fixture, lane
 	cell.Details["debt_reason_before"] = indexVacuumM4DebtReason(report)
 	cell.Details["freelist_reclaimable_ratio_ppm_before"] = strconv.FormatUint(report.FreelistReclaimableRatioPPM, 10)
 	cell.HighDebt = report.FreelistReclaimableValid && report.FreelistReclaimableRatioPPM >= 500_000
-	cell.ShrinkRequired = cell.HighDebt
+	// Every deterministic matrix fixture is seeded with reclaimable index debt.
+	// HighDebt identifies the issue's required subset; supported cells must all
+	// prove that their entry point actually replaces and shrinks the index.
+	cell.ShrinkRequired = true
 
 	started := time.Now()
 	status, retries, laneClosed, runErr := runIndexVacuumM4Lane(t, database, opts, fixture, lane)
