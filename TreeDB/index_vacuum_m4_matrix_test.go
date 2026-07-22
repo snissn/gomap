@@ -132,6 +132,8 @@ func TestIndexVacuumM4ExpectedLaneError(t *testing.T) {
 		{name: "freebsd outer full namespace", goos: "freebsd", fixture: outer, lane: full, err: fmt.Errorf("promotion: %w", ErrNamespacePersistenceUnsupported), want: true},
 		{name: "netbsd outer full namespace", goos: "netbsd", fixture: outer, lane: full, err: fmt.Errorf("promotion: %w", ErrNamespacePersistenceUnsupported), want: true},
 		{name: "openbsd outer full namespace", goos: "openbsd", fixture: outer, lane: full, err: fmt.Errorf("promotion: %w", ErrNamespacePersistenceUnsupported), want: true},
+		{name: "windows outer full namespace", goos: "windows", fixture: outer, lane: full, err: fmt.Errorf("promotion: %w", ErrNamespacePersistenceUnsupported), want: true},
+		{name: "windows outer full owner", goos: "windows", fixture: outer, lane: full, err: ErrCompactStorageLeafPageLogOwnerUnsupported},
 		{name: "bsd outer full owner", goos: "freebsd", fixture: outer, lane: full, err: ErrCompactStorageLeafPageLogOwnerUnsupported},
 		{name: "linux outer exhaustive namespace", goos: "linux", fixture: outer, lane: exhaustive, err: ErrNamespacePersistenceUnsupported},
 		{name: "bsd outer exhaustive namespace", goos: "openbsd", fixture: outer, lane: exhaustive, err: ErrNamespacePersistenceUnsupported, want: true},
@@ -599,7 +601,7 @@ func indexVacuumM4ExpectedLaneError(goos string, fixture indexVacuumM4Fixture, l
 
 func indexVacuumM4FullNamespaceBoundaryGOOS(goos string) bool {
 	switch goos {
-	case "darwin", "freebsd", "netbsd", "openbsd":
+	case "darwin", "freebsd", "netbsd", "openbsd", "windows":
 		return true
 	default:
 		return false
