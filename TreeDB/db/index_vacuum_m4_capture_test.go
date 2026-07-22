@@ -30,7 +30,7 @@ func TestIndexVacuumM4CaptureKeepsCertificationLanes(t *testing.T) {
 		"BenchmarkPL06ExternalVacuumCollectionForegroundChurn",
 		"treedb_vacuum_m0_capture.sh",
 		"M0_PACKET_DIR",
-		"reused M0 packet is not an exact-head all-gates-pass packet",
+		"reused M0 packet is not a complete, clean, exact-head all-gates-pass packet",
 		"compact_storage_m0_profile.sh",
 		"-race",
 		"-timeout 20m",
