@@ -3,15 +3,57 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TMP_ROOT=${TMPDIR:-/tmp}
-RUN_DIR=${RUN_DIR:-$(mktemp -d "$TMP_ROOT/treedb_index_vacuum_m4_XXXXXX")}
+RUN_DIR=${RUN_DIR:-}
 COUNT=${COUNT:-10}
 RUN_FULL_TESTS=${RUN_FULL_TESTS:-true}
 RUN_RACE_TESTS=${RUN_RACE_TESTS:-true}
 M0_PACKET_DIR=${M0_PACKET_DIR:-}
 
+cd "$ROOT"
+if [[ -n "$(git status --porcelain)" ]]; then
+  printf 'refusing certification from a dirty worktree\n' >&2
+  exit 1
+fi
+
+if [[ -z "$RUN_DIR" ]]; then
+  RUN_DIR=$(mktemp -d "$TMP_ROOT/treedb_index_vacuum_m4_XXXXXX")
+elif [[ -e "$RUN_DIR" ]]; then
+  if [[ ! -d "$RUN_DIR" ]]; then
+    printf 'RUN_DIR exists but is not a directory: %s\n' "$RUN_DIR" >&2
+    exit 1
+  fi
+  if [[ -n "$(find "$RUN_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+    printf 'refusing non-empty RUN_DIR: %s\n' "$RUN_DIR" >&2
+    exit 1
+  fi
+else
+  mkdir -p "$RUN_DIR"
+fi
 mkdir -p "$RUN_DIR"/{tests,benchmarks,profiles,m0,compact-storage}
 RUN_DIR=$(cd "$RUN_DIR" && pwd -P)
-cd "$ROOT"
+
+for command in lscpu free findmnt; do
+  if ! command -v "$command" >/dev/null 2>&1; then
+    printf 'unsupported platform metadata command: %s\n' "$command" >&2
+    exit 1
+  fi
+done
+if ! cpu=$(lscpu | awk -F: '/Model name/{sub(/^[ \t]+/, "", $2); print $2; exit}'); then
+  printf 'unsupported platform metadata: lscpu failed\n' >&2
+  exit 1
+fi
+if ! memory=$(free -h | awk '/^Mem:/{print $2 " total, " $7 " available"}'); then
+  printf 'unsupported platform metadata: free failed\n' >&2
+  exit 1
+fi
+if ! filesystem=$(findmnt -no SOURCE,FSTYPE,OPTIONS --target "$TMP_ROOT"); then
+  printf 'unsupported platform metadata: findmnt failed for %s\n' "$TMP_ROOT" >&2
+  exit 1
+fi
+if [[ -z "$cpu" || -z "$memory" || -z "$filesystem" ]]; then
+  printf 'unsupported platform metadata: cpu=%q memory=%q filesystem=%q\n' "$cpu" "$memory" "$filesystem" >&2
+  exit 1
+fi
 
 run_tree_test() {
   env GOWORK=off TMPDIR="$TMP_ROOT" go test "$@"
@@ -27,14 +69,14 @@ run_and_log() {
 
 {
   printf 'source_sha=%s\n' "$(git rev-parse HEAD)"
-  printf 'source_status_lines=%s\n' "$(git status --short | wc -l)"
+  printf 'source_status_lines=0\n'
   printf 'go_version=%s\n' "$(go version)"
   printf 'kernel=%s\n' "$(uname -srvmo)"
   printf 'goos=%s\n' "$(go env GOOS)"
   printf 'goarch=%s\n' "$(go env GOARCH)"
-  printf 'cpu=%s\n' "$(lscpu | awk -F: '/Model name/{sub(/^[ \t]+/, "", $2); print $2; exit}')"
-  printf 'memory=%s\n' "$(free -h | awk '/^Mem:/{print $2 " total, " $7 " available"}')"
-  printf 'filesystem=%s\n' "$(findmnt -no SOURCE,FSTYPE,OPTIONS --target "$TMP_ROOT")"
+  printf 'cpu=%s\n' "$cpu"
+  printf 'memory=%s\n' "$memory"
+  printf 'filesystem=%s\n' "$filesystem"
   printf 'count=%s\n' "$COUNT"
   printf 'run_full_tests=%s\n' "$RUN_FULL_TESTS"
   printf 'run_race_tests=%s\n' "$RUN_RACE_TESTS"

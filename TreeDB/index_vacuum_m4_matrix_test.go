@@ -81,6 +81,9 @@ func TestIndexVacuumM4MatrixHarnessContract(t *testing.T) {
 		"run_and_log public",
 		"TestVacuumIndexOnline|TestPublicVacuum|TestCached.*Vacuum",
 		"TREEDB_CLOSE_VACUUM_INDEX_ONLINE=1",
+		"git status --porcelain",
+		"refusing non-empty RUN_DIR",
+		"unsupported platform metadata command",
 		"-race",
 		"-timeout 20m",
 		"-timeout 30m",
@@ -114,19 +117,22 @@ func TestIndexVacuumM4ExpectedLaneError(t *testing.T) {
 
 	for _, test := range []struct {
 		name    string
+		goos    string
 		fixture indexVacuumM4Fixture
 		lane    indexVacuumM4Lane
 		err     error
 		want    bool
 	}{
-		{name: "outer full namespace", fixture: outer, lane: full, err: fmt.Errorf("promotion: %w", ErrNamespacePersistenceUnsupported), want: true},
-		{name: "outer exhaustive owner", fixture: outer, lane: exhaustive, err: ErrCompactStorageLeafPageLogOwnerUnsupported, want: true},
+		{name: "linux outer full namespace", goos: "linux", fixture: outer, lane: full, err: fmt.Errorf("promotion: %w", ErrNamespacePersistenceUnsupported)},
+		{name: "darwin outer full namespace", goos: "darwin", fixture: outer, lane: full, err: fmt.Errorf("promotion: %w", ErrNamespacePersistenceUnsupported), want: true},
+		{name: "darwin outer full owner", goos: "darwin", fixture: outer, lane: full, err: ErrCompactStorageLeafPageLogOwnerUnsupported},
+		{name: "outer exhaustive owner", goos: "linux", fixture: outer, lane: exhaustive, err: ErrCompactStorageLeafPageLogOwnerUnsupported, want: true},
 		{name: "outer backend", fixture: outer, lane: backend, err: ErrNamespacePersistenceUnsupported},
 		{name: "inline full", fixture: inline, lane: full, err: ErrNamespacePersistenceUnsupported},
 		{name: "untyped", fixture: outer, lane: full, err: errors.New("promotion failed")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := indexVacuumM4ExpectedLaneError(test.fixture, test.lane, test.err); got != test.want {
+			if got := indexVacuumM4ExpectedLaneError(test.goos, test.fixture, test.lane, test.err); got != test.want {
 				t.Fatalf("expected=%v want %v", got, test.want)
 			}
 		})
@@ -302,7 +308,7 @@ func runIndexVacuumM4MatrixCell(t *testing.T, fixture indexVacuumM4Fixture, lane
 	cell.Status = status
 	cell.Retries = retries
 	supported := indexVacuumM4PlatformSupportsLane(runtime.GOOS, lane)
-	expectedErr := indexVacuumM4ExpectedLaneError(fixture, lane, runErr)
+	expectedErr := indexVacuumM4ExpectedLaneError(runtime.GOOS, fixture, lane, runErr)
 	cell.ExpectedError = expectedErr
 	if runErr != nil {
 		cell.Details["error"] = runErr.Error()
@@ -570,12 +576,16 @@ func indexVacuumM4UnsupportedLaneResultAccepted(supported, expectedErr bool, sta
 	return supported || expectedErr || errors.Is(err, backenddb.ErrVacuumUnsupported) || status == string(CompactStoragePhaseStatusUnsupported)
 }
 
-func indexVacuumM4ExpectedLaneError(fixture indexVacuumM4Fixture, lane indexVacuumM4Lane, err error) bool {
-	if fixture.name != "outer-leaf" || (lane.name != "compact-storage-full" && lane.name != "compact-storage-exhaustive") {
+func indexVacuumM4ExpectedLaneError(goos string, fixture indexVacuumM4Fixture, lane indexVacuumM4Lane, err error) bool {
+	if fixture.name != "outer-leaf" {
 		return false
 	}
-	return errors.Is(err, ErrNamespacePersistenceUnsupported) ||
-		errors.Is(err, ErrCompactStorageLeafPageLogOwnerUnsupported)
+	if lane.name == "compact-storage-exhaustive" {
+		return errors.Is(err, ErrNamespacePersistenceUnsupported) ||
+			errors.Is(err, ErrCompactStorageLeafPageLogOwnerUnsupported)
+	}
+	return goos == "darwin" && lane.name == "compact-storage-full" &&
+		errors.Is(err, ErrNamespacePersistenceUnsupported)
 }
 
 func configureIndexVacuumM4BackgroundLane(database *DB, reason string) {
