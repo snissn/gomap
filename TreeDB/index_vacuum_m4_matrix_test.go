@@ -133,6 +133,8 @@ func TestIndexVacuumM4ExpectedLaneError(t *testing.T) {
 		{name: "netbsd outer full namespace", goos: "netbsd", fixture: outer, lane: full, err: fmt.Errorf("promotion: %w", ErrNamespacePersistenceUnsupported), want: true},
 		{name: "openbsd outer full namespace", goos: "openbsd", fixture: outer, lane: full, err: fmt.Errorf("promotion: %w", ErrNamespacePersistenceUnsupported), want: true},
 		{name: "bsd outer full owner", goos: "freebsd", fixture: outer, lane: full, err: ErrCompactStorageLeafPageLogOwnerUnsupported},
+		{name: "linux outer exhaustive namespace", goos: "linux", fixture: outer, lane: exhaustive, err: ErrNamespacePersistenceUnsupported},
+		{name: "bsd outer exhaustive namespace", goos: "openbsd", fixture: outer, lane: exhaustive, err: ErrNamespacePersistenceUnsupported, want: true},
 		{name: "outer exhaustive owner", goos: "linux", fixture: outer, lane: exhaustive, err: ErrCompactStorageLeafPageLogOwnerUnsupported, want: true},
 		{name: "outer backend", fixture: outer, lane: backend, err: ErrNamespacePersistenceUnsupported},
 		{name: "inline full", fixture: inline, lane: full, err: ErrNamespacePersistenceUnsupported},
@@ -588,8 +590,8 @@ func indexVacuumM4ExpectedLaneError(goos string, fixture indexVacuumM4Fixture, l
 		return false
 	}
 	if lane.name == "compact-storage-exhaustive" {
-		return errors.Is(err, ErrNamespacePersistenceUnsupported) ||
-			errors.Is(err, ErrCompactStorageLeafPageLogOwnerUnsupported)
+		return errors.Is(err, ErrCompactStorageLeafPageLogOwnerUnsupported) ||
+			indexVacuumM4FullNamespaceBoundaryGOOS(goos) && errors.Is(err, ErrNamespacePersistenceUnsupported)
 	}
 	return indexVacuumM4FullNamespaceBoundaryGOOS(goos) && lane.name == "compact-storage-full" &&
 		errors.Is(err, ErrNamespacePersistenceUnsupported)
