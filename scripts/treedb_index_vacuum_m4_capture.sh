@@ -121,10 +121,19 @@ env GOWORK=off TMPDIR="$TMP_ROOT" go test ./TreeDB/db -run '^$' \
 if [[ -n "$M0_PACKET_DIR" ]]; then
   M0_PACKET_DIR=$(cd "$M0_PACKET_DIR" && pwd -P)
   source_sha=$(git rev-parse HEAD)
-  if ! jq -e --arg sha "$source_sha" \
-    '.environment.git_sha == $sha and (.gates | to_entries | all(.value == true))' \
+  if ! jq -e --arg sha "$source_sha" --argjson count "$COUNT" '
+    .schema_version == 1 and
+    .environment.git_sha == $sha and
+    .environment.dirty_state == "clean" and
+    .environment.repetitions == $count and
+    .gates == {
+      "legacy_completed_without_abort": true,
+      "legacy_cv_at_most_10_percent": true,
+      "public_status_explicit": true
+    }
+  ' \
     "$M0_PACKET_DIR/results.json" >/dev/null; then
-    printf 'reused M0 packet is not an exact-head all-gates-pass packet\n' >&2
+    printf 'reused M0 packet is not a complete, clean, exact-head all-gates-pass packet\n' >&2
     exit 1
   fi
   rm -rf "$RUN_DIR/m0"

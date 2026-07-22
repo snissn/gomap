@@ -84,6 +84,10 @@ func TestIndexVacuumM4MatrixHarnessContract(t *testing.T) {
 		"git status --porcelain",
 		"refusing non-empty RUN_DIR",
 		"unsupported platform metadata command",
+		`.environment.dirty_state == "clean"`,
+		"legacy_completed_without_abort",
+		"legacy_cv_at_most_10_percent",
+		"public_status_explicit",
 		"-race",
 		"-timeout 20m",
 		"-timeout 30m",
@@ -125,7 +129,10 @@ func TestIndexVacuumM4ExpectedLaneError(t *testing.T) {
 	}{
 		{name: "linux outer full namespace", goos: "linux", fixture: outer, lane: full, err: fmt.Errorf("promotion: %w", ErrNamespacePersistenceUnsupported)},
 		{name: "darwin outer full namespace", goos: "darwin", fixture: outer, lane: full, err: fmt.Errorf("promotion: %w", ErrNamespacePersistenceUnsupported), want: true},
-		{name: "darwin outer full owner", goos: "darwin", fixture: outer, lane: full, err: ErrCompactStorageLeafPageLogOwnerUnsupported},
+		{name: "freebsd outer full namespace", goos: "freebsd", fixture: outer, lane: full, err: fmt.Errorf("promotion: %w", ErrNamespacePersistenceUnsupported), want: true},
+		{name: "netbsd outer full namespace", goos: "netbsd", fixture: outer, lane: full, err: fmt.Errorf("promotion: %w", ErrNamespacePersistenceUnsupported), want: true},
+		{name: "openbsd outer full namespace", goos: "openbsd", fixture: outer, lane: full, err: fmt.Errorf("promotion: %w", ErrNamespacePersistenceUnsupported), want: true},
+		{name: "bsd outer full owner", goos: "freebsd", fixture: outer, lane: full, err: ErrCompactStorageLeafPageLogOwnerUnsupported},
 		{name: "outer exhaustive owner", goos: "linux", fixture: outer, lane: exhaustive, err: ErrCompactStorageLeafPageLogOwnerUnsupported, want: true},
 		{name: "outer backend", fixture: outer, lane: backend, err: ErrNamespacePersistenceUnsupported},
 		{name: "inline full", fixture: inline, lane: full, err: ErrNamespacePersistenceUnsupported},
@@ -584,8 +591,17 @@ func indexVacuumM4ExpectedLaneError(goos string, fixture indexVacuumM4Fixture, l
 		return errors.Is(err, ErrNamespacePersistenceUnsupported) ||
 			errors.Is(err, ErrCompactStorageLeafPageLogOwnerUnsupported)
 	}
-	return goos == "darwin" && lane.name == "compact-storage-full" &&
+	return indexVacuumM4FullNamespaceBoundaryGOOS(goos) && lane.name == "compact-storage-full" &&
 		errors.Is(err, ErrNamespacePersistenceUnsupported)
+}
+
+func indexVacuumM4FullNamespaceBoundaryGOOS(goos string) bool {
+	switch goos {
+	case "darwin", "freebsd", "netbsd", "openbsd":
+		return true
+	default:
+		return false
+	}
 }
 
 func configureIndexVacuumM4BackgroundLane(database *DB, reason string) {
