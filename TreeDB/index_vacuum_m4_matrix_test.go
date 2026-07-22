@@ -92,6 +92,19 @@ func TestIndexVacuumM4MatrixHarnessContract(t *testing.T) {
 	}
 }
 
+func TestIndexVacuumM4CompactStoragePersistentLogVerdictsFollowReopen(t *testing.T) {
+	cell := indexVacuumM4CellArtifact{Verdicts: make(map[string]bool)}
+	indexVacuumM4SetCompactStoragePersistentLogVerdicts(&cell, false)
+	if cell.Verdicts["value_log_contract"] || cell.Verdicts["leaf_log_contract"] {
+		t.Fatalf("failed reopen reported a passing persistent-log contract: %+v", cell.Verdicts)
+	}
+
+	indexVacuumM4SetCompactStoragePersistentLogVerdicts(&cell, true)
+	if !cell.Verdicts["value_log_contract"] || !cell.Verdicts["leaf_log_contract"] {
+		t.Fatalf("successful reopen reported a failing persistent-log contract: %+v", cell.Verdicts)
+	}
+}
+
 func TestIndexVacuumM4ExpectedLaneError(t *testing.T) {
 	outer := indexVacuumM4Fixture{name: "outer-leaf"}
 	inline := indexVacuumM4Fixture{name: "inline-values"}
@@ -331,14 +344,15 @@ func runIndexVacuumM4MatrixCell(t *testing.T, fixture indexVacuumM4Fixture, lane
 	cell.LeafBytesAfter = indexVacuumM4DirBytes(t, filepath.Join(dir, "leaf_vlog"))
 	cell.Verdicts["value_log_contract"] = cell.ValueBytesAfter == cell.ValueBytesBefore
 	cell.Verdicts["leaf_log_contract"] = cell.LeafBytesAfter == cell.LeafBytesBefore
-	if lane.name == "compact-storage-full" || lane.name == "compact-storage-exhaustive" {
-		cell.Details["value_log_source_prefix_unchanged"] = strconv.FormatBool(indexVacuumM4PersistentSourcePrefixesUnchanged(t, valueSourcesBefore))
-		cell.Details["leaf_log_source_prefix_unchanged"] = strconv.FormatBool(indexVacuumM4PersistentSourcePrefixesUnchanged(t, leafSourcesBefore))
-		cell.Details["persistent_log_contract"] = "whole CompactStorage owns separate log phases; before/after bytes and source-prefix observations are reported"
-		cell.Verdicts["value_log_contract"] = true
-		cell.Verdicts["leaf_log_contract"] = true
+	compactStorageLane := lane.name == "compact-storage-full" || lane.name == "compact-storage-exhaustive"
+	if compactStorageLane {
+		valueSourcesUnchanged := indexVacuumM4PersistentSourcePrefixesUnchanged(t, valueSourcesBefore)
+		leafSourcesUnchanged := indexVacuumM4PersistentSourcePrefixesUnchanged(t, leafSourcesBefore)
+		cell.Details["value_log_source_prefix_unchanged"] = strconv.FormatBool(valueSourcesUnchanged)
+		cell.Details["leaf_log_source_prefix_unchanged"] = strconv.FormatBool(leafSourcesUnchanged)
+		cell.Details["persistent_log_contract"] = "whole CompactStorage owns value-log rewrite and leaf-generation pack; contract verdicts require the compacted database to reopen and resolve the original logical digest"
 	}
-	indexOnlyLane := lane.name != "compact-storage-full" && lane.name != "compact-storage-exhaustive"
+	indexOnlyLane := !compactStorageLane
 	if indexOnlyLane && (!cell.Verdicts["value_log_contract"] || !cell.Verdicts["leaf_log_contract"]) {
 		t.Errorf("persistent log bytes changed: value=%d->%d leaf=%d->%d", cell.ValueBytesBefore, cell.ValueBytesAfter, cell.LeafBytesBefore, cell.LeafBytesAfter)
 	}
@@ -369,6 +383,9 @@ func runIndexVacuumM4MatrixCell(t *testing.T, fixture indexVacuumM4Fixture, lane
 	cell.Details["freelist_reclaimable_ratio_ppm_after"] = strconv.FormatUint(afterReport.FreelistReclaimableRatioPPM, 10)
 	cell.Verdicts["reopen_digest"] = gotDigest == wantDigest
 	cell.Verdicts["logical_digest"] = cell.Verdicts["logical_digest"] || gotDigest == wantDigest
+	if compactStorageLane {
+		indexVacuumM4SetCompactStoragePersistentLogVerdicts(&cell, cell.Verdicts["reopen_digest"])
+	}
 	if err := reopened.Close(); err != nil {
 		t.Fatalf("close reopened: %v", err)
 	}
@@ -379,6 +396,11 @@ func runIndexVacuumM4MatrixCell(t *testing.T, fixture indexVacuumM4Fixture, lane
 		cell.Status = "supported"
 	}
 	return cell
+}
+
+func indexVacuumM4SetCompactStoragePersistentLogVerdicts(cell *indexVacuumM4CellArtifact, reopenDigestOK bool) {
+	cell.Verdicts["value_log_contract"] = reopenDigestOK
+	cell.Verdicts["leaf_log_contract"] = reopenDigestOK
 }
 
 func indexVacuumM4Options(dir string) Options {
