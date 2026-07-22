@@ -120,6 +120,25 @@ func TestIndexVacuumM4ExpectedLaneError(t *testing.T) {
 	}
 }
 
+func TestIndexVacuumM4PlatformSupportsLane(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		goos string
+		lane indexVacuumM4Lane
+		want bool
+	}{
+		{name: "linux online", goos: "linux", lane: indexVacuumM4Lane{expectsOnlineSwap: true}, want: true},
+		{name: "windows online", goos: "windows", lane: indexVacuumM4Lane{expectsOnlineSwap: true}, want: false},
+		{name: "windows offline", goos: "windows", lane: indexVacuumM4Lane{}, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := indexVacuumM4PlatformSupportsLane(test.goos, test.lane); got != test.want {
+				t.Fatalf("supported=%v want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestIndexVacuumM4CertificationMatrix(t *testing.T) {
 	fixtures := []indexVacuumM4Fixture{
 		{
@@ -243,19 +262,23 @@ func runIndexVacuumM4MatrixCell(t *testing.T, fixture indexVacuumM4Fixture, lane
 	cell.DurationNanos = time.Since(started).Nanoseconds()
 	cell.Status = status
 	cell.Retries = retries
+	supported := indexVacuumM4PlatformSupportsLane(runtime.GOOS, lane)
 	expectedErr := indexVacuumM4ExpectedLaneError(fixture, lane, runErr)
 	cell.ExpectedError = expectedErr
 	if runErr != nil {
 		cell.Details["error"] = runErr.Error()
 		if expectedErr {
 			cell.Details["error_class"] = "expected"
-		} else {
+		} else if supported || !errors.Is(runErr, backenddb.ErrVacuumUnsupported) {
 			cell.Errors = 1
 		}
 	}
 
-	supported := !lane.expectsOnlineSwap || runtime.GOOS != "windows"
 	cell.Supported = supported && !expectedErr
+	if !supported && errors.Is(runErr, backenddb.ErrVacuumUnsupported) {
+		cell.Status = string(CompactStoragePhaseStatusUnsupported)
+		cell.Details["error_class"] = "platform_unsupported"
+	}
 	if supported && runErr != nil && !expectedErr {
 		t.Fatalf("supported lane error: %v", runErr)
 	}
@@ -459,7 +482,14 @@ func runIndexVacuumM4Lane(t *testing.T, database *DB, opts Options, fixture inde
 	case "close-opt-in-vacuum":
 		t.Setenv(envCloseVacuumIndexOnline, "1")
 		t.Setenv(envCloseVacuumTimeout, "2m")
-		return "supported", 0, true, database.Close()
+		if err := database.Close(); err != nil {
+			return "error", 0, true, err
+		}
+		if runtime.GOOS == "windows" {
+			// Close intentionally absorbs an unsupported optional maintenance pass.
+			return string(CompactStoragePhaseStatusUnsupported), 0, true, backenddb.ErrVacuumUnsupported
+		}
+		return "supported", 0, true, nil
 	case "background-user", "background-freelist", "background-collection-roots":
 		configureIndexVacuumM4BackgroundLane(database, lane.backgroundReason)
 		before := database.bgVac.Stats()
@@ -469,6 +499,9 @@ func runIndexVacuumM4Lane(t *testing.T, database *DB, opts Options, fixture inde
 			(after.RetryRecoverableRootSetTotal - before.RetryRecoverableRootSetTotal) +
 			(after.RetryCheckpointCleanupTotal - before.RetryCheckpointCleanupTotal) +
 			(after.RetryResourcePinnedTotal - before.RetryResourcePinnedTotal)
+		if after.UnsupportedTotal-before.UnsupportedTotal == 1 && after.LastOutcome == backgroundIndexVacuumOutcomeUnsupported {
+			return after.LastOutcome, retries, false, backenddb.ErrVacuumUnsupported
+		}
 		if after.Vacuums-before.Vacuums != 1 || after.LastDebtReason != lane.backgroundReason {
 			return after.LastOutcome, retries, false, fmt.Errorf("background result vacuums=%d reason=%q want one/%q", after.Vacuums-before.Vacuums, after.LastDebtReason, lane.backgroundReason)
 		}
@@ -479,6 +512,10 @@ func runIndexVacuumM4Lane(t *testing.T, database *DB, opts Options, fixture inde
 	default:
 		return "error", 0, false, fmt.Errorf("unknown lane %q for fixture %q", lane.name, fixture.name)
 	}
+}
+
+func indexVacuumM4PlatformSupportsLane(goos string, lane indexVacuumM4Lane) bool {
+	return !lane.expectsOnlineSwap || goos != "windows"
 }
 
 func indexVacuumM4ExpectedLaneError(fixture indexVacuumM4Fixture, lane indexVacuumM4Lane, err error) bool {
