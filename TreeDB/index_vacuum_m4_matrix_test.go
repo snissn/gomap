@@ -92,6 +92,34 @@ func TestIndexVacuumM4MatrixHarnessContract(t *testing.T) {
 	}
 }
 
+func TestIndexVacuumM4ExpectedLaneError(t *testing.T) {
+	outer := indexVacuumM4Fixture{name: "outer-leaf"}
+	inline := indexVacuumM4Fixture{name: "inline-values"}
+	full := indexVacuumM4Lane{name: "compact-storage-full"}
+	exhaustive := indexVacuumM4Lane{name: "compact-storage-exhaustive"}
+	backend := indexVacuumM4Lane{name: "backend-vacuum-online"}
+
+	for _, test := range []struct {
+		name    string
+		fixture indexVacuumM4Fixture
+		lane    indexVacuumM4Lane
+		err     error
+		want    bool
+	}{
+		{name: "outer full namespace", fixture: outer, lane: full, err: fmt.Errorf("promotion: %w", ErrNamespacePersistenceUnsupported), want: true},
+		{name: "outer exhaustive owner", fixture: outer, lane: exhaustive, err: ErrCompactStorageLeafPageLogOwnerUnsupported, want: true},
+		{name: "outer backend", fixture: outer, lane: backend, err: ErrNamespacePersistenceUnsupported},
+		{name: "inline full", fixture: inline, lane: full, err: ErrNamespacePersistenceUnsupported},
+		{name: "untyped", fixture: outer, lane: full, err: errors.New("promotion failed")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := indexVacuumM4ExpectedLaneError(test.fixture, test.lane, test.err); got != test.want {
+				t.Fatalf("expected=%v want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestIndexVacuumM4CertificationMatrix(t *testing.T) {
 	fixtures := []indexVacuumM4Fixture{
 		{
@@ -454,7 +482,10 @@ func runIndexVacuumM4Lane(t *testing.T, database *DB, opts Options, fixture inde
 }
 
 func indexVacuumM4ExpectedLaneError(fixture indexVacuumM4Fixture, lane indexVacuumM4Lane, err error) bool {
-	return fixture.name == "outer-leaf" && lane.name == "compact-storage-exhaustive" &&
+	if fixture.name != "outer-leaf" || (lane.name != "compact-storage-full" && lane.name != "compact-storage-exhaustive") {
+		return false
+	}
+	return errors.Is(err, ErrNamespacePersistenceUnsupported) ||
 		errors.Is(err, ErrCompactStorageLeafPageLogOwnerUnsupported)
 }
 
