@@ -10,6 +10,10 @@ RUN_RACE_TESTS=${RUN_RACE_TESTS:-true}
 M0_PACKET_DIR=${M0_PACKET_DIR:-}
 
 cd "$ROOT"
+if [[ "$COUNT" != "10" ]]; then
+  printf 'M4 certification requires exactly 10 M0 repetitions\n' >&2
+  exit 1
+fi
 if [[ -n "$(git status --porcelain)" ]]; then
   printf 'refusing certification from a dirty worktree\n' >&2
   exit 1

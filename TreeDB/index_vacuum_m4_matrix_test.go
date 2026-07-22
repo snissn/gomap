@@ -84,6 +84,7 @@ func TestIndexVacuumM4MatrixHarnessContract(t *testing.T) {
 		"git status --porcelain",
 		"refusing non-empty RUN_DIR",
 		"unsupported platform metadata command",
+		"M4 certification requires exactly 10 M0 repetitions",
 		`.environment.dirty_state == "clean"`,
 		"legacy_completed_without_abort",
 		"legacy_cv_at_most_10_percent",
