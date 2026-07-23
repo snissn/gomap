@@ -44,6 +44,10 @@ type commandWALDependencyDebtEntry struct {
 	lastLSN       uint64
 	resources     []*rootpublication.StableResourceSet
 	rotationFiles []*rootpublication.StableResourceToken
+	// createdAt remains the original physical-range creation time if a
+	// coalesced empty range is partially trimmed. Reported max age is therefore
+	// conservative physical-range age, rather than the age of only its
+	// remaining LSNs.
 	createdAt     time.Time
 	// retriesPerLSN is uniform across this entry's inclusive LSN range. Empty
 	// ranges are split at retry frontiers so partial release preserves exact
