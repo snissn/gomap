@@ -64,6 +64,13 @@ func SetVectorPartitionBarrierBeforeMutationHookForTestingV1(fn func(string)) fu
 	return setVectorPartitionBarrierBeforeMutationHookForTestV1(fn)
 }
 
+// VectorPartitionNamespacePersistenceSupportedForTestingV1 reports whether
+// this platform can durably create and remove the VPM namespace. It is a
+// testing capability seam; production mutations fail closed when unavailable.
+func VectorPartitionNamespacePersistenceSupportedForTestingV1() bool {
+	return vpmNamespacePersistenceSupported()
+}
+
 func (c *Collection) withVectorPartitionStorageMutationV1(operation string, fn func() error) error {
 	return WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
 		vectorPartitionBarrierBeforeMutationHookForTest.RLock()

@@ -289,6 +289,9 @@ func TestRaftSnapshotV1ExportWaitsForVectorPartitionStorageBarrier(t *testing.T)
 }
 
 func TestRaftSnapshotV1ExportDoesNotInvertVectorPartitionPublishAndApplyLocks(t *testing.T) {
+	if !collections.VectorPartitionNamespacePersistenceSupportedForTestingV1() {
+		t.Skip("vector partition namespace persistence unsupported")
+	}
 	root := t.TempDir()
 	db := openRaftSnapshotFSMTestDB(t, root, true)
 	defer func() { _ = db.Close() }()

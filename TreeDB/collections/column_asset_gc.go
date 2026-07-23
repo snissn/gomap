@@ -297,12 +297,18 @@ func (c *Collection) ColumnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		if err := c.db.CheckStorageMaintenanceReady(); err != nil {
 			return stats, err
 		}
-		// V1 destructive GC keeps planning under the mutation lock so the
-		// candidate/protection view cannot race with collection writes. A later
-		// planner snapshot handoff can narrow this lock once benchmark evidence
-		// justifies the extra complexity.
-		unlock := c.lockMutation()
-		defer unlock.Unlock()
+		// Destructive GC and durable vector-partition publication both protect
+		// column assets. Keep their shared order storage barrier -> collection
+		// mutation, including planning and recoverable-root revalidation. Taking
+		// only the mutation lock here would let publication reserve the storage
+		// barrier and then advance root-publication state between the GC plan and
+		// its delete witness.
+		var mutationErr error
+		mutationErr = c.withVectorPartitionStorageMutationV1("column_asset_gc", func() error {
+			stats, mutationErr = c.columnAssetGC(ctx, opts)
+			return mutationErr
+		})
+		return stats, mutationErr
 	}
 	return c.columnAssetGC(ctx, opts)
 }
