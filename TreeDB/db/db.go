@@ -1431,7 +1431,7 @@ type Options struct {
 	// WALMaxSegmentBytes, which remains a per-frame payload cap. 0 disables
 	// runtime command-WAL rotation.
 	CommandWALSegmentTargetBytes int64
-	// JournalCompression enables best-effort zstd compression for cached-mode
+	// JournalCompression enables best-effort zstd compression for generic cached-mode
 	// journal/commitlog segments (metadata only).
 	//
 	// The redo log will only keep compressed bytes when they are smaller than the

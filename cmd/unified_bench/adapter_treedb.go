@@ -64,7 +64,7 @@ var (
 	treedbLeafPageReadCacheWriteAdmission = flag.String("treedb-leaf-page-read-cache-write-admission", "immediate", "TreeDB: write-side outer-leaf read-cache admission policy (immediate|adaptive)")
 	treedbChunkSize                       = flag.Int64("treedb-chunk-size", defaultTreeDBChunkSizeBytes, "TreeDB: pager chunk size in bytes (default 256KiB)")
 	treedbJournalLanes                    = flag.Int("treedb-journal-lanes", 0, "TreeDB: journal/value-log lane count (0=coalescing-safe auto; explicit values override)")
-	treedbJournalCompress                 = flag.Bool("treedb-journal-compress", false, "TreeDB: compress journal/commitlog segments (zstd)")
+	treedbJournalCompress                 = flag.Bool("treedb-journal-compress", false, "TreeDB: request generic journal compression; strict command-WAL V2 frames remain raw")
 	treedbKeepRecent                      = flag.Uint64("treedb-keep-recent", 0, "TreeDB: KeepRecent commit versions to retain before page reuse (0=default; cached defaults to 1)")
 	treedbMaxQueuedMems                   = flag.Int("treedb-max-queued-memtables", 0, "TreeDB (cached): max queued immutable memtables before backpressure flush (0=default, <0=disable)")
 	treedbSlowdownBacklogSeconds          = flag.Float64("treedb-slowdown-backlog-seconds", 1, "TreeDB (cached): begin writer backpressure when queued flush backlog exceeds this many seconds (0=disabled)")
