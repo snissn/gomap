@@ -592,6 +592,17 @@ func TestVectorPartitionLifecycleContractDoc(t *testing.T) {
 	)
 }
 
+func TestVectorPartitionStorageFormatContractDoc(t *testing.T) {
+	doc := readRepoText(t, "TreeDB/docs/spec/storage-format.md")
+	requireTextContains(t, "vector partition storage format", doc,
+		"### Vector-partition manifests (`vector_partitions/`)",
+		"one (exactly one)\nrouter-asset frame",
+		"Promotion\nwrites and syncs a checksummed VPI1 inactive record before atomically replacing",
+		"VPR1 is the bounded,\nversioned, checksummed reclaim journal",
+		"Raft-snapshot-included namespace",
+	)
+}
+
 func TestVectorPartitionStoreV1CleanupRefusesReachableGeneration(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	s, err := OpenVectorPartitionStoreV1(t.TempDir())
@@ -678,6 +689,105 @@ func TestVectorPartitionStoreV1PublishFaultWindowsReopenOldOrCompleteNew(t *test
 			}
 		})
 	}
+}
+
+func TestVectorPartitionStoreV1SameGenerationBuildingPromotionCrashSafe(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	boundaries := []string{"generation_temp_synced", "promotion_inactive_synced", "promotion_renamed", "generation_linked", "promotion_dir_synced", "generation_dir_synced", "active_temp_synced", "active_renamed", "active_dir_synced", "retired_removed", "publication_complete"}
+	for _, boundary := range boundaries {
+		t.Run(boundary, func(t *testing.T) {
+			root := t.TempDir()
+			store, err := OpenVectorPartitionStoreV1(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ready := testVectorPartitionManifestV1()
+			building := ready
+			building.State, building.RouterGeneration, building.RouterAsset, building.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+			building.Canonicalize()
+			if err := store.publishLocked(building); err != nil {
+				t.Fatal(err)
+			}
+			stop := setVectorPartitionPublishHookForTestV1(func(at string) error {
+				if at == boundary {
+					return errors.New("injected promotion interruption")
+				}
+				return nil
+			})
+			err = store.publishLocked(ready)
+			stop()
+			if err == nil || !strings.Contains(err.Error(), "injected promotion interruption") {
+				t.Fatalf("promotion err=%v", err)
+			}
+			reopened, err := OpenExistingVectorPartitionStoreV1(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := reopened.Open(ready.Collection, ready.IndexName, ready.Generation)
+			if err != nil || (got.State != "building" && got.State != "ready") {
+				t.Fatalf("reopen promotion state=%q err=%v", got.State, err)
+			}
+			if got.State == "ready" {
+				if _, activeErr := reopened.OpenActive(ready.Collection, ready.IndexName); activeErr != nil {
+					if _, inactiveErr := reopened.readInactiveGeneration(ready.Collection, ready.IndexName); inactiveErr != nil {
+						t.Fatalf("prepared-only promoted ready lacks inactive authority: active=%v inactive=%v", activeErr, inactiveErr)
+					}
+				}
+			}
+			if err := reopened.publishLocked(ready); err != nil {
+				t.Fatalf("idempotent promotion retry: %v", err)
+			}
+			active, err := reopened.OpenActive(ready.Collection, ready.IndexName)
+			if err != nil || active.Generation != ready.Generation {
+				t.Fatalf("retry active=%+v err=%v", active, err)
+			}
+		})
+	}
+
+	t.Run("negative_transitions", func(t *testing.T) {
+		store, err := OpenVectorPartitionStoreV1(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		ready := testVectorPartitionManifestV1()
+		building := ready
+		building.State, building.RouterGeneration, building.RouterAsset, building.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+		building.Canonicalize()
+		if err := store.publishLocked(building); err != nil {
+			t.Fatal(err)
+		}
+		for _, tc := range []struct {
+			name   string
+			mutate func(*VectorPartitionManifestV1)
+		}{
+			{name: "source", mutate: func(m *VectorPartitionManifestV1) { m.SourceChecksum++ }},
+			{name: "balance", mutate: func(m *VectorPartitionManifestV1) { m.BalancePolicy = "different" }},
+			{name: "placement", mutate: func(m *VectorPartitionManifestV1) { m.Placements[0].GroupID = "other-group" }},
+			{name: "membership", mutate: func(m *VectorPartitionManifestV1) { m.Memberships[0].VectorOrdinal++ }},
+			{name: "asset", mutate: func(m *VectorPartitionManifestV1) { m.Assets[0].ID = "different-asset" }},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				wrong := ready
+				wrong.Placements = append([]VectorPartitionPlacementV1(nil), ready.Placements...)
+				wrong.Memberships = append([]VectorPartitionMembershipV1(nil), ready.Memberships...)
+				wrong.Assets = append([]VectorPartitionAssetV1(nil), ready.Assets...)
+				tc.mutate(&wrong)
+				wrong.Canonicalize()
+				if vectorPartitionBuildingPromotionIdentityV1(building, wrong) {
+					t.Fatal("building projection accepted changed ready topology")
+				}
+				if err := store.publishLocked(wrong); err == nil {
+					t.Fatal("changed ready promotion accepted")
+				}
+			})
+		}
+		if err := store.publishLocked(ready); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.publishLocked(building); err == nil {
+			t.Fatal("ready-to-building transition accepted")
+		}
+	})
 }
 
 func TestVectorPartitionStoreV1DeactivateDurablyRetiresActiveGeneration(t *testing.T) {

@@ -50,6 +50,32 @@ A TreeDB deployment uses:
   `stable/`, `apply/`, `snapshots/`, and `peers/<peer-id>/` directories,
 - optional side-store DBs (`dictdb`, `templatedb`) using their own `index.db` files.
 
+### Vector-partition manifests (`vector_partitions/`)
+
+`vector_partitions/` is a persistent, Raft-snapshot-included namespace for M1
+vector-partition metadata; it is not a WAL, slab, or cache. A VPM1 filename is
+`sha256(collection)-sha256(index)-generation.vpm` and is accepted only when
+its decoded collection, index, and generation bind exactly to that name. VPM1
+has a fixed version, bounded length-prefixed fields and lists, one (exactly one)
+router-asset frame, canonical ordering, and an integrity digest; malformed,
+unknown-version, over-bound, trailing, or identity-mismatched records fail
+closed.
+
+Ready publication writes and syncs the complete VPM1 then its active pointer.
+A retained `building` VPM1 may be promoted only to a ready VPM1 with the exact
+same collection/index/generation/index-definition/source identity. Promotion
+writes and syncs a checksummed VPI1 inactive record before atomically replacing
+the VPM1; recovery consequently sees retained building, prepared-only
+ready+VPI1, or active ready, never a partial or unexplained pointerless ready
+record. Active and retired pointers are text generation records with bounded
+strict framing. VPI1 is identity-bound and checksummed and remains after exact
+deletion/reclaim to prove intentional no-active state. VPR1 is the bounded,
+versioned, checksummed reclaim journal that retains original and rewritten asset
+debt until physical GC completes. Deletion journals before unlink; VPI1 is
+durable before retired-pointer removal; a later active pointer is durable before
+stale VPI1 removal. Pre-alpha binaries may reject old `vector_partitions/`
+contents; no migration compatibility is promised.
+
 Before a writable public open can succeed, TreeDB establishes the complete
 directory dependency chain from the outer database root through `maindb`,
 enabled side-store roots, and each backend's `wal`, `value_vlog`, `leaf_vlog`,

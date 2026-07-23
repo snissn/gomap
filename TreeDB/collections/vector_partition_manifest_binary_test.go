@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"encoding/binary"
 	"math"
 	"strings"
@@ -269,6 +270,38 @@ func requireVPMBinaryDecodeError(t testing.TB, raw []byte, limits VectorPartitio
 	}
 }
 
+func TestVectorPartitionManifestV1RouterAssetFramingIsExactlyOne(t *testing.T) {
+	for _, state := range []string{"ready", "building"} {
+		t.Run(state, func(t *testing.T) {
+			m := testVectorPartitionManifestV1()
+			if state == "building" {
+				m.State, m.RouterGeneration, m.RouterAsset, m.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+				m.Canonicalize()
+			}
+			raw, err := EncodeVectorPartitionManifestV1(m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			layout := parseVPMBinaryLayout(t, raw)
+			if len(layout.routerAssets.items) != 1 {
+				t.Fatalf("canonical router assets=%d want 1", len(layout.routerAssets.items))
+			}
+			if got, err := DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits()); err != nil {
+				t.Fatalf("canonical decode err=%v", err)
+			} else if round, err := EncodeVectorPartitionManifestV1(got); err != nil || !bytes.Equal(round, raw) {
+				t.Fatalf("canonical reencode exact=%t err=%v", bytes.Equal(round, raw), err)
+			}
+			zero := removeVPMBinaryListItem(raw, layout.routerAssets.countOffset, layout.routerAssets.items[0].vpmBinarySpan)
+			requireVPMBinaryDecodeError(t, zero, DefaultVectorPartitionManifestLimits(), "router asset count")
+			more := append([]byte(nil), raw[:layout.routerAssets.end]...)
+			more = append(more, raw[layout.routerAssets.items[0].start:layout.routerAssets.items[0].end]...)
+			more = append(more, raw[layout.routerAssets.end:]...)
+			binary.BigEndian.PutUint32(more[layout.routerAssets.countOffset:], 2)
+			requireVPMBinaryDecodeError(t, more, DefaultVectorPartitionManifestLimits(), "router asset count")
+		})
+	}
+}
+
 func TestVectorPartitionManifestV1BinaryMutationAndResealMatrix(t *testing.T) {
 	base := testVectorPartitionManifestV1()
 	base.OverlapMemberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 0, PartitionID: 1}}
@@ -442,7 +475,7 @@ func TestVectorPartitionManifestV1BinaryMutationAndResealMatrix(t *testing.T) {
 		},
 		{
 			name: "resealed_invalid_ready_structure",
-			want: "invalid vector partition manifest: asset",
+			want: "router asset count",
 			mutate: func(t testing.TB, raw []byte, m VectorPartitionManifestV1, layout vpmBinaryLayout) []byte {
 				raw = removeVPMBinaryListItem(raw, layout.routerAssets.countOffset, layout.routerAssets.items[0].vpmBinarySpan)
 				m.RouterAsset = VectorPartitionAssetV1{}

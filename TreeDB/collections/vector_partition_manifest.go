@@ -521,9 +521,6 @@ func DecodeVectorPartitionManifestV1(raw []byte, l VectorPartitionManifestLimits
 	m.RouterGeneration = r.u64()
 	m.PartitionCount = r.u32()
 	ra := r.assets()
-	if len(ra) == 1 {
-		m.RouterAsset = ra[0]
-	}
 	m.Placements = r.placements()
 	m.Memberships = r.memberships()
 	m.OverlapMemberships = r.memberships()
@@ -532,6 +529,10 @@ func DecodeVectorPartitionManifestV1(raw []byte, l VectorPartitionManifestLimits
 	if r.err != nil || r.off != len(raw) {
 		return VectorPartitionManifestV1{}, fmt.Errorf("%w: truncated, over-cap, or trailing record: %v", ErrVectorPartitionManifestInvalid, r.err)
 	}
+	if len(ra) != 1 {
+		return VectorPartitionManifestV1{}, fmt.Errorf("%w: router asset count", ErrVectorPartitionManifestInvalid)
+	}
+	m.RouterAsset = ra[0]
 	if err := m.Validate(l); err != nil {
 		return VectorPartitionManifestV1{}, err
 	}
@@ -1455,13 +1456,40 @@ func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) erro
 		return e
 	}
 	target := filepath.Join(s.dir, name)
+	promoting := false
 	if e = os.Link(tmp, target); e != nil {
 		if !errors.Is(e, os.ErrExist) {
 			return e
 		}
 		existing, readErr := readBoundedVPM(target, DefaultVectorPartitionManifestLimits().MaxBytes)
-		if readErr != nil || !bytes.Equal(existing, raw) {
-			return fmt.Errorf("%w: generation %d already published with different bytes", ErrVectorPartitionManifestInvalid, m.Generation)
+		if readErr != nil {
+			return readErr
+		}
+		if bytes.Equal(existing, raw) {
+			// Exact idempotent retry.
+		} else {
+			previous, decodeErr := DecodeVectorPartitionManifestV1(existing, DefaultVectorPartitionManifestLimits())
+			if decodeErr != nil || previous.State != "building" || m.State != "ready" || !vectorPartitionBuildingPromotionIdentityV1(previous, m) {
+				return fmt.Errorf("%w: generation %d already published with different bytes", ErrVectorPartitionManifestInvalid, m.Generation)
+			}
+			// Persist intentional no-active authority before atomically replacing a
+			// retained building record. A restart can therefore observe only the
+			// old building, prepared-only ready+inactive, or active ready state.
+			if e = s.writeInactiveMarker(m.Collection, m.IndexName, m.Generation); e != nil {
+				return e
+			}
+			if e = vectorPartitionPublishFaultV1("promotion_inactive_synced"); e != nil {
+				return e
+			}
+			if e = renameVPM(tmp, target); e != nil {
+				return e
+			}
+			promoting = true
+		}
+	}
+	if promoting {
+		if e = vectorPartitionPublishFaultV1("promotion_renamed"); e != nil {
+			return e
 		}
 	}
 	if e = vectorPartitionPublishFaultV1("generation_linked"); e != nil {
@@ -1469,6 +1497,11 @@ func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) erro
 	}
 	if e = syncDirVPM(s.dir); e != nil {
 		return e
+	}
+	if promoting {
+		if e = vectorPartitionPublishFaultV1("promotion_dir_synced"); e != nil {
+			return e
+		}
 	}
 	if e = vectorPartitionPublishFaultV1("generation_dir_synced"); e != nil {
 		return e
@@ -1522,6 +1555,18 @@ func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) erro
 	}
 	return vectorPartitionPublishFaultV1("publication_complete")
 }
+
+func vectorPartitionBuildingPromotionIdentityV1(building, ready VectorPartitionManifestV1) bool {
+	// A generation-bound building record already owns all non-router topology
+	// and asset identity. Promotion may change only the ready-state fields.
+	expected := ready
+	expected.State, expected.RouterGeneration, expected.RouterAsset, expected.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+	expected.Canonicalize()
+	want, wantErr := EncodeVectorPartitionManifestV1(expected)
+	got, gotErr := EncodeVectorPartitionManifestV1(building)
+	return wantErr == nil && gotErr == nil && bytes.Equal(got, want)
+}
+
 func (s *VectorPartitionStoreV1) uniqueTemp(name string) (string, error) {
 	var nonce [12]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
