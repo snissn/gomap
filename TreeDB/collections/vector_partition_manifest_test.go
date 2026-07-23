@@ -458,7 +458,7 @@ func TestCollectionVectorPartitionReclaimV1ReclaimsCoResidentRecords(t *testing.
 		if err := m.Validate(DefaultVectorPartitionManifestLimits()); err != nil {
 			t.Fatal(err)
 		}
-		if err := store.Publish(m); err != nil {
+		if err := store.publishLocked(m); err != nil {
 			t.Fatal(err)
 		}
 		if err := store.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
@@ -553,7 +553,7 @@ func publishDeletedVectorPartitionReclaimCandidateV1(t *testing.T, d *backenddb.
 	if err := m.Validate(DefaultVectorPartitionManifestLimits()); err != nil {
 		t.Fatalf("mixed reclaim manifest: %v", err)
 	}
-	if err := store.Publish(m); err != nil {
+	if err := store.publishLocked(m); err != nil {
 		t.Fatalf("publish mixed reclaim manifest: %v", err)
 	}
 	if err := store.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
@@ -884,6 +884,44 @@ func TestCollectionVectorPartitionManifestV1PublicationSharesMutationBarrier(t *
 	}
 }
 
+func TestCollectionVectorPartitionBuildingManifestProtectsAssetsFromGC(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
+	defer d.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	_, graph, _, err := col.columnVectorGraphPhysicalRowReaderSnapshotView(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testVectorPartitionManifestV1()
+	m.State, m.RouterGeneration, m.RouterAsset, m.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+	m.IndexName, m.IndexDefinitionDigest = def.Name, VectorIndexDefinitionDigestV1(def)
+	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
+	refs, resources := appendVectorPartitionStableAssetsV1(t, d, col, 913)
+	resources.Release() // Building publication has no producer authority transfer.
+	for i := range m.Assets {
+		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(raw)
+		m.Assets[i].Ref, m.Assets[i].Bytes, m.Assets[i].Checksum = refs[i], uint64(refs[i].Length), hex.EncodeToString(sum[:])
+	}
+	m.Canonicalize()
+	if err := col.PublishVectorPartitionManifestV1(m, nil); err != nil {
+		t.Fatalf("publish building: %v", err)
+	}
+	gc, err := col.ColumnAssetGC(t.Context(), ColumnAssetGCOptions{DryRun: true, CandidateRefs: refs[:2]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gc.BytesEligible != 0 {
+		t.Fatalf("building manifest assets became GC eligible: %+v", gc)
+	}
+}
+
 func TestVectorPartitionManifestV1CanonicalRoundTrip(t *testing.T) {
 	m := testVectorPartitionManifestV1()
 	raw, err := EncodeVectorPartitionManifestV1(m)
@@ -1092,15 +1130,70 @@ func TestVectorPartitionManifestV1TotalMembershipCap(t *testing.T) {
 	}
 }
 
-func TestVectorPartitionStoreV1RejectsRawReadyAuthority(t *testing.T) {
+func TestVectorPartitionManifestV1DefaultLimitsSupportMillionRowsAndOverlap(t *testing.T) {
+	m := testVectorPartitionManifestV1()
+	m.State, m.RouterGeneration, m.RouterAsset, m.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+	m.PartitionCount = 1
+	m.Placements = []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}}
+	m.Assets = m.Assets[:1]
+	m.SourceRowCount = 1_000_000
+	m.Memberships = make([]VectorPartitionMembershipV1, m.SourceRowCount)
+	for i := range m.Memberships {
+		m.Memberships[i] = VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 0}
+	}
+	m.OverlapMemberships = make([]VectorPartitionMembershipV1, 200_000)
+	for i := range m.OverlapMemberships {
+		m.OverlapMemberships[i] = VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 0}
+	}
+	m.Representatives = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}}
+	m.Canonicalize()
+	raw, err := EncodeVectorPartitionManifestV1(m)
+	if err != nil {
+		t.Fatalf("encode 1M rows + 20%% overlap: %v", err)
+	}
+	got, err := DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits())
+	if err != nil {
+		t.Fatalf("decode 1M rows + 20%% overlap: %v", err)
+	}
+	if got.SourceRowCount != 1_000_000 || len(got.OverlapMemberships) != 200_000 || len(got.Representatives) != 1 {
+		t.Fatalf("decoded aggregate limits wrong: rows=%d overlap=%d representatives=%d", got.SourceRowCount, len(got.OverlapMemberships), len(got.Representatives))
+	}
+	legacy := DefaultVectorPartitionManifestLimits()
+	legacy.MaxSourceRows, legacy.MaxTotalMemberships, legacy.MaxMemberships = 0, 0, 1<<20
+	if err := got.Validate(legacy); err == nil {
+		t.Fatal("legacy MaxMemberships aggregate cap accepted overlapping manifest")
+	}
+}
+
+func TestVectorPartitionManifestV1RejectsNonCanonicalRouterPartitionAndDigest(t *testing.T) {
+	m := testVectorPartitionManifestV1()
+	m.RouterAsset.PartitionID = 1
+	m.Canonicalize()
+	if err := m.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
+		t.Fatal("nonzero router partition accepted")
+	}
+	m = testVectorPartitionManifestV1()
+	m.ReadySetDigest = m.readyDigest()
+	m.RouterAsset.PartitionID = 1
+	if m.ReadySetDigest == m.readyDigest() {
+		t.Fatal("ready digest does not distinguish router partition identity")
+	}
+}
+
+func TestVectorPartitionStoreV1RejectsRawPublicationAuthority(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	s, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	ready := testVectorPartitionManifestV1()
-	if err := s.Publish(ready); err == nil {
-		t.Fatal("raw ready publication bypass accepted")
+	building := ready
+	building.State, building.RouterGeneration, building.RouterAsset, building.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+	building.Canonicalize()
+	for _, m := range []VectorPartitionManifestV1{ready, building} {
+		if err := s.Publish(m); err == nil {
+			t.Fatal("raw publication bypass accepted")
+		}
 	}
 }
 
@@ -1164,7 +1257,7 @@ func BenchmarkVectorPartitionStoreV1WarmOpen(b *testing.B) {
 	m := testVectorPartitionManifestV1()
 	m.State, m.RouterGeneration, m.RouterAsset, m.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
 	m.Canonicalize()
-	if err := s.Publish(m); err != nil {
+	if err := s.publishLocked(m); err != nil {
 		b.Fatal(err)
 	}
 	b.Run("open", func(b *testing.B) {

@@ -36,10 +36,29 @@ var ErrVectorPartitionManifestInvalid = errors.New("collections: invalid vector 
 
 // VectorPartitionManifestLimits caps decoded state before any count-derived
 // allocation. Defaults deliberately leave ample headroom below int limits.
-type VectorPartitionManifestLimits struct{ MaxBytes, MaxPartitions, MaxMemberships, MaxAssets, MaxStringBytes, MaxMembershipsPerVector, MaxRepresentativesPerPartition int }
+type VectorPartitionManifestLimits struct {
+	MaxBytes, MaxPartitions, MaxMemberships, MaxAssets, MaxStringBytes, MaxMembershipsPerVector, MaxRepresentativesPerPartition int
+	// MaxSourceRows and MaxTotalMemberships separate the source cardinality
+	// from aggregate primary/overlap/representative membership storage. Zero
+	// retains the legacy MaxMemberships cap for callers that configured it.
+	MaxSourceRows, MaxTotalMemberships int
+}
 
 func DefaultVectorPartitionManifestLimits() VectorPartitionManifestLimits {
-	return VectorPartitionManifestLimits{16 << 20, 1 << 16, 1 << 20, 1 << 18, 4096, 16, 1 << 16}
+	return VectorPartitionManifestLimits{MaxBytes: 16 << 20, MaxPartitions: 1 << 16, MaxMemberships: 2 << 20, MaxAssets: 1 << 18, MaxStringBytes: 4096, MaxMembershipsPerVector: 16, MaxRepresentativesPerPartition: 1 << 16, MaxSourceRows: 1 << 20}
+}
+
+func (l VectorPartitionManifestLimits) sourceRowLimit() int {
+	if l.MaxSourceRows > 0 {
+		return l.MaxSourceRows
+	}
+	return l.MaxMemberships
+}
+func (l VectorPartitionManifestLimits) totalMembershipLimit() int {
+	if l.MaxTotalMemberships > 0 {
+		return l.MaxTotalMemberships
+	}
+	return l.MaxMemberships
 }
 
 type VectorPartitionAssetV1 struct {
@@ -124,10 +143,10 @@ func (m VectorPartitionManifestV1) Validate(l VectorPartitionManifestLimits) err
 	if m.Format != VectorPartitionManifestFormatV1 || (m.State != "building" && m.State != "ready") || m.Collection == "" || m.IndexName == "" || !isSHA256VPM(m.IndexDefinitionDigest) || !isSHA256VPM(m.IntegrityDigest) || m.Generation == 0 || m.SourceGeneration == 0 || m.SourceRowCount == 0 || m.PartitionCount == 0 || int(m.PartitionCount) > l.MaxPartitions {
 		return fmt.Errorf("%w: identity or partition bounds", ErrVectorPartitionManifestInvalid)
 	}
-	if m.SourceRowCount > uint64(l.MaxMemberships) || len(m.Collection) > l.MaxStringBytes || len(m.IndexName) > l.MaxStringBytes || len(m.State) > l.MaxStringBytes || len(m.BalancePolicy) > l.MaxStringBytes || len(m.IndexDefinitionDigest) > l.MaxStringBytes || len(m.IntegrityDigest) > l.MaxStringBytes {
+	if m.SourceRowCount > uint64(l.sourceRowLimit()) || len(m.Collection) > l.MaxStringBytes || len(m.IndexName) > l.MaxStringBytes || len(m.State) > l.MaxStringBytes || len(m.BalancePolicy) > l.MaxStringBytes || len(m.IndexDefinitionDigest) > l.MaxStringBytes || len(m.IntegrityDigest) > l.MaxStringBytes {
 		return fmt.Errorf("%w: source/string cap", ErrVectorPartitionManifestInvalid)
 	}
-	if len(m.Placements) != int(m.PartitionCount) || len(m.Assets) == 0 || len(m.Assets) > l.MaxAssets || len(m.Memberships) != int(m.SourceRowCount) || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || totalMembershipsVPM(m.Memberships, m.OverlapMemberships, m.Representatives) > l.MaxMemberships || (m.State == "ready" && !isSHA256VPM(m.ReadySetDigest)) {
+	if len(m.Placements) != int(m.PartitionCount) || len(m.Assets) == 0 || len(m.Assets) > l.MaxAssets || len(m.Memberships) != int(m.SourceRowCount) || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || totalMembershipsVPM(m.Memberships, m.OverlapMemberships, m.Representatives) > l.totalMembershipLimit() || (m.State == "ready" && !isSHA256VPM(m.ReadySetDigest)) {
 		return fmt.Errorf("%w: incomplete ready set or capped list", ErrVectorPartitionManifestInvalid)
 	}
 	if m.State == "ready" {
@@ -136,6 +155,9 @@ func (m VectorPartitionManifestV1) Validate(l VectorPartitionManifestLimits) err
 		}
 		if err := validateAssetVPM(m.RouterAsset, l); err != nil {
 			return err
+		}
+		if m.RouterAsset.PartitionID != 0 {
+			return fmt.Errorf("%w: router partition must be zero", ErrVectorPartitionManifestInvalid)
 		}
 	} else if m.RouterGeneration != 0 || m.ReadySetDigest != "" || m.RouterAsset != (VectorPartitionAssetV1{}) {
 		return fmt.Errorf("%w: building ready references", ErrVectorPartitionManifestInvalid)
@@ -349,6 +371,9 @@ func (m VectorPartitionManifestV1) readyDigest() string {
 		writeColumnAssetRefVPM(h, a.Ref)
 	}
 	a := m.RouterAsset
+	// The router has no logical partition, but its required canonical zero is
+	// still encoded so this digest has one unambiguous asset representation.
+	writeU32VPM(h, a.PartitionID)
 	writeStringVPM(h, a.ID)
 	writeStringVPM(h, a.Checksum)
 	writeU64VPM(h, a.Bytes)
@@ -448,7 +473,7 @@ func EncodeVectorPartitionManifestV1(m VectorPartitionManifestV1) ([]byte, error
 	return b.Bytes(), nil
 }
 func preflightVectorPartitionManifestV1(m VectorPartitionManifestV1, l VectorPartitionManifestLimits) error {
-	if len(m.Placements) > l.MaxPartitions || len(m.Assets) > l.MaxAssets || len(m.Memberships) > l.MaxMemberships || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || totalMembershipsVPM(m.Memberships, m.OverlapMemberships, m.Representatives) > l.MaxMemberships {
+	if len(m.Placements) > l.MaxPartitions || len(m.Assets) > l.MaxAssets || len(m.Memberships) > l.MaxMemberships || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || totalMembershipsVPM(m.Memberships, m.OverlapMemberships, m.Representatives) > l.totalMembershipLimit() {
 		return fmt.Errorf("%w: list cap", ErrVectorPartitionManifestInvalid)
 	}
 	for _, s := range []string{m.Format, m.State, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.IntegrityDigest, m.BalancePolicy, m.ReadySetDigest} {
@@ -669,7 +694,7 @@ func (r *vpmReader) memberships() []VectorPartitionMembershipV1 {
 	if r.err != nil {
 		return nil
 	}
-	if n > r.l.MaxMemberships-r.membershipTotal {
+	if n > r.l.totalMembershipLimit()-r.membershipTotal {
 		r.err = errors.New("total membership cap")
 		return nil
 	}
@@ -1260,15 +1285,19 @@ func OpenExistingVectorPartitionStoreV1(root string) (*VectorPartitionStoreV1, e
 	return &VectorPartitionStoreV1{root: root, dir: d}, nil
 }
 
-// Publish persists only a non-ready building generation. Ready publication is
-// intentionally unavailable on the raw store: it must flow through
-// Collection.PublishVectorPartitionManifestV1, which owns live TVIS, asset,
-// namespace, and stable-resource authority checks.
+// Publish is intentionally unavailable on the raw store. A store alone cannot
+// establish collection mutation, live TVIS, or asset reachability authority;
+// Collection.PublishVectorPartitionManifestV1 owns both building and ready
+// publication.
 func (s *VectorPartitionStoreV1) Publish(m VectorPartitionManifestV1) error {
-	if m.State == "ready" {
-		return errors.New("collections: ready vector partition publication requires collection authority")
+	return errors.New("collections: vector partition publication requires collection authority")
+}
+
+func (s *VectorPartitionStoreV1) publishValidatedBuilding(m VectorPartitionManifestV1) error {
+	if m.State != "building" {
+		return errors.New("collections: validated building publication requires building state")
 	}
-	return WithVectorPartitionStorageBarrierV1(s.root, func() error { return s.publishLocked(m) })
+	return s.publishLocked(m)
 }
 
 func (s *VectorPartitionStoreV1) publishValidatedReady(m VectorPartitionManifestV1) error {
@@ -2017,13 +2046,21 @@ func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV
 		if err := validateStableColumnResourcesMatchPrepared(prepared, resources); err != nil {
 			return fmt.Errorf("collections: vector partition stable publication authority: %w", err)
 		}
-		namespace := ""
-		if cfg := c.meta.Options.ColumnStore; cfg != nil && cfg.AssetManager != nil {
-			namespace = cfg.AssetManager.Namespace
-		}
-		if err := verifyVectorPartitionAssetsV1(c.db.ColumnAssetRootDir(), namespace, append(append([]VectorPartitionAssetV1(nil), m.Assets...), m.RouterAsset)); err != nil {
-			return err
-		}
+	}
+	// Building manifests have no producer-issued stable-resource set, but they
+	// must still prove every referenced asset exists and matches before their
+	// raw durable reference is published. This closes the GC/rewrite-wins order:
+	// a manifest may not turn a reclaimed ref into dangling durable state.
+	namespace := ""
+	if cfg := c.meta.Options.ColumnStore; cfg != nil && cfg.AssetManager != nil {
+		namespace = cfg.AssetManager.Namespace
+	}
+	assets := append([]VectorPartitionAssetV1(nil), m.Assets...)
+	if m.State == "ready" {
+		assets = append(assets, m.RouterAsset)
+	}
+	if err := verifyVectorPartitionAssetsV1(c.db.ColumnAssetRootDir(), namespace, assets); err != nil {
+		return err
 	}
 	s, e := OpenVectorPartitionStoreV1(c.db.Dir())
 	if e != nil {
@@ -2032,7 +2069,7 @@ func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV
 	if m.State == "ready" {
 		return s.publishValidatedReady(m)
 	}
-	return s.Publish(m)
+	return s.publishValidatedBuilding(m)
 }
 
 // validateVectorPartitionSourceIdentityV1 deliberately obtains the source

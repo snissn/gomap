@@ -29,6 +29,11 @@ const (
 	raftSnapshotArchiveGlobV1      = "treedb-snapshot-*.tar"
 )
 
+// raftSnapshotAfterExtractForTest blocks a restore after archive extraction
+// while it still owns the storage barrier. It is test-only and makes the
+// barrier-before-FSM-lock ordering regression deterministic.
+var raftSnapshotAfterExtractForTest func()
+
 var raftSnapshotMainDBEntriesV1 = []string{
 	"index.db",
 	raftSnapshotFormatConfigFileV1,
@@ -54,10 +59,13 @@ func (f *FSM) ExportRaftSnapshotV1() (raftcluster.RaftSnapshotV1, error) {
 	if f == nil {
 		return raftcluster.RaftSnapshotV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
 	var snapshot raftcluster.RaftSnapshotV1
 	err := collections.WithVectorPartitionStorageBarrierV1(raftcluster.MainDBDir(f.cluster.Dir), func() error {
+		// All snapshot operations take the root barrier before f.mu. Install
+		// extracts under the barrier and then takes f.mu, so reversing this
+		// order here can deadlock export behind an in-flight install.
+		f.mu.Lock()
+		defer f.mu.Unlock()
 		var inner error
 		snapshot, inner = f.exportRaftSnapshotV1Locked()
 		return inner
@@ -256,6 +264,9 @@ func (f *FSM) installRaftSnapshotV1Locked(reader io.Reader) error {
 	header, err := extractRaftSnapshotArchiveV1(reader, tmpMain, tmpSide, tmpApply)
 	if err != nil {
 		return err
+	}
+	if hook := raftSnapshotAfterExtractForTest; hook != nil {
+		hook()
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -288,6 +288,53 @@ func TestRaftSnapshotV1ExportWaitsForVectorPartitionStorageBarrier(t *testing.T)
 	}
 }
 
+func TestRaftSnapshotV1InstallExtractionDoesNotDeadlockExport(t *testing.T) {
+	requireRaftSnapshotInstallSupportedV1(t)
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	sourceDB := openRaftSnapshotFSMTestDB(t, sourceDir, true)
+	defer func() { _ = sourceDB.Close() }()
+	sourceFSM := openRaftSnapshotFSMForTest(t, sourceDB, sourceDir, true)
+	defer func() { _ = sourceFSM.Close() }()
+	applySnapshotSourceEntries(t, sourceFSM, []byte(`{"_id":"order","name":"snapshot"}`))
+	snapshot, err := sourceFSM.ExportRaftSnapshotV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = snapshot.Release() }()
+	targetDir := filepath.Join(root, "target")
+	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
+	targetFSM := openRaftSnapshotFSMForTest(t, targetDB, targetDir, true)
+	defer func() { _ = targetFSM.Close() }()
+	entered, release := make(chan struct{}), make(chan struct{})
+	raftSnapshotAfterExtractForTest = func() { close(entered); <-release }
+	defer func() { raftSnapshotAfterExtractForTest = nil }()
+	reader := openRaftSnapshotArchiveForTest(t, snapshot)
+	defer reader.Close()
+	installDone := make(chan error, 1)
+	go func() { installDone <- targetFSM.InstallRaftSnapshotV1(reader) }()
+	<-entered
+	exportDone := make(chan error, 1)
+	go func() { _, err := targetFSM.ExportRaftSnapshotV1(); exportDone <- err }()
+	close(release)
+	select {
+	case err := <-installDone:
+		if err != nil {
+			t.Fatalf("install: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("install deadlocked")
+	}
+	select {
+	case err := <-exportDone:
+		if err != nil {
+			t.Fatalf("export: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("export deadlocked")
+	}
+}
+
 func BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall(b *testing.B) {
 	for _, rows := range []int{10_000, 100_000, 1_000_000} {
 		b.Run(fmt.Sprintf("memberships=%d", rows), func(b *testing.B) {
