@@ -34,6 +34,44 @@ const vectorPartitionMaxReferencedBytesV1 uint64 = 1 << 34
 
 var ErrVectorPartitionManifestInvalid = errors.New("collections: invalid vector partition manifest")
 
+const (
+	vectorPartitionMutationOperationPublishV1 = "publish"
+	vectorPartitionMutationOperationReclaimV1 = "reclaim"
+)
+
+var vectorPartitionBarrierBeforeMutationHookForTest struct {
+	sync.RWMutex
+	fn func(string)
+}
+
+// setVectorPartitionBarrierBeforeMutationHookForTestV1 exposes the structural
+// storage-barrier-before-mutation order to deterministic concurrency tests.
+func setVectorPartitionBarrierBeforeMutationHookForTestV1(fn func(string)) func() {
+	vectorPartitionBarrierBeforeMutationHookForTest.Lock()
+	old := vectorPartitionBarrierBeforeMutationHookForTest.fn
+	vectorPartitionBarrierBeforeMutationHookForTest.fn = fn
+	vectorPartitionBarrierBeforeMutationHookForTest.Unlock()
+	return func() {
+		vectorPartitionBarrierBeforeMutationHookForTest.Lock()
+		vectorPartitionBarrierBeforeMutationHookForTest.fn = old
+		vectorPartitionBarrierBeforeMutationHookForTest.Unlock()
+	}
+}
+
+func (c *Collection) withVectorPartitionStorageMutationV1(operation string, fn func() error) error {
+	return WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+		vectorPartitionBarrierBeforeMutationHookForTest.RLock()
+		hook := vectorPartitionBarrierBeforeMutationHookForTest.fn
+		vectorPartitionBarrierBeforeMutationHookForTest.RUnlock()
+		if hook != nil {
+			hook(operation)
+		}
+		unlock := c.lockMutation()
+		defer unlock.Unlock()
+		return fn()
+	})
+}
+
 // VectorPartitionManifestLimits caps decoded state before any count-derived
 // allocation. Defaults deliberately leave ample headroom below int limits.
 type VectorPartitionManifestLimits struct {
@@ -2106,9 +2144,7 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 	if err := c.db.CheckStorageMaintenanceReady(); err != nil {
 		return zero, err
 	}
-	err := WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
-		unlock := c.lockMutation()
-		defer unlock.Unlock()
+	err := c.withVectorPartitionStorageMutationV1(vectorPartitionMutationOperationReclaimV1, func() error {
 		s, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
 		if err != nil {
 			return err
@@ -2237,7 +2273,7 @@ func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV
 	if err := c.db.CheckStorageMaintenanceReady(); err != nil {
 		return err
 	}
-	return WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+	return c.withVectorPartitionStorageMutationV1(vectorPartitionMutationOperationPublishV1, func() error {
 		if err := preflightVectorPartitionManifestV1(m, DefaultVectorPartitionManifestLimits()); err != nil {
 			return err
 		}
@@ -2248,8 +2284,6 @@ func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV
 		// The source validation and active-pointer rename must share the collection
 		// mutation barrier. A catalog read lock alone does not prevent a column
 		// publication from advancing TVIS between validation and activation.
-		unlockMutation := c.lockMutation()
-		defer unlockMutation.Unlock()
 		// Do not hold catalogMu across VectorPartitionSourceIdentityV1 below:
 		// VectorIndexStatus may refresh the snapshot catalog and must take its write
 		// lock in rememberCatalog. The mutation barrier already prevents a source
