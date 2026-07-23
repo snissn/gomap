@@ -24772,7 +24772,18 @@ func (db *DB) cleanupCommandWALCheckpoint(sync bool) error {
 	if cleanupHook == nil {
 		return nil
 	}
-	return cleanupHook(sync)
+	if err := cleanupHook(sync); err != nil {
+		// Command-WAL cleanup is opportunistic after this checkpoint has already
+		// established its durable boundary. A concurrent append/publication can
+		// invalidate only the deletion proof; retaining the WAL is safe and a
+		// later checkpoint will recapture it. Do not turn that expected retry
+		// condition into a sticky background error.
+		if errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (db *DB) canPiggybackCommandWALCheckpointPublish(sync bool) bool {
