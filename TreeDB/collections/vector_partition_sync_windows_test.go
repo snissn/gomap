@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -43,14 +44,27 @@ func TestVectorPartitionWindowsExistingNamespaceMutatorsLeaveNoTrace(t *testing.
 	building := testVectorPartitionManifestV1()
 	building.State, building.RouterGeneration, building.RouterAsset, building.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
 	building.Canonicalize()
-	for name, mutate := range map[string]func() error{
-		"publish":    func() error { return store.Publish(building) },
-		"deactivate": func() error { return store.Deactivate(building.Collection, building.IndexName) },
-		"delete": func() error {
-			return store.Delete(building.Collection, building.IndexName, building.Generation, VectorPartitionCleanupEligibilityV1{})
+	for name, tt := range map[string]struct {
+		mutate                  func() error
+		wantCollectionAuthority bool
+	}{
+		"publish": {
+			mutate:                  func() error { return store.Publish(building) },
+			wantCollectionAuthority: true,
+		},
+		"deactivate": {mutate: func() error { return store.Deactivate(building.Collection, building.IndexName) }},
+		"delete": {
+			mutate: func() error {
+				return store.Delete(building.Collection, building.IndexName, building.Generation, VectorPartitionCleanupEligibilityV1{})
+			},
 		},
 	} {
-		if err := mutate(); !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+		err := tt.mutate()
+		if tt.wantCollectionAuthority {
+			if err == nil || !strings.Contains(err.Error(), "requires collection authority") {
+				t.Fatalf("%s err=%v want collection-authority rejection before namespace mutation", name, err)
+			}
+		} else if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
 			t.Fatalf("%s err=%v want namespace persistence unsupported", name, err)
 		}
 		if after := snapshotVPMWindowsTree(t, root); !bytes.Equal(after, before) {

@@ -1046,14 +1046,20 @@ func TestCollectionVectorPartitionBuildingPublicationAndGCLinearize(t *testing.T
 		entered, release := make(chan struct{}), make(chan struct{})
 		restore := setColumnAssetStableDeleteAfterPlanTestHook(func() { close(entered); <-release })
 		defer restore()
-		gcDone := make(chan error, 1)
+		type gcResult struct {
+			stats ColumnAssetGCStats
+			err   error
+		}
+		gcDone := make(chan gcResult, 1)
 		go func() {
-			_, err := col.ColumnAssetGC(t.Context(), ColumnAssetGCOptions{CandidateRefs: refs})
-			gcDone <- err
+			stats, err := col.ColumnAssetGC(t.Context(), ColumnAssetGCOptions{CandidateRefs: refs})
+			gcDone <- gcResult{stats: stats, err: err}
 		}()
 		select {
 		case <-entered:
-		case <-time.After(10 * time.Second):
+		case result := <-gcDone:
+			t.Fatalf("GC returned before after-plan hook: stats=%+v err=%v", result.stats, result.err)
+		case <-time.After(30 * time.Second):
 			t.Fatal("GC did not reach after-plan hook")
 		}
 		rawStore, err := OpenVectorPartitionStoreV1(d.Dir())
@@ -1072,9 +1078,9 @@ func TestCollectionVectorPartitionBuildingPublicationAndGCLinearize(t *testing.T
 		}
 		close(release)
 		select {
-		case err := <-gcDone:
-			if err != nil {
-				t.Fatalf("GC: %v", err)
+		case result := <-gcDone:
+			if result.err != nil {
+				t.Fatalf("GC: %v", result.err)
 			}
 		case <-time.After(10 * time.Second):
 			t.Fatal("GC deadlocked")
