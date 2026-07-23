@@ -922,6 +922,104 @@ func TestCollectionVectorPartitionBuildingManifestProtectsAssetsFromGC(t *testin
 	}
 }
 
+func TestCollectionVectorPartitionBuildingPublicationAndGCLinearize(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	newFixture := func(t *testing.T, fileID uint32) (*backenddb.DB, *Collection, VectorPartitionManifestV1, []ColumnAssetRef) {
+		_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
+		if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+			t.Fatal(err)
+		}
+		_, graph, _, err := col.columnVectorGraphPhysicalRowReaderSnapshotView(def.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		refs, resources := appendVectorPartitionStableAssetsV1(t, d, col, fileID)
+		resources.Release()
+		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(raw)
+		m := testVectorPartitionManifestV1()
+		m.State, m.RouterGeneration, m.RouterAsset, m.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+		m.IndexName, m.IndexDefinitionDigest = def.Name, VectorIndexDefinitionDigestV1(def)
+		m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
+		m.PartitionCount, m.Placements, m.Assets = 1, []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}}, m.Assets[:1]
+		m.Memberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 1, PartitionID: 0}}
+		m.Assets[0].Ref, m.Assets[0].Bytes, m.Assets[0].Checksum = refs[0], uint64(refs[0].Length), hex.EncodeToString(sum[:])
+		m.Canonicalize()
+		return d, col, m, refs
+	}
+	t.Run("publish_first_retains", func(t *testing.T) {
+		d, col, m, refs := newFixture(t, 951)
+		defer d.Close()
+		if err := col.PublishVectorPartitionManifestV1(m, nil); err != nil {
+			t.Fatal(err)
+		}
+		stats, err := col.ColumnAssetGC(t.Context(), ColumnAssetGCOptions{CandidateRefs: refs})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stats.SegmentsDeleted != 0 {
+			t.Fatalf("GC deleted published building asset: %+v", stats)
+		}
+	})
+	t.Run("gc_first_blocks_then_fails_closed", func(t *testing.T) {
+		d, col, m, refs := newFixture(t, 952)
+		defer d.Close()
+		entered, release := make(chan struct{}), make(chan struct{})
+		restore := setColumnAssetStableDeleteAfterPlanTestHook(func() { close(entered); <-release })
+		defer restore()
+		gcDone := make(chan error, 1)
+		go func() {
+			_, err := col.ColumnAssetGC(t.Context(), ColumnAssetGCOptions{CandidateRefs: refs})
+			gcDone <- err
+		}()
+		select {
+		case <-entered:
+		case <-time.After(10 * time.Second):
+			t.Fatal("GC did not reach after-plan hook")
+		}
+		rawStore, err := OpenVectorPartitionStoreV1(d.Dir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rawStore.Publish(m); err == nil {
+			t.Fatal("raw store publication accepted")
+		}
+		publishDone := make(chan error, 1)
+		go func() { publishDone <- col.PublishVectorPartitionManifestV1(m, nil) }()
+		select {
+		case err := <-publishDone:
+			t.Fatalf("publication escaped GC mutation authority: %v", err)
+		default:
+		}
+		close(release)
+		select {
+		case err := <-gcDone:
+			if err != nil {
+				t.Fatalf("GC: %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("GC deadlocked")
+		}
+		select {
+		case err := <-publishDone:
+			if err == nil {
+				t.Fatal("publication succeeded after GC removed its asset")
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("publication deadlocked")
+		}
+		store, err := OpenExistingVectorPartitionStoreV1(d.Dir())
+		if err == nil {
+			if _, openErr := store.Open(m.Collection, m.IndexName, m.Generation); !errors.Is(openErr, os.ErrNotExist) {
+				t.Fatalf("dangling building manifest open err=%v", openErr)
+			}
+		}
+	})
+}
+
 func TestVectorPartitionManifestV1CanonicalRoundTrip(t *testing.T) {
 	m := testVectorPartitionManifestV1()
 	raw, err := EncodeVectorPartitionManifestV1(m)

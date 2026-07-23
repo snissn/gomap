@@ -194,8 +194,12 @@ group.
 The record separates `building` from `ready`. A building record has no router
 or ready-set reference and is never active. A ready record requires a matching
 router generation and canonical SHA-256 ready-set digest over length-prefixed
-placement and asset descriptors. It contains exactly one disjoint membership
+placement and asset descriptors, including the router's required canonical
+`partition_id=0`. It contains exactly one disjoint membership
 for every source ordinal and separately records bounded overlap memberships.
+Raw `VectorPartitionStoreV1.Publish` is fail-closed: both building and ready
+publication require collection authority, which verifies the current source
+identity and referenced assets while holding the collection mutation authority.
 All decoded count-derived allocations, strings, assets, memberships and record
 bytes are capped before allocation; unknown/trailing records fail closed.
 
@@ -233,12 +237,14 @@ is separate from the ready-set asset contract.
 | identity | collection, index name, SHA-256 index-definition digest; source generation/checksum/schema/row count; partition and router generations | exact live TVIS/base identity; ready router generation equals partition generation |
 | placement | dense logical `partition_id` to one Raft group, with many logical partitions allowed per group | IDs are exactly `[0, partition_count)` and canonical |
 | memberships | one disjoint membership per source ordinal; bounded overlap and representatives | ordinal/partition coverage, sorted order, per-vector and per-partition caps |
-| assets | typed `ColumnAssetRef`, length, CRC, SHA-256 and logical asset ID for each partition plus router | references are namespace-bound, unique, streamed and checksum-verified before ready publication |
+| assets | typed `ColumnAssetRef`, length, CRC, SHA-256 and logical asset ID for each partition plus router | references are namespace-bound, unique, streamed and checksum-verified before every collection-authorized publication; router partition ID is exactly zero |
 | ready set | SHA-256 over canonical placements, partition assets and router descriptor | mismatches, mixed router/generation, or missing partition asset reject |
 
 Default decode limits are 16 MiB encoded bytes, 65,536 partitions, 1,048,576
-memberships total across disjoint, overlap, and representative lists, 262,144
-assets, 4 KiB strings, 16 memberships per vector, and
+source rows, and 2,097,152 aggregate memberships across disjoint, overlap,
+and representative lists (so the declared 1M-row fixture plus 20% overlap and
+representatives is representable), 262,144 assets, 4 KiB strings, 16
+memberships per vector, and
 65,536 representatives per partition. A single asset is capped at 8 GiB and
 total referenced bytes at 16 GiB. Count-derived allocations are checked against
 these limits before allocation.
