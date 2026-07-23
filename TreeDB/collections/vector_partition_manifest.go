@@ -787,6 +787,29 @@ var vectorPartitionPublishHooksV1 struct {
 	at func(string) error
 }
 
+var vectorPartitionDeleteAfterTombstoneForTestV1 struct {
+	sync.RWMutex
+	hook func()
+}
+
+func setVectorPartitionDeleteAfterTombstoneForTestV1(hook func()) func() {
+	vectorPartitionDeleteAfterTombstoneForTestV1.Lock()
+	old := vectorPartitionDeleteAfterTombstoneForTestV1.hook
+	vectorPartitionDeleteAfterTombstoneForTestV1.hook = hook
+	vectorPartitionDeleteAfterTombstoneForTestV1.Unlock()
+	return func() {
+		vectorPartitionDeleteAfterTombstoneForTestV1.Lock()
+		vectorPartitionDeleteAfterTombstoneForTestV1.hook = old
+		vectorPartitionDeleteAfterTombstoneForTestV1.Unlock()
+	}
+}
+
+func vectorPartitionDeleteAfterTombstoneHookV1() func() {
+	vectorPartitionDeleteAfterTombstoneForTestV1.RLock()
+	defer vectorPartitionDeleteAfterTombstoneForTestV1.RUnlock()
+	return vectorPartitionDeleteAfterTombstoneForTestV1.hook
+}
+
 func setVectorPartitionPublishHookForTestV1(at func(string) error) func() {
 	vectorPartitionPublishHooksV1.Lock()
 	old := vectorPartitionPublishHooksV1.at
@@ -1297,7 +1320,7 @@ func (s *VectorPartitionStoreV1) publishValidatedBuilding(m VectorPartitionManif
 	if m.State != "building" {
 		return errors.New("collections: validated building publication requires building state")
 	}
-	return s.publishLocked(m)
+	return WithVectorPartitionStorageBarrierV1(s.root, func() error { return s.publishLocked(m) })
 }
 
 func (s *VectorPartitionStoreV1) publishValidatedReady(m VectorPartitionManifestV1) error {
@@ -1310,12 +1333,10 @@ func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) erro
 	if !vpmNamespacePersistenceSupported() {
 		return fmt.Errorf("%w: vector partition publication", rootpublication.ErrNamespacePersistenceUnsupported)
 	}
-	if m.State == "ready" {
-		if _, err := os.Stat(s.deleteTombstonePath(m.Collection, m.IndexName, m.Generation)); err == nil {
-			return fmt.Errorf("%w: generation %d is deleting", ErrVectorPartitionManifestInvalid, m.Generation)
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
+	if _, err := os.Stat(s.deleteTombstonePath(m.Collection, m.IndexName, m.Generation)); err == nil {
+		return fmt.Errorf("%w: generation %d is deleting", ErrVectorPartitionManifestInvalid, m.Generation)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	raw, e := EncodeVectorPartitionManifestV1(m)
 	if e != nil {
@@ -1623,6 +1644,9 @@ func (s *VectorPartitionStoreV1) deleteLocked(collection, index string, generati
 		}
 	} else if _, err := s.openDeleteTombstone(collection, index, generation); err != nil {
 		return err
+	}
+	if hook := vectorPartitionDeleteAfterTombstoneHookV1(); hook != nil {
+		hook()
 	}
 	// Detach the marker before the manifest. Thus any durable interrupted state
 	// is either a retryable tombstone with a retained manifest, or no manifest

@@ -409,6 +409,82 @@ func TestVectorPartitionStoreV1CleanupResumesDurableTombstone(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionStoreV1BuildingPublicationCannotResurrectDeletingGeneration(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	s, err := OpenVectorPartitionStoreV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testVectorPartitionManifestV1()
+	m.State, m.RouterGeneration, m.RouterAsset, m.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+	m.Canonicalize()
+	if err := s.publishLocked(m); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.publishValidatedBuilding(m); err == nil {
+		t.Fatal("building retry resurrected deleting generation")
+	}
+	if _, err := s.Open(m.Collection, m.IndexName, m.Generation); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("manifest relinked after tombstone: %v", err)
+	}
+}
+
+func TestVectorPartitionStoreV1DeleteSerializesBuildingPublication(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	s, err := OpenVectorPartitionStoreV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testVectorPartitionManifestV1()
+	m.State, m.RouterGeneration, m.RouterAsset, m.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+	m.Canonicalize()
+	if err := s.publishLocked(m); err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	restore := setVectorPartitionDeleteAfterTombstoneForTestV1(func() { close(entered); <-release })
+	defer restore()
+	deleteDone := make(chan error, 1)
+	go func() {
+		deleteDone <- s.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{})
+	}()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("delete did not persist tombstone")
+	}
+	publishDone := make(chan error, 1)
+	go func() { publishDone <- s.publishValidatedBuilding(m) }()
+	select {
+	case err := <-publishDone:
+		t.Fatalf("publication escaped delete barrier: %v", err)
+	default:
+	}
+	close(release)
+	select {
+	case err := <-deleteDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("delete deadlocked")
+	}
+	select {
+	case err := <-publishDone:
+		if err == nil {
+			t.Fatal("building publication resurrected delete")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("publication deadlocked")
+	}
+	if _, err := s.Open(m.Collection, m.IndexName, m.Generation); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("manifest relinked after serialized delete: %v", err)
+	}
+}
+
 func TestCollectionVectorPartitionReclaimV1ReclaimsCoResidentRecords(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	_, d, col, _ := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}})

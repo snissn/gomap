@@ -200,6 +200,10 @@ for every source ordinal and separately records bounded overlap memberships.
 Raw `VectorPartitionStoreV1.Publish` is fail-closed: both building and ready
 publication require collection authority, which verifies the current source
 identity and referenced assets while holding the collection mutation authority.
+Collection-authorized publication then takes the root storage barrier; deletion,
+deactivation, reader pins, and snapshots use that same barrier. A durable
+deletion tombstone rejects both building and ready retries before any temporary
+file, link, or rename, so a deleting generation cannot be resurrected.
 All decoded count-derived allocations, strings, assets, memberships and record
 bytes are capped before allocation; unknown/trailing records fail closed.
 
