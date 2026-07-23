@@ -8175,7 +8175,15 @@ func backendSyncBoundary(backend BackendDB) error {
 		return errors.New("cachingdb: missing backend")
 	}
 	if checkpointer, ok := backend.(backendCheckpointer); ok {
-		return checkpointer.Checkpoint()
+		err := checkpointer.Checkpoint()
+		// Backend checkpointing establishes the durable boundary before it
+		// attempts command-WAL cleanup. A concurrent append can invalidate only
+		// that cleanup proof; the retained WAL is safe and a later checkpoint
+		// can retry reclamation.
+		if errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) {
+			return nil
+		}
+		return err
 	}
 	b := backend.NewBatch()
 	if b == nil {
