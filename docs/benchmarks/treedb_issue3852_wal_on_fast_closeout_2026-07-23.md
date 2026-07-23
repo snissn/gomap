@@ -11,12 +11,13 @@ The baseline was `origin/main` at
 `11b95c696e0594ba8aed17634d09cb7aa24dfdd7`. The candidate was built from the
 #3852 change. Each database was run twice in alternating TreeDB/LevelDB order
 on the same host (Intel Core i5-11400F, six physical cores, `GOMAXPROCS=12`).
-The profile is `command_wal_relaxed` (`wal_on_relaxed`) with
-`read_integrity=verify`.
+The unified-bench profile is `wal_on_fast`, which selects TreeDB's
+`command_wal_relaxed` mode with `read_integrity=verify`.
 
 ```sh
-TMPDIR=/mnt/fast4tb/tmp BIN=/path/to/unified-bench \
-  -dbs treedb|leveldb -keys 500000 -profile wal_on_fast \
+BIN=/path/to/unified-bench
+TMPDIR=/mnt/fast4tb/tmp "$BIN" -dbs treedb|leveldb -keys 500000 \
+  -profile wal_on_fast \
   -checkpoint-between-tests -test sequential_write,random_write \
   -profile-dir <artifact-dir>
 ```
@@ -90,6 +91,5 @@ GOWORK=off go test ./TreeDB/db -run '^TestCommandWALDependencyDebt' -count=1
 GOWORK=off go test -race ./TreeDB/db -run '^TestCommandWALDependencyDebt' -count=1
 GOWORK=off go test ./TreeDB/internal/commitlog -run '^(TestCommandFrameV2RejectsCompressedSegmentStorage|TestCommandJournalV2CompressionOptionWritesStrictlyReopenableRawFrames|TestCommandJournal.*)' -count=1
 GOWORK=off go test ./TreeDB -run '^(TestPublicCommandWALCheckpointCleansCoveredCommandJournalSegment|TestPublicCommandWALEmptyCheckpointReclaimsCoveredBenchmarkEpochs|TestPublicCommandWALGroupCommitFastRelaxedPublicationsOverlapWithoutCoordinator)$' -count=1
-GOWORK=off go test ./cmd/unified_bench -run '^TestApplyProfile_WALOnFast' -count=1
+GOWORK=off go test ./cmd/unified_bench -run '^TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations$' -count=1
 ```
-
