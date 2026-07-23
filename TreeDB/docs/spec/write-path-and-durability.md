@@ -420,6 +420,14 @@ plus new `AppliedLSN`, never a split state. A future
 checkpoint-without-publication mode must report command WAL debt and retain all
 required WAL segments and external refs.
 
+For a cached command-WAL checkpoint with no pending public frames, maintenance
+may republish the selected roots with the same `AppliedCommandLSN` only when
+the recovery-selectable fallback slot still has an older applied LSN. It writes
+no command-WAL frame and does not advance the next LSN; it waits for the
+fallback slot to converge before covered-segment cleanup can use that proof.
+If the publication fails, cleanup remains fail-closed and the older fallback
+continues to retain the required command-WAL coverage.
+
 The authoritative `AppliedLSN` must be selected by the same backend meta choice
 as the roots whose effects it covers. The V1 storage target is the
 in-page-marked meta-page field `AppliedCommandLSN`; the meta write must select

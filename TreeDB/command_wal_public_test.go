@@ -2317,6 +2317,65 @@ func TestPublicCommandWALCheckpointCleansCoveredCommandJournalSegment(t *testing
 	}
 }
 
+func TestPublicCommandWALEmptyCheckpointReclaimsCoveredBenchmarkEpochs(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, Durability: DurabilityWALOnRelaxed, CommandWAL: true, CommandWALStatsScan: true, DisableSideStores: true})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	for _, epoch := range []string{"first", "second"} {
+		batch := db.NewBatch()
+		for i := 0; i < 64; i++ {
+			if err := batch.Set([]byte(fmt.Sprintf("%s-%03d", epoch, i)), []byte("value")); err != nil {
+				t.Fatalf("%s batch Set: %v", epoch, err)
+			}
+		}
+		if err := batch.Write(); err != nil {
+			t.Fatalf("%s batch Write: %v", epoch, err)
+		}
+		if err := batch.Close(); err != nil {
+			t.Fatalf("%s batch Close: %v", epoch, err)
+		}
+		if err := db.Checkpoint(); err != nil {
+			t.Fatalf("%s Checkpoint: %v", epoch, err)
+		}
+	}
+	before := publicCommandWALSegmentNames(t, dir)
+	if len(before) < 2 {
+		t.Fatalf("segments after two checkpointed epochs=%v, want closed command WAL generations", before)
+	}
+	stateBefore := db.backend.State()
+	nextLSNBefore := db.backend.CommandWALNextLSN()
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("empty post-run Checkpoint: %v", err)
+	}
+	if got := db.backend.State().AppliedCommandLSN; got != stateBefore.AppliedCommandLSN {
+		t.Fatalf("AppliedCommandLSN after empty checkpoint=%d, want unchanged %d", got, stateBefore.AppliedCommandLSN)
+	}
+	if got := db.backend.CommandWALNextLSN(); got != nextLSNBefore {
+		t.Fatalf("next command WAL LSN after empty checkpoint=%d, want unchanged %d", got, nextLSNBefore)
+	}
+	after := publicCommandWALSegmentNames(t, dir)
+	if len(after) != 1 {
+		t.Fatalf("empty checkpoint retained covered benchmark epochs: before=%v after=%v", before, after)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close after cleanup: %v", err)
+	}
+	db, err = Open(Options{Dir: dir, Durability: DurabilityWALOnRelaxed, CommandWAL: true, CommandWALStatsScan: true, DisableSideStores: true})
+	if err != nil {
+		t.Fatalf("reopen after cleanup: %v", err)
+	}
+	for _, key := range [][]byte{[]byte("first-000"), []byte("second-000")} {
+		got, err := db.Get(key)
+		if err != nil || string(got) != "value" {
+			t.Fatalf("Get(%q)=(%q, %v), want (value, nil)", key, got, err)
+		}
+	}
+}
+
 func TestPublicCommandWALAutoCheckpointUsesCommandWALBytes(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{
