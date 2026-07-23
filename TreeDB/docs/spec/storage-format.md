@@ -62,8 +62,9 @@ unknown-version, over-bound, trailing, or identity-mismatched records fail
 closed.
 
 Ready publication writes and syncs the complete VPM1 then its active pointer.
-A retained `building` VPM1 may be promoted only to a ready VPM1 with the exact
-same collection/index/generation/index-definition/source identity. Promotion
+A retained `building` VPM1 may be promoted only to the canonical `building`
+projection of the ready VPM1: it may differ only in state, router generation,
+router asset, ready-set digest, and the recomputed integrity digest. Promotion
 writes and syncs a checksummed VPI1 inactive record before atomically replacing
 the VPM1; recovery consequently sees retained building, prepared-only
 ready+VPI1, or active ready, never a partial or unexplained pointerless ready

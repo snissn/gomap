@@ -1434,6 +1434,49 @@ func TestCollectionVectorPartitionBuildingManifestProtectsAssetsFromGC(t *testin
 	}
 }
 
+func TestCollectionVectorPartitionSameGenerationBuildingPromotionPublishesReady(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
+	defer d.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	_, graph, _, err := col.columnVectorGraphPhysicalRowReaderSnapshotView(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := testVectorPartitionManifestV1()
+	ready.IndexName, ready.IndexDefinitionDigest = def.Name, VectorIndexDefinitionDigestV1(def)
+	ready.SourceGeneration, ready.SourceChecksum, ready.SourceSchemaHash, ready.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
+	ready, resources := vectorPartitionManifestWithFreshStableAssetsV1(t, d, col, ready, 914)
+	building := ready
+	building.State, building.RouterGeneration, building.RouterAsset, building.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+	building.Canonicalize()
+	if err := col.PublishVectorPartitionManifestV1(building, nil); err != nil {
+		resources.Release()
+		t.Fatalf("publish building: %v", err)
+	}
+	before, err := col.PlanColumnAssetReachability(t.Context(), ColumnAssetReachabilityOptions{})
+	if err != nil || before.Sources.PreparedRefs != 2 || before.Sources.PinnedRefs != 0 {
+		resources.Release()
+		t.Fatalf("building reachability=%+v err=%v", before.Sources, err)
+	}
+	if err := col.PublishVectorPartitionManifestV1(ready, resources); err != nil {
+		t.Fatalf("collection-authorized same-generation promotion: %v", err)
+	}
+	after, err := col.PlanColumnAssetReachability(t.Context(), ColumnAssetReachabilityOptions{})
+	if err != nil || after.Sources.PreparedRefs != 3 || after.Sources.PinnedRefs != 3 {
+		t.Fatalf("ready promotion reachability=%+v err=%v", after.Sources, err)
+	}
+	store, err := OpenExistingVectorPartitionStoreV1(d.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active, err := store.OpenActive(ready.Collection, ready.IndexName); err != nil || active.Generation != ready.Generation {
+		t.Fatalf("promoted active=%+v err=%v", active, err)
+	}
+}
+
 func TestCollectionVectorPartitionBuildingPublicationAndGCLinearize(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	newFixture := func(t *testing.T, fileID uint32) (*backenddb.DB, *Collection, VectorPartitionManifestV1, []ColumnAssetRef) {
