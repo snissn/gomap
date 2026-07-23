@@ -266,6 +266,90 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	}
 }
 
+func TestCollectionVectorPartitionReadyDeleteCrashWindowReopenReachability(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	newFixture := func(t *testing.T) (*backenddb.DB, *Collection, *VectorPartitionStoreV1, VectorPartitionManifestV1, []ColumnAssetRef) {
+		t.Helper()
+		_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
+		if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+			t.Fatal(err)
+		}
+		_, graph, _, err := col.columnVectorGraphPhysicalRowReaderSnapshotView(def.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := testVectorPartitionManifestV1()
+		m.IndexName, m.IndexDefinitionDigest = def.Name, VectorIndexDefinitionDigestV1(def)
+		m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
+		m, resources := vectorPartitionManifestWithFreshStableAssetsV1(t, d, col, m, 991)
+		if err := col.PublishVectorPartitionManifestV1(m, resources); err != nil {
+			resources.Release()
+			t.Fatal(err)
+		}
+		refs := append([]ColumnAssetRef(nil), m.Assets[0].Ref, m.Assets[1].Ref, m.RouterAsset.Ref)
+		store, err := OpenExistingVectorPartitionStoreV1(d.Dir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Deactivate(m.Collection, m.IndexName); err != nil {
+			t.Fatal(err)
+		}
+		return d, col, store, m, refs
+	}
+	removeRetired := func(t *testing.T, store *VectorPartitionStoreV1, m VectorPartitionManifestV1) {
+		t.Helper()
+		retired := filepath.Join(store.dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+".retired")
+		if err := os.Remove(retired); err != nil {
+			t.Fatal(err)
+		}
+		if err := syncDirVPM(store.dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("matching_tombstone_is_prepared_only_after_reopen", func(t *testing.T) {
+		d, col, store, m, refs := newFixture(t)
+		if err := store.writeDeleteTombstone(m); err != nil {
+			t.Fatal(err)
+		}
+		removeRetired(t, store, m)
+		dir := d.Dir()
+		if err := d.Close(); err != nil {
+			t.Fatal(err)
+		}
+		reopenedDB := openCollectionCommandWALDB(t, dir)
+		defer reopenedDB.Close()
+		reopened, err := NewCollectionManager(reopenedDB).OpenCollection(col.name)
+		if err != nil {
+			t.Fatalf("reopen: %v", err)
+		}
+		if _, err := reopened.PlanColumnAssetReachability(t.Context(), ColumnAssetReachabilityOptions{}); err != nil {
+			t.Fatalf("reopen reachability rejected tombstoned ready crash window: %v", err)
+		}
+		gc, err := reopened.ColumnAssetGC(t.Context(), ColumnAssetGCOptions{DryRun: true, CandidateRefs: refs})
+		if err != nil {
+			t.Fatalf("reopen GC: %v", err)
+		}
+		if gc.BytesEligible != 0 {
+			t.Fatalf("tombstoned ready assets became eligible: %+v", gc)
+		}
+		reopenedStore, err := OpenExistingVectorPartitionStoreV1(reopenedDB.Dir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := reopenedStore.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
+			t.Fatalf("retry exact delete: %v", err)
+		}
+	})
+	t.Run("pointerless_ready_without_tombstone_fails_closed", func(t *testing.T) {
+		d, col, store, m, _ := newFixture(t)
+		defer d.Close()
+		removeRetired(t, store, m)
+		if _, err := col.PlanColumnAssetReachability(t.Context(), ColumnAssetReachabilityOptions{}); err == nil {
+			t.Fatal("pointerless ready manifest without tombstone did not fail closed")
+		}
+	})
+}
+
 func TestVectorPartitionStoreV1CleanupRefusesReachableGeneration(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	s, err := OpenVectorPartitionStoreV1(t.TempDir())

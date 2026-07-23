@@ -18,6 +18,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1100,6 +1101,7 @@ func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[str
 	}
 	defer dir.Close()
 	byIndex := make(map[string][]VectorPartitionManifestV1)
+	tombstones := make(map[string]map[uint64]vectorPartitionReclaimStateV1)
 	prefix := safeVPM(c.name) + "-"
 	var totalBytes int64
 	var reclaimBytes int64
@@ -1147,6 +1149,10 @@ func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[str
 				if _, releasing := releaseReclaimIDs[entry.Name()]; !releasing {
 					reclaimPrepared = append(reclaimPrepared, reclaim.debtRefs()...)
 				}
+				if tombstones[reclaim.IndexName] == nil {
+					tombstones[reclaim.IndexName] = make(map[uint64]vectorPartitionReclaimStateV1)
+				}
+				tombstones[reclaim.IndexName][reclaim.Generation] = reclaim
 				continue
 			}
 			if filepath.Ext(entry.Name()) != ".vpm" {
@@ -1200,6 +1206,27 @@ func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[str
 				return nil, nil, fmt.Errorf("collections: vector partition active pointer for %q: %w", index, err)
 			}
 			retired, retiredErr := s.OpenRetired(c.name, index)
+			if errors.Is(retiredErr, os.ErrNotExist) {
+				// Delete persists its identity-bound reclaim journal before it
+				// removes+syncs the retired marker and then unlinks the manifest.
+				// A crash in that window leaves a pointerless ready manifest. The
+				// matching durable tombstone makes it prepared-only until exact
+				// deletion is retried; any other pointerless ready state is corrupt.
+				for _, m := range manifests {
+					if m.State != "ready" {
+						continue
+					}
+					reclaim, ok := tombstones[index][m.Generation]
+					if !ok {
+						return nil, nil, fmt.Errorf("collections: vector partition active/retired pointer for %q: %w", index, retiredErr)
+					}
+					expected, stateErr := newVectorPartitionReclaimStateV1(m)
+					if stateErr != nil || !slices.Equal(reclaim.OriginalRefs, expected.OriginalRefs) {
+						return nil, nil, fmt.Errorf("collections: deleting vector partition generation %d for %q does not bind retained ready manifest", m.Generation, index)
+					}
+				}
+				continue
+			}
 			if retiredErr != nil {
 				return nil, nil, fmt.Errorf("collections: vector partition active/retired pointer for %q: %w", index, retiredErr)
 			}
