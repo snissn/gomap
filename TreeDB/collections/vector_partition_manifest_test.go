@@ -1096,6 +1096,90 @@ func TestCollectionVectorPartitionBuildingPublicationAndGCLinearize(t *testing.T
 	})
 }
 
+// TestCollectionVectorPartitionDeleteFencesBuildingRetryEndToEnd proves the
+// collection-owned building path cannot recreate a generation after Delete has
+// durably claimed it.  In particular, the retry traverses source and asset
+// validation plus the collection mutation authority before it blocks at the
+// store's root storage barrier behind deletion.
+func TestCollectionVectorPartitionDeleteFencesBuildingRetryEndToEnd(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
+	defer d.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	_, graph, _, err := col.columnVectorGraphPhysicalRowReaderSnapshotView(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testVectorPartitionManifestV1()
+	m.State, m.RouterGeneration, m.RouterAsset, m.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+	m.IndexName, m.IndexDefinitionDigest = def.Name, VectorIndexDefinitionDigestV1(def)
+	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
+	refs, resources := appendVectorPartitionStableAssetsV1(t, d, col, 981)
+	resources.Release() // Building publication has no producer authority transfer.
+	for i := range m.Assets {
+		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(raw)
+		m.Assets[i].Ref, m.Assets[i].Bytes, m.Assets[i].Checksum = refs[i], uint64(refs[i].Length), hex.EncodeToString(sum[:])
+	}
+	m.Canonicalize()
+	if err := col.PublishVectorPartitionManifestV1(m, nil); err != nil {
+		t.Fatalf("publish initial building manifest: %v", err)
+	}
+	store, err := OpenExistingVectorPartitionStoreV1(d.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	restore := setVectorPartitionDeleteAfterTombstoneForTestV1(func() {
+		close(entered)
+		<-release
+	})
+	defer restore()
+	deleteDone := make(chan error, 1)
+	go func() {
+		deleteDone <- store.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{})
+	}()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("delete did not durably write its tombstone")
+	}
+
+	retryDone := make(chan error, 1)
+	go func() { retryDone <- col.PublishVectorPartitionManifestV1(m, nil) }()
+	select {
+	case err := <-retryDone:
+		t.Fatalf("collection building retry escaped delete storage barrier: %v", err)
+	default:
+	}
+	close(release)
+	select {
+	case err := <-deleteDone:
+		if err != nil {
+			t.Fatalf("delete: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("delete deadlocked")
+	}
+	select {
+	case err := <-retryDone:
+		if err == nil || !strings.Contains(err.Error(), "deleting") {
+			t.Fatalf("collection building retry err=%v, want deleting tombstone rejection", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("collection building retry deadlocked")
+	}
+	if _, err := store.Open(m.Collection, m.IndexName, m.Generation); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted generation relinked by building retry: open err=%v", err)
+	}
+}
+
 func TestVectorPartitionManifestV1CanonicalRoundTrip(t *testing.T) {
 	m := testVectorPartitionManifestV1()
 	raw, err := EncodeVectorPartitionManifestV1(m)
