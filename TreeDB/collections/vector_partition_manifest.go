@@ -18,7 +18,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -840,7 +839,58 @@ const (
 	vectorPartitionReclaimVersionV1  = 1
 	vectorPartitionReclaimMaxRefsV1  = 1 << 19
 	vectorPartitionReclaimMaxBytesV1 = vectorPartitionStoreMaxBytesV1
+	vectorPartitionInactiveMagicV1   = "VPI1"
+	vectorPartitionInactiveVersionV1 = 1
 )
+
+type vectorPartitionInactiveStateV1 struct {
+	Collection, IndexName string
+	Generation            uint64
+}
+
+func canonicalVectorPartitionInactiveStateV1(state vectorPartitionInactiveStateV1) (vectorPartitionInactiveStateV1, error) {
+	limits := DefaultVectorPartitionManifestLimits()
+	if state.Collection == "" || state.IndexName == "" || state.Generation == 0 || len(state.Collection) > limits.MaxStringBytes || len(state.IndexName) > limits.MaxStringBytes {
+		return vectorPartitionInactiveStateV1{}, fmt.Errorf("%w: inactive marker identity", ErrVectorPartitionManifestInvalid)
+	}
+	return state, nil
+}
+
+func encodeVectorPartitionInactiveStateV1(input vectorPartitionInactiveStateV1) ([]byte, error) {
+	state, err := canonicalVectorPartitionInactiveStateV1(input)
+	if err != nil {
+		return nil, err
+	}
+	payload := bytes.NewBuffer(make([]byte, 0, 16+len(state.Collection)+len(state.IndexName)))
+	putStringVPM(payload, state.Collection)
+	putStringVPM(payload, state.IndexName)
+	putU64VPM(payload, state.Generation)
+	out := make([]byte, 0, 8+payload.Len()+sha256.Size)
+	out = append(out, vectorPartitionInactiveMagicV1...)
+	var version [4]byte
+	binary.BigEndian.PutUint32(version[:], vectorPartitionInactiveVersionV1)
+	out = append(out, version[:]...)
+	out = append(out, payload.Bytes()...)
+	sum := sha256.Sum256(out)
+	out = append(out, sum[:]...)
+	return out, nil
+}
+
+func decodeVectorPartitionInactiveStateV1(raw []byte) (vectorPartitionInactiveStateV1, error) {
+	if len(raw) < 8+4+4+8+sha256.Size || string(raw[:4]) != vectorPartitionInactiveMagicV1 || binary.BigEndian.Uint32(raw[4:8]) != vectorPartitionInactiveVersionV1 {
+		return vectorPartitionInactiveStateV1{}, fmt.Errorf("%w: inactive marker header", ErrVectorPartitionManifestInvalid)
+	}
+	sum := sha256.Sum256(raw[:len(raw)-sha256.Size])
+	if !bytes.Equal(sum[:], raw[len(raw)-sha256.Size:]) {
+		return vectorPartitionInactiveStateV1{}, fmt.Errorf("%w: inactive marker checksum", ErrVectorPartitionManifestInvalid)
+	}
+	r := vpmReader{b: raw[8 : len(raw)-sha256.Size], l: VectorPartitionManifestLimits{MaxStringBytes: DefaultVectorPartitionManifestLimits().MaxStringBytes}}
+	state := vectorPartitionInactiveStateV1{Collection: r.str(), IndexName: r.str(), Generation: r.u64()}
+	if r.err != nil || r.off != len(r.b) {
+		return vectorPartitionInactiveStateV1{}, fmt.Errorf("%w: inactive marker payload", ErrVectorPartitionManifestInvalid)
+	}
+	return canonicalVectorPartitionInactiveStateV1(state)
+}
 
 // vectorPartitionReclaimStateV1 is a bounded durable deletion journal. Original
 // refs are copied from the generation manifest before that manifest is removed.
@@ -1101,7 +1151,6 @@ func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[str
 	}
 	defer dir.Close()
 	byIndex := make(map[string][]VectorPartitionManifestV1)
-	tombstones := make(map[string]map[uint64]vectorPartitionReclaimStateV1)
 	prefix := safeVPM(c.name) + "-"
 	var totalBytes int64
 	var reclaimBytes int64
@@ -1133,6 +1182,16 @@ func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[str
 				retiredNames[entry.Name()] = struct{}{}
 				continue
 			}
+			if strings.HasSuffix(entry.Name(), ".inactive") {
+				state, err := s.readInactiveStatePath(filepath.Join(s.dir, entry.Name()))
+				if err != nil {
+					return nil, nil, fmt.Errorf("collections: invalid vector partition inactive marker %q: %w", entry.Name(), err)
+				}
+				if state.Collection != c.name || entry.Name() != s.inactiveName(state.Collection, state.IndexName) {
+					return nil, nil, fmt.Errorf("collections: invalid vector partition inactive marker identity %q", entry.Name())
+				}
+				continue
+			}
 			if strings.HasSuffix(entry.Name(), ".deleting") {
 				raw, err := readBoundedVPM(filepath.Join(s.dir, entry.Name()), vectorPartitionReclaimMaxBytesV1)
 				if err != nil {
@@ -1149,10 +1208,6 @@ func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[str
 				if _, releasing := releaseReclaimIDs[entry.Name()]; !releasing {
 					reclaimPrepared = append(reclaimPrepared, reclaim.debtRefs()...)
 				}
-				if tombstones[reclaim.IndexName] == nil {
-					tombstones[reclaim.IndexName] = make(map[uint64]vectorPartitionReclaimStateV1)
-				}
-				tombstones[reclaim.IndexName][reclaim.Generation] = reclaim
 				continue
 			}
 			if filepath.Ext(entry.Name()) != ".vpm" {
@@ -1207,30 +1262,20 @@ func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[str
 			}
 			retired, retiredErr := s.OpenRetired(c.name, index)
 			if errors.Is(retiredErr, os.ErrNotExist) {
-				// Delete persists its identity-bound reclaim journal before it
-				// removes+syncs the retired marker and then unlinks the manifest.
-				// A crash in that window leaves a pointerless ready manifest. The
-				// matching durable tombstone makes it prepared-only until exact
-				// deletion is retried; any other pointerless ready state is corrupt.
-				for _, m := range manifests {
-					if m.State != "ready" {
-						continue
-					}
-					reclaim, ok := tombstones[index][m.Generation]
-					if !ok {
-						return nil, nil, fmt.Errorf("collections: vector partition active/retired pointer for %q: %w", index, retiredErr)
-					}
-					expected, stateErr := newVectorPartitionReclaimStateV1(m)
-					if stateErr != nil || !slices.Equal(reclaim.OriginalRefs, expected.OriginalRefs) {
-						return nil, nil, fmt.Errorf("collections: deleting vector partition generation %d for %q does not bind retained ready manifest", m.Generation, index)
-					}
+				if _, inactiveErr := s.readInactiveGeneration(c.name, index); inactiveErr == nil {
+					continue
+				} else if !errors.Is(inactiveErr, os.ErrNotExist) {
+					return nil, nil, fmt.Errorf("collections: vector partition inactive marker for %q: %w", index, inactiveErr)
 				}
-				continue
+				return nil, nil, fmt.Errorf("collections: vector partition active/retired pointer for %q: %w", index, retiredErr)
 			}
 			if retiredErr != nil {
 				return nil, nil, fmt.Errorf("collections: vector partition active/retired pointer for %q: %w", index, retiredErr)
 			}
 			expectedRetired[safeVPM(c.name)+"-"+safeVPM(index)+".retired"] = struct{}{}
+			if _, inactiveErr := s.readInactiveGeneration(c.name, index); inactiveErr != nil && !errors.Is(inactiveErr, os.ErrNotExist) {
+				return nil, nil, fmt.Errorf("collections: vector partition inactive marker for %q: %w", index, inactiveErr)
+			}
 			if !vectorPartitionManifestGenerationRetained(manifests, retired.Generation) {
 				return nil, nil, fmt.Errorf("collections: retired vector partition generation %d for %q is not retained", retired.Generation, index)
 			}
@@ -1238,6 +1283,9 @@ func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[str
 		}
 		if active.State != "ready" {
 			return nil, nil, fmt.Errorf("collections: vector partition active pointer for %q targets non-ready generation", index)
+		}
+		if _, inactiveErr := s.readInactiveGeneration(c.name, index); inactiveErr != nil && !errors.Is(inactiveErr, os.ErrNotExist) {
+			return nil, nil, fmt.Errorf("collections: vector partition inactive marker for %q: %w", index, inactiveErr)
 		}
 		found := false
 		for _, m := range manifests {
@@ -1434,6 +1482,12 @@ func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) erro
 		if e = vectorPartitionPublishFaultV1("active_dir_synced"); e != nil {
 			return e
 		}
+		// The active pointer is durable before a previous inactive marker is
+		// removed. A crash may therefore retain both lifecycle records, never
+		// leave the index pointerless without the inactive record.
+		if err := os.Remove(s.inactivePath(m.Collection, m.IndexName)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 		if err := os.Remove(retired); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -1545,6 +1599,9 @@ func (s *VectorPartitionStoreV1) deactivateLocked(collection, index string) erro
 		return err
 	}
 	if err = syncDirVPM(s.dir); err != nil {
+		return err
+	}
+	if err = os.Remove(s.inactivePath(collection, index)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	if err = os.Remove(filepath.Join(s.dir, safeVPM(collection)+"-"+safeVPM(index)+".active")); err != nil {
@@ -1679,6 +1736,9 @@ func (s *VectorPartitionStoreV1) deleteLocked(collection, index string, generati
 	// is either a retryable tombstone with a retained manifest, or no manifest
 	// and no pointer that could resurrect it.
 	if retiredMatches {
+		if err := s.writeInactiveMarker(collection, index, generation); err != nil {
+			return err
+		}
 		if err := os.Remove(retiredPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -1700,6 +1760,60 @@ func (s *VectorPartitionStoreV1) deleteTombstonePath(collection, index string, g
 }
 func (s *VectorPartitionStoreV1) deleteTombstoneName(collection, index string, generation uint64) string {
 	return fmt.Sprintf("%s-%s-%d.deleting", safeVPM(collection), safeVPM(index), generation)
+}
+
+func (s *VectorPartitionStoreV1) inactivePath(collection, index string) string {
+	return filepath.Join(s.dir, s.inactiveName(collection, index))
+}
+func (s *VectorPartitionStoreV1) inactiveName(collection, index string) string {
+	return safeVPM(collection) + "-" + safeVPM(index) + ".inactive"
+}
+
+// writeInactiveMarker records that exact deletion detached the last lifecycle
+// pointer for this index. It is durable before the retired marker is removed,
+// so historical ready manifests remain prepared-only even after reclaim later
+// releases the deletion journal.
+func (s *VectorPartitionStoreV1) writeInactiveMarker(collection, index string, generation uint64) error {
+	path := s.inactivePath(collection, index)
+	raw, err := encodeVectorPartitionInactiveStateV1(vectorPartitionInactiveStateV1{Collection: collection, IndexName: index, Generation: generation})
+	if err != nil {
+		return err
+	}
+	tmp, err := s.uniqueTemp(filepath.Base(path))
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp)
+	if err = os.WriteFile(tmp, raw, 0600); err != nil {
+		return err
+	}
+	if err = syncFileVPM(tmp); err != nil {
+		return err
+	}
+	if err = renameVPM(tmp, path); err != nil {
+		return err
+	}
+	return syncDirVPM(s.dir)
+}
+
+func (s *VectorPartitionStoreV1) readInactiveGeneration(collection, index string) (uint64, error) {
+	state, err := s.readInactiveStatePath(s.inactivePath(collection, index))
+	if err != nil {
+		return 0, err
+	}
+	if state.Collection != collection || state.IndexName != index {
+		return 0, fmt.Errorf("%w: inactive marker identity", ErrVectorPartitionManifestInvalid)
+	}
+	return state.Generation, nil
+}
+
+func (s *VectorPartitionStoreV1) readInactiveStatePath(path string) (vectorPartitionInactiveStateV1, error) {
+	limits := DefaultVectorPartitionManifestLimits()
+	raw, err := readBoundedVPM(path, 16+limits.MaxStringBytes*2+sha256.Size)
+	if err != nil {
+		return vectorPartitionInactiveStateV1{}, err
+	}
+	return decodeVectorPartitionInactiveStateV1(raw)
 }
 func (s *VectorPartitionStoreV1) writeDeleteTombstone(m VectorPartitionManifestV1) error {
 	state, err := newVectorPartitionReclaimStateV1(m)

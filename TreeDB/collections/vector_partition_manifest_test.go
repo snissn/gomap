@@ -218,6 +218,12 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	if _, err := os.Stat(store.deleteTombstonePath(m.Collection, m.IndexName, m.Generation)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("completed reclaim record remains: %v", err)
 	}
+	if generation, err := store.readInactiveGeneration(m.Collection, m.IndexName); err != nil || generation != m.Generation {
+		t.Fatalf("reclaim lost durable inactive lifecycle marker generation=%d err=%v", generation, err)
+	}
+	if _, err := col.PlanColumnAssetReachability(t.Context(), ColumnAssetReachabilityOptions{}); err != nil {
+		t.Fatalf("zero-history inactive lifecycle marker rejected after reclaim: %v", err)
+	}
 	if _, err := os.Stat(oldSegment); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("reclaimed partition segment still present: %v", err)
 	}
@@ -306,9 +312,9 @@ func TestCollectionVectorPartitionReadyDeleteCrashWindowReopenReachability(t *te
 			t.Fatal(err)
 		}
 	}
-	t.Run("matching_tombstone_is_prepared_only_after_reopen", func(t *testing.T) {
+	t.Run("durable_inactive_marker_is_prepared_only_after_reopen", func(t *testing.T) {
 		d, col, store, m, refs := newFixture(t)
-		if err := store.writeDeleteTombstone(m); err != nil {
+		if err := store.writeInactiveMarker(m.Collection, m.IndexName, m.Generation); err != nil {
 			t.Fatal(err)
 		}
 		removeRetired(t, store, m)
@@ -340,6 +346,127 @@ func TestCollectionVectorPartitionReadyDeleteCrashWindowReopenReachability(t *te
 			t.Fatalf("retry exact delete: %v", err)
 		}
 	})
+	t.Run("older_ready_generations_remain_prepared_after_latest_delete_crash", func(t *testing.T) {
+		d, col, store, older, _ := newFixture(t)
+		latest := older
+		latest.Generation++
+		latest.RouterGeneration = latest.Generation
+		latest.Canonicalize()
+		latest, latestResources := vectorPartitionManifestWithFreshStableAssetsV1(t, d, col, latest, 992)
+		if err := col.PublishVectorPartitionManifestV1(latest, latestResources); err != nil {
+			latestResources.Release()
+			t.Fatalf("publish latest ready generation: %v", err)
+		}
+		if err := store.Deactivate(latest.Collection, latest.IndexName); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Delete(latest.Collection, latest.IndexName, latest.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
+			t.Fatalf("delete latest ready generation: %v", err)
+		}
+		if _, err := col.ReclaimVectorPartitionGenerationV1(t.Context(), latest.IndexName, latest.Generation); err != nil {
+			t.Fatalf("reclaim latest ready generation: %v", err)
+		}
+		if _, err := os.Stat(store.deleteTombstonePath(latest.Collection, latest.IndexName, latest.Generation)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("latest reclaim tombstone remains: %v", err)
+		}
+		if generation, err := store.readInactiveGeneration(latest.Collection, latest.IndexName); err != nil || generation != latest.Generation {
+			t.Fatalf("latest reclaim inactive marker generation=%d err=%v", generation, err)
+		}
+		dir := d.Dir()
+		if err := d.Close(); err != nil {
+			t.Fatal(err)
+		}
+		reopenedDB := openCollectionCommandWALDB(t, dir)
+		reopened, err := NewCollectionManager(reopenedDB).OpenCollection(col.name)
+		if err != nil {
+			reopenedDB.Close()
+			t.Fatal(err)
+		}
+		plan, err := reopened.PlanColumnAssetReachability(t.Context(), ColumnAssetReachabilityOptions{})
+		if err != nil {
+			reopenedDB.Close()
+			t.Fatalf("reachability with older ready generation: %v", err)
+		}
+		if plan.Sources.PreparedRefs != 3 || plan.Sources.PinnedRefs != 0 {
+			reopenedDB.Close()
+			t.Fatalf("pointerless crash roots prepared=%d pinned=%d, want 3 prepared and 0 pinned", plan.Sources.PreparedRefs, plan.Sources.PinnedRefs)
+		}
+		reopenedStore, err := OpenExistingVectorPartitionStoreV1(reopenedDB.Dir())
+		if err != nil {
+			reopenedDB.Close()
+			t.Fatal(err)
+		}
+		third := latest
+		third.Generation++
+		third.RouterGeneration = third.Generation
+		third.Canonicalize()
+		third, thirdResources := vectorPartitionManifestWithFreshStableAssetsV1(t, reopenedDB, reopened, third, 993)
+		if err := reopened.PublishVectorPartitionManifestV1(third, thirdResources); err != nil {
+			thirdResources.Release()
+			reopenedDB.Close()
+			t.Fatalf("republish after inactive state: %v", err)
+		}
+		if _, err := reopenedStore.readInactiveGeneration(third.Collection, third.IndexName); !errors.Is(err, os.ErrNotExist) {
+			reopenedDB.Close()
+			t.Fatalf("new active generation retained stale inactive marker: %v", err)
+		}
+		if err := reopenedStore.Deactivate(third.Collection, third.IndexName); err != nil {
+			reopenedDB.Close()
+			t.Fatal(err)
+		}
+		if err := reopenedStore.Delete(third.Collection, third.IndexName, third.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
+			reopenedDB.Close()
+			t.Fatalf("delete republished generation: %v", err)
+		}
+		if _, err := reopened.ReclaimVectorPartitionGenerationV1(t.Context(), third.IndexName, third.Generation); err != nil {
+			reopenedDB.Close()
+			t.Fatalf("reclaim republished generation: %v", err)
+		}
+		if _, err := reopened.PlanColumnAssetReachability(t.Context(), ColumnAssetReachabilityOptions{}); err != nil {
+			reopenedDB.Close()
+			t.Fatalf("reachability after exact delete: %v", err)
+		}
+		if err := reopenedDB.Close(); err != nil {
+			t.Fatal(err)
+		}
+		againDB := openCollectionCommandWALDB(t, dir)
+		defer againDB.Close()
+		again, err := NewCollectionManager(againDB).OpenCollection(col.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := again.PlanColumnAssetReachability(t.Context(), ColumnAssetReachabilityOptions{}); err != nil {
+			t.Fatalf("reopen after exact delete: %v", err)
+		}
+	})
+	t.Run("tombstone_cannot_authorize_pointerless_ready_state", func(t *testing.T) {
+		for _, tc := range []struct {
+			name      string
+			configure func(*vectorPartitionReclaimStateV1)
+		}{
+			{name: "matching_refs", configure: func(*vectorPartitionReclaimStateV1) {}},
+			{name: "mismatched_refs", configure: func(state *vectorPartitionReclaimStateV1) {
+				state.OriginalRefs[0].Generation++
+			}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				d, col, store, m, _ := newFixture(t)
+				defer d.Close()
+				state, err := newVectorPartitionReclaimStateV1(m)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tc.configure(&state)
+				if err := store.writeDeleteTombstoneState(state); err != nil {
+					t.Fatal(err)
+				}
+				removeRetired(t, store, m)
+				if _, err := col.PlanColumnAssetReachability(t.Context(), ColumnAssetReachabilityOptions{}); err == nil {
+					t.Fatal("non-explanatory pointerless ready state did not fail closed")
+				}
+			})
+		}
+	})
 	t.Run("pointerless_ready_without_tombstone_fails_closed", func(t *testing.T) {
 		d, col, store, m, _ := newFixture(t)
 		defer d.Close()
@@ -348,6 +475,27 @@ func TestCollectionVectorPartitionReadyDeleteCrashWindowReopenReachability(t *te
 			t.Fatal("pointerless ready manifest without tombstone did not fail closed")
 		}
 	})
+	t.Run("malformed_inactive_marker_fails_closed", func(t *testing.T) {
+		d, col, store, m, _ := newFixture(t)
+		defer d.Close()
+		if err := os.WriteFile(store.inactivePath(m.Collection, m.IndexName), []byte("corrupt"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		removeRetired(t, store, m)
+		if _, err := col.PlanColumnAssetReachability(t.Context(), ColumnAssetReachabilityOptions{}); err == nil {
+			t.Fatal("malformed inactive marker did not fail closed")
+		}
+	})
+}
+
+func TestVectorPartitionLifecycleContractDoc(t *testing.T) {
+	doc := readRepoText(t, "TreeDB/docs/spec/vector-partition-raft-v1.md")
+	requireTextContains(t, "vector partition lifecycle contract", doc,
+		"durable, checksummed, identity-bound `.inactive`\nmarker before it removes the retired pointer",
+		"A later ready\npublication writes and syncs its active pointer before removing `.inactive`",
+		"a pointerless ready set without `.inactive`\nfails closed",
+		"The marker may validly remain when no manifest remains.",
+	)
 }
 
 func TestVectorPartitionStoreV1CleanupRefusesReachableGeneration(t *testing.T) {

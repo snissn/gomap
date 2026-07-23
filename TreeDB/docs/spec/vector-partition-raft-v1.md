@@ -14,6 +14,17 @@ The active pointer pins one ready generation. `Deactivate` durably changes that
 generation to retained/prepared-only; deletion then permits column-asset GC.
 Corrupt pointers, filenames, manifests, or catalog-group mappings fail closed.
 
+An exact deletion writes a durable, checksummed, identity-bound `.inactive`
+marker before it removes the retired pointer. The marker remains after reclaim
+removes the deletion journal: it proves that the index intentionally has no
+active generation, including when older ready manifests remain. A later ready
+publication writes and syncs its active pointer before removing `.inactive`;
+deactivation writes and syncs its
+retired pointer before removing either lifecycle record. Thus recovery treats
+ready manifests as prepared-only only when a durable active, retired, or
+inactive lifecycle record exists; a pointerless ready set without `.inactive`
+fails closed. The marker may validly remain when no manifest remains.
+
 `VectorPartitionStatusV1.Ready` means the stored generation is complete.
 `Active` additionally requires it to be the active pointer target and source
 valid. M1 provides explicit in-process reader-pin handles; status and deletion
@@ -260,8 +271,8 @@ these limits before allocation.
 | build -> retained building | write generation temp, `fsync`, link/rename, directory `fsync` | complete non-active building record only |
 | build -> ready active | validate live source and producer stable-resource set; stream assets; persist generation; then write/`fsync`/rename active pointer and directory | old complete active pointer or new complete active pointer, never a partial manifest |
 | active -> retired | persist retired marker and directory sync, then remove active marker and sync | prepared-only generation is not active |
-| retired -> deleting | require inactive plus zero reader pins and caller-proved zero snapshot/catalog references; persist checksummed reclaim journal before removing manifest | retryable reclaim debt survives crash/reopen |
-| deleting -> absent | journal superseded refs before any mixed-segment remap; GC physical segment debt; remove journal only when all original and superseded segments are absent | incomplete fallback is retried, never treated as deletion |
+| retired -> deleting | require inactive plus zero reader pins and caller-proved zero snapshot/catalog references; persist checksummed reclaim journal, then write/sync `.inactive` before removing the retired pointer and manifest | retryable reclaim debt and intentional pointerless state survive crash/reopen |
+| deleting -> absent | journal superseded refs before any mixed-segment remap; GC physical segment debt; remove journal only when all original and superseded segments are absent; retain `.inactive` | incomplete fallback is retried, never treated as deletion |
 
 The storage barrier is canonical-root scoped (including symlink aliases) and
 serializes publication, deletion, reader acquisition, and snapshot export.
