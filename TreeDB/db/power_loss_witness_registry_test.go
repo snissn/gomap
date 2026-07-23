@@ -9,7 +9,10 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/powerlossoracle"
 )
 
-const powerLossWitnessPageReuseTest = "TestPowerLossOracleCounterexampleRecoverablePageReuse"
+const (
+	powerLossWitnessPageReuseTest  = "TestPowerLossOracleCounterexampleRecoverablePageReuse"
+	powerLossWitnessStaleBuildTest = "TestPowerLossCertificationStaleBuildBasePublicReopen"
+)
 
 // This anchor deliberately lives outside the witness file so a test rename or
 // deletion is a compile failure.
@@ -26,6 +29,11 @@ func TestPowerLossCounterexampleWitnessRegistryAnchors(t *testing.T) {
 	registered := make(map[powerLossWitnessTestKey]bool)
 	for _, witness := range powerlossoracle.CounterexampleWitnesses {
 		if witness.Package == "./TreeDB/db" {
+			if witness.TestName == powerLossWitnessStaleBuildTest {
+				// Anchored by the external db_test registry, which can name the
+				// package-external certification function directly.
+				continue
+			}
 			registered[powerLossWitnessTestKey{pkg: witness.Package, testName: witness.TestName}] = true
 		}
 	}

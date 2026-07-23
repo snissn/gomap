@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -353,28 +354,44 @@ func storageLayoutPathDepth(path string) int {
 
 var syncStorageLayoutDir = syncStorageLayoutDirRequired
 
-func syncStorageLayoutDirRequired(dir string) error {
-	if dir == "" {
-		return fmt.Errorf("treedb: empty storage layout namespace")
-	}
-	if runtime.GOOS == "windows" {
-		return fmt.Errorf("%w: generic parent-directory sync is unavailable on windows", ErrNamespacePersistenceUnsupported)
-	}
+var syncStorageLayoutDirHandle = func(dir string) error {
 	file, err := os.Open(dir)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = file.Close() }()
-	if err := file.Sync(); err != nil {
+	return file.Sync()
+}
+
+func syncStorageLayoutDirRequired(dir string) error {
+	if dir == "" {
+		return fmt.Errorf("treedb: empty storage layout namespace")
+	}
+	if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceAuxiliary, dir, dir); err != nil {
+		return errors.Join(err, ErrRecoveryRequired)
+	}
+	if runtime.GOOS == "windows" {
+		return errors.Join(
+			fmt.Errorf("%w: generic parent-directory sync is unavailable on windows", ErrNamespacePersistenceUnsupported),
+			ErrRecoveryRequired,
+		)
+	}
+	if err := syncStorageLayoutDirHandle(dir); err != nil {
 		lowerErr := strings.ToLower(err.Error())
 		if errors.Is(err, syscall.EINVAL) ||
 			errors.Is(err, syscall.EPERM) ||
 			errors.Is(err, syscall.ENOTSUP) ||
 			errors.Is(err, syscall.ENOSYS) ||
 			strings.Contains(lowerErr, "not supported") {
-			return fmt.Errorf("%w: sync directory %q: %v", ErrNamespacePersistenceUnsupported, dir, err)
+			return errors.Join(
+				fmt.Errorf("%w: sync directory %q: %v", ErrNamespacePersistenceUnsupported, dir, err),
+				ErrRecoveryRequired,
+			)
 		}
-		return err
+		return errors.Join(err, ErrRecoveryRequired)
+	}
+	if err := durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceAuxiliary, dir, dir); err != nil {
+		return errors.Join(err, ErrRecoveryRequired)
 	}
 	return nil
 }

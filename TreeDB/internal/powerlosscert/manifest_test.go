@@ -25,7 +25,7 @@ func TestCommittedRiskInventoryIsValid(t *testing.T) {
 }
 
 func TestParseChildManifestRejectsUnknownFields(t *testing.T) {
-	data := []byte(`{"schema_version":"treedb-power-loss-child/v1","unexpected":true}`)
+	data := []byte(`{"schema_version":"treedb-power-loss-child/v3","unexpected":true}`)
 	if _, err := ParseChildManifest(data); err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("ParseChildManifest error=%v, want unknown-field rejection", err)
 	}
@@ -45,6 +45,24 @@ func TestValidateBundleRejectsStaleSHAAndDuplicateWitnessIDs(t *testing.T) {
 	duplicate.Issue = 3675
 	if err := ValidateBundle(testRepositorySHA, inventory, []ChildManifest{manifest, duplicate}); err == nil || !strings.Contains(err.Error(), "duplicate witness id") {
 		t.Fatalf("ValidateBundle duplicate error=%v", err)
+	}
+}
+
+func TestValidateBundleRejectsPriorChildManifestSchema(t *testing.T) {
+	manifest := testChildManifest("witness-a")
+	manifest.SchemaVersion = "treedb-power-loss-child/v2"
+	if err := ValidateBundle(testRepositorySHA, testRiskInventory(), []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), "schema_version") {
+		t.Fatalf("ValidateBundle prior child schema error=%v", err)
+	}
+}
+
+func TestValidateBundleBindsReplayWindowToCommandVariant(t *testing.T) {
+	manifest := testChildManifest("witness-a")
+	witness := &manifest.Witnesses[0]
+	witness.ReplayWindow = "variant-b"
+	witness.Command.Env[powerLossReplayWindowEnv] = witness.ReplayWindow
+	if err := ValidateBundle(testRepositorySHA, testRiskInventory(), []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), "does not match command variant") {
+		t.Fatalf("ValidateBundle replay-window variant binding error=%v", err)
 	}
 }
 
@@ -120,6 +138,23 @@ func TestValidateBundleRequiresModeledReopenMode(t *testing.T) {
 		manifest.Witnesses[0].Command.Env[powerLossReopenModeEnv] = mode
 		if err := ValidateBundle(testRepositorySHA, inventory, []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), powerLossReopenModeEnv) {
 			t.Fatalf("ValidateBundle reopen mode=%q error=%v", mode, err)
+		}
+	}
+}
+
+func TestValidateBundleRecoveryDirectoryContract(t *testing.T) {
+	for _, dir := range []string{"", "recovery-input", "recovery-input/db"} {
+		manifest := testChildManifest("witness-a")
+		manifest.Witnesses[0].ExpectedRecoveryDir = dir
+		if err := ValidateBundle(testRepositorySHA, testRiskInventory(), []ChildManifest{manifest}); err != nil {
+			t.Fatalf("ValidateBundle dir=%q: %v", dir, err)
+		}
+	}
+	for _, dir := range []string{"/recovery-input/db", "../db", "recovery-input/../db", "recovery-input//db", `recovery-input\db`, "other/db"} {
+		manifest := testChildManifest("witness-a")
+		manifest.Witnesses[0].ExpectedRecoveryDir = dir
+		if err := ValidateBundle(testRepositorySHA, testRiskInventory(), []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), "recovery directory") {
+			t.Fatalf("ValidateBundle dir=%q error=%v", dir, err)
 		}
 	}
 }

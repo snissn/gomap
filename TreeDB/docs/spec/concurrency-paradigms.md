@@ -404,7 +404,7 @@ Notes:
 | --- | --- |
 | `Options.JournalLanes` | Number of active WAL/vlog lanes (partition factor for append paths). |
 | `Options.WALMaxSegmentBytes` | Segment rotation pressure; changes append/rotation cadence. |
-| `Options.JournalCompression` | WAL write CPU/IO tradeoff; may shift worker bottlenecks. |
+| `Options.JournalCompression` | Generic journal/commitlog CPU/IO tradeoff; strict V2 command-WAL frames remain raw and are not compressed. |
 | `Options.ValueLog.PointerThreshold` | Changes fraction of writes routed through value-log workers. |
 | `Options.ValueLog.ForcePointers` | Forces value-log path for all puts; increases vlog lane pressure. |
 
@@ -433,6 +433,8 @@ Notes:
 - Background prune defaults: interval `250ms`, max pages `4096`, max duration `25ms`.
 - Cached auto-checkpoint defaults: interval `30s`, idle trigger `2s`, size trigger `2GiB`.
 - Background index vacuum defaults: interval `30s`, span ratio threshold `1_200_000` ppm.
+- Background index vacuum starts only for writable supported-platform opens; a negative interval disables it. Close cancels and joins an active pass.
+- Expected cutover races are recorded as retry outcomes. Unsupported capability quiesces the worker, while permanent failures remain visible through stats and `NotifyError` without repeating on an unchanged state.
 
 ### 6.6 Environment flags that change maintenance sequencing
 

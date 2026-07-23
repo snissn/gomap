@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,6 +22,46 @@ func TestSyncCommandWALDependenciesThroughNoDebtIsAllocationFree(t *testing.T) {
 		}
 	}); allocs != 0 {
 		t.Fatalf("syncCommandWALDependenciesThrough allocations=%v, want 0", allocs)
+	}
+}
+
+func TestRawKVPointCommandWALRejectsMaterializedRIDBeforeRevisionAllocation(t *testing.T) {
+	d, err := Open(Options{
+		Dir:                    t.TempDir(),
+		CommandWAL:             true,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	assigned := false
+	_, err = d.AppendRawKVPointCommandWALTrustedWithPreparedRevision(
+		commitlog.RawKVOpSetMaterializedRID,
+		[]byte("key"),
+		[]byte("value"),
+		func() page.EntryRevision {
+			assigned = true
+			return page.EntryRevision(1)
+		},
+		false,
+	)
+	if !errors.Is(err, ErrCommandWALUnsupported) {
+		t.Fatalf("prepared materialized RID error=%v, want %v", err, ErrCommandWALUnsupported)
+	}
+	if assigned {
+		t.Fatal("materialized RID rejection consumed a prepared revision")
+	}
+
+	if _, err := d.AppendRawKVPointCommandWALTrustedWithRevision(
+		commitlog.RawKVOpSetMaterializedRID,
+		[]byte("key"),
+		[]byte("value"),
+		page.EntryRevision(1),
+		false,
+	); !errors.Is(err, ErrCommandWALUnsupported) {
+		t.Fatalf("revision materialized RID error=%v, want %v", err, ErrCommandWALUnsupported)
 	}
 }
 
@@ -347,7 +388,7 @@ func TestRawKVCommandWALIntentUsesDirectEntries(t *testing.T) {
 		_ = d.Close()
 		t.Fatalf("DeleteRange: %v", err)
 	}
-	intent, err := d.prepareRawKVCommandWALIntent(b)
+	intent, err := d.prepareRawKVCommandWALIntent(b, false)
 	if err != nil {
 		_ = b.Close()
 		_ = d.Close()
@@ -710,6 +751,298 @@ func TestRawKVCommandWALPreAppendFailureRetainsReusableDependenciesForRetry(t *t
 	}
 }
 
+func TestRawKVCommandWALMixedMaterializedAndSetRIDPreservesExternalDependency(t *testing.T) {
+	d, external := openCommandWALPointerDependencyTestDB(t)
+	defer func() { _ = d.Close() }()
+
+	conflicting := external
+	conflicting.Value = []byte("wrong-materialization")
+	if _, err := d.AppendRawKVCommandWALOrderedEntriesWithMode([]batchpkg.Entry{conflicting}, RawKVCommandWALAppendDurable); !errors.Is(err, ErrCommandWALConflictingValueLogRID) {
+		t.Fatalf("conflicting live materialization error=%v, want %v", err, ErrCommandWALConflictingValueLogRID)
+	}
+
+	materializedValue := bytes.Repeat([]byte("materialized-command-value|"), 16)
+	materializedPtrs, err := d.AppendValueLogValues([][]byte{materializedValue})
+	if err != nil {
+		t.Fatalf("AppendValueLogValues materialized: %v", err)
+	}
+	if len(materializedPtrs) != 1 {
+		t.Fatalf("AppendValueLogValues materialized returned %d pointers, want 1", len(materializedPtrs))
+	}
+	path, fileID, ok := d.currentValueLogAppender().CurrentValueLogSegment()
+	if !ok || path == "" || fileID != materializedPtrs[0].FileID {
+		t.Fatalf("CurrentValueLogSegment materialized=(%q,%d,%t), pointer file_id=%d", path, fileID, ok, materializedPtrs[0].FileID)
+	}
+	if err := d.RegisterValueLogSegment(path, fileID); err != nil {
+		t.Fatalf("RegisterValueLogSegment materialized: %v", err)
+	}
+
+	materialized := external
+	materialized.Key = []byte("materialized")
+	materialized.Value = materializedValue
+	materialized.ValuePtr = materializedPtrs[0]
+	inner, err := d.newRawKVCommandWALPayloadIntentFromEntries([]batchpkg.Entry{materialized, external}, true)
+	if err != nil {
+		t.Fatalf("newRawKVCommandWALPayloadIntentFromEntries: %v", err)
+	}
+	intent := &CommandWALIntent{inner: *inner}
+	if intent == nil || intent.inner.payloadFormat != commitlog.PayloadFormatRawKVBatchV2 || !intent.inner.externalRefs {
+		t.Fatalf("mixed intent=%+v, want RawKVBatchV2 with external refs", intent)
+	}
+	lsn, err := d.AppendCommandWALIntent(intent, true)
+	if err != nil {
+		t.Fatalf("AppendCommandWALIntent mixed materialized/SetRID: %v", err)
+	}
+	if lsn == 0 {
+		t.Fatal("AppendCommandWALIntent mixed materialized/SetRID lsn=0")
+	}
+	if intent.inner.dependencyResources != nil {
+		t.Fatal("mixed materialized/SetRID dependency resources retained after durable append")
+	}
+	ops, err := commitlog.DecodeRawKVBatchPayload(intent.inner.payload)
+	if err != nil {
+		t.Fatalf("DecodeRawKVBatchPayload mixed materialized/SetRID: %v", err)
+	}
+	if len(ops) != 2 || ops[0].Op != commitlog.RawKVOpSetMaterializedRID || ops[1].Op != commitlog.RawKVOpSetRID ||
+		ops[0].RID == 0 || ops[1].RID == 0 || ops[0].RID == ops[1].RID {
+		t.Fatalf("mixed materialized/SetRID ops=%+v", ops)
+	}
+	fence, err := commitlog.ExternalRefFenceV1FromRawKVPayload(intent.inner.payload)
+	if err != nil {
+		t.Fatalf("ExternalRefFenceV1FromRawKVPayload: %v", err)
+	}
+	if fence.Count != 1 {
+		t.Fatalf("mixed materialized/SetRID fence count=%d, want only SetRID dependency", fence.Count)
+	}
+}
+
+func TestRawKVCommandWALMaterializedRIDSelectionRequiresDurableModeAndBounds(t *testing.T) {
+	materializedValue := bytes.Repeat([]byte("materialized-mode-value|"), 16)
+
+	t.Run("inline-only-reuses-first-plan", func(t *testing.T) {
+		d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, Durability: DurabilityWALOnRelaxed, DisableBackgroundPrune: true})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer func() { _ = d.Close() }()
+		scans := 0
+		intent, err := d.newRawKVCommandWALIntentFromEntryScanWithHint(func(emit func(batchpkg.Entry) error) error {
+			scans++
+			return emit(batchpkg.Entry{Type: batchpkg.OpPut, Key: []byte("inline"), Value: []byte("value")})
+		}, 1, true)
+		if err != nil {
+			t.Fatalf("newRawKVCommandWALIntentFromEntryScanWithHint: %v", err)
+		}
+		defer releaseUnassignedCommandWALIntent(intent)
+		if scans != 1 {
+			t.Fatalf("planning scans=%d, want 1 for an already-correct inline V1 plan", scans)
+		}
+		if intent == nil || intent.payloadFormat != commitlog.PayloadFormatRawKVBatchV1 || intent.externalRefs {
+			t.Fatalf("inline intent=%+v, want dependency-free RawKVBatchV1", intent)
+		}
+	})
+
+	t.Run("reusable-intent-falls-back", func(t *testing.T) {
+		d, external := openCommandWALPointerDependencyTestDB(t)
+		defer func() { _ = d.Close() }()
+		external.Value = bytes.Repeat([]byte("command-wal-dependency|"), 16)
+		intent, err := d.NewRawKVCommandWALIntentFromOrderedEntries([]batchpkg.Entry{external})
+		if err != nil {
+			t.Fatalf("NewRawKVCommandWALIntentFromOrderedEntries: %v", err)
+		}
+		if intent == nil || intent.inner.payloadFormat != commitlog.PayloadFormatRawKVBatchV1 || !intent.inner.externalRefs {
+			t.Fatalf("reusable intent=%+v, want dependency-bearing RawKVBatchV1", intent)
+		}
+		ops, err := commitlog.DecodeRawKVBatchPayload(intent.inner.payload)
+		if err != nil {
+			t.Fatalf("DecodeRawKVBatchPayload: %v", err)
+		}
+		if len(ops) != 1 || ops[0].Op != commitlog.RawKVOpSetRID {
+			t.Fatalf("reusable intent ops=%+v, want SetRID", ops)
+		}
+	})
+
+	for _, tc := range []struct {
+		name       string
+		mode       RawKVCommandWALAppendMode
+		legacyAPI  bool
+		wantFormat commitlog.PayloadFormat
+		wantOp     commitlog.RawKVOp
+		wantClass  commitlog.CommandDurabilityClass
+	}{
+		{name: "relaxed", mode: RawKVCommandWALAppendRelaxed, legacyAPI: true, wantFormat: commitlog.PayloadFormatRawKVBatchV1, wantOp: commitlog.RawKVOpSetRID, wantClass: commitlog.CommandDurabilityRelaxed},
+		{name: "direct-durable", mode: RawKVCommandWALAppendDurable, legacyAPI: true, wantFormat: commitlog.PayloadFormatRawKVBatchV2, wantOp: commitlog.RawKVOpSetMaterializedRID, wantClass: commitlog.CommandDurabilityDurable},
+		{name: "durable-prefix-participant", mode: RawKVCommandWALAppendDurablePrefixParticipant, wantFormat: commitlog.PayloadFormatRawKVBatchV2, wantOp: commitlog.RawKVOpSetMaterializedRID, wantClass: commitlog.CommandDurabilityRelaxed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, external := openCommandWALPointerDependencyTestDB(t)
+			external.Value = bytes.Repeat([]byte("command-wal-dependency|"), 16)
+			var err error
+			if tc.legacyAPI {
+				_, err = d.AppendRawKVCommandWALOrderedEntries([]batchpkg.Entry{external}, tc.mode == RawKVCommandWALAppendDurable)
+			} else {
+				_, err = d.AppendRawKVCommandWALOrderedEntriesWithMode([]batchpkg.Entry{external}, tc.mode)
+			}
+			if err != nil {
+				_ = d.Close()
+				t.Fatalf("AppendRawKVCommandWALOrderedEntriesWithMode: %v", err)
+			}
+			env := readFirstRawKVCommandWALEnvelope(t, d)
+			if env.PayloadFormat != tc.wantFormat || env.DurabilityClass != tc.wantClass {
+				_ = d.Close()
+				t.Fatalf("envelope format=%d class=%d, want format=%d class=%d", env.PayloadFormat, env.DurabilityClass, tc.wantFormat, tc.wantClass)
+			}
+			ops, err := commitlog.DecodeRawKVBatchPayload(env.Payload)
+			if err != nil {
+				_ = d.Close()
+				t.Fatalf("DecodeRawKVBatchPayload: %v", err)
+			}
+			if len(ops) != 1 || ops[0].Op != tc.wantOp {
+				_ = d.Close()
+				t.Fatalf("ops=%+v, want one %d", ops, tc.wantOp)
+			}
+			if err := d.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+		})
+	}
+
+	t.Run("value-over-bound", func(t *testing.T) {
+		d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, Durability: DurabilityWALOnRelaxed, DisableBackgroundPrune: true})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer func() { _ = d.Close() }()
+		entry := appendCommandWALPointerEntry(t, d, []byte("oversize"), bytes.Repeat([]byte("x"), RawKVCommandWALMaterializedRIDMaxValueBytes+1))
+		intent, err := d.newRawKVCommandWALIntentFromEntries([]batchpkg.Entry{entry}, true)
+		if err != nil {
+			t.Fatalf("newRawKVCommandWALIntentFromEntries: %v", err)
+		}
+		defer releaseUnassignedCommandWALIntent(intent)
+		if intent.payloadFormat != commitlog.PayloadFormatRawKVBatchV1 || !intent.externalRefs {
+			t.Fatalf("oversize intent format=%d external=%t, want V1 external", intent.payloadFormat, intent.externalRefs)
+		}
+	})
+
+	t.Run("operation-count-over-bound", func(t *testing.T) {
+		d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, Durability: DurabilityWALOnRelaxed, DisableBackgroundPrune: true})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer func() { _ = d.Close() }()
+		entries := make([]batchpkg.Entry, 0, RawKVCommandWALMaterializedRIDMaxOperations+1)
+		entries = append(entries, appendCommandWALPointerEntry(t, d, []byte("materialized"), materializedValue))
+		for i := 1; i < RawKVCommandWALMaterializedRIDMaxOperations; i++ {
+			entries = append(entries, batchpkg.Entry{Type: batchpkg.OpDelete, Key: []byte(fmt.Sprintf("delete-%03d", i))})
+		}
+		intent, err := d.newRawKVCommandWALIntentFromEntries(entries, true)
+		if err != nil {
+			t.Fatalf("newRawKVCommandWALIntentFromEntries: %v", err)
+		}
+		if intent.payloadFormat != commitlog.PayloadFormatRawKVBatchV2 || intent.externalRefs {
+			releaseUnassignedCommandWALIntent(intent)
+			t.Fatalf("256-op intent format=%d external=%t, want self-contained V2", intent.payloadFormat, intent.externalRefs)
+		}
+		releaseUnassignedCommandWALIntent(intent)
+
+		entries = append(entries, batchpkg.Entry{Type: batchpkg.OpDelete, Key: []byte("delete-256")})
+		intent, err = d.newRawKVCommandWALIntentFromEntries(entries, true)
+		if err != nil {
+			t.Fatalf("newRawKVCommandWALIntentFromEntries over bound: %v", err)
+		}
+		defer releaseUnassignedCommandWALIntent(intent)
+		if intent.payloadFormat != commitlog.PayloadFormatRawKVBatchV1 || !intent.externalRefs {
+			t.Fatalf("257-op intent format=%d external=%t, want V1 external", intent.payloadFormat, intent.externalRefs)
+		}
+	})
+
+	t.Run("operation-count-cap-stops-materialization-validation", func(t *testing.T) {
+		d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, Durability: DurabilityWALOnRelaxed, DisableBackgroundPrune: true})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer func() { _ = d.Close() }()
+		pointer := appendCommandWALPointerEntry(t, d, []byte("pointer-000"), materializedValue)
+		entries := make([]batchpkg.Entry, RawKVCommandWALMaterializedRIDMaxOperations+1)
+		for i := range entries {
+			entries[i] = pointer
+			entries[i].Key = []byte(fmt.Sprintf("pointer-%03d", i))
+		}
+		entries[len(entries)-1].Value = []byte("conflicting-retained-value-after-cap")
+
+		intent, err := d.newRawKVCommandWALIntentFromEntries(entries, true)
+		if err != nil {
+			t.Fatalf("newRawKVCommandWALIntentFromEntries after cap: %v", err)
+		}
+		defer releaseUnassignedCommandWALIntent(intent)
+		if intent.payloadFormat != commitlog.PayloadFormatRawKVBatchV1 || !intent.externalRefs {
+			t.Fatalf("257-op capped intent format=%d external=%t, want V1 external", intent.payloadFormat, intent.externalRefs)
+		}
+	})
+
+	t.Run("frame-over-bound", func(t *testing.T) {
+		d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, Durability: DurabilityWALOnRelaxed, DisableBackgroundPrune: true})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer func() { _ = d.Close() }()
+		entries := []batchpkg.Entry{appendCommandWALPointerEntry(t, d, []byte("materialized"), materializedValue)}
+		for i := 0; i < 16; i++ {
+			entries = append(entries, batchpkg.Entry{Type: batchpkg.OpPut, Key: []byte(fmt.Sprintf("inline-%02d", i)), Value: bytes.Repeat([]byte{byte(i + 1)}, 64<<10)})
+		}
+		intent, err := d.newRawKVCommandWALIntentFromEntries(entries, true)
+		if err != nil {
+			t.Fatalf("newRawKVCommandWALIntentFromEntries: %v", err)
+		}
+		defer releaseUnassignedCommandWALIntent(intent)
+		if intent.rawKVPlan.PayloadLen <= RawKVCommandWALMaterializedRIDMaxFrameBytes-RawKVCommandWALMaterializedRIDFrameReserve {
+			t.Fatalf("fallback payload len=%d, want over materialized frame bound", intent.rawKVPlan.PayloadLen)
+		}
+		if intent.payloadFormat != commitlog.PayloadFormatRawKVBatchV1 || !intent.externalRefs {
+			t.Fatalf("oversize-frame intent format=%d external=%t, want V1 external", intent.payloadFormat, intent.externalRefs)
+		}
+	})
+}
+
+func readFirstRawKVCommandWALEnvelope(t *testing.T, d *DB) commitlog.CommandEnvelope {
+	t.Helper()
+	if d == nil || d.commandJournal == nil {
+		t.Fatal("missing command journal")
+	}
+	if err := d.commandJournal.FlushObserved(false); err != nil {
+		t.Fatalf("FlushObserved: %v", err)
+	}
+	r, err := commitlog.NewReader(filepath.Join(WALDirPath(d.dir), "commit-l0-000001.log"))
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	defer r.Close()
+	env, err := r.ReadCommandFrame()
+	if err != nil {
+		t.Fatalf("ReadCommandFrame: %v", err)
+	}
+	return env
+}
+
+func appendCommandWALPointerEntry(t *testing.T, d *DB, key, value []byte) batchpkg.Entry {
+	t.Helper()
+	ptrs, err := d.AppendValueLogValues([][]byte{value})
+	if err != nil {
+		t.Fatalf("AppendValueLogValues: %v", err)
+	}
+	if len(ptrs) != 1 {
+		t.Fatalf("AppendValueLogValues returned %d pointers, want 1", len(ptrs))
+	}
+	path, fileID, ok := d.currentValueLogAppender().CurrentValueLogSegment()
+	if !ok || path == "" || fileID != ptrs[0].FileID {
+		t.Fatalf("CurrentValueLogSegment=(%q,%d,%t), pointer file_id=%d", path, fileID, ok, ptrs[0].FileID)
+	}
+	if err := d.RegisterValueLogSegment(path, fileID); err != nil {
+		t.Fatalf("RegisterValueLogSegment: %v", err)
+	}
+	return batchpkg.Entry{Type: batchpkg.OpPut, Key: key, Value: value, IsPtr: true, ValuePtr: ptrs[0]}
+}
+
 func openCommandWALPointerDependencyTestDB(t *testing.T) (*DB, batchpkg.Entry) {
 	t.Helper()
 	d, err := Open(Options{
@@ -721,35 +1054,14 @@ func openCommandWALPointerDependencyTestDB(t *testing.T) (*DB, batchpkg.Entry) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	ptrs, err := d.AppendValueLogValues([][]byte{bytes.Repeat([]byte("command-wal-dependency|"), 16)})
-	if err != nil {
-		_ = d.Close()
-		t.Fatalf("AppendValueLogValues: %v", err)
-	}
-	if len(ptrs) != 1 {
-		_ = d.Close()
-		t.Fatalf("AppendValueLogValues returned %d pointers, want 1", len(ptrs))
-	}
-	path, fileID, ok := d.currentValueLogAppender().CurrentValueLogSegment()
-	if !ok || path == "" || fileID != ptrs[0].FileID {
-		_ = d.Close()
-		t.Fatalf("CurrentValueLogSegment=(%q,%d,%t), pointer file_id=%d", path, fileID, ok, ptrs[0].FileID)
-	}
-	if err := d.RegisterValueLogSegment(path, fileID); err != nil {
-		_ = d.Close()
-		t.Fatalf("RegisterValueLogSegment: %v", err)
-	}
-	return d, batchpkg.Entry{
-		Type:     batchpkg.OpPut,
-		Key:      []byte("pointer-dependency"),
-		IsPtr:    true,
-		ValuePtr: ptrs[0],
-	}
+	entry := appendCommandWALPointerEntry(t, d, []byte("pointer-dependency"), bytes.Repeat([]byte("command-wal-dependency|"), 16))
+	entry.Value = nil
+	return d, entry
 }
 
 func rawKVOpTypeForTest(op commitlog.RawKVOp) batchpkg.OpType {
 	switch op {
-	case commitlog.RawKVOpSet, commitlog.RawKVOpSetRID:
+	case commitlog.RawKVOpSet, commitlog.RawKVOpSetRID, commitlog.RawKVOpSetMaterializedRID:
 		return batchpkg.OpPut
 	case commitlog.RawKVOpDelete:
 		return batchpkg.OpDelete

@@ -1142,7 +1142,9 @@ func TestPublicCommandWALGroupCommitCoversRotationAndExternalValueDependencies(t
 		go func(i int) {
 			b := db.NewBatch()
 			defer b.Close()
-			if err := b.Set([]byte(fmt.Sprintf("external/%d", i)), bytes.Repeat([]byte{byte('a' + i)}, 4096)); err != nil {
+			// Stay above the bounded materialized-RID value limit so this test
+			// continues to cover grouped external dependency fences.
+			if err := b.Set([]byte(fmt.Sprintf("external/%d", i)), bytes.Repeat([]byte{byte('a' + i)}, 65<<10)); err != nil {
 				errs <- err
 				return
 			}

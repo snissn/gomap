@@ -2,6 +2,7 @@ package db_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -27,7 +28,7 @@ func BenchmarkPL06ExternalVacuumCollectionForegroundChurn(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			foreground := pl06PublicChurnResult{latencies: make([]time.Duration, 0, b.N*pl06PublicChurnOperationsPerVacuum)}
-			var vacuumErrors, exposureMisses uint64
+			var unsupported, concurrentRetries, unexpected, exposureMisses uint64
 			for i := 0; i < b.N; i++ {
 				round, vacuumErr, exposureMiss := runPL06PublicFixedChurnRound(database, i)
 				foreground.latencies = append(foreground.latencies, round.latencies...)
@@ -37,8 +38,15 @@ func BenchmarkPL06ExternalVacuumCollectionForegroundChurn(b *testing.B) {
 				if round.err != nil && foreground.err == nil {
 					foreground.err = round.err
 				}
-				if vacuumErr != nil {
-					vacuumErrors++
+				switch {
+				case vacuumErr == nil:
+				case errors.Is(vacuumErr, dbpkg.ErrVacuumRecoverableRootSetRequired), errors.Is(vacuumErr, dbpkg.ErrVacuumUnsupported):
+					unsupported++
+				case pl06PublicVacuumConcurrentRetry(vacuumErr):
+					concurrentRetries++
+				default:
+					unexpected++
+					b.Logf("unexpected vacuum error: %T: %v", vacuumErr, vacuumErr)
 				}
 				if exposureMiss {
 					exposureMisses++
@@ -48,14 +56,15 @@ func BenchmarkPL06ExternalVacuumCollectionForegroundChurn(b *testing.B) {
 			if foreground.err != nil {
 				b.Fatalf("foreground churn: %v", foreground.err)
 			}
-			if exposureMisses != 0 {
+			successfulAttempts := uint64(b.N) - unsupported - concurrentRetries - unexpected
+			if successfulAttempts > 0 && exposureMisses != 0 {
 				b.Fatalf("foreground exposure misses=%d want 0", exposureMisses)
 			}
 			wantSamples := b.N * pl06PublicChurnOperationsPerVacuum
 			if len(foreground.latencies) != wantSamples || foreground.points != uint64(wantSamples/2) || foreground.ranges != uint64(wantSamples/2) {
 				b.Fatalf("foreground fixed work samples=%d points=%d ranges=%d want %d/%d/%d", len(foreground.latencies), foreground.points, foreground.ranges, wantSamples, wantSamples/2, wantSamples/2)
 			}
-			if foreground.overlap == 0 {
+			if successfulAttempts > 0 && foreground.overlap == 0 {
 				b.Fatal("foreground fixed work did not overlap vacuum")
 			}
 
@@ -66,8 +75,31 @@ func BenchmarkPL06ExternalVacuumCollectionForegroundChurn(b *testing.B) {
 			b.ReportMetric(float64(foreground.ranges)/float64(b.N), "foreground-ranges/op")
 			b.ReportMetric(float64(foreground.overlap)/float64(b.N), "foreground-overlap-samples/op")
 			b.ReportMetric(float64(exposureMisses)/float64(b.N), "foreground-exposure-misses/op")
-			b.ReportMetric(float64(vacuumErrors)/float64(b.N), "vacuum-errors/op")
+			b.ReportMetric(float64(unsupported)/float64(b.N), "vacuum-unsupported/op")
+			b.ReportMetric(float64(concurrentRetries)/float64(b.N), "vacuum-concurrent-retries/op")
+			b.ReportMetric(float64(unexpected)/float64(b.N), "vacuum-unexpected-errors/op")
 		})
+	}
+}
+
+func pl06PublicVacuumConcurrentRetry(err error) bool {
+	return errors.Is(err, dbpkg.ErrVacuumConcurrentMutation) ||
+		errors.Is(err, dbpkg.ErrRecoverableRootSetStale) ||
+		errors.Is(err, dbpkg.ErrDurableWALCleanupProofStale)
+}
+
+func TestPL06PublicVacuumRetryClassification(t *testing.T) {
+	for _, err := range []error{
+		dbpkg.ErrVacuumConcurrentMutation,
+		dbpkg.ErrRecoverableRootSetStale,
+		dbpkg.ErrDurableWALCleanupProofStale,
+	} {
+		if !pl06PublicVacuumConcurrentRetry(err) {
+			t.Fatalf("error %v was not classified as a concurrent retry", err)
+		}
+	}
+	if pl06PublicVacuumConcurrentRetry(errors.New("I/O failure")) {
+		t.Fatal("permanent error was classified as a concurrent retry")
 	}
 }
 

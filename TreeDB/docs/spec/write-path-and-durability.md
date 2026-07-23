@@ -234,6 +234,14 @@ replay for old raw record batches after `command_wal_v2` activation. Complete
 command frames whose dependencies or external refs are missing fail recovery
 closed unless the command kind defines a formal idempotent skip rule.
 
+`Options.JournalCompression` is not command-frame compression. Strict V2
+command frames remain raw length/CRC-bounded segment records even when generic
+commitlog compression is requested, so torn-tail inspection can classify the
+frame identity, LSN, and durability class before replay. A compressed command
+WAL therefore requires a dedicated payload-aware format and recovery proof;
+turning on generic segment compression is intentionally rejected by strict V2
+readers and is not a write-throughput optimization.
+
 Command-WAL collection writes add a stronger visibility boundary for command kinds
 that are `WAL-supported`: no collection read, scan, uniqueness check,
 update/delete planner, or pending-state merge may observe a mutation before its
@@ -419,6 +427,14 @@ open must select either the old roots plus old `AppliedLSN` or the new roots
 plus new `AppliedLSN`, never a split state. A future
 checkpoint-without-publication mode must report command WAL debt and retain all
 required WAL segments and external refs.
+
+For a cached command-WAL checkpoint with no pending public frames, maintenance
+may republish the selected roots with the same `AppliedCommandLSN` only when
+the recovery-selectable fallback slot still has an older applied LSN. It writes
+no command-WAL frame and does not advance the next LSN; it waits for the
+fallback slot to converge before covered-segment cleanup can use that proof.
+If the publication fails, cleanup remains fail-closed and the older fallback
+continues to retain the required command-WAL coverage.
 
 The authoritative `AppliedLSN` must be selected by the same backend meta choice
 as the roots whose effects it covers. The V1 storage target is the

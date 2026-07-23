@@ -2,11 +2,13 @@ package caching
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -19,7 +21,20 @@ type pointSuccessorCandidate struct {
 	revision page.EntryRevision
 	priority int
 	found    bool
+	layer    pointSuccessorLayer
 }
+
+// pointSuccessorLayer identifies the source that supplied a visible result.
+// Keep this separate from priority: priority expresses recency, while layer is
+// attribution for the Dgraph-shaped read/write workload.
+type pointSuccessorLayer uint8
+
+const (
+	pointSuccessorLayerUnknown pointSuccessorLayer = iota
+	pointSuccessorLayerMutable
+	pointSuccessorLayerQueue
+	pointSuccessorLayerPublished
+)
 
 func choosePointSuccessor(best, candidate pointSuccessorCandidate) pointSuccessorCandidate {
 	if !candidate.found {
@@ -164,6 +179,20 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 		return nil, nil, false, nil
 	}
 	db.pointSuccessorCallsTotal.Add(1)
+	debugTiming := pointSuccessorDebugEnabled.Load()
+	var selectionStarted time.Time
+	if debugTiming {
+		selectionStarted = time.Now()
+	}
+	selectionRecorded := false
+	recordSelection := func() {
+		if debugTiming && !selectionRecorded {
+			db.pointSuccessorSelectionNsTotal.Add(uint64(time.Since(selectionStarted).Nanoseconds()))
+			db.pointSuccessorSelectionTimingSamplesTotal.Add(1)
+			selectionRecorded = true
+		}
+	}
+	defer recordSelection()
 	db.noteRead()
 
 	db.writeMu.Lock()
@@ -179,12 +208,20 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 	var mutables []memtable.Table
 	var queue []memtable.Table
 	var spans [][]batch.DeleteRange
+	pointShard := -1
 	if view != nil {
 		mutables = view.mutables
 		queue = view.queue
 		spans = view.queueRangeSpans
 		if snap, ok := liveIteratorRootDomainSnapshot(view); ok && len(snap.immutables) > 0 {
 			queue = snap.immutables
+		}
+		if _, ok := mvcckey.ExactVersionRange(start, end); ok && !memtableViewHasRangeSpans(view) {
+			pointShard = db.shardIndex(start)
+			if pointShard >= 0 && pointShard < len(view.rootPointShards) {
+				queue = view.rootPointShards[pointShard].immutables
+				spans = nil
+			}
 		}
 	}
 	var callSources uint64
@@ -201,9 +238,11 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 		initialTarget = db.shardIndex(start)
 		if initialTarget >= 0 && initialTarget < len(mutables) {
 			initialCandidate = seekPointSuccessorTable(mutables[initialTarget], start, end, nil, 0, 0)
+			initialCandidate.layer = pointSuccessorLayerMutable
 			db.pointSuccessorMutableProbesTotal.Add(1)
 			callSources++
 			if initialCandidate.found && bytes.Equal(initialCandidate.key, start) && initialCandidate.flags&node.FlagTombstone == 0 {
+				recordSelection()
 				return db.materializePointSuccessor(initialCandidate)
 			}
 		}
@@ -220,38 +259,51 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 		best := pointSuccessorCandidate{}
 		priority := 0
 		if len(mutables) > 0 {
-			target := db.shardIndex(lower)
+			target := pointShard
+			if target < 0 {
+				target = db.shardIndex(lower)
+			}
 			if target >= 0 && target < len(mutables) {
 				candidate := initialCandidate
 				if target != initialTarget || !bytes.Equal(lower, start) {
 					candidate = seekPointSuccessorTable(mutables[target], lower, end, nil, 0, priority)
+					candidate.layer = pointSuccessorLayerMutable
 					db.pointSuccessorMutableProbesTotal.Add(1)
 					callSources++
 				}
 				best = choosePointSuccessor(best, candidate)
 				priority++
 				if candidate.found && bytes.Equal(candidate.key, lower) && candidate.flags&node.FlagTombstone == 0 {
+					recordSelection()
 					return db.materializePointSuccessor(candidate)
 				}
 			}
 			for i, mt := range mutables {
+				if pointShard >= 0 {
+					break
+				}
 				if i == target {
 					continue
 				}
-				best = choosePointSuccessor(best, seekPointSuccessorTable(mt, lower, end, nil, 0, priority))
+				candidate := seekPointSuccessorTable(mt, lower, end, nil, 0, priority)
+				candidate.layer = pointSuccessorLayerMutable
+				best = choosePointSuccessor(best, candidate)
 				db.pointSuccessorMutableProbesTotal.Add(1)
 				callSources++
 				priority++
 			}
 		}
 		for i := len(queue) - 1; i >= 0; i-- {
-			best = choosePointSuccessor(best, seekPointSuccessorTable(queue[i], lower, end, spans, i+1, priority))
+			candidate := seekPointSuccessorTable(queue[i], lower, end, spans, i+1, priority)
+			candidate.layer = pointSuccessorLayerQueue
+			best = choosePointSuccessor(best, candidate)
 			db.pointSuccessorQueueProbesTotal.Add(1)
 			callSources++
 			priority++
 		}
 		if disk != nil {
 			candidate, probeErr := seekPointSuccessorIterator(disk, lower, end, spans, priority)
+			candidate.layer = pointSuccessorLayerPublished
 			db.pointSuccessorBackendProbesTotal.Add(1)
 			callSources++
 			if probeErr != nil {
@@ -263,6 +315,7 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 			return nil, nil, false, nil
 		}
 		if best.flags&node.FlagTombstone == 0 {
+			recordSelection()
 			return db.materializePointSuccessor(best)
 		}
 		lower = pointSuccessorAfter(best.key)
@@ -271,6 +324,15 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 }
 
 func (db *DB) materializePointSuccessor(candidate pointSuccessorCandidate) ([]byte, []byte, bool, error) {
+	debugTiming := pointSuccessorDebugEnabled.Load()
+	var materializeStarted time.Time
+	if debugTiming {
+		materializeStarted = time.Now()
+		defer func() {
+			db.pointSuccessorMaterializeNsTotal.Add(uint64(time.Since(materializeStarted).Nanoseconds()))
+			db.pointSuccessorMaterializeTimingSamplesTotal.Add(1)
+		}()
+	}
 	if !candidate.found || candidate.flags&node.FlagTombstone != 0 {
 		return nil, nil, false, nil
 	}
@@ -287,5 +349,13 @@ func (db *DB) materializePointSuccessor(candidate pointSuccessorCandidate) ([]by
 		value = append([]byte(nil), candidate.value...)
 	}
 	db.pointSuccessorHitsTotal.Add(1)
+	switch candidate.layer {
+	case pointSuccessorLayerMutable:
+		db.pointSuccessorMutableHitsTotal.Add(1)
+	case pointSuccessorLayerQueue:
+		db.pointSuccessorQueueHitsTotal.Add(1)
+	case pointSuccessorLayerPublished:
+		db.pointSuccessorBackendHitsTotal.Add(1)
+	}
 	return key, value, true, nil
 }

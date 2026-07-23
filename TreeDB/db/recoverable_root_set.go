@@ -31,6 +31,22 @@ type RecoverableRoot struct {
 	Visible           bool
 }
 
+type recoverableRootKey struct {
+	commitSeq         uint64
+	userRootPageID    uint64
+	systemRootPageID  uint64
+	appliedCommandLSN uint64
+	maxEntryRevision  uint64
+}
+
+func recoverableRootIdentity(root RecoverableRoot) recoverableRootKey {
+	return recoverableRootKey{
+		commitSeq: root.CommitSeq, userRootPageID: root.UserRootPageID,
+		systemRootPageID: root.SystemRootPageID, appliedCommandLSN: root.AppliedCommandLSN,
+		maxEntryRevision: root.MaxEntryRevision,
+	}
+}
+
 type recoverableDurableBasis struct {
 	slot       uint64
 	slotCommit [2]uint64
@@ -73,6 +89,7 @@ type RecoverableRootSet struct {
 	oldestRegistryID    int64
 	systemRootEpoch     uint64
 	resources           []*rootpublication.StableResourceSet
+	rootResources       map[recoverableRootKey]*rootpublication.StableResourceSet
 	identityPinRegistry *rootpublication.IdentityPinRegistry
 
 	mu           sync.Mutex
@@ -197,9 +214,36 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 		}
 	}
 	durableResources, cloneErr := cloneRecoverableResourceUnion(sources...)
+	rootResources := make(map[recoverableRootKey]*rootpublication.StableResourceSet, 3)
+	rootResourceSets := make([]*rootpublication.StableResourceSet, 0, 2)
+	if cloneErr == nil {
+		for slot, record := range db.durableRoot.slotRecord {
+			if record.CommitSeq == 0 {
+				continue
+			}
+			resources, resourceErr := rootpublication.CloneStableResourceSetExcludingKinds(db.durableRoot.slotResources[slot])
+			if resourceErr != nil {
+				cloneErr = resourceErr
+				break
+			}
+			root := RecoverableRoot{
+				CommitSeq: record.CommitSeq, UserRootPageID: record.UserRootPageID,
+				SystemRootPageID: record.SystemRootPageID, AppliedCommandLSN: record.AppliedCommandLSN,
+				MaxEntryRevision: record.MaxEntryRevision,
+			}
+			rootResources[recoverableRootIdentity(root)] = resources
+			if resources != nil {
+				rootResourceSets = append(rootResourceSets, resources)
+			}
+		}
+	}
 	db.durablePublishMu.Unlock()
 	if cloneErr != nil {
 		db.rootReuseMu.RUnlock()
+		durableResources.Release()
+		for _, resources := range rootResourceSets {
+			resources.Release()
+		}
 		return nil, false, cloneErr
 	}
 
@@ -207,6 +251,9 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 	if !ok || stable.idx != db.idx.Load() {
 		db.rootReuseMu.RUnlock()
 		durableResources.Release()
+		for _, resources := range rootResourceSets {
+			resources.Release()
+		}
 		return nil, true, nil
 	}
 	roots := recoverableRootsForBasis(state, durable, coordinatorView)
@@ -225,6 +272,9 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 			stable.idx.registry.Unregister(oldestRegistryID)
 		}
 		durableResources.Release()
+		for _, resources := range rootResourceSets {
+			resources.Release()
+		}
 	}
 	if coordinator != nil {
 		if err := coordinator.RevalidateReachability(coordinatorView.Epoch); err != nil {
@@ -256,7 +306,7 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 		return nil, true, nil
 	}
 
-	resources := make([]*rootpublication.StableResourceSet, 0, 3)
+	resources := make([]*rootpublication.StableResourceSet, 0, 3+len(rootResourceSets))
 	if durableResources != nil {
 		resources = append(resources, durableResources)
 	}
@@ -266,18 +316,35 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 	}
 	if visibleResources != nil {
 		resources = append(resources, visibleResources)
+		visibleRoot := RecoverableRoot{
+			CommitSeq: state.CommitSeq, UserRootPageID: state.RootPageID,
+			SystemRootPageID: state.SystemRootPageID, AppliedCommandLSN: state.AppliedCommandLSN,
+			MaxEntryRevision: uint64(state.MaxEntryRevision),
+		}
+		key := recoverableRootIdentity(visibleRoot)
+		if _, exists := rootResources[key]; !exists {
+			rootResources[key] = visibleResources
+		}
 		visibleResources = nil
 	}
+	resources = append(resources, rootResourceSets...)
 	releaseCoordinator = false
 	releaseVisible = false
 	return &RecoverableRootSet{
 		db: db, roots: roots, visible: state, durable: durable,
 		coordinator: coordinator, coordinatorEpoch: coordinatorView.Epoch,
 		idx: stable.idx, stableSnapshot: stable, oldestRegistryID: oldestRegistryID,
-		systemRootEpoch: systemRootEpoch, resources: resources,
+		systemRootEpoch: systemRootEpoch, resources: resources, rootResources: rootResources,
 		identityPinRegistry: db.StableResourceIdentityPinRegistry(),
 		identityPins:        make(map[rootpublication.StableIdentity]recoverableIdentityPin),
 	}, false, nil
+}
+
+func (set *RecoverableRootSet) resourcesForRoot(root RecoverableRoot) *rootpublication.StableResourceSet {
+	if set == nil || set.released.Load() {
+		return nil
+	}
+	return set.rootResources[recoverableRootIdentity(root)]
 }
 
 func cloneRecoverableResourceUnion(sources ...*rootpublication.StableResourceSet) (*rootpublication.StableResourceSet, error) {
@@ -530,6 +597,17 @@ func (set *RecoverableRootSet) PinStableFile(file *os.File) error {
 // Revalidate proves that the captured visible/durable root basis and exact
 // coordinator debt are still current immediately before destructive mutation.
 func (set *RecoverableRootSet) Revalidate() error {
+	return set.revalidate(false)
+}
+
+// revalidateWithDurablePublishLockHeld is the cutover form of Revalidate.
+// The caller must hold durablePublishMu, which closes the last candidate
+// publication window without recursively acquiring the same mutex.
+func (set *RecoverableRootSet) revalidateWithDurablePublishLockHeld() error {
+	return set.revalidate(true)
+}
+
+func (set *RecoverableRootSet) revalidate(durablePublishLockHeld bool) error {
 	if set == nil || set.released.Load() || set.db == nil {
 		return ErrRecoverableRootSetStale
 	}
@@ -542,13 +620,17 @@ func (set *RecoverableRootSet) Revalidate() error {
 	if !ok || state != set.visible || set.db.idx.Load() != set.idx || set.db.systemRootPublishEpoch.Load() != set.systemRootEpoch {
 		return ErrRecoverableRootSetStale
 	}
-	set.db.durablePublishMu.Lock()
+	if !durablePublishLockHeld {
+		set.db.durablePublishMu.Lock()
+	}
 	current := recoverableDurableBasis{
 		slot: set.db.durableRoot.slot, slotCommit: set.db.durableRoot.slotCommit,
 		slotRecord: set.db.durableRoot.slotRecord, pending: set.db.durableRoot.pending,
 		ambiguous: append([]*durableRootPublishCandidateV1(nil), set.db.durableRoot.ambiguous...),
 	}
-	set.db.durablePublishMu.Unlock()
+	if !durablePublishLockHeld {
+		set.db.durablePublishMu.Unlock()
+	}
 	if !set.durable.equal(current) {
 		return ErrRecoverableRootSetStale
 	}

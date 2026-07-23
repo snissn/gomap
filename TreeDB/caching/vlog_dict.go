@@ -2,15 +2,27 @@ package caching
 
 import (
 	"context"
+	"errors"
 	"log"
 	"math/bits"
 	"time"
 
 	"github.com/snissn/compress/zstd"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
+
+func (db *DB) reportValueLogDictPublishError(err error) {
+	// Dictionary publication is retried from the unchanged active profile. A
+	// stale cleanup proof means the durable write raced another command-WAL
+	// append; cleanup retained the WAL and a later pass can safely converge.
+	if errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) {
+		return
+	}
+	db.reportError(err)
+}
 
 const (
 	// Scale trainer sampling by payload bytes so large batches of small values
@@ -1020,8 +1032,13 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 	if db == nil {
 		return
 	}
-	db.valueLogDictApplyMu.RLock()
-	defer db.valueLogDictApplyMu.RUnlock()
+	// Profile application is a check-then-publish transaction: the applied hash
+	// is checked before the dictionary and current marker are persisted, then the
+	// hash is advanced only after publication succeeds. Serialize callers so the
+	// trainer callback and periodic publisher cannot both observe the old hash
+	// and persist the same accepted profile twice.
+	db.valueLogDictApplyMu.Lock()
+	defer db.valueLogDictApplyMu.Unlock()
 	if db.closing.Load() {
 		return
 	}
@@ -1084,7 +1101,7 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := ks.SetK(ctx, dictID, profileK); err != nil {
-				db.reportError(err)
+				db.reportValueLogDictPublishError(err)
 				return
 			}
 			db.valueLogDictCurrentKByClass[class].Store(uint32(profileK))
@@ -1119,8 +1136,17 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 	defer cancel()
 	dictID, err := writer.PutDictBytes(ctx, profile.Dict)
 	if err != nil {
-		db.reportError(err)
+		db.reportValueLogDictPublishError(err)
 		return
+	}
+	// Persist the dictionary's compression parameter before publishing its
+	// current marker. A retryable metadata failure must leave the old profile
+	// current so a later publisher pass can retry the complete operation.
+	if ks, ok := store.(dictStoreK); ok {
+		if err := ks.SetK(ctx, dictID, profileK); err != nil {
+			db.reportValueLogDictPublishError(err)
+			return
+		}
 	}
 	classMode := db.dictClassMode()
 	publishedViaGlobalCurrent := false
@@ -1129,26 +1155,26 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 		_, hasClassReader := store.(dictStoreCurrentByClass)
 		if hasClassWriter && hasClassReader {
 			if err := byClassWriter.SetCurrentForClass(ctx, vlogDictClassSuffix(class), dictID); err != nil {
-				db.reportError(err)
+				db.reportValueLogDictPublishError(err)
 				return
 			}
 			if class == vlogDictClassSingleValue {
 				// Keep legacy global current in sync for mode switches/reopen paths
 				// that read only the global marker.
 				if err := writer.SetCurrent(ctx, dictID); err != nil {
-					db.reportError(err)
+					db.reportValueLogDictPublishError(err)
 					return
 				}
 				publishedViaGlobalCurrent = true
 			}
 		} else if err := writer.SetCurrent(ctx, dictID); err != nil {
-			db.reportError(err)
+			db.reportValueLogDictPublishError(err)
 			return
 		} else {
 			publishedViaGlobalCurrent = true
 		}
 	} else if err := writer.SetCurrent(ctx, dictID); err != nil {
-		db.reportError(err)
+		db.reportValueLogDictPublishError(err)
 		return
 	} else {
 		publishedViaGlobalCurrent = true
@@ -1165,11 +1191,6 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 	if class == vlogDictClassSingleValue || classMode != vlogDictClassModeSplitOuterLeaf || publishedViaGlobalCurrent {
 		db.dictCurrentCached.Store(dictID)
 		db.dictCurrentOps.Store(0)
-	}
-	if ks, ok := store.(dictStoreK); ok {
-		if err := ks.SetK(ctx, dictID, profileK); err != nil {
-			db.reportError(err)
-		}
 	}
 	db.valueLogDictLastAppliedDictHashByClass[class].Store(profile.DictHash)
 	db.valueLogDictLastAppliedDictIDByClass[class].Store(dictID)

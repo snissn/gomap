@@ -6,7 +6,7 @@ import (
 )
 
 func TestParseRunPlanRejectsUnknownFields(t *testing.T) {
-	if _, err := ParseRunPlan([]byte(`{"schema_version":"treedb-power-loss-run-plan/v2","unknown":true}`)); err == nil || !strings.Contains(err.Error(), "unknown field") {
+	if _, err := ParseRunPlan([]byte(`{"schema_version":"treedb-power-loss-run-plan/v4","unknown":true}`)); err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("ParseRunPlan unknown-field error=%v", err)
 	}
 }
@@ -15,6 +15,41 @@ func TestValidateRunPlanAcceptsFrozenExpectedRecovery(t *testing.T) {
 	plan := testRunPlan()
 	if err := ValidateRunPlan(testRiskInventory(), plan); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestValidateRunPlanRejectsPriorSchemaAndMismatchedReplayWindow(t *testing.T) {
+	plan := testRunPlan()
+	plan.SchemaVersion = "treedb-power-loss-run-plan/v3"
+	if err := ValidateRunPlan(testRiskInventory(), plan); err == nil || !strings.Contains(err.Error(), "schema_version") {
+		t.Fatalf("ValidateRunPlan prior schema error=%v", err)
+	}
+
+	plan = testRunPlan()
+	plan.Cases[0].ReplayWindow = "another-variant"
+	if err := ValidateRunPlan(testRiskInventory(), plan); err == nil || !strings.Contains(err.Error(), "does not match variant id") {
+		t.Fatalf("ValidateRunPlan mismatched replay window error=%v", err)
+	}
+}
+
+func TestValidateRunPlanRecoveryDirectoryContract(t *testing.T) {
+	for _, dir := range []string{"", "recovery-input", "recovery-input/db"} {
+		t.Run("accept-"+strings.ReplaceAll(dir, "/", "-"), func(t *testing.T) {
+			plan := testRunPlan()
+			plan.Cases[0].ExpectedRecovery.Dir = dir
+			if err := ValidateRunPlan(testRiskInventory(), plan); err != nil {
+				t.Fatalf("ValidateRunPlan dir=%q: %v", dir, err)
+			}
+		})
+	}
+	for _, dir := range []string{"/recovery-input/db", "../db", "recovery-input/../db", "recovery-input//db", `recovery-input\db`, "other/db"} {
+		t.Run("reject-"+strings.NewReplacer("/", "-", `\`, "-").Replace(dir), func(t *testing.T) {
+			plan := testRunPlan()
+			plan.Cases[0].ExpectedRecovery.Dir = dir
+			if err := ValidateRunPlan(testRiskInventory(), plan); err == nil || !strings.Contains(err.Error(), "recovery directory") {
+				t.Fatalf("ValidateRunPlan dir=%q error=%v", dir, err)
+			}
+		})
 	}
 }
 

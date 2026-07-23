@@ -255,6 +255,191 @@ func testCloneStableResourceSetFiltersExactLogicalObligationClosure(t *testing.T
 	}
 }
 
+func testCloneStableResourceSetReportsPhysicalAndLogicalWorkSeparately(t *testing.T) {
+	dir := t.TempDir()
+	makeObligation := func(partID uint64) StableLogicalObligation {
+		obligation := StableLogicalObligation{
+			Class: "column-asset-ref-v1", Kind: "tcs1_part_image", Namespace: "columns",
+			Generation: 1, PartID: partID, FileID: 1, Offset: int64(partID * 8), Length: 8,
+			Checksum: uint32(partID), Reachability: ReachabilityColumnManifest,
+		}
+		obligation.Digest = sha256.Sum256([]byte(fmt.Sprintf("work-obligation-%d", partID)))
+		return obligation
+	}
+	obligations := []StableLogicalObligation{makeObligation(1), makeObligation(2), makeObligation(3)}
+	token := stableTokenFixture(t, dir, "asset.bin", 1, 8, ReachabilityColumnManifest, "asset", func(spec *StableResourceSpec) {
+		spec.Kind = ResourceColumnAsset
+		spec.LogicalLane = "columns"
+		spec.ResourceID = "1"
+		spec.LogicalObligations = obligations
+		spec.ContentSynced = true
+	})
+	builder := NewStableResourceSetBuilder()
+	if err := builder.Add(token); err != nil {
+		t.Fatal(err)
+	}
+	source, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Release()
+
+	clone, work, err := CloneStableResourceSetForLogicalObligationsWithWork(source, StableLogicalObligationRequirements{
+		ScopedFields: []ReachabilityField{ReachabilityColumnManifest},
+		Obligations:  obligations[:2],
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clone.Release()
+	if work.CloneOperations != 1 || work.FreezeOperations != 1 || work.SourceEntriesInspected != 1 || work.SourceObligationsInspected != 3 {
+		t.Fatalf("clone operation/source work=%+v", work)
+	}
+	if work.RetainedEntries != 1 || work.RetainedObligations != 2 || work.DroppedEntries != 0 || work.DroppedObligations != 1 {
+		t.Fatalf("retained/dropped work=%+v", work)
+	}
+	if work.CopiedEntries != 1 || work.CopiedObligations != 2 || work.PhysicalHandleCopies != 1 || work.LogicalObligationNormalizations != 0 {
+		t.Fatalf("copy/normalization work=%+v", work)
+	}
+}
+
+func testAppendOnlyResourceClosureCloneWorkIsBoundedByMutation(t *testing.T) {
+	const batches = 32
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "asset.bin", string(make([]byte, 4096)))
+	makeObligation := func(partID uint64) StableLogicalObligation {
+		obligation := StableLogicalObligation{
+			Class: "column-asset-ref-v1", Kind: "tcs1_part_image", Namespace: "columns",
+			Generation: partID, PartID: partID, FileID: 1, Offset: int64(partID * 8), Length: 8,
+			Checksum: uint32(partID), Reachability: ReachabilityColumnManifest,
+		}
+		obligation.Digest = sha256.Sum256([]byte(fmt.Sprintf("append-only-obligation-%d", partID)))
+		return obligation
+	}
+	makeToken := func(obligation StableLogicalObligation) *StableResourceToken {
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceColumnAsset, LogicalLane: "columns", ResourceID: "1", Generation: 1,
+			DiagnosticPath: "columns/asset.bin", File: file, Frontier: DurableFrontier{Bytes: uint64(obligation.Offset + obligation.Length)},
+			Digest: sha256.Sum256([]byte("append-only-segment")), Reachability: ReachabilityColumnManifest,
+			LogicalObligations: []StableLogicalObligation{obligation}, ContentSynced: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	all := make([]StableLogicalObligation, 0, batches)
+	var cumulative StableResourceClosureWork
+	var visible *StableResourceSet
+	for batch := 1; batch <= batches; batch++ {
+		added := makeObligation(uint64(batch))
+		all = append(all, added)
+		mutation := StableLogicalObligationMutation{
+			ScopedFields: []ReachabilityField{ReachabilityColumnManifest},
+			Added:        []StableLogicalObligation{added},
+		}
+		inherited, cloneWork, err := CloneStableResourceSetApplyingLogicalObligationMutation(visible, mutation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		producerBuilder := NewStableResourceSetBuilder()
+		if err := producerBuilder.Add(makeToken(added)); err != nil {
+			t.Fatal(err)
+		}
+		producer, err := producerBuilder.Freeze()
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidateBuilder := NewStableResourceSetBuilder()
+		if inherited != nil {
+			if err := candidateBuilder.Merge(inherited); err != nil {
+				producer.Release()
+				t.Fatal(err)
+			}
+		}
+		mergeWork, err := candidateBuilder.MergeAppendOnlyLogicalObligations(producer, mutation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		next, err := candidateBuilder.Freeze()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cumulative.RequirementObligationsInspected += cloneWork.RequirementObligationsInspected + mergeWork.RequirementObligationsInspected
+		cumulative.SourceObligationsInspected += cloneWork.SourceObligationsInspected + mergeWork.SourceObligationsInspected
+		cumulative.CopiedObligations += cloneWork.CopiedObligations + mergeWork.CopiedObligations
+		cumulative.LogicalObligationNormalizations += cloneWork.LogicalObligationNormalizations + mergeWork.LogicalObligationNormalizations
+		cumulative.RetainedIndexNodeVisits += cloneWork.RetainedIndexNodeVisits + mergeWork.RetainedIndexNodeVisits
+		cumulative.RetainedIndexNodeCopies += cloneWork.RetainedIndexNodeCopies + mergeWork.RetainedIndexNodeCopies
+		cumulative.LogicalIndexNodesAdmitted += cloneWork.LogicalIndexNodesAdmitted + mergeWork.LogicalIndexNodesAdmitted
+		visible.Release()
+		visible = next
+	}
+	defer visible.Release()
+	descriptors := visible.Descriptors()
+	if len(descriptors) != 1 || !slices.Equal(descriptors[0].LogicalObligations(), all) {
+		t.Fatalf("final append-only closure descriptors=%+v want %d exact obligations", descriptors, len(all))
+	}
+	// One new obligation per batch should not make candidate clone work follow
+	// the triangular retained-history total (batches*(batches+1)/2).
+	if cumulative.RequirementObligationsInspected > batches*2 || cumulative.SourceObligationsInspected > batches*2 || cumulative.CopiedObligations > batches*2 || cumulative.LogicalObligationNormalizations > batches*2 {
+		t.Fatalf("append-only cumulative clone work=%+v want O(%d) mutation work", cumulative, batches)
+	}
+	if cumulative.RetainedIndexNodeVisits == 0 || cumulative.RetainedIndexNodeVisits > batches*16 || cumulative.RetainedIndexNodeCopies != cumulative.RetainedIndexNodeVisits || cumulative.LogicalIndexNodesAdmitted != batches-1 {
+		t.Fatalf("append-only persistent-index work=%+v want explicit O(new obligations * index depth)", cumulative)
+	}
+}
+
+func testLogicalObligationRemovalMutationUsesExactFilter(t *testing.T) {
+	dir := t.TempDir()
+	makeObligation := func(partID uint64) StableLogicalObligation {
+		obligation := StableLogicalObligation{
+			Class: "column-asset-ref-v1", Kind: "tcs1_part_image", Namespace: "columns",
+			Generation: 1, PartID: partID, FileID: partID, Offset: 0, Length: 8,
+			Checksum: uint32(partID), Reachability: ReachabilityColumnManifest,
+		}
+		obligation.Digest = sha256.Sum256([]byte(fmt.Sprintf("remove-obligation-%d", partID)))
+		return obligation
+	}
+	keep, remove := makeObligation(1), makeObligation(2)
+	builder := NewStableResourceSetBuilder()
+	for i, obligation := range []StableLogicalObligation{keep, remove} {
+		token := stableTokenFixture(t, dir, fmt.Sprintf("remove-%d.bin", i), uint64(i+1), 8, ReachabilityColumnManifest, fmt.Sprintf("remove-%d", i), func(spec *StableResourceSpec) {
+			spec.Kind = ResourceColumnAsset
+			spec.LogicalLane = "columns"
+			spec.ResourceID = fmt.Sprint(i + 1)
+			spec.LogicalObligations = []StableLogicalObligation{obligation}
+			spec.ContentSynced = true
+		})
+		if err := builder.Add(token); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Release()
+	filtered, work, err := CloneStableResourceSetApplyingLogicalObligationMutation(source, StableLogicalObligationMutation{
+		ScopedFields: []ReachabilityField{ReachabilityColumnManifest},
+		Removed:      []StableLogicalObligation{remove},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer filtered.Release()
+	if work.AppendOnlyFastPath != 0 || work.RemovedObligations != 1 || work.SourceObligationsInspected == 0 {
+		t.Fatalf("destructive mutation work=%+v want exact full filter", work)
+	}
+	descriptors := filtered.Descriptors()
+	if len(descriptors) != 1 || !slices.Equal(descriptors[0].LogicalObligations(), []StableLogicalObligation{keep}) {
+		t.Fatalf("filtered descriptors=%+v want only retained obligation", descriptors)
+	}
+	if got := source.Descriptors(); len(got) != 2 {
+		t.Fatalf("source closure changed by destructive clone: %+v", got)
+	}
+}
+
 func testStableResourceSetRejectsDataStableNamespaceUnstable(t *testing.T) {
 	dir := t.TempDir()
 	parent, err := os.Open(dir)

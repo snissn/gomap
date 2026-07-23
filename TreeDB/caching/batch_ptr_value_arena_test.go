@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
@@ -130,6 +131,85 @@ func TestBatchPtrValueArena_RecycledWhenPointersAssigned(t *testing.T) {
 	}
 	if count := countBatchArenaLeaseChunks(db, db.mutableShards[0].mem); count != 1 {
 		t.Fatalf("expected only the main batch arena lease to remain; got %d chunks", count)
+	}
+
+	got, err := db.Get(key)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !bytes.Equal(got, val) {
+		t.Fatalf("value corrupted: got=%x want=%x", got, val)
+	}
+}
+
+func TestBatchPtrValueArena_RecycledAfterMaterializedCommandWALAppend(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir, NewMockBackend(), Options{
+		ExternalCommandWAL:       true,
+		MemtableMode:             "btree",
+		MemtableShards:           1,
+		FlushThreshold:           1 << 20,
+		ValueLogPointerThreshold: 32,
+		ForceValueLogPointers:    true,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	key := []byte("materialized-command-wal")
+	val := bytes.Repeat([]byte{0x44}, 64)
+
+	b := db.NewBatchWithSize(1)
+	defer b.Close()
+	if err := b.Set(key, val); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if got := len(b.ptrValueIdxs); got != 1 {
+		t.Fatalf("expected exactly one pointer-value entry after Set, got %d", got)
+	}
+	if len(b.ptrCopyArenaChunks) == 0 && b.ptrCopyBytes == 0 {
+		t.Fatal("expected pointer-value arena path to allocate copy storage after Set")
+	}
+
+	if err := b.WriteAfterCommandWALAppend(true, func() error {
+		if !b.commandWALMaterializedRID {
+			t.Fatal("expected command WAL materialized-RID mode before append")
+		}
+		return b.Replay(func(entry batch.Entry) error {
+			if !entry.IsPtr || entry.ValuePtr.FileID == 0 || entry.ValuePtr.Length == 0 {
+				t.Fatalf("command WAL replay entry lacks materialized pointer: %+v", entry)
+			}
+			if !bytes.Equal(entry.Value, val) {
+				t.Fatalf("command WAL replay value=%x, want %x", entry.Value, val)
+			}
+			return nil
+		})
+	}); err != nil {
+		t.Fatalf("write after command WAL append: %v", err)
+	}
+
+	if len(b.ptrValueIdxs) != 0 {
+		t.Fatalf("expected pointer entry indices to be cleared after write, got %d", len(b.ptrValueIdxs))
+	}
+	if len(b.ptrCopyArenaChunks) != 0 {
+		t.Fatalf("expected ptr copy arena chunks to drain after write, got %d", len(b.ptrCopyArenaChunks))
+	}
+	if count := countBatchArenaLeaseChunks(db, db.mutableShards[0].mem); count != 1 {
+		t.Fatalf("expected only the main batch arena lease after materialized command WAL append; got %d chunks", count)
+	}
+	for i := 0; i < 256; i++ {
+		b.Reset()
+		iterKey := []byte(fmt.Sprintf("materialized-command-wal-%03d", i))
+		iterVal := bytes.Repeat([]byte{byte(i)}, 64)
+		if err := b.Set(iterKey, iterVal); err != nil {
+			t.Fatalf("set reuse %d: %v", i, err)
+		}
+		if err := b.WriteAfterCommandWALAppend(true, func() error {
+			return b.Replay(func(batch.Entry) error { return nil })
+		}); err != nil {
+			t.Fatalf("write reuse %d: %v", i, err)
+		}
 	}
 
 	got, err := db.Get(key)

@@ -73,6 +73,108 @@ func TestCommandWALAppliedCommandLSNMetaFieldRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRefreshCommandWALCheckpointFallbackConvergesSlotsWithoutNewLSN(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open command WAL DB: %v", err)
+	}
+	defer db.Close()
+
+	state := db.State()
+	if err := db.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, 1, []CommandWALLSNRange{{First: 1, Last: 1}}, true); err != nil {
+		t.Fatalf("publish first applied LSN: %v", err)
+	}
+	if err := db.rootPublication.coordinator.WaitThrough(context.Background(), db.State().CommitSeq); err != nil {
+		t.Fatalf("wait first durable root: %v", err)
+	}
+	state = db.State()
+	if err := db.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, 2, []CommandWALLSNRange{{First: 2, Last: 2}}, true); err != nil {
+		t.Fatalf("publish second applied LSN: %v", err)
+	}
+	if err := db.rootPublication.coordinator.WaitThrough(context.Background(), db.State().CommitSeq); err != nil {
+		t.Fatalf("wait second durable root: %v", err)
+	}
+	before := db.State()
+	if before == nil || before.AppliedCommandLSN == 0 {
+		t.Fatalf("state before refresh=%+v, want applied command WAL state", before)
+	}
+	nextLSN := db.CommandWALNextLSN()
+	db.durablePublishMu.Lock()
+	selected := db.durableRoot.slotRecord[db.durableRoot.slot]
+	fallback := db.durableRoot.slotRecord[db.durableRoot.slot^1]
+	db.durablePublishMu.Unlock()
+	if fallback.AppliedCommandLSN >= selected.AppliedCommandLSN {
+		t.Fatalf("test did not create lagging fallback: selected=%d fallback=%d", selected.AppliedCommandLSN, fallback.AppliedCommandLSN)
+	}
+
+	if err := db.RefreshCommandWALCheckpointFallback(); err != nil {
+		t.Fatalf("RefreshCommandWALCheckpointFallback: %v", err)
+	}
+	if got := db.State().AppliedCommandLSN; got != before.AppliedCommandLSN {
+		t.Fatalf("AppliedCommandLSN after refresh=%d, want unchanged %d", got, before.AppliedCommandLSN)
+	}
+	if got := db.CommandWALNextLSN(); got != nextLSN {
+		t.Fatalf("next command WAL LSN after refresh=%d, want unchanged %d", got, nextLSN)
+	}
+	db.durablePublishMu.Lock()
+	selected = db.durableRoot.slotRecord[db.durableRoot.slot]
+	fallback = db.durableRoot.slotRecord[db.durableRoot.slot^1]
+	db.durablePublishMu.Unlock()
+	if selected.AppliedCommandLSN != before.AppliedCommandLSN || fallback.AppliedCommandLSN != before.AppliedCommandLSN {
+		t.Fatalf("refreshed root slots selected=%d fallback=%d, want both %d", selected.AppliedCommandLSN, fallback.AppliedCommandLSN, before.AppliedCommandLSN)
+	}
+}
+
+func TestRefreshCommandWALCheckpointFallbackPublicationFailureRetainsFallback(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open command WAL DB: %v", err)
+	}
+	if err := db.SetSync([]byte("first"), []byte("one")); err != nil {
+		t.Fatalf("SetSync first: %v", err)
+	}
+	if err := db.SetSync([]byte("second"), []byte("two")); err != nil {
+		t.Fatalf("SetSync second: %v", err)
+	}
+	if err := db.rootPublication.coordinator.WaitThrough(context.Background(), db.State().CommitSeq); err != nil {
+		t.Fatalf("wait durable command roots: %v", err)
+	}
+	before := db.State()
+	db.durablePublishMu.Lock()
+	fallbackBefore := db.durableRoot.slotRecord[db.durableRoot.slot^1].AppliedCommandLSN
+	db.durablePublishMu.Unlock()
+	if fallbackBefore >= before.AppliedCommandLSN {
+		t.Fatalf("test did not create lagging fallback: applied=%d fallback=%d", before.AppliedCommandLSN, fallbackBefore)
+	}
+
+	db.testFailWriteMeta.Store(true)
+	err = db.RefreshCommandWALCheckpointFallback()
+	db.testFailWriteMeta.Store(false)
+	if !errors.Is(err, errTestWriteMetaFailpoint) {
+		t.Fatalf("RefreshCommandWALCheckpointFallback error=%v, want write-meta failpoint", err)
+	}
+	db.durablePublishMu.Lock()
+	fallbackAfter := db.durableRoot.slotRecord[db.durableRoot.slot^1].AppliedCommandLSN
+	db.durablePublishMu.Unlock()
+	if fallbackAfter != fallbackBefore {
+		t.Fatalf("failed refresh changed fallback applied LSN=%d, want %d", fallbackAfter, fallbackBefore)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close after failed refresh: %v", err)
+	}
+	reopened, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("reopen command WAL DB: %v", err)
+	}
+	defer reopened.Close()
+	assertDBValue(t, reopened, "first", "one")
+	assertDBValue(t, reopened, "second", "two")
+}
+
 func TestCommandWALAppliedLSNOnlyPublishPreservesValueLogRefTracker(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{
@@ -249,6 +351,70 @@ func TestCommandWALAppliedLSNOnlyPublishRebindsRootsAfterDurableGateWait(t *test
 	got, err = reopened.Get([]byte("new-root"))
 	if err != nil || string(got) != "two" {
 		t.Fatalf("reopened Get(new-root)=(%q, %v), want (two, nil)", got, err)
+	}
+}
+
+func TestCommandWALPublicationRebindsBuilderAfterRuntimeSwap(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	for _, tc := range []struct {
+		name    string
+		publish func(*testing.T, *DB) error
+	}{
+		{
+			name: "applied_lsn",
+			publish: func(_ *testing.T, db *DB) error {
+				return db.PublishCommandWALAppliedLSN(1, []CommandWALLSNRange{{First: 1, Last: 1}}, true)
+			},
+		},
+		{
+			name: "noop",
+			publish: func(t *testing.T, db *DB) error {
+				payload, err := commitlog.EncodeRawKVBatchPayload(nil)
+				if err != nil {
+					t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+				}
+				intent, err := db.NewTrustedCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
+				if err != nil {
+					t.Fatalf("NewTrustedCommandWALIntent: %v", err)
+				}
+				return db.PublishCommandWALNoop(intent, true)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			oldRuntime := db.rootPublication
+			replacement, err := newRootPublicationRuntimeV1(db, db.idx.Load(), db.durableRoot, db.meta)
+			if err != nil {
+				t.Fatalf("new replacement runtime: %v", err)
+			}
+			var once sync.Once
+			db.testCommandWALAfterBuilderAcquireHook = func() {
+				once.Do(func() {
+					db.writeMu.Lock()
+					db.rootPublication = replacement
+					db.writeMu.Unlock()
+				})
+			}
+
+			if err := tc.publish(t, db); err != nil {
+				t.Fatalf("publish after runtime swap: %v", err)
+			}
+			db.testCommandWALAfterBuilderAcquireHook = nil
+			handoff, err := stopRootPublicationRuntimeV1(oldRuntime)
+			if err != nil {
+				t.Fatalf("stop old runtime: %v", err)
+			}
+			handoff.Release()
+			oldRuntime.release()
+		})
 	}
 }
 
@@ -1613,6 +1779,10 @@ func TestCommandWALCleanupRejectsSnapshotAfterAppend(t *testing.T) {
 	if !errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
 		t.Fatalf("CleanupCommandWALCoveredSegments error=%v, want cleanup snapshot stale", err)
 	}
+	err = db.CleanupCommandWALCoveredSegmentsAtCheckpoint(false)
+	if !errors.Is(err, ErrDurableWALCleanupProofStale) {
+		t.Fatalf("checkpoint cleanup error=%v, want durable cleanup retry sentinel", err)
+	}
 	if _, statErr := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); statErr != nil {
 		t.Fatalf("covered segment removed under stale append snapshot: %v", statErr)
 	}
@@ -1652,6 +1822,16 @@ func TestCommandWALCleanupAdvancesJournalNamespaceGeneration(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); !os.IsNotExist(err) {
 		t.Fatalf("covered segment stat=%v, want removed", err)
+	}
+}
+
+func TestNormalizeCommandWALCheckpointCleanupErrorPrefersStaleOverUnavailable(t *testing.T) {
+	err := normalizeCommandWALCheckpointCleanupError(errors.Join(
+		errDurableWALCleanupProofUnavailable,
+		errDurableWALCleanupProofStale,
+	))
+	if !errors.Is(err, ErrDurableWALCleanupProofStale) {
+		t.Fatalf("checkpoint cleanup error=%v, want durable cleanup retry sentinel", err)
 	}
 }
 

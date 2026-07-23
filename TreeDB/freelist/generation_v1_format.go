@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
 )
 
 const (
@@ -34,6 +35,41 @@ type AppendPageSink interface {
 	WritePage(pageID uint64, data []byte) error
 }
 
+// CandidatePageViewV1 is a read-only view of one candidate-owned page. It can
+// copy into caller-owned storage without exposing the candidate's byte slice.
+type CandidatePageViewV1 struct {
+	data []byte
+}
+
+func (view CandidatePageViewV1) Len() int { return len(view.data) }
+
+func (view CandidatePageViewV1) CopyTo(dst []byte) error {
+	if len(view.data) != page.PageSize || len(dst) != len(view.data) {
+		return fmt.Errorf("%w: invalid candidate page copy", ErrGenerationFormat)
+	}
+	copy(dst, view.data)
+	return nil
+}
+
+// WriteCandidatePageToPagerV1 copies an opaque candidate page directly into
+// pager-owned mmap storage. Pager.Write holds the pager lock for the complete
+// copy, preventing a concurrent Sync from draining a partially populated page.
+func WriteCandidatePageToPagerV1(dst *pager.Pager, pageID uint64, view CandidatePageViewV1) error {
+	if dst == nil {
+		return fmt.Errorf("%w: missing candidate pager", ErrGenerationFormat)
+	}
+	if len(view.data) != page.PageSize {
+		return fmt.Errorf("%w: invalid candidate page copy", ErrGenerationFormat)
+	}
+	return dst.Write(pageID, view.data)
+}
+
+// CandidatePageWriterV1 receives an opaque read-only page view. It may retain
+// the view, but cannot mutate or alias candidate-owned bytes through this API.
+type CandidatePageWriterV1 interface {
+	WriteCandidatePageV1(pageID uint64, view CandidatePageViewV1) error
+}
+
 type GenerationRefV1 struct {
 	HeaderPageID uint64
 	GenerationID uint64
@@ -54,6 +90,31 @@ type MemoryPageStoreV1 struct {
 
 func NewMemoryPageStoreV1() *MemoryPageStoreV1 {
 	return &MemoryPageStoreV1{Pages: make(map[uint64][]byte)}
+}
+
+// CandidatePageSinkV1 validates production candidate writes without retaining
+// their bytes. It allows the materialized candidate to take ownership of each
+// freshly encoded page instead of making a validation-store copy.
+type CandidatePageSinkV1 struct {
+	pageIDs map[uint64]struct{}
+}
+
+func NewCandidatePageSinkV1() *CandidatePageSinkV1 {
+	return &CandidatePageSinkV1{pageIDs: make(map[uint64]struct{})}
+}
+
+func (s *CandidatePageSinkV1) WritePage(id uint64, data []byte) error {
+	if s == nil || len(data) != page.PageSize {
+		return fmt.Errorf("%w: invalid candidate page write", ErrGenerationFormat)
+	}
+	if s.pageIDs == nil {
+		s.pageIDs = make(map[uint64]struct{})
+	}
+	if _, exists := s.pageIDs[id]; exists {
+		return fmt.Errorf("%w: page %d rewritten", ErrGenerationFormat, id)
+	}
+	s.pageIDs[id] = struct{}{}
+	return nil
 }
 
 func (s *MemoryPageStoreV1) WritePage(id uint64, data []byte) error {

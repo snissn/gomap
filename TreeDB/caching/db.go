@@ -35,6 +35,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/merging"
+	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -77,7 +78,23 @@ var ErrBatchDeleteRangeTooLarge = errors.New("cachingdb: batch DeleteRange mater
 var errWALClosed = errors.New("cachingdb: wal writer closed")
 var errWALUnavailable = errors.New("cachingdb: wal unavailable")
 
+const (
+	commandWALMaterializedRIDMaxValueBytes  = backenddb.RawKVCommandWALMaterializedRIDMaxValueBytes
+	commandWALMaterializedRIDMaxBatchBytes  = backenddb.RawKVCommandWALMaterializedRIDMaxFrameBytes
+	commandWALMaterializedRIDMaxOps         = backenddb.RawKVCommandWALMaterializedRIDMaxOperations
+	commandWALDefaultMaxSegmentBytes        = 64 << 20
+	commandWALMaterializedRIDFrameReserve   = backenddb.RawKVCommandWALMaterializedRIDFrameReserve
+	commandWALMaterializedRIDOpOverhead     = 17 + 8
+	commandWALMaterializedRIDVLogReserve    = 1 << 20
+	commandWALMaterializedRIDVLogOpOverhead = 64
+)
+
 var iteratorDebugEnabled atomic.Bool
+
+// pointSuccessorDebugEnabled gates timestamp-based point-read attribution.
+// Counters remain available in production, but wall-clock probes are opt-in so
+// a diagnostic seam never charges every Dgraph point read.
+var pointSuccessorDebugEnabled atomic.Bool
 
 var valueLogEligiblePool sync.Pool                  // stores []int
 var valueLogKeyPool sync.Pool                       // stores [][]byte
@@ -2448,6 +2465,12 @@ const (
 // intended for benchmarking/diagnostics and is disabled by default.
 func SetIteratorDebug(enabled bool) {
 	iteratorDebugEnabled.Store(enabled)
+}
+
+// SetPointSuccessorDebug toggles timestamp attribution for SeekGE. It is for
+// benchmarks and diagnostics only; normal point reads do no clock sampling.
+func SetPointSuccessorDebug(enabled bool) {
+	pointSuccessorDebugEnabled.Store(enabled)
 }
 
 func envBool(name string) bool {
@@ -7955,6 +7978,9 @@ func (db *DB) advanceValueLogWriterPastObservedSeq(l *lane, observedMaxSeq int) 
 }
 
 func hashKey(key []byte) uint64 {
+	if prefix, ok := mvcckey.VersionAffinityPrefix(key); ok {
+		key = prefix
+	}
 	return xxhash.Sum64(key)
 }
 
@@ -8348,7 +8374,7 @@ type Options struct {
 	// WALMaxSegmentBytes caps the size of a single WAL segment payload.
 	// 0 uses the default limit.
 	WALMaxSegmentBytes int64
-	// JournalCompression enables best-effort zstd compression for journal/commitlog
+	// JournalCompression enables best-effort zstd compression for generic journal/commitlog
 	// segments (metadata only). The writer only keeps compressed bytes when they
 	// are smaller than the raw payload, so compression never causes size
 	// amplification.
@@ -8849,7 +8875,7 @@ type DB struct {
 	valueLogDictMetricsPauseBytes  int
 
 	valueLogDictTrainerMu      sync.RWMutex
-	valueLogDictApplyMu        sync.RWMutex
+	valueLogDictApplyMu        sync.Mutex
 	valueLogDictTrainer        *compression.Trainer
 	valueLogDictTrainerByClass [vlogDictClassCount]*compression.Trainer
 	valueLogDictKickCh         chan struct{}
@@ -9024,12 +9050,19 @@ type DB struct {
 	iteratorQueueLenMax                                          atomic.Uint64
 	pointSuccessorCallsTotal                                     atomic.Uint64
 	pointSuccessorHitsTotal                                      atomic.Uint64
+	pointSuccessorMutableHitsTotal                               atomic.Uint64
+	pointSuccessorQueueHitsTotal                                 atomic.Uint64
+	pointSuccessorBackendHitsTotal                               atomic.Uint64
 	pointSuccessorMutableProbesTotal                             atomic.Uint64
 	pointSuccessorQueueProbesTotal                               atomic.Uint64
 	pointSuccessorBackendProbesTotal                             atomic.Uint64
 	pointSuccessorSourcesTotal                                   atomic.Uint64
 	pointSuccessorSourcesMax                                     atomic.Uint64
 	pointSuccessorGeneralMergeIteratorsTotal                     atomic.Uint64
+	pointSuccessorSelectionNsTotal                               atomic.Uint64
+	pointSuccessorMaterializeNsTotal                             atomic.Uint64
+	pointSuccessorSelectionTimingSamplesTotal                    atomic.Uint64
+	pointSuccessorMaterializeTimingSamplesTotal                  atomic.Uint64
 	checkpointTotalNs                                            atomic.Uint64
 	checkpointMaxNs                                              atomic.Uint64
 	checkpointNoopSkips                                          atomic.Uint64
@@ -10667,6 +10700,22 @@ func (b *Batch) OrderedEntries() []batch.Entry {
 	return b.entries
 }
 
+// ExternalCommandWALRequiresEntryScan reports whether cached preflight placed
+// any operation in the value log. The public command-WAL wrapper must then
+// encode the post-placement entries instead of its prebuilt inline payload so
+// the frame records either SetRID or SetMaterializedRID explicitly.
+func (b *Batch) ExternalCommandWALRequiresEntryScan() bool {
+	if b == nil || b.db == nil || !b.db.externalCommandWAL {
+		return false
+	}
+	for i := range b.entries {
+		if b.entries[i].Type == batch.OpPut && b.entries[i].IsPtr {
+			return true
+		}
+	}
+	return false
+}
+
 func assignLegacyPointEntryRevisions(entries []batch.Entry, revision page.EntryRevision) page.EntryRevision {
 	maxRevision := page.LegacyEntryRevision
 	for i := range entries {
@@ -12205,10 +12254,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	segments, _ := listNonEmptySplitLogSegments(walDir, valueLogDir, leafLogDir)
 	reserveLeafLogLane := opts.IndexOuterLeavesInValueLog
 	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
-	// RID allocation is monotonic, so each non-leaf lane's latest non-empty
-	// value-log segment contains that lane's high-watermark. Leaf-log append lanes
-	// share one encoded lane across multiple physical writers, so their RID seed
-	// scans every non-empty reserved leaf-log segment.
+	// Scan every non-empty segment: exact-RID command-WAL recovery may append an
+	// older missing RID into a newer segment, so the physical tail is no longer
+	// guaranteed to carry the allocator high-watermark.
 	maxExistingRID, err := maxValueLogRIDFromSegments(segments)
 	if err != nil {
 		return nil, err
@@ -24027,11 +24075,99 @@ func (db *DB) observePublishWatermarkLagDrift(backlogBytes int64, now time.Time)
 //   - forces a backend sync boundary (even if the queue is empty),
 //   - removes all older WAL segments (keeping only the currently-open one).
 func (db *DB) Checkpoint() error {
+	return db.checkpointContext(context.Background())
+}
+
+// CheckpointContext is Checkpoint with cooperative cancellation while waiting
+// for checkpoint ownership and between durability stages. An in-flight storage
+// syscall is allowed to complete before cancellation is observed.
+func (db *DB) CheckpointContext(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return db.checkpointContext(ctx)
+}
+
+type checkpointTryLocker interface {
+	Lock()
+	TryLock() bool
+	Unlock()
+}
+
+func lockCheckpointMutexContext(ctx context.Context, mu checkpointTryLocker) error {
+	if ctx.Done() == nil {
+		mu.Lock()
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if mu.TryLock() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func lockCheckpointWriteMutexContext(ctx context.Context, mu *sync.RWMutex) error {
+	if ctx.Done() == nil {
+		mu.Lock()
+		return nil
+	}
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if mu.TryLock() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (db *DB) waitForActiveCheckpointContext(ctx context.Context) error {
+	if ctx.Done() == nil {
+		db.checkpointMu.Lock()
+		for db.checkpointing.Load() {
+			db.checkpointCond.Wait()
+		}
+		db.checkpointMu.Unlock()
+		return nil
+	}
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for db.checkpointing.Load() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+	return nil
+}
+
+func (db *DB) checkpointContext(ctx context.Context) error {
 	if db == nil {
 		return nil
 	}
 	if db.closing.Load() {
 		return errDBClosing
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	start := time.Now()
 	defer func() {
@@ -24074,7 +24210,9 @@ func (db *DB) Checkpoint() error {
 	defer addAtomicInt64FloorZero(&db.checkpointFlushPreemptActive, -1)
 	barrierWaitStart := time.Now()
 	flushMuWaitStart := barrierWaitStart
-	db.flushMu.Lock()
+	if err := lockCheckpointMutexContext(ctx, &db.flushMu); err != nil {
+		return err
+	}
 	flushMuWaitDur := time.Since(flushMuWaitStart)
 	barrierWaitDur := time.Since(barrierWaitStart)
 	db.observeCheckpointBarrierWait(barrierWaitDur)
@@ -24089,11 +24227,14 @@ func (db *DB) Checkpoint() error {
 			db.flushMu.Unlock()
 		}
 	}
-	lockFlushMu := func() {
+	lockFlushMu := func() error {
 		if !flushMuHeld {
-			db.flushMu.Lock()
+			if err := lockCheckpointMutexContext(ctx, &db.flushMu); err != nil {
+				return err
+			}
 			flushMuHeld = true
 		}
+		return nil
 	}
 	defer unlockFlushMu()
 
@@ -24108,12 +24249,12 @@ func (db *DB) Checkpoint() error {
 		}
 		db.checkpointMu.Unlock()
 		unlockFlushMu()
-		db.checkpointMu.Lock()
-		for db.checkpointing.Load() {
-			db.checkpointCond.Wait()
+		if err := db.waitForActiveCheckpointContext(ctx); err != nil {
+			return err
 		}
-		db.checkpointMu.Unlock()
-		lockFlushMu()
+		if err := lockFlushMu(); err != nil {
+			return err
+		}
 	}
 
 	db.resetCheckpointFlushAllLastStats()
@@ -24134,7 +24275,12 @@ func (db *DB) Checkpoint() error {
 		db.checkpointMu.Unlock()
 	}
 
-	db.writeMu.Lock()
+	// checkpointing and checkpointWriteCutoverActive already stop new cached
+	// writers at admission. Poll here so cancellation cannot leave an orphaned
+	// RWMutex writer that continues blocking readers after this call returns.
+	if err := lockCheckpointWriteMutexContext(ctx, &db.writeMu); err != nil {
+		return err
+	}
 	cutoverStart := time.Now()
 	releaseWriteMu := func() {
 		d := time.Since(cutoverStart)
@@ -24144,6 +24290,11 @@ func (db *DB) Checkpoint() error {
 	}
 	if hook := db.testBeforeCheckpointFrontierCapture; hook != nil {
 		hook()
+	}
+	if err := ctx.Err(); err != nil {
+		releaseWriteMu()
+		endWriteCutover()
+		return err
 	}
 
 	// Rotate mutable into the flush queue and ensure future writes land in a fresh
@@ -24174,6 +24325,9 @@ func (db *DB) Checkpoint() error {
 		db.mu.Unlock()
 		releaseWriteMu()
 		endWriteCutover()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		backendBoundaryStart := time.Now()
 		err := backendSyncBoundary(db.backend)
 		recordCheckpointStageSince(&db.checkpointStageBackendBoundary, backendBoundaryStart)
@@ -24203,12 +24357,18 @@ func (db *DB) Checkpoint() error {
 			if hook := db.testAfterCheckpointFrontierCapture; hook != nil {
 				hook()
 			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if publishHook := db.loadCommandWALCheckpointPublishHook(); publishHook != nil {
 				commandWALAppliedLSN, commandWALRanges, err := publishHook(true)
 				if err != nil {
 					return err
 				}
 				if _, err := db.publishCommandWALCheckpointApplied(commandWALAppliedLSN, commandWALRanges); err != nil {
+					return err
+				}
+				if err := ctx.Err(); err != nil {
 					return err
 				}
 				backendBoundaryStart := time.Now()
@@ -24262,6 +24422,9 @@ func (db *DB) Checkpoint() error {
 	if hook := db.testAfterCheckpointFrontierCapture; hook != nil {
 		hook()
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	walRotateStart := time.Now()
 	errCh := make(chan error, len(rotateLaneIDs))
@@ -24284,10 +24447,16 @@ func (db *DB) Checkpoint() error {
 		}
 	}
 	recordCheckpointStageSince(&db.checkpointStageWALRotate, walRotateStart)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	wroteDuringWALRotate := db.nextRID.Load() != ridBeforeWALRotate
 	valueLogFlushStart := time.Now()
 	if err := db.checkpointFlushValueLogLanes(); err != nil {
 		recordCheckpointStageSince(&db.checkpointStageValueLogFlush, valueLogFlushStart)
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	valueLogFlushDur := time.Since(valueLogFlushStart)
@@ -24317,6 +24486,9 @@ func (db *DB) Checkpoint() error {
 	// Flush all queued memtables with backend sync.
 	if hook := db.testBeforeCheckpointFrontierDrain; hook != nil {
 		hook()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	leafLogAppendWaitBefore := db.flushApplyLeafLogAppendWaitNs.Load()
 	reducerPublishBefore := db.backendFlushApplyReducerPublishNs()
@@ -24356,7 +24528,10 @@ func (db *DB) Checkpoint() error {
 		ownedDrainStart := time.Now()
 		db.flushCheckpointFrontierLocked(true, nil, frontier)
 		ownedDrainDur = time.Since(ownedDrainStart)
-		lockFlushMu()
+		if err := lockFlushMu(); err != nil {
+			db.clearActiveCheckpointFrontier()
+			return err
+		}
 		db.clearActiveCheckpointFrontier()
 		db.observeCheckpointSharedDrainWait(time.Since(flushAllStart))
 	}
@@ -24374,6 +24549,9 @@ func (db *DB) Checkpoint() error {
 		db.mu.RUnlock()
 	}
 	recordCheckpointStageSince(&db.checkpointStageFlushAll, flushAllStart)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	leafLogAppendWaitAfter := db.flushApplyLeafLogAppendWaitNs.Load()
 	leafValueLogSyncNs := uint64(valueLogFlushDur.Nanoseconds()) + saturatingSubUint64(leafLogAppendWaitAfter, leafLogAppendWaitBefore)
 	db.checkpointStageLeafValueLogSync.record(time.Duration(leafValueLogSyncNs))
@@ -24421,6 +24599,9 @@ func (db *DB) Checkpoint() error {
 	// WriteSync only proves the command-WAL prefix when command WAL is enabled,
 	// and relaxed publication may only enqueue a root candidate, so explicitly
 	// wait through the backend checkpoint before trimming the command WAL.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	backendBoundaryStart := time.Now()
 	commitErr := backendSyncBoundary(db.backend)
 	recordCheckpointStageSince(&db.checkpointStageBackendBoundary, backendBoundaryStart)
@@ -24591,7 +24772,18 @@ func (db *DB) cleanupCommandWALCheckpoint(sync bool) error {
 	if cleanupHook == nil {
 		return nil
 	}
-	return cleanupHook(sync)
+	if err := cleanupHook(sync); err != nil {
+		// Command-WAL cleanup is opportunistic after this checkpoint has already
+		// established its durable boundary. A concurrent append/publication can
+		// invalidate only the deletion proof; retaining the WAL is safe and a
+		// later checkpoint will recapture it. Do not turn that expected retry
+		// condition into a sticky background error.
+		if errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (db *DB) canPiggybackCommandWALCheckpointPublish(sync bool) bool {
@@ -30315,11 +30507,18 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.iterator.queue_len_max"] = fmt.Sprintf("%d", db.iteratorQueueLenMax.Load())
 	stats["treedb.cache.point_successor.calls_total"] = fmt.Sprintf("%d", db.pointSuccessorCallsTotal.Load())
 	stats["treedb.cache.point_successor.hits_total"] = fmt.Sprintf("%d", db.pointSuccessorHitsTotal.Load())
+	stats["treedb.cache.point_successor.mutable_hits_total"] = fmt.Sprintf("%d", db.pointSuccessorMutableHitsTotal.Load())
+	stats["treedb.cache.point_successor.queue_hits_total"] = fmt.Sprintf("%d", db.pointSuccessorQueueHitsTotal.Load())
+	stats["treedb.cache.point_successor.backend_hits_total"] = fmt.Sprintf("%d", db.pointSuccessorBackendHitsTotal.Load())
 	stats["treedb.cache.point_successor.mutable_probes_total"] = fmt.Sprintf("%d", db.pointSuccessorMutableProbesTotal.Load())
 	stats["treedb.cache.point_successor.queue_probes_total"] = fmt.Sprintf("%d", db.pointSuccessorQueueProbesTotal.Load())
 	stats["treedb.cache.point_successor.backend_probes_total"] = fmt.Sprintf("%d", db.pointSuccessorBackendProbesTotal.Load())
 	stats["treedb.cache.point_successor.sources_total"] = fmt.Sprintf("%d", db.pointSuccessorSourcesTotal.Load())
 	stats["treedb.cache.point_successor.sources_max"] = fmt.Sprintf("%d", db.pointSuccessorSourcesMax.Load())
+	stats["treedb.cache.point_successor.selection_ns_total"] = fmt.Sprintf("%d", db.pointSuccessorSelectionNsTotal.Load())
+	stats["treedb.cache.point_successor.materialize_ns_total"] = fmt.Sprintf("%d", db.pointSuccessorMaterializeNsTotal.Load())
+	stats["treedb.cache.point_successor.selection_timing_samples_total"] = fmt.Sprintf("%d", db.pointSuccessorSelectionTimingSamplesTotal.Load())
+	stats["treedb.cache.point_successor.materialize_timing_samples_total"] = fmt.Sprintf("%d", db.pointSuccessorMaterializeTimingSamplesTotal.Load())
 	// This metric is an invariant sentinel for SeekGE, not a global iterator
 	// construction counter. It must stay zero because the point-successor path
 	// has no general-merge fallback; any future fallback must increment it at
@@ -33332,6 +33531,7 @@ type Batch struct {
 	entryRevision                page.EntryRevision
 	commandWALAppend             func() error
 	commandWALPreparedRevision   bool
+	commandWALMaterializedRID    bool
 	valueCopyShard               *memShard
 	appendOnlyDirectValueCopier  func([]byte) []byte
 
@@ -34430,6 +34630,7 @@ func (b *Batch) Reset() {
 	b.maxEntries = 0
 	b.commandWALAppend = nil
 	b.commandWALPreparedRevision = false
+	b.commandWALMaterializedRID = false
 	b.valueCopyShard = nil
 	b.commandWALCompactReplay = false
 	b.commandWALCompactRanges = nil
@@ -36113,6 +36314,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	needRotate := false
 	needSyncBarrier := false
 	commandWALAppended := false
+	b.commandWALMaterializedRID = false
 	var retainStableViewValueMems []memtable.Table
 	var stableViewValueLeaseBytes int64
 	stableViewValueLeaseFinalized := false
@@ -36298,11 +36500,12 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	valueLogEnabled := b.db.valueLogEnabled()
 
 	var (
-		eligibleIdxs       []int
-		eligibleCountTotal int
-		allowPointers      bool
-		eligibleCount      int
-		multiLanePointers  bool
+		eligibleIdxs                  []int
+		eligibleCountTotal            int
+		allowPointers                 bool
+		eligibleCount                 int
+		multiLanePointers             bool
+		materializeCommandWALPointers bool
 	)
 	if !allDeletes {
 		eligibleIdxs = b.eligibleIdxs
@@ -36331,6 +36534,9 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			allowPointers = false
 		}
 		eligibleCount = len(eligibleIdxs)
+		materializeCommandWALPointers = durability == journalDurabilitySync &&
+			allowPointers &&
+			b.commandWALCanMaterializeValueLogPointers(eligibleIdxs)
 		if debugPtr && eligibleCountTotal > 0 {
 			b.db.debugPtrEligible.Add(int64(eligibleCountTotal))
 			if !valueLogEnabled {
@@ -36340,6 +36546,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			}
 		}
 		multiLanePointers = allowPointers &&
+			!materializeCommandWALPointers &&
 			b.db.disableJournal &&
 			// journalDurabilityFlush is still an unsynced fast-path write. We widen
 			// multi-lane pointer batching to include it so unsynced importer batches
@@ -36355,20 +36562,31 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	)
 	needLaneForPointers := !allDeletes && !multiLanePointers && allowPointers
 	needLaneForJournal := !b.db.disableJournal
+	reserveLane := durability == journalDurabilitySync || materializeCommandWALPointers
 	if needLaneForPointers || needLaneForJournal {
-		l, err := b.db.pickLane(durability == journalDurabilitySync, -1)
+		l, err := b.db.pickLane(reserveLane, -1)
 		if err != nil {
 			unlockWriteMu()
 			return err
 		}
 		lane = l
-		if durability == journalDurabilitySync {
+		if reserveLane {
 			defer b.db.releaseLaneSync(lane)
 		}
 		if !b.db.disableJournal && allowPointers {
 			rids = make([]uint64, len(b.entries))
 		}
 	}
+	if materializeCommandWALPointers {
+		materializeCommandWALPointers = b.commandWALMaterializedRIDFitsCurrentValueLogSegment(lane, eligibleIdxs)
+		if materializeCommandWALPointers {
+			// The command frame carries both the reserved RID and the value
+			// bytes, so the value-log append is recoverable without becoming a
+			// stable dependency before the command-WAL acknowledgement.
+			durability = journalDurabilityNone
+		}
+	}
+	b.commandWALMaterializedRID = materializeCommandWALPointers
 
 	if !allDeletes && allowPointers && eligibleCount > 0 {
 		if multiLanePointers {
@@ -36472,7 +36690,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 					op := &b.entries[idx]
 					op.ValuePtr = lb.ptrs[i]
 					op.IsPtr = true
-					if b.db.memtableValueLogPointers {
+					if b.db.memtableValueLogPointers && !materializeCommandWALPointers {
 						op.Value = nil
 					}
 				}
@@ -36556,7 +36774,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 					op := &b.entries[idx]
 					op.ValuePtr = ptr
 					op.IsPtr = true
-					if b.db.memtableValueLogPointers {
+					if b.db.memtableValueLogPointers && !materializeCommandWALPointers {
 						op.Value = nil
 					}
 					used++
@@ -36623,11 +36841,30 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	}
 
 	if b.commandWALAppend != nil {
+		if b.commandWALMaterializedRID && b.db.memtableValueLogPointers {
+			for _, idx := range b.ptrValueIdxs {
+				if idx < 0 || idx >= len(b.entries) {
+					unlockWriteMu()
+					return fmt.Errorf("cachingdb: ptr value entry index %d out of range", idx)
+				}
+			}
+		}
 		if err := b.commandWALAppend(); err != nil {
 			unlockWriteMu()
 			return err
 		}
 		commandWALAppended = true
+		if b.commandWALMaterializedRID && b.db.memtableValueLogPointers {
+			// SetMaterializedRID needs the value through the callback above. The
+			// pointer-in-memtable representation needs only ValuePtr, so clear the
+			// serialization copy before any sorted/steal publication path can take
+			// ownership of it.
+			for _, idx := range b.ptrValueIdxs {
+				if b.entries[idx].IsPtr {
+					b.entries[idx].Value = nil
+				}
+			}
+		}
 	}
 
 	if !allDeletes {
@@ -36975,6 +37212,79 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	return nil
 }
 
+func (b *Batch) commandWALCanMaterializeValueLogPointers(eligibleIdxs []int) bool {
+	if b == nil || b.db == nil || b.commandWALAppend == nil || !b.db.externalCommandWAL ||
+		len(eligibleIdxs) == 0 || len(b.entries) == 0 || len(b.entries) > commandWALMaterializedRIDMaxOps {
+		return false
+	}
+	capBytes := b.db.walMaxSegmentBytes
+	if capBytes <= 0 {
+		capBytes = commandWALDefaultMaxSegmentBytes
+	}
+	if capBytes > commandWALMaterializedRIDMaxBatchBytes {
+		capBytes = commandWALMaterializedRIDMaxBatchBytes
+	}
+	estimated := int64(commandWALMaterializedRIDFrameReserve)
+	for i, idx := range eligibleIdxs {
+		if idx < 0 || idx >= len(b.entries) {
+			return false
+		}
+		if i > 0 && idx <= eligibleIdxs[i-1] {
+			return false
+		}
+		if len(b.entries[idx].Value) == 0 || len(b.entries[idx].Value) > commandWALMaterializedRIDMaxValueBytes {
+			return false
+		}
+	}
+	eligibleCursor := 0
+	for i := range b.entries {
+		entry := &b.entries[i]
+		delta := int64(commandWALMaterializedRIDOpOverhead) + int64(len(entry.Key))
+		if entry.Type == batch.OpPut {
+			delta += int64(len(entry.Value))
+			if eligibleCursor < len(eligibleIdxs) && eligibleIdxs[eligibleCursor] == i {
+				eligibleCursor++
+			}
+		} else if entry.Type == batch.OpDeleteRange {
+			delta += int64(len(entry.Value))
+		}
+		if delta > capBytes-estimated {
+			return false
+		}
+		estimated += delta
+	}
+	return eligibleCursor == len(eligibleIdxs) && estimated <= capBytes
+}
+
+func (b *Batch) commandWALMaterializedRIDFitsCurrentValueLogSegment(l *lane, eligibleIdxs []int) bool {
+	if b == nil || b.db == nil || l == nil || len(eligibleIdxs) == 0 {
+		return false
+	}
+	maxBytes := b.db.valueLogMaxSegmentBytesForLane(l)
+	if maxBytes <= 0 {
+		return true
+	}
+	estimated := int64(commandWALMaterializedRIDVLogReserve)
+	for _, idx := range eligibleIdxs {
+		if idx < 0 || idx >= len(b.entries) {
+			return false
+		}
+		entry := &b.entries[idx]
+		delta := int64(commandWALMaterializedRIDVLogOpOverhead) + int64(len(entry.Key)) + int64(len(entry.Value))
+		if delta > maxBytes-estimated {
+			return false
+		}
+		estimated += delta
+	}
+	l.vlogMu.Lock()
+	defer l.vlogMu.Unlock()
+	if l.vlog == nil {
+		return true
+	}
+	size := l.vlog.Size()
+	return size <= maxBytes-estimated
+}
+
 type logSegmentInfo struct {
 	path     string
 	size     int64
@@ -37072,7 +37382,7 @@ func listNonEmptySplitLogSegments(walDir, valueLogDir, leafLogDir string) (segme
 
 func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
 	var maxRID uint64
-	for _, seg := range ridSeedValueLogSegments(segments) {
+	for _, seg := range segments {
 		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 {
 			continue
 		}
@@ -37107,32 +37417,6 @@ func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
 		}
 	}
 	return maxRID, nil
-}
-
-func ridSeedValueLogSegments(segments []logSegmentInfo) []logSegmentInfo {
-	if len(segments) == 0 {
-		return nil
-	}
-	out := make([]logSegmentInfo, 0, len(segments))
-	for _, seg := range segments {
-		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 {
-			continue
-		}
-		if seg.lane == leafLogLaneID {
-			out = append(out, seg)
-		}
-	}
-	out = append(out, tailValueLogSegmentsByLaneExcept(segments, leafLogLaneID)...)
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].lane != out[j].lane {
-			return out[i].lane < out[j].lane
-		}
-		if out[i].seq != out[j].seq {
-			return out[i].seq < out[j].seq
-		}
-		return out[i].path < out[j].path
-	})
-	return out
 }
 
 func tailValueLogSegmentsByLane(segments []logSegmentInfo) []logSegmentInfo {
@@ -37493,6 +37777,7 @@ func (b *Batch) Close() error {
 	b.commandWALCompactReplay = false
 	b.commandWALCompactRanges = nil
 	b.commandWALCompactPointStart = 0
+	b.commandWALMaterializedRID = false
 	return nil
 }
 
@@ -37521,6 +37806,9 @@ func (b *Batch) Replay(fn func(batch.Entry) error) error {
 			pointStart = len(b.entries)
 		}
 		for _, entry := range b.entries[pointStart:] {
+			if entry.IsPtr && !b.commandWALMaterializedRID {
+				entry.Value = nil
+			}
 			if err := fn(entry); err != nil {
 				return err
 			}
@@ -37529,6 +37817,9 @@ func (b *Batch) Replay(fn func(batch.Entry) error) error {
 	}
 
 	for _, entry := range b.entries {
+		if entry.IsPtr && !b.commandWALMaterializedRID {
+			entry.Value = nil
+		}
 		if err := fn(entry); err != nil {
 			return err
 		}

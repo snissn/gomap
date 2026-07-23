@@ -207,6 +207,10 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 			_ = columnDelta.Iter.Close()
 			return nil, fmt.Errorf("collections: register column publish durable requirements: %w", err)
 		}
+		if err := ctx.RegisterDurableLogicalObligationMutation(plan.durableResourceMutation); err != nil {
+			_ = columnDelta.Iter.Close()
+			return nil, fmt.Errorf("collections: register column publish durable mutation: %w", err)
+		}
 		if err := ctx.RegisterDurableResources(plan.takeStableResources()); err != nil {
 			_ = columnDelta.Iter.Close()
 			return nil, fmt.Errorf("collections: register column publish durable resources: %w", err)
@@ -346,6 +350,13 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 				cleanupColumnDelta = nil
 			}
 			return nil, fmt.Errorf("collections: register column publish durable requirements: %w", err)
+		}
+		if err := ctx.RegisterDurableLogicalObligationMutation(plan.durableResourceMutation); err != nil {
+			if cleanupColumnDelta != nil {
+				cleanupColumnDelta()
+				cleanupColumnDelta = nil
+			}
+			return nil, fmt.Errorf("collections: register column publish durable mutation: %w", err)
 		}
 		if err := ctx.RegisterDurableResources(plan.takeStableResources()); err != nil {
 			if cleanupColumnDelta != nil {
@@ -631,6 +642,29 @@ func recordColumnPublishTiming(stats *CollectionInsertStats, timing backenddb.Co
 	stats.ColumnPublishFinalize += timing.Finalize
 	stats.ColumnPublishFinalizePrepareDurability += timing.FinalizePrepareDurability
 	stats.ColumnPublishFinalizeCandidateBuild += timing.FinalizeCandidateBuild
+	stats.ColumnPublishFinalizeCandidateVisibleBaseClone += timing.FinalizeCandidateVisibleBaseClone
+	stats.ColumnPublishFinalizeCandidateInheritedFilter += timing.FinalizeCandidateInheritedFilter
+	stats.ColumnPublishFinalizeCandidateFreshCapture += timing.FinalizeCandidateFreshCapture
+	stats.ColumnPublishFinalizeCandidateClosureAssemble += timing.FinalizeCandidateClosureAssemble
+	stats.ColumnPublishFinalizeCandidateVisibleClone += timing.FinalizeCandidateVisibleClone
+	stats.ColumnPublishFinalizeCandidateCOWPrepare += timing.FinalizeCandidateCOWPrepare
+	stats.ColumnPublishFinalizeCandidateOther += timing.FinalizeCandidateOther
+	work := timing.FinalizeCandidateResourceWork
+	stats.ColumnPublishFinalizeCandidateResourceWork.Add(ColumnPublishCandidateResourceWork{
+		CloneOperations: work.CloneOperations, FreezeOperations: work.FreezeOperations,
+		RequirementFieldsInspected: work.RequirementFieldsInspected, RequirementObligationsInspected: work.RequirementObligationsInspected,
+		SourceEntriesInspected: work.SourceEntriesInspected, SourceObligationsInspected: work.SourceObligationsInspected,
+		RetainedEntries: work.RetainedEntries, RetainedObligations: work.RetainedObligations,
+		DroppedEntries: work.DroppedEntries, DroppedObligations: work.DroppedObligations,
+		CopiedEntries: work.CopiedEntries, CopiedObligations: work.CopiedObligations,
+		PhysicalHandleCopies: work.PhysicalHandleCopies, LogicalObligationNormalizations: work.LogicalObligationNormalizations,
+		RetainedIndexNodeVisits: work.RetainedIndexNodeVisits, RetainedIndexNodeCopies: work.RetainedIndexNodeCopies,
+		LogicalIndexNodesAdmitted: work.LogicalIndexNodesAdmitted, NewlyAdmittedEntries: work.NewlyAdmittedEntries,
+		NewlyAdmittedObligations: work.NewlyAdmittedObligations, RemovedObligations: work.RemovedObligations,
+		AppendOnlyFastPath:  work.AppendOnlyFastPath,
+		AppendOnlyFallbacks: work.AppendOnlyFallbacks, DestructiveFallbacks: work.DestructiveFallbacks,
+		FullClosureValidations: work.FullClosureValidations,
+	})
 	stats.ColumnPublishFinalizeEnqueueActivation += timing.FinalizeEnqueueActivation
 	stats.ColumnPublishFinalizeAdmissionWait += timing.FinalizeAdmissionWait
 	stats.ColumnPublishFinalizeDurabilityWait += timing.FinalizeDurabilityWait

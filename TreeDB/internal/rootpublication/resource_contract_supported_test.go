@@ -16,6 +16,18 @@ func TestCloneStableResourceSetFiltersExactLogicalObligationClosure(t *testing.T
 	testCloneStableResourceSetFiltersExactLogicalObligationClosure(t)
 }
 
+func TestCloneStableResourceSetReportsPhysicalAndLogicalWorkSeparately(t *testing.T) {
+	testCloneStableResourceSetReportsPhysicalAndLogicalWorkSeparately(t)
+}
+
+func TestAppendOnlyResourceClosureCloneWorkIsBoundedByMutation(t *testing.T) {
+	testAppendOnlyResourceClosureCloneWorkIsBoundedByMutation(t)
+}
+
+func TestLogicalObligationRemovalMutationUsesExactFilter(t *testing.T) {
+	testLogicalObligationRemovalMutationUsesExactFilter(t)
+}
+
 func TestStableResourceSetRejectsDataStableNamespaceUnstable(t *testing.T) {
 	testStableResourceSetRejectsDataStableNamespaceUnstable(t)
 }

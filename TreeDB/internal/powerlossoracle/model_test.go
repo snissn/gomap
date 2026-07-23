@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestCaptureOmitsProcessLocalLock(t *testing.T) {
@@ -282,6 +283,49 @@ func TestObserveNewFileDirectorySyncPromotesExactDirectoryChildren(t *testing.T)
 	}
 }
 
+func TestObserveCreatedDirectoryChildSyncPromotesEntryNotContents(t *testing.T) {
+	root := t.TempDir()
+	model, err := Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := filepath.Join(root, "created")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Observe(root, durabilitycut.Event{
+		Resource:  durabilitycut.ResourceAuxiliary,
+		Namespace: durabilitycut.NamespaceCreate,
+		Root:      root,
+		NewPath:   child,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(child, "still-volatile")
+	if err := os.WriteFile(file, []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Observe(root, durabilitycut.Event{
+		Point:            durabilitycut.AfterNewFileDirectorySync,
+		Resource:         durabilitycut.ResourceAuxiliary,
+		Root:             child,
+		Path:             child,
+		CreatedDirectory: child,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	crashDir := t.TempDir()
+	if err := model.MaterializeStable(crashDir); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(filepath.Join(crashDir, "created")); err != nil || !info.IsDir() {
+		t.Fatalf("stable created directory info=%v err=%v", info, err)
+	}
+	if _, err := os.Stat(filepath.Join(crashDir, "created", "still-volatile")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("child-handle creation sync persisted directory contents: %v", err)
+	}
+}
+
 func TestStableAndVolatileBytesAreIndependent(t *testing.T) {
 	source := t.TempDir()
 	if err := os.WriteFile(filepath.Join(source, "index.db"), []byte("old"), 0o644); err != nil {
@@ -354,7 +398,7 @@ func TestMaterializeVolatileWritesProcessVisibleImage(t *testing.T) {
 	}
 }
 
-func TestNestedCreateRequiresStableAncestorChain(t *testing.T) {
+func TestNestedCreateBecomesReachableOnlyAfterStableAncestorChain(t *testing.T) {
 	model := newModel()
 	if err := model.Create("a/b/value", []byte("stable")); err != nil {
 		t.Fatal(err)
@@ -362,10 +406,17 @@ func TestNestedCreateRequiresStableAncestorChain(t *testing.T) {
 	if err := model.SyncFile("a/b/value"); err != nil {
 		t.Fatal(err)
 	}
-	if err := model.SyncDir("a/b"); err == nil {
-		t.Fatal("SyncDir(a/b) succeeded before parent entries were stable")
+	if err := model.SyncDir("a/b"); err != nil {
+		t.Fatalf("SyncDir(a/b): %v", err)
 	}
-	for _, dir := range []string{".", "a", "a/b"} {
+	unreachable := t.TempDir()
+	if err := model.MaterializeStable(unreachable); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(unreachable, "a")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unreachable stable child materialized before ancestor sync: %v", err)
+	}
+	for _, dir := range []string{".", "a"} {
 		if err := model.SyncDir(dir); err != nil {
 			t.Fatalf("SyncDir(%q): %v", dir, err)
 		}
@@ -377,6 +428,110 @@ func TestNestedCreateRequiresStableAncestorChain(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(crashDir, "a", "b", "value"))
 	if err != nil || string(got) != "stable" {
 		t.Fatalf("nested stable value=%q err=%v", got, err)
+	}
+}
+
+func TestStableFingerprintExcludesUnreachableDurableSubtree(t *testing.T) {
+	model := newModel()
+	want := model.StableFingerprint()
+	if err := model.Create("a/b/value", []byte("stable")); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.SyncFile("a/b/value"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.SyncDir("a/b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.SyncDir("a"); err != nil {
+		t.Fatal(err)
+	}
+	if got := model.StableFingerprint(); got != want {
+		t.Fatalf("unreachable durable subtree changed stable fingerprint: got=%s want=%s", got, want)
+	}
+	model.Crash()
+	if got := model.StableFingerprint(); got != want {
+		t.Fatalf("crash projection changed stable fingerprint: got=%s want=%s", got, want)
+	}
+}
+
+func TestSyncDirReplacementPrunesOldDurableSubtree(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "dir", "old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "dir", "old", "value"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	model, err := Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldIdentity := model.stableDirs["dir"]
+	if err := os.RemoveAll(filepath.Join(root, "dir")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Overlay(root); err != nil {
+		t.Fatal(err)
+	}
+	newIdentity := model.volatileDirs["dir"]
+	if !validStableIdentity(oldIdentity) || !validStableIdentity(newIdentity) || rootpublication.SamePhysicalIdentity(oldIdentity, newIdentity) {
+		t.Skip("filesystem does not expose distinct stable directory identities")
+	}
+	if err := model.SyncDir("."); err != nil {
+		t.Fatal(err)
+	}
+	crashDir := t.TempDir()
+	if err := model.MaterializeStable(crashDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(crashDir, "dir", "old", "value")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replacement retained old durable subtree: %v", err)
+	}
+	if info, err := os.Stat(filepath.Join(crashDir, "dir")); err != nil || !info.IsDir() {
+		t.Fatalf("replacement directory missing from stable image: info=%v err=%v", info, err)
+	}
+}
+
+func TestSyncDirSyntheticReplacementPrunesOldDurableSubtree(t *testing.T) {
+	model := newModel()
+	if err := model.Create("dir/old/value", []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.SyncFile("dir/old/value"); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{"dir/old", "dir", "."} {
+		if err := model.SyncDir(dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldIdentity := model.stableDirs["dir"]
+	if err := model.Unlink("dir"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Create("dir/new/value", []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	newIdentity := model.volatileDirs["dir"]
+	if !validStableIdentity(oldIdentity) || !validStableIdentity(newIdentity) || rootpublication.SamePhysicalIdentity(oldIdentity, newIdentity) {
+		t.Fatalf("synthetic directory replacement identities old=%+v new=%+v", oldIdentity, newIdentity)
+	}
+	if err := model.SyncDir("."); err != nil {
+		t.Fatal(err)
+	}
+	crashDir := t.TempDir()
+	if err := model.MaterializeStable(crashDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(crashDir, "dir", "old", "value")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("synthetic replacement retained old durable subtree: %v", err)
+	}
+	if info, err := os.Stat(filepath.Join(crashDir, "dir")); err != nil || !info.IsDir() {
+		t.Fatalf("synthetic replacement directory missing from stable image: info=%v err=%v", info, err)
 	}
 }
 
@@ -420,6 +575,75 @@ func TestRenameOverwritePreservesInodeUntilDestinationDirectorySync(t *testing.T
 	}
 	if _, err := os.Stat(filepath.Join(after, "dir", "source")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("post-sync source err=%v want not-exist", err)
+	}
+}
+
+func TestObservedRenameRecoversSourceDetachedByEarlierOverlay(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "health.json")
+	if err := os.WriteFile(target, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	model, err := Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tmp := filepath.Join(root, "health.json.tmp.1")
+	if err := os.WriteFile(tmp, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Observe(root, durabilitycut.Event{
+		Namespace: durabilitycut.NamespaceCreate,
+		NewPath:   tmp,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tmp, []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Observe(root, durabilitycut.Event{
+		Point: durabilitycut.AfterDependencyFileSync,
+		Path:  tmp,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, target); err != nil {
+		t.Fatal(err)
+	}
+
+	// A callback from another concurrent producer can observe the physical
+	// post-rename namespace before this rename's own callback is serialized.
+	if err := model.Observe(root, durabilitycut.Event{Point: durabilitycut.BeforeUserspaceFlush}); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Observe(root, durabilitycut.Event{
+		Namespace: durabilitycut.NamespaceRename,
+		OldPath:   tmp,
+		NewPath:   target,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	before := t.TempDir()
+	if err := model.MaterializeStable(before); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(before, "health.json")); err != nil || string(got) != "old" {
+		t.Fatalf("pre-directory-sync target=%q err=%v want old", got, err)
+	}
+	if err := model.Observe(root, durabilitycut.Event{
+		Point: durabilitycut.AfterNewFileDirectorySync,
+		Path:  root,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after := t.TempDir()
+	if err := model.MaterializeStable(after); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(after, "health.json")); err != nil || string(got) != "new" {
+		t.Fatalf("post-directory-sync target=%q err=%v want new", got, err)
 	}
 }
 

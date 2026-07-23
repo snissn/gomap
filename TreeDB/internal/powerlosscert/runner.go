@@ -437,7 +437,7 @@ func requirePullRequestProvenance(repoRoot, repositorySHA string, pullRequests [
 				if len(parents) != 2 {
 					return fmt.Errorf("%s head_sha=%s is not a non-first merge parent and does not produce the exact squash merge tree for merge_sha=%s", prefix, pr.HeadSHA, pr.MergeSHA)
 				}
-				prospectiveTree, err := commandOutputWithEnvironment(repoRoot, gitEnvironment, gitBinary, "merge-tree", "--write-tree", parents[1], pr.HeadSHA)
+				prospectiveTree, err := prospectiveSquashMergeTree(repoRoot, gitEnvironment, gitBinary, parents[1], pr.HeadSHA)
 				if err != nil {
 					return fmt.Errorf("%s compute exact squash merge tree from head_sha=%s: %w", prefix, pr.HeadSHA, err)
 				}
@@ -450,6 +450,53 @@ func requirePullRequestProvenance(repoRoot, repositorySHA string, pullRequests [
 		previousMergeSHA = pr.MergeSHA
 	}
 	return nil
+}
+
+// prospectiveSquashMergeTree computes the tree produced by applying head to
+// parent without committing it. Git 2.38 added merge-tree --write-tree; older
+// trusted system Git versions use an isolated clone so certification keeps the
+// same exact-tree provenance gate without mutating the candidate repository.
+func prospectiveSquashMergeTree(repoRoot string, gitEnvironment []string, gitBinary, parent, head string) (string, error) {
+	prospectiveTree, fastErr := commandOutputWithEnvironment(repoRoot, gitEnvironment, gitBinary, "merge-tree", "--write-tree", parent, head)
+	if fastErr == nil {
+		return prospectiveTree, nil
+	}
+	prospectiveTree, err := prospectiveSquashMergeTreeFallback(repoRoot, gitEnvironment, gitBinary, parent, head)
+	if err != nil {
+		return "", fmt.Errorf("fast merge-tree failed (%v); isolated fallback failed: %w", fastErr, err)
+	}
+	return prospectiveTree, nil
+}
+
+func prospectiveSquashMergeTreeFallback(repoRoot string, gitEnvironment []string, gitBinary, parent, head string) (string, error) {
+	privateRoot, err := os.MkdirTemp("", "treedb-power-loss-cert-merge-tree-*")
+	if err != nil {
+		return "", fmt.Errorf("create isolated merge-tree checkout: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(privateRoot) }()
+	checkout := filepath.Join(privateRoot, "checkout")
+	if _, err := commandOutputWithEnvironment("", gitEnvironment, gitBinary, "clone", "--no-checkout", "--shared", "--", repoRoot, checkout); err != nil {
+		return "", fmt.Errorf("clone isolated merge-tree checkout: %w", err)
+	}
+	if _, err := commandOutputWithEnvironment(checkout, gitEnvironment, gitBinary, "checkout", "--detach", parent); err != nil {
+		return "", fmt.Errorf("checkout merge parent %s: %w", parent, err)
+	}
+	if _, err := commandOutputWithEnvironment(
+		checkout,
+		gitEnvironment,
+		gitBinary,
+		"-c", "user.name=TreeDB power-loss certification",
+		"-c", "user.email=powerlosscert@example.invalid",
+		"-c", "commit.gpgSign=false",
+		"merge", "--no-commit", "--no-ff", head,
+	); err != nil {
+		return "", fmt.Errorf("merge head %s: %w", head, err)
+	}
+	prospectiveTree, err := commandOutputWithEnvironment(checkout, gitEnvironment, gitBinary, "write-tree")
+	if err != nil {
+		return "", fmt.Errorf("write isolated prospective tree: %w", err)
+	}
+	return prospectiveTree, nil
 }
 
 func requireEmptyOutputRoot(root string) error {
@@ -674,6 +721,9 @@ func executeRunCase(outputRoot string, plan RunPlan, runCase RunCase, binary Art
 		"TREEDB_POWERLOSS_REOPEN_MODE":      runCase.ReopenMode,
 		powerLossProfileEnv:                 runCase.Profile,
 	}
+	if runCase.ReplayWindow != "" {
+		env[powerLossReplayWindowEnv] = runCase.ReplayWindow
+	}
 	ledgerPath := filepath.Join(outputRoot, "inputs", "power_loss_counterexamples.json")
 	if _, err := os.Stat(ledgerPath); err == nil {
 		env["TREEDB_POWERLOSS_COUNTEREXAMPLE_LEDGER"] = "inputs/power_loss_counterexamples.json"
@@ -852,7 +902,7 @@ func environmentList(values map[string]string) []string {
 
 func validateExecutedRecovery(runCase RunCase, trace operationTraceArtifact, recovery recoveryTraceArtifact) error {
 	prefix := fmt.Sprintf("powerlosscert: case %q", runCase.ID)
-	if trace.CutID != runCase.CutID || trace.VariantID != runCase.VariantID || trace.Seed != strconv.FormatUint(runCase.Seed, 10) || trace.DeclaredCutPoint != runCase.CutPoint {
+	if trace.CutID != runCase.CutID || trace.VariantID != runCase.VariantID || trace.Seed != strconv.FormatUint(runCase.Seed, 10) || trace.DeclaredCutPoint != runCase.CutPoint || trace.ReplayWindow != runCase.ReplayWindow {
 		return fmt.Errorf("%s operation trace does not match the frozen replay selector", prefix)
 	}
 	_, occurrence, err := parseCutAddress(runCase.CutID)
@@ -867,8 +917,12 @@ func validateExecutedRecovery(runCase RunCase, trace operationTraceArtifact, rec
 		return fmt.Errorf("%s recovery read_only=%t want=%t", prefix, recovery.ReadOnly, wantReadOnly)
 	}
 	want := runCase.ExpectedRecovery
-	if recovery.Rejected != want.Rejected || recovery.ErrorType != want.ErrorType || recovery.CommitSeq != want.CommitSeq || recovery.AppliedLSN != want.AppliedLSN {
-		return fmt.Errorf("%s recovery=(rejected=%t error_type=%q commit=%d applied=%d) want=(rejected=%t error_type=%q commit=%d applied=%d)", prefix, recovery.Rejected, recovery.ErrorType, recovery.CommitSeq, recovery.AppliedLSN, want.Rejected, want.ErrorType, want.CommitSeq, want.AppliedLSN)
+	wantDir, err := normalizeRecoveryDir(want.Dir)
+	if err != nil {
+		return fmt.Errorf("%s: %w", prefix, err)
+	}
+	if recovery.Dir != wantDir || recovery.Rejected != want.Rejected || recovery.ErrorType != want.ErrorType || recovery.CommitSeq != want.CommitSeq || recovery.AppliedLSN != want.AppliedLSN {
+		return fmt.Errorf("%s recovery=(dir=%q rejected=%t error_type=%q commit=%d applied=%d) want=(dir=%q rejected=%t error_type=%q commit=%d applied=%d)", prefix, recovery.Dir, recovery.Rejected, recovery.ErrorType, recovery.CommitSeq, recovery.AppliedLSN, wantDir, want.Rejected, want.ErrorType, want.CommitSeq, want.AppliedLSN)
 	}
 	if recovery.Rejected && recovery.Error == "" {
 		return fmt.Errorf("%s rejected recovery has no error text", prefix)
@@ -879,7 +933,11 @@ func validateExecutedRecovery(runCase RunCase, trace operationTraceArtifact, rec
 	if err := validateRecoveryStats(recovery, runCase.Profile); err != nil {
 		return fmt.Errorf("%s: %w", prefix, err)
 	}
-	if got := observedWitnessState(recovery); got != runCase.State {
+	got, err := observedWitnessStateForComparison(recovery, runCase.StateComparison)
+	if err != nil {
+		return fmt.Errorf("%s: %w", prefix, err)
+	}
+	if got != runCase.State {
 		return fmt.Errorf("%s observed recovery state=%+v want frozen state=%+v", prefix, got, runCase.State)
 	}
 	return nil
@@ -909,6 +967,58 @@ func observedWitnessState(recovery recoveryTraceArtifact) WitnessState {
 		CleanupPins: fmt.Sprintf("slot0_commit_seq=%s slot1_commit_seq=%s",
 			stat("treedb.durable_root.slot0.commit_seq"), stat("treedb.durable_root.slot1.commit_seq")),
 	}
+}
+
+func observedWitnessStateForComparison(recovery recoveryTraceArtifact, comparison string) (WitnessState, error) {
+	if comparison == stateComparisonExact {
+		return observedWitnessState(recovery), nil
+	}
+	if comparison != stateComparisonLogicalHorizon {
+		return WitnessState{}, fmt.Errorf("invalid state comparison %q", comparison)
+	}
+	if recovery.Rejected {
+		return WitnessState{}, fmt.Errorf("logical-horizon state comparison requires accepted recovery")
+	}
+	stat := func(key string) string { return recovery.Stats[key] }
+	selectedSlot := stat("treedb.durable_root.selected_slot")
+	selectedCommit := stat("treedb.durable_root.commit_seq")
+	var selectedSlotCommit, fallbackCommit string
+	switch selectedSlot {
+	case "0":
+		selectedSlotCommit = stat("treedb.durable_root.slot0.commit_seq")
+		fallbackCommit = stat("treedb.durable_root.slot1.commit_seq")
+	case "1":
+		selectedSlotCommit = stat("treedb.durable_root.slot1.commit_seq")
+		fallbackCommit = stat("treedb.durable_root.slot0.commit_seq")
+	default:
+		return WitnessState{}, fmt.Errorf("logical-horizon state has invalid selected slot %q", selectedSlot)
+	}
+	if selectedCommit == "" || fallbackCommit == "" {
+		return WitnessState{}, fmt.Errorf("logical-horizon state is missing selected or fallback commit sequence")
+	}
+	if selectedSlotCommit != selectedCommit {
+		return WitnessState{}, fmt.Errorf("logical-horizon state selected slot commit=%q does not match durable root commit=%q", selectedSlotCommit, selectedCommit)
+	}
+	selectedCommitNumber, selectedErr := strconv.ParseUint(selectedCommit, 10, 64)
+	fallbackCommitNumber, fallbackErr := strconv.ParseUint(fallbackCommit, 10, 64)
+	if selectedErr != nil || fallbackErr != nil || selectedCommitNumber <= fallbackCommitNumber {
+		return WitnessState{}, fmt.Errorf("logical-horizon state has invalid selected/fallback commits %q/%q", selectedCommit, fallbackCommit)
+	}
+	freelistGeneration, err := strconv.ParseUint(stat("treedb.durable_root.freelist.generation"), 10, 64)
+	if err != nil || freelistGeneration == 0 {
+		return WitnessState{}, fmt.Errorf("logical-horizon state has invalid freelist generation %q", stat("treedb.durable_root.freelist.generation"))
+	}
+	return WitnessState{
+		RootMetaGeneration: fmt.Sprintf("selected_commit_seq=%s fallback_commit_seq=%s", selectedCommit, fallbackCommit),
+		FreelistGeneration: "generation=persisted",
+		ExternalFrontiers: fmt.Sprintf("stable_image_tree_artifact=stable_image_tree.json manifest_entries=%s",
+			stat("treedb.durable_root.manifest.entries")),
+		NamespaceGeneration: "stable_image_tree_artifact=stable_image_tree.json",
+		WALLineage:          fmt.Sprintf("profile=%s applied_lsn=%s", stat("treedb.profile.resolved"), stat("treedb.applied_command_lsn")),
+		DurableLSN: fmt.Sprintf("durable_wal_lsn=%s durable_root_commit_seq=%s",
+			stat("treedb.command_wal.durable_wal_lsn"), selectedCommit),
+		CleanupPins: fmt.Sprintf("selected_commit_seq=%s fallback_commit_seq=%s", selectedCommit, fallbackCommit),
+	}, nil
 }
 
 func buildChildManifest(plan RunPlan, outputRoot string, binaries map[string]Artifact, executed []executedCase, performanceSHA string) (ChildManifest, error) {
@@ -941,6 +1051,14 @@ func buildChildManifest(plan RunPlan, outputRoot string, binaries map[string]Art
 		if err != nil {
 			return ChildManifest{}, err
 		}
+		expectedRecoveryDir, err := normalizeRecoveryDir(runCase.ExpectedRecovery.Dir)
+		if err != nil {
+			return ChildManifest{}, fmt.Errorf("powerlosscert: case %q: %w", runCase.ID, err)
+		}
+		state, err := observedWitnessStateForComparison(result.recovery, runCase.StateComparison)
+		if err != nil {
+			return ChildManifest{}, fmt.Errorf("powerlosscert: case %q: %w", runCase.ID, err)
+		}
 		witness := Witness{
 			ID:                     runCase.ID,
 			EvidenceTier:           EvidenceTierModeledCrash,
@@ -955,7 +1073,10 @@ func buildChildManifest(plan RunPlan, outputRoot string, binaries map[string]Art
 			ExpectedOutcome:        runCase.ExpectedOutcome,
 			ActualOutcome:          runCase.ExpectedOutcome,
 			TypedError:             runCase.ExpectedTypedError,
-			State:                  observedWitnessState(result.recovery),
+			ExpectedRecoveryDir:    expectedRecoveryDir,
+			State:                  state,
+			StateComparison:        runCase.StateComparison,
+			ReplayWindow:           runCase.ReplayWindow,
 			CounterexampleID:       runCase.CounterexampleID,
 			NegativeControlID:      runCase.NegativeControlID,
 			Seed:                   runCase.Seed,

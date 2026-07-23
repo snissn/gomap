@@ -107,8 +107,9 @@ type DB struct {
 	pruner                         pruneWorker
 	leafGenerationPins             leafGenerationPinTracker
 	// Test hooks used for exact compaction phase-boundary coordination.
-	compactStorageBeforePhase func(string)
-	compactStorageAfterPhase  func(string)
+	compactStorageBeforePhase           func(string)
+	compactStorageAfterPhase            func(string)
+	compactStorageVacuumIndexOnlineHook func(context.Context, bool) error
 	// Test hook used to observe whether fenced value-log reclaim resolved
 	// referenced segments through the tracker or the full-scan fallback.
 	compactStorageFencedValueLogRefHook func(compactStorageFencedValueLogRefEvent)
@@ -224,6 +225,7 @@ type DB struct {
 	vacuumBeforeRecorderFenceHook func()
 	vacuumPagerSyncHook           func(vacuumPagerSyncPhase)
 	vacuumPreflushHook            func() error
+	vacuumReplacementRuntimeHook  func(*rootPublicationRuntimeV1) error
 	meta                          page.MetaPageBody
 	metaPageID                    uint64
 	durableRoot                   durableRootRuntimeV1
@@ -547,6 +549,7 @@ type DB struct {
 	testAfterOptimisticBaseCaptureHook             func()
 	testAfterOptimisticApplyHook                   func()
 	testAfterOptimisticPublishPrepareHook          func()
+	testCommandWALAfterBuilderAcquireHook          func()
 	testCommandWALBeforeDurablePublishLockHook     func()
 	testCommandWALCleanupAfterScanHook             func()
 	testBeforeFinalizeCommitHook                   func()
@@ -1428,7 +1431,7 @@ type Options struct {
 	// WALMaxSegmentBytes, which remains a per-frame payload cap. 0 disables
 	// runtime command-WAL rotation.
 	CommandWALSegmentTargetBytes int64
-	// JournalCompression enables best-effort zstd compression for cached-mode
+	// JournalCompression enables best-effort zstd compression for generic cached-mode
 	// journal/commitlog segments (metadata only).
 	//
 	// The redo log will only keep compressed bytes when they are smaller than the
@@ -3324,7 +3327,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	// below then seals new old-generation readers before reuse is sampled.
 	var durableResources *rootpublication.StableResourceSet
 	if db.durableRoot.pending == nil {
-		durableResources, err = db.captureDurableRootResourcesV1(idx, nextMeta, vlogRefDelta, opts.durableResources, opts.durableResourceRequirements, opts.valueLogPublicationLocked)
+		durableResources, err = db.captureDurableRootResourcesV1(idx, nextMeta, vlogRefDelta, opts.durableResources, opts.durableResourceRequirements, opts.durableResourceMutation, opts.valueLogPublicationLocked, opts.publishTiming)
 		if err != nil {
 			return post, wrapFinalizeCommitError(fmt.Errorf("capture durable-root dependencies: %w", err), true)
 		}

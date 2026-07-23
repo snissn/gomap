@@ -5,6 +5,7 @@ package powerlossoracle
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -84,10 +85,18 @@ type ByteRange struct{ Offset, Length int64 }
 // names that survive power loss. Names reference inode identities so that file
 // sync followed by rename and directory sync has realistic semantics.
 type Model struct {
-	nextID           uint64
-	inodes           map[uint64]*inode
-	volatile         map[string]uint64
-	stable           map[string]uint64
+	nextID    uint64
+	nextDirID uint64
+	inodes    map[uint64]*inode
+	volatile  map[string]uint64
+	stable    map[string]uint64
+	// overlayDetached retains the inode behind a process-visible name that a
+	// post-operation scan no longer sees. Concurrent producers can complete a
+	// rename before their synchronous observation callbacks acquire the test's
+	// serialization lock; a different callback may therefore overlay the
+	// destination first. Keeping the detached source lets the later explicit
+	// rename preserve prior file-sync state instead of inventing a new inode.
+	overlayDetached  map[string]uint64
 	volatileDirs     map[string]rootpublication.StableIdentity
 	stableDirs       map[string]rootpublication.StableIdentity
 	excludeLockFiles bool
@@ -175,12 +184,15 @@ func capture(root string, excludeLockFiles bool, excluded []string) (*Model, err
 }
 
 func newModel() *Model {
+	rootIdentity := syntheticDirectoryIdentity(1)
 	return &Model{
-		inodes:       make(map[uint64]*inode),
-		volatile:     make(map[string]uint64),
-		stable:       make(map[string]uint64),
-		volatileDirs: map[string]rootpublication.StableIdentity{".": {}},
-		stableDirs:   map[string]rootpublication.StableIdentity{".": {}},
+		nextDirID:       1,
+		inodes:          make(map[uint64]*inode),
+		volatile:        make(map[string]uint64),
+		stable:          make(map[string]uint64),
+		overlayDetached: make(map[string]uint64),
+		volatileDirs:    map[string]rootpublication.StableIdentity{".": rootIdentity},
+		stableDirs:      map[string]rootpublication.StableIdentity{".": rootIdentity},
 	}
 }
 
@@ -202,6 +214,7 @@ func (m *Model) allocateWithIdentity(volatile, stable []byte, identity rootpubli
 func (m *Model) Clone() *Model {
 	out := newModel()
 	out.nextID = m.nextID
+	out.nextDirID = m.nextDirID
 	out.excludeLockFiles = m.excludeLockFiles
 	for id, node := range m.inodes {
 		out.inodes[id] = &inode{
@@ -215,6 +228,9 @@ func (m *Model) Clone() *Model {
 	}
 	for path, id := range m.stable {
 		out.stable[path] = id
+	}
+	for path, id := range m.overlayDetached {
+		out.overlayDetached[path] = id
 	}
 	for path, identity := range m.volatileDirs {
 		out.volatileDirs[path] = identity
@@ -242,6 +258,9 @@ func (m *Model) PathStable(root, path string) (bool, error) {
 	volatileID, volatileOK := m.volatile[rel]
 	stableID, stableOK := m.stable[rel]
 	if !volatileOK || !stableOK || volatileID != stableID {
+		return false, nil
+	}
+	if !stableDirReachable(m.stableDirs, cleanInternal(pathpkg.Dir(rel))) {
 		return false, nil
 	}
 	node := m.inodes[volatileID]
@@ -309,6 +328,7 @@ func (m *Model) Overlay(root string) error {
 	}
 	for path := range m.volatile {
 		if _, ok := seenFiles[path]; !ok {
+			m.overlayDetached[path] = m.volatile[path]
 			delete(m.volatile, path)
 		}
 	}
@@ -359,6 +379,20 @@ func (m *Model) Observe(root string, event durabilitycut.Event) error {
 			eventPaths = append(eventPaths, normalized)
 		}
 	}
+	createdDirectory := ""
+	if event.CreatedDirectory != "" {
+		if event.Point != durabilitycut.BeforeNewFileDirectorySync && event.Point != durabilitycut.AfterNewFileDirectorySync {
+			return fmt.Errorf("powerlossoracle: cut %s carries a created-directory target", event.Point)
+		}
+		rel, err := filepath.Rel(root, event.CreatedDirectory)
+		if err != nil {
+			return fmt.Errorf("powerlossoracle: cut %s created directory %q: %w", event.Point, event.CreatedDirectory, err)
+		}
+		createdDirectory, err = normalize(filepath.ToSlash(rel))
+		if err != nil {
+			return fmt.Errorf("powerlossoracle: cut %s created directory %q is outside root %q: %w", event.Point, event.CreatedDirectory, root, err)
+		}
+	}
 	if err := m.Overlay(root); err != nil {
 		return err
 	}
@@ -370,7 +404,14 @@ func (m *Model) Observe(root string, event durabilitycut.Event) error {
 			}
 		}
 	case durabilitycut.AfterNewFileDirectorySync:
-		if err := m.SyncDir(eventPaths[0]); err != nil {
+		dir := eventPaths[0]
+		if createdDirectory != "" {
+			if _, ok := m.volatileDirs[createdDirectory]; !ok {
+				return fmt.Errorf("powerlossoracle: created-directory sync missing directory %q", createdDirectory)
+			}
+			dir = cleanInternal(pathpkg.Dir(createdDirectory))
+		}
+		if err := m.SyncDir(dir); err != nil {
 			return err
 		}
 	case durabilitycut.AfterIndexDataSync, durabilitycut.AfterMetaSync:
@@ -412,13 +453,35 @@ func (m *Model) observeNamespace(root string, event durabilitycut.Event) error {
 		if err != nil {
 			return err
 		}
-		data, err := os.ReadFile(event.NewPath)
+		info, err := os.Stat(event.NewPath)
 		if err != nil {
-			return fmt.Errorf("powerlossoracle: read created file %q: %w", event.NewPath, err)
+			return fmt.Errorf("powerlossoracle: stat created path %q: %w", event.NewPath, err)
 		}
 		identity, err := captureStableIdentity(event.NewPath)
 		if err != nil {
 			return err
+		}
+		if info.IsDir() {
+			m.ensureVolatileParents(path)
+			m.volatileDirs[path] = identity
+			m.trace = append(m.trace, "create-dir:"+path)
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("powerlossoracle: created path %q is unsupported type %s", event.NewPath, info.Mode())
+		}
+		data, err := os.ReadFile(event.NewPath)
+		if err != nil {
+			return fmt.Errorf("powerlossoracle: read created file %q: %w", event.NewPath, err)
+		}
+		if id, exists := m.volatile[path]; exists {
+			if _, stable := m.stable[path]; stable {
+				return fmt.Errorf("powerlossoracle: file already exists %q", path)
+			}
+			m.inodes[id].volatile = clone(data)
+			m.inodes[id].stableIdentity = physicalStableIdentity(identity)
+			m.trace = append(m.trace, "create-observed:"+path)
+			return nil
 		}
 		return m.createWithIdentity(path, data, identity)
 	case durabilitycut.NamespaceRename:
@@ -566,10 +629,14 @@ func (m *Model) Rename(oldPath, newPath string) error {
 	}
 	id, ok := m.volatile[oldPath]
 	if !ok {
-		return fmt.Errorf("powerlossoracle: rename missing file %q", oldPath)
+		id, ok = m.overlayDetached[oldPath]
+		if !ok {
+			return fmt.Errorf("powerlossoracle: rename missing file %q", oldPath)
+		}
 	}
 	m.ensureVolatileParents(newPath)
 	delete(m.volatile, oldPath)
+	delete(m.overlayDetached, oldPath)
 	m.volatile[newPath] = id
 	m.trace = append(m.trace, "rename:"+oldPath+"->"+newPath)
 	return nil
@@ -584,7 +651,13 @@ func (m *Model) Unlink(path string) error {
 	}
 	if _, ok := m.volatile[path]; ok {
 		delete(m.volatile, path)
+		delete(m.overlayDetached, path)
 		m.trace = append(m.trace, "unlink:"+path)
+		return nil
+	}
+	if _, ok := m.overlayDetached[path]; ok {
+		delete(m.overlayDetached, path)
+		m.trace = append(m.trace, "unlink-detached:"+path)
 		return nil
 	}
 	if path == "." {
@@ -650,11 +723,6 @@ func (m *Model) SyncDir(dir string) error {
 	if _, ok := m.volatileDirs[dir]; !ok {
 		return fmt.Errorf("powerlossoracle: sync missing directory %q", dir)
 	}
-	if dir != "." {
-		if _, ok := m.stableDirs[dir]; !ok {
-			return fmt.Errorf("powerlossoracle: sync unreachable directory %q before parent directory entry", dir)
-		}
-	}
 	for path := range m.stable {
 		if cleanInternal(pathpkg.Dir(path)) == dir {
 			delete(m.stable, path)
@@ -666,9 +734,14 @@ func (m *Model) SyncDir(dir string) error {
 		}
 	}
 	removedTrees := make([]string, 0)
-	for child := range m.stableDirs {
+	for child, stableIdentity := range m.stableDirs {
 		if child != "." && cleanInternal(pathpkg.Dir(child)) == dir {
-			if _, stillVisible := m.volatileDirs[child]; !stillVisible {
+			volatileIdentity, stillVisible := m.volatileDirs[child]
+			replaced := stillVisible &&
+				validStableIdentity(stableIdentity) &&
+				validStableIdentity(volatileIdentity) &&
+				!rootpublication.SamePhysicalIdentity(stableIdentity, volatileIdentity)
+			if !stillVisible || replaced {
 				removedTrees = append(removedTrees, child)
 			}
 			delete(m.stableDirs, child)
@@ -701,13 +774,17 @@ func (m *Model) SyncDir(dir string) error {
 
 // Crash discards every volatile byte and namespace mutation.
 func (m *Model) Crash() {
-	m.volatile = make(map[string]uint64, len(m.stable))
-	for path, id := range m.stable {
+	reachableDirs, reachableFiles := reachableNamespace(m.stableDirs, m.stable)
+	m.stableDirs = reachableDirs
+	m.stable = reachableFiles
+	m.volatile = make(map[string]uint64, len(reachableFiles))
+	for path, id := range reachableFiles {
 		m.volatile[path] = id
 		m.inodes[id].volatile = clone(m.inodes[id].stable)
 	}
-	m.volatileDirs = make(map[string]rootpublication.StableIdentity, len(m.stableDirs))
-	for dir, identity := range m.stableDirs {
+	m.volatileDirs = make(map[string]rootpublication.StableIdentity, len(reachableDirs))
+	m.overlayDetached = make(map[string]uint64)
+	for dir, identity := range reachableDirs {
 		m.volatileDirs[dir] = identity
 	}
 	m.trace = append(m.trace, "crash")
@@ -729,6 +806,9 @@ func (m *Model) MaterializeVolatile(root string) error {
 func (m *Model) materialize(root string, dirs map[string]rootpublication.StableIdentity, files map[string]uint64, bytesFor func(*inode) []byte, label string) error {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return err
+	}
+	if label == "stable" {
+		dirs, files = reachableNamespace(dirs, files)
 	}
 	dirPaths := keys(dirs)
 	sort.Slice(dirPaths, func(i, j int) bool {
@@ -780,13 +860,14 @@ func (m *Model) InstallStableIdentityOverrides(root string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	overrides := make(map[string]rootpublication.StableIdentity, len(m.stable)+len(m.stableDirs))
-	for dir, identity := range m.stableDirs {
+	reachableDirs, reachableFiles := reachableNamespace(m.stableDirs, m.stable)
+	overrides := make(map[string]rootpublication.StableIdentity, len(reachableFiles)+len(reachableDirs))
+	for dir, identity := range reachableDirs {
 		if validStableIdentity(identity) {
 			overrides[filepath.Join(root, filepath.FromSlash(dir))] = physicalStableIdentity(identity)
 		}
 	}
-	for path, id := range m.stable {
+	for path, id := range reachableFiles {
 		identity := m.inodes[id].stableIdentity
 		if validStableIdentity(identity) {
 			overrides[filepath.Join(root, filepath.FromSlash(path))] = physicalStableIdentity(identity)
@@ -797,8 +878,9 @@ func (m *Model) InstallStableIdentityOverrides(root string) (func(), error) {
 
 // StablePaths returns stable regular-file paths in deterministic order.
 func (m *Model) StablePaths() []string {
-	paths := make([]string, 0, len(m.stable))
-	for path := range m.stable {
+	_, reachableFiles := reachableNamespace(m.stableDirs, m.stable)
+	paths := make([]string, 0, len(reachableFiles))
+	for path := range reachableFiles {
 		paths = append(paths, path)
 	}
 	sort.Strings(paths)
@@ -815,8 +897,76 @@ func (m *Model) VolatilePaths() []string {
 	return paths
 }
 
+// reachableNamespace projects per-directory durable contents onto the names
+// reachable from the materialized root. A child directory can be synced before
+// its own parent entry; its durable contents become reachable only if a later
+// ancestor sync persists the chain.
+func reachableNamespace(dirs map[string]rootpublication.StableIdentity, files map[string]uint64) (map[string]rootpublication.StableIdentity, map[string]uint64) {
+	reachableDirs := make(map[string]rootpublication.StableIdentity, len(dirs))
+	if identity, ok := dirs["."]; ok {
+		reachableDirs["."] = identity
+	}
+	dirPaths := keys(dirs)
+	sort.Slice(dirPaths, func(i, j int) bool {
+		di, dj := strings.Count(dirPaths[i], "/"), strings.Count(dirPaths[j], "/")
+		if di == dj {
+			return dirPaths[i] < dirPaths[j]
+		}
+		return di < dj
+	})
+	for _, dir := range dirPaths {
+		if dir == "." {
+			continue
+		}
+		if _, ok := reachableDirs[cleanInternal(pathpkg.Dir(dir))]; ok {
+			reachableDirs[dir] = dirs[dir]
+		}
+	}
+	reachableFiles := make(map[string]uint64, len(files))
+	for path, id := range files {
+		if _, ok := reachableDirs[cleanInternal(pathpkg.Dir(path))]; ok {
+			reachableFiles[path] = id
+		}
+	}
+	return reachableDirs, reachableFiles
+}
+
+func stableDirReachable(dirs map[string]rootpublication.StableIdentity, dir string) bool {
+	for {
+		if _, ok := dirs[dir]; !ok {
+			return false
+		}
+		if dir == "." {
+			return true
+		}
+		dir = cleanInternal(pathpkg.Dir(dir))
+	}
+}
+
 // Trace returns the deterministic operation trace used in failure diagnostics.
 func (m *Model) Trace() []string { return append([]string(nil), m.trace...) }
+
+// BeginReplayWindow records a stable address boundary without discarding the
+// persistence trace that precedes it. Tests with asynchronous setup can use a
+// window-relative cut occurrence while retained evidence still shows every
+// resource and namespace event that made the setup durable.
+//
+// Callers must serialize this method with Observe when observations may arrive
+// concurrently, just as they serialize concurrent Observe calls themselves.
+func (m *Model) BeginReplayWindow(variantID string) error {
+	if m == nil {
+		return errorsf("begin replay window on nil model")
+	}
+	if strings.TrimSpace(variantID) == "" || strings.ContainsAny(variantID, "\r\n") {
+		return errorsf("invalid replay window variant %q", variantID)
+	}
+	m.trace = append(m.trace, replayWindowMarker(variantID))
+	return nil
+}
+
+func replayWindowMarker(variantID string) string {
+	return "replay-window:" + variantID
+}
 
 // UseObservedTrace binds an adversarial selective-writeback model to the
 // operation trace captured from the corresponding real production cut. It
@@ -835,13 +985,17 @@ func (m *Model) UseObservedTrace(observed *Model) error {
 // and bytes at a cut without materializing them.
 func (m *Model) StableFingerprint() string {
 	h := sha256.New()
-	dirs := keys(m.stableDirs)
+	reachableDirs, reachableFiles := reachableNamespace(m.stableDirs, m.stable)
+	dirs := keys(reachableDirs)
 	sort.Strings(dirs)
 	for _, dir := range dirs {
-		_, _ = fmt.Fprintf(h, "d:%s\x00", dir)
+		identity := physicalStableIdentity(reachableDirs[dir])
+		_, _ = fmt.Fprintf(h, "d:%s:%s:%d:%x\x00", dir, identity.Platform, identity.VolumeID, identity.ObjectID)
 	}
-	for _, path := range m.StablePaths() {
-		id := m.stable[path]
+	paths := keys(reachableFiles)
+	sort.Strings(paths)
+	for _, path := range paths {
+		id := reachableFiles[path]
 		_, _ = fmt.Fprintf(h, "f:%s:%d:", path, id)
 		_, _ = h.Write(m.inodes[id].stable)
 		_, _ = h.Write([]byte{0})
@@ -852,12 +1006,19 @@ func (m *Model) StableFingerprint() string {
 func (m *Model) ensureVolatileParents(path string) {
 	for dir := cleanInternal(pathpkg.Dir(path)); ; dir = cleanInternal(pathpkg.Dir(dir)) {
 		if _, exists := m.volatileDirs[dir]; !exists {
-			m.volatileDirs[dir] = rootpublication.StableIdentity{}
+			m.nextDirID++
+			m.volatileDirs[dir] = syntheticDirectoryIdentity(m.nextDirID)
 		}
 		if dir == "." {
 			return
 		}
 	}
+}
+
+func syntheticDirectoryIdentity(id uint64) rootpublication.StableIdentity {
+	var objectID [16]byte
+	binary.BigEndian.PutUint64(objectID[8:], id)
+	return rootpublication.StableIdentity{Platform: "powerlossoracle", ObjectID: objectID}
 }
 
 func captureStableIdentity(path string) (rootpublication.StableIdentity, error) {

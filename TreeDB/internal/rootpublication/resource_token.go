@@ -454,6 +454,13 @@ type StableResourceToken struct {
 }
 
 func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, error) {
+	return newStableResourceToken(spec, nil)
+}
+
+// newStableResourceToken accepts an immutable normalized obligation view only
+// for exact-handle clones produced inside this package. Public producers always
+// pass nil and retain the full validation/copy boundary above.
+func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalObligation) (*StableResourceToken, error) {
 	if spec.Kind == "" || spec.ResourceID == "" || spec.Generation == 0 || spec.Reachability == "" || spec.File == nil {
 		return nil, fmt.Errorf("%w: incomplete resource registration", ErrUnresolvedResource)
 	}
@@ -463,9 +470,15 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 	if err := validateDurableFrontier(spec.Frontier); err != nil {
 		return nil, err
 	}
-	logicalObligations, err := normalizeStableLogicalObligations(spec.LogicalObligations, spec.Reachability)
-	if err != nil {
-		return nil, err
+	logicalObligations := normalized
+	if logicalObligations == nil {
+		var err error
+		logicalObligations, err = normalizeStableLogicalObligations(spec.LogicalObligations, spec.Reachability)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		logicalObligations = stableLogicalObligationList(logicalObligations)
 	}
 	stability, ok := stableResourceStabilityForField(spec.Reachability)
 	if !ok {

@@ -66,7 +66,11 @@ value-log sync, checkpoint, iterator rotation/source, and queue metrics where
 the public `Stats` map exposes them. `command_wal_group_commits/sync`,
 `command_wal_group_syncs/ack`, and `command_wal_group_size_max` are derived
 from production coordinator counters; they are not inferred from benchmark
-concurrency.
+concurrency. The same rows also report command-WAL and value-log bytes written
+per acknowledged commit, pre/post-checkpoint logical file bytes, and untimed
+checkpoint, close, and verified reopen latency. These lifecycle measurements
+run after the acknowledgement timer and therefore do not change `ns/op` or
+the acknowledgement percentiles.
 
 The MVCC package has a separately named write/read-alternating row:
 

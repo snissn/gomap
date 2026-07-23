@@ -1075,6 +1075,9 @@ func (w *Writer) AppendCommandV2(env CommandEnvelope) error {
 }
 
 func (w *Writer) AppendRawKVSingleCommandDirect(lsn, baseAppliedLSN uint64, op RawKVOperation) error {
+	if op.Op == RawKVOpSetMaterializedRID {
+		return ErrCommandWALUnsupportedVersion
+	}
 	valueLen := len(op.Value)
 	if op.Op == RawKVOpSetRID {
 		valueLen = 8

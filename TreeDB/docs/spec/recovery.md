@@ -244,6 +244,20 @@ replay must observe either the old root plus old `AppliedLSN`, or the new root
 plus advanced `AppliedLSN`; it must not observe command effects without the
 matching `AppliedLSN` or `AppliedLSN` without command effects.
 
+`RawKVBatchV2` adds `SetMaterializedRID(RID, value)`. Recovery reuses an
+existing RID only when its decoded value bytes match exactly. If the RID is
+absent, recovery appends `value` under that exact RID and advances the allocator
+past it. Conflicting bytes fail with a hard corruption error. Newly appended
+records are synced before roots plus `AppliedLSN`; a crash after that append can
+retry by matching and reusing the same RID. Legacy `SetRID` remains a lookup-only
+operation with its external dependency fence.
+
+Exact-RID repair can place a lower RID in a newer physical segment. Backend
+replay and the public cached allocator therefore derive their RID high-water by
+scanning every non-empty persistent value-log segment, not only each lane's
+physical tail. Foreground allocation after recovery must remain above that
+all-segment high-water.
+
 For target versioned raw-KV entries, the replay executor assigns the same
 revision contract as live apply from the persisted raw-KV revision domain.
 Command-WAL replay uses the accepted command LSN as the mutation revision only

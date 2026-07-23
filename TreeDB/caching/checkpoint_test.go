@@ -2,17 +2,234 @@ package caching
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
+
+func TestCachingDB_CheckpointContextCancelsWhileWaitingForFlushOwnership(t *testing.T) {
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- db.CheckpointContext(ctx) }()
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("CheckpointContext error=%v, want context.Canceled", err)
+		}
+	case <-time.After(withRaceTimeout(2 * time.Second)):
+		t.Fatal("CheckpointContext did not cancel while waiting for flush ownership")
+	}
+}
+
+func TestLockCheckpointMutexContextCancellationLeavesNoWaiters(t *testing.T) {
+	var mu sync.Mutex
+	mu.Lock()
+	baselineGoroutines := runtime.NumGoroutine()
+
+	const waiters = 64
+	contexts := make([]context.CancelFunc, waiters)
+	done := make(chan error, waiters)
+	var callers sync.WaitGroup
+	for i := range contexts {
+		ctx, cancel := context.WithCancel(context.Background())
+		contexts[i] = cancel
+		callers.Add(1)
+		go func() {
+			defer callers.Done()
+			done <- lockCheckpointMutexContext(ctx, &mu)
+		}()
+	}
+	time.Sleep(20 * time.Millisecond)
+	for _, cancel := range contexts {
+		cancel()
+	}
+	for range contexts {
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("lock wait error=%v, want context.Canceled", err)
+		}
+	}
+	callers.Wait()
+
+	runtime.Gosched()
+	blockedGoroutines := runtime.NumGoroutine()
+	mu.Unlock()
+	if blockedGoroutines > baselineGoroutines+waiters/4 {
+		t.Fatalf("goroutines after cancellation=%d baseline=%d; canceled flush waiters remain parked", blockedGoroutines, baselineGoroutines)
+	}
+	if !mu.TryLock() {
+		t.Fatal("canceled checkpoint lock calls left queued mutex waiters")
+	}
+	mu.Unlock()
+}
+
+func TestCachingDB_CheckpointContextCancelsBeforeFrontierDrain(t *testing.T) {
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{FlushThreshold: 1 << 30})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if err := db.Set([]byte("key"), []byte("value")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	reached := make(chan struct{})
+	release := make(chan struct{})
+	db.testBeforeCheckpointFrontierDrain = func() {
+		close(reached)
+		<-release
+	}
+	defer func() { db.testBeforeCheckpointFrontierDrain = nil }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- db.CheckpointContext(ctx) }()
+	awaitCheckpointTestSignal(t, reached, "checkpoint frontier drain")
+	cancel()
+	close(release)
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("CheckpointContext error=%v, want context.Canceled", err)
+		}
+	case <-time.After(withRaceTimeout(2 * time.Second)):
+		t.Fatal("CheckpointContext did not cancel before draining the frontier")
+	}
+}
+
+func TestCachingDB_CheckpointContextQueuesBehindActiveReaders(t *testing.T) {
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.writeMu.RLock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- db.CheckpointContext(ctx) }()
+	deadline := time.Now().Add(withRaceTimeout(2 * time.Second))
+	for !db.checkpointing.Load() {
+		if time.Now().After(deadline) {
+			db.writeMu.RUnlock()
+			t.Fatal("checkpoint did not reach write ownership wait")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// Allow the checkpoint waiter to enter RWMutex.Lock after publishing the
+	// checkpoint state observed above.
+	time.Sleep(withRaceTimeout(10 * time.Millisecond))
+
+	lateReader := make(chan error, 1)
+	go func() {
+		err := db.beginDirectWrite()
+		if err == nil {
+			db.writeMu.RUnlock()
+		}
+		lateReader <- err
+	}()
+	select {
+	case err := <-lateReader:
+		db.writeMu.RUnlock()
+		t.Fatalf("later writer bypassed queued checkpoint: %v", err)
+	case <-time.After(withRaceTimeout(25 * time.Millisecond)):
+	}
+
+	db.writeMu.RUnlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("CheckpointContext: %v", err)
+		}
+	case <-time.After(withRaceTimeout(2 * time.Second)):
+		t.Fatal("queued checkpoint did not finish after reader released")
+	}
+	select {
+	case err := <-lateReader:
+		if err != nil {
+			t.Fatalf("late writer after checkpoint: %v", err)
+		}
+	case <-time.After(withRaceTimeout(2 * time.Second)):
+		t.Fatal("timed out waiting for late writer after checkpoint")
+	}
+}
+
+func TestCachingDB_CanceledCheckpointDoesNotLeaveWriteWaiter(t *testing.T) {
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.writeMu.RLock()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- db.CheckpointContext(ctx) }()
+	deadline := time.Now().Add(withRaceTimeout(2 * time.Second))
+	for !db.checkpointing.Load() {
+		if time.Now().After(deadline) {
+			db.writeMu.RUnlock()
+			t.Fatal("checkpoint did not reach write ownership wait")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// Checkpointing is published immediately before the contended write-lock
+	// path. Give the waiter time to enter that path before cancellation.
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			db.writeMu.RUnlock()
+			t.Fatalf("CheckpointContext error=%v, want context.Canceled", err)
+		}
+	case <-time.After(withRaceTimeout(2 * time.Second)):
+		db.writeMu.RUnlock()
+		t.Fatal("CheckpointContext did not cancel while waiting for write ownership")
+	}
+
+	lateWriter := make(chan error, 1)
+	go func() {
+		err := db.beginDirectWrite()
+		if err == nil {
+			db.writeMu.RUnlock()
+		}
+		lateWriter <- err
+	}()
+	select {
+	case err := <-lateWriter:
+		if err != nil {
+			db.writeMu.RUnlock()
+			t.Fatalf("beginDirectWrite after canceled checkpoint: %v", err)
+		}
+	case <-time.After(withRaceTimeout(100 * time.Millisecond)):
+		db.writeMu.RUnlock()
+		t.Fatal("canceled checkpoint left a writeMu waiter blocking later writes")
+	}
+	db.writeMu.RUnlock()
+}
 
 func countCommitLogFiles(entries []os.DirEntry) int {
 	n := 0

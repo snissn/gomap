@@ -6,7 +6,7 @@ TMP_ROOT=${TMPDIR:-/tmp}
 mkdir -p "$TMP_ROOT"
 RUN_DIR=${RUN_DIR:-$(mktemp -d "$TMP_ROOT/compact_storage_m0_XXXXXX")}
 COUNT=${COUNT:-12}
-ARTIFACT_SCHEMA_VERSION=2
+ARTIFACT_SCHEMA_VERSION=3
 
 default_cpu_set() {
   local allowed range start end cpu
@@ -46,8 +46,9 @@ GOMAXPROCS=${GOMAXPROCS:-2}
 GOMEMLIMIT=${GOMEMLIMIT:-8GiB}
 BENCH='^BenchmarkCompactStorageM0$'
 STRESS='^BenchmarkCompactStorageM0/one-generation-per-pass$'
+DECISION='^BenchmarkCompactStorageIndexVacuumDecisionNoDebt$'
 
-mkdir -p "$RUN_DIR"/{canonical,profiles,syscalls,overhead/on,overhead/off}
+mkdir -p "$RUN_DIR"/{canonical,decision,rss,profiles,syscalls,overhead/on,overhead/off}
 cd "$ROOT"
 
 run_go_test() {
@@ -89,6 +90,29 @@ if command -v benchstat >/dev/null 2>&1; then
   benchstat "$RUN_DIR/canonical/raw.txt" >"$RUN_DIR/canonical/benchstat.txt"
 else
   printf 'benchstat not found\n' >"$RUN_DIR/canonical/benchstat.txt"
+fi
+
+: >"$RUN_DIR/decision/raw.txt"
+for sample in $(seq 1 "$COUNT"); do
+  run_go_test -run '^$' -bench "$DECISION" -benchtime=100x -count=1 -benchmem |
+    tee -a "$RUN_DIR/decision/raw.txt"
+done
+if command -v benchstat >/dev/null 2>&1; then
+  benchstat "$RUN_DIR/decision/raw.txt" >"$RUN_DIR/decision/benchstat.txt"
+fi
+
+if [[ -x /usr/bin/time ]]; then
+  : >"$RUN_DIR/rss/max_rss_kib.txt"
+  for sample in $(seq 1 "$COUNT"); do
+    for fixture in full-high-debt exhaustive-control; do
+      /usr/bin/time -f "$sample $fixture %M" -o "$RUN_DIR/rss/max_rss_kib.txt" -a \
+        env GOWORK=off TMPDIR="$TMP_ROOT" GOMAXPROCS="$GOMAXPROCS" GOMEMLIMIT="$GOMEMLIMIT" \
+        taskset -c "$CPU_SET" go test ./TreeDB/db -run '^$' \
+        -bench "^BenchmarkCompactStorageM0/$fixture$" -benchtime=1x -count=1 >/dev/null
+    done
+  done
+else
+  printf '/usr/bin/time unavailable\n' >"$RUN_DIR/rss/max_rss_kib.txt"
 fi
 
 run_overhead_sample() {
@@ -230,11 +254,20 @@ find "$RUN_DIR/canonical/compact-storage-m0" -name 'sample-*.json' -print0 |
       checkpoint_stable_calls: ((.checkpoints // []) | map(.stable_calls) | add // 0),
       alloc_bytes: .allocation.total_alloc_bytes,
       alloc_objects: .allocation.allocation_objects,
+      heap_alloc_after: .allocation.heap_alloc_after,
+      heap_inuse_after: .allocation.heap_inuse_after,
+      heap_sys_after: .allocation.heap_sys_after,
       foreground_p95_ns: .foreground_writes.p95_nanos,
       foreground_p99_ns: .foreground_writes.p99_nanos,
       idle_p95_ns: .idle_writes.p95_nanos,
       idle_p99_ns: .idle_writes.p99_nanos,
-      vacuum_reason: .vacuum.plan_reason
+      vacuum_status: .vacuum.status,
+      vacuum_required: .vacuum.required,
+      vacuum_reason: .vacuum.plan_reason,
+      vacuum_ran: .vacuum.ran,
+      vacuum_reclaimed_bytes: .vacuum.reclaimed_bytes,
+      vacuum_wall_ns: .vacuum.total_wall_time_nanos,
+      vacuum_max_writer_pause_ns: .vacuum.max_writer_pause_nanos
     })' >"$RUN_DIR/canonical/summary.json"
 
 printf '%s\n' "$RUN_DIR"

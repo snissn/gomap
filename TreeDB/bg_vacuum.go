@@ -9,12 +9,18 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func backgroundIndexVacuumShouldReport(err error) bool {
 	return err != nil &&
 		!errors.Is(err, backenddb.ErrVacuumConcurrentMutation) &&
-		!errors.Is(err, backenddb.ErrVacuumRecoverableRootSetRequired)
+		!errors.Is(err, backenddb.ErrVacuumRecoverableRootSetRequired) &&
+		!errors.Is(err, backenddb.ErrRecoverableRootSetStale) &&
+		!errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) &&
+		!errors.Is(err, rootpublication.ErrResourcePinned) &&
+		!errors.Is(err, backenddb.ErrVacuumUnsupported) &&
+		!errors.Is(err, context.Canceled)
 }
 
 const (
@@ -28,6 +34,20 @@ const (
 	backgroundIndexVacuumDebtReasonUser                            = "user"
 	backgroundIndexVacuumDebtReasonFreelist                        = "freelist"
 	backgroundIndexVacuumDebtReasonCollectionRoots                 = "collection_roots"
+	backgroundIndexVacuumRetryReasonNone                           = "none"
+	backgroundIndexVacuumRetryReasonConcurrentMutation             = "concurrent_mutation"
+	backgroundIndexVacuumRetryReasonRecoverableRootSet             = "recoverable_root_set"
+	backgroundIndexVacuumRetryReasonCheckpointCleanup              = "checkpoint_cleanup"
+	backgroundIndexVacuumRetryReasonResourcePinned                 = "resource_pinned"
+	backgroundIndexVacuumOutcomeNone                               = "none"
+	backgroundIndexVacuumOutcomeBacklogSkip                        = "backlog_skip"
+	backgroundIndexVacuumOutcomeUnchanged                          = "unchanged"
+	backgroundIndexVacuumOutcomeNoDebt                             = "no_debt"
+	backgroundIndexVacuumOutcomeRetry                              = "retry"
+	backgroundIndexVacuumOutcomeUnsupported                        = "unsupported"
+	backgroundIndexVacuumOutcomePermanentFailure                   = "permanent_failure"
+	backgroundIndexVacuumOutcomeSuccess                            = "success"
+	backgroundIndexVacuumOutcomeCanceled                           = "canceled"
 )
 
 type bgIndexVacuumConfig struct {
@@ -85,16 +105,25 @@ type bgIndexVacuumWorker struct {
 	stopCh   chan struct{}
 	doneCh   chan struct{}
 	kickCh   chan struct{}
+	cancel   context.CancelFunc
 
-	runMu          sync.Mutex
-	runs           atomic.Uint64
-	probes         atomic.Uint64
-	vacuums        atomic.Uint64
-	lastRunUnix    atomic.Int64
-	lastVacuumUnix atomic.Int64
-	lastSpanRatio  atomic.Uint64
-	lastPages      atomic.Uint64
-	lastErr        atomic.Value // string
+	runMu                        sync.Mutex
+	runs                         atomic.Uint64
+	probes                       atomic.Uint64
+	vacuums                      atomic.Uint64
+	lastRunUnix                  atomic.Int64
+	lastVacuumUnix               atomic.Int64
+	lastSpanRatio                atomic.Uint64
+	lastPages                    atomic.Uint64
+	lastErr                      atomic.Value // string
+	lastRetryReason              atomic.Value // string
+	lastOutcome                  atomic.Value // string
+	retryConcurrentMutationTotal atomic.Uint64
+	retryRecoverableRootSetTotal atomic.Uint64
+	retryCheckpointCleanupTotal  atomic.Uint64
+	retryResourcePinnedTotal     atomic.Uint64
+	unsupportedTotal             atomic.Uint64
+	permanentFailuresTotal       atomic.Uint64
 
 	backlogConsecutiveSkips atomic.Uint64
 	backlogSkips            atomic.Uint64
@@ -113,6 +142,7 @@ type bgIndexVacuumWorker struct {
 	lastProbeFreelistValid          bool
 	lastProbeValid                  bool
 	retryProbe                      bool
+	unsupported                     bool
 }
 
 var bgIndexVacuumBacklogBytesHook struct {
@@ -123,6 +153,16 @@ var bgIndexVacuumBacklogBytesHook struct {
 var bgIndexVacuumFreelistDebtSnapshotHook struct {
 	mu sync.RWMutex
 	fn func(*DB) (backenddb.IndexVacuumFreelistDebtSnapshot, bool)
+}
+
+var bgIndexVacuumRunHook struct {
+	mu sync.RWMutex
+	fn func(*DB, context.Context) error
+}
+
+var bgIndexVacuumTriggerReportHook struct {
+	mu sync.RWMutex
+	fn func(*DB, context.Context) (backenddb.IndexVacuumTriggerReport, error)
 }
 
 func setBackgroundIndexVacuumBacklogBytesHookForTest(fn func(*DB) int64) func() {
@@ -147,6 +187,50 @@ func setBackgroundIndexVacuumFreelistDebtSnapshotHookForTest(fn func(*DB) (backe
 		bgIndexVacuumFreelistDebtSnapshotHook.fn = prev
 		bgIndexVacuumFreelistDebtSnapshotHook.mu.Unlock()
 	}
+}
+
+func setBackgroundIndexVacuumRunHookForTest(fn func(*DB, context.Context) error) func() {
+	bgIndexVacuumRunHook.mu.Lock()
+	prev := bgIndexVacuumRunHook.fn
+	bgIndexVacuumRunHook.fn = fn
+	bgIndexVacuumRunHook.mu.Unlock()
+	return func() {
+		bgIndexVacuumRunHook.mu.Lock()
+		bgIndexVacuumRunHook.fn = prev
+		bgIndexVacuumRunHook.mu.Unlock()
+	}
+}
+
+func setBackgroundIndexVacuumTriggerReportHookForTest(fn func(*DB, context.Context) (backenddb.IndexVacuumTriggerReport, error)) func() {
+	bgIndexVacuumTriggerReportHook.mu.Lock()
+	prev := bgIndexVacuumTriggerReportHook.fn
+	bgIndexVacuumTriggerReportHook.fn = fn
+	bgIndexVacuumTriggerReportHook.mu.Unlock()
+	return func() {
+		bgIndexVacuumTriggerReportHook.mu.Lock()
+		bgIndexVacuumTriggerReportHook.fn = prev
+		bgIndexVacuumTriggerReportHook.mu.Unlock()
+	}
+}
+
+func backgroundIndexVacuumTriggerReport(db *DB, ctx context.Context) (backenddb.IndexVacuumTriggerReport, error) {
+	bgIndexVacuumTriggerReportHook.mu.RLock()
+	hook := bgIndexVacuumTriggerReportHook.fn
+	bgIndexVacuumTriggerReportHook.mu.RUnlock()
+	if hook != nil {
+		return hook(db, ctx)
+	}
+	return db.backend.IndexVacuumTriggerReportContext(ctx)
+}
+
+func backgroundIndexVacuumRun(db *DB, ctx context.Context) error {
+	bgIndexVacuumRunHook.mu.RLock()
+	hook := bgIndexVacuumRunHook.fn
+	bgIndexVacuumRunHook.mu.RUnlock()
+	if hook != nil {
+		return hook(db, ctx)
+	}
+	return db.VacuumIndexOnline(ctx)
 }
 
 func backgroundIndexVacuumBacklogBytes(db *DB) int64 {
@@ -194,8 +278,12 @@ func (w *bgIndexVacuumWorker) Start(db *DB, cfg bgIndexVacuumConfig) {
 	w.stopCh = make(chan struct{})
 	w.doneCh = make(chan struct{})
 	w.kickCh = make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	w.cancel = cancel
 	w.lastErr.Store("")
 	w.lastDebtReason.Store(backgroundIndexVacuumDebtReasonNone)
+	w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonNone)
+	w.lastOutcome.Store(backgroundIndexVacuumOutcomeNone)
 
 	go func() {
 		defer close(w.doneCh)
@@ -211,7 +299,7 @@ func (w *bgIndexVacuumWorker) Start(db *DB, cfg bgIndexVacuumConfig) {
 			case <-ticker.C:
 			}
 
-			w.runOnce(db)
+			w.runOnceContext(ctx, db)
 		}
 	}()
 }
@@ -238,6 +326,7 @@ func (w *bgIndexVacuumWorker) Stop() {
 		return
 	}
 	w.stopOnce.Do(func() {
+		w.cancel()
 		close(w.stopCh)
 		<-w.doneCh
 		w.enabled.Store(false)
@@ -245,12 +334,19 @@ func (w *bgIndexVacuumWorker) Stop() {
 }
 
 func (w *bgIndexVacuumWorker) runOnce(db *DB) {
+	w.runOnceContext(context.Background(), db)
+}
+
+func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 	if db == nil || db.backend == nil {
 		return
 	}
 
 	w.runMu.Lock()
 	defer w.runMu.Unlock()
+	if w.unsupported {
+		return
+	}
 
 	now := time.Now()
 	state, ok := db.backend.StateToken()
@@ -267,6 +363,7 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 			consecutive++
 			w.backlogConsecutiveSkips.Store(consecutive)
 			w.backlogSkips.Add(1)
+			w.lastOutcome.Store(backgroundIndexVacuumOutcomeBacklogSkip)
 			w.finishRun(now, "")
 			return
 		}
@@ -278,14 +375,30 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 	}
 
 	if !forcedAfterBacklog && w.lastProbeValid && !w.retryProbe && state.CommitSeq == w.lastProbeCommitSeq && !w.freelistDebtChangedSinceLastProbe(db) {
+		w.lastOutcome.Store(backgroundIndexVacuumOutcomeUnchanged)
 		w.finishRun(now, "")
 		return
 	}
 
-	rep, err := db.backend.IndexVacuumTriggerReport()
+	rep, err := backgroundIndexVacuumTriggerReport(db, ctx)
 	w.probes.Add(1)
 	if err != nil {
-		w.retryProbe = true
+		if errors.Is(err, context.Canceled) {
+			w.retryProbe = false
+			w.lastOutcome.Store(backgroundIndexVacuumOutcomeCanceled)
+			w.finishRun(now, err.Error())
+			return
+		}
+		w.retryProbe = false
+		w.lastProbeCommitSeq = state.CommitSeq
+		if snap, ok := backgroundIndexVacuumFreelistDebtSnapshot(db); ok {
+			w.lastProbeFreelistReclaimable = snap.FreelistReclaimable
+			w.lastProbeFreelistReclaimablePPM = snap.FreelistReclaimablePPM
+			w.lastProbeFreelistValid = snap.FreelistReclaimableValid
+		}
+		w.lastProbeValid = true
+		w.permanentFailuresTotal.Add(1)
+		w.lastOutcome.Store(backgroundIndexVacuumOutcomePermanentFailure)
 		w.finishRun(now, err.Error())
 		db.reportError(err)
 		return
@@ -302,12 +415,13 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 	w.lastDebtReason.Store(reason)
 	if reason == backgroundIndexVacuumDebtReasonNone {
 		w.retryProbe = false
+		w.lastOutcome.Store(backgroundIndexVacuumOutcomeNoDebt)
 		w.finishRun(now, "")
 		return
 	}
 
-	if err := db.VacuumIndexOnline(context.Background()); err != nil {
-		w.retryProbe = true
+	if err := backgroundIndexVacuumRun(db, ctx); err != nil {
+		w.recordVacuumError(err)
 		w.finishRun(now, err.Error())
 		// A bounded online-vacuum pass may lose its cutover race to foreground
 		// mutations. That is expected retry control flow: retain it in worker
@@ -319,9 +433,52 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 	}
 
 	w.retryProbe = false
+	w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonNone)
+	w.lastOutcome.Store(backgroundIndexVacuumOutcomeSuccess)
+	w.lastErr.Store("")
 	w.vacuums.Add(1)
 	w.finishRun(now, "")
 	w.lastVacuumUnix.Store(now.Unix())
+}
+
+func (w *bgIndexVacuumWorker) recordVacuumError(err error) {
+	switch {
+	case errors.Is(err, backenddb.ErrVacuumUnsupported):
+		w.retryProbe = false
+		w.unsupported = true
+		w.unsupportedTotal.Add(1)
+		w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonNone)
+		w.lastOutcome.Store(backgroundIndexVacuumOutcomeUnsupported)
+	case errors.Is(err, context.Canceled):
+		w.retryProbe = false
+		w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonNone)
+		w.lastOutcome.Store(backgroundIndexVacuumOutcomeCanceled)
+	case errors.Is(err, backenddb.ErrVacuumConcurrentMutation):
+		w.retryProbe = true
+		w.retryConcurrentMutationTotal.Add(1)
+		w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonConcurrentMutation)
+		w.lastOutcome.Store(backgroundIndexVacuumOutcomeRetry)
+	case errors.Is(err, backenddb.ErrRecoverableRootSetStale), errors.Is(err, backenddb.ErrVacuumRecoverableRootSetRequired):
+		w.retryProbe = true
+		w.retryRecoverableRootSetTotal.Add(1)
+		w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonRecoverableRootSet)
+		w.lastOutcome.Store(backgroundIndexVacuumOutcomeRetry)
+	case errors.Is(err, backenddb.ErrDurableWALCleanupProofStale):
+		w.retryProbe = true
+		w.retryCheckpointCleanupTotal.Add(1)
+		w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonCheckpointCleanup)
+		w.lastOutcome.Store(backgroundIndexVacuumOutcomeRetry)
+	case errors.Is(err, rootpublication.ErrResourcePinned):
+		w.retryProbe = true
+		w.retryResourcePinnedTotal.Add(1)
+		w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonResourcePinned)
+		w.lastOutcome.Store(backgroundIndexVacuumOutcomeRetry)
+	default:
+		w.retryProbe = false
+		w.permanentFailuresTotal.Add(1)
+		w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonNone)
+		w.lastOutcome.Store(backgroundIndexVacuumOutcomePermanentFailure)
+	}
 }
 
 func (w *bgIndexVacuumWorker) freelistDebtChangedSinceLastProbe(db *DB) bool {
@@ -340,7 +497,9 @@ func (w *bgIndexVacuumWorker) freelistDebtChangedSinceLastProbe(db *DB) bool {
 func (w *bgIndexVacuumWorker) finishRun(now time.Time, err string) {
 	w.runs.Add(1)
 	w.lastRunUnix.Store(now.Unix())
-	w.lastErr.Store(err)
+	if err != "" {
+		w.lastErr.Store(err)
+	}
 }
 
 func (w *bgIndexVacuumWorker) recordLastTriggerReport(rep backenddb.IndexVacuumTriggerReport) {
@@ -446,11 +605,20 @@ type bgIndexVacuumStats struct {
 	BacklogForcedRuns       uint64
 	LastBacklogBytes        int64
 
-	LastRunUnix    int64
-	LastVacuumUnix int64
-	LastSpanRatio  uint64
-	LastPages      uint64
-	LastErr        string
+	LastRunUnix     int64
+	LastVacuumUnix  int64
+	LastSpanRatio   uint64
+	LastPages       uint64
+	LastErr         string
+	LastRetryReason string
+	LastOutcome     string
+
+	RetryConcurrentMutationTotal uint64
+	RetryRecoverableRootSetTotal uint64
+	RetryCheckpointCleanupTotal  uint64
+	RetryResourcePinnedTotal     uint64
+	UnsupportedTotal             uint64
+	PermanentFailuresTotal       uint64
 
 	LastFreelistReclaimablePages uint64
 	LastFreelistReclaimableRatio uint64
@@ -481,6 +649,12 @@ func (w *bgIndexVacuumWorker) Stats() bgIndexVacuumStats {
 		LastVacuumUnix:               w.lastVacuumUnix.Load(),
 		LastSpanRatio:                w.lastSpanRatio.Load(),
 		LastPages:                    w.lastPages.Load(),
+		RetryConcurrentMutationTotal: w.retryConcurrentMutationTotal.Load(),
+		RetryRecoverableRootSetTotal: w.retryRecoverableRootSetTotal.Load(),
+		RetryCheckpointCleanupTotal:  w.retryCheckpointCleanupTotal.Load(),
+		RetryResourcePinnedTotal:     w.retryResourcePinnedTotal.Load(),
+		UnsupportedTotal:             w.unsupportedTotal.Load(),
+		PermanentFailuresTotal:       w.permanentFailuresTotal.Load(),
 		LastFreelistReclaimablePages: w.lastFreelistReclaimablePages.Load(),
 		LastFreelistReclaimableRatio: w.lastFreelistReclaimableRatio.Load(),
 		LastCollectionRootPages:      w.lastCollectionRootPages.Load(),
@@ -494,6 +668,18 @@ func (w *bgIndexVacuumWorker) Stats() bgIndexVacuumStats {
 	}
 	if out.LastDebtReason == "" {
 		out.LastDebtReason = backgroundIndexVacuumDebtReasonNone
+	}
+	if v := w.lastRetryReason.Load(); v != nil {
+		out.LastRetryReason, _ = v.(string)
+	}
+	if out.LastRetryReason == "" {
+		out.LastRetryReason = backgroundIndexVacuumRetryReasonNone
+	}
+	if v := w.lastOutcome.Load(); v != nil {
+		out.LastOutcome, _ = v.(string)
+	}
+	if out.LastOutcome == "" {
+		out.LastOutcome = backgroundIndexVacuumOutcomeNone
 	}
 	return out
 }
@@ -511,6 +697,14 @@ func bgIndexVacuumStatsInto(out map[string]string, w *bgIndexVacuumWorker) {
 	out["treedb.bg_vacuum.runs"] = fmt.Sprintf("%d", stats.Runs)
 	out["treedb.bg_vacuum.trigger_probes"] = fmt.Sprintf("%d", stats.Probes)
 	out["treedb.bg_vacuum.vacuums"] = fmt.Sprintf("%d", stats.Vacuums)
+	out["treedb.bg_vacuum.retry_concurrent_mutation_total"] = fmt.Sprintf("%d", stats.RetryConcurrentMutationTotal)
+	out["treedb.bg_vacuum.retry_recoverable_root_set_total"] = fmt.Sprintf("%d", stats.RetryRecoverableRootSetTotal)
+	out["treedb.bg_vacuum.retry_checkpoint_cleanup_total"] = fmt.Sprintf("%d", stats.RetryCheckpointCleanupTotal)
+	out["treedb.bg_vacuum.retry_resource_pinned_total"] = fmt.Sprintf("%d", stats.RetryResourcePinnedTotal)
+	out["treedb.bg_vacuum.unsupported_total"] = fmt.Sprintf("%d", stats.UnsupportedTotal)
+	out["treedb.bg_vacuum.permanent_failures_total"] = fmt.Sprintf("%d", stats.PermanentFailuresTotal)
+	out["treedb.bg_vacuum.last_retry_reason"] = stats.LastRetryReason
+	out["treedb.bg_vacuum.last_outcome"] = stats.LastOutcome
 	out["treedb.bg_vacuum.backlog_skips_consecutive"] = fmt.Sprintf("%d", stats.BacklogConsecutiveSkips)
 	out["treedb.bg_vacuum.backlog_skips_total"] = fmt.Sprintf("%d", stats.BacklogSkips)
 	out["treedb.bg_vacuum.backlog_forced_runs"] = fmt.Sprintf("%d", stats.BacklogForcedRuns)

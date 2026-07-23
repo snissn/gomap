@@ -111,6 +111,37 @@ func TestVerifyArtifactsChecksContentAndRejectsEscapes(t *testing.T) {
 	}
 }
 
+func TestVerifyArtifactsAcceptsFrozenChildRecoveryDirectory(t *testing.T) {
+	root := t.TempDir()
+	manifest := testChildManifest("fresh-layout")
+	manifest.Witnesses[0].ExpectedRecoveryDir = "recovery-input/db"
+	for index := range manifest.TestBinaries {
+		manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
+	}
+	writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
+	if err := VerifyArtifacts(root, []ChildManifest{manifest}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerifyArtifactsRejectsRecoveryDirectorySubstitution(t *testing.T) {
+	for _, dir := range []string{"", "recovery-input", "../db", "/recovery-input/db", `recovery-input\db`} {
+		t.Run(strings.NewReplacer("/", "-", `\`, "-").Replace(dir), func(t *testing.T) {
+			root := t.TempDir()
+			manifest := testChildManifest("fresh-layout")
+			manifest.Witnesses[0].ExpectedRecoveryDir = "recovery-input/db"
+			for index := range manifest.TestBinaries {
+				manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
+			}
+			writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
+			rewriteArtifactJSONField(t, root, &manifest.Witnesses[0], ArtifactKindRecoveryTrace, "dir", dir)
+			if err := VerifyArtifacts(root, []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), "expected recovery directory") {
+				t.Fatalf("VerifyArtifacts dir=%q error=%v", dir, err)
+			}
+		})
+	}
+}
+
 func TestVerifyArtifactsRejectsOperationTraceThatDoesNotMatchWitness(t *testing.T) {
 	root := t.TempDir()
 	manifest := testChildManifest("witness-a")
@@ -183,6 +214,36 @@ func TestVerifyArtifactsRequiresTraceToEndAtDeclaredCutOccurrence(t *testing.T) 
 	}
 }
 
+func TestReplayWindowCutCountRetainsPrefixButScopesAddress(t *testing.T) {
+	events := []string{
+		"cut:after-meta-write:meta",
+		"cut:after-meta-write:meta",
+		"replay-window:variant-a",
+		"cut:after-meta-write:meta",
+	}
+	if got, err := replayWindowCutCount(events, "after-meta-write", "variant-a"); err != nil || got != 1 {
+		t.Fatalf("windowed matching events=%d error=%v want 1", got, err)
+	}
+	for _, test := range []struct {
+		name   string
+		events []string
+		window string
+		want   string
+	}{
+		{name: "missing", events: []string{"cut:after-meta-write:meta"}, window: "variant-a", want: "exactly one"},
+		{name: "duplicate", events: []string{"replay-window:variant-a", "replay-window:variant-a", "cut:after-meta-write:meta"}, window: "variant-a", want: "exactly one"},
+		{name: "misordered", events: []string{"cut:after-meta-write:meta", "replay-window:variant-a"}, window: "variant-a", want: "does not precede"},
+		{name: "wrong-marker", events: []string{"replay-window:variant-b", "cut:after-meta-write:meta"}, window: "variant-a", want: "does not match"},
+		{name: "undeclared", events: events, want: "without a declared"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := replayWindowCutCount(test.events, "after-meta-write", test.window); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("replayWindowCutCount error=%v want substring %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestVerifyArtifactsRejectsModeledEvidenceReuseAcrossWitnesses(t *testing.T) {
 	root := t.TempDir()
 	manifest := testChildManifest("witness-a")
@@ -209,6 +270,7 @@ func TestVerifyArtifactsRejectsMalformedOrUnboundModeledArtifacts(t *testing.T) 
 		want  string
 	}{
 		{name: "stable tree schema", kind: ArtifactKindStableImageTree, field: "schema_version", value: "wrong/v1", want: "stable image tree"},
+		{name: "operation trace schema", kind: ArtifactKindOperationTrace, field: "schema_version", value: "treedb-power-loss-operation-trace/v1", want: "operation trace"},
 		{name: "stable tree directory escape", kind: ArtifactKindStableImageTree, field: "directories", value: []string{"../escape"}, want: "unsafe or non-canonical"},
 		{name: "dirty tree totals", kind: ArtifactKindDirtyImageTree, field: "total_bytes", value: 999, want: "dirty image tree"},
 		{name: "metrics cross reference", kind: ArtifactKindMetrics, field: "trace_events", value: 999, want: "does not match"},
@@ -231,6 +293,60 @@ func TestVerifyArtifactsRejectsMalformedOrUnboundModeledArtifacts(t *testing.T) 
 			}
 		})
 	}
+}
+
+func TestVerifyArtifactsRejectsInvalidDeclaredReplayWindow(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		events []string
+		want   string
+	}{
+		{name: "missing-marker", events: []string{"cut:after-meta-write:meta:meta.db:0"}, want: "exactly one replay-window marker"},
+		{name: "duplicate-marker", events: []string{"replay-window:variant-a", "replay-window:variant-a", "cut:after-meta-write:meta:meta.db:0"}, want: "exactly one replay-window marker"},
+		{name: "marker-after-last-cut", events: []string{"cut:after-meta-write:meta:meta.db:0", "replay-window:variant-a"}, want: "does not precede a matching cut"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			manifest := testChildManifest("witness-a")
+			witness := &manifest.Witnesses[0]
+			witness.ReplayWindow = "variant-a"
+			witness.Command.Env[powerLossReplayWindowEnv] = witness.ReplayWindow
+			witness.CutID = "cut/checkpoint-generation-2/after-meta-write/000"
+			witness.CutOccurrence = 0
+			witness.ObservedEventCount = 1
+			witness.Command.Env["TREEDB_POWERLOSS_CUT_ID"] = witness.CutID
+			for index := range manifest.TestBinaries {
+				manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
+			}
+			writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
+			rewriteArtifactJSONField(t, root, witness, ArtifactKindOperationTrace, "events", test.events)
+
+			if err := VerifyArtifacts(root, []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("VerifyArtifacts error=%v want substring %q", err, test.want)
+			}
+		})
+	}
+
+	t.Run("trace-variant-mismatch", func(t *testing.T) {
+		root := t.TempDir()
+		manifest := testChildManifest("witness-a")
+		witness := &manifest.Witnesses[0]
+		witness.ReplayWindow = "variant-a"
+		witness.Command.Env[powerLossReplayWindowEnv] = witness.ReplayWindow
+		witness.CutID = "cut/checkpoint-generation-2/after-meta-write/000"
+		witness.CutOccurrence = 0
+		witness.ObservedEventCount = 1
+		witness.Command.Env["TREEDB_POWERLOSS_CUT_ID"] = witness.CutID
+		for index := range manifest.TestBinaries {
+			manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
+		}
+		writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
+		rewriteArtifactJSONField(t, root, witness, ArtifactKindOperationTrace, "variant_id", "variant-b")
+
+		if err := VerifyArtifacts(root, []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), "does not match variant_id") {
+			t.Fatalf("VerifyArtifacts trace-variant mismatch error=%v", err)
+		}
+	})
 }
 
 func TestVerifyArtifactsRejectsImageBytesThatDoNotMatchTree(t *testing.T) {
@@ -457,6 +573,19 @@ func writeModeledEvidenceFixture(t *testing.T, root string, manifest *ChildManif
 	t.Helper()
 	witness := &manifest.Witnesses[0]
 	evidenceDir := filepath.Join(root, filepath.FromSlash(witness.Command.Env["TREEDB_POWERLOSS_EVIDENCE_DIR"]))
+	recoveryDir, err := normalizeRecoveryDir(witness.ExpectedRecoveryDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imageFile := "index.db"
+	var imageDirectories []string
+	if child := strings.TrimPrefix(recoveryDir, defaultRecoveryDir+"/"); child != recoveryDir {
+		imageFile = filepath.Join(filepath.FromSlash(child), "index.db")
+		parts := strings.Split(child, "/")
+		for index := range parts {
+			imageDirectories = append(imageDirectories, strings.Join(parts[:index+1], "/"))
+		}
+	}
 	stableContents := []byte("stable")
 	dirtyContents := []byte("dirty")
 	for _, image := range []struct {
@@ -471,7 +600,11 @@ func writeModeledEvidenceFixture(t *testing.T, root string, manifest *ChildManif
 		if err := os.MkdirAll(filepath.Join(evidenceDir, image.dir), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(evidenceDir, image.dir, "index.db"), image.contents, 0o600); err != nil {
+		imagePath := filepath.Join(evidenceDir, image.dir, imageFile)
+		if err := os.MkdirAll(filepath.Dir(imagePath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(imagePath, image.contents, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -480,13 +613,15 @@ func writeModeledEvidenceFixture(t *testing.T, root string, manifest *ChildManif
 	stableTree := imageTreeArtifact{
 		SchemaVersion: imageTreeSchemaVersion,
 		Kind:          "stable-image",
-		Files:         []imageTreeFileArtifact{{Path: "index.db", Bytes: int64(len(stableContents)), SHA256: fmt.Sprintf("%x", stableDigest)}},
+		Directories:   imageDirectories,
+		Files:         []imageTreeFileArtifact{{Path: filepath.ToSlash(imageFile), Bytes: int64(len(stableContents)), SHA256: fmt.Sprintf("%x", stableDigest)}},
 		TotalBytes:    int64(len(stableContents)),
 	}
 	dirtyTree := imageTreeArtifact{
 		SchemaVersion: imageTreeSchemaVersion,
 		Kind:          "dirty-image",
-		Files:         []imageTreeFileArtifact{{Path: "index.db", Bytes: int64(len(dirtyContents)), SHA256: fmt.Sprintf("%x", dirtyDigest)}},
+		Directories:   imageDirectories,
+		Files:         []imageTreeFileArtifact{{Path: filepath.ToSlash(imageFile), Bytes: int64(len(dirtyContents)), SHA256: fmt.Sprintf("%x", dirtyDigest)}},
 		TotalBytes:    int64(len(dirtyContents)),
 	}
 	stableFingerprint := strings.Repeat("a", 64)
@@ -515,7 +650,7 @@ func writeModeledEvidenceFixture(t *testing.T, root string, manifest *ChildManif
 	recovery := recoveryTraceArtifact{
 		SchemaVersion:      recoveryTraceSchemaVersion,
 		PublicAPI:          "treedb.Open",
-		Dir:                "recovery-input",
+		Dir:                recoveryDir,
 		PreOpenSnapshotDir: "recovery-preopen",
 		InputTreeSHA256:    stableArtifact.SHA256,
 		StableFingerprint:  stableFingerprint,
@@ -609,18 +744,24 @@ func mustJSON(t *testing.T, value any) string {
 
 func testOperationTraceJSON(t *testing.T, witness Witness, cutPoint string) string {
 	t.Helper()
-	events := make([]string, witness.ObservedEventCount)
-	for index := range events {
-		events[index] = "cut:" + cutPoint + ":meta:meta.db:0"
+	events := make([]string, 0, witness.ObservedEventCount+1)
+	if witness.ReplayWindow != "" {
+		events = append(events, "replay-window:"+witness.ReplayWindow)
+	}
+	for range witness.ObservedEventCount {
+		events = append(events, "cut:"+cutPoint+":meta:meta.db:0")
 	}
 	trace := map[string]any{
-		"schema_version":       "treedb-power-loss-operation-trace/v1",
+		"schema_version":       operationTraceSchemaVersion,
 		"cut_id":               witness.CutID,
 		"variant_id":           witness.Command.Env["TREEDB_POWERLOSS_VARIANT_ID"],
 		"seed":                 fmt.Sprint(witness.Seed),
 		"declared_cut_point":   cutPoint,
 		"observed_event_count": witness.ObservedEventCount,
 		"events":               events,
+	}
+	if witness.ReplayWindow != "" {
+		trace["replay_window"] = witness.ReplayWindow
 	}
 	data, err := json.Marshal(trace)
 	if err != nil {

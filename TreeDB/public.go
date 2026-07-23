@@ -30,6 +30,8 @@ import (
 // Options configures TreeDB. It is re-exported from TreeDB/db for convenience.
 type Options = db.Options
 
+var errVacuumUnsupported = db.ErrVacuumUnsupported
+
 // EntryRevision is TreeDB's native per-entry revision metadata. Revision zero is
 // reserved for legacy entries that do not carry revision metadata.
 type EntryRevision = page.EntryRevision
@@ -64,8 +66,6 @@ const (
 	FlushAdmissionPolicyOff      = db.FlushAdmissionPolicyOff
 	FlushAdmissionPolicyAuto     = db.FlushAdmissionPolicyAuto
 )
-
-var errVacuumUnsupported = db.ErrVacuumUnsupported
 
 // ErrNamespacePersistenceUnsupported reports that the active platform or
 // filesystem cannot persist a directory creation required by a successful
@@ -595,19 +595,59 @@ func (db *DB) beginPublicOperation() error {
 }
 
 func (db *DB) beginFullScanMaintenance(op string) (time.Duration, func(success bool)) {
+	wait, finish, _ := db.beginFullScanMaintenanceContext(context.Background(), op)
+	return wait, finish
+}
+
+func lockFullScanMaintenanceContext(ctx context.Context, mu *sync.Mutex) error {
+	if ctx.Done() == nil {
+		mu.Lock()
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if mu.TryLock() {
+			if err := ctx.Err(); err != nil {
+				mu.Unlock()
+				return err
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (db *DB) beginFullScanMaintenanceContext(ctx context.Context, op string) (time.Duration, func(success bool), error) {
 	if db == nil {
-		return 0, func(bool) {}
+		return 0, func(bool) {}, nil
 	}
 	wait := time.Duration(0)
+	if err := ctx.Err(); err != nil {
+		return wait, func(bool) {}, err
+	}
 	if db.maintenance.mu.TryLock() {
-		// uncontended fast path
+		if err := ctx.Err(); err != nil {
+			db.maintenance.mu.Unlock()
+			return wait, func(bool) {}, err
+		}
 	} else {
 		waitStart := time.Now()
-		db.maintenance.mu.Lock()
+		err := lockFullScanMaintenanceContext(ctx, &db.maintenance.mu)
 		wait = time.Since(waitStart)
 		db.maintenance.deferrals.Add(1)
 		db.maintenance.waitTotal.Add(wait.Nanoseconds())
 		atomicStoreMaxInt64(&db.maintenance.waitMax, wait.Nanoseconds())
+		if err != nil {
+			return wait, func(bool) {}, err
+		}
 	}
 	db.maintenance.active.Store(maintenanceOpCode(op))
 
@@ -628,7 +668,7 @@ func (db *DB) beginFullScanMaintenance(op string) (time.Duration, func(success b
 		}
 		db.maintenance.active.Store(maintenanceOpNone)
 		db.maintenance.mu.Unlock()
-	}
+	}, nil
 }
 
 func maintenanceStatsInto(stats map[string]string, m *maintenanceCoordinator) {
@@ -1136,10 +1176,24 @@ func openResolved(opts Options) (*DB, error) {
 		cached.StartAutoCheckpoint(autoInterval, maxWALBytes, idleInterval)
 	}
 
-	// #3681 owns RecoverableRootSet convergence for destructive maintenance.
-	// Until that fence is available, do not launch a worker whose only online
-	// operation is deliberately unsupported. Explicit VacuumIndexOnline calls
-	// still fail closed with ErrVacuumRecoverableRootSetRequired.
+	vacuumInterval := opts.BackgroundIndexVacuumInterval
+	if vacuumInterval == 0 {
+		vacuumInterval = 30 * time.Second
+	}
+	if vacuumInterval < 0 {
+		vacuumInterval = 0
+	}
+	if vacuumInterval > 0 && !opts.ReadOnly && runtime.GOOS != "windows" {
+		out.bgVac.Start(out, bgIndexVacuumConfig{
+			Interval:                    vacuumInterval,
+			SpanRatioPPM:                opts.BackgroundIndexVacuumSpanRatioPPM,
+			MaxBacklogSkips:             opts.BackgroundIndexVacuumMaxBacklogSkips,
+			FreelistReclaimableRatioPPM: opts.BackgroundIndexVacuumFreelistReclaimableRatioPPM,
+			FreelistReclaimablePages:    opts.BackgroundIndexVacuumFreelistReclaimablePages,
+			CollectionRootSpanRatioPPM:  opts.BackgroundIndexVacuumCollectionRootSpanRatioPPM,
+			CollectionRootPages:         opts.BackgroundIndexVacuumCollectionRootPages,
+		})
+	}
 	cached.SetStatsHook(out.publicCachedExpvarStatsInto)
 
 	return out, nil
@@ -2442,6 +2496,9 @@ func (db *DB) checkpointCachedForPublicCommandWAL() error {
 		return err
 	}
 	if db.commandWALCached && db.backend != nil {
+		if err := db.refreshPublicCommandWALCheckpointFallback(); err != nil {
+			return err
+		}
 		if err := db.backend.CleanupCommandWALCoveredSegmentsAtCheckpoint(true); err != nil {
 			return err
 		}
@@ -2477,24 +2534,42 @@ func (db *DB) CompactIndex() error {
 // a short writer pause. Disk space from the old index is reclaimed once any old
 // snapshots/iterators drain.
 func (db *DB) VacuumIndexOnline(ctx context.Context) error {
-	if err := db.ensureOpen(); err != nil {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// Reject unsupported platforms before maintenance acquisition or cached
+	// checkpointing so this API remains non-mutating when it cannot run.
+	if runtime.GOOS == "windows" {
+		return errVacuumUnsupported
+	}
+	_, finishMaintenance, err := db.beginFullScanMaintenanceContext(ctx, "vacuum")
+	if err != nil {
+		return err
+	}
+	success := false
+	defer func() { finishMaintenance(success) }()
+	if err := db.beginPublicOperation(); err != nil {
+		return err
+	}
+	defer db.lifecycleMu.RUnlock()
 	if db.backend == nil {
 		return ErrClosed
 	}
-	_, finishMaintenance := db.beginFullScanMaintenance("vacuum")
-	success := false
-	defer func() { finishMaintenance(success) }()
 
 	// In cached mode, ensure the backend reflects all buffered writes before
 	// rebuilding/switching the index file. This avoids exposing a backend state
 	// that temporarily "forgets" keys that only existed in memtables/WAL, which
 	// can break higher layers that assume a stable durable boundary.
 	if db.cached != nil {
-		if err := db.cached.Checkpoint(); err != nil {
+		if err := db.cached.CheckpointContext(ctx); err != nil {
 			return err
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	if err := db.reconcileCachedBackendMaintenance(db.backend.VacuumIndexOnline(ctx)); err != nil {

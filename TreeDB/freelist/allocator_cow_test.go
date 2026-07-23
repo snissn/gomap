@@ -376,7 +376,7 @@ func TestAllocatorCOWCandidateRetirementsRollbackBeforePublish(t *testing.T) {
 		before := allocator.Counters()
 		if _, err := allocator.PrepareCOWCandidateRetiringV1(
 			2, 2, candidateIDFromString("failed-retirement-stage"), capability,
-			[]COWRetirementV1{{PageIDs: []uint64{4}, LastReachableCommitSeq: 1}},
+			[]COWRetirementV1{{PageIDs: []uint64{4, 5, 6}, LastReachableCommitSeq: 1}},
 			1, failingPageSinkV1{},
 		); err == nil {
 			t.Fatal("candidate preparation unexpectedly succeeded")
@@ -402,14 +402,14 @@ func TestAllocatorCOWCandidateRetirementsRollbackBeforePublish(t *testing.T) {
 		before := allocator.Counters()
 		prepared, err := allocator.PrepareCOWCandidateRetiringV1(
 			2, 2, candidateIDFromString("aborted-retirement-stage"), capability,
-			[]COWRetirementV1{{PageIDs: []uint64{4}, LastReachableCommitSeq: 1}},
+			[]COWRetirementV1{{PageIDs: []uint64{4, 5, 6}, LastReachableCommitSeq: 1}},
 			1, NewMemoryPageStoreV1(),
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := prepared.Candidate().Generation().RetiredCount(); got != 1 {
-			t.Fatalf("prepared retired=%d want 1", got)
+		if got := prepared.Candidate().Generation().RetiredCount(); got != 3 {
+			t.Fatalf("prepared retired=%d want 3", got)
 		}
 		if got := p.PageCount(); got != 8 {
 			t.Fatalf("pager pages after prepare=%d want 8", got)

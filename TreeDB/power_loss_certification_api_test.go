@@ -479,12 +479,12 @@ func TestPowerLossCertificationDurablePrefixHolePublicReopen(t *testing.T) {
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		return model.Observe(opts.Dir, event)
 	})
-	// Point writes retain their value inline in the command-WAL frame, so
-	// recovery can legitimately reconstruct a missing value-log segment. The
-	// public batch path materializes the pointer first and journals its external
-	// RID, making the selected segment a real durable-prefix dependency.
+	// Bounded durable pointer writes use self-contained SetMaterializedRID
+	// frames, so recovery can legitimately reconstruct a missing value-log
+	// segment. Exceed the materialized-value limit to force an external SetRID;
+	// the selected segment is then a real durable-prefix dependency.
 	batch := db.NewBatch()
-	if err := batch.Set([]byte("cert/durable-hole"), bytes.Repeat([]byte("h"), 4096)); err != nil {
+	if err := batch.Set([]byte("cert/durable-hole"), bytes.Repeat([]byte("h"), backenddb.RawKVCommandWALMaterializedRIDMaxValueBytes+1)); err != nil {
 		_ = batch.Close()
 		restore()
 		t.Fatal(err)

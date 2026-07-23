@@ -1,8 +1,8 @@
 # Command-WAL Durable Write Contract
 
-Status: current behavior and measurement contract for issue #3657 (M3
-candidate). The candidate preserves this contract but does not meet the issue's
-latency exit gate.
+Status: current behavior and measurement contract, including the bounded
+RID-plus-bytes materialization path from issue #3731 and the conservative
+`SetRID` fallback.
 
 This document defines the durability boundary used by cached public raw-KV
 operations in `ProfileCommandWALDurable`. It distinguishes a logical public
@@ -14,8 +14,9 @@ weaker durability mode.
 
 For `SetSync`, `DeleteSync`, and a dirty `Batch.WriteSync`, a nil return means:
 
-1. any value-log records referenced by the command frame have passed a file
-   sync boundary;
+1. any external value-log records referenced by the command frame have passed a
+   file sync boundary, while any materialized RID operation carries the exact
+   RID and logical bytes needed to recreate that record;
 2. the complete typed command-WAL frame has been written and the command-WAL
    file has passed a later file sync boundary; and
 3. the mutation has been published to the cached memtable before the call
@@ -55,53 +56,59 @@ There is one logical command-WAL sync and one actual command-WAL file-sync hook
 for this operation when no segment rotation occurs. Directory sync is a segment
 creation/rotation concern, not a per-operation durability barrier.
 
-### Pointer-backed dirty `WriteSync`
+### Bounded materialized pointer-backed dirty `WriteSync`
+
+When a batch has at most 256 total operations, every eligible value
+is at most 64 KiB, the conservative full command-frame estimate is at most
+1 MiB and below the configured command segment cap, and a capped active
+value-log segment has enough conservatively reserved space to avoid rotation:
 
 ```text
 public Batch.WriteSync
-  -> append external records to the selected persistent value-log lane
-  -> value-log materialization Sync
-  -> retain that lane's durable-write reservation
+  -> append records to the selected persistent value-log lane without fsync
   -> acquire the command publish/barrier ordering lock
   -> validate/read each pointer RID
-  -> verify the active lane still has the certified file, sequence, and size
-  -> reuse the materialization Sync for that unchanged active segment
-  -> encode RID references and append one RawKVBatch command frame
+  -> encode each RID plus its exact logical bytes in RawKVBatchV2
+  -> append one RawKVBatch command frame
   -> flush command writer buffers
   -> command-WAL file Sync
   -> publish pointers to cached memtables and reset the batch
   -> return nil
 ```
 
-For an unchanged active segment, current code therefore performs one actual
-value-log file-sync hook for a forced-pointer dirty `WriteSync`, attributed to
-`materialization`; the logical `external_ref` sync and its duplicate physical
-file sync are coalesced. The successful materialization sync records a
-certificate containing the active file ID, lane sequence, and writer size while
-holding `vlogMu`. The durable batch retains `lane.syncing` until
-external-reference ordering. Reuse requires that reservation plus an exact
-file/sequence/size match under the same lock. The value log is append-only, so
-the certificate covers every referenced byte in that unchanged file at or
-below the recorded boundary. Pointer validation and RID lookup complete before
-external-reference ordering can append or sync a command frame. The later
-command-WAL sync remains mandatory.
+This path has one durable barrier: the command-WAL file sync. Recovery scans the
+value log by RID. A missing RID is appended under the encoded exact RID; a
+matching RID is reused; a present RID with different bytes fails closed. Replay
+syncs any newly appended value-log bytes before publishing roots and
+`AppliedCommandLSN`, so a replay crash can safely retry without allocating a
+different RID or duplicating a logical record.
 
-Every uncertainty falls back to the original external-reference sync: writer
-growth, rotation, reservation release, missing active writer, a failed
-materialization sync, or a referenced file different from the certified active
-file. Malformed or unreadable pointers fail before command-WAL durability.
+The backend encoder independently enforces the same 64 KiB value, 1 MiB frame,
+and 256 total-operation bounds. Retaining `entry.Value` beside a pointer is not
+by itself permission to emit `SetMaterializedRID`. One-shot raw entry APIs must
+declare one of three append modes: relaxed, directly durable, or a grouped
+durable-prefix participant. Relaxed mode always emits the V1 `SetRID` fallback.
+A prefix participant may emit bounded V2 while appending an individually
+relaxed frame, but its caller must not acknowledge the mutation until a later
+durable-prefix barrier covers that frame. Reusable entry intents, whose eventual
+boundary is unknown, conservatively remain V1.
 
-When a command frame references a rotated, non-current value-log segment, the
-current implementation first flushes and, unless its own active reference is
-certified, syncs the referenced lane's active writer, then opens and syncs each
-distinct referenced old segment directly.
-Each operation is a logical `external_ref` observation. The active-writer call
-records its lane-lock wait; the direct old-segment call has zero lock wait and
-records the direct request time. Failure to open an old segment is a logical error
-without a physical file-sync attempt. A reached direct sync hook is both a
-logical observation and a physical rotated-segment attempt. This is measured
-ordering, not a required sync count, and it makes segment rotation an explicit
-exclusion in any M3 coalescing proof.
+### `SetRID` fallback
+
+If any materialized value or the estimated frame exceeds the bounds above, or
+the append could cross a configured value-log segment boundary, the whole batch
+retains the external-reference path:
+
+```text
+append value-log records -> sync exact producer closure -> encode SetRID
+-> sync command WAL -> publish pointers
+```
+
+The fallback keeps `ExternalRefFenceV1`, exact stable dependency handles,
+rotation/old-segment handling, pending-debt barriers, and GC/rewrite protection.
+A mixed V2 payload may contain both operations: only `SetRID` contributes to the
+external RID fence and producer closure. Malformed or unreadable pointers fail
+before command-WAL durability.
 
 ### `Write` followed by `WriteSync`
 
@@ -206,7 +213,7 @@ The verification matrix requires all of the following:
   counts; and
 - observer state remains race-safe.
 
-## M3 result and remaining ownership
+## Historical M3 result and #3731 boundary
 
 M3 removes the only redundancy proven by M2: the second value-log sync in the
 unchanged active-segment pointer path. Deterministic counters and Linux syscall
@@ -214,11 +221,9 @@ tracing show one value-log sync rather than two, while rotation, writer growth,
 missing-writer, released-reservation, and error fallbacks retain conservative
 ordering. Crash/reopen, race, and full repository tests pass.
 
-The identical focused benchmark does not demonstrate the required latency
-improvement: the canonical alternating comparison is statistically
-inconclusive and has a +3.0% geomean. The remaining power-loss-durable floor is
-one value-log materialization sync followed by one command-WAL sync. Therefore
-this candidate is a partial mechanism result and a no-go for #3657's latency
-gate, not completion of that issue. Command-WAL sync removal, async
-acknowledgement, relaxed durability, and per-write backend checkpointing remain
-outside the optimization boundary.
+That candidate left one value-log materialization sync followed by one
+command-WAL sync. #3731 removes the first sync only for the bounded,
+format-explicit materialized-RID path above. Oversized or uncertain batches
+continue to use `SetRID`; command-WAL sync removal, async acknowledgement,
+relaxed durability, and per-write backend checkpointing remain outside the
+optimization boundary.

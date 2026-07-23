@@ -7,7 +7,9 @@ leaf-pack work, exact checkpoint frontiers, stable calls, index-vacuum
 disposition, maintenance allocations, and matched foreground/idle write
 latencies.
 
-Current artifacts use `schema_version: 2`. Version 2 records the complete,
+Current artifacts use `schema_version: 3`. Version 3 adds the typed
+`status`, `required`, and policy `reason` for the index-vacuum phase and vacuum
+summary. Version 2 introduced the complete,
 potentially overlapping directory-sync operation duration in
 `leaf_pack.directory_sync_time_nanos` and the non-overlapping publication-path
 charge in `leaf_pack.directory_sync_wait_nanos`. The capture script rejects
@@ -30,6 +32,17 @@ overhead evidence, CPU/allocation/block/mutex profiles, a runtime trace, and a
 stable-syscall `strace` summary. Diagnostic profiles disable the test recorder
 so allocation attribution describes the production maintenance path; pprof
 phase labels remain available.
+
+Schema v3 records vacuum subphase and maximum-writer-pause timings, physical
+index bytes/pages before and after replacement, live/in-use heap boundaries,
+and the process heap arena high-water proxy (`heap_sys_after`). GNU `time`
+provides the independent per-fixture maximum-RSS measurement.
+
+The wrapper also runs `BenchmarkCompactStorageIndexVacuumDecisionNoDebt` in 12
+independent 100-operation samples and records GNU `time` maximum RSS for the
+`full-high-debt` and `exhaustive-control` fixtures. The decision benchmark is
+the no-replacement gate: it executes the bounded metadata probe and planner but
+none of the maintenance phases.
 
 The allocation profile is a subtraction of `allocs` snapshots taken immediately
 before and after the measured operation. Each snapshot first advances two GC

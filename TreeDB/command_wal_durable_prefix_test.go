@@ -256,7 +256,9 @@ func TestPublicCommandWALRelaxedPointerDebtStatsCloseOnSetSync(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	b := db.NewBatch()
-	if err := b.Set([]byte("relaxed-pointer"), bytes.Repeat([]byte("r"), 4096)); err != nil {
+	// Keep this above the bounded materialized-RID value limit so the test
+	// continues to exercise #3920's external dependency-debt path.
+	if err := b.Set([]byte("relaxed-pointer"), bytes.Repeat([]byte("r"), 65<<10)); err != nil {
 		_ = b.Close()
 		t.Fatalf("relaxed pointer batch Set: %v", err)
 	}
@@ -313,7 +315,9 @@ func TestPublicCommandWALRelaxedPointerDebtEmitsExactDependencySyncCuts(t *testi
 	defer restore()
 
 	b := db.NewBatch()
-	if err := b.Set([]byte("relaxed-pointer"), bytes.Repeat([]byte("r"), 4096)); err != nil {
+	// Keep this above the bounded materialized-RID value limit so the test
+	// continues to exercise #3920's external dependency-sync path.
+	if err := b.Set([]byte("relaxed-pointer"), bytes.Repeat([]byte("r"), 65<<10)); err != nil {
 		_ = b.Close()
 		t.Fatalf("relaxed pointer batch Set: %v", err)
 	}
@@ -389,7 +393,9 @@ func TestPublicCommandWALRelaxedPointerDependencySyncCutsRetainDebtForRetry(t *t
 			defer func() { _ = db.Close() }()
 
 			b := db.NewBatch()
-			if err := b.Set([]byte("relaxed-pointer"), bytes.Repeat([]byte("r"), 4096)); err != nil {
+			// Keep this above the bounded materialized-RID value limit so the test
+			// continues to exercise #3920's external dependency retry path.
+			if err := b.Set([]byte("relaxed-pointer"), bytes.Repeat([]byte("r"), 65<<10)); err != nil {
 				_ = b.Close()
 				t.Fatalf("batch Set relaxed pointer: %v", err)
 			}

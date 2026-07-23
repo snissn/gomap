@@ -3,7 +3,6 @@ package treedb_test
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -148,12 +147,12 @@ func TestVacuumIndexOnline_LeafPagesInValueLog_PreservesLeafRefWrites(t *testing
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := db.VacuumIndexOnline(ctx); !errors.Is(err, treedbdb.ErrVacuumRecoverableRootSetRequired) {
-		t.Fatalf("vacuum err=%v want recoverable-root-set fence", err)
+	if err := db.VacuumIndexOnline(ctx); err != nil {
+		t.Fatalf("vacuum: %v", err)
 	}
 
-	// The rejected maintenance attempt must leave the live leaf-log root fully
-	// writable and checkpointable.
+	// The published replacement must leave the live leaf-log root fully writable
+	// and checkpointable.
 	if err := db.Set([]byte("k010"), []byte("updated")); err != nil {
 		t.Fatalf("set updated: %v", err)
 	}
@@ -166,6 +165,23 @@ func TestVacuumIndexOnline_LeafPagesInValueLog_PreservesLeafRefWrites(t *testing
 
 	metaAfter := readMainMeta(t, dir)
 	requireMainRootLeafLogChildren(t, dir, metaAfter.UserRootPageID)
+
+	reopened, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	got, err := reopened.Get([]byte("k010"))
+	if err != nil {
+		_ = reopened.Close()
+		t.Fatalf("get updated after reopen: %v", err)
+	}
+	if !bytes.Equal(got, []byte("updated")) {
+		_ = reopened.Close()
+		t.Fatalf("updated value after reopen=%q want updated", got)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("close reopened: %v", err)
+	}
 }
 
 func TestVacuumIndexOffline_LeafPagesInValueLog_ReopenParity(t *testing.T) {

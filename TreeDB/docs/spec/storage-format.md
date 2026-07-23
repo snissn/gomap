@@ -2076,9 +2076,10 @@ through an obsolete rotation token. A failure before a durable frame append
 retains the debt for retry; a failure after append or during the final WAL sync
 is commit-ambiguous and poisons the open handle with `ErrRecoveryRequired`.
 
-Every V2 `RawKVBatch` frame containing at least one `SetRID` operation has
-exactly one `ExternalRefFenceV1` precondition. Frames without `SetRID` have no
-RID fence. Its payload is:
+Every V2 command envelope containing a `RawKVBatch` payload with at least one
+`SetRID` operation has exactly one `ExternalRefFenceV1` precondition. Frames
+without `SetRID` have no RID fence, including `RawKVBatchV2` frames whose
+pointer operations are all `SetMaterializedRID`. Its payload is:
 
 ```text
 u32 UniqueRIDCount
@@ -2099,7 +2100,7 @@ Current command kinds:
 
 | Value | Kind | Scope | Payload format | Status |
 |---:|---|---|---|---|
-| 1 | `RawKVBatch` | raw KV | `RawKVBatchV1` | typed raw key/value command batch |
+| 1 | `RawKVBatch` | raw KV | `RawKVBatchV1` or `RawKVBatchV2` | typed raw key/value command batch |
 | 100 | `CollectionInsertBatchByID` | collection | `CollectionInsertBatchByIDV1` | deterministic collection insert/upsert-by-id batch |
 | 101 | `CollectionDeleteBatchByID` | collection | `CollectionDeleteBatchByIDV1` | deterministic collection delete-by-id batch |
 | 102 | `CollectionUpdateBatchByID` | collection | `CollectionUpdateBatchByIDV1` | deterministic collection update/replace-by-id batch |
@@ -2119,8 +2120,9 @@ Current payload format IDs:
 | 6 | `CatalogCreateCollectionV1` |
 | 7 | `CollectionRebuildVectorIndexV1` |
 | 8 | `DurablePrefixBarrierV1` |
+| 9 | `RawKVBatchV2` |
 
-`RawKVBatchV1` payload:
+`RawKVBatchV1` and `RawKVBatchV2` share this payload framing:
 
 ```text
 u16 Version        // 1
@@ -2128,12 +2130,28 @@ u32 OpCount
 Op[OpCount]
 
 Op:
-u8  Op             // 1=set, 2=delete, 3=set-by-value-log-RID, 4=delete-range
+u8  Op             // 1=set, 2=delete, 3=set-by-value-log-RID, 4=delete-range,
+                   // 5=set-by-materialized-value-log-RID (V2 only)
 u32 KeyLen          // for delete-range: StartLen, or 0xffffffff for nil/unbounded
 u32 ValueLen        // for delete-range: EndLen, or 0xffffffff for nil/unbounded
 bytes Key[KeyLen]   // omitted when delete-range StartLen is 0xffffffff
 bytes Value[ValueLen] // omitted when delete-range EndLen is 0xffffffff
 ```
+
+`SetMaterializedRID` encodes `ValueLen >= 8`, followed by a non-zero
+little-endian `u64 RID` and the exact logical value bytes. `RawKVBatchV1`
+rejects this operation. `RawKVBatchV2` recovery either reuses an existing record
+whose RID and bytes both match or appends the bytes under that exact RID before
+publishing the pointer. A present RID with different bytes is corruption.
+Materialized RID operations are self-contained and do not enter the external
+RID fence; `SetRID` operations in the same V2 payload retain the normal fence
+and stable dependency closure. Live encoding selects V2 only through an
+explicit directly durable or durable-prefix-participant append mode and only
+within the shared 64 KiB/value, 1 MiB/frame, and 256-operation bounds. An
+ordinary relaxed append and a reusable intent with no declared final durability
+boundary use V1 even if pointer entries retain logical value bytes. A grouped
+participant's envelope remains individually relaxed; its later durable-prefix
+barrier is the acknowledgement boundary that stabilizes the preceding frame.
 
 A `RawKVBatch` command frame is one atomic command: one frame, one `LSN`, and
 all contained operations decode as one batch. Delete operations require
@@ -2475,6 +2493,18 @@ objects above into one lifecycle:
 Applied compaction is serialized with other backend maintenance for the full
 multi-phase sequence. Planning mode reports debt without mutating storage and is
 safe for read-only opens.
+
+Index-vacuum planning uses bounded pager metadata: total/user page span,
+freelist reclaimable pages, and collection-root span. The phase report is one of
+`planned`, `not_required`, `succeeded`, `deferred`, `unsupported`, or `failed`
+and carries whether work was required plus its reason. A successful online
+replacement rebuilds every recovery-selectable root under one
+`RecoverableRootSet`, atomically rebinds the live runtime, and is followed by a
+checkpoint. Index-only replacement does not rewrite or retire persistent value
+or leaf-log files. Completion flags remain false while required index or other
+storage-domain debt remains. After releasing the leaf-generation guard,
+CompactStorage performs one bounded leaf-GC settle and one debt-driven final
+index replacement so work created by earlier maintenance phases is not hidden.
 
 In cached mode, public maintenance wrappers checkpoint first, protect cached
 value-log paths, reserve rewrite RIDs from the live cached allocator, and

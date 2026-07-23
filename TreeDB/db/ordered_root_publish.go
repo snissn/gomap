@@ -296,6 +296,23 @@ type CommandWALPublishContext struct {
 	AppliedCommandLSN           uint64
 	durableResources            *rootpublication.StableResourceSetBuilder
 	durableResourceRequirements *rootpublication.StableLogicalObligationRequirements
+	durableResourceMutation     *rootpublication.StableLogicalObligationMutation
+}
+
+// RegisterDurableLogicalObligationMutation supplies the exact root-local
+// addition/removal evidence corresponding to the published root delta. It does
+// not replace the complete requirements oracle; it authorizes bounded retained
+// closure derivation only when removals are explicitly empty.
+func (ctx CommandWALPublishContext) RegisterDurableLogicalObligationMutation(mutation rootpublication.StableLogicalObligationMutation) error {
+	if ctx.durableResourceMutation == nil {
+		return rootpublication.ErrResourceOwnership
+	}
+	merged, err := rootpublication.MergeStableLogicalObligationMutations(*ctx.durableResourceMutation, mutation)
+	if err != nil {
+		return err
+	}
+	*ctx.durableResourceMutation = merged
+	return nil
 }
 
 // RegisterDurableResources transfers a producer-owned exact resource closure
@@ -2795,9 +2812,11 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	durableResourceBuilder := rootpublication.NewStableResourceSetBuilder()
 	defer durableResourceBuilder.Abandon()
 	durableResourceRequirements := rootpublication.StableLogicalObligationRequirements{}
+	durableResourceMutation := rootpublication.StableLogicalObligationMutation{}
 	ctx := CommandWALPublishContext{
 		AppliedCommandLSN: lsn, durableResources: durableResourceBuilder,
 		durableResourceRequirements: &durableResourceRequirements,
+		durableResourceMutation:     &durableResourceMutation,
 	}
 
 	if buildContextDeltas != nil {
@@ -2961,6 +2980,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	finalizeOpts.closeTeardownPinned = true
 	finalizeOpts.durableResources = durableResources
 	finalizeOpts.durableResourceRequirements = durableResourceRequirements
+	finalizeOpts.durableResourceMutation = durableResourceMutation
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, syncCommandWAL, merged, touchedValueLogSegments,
 		true, vlogRefDelta, nil, nil, finalizeOpts,
@@ -3796,9 +3816,11 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	durableResourceBuilder := rootpublication.NewStableResourceSetBuilder()
 	defer durableResourceBuilder.Abandon()
 	durableResourceRequirements := rootpublication.StableLogicalObligationRequirements{}
+	durableResourceMutation := rootpublication.StableLogicalObligationMutation{}
 	ctx := CommandWALPublishContext{
 		AppliedCommandLSN: lsn, durableResources: durableResourceBuilder,
 		durableResourceRequirements: &durableResourceRequirements,
+		durableResourceMutation:     &durableResourceMutation,
 	}
 
 	allOrdered := ordered
@@ -3978,6 +4000,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	finalizeOpts.closeTeardownPinned = true
 	finalizeOpts.durableResources = durableResources
 	finalizeOpts.durableResourceRequirements = durableResourceRequirements
+	finalizeOpts.durableResourceMutation = durableResourceMutation
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, syncCommandWAL, merged, touchedValueLogSegments,
 		true, vlogRefDelta, nil, nil, finalizeOpts,

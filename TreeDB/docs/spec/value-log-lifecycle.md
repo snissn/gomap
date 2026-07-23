@@ -75,6 +75,14 @@ truncating, rewriting, or moving value-log bytes. The first implementation must
 skip value-log records protected only by command WAL rather than patching WAL
 records in place.
 
+A `RawKVBatchV2` `SetMaterializedRID` is not an external-ref retention root:
+the complete command frame contains the exact RID and value bytes needed to
+recreate a missing record. Before apply it is protected by retaining the command
+frame itself; after apply, the recreated or reused pointer participates in the
+ordinary published-root and cached-memtable reachability rules. `SetRID` entries,
+including those sharing the same V2 frame, retain the external-ref protections
+above.
+
 Command-WAL-only protection may be released only after the command frame is covered by a
 durable `AppliedLSN`, the root descriptors containing the refs are durable, and
 the value-log reachability tracker has incorporated those published roots or a
@@ -348,6 +356,18 @@ storage. It composes:
 
 Applied full storage compaction holds backend maintenance serialization for the
 whole sequence. Plan mode computes the same debt model without mutating storage.
+The plan records index page/span/freelist debt and a typed `index-vacuum`
+disposition. Full mode uses the bounded production thresholds; Exhaustive runs
+for any measured reclaimable index debt. Apply re-probes immediately before the
+phase, invokes the RecoverableRootSet-fenced online replacement on supported
+writable platforms, and checkpoints only after a successful replacement.
+One bounded settle replacement runs when later GC/checkpoint phases create new
+policy debt; completion is based on the audit after that settle pass.
+Transient stale/mutation races are `deferred`, Windows is `unsupported`, and
+permanent errors fail compaction. Deferred or unsupported required work keeps
+all completion flags false. `PolicyFullyCompacted` means selected planner debt
+converged; `ByteMinimized` additionally requires every Exhaustive byte phase to
+complete.
 
 Each cold debt audit performs at most one page-granular reachability walk over a
 coherent snapshot of the user, system, collection, and protected roots. The

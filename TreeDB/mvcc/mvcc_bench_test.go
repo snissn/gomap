@@ -2,6 +2,7 @@ package mvcc
 
 import (
 	"fmt"
+	"strconv"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -80,6 +81,171 @@ func BenchmarkCommitAt(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkCommitAtCommandWALRelaxedSingleton exercises the production-shaped
+// cached command-WAL path used by Dgraph. BenchmarkCommitAt deliberately uses
+// the no-WAL profile and is a useful MVCC-front-end control, but it does not
+// expose the asynchronous canonical-flush/root-publication work that dominates
+// the live relaxed profile.
+func BenchmarkCommitAtCommandWALRelaxedSingleton(b *testing.B) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, b.TempDir())
+	opts.DisableSideStores = true
+	opts.BackgroundCheckpointInterval = -1
+	// Keep the reproduction bounded while forcing several background flushes in
+	// a short benchmark. One shard makes source/flush accounting deterministic;
+	// the live Dgraph gate retains its production defaults.
+	opts.FlushThreshold = 64 << 10
+	opts.MemtableShards = 1
+	db, err := treedb.Open(opts)
+	if err != nil {
+		b.Fatalf("Open: %v", err)
+	}
+	b.Cleanup(func() { _ = db.Close() })
+	store := New(db)
+	logicalKeys := [][]byte{
+		[]byte("dgraph-posting-0"),
+		[]byte("dgraph-posting-1"),
+		[]byte("dgraph-posting-2"),
+		[]byte("dgraph-posting-3"),
+	}
+	value := make([]byte, 512)
+	before := db.Stats()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mutation := []Mutation{{Key: logicalKeys[i%len(logicalKeys)], Value: value}}
+		if err := store.CommitAt(uint64(i+1), mutation, CommitRelaxed); err != nil {
+			b.Fatalf("CommitAt(%d): %v", i+1, err)
+		}
+	}
+	b.StopTimer()
+	if err := db.Checkpoint(); err != nil {
+		b.Fatalf("Checkpoint: %v", err)
+	}
+	after := db.Stats()
+	commandAppends := benchmarkStatDelta(b, before, after, "treedb.command_wal.append.count_total")
+	pointAppends := benchmarkStatDelta(b, before, after, "treedb.command_wal.append.point.count_total")
+	payloadAppends := benchmarkStatDelta(b, before, after, "treedb.command_wal.append.payload.count_total")
+	backendWrites := benchmarkStatDelta(b, before, after, "treedb.cache.flush_apply.batches_total")
+	units := benchmarkStatDelta(b, before, after, "treedb.cache.flush_apply.units_total")
+	entries := benchmarkStatDelta(b, before, after, "treedb.cache.flush_apply.entries_total")
+	b.ReportMetric(commandAppends/float64(b.N), "command_wal_appends/op")
+	b.ReportMetric(pointAppends/float64(b.N), "point_appends/op")
+	b.ReportMetric(payloadAppends/float64(b.N), "payload_appends/op")
+	b.ReportMetric(backendWrites/float64(b.N), "backend_writes/op")
+	if backendWrites > 0 {
+		b.ReportMetric(units/backendWrites, "memtables/backend_write")
+		b.ReportMetric(entries/backendWrites, "entries/backend_write")
+	}
+}
+
+func benchmarkStatDelta(b *testing.B, before, after map[string]string, key string) float64 {
+	b.Helper()
+	parse := func(stats map[string]string) uint64 {
+		value, ok := stats[key]
+		if !ok {
+			b.Fatalf("missing stat %q", key)
+		}
+		parsed, err := strconv.ParseUint(value, 10, 64)
+		if err != nil {
+			b.Fatalf("parse stat %q=%q: %v", key, value, err)
+		}
+		return parsed
+	}
+	start, finish := parse(before), parse(after)
+	if finish < start {
+		b.Fatalf("stat %q regressed from %d to %d", key, start, finish)
+	}
+	return float64(finish - start)
+}
+
+// BenchmarkCommitGroupAtDgraphShape models the c4 external-MVCC publication
+// wedge: four independently timestamped caller commits, each with a small
+// mutation batch. The grouped row must issue one public TreeDB batch write per
+// four commits, while the baseline preserves the existing CommitAt boundary.
+func BenchmarkCommitGroupAtDgraphShape(b *testing.B) {
+	const commitsPerPublication = 4
+	for _, grouped := range []bool{false, true} {
+		name := "CommitAt_x4"
+		if grouped {
+			name = "CommitGroupAt_x4"
+		}
+		b.Run(name, func(b *testing.B) {
+			db := openBenchDB(b)
+			countingDB := &benchmarkBatchCounterDB{DB: db}
+			store := newStore(countingDB)
+			groups := make([]CommitGroup, commitsPerPublication)
+			for groupIndex := range groups {
+				groups[groupIndex].Mutations = []Mutation{{
+					Key:   []byte(fmt.Sprintf("dgraph-submission-%d", groupIndex)),
+					Value: []byte("posting-list-delta"),
+				}}
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				firstTimestamp := uint64(i*commitsPerPublication + 1)
+				for groupIndex := range groups {
+					groups[groupIndex].Timestamp = firstTimestamp + uint64(groupIndex)
+				}
+				if grouped {
+					if err := store.CommitGroupAt(groups, CommitRelaxed); err != nil {
+						b.Fatal(err)
+					}
+					continue
+				}
+				for groupIndex := range groups {
+					if err := store.CommitAt(groups[groupIndex].Timestamp, groups[groupIndex].Mutations, CommitRelaxed); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(countingDB.pointWrites+countingDB.batchWrites)/float64(b.N), "public_writes/publication")
+			b.ReportMetric(float64(countingDB.batchWrites)/float64(b.N), "public_batch_writes/publication")
+		})
+	}
+}
+
+// benchmarkBatchCounterDB observes calls at TreeDB's public Batch surface,
+// rather than relying on optional runtime statistics in a benchmark profile.
+type benchmarkBatchCounterDB struct {
+	*treedb.DB
+	pointWrites uint64
+	batchWrites uint64
+}
+
+func (db *benchmarkBatchCounterDB) NewBatchWithSize(size int) treedb.Batch {
+	return &benchmarkBatchCounter{Batch: db.DB.NewBatchWithSize(size), db: db}
+}
+
+func (db *benchmarkBatchCounterDB) Set(key, value []byte) error {
+	db.pointWrites++
+	return db.DB.Set(key, value)
+}
+
+func (db *benchmarkBatchCounterDB) SetSync(key, value []byte) error {
+	db.pointWrites++
+	return db.DB.SetSync(key, value)
+}
+
+type benchmarkBatchCounter struct {
+	treedb.Batch
+	db *benchmarkBatchCounterDB
+}
+
+func (b *benchmarkBatchCounter) Write() error {
+	b.db.batchWrites++
+	return b.Batch.Write()
+}
+
+func (b *benchmarkBatchCounter) WriteSync() error {
+	b.db.batchWrites++
+	return b.Batch.WriteSync()
+}
+
+var _ treeDB = (*benchmarkBatchCounterDB)(nil)
+var _ treedb.Batch = (*benchmarkBatchCounter)(nil)
 
 func BenchmarkGetAt(b *testing.B) {
 	for _, depth := range []int{1, 8, 64} {

@@ -5,7 +5,7 @@ import (
 	"reflect"
 )
 
-const WitnessContractsSchemaVersion = "treedb-power-loss-witness-contracts/v2"
+const WitnessContractsSchemaVersion = "treedb-power-loss-witness-contracts/v4"
 
 // WitnessContracts is the committed binding between the certification issue,
 // required graph PRs, replay selectors, and the risk dimensions they are

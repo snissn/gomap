@@ -538,6 +538,66 @@ func (m *StoredDocumentJSONMaterializer) StoredDocumentJSON(document []byte) ([]
 	}
 }
 
+// ColumnPublishCandidateResourceWork distinguishes physical resource-entry
+// work from logical-obligation and persistent-index work while constructing
+// ordered-root publication candidates.
+type ColumnPublishCandidateResourceWork struct {
+	CloneOperations                 uint64
+	FreezeOperations                uint64
+	RequirementFieldsInspected      uint64
+	RequirementObligationsInspected uint64
+	SourceEntriesInspected          uint64
+	SourceObligationsInspected      uint64
+	RetainedEntries                 uint64
+	RetainedObligations             uint64
+	DroppedEntries                  uint64
+	DroppedObligations              uint64
+	CopiedEntries                   uint64
+	CopiedObligations               uint64
+	PhysicalHandleCopies            uint64
+	LogicalObligationNormalizations uint64
+	RetainedIndexNodeVisits         uint64
+	RetainedIndexNodeCopies         uint64
+	LogicalIndexNodesAdmitted       uint64
+	NewlyAdmittedEntries            uint64
+	NewlyAdmittedObligations        uint64
+	RemovedObligations              uint64
+	AppendOnlyFastPath              uint64
+	AppendOnlyFallbacks             uint64
+	DestructiveFallbacks            uint64
+	FullClosureValidations          uint64
+}
+
+func (work *ColumnPublishCandidateResourceWork) Add(other ColumnPublishCandidateResourceWork) {
+	if work == nil {
+		return
+	}
+	work.CloneOperations += other.CloneOperations
+	work.FreezeOperations += other.FreezeOperations
+	work.RequirementFieldsInspected += other.RequirementFieldsInspected
+	work.RequirementObligationsInspected += other.RequirementObligationsInspected
+	work.SourceEntriesInspected += other.SourceEntriesInspected
+	work.SourceObligationsInspected += other.SourceObligationsInspected
+	work.RetainedEntries += other.RetainedEntries
+	work.RetainedObligations += other.RetainedObligations
+	work.DroppedEntries += other.DroppedEntries
+	work.DroppedObligations += other.DroppedObligations
+	work.CopiedEntries += other.CopiedEntries
+	work.CopiedObligations += other.CopiedObligations
+	work.PhysicalHandleCopies += other.PhysicalHandleCopies
+	work.LogicalObligationNormalizations += other.LogicalObligationNormalizations
+	work.RetainedIndexNodeVisits += other.RetainedIndexNodeVisits
+	work.RetainedIndexNodeCopies += other.RetainedIndexNodeCopies
+	work.LogicalIndexNodesAdmitted += other.LogicalIndexNodesAdmitted
+	work.NewlyAdmittedEntries += other.NewlyAdmittedEntries
+	work.NewlyAdmittedObligations += other.NewlyAdmittedObligations
+	work.RemovedObligations += other.RemovedObligations
+	work.AppendOnlyFastPath += other.AppendOnlyFastPath
+	work.AppendOnlyFallbacks += other.AppendOnlyFallbacks
+	work.DestructiveFallbacks += other.DestructiveFallbacks
+	work.FullClosureValidations += other.FullClosureValidations
+}
+
 // CollectionInsertStats captures phase timings and counters from the most
 // recent successful InsertBatch call on a Collection handle.
 type CollectionInsertStats struct {
@@ -589,17 +649,25 @@ type CollectionInsertStats struct {
 	ColumnPublishFinalize         time.Duration
 	// ColumnPublishFinalize* fields subdivide ColumnPublishFinalize. They are
 	// diagnostic children and are not added to CommitExclusiveTotal.
-	ColumnPublishFinalizePrepareDurability time.Duration
-	ColumnPublishFinalizeCandidateBuild    time.Duration
-	ColumnPublishFinalizeEnqueueActivation time.Duration
-	ColumnPublishFinalizeAdmissionWait     time.Duration
-	ColumnPublishFinalizeDurabilityWait    time.Duration
-	ColumnPublishPostFinalize              time.Duration
-	ColumnPublishDocumentExtraction        time.Duration
-	ColumnPublishDeclaredColumnEncoding    time.Duration
-	ColumnPublishAssetPreparation          time.Duration
-	ColumnPublishRowAssetPreparation       time.Duration
-	ColumnPublishTypedColumnPreparation    time.Duration
+	ColumnPublishFinalizePrepareDurability         time.Duration
+	ColumnPublishFinalizeCandidateBuild            time.Duration
+	ColumnPublishFinalizeCandidateVisibleBaseClone time.Duration
+	ColumnPublishFinalizeCandidateInheritedFilter  time.Duration
+	ColumnPublishFinalizeCandidateFreshCapture     time.Duration
+	ColumnPublishFinalizeCandidateClosureAssemble  time.Duration
+	ColumnPublishFinalizeCandidateVisibleClone     time.Duration
+	ColumnPublishFinalizeCandidateCOWPrepare       time.Duration
+	ColumnPublishFinalizeCandidateOther            time.Duration
+	ColumnPublishFinalizeCandidateResourceWork     ColumnPublishCandidateResourceWork
+	ColumnPublishFinalizeEnqueueActivation         time.Duration
+	ColumnPublishFinalizeAdmissionWait             time.Duration
+	ColumnPublishFinalizeDurabilityWait            time.Duration
+	ColumnPublishPostFinalize                      time.Duration
+	ColumnPublishDocumentExtraction                time.Duration
+	ColumnPublishDeclaredColumnEncoding            time.Duration
+	ColumnPublishAssetPreparation                  time.Duration
+	ColumnPublishRowAssetPreparation               time.Duration
+	ColumnPublishTypedColumnPreparation            time.Duration
 
 	ColumnPublishTypedColumnDictionaryBuild    time.Duration
 	ColumnPublishTypedColumnRowMaterialization time.Duration

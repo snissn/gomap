@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -94,6 +95,9 @@ type finalizeCommitOptions struct {
 	// durableResourceRequirements scopes exact logical obligations for external
 	// resources whose physical files can outlive several root generations.
 	durableResourceRequirements rootpublication.StableLogicalObligationRequirements
+	// durableResourceMutation is exact root-local addition/removal evidence used
+	// to derive inherited resource pins without replaying retained history.
+	durableResourceMutation rootpublication.StableLogicalObligationMutation
 	// valueLogPublicationLocked proves the caller already owns the exclusive
 	// valueLogPublicationMu lease. Candidate dependency capture must reuse that
 	// lease instead of recursively acquiring its read side.
@@ -124,7 +128,7 @@ func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64,
 		db.teardownMu.RLock()
 		defer db.teardownMu.RUnlock()
 	}
-	builder, err := db.acquireRootPublicationBuilderV1()
+	builder, err := db.acquireCommandWALPublicationBuilderV1()
 	if err != nil {
 		return err
 	}
@@ -139,12 +143,6 @@ func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64,
 		}
 	}
 	defer releaseDurablePublish()
-	db.writeMu.Lock()
-	if err := db.checkWriteAdmissionLocked(); err != nil {
-		db.writeMu.Unlock()
-		return err
-	}
-
 	var (
 		baseSeq        uint64
 		rootsUnchanged bool
@@ -232,6 +230,67 @@ func (db *DB) PublishCommandWALAppliedLSN(appliedLSN uint64, covered []CommandWA
 	unlockCommandWALPublish := db.lockCommandWALRawPublishWithTeardown()
 	defer unlockCommandWALPublish()
 	return db.publishCurrentCommandWALRootsTeardownPinned(appliedLSN, covered, sync)
+}
+
+// RefreshCommandWALCheckpointFallback republishes the current durable root at
+// a checkpoint only when the recovery fallback slot still names an older
+// AppliedCommandLSN. It does not append a command frame or advance the LSN.
+//
+// This is intentionally a checkpoint-maintenance seam for the cached public
+// command-WAL owner. Callers must exclude new public command frames while
+// deciding whether a refresh is needed.
+func (db *DB) RefreshCommandWALCheckpointFallback() error {
+	if db == nil || !db.commandWAL {
+		return nil
+	}
+	// Keep the predicate and same-LSN publication in the raw-publish domain.
+	// The public cached owner holds its operation gate as well, but backend
+	// command-WAL publishers do not use that gate. Holding this existing
+	// backend serialization prevents an intervening command frame from making
+	// the sampled AppliedCommandLSN stale before the fallback is refreshed.
+	unlockCommandWALPublish := db.lockCommandWALRawPublishWithTeardown()
+	defer unlockCommandWALPublish()
+	db.durablePublishMu.Lock()
+	if db.durableRoot.slot > 1 {
+		db.durablePublishMu.Unlock()
+		return fmt.Errorf("command WAL checkpoint fallback: invalid selected root slot %d", db.durableRoot.slot)
+	}
+	selected := db.durableRoot.slotRecord[db.durableRoot.slot]
+	fallback := db.durableRoot.slotRecord[db.durableRoot.slot^1]
+	state := db.state.Load()
+	needsRefresh := state != nil && state.AppliedCommandLSN != 0 &&
+		selected.AppliedCommandLSN == state.AppliedCommandLSN &&
+		fallback.AppliedCommandLSN < selected.AppliedCommandLSN
+	db.durablePublishMu.Unlock()
+	if !needsRefresh {
+		return nil
+	}
+	// Call the inner publisher while retaining the raw-publish guard above;
+	// PublishCommandWALAppliedLSN would otherwise reacquire it. This remains a
+	// same-root, same-LSN metadata publication and cannot append a WAL frame.
+	if err := db.publishCurrentCommandWALRootsTeardownPinned(state.AppliedCommandLSN, nil, true); err != nil {
+		return err
+	}
+	if runtime := db.rootPublication; runtime != nil && runtime.coordinator != nil {
+		refreshed := db.state.Load()
+		if refreshed == nil {
+			return ErrClosed
+		}
+		if err := runtime.coordinator.WaitThrough(context.Background(), refreshed.CommitSeq); err != nil {
+			return publicRootPublicationErrorV1(err)
+		}
+	}
+	db.durablePublishMu.Lock()
+	defer db.durablePublishMu.Unlock()
+	if db.durableRoot.slot > 1 {
+		return fmt.Errorf("command WAL checkpoint fallback: invalid refreshed root slot %d", db.durableRoot.slot)
+	}
+	selected = db.durableRoot.slotRecord[db.durableRoot.slot]
+	fallback = db.durableRoot.slotRecord[db.durableRoot.slot^1]
+	if selected.AppliedCommandLSN != state.AppliedCommandLSN || fallback.AppliedCommandLSN != state.AppliedCommandLSN {
+		return fmt.Errorf("command WAL checkpoint fallback refresh did not converge: selected=%d fallback=%d want=%d", selected.AppliedCommandLSN, fallback.AppliedCommandLSN, state.AppliedCommandLSN)
+	}
+	return nil
 }
 
 func validateCommandWALPublishLocked(current page.MetaPageBody, newRootID uint64, sysRootID uint64, opts finalizeCommitOptions) error {

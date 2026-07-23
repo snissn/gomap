@@ -150,6 +150,7 @@ var retainedPowerLossCounterexamples = []string{
 	"relaxed-command-frame-before-rid",
 	"chunked-sync-intermediate-root",
 	"older-meta-live-page-reused",
+	"stale-build-base-root-publication",
 }
 
 type observedPowerLossCommandFrame struct {
@@ -1069,6 +1070,18 @@ func powerLossLedgerGeneratedVariants(t *testing.T) map[string][]powerlossoracle
 				powerlossoracle.VariantOldPageReuse: powerlossoracle.ExpectedOldRoot,
 			},
 		},
+		{
+			ID:               "public-stale-build-base-retry-stable-image",
+			Point:            powerlossoracle.AfterMetaSync,
+			Occurrence:       0,
+			Model:            model,
+			Dependencies:     []powerlossoracle.DirtyResource{{Kind: powerlossoracle.ResourceIndex, ID: "stale-build-base-retry", Path: "maindb/index.db"}},
+			RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantFullWriteback},
+			ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
+				powerlossoracle.VariantSyncedOnly:    powerlossoracle.ExpectedOldRoot,
+				powerlossoracle.VariantFullWriteback: powerlossoracle.ExpectedNewRoot,
+			},
+		},
 	}
 	generated := make(map[string][]powerlossoracle.Variant, len(specs))
 	for _, spec := range specs {
@@ -1119,7 +1132,9 @@ func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T
 		return nil
 	})
 	b := db.NewBatch()
-	if err := b.Set([]byte("rid/missing"), bytes.Repeat([]byte("r"), 4096)); err != nil {
+	// Stay above the bounded materialized-RID value limit: this witness owns
+	// the absent external-RID suffix contract, not V2 self-contained replay.
+	if err := b.Set([]byte("rid/missing"), bytes.Repeat([]byte("r"), 65<<10)); err != nil {
 		t.Fatal(err)
 	}
 	err = b.Write()
@@ -1787,7 +1802,8 @@ func buildPowerLossCommandFrames(model *powerlossoracle.Model, root string, obse
 			ChecksumValid: checksumValid,
 			Applied:       observedFrame.LSN <= openedAppliedLSN,
 		}
-		if checksumValid && envelope.Kind == commitlog.CommandKindRawKVBatch && envelope.Scope == commitlog.CommandScopeRawKV && envelope.PayloadFormat == commitlog.PayloadFormatRawKVBatchV1 {
+		if checksumValid && envelope.Kind == commitlog.CommandKindRawKVBatch && envelope.Scope == commitlog.CommandScopeRawKV &&
+			(envelope.PayloadFormat == commitlog.PayloadFormatRawKVBatchV1 || envelope.PayloadFormat == commitlog.PayloadFormatRawKVBatchV2) {
 			operations, err := commitlog.DecodeRawKVBatchPayload(envelope.Payload)
 			if err != nil {
 				return nil, fmt.Errorf("decode stable command-WAL LSN %d dependencies: %w", observedFrame.LSN, err)

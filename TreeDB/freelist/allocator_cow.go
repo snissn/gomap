@@ -209,7 +209,15 @@ func (a *Allocator) retireCOWLocked(ids []uint64, lastReachableCommitSeq uint64)
 		if id < 2 {
 			return errCannotFreePageZero
 		}
-		a.cow.txn.Retire(id, lastReachableCommitSeq)
+	}
+	if len(ids) == 1 {
+		a.cow.txn.Retire(ids[0], lastReachableCommitSeq)
+	} else {
+		retired := make([]retiredPage, len(ids))
+		for i, id := range ids {
+			retired[i] = retiredPage{id: id, lastReachableCommitSeq: lastReachableCommitSeq}
+		}
+		a.cow.txn.retireMany(retired)
 	}
 	a.stats.FreePages += uint64(len(ids))
 	if TestHookRetireCOWBeforeUnlock != nil {

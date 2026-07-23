@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -14,7 +15,6 @@ import (
 // in progress. The vacuum recorder must capture the full batch.Entry so vacuum
 // never needs to look up the key in a potentially stale snapshot.
 func TestVacuumRaceMissingKey(t *testing.T) {
-	skipLegacyOnlineVacuumRuntimeIntegration(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on windows")
 	}
@@ -55,14 +55,13 @@ func TestVacuumRaceMissingKey(t *testing.T) {
 
 	var wg sync.WaitGroup
 	errCh := make(chan error, 10)
+	vacuumErrCh := make(chan error, 1)
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		time.Sleep(10 * time.Millisecond)
-		if err := db.vacuumIndexOnlineLegacyForTest(ctx); err != nil {
-			errCh <- fmt.Errorf("vacuum failed: %v", err)
-		}
+		vacuumErrCh <- db.VacuumIndexOnline(ctx)
 	}()
 
 	const newKeysStart = 2000
@@ -96,6 +95,14 @@ func TestVacuumRaceMissingKey(t *testing.T) {
 	close(errCh)
 	for err := range errCh {
 		t.Fatalf("concurrent op error: %v", err)
+	}
+	if vacuumErr := <-vacuumErrCh; vacuumErr != nil {
+		if !errors.Is(vacuumErr, ErrRecoverableRootSetStale) && !errors.Is(vacuumErr, ErrVacuumConcurrentMutation) {
+			t.Fatalf("concurrent vacuum: %v", vacuumErr)
+		}
+		if err := db.VacuumIndexOnline(ctx); err != nil {
+			t.Fatalf("post-churn vacuum retry: %v", err)
+		}
 	}
 
 	missing := 0

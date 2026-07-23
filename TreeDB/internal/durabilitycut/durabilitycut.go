@@ -79,6 +79,12 @@ type Event struct {
 	Namespace NamespaceOperation
 	OldPath   string
 	NewPath   string
+	// CreatedDirectory identifies a newly-created directory entry made durable
+	// by this boundary when the physical persistence handle in Path is the child
+	// itself rather than its parent. Windows uses this narrower create-through-
+	// child contract; keeping both paths explicit prevents a durability model
+	// from mistaking the child-handle flush for a sync of the child's contents.
+	CreatedDirectory string
 }
 
 // EmitNamespace avoids constructing a namespace event on the
@@ -130,6 +136,24 @@ func EmitPath(point Point, resource Resource, root, path string) error {
 		return nil
 	}
 	return h.observe(Event{Point: point, Resource: resource, Root: root, Path: path})
+}
+
+// EmitCreatedDirectoryPath records the physical persistence handle together
+// with the newly-created directory entry whose parent link it stabilizes.
+// Platforms that persist creation by syncing the parent should keep using
+// EmitPath with the parent path.
+func EmitCreatedDirectoryPath(point Point, resource Resource, root, path, createdDirectory string) error {
+	h := installed.Load()
+	if h == nil || h.observe == nil {
+		return nil
+	}
+	return h.observe(Event{
+		Point:            point,
+		Resource:         resource,
+		Root:             root,
+		Path:             path,
+		CreatedDirectory: createdDirectory,
+	})
 }
 
 // EmitRange avoids constructing a byte-range event on the

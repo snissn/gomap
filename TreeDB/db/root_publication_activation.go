@@ -109,30 +109,75 @@ func publicRootPublicationErrorV1(err error) error {
 }
 
 func (db *DB) acquireRootPublicationBuilderV1() (*rootpublication.BuilderToken, error) {
-	if db == nil || db.rootPublication == nil || db.rootPublication.coordinator == nil {
-		return nil, nil
+	_, builder, err := db.acquireRootPublicationBuilderForRuntimeV1()
+	return builder, err
+}
+
+func (db *DB) acquireRootPublicationBuilderForRuntimeV1() (*rootPublicationRuntimeV1, *rootpublication.BuilderToken, error) {
+	if db == nil || db.rootPublication == nil {
+		return nil, nil, nil
 	}
-	builder, err := db.rootPublication.coordinator.AcquireBuilder(context.Background())
+	runtime := db.rootPublication
+	if runtime.coordinator == nil {
+		return runtime, nil, nil
+	}
+	builder, err := runtime.coordinator.AcquireBuilder(context.Background())
 	if err != nil {
-		return nil, fmt.Errorf("acquire root-publication builder: %w", publicRootPublicationErrorV1(err))
+		return nil, nil, fmt.Errorf("acquire root-publication builder: %w", publicRootPublicationErrorV1(err))
 	}
-	return builder, nil
+	return runtime, builder, nil
+}
+
+// acquireCommandWALPublicationBuilderV1 returns with writeMu held and the
+// builder bound to the runtime that is still live under that lock.
+func (db *DB) acquireCommandWALPublicationBuilderV1() (*rootpublication.BuilderToken, error) {
+	for {
+		runtime, builder, err := db.acquireRootPublicationBuilderForRuntimeV1()
+		if err != nil {
+			return nil, err
+		}
+		if hook := db.testCommandWALAfterBuilderAcquireHook; hook != nil {
+			hook()
+		}
+		db.writeMu.Lock()
+		if err := db.checkWriteAdmissionLocked(); err != nil {
+			db.writeMu.Unlock()
+			if builder != nil {
+				builder.Release()
+			}
+			return nil, err
+		}
+		if db.rootPublication == runtime {
+			return builder, nil
+		}
+		db.writeMu.Unlock()
+		if builder != nil {
+			builder.Release()
+		}
+	}
 }
 
 func (runtime *rootPublicationRuntimeV1) cloneVisibleResources() (*rootpublication.StableResourceSet, error) {
+	resources, _, err := runtime.cloneVisibleResourcesWithWork()
+	return resources, err
+}
+
+func (runtime *rootPublicationRuntimeV1) cloneVisibleResourcesWithWork() (*rootpublication.StableResourceSet, rootpublication.StableResourceClosureWork, error) {
 	if runtime == nil {
-		return nil, errors.New("missing root-publication runtime")
+		return nil, rootpublication.StableResourceClosureWork{}, errors.New("missing root-publication runtime")
 	}
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	if runtime.poison != nil {
-		return nil, runtime.poison
+		return nil, rootpublication.StableResourceClosureWork{}, runtime.poison
 	}
-	resources, err := rootpublication.CloneStableResourceSetExcludingKinds(runtime.visibleResources)
+	resources, work, err := rootpublication.CloneStableResourceSetForLogicalObligationsWithWork(
+		runtime.visibleResources, rootpublication.StableLogicalObligationRequirements{},
+	)
 	if err != nil {
-		return nil, fmt.Errorf("clone visible root resources: %w", err)
+		return nil, work, fmt.Errorf("clone visible root resources: %w", err)
 	}
-	return resources, nil
+	return resources, work, nil
 }
 
 func (seal *rootPublicationSealV1) release() {
@@ -148,13 +193,13 @@ func (seal *rootPublicationSealV1) release() {
 	}
 }
 
-func rootPublicationLineageIDV1(db *DB, idx *indexGen) rootpublication.DurableRootLineageID {
+func rootPublicationLineageIDV1(db *DB, idx *indexGen, durable durableRootRuntimeV1) rootpublication.DurableRootLineageID {
 	var material [80]byte
 	if db != nil {
-		binary.LittleEndian.PutUint64(material[0:8], db.durableRoot.record.CommitSeq)
-		binary.LittleEndian.PutUint64(material[8:16], db.durableRoot.record.Freelist.GenerationID)
-		binary.LittleEndian.PutUint64(material[16:24], db.durableRoot.record.Freelist.HighWater)
-		copy(material[24:56], db.durableRoot.meta.RootRecordDigest[:])
+		binary.LittleEndian.PutUint64(material[0:8], durable.record.CommitSeq)
+		binary.LittleEndian.PutUint64(material[8:16], durable.record.Freelist.GenerationID)
+		binary.LittleEndian.PutUint64(material[16:24], durable.record.Freelist.HighWater)
+		copy(material[24:56], durable.meta.RootRecordDigest[:])
 		copy(material[56:72], []byte(db.dir))
 	}
 	if idx != nil {
@@ -183,37 +228,60 @@ func (db *DB) initializeRootPublicationRuntimeV1(idx *indexGen) error {
 	if db == nil || idx == nil || db.durableRoot.record.CommitSeq == 0 {
 		return errors.New("missing root-publication durable base")
 	}
+	runtime, err := newRootPublicationRuntimeV1(db, idx, db.durableRoot, db.meta)
+	if err != nil {
+		return err
+	}
+	db.rootPublication = runtime
+	return nil
+}
+
+func newRootPublicationRuntimeV1(db *DB, idx *indexGen, durable durableRootRuntimeV1, visible page.MetaPageBody) (*rootPublicationRuntimeV1, error) {
+	if db == nil || idx == nil || durable.record.CommitSeq == 0 {
+		return nil, errors.New("missing root-publication durable base")
+	}
 	baseResources, err := rootpublication.CloneStableResourceSetExcludingKinds(
-		db.durableRoot.slotResources[db.durableRoot.slot],
+		durable.slotResources[durable.slot],
 	)
 	if err != nil {
-		return fmt.Errorf("clone initial visible root resources: %w", err)
+		return nil, fmt.Errorf("clone initial visible root resources: %w", err)
 	}
 	runtime := &rootPublicationRuntimeV1{
-		db: db, idx: idx, lineage: rootPublicationLineageIDV1(db, idx),
+		db: db, idx: idx, lineage: rootPublicationLineageIDV1(db, idx, durable),
 		visibleResources: baseResources,
 		visibleMembers:   make(map[uint64]*rootPublicationVisibleMemberV1),
 	}
-	oldest, err := oldestRecoverableSlotCommitV1(db.durableRoot.slotCommit)
+	oldest, err := oldestRecoverableSlotCommitV1(durable.slotCommit)
 	if err != nil {
 		baseResources.Release()
-		return err
+		return nil, err
 	}
 	coordinator, err := rootpublication.New(rootpublication.Options{
 		Publisher:                  runtime,
 		FixedPublishDelay:          db.rootPublicationFixedDelay,
-		InitialDurableFrontier:     rootPublicationFrontierV1(db.meta),
+		InitialDurableFrontier:     rootPublicationFrontierV1(visible),
 		OldestRecoverableCommitSeq: oldest,
 		DurableRootLineage:         runtime.lineage,
-		DurableRootSequence:        db.durableRoot.record.CommitSeq,
+		DurableRootSequence:        durable.record.CommitSeq,
 	})
 	if err != nil {
 		baseResources.Release()
-		return err
+		return nil, err
 	}
 	runtime.coordinator = coordinator
-	db.rootPublication = runtime
-	return nil
+	return runtime, nil
+}
+
+func stopRootPublicationRuntimeV1(runtime *rootPublicationRuntimeV1) (*rootpublication.RecoveryResourceHandoff, error) {
+	if runtime == nil || runtime.coordinator == nil {
+		return nil, nil
+	}
+	stopErr := runtime.coordinator.Stop(context.Background())
+	handoff, handoffErr := runtime.coordinator.TakeRecoveryHandoff()
+	if stopErr != nil || handoffErr != nil {
+		return handoff, errors.Join(publicRootPublicationErrorV1(stopErr), publicRootPublicationErrorV1(handoffErr))
+	}
+	return handoff, nil
 }
 
 func rootPublicationLogicalCandidateIDV1(lineage rootpublication.DurableRootLineageID, generationID uint64, next page.MetaPageBody) freelist.CandidateIDV1 {
@@ -410,11 +478,19 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 	install *rootPublicationVisibleInstallV1,
 	dependencyBytes uint64,
 	indexBytes uint64,
+	timing *CommandWALPublishTiming,
 ) (_ *rootpublication.PreparedRootCandidate, err error) {
 	if runtime == nil || runtime.db == nil || runtime.idx == nil || install == nil {
 		return nil, errors.New("missing visible root candidate input")
 	}
-	visibleResources, err := rootpublication.CloneStableResourceSetExcludingKinds(resources)
+	visibleCloneStart := time.Now()
+	visibleResources, visibleWork, err := rootpublication.CloneStableResourceSetForLogicalObligationsWithWork(
+		resources, rootpublication.StableLogicalObligationRequirements{},
+	)
+	if timing != nil {
+		timing.FinalizeCandidateVisibleClone += time.Since(visibleCloneStart)
+		timing.FinalizeCandidateResourceWork.Add(visibleWork)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("clone visible root resource closure: %w", err)
 	}
@@ -440,6 +516,7 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 			PageIDs: retired, LastReachableCommitSeq: next.CommitSeq - 1,
 		})
 	}
+	cowPrepareStart := time.Now()
 	prepared, err := runtime.idx.allocator.PrepareCOWCandidateRetiringV1(
 		generationID,
 		next.CommitSeq,
@@ -447,8 +524,11 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 		capability,
 		retirements,
 		0,
-		freelist.NewMemoryPageStoreV1(),
+		freelist.NewCandidatePageSinkV1(),
 	)
+	if timing != nil {
+		timing.FinalizeCandidateCOWPrepare += time.Since(cowPrepareStart)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("prepare visible root COW generation: %w", err)
 	}
@@ -473,13 +553,11 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 		return nil, errors.New("visible root COW candidate has no generation")
 	}
 	if indexBytes == 0 {
-		for _, image := range prepared.Candidate().Pages() {
-			bytes := uint64(len(image.Data))
-			if ^uint64(0)-indexBytes < bytes {
-				indexBytes = ^uint64(0)
-				break
-			}
-			indexBytes += bytes
+		pageCount := uint64(prepared.Candidate().PageCount())
+		if pageCount > ^uint64(0)/page.PageSize {
+			indexBytes = ^uint64(0)
+		} else {
+			indexBytes = pageCount * page.PageSize
 		}
 	}
 	next.TotalPages = generation.HighWater()
@@ -595,19 +673,24 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	releaseDurablePublish func(),
 ) (finalizeCommitPost, error) {
 	candidateBuildStart := time.Now()
+	var candidateTiming CommandWALPublishTiming
 	prePublishErr := func(err error) error { return wrapFinalizeCommitError(err, true) }
 	if runtime == nil || runtime.coordinator == nil || builder == nil || idx == nil || releaseDurablePublish == nil {
 		return post, prePublishErr(errors.New("incomplete queued root-publication handoff"))
 	}
-	visibleBase, err := runtime.cloneVisibleResources()
+	visibleBaseCloneStart := time.Now()
+	visibleBase, visibleBaseWork, err := runtime.cloneVisibleResourcesWithWork()
+	candidateTiming.FinalizeCandidateVisibleBaseClone += time.Since(visibleBaseCloneStart)
+	candidateTiming.FinalizeCandidateResourceWork.Add(visibleBaseWork)
 	if err != nil {
-		return post, err
+		return post, prePublishErr(err)
 	}
 	defer visibleBase.Release()
 
 	resources, err := db.captureDurableRootResourcesFromBaseV1(
 		idx, next, vlogRefDelta, visibleBase, opts.durableResources,
-		opts.durableResourceRequirements, opts.valueLogPublicationLocked,
+		opts.durableResourceRequirements, opts.durableResourceMutation, opts.valueLogPublicationLocked,
+		&candidateTiming,
 	)
 	if err != nil {
 		return post, prePublishErr(fmt.Errorf("capture queued root dependencies: %w", err))
@@ -656,7 +739,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	}
 	candidate, err := runtime.prepareVisibleCandidate(
 		next, retired, resources, install,
-		dependencyBytes, 0,
+		dependencyBytes, 0, &candidateTiming,
 	)
 	if err != nil {
 		return post, prePublishErr(err)
@@ -680,7 +763,17 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		hook()
 	}
 	if opts.publishTiming != nil {
-		opts.publishTiming.FinalizeCandidateBuild += time.Since(candidateBuildStart)
+		candidateTiming.FinalizeCandidateBuild = time.Since(candidateBuildStart)
+		accounted := candidateTiming.FinalizeCandidateVisibleBaseClone +
+			candidateTiming.FinalizeCandidateInheritedFilter +
+			candidateTiming.FinalizeCandidateFreshCapture +
+			candidateTiming.FinalizeCandidateClosureAssemble +
+			candidateTiming.FinalizeCandidateVisibleClone +
+			candidateTiming.FinalizeCandidateCOWPrepare
+		if candidateTiming.FinalizeCandidateBuild > accounted {
+			candidateTiming.FinalizeCandidateOther = candidateTiming.FinalizeCandidateBuild - accounted
+		}
+		opts.publishTiming.Add(candidateTiming)
 	}
 
 	enqueueStart := time.Now()
@@ -899,7 +992,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 		capability,
 		retirements,
 		auxiliaryCount,
-		freelist.NewMemoryPageStoreV1(),
+		freelist.NewCandidatePageSinkV1(),
 	)
 	if err != nil {
 		return fmt.Errorf("prepare root-publication seal generation: %w", err)
@@ -1001,10 +1094,8 @@ func (runtime *rootPublicationRuntimeV1) materializeSeal(seal *rootPublicationSe
 		if prepared == nil || prepared.Candidate() == nil {
 			return errors.New("root-publication prefix contains no COW candidate")
 		}
-		for _, image := range prepared.Candidate().Pages() {
-			if err := seal.idx.pager.Write(image.PageID, image.Data); err != nil {
-				return fmt.Errorf("write root-publication COW page %d: %w", image.PageID, err)
-			}
+		if err := prepared.Candidate().WritePagesToV1(durablePagerSinkV1{pager: seal.idx.pager}); err != nil {
+			return fmt.Errorf("write root-publication COW pages: %w", err)
 		}
 	}
 	auxiliary := seal.prepared.AuxiliaryPageIDs()
