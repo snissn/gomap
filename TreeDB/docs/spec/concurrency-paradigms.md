@@ -404,7 +404,7 @@ Notes:
 | --- | --- |
 | `Options.JournalLanes` | Number of active WAL/vlog lanes (partition factor for append paths). |
 | `Options.WALMaxSegmentBytes` | Segment rotation pressure; changes append/rotation cadence. |
-| `Options.JournalCompression` | WAL write CPU/IO tradeoff; may shift worker bottlenecks. |
+| `Options.JournalCompression` | Generic journal/commitlog CPU/IO tradeoff; strict V2 command-WAL frames remain raw and are not compressed. |
 | `Options.ValueLog.PointerThreshold` | Changes fraction of writes routed through value-log workers. |
 | `Options.ValueLog.ForcePointers` | Forces value-log path for all puts; increases vlog lane pressure. |
 

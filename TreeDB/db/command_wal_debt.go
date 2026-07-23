@@ -29,7 +29,11 @@ func (debt *CommandWALDependencyDebt) entryCountThrough(lsn uint64) uint64 {
 		if entry.firstLSN > lsn {
 			break
 		}
-		count++
+		last := entry.lastLSN
+		if last > lsn {
+			last = lsn
+		}
+		count += last - entry.firstLSN + 1
 	}
 	debt.mu.Unlock()
 	return count
@@ -40,8 +44,15 @@ type commandWALDependencyDebtEntry struct {
 	lastLSN       uint64
 	resources     []*rootpublication.StableResourceSet
 	rotationFiles []*rootpublication.StableResourceToken
-	createdAt     time.Time
-	retries       uint64
+	// createdAt remains the original physical-range creation time if a
+	// coalesced empty range is partially trimmed. Reported max age is therefore
+	// conservative physical-range age, rather than the age of only its
+	// remaining LSNs.
+	createdAt time.Time
+	// retriesPerLSN is uniform across this entry's inclusive LSN range. Empty
+	// ranges are split at retry frontiers so partial release preserves exact
+	// logical retry accounting without retaining one entry per relaxed command.
+	retriesPerLSN uint64
 }
 
 func (debt *CommandWALDependencyDebt) add(lsn uint64, rotationFiles []*rootpublication.StableResourceToken, resources ...*rootpublication.StableResourceSet) error {
@@ -58,6 +69,20 @@ func (debt *CommandWALDependencyDebt) add(lsn uint64, rotationFiles []*rootpubli
 	defer debt.mu.Unlock()
 	if n := len(debt.entries); n != 0 && lsn <= debt.entries[n-1].lastLSN {
 		return fmt.Errorf("treedb: command WAL dependency debt LSN %d is not after %d", lsn, debt.entries[n-1].lastLSN)
+	}
+	// Most relaxed point commands carry no external physical dependency and do
+	// not rotate the command journal. Keep their exact LSN coverage, but merge
+	// adjacent empty records instead of retaining one heap entry per write until
+	// the next durable boundary. Dependency-bearing entries must remain separate
+	// because their resource/token ownership and retry accounting are exact.
+	if len(owned) == 0 && len(rotationFiles) == 0 {
+		if n := len(debt.entries); n != 0 {
+			previous := &debt.entries[n-1]
+			if len(previous.resources) == 0 && len(previous.rotationFiles) == 0 && previous.retriesPerLSN == 0 && previous.lastLSN+1 == lsn {
+				previous.lastLSN = lsn
+				return nil
+			}
+		}
 	}
 	debt.entries = append(debt.entries, commandWALDependencyDebtEntry{
 		firstLSN: lsn, lastLSN: lsn, resources: append([]*rootpublication.StableResourceSet(nil), owned...),
@@ -245,11 +270,33 @@ func (debt *CommandWALDependencyDebt) noteRetryThrough(lsn uint64) {
 	}
 	debt.mu.Lock()
 	defer debt.mu.Unlock()
-	for i := range debt.entries {
+	for i := 0; i < len(debt.entries); i++ {
 		if debt.entries[i].firstLSN > lsn {
 			break
 		}
-		debt.entries[i].retries++
+		if lsn < debt.entries[i].lastLSN && len(debt.entries[i].resources) == 0 && len(debt.entries[i].rotationFiles) == 0 {
+			// Retry accounting is per logical command. Split an empty coalesced
+			// range at the retry frontier before incrementing so a later partial
+			// release drops exactly the retry counts it covered.
+			tail := debt.entries[i]
+			tail.firstLSN = lsn + 1
+			// The range may already have previous retry attempts. Both halves
+			// retain that uniform per-LSN history; the covered prefix receives
+			// one additional retry below.
+			tail.retriesPerLSN = debt.entries[i].retriesPerLSN
+			debt.entries[i].lastLSN = lsn
+			debt.entries = append(debt.entries, commandWALDependencyDebtEntry{})
+			copy(debt.entries[i+2:], debt.entries[i+1:])
+			debt.entries[i+1] = tail
+		}
+		last := debt.entries[i].lastLSN
+		if last > lsn {
+			last = lsn
+		}
+		debt.entries[i].retriesPerLSN++
+		if last == lsn {
+			break
+		}
 	}
 }
 
@@ -262,10 +309,6 @@ func (debt *CommandWALDependencyDebt) releaseThrough(lsn uint64) {
 	for cut < len(debt.entries) && debt.entries[cut].lastLSN <= lsn {
 		cut++
 	}
-	if cut == 0 {
-		debt.mu.Unlock()
-		return
-	}
 	physical := false
 	for i := 0; i < cut; i++ {
 		if len(debt.entries[i].resources) != 0 || len(debt.entries[i].rotationFiles) != 0 {
@@ -273,17 +316,28 @@ func (debt *CommandWALDependencyDebt) releaseThrough(lsn uint64) {
 			break
 		}
 	}
-	if !physical {
+	if cut != 0 && !physical {
 		copy(debt.entries, debt.entries[cut:])
 		clear(debt.entries[len(debt.entries)-cut:])
 		debt.entries = debt.entries[:len(debt.entries)-cut]
-		debt.mu.Unlock()
-		return
 	}
-	released := append([]commandWALDependencyDebtEntry(nil), debt.entries[:cut]...)
-	copy(debt.entries, debt.entries[cut:])
-	clear(debt.entries[len(debt.entries)-cut:])
-	debt.entries = debt.entries[:len(debt.entries)-cut]
+	var released []commandWALDependencyDebtEntry
+	if cut != 0 && physical {
+		released = append([]commandWALDependencyDebtEntry(nil), debt.entries[:cut]...)
+		copy(debt.entries, debt.entries[cut:])
+		clear(debt.entries[len(debt.entries)-cut:])
+		debt.entries = debt.entries[:len(debt.entries)-cut]
+	}
+	// A coalesced empty range has no resource ownership to split. Trim the
+	// already-covered prefix so a later append can continue from the remaining
+	// exact LSN frontier. Never split a resource-bearing entry: its ownership is
+	// deliberately indivisible until the entire entry is covered.
+	if len(debt.entries) != 0 {
+		entry := &debt.entries[0]
+		if entry.firstLSN <= lsn && lsn < entry.lastLSN && len(entry.resources) == 0 && len(entry.rotationFiles) == 0 {
+			entry.firstLSN = lsn + 1
+		}
+	}
 	debt.mu.Unlock()
 	for _, entry := range released {
 		for _, resource := range entry.resources {
@@ -326,10 +380,11 @@ func (debt *CommandWALDependencyDebt) stats(now time.Time) commandWALDependencyD
 	}
 	debt.mu.Lock()
 	sets := make([]*rootpublication.StableResourceSet, 0)
-	stats := commandWALDependencyDebtStats{entries: uint64(len(debt.entries))}
+	stats := commandWALDependencyDebtStats{}
 	for _, entry := range debt.entries {
+		stats.entries += entry.lastLSN - entry.firstLSN + 1
 		sets = append(sets, entry.resources...)
-		stats.retries += entry.retries
+		stats.retries += (entry.lastLSN - entry.firstLSN + 1) * entry.retriesPerLSN
 		if age := now.Sub(entry.createdAt); age > stats.oldest {
 			stats.oldest = age
 		}
