@@ -1477,6 +1477,59 @@ func TestCollectionVectorPartitionSameGenerationBuildingPromotionPublishesReady(
 	}
 }
 
+func TestCollectionVectorPartitionPublishRejectsReadOnlyWithoutNamespaceTrace(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	_, graph, _, err := col.columnVectorGraphPhysicalRowReaderSnapshotView(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := testVectorPartitionManifestV1()
+	ready.IndexName, ready.IndexDefinitionDigest = def.Name, VectorIndexDefinitionDigestV1(def)
+	ready.SourceGeneration, ready.SourceChecksum, ready.SourceSchemaHash, ready.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
+	ready, resources := vectorPartitionManifestWithFreshStableAssetsV1(t, d, col, ready, 915)
+	building := ready
+	building.State, building.RouterGeneration, building.RouterAsset, building.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+	building.Canonicalize()
+	dir := d.Dir()
+	if err := d.Close(); err != nil {
+		resources.Release()
+		t.Fatal(err)
+	}
+	defer resources.Release()
+	readonly, err := backenddb.Open(backenddb.Options{Dir: dir, ReadOnly: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readonly.Close()
+	readonlyCol, err := NewCollectionManager(readonly).OpenCollection(col.name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	namespace := filepath.Join(dir, "vector_partitions")
+	if _, err := os.Stat(namespace); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unexpected preexisting namespace: %v", err)
+	}
+	if err := readonlyCol.PublishVectorPartitionManifestV1(building, nil); !errors.Is(err, backenddb.ErrReadOnly) {
+		t.Fatalf("building read-only publish err=%v", err)
+	}
+	if _, err := os.Stat(namespace); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("building read-only publish left namespace trace: %v", err)
+	}
+	if err := readonlyCol.PublishVectorPartitionManifestV1(ready, resources); !errors.Is(err, backenddb.ErrReadOnly) {
+		t.Fatalf("ready read-only publish err=%v", err)
+	}
+	if resources.Owner() != rootpublication.ResourceOwnerReleased {
+		t.Fatalf("ready resources owner=%v want released", resources.Owner())
+	}
+	if _, err := os.Stat(namespace); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ready read-only publish left namespace trace: %v", err)
+	}
+}
+
 func TestCollectionVectorPartitionBuildingPublicationAndGCLinearize(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	newFixture := func(t *testing.T, fileID uint32) (*backenddb.DB, *Collection, VectorPartitionManifestV1, []ColumnAssetRef) {

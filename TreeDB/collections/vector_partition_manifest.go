@@ -58,6 +58,12 @@ func setVectorPartitionBarrierBeforeMutationHookForTestV1(fn func(string)) func(
 	}
 }
 
+// SetVectorPartitionBarrierBeforeMutationHookForTestingV1 is the cross-package
+// deterministic-concurrency seam for Raft FSM tests.
+func SetVectorPartitionBarrierBeforeMutationHookForTestingV1(fn func(string)) func() {
+	return setVectorPartitionBarrierBeforeMutationHookForTestV1(fn)
+}
+
 func (c *Collection) withVectorPartitionStorageMutationV1(operation string, fn func() error) error {
 	return WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
 		vectorPartitionBarrierBeforeMutationHookForTest.RLock()
