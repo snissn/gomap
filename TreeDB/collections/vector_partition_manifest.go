@@ -841,11 +841,29 @@ const (
 	vectorPartitionReclaimMaxBytesV1 = vectorPartitionStoreMaxBytesV1
 	vectorPartitionInactiveMagicV1   = "VPI1"
 	vectorPartitionInactiveVersionV1 = 1
+	// magic/version, two string lengths, generation, checksum
+	vectorPartitionInactiveFixedBytesV1 = 8 + 4 + 4 + 8 + sha256.Size
 )
 
 type vectorPartitionInactiveStateV1 struct {
 	Collection, IndexName string
 	Generation            uint64
+}
+
+// vectorPartitionInactiveStateEncodedSizeV1 is the single bounded size model
+// for both writer allocation and reader admission: magic/version, two
+// length-prefixed identities, generation, and checksum.
+func vectorPartitionInactiveStateEncodedSizeV1(state vectorPartitionInactiveStateV1) (int, error) {
+	state, err := canonicalVectorPartitionInactiveStateV1(state)
+	if err != nil {
+		return 0, err
+	}
+	return vectorPartitionInactiveFixedBytesV1 + len(state.Collection) + len(state.IndexName), nil
+}
+
+func vectorPartitionInactiveStateMaxEncodedBytesV1() int {
+	limits := DefaultVectorPartitionManifestLimits()
+	return vectorPartitionInactiveFixedBytesV1 + limits.MaxStringBytes*2
 }
 
 func canonicalVectorPartitionInactiveStateV1(state vectorPartitionInactiveStateV1) (vectorPartitionInactiveStateV1, error) {
@@ -861,11 +879,15 @@ func encodeVectorPartitionInactiveStateV1(input vectorPartitionInactiveStateV1) 
 	if err != nil {
 		return nil, err
 	}
-	payload := bytes.NewBuffer(make([]byte, 0, 16+len(state.Collection)+len(state.IndexName)))
+	size, err := vectorPartitionInactiveStateEncodedSizeV1(state)
+	if err != nil {
+		return nil, err
+	}
+	payload := bytes.NewBuffer(make([]byte, 0, size-8-sha256.Size))
 	putStringVPM(payload, state.Collection)
 	putStringVPM(payload, state.IndexName)
 	putU64VPM(payload, state.Generation)
-	out := make([]byte, 0, 8+payload.Len()+sha256.Size)
+	out := make([]byte, 0, size)
 	out = append(out, vectorPartitionInactiveMagicV1...)
 	var version [4]byte
 	binary.BigEndian.PutUint32(version[:], vectorPartitionInactiveVersionV1)
@@ -1808,8 +1830,7 @@ func (s *VectorPartitionStoreV1) readInactiveGeneration(collection, index string
 }
 
 func (s *VectorPartitionStoreV1) readInactiveStatePath(path string) (vectorPartitionInactiveStateV1, error) {
-	limits := DefaultVectorPartitionManifestLimits()
-	raw, err := readBoundedVPM(path, 16+limits.MaxStringBytes*2+sha256.Size)
+	raw, err := readBoundedVPM(path, vectorPartitionInactiveStateMaxEncodedBytesV1())
 	if err != nil {
 		return vectorPartitionInactiveStateV1{}, err
 	}
@@ -2371,6 +2392,10 @@ func (c *Collection) VectorPartitionStatusV1(index string, generation uint64) (V
 				staleReason = "inactive"
 			case !errors.Is(retiredErr, os.ErrNotExist):
 				staleReason = "pointer_invalid"
+			default:
+				if _, inactiveErr := s.readInactiveGeneration(c.name, index); inactiveErr != nil {
+					staleReason = "pointer_invalid"
+				}
 			}
 		}
 		if staleReason != "pointer_invalid" && c.validateVectorPartitionSourceIdentityV1(m) != nil {

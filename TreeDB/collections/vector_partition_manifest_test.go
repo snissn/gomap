@@ -486,6 +486,100 @@ func TestCollectionVectorPartitionReadyDeleteCrashWindowReopenReachability(t *te
 			t.Fatal("malformed inactive marker did not fail closed")
 		}
 	})
+	t.Run("status_requires_valid_inactive_authority", func(t *testing.T) {
+		for _, tc := range []struct {
+			name      string
+			configure func(*VectorPartitionStoreV1, VectorPartitionManifestV1) error
+			want      string
+		}{
+			{name: "valid", configure: func(store *VectorPartitionStoreV1, m VectorPartitionManifestV1) error {
+				if err := store.writeInactiveMarker(m.Collection, m.IndexName, m.Generation); err != nil {
+					return err
+				}
+				return os.Remove(filepath.Join(store.dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+".retired"))
+			}, want: "inactive"},
+			{name: "absent", configure: func(store *VectorPartitionStoreV1, m VectorPartitionManifestV1) error {
+				return os.Remove(filepath.Join(store.dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+".retired"))
+			}, want: "pointer_invalid"},
+			{name: "corrupt", configure: func(store *VectorPartitionStoreV1, m VectorPartitionManifestV1) error {
+				if err := os.WriteFile(store.inactivePath(m.Collection, m.IndexName), []byte("corrupt"), 0600); err != nil {
+					return err
+				}
+				return os.Remove(filepath.Join(store.dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+".retired"))
+			}, want: "pointer_invalid"},
+			{name: "foreign", configure: func(store *VectorPartitionStoreV1, m VectorPartitionManifestV1) error {
+				raw, err := encodeVectorPartitionInactiveStateV1(vectorPartitionInactiveStateV1{Collection: m.Collection, IndexName: "other", Generation: m.Generation})
+				if err != nil {
+					return err
+				}
+				if err := os.WriteFile(store.inactivePath(m.Collection, m.IndexName), raw, 0600); err != nil {
+					return err
+				}
+				return os.Remove(filepath.Join(store.dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+".retired"))
+			}, want: "pointer_invalid"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				d, col, store, m, _ := newFixture(t)
+				defer d.Close()
+				if err := tc.configure(store, m); err != nil {
+					t.Fatal(err)
+				}
+				status, err := col.VectorPartitionStatusV1(m.IndexName, m.Generation)
+				if err != nil || status.StaleReason != tc.want || status.Active {
+					t.Fatalf("status=%+v err=%v, want inactive status %q", status, err, tc.want)
+				}
+			})
+		}
+	})
+}
+
+func TestVectorPartitionInactiveStateV1BoundedCodec(t *testing.T) {
+	limits := DefaultVectorPartitionManifestLimits()
+	state := vectorPartitionInactiveStateV1{
+		Collection: strings.Repeat("c", limits.MaxStringBytes),
+		IndexName:  strings.Repeat("i", limits.MaxStringBytes),
+		Generation: 1,
+	}
+	raw, err := encodeVectorPartitionInactiveStateV1(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) != vectorPartitionInactiveStateMaxEncodedBytesV1() {
+		t.Fatalf("maximum inactive record bytes=%d want %d", len(raw), vectorPartitionInactiveStateMaxEncodedBytesV1())
+	}
+	decoded, err := decodeVectorPartitionInactiveStateV1(raw)
+	if err != nil || decoded != state {
+		t.Fatalf("maximum inactive record decoded=%+v err=%v", decoded, err)
+	}
+	store, err := OpenVectorPartitionStoreV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.writeInactiveMarker(state.Collection, state.IndexName, state.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if generation, err := store.readInactiveGeneration(state.Collection, state.IndexName); err != nil || generation != state.Generation {
+		t.Fatalf("maximum inactive record read generation=%d err=%v", generation, err)
+	}
+	if _, err := encodeVectorPartitionInactiveStateV1(vectorPartitionInactiveStateV1{Collection: state.Collection + "x", IndexName: state.IndexName, Generation: 1}); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		t.Fatalf("over-cap inactive identity err=%v", err)
+	}
+	for name, malformed := range map[string][]byte{
+		"trailing": append(append([]byte(nil), raw...), 0),
+		"corrupt":  func() []byte { x := append([]byte(nil), raw...); x[len(x)-1] ^= 0xff; return x }(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := decodeVectorPartitionInactiveStateV1(malformed); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+				t.Fatalf("decode err=%v, want fail-closed invalid marker", err)
+			}
+		})
+	}
+	if err := os.WriteFile(store.inactivePath(state.Collection, state.IndexName), append(raw, 0), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.readInactiveGeneration(state.Collection, state.IndexName); err == nil {
+		t.Fatal("over-sized inactive marker accepted")
+	}
 }
 
 func TestVectorPartitionLifecycleContractDoc(t *testing.T) {
