@@ -433,6 +433,19 @@ func (tdb *DB) cleanupPublicCommandWALCheckpoint(sync bool) error {
 	return tdb.backend.CleanupCommandWALCoveredSegmentsAtCheckpoint(sync)
 }
 
+func (tdb *DB) refreshPublicCommandWALCheckpointFallback() error {
+	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil {
+		return nil
+	}
+	tdb.commandWALPublicOperationGate.Lock()
+	defer tdb.commandWALPublicOperationGate.Unlock()
+	first, last := tdb.publicCommandWALPendingRange()
+	if first != 0 || last != 0 {
+		return nil
+	}
+	return tdb.backend.RefreshCommandWALCheckpointFallback()
+}
+
 func (tdb *DB) syncPublicCommandWAL() error {
 	return tdb.forcePublicCommandWALGroupCommit()
 }
