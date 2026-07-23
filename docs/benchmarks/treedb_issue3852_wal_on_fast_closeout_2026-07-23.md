@@ -16,10 +16,14 @@ The unified-bench profile is `wal_on_fast`, which selects TreeDB's
 
 ```sh
 BIN=/path/to/unified-bench
-TMPDIR=/mnt/fast4tb/tmp "$BIN" -dbs treedb|leveldb -keys 500000 \
+TMPDIR=/mnt/fast4tb/tmp "$BIN" -dbs treedb -keys 500000 \
   -profile wal_on_fast \
   -checkpoint-between-tests -test sequential_write,random_write \
-  -profile-dir <artifact-dir>
+  -profile-dir <treedb-artifact-dir>
+TMPDIR=/mnt/fast4tb/tmp "$BIN" -dbs leveldb -keys 500000 \
+  -profile wal_on_fast \
+  -checkpoint-between-tests -test sequential_write,random_write \
+  -profile-dir <leveldb-artifact-dir>
 ```
 
 The full alternating matrix below is retained because this workload is subject
