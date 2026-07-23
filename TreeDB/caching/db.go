@@ -8374,7 +8374,7 @@ type Options struct {
 	// WALMaxSegmentBytes caps the size of a single WAL segment payload.
 	// 0 uses the default limit.
 	WALMaxSegmentBytes int64
-	// JournalCompression enables best-effort zstd compression for journal/commitlog
+	// JournalCompression enables best-effort zstd compression for generic journal/commitlog
 	// segments (metadata only). The writer only keeps compressed bytes when they
 	// are smaller than the raw payload, so compression never causes size
 	// amplification.
