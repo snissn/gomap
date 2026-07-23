@@ -2106,9 +2106,9 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 	if err := c.db.CheckStorageMaintenanceReady(); err != nil {
 		return zero, err
 	}
-	unlock := c.lockMutation()
-	defer unlock.Unlock()
-	return zero, WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+	err := WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+		unlock := c.lockMutation()
+		defer unlock.Unlock()
 		s, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
 		if err != nil {
 			return err
@@ -2202,6 +2202,7 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 		zero = stats
 		return nil
 	})
+	return zero, err
 }
 
 type VectorPartitionStatusV1 struct {
@@ -2233,74 +2234,76 @@ func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV
 		// return path must release the producer's exact identity pins once.
 		defer resources.Release()
 	}
-	if err := preflightVectorPartitionManifestV1(m, DefaultVectorPartitionManifestLimits()); err != nil {
+	if err := c.db.CheckStorageMaintenanceReady(); err != nil {
 		return err
 	}
-	m.Canonicalize()
-	if err := m.Validate(DefaultVectorPartitionManifestLimits()); err != nil {
-		return err
-	}
-	// The source validation and active-pointer rename must share the collection
-	// mutation barrier. A catalog read lock alone does not prevent a column
-	// publication from advancing TVIS between validation and activation.
-	unlockMutation := c.lockMutation()
-	defer unlockMutation.Unlock()
-	// Do not hold catalogMu across VectorPartitionSourceIdentityV1 below:
-	// VectorIndexStatus may refresh the snapshot catalog and must take its write
-	// lock in rememberCatalog. The mutation barrier already prevents a source
-	// publication from advancing between source validation and activation.
-	if m.Collection != c.name {
-		return fmt.Errorf("collections: vector partition collection %q does not match %q", m.Collection, c.name)
-	}
-	var def *VectorIndexDefinition
-	for i := range c.meta.VectorIndexes {
-		if c.meta.VectorIndexes[i].Name == m.IndexName {
-			def = &c.meta.VectorIndexes[i]
-			break
+	return WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+		if err := preflightVectorPartitionManifestV1(m, DefaultVectorPartitionManifestLimits()); err != nil {
+			return err
 		}
-	}
-	if def == nil {
-		return fmt.Errorf("collections: unknown vector index %q", m.IndexName)
-	}
-	if m.IndexDefinitionDigest != VectorIndexDefinitionDigestV1(*def) {
-		return errors.New("collections: vector partition index definition digest mismatch")
-	}
-	if err := c.validateVectorPartitionSourceIdentityV1(m); err != nil {
-		return err
-	}
-	if m.State == "ready" {
-		prepared := make([]ColumnPreparedAsset, 0, len(m.Assets)+1)
-		for _, asset := range m.Assets {
-			prepared = append(prepared, ColumnPreparedAsset{Ref: asset.Ref, Bytes: int64(asset.Bytes)})
+		m.Canonicalize()
+		if err := m.Validate(DefaultVectorPartitionManifestLimits()); err != nil {
+			return err
 		}
-		prepared = append(prepared, ColumnPreparedAsset{Ref: m.RouterAsset.Ref, Bytes: int64(m.RouterAsset.Bytes)})
-		if err := validateStableColumnResourcesMatchPrepared(prepared, resources); err != nil {
-			return fmt.Errorf("collections: vector partition stable publication authority: %w", err)
+		// The source validation and active-pointer rename must share the collection
+		// mutation barrier. A catalog read lock alone does not prevent a column
+		// publication from advancing TVIS between validation and activation.
+		unlockMutation := c.lockMutation()
+		defer unlockMutation.Unlock()
+		// Do not hold catalogMu across VectorPartitionSourceIdentityV1 below:
+		// VectorIndexStatus may refresh the snapshot catalog and must take its write
+		// lock in rememberCatalog. The mutation barrier already prevents a source
+		// publication from advancing between source validation and activation.
+		if m.Collection != c.name {
+			return fmt.Errorf("collections: vector partition collection %q does not match %q", m.Collection, c.name)
 		}
-	}
-	// Building manifests have no producer-issued stable-resource set, but they
-	// must still prove every referenced asset exists and matches before their
-	// raw durable reference is published. This closes the GC/rewrite-wins order:
-	// a manifest may not turn a reclaimed ref into dangling durable state.
-	namespace := ""
-	if cfg := c.meta.Options.ColumnStore; cfg != nil && cfg.AssetManager != nil {
-		namespace = cfg.AssetManager.Namespace
-	}
-	assets := append([]VectorPartitionAssetV1(nil), m.Assets...)
-	if m.State == "ready" {
-		assets = append(assets, m.RouterAsset)
-	}
-	if err := verifyVectorPartitionAssetsV1(c.db.ColumnAssetRootDir(), namespace, assets); err != nil {
-		return err
-	}
-	s, e := OpenVectorPartitionStoreV1(c.db.Dir())
-	if e != nil {
-		return e
-	}
-	if m.State == "ready" {
-		return s.publishValidatedReady(m)
-	}
-	return s.publishValidatedBuilding(m)
+		var def *VectorIndexDefinition
+		for i := range c.meta.VectorIndexes {
+			if c.meta.VectorIndexes[i].Name == m.IndexName {
+				def = &c.meta.VectorIndexes[i]
+				break
+			}
+		}
+		if def == nil {
+			return fmt.Errorf("collections: unknown vector index %q", m.IndexName)
+		}
+		if m.IndexDefinitionDigest != VectorIndexDefinitionDigestV1(*def) {
+			return errors.New("collections: vector partition index definition digest mismatch")
+		}
+		if err := c.validateVectorPartitionSourceIdentityV1(m); err != nil {
+			return err
+		}
+		if m.State == "ready" {
+			prepared := make([]ColumnPreparedAsset, 0, len(m.Assets)+1)
+			for _, asset := range m.Assets {
+				prepared = append(prepared, ColumnPreparedAsset{Ref: asset.Ref, Bytes: int64(asset.Bytes)})
+			}
+			prepared = append(prepared, ColumnPreparedAsset{Ref: m.RouterAsset.Ref, Bytes: int64(m.RouterAsset.Bytes)})
+			if err := validateStableColumnResourcesMatchPrepared(prepared, resources); err != nil {
+				return fmt.Errorf("collections: vector partition stable publication authority: %w", err)
+			}
+		}
+		// Building manifests have no producer-issued stable-resource set, but they
+		// must still prove every referenced asset exists and matches before their
+		// raw durable reference is published. This closes the GC/rewrite-wins order:
+		// a manifest may not turn a reclaimed ref into dangling durable state.
+		namespace := ""
+		if cfg := c.meta.Options.ColumnStore; cfg != nil && cfg.AssetManager != nil {
+			namespace = cfg.AssetManager.Namespace
+		}
+		assets := append([]VectorPartitionAssetV1(nil), m.Assets...)
+		if m.State == "ready" {
+			assets = append(assets, m.RouterAsset)
+		}
+		if err := verifyVectorPartitionAssetsV1(c.db.ColumnAssetRootDir(), namespace, assets); err != nil {
+			return err
+		}
+		s, e := OpenVectorPartitionStoreV1(c.db.Dir())
+		if e != nil {
+			return e
+		}
+		return s.publishLocked(m)
+	})
 }
 
 // validateVectorPartitionSourceIdentityV1 deliberately obtains the source

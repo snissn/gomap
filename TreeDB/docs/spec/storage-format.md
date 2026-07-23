@@ -53,7 +53,7 @@ A TreeDB deployment uses:
 ### Vector-partition manifests (`vector_partitions/`)
 
 `vector_partitions/` is a persistent, Raft-snapshot-included namespace for M1
-vector-partition metadata; it is not a WAL, slab, or cache. A VPM1 filename is
+vector-partition metadata; it is not a WAL or cache. A VPM1 filename is
 `sha256(collection)-sha256(index)-generation.vpm` and is accepted only when
 its decoded collection, index, and generation bind exactly to that name. VPM1
 has a fixed version, bounded length-prefixed fields and lists, one (exactly one)
