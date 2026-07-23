@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -212,8 +213,17 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
+	var mutationOperations []string
+	restoreMutationHook := setVectorPartitionBarrierBeforeMutationHookForTestV1(func(operation string) {
+		mutationOperations = append(mutationOperations, operation)
+	})
+	defer restoreMutationHook()
 	if _, err := col.ReclaimVectorPartitionGenerationV1(ctx, m.IndexName, m.Generation); err != nil {
 		t.Fatalf("public VPM reclaim: %v", err)
+	}
+	restoreMutationHook()
+	if got, want := mutationOperations, []string{vectorPartitionMutationOperationReclaimV1}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("reclaim storage mutation operations=%v want %v", got, want)
 	}
 	if _, err := os.Stat(store.deleteTombstonePath(m.Collection, m.IndexName, m.Generation)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("completed reclaim record remains: %v", err)

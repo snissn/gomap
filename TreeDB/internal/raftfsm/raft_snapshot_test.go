@@ -288,6 +288,106 @@ func TestRaftSnapshotV1ExportWaitsForVectorPartitionStorageBarrier(t *testing.T)
 	}
 }
 
+func TestRaftSnapshotV1ExportDoesNotInvertVectorPartitionPublishAndApplyLocks(t *testing.T) {
+	root := t.TempDir()
+	db := openRaftSnapshotFSMTestDB(t, root, true)
+	defer func() { _ = db.Close() }()
+	ready := publishRaftSnapshotReadyVectorPartitionForTest(t, db, 1)
+	col, err := collections.NewCollectionManager(db).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection docs: %v", err)
+	}
+	building := ready
+	building.State, building.Generation = "building", ready.Generation+1
+	building.RouterGeneration, building.RouterAsset, building.ReadySetDigest = 0, collections.VectorPartitionAssetV1{}, ""
+	building.Canonicalize()
+	bootstrapRaftSnapshotFSMCoverageForDirectVectorPartitionFixture(t, db, root)
+	fsm := openRaftSnapshotFSMForTest(t, db, root, true)
+	defer func() { _ = fsm.Close() }()
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	restore := collections.SetVectorPartitionBarrierBeforeMutationHookForTestingV1(func(operation string) {
+		if operation == "publish" {
+			close(entered)
+			<-release
+		}
+	})
+	defer restore()
+	publishDone := make(chan error, 1)
+	go func() { publishDone <- col.PublishVectorPartitionManifestV1(building, nil) }()
+	<-entered
+
+	applyDone := make(chan error, 1)
+	raw := deterministicInsertBatchEntry(t, "docs", "snapshot-publish-lock-order", nativewire.DocumentFormatJSON, [][]byte{[]byte("lock-order")}, [][]byte{[]byte(`{"_id":"lock-order","embedding":[1,0,0]}`)})
+	go func() {
+		_, err := fsm.ApplyCommittedEntryV1(committedCommand(1, 2, raw))
+		applyDone <- err
+	}()
+	exportDone := make(chan error, 1)
+	go func() { _, err := fsm.ExportRaftSnapshotV1(); exportDone <- err }()
+	select {
+	case err := <-applyDone:
+		if err != nil {
+			t.Fatalf("ApplyCommittedEntryV1: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("apply blocked behind paused vector-partition publish")
+	}
+
+	select {
+	case err := <-exportDone:
+		t.Fatalf("snapshot escaped vector-partition publication barrier: %v", err)
+	default:
+	}
+	close(release)
+	select {
+	case err := <-publishDone:
+		// The committed insert invalidates the loaded vector source before the
+		// paused building publication can resume, so it must fail closed here.
+		if err == nil || !strings.Contains(err.Error(), `source index "embedding" is not a loaded TVIS generation`) {
+			t.Fatalf("paused vector-partition publish err=%v, want stale source rejection", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("vector-partition publish deadlocked")
+	}
+	select {
+	case err := <-exportDone:
+		if err != nil {
+			t.Fatalf("ExportRaftSnapshotV1: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("snapshot deadlocked after vector-partition publish released")
+	}
+}
+
+// bootstrapRaftSnapshotFSMCoverageForDirectVectorPartitionFixture records the
+// opaque pre-existing local command-WAL coverage caused by direct collection
+// fixture construction. It exists only because this regression deliberately
+// builds the ready generation before opening its FSM; subsequent test work is
+// a real committed command at the next Raft index.
+func bootstrapRaftSnapshotFSMCoverageForDirectVectorPartitionFixture(t testing.TB, db *backenddb.DB, root string) {
+	t.Helper()
+	coverage := db.State().AppliedCommandLSN
+	if coverage == 0 {
+		t.Fatal("direct vector-partition fixture did not create local command coverage")
+	}
+	cluster, err := raftcluster.Validate(validFSMClusterConfig(root))
+	if err != nil {
+		t.Fatalf("Validate cluster: %v", err)
+	}
+	const term, index = uint64(1), uint64(1)
+	id := raftentry.ApplyEntryID{Term: term, Index: index}
+	opts := raftapply.DurableApplyStoreOptions{DisableSync: true, AllowInitialIndexGap: true}
+	progress, err := raftapply.OpenDurableApplyProgressStore(cluster.Layout.ApplyDir, opts)
+	if err != nil {
+		t.Fatalf("OpenDurableApplyProgressStore: %v", err)
+	}
+	defer progress.Close()
+	if err := progress.RecordApplied(raftapply.ApplyProgressRecordV1{EntryID: id, AppliedCommandLSN: coverage}); err != nil {
+		t.Fatalf("RecordApplied fixture coverage: %v", err)
+	}
+}
+
 func TestRaftSnapshotV1InstallExtractionDoesNotDeadlockExport(t *testing.T) {
 	requireRaftSnapshotInstallSupportedV1(t)
 	root := t.TempDir()
