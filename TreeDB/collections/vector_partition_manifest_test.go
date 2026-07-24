@@ -592,6 +592,7 @@ func TestCollectionVectorPartitionReadyDeleteCrashWindowReopenReachability(t *te
 }
 
 func TestVectorPartitionInactiveStateV1BoundedCodec(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	limits := DefaultVectorPartitionManifestLimits()
 	state := vectorPartitionInactiveStateV1{
 		Collection: strings.Repeat("c", limits.MaxStringBytes),
@@ -637,6 +638,632 @@ func TestVectorPartitionInactiveStateV1BoundedCodec(t *testing.T) {
 	}
 	if _, err := store.readInactiveGeneration(state.Collection, state.IndexName); err == nil {
 		t.Fatal("over-sized inactive marker accepted")
+	}
+}
+
+func TestVectorPartitionOwnedTempInstallNoReplaceV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	s, err := OpenVectorPartitionStoreV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := s.beginMutationDirV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	temp, err := d.write(".temp", []byte("payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer temp.cleanup()
+	if err := temp.installNoReplace("target"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.read("target", 32)
+	if err != nil || string(got) != "payload" {
+		t.Fatalf("target=%q err=%v", got, err)
+	}
+	if err := temp.cleanup(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.read(".temp", 32); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("temporary name err=%v, want absent", err)
+	}
+	if _, err := d.read("target", 32); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVectorPartitionOwnedTempInstallNoReplaceExistingTargetV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	s, err := OpenVectorPartitionStoreV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := s.beginMutationDirV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if err := os.WriteFile(filepath.Join(s.dir, "target"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	temp, err := d.write(".temp", []byte("new"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer temp.cleanup()
+	if err := temp.installNoReplace("target"); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("err=%v", err)
+	}
+	got, err := d.read("target", 32)
+	if err != nil || string(got) != "old" {
+		t.Fatalf("target=%q err=%v", got, err)
+	}
+}
+
+func TestVectorPartitionOwnedTempReplaceV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	s, err := OpenVectorPartitionStoreV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := s.beginMutationDirV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if err := os.WriteFile(filepath.Join(s.dir, "target"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	temp, err := d.write(".temp", []byte("replacement"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := temp.replace("target"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.read("target", 32)
+	if err != nil || string(got) != "replacement" {
+		t.Fatalf("target=%q err=%v", got, err)
+	}
+	identity, err := d.childIdentity("target")
+	if err != nil || !rootpublication.SamePhysicalIdentity(identity, temp.identity) {
+		t.Fatalf("target identity=%+v err=%v, want %+v", identity, err, temp.identity)
+	}
+	if err := temp.cleanup(); err != nil {
+		t.Fatal(err)
+	}
+	if temp.file != nil {
+		t.Fatal("cleanup left original temporary file open")
+	}
+	if _, err := d.read(".temp", 32); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("temporary name err=%v, want absent", err)
+	}
+}
+
+func TestVectorPartitionOwnedTempSourceReboundV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	for _, tc := range []struct {
+		name          string
+		prepareTarget func(t *testing.T, s *VectorPartitionStoreV1)
+		install       func(*vectorPartitionOwnedTempV1) error
+		checkTarget   func(t *testing.T, d *vectorPartitionMutationDirV1)
+	}{
+		{
+			name:    "install-no-replace",
+			install: func(temp *vectorPartitionOwnedTempV1) error { return temp.installNoReplace("target") },
+			checkTarget: func(t *testing.T, d *vectorPartitionMutationDirV1) {
+				t.Helper()
+				if _, err := d.read("target", 32); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("target err=%v, want absent", err)
+				}
+			},
+		},
+		{
+			name: "replace",
+			prepareTarget: func(t *testing.T, s *VectorPartitionStoreV1) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(s.dir, "target"), []byte("old"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			install: func(temp *vectorPartitionOwnedTempV1) error { return temp.replace("target") },
+			checkTarget: func(t *testing.T, d *vectorPartitionMutationDirV1) {
+				t.Helper()
+				got, err := d.read("target", 32)
+				if err != nil || string(got) != "old" {
+					t.Fatalf("target=%q err=%v", got, err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := OpenVectorPartitionStoreV1(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			d, err := s.beginMutationDirV1()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close()
+			if tc.prepareTarget != nil {
+				tc.prepareTarget(t, s)
+			}
+			temp, err := d.write(".temp", []byte("original"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(s.dir, ".temp")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(s.dir, ".temp"), []byte("rebound"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := tc.install(temp); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+				t.Fatalf("install err=%v, want rebound-source rejection", err)
+			}
+			tc.checkTarget(t, d)
+			if err := temp.cleanup(); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+				t.Fatalf("cleanup err=%v, want rebound-source rejection", err)
+			}
+			if temp.file != nil {
+				t.Fatal("cleanup left original temporary file open")
+			}
+			got, err := d.read(".temp", 32)
+			if err != nil || string(got) != "rebound" {
+				t.Fatalf("rebound temp=%q err=%v", got, err)
+			}
+		})
+	}
+}
+
+func TestVectorPartitionOwnedTempTargetReboundV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	for _, tc := range []struct {
+		name    string
+		install func(*vectorPartitionOwnedTempV1) error
+	}{
+		{name: "install-no-replace", install: func(temp *vectorPartitionOwnedTempV1) error { return temp.installNoReplace("target") }},
+		{name: "replace", install: func(temp *vectorPartitionOwnedTempV1) error { return temp.replace("target") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := OpenVectorPartitionStoreV1(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			d, err := s.beginMutationDirV1()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close()
+			temp, err := d.write(".temp", []byte("owned"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.afterTempInstall = func(target string) {
+				if err := os.Remove(filepath.Join(s.dir, target)); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(s.dir, target), []byte("target-decoy"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := tc.install(temp); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+				t.Fatalf("install err=%v, want target-rebind rejection", err)
+			}
+			if err := temp.cleanup(); !errors.Is(err, ErrVectorPartitionManifestInvalid) && err != nil {
+				t.Fatalf("cleanup err=%v", err)
+			}
+			if temp.file != nil {
+				t.Fatal("cleanup left original temporary file open")
+			}
+			got, err := d.read("target", 32)
+			if err != nil || string(got) != "target-decoy" {
+				t.Fatalf("target=%q err=%v", got, err)
+			}
+		})
+	}
+}
+
+func TestVectorPartitionOwnedTempSymlinkSourceReboundV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	for _, tc := range []struct {
+		name          string
+		prepareTarget func(t *testing.T, s *VectorPartitionStoreV1)
+		install       func(*vectorPartitionOwnedTempV1) error
+		checkTarget   func(t *testing.T, d *vectorPartitionMutationDirV1)
+	}{
+		{
+			name:    "install-no-replace",
+			install: func(temp *vectorPartitionOwnedTempV1) error { return temp.installNoReplace("target") },
+			checkTarget: func(t *testing.T, d *vectorPartitionMutationDirV1) {
+				t.Helper()
+				if _, err := d.read("target", 32); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("target err=%v, want absent", err)
+				}
+			},
+		},
+		{
+			name: "replace",
+			prepareTarget: func(t *testing.T, s *VectorPartitionStoreV1) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(s.dir, "target"), []byte("old"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			install: func(temp *vectorPartitionOwnedTempV1) error { return temp.replace("target") },
+			checkTarget: func(t *testing.T, d *vectorPartitionMutationDirV1) {
+				t.Helper()
+				got, err := d.read("target", 32)
+				if err != nil || string(got) != "old" {
+					t.Fatalf("target=%q err=%v", got, err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := OpenVectorPartitionStoreV1(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			d, err := s.beginMutationDirV1()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close()
+			if tc.prepareTarget != nil {
+				tc.prepareTarget(t, s)
+			}
+			temp, err := d.write(".temp", []byte("original"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(s.dir, ".temp")); err != nil {
+				t.Fatal(err)
+			}
+			victim := filepath.Join(s.dir, "victim")
+			if err := os.WriteFile(victim, []byte("victim-bytes"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("victim", filepath.Join(s.dir, ".temp")); err != nil {
+				t.Skipf("symlink unsupported: %v", err)
+			}
+			if err := tc.install(temp); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+				t.Fatalf("install err=%v, want symlink-source rejection", err)
+			}
+			tc.checkTarget(t, d)
+			if err := temp.cleanup(); err == nil {
+				t.Fatal("cleanup accepted a rebound symlink")
+			}
+			if temp.file != nil {
+				t.Fatal("cleanup left original temporary file open")
+			}
+			info, err := os.Lstat(filepath.Join(s.dir, ".temp"))
+			if err != nil || info.Mode()&os.ModeSymlink == 0 {
+				t.Fatalf("rebound temp info=%v err=%v, want symlink", info, err)
+			}
+			got, err := os.ReadFile(victim)
+			if err != nil || string(got) != "victim-bytes" {
+				t.Fatalf("symlink destination=%q err=%v", got, err)
+			}
+		})
+	}
+}
+
+func TestVectorPartitionMutationWriteTempCollisionV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	s, err := OpenVectorPartitionStoreV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := s.beginMutationDirV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if err := os.WriteFile(filepath.Join(s.dir, ".temp"), []byte("already-here"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if temp, err := d.write(".temp", []byte("new")); !errors.Is(err, os.ErrExist) || temp != nil {
+		t.Fatalf("write temp=%v err=%v, want nil and EEXIST", temp, err)
+	}
+	got, err := d.read(".temp", 32)
+	if err != nil || string(got) != "already-here" {
+		t.Fatalf("collision entry=%q err=%v", got, err)
+	}
+}
+
+func TestVectorPartitionMutationWritePreSyncFailureCleanupV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	s, err := OpenVectorPartitionStoreV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := s.beginMutationDirV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	injected := errors.New("injected pre-sync failure")
+	var retained *os.File
+	d.beforeWriteSync = func(f *os.File) error {
+		retained = f
+		return injected
+	}
+	temp, err := d.write(".temp", []byte("partially-written"))
+	if !errors.Is(err, injected) || temp != nil {
+		t.Fatalf("write temp=%v err=%v, want nil and injected failure", temp, err)
+	}
+	if retained == nil {
+		t.Fatal("pre-sync hook did not receive retained descriptor")
+	}
+	if err := retained.Close(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("retained descriptor close err=%v, want closed", err)
+	}
+	if _, err := d.read(".temp", 32); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("owned temporary name err=%v, want absent", err)
+	}
+}
+
+func TestVectorPartitionMutationWritePreSyncFailureReboundTempV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	s, err := OpenVectorPartitionStoreV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := s.beginMutationDirV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	injected := errors.New("injected pre-sync failure")
+	var retained *os.File
+	d.beforeWriteSync = func(f *os.File) error {
+		retained = f
+		if err := os.Remove(filepath.Join(s.dir, ".temp")); err != nil {
+			t.Fatalf("rebind remove: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(s.dir, ".temp"), []byte("rebound-decoy"), 0o600); err != nil {
+			t.Fatalf("rebind create: %v", err)
+		}
+		return injected
+	}
+	temp, err := d.write(".temp", []byte("partially-written"))
+	if !errors.Is(err, injected) || !errors.Is(err, ErrVectorPartitionManifestInvalid) || temp != nil {
+		t.Fatalf("write temp=%v err=%v, want rebound cleanup rejection and injected failure", temp, err)
+	}
+	if retained == nil {
+		t.Fatal("pre-sync hook did not receive retained descriptor")
+	}
+	if err := retained.Close(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("retained descriptor close err=%v, want closed", err)
+	}
+	got, err := d.read(".temp", 32)
+	if err != nil || string(got) != "rebound-decoy" {
+		t.Fatalf("rebound temporary=%q err=%v", got, err)
+	}
+}
+
+func TestVectorPartitionStoreV1PublishGenerationTempReboundV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	for _, tc := range []struct {
+		name    string
+		rebind  func(t *testing.T, store *VectorPartitionStoreV1, tempName string) (string, []byte)
+		inspect func(t *testing.T, path string)
+	}{
+		{
+			name: "regular-file",
+			rebind: func(t *testing.T, store *VectorPartitionStoreV1, tempName string) (string, []byte) {
+				t.Helper()
+				decoy := []byte("regular-decoy")
+				path := filepath.Join(store.dir, tempName)
+				if err := os.WriteFile(path, decoy, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return path, decoy
+			},
+			inspect: func(t *testing.T, path string) {
+				t.Helper()
+				info, err := os.Lstat(path)
+				if err != nil || !info.Mode().IsRegular() {
+					t.Fatalf("rebound temp info=%v err=%v, want regular file", info, err)
+				}
+			},
+		},
+		{
+			name: "symlink",
+			rebind: func(t *testing.T, store *VectorPartitionStoreV1, tempName string) (string, []byte) {
+				t.Helper()
+				decoy := []byte("symlink-destination-decoy")
+				victim := filepath.Join(store.dir, "generation-temp-victim")
+				if err := os.WriteFile(victim, decoy, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(store.dir, tempName)
+				if err := os.Symlink(filepath.Base(victim), path); err != nil {
+					t.Fatal(err)
+				}
+				return path, decoy
+			},
+			inspect: func(t *testing.T, path string) {
+				t.Helper()
+				info, err := os.Lstat(path)
+				if err != nil || info.Mode()&os.ModeSymlink == 0 {
+					t.Fatalf("rebound temp info=%v err=%v, want symlink", info, err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, err := OpenVectorPartitionStoreV1(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest := testVectorPartitionManifestV1()
+			generationName := fmt.Sprintf("%s-%s-%d.vpm", safeVPM(manifest.Collection), safeVPM(manifest.IndexName), manifest.Generation)
+			var reboundPath string
+			var decoy []byte
+			stop := setVectorPartitionPublishHookForTestV1(func(at string) error {
+				if at != "generation_temp_synced" {
+					return nil
+				}
+				entries, err := os.ReadDir(store.dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				prefix := "." + generationName + "."
+				var tempName string
+				for _, entry := range entries {
+					if strings.HasPrefix(entry.Name(), prefix) && strings.HasSuffix(entry.Name(), ".tmp") {
+						if tempName != "" {
+							t.Fatalf("multiple generation temporary files: %q and %q", tempName, entry.Name())
+						}
+						tempName = entry.Name()
+					}
+				}
+				if tempName == "" {
+					t.Fatal("generation temporary file not found at sync boundary")
+				}
+				if err := os.Remove(filepath.Join(store.dir, tempName)); err != nil {
+					t.Fatal(err)
+				}
+				reboundPath, decoy = tc.rebind(t, store, tempName)
+				return nil
+			})
+			err = store.publishLocked(manifest)
+			stop()
+			if err == nil {
+				t.Fatal("publication accepted a rebound generation temporary file")
+			}
+			if reboundPath == "" {
+				t.Fatal("generation-temp hook did not run")
+			}
+			tc.inspect(t, reboundPath)
+			got, err := os.ReadFile(reboundPath)
+			if err != nil || !bytes.Equal(got, decoy) {
+				t.Fatalf("rebound decoy=%q err=%v", got, err)
+			}
+			if _, err := os.Lstat(filepath.Join(store.dir, generationName)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("final generation err=%v, want absent", err)
+			}
+			activeName := safeVPM(manifest.Collection) + "-" + safeVPM(manifest.IndexName) + ".active"
+			if _, err := os.Lstat(filepath.Join(store.dir, activeName)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("active pointer err=%v, want absent", err)
+			}
+		})
+	}
+}
+
+func TestVectorPartitionStoreV1PublishActiveTempReboundV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	for _, tc := range []struct {
+		name    string
+		rebind  func(t *testing.T, store *VectorPartitionStoreV1, tempName string) (string, []byte)
+		inspect func(t *testing.T, path string)
+	}{
+		{
+			name: "regular-file",
+			rebind: func(t *testing.T, store *VectorPartitionStoreV1, tempName string) (string, []byte) {
+				t.Helper()
+				decoy := []byte("regular-active-decoy")
+				path := filepath.Join(store.dir, tempName)
+				if err := os.WriteFile(path, decoy, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return path, decoy
+			},
+			inspect: func(t *testing.T, path string) {
+				t.Helper()
+				info, err := os.Lstat(path)
+				if err != nil || !info.Mode().IsRegular() {
+					t.Fatalf("rebound temp info=%v err=%v, want regular file", info, err)
+				}
+			},
+		},
+		{
+			name: "symlink",
+			rebind: func(t *testing.T, store *VectorPartitionStoreV1, tempName string) (string, []byte) {
+				t.Helper()
+				decoy := []byte("symlink-active-destination-decoy")
+				victim := filepath.Join(store.dir, "active-temp-victim")
+				if err := os.WriteFile(victim, decoy, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(store.dir, tempName)
+				if err := os.Symlink(filepath.Base(victim), path); err != nil {
+					t.Fatal(err)
+				}
+				return path, decoy
+			},
+			inspect: func(t *testing.T, path string) {
+				t.Helper()
+				info, err := os.Lstat(path)
+				if err != nil || info.Mode()&os.ModeSymlink == 0 {
+					t.Fatalf("rebound temp info=%v err=%v, want symlink", info, err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, err := OpenVectorPartitionStoreV1(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest := testVectorPartitionManifestV1()
+			activeName := safeVPM(manifest.Collection) + "-" + safeVPM(manifest.IndexName) + ".active"
+			var reboundPath string
+			var decoy []byte
+			stop := setVectorPartitionPublishHookForTestV1(func(at string) error {
+				if at != "active_temp_synced" {
+					return nil
+				}
+				entries, err := os.ReadDir(store.dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				prefix := "." + activeName + "."
+				var tempName string
+				for _, entry := range entries {
+					if strings.HasPrefix(entry.Name(), prefix) && strings.HasSuffix(entry.Name(), ".tmp") {
+						if tempName != "" {
+							t.Fatalf("multiple active temporary files: %q and %q", tempName, entry.Name())
+						}
+						tempName = entry.Name()
+					}
+				}
+				if tempName == "" {
+					t.Fatal("active temporary file not found at sync boundary")
+				}
+				if err := os.Remove(filepath.Join(store.dir, tempName)); err != nil {
+					t.Fatal(err)
+				}
+				reboundPath, decoy = tc.rebind(t, store, tempName)
+				return nil
+			})
+			err = store.publishLocked(manifest)
+			stop()
+			if err == nil {
+				t.Fatal("publication accepted a rebound active temporary file")
+			}
+			if reboundPath == "" {
+				t.Fatal("active-temp hook did not run")
+			}
+			tc.inspect(t, reboundPath)
+			got, err := os.ReadFile(reboundPath)
+			if err != nil || !bytes.Equal(got, decoy) {
+				t.Fatalf("rebound decoy=%q err=%v", got, err)
+			}
+			generation, err := store.Open(manifest.Collection, manifest.IndexName, manifest.Generation)
+			if err != nil || generation.Generation != manifest.Generation {
+				t.Fatalf("prepared generation=%+v err=%v", generation, err)
+			}
+			if raw, err := os.ReadFile(filepath.Join(store.dir, activeName)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("active pointer=%q err=%v, want absent", raw, err)
+			}
+		})
 	}
 }
 

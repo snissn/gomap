@@ -38,6 +38,10 @@ var raftSnapshotAfterExtractForTest func()
 // to deterministic no-follow regression tests.
 var raftSnapshotBeforeOpenForTest func(string)
 
+// raftSnapshotBeforeVectorPartitionRootOpenForTest makes the vector-partition
+// root discovery/open boundary observable to deterministic replacement tests.
+var raftSnapshotBeforeVectorPartitionRootOpenForTest func(string)
+
 var raftSnapshotMainDBEntriesV1 = []string{
 	"index.db",
 	raftSnapshotFormatConfigFileV1,
@@ -472,9 +476,6 @@ func appendRaftSnapshotDirV1(tw *tar.Writer, prefix, root string) error {
 	if tw == nil {
 		return fmt.Errorf("raftfsm: nil snapshot archive writer")
 	}
-	if strings.HasSuffix(prefix, "/vector_partitions") {
-		return appendRaftSnapshotVectorPartitionDirV1(tw, prefix, root)
-	}
 	root = filepath.Clean(root)
 	info, err := os.Lstat(root)
 	if err != nil {
@@ -485,6 +486,19 @@ func appendRaftSnapshotDirV1(tw *tar.Writer, prefix, root string) error {
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("raftfsm: snapshot path %q is not a directory", root)
+	}
+	return appendRaftSnapshotDirWithRootInfoV1(tw, prefix, root, info)
+}
+
+func appendRaftSnapshotDirWithRootInfoV1(tw *tar.Writer, prefix, root string, expectedRoot fs.FileInfo) error {
+	if tw == nil {
+		return fmt.Errorf("raftfsm: nil snapshot archive writer")
+	}
+	if expectedRoot == nil {
+		return fmt.Errorf("raftfsm: nil snapshot directory identity for %q", root)
+	}
+	if strings.HasSuffix(prefix, "/vector_partitions") {
+		return appendRaftSnapshotVectorPartitionDirV1(tw, prefix, root, expectedRoot)
 	}
 	return filepath.WalkDir(root, func(filePath string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -539,12 +553,22 @@ func appendRaftSnapshotDirV1(tw *tar.Writer, prefix, root string) error {
 
 // appendRaftSnapshotVectorPartitionDirV1 keeps discovery and child opens on
 // one exact retained directory handle. The VPM namespace is flat by contract.
-func appendRaftSnapshotVectorPartitionDirV1(tw *tar.Writer, prefix, root string) error {
+func appendRaftSnapshotVectorPartitionDirV1(tw *tar.Writer, prefix, root string, expectedRoot fs.FileInfo) error {
+	if raftSnapshotBeforeVectorPartitionRootOpenForTest != nil {
+		raftSnapshotBeforeVectorPartitionRootOpenForTest(root)
+	}
 	dir, err := rootpublication.OpenStableParent(root)
 	if err != nil {
 		return err
 	}
 	defer dir.Close()
+	openedRoot, err := dir.Stat()
+	if err != nil {
+		return err
+	}
+	if !openedRoot.IsDir() || !os.SameFile(expectedRoot, openedRoot) {
+		return fmt.Errorf("raftfsm: vector partition snapshot root %q changed while opening", root)
+	}
 	if err := writeRaftSnapshotDirHeaderV1(tw, prefix); err != nil {
 		return err
 	}
@@ -643,7 +667,7 @@ func appendRaftSnapshotStoragePathV1(tw *tar.Writer, archiveName, src string) er
 		return fmt.Errorf("raftfsm: snapshot path %q is a symlink", src)
 	}
 	if info.IsDir() {
-		return appendRaftSnapshotDirV1(tw, archiveName, src)
+		return appendRaftSnapshotDirWithRootInfoV1(tw, archiveName, filepath.Clean(src), info)
 	}
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("raftfsm: snapshot path %q is not a regular file", src)

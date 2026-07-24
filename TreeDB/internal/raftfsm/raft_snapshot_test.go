@@ -1355,6 +1355,48 @@ func TestRaftSnapshotV1ExportRejectsSameSizeVectorPartitionReplacement(t *testin
 	}
 }
 
+func TestRaftSnapshotV1ExportRejectsVectorPartitionRootReplacementBeforeOpen(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "vector_partitions")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "original.vpm"), []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	decoy := filepath.Join(parent, "decoy")
+	if err := os.Mkdir(decoy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	decoyBytes := []byte("decoy-must-not-be-archived")
+	if err := os.WriteFile(filepath.Join(decoy, "decoy.vpm"), decoyBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := raftSnapshotBeforeVectorPartitionRootOpenForTest
+	raftSnapshotBeforeVectorPartitionRootOpenForTest = func(path string) {
+		if path != root {
+			return
+		}
+		if err := os.Rename(root, root+".original"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(decoy, root); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func() { raftSnapshotBeforeVectorPartitionRootOpenForTest = old }()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	err := appendRaftSnapshotStoragePathV1(tw, "db/vector_partitions", root)
+	_ = tw.Close()
+	if err == nil || !strings.Contains(err.Error(), "root") {
+		t.Fatalf("snapshot root replacement error=%v, want root identity rejection", err)
+	}
+	if bytes.Contains(buf.Bytes(), decoyBytes) {
+		t.Fatal("snapshot archive contains bytes from replacement vector partition root")
+	}
+}
+
 func BenchmarkRaftSnapshotV1ExportInstall(b *testing.B) {
 	requireRaftSnapshotInstallSupportedV1(b)
 	root := b.TempDir()
