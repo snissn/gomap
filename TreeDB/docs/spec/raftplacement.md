@@ -228,11 +228,14 @@ fails before bootstrap, reopen, or participation when any fixed voter is
 missing that capability.
 
 Each generation contains a monotonic `Epoch`, the complete catalog, and a
-SHA-256 digest of its canonical JSON representation. Canonicalization sorts
-features, groups, group members, collection placements, and token partitions;
-therefore equivalent input has one byte representation and digest. The command
-envelope carries `ExpectedEpoch`: exact committed bytes are idempotent, stale
-writers, skipped epochs, and different bytes for a committed epoch fail closed.
+SHA-256 digest. The digest input is the canonical JSON object
+`{"format":...,"epoch":...,"catalog":...}` in that field order; the record's
+`digest` field is excluded rather than serialized as an empty string.
+Canonicalization sorts features, groups, group members, collection placements,
+and token partitions; therefore equivalent input has one byte representation
+and digest. The command envelope carries `ExpectedEpoch`: exact committed bytes
+are idempotent, stale writers, skipped epochs, and different bytes for a
+committed epoch fail closed.
 The bounded v1 payload limits command and snapshot bytes, nesting, JSON
 objects/arrays, numeric tokens, strings, groups, members, features, placements,
 and per-placement plus aggregate token partitions. Command, record, and
