@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
 	"os"
@@ -148,6 +149,9 @@ func TestPartitionStageWritesValidatedDeterministicArtifact(t *testing.T) {
 }
 
 func TestRouterStageUsesPersistedExactAndNativeHNSWPaths(t *testing.T) {
+	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
+		t.Skip("durable M1 lifecycle publication is unsupported; router codec and model coverage remain platform-neutral")
+	}
 	dataset := writeFixtureForTest(t, 32, 4, 8)
 	if err := runWithHermeticProvenance(t, []string{
 		"-dataset", dataset,
@@ -231,6 +235,28 @@ func TestRouterStageUsesPersistedExactAndNativeHNSWPaths(t *testing.T) {
 	if !bytes.Contains(markdown, []byte("M4 local router evidence")) ||
 		!bytes.Contains(markdown, []byte("not production Raft or M8 acceptance evidence")) {
 		t.Fatalf("router Markdown has incorrect evidence boundary:\n%s", markdown)
+	}
+}
+
+func TestRouterStageFailsBeforePartialEvidenceWithoutNamespacePersistence(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "evidence")
+	args := []string{
+		"-dataset", "must-not-be-read",
+		"-out", out,
+		"-partitions", "4",
+		"-probes", "1",
+		"-stage", "router",
+	}
+	var stdout bytes.Buffer
+	err := runWithRuntimeCapabilities(args, &stdout, benchmarkRuntimeCapabilities{})
+	if !errors.Is(err, collections.ErrVectorPartitionNamespacePersistenceUnsupportedV1) {
+		t.Fatalf("unsupported M4 router stage err=%v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("unsupported M4 router stage emitted stdout: %q", stdout.String())
+	}
+	if _, statErr := os.Stat(out); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("unsupported M4 router stage created partial evidence directory: %v", statErr)
 	}
 }
 

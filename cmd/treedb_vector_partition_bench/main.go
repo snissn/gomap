@@ -311,10 +311,27 @@ func main() {
 	}
 }
 
-func run(args []string, stdout io.Writer) (runErr error) {
+type benchmarkRuntimeCapabilities struct {
+	vectorPartitionNamespacePersistence bool
+}
+
+func currentBenchmarkRuntimeCapabilities() benchmarkRuntimeCapabilities {
+	return benchmarkRuntimeCapabilities{
+		vectorPartitionNamespacePersistence: collections.VectorPartitionNamespacePersistenceSupportedV1(),
+	}
+}
+
+func run(args []string, stdout io.Writer) error {
+	return runWithRuntimeCapabilities(args, stdout, currentBenchmarkRuntimeCapabilities())
+}
+
+func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities benchmarkRuntimeCapabilities) (runErr error) {
 	cfg, err := parseConfig(args)
 	if err != nil {
 		return err
+	}
+	if cfg.stage == "router" && !capabilities.vectorPartitionNamespacePersistence {
+		return fmt.Errorf("%w: M4 router evidence requires durable vector-partition lifecycle publication", collections.ErrVectorPartitionNamespacePersistenceUnsupportedV1)
 	}
 	cfg.command = append([]string{"treedb_vector_partition_bench"}, args...)
 	if cfg.baseSHA, cfg.headSHA, err = provenance(); err != nil {
