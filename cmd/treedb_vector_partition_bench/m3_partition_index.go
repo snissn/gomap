@@ -23,6 +23,9 @@ const (
 	m3ReportSchemaVersion = 2
 	m3BenchmarkCollection = "m3_partition_source"
 	m3WarmupPasses        = 1
+	// m3PartitionAssetFileIDBase reserves a benchmark-owned column-asset
+	// segment range, separate from the collection package's production ranges.
+	m3PartitionAssetFileIDBase uint64 = 40_000
 )
 
 type m3PartitionIndexReport struct {
@@ -147,6 +150,44 @@ func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vect
 	return err
 }
 
+func m3PartitionAssetFileID(generation uint64) (uint32, error) {
+	maxFileID := uint64(^uint32(0))
+	if generation == 0 || generation > maxFileID-m3PartitionAssetFileIDBase {
+		return 0, fmt.Errorf("M3 generation %d exceeds column-asset file-ID range", generation)
+	}
+	return uint32(m3PartitionAssetFileIDBase + generation), nil
+}
+
+func closeM3PartitionSearchers(searchers []*collections.VectorPartitionLocalSearcherV1) error {
+	var resultErr error
+	for _, searcher := range searchers {
+		if searcher != nil {
+			resultErr = errors.Join(resultErr, searcher.Close())
+		}
+	}
+	return resultErr
+}
+
+func openM3PartitionSearchers(count int, open func(uint32) (*collections.VectorPartitionLocalSearcherV1, error)) (searchers []*collections.VectorPartitionLocalSearcherV1, resultErr error) {
+	if count < 0 || uint64(count) > uint64(^uint32(0)) {
+		return nil, fmt.Errorf("M3 partition count %d exceeds uint32 range", count)
+	}
+	searchers = make([]*collections.VectorPartitionLocalSearcherV1, count)
+	defer func() {
+		if resultErr != nil {
+			resultErr = errors.Join(resultErr, closeM3PartitionSearchers(searchers))
+			searchers = nil
+		}
+	}()
+	for partition := range searchers {
+		searchers[partition], resultErr = open(uint32(partition))
+		if resultErr != nil {
+			return searchers, resultErr
+		}
+	}
+	return searchers, nil
+}
+
 func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, generation uint64) (_ m3PartitionIndexRow, resultErr error) {
 	dir, err := os.MkdirTemp("", "treedb-vector-partition-m3-*")
 	if err != nil {
@@ -237,7 +278,11 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 			Dimensions:  len(vectors[0]),
 		}
 	}
-	assets, resources, err := col.MaterializeVectorPartitionLocalSearchAssetsV1(partitionHNSWIndex, manifest, uint32(40_000+generation), inputs)
+	assetFileID, err := m3PartitionAssetFileID(generation)
+	if err != nil {
+		return m3PartitionIndexRow{}, err
+	}
+	assets, resources, err := col.MaterializeVectorPartitionLocalSearchAssetsV1(partitionHNSWIndex, manifest, assetFileID, inputs)
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
@@ -300,21 +345,16 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 	if lifecycle.Capacity != uint64(artifact.Metrics.Cap) || lifecycle.OverlapBudget != uint64(overlap.Budget) || lifecycle.UnspentOverlapBudget != uint64(overlap.Unspent) {
 		return m3PartitionIndexRow{}, fmt.Errorf("reopened lifecycle accounting=%+v", lifecycle)
 	}
-	searchers := make([]*collections.VectorPartitionLocalSearcherV1, cfg.partitions)
 	openStarted := time.Now()
-	for partition := range searchers {
-		searchers[partition], err = col.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, generation, uint32(partition))
-		if err != nil {
-			return m3PartitionIndexRow{}, err
-		}
+	searchers, err := openM3PartitionSearchers(cfg.partitions, func(partition uint32) (*collections.VectorPartitionLocalSearcherV1, error) {
+		return col.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, generation, partition)
+	})
+	if err != nil {
+		return m3PartitionIndexRow{}, err
 	}
 	openWall := time.Since(openStarted).Nanoseconds()
 	defer func() {
-		for _, searcher := range searchers {
-			if searcher != nil {
-				resultErr = errors.Join(resultErr, searcher.Close())
-			}
-		}
+		resultErr = errors.Join(resultErr, closeM3PartitionSearchers(searchers))
 	}()
 
 	var recallTotal float64

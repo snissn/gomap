@@ -216,6 +216,52 @@ func TestM3PartitionIndexFailsBeforePartialEvidenceWithoutNamespacePersistence(t
 	}
 }
 
+func TestM3PartitionAssetFileIDBounds(t *testing.T) {
+	if got, err := m3PartitionAssetFileID(1); err != nil || got != 40_001 {
+		t.Fatalf("first M3 file ID=%d err=%v", got, err)
+	}
+	maxGeneration := uint64(^uint32(0)) - m3PartitionAssetFileIDBase
+	if got, err := m3PartitionAssetFileID(maxGeneration); err != nil || got != ^uint32(0) {
+		t.Fatalf("last M3 file ID=%d err=%v", got, err)
+	}
+	if _, err := m3PartitionAssetFileID(0); err == nil {
+		t.Fatal("zero generation accepted")
+	}
+	if _, err := m3PartitionAssetFileID(maxGeneration + 1); err == nil {
+		t.Fatal("overflowing generation accepted")
+	}
+}
+
+func TestOpenM3PartitionSearchersClosesPartialSuccess(t *testing.T) {
+	openFailure := errors.New("injected partition open failure")
+	var first *collections.VectorPartitionLocalSearcherV1
+	searchers, err := openM3PartitionSearchers(2, func(partition uint32) (*collections.VectorPartitionLocalSearcherV1, error) {
+		if partition == 1 {
+			return nil, openFailure
+		}
+		searcher, openErr := collections.OpenVectorPartitionLocalSearcherV1(collections.VectorPartitionSearchAssetV1{
+			ManifestChecksum: strings.Repeat("c", 64),
+			Generation:       1,
+			PartitionID:      partition,
+			Dimensions:       1,
+			IDs:              []string{"row-0"},
+			Vectors:          [][]float32{{1}},
+			Kinds:            []collections.VectorPartitionMembershipKindV1{collections.VectorPartitionMembershipHomeV1},
+		})
+		first = searcher
+		return searcher, openErr
+	})
+	if !errors.Is(err, openFailure) {
+		t.Fatalf("partial open err=%v", err)
+	}
+	if searchers != nil {
+		t.Fatalf("partial open returned searchers=%v", searchers)
+	}
+	if first == nil || !first.Status().Retired {
+		t.Fatalf("first searcher not closed after partial failure: %+v", first)
+	}
+}
+
 func TestPartitionStageEdgeClampPreservesRepetitionCapacity(t *testing.T) {
 	cfg, err := parseConfig([]string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-probes", "1", "-stage", "partition", "-partition-repetitions", "4", "-partition-degree", "16"})
 	if err != nil {

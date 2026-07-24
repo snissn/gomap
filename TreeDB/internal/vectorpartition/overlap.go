@@ -155,7 +155,8 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 	return out, nil
 }
 
-// ValidateOverlap is intentionally reusable by manifest/materialization code.
+// overlapCutReduction scores only directed cut edges that membership in
+// partition would newly satisfy for node.
 func overlapCutReduction(members []map[int]struct{}, node, partition int, neighbors []int) int {
 	reduction := 0
 	for _, neighbor := range neighbors {
