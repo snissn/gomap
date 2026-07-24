@@ -27,6 +27,16 @@ type submitOnlyGroupSubmitter struct {
 	groupID GroupID
 }
 
+type recordingCatalogRouteValidator struct {
+	calls []raftentry.RequestMetadataV1
+	err   error
+}
+
+func (v *recordingCatalogRouteValidator) ValidateCatalogRouteMetadata(_ context.Context, metadata raftentry.RequestMetadataV1) error {
+	v.calls = append(v.calls, cloneRequestMetadataV1(metadata))
+	return v.err
+}
+
 func (s *submitOnlyGroupSubmitter) Config() ResolvedConfig {
 	return ResolvedConfig{GroupID: s.groupID}
 }
@@ -133,6 +143,34 @@ func TestGroupRoutedSubmitterRoutesCollectionAndTokenTargets(t *testing.T) {
 	}
 	if tokenResult.ActualAck != iwire.AckRaftCommitted || tokenResult.CommittedEntry.RequestMetadata.ClusterRouteToken != 42 {
 		t.Fatalf("token result ack/token=%d/%d want raft_committed/42", tokenResult.ActualAck, tokenResult.CommittedEntry.RequestMetadata.ClusterRouteToken)
+	}
+}
+
+func TestCatalogMetaGroupRoutedSubmitterValidatesBeforeOwnerLookup(t *testing.T) {
+	groupA := &recordingGroupSubmitter{groupID: "group-a"}
+	registry, err := NewGroupSubmitterRegistryV1([]GroupSubmitterV1{{GroupID: "group-a", Submitter: groupA}})
+	if err != nil {
+		t.Fatalf("NewGroupSubmitterRegistryV1: %v", err)
+	}
+	if _, err := NewCatalogMetaGroupRoutedSubmitter(registry, nil); !errors.Is(err, ErrInvalidSubmitter) {
+		t.Fatalf("nil validator error=%v want ErrInvalidSubmitter", err)
+	}
+	validator := &recordingCatalogRouteValidator{err: errors.New("catalog route mismatch")}
+	dispatcher, err := NewCatalogMetaGroupRoutedSubmitter(registry, validator)
+	if err != nil {
+		t.Fatalf("NewCatalogMetaGroupRoutedSubmitter: %v", err)
+	}
+	metadata := routeMetadata("group-a", iwire.AckRaftCommitted)
+	metadata.CatalogMetaEpoch = 3
+	metadata.CatalogMetaDigest = "digest"
+	if _, err := dispatcher.SubmitCommandEntryV1(context.Background(), testClusterCommandEntry(t, 7), metadata); err == nil {
+		t.Fatal("catalog validator rejection unexpectedly admitted")
+	}
+	if len(validator.calls) != 1 || validator.calls[0].CatalogMetaEpoch != 3 {
+		t.Fatalf("validator calls=%+v want one call with epoch 3", validator.calls)
+	}
+	if got := len(groupA.snapshot()); got != 0 {
+		t.Fatalf("owner submit calls=%d want 0 before catalog validation", got)
 	}
 }
 

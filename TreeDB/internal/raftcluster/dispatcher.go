@@ -89,10 +89,15 @@ func (r GroupSubmitterRegistryV1) empty() bool {
 type GroupRoutedSubmitterOptions struct {
 	Registry              GroupSubmitterRegistryV1
 	CatalogProofValidator CatalogProofValidatorV1
+	CatalogRouteValidator CatalogRouteValidatorV1
 }
 
 type CatalogProofValidatorV1 interface {
 	ValidateCatalogMetaProof(context.Context, uint64, string) error
+}
+
+type CatalogRouteValidatorV1 interface {
+	ValidateCatalogRouteMetadata(context.Context, raftentry.RequestMetadataV1) error
 }
 
 // GroupRoutedSubmitter dispatches collection and single-token routed writes to
@@ -102,13 +107,35 @@ type CatalogProofValidatorV1 interface {
 type GroupRoutedSubmitter struct {
 	registry              GroupSubmitterRegistryV1
 	catalogProofValidator CatalogProofValidatorV1
+	catalogRouteValidator CatalogRouteValidatorV1
 }
 
 func NewGroupRoutedSubmitter(opts GroupRoutedSubmitterOptions) (*GroupRoutedSubmitter, error) {
 	if opts.Registry.empty() {
 		return nil, errors.Join(ErrInvalidSubmitter, fmt.Errorf("group submitter registry is required"))
 	}
-	return &GroupRoutedSubmitter{registry: opts.Registry, catalogProofValidator: opts.CatalogProofValidator}, nil
+	if opts.CatalogProofValidator != nil && opts.CatalogRouteValidator != nil {
+		return nil, errors.Join(ErrInvalidSubmitter, fmt.Errorf("configure one catalog validator, not both"))
+	}
+	return &GroupRoutedSubmitter{
+		registry:              opts.Registry,
+		catalogProofValidator: opts.CatalogProofValidator,
+		catalogRouteValidator: opts.CatalogRouteValidator,
+	}, nil
+}
+
+// NewCatalogMetaGroupRoutedSubmitter constructs the production replicated
+// catalog path. Unlike the legacy bootstrap/test constructor, it requires a
+// validator that re-resolves the complete route against the applied catalog
+// generation before selecting a local group submitter.
+func NewCatalogMetaGroupRoutedSubmitter(registry GroupSubmitterRegistryV1, validator CatalogRouteValidatorV1) (*GroupRoutedSubmitter, error) {
+	if validator == nil {
+		return nil, errors.Join(ErrInvalidSubmitter, fmt.Errorf("replicated catalog route validator is required"))
+	}
+	return NewGroupRoutedSubmitter(GroupRoutedSubmitterOptions{
+		Registry:              registry,
+		CatalogRouteValidator: validator,
+	})
 }
 
 func (s *GroupRoutedSubmitter) SubmitCommandEntryV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1) (SubmitResultV1, error) {
@@ -119,7 +146,11 @@ func (s *GroupRoutedSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	if err != nil {
 		return SubmitResultV1{}, err
 	}
-	if s.catalogProofValidator != nil {
+	if s.catalogRouteValidator != nil {
+		if err := s.catalogRouteValidator.ValidateCatalogRouteMetadata(ctx, cloneRequestMetadataV1(metadata)); err != nil {
+			return SubmitResultV1{}, err
+		}
+	} else if s.catalogProofValidator != nil {
 		if err := s.catalogProofValidator.ValidateCatalogMetaProof(ctx, metadata.CatalogMetaEpoch, metadata.CatalogMetaDigest); err != nil {
 			return SubmitResultV1{}, err
 		}

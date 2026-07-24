@@ -9,7 +9,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	hraft "github.com/hashicorp/raft"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
@@ -639,6 +641,106 @@ func newMongoGroupRoutedDispatcherTestServer(tb testing.TB, provider treenativew
 	server.ClusterSubmitter = treenativewire.NewRoutedRaftClusterSubmitter(dispatcher, provider, server.Collections)
 	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(60)
 	return server, groupA, groupB
+}
+
+func newMongoCatalogMetaGroupRoutedDispatcherTestServer(tb testing.TB, provider treenativewire.ClusterRouteProvider, authority *raftplacement.CatalogMetaAuthorityV1) (*Server, *mongoRecordingRaftCommandSubmitter, *mongoRecordingRaftCommandSubmitter) {
+	tb.Helper()
+	db, err := backenddb.Open(backenddb.Options{Dir: tb.TempDir()})
+	if err != nil {
+		tb.Fatalf("open db: %v", err)
+	}
+	tb.Cleanup(func() { _ = db.Close() })
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	if _, err := server.Collections.CreateCollection(server.defaultCollectionMeta("app.users")); err != nil {
+		tb.Fatalf("create app.users: %v", err)
+	}
+	groupA := &mongoRecordingRaftCommandSubmitter{groupID: "group-a"}
+	groupB := &mongoRecordingRaftCommandSubmitter{groupID: "group-b"}
+	registry, err := raftcluster.NewGroupSubmitterRegistryV1([]raftcluster.GroupSubmitterV1{
+		{GroupID: "group-a", Submitter: groupA},
+		{GroupID: "group-b", Submitter: groupB},
+	})
+	if err != nil {
+		tb.Fatalf("NewGroupSubmitterRegistryV1: %v", err)
+	}
+	dispatcher, err := raftcluster.NewCatalogMetaGroupRoutedSubmitter(registry, authority)
+	if err != nil {
+		tb.Fatalf("NewCatalogMetaGroupRoutedSubmitter: %v", err)
+	}
+	server.ClusterSubmitter = treenativewire.NewRoutedRaftClusterSubmitter(dispatcher, provider, server.Collections)
+	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(60)
+	return server, groupA, groupB
+}
+
+func newMongoCatalogMetaAuthority(t testing.TB) (*raftplacement.CatalogMetaAuthorityV1, *raftcluster.CatalogMetaRaftProviderV1) {
+	t.Helper()
+	authority := raftplacement.NewCatalogMetaAuthorityV1()
+	_, transport := hraft.NewInmemTransport("meta-a")
+	t.Cleanup(func() { _ = transport.Close() })
+	features := raftcluster.FeatureSet{
+		ConfigVersion: raftcluster.SupportedConfigVersion,
+		Required: []raftcluster.RequiredFeature{
+			{Name: raftcluster.FeatureSingleGroupProvider, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureSingleGroupProvider]},
+			{Name: raftcluster.FeatureCatalogMetaAuthority, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureCatalogMetaAuthority]},
+		},
+	}
+	provider, err := raftcluster.OpenCatalogMetaRaftProviderV1(raftcluster.CatalogMetaRaftProviderOptionsV1{
+		Cluster: raftcluster.Config{
+			Dir: t.TempDir(), NodeID: "meta-a", GroupID: "meta",
+			Features: features,
+			Peers:    []raftcluster.Peer{{ID: "meta-a", Address: "meta-a", Capabilities: features}},
+		},
+		State: authority, Transport: transport, Bootstrap: true,
+	})
+	if err != nil {
+		t.Fatalf("OpenCatalogMetaRaftProviderV1: %v", err)
+	}
+	t.Cleanup(func() { _ = provider.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		status, err := provider.ClusterAdmissionStatus(ctx)
+		if err != nil {
+			t.Fatalf("ClusterAdmissionStatus: %v", err)
+		}
+		if status.Leader {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("wait catalog meta leader: %v", ctx.Err())
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if _, _, err := provider.SubmitCatalogMetaCommandV1(ctx, mongoCatalogMetaCommand(t, 0, 1)); err != nil {
+		t.Fatalf("submit initial catalog meta: %v", err)
+	}
+	return authority, provider
+}
+
+func mongoCatalogMetaCommand(t testing.TB, expected, epoch uint64) []byte {
+	t.Helper()
+	record, err := raftplacement.NewCatalogMetaRecordV1(epoch, raftplacement.CatalogV1{
+		Groups: []raftplacement.GroupV1{
+			{ID: "group-a", Members: []raftcluster.NodeID{"node-a", "node-b"}, LeaderHint: "node-a"},
+			{ID: "group-b", Members: []raftcluster.NodeID{"node-b", "node-c"}, LeaderHint: "node-b"},
+		},
+		Placements: []raftplacement.CollectionPlacementV1{{
+			Collection: raftplacement.CollectionRefV1{Database: "app", Catalog: "default", Collection: "users"},
+			Mode:       raftplacement.PlacementModeCollectionV1,
+			GroupID:    "group-a",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NewCatalogMetaRecordV1: %v", err)
+	}
+	command, err := raftplacement.EncodeCatalogMetaCommandV1(raftplacement.CatalogMetaCommandV1{ExpectedEpoch: expected, Record: record})
+	if err != nil {
+		t.Fatalf("EncodeCatalogMetaCommandV1: %v", err)
+	}
+	return command
 }
 
 func newMongoRaftBridgeTestServer(tb testing.TB, admission raftcluster.AdmissionStatus) *Server {
@@ -1418,6 +1520,62 @@ func TestMongoGroupRoutedDispatcherRoutesCollectionBatchWrite(t *testing.T) {
 	}
 	if got := routes[0]; got.Shape != treenativewire.ClusterRouteShapeTokenBatch || len(got.Tokens) != 2 {
 		t.Fatalf("route request=%+v want token_batch classification for two IDs", got)
+	}
+}
+
+func TestCatalogMetaMongoAndSharedSubmitProofMatrix(t *testing.T) {
+	authority, metaRaft := newMongoCatalogMetaAuthority(t)
+	proof, err := authority.CurrentCatalogProof(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentCatalogProof: %v", err)
+	}
+	provider, err := treenativewire.NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof)
+	if err != nil {
+		t.Fatalf("NewCatalogMetaClusterRouteProvider: %v", err)
+	}
+	server, groupA, groupB := newMongoCatalogMetaGroupRoutedDispatcherTestServer(t, provider, authority)
+	response := serveCommand(t, server, 336350, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "name", Value: "Grace"}},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, response)
+	if calls := groupB.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-b calls=%d want 0", len(calls))
+	}
+	calls := groupA.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("group-a calls=%d want 1", len(calls))
+	}
+	if got := calls[0].metadata; got.CatalogMetaEpoch != proof.Epoch || got.CatalogMetaDigest != proof.Digest {
+		t.Fatalf("Mongo shared-submit proof=%d/%s want %d/%s", got.CatalogMetaEpoch, got.CatalogMetaDigest, proof.Epoch, proof.Digest)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, _, err := metaRaft.SubmitCatalogMetaCommandV1(ctx, mongoCatalogMetaCommand(t, 1, 2)); err != nil {
+		t.Fatalf("submit catalog epoch 2: %v", err)
+	}
+	staleProvider, err := treenativewire.NewCatalogMetaClusterRouteProvider(authority, func(context.Context) (raftplacement.CatalogProofV1, error) {
+		return proof, nil
+	})
+	if err != nil {
+		t.Fatalf("NewCatalogMetaClusterRouteProvider stale: %v", err)
+	}
+	staleServer, staleA, staleB := newMongoCatalogMetaGroupRoutedDispatcherTestServer(t, staleProvider, authority)
+	staleResponse := serveCommand(t, staleServer, 336351, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u3"}, {Key: "name", Value: "Katherine"}},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, staleResponse, "NotWritablePrimary")
+	if len(staleA.snapshotCalls()) != 0 || len(staleB.snapshotCalls()) != 0 {
+		t.Fatal("stale Mongo catalog proof reached a group submitter")
 	}
 }
 

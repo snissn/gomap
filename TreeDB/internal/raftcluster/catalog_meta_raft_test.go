@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -52,7 +55,7 @@ func TestCatalogMetaRaftProviderCommitsOnlyAfterLeaderApplyAndSnapshots(t *testi
 	if _, _, err := p.SubmitCatalogMetaCommandV1(context.Background(), []byte("generation-2")); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.InstallCatalogMetaSnapshotBytesV1(state.snapshot); err != nil {
+	if err := state.InstallCatalogMetaSnapshotBytesV1(catalogMetaRestoreCapabilityV1(), state.snapshot); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(state.command, []byte("generation-1")) {
@@ -64,6 +67,242 @@ func TestCatalogMetaRaftProviderFollowerAndCancellationFailClosed(t *testing.T) 
 	p := &CatalogMetaRaftProviderV1{}
 	if _, _, err := p.SubmitCatalogMetaCommandV1(context.Background(), []byte("x")); !errors.Is(err, ErrInvalidHashicorpRaftProvider) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestCatalogMetaRaftProviderDistinguishesPreEnqueueCancellationFromAmbiguousApply(t *testing.T) {
+	state := &blockingCatalogMetaRaftTestState{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	_, transport := hraft.NewInmemTransport("node-a")
+	defer transport.Close()
+	p, err := OpenCatalogMetaRaftProviderV1(CatalogMetaRaftProviderOptionsV1{
+		Cluster:      catalogMetaTestConfig(t.TempDir(), "node-a", []Peer{catalogMetaCapablePeer("node-a")}),
+		State:        state,
+		Transport:    transport,
+		RaftConfig:   catalogMetaFastRaftConfig(),
+		Bootstrap:    true,
+		ApplyTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("OpenCatalogMetaRaftProviderV1: %v", err)
+	}
+	defer p.Close()
+	waitCatalogMetaLeader(t, map[NodeID]*CatalogMetaRaftProviderV1{"node-a": p})
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := p.SubmitCatalogMetaCommandV1(canceled, []byte("not-enqueued")); !errors.Is(err, context.Canceled) || errors.Is(err, ErrCommitAmbiguous) {
+		t.Fatalf("pre-enqueue cancellation error=%v want context.Canceled without ambiguity", err)
+	}
+	if got := state.applyCount(); got != 0 {
+		t.Fatalf("pre-enqueue apply count=%d want 0", got)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, _, err := p.SubmitCatalogMetaCommandV1(ctx, []byte("enqueued"))
+		result <- err
+	}()
+	select {
+	case <-state.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("catalog command did not reach committed apply")
+	}
+	err = <-result
+	if !errors.Is(err, ErrCommitAmbiguous) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("post-enqueue cancellation error=%v want ErrCommitAmbiguous and deadline", err)
+	}
+	close(state.release)
+	waitCatalogMetaCondition(t, func() bool {
+		return bytes.Equal(state.currentCommand(), []byte("enqueued"))
+	}, "enqueued command did not finish applying after ambiguous caller outcome")
+}
+
+func TestCatalogMetaRaftProviderFixedPeersFailoverSnapshotReopenAndRejoin(t *testing.T) {
+	root := t.TempDir()
+	peers := []Peer{
+		catalogMetaCapablePeer("node-a"),
+		catalogMetaCapablePeer("node-b"),
+		catalogMetaCapablePeer("node-c"),
+	}
+	transports := make(map[NodeID]*hraft.InmemTransport, len(peers))
+	for _, peer := range peers {
+		_, transport := hraft.NewInmemTransportWithTimeout(hraft.ServerAddress(peer.Address), 2*time.Second)
+		transports[peer.ID] = transport
+	}
+	connectCatalogMetaTransports(peers, transports)
+	t.Cleanup(func() {
+		for _, transport := range transports {
+			_ = transport.Close()
+		}
+	})
+
+	providers := make(map[NodeID]*CatalogMetaRaftProviderV1, len(peers))
+	states := make(map[NodeID]*concurrentCatalogMetaRaftTestState, len(peers))
+	configs := make(map[NodeID]Config, len(peers))
+	for _, peer := range peers {
+		cfg := catalogMetaTestConfig(filepath.Join(root, string(peer.ID)), peer.ID, peers)
+		state := &concurrentCatalogMetaRaftTestState{}
+		provider, err := OpenCatalogMetaRaftProviderV1(CatalogMetaRaftProviderOptionsV1{
+			Cluster:      cfg,
+			State:        state,
+			Transport:    transports[peer.ID],
+			RaftConfig:   catalogMetaFastRaftConfig(),
+			Bootstrap:    true,
+			ApplyTimeout: 2 * time.Second,
+		})
+		if err != nil {
+			t.Fatalf("%s OpenCatalogMetaRaftProviderV1: %v", peer.ID, err)
+		}
+		providers[peer.ID], states[peer.ID], configs[peer.ID] = provider, state, cfg
+	}
+	t.Cleanup(func() {
+		for _, provider := range providers {
+			_ = provider.Close()
+		}
+	})
+
+	leaderID := waitCatalogMetaLeader(t, providers)
+	if _, _, err := providers[leaderID].SubmitCatalogMetaCommandV1(context.Background(), []byte("generation-1")); err != nil {
+		t.Fatalf("leader submit generation-1: %v", err)
+	}
+	waitCatalogMetaStates(t, states, []NodeID{"node-a", "node-b", "node-c"}, []byte("generation-1"))
+	for id, provider := range providers {
+		if id == leaderID {
+			continue
+		}
+		if _, _, err := provider.SubmitCatalogMetaCommandV1(context.Background(), []byte("follower-write")); !errors.Is(err, ErrNotLeader) {
+			t.Fatalf("%s follower submit error=%v want ErrNotLeader", id, err)
+		}
+		break
+	}
+
+	oldLeader := providers[leaderID]
+	if err := oldLeader.Close(); err != nil {
+		t.Fatalf("close old leader %s: %v", leaderID, err)
+	}
+	delete(providers, leaderID)
+	disconnectCatalogMetaTransport(leaderID, peers, transports)
+	newLeaderID := waitCatalogMetaLeader(t, providers)
+	if _, _, err := providers[newLeaderID].SubmitCatalogMetaCommandV1(context.Background(), []byte("generation-2")); err != nil {
+		t.Fatalf("new leader submit generation-2: %v", err)
+	}
+	running := make([]NodeID, 0, len(providers))
+	for id := range providers {
+		running = append(running, id)
+	}
+	waitCatalogMetaStates(t, states, running, []byte("generation-2"))
+
+	unsupported := configs[leaderID]
+	unsupported.Peers = append([]Peer(nil), unsupported.Peers...)
+	for i := range unsupported.Peers {
+		if unsupported.Peers[i].ID == leaderID {
+			unsupported.Peers[i].Capabilities = DefaultFeatureSet()
+		}
+	}
+	if rejected, err := OpenCatalogMetaRaftProviderV1(CatalogMetaRaftProviderOptionsV1{
+		Cluster: unsupported, State: &concurrentCatalogMetaRaftTestState{}, Transport: transports[leaderID], Bootstrap: true,
+	}); rejected != nil || !errors.Is(err, ErrUnsupportedFeature) {
+		if rejected != nil {
+			_ = rejected.Close()
+		}
+		t.Fatalf("unsupported voter reopen provider/error=%v/%v want nil ErrUnsupportedFeature", rejected, err)
+	}
+
+	rejoinedState := &concurrentCatalogMetaRaftTestState{}
+	rejoined, err := OpenCatalogMetaRaftProviderV1(CatalogMetaRaftProviderOptionsV1{
+		Cluster:      configs[leaderID],
+		State:        rejoinedState,
+		Transport:    transports[leaderID],
+		RaftConfig:   catalogMetaFastRaftConfig(),
+		Bootstrap:    true,
+		ApplyTimeout: 2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("rejoin old leader %s: %v", leaderID, err)
+	}
+	providers[leaderID], states[leaderID] = rejoined, rejoinedState
+	connectCatalogMetaTransports(peers, transports)
+	waitCatalogMetaStates(t, states, []NodeID{leaderID}, []byte("generation-2"))
+
+	if err := rejoined.SnapshotCatalogMetaV1(context.Background()); err != nil {
+		t.Fatalf("snapshot rejoined node: %v", err)
+	}
+	if err := rejoined.Close(); err != nil {
+		t.Fatalf("close snapshotted node: %v", err)
+	}
+	delete(providers, leaderID)
+	reopenedState := &concurrentCatalogMetaRaftTestState{}
+	reopened, err := OpenCatalogMetaRaftProviderV1(CatalogMetaRaftProviderOptionsV1{
+		Cluster:      configs[leaderID],
+		State:        reopenedState,
+		Transport:    transports[leaderID],
+		RaftConfig:   catalogMetaFastRaftConfig(),
+		Bootstrap:    true,
+		ApplyTimeout: 2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("reopen snapshotted node: %v", err)
+	}
+	providers[leaderID], states[leaderID] = reopened, reopenedState
+	connectCatalogMetaTransports(peers, transports)
+	waitCatalogMetaStates(t, states, []NodeID{leaderID}, []byte("generation-2"))
+}
+
+func TestCatalogMetaRaftProviderRefusesUnsupportedFixedVoterBeforeBootstrap(t *testing.T) {
+	peers := []Peer{catalogMetaCapablePeer("node-a"), catalogMetaCapablePeer("node-b")}
+	peers[1].Capabilities = DefaultFeatureSet()
+	_, transport := hraft.NewInmemTransport("node-a")
+	defer transport.Close()
+	provider, err := OpenCatalogMetaRaftProviderV1(CatalogMetaRaftProviderOptionsV1{
+		Cluster:   catalogMetaTestConfig(t.TempDir(), "node-a", peers),
+		State:     &catalogMetaRaftTestState{},
+		Transport: transport,
+		Bootstrap: true,
+	})
+	if provider != nil {
+		_ = provider.Close()
+		t.Fatal("unsupported fixed voter returned a provider")
+	}
+	if !errors.Is(err, ErrUnsupportedFeature) {
+		t.Fatalf("OpenCatalogMetaRaftProviderV1 error=%v want ErrUnsupportedFeature", err)
+	}
+}
+
+func TestCatalogMetaRaftProviderUnavailableWithoutMetaQuorum(t *testing.T) {
+	peers := []Peer{
+		catalogMetaCapablePeer("node-a"),
+		catalogMetaCapablePeer("node-b"),
+		catalogMetaCapablePeer("node-c"),
+	}
+	_, transport := hraft.NewInmemTransport("node-a")
+	defer transport.Close()
+	state := &concurrentCatalogMetaRaftTestState{}
+	provider, err := OpenCatalogMetaRaftProviderV1(CatalogMetaRaftProviderOptionsV1{
+		Cluster:      catalogMetaTestConfig(t.TempDir(), "node-a", peers),
+		State:        state,
+		Transport:    transport,
+		RaftConfig:   catalogMetaFastRaftConfig(),
+		Bootstrap:    true,
+		ApplyTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("OpenCatalogMetaRaftProviderV1: %v", err)
+	}
+	defer provider.Close()
+	waitCatalogMetaCondition(t, func() bool {
+		status, err := provider.ClusterAdmissionStatus(context.Background())
+		return err == nil && status.Unavailable && !status.Leader
+	}, "isolated catalog meta voter did not report unavailable")
+	if _, _, err := provider.SubmitCatalogMetaCommandV1(context.Background(), []byte("must-not-commit")); !errors.Is(err, ErrAdmissionUnavailable) {
+		t.Fatalf("submit without meta quorum error=%v want ErrAdmissionUnavailable", err)
+	}
+	if got := state.currentCommand(); len(got) != 0 {
+		t.Fatalf("unavailable meta voter applied %q", got)
 	}
 }
 
@@ -85,6 +324,195 @@ type catalogMetaRaftTestState struct {
 	index             uint64
 }
 
+type blockingCatalogMetaRaftTestState struct {
+	mu      sync.Mutex
+	command []byte
+	applies int
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingCatalogMetaRaftTestState) ApplyCatalogMetaCommittedV1(capability CatalogMetaApplyCapabilityV1, b []byte, _ uint64) error {
+	if !capability.Granted() {
+		return ErrHashicorpRaftLogEntry
+	}
+	s.once.Do(func() { close(s.started) })
+	<-s.release
+	s.mu.Lock()
+	s.command = bytes.Clone(b)
+	s.applies++
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *blockingCatalogMetaRaftTestState) ExportCatalogMetaSnapshotBytesV1() ([]byte, error) {
+	return s.currentCommand(), nil
+}
+
+func (s *blockingCatalogMetaRaftTestState) InstallCatalogMetaSnapshotBytesV1(capability CatalogMetaRestoreCapabilityV1, b []byte) error {
+	if !capability.Granted() {
+		return ErrHashicorpRaftLogEntry
+	}
+	s.mu.Lock()
+	s.command = bytes.Clone(b)
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *blockingCatalogMetaRaftTestState) currentCommand() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return bytes.Clone(s.command)
+}
+
+func (s *blockingCatalogMetaRaftTestState) applyCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.applies
+}
+
+type concurrentCatalogMetaRaftTestState struct {
+	mu      sync.Mutex
+	command []byte
+	index   uint64
+}
+
+func (s *concurrentCatalogMetaRaftTestState) ApplyCatalogMetaCommittedV1(capability CatalogMetaApplyCapabilityV1, b []byte, index uint64) error {
+	if !capability.Granted() {
+		return ErrHashicorpRaftLogEntry
+	}
+	s.mu.Lock()
+	s.command, s.index = bytes.Clone(b), index
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *concurrentCatalogMetaRaftTestState) ExportCatalogMetaSnapshotBytesV1() ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return bytes.Clone(s.command), nil
+}
+
+func (s *concurrentCatalogMetaRaftTestState) InstallCatalogMetaSnapshotBytesV1(capability CatalogMetaRestoreCapabilityV1, b []byte) error {
+	if !capability.Granted() {
+		return ErrHashicorpRaftLogEntry
+	}
+	s.mu.Lock()
+	s.command = bytes.Clone(b)
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *concurrentCatalogMetaRaftTestState) currentCommand() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return bytes.Clone(s.command)
+}
+
+func catalogMetaCapablePeer(id NodeID) Peer {
+	return Peer{
+		ID:      id,
+		Address: string(id),
+		Capabilities: FeatureSet{
+			ConfigVersion: SupportedConfigVersion,
+			Required: []RequiredFeature{
+				{Name: FeatureSingleGroupProvider, Version: SupportedFeatureFloors[FeatureSingleGroupProvider]},
+				{Name: FeatureCatalogMetaAuthority, Version: SupportedFeatureFloors[FeatureCatalogMetaAuthority]},
+			},
+		},
+	}
+}
+
+func catalogMetaTestConfig(root string, id NodeID, peers []Peer) Config {
+	return Config{
+		Dir:      filepath.Join(root, "db"),
+		NodeID:   id,
+		GroupID:  "meta",
+		Peers:    append([]Peer(nil), peers...),
+		Features: catalogMetaCapablePeer(id).Capabilities,
+	}
+}
+
+func catalogMetaFastRaftConfig() *hraft.Config {
+	config := hraft.DefaultConfig()
+	config.HeartbeatTimeout = 300 * time.Millisecond
+	config.ElectionTimeout = 300 * time.Millisecond
+	config.LeaderLeaseTimeout = 300 * time.Millisecond
+	config.CommitTimeout = 5 * time.Millisecond
+	config.SnapshotInterval = time.Hour
+	config.SnapshotThreshold = ^uint64(0)
+	config.TrailingLogs = 0
+	config.LogOutput = io.Discard
+	config.LogLevel = "ERROR"
+	config.NoLegacyTelemetry = true
+	return config
+}
+
+func waitCatalogMetaLeader(t *testing.T, providers map[NodeID]*CatalogMetaRaftProviderV1) NodeID {
+	t.Helper()
+	var leader NodeID
+	waitCatalogMetaCondition(t, func() bool {
+		leader = ""
+		for id, provider := range providers {
+			status, err := provider.ClusterAdmissionStatus(context.Background())
+			if err == nil && status.Leader {
+				if leader != "" {
+					return false
+				}
+				leader = id
+			}
+		}
+		return leader != ""
+	}, fmt.Sprintf("catalog meta cluster has no unique leader among %d providers", len(providers)))
+	return leader
+}
+
+func waitCatalogMetaStates(t *testing.T, states map[NodeID]*concurrentCatalogMetaRaftTestState, ids []NodeID, command []byte) {
+	t.Helper()
+	waitCatalogMetaCondition(t, func() bool {
+		for _, id := range ids {
+			state := states[id]
+			if state == nil || !bytes.Equal(state.currentCommand(), command) {
+				return false
+			}
+		}
+		return true
+	}, fmt.Sprintf("catalog states %v did not converge to %q", ids, command))
+}
+
+func waitCatalogMetaCondition(t *testing.T, ready func() bool, message string) {
+	t.Helper()
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		if ready() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal(message)
+}
+
+func connectCatalogMetaTransports(peers []Peer, transports map[NodeID]*hraft.InmemTransport) {
+	for _, from := range peers {
+		for _, to := range peers {
+			if from.ID == to.ID {
+				continue
+			}
+			transports[from.ID].Connect(hraft.ServerAddress(to.Address), transports[to.ID])
+		}
+	}
+}
+
+func disconnectCatalogMetaTransport(id NodeID, peers []Peer, transports map[NodeID]*hraft.InmemTransport) {
+	transports[id].DisconnectAll()
+	for _, peer := range peers {
+		if peer.ID != id {
+			transports[peer.ID].Disconnect(hraft.ServerAddress(id))
+		}
+	}
+}
+
 func (s *catalogMetaRaftTestState) ApplyCatalogMetaCommittedV1(_ CatalogMetaApplyCapabilityV1, b []byte, index uint64) error {
 	s.command = bytes.Clone(b)
 	s.index = index
@@ -94,7 +522,10 @@ func (s *catalogMetaRaftTestState) ExportCatalogMetaSnapshotBytesV1() ([]byte, e
 	s.snapshot = bytes.Clone(s.command)
 	return bytes.Clone(s.command), nil
 }
-func (s *catalogMetaRaftTestState) InstallCatalogMetaSnapshotBytesV1(b []byte) error {
+func (s *catalogMetaRaftTestState) InstallCatalogMetaSnapshotBytesV1(capability CatalogMetaRestoreCapabilityV1, b []byte) error {
+	if !capability.Granted() {
+		return ErrRaftSnapshotUnsupported
+	}
 	s.command = bytes.Clone(b)
 	return nil
 }

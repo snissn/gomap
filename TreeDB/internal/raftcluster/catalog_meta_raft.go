@@ -23,15 +23,20 @@ const catalogMetaRaftSnapshotMaxBytesV1 = 3 << 20
 type CatalogMetaCommittedStateV1 interface {
 	ApplyCatalogMetaCommittedV1(CatalogMetaApplyCapabilityV1, []byte, uint64) error
 	ExportCatalogMetaSnapshotBytesV1() ([]byte, error)
-	InstallCatalogMetaSnapshotBytesV1([]byte) error
+	InstallCatalogMetaSnapshotBytesV1(CatalogMetaRestoreCapabilityV1, []byte) error
 }
 
 type CatalogMetaApplyCapabilityV1 struct{ granted bool }
+type CatalogMetaRestoreCapabilityV1 struct{ granted bool }
 
 func catalogMetaApplyCapabilityV1() CatalogMetaApplyCapabilityV1 {
 	return CatalogMetaApplyCapabilityV1{granted: true}
 }
 func (c CatalogMetaApplyCapabilityV1) Granted() bool { return c.granted }
+func catalogMetaRestoreCapabilityV1() CatalogMetaRestoreCapabilityV1 {
+	return CatalogMetaRestoreCapabilityV1{granted: true}
+}
+func (c CatalogMetaRestoreCapabilityV1) Granted() bool { return c.granted }
 
 type CatalogMetaRaftProviderOptionsV1 struct {
 	Cluster        Config
@@ -54,6 +59,13 @@ type CatalogMetaRaftProviderV1 struct {
 	raft         *hraft.Raft
 	owned        []io.Closer
 	applyTimeout time.Duration
+}
+
+func (p *CatalogMetaRaftProviderV1) Config() ResolvedConfig {
+	if p == nil {
+		return ResolvedConfig{}
+	}
+	return p.cluster
 }
 
 func OpenCatalogMetaRaftProviderV1(opts CatalogMetaRaftProviderOptionsV1) (*CatalogMetaRaftProviderV1, error) {
@@ -102,8 +114,14 @@ func OpenCatalogMetaRaftProviderV1(opts CatalogMetaRaftProviderOptionsV1) (*Cata
 }
 
 func featureSetSupportsV1(features FeatureSet, name FeatureName) bool {
+	floor, known := SupportedFeatureFloors[name]
+	if !known {
+		return false
+	}
 	for _, required := range features.Required {
-		if required.Name == name {
+		if required.Name == name &&
+			required.Version.Major == floor.Major &&
+			required.Version.Minor >= floor.Minor {
 			return true
 		}
 	}
@@ -219,7 +237,7 @@ func (f catalogMetaRaftFSMV1) Restore(src io.ReadCloser) error {
 	if len(b) > catalogMetaRaftSnapshotMaxBytesV1 {
 		return ErrHashicorpRaftLogEntry
 	}
-	return f.state.InstallCatalogMetaSnapshotBytesV1(b)
+	return f.state.InstallCatalogMetaSnapshotBytesV1(catalogMetaRestoreCapabilityV1(), b)
 }
 
 type catalogMetaRaftSnapshotV1 struct{ bytes []byte }

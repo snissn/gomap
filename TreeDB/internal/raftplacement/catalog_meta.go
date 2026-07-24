@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
+	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
 
 // The meta payload is deliberately small: it is replicated as one Raft entry,
@@ -42,6 +43,7 @@ var (
 	ErrCatalogMetaConflict       = errors.New("raftplacement: conflicting catalog meta epoch")
 	ErrCatalogMetaDigestMismatch = errors.New("raftplacement: catalog meta digest mismatch")
 	ErrCatalogMetaProofMissing   = errors.New("raftplacement: catalog meta proof missing")
+	ErrCatalogMetaRouteMismatch  = errors.New("raftplacement: catalog meta route mismatch")
 )
 
 // CatalogMetaRecordV1 is the complete, immutable generation installed by the
@@ -72,11 +74,12 @@ type CatalogProofV1 struct {
 }
 
 type CatalogMetaStatusV1 struct {
-	Epoch        uint64
-	Digest       string
-	AppliedIndex uint64
-	Features     raftcluster.FeatureSet
-	Refusal      string
+	Epoch             uint64
+	Digest            string
+	AppliedIndex      uint64
+	Features          raftcluster.FeatureSet
+	RetainedWireBytes uint64
+	Refusal           string
 }
 
 // CatalogMetaSnapshotV1 is an all-or-nothing snapshot payload. It contains a
@@ -119,7 +122,14 @@ func (a *CatalogMetaAuthorityV1) ExportCatalogMetaSnapshotBytesV1() ([]byte, err
 	return b, nil
 }
 
-func (a *CatalogMetaAuthorityV1) InstallCatalogMetaSnapshotBytesV1(raw []byte) error {
+func (a *CatalogMetaAuthorityV1) InstallCatalogMetaSnapshotBytesV1(capability raftcluster.CatalogMetaRestoreCapabilityV1, raw []byte) error {
+	if !capability.Granted() {
+		return ErrCatalogMetaUnavailable
+	}
+	return a.installCatalogMetaSnapshotBytesV1(raw)
+}
+
+func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotBytesV1(raw []byte) error {
 	if len(raw) == 0 || len(raw) > MaxCatalogMetaSnapshotBytesV1 {
 		return errors.Join(ErrCatalogMetaLimit, fmt.Errorf("snapshot is %d bytes", len(raw)))
 	}
@@ -142,14 +152,14 @@ func (a *CatalogMetaAuthorityV1) InstallCatalogMetaSnapshotBytesV1(raw []byte) e
 	if !bytes.Equal(raw, canonical) {
 		return errors.Join(ErrInvalidCatalogMeta, fmt.Errorf("snapshot is not canonical"))
 	}
-	_, err = a.InstallCatalogMetaSnapshotV1(snapshot)
+	_, err = a.installCatalogMetaSnapshotV1(snapshot)
 	return err
 }
 
 // CatalogMetaAuthorityV1 is the local applied view of one replicated meta
 // group. It never activates a catalog from a file or constructor argument:
-// only ApplyCommittedCatalogMetaV1 or InstallCatalogMetaSnapshotV1 may publish
-// a generation. Reads take an RLock and do not contact the meta leader.
+// only capability-bearing Raft Apply or Restore callbacks may publish a
+// generation. Reads take an RLock and do not contact the meta leader.
 type CatalogMetaAuthorityV1 struct {
 	mu          sync.RWMutex
 	record      CatalogMetaRecordV1
@@ -298,6 +308,17 @@ func (a *CatalogMetaAuthorityV1) CurrentCatalogVersion(context.Context) (uint64,
 	return status.Epoch, true, nil
 }
 
+// CurrentCatalogProof returns the exact locally applied proof without
+// contacting the meta leader. An authority without a committed generation
+// fails closed.
+func (a *CatalogMetaAuthorityV1) CurrentCatalogProof(context.Context) (CatalogProofV1, error) {
+	status, ok := a.Status()
+	if !ok {
+		return CatalogProofV1{}, ErrCatalogMetaUnavailable
+	}
+	return CatalogProofV1{Epoch: status.Epoch, Digest: status.Digest}, nil
+}
+
 func (a *CatalogMetaAuthorityV1) Route(_ context.Context, proof CatalogProofV1, request RouteRequestV1) (RouteDecisionV1, error) {
 	if a == nil {
 		return RouteDecisionV1{}, ErrCatalogMetaUnavailable
@@ -310,6 +331,30 @@ func (a *CatalogMetaAuthorityV1) Route(_ context.Context, proof CatalogProofV1, 
 	return a.resolved.Route(request)
 }
 
+func (a *CatalogMetaAuthorityV1) RouteDocumentToken(_ context.Context, proof CatalogProofV1, collection CollectionRefV1, token uint64) (RouteDecisionV1, error) {
+	if a == nil {
+		return RouteDecisionV1{}, ErrCatalogMetaUnavailable
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if err := a.admitLocked(proof); err != nil {
+		return RouteDecisionV1{}, err
+	}
+	return a.resolved.RouteDocumentToken(collection.Database, collection.Catalog, collection.Collection, token)
+}
+
+func (a *CatalogMetaAuthorityV1) ClassifyDocumentTokenBatch(_ context.Context, proof CatalogProofV1, collection CollectionRefV1, tokens []uint64) (RouteTokenBatchDecisionV1, error) {
+	if a == nil {
+		return RouteTokenBatchDecisionV1{}, ErrCatalogMetaUnavailable
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if err := a.admitLocked(proof); err != nil {
+		return RouteTokenBatchDecisionV1{}, err
+	}
+	return a.resolved.ClassifyDocumentTokenBatch(collection.Database, collection.Catalog, collection.Collection, tokens)
+}
+
 func (a *CatalogMetaAuthorityV1) ValidateCatalogMetaProof(_ context.Context, epoch uint64, digest string) error {
 	if a == nil {
 		return ErrCatalogMetaUnavailable
@@ -317,6 +362,70 @@ func (a *CatalogMetaAuthorityV1) ValidateCatalogMetaProof(_ context.Context, epo
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.admitLocked(CatalogProofV1{Epoch: epoch, Digest: digest})
+}
+
+// ValidateCatalogRouteMetadata re-resolves request-only route metadata against
+// the exact locally applied catalog generation. It is the final owner-dispatch
+// guard: carrying a valid epoch/digest alone cannot redirect a command to a
+// different group, placement, partition, or member set.
+func (a *CatalogMetaAuthorityV1) ValidateCatalogRouteMetadata(_ context.Context, metadata raftentry.RequestMetadataV1) error {
+	if a == nil {
+		return ErrCatalogMetaUnavailable
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if err := a.admitLocked(CatalogProofV1{Epoch: metadata.CatalogMetaEpoch, Digest: metadata.CatalogMetaDigest}); err != nil {
+		return err
+	}
+	if !metadata.ClusterRouteKnown {
+		return errors.Join(ErrCatalogMetaRouteMismatch, fmt.Errorf("route metadata is missing"))
+	}
+	request := RouteRequestV1{
+		Collection: CollectionRefV1{
+			Database:   metadata.ClusterRouteDatabase,
+			Catalog:    metadata.ClusterRouteCatalog,
+			Collection: metadata.ClusterRouteCollection,
+		},
+		Shape: RouteShapeV1(metadata.ClusterRouteShape),
+	}
+	if metadata.ClusterRouteTokenKnown {
+		token := metadata.ClusterRouteToken
+		request.Token = &token
+	}
+	decision, err := a.resolved.Route(request)
+	if err != nil {
+		return errors.Join(ErrCatalogMetaRouteMismatch, err)
+	}
+	if metadata.ClusterRouteGroupID != string(decision.GroupID()) ||
+		metadata.ClusterRouteLeaderHint != string(decision.LeaderHint()) ||
+		metadata.ClusterRoutePlacementMode != string(decision.PlacementMode) ||
+		metadata.ClusterRouteKey != string(decision.RouteKey) ||
+		metadata.ClusterRouteTokenKnown != decision.Token.Present ||
+		(metadata.ClusterRouteTokenKnown && metadata.ClusterRouteToken != decision.Token.Token) ||
+		metadata.ClusterRoutePartitionID != catalogMetaRoutePartitionIDV1(decision) ||
+		!catalogMetaRouteMembersEqualV1(metadata.ClusterRouteMembers, decision.Group.Members) {
+		return errors.Join(ErrCatalogMetaRouteMismatch, fmt.Errorf("route metadata differs from committed catalog decision"))
+	}
+	return nil
+}
+
+func catalogMetaRoutePartitionIDV1(decision RouteDecisionV1) string {
+	if !decision.Token.Present {
+		return ""
+	}
+	return string(decision.Token.Partition.ID)
+}
+
+func catalogMetaRouteMembersEqualV1(got []string, want []raftcluster.NodeID) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range want {
+		if got[i] != string(want[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *CatalogMetaAuthorityV1) admitLocked(proof CatalogProofV1) error {
@@ -347,7 +456,7 @@ func (a *CatalogMetaAuthorityV1) ExportCatalogMetaSnapshotV1() (CatalogMetaSnaps
 	return CatalogMetaSnapshotV1{Format: CatalogMetaFormatV1, AppliedIndex: a.applied, Record: bytes.Clone(a.recordBytes), LastCommand: bytes.Clone(a.command)}, nil
 }
 
-func (a *CatalogMetaAuthorityV1) InstallCatalogMetaSnapshotV1(snapshot CatalogMetaSnapshotV1) (CatalogMetaStatusV1, error) {
+func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMetaSnapshotV1) (CatalogMetaStatusV1, error) {
 	if a == nil {
 		return CatalogMetaStatusV1{}, ErrCatalogMetaUnavailable
 	}
@@ -362,6 +471,23 @@ func (a *CatalogMetaAuthorityV1) InstallCatalogMetaSnapshotV1(snapshot CatalogMe
 	if err != nil {
 		return CatalogMetaStatusV1{}, err
 	}
+	if len(snapshot.LastCommand) == 0 {
+		return CatalogMetaStatusV1{}, errors.Join(ErrInvalidCatalogMeta, ErrCatalogMetaConflict, fmt.Errorf("snapshot last command is required"))
+	}
+	command, err := DecodeCatalogMetaCommandV1(snapshot.LastCommand)
+	if err != nil {
+		return CatalogMetaStatusV1{}, errors.Join(ErrInvalidCatalogMeta, ErrCatalogMetaConflict, fmt.Errorf("decode snapshot last command: %w", err))
+	}
+	commandRecord, err := encodeCatalogMetaRecordV1(command.Record)
+	if err != nil {
+		return CatalogMetaStatusV1{}, errors.Join(ErrInvalidCatalogMeta, ErrCatalogMetaConflict, fmt.Errorf("encode snapshot last command record: %w", err))
+	}
+	if command.ExpectedEpoch != record.Epoch-1 ||
+		command.Record.Epoch != record.Epoch ||
+		command.Record.Digest != record.Digest ||
+		!bytes.Equal(snapshot.Record, commandRecord) {
+		return CatalogMetaStatusV1{}, errors.Join(ErrInvalidCatalogMeta, ErrCatalogMetaConflict, fmt.Errorf("snapshot last command does not exactly install its record"))
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.record.Epoch > record.Epoch {
@@ -373,12 +499,6 @@ func (a *CatalogMetaAuthorityV1) InstallCatalogMetaSnapshotV1(snapshot CatalogMe
 		}
 		return a.statusLocked(), nil
 	}
-	if len(snapshot.LastCommand) > 0 {
-		command, commandErr := DecodeCatalogMetaCommandV1(snapshot.LastCommand)
-		if commandErr != nil || command.Record.Epoch != record.Epoch || command.Record.Digest != record.Digest {
-			return CatalogMetaStatusV1{}, errors.Join(ErrInvalidCatalogMeta, ErrCatalogMetaConflict)
-		}
-	}
 	a.record = record
 	a.resolved = resolved
 	a.recordBytes = bytes.Clone(snapshot.Record)
@@ -389,7 +509,14 @@ func (a *CatalogMetaAuthorityV1) InstallCatalogMetaSnapshotV1(snapshot CatalogMe
 }
 
 func (a *CatalogMetaAuthorityV1) statusLocked() CatalogMetaStatusV1 {
-	return CatalogMetaStatusV1{Epoch: a.record.Epoch, Digest: a.record.Digest, AppliedIndex: a.applied, Features: cloneFeatureSet(a.record.Catalog.Features), Refusal: a.refusal}
+	return CatalogMetaStatusV1{
+		Epoch:             a.record.Epoch,
+		Digest:            a.record.Digest,
+		AppliedIndex:      a.applied,
+		Features:          cloneFeatureSet(a.record.Catalog.Features),
+		RetainedWireBytes: uint64(len(a.recordBytes) + len(a.command)),
+		Refusal:           a.refusal,
+	}
 }
 
 func validateCatalogMetaRecordV1(record CatalogMetaRecordV1) (CatalogMetaRecordV1, error) {

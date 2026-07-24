@@ -60,11 +60,29 @@ func (p CatalogMetaClusterRouteProvider) ClusterRoute(ctx context.Context, reque
 		if !request.TokenKnown {
 			return ClusterRouteTarget{}, errors.Join(raftplacement.ErrInvalidRouteRequest, raftplacement.ErrMissingRouteToken)
 		}
-		decision, err := p.authority.Route(ctx, proof, raftplacement.RouteRequestV1{Collection: raftplacement.CollectionRefV1{Database: request.Database, Catalog: request.Catalog, Collection: request.Collection}, Shape: raftplacement.RouteShapeTokenV1, Token: &request.Token})
+		decision, err := p.authority.RouteDocumentToken(ctx, proof, raftplacement.CollectionRefV1{Database: request.Database, Catalog: request.Catalog, Collection: request.Collection}, request.Token)
 		if err != nil {
 			return ClusterRouteTarget{}, err
 		}
 		target := clusterRouteTargetFromCatalogDecision(decision)
+		target.CatalogMetaEpoch, target.CatalogMetaDigest = proof.Epoch, proof.Digest
+		return target, nil
+	case ClusterRouteShapeTokenBatch:
+		ref := raftplacement.CollectionRefV1{Database: request.Database, Catalog: request.Catalog, Collection: request.Collection}
+		decision, err := p.authority.Route(ctx, proof, raftplacement.RouteRequestV1{Collection: ref, Shape: raftplacement.RouteShapeCollectionV1})
+		if err == nil {
+			target := clusterRouteTargetFromCatalogDecision(decision)
+			target.CatalogMetaEpoch, target.CatalogMetaDigest = proof.Epoch, proof.Digest
+			return target, nil
+		}
+		if !errors.Is(err, raftplacement.ErrUnsupportedPlacementMode) {
+			return ClusterRouteTarget{}, err
+		}
+		batch, err := p.authority.ClassifyDocumentTokenBatch(ctx, proof, ref, request.Tokens)
+		if err != nil {
+			return ClusterRouteTarget{}, err
+		}
+		target := clusterRouteTargetFromCatalogTokenBatch(batch)
 		target.CatalogMetaEpoch, target.CatalogMetaDigest = proof.Epoch, proof.Digest
 		return target, nil
 	default:

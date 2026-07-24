@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
+	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
 
 func TestCatalogMetaCanonicalCommandAndExactRetry(t *testing.T) {
@@ -92,6 +95,55 @@ func TestCatalogMetaRouteAdmissionFailsClosed(t *testing.T) {
 	}
 }
 
+func TestCatalogMetaOwnerDispatchRevalidatesCompleteRoute(t *testing.T) {
+	a := NewCatalogMetaAuthorityV1()
+	if _, err := a.applyCommittedCatalogMetaV1(mustCatalogMetaCommand(t, 0, 1, validCatalog()), 7); err != nil {
+		t.Fatalf("apply catalog: %v", err)
+	}
+	status, ok := a.Status()
+	if !ok {
+		t.Fatal("catalog status unavailable")
+	}
+	metadata := raftentry.RequestMetadataV1{
+		ClusterRouteKnown:         true,
+		ClusterRouteDatabase:      "default",
+		ClusterRouteCatalog:       "default",
+		ClusterRouteCollection:    "users",
+		ClusterRouteShape:         string(RouteShapeCollectionV1),
+		ClusterRouteGroupID:       "group-a",
+		ClusterRouteMembers:       []string{"node-a", "node-c"},
+		ClusterRouteLeaderHint:    "node-a",
+		ClusterRoutePlacementMode: string(PlacementModeCollectionV1),
+		CatalogMetaEpoch:          status.Epoch,
+		CatalogMetaDigest:         status.Digest,
+	}
+	if err := a.ValidateCatalogRouteMetadata(context.Background(), metadata); err != nil {
+		t.Fatalf("validate authoritative route: %v", err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*raftentry.RequestMetadataV1)
+	}{
+		{name: "missing proof", mutate: func(m *raftentry.RequestMetadataV1) { m.CatalogMetaDigest = "" }},
+		{name: "wrong collection", mutate: func(m *raftentry.RequestMetadataV1) { m.ClusterRouteCollection = "orders" }},
+		{name: "wrong group", mutate: func(m *raftentry.RequestMetadataV1) { m.ClusterRouteGroupID = "group-b" }},
+		{name: "wrong members", mutate: func(m *raftentry.RequestMetadataV1) { m.ClusterRouteMembers = []string{"node-a"} }},
+		{name: "wrong leader hint", mutate: func(m *raftentry.RequestMetadataV1) { m.ClusterRouteLeaderHint = "node-b" }},
+		{name: "wrong placement", mutate: func(m *raftentry.RequestMetadataV1) { m.ClusterRoutePlacementMode = string(PlacementModeTokenV1) }},
+		{name: "invented token", mutate: func(m *raftentry.RequestMetadataV1) { m.ClusterRouteTokenKnown = true; m.ClusterRouteToken = 9 }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := metadata
+			candidate.ClusterRouteMembers = append([]string(nil), metadata.ClusterRouteMembers...)
+			tc.mutate(&candidate)
+			if err := a.ValidateCatalogRouteMetadata(context.Background(), candidate); err == nil {
+				t.Fatal("tampered route unexpectedly validated")
+			}
+		})
+	}
+}
+
 func TestCatalogMetaSnapshotInstallNeverMovesBackward(t *testing.T) {
 	source := NewCatalogMetaAuthorityV1()
 	if _, err := source.applyCommittedCatalogMetaV1(mustCatalogMetaCommand(t, 0, 1, validCatalog()), 9); err != nil {
@@ -102,17 +154,232 @@ func TestCatalogMetaSnapshotInstallNeverMovesBackward(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := NewCatalogMetaAuthorityV1()
-	if _, err := target.InstallCatalogMetaSnapshotV1(snapshot); err != nil {
+	if _, err := target.installCatalogMetaSnapshotV1(snapshot); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := target.InstallCatalogMetaSnapshotV1(snapshot); err != nil {
+	if _, err := target.installCatalogMetaSnapshotV1(snapshot); err != nil {
 		t.Fatalf("same snapshot: %v", err)
 	}
 	if _, err := target.applyCommittedCatalogMetaV1(mustCatalogMetaCommand(t, 1, 2, validCatalog()), 10); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := target.InstallCatalogMetaSnapshotV1(snapshot); !errors.Is(err, ErrCatalogMetaStaleEpoch) {
+	if _, err := target.installCatalogMetaSnapshotV1(snapshot); !errors.Is(err, ErrCatalogMetaStaleEpoch) {
 		t.Fatalf("rollback snapshot err=%v", err)
+	}
+}
+
+func TestCatalogMetaSnapshotRestorePreservesExactRetryIdentity(t *testing.T) {
+	source := NewCatalogMetaAuthorityV1()
+	command := mustCatalogMetaCommand(t, 0, 1, validCatalog())
+	if _, err := source.applyCommittedCatalogMetaV1(command, 9); err != nil {
+		t.Fatalf("apply source: %v", err)
+	}
+	snapshot, err := source.ExportCatalogMetaSnapshotV1()
+	if err != nil {
+		t.Fatalf("export snapshot: %v", err)
+	}
+	target := NewCatalogMetaAuthorityV1()
+	if _, err := target.installCatalogMetaSnapshotV1(snapshot); err != nil {
+		t.Fatalf("install snapshot: %v", err)
+	}
+	retry, err := target.applyCommittedCatalogMetaV1(command, 10)
+	if err != nil {
+		t.Fatalf("exact retry after restore: %v", err)
+	}
+	if retry.Epoch != 1 || retry.AppliedIndex != 9 {
+		t.Fatalf("retry status=%+v want restored epoch/index 1/9", retry)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*CatalogMetaSnapshotV1)
+	}{
+		{name: "missing command", mutate: func(s *CatalogMetaSnapshotV1) { s.LastCommand = nil }},
+		{name: "different command", mutate: func(s *CatalogMetaSnapshotV1) {
+			s.LastCommand = mustCatalogMetaCommand(t, 1, 2, validCatalog())
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := snapshot
+			tc.mutate(&candidate)
+			if _, err := target.installCatalogMetaSnapshotV1(candidate); !errors.Is(err, ErrCatalogMetaConflict) {
+				t.Fatalf("install same-epoch snapshot error=%v want ErrCatalogMetaConflict", err)
+			}
+		})
+	}
+}
+
+func TestCatalogMetaSnapshotRestoreRequiresRaftCapability(t *testing.T) {
+	source := NewCatalogMetaAuthorityV1()
+	if _, err := source.applyCommittedCatalogMetaV1(mustCatalogMetaCommand(t, 0, 1, validCatalog()), 9); err != nil {
+		t.Fatalf("apply source: %v", err)
+	}
+	raw, err := source.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatalf("export snapshot bytes: %v", err)
+	}
+	target := NewCatalogMetaAuthorityV1()
+	if err := target.InstallCatalogMetaSnapshotBytesV1(raftcluster.CatalogMetaRestoreCapabilityV1{}, raw); !errors.Is(err, ErrCatalogMetaUnavailable) {
+		t.Fatalf("unauthorized restore error=%v want ErrCatalogMetaUnavailable", err)
+	}
+	if _, ok := target.Status(); ok {
+		t.Fatal("unauthorized restore activated catalog state")
+	}
+}
+
+func TestCatalogMetaReplayCrashRestoreModelNeverMovesBackward(t *testing.T) {
+	const seeds = 64
+	for seed := int64(0); seed < seeds; seed++ {
+		rng := rand.New(rand.NewSource(seed))
+		authority := NewCatalogMetaAuthorityV1()
+		var epoch uint64
+		var lastCommand []byte
+		var snapshot CatalogMetaSnapshotV1
+		for step := 0; step < 64; step++ {
+			switch rng.Intn(4) {
+			case 0, 1:
+				next := epoch + 1
+				command := mustCatalogMetaCommand(t, epoch, next, validCatalog())
+				if _, err := authority.applyCommittedCatalogMetaV1(command, uint64(step+1)); err != nil {
+					t.Fatalf("seed=%d step=%d apply epoch %d: %v", seed, step, next, err)
+				}
+				epoch, lastCommand = next, command
+			case 2:
+				if epoch == 0 {
+					continue
+				}
+				if _, err := authority.applyCommittedCatalogMetaV1(lastCommand, uint64(step+1)); err != nil {
+					t.Fatalf("seed=%d step=%d exact retry: %v", seed, step, err)
+				}
+			case 3:
+				if epoch == 0 {
+					continue
+				}
+				var err error
+				snapshot, err = authority.ExportCatalogMetaSnapshotV1()
+				if err != nil {
+					t.Fatalf("seed=%d step=%d export: %v", seed, step, err)
+				}
+				restarted := NewCatalogMetaAuthorityV1()
+				if _, err := restarted.installCatalogMetaSnapshotV1(snapshot); err != nil {
+					t.Fatalf("seed=%d step=%d restore: %v", seed, step, err)
+				}
+				authority = restarted
+			}
+			status, ok := authority.Status()
+			if epoch == 0 {
+				if ok {
+					t.Fatalf("seed=%d step=%d empty model published status=%+v", seed, step, status)
+				}
+				continue
+			}
+			if !ok || status.Epoch != epoch {
+				t.Fatalf("seed=%d step=%d status=%+v/%t want epoch %d", seed, step, status, ok, epoch)
+			}
+			if epoch > 1 {
+				stale := mustCatalogMetaCommand(t, epoch-2, epoch-1, validCatalog())
+				if _, err := authority.applyCommittedCatalogMetaV1(stale, uint64(step+1000)); err == nil {
+					t.Fatalf("seed=%d step=%d stale command unexpectedly applied", seed, step)
+				}
+				after, _ := authority.Status()
+				if after.Epoch != epoch || after.Digest != status.Digest {
+					t.Fatalf("seed=%d step=%d stale command changed state from %+v to %+v", seed, step, status, after)
+				}
+			}
+		}
+	}
+}
+
+func TestCatalogMetaConcurrentReadersObserveOnlyCompleteGenerations(t *testing.T) {
+	authority := NewCatalogMetaAuthorityV1()
+	type generation struct {
+		digest string
+		group  raftcluster.GroupID
+	}
+	generations := make(map[uint64]generation)
+	var generationsMu sync.RWMutex
+	makeCatalog := func(epoch uint64) CatalogV1 {
+		catalog := validCatalog()
+		if epoch%2 == 0 {
+			catalog.Placements[0].GroupID = "group-b"
+		}
+		return catalog
+	}
+	first := mustCatalogMetaCommand(t, 0, 1, makeCatalog(1))
+	if _, err := authority.applyCommittedCatalogMetaV1(first, 1); err != nil {
+		t.Fatalf("apply first generation: %v", err)
+	}
+	firstStatus, _ := authority.Status()
+	generations[1] = generation{digest: firstStatus.Digest, group: "group-a"}
+
+	const finalEpoch = 64
+	done := make(chan struct{})
+	errs := make(chan error, 16)
+	var readers sync.WaitGroup
+	for reader := 0; reader < 8; reader++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+				}
+				status, ok := authority.Status()
+				if !ok {
+					errs <- fmt.Errorf("authority became unavailable")
+					return
+				}
+				generationsMu.RLock()
+				want, known := generations[status.Epoch]
+				generationsMu.RUnlock()
+				if !known {
+					continue
+				}
+				if status.Digest != want.digest {
+					errs <- fmt.Errorf("epoch %d digest=%s want %s", status.Epoch, status.Digest, want.digest)
+					return
+				}
+				decision, err := authority.Route(context.Background(), CatalogProofV1{Epoch: status.Epoch, Digest: status.Digest}, RouteRequestV1{
+					Collection: CollectionRefV1{Database: DefaultDatabase, Catalog: DefaultCatalog, Collection: "users"},
+					Shape:      RouteShapeCollectionV1,
+				})
+				if err != nil {
+					if errors.Is(err, ErrCatalogMetaStaleEpoch) {
+						continue
+					}
+					errs <- err
+					return
+				}
+				if decision.GroupID() != want.group {
+					errs <- fmt.Errorf("epoch %d route group=%s want %s", status.Epoch, decision.GroupID(), want.group)
+					return
+				}
+			}
+		}()
+	}
+	for epoch := uint64(2); epoch <= finalEpoch; epoch++ {
+		command := mustCatalogMetaCommand(t, epoch-1, epoch, makeCatalog(epoch))
+		status, err := authority.applyCommittedCatalogMetaV1(command, epoch)
+		if err != nil {
+			close(done)
+			readers.Wait()
+			t.Fatalf("apply epoch %d: %v", epoch, err)
+		}
+		group := raftcluster.GroupID("group-a")
+		if epoch%2 == 0 {
+			group = "group-b"
+		}
+		generationsMu.Lock()
+		generations[epoch] = generation{digest: status.Digest, group: group}
+		generationsMu.Unlock()
+	}
+	close(done)
+	readers.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
 	}
 }
 
@@ -300,7 +567,7 @@ func TestCatalogMetaSnapshotBytesPreflightAndCanonicalRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := NewCatalogMetaAuthorityV1()
-	if err := target.InstallCatalogMetaSnapshotBytesV1(raw); err != nil {
+	if err := target.installCatalogMetaSnapshotBytesV1(raw); err != nil {
 		t.Fatalf("canonical restore: %v", err)
 	}
 	status, ok := target.Status()
@@ -331,7 +598,7 @@ func TestCatalogMetaSnapshotBytesPreflightAndCanonicalRestore(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := NewCatalogMetaAuthorityV1().InstallCatalogMetaSnapshotBytesV1(tc.raw)
+			err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(tc.raw)
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("error=%v want errors.Is(%v)", err, tc.want)
 			}
