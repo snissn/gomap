@@ -3,6 +3,7 @@ package raftplacement
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -113,6 +114,32 @@ func TestCatalogMetaCanonicalizesDefaultsBeforeDigest(t *testing.T) {
 		len(status.Features.Required) != 1 ||
 		status.Features.Required[0].Name != FeatureCollectionGroups {
 		t.Fatalf("status=%+v available=%v", status, ok)
+	}
+}
+
+func TestCatalogMetaDigestExcludesDigestField(t *testing.T) {
+	record, err := NewCatalogMetaRecordV1(1, validCatalog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(struct {
+		Format  uint16    `json:"format"`
+		Epoch   uint64    `json:"epoch"`
+		Catalog CatalogV1 `json:"catalog"`
+	}{
+		Format:  record.Format,
+		Epoch:   record.Epoch,
+		Catalog: record.Catalog,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(payload, []byte(`"digest"`)) {
+		t.Fatalf("independent digest payload contains digest field: %s", payload)
+	}
+	want := fmt.Sprintf("%x", sha256.Sum256(payload))
+	if record.Digest != want {
+		t.Fatalf("record digest=%s want independent payload digest=%s", record.Digest, want)
 	}
 }
 

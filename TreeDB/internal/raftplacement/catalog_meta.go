@@ -624,8 +624,18 @@ func decodeCatalogMetaRecordV1(raw []byte) (CatalogMetaRecordV1, error) {
 	return record, nil
 }
 func catalogMetaDigestV1(record CatalogMetaRecordV1) (string, error) {
-	record.Digest = ""
-	b, err := json.Marshal(record)
+	// Keep the digest input structurally separate from the wire record. Merely
+	// clearing record.Digest would still serialize `"digest":""`, contrary to
+	// the public record contract and independent implementations.
+	b, err := json.Marshal(struct {
+		Format  uint16    `json:"format"`
+		Epoch   uint64    `json:"epoch"`
+		Catalog CatalogV1 `json:"catalog"`
+	}{
+		Format:  record.Format,
+		Epoch:   record.Epoch,
+		Catalog: record.Catalog,
+	})
 	if err != nil {
 		return "", errors.Join(ErrInvalidCatalogMeta, err)
 	}
