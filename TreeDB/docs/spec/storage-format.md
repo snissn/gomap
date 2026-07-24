@@ -53,29 +53,41 @@ A TreeDB deployment uses:
 ### Vector-partition manifests (`vector_partitions/`)
 
 `vector_partitions/` is a persistent, Raft-snapshot-included namespace for M1
-vector-partition metadata; it is not a WAL or cache. A VPM1 filename is
-`sha256(collection)-sha256(index)-generation.vpm` and is accepted only when
-its decoded collection, index, and generation bind exactly to that name. VPM1
-has a fixed version, bounded length-prefixed fields and lists, one (exactly one)
-router-asset frame, canonical ordering, and an integrity digest; malformed,
-unknown-version, over-bound, trailing, or identity-mismatched records fail
-closed.
+vector-partition metadata; it is not a WAL or cache. VPM1 remains the canonical
+generation-manifest payload, but it is not published as a mutable standalone
+file. Local lifecycle authority is an immutable VCP1 checkpoint plus a
+digest-chained VLC1 delta tail under the exact hashed identity:
 
-Ready publication writes and syncs the complete VPM1 then its active pointer.
-A retained `building` VPM1 may be promoted only to the canonical `building`
-projection of the ready VPM1: it may differ only in state, router generation,
-router asset, ready-set digest, and the recomputed integrity digest. Promotion
-writes and syncs a checksummed VPI1 inactive record before atomically replacing
-the VPM1; recovery consequently sees retained building, prepared-only
-ready+VPI1, or active ready, never a partial or unexplained pointerless ready
-record. Active and retired pointers are text generation records with bounded
-strict framing. VPI1 is identity-bound and checksummed and remains after exact
-deletion/reclaim to prove intentional no-active state. VPR1 is the bounded,
-versioned, checksummed reclaim journal that retains original and rewritten asset
-debt until physical GC completes. Deletion journals before unlink; VPI1 is
-durable before retired-pointer removal; a later active pointer is durable before
-stale VPI1 removal. Pre-alpha binaries may reject old `vector_partitions/`
-contents; no migration compatibility is promised.
+```text
+sha256(collection)-sha256(index).lifecycle.checkpoint.<20-digit-epoch>.vlc
+sha256(collection)-sha256(index).lifecycle.epoch.<20-digit-epoch>.delta.<20-digit-sequence>.vlc
+```
+
+The highest checkpoint epoch is the sole authority; corruption never falls
+back to a lower epoch. BUILD creates a new checkpoint epoch. READY,
+LOCAL_ACTIVATE, DEACTIVATE, DELETE_PREPARE, RECLAIM_PROGRESS, and
+DELETE_COMPLETE append immutable deltas until the bounded tail is compacted
+into another checkpoint. A checkpoint contains the identity, generation high
+water, at most two live generation states, active/retired generation, last
+sequence/digest, embedded canonical VPM1 manifests, and any VPR1 reclaim debt.
+The checkpoint is capped at 30 MiB, its current tail at 4 MiB, the identity
+namespace at 64 MiB and 4,096 entries. Counts and lengths are checked before
+allocation.
+
+Every file is installed no-replace from an exact synchronized anonymous handle,
+then the parent namespace is synchronized and reopened. Exact-byte retries are
+idempotent; conflicting immutable names, physical aliases, symlinks, malformed
+names, gaps, cross-identity payloads, or invalid transitions fail closed.
+Superseded epochs may remain as zero-length audit stubs in a live store, but
+Raft export includes only the highest checkpoint and its contiguous current
+tail. Restore rejects any extra audit epoch or legacy mutable authority.
+
+VPM1 has a fixed version, bounded length-prefixed fields and lists, one
+(exactly one) router-asset frame, canonical ordering, and an integrity digest.
+VPR1 is the bounded, versioned, checksummed reclaim payload that retains
+original and rewritten asset debt until physical GC completes. Pre-alpha
+binaries reject old `.vpm`, `.active`, `.retired`, `.inactive`, and `.deleting`
+authority; there is no fallback or migration path.
 
 Before a writable public open can succeed, TreeDB establishes the complete
 directory dependency chain from the outer database root through `maindb`,

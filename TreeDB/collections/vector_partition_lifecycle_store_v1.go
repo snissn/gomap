@@ -1,8 +1,7 @@
 package collections
 
-// This file owns the private, append-only storage container for VLC1 records.
-// It intentionally has no public collection mutation call sites: M1 only
-// establishes a fail-closed durable chain beneath the retained VPM directory.
+// This file owns the append-only VLC1 record and immutable-file primitives
+// shared by the checkpoint-backed public lifecycle.
 
 import (
 	"bytes"

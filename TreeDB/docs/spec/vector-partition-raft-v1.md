@@ -10,29 +10,27 @@ Each ready manifest stores typed `ColumnAssetRef`s, not paths. Every partition
 asset has an explicit logical `partition_id`; every declared logical partition
 must have at least one asset, while the router is a separate asset. Asset refs,
 checksums, lengths, and aggregate referenced bytes are bounded and canonical.
-The active pointer pins one ready generation. `Deactivate` durably changes that
-generation to retained/prepared-only; deletion then permits column-asset GC.
-Corrupt pointers, filenames, manifests, or catalog-group mappings fail closed.
+The reduced checkpoint state pins one ready active generation. `Deactivate`
+appends an immutable transition that changes it to retained/prepared-only;
+deletion then permits column-asset GC. Corrupt filenames, manifests, lifecycle
+records, physical aliases, or catalog-group mappings fail closed.
 
-An exact deletion writes a durable, checksummed, identity-bound `.inactive`
-marker before it removes the retired pointer. The marker remains after reclaim
-removes the deletion journal: it proves that the index intentionally has no
-active generation, including when older ready manifests remain. A later ready
-publication writes and syncs its active pointer before removing `.inactive`;
-deactivation writes and syncs its
-retired pointer before removing either lifecycle record. Thus recovery treats
-ready manifests as prepared-only only when a durable active, retired, or
-inactive lifecycle record exists; a pointerless ready set without `.inactive`
-fails closed. The marker may validly remain when no manifest remains.
+An exact deletion appends DELETE_PREPARE with a durable, checksummed,
+identity-bound VPR1 reclaim payload. DELETE_COMPLETE removes the generation
+from the reduced live set while retaining its generation in the monotonic high
+water, which proves intentional no-active state and prevents resurrection.
+There are no mutable active, retired, inactive, or deleting pointer files.
+Recovery derives every state from the highest VCP1 checkpoint plus its exact
+VLC1 tail; it never falls back to an older checkpoint.
 
 `VectorPartitionStatusV1.Ready` means the stored generation is complete.
-`Active` additionally requires it to be the active pointer target and source
-valid. M1 provides explicit in-process reader-pin handles; status and deletion
-observe those pins. `SnapshotReferences` and `CatalogReferences` remain
-trusted caller-supplied cleanup authority inputs: M1 does not infer external
-backup or catalog reachability. M7 owns durable catalog/cutover derivation.
-Raft archives are self-contained copies and do not pin live side-store files
-after export.
+`Active` additionally requires the reduced checkpoint state to select that
+generation and its source identity to remain valid. M1 provides explicit
+in-process reader-pin handles; status and deletion observe those pins.
+`SnapshotReferences` and `CatalogReferences` remain trusted caller-supplied
+cleanup authority inputs: M1 does not infer external backup or catalog
+reachability. M7 owns durable catalog/cutover derivation. Raft archives are
+self-contained copies and do not pin live side-store files after export.
 
 ## Identity and placement
 
@@ -213,40 +211,39 @@ deactivation, and deletion require collection authority. Collection-authorized
 publication verifies the current source identity and referenced assets, and all
 collection-owned lifecycle mutation takes the root storage barrier before the
 collection mutation authority. Reader pins and snapshots use that same barrier.
-A durable
-deletion tombstone rejects both building and ready retries before any temporary
-file, link, or rename, so a deleting generation cannot be resurrected.
+A durable DELETE_PREPARE transition rejects both building and ready retries
+before any new lifecycle entry can be installed, so a deleting or completed
+generation cannot be resurrected.
 All decoded count-derived allocations, strings, assets, memberships and record
 bytes are capped before allocation; unknown/trailing records fail closed.
 
-Local publication writes and syncs the generation, renames it, then (only for a
-ready generation) write-sync-renames an active pointer. Readers therefore see
-an old complete pointer or a new complete pointer, never a partial generation.
+Local publication installs an immutable BUILD checkpoint, then READY and
+LOCAL_ACTIVATE deltas. A crash or retry therefore observes building, ready but
+inactive, or ready and active state—never a partially encoded manifest.
 Raft snapshot archives include `db/vector_partitions`. Deletion requires an
 explicit proof that the generation is inactive and has no reader pin, snapshot
 reference, or catalog reference; M1 does not infer those external references.
-Before removing the generation manifest, deletion durably replaces it with a
-bounded, versioned, canonical, checksummed reclaim journal containing every
-original asset ref. If an original ref shares a physical segment with a live
-column-manifest ref, the mixed-segment rewrite write-sync-renames the journal
-with those superseded live refs and syncs its directory before the remap may be
-published. A persistence error, or cancellation observed before remap
+DELETE_PREPARE stores the bounded, versioned, canonical, checksummed reclaim
+payload containing every original asset ref. If an original ref shares a
+physical segment with a live column-manifest ref, the mixed-segment rewrite
+appends RECLAIM_PROGRESS with those superseded live refs before the remap may
+be published. A persistence error, or cancellation observed before remap
 publication, leaves the old manifest mapping authoritative. Recovery retries
-with both original and superseded refs, and retains the journal until all of
-their segment debt is physically absent; the durable-root fallback generation
-can therefore delay, but never bypass, deletion.
+with both original and superseded refs, and retains the reduced reclaim state
+until all segment debt is physically absent; the durable-root fallback
+generation can therefore delay, but never bypass, DELETE_COMPLETE.
 
 ### V1 format and bounds
 
-The authoritative on-disk record is binary `VPM1` (big-endian magic
+The canonical generation payload is binary `VPM1` (big-endian magic
 `0x56504d31`, version `2`), followed by fixed-order length-prefixed fields;
 there are no tagged optional fields. The JSON form is an inspection/exchange
 encoding of that same record: unknown fields, a second JSON value, trailing
-bytes, and non-canonical ordering fail closed. This is a pre-alpha on-disk
-format: old database directories need not be readable by new binaries. Version
-2 adds a whole-record SHA-256 integrity digest covering identity, policy,
-generations, placement, every membership family, and asset descriptors; this
-is separate from the ready-set asset contract.
+bytes, and non-canonical ordering fail closed. VPM1 is embedded in VCP1
+checkpoint state instead of published as a mutable `.vpm` file. Version 2 adds
+a whole-record SHA-256 integrity digest covering identity, policy, generations,
+placement, every membership family, and asset descriptors; this is separate
+from the ready-set asset contract.
 
 | Record area | Required content | Validation boundary |
 | --- | --- | --- |
@@ -265,15 +262,22 @@ memberships per vector, and
 total referenced bytes at 16 GiB. Count-derived allocations are checked against
 these limits before allocation.
 
+VCP1 checkpoints use version 1, a SHA-256 checksum, a 30 MiB cap, and at most
+two live generations. VLC1 version-1 records form a sequence- and
+previous-digest-bound immutable tail capped at 4 MiB per checkpoint epoch.
+The physical identity namespace is capped at 64 MiB and 4,096 entries.
+
 ### Lifecycle, publication, and cleanup authority
 
-| Transition | Durable order | Observable result |
+| Transition | Immutable operation | Observable result |
 | --- | --- | --- |
-| build -> retained building | write generation temp, `fsync`, link/rename, directory `fsync` | complete non-active building record only |
-| build -> ready active | validate live source and producer stable-resource set; stream assets; persist generation; then write/`fsync`/rename active pointer and directory | old complete active pointer or new complete active pointer, never a partial manifest |
-| active -> retired | persist retired marker and directory sync, then remove active marker and sync | prepared-only generation is not active |
-| retired -> deleting | require inactive plus zero reader pins and caller-proved zero snapshot/catalog references; persist checksummed reclaim journal, then write/sync `.inactive` before removing the retired pointer and manifest | retryable reclaim debt and intentional pointerless state survive crash/reopen |
-| deleting -> absent | journal superseded refs before any mixed-segment remap; GC physical segment debt; remove journal only when all original and superseded segments are absent; retain `.inactive` | incomplete fallback is retried, never treated as deletion |
+| absent -> building | BUILD in a new VCP1 checkpoint epoch | complete non-active building generation |
+| building -> ready | READY digest-bound promotion delta | complete prepared generation, still not active |
+| ready -> active | LOCAL_ACTIVATE delta | one complete ready generation is locally active |
+| active -> retired | DEACTIVATE delta | generation remains prepared but is not active |
+| retired/building -> deleting | caller fences plus DELETE_PREPARE carrying VPR1 | generation no longer opens; retryable reclaim debt survives reopen |
+| deleting -> progress | RECLAIM_PROGRESS before mixed-segment remap publication | original and superseded debt remain protected and retryable |
+| deleting -> absent | physical GC followed by DELETE_COMPLETE | generation leaves the live set; generation high water prevents resurrection |
 
 The storage barrier is canonical-root scoped (including symlink aliases) and
 serializes publication, deletion, reader acquisition, and snapshot export.
@@ -286,28 +290,33 @@ derivation and cluster cutover authority.
 ### Snapshot and portability semantics
 
 Raft export copies `db/vector_partitions` together with column assets while
-holding the same root barrier. Restore replaces the side-store namespace, so a
+holding the same root barrier. For each identity it validates the complete live
+namespace, selects only the highest checkpoint plus its contiguous current
+tail, and omits lower audit epochs. It binds each selected regular file to its
+stable physical identity before and after streaming. Restore rejects legacy
+mutable files, symlinks, hard-link aliases, malformed chains, corrupt highest
+checkpoints, and extra audit epochs before replacing the target namespace. A
 restored manifest’s typed refs resolve against the archived assets instead of
 the prior target directory. Snapshot archives are copies: exporting an archive
 does not create a live reader pin or a durable catalog reference. File names
-are opaque SHA-256-derived identities; manifest fields, not host paths, are
+are opaque SHA-256-derived identities; checkpoint payloads, not host paths, are
 portable across restored DB roots.
 
 On Windows, M1 can open an already restored `vector_partitions` namespace but
 fails closed for creation, publication, activation, deletion, and reclaim
-journaling. Generic directory sync and link/remove name-persistence proofs are
-not available there; write-through rename alone is insufficient. This is an
-explicit platform capability boundary, not a claim of Unix directory durability.
+journaling. The exact no-replace installation and parent-name persistence proof
+is not available there. This is an explicit platform capability boundary, not
+a claim of Unix directory durability.
 
 ### M1 evidence boundary
 
 M1 correctness tests publish a genuinely authorized ready generation and prove
-that its manifest, active pointer, router asset, and partition assets survive
-close/reopen and Raft snapshot/install before `OpenActive` succeeds. The scale
-benchmark is narrower: `synthetic_ready_manifest_scale_v1` derives a test-only
-ready manifest from a valid template, expands only its memberships, and keeps
-fixture and authority construction outside the timer. It does not expose a
-production authorization bypass and is not production Raft or ANN evidence.
+that its checkpoint-reduced active state, router asset, and partition assets
+survive close/reopen and Raft snapshot/install before `OpenActive` succeeds.
+Scale measurements use canonical manifests with 10k, 100k, and 1M disjoint
+memberships; fixture and authority construction remain outside the timed
+operation. The measurement harness exposes no production authorization bypass
+and is not production Raft or ANN evidence.
 
 The evidence ledger reports encoded VPM1 manifest bytes separately from full
 snapshot archive bytes. Only the former is used for the metadata-bytes/vector

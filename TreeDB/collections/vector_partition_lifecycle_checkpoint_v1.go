@@ -1,9 +1,7 @@
 package collections
 
-// This file defines the private, self-contained checkpoint used to compact the
-// immutable local M1 lifecycle history. Persistence and public call-site
-// integration remain deliberately separate until the codec and replay contract
-// are proven.
+// This file defines the self-contained checkpoint used to compact the
+// immutable local M1 lifecycle history.
 
 import (
 	"bytes"

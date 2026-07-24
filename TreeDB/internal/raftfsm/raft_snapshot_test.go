@@ -438,96 +438,6 @@ func TestRaftSnapshotV1InstallExtractionDoesNotDeadlockExport(t *testing.T) {
 	}
 }
 
-func BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall(b *testing.B) {
-	for _, rows := range []int{10_000, 100_000, 1_000_000} {
-		b.Run(fmt.Sprintf("memberships=%d", rows), func(b *testing.B) {
-			root := b.TempDir()
-			sourceDir := filepath.Join(root, "source")
-			sourceDB := openRaftSnapshotFSMTestDB(b, sourceDir, true)
-			defer sourceDB.Close()
-			sourceFSM := openRaftSnapshotFSMForTest(b, sourceDB, sourceDir, true)
-			defer sourceFSM.Close()
-			applySnapshotSourceEntries(b, sourceFSM, []byte(`{"_id":"benchmark","name":"snapshot"}`))
-			manifest := stageRaftSnapshotReadyVectorPartitionForTest(b, sourceDB, 1)
-			stageRaftSnapshotSyntheticReadyScaleForBenchmark(b, sourceDir, manifest, rows)
-			b.Run("archive", func(b *testing.B) {
-				var archiveBytes int
-				for i := 0; i < b.N; i++ {
-					snapshot, err := sourceFSM.ExportRaftSnapshotV1()
-					if err != nil {
-						b.Fatal(err)
-					}
-					archiveBytes = len(readRaftSnapshotArchiveForTest(b, snapshot))
-				}
-				b.ReportMetric(float64(archiveBytes), "archive-bytes")
-			})
-			snapshot, err := sourceFSM.ExportRaftSnapshotV1()
-			if err != nil {
-				b.Fatal(err)
-			}
-			b.Run("install", func(b *testing.B) {
-				for i := 0; i < b.N; i++ {
-					targetDir := filepath.Join(root, fmt.Sprintf("target-%d", i))
-					targetDB := openRaftSnapshotFSMTestDB(b, targetDir, false)
-					targetFSM := openRaftSnapshotFSMForTest(b, targetDB, targetDir, true)
-					installRaftSnapshotForTest(b, targetFSM, snapshot)
-					targetStore, err := collections.OpenExistingVectorPartitionStoreV1(targetDir)
-					if err != nil {
-						b.Fatal(err)
-					}
-					if _, err := targetStore.OpenActive("docs", "embedding"); err != nil {
-						b.Fatal(err)
-					}
-					targetFSM.Close()
-					targetDB.Close()
-				}
-			})
-		})
-	}
-}
-
-// stageRaftSnapshotSyntheticReadyScaleForBenchmark expands only the durable
-// M1 manifest record after a real collection-authorized ready generation has
-// been staged. It intentionally excludes construction of a rows-sized TVIS or
-// HNSW graph: archive/install evidence here measures bounded manifest metadata
-// and side-store transport, while TestRaftSnapshotV1InstallPreserves...
-// separately proves authority publication and active ready recovery.
-func stageRaftSnapshotSyntheticReadyScaleForBenchmark(tb testing.TB, root string, manifest collections.VectorPartitionManifestV1, rows int) {
-	tb.Helper()
-	if rows < 1 {
-		tb.Fatal("synthetic ready scale requires positive rows")
-	}
-	manifest.SourceRowCount = uint64(rows)
-	manifest.Memberships = make([]collections.VectorPartitionMembershipV1, rows)
-	for i := range manifest.Memberships {
-		manifest.Memberships[i] = collections.VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 0}
-	}
-	manifest.Canonicalize()
-	raw, err := collections.EncodeVectorPartitionManifestV1(manifest)
-	if err != nil {
-		tb.Fatal(err)
-	}
-	if rows == 1_000_000 && len(raw) > rows*64 {
-		tb.Fatalf("synthetic ready manifest=%d bytes exceeds 64 B/vector", len(raw))
-	}
-	paths, err := filepath.Glob(filepath.Join(root, "vector_partitions", "*.vpm"))
-	if err != nil || len(paths) != 1 {
-		tb.Fatalf("synthetic ready fixture manifests=%v err=%v want one", paths, err)
-	}
-	path := paths[0]
-	if err := os.WriteFile(path, raw, 0600); err != nil {
-		tb.Fatal(err)
-	}
-	store, err := collections.OpenExistingVectorPartitionStoreV1(root)
-	if err != nil {
-		tb.Fatal(err)
-	}
-	got, err := store.OpenActive("docs", "embedding")
-	if err != nil || got.SourceRowCount != uint64(rows) {
-		tb.Fatalf("synthetic ready fixture active=%+v err=%v", got, err)
-	}
-}
-
 // stageRaftSnapshotReadyVectorPartitionForTest builds a ready manifest through
 // the collection authority in a separate local DB, then stages its durable
 // side-store namespace into the Raft-owned source. Direct collection work must
@@ -1284,8 +1194,11 @@ func TestRaftSnapshotV1ExportRejectsDirectoryRootSymlink(t *testing.T) {
 }
 
 func TestRaftSnapshotV1ExportRejectsVectorPartitionLifecycleDirectory(t *testing.T) {
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "record.active"), 0o700); err != nil {
+	root, entry := stageRaftSnapshotLifecycleRootForRaceTest(t)
+	if err := os.Remove(entry); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(entry, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
@@ -1298,12 +1211,8 @@ func TestRaftSnapshotV1ExportRejectsVectorPartitionLifecycleDirectory(t *testing
 }
 
 func TestRaftSnapshotV1ExportRejectsLifecycleSwapBeforeOpen(t *testing.T) {
-	root := t.TempDir()
-	entry := filepath.Join(root, "record.active")
-	if err := os.WriteFile(entry, []byte("7\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	outside := filepath.Join(root, "outside")
+	root, entry := stageRaftSnapshotLifecycleRootForRaceTest(t)
+	outside := filepath.Join(filepath.Dir(root), "outside-lifecycle-swap")
 	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1329,9 +1238,9 @@ func TestRaftSnapshotV1ExportRejectsLifecycleSwapBeforeOpen(t *testing.T) {
 }
 
 func TestRaftSnapshotV1ExportRejectsSameSizeVectorPartitionReplacement(t *testing.T) {
-	root := t.TempDir()
-	entry := filepath.Join(root, "record.vpm")
-	if err := os.WriteFile(entry, []byte("same"), 0o600); err != nil {
+	root, entry := stageRaftSnapshotLifecycleRootForRaceTest(t)
+	original, err := os.ReadFile(entry)
+	if err != nil {
 		t.Fatal(err)
 	}
 	old := raftSnapshotBeforeOpenForTest
@@ -1340,7 +1249,8 @@ func TestRaftSnapshotV1ExportRejectsSameSizeVectorPartitionReplacement(t *testin
 			if err := os.Rename(entry, entry+".old"); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(entry, []byte("swap"), 0o600); err != nil {
+			replacement := bytes.Repeat([]byte{0xa5}, len(original))
+			if err := os.WriteFile(entry, replacement, 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -1348,7 +1258,7 @@ func TestRaftSnapshotV1ExportRejectsSameSizeVectorPartitionReplacement(t *testin
 	defer func() { raftSnapshotBeforeOpenForTest = old }()
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
-	err := appendRaftSnapshotStoragePathV1(tw, "db/vector_partitions", root)
+	err = appendRaftSnapshotStoragePathV1(tw, "db/vector_partitions", root)
 	_ = tw.Close()
 	if err == nil {
 		t.Fatal("snapshot accepted same-size replacement")
@@ -1356,14 +1266,8 @@ func TestRaftSnapshotV1ExportRejectsSameSizeVectorPartitionReplacement(t *testin
 }
 
 func TestRaftSnapshotV1ExportRejectsVectorPartitionRootReplacementBeforeOpen(t *testing.T) {
-	parent := t.TempDir()
-	root := filepath.Join(parent, "vector_partitions")
-	if err := os.Mkdir(root, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "original.vpm"), []byte("original"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	root, _ := stageRaftSnapshotLifecycleRootForRaceTest(t)
+	parent := filepath.Dir(root)
 	decoy := filepath.Join(parent, "decoy")
 	if err := os.Mkdir(decoy, 0o700); err != nil {
 		t.Fatal(err)
@@ -1395,6 +1299,22 @@ func TestRaftSnapshotV1ExportRejectsVectorPartitionRootReplacementBeforeOpen(t *
 	if bytes.Contains(buf.Bytes(), decoyBytes) {
 		t.Fatal("snapshot archive contains bytes from replacement vector partition root")
 	}
+}
+
+func stageRaftSnapshotLifecycleRootForRaceTest(t *testing.T) (string, string) {
+	t.Helper()
+	databaseRoot := t.TempDir()
+	database := openRaftSnapshotFSMTestDB(t, databaseRoot, false)
+	publishRaftSnapshotReadyVectorPartitionForTest(t, database, 1)
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(databaseRoot, "vector_partitions")
+	checkpoints, err := filepath.Glob(filepath.Join(root, "*.lifecycle.checkpoint.*.vlc"))
+	if err != nil || len(checkpoints) != 1 {
+		t.Fatalf("lifecycle checkpoint fixture=%v err=%v, want one", checkpoints, err)
+	}
+	return root, checkpoints[0]
 }
 
 func BenchmarkRaftSnapshotV1ExportInstall(b *testing.B) {

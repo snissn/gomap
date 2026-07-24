@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -29,7 +30,7 @@ func TestVectorPartitionReachabilityRejectsNonRegularLifecycleRecordsV1(t *testi
 	for _, suffix := range []string{"-7.vpm", ".active", ".retired", ".inactive", ".deleting"} {
 		t.Run(suffix, func(t *testing.T) {
 			s, col, _, prefix := malformedVectorPartitionEntryFixtureV1(t)
-			target := filepath.Join(s.dir, "ordinary-target")
+			target := filepath.Join(t.TempDir(), "ordinary-target")
 			if err := os.WriteFile(target, []byte("not a record"), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -47,16 +48,7 @@ func TestVectorPartitionStatusRejectsNonRegularLifecyclePointersV1(t *testing.T)
 	for _, suffix := range []string{".active", ".retired", ".inactive"} {
 		t.Run(suffix, func(t *testing.T) {
 			s, col, index, prefix := malformedVectorPartitionEntryFixtureV1(t)
-			m := testVectorPartitionManifestV1()
-			m.Collection, m.IndexName = col.name, index
-			raw, err := EncodeVectorPartitionManifestV1(m)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(s.dir, prefix+"-7.vpm"), raw, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			target := filepath.Join(s.dir, "ordinary-target")
+			target := filepath.Join(t.TempDir(), "ordinary-target")
 			if err := os.WriteFile(target, []byte("7\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -64,8 +56,8 @@ func TestVectorPartitionStatusRejectsNonRegularLifecyclePointersV1(t *testing.T)
 				t.Fatal(err)
 			}
 			status, err := col.VectorPartitionStatusV1(index, 7)
-			if err != nil || status.StaleReason != "pointer_invalid" {
-				t.Fatalf("status=%+v err=%v want pointer_invalid", status, err)
+			if !errors.Is(err, ErrVectorPartitionManifestInvalid) || status.Active {
+				t.Fatalf("status=%+v err=%v want legacy authority rejection", status, err)
 			}
 		})
 	}
@@ -171,8 +163,8 @@ func TestVectorPartitionPublishFailsClosedOnGenerationLinkedDirectoryReplacement
 	m := testVectorPartitionManifestV1()
 	moved := filepath.Join(root, "vector_partitions.old")
 	replaced := false
-	restore := setVectorPartitionPublishHookForTestV1(func(boundary string) error {
-		if boundary == "generation_linked" && !replaced {
+	restore := setVectorPartitionLifecycleStoreHookForTestV1(func(boundary string) error {
+		if boundary == "before_checkpoint_install" && !replaced {
 			replaced = true
 			if err := os.Rename(s.dir, moved); err != nil {
 				return err
@@ -185,18 +177,16 @@ func TestVectorPartitionPublishFailsClosedOnGenerationLinkedDirectoryReplacement
 	if err := s.publishValidatedReady(m); err == nil {
 		t.Fatal("publication followed replacement directory")
 	}
-	name := safeVPM(m.Collection) + "-" + safeVPM(m.IndexName) + "-" + strconv.FormatUint(m.Generation, 10) + ".vpm"
-	if _, err := os.Stat(filepath.Join(moved, name)); err != nil {
-		t.Fatalf("old bound namespace lost generation: %v", err)
+	if !replaced {
+		t.Fatal("checkpoint install boundary did not replace directory")
 	}
-	if _, err := os.Stat(filepath.Join(s.dir, name)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("replacement namespace received generation: %v", err)
+	oldEntries, err := os.ReadDir(moved)
+	if err != nil || len(oldEntries) != 1 || !strings.HasSuffix(oldEntries[0].Name(), ".vlc") {
+		t.Fatalf("old bound namespace entries=%v err=%v, want installed immutable checkpoint", oldEntries, err)
 	}
-	active := safeVPM(m.Collection) + "-" + safeVPM(m.IndexName) + ".active"
-	for _, dir := range []string{moved, s.dir} {
-		if _, err := os.Stat(filepath.Join(dir, active)); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("split publication left active pointer in %q: %v", dir, err)
-		}
+	newEntries, err := os.ReadDir(s.dir)
+	if err != nil || len(newEntries) != 0 {
+		t.Fatalf("replacement namespace entries=%v err=%v, want empty", newEntries, err)
 	}
 }
 
@@ -214,10 +204,12 @@ func TestVectorPartitionDeleteUsesRetainedDirectoryAfterTombstoneV1(t *testing.T
 	if err := deactivateVectorPartitionStoreForTest(s, m.Collection, m.IndexName); err != nil {
 		t.Fatal(err)
 	}
-	manifest := safeVPM(m.Collection) + "-" + safeVPM(m.IndexName) + "-" + strconv.FormatUint(m.Generation, 10) + ".vpm"
-	retired := safeVPM(m.Collection) + "-" + safeVPM(m.IndexName) + ".retired"
-	moved := filepath.Join(root, "vector_partitions.old")
-	decoyManifest, decoyRetired := []byte("manifest-decoy"), []byte("retired-decoy")
+	oldRoot := filepath.Join(root, "old-root")
+	if err := os.Mkdir(oldRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(oldRoot, "vector_partitions")
+	decoyName, decoyBytes := "replacement-decoy", []byte("must-not-change")
 	restore := setVectorPartitionDeleteAfterTombstoneForTestV1(func() {
 		if err := os.Rename(s.dir, moved); err != nil {
 			t.Fatal(err)
@@ -225,10 +217,7 @@ func TestVectorPartitionDeleteUsesRetainedDirectoryAfterTombstoneV1(t *testing.T
 		if err := os.Mkdir(s.dir, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(s.dir, manifest), decoyManifest, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(s.dir, retired), decoyRetired, 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(s.dir, decoyName), decoyBytes, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -236,22 +225,19 @@ func TestVectorPartitionDeleteUsesRetainedDirectoryAfterTombstoneV1(t *testing.T
 	if err := deleteVectorPartitionStoreForTest(s, m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
 		t.Fatal(err)
 	}
-	for name, want := range map[string][]byte{manifest: decoyManifest, retired: decoyRetired} {
-		got, err := os.ReadFile(filepath.Join(s.dir, name))
-		if err != nil || !bytes.Equal(got, want) {
-			t.Fatalf("replacement %s changed: %q %v", name, got, err)
-		}
+	got, err := os.ReadFile(filepath.Join(s.dir, decoyName))
+	if err != nil || !bytes.Equal(got, decoyBytes) {
+		t.Fatalf("replacement namespace changed: %q %v", got, err)
 	}
-	if _, err := os.Stat(filepath.Join(moved, manifest)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("old manifest retained: %v", err)
+	oldStore, err := OpenExistingVectorPartitionStoreV1(oldRoot)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(moved, retired)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("old retired retained: %v", err)
+	if _, err := oldStore.Open(m.Collection, m.IndexName, m.Generation); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old retained authority still opens deleting generation: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(moved, s.inactiveName(m.Collection, m.IndexName))); err != nil {
-		t.Fatalf("old inactive missing: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(moved, s.deleteTombstoneName(m.Collection, m.IndexName, m.Generation))); err != nil {
-		t.Fatalf("old tombstone missing: %v", err)
+	reclaim, err := oldStore.openDeleteTombstone(m.Collection, m.IndexName, m.Generation)
+	if err != nil || reclaim.Generation != m.Generation {
+		t.Fatalf("old retained delete authority=%+v err=%v", reclaim, err)
 	}
 }

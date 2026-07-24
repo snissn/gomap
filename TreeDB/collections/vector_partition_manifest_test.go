@@ -249,20 +249,17 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	if _, err := os.Stat(oldSegment); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("reclaimed partition segment still present: %v", err)
 	}
-	if err := store.publishLocked(m); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.WriteFile(filepath.Join(store.dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+".active"), []byte("not-a-generation\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	status, err = col.VectorPartitionStatusV1(def.Name, m.Generation)
-	if err != nil || status.StaleReason != "pointer_invalid" || status.Active {
-		t.Fatalf("corrupt active pointer status=%+v err=%v", status, err)
+	if !errors.Is(err, ErrVectorPartitionManifestInvalid) || status.Active {
+		t.Fatalf("legacy active authority status=%+v err=%v", status, err)
 	}
 	if _, err := col.PlanColumnAssetReachability(t.Context(), ColumnAssetReachabilityOptions{}); err == nil {
-		t.Fatal("corrupt active vector partition pointer did not fail closed")
+		t.Fatal("legacy active vector partition authority did not fail closed")
 	}
-	if err := store.publishLocked(m); err != nil {
+	if err := os.Remove(filepath.Join(store.dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+".active")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(store.dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+"-999.vpm"), []byte("corrupt"), 0600); err != nil {
@@ -294,7 +291,10 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	}
 }
 
-func TestCollectionVectorPartitionReadyDeleteCrashWindowReopenReachability(t *testing.T) {
+// legacyCollectionVectorPartitionReadyDeleteCrashWindowReopenReachability is
+// retained as format archaeology. Immutable checkpoint fault/reopen coverage
+// lives in vector_partition_lifecycle_checkpoint_store_v1_test.go.
+func legacyCollectionVectorPartitionReadyDeleteCrashWindowReopenReachability(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	newFixture := func(t *testing.T) (*backenddb.DB, *Collection, *VectorPartitionStoreV1, VectorPartitionManifestV1, []ColumnAssetRef) {
 		t.Helper()
@@ -591,7 +591,7 @@ func TestCollectionVectorPartitionReadyDeleteCrashWindowReopenReachability(t *te
 	})
 }
 
-func TestVectorPartitionInactiveStateV1BoundedCodec(t *testing.T) {
+func TestLegacyVectorPartitionInactiveStateV1BoundedCodec(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	limits := DefaultVectorPartitionManifestLimits()
 	state := vectorPartitionInactiveStateV1{
@@ -610,16 +610,6 @@ func TestVectorPartitionInactiveStateV1BoundedCodec(t *testing.T) {
 	if err != nil || decoded != state {
 		t.Fatalf("maximum inactive record decoded=%+v err=%v", decoded, err)
 	}
-	store, err := OpenVectorPartitionStoreV1(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.writeInactiveMarker(state.Collection, state.IndexName, state.Generation); err != nil {
-		t.Fatal(err)
-	}
-	if generation, err := store.readInactiveGeneration(state.Collection, state.IndexName); err != nil || generation != state.Generation {
-		t.Fatalf("maximum inactive record read generation=%d err=%v", generation, err)
-	}
 	if _, err := encodeVectorPartitionInactiveStateV1(vectorPartitionInactiveStateV1{Collection: state.Collection + "x", IndexName: state.IndexName, Generation: 1}); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
 		t.Fatalf("over-cap inactive identity err=%v", err)
 	}
@@ -632,12 +622,6 @@ func TestVectorPartitionInactiveStateV1BoundedCodec(t *testing.T) {
 				t.Fatalf("decode err=%v, want fail-closed invalid marker", err)
 			}
 		})
-	}
-	if err := os.WriteFile(store.inactivePath(state.Collection, state.IndexName), append(raw, 0), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.readInactiveGeneration(state.Collection, state.IndexName); err == nil {
-		t.Fatal("over-sized inactive marker accepted")
 	}
 }
 
@@ -1047,7 +1031,7 @@ func TestVectorPartitionMutationWritePreSyncFailureReboundTempV1(t *testing.T) {
 	}
 }
 
-func TestVectorPartitionStoreV1PublishGenerationTempReboundV1(t *testing.T) {
+func legacyVectorPartitionStoreV1PublishGenerationTempReboundV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	for _, tc := range []struct {
 		name    string
@@ -1157,7 +1141,7 @@ func TestVectorPartitionStoreV1PublishGenerationTempReboundV1(t *testing.T) {
 	}
 }
 
-func TestVectorPartitionStoreV1PublishActiveTempReboundV1(t *testing.T) {
+func legacyVectorPartitionStoreV1PublishActiveTempReboundV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	for _, tc := range []struct {
 		name    string
@@ -1270,10 +1254,10 @@ func TestVectorPartitionStoreV1PublishActiveTempReboundV1(t *testing.T) {
 func TestVectorPartitionLifecycleContractDoc(t *testing.T) {
 	doc := readRepoText(t, "TreeDB/docs/spec/vector-partition-raft-v1.md")
 	requireTextContains(t, "vector partition lifecycle contract", doc,
-		"durable, checksummed, identity-bound `.inactive`\nmarker before it removes the retired pointer",
-		"A later ready\npublication writes and syncs its active pointer before removing `.inactive`",
-		"a pointerless ready set without `.inactive`\nfails closed",
-		"The marker may validly remain when no manifest remains.",
+		"Local publication installs an immutable BUILD checkpoint, then READY and\nLOCAL_ACTIVATE deltas.",
+		"A crash or retry therefore observes building, ready but\ninactive, or ready and active state",
+		"A durable DELETE_PREPARE transition rejects both building and ready retries",
+		"Recovery derives every state from the highest VCP1 checkpoint plus its exact\nVLC1 tail",
 	)
 }
 
@@ -1282,8 +1266,8 @@ func TestVectorPartitionStorageFormatContractDoc(t *testing.T) {
 	requireTextContains(t, "vector partition storage format", doc,
 		"### Vector-partition manifests (`vector_partitions/`)",
 		"one (exactly one)\nrouter-asset frame",
-		"Promotion\nwrites and syncs a checksummed VPI1 inactive record before atomically replacing",
-		"VPR1 is the bounded,\nversioned, checksummed reclaim journal",
+		"The highest checkpoint epoch is the sole authority",
+		"VPR1 is the bounded, versioned, checksummed reclaim payload",
 		"Raft-snapshot-included namespace",
 	)
 }
@@ -1324,7 +1308,7 @@ func TestVectorPartitionStoreV1CleanupRefusesReachableGeneration(t *testing.T) {
 	}
 }
 
-func TestVectorPartitionStoreV1PublishFaultWindowsReopenOldOrCompleteNew(t *testing.T) {
+func legacyVectorPartitionStoreV1PublishFaultWindowsReopenOldOrCompleteNew(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	boundaries := []string{"generation_temp_synced", "generation_linked", "generation_dir_synced", "active_temp_synced", "active_renamed", "active_dir_synced", "retired_removed", "publication_complete"}
 	for _, boundary := range boundaries {
@@ -1376,7 +1360,7 @@ func TestVectorPartitionStoreV1PublishFaultWindowsReopenOldOrCompleteNew(t *test
 	}
 }
 
-func TestVectorPartitionStoreV1SameGenerationBuildingPromotionCrashSafe(t *testing.T) {
+func legacyVectorPartitionStoreV1SameGenerationBuildingPromotionCrashSafe(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	boundaries := []string{"generation_temp_synced", "promotion_inactive_synced", "promotion_renamed", "generation_linked", "promotion_dir_synced", "generation_dir_synced", "active_temp_synced", "active_renamed", "active_dir_synced", "retired_removed", "publication_complete"}
 	for _, boundary := range boundaries {
@@ -1503,7 +1487,7 @@ func TestVectorPartitionStoreV1DeactivateDurablyRetiresActiveGeneration(t *testi
 	}
 }
 
-func TestVectorPartitionStoreV1CleanupResumesDurableTombstone(t *testing.T) {
+func legacyVectorPartitionStoreV1CleanupResumesDurableTombstone(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	s, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {

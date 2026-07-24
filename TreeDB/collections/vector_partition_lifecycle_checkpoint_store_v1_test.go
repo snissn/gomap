@@ -209,6 +209,84 @@ func TestVectorPartitionLifecycleCheckpointStoreV1PostInstallRetries(t *testing.
 	})
 }
 
+func TestVectorPartitionLifecycleCheckpointStoreV1PreInstallRetries(t *testing.T) {
+	t.Run("checkpoint", func(t *testing.T) {
+		store, err := OpenVectorPartitionStoreV1(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		buildRaw, build := lifecycleManifestPayloadV1(t, "building")
+		forced := errors.New("before checkpoint install")
+		restore := setVectorPartitionLifecycleStoreHookForTestV1(func(boundary string) error {
+			if boundary == "before_checkpoint_install" {
+				return forced
+			}
+			return nil
+		})
+		err = store.persistVectorPartitionLifecycleOperationV1("docs", "embedding", vectorPartitionLifecycleBuildV1, build.Generation, buildRaw)
+		restore()
+		if errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+			t.Skipf("checkpoint publication unsupported: %v", err)
+		}
+		if !errors.Is(err, forced) {
+			t.Fatalf("pre-install checkpoint err=%v", err)
+		}
+		empty, err := store.loadVectorPartitionLifecycleCheckpointStateV1("docs", "embedding")
+		if err != nil || empty.checkpoint.Epoch != 0 || empty.state.GenerationHighWater != 0 {
+			t.Fatalf("pre-install checkpoint became authority: state=%+v epoch=%d err=%v", empty.state, empty.checkpoint.Epoch, err)
+		}
+		if err := store.persistVectorPartitionLifecycleOperationV1("docs", "embedding", vectorPartitionLifecycleBuildV1, build.Generation, buildRaw); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := store.loadVectorPartitionLifecycleCheckpointStateV1("docs", "embedding")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if loaded.checkpoint.Epoch != 1 || loaded.state.GenerationHighWater != build.Generation {
+			t.Fatalf("retry checkpoint state=%+v epoch=%d", loaded.state, loaded.checkpoint.Epoch)
+		}
+	})
+
+	t.Run("delta", func(t *testing.T) {
+		store, err := OpenVectorPartitionStoreV1(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, base := lifecycleManifestPayloadV1(t, "building")
+		building, _ := persistLifecycleCheckpointBuildV1(t, store, base.Generation)
+		_, readyPayload := lifecycleCheckpointReadyForBuildingV1(t, building)
+		forced := errors.New("before delta install")
+		restore := setVectorPartitionLifecycleStoreHookForTestV1(func(boundary string) error {
+			if boundary == "before_delta_install" {
+				return forced
+			}
+			return nil
+		})
+		err = store.persistVectorPartitionLifecycleOperationV1("docs", "embedding", vectorPartitionLifecycleReadyV1, building.Generation, readyPayload)
+		restore()
+		if !errors.Is(err, forced) {
+			t.Fatalf("pre-install delta err=%v", err)
+		}
+		loaded, err := store.loadVectorPartitionLifecycleCheckpointStateV1("docs", "embedding")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(loaded.deltas) != 0 || loaded.state.Generations[building.Generation].Manifest.State != "building" {
+			t.Fatalf("pre-install delta changed authority state=%+v deltas=%d", loaded.state, len(loaded.deltas))
+		}
+		if err := store.persistVectorPartitionLifecycleOperationV1("docs", "embedding", vectorPartitionLifecycleReadyV1, building.Generation, readyPayload); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err = store.loadVectorPartitionLifecycleCheckpointStateV1("docs", "embedding")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(loaded.deltas) != 1 || loaded.state.Generations[building.Generation].Manifest.State != "ready" {
+			t.Fatalf("retry delta state=%+v deltas=%d", loaded.state, len(loaded.deltas))
+		}
+	})
+}
+
 func TestVectorPartitionLifecycleCheckpointStoreV1HighestCheckpointIsSoleAuthority(t *testing.T) {
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {

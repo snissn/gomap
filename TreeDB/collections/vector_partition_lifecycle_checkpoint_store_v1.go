@@ -1,8 +1,7 @@
 package collections
 
-// This file owns the private immutable VCP1 checkpoint plus VLC1 delta-tail
-// container. Public lifecycle paths remain on their existing authority until
-// this storage protocol and its crash/capacity behavior are proven.
+// This file owns the immutable VCP1 checkpoint plus VLC1 delta-tail container
+// used by every public vector-partition lifecycle path.
 
 import (
 	"bytes"

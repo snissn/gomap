@@ -1415,7 +1415,7 @@ func (state vectorPartitionReclaimStateV1) clone() vectorPartitionReclaimStateV1
 	return state
 }
 
-func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[string]struct{}) ([]ColumnAssetRef, []ColumnAssetRef, error) {
+func (c *Collection) vectorPartitionLegacyReachabilityRefsV1(releaseReclaimIDs map[string]struct{}) ([]ColumnAssetRef, []ColumnAssetRef, error) {
 	if c == nil || c.db == nil {
 		return nil, nil, nil
 	}
@@ -1705,16 +1705,27 @@ func (s *VectorPartitionStoreV1) publishValidatedBuilding(m VectorPartitionManif
 	if m.State != "building" {
 		return errors.New("collections: validated building publication requires building state")
 	}
-	return WithVectorPartitionStorageBarrierV1(s.root, func() error { return s.publishLocked(m) })
+	return WithVectorPartitionStorageBarrierV1(s.root, func() error {
+		return s.persistVectorPartitionManifestLifecycleV1(m)
+	})
 }
 
 func (s *VectorPartitionStoreV1) publishValidatedReady(m VectorPartitionManifestV1) error {
 	if m.State != "ready" {
 		return errors.New("collections: validated ready publication requires ready manifest")
 	}
-	return WithVectorPartitionStorageBarrierV1(s.root, func() error { return s.publishLocked(m) })
+	return WithVectorPartitionStorageBarrierV1(s.root, func() error {
+		return s.persistVectorPartitionManifestLifecycleV1(m)
+	})
 }
-func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) (resultErr error) {
+func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) error {
+	return s.persistVectorPartitionManifestLifecycleV1(m)
+}
+
+// vectorPartitionLegacyPublishLockedV1 retains the removed mutable-file
+// implementation only while its codec and corruption-diagnostic helpers are
+// being retired. No production or test authority path calls it.
+func (s *VectorPartitionStoreV1) vectorPartitionLegacyPublishLockedV1(m VectorPartitionManifestV1) (resultErr error) {
 	boundDir, err := s.openDir()
 	if err != nil {
 		return err
@@ -1885,19 +1896,14 @@ func (s *VectorPartitionStoreV1) uniqueTemp(name string) (string, error) {
 	return filepath.Join(s.dir, "."+name+"."+hex.EncodeToString(nonce[:])+".tmp"), nil
 }
 func (s *VectorPartitionStoreV1) Open(collection, index string, generation uint64) (VectorPartitionManifestV1, error) {
-	name := fmt.Sprintf("%s-%s-%d.vpm", safeVPM(collection), safeVPM(index), generation)
-	raw, e := s.readBounded(name, DefaultVectorPartitionManifestLimits().MaxBytes)
-	if e != nil {
-		return VectorPartitionManifestV1{}, e
-	}
-	m, err := DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits())
+	loaded, present, err := s.loadVectorPartitionLifecycleAuthorityV1(collection, index)
 	if err != nil {
 		return VectorPartitionManifestV1{}, err
 	}
-	if m.Collection != collection || m.IndexName != index || m.Generation != generation {
-		return VectorPartitionManifestV1{}, fmt.Errorf("%w: stored identity mismatch", ErrVectorPartitionManifestInvalid)
+	if !present {
+		return VectorPartitionManifestV1{}, os.ErrNotExist
 	}
-	return m, nil
+	return vectorPartitionLifecycleManifestV1(loaded.state, generation, false)
 }
 func (s *VectorPartitionStoreV1) openDir() (*os.File, error) {
 	dir, err := rootpublication.OpenStableParent(s.dir)
@@ -2007,10 +2013,10 @@ func validateVectorPartitionDurableEntryV1(entry os.DirEntry) error {
 	return nil
 }
 func (s *VectorPartitionStoreV1) OpenActive(collection, index string) (VectorPartitionManifestV1, error) {
-	return s.openPointer(collection, index, ".active")
+	return s.openVectorPartitionLifecyclePointerV1(collection, index, true)
 }
 func (s *VectorPartitionStoreV1) OpenRetired(collection, index string) (VectorPartitionManifestV1, error) {
-	return s.openPointer(collection, index, ".retired")
+	return s.openVectorPartitionLifecyclePointerV1(collection, index, false)
 }
 func (s *VectorPartitionStoreV1) openPointer(collection, index, suffix string) (VectorPartitionManifestV1, error) {
 	name := safeVPM(collection) + "-" + safeVPM(index) + suffix
@@ -2048,39 +2054,7 @@ func (s *VectorPartitionStoreV1) deactivateLocked(collection, index string) (res
 	if !vpmNamespacePersistenceSupported() {
 		return fmt.Errorf("%w: vector partition deactivation", rootpublication.ErrNamespacePersistenceUnsupported)
 	}
-	mutation, err := s.beginMutationDirV1()
-	if err != nil {
-		return err
-	}
-	defer mutation.Close()
-	active, err := mutation.openPointer(collection, index, ".active")
-	if err != nil {
-		return err
-	}
-	retired := safeVPM(collection) + "-" + safeVPM(index) + ".retired"
-	tmp, err := s.uniqueTemp(retired)
-	if err != nil {
-		return err
-	}
-	tmpName := filepath.Base(tmp)
-	retiredTemp, err := mutation.write(tmpName, []byte(fmt.Sprintf("%d\n", active.Generation)))
-	if err != nil {
-		return err
-	}
-	defer func() { resultErr = errors.Join(resultErr, retiredTemp.cleanup()) }()
-	if err = retiredTemp.replace(retired); err != nil {
-		return err
-	}
-	if err = mutation.sync(); err != nil {
-		return err
-	}
-	if err = mutation.remove(s.inactiveName(collection, index)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if err = mutation.remove(safeVPM(collection) + "-" + safeVPM(index) + ".active"); err != nil {
-		return err
-	}
-	return mutation.sync()
+	return s.deactivateVectorPartitionLifecycleV1(collection, index)
 }
 
 // VectorPartitionCleanupEligibilityV1 makes every external reachability
@@ -2167,86 +2141,10 @@ func (s *VectorPartitionStoreV1) Delete(collection, index string, generation uin
 	return ErrVectorPartitionCollectionAuthorityRequired
 }
 func (s *VectorPartitionStoreV1) deleteLocked(collection, index string, generation uint64, eligibility VectorPartitionCleanupEligibilityV1) error {
-	mutation, err := s.beginMutationDirV1()
-	if err != nil {
-		return err
-	}
-	defer mutation.Close()
 	if !vpmNamespacePersistenceSupported() {
 		return fmt.Errorf("%w: vector partition deletion", rootpublication.ErrNamespacePersistenceUnsupported)
 	}
-	if !eligibility.Deletable() {
-		return fmt.Errorf("collections: vector partition generation %d is still reachable", generation)
-	}
-	if pins := vectorPartitionReaderPinCountV1(s.root, collection, index, generation); pins != 0 {
-		return fmt.Errorf("collections: vector partition generation %d has %d reader pins", generation, pins)
-	}
-	tombstoneName := s.deleteTombstoneName(collection, index, generation)
-	tombstonePresent, tombstoneErr := mutation.present(tombstoneName)
-	if tombstoneErr != nil {
-		return tombstoneErr
-	}
-	if active, err := mutation.openPointer(collection, index, ".active"); err == nil {
-		if active.Generation == generation {
-			return fmt.Errorf("collections: vector partition generation %d is active", generation)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("collections: vector partition cleanup active pointer: %w", err)
-	}
-	retiredName := safeVPM(collection) + "-" + safeVPM(index) + ".retired"
-	retiredRaw, retiredErr := mutation.read(retiredName, 32)
-	var retiredGeneration uint64
-	if retiredErr == nil {
-		retiredGeneration, retiredErr = readVectorPartitionPointerGenerationV1(retiredRaw)
-	}
-	retiredMatches := retiredErr == nil && retiredGeneration == generation
-	if retiredErr != nil && !errors.Is(retiredErr, os.ErrNotExist) {
-		return fmt.Errorf("collections: vector partition cleanup retired pointer: %w", retiredErr)
-	}
-	if !tombstonePresent {
-		m, err := mutation.openManifest(collection, index, generation)
-		if err != nil {
-			return err
-		}
-		state, stateErr := newVectorPartitionReclaimStateV1(m)
-		if stateErr != nil {
-			return stateErr
-		}
-		if err := mutation.writeDeleteTombstoneState(state); err != nil {
-			return err
-		}
-	} else {
-		raw, err := mutation.read(tombstoneName, vectorPartitionReclaimMaxBytesV1)
-		if err != nil {
-			return err
-		}
-		state, err := decodeVectorPartitionReclaimRecordV1(raw)
-		if err != nil || state.Collection != collection || state.IndexName != index || state.Generation != generation {
-			return fmt.Errorf("%w: reclaim record identity", ErrVectorPartitionManifestInvalid)
-		}
-	}
-	if hook := vectorPartitionDeleteAfterTombstoneHookV1(); hook != nil {
-		hook()
-	}
-	// Detach the marker before the manifest. Thus any durable interrupted state
-	// is either a retryable tombstone with a retained manifest, or no manifest
-	// and no pointer that could resurrect it.
-	if retiredMatches {
-		if err := mutation.writeInactiveMarker(collection, index, generation); err != nil {
-			return err
-		}
-		if err := mutation.remove(retiredName); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if err := mutation.sync(); err != nil {
-			return err
-		}
-	}
-	manifestName := fmt.Sprintf("%s-%s-%d.vpm", safeVPM(collection), safeVPM(index), generation)
-	if e := mutation.remove(manifestName); e != nil && !errors.Is(e, os.ErrNotExist) {
-		return e
-	}
-	return mutation.sync()
+	return s.deleteVectorPartitionLifecycleV1(collection, index, generation, eligibility)
 }
 func (s *VectorPartitionStoreV1) deleteTombstonePath(collection, index string, generation uint64) string {
 	return filepath.Join(s.dir, s.deleteTombstoneName(collection, index, generation))
@@ -2297,14 +2195,14 @@ func (d *vectorPartitionMutationDirV1) writeInactiveMarker(collection, index str
 }
 
 func (s *VectorPartitionStoreV1) readInactiveGeneration(collection, index string) (uint64, error) {
-	state, err := s.readInactiveStateName(s.inactiveName(collection, index))
+	loaded, present, err := s.loadVectorPartitionLifecycleAuthorityV1(collection, index)
 	if err != nil {
 		return 0, err
 	}
-	if state.Collection != collection || state.IndexName != index {
-		return 0, fmt.Errorf("%w: inactive marker identity", ErrVectorPartitionManifestInvalid)
+	if !present || loaded.state.ActiveGeneration != 0 || loaded.state.RetiredGeneration != 0 || loaded.state.GenerationHighWater == 0 {
+		return 0, os.ErrNotExist
 	}
-	return state.Generation, nil
+	return loaded.state.GenerationHighWater, nil
 }
 
 func (s *VectorPartitionStoreV1) readInactiveStateName(name string) (vectorPartitionInactiveStateV1, error) {
@@ -2400,15 +2298,18 @@ func (s *VectorPartitionStoreV1) writeDeleteTombstoneState(input vectorPartition
 	return nil
 }
 func (s *VectorPartitionStoreV1) openDeleteTombstone(collection, index string, generation uint64) (vectorPartitionReclaimStateV1, error) {
-	raw, err := s.readBounded(s.deleteTombstoneName(collection, index, generation), vectorPartitionReclaimMaxBytesV1)
+	loaded, present, err := s.loadVectorPartitionLifecycleAuthorityV1(collection, index)
 	if err != nil {
 		return vectorPartitionReclaimStateV1{}, err
 	}
-	state, err := decodeVectorPartitionReclaimRecordV1(raw)
-	if err != nil || state.Collection != collection || state.IndexName != index || state.Generation != generation {
-		return vectorPartitionReclaimStateV1{}, fmt.Errorf("%w: reclaim record identity", ErrVectorPartitionManifestInvalid)
+	if !present {
+		return vectorPartitionReclaimStateV1{}, os.ErrNotExist
 	}
-	return state, nil
+	entry, ok := loaded.state.Generations[generation]
+	if !ok || !entry.Deleting || entry.Reclaim == nil {
+		return vectorPartitionReclaimStateV1{}, os.ErrNotExist
+	}
+	return entry.Reclaim.clone(), nil
 }
 
 type vectorPartitionReclaimRecordV1 struct {
@@ -2536,10 +2437,34 @@ func (s *VectorPartitionStoreV1) persistVectorPartitionRewriteDebtV1(records []v
 		if !changed[i] {
 			continue
 		}
-		if err := s.writeDeleteTombstoneState(updates[i]); err != nil {
+		raw, err := encodeVectorPartitionReclaimRecordV1(updates[i])
+		if err != nil {
+			return err
+		}
+		vectorPartitionReclaimPersistHooksV1.RLock()
+		beforeCommit := vectorPartitionReclaimPersistHooksV1.beforeRename
+		afterCommit := vectorPartitionReclaimPersistHooksV1.afterCommit
+		vectorPartitionReclaimPersistHooksV1.RUnlock()
+		if beforeCommit != nil {
+			if err := beforeCommit(records[i].id, updates[i]); err != nil {
+				return err
+			}
+		}
+		if err := s.persistVectorPartitionLifecycleOperationV1(
+			updates[i].Collection,
+			updates[i].IndexName,
+			vectorPartitionLifecycleReclaimProgressV1,
+			updates[i].Generation,
+			raw,
+		); err != nil {
 			return err
 		}
 		records[i].state = updates[i]
+		if afterCommit != nil {
+			if err := afterCommit(records[i].id, updates[i]); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -2622,7 +2547,7 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 		if _, err := s.openDeleteTombstone(c.name, index, generation); err != nil {
 			return err
 		}
-		records, err := s.reclaimRecords(c.name)
+		records, err := c.vectorPartitionLifecycleReclaimRecordsV1(s)
 		if err != nil {
 			return err
 		}
@@ -2635,13 +2560,8 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 		if expectedNamespace == "" {
 			return errors.New("collections: vector partition reclaim requires column asset namespace")
 		}
-		requestedID := s.deleteTombstoneName(c.name, index, generation)
+		requestedID := vectorPartitionLifecycleReclaimIDV1(c.name, index, generation)
 		requestedComplete := false
-		mutation, err := s.beginMutationDirV1()
-		if err != nil {
-			return err
-		}
-		defer mutation.Close()
 		for _, record := range records {
 			reclaimIDs[record.id] = struct{}{}
 			for _, ref := range record.state.debtRefs() {
@@ -2696,16 +2616,19 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 				}
 			}
 			if complete {
-				if err := mutation.remove(record.id); err != nil && !errors.Is(err, os.ErrNotExist) {
+				if err := s.persistVectorPartitionLifecycleOperationV1(
+					record.state.Collection,
+					record.state.IndexName,
+					vectorPartitionLifecycleDeleteCompleteV1,
+					record.state.Generation,
+					nil,
+				); err != nil {
 					return err
 				}
 				if record.id == requestedID {
 					requestedComplete = true
 				}
 			}
-		}
-		if err := mutation.sync(); err != nil {
-			return err
 		}
 		if !requestedComplete {
 			return fmt.Errorf("collections: vector partition reclaim generation %d not physically complete", generation)
@@ -2811,7 +2734,7 @@ func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV
 		if e != nil {
 			return e
 		}
-		return s.publishLocked(m)
+		return s.persistVectorPartitionManifestLifecycleV1(m)
 	})
 }
 
@@ -2899,7 +2822,7 @@ func verifyVectorPartitionAssetsV1(root, namespace string, assets []VectorPartit
 	return nil
 }
 
-func (c *Collection) VectorPartitionStatusV1(index string, generation uint64) (VectorPartitionStatusV1, error) {
+func (c *Collection) vectorPartitionLegacyStatusV1(index string, generation uint64) (VectorPartitionStatusV1, error) {
 	if c == nil || c.db == nil {
 		return VectorPartitionStatusV1{}, errors.New("collections: closed collection")
 	}
