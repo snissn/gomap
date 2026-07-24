@@ -61,7 +61,8 @@ type VectorPartitionLocalSearcherV1 struct {
 	retired                    bool
 	opened, searches, failures uint64
 	partitionPin               *VectorPartitionReaderPinV1
-	closeOnce                  sync.Once
+	closing                    bool
+	persistentPinReleased      bool
 }
 
 // Close releases the M1 generation pin held by a persistent opener. It is
@@ -70,14 +71,22 @@ func (s *VectorPartitionLocalSearcherV1) Close() error {
 	if s == nil {
 		return nil
 	}
-	s.closeOnce.Do(func() {
-		s.mu.Lock()
-		s.retired = true
-		s.mu.Unlock()
-		if s.partitionPin != nil {
-			s.partitionPin.Release()
-		}
-	})
+	s.mu.Lock()
+	s.retired = true
+	s.closing = true
+	release := s.releasePersistentPinLocked()
+	s.mu.Unlock()
+	if release != nil {
+		release.Release()
+	}
+	return nil
+}
+
+func (s *VectorPartitionLocalSearcherV1) releasePersistentPinLocked() *VectorPartitionReaderPinV1 {
+	if s.closing && s.pins == 0 && !s.persistentPinReleased && s.partitionPin != nil {
+		s.persistentPinReleased = true
+		return s.partitionPin
+	}
 	return nil
 }
 
@@ -181,7 +190,11 @@ func (s *VectorPartitionLocalSearcherV1) Release() {
 	if s.pins > 0 {
 		s.pins--
 	}
+	release := s.releasePersistentPinLocked()
 	s.mu.Unlock()
+	if release != nil {
+		release.Release()
+	}
 }
 func (s *VectorPartitionLocalSearcherV1) Retire() error {
 	if s == nil {
@@ -190,8 +203,12 @@ func (s *VectorPartitionLocalSearcherV1) Retire() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.retired = true
+	s.closing = true
 	if s.pins != 0 {
 		return fmt.Errorf("%w: generation still pinned", ErrVectorPartitionSearchUnavailable)
+	}
+	if release := s.releasePersistentPinLocked(); release != nil {
+		go release.Release()
 	}
 	return nil
 }

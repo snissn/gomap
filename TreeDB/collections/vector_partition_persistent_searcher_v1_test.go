@@ -53,6 +53,20 @@ func TestVectorPartitionPersistentLocalSearcherReopenCorruptionAndPinsV1(t *test
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
+	// Close rejects new work but defers the M1 pin release until an explicit
+	// local lease drains, so deletion cannot race an in-flight caller.
+	lease, err := col.OpenVectorPartitionLocalSearcherForGenerationV1(def.Name, m1.Generation, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Acquire(); err != nil {
+		t.Fatal(err)
+	}
+	_ = lease.Close()
+	if err := col.DeleteVectorPartitionGenerationV1(def.Name, m1.Generation, VectorPartitionCleanupEligibilityV1{}); err == nil {
+		t.Fatal("delete succeeded while closing local lease pinned")
+	}
+	lease.Release()
 	// Two complete immutable generations may be read concurrently; each opener
 	// is bound to the requested manifest generation rather than an active alias.
 	m2 := makeGeneration(42, 942)

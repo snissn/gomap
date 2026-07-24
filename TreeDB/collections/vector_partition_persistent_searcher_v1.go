@@ -16,6 +16,7 @@ import (
 
 const vectorPartitionSearchAssetMagicV1 = "VPS1"
 const vectorPartitionSearchAssetVersionV1 uint32 = 1
+const vectorPartitionSearchAssetMaxBytesV1 int64 = 256 << 20
 
 func vectorPartitionLocalAssetIDV1(partition uint32) string {
 	return fmt.Sprintf("hnsw_search_pack_v1/partition/%d", partition)
@@ -63,10 +64,22 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(generation ui
 }
 
 func encodeVectorPartitionSearchAssetV1(a VectorPartitionSearchAssetV1) ([]byte, error) {
+	if len(a.Adjacency) == 0 {
+		a.Adjacency = make([][]uint32, len(a.IDs))
+	}
 	if err := validateVectorPartitionSearchAssetV1(a); err != nil {
 		return nil, err
 	}
+	// Bounded preflight covers all count-derived writes before allocating.
+	bytesNeeded := int64(4 + 4 + 8 + 4 + 4 + 4 + 4 + sha256.Size + len(a.ManifestChecksum))
+	for i, id := range a.IDs {
+		bytesNeeded += int64(4 + len(id) + 1 + 4*len(a.Vectors[i]) + 4 + 4*len(a.Adjacency[i]))
+		if bytesNeeded > vectorPartitionSearchAssetMaxBytesV1 {
+			return nil, errors.New("partition search asset byte cap")
+		}
+	}
 	var b bytes.Buffer
+	b.Grow(int(bytesNeeded))
 	b.WriteString(vectorPartitionSearchAssetMagicV1)
 	var x [8]byte
 	binary.BigEndian.PutUint32(x[:4], vectorPartitionSearchAssetVersionV1)
@@ -244,7 +257,7 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index strin
 			break
 		}
 	}
-	if asset == nil || asset.Ref.Kind != ColumnAssetKindTCS1HNSWSearchPack || asset.Ref.Generation != generation {
+	if asset == nil || asset.Ref.Kind != ColumnAssetKindTCS1HNSWSearchPack || asset.Ref.Generation != generation || asset.Ref.Length > vectorPartitionSearchAssetMaxBytesV1 || asset.Ref.Length <= 0 {
 		return nil, fmt.Errorf("%w: missing or stale partition asset", ErrVectorPartitionSearchUnavailable)
 	}
 	namespace := c.meta.Options.ColumnStore.AssetManager.Namespace
@@ -259,10 +272,13 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index strin
 	if err != nil {
 		return nil, err
 	}
-	raw, readErr := io.ReadAll(io.NewSectionReader(f, asset.Ref.Offset, asset.Ref.Length))
+	raw, readErr := io.ReadAll(io.LimitReader(io.NewSectionReader(f, asset.Ref.Offset, asset.Ref.Length), vectorPartitionSearchAssetMaxBytesV1+1))
 	closeErr := f.Close()
 	if err := errors.Join(readErr, closeErr); err != nil {
 		return nil, err
+	}
+	if int64(len(raw)) != asset.Ref.Length || int64(len(raw)) > vectorPartitionSearchAssetMaxBytesV1 {
+		return nil, fmt.Errorf("%w: asset byte cap", ErrVectorPartitionSearchUnavailable)
 	}
 	decoded, err := decodeVectorPartitionSearchAssetV1(raw)
 	if err != nil {

@@ -42,9 +42,11 @@ func ValidateArtifact(a Artifact) error { return internal.ValidateArtifact(a) }
 func BuildOverlap(a Artifact, c OverlapConfig) (OverlapResult, error) {
 	return internal.BuildOverlap(a, c)
 }
-func ValidateOverlap(a Artifact, r OverlapResult) error { return internal.ValidateOverlap(a, r) }
-func CanonicalJSON(a Artifact) ([]byte, error)          { return internal.CanonicalJSON(a) }
-func Digest(a Artifact) (string, error)                 { return internal.Digest(a) }
+func ValidateOverlap(a Artifact, c OverlapConfig, r OverlapResult) error {
+	return internal.ValidateOverlap(a, c, r)
+}
+func CanonicalJSON(a Artifact) ([]byte, error) { return internal.CanonicalJSON(a) }
+func Digest(a Artifact) (string, error)        { return internal.Digest(a) }
 func DecodeArtifact(raw []byte, maxBytes int) (Artifact, error) {
 	return internal.DecodeArtifact(raw, maxBytes)
 }
