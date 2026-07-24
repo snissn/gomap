@@ -1,0 +1,886 @@
+package nativewire
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
+	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
+)
+
+const vectorPartitionShardSearchDigestTestV1 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+type fakeVectorPartitionReadCoordinatorV1 struct {
+	mu       sync.Mutex
+	calls    []raftcluster.ReadIndexBarrier
+	proof    raftcluster.ReadIndexProof
+	progress raftcluster.AppliedProgress
+	err      error
+	wait     bool
+}
+
+func (f *fakeVectorPartitionReadCoordinatorV1) CoordinateRoutedReadIndex(ctx context.Context, target raftcluster.ReadIndexBarrier) (raftcluster.ReadIndexProof, raftcluster.AppliedProgress, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, target)
+	wait := f.wait
+	err := f.err
+	proof := f.proof
+	progress := f.progress
+	f.mu.Unlock()
+	if wait {
+		<-ctx.Done()
+		return raftcluster.ReadIndexProof{}, raftcluster.AppliedProgress{}, ctx.Err()
+	}
+	return proof, progress, err
+}
+
+func (f *fakeVectorPartitionReadCoordinatorV1) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
+type fakeVectorPartitionGenerationSourceV1 struct {
+	mu        sync.Mutex
+	manifest  collections.VectorPartitionManifestV1
+	assets    map[uint32]collections.VectorPartitionSearchAssetV1
+	openErr   map[uint32]error
+	pins      int
+	releases  int
+	opens     int
+	searchers map[uint32]*collections.VectorPartitionLocalSearcherV1
+	pinErr    error
+}
+
+func (f *fakeVectorPartitionGenerationSourceV1) PinVectorPartitionGenerationV1(ctx context.Context, index string, generation uint64) (VectorPartitionPinnedGenerationV1, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.pinErr != nil {
+		return nil, f.pinErr
+	}
+	f.pins++
+	return &fakeVectorPartitionPinnedGenerationV1{
+		source:   f,
+		manifest: pinnedVectorPartitionManifestV1(f.manifest),
+	}, nil
+}
+
+type fakeVectorPartitionPinnedGenerationV1 struct {
+	source   *fakeVectorPartitionGenerationSourceV1
+	manifest VectorPartitionPinnedManifestV1
+	once     sync.Once
+}
+
+func (p *fakeVectorPartitionPinnedGenerationV1) Manifest() VectorPartitionPinnedManifestV1 {
+	return clonePinnedVectorPartitionManifestV1(p.manifest)
+}
+
+func (p *fakeVectorPartitionPinnedGenerationV1) OpenPartition(ctx context.Context, partition uint32) (*VectorPartitionPartitionSearchLeaseV1, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	p.source.mu.Lock()
+	defer p.source.mu.Unlock()
+	p.source.opens++
+	if err := p.source.openErr[partition]; err != nil {
+		return nil, err
+	}
+	asset, ok := p.source.assets[partition]
+	if !ok {
+		return nil, collections.ErrVectorPartitionSearchUnavailable
+	}
+	searcher, err := collections.OpenVectorPartitionLocalSearcherV1(asset)
+	if err == nil {
+		if p.source.searchers == nil {
+			p.source.searchers = make(map[uint32]*collections.VectorPartitionLocalSearcherV1)
+		}
+		p.source.searchers[partition] = searcher
+	}
+	if err != nil {
+		return nil, err
+	}
+	return NewVectorPartitionPartitionSearchLeaseV1(searcher, false, searcher.Close)
+}
+
+func (p *fakeVectorPartitionPinnedGenerationV1) Close() error {
+	p.once.Do(func() {
+		p.source.mu.Lock()
+		p.source.releases++
+		p.source.mu.Unlock()
+	})
+	return nil
+}
+
+func (f *fakeVectorPartitionGenerationSourceV1) counts() (pins, releases, opens int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.pins, f.releases, f.opens
+}
+
+func TestVectorPartitionSearchLeaseClosePreservesErrorV1(t *testing.T) {
+	searcher, err := collections.OpenVectorPartitionLocalSearcherV1(
+		vectorPartitionShardSearchAssetTestV1(0, []string{"a"}, [][]float32{{1, 0}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = searcher.Close() })
+	closeFailure := errors.New("injected close failure")
+	closeCalls := 0
+	lease, err := NewVectorPartitionPartitionSearchLeaseV1(searcher, false, func() error {
+		closeCalls++
+		return closeFailure
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Close(); !errors.Is(err, closeFailure) {
+		t.Fatalf("first close err=%v", err)
+	}
+	if err := lease.Close(); !errors.Is(err, closeFailure) {
+		t.Fatalf("idempotent close err=%v", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls=%d", closeCalls)
+	}
+}
+
+func TestCollectionVectorPartitionGenerationCacheInvalidationWaitsForRequestLeaseV1(t *testing.T) {
+	searcher, err := collections.OpenVectorPartitionLocalSearcherV1(
+		vectorPartitionShardSearchAssetTestV1(0, []string{"a"}, [][]float32{{1, 0}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := collectionVectorPartitionGenerationKeyV1{index: "embedding", generation: 7}
+	entry := &collectionVectorPartitionGenerationCacheV1{
+		index:      key.index,
+		generation: key.generation,
+		refs:       1,
+		searchers:  map[uint32]*collections.VectorPartitionLocalSearcherV1{0: searcher},
+		opening:    make(map[uint32]*collectionVectorPartitionSearchLoadV1),
+	}
+	source := &CollectionVectorPartitionGenerationSourceV1{
+		Collection: new(collections.Collection),
+		entries:    map[collectionVectorPartitionGenerationKeyV1]*collectionVectorPartitionGenerationCacheV1{key: entry},
+	}
+	pinned := newCollectionVectorPartitionGenerationLeaseV1(source, entry)
+
+	if err := source.InvalidateVectorPartitionGenerationV1(key.index, key.generation); err != nil {
+		t.Fatal(err)
+	}
+	if status := searcher.Status(); status.Retired {
+		t.Fatalf("invalidation retired an in-flight request searcher: %+v", status)
+	}
+	partition, err := pinned.OpenPartition(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("in-flight pinned open: %v", err)
+	}
+	if !partition.CacheHit {
+		t.Fatal("expected cached partition lease")
+	}
+	got, _, err := partition.Searcher.SearchWithOptionsV1(context.Background(), []float32{1, 0}, collections.VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 1})
+	if err != nil || len(got) != 1 || got[0].ID != "a" {
+		t.Fatalf("search=%+v err=%v", got, err)
+	}
+	if err := partition.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.PinVectorPartitionGenerationV1(context.Background(), key.index, key.generation); !errors.Is(err, ErrVectorPartitionShardSearchGenerationMismatch) {
+		t.Fatalf("stale generation pin err=%v", err)
+	}
+	if err := pinned.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if status := searcher.Status(); !status.Retired || status.ActivePins != 0 {
+		t.Fatalf("last request release did not retire cached searcher: %+v", status)
+	}
+	if err := pinned.Close(); err != nil {
+		t.Fatalf("idempotent pinned close: %v", err)
+	}
+	stats := source.Stats()
+	if stats.Invalidations != 1 || stats.PartitionHits != 1 {
+		t.Fatalf("cache stats=%+v", stats)
+	}
+}
+
+func TestCollectionVectorPartitionGenerationCacheCloseLetsPinnedRequestsDrainV1(t *testing.T) {
+	searcher, err := collections.OpenVectorPartitionLocalSearcherV1(
+		vectorPartitionShardSearchAssetTestV1(0, []string{"a"}, [][]float32{{1, 0}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := collectionVectorPartitionGenerationKeyV1{index: "embedding", generation: 7}
+	entry := &collectionVectorPartitionGenerationCacheV1{
+		index:      key.index,
+		generation: key.generation,
+		refs:       1,
+		searchers:  map[uint32]*collections.VectorPartitionLocalSearcherV1{0: searcher},
+		opening:    make(map[uint32]*collectionVectorPartitionSearchLoadV1),
+	}
+	source := &CollectionVectorPartitionGenerationSourceV1{
+		Collection: new(collections.Collection),
+		entries:    map[collectionVectorPartitionGenerationKeyV1]*collectionVectorPartitionGenerationCacheV1{key: entry},
+	}
+	pinned := newCollectionVectorPartitionGenerationLeaseV1(source, entry)
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+	partition, err := pinned.OpenPartition(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("pinned request could not drain after source close: %v", err)
+	}
+	if _, err := source.PinVectorPartitionGenerationV1(context.Background(), key.index, key.generation); !errors.Is(err, ErrVectorPartitionShardSearchAssetsUnavailable) {
+		t.Fatalf("new pin after close err=%v", err)
+	}
+	if err := partition.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := pinned.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if status := searcher.Status(); !status.Retired {
+		t.Fatalf("drained source did not close searcher: %+v", status)
+	}
+}
+
+func TestVectorPartitionShardSearchLeaderGroupLocalReturnsOracleAndProofV1(t *testing.T) {
+	service, source, coordinator := newVectorPartitionShardSearchTestServiceV1(t, []raftplacement.VectorPartitionGroupV1{
+		{PartitionID: 0, GroupID: "group-a"},
+		{PartitionID: 1, GroupID: "group-a"},
+	}, map[uint32]collections.VectorPartitionSearchAssetV1{
+		0: vectorPartitionShardSearchAssetTestV1(0, []string{"a", "b", "c"}, [][]float32{{1, 0}, {0.8, 0.2}, {0, 1}}),
+		1: vectorPartitionShardSearchAssetTestV1(1, []string{"d", "e"}, [][]float32{{0.7, 0.3}, {-1, 0}}),
+	})
+	request := vectorPartitionShardSearchRequestTestV1([]uint32{0, 1})
+	response, err := service.Search(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if response.Version != 1 || response.RequestID != request.RequestID || len(response.Partials) != 2 {
+		t.Fatalf("response identity=%+v", response)
+	}
+	if got := response.Proof; got.ServingNode != "node-a" || got.LeaderNode != "node-a" || got.GroupID != "group-a" ||
+		got.ReadTerm != 3 || got.ReadIndex != 41 || got.AppliedTerm != 3 || got.AppliedIndex != 43 ||
+		got.PartitionGeneration != 7 || got.RouterGeneration != 7 || got.SourceGeneration != 11 {
+		t.Fatalf("proof=%+v", got)
+	}
+	if got := response.Partials[0].Neighbors; len(got) != 2 || got[0].ID != "a" || got[1].ID != "b" {
+		t.Fatalf("partition 0 neighbors=%+v", got)
+	}
+	if got := response.Partials[1].Neighbors; len(got) != 2 || got[0].ID != "d" || got[1].ID != "e" {
+		t.Fatalf("partition 1 neighbors=%+v", got)
+	}
+	if response.Candidates != 5 || response.ResponseBytes != 580 || response.Timing.ReadIndexApplyNanos == 0 {
+		t.Fatalf("response accounting=%+v", response)
+	}
+	if coordinator.callCount() != 1 {
+		t.Fatalf("read coordinator calls=%d", coordinator.callCount())
+	}
+	if pins, releases, opens := source.counts(); pins != 1 || releases != 1 || opens != 2 {
+		t.Fatalf("source counts pins=%d releases=%d opens=%d", pins, releases, opens)
+	}
+	stats := service.Stats()
+	if stats.Requests != 1 || stats.Successes != 1 || stats.Errors != 0 || stats.Partitions != 2 ||
+		stats.ReadProofs != 1 || stats.MutationAttempts != 0 {
+		t.Fatalf("stats=%+v", stats)
+	}
+}
+
+func TestVectorPartitionShardSearchRouteFailuresNeverOpenOrSearchLocalStateV1(t *testing.T) {
+	tests := []struct {
+		name      string
+		parts     []raftplacement.VectorPartitionGroupV1
+		request   func(VectorPartitionShardSearchRequestV1) VectorPartitionShardSearchRequestV1
+		coordErr  error
+		wantCode  VectorPartitionShardSearchErrorCodeV1
+		wantCoord int
+	}{
+		{
+			name:  "missing_group",
+			parts: []raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},
+			request: func(r VectorPartitionShardSearchRequestV1) VectorPartitionShardSearchRequestV1 {
+				r.TargetGroupID = ""
+				return r
+			},
+			wantCode: VectorPartitionShardSearchErrorMissingOwnerV1,
+		},
+		{
+			name:  "remote_owner",
+			parts: []raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-b"}},
+			request: func(r VectorPartitionShardSearchRequestV1) VectorPartitionShardSearchRequestV1 {
+				r.TargetGroupID = "group-b"
+				return r
+			},
+			wantCode: VectorPartitionShardSearchErrorRemoteOwnerV1,
+		},
+		{
+			name:  "mixed_groups",
+			parts: []raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-b"}},
+			request: func(r VectorPartitionShardSearchRequestV1) VectorPartitionShardSearchRequestV1 {
+				r.PartitionIDs = []uint32{0, 1}
+				return r
+			},
+			wantCode: VectorPartitionShardSearchErrorRouteMismatchV1,
+		},
+		{
+			name:  "unknown_partition",
+			parts: []raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},
+			request: func(r VectorPartitionShardSearchRequestV1) VectorPartitionShardSearchRequestV1 {
+				r.PartitionIDs = []uint32{1}
+				return r
+			},
+			wantCode: VectorPartitionShardSearchErrorUnknownOwnerV1,
+		},
+		{
+			name:  "stale_leader_hint",
+			parts: []raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},
+			request: func(r VectorPartitionShardSearchRequestV1) VectorPartitionShardSearchRequestV1 {
+				r.TargetNodeID = "node-old"
+				return r
+			},
+			coordErr:  raftcluster.ErrReadBarrierTargetMismatch,
+			wantCode:  VectorPartitionShardSearchErrorRouteMismatchV1,
+			wantCoord: 1,
+		},
+		{
+			name:  "follower",
+			parts: []raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},
+			request: func(r VectorPartitionShardSearchRequestV1) VectorPartitionShardSearchRequestV1 {
+				return r
+			},
+			coordErr:  raftcluster.ErrNotLeader,
+			wantCode:  VectorPartitionShardSearchErrorNotLeaderV1,
+			wantCoord: 1,
+		},
+		{
+			name:  "unavailable_quorum",
+			parts: []raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},
+			request: func(r VectorPartitionShardSearchRequestV1) VectorPartitionShardSearchRequestV1 {
+				return r
+			},
+			coordErr:  raftcluster.ErrReadBarrierNotSatisfied,
+			wantCode:  VectorPartitionShardSearchErrorGroupUnavailableV1,
+			wantCoord: 1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assets := map[uint32]collections.VectorPartitionSearchAssetV1{
+				0: vectorPartitionShardSearchAssetTestV1(0, []string{"a"}, [][]float32{{1, 0}}),
+				1: vectorPartitionShardSearchAssetTestV1(1, []string{"b"}, [][]float32{{1, 0}}),
+			}
+			service, source, coordinator := newVectorPartitionShardSearchTestServiceV1(t, test.parts, assets)
+			coordinator.err = test.coordErr
+			request := test.request(vectorPartitionShardSearchRequestTestV1([]uint32{0}))
+			response, err := service.Search(context.Background(), request)
+			assertVectorPartitionShardSearchCodeV1(t, err, test.wantCode)
+			if !vectorPartitionShardSearchResponseZeroTestV1(response) {
+				t.Fatalf("failure returned partial response=%+v", response)
+			}
+			if got := coordinator.callCount(); got != test.wantCoord {
+				t.Fatalf("coordinator calls=%d want %d", got, test.wantCoord)
+			}
+			if pins, releases, opens := source.counts(); pins != 0 || releases != 0 || opens != 0 {
+				t.Fatalf("local state observed pins=%d releases=%d opens=%d", pins, releases, opens)
+			}
+		})
+	}
+}
+
+func TestVectorPartitionShardSearchGenerationAndAssetFailuresAreWholeRequestV1(t *testing.T) {
+	t.Run("generation_identity", func(t *testing.T) {
+		service, source, coordinator := newVectorPartitionShardSearchTestServiceV1(t,
+			[]raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},
+			map[uint32]collections.VectorPartitionSearchAssetV1{0: vectorPartitionShardSearchAssetTestV1(0, []string{"a"}, [][]float32{{1, 0}})},
+		)
+		request := vectorPartitionShardSearchRequestTestV1([]uint32{0})
+		request.SourceGeneration++
+		_, err := service.Search(context.Background(), request)
+		assertVectorPartitionShardSearchCodeV1(t, err, VectorPartitionShardSearchErrorGenerationMismatchV1)
+		if coordinator.callCount() != 0 {
+			t.Fatal("generation mismatch reached read proof")
+		}
+		if pins, releases, opens := source.counts(); pins != 0 || releases != 0 || opens != 0 {
+			t.Fatalf("generation mismatch observed local state %d/%d/%d", pins, releases, opens)
+		}
+	})
+
+	t.Run("active_manifest_changed", func(t *testing.T) {
+		service, source, _ := newVectorPartitionShardSearchTestServiceV1(t,
+			[]raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},
+			map[uint32]collections.VectorPartitionSearchAssetV1{0: vectorPartitionShardSearchAssetTestV1(0, []string{"a"}, [][]float32{{1, 0}})},
+		)
+		source.manifest.Generation = 8
+		_, err := service.Search(context.Background(), vectorPartitionShardSearchRequestTestV1([]uint32{0}))
+		assertVectorPartitionShardSearchCodeV1(t, err, VectorPartitionShardSearchErrorGenerationMismatchV1)
+		if pins, releases, opens := source.counts(); pins != 1 || releases != 1 || opens != 0 {
+			t.Fatalf("pin lifetime=%d/%d opens=%d", pins, releases, opens)
+		}
+	})
+
+	t.Run("second_asset_missing_no_first_partial", func(t *testing.T) {
+		service, source, _ := newVectorPartitionShardSearchTestServiceV1(t,
+			[]raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-a"}},
+			map[uint32]collections.VectorPartitionSearchAssetV1{0: vectorPartitionShardSearchAssetTestV1(0, []string{"a"}, [][]float32{{1, 0}})},
+		)
+		source.openErr = map[uint32]error{1: errors.New("corrupt pack checksum")}
+		response, err := service.Search(context.Background(), vectorPartitionShardSearchRequestTestV1([]uint32{0, 1}))
+		assertVectorPartitionShardSearchCodeV1(t, err, VectorPartitionShardSearchErrorAssetsUnavailableV1)
+		if !vectorPartitionShardSearchResponseZeroTestV1(response) {
+			t.Fatalf("failure returned partial response=%+v", response)
+		}
+		if pins, releases, opens := source.counts(); pins != 1 || releases != 1 || opens != 2 {
+			t.Fatalf("pin lifetime=%d/%d opens=%d", pins, releases, opens)
+		}
+		source.mu.Lock()
+		first := source.searchers[0]
+		source.mu.Unlock()
+		if first == nil {
+			t.Fatal("first searcher not opened")
+		}
+		status := first.Status()
+		if status.Searches != 0 || !status.Retired || status.ActivePins != 0 {
+			t.Fatalf("first partition status after whole-request failure=%+v", status)
+		}
+	})
+}
+
+func TestVectorPartitionShardSearchBoundsFailBeforeProofOrAllocationV1(t *testing.T) {
+	service, source, coordinator := newVectorPartitionShardSearchTestServiceV1(t,
+		[]raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},
+		map[uint32]collections.VectorPartitionSearchAssetV1{0: vectorPartitionShardSearchAssetTestV1(0, []string{"a"}, [][]float32{{1, 0}})},
+	)
+	base := vectorPartitionShardSearchRequestTestV1([]uint32{0})
+	tests := []struct {
+		name string
+		edit func(*VectorPartitionShardSearchRequestV1)
+		code VectorPartitionShardSearchErrorCodeV1
+	}{
+		{name: "dimension", edit: func(r *VectorPartitionShardSearchRequestV1) {
+			r.Query = make([]float32, service.limits.MaxDimensions+1)
+		}},
+		{name: "nan", edit: func(r *VectorPartitionShardSearchRequestV1) { r.Query[0] = float32(math.NaN()) }},
+		{name: "infinity", edit: func(r *VectorPartitionShardSearchRequestV1) { r.Query[0] = float32(math.Inf(1)) }},
+		{name: "zero", edit: func(r *VectorPartitionShardSearchRequestV1) { r.Query = []float32{0, 0} }},
+		{name: "top_k", edit: func(r *VectorPartitionShardSearchRequestV1) { r.TopK = service.limits.MaxTopK + 1 }},
+		{name: "ef_search", edit: func(r *VectorPartitionShardSearchRequestV1) { r.EfSearch = service.limits.MaxEfSearch + 1 }},
+		{name: "partition_order", edit: func(r *VectorPartitionShardSearchRequestV1) { r.PartitionIDs = []uint32{0, 0} }},
+		{name: "request_bytes", edit: func(r *VectorPartitionShardSearchRequestV1) { r.RequestBytesLimit = 1 }},
+		{name: "candidate_bytes", edit: func(r *VectorPartitionShardSearchRequestV1) { r.CandidateBytesLimit = 1 }},
+		{name: "response_bytes", edit: func(r *VectorPartitionShardSearchRequestV1) { r.ResponseBytesLimit = 1 }, code: VectorPartitionShardSearchErrorResponseTooLargeV1},
+		{name: "exact_mode_cannot_silently_use_hnsw", edit: func(r *VectorPartitionShardSearchRequestV1) { r.Mode = "exact_no_document" }},
+		{name: "latest_vector_claim", edit: func(r *VectorPartitionShardSearchRequestV1) { r.Consistency = "linearizable_latest_vector" }, code: VectorPartitionShardSearchErrorUnsupportedConsistencyV1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := base
+			request.Query = append([]float32(nil), base.Query...)
+			request.PartitionIDs = append([]uint32(nil), base.PartitionIDs...)
+			test.edit(&request)
+			_, err := service.Search(context.Background(), request)
+			want := test.code
+			if want == "" {
+				want = VectorPartitionShardSearchErrorInvalidRequestV1
+			}
+			assertVectorPartitionShardSearchCodeV1(t, err, want)
+		})
+	}
+	if coordinator.callCount() != 0 {
+		t.Fatalf("invalid requests reached proof %d times", coordinator.callCount())
+	}
+	if pins, releases, opens := source.counts(); pins != 0 || releases != 0 || opens != 0 {
+		t.Fatalf("invalid requests observed local state %d/%d/%d", pins, releases, opens)
+	}
+}
+
+func TestVectorPartitionShardSearchCancellationReleasesPinsWithoutPartialV1(t *testing.T) {
+	t.Run("before_read_proof", func(t *testing.T) {
+		service, source, coordinator := newVectorPartitionShardSearchTestServiceV1(t,
+			[]raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},
+			map[uint32]collections.VectorPartitionSearchAssetV1{0: vectorPartitionShardSearchAssetTestV1(0, []string{"a"}, [][]float32{{1, 0}})},
+		)
+		coordinator.wait = true
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			response, err := service.Search(ctx, vectorPartitionShardSearchRequestTestV1([]uint32{0}))
+			if !vectorPartitionShardSearchResponseZeroTestV1(response) {
+				done <- fmt.Errorf("partial response: %+v", response)
+				return
+			}
+			done <- err
+		}()
+		waitVectorPartitionShardConditionV1(t, func() bool { return coordinator.callCount() == 1 })
+		cancel()
+		assertVectorPartitionShardSearchCodeV1(t, <-done, VectorPartitionShardSearchErrorCanceledV1)
+		if pins, releases, opens := source.counts(); pins != 0 || releases != 0 || opens != 0 {
+			t.Fatalf("pre-proof cancellation observed state %d/%d/%d", pins, releases, opens)
+		}
+	})
+
+	t.Run("during_search", func(t *testing.T) {
+		service, source, _ := newVectorPartitionShardSearchTestServiceV1(t,
+			[]raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},
+			map[uint32]collections.VectorPartitionSearchAssetV1{0: vectorPartitionShardSearchAssetTestV1(0, []string{"a"}, [][]float32{{1, 0}})},
+		)
+		started := make(chan struct{})
+		service.testSearchPartition = func(ctx context.Context, searcher *collections.VectorPartitionLocalSearcherV1, _ []float32, _ collections.VectorPartitionSearchOptionsV1) ([]collections.VectorPartitionSearchResultV1, collections.VectorPartitionSearchMetricsV1, error) {
+			if err := searcher.Acquire(); err != nil {
+				return nil, collections.VectorPartitionSearchMetricsV1{}, err
+			}
+			close(started)
+			<-ctx.Done()
+			searcher.Release()
+			return nil, collections.VectorPartitionSearchMetricsV1{}, ctx.Err()
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			response, err := service.Search(ctx, vectorPartitionShardSearchRequestTestV1([]uint32{0}))
+			if !vectorPartitionShardSearchResponseZeroTestV1(response) {
+				done <- fmt.Errorf("partial response: %+v", response)
+				return
+			}
+			done <- err
+		}()
+		<-started
+		cancel()
+		assertVectorPartitionShardSearchCodeV1(t, <-done, VectorPartitionShardSearchErrorCanceledV1)
+		if pins, releases, opens := source.counts(); pins != 1 || releases != 1 || opens != 1 {
+			t.Fatalf("search cancellation pin lifetime=%d/%d opens=%d", pins, releases, opens)
+		}
+		source.mu.Lock()
+		searcher := source.searchers[0]
+		source.mu.Unlock()
+		if status := searcher.Status(); status.ActivePins != 0 || !status.Retired {
+			t.Fatalf("searcher pins leaked: %+v", status)
+		}
+	})
+
+	t.Run("during_response", func(t *testing.T) {
+		service, source, _ := newVectorPartitionShardSearchTestServiceV1(t,
+			[]raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},
+			map[uint32]collections.VectorPartitionSearchAssetV1{0: vectorPartitionShardSearchAssetTestV1(0, []string{"a"}, [][]float32{{1, 0}})},
+		)
+		ctx, cancel := context.WithCancel(context.Background())
+		service.testBeforeResponseCopy = cancel
+		response, err := service.Search(ctx, vectorPartitionShardSearchRequestTestV1([]uint32{0}))
+		assertVectorPartitionShardSearchCodeV1(t, err, VectorPartitionShardSearchErrorCanceledV1)
+		if !vectorPartitionShardSearchResponseZeroTestV1(response) {
+			t.Fatalf("response cancellation returned partial=%+v", response)
+		}
+		if pins, releases, opens := source.counts(); pins != 1 || releases != 1 || opens != 1 {
+			t.Fatalf("response cancellation pin lifetime=%d/%d opens=%d", pins, releases, opens)
+		}
+	})
+}
+
+func TestVectorPartitionShardSearchPinsExactGenerationAcrossConcurrentActivationV1(t *testing.T) {
+	service, source, _ := newVectorPartitionShardSearchTestServiceV1(t,
+		[]raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},
+		map[uint32]collections.VectorPartitionSearchAssetV1{0: vectorPartitionShardSearchAssetTestV1(0, []string{"old"}, [][]float32{{1, 0}})},
+	)
+	service.testSearchPartition = func(ctx context.Context, searcher *collections.VectorPartitionLocalSearcherV1, query []float32, opts collections.VectorPartitionSearchOptionsV1) ([]collections.VectorPartitionSearchResultV1, collections.VectorPartitionSearchMetricsV1, error) {
+		source.mu.Lock()
+		source.manifest.Generation = 8
+		source.manifest.RouterGeneration = 8
+		source.assets[0] = vectorPartitionShardSearchAssetTestV1(0, []string{"new"}, [][]float32{{1, 0}})
+		source.assets[0] = func(asset collections.VectorPartitionSearchAssetV1) collections.VectorPartitionSearchAssetV1 {
+			asset.Generation = 8
+			return asset
+		}(source.assets[0])
+		source.mu.Unlock()
+		return searcher.SearchWithOptionsV1(ctx, query, opts)
+	}
+	response, err := service.Search(context.Background(), vectorPartitionShardSearchRequestTestV1([]uint32{0}))
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if got := response.Partials[0].Neighbors[0].ID; got != "old" {
+		t.Fatalf("result=%q want pinned old generation", got)
+	}
+	if response.Proof.PartitionGeneration != 7 || response.Proof.RouterGeneration != 7 {
+		t.Fatalf("proof mixed generations: %+v", response.Proof)
+	}
+}
+
+func TestVectorPartitionShardSearchDeadlineIsStableAndNoMutationV1(t *testing.T) {
+	service, source, coordinator := newVectorPartitionShardSearchTestServiceV1(t,
+		[]raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},
+		map[uint32]collections.VectorPartitionSearchAssetV1{0: vectorPartitionShardSearchAssetTestV1(0, []string{"a"}, [][]float32{{1, 0}})},
+	)
+	request := vectorPartitionShardSearchRequestTestV1([]uint32{0})
+	request.DeadlineUnixNano = time.Now().Add(-time.Second).UnixNano()
+	_, err := service.Search(context.Background(), request)
+	assertVectorPartitionShardSearchCodeV1(t, err, VectorPartitionShardSearchErrorDeadlineV1)
+	if coordinator.callCount() != 0 {
+		t.Fatal("expired request reached read proof")
+	}
+	if pins, releases, opens := source.counts(); pins != 0 || releases != 0 || opens != 0 {
+		t.Fatalf("expired request observed local state %d/%d/%d", pins, releases, opens)
+	}
+	if stats := service.Stats(); stats.TimedOut != 1 || stats.MutationAttempts != 0 {
+		t.Fatalf("stats=%+v", stats)
+	}
+}
+
+func BenchmarkVectorPartitionShardSearchServiceV1(b *testing.B) {
+	service, fakeSource, _ := newVectorPartitionShardSearchTestServiceV1(b,
+		[]raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},
+		map[uint32]collections.VectorPartitionSearchAssetV1{
+			0: vectorPartitionShardSearchAssetTestV1(0,
+				[]string{"a", "b", "c", "d", "e", "f", "g", "h"},
+				[][]float32{{1, 0}, {.9, .1}, {.8, .2}, {.7, .3}, {.6, .4}, {.5, .5}, {.4, .6}, {0, 1}},
+			),
+		},
+	)
+	searcher, err := collections.OpenVectorPartitionLocalSearcherV1(fakeSource.assets[0])
+	if err != nil {
+		b.Fatal(err)
+	}
+	key := collectionVectorPartitionGenerationKeyV1{index: "embedding", generation: 7}
+	entry := &collectionVectorPartitionGenerationCacheV1{
+		index:      key.index,
+		generation: key.generation,
+		manifest:   pinnedVectorPartitionManifestV1(fakeSource.manifest),
+		searchers:  map[uint32]*collections.VectorPartitionLocalSearcherV1{0: searcher},
+		opening:    make(map[uint32]*collectionVectorPartitionSearchLoadV1),
+	}
+	cachedSource := &CollectionVectorPartitionGenerationSourceV1{
+		Collection: new(collections.Collection),
+		entries:    map[collectionVectorPartitionGenerationKeyV1]*collectionVectorPartitionGenerationCacheV1{key: entry},
+	}
+	service.generationSource = cachedSource
+	b.Cleanup(func() {
+		if err := cachedSource.Close(); err != nil {
+			b.Error(err)
+		}
+	})
+	request := vectorPartitionShardSearchRequestTestV1([]uint32{0})
+	b.ReportAllocs()
+	b.SetBytes(int64(len(request.Query)*4 + len(request.PartitionIDs)*4))
+	latencies := make([]uint64, b.N)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		started := time.Now()
+		response, err := service.Search(context.Background(), request)
+		if err != nil {
+			b.Fatal(err)
+		}
+		latencies[i] = uint64(time.Since(started).Nanoseconds())
+		if response.ResponseBytes == 0 {
+			b.Fatal("empty response accounting")
+		}
+	}
+	b.StopTimer()
+	stats := service.Stats()
+	n := uint64(b.N)
+	if n != 0 {
+		cacheStats := cachedSource.Stats()
+		if cacheStats.GenerationHits != n || cacheStats.PartitionHits != n {
+			b.Fatalf("warm cache stats=%+v requests=%d", cacheStats, n)
+		}
+		b.ReportMetric(float64(stats.RouteOwnerNanos)/float64(n), "route-ns/op")
+		b.ReportMetric(float64(stats.ReadIndexApplyNanos)/float64(n), "read-index-apply-ns/op")
+		b.ReportMetric(float64(stats.GenerationOpenNanos)/float64(n), "generation-open-ns/op")
+		b.ReportMetric(float64(stats.SearchNanos)/float64(n), "partition-search-ns/op")
+		b.ReportMetric(float64(stats.ResponseCopyNanos)/float64(n), "response-copy-ns/op")
+		b.ReportMetric(float64(stats.ResponseBytes)/float64(n), "response-B/op")
+		b.ReportMetric(float64(stats.Candidates)/float64(n), "candidates/op")
+		sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+		b.ReportMetric(float64(vectorPartitionShardPercentileTestV1(latencies, 50)), "p50-ns")
+		b.ReportMetric(float64(vectorPartitionShardPercentileTestV1(latencies, 95)), "p95-ns")
+		b.ReportMetric(float64(vectorPartitionShardPercentileTestV1(latencies, 99)), "p99-ns")
+		totalSeconds := float64(stats.TotalNanos) / float64(time.Second)
+		if totalSeconds > 0 {
+			b.ReportMetric(float64(n)/totalSeconds, "service-qps")
+		}
+	}
+}
+
+func newVectorPartitionShardSearchTestServiceV1(tb testing.TB, parts []raftplacement.VectorPartitionGroupV1, assets map[uint32]collections.VectorPartitionSearchAssetV1) (*VectorPartitionShardSearchServiceV1, *fakeVectorPartitionGenerationSourceV1, *fakeVectorPartitionReadCoordinatorV1) {
+	tb.Helper()
+	catalog, err := raftplacement.Validate(raftplacement.CatalogV1{
+		Features: raftplacement.DefaultFeatureSet(),
+		Groups: []raftplacement.GroupV1{
+			{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"},
+			{ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"},
+		},
+		Placements: []raftplacement.CollectionPlacementV1{{
+			Collection: raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "docs"},
+			GroupID:    "group-a",
+			Mode:       raftplacement.PlacementModeCollectionV1,
+		}},
+	})
+	if err != nil {
+		tb.Fatalf("catalog: %v", err)
+	}
+	placement := raftplacement.VectorPartitionPlacementRecordV1{
+		Collection:            raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "docs"},
+		IndexName:             "embedding",
+		IndexDefinitionDigest: vectorPartitionShardSearchDigestTestV1,
+		SourceGeneration:      11,
+		SourceChecksum:        22,
+		SourceSchemaHash:      33,
+		SourceRowCount:        5,
+		PartitionGeneration:   7,
+		PartitionCount:        uint32(len(parts)),
+		Partitions:            append([]raftplacement.VectorPartitionGroupV1(nil), parts...),
+	}
+	manifestParts := make([]collections.VectorPartitionPlacementV1, len(parts))
+	for i, part := range parts {
+		manifestParts[i] = collections.VectorPartitionPlacementV1{PartitionID: part.PartitionID, GroupID: string(part.GroupID)}
+	}
+	source := &fakeVectorPartitionGenerationSourceV1{
+		manifest: collections.VectorPartitionManifestV1{
+			Format:                collections.VectorPartitionManifestFormatV1,
+			State:                 "ready",
+			Collection:            "docs",
+			IndexName:             "embedding",
+			IndexDefinitionDigest: vectorPartitionShardSearchDigestTestV1,
+			SourceGeneration:      11,
+			SourceChecksum:        22,
+			SourceSchemaHash:      33,
+			SourceRowCount:        5,
+			Generation:            7,
+			RouterGeneration:      7,
+			PartitionCount:        uint32(len(parts)),
+			Placements:            manifestParts,
+		},
+		assets:    assets,
+		openErr:   make(map[uint32]error),
+		searchers: make(map[uint32]*collections.VectorPartitionLocalSearcherV1),
+	}
+	coordinator := &fakeVectorPartitionReadCoordinatorV1{
+		proof: raftcluster.ReadIndexProof{
+			NodeID: "node-a", GroupID: "group-a", Term: 3, Index: 41,
+			HasQuorum: true, EvidenceKind: raftcluster.ReadIndexEvidenceProduction,
+		},
+		progress: raftcluster.AppliedProgress{
+			NodeID: "node-a", GroupID: "group-a", Term: 3, Index: 43, HasApplied: true,
+		},
+	}
+	service, err := NewVectorPartitionShardSearchServiceV1(VectorPartitionShardSearchServiceOptionsV1{
+		Catalog:          catalog,
+		Placement:        placement,
+		LocalNodeID:      "node-a",
+		LocalGroupID:     "group-a",
+		ReadCoordinator:  coordinator,
+		GenerationSource: source,
+	})
+	if err != nil {
+		tb.Fatalf("service: %v", err)
+	}
+	return service, source, coordinator
+}
+
+func vectorPartitionShardSearchAssetTestV1(partition uint32, ids []string, vectors [][]float32) collections.VectorPartitionSearchAssetV1 {
+	return collections.VectorPartitionSearchAssetV1{
+		ManifestChecksum: vectorPartitionShardSearchDigestTestV1,
+		Generation:       7,
+		PartitionID:      partition,
+		Dimensions:       len(vectors[0]),
+		IDs:              append([]string(nil), ids...),
+		Vectors:          vectors,
+		Kinds:            repeatVectorPartitionMembershipKindTestV1(len(ids), collections.VectorPartitionMembershipHomeV1),
+	}
+}
+
+func repeatVectorPartitionMembershipKindTestV1(count int, kind collections.VectorPartitionMembershipKindV1) []collections.VectorPartitionMembershipKindV1 {
+	out := make([]collections.VectorPartitionMembershipKindV1, count)
+	for i := range out {
+		out[i] = kind
+	}
+	return out
+}
+
+func vectorPartitionShardSearchRequestTestV1(partitions []uint32) VectorPartitionShardSearchRequestV1 {
+	return VectorPartitionShardSearchRequestV1{
+		Version:               1,
+		RequestID:             "request-1",
+		CancellationID:        "cancel-1",
+		Database:              "default",
+		Catalog:               "default",
+		Collection:            "docs",
+		IndexName:             "embedding",
+		IndexDefinitionDigest: vectorPartitionShardSearchDigestTestV1,
+		SourceGeneration:      11,
+		SourceChecksum:        22,
+		SourceSchemaHash:      33,
+		SourceRowCount:        5,
+		PartitionGeneration:   7,
+		RouterGeneration:      7,
+		TargetGroupID:         "group-a",
+		TargetNodeID:          "node-a",
+		PartitionIDs:          append([]uint32(nil), partitions...),
+		Query:                 []float32{1, 0},
+		Metric:                VectorPartitionShardSearchMetricCosineV1,
+		Mode:                  VectorPartitionShardSearchModeNoDocumentV1,
+		Consistency:           VectorPartitionShardSearchConsistencySnapshotV1,
+		StatsMode:             VectorPartitionShardSearchStatsBasicV1,
+		TopK:                  2,
+		EfSearch:              4,
+		RequestBytesLimit:     64 << 10,
+		CandidateBytesLimit:   1 << 20,
+		ResponseBytesLimit:    1 << 20,
+	}
+}
+
+func assertVectorPartitionShardSearchCodeV1(tb testing.TB, err error, want VectorPartitionShardSearchErrorCodeV1) {
+	tb.Helper()
+	if err == nil {
+		tb.Fatalf("err=nil want code %q", want)
+	}
+	var serviceErr *VectorPartitionShardSearchErrorV1
+	if !errors.As(err, &serviceErr) || serviceErr.Code != want {
+		tb.Fatalf("err=%v code=%q want %q", err, serviceErr.Code, want)
+	}
+	if strings.TrimSpace(err.Error()) == "" {
+		tb.Fatal("empty stable error")
+	}
+}
+
+func vectorPartitionShardSearchResponseZeroTestV1(response VectorPartitionShardSearchResponseV1) bool {
+	return response.Version == 0 && response.RequestID == "" && len(response.Partials) == 0 &&
+		response.Partitions == 0 && response.Candidates == 0 && response.Edges == 0 &&
+		response.ResponseBytes == 0 && response.Proof == (VectorPartitionShardSearchProofV1{})
+}
+
+func vectorPartitionShardPercentileTestV1(sortedValues []uint64, percentile int) uint64 {
+	if len(sortedValues) == 0 {
+		return 0
+	}
+	index := (len(sortedValues)*percentile + 99) / 100
+	if index < 1 {
+		index = 1
+	}
+	if index > len(sortedValues) {
+		index = len(sortedValues)
+	}
+	return sortedValues[index-1]
+}
+
+func waitVectorPartitionShardConditionV1(tb testing.TB, condition func() bool) {
+	tb.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	tb.Fatal("condition did not become true")
+}

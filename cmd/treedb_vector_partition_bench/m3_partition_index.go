@@ -90,6 +90,7 @@ type m3PartitionIndexRow struct {
 	MissingAssets                uint64  `json:"missing_assets"`
 	CorruptAssets                uint64  `json:"corrupt_assets"`
 	StaleAssets                  uint64  `json:"stale_assets"`
+	PersistentDBDir              string  `json:"persistent_db_dir,omitempty"`
 }
 
 func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vectorpartition.Artifact, artifactDigest, suffix string, vectors, queries [][]float64, stdout io.Writer) error {
@@ -189,13 +190,15 @@ func openM3PartitionSearchers(count int, open func(uint32) (*collections.VectorP
 }
 
 func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, generation uint64) (_ m3PartitionIndexRow, resultErr error) {
-	dir, err := os.MkdirTemp("", "treedb-vector-partition-m3-*")
+	dir, cleanup, err := m3PartitionIndexDirectory(cfg.m3PersistDir)
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
-	defer func() {
-		resultErr = errors.Join(resultErr, os.RemoveAll(dir))
-	}()
+	if cleanup {
+		defer func() {
+			resultErr = errors.Join(resultErr, os.RemoveAll(dir))
+		}()
+	}
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
 		return m3PartitionIndexRow{}, err
 	}
@@ -430,6 +433,10 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 	peakRSS, peakAvailable := m3PeakRSS()
 	resident, residentAvailable := m3ResidentBytes()
 	nsPerOp := float64(elapsed.Nanoseconds()) / float64(timedOps)
+	persistentDBDir := ""
+	if !cleanup {
+		persistentDBDir = dir
+	}
 	row := m3PartitionIndexRow{
 		Budget:                       overlap.Budget,
 		Used:                         overlap.Used,
@@ -472,8 +479,33 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 		MissingAssets:                lifecycle.MissingAssets,
 		CorruptAssets:                lifecycle.CorruptAssets,
 		StaleAssets:                  lifecycle.StaleAssets,
+		PersistentDBDir:              persistentDBDir,
 	}
 	return row, nil
+}
+
+func m3PartitionIndexDirectory(persist string) (dir string, cleanup bool, err error) {
+	if persist == "" {
+		dir, err = os.MkdirTemp("", "treedb-vector-partition-m3-*")
+		return dir, true, err
+	}
+	dir, err = filepath.Abs(persist)
+	if err != nil {
+		return "", false, err
+	}
+	entries, readErr := os.ReadDir(dir)
+	switch {
+	case readErr == nil && len(entries) != 0:
+		return "", false, fmt.Errorf("M3 persistent DB directory %q must be empty", dir)
+	case readErr == nil:
+	case errors.Is(readErr, os.ErrNotExist):
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return "", false, err
+		}
+	default:
+		return "", false, readErr
+	}
+	return dir, false, nil
 }
 
 func insertM3SourceRows(col *collections.Collection, vectors [][]float64) error {

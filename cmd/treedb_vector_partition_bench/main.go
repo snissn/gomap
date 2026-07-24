@@ -72,6 +72,7 @@ type config struct {
 	hnsw         *treeDBPartitionHNSW
 	memory       benchmarkMemoryPlan
 	stage        string
+	m3PersistDir string
 	partition    vectorpartition.Config
 }
 
@@ -274,7 +275,77 @@ func currentBenchmarkRuntimeCapabilities() benchmarkRuntimeCapabilities {
 }
 
 func run(args []string, stdout io.Writer) error {
+	if len(args) > 0 && args[0] == "generate-fixture" {
+		return runGenerateFixture(args[1:], stdout)
+	}
 	return runWithRuntimeCapabilities(args, stdout, currentBenchmarkRuntimeCapabilities())
+}
+
+func runGenerateFixture(args []string, stdout io.Writer) error {
+	var (
+		out        string
+		vectors    int
+		queries    int
+		dimensions int
+		seed       int64
+	)
+	fs := flag.NewFlagSet("treedb_vector_partition_bench generate-fixture", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&out, "out", "", "fixture directory")
+	fs.IntVar(&vectors, "vectors", 0, "number of deterministic corpus vectors")
+	fs.IntVar(&queries, "queries", 1, "number of deterministic queries")
+	fs.IntVar(&dimensions, "dimensions", 16, "vector dimensions")
+	fs.Int64Var(&seed, "seed", 1, "fixture generation seed")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || out == "" || vectors < 1 || vectors > maxVectors || queries < 1 || queries > maxVectors || dimensions < 1 || dimensions > maxDimensions {
+		return errors.New("generate-fixture requires -out and positive bounded vectors, queries, and dimensions")
+	}
+	rows := int64(vectors) + int64(queries)
+	if rows > maxFixtureBytes/(int64(dimensions)*8) {
+		return fmt.Errorf("generated fixture float64 data exceeds %d-byte cap", maxFixtureBytes)
+	}
+	manifest := fixtureManifest{
+		SchemaVersion: schemaVersion,
+		Fixture:       fmt.Sprintf("deterministic_%d", vectors),
+		Generator:     fixtureGenerator,
+		Arithmetic:    fixtureArithmetic,
+		Vectors:       vectors,
+		Queries:       queries,
+		Dimensions:    dimensions,
+		Metric:        "cosine",
+		Seed:          seed,
+	}
+	corpus, querySet := deterministicFixture(manifest)
+	manifest.Checksum = fixtureChecksumFromData(corpus, querySet)
+	if err := validateM3FixtureWithCaps(manifest, maxVectors, maxFixtureBytes); err != nil {
+		return err
+	}
+	dir, err := filepath.Abs(out)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	raw, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	raw = append(raw, '\n')
+	path := filepath.Join(dir, "fixture_manifest.json")
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return fmt.Errorf("create fixture manifest: %w", err)
+	}
+	_, writeErr := file.Write(raw)
+	closeErr := file.Close()
+	if writeErr != nil || closeErr != nil {
+		return errors.Join(writeErr, closeErr)
+	}
+	_, err = fmt.Fprintf(stdout, "fixture=%s vectors=%d queries=%d dimensions=%d checksum=%s\n", path, vectors, queries, dimensions, manifest.Checksum)
+	return err
 }
 
 func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities benchmarkRuntimeCapabilities) (runErr error) {
@@ -295,6 +366,8 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 	}
 	if cfg.stage == "partition" {
 		err = validatePartitionFixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes)
+	} else if cfg.stage == "overlap,partition_index" {
+		err = validateM3FixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes)
 	} else {
 		err = validateFixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes)
 	}
@@ -401,6 +474,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.format, "format", cfg.format, "json or text")
 	fs.StringVar(&cfg.out, "out", "", "artifact directory")
 	fs.StringVar(&cfg.stage, "stage", cfg.stage, "simulation, partition, or overlap,partition_index")
+	fs.StringVar(&cfg.m3PersistDir, "m3-persist-db", "", "retain the single overlap,partition_index row as a persistent TreeDB directory for downstream service benchmarks")
 	fs.IntVar(&cfg.partition.Repetitions, "partition-repetitions", cfg.partition.Repetitions, "dense-ball graph sketch repetitions")
 	fs.IntVar(&cfg.partition.Pivots, "partition-pivots", cfg.partition.Pivots, "dense-ball pivots per recursive level")
 	fs.IntVar(&cfg.partition.MaxLeafBucket, "partition-max-leaf-bucket", cfg.partition.MaxLeafBucket, "maximum dense-ball leaf bucket")
@@ -440,6 +514,9 @@ func parseConfig(args []string) (config, error) {
 		if x < 0 || x > 1 || math.IsNaN(x) || math.IsInf(x, 0) {
 			return config{}, errors.New("overlap must be finite in [0,1]")
 		}
+	}
+	if cfg.m3PersistDir != "" && (cfg.stage != "overlap,partition_index" || len(cfg.overlaps) != 1) {
+		return config{}, errors.New("-m3-persist-db requires stage overlap,partition_index with exactly one overlap ratio")
 	}
 	cfg.stages = stageSet(stages)
 	if len(cfg.stages) == 0 {
@@ -723,6 +800,24 @@ func validatePartitionFixtureWithCaps(m fixtureManifest, capVectors int, capByte
 	}
 	if int64(m.Vectors) > capBytes/(int64(m.Dimensions)*8) {
 		return errors.New("partition vector data exceeds pre-allocation memory cap")
+	}
+	return nil
+}
+
+// validateM3FixtureWithCaps permits the declared 1M-vector corpus plus a
+// separately bounded query set. Unlike simulation mode, M3's corpus cap is a
+// vector count rather than a combined vector/query count; the byte cap still
+// covers both generated matrices before allocation.
+func validateM3FixtureWithCaps(m fixtureManifest, capVectors int, capBytes int64) error {
+	if err := validateFixtureSyntax(m, capVectors); err != nil {
+		return err
+	}
+	if m.Queries > capVectors {
+		return errors.New("unsupported or malformed fixture manifest")
+	}
+	rows := int64(m.Vectors) + int64(m.Queries)
+	if rows > capBytes/(int64(m.Dimensions)*8) {
+		return errors.New("M3 fixture float64 data exceeds pre-allocation memory cap")
 	}
 	return nil
 }

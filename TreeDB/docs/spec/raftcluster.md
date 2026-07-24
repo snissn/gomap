@@ -198,6 +198,14 @@ evidence is not production quorum evidence and the provider does not apply
 entries by itself. Harness proofs are marked `ReadIndexEvidenceTestHarness` and
 must fail closed at nativewire's production `linearizable` read boundary.
 
+Vector partition shard search V1 consumes this same generic boundary. It
+resolves one owner group from the vector partition placement record, calls
+`RoutedReadIndexCoordinator` for that group, independently validates the
+returned proof/apply target, and only then pins M3 partition assets. It does not
+add a vector-specific read proof, remote forwarding path, or consistency
+mechanism. See
+[vector-partition-shard-search-v1.md](vector-partition-shard-search-v1.md).
+
 ## Recovery Status Boundary
 
 `RecoveryStatusV1` is the report-only readiness contract for snapshot/tail

@@ -106,6 +106,62 @@ func TestFixtureArithmeticUsesExplicitFMA(t *testing.T) {
 	}
 }
 
+func TestGenerateFixtureWritesValidatedDeterministicManifestV1(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "fixture")
+	var stdout bytes.Buffer
+	if err := run([]string{
+		"generate-fixture",
+		"-out", out,
+		"-vectors", "32",
+		"-queries", "2",
+		"-dimensions", "8",
+		"-seed", "7",
+	}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := loadFixture(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Vectors != 32 || manifest.Queries != 2 || manifest.Dimensions != 8 || manifest.Seed != 7 {
+		t.Fatalf("manifest=%+v", manifest)
+	}
+	vectors, queries := deterministicFixture(manifest)
+	if got := fixtureChecksumFromData(vectors, queries); got != manifest.Checksum {
+		t.Fatalf("checksum=%s want %s", manifest.Checksum, got)
+	}
+	if err := validateM3FixtureWithCaps(manifest, maxVectors, maxFixtureBytes); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), filepath.Join(out, "fixture_manifest.json")) {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+	if err := run([]string{"generate-fixture", "-out", out, "-vectors", "32"}, io.Discard); err == nil {
+		t.Fatal("fixture generator overwrote an existing manifest")
+	}
+}
+
+func TestM3FixtureAllowsMillionVectorsPlusBoundedQueriesV1(t *testing.T) {
+	manifest := fixtureManifest{
+		SchemaVersion: schemaVersion,
+		Fixture:       "million",
+		Generator:     fixtureGenerator,
+		Arithmetic:    fixtureArithmetic,
+		Vectors:       1_000_000,
+		Queries:       1,
+		Dimensions:    16,
+		Metric:        "cosine",
+		Seed:          1,
+		Checksum:      strings.Repeat("0", 64),
+	}
+	if err := validateM3FixtureWithCaps(manifest, maxVectors, maxFixtureBytes); err != nil {
+		t.Fatalf("declared 1M M3 fixture rejected: %v", err)
+	}
+	if err := validateFixtureWithCaps(manifest, maxVectors, maxFixtureBytes); err == nil {
+		t.Fatal("simulation combined-count cap unexpectedly accepted 1M plus a query")
+	}
+}
+
 func TestPartitionStageWritesValidatedDeterministicArtifact(t *testing.T) {
 	dataset := writeFixtureForTest(t, 16, 2, 4)
 	args := []string{"-dataset", dataset, "-out", t.TempDir(), "-partitions", "4", "-probes", "1", "-stage", "partition", "-partition-repetitions", "1", "-partition-pivots", "2", "-partition-max-leaf-bucket", "4", "-partition-degree", "2"}
@@ -229,6 +285,35 @@ func TestM3PartitionAssetFileIDBounds(t *testing.T) {
 	}
 	if _, err := m3PartitionAssetFileID(maxGeneration + 1); err == nil {
 		t.Fatal("overflowing generation accepted")
+	}
+}
+
+func TestM3PartitionIndexPersistentDirectoryIsExplicitAndEmptyV1(t *testing.T) {
+	root := t.TempDir()
+	persist := filepath.Join(root, "persistent")
+	got, cleanup, err := m3PartitionIndexDirectory(persist)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleanup || got != persist {
+		t.Fatalf("persistent directory=%q cleanup=%t", got, cleanup)
+	}
+	if err := os.WriteFile(filepath.Join(persist, "occupied"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := m3PartitionIndexDirectory(persist); err == nil {
+		t.Fatal("non-empty persistent directory accepted")
+	}
+	if _, err := parseConfig([]string{
+		"-dataset", fixturePath(t),
+		"-out", t.TempDir(),
+		"-partitions", "4",
+		"-probes", "1",
+		"-overlap", "0,0.2",
+		"-stage", "overlap,partition_index",
+		"-m3-persist-db", filepath.Join(root, "invalid-multiple"),
+	}); err == nil {
+		t.Fatal("persistent M3 DB accepted multiple overlap rows")
 	}
 }
 

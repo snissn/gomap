@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
@@ -29,6 +30,38 @@ func TestVectorPartitionLocalSearcherV1ExactStableIDsAndPins(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestVectorPartitionLocalSearcherV1ExplicitOptionsAndCancellation(t *testing.T) {
+	asset := VectorPartitionSearchAssetV1{
+		ManifestChecksum: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Generation:       1,
+		PartitionID:      2,
+		Dimensions:       2,
+		IDs:              []string{"a", "b"},
+		Vectors:          [][]float32{{1, 0}, {0, 1}},
+		Kinds:            []VectorPartitionMembershipKindV1{VectorPartitionMembershipHomeV1, VectorPartitionMembershipHomeV1},
+	}
+	searcher, err := OpenVectorPartitionLocalSearcherV1(asset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, metrics, err := searcher.SearchWithOptionsV1(context.Background(), []float32{1, 0}, VectorPartitionSearchOptionsV1{
+		TopK:     1,
+		EfSearch: 2,
+	})
+	if err != nil || len(results) != 1 || results[0].ID != "a" || metrics.Candidates != 2 {
+		t.Fatalf("results=%+v metrics=%+v err=%v", results, metrics, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := searcher.SearchWithOptionsV1(ctx, []float32{1, 0}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 2}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled search err=%v", err)
+	}
+	if status := searcher.Status(); status.ActivePins != 0 {
+		t.Fatalf("canceled search leaked pins: %+v", status)
+	}
+}
+
 func TestVectorPartitionLocalSearcherV1FailsClosed(t *testing.T) {
 	_, e := OpenVectorPartitionLocalSearcherV1(VectorPartitionSearchAssetV1{ManifestChecksum: "bad", Generation: 1, Dimensions: 1, IDs: []string{"x", "x"}, Vectors: [][]float32{{1}, {1}}, Kinds: []VectorPartitionMembershipKindV1{VectorPartitionMembershipHomeV1, VectorPartitionMembershipHomeV1}})
 	if !errors.Is(e, ErrVectorPartitionSearchUnavailable) {

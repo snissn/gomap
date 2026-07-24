@@ -4,6 +4,7 @@ package collections
 // can be carried by a serving group without claiming canonical-row ownership.
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -53,6 +54,15 @@ type VectorPartitionSearchMetricsV1 struct {
 	Candidates uint64
 	Edges      uint64
 	Route      string
+}
+
+// VectorPartitionSearchOptionsV1 is the bounded M3 no-document search
+// contract consumed by routed serving layers. EfSearch is applied by the
+// native HNSW pack. The exact in-memory fallback validates it but does not need
+// a traversal frontier.
+type VectorPartitionSearchOptionsV1 struct {
+	TopK     int
+	EfSearch int
 }
 
 const (
@@ -263,7 +273,7 @@ func (s *VectorPartitionLocalSearcherV1) Retire() error {
 	return nil
 }
 func (s *VectorPartitionLocalSearcherV1) Search(query []float32, topK int) ([]VectorPartitionSearchResultV1, error) {
-	results, _, err := s.SearchWithMetrics(query, topK)
+	results, _, err := s.SearchWithOptionsV1(context.Background(), query, VectorPartitionSearchOptionsV1{TopK: topK})
 	return results, err
 }
 
@@ -271,11 +281,26 @@ func (s *VectorPartitionLocalSearcherV1) Search(query []float32, topK int) ([]Ve
 // Search and returns native candidate/edge accounting for benchmark and status
 // attribution.
 func (s *VectorPartitionLocalSearcherV1) SearchWithMetrics(query []float32, topK int) ([]VectorPartitionSearchResultV1, VectorPartitionSearchMetricsV1, error) {
+	return s.SearchWithOptionsV1(context.Background(), query, VectorPartitionSearchOptionsV1{TopK: topK})
+}
+
+// SearchWithOptionsV1 executes M3's authoritative no-document path with an
+// explicit HNSW candidate frontier. It observes cancellation before acquiring
+// resources and before returning results. Serving layers that need to abandon
+// an in-flight native traversal may call this method in a goroutine: Close
+// defers the persistent generation-pin release until the search pin exits.
+func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context, query []float32, opts VectorPartitionSearchOptionsV1) ([]VectorPartitionSearchResultV1, VectorPartitionSearchMetricsV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, VectorPartitionSearchMetricsV1{}, err
+	}
 	if err := s.Acquire(); err != nil {
 		return nil, VectorPartitionSearchMetricsV1{}, err
 	}
 	defer s.Release()
-	if topK < 1 || len(query) != s.asset.Dimensions {
+	if opts.TopK < 1 || opts.EfSearch < 0 || len(query) != s.asset.Dimensions {
 		s.recordFailure()
 		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: query bounds", ErrVectorPartitionSearchUnavailable)
 	}
@@ -292,10 +317,14 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithMetrics(query []float32, topK
 		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: zero query", ErrVectorPartitionSearchUnavailable)
 	}
 	if s.prepared != nil {
-		results, stats, err := s.prepared.searchCosine(query, columnVectorGraphNativeSearchOptions{TopK: topK}, &columnVectorGraphNativeSearchScratch{})
+		results, stats, err := s.prepared.searchCosine(query, columnVectorGraphNativeSearchOptions{TopK: opts.TopK, EfSearch: opts.EfSearch}, &columnVectorGraphNativeSearchScratch{})
 		if err != nil {
 			s.recordFailure()
 			return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: native HNSW: %v", ErrVectorPartitionSearchUnavailable, err)
+		}
+		if err := ctx.Err(); err != nil {
+			s.recordFailure()
+			return nil, VectorPartitionSearchMetricsV1{}, err
 		}
 		out := make([]VectorPartitionSearchResultV1, len(results))
 		for i, r := range results {
@@ -327,8 +356,12 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithMetrics(query []float32, topK
 		}
 		return out[i].ID < out[j].ID
 	})
-	if topK < len(out) {
-		out = out[:topK]
+	if err := ctx.Err(); err != nil {
+		s.recordFailure()
+		return nil, VectorPartitionSearchMetricsV1{}, err
+	}
+	if opts.TopK < len(out) {
+		out = out[:opts.TopK]
 	}
 	s.mu.Lock()
 	s.searches++
