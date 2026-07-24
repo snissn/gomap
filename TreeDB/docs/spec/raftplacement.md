@@ -236,6 +236,17 @@ and token partitions; therefore equivalent input has one byte representation
 and digest. The command envelope carries `ExpectedEpoch`: exact committed bytes
 are idempotent, stale writers, skipped epochs, and different bytes for a
 committed epoch fail closed.
+Because M4A does not include a migration or rebalance workflow, generation
+changes also preserve the topology of every existing catalog entry. An
+existing group cannot be removed or change members, and an existing placement
+cannot be removed or change mode, collection owner, route key, or token
+partitions. Such a committed command returns
+`ErrCatalogMetaTopologyChange` before replacing the resolved state; forward
+snapshot installation enforces the same rule. Compatible feature/version
+metadata, leader hints, and additive groups or placements remain valid. A
+future topology-changing generation must first define an explicit workflow
+that transfers data, apply progress, and idempotency state before route
+publication.
 The bounded v1 payload limits command and snapshot bytes, nesting, JSON
 objects/arrays, numeric tokens, strings, groups, members, features, placements,
 and per-placement plus aggregate token partitions. Command, record, and
@@ -292,6 +303,8 @@ The conservative failure matrix is:
   after Raft enqueue is `ErrCommitAmbiguous`;
 - replay of the exact command is idempotent, while stale, skipped, conflicting,
   partial, or mixed generations fail closed;
+- owner, member, mode, route-key, partition, removal, or other existing-entry
+  topology changes fail closed until an explicit migration workflow exists;
 - failover can commit the next generation, and rejoin/reopen restores or catches
   up monotonically;
 - unsupported fixed voters fail provider open before local apply or routing;

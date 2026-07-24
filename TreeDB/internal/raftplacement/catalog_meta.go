@@ -41,6 +41,7 @@ var (
 	ErrCatalogMetaStaleEpoch     = errors.New("raftplacement: stale catalog meta epoch")
 	ErrCatalogMetaSkippedEpoch   = errors.New("raftplacement: skipped catalog meta epoch")
 	ErrCatalogMetaConflict       = errors.New("raftplacement: conflicting catalog meta epoch")
+	ErrCatalogMetaTopologyChange = errors.New("raftplacement: catalog meta topology change requires migration")
 	ErrCatalogMetaDigestMismatch = errors.New("raftplacement: catalog meta digest mismatch")
 	ErrCatalogMetaProofMissing   = errors.New("raftplacement: catalog meta proof missing")
 	ErrCatalogMetaRouteMismatch  = errors.New("raftplacement: catalog meta route mismatch")
@@ -306,6 +307,11 @@ func (a *CatalogMetaAuthorityV1) applyCommittedCatalogMetaV1(raw []byte, applied
 	if err != nil {
 		return CatalogMetaStatusV1{}, err
 	}
+	if a.record.Epoch != 0 {
+		if err := validateCatalogMetaTopologyTransitionV1(a.resolved, resolved); err != nil {
+			return CatalogMetaStatusV1{}, err
+		}
+	}
 	a.record = command.Record
 	a.resolved = resolved
 	a.recordBytes, _ = encodeCatalogMetaRecordV1(command.Record)
@@ -526,6 +532,11 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 		}
 		return a.statusLocked(), nil
 	}
+	if a.record.Epoch != 0 {
+		if err := validateCatalogMetaTopologyTransitionV1(a.resolved, resolved); err != nil {
+			return CatalogMetaStatusV1{}, err
+		}
+	}
 	a.record = record
 	a.resolved = resolved
 	a.recordBytes = bytes.Clone(snapshot.Record)
@@ -720,4 +731,99 @@ func canonicalCatalogMetaCatalogV1(c CatalogV1) (CatalogV1, ResolvedCatalogV1, e
 		}
 	}
 	return canonical, resolved, nil
+}
+
+// validateCatalogMetaTopologyTransitionV1 enforces the M4A no-migration
+// boundary. Existing ownership and membership may not change until an
+// explicit migration workflow can transfer data, apply progress, and
+// idempotency state before publishing the new route. Metadata-only updates and
+// new groups or placements remain valid.
+func validateCatalogMetaTopologyTransitionV1(current, next ResolvedCatalogV1) error {
+	for _, group := range current.Groups {
+		nextGroup, ok := next.groups[group.ID]
+		if !ok {
+			return catalogMetaTopologyChangeV1("group %q was removed", group.ID)
+		}
+		if !equalCatalogMetaMembersV1(group.Members, nextGroup.Members) {
+			return catalogMetaTopologyChangeV1("group %q members changed", group.ID)
+		}
+	}
+	for _, placement := range current.Placements {
+		nextPlacement, ok := next.placements[placement.Collection]
+		if !ok {
+			return catalogMetaTopologyChangeV1(
+				"placement %s/%s/%s was removed",
+				placement.Collection.Database,
+				placement.Collection.Catalog,
+				placement.Collection.Collection,
+			)
+		}
+		if placement.Mode != nextPlacement.Mode {
+			return catalogMetaTopologyChangeV1(
+				"placement %s/%s/%s mode changed from %q to %q",
+				placement.Collection.Database,
+				placement.Collection.Catalog,
+				placement.Collection.Collection,
+				placement.Mode,
+				nextPlacement.Mode,
+			)
+		}
+		if placement.GroupID != nextPlacement.GroupID {
+			return catalogMetaTopologyChangeV1(
+				"placement %s/%s/%s owner changed from %q to %q",
+				placement.Collection.Database,
+				placement.Collection.Catalog,
+				placement.Collection.Collection,
+				placement.GroupID,
+				nextPlacement.GroupID,
+			)
+		}
+		if placement.RouteKey != nextPlacement.RouteKey {
+			return catalogMetaTopologyChangeV1(
+				"placement %s/%s/%s route key changed from %q to %q",
+				placement.Collection.Database,
+				placement.Collection.Catalog,
+				placement.Collection.Collection,
+				placement.RouteKey,
+				nextPlacement.RouteKey,
+			)
+		}
+		if !equalCatalogMetaPartitionsV1(placement.TokenPartitions, nextPlacement.TokenPartitions) {
+			return catalogMetaTopologyChangeV1(
+				"placement %s/%s/%s partitions changed",
+				placement.Collection.Database,
+				placement.Collection.Catalog,
+				placement.Collection.Collection,
+			)
+		}
+	}
+	return nil
+}
+
+func catalogMetaTopologyChangeV1(format string, args ...any) error {
+	return errors.Join(ErrCatalogMetaConflict, ErrCatalogMetaTopologyChange, fmt.Errorf(format, args...))
+}
+
+func equalCatalogMetaMembersV1(a, b []raftcluster.NodeID) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalCatalogMetaPartitionsV1(a, b []ResolvedTokenPartitionV1) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

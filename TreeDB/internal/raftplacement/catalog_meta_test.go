@@ -162,6 +162,201 @@ func TestCatalogMetaRejectsStaleSkippedAndConflictingEpoch(t *testing.T) {
 	}
 }
 
+func TestCatalogMetaTopologyTransitionsFailClosedWithoutMigration(t *testing.T) {
+	tokenRef := CollectionRefV1{Database: DefaultDatabase, Catalog: DefaultCatalog, Collection: "events"}
+	base := validCatalog()
+	base.Features = DefaultFeatureSet()
+	base.Placements = append(base.Placements, tokenPlacement(tokenRef, PlacementModeTokenV1))
+
+	tests := []struct {
+		name   string
+		mutate func(*CatalogV1)
+		want   error
+		check  func(*testing.T, *CatalogMetaAuthorityV1, CatalogMetaStatusV1)
+	}{
+		{
+			name: "leader hint metadata update",
+			mutate: func(c *CatalogV1) {
+				c.Groups[0].LeaderHint = "node-c"
+			},
+			check: func(t *testing.T, authority *CatalogMetaAuthorityV1, status CatalogMetaStatusV1) {
+				decision := routeCatalogMetaCollectionV1(t, authority, status, CollectionRefV1{
+					Database: DefaultDatabase, Catalog: DefaultCatalog, Collection: "users",
+				})
+				if decision.LeaderHint() != "node-c" {
+					t.Fatalf("leader hint=%q want node-c", decision.LeaderHint())
+				}
+			},
+		},
+		{
+			name: "canonical feature defaults",
+			mutate: func(c *CatalogV1) {
+				c.Features = raftcluster.FeatureSet{}
+			},
+		},
+		{
+			name: "add group and placement",
+			mutate: func(c *CatalogV1) {
+				c.Groups = append(c.Groups, GroupV1{
+					ID: "group-c", Members: []raftcluster.NodeID{"node-c", "node-d"}, LeaderHint: "node-c",
+				})
+				c.Placements = append(c.Placements, CollectionPlacementV1{
+					Collection: CollectionRefV1{Database: DefaultDatabase, Catalog: DefaultCatalog, Collection: "audit"},
+					GroupID:    "group-c",
+				})
+			},
+			check: func(t *testing.T, authority *CatalogMetaAuthorityV1, status CatalogMetaStatusV1) {
+				decision := routeCatalogMetaCollectionV1(t, authority, status, CollectionRefV1{
+					Database: DefaultDatabase, Catalog: DefaultCatalog, Collection: "audit",
+				})
+				if decision.GroupID() != "group-c" {
+					t.Fatalf("new placement group=%q want group-c", decision.GroupID())
+				}
+			},
+		},
+		{
+			name: "change collection owner",
+			mutate: func(c *CatalogV1) {
+				c.Placements[0].GroupID = "group-b"
+			},
+			want: ErrCatalogMetaTopologyChange,
+		},
+		{
+			name: "change group members",
+			mutate: func(c *CatalogV1) {
+				c.Groups[0].Members = append(c.Groups[0].Members, "node-d")
+			},
+			want: ErrCatalogMetaTopologyChange,
+		},
+		{
+			name: "remove group and its placements",
+			mutate: func(c *CatalogV1) {
+				c.Groups = c.Groups[:1]
+				c.Placements = c.Placements[:1]
+			},
+			want: ErrCatalogMetaTopologyChange,
+		},
+		{
+			name: "remove placement",
+			mutate: func(c *CatalogV1) {
+				c.Placements = c.Placements[1:]
+			},
+			want: ErrCatalogMetaTopologyChange,
+		},
+		{
+			name: "change placement mode",
+			mutate: func(c *CatalogV1) {
+				c.Placements[2].Mode = PlacementModeRingV1
+			},
+			want: ErrCatalogMetaTopologyChange,
+		},
+		{
+			name: "change partition owner",
+			mutate: func(c *CatalogV1) {
+				c.Placements[2].TokenPartitions[0].GroupID = "group-b"
+			},
+			want: ErrCatalogMetaTopologyChange,
+		},
+		{
+			name: "change partition boundary",
+			mutate: func(c *CatalogV1) {
+				c.Placements[2].TokenPartitions[0].End--
+				c.Placements[2].TokenPartitions[1].Start--
+			},
+			want: ErrCatalogMetaTopologyChange,
+		},
+		{
+			name: "change partition identity",
+			mutate: func(c *CatalogV1) {
+				c.Placements[2].TokenPartitions[0].ID = "token-replacement"
+			},
+			want: ErrCatalogMetaTopologyChange,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			authority := NewCatalogMetaAuthorityV1()
+			if _, err := authority.applyCommittedCatalogMetaV1(mustCatalogMetaCommand(t, 0, 1, base), 1); err != nil {
+				t.Fatalf("apply base: %v", err)
+			}
+			before, _ := authority.Status()
+			next := cloneCatalog(base)
+			tc.mutate(&next)
+			status, err := authority.applyCommittedCatalogMetaV1(mustCatalogMetaCommand(t, 1, 2, next), 2)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("apply transition error=%v want errors.Is(%v)", err, tc.want)
+			}
+			if tc.want != nil {
+				after, _ := authority.Status()
+				if after.Epoch != before.Epoch || after.Digest != before.Digest || after.AppliedIndex != before.AppliedIndex {
+					t.Fatalf("refused transition published state: before=%+v after=%+v", before, after)
+				}
+				decision := routeCatalogMetaCollectionV1(t, authority, after, CollectionRefV1{
+					Database: DefaultDatabase, Catalog: DefaultCatalog, Collection: "users",
+				})
+				if decision.GroupID() != "group-a" {
+					t.Fatalf("refused transition route group=%q want group-a", decision.GroupID())
+				}
+				return
+			}
+			if status.Epoch != 2 || status.AppliedIndex != 2 {
+				t.Fatalf("allowed transition status=%+v", status)
+			}
+			if tc.check != nil {
+				tc.check(t, authority, status)
+			}
+		})
+	}
+}
+
+func TestCatalogMetaForwardSnapshotRejectsTopologyChangeOnLiveAuthority(t *testing.T) {
+	target := NewCatalogMetaAuthorityV1()
+	if _, err := target.applyCommittedCatalogMetaV1(mustCatalogMetaCommand(t, 0, 1, validCatalog()), 1); err != nil {
+		t.Fatalf("apply target base: %v", err)
+	}
+	before, _ := target.Status()
+
+	next := validCatalog()
+	next.Placements[0].GroupID = "group-b"
+	record, err := NewCatalogMetaRecordV1(2, next)
+	if err != nil {
+		t.Fatalf("build snapshot record: %v", err)
+	}
+	recordBytes, err := encodeCatalogMetaRecordV1(record)
+	if err != nil {
+		t.Fatalf("encode snapshot record: %v", err)
+	}
+	command, err := EncodeCatalogMetaCommandV1(CatalogMetaCommandV1{ExpectedEpoch: 1, Record: record})
+	if err != nil {
+		t.Fatalf("encode snapshot command: %v", err)
+	}
+	_, err = target.installCatalogMetaSnapshotV1(CatalogMetaSnapshotV1{
+		Format:       CatalogMetaFormatV1,
+		AppliedIndex: 2,
+		Record:       recordBytes,
+		LastCommand:  command,
+	})
+	if !errors.Is(err, ErrCatalogMetaTopologyChange) {
+		t.Fatalf("install topology-changing snapshot error=%v want ErrCatalogMetaTopologyChange", err)
+	}
+	after, _ := target.Status()
+	if after.Epoch != before.Epoch || after.Digest != before.Digest || after.AppliedIndex != before.AppliedIndex {
+		t.Fatalf("refused snapshot published state: before=%+v after=%+v", before, after)
+	}
+}
+
+func routeCatalogMetaCollectionV1(t *testing.T, authority *CatalogMetaAuthorityV1, status CatalogMetaStatusV1, ref CollectionRefV1) RouteDecisionV1 {
+	t.Helper()
+	decision, err := authority.Route(context.Background(), CatalogProofV1{
+		Epoch: status.Epoch, Digest: status.Digest,
+	}, RouteRequestV1{Collection: ref, Shape: RouteShapeCollectionV1})
+	if err != nil {
+		t.Fatalf("route %s/%s/%s: %v", ref.Database, ref.Catalog, ref.Collection, err)
+	}
+	return decision
+}
+
 func TestCatalogMetaRouteAdmissionFailsClosed(t *testing.T) {
 	a := NewCatalogMetaAuthorityV1()
 	command := mustCatalogMetaCommand(t, 0, 1, validCatalog())
@@ -438,14 +633,14 @@ func TestCatalogMetaConcurrentReadersObserveOnlyCompleteGenerations(t *testing.T
 	authority := NewCatalogMetaAuthorityV1()
 	type generation struct {
 		digest string
-		group  raftcluster.GroupID
+		leader raftcluster.NodeID
 	}
 	generations := make(map[uint64]generation)
 	var generationsMu sync.RWMutex
 	makeCatalog := func(epoch uint64) CatalogV1 {
 		catalog := validCatalog()
 		if epoch%2 == 0 {
-			catalog.Placements[0].GroupID = "group-b"
+			catalog.Groups[0].LeaderHint = "node-c"
 		}
 		return catalog
 	}
@@ -454,7 +649,7 @@ func TestCatalogMetaConcurrentReadersObserveOnlyCompleteGenerations(t *testing.T
 		t.Fatalf("apply first generation: %v", err)
 	}
 	firstStatus, _ := authority.Status()
-	generations[1] = generation{digest: firstStatus.Digest, group: "group-a"}
+	generations[1] = generation{digest: firstStatus.Digest, leader: "node-a"}
 
 	const finalEpoch = 64
 	done := make(chan struct{})
@@ -496,8 +691,12 @@ func TestCatalogMetaConcurrentReadersObserveOnlyCompleteGenerations(t *testing.T
 					errs <- err
 					return
 				}
-				if decision.GroupID() != want.group {
-					errs <- fmt.Errorf("epoch %d route group=%s want %s", status.Epoch, decision.GroupID(), want.group)
+				if decision.GroupID() != "group-a" {
+					errs <- fmt.Errorf("epoch %d route group=%s want group-a", status.Epoch, decision.GroupID())
+					return
+				}
+				if decision.LeaderHint() != want.leader {
+					errs <- fmt.Errorf("epoch %d leader hint=%s want %s", status.Epoch, decision.LeaderHint(), want.leader)
 					return
 				}
 			}
@@ -511,12 +710,12 @@ func TestCatalogMetaConcurrentReadersObserveOnlyCompleteGenerations(t *testing.T
 			readers.Wait()
 			t.Fatalf("apply epoch %d: %v", epoch, err)
 		}
-		group := raftcluster.GroupID("group-a")
+		leader := raftcluster.NodeID("node-a")
 		if epoch%2 == 0 {
-			group = "group-b"
+			leader = "node-c"
 		}
 		generationsMu.Lock()
-		generations[epoch] = generation{digest: status.Digest, group: group}
+		generations[epoch] = generation{digest: status.Digest, leader: leader}
 		generationsMu.Unlock()
 	}
 	close(done)

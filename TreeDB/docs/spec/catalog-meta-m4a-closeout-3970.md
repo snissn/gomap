@@ -11,6 +11,7 @@ scale results.
 | Surface | Evidence | Conservative result |
 | --- | --- | --- |
 | Deterministic record/command | Canonical round trip, duplicate/unknown/truncated input, digest, identity, and bounded decoder tests | One epoch has one canonical record and digest; invalid input fails before publication. |
+| Topology transition boundary | Table-driven owner/member/mode/partition/removal refusals, permitted metadata/addition cases, live forward-snapshot refusal, and real-cluster failover | Existing topology is immutable until an explicit migration workflow; a refused epoch-valid owner move does not publish or flip routes, while leader hints, compatible feature metadata, and additive entries can advance. |
 | Committed authority | `CatalogMetaRaftProviderV1` has the only usable apply/restore capabilities | Local files, static route adapters, and follower-local calls cannot activate ownership. |
 | Three fixed peers | Three real `CatalogMetaAuthorityV1` instances over HashiCorp in-memory transports and durable stores exercise follower refusal, leader loss, new-leader commit, convergence, rejoin, snapshot, and reopen | Every authority preserves exact identity, feature floors, route decisions, retry identity, and monotonic generations. |
 | Availability and cancellation | Isolated voter, pre-enqueue cancellation, and blocked post-enqueue apply | No quorum is unavailable; only a post-enqueue cancellation is reported as commit-ambiguous. |

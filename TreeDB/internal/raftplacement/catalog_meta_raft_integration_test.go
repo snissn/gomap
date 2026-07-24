@@ -96,27 +96,36 @@ func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFai
 	target.waitEpochOn(t, follower, 1)
 	target.assertAuthorityIdentityAndRoute(t, follower, 1, "group-a")
 
-	// Fail over, advance monotonically, and reject use of the old backup as a
-	// rollback mechanism on the live authority.
+	// Fail over and prove that an epoch-valid owner move still fails closed:
+	// M4A has no migration workflow that could transfer the collection data,
+	// apply progress, and idempotency state before publishing the new route.
 	target.closeNode(t, targetLeader)
 	newLeader := target.waitLeader(t)
-	command2 := mustCatalogMetaCommand(t, 1, 2, realCatalogMetaIntegrationCatalogV1("group-b"))
+	unsafeCommand2 := mustCatalogMetaCommand(t, 1, 2, realCatalogMetaIntegrationCatalogV1("group-b"))
+	if _, _, err := target.providers[newLeader].SubmitCatalogMetaCommandV1(ctx, unsafeCommand2); !errors.Is(err, ErrCatalogMetaTopologyChange) {
+		t.Fatalf("target owner move error=%v want ErrCatalogMetaTopologyChange", err)
+	}
+	target.assertEpochAndRoute(t, 1, "group-a")
+
+	// The refused log entry does not prevent a safe metadata generation from
+	// advancing monotonically, and the old backup still cannot roll it back.
+	command2 := mustCatalogMetaCommand(t, 1, 2, realCatalogMetaIntegrationCatalogV1("group-a"))
 	if _, _, err := target.providers[newLeader].SubmitCatalogMetaCommandV1(ctx, command2); err != nil {
 		t.Fatalf("target epoch 2 after failover: %v", err)
 	}
 	target.waitEpoch(t, 2)
-	target.assertEpochAndRoute(t, 2, "group-b")
+	target.assertEpochAndRoute(t, 2, "group-a")
 	if err := target.providers[newLeader].RestoreCatalogMetaBackupV1(ctx, backup); !errors.Is(err, raftcluster.ErrCatalogMetaBackupRestoreTarget) || !errors.Is(err, ErrCatalogMetaConflict) {
 		t.Fatalf("live rollback restore error=%v want restore-target conflict", err)
 	}
-	target.assertEpochAndRoute(t, 2, "group-b")
+	target.assertEpochAndRoute(t, 2, "group-a")
 
 	// Rejoin the former leader with a new real authority and prove it receives
 	// the newer snapshot/log state and exact identity.
 	target.reopenNode(t, targetLeader)
 	target.connectAll()
 	target.waitEpochOn(t, targetLeader, 2)
-	target.assertEpochAndRoute(t, 2, "group-b")
+	target.assertEpochAndRoute(t, 2, "group-a")
 }
 
 type realCatalogMetaClusterV1 struct {
