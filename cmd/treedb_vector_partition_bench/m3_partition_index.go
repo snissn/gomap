@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +28,9 @@ const (
 	// m3PartitionAssetFileIDBase reserves a benchmark-owned column-asset
 	// segment range, separate from the collection package's production ranges.
 	m3PartitionAssetFileIDBase uint64 = 40_000
+	// Router assets use a disjoint benchmark-owned segment range so the M4
+	// ready-generation publication cannot alias an M3 partition-pack segment.
+	m3RouterAssetFileIDBase uint64 = 50_000
 )
 
 type m3PartitionIndexReport struct {
@@ -160,6 +164,14 @@ func m3PartitionAssetFileID(generation uint64) (uint32, error) {
 	return uint32(m3PartitionAssetFileIDBase + generation), nil
 }
 
+func m3RouterAssetFileID(generation uint64) (uint32, error) {
+	maxFileID := uint64(^uint32(0))
+	if generation == 0 || generation > maxFileID-m3RouterAssetFileIDBase {
+		return 0, fmt.Errorf("M3 router generation %d exceeds column-asset file-ID range", generation)
+	}
+	return uint32(m3RouterAssetFileIDBase + generation), nil
+}
+
 func closeM3PartitionSearchers(searchers []*collections.VectorPartitionLocalSearcherV1) error {
 	var resultErr error
 	for _, searcher := range searchers {
@@ -281,6 +293,10 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
+	routerPartitions, err := m3RouterPartitions(artifact, sourceOrdinals, vectors)
+	if err != nil {
+		return m3PartitionIndexRow{}, err
+	}
 	sourceRows = nil
 	sourceOrdinals = nil
 	// Source-ordinal reconciliation owns large transient maps and stable-ID
@@ -315,6 +331,31 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 	if err := col.PublishVectorPartitionManifestV1(manifest, nil); err != nil {
 		return m3PartitionIndexRow{}, err
 	}
+	routerFileID, err := m3RouterAssetFileID(generation)
+	if err != nil {
+		return m3PartitionIndexRow{}, err
+	}
+	routerStatus, err := col.BuildAndPublishVectorPartitionRouterV1(
+		context.Background(),
+		manifest,
+		routerPartitions,
+		collections.VectorPartitionRouterBuildOptionsV1{
+			Config:         vectorpartition.DefaultRouterConfigV1(),
+			AssetFileID:    routerFileID,
+			AssetPartID:    uint64(manifest.PartitionCount) + 1,
+			M:              partitionHNSWDegree,
+			EfConstruction: 128,
+			EfSearch:       128,
+		},
+	)
+	if err != nil {
+		return m3PartitionIndexRow{}, err
+	}
+	if routerStatus.Generation != generation || routerStatus.RouterBytes == 0 {
+		return m3PartitionIndexRow{}, fmt.Errorf("M3 router publication status=%+v", routerStatus)
+	}
+	routerPartitions = nil
+	debug.FreeOSMemory()
 	if err := sampler.Sample(); err != nil {
 		return m3PartitionIndexRow{}, err
 	}
@@ -360,6 +401,10 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
+	if !lifecycle.Ready || !lifecycle.Active || lifecycle.Manifest.RouterGeneration != generation || lifecycle.Manifest.RouterAsset.Bytes == 0 {
+		return m3PartitionIndexRow{}, fmt.Errorf("reopened M3 router lifecycle=%+v", lifecycle)
+	}
+	manifest = lifecycle.Manifest
 	if lifecycle.Capacity != uint64(artifact.Metrics.Cap) || lifecycle.OverlapBudget != uint64(overlap.Budget) || lifecycle.UnspentOverlapBudget != uint64(overlap.Unspent) {
 		return m3PartitionIndexRow{}, fmt.Errorf("reopened lifecycle accounting=%+v", lifecycle)
 	}
@@ -442,8 +487,8 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 	for _, asset := range manifest.Assets {
 		packPayloadBytes += asset.Bytes
 	}
-	if packPayloadBytes != packBytes || lifecycle.AssetBytes != packPayloadBytes {
-		return m3PartitionIndexRow{}, fmt.Errorf("pack byte accounting manifest=%d status=%d lifecycle=%d", packPayloadBytes, packBytes, lifecycle.AssetBytes)
+	if packPayloadBytes != packBytes || lifecycle.AssetBytes != packPayloadBytes+manifest.RouterAsset.Bytes {
+		return m3PartitionIndexRow{}, fmt.Errorf("pack byte accounting partitions=%d status=%d router=%d lifecycle=%d", packPayloadBytes, packBytes, manifest.RouterAsset.Bytes, lifecycle.AssetBytes)
 	}
 	peakRSS, peakAvailable := m3PeakRSS()
 	resident, residentAvailable := m3ResidentBytes()
@@ -572,6 +617,45 @@ func m3SourceOrdinalsByArtifactID(artifact vectorpartition.Artifact, rows []coll
 		}
 	}
 	return sourceOrdinals, nil
+}
+
+func m3RouterPartitions(artifact vectorpartition.Artifact, sourceOrdinals []int, vectors [][]float64) ([]vectorpartition.RouterPartitionV1, error) {
+	if len(artifact.Assignment) == 0 || len(artifact.Assignment) != len(sourceOrdinals) || len(vectors) != len(sourceOrdinals) ||
+		artifact.Config.Partitions < 1 || len(vectors[0]) < 1 {
+		return nil, errors.New("M3 router source shape mismatch")
+	}
+	dimensions := len(vectors[0])
+	if len(vectors) > math.MaxInt/dimensions {
+		return nil, errors.New("M3 router vector backing size overflow")
+	}
+	counts := make([]int, artifact.Config.Partitions)
+	seenSourceOrdinals := make([]bool, len(sourceOrdinals))
+	for ordinal, partition := range artifact.Assignment {
+		if partition < 0 || partition >= len(counts) || sourceOrdinals[ordinal] < 0 || sourceOrdinals[ordinal] >= len(vectors) ||
+			seenSourceOrdinals[sourceOrdinals[ordinal]] || len(vectors[ordinal]) != dimensions {
+			return nil, errors.New("M3 router assignment or source ordinal is invalid")
+		}
+		seenSourceOrdinals[sourceOrdinals[ordinal]] = true
+		counts[partition]++
+	}
+	partitions := make([]vectorpartition.RouterPartitionV1, len(counts))
+	for partition := range partitions {
+		partitions[partition].PartitionID = uint32(partition)
+		partitions[partition].Vectors = make([]vectorpartition.RouterVectorV1, 0, counts[partition])
+	}
+	values := make([]float32, len(vectors)*dimensions)
+	for artifactOrdinal, partition := range artifact.Assignment {
+		offset := artifactOrdinal * dimensions
+		row := values[offset : offset+dimensions : offset+dimensions]
+		for dimension, value := range vectors[artifactOrdinal] {
+			row[dimension] = float32(value)
+		}
+		partitions[partition].Vectors = append(partitions[partition].Vectors, vectorpartition.RouterVectorV1{
+			Ordinal: uint64(sourceOrdinals[artifactOrdinal]),
+			Values:  row,
+		})
+	}
+	return partitions, nil
 }
 
 func m3BuildingManifest(meta collections.CollectionMeta, source collections.VectorPartitionSourceIdentityV1, artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, sourceOrdinals []int, generation uint64) (collections.VectorPartitionManifestV1, [][]int, error) {

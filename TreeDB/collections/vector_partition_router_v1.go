@@ -337,7 +337,7 @@ func (c *Collection) BuildAndPublishVectorPartitionRouterV1(ctx context.Context,
 		c.db.ColumnAssetRootDir(), *cfg, opts.AssetFileID,
 		[]StableColumnPhysicalAssetAppend{{
 			Payload: raw, Kind: ColumnAssetKindTCS1HNSWSearchPack,
-			Generation: building.SourceGeneration, PartID: opts.AssetPartID,
+			Generation: building.Generation, PartID: opts.AssetPartID,
 		}},
 		c.db.StableResourceIdentityPinRegistry(), lease,
 	)

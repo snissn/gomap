@@ -420,6 +420,50 @@ func TestM3PartitionAssetFileIDBounds(t *testing.T) {
 	}
 }
 
+func TestM3RouterAssetFileIDBounds(t *testing.T) {
+	if got, err := m3RouterAssetFileID(1); err != nil || got != 50_001 {
+		t.Fatalf("first M3 router file ID=%d err=%v", got, err)
+	}
+	maxGeneration := uint64(^uint32(0)) - m3RouterAssetFileIDBase
+	if got, err := m3RouterAssetFileID(maxGeneration); err != nil || got != ^uint32(0) {
+		t.Fatalf("last M3 router file ID=%d err=%v", got, err)
+	}
+	if _, err := m3RouterAssetFileID(0); err == nil {
+		t.Fatal("zero router generation accepted")
+	}
+	if _, err := m3RouterAssetFileID(maxGeneration + 1); err == nil {
+		t.Fatal("overflowing router generation accepted")
+	}
+}
+
+func TestM3RouterPartitionsBindArtifactToNativeOrdinalsV1(t *testing.T) {
+	artifact := vectorpartition.Artifact{
+		Config:     vectorpartition.Config{Partitions: 2},
+		Assignment: []int{1, 0, 1},
+	}
+	partitions, err := m3RouterPartitions(
+		artifact,
+		[]int{2, 0, 1},
+		[][]float64{{1, 2}, {3, 4}, {5, 6}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(partitions) != 2 || partitions[0].PartitionID != 0 || partitions[1].PartitionID != 1 ||
+		len(partitions[0].Vectors) != 1 || len(partitions[1].Vectors) != 2 {
+		t.Fatalf("router partitions=%+v", partitions)
+	}
+	if got := partitions[0].Vectors[0]; got.Ordinal != 0 || len(got.Values) != 2 || got.Values[0] != 3 || got.Values[1] != 4 {
+		t.Fatalf("partition 0 vector=%+v", got)
+	}
+	if got := partitions[1].Vectors[0]; got.Ordinal != 2 || got.Values[0] != 1 || got.Values[1] != 2 {
+		t.Fatalf("partition 1 first vector=%+v", got)
+	}
+	if got := partitions[1].Vectors[1]; got.Ordinal != 1 || got.Values[0] != 5 || got.Values[1] != 6 {
+		t.Fatalf("partition 1 second vector=%+v", got)
+	}
+}
+
 func TestM3PartitionIndexPersistentDirectoryIsExplicitAndEmptyV1(t *testing.T) {
 	root := t.TempDir()
 	persist := filepath.Join(root, "persistent")
