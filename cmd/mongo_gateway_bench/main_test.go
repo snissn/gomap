@@ -1163,7 +1163,7 @@ func TestParseConfigRouteModeRing(t *testing.T) {
 		{
 			name: "production n-group default workload remains fail-closed",
 			args: []string{"-target", "treedb", "-route-mode", "production", "-route-groups", "2"},
-			want: "serial insert-only local-owner or remote-owner redirect proof",
+			want: "fail-closed scaffold accepts only a serial insert-only workload",
 		},
 		{
 			name: "production explicit command-wal false remains fail-closed",
@@ -1188,7 +1188,7 @@ func TestParseConfigRouteModeRing(t *testing.T) {
 		{
 			name: "production default workload remains fail-closed",
 			args: []string{"-target", "treedb", "-route-mode", "production", "-route-groups", "1"},
-			want: "serial insert-only local-owner or remote-owner redirect proof",
+			want: "fail-closed scaffold accepts only a serial insert-only workload",
 		},
 		{
 			name: "mongo target",

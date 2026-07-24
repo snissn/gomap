@@ -64,7 +64,7 @@ type ProductionRouteProofHarness struct {
 // benchmark.
 func ConfigureProductionRouteProofHarness(opts ProductionRouteProofOptions, db *backenddb.DB, manager *collections.CollectionManager, server *mongogateway.Server) (*ProductionRouteProofHarness, error) {
 	if server == nil {
-		return nil, errors.New("production route proof harness requires Mongo gateway server")
+		return nil, errors.New("internal production route scaffold requires Mongo gateway server")
 	}
 	if opts.GroupCount < 1 {
 		opts.GroupCount = 1
@@ -188,7 +188,7 @@ func ProductionRouteProofGroupIDForDocumentID(groupCount, partitionCount int, do
 
 func (h *ProductionRouteProofHarness) ProbeUnknownOwnerReject(ctx context.Context, database, collection string) error {
 	if h == nil || h.dispatcher == nil || h.recorder == nil {
-		return errors.New("production route proof dispatcher is not configured")
+		return errors.New("internal production route scaffold dispatcher is not configured")
 	}
 	target := h.recorder.unknownOwnerProbeTarget()
 	unknown := nativewire.ClusterRequestMetadata{
@@ -216,7 +216,7 @@ func (h *ProductionRouteProofHarness) ProbeUnknownOwnerReject(ctx context.Contex
 
 func (h *ProductionRouteProofHarness) ProbeDirectLocalBypassReject(ctx context.Context) error {
 	if h == nil || h.dispatcher == nil {
-		return errors.New("production route proof dispatcher is not configured")
+		return errors.New("internal production route scaffold dispatcher is not configured")
 	}
 	direct := nativewire.ClusterRequestMetadata{AckPolicy: nativewire.AckVisible}
 	if _, err := h.dispatcher.SubmitCommandEntryV1(ctx, nil, direct); !errors.Is(err, raftcluster.ErrRouteTargetMissing) {
@@ -361,13 +361,13 @@ func (b *productionRouteProofMemoryApplyBoundary) PreflightCommandEntryV1(ctx co
 		return raftcluster.CommandEntryPreflightResultV1{}, raftcluster.ErrInvalidSubmitter
 	}
 	if req.GroupID != "" && req.GroupID != b.cluster.GroupID {
-		return raftcluster.CommandEntryPreflightResultV1{}, fmt.Errorf("production route proof preflight group %q does not match local group %q", req.GroupID, b.cluster.GroupID)
+		return raftcluster.CommandEntryPreflightResultV1{}, fmt.Errorf("internal production route scaffold preflight group %q does not match local group %q", req.GroupID, b.cluster.GroupID)
 	}
 	if req.NodeID != "" && req.NodeID != b.cluster.NodeID {
-		return raftcluster.CommandEntryPreflightResultV1{}, fmt.Errorf("production route proof preflight node %q does not match local node %q", req.NodeID, b.cluster.NodeID)
+		return raftcluster.CommandEntryPreflightResultV1{}, fmt.Errorf("internal production route scaffold preflight node %q does not match local node %q", req.NodeID, b.cluster.NodeID)
 	}
 	if len(req.EntryBytes) == 0 {
-		return raftcluster.CommandEntryPreflightResultV1{}, errors.New("production route proof preflight empty command entry")
+		return raftcluster.CommandEntryPreflightResultV1{}, errors.New("internal production route scaffold preflight empty command entry")
 	}
 	meta := productionRouteProofApplyMetadata(req.CurrentCatalogVersion, req.HasCurrentCatalogVersion, req.SyncLocalCommandWAL, req.RequestMetadata, req.ExpectedTarget)
 	opts := raftapply.Options{ResultStore: b.results}
@@ -375,7 +375,7 @@ func (b *productionRouteProofMemoryApplyBoundary) PreflightCommandEntryV1(ctx co
 	var err error
 	if len(req.DecodedEntry.Bytes) != 0 {
 		if !bytes.Equal(req.DecodedEntry.Bytes, req.EntryBytes) {
-			return raftcluster.CommandEntryPreflightResultV1{}, errors.New("production route proof preflight decoded command entry does not match raw entry bytes")
+			return raftcluster.CommandEntryPreflightResultV1{}, errors.New("internal production route scaffold preflight decoded command entry does not match raw entry bytes")
 		}
 		result, err = raftapply.PreflightDecodedCommandEntryV1(b.db, req.DecodedEntry, meta, opts)
 	} else {
@@ -400,7 +400,7 @@ func (b *productionRouteProofMemoryApplyBoundary) ApplyCommittedCommandEntryV1(c
 		return raftentry.ApplyResultV1{}, raftcluster.ErrInvalidSubmitter
 	}
 	if entry.RequestMetadata.ClusterRouteGroupID != "" && entry.RequestMetadata.ClusterRouteGroupID != string(b.cluster.GroupID) {
-		return raftentry.ApplyResultV1{}, fmt.Errorf("production route proof apply route group %q does not match local group %q", entry.RequestMetadata.ClusterRouteGroupID, b.cluster.GroupID)
+		return raftentry.ApplyResultV1{}, fmt.Errorf("internal production route scaffold apply route group %q does not match local group %q", entry.RequestMetadata.ClusterRouteGroupID, b.cluster.GroupID)
 	}
 	meta := productionRouteProofApplyMetadata(entry.CurrentCatalogVersion, entry.HasCurrentCatalogVersion, entry.SyncLocalCommandWAL, entry.RequestMetadata, entry.ExpectedTarget)
 	meta.EntryID = raftentry.ApplyEntryID{Term: entry.Term, Index: entry.Index}
@@ -557,7 +557,7 @@ func newProductionRouteProofRecorderWithForwardGroups(groupCount, partitionCount
 
 func (r *productionRouteProofRecorder) ClusterRoute(_ context.Context, request nativewire.ClusterRouteRequest) (nativewire.ClusterRouteTarget, error) {
 	if r == nil {
-		return nativewire.ClusterRouteTarget{}, errors.New("missing production route proof recorder")
+		return nativewire.ClusterRouteTarget{}, errors.New("missing internal production route scaffold recorder")
 	}
 	var target nativewire.ClusterRouteTarget
 	switch request.Shape {
