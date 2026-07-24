@@ -129,13 +129,18 @@ func TestCatalogMetaRaftProviderDistinguishesPreEnqueueCancellationFromAmbiguous
 	}
 	_, transport := hraft.NewInmemTransport("node-a")
 	defer transport.Close()
+	// This test isolates apply/cancellation semantics; persistence and owned
+	// Bolt-store cleanup are exercised separately.
 	p, err := OpenCatalogMetaRaftProviderV1(CatalogMetaRaftProviderOptionsV1{
-		Cluster:      catalogMetaTestConfig(t.TempDir(), "node-a", []Peer{catalogMetaCapablePeer("node-a")}),
-		State:        state,
-		Transport:    transport,
-		RaftConfig:   catalogMetaFastRaftConfig(),
-		Bootstrap:    true,
-		ApplyTimeout: time.Second,
+		Cluster:       catalogMetaTestConfig(t.TempDir(), "node-a", []Peer{catalogMetaCapablePeer("node-a")}),
+		State:         state,
+		Transport:     transport,
+		LogStore:      hraft.NewInmemStore(),
+		StableStore:   hraft.NewInmemStore(),
+		SnapshotStore: hraft.NewInmemSnapshotStore(),
+		RaftConfig:    catalogMetaFastRaftConfig(),
+		Bootstrap:     true,
+		ApplyTimeout:  time.Second,
 	})
 	if err != nil {
 		t.Fatalf("OpenCatalogMetaRaftProviderV1: %v", err)
