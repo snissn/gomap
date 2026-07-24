@@ -65,6 +65,106 @@ func TestMoveStableChildFileNoReplaceCrossParentPreservesIdentity(t *testing.T) 
 	}
 }
 
+func TestInstallStableFileHandleNoReplacePreservesExactHandleAcrossSourceRebind(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	destinationDir := filepath.Join(root, "destination")
+	for _, dir := range []string{sourceDir, destinationDir} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sourceParent, err := os.Open(sourceDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sourceParent.Close()
+	destinationParent, err := os.Open(destinationDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destinationParent.Close()
+	expected, err := OpenStableChildFile(sourceParent, "source.tmp", os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer expected.Close()
+	if _, err := expected.WriteString("owned-by-retained-handle"); err != nil {
+		t.Fatal(err)
+	}
+	want, err := StableIdentityFromFile(expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(sourceDir, "source.tmp"), filepath.Join(sourceDir, "source.saved")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "source.tmp"), []byte("rebound-decoy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := InstallStableFileHandleNoReplace(expected, destinationParent, "installed")
+	if err != nil || !installed {
+		t.Fatalf("InstallStableFileHandleNoReplace installed=%v err=%v", installed, err)
+	}
+	got, err := OpenStableChildFile(destinationParent, "installed", os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer got.Close()
+	identity, err := StableIdentityFromFile(got)
+	if err != nil || !SamePhysicalIdentity(identity, want) {
+		t.Fatalf("installed identity=%+v err=%v want=%+v", identity, err, want)
+	}
+	raw, err := os.ReadFile(filepath.Join(destinationDir, "installed"))
+	if err != nil || string(raw) != "owned-by-retained-handle" {
+		t.Fatalf("installed bytes=%q err=%v", raw, err)
+	}
+	raw, err = os.ReadFile(filepath.Join(sourceDir, "source.tmp"))
+	if err != nil || string(raw) != "rebound-decoy" {
+		t.Fatalf("rebound source bytes=%q err=%v", raw, err)
+	}
+}
+
+func TestInstallStableFileHandleNoReplaceLeavesExistingTargetUntouched(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	destinationDir := filepath.Join(root, "destination")
+	for _, dir := range []string{sourceDir, destinationDir} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sourceParent, err := os.Open(sourceDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sourceParent.Close()
+	destinationParent, err := os.Open(destinationDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destinationParent.Close()
+	expected, err := OpenStableChildFile(sourceParent, "source.tmp", os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer expected.Close()
+	if _, err := expected.WriteString("new"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destinationDir, "installed"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := InstallStableFileHandleNoReplace(expected, destinationParent, "installed")
+	if installed || !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("InstallStableFileHandleNoReplace installed=%v err=%v want conflict", installed, err)
+	}
+	raw, err := os.ReadFile(filepath.Join(destinationDir, "installed"))
+	if err != nil || string(raw) != "old" {
+		t.Fatalf("existing target bytes=%q err=%v", raw, err)
+	}
+}
+
 func TestMoveStableChildFileNoReplaceRejectsReplacement(t *testing.T) {
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "source")

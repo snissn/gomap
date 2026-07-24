@@ -1278,6 +1278,26 @@ func OpenStableChildFile(parent *os.File, name string, flags int, perm os.FileMo
 	return openStableChildFile(parent, name, flags, perm)
 }
 
+// OpenStableAnonymousFile creates an unlinked regular file relative to the
+// exact already-open parent directory handle.  It never creates a staging
+// pathname: callers can publish the retained handle with
+// InstallStableFileHandleNoReplace after syncing its contents.  Platforms or
+// filesystems without an anonymous-file primitive fail closed before a
+// namespace mutation.
+func OpenStableAnonymousFile(parent *os.File, perm os.FileMode) (*os.File, error) {
+	if parent == nil {
+		return nil, fmt.Errorf("%w: anonymous stable file requires an exact parent handle", ErrUnresolvedResource)
+	}
+	info, err := parent.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%w: anonymous stable file parent is not an exact directory", ErrUnresolvedResource)
+	}
+	return openStableAnonymousFile(parent, perm)
+}
+
 // OpenStableParent captures a directory for later exact-handle child
 // operations. On Windows the handle explicitly shares delete access so a
 // rename/recreate adversary cannot force later child creation through the
@@ -1367,6 +1387,18 @@ func LinkStableChildFileNoReplace(parent *os.File, oldName, newName string) erro
 		return fmt.Errorf("%w: stable child link requires distinct base names and an exact parent handle", ErrUnresolvedResource)
 	}
 	return linkStableChildFileNoReplace(parent, oldName, newName)
+}
+
+// InstallStableFileHandleNoReplace installs the exact already-open file under
+// name in destinationParent without consulting a source pathname. The boolean
+// reports whether the destination link was installed; true with an error is
+// namespace-ambiguous and callers must retain recovery state. Unsupported
+// platforms fail closed before mutating the destination namespace.
+func InstallStableFileHandleNoReplace(expected, destinationParent *os.File, name string) (bool, error) {
+	if expected == nil || destinationParent == nil || !stableChildBaseName(name) {
+		return false, fmt.Errorf("%w: stable handle install requires a base name and exact file and parent handles", ErrUnresolvedResource)
+	}
+	return installStableFileHandleNoReplace(expected, destinationParent, name)
 }
 
 // MoveStableChildFileNoReplace installs Expected under destinationParent using

@@ -15,6 +15,10 @@ import (
 
 var stableReOpenFile = windows.NewLazySystemDLL("kernel32.dll").NewProc("ReOpenFile")
 
+func openStableAnonymousFile(*os.File, os.FileMode) (*os.File, error) {
+	return nil, ErrNamespacePersistenceUnsupported
+}
+
 func linkStableChildFileNoReplace(*os.File, string, string) error {
 	return ErrNamespacePersistenceUnsupported
 }
@@ -201,6 +205,10 @@ func stableCrossParentMoveNoReplaceSupported() bool { return false }
 
 func moveStableChildFileNoReplace(*os.File, *os.File, string, *os.File, string) (bool, error) {
 	return false, fmt.Errorf("%w: cross-parent no-replace move is unavailable", ErrNamespacePersistenceUnsupported)
+}
+
+func installStableFileHandleNoReplace(*os.File, *os.File, string) (bool, error) {
+	return false, fmt.Errorf("%w: exact-handle no-replace install is unavailable", ErrNamespacePersistenceUnsupported)
 }
 
 type stableWindowsFileIDInfo struct {
