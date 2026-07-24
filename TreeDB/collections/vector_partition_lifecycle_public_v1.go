@@ -485,16 +485,61 @@ func (c *Collection) VectorPartitionStatusV1(index string, generation uint64) (V
 			staleReason = "source_stale"
 		}
 	}
+	var capacity, overlapBudget, unspentOverlapBudget uint64
+	if policy, ok := parseVectorPartitionOverlapPolicyV1(manifest.BalancePolicy); ok {
+		capacity = policy.Capacity
+		overlapBudget = policy.Budget
+		unspentOverlapBudget = policy.Unspent
+	}
+	var missingAssets, corruptAssets, staleAssets uint64
+	statusAssets := append([]VectorPartitionAssetV1(nil), manifest.Assets...)
+	if manifest.State == "ready" {
+		statusAssets = append(statusAssets, manifest.RouterAsset)
+	}
+	namespace := ""
+	if len(statusAssets) > 0 {
+		// Publication already bound every descriptor to the collection's asset
+		// namespace. Reuse that immutable binding here and require every status
+		// descriptor to agree with it.
+		namespace = statusAssets[0].Ref.Namespace
+	}
+	for _, asset := range statusAssets {
+		if asset.Ref.Generation != manifest.Generation {
+			staleAssets++
+			continue
+		}
+		if err := verifyVectorPartitionAssetsV1(c.db.ColumnAssetRootDir(), namespace, []VectorPartitionAssetV1{asset}); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				missingAssets++
+			} else {
+				corruptAssets++
+			}
+			continue
+		}
+		if asset.ID == vectorPartitionLocalAssetIDV1(asset.PartitionID) {
+			singleAssetManifest := manifest
+			singleAssetManifest.Assets = []VectorPartitionAssetV1{asset}
+			if err := c.validateVectorPartitionAssetMembershipBindingsV1(singleAssetManifest); err != nil {
+				staleAssets++
+			}
+		}
+	}
 	return VectorPartitionStatusV1{
-		Manifest:           manifest,
-		Ready:              manifest.State == "ready",
-		Active:             active,
-		StaleReason:        staleReason,
-		PartitionCount:     manifest.PartitionCount,
-		GroupCount:         uint32(len(groups)),
-		Memberships:        uint64(len(manifest.Memberships)),
-		OverlapMemberships: uint64(len(manifest.OverlapMemberships)),
-		AssetBytes:         assetBytes,
-		ReaderPins:         vectorPartitionReaderPinCountV1(c.db.Dir(), c.name, index, generation),
+		Manifest:             manifest,
+		Ready:                manifest.State == "ready",
+		Active:               active,
+		StaleReason:          staleReason,
+		PartitionCount:       manifest.PartitionCount,
+		GroupCount:           uint32(len(groups)),
+		Memberships:          uint64(len(manifest.Memberships)),
+		OverlapMemberships:   uint64(len(manifest.OverlapMemberships)),
+		AssetBytes:           assetBytes,
+		ReaderPins:           vectorPartitionReaderPinCountV1(c.db.Dir(), c.name, index, generation),
+		Capacity:             capacity,
+		OverlapBudget:        overlapBudget,
+		UnspentOverlapBudget: unspentOverlapBudget,
+		MissingAssets:        missingAssets,
+		CorruptAssets:        corruptAssets,
+		StaleAssets:          staleAssets,
 	}, nil
 }

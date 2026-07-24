@@ -263,10 +263,27 @@ func main() {
 	}
 }
 
-func run(args []string, stdout io.Writer) (runErr error) {
+type benchmarkRuntimeCapabilities struct {
+	vectorPartitionNamespacePersistence bool
+}
+
+func currentBenchmarkRuntimeCapabilities() benchmarkRuntimeCapabilities {
+	return benchmarkRuntimeCapabilities{
+		vectorPartitionNamespacePersistence: collections.VectorPartitionNamespacePersistenceSupportedV1(),
+	}
+}
+
+func run(args []string, stdout io.Writer) error {
+	return runWithRuntimeCapabilities(args, stdout, currentBenchmarkRuntimeCapabilities())
+}
+
+func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities benchmarkRuntimeCapabilities) (runErr error) {
 	cfg, err := parseConfig(args)
 	if err != nil {
 		return err
+	}
+	if cfg.stage == "overlap,partition_index" && !capabilities.vectorPartitionNamespacePersistence {
+		return fmt.Errorf("%w: M3 partition-index evidence requires durable vector-partition lifecycle publication", collections.ErrVectorPartitionNamespacePersistenceUnsupportedV1)
 	}
 	cfg.command = append([]string{"treedb_vector_partition_bench"}, args...)
 	if cfg.baseSHA, cfg.headSHA, err = provenance(); err != nil {
@@ -290,10 +307,11 @@ func run(args []string, stdout io.Writer) (runErr error) {
 	if cfg.seed != fixture.Seed {
 		return fmt.Errorf("-seed %d does not match fixture seed %d", cfg.seed, fixture.Seed)
 	}
-	if cfg.stage == "partition" {
+	if cfg.stage == "partition" || cfg.stage == "overlap,partition_index" {
 		// The partition builder owns only the frozen vector corpus and its own
-		// graph controls. Simulation probes, overlaps, stages, top-k and memory
-		// planning are intentionally irrelevant here.
+		// graph controls. Simulation probes, stage selection, and simulation
+		// memory planning are intentionally irrelevant here; M3 separately
+		// consumes explicit overlap ratios, queries, and top-k.
 		if err := vectorpartition.ValidateReferenceInputShape(cfg.partition, fixture.Vectors, fixture.Dimensions); err != nil {
 			return err
 		}
@@ -301,8 +319,20 @@ func run(args []string, stdout io.Writer) (runErr error) {
 		// by BuildWithPartitioner. The manifest checksum additionally commits the
 		// simulation-only query/truth stream, so verifying it here would recreate
 		// queries and exact truth that this stage deliberately does not own.
-		vectors := deterministicVectors(fixture)
-		return runPartitionStage(cfg, fixture, vectors, stdout)
+		if cfg.stage == "partition" {
+			return runPartitionStage(cfg, fixture, deterministicVectors(fixture), nil, stdout)
+		}
+		if cfg.topK > fixture.Vectors {
+			return errors.New("top-k cannot exceed fixture vectors")
+		}
+		if _, err := validateM3BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits); err != nil {
+			return err
+		}
+		vectors, queries := deterministicFixture(fixture)
+		if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
+			return errors.New("fixture checksum does not match generated vector/query/truth stream")
+		}
+		return runPartitionStage(cfg, fixture, vectors, queries, stdout)
 	}
 	if cfg.topK > fixture.Vectors {
 		return errors.New("top-k cannot exceed fixture vectors")
@@ -370,7 +400,7 @@ func parseConfig(args []string) (config, error) {
 	fs.Int64Var(&cfg.seed, "seed", cfg.seed, "fixture generation seed (must match manifest)")
 	fs.StringVar(&cfg.format, "format", cfg.format, "json or text")
 	fs.StringVar(&cfg.out, "out", "", "artifact directory")
-	fs.StringVar(&cfg.stage, "stage", cfg.stage, "simulation or partition")
+	fs.StringVar(&cfg.stage, "stage", cfg.stage, "simulation, partition, or overlap,partition_index")
 	fs.IntVar(&cfg.partition.Repetitions, "partition-repetitions", cfg.partition.Repetitions, "dense-ball graph sketch repetitions")
 	fs.IntVar(&cfg.partition.Pivots, "partition-pivots", cfg.partition.Pivots, "dense-ball pivots per recursive level")
 	fs.IntVar(&cfg.partition.MaxLeafBucket, "partition-max-leaf-bucket", cfg.partition.MaxLeafBucket, "maximum dense-ball leaf bucket")
@@ -385,7 +415,7 @@ func parseConfig(args []string) (config, error) {
 	// The offline M2 builder does not execute M0 probe simulations. Preserve
 	// the simulation requirement while allowing the issue's partition-stage
 	// invocation to omit a meaningless -probes flag.
-	if cfg.stage == "partition" && probes == "" {
+	if (cfg.stage == "partition" || cfg.stage == "overlap,partition_index") && probes == "" {
 		probes = "1"
 	}
 	var err error
@@ -395,7 +425,7 @@ func parseConfig(args []string) (config, error) {
 	if cfg.overlaps, err = parseFloats(overlap); err != nil {
 		return config{}, fmt.Errorf("overlap: %w", err)
 	}
-	if cfg.dataset == "" || cfg.out == "" || cfg.partitions < 1 || cfg.partitions > maxPartitions || cfg.topK < 1 || cfg.maxVectors < 1 || cfg.maxVectors > maxVectors || cfg.maxBytes < 8 || cfg.maxBytes > maxFixtureBytes || cfg.format != "json" && cfg.format != "text" || cfg.stage != "simulation" && cfg.stage != "partition" {
+	if cfg.dataset == "" || cfg.out == "" || cfg.partitions < 1 || cfg.partitions > maxPartitions || cfg.topK < 1 || cfg.maxVectors < 1 || cfg.maxVectors > maxVectors || cfg.maxBytes < 8 || cfg.maxBytes > maxFixtureBytes || cfg.format != "json" && cfg.format != "text" || cfg.stage != "simulation" && cfg.stage != "partition" && cfg.stage != "overlap,partition_index" {
 		return config{}, errors.New("dataset, out, positive bounded partitions/top-k, and json|text format are required")
 	}
 	if len(cfg.probes) == 0 || len(cfg.overlaps) == 0 || math.IsNaN(cfg.recallTarget) || math.IsInf(cfg.recallTarget, 0) || cfg.recallTarget < 0 || cfg.recallTarget > 1 {
@@ -429,7 +459,7 @@ func parseConfig(args []string) (config, error) {
 	return cfg, nil
 }
 
-func runPartitionStage(cfg config, fixture fixtureManifest, vectors [][]float64, stdout io.Writer) error {
+func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][]float64, stdout io.Writer) error {
 	input := make([]vectorpartition.Vector, len(vectors))
 	for i, values := range vectors {
 		input[i] = vectorpartition.Vector{ID: fmt.Sprintf("doc-%06d", i), Values: values}
@@ -480,6 +510,9 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors [][]float64,
 	}
 	if err := os.WriteFile(filepath.Join(cfg.out, "vector_partition_build_"+suffix+".json"), raw, 0644); err != nil {
 		return err
+	}
+	if cfg.stage == "overlap,partition_index" {
+		return runM3PartitionIndexStage(cfg, fixture, artifact, digest, suffix, vectors, queries, stdout)
 	}
 	if cfg.format == "json" {
 		_, err = fmt.Fprintln(stdout, string(raw))
@@ -706,6 +739,59 @@ type benchmarkWorkPlan struct {
 	VectorQueryPairs  int64
 	CorpusPasses      int64
 	VectorQueryVisits int64
+}
+
+type m3BenchmarkWorkPlan struct {
+	ChecksumVectorQueryVisits   int64
+	MembershipVectorQueryVisits int64
+	VectorQueryVisits           int64
+}
+
+func validateM3BenchmarkWork(cfg config, m fixtureManifest, capUnits int64) (m3BenchmarkWorkPlan, error) {
+	if capUnits < 1 || len(cfg.overlaps) == 0 {
+		return m3BenchmarkWorkPlan{}, errors.New("cannot plan M3 benchmark work without a positive cap and overlap rows")
+	}
+	vectors := int64(m.Vectors)
+	queries := int64(m.Queries)
+	checksumVisits, err := memoryMul(vectors, queries)
+	if err != nil {
+		return m3BenchmarkWorkPlan{}, err
+	}
+	var membershipUpperBound int64
+	for _, ratio := range cfg.overlaps {
+		if math.IsNaN(ratio) || math.IsInf(ratio, 0) || ratio < 0 || ratio > 1 {
+			return m3BenchmarkWorkPlan{}, errors.New("cannot plan M3 benchmark work with an invalid overlap ratio")
+		}
+		budget := int64(math.Floor(ratio * float64(m.Vectors)))
+		rowMemberships, err := memoryAdd(vectors, budget)
+		if err != nil {
+			return m3BenchmarkWorkPlan{}, err
+		}
+		membershipUpperBound, err = memoryAdd(membershipUpperBound, rowMemberships)
+		if err != nil {
+			return m3BenchmarkWorkPlan{}, err
+		}
+	}
+	// Each M3 row scans every local membership once for the exact partition
+	// oracle and once more to validate returned IDs/scores against authority.
+	membershipVisits, err := memoryMul(queries, membershipUpperBound, 2)
+	if err != nil {
+		return m3BenchmarkWorkPlan{}, err
+	}
+	totalVisits, err := memoryAdd(checksumVisits, membershipVisits)
+	if err != nil {
+		return m3BenchmarkWorkPlan{}, err
+	}
+	plan := m3BenchmarkWorkPlan{
+		ChecksumVectorQueryVisits:   checksumVisits,
+		MembershipVectorQueryVisits: membershipVisits,
+		VectorQueryVisits:           totalVisits,
+	}
+	if totalVisits > capUnits {
+		return plan, fmt.Errorf("modeled M3 benchmark work exceeds %d-unit cap (%s): checksum_visits=%d membership_visits=%d",
+			capUnits, benchmarkWorkScope, checksumVisits, membershipVisits)
+	}
+	return plan, nil
 }
 
 func validateBenchmarkWork(cfg config, m fixtureManifest, capUnits int64) (benchmarkWorkPlan, error) {

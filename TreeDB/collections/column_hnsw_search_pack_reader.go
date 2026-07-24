@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
@@ -215,11 +216,19 @@ func decodeColumnHNSWSearchPackEnvelope(raw []byte, opts columnHNSWSearchPackDec
 		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: bad hnsw_search_pack_v1 magic=%q", string(raw[:8]))
 	}
 	version := hnswPackU16(raw, columnHNSWSearchPackHeaderVersionOffset)
-	if version != columnHNSWSearchPackVersionV1 {
+	headerSize := columnHNSWSearchPackHeaderSize
+	switch version {
+	case columnHNSWSearchPackVersionV1:
+	case columnHNSWSearchPackVersionV2:
+		headerSize = columnHNSWSearchPackHeaderSizeV2
+	default:
 		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: unsupported hnsw_search_pack_v1 version=%d", version)
 	}
-	if got := hnswPackU16(raw, columnHNSWSearchPackHeaderHeaderSizeOffset); got != columnHNSWSearchPackHeaderSize {
-		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: hnsw_search_pack_v1 header_size=%d want %d", got, columnHNSWSearchPackHeaderSize)
+	if len(raw) < headerSize {
+		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: truncated hnsw_search_pack_v1 header bytes=%d want at least %d", len(raw), headerSize)
+	}
+	if got := hnswPackU16(raw, columnHNSWSearchPackHeaderHeaderSizeOffset); got != uint16(headerSize) {
+		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: hnsw_search_pack_v1 header_size=%d want %d", got, headerSize)
 	}
 	if got := hnswPackU16(raw, columnHNSWSearchPackHeaderSectionEntrySizeOffset); got != columnHNSWSearchPackSectionEntrySize {
 		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: hnsw_search_pack_v1 section_entry_size=%d want %d", got, columnHNSWSearchPackSectionEntrySize)
@@ -287,6 +296,16 @@ func decodeColumnHNSWSearchPackEnvelope(raw []byte, opts columnHNSWSearchPackDec
 	if err := validateColumnHNSWSearchPackExpectedBaseIdentity(baseIdentity, opts.ExpectedBaseIdentity); err != nil {
 		return columnHNSWSearchPack{}, opts, err
 	}
+	var membershipDigest [sha256.Size]byte
+	if version == columnHNSWSearchPackVersionV2 {
+		copy(membershipDigest[:], raw[columnHNSWSearchPackHeaderMembershipDigestOffset:columnHNSWSearchPackHeaderSizeV2])
+		if membershipDigest == ([sha256.Size]byte{}) {
+			return columnHNSWSearchPack{}, opts, errors.New("collections: hnsw_search_pack_v1 version 2 missing membership digest")
+		}
+	}
+	if opts.ExpectedMembershipDigest != ([sha256.Size]byte{}) && membershipDigest != opts.ExpectedMembershipDigest {
+		return columnHNSWSearchPack{}, opts, errors.New("collections: hnsw_search_pack_v1 membership digest mismatch")
+	}
 	directoryOffset := hnswPackU64(raw, columnHNSWSearchPackHeaderDirectoryOffsetOffset)
 	directoryLength := hnswPackU64(raw, columnHNSWSearchPackHeaderDirectoryLengthOffset)
 	dataOffset := hnswPackU64(raw, columnHNSWSearchPackHeaderDataOffsetOffset)
@@ -299,7 +318,7 @@ func decodeColumnHNSWSearchPackEnvelope(raw []byte, opts columnHNSWSearchPackDec
 	if sectionCount32 > 8+2*opts.MaxLayers {
 		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: hnsw_search_pack_v1 section_count=%d exceeds cap", sectionCount32)
 	}
-	if directoryOffset != columnHNSWSearchPackDirectoryOffset || directoryLength != uint64(sectionCount32)*columnHNSWSearchPackSectionEntrySize {
+	if directoryOffset != uint64(headerSize) || directoryLength != uint64(sectionCount32)*columnHNSWSearchPackSectionEntrySize {
 		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: hnsw_search_pack_v1 corrupt section directory offset=%d length=%d count=%d", directoryOffset, directoryLength, sectionCount32)
 	}
 	if dataOffset < directoryOffset+directoryLength || dataOffset > totalLength || dataLength != totalLength-dataOffset {
@@ -337,6 +356,7 @@ func decodeColumnHNSWSearchPackEnvelope(raw []byte, opts columnHNSWSearchPackDec
 			BaseManifestGeneration: baseIdentity.ManifestGeneration,
 			BaseManifestChecksum:   baseIdentity.ManifestChecksum,
 			BaseSchemaHash:         baseIdentity.SchemaHash,
+			MembershipDigest:       membershipDigest,
 			TotalLength:            totalLength,
 			DataOffset:             dataOffset,
 			DataLength:             dataLength,

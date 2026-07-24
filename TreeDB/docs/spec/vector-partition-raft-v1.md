@@ -240,26 +240,29 @@ with both original and superseded refs, and retains the reduced reclaim state
 until all segment debt is physically absent; the durable-root fallback
 generation can therefore delay, but never bypass, DELETE_COMPLETE.
 
-### V1 API/schema contract, VPM1 wire version 2, and bounds
+### V1 API/schema contract, VPM1 wire version 3, and bounds
 
 `V1` in public API, type, and schema names identifies that pre-alpha contract;
 it is distinct from the explicit VPM1 wire version.
 The canonical generation payload is binary `VPM1` (big-endian magic
-`0x56504d31`, version `2`), followed by fixed-order length-prefixed fields;
+`0x56504d31`, version `3`), followed by fixed-order length-prefixed fields;
 there are no tagged optional fields. The JSON form is an inspection/exchange
 encoding of that same record: unknown fields, a second JSON value, trailing
 bytes, and non-canonical ordering fail closed. VPM1 is embedded in VCP1
 checkpoint state instead of published as a mutable `.vpm` file. Version 2 adds
 a whole-record SHA-256 integrity digest covering identity, policy, generations,
 placement, every membership family, and asset descriptors; this is separate
-from the ready-set asset contract.
+from the ready-set asset contract. Version 3 adds each asset descriptor's
+optional membership digest. Native partition HNSW assets require it; the digest
+also appears in their pack wire-version-2 header and binds generation,
+partition, ordered authoritative stable IDs, and home/overlap kinds.
 
 | Record area | Required content | Validation boundary |
 | --- | --- | --- |
 | identity | collection, index name, SHA-256 index-definition digest; source generation/checksum/schema/row count; partition and router generations | exact live TVIS/base identity; ready router generation equals partition generation |
 | placement | dense logical `partition_id` to one Raft group, with many logical partitions allowed per group | IDs are exactly `[0, partition_count)` and canonical |
-| memberships | one disjoint membership per source ordinal; bounded overlap and representatives | ordinal/partition coverage, sorted order, per-vector and per-partition caps |
-| assets | typed `ColumnAssetRef`, length, CRC, SHA-256 and logical asset ID for each partition plus router | references are namespace-bound, unique, streamed and checksum-verified before every collection-authorized publication; router partition ID is exactly zero |
+| memberships | one disjoint membership per source ordinal; bounded overlap and representatives | ordinal/partition coverage, sorted order, per-vector and per-partition caps; the same ordinal/partition pair cannot be both home and overlap |
+| assets | typed `ColumnAssetRef`, length, CRC, SHA-256 and logical asset ID for each partition plus router; native partition packs also carry the canonical membership digest | references are namespace-bound, unique, streamed and checksum-verified before every collection-authorized publication; native membership identity is recomputed from the authoritative source and must match both descriptor and pack header; router partition ID is exactly zero |
 | ready set | SHA-256 over canonical placements, partition assets and router descriptor | mismatches, mixed router/generation, or missing partition asset reject |
 
 Default decode limits are 16 MiB encoded bytes, 65,536 partitions, 1,048,576
