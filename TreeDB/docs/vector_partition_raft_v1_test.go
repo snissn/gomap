@@ -141,10 +141,10 @@ func TestVectorPartitionM1EvidenceSchema(t *testing.T) {
 		t.Fatalf("incomplete candidate/environment provenance: head=%q base=%q go=%q hardware=%q details=%+v", ledger.HeadSHA, ledger.BaseSHA, ledger.GoVersion, ledger.HardwareContext, ledger.HardwareDetails)
 	}
 	wantScales := []int{10000, 100000, 1000000}
-	if ledger.Dataset.Name != "synthetic_ready_manifest_scale_v1" || fmt.Sprint(ledger.Dataset.Scales) != fmt.Sprint(wantScales) || ledger.Dataset.MembershipShape == "" || !strings.Contains(ledger.Dataset.AuthorityConstruction, "excluded") {
+	if ledger.Dataset.Name != "synthetic_checkpoint_ready_manifest_scale_v1" || fmt.Sprint(ledger.Dataset.Scales) != fmt.Sprint(wantScales) || ledger.Dataset.MembershipShape == "" || !strings.Contains(ledger.Dataset.AuthorityConstruction, "treedb_benchmark") || !strings.Contains(ledger.Dataset.AuthorityConstruction, "excluded") {
 		t.Fatalf("invalid dataset attribution: %+v", ledger.Dataset)
 	}
-	if !strings.Contains(ledger.FixtureAttribution.CorrectnessPath, "genuine") || !strings.Contains(ledger.FixtureAttribution.PerformancePath, "test-only synthetic") || ledger.FixtureAttribution.MeasuredStorage == "" || !strings.Contains(ledger.FixtureAttribution.ExcludedClaims, "not ANN") || !strings.Contains(ledger.TimedBoundary, "complete go test process") {
+	if !strings.Contains(ledger.FixtureAttribution.CorrectnessPath, "genuine") || !strings.Contains(ledger.FixtureAttribution.PerformancePath, "treedb_benchmark-tagged synthetic") || !strings.Contains(ledger.FixtureAttribution.PerformancePath, "VCP1/VLC1") || ledger.FixtureAttribution.MeasuredStorage == "" || !strings.Contains(ledger.FixtureAttribution.ExcludedClaims, "not ANN") || !strings.Contains(ledger.TimedBoundary, "complete go test process") {
 		t.Fatalf("incomplete fixture/timing boundary: fixture=%+v boundary=%q", ledger.FixtureAttribution, ledger.TimedBoundary)
 	}
 	if len(ledger.Command) != 8 {
@@ -160,7 +160,7 @@ func TestVectorPartitionM1EvidenceSchema(t *testing.T) {
 		}
 		seenCommands[command] = struct{}{}
 	}
-	if ledger.StorageMetrics.ManifestBytes != 12000642 || ledger.StorageMetrics.MetadataBytesPerVec != 12.000642 || ledger.StorageMetrics.GateBytesPerVec != 64 || ledger.StorageMetrics.LargestArchiveBytes != 12573184 || ledger.StorageMetrics.MetadataBytesPerVec >= ledger.StorageMetrics.GateBytesPerVec || ledger.StorageMetrics.ManifestBytes == ledger.StorageMetrics.LargestArchiveBytes || !strings.Contains(ledger.StorageMetrics.Attribution, "not metadata bytes") {
+	if ledger.StorageMetrics.ManifestBytes != 12000642 || ledger.StorageMetrics.MetadataBytesPerVec != 12.000642 || ledger.StorageMetrics.GateBytesPerVec != 64 || ledger.StorageMetrics.LargestArchiveBytes != 12575232 || ledger.StorageMetrics.MetadataBytesPerVec >= ledger.StorageMetrics.GateBytesPerVec || ledger.StorageMetrics.ManifestBytes == ledger.StorageMetrics.LargestArchiveBytes || !strings.Contains(ledger.StorageMetrics.Attribution, "not metadata bytes") {
 		t.Fatalf("invalid or conflated storage metrics: %+v", ledger.StorageMetrics)
 	}
 	if len(ledger.Stages) != 3 {
@@ -171,7 +171,7 @@ func TestVectorPartitionM1EvidenceSchema(t *testing.T) {
 			t.Fatalf("invalid evidence stage: %+v", stage)
 		}
 	}
-	if ledger.Metrics.MeasurementStatus != "measured" || ledger.Metrics.PeakProcessRSSBytes != 2612731904 || ledger.Metrics.FinalManifestBytes != ledger.StorageMetrics.ManifestBytes || ledger.Metrics.MetadataBytesPerVector != ledger.StorageMetrics.MetadataBytesPerVec || ledger.Metrics.MetricScope == "" {
+	if ledger.Metrics.MeasurementStatus != "measured" || ledger.Metrics.PeakProcessRSSBytes != 632111104 || ledger.Metrics.FinalManifestBytes != ledger.StorageMetrics.ManifestBytes || ledger.Metrics.MetadataBytesPerVector != ledger.StorageMetrics.MetadataBytesPerVec || ledger.Metrics.MetricScope == "" {
 		t.Fatalf("invalid M0-style summary metrics: %+v", ledger.Metrics)
 	}
 	if len(ledger.Codec) != len(wantScales) || len(ledger.Snapshot) != len(wantScales) {

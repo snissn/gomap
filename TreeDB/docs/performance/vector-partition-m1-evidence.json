@@ -3,8 +3,8 @@
   "result_kind": "local_microbenchmark",
   "measurement_status": "measured",
   "production_evidence": false,
-  "head_sha": "0aae57a7a3f6ddb9dea3b7a789559928f6428071",
-  "base_sha": "dc383529612a5a81be8d499bfcd7b09f1b7873e5",
+  "head_sha": "b16bcbf989d9fb9333d95fe8de08fcc6c1122bcc",
+  "base_sha": "35e8a45d9d50e5f48e70b998d8f2ac19cafc199b",
   "go_version": "go1.26.0 linux/amd64",
   "hardware_context": "Linux 6.8.0-124-generic x86_64; 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz; 6 physical cores; 12 logical CPUs",
   "hardware_details": {
@@ -14,15 +14,15 @@
     "logical_cpus": 12
   },
   "dataset": {
-    "name": "synthetic_ready_manifest_scale_v1",
+    "name": "synthetic_checkpoint_ready_manifest_scale_v1",
     "scales": [10000, 100000, 1000000],
     "membership_shape": "one disjoint membership per source ordinal",
-    "authority_construction": "excluded from the benchmark timer"
+    "authority_construction": "treedb_benchmark-tagged checkpoint fixture derived from a genuinely authorized one-row ready template; excluded from the benchmark timer"
   },
   "fixture_attribution": {
-    "correctness_path": "genuine stable-authority ready publication followed by active OpenActive and Raft snapshot/install tests",
-    "performance_path": "test-only synthetic ready manifest derived from a valid ready template and expanded to the declared membership scale",
-    "measured_storage": "manifest side-store encode/decode plus archive/install of the complete vector_partitions namespace and referenced assets",
+    "correctness_path": "genuine stable-authority ready publication followed by checkpoint-reduced OpenActive and Raft snapshot/install tests",
+    "performance_path": "treedb_benchmark-tagged synthetic ready manifest derived from a genuinely authorized one-row template, expanded to the declared membership scale, and published through VCP1/VLC1 without live TVIS row-count revalidation",
+    "measured_storage": "manifest encode/decode plus archive/install of the selected highest VCP1 checkpoint, current VLC1 tail, and referenced assets",
     "excluded_claims": "not ANN search throughput, production Raft throughput, or a production corpus measurement"
   },
   "timed_boundary": "one benchmark iteration; fixture and authority setup excluded by the Go benchmark timer; peak RSS covers the complete go test process, including compile and setup",
@@ -32,21 +32,21 @@
     "/usr/bin/time -v env GOWORK=off go test ./TreeDB/collections -run '^$' -bench '^BenchmarkVectorPartitionManifestV1Scale$/^rows=1000000$/^(decode_validate|encode)$' -benchtime=1x -benchmem -count=1",
     "/usr/bin/time -v env GOWORK=off go test ./TreeDB/collections -run '^$' -bench '^BenchmarkVectorPartitionStoreV1WarmOpen$' -benchtime=1x -benchmem -count=1",
     "/usr/bin/time -v env GOWORK=off go test ./TreeDB/collections -run '^$' -bench '^BenchmarkVectorPartitionStatusV1Warm$' -benchtime=1x -benchmem -count=1",
-    "/usr/bin/time -v env GOWORK=off go test ./TreeDB/internal/raftfsm -run '^$' -bench '^BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall$/^memberships=10000$/^(archive|install)$' -benchtime=1x -benchmem -count=1",
-    "/usr/bin/time -v env GOWORK=off go test ./TreeDB/internal/raftfsm -run '^$' -bench '^BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall$/^memberships=100000$/^(archive|install)$' -benchtime=1x -benchmem -count=1",
-    "/usr/bin/time -v env GOWORK=off go test ./TreeDB/internal/raftfsm -run '^$' -bench '^BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall$/^memberships=1000000$/^(archive|install)$' -benchtime=1x -benchmem -count=1"
+    "/usr/bin/time -v env GOWORK=off go test -tags treedb_benchmark ./TreeDB/internal/raftfsm -run '^$' -bench '^BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall$/^memberships=10000$/^(archive|install)$' -benchtime=1x -benchmem -count=1",
+    "/usr/bin/time -v env GOWORK=off go test -tags treedb_benchmark ./TreeDB/internal/raftfsm -run '^$' -bench '^BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall$/^memberships=100000$/^(archive|install)$' -benchtime=1x -benchmem -count=1",
+    "/usr/bin/time -v env GOWORK=off go test -tags treedb_benchmark ./TreeDB/internal/raftfsm -run '^$' -bench '^BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall$/^memberships=1000000$/^(archive|install)$' -benchtime=1x -benchmem -count=1"
   ],
   "raw_artifacts": [
     {
-      "path": "performance/vector-partition-m1-0aae57a7a.raw.txt",
-      "sha256": "bee8884f2a06ccf226a4f442dbc402606eb11c4aa05f450eb4d9cc3473764403"
+      "path": "performance/vector-partition-m1-b16bcbf98.raw.txt",
+      "sha256": "e4be520d04d28730a1c92ddcd5eeca58632d950be1171f1bb5ea5552a8e8ad52"
     }
   ],
   "storage_metrics": {
     "manifest_bytes_at_1000000": 12000642,
     "metadata_bytes_per_vector_at_1000000": 12.000642,
     "gate_bytes_per_vector": 64,
-    "largest_snapshot_archive_bytes": 12573184,
+    "largest_snapshot_archive_bytes": 12575232,
     "attribution": "manifest bytes measure the encoded VPM1 record; archive bytes measure the complete snapshot tar stream and are not metadata bytes per vector"
   },
   "stages": [
@@ -56,7 +56,7 @@
   ],
   "metrics": {
     "measurement_status": "measured",
-    "peak_process_rss_bytes": 2612731904,
+    "peak_process_rss_bytes": 632111104,
     "final_manifest_bytes": 12000642,
     "metadata_bytes_per_vector": 12.000642,
     "metric_scope": "summary only; operation-specific time, allocation, archive, and RSS metrics are reported below"
@@ -64,87 +64,87 @@
   "codec": [
     {
       "memberships": 10000,
-      "decode_validate_ns_op": 1041943,
+      "decode_validate_ns_op": 981828,
       "decode_validate_b_op": 1609696,
       "decode_validate_allocs_op": 85,
-      "encode_ns_op": 1726755,
-      "encode_b_op": 913888,
-      "encode_allocs_op": 92,
-      "process_peak_rss_kb": 2551496,
-      "rss_context": "cold process; compile and cache population dominate this full-process value"
+      "encode_ns_op": 1908414,
+      "encode_b_op": 1962592,
+      "encode_allocs_op": 109,
+      "process_peak_rss_kb": 436480,
+      "rss_context": "complete go test process"
     },
     {
       "memberships": 100000,
-      "decode_validate_ns_op": 11324115,
+      "decode_validate_ns_op": 9336004,
       "decode_validate_b_op": 14003392,
       "decode_validate_allocs_op": 97,
-      "encode_ns_op": 21091240,
+      "encode_ns_op": 17765410,
       "encode_b_op": 17594744,
       "encode_allocs_op": 114,
-      "process_peak_rss_kb": 425344,
+      "process_peak_rss_kb": 439168,
       "rss_context": "complete go test process"
     },
     {
       "memberships": 1000000,
-      "decode_validate_ns_op": 112092008,
-      "decode_validate_b_op": 191125336,
+      "decode_validate_ns_op": 102101968,
+      "decode_validate_b_op": 191125240,
       "decode_validate_allocs_op": 95,
-      "encode_ns_op": 207993450,
-      "encode_b_op": 228014456,
-      "encode_allocs_op": 119,
-      "process_peak_rss_kb": 429952,
+      "encode_ns_op": 184429532,
+      "encode_b_op": 228014440,
+      "encode_allocs_op": 118,
+      "process_peak_rss_kb": 440192,
       "rss_context": "complete go test process"
     }
   ],
   "warm": {
     "open": {
-      "ns_op": 94539,
-      "b_op": 14440,
-      "allocs_op": 63,
-      "process_peak_rss_kb": 418816
+      "ns_op": 196040,
+      "b_op": 69528,
+      "allocs_op": 373,
+      "process_peak_rss_kb": 435968
     },
     "status": {
-      "ns_op": 21140117,
-      "b_op": 1144704,
-      "allocs_op": 3291,
-      "process_peak_rss_kb": 419456
+      "ns_op": 13157171,
+      "b_op": 670080,
+      "allocs_op": 3256,
+      "process_peak_rss_kb": 439296
     }
   },
   "snapshot": [
     {
       "memberships": 10000,
-      "archive_ns_op": 58529576,
-      "archive_bytes": 693248,
-      "archive_b_op": 1710056,
-      "archive_allocs_op": 1196,
-      "install_ns_op": 645308362,
-      "install_b_op": 59158592,
-      "install_allocs_op": 9469,
-      "process_peak_rss_kb": 1272424,
-      "rss_context": "cold process; compile and cache population included"
+      "archive_ns_op": 46190914,
+      "archive_bytes": 695296,
+      "archive_b_op": 13443136,
+      "archive_allocs_op": 2058,
+      "install_ns_op": 282760342,
+      "install_b_op": 83787088,
+      "install_allocs_op": 10572,
+      "process_peak_rss_kb": 326144,
+      "rss_context": "complete go test process"
     },
     {
       "memberships": 100000,
-      "archive_ns_op": 56899998,
-      "archive_bytes": 1773568,
-      "archive_b_op": 4610672,
-      "archive_allocs_op": 1207,
-      "install_ns_op": 632118035,
-      "install_b_op": 74189584,
-      "install_allocs_op": 9463,
-      "process_peak_rss_kb": 323968,
+      "archive_ns_op": 229331503,
+      "archive_bytes": 1775616,
+      "archive_b_op": 130632208,
+      "archive_allocs_op": 2114,
+      "install_ns_op": 662289049,
+      "install_b_op": 337747928,
+      "install_allocs_op": 10670,
+      "process_peak_rss_kb": 331008,
       "rss_context": "complete go test process"
     },
     {
       "memberships": 1000000,
-      "archive_ns_op": 58345919,
-      "archive_bytes": 12573184,
-      "archive_b_op": 25786608,
-      "archive_allocs_op": 1210,
-      "install_ns_op": 743943969,
-      "install_b_op": 273417104,
-      "install_allocs_op": 9529,
-      "process_peak_rss_kb": 326016,
+      "archive_ns_op": 2094246445,
+      "archive_bytes": 12575232,
+      "archive_b_op": 1614262104,
+      "archive_allocs_op": 2198,
+      "install_ns_op": 4542216670,
+      "install_b_op": 3628172544,
+      "install_allocs_op": 10855,
+      "process_peak_rss_kb": 617296,
       "rss_context": "complete go test process"
     }
   ]
