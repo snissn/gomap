@@ -27,6 +27,9 @@ type RouterBuildMetricsV1 = internal.RouterBuildMetricsV1
 type RouterModelV1 = internal.RouterModelV1
 type RouterPartitionScoreV1 = internal.RouterPartitionScoreV1
 type RouterRouteResultV1 = internal.RouterRouteResultV1
+type OverlapConfig = internal.OverlapConfig
+type Membership = internal.Membership
+type OverlapResult = internal.OverlapResult
 
 const SchemaVersion = internal.SchemaVersion
 
@@ -62,7 +65,13 @@ func BuildWithPartitioner(v []Vector, c Config, s Source, p Partitioner) (Artifa
 func BuildWithPartitionerPhased(v []Vector, c Config, s Source, p Partitioner) (Artifact, PhaseMetrics, error) {
 	return internal.BuildWithPartitionerPhased(v, c, s, p)
 }
-func ValidateArtifact(a Artifact) error        { return internal.ValidateArtifact(a) }
+func ValidateArtifact(a Artifact) error { return internal.ValidateArtifact(a) }
+func BuildOverlap(a Artifact, c OverlapConfig) (OverlapResult, error) {
+	return internal.BuildOverlap(a, c)
+}
+func ValidateOverlap(a Artifact, c OverlapConfig, r OverlapResult) error {
+	return internal.ValidateOverlap(a, c, r)
+}
 func CanonicalJSON(a Artifact) ([]byte, error) { return internal.CanonicalJSON(a) }
 func Digest(a Artifact) (string, error)        { return internal.Digest(a) }
 func DecodeArtifact(raw []byte, maxBytes int) (Artifact, error) {
