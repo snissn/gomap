@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -19,7 +20,7 @@ import (
 )
 
 const (
-	m3ReportSchemaVersion = 1
+	m3ReportSchemaVersion = 2
 	m3BenchmarkCollection = "m3_partition_source"
 	m3WarmupPasses        = 1
 )
@@ -44,47 +45,48 @@ type m3PartitionIndexReport struct {
 }
 
 type m3PartitionIndexRow struct {
-	Ratio                  float64 `json:"ratio"`
-	Budget                 int     `json:"budget"`
-	Used                   int     `json:"used"`
-	Unspent                int     `json:"unspent"`
-	Capacity               int     `json:"capacity"`
-	ReplicationFactor      float64 `json:"replication_factor"`
-	PartitionLoads         []int   `json:"partition_loads"`
-	EdgeCutBefore          int     `json:"edge_cut_before"`
-	EdgeCutAfter           int     `json:"edge_cut_after"`
-	BuildWallNanos         int64   `json:"build_wall_nanos"`
-	PeakRSSBytes           int64   `json:"peak_rss_bytes"`
-	PeakRSSAvailable       bool    `json:"peak_rss_available"`
-	ResidentBytes          int64   `json:"resident_bytes"`
-	ResidentBytesAvailable bool    `json:"resident_bytes_available"`
-	TemporaryBytes         int64   `json:"temporary_bytes"`
-	FinalBytes             int64   `json:"final_bytes"`
-	BytesPerSourceVector   float64 `json:"bytes_per_source_vector"`
-	PackBytes              uint64  `json:"pack_bytes"`
-	MappedBytes            uint64  `json:"mapped_bytes"`
-	HeapBytes              uint64  `json:"heap_bytes"`
-	SearcherOpenWallNanos  int64   `json:"searcher_open_wall_nanos"`
-	PackOpenNanos          uint64  `json:"pack_open_nanos"`
-	Queries                int     `json:"queries"`
-	LocalSearches          int     `json:"local_searches"`
-	WarmupPasses           int     `json:"warmup_passes"`
-	WarmNSPerOp            float64 `json:"warm_ns_per_op"`
-	WarmQPS                float64 `json:"warm_qps"`
-	WarmBytesPerOp         float64 `json:"warm_bytes_per_op"`
-	WarmAllocsPerOp        float64 `json:"warm_allocs_per_op"`
-	CandidatesPerOp        float64 `json:"candidates_per_op"`
-	EdgesPerOp             float64 `json:"edges_per_op"`
-	ExactLocalRecallAtK    float64 `json:"exact_local_recall_at_k"`
-	ManifestDigest         string  `json:"manifest_digest"`
-	SourceGeneration       uint64  `json:"source_generation"`
-	SourceChecksum         uint64  `json:"source_checksum"`
-	SourceSchemaHash       uint64  `json:"source_schema_hash"`
-	SourceRows             uint64  `json:"source_rows"`
-	SearchRoute            string  `json:"search_route"`
-	MissingAssets          uint64  `json:"missing_assets"`
-	CorruptAssets          uint64  `json:"corrupt_assets"`
-	StaleAssets            uint64  `json:"stale_assets"`
+	Ratio                        float64 `json:"ratio"`
+	Budget                       int     `json:"budget"`
+	Used                         int     `json:"used"`
+	Unspent                      int     `json:"unspent"`
+	Capacity                     int     `json:"capacity"`
+	ReplicationFactor            float64 `json:"replication_factor"`
+	PartitionLoads               []int   `json:"partition_loads"`
+	EdgeCutBefore                int     `json:"edge_cut_before"`
+	EdgeCutAfter                 int     `json:"edge_cut_after"`
+	BuildWallNanos               int64   `json:"build_wall_nanos"`
+	PeakRSSBytes                 int64   `json:"peak_rss_bytes"`
+	PeakRSSAvailable             bool    `json:"peak_rss_available"`
+	ResidentBytes                int64   `json:"resident_bytes"`
+	ResidentBytesAvailable       bool    `json:"resident_bytes_available"`
+	SourcePhysicalBytes          int64   `json:"source_physical_bytes"`
+	PeakDerivedTemporaryBytes    int64   `json:"peak_derived_temporary_bytes"`
+	FinalDerivedPhysicalBytes    int64   `json:"final_derived_physical_bytes"`
+	PhysicalBytesPerSourceVector float64 `json:"physical_bytes_per_source_vector"`
+	PackBytes                    uint64  `json:"pack_payload_bytes"`
+	MappedBytes                  uint64  `json:"mapped_bytes"`
+	HeapBytes                    uint64  `json:"heap_bytes"`
+	SearcherOpenWallNanos        int64   `json:"searcher_open_wall_nanos"`
+	PackOpenNanos                uint64  `json:"pack_open_nanos"`
+	Queries                      int     `json:"queries"`
+	LocalSearches                int     `json:"local_searches"`
+	WarmupPasses                 int     `json:"warmup_passes"`
+	WarmNSPerOp                  float64 `json:"warm_ns_per_op"`
+	WarmQPS                      float64 `json:"warm_qps"`
+	WarmBytesPerOp               float64 `json:"warm_bytes_per_op"`
+	WarmAllocsPerOp              float64 `json:"warm_allocs_per_op"`
+	CandidatesPerOp              float64 `json:"candidates_per_op"`
+	EdgesPerOp                   float64 `json:"edges_per_op"`
+	ExactLocalRecallAtK          float64 `json:"exact_local_recall_at_k"`
+	ManifestDigest               string  `json:"manifest_digest"`
+	SourceGeneration             uint64  `json:"source_generation"`
+	SourceChecksum               uint64  `json:"source_checksum"`
+	SourceSchemaHash             uint64  `json:"source_schema_hash"`
+	SourceRows                   uint64  `json:"source_rows"`
+	SearchRoute                  string  `json:"search_route"`
+	MissingAssets                uint64  `json:"missing_assets"`
+	CorruptAssets                uint64  `json:"corrupt_assets"`
+	StaleAssets                  uint64  `json:"stale_assets"`
 }
 
 func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vectorpartition.Artifact, artifactDigest, suffix string, vectors, queries [][]float64, stdout io.Writer) error {
@@ -146,7 +148,6 @@ func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vect
 }
 
 func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, generation uint64) (_ m3PartitionIndexRow, resultErr error) {
-	started := time.Now()
 	dir, err := os.MkdirTemp("", "treedb-vector-partition-m3-*")
 	if err != nil {
 		return m3PartitionIndexRow{}, err
@@ -186,6 +187,35 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 	if err != nil || !status.Loaded {
 		return m3PartitionIndexRow{}, fmt.Errorf("source vector rebuild status=%+v: %w", status, err)
 	}
+	if err := db.Checkpoint(); err != nil {
+		return m3PartitionIndexRow{}, err
+	}
+	if err := db.Close(); err != nil {
+		return m3PartitionIndexRow{}, err
+	}
+	dbOpen = false
+	sourcePhysicalBytes, err := m3DirectoryBytes(dir)
+	if err != nil || sourcePhysicalBytes <= 0 {
+		return m3PartitionIndexRow{}, fmt.Errorf("source physical footprint=%d: %w", sourcePhysicalBytes, err)
+	}
+	db, err = backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		return m3PartitionIndexRow{}, err
+	}
+	dbOpen = true
+	manager = collections.NewCollectionManager(db)
+	col, err = manager.OpenCollection(m3BenchmarkCollection)
+	if err != nil {
+		return m3PartitionIndexRow{}, err
+	}
+	started := time.Now()
+	sampler := startM3PhysicalFootprintSampler(dir, sourcePhysicalBytes)
+	defer func() {
+		if sampler != nil {
+			_, sampleErr := sampler.Stop()
+			resultErr = errors.Join(resultErr, sampleErr)
+		}
+	}()
 	source, sourceRows, err := col.VectorPartitionSourceOrdinalsV1(partitionHNSWIndex)
 	if err != nil {
 		return m3PartitionIndexRow{}, err
@@ -214,23 +244,44 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 	if resources != nil {
 		resources.Release()
 	}
+	if err := sampler.Sample(); err != nil {
+		return m3PartitionIndexRow{}, err
+	}
 	manifest.Assets = assets
 	manifest.Canonicalize()
 	if err := col.PublishVectorPartitionManifestV1(manifest, nil); err != nil {
 		return m3PartitionIndexRow{}, err
 	}
+	if err := sampler.Sample(); err != nil {
+		return m3PartitionIndexRow{}, err
+	}
 	if err := db.Checkpoint(); err != nil {
 		return m3PartitionIndexRow{}, err
 	}
-	buildWall := time.Since(started).Nanoseconds()
-	temporaryBytes, err := m3DirectoryBytes(dir)
-	if err != nil {
+	if err := sampler.Sample(); err != nil {
 		return m3PartitionIndexRow{}, err
 	}
 	if err := db.Close(); err != nil {
 		return m3PartitionIndexRow{}, err
 	}
 	dbOpen = false
+	finalTotalPhysicalBytes, err := m3DirectoryBytes(dir)
+	if err != nil {
+		return m3PartitionIndexRow{}, err
+	}
+	if finalTotalPhysicalBytes < sourcePhysicalBytes {
+		return m3PartitionIndexRow{}, fmt.Errorf("final physical footprint=%d below source baseline=%d", finalTotalPhysicalBytes, sourcePhysicalBytes)
+	}
+	finalDerivedPhysicalBytes := finalTotalPhysicalBytes - sourcePhysicalBytes
+	if err := sampler.Sample(); err != nil {
+		return m3PartitionIndexRow{}, err
+	}
+	peakDerivedTemporaryBytes, err := sampler.Stop()
+	sampler = nil
+	if err != nil {
+		return m3PartitionIndexRow{}, err
+	}
+	buildWall := time.Since(started).Nanoseconds()
 
 	db, err = backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
 	if err != nil {
@@ -329,57 +380,58 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 		heapBytes += searchStatus.HeapBytes
 		packOpenNanos += searchStatus.OpenNanos
 	}
-	var finalBytes uint64
+	var packPayloadBytes uint64
 	for _, asset := range manifest.Assets {
-		finalBytes += asset.Bytes
+		packPayloadBytes += asset.Bytes
 	}
-	if finalBytes != packBytes || lifecycle.AssetBytes != finalBytes {
-		return m3PartitionIndexRow{}, fmt.Errorf("pack byte accounting manifest=%d status=%d lifecycle=%d", finalBytes, packBytes, lifecycle.AssetBytes)
+	if packPayloadBytes != packBytes || lifecycle.AssetBytes != packPayloadBytes {
+		return m3PartitionIndexRow{}, fmt.Errorf("pack byte accounting manifest=%d status=%d lifecycle=%d", packPayloadBytes, packBytes, lifecycle.AssetBytes)
 	}
 	peakRSS, peakAvailable := m3PeakRSS()
 	resident, residentAvailable := m3ResidentBytes()
 	nsPerOp := float64(elapsed.Nanoseconds()) / float64(timedOps)
 	row := m3PartitionIndexRow{
-		Budget:                 overlap.Budget,
-		Used:                   overlap.Used,
-		Unspent:                overlap.Unspent,
-		Capacity:               artifact.Metrics.Cap,
-		ReplicationFactor:      float64(len(overlap.Memberships)) / float64(len(artifact.IDs)),
-		PartitionLoads:         append([]int(nil), overlap.Loads...),
-		EdgeCutBefore:          overlap.EdgeCutBefore,
-		EdgeCutAfter:           overlap.EdgeCutAfter,
-		BuildWallNanos:         buildWall,
-		PeakRSSBytes:           peakRSS,
-		PeakRSSAvailable:       peakAvailable,
-		ResidentBytes:          resident,
-		ResidentBytesAvailable: residentAvailable,
-		TemporaryBytes:         temporaryBytes,
-		FinalBytes:             int64(finalBytes),
-		BytesPerSourceVector:   float64(finalBytes) / float64(len(vectors)),
-		PackBytes:              packBytes,
-		MappedBytes:            mappedBytes,
-		HeapBytes:              heapBytes,
-		SearcherOpenWallNanos:  openWall,
-		PackOpenNanos:          packOpenNanos,
-		Queries:                len(queries),
-		LocalSearches:          timedOps,
-		WarmupPasses:           m3WarmupPasses,
-		WarmNSPerOp:            nsPerOp,
-		WarmQPS:                1e9 / nsPerOp,
-		WarmBytesPerOp:         float64(after.TotalAlloc-before.TotalAlloc) / float64(timedOps),
-		WarmAllocsPerOp:        float64(after.Mallocs-before.Mallocs) / float64(timedOps),
-		CandidatesPerOp:        float64(candidates) / float64(timedOps),
-		EdgesPerOp:             float64(edges) / float64(timedOps),
-		ExactLocalRecallAtK:    recallTotal / float64(correctnessSearches),
-		ManifestDigest:         manifest.IntegrityDigest,
-		SourceGeneration:       source.Generation,
-		SourceChecksum:         source.Checksum,
-		SourceSchemaHash:       source.SchemaHash,
-		SourceRows:             source.RowCount,
-		SearchRoute:            collections.VectorPartitionSearchRouteHNSWSearchPackV1,
-		MissingAssets:          lifecycle.MissingAssets,
-		CorruptAssets:          lifecycle.CorruptAssets,
-		StaleAssets:            lifecycle.StaleAssets,
+		Budget:                       overlap.Budget,
+		Used:                         overlap.Used,
+		Unspent:                      overlap.Unspent,
+		Capacity:                     artifact.Metrics.Cap,
+		ReplicationFactor:            float64(len(overlap.Memberships)) / float64(len(artifact.IDs)),
+		PartitionLoads:               append([]int(nil), overlap.Loads...),
+		EdgeCutBefore:                overlap.EdgeCutBefore,
+		EdgeCutAfter:                 overlap.EdgeCutAfter,
+		BuildWallNanos:               buildWall,
+		PeakRSSBytes:                 peakRSS,
+		PeakRSSAvailable:             peakAvailable,
+		ResidentBytes:                resident,
+		ResidentBytesAvailable:       residentAvailable,
+		SourcePhysicalBytes:          sourcePhysicalBytes,
+		PeakDerivedTemporaryBytes:    peakDerivedTemporaryBytes,
+		FinalDerivedPhysicalBytes:    finalDerivedPhysicalBytes,
+		PhysicalBytesPerSourceVector: float64(finalDerivedPhysicalBytes) / float64(len(vectors)),
+		PackBytes:                    packBytes,
+		MappedBytes:                  mappedBytes,
+		HeapBytes:                    heapBytes,
+		SearcherOpenWallNanos:        openWall,
+		PackOpenNanos:                packOpenNanos,
+		Queries:                      len(queries),
+		LocalSearches:                timedOps,
+		WarmupPasses:                 m3WarmupPasses,
+		WarmNSPerOp:                  nsPerOp,
+		WarmQPS:                      1e9 / nsPerOp,
+		WarmBytesPerOp:               float64(after.TotalAlloc-before.TotalAlloc) / float64(timedOps),
+		WarmAllocsPerOp:              float64(after.Mallocs-before.Mallocs) / float64(timedOps),
+		CandidatesPerOp:              float64(candidates) / float64(timedOps),
+		EdgesPerOp:                   float64(edges) / float64(timedOps),
+		ExactLocalRecallAtK:          recallTotal / float64(correctnessSearches),
+		ManifestDigest:               manifest.IntegrityDigest,
+		SourceGeneration:             source.Generation,
+		SourceChecksum:               source.Checksum,
+		SourceSchemaHash:             source.SchemaHash,
+		SourceRows:                   source.RowCount,
+		SearchRoute:                  collections.VectorPartitionSearchRouteHNSWSearchPackV1,
+		MissingAssets:                lifecycle.MissingAssets,
+		CorruptAssets:                lifecycle.CorruptAssets,
+		StaleAssets:                  lifecycle.StaleAssets,
 	}
 	return row, nil
 }
@@ -578,13 +630,13 @@ func m3ReplicationGate(rows []m3PartitionIndexRow) string {
 	if baseline == nil || overlap20 == nil {
 		return "not_evaluated: requires overlap 0 and 0.20 rows"
 	}
-	if baseline.FinalBytes <= 0 {
+	if baseline.FinalDerivedPhysicalBytes <= 0 {
 		return "failed: zero disjoint baseline bytes"
 	}
-	if float64(overlap20.FinalBytes) > 1.35*float64(baseline.FinalBytes) {
-		return fmt.Sprintf("failed: %.6fx exceeds 1.35x", float64(overlap20.FinalBytes)/float64(baseline.FinalBytes))
+	if float64(overlap20.FinalDerivedPhysicalBytes) > 1.35*float64(baseline.FinalDerivedPhysicalBytes) {
+		return fmt.Sprintf("failed: %.6fx exceeds 1.35x", float64(overlap20.FinalDerivedPhysicalBytes)/float64(baseline.FinalDerivedPhysicalBytes))
 	}
-	return fmt.Sprintf("passed: %.6fx <= 1.35x", float64(overlap20.FinalBytes)/float64(baseline.FinalBytes))
+	return fmt.Sprintf("passed: %.6fx <= 1.35x", float64(overlap20.FinalDerivedPhysicalBytes)/float64(baseline.FinalDerivedPhysicalBytes))
 }
 
 func validateM3PartitionIndexReport(report m3PartitionIndexReport) error {
@@ -592,10 +644,10 @@ func validateM3PartitionIndexReport(report m3PartitionIndexReport) error {
 		return errors.New("invalid M3 report identity")
 	}
 	for _, row := range report.Rows {
-		if row.Budget < 0 || row.Used < 0 || row.Unspent != row.Budget-row.Used || row.Capacity < 1 || row.ReplicationFactor < 1 || row.EdgeCutAfter > row.EdgeCutBefore || row.BuildWallNanos <= 0 || row.TemporaryBytes <= 0 || row.FinalBytes <= 0 || row.PackBytes != uint64(row.FinalBytes) || row.BytesPerSourceVector <= 0 || row.SearcherOpenWallNanos <= 0 || row.PackOpenNanos == 0 || row.LocalSearches <= 0 || row.WarmNSPerOp <= 0 || row.WarmQPS <= 0 || row.CandidatesPerOp <= 0 || row.ExactLocalRecallAtK < 0 || row.ExactLocalRecallAtK > 1 || row.ManifestDigest == "" || row.SourceRows != uint64(report.Dataset.Vectors) || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 {
+		if row.Budget < 0 || row.Used < 0 || row.Unspent != row.Budget-row.Used || row.Capacity < 1 || row.ReplicationFactor < 1 || row.EdgeCutAfter > row.EdgeCutBefore || row.BuildWallNanos <= 0 || row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes <= 0 || row.PackBytes == 0 || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PhysicalBytesPerSourceVector <= 0 || row.SearcherOpenWallNanos <= 0 || row.PackOpenNanos == 0 || row.LocalSearches <= 0 || row.WarmNSPerOp <= 0 || row.WarmQPS <= 0 || row.CandidatesPerOp <= 0 || row.ExactLocalRecallAtK < 0 || row.ExactLocalRecallAtK > 1 || row.ManifestDigest == "" || row.SourceRows != uint64(report.Dataset.Vectors) || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 {
 			return fmt.Errorf("invalid M3 evidence row: %+v", row)
 		}
-		for _, value := range []float64{row.Ratio, row.ReplicationFactor, row.BytesPerSourceVector, row.WarmNSPerOp, row.WarmQPS, row.WarmBytesPerOp, row.WarmAllocsPerOp, row.CandidatesPerOp, row.EdgesPerOp, row.ExactLocalRecallAtK} {
+		for _, value := range []float64{row.Ratio, row.ReplicationFactor, row.PhysicalBytesPerSourceVector, row.WarmNSPerOp, row.WarmQPS, row.WarmBytesPerOp, row.WarmAllocsPerOp, row.CandidatesPerOp, row.EdgesPerOp, row.ExactLocalRecallAtK} {
 			if math.IsNaN(value) || math.IsInf(value, 0) {
 				return errors.New("non-finite M3 evidence")
 			}
@@ -627,4 +679,75 @@ func m3DirectoryBytes(root string) (int64, error) {
 		return nil
 	})
 	return total, err
+}
+
+type m3PhysicalFootprintSampler struct {
+	root     string
+	baseline int64
+	stop     chan struct{}
+	done     chan struct{}
+
+	mu      sync.Mutex
+	peak    int64
+	err     error
+	stopped bool
+}
+
+func startM3PhysicalFootprintSampler(root string, baseline int64) *m3PhysicalFootprintSampler {
+	sampler := &m3PhysicalFootprintSampler{root: root, baseline: baseline, stop: make(chan struct{}), done: make(chan struct{})}
+	go func() {
+		defer close(sampler.done)
+		ticker := time.NewTicker(time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				_ = sampler.Sample()
+			case <-sampler.stop:
+				return
+			}
+		}
+	}()
+	return sampler
+}
+
+func (sampler *m3PhysicalFootprintSampler) Sample() error {
+	if sampler == nil {
+		return errors.New("nil M3 physical footprint sampler")
+	}
+	sampler.mu.Lock()
+	defer sampler.mu.Unlock()
+	if sampler.err != nil {
+		return sampler.err
+	}
+	total, err := m3DirectoryBytes(sampler.root)
+	if err != nil {
+		sampler.err = err
+		return err
+	}
+	delta := total - sampler.baseline
+	if delta < 0 {
+		sampler.err = fmt.Errorf("M3 physical footprint=%d below source baseline=%d", total, sampler.baseline)
+		return sampler.err
+	}
+	if delta > sampler.peak {
+		sampler.peak = delta
+	}
+	return nil
+}
+
+func (sampler *m3PhysicalFootprintSampler) Stop() (int64, error) {
+	if sampler == nil {
+		return 0, nil
+	}
+	sampler.mu.Lock()
+	if !sampler.stopped {
+		close(sampler.stop)
+		sampler.stopped = true
+	}
+	sampler.mu.Unlock()
+	<-sampler.done
+	sampler.mu.Lock()
+	defer sampler.mu.Unlock()
+	return sampler.peak, sampler.err
 }

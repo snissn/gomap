@@ -116,10 +116,10 @@ func (l VectorPartitionManifestLimits) totalMembershipLimit() int {
 }
 
 type VectorPartitionAssetV1 struct {
-	ID, Checksum string
-	PartitionID  uint32 // logical partition; RouterAsset is separate and remains zero.
-	Bytes        uint64
-	Ref          ColumnAssetRef
+	ID, Checksum, MembershipDigest string
+	PartitionID                    uint32 // logical partition; RouterAsset is separate and remains zero.
+	Bytes                          uint64
+	Ref                            ColumnAssetRef
 }
 type VectorPartitionPlacementV1 struct {
 	PartitionID uint32
@@ -239,6 +239,15 @@ func (m VectorPartitionManifestV1) Validate(l VectorPartitionManifestLimits) err
 	if err := validateMembershipsVPM(m.OverlapMemberships, seenP, "overlap", m.SourceRowCount, false, l.MaxMembershipsPerVector); err != nil {
 		return err
 	}
+	homeMemberships := make(map[VectorPartitionMembershipV1]struct{}, len(m.Memberships))
+	for _, membership := range m.Memberships {
+		homeMemberships[membership] = struct{}{}
+	}
+	for _, membership := range m.OverlapMemberships {
+		if _, duplicate := homeMemberships[membership]; duplicate {
+			return fmt.Errorf("%w: duplicate home/overlap membership", ErrVectorPartitionManifestInvalid)
+		}
+	}
 	if err := validateMembershipsVPM(m.Representatives, seenP, "representative", m.SourceRowCount, false, l.MaxRepresentativesPerPartition); err != nil {
 		return err
 	}
@@ -299,7 +308,7 @@ func totalMembershipsVPM(lists ...[]VectorPartitionMembershipV1) int {
 	return total
 }
 func validateAssetVPM(a VectorPartitionAssetV1, l VectorPartitionManifestLimits) error {
-	if a.ID == "" || len(a.ID) > l.MaxStringBytes || !isSHA256VPM(a.Checksum) || a.Ref.Offset < 0 || a.Ref.Length < 0 || uint64(a.Ref.Length) != a.Bytes {
+	if a.ID == "" || len(a.ID) > l.MaxStringBytes || !isSHA256VPM(a.Checksum) || len(a.MembershipDigest) > l.MaxStringBytes || a.MembershipDigest != "" && !isSHA256VPM(a.MembershipDigest) || a.ID == vectorPartitionLocalAssetIDV1(a.PartitionID) && !isSHA256VPM(a.MembershipDigest) || a.Ref.Offset < 0 || a.Ref.Length < 0 || uint64(a.Ref.Length) != a.Bytes {
 		return fmt.Errorf("%w: asset", ErrVectorPartitionManifestInvalid)
 	}
 	if err := validateColumnAssetRefForPlan(a.Ref); err != nil {
@@ -325,6 +334,9 @@ func encodedSizeVPM(m VectorPartitionManifestV1, l VectorPartitionManifestLimits
 			return err
 		}
 		if err := str(a.Checksum); err != nil {
+			return err
+		}
+		if err := str(a.MembershipDigest); err != nil {
 			return err
 		}
 		if err := str(string(a.Ref.Kind)); err != nil {
@@ -421,6 +433,7 @@ func (m VectorPartitionManifestV1) readyDigest() string {
 		writeU32VPM(h, a.PartitionID)
 		writeStringVPM(h, a.ID)
 		writeStringVPM(h, a.Checksum)
+		writeStringVPM(h, a.MembershipDigest)
 		writeU64VPM(h, a.Bytes)
 		writeColumnAssetRefVPM(h, a.Ref)
 	}
@@ -430,6 +443,7 @@ func (m VectorPartitionManifestV1) readyDigest() string {
 	writeU32VPM(h, a.PartitionID)
 	writeStringVPM(h, a.ID)
 	writeStringVPM(h, a.Checksum)
+	writeStringVPM(h, a.MembershipDigest)
 	writeU64VPM(h, a.Bytes)
 	writeColumnAssetRefVPM(h, a.Ref)
 	return hex.EncodeToString(h.Sum(nil))
@@ -510,7 +524,7 @@ func EncodeVectorPartitionManifestV1(m VectorPartitionManifestV1) ([]byte, error
 	var x [4]byte
 	binary.BigEndian.PutUint32(x[:], vectorPartitionManifestMagicV1)
 	b.Write(x[:])
-	putU32VPM(b, 2)
+	putU32VPM(b, 3)
 	for _, s := range []string{m.Format, m.State, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.IntegrityDigest, m.BalancePolicy, m.ReadySetDigest} {
 		putStringVPM(b, s)
 	}
@@ -541,12 +555,12 @@ func preflightVectorPartitionManifestV1(m VectorPartitionManifestV1, l VectorPar
 		}
 	}
 	for _, a := range m.Assets {
-		if len(a.ID) > l.MaxStringBytes || len(a.Checksum) > l.MaxStringBytes || len(a.Ref.Namespace) > l.MaxStringBytes || len(a.Ref.Kind) > l.MaxStringBytes {
+		if len(a.ID) > l.MaxStringBytes || len(a.Checksum) > l.MaxStringBytes || len(a.MembershipDigest) > l.MaxStringBytes || len(a.Ref.Namespace) > l.MaxStringBytes || len(a.Ref.Kind) > l.MaxStringBytes {
 			return fmt.Errorf("%w: string cap", ErrVectorPartitionManifestInvalid)
 		}
 	}
 	a := m.RouterAsset
-	if len(a.ID) > l.MaxStringBytes || len(a.Checksum) > l.MaxStringBytes || len(a.Ref.Namespace) > l.MaxStringBytes || len(a.Ref.Kind) > l.MaxStringBytes {
+	if len(a.ID) > l.MaxStringBytes || len(a.Checksum) > l.MaxStringBytes || len(a.MembershipDigest) > l.MaxStringBytes || len(a.Ref.Namespace) > l.MaxStringBytes || len(a.Ref.Kind) > l.MaxStringBytes {
 		return fmt.Errorf("%w: string cap", ErrVectorPartitionManifestInvalid)
 	}
 	return nil
@@ -559,7 +573,7 @@ func DecodeVectorPartitionManifestV1(raw []byte, l VectorPartitionManifestLimits
 		return VectorPartitionManifestV1{}, fmt.Errorf("%w: encoded bytes cap", ErrVectorPartitionManifestInvalid)
 	}
 	r := vpmReader{b: raw, l: l}
-	if r.u32() != vectorPartitionManifestMagicV1 || r.u32() != 2 {
+	if r.u32() != vectorPartitionManifestMagicV1 || r.u32() != 3 {
 		return VectorPartitionManifestV1{}, fmt.Errorf("%w: magic/version", ErrVectorPartitionManifestInvalid)
 	}
 	m := VectorPartitionManifestV1{}
@@ -713,14 +727,14 @@ func (r *vpmReader) allocationCount(max, minItemBytes int, label string) int {
 
 func (r *vpmReader) assets() []VectorPartitionAssetV1 {
 	// partition + two empty strings + bytes + the shortest column reference.
-	const minAssetBytes = 4 + 4 + 4 + 8 + (4 + 4 + 8 + 8 + 4 + 8 + 8 + 4)
+	const minAssetBytes = 4 + 4 + 4 + 4 + 8 + (4 + 4 + 8 + 8 + 4 + 8 + 8 + 4)
 	n := r.allocationCount(r.l.MaxAssets, minAssetBytes, "asset")
 	if r.err != nil {
 		return nil
 	}
 	x := make([]VectorPartitionAssetV1, n)
 	for i := range x {
-		x[i] = VectorPartitionAssetV1{PartitionID: r.u32(), ID: r.str(), Checksum: r.str(), Bytes: r.u64(), Ref: r.columnRef()}
+		x[i] = VectorPartitionAssetV1{PartitionID: r.u32(), ID: r.str(), Checksum: r.str(), MembershipDigest: r.str(), Bytes: r.u64(), Ref: r.columnRef()}
 	}
 	return x
 }
@@ -801,6 +815,7 @@ func putAssetsVPM(b *bytes.Buffer, x []VectorPartitionAssetV1) {
 		putU32VPM(b, a.PartitionID)
 		putStringVPM(b, a.ID)
 		putStringVPM(b, a.Checksum)
+		putStringVPM(b, a.MembershipDigest)
 		putU64VPM(b, a.Bytes)
 		putColumnAssetRefVPM(b, a.Ref)
 	}
@@ -2754,6 +2769,9 @@ func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV
 			return errors.New("collections: vector partition index definition digest mismatch")
 		}
 		if err := c.validateVectorPartitionSourceIdentityV1(m); err != nil {
+			return err
+		}
+		if err := c.validateVectorPartitionAssetMembershipBindingsV1(m); err != nil {
 			return err
 		}
 		if m.State == "ready" {

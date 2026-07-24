@@ -1,8 +1,10 @@
 package collections
 
 import (
+	"encoding/hex"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -155,6 +157,181 @@ func TestVectorPartitionNativePackPreflightAndLayeredAdjacencyV1(t *testing.T) {
 			t.Fatalf("remapped adjacency=%v want %v", got, want)
 		}
 	}
+}
+
+func TestVectorPartitionNativePackMembershipBindingRejectsCrossManifestMixV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
+	defer d.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	manifest := testVectorPartitionManifestV1()
+	manifest.State, manifest.RouterGeneration, manifest.RouterAsset, manifest.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+	manifest.Generation = 61
+	manifest.IndexName = def.Name
+	manifest.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
+	_, graph, _, err := col.columnVectorGraphPhysicalRowReaderSnapshotView(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, manifest.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
+	source := VectorPartitionSourceIdentityV1{Generation: manifest.SourceGeneration, Checksum: manifest.SourceChecksum, SchemaHash: manifest.SourceSchemaHash, RowCount: manifest.SourceRowCount}
+	inputs := []VectorPartitionSearchAssetV1{
+		{Source: source, Generation: manifest.Generation, PartitionID: 0, Dimensions: def.Dimensions},
+		{Source: source, Generation: manifest.Generation, PartitionID: 1, Dimensions: def.Dimensions},
+	}
+	assets, resources, err := col.MaterializeVectorPartitionLocalSearchAssetsV1(def.Name, manifest, 961, inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resources.Release()
+	manifest.Assets = assets
+	manifest.Canonicalize()
+	if err := col.validateVectorPartitionAssetMembershipBindingsV1(manifest); err != nil {
+		t.Fatalf("valid bindings: %v", err)
+	}
+	for _, asset := range assets {
+		expected, err := decodeVectorPartitionMembershipDigestV1(asset.MembershipDigest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), asset.Ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := hnswPackU16(raw, columnHNSWSearchPackHeaderVersionOffset); got != columnHNSWSearchPackVersionV2 {
+			t.Fatalf("pack version=%d want %d", got, columnHNSWSearchPackVersionV2)
+		}
+		pack, err := decodeColumnHNSWSearchPack(raw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{ManifestGeneration: manifest.SourceGeneration, ManifestChecksum: manifest.SourceChecksum, SchemaHash: manifest.SourceSchemaHash}, ExpectedMembershipDigest: expected})
+		if err != nil || pack.Header.MembershipDigest != expected {
+			t.Fatalf("persisted membership header=%x expected=%x err=%v", pack.Header.MembershipDigest, expected, err)
+		}
+	}
+
+	mixed := manifest
+	mixed.Memberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 1}, {VectorOrdinal: 1, PartitionID: 0}}
+	mixed.Canonicalize()
+	if err := col.validateVectorPartitionAssetMembershipBindingsV1(mixed); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("same-source cross-membership mix err=%v", err)
+	}
+	sourceReader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range mixed.Assets {
+		digest, err := vectorPartitionMembershipDigestV1(sourceReader, mixed.Generation, mixed.Assets[i].PartitionID, vectorPartitionMembershipsForPartitionV1(mixed, mixed.Assets[i].PartitionID))
+		if err != nil {
+			sourceReader.Close()
+			t.Fatal(err)
+		}
+		mixed.Assets[i].MembershipDigest = hex.EncodeToString(digest[:])
+	}
+	if err := sourceReader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	mixed.Canonicalize()
+	if err := col.validateVectorPartitionAssetMembershipBindingsV1(mixed); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("descriptor-resealed cross-membership header mix err=%v", err)
+	}
+
+	duplicate := manifest
+	duplicate.OverlapMemberships = append(duplicate.OverlapMemberships, duplicate.Memberships[0])
+	duplicate.Canonicalize()
+	if err := duplicate.Validate(DefaultVectorPartitionManifestLimits()); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		t.Fatalf("duplicate home/overlap membership err=%v", err)
+	}
+}
+
+func TestVectorPartitionNativePackExactCapRejectsWithoutDurableTraceV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
+	defer d.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	manifest := testVectorPartitionManifestV1()
+	manifest.State, manifest.RouterGeneration, manifest.RouterAsset, manifest.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+	manifest.Generation = 62
+	manifest.IndexName = def.Name
+	manifest.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
+	_, graph, _, err := col.columnVectorGraphPhysicalRowReaderSnapshotView(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, manifest.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
+	source := VectorPartitionSourceIdentityV1{Generation: manifest.SourceGeneration, Checksum: manifest.SourceChecksum, SchemaHash: manifest.SourceSchemaHash, RowCount: manifest.SourceRowCount}
+	input := []VectorPartitionSearchAssetV1{{Source: source, Generation: manifest.Generation, PartitionID: 0, Dimensions: def.Dimensions}}
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	level, err := vectorPartitionSourceMaxLayerV1(reader, 0)
+	if err != nil {
+		reader.Close()
+		t.Fatal(err)
+	}
+	id, ok := reader.documentIDForOrdinal(0)
+	if !ok {
+		reader.Close()
+		t.Fatal("missing source stable ID")
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	exactBytes, err := exactVectorPartitionNativePackBytesV1(1, def.Dimensions, make([]uint64, level+1), uint64(len(id)), vectorPartitionSearchAssetMaxBytesV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := vectorPartitionTestDirectoryBytesV1(d.ColumnAssetRootDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, resources, err := col.materializeVectorPartitionLocalSearchAssetsV1(def.Name, manifest, 962, input, exactBytes-1); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		if resources != nil {
+			resources.Release()
+		}
+		t.Fatalf("over-bound materialize err=%v", err)
+	}
+	after, err := vectorPartitionTestDirectoryBytesV1(d.ColumnAssetRootDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("over-bound materialize left physical trace before=%d after=%d", before, after)
+	}
+	if store, err := OpenExistingVectorPartitionStoreV1(d.Dir()); err == nil {
+		if _, err := store.Open(manifest.Collection, manifest.IndexName, manifest.Generation); err == nil {
+			t.Fatal("over-bound materialize left manifest trace")
+		}
+	}
+	assets, resources, err := col.materializeVectorPartitionLocalSearchAssetsV1(def.Name, manifest, 962, input, exactBytes)
+	if err != nil {
+		t.Fatalf("exact-bound materialize: %v", err)
+	}
+	defer resources.Release()
+	if len(assets) != 1 || int64(assets[0].Bytes) != exactBytes {
+		t.Fatalf("exact-bound assets=%+v exact=%d", assets, exactBytes)
+	}
+}
+
+func vectorPartitionTestDirectoryBytesV1(root string) (int64, error) {
+	var total int64
+	err := filepath.WalkDir(root, func(_ string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		total += info.Size()
+		return nil
+	})
+	return total, err
 }
 
 func TestVectorPartitionSourceOrdinalsBindNativeStableIDsV1(t *testing.T) {

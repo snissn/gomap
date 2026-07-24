@@ -35,21 +35,31 @@ order equals HNSW row order.
 
 `MaterializeVectorPartitionLocalSearchAssetsV1` then:
 
-1. validates count and conservative byte caps before row/pack allocation;
-2. loads authoritative source rows for each home and overlap membership;
-3. puts the selected highest-level source node at local ordinal zero;
-4. remaps every layered HNSW adjacency list from source to partition-local
+1. validates shape caps, scans authoritative stable IDs and topology, and
+   computes the exact encoded size including the header, directory, alignment,
+   ID bytes, every adjacency section, and row-reference sections before
+   allocating vectors or full topology;
+2. derives a canonical SHA-256 over the partition generation, partition ID,
+   and ordered authoritative stable-ID/home-or-overlap membership sequence;
+3. loads authoritative source rows for each home and overlap membership;
+4. puts the selected highest-level source node at local ordinal zero;
+5. remaps every layered HNSW adjacency list from source to partition-local
    ordinals, preserving the layered framing and dropping cross-partition
    neighbors; and
-5. writes the existing native `hnsw_search_pack_v1` format through the column
-   asset manager.
+6. writes the native `hnsw_search_pack_v1` format through the column asset
+   manager only after the actual encoded length exactly matches the preflight
+   and remains within the 256 MiB cap.
 
 The returned descriptors are installed in M1's manifest, which binds each
-logical partition to its exact asset ref, length, CRC, and SHA-256.
+logical partition to its exact membership digest, asset ref, length, CRC, and
+SHA-256. Partition packs use wire version 2 of the existing pack format to
+persist the same membership digest in the header; ordinary non-partition packs
+remain wire version 1.
 `OpenVectorPartitionLocalSearcherForGenerationV1` rechecks that binding after
 database close/reopen, maps or bounded-copies the pack, verifies the source
-identity and native HNSW header, and holds an M1 generation reader pin until
-`Close`. Missing, corrupt, stale-generation, or malformed assets fail closed.
+identity, recomputed membership set, descriptor, and native HNSW header, and
+holds an M1 generation reader pin until `Close`. Missing, corrupt,
+stale-generation, cross-membership, or malformed assets fail closed.
 
 `SearchWithMetrics` uses the no-document native HNSW route and returns
 candidate/edge accounting. Search status exposes route, pack/mapped/heap bytes,
@@ -83,26 +93,24 @@ GOWORK=off go run ./cmd/treedb_vector_partition_bench \
 
 The report records the M2 artifact digest and source/manifest identities,
 budget/used/unspent, loads, before/after edge cut, build wall time, peak and
-resident RSS availability, temporary/final/pack/mapped/heap bytes, bytes per
-source vector, pack/open time, warm latency/QPS/allocations, candidate/edge
-counts, exact local recall, and asset-health counts. The overlap `0.20` final
-pack bytes must remain at or below `1.35x` the disjoint row. Evidence is not a
-product enablement default: enablement remains disabled pending a clustered
-1M quality or fixed-probe win. No repository M3 1M corpus is currently
-available, so the report says unavailable rather than extrapolating.
+resident RSS availability, the closed/checkpointed source physical baseline,
+sampled peak M3-derived physical delta, final M3-derived on-disk bytes, pack
+payload/mapped/heap bytes, physical bytes per source vector, pack/open time,
+warm latency/QPS/allocations, candidate/edge counts, exact local recall, and
+asset-health counts. The derived physical measurements include asset framing
+and alignment plus the M1 lifecycle/manifest state. The overlap `0.20` final
+derived physical bytes must remain at or below `1.35x` the disjoint row; pack
+payload is retained as a separate diagnostic. Evidence is not a product
+enablement default: enablement remains disabled pending a clustered 1M quality
+or fixed-probe win. No repository M3 1M corpus is currently available, so the
+report says unavailable rather than extrapolating.
 
 The checked-in 10k report is
 [`TreeDB/docs/spec/artifacts/vector-partition-m3-evidence-v1.json`](../TreeDB/docs/spec/artifacts/vector-partition-m3-evidence-v1.json).
-It was captured from implementation commit
-`9d62ae1aad292eb0880a52e603b57ba68fd31a75` over base
-`a2d7bd55808136beaea1b6f823668f7b5d28cad8`. The disjoint and requested
-`0.20` rows used 4,527,160 and 4,527,938 pack bytes respectively
-(`1.000172x`, passing the `1.35x` gate). Both exercised 2,048 native local
-searches with 135.75 candidates and 4,263.535 edges per search. The hard
-capacity admitted one overlap membership and left 1,999 budget units unspent;
-edge cut fell from 5,184 to 5,088, while exact-local recall remained
-`0.321631`. This fixture therefore supplies cost, lifecycle, and native-path
-evidence, not the clustered/1M enablement win required by the issue.
+The exact implementation head and measured values are recorded in that
+machine-readable artifact. This fixture supplies cost, lifecycle, and
+native-path evidence, not the clustered/1M enablement win required by the
+issue.
 
 Routing, RPC, Raft placement, distributed merge, and document fetch remain
 later milestones.

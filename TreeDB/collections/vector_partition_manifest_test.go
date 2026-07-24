@@ -2760,9 +2760,8 @@ func TestVectorPartitionManifestV1TotalMembershipCap(t *testing.T) {
 func TestVectorPartitionManifestV1DefaultLimitsSupportMillionRowsAndOverlap(t *testing.T) {
 	m := testVectorPartitionManifestV1()
 	m.State, m.RouterGeneration, m.RouterAsset, m.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
-	m.PartitionCount = 1
-	m.Placements = []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}}
-	m.Assets = m.Assets[:1]
+	m.PartitionCount = 2
+	m.Placements = []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}, {PartitionID: 1, GroupID: "raft-a"}}
 	m.SourceRowCount = 1_000_000
 	m.Memberships = make([]VectorPartitionMembershipV1, m.SourceRowCount)
 	for i := range m.Memberships {
@@ -2770,7 +2769,7 @@ func TestVectorPartitionManifestV1DefaultLimitsSupportMillionRowsAndOverlap(t *t
 	}
 	m.OverlapMemberships = make([]VectorPartitionMembershipV1, 200_000)
 	for i := range m.OverlapMemberships {
-		m.OverlapMemberships[i] = VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 0}
+		m.OverlapMemberships[i] = VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 1}
 	}
 	m.Representatives = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}}
 	m.Canonicalize()

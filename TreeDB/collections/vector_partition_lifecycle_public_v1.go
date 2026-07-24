@@ -514,6 +514,14 @@ func (c *Collection) VectorPartitionStatusV1(index string, generation uint64) (V
 			} else {
 				corruptAssets++
 			}
+			continue
+		}
+		if asset.ID == vectorPartitionLocalAssetIDV1(asset.PartitionID) {
+			singleAssetManifest := manifest
+			singleAssetManifest.Assets = []VectorPartitionAssetV1{asset}
+			if err := c.validateVectorPartitionAssetMembershipBindingsV1(singleAssetManifest); err != nil {
+				staleAssets++
+			}
 		}
 	}
 	return VectorPartitionStatusV1{
