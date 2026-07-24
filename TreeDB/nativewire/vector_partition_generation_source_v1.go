@@ -31,6 +31,12 @@ type CollectionVectorPartitionGenerationSourceV1 struct {
 	stats       CollectionVectorPartitionGenerationCacheStatsV1
 	closeOnce   sync.Once
 	closeErr    error
+
+	// Narrow package-test seams for shared-load cancellation and cached-active
+	// validation. Production always uses the collection lifecycle authority.
+	testLoadGeneration func(context.Context, collectionVectorPartitionGenerationKeyV1) (*collectionVectorPartitionGenerationCacheV1, error)
+	testValidateActive func(context.Context, collectionVectorPartitionGenerationKeyV1) error
+	testBeforeLoadWait func()
 }
 
 type CollectionVectorPartitionGenerationCacheStatsV1 struct {
@@ -83,17 +89,38 @@ func (s *CollectionVectorPartitionGenerationSourceV1) PinVectorPartitionGenerati
 		}
 		if entry := s.entries[key]; entry != nil {
 			entry.refs++
+			s.mu.Unlock()
+			if err := s.validateActive(ctx, key); err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					_ = s.release(entry)
+					return nil, err
+				}
+				invalidateErr := s.InvalidateVectorPartitionGenerationV1(key.index, key.generation)
+				releaseErr := s.release(entry)
+				return nil, errors.Join(
+					fmt.Errorf("%w: cached generation is no longer active: %v", ErrVectorPartitionShardSearchGenerationMismatch, err),
+					invalidateErr,
+					releaseErr,
+				)
+			}
+			s.mu.Lock()
 			s.stats.GenerationHits++
 			s.mu.Unlock()
 			return newCollectionVectorPartitionGenerationLeaseV1(s, entry), nil
 		}
 		if load := s.loads[key]; load != nil {
 			s.mu.Unlock()
+			if s.testBeforeLoadWait != nil {
+				s.testBeforeLoadWait()
+			}
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			case <-load.ready:
 				if load.err != nil {
+					if (errors.Is(load.err, context.Canceled) || errors.Is(load.err, context.DeadlineExceeded)) && ctx.Err() == nil {
+						continue
+					}
 					return nil, load.err
 				}
 				continue
@@ -146,11 +173,17 @@ func (s *CollectionVectorPartitionGenerationSourceV1) PinVectorPartitionGenerati
 }
 
 func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context.Context, key collectionVectorPartitionGenerationKeyV1) (*collectionVectorPartitionGenerationCacheV1, error) {
+	if s.testLoadGeneration != nil {
+		return s.testLoadGeneration(ctx, key)
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	pin, err := s.Collection.AcquireVectorPartitionReaderPinV1(key.index, key.generation)
+	pin, err := s.Collection.AcquireVectorPartitionReaderPinWithContextV1(ctx, key.index, key.generation)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("%w: generation pin: %v", ErrVectorPartitionShardSearchAssetsUnavailable, err)
 	}
 	release := true
@@ -159,15 +192,12 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 			pin.Release()
 		}
 	}()
-	status, err := s.Collection.VectorPartitionStatusV1(key.index, key.generation)
+	manifest, err := s.Collection.ActiveVectorPartitionManifestWithContextV1(ctx, key.index, key.generation)
 	if err != nil {
-		return nil, fmt.Errorf("%w: generation status: %v", ErrVectorPartitionShardSearchAssetsUnavailable, err)
-	}
-	if !status.Ready || !status.Active || status.StaleReason != "" {
-		return nil, fmt.Errorf("%w: generation ready=%t active=%t stale_reason=%q", ErrVectorPartitionShardSearchGenerationMismatch, status.Ready, status.Active, status.StaleReason)
-	}
-	if status.MissingAssets != 0 || status.CorruptAssets != 0 || status.StaleAssets != 0 {
-		return nil, fmt.Errorf("%w: missing=%d corrupt=%d stale=%d", ErrVectorPartitionShardSearchAssetsUnavailable, status.MissingAssets, status.CorruptAssets, status.StaleAssets)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: generation status: %v", ErrVectorPartitionShardSearchGenerationMismatch, err)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -177,11 +207,18 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 		collection: s.Collection,
 		index:      key.index,
 		generation: key.generation,
-		manifest:   pinnedVectorPartitionManifestV1(status.Manifest),
+		manifest:   pinnedVectorPartitionManifestV1(manifest),
 		pin:        pin,
 		searchers:  make(map[uint32]*collections.VectorPartitionLocalSearcherV1),
 		opening:    make(map[uint32]*collectionVectorPartitionSearchLoadV1),
 	}, nil
+}
+
+func (s *CollectionVectorPartitionGenerationSourceV1) validateActive(ctx context.Context, key collectionVectorPartitionGenerationKeyV1) error {
+	if s.testValidateActive != nil {
+		return s.testValidateActive(ctx, key)
+	}
+	return s.Collection.ValidateActiveVectorPartitionGenerationWithContextV1(ctx, key.index, key.generation)
 }
 
 func (s *CollectionVectorPartitionGenerationSourceV1) isInvalidatedLocked(key collectionVectorPartitionGenerationKeyV1) bool {
@@ -347,6 +384,9 @@ func (e *collectionVectorPartitionGenerationCacheV1) openPartition(ctx context.C
 				return nil, ctx.Err()
 			case <-load.ready:
 				if load.err != nil {
+					if (errors.Is(load.err, context.Canceled) || errors.Is(load.err, context.DeadlineExceeded)) && ctx.Err() == nil {
+						continue
+					}
 					return nil, load.err
 				}
 				continue
@@ -356,9 +396,11 @@ func (e *collectionVectorPartitionGenerationCacheV1) openPartition(ctx context.C
 		e.opening[partition] = load
 		e.mu.Unlock()
 
-		searcher, err := e.collection.OpenVectorPartitionLocalSearcherForGenerationV1(e.index, e.generation, partition)
+		searcher, err := e.collection.OpenVectorPartitionLocalSearcherForGenerationWithContextV1(ctx, e.index, e.generation, partition)
 		if err != nil {
-			err = fmt.Errorf("%w: %v", ErrVectorPartitionShardSearchAssetsUnavailable, err)
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				err = fmt.Errorf("%w: %v", ErrVectorPartitionShardSearchAssetsUnavailable, err)
+			}
 		}
 		e.mu.Lock()
 		if err == nil && e.closed {

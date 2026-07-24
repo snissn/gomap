@@ -31,6 +31,29 @@ func TestVectorPartitionLocalSearcherV1ExactStableIDsAndPins(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionLocalSearcherV1ScratchBoundIncludesRowSizedHNSWState(t *testing.T) {
+	searcher := &VectorPartitionLocalSearcherV1{
+		asset: VectorPartitionSearchAssetV1{Generation: 1, PartitionID: 2, Dimensions: 128},
+		prepared: &columnHNSWSearchPackPreparedView{Header: columnHNSWSearchPackHeader{
+			Rows:         1_000_000,
+			Dimensions:   128,
+			VectorStride: 128,
+			M:            16,
+			EfSearch:     128,
+		}},
+	}
+	got, err := searcher.SearchScratchBytesV1(VectorPartitionSearchOptionsV1{TopK: 10, EfSearch: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got <= 8_000_000 {
+		t.Fatalf("scratch bytes=%d want row-count visit bitmap plus candidate queues", got)
+	}
+	if got <= 16*64 {
+		t.Fatalf("scratch bytes=%d incorrectly modeled only ef_search candidates", got)
+	}
+}
+
 func TestVectorPartitionLocalSearcherV1ExplicitOptionsAndCancellation(t *testing.T) {
 	asset := VectorPartitionSearchAssetV1{
 		ManifestChecksum: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

@@ -7,12 +7,63 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"sort"
 	"strings"
 )
+
+// ValidateActiveVectorPartitionGenerationWithContextV1 performs the
+// lightweight per-request lifecycle check needed by serving caches. It reads
+// the authoritative checkpoint and source identity without rehashing immutable
+// search assets, which were verified when the cached generation was opened.
+func (c *Collection) ValidateActiveVectorPartitionGenerationWithContextV1(ctx context.Context, index string, generation uint64) error {
+	_, err := c.ActiveVectorPartitionManifestWithContextV1(ctx, index, generation)
+	return err
+}
+
+func (c *Collection) ActiveVectorPartitionManifestWithContextV1(ctx context.Context, index string, generation uint64) (VectorPartitionManifestV1, error) {
+	if c == nil || c.db == nil {
+		return VectorPartitionManifestV1{}, errors.New("collections: closed collection")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	store, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
+	if err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	loaded, present, err := store.loadVectorPartitionLifecycleAuthorityV1(c.name, index)
+	if err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	if !present || loaded.state.ActiveGeneration != generation {
+		return VectorPartitionManifestV1{}, fmt.Errorf("%w: generation %d is not active", ErrVectorPartitionManifestInvalid, generation)
+	}
+	entry, ok := loaded.state.Generations[generation]
+	if !ok || entry.Manifest == nil || entry.Deleting || entry.Manifest.State != "ready" {
+		return VectorPartitionManifestV1{}, fmt.Errorf("%w: generation %d is not complete and ready", ErrVectorPartitionManifestInvalid, generation)
+	}
+	manifest, err := vectorPartitionLifecycleManifestV1(loaded.state, generation, false)
+	if err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	if err := c.validateVectorPartitionSourceIdentityV1(manifest); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	return manifest, nil
+}
 
 func (s *VectorPartitionStoreV1) loadVectorPartitionLifecycleAuthorityV1(collection, index string) (vectorPartitionLifecycleCheckpointStoreStateV1, bool, error) {
 	var zero vectorPartitionLifecycleCheckpointStoreStateV1

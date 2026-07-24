@@ -1,12 +1,22 @@
 package collections
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestOpenVectorPartitionLocalSearcherForGenerationWithContextV1RejectsCanceledColdOpen(t *testing.T) {
+	_, _, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := col.OpenVectorPartitionLocalSearcherForGenerationWithContextV1(ctx, def.Name, 1, 0); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled cold open err=%v", err)
+	}
+}
 
 func TestVectorPartitionPersistentLocalSearcherReopenCorruptionAndPinsV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)

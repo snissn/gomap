@@ -12,6 +12,7 @@ import (
 	"math"
 	"sort"
 	"sync"
+	"unsafe"
 )
 
 var ErrVectorPartitionSearchUnavailable = errors.New("collections: vector partition search unavailable")
@@ -81,6 +82,101 @@ type VectorPartitionSearchStatusV1 struct {
 	ActivePins                          uint64
 	Opened, Searches, Failures          uint64
 	Retired                             bool
+}
+
+// SearchScratchBytesV1 returns a conservative upper bound for the transient
+// candidate/search scratch allocated by one SearchWithOptionsV1 call. Serving
+// layers use it before search so a small ef_search cannot conceal the
+// row-count-sized visit bitmap required by the native HNSW pack.
+func (s *VectorPartitionLocalSearcherV1) SearchScratchBytesV1(opts VectorPartitionSearchOptionsV1) (uint64, error) {
+	if s == nil || opts.TopK < 1 || opts.EfSearch < 0 {
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
+	s.mu.Lock()
+	if s.retired {
+		s.mu.Unlock()
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
+	prepared := s.prepared
+	exactRows := len(s.asset.IDs)
+	var header columnHNSWSearchPackHeader
+	if prepared != nil {
+		header = prepared.Header
+	}
+	s.mu.Unlock()
+
+	if prepared == nil {
+		return checkedVectorPartitionScratchProductV1(uint64(exactRows), uint64(unsafe.Sizeof(VectorPartitionSearchResultV1{})))
+	}
+	rowCount := header.Rows
+	if rowCount < 0 || header.VectorStride < 0 || header.M < 0 {
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
+	topK := opts.TopK
+	if topK > rowCount {
+		topK = rowCount
+	}
+	efSearch := opts.EfSearch
+	if efSearch == 0 {
+		efSearch = header.EfSearch
+	}
+	if efSearch < topK {
+		efSearch = topK
+	}
+	if efSearch > rowCount {
+		efSearch = rowCount
+	}
+	degree := header.M
+	if degree < 1 {
+		degree = 1
+	}
+	if degree <= math.MaxInt/2 {
+		degree *= 2
+	}
+	frontier := columnVectorGraphNativeSearchFrontierCapacity(rowCount, degree, topK, efSearch)
+
+	var total uint64
+	add := func(count int, width uintptr) error {
+		if count < 0 {
+			return ErrVectorPartitionSearchUnavailable
+		}
+		bytes, err := checkedVectorPartitionScratchProductV1(uint64(count), uint64(width))
+		if err != nil || math.MaxUint64-total < bytes {
+			return ErrVectorPartitionSearchUnavailable
+		}
+		total += bytes
+		return nil
+	}
+	for _, item := range []struct {
+		count int
+		width uintptr
+	}{
+		{rowCount, unsafe.Sizeof(uint64(0))},
+		{frontier, unsafe.Sizeof(columnVectorGraphSearchCandidate{})},
+		{efSearch, unsafe.Sizeof(columnVectorGraphSearchCandidate{})},
+		{topK, unsafe.Sizeof(columnVectorGraphNativeSearchResult{})},
+		{topK, unsafe.Sizeof([]byte(nil))},
+		{topK, unsafe.Sizeof(int(0))},
+		{topK, unsafe.Sizeof(int(0))},
+		{topK, unsafe.Sizeof(DocumentRowRef{})},
+		{topK, unsafe.Sizeof(bool(false))},
+		{degree, unsafe.Sizeof(float64(0))},
+		{degree, unsafe.Sizeof(uint32(0))},
+		{degree, unsafe.Sizeof(float32(0))},
+		{header.VectorStride, unsafe.Sizeof(float32(0))},
+	} {
+		if err := add(item.count, item.width); err != nil {
+			return 0, err
+		}
+	}
+	return total, nil
+}
+
+func checkedVectorPartitionScratchProductV1(left, right uint64) (uint64, error) {
+	if left != 0 && right > math.MaxUint64/left {
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
+	return left * right, nil
 }
 
 type VectorPartitionLocalSearcherV1 struct {

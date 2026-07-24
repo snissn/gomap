@@ -307,6 +307,13 @@ func NewVectorPartitionShardSearchServiceV1(opts VectorPartitionShardSearchServi
 	if _, ok := opts.Catalog.Placement(opts.Placement.Collection); !ok {
 		return nil, fmt.Errorf("%w: collection is absent from the resolved catalog", ErrVectorPartitionShardSearchRouteMismatch)
 	}
+	localGroup, ok := opts.Catalog.Group(opts.LocalGroupID)
+	if !ok {
+		return nil, fmt.Errorf("%w: local group %q is absent from the resolved catalog", ErrVectorPartitionShardSearchRouteMismatch, opts.LocalGroupID)
+	}
+	if !slices.Contains(localGroup.Members, opts.LocalNodeID) {
+		return nil, fmt.Errorf("%w: local node %q is not a member of group %q", ErrVectorPartitionShardSearchRouteMismatch, opts.LocalNodeID, opts.LocalGroupID)
+	}
 	owners := make(map[uint32]raftcluster.GroupID, len(opts.Placement.Partitions))
 	for _, part := range opts.Placement.Partitions {
 		owners[part.PartitionID] = part.GroupID
@@ -464,6 +471,18 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 			candidateCeiling = uint64(status.HomeMemberships + status.OverlapMemberships)
 		}
 		partitionCandidateBytes, ok := mulUint64V1(candidateCeiling, 64)
+		scratchBytes, scratchErr := searcher.SearchScratchBytesV1(collections.VectorPartitionSearchOptionsV1{
+			TopK:     request.TopK,
+			EfSearch: request.EfSearch,
+		})
+		if scratchErr != nil {
+			_ = lease.Close()
+			response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
+			return response, s.wrapError(fmt.Errorf("%w: partition %d scratch bound: %v", ErrVectorPartitionShardSearchAssetsUnavailable, partitionID, scratchErr), groupID)
+		}
+		if scratchBytes > partitionCandidateBytes {
+			partitionCandidateBytes = scratchBytes
+		}
 		if ok {
 			openedCandidateBytes, ok = addUint64V1(openedCandidateBytes, partitionCandidateBytes)
 		}

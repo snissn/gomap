@@ -256,6 +256,149 @@ func TestCollectionVectorPartitionGenerationCacheCloseLetsPinnedRequestsDrainV1(
 	}
 }
 
+func TestCollectionVectorPartitionGenerationCacheRevalidatesWarmHitV1(t *testing.T) {
+	searcher, err := collections.OpenVectorPartitionLocalSearcherV1(
+		vectorPartitionShardSearchAssetTestV1(0, []string{"a"}, [][]float32{{1, 0}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := collectionVectorPartitionGenerationKeyV1{index: "embedding", generation: 7}
+	entry := &collectionVectorPartitionGenerationCacheV1{
+		index:      key.index,
+		generation: key.generation,
+		manifest:   VectorPartitionPinnedManifestV1{Generation: key.generation},
+		searchers:  map[uint32]*collections.VectorPartitionLocalSearcherV1{0: searcher},
+		opening:    make(map[uint32]*collectionVectorPartitionSearchLoadV1),
+	}
+	source := &CollectionVectorPartitionGenerationSourceV1{
+		Collection: new(collections.Collection),
+		entries:    map[collectionVectorPartitionGenerationKeyV1]*collectionVectorPartitionGenerationCacheV1{key: entry},
+		testValidateActive: func(context.Context, collectionVectorPartitionGenerationKeyV1) error {
+			return errors.New("generation replaced")
+		},
+	}
+	if _, err := source.PinVectorPartitionGenerationV1(context.Background(), key.index, key.generation); !errors.Is(err, ErrVectorPartitionShardSearchGenerationMismatch) {
+		t.Fatalf("warm stale generation err=%v", err)
+	}
+	if !searcher.Status().Retired {
+		t.Fatal("stale warm generation remained cached and open")
+	}
+	if _, ok := source.invalidated[key]; !ok {
+		t.Fatal("stale warm generation was not permanently invalidated")
+	}
+}
+
+func TestCollectionVectorPartitionGenerationSingleflightDoesNotShareCallerCancellationV1(t *testing.T) {
+	key := collectionVectorPartitionGenerationKeyV1{index: "embedding", generation: 7}
+	firstLoadStarted := make(chan struct{})
+	releaseFirstLoad := make(chan struct{})
+	waiterAttached := make(chan struct{})
+	var waitOnce sync.Once
+	loadCalls := 0
+	source := &CollectionVectorPartitionGenerationSourceV1{
+		Collection: new(collections.Collection),
+		testBeforeLoadWait: func() {
+			waitOnce.Do(func() { close(waiterAttached) })
+		},
+		testLoadGeneration: func(ctx context.Context, got collectionVectorPartitionGenerationKeyV1) (*collectionVectorPartitionGenerationCacheV1, error) {
+			if got != key {
+				return nil, fmt.Errorf("key=%+v", got)
+			}
+			loadCalls++
+			if loadCalls == 1 {
+				close(firstLoadStarted)
+				<-releaseFirstLoad
+				return nil, ctx.Err()
+			}
+			return &collectionVectorPartitionGenerationCacheV1{
+				index:      key.index,
+				generation: key.generation,
+				manifest:   VectorPartitionPinnedManifestV1{Generation: key.generation},
+				searchers:  make(map[uint32]*collections.VectorPartitionLocalSearcherV1),
+				opening:    make(map[uint32]*collectionVectorPartitionSearchLoadV1),
+			}, nil
+		},
+	}
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstResult := make(chan error, 1)
+	go func() {
+		_, err := source.PinVectorPartitionGenerationV1(firstCtx, key.index, key.generation)
+		firstResult <- err
+	}()
+	<-firstLoadStarted
+	secondResult := make(chan struct {
+		pin VectorPartitionPinnedGenerationV1
+		err error
+	}, 1)
+	go func() {
+		pin, err := source.PinVectorPartitionGenerationV1(context.Background(), key.index, key.generation)
+		secondResult <- struct {
+			pin VectorPartitionPinnedGenerationV1
+			err error
+		}{pin: pin, err: err}
+	}()
+	<-waiterAttached
+	cancelFirst()
+	close(releaseFirstLoad)
+	if err := <-firstResult; !errors.Is(err, context.Canceled) {
+		t.Fatalf("first caller err=%v", err)
+	}
+	second := <-secondResult
+	if second.err != nil || second.pin == nil {
+		t.Fatalf("independent waiter pin=%v err=%v", second.pin, second.err)
+	}
+	if loadCalls != 2 {
+		t.Fatalf("load calls=%d want canceled caller plus independent retry", loadCalls)
+	}
+	if err := second.pin.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVectorPartitionShardSearchConstructorRejectsNonMemberLocalNodeV1(t *testing.T) {
+	catalog, err := raftplacement.Validate(raftplacement.CatalogV1{
+		Features: raftplacement.DefaultFeatureSet(),
+		Groups: []raftplacement.GroupV1{{
+			ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a",
+		}},
+		Placements: []raftplacement.CollectionPlacementV1{{
+			Collection: raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "docs"},
+			GroupID:    "group-a",
+			Mode:       raftplacement.PlacementModeCollectionV1,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	placement := raftplacement.VectorPartitionPlacementRecordV1{
+		Collection:            raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "docs"},
+		IndexName:             "embedding",
+		IndexDefinitionDigest: vectorPartitionShardSearchDigestTestV1,
+		SourceGeneration:      11,
+		SourceChecksum:        22,
+		SourceSchemaHash:      33,
+		SourceRowCount:        5,
+		PartitionGeneration:   7,
+		PartitionCount:        1,
+		Partitions:            []raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},
+	}
+	_, err = NewVectorPartitionShardSearchServiceV1(VectorPartitionShardSearchServiceOptionsV1{
+		Catalog:          catalog,
+		Placement:        placement,
+		LocalNodeID:      "node-b",
+		LocalGroupID:     "group-a",
+		ReadCoordinator:  &fakeVectorPartitionReadCoordinatorV1{},
+		GenerationSource: &fakeVectorPartitionGenerationSourceV1{},
+	})
+	if !errors.Is(err, ErrVectorPartitionShardSearchRouteMismatch) {
+		t.Fatalf("non-member constructor err=%v", err)
+	}
+}
+
 func TestVectorPartitionShardSearchLeaderGroupLocalReturnsOracleAndProofV1(t *testing.T) {
 	service, source, coordinator := newVectorPartitionShardSearchTestServiceV1(t, []raftplacement.VectorPartitionGroupV1{
 		{PartitionID: 0, GroupID: "group-a"},
@@ -662,6 +805,9 @@ func BenchmarkVectorPartitionShardSearchServiceV1(b *testing.B) {
 	cachedSource := &CollectionVectorPartitionGenerationSourceV1{
 		Collection: new(collections.Collection),
 		entries:    map[collectionVectorPartitionGenerationKeyV1]*collectionVectorPartitionGenerationCacheV1{key: entry},
+		testValidateActive: func(context.Context, collectionVectorPartitionGenerationKeyV1) error {
+			return nil
+		},
 	}
 	service.generationSource = cachedSource
 	b.Cleanup(func() {

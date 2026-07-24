@@ -27,6 +27,15 @@ func requireVectorPartitionPersistenceV1(t testing.TB) {
 	}
 }
 
+func TestVerifyVectorPartitionAssetsWithContextV1RejectsCanceledOpen(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := verifyVectorPartitionAssetsWithContextV1(ctx, t.TempDir(), "namespace", []VectorPartitionAssetV1{{ID: "asset"}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("verify canceled err=%v", err)
+	}
+}
+
 // These helpers exercise the store's private already-authorized primitives in
 // storage-format tests. Production lifecycle mutation must go through the
 // collection-owned APIs so it has DB maintenance authority.

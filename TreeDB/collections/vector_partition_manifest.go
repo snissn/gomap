@@ -2129,16 +2129,32 @@ func vectorPartitionReaderPinCountV1(root, collection, index string, generation 
 	return vectorPartitionReaderPinsV1.counts[vectorPartitionReaderPinKeyV1(root, collection, index, generation)]
 }
 func (c *Collection) AcquireVectorPartitionReaderPinV1(index string, generation uint64) (*VectorPartitionReaderPinV1, error) {
+	return c.AcquireVectorPartitionReaderPinWithContextV1(context.Background(), index, generation)
+}
+
+func (c *Collection) AcquireVectorPartitionReaderPinWithContextV1(ctx context.Context, index string, generation uint64) (*VectorPartitionReaderPinV1, error) {
 	if c == nil || c.db == nil {
 		return nil, errors.New("collections: closed collection")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var pin *VectorPartitionReaderPinV1
 	err := WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		s, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
 		if err != nil {
 			return err
 		}
 		if _, err := s.Open(c.name, index, generation); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		key := vectorPartitionReaderPinKeyV1(c.db.Dir(), c.name, index, generation)
@@ -2854,7 +2870,17 @@ func (c *Collection) VectorPartitionSourceIdentityV1(indexName string) (VectorPa
 }
 
 func verifyVectorPartitionAssetsV1(root, namespace string, assets []VectorPartitionAssetV1) error {
+	return verifyVectorPartitionAssetsWithContextV1(context.Background(), root, namespace, assets)
+}
+
+func verifyVectorPartitionAssetsWithContextV1(ctx context.Context, root, namespace string, assets []VectorPartitionAssetV1) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	for _, a := range assets {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := validateColumnAssetRefForPlan(a.Ref); err != nil {
 			return fmt.Errorf("collections: vector partition asset %q ref: %w", a.ID, err)
 		}
@@ -2881,7 +2907,10 @@ func verifyVectorPartitionAssetsV1(root, namespace string, assets []VectorPartit
 			file.Close()
 			return fmt.Errorf("collections: vector partition asset %q truncated", a.ID)
 		}
-		section := io.NewSectionReader(file, a.Ref.Offset, a.Ref.Length)
+		section := &vectorPartitionContextReaderV1{
+			ctx: ctx,
+			r:   io.NewSectionReader(file, a.Ref.Offset, a.Ref.Length),
+		}
 		sha := sha256.New()
 		crc := crc32.NewIEEE()
 		written, err := io.CopyBuffer(io.MultiWriter(sha, crc), section, make([]byte, 64<<10))
@@ -2897,6 +2926,27 @@ func verifyVectorPartitionAssetsV1(root, namespace string, assets []VectorPartit
 		}
 	}
 	return nil
+}
+
+type vectorPartitionContextReaderV1 struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (r *vectorPartitionContextReaderV1) Read(dst []byte) (int, error) {
+	if r == nil || r.r == nil {
+		return 0, io.EOF
+	}
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	n, err := r.r.Read(dst)
+	if err == nil {
+		if ctxErr := r.ctx.Err(); ctxErr != nil {
+			return n, ctxErr
+		}
+	}
+	return n, err
 }
 
 func (c *Collection) vectorPartitionLegacyStatusV1(index string, generation uint64) (VectorPartitionStatusV1, error) {

@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -63,7 +64,17 @@ func vectorPartitionMembershipsForPartitionV1(manifest VectorPartitionManifestV1
 }
 
 func vectorPartitionMembershipDigestV1(reader *columnVectorGraphPhysicalRowReader, generation uint64, partition uint32, members []vectorPartitionMembershipSourceV1) ([sha256.Size]byte, error) {
+	return vectorPartitionMembershipDigestWithContextV1(context.Background(), reader, generation, partition, members)
+}
+
+func vectorPartitionMembershipDigestWithContextV1(ctx context.Context, reader *columnVectorGraphPhysicalRowReader, generation uint64, partition uint32, members []vectorPartitionMembershipSourceV1) ([sha256.Size]byte, error) {
 	var zero [sha256.Size]byte
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
 	if reader == nil || generation == 0 || len(members) == 0 {
 		return zero, fmt.Errorf("%w: membership digest input", ErrVectorPartitionSearchUnavailable)
 	}
@@ -81,7 +92,12 @@ func vectorPartitionMembershipDigestV1(reader *columnVectorGraphPhysicalRowReade
 	binary.BigEndian.PutUint64(encoded[:], uint64(len(canonical)))
 	h.Write(encoded[:])
 	lastOrdinal := -1
-	for _, member := range canonical {
+	for i, member := range canonical {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return zero, err
+			}
+		}
 		if member.ordinal < 0 || member.ordinal == lastOrdinal {
 			return zero, fmt.Errorf("%w: duplicate membership ordinal", ErrVectorPartitionSearchUnavailable)
 		}
@@ -103,6 +119,9 @@ func vectorPartitionMembershipDigestV1(reader *columnVectorGraphPhysicalRowReade
 		}
 		h.Write([]byte{kindByte})
 		lastOrdinal = member.ordinal
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, err
 	}
 	var digest [sha256.Size]byte
 	copy(digest[:], h.Sum(nil))
@@ -542,11 +561,29 @@ func decodeVectorPartitionSearchAssetV1(raw []byte) (VectorPartitionSearchAssetV
 }
 
 func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index string, generation uint64, partition uint32) (*VectorPartitionLocalSearcherV1, error) {
+	return c.OpenVectorPartitionLocalSearcherForGenerationWithContextV1(context.Background(), index, generation, partition)
+}
+
+// OpenVectorPartitionLocalSearcherForGenerationWithContextV1 is the
+// cancellation-aware cold-open boundary used by routed serving. Checks are
+// placed around lifecycle reads, membership scans, checksum streaming, and
+// mapped-resource preparation; any acquired pin or handle is released on a
+// canceled return.
+func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationWithContextV1(ctx context.Context, index string, generation uint64, partition uint32) (*VectorPartitionLocalSearcherV1, error) {
 	if c == nil || c.db == nil {
 		return nil, ErrVectorPartitionSearchUnavailable
 	}
-	pin, err := c.AcquireVectorPartitionReaderPinV1(index, generation)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	pin, err := c.AcquireVectorPartitionReaderPinWithContextV1(ctx, index, generation)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("%w: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
 	release := true
@@ -561,6 +598,9 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index strin
 	}
 	m, err := store.Open(c.name, index, generation)
 	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	def, ok := findVectorIndex(c.meta.VectorIndexes, index)
@@ -585,16 +625,22 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index strin
 	if err != nil {
 		return nil, fmt.Errorf("%w: membership source reader: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
-	recomputedMembershipDigest, digestErr := vectorPartitionMembershipDigestV1(sourceReader, generation, partition, vectorPartitionMembershipsForPartitionV1(m, partition))
+	recomputedMembershipDigest, digestErr := vectorPartitionMembershipDigestWithContextV1(ctx, sourceReader, generation, partition, vectorPartitionMembershipsForPartitionV1(m, partition))
 	closeErr := sourceReader.Close()
 	if digestErr != nil || closeErr != nil {
+		if errors.Is(digestErr, context.Canceled) || errors.Is(digestErr, context.DeadlineExceeded) {
+			return nil, digestErr
+		}
 		return nil, fmt.Errorf("%w: membership identity: %v", ErrVectorPartitionSearchUnavailable, errors.Join(digestErr, closeErr))
 	}
 	if recomputedMembershipDigest != expectedMembershipDigest {
 		return nil, fmt.Errorf("%w: descriptor membership digest mismatch", ErrVectorPartitionSearchUnavailable)
 	}
 	namespace := c.meta.Options.ColumnStore.AssetManager.Namespace
-	if err := verifyVectorPartitionAssetsV1(c.db.ColumnAssetRootDir(), namespace, []VectorPartitionAssetV1{*asset}); err != nil {
+	if err := verifyVectorPartitionAssetsWithContextV1(ctx, c.db.ColumnAssetRootDir(), namespace, []VectorPartitionAssetV1{*asset}); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("%w: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
 	path, err := columnAssetSegmentPath(c.db.ColumnAssetRootDir(), asset.Ref)
@@ -611,6 +657,10 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index strin
 	if err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		_ = h.Release()
+		return nil, err
+	}
 	view, err := newColumnHNSWSearchPackPreparedViewFromHandle(manager, h, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{ManifestGeneration: m.SourceGeneration, ManifestChecksum: m.SourceChecksum, SchemaHash: m.SourceSchemaHash}, ExpectedMembershipDigest: expectedMembershipDigest})
 	if err != nil {
 		_ = h.Release()
@@ -619,6 +669,10 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index strin
 	if view.Header.Dimensions != def.Dimensions || view.Header.M != def.M || view.Header.EfConstruction != def.EfConstruction || view.Header.EfSearch != def.EfSearch {
 		_ = view.Close()
 		return nil, ErrVectorPartitionSearchUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		_ = view.Close()
+		return nil, err
 	}
 	openNanos := time.Since(openStarted).Nanoseconds()
 	if openNanos < 1 {
