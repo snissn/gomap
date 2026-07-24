@@ -182,6 +182,7 @@ func TestVectorPartitionLifecyclePublicV1RejectsConflictsAndLegacyAuthority(t *t
 }
 
 func TestVectorPartitionSnapshotEntriesV1SelectsHighestCheckpointAndCurrentTail(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -222,6 +223,7 @@ func TestVectorPartitionSnapshotEntriesV1SelectsHighestCheckpointAndCurrentTail(
 }
 
 func TestVectorPartitionSnapshotEntriesV1RejectsCorruptHighestAndLegacyAuthority(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	t.Run("corrupt highest has no fallback", func(t *testing.T) {
 		store, err := OpenVectorPartitionStoreV1(t.TempDir())
 		if err != nil {
@@ -267,6 +269,7 @@ func TestVectorPartitionSnapshotEntriesV1RejectsCorruptHighestAndLegacyAuthority
 }
 
 func TestVectorPartitionSnapshotEntriesV1RejectsHardLinkAlias(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -293,6 +296,7 @@ func TestVectorPartitionSnapshotEntriesV1RejectsHardLinkAlias(t *testing.T) {
 }
 
 func TestValidateVectorPartitionSnapshotNamespaceV1RequiresExactSelection(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	liveRoot := t.TempDir()
 	store, err := OpenVectorPartitionStoreV1(liveRoot)
 	if err != nil {

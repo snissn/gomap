@@ -44,6 +44,7 @@ func lifecycleStoreBuildV1(t *testing.T, store *VectorPartitionStoreV1) ([]byte,
 }
 
 func TestVectorPartitionLifecycleStoreV1AppendLoadAndIdempotentSlot(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -103,6 +104,7 @@ func TestVectorPartitionLifecycleStoreV1AppendLoadAndIdempotentSlot(t *testing.T
 }
 
 func TestVectorPartitionLifecycleStoreV1PreInstallFailureAndIllegalTransitionLeaveNoSlot(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -136,6 +138,7 @@ func TestVectorPartitionLifecycleStoreV1PreInstallFailureAndIllegalTransitionLea
 }
 
 func TestVectorPartitionLifecycleStoreV1PostInstallRetryUsesTail(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -169,6 +172,7 @@ func TestVectorPartitionLifecycleStoreV1PostInstallRetryUsesTail(t *testing.T) {
 }
 
 func TestVectorPartitionLifecycleStoreV1EveryPersistedPrefixReduces(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -194,6 +198,7 @@ func TestVectorPartitionLifecycleStoreV1EveryPersistedPrefixReduces(t *testing.T
 }
 
 func TestVectorPartitionLifecycleStoreV1DifferentOccupantRejectedThroughAppend(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -228,6 +233,7 @@ func TestVectorPartitionLifecycleStoreV1DifferentOccupantRejectedThroughAppend(t
 }
 
 func TestVectorPartitionLifecycleStoreV1RejectsBadSlotsAndDirectoryRebind(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	for _, tc := range []struct {
 		name string
 		raw  func(t *testing.T) []byte
@@ -319,6 +325,7 @@ func TestVectorPartitionLifecycleStoreV1RejectsBadSlotsAndDirectoryRebind(t *tes
 }
 
 func TestVectorPartitionLifecycleStoreV1RejectsSameBytesSlotSwap(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -354,6 +361,7 @@ func TestVectorPartitionLifecycleStoreV1RejectsSameBytesSlotSwap(t *testing.T) {
 }
 
 func TestVectorPartitionLifecycleStoreV1RejectsEmptyDirectoryRebind(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -375,6 +383,7 @@ func TestVectorPartitionLifecycleStoreV1RejectsEmptyDirectoryRebind(t *testing.T
 }
 
 func TestVectorPartitionLifecycleStoreV1RecordAndAggregateCaps(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -421,6 +430,7 @@ func TestVectorPartitionLifecycleStoreV1RecordAndAggregateCaps(t *testing.T) {
 }
 
 func TestVectorPartitionLifecycleStoreV1FailsClosedMalformedPrefixAndSlotConflict(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

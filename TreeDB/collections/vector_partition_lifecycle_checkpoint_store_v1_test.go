@@ -41,6 +41,7 @@ func lifecycleCheckpointReadyForBuildingV1(t *testing.T, building VectorPartitio
 }
 
 func TestVectorPartitionLifecycleCheckpointStoreV1BuildTailAndReopen(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	root := t.TempDir()
 	store, err := OpenVectorPartitionStoreV1(root)
 	if err != nil {
@@ -81,6 +82,7 @@ func TestVectorPartitionLifecycleCheckpointStoreV1BuildTailAndReopen(t *testing.
 }
 
 func TestVectorPartitionLifecycleCheckpointStoreV1CompactsOversizedTailIntoCheckpoint(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -143,6 +145,7 @@ func TestVectorPartitionLifecycleCheckpointStoreV1CompactsOversizedTailIntoCheck
 }
 
 func TestVectorPartitionLifecycleCheckpointStoreV1PostInstallRetries(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	t.Run("checkpoint", func(t *testing.T) {
 		store, err := OpenVectorPartitionStoreV1(t.TempDir())
 		if err != nil {
@@ -210,6 +213,7 @@ func TestVectorPartitionLifecycleCheckpointStoreV1PostInstallRetries(t *testing.
 }
 
 func TestVectorPartitionLifecycleCheckpointStoreV1PreInstallRetries(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	t.Run("checkpoint", func(t *testing.T) {
 		store, err := OpenVectorPartitionStoreV1(t.TempDir())
 		if err != nil {
@@ -288,6 +292,7 @@ func TestVectorPartitionLifecycleCheckpointStoreV1PreInstallRetries(t *testing.T
 }
 
 func TestVectorPartitionLifecycleCheckpointStoreV1HighestCheckpointIsSoleAuthority(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -323,6 +328,7 @@ func TestVectorPartitionLifecycleCheckpointStoreV1HighestCheckpointIsSoleAuthori
 }
 
 func TestVectorPartitionLifecycleCheckpointStoreV1AuditRetryKeepsNewAuthority(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -369,6 +375,7 @@ func TestVectorPartitionLifecycleCheckpointStoreV1AuditRetryKeepsNewAuthority(t 
 }
 
 func TestVectorPartitionLifecycleCheckpointStoreV1RejectsAuditHardLinkAlias(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -416,6 +423,7 @@ func TestVectorPartitionLifecycleCheckpointStoreV1RejectsAuditHardLinkAlias(t *t
 }
 
 func TestVectorPartitionLifecycleCheckpointStoreV1RejectsDeletePrepareWithProgress(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -477,6 +485,7 @@ func TestVectorPartitionLifecycleCheckpointStoreV1RejectsDeletePrepareWithProgre
 }
 
 func TestVectorPartitionLifecycleCheckpointStoreV1RejectsGapHigherEpochAndMalformedName(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	for _, test := range []struct {
 		name  string
 		entry func(t *testing.T, store *VectorPartitionStoreV1, loaded vectorPartitionLifecycleCheckpointStoreStateV1) string
@@ -548,6 +557,7 @@ func TestVectorPartitionLifecycleCheckpointStoreV1RejectsGapHigherEpochAndMalfor
 }
 
 func TestVectorPartitionLifecycleCheckpointStoreV1PreflightsPhysicalCapBeforeInstall(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
