@@ -67,6 +67,19 @@ func TestCatalogMetaRaftProviderFollowerAndCancellationFailClosed(t *testing.T) 
 	}
 }
 
+func TestCatalogMetaRaftRestoreBoundsSnapshotBeforeStateInstall(t *testing.T) {
+	state := &catalogMetaRaftTestState{}
+	fsm := catalogMetaRaftFSMV1{state: state}
+	raw := bytes.Repeat([]byte("x"), catalogMetaRaftSnapshotMaxBytesV1+1)
+	err := fsm.Restore(io.NopCloser(bytes.NewReader(raw)))
+	if !errors.Is(err, ErrHashicorpRaftLogEntry) {
+		t.Fatalf("Restore error=%v want ErrHashicorpRaftLogEntry", err)
+	}
+	if state.command != nil {
+		t.Fatalf("oversized snapshot reached state install: %d bytes", len(state.command))
+	}
+}
+
 type catalogMetaRaftTestState struct {
 	command, snapshot []byte
 	index             uint64

@@ -227,8 +227,13 @@ features, groups, group members, collection placements, and token partitions;
 therefore equivalent input has one byte representation and digest. The command
 envelope carries `ExpectedEpoch`: exact committed bytes are idempotent, stale
 writers, skipped epochs, and different bytes for a committed epoch fail closed.
-The bounded v1 payload limits command bytes, groups, members, features,
-placements, and token partitions before it is published.
+The bounded v1 payload limits command and snapshot bytes, nesting, JSON
+objects/arrays, numeric tokens, strings, groups, members, features, placements,
+and per-placement plus aggregate token partitions. Command, record, and
+snapshot decoders stream-preflight those counts before `encoding/json` may
+allocate catalog slices. They also reject duplicate JSON keys, duplicate
+catalog identities, truncation, integer overflow, unknown fields/versions, and
+non-canonical bytes before publication.
 
 Routed submit/read/lifecycle callers must present `CatalogProofV1{Epoch,
 Digest}`. `CatalogMetaAuthorityV1.Route` rejects an unavailable authority,

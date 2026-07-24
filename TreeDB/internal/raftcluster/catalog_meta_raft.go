@@ -11,6 +11,12 @@ import (
 	hraft "github.com/hashicorp/raft"
 )
 
+// Catalog snapshots contain two independently command-bounded byte fields
+// encoded as base64 in a JSON envelope. Keep this transport boundary aligned
+// with raftplacement.MaxCatalogMetaSnapshotBytesV1 without importing the
+// schema package back into raftcluster.
+const catalogMetaRaftSnapshotMaxBytesV1 = 3 << 20
+
 // CatalogMetaCommittedStateV1 is implemented by raftplacement's authority.
 // The dependency inversion keeps raftcluster independent of catalog schema
 // while ensuring only committed Raft Apply and Restore can publish state.
@@ -206,9 +212,12 @@ func (f catalogMetaRaftFSMV1) Restore(src io.ReadCloser) error {
 		return ErrRaftSnapshotUnsupported
 	}
 	defer src.Close()
-	b, e := io.ReadAll(io.LimitReader(src, 2<<20))
+	b, e := io.ReadAll(io.LimitReader(src, catalogMetaRaftSnapshotMaxBytesV1+1))
 	if e != nil {
 		return e
+	}
+	if len(b) > catalogMetaRaftSnapshotMaxBytesV1 {
+		return ErrHashicorpRaftLogEntry
 	}
 	return f.state.InstallCatalogMetaSnapshotBytesV1(b)
 }

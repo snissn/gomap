@@ -19,13 +19,18 @@ import (
 // retained in snapshots, and read on every routed request. Limits are checked
 // at the wire boundary before JSON decoding and again after decode.
 const (
-	CatalogMetaFormatV1             uint16 = 1
-	MaxCatalogMetaCommandBytesV1           = 1 << 20
-	MaxCatalogMetaGroupsV1                 = 128
-	MaxCatalogMetaMembersPerGroupV1        = 64
-	MaxCatalogMetaPlacementsV1             = 4096
-	MaxCatalogMetaPartitionsV1             = 16384
-	MaxCatalogMetaFeaturesV1               = 64
+	CatalogMetaFormatV1                    uint16 = 1
+	MaxCatalogMetaCommandBytesV1                  = 1 << 20
+	MaxCatalogMetaSnapshotBytesV1                 = 3 << 20
+	MaxCatalogMetaStringBytesV1                   = 128
+	MaxCatalogMetaDigestBytesV1                   = sha256.Size * 2
+	MaxCatalogMetaNestingDepthV1                  = 8
+	MaxCatalogMetaGroupsV1                        = 128
+	MaxCatalogMetaMembersPerGroupV1               = 64
+	MaxCatalogMetaPlacementsV1                    = 4096
+	MaxCatalogMetaPartitionsV1                    = 16384
+	MaxCatalogMetaPartitionsPerPlacementV1        = MaxCatalogMetaPartitionsV1
+	MaxCatalogMetaFeaturesV1                      = 64
 )
 
 var (
@@ -105,12 +110,21 @@ func (a *CatalogMetaAuthorityV1) ExportCatalogMetaSnapshotBytesV1() ([]byte, err
 	if err != nil {
 		return nil, errors.Join(ErrInvalidCatalogMeta, err)
 	}
+	if len(b) > MaxCatalogMetaSnapshotBytesV1 {
+		return nil, errors.Join(ErrCatalogMetaLimit, fmt.Errorf("snapshot is %d bytes", len(b)))
+	}
+	if err := preflightCatalogMetaSnapshotJSONV1(b); err != nil {
+		return nil, err
+	}
 	return b, nil
 }
 
 func (a *CatalogMetaAuthorityV1) InstallCatalogMetaSnapshotBytesV1(raw []byte) error {
-	if len(raw) == 0 || len(raw) > MaxCatalogMetaCommandBytesV1*2 {
-		return ErrCatalogMetaLimit
+	if len(raw) == 0 || len(raw) > MaxCatalogMetaSnapshotBytesV1 {
+		return errors.Join(ErrCatalogMetaLimit, fmt.Errorf("snapshot is %d bytes", len(raw)))
+	}
+	if err := preflightCatalogMetaSnapshotJSONV1(raw); err != nil {
+		return err
 	}
 	var snapshot CatalogMetaSnapshotV1
 	d := json.NewDecoder(bytes.NewReader(raw))
@@ -121,7 +135,14 @@ func (a *CatalogMetaAuthorityV1) InstallCatalogMetaSnapshotBytesV1(raw []byte) e
 	if err := d.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return errors.Join(ErrInvalidCatalogMeta, fmt.Errorf("trailing snapshot data"))
 	}
-	_, err := a.InstallCatalogMetaSnapshotV1(snapshot)
+	canonical, err := json.Marshal(snapshot)
+	if err != nil {
+		return errors.Join(ErrInvalidCatalogMeta, err)
+	}
+	if !bytes.Equal(raw, canonical) {
+		return errors.Join(ErrInvalidCatalogMeta, fmt.Errorf("snapshot is not canonical"))
+	}
+	_, err = a.InstallCatalogMetaSnapshotV1(snapshot)
 	return err
 }
 
@@ -151,6 +172,9 @@ func NewCatalogMetaRecordV1(epoch uint64, catalog CatalogV1) (CatalogMetaRecordV
 	}
 	_ = resolved
 	record := CatalogMetaRecordV1{Format: CatalogMetaFormatV1, Epoch: epoch, Catalog: canonical}
+	if err := preflightCatalogMetaRecordValueV1(record); err != nil {
+		return CatalogMetaRecordV1{}, err
+	}
 	digest, err := catalogMetaDigestV1(record)
 	if err != nil {
 		return CatalogMetaRecordV1{}, err
@@ -173,12 +197,18 @@ func EncodeCatalogMetaCommandV1(command CatalogMetaCommandV1) ([]byte, error) {
 	if len(b) > MaxCatalogMetaCommandBytesV1 {
 		return nil, errors.Join(ErrCatalogMetaLimit, fmt.Errorf("command is %d bytes", len(b)))
 	}
+	if err := preflightCatalogMetaCommandJSONV1(b); err != nil {
+		return nil, err
+	}
 	return b, nil
 }
 
 func DecodeCatalogMetaCommandV1(raw []byte) (CatalogMetaCommandV1, error) {
 	if len(raw) == 0 || len(raw) > MaxCatalogMetaCommandBytesV1 {
 		return CatalogMetaCommandV1{}, errors.Join(ErrCatalogMetaLimit, fmt.Errorf("command is %d bytes", len(raw)))
+	}
+	if err := preflightCatalogMetaCommandJSONV1(raw); err != nil {
+		return CatalogMetaCommandV1{}, err
 	}
 	var command CatalogMetaCommandV1
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -386,11 +416,36 @@ func encodeCatalogMetaRecordV1(record CatalogMetaRecordV1) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(record)
+	b, err := json.Marshal(record)
+	if err != nil {
+		return nil, errors.Join(ErrInvalidCatalogMeta, err)
+	}
+	if len(b) > MaxCatalogMetaCommandBytesV1 {
+		return nil, errors.Join(ErrCatalogMetaLimit, fmt.Errorf("record is %d bytes", len(b)))
+	}
+	if err := preflightCatalogMetaRecordJSONV1(b); err != nil {
+		return nil, err
+	}
+	return b, nil
 }
+
+func preflightCatalogMetaRecordValueV1(record CatalogMetaRecordV1) error {
+	b, err := json.Marshal(record)
+	if err != nil {
+		return errors.Join(ErrInvalidCatalogMeta, err)
+	}
+	if len(b) > MaxCatalogMetaCommandBytesV1 {
+		return errors.Join(ErrCatalogMetaLimit, fmt.Errorf("record is %d bytes", len(b)))
+	}
+	return preflightCatalogMetaRecordJSONV1(b)
+}
+
 func decodeCatalogMetaRecordV1(raw []byte) (CatalogMetaRecordV1, error) {
 	if len(raw) == 0 || len(raw) > MaxCatalogMetaCommandBytesV1 {
 		return CatalogMetaRecordV1{}, ErrCatalogMetaLimit
+	}
+	if err := preflightCatalogMetaRecordJSONV1(raw); err != nil {
+		return CatalogMetaRecordV1{}, err
 	}
 	var record CatalogMetaRecordV1
 	d := json.NewDecoder(bytes.NewReader(raw))
