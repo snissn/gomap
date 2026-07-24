@@ -26,8 +26,9 @@ func TestVectorPartitionPersistentLocalSearcherReopenCorruptionAndPinsV1(t *test
 			t.Fatal(err)
 		}
 		m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
-		in := []VectorPartitionSearchAssetV1{{ManifestChecksum: m.IntegrityDigest, Generation: g, PartitionID: 0, Dimensions: 3, IDs: []string{"a"}, Vectors: [][]float32{{1, 0, 0}}, Kinds: []VectorPartitionMembershipKindV1{VectorPartitionMembershipHomeV1}, Adjacency: [][]uint32{{}}}, {ManifestChecksum: m.IntegrityDigest, Generation: g, PartitionID: 1, Dimensions: 3, IDs: []string{"b"}, Vectors: [][]float32{{0, 1, 0}}, Kinds: []VectorPartitionMembershipKindV1{VectorPartitionMembershipHomeV1}, Adjacency: [][]uint32{{}}}}
-		assets, res, err := col.MaterializeVectorPartitionLocalSearchAssetsV1(g, file, in)
+		source := VectorPartitionSourceIdentityV1{Generation: m.SourceGeneration, Checksum: m.SourceChecksum, SchemaHash: m.SourceSchemaHash, RowCount: m.SourceRowCount}
+		in := []VectorPartitionSearchAssetV1{{Source: source, ManifestChecksum: m.IntegrityDigest, Generation: g, PartitionID: 0, Dimensions: 3, IDs: []string{"a"}, Vectors: [][]float32{{1, 0, 0}}, Kinds: []VectorPartitionMembershipKindV1{VectorPartitionMembershipHomeV1}, Adjacency: [][]uint32{{}}}, {Source: source, ManifestChecksum: m.IntegrityDigest, Generation: g, PartitionID: 1, Dimensions: 3, IDs: []string{"b"}, Vectors: [][]float32{{0, 1, 0}}, Kinds: []VectorPartitionMembershipKindV1{VectorPartitionMembershipHomeV1}, Adjacency: [][]uint32{{}}}}
+		assets, res, err := col.MaterializeVectorPartitionLocalSearchAssetsV1(def.Name, m, file, in)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -7,10 +7,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"math"
-	"os"
+	"strconv"
 
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -25,7 +25,8 @@ func vectorPartitionLocalAssetIDV1(partition uint32) string {
 // MaterializeVectorPartitionLocalSearchAssetsV1 uses the M1 column-asset
 // authority. Callers install the returned descriptors in the generation M1
 // manifest; publication then validates the exact ref, size, CRC and SHA-256.
-func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(generation uint64, fileID uint32, inputs []VectorPartitionSearchAssetV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
+func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
+	generation := manifest.Generation
 	if c == nil || c.db == nil || generation == 0 || len(inputs) == 0 {
 		return nil, nil, ErrVectorPartitionSearchUnavailable
 	}
@@ -33,12 +34,28 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(generation ui
 	if cfg == nil || cfg.AssetManager == nil {
 		return nil, nil, fmt.Errorf("%w: column asset manager", ErrVectorPartitionSearchUnavailable)
 	}
+	def, ok := findVectorIndex(c.meta.VectorIndexes, index)
+	if !ok || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 {
+		return nil, nil, fmt.Errorf("%w: native FP32 cosine index", ErrVectorPartitionSearchUnavailable)
+	}
 	items := make([]StableColumnPhysicalAssetAppend, len(inputs))
 	for i, in := range inputs {
-		if in.Generation != generation {
+		if in.Generation != generation || in.Dimensions != def.Dimensions || in.Source.Generation != manifest.SourceGeneration || in.Source.Checksum != manifest.SourceChecksum || in.Source.SchemaHash != manifest.SourceSchemaHash || in.Source.RowCount != manifest.SourceRowCount {
 			return nil, nil, fmt.Errorf("%w: generation mismatch", ErrVectorPartitionSearchUnavailable)
 		}
-		raw, err := encodeVectorPartitionSearchAssetV1(in)
+		if err := validateVectorPartitionSearchAssetV1(in); err != nil {
+			return nil, nil, err
+		}
+		rows := make([]columnVectorGraphAssetRow, len(in.IDs))
+		for j := range rows {
+			rows[j] = columnVectorGraphAssetRow{ID: []byte(in.IDs[j]), Vector: in.Vectors[j], Adjacency: in.Adjacency[j], BaseRowRef: DocumentRowRef{DocumentID: []byte(in.IDs[j]), Generation: manifest.SourceGeneration, PartID: 1, RowIndex: j, AppliedCommandLSN: 1}}
+		}
+		graph := columnVectorGraphManifestSnapshot{IndexName: def.Name, Field: def.Field, Metric: def.Metric, Encoding: def.Encoding, Dimensions: def.Dimensions, M: def.M, EfConstruction: def.EfConstruction, EfSearch: def.EfSearch, BaseManifestGeneration: manifest.SourceGeneration, BaseManifestChecksum: manifest.SourceChecksum, BaseSchemaHash: manifest.SourceSchemaHash, GraphSchemaHash: cfg.SchemaHash, RowCount: len(rows)}
+		pack, err := buildColumnHNSWSearchPackInput(def, graph, rows)
+		if err != nil {
+			return nil, nil, err
+		}
+		raw, err := encodeColumnHNSWSearchPack(pack)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -268,29 +285,25 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index strin
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	raw, readErr := io.ReadAll(io.LimitReader(io.NewSectionReader(f, asset.Ref.Offset, asset.Ref.Length), vectorPartitionSearchAssetMaxBytesV1+1))
-	closeErr := f.Close()
-	if err := errors.Join(readErr, closeErr); err != nil {
-		return nil, err
-	}
-	if int64(len(raw)) != asset.Ref.Length || int64(len(raw)) > vectorPartitionSearchAssetMaxBytesV1 {
+	if asset.Ref.Length > vectorPartitionSearchAssetMaxBytesV1 {
 		return nil, fmt.Errorf("%w: asset byte cap", ErrVectorPartitionSearchUnavailable)
 	}
-	decoded, err := decodeVectorPartitionSearchAssetV1(raw)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrVectorPartitionSearchUnavailable, err)
-	}
-	if decoded.Generation != generation || decoded.PartitionID != partition {
-		return nil, fmt.Errorf("%w: asset generation/partition mismatch", ErrVectorPartitionSearchUnavailable)
-	}
-	s, err := OpenVectorPartitionLocalSearcherV1(decoded)
+	manager := mappedresource.NewManager()
+	key := mappedresource.Key{Class: mappedresource.ClassTypedColumnAsset, Namespace: asset.Ref.Namespace, Kind: string(asset.Ref.Kind), Generation: asset.Ref.Generation, PartID: asset.Ref.PartID, FileID: asset.Ref.FileID, Offset: asset.Ref.Offset, Length: asset.Ref.Length, Checksum: uint64(asset.Ref.Checksum), Version: columnHNSWSearchPackVersionV1, Encoding: columnVectorIndexStateEncodingHNSWSearchPackV1, Section: mappedresource.Section{Kind: string(columnVectorIndexStateAssetRoleHNSWSearchPack), Category: string(ColumnAssetKindTCS1HNSWSearchPack), Name: asset.ID}}
+	h, err := manager.AcquireFileRange(key, mappedresource.Scope{Kind: mappedresource.ScopePreparedSearch, ID: "vector_partition/" + strconv.FormatUint(generation, 10), Collection: c.name, Namespace: asset.Ref.Namespace, Generation: generation, Reason: "vector partition native HNSW"}, path, mappedresource.AcquireOptions{Reason: "vector partition native HNSW", ValidationMode: mappedresource.ValidationVerify, PreferMapped: true, AllowHeapCopy: true, ResourceRoot: c.db.ColumnAssetRootDir(), ResourcePath: path})
 	if err != nil {
 		return nil, err
 	}
+	view, err := newColumnHNSWSearchPackPreparedViewFromHandle(manager, h, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{ManifestGeneration: m.SourceGeneration, ManifestChecksum: m.SourceChecksum, SchemaHash: m.SourceSchemaHash}})
+	if err != nil {
+		_ = h.Release()
+		return nil, fmt.Errorf("%w: %v", ErrVectorPartitionSearchUnavailable, err)
+	}
+	if view.Header.Dimensions <= 0 {
+		_ = view.Close()
+		return nil, ErrVectorPartitionSearchUnavailable
+	}
+	s := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Generation: generation, PartitionID: partition, Dimensions: view.Header.Dimensions}, prepared: view, opened: 1}
 	s.partitionPin = pin
 	release = false
 	return s, nil

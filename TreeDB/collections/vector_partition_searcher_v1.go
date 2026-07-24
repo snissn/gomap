@@ -26,6 +26,9 @@ const (
 // input. Vectors are retained as FP32-equivalent float32 values for exact
 // authoritative scoring; Documents are intentionally absent.
 type VectorPartitionSearchAssetV1 struct {
+	// Source binds this input to the non-circular M1 source identity. It is
+	// required by the persistent native-pack path.
+	Source           VectorPartitionSourceIdentityV1
 	ManifestChecksum string
 	Generation       uint64
 	PartitionID      uint32
@@ -63,6 +66,7 @@ type VectorPartitionLocalSearcherV1 struct {
 	partitionPin               *VectorPartitionReaderPinV1
 	closing                    bool
 	persistentPinReleased      bool
+	prepared                   *columnHNSWSearchPackPreparedView
 }
 
 // Close releases the M1 generation pin held by a persistent opener. It is
@@ -75,9 +79,22 @@ func (s *VectorPartitionLocalSearcherV1) Close() error {
 	s.retired = true
 	s.closing = true
 	release := s.releasePersistentPinLocked()
+	view := s.releasePreparedLocked()
 	s.mu.Unlock()
+	if view != nil {
+		_ = view.Close()
+	}
 	if release != nil {
 		release.Release()
+	}
+	return nil
+}
+
+func (s *VectorPartitionLocalSearcherV1) releasePreparedLocked() *columnHNSWSearchPackPreparedView {
+	if s.closing && s.pins == 0 && s.prepared != nil {
+		v := s.prepared
+		s.prepared = nil
+		return v
 	}
 	return nil
 }
@@ -191,7 +208,11 @@ func (s *VectorPartitionLocalSearcherV1) Release() {
 		s.pins--
 	}
 	release := s.releasePersistentPinLocked()
+	view := s.releasePreparedLocked()
 	s.mu.Unlock()
+	if view != nil {
+		_ = view.Close()
+	}
 	if release != nil {
 		release.Release()
 	}
@@ -208,7 +229,11 @@ func (s *VectorPartitionLocalSearcherV1) Retire() error {
 		return fmt.Errorf("%w: generation still pinned", ErrVectorPartitionSearchUnavailable)
 	}
 	release := s.releasePersistentPinLocked()
+	view := s.releasePreparedLocked()
 	s.mu.Unlock()
+	if view != nil {
+		_ = view.Close()
+	}
 	if release != nil {
 		release.Release()
 	}
@@ -231,6 +256,20 @@ func (s *VectorPartitionLocalSearcherV1) Search(query []float32, topK int) ([]Ve
 	}
 	if qn == 0 {
 		return nil, fmt.Errorf("%w: zero query", ErrVectorPartitionSearchUnavailable)
+	}
+	if s.prepared != nil {
+		results, _, err := s.prepared.searchCosine(query, columnVectorGraphNativeSearchOptions{TopK: topK}, &columnVectorGraphNativeSearchScratch{})
+		if err != nil {
+			return nil, fmt.Errorf("%w: native HNSW: %v", ErrVectorPartitionSearchUnavailable, err)
+		}
+		out := make([]VectorPartitionSearchResultV1, len(results))
+		for i, r := range results {
+			out[i] = VectorPartitionSearchResultV1{ID: string(r.ID), Score: float32(r.Score)}
+		}
+		s.mu.Lock()
+		s.searches++
+		s.mu.Unlock()
+		return out, nil
 	}
 	out := make([]VectorPartitionSearchResultV1, len(s.asset.IDs))
 	for i, v := range s.asset.Vectors {
