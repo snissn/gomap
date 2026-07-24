@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	hraft "github.com/hashicorp/raft"
+	raftboltdb "github.com/hashicorp/raft-boltdb/v2"
 )
 
 func TestCatalogMetaRaftProviderCommitsOnlyAfterLeaderApplyAndSnapshots(t *testing.T) {
@@ -70,6 +72,56 @@ func TestCatalogMetaRaftProviderFollowerAndCancellationFailClosed(t *testing.T) 
 	}
 }
 
+func TestCatalogMetaRaftProviderClosesOwnedStoresOnBootstrapPreflightErrors(t *testing.T) {
+	t.Run("has existing state", func(t *testing.T) {
+		config := catalogMetaTestConfig(t.TempDir(), "node-a", []Peer{catalogMetaCapablePeer("node-a")})
+		resolved, err := Validate(config)
+		if err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+		sentinel := errors.New("last-index sentinel")
+		_, transport := hraft.NewInmemTransport("node-a")
+		defer transport.Close()
+
+		provider, err := OpenCatalogMetaRaftProviderV1(CatalogMetaRaftProviderOptionsV1{
+			Cluster:       config,
+			State:         &catalogMetaRaftTestState{},
+			Transport:     transport,
+			LogStore:      &catalogMetaFailingLastIndexStore{InmemStore: hraft.NewInmemStore(), err: sentinel},
+			SnapshotStore: hraft.NewInmemSnapshotStore(),
+			Bootstrap:     true,
+		})
+		if provider != nil || !errors.Is(err, ErrInvalidHashicorpRaftProvider) || !strings.Contains(err.Error(), sentinel.Error()) {
+			t.Fatalf("provider=%v err=%v want nil provider and sentinel error", provider, err)
+		}
+		assertCatalogMetaBoltStoreUnlocked(t, filepath.Join(resolved.Layout.StableDir, "raft-stable.bolt"))
+	})
+
+	t.Run("bootstrap cluster", func(t *testing.T) {
+		config := catalogMetaTestConfig(t.TempDir(), "node-a", []Peer{catalogMetaCapablePeer("node-a")})
+		resolved, err := Validate(config)
+		if err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+		sentinel := errors.New("set-uint64 sentinel")
+		_, transport := hraft.NewInmemTransport("node-a")
+		defer transport.Close()
+
+		provider, err := OpenCatalogMetaRaftProviderV1(CatalogMetaRaftProviderOptionsV1{
+			Cluster:       config,
+			State:         &catalogMetaRaftTestState{},
+			Transport:     transport,
+			StableStore:   &catalogMetaFailingSetUint64Store{InmemStore: hraft.NewInmemStore(), err: sentinel},
+			SnapshotStore: hraft.NewInmemSnapshotStore(),
+			Bootstrap:     true,
+		})
+		if provider != nil || !errors.Is(err, ErrInvalidHashicorpRaftProvider) || !strings.Contains(err.Error(), sentinel.Error()) {
+			t.Fatalf("provider=%v err=%v want nil provider and sentinel error", provider, err)
+		}
+		assertCatalogMetaBoltStoreUnlocked(t, filepath.Join(resolved.Layout.LogDir, "raft-log.bolt"))
+	})
+}
+
 func TestCatalogMetaRaftProviderDistinguishesPreEnqueueCancellationFromAmbiguousApply(t *testing.T) {
 	state := &blockingCatalogMetaRaftTestState{
 		started: make(chan struct{}),
@@ -120,6 +172,35 @@ func TestCatalogMetaRaftProviderDistinguishesPreEnqueueCancellationFromAmbiguous
 	waitCatalogMetaCondition(t, func() bool {
 		return bytes.Equal(state.currentCommand(), []byte("enqueued"))
 	}, "enqueued command did not finish applying after ambiguous caller outcome")
+}
+
+type catalogMetaFailingLastIndexStore struct {
+	*hraft.InmemStore
+	err error
+}
+
+func (s *catalogMetaFailingLastIndexStore) LastIndex() (uint64, error) {
+	return 0, s.err
+}
+
+type catalogMetaFailingSetUint64Store struct {
+	*hraft.InmemStore
+	err error
+}
+
+func (s *catalogMetaFailingSetUint64Store) SetUint64([]byte, uint64) error {
+	return s.err
+}
+
+func assertCatalogMetaBoltStoreUnlocked(t *testing.T, path string) {
+	t.Helper()
+	store, err := raftboltdb.NewBoltStore(path)
+	if err != nil {
+		t.Fatalf("reopen owned Bolt store %q after failed provider startup: %v", path, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close reopened Bolt store %q: %v", path, err)
+	}
 }
 
 func TestCatalogMetaRaftProviderFixedPeersFailoverSnapshotReopenAndRejoin(t *testing.T) {

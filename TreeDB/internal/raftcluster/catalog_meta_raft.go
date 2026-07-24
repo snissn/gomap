@@ -106,13 +106,15 @@ func OpenCatalogMetaRaftProviderV1(opts CatalogMetaRaftProviderOptionsV1) (*Cata
 	defer stores.closeOnError(&err)
 	conf := hashicorpRaftConfig(cluster.NodeID, opts.RaftConfig)
 	if opts.Bootstrap {
-		has, e := hraft.HasExistingState(stores.log, stores.stable, stores.snapshots)
-		if e != nil {
-			return nil, e
+		has, hasStateErr := hraft.HasExistingState(stores.log, stores.stable, stores.snapshots)
+		if hasStateErr != nil {
+			err = errors.Join(ErrInvalidHashicorpRaftProvider, hasStateErr)
+			return nil, err
 		}
 		if !has {
-			if e = hraft.BootstrapCluster(conf, stores.log, stores.stable, stores.snapshots, opts.Transport, hashicorpRaftConfiguration(cluster)); e != nil {
-				return nil, e
+			if bootstrapErr := hraft.BootstrapCluster(conf, stores.log, stores.stable, stores.snapshots, opts.Transport, hashicorpRaftConfiguration(cluster)); bootstrapErr != nil {
+				err = errors.Join(ErrInvalidHashicorpRaftProvider, bootstrapErr)
+				return nil, err
 			}
 		}
 	}
