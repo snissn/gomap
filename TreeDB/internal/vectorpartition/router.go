@@ -547,7 +547,7 @@ func checkedRouterWorkV1(partitions [][]routerBuildVectorV1, dimensions int, cfg
 		if len(partition) != 0 && int64(budget) > math.MaxInt64/int64(len(partition)) {
 			return 0, false
 		}
-		vectorRepresentativePairs += int64(len(partition) * budget)
+		vectorRepresentativePairs += int64(len(partition)) * int64(budget)
 	}
 	work := vectorRepresentativePairs
 	for _, multiplier := range []int{cfg.BranchFactor, cfg.MaxIterations, dimensions} {
@@ -574,6 +574,9 @@ func normalizeRouterVectorV1(values []float32) ([]float32, error) {
 		return nil, errors.New("vector norm is not finite and positive")
 	}
 	inverseNorm := float32(1 / math.Sqrt(normSquared))
+	if math.IsInf(float64(inverseNorm), 0) || inverseNorm == 0 {
+		return nil, errors.New("vector norm cannot be represented safely")
+	}
 	normalized := make([]float32, len(values))
 	for i, value := range values {
 		normalized[i] = value * inverseNorm

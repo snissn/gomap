@@ -186,6 +186,28 @@ func TestRepresentativeRouterExactOracleStableTieAndBudgets(t *testing.T) {
 	if _, err := RouteExactV1(model, []float32{1, 0}, len(model.Representatives), model.Metrics.Partitions+1); err == nil {
 		t.Fatal("expected oversized partition probes to fail")
 	}
+	if _, err := RouteExactV1(model, []float32{math.SmallestNonzeroFloat32, 0}, len(model.Representatives), 1); err == nil {
+		t.Fatal("expected underflowed router query norm to fail")
+	}
+}
+
+func TestCheckedRouterWorkUsesWidePairMultiplication(t *testing.T) {
+	const vectors = 50_000
+	work, ok := checkedRouterWorkV1(
+		[][]routerBuildVectorV1{make([]routerBuildVectorV1, vectors)},
+		1,
+		RouterConfigV1{
+			RepresentativesPerPartition: vectors,
+			BranchFactor:                1,
+			MaxIterations:               1,
+		},
+	)
+	if !ok {
+		t.Fatal("expected representable router work")
+	}
+	if want := int64(vectors) * int64(vectors); work != want {
+		t.Fatalf("router work=%d want %d", work, want)
+	}
 }
 
 func TestPartitionRouterModelValidationRejectsForgedMetadata(t *testing.T) {
