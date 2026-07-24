@@ -7,7 +7,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -83,16 +82,21 @@ func TestVectorPartitionWindowsOpenExistingReadyNamespaceIsReadOnly(t *testing.T
 	if err := os.Mkdir(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	m := testVectorPartitionManifestV1()
-	raw, err := EncodeVectorPartitionManifestV1(m)
+	buildingRaw, building := lifecycleManifestPayloadV1(t, "building")
+	_, m := lifecycleManifestPayloadV1(t, "ready")
+	build := lifecycleRecordV1(t, 1, [32]byte{}, vectorPartitionLifecycleBuildV1, m.Generation, buildingRaw)
+	ready := lifecycleRecordV1(t, 2, build.Digest, vectorPartitionLifecycleReadyV1, m.Generation, lifecycleReadyPromotionPayloadV1(t, building, m))
+	active := lifecycleRecordV1(t, 3, ready.Digest, vectorPartitionLifecycleLocalActivateV1, m.Generation, nil)
+	checkpoint := lifecycleCheckpointV1(t, []vectorPartitionLifecycleRecordV1{build, ready, active}, 1)
+	raw, err := encodeVectorPartitionLifecycleCheckpointCanonicalV1(checkpoint)
 	if err != nil {
 		t.Fatal(err)
 	}
-	name := safeVPM(m.Collection) + "-" + safeVPM(m.IndexName) + "-" + strconv.FormatUint(m.Generation, 10) + ".vpm"
-	if err := os.WriteFile(filepath.Join(dir, name), raw, 0600); err != nil {
+	name, err := vectorPartitionLifecycleCheckpointNameV1(m.Collection, m.IndexName, 1)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+".active"), []byte(strconv.FormatUint(m.Generation, 10)+"\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, name), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
 	before := snapshotVPMWindowsTree(t, root)
