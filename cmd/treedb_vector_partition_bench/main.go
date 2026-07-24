@@ -276,7 +276,7 @@ func run(args []string, stdout io.Writer) (runErr error) {
 	if err != nil {
 		return err
 	}
-	if cfg.stage == "partition" {
+	if cfg.stage == "partition" || cfg.stage == "overlap,partition_index" {
 		err = validatePartitionFixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes)
 	} else {
 		err = validateFixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes)
@@ -290,7 +290,7 @@ func run(args []string, stdout io.Writer) (runErr error) {
 	if cfg.seed != fixture.Seed {
 		return fmt.Errorf("-seed %d does not match fixture seed %d", cfg.seed, fixture.Seed)
 	}
-	if cfg.stage == "partition" {
+	if cfg.stage == "partition" || cfg.stage == "overlap,partition_index" {
 		// The partition builder owns only the frozen vector corpus and its own
 		// graph controls. Simulation probes, overlaps, stages, top-k and memory
 		// planning are intentionally irrelevant here.
@@ -370,7 +370,7 @@ func parseConfig(args []string) (config, error) {
 	fs.Int64Var(&cfg.seed, "seed", cfg.seed, "fixture generation seed (must match manifest)")
 	fs.StringVar(&cfg.format, "format", cfg.format, "json or text")
 	fs.StringVar(&cfg.out, "out", "", "artifact directory")
-	fs.StringVar(&cfg.stage, "stage", cfg.stage, "simulation or partition")
+	fs.StringVar(&cfg.stage, "stage", cfg.stage, "simulation, partition, or overlap,partition_index")
 	fs.IntVar(&cfg.partition.Repetitions, "partition-repetitions", cfg.partition.Repetitions, "dense-ball graph sketch repetitions")
 	fs.IntVar(&cfg.partition.Pivots, "partition-pivots", cfg.partition.Pivots, "dense-ball pivots per recursive level")
 	fs.IntVar(&cfg.partition.MaxLeafBucket, "partition-max-leaf-bucket", cfg.partition.MaxLeafBucket, "maximum dense-ball leaf bucket")
@@ -385,7 +385,7 @@ func parseConfig(args []string) (config, error) {
 	// The offline M2 builder does not execute M0 probe simulations. Preserve
 	// the simulation requirement while allowing the issue's partition-stage
 	// invocation to omit a meaningless -probes flag.
-	if cfg.stage == "partition" && probes == "" {
+	if (cfg.stage == "partition" || cfg.stage == "overlap,partition_index") && probes == "" {
 		probes = "1"
 	}
 	var err error
@@ -395,7 +395,7 @@ func parseConfig(args []string) (config, error) {
 	if cfg.overlaps, err = parseFloats(overlap); err != nil {
 		return config{}, fmt.Errorf("overlap: %w", err)
 	}
-	if cfg.dataset == "" || cfg.out == "" || cfg.partitions < 1 || cfg.partitions > maxPartitions || cfg.topK < 1 || cfg.maxVectors < 1 || cfg.maxVectors > maxVectors || cfg.maxBytes < 8 || cfg.maxBytes > maxFixtureBytes || cfg.format != "json" && cfg.format != "text" || cfg.stage != "simulation" && cfg.stage != "partition" {
+	if cfg.dataset == "" || cfg.out == "" || cfg.partitions < 1 || cfg.partitions > maxPartitions || cfg.topK < 1 || cfg.maxVectors < 1 || cfg.maxVectors > maxVectors || cfg.maxBytes < 8 || cfg.maxBytes > maxFixtureBytes || cfg.format != "json" && cfg.format != "text" || cfg.stage != "simulation" && cfg.stage != "partition" && cfg.stage != "overlap,partition_index" {
 		return config{}, errors.New("dataset, out, positive bounded partitions/top-k, and json|text format are required")
 	}
 	if len(cfg.probes) == 0 || len(cfg.overlaps) == 0 || math.IsNaN(cfg.recallTarget) || math.IsInf(cfg.recallTarget, 0) || cfg.recallTarget < 0 || cfg.recallTarget > 1 {
@@ -480,6 +480,38 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors [][]float64,
 	}
 	if err := os.WriteFile(filepath.Join(cfg.out, "vector_partition_build_"+suffix+".json"), raw, 0644); err != nil {
 		return err
+	}
+	// M3 evidence is deliberately separate from M2's immutable disjoint
+	// artifact.  It records bounded derived membership accounting for every
+	// requested ratio and does not imply a serving enablement policy.
+	if cfg.stage == "overlap,partition_index" {
+		type overlapEvidence struct {
+			Ratio             float64 `json:"ratio"`
+			Budget            int     `json:"budget"`
+			Used              int     `json:"used"`
+			Unspent           int     `json:"unspent"`
+			ReplicationFactor float64 `json:"replication_factor"`
+			PartitionLoads    []int   `json:"partition_loads"`
+		}
+		evidence := make([]overlapEvidence, 0, len(cfg.overlaps))
+		for _, ratio := range cfg.overlaps {
+			overlap, err := vectorpartition.BuildOverlap(artifact, vectorpartition.OverlapConfig{Ratio: ratio})
+			if err != nil {
+				return fmt.Errorf("build bounded overlap ratio %.4f: %w", ratio, err)
+			}
+			evidence = append(evidence, overlapEvidence{ratio, overlap.Budget, overlap.Used, overlap.Unspent, float64(len(overlap.Memberships)) / float64(len(artifact.IDs)), overlap.Loads})
+		}
+		b, err := json.Marshal(struct {
+			ResultKind     string            `json:"result_kind"`
+			ArtifactSHA256 string            `json:"artifact_sha256"`
+			Overlaps       []overlapEvidence `json:"overlaps"`
+		}{"m3_bounded_overlap", digest, evidence})
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(cfg.out, "vector_partition_overlap_"+suffix+".json"), b, 0644); err != nil {
+			return err
+		}
 	}
 	if cfg.format == "json" {
 		_, err = fmt.Fprintln(stdout, string(raw))

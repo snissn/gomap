@@ -17,6 +17,9 @@ type PhaseMetrics = internal.PhaseMetrics
 type Partitioner = internal.Partitioner
 type ReferencePartitioner = internal.ReferencePartitioner
 type ExternalJSONLimits = internal.ExternalJSONLimits
+type OverlapConfig = internal.OverlapConfig
+type Membership = internal.Membership
+type OverlapResult = internal.OverlapResult
 
 const SchemaVersion = internal.SchemaVersion
 
@@ -35,9 +38,13 @@ func BuildWithPartitioner(v []Vector, c Config, s Source, p Partitioner) (Artifa
 func BuildWithPartitionerPhased(v []Vector, c Config, s Source, p Partitioner) (Artifact, PhaseMetrics, error) {
 	return internal.BuildWithPartitionerPhased(v, c, s, p)
 }
-func ValidateArtifact(a Artifact) error        { return internal.ValidateArtifact(a) }
-func CanonicalJSON(a Artifact) ([]byte, error) { return internal.CanonicalJSON(a) }
-func Digest(a Artifact) (string, error)        { return internal.Digest(a) }
+func ValidateArtifact(a Artifact) error { return internal.ValidateArtifact(a) }
+func BuildOverlap(a Artifact, c OverlapConfig) (OverlapResult, error) {
+	return internal.BuildOverlap(a, c)
+}
+func ValidateOverlap(a Artifact, r OverlapResult) error { return internal.ValidateOverlap(a, r) }
+func CanonicalJSON(a Artifact) ([]byte, error)          { return internal.CanonicalJSON(a) }
+func Digest(a Artifact) (string, error)                 { return internal.Digest(a) }
 func DecodeArtifact(raw []byte, maxBytes int) (Artifact, error) {
 	return internal.DecodeArtifact(raw, maxBytes)
 }
