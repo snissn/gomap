@@ -13,12 +13,15 @@ and accepts only proposals that remain within both the global
 It records unspent budget rather than overflowing a cap. Ratio zero produces
 only the original home memberships.
 
-`collections.VectorPartitionLocalSearcherV1` is an immutable,
-generation/checksum-bound no-document searcher. It validates all IDs, FP32
-vectors, membership kinds, and optional HNSW adjacency before open; malformed,
-stale/retired, or pinned-for-removal assets fail closed. Exact scores are
-computed only from the validated local FP32 vectors. Search responses are
-stable IDs plus scores, never documents.
+`collections.MaterializeVectorPartitionLocalSearchAssetsV1` appends immutable
+packs through the existing column-asset manager. Its returned descriptors are
+installed in M1's manifest, which binds each partition ID to exact asset ref,
+length, CRC, and SHA-256; M1 reachability/reclaim therefore retains the pack
+until the generation is deleted and reclaimed. `OpenVectorPartitionLocalSearcherForGenerationV1`
+rechecks that binding, decodes the bounded pack, and holds M1's generation
+reader pin until `Close`. Missing, corrupt, stale-generation, or malformed
+assets fail closed. Exact scores are computed only from validated local FP32
+vectors; responses are stable IDs plus scores, never documents.
 
 The M3 benchmark matrix must include overlap `0,0.20`. The current offline
 fixture harness accepts the partition stage; reported overlap quality/cost is

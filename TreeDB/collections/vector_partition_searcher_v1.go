@@ -60,6 +60,25 @@ type VectorPartitionLocalSearcherV1 struct {
 	pins                       uint64
 	retired                    bool
 	opened, searches, failures uint64
+	partitionPin               *VectorPartitionReaderPinV1
+	closeOnce                  sync.Once
+}
+
+// Close releases the M1 generation pin held by a persistent opener. It is
+// harmless for an in-memory-only searcher.
+func (s *VectorPartitionLocalSearcherV1) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		s.retired = true
+		s.mu.Unlock()
+		if s.partitionPin != nil {
+			s.partitionPin.Release()
+		}
+	})
+	return nil
 }
 
 func OpenVectorPartitionLocalSearcherV1(asset VectorPartitionSearchAssetV1) (*VectorPartitionLocalSearcherV1, error) {
