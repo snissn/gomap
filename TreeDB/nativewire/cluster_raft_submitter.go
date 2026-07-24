@@ -216,8 +216,16 @@ func nativeErrorForRaftClusterSubmit(err error) error {
 }
 
 func clusterProtocolError(code iwire.ErrorCode, err error) error {
-	protocolErr := protocolError(code, "%v", err)
 	route, hasRoute := ClusterRouteErrorMetadataOf(err)
+	route = redactClusterRouteErrorMetadata(route)
+	protocolErr := protocolError(code, "%v", err)
+	if hasRoute {
+		reason := "cluster route rejected"
+		if fields := clusterRouteErrorMetadataFields(route); fields != "" {
+			reason += "; " + fields
+		}
+		protocolErr = protocolError(code, "%s", reason)
+	}
 	leaderHint := clusterLeaderHint(err)
 	if leaderHint == "" {
 		leaderHint = route.LeaderHint

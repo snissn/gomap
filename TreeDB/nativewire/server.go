@@ -705,7 +705,9 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	var responseSections []iwire.Section
 	var responseBody []byte
 	responseBodySet := false
-	if s.clusterSubmitter != nil && cmd.Schema.Kind == iwire.CommandKindMutation {
+	if err = s.rejectClusterRoutedLocalMetadataRead(cmd.Header.ID); err != nil {
+		// The common error path below records command/request counters.
+	} else if s.clusterSubmitter != nil && cmd.Schema.Kind == iwire.CommandKindMutation {
 		responseSections, err = s.handleClusterMutation(ctx, header, cmd)
 	} else {
 		if cmd.Schema.Kind == iwire.CommandKindRead && !coordinatedReadCommand(cmd.Header.ID) {
@@ -975,6 +977,10 @@ func (s *Server) Stats() map[string]string {
 		"cluster_submit.ack_synced_total",
 		"cluster_submit.ack_raft_committed_total",
 		"cluster_submit.nanos_total",
+		"cluster_read_route.requests_total",
+		"cluster_read_route.errors_total",
+		"cluster_read_route.unsupported_total",
+		"cluster_read_route.owner_store_unbound_total",
 	} {
 		out[nativeStatsPrefix+key] = "0"
 	}

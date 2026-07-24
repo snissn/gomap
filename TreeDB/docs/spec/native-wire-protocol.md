@@ -855,6 +855,33 @@ Single-node servers MAY treat `leader_read`, `linearizable`, and `lease_read` as
 equivalent when no cluster is configured, but they MUST report the actual mode in
 the response.
 
+The current token/ring cluster implementation recognizes `get_many` with
+exactly one document ID and maps it with `DocumentIDTokenV1` to one catalog
+owner. The public nativewire read then fails closed with route class
+`owner_store_unbound` before invoking a read coordinator or observing the local
+collection. A catalog owner and read-index proof do not establish that the
+serving `CollectionManager` is the exact applied store for that owner; no
+production Raft/store identity binding currently exists.
+
+`GroupRoutedReadIndexCoordinator` is internal downstream scaffolding only. It
+can validate owner selection and read-index-before-apply ordering, but it does
+not bind collection-store identity and cannot enable public reads. Therefore
+there is no enabled-path latency claim or benchmark for token/ring reads.
+Multi-ID reads, non-route-key queries, scans, secondary/unique-index reads, and
+cross-shard reads also fail closed; no scatter, follower-read, lease-read,
+global ordering, or global unique coordination is implied.
+
+All token/ring document mutations fail closed until authoritative collection
+and index metadata is structurally bound to the exact owner route proof.
+Gateway-local collection metadata is not authoritative for a remote owner,
+including when it reports no indexes. Routed `list_collections`,
+`list_indexes`, and `open_collection` requests also fail closed instead of
+returning gateway-local metadata. Collection-placement mutations remain
+supported. Rejected public read routes expose only request/error/unsupported
+and `owner_store_unbound` counters under
+`treedb.native_wire.cluster_read_route.*`; no success, read-index, leader, or
+follower-path counter is emitted for this disabled path.
+
 ## 13. Error Model
 
 The v1 `error` section uses stable numeric codes plus a retry hint and a

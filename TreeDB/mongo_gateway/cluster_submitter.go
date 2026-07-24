@@ -147,6 +147,9 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	if !exists {
+		if s.clusterRouteProviderConfigured() {
+			return mongoClusterMutationCommandError(mongoClusterMissingCollectionMetadataError())
+		}
 		if err := rejectClusterMissingCollectionMajorityNoop(ack); err != nil {
 			return mongoClusterMutationCommandError(err)
 		}
@@ -213,6 +216,9 @@ func (s *Server) clusterDeleteResponse(ctx context.Context, command wire.Documen
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	if !exists {
+		if s.clusterRouteProviderConfigured() {
+			return mongoClusterMutationCommandError(mongoClusterMissingCollectionMetadataError())
+		}
 		if err := rejectClusterMissingCollectionMajorityNoop(ack); err != nil {
 			return mongoClusterMutationCommandError(err)
 		}
@@ -486,6 +492,11 @@ func (s *Server) submitClusterMutation(ctx context.Context, command iwire.Comman
 		if err != nil {
 			return nil, err
 		}
+		if routed {
+			if err := s.rejectClusterTokenRouteIndexedMutation(command, *routeReq, route); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if row := raftentry.ClassifyNativeWireCommandV1(command); !row.Known || row.Decision != raftentry.DecisionAccepted {
 		return nil, fmt.Errorf("cluster submitter command %d is not accepted by R3a v1", command)
@@ -550,11 +561,53 @@ func (s *Server) preflightClusterRoute(ctx context.Context, routeReq *treenative
 	return err
 }
 
-func (s *Server) preflightClusterFindRoute(ctx context.Context, db, collection string) error {
+func (s *Server) preflightClusterFindRoute(ctx context.Context, db, collection string, plan findPlan) error {
 	if !s.clusterRouteProviderConfigured() {
 		return nil
 	}
-	return s.preflightClusterRoute(ctx, mongoClusterQueryRouteRequest(db, collection, 0, "find"))
+	routeReq, err := mongoClusterFindRouteRequest(db, collection, plan)
+	if err != nil {
+		return err
+	}
+	_, routed, err := treenativewire.PreflightClusterRoute(ctx, s.ClusterSubmitter, *routeReq)
+	if err != nil || !routed {
+		return err
+	}
+	return &iwire.ProtocolError{
+		Code: iwire.ErrReadOnly,
+		Reason: "Mongo gateway cluster route target for _id find is disabled until the serving collection-store identity " +
+			"is bound to the owner Raft proof; refusing an unbarriered local read",
+	}
+}
+
+func mongoClusterFindRouteRequest(db, collection string, plan findPlan) (*treenativewire.ClusterRouteRequest, error) {
+	value, ok := simplePrimaryEqualityFindValue(plan)
+	if !ok {
+		return mongoClusterQueryRouteRequest(db, collection, 0, "find"), nil
+	}
+	key, err := encodePrimaryKey(value)
+	if err != nil {
+		return nil, err
+	}
+	return mongoClusterDocumentIDRouteRequest(db, collection, 0, "find", key), nil
+}
+
+func (s *Server) rejectClusterTokenRouteIndexedMutation(command iwire.CommandID, _ treenativewire.ClusterRouteRequest, target treenativewire.ClusterRouteTarget) error {
+	switch target.PlacementMode {
+	case string(raftplacement.PlacementModeTokenV1), string(raftplacement.PlacementModeRingV1):
+	default:
+		return nil
+	}
+	switch command {
+	case iwire.CommandInsertBatch, iwire.CommandUpdateBSONSet, iwire.CommandDeleteBatch:
+	default:
+		return nil
+	}
+	return &iwire.ProtocolError{
+		Code: iwire.ErrReadOnly,
+		Reason: "Mongo gateway token/ring mutation is disabled until authoritative collection and index metadata " +
+			"is bound to the owner route proof",
+	}
 }
 
 func mongoClusterRouteRequest(db, collection string, command iwire.CommandID, commandName string) *treenativewire.ClusterRouteRequest {
@@ -965,7 +1018,11 @@ func mongoClusterRouteCommandError(err error) (wire.Document, error) {
 	if collections.IsDuplicateKeyError(err) && nativeCode != iwire.ErrCommitAmbiguous {
 		code, codeName = commandCodeDuplicateKey, "DuplicateKey"
 	}
-	return commandErrorWithFields(code, codeName, err.Error(), mongoClusterErrorFields(err, nativeCode, codeName))
+	message := err.Error()
+	if _, routed := treenativewire.ClusterRouteErrorMetadataOf(err); routed {
+		message = "Mongo gateway cluster route rejected"
+	}
+	return commandErrorWithFields(code, codeName, message, mongoClusterErrorFields(err, nativeCode, codeName))
 }
 
 func mongoClusterNativeErrorCodeOf(err error) (iwire.ErrorCode, bool) {
@@ -1060,9 +1117,6 @@ func appendMongoClusterRouteErrorFields(fields bson.D, route treenativewire.Clus
 	}
 	appendString("treedbRouteGroup", route.GroupID)
 	appendString("treedbRouteLeaderHint", route.LeaderHint)
-	appendString("treedbRouteDatabase", route.Database)
-	appendString("treedbRouteCatalog", route.Catalog)
-	appendString("treedbRouteCollection", route.Collection)
 	appendString("treedbRouteShape", route.Shape)
 	appendString("treedbRoutePlacementMode", route.PlacementMode)
 	appendString("treedbRouteKey", route.RouteKey)
@@ -1091,8 +1145,10 @@ func mongoClusterRouteRejectedMessage(message string) bool {
 		strings.Contains(message, "cluster route shape") ||
 		strings.Contains(message, "cluster token route") ||
 		strings.Contains(message, "cluster token batch route") ||
+		strings.Contains(message, "routed-cluster") ||
 		strings.Contains(message, "cluster route target") ||
 		strings.Contains(message, "route target") ||
+		strings.Contains(message, "owner route proof") ||
 		strings.Contains(message, "route request") ||
 		strings.Contains(message, "requires fanout before submit") ||
 		strings.Contains(message, "requires command split before submit")
@@ -1158,4 +1214,33 @@ func mongoClusterUnsupportedLocalMutation(command string) (wire.Document, error)
 		"BadValue",
 		"Mongo gateway cluster submitter mode does not support local "+command+" mutation",
 	)
+}
+
+func mongoClusterUnsupportedIndexDDL() (wire.Document, error) {
+	return commandError(
+		commandCodeBadValue,
+		"BadValue",
+		"Mongo gateway cluster mode does not support secondary or global unique index DDL; "+
+			"shard-local index ownership and global unique coordination are not implemented",
+	)
+}
+
+func mongoClusterMissingCollectionMetadataError() error {
+	return &iwire.ProtocolError{
+		Code: iwire.ErrReadOnly,
+		Reason: "Mongo gateway token/ring mutation is disabled until authoritative collection and index metadata " +
+			"is bound to the owner route proof",
+	}
+}
+
+func (s *Server) rejectClusterRoutedLocalMetadataRead(command string) (wire.Document, error, bool) {
+	if !s.clusterRouteProviderConfigured() {
+		return nil, nil, false
+	}
+	doc, err := mongoClusterRouteCommandError(&iwire.ProtocolError{
+		Code: iwire.ErrReadOnly,
+		Reason: "Mongo gateway routed-cluster " + command + " is disabled until authoritative catalog metadata " +
+			"is bound to the route provider",
+	})
+	return doc, err, true
 }
