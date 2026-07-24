@@ -1151,6 +1151,9 @@ func (r *VectorPartitionRouterV1) Search(query []float32, opts VectorPartitionRo
 		native, stats, err := r.view.searchCosine(query, columnVectorGraphNativeSearchOptions{
 			TopK: opts.CandidateBudget, EfSearch: opts.CandidateBudget,
 			CandidateLimit: opts.CandidateBudget,
+			// Router search consumes only representative ordinals and scores.
+			// Keep the hot path off document-ID and row-ref materialization.
+			OmitResultMaterialization: true,
 		}, scratch)
 		if err != nil {
 			return fail(err)
