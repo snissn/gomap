@@ -138,7 +138,9 @@ func (p *CatalogMetaRaftProviderV1) SubmitCatalogMetaCommandV1(ctx context.Conte
 		return 0, 0, ErrNotLeader
 	}
 	if err := ctx.Err(); err != nil {
-		return 0, 0, errors.Join(ErrCommitAmbiguous, err)
+		// Nothing has been enqueued yet; this is an ordinary caller
+		// cancellation, not an ambiguous commit outcome.
+		return 0, 0, err
 	}
 	f := p.raft.Apply(bytes.Clone(command), p.applyTimeout)
 	if err := waitHashicorpRaftFuture(ctx, f); err != nil {
