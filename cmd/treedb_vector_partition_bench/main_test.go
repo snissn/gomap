@@ -210,10 +210,30 @@ func TestRouterStageUsesPersistedExactAndNativeHNSWPaths(t *testing.T) {
 		exact.CandidateBudget != 8 || approximate.CandidateBudget != 8 ||
 		exact.Candidates != 32 || approximate.Candidates != 32 ||
 		exact.RecallAtK != approximate.RecallAtK ||
+		!result.Metrics.CoarseningRecallAvailable ||
+		!result.Metrics.ApproximateRouterRecallAvailable ||
+		!result.Metrics.HNSWRecallLossAvailable ||
 		result.Metrics.HNSWRecallLoss != 0 ||
 		exact.P50Nanos == 0 || approximate.P50Nanos == 0 ||
 		exact.AllocsPerOp == 0 || approximate.AllocsPerOp == 0 {
 		t.Fatalf("exact=%+v approximate=%+v metrics=%+v", exact, approximate, result.Metrics)
+	}
+	var exactOnlyOut bytes.Buffer
+	exactOnlyArgs := append(append([]string(nil), args...), "-stages", "exact_representative_routing")
+	exactOnlyArgs[3] = t.TempDir()
+	if err := runWithHermeticProvenance(t, exactOnlyArgs, &exactOnlyOut); err != nil {
+		t.Fatal(err)
+	}
+	var exactOnly runResult
+	if err := json.Unmarshal(exactOnlyOut.Bytes(), &exactOnly); err != nil {
+		t.Fatal(err)
+	}
+	if !exactOnly.Metrics.CoarseningRecallAvailable ||
+		exactOnly.Metrics.ApproximateRouterRecallAvailable ||
+		exactOnly.Metrics.HNSWRecallLossAvailable ||
+		exactOnly.Metrics.ApproximateRouterRecall != 0 ||
+		exactOnly.Metrics.HNSWRecallLoss != 0 {
+		t.Fatalf("exact-only metrics=%+v", exactOnly.Metrics)
 	}
 	entries, err := os.ReadDir(out)
 	if err != nil {
