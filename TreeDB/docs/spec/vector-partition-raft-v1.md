@@ -242,6 +242,8 @@ generation can therefore delay, but never bypass, DELETE_COMPLETE.
 
 ### V1 API/schema contract, VPM1 wire version 2, and bounds
 
+`V1` in public API, type, and schema names identifies that pre-alpha contract;
+it is distinct from the explicit VPM1 wire version.
 The canonical generation payload is binary `VPM1` (big-endian magic
 `0x56504d31`, version `2`), followed by fixed-order length-prefixed fields;
 there are no tagged optional fields. The JSON form is an inspection/exchange
