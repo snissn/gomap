@@ -1226,7 +1226,7 @@ func TestParseConfigRouteModeRing(t *testing.T) {
 	}
 }
 
-func TestTreeDBProductionRouteModeLocalOwnerFailsClosedWithoutOwnerBoundIndexPolicy(t *testing.T) {
+func TestTreeDBProductionRouteModeLocalOwnerFailsClosedWithoutReplicatedCatalogAuthority(t *testing.T) {
 	cfg, err := parseConfig([]string{
 		"-target", "treedb",
 		"-route-mode", "production",
@@ -1263,12 +1263,12 @@ func TestTreeDBProductionRouteModeLocalOwnerFailsClosedWithoutOwnerBoundIndexPol
 	runCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if _, err := runBenchmark(runCtx, cfg, target, nil); err == nil ||
-		!strings.Contains(err.Error(), "authoritative collection and index metadata is bound") {
-		t.Fatalf("run production route benchmark err=%v want owner-bound index-policy rejection", err)
+		!strings.Contains(err.Error(), "catalog meta unavailable") {
+		t.Fatalf("run production route benchmark err=%v want replicated catalog authority rejection", err)
 	}
 }
 
-func TestTreeDBProductionRouteModeRemoteOwnerFailsClosedWithoutOwnerBoundIndexPolicy(t *testing.T) {
+func TestTreeDBProductionRouteModeRemoteOwnerFailsClosedWithoutReplicatedCatalogAuthority(t *testing.T) {
 	cfg, err := parseConfig([]string{
 		"-target", "treedb",
 		"-route-mode", "production",
@@ -1305,12 +1305,12 @@ func TestTreeDBProductionRouteModeRemoteOwnerFailsClosedWithoutOwnerBoundIndexPo
 	runCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if _, err := runBenchmark(runCtx, cfg, target, nil); err == nil ||
-		!strings.Contains(err.Error(), "authoritative collection and index metadata is bound") {
-		t.Fatalf("run production remote-owner benchmark err=%v want owner-bound index-policy rejection", err)
+		!strings.Contains(err.Error(), "catalog meta unavailable") {
+		t.Fatalf("run production remote-owner benchmark err=%v want replicated catalog authority rejection", err)
 	}
 }
 
-func TestTreeDBProductionRouteModeRemoteExecutionFailsClosedWithoutOwnerBoundIndexPolicy(t *testing.T) {
+func TestTreeDBProductionRouteModeRemoteExecutionFailsClosedWithoutReplicatedCatalogAuthority(t *testing.T) {
 	cfg, err := parseConfig([]string{
 		"-target", "treedb",
 		"-route-mode", "production",
@@ -1348,8 +1348,8 @@ func TestTreeDBProductionRouteModeRemoteExecutionFailsClosedWithoutOwnerBoundInd
 	runCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if _, err := runBenchmark(runCtx, cfg, target, nil); err == nil ||
-		!strings.Contains(err.Error(), "authoritative collection and index metadata is bound") {
-		t.Fatalf("run production remote-execution benchmark err=%v want owner-bound index-policy rejection", err)
+		!strings.Contains(err.Error(), "catalog meta unavailable") {
+		t.Fatalf("run production remote-execution benchmark err=%v want replicated catalog authority rejection", err)
 	}
 }
 

@@ -84,10 +84,8 @@ func (r GroupSubmitterRegistryV1) empty() bool {
 	return len(r.byGroup) == 0
 }
 
-// GroupRoutedSubmitterOptions configures an in-process dispatcher over local
-// group submitters.
-type GroupRoutedSubmitterOptions struct {
-	Registry GroupSubmitterRegistryV1
+type CatalogRouteValidatorV1 interface {
+	ValidateCatalogRouteMetadata(context.Context, raftentry.RequestMetadataV1) error
 }
 
 // GroupRoutedSubmitter dispatches collection and single-token routed writes to
@@ -95,30 +93,52 @@ type GroupRoutedSubmitterOptions struct {
 // fanout-required route metadata is rejected before any group submitter sees
 // the entry.
 type GroupRoutedSubmitter struct {
-	registry GroupSubmitterRegistryV1
+	registry              GroupSubmitterRegistryV1
+	catalogRouteValidator CatalogRouteValidatorV1
 }
 
-func NewGroupRoutedSubmitter(opts GroupRoutedSubmitterOptions) (*GroupRoutedSubmitter, error) {
-	if opts.Registry.empty() {
+func newCatalogMetaGroupRoutedSubmitter(registry GroupSubmitterRegistryV1, validator CatalogRouteValidatorV1) (*GroupRoutedSubmitter, error) {
+	if registry.empty() {
 		return nil, errors.Join(ErrInvalidSubmitter, fmt.Errorf("group submitter registry is required"))
 	}
-	return &GroupRoutedSubmitter{registry: opts.Registry}, nil
+	if validator == nil {
+		return nil, errors.Join(ErrInvalidSubmitter, fmt.Errorf("replicated catalog route validator is required"))
+	}
+	return &GroupRoutedSubmitter{
+		registry:              registry,
+		catalogRouteValidator: validator,
+	}, nil
+}
+
+// NewCatalogMetaGroupRoutedSubmitter constructs the production replicated
+// catalog path. It is the only public constructor for a routed dispatcher and
+// requires a validator that re-resolves the complete route and current proof
+// against the applied catalog generation before selecting a local group
+// submitter.
+func NewCatalogMetaGroupRoutedSubmitter(registry GroupSubmitterRegistryV1, validator CatalogRouteValidatorV1) (*GroupRoutedSubmitter, error) {
+	return newCatalogMetaGroupRoutedSubmitter(registry, validator)
 }
 
 func (s *GroupRoutedSubmitter) SubmitCommandEntryV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1) (SubmitResultV1, error) {
 	if s == nil || s.registry.empty() {
 		return SubmitResultV1{}, ErrInvalidSubmitter
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	target, err := routeDispatchTargetFromMetadata(metadata)
 	if err != nil {
+		return SubmitResultV1{}, err
+	}
+	if s.catalogRouteValidator == nil {
+		return SubmitResultV1{}, errors.Join(ErrInvalidSubmitter, fmt.Errorf("replicated catalog route validator is unavailable"))
+	}
+	if err := s.catalogRouteValidator.ValidateCatalogRouteMetadata(ctx, cloneRequestMetadataV1(metadata)); err != nil {
 		return SubmitResultV1{}, err
 	}
 	submitter, ok := s.registry.Lookup(target.GroupID)
 	if !ok {
 		return SubmitResultV1{}, errors.Join(ErrRouteTargetUnknown, routeErrorWithMetadata(metadata, "route group %q is not configured locally", target.GroupID))
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	return submitter.SubmitCommandEntryV1(ctx, bytes.Clone(entry), cloneRequestMetadataV1(metadata))
 }

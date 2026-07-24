@@ -3,7 +3,8 @@
 // or token partitions through explicit helper APIs.
 //
 // This package is deliberately pure catalog validation, simulation, and
-// route-decision logic. It does not submit routed requests, start Raft groups,
-// expose submitter APIs, choose leaders, maintain a meta Raft group, rebalance
-// data, or provide native-wire/Mongo server routing.
+// route-decision logic. CatalogMetaAuthorityV1 additionally provides the local
+// applied-state seam for a declared replicated meta Raft group; it does not
+// start that group, choose leaders, rebalance data, or provide a forwarding
+// protocol.
 package raftplacement

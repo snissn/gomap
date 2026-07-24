@@ -952,5 +952,7 @@ func requestMetadataEqual(a, b raftentry.RequestMetadataV1) bool {
 		a.ClusterRouteKey == b.ClusterRouteKey &&
 		a.ClusterRouteTokenKnown == b.ClusterRouteTokenKnown &&
 		a.ClusterRouteToken == b.ClusterRouteToken &&
-		a.ClusterRoutePartitionID == b.ClusterRoutePartitionID
+		a.ClusterRoutePartitionID == b.ClusterRoutePartitionID &&
+		a.CatalogMetaEpoch == b.CatalogMetaEpoch &&
+		a.CatalogMetaDigest == b.CatalogMetaDigest
 }

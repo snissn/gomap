@@ -119,15 +119,17 @@ is binding at the single-group submit boundary. A `SingleGroupSubmitter` for
 `group-a` must reject a request whose route metadata targets `group-b` before
 command preflight, commit-source invocation, or local apply.
 
-`nativewire.CatalogClusterRouteProvider` is the reusable adapter from
-`ResolvedCatalogV1` to `nativewire.ClusterRouteTarget`. It converts collection
-route decisions to collection targets, exactly-one-token token/ring decisions to
-token targets with partition metadata, and token-batch decisions to
-`token_batch` targets that carry the catalog classification
-(`same_partition`, `same_group_multi_partition`, or `fanout_required`).
-Non-fanout token-batch targets may include the single resolved group metadata,
-but adapters still reject token/ring multi-ID writes before submit until command
-split or fanout execution exists.
+`nativewire.CatalogRouteResolverV1` is a read-only bootstrap and inspection
+adapter from `ResolvedCatalogV1` to `nativewire.ClusterRouteTarget`. Its method
+is deliberately named `ResolveCatalogRouteV1`: it does not implement
+`ClusterRouteProvider` and therefore cannot be composed with a production
+routed submitter. Production adapters use
+`nativewire.CatalogMetaClusterRouteProvider`, which resolves the same
+collection, token, and token-batch shapes from the locally applied replicated
+authority and attaches its exact proof. Non-fanout token-batch targets may
+include the single resolved group metadata, but adapters still reject
+token/ring multi-ID writes before submit until command split or fanout
+execution exists.
 
 Native-wire route preflight uses the default database and catalog plus the
 collection name encoded in the deterministic command sections. `create_collection`
@@ -210,7 +212,110 @@ choosing a multi-group submit target. Native-wire and Mongo gateway adapters may
 use those decisions as fail-closed request preflight metadata only; they are not
 live network routing or leadership proof.
 
-## Deferred Scope
+## Replicated catalog/meta authority (M4A)
+
+`raftplacement.CatalogMetaAuthorityV1` is the generic M4A state-machine seam
+for the catalog. It replaces the unsafe idea that a process-local/static
+`ResolvedCatalogV1` can activate ownership. A deployment must designate one
+fixed-peer Raft meta group and open it with
+`raftcluster.OpenCatalogMetaRaftProviderV1`. Only that provider can mint the
+capabilities accepted by `ApplyCatalogMetaCommittedV1` and
+`InstallCatalogMetaSnapshotBytesV1`; constructing an authority does not install
+a catalog, and neither a local file nor an adapter exposes an activation API.
+Every configured meta voter must declare
+`raftcluster.FeatureCatalogMetaAuthority` at the supported floor. Provider open
+fails before bootstrap, reopen, or participation when any fixed voter is
+missing that capability.
+
+Each generation contains a monotonic `Epoch`, the complete catalog, and a
+SHA-256 digest. The digest input is the canonical JSON object
+`{"format":...,"epoch":...,"catalog":...}` in that field order; the record's
+`digest` field is excluded rather than serialized as an empty string.
+Canonicalization sorts features, groups, group members, collection placements,
+and token partitions; therefore equivalent input has one byte representation
+and digest. The command envelope carries `ExpectedEpoch`: exact committed bytes
+are idempotent, stale writers, skipped epochs, and different bytes for a
+committed epoch fail closed.
+Because M4A does not include a migration or rebalance workflow, generation
+changes also preserve the topology of every existing catalog entry. An
+existing group cannot be removed or change members, and an existing placement
+cannot be removed or change mode, collection owner, route key, or token
+partitions. Such a committed command returns
+`ErrCatalogMetaTopologyChange` before replacing the resolved state; forward
+snapshot installation enforces the same rule. Compatible feature/version
+metadata, leader hints, and additive groups or placements remain valid. A
+future topology-changing generation must first define an explicit workflow
+that transfers data, apply progress, and idempotency state before route
+publication.
+The bounded v1 payload limits command and snapshot bytes, nesting, JSON
+objects/arrays, numeric tokens, strings, groups, members, features, placements,
+and per-placement plus aggregate token partitions. Command, record, and
+snapshot decoders stream-preflight those counts before `encoding/json` may
+allocate catalog slices. They also reject duplicate JSON keys, duplicate
+catalog identities, truncation, integer overflow, unknown fields/versions, and
+non-canonical bytes before publication.
+
+Routed submit/read/lifecycle callers must present `CatalogProofV1{Epoch,
+Digest}`. `CatalogMetaAuthorityV1.Route` rejects an unavailable authority,
+missing proof, stale/future epoch, or digest mismatch before resolving a group.
+`CurrentCatalogProof` returns the exact locally applied proof under the same
+read lock as status/route access. It does not contact the meta group, so a
+steady-state request adds no meta-group round trip. Loss of the meta leader
+blocks new catalog commands; it does not invalidate an already-applied local
+generation. Before the first committed generation, or when the application
+cannot supply its locally applied proof, route admission remains unavailable.
+
+`nativewire.CatalogMetaClusterRouteProvider` is the corresponding preflight
+adapter for collection, single-token, and token-batch shapes. It refuses stale
+or missing proofs before request success. On the owner side,
+`raftcluster.NewCatalogMetaGroupRoutedSubmitter` is the production constructor:
+it re-resolves the request-only route fields against the same applied
+generation and requires exact equality for collection identity, route shape,
+group, members, leader hint, placement mode, route key, token/partition, epoch,
+and digest before group lookup or mutation. It is the only exported routed
+dispatcher constructor. There is no zero-validator constructor or production
+static-catalog `ClusterRouteProvider`; test-only permissive adapters are
+confined to `_test.go` files.
+
+`ExportCatalogMetaSnapshotV1` serializes one canonical record plus its applied
+index and exact last committed command. Restore validates the complete
+record/digest/command identity before one atomic publication, rejects rollback
+and same-epoch conflicts, and preserves exact-command retry identity. The Raft
+FSM bounds and installs that byte payload for snapshot/reopen/rejoin.
+`CatalogMetaRaftProviderV1.ExportCatalogMetaBackupV1` forces or reuses a
+retained HashiCorp snapshot and packages its version, term, index, bounded
+payload, and checksum. `RestoreCatalogMetaBackupV1` validates the complete
+archive and payload without mutation, requires the current meta leader and a
+fresh local authority, waits for the fixed-voter configuration to apply, and
+then invokes HashiCorp Raft `Restore`. HashiCorp propagates that snapshot to
+followers and commits a no-op before returning. Restore is a disaster-recovery
+operation for a fresh cluster only: a live generation rejects an old archive
+instead of rolling back. The integration contract verifies leader/follower
+behavior, corrupt archive refusal, all three real authorities, exact retry,
+feature and route identity, snapshot reopen, failover, and old-leader rejoin.
+
+The conservative failure matrix is:
+
+- a follower rejects catalog mutation with `ErrNotLeader`;
+- a node without a known meta leader/quorum rejects mutation with
+  `ErrAdmissionUnavailable`;
+- cancellation before enqueue is ordinary cancellation, while cancellation
+  after Raft enqueue is `ErrCommitAmbiguous`;
+- replay of the exact command is idempotent, while stale, skipped, conflicting,
+  partial, or mixed generations fail closed;
+- owner, member, mode, route-key, partition, removal, or other existing-entry
+  topology changes fail closed until an explicit migration workflow exists;
+- failover can commit the next generation, and rejoin/reopen restores or catches
+  up monotonically;
+- unsupported fixed voters fail provider open before local apply or routing;
+- missing, stale, future, digest-mismatched, or route-mismatched request
+  metadata is rejected before the data-group owner is selected.
+
+The complete test and capacity matrix and reproducible benchmark results are in
+[catalog-meta M4A closeout evidence](catalog-meta-m4a-closeout-3970.md).
+This issue deliberately does not add live membership changes, rebalance or
+migration, a second production Raft topology, or the vector-specific lifecycle
+state machine.
 
 ## Vector partition placement (M1)
 
