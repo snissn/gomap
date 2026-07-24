@@ -187,6 +187,7 @@ func decodeClusterRouteErrorField(value string) string {
 }
 
 func clusterRouteErrorMetadataFields(metadata ClusterRouteErrorMetadata) string {
+	metadata = redactClusterRouteErrorMetadata(metadata)
 	var fields []string
 	appendField := func(key, value string) {
 		if value != "" {
@@ -207,9 +208,6 @@ func clusterRouteErrorMetadataFields(metadata ClusterRouteErrorMetadata) string 
 			fields = append(fields, "route_members="+strings.Join(escaped, ","))
 		}
 	}
-	appendField("route_database", metadata.Database)
-	appendField("route_catalog", metadata.Catalog)
-	appendField("route_collection", metadata.Collection)
 	appendField("route_shape", metadata.Shape)
 	appendField("route_placement", metadata.PlacementMode)
 	appendField("route_key", metadata.RouteKey)
@@ -220,6 +218,16 @@ func clusterRouteErrorMetadataFields(metadata ClusterRouteErrorMetadata) string 
 	appendField("route_partition", metadata.PartitionID)
 	appendField("local_group", metadata.LocalGroupID)
 	return strings.Join(fields, " ")
+}
+
+// redactClusterRouteErrorMetadata removes tenant-sensitive namespace fields
+// before route details cross a protocol boundary. Stable routing coordinates
+// remain available for redirect and diagnostics.
+func redactClusterRouteErrorMetadata(metadata ClusterRouteErrorMetadata) ClusterRouteErrorMetadata {
+	metadata.Database = ""
+	metadata.Catalog = ""
+	metadata.Collection = ""
+	return metadata
 }
 
 func errorCodeFor(err error) iwire.ErrorCode {

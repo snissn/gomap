@@ -285,6 +285,23 @@ read-index proof can land on no-op/config Raft log entries must add applied
 Raft-index tracking or translate the proof to the latest TreeDB command index at
 or below the proof before relying on the command FSM progress.
 
+The first routed slice is intentionally fail closed. One nativewire `get_many`
+document ID and a Mongo exact-`_id` find derive the catalog token and owner, but
+both public paths reject before local collection observation. A real production
+Raft integration must structurally bind the exact serving collection store or
+manager identity to the same owner proof before either path can be enabled.
+`GroupRoutedReadIndexCoordinator` remains internal contract scaffolding for
+owner selection and read-index-before-apply ordering; its static synthetic
+benchmark is not an enabled-path, storage, network, or quorum measurement.
+Consequently this issue makes no enabled routed-read latency claim.
+
+Non-shard-key, secondary/unique-index, multi-ID, scatter, follower, and remote
+data-plane reads remain deferred to explicit later work. All token/ring
+document mutations also fail closed until authoritative collection and index
+metadata is structurally bound to the exact owner route proof. A gateway-local
+collection-manager copy is not sufficient evidence, even when it currently
+reports no indexes. Collection-placement mutations remain supported.
+
 `lease_read` is allowed only if leader leases are implemented and the server can
 prove the lease is valid.
 

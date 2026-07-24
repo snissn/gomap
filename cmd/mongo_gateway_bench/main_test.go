@@ -1163,7 +1163,7 @@ func TestParseConfigRouteModeRing(t *testing.T) {
 		{
 			name: "production n-group default workload remains fail-closed",
 			args: []string{"-target", "treedb", "-route-mode", "production", "-route-groups", "2"},
-			want: "serial insert-only local-owner or remote-owner redirect proof",
+			want: "fail-closed scaffold accepts only a serial insert-only workload",
 		},
 		{
 			name: "production explicit command-wal false remains fail-closed",
@@ -1188,7 +1188,7 @@ func TestParseConfigRouteModeRing(t *testing.T) {
 		{
 			name: "production default workload remains fail-closed",
 			args: []string{"-target", "treedb", "-route-mode", "production", "-route-groups", "1"},
-			want: "serial insert-only local-owner or remote-owner redirect proof",
+			want: "fail-closed scaffold accepts only a serial insert-only workload",
 		},
 		{
 			name: "mongo target",
@@ -1226,7 +1226,7 @@ func TestParseConfigRouteModeRing(t *testing.T) {
 	}
 }
 
-func TestTreeDBProductionRouteModeLocalOwnerRoutedCommitSmoke(t *testing.T) {
+func TestTreeDBProductionRouteModeLocalOwnerFailsClosedWithoutOwnerBoundIndexPolicy(t *testing.T) {
 	cfg, err := parseConfig([]string{
 		"-target", "treedb",
 		"-route-mode", "production",
@@ -1262,57 +1262,13 @@ func TestTreeDBProductionRouteModeLocalOwnerRoutedCommitSmoke(t *testing.T) {
 
 	runCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	result, err := runBenchmark(runCtx, cfg, target, nil)
-	if err != nil {
-		t.Fatalf("run production route benchmark: %v", err)
-	}
-	if result.RouteMode != routeModeProduction || result.RouteGroupCount != 1 || result.RoutePartitionCount != 4 {
-		t.Fatalf("unexpected production route result config: %+v", result)
-	}
-	if result.RouteEvidence != nil {
-		t.Fatalf("local route evidence unexpectedly present for production route mode: %+v", result.RouteEvidence)
-	}
-	if result.ProductionRouteEvidenceStatus != "available" {
-		t.Fatalf("production route evidence status=%q want available", result.ProductionRouteEvidenceStatus)
-	}
-	evidence := result.ProductionRouteEvidence
-	if evidence == nil {
-		t.Fatalf("production route evidence missing: %+v", result)
-	}
-	if evidence.EvidenceScope != routeEvidenceScopeProductionRoutedCommit || !evidence.RealRoutedCommits {
-		t.Fatalf("production evidence scope/real commits=%+v want production routed commits", evidence)
-	}
-	wantRoutedCommits := int64(cfg.Documents + 1) // auto-create plus one routed insert per document.
-	if evidence.RouteAttemptsTotal != wantRoutedCommits || evidence.RouteLocalOwnerHits != wantRoutedCommits {
-		t.Fatalf("route attempts/local hits=%d/%d want %d evidence=%+v", evidence.RouteAttemptsTotal, evidence.RouteLocalOwnerHits, wantRoutedCommits, evidence)
-	}
-	if evidence.RouteUnknownOwnerRejects != 1 || evidence.DirectLocalBypassRejects != 1 {
-		t.Fatalf("guardrail rejects unknown/direct=%d/%d want 1/1 evidence=%+v", evidence.RouteUnknownOwnerRejects, evidence.DirectLocalBypassRejects, evidence)
-	}
-	if evidence.RouteRemoteRedirects != 0 || evidence.RouteRemoteForwards != 0 {
-		t.Fatalf("remote redirect/forward counters=%d/%d want 0/0 for local-owner proof", evidence.RouteRemoteRedirects, evidence.RouteRemoteForwards)
-	}
-	if evidence.RouteGroupHits["group-00"] != int(wantRoutedCommits) ||
-		evidence.RouteLeaderHits["node-00-a"] != int(wantRoutedCommits) ||
-		evidence.CommitGroupHits["group-00"] != int(wantRoutedCommits) ||
-		evidence.AppliedGroupHits["group-00"] != int(wantRoutedCommits) {
-		t.Fatalf("group/leader/commit/apply hits do not prove local-owner routed submit/apply: %+v", evidence)
-	}
-	if got := sumStringIntValues(evidence.RouteTokenPartitionHits); got != cfg.Documents {
-		t.Fatalf("token partition hit total=%d want documents=%d hits=%v", got, cfg.Documents, evidence.RouteTokenPartitionHits)
-	}
-	if result.Phases[0].Name != "load_insert_one_production_routed_commit" {
-		t.Fatalf("load phase name=%q want production routed commit boundary", result.Phases[0].Name)
-	}
-	if evidence.WriteLatencyMicros != result.Phases[0].LatencyMicros || evidence.WritesPerSecond != result.Phases[0].OpsPerSecond {
-		t.Fatalf("production write latency/throughput not tied to load phase evidence=%+v phase=%+v", evidence, result.Phases[0])
-	}
-	if evidence.CPUContext == "" || evidence.BytesPerOp <= 0 || evidence.AllocsPerOp <= 0 {
-		t.Fatalf("production measurement context/allocation fields missing: %+v", evidence)
+	if _, err := runBenchmark(runCtx, cfg, target, nil); err == nil ||
+		!strings.Contains(err.Error(), "authoritative collection and index metadata is bound") {
+		t.Fatalf("run production route benchmark err=%v want owner-bound index-policy rejection", err)
 	}
 }
 
-func TestTreeDBProductionRouteModeRemoteOwnerRedirectSmoke(t *testing.T) {
+func TestTreeDBProductionRouteModeRemoteOwnerFailsClosedWithoutOwnerBoundIndexPolicy(t *testing.T) {
 	cfg, err := parseConfig([]string{
 		"-target", "treedb",
 		"-route-mode", "production",
@@ -1348,55 +1304,13 @@ func TestTreeDBProductionRouteModeRemoteOwnerRedirectSmoke(t *testing.T) {
 
 	runCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	result, err := runBenchmark(runCtx, cfg, target, nil)
-	if err != nil {
-		t.Fatalf("run production route remote redirect benchmark: %v", err)
-	}
-	if result.RouteMode != routeModeProduction || result.RouteGroupCount != 2 || result.RoutePartitionCount != 4 {
-		t.Fatalf("unexpected production route result config: %+v", result)
-	}
-	if result.RouteEvidence != nil {
-		t.Fatalf("local route evidence unexpectedly present for production route mode: %+v", result.RouteEvidence)
-	}
-	if result.ProductionRouteEvidenceStatus != productionRouteEvidenceStatusRemoteOwnerRedirect {
-		t.Fatalf("production route evidence status=%q want %q", result.ProductionRouteEvidenceStatus, productionRouteEvidenceStatusRemoteOwnerRedirect)
-	}
-	evidence := result.ProductionRouteEvidence
-	if evidence == nil {
-		t.Fatalf("production route evidence missing: %+v", result)
-	}
-	if evidence.EvidenceScope != routeEvidenceScopeProductionRemoteOwnerRedirect || evidence.RealRoutedCommits {
-		t.Fatalf("production remote redirect evidence scope/real commits=%+v want redirect-only without routed commits", evidence)
-	}
-	if evidence.RouteAttemptsTotal != int64(cfg.Documents) ||
-		evidence.RouteRemoteRedirects != int64(cfg.Documents) ||
-		evidence.RouteLocalOwnerHits != 0 {
-		t.Fatalf("route attempts/remote/local=%d/%d/%d want %d/%d/0 evidence=%+v",
-			evidence.RouteAttemptsTotal, evidence.RouteRemoteRedirects, evidence.RouteLocalOwnerHits,
-			cfg.Documents, cfg.Documents, evidence)
-	}
-	if evidence.RouteGroupHits["group-00"] != 0 || evidence.RouteGroupHits["group-01"] != cfg.Documents ||
-		evidence.RouteLeaderHits["node-01-a"] != cfg.Documents {
-		t.Fatalf("route group/leader hits do not prove remote owner redirect: %+v", evidence)
-	}
-	if len(evidence.CommitGroupHits) != 0 || len(evidence.AppliedGroupHits) != 0 {
-		t.Fatalf("remote redirect evidence has local commit/apply hits: %+v", evidence)
-	}
-	if got := sumStringIntValues(evidence.RouteTokenPartitionHits); got != cfg.Documents {
-		t.Fatalf("token partition hit total=%d want documents=%d hits=%v", got, cfg.Documents, evidence.RouteTokenPartitionHits)
-	}
-	if result.Phases[0].Name != "load_insert_one_production_remote_owner_redirect" {
-		t.Fatalf("load phase name=%q want production remote-owner redirect boundary", result.Phases[0].Name)
-	}
-	if evidence.WriteLatencyMicros != result.Phases[0].LatencyMicros || evidence.WritesPerSecond != result.Phases[0].OpsPerSecond {
-		t.Fatalf("production remote redirect latency/throughput not tied to load phase evidence=%+v phase=%+v", evidence, result.Phases[0])
-	}
-	if evidence.CPUContext == "" || evidence.BytesPerOp <= 0 || evidence.AllocsPerOp <= 0 {
-		t.Fatalf("production remote redirect measurement context/allocation fields missing: %+v", evidence)
+	if _, err := runBenchmark(runCtx, cfg, target, nil); err == nil ||
+		!strings.Contains(err.Error(), "authoritative collection and index metadata is bound") {
+		t.Fatalf("run production remote-owner benchmark err=%v want owner-bound index-policy rejection", err)
 	}
 }
 
-func TestTreeDBProductionRouteModeRemoteOwnerRoutedCommitSmoke(t *testing.T) {
+func TestTreeDBProductionRouteModeRemoteExecutionFailsClosedWithoutOwnerBoundIndexPolicy(t *testing.T) {
 	cfg, err := parseConfig([]string{
 		"-target", "treedb",
 		"-route-mode", "production",
@@ -1433,57 +1347,9 @@ func TestTreeDBProductionRouteModeRemoteOwnerRoutedCommitSmoke(t *testing.T) {
 
 	runCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	result, err := runBenchmark(runCtx, cfg, target, nil)
-	if err != nil {
-		t.Fatalf("run production route remote routed benchmark: %v", err)
-	}
-	if result.RouteMode != routeModeProduction || result.RouteGroupCount != 2 || result.RoutePartitionCount != 4 {
-		t.Fatalf("unexpected production route result config: %+v", result)
-	}
-	if result.RouteEvidence != nil {
-		t.Fatalf("local route evidence unexpectedly present for production route mode: %+v", result.RouteEvidence)
-	}
-	if result.ProductionRouteEvidenceStatus != productionRouteEvidenceStatusRemoteOwnerRouted {
-		t.Fatalf("production route evidence status=%q want %q", result.ProductionRouteEvidenceStatus, productionRouteEvidenceStatusRemoteOwnerRouted)
-	}
-	evidence := result.ProductionRouteEvidence
-	if evidence == nil {
-		t.Fatalf("production route evidence missing: %+v", result)
-	}
-	if evidence.EvidenceScope != routeEvidenceScopeProductionRemoteOwnerRouted || !evidence.RealRoutedCommits {
-		t.Fatalf("production remote routed evidence scope/real commits=%+v want remote-owner routed commits", evidence)
-	}
-	if evidence.RouteAttemptsTotal != int64(cfg.Documents) ||
-		evidence.RouteRemoteForwards != int64(cfg.Documents) ||
-		evidence.RouteRemoteRedirects != 0 ||
-		evidence.RouteLocalOwnerHits != 0 {
-		t.Fatalf("route attempts/forwards/redirects/local=%d/%d/%d/%d want %d/%d/0/0 evidence=%+v",
-			evidence.RouteAttemptsTotal, evidence.RouteRemoteForwards, evidence.RouteRemoteRedirects, evidence.RouteLocalOwnerHits,
-			cfg.Documents, cfg.Documents, evidence)
-	}
-	if evidence.RouteUnknownOwnerRejects != 1 || evidence.DirectLocalBypassRejects != 1 {
-		t.Fatalf("guardrail rejects unknown/direct=%d/%d want 1/1 evidence=%+v", evidence.RouteUnknownOwnerRejects, evidence.DirectLocalBypassRejects, evidence)
-	}
-	if evidence.RouteGroupHits["group-00"] != 0 ||
-		evidence.RouteGroupHits["group-01"] != cfg.Documents ||
-		evidence.RouteLeaderHits["node-01-a"] != cfg.Documents ||
-		evidence.CommitGroupHits["group-01"] != cfg.Documents ||
-		evidence.AppliedGroupHits["group-01"] != cfg.Documents ||
-		evidence.CommitGroupHits["group-00"] != 0 ||
-		evidence.AppliedGroupHits["group-00"] != 0 {
-		t.Fatalf("route/commit/apply hits do not prove remote-owner routed submit/apply: %+v", evidence)
-	}
-	if got := sumStringIntValues(evidence.RouteTokenPartitionHits); got != cfg.Documents {
-		t.Fatalf("token partition hit total=%d want documents=%d hits=%v", got, cfg.Documents, evidence.RouteTokenPartitionHits)
-	}
-	if result.Phases[0].Name != "load_insert_one_production_remote_owner_routed_commit" {
-		t.Fatalf("load phase name=%q want production remote-owner routed commit boundary", result.Phases[0].Name)
-	}
-	if evidence.WriteLatencyMicros != result.Phases[0].LatencyMicros || evidence.WritesPerSecond != result.Phases[0].OpsPerSecond {
-		t.Fatalf("production remote routed latency/throughput not tied to load phase evidence=%+v phase=%+v", evidence, result.Phases[0])
-	}
-	if evidence.CPUContext == "" || evidence.BytesPerOp <= 0 || evidence.AllocsPerOp <= 0 {
-		t.Fatalf("production remote routed measurement context/allocation fields missing: %+v", evidence)
+	if _, err := runBenchmark(runCtx, cfg, target, nil); err == nil ||
+		!strings.Contains(err.Error(), "authoritative collection and index metadata is bound") {
+		t.Fatalf("run production remote-execution benchmark err=%v want owner-bound index-policy rejection", err)
 	}
 }
 

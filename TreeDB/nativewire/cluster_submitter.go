@@ -167,6 +167,9 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 		}
 	}
 	if routed {
+		if err := s.rejectClusterTokenRouteIndexedMutation(cmd.Header.ID, routeReq, route); err != nil {
+			return nil, err
+		}
 		applyClusterRouteMetadata(&metadata, routeReq, route)
 	}
 	result, err := s.clusterSubmitter.SubmitCommandEntryV1(ctx, entry, metadata)
@@ -315,14 +318,22 @@ func PreflightClusterRoute(ctx context.Context, submitter ClusterSubmitter, requ
 	}
 	target, err := provider.ClusterRoute(ctx, request)
 	if err != nil {
-		return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "cluster route rejected %s/%s/%s: %v", request.Database, request.Catalog, request.Collection, err)
+		return ClusterRouteTarget{}, true, clusterRouteTargetProtocolError(
+			iwire.ErrReadOnly,
+			request,
+			ClusterRouteTarget{},
+			"route_provider_rejected",
+			"cluster route provider rejected request",
+		)
 	}
 	if target.PlacementMode == "" {
-		reason := target.Reason
-		if reason == "" {
-			reason = "cluster route target missing collection placement mode"
-		}
-		return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+		return ClusterRouteTarget{}, true, clusterRouteTargetProtocolError(
+			iwire.ErrReadOnly,
+			request,
+			target,
+			"invalid_target",
+			"cluster route target missing collection placement mode",
+		)
 	}
 	target.Shape = normalizeClusterRouteTargetShape(target.Shape, target.PlacementMode)
 	if target.PlacementMode == "token" || target.PlacementMode == "ring" {
@@ -331,77 +342,97 @@ func PreflightClusterRoute(ctx context.Context, submitter ClusterSubmitter, requ
 		}
 	}
 	if target.GroupID == "" {
-		reason := target.Reason
-		if reason == "" {
-			reason = "cluster route target missing group id"
-		}
-		return ClusterRouteTarget{}, true, clusterRouteTargetProtocolError(iwire.ErrReadOnly, request, target, "missing_owner", reason)
+		return ClusterRouteTarget{}, true, clusterRouteTargetProtocolError(
+			iwire.ErrReadOnly,
+			request,
+			target,
+			"missing_owner",
+			"cluster route target missing group id",
+		)
 	}
 	switch target.PlacementMode {
 	case "collection":
 		if target.Shape != ClusterRouteShapeCollection {
-			reason := target.Reason
-			if reason == "" {
-				reason = "cluster collection route target must use collection route shape"
-			}
-			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+			return ClusterRouteTarget{}, true, clusterRouteTargetProtocolError(
+				iwire.ErrReadOnly,
+				request,
+				target,
+				"invalid_target",
+				"cluster collection route target must use collection route shape",
+			)
 		}
 	case "token", "ring":
 		if request.Shape != ClusterRouteShapeToken || !request.TokenKnown {
-			reason := target.Reason
-			if reason == "" {
-				reason = "cluster token/ring route target requires exactly one document id"
-			}
-			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+			return ClusterRouteTarget{}, true, clusterRouteTargetProtocolError(
+				iwire.ErrReadOnly,
+				request,
+				target,
+				"invalid_target",
+				"cluster token/ring route target requires exactly one document id",
+			)
 		}
 		if target.Shape != ClusterRouteShapeToken {
-			reason := target.Reason
-			if reason == "" {
-				reason = "cluster token/ring route target must use token route shape"
-			}
-			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+			return ClusterRouteTarget{}, true, clusterRouteTargetProtocolError(
+				iwire.ErrReadOnly,
+				request,
+				target,
+				"invalid_target",
+				"cluster token/ring route target must use token route shape",
+			)
 		}
 		if target.RouteKey == "" {
-			reason := target.Reason
-			if reason == "" {
-				reason = "cluster token/ring route target missing route key"
-			}
-			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+			return ClusterRouteTarget{}, true, clusterRouteTargetProtocolError(
+				iwire.ErrReadOnly,
+				request,
+				target,
+				"invalid_target",
+				"cluster token/ring route target missing route key",
+			)
 		}
 		if target.RouteKey != string(raftplacement.RouteKeyDocumentIDV1) {
-			reason := target.Reason
-			if reason == "" {
-				reason = fmt.Sprintf("cluster token/ring route target uses unsupported route key %q; requires _id", target.RouteKey)
-			}
-			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+			return ClusterRouteTarget{}, true, clusterRouteTargetProtocolError(
+				iwire.ErrReadOnly,
+				request,
+				target,
+				"invalid_target",
+				fmt.Sprintf("cluster token/ring route target uses unsupported route key %q; requires _id", target.RouteKey),
+			)
 		}
 		if !target.TokenKnown {
-			reason := target.Reason
-			if reason == "" {
-				reason = "cluster token/ring route target missing document token"
-			}
-			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+			return ClusterRouteTarget{}, true, clusterRouteTargetProtocolError(
+				iwire.ErrReadOnly,
+				request,
+				target,
+				"invalid_target",
+				"cluster token/ring route target missing document token",
+			)
 		}
 		if target.Token != request.Token {
-			reason := target.Reason
-			if reason == "" {
-				reason = "cluster token/ring route target token does not match request token"
-			}
-			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+			return ClusterRouteTarget{}, true, clusterRouteTargetProtocolError(
+				iwire.ErrReadOnly,
+				request,
+				target,
+				"invalid_target",
+				"cluster token/ring route target token does not match request token",
+			)
 		}
 		if target.PartitionID == "" {
-			reason := target.Reason
-			if reason == "" {
-				reason = "cluster token/ring route target missing token partition id"
-			}
-			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+			return ClusterRouteTarget{}, true, clusterRouteTargetProtocolError(
+				iwire.ErrReadOnly,
+				request,
+				target,
+				"invalid_target",
+				"cluster token/ring route target missing token partition id",
+			)
 		}
 	default:
-		reason := target.Reason
-		if reason == "" {
-			reason = "cluster route target placement mode " + target.PlacementMode + " is not supported"
-		}
-		return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+		return ClusterRouteTarget{}, true, clusterRouteTargetProtocolError(
+			iwire.ErrReadOnly,
+			request,
+			target,
+			"invalid_target",
+			"cluster route target placement mode "+target.PlacementMode+" is not supported",
+		)
 	}
 	target.Members = append([]string(nil), target.Members...)
 	return target, true, nil
@@ -420,7 +451,7 @@ func clusterTokenBatchRouteRejection(request ClusterRouteRequest, target Cluster
 }
 
 func clusterRouteTargetProtocolError(code iwire.ErrorCode, request ClusterRouteRequest, target ClusterRouteTarget, class, reason string) error {
-	route := clusterRouteErrorMetadataFromTarget(request, target, class)
+	route := redactClusterRouteErrorMetadata(clusterRouteErrorMetadataFromTarget(request, target, class))
 	if fields := clusterRouteErrorMetadataFields(route); fields != "" {
 		reason += "; " + fields
 	}
@@ -528,6 +559,47 @@ func clusterMutationRouteRequest(cmd iwire.ValidatedCommand, limits iwire.Limits
 		req.Tokens = tokens
 	}
 	return req, nil
+}
+
+func (s *Server) rejectClusterTokenRouteIndexedMutation(command iwire.CommandID, request ClusterRouteRequest, target ClusterRouteTarget) error {
+	switch target.PlacementMode {
+	case string(raftplacement.PlacementModeTokenV1), string(raftplacement.PlacementModeRingV1):
+	default:
+		return nil
+	}
+	switch command {
+	case iwire.CommandInsertBatch,
+		iwire.CommandReplaceBatch,
+		iwire.CommandDeleteBatch,
+		iwire.CommandUpdateBSONSet:
+	default:
+		return nil
+	}
+	return clusterRouteTargetProtocolError(
+		iwire.ErrReadOnly,
+		request,
+		target,
+		"index_policy_unbound",
+		"cluster token/ring mutation is disabled until authoritative collection and index metadata is bound to the owner route proof",
+	)
+}
+
+func (s *Server) rejectClusterRoutedLocalMetadataRead(command iwire.CommandID) error {
+	if s == nil || s.clusterSubmitter == nil {
+		return nil
+	}
+	if _, ok := s.clusterSubmitter.(ClusterRouteProvider); !ok {
+		return nil
+	}
+	switch command {
+	case iwire.CommandListCollections, iwire.CommandListIndexes, iwire.CommandOpenCollection:
+		return protocolError(
+			iwire.ErrReadOnly,
+			"nativewire routed-cluster metadata read is disabled until authoritative catalog metadata is bound to the route provider",
+		)
+	default:
+		return nil
+	}
 }
 
 func clusterMutationDocumentToken(cmd iwire.ValidatedCommand, limits iwire.Limits) (uint64, bool, error) {

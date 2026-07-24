@@ -6,6 +6,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 )
 
 func (s *Server) handleRead(ctx context.Context, header iwire.Header, state *connState, cmd iwire.ValidatedCommand) ([]iwire.Section, []byte, bool, error) {
@@ -144,23 +145,76 @@ func (s *Server) preflightClusterReadRoute(ctx context.Context, state *connState
 	default:
 		return nil
 	}
+	s.counters.inc("cluster_read_route.requests_total")
+	request, err := clusterReadRouteRequest(state, cmd, s.limits)
+	if err != nil {
+		s.counters.inc("cluster_read_route.errors_total")
+		return err
+	}
+	target, routed, err := PreflightClusterRoute(ctx, s.clusterSubmitter, request)
+	if err != nil {
+		s.counters.inc("cluster_read_route.errors_total")
+		if request.Shape == ClusterRouteShapeQuery {
+			s.counters.inc("cluster_read_route.unsupported_total")
+		}
+		return err
+	}
+	if !routed {
+		return nil
+	}
+	if target.PlacementMode != string(raftplacement.PlacementModeTokenV1) &&
+		target.PlacementMode != string(raftplacement.PlacementModeRingV1) {
+		s.counters.inc("cluster_read_route.errors_total")
+		s.counters.inc("cluster_read_route.unsupported_total")
+		return protocolError(iwire.ErrReadOnly, "cluster routed _id read requires token/ring placement; got %q", target.PlacementMode)
+	}
+	s.counters.inc("cluster_read_route.errors_total")
+	s.counters.inc("cluster_read_route.unsupported_total")
+	s.counters.inc("cluster_read_route.owner_store_unbound_total")
+	return clusterRouteTargetProtocolError(
+		iwire.ErrReadOnly,
+		request,
+		target,
+		"owner_store_unbound",
+		"cluster token/ring public read is disabled until the serving collection-store identity is bound to the owner Raft proof",
+	)
+}
+
+func clusterReadRouteRequest(state *connState, cmd iwire.ValidatedCommand, limits iwire.Limits) (ClusterRouteRequest, error) {
 	collection, err := clusterReadRouteCollection(state, cmd.Known)
 	if err != nil {
-		return err
+		return ClusterRouteRequest{}, err
 	}
 	name := ""
 	if cmd.Schema != nil {
 		name = cmd.Schema.Name
 	}
-	_, _, err = PreflightClusterRoute(ctx, s.clusterSubmitter, ClusterRouteRequest{
+	request := ClusterRouteRequest{
 		Database:    "default",
 		Catalog:     "default",
 		Collection:  collection,
 		CommandID:   cmd.Header.ID,
 		CommandName: name,
 		Shape:       ClusterRouteShapeQuery,
-	})
-	return err
+	}
+	if cmd.Header.ID != iwire.CommandGetMany {
+		return request, nil
+	}
+	rawIDs, err := metadataSection(cmd.Known, iwire.SectionDocumentIDs)
+	if err != nil {
+		return ClusterRouteRequest{}, err
+	}
+	ids, err := decodeByteVectorBorrowed(rawIDs, limits)
+	if err != nil {
+		return ClusterRouteRequest{}, err
+	}
+	if len(ids) != 1 {
+		return request, nil
+	}
+	request.Shape = ClusterRouteShapeToken
+	request.TokenKnown = true
+	request.Token = raftplacement.DocumentIDTokenV1(ids[0])
+	return request, nil
 }
 
 func clusterReadRouteCollection(state *connState, sections []iwire.Section) (string, error) {

@@ -147,6 +147,19 @@ type mongoStaticClusterRouteProvider struct {
 	routes []treenativewire.ClusterRouteRequest
 }
 
+type mongoSensitiveRouteError struct {
+	message string
+	route   treenativewire.ClusterRouteErrorMetadata
+}
+
+func (e mongoSensitiveRouteError) Error() string {
+	return e.message
+}
+
+func (e mongoSensitiveRouteError) ClusterRouteErrorMetadata() treenativewire.ClusterRouteErrorMetadata {
+	return e.route
+}
+
 func (p *mongoStaticClusterRouteProvider) ClusterRoute(ctx context.Context, req treenativewire.ClusterRouteRequest) (treenativewire.ClusterRouteTarget, error) {
 	p.mu.Lock()
 	p.routes = append(p.routes, req)
@@ -412,23 +425,55 @@ func assertStringArrayField(tb testing.TB, doc wire.Document, key string, want [
 	}
 }
 
-func assertMongoRemoteOwnerRouteFields(tb testing.TB, doc wire.Document, wantToken uint64) {
+func assertMongoOwnerBoundIndexPolicyError(tb testing.TB, doc wire.Document) {
 	tb.Helper()
 	assertBool(tb, doc, "treedbClusterError", true)
-	assertStringField(tb, doc, "treedbErrorClass", "remote_owner_redirect")
-	assertStringField(tb, doc, "treedbLeaderHint", "node-z")
-	assertStringField(tb, doc, "treedbRouteGroup", "group-z")
-	assertStringField(tb, doc, "treedbRouteLeaderHint", "node-z")
-	assertStringField(tb, doc, "treedbRouteDatabase", "app")
-	assertStringField(tb, doc, "treedbRouteCatalog", "default")
-	assertStringField(tb, doc, "treedbRouteCollection", "users")
-	assertStringField(tb, doc, "treedbRouteShape", string(treenativewire.ClusterRouteShapeToken))
-	assertStringField(tb, doc, "treedbRoutePlacementMode", string(raftplacement.PlacementModeRingV1))
-	assertStringField(tb, doc, "treedbRouteKey", string(raftplacement.RouteKeyDocumentIDV1))
-	assertStringField(tb, doc, "treedbRoutePartitionId", "p9")
-	assertStringArrayField(tb, doc, "treedbRouteMembers", []string{"node-z", "node-y"})
-	assertBool(tb, doc, "treedbRouteTokenKnown", true)
-	assertStringField(tb, doc, "treedbRouteToken", fmt.Sprintf("%d", wantToken))
+	assertStringField(tb, doc, "treedbErrorClass", "route_rejected")
+	for _, key := range []string{
+		"treedbLeaderHint",
+		"treedbRouteGroup",
+		"treedbRouteLeaderHint",
+		"treedbRouteDatabase",
+		"treedbRouteCatalog",
+		"treedbRouteCollection",
+		"treedbRouteShape",
+		"treedbRoutePlacementMode",
+		"treedbRouteKey",
+		"treedbRoutePartitionId",
+		"treedbRouteMembers",
+		"treedbRouteTokenKnown",
+		"treedbRouteToken",
+	} {
+		assertNoField(tb, doc, key)
+	}
+}
+
+func TestMongoClusterRouteCommandErrorRedactsSensitiveRouteReasonAndMetadata(t *testing.T) {
+	const secret = "tenant-secret-collection"
+	response, err := mongoClusterRouteCommandError(mongoSensitiveRouteError{
+		message: "route failed for " + secret,
+		route: treenativewire.ClusterRouteErrorMetadata{
+			Class:      "remote_owner_redirect",
+			Database:   "secret-db",
+			Catalog:    "secret-catalog",
+			Collection: secret,
+			GroupID:    "group-z",
+		},
+	})
+	if err != nil {
+		t.Fatalf("mongoClusterRouteCommandError: %v", err)
+	}
+	assertCommandError(t, response, "BadValue")
+	assertStringField(t, response, "treedbErrorClass", "remote_owner_redirect")
+	assertStringField(t, response, "treedbRouteGroup", "group-z")
+	for _, value := range []string{secret, "secret-db", "secret-catalog"} {
+		if raw, ok := bson.Raw(response).Lookup("errmsg").StringValueOK(); !ok || strings.Contains(raw, value) {
+			t.Fatalf("errmsg=%q ok=%v exposes namespace %q", raw, ok, value)
+		}
+	}
+	for _, key := range []string{"treedbRouteDatabase", "treedbRouteCatalog", "treedbRouteCollection"} {
+		assertNoField(t, response, key)
+	}
 }
 
 func assertNoField(tb testing.TB, doc wire.Document, key string) {
@@ -866,7 +911,7 @@ func TestClusterRoutePreflightMongoUsesNamespaceBeforeGatewayName(t *testing.T) 
 func TestClusterRoutePreflightMongoRejectsBeforeSubmitter(t *testing.T) {
 	submitter := &mongoRoutingClusterSubmitter{
 		mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{},
-		err:                       errors.New("token placement requires explicit token"),
+		err:                       errors.New("tenant-secret-db/users stored at /srv/private/tenant-secret"),
 	}
 	server := NewServer()
 	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
@@ -879,9 +924,18 @@ func TestClusterRoutePreflightMongoRejectsBeforeSubmitter(t *testing.T) {
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, response, "NotWritablePrimary")
-	assertErrmsgContains(t, response, "token placement requires explicit token")
+	assertErrmsgContains(t, response, "Mongo gateway cluster route rejected")
 	assertBool(t, response, "treedbClusterError", true)
-	assertStringField(t, response, "treedbErrorClass", "route_rejected")
+	assertStringField(t, response, "treedbErrorClass", "route_provider_rejected")
+	errmsg, ok := bson.Raw(response).Lookup("errmsg").StringValueOK()
+	if !ok {
+		t.Fatalf("errmsg missing or non-string: %+v", response)
+	}
+	for _, secret := range []string{"tenant-secret-db", "users", "/srv/private/tenant-secret"} {
+		if strings.Contains(errmsg, secret) {
+			t.Fatalf("provider route error exposes %q: %+v", secret, response)
+		}
+	}
 	if routes := submitter.snapshotRoutes(); len(routes) != 1 {
 		t.Fatalf("route calls=%d want 1", len(routes))
 	}
@@ -890,7 +944,7 @@ func TestClusterRoutePreflightMongoRejectsBeforeSubmitter(t *testing.T) {
 	}
 }
 
-func TestClusterRoutePreflightMongoTokenPlacementSingleIDWrites(t *testing.T) {
+func TestClusterRoutePreflightMongoTokenPlacementSingleIDWritesFailClosedWithoutIndexPolicy(t *testing.T) {
 	tests := []struct {
 		name        string
 		command     iwire.CommandID
@@ -942,7 +996,10 @@ func TestClusterRoutePreflightMongoTokenPlacementSingleIDWrites(t *testing.T) {
 			t.Run(string(mode)+"/"+tc.name, func(t *testing.T) {
 				server, submitter := newMongoPlacementRouteTestServer(t, mode)
 				response := tc.run(t, server)
-				assertOK(t, response)
+				assertCommandError(t, response, "NotWritablePrimary")
+				assertErrmsgContains(t, response, "authoritative collection and index metadata is bound")
+				assertBool(t, response, "treedbClusterError", true)
+				assertStringField(t, response, "treedbErrorClass", "route_rejected")
 				token := mongoClusterRouteTokenForValue(t, "u1")
 				routes := submitter.snapshotRoutes()
 				if len(routes) != 1 {
@@ -952,13 +1009,9 @@ func TestClusterRoutePreflightMongoTokenPlacementSingleIDWrites(t *testing.T) {
 					t.Fatalf("route request=%+v want app/default/users %s token=%d", got, tc.commandName, token)
 				}
 				calls := submitter.snapshotCalls()
-				if len(calls) != 1 {
-					t.Fatalf("submit calls=%d want 1", len(calls))
+				if len(calls) != 0 {
+					t.Fatalf("submit calls=%d want 0", len(calls))
 				}
-				if got := calls[0].entry.Decoded.CommandID; got != tc.command {
-					t.Fatalf("submitted command id=%d want %d", got, tc.command)
-				}
-				assertMongoClusterTokenRouteMetadata(t, calls[0], "app", "users", mode, "p0", token)
 			})
 		}
 	}
@@ -1068,22 +1121,82 @@ func TestClusterRoutePreflightMongoTokenPlacementRejectsMultiIDWrites(t *testing
 	}
 }
 
-func TestClusterRoutePreflightMongoRejectsUnsupportedFindRoute(t *testing.T) {
-	server, submitter := newMongoPlacementRouteTestServer(t, raftplacement.PlacementModeRingV1)
-	response := serveCommand(t, server, 336108, bson.D{
-		{Key: "find", Value: "users"},
-		{Key: "filter", Value: bson.D{{Key: "name", Value: "Ada"}}},
-		{Key: "$db", Value: "app"},
-	})
-	assertCommandError(t, response, "NotWritablePrimary")
-	assertErrmsgContains(t, response, "query route shape is not supported")
-	assertBool(t, response, "treedbClusterError", true)
-	assertStringField(t, response, "treedbErrorClass", "route_rejected")
-	if routes := submitter.snapshotRoutes(); len(routes) != 0 {
-		t.Fatalf("route calls=%d want 0 before unsupported query provider call", len(routes))
+func TestClusterRoutePreflightMongoShardKeyFindMapsTokenThenFailsClosed(t *testing.T) {
+	for _, mode := range []raftplacement.PlacementModeV1{
+		raftplacement.PlacementModeTokenV1,
+		raftplacement.PlacementModeRingV1,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			server, submitter := newMongoPlacementRouteTestServer(t, mode)
+			response := serveCommand(t, server, 336108, bson.D{
+				{Key: "find", Value: "users"},
+				{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+				{Key: "$db", Value: "app"},
+			})
+			assertCommandError(t, response, "NotWritablePrimary")
+			assertErrmsgContains(t, response, "Mongo gateway cluster route target for _id find is disabled until the serving collection-store identity is bound to the owner Raft proof")
+			assertBool(t, response, "treedbClusterError", true)
+			assertStringField(t, response, "treedbErrorClass", "route_rejected")
+			routes := submitter.snapshotRoutes()
+			if len(routes) != 1 {
+				t.Fatalf("route calls=%d want 1", len(routes))
+			}
+			wantToken := mongoClusterRouteTokenForValue(t, "u1")
+			if got := routes[0]; got.Database != "app" || got.Catalog != "default" || got.Collection != "users" ||
+				got.CommandName != "find" || got.Shape != treenativewire.ClusterRouteShapeToken ||
+				!got.TokenKnown || got.Token != wantToken {
+				t.Fatalf("find route request=%+v want app/default/users token=%d", got, wantToken)
+			}
+			if calls := submitter.snapshotCalls(); len(calls) != 0 {
+				t.Fatalf("submit calls=%d want 0", len(calls))
+			}
+		})
 	}
-	if calls := submitter.snapshotCalls(); len(calls) != 0 {
-		t.Fatalf("submit calls=%d want 0", len(calls))
+}
+
+func TestClusterRoutePreflightMongoRejectsNonShardAndSecondaryIndexReads(t *testing.T) {
+	tests := []struct {
+		name  string
+		index *collections.IndexDefinition
+	}{
+		{name: "non_shard_key"},
+		{
+			name: "secondary_index",
+			index: &collections.IndexDefinition{
+				Name:      "name_1",
+				Field:     "name",
+				ValueType: collections.IndexValueString,
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server, submitter := newMongoPlacementRouteTestServer(t, raftplacement.PlacementModeRingV1)
+			if tc.index != nil {
+				col, err := server.Collections.OpenCollection("app.users")
+				if err != nil {
+					t.Fatalf("open app.users: %v", err)
+				}
+				if _, err := col.CreateIndex(*tc.index); err != nil {
+					t.Fatalf("create test index: %v", err)
+				}
+			}
+			response := serveCommand(t, server, 336109, bson.D{
+				{Key: "find", Value: "users"},
+				{Key: "filter", Value: bson.D{{Key: "name", Value: "Ada"}}},
+				{Key: "$db", Value: "app"},
+			})
+			assertCommandError(t, response, "NotWritablePrimary")
+			assertErrmsgContains(t, response, "query route shape is not supported")
+			assertBool(t, response, "treedbClusterError", true)
+			assertStringField(t, response, "treedbErrorClass", "route_rejected")
+			if routes := submitter.snapshotRoutes(); len(routes) != 0 {
+				t.Fatalf("route calls=%d want 0 before unsupported query provider call", len(routes))
+			}
+			if calls := submitter.snapshotCalls(); len(calls) != 0 {
+				t.Fatalf("submit calls=%d want 0", len(calls))
+			}
+		})
 	}
 }
 
@@ -1143,6 +1256,127 @@ func TestClusterRoutePreflightMongoRejectsNonShardKeyWrites(t *testing.T) {
 	}
 }
 
+func TestClusterRoutePreflightMongoRejectsTokenRingMutationsWithoutOwnerBoundIndexPolicy(t *testing.T) {
+	tests := []struct {
+		name            string
+		index           collections.IndexDefinition
+		missingMetadata bool
+		nilManager      bool
+		run             func(testing.TB, *Server) wire.Document
+		wantError       string
+		wantRoutes      int
+	}{
+		{
+			name: "secondary_index_update",
+			index: collections.IndexDefinition{
+				Name:      "name_1",
+				Field:     "name",
+				ValueType: collections.IndexValueString,
+			},
+			run: func(tb testing.TB, server *Server) wire.Document {
+				return serveCommand(tb, server, 336111, bson.D{
+					{Key: "update", Value: "users"},
+					{Key: "updates", Value: bson.A{bson.D{
+						{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+						{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Ada"}}}}},
+					}}},
+					{Key: "$db", Value: "app"},
+				})
+			},
+			wantError:  "authoritative collection and index metadata is bound",
+			wantRoutes: 1,
+		},
+		{
+			name: "global_unique_insert",
+			index: collections.IndexDefinition{
+				Name:      "email_1",
+				Field:     "email",
+				ValueType: collections.IndexValueString,
+				Unique:    true,
+			},
+			run: func(tb testing.TB, server *Server) wire.Document {
+				return serveCommand(tb, server, 336112, bson.D{
+					{Key: "insert", Value: "users"},
+					{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "ada@example.test"}}}},
+					{Key: "$db", Value: "app"},
+				})
+			},
+			wantError:  "authoritative collection and index metadata is bound",
+			wantRoutes: 1,
+		},
+		{
+			name:            "missing_local_metadata",
+			missingMetadata: true,
+			run: func(tb testing.TB, server *Server) wire.Document {
+				return serveCommand(tb, server, 336113, bson.D{
+					{Key: "update", Value: "users"},
+					{Key: "updates", Value: bson.A{bson.D{
+						{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+						{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Ada"}}}}},
+					}}},
+					{Key: "$db", Value: "app"},
+				})
+			},
+			wantError: "authoritative collection and index metadata is bound",
+		},
+		{
+			name:       "missing_collection_manager",
+			nilManager: true,
+			run: func(tb testing.TB, server *Server) wire.Document {
+				return serveCommand(tb, server, 336114, bson.D{
+					{Key: "update", Value: "users"},
+					{Key: "updates", Value: bson.A{bson.D{
+						{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+						{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Ada"}}}}},
+					}}},
+					{Key: "$db", Value: "app"},
+				})
+			},
+			wantError:  "authoritative collection and index metadata is bound",
+			wantRoutes: 1,
+		},
+	}
+	for _, mode := range []raftplacement.PlacementModeV1{
+		raftplacement.PlacementModeTokenV1,
+		raftplacement.PlacementModeRingV1,
+	} {
+		for _, tc := range tests {
+			t.Run(string(mode)+"/"+tc.name, func(t *testing.T) {
+				server, submitter := newMongoPlacementRouteTestServer(t, mode)
+				if tc.missingMetadata {
+					db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+					if err != nil {
+						t.Fatalf("open empty metadata db: %v", err)
+					}
+					t.Cleanup(func() { _ = db.Close() })
+					server.Collections = collections.NewCollectionManager(db)
+				} else if tc.nilManager {
+					server.Collections = nil
+				} else {
+					col, err := server.Collections.OpenCollection("app.users")
+					if err != nil {
+						t.Fatalf("open app.users: %v", err)
+					}
+					if _, err := col.CreateIndex(tc.index); err != nil {
+						t.Fatalf("create test index: %v", err)
+					}
+				}
+				response := tc.run(t, server)
+				assertCommandError(t, response, "NotWritablePrimary")
+				assertErrmsgContains(t, response, tc.wantError)
+				assertBool(t, response, "treedbClusterError", true)
+				assertStringField(t, response, "treedbErrorClass", "route_rejected")
+				if routes := submitter.snapshotRoutes(); len(routes) != tc.wantRoutes {
+					t.Fatalf("route calls=%d want %d", len(routes), tc.wantRoutes)
+				}
+				if calls := submitter.snapshotCalls(); len(calls) != 0 {
+					t.Fatalf("submit calls=%d want 0", len(calls))
+				}
+			})
+		}
+	}
+}
+
 func TestMongoGroupRoutedDispatcherRoutesCollectionBatchWrite(t *testing.T) {
 	provider := &mongoStaticClusterRouteProvider{
 		target: treenativewire.ClusterRouteTarget{
@@ -1187,7 +1421,7 @@ func TestMongoGroupRoutedDispatcherRoutesCollectionBatchWrite(t *testing.T) {
 	}
 }
 
-func TestMongoGroupRoutedDispatcherRoutesSingleTokenWrite(t *testing.T) {
+func TestMongoGroupRoutedDispatcherRejectsSingleTokenWriteWithoutOwnerBoundIndexPolicy(t *testing.T) {
 	token := mongoClusterRouteTokenForValue(t, "u1")
 	provider := &mongoStaticClusterRouteProvider{
 		target: treenativewire.ClusterRouteTarget{
@@ -1208,18 +1442,14 @@ func TestMongoGroupRoutedDispatcherRoutesSingleTokenWrite(t *testing.T) {
 		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}}}},
 		{Key: "$db", Value: "app"},
 	})
-	assertOK(t, response)
-	assertInt32(t, response, "n", 1)
+	assertCommandError(t, response, "NotWritablePrimary")
+	assertErrmsgContains(t, response, "authoritative collection and index metadata is bound")
 	if calls := groupA.snapshotCalls(); len(calls) != 0 {
 		t.Fatalf("group-a calls=%d want 0", len(calls))
 	}
 	calls := groupB.snapshotCalls()
-	if len(calls) != 1 {
-		t.Fatalf("group-b calls=%d want 1", len(calls))
-	}
-	meta := calls[0].metadata
-	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(treenativewire.ClusterRouteShapeToken) || meta.ClusterRouteGroupID != "group-b" || meta.ClusterRouteKey != string(raftplacement.RouteKeyDocumentIDV1) || !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != "p0" {
-		t.Fatalf("group-b token route metadata=%+v want group-b token=%d p0", meta, token)
+	if len(calls) != 0 {
+		t.Fatalf("group-b calls=%d want 0", len(calls))
 	}
 }
 
@@ -1248,7 +1478,7 @@ func TestMongoGroupRoutedDispatcherCatalogRoutesCollectionOwner(t *testing.T) {
 	}
 }
 
-func TestMongoGroupRoutedDispatcherCatalogRoutesSingleTokenOwner(t *testing.T) {
+func TestMongoGroupRoutedDispatcherCatalogRejectsSingleTokenOwnerWithoutIndexPolicy(t *testing.T) {
 	token := mongoClusterRouteTokenForValue(t, "u1")
 	provider := treenativewire.NewCatalogClusterRouteProvider(mustMongoTokenGroupRouteCatalog(t, raftplacement.PlacementModeRingV1, token))
 	server, groupA, groupB := newMongoGroupRoutedDispatcherTestServer(t, provider)
@@ -1257,17 +1487,66 @@ func TestMongoGroupRoutedDispatcherCatalogRoutesSingleTokenOwner(t *testing.T) {
 		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}}}},
 		{Key: "$db", Value: "app"},
 	})
-	assertOK(t, response)
+	assertCommandError(t, response, "NotWritablePrimary")
+	assertErrmsgContains(t, response, "authoritative collection and index metadata is bound")
 	if calls := groupA.snapshotCalls(); len(calls) != 0 {
 		t.Fatalf("group-a calls=%d want 0", len(calls))
 	}
 	calls := groupB.snapshotCalls()
-	if len(calls) != 1 {
-		t.Fatalf("group-b calls=%d want 1", len(calls))
+	if len(calls) != 0 {
+		t.Fatalf("group-b calls=%d want 0", len(calls))
 	}
-	meta := calls[0].metadata
-	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(treenativewire.ClusterRouteShapeToken) || meta.ClusterRouteGroupID != "group-b" || meta.ClusterRouteLeaderHint != "node-c" || meta.ClusterRouteKey != string(raftplacement.RouteKeyDocumentIDV1) || !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != "p1" {
-		t.Fatalf("group-b catalog token route metadata=%+v want group-b/node-c token=%d p1", meta, token)
+}
+
+func TestMongoRoutedMetadataReadsFailClosedBeforeLocalCatalogObservation(t *testing.T) {
+	server, submitter := newMongoPlacementRouteTestServer(t, raftplacement.PlacementModeRingV1)
+	commands := []struct {
+		name    string
+		request bson.D
+	}{
+		{
+			name: "listCollections",
+			request: bson.D{
+				{Key: "listCollections", Value: int32(1)},
+				{Key: "$db", Value: "app"},
+			},
+		},
+		{
+			name: "listDatabases",
+			request: bson.D{
+				{Key: "listDatabases", Value: int32(1)},
+				{Key: "$db", Value: "admin"},
+			},
+		},
+		{
+			name: "listIndexes",
+			request: bson.D{
+				{Key: "listIndexes", Value: "users"},
+				{Key: "$db", Value: "app"},
+			},
+		},
+	}
+	for i, command := range commands {
+		t.Run(command.name, func(t *testing.T) {
+			response := serveCommand(t, server, int32(336320+i), command.request)
+			assertCommandError(t, response, "NotWritablePrimary")
+			assertErrmsgContains(t, response, "authoritative catalog metadata")
+			assertBool(t, response, "treedbClusterError", true)
+			assertStringField(t, response, "treedbErrorClass", "route_rejected")
+			for _, key := range []string{
+				"treedbRouteDatabase",
+				"treedbRouteCatalog",
+				"treedbRouteCollection",
+			} {
+				assertNoField(t, response, key)
+			}
+		})
+	}
+	if routes := submitter.snapshotRoutes(); len(routes) != 0 {
+		t.Fatalf("metadata route calls=%+v want none", routes)
+	}
+	if calls := submitter.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("metadata submit calls=%d want none", len(calls))
 	}
 }
 
@@ -1293,11 +1572,8 @@ func TestMongoGroupRoutedDispatcherRejectsUnknownGroupBeforeSubmit(t *testing.T)
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, response, "NotWritablePrimary")
-	assertErrmsgContains(t, response, "route target unknown")
-	assertBool(t, response, "treedbClusterError", true)
-	assertStringField(t, response, "treedbErrorClass", "remote_owner_redirect")
-	assertStringField(t, response, "treedbLeaderHint", "node-z")
-	assertStringField(t, response, "treedbRouteGroup", "group-z")
+	assertErrmsgContains(t, response, "authoritative collection and index metadata is bound")
+	assertMongoOwnerBoundIndexPolicyError(t, response)
 	users, err := server.Collections.OpenCollection("app.users")
 	if err != nil {
 		t.Fatalf("OpenCollection app.users: %v", err)
@@ -1337,12 +1613,8 @@ func TestMongoGroupRoutedDispatcherUnknownOwnerErrorsBeforeSubmit(t *testing.T) 
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, response, "NotWritablePrimary")
-	assertErrmsgContains(t, response, "route target unknown")
-	assertBool(t, response, "treedbClusterError", true)
-	assertStringField(t, response, "treedbErrorClass", "unknown_owner")
-	assertStringField(t, response, "treedbRouteGroup", "group-z")
-	assertNoField(t, response, "treedbLeaderHint")
-	assertNoField(t, response, "treedbRouteLeaderHint")
+	assertErrmsgContains(t, response, "authoritative collection and index metadata is bound")
+	assertMongoOwnerBoundIndexPolicyError(t, response)
 	users, err := server.Collections.OpenCollection("app.users")
 	if err != nil {
 		t.Fatalf("OpenCollection app.users: %v", err)
@@ -1381,7 +1653,7 @@ func TestMongoGroupRoutedDispatcherMissingOwnerErrorsBeforeSubmit(t *testing.T) 
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, response, "NotWritablePrimary")
-	assertErrmsgContains(t, response, "route target missing")
+	assertErrmsgContains(t, response, "cluster route rejected")
 	assertBool(t, response, "treedbClusterError", true)
 	assertStringField(t, response, "treedbErrorClass", "missing_owner")
 	assertNoField(t, response, "treedbRouteGroup")
@@ -1428,8 +1700,8 @@ func TestMongoGroupRoutedDispatcherRemoteOwnerErrorsForMutations(t *testing.T) {
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, insertResponse, "NotWritablePrimary")
-	assertErrmsgContains(t, insertResponse, "route target unknown")
-	assertMongoRemoteOwnerRouteFields(t, insertResponse, mongoClusterRouteTokenForValue(t, "u2"))
+	assertErrmsgContains(t, insertResponse, "authoritative collection and index metadata is bound")
+	assertMongoOwnerBoundIndexPolicyError(t, insertResponse)
 	key2, err := encodePrimaryKey(mustRawValue(t, "u2"))
 	if err != nil {
 		t.Fatalf("encode u2 primary key: %v", err)
@@ -1447,7 +1719,7 @@ func TestMongoGroupRoutedDispatcherRemoteOwnerErrorsForMutations(t *testing.T) {
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, updateResponse, "NotWritablePrimary")
-	assertMongoRemoteOwnerRouteFields(t, updateResponse, mongoClusterRouteTokenForValue(t, "u1"))
+	assertMongoOwnerBoundIndexPolicyError(t, updateResponse)
 
 	deleteResponse := serveCommand(t, server, 336306, bson.D{
 		{Key: "delete", Value: "users"},
@@ -1455,7 +1727,7 @@ func TestMongoGroupRoutedDispatcherRemoteOwnerErrorsForMutations(t *testing.T) {
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, deleteResponse, "NotWritablePrimary")
-	assertMongoRemoteOwnerRouteFields(t, deleteResponse, mongoClusterRouteTokenForValue(t, "u1"))
+	assertMongoOwnerBoundIndexPolicyError(t, deleteResponse)
 
 	got, err := users.Get(key1)
 	if err != nil {
@@ -2143,7 +2415,7 @@ func TestClusterSubmitterConcreteBridgeRouteGroupMismatchNotWritablePrimary(t *t
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, response, "NotWritablePrimary")
-	assertErrmsgContains(t, response, "route group")
+	assertErrmsgContains(t, response, "cluster route rejected")
 	assertBool(t, response, "treedbClusterError", true)
 	assertStringField(t, response, "treedbErrorClass", "remote_owner_redirect")
 	assertStringField(t, response, "treedbLeaderHint", "node-c")
@@ -2663,6 +2935,19 @@ func TestClusterSubmitterRejectsIndexDDLNoLocalMutation(t *testing.T) {
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, createResponse, "BadValue")
+	assertErrmsgContains(t, createResponse, "does not support secondary or global unique index DDL")
+	uniqueResponse := serveCommand(t, server, 325814, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+			{Key: "unique", Value: true},
+			{Key: "treedbValueType", Value: "string"},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, uniqueResponse, "BadValue")
+	assertErrmsgContains(t, uniqueResponse, "does not support secondary or global unique index DDL")
 	dropResponse := serveCommand(t, server, 325813, bson.D{
 		{Key: "dropIndexes", Value: "users"},
 		{Key: "index", Value: "name_1"},
