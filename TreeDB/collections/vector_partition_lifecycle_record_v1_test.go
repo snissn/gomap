@@ -95,6 +95,8 @@ func TestVectorPartitionLifecycleRecordV1CanonicalRoundTrip(t *testing.T) {
 func TestVectorPartitionReadyPromotionV1CanonicalRoundTripAndReconstruction(t *testing.T) {
 	_, building := lifecycleManifestPayloadV1(t, "building")
 	_, ready := lifecycleManifestPayloadV1(t, "ready")
+	building.Representatives = nil
+	building.Canonicalize()
 	raw := lifecycleReadyPromotionPayloadV1(t, building, ready)
 	promotion, err := decodeVectorPartitionReadyPromotionCanonicalV1(raw)
 	if err != nil {
@@ -121,6 +123,9 @@ func TestVectorPartitionReadyPromotionV1CanonicalRoundTripAndReconstruction(t *t
 	}
 	if !bytes.Equal(gotRaw, wantRaw) {
 		t.Fatal("ready promotion did not reconstruct the exact canonical manifest")
+	}
+	if len(got.Representatives) == 0 {
+		t.Fatal("ready promotion omitted the computed representative mapping")
 	}
 	if len(raw) >= len(wantRaw) {
 		t.Fatalf("promotion bytes=%d, full ready manifest=%d", len(raw), len(wantRaw))

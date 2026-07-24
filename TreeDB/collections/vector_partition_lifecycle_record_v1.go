@@ -22,11 +22,12 @@ const (
 	vectorPartitionLifecycleMaxBytesV1 = 64 << 20
 
 	vectorPartitionReadyPromotionMagicV1   = "VRP1"
-	vectorPartitionReadyPromotionVersionV1 = 1
-	// A promotion carries one router asset and fixed-size digests, never the
-	// full membership manifest. Keep it independently bounded well below the
-	// lifecycle/store caps.
-	vectorPartitionReadyPromotionMaxBytesV1 = 64 << 10
+	vectorPartitionReadyPromotionVersionV1 = 2
+	// A promotion carries one router asset, the generation's computed
+	// representative mapping, and fixed-size digests. The mapping remains
+	// bounded below the lifecycle/store caps and avoids retaining a second full
+	// membership manifest.
+	vectorPartitionReadyPromotionMaxBytesV1 = 16 << 20
 )
 
 // vectorPartitionLifecycleOperationV1 is intentionally local-M1 scoped; it
@@ -65,6 +66,7 @@ type vectorPartitionReadyPromotionV1 struct {
 	BuildingDigest   [sha256.Size]byte
 	RouterGeneration uint64
 	RouterAsset      VectorPartitionAssetV1
+	Representatives  []VectorPartitionMembershipV1
 	ReadySetDigest   string
 	ReadyDigest      [sha256.Size]byte
 }
@@ -111,6 +113,18 @@ func vectorPartitionReadyPromotionShapeV1(p vectorPartitionReadyPromotionV1) err
 	if err := validateAssetVPM(p.RouterAsset, limits); err != nil {
 		return fmt.Errorf("%w: ready promotion router asset", ErrVectorPartitionManifestInvalid)
 	}
+	if len(p.Representatives) > limits.MaxMemberships {
+		return fmt.Errorf("%w: ready promotion representative cap", ErrVectorPartitionManifestInvalid)
+	}
+	for i, representative := range p.Representatives {
+		if i > 0 {
+			previous := p.Representatives[i-1]
+			if representative.VectorOrdinal < previous.VectorOrdinal ||
+				(representative.VectorOrdinal == previous.VectorOrdinal && representative.PartitionID <= previous.PartitionID) {
+				return fmt.Errorf("%w: ready promotion representatives", ErrVectorPartitionManifestInvalid)
+			}
+		}
+	}
 	return nil
 }
 
@@ -133,6 +147,7 @@ func encodeVectorPartitionReadyPromotionCanonicalV1(p vectorPartitionReadyPromot
 	putU64VPM(b, p.RouterGeneration)
 	b.Write(p.ReadyDigest[:])
 	putStringVPM(b, p.ReadySetDigest)
+	putMembershipsVPM(b, p.Representatives)
 	putAssetsVPM(b, []VectorPartitionAssetV1{p.RouterAsset})
 	if b.Len()+sha256.Size > vectorPartitionReadyPromotionMaxBytesV1 {
 		return nil, fmt.Errorf("%w: ready promotion bytes cap", ErrVectorPartitionManifestInvalid)
@@ -144,7 +159,7 @@ func encodeVectorPartitionReadyPromotionCanonicalV1(p vectorPartitionReadyPromot
 
 func decodeVectorPartitionReadyPromotionCanonicalV1(raw []byte) (vectorPartitionReadyPromotionV1, error) {
 	var zero vectorPartitionReadyPromotionV1
-	const fixed = 4 + 4 + 8 + sha256.Size + 8 + sha256.Size + 4 + 4 + sha256.Size
+	const fixed = 4 + 4 + 8 + sha256.Size + 8 + sha256.Size + 4 + 4 + 4 + sha256.Size
 	if len(raw) < fixed || len(raw) > vectorPartitionReadyPromotionMaxBytesV1 {
 		return zero, fmt.Errorf("%w: ready promotion bytes", ErrVectorPartitionManifestInvalid)
 	}
@@ -176,6 +191,7 @@ func decodeVectorPartitionReadyPromotionCanonicalV1(raw []byte) (vectorPartition
 	copy(p.ReadyDigest[:], content[r.off:r.off+sha256.Size])
 	r.off += sha256.Size
 	p.ReadySetDigest = r.str()
+	p.Representatives = r.memberships()
 	assets := r.assets()
 	if r.err != nil || r.off != len(content) || len(assets) != 1 {
 		return zero, fmt.Errorf("%w: ready promotion truncated, trailing, or asset count", ErrVectorPartitionManifestInvalid)
@@ -205,6 +221,7 @@ func makeVectorPartitionReadyPromotionPayloadV1(building, ready VectorPartitionM
 		BuildingDigest:   sha256.Sum256(buildingRaw),
 		RouterGeneration: ready.RouterGeneration,
 		RouterAsset:      ready.RouterAsset,
+		Representatives:  append([]VectorPartitionMembershipV1(nil), ready.Representatives...),
 		ReadySetDigest:   ready.ReadySetDigest,
 		ReadyDigest:      sha256.Sum256(readyRaw),
 	})
@@ -229,6 +246,7 @@ func applyVectorPartitionReadyPromotionV1(building VectorPartitionManifestV1, pa
 	ready.State = "ready"
 	ready.RouterGeneration = p.RouterGeneration
 	ready.RouterAsset = p.RouterAsset
+	ready.Representatives = append([]VectorPartitionMembershipV1(nil), p.Representatives...)
 	ready.ReadySetDigest = p.ReadySetDigest
 	ready.Canonicalize()
 	if ready.ReadySetDigest != p.ReadySetDigest {

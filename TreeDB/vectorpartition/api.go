@@ -1,5 +1,6 @@
-// Package vectorpartition exposes the offline M2 builder to TreeDB commands.
-// The implementation remains internal; this is not a server/runtime API.
+// Package vectorpartition exposes the offline M2 builder and deterministic M4
+// representative coarsening core to TreeDB commands. The persisted router
+// lifecycle and search handle remain collection APIs.
 package vectorpartition
 
 import (
@@ -17,6 +18,15 @@ type PhaseMetrics = internal.PhaseMetrics
 type Partitioner = internal.Partitioner
 type ReferencePartitioner = internal.ReferencePartitioner
 type ExternalJSONLimits = internal.ExternalJSONLimits
+type RouterConfigV1 = internal.RouterConfigV1
+type RouterVectorV1 = internal.RouterVectorV1
+type RouterPartitionV1 = internal.RouterPartitionV1
+type RouterHierarchyNodeV1 = internal.RouterHierarchyNodeV1
+type RouterRepresentativeV1 = internal.RouterRepresentativeV1
+type RouterBuildMetricsV1 = internal.RouterBuildMetricsV1
+type RouterModelV1 = internal.RouterModelV1
+type RouterPartitionScoreV1 = internal.RouterPartitionScoreV1
+type RouterRouteResultV1 = internal.RouterRouteResultV1
 type OverlapConfig = internal.OverlapConfig
 type Membership = internal.Membership
 type OverlapResult = internal.OverlapResult
@@ -25,6 +35,23 @@ const SchemaVersion = internal.SchemaVersion
 
 func DefaultConfig() Config         { return internal.DefaultConfig() }
 func ValidateConfig(c Config) error { return internal.ValidateConfig(c) }
+func DefaultRouterConfigV1() RouterConfigV1 {
+	return internal.DefaultRouterConfigV1()
+}
+func ValidateRouterConfigV1(c RouterConfigV1) error {
+	return internal.ValidateRouterConfigV1(c)
+}
+func BuildRouterV1(p []RouterPartitionV1, c RouterConfigV1) (RouterModelV1, error) {
+	return internal.BuildRouterV1(p, c)
+}
+func ValidateRouterModelV1(m RouterModelV1) error { return internal.ValidateRouterModelV1(m) }
+func CanonicalRouterJSONV1(m RouterModelV1) ([]byte, error) {
+	return internal.CanonicalRouterJSONV1(m)
+}
+func RouterDigestV1(m RouterModelV1) (string, error) { return internal.RouterDigestV1(m) }
+func RouteExactV1(m RouterModelV1, query []float32, candidateBudget, partitionProbes int) (RouterRouteResultV1, error) {
+	return internal.RouteExactV1(m, query, candidateBudget, partitionProbes)
+}
 func ValidateInputShape(c Config, vectors, dimensions int) error {
 	return internal.ValidateInputShape(c, vectors, dimensions)
 }
