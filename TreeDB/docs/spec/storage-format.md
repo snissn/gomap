@@ -50,6 +50,56 @@ A TreeDB deployment uses:
   `stable/`, `apply/`, `snapshots/`, and `peers/<peer-id>/` directories,
 - optional side-store DBs (`dictdb`, `templatedb`) using their own `index.db` files.
 
+### Vector-partition manifests (`vector_partitions/`)
+
+`vector_partitions/` is a persistent, Raft-snapshot-included namespace for M1
+vector-partition metadata; it is not a WAL or cache. VPM1 remains the canonical
+generation-manifest payload, but it is not published as a mutable standalone
+file. Local lifecycle authority is an immutable VCP1 checkpoint plus a
+digest-chained VLC1 delta tail under the exact hashed identity:
+
+```text
+sha256(collection)-sha256(index).lifecycle.checkpoint.<20-digit-epoch>.vlc
+sha256(collection)-sha256(index).lifecycle.epoch.<20-digit-epoch>.delta.<20-digit-sequence>.vlc
+```
+
+The highest checkpoint epoch is the sole authority; corruption never falls
+back to a lower epoch. BUILD creates a new checkpoint epoch. READY,
+LOCAL_ACTIVATE, DEACTIVATE, DELETE_PREPARE, RECLAIM_PROGRESS, and
+DELETE_COMPLETE append immutable deltas until the bounded tail is compacted
+into another checkpoint. A checkpoint contains the identity, generation floor
+and high water, durable activation high water, at most two live generation
+states, active/retired generation, last sequence/digest, embedded canonical
+VPM1 manifests, and any VPR1 reclaim debt. The generation floor records the
+first accepted generation; successors must be contiguous, so an absent
+generation inside the durable floor/high-water interval is exact proof of
+completed deletion rather than an unrecorded gap. The activation high water
+records the newest generation that ever held local activation authority
+independently of the live pointers, so deletion and reclaim cannot make an
+older prepared generation eligible for reactivation. The checkpoint is capped
+at 30 MiB, its current tail at 4 MiB, the identity namespace at 64 MiB and
+4,096 entries. Counts and lengths are checked before allocation.
+
+Every file is installed no-replace from an exact synchronized anonymous handle,
+then the parent namespace is synchronized and reopened. Exact-byte retries are
+idempotent; conflicting immutable names, physical aliases, symlinks, malformed
+names, gaps, cross-identity payloads, or invalid transitions fail closed.
+Superseded epochs may remain as zero-length audit stubs in a live store, but
+Raft export includes only the highest checkpoint and its contiguous current
+tail. The archive always carries an explicit `db/vector_partitions` directory,
+including when it is empty. Restore rejects a missing directory, any extra
+audit epoch, or legacy mutable authority. It reads the namespace in bounded
+batches, applies the 4,096-entry cap to all names, and verifies the ranges,
+CRC32 values, and SHA-256 digests of every asset referenced by a non-deleting
+manifest before replacing the target namespace.
+
+VPM1 has a fixed version, bounded length-prefixed fields and lists, one
+(exactly one) router-asset frame, canonical ordering, and an integrity digest.
+VPR1 is the bounded, versioned, checksummed reclaim payload that retains
+original and rewritten asset debt until physical GC completes. Pre-alpha
+binaries reject old `.vpm`, `.active`, `.retired`, `.inactive`, and `.deleting`
+authority; there is no fallback or migration path.
+
 Before a writable public open can succeed, TreeDB establishes the complete
 directory dependency chain from the outer database root through `maindb`,
 enabled side-store roots, and each backend's `wal`, `value_vlog`, `leaf_vlog`,

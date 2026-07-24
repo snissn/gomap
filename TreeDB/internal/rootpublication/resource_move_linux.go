@@ -16,6 +16,10 @@ func moveStableChildFileNoReplace(sourceParent, expected *os.File, oldName strin
 	return moveStableChildFileNoReplaceLinux(sourceParent, expected, oldName, destinationParent, newName, nil)
 }
 
+func installStableFileHandleNoReplace(expected, destinationParent *os.File, name string) (bool, error) {
+	return linkStableFileHandleNoReplace(expected, destinationParent, name)
+}
+
 func moveStableChildFileNoReplaceLinux(sourceParent, expected *os.File, oldName string, destinationParent *os.File, newName string, afterValidation func()) (bool, error) {
 	// Reject an already-rebound staging name. The later mutation uses only the
 	// retained child handle, so a rebind after this check cannot redirect the

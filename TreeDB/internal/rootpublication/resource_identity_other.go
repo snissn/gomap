@@ -4,6 +4,10 @@ package rootpublication
 
 import "os"
 
+func linkStableChildFileNoReplace(*os.File, string, string) error {
+	return ErrNamespacePersistenceUnsupported
+}
+
 func stableRelativeNamespaceSupported() bool { return false }
 
 func stableNamespaceCreationPersistsThroughChild() bool { return false }
@@ -11,6 +15,10 @@ func stableNamespaceCreationPersistsThroughChild() bool { return false }
 func openStableParent(path string) (*os.File, error) { return os.Open(path) }
 
 func openStableChildFile(*os.File, string, int, os.FileMode) (*os.File, error) {
+	return nil, ErrNamespacePersistenceUnsupported
+}
+
+func openStableAnonymousFile(*os.File, os.FileMode) (*os.File, error) {
 	return nil, ErrNamespacePersistenceUnsupported
 }
 
@@ -29,6 +37,10 @@ func renameStableChildFile(*os.File, string, string) error {
 func stableCrossParentMoveNoReplaceSupported() bool { return false }
 
 func moveStableChildFileNoReplace(*os.File, *os.File, string, *os.File, string) (bool, error) {
+	return false, ErrNamespacePersistenceUnsupported
+}
+
+func installStableFileHandleNoReplace(*os.File, *os.File, string) (bool, error) {
 	return false, ErrNamespacePersistenceUnsupported
 }
 

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
@@ -28,6 +29,20 @@ const (
 	raftSnapshotArchiveGlobV1      = "treedb-snapshot-*.tar"
 )
 
+// raftSnapshotAfterExtractForTest blocks a restore after archive extraction
+// while it still owns the storage barrier. It is test-only and makes the
+// barrier-before-FSM-lock ordering regression deterministic.
+var raftSnapshotAfterExtractForTest func()
+
+// raftSnapshotBeforeOpenForTest makes the discovery/open boundary observable
+// to deterministic no-follow regression tests.
+var raftSnapshotBeforeOpenForTest func(string)
+
+// raftSnapshotBeforeVectorPartitionRootOpenForTest makes the vector-partition
+// root retained-open/path-revalidation boundary observable to deterministic
+// replacement tests.
+var raftSnapshotBeforeVectorPartitionRootOpenForTest func(string)
+
 var raftSnapshotMainDBEntriesV1 = []string{
 	"index.db",
 	raftSnapshotFormatConfigFileV1,
@@ -35,6 +50,9 @@ var raftSnapshotMainDBEntriesV1 = []string{
 	"value_vlog",
 	"leaf_vlog",
 	"column_assets",
+	// M1 vector-partition manifests are durable derived state. Omitting this
+	// namespace would make a restored ready generation silently partial.
+	"vector_partitions",
 }
 
 var raftSnapshotSideStoreEntriesV1 = []string{
@@ -50,8 +68,21 @@ func (f *FSM) ExportRaftSnapshotV1() (raftcluster.RaftSnapshotV1, error) {
 	if f == nil {
 		return raftcluster.RaftSnapshotV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	var snapshot raftcluster.RaftSnapshotV1
+	err := collections.WithVectorPartitionStorageBarrierV1(raftcluster.MainDBDir(f.cluster.Dir), func() error {
+		// All snapshot operations take the root barrier before f.mu. Install
+		// extracts under the barrier and then takes f.mu, so reversing this
+		// order here can deadlock export behind an in-flight install.
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		var inner error
+		snapshot, inner = f.exportRaftSnapshotV1Locked()
+		return inner
+	})
+	return snapshot, err
+}
+
+func (f *FSM) exportRaftSnapshotV1Locked() (raftcluster.RaftSnapshotV1, error) {
 	if err := f.requireRaftSnapshotOpenV1(); err != nil {
 		return raftcluster.RaftSnapshotV1{}, err
 	}
@@ -188,6 +219,12 @@ func (f *FSM) InstallRaftSnapshotV1(reader io.Reader) error {
 	if f == nil {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
 	}
+	return collections.WithVectorPartitionStorageBarrierV1(raftcluster.MainDBDir(f.cluster.Dir), func() error { return f.installRaftSnapshotV1Locked(reader) })
+}
+func (f *FSM) installRaftSnapshotV1Locked(reader io.Reader) error {
+	if f == nil {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
+	}
 	if reader == nil {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "nil snapshot reader")
 	}
@@ -236,6 +273,12 @@ func (f *FSM) InstallRaftSnapshotV1(reader io.Reader) error {
 	header, err := extractRaftSnapshotArchiveV1(reader, tmpMain, tmpSide, tmpApply)
 	if err != nil {
 		return err
+	}
+	if hook := raftSnapshotAfterExtractForTest; hook != nil {
+		hook()
+	}
+	if err := collections.ValidateVectorPartitionSnapshotNamespaceV1(tmpMain); err != nil {
+		return codedError(raftentry.ErrorRejectedConflictV1, "validate extracted vector partition lifecycle snapshot: %v", err)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -448,6 +491,19 @@ func appendRaftSnapshotDirV1(tw *tar.Writer, prefix, root string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("raftfsm: snapshot path %q is not a directory", root)
 	}
+	return appendRaftSnapshotDirWithRootInfoV1(tw, prefix, root, info)
+}
+
+func appendRaftSnapshotDirWithRootInfoV1(tw *tar.Writer, prefix, root string, expectedRoot fs.FileInfo) error {
+	if tw == nil {
+		return fmt.Errorf("raftfsm: nil snapshot archive writer")
+	}
+	if expectedRoot == nil {
+		return fmt.Errorf("raftfsm: nil snapshot directory identity for %q", root)
+	}
+	if strings.HasSuffix(prefix, "/vector_partitions") {
+		return appendRaftSnapshotVectorPartitionDirV1(tw, prefix, root, expectedRoot)
+	}
 	return filepath.WalkDir(root, func(filePath string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -471,6 +527,9 @@ func appendRaftSnapshotDirV1(tw *tar.Writer, prefix, root string) error {
 		}
 		name := pathpkg.Join(prefix, filepath.ToSlash(rel))
 		if entry.IsDir() {
+			if raftSnapshotVectorPartitionLifecycleEntryV1(prefix, filepath.ToSlash(rel)) {
+				return fmt.Errorf("raftfsm: vector partition lifecycle path %q is not a regular file", filePath)
+			}
 			return writeRaftSnapshotDirHeaderV1(tw, name)
 		}
 		if !info.Mode().IsRegular() {
@@ -496,6 +555,100 @@ func appendRaftSnapshotDirV1(tw *tar.Writer, prefix, root string) error {
 	})
 }
 
+// appendRaftSnapshotVectorPartitionDirV1 keeps discovery and child opens on
+// one exact retained directory handle. The immutable lifecycle namespace is
+// flat by contract.
+func appendRaftSnapshotVectorPartitionDirV1(tw *tar.Writer, prefix, root string, expectedRoot fs.FileInfo) error {
+	dir, err := rootpublication.OpenStableParent(root)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	openedRoot, err := dir.Stat()
+	if err != nil {
+		return err
+	}
+	if !openedRoot.IsDir() || !os.SameFile(expectedRoot, openedRoot) {
+		return fmt.Errorf("raftfsm: vector partition snapshot root %q changed while opening", root)
+	}
+	retainedIdentity, err := rootpublication.StableIdentityFromFile(dir)
+	if err != nil {
+		return fmt.Errorf("raftfsm: capture vector partition snapshot root %q identity: %w", root, err)
+	}
+	if raftSnapshotBeforeVectorPartitionRootOpenForTest != nil {
+		raftSnapshotBeforeVectorPartitionRootOpenForTest(root)
+	}
+	current, err := rootpublication.OpenStableParent(root)
+	if err != nil {
+		return fmt.Errorf("raftfsm: reopen vector partition snapshot root %q: %w", root, err)
+	}
+	currentIdentity, identityErr := rootpublication.StableIdentityFromFile(current)
+	closeErr := current.Close()
+	if err := errors.Join(identityErr, closeErr); err != nil {
+		return fmt.Errorf("raftfsm: revalidate vector partition snapshot root %q identity: %w", root, err)
+	}
+	if !rootpublication.SamePhysicalIdentity(retainedIdentity, currentIdentity) {
+		return fmt.Errorf("raftfsm: vector partition snapshot root %q changed after retained open", root)
+	}
+	if err := writeRaftSnapshotDirHeaderV1(tw, prefix); err != nil {
+		return err
+	}
+	entries, err := collections.VectorPartitionSnapshotEntriesV1(dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if raftSnapshotBeforeOpenForTest != nil {
+			raftSnapshotBeforeOpenForTest(filepath.Join(root, entry.Name))
+		}
+		file, err := rootpublication.OpenStableChildFile(dir, entry.Name, os.O_RDONLY, 0)
+		if err != nil {
+			return err
+		}
+		exactInfo, statErr := file.Stat()
+		exactIdentity, identityErr := rootpublication.StableIdentityFromFile(file)
+		if statErr != nil || identityErr != nil || !exactInfo.Mode().IsRegular() || exactInfo.Size() < 0 ||
+			uint64(exactInfo.Size()) != entry.Bytes ||
+			!rootpublication.SamePhysicalIdentity(exactIdentity, entry.Identity) {
+			_ = file.Close()
+			if statErr != nil {
+				return statErr
+			}
+			if identityErr != nil {
+				return identityErr
+			}
+			return fmt.Errorf("raftfsm: vector partition snapshot entry %q changed while opening", entry.Name)
+		}
+		if err := rootpublication.ValidateStableChildLink(dir, file, entry.Name); err != nil {
+			_ = file.Close()
+			return err
+		}
+		header := &tar.Header{Name: pathpkg.Join(prefix, entry.Name), Mode: int64(exactInfo.Mode().Perm()), Size: exactInfo.Size(), ModTime: exactInfo.ModTime()}
+		if err := tw.WriteHeader(header); err != nil {
+			_ = file.Close()
+			return err
+		}
+		copyErr := copyRaftSnapshotFileContentV1(tw, file, header.Size)
+		validateErr := rootpublication.ValidateStableChildLink(dir, file, entry.Name)
+		closeErr := file.Close()
+		if err := errors.Join(copyErr, validateErr, closeErr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func raftSnapshotVectorPartitionLifecycleEntryV1(prefix, rel string) bool {
+	parts := strings.Split(pathpkg.Join(prefix, rel), "/")
+	for i, part := range parts {
+		if part == "vector_partitions" && i+2 == len(parts) {
+			name := parts[i+1]
+			return strings.HasSuffix(name, ".vpm") || strings.HasSuffix(name, ".active") || strings.HasSuffix(name, ".retired") || strings.HasSuffix(name, ".inactive") || strings.HasSuffix(name, ".deleting")
+		}
+	}
+	return false
+}
+
 func shouldSkipRaftSnapshotTreeDBFileV1(rel string) bool {
 	return filepath.Base(rel) == "command-wal-journal-owner.lock"
 }
@@ -506,6 +659,16 @@ func appendRaftSnapshotTreeDBStorageV1(tw *tar.Writer, prefix, mainDir string) e
 	}
 	for _, name := range raftSnapshotMainDBEntriesV1 {
 		src := filepath.Join(mainDir, name)
+		if name == "vector_partitions" {
+			if _, err := os.Lstat(src); os.IsNotExist(err) {
+				if err := writeRaftSnapshotDirHeaderV1(tw, pathpkg.Join(prefix, name)); err != nil {
+					return err
+				}
+				continue
+			} else if err != nil {
+				return err
+			}
+		}
 		if err := appendRaftSnapshotStoragePathV1(tw, pathpkg.Join(prefix, name), src); err != nil {
 			return err
 		}
@@ -539,7 +702,7 @@ func appendRaftSnapshotStoragePathV1(tw *tar.Writer, archiveName, src string) er
 		return fmt.Errorf("raftfsm: snapshot path %q is a symlink", src)
 	}
 	if info.IsDir() {
-		return appendRaftSnapshotDirV1(tw, archiveName, src)
+		return appendRaftSnapshotDirWithRootInfoV1(tw, archiveName, filepath.Clean(src), info)
 	}
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("raftfsm: snapshot path %q is not a regular file", src)

@@ -1688,3 +1688,12 @@ Coverage:
 The native-wire server does not exist yet. R0 follow-up work must add
 broader negative conformance fixtures, drift tests, and direct collection parity
 tests before claiming native-wire v1 server support.
+
+# Vector partition M1 verification
+
+M1 verification covers canonical bounded codec round-trip, typed asset
+verification, active/retired lifecycle, fail-closed reachability, Raft snapshot
+archive inclusion, and column-asset GC eligibility after durable retirement.
+It does not claim ANN query serving. Reader pins cover only this generation's
+local cleanup lifecycle; they do not imply a query-serving or cluster-cutover
+contract.
