@@ -1648,13 +1648,40 @@ func TestCollectionVectorPartitionReclaimV1ReclaimsCoResidentRecords(t *testing.
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
+	injected := errors.New("post-install delete complete")
+	restore := setVectorPartitionLifecycleStoreHookForTestV1(func(boundary string) error {
+		if boundary == "after_delta_install" {
+			return injected
+		}
+		return nil
+	})
+	restored := false
+	defer func() {
+		if !restored {
+			restore()
+		}
+	}()
+	if _, err := col.ReclaimVectorPartitionGenerationV1(ctx, "embedding", 11); !errors.Is(err, injected) {
+		t.Fatalf("reclaim err=%v, want post-install failure", err)
+	}
+	restore()
+	restored = true
+	if _, err := store.openDeleteTombstone(col.name, "embedding", 11); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("completed generation 11 remained deleting: %v", err)
+	}
+	if _, err := store.openDeleteTombstone(col.name, "embedding", 12); err != nil {
+		t.Fatalf("co-resident generation 12 lost after partial completion: %v", err)
+	}
 	if _, err := col.ReclaimVectorPartitionGenerationV1(ctx, "embedding", 11); err != nil {
-		t.Fatal(err)
+		t.Fatalf("retry completed generation while draining co-resident debt: %v", err)
 	}
 	for _, generation := range []uint64{11, 12} {
-		if _, err := os.Stat(store.deleteTombstonePath(col.name, "embedding", generation)); !errors.Is(err, os.ErrNotExist) {
+		if _, err := store.openDeleteTombstone(col.name, "embedding", generation); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("reclaim record %d remains: %v", generation, err)
 		}
+	}
+	if _, err := col.ReclaimVectorPartitionGenerationV1(ctx, "embedding", 11); err != nil {
+		t.Fatalf("retry after every reclaim record completed: %v", err)
 	}
 	path, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), refs[0])
 	if err != nil {

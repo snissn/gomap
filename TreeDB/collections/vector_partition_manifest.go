@@ -2521,7 +2521,8 @@ func (c *Collection) DeleteVectorPartitionGenerationV1(index string, generation 
 // throughout rewrite and GC, excludes only this exact record from VPM prepared
 // roots, journals every old live ref before remap publication, and removes the
 // record only after every original and superseded segment is physically absent.
-// All errors leave a checksummed, canonical record durable for retry.
+// All errors leave either a checksummed canonical reclaim record or the
+// lifecycle's monotonic completed-generation proof durable for retry.
 func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, index string, generation uint64) (ColumnAssetGCStats, error) {
 	var zero ColumnAssetGCStats
 	if c == nil || c.db == nil {
@@ -2544,12 +2545,54 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 		if err != nil {
 			return err
 		}
+		requestedComplete := false
 		if _, err := s.openDeleteTombstone(c.name, index, generation); err != nil {
-			return err
+			if !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			requestedComplete, err = s.vectorPartitionLifecycleGenerationCompleteV1(c.name, index, generation)
+			if err != nil {
+				return err
+			}
+			if !requestedComplete {
+				return os.ErrNotExist
+			}
 		}
 		records, err := c.vectorPartitionLifecycleReclaimRecordsV1(s)
 		if err != nil {
 			return err
+		}
+		requestedID := vectorPartitionLifecycleReclaimIDV1(c.name, index, generation)
+		pending := records[:0]
+		for _, record := range records {
+			complete, err := vectorPartitionReclaimDebtPhysicallyAbsentV1(c.db.ColumnAssetRootDir(), record.state)
+			if err != nil {
+				return err
+			}
+			if !complete {
+				pending = append(pending, record)
+				continue
+			}
+			if err := s.persistVectorPartitionLifecycleOperationV1(
+				record.state.Collection,
+				record.state.IndexName,
+				vectorPartitionLifecycleDeleteCompleteV1,
+				record.state.Generation,
+				nil,
+			); err != nil {
+				return err
+			}
+			if record.id == requestedID {
+				requestedComplete = true
+			}
+		}
+		records = pending
+		// A previous call may have installed DELETE_COMPLETE and then observed
+		// a post-install error. Its requested record is intentionally absent,
+		// but the high-water proof makes the retry successful. Continue through
+		// any co-resident records so one completed ID cannot strand their debt.
+		if len(records) == 0 && requestedComplete {
+			return nil
 		}
 		reclaimIDs := make(map[string]struct{}, len(records))
 		refs := make([]ColumnAssetRef, 0, len(records)*2)
@@ -2560,8 +2603,6 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 		if expectedNamespace == "" {
 			return errors.New("collections: vector partition reclaim requires column asset namespace")
 		}
-		requestedID := vectorPartitionLifecycleReclaimIDV1(c.name, index, generation)
-		requestedComplete := false
 		for _, record := range records {
 			reclaimIDs[record.id] = struct{}{}
 			for _, ref := range record.state.debtRefs() {
@@ -2603,17 +2644,9 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 			}
 		}
 		for _, record := range records {
-			complete := true
-			for _, ref := range record.state.debtRefs() {
-				path, err := columnAssetSegmentPath(c.db.ColumnAssetRootDir(), ref)
-				if err != nil {
-					return err
-				}
-				if _, err := os.Stat(path); err == nil {
-					complete = false
-				} else if !errors.Is(err, os.ErrNotExist) {
-					return err
-				}
+			complete, err := vectorPartitionReclaimDebtPhysicallyAbsentV1(c.db.ColumnAssetRootDir(), record.state)
+			if err != nil {
+				return err
 			}
 			if complete {
 				if err := s.persistVectorPartitionLifecycleOperationV1(
@@ -2637,6 +2670,21 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 		return nil
 	})
 	return zero, err
+}
+
+func vectorPartitionReclaimDebtPhysicallyAbsentV1(assetRoot string, state vectorPartitionReclaimStateV1) (bool, error) {
+	for _, ref := range state.debtRefs() {
+		path, err := columnAssetSegmentPath(assetRoot, ref)
+		if err != nil {
+			return false, err
+		}
+		if _, err := os.Stat(path); err == nil {
+			return false, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 type VectorPartitionStatusV1 struct {

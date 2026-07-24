@@ -72,6 +72,21 @@ func vectorPartitionLifecycleManifestV1(state vectorPartitionLifecycleStateV1, g
 	return DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits())
 }
 
+func (s *VectorPartitionStoreV1) vectorPartitionLifecycleGenerationCompleteV1(collection, index string, generation uint64) (bool, error) {
+	if generation == 0 {
+		return false, nil
+	}
+	loaded, present, err := s.loadVectorPartitionLifecycleAuthorityV1(collection, index)
+	if err != nil {
+		return false, err
+	}
+	if !present || generation > loaded.state.GenerationHighWater {
+		return false, nil
+	}
+	_, live := loaded.state.Generations[generation]
+	return !live, nil
+}
+
 func vectorPartitionManifestCanonicalEqualV1(a, b VectorPartitionManifestV1) bool {
 	aRaw, aErr := EncodeVectorPartitionManifestV1(a)
 	bRaw, bErr := EncodeVectorPartitionManifestV1(b)
