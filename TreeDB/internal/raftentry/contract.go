@@ -64,6 +64,8 @@ type RequestMetadataV1 struct {
 	ClusterRouteTokenKnown    bool
 	ClusterRouteToken         uint64
 	ClusterRoutePartitionID   string
+	CatalogMetaEpoch          uint64
+	CatalogMetaDigest         string
 }
 
 type CommandDigestV1 [32]byte

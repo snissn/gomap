@@ -133,7 +133,11 @@ func ConfigureProductionRouteProofHarness(opts ProductionRouteProofOptions, db *
 		_ = closeProductionRouteProofFSMs(openedFSMs)
 		return nil, err
 	}
-	dispatcher, err := raftcluster.NewGroupRoutedSubmitter(raftcluster.GroupRoutedSubmitterOptions{Registry: registry})
+	// This legacy benchmark scaffold has no replicated catalog authority.
+	// Keep the production composition fail closed: it can exercise route
+	// topology counters, but it cannot admit a routed mutation from a
+	// constructor-local catalog or synthetic proof.
+	dispatcher, err := raftcluster.NewCatalogMetaGroupRoutedSubmitter(registry, productionRouteProofFailClosedCatalogValidator{})
 	if err != nil {
 		_ = closeProductionRouteProofFSMs(openedFSMs)
 		return nil, err
@@ -146,6 +150,12 @@ func ConfigureProductionRouteProofHarness(opts ProductionRouteProofOptions, db *
 		recorder:   recorder,
 		dispatcher: dispatcher,
 	}, nil
+}
+
+type productionRouteProofFailClosedCatalogValidator struct{}
+
+func (productionRouteProofFailClosedCatalogValidator) ValidateCatalogRouteMetadata(context.Context, raftentry.RequestMetadataV1) error {
+	return raftplacement.ErrCatalogMetaUnavailable
 }
 
 func (h *ProductionRouteProofHarness) Close() error {
@@ -207,8 +217,8 @@ func (h *ProductionRouteProofHarness) ProbeUnknownOwnerReject(ctx context.Contex
 		ClusterRouteToken:         0,
 		ClusterRoutePartitionID:   "token-999999",
 	}
-	if _, err := h.dispatcher.SubmitCommandEntryV1(ctx, nil, unknown); !errors.Is(err, raftcluster.ErrRouteTargetUnknown) {
-		return fmt.Errorf("production route unknown-owner guardrail err=%v want %v", err, raftcluster.ErrRouteTargetUnknown)
+	if _, err := h.dispatcher.SubmitCommandEntryV1(ctx, nil, unknown); !errors.Is(err, raftplacement.ErrCatalogMetaUnavailable) {
+		return fmt.Errorf("production route catalog-authority guardrail err=%v want %v", err, raftplacement.ErrCatalogMetaUnavailable)
 	}
 	h.recorder.recordUnknownOwnerReject()
 	return nil

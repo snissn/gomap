@@ -27,6 +27,18 @@ type submitOnlyGroupSubmitter struct {
 	groupID GroupID
 }
 
+type recordingCatalogRouteValidator struct {
+	calls      []raftentry.RequestMetadataV1
+	nilContext bool
+	err        error
+}
+
+func (v *recordingCatalogRouteValidator) ValidateCatalogRouteMetadata(ctx context.Context, metadata raftentry.RequestMetadataV1) error {
+	v.calls = append(v.calls, cloneRequestMetadataV1(metadata))
+	v.nilContext = ctx == nil
+	return v.err
+}
+
 func (s *submitOnlyGroupSubmitter) Config() ResolvedConfig {
 	return ResolvedConfig{GroupID: s.groupID}
 }
@@ -133,6 +145,58 @@ func TestGroupRoutedSubmitterRoutesCollectionAndTokenTargets(t *testing.T) {
 	}
 	if tokenResult.ActualAck != iwire.AckRaftCommitted || tokenResult.CommittedEntry.RequestMetadata.ClusterRouteToken != 42 {
 		t.Fatalf("token result ack/token=%d/%d want raft_committed/42", tokenResult.ActualAck, tokenResult.CommittedEntry.RequestMetadata.ClusterRouteToken)
+	}
+}
+
+func TestCatalogMetaGroupRoutedSubmitterValidatesBeforeOwnerLookup(t *testing.T) {
+	groupA := &recordingGroupSubmitter{groupID: "group-a"}
+	registry, err := NewGroupSubmitterRegistryV1([]GroupSubmitterV1{{GroupID: "group-a", Submitter: groupA}})
+	if err != nil {
+		t.Fatalf("NewGroupSubmitterRegistryV1: %v", err)
+	}
+	if _, err := NewCatalogMetaGroupRoutedSubmitter(registry, nil); !errors.Is(err, ErrInvalidSubmitter) {
+		t.Fatalf("nil validator error=%v want ErrInvalidSubmitter", err)
+	}
+	validator := &recordingCatalogRouteValidator{err: errors.New("catalog route mismatch")}
+	dispatcher, err := NewCatalogMetaGroupRoutedSubmitter(registry, validator)
+	if err != nil {
+		t.Fatalf("NewCatalogMetaGroupRoutedSubmitter: %v", err)
+	}
+	metadata := routeMetadata("group-a", iwire.AckRaftCommitted)
+	metadata.CatalogMetaEpoch = 3
+	metadata.CatalogMetaDigest = "digest"
+	if _, err := dispatcher.SubmitCommandEntryV1(context.Background(), testClusterCommandEntry(t, 7), metadata); err == nil {
+		t.Fatal("catalog validator rejection unexpectedly admitted")
+	}
+	if len(validator.calls) != 1 ||
+		validator.calls[0].CatalogMetaEpoch != 3 ||
+		validator.calls[0].CatalogMetaDigest != "digest" {
+		t.Fatalf("validator calls=%+v want one call with epoch 3 and digest %q", validator.calls, "digest")
+	}
+	if got := len(groupA.snapshot()); got != 0 {
+		t.Fatalf("owner submit calls=%d want 0 before catalog validation", got)
+	}
+}
+
+func TestCatalogMetaGroupRoutedSubmitterNormalizesNilContextBeforeValidation(t *testing.T) {
+	groupA := &recordingGroupSubmitter{groupID: "group-a"}
+	registry, err := NewGroupSubmitterRegistryV1([]GroupSubmitterV1{{GroupID: "group-a", Submitter: groupA}})
+	if err != nil {
+		t.Fatalf("NewGroupSubmitterRegistryV1: %v", err)
+	}
+	validator := &recordingCatalogRouteValidator{}
+	dispatcher, err := NewCatalogMetaGroupRoutedSubmitter(registry, validator)
+	if err != nil {
+		t.Fatalf("NewCatalogMetaGroupRoutedSubmitter: %v", err)
+	}
+	if _, err := dispatcher.SubmitCommandEntryV1(nil, testClusterCommandEntry(t, 8), routeMetadata("group-a", iwire.AckRaftCommitted)); err != nil {
+		t.Fatalf("SubmitCommandEntryV1: %v", err)
+	}
+	if validator.nilContext {
+		t.Fatal("catalog validator received nil context")
+	}
+	if len(validator.calls) != 1 || len(groupA.snapshot()) != 1 {
+		t.Fatalf("validator/owner calls=%d/%d want 1/1", len(validator.calls), len(groupA.snapshot()))
 	}
 }
 
@@ -334,9 +398,9 @@ func TestGroupRoutedSubmitterAdmissionMissingProviderFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewGroupSubmitterRegistryV1: %v", err)
 	}
-	dispatcher, err := NewGroupRoutedSubmitter(GroupRoutedSubmitterOptions{Registry: registry})
+	dispatcher, err := NewCatalogMetaGroupRoutedSubmitter(registry, &recordingCatalogRouteValidator{})
 	if err != nil {
-		t.Fatalf("NewGroupRoutedSubmitter: %v", err)
+		t.Fatalf("NewCatalogMetaGroupRoutedSubmitter: %v", err)
 	}
 	status, err := dispatcher.ClusterAdmissionStatus(context.Background())
 	if err != nil {
@@ -357,9 +421,9 @@ func newTestGroupRoutedSubmitter(tb testing.TB, submitters ...*recordingGroupSub
 	if err != nil {
 		tb.Fatalf("NewGroupSubmitterRegistryV1: %v", err)
 	}
-	dispatcher, err := NewGroupRoutedSubmitter(GroupRoutedSubmitterOptions{Registry: registry})
+	dispatcher, err := NewCatalogMetaGroupRoutedSubmitter(registry, &recordingCatalogRouteValidator{})
 	if err != nil {
-		tb.Fatalf("NewGroupRoutedSubmitter: %v", err)
+		tb.Fatalf("NewCatalogMetaGroupRoutedSubmitter: %v", err)
 	}
 	return dispatcher
 }

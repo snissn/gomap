@@ -20,7 +20,7 @@ func TestClusterRouteSingleIDReadFailsClosedBeforeLocalObservation(t *testing.T)
 		t.Run(string(mode), func(t *testing.T) {
 			routeProvider := &placementRouteClusterSubmitter{
 				fakeClusterSubmitter: &fakeClusterSubmitter{},
-				provider: NewCatalogClusterRouteProvider(
+				provider: newStaticCatalogRouteProviderForTest(
 					mustNativewireTokenGroupRouteCatalog(t, mode, token),
 				),
 			}
@@ -91,7 +91,7 @@ func TestClusterRouteUnsupportedReadShapesFailClosedBeforeProviderOrLocalRead(t 
 	token := raftplacement.DocumentIDTokenV1(id)
 	routeProvider := &placementRouteClusterSubmitter{
 		fakeClusterSubmitter: &fakeClusterSubmitter{},
-		provider: NewCatalogClusterRouteProvider(
+		provider: newStaticCatalogRouteProviderForTest(
 			mustNativewireTokenGroupRouteCatalog(t, raftplacement.PlacementModeRingV1, token),
 		),
 	}
@@ -129,7 +129,7 @@ func TestClusterRouteUnsupportedReadShapesFailClosedBeforeProviderOrLocalRead(t 
 func TestClusterRouteMetadataReadsFailClosedBeforeLocalCatalogObservation(t *testing.T) {
 	routeProvider := &placementRouteClusterSubmitter{
 		fakeClusterSubmitter: &fakeClusterSubmitter{},
-		provider: NewCatalogClusterRouteProvider(
+		provider: newStaticCatalogRouteProviderForTest(
 			mustNativewireRouteTestCatalog(t, raftplacement.PlacementModeRingV1),
 		),
 	}

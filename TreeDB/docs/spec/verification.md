@@ -776,7 +776,7 @@ Coverage:
   - `TestRouteTokenBatchClassifiesDocumentTokens`
   - `TestRouteTokenBatchFailsClosed`
 - `TreeDB/nativewire/cluster_submitter_test.go`:
-  - `TestCatalogClusterRouteProviderRoutesResolvedCatalog`
+  - `TestCatalogRouteResolverRoutesResolvedCatalog`
   - `TestClusterRoutePreflightTokenPlacementSingleIDMutationCommands`
   - `TestClusterRoutePreflightTokenPlacementRejectsMultiID`
   - `TestRaftClusterSubmitterRouteGroupMismatchRejectsBeforeLocalMutation`

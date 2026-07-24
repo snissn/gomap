@@ -14,13 +14,15 @@ const (
 	// FeatureSingleGroupProvider is the feature gate for the #3044-0 provider
 	// and storage boundary. It reserves only the single-group contract; it does
 	// not imply a selected Raft library or production HA behavior.
-	FeatureSingleGroupProvider FeatureName = "treedb.raftcluster.single_group_provider"
+	FeatureSingleGroupProvider  FeatureName = "treedb.raftcluster.single_group_provider"
+	FeatureCatalogMetaAuthority FeatureName = "treedb.raftcluster.catalog_meta_authority"
 )
 
 var (
 	SupportedConfigVersion = Version{Major: 1, Minor: 0}
 	SupportedFeatureFloors = map[FeatureName]Version{
-		FeatureSingleGroupProvider: {Major: 1, Minor: 0},
+		FeatureSingleGroupProvider:  {Major: 1, Minor: 0},
+		FeatureCatalogMetaAuthority: {Major: 1, Minor: 0},
 	}
 
 	ErrInvalidConfig       = errors.New("raftcluster: invalid config")
@@ -77,6 +79,9 @@ func DefaultFeatureSet() FeatureSet {
 type Peer struct {
 	ID      NodeID
 	Address string
+	// Capabilities is the fixed voter's declared supported feature set. A zero
+	// value retains legacy config compatibility and normalizes to DefaultFeatureSet.
+	Capabilities FeatureSet
 }
 
 // Config is the user-provided single-group cluster configuration.
@@ -293,7 +298,11 @@ func validatePeers(local NodeID, peers []Peer) ([]Peer, error) {
 		if peer.ID == local {
 			localFound = true
 		}
-		out = append(out, Peer{ID: peer.ID, Address: address})
+		capabilities, err := validateFeatures(peer.Capabilities)
+		if err != nil {
+			return nil, errors.Join(ErrInvalidConfig, fmt.Errorf("peer %q capabilities: %w", peer.ID, err))
+		}
+		out = append(out, Peer{ID: peer.ID, Address: address, Capabilities: capabilities})
 	}
 	if !localFound {
 		return nil, errors.Join(ErrInvalidConfig, ErrLocalMemberMissing, fmt.Errorf("local node %q is not in peer set", local))
