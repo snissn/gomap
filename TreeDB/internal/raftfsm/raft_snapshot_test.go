@@ -1283,6 +1283,20 @@ func TestRaftSnapshotV1ExportRejectsDirectoryRootSymlink(t *testing.T) {
 	}
 }
 
+func TestRaftSnapshotV1ExportRejectsVectorPartitionLifecycleDirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "record.active"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	err := appendRaftSnapshotStoragePathV1(tw, "db/vector_partitions", root)
+	_ = tw.Close()
+	if err == nil || !strings.Contains(err.Error(), "lifecycle") {
+		t.Fatalf("appendRaftSnapshotStoragePathV1 lifecycle directory error=%v, want rejection", err)
+	}
+}
+
 func BenchmarkRaftSnapshotV1ExportInstall(b *testing.B) {
 	requireRaftSnapshotInstallSupportedV1(b)
 	root := b.TempDir()

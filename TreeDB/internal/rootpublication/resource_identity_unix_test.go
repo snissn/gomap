@@ -6,7 +6,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestStableNamespaceParentGenerationTracksExactParentIdentity(t *testing.T) {
@@ -44,6 +46,50 @@ func TestStableNamespaceParentGenerationTracksExactParentIdentity(t *testing.T) 
 	}
 	if secondGeneration == firstGeneration {
 		t.Fatalf("distinct parent generations collided: %d", firstGeneration)
+	}
+}
+
+func TestOpenStableParentAndChildRejectLinksAndDoNotBlockOnFIFO(t *testing.T) {
+	root := t.TempDir()
+	realParent := filepath.Join(root, "real")
+	if err := os.Mkdir(realParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realParent, filepath.Join(root, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenStableParent(filepath.Join(root, "linked")); err == nil {
+		t.Fatal("OpenStableParent followed symlink")
+	}
+	parent, err := OpenStableParent(realParent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	if err := os.Symlink(filepath.Join(realParent, "target"), filepath.Join(realParent, "linked-child")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenStableChildFile(parent, "linked-child", os.O_RDONLY, 0); err == nil {
+		t.Fatal("OpenStableChildFile followed symlink")
+	}
+	if err := syscall.Mkfifo(filepath.Join(realParent, "pipe"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		file, err := OpenStableChildFile(parent, "pipe", os.O_RDONLY, 0)
+		if file != nil {
+			err = errors.Join(err, file.Close())
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("nonblocking FIFO child open: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("OpenStableChildFile blocked on FIFO")
 	}
 }
 

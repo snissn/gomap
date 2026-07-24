@@ -832,7 +832,10 @@ func putMembershipsVPM(b *bytes.Buffer, x []VectorPartitionMembershipV1) {
 
 // VectorPartitionStoreV1 uses write-sync-rename-sync publication. The active
 // pointer changes only after its complete generation has been made durable.
-type VectorPartitionStoreV1 struct{ root, dir string }
+type VectorPartitionStoreV1 struct {
+	root, dir   string
+	dirIdentity rootpublication.StableIdentity
+}
 
 // vectorPartitionPublishHooksV1 is deliberately test-only fault injection at
 // real persistence boundaries. It lets reopen tests verify the actual on-disk
@@ -1222,7 +1225,7 @@ func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[str
 	if err != nil {
 		return nil, nil, err
 	}
-	dir, err := os.Open(s.dir)
+	dir, err := s.openDir()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1241,7 +1244,7 @@ func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[str
 			return nil, nil, readErr
 		}
 		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
+			if !strings.HasPrefix(entry.Name(), prefix) {
 				continue
 			}
 			if len(entry.Name()) > 256 {
@@ -1250,6 +1253,9 @@ func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[str
 			relevant++
 			if relevant > vectorPartitionStoreMaxEntriesV1 {
 				return nil, nil, fmt.Errorf("collections: vector partition retained entry cap")
+			}
+			if err := validateVectorPartitionDurableEntryV1(entry); err != nil {
+				return nil, nil, err
 			}
 			if strings.HasSuffix(entry.Name(), ".active") {
 				activeNames[entry.Name()] = struct{}{}
@@ -1260,7 +1266,7 @@ func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[str
 				continue
 			}
 			if strings.HasSuffix(entry.Name(), ".inactive") {
-				state, err := s.readInactiveStatePath(filepath.Join(s.dir, entry.Name()))
+				state, err := s.readInactiveStateName(entry.Name())
 				if err != nil {
 					return nil, nil, fmt.Errorf("collections: invalid vector partition inactive marker %q: %w", entry.Name(), err)
 				}
@@ -1270,7 +1276,7 @@ func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[str
 				continue
 			}
 			if strings.HasSuffix(entry.Name(), ".deleting") {
-				raw, err := readBoundedVPM(filepath.Join(s.dir, entry.Name()), vectorPartitionReclaimMaxBytesV1)
+				raw, err := s.readBounded(entry.Name(), vectorPartitionReclaimMaxBytesV1)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1290,7 +1296,7 @@ func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[str
 			if filepath.Ext(entry.Name()) != ".vpm" {
 				return nil, nil, fmt.Errorf("collections: unexpected vector partition entry %q", entry.Name())
 			}
-			raw, err := readBoundedVPM(filepath.Join(s.dir, entry.Name()), DefaultVectorPartitionManifestLimits().MaxBytes)
+			raw, err := s.readBounded(entry.Name(), DefaultVectorPartitionManifestLimits().MaxBytes)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -1421,10 +1427,13 @@ func OpenVectorPartitionStoreV1(root string) (*VectorPartitionStoreV1, error) {
 		return nil, errors.New("collections: empty vector partition store root")
 	}
 	d := filepath.Join(root, "vector_partitions")
-	_, existedErr := os.Stat(d)
+	info, existedErr := os.Lstat(d)
 	existed := existedErr == nil
 	if existedErr != nil && !errors.Is(existedErr, os.ErrNotExist) {
 		return nil, existedErr
+	}
+	if existed && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
+		return nil, fmt.Errorf("%w: store is not an exact directory", ErrVectorPartitionManifestInvalid)
 	}
 	// On Windows the namespace protocol has no proof for the initial directory
 	// creation, link, and later remove transitions. Refuse before MkdirAll so
@@ -1435,6 +1444,13 @@ func OpenVectorPartitionStoreV1(root string) (*VectorPartitionStoreV1, error) {
 	if err := os.MkdirAll(d, 0700); err != nil {
 		return nil, err
 	}
+	info, err := os.Lstat(d)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%w: store is not an exact directory", ErrVectorPartitionManifestInvalid)
+	}
 	// A first store creation changes root's directory entries. Sync it too so a
 	// returned store is rooted in durable metadata, not merely a durable child.
 	if !existed {
@@ -1442,7 +1458,7 @@ func OpenVectorPartitionStoreV1(root string) (*VectorPartitionStoreV1, error) {
 			return nil, err
 		}
 	}
-	return &VectorPartitionStoreV1{root: root, dir: d}, nil
+	return newVectorPartitionStoreV1(root, d)
 }
 
 // OpenExistingVectorPartitionStoreV1 is read-only with respect to directory
@@ -1453,14 +1469,27 @@ func OpenExistingVectorPartitionStoreV1(root string) (*VectorPartitionStoreV1, e
 		return nil, errors.New("collections: empty vector partition store root")
 	}
 	d := filepath.Join(root, "vector_partitions")
-	info, err := os.Stat(d)
+	info, err := os.Lstat(d)
 	if err != nil {
 		return nil, err
 	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("%w: store is not a directory", ErrVectorPartitionManifestInvalid)
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%w: store is not an exact directory", ErrVectorPartitionManifestInvalid)
 	}
-	return &VectorPartitionStoreV1{root: root, dir: d}, nil
+	return newVectorPartitionStoreV1(root, d)
+}
+
+func newVectorPartitionStoreV1(root, dirPath string) (*VectorPartitionStoreV1, error) {
+	dir, err := rootpublication.OpenStableParent(dirPath)
+	if err != nil {
+		return nil, err
+	}
+	identity, identityErr := rootpublication.StableIdentityFromFile(dir)
+	closeErr := dir.Close()
+	if err := errors.Join(identityErr, closeErr); err != nil {
+		return nil, err
+	}
+	return &VectorPartitionStoreV1{root: root, dir: dirPath, dirIdentity: identity}, nil
 }
 
 // Publish is intentionally unavailable on the raw store. A store alone cannot
@@ -1488,10 +1517,10 @@ func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) erro
 	if !vpmNamespacePersistenceSupported() {
 		return fmt.Errorf("%w: vector partition publication", rootpublication.ErrNamespacePersistenceUnsupported)
 	}
-	if _, err := os.Stat(s.deleteTombstonePath(m.Collection, m.IndexName, m.Generation)); err == nil {
-		return fmt.Errorf("%w: generation %d is deleting", ErrVectorPartitionManifestInvalid, m.Generation)
-	} else if !errors.Is(err, os.ErrNotExist) {
+	if present, err := s.regularEntryPresent(filepath.Base(s.deleteTombstonePath(m.Collection, m.IndexName, m.Generation))); err != nil {
 		return err
+	} else if present {
+		return fmt.Errorf("%w: generation %d is deleting", ErrVectorPartitionManifestInvalid, m.Generation)
 	}
 	raw, e := EncodeVectorPartitionManifestV1(m)
 	if e != nil {
@@ -1518,7 +1547,7 @@ func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) erro
 		if !errors.Is(e, os.ErrExist) {
 			return e
 		}
-		existing, readErr := readBoundedVPM(target, DefaultVectorPartitionManifestLimits().MaxBytes)
+		existing, readErr := s.readBounded(name, DefaultVectorPartitionManifestLimits().MaxBytes)
 		if readErr != nil {
 			return readErr
 		}
@@ -1632,8 +1661,8 @@ func (s *VectorPartitionStoreV1) uniqueTemp(name string) (string, error) {
 	return filepath.Join(s.dir, "."+name+"."+hex.EncodeToString(nonce[:])+".tmp"), nil
 }
 func (s *VectorPartitionStoreV1) Open(collection, index string, generation uint64) (VectorPartitionManifestV1, error) {
-	p := filepath.Join(s.dir, fmt.Sprintf("%s-%s-%d.vpm", safeVPM(collection), safeVPM(index), generation))
-	raw, e := readBoundedVPM(p, DefaultVectorPartitionManifestLimits().MaxBytes)
+	name := fmt.Sprintf("%s-%s-%d.vpm", safeVPM(collection), safeVPM(index), generation)
+	raw, e := s.readBounded(name, DefaultVectorPartitionManifestLimits().MaxBytes)
 	if e != nil {
 		return VectorPartitionManifestV1{}, e
 	}
@@ -1646,12 +1675,44 @@ func (s *VectorPartitionStoreV1) Open(collection, index string, generation uint6
 	}
 	return m, nil
 }
-func readBoundedVPM(path string, max int) ([]byte, error) {
-	f, err := os.Open(path)
+func (s *VectorPartitionStoreV1) openDir() (*os.File, error) {
+	dir, err := rootpublication.OpenStableParent(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	identity, identityErr := rootpublication.StableIdentityFromFile(dir)
+	if identityErr != nil {
+		dir.Close()
+		return nil, identityErr
+	}
+	if !rootpublication.SamePhysicalIdentity(s.dirIdentity, identity) {
+		dir.Close()
+		return nil, fmt.Errorf("%w: vector partition store directory identity changed", ErrVectorPartitionManifestInvalid)
+	}
+	return dir, nil
+}
+
+func (s *VectorPartitionStoreV1) readBounded(name string, max int) ([]byte, error) {
+	if filepath.Base(name) != name {
+		return nil, fmt.Errorf("%w: vector partition record name", ErrVectorPartitionManifestInvalid)
+	}
+	dir, err := s.openDir()
+	if err != nil {
+		return nil, err
+	}
+	defer dir.Close()
+	f, err := rootpublication.OpenStableChildFile(dir, name, os.O_RDONLY, 0)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%w: vector partition record %q is not a regular file", ErrVectorPartitionManifestInvalid, name)
+	}
 	raw, err := io.ReadAll(io.LimitReader(f, int64(max)+1))
 	if err != nil {
 		return nil, err
@@ -1661,6 +1722,47 @@ func readBoundedVPM(path string, max int) ([]byte, error) {
 	}
 	return raw, nil
 }
+
+// regularEntryPresent reports whether an exact lifecycle entry is present.
+// Tombstones are a resurrection fence: a malformed entry is corruption, never
+// equivalent to an absent fence.
+func (s *VectorPartitionStoreV1) regularEntryPresent(name string) (bool, error) {
+	dir, err := s.openDir()
+	if err != nil {
+		return false, err
+	}
+	defer dir.Close()
+	entry, err := rootpublication.OpenStableChildFile(dir, name, os.O_RDONLY, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	info, statErr := entry.Stat()
+	closeErr := entry.Close()
+	if err := errors.Join(statErr, closeErr); err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("%w: vector partition record %q is not a regular file", ErrVectorPartitionManifestInvalid, name)
+	}
+	return true, nil
+}
+
+func validateVectorPartitionDurableEntryV1(entry os.DirEntry) error {
+	if entry.Type()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%w: vector partition record %q is a symlink", ErrVectorPartitionManifestInvalid, entry.Name())
+	}
+	info, err := entry.Info()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%w: vector partition record %q is not a regular file", ErrVectorPartitionManifestInvalid, entry.Name())
+	}
+	return nil
+}
 func (s *VectorPartitionStoreV1) OpenActive(collection, index string) (VectorPartitionManifestV1, error) {
 	return s.openPointer(collection, index, ".active")
 }
@@ -1668,18 +1770,18 @@ func (s *VectorPartitionStoreV1) OpenRetired(collection, index string) (VectorPa
 	return s.openPointer(collection, index, ".retired")
 }
 func (s *VectorPartitionStoreV1) openPointer(collection, index, suffix string) (VectorPartitionManifestV1, error) {
-	p := filepath.Join(s.dir, safeVPM(collection)+"-"+safeVPM(index)+suffix)
-	generation, e := readVectorPartitionPointerGenerationV1(p)
+	name := safeVPM(collection) + "-" + safeVPM(index) + suffix
+	raw, e := s.readBounded(name, 32)
+	if e != nil {
+		return VectorPartitionManifestV1{}, e
+	}
+	generation, e := readVectorPartitionPointerGenerationV1(raw)
 	if e != nil {
 		return VectorPartitionManifestV1{}, e
 	}
 	return s.Open(collection, index, generation)
 }
-func readVectorPartitionPointerGenerationV1(p string) (uint64, error) {
-	raw, e := readBoundedVPM(p, 32)
-	if e != nil {
-		return 0, e
-	}
+func readVectorPartitionPointerGenerationV1(raw []byte) (uint64, error) {
 	if len(raw) < 2 || len(raw) > 32 {
 		return 0, fmt.Errorf("%w: active pointer size", ErrVectorPartitionManifestInvalid)
 	}
@@ -1828,8 +1930,8 @@ func (s *VectorPartitionStoreV1) deleteLocked(collection, index string, generati
 		return fmt.Errorf("collections: vector partition generation %d has %d reader pins", generation, pins)
 	}
 	tombstone := s.deleteTombstonePath(collection, index, generation)
-	_, tombstoneErr := os.Stat(tombstone)
-	if tombstoneErr != nil && !errors.Is(tombstoneErr, os.ErrNotExist) {
+	tombstonePresent, tombstoneErr := s.regularEntryPresent(filepath.Base(tombstone))
+	if tombstoneErr != nil {
 		return tombstoneErr
 	}
 	if active, err := s.OpenActive(collection, index); err == nil {
@@ -1839,13 +1941,18 @@ func (s *VectorPartitionStoreV1) deleteLocked(collection, index string, generati
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("collections: vector partition cleanup active pointer: %w", err)
 	}
-	retiredPath := filepath.Join(s.dir, safeVPM(collection)+"-"+safeVPM(index)+".retired")
-	retiredGeneration, retiredErr := readVectorPartitionPointerGenerationV1(retiredPath)
+	retiredName := safeVPM(collection) + "-" + safeVPM(index) + ".retired"
+	retiredPath := filepath.Join(s.dir, retiredName)
+	retiredRaw, retiredErr := s.readBounded(retiredName, 32)
+	var retiredGeneration uint64
+	if retiredErr == nil {
+		retiredGeneration, retiredErr = readVectorPartitionPointerGenerationV1(retiredRaw)
+	}
 	retiredMatches := retiredErr == nil && retiredGeneration == generation
 	if retiredErr != nil && !errors.Is(retiredErr, os.ErrNotExist) {
 		return fmt.Errorf("collections: vector partition cleanup retired pointer: %w", retiredErr)
 	}
-	if errors.Is(tombstoneErr, os.ErrNotExist) {
+	if !tombstonePresent {
 		m, err := s.Open(collection, index, generation)
 		if err != nil {
 			return err
@@ -1924,7 +2031,7 @@ func (s *VectorPartitionStoreV1) writeInactiveMarker(collection, index string, g
 }
 
 func (s *VectorPartitionStoreV1) readInactiveGeneration(collection, index string) (uint64, error) {
-	state, err := s.readInactiveStatePath(s.inactivePath(collection, index))
+	state, err := s.readInactiveStateName(s.inactiveName(collection, index))
 	if err != nil {
 		return 0, err
 	}
@@ -1934,8 +2041,8 @@ func (s *VectorPartitionStoreV1) readInactiveGeneration(collection, index string
 	return state.Generation, nil
 }
 
-func (s *VectorPartitionStoreV1) readInactiveStatePath(path string) (vectorPartitionInactiveStateV1, error) {
-	raw, err := readBoundedVPM(path, vectorPartitionInactiveStateMaxEncodedBytesV1())
+func (s *VectorPartitionStoreV1) readInactiveStateName(name string) (vectorPartitionInactiveStateV1, error) {
+	raw, err := s.readBounded(name, vectorPartitionInactiveStateMaxEncodedBytesV1())
 	if err != nil {
 		return vectorPartitionInactiveStateV1{}, err
 	}
@@ -1993,7 +2100,7 @@ func (s *VectorPartitionStoreV1) writeDeleteTombstoneState(input vectorPartition
 	return nil
 }
 func (s *VectorPartitionStoreV1) openDeleteTombstone(collection, index string, generation uint64) (vectorPartitionReclaimStateV1, error) {
-	raw, err := readBoundedVPM(s.deleteTombstonePath(collection, index, generation), vectorPartitionReclaimMaxBytesV1)
+	raw, err := s.readBounded(s.deleteTombstoneName(collection, index, generation), vectorPartitionReclaimMaxBytesV1)
 	if err != nil {
 		return vectorPartitionReclaimStateV1{}, err
 	}
@@ -2010,7 +2117,7 @@ type vectorPartitionReclaimRecordV1 struct {
 }
 
 func (s *VectorPartitionStoreV1) reclaimRecords(collection string) ([]vectorPartitionReclaimRecordV1, error) {
-	dir, err := os.Open(s.dir)
+	dir, err := s.openDir()
 	if err != nil {
 		return nil, err
 	}
@@ -2024,13 +2131,16 @@ func (s *VectorPartitionStoreV1) reclaimRecords(collection string) ([]vectorPart
 			return nil, readErr
 		}
 		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) || !strings.HasSuffix(entry.Name(), ".deleting") {
+			if !strings.HasPrefix(entry.Name(), prefix) || !strings.HasSuffix(entry.Name(), ".deleting") {
 				continue
+			}
+			if err := validateVectorPartitionDurableEntryV1(entry); err != nil {
+				return nil, err
 			}
 			if len(records) >= vectorPartitionStoreMaxEntriesV1 {
 				return nil, fmt.Errorf("collections: vector partition reclaim record cap")
 			}
-			raw, err := readBoundedVPM(filepath.Join(s.dir, entry.Name()), vectorPartitionReclaimMaxBytesV1)
+			raw, err := s.readBounded(entry.Name(), vectorPartitionReclaimMaxBytesV1)
 			if err != nil {
 				return nil, err
 			}

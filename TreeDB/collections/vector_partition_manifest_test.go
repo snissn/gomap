@@ -302,6 +302,12 @@ func TestCollectionVectorPartitionReadyDeleteCrashWindowReopenReachability(t *te
 		if _, err := col.RebuildVectorIndex(def.Name); err != nil {
 			t.Fatal(err)
 		}
+		if err := col.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		if err := d.Checkpoint(); err != nil {
+			t.Fatal(err)
+		}
 		_, graph, _, err := col.columnVectorGraphPhysicalRowReaderSnapshotView(def.Name)
 		if err != nil {
 			t.Fatal(err)
@@ -1679,6 +1685,12 @@ func TestCollectionVectorPartitionBuildingPublicationAndGCLinearize(t *testing.T
 	newFixture := func(t *testing.T, fileID uint32) (*backenddb.DB, *Collection, VectorPartitionManifestV1, []ColumnAssetRef) {
 		_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
 		if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+			t.Fatal(err)
+		}
+		if err := col.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		if err := d.Checkpoint(); err != nil {
 			t.Fatal(err)
 		}
 		_, graph, _, err := col.columnVectorGraphPhysicalRowReaderSnapshotView(def.Name)

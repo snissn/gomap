@@ -502,6 +502,9 @@ func appendRaftSnapshotDirV1(tw *tar.Writer, prefix, root string) error {
 		}
 		name := pathpkg.Join(prefix, filepath.ToSlash(rel))
 		if entry.IsDir() {
+			if raftSnapshotVectorPartitionLifecycleEntryV1(prefix, filepath.ToSlash(rel)) {
+				return fmt.Errorf("raftfsm: vector partition lifecycle path %q is not a regular file", filePath)
+			}
 			return writeRaftSnapshotDirHeaderV1(tw, name)
 		}
 		if !info.Mode().IsRegular() {
@@ -525,6 +528,17 @@ func appendRaftSnapshotDirV1(tw *tar.Writer, prefix, root string) error {
 		closeErr := file.Close()
 		return errors.Join(copyErr, closeErr)
 	})
+}
+
+func raftSnapshotVectorPartitionLifecycleEntryV1(prefix, rel string) bool {
+	parts := strings.Split(pathpkg.Join(prefix, rel), "/")
+	for i, part := range parts {
+		if part == "vector_partitions" && i+2 == len(parts) {
+			name := parts[i+1]
+			return strings.HasSuffix(name, ".vpm") || strings.HasSuffix(name, ".active") || strings.HasSuffix(name, ".retired") || strings.HasSuffix(name, ".inactive") || strings.HasSuffix(name, ".deleting")
+		}
+	}
+	return false
 }
 
 func shouldSkipRaftSnapshotTreeDBFileV1(rel string) bool {
