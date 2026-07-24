@@ -20,6 +20,8 @@ var vectorPartitionStorageBarriersV1 = struct {
 	entries map[string]*vectorPartitionStorageBarrierEntryV1
 }{entries: make(map[string]*vectorPartitionStorageBarrierEntryV1)}
 
+// WithVectorPartitionStorageBarrierV1 is non-reentrant for a root: fn must
+// not invoke it again for the same root, or it will wait on its own mutation.
 func WithVectorPartitionStorageBarrierV1(root string, fn func() error) error {
 	canonical, err := canonicalVectorPartitionStorageRootV1(root)
 	if err != nil {

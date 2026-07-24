@@ -4,6 +4,10 @@ package rootpublication
 
 import "os"
 
+func linkStableChildFileNoReplace(*os.File, string, string) error {
+	return ErrNamespacePersistenceUnsupported
+}
+
 func stableRelativeNamespaceSupported() bool { return false }
 
 func stableNamespaceCreationPersistsThroughChild() bool { return false }

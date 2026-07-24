@@ -34,6 +34,10 @@ const (
 // barrier-before-FSM-lock ordering regression deterministic.
 var raftSnapshotAfterExtractForTest func()
 
+// raftSnapshotBeforeOpenForTest makes the discovery/open boundary observable
+// to deterministic no-follow regression tests.
+var raftSnapshotBeforeOpenForTest func(string)
+
 var raftSnapshotMainDBEntriesV1 = []string{
 	"index.db",
 	raftSnapshotFormatConfigFileV1,
@@ -468,6 +472,9 @@ func appendRaftSnapshotDirV1(tw *tar.Writer, prefix, root string) error {
 	if tw == nil {
 		return fmt.Errorf("raftfsm: nil snapshot archive writer")
 	}
+	if strings.HasSuffix(prefix, "/vector_partitions") {
+		return appendRaftSnapshotVectorPartitionDirV1(tw, prefix, root)
+	}
 	root = filepath.Clean(root)
 	info, err := os.Lstat(root)
 	if err != nil {
@@ -528,6 +535,58 @@ func appendRaftSnapshotDirV1(tw *tar.Writer, prefix, root string) error {
 		closeErr := file.Close()
 		return errors.Join(copyErr, closeErr)
 	})
+}
+
+// appendRaftSnapshotVectorPartitionDirV1 keeps discovery and child opens on
+// one exact retained directory handle. The VPM namespace is flat by contract.
+func appendRaftSnapshotVectorPartitionDirV1(tw *tar.Writer, prefix, root string) error {
+	dir, err := rootpublication.OpenStableParent(root)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	if err := writeRaftSnapshotDirHeaderV1(tw, prefix); err != nil {
+		return err
+	}
+	entries, err := dir.ReadDir(-1)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&fs.ModeSymlink != 0 || entry.IsDir() || !info.Mode().IsRegular() {
+			return fmt.Errorf("raftfsm: vector partition snapshot entry %q is not a regular file", entry.Name())
+		}
+		if raftSnapshotBeforeOpenForTest != nil {
+			raftSnapshotBeforeOpenForTest(filepath.Join(root, entry.Name()))
+		}
+		file, err := rootpublication.OpenStableChildFile(dir, entry.Name(), os.O_RDONLY, 0)
+		if err != nil {
+			return err
+		}
+		exactInfo, statErr := file.Stat()
+		if statErr != nil || !exactInfo.Mode().IsRegular() || exactInfo.Size() != info.Size() || !os.SameFile(info, exactInfo) {
+			_ = file.Close()
+			if statErr != nil {
+				return statErr
+			}
+			return fmt.Errorf("raftfsm: vector partition snapshot entry %q changed while opening", entry.Name())
+		}
+		header := &tar.Header{Name: pathpkg.Join(prefix, entry.Name()), Mode: int64(exactInfo.Mode().Perm()), Size: exactInfo.Size(), ModTime: exactInfo.ModTime()}
+		if err := tw.WriteHeader(header); err != nil {
+			_ = file.Close()
+			return err
+		}
+		copyErr := copyRaftSnapshotFileContentV1(tw, file, header.Size)
+		closeErr := file.Close()
+		if err := errors.Join(copyErr, closeErr); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func raftSnapshotVectorPartitionLifecycleEntryV1(prefix, rel string) bool {

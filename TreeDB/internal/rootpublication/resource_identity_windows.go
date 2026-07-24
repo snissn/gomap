@@ -15,6 +15,10 @@ import (
 
 var stableReOpenFile = windows.NewLazySystemDLL("kernel32.dll").NewProc("ReOpenFile")
 
+func linkStableChildFileNoReplace(*os.File, string, string) error {
+	return ErrNamespacePersistenceUnsupported
+}
+
 func stableRelativeNamespaceSupported() bool { return false }
 
 // Windows does not provide the complete create/rename/remove plus parent-sync

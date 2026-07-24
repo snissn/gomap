@@ -93,6 +93,41 @@ func TestOpenStableParentAndChildRejectLinksAndDoNotBlockOnFIFO(t *testing.T) {
 	}
 }
 
+func TestLinkStableChildFileNoReplaceUsesCapturedParent(t *testing.T) {
+	root := t.TempDir()
+	original := filepath.Join(root, "original")
+	if err := os.Mkdir(original, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := OpenStableParent(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	if err := os.WriteFile(filepath.Join(original, "source"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(root, "moved")
+	if err := os.Rename(original, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(original, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := LinkStableChildFileNoReplace(parent, "source", "target"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(moved, "target")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(original, "target")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("rebound parent received link")
+	}
+	if err := LinkStableChildFileNoReplace(parent, "source", "target"); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("existing link err=%v", err)
+	}
+}
+
 func TestOpenStableChildFileUsesCapturedParentAfterPathReplacement(t *testing.T) {
 	root := t.TempDir()
 	originalDir := filepath.Join(root, "segments")

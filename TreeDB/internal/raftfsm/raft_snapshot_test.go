@@ -1292,8 +1292,66 @@ func TestRaftSnapshotV1ExportRejectsVectorPartitionLifecycleDirectory(t *testing
 	tw := tar.NewWriter(&buf)
 	err := appendRaftSnapshotStoragePathV1(tw, "db/vector_partitions", root)
 	_ = tw.Close()
-	if err == nil || !strings.Contains(err.Error(), "lifecycle") {
+	if err == nil || !strings.Contains(err.Error(), "not a regular") {
 		t.Fatalf("appendRaftSnapshotStoragePathV1 lifecycle directory error=%v, want rejection", err)
+	}
+}
+
+func TestRaftSnapshotV1ExportRejectsLifecycleSwapBeforeOpen(t *testing.T) {
+	root := t.TempDir()
+	entry := filepath.Join(root, "record.active")
+	if err := os.WriteFile(entry, []byte("7\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(root, "outside")
+	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := raftSnapshotBeforeOpenForTest
+	raftSnapshotBeforeOpenForTest = func(path string) {
+		if path == entry {
+			if err := os.Remove(entry); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, entry); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	defer func() { raftSnapshotBeforeOpenForTest = old }()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	err := appendRaftSnapshotStoragePathV1(tw, "db/vector_partitions", root)
+	_ = tw.Close()
+	if err == nil {
+		t.Fatal("snapshot export followed lifecycle symlink swapped after discovery")
+	}
+}
+
+func TestRaftSnapshotV1ExportRejectsSameSizeVectorPartitionReplacement(t *testing.T) {
+	root := t.TempDir()
+	entry := filepath.Join(root, "record.vpm")
+	if err := os.WriteFile(entry, []byte("same"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := raftSnapshotBeforeOpenForTest
+	raftSnapshotBeforeOpenForTest = func(path string) {
+		if path == entry {
+			if err := os.Rename(entry, entry+".old"); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(entry, []byte("swap"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	defer func() { raftSnapshotBeforeOpenForTest = old }()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	err := appendRaftSnapshotStoragePathV1(tw, "db/vector_partitions", root)
+	_ = tw.Close()
+	if err == nil {
+		t.Fatal("snapshot accepted same-size replacement")
 	}
 }
 

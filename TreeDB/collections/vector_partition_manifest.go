@@ -837,6 +837,105 @@ type VectorPartitionStoreV1 struct {
 	dirIdentity rootpublication.StableIdentity
 }
 
+type vectorPartitionMutationDirV1 struct{ dir *os.File }
+
+func (s *VectorPartitionStoreV1) beginMutationDirV1() (*vectorPartitionMutationDirV1, error) {
+	dir, err := s.openDir()
+	if err != nil {
+		return nil, err
+	}
+	return &vectorPartitionMutationDirV1{dir: dir}, nil
+}
+func (d *vectorPartitionMutationDirV1) Close() error { return d.dir.Close() }
+func (d *vectorPartitionMutationDirV1) sync() error {
+	return rootpublication.SyncStableNamespace(d.dir)
+}
+func (d *vectorPartitionMutationDirV1) remove(name string) error {
+	return rootpublication.RemoveStableChildFile(d.dir, name)
+}
+func (d *vectorPartitionMutationDirV1) rename(oldName, newName string) error {
+	return rootpublication.RenameStableChildFile(d.dir, oldName, newName)
+}
+func (d *vectorPartitionMutationDirV1) link(oldName, newName string) error {
+	return rootpublication.LinkStableChildFileNoReplace(d.dir, oldName, newName)
+}
+func (d *vectorPartitionMutationDirV1) write(name string, raw []byte) error {
+	f, err := rootpublication.OpenStableChildFile(d.dir, name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	_, writeErr := f.Write(raw)
+	syncErr := rootpublication.SyncStableFile(f)
+	closeErr := f.Close()
+	return errors.Join(writeErr, syncErr, closeErr)
+}
+func (d *vectorPartitionMutationDirV1) read(name string, max int) ([]byte, error) {
+	f, err := rootpublication.OpenStableChildFile(d.dir, name, os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%w: vector partition record %q is not regular", ErrVectorPartitionManifestInvalid, name)
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, int64(max)+1))
+	if err != nil || len(raw) > max {
+		return nil, fmt.Errorf("%w: vector partition record bytes", ErrVectorPartitionManifestInvalid)
+	}
+	return raw, nil
+}
+func (d *vectorPartitionMutationDirV1) present(name string) (bool, error) {
+	f, err := rootpublication.OpenStableChildFile(d.dir, name, os.O_RDONLY, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	info, statErr := f.Stat()
+	closeErr := f.Close()
+	if err := errors.Join(statErr, closeErr); err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("%w: vector partition record %q is not regular", ErrVectorPartitionManifestInvalid, name)
+	}
+	return true, nil
+}
+func (d *vectorPartitionMutationDirV1) openPointer(collection, index, suffix string) (VectorPartitionManifestV1, error) {
+	raw, err := d.read(safeVPM(collection)+"-"+safeVPM(index)+suffix, 32)
+	if err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	generation, err := readVectorPartitionPointerGenerationV1(raw)
+	if err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	name := fmt.Sprintf("%s-%s-%d.vpm", safeVPM(collection), safeVPM(index), generation)
+	raw, err = d.read(name, DefaultVectorPartitionManifestLimits().MaxBytes)
+	if err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	m, err := DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits())
+	if err != nil || m.Collection != collection || m.IndexName != index || m.Generation != generation {
+		return VectorPartitionManifestV1{}, fmt.Errorf("%w: stored identity mismatch", ErrVectorPartitionManifestInvalid)
+	}
+	return m, nil
+}
+func (d *vectorPartitionMutationDirV1) openManifest(collection, index string, generation uint64) (VectorPartitionManifestV1, error) {
+	name := fmt.Sprintf("%s-%s-%d.vpm", safeVPM(collection), safeVPM(index), generation)
+	raw, err := d.read(name, DefaultVectorPartitionManifestLimits().MaxBytes)
+	if err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	m, err := DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits())
+	if err != nil || m.Collection != collection || m.IndexName != index || m.Generation != generation {
+		return VectorPartitionManifestV1{}, fmt.Errorf("%w: stored identity mismatch", ErrVectorPartitionManifestInvalid)
+	}
+	return m, nil
+}
+
 // vectorPartitionPublishHooksV1 is deliberately test-only fault injection at
 // real persistence boundaries. It lets reopen tests verify the actual on-disk
 // recovery invariant rather than infer it from a successful call return.
@@ -1514,10 +1613,16 @@ func (s *VectorPartitionStoreV1) publishValidatedReady(m VectorPartitionManifest
 	return WithVectorPartitionStorageBarrierV1(s.root, func() error { return s.publishLocked(m) })
 }
 func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) error {
+	boundDir, err := s.openDir()
+	if err != nil {
+		return err
+	}
+	defer boundDir.Close()
 	if !vpmNamespacePersistenceSupported() {
 		return fmt.Errorf("%w: vector partition publication", rootpublication.ErrNamespacePersistenceUnsupported)
 	}
-	if present, err := s.regularEntryPresent(filepath.Base(s.deleteTombstonePath(m.Collection, m.IndexName, m.Generation))); err != nil {
+	mutation := &vectorPartitionMutationDirV1{dir: boundDir}
+	if present, err := mutation.present(s.deleteTombstoneName(m.Collection, m.IndexName, m.Generation)); err != nil {
 		return err
 	} else if present {
 		return fmt.Errorf("%w: generation %d is deleting", ErrVectorPartitionManifestInvalid, m.Generation)
@@ -1531,23 +1636,20 @@ func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) erro
 	if e != nil {
 		return e
 	}
-	defer os.Remove(tmp)
-	if e = os.WriteFile(tmp, raw, 0600); e != nil {
-		return e
-	}
-	if e = syncFileVPM(tmp); e != nil {
+	tmpName := filepath.Base(tmp)
+	defer rootpublication.RemoveStableChildFile(boundDir, tmpName)
+	if e = mutation.write(tmpName, raw); e != nil {
 		return e
 	}
 	if e = vectorPartitionPublishFaultV1("generation_temp_synced"); e != nil {
 		return e
 	}
-	target := filepath.Join(s.dir, name)
 	promoting := false
-	if e = os.Link(tmp, target); e != nil {
+	if e = rootpublication.LinkStableChildFileNoReplace(boundDir, tmpName, name); e != nil {
 		if !errors.Is(e, os.ErrExist) {
 			return e
 		}
-		existing, readErr := s.readBounded(name, DefaultVectorPartitionManifestLimits().MaxBytes)
+		existing, readErr := mutation.read(name, DefaultVectorPartitionManifestLimits().MaxBytes)
 		if readErr != nil {
 			return readErr
 		}
@@ -1561,13 +1663,29 @@ func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) erro
 			// Persist intentional no-active authority before atomically replacing a
 			// retained building record. A restart can therefore observe only the
 			// old building, prepared-only ready+inactive, or active ready state.
-			if e = s.writeInactiveMarker(m.Collection, m.IndexName, m.Generation); e != nil {
+			inactiveRaw, inactiveErr := encodeVectorPartitionInactiveStateV1(vectorPartitionInactiveStateV1{Collection: m.Collection, IndexName: m.IndexName, Generation: m.Generation})
+			if inactiveErr != nil {
+				return inactiveErr
+			}
+			inactiveTmp, inactiveErr := s.uniqueTemp(s.inactiveName(m.Collection, m.IndexName))
+			if inactiveErr != nil {
+				return inactiveErr
+			}
+			inactiveTmpName := filepath.Base(inactiveTmp)
+			defer rootpublication.RemoveStableChildFile(boundDir, inactiveTmpName)
+			if e = mutation.write(inactiveTmpName, inactiveRaw); e != nil {
+				return e
+			}
+			if e = rootpublication.RenameStableChildFile(boundDir, inactiveTmpName, s.inactiveName(m.Collection, m.IndexName)); e != nil {
+				return e
+			}
+			if e = rootpublication.SyncStableNamespace(boundDir); e != nil {
 				return e
 			}
 			if e = vectorPartitionPublishFaultV1("promotion_inactive_synced"); e != nil {
 				return e
 			}
-			if e = renameVPM(tmp, target); e != nil {
+			if e = rootpublication.RenameStableChildFile(boundDir, tmpName, name); e != nil {
 				return e
 			}
 			promoting = true
@@ -1581,7 +1699,10 @@ func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) erro
 	if e = vectorPartitionPublishFaultV1("generation_linked"); e != nil {
 		return e
 	}
-	if e = syncDirVPM(s.dir); e != nil {
+	if e = s.verifyBoundDirV1(boundDir); e != nil {
+		return e
+	}
+	if e = rootpublication.SyncStableNamespace(boundDir); e != nil {
 		return e
 	}
 	if promoting {
@@ -1593,23 +1714,21 @@ func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) erro
 		return e
 	}
 	if m.State == "ready" {
-		active := filepath.Join(s.dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+".active")
-		retired := filepath.Join(s.dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+".retired")
-		atmp, e := s.uniqueTemp(filepath.Base(active))
+		activeName := safeVPM(m.Collection) + "-" + safeVPM(m.IndexName) + ".active"
+		retiredName := safeVPM(m.Collection) + "-" + safeVPM(m.IndexName) + ".retired"
+		atmp, e := s.uniqueTemp(activeName)
 		if e != nil {
 			return e
 		}
-		defer os.Remove(atmp)
-		if e = os.WriteFile(atmp, []byte(fmt.Sprintf("%d\n", m.Generation)), 0600); e != nil {
-			return e
-		}
-		if e = syncFileVPM(atmp); e != nil {
+		atmpName := filepath.Base(atmp)
+		defer rootpublication.RemoveStableChildFile(boundDir, atmpName)
+		if e = mutation.write(atmpName, []byte(fmt.Sprintf("%d\n", m.Generation))); e != nil {
 			return e
 		}
 		if e = vectorPartitionPublishFaultV1("active_temp_synced"); e != nil {
 			return e
 		}
-		if e = renameVPM(atmp, active); e != nil {
+		if e = rootpublication.RenameStableChildFile(boundDir, atmpName, activeName); e != nil {
 			return e
 		}
 		if e = vectorPartitionPublishFaultV1("active_renamed"); e != nil {
@@ -1617,7 +1736,7 @@ func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) erro
 		}
 		// The replacement pointer is durable before a stale retired marker is
 		// removed. A crash may therefore retain both markers, never neither.
-		if e = syncDirVPM(s.dir); e != nil {
+		if e = rootpublication.SyncStableNamespace(boundDir); e != nil {
 			return e
 		}
 		if e = vectorPartitionPublishFaultV1("active_dir_synced"); e != nil {
@@ -1626,17 +1745,17 @@ func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) erro
 		// The active pointer is durable before a previous inactive marker is
 		// removed. A crash may therefore retain both lifecycle records, never
 		// leave the index pointerless without the inactive record.
-		if err := os.Remove(s.inactivePath(m.Collection, m.IndexName)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := rootpublication.RemoveStableChildFile(boundDir, s.inactiveName(m.Collection, m.IndexName)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		if err := os.Remove(retired); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := rootpublication.RemoveStableChildFile(boundDir, retiredName); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 		if e = vectorPartitionPublishFaultV1("retired_removed"); e != nil {
 			return e
 		}
 	}
-	if e = syncDirVPM(s.dir); e != nil {
+	if e = rootpublication.SyncStableNamespace(boundDir); e != nil {
 		return e
 	}
 	return vectorPartitionPublishFaultV1("publication_complete")
@@ -1690,6 +1809,25 @@ func (s *VectorPartitionStoreV1) openDir() (*os.File, error) {
 		return nil, fmt.Errorf("%w: vector partition store directory identity changed", ErrVectorPartitionManifestInvalid)
 	}
 	return dir, nil
+}
+
+// verifyBoundDirV1 prevents a mutation that started in one namespace from
+// continuing through a path rebound to another namespace.
+func (s *VectorPartitionStoreV1) verifyBoundDirV1(bound *os.File) error {
+	identity, err := rootpublication.StableIdentityFromFile(bound)
+	if err != nil || !rootpublication.SamePhysicalIdentity(s.dirIdentity, identity) {
+		return fmt.Errorf("%w: vector partition store directory identity changed", ErrVectorPartitionManifestInvalid)
+	}
+	current, err := rootpublication.OpenStableParent(s.dir)
+	if err != nil {
+		return err
+	}
+	defer current.Close()
+	currentIdentity, err := rootpublication.StableIdentityFromFile(current)
+	if err != nil || !rootpublication.SamePhysicalIdentity(identity, currentIdentity) {
+		return fmt.Errorf("%w: vector partition store directory identity changed", ErrVectorPartitionManifestInvalid)
+	}
+	return nil
 }
 
 func (s *VectorPartitionStoreV1) readBounded(name string, max int) ([]byte, error) {
@@ -1805,35 +1943,38 @@ func (s *VectorPartitionStoreV1) deactivateLocked(collection, index string) erro
 	if !vpmNamespacePersistenceSupported() {
 		return fmt.Errorf("%w: vector partition deactivation", rootpublication.ErrNamespacePersistenceUnsupported)
 	}
-	active, err := s.OpenActive(collection, index)
+	mutation, err := s.beginMutationDirV1()
 	if err != nil {
 		return err
 	}
-	retired := filepath.Join(s.dir, safeVPM(collection)+"-"+safeVPM(index)+".retired")
-	tmp, err := s.uniqueTemp(filepath.Base(retired))
+	defer mutation.Close()
+	active, err := mutation.openPointer(collection, index, ".active")
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp)
-	if err = os.WriteFile(tmp, []byte(fmt.Sprintf("%d\n", active.Generation)), 0600); err != nil {
+	retired := safeVPM(collection) + "-" + safeVPM(index) + ".retired"
+	tmp, err := s.uniqueTemp(retired)
+	if err != nil {
 		return err
 	}
-	if err = syncFileVPM(tmp); err != nil {
+	tmpName := filepath.Base(tmp)
+	defer mutation.remove(tmpName)
+	if err = mutation.write(tmpName, []byte(fmt.Sprintf("%d\n", active.Generation))); err != nil {
 		return err
 	}
-	if err = renameVPM(tmp, retired); err != nil {
+	if err = mutation.rename(tmpName, retired); err != nil {
 		return err
 	}
-	if err = syncDirVPM(s.dir); err != nil {
+	if err = mutation.sync(); err != nil {
 		return err
 	}
-	if err = os.Remove(s.inactivePath(collection, index)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err = mutation.remove(s.inactiveName(collection, index)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err = os.Remove(filepath.Join(s.dir, safeVPM(collection)+"-"+safeVPM(index)+".active")); err != nil {
+	if err = mutation.remove(safeVPM(collection) + "-" + safeVPM(index) + ".active"); err != nil {
 		return err
 	}
-	return syncDirVPM(s.dir)
+	return mutation.sync()
 }
 
 // VectorPartitionCleanupEligibilityV1 makes every external reachability
@@ -1920,6 +2061,11 @@ func (s *VectorPartitionStoreV1) Delete(collection, index string, generation uin
 	return ErrVectorPartitionCollectionAuthorityRequired
 }
 func (s *VectorPartitionStoreV1) deleteLocked(collection, index string, generation uint64, eligibility VectorPartitionCleanupEligibilityV1) error {
+	mutation, err := s.beginMutationDirV1()
+	if err != nil {
+		return err
+	}
+	defer mutation.Close()
 	if !vpmNamespacePersistenceSupported() {
 		return fmt.Errorf("%w: vector partition deletion", rootpublication.ErrNamespacePersistenceUnsupported)
 	}
@@ -1929,12 +2075,12 @@ func (s *VectorPartitionStoreV1) deleteLocked(collection, index string, generati
 	if pins := vectorPartitionReaderPinCountV1(s.root, collection, index, generation); pins != 0 {
 		return fmt.Errorf("collections: vector partition generation %d has %d reader pins", generation, pins)
 	}
-	tombstone := s.deleteTombstonePath(collection, index, generation)
-	tombstonePresent, tombstoneErr := s.regularEntryPresent(filepath.Base(tombstone))
+	tombstoneName := s.deleteTombstoneName(collection, index, generation)
+	tombstonePresent, tombstoneErr := mutation.present(tombstoneName)
 	if tombstoneErr != nil {
 		return tombstoneErr
 	}
-	if active, err := s.OpenActive(collection, index); err == nil {
+	if active, err := mutation.openPointer(collection, index, ".active"); err == nil {
 		if active.Generation == generation {
 			return fmt.Errorf("collections: vector partition generation %d is active", generation)
 		}
@@ -1942,8 +2088,7 @@ func (s *VectorPartitionStoreV1) deleteLocked(collection, index string, generati
 		return fmt.Errorf("collections: vector partition cleanup active pointer: %w", err)
 	}
 	retiredName := safeVPM(collection) + "-" + safeVPM(index) + ".retired"
-	retiredPath := filepath.Join(s.dir, retiredName)
-	retiredRaw, retiredErr := s.readBounded(retiredName, 32)
+	retiredRaw, retiredErr := mutation.read(retiredName, 32)
 	var retiredGeneration uint64
 	if retiredErr == nil {
 		retiredGeneration, retiredErr = readVectorPartitionPointerGenerationV1(retiredRaw)
@@ -1953,15 +2098,26 @@ func (s *VectorPartitionStoreV1) deleteLocked(collection, index string, generati
 		return fmt.Errorf("collections: vector partition cleanup retired pointer: %w", retiredErr)
 	}
 	if !tombstonePresent {
-		m, err := s.Open(collection, index, generation)
+		m, err := mutation.openManifest(collection, index, generation)
 		if err != nil {
 			return err
 		}
-		if err := s.writeDeleteTombstone(m); err != nil {
+		state, stateErr := newVectorPartitionReclaimStateV1(m)
+		if stateErr != nil {
+			return stateErr
+		}
+		if err := mutation.writeDeleteTombstoneState(state); err != nil {
 			return err
 		}
-	} else if _, err := s.openDeleteTombstone(collection, index, generation); err != nil {
-		return err
+	} else {
+		raw, err := mutation.read(tombstoneName, vectorPartitionReclaimMaxBytesV1)
+		if err != nil {
+			return err
+		}
+		state, err := decodeVectorPartitionReclaimRecordV1(raw)
+		if err != nil || state.Collection != collection || state.IndexName != index || state.Generation != generation {
+			return fmt.Errorf("%w: reclaim record identity", ErrVectorPartitionManifestInvalid)
+		}
 	}
 	if hook := vectorPartitionDeleteAfterTombstoneHookV1(); hook != nil {
 		hook()
@@ -1970,24 +2126,21 @@ func (s *VectorPartitionStoreV1) deleteLocked(collection, index string, generati
 	// is either a retryable tombstone with a retained manifest, or no manifest
 	// and no pointer that could resurrect it.
 	if retiredMatches {
-		if err := s.writeInactiveMarker(collection, index, generation); err != nil {
+		if err := mutation.writeInactiveMarker(collection, index, generation); err != nil {
 			return err
 		}
-		if err := os.Remove(retiredPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := mutation.remove(retiredName); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		if err := syncDirVPM(s.dir); err != nil {
+		if err := mutation.sync(); err != nil {
 			return err
 		}
 	}
-	p := filepath.Join(s.dir, fmt.Sprintf("%s-%s-%d.vpm", safeVPM(collection), safeVPM(index), generation))
-	if e := os.Remove(p); e != nil && !errors.Is(e, os.ErrNotExist) {
+	manifestName := fmt.Sprintf("%s-%s-%d.vpm", safeVPM(collection), safeVPM(index), generation)
+	if e := mutation.remove(manifestName); e != nil && !errors.Is(e, os.ErrNotExist) {
 		return e
 	}
-	if err := syncDirVPM(s.dir); err != nil {
-		return err
-	}
-	return syncDirVPM(s.dir)
+	return mutation.sync()
 }
 func (s *VectorPartitionStoreV1) deleteTombstonePath(collection, index string, generation uint64) string {
 	return filepath.Join(s.dir, s.deleteTombstoneName(collection, index, generation))
@@ -2008,26 +2161,32 @@ func (s *VectorPartitionStoreV1) inactiveName(collection, index string) string {
 // so historical ready manifests remain prepared-only even after reclaim later
 // releases the deletion journal.
 func (s *VectorPartitionStoreV1) writeInactiveMarker(collection, index string, generation uint64) error {
-	path := s.inactivePath(collection, index)
+	mutation, err := s.beginMutationDirV1()
+	if err != nil {
+		return err
+	}
+	defer mutation.Close()
+	return mutation.writeInactiveMarker(collection, index, generation)
+}
+func (d *vectorPartitionMutationDirV1) writeInactiveMarker(collection, index string, generation uint64) error {
 	raw, err := encodeVectorPartitionInactiveStateV1(vectorPartitionInactiveStateV1{Collection: collection, IndexName: index, Generation: generation})
 	if err != nil {
 		return err
 	}
-	tmp, err := s.uniqueTemp(filepath.Base(path))
-	if err != nil {
+	name := safeVPM(collection) + "-" + safeVPM(index) + ".inactive"
+	var nonce [12]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
 		return err
 	}
-	defer os.Remove(tmp)
-	if err = os.WriteFile(tmp, raw, 0600); err != nil {
+	tmp := "." + name + "." + hex.EncodeToString(nonce[:]) + ".mutation.tmp"
+	if err = d.write(tmp, raw); err != nil {
 		return err
 	}
-	if err = syncFileVPM(tmp); err != nil {
+	defer d.remove(tmp)
+	if err = d.rename(tmp, name); err != nil {
 		return err
 	}
-	if err = renameVPM(tmp, path); err != nil {
-		return err
-	}
-	return syncDirVPM(s.dir)
+	return d.sync()
 }
 
 func (s *VectorPartitionStoreV1) readInactiveGeneration(collection, index string) (uint64, error) {
@@ -2053,7 +2212,36 @@ func (s *VectorPartitionStoreV1) writeDeleteTombstone(m VectorPartitionManifestV
 	if err != nil {
 		return err
 	}
-	return s.writeDeleteTombstoneState(state)
+	mutation, err := s.beginMutationDirV1()
+	if err != nil {
+		return err
+	}
+	defer mutation.Close()
+	return mutation.writeDeleteTombstoneState(state)
+}
+func (d *vectorPartitionMutationDirV1) writeDeleteTombstoneState(input vectorPartitionReclaimStateV1) error {
+	state, err := canonicalVectorPartitionReclaimStateV1(input)
+	if err != nil {
+		return err
+	}
+	raw, err := encodeVectorPartitionReclaimRecordV1(state)
+	if err != nil {
+		return err
+	}
+	name := fmt.Sprintf("%s-%s-%d.deleting", safeVPM(state.Collection), safeVPM(state.IndexName), state.Generation)
+	var nonce [12]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return err
+	}
+	tmp := "." + name + "." + hex.EncodeToString(nonce[:]) + ".mutation.tmp"
+	if err := d.write(tmp, raw); err != nil {
+		return err
+	}
+	defer d.remove(tmp)
+	if err := d.rename(tmp, name); err != nil {
+		return err
+	}
+	return d.sync()
 }
 func (s *VectorPartitionStoreV1) writeDeleteTombstoneState(input vectorPartitionReclaimStateV1) error {
 	if !vpmNamespacePersistenceSupported() {
@@ -2063,20 +2251,23 @@ func (s *VectorPartitionStoreV1) writeDeleteTombstoneState(input vectorPartition
 	if err != nil {
 		return err
 	}
-	tombstone := s.deleteTombstonePath(state.Collection, state.IndexName, state.Generation)
+	mutation, err := s.beginMutationDirV1()
+	if err != nil {
+		return err
+	}
+	defer mutation.Close()
+	tombstone := s.deleteTombstoneName(state.Collection, state.IndexName, state.Generation)
 	raw, err := encodeVectorPartitionReclaimRecordV1(state)
 	if err != nil {
 		return err
 	}
-	tmp, err := s.uniqueTemp(filepath.Base(tombstone))
+	tmp, err := s.uniqueTemp(tombstone)
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp)
-	if err = os.WriteFile(tmp, raw, 0600); err != nil {
-		return err
-	}
-	if err = syncFileVPM(tmp); err != nil {
+	tmpName := filepath.Base(tmp)
+	defer mutation.remove(tmpName)
+	if err = mutation.write(tmpName, raw); err != nil {
 		return err
 	}
 	vectorPartitionReclaimPersistHooksV1.RLock()
@@ -2084,14 +2275,14 @@ func (s *VectorPartitionStoreV1) writeDeleteTombstoneState(input vectorPartition
 	afterCommit := vectorPartitionReclaimPersistHooksV1.afterCommit
 	vectorPartitionReclaimPersistHooksV1.RUnlock()
 	if beforeRename != nil {
-		if err := beforeRename(tombstone, state); err != nil {
+		if err := beforeRename(filepath.Join(s.dir, tombstone), state); err != nil {
 			return err
 		}
 	}
-	if err = renameVPM(tmp, tombstone); err != nil {
+	if err = mutation.rename(tmpName, tombstone); err != nil {
 		return err
 	}
-	if err = syncDirVPM(s.dir); err != nil {
+	if err = mutation.sync(); err != nil {
 		return err
 	}
 	if afterCommit != nil {
@@ -2337,6 +2528,11 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 		}
 		requestedID := s.deleteTombstoneName(c.name, index, generation)
 		requestedComplete := false
+		mutation, err := s.beginMutationDirV1()
+		if err != nil {
+			return err
+		}
+		defer mutation.Close()
 		for _, record := range records {
 			reclaimIDs[record.id] = struct{}{}
 			for _, ref := range record.state.debtRefs() {
@@ -2391,7 +2587,7 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 				}
 			}
 			if complete {
-				if err := os.Remove(filepath.Join(s.dir, record.id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				if err := mutation.remove(record.id); err != nil && !errors.Is(err, os.ErrNotExist) {
 					return err
 				}
 				if record.id == requestedID {
@@ -2399,7 +2595,7 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 				}
 			}
 		}
-		if err := syncDirVPM(s.dir); err != nil {
+		if err := mutation.sync(); err != nil {
 			return err
 		}
 		if !requestedComplete {

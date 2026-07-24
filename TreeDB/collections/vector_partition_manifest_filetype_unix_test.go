@@ -3,6 +3,7 @@
 package collections
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -157,5 +158,100 @@ func TestVectorPartitionStoreRejectsDirectoryReplacementV1(t *testing.T) {
 		t.Fatalf("fresh store did not bind replacement directory: %v", err)
 	} else if _, err := fresh.Open("docs", "embedding", 7); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("fresh store did not observe replacement: %v", err)
+	}
+}
+
+func TestVectorPartitionPublishFailsClosedOnGenerationLinkedDirectoryReplacementV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	root := t.TempDir()
+	s, err := OpenVectorPartitionStoreV1(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testVectorPartitionManifestV1()
+	moved := filepath.Join(root, "vector_partitions.old")
+	replaced := false
+	restore := setVectorPartitionPublishHookForTestV1(func(boundary string) error {
+		if boundary == "generation_linked" && !replaced {
+			replaced = true
+			if err := os.Rename(s.dir, moved); err != nil {
+				return err
+			}
+			return os.Mkdir(s.dir, 0o700)
+		}
+		return nil
+	})
+	defer restore()
+	if err := s.publishValidatedReady(m); err == nil {
+		t.Fatal("publication followed replacement directory")
+	}
+	name := safeVPM(m.Collection) + "-" + safeVPM(m.IndexName) + "-" + strconv.FormatUint(m.Generation, 10) + ".vpm"
+	if _, err := os.Stat(filepath.Join(moved, name)); err != nil {
+		t.Fatalf("old bound namespace lost generation: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(s.dir, name)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replacement namespace received generation: %v", err)
+	}
+	active := safeVPM(m.Collection) + "-" + safeVPM(m.IndexName) + ".active"
+	for _, dir := range []string{moved, s.dir} {
+		if _, err := os.Stat(filepath.Join(dir, active)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("split publication left active pointer in %q: %v", dir, err)
+		}
+	}
+}
+
+func TestVectorPartitionDeleteUsesRetainedDirectoryAfterTombstoneV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	root := t.TempDir()
+	s, err := OpenVectorPartitionStoreV1(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testVectorPartitionManifestV1()
+	if err := s.publishLocked(m); err != nil {
+		t.Fatal(err)
+	}
+	if err := deactivateVectorPartitionStoreForTest(s, m.Collection, m.IndexName); err != nil {
+		t.Fatal(err)
+	}
+	manifest := safeVPM(m.Collection) + "-" + safeVPM(m.IndexName) + "-" + strconv.FormatUint(m.Generation, 10) + ".vpm"
+	retired := safeVPM(m.Collection) + "-" + safeVPM(m.IndexName) + ".retired"
+	moved := filepath.Join(root, "vector_partitions.old")
+	decoyManifest, decoyRetired := []byte("manifest-decoy"), []byte("retired-decoy")
+	restore := setVectorPartitionDeleteAfterTombstoneForTestV1(func() {
+		if err := os.Rename(s.dir, moved); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(s.dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(s.dir, manifest), decoyManifest, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(s.dir, retired), decoyRetired, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	})
+	defer restore()
+	if err := deleteVectorPartitionStoreForTest(s, m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string][]byte{manifest: decoyManifest, retired: decoyRetired} {
+		got, err := os.ReadFile(filepath.Join(s.dir, name))
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("replacement %s changed: %q %v", name, got, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(moved, manifest)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old manifest retained: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(moved, retired)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old retired retained: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(moved, s.inactiveName(m.Collection, m.IndexName))); err != nil {
+		t.Fatalf("old inactive missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(moved, s.deleteTombstoneName(m.Collection, m.IndexName, m.Generation))); err != nil {
+		t.Fatalf("old tombstone missing: %v", err)
 	}
 }

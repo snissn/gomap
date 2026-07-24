@@ -86,6 +86,15 @@ func renameStableChildFile(parent *os.File, oldName, newName string) error {
 	}
 }
 
+func linkStableChildFileNoReplace(parent *os.File, oldName, newName string) error {
+	for {
+		err := unix.Linkat(int(parent.Fd()), oldName, int(parent.Fd()), newName, 0)
+		if err != unix.EINTR {
+			return err
+		}
+	}
+}
+
 func duplicateStableFile(file *os.File) (*os.File, error) {
 	if file == nil {
 		return nil, os.ErrInvalid
