@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
 	"os"
@@ -148,6 +149,9 @@ func TestPartitionStageWritesValidatedDeterministicArtifact(t *testing.T) {
 }
 
 func TestM3OverlapPartitionIndexBuildsReopensAndSearchesNativePacks(t *testing.T) {
+	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
+		t.Skip("durable M1 lifecycle publication is unsupported; native pack codec coverage remains platform-neutral in TreeDB/collections")
+	}
 	dataset := writeFixtureForTest(t, 64, 8, 8)
 	out := t.TempDir()
 	args := []string{
@@ -185,6 +189,30 @@ func TestM3OverlapPartitionIndexBuildsReopensAndSearchesNativePacks(t *testing.T
 	}
 	if len(entries) != 3 {
 		t.Fatalf("M3 artifacts=%d want M2 artifact, M2 report, M3 report", len(entries))
+	}
+}
+
+func TestM3PartitionIndexFailsBeforePartialEvidenceWithoutNamespacePersistence(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "evidence")
+	args := []string{
+		"-dataset", "must-not-be-read",
+		"-out", out,
+		"-partitions", "4",
+		"-probes", "1",
+		"-overlap", "0,0.20",
+		"-top-k", "4",
+		"-stage", "overlap,partition_index",
+	}
+	var stdout bytes.Buffer
+	err := runWithRuntimeCapabilities(args, &stdout, benchmarkRuntimeCapabilities{})
+	if !errors.Is(err, collections.ErrVectorPartitionNamespacePersistenceUnsupportedV1) {
+		t.Fatalf("unsupported M3 stage err=%v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("unsupported M3 stage emitted stdout: %q", stdout.String())
+	}
+	if _, statErr := os.Stat(out); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("unsupported M3 stage created partial evidence directory: %v", statErr)
 	}
 }
 

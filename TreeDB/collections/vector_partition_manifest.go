@@ -33,8 +33,9 @@ const vectorPartitionMaxAssetBytesV1 uint64 = 1 << 33
 const vectorPartitionMaxReferencedBytesV1 uint64 = 1 << 34
 
 var (
-	ErrVectorPartitionManifestInvalid             = errors.New("collections: invalid vector partition manifest")
-	ErrVectorPartitionCollectionAuthorityRequired = errors.New("collections: vector partition lifecycle mutation requires collection authority")
+	ErrVectorPartitionManifestInvalid                   = errors.New("collections: invalid vector partition manifest")
+	ErrVectorPartitionCollectionAuthorityRequired       = errors.New("collections: vector partition lifecycle mutation requires collection authority")
+	ErrVectorPartitionNamespacePersistenceUnsupportedV1 = rootpublication.ErrNamespacePersistenceUnsupported
 )
 
 const (
@@ -67,11 +68,18 @@ func SetVectorPartitionBarrierBeforeMutationHookForTestingV1(fn func(string)) fu
 	return setVectorPartitionBarrierBeforeMutationHookForTestV1(fn)
 }
 
-// VectorPartitionNamespacePersistenceSupportedForTestingV1 reports whether
-// this platform can durably create and remove the VPM namespace. It is a
-// testing capability seam; production mutations fail closed when unavailable.
-func VectorPartitionNamespacePersistenceSupportedForTestingV1() bool {
+// VectorPartitionNamespacePersistenceSupportedV1 reports whether this
+// platform can durably create, publish, and remove the append-only VPM
+// namespace. Production callers that require the M1 lifecycle should fail
+// before doing partial work when this returns false.
+func VectorPartitionNamespacePersistenceSupportedV1() bool {
 	return vpmNamespacePersistenceSupported()
+}
+
+// VectorPartitionNamespacePersistenceSupportedForTestingV1 retains the
+// cross-package testing capability seam.
+func VectorPartitionNamespacePersistenceSupportedForTestingV1() bool {
+	return VectorPartitionNamespacePersistenceSupportedV1()
 }
 
 func (c *Collection) withVectorPartitionStorageMutationV1(operation string, fn func() error) error {
