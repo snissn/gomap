@@ -125,3 +125,60 @@ func TestClusterRouteUnsupportedReadShapesFailClosedBeforeProviderOrLocalRead(t 
 		t.Fatalf("unsupported routed reads=%q want 2", got)
 	}
 }
+
+func TestClusterRouteMetadataReadsFailClosedBeforeLocalCatalogObservation(t *testing.T) {
+	routeProvider := &placementRouteClusterSubmitter{
+		fakeClusterSubmitter: &fakeClusterSubmitter{},
+		provider: NewCatalogClusterRouteProvider(
+			mustNativewireRouteTestCatalog(t, raftplacement.PlacementModeRingV1),
+		),
+	}
+	client, _, mgr, _ := serveCollectionPipeWithServerAndOptions(t, ServerOptions{
+		ClusterSubmitter: routeProvider,
+	})
+	seedReadCollection(t, mgr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	operations := []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "list_collections",
+			run: func() error {
+				_, err := client.ListCollections(ctx)
+				return err
+			},
+		},
+		{
+			name: "list_indexes",
+			run: func() error {
+				_, err := client.ListIndexes(ctx, "users")
+				return err
+			},
+		},
+		{
+			name: "open_collection",
+			run: func() error {
+				_, err := client.OpenCollection(ctx, "users")
+				return err
+			},
+		},
+	}
+	for _, operation := range operations {
+		t.Run(operation.name, func(t *testing.T) {
+			err := operation.run()
+			if !isRemoteError(err, iwire.ErrReadOnly) ||
+				!strings.Contains(err.Error(), "authoritative catalog metadata") {
+				t.Fatalf("%s err=%v want routed metadata read-only rejection", operation.name, err)
+			}
+		})
+	}
+	if routes := routeProvider.snapshotRoutes(); len(routes) != 0 {
+		t.Fatalf("metadata route provider calls=%+v want none", routes)
+	}
+}

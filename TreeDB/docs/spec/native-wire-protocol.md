@@ -871,11 +871,14 @@ Multi-ID reads, non-route-key queries, scans, secondary/unique-index reads, and
 cross-shard reads also fail closed; no scatter, follower-read, lease-read,
 global ordering, or global unique coordination is implied.
 
-Token/ring document mutations fail closed when local collection metadata is
-missing or cannot be verified, or when the collection has secondary, vector,
-or text indexes. Unique secondary indexes receive an explicit
-global-unique-coordination rejection. Rejected public read routes expose only
-request/error/unsupported and `owner_store_unbound` counters under
+All token/ring document mutations fail closed until authoritative collection
+and index metadata is structurally bound to the exact owner route proof.
+Gateway-local collection metadata is not authoritative for a remote owner,
+including when it reports no indexes. Routed `list_collections`,
+`list_indexes`, and `open_collection` requests also fail closed instead of
+returning gateway-local metadata. Collection-placement mutations remain
+supported. Rejected public read routes expose only request/error/unsupported
+and `owner_store_unbound` counters under
 `treedb.native_wire.cluster_read_route.*`; no success, read-index, leader, or
 follower-path counter is emitted for this disabled path.
 

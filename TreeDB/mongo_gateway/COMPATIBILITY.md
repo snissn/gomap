@@ -122,11 +122,12 @@ policy is deliberately narrower:
 - non-`_id` filters, secondary-index equality/range reads, `_id` `$in`, scans,
   and other possible scatter shapes remain query-route rejections. There is no
   default scatter or global result coordination;
-- token/ring document mutations on a collection with secondary, vector, or text
-  indexes fail before cluster submission. A unique secondary index receives the
-  more specific global-unique-coordination rejection. Missing or unverifiable
-  local collection metadata also rejects because it cannot prove that the
-  remote owner lacks indexes or global uniqueness; and
+- all token/ring document mutations fail before cluster submission until
+  authoritative collection and index metadata is structurally bound to the
+  exact owner route proof. Gateway-local collection metadata is not
+  authoritative for a remote owner, including when it reports no indexes;
+- `listCollections`, `listDatabases`, and `listIndexes` fail closed in routed
+  cluster mode instead of returning gateway-local metadata; and
 - `createIndexes` and `dropIndexes` remain local-mutation rejections in cluster
   mode. No sharded secondary-index DDL or global unique-index claim is made.
 
@@ -167,10 +168,10 @@ enabled-path latency claim is made.
 | Command option | `readConcern` on `find`, `getMore`, `listCollections`, `listDatabases`, and `listIndexes` | `supported subset` / `rejected` | `TestMongoReadConcernAcceptsLocalStaleReadSurfaces`, `TestMongoReadConcernRejectsStrongLevelsBeforeServingData`, `TestMongoCompatibilityMatrix` | Absent/empty, `{level: "local"}`, and `{level: "available"}` are accepted and map to local_stale reads. `majority`, `linearizable`, `snapshot`, cluster-time fields, unknown options, malformed documents, bad `level` types, and duplicate `level` are rejected before serving data. |
 | Command | `update` / `updateOne` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, update tests | Only `_id`-targeted updateOne with accepted update shapes. |
 | Command | `delete` / `deleteOne` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, CRUD tests | Only `_id`-targeted deletes. |
-| Command | `listCollections` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | Minimal filtering and response fields. |
+| Command | `listCollections` | `supported subset` standalone; `rejected` in routed cluster mode | `TestMongoCompatibilityMatrix`, metadata tests, `TestMongoRoutedMetadataReadsFailClosedBeforeLocalCatalogObservation` | Minimal filtering and response fields; routed mode has no authoritative catalog binding. |
 | Command | `create` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerCreateCollectionCommand` | Creates a plain TreeDB collection catalog entry; existing collections are treated as idempotent no-op success with a response note instead of MongoDB `NamespaceExists`; capped collections and other MongoDB collection options are rejected. |
 | Command | `createIndexes` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | Single-field ascending indexes only, with `treedbValueType`. |
-| Command | `listIndexes` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | Emits TreeDB-specific `treedbValueType`. |
+| Command | `listIndexes` | `supported subset` standalone; `rejected` in routed cluster mode | `TestMongoCompatibilityMatrix`, metadata tests, `TestMongoRoutedMetadataReadsFailClosedBeforeLocalCatalogObservation` | Emits TreeDB-specific `treedbValueType` only when local metadata is authoritative. |
 | Command | `dropIndexes` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | No broad collection/database DDL surface. |
 | Command | `aggregate` | `not implemented` | `TestMongoCompatibilityMatrix` | No aggregation pipeline. |
 | Command | `count`, `countDocuments`, `estimatedDocumentCount` | `not implemented` | `TestMongoCompatibilityMatrix` covers `count` command absence | Future fast count work should be explicit. |
@@ -264,8 +265,8 @@ before deciding whether to implement or reject them.
 | Surface | Status | Harness / evidence | Current gap |
 |---|---|---|---|
 | Built-in `_id_` index metadata | `supported subset` | `listIndexes` tests | Backed by primary key, not a user-created secondary index. |
-| Single-field ascending secondary index | `supported subset` standalone; `rejected` for cluster token/ring reads/writes | `TestMongoCompatibilityMatrix`, `TestClusterRoutePreflightMongoRejectsNonShardAndSecondaryIndexReads`, `TestClusterRoutePreflightMongoRejectsTokenRingIndexedWrites` | Cluster mode has no shard-local secondary-index ownership or scatter policy. |
-| Unique single-field secondary index | `supported subset` standalone; `rejected` for cluster token/ring | metadata/update tests, `TestClusterRoutePreflightMongoRejectsTokenRingIndexedWrites`, `TestClusterSubmitterRejectsIndexDDLNoLocalMutation` | Global unique coordination is not implemented. |
+| Single-field ascending secondary index | `supported subset` standalone; token/ring reads and all token/ring writes are rejected | `TestMongoCompatibilityMatrix`, `TestClusterRoutePreflightMongoRejectsNonShardAndSecondaryIndexReads`, token/ring mutation policy tests | Cluster mode has no owner-bound shard-local index metadata or scatter policy. |
+| Unique single-field secondary index | `supported subset` standalone; token/ring reads and all token/ring writes are rejected | metadata/update tests, token/ring mutation policy tests, `TestClusterSubmitterRejectsIndexDDLNoLocalMutation` | Global unique coordination and owner-bound index metadata are not implemented. |
 | Supported `treedbValueType` values | `supported subset` | metadata tests | `string`, `bool`, `int64`, `double`. |
 | Compound index | `rejected` | `TestMongoCompatibilityMatrix` | Needs collection index design work. |
 | Descending, hashed, text, wildcard, geospatial indexes | `rejected` / `not implemented` | Invalid index commands reject or command absent | Out of MVP scope. |

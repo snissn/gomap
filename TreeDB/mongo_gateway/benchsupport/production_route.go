@@ -20,9 +20,9 @@ import (
 	"github.com/snissn/gomap/TreeDB/nativewire"
 )
 
-// ProductionRouteProofOptions scopes the bench-only production route proof. It
-// defaults to one locally executable group. RemoteOwnerExecution opts the proof
-// harness into static, in-process forwarding to additional registered groups.
+// ProductionRouteProofOptions scopes the internal production route scaffold.
+// Public token/ring mutations remain fail closed until authoritative collection
+// and index metadata is bound to the exact owner route proof.
 type ProductionRouteProofOptions struct {
 	GroupCount           int
 	PartitionCount       int

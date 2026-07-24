@@ -3,12 +3,10 @@ package nativewire
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
 	"time"
 
-	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
@@ -425,7 +423,7 @@ func clusterTokenBatchRouteRejection(request ClusterRouteRequest, target Cluster
 }
 
 func clusterRouteTargetProtocolError(code iwire.ErrorCode, request ClusterRouteRequest, target ClusterRouteTarget, class, reason string) error {
-	route := clusterRouteErrorMetadataFromTarget(request, target, class)
+	route := redactClusterRouteErrorMetadata(clusterRouteErrorMetadataFromTarget(request, target, class))
 	if fields := clusterRouteErrorMetadataFields(route); fields != "" {
 		reason += "; " + fields
 	}
@@ -549,53 +547,31 @@ func (s *Server) rejectClusterTokenRouteIndexedMutation(command iwire.CommandID,
 	default:
 		return nil
 	}
-	if s == nil || s.collections == nil {
-		return clusterRouteTargetProtocolError(
+	return clusterRouteTargetProtocolError(
+		iwire.ErrReadOnly,
+		request,
+		target,
+		"index_policy_unbound",
+		"cluster token/ring mutation is disabled until authoritative collection and index metadata is bound to the owner route proof",
+	)
+}
+
+func (s *Server) rejectClusterRoutedLocalMetadataRead(command iwire.CommandID) error {
+	if s == nil || s.clusterSubmitter == nil {
+		return nil
+	}
+	if _, ok := s.clusterSubmitter.(ClusterRouteProvider); !ok {
+		return nil
+	}
+	switch command {
+	case iwire.CommandListCollections, iwire.CommandListIndexes, iwire.CommandOpenCollection:
+		return protocolError(
 			iwire.ErrReadOnly,
-			request,
-			target,
-			"index_policy_unverifiable",
-			"cluster token/ring mutation cannot verify sharded index policy because local collection metadata is unavailable",
+			"nativewire routed-cluster metadata read is disabled until authoritative catalog metadata is bound to the route provider",
 		)
+	default:
+		return nil
 	}
-	col, err := s.collections.OpenCollection(request.Collection)
-	if errors.Is(err, collections.ErrCollectionNotFound) {
-		return clusterRouteTargetProtocolError(
-			iwire.ErrReadOnly,
-			request,
-			target,
-			"index_policy_unverifiable",
-			"cluster token/ring mutation cannot verify sharded index policy because local collection metadata is unavailable",
-		)
-	}
-	if err != nil {
-		return err
-	}
-	meta := col.MetaView()
-	for _, index := range meta.Indexes {
-		if index.Unique {
-			return clusterRouteTargetProtocolError(
-				iwire.ErrReadOnly,
-				request,
-				target,
-				"global_unique_unsupported",
-				fmt.Sprintf(
-					"cluster token/ring mutation does not support global unique-index coordination; index=%q",
-					index.Name,
-				),
-			)
-		}
-	}
-	if len(meta.Indexes) != 0 || len(meta.VectorIndexes) != 0 || len(meta.TextIndexes) != 0 {
-		return clusterRouteTargetProtocolError(
-			iwire.ErrReadOnly,
-			request,
-			target,
-			"secondary_index_unsupported",
-			"cluster token/ring mutation does not support secondary-index writes without shard-local index ownership",
-		)
-	}
-	return nil
 }
 
 func clusterMutationDocumentToken(cmd iwire.ValidatedCommand, limits iwire.Limits) (uint64, bool, error) {

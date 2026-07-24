@@ -1773,6 +1773,9 @@ func (s *Server) listCollectionsResponse(command wire.Document) (wire.Document, 
 	if doc, rejected, err := rejectUnsupportedReadConcern(command); rejected {
 		return doc, err
 	}
+	if doc, err, rejected := s.rejectClusterRoutedLocalMetadataRead("listCollections"); rejected {
+		return doc, err
+	}
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 	}
@@ -1817,6 +1820,9 @@ func (s *Server) listCollectionsResponse(command wire.Document) (wire.Document, 
 
 func (s *Server) listDatabasesResponse(command wire.Document) (wire.Document, error) {
 	if doc, rejected, err := rejectUnsupportedReadConcern(command); rejected {
+		return doc, err
+	}
+	if doc, err, rejected := s.rejectClusterRoutedLocalMetadataRead("listDatabases"); rejected {
 		return doc, err
 	}
 	if s.Collections == nil {
@@ -2228,6 +2234,9 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 
 func (s *Server) listIndexesResponse(command wire.Document) (wire.Document, error) {
 	if doc, rejected, err := rejectUnsupportedReadConcern(command); rejected {
+		return doc, err
+	}
+	if doc, err, rejected := s.rejectClusterRoutedLocalMetadataRead("listIndexes"); rejected {
 		return doc, err
 	}
 	if s.Collections == nil {

@@ -157,66 +157,19 @@ The result also emits
 `production_route_evidence`. Treat those fields as local deterministic routing
 distribution evidence only, not as a cluster throughput or scaleout claim.
 
-`-route-mode production` is a fail-closed production route proof. With
-`-route-groups 1`, it proves local-owner routed commits. With
-`-route-groups >1`, it defaults to remote-owner redirect/no-local-mutation
-behavior only; it does not forward, execute on a remote group, fan out, or claim
-horizontal scale. Passing `-production-route-remote-execution` with
-`-route-groups >1` opts into a static, in-process remote-owner routed write
-proof: the Mongo/nativewire write enters through the local submit boundary,
-routes to the owning registered group, and records route/commit/apply evidence
-for that owner group. Production mode uses command WAL and BSON collection
-storage, routes collection creation and each measured `InsertOne` through the
-production cluster submitter boundary, and emits `production_route_evidence`
-only for the supported proof scopes. It does not emit local `route_evidence`.
-The current production proof accepts only the serial insert-only shape:
-`-batch-size 1`, `-insert-producers 1`, `-secondary-indexes 0`, `-reads 0`,
-`-range-reads 0`, `-updates 0`, `-deletes 0`, no range/indexed-update options,
-and no concurrent phases.
+`-route-mode production` retains the internal route/submit/apply harness, but
+the public Mongo token/ring write path now fails closed before submit. The
+gateway does not yet bind authoritative collection and index metadata to the
+exact owner route proof, and a gateway-local indexless collection is not
+authoritative for a remote owner. Consequently production-mode runs currently
+return that policy error and must not emit or claim routed-commit,
+remote-redirect, or remote-forward performance evidence.
 
-Use a small production proof run when validating the route boundary:
-
-```sh
-GOWORK=off go run ./cmd/mongo_gateway_bench \
-  -target treedb \
-  -route-mode production \
-  -route-groups 1 \
-  -route-partitions 4 \
-  -documents 1000 \
-  -batch-size 1 \
-  -insert-producers 1 \
-  -reads 0 -range-reads 0 -updates 0 -deletes 0 \
-  -secondary-indexes 0 \
-  -prebuild-documents \
-  -treedb-maintenance none \
-  -format json
-```
-
-Production local-owner proof JSON reports
-`production_route_evidence_status=available` and `production_route_evidence`
-with `evidence_scope=production_routed_commit`, `real_routed_commits=true`,
-route-attempt/local-owner/remote-redirect/remote-forward/unknown-owner counters,
-route group/leader/token-partition hits, commit and applied group hits,
-fanout/split attempts and failures, direct-local-bypass rejects, write
-p50/p95/p99 latency, writes/sec, `B/op`, `allocs/op`, CPU context,
-storage/snapshot overhead, and artifact pointers. Treat this as
-correctness/instrumentation evidence for the local-owner production route
-boundary, not as cluster throughput or horizontal-scale evidence.
-
-Production remote-owner redirect proof JSON reports
-`production_route_evidence_status=available_remote_owner_redirect_only` and
-`evidence_scope=production_remote_owner_redirect`, with
-`real_routed_commits=false`, remote redirect counters, route group/leader/token
-partition hits, and empty commit/apply group hits. Treat this as redirect and
-zero-local-mutation evidence only, not as remote execution or scale evidence.
-
-Production remote-owner routed proof JSON reports
-`production_route_evidence_status=available_remote_owner_routed_commit` and
-`evidence_scope=production_remote_owner_routed_commit`, with
-`real_routed_commits=true`, remote forward counters, route group/leader/token
-partition hits, and commit/apply group hits on the owner group. Treat this as
-static in-process production-route correctness evidence, not as network leader
-forwarding, HA, rebalance, fanout, routed reads, or horizontal-scale evidence.
+The legacy production evidence fields and static harness remain for the future
+owner-bound implementation and schema compatibility. They do not describe an
+enabled public path in the current build. `-route-mode ring` remains
+local-preflight-only evidence, while collection-placement writes remain the
+enabled routed mutation shape outside this token/ring benchmark mode.
 
 Use `-insert-producers N` to split the insert load phase across producer
 goroutines. The effective producer count is capped at the number of insert

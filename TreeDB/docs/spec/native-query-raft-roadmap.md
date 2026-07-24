@@ -296,10 +296,11 @@ benchmark is not an enabled-path, storage, network, or quorum measurement.
 Consequently this issue makes no enabled routed-read latency claim.
 
 Non-shard-key, secondary/unique-index, multi-ID, scatter, follower, and remote
-data-plane reads remain deferred to explicit later work. Token/ring mutations
-also fail closed when local collection metadata is missing or unverifiable, or
-when secondary/vector/text indexes are present, until shard-local index
-ownership and any global unique policy are implemented.
+data-plane reads remain deferred to explicit later work. All token/ring
+document mutations also fail closed until authoritative collection and index
+metadata is structurally bound to the exact owner route proof. A gateway-local
+collection-manager copy is not sufficient evidence, even when it currently
+reports no indexes. Collection-placement mutations remain supported.
 
 `lease_read` is allowed only if leader leases are implemented and the server can
 prove the lease is valid.

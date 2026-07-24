@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync"
@@ -29,6 +30,19 @@ type fakeClusterSubmitter struct {
 	status       ClusterAdmissionStatus
 	admissionErr error
 	resultHook   func(raftentry.CommandEntryV1, ClusterRequestMetadata, ClusterSubmitResult) (ClusterSubmitResult, error)
+}
+
+type testSensitiveClusterRouteError struct {
+	message string
+	route   ClusterRouteErrorMetadata
+}
+
+func (e testSensitiveClusterRouteError) Error() string {
+	return e.message
+}
+
+func (e testSensitiveClusterRouteError) ClusterRouteErrorMetadata() ClusterRouteErrorMetadata {
+	return e.route
 }
 
 type admissionClusterSubmitter struct {
@@ -431,25 +445,25 @@ func assertNativeRemoteOwnerRouteError(tb testing.TB, err error, collection stri
 	if !ok {
 		tb.Fatalf("ClusterRouteErrorMetadataOf ok=false err=%v", err)
 	}
-	if route.Class != "remote_owner_redirect" ||
+	if route.Class != "index_policy_unbound" ||
 		route.GroupID != "group-z" ||
 		route.LeaderHint != "node-z" ||
-		route.Database != "default" ||
-		route.Catalog != "default" ||
-		route.Collection != collection ||
+		route.Database != "" ||
+		route.Catalog != "" ||
+		route.Collection != "" ||
 		route.Shape != string(ClusterRouteShapeToken) ||
 		route.PlacementMode != string(raftplacement.PlacementModeRingV1) ||
 		route.RouteKey != string(raftplacement.RouteKeyDocumentIDV1) ||
 		!route.TokenKnown ||
 		route.PartitionID != "p9" {
-		tb.Fatalf("route metadata=%+v want remote owner redirect for group-z/node-z %s token p9", route, collection)
+		tb.Fatalf("route metadata=%+v want redacted owner-bound index-policy rejection for group-z/node-z %s token p9", route, collection)
 	}
 	if len(route.Members) != 2 || route.Members[0] != "node-z" || route.Members[1] != "node-y" {
 		tb.Fatalf("route members=%v want [node-z node-y]", route.Members)
 	}
 }
 
-func TestClusterRouteErrorMetadataFieldsPreserveWhitespaceAcrossWireText(t *testing.T) {
+func TestClusterRouteErrorMetadataFieldsRedactNamespaceAndPreserveRoutingWhitespace(t *testing.T) {
 	want := ClusterRouteErrorMetadata{
 		Class:         "remote_owner_redirect",
 		Database:      "sales db",
@@ -467,14 +481,19 @@ func TestClusterRouteErrorMetadataFieldsPreserveWhitespaceAcrossWireText(t *test
 		LocalGroupID:  "group local",
 	}
 	fields := clusterRouteErrorMetadataFields(want)
+	for _, secret := range []string{want.Database, want.Catalog, want.Collection} {
+		if strings.Contains(fields, url.QueryEscape(secret)) || strings.Contains(fields, secret) {
+			t.Fatalf("route metadata fields=%q expose namespace %q", fields, secret)
+		}
+	}
 	got, ok := parseClusterRouteErrorMetadata("cluster route rejected; " + fields)
 	if !ok {
 		t.Fatalf("parseClusterRouteErrorMetadata ok=false fields=%q", fields)
 	}
 	if got.Class != want.Class ||
-		got.Database != want.Database ||
-		got.Catalog != want.Catalog ||
-		got.Collection != want.Collection ||
+		got.Database != "" ||
+		got.Catalog != "" ||
+		got.Collection != "" ||
 		got.GroupID != want.GroupID ||
 		got.LeaderHint != want.LeaderHint ||
 		got.PartitionID != want.PartitionID ||
@@ -483,6 +502,29 @@ func TestClusterRouteErrorMetadataFieldsPreserveWhitespaceAcrossWireText(t *test
 		got.Members[0] != want.Members[0] ||
 		got.Members[1] != want.Members[1] {
 		t.Fatalf("route metadata roundtrip=%+v want %+v fields=%q", got, want, fields)
+	}
+}
+
+func TestClusterProtocolErrorRedactsSensitiveRouteReasonAndMetadata(t *testing.T) {
+	const secret = "tenant-secret-collection"
+	err := clusterProtocolError(iwire.ErrReadOnly, testSensitiveClusterRouteError{
+		message: "route failed for " + secret,
+		route: ClusterRouteErrorMetadata{
+			Class:      "remote_owner_redirect",
+			Database:   "secret-db",
+			Catalog:    "secret-catalog",
+			Collection: secret,
+			GroupID:    "group-z",
+		},
+	})
+	if strings.Contains(err.Error(), secret) ||
+		strings.Contains(err.Error(), "secret-db") ||
+		strings.Contains(err.Error(), "secret-catalog") {
+		t.Fatalf("cluster protocol error exposes namespace: %v", err)
+	}
+	route, ok := ClusterRouteErrorMetadataOf(err)
+	if !ok || route.Database != "" || route.Catalog != "" || route.Collection != "" || route.GroupID != "group-z" {
+		t.Fatalf("redacted route metadata=%+v ok=%v", route, ok)
 	}
 }
 
@@ -1220,7 +1262,7 @@ func TestClusterRoutePreflightSkipsMalformedDeterministicEntry(t *testing.T) {
 	}
 }
 
-func TestClusterRoutePreflightTokenPlacementAcceptsSingleID(t *testing.T) {
+func TestClusterRoutePreflightTokenPlacementRejectsSingleIDWithoutOwnerBoundIndexPolicy(t *testing.T) {
 	catalog := mustNativewireRouteTestCatalog(t, raftplacement.PlacementModeTokenV1)
 	submitter := &placementRouteClusterSubmitter{
 		fakeClusterSubmitter: &fakeClusterSubmitter{},
@@ -1238,8 +1280,10 @@ func TestClusterRoutePreflightTokenPlacementAcceptsSingleID(t *testing.T) {
 		[][]byte{[]byte(`{"name":"Ada"}`)},
 		AckVisible,
 	)
-	if err != nil {
-		t.Fatalf("InsertBatch token placement: %v", err)
+	if !isRemoteError(err, iwire.ErrReadOnly) ||
+		!strings.Contains(err.Error(), "authoritative collection and index metadata is bound") ||
+		!strings.Contains(err.Error(), "route_error_class=index_policy_unbound") {
+		t.Fatalf("InsertBatch token placement err=%v want owner-bound index-policy rejection", err)
 	}
 	if routes := submitter.snapshotRoutes(); len(routes) != 1 {
 		t.Fatalf("route calls=%d want 1", len(routes))
@@ -1250,10 +1294,9 @@ func TestClusterRoutePreflightTokenPlacementAcceptsSingleID(t *testing.T) {
 		}
 	}
 	calls := submitter.snapshot()
-	if len(calls) != 1 {
-		t.Fatalf("submitter calls=%d want 1", len(calls))
+	if len(calls) != 0 {
+		t.Fatalf("submitter calls=%d want 0", len(calls))
 	}
-	assertNativeClusterTokenRouteMetadata(t, calls[0], raftplacement.PlacementModeTokenV1, "p0", raftplacement.DocumentIDTokenV1([]byte("u1")))
 }
 
 func TestClusterMutationDocumentTokenHonorsDecodeLimits(t *testing.T) {
@@ -1278,7 +1321,7 @@ func TestClusterMutationDocumentTokenHonorsDecodeLimits(t *testing.T) {
 	}
 }
 
-func TestClusterRoutePreflightTokenPlacementSingleIDMutationCommands(t *testing.T) {
+func TestClusterRoutePreflightTokenPlacementSingleIDMutationCommandsFailClosed(t *testing.T) {
 	tests := []struct {
 		name    string
 		command iwire.CommandID
@@ -1342,8 +1385,10 @@ func TestClusterRoutePreflightTokenPlacementSingleIDMutationCommands(t *testing.
 				if err := client.Hello(ctx); err != nil {
 					t.Fatalf("Hello: %v", err)
 				}
-				if err := tc.run(ctx, client); err != nil {
-					t.Fatalf("%s: %v", tc.name, err)
+				if err := tc.run(ctx, client); !isRemoteError(err, iwire.ErrReadOnly) ||
+					!strings.Contains(err.Error(), "authoritative collection and index metadata is bound") ||
+					!strings.Contains(err.Error(), "route_error_class=index_policy_unbound") {
+					t.Fatalf("%s err=%v want owner-bound index-policy rejection", tc.name, err)
 				}
 				token := raftplacement.DocumentIDTokenV1([]byte("u1"))
 				routes := submitter.snapshotRoutes()
@@ -1354,19 +1399,15 @@ func TestClusterRoutePreflightTokenPlacementSingleIDMutationCommands(t *testing.
 					t.Fatalf("route request=%+v want command=%d name=%s token=%d", got, tc.command, tc.name, token)
 				}
 				calls := submitter.snapshot()
-				if len(calls) != 1 {
-					t.Fatalf("submitter calls=%d want 1", len(calls))
+				if len(calls) != 0 {
+					t.Fatalf("submitter calls=%d want 0", len(calls))
 				}
-				if calls[0].entry.Decoded.CommandID != tc.command {
-					t.Fatalf("submitted command=%d want %d", calls[0].entry.Decoded.CommandID, tc.command)
-				}
-				assertNativeClusterTokenRouteMetadata(t, calls[0], mode, "p0", token)
 			})
 		}
 	}
 }
 
-func TestClusterRoutePreflightTokenRingIndexedWritesFailClosed(t *testing.T) {
+func TestClusterRoutePreflightTokenRingMutationsFailClosedWithoutOwnerBoundIndexPolicy(t *testing.T) {
 	tests := []struct {
 		name             string
 		createCollection bool
@@ -1382,7 +1423,7 @@ func TestClusterRoutePreflightTokenRingIndexedWritesFailClosed(t *testing.T) {
 				Field:     "name",
 				ValueType: collections.IndexValueString,
 			},
-			wantError: "does not support secondary-index writes without shard-local index ownership",
+			wantError: "authoritative collection and index metadata is bound",
 		},
 		{
 			name:             "global_unique",
@@ -1393,16 +1434,16 @@ func TestClusterRoutePreflightTokenRingIndexedWritesFailClosed(t *testing.T) {
 				ValueType: collections.IndexValueString,
 				Unique:    true,
 			},
-			wantError: "does not support global unique-index coordination",
+			wantError: "authoritative collection and index metadata is bound",
 		},
 		{
 			name:      "missing_local_metadata",
-			wantError: "cannot verify sharded index policy because local collection metadata is unavailable",
+			wantError: "authoritative collection and index metadata is bound",
 		},
 		{
 			name:       "missing_collection_manager",
 			nilManager: true,
-			wantError:  "cannot verify sharded index policy because local collection metadata is unavailable",
+			wantError:  "authoritative collection and index metadata is bound",
 		},
 	}
 	for _, mode := range []raftplacement.PlacementModeV1{
@@ -2641,8 +2682,10 @@ func TestRaftClusterSubmitterRouteGroupMismatchRejectsBeforeLocalMutation(t *tes
 	}
 	version := clientCatalogVersion(t, client, ctx)
 	_, err := client.commandSections(ctx, iwire.CommandCreateCollection, raftClusterCreateCollectionSections("users", version, AckRaftCommitted)...)
-	if !isRemoteError(err, iwire.ErrReadOnly) || !strings.Contains(err.Error(), "route group") {
-		t.Fatalf("CreateCollection route mismatch err=%v want read-only route group mismatch", err)
+	if !isRemoteError(err, iwire.ErrReadOnly) ||
+		!strings.Contains(err.Error(), "cluster route rejected") ||
+		!strings.Contains(err.Error(), "route_error_class=remote_owner_redirect") {
+		t.Fatalf("CreateCollection route mismatch err=%v want redacted read-only remote-owner redirect", err)
 	}
 	if _, openErr := mgr.OpenCollection("users"); !errors.Is(openErr, collections.ErrCollectionNotFound) {
 		t.Fatalf("OpenCollection users after route mismatch err=%v want ErrCollectionNotFound", openErr)
@@ -2695,7 +2738,7 @@ func TestRaftClusterSubmitterGroupRoutedDispatcherRoutesCollectionWrite(t *testi
 	}
 }
 
-func TestRaftClusterSubmitterGroupRoutedDispatcherRoutesSingleTokenWrite(t *testing.T) {
+func TestRaftClusterSubmitterGroupRoutedDispatcherRejectsSingleTokenWriteWithoutOwnerBoundIndexPolicy(t *testing.T) {
 	token := raftplacement.DocumentIDTokenV1([]byte("u1"))
 	provider := &staticClusterRouteProvider{
 		target: ClusterRouteTarget{
@@ -2717,22 +2760,15 @@ func TestRaftClusterSubmitterGroupRoutedDispatcherRoutesSingleTokenWrite(t *test
 	if err := client.Hello(ctx); err != nil {
 		t.Fatalf("Hello: %v", err)
 	}
-	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON, [][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"Ada"}`)}, AckVisible); err != nil {
-		t.Fatalf("InsertBatch group-routed dispatcher: %v", err)
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON, [][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"Ada"}`)}, AckVisible); !isRemoteError(err, iwire.ErrReadOnly) || !strings.Contains(err.Error(), "index_policy_unbound") {
+		t.Fatalf("InsertBatch group-routed dispatcher err=%v want owner-bound index-policy rejection", err)
 	}
 	if calls := groupA.snapshotCalls(); len(calls) != 0 {
 		t.Fatalf("group-a calls=%d want 0", len(calls))
 	}
 	calls := groupB.snapshotCalls()
-	if len(calls) != 1 {
-		t.Fatalf("group-b calls=%d want 1", len(calls))
-	}
-	meta := calls[0].metadata
-	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandInsertBatch {
-		t.Fatalf("group-b command=%d want insert_batch", got)
-	}
-	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(ClusterRouteShapeToken) || meta.ClusterRouteGroupID != "group-b" || meta.ClusterRouteKey != string(raftplacement.RouteKeyDocumentIDV1) || !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != "p0" {
-		t.Fatalf("group-b token route metadata=%+v want group-b token=%d p0", meta, token)
+	if len(calls) != 0 {
+		t.Fatalf("group-b calls=%d want 0", len(calls))
 	}
 }
 
@@ -2764,7 +2800,7 @@ func TestRaftClusterSubmitterGroupRoutedDispatcherCatalogRoutesCollectionOwner(t
 	}
 }
 
-func TestRaftClusterSubmitterGroupRoutedDispatcherCatalogRoutesSingleTokenOwner(t *testing.T) {
+func TestRaftClusterSubmitterGroupRoutedDispatcherCatalogRejectsSingleTokenOwnerWithoutIndexPolicy(t *testing.T) {
 	id := []byte("u1")
 	token := raftplacement.DocumentIDTokenV1(id)
 	provider := NewCatalogClusterRouteProvider(mustNativewireTokenGroupRouteCatalog(t, raftplacement.PlacementModeRingV1, token))
@@ -2775,19 +2811,15 @@ func TestRaftClusterSubmitterGroupRoutedDispatcherCatalogRoutesSingleTokenOwner(
 	if err := client.Hello(ctx); err != nil {
 		t.Fatalf("Hello: %v", err)
 	}
-	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON, [][]byte{id}, [][]byte{[]byte(`{"name":"Ada"}`)}, AckVisible); err != nil {
-		t.Fatalf("InsertBatch catalog group-routed dispatcher: %v", err)
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON, [][]byte{id}, [][]byte{[]byte(`{"name":"Ada"}`)}, AckVisible); !isRemoteError(err, iwire.ErrReadOnly) || !strings.Contains(err.Error(), "index_policy_unbound") {
+		t.Fatalf("InsertBatch catalog group-routed dispatcher err=%v want owner-bound index-policy rejection", err)
 	}
 	if calls := groupA.snapshotCalls(); len(calls) != 0 {
 		t.Fatalf("group-a calls=%d want 0", len(calls))
 	}
 	calls := groupB.snapshotCalls()
-	if len(calls) != 1 {
-		t.Fatalf("group-b calls=%d want 1", len(calls))
-	}
-	meta := calls[0].metadata
-	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(ClusterRouteShapeToken) || meta.ClusterRouteGroupID != "group-b" || meta.ClusterRouteLeaderHint != "node-c" || meta.ClusterRouteKey != string(raftplacement.RouteKeyDocumentIDV1) || !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != "p1" {
-		t.Fatalf("group-b catalog token route metadata=%+v want group-b/node-c token=%d p1", meta, token)
+	if len(calls) != 0 {
+		t.Fatalf("group-b calls=%d want 0", len(calls))
 	}
 }
 
@@ -2814,8 +2846,8 @@ func TestRaftClusterSubmitterGroupRoutedDispatcherRejectsUnknownGroupBeforeSubmi
 		t.Fatalf("Hello: %v", err)
 	}
 	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON, [][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"Ada"}`)}, AckVisible)
-	if !isRemoteError(err, iwire.ErrReadOnly) || !strings.Contains(err.Error(), "route target unknown") {
-		t.Fatalf("InsertBatch unknown group err=%v want read-only route target unknown", err)
+	if !isRemoteError(err, iwire.ErrReadOnly) || !strings.Contains(err.Error(), "index_policy_unbound") {
+		t.Fatalf("InsertBatch unknown group err=%v want owner-bound index-policy rejection", err)
 	}
 	if calls := groupA.snapshotCalls(); len(calls) != 0 {
 		t.Fatalf("group-a calls=%d want 0", len(calls))
@@ -2846,15 +2878,15 @@ func TestRaftClusterSubmitterGroupRoutedDispatcherUnknownOwnerErrorsBeforeSubmit
 		t.Fatalf("Hello: %v", err)
 	}
 	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON, [][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"Ada"}`)}, AckVisible)
-	if !isRemoteError(err, iwire.ErrReadOnly) || !strings.Contains(err.Error(), "route target unknown") {
-		t.Fatalf("InsertBatch unknown owner err=%v want read-only route target unknown", err)
+	if !isRemoteError(err, iwire.ErrReadOnly) || !strings.Contains(err.Error(), "index_policy_unbound") {
+		t.Fatalf("InsertBatch unknown owner err=%v want owner-bound index-policy rejection", err)
 	}
 	route, ok := ClusterRouteErrorMetadataOf(err)
 	if !ok {
 		t.Fatalf("ClusterRouteErrorMetadataOf ok=false err=%v", err)
 	}
-	if route.Class != "unknown_owner" || route.GroupID != "group-z" || route.LeaderHint != "" {
-		t.Fatalf("route metadata=%+v want unknown owner group-z without leader hint", route)
+	if route.Class != "index_policy_unbound" || route.GroupID != "group-z" || route.LeaderHint != "" {
+		t.Fatalf("route metadata=%+v want owner-bound index-policy rejection for group-z", route)
 	}
 	if calls := groupA.snapshotCalls(); len(calls) != 0 {
 		t.Fatalf("group-a calls=%d want 0", len(calls))
