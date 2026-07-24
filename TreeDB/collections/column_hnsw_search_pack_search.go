@@ -58,10 +58,20 @@ func (v *columnHNSWSearchPackPreparedView) searchCosine(query []float32, opts co
 	if efSearch < 0 {
 		return nil, stats, errColumnVectorGraphNativeSearchEfSearchNegative
 	}
+	candidateLimit := opts.CandidateLimit
+	if candidateLimit < 0 {
+		return nil, stats, errors.New("collections: hnsw_search_pack_v1 candidate limit cannot be negative")
+	}
 	if topK == 0 || rowCount == 0 {
 		return nil, stats, nil
 	}
 	stats.CandidateRows = uint64(rowCount)
+	if candidateLimit == 0 || candidateLimit > rowCount {
+		candidateLimit = rowCount
+	}
+	if topK > candidateLimit {
+		topK = candidateLimit
+	}
 	if topK > rowCount {
 		topK = rowCount
 	}
@@ -71,8 +81,8 @@ func (v *columnHNSWSearchPackPreparedView) searchCosine(query []float32, opts co
 	if efSearch < topK {
 		efSearch = topK
 	}
-	if efSearch > rowCount {
-		efSearch = rowCount
+	if efSearch > candidateLimit {
+		efSearch = candidateLimit
 	}
 	degree := v.Header.M
 	if degree < 1 {
@@ -102,15 +112,17 @@ func (v *columnHNSWSearchPackPreparedView) searchCosine(query []float32, opts co
 	if entryOrdinal < 0 || entryOrdinal >= rowCount {
 		return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 entry ordinal=%d outside rows=%d", entryOrdinal, rowCount)
 	}
-	maxLayer, err := v.maxLayerForOrdinal(entryOrdinal)
-	if err != nil {
-		return nil, stats, err
-	}
 	traversalStart, traversalDistanceBefore := columnVectorGraphNativeSearchStartGraphTraversal(&stats)
-	for layer := maxLayer; layer > 0; layer-- {
-		entryOrdinal, err = v.greedyNearestAtLayer(normalizedQuery, entryOrdinal, layer, opts.ScoreBatchMode, scratch, &stats, countLoopEdges, &loopEdgeVisits)
+	if opts.CandidateLimit == 0 {
+		maxLayer, err := v.maxLayerForOrdinal(entryOrdinal)
 		if err != nil {
 			return nil, stats, err
+		}
+		for layer := maxLayer; layer > 0; layer-- {
+			entryOrdinal, err = v.greedyNearestAtLayer(normalizedQuery, entryOrdinal, layer, opts.ScoreBatchMode, scratch, &stats, countLoopEdges, &loopEdgeVisits)
+			if err != nil {
+				return nil, stats, err
+			}
 		}
 	}
 	visitMarks := scratch.visitMarks
@@ -122,6 +134,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosine(query []float32, opts co
 	nextSeed := 0
 	rowCount64 := uint64(rowCount)
 	for {
+		if opts.CandidateLimit > 0 && visitedCandidates >= uint64(candidateLimit) {
+			break
+		}
 		candidate, ok := scratch.popFrontierAccounting(&stats)
 		if !ok {
 			if len(scratch.top) >= efSearch {
@@ -163,6 +178,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosine(query []float32, opts co
 			}
 			visitMarks[neighborOrdinal] = visitEpoch
 			tile = append(tile, neighbor)
+			if opts.CandidateLimit > 0 && uint64(len(tile))+visitedCandidates >= uint64(candidateLimit) {
+				break
+			}
 		}
 		if len(tile) != 0 {
 			if err := v.scoreAndPushFrontierVisitedTile(normalizedQuery, tile, efSearch, opts.ScoreBatchMode, scratch, &stats, &visitedCandidates); err != nil {
@@ -170,10 +188,10 @@ func (v *columnHNSWSearchPackPreparedView) searchCosine(query []float32, opts co
 			}
 		}
 	}
+	stats.Candidates = visitedCandidates
 	if countLoopEdges {
 		stats.Edges = loopEdgeVisits
 		stats.VisitedEdges = loopEdgeVisits
-		stats.Candidates = visitedCandidates
 	}
 	columnVectorGraphNativeSearchFinishGraphTraversal(&stats, traversalStart, traversalDistanceBefore)
 	if len(scratch.top) == 0 {
