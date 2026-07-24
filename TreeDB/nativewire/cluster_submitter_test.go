@@ -918,7 +918,7 @@ func TestClusterRoutePreflightAddsMetadata(t *testing.T) {
 func TestClusterRoutePreflightRejectsBeforeSubmitter(t *testing.T) {
 	submitter := &routingClusterSubmitter{
 		fakeClusterSubmitter: &fakeClusterSubmitter{},
-		err:                  errors.New("unplaced collection"),
+		err:                  errors.New("tenant-secret-db/users stored at /srv/private/tenant-secret"),
 	}
 	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -933,6 +933,16 @@ func TestClusterRoutePreflightRejectsBeforeSubmitter(t *testing.T) {
 	)
 	if !isRemoteError(err, iwire.ErrReadOnly) {
 		t.Fatalf("InsertBatch err=%v want read-only", err)
+	}
+	for _, secret := range []string{"tenant-secret-db", "users", "/srv/private/tenant-secret"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("provider route error exposes %q: %v", secret, err)
+		}
+	}
+	route, ok := ClusterRouteErrorMetadataOf(err)
+	if !ok || route.Class != "route_provider_rejected" ||
+		route.Database != "" || route.Catalog != "" || route.Collection != "" {
+		t.Fatalf("provider route metadata=%+v ok=%v want redacted route_provider_rejected", route, ok)
 	}
 	if routes := submitter.snapshotRoutes(); len(routes) != 1 {
 		t.Fatalf("route calls=%d want 1", len(routes))
@@ -948,6 +958,7 @@ func TestClusterRoutePreflightRejectsMissingPlacementMode(t *testing.T) {
 		target: ClusterRouteTarget{
 			GroupID: "group-a",
 			Members: []string{"node-a", "node-b"},
+			Reason:  "tenant-secret-db/users stored at /srv/private/tenant-secret",
 		},
 	}
 	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
@@ -963,6 +974,11 @@ func TestClusterRoutePreflightRejectsMissingPlacementMode(t *testing.T) {
 	)
 	if !isRemoteError(err, iwire.ErrReadOnly) {
 		t.Fatalf("InsertBatch err=%v want read-only", err)
+	}
+	for _, secret := range []string{"tenant-secret-db", "users", "/srv/private/tenant-secret"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("target reason exposes %q: %v", secret, err)
+		}
 	}
 	if routes := submitter.snapshotRoutes(); len(routes) != 1 {
 		t.Fatalf("route calls=%d want 1", len(routes))

@@ -911,7 +911,7 @@ func TestClusterRoutePreflightMongoUsesNamespaceBeforeGatewayName(t *testing.T) 
 func TestClusterRoutePreflightMongoRejectsBeforeSubmitter(t *testing.T) {
 	submitter := &mongoRoutingClusterSubmitter{
 		mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{},
-		err:                       errors.New("token placement requires explicit token"),
+		err:                       errors.New("tenant-secret-db/users stored at /srv/private/tenant-secret"),
 	}
 	server := NewServer()
 	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
@@ -924,9 +924,18 @@ func TestClusterRoutePreflightMongoRejectsBeforeSubmitter(t *testing.T) {
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, response, "NotWritablePrimary")
-	assertErrmsgContains(t, response, "token placement requires explicit token")
+	assertErrmsgContains(t, response, "Mongo gateway cluster route rejected")
 	assertBool(t, response, "treedbClusterError", true)
-	assertStringField(t, response, "treedbErrorClass", "route_rejected")
+	assertStringField(t, response, "treedbErrorClass", "route_provider_rejected")
+	errmsg, ok := bson.Raw(response).Lookup("errmsg").StringValueOK()
+	if !ok {
+		t.Fatalf("errmsg missing or non-string: %+v", response)
+	}
+	for _, secret := range []string{"tenant-secret-db", "users", "/srv/private/tenant-secret"} {
+		if strings.Contains(errmsg, secret) {
+			t.Fatalf("provider route error exposes %q: %+v", secret, response)
+		}
+	}
 	if routes := submitter.snapshotRoutes(); len(routes) != 1 {
 		t.Fatalf("route calls=%d want 1", len(routes))
 	}

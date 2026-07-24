@@ -29,8 +29,8 @@ type ProductionRouteProofOptions struct {
 	RemoteOwnerExecution bool
 }
 
-// ProductionRouteProofSnapshot is the bench-facing counter snapshot proving
-// that routed submit/apply went through the production cluster submitter path.
+// ProductionRouteProofSnapshot is a legacy internal-scaffold counter snapshot.
+// It is not evidence that the current public token/ring path can route writes.
 type ProductionRouteProofSnapshot struct {
 	RealRoutedCommits        bool
 	RouteAttemptsTotal       int64
@@ -48,8 +48,8 @@ type ProductionRouteProofSnapshot struct {
 	DirectLocalBypassRejects int64
 }
 
-// ProductionRouteProofHarness owns the production-route proof submitters and
-// route counters used by mongo_gateway_bench correctness evidence.
+// ProductionRouteProofHarness owns the internal route-topology scaffold and
+// counters used by mongo_gateway_bench fail-closed policy checks.
 type ProductionRouteProofHarness struct {
 	fsm        *raftfsm.FSM
 	fsms       []*raftfsm.FSM
@@ -57,11 +57,11 @@ type ProductionRouteProofHarness struct {
 	dispatcher *raftcluster.GroupRoutedSubmitter
 }
 
-// ConfigureProductionRouteProofHarness wires server.ClusterSubmitter to a
-// routed dispatcher with a local group and, when opted in, registered
-// in-process remote groups. The commit sources are deterministic and
-// in-process, so this is correctness/instrumentation proof for the gateway
-// route boundary, not a multi-node scaleout benchmark.
+// ConfigureProductionRouteProofHarness wires server.ClusterSubmitter to an
+// internal routed dispatcher with a local group and, when opted in, registered
+// in-process remote groups. Public token/ring mutations reject before this
+// scaffold can provide enabled-path evidence; it is not a multi-node scaleout
+// benchmark.
 func ConfigureProductionRouteProofHarness(opts ProductionRouteProofOptions, db *backenddb.DB, manager *collections.CollectionManager, server *mongogateway.Server) (*ProductionRouteProofHarness, error) {
 	if server == nil {
 		return nil, errors.New("production route proof harness requires Mongo gateway server")
