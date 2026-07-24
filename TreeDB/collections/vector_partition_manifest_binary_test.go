@@ -86,7 +86,7 @@ func parseVPMBinaryLayout(t testing.TB, raw []byte) vpmBinaryLayout {
 	if got := c.u32(); got != vectorPartitionManifestMagicV1 {
 		t.Fatalf("binary fixture magic=%#x", got)
 	}
-	if got := c.u32(); got != 2 {
+	if got := c.u32(); got != 3 {
 		t.Fatalf("binary fixture version=%d", got)
 	}
 	var layout vpmBinaryLayout
@@ -156,6 +156,7 @@ func (c *vpmBinaryLayoutCursor) columnRef() vpmBinaryColumnRef {
 func (c *vpmBinaryLayoutCursor) asset() vpmBinaryAssetItem {
 	start := c.off
 	partitionOffset := c.take(4).start
+	_ = c.str()
 	_ = c.str()
 	_ = c.str()
 	c.take(8)
@@ -304,7 +305,7 @@ func TestVectorPartitionManifestV1RouterAssetFramingIsExactlyOne(t *testing.T) {
 
 func TestVectorPartitionManifestV1BinaryMutationAndResealMatrix(t *testing.T) {
 	base := testVectorPartitionManifestV1()
-	base.OverlapMemberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 0, PartitionID: 1}}
+	base.OverlapMemberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 1}, {VectorOrdinal: 1, PartitionID: 0}}
 	base.Canonicalize()
 	productionRaw, err := EncodeVectorPartitionManifestV1(base)
 	if err != nil {

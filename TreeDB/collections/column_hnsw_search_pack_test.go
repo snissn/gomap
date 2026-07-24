@@ -71,7 +71,7 @@ func TestColumnHNSWSearchPackDecodeRejectsCorruptEnvelope2312(t *testing.T) {
 		},
 		{
 			name: "bad_version",
-			raw:  testColumnHNSWSearchPackPatchU16Header2312(raw, columnHNSWSearchPackHeaderVersionOffset, columnHNSWSearchPackVersionV1+1),
+			raw:  testColumnHNSWSearchPackPatchU16Header2312(raw, columnHNSWSearchPackHeaderVersionOffset, columnHNSWSearchPackVersionV2+1),
 			want: "unsupported hnsw_search_pack_v1 version",
 		},
 		{

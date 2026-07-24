@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
 	"os"
@@ -144,6 +145,120 @@ func TestPartitionStageWritesValidatedDeterministicArtifact(t *testing.T) {
 	}
 	if report.ArtifactSHA256 != again.ArtifactSHA256 {
 		t.Fatalf("digest changed: %s %s", report.ArtifactSHA256, again.ArtifactSHA256)
+	}
+}
+
+func TestM3OverlapPartitionIndexBuildsReopensAndSearchesNativePacks(t *testing.T) {
+	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
+		t.Skip("durable M1 lifecycle publication is unsupported; native pack codec coverage remains platform-neutral in TreeDB/collections")
+	}
+	dataset := writeFixtureForTest(t, 64, 8, 8)
+	out := t.TempDir()
+	args := []string{
+		"-dataset", dataset,
+		"-out", out,
+		"-partitions", "4",
+		"-probes", "1",
+		"-overlap", "0,0.20",
+		"-top-k", "4",
+		"-stage", "overlap,partition_index",
+		"-partition-repetitions", "1",
+		"-partition-pivots", "2",
+		"-partition-max-leaf-bucket", "8",
+		"-partition-degree", "4",
+	}
+	var stdout bytes.Buffer
+	if err := runWithHermeticProvenance(t, args, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	var report m3PartitionIndexReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.ResultKind != "m3_native_partition_hnsw_evidence" || len(report.Rows) != 2 || !strings.HasPrefix(report.ReplicationGate, "passed:") {
+		t.Fatalf("report=%+v", report)
+	}
+	for _, row := range report.Rows {
+		if row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PackBytes == 0 || row.LocalSearches != 8*4 || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 || row.ExactLocalRecallAtK <= 0 || row.EdgesPerOp <= 0 {
+			t.Fatalf("M3 row=%+v", row)
+		}
+	}
+	entries, err := os.ReadDir(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("M3 artifacts=%d want M2 artifact, M2 report, M3 report", len(entries))
+	}
+}
+
+func TestM3PartitionIndexFailsBeforePartialEvidenceWithoutNamespacePersistence(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "evidence")
+	args := []string{
+		"-dataset", "must-not-be-read",
+		"-out", out,
+		"-partitions", "4",
+		"-probes", "1",
+		"-overlap", "0,0.20",
+		"-top-k", "4",
+		"-stage", "overlap,partition_index",
+	}
+	var stdout bytes.Buffer
+	err := runWithRuntimeCapabilities(args, &stdout, benchmarkRuntimeCapabilities{})
+	if !errors.Is(err, collections.ErrVectorPartitionNamespacePersistenceUnsupportedV1) {
+		t.Fatalf("unsupported M3 stage err=%v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("unsupported M3 stage emitted stdout: %q", stdout.String())
+	}
+	if _, statErr := os.Stat(out); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("unsupported M3 stage created partial evidence directory: %v", statErr)
+	}
+}
+
+func TestM3PartitionAssetFileIDBounds(t *testing.T) {
+	if got, err := m3PartitionAssetFileID(1); err != nil || got != 40_001 {
+		t.Fatalf("first M3 file ID=%d err=%v", got, err)
+	}
+	maxGeneration := uint64(^uint32(0)) - m3PartitionAssetFileIDBase
+	if got, err := m3PartitionAssetFileID(maxGeneration); err != nil || got != ^uint32(0) {
+		t.Fatalf("last M3 file ID=%d err=%v", got, err)
+	}
+	if _, err := m3PartitionAssetFileID(0); err == nil {
+		t.Fatal("zero generation accepted")
+	}
+	if _, err := m3PartitionAssetFileID(maxGeneration + 1); err == nil {
+		t.Fatal("overflowing generation accepted")
+	}
+}
+
+func TestOpenM3PartitionSearchersClosesPartialSuccess(t *testing.T) {
+	openFailure := errors.New("injected partition open failure")
+	var first *collections.VectorPartitionLocalSearcherV1
+	searchers, err := openM3PartitionSearchers(2, func(partition uint32) (*collections.VectorPartitionLocalSearcherV1, error) {
+		if partition == 1 {
+			return nil, openFailure
+		}
+		searcher, openErr := collections.OpenVectorPartitionLocalSearcherV1(collections.VectorPartitionSearchAssetV1{
+			ManifestChecksum: strings.Repeat("c", 64),
+			Generation:       1,
+			PartitionID:      partition,
+			Dimensions:       1,
+			IDs:              []string{"row-0"},
+			Vectors:          [][]float32{{1}},
+			Kinds:            []collections.VectorPartitionMembershipKindV1{collections.VectorPartitionMembershipHomeV1},
+		})
+		first = searcher
+		return searcher, openErr
+	})
+	if !errors.Is(err, openFailure) {
+		t.Fatalf("partial open err=%v", err)
+	}
+	if searchers != nil {
+		t.Fatalf("partial open returned searchers=%v", searchers)
+	}
+	if first == nil || !first.Status().Retired {
+		t.Fatalf("first searcher not closed after partial failure: %+v", first)
 	}
 }
 
@@ -616,6 +731,32 @@ func TestBenchmarkWorkBudgetBoundaryAndCanonicalShape(t *testing.T) {
 	}
 }
 
+func TestM3BenchmarkWorkBudgetBoundary(t *testing.T) {
+	fixture := fixtureManifest{Vectors: 10, Queries: 10}
+	cfg := config{overlaps: []float64{0, .2}}
+	plan, err := validateM3BenchmarkWork(cfg, fixture, 540)
+	if err != nil {
+		t.Fatalf("exact M3 work-budget boundary rejected: %v", err)
+	}
+	if plan.ChecksumVectorQueryVisits != 100 || plan.MembershipVectorQueryVisits != 440 || plan.VectorQueryVisits != 540 {
+		t.Fatalf("M3 boundary work plan=%+v", plan)
+	}
+	if _, err := validateM3BenchmarkWork(cfg, fixture, 539); err == nil {
+		t.Fatal("accepted M3 work plan above exact boundary")
+	}
+	canonical, err := loadFixture(fixturePath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalPlan, err := validateM3BenchmarkWork(cfg, canonical, maxBenchmarkWorkUnits)
+	if err != nil {
+		t.Fatalf("canonical M3 work plan rejected: %v", err)
+	}
+	if canonicalPlan.VectorQueryVisits != 6_912_000 {
+		t.Fatalf("canonical M3 work plan=%+v", canonicalPlan)
+	}
+}
+
 func TestPathologicalBenchmarkWorkRejectsBeforeGenerationOrEvidence(t *testing.T) {
 	dataset := t.TempDir()
 	fixture := fixtureManifest{
@@ -656,6 +797,27 @@ func TestPathologicalBenchmarkWorkRejectsBeforeGenerationOrEvidence(t *testing.T
 	}
 	if len(entries) != 0 {
 		t.Fatalf("rejected work budget emitted evidence: %+v", entries)
+	}
+
+	m3Out := t.TempDir()
+	err = runWithRuntimeCapabilities([]string{
+		"-dataset", dataset,
+		"-out", m3Out,
+		"-partitions", "1",
+		"-probes", "1",
+		"-overlap", "0",
+		"-top-k", "1",
+		"-stage", "overlap,partition_index",
+	}, io.Discard, benchmarkRuntimeCapabilities{vectorPartitionNamespacePersistence: true})
+	if err == nil || !strings.Contains(err.Error(), "modeled M3 benchmark work") {
+		t.Fatalf("pathological M3 work error=%v", err)
+	}
+	entries, readErr = os.ReadDir(m3Out)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("rejected M3 work budget emitted evidence: %+v", entries)
 	}
 }
 
