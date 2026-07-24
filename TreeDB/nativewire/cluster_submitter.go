@@ -52,17 +52,19 @@ type ClusterRouteRequest struct {
 }
 
 type ClusterRouteTarget struct {
-	GroupID         string
-	Members         []string
-	LeaderHint      string
-	PlacementMode   string
-	RouteKey        string
-	Reason          string
-	Shape           ClusterRouteShape
-	TokenKnown      bool
-	Token           uint64
-	PartitionID     string
-	TokenBatchClass string
+	GroupID           string
+	Members           []string
+	LeaderHint        string
+	PlacementMode     string
+	RouteKey          string
+	Reason            string
+	Shape             ClusterRouteShape
+	TokenKnown        bool
+	Token             uint64
+	PartitionID       string
+	TokenBatchClass   string
+	CatalogMetaEpoch  uint64
+	CatalogMetaDigest string
 }
 
 // ClusterAdmissionProvider exposes the node write-admission state backing a
@@ -631,6 +633,8 @@ func applyClusterRouteMetadata(metadata *ClusterRequestMetadata, request Cluster
 	metadata.ClusterRouteTokenKnown = target.TokenKnown
 	metadata.ClusterRouteToken = target.Token
 	metadata.ClusterRoutePartitionID = target.PartitionID
+	metadata.CatalogMetaEpoch = target.CatalogMetaEpoch
+	metadata.CatalogMetaDigest = target.CatalogMetaDigest
 }
 
 func deadlineUnixNanosFromSections(sections []iwire.Section) (int64, error) {

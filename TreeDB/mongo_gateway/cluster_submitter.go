@@ -516,6 +516,8 @@ func (s *Server) submitClusterMutation(ctx context.Context, command iwire.Comman
 		metadata.ClusterRouteTokenKnown = route.TokenKnown
 		metadata.ClusterRouteToken = route.Token
 		metadata.ClusterRoutePartitionID = route.PartitionID
+		metadata.CatalogMetaEpoch = route.CatalogMetaEpoch
+		metadata.CatalogMetaDigest = route.CatalogMetaDigest
 	}
 	if _, err := raftentry.DecodeCommandEntryV1(entry, raftentry.DecodeOptions{RequestMetadata: metadata}); err != nil {
 		return nil, err

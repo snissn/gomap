@@ -276,6 +276,15 @@ func (a *CatalogMetaAuthorityV1) Route(_ context.Context, proof CatalogProofV1, 
 	return a.resolved.Route(request)
 }
 
+func (a *CatalogMetaAuthorityV1) ValidateCatalogMetaProof(_ context.Context, epoch uint64, digest string) error {
+	if a == nil {
+		return ErrCatalogMetaUnavailable
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.admitLocked(CatalogProofV1{Epoch: epoch, Digest: digest})
+}
+
 func (a *CatalogMetaAuthorityV1) admitLocked(proof CatalogProofV1) error {
 	if a.record.Epoch == 0 {
 		return ErrCatalogMetaUnavailable

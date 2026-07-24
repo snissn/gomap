@@ -87,7 +87,12 @@ func (r GroupSubmitterRegistryV1) empty() bool {
 // GroupRoutedSubmitterOptions configures an in-process dispatcher over local
 // group submitters.
 type GroupRoutedSubmitterOptions struct {
-	Registry GroupSubmitterRegistryV1
+	Registry              GroupSubmitterRegistryV1
+	CatalogProofValidator CatalogProofValidatorV1
+}
+
+type CatalogProofValidatorV1 interface {
+	ValidateCatalogMetaProof(context.Context, uint64, string) error
 }
 
 // GroupRoutedSubmitter dispatches collection and single-token routed writes to
@@ -95,14 +100,15 @@ type GroupRoutedSubmitterOptions struct {
 // fanout-required route metadata is rejected before any group submitter sees
 // the entry.
 type GroupRoutedSubmitter struct {
-	registry GroupSubmitterRegistryV1
+	registry              GroupSubmitterRegistryV1
+	catalogProofValidator CatalogProofValidatorV1
 }
 
 func NewGroupRoutedSubmitter(opts GroupRoutedSubmitterOptions) (*GroupRoutedSubmitter, error) {
 	if opts.Registry.empty() {
 		return nil, errors.Join(ErrInvalidSubmitter, fmt.Errorf("group submitter registry is required"))
 	}
-	return &GroupRoutedSubmitter{registry: opts.Registry}, nil
+	return &GroupRoutedSubmitter{registry: opts.Registry, catalogProofValidator: opts.CatalogProofValidator}, nil
 }
 
 func (s *GroupRoutedSubmitter) SubmitCommandEntryV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1) (SubmitResultV1, error) {
@@ -112,6 +118,11 @@ func (s *GroupRoutedSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	target, err := routeDispatchTargetFromMetadata(metadata)
 	if err != nil {
 		return SubmitResultV1{}, err
+	}
+	if s.catalogProofValidator != nil {
+		if err := s.catalogProofValidator.ValidateCatalogMetaProof(ctx, metadata.CatalogMetaEpoch, metadata.CatalogMetaDigest); err != nil {
+			return SubmitResultV1{}, err
+		}
 	}
 	submitter, ok := s.registry.Lookup(target.GroupID)
 	if !ok {

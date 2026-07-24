@@ -53,7 +53,9 @@ func (p CatalogMetaClusterRouteProvider) ClusterRoute(ctx context.Context, reque
 		if err != nil {
 			return ClusterRouteTarget{}, err
 		}
-		return clusterRouteTargetFromCatalogDecision(decision), nil
+		target := clusterRouteTargetFromCatalogDecision(decision)
+		target.CatalogMetaEpoch, target.CatalogMetaDigest = proof.Epoch, proof.Digest
+		return target, nil
 	case ClusterRouteShapeToken:
 		if !request.TokenKnown {
 			return ClusterRouteTarget{}, errors.Join(raftplacement.ErrInvalidRouteRequest, raftplacement.ErrMissingRouteToken)
@@ -62,7 +64,9 @@ func (p CatalogMetaClusterRouteProvider) ClusterRoute(ctx context.Context, reque
 		if err != nil {
 			return ClusterRouteTarget{}, err
 		}
-		return clusterRouteTargetFromCatalogDecision(decision), nil
+		target := clusterRouteTargetFromCatalogDecision(decision)
+		target.CatalogMetaEpoch, target.CatalogMetaDigest = proof.Epoch, proof.Digest
+		return target, nil
 	default:
 		return ClusterRouteTarget{}, errors.Join(raftplacement.ErrInvalidRouteRequest, raftplacement.ErrUnsupportedRouteShape)
 	}
