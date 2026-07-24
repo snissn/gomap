@@ -30,6 +30,9 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(index string,
 	if c == nil || c.db == nil || generation == 0 || len(inputs) == 0 {
 		return nil, nil, ErrVectorPartitionSearchUnavailable
 	}
+	if index == "" || index != manifest.IndexName {
+		return nil, nil, fmt.Errorf("%w: index/manifest mismatch", ErrVectorPartitionSearchUnavailable)
+	}
 	cfg := c.meta.Options.ColumnStore
 	if cfg == nil || cfg.AssetManager == nil {
 		return nil, nil, fmt.Errorf("%w: column asset manager", ErrVectorPartitionSearchUnavailable)
@@ -37,6 +40,9 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(index string,
 	def, ok := findVectorIndex(c.meta.VectorIndexes, index)
 	if !ok || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 {
 		return nil, nil, fmt.Errorf("%w: native FP32 cosine index", ErrVectorPartitionSearchUnavailable)
+	}
+	if manifest.IndexDefinitionDigest != VectorIndexDefinitionDigestV1(def) {
+		return nil, nil, fmt.Errorf("%w: index definition digest", ErrVectorPartitionSearchUnavailable)
 	}
 	items := make([]StableColumnPhysicalAssetAppend, len(inputs))
 	for i, in := range inputs {
@@ -76,6 +82,9 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(index string,
 	for i := range inputs {
 		sum := sha256.Sum256(items[i].Payload)
 		out[i] = VectorPartitionAssetV1{ID: vectorPartitionLocalAssetIDV1(inputs[i].PartitionID), PartitionID: inputs[i].PartitionID, Checksum: hex.EncodeToString(sum[:]), Bytes: uint64(len(items[i].Payload)), Ref: refs[i]}
+		if out[i].Ref.PartID != uint64(inputs[i].PartitionID)+1 {
+			return nil, nil, fmt.Errorf("%w: partition ref", ErrVectorPartitionSearchUnavailable)
+		}
 	}
 	return out, resources, nil
 }
@@ -267,6 +276,10 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index strin
 	if err != nil {
 		return nil, err
 	}
+	def, ok := findVectorIndex(c.meta.VectorIndexes, index)
+	if !ok || m.IndexName != index || m.IndexDefinitionDigest != VectorIndexDefinitionDigestV1(def) || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 {
+		return nil, fmt.Errorf("%w: stale index definition", ErrVectorPartitionSearchUnavailable)
+	}
 	var asset *VectorPartitionAssetV1
 	for i := range m.Assets {
 		if m.Assets[i].PartitionID == partition && m.Assets[i].ID == vectorPartitionLocalAssetIDV1(partition) {
@@ -274,7 +287,7 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index strin
 			break
 		}
 	}
-	if asset == nil || asset.Ref.Kind != ColumnAssetKindTCS1HNSWSearchPack || asset.Ref.Generation != generation || asset.Ref.Length > vectorPartitionSearchAssetMaxBytesV1 || asset.Ref.Length <= 0 {
+	if asset == nil || asset.Ref.Kind != ColumnAssetKindTCS1HNSWSearchPack || asset.Ref.Generation != generation || asset.Ref.PartID != uint64(partition)+1 || asset.Ref.Length > vectorPartitionSearchAssetMaxBytesV1 || asset.Ref.Length <= 0 {
 		return nil, fmt.Errorf("%w: missing or stale partition asset", ErrVectorPartitionSearchUnavailable)
 	}
 	namespace := c.meta.Options.ColumnStore.AssetManager.Namespace
@@ -299,11 +312,22 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index strin
 		_ = h.Release()
 		return nil, fmt.Errorf("%w: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
-	if view.Header.Dimensions <= 0 {
+	if view.Header.Dimensions != def.Dimensions || view.Header.M != def.M || view.Header.EfConstruction != def.EfConstruction || view.Header.EfSearch != def.EfSearch {
 		_ = view.Close()
 		return nil, ErrVectorPartitionSearchUnavailable
 	}
-	s := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Generation: generation, PartitionID: partition, Dimensions: view.Header.Dimensions}, prepared: view, opened: 1}
+	home, overlap := 0, 0
+	for _, x := range m.Memberships {
+		if x.PartitionID == partition {
+			home++
+		}
+	}
+	for _, x := range m.OverlapMemberships {
+		if x.PartitionID == partition {
+			overlap++
+		}
+	}
+	s := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Generation: generation, PartitionID: partition, Dimensions: view.Header.Dimensions}, prepared: view, opened: 1, homeMemberships: home, overlapMemberships: overlap, packBytes: uint64(asset.Ref.Length), heapBytes: view.heapCopyBytes}
 	s.partitionPin = pin
 	release = false
 	return s, nil

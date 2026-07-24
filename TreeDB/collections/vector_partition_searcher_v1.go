@@ -56,17 +56,19 @@ type VectorPartitionSearchStatusV1 struct {
 }
 
 type VectorPartitionLocalSearcherV1 struct {
-	mu                         sync.Mutex
-	asset                      VectorPartitionSearchAssetV1
-	norms                      []float32
-	digest                     string
-	pins                       uint64
-	retired                    bool
-	opened, searches, failures uint64
-	partitionPin               *VectorPartitionReaderPinV1
-	closing                    bool
-	persistentPinReleased      bool
-	prepared                   *columnHNSWSearchPackPreparedView
+	mu                                  sync.Mutex
+	asset                               VectorPartitionSearchAssetV1
+	norms                               []float32
+	digest                              string
+	pins                                uint64
+	retired                             bool
+	opened, searches, failures          uint64
+	partitionPin                        *VectorPartitionReaderPinV1
+	closing                             bool
+	persistentPinReleased               bool
+	prepared                            *columnHNSWSearchPackPreparedView
+	homeMemberships, overlapMemberships int
+	packBytes, heapBytes                uint64
 }
 
 // Close releases the M1 generation pin held by a persistent opener. It is
@@ -299,7 +301,10 @@ func (s *VectorPartitionLocalSearcherV1) Status() VectorPartitionSearchStatusV1 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st := VectorPartitionSearchStatusV1{Generation: s.asset.Generation, PartitionID: s.asset.PartitionID, ActivePins: s.pins, Opened: s.opened, Searches: s.searches, Failures: s.failures, Retired: s.retired}
+	st := VectorPartitionSearchStatusV1{Generation: s.asset.Generation, PartitionID: s.asset.PartitionID, ActivePins: s.pins, Opened: s.opened, Searches: s.searches, Failures: s.failures, Retired: s.retired, HomeMemberships: s.homeMemberships, OverlapMemberships: s.overlapMemberships, PackBytes: s.packBytes, HeapBytes: s.heapBytes}
+	if s.prepared != nil {
+		return st
+	}
 	for i, k := range s.asset.Kinds {
 		if k == VectorPartitionMembershipHomeV1 {
 			st.HomeMemberships++
