@@ -290,6 +290,18 @@ func TestReduceVectorPartitionLifecycleChainV1MultiGenerationAuthority(t *testin
 			t.Fatalf("g2 deactivate=%+v", state)
 		}
 	}
+	staleActivation := append([]vectorPartitionLifecycleRecordV1(nil), chain[:6]...)
+	staleActivation = append(staleActivation, lifecycleRecordV1(
+		t,
+		7,
+		chain[5].Digest,
+		vectorPartitionLifecycleLocalActivateV1,
+		ready.Generation,
+		nil,
+	))
+	if _, err := reduceVectorPartitionLifecycleChainV1(staleActivation); err == nil {
+		t.Fatal("stale ready generation reactivated after a newer generation")
+	}
 	// A retained completed generation cannot be revived by a later BUILD.
 	bad := append([]vectorPartitionLifecycleRecordV1(nil), chain...)
 	appendRecord(&bad, vectorPartitionLifecycleBuildV1, build.Generation, buildRaw)

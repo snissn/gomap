@@ -429,7 +429,15 @@ func reduceVectorPartitionLifecycleRecordV1(state *vectorPartitionLifecycleState
 		state.Generations[r.Generation] = generation
 	case vectorPartitionLifecycleLocalActivateV1:
 		generation, present := state.Generations[r.Generation]
-		if !present || generation.Manifest == nil || generation.Manifest.State != "ready" || generation.Deleting || state.ActiveGeneration == r.Generation {
+		activationHighWater := state.ActiveGeneration
+		if state.RetiredGeneration > activationHighWater {
+			activationHighWater = state.RetiredGeneration
+		}
+		if !present ||
+			generation.Manifest == nil ||
+			generation.Manifest.State != "ready" ||
+			generation.Deleting ||
+			r.Generation <= activationHighWater {
 			return fmt.Errorf("%w: activate transition", ErrVectorPartitionManifestInvalid)
 		}
 		if state.ActiveGeneration != 0 {

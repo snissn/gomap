@@ -316,6 +316,37 @@ func TestVectorPartitionLifecycleCheckpointV1RejectsInvalidState(t *testing.T) {
 		}
 	})
 
+	t.Run("active-below-retired", func(t *testing.T) {
+		chain := lifecycleLegalChainV1(t)
+		_, build := lifecycleManifestPayloadV1(t, "building")
+		_, ready := lifecycleManifestPayloadV1(t, "ready")
+		secondReady := cloneVectorPartitionManifestForCheckpointV1(ready)
+		secondReady.Generation++
+		secondReady.RouterGeneration++
+		secondReady.Canonicalize()
+		secondBuild := cloneVectorPartitionManifestForCheckpointV1(secondReady)
+		secondBuild.State = "building"
+		secondBuild.RouterGeneration = 0
+		secondBuild.RouterAsset = VectorPartitionAssetV1{}
+		secondBuild.ReadySetDigest = ""
+		secondBuild.Canonicalize()
+		secondBuildRaw, err := EncodeVectorPartitionManifestV1(secondBuild)
+		if err != nil {
+			t.Fatal(err)
+		}
+		secondReadyPayload := lifecycleReadyPromotionPayloadV1(t, secondBuild, secondReady)
+		chain = chain[:3]
+		chain = append(chain, lifecycleRecordV1(t, 4, chain[2].Digest, vectorPartitionLifecycleBuildV1, secondBuild.Generation, secondBuildRaw))
+		chain = append(chain, lifecycleRecordV1(t, 5, chain[3].Digest, vectorPartitionLifecycleReadyV1, secondReady.Generation, secondReadyPayload))
+		chain = append(chain, lifecycleRecordV1(t, 6, chain[4].Digest, vectorPartitionLifecycleLocalActivateV1, secondReady.Generation, nil))
+		candidate := lifecycleCheckpointV1(t, chain, 7)
+		candidate.State.ActiveGeneration = build.Generation
+		candidate.State.RetiredGeneration = secondReady.Generation
+		if _, err := encodeVectorPartitionLifecycleCheckpointCanonicalV1(candidate); err == nil {
+			t.Fatal("accepted checkpoint whose active generation is below its retired generation")
+		}
+	})
+
 	t.Run("active-deleting", func(t *testing.T) {
 		candidate := base
 		candidate.State.Generations = make(map[uint64]vectorPartitionLifecycleGenerationStateV1, len(base.State.Generations))

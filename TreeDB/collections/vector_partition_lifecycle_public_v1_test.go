@@ -156,6 +156,51 @@ func TestVectorPartitionLifecyclePublicV1ReadyActivationRetry(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionLifecyclePublicV1ReadyRetryCannotReactivateRetiredGeneration(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	store, err := OpenVectorPartitionStoreV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := testVectorPartitionManifestV1()
+	if err := store.publishValidatedReady(first); err != nil {
+		t.Fatal(err)
+	}
+	second := cloneVectorPartitionManifestForCheckpointV1(first)
+	second.Generation++
+	second.RouterGeneration++
+	second.Canonicalize()
+	if err := store.publishValidatedReady(second); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.publishValidatedReady(first); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		t.Fatalf("stale ready retry err=%v, want invalid lifecycle transition", err)
+	}
+	active, err := store.OpenActive(first.Collection, first.IndexName)
+	if err != nil || active.Generation != second.Generation {
+		t.Fatalf("active after stale retry=%+v err=%v, want generation %d", active, err, second.Generation)
+	}
+	retired, err := store.OpenRetired(first.Collection, first.IndexName)
+	if err != nil || retired.Generation != first.Generation {
+		t.Fatalf("retired after stale retry=%+v err=%v, want generation %d", retired, err, first.Generation)
+	}
+
+	if err := store.deactivateLocked(second.Collection, second.IndexName); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.publishValidatedReady(second); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		t.Fatalf("deactivated ready retry err=%v, want invalid lifecycle transition", err)
+	}
+	if _, err := store.OpenActive(second.Collection, second.IndexName); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deactivated generation reactivated by retry: %v", err)
+	}
+	retired, err = store.OpenRetired(second.Collection, second.IndexName)
+	if err != nil || retired.Generation != second.Generation {
+		t.Fatalf("retired after deactivated retry=%+v err=%v, want generation %d", retired, err, second.Generation)
+	}
+}
+
 func TestVectorPartitionLifecyclePublicV1RejectsConflictsAndLegacyAuthority(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())

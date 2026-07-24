@@ -55,7 +55,9 @@ func canonicalVectorPartitionLifecycleCheckpointV1(input vectorPartitionLifecycl
 		state.LastSequence == 0 || vectorPartitionLifecycleZeroDigestV1(state.LastDigest) ||
 		state.GenerationHighWater == 0 ||
 		len(state.Generations) > vectorPartitionLifecycleCheckpointMaxLiveV1 ||
-		(state.ActiveGeneration != 0 && state.ActiveGeneration == state.RetiredGeneration) {
+		(state.ActiveGeneration != 0 &&
+			state.RetiredGeneration != 0 &&
+			state.ActiveGeneration <= state.RetiredGeneration) {
 		return zero, nil, fmt.Errorf("%w: lifecycle checkpoint identity or bounds", ErrVectorPartitionManifestInvalid)
 	}
 

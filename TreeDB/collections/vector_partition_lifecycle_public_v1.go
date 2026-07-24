@@ -163,6 +163,21 @@ func (s *VectorPartitionStoreV1) persistVectorPartitionManifestLifecycleV1(m Vec
 		} else if entry.Manifest.State != "ready" || !vectorPartitionManifestCanonicalEqualV1(*entry.Manifest, m) {
 			return fmt.Errorf("%w: generation %d already published with different bytes", ErrVectorPartitionManifestInvalid, m.Generation)
 		}
+		if loaded.state.ActiveGeneration == m.Generation {
+			return nil
+		}
+		activationHighWater := loaded.state.ActiveGeneration
+		if loaded.state.RetiredGeneration > activationHighWater {
+			activationHighWater = loaded.state.RetiredGeneration
+		}
+		if m.Generation <= activationHighWater {
+			return fmt.Errorf(
+				"%w: generation %d cannot reactivate after generation %d reached lifecycle authority",
+				ErrVectorPartitionManifestInvalid,
+				m.Generation,
+				activationHighWater,
+			)
+		}
 		return s.persistVectorPartitionLifecycleOperationV1(
 			m.Collection,
 			m.IndexName,
