@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	m3ReportSchemaVersion = 2
+	m3ReportSchemaVersion = 3
 	m3BenchmarkCollection = "m3_partition_source"
 	m3WarmupPasses        = 1
 	// m3PartitionAssetFileIDBase reserves a benchmark-owned column-asset
@@ -72,6 +72,7 @@ type m3PartitionIndexRow struct {
 	FinalDerivedPhysicalBytes    int64   `json:"final_derived_physical_bytes"`
 	PhysicalBytesPerSourceVector float64 `json:"physical_bytes_per_source_vector"`
 	PackBytes                    uint64  `json:"pack_payload_bytes"`
+	PartitionHNSWM               int     `json:"partition_hnsw_m"`
 	MappedBytes                  uint64  `json:"mapped_bytes"`
 	HeapBytes                    uint64  `json:"heap_bytes"`
 	SearcherOpenWallNanos        int64   `json:"searcher_open_wall_nanos"`
@@ -227,6 +228,20 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 	}()
 	manager := collections.NewCollectionManager(db)
 	meta := partitionCollectionMeta(m3BenchmarkCollection, len(vectors[0]))
+	if cfg.partition.Degree < 2 {
+		return m3PartitionIndexRow{}, errors.New("M3 persistent HNSW degree must be at least 2")
+	}
+	foundIndex := false
+	for i := range meta.VectorIndexes {
+		if meta.VectorIndexes[i].Name == partitionHNSWIndex {
+			meta.VectorIndexes[i].M = cfg.partition.Degree
+			foundIndex = true
+			break
+		}
+	}
+	if !foundIndex {
+		return m3PartitionIndexRow{}, errors.New("M3 persistent HNSW index definition missing")
+	}
 	if _, err := manager.CreateCollection(meta); err != nil {
 		return m3PartitionIndexRow{}, err
 	}
@@ -343,7 +358,7 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 			Config:         vectorpartition.DefaultRouterConfigV1(),
 			AssetFileID:    routerFileID,
 			AssetPartID:    uint64(manifest.PartitionCount) + 1,
-			M:              partitionHNSWDegree,
+			M:              cfg.partition.Degree,
 			EfConstruction: 128,
 			EfSearch:       128,
 		},
@@ -516,6 +531,7 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 		FinalDerivedPhysicalBytes:    finalDerivedPhysicalBytes,
 		PhysicalBytesPerSourceVector: float64(finalDerivedPhysicalBytes) / float64(len(vectors)),
 		PackBytes:                    packBytes,
+		PartitionHNSWM:               cfg.partition.Degree,
 		MappedBytes:                  mappedBytes,
 		HeapBytes:                    heapBytes,
 		SearcherOpenWallNanos:        openWall,
@@ -815,7 +831,7 @@ func validateM3PartitionIndexReport(report m3PartitionIndexReport) error {
 		return errors.New("invalid M3 report identity")
 	}
 	for _, row := range report.Rows {
-		if row.Budget < 0 || row.Used < 0 || row.Unspent != row.Budget-row.Used || row.Capacity < 1 || row.ReplicationFactor < 1 || row.EdgeCutAfter > row.EdgeCutBefore || row.BuildWallNanos <= 0 || row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes <= 0 || row.PackBytes == 0 || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PhysicalBytesPerSourceVector <= 0 || row.SearcherOpenWallNanos <= 0 || row.PackOpenNanos == 0 || row.LocalSearches <= 0 || row.WarmNSPerOp <= 0 || row.WarmQPS <= 0 || row.CandidatesPerOp <= 0 || row.ExactLocalRecallAtK < 0 || row.ExactLocalRecallAtK > 1 || row.ManifestDigest == "" || row.SourceRows != uint64(report.Dataset.Vectors) || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 {
+		if row.Budget < 0 || row.Used < 0 || row.Unspent != row.Budget-row.Used || row.Capacity < 1 || row.ReplicationFactor < 1 || row.EdgeCutAfter > row.EdgeCutBefore || row.BuildWallNanos <= 0 || row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes <= 0 || row.PackBytes == 0 || row.PartitionHNSWM < 2 || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PhysicalBytesPerSourceVector <= 0 || row.SearcherOpenWallNanos <= 0 || row.PackOpenNanos == 0 || row.LocalSearches <= 0 || row.WarmNSPerOp <= 0 || row.WarmQPS <= 0 || row.CandidatesPerOp <= 0 || row.ExactLocalRecallAtK < 0 || row.ExactLocalRecallAtK > 1 || row.ManifestDigest == "" || row.SourceRows != uint64(report.Dataset.Vectors) || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 {
 			return fmt.Errorf("invalid M3 evidence row: %+v", row)
 		}
 		for _, value := range []float64{row.Ratio, row.ReplicationFactor, row.PhysicalBytesPerSourceVector, row.WarmNSPerOp, row.WarmQPS, row.WarmBytesPerOp, row.WarmAllocsPerOp, row.CandidatesPerOp, row.EdgesPerOp, row.ExactLocalRecallAtK} {

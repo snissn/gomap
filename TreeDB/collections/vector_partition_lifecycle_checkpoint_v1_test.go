@@ -345,6 +345,7 @@ func TestVectorPartitionLifecycleCheckpointV1RejectsInvalidState(t *testing.T) {
 		secondReady := cloneVectorPartitionManifestForCheckpointV1(ready)
 		secondReady.Generation++
 		secondReady.RouterGeneration++
+		secondReady.RouterAsset.Ref.Generation = secondReady.Generation
 		secondReady.Canonicalize()
 		secondBuild := cloneVectorPartitionManifestForCheckpointV1(secondReady)
 		secondBuild.State = "building"

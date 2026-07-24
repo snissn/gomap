@@ -70,7 +70,7 @@ func TestShouldRefreshVectorPartitionReclaimGCPlanV1(t *testing.T) {
 	}
 }
 
-func appendVectorPartitionStableAssetsV1(t testing.TB, d *backenddb.DB, col *Collection, fileID uint32) ([]ColumnAssetRef, *rootpublication.StableResourceSet) {
+func appendVectorPartitionStableAssetsV1(t testing.TB, d *backenddb.DB, col *Collection, fileID uint32, generation uint64) ([]ColumnAssetRef, *rootpublication.StableResourceSet) {
 	t.Helper()
 	lease, err := d.AcquireStableResourceCaptureLease()
 	if err != nil {
@@ -79,9 +79,9 @@ func appendVectorPartitionStableAssetsV1(t testing.TB, d *backenddb.DB, col *Col
 	defer lease.Release()
 	cfg := *col.meta.Options.ColumnStore
 	refs, resources, err := AppendColumnPhysicalAssetsWithStableResources(d.ColumnAssetRootDir(), cfg, fileID, []StableColumnPhysicalAssetAppend{
-		{Payload: []byte("partition-0"), Kind: ColumnAssetKindTCS1PartImage, Generation: 701, PartID: 1},
-		{Payload: []byte("partition-1"), Kind: ColumnAssetKindTCS1PartImage, Generation: 702, PartID: 2},
-		{Payload: []byte("router"), Kind: ColumnAssetKindTCS1PartImage, Generation: 703, PartID: 3},
+		{Payload: []byte("partition-0"), Kind: ColumnAssetKindTCS1PartImage, Generation: generation, PartID: 1},
+		{Payload: []byte("partition-1"), Kind: ColumnAssetKindTCS1PartImage, Generation: generation, PartID: 2},
+		{Payload: []byte("router"), Kind: ColumnAssetKindTCS1PartImage, Generation: generation, PartID: 3},
 	}, d.StableResourceIdentityPinRegistry(), lease)
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +95,7 @@ func appendVectorPartitionStableAssetsV1(t testing.TB, d *backenddb.DB, col *Col
 // referenced assets.
 func vectorPartitionManifestWithFreshStableAssetsV1(t testing.TB, d *backenddb.DB, col *Collection, base VectorPartitionManifestV1, fileID uint32) (VectorPartitionManifestV1, *rootpublication.StableResourceSet) {
 	t.Helper()
-	refs, resources := appendVectorPartitionStableAssetsV1(t, d, col, fileID)
+	refs, resources := appendVectorPartitionStableAssetsV1(t, d, col, fileID, base.Generation)
 	for i := range base.Assets {
 		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[i])
 		if err != nil {
@@ -135,7 +135,7 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 		t.Fatal("missing typed state asset")
 	}
 	_ = view
-	refs, resources := appendVectorPartitionStableAssetsV1(t, d, col, 701)
+	refs, resources := appendVectorPartitionStableAssetsV1(t, d, col, 701, m.Generation)
 	oldSegment, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), refs[0])
 	if err != nil {
 		t.Fatal(err)
@@ -193,6 +193,25 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	if err != nil || status.ReaderPins != 0 {
 		t.Fatalf("released status=%+v err=%v", status, err)
 	}
+	_, authorityToken, err := col.ActiveVectorPartitionManifestAndAuthorityTokenWithContextV1(t.Context(), def.Name, m.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpointReads := 0
+	restoreLifecycleHook := setVectorPartitionLifecycleStoreHookForTestV1(func(boundary string) error {
+		if boundary == "after_slot_read" {
+			checkpointReads++
+		}
+		return nil
+	})
+	if err := col.ValidateActiveVectorPartitionAuthorityTokenWithContextV1(t.Context(), def.Name, m.Generation, authorityToken); err != nil {
+		restoreLifecycleHook()
+		t.Fatalf("bounded active authority validation: %v", err)
+	}
+	restoreLifecycleHook()
+	if checkpointReads != 0 {
+		t.Fatalf("warm active authority validation reread %d lifecycle slots", checkpointReads)
+	}
 	plan, err := col.PlanColumnAssetReachability(t.Context(), ColumnAssetReachabilityOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -213,6 +232,9 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	}
 	if err := col.DeactivateVectorPartitionV1(m.IndexName); err != nil {
 		t.Fatal(err)
+	}
+	if err := col.ValidateActiveVectorPartitionAuthorityTokenWithContextV1(t.Context(), def.Name, m.Generation, authorityToken); err == nil {
+		t.Fatal("pre-deactivation active authority token survived lifecycle mutation")
 	}
 	pin, err = col.AcquireVectorPartitionReaderPinV1(def.Name, m.Generation)
 	if err != nil {
@@ -1302,6 +1324,7 @@ func TestVectorPartitionStoreV1CleanupRefusesReachableGeneration(t *testing.T) {
 	newer := m
 	newer.Generation = 8
 	newer.RouterGeneration = 8
+	newer.RouterAsset.Ref.Generation = newer.Generation
 	newer.Canonicalize()
 	if err := s.publishLocked(newer); err != nil {
 		t.Fatal(err)
@@ -1371,6 +1394,7 @@ func legacyVectorPartitionStoreV1PublishFaultWindowsReopenOldOrCompleteNew(t *te
 			}
 			candidate := old
 			candidate.Generation, candidate.RouterGeneration = old.Generation+1, old.Generation+1
+			candidate.RouterAsset.Ref.Generation = candidate.Generation
 			candidate.Canonicalize()
 			stop := setVectorPartitionPublishHookForTestV1(func(at string) error {
 				if at == boundary {
@@ -2112,7 +2136,7 @@ func TestCollectionVectorPartitionManifestV1PublicationSharesMutationBarrier(t *
 	m.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
 	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
 	_ = view
-	refs, resources := appendVectorPartitionStableAssetsV1(t, d, col, 711)
+	refs, resources := appendVectorPartitionStableAssetsV1(t, d, col, 711, m.Generation)
 	for i := range m.Assets {
 		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[i])
 		if err != nil {
@@ -2157,7 +2181,7 @@ func TestCollectionVectorPartitionBuildingManifestProtectsAssetsFromGC(t *testin
 	m.State, m.RouterGeneration, m.RouterAsset, m.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
 	m.IndexName, m.IndexDefinitionDigest = def.Name, VectorIndexDefinitionDigestV1(def)
 	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
-	refs, resources := appendVectorPartitionStableAssetsV1(t, d, col, 913)
+	refs, resources := appendVectorPartitionStableAssetsV1(t, d, col, 913, m.Generation)
 	resources.Release() // Building publication has no producer authority transfer.
 	for i := range m.Assets {
 		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[i])
@@ -2385,14 +2409,14 @@ func TestCollectionVectorPartitionBuildingPublicationAndGCLinearize(t *testing.T
 		if err != nil {
 			t.Fatal(err)
 		}
-		refs, resources := appendVectorPartitionStableAssetsV1(t, d, col, fileID)
+		m := testVectorPartitionManifestV1()
+		refs, resources := appendVectorPartitionStableAssetsV1(t, d, col, fileID, m.Generation)
 		resources.Release()
 		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[0])
 		if err != nil {
 			t.Fatal(err)
 		}
 		sum := sha256.Sum256(raw)
-		m := testVectorPartitionManifestV1()
 		m.State, m.RouterGeneration, m.RouterAsset, m.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
 		m.IndexName, m.IndexDefinitionDigest = def.Name, VectorIndexDefinitionDigestV1(def)
 		m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
@@ -2498,7 +2522,7 @@ func TestCollectionVectorPartitionDeleteFencesBuildingRetryEndToEnd(t *testing.T
 	m.State, m.RouterGeneration, m.RouterAsset, m.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
 	m.IndexName, m.IndexDefinitionDigest = def.Name, VectorIndexDefinitionDigestV1(def)
 	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
-	refs, resources := appendVectorPartitionStableAssetsV1(t, d, col, 981)
+	refs, resources := appendVectorPartitionStableAssetsV1(t, d, col, 981, m.Generation)
 	resources.Release() // Building publication has no producer authority transfer.
 	for i := range m.Assets {
 		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[i])
@@ -2819,6 +2843,15 @@ func TestVectorPartitionManifestV1RejectsNonCanonicalRouterPartitionAndDigest(t 
 	}
 }
 
+func TestVectorPartitionManifestV1RejectsRouterAssetFromForeignGeneration(t *testing.T) {
+	m := testVectorPartitionManifestV1()
+	m.RouterAsset.Ref.Generation = m.Generation + 1
+	m.Canonicalize()
+	if err := m.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
+		t.Fatal("router asset from a foreign generation accepted")
+	}
+}
+
 func TestVectorPartitionStoreV1RejectsRawPublicationAuthority(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	s, err := OpenVectorPartitionStoreV1(t.TempDir())
@@ -2840,7 +2873,7 @@ func testVectorPartitionManifestV1() VectorPartitionManifestV1 {
 	h := strings.Repeat("a", 64)
 	b := strings.Repeat("b", 64)
 	ref := func(partID uint64, fileID uint32, bytes int64) ColumnAssetRef {
-		return ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: "test", Generation: 4, PartID: partID, FileID: fileID, Length: bytes}
+		return ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: "test", Generation: 7, PartID: partID, FileID: fileID, Length: bytes}
 	}
 	m := VectorPartitionManifestV1{State: "ready", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: h, SourceGeneration: 4, SourceChecksum: 9, SourceSchemaHash: 11, SourceRowCount: 2, Generation: 7, RouterGeneration: 7, PartitionCount: 2, BalancePolicy: "disjoint_v1", Placements: []VectorPartitionPlacementV1{{0, "raft-a"}, {1, "raft-a"}}, Memberships: []VectorPartitionMembershipV1{{0, 0}, {1, 1}}, Representatives: []VectorPartitionMembershipV1{{0, 0}}, Assets: []VectorPartitionAssetV1{{ID: "partition/0", PartitionID: 0, Checksum: b, Bytes: 12, Ref: ref(1, 1, 12)}, {ID: "partition/1", PartitionID: 1, Checksum: b, Bytes: 13, Ref: ref(2, 2, 13)}}, RouterAsset: VectorPartitionAssetV1{ID: "router", Checksum: b, Bytes: 14, Ref: ref(3, 3, 14)}}
 	m.Canonicalize()
@@ -2926,7 +2959,7 @@ func BenchmarkVectorPartitionStatusV1Warm(b *testing.B) {
 		b.Fatal(err)
 	}
 	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
-	refs, resources := appendVectorPartitionStableAssetsV1(b, d, col, 702)
+	refs, resources := appendVectorPartitionStableAssetsV1(b, d, col, 702, m.Generation)
 	for i := range m.Assets {
 		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[i])
 		if err != nil {

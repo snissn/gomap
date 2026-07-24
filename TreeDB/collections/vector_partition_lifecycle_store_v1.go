@@ -5,6 +5,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -84,6 +85,16 @@ func parseVectorPartitionLifecycleNameV1(collection, index, name string) (uint64
 }
 
 func readVectorPartitionLifecycleSlotV1(dir *os.File, name string, max int) ([]byte, error) {
+	return readVectorPartitionLifecycleSlotWithContextV1(context.Background(), dir, name, max)
+}
+
+func readVectorPartitionLifecycleSlotWithContextV1(ctx context.Context, dir *os.File, name string, max int) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if max < 0 || max > vectorPartitionStoreMaxBytesV1 {
 		return nil, fmt.Errorf("%w: lifecycle slot read limit", ErrVectorPartitionManifestInvalid)
 	}
@@ -99,12 +110,29 @@ func readVectorPartitionLifecycleSlotV1(dir *os.File, name string, max int) ([]b
 	if !info.Mode().IsRegular() || info.Size() < 0 || uint64(info.Size()) > uint64(max) {
 		return nil, fmt.Errorf("%w: lifecycle slot %q is not a bounded regular file", ErrVectorPartitionManifestInvalid, name)
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, int64(max)+1))
-	if err != nil {
-		return nil, err
+	raw := make([]byte, 0, min(int(info.Size()), max))
+	buf := make([]byte, 64<<10)
+	reader := io.LimitReader(f, int64(max)+1)
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		n, readErr := reader.Read(buf)
+		if n > 0 {
+			raw = append(raw, buf[:n]...)
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
 	}
 	if len(raw) > max {
 		return nil, fmt.Errorf("%w: lifecycle slot bytes cap", ErrVectorPartitionManifestInvalid)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if err := vectorPartitionLifecycleStoreFaultV1("after_slot_read"); err != nil {
 		return nil, err

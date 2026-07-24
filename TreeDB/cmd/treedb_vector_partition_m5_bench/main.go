@@ -76,6 +76,7 @@ type m3Report struct {
 
 type m3Row struct {
 	Ratio            float64 `json:"ratio"`
+	PartitionHNSWM   int     `json:"partition_hnsw_m"`
 	ManifestDigest   string  `json:"manifest_digest"`
 	SourceGeneration uint64  `json:"source_generation"`
 	SourceChecksum   uint64  `json:"source_checksum"`
@@ -190,6 +191,7 @@ type manifestReport struct {
 	ManifestDigest        string `json:"manifest_digest"`
 	PartitionID           uint32 `json:"partition_id"`
 	PartitionCount        uint32 `json:"partition_count"`
+	PartitionHNSWM        int    `json:"partition_hnsw_m"`
 	OwnerGroup            string `json:"owner_group"`
 }
 
@@ -348,6 +350,7 @@ func run(args []string, stdout io.Writer) error {
 			ManifestDigest:        status.Manifest.IntegrityDigest,
 			PartitionID:           uint32(cfg.partition),
 			PartitionCount:        status.Manifest.PartitionCount,
+			PartitionHNSWM:        row.PartitionHNSWM,
 			OwnerGroup:            status.Manifest.Placements[cfg.partition].GroupID,
 		},
 		Raft: raftReport{
@@ -435,7 +438,7 @@ func loadM3Report(path string) (m3Report, []byte, error) {
 }
 
 func validateM3Input(report m3Report, dbOverride string, partition uint) (m3Row, error) {
-	if report.SchemaVersion != 2 || report.ResultKind != "m3_native_partition_hnsw_evidence" {
+	if report.SchemaVersion != 3 || report.ResultKind != "m3_native_partition_hnsw_evidence" {
 		return m3Row{}, errors.New("unsupported M3 report identity")
 	}
 	if report.Dataset.Vectors != m5RequiredVectors || report.Dataset.Queries < 1 || report.Dataset.Dimensions < 4 || report.Dataset.Metric != "cosine" {
@@ -445,7 +448,7 @@ func validateM3Input(report m3Report, dbOverride string, partition uint) (m3Row,
 		return m3Row{}, errors.New("M5 acceptance requires one M3 row and an in-range partition")
 	}
 	row := report.Rows[0]
-	if row.Ratio != 0 || row.SourceRows != m5RequiredVectors || row.SearchRoute != m5RequiredRoute ||
+	if row.Ratio != 0 || row.PartitionHNSWM < 2 || row.SourceRows != m5RequiredVectors || row.SearchRoute != m5RequiredRoute ||
 		row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 ||
 		row.SourceGeneration == 0 || row.SourceChecksum == 0 || row.SourceSchemaHash == 0 ||
 		len(row.ManifestDigest) != 64 {

@@ -110,11 +110,11 @@ explicit directory and only one overlap row, then records the absolute
 directory in the M3 report. The default path remains temporary and is removed
 after the benchmark.
 
-## Remaining real-Raft gate
+## Real-Raft acceptance runner
 
-There is not yet an opt-in runner that composes this retained database with a
-real local `HashicorpRaftProvider` leader and
-`VectorPartitionShardSearchServiceV1`. The required runner must:
+`TreeDB/cmd/treedb_vector_partition_m5_bench` composes the retained M3 database
+with a real local `HashicorpRaftProvider` leader and
+`VectorPartitionShardSearchServiceV1`. It:
 
 1. open collection `m3_partition_source`, index `embedding_graph`, generation
    1 from the M3 report;
@@ -128,5 +128,14 @@ real local `HashicorpRaftProvider` leader and
 5. compare service overhead excluding read-index/apply and HNSW search against
    the same generation's partition-local HNSW time and evaluate the 10% gate.
 
-Until that runner and its checked artifact exist, the M5 correctness freeze is
-not #3914 performance-gate completion.
+Run it against the retained M3 report/database:
+
+```sh
+GOWORK=off go run ./TreeDB/cmd/treedb_vector_partition_m5_bench \
+  -m3-report "$M3_REPORT" \
+  -db "$DB" \
+  -out "$M5_REPORT"
+```
+
+The runner fails by default when the measured service-only overhead exceeds
+10%. The checked acceptance artifact below remains the final #3914 gate.

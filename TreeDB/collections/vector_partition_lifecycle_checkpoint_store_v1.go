@@ -5,6 +5,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -143,7 +144,17 @@ func inspectVectorPartitionLifecycleCheckpointEntryV1(dir *os.File, name string,
 }
 
 func (s *VectorPartitionStoreV1) loadVectorPartitionLifecycleCheckpointStateFromDirV1(dir *os.File, collection, index string) (vectorPartitionLifecycleCheckpointStoreStateV1, error) {
+	return s.loadVectorPartitionLifecycleCheckpointStateFromDirWithContextV1(context.Background(), dir, collection, index)
+}
+
+func (s *VectorPartitionStoreV1) loadVectorPartitionLifecycleCheckpointStateFromDirWithContextV1(ctx context.Context, dir *os.File, collection, index string) (vectorPartitionLifecycleCheckpointStoreStateV1, error) {
 	var loaded vectorPartitionLifecycleCheckpointStoreStateV1
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return loaded, err
+	}
 	if err := s.verifyBoundDirV1(dir); err != nil {
 		return loaded, err
 	}
@@ -154,6 +165,9 @@ func (s *VectorPartitionStoreV1) loadVectorPartitionLifecycleCheckpointStateFrom
 	prefix := vectorPartitionLifecycleNamePrefixV1(collection, index)
 	var highestEpoch uint64
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return loaded, err
+		}
 		if !strings.HasPrefix(entry.Name(), prefix) {
 			continue
 		}
@@ -235,11 +249,11 @@ func (s *VectorPartitionStoreV1) loadVectorPartitionLifecycleCheckpointStateFrom
 	if checkpointEntry == nil || checkpointEntry.bytes == 0 {
 		return loaded, fmt.Errorf("%w: highest lifecycle checkpoint is empty", ErrVectorPartitionManifestInvalid)
 	}
-	checkpointRaw, err := readVectorPartitionLifecycleSlotV1(dir, checkpointEntry.name, vectorPartitionLifecycleCheckpointMaxBytesV1)
+	checkpointRaw, err := readVectorPartitionLifecycleSlotWithContextV1(ctx, dir, checkpointEntry.name, vectorPartitionLifecycleCheckpointMaxBytesV1)
 	if err != nil {
 		return loaded, err
 	}
-	loaded.checkpoint, err = decodeVectorPartitionLifecycleCheckpointCanonicalV1(checkpointRaw, collection, index, highestEpoch)
+	loaded.checkpoint, err = decodeVectorPartitionLifecycleCheckpointCanonicalWithContextV1(ctx, checkpointRaw, collection, index, highestEpoch)
 	if err != nil {
 		return loaded, err
 	}
@@ -248,11 +262,14 @@ func (s *VectorPartitionStoreV1) loadVectorPartitionLifecycleCheckpointStateFrom
 	loaded.deltas = make([]vectorPartitionLifecycleRecordV1, 0, len(currentDeltas))
 	nextSequence := loaded.checkpoint.State.LastSequence
 	for _, entry := range currentDeltas {
+		if err := ctx.Err(); err != nil {
+			return loaded, err
+		}
 		if nextSequence == math.MaxUint64 || entry.sequence != nextSequence+1 || entry.bytes == 0 {
 			return loaded, fmt.Errorf("%w: lifecycle checkpoint delta gap or empty slot", ErrVectorPartitionManifestInvalid)
 		}
 		remaining := vectorPartitionLifecycleCheckpointTailMaxBytesV1 - int(loaded.tailBytes)
-		raw, err := readVectorPartitionLifecycleSlotV1(dir, entry.name, remaining)
+		raw, err := readVectorPartitionLifecycleSlotWithContextV1(ctx, dir, entry.name, remaining)
 		if err != nil {
 			return loaded, err
 		}
@@ -269,6 +286,9 @@ func (s *VectorPartitionStoreV1) loadVectorPartitionLifecycleCheckpointStateFrom
 	}
 	loaded.state, err = reduceVectorPartitionLifecycleCheckpointTailV1(loaded.checkpoint, loaded.deltas)
 	if err != nil {
+		return loaded, err
+	}
+	if err := ctx.Err(); err != nil {
 		return loaded, err
 	}
 	if err := s.verifyBoundDirV1(dir); err != nil {

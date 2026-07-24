@@ -90,7 +90,7 @@ func (s *CollectionVectorPartitionGenerationSourceV1) PinVectorPartitionGenerati
 		if entry := s.entries[key]; entry != nil {
 			entry.refs++
 			s.mu.Unlock()
-			if err := s.validateActive(ctx, key); err != nil {
+			if err := s.validateActive(ctx, key, entry.authorityToken); err != nil {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					_ = s.release(entry)
 					return nil, err
@@ -192,7 +192,7 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 			pin.Release()
 		}
 	}()
-	manifest, err := s.Collection.ActiveVectorPartitionManifestWithContextV1(ctx, key.index, key.generation)
+	manifest, authorityToken, err := s.Collection.ActiveVectorPartitionManifestAndAuthorityTokenWithContextV1(ctx, key.index, key.generation)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, err
@@ -204,21 +204,22 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 	}
 	release = false
 	return &collectionVectorPartitionGenerationCacheV1{
-		collection: s.Collection,
-		index:      key.index,
-		generation: key.generation,
-		manifest:   pinnedVectorPartitionManifestV1(manifest),
-		pin:        pin,
-		searchers:  make(map[uint32]*collections.VectorPartitionLocalSearcherV1),
-		opening:    make(map[uint32]*collectionVectorPartitionSearchLoadV1),
+		collection:     s.Collection,
+		index:          key.index,
+		generation:     key.generation,
+		manifest:       pinnedVectorPartitionManifestV1(manifest),
+		authorityToken: authorityToken,
+		pin:            pin,
+		searchers:      make(map[uint32]*collections.VectorPartitionLocalSearcherV1),
+		opening:        make(map[uint32]*collectionVectorPartitionSearchLoadV1),
 	}, nil
 }
 
-func (s *CollectionVectorPartitionGenerationSourceV1) validateActive(ctx context.Context, key collectionVectorPartitionGenerationKeyV1) error {
+func (s *CollectionVectorPartitionGenerationSourceV1) validateActive(ctx context.Context, key collectionVectorPartitionGenerationKeyV1, authorityToken collections.VectorPartitionActiveAuthorityTokenV1) error {
 	if s.testValidateActive != nil {
 		return s.testValidateActive(ctx, key)
 	}
-	return s.Collection.ValidateActiveVectorPartitionGenerationWithContextV1(ctx, key.index, key.generation)
+	return s.Collection.ValidateActiveVectorPartitionAuthorityTokenWithContextV1(ctx, key.index, key.generation, authorityToken)
 }
 
 func (s *CollectionVectorPartitionGenerationSourceV1) isInvalidatedLocked(key collectionVectorPartitionGenerationKeyV1) bool {
@@ -333,11 +334,12 @@ func (s *CollectionVectorPartitionGenerationSourceV1) partitionOpen(cacheHit boo
 }
 
 type collectionVectorPartitionGenerationCacheV1 struct {
-	collection *collections.Collection
-	index      string
-	generation uint64
-	manifest   VectorPartitionPinnedManifestV1
-	pin        *collections.VectorPartitionReaderPinV1
+	collection     *collections.Collection
+	index          string
+	generation     uint64
+	manifest       VectorPartitionPinnedManifestV1
+	authorityToken collections.VectorPartitionActiveAuthorityTokenV1
+	pin            *collections.VectorPartitionReaderPinV1
 
 	// refs and retire are protected by the source mutex.
 	refs   uint64

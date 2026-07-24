@@ -46,21 +46,72 @@ func vectorPartitionLocalAssetIDV1(partition uint32) string {
 }
 
 func vectorPartitionMembershipsForPartitionV1(manifest VectorPartitionManifestV1, partition uint32) []vectorPartitionMembershipSourceV1 {
-	members := make([]vectorPartitionMembershipSourceV1, 0)
-	for _, membership := range manifest.Memberships {
+	members, _ := vectorPartitionMembershipsForPartitionWithContextV1(context.Background(), manifest, partition)
+	return members
+}
+
+func vectorPartitionMembershipsForPartitionWithContextV1(ctx context.Context, manifest VectorPartitionManifestV1, partition uint32) ([]vectorPartitionMembershipSourceV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	count := 0
+	for i, membership := range manifest.Memberships {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
+		if membership.PartitionID == partition {
+			count++
+		}
+	}
+	for i, membership := range manifest.OverlapMemberships {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
+		if membership.PartitionID == partition {
+			count++
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	members := make([]vectorPartitionMembershipSourceV1, 0, count)
+	for i, membership := range manifest.Memberships {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		if membership.PartitionID == partition {
 			members = append(members, vectorPartitionMembershipSourceV1{ordinal: int(membership.VectorOrdinal), kind: VectorPartitionMembershipHomeV1})
 		}
 	}
-	for _, membership := range manifest.OverlapMemberships {
+	for i, membership := range manifest.OverlapMemberships {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		if membership.PartitionID == partition {
 			members = append(members, vectorPartitionMembershipSourceV1{ordinal: int(membership.VectorOrdinal), kind: VectorPartitionMembershipOverlapV1})
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	sort.Slice(members, func(i, j int) bool {
 		return members[i].ordinal < members[j].ordinal || members[i].ordinal == members[j].ordinal && members[i].kind < members[j].kind
 	})
-	return members
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return members, nil
 }
 
 func vectorPartitionMembershipDigestV1(reader *columnVectorGraphPhysicalRowReader, generation uint64, partition uint32, members []vectorPartitionMembershipSourceV1) ([sha256.Size]byte, error) {
@@ -78,10 +129,26 @@ func vectorPartitionMembershipDigestWithContextV1(ctx context.Context, reader *c
 	if reader == nil || generation == 0 || len(members) == 0 {
 		return zero, fmt.Errorf("%w: membership digest input", ErrVectorPartitionSearchUnavailable)
 	}
-	canonical := append([]vectorPartitionMembershipSourceV1(nil), members...)
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
+	canonical := make([]vectorPartitionMembershipSourceV1, len(members))
+	for offset := 0; offset < len(members); offset += 1024 {
+		if err := ctx.Err(); err != nil {
+			return zero, err
+		}
+		end := min(offset+1024, len(members))
+		copy(canonical[offset:end], members[offset:end])
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
 	sort.Slice(canonical, func(i, j int) bool {
 		return canonical[i].ordinal < canonical[j].ordinal || canonical[i].ordinal == canonical[j].ordinal && canonical[i].kind < canonical[j].kind
 	})
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
 	h := sha256.New()
 	h.Write([]byte("treedb/vector-partition-membership/v1"))
 	var encoded [8]byte
@@ -596,7 +663,7 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationWithContextV1(
 	if err != nil {
 		return nil, err
 	}
-	m, err := store.Open(c.name, index, generation)
+	m, err := store.OpenWithContext(ctx, c.name, index, generation)
 	if err != nil {
 		return nil, err
 	}
@@ -625,7 +692,12 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationWithContextV1(
 	if err != nil {
 		return nil, fmt.Errorf("%w: membership source reader: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
-	recomputedMembershipDigest, digestErr := vectorPartitionMembershipDigestWithContextV1(ctx, sourceReader, generation, partition, vectorPartitionMembershipsForPartitionV1(m, partition))
+	members, membershipErr := vectorPartitionMembershipsForPartitionWithContextV1(ctx, m, partition)
+	if membershipErr != nil {
+		_ = sourceReader.Close()
+		return nil, membershipErr
+	}
+	recomputedMembershipDigest, digestErr := vectorPartitionMembershipDigestWithContextV1(ctx, sourceReader, generation, partition, members)
 	closeErr := sourceReader.Close()
 	if digestErr != nil || closeErr != nil {
 		if errors.Is(digestErr, context.Canceled) || errors.Is(digestErr, context.DeadlineExceeded) {

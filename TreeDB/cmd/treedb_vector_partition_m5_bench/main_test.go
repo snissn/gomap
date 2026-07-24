@@ -42,7 +42,7 @@ func TestDeterministicQueryMatchesFixtureV2Contract(t *testing.T) {
 
 func TestValidateM3InputRequiresExactAcceptanceShape(t *testing.T) {
 	report := m3Report{
-		SchemaVersion: 2,
+		SchemaVersion: 3,
 		ResultKind:    "m3_native_partition_hnsw_evidence",
 		Dataset: fixtureManifest{
 			Generator:  "treedb_vector_partition_fixture_v2",
@@ -54,6 +54,7 @@ func TestValidateM3InputRequiresExactAcceptanceShape(t *testing.T) {
 		},
 		Partitions: 16,
 		Rows: []m3Row{{
+			PartitionHNSWM:   4,
 			ManifestDigest:   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			SourceGeneration: 1,
 			SourceChecksum:   2,
