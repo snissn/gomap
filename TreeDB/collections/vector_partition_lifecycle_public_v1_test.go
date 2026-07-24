@@ -2,6 +2,7 @@ package collections
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -445,9 +446,29 @@ func TestValidateVectorPartitionSnapshotNamespaceV1RequiresExactSelection(t *tes
 	}
 	_, base := lifecycleManifestPayloadV1(t, "building")
 	first, _ := persistLifecycleCheckpointBuildV1(t, store, base.Generation)
-	persistLifecycleCheckpointBuildV1(t, store, first.Generation+1)
+	second, _ := persistLifecycleCheckpointBuildV1(t, store, first.Generation+1)
 	if err := ValidateVectorPartitionSnapshotNamespaceV1(liveRoot); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
 		t.Fatalf("live audit namespace validation err=%v", err)
+	}
+	for _, manifest := range []VectorPartitionManifestV1{first, second} {
+		reclaim, err := encodeVectorPartitionReclaimRecordV1(vectorPartitionReclaimStateV1{
+			Collection:   manifest.Collection,
+			IndexName:    manifest.IndexName,
+			Generation:   manifest.Generation,
+			OriginalRefs: vectorPartitionReclaimRefsFromManifestV1(manifest),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.persistVectorPartitionLifecycleOperationV1(
+			manifest.Collection,
+			manifest.IndexName,
+			vectorPartitionLifecycleDeletePrepareV1,
+			manifest.Generation,
+			reclaim,
+		); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	dir, err := store.openDir()
@@ -484,5 +505,23 @@ func TestValidateVectorPartitionSnapshotNamespaceV1RequiresExactSelection(t *tes
 	}
 	if err := ValidateVectorPartitionSnapshotNamespaceV1(snapshotRoot); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
 		t.Fatalf("legacy extracted namespace err=%v", err)
+	}
+}
+
+func TestValidateVectorPartitionSnapshotNamespaceV1RejectsTotalEntryCap(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	root := t.TempDir()
+	store, err := OpenVectorPartitionStoreV1(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i <= vectorPartitionStoreMaxEntriesV1; i++ {
+		name := fmt.Sprintf("foreign-%05d", i)
+		if err := os.WriteFile(filepath.Join(store.dir, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ValidateVectorPartitionSnapshotNamespaceV1(root); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		t.Fatalf("oversized snapshot namespace err=%v", err)
 	}
 }

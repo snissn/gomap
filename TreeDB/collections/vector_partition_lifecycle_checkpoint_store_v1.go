@@ -147,10 +147,7 @@ func (s *VectorPartitionStoreV1) loadVectorPartitionLifecycleCheckpointStateFrom
 	if err := s.verifyBoundDirV1(dir); err != nil {
 		return loaded, err
 	}
-	if _, err := dir.Seek(0, io.SeekStart); err != nil {
-		return loaded, err
-	}
-	entries, err := dir.ReadDir(-1)
+	entries, err := readVectorPartitionDirEntriesBoundedV1(dir)
 	if err != nil {
 		return loaded, err
 	}
@@ -159,9 +156,6 @@ func (s *VectorPartitionStoreV1) loadVectorPartitionLifecycleCheckpointStateFrom
 	for _, entry := range entries {
 		if !strings.HasPrefix(entry.Name(), prefix) {
 			continue
-		}
-		if len(loaded.entries) >= vectorPartitionStoreMaxEntriesV1 {
-			return loaded, fmt.Errorf("%w: lifecycle checkpoint entry cap", ErrVectorPartitionManifestInvalid)
 		}
 		parsed, err := parseVectorPartitionLifecycleCheckpointEntryNameV1(collection, index, entry.Name())
 		if err != nil {

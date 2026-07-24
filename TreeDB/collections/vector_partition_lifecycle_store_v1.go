@@ -123,10 +123,7 @@ func (s *VectorPartitionStoreV1) loadVectorPartitionLifecycleChainFromDirV1(dir 
 	if err := s.verifyBoundDirV1(dir); err != nil {
 		return nil, zero, err
 	}
-	if _, err := dir.Seek(0, io.SeekStart); err != nil {
-		return nil, zero, err
-	}
-	entries, err := dir.ReadDir(-1)
+	entries, err := readVectorPartitionDirEntriesBoundedV1(dir)
 	if err != nil {
 		return nil, zero, err
 	}

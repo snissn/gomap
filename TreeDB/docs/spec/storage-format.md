@@ -83,7 +83,12 @@ idempotent; conflicting immutable names, physical aliases, symlinks, malformed
 names, gaps, cross-identity payloads, or invalid transitions fail closed.
 Superseded epochs may remain as zero-length audit stubs in a live store, but
 Raft export includes only the highest checkpoint and its contiguous current
-tail. Restore rejects any extra audit epoch or legacy mutable authority.
+tail. The archive always carries an explicit `db/vector_partitions` directory,
+including when it is empty. Restore rejects a missing directory, any extra
+audit epoch, or legacy mutable authority. It reads the namespace in bounded
+batches, applies the 4,096-entry cap to all names, and verifies the ranges,
+CRC32 values, and SHA-256 digests of every asset referenced by a non-deleting
+manifest before replacing the target namespace.
 
 VPM1 has a fixed version, bounded length-prefixed fields and lists, one
 (exactly one) router-asset frame, canonical ordering, and an integrity digest.

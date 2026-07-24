@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"sort"
 	"strings"
@@ -22,10 +21,7 @@ func (s *VectorPartitionStoreV1) loadVectorPartitionLifecycleAuthorityV1(collect
 		return zero, false, err
 	}
 	defer dir.Close()
-	if _, err := dir.Seek(0, io.SeekStart); err != nil {
-		return zero, false, err
-	}
-	entries, err := dir.ReadDir(-1)
+	entries, err := readVectorPartitionDirEntriesBoundedV1(dir)
 	if err != nil {
 		return zero, false, err
 	}

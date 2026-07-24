@@ -659,6 +659,16 @@ func appendRaftSnapshotTreeDBStorageV1(tw *tar.Writer, prefix, mainDir string) e
 	}
 	for _, name := range raftSnapshotMainDBEntriesV1 {
 		src := filepath.Join(mainDir, name)
+		if name == "vector_partitions" {
+			if _, err := os.Lstat(src); os.IsNotExist(err) {
+				if err := writeRaftSnapshotDirHeaderV1(tw, pathpkg.Join(prefix, name)); err != nil {
+					return err
+				}
+				continue
+			} else if err != nil {
+				return err
+			}
+		}
 		if err := appendRaftSnapshotStoragePathV1(tw, pathpkg.Join(prefix, name), src); err != nil {
 			return err
 		}

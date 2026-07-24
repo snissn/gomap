@@ -304,12 +304,16 @@ Raft export copies `db/vector_partitions` together with column assets while
 holding the same root barrier. For each identity it validates the complete live
 namespace, selects only the highest checkpoint plus its contiguous current
 tail, and omits lower audit epochs. It binds each selected regular file to its
-stable physical identity before and after streaming. Restore rejects legacy
-mutable files, symlinks, hard-link aliases, malformed chains, corrupt highest
-checkpoints, and extra audit epochs before replacing the target namespace. A
-restored manifest’s typed refs resolve against the archived assets instead of
-the prior target directory. Snapshot archives are copies: exporting an archive
-does not create a live reader pin or a durable catalog reference. File names
+stable physical identity before and after streaming. Export writes an explicit
+empty `db/vector_partitions` directory when no lifecycle authority exists.
+Restore rejects a missing directory, legacy mutable files, symlinks, hard-link
+aliases, malformed chains, corrupt highest checkpoints, and extra audit epochs
+before replacing the target namespace. It also streams and verifies the exact
+ranges, CRC32 values, and SHA-256 digests of every asset referenced by a
+non-deleting manifest. A restored manifest’s typed refs resolve against the
+archived assets instead of the prior target directory. Snapshot archives are
+copies: exporting an archive does not create a live reader pin or a durable
+catalog reference. File names
 are opaque SHA-256-derived identities; checkpoint payloads, not host paths, are
 portable across restored DB roots.
 

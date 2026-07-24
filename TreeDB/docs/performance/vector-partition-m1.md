@@ -7,7 +7,7 @@ microbenchmark (`production_evidence=false`), not ANN search throughput or a
 production multi-group Raft result.
 
 Correctness and scale use deliberately different fixtures. The correctness
-tests exercise genuine stable-authority ready publication, `OpenActive`, and
+tests exercise genuine stable-authority-ready publication, `OpenActive`, and
 Raft snapshot/install with the checkpoint-reduced active state, router, and
 partition assets intact. Snapshot measurements use
 `synthetic_checkpoint_ready_manifest_scale_v1`: an explicitly

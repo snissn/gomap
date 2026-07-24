@@ -1381,7 +1381,8 @@ func RenameStableChildFile(parent *os.File, oldName, newName string) error {
 
 // LinkStableChildFileNoReplace installs a hard link relative to one exact
 // parent without following a rebound pathname. It reports os.ErrExist when
-// newName already exists.
+// newName already exists. Unsupported platforms return
+// ErrNamespacePersistenceUnsupported.
 func LinkStableChildFileNoReplace(parent *os.File, oldName, newName string) error {
 	if parent == nil || !stableChildBaseName(oldName) || !stableChildBaseName(newName) || oldName == newName {
 		return fmt.Errorf("%w: stable child link requires distinct base names and an exact parent handle", ErrUnresolvedResource)

@@ -258,6 +258,124 @@ func TestRaftSnapshotV1InstallPreservesVectorPartitionManifestNamespace(t *testi
 	}
 }
 
+func TestRaftSnapshotV1ExportIncludesEmptyVectorPartitionNamespace(t *testing.T) {
+	root := t.TempDir()
+	sourceDB := openRaftSnapshotFSMTestDB(t, root, true)
+	defer func() { _ = sourceDB.Close() }()
+	sourceFSM := openRaftSnapshotFSMForTest(t, sourceDB, root, true)
+	defer func() { _ = sourceFSM.Close() }()
+	applySnapshotSourceEntries(t, sourceFSM, []byte(`{"_id":"empty-partitions","name":"metadata"}`))
+	if err := os.RemoveAll(filepath.Join(root, "vector_partitions")); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := sourceFSM.ExportRaftSnapshotV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := tar.NewReader(bytes.NewReader(readRaftSnapshotArchiveForTest(t, snapshot)))
+	for {
+		header, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if header.Name == "db/vector_partitions" {
+			if header.Typeflag != tar.TypeDir {
+				t.Fatalf("empty vector partition namespace type=%d want directory", header.Typeflag)
+			}
+			return
+		}
+	}
+	t.Fatal("snapshot archive omitted empty db/vector_partitions namespace")
+}
+
+func TestRaftSnapshotV1InstallRejectsIncompleteVectorPartitionStateBeforeReplacement(t *testing.T) {
+	requireRaftSnapshotInstallSupportedV1(t)
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	sourceDB := openRaftSnapshotFSMTestDB(t, sourceDir, true)
+	defer func() { _ = sourceDB.Close() }()
+	sourceFSM := openRaftSnapshotFSMForTest(t, sourceDB, sourceDir, true)
+	defer func() { _ = sourceFSM.Close() }()
+	applySnapshotSourceEntries(t, sourceFSM, []byte(`{"_id":"source-only","name":"snapshot"}`))
+	manifest := stageRaftSnapshotReadyVectorPartitionForTest(t, sourceDB, 1)
+	snapshot, err := sourceFSM.ExportRaftSnapshotV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := readRaftSnapshotArchiveForTest(t, snapshot)
+	asset := manifest.Assets[0]
+	assetPath := filepath.ToSlash(filepath.Join(
+		"db",
+		"column_assets",
+		asset.Ref.Namespace,
+		"assets",
+		"segments",
+		fmt.Sprintf("segment-%06d.tca", asset.Ref.FileID),
+	))
+
+	tests := []struct {
+		name    string
+		rewrite func(*tar.Header, []byte) (bool, []byte)
+	}{
+		{
+			name: "missing lifecycle namespace",
+			rewrite: func(header *tar.Header, raw []byte) (bool, []byte) {
+				return header.Name != "db/vector_partitions" &&
+					!strings.HasPrefix(header.Name, "db/vector_partitions/"), raw
+			},
+		},
+		{
+			name: "missing referenced asset segment",
+			rewrite: func(header *tar.Header, raw []byte) (bool, []byte) {
+				return header.Name != assetPath, raw
+			},
+		},
+		{
+			name: "truncated referenced asset segment",
+			rewrite: func(header *tar.Header, raw []byte) (bool, []byte) {
+				end := asset.Ref.Offset + asset.Ref.Length
+				if header.Name == assetPath && end > 0 && end <= int64(len(raw)) {
+					return true, raw[:end-1]
+				}
+				return true, raw
+			},
+		},
+		{
+			name: "corrupt referenced asset range",
+			rewrite: func(header *tar.Header, raw []byte) (bool, []byte) {
+				if header.Name == assetPath && asset.Ref.Offset >= 0 && asset.Ref.Offset < int64(len(raw)) {
+					raw = bytes.Clone(raw)
+					raw[asset.Ref.Offset] ^= 0xff
+				}
+				return true, raw
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tampered := rewriteRaftSnapshotArchiveEntriesForTest(t, payload, tt.rewrite)
+			targetDir := filepath.Join(root, strings.ReplaceAll(tt.name, " ", "-"))
+			targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
+			targetFSM := openRaftSnapshotFSMForTest(t, targetDB, targetDir, true)
+			defer func() { _ = targetFSM.Close() }()
+			targetDoc := []byte(`{"_id":"u-large","name":"preserve"}`)
+			applySnapshotSourceEntries(t, targetFSM, targetDoc)
+
+			err := targetFSM.InstallRaftSnapshotV1(bytes.NewReader(tampered))
+			if err == nil {
+				t.Fatal("tampered vector partition snapshot installed")
+			}
+			if !strings.Contains(err.Error(), "validate extracted vector partition lifecycle snapshot") {
+				t.Fatalf("tampered snapshot rejection=%v, want vector partition validation", err)
+			}
+			assertSnapshotDocument(t, targetFSM, "u-large", targetDoc)
+		})
+	}
+}
+
 func TestRaftSnapshotV1ExportWaitsForVectorPartitionStorageBarrier(t *testing.T) {
 	root := t.TempDir()
 	db := openRaftSnapshotFSMTestDB(t, root, true)
@@ -1526,6 +1644,46 @@ func rewriteRaftSnapshotArchiveHeaderForTest(t testing.TB, payload []byte, mut f
 	}
 	if !found {
 		t.Fatalf("archive missing %s", raftcluster.RaftSnapshotArchiveManifestPathV1)
+	}
+	return out.Bytes()
+}
+
+func rewriteRaftSnapshotArchiveEntriesForTest(
+	t testing.TB,
+	payload []byte,
+	rewrite func(*tar.Header, []byte) (bool, []byte),
+) []byte {
+	t.Helper()
+	tr := tar.NewReader(bytes.NewReader(payload))
+	var out bytes.Buffer
+	tw := tar.NewWriter(&out)
+	for {
+		header, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next archive entry: %v", err)
+		}
+		raw, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatalf("ReadAll archive entry %q: %v", header.Name, err)
+		}
+		next := *header
+		keep, raw := rewrite(&next, raw)
+		if !keep {
+			continue
+		}
+		next.Size = int64(len(raw))
+		if err := tw.WriteHeader(&next); err != nil {
+			t.Fatalf("WriteHeader archive entry %q: %v", next.Name, err)
+		}
+		if _, err := tw.Write(raw); err != nil {
+			t.Fatalf("Write archive entry %q: %v", next.Name, err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("Close rewritten archive: %v", err)
 	}
 	return out.Bytes()
 }

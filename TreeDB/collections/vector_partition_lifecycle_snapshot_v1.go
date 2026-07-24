@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -123,15 +122,9 @@ func VectorPartitionSnapshotEntriesV1(dir *os.File) ([]VectorPartitionSnapshotEn
 	if err := store.verifyBoundDirV1(dir); err != nil {
 		return nil, err
 	}
-	if _, err := dir.Seek(0, 0); err != nil {
-		return nil, err
-	}
-	entries, err := dir.ReadDir(-1)
+	entries, err := readVectorPartitionDirEntriesBoundedV1(dir)
 	if err != nil {
 		return nil, err
-	}
-	if len(entries) > vectorPartitionStoreMaxEntriesV1 {
-		return nil, fmt.Errorf("%w: lifecycle snapshot entry cap", ErrVectorPartitionManifestInvalid)
 	}
 	groups := make(map[string]vectorPartitionSnapshotGroupV1)
 	seenIdentities := make([]VectorPartitionSnapshotEntryV1, 0, len(entries))
@@ -211,7 +204,7 @@ func VectorPartitionSnapshotEntriesV1(dir *os.File) ([]VectorPartitionSnapshotEn
 func ValidateVectorPartitionSnapshotNamespaceV1(root string) error {
 	store, err := OpenExistingVectorPartitionStoreV1(root)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return fmt.Errorf("%w: snapshot missing vector partition namespace", ErrVectorPartitionManifestInvalid)
 	}
 	if err != nil {
 		return err
@@ -225,17 +218,65 @@ func ValidateVectorPartitionSnapshotNamespaceV1(root string) error {
 		_ = dir.Close()
 		return err
 	}
-	if _, err := dir.Seek(0, io.SeekStart); err != nil {
+	all, err := readVectorPartitionDirEntriesBoundedV1(dir)
+	if err != nil {
 		_ = dir.Close()
 		return err
 	}
-	all, err := dir.ReadDir(-1)
-	closeErr := dir.Close()
-	if err != nil || closeErr != nil {
-		return errors.Join(err, closeErr)
-	}
 	if len(all) != len(selected) {
+		_ = dir.Close()
 		return fmt.Errorf("%w: snapshot namespace contains superseded lifecycle audit entries", ErrVectorPartitionManifestInvalid)
+	}
+	validateErr := validateVectorPartitionSnapshotAssetsV1(root, store, dir, selected)
+	closeErr := dir.Close()
+	return errors.Join(validateErr, closeErr)
+}
+
+func validateVectorPartitionSnapshotAssetsV1(root string, store *VectorPartitionStoreV1, dir *os.File, selected []VectorPartitionSnapshotEntryV1) error {
+	seen := make(map[string]struct{})
+	for _, selectedEntry := range selected {
+		if !strings.Contains(selectedEntry.Name, ".lifecycle.checkpoint.") {
+			continue
+		}
+		raw, err := readVectorPartitionLifecycleSlotV1(dir, selectedEntry.Name, vectorPartitionLifecycleCheckpointMaxBytesV1)
+		if err != nil {
+			return err
+		}
+		collection, index, _, err := vectorPartitionCheckpointEnvelopeIdentityV1(raw)
+		if err != nil {
+			return err
+		}
+		identity := collection + "\x00" + index
+		if _, present := seen[identity]; present {
+			continue
+		}
+		seen[identity] = struct{}{}
+		loaded, err := store.loadVectorPartitionLifecycleCheckpointStateFromDirV1(dir, collection, index)
+		if err != nil {
+			return err
+		}
+		generations := make([]uint64, 0, len(loaded.state.Generations))
+		for generation := range loaded.state.Generations {
+			generations = append(generations, generation)
+		}
+		sort.Slice(generations, func(i, j int) bool { return generations[i] < generations[j] })
+		for _, generation := range generations {
+			entry := loaded.state.Generations[generation]
+			if entry.Manifest == nil || entry.Deleting {
+				continue
+			}
+			assets := append([]VectorPartitionAssetV1(nil), entry.Manifest.Assets...)
+			if entry.Manifest.State == "ready" {
+				assets = append(assets, entry.Manifest.RouterAsset)
+			}
+			if len(assets) == 0 {
+				return fmt.Errorf("%w: snapshot vector partition generation %d has no assets", ErrVectorPartitionManifestInvalid, generation)
+			}
+			namespace := assets[0].Ref.Namespace
+			if err := verifyVectorPartitionAssetsV1(filepath.Join(root, "column_assets"), namespace, assets); err != nil {
+				return fmt.Errorf("%w: snapshot vector partition generation %d assets: %v", ErrVectorPartitionManifestInvalid, generation, err)
+			}
+		}
 	}
 	return nil
 }

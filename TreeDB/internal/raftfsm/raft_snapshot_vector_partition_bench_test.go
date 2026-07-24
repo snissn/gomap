@@ -69,6 +69,7 @@ func stageRaftSnapshotSyntheticReadyScaleForBenchmark(tb testing.TB, root string
 	if rows < 1 {
 		tb.Fatal("synthetic ready scale requires positive rows")
 	}
+	expected := manifest
 	manifest.SourceRowCount = uint64(rows)
 	manifest.Memberships = make([]collections.VectorPartitionMembershipV1, rows)
 	for i := range manifest.Memberships {
@@ -82,7 +83,7 @@ func stageRaftSnapshotSyntheticReadyScaleForBenchmark(tb testing.TB, root string
 	if rows == 1_000_000 && len(raw) > rows*64 {
 		tb.Fatalf("synthetic ready manifest=%d bytes exceeds 64 B/vector", len(raw))
 	}
-	if err := collections.StageSyntheticReadyVectorPartitionForBenchmarkV1(root, manifest); err != nil {
+	if err := collections.StageSyntheticReadyVectorPartitionForBenchmarkV1(root, expected, manifest); err != nil {
 		tb.Fatal(err)
 	}
 	store, err := collections.OpenExistingVectorPartitionStoreV1(root)
@@ -92,5 +93,34 @@ func stageRaftSnapshotSyntheticReadyScaleForBenchmark(tb testing.TB, root string
 	got, err := store.OpenActive("docs", "embedding")
 	if err != nil || got.SourceRowCount != uint64(rows) {
 		tb.Fatalf("synthetic ready fixture active=%+v err=%v", got, err)
+	}
+}
+
+func TestStageSyntheticReadyVectorPartitionForBenchmarkV1RequiresExactFixture(t *testing.T) {
+	root := t.TempDir()
+	sourceDB := openRaftSnapshotFSMTestDB(t, root, true)
+	defer sourceDB.Close()
+	original := stageRaftSnapshotReadyVectorPartitionForTest(t, sourceDB, 1)
+	replacement := original
+	replacement.SourceRowCount = 2
+	replacement.Memberships = append(replacement.Memberships, collections.VectorPartitionMembershipV1{
+		VectorOrdinal: 1,
+		PartitionID:   0,
+	})
+	replacement.Canonicalize()
+
+	if err := collections.StageSyntheticReadyVectorPartitionForBenchmarkV1(root, replacement, replacement); err == nil {
+		t.Fatal("synthetic benchmark replacement accepted a mismatched fixture expectation")
+	}
+	store, err := collections.OpenExistingVectorPartitionStoreV1(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := store.OpenActive(original.Collection, original.IndexName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.SourceRowCount != original.SourceRowCount || len(active.Memberships) != len(original.Memberships) {
+		t.Fatalf("rejected synthetic replacement mutated active fixture: %+v", active)
 	}
 }
