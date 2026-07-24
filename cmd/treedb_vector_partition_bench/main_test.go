@@ -162,6 +162,14 @@ func TestM3FixtureAllowsMillionVectorsPlusBoundedQueriesV1(t *testing.T) {
 	}
 }
 
+func TestM3SourceLoadBoundsColumnGraphPublicationsV1(t *testing.T) {
+	const acceptanceRows = 1_000_000
+	publications := (acceptanceRows + m3SourceInsertBatchRows - 1) / m3SourceInsertBatchRows
+	if publications != 62 {
+		t.Fatalf("1M-row M3 source publications=%d want 62", publications)
+	}
+}
+
 func TestPartitionStageWritesValidatedDeterministicArtifact(t *testing.T) {
 	dataset := writeFixtureForTest(t, 16, 2, 4)
 	args := []string{"-dataset", dataset, "-out", t.TempDir(), "-partitions", "4", "-probes", "1", "-stage", "partition", "-partition-repetitions", "1", "-partition-pivots", "2", "-partition-max-leaf-bucket", "4", "-partition-degree", "2"}
