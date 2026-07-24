@@ -138,4 +138,6 @@ GOWORK=off go run ./TreeDB/cmd/treedb_vector_partition_m5_bench \
 ```
 
 The runner fails by default when the measured service-only overhead exceeds
-10%. The checked acceptance artifact below remains the final #3914 gate.
+10%. A checked large-scale acceptance artifact has not yet been produced; the
+retained M3 database plus the emitted M5 JSON report from this command remain
+the final #3914 acceptance gate.

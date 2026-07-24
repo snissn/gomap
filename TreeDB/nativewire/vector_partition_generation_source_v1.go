@@ -95,6 +95,12 @@ func (s *CollectionVectorPartitionGenerationSourceV1) PinVectorPartitionGenerati
 					_ = s.release(entry)
 					return nil, err
 				}
+				if errors.Is(err, collections.ErrVectorPartitionAuthorityRefreshRequiredV1) {
+					if evictErr := s.evictForAuthorityRefresh(entry); evictErr != nil {
+						return nil, evictErr
+					}
+					continue
+				}
 				invalidateErr := s.InvalidateVectorPartitionGenerationV1(key.index, key.generation)
 				releaseErr := s.release(entry)
 				return nil, errors.Join(
@@ -200,6 +206,7 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 		return nil, fmt.Errorf("%w: generation status: %v", ErrVectorPartitionShardSearchGenerationMismatch, err)
 	}
 	if err := ctx.Err(); err != nil {
+		authorityToken.Release()
 		return nil, err
 	}
 	release = false
@@ -312,6 +319,28 @@ func (s *CollectionVectorPartitionGenerationSourceV1) Stats() CollectionVectorPa
 func (s *CollectionVectorPartitionGenerationSourceV1) release(entry *collectionVectorPartitionGenerationCacheV1) error {
 	var closeEntry bool
 	s.mu.Lock()
+	if entry.refs != 0 {
+		entry.refs--
+	}
+	closeEntry = entry.refs == 0 && entry.retire
+	s.mu.Unlock()
+	if closeEntry {
+		return entry.close()
+	}
+	return nil
+}
+
+func (s *CollectionVectorPartitionGenerationSourceV1) evictForAuthorityRefresh(entry *collectionVectorPartitionGenerationCacheV1) error {
+	if s == nil || entry == nil {
+		return nil
+	}
+	var closeEntry bool
+	key := collectionVectorPartitionGenerationKeyV1{index: entry.index, generation: entry.generation}
+	s.mu.Lock()
+	if s.entries[key] == entry {
+		delete(s.entries, key)
+		entry.retire = true
+	}
 	if entry.refs != 0 {
 		entry.refs--
 	}
@@ -448,6 +477,7 @@ func (e *collectionVectorPartitionGenerationCacheV1) close() error {
 		for _, searcher := range searchers {
 			e.closeErr = errors.Join(e.closeErr, searcher.Close())
 		}
+		e.authorityToken.Release()
 		if e.pin != nil {
 			e.pin.Release()
 		}

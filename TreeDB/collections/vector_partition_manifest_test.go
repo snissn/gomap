@@ -197,6 +197,7 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer authorityToken.Release()
 	checkpointReads := 0
 	restoreLifecycleHook := setVectorPartitionLifecycleStoreHookForTestV1(func(boundary string) error {
 		if boundary == "after_slot_read" {
@@ -319,6 +320,79 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 		if staleErr == nil || !strings.Contains(staleErr.Error(), "source identity mismatch") {
 			t.Fatalf("stale source identity err=%v want intended mismatch", staleErr)
 		}
+	}
+}
+
+func TestVectorPartitionActiveAuthoritySurvivesReplacementBuildAndPinCancellationV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{
+		{id: "a", vector: []float32{1, 0, 0}},
+		{id: "b", vector: []float32{0, 1, 0}},
+	})
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	_, graph, _, err := col.columnVectorGraphPhysicalRowReaderSnapshotView(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := testVectorPartitionManifestV1()
+	active.IndexName = def.Name
+	active.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
+	active.SourceGeneration, active.SourceChecksum, active.SourceSchemaHash, active.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
+	active, activeResources := vectorPartitionManifestWithFreshStableAssetsV1(t, d, col, active, 704)
+	if err := col.PublishVectorPartitionManifestV1(active, activeResources); err != nil {
+		t.Fatal(err)
+	}
+	_, token, err := col.ActiveVectorPartitionManifestAndAuthorityTokenWithContextV1(t.Context(), def.Name, active.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer token.Release()
+
+	replacement := cloneVectorPartitionManifestForCheckpointV1(active)
+	replacement.Generation++
+	replacement.RouterGeneration = replacement.Generation
+	replacement, replacementResources := vectorPartitionManifestWithFreshStableAssetsV1(t, d, col, replacement, 705)
+	replacementResources.Release()
+	replacement.State = "building"
+	replacement.RouterGeneration = 0
+	replacement.RouterAsset = VectorPartitionAssetV1{}
+	replacement.ReadySetDigest = ""
+	replacement.Canonicalize()
+	if err := col.PublishVectorPartitionManifestV1(replacement, nil); err != nil {
+		t.Fatalf("publish replacement BUILD: %v", err)
+	}
+	if err := col.ValidateActiveVectorPartitionAuthorityTokenWithContextV1(t.Context(), def.Name, active.Generation, token); err != nil {
+		t.Fatalf("replacement BUILD invalidated active generation: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	hookCalls := 0
+	restore := setVectorPartitionLifecycleStoreHookForTestV1(func(boundary string) error {
+		if boundary == "after_slot_read" && hookCalls == 0 {
+			hookCalls++
+			cancel()
+		}
+		return nil
+	})
+	pin, err := col.AcquireVectorPartitionReaderPinWithContextV1(ctx, def.Name, active.Generation)
+	restore()
+	if !errors.Is(err, context.Canceled) {
+		if pin != nil {
+			pin.Release()
+		}
+		t.Fatalf("reader pin cancellation err=%v want context canceled", err)
+	}
+	if pin != nil {
+		t.Fatal("canceled reader pin acquisition returned a pin")
+	}
+	if hookCalls != 1 {
+		t.Fatalf("reader pin lifecycle hook calls=%d want 1", hookCalls)
+	}
+	if got := vectorPartitionReaderPinCountV1(d.Dir(), col.name, def.Name, active.Generation); got != 0 {
+		t.Fatalf("canceled reader pin count=%d want 0", got)
 	}
 }
 

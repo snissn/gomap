@@ -117,17 +117,29 @@ generation and partition leases are released on success, error, cancellation,
 deadline, or caller context loss. The production collection adapter caches the
 validated immutable generation, its long-lived M1 reader pin, and opened
 mapped/heap search packs. A cold generation load reads and validates lifecycle
-status once; warm request leases clone only the bounded placement identity and
-reuse the cached partition searchers.
+and vector-source authority once, then retains a generation-scoped in-memory
+activation lease and the DB's coherent scalar state token. Warm request leases
+perform only bounded in-memory activation/state comparisons, clone the bounded
+placement identity, and reuse the cached partition searchers; they do not scan
+the lifecycle directory or call operational vector-index status APIs. A normal
+replacement `BUILD` leaves the active generation lease valid. Successful
+`READY` activation or deactivation advances the mutation-driven activation
+revision. A DB state publication evicts the cache entry without permanently
+tombstoning it and forces one new full authority load, which either confirms
+the generation/source or fails closed.
 
 The catalog/lifecycle owner must call
 `InvalidateVectorPartitionGenerationV1` when it replaces the service's static
 placement generation. Invalidation permanently tombstones that generation in
 the source, blocks stale reloads, and retires its resources after existing
-request leases drain. Source `Close` similarly rejects new pins and lets active
-requests drain. If cancellation abandons an in-flight exact fallback search,
-the request pin keeps its resource alive until that search exits; no close path
-unmaps a pack underneath an active request.
+request leases drain. Lifecycle activation changes are also detected by the
+collection-owned authority lease, so a missed service-owner notification
+cannot keep serving a retired generation. Source `Close` similarly rejects new
+pins and lets active requests drain. Reader-pin acquisition and cold authority
+loading propagate caller cancellation through lifecycle checkpoint reads. If
+cancellation abandons an in-flight exact fallback search, the request pin keeps
+its resource alive until that search exits; no close path unmaps a pack
+underneath an active request.
 
 A concurrent activation can therefore make the requested generation old, but
 cannot mix old and new assets inside one accepted request.

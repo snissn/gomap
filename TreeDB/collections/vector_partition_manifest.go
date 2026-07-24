@@ -36,6 +36,11 @@ var (
 	ErrVectorPartitionManifestInvalid                   = errors.New("collections: invalid vector partition manifest")
 	ErrVectorPartitionCollectionAuthorityRequired       = errors.New("collections: vector partition lifecycle mutation requires collection authority")
 	ErrVectorPartitionNamespacePersistenceUnsupportedV1 = rootpublication.ErrNamespacePersistenceUnsupported
+	// ErrVectorPartitionAuthorityRefreshRequiredV1 means the durable DB system
+	// root changed after a cached generation's cold validation. Callers should
+	// evict that cache entry and perform another full authority open; this is
+	// not by itself proof that the generation was deactivated.
+	ErrVectorPartitionAuthorityRefreshRequiredV1 = errors.New("collections: vector partition active authority refresh required")
 )
 
 const (
@@ -2270,7 +2275,7 @@ func (c *Collection) AcquireVectorPartitionReaderPinWithContextV1(ctx context.Co
 		if err != nil {
 			return err
 		}
-		if _, err := s.Open(c.name, index, generation); err != nil {
+		if _, err := s.OpenWithContext(ctx, c.name, index, generation); err != nil {
 			return err
 		}
 		if err := ctx.Err(); err != nil {
@@ -2652,7 +2657,9 @@ func (c *Collection) DeactivateVectorPartitionV1(index string) error {
 		if err != nil {
 			return err
 		}
-		return s.deactivateLocked(c.name, index)
+		mutationErr := s.deactivateLocked(c.name, index)
+		syncVectorPartitionActiveAuthorityFromStoreV1(c.db.Dir(), s, c.name, index)
+		return mutationErr
 	})
 }
 
@@ -2946,8 +2953,29 @@ func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV
 		if e != nil {
 			return e
 		}
-		return s.persistVectorPartitionManifestLifecycleV1(m)
+		mutationErr := s.persistVectorPartitionManifestLifecycleV1(m)
+		if m.State == "ready" {
+			syncVectorPartitionActiveAuthorityFromStoreV1(c.db.Dir(), s, c.name, m.IndexName)
+		}
+		return mutationErr
 	})
+}
+
+// syncVectorPartitionActiveAuthorityFromStoreV1 mirrors the durable result
+// even when a lifecycle call reports an injected post-install error. That
+// closes the commit-ambiguous window without making BUILD publication affect
+// the current serving generation.
+func syncVectorPartitionActiveAuthorityFromStoreV1(root string, store *VectorPartitionStoreV1, collection, index string) {
+	if store == nil {
+		notifyVectorPartitionActiveAuthorityV1(root, collection, index, 0)
+		return
+	}
+	active, err := store.OpenActive(collection, index)
+	if err != nil {
+		notifyVectorPartitionActiveAuthorityV1(root, collection, index, 0)
+		return
+	}
+	notifyVectorPartitionActiveAuthorityV1(root, collection, index, active.Generation)
 }
 
 // validateVectorPartitionSourceIdentityV1 deliberately obtains the source
@@ -2986,6 +3014,39 @@ func (c *Collection) VectorPartitionSourceIdentityV1(indexName string) (VectorPa
 		return VectorPartitionSourceIdentityV1{}, fmt.Errorf("collections: vector partition source identity: %w", err)
 	}
 	return VectorPartitionSourceIdentityV1{Generation: graph.BaseManifestGeneration, Checksum: graph.BaseManifestChecksum, SchemaHash: graph.BaseSchemaHash, RowCount: uint64(graph.RowCount)}, nil
+}
+
+// vectorPartitionSourceIdentityAtSnapshotV1 performs the cold-open source
+// validation against one coherent snapshot without flushing or taking the
+// collection mutation lock recursively. Callers already hold the mutation
+// boundary that prevents a source publication during validation.
+func (c *Collection) vectorPartitionSourceIdentityAtSnapshotV1(indexName string, snap *backenddb.Snapshot) (VectorPartitionSourceIdentityV1, error) {
+	if c == nil {
+		return VectorPartitionSourceIdentityV1{}, errCollectionNil
+	}
+	if c.db == nil {
+		return VectorPartitionSourceIdentityV1{}, errCollectionDBNil
+	}
+	if snap == nil {
+		return VectorPartitionSourceIdentityV1{}, backenddb.ErrClosed
+	}
+	status, err := c.columnGraphVectorIndexStatusAtSnapshot(indexName, snap)
+	if err != nil {
+		return VectorPartitionSourceIdentityV1{}, fmt.Errorf("collections: vector partition source status: %w", err)
+	}
+	if !status.Loaded || status.State != VectorIndexStateColumnGraphLoaded {
+		return VectorPartitionSourceIdentityV1{}, fmt.Errorf("collections: vector partition source index %q is not a loaded TVIS generation", indexName)
+	}
+	_, graph, _, err := c.columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(indexName, snap)
+	if err != nil {
+		return VectorPartitionSourceIdentityV1{}, fmt.Errorf("collections: vector partition source identity: %w", err)
+	}
+	return VectorPartitionSourceIdentityV1{
+		Generation: graph.BaseManifestGeneration,
+		Checksum:   graph.BaseManifestChecksum,
+		SchemaHash: graph.BaseSchemaHash,
+		RowCount:   uint64(graph.RowCount),
+	}, nil
 }
 
 func verifyVectorPartitionAssetsV1(root, namespace string, assets []VectorPartitionAssetV1) error {

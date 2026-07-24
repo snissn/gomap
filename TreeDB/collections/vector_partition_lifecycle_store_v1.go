@@ -137,6 +137,9 @@ func readVectorPartitionLifecycleSlotWithContextV1(ctx context.Context, dir *os.
 	if err := vectorPartitionLifecycleStoreFaultV1("after_slot_read"); err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := rootpublication.ValidateStableChildLink(dir, f, name); err != nil {
 		return nil, err
 	}

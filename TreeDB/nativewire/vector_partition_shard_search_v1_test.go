@@ -289,6 +289,60 @@ func TestCollectionVectorPartitionGenerationCacheRevalidatesWarmHitV1(t *testing
 	}
 }
 
+func TestCollectionVectorPartitionGenerationCacheRefreshIsNotPermanentInvalidationV1(t *testing.T) {
+	oldSearcher, err := collections.OpenVectorPartitionLocalSearcherV1(
+		vectorPartitionShardSearchAssetTestV1(0, []string{"old"}, [][]float32{{1, 0}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := collectionVectorPartitionGenerationKeyV1{index: "embedding", generation: 7}
+	oldEntry := &collectionVectorPartitionGenerationCacheV1{
+		index:      key.index,
+		generation: key.generation,
+		manifest:   VectorPartitionPinnedManifestV1{Generation: key.generation},
+		searchers:  map[uint32]*collections.VectorPartitionLocalSearcherV1{0: oldSearcher},
+		opening:    make(map[uint32]*collectionVectorPartitionSearchLoadV1),
+	}
+	loads := 0
+	source := &CollectionVectorPartitionGenerationSourceV1{
+		Collection: new(collections.Collection),
+		entries:    map[collectionVectorPartitionGenerationKeyV1]*collectionVectorPartitionGenerationCacheV1{key: oldEntry},
+		testValidateActive: func(context.Context, collectionVectorPartitionGenerationKeyV1) error {
+			return collections.ErrVectorPartitionAuthorityRefreshRequiredV1
+		},
+		testLoadGeneration: func(context.Context, collectionVectorPartitionGenerationKeyV1) (*collectionVectorPartitionGenerationCacheV1, error) {
+			loads++
+			return &collectionVectorPartitionGenerationCacheV1{
+				index:      key.index,
+				generation: key.generation,
+				manifest:   VectorPartitionPinnedManifestV1{Generation: key.generation},
+				searchers:  make(map[uint32]*collections.VectorPartitionLocalSearcherV1),
+				opening:    make(map[uint32]*collectionVectorPartitionSearchLoadV1),
+			}, nil
+		},
+	}
+	pinned, err := source.PinVectorPartitionGenerationV1(t.Context(), key.index, key.generation)
+	if err != nil {
+		t.Fatalf("refresh pin: %v", err)
+	}
+	if loads != 1 {
+		t.Fatalf("refresh loads=%d want 1", loads)
+	}
+	if !oldSearcher.Status().Retired {
+		t.Fatal("authority refresh did not retire the old cache entry")
+	}
+	if _, permanentlyInvalidated := source.invalidated[key]; permanentlyInvalidated {
+		t.Fatal("ordinary DB authority refresh permanently invalidated generation")
+	}
+	if err := pinned.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCollectionVectorPartitionGenerationSingleflightDoesNotShareCallerCancellationV1(t *testing.T) {
 	key := collectionVectorPartitionGenerationKeyV1{index: "embedding", generation: 7}
 	firstLoadStarted := make(chan struct{})
