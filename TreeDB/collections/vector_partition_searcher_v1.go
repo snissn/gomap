@@ -201,14 +201,16 @@ func (s *VectorPartitionLocalSearcherV1) Retire() error {
 		return nil
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.retired = true
 	s.closing = true
 	if s.pins != 0 {
+		s.mu.Unlock()
 		return fmt.Errorf("%w: generation still pinned", ErrVectorPartitionSearchUnavailable)
 	}
-	if release := s.releasePersistentPinLocked(); release != nil {
-		go release.Release()
+	release := s.releasePersistentPinLocked()
+	s.mu.Unlock()
+	if release != nil {
+		release.Release()
 	}
 	return nil
 }
