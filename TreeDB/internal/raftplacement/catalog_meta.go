@@ -83,6 +83,44 @@ type CatalogMetaSnapshotV1 struct {
 	Record       []byte `json:"record"`
 }
 
+// ApplyCatalogMetaCommittedV1, ExportCatalogMetaSnapshotBytesV1, and
+// InstallCatalogMetaSnapshotBytesV1 are the narrow dependency-inverted hooks
+// used by raftcluster's HashiCorp meta-group adapter. They ensure the adapter
+// cannot mutate a catalog except through committed log Apply or Restore.
+func (a *CatalogMetaAuthorityV1) ApplyCatalogMetaCommittedV1(raw []byte, appliedIndex uint64) error {
+	_, err := a.ApplyCommittedCatalogMetaV1(raw, appliedIndex)
+	return err
+}
+
+func (a *CatalogMetaAuthorityV1) ExportCatalogMetaSnapshotBytesV1() ([]byte, error) {
+	s, err := a.ExportCatalogMetaSnapshotV1()
+	if err != nil {
+		return nil, err
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		return nil, errors.Join(ErrInvalidCatalogMeta, err)
+	}
+	return b, nil
+}
+
+func (a *CatalogMetaAuthorityV1) InstallCatalogMetaSnapshotBytesV1(raw []byte) error {
+	if len(raw) == 0 || len(raw) > MaxCatalogMetaCommandBytesV1*2 {
+		return ErrCatalogMetaLimit
+	}
+	var snapshot CatalogMetaSnapshotV1
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&snapshot); err != nil {
+		return errors.Join(ErrInvalidCatalogMeta, err)
+	}
+	if err := d.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.Join(ErrInvalidCatalogMeta, fmt.Errorf("trailing snapshot data"))
+	}
+	_, err := a.InstallCatalogMetaSnapshotV1(snapshot)
+	return err
+}
+
 // CatalogMetaAuthorityV1 is the local applied view of one replicated meta
 // group. It never activates a catalog from a file or constructor argument:
 // only ApplyCommittedCatalogMetaV1 or InstallCatalogMetaSnapshotV1 may publish
