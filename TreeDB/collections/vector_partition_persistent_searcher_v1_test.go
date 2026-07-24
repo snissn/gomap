@@ -64,7 +64,7 @@ func TestVectorPartitionPersistentLocalSearcherReopenCorruptionAndPinsV1(t *test
 		t.Fatalf("search metrics=%+v err=%v", metrics, err)
 	}
 	searchStatus := s.Status()
-	if searchStatus.SearchRoute != VectorPartitionSearchRouteHNSWSearchPackV1 || searchStatus.PackBytes == 0 || searchStatus.MappedBytes+searchStatus.HeapBytes == 0 || searchStatus.OpenNanos == 0 || searchStatus.Candidates == 0 {
+	if searchStatus.SearchRoute != VectorPartitionSearchRouteHNSWSearchPackV1 || searchStatus.MaxStableIDBytes != 1 || searchStatus.PackBytes == 0 || searchStatus.MappedBytes+searchStatus.HeapBytes == 0 || searchStatus.OpenNanos == 0 || searchStatus.Candidates == 0 {
 		t.Fatalf("search status=%+v", searchStatus)
 	}
 	if err := col.DeleteVectorPartitionGenerationV1(def.Name, m1.Generation, VectorPartitionCleanupEligibilityV1{}); err == nil {

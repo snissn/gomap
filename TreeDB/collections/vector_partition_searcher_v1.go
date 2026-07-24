@@ -75,6 +75,7 @@ type VectorPartitionSearchStatusV1 struct {
 	Generation                          uint64
 	PartitionID                         uint32
 	HomeMemberships, OverlapMemberships int
+	MaxStableIDBytes                    int
 	PackBytes, MappedBytes, HeapBytes   uint64
 	OpenNanos                           uint64
 	SearchRoute                         string
@@ -195,6 +196,7 @@ type VectorPartitionLocalSearcherV1 struct {
 	packBytes, mappedBytes, heapBytes   uint64
 	openNanos                           uint64
 	searchRoute                         string
+	maxStableIDBytes                    int
 	candidates, edges                   uint64
 }
 
@@ -259,7 +261,44 @@ func OpenVectorPartitionLocalSearcherV1(asset VectorPartitionSearchAssetV1) (*Ve
 			h.Write([]byte(fmt.Sprintf("%08x", math.Float32bits(x))))
 		}
 	}
-	return &VectorPartitionLocalSearcherV1{asset: clonePartitionSearchAsset(asset), norms: norms, digest: hex.EncodeToString(h.Sum(nil)), opened: 1, searchRoute: VectorPartitionSearchRouteExactFP32ScanV1}, nil
+	return &VectorPartitionLocalSearcherV1{
+		asset:            clonePartitionSearchAsset(asset),
+		norms:            norms,
+		digest:           hex.EncodeToString(h.Sum(nil)),
+		opened:           1,
+		searchRoute:      VectorPartitionSearchRouteExactFP32ScanV1,
+		maxStableIDBytes: vectorPartitionMaxStableIDBytesV1(asset.IDs),
+	}, nil
+}
+
+func vectorPartitionMaxStableIDBytesV1(ids []string) int {
+	maxBytes := 0
+	for _, id := range ids {
+		if len(id) > maxBytes {
+			maxBytes = len(id)
+		}
+	}
+	return maxBytes
+}
+
+func vectorPartitionPreparedMaxStableIDBytesV1(view *columnHNSWSearchPackPreparedView) (int, error) {
+	if view == nil || len(view.DocumentIDOffsets) != view.Header.Rows+1 {
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
+	maxBytes := uint64(0)
+	for i := 0; i < view.Header.Rows; i++ {
+		start, end := view.DocumentIDOffsets[i], view.DocumentIDOffsets[i+1]
+		if end < start || end > uint64(len(view.DocumentIDBytes)) {
+			return 0, ErrVectorPartitionSearchUnavailable
+		}
+		if width := end - start; width > maxBytes {
+			maxBytes = width
+		}
+	}
+	if maxBytes > uint64(math.MaxInt) {
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
+	return int(maxBytes), nil
 }
 
 func validateVectorPartitionSearchAssetV1(a VectorPartitionSearchAssetV1) error {
@@ -437,6 +476,12 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context
 	out := make([]VectorPartitionSearchResultV1, len(s.asset.IDs))
 	var edges uint64
 	for i, v := range s.asset.Vectors {
+		if i&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				s.recordFailure()
+				return nil, VectorPartitionSearchMetricsV1{}, err
+			}
+		}
 		var d float64
 		for j, x := range v {
 			d += float64(x) * float64(query[j])
@@ -482,7 +527,7 @@ func (s *VectorPartitionLocalSearcherV1) Status() VectorPartitionSearchStatusV1 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st := VectorPartitionSearchStatusV1{Generation: s.asset.Generation, PartitionID: s.asset.PartitionID, ActivePins: s.pins, Opened: s.opened, Searches: s.searches, Failures: s.failures, Retired: s.retired, HomeMemberships: s.homeMemberships, OverlapMemberships: s.overlapMemberships, PackBytes: s.packBytes, MappedBytes: s.mappedBytes, HeapBytes: s.heapBytes, OpenNanos: s.openNanos, SearchRoute: s.searchRoute, Candidates: s.candidates, Edges: s.edges}
+	st := VectorPartitionSearchStatusV1{Generation: s.asset.Generation, PartitionID: s.asset.PartitionID, ActivePins: s.pins, Opened: s.opened, Searches: s.searches, Failures: s.failures, Retired: s.retired, HomeMemberships: s.homeMemberships, OverlapMemberships: s.overlapMemberships, MaxStableIDBytes: s.maxStableIDBytes, PackBytes: s.packBytes, MappedBytes: s.mappedBytes, HeapBytes: s.heapBytes, OpenNanos: s.openNanos, SearchRoute: s.searchRoute, Candidates: s.candidates, Edges: s.edges}
 	if s.prepared != nil {
 		return st
 	}

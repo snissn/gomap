@@ -19,6 +19,9 @@ func TestVectorPartitionLocalSearcherV1ExactStableIDsAndPins(t *testing.T) {
 	if got[0].ID != "b" || got[0].Score <= got[1].Score {
 		t.Fatalf("%+v", got)
 	}
+	if status := s.Status(); status.MaxStableIDBytes != 1 {
+		t.Fatalf("max stable ID bytes=%d want 1", status.MaxStableIDBytes)
+	}
 	if e := s.Acquire(); e != nil {
 		t.Fatal(e)
 	}

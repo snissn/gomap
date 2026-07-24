@@ -466,6 +466,11 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 			response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
 			return response, s.wrapError(fmt.Errorf("%w: partition %d unknown search route %q", ErrVectorPartitionShardSearchAssetsUnavailable, partitionID, status.SearchRoute), groupID)
 		}
+		if status.MaxStableIDBytes > s.limits.MaxStableIDBytes {
+			_ = lease.Close()
+			response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
+			return response, s.wrapError(fmt.Errorf("%w: partition %d stable ID bytes=%d exceeds limit=%d", ErrVectorPartitionShardSearchAssetsUnavailable, partitionID, status.MaxStableIDBytes, s.limits.MaxStableIDBytes), groupID)
+		}
 		candidateCeiling := uint64(request.EfSearch)
 		if status.SearchRoute == collections.VectorPartitionSearchRouteExactFP32ScanV1 {
 			candidateCeiling = uint64(status.HomeMemberships + status.OverlapMemberships)
@@ -609,13 +614,28 @@ func searchVectorPartitionDirectV1(ctx context.Context, searcher *collections.Ve
 }
 
 func searchVectorPartitionWithContextV1(ctx context.Context, searcher *collections.VectorPartitionLocalSearcherV1, query []float32, opts collections.VectorPartitionSearchOptionsV1) ([]collections.VectorPartitionSearchResultV1, collections.VectorPartitionSearchMetricsV1, error) {
+	return runVectorPartitionOwnedSearchWithContextV1(ctx, query, opts, searcher.SearchWithOptionsV1)
+}
+
+func runVectorPartitionOwnedSearchWithContextV1(
+	ctx context.Context,
+	query []float32,
+	opts collections.VectorPartitionSearchOptionsV1,
+	search func(context.Context, []float32, collections.VectorPartitionSearchOptionsV1) ([]collections.VectorPartitionSearchResultV1, collections.VectorPartitionSearchMetricsV1, error),
+) ([]collections.VectorPartitionSearchResultV1, collections.VectorPartitionSearchMetricsV1, error) {
 	result := make(chan vectorPartitionSearchAsyncResultV1, 1)
+	ownedQuery := slices.Clone(query)
 	go func() {
-		results, metrics, err := searcher.SearchWithOptionsV1(ctx, query, opts)
+		results, metrics, err := search(ctx, ownedQuery, opts)
 		result <- vectorPartitionSearchAsyncResultV1{results: results, metrics: metrics, err: err}
 	}()
 	select {
 	case <-ctx.Done():
+		// Join the bounded exact scan before returning so the request cannot
+		// outlive its generation lease. SearchWithOptionsV1 polls ctx while
+		// scanning; owning the query also prevents caller reuse from racing
+		// with any work between cancellation and the join.
+		<-result
 		return nil, collections.VectorPartitionSearchMetricsV1{}, ctx.Err()
 	case completed := <-result:
 		return completed.results, completed.metrics, completed.err

@@ -653,6 +653,27 @@ func TestVectorPartitionShardSearchGenerationAndAssetFailuresAreWholeRequestV1(t
 			t.Fatalf("first partition status after whole-request failure=%+v", status)
 		}
 	})
+
+	t.Run("oversized_stable_id_rejected_before_search", func(t *testing.T) {
+		service, source, _ := newVectorPartitionShardSearchTestServiceV1(t,
+			[]raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},
+			map[uint32]collections.VectorPartitionSearchAssetV1{
+				0: vectorPartitionShardSearchAssetTestV1(0, []string{strings.Repeat("x", DefaultVectorPartitionShardSearchLimitsV1().MaxStableIDBytes+1)}, [][]float32{{1, 0}}),
+			},
+		)
+		service.testSearchPartition = func(context.Context, *collections.VectorPartitionLocalSearcherV1, []float32, collections.VectorPartitionSearchOptionsV1) ([]collections.VectorPartitionSearchResultV1, collections.VectorPartitionSearchMetricsV1, error) {
+			t.Fatal("oversized stable ID reached search")
+			return nil, collections.VectorPartitionSearchMetricsV1{}, nil
+		}
+		response, err := service.Search(context.Background(), vectorPartitionShardSearchRequestTestV1([]uint32{0}))
+		assertVectorPartitionShardSearchCodeV1(t, err, VectorPartitionShardSearchErrorAssetsUnavailableV1)
+		if !vectorPartitionShardSearchResponseZeroTestV1(response) {
+			t.Fatalf("oversized stable ID returned partial response=%+v", response)
+		}
+		if pins, releases, opens := source.counts(); pins != 1 || releases != 1 || opens != 1 {
+			t.Fatalf("oversized stable ID pin lifetime=%d/%d opens=%d", pins, releases, opens)
+		}
+	})
 }
 
 func TestVectorPartitionShardSearchBoundsFailBeforeProofOrAllocationV1(t *testing.T) {
@@ -783,6 +804,47 @@ func TestVectorPartitionShardSearchCancellationReleasesPinsWithoutPartialV1(t *t
 			t.Fatalf("response cancellation pin lifetime=%d/%d opens=%d", pins, releases, opens)
 		}
 	})
+}
+
+func TestRunVectorPartitionOwnedSearchWithContextV1OwnsQueryAndJoinsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	query := []float32{1, 2}
+	started := make(chan struct{})
+	finish := make(chan struct{})
+	observedQuery := make(chan []float32, 1)
+	done := make(chan error, 1)
+
+	go func() {
+		_, _, err := runVectorPartitionOwnedSearchWithContextV1(
+			ctx,
+			query,
+			collections.VectorPartitionSearchOptionsV1{TopK: 1},
+			func(ctx context.Context, owned []float32, _ collections.VectorPartitionSearchOptionsV1) ([]collections.VectorPartitionSearchResultV1, collections.VectorPartitionSearchMetricsV1, error) {
+				close(started)
+				<-ctx.Done()
+				<-finish
+				observedQuery <- append([]float32(nil), owned...)
+				return nil, collections.VectorPartitionSearchMetricsV1{}, ctx.Err()
+			},
+		)
+		done <- err
+	}()
+
+	<-started
+	cancel()
+	select {
+	case err := <-done:
+		t.Fatalf("canceled search returned before worker joined: %v", err)
+	default:
+	}
+	query[0] = 99
+	close(finish)
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled search err=%v", err)
+	}
+	if got := <-observedQuery; len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Fatalf("worker query=%v want owned [1 2]", got)
+	}
 }
 
 func TestVectorPartitionShardSearchPinsExactGenerationAcrossConcurrentActivationV1(t *testing.T) {

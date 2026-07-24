@@ -762,7 +762,12 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationWithContextV1(
 			overlap++
 		}
 	}
-	s := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Generation: generation, PartitionID: partition, Dimensions: view.Header.Dimensions}, prepared: view, opened: 1, homeMemberships: home, overlapMemberships: overlap, packBytes: uint64(asset.Ref.Length), mappedBytes: view.mappedBytes, heapBytes: view.heapCopyBytes, openNanos: view.openNanos, searchRoute: VectorPartitionSearchRouteHNSWSearchPackV1}
+	maxStableIDBytes, err := vectorPartitionPreparedMaxStableIDBytesV1(view)
+	if err != nil {
+		_ = view.Close()
+		return nil, fmt.Errorf("%w: stable ID bounds", ErrVectorPartitionSearchUnavailable)
+	}
+	s := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Generation: generation, PartitionID: partition, Dimensions: view.Header.Dimensions}, prepared: view, opened: 1, homeMemberships: home, overlapMemberships: overlap, packBytes: uint64(asset.Ref.Length), mappedBytes: view.mappedBytes, heapBytes: view.heapCopyBytes, openNanos: view.openNanos, searchRoute: VectorPartitionSearchRouteHNSWSearchPackV1, maxStableIDBytes: maxStableIDBytes}
 	s.partitionPin = pin
 	release = false
 	return s, nil
