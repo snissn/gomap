@@ -1309,6 +1309,39 @@ func TestVectorPartitionStoreV1CleanupRefusesReachableGeneration(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionStoreV1DeleteAcceptsManifestOrderDifferentFromReclaimOrder(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	s, err := OpenVectorPartitionStoreV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testVectorPartitionManifestV1()
+	m.Assets[0].Ref.FileID = 20
+	m.Assets[1].Ref.FileID = 10
+	m.RouterAsset.Ref.FileID = 30
+	m.Canonicalize()
+	if err := s.publishLocked(m); err != nil {
+		t.Fatal(err)
+	}
+	if err := deactivateVectorPartitionStoreForTest(s, m.Collection, m.IndexName); err != nil {
+		t.Fatal(err)
+	}
+	if err := deleteVectorPartitionStoreForTest(s, m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
+		t.Fatalf("delete non-ref-ordered manifest: %v", err)
+	}
+	reclaim, err := s.openDeleteTombstone(m.Collection, m.IndexName, m.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := []uint32{
+		reclaim.OriginalRefs[0].FileID,
+		reclaim.OriginalRefs[1].FileID,
+		reclaim.OriginalRefs[2].FileID,
+	}, []uint32{10, 20, 30}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("reclaim file order=%v want %v", got, want)
+	}
+}
+
 func legacyVectorPartitionStoreV1PublishFaultWindowsReopenOldOrCompleteNew(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	boundaries := []string{"generation_temp_synced", "generation_linked", "generation_dir_synced", "active_temp_synced", "active_renamed", "active_dir_synced", "retired_removed", "publication_complete"}

@@ -1213,6 +1213,7 @@ func vectorPartitionReclaimRefsFromManifestV1(m VectorPartitionManifestV1) []Col
 	if m.RouterAsset.Ref.Kind != "" {
 		refs = append(refs, m.RouterAsset.Ref)
 	}
+	sort.Slice(refs, func(i, j int) bool { return compareColumnAssetRefs(refs[i], refs[j]) < 0 })
 	return refs
 }
 
