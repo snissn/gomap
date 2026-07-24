@@ -276,7 +276,7 @@ func run(args []string, stdout io.Writer) (runErr error) {
 	if err != nil {
 		return err
 	}
-	if cfg.stage == "partition" || cfg.stage == "overlap,partition_index" {
+	if cfg.stage == "partition" {
 		err = validatePartitionFixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes)
 	} else {
 		err = validateFixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes)
@@ -292,8 +292,9 @@ func run(args []string, stdout io.Writer) (runErr error) {
 	}
 	if cfg.stage == "partition" || cfg.stage == "overlap,partition_index" {
 		// The partition builder owns only the frozen vector corpus and its own
-		// graph controls. Simulation probes, overlaps, stages, top-k and memory
-		// planning are intentionally irrelevant here.
+		// graph controls. Simulation probes, stage selection, and simulation
+		// memory planning are intentionally irrelevant here; M3 separately
+		// consumes explicit overlap ratios, queries, and top-k.
 		if err := vectorpartition.ValidateReferenceInputShape(cfg.partition, fixture.Vectors, fixture.Dimensions); err != nil {
 			return err
 		}
@@ -301,8 +302,17 @@ func run(args []string, stdout io.Writer) (runErr error) {
 		// by BuildWithPartitioner. The manifest checksum additionally commits the
 		// simulation-only query/truth stream, so verifying it here would recreate
 		// queries and exact truth that this stage deliberately does not own.
-		vectors := deterministicVectors(fixture)
-		return runPartitionStage(cfg, fixture, vectors, stdout)
+		if cfg.stage == "partition" {
+			return runPartitionStage(cfg, fixture, deterministicVectors(fixture), nil, stdout)
+		}
+		if cfg.topK > fixture.Vectors {
+			return errors.New("top-k cannot exceed fixture vectors")
+		}
+		vectors, queries := deterministicFixture(fixture)
+		if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
+			return errors.New("fixture checksum does not match generated vector/query/truth stream")
+		}
+		return runPartitionStage(cfg, fixture, vectors, queries, stdout)
 	}
 	if cfg.topK > fixture.Vectors {
 		return errors.New("top-k cannot exceed fixture vectors")
@@ -429,7 +439,7 @@ func parseConfig(args []string) (config, error) {
 	return cfg, nil
 }
 
-func runPartitionStage(cfg config, fixture fixtureManifest, vectors [][]float64, stdout io.Writer) error {
+func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][]float64, stdout io.Writer) error {
 	input := make([]vectorpartition.Vector, len(vectors))
 	for i, values := range vectors {
 		input[i] = vectorpartition.Vector{ID: fmt.Sprintf("doc-%06d", i), Values: values}
@@ -481,37 +491,8 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors [][]float64,
 	if err := os.WriteFile(filepath.Join(cfg.out, "vector_partition_build_"+suffix+".json"), raw, 0644); err != nil {
 		return err
 	}
-	// M3 evidence is deliberately separate from M2's immutable disjoint
-	// artifact.  It records bounded derived membership accounting for every
-	// requested ratio and does not imply a serving enablement policy.
 	if cfg.stage == "overlap,partition_index" {
-		type overlapEvidence struct {
-			Ratio             float64 `json:"ratio"`
-			Budget            int     `json:"budget"`
-			Used              int     `json:"used"`
-			Unspent           int     `json:"unspent"`
-			ReplicationFactor float64 `json:"replication_factor"`
-			PartitionLoads    []int   `json:"partition_loads"`
-		}
-		evidence := make([]overlapEvidence, 0, len(cfg.overlaps))
-		for _, ratio := range cfg.overlaps {
-			overlap, err := vectorpartition.BuildOverlap(artifact, vectorpartition.OverlapConfig{Ratio: ratio})
-			if err != nil {
-				return fmt.Errorf("build bounded overlap ratio %.4f: %w", ratio, err)
-			}
-			evidence = append(evidence, overlapEvidence{ratio, overlap.Budget, overlap.Used, overlap.Unspent, float64(len(overlap.Memberships)) / float64(len(artifact.IDs)), overlap.Loads})
-		}
-		b, err := json.Marshal(struct {
-			ResultKind     string            `json:"result_kind"`
-			ArtifactSHA256 string            `json:"artifact_sha256"`
-			Overlaps       []overlapEvidence `json:"overlaps"`
-		}{"m3_bounded_overlap", digest, evidence})
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(filepath.Join(cfg.out, "vector_partition_overlap_"+suffix+".json"), b, 0644); err != nil {
-			return err
-		}
+		return runM3PartitionIndexStage(cfg, fixture, artifact, digest, suffix, vectors, queries, stdout)
 	}
 	if cfg.format == "json" {
 		_, err = fmt.Fprintln(stdout, string(raw))

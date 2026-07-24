@@ -48,6 +48,13 @@ func TestVectorPartitionPersistentLocalSearcherReopenCorruptionAndPinsV1(t *test
 	if got, err := s.Search([]float32{1, 0, 0}, 1); err != nil || len(got) != 1 || got[0].ID != "b" {
 		t.Fatalf("search=%+v err=%v", got, err)
 	}
+	if _, metrics, err := s.SearchWithMetrics([]float32{1, 0, 0}, 1); err != nil || metrics.Route != VectorPartitionSearchRouteHNSWSearchPackV1 || metrics.Candidates == 0 {
+		t.Fatalf("search metrics=%+v err=%v", metrics, err)
+	}
+	searchStatus := s.Status()
+	if searchStatus.SearchRoute != VectorPartitionSearchRouteHNSWSearchPackV1 || searchStatus.PackBytes == 0 || searchStatus.MappedBytes+searchStatus.HeapBytes == 0 || searchStatus.OpenNanos == 0 || searchStatus.Candidates == 0 {
+		t.Fatalf("search status=%+v", searchStatus)
+	}
 	if err := col.DeleteVectorPartitionGenerationV1(def.Name, m1.Generation, VectorPartitionCleanupEligibilityV1{}); err == nil {
 		t.Fatal("delete succeeded while local searcher pinned")
 	}
@@ -125,4 +132,71 @@ func TestVectorPartitionPersistentLocalSearcherReopenCorruptionAndPinsV1(t *test
 		t.Fatalf("corrupt open err=%v", err)
 	}
 	_ = d.Close()
+}
+
+func TestVectorPartitionNativePackPreflightAndLayeredAdjacencyV1(t *testing.T) {
+	if err := preflightVectorPartitionNativePackV1(1, 3, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := preflightVectorPartitionNativePackV1(1_000_000, 4096, 16); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("over-cap preflight err=%v", err)
+	}
+	source := []uint32{columnVectorGraphLayeredAdjacencyMagic, 1, 3, 2, 3, 4, 2, 2, 4}
+	got, err := remapVectorPartitionAdjacencyV1(source, map[int]int{2: 0, 4: 1}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []uint32{columnVectorGraphLayeredAdjacencyMagic, 1, 1, 1, 1, 1}
+	if len(got) != len(want) {
+		t.Fatalf("remapped adjacency=%v want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("remapped adjacency=%v want %v", got, want)
+		}
+	}
+}
+
+func TestVectorPartitionSourceOrdinalsBindNativeStableIDsV1(t *testing.T) {
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
+	defer d.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	identity, rows, err := col.VectorPartitionSourceOrdinalsV1(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.RowCount != 2 || len(rows) != 2 {
+		t.Fatalf("identity=%+v rows=%+v", identity, rows)
+	}
+	seen := make(map[string]uint64, len(rows))
+	for ordinal, row := range rows {
+		if row.Ordinal != uint64(ordinal) {
+			t.Fatalf("row[%d]=%+v", ordinal, row)
+		}
+		seen[row.StableID] = row.Ordinal
+	}
+	if _, ok := seen["a"]; !ok {
+		t.Fatalf("missing stable ID a: %+v", rows)
+	}
+	if _, ok := seen["b"]; !ok {
+		t.Fatalf("missing stable ID b: %+v", rows)
+	}
+}
+
+func TestVectorPartitionOverlapPolicyCanonicalV1(t *testing.T) {
+	policy := VectorPartitionOverlapPolicyV1{Capacity: 100, Budget: 20, Unspent: 3}
+	raw, err := FormatVectorPartitionOverlapPolicyV1(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := parseVectorPartitionOverlapPolicyV1(raw); !ok || got != policy {
+		t.Fatalf("policy=%+v ok=%v want %+v", got, ok, policy)
+	}
+	for _, bad := range []string{"", raw + "junk", "m3_bounded_overlap_v1:capacity=0,budget=1,unspent=0", "m3_bounded_overlap_v1:capacity=1,budget=0,unspent=1"} {
+		if _, ok := parseVectorPartitionOverlapPolicyV1(bad); ok {
+			t.Fatalf("accepted noncanonical policy %q", bad)
+		}
+	}
 }

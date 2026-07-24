@@ -147,6 +147,47 @@ func TestPartitionStageWritesValidatedDeterministicArtifact(t *testing.T) {
 	}
 }
 
+func TestM3OverlapPartitionIndexBuildsReopensAndSearchesNativePacks(t *testing.T) {
+	dataset := writeFixtureForTest(t, 64, 8, 8)
+	out := t.TempDir()
+	args := []string{
+		"-dataset", dataset,
+		"-out", out,
+		"-partitions", "4",
+		"-probes", "1",
+		"-overlap", "0,0.20",
+		"-top-k", "4",
+		"-stage", "overlap,partition_index",
+		"-partition-repetitions", "1",
+		"-partition-pivots", "2",
+		"-partition-max-leaf-bucket", "8",
+		"-partition-degree", "4",
+	}
+	var stdout bytes.Buffer
+	if err := runWithHermeticProvenance(t, args, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	var report m3PartitionIndexReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.ResultKind != "m3_native_partition_hnsw_evidence" || len(report.Rows) != 2 || !strings.HasPrefix(report.ReplicationGate, "passed:") {
+		t.Fatalf("report=%+v", report)
+	}
+	for _, row := range report.Rows {
+		if row.PackBytes == 0 || row.PackBytes != uint64(row.FinalBytes) || row.LocalSearches != 8*4 || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 || row.ExactLocalRecallAtK <= 0 {
+			t.Fatalf("M3 row=%+v", row)
+		}
+	}
+	entries, err := os.ReadDir(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("M3 artifacts=%d want M2 artifact, M2 report, M3 report", len(entries))
+	}
+}
+
 func TestPartitionStageEdgeClampPreservesRepetitionCapacity(t *testing.T) {
 	cfg, err := parseConfig([]string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-probes", "1", "-stage", "partition", "-partition-repetitions", "4", "-partition-degree", "16"})
 	if err != nil {

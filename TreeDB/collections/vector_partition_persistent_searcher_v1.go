@@ -10,6 +10,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -44,6 +45,10 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(index string,
 	generation := manifest.Generation
 	if c == nil || c.db == nil || generation == 0 || len(inputs) == 0 {
 		return nil, nil, ErrVectorPartitionSearchUnavailable
+	}
+	limits := DefaultVectorPartitionManifestLimits()
+	if manifest.SourceRowCount == 0 || manifest.SourceRowCount > uint64(limits.sourceRowLimit()) || len(manifest.Memberships) != int(manifest.SourceRowCount) || len(manifest.OverlapMemberships) > limits.MaxMemberships || len(inputs) > int(manifest.PartitionCount) {
+		return nil, nil, fmt.Errorf("%w: manifest count cap", ErrVectorPartitionSearchUnavailable)
 	}
 	if index == "" || index != manifest.IndexName {
 		return nil, nil, fmt.Errorf("%w: index/manifest mismatch", ErrVectorPartitionSearchUnavailable)
@@ -104,14 +109,16 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(index string,
 		if len(selected) == 0 {
 			return nil, nil, fmt.Errorf("%w: partition has no canonical memberships", ErrVectorPartitionSearchUnavailable)
 		}
-		ordToLocal := make(map[int]int, len(selected))
-		for j, x := range selected {
-			if _, dup := ordToLocal[x.ordinal]; dup {
-				return nil, nil, fmt.Errorf("%w: duplicate membership ordinal", ErrVectorPartitionSearchUnavailable)
-			}
-			ordToLocal[x.ordinal] = j
+		if err := preflightVectorPartitionNativePackV1(len(selected), def.Dimensions, def.M); err != nil {
+			return nil, nil, err
 		}
-		rows := make([]columnVectorGraphAssetRow, len(selected))
+		type selectedRow struct {
+			ordinal int
+			kind    VectorPartitionMembershipKindV1
+			row     columnVectorGraphPhysicalRow
+			level   int
+		}
+		sourceRows := make([]selectedRow, len(selected))
 		scratch := &columnPhysicalRowReaderScratch{}
 		for j, x := range selected {
 			r, fetchErr := reader.FetchRow(x.ordinal, scratch)
@@ -127,15 +134,35 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(index string,
 			if len(r.ID) == 0 || len(r.Vector) != def.Dimensions {
 				return nil, nil, fmt.Errorf("%w: authoritative typed row", ErrVectorPartitionSearchUnavailable)
 			}
-			adj := make([]uint32, 0, len(r.Adjacency))
-			for _, n := range r.Adjacency {
-				if local, ok := ordToLocal[int(n)]; ok && local != j {
-					adj = append(adj, uint32(local))
-				}
+			level, levelErr := columnVectorGraphAdjacencyMaxLayer(r.Adjacency)
+			if levelErr != nil {
+				return nil, nil, fmt.Errorf("%w: source adjacency: %v", ErrVectorPartitionSearchUnavailable, levelErr)
 			}
-			sort.Slice(adj, func(a, b int) bool { return adj[a] < adj[b] })
-			adj = compactPartitionAdjacencyV1(adj)
-			rows[j] = columnVectorGraphAssetRow{ID: append([]byte(nil), r.ID...), Vector: append([]float32(nil), r.Vector...), InvNorm: r.InvNorm, Adjacency: adj, BaseRowRef: DocumentRowRef{DocumentID: append([]byte(nil), r.ID...), Generation: manifest.SourceGeneration, PartID: 1, RowIndex: j, AppliedCommandLSN: 1}}
+			sourceRows[j] = selectedRow{ordinal: x.ordinal, kind: x.kind, row: r, level: level}
+		}
+		// HNSW packs require their entry node at local ordinal zero. Preserve the
+		// source graph's highest-level node in that position, then use stable
+		// source ordinals for deterministic order.
+		sort.Slice(sourceRows, func(a, b int) bool {
+			if sourceRows[a].level != sourceRows[b].level {
+				return sourceRows[a].level > sourceRows[b].level
+			}
+			return sourceRows[a].ordinal < sourceRows[b].ordinal
+		})
+		ordToLocal := make(map[int]int, len(sourceRows))
+		for j, source := range sourceRows {
+			if _, dup := ordToLocal[source.ordinal]; dup {
+				return nil, nil, fmt.Errorf("%w: duplicate membership ordinal", ErrVectorPartitionSearchUnavailable)
+			}
+			ordToLocal[source.ordinal] = j
+		}
+		rows := make([]columnVectorGraphAssetRow, len(sourceRows))
+		for j, source := range sourceRows {
+			adj, adjErr := remapVectorPartitionAdjacencyV1(source.row.Adjacency, ordToLocal, j)
+			if adjErr != nil {
+				return nil, nil, fmt.Errorf("%w: source adjacency: %v", ErrVectorPartitionSearchUnavailable, adjErr)
+			}
+			rows[j] = columnVectorGraphAssetRow{ID: append([]byte(nil), source.row.ID...), Vector: append([]float32(nil), source.row.Vector...), InvNorm: source.row.InvNorm, Adjacency: adj, BaseRowRef: DocumentRowRef{DocumentID: append([]byte(nil), source.row.ID...), Generation: manifest.SourceGeneration, PartID: 1, RowIndex: source.row.RowIndex, AppliedCommandLSN: 1}}
 		}
 		graph := columnVectorGraphManifestSnapshot{IndexName: def.Name, Field: def.Field, Metric: def.Metric, Encoding: def.Encoding, Dimensions: def.Dimensions, M: def.M, EfConstruction: def.EfConstruction, EfSearch: def.EfSearch, BaseManifestGeneration: manifest.SourceGeneration, BaseManifestChecksum: manifest.SourceChecksum, BaseSchemaHash: manifest.SourceSchemaHash, GraphSchemaHash: cfg.SchemaHash, RowCount: len(rows)}
 		pack, err := buildColumnHNSWSearchPackInput(def, graph, rows)
@@ -384,6 +411,7 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index strin
 	}
 	manager := mappedresource.NewManager()
 	key := mappedresource.Key{Class: mappedresource.ClassTypedColumnAsset, Namespace: asset.Ref.Namespace, Kind: string(asset.Ref.Kind), Generation: asset.Ref.Generation, PartID: asset.Ref.PartID, FileID: asset.Ref.FileID, Offset: asset.Ref.Offset, Length: asset.Ref.Length, Checksum: uint64(asset.Ref.Checksum), Version: columnHNSWSearchPackVersionV1, Encoding: columnVectorIndexStateEncodingHNSWSearchPackV1, Section: mappedresource.Section{Kind: string(columnVectorIndexStateAssetRoleHNSWSearchPack), Category: string(ColumnAssetKindTCS1HNSWSearchPack), Name: asset.ID}}
+	openStarted := time.Now()
 	h, err := manager.AcquireFileRange(key, mappedresource.Scope{Kind: mappedresource.ScopePreparedSearch, ID: "vector_partition/" + strconv.FormatUint(generation, 10), Collection: c.name, Namespace: asset.Ref.Namespace, Generation: generation, Reason: "vector partition native HNSW"}, path, mappedresource.AcquireOptions{Reason: "vector partition native HNSW", ValidationMode: mappedresource.ValidationVerify, PreferMapped: true, AllowHeapCopy: true, ResourceRoot: c.db.ColumnAssetRootDir(), ResourcePath: path})
 	if err != nil {
 		return nil, err
@@ -397,6 +425,11 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index strin
 		_ = view.Close()
 		return nil, ErrVectorPartitionSearchUnavailable
 	}
+	openNanos := time.Since(openStarted).Nanoseconds()
+	if openNanos < 1 {
+		openNanos = 1
+	}
+	view.openNanos = uint64(openNanos)
 	home, overlap := 0, 0
 	for _, x := range m.Memberships {
 		if x.PartitionID == partition {
@@ -408,8 +441,60 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index strin
 			overlap++
 		}
 	}
-	s := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Generation: generation, PartitionID: partition, Dimensions: view.Header.Dimensions}, prepared: view, opened: 1, homeMemberships: home, overlapMemberships: overlap, packBytes: uint64(asset.Ref.Length), heapBytes: view.heapCopyBytes}
+	s := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Generation: generation, PartitionID: partition, Dimensions: view.Header.Dimensions}, prepared: view, opened: 1, homeMemberships: home, overlapMemberships: overlap, packBytes: uint64(asset.Ref.Length), mappedBytes: view.mappedBytes, heapBytes: view.heapCopyBytes, openNanos: view.openNanos, searchRoute: VectorPartitionSearchRouteHNSWSearchPackV1}
 	s.partitionPin = pin
 	release = false
 	return s, nil
+}
+
+func preflightVectorPartitionNativePackV1(rows, dimensions, degree int) error {
+	if rows < 1 || rows > 1_000_000 || dimensions < 1 || dimensions > 4096 || degree < 1 {
+		return fmt.Errorf("%w: native pack shape cap", ErrVectorPartitionSearchUnavailable)
+	}
+	stride, err := columnHNSWSearchPackVectorStrideForDimensions(dimensions)
+	if err != nil {
+		return fmt.Errorf("%w: native pack stride: %v", ErrVectorPartitionSearchUnavailable, err)
+	}
+	// Reject impossible packs before allocating rows, normalized vectors, or
+	// adjacency. This is a conservative minimum: encoding performs the exact
+	// final byte cap after source IDs/topology are known.
+	perRow := int64(stride)*4 + 2 + 8*6
+	if degree <= math.MaxInt/2 {
+		perRow += int64(degree*2) * 4
+	}
+	if int64(rows) > vectorPartitionSearchAssetMaxBytesV1/perRow {
+		return fmt.Errorf("%w: native pack byte cap", ErrVectorPartitionSearchUnavailable)
+	}
+	return nil
+}
+
+func remapVectorPartitionAdjacencyV1(source []uint32, ordToLocal map[int]int, self int) ([]uint32, error) {
+	remapLayer := func(neighbors []uint32) []uint32 {
+		out := make([]uint32, 0, len(neighbors))
+		for _, neighbor := range neighbors {
+			if local, ok := ordToLocal[int(neighbor)]; ok && local != self {
+				out = append(out, uint32(local))
+			}
+		}
+		sort.Slice(out, func(a, b int) bool { return out[a] < out[b] })
+		return compactPartitionAdjacencyV1(out)
+	}
+	if !columnVectorGraphAdjacencyIsLayered(source) {
+		return remapLayer(source), nil
+	}
+	maxLayer, err := columnVectorGraphAdjacencyMaxLayer(source)
+	if err != nil {
+		return nil, err
+	}
+	out := []uint32{columnVectorGraphLayeredAdjacencyMagic, uint32(maxLayer)}
+	for layer := 0; layer <= maxLayer; layer++ {
+		neighbors, err := columnVectorGraphAdjacencyLayer(source, layer)
+		if err != nil {
+			return nil, err
+		}
+		remapped := remapLayer(neighbors)
+		out = append(out, uint32(len(remapped)))
+		out = append(out, remapped...)
+	}
+	return out, nil
 }

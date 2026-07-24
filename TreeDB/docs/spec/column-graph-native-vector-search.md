@@ -167,6 +167,24 @@ claiming high-QPS vector search:
   quantized and their closeout evidence lives in
   `quantized-prepared-hnsw-closeout-2588.md`.
 
+### Vector-partition local packs
+
+M3 vector partitions reuse `hnsw_search_pack_v1`; they do not define a second
+ANN encoding or a document-bearing shard format. A partition generation binds
+the native source generation/checksum/schema and maps the M2 artifact's stable
+IDs to authoritative source ordinals before selecting rows. Pack construction
+preserves layered HNSW adjacency framing, remaps retained neighbors to local
+ordinals, drops cross-partition neighbors, and places the retained
+highest-level node at local ordinal zero. Count and conservative byte
+preflights run before row and pack allocation.
+
+The generation's M1 manifest owns exact asset refs, lengths, CRCs, SHA-256
+digests, home/overlap memberships, and bounded overlap accounting. A reopened
+partition searcher re-verifies the asset and source binding, reports
+mapped/heap/open and candidate/edge counters, and returns stable IDs plus
+scores without fetching documents. Corrupt, missing, stale, malformed, or
+foreign-generation packs fail closed.
+
 Healthy no-document fast-path evidence must include `ns/op`, `ops/sec`, `B/op`,
 `allocs/op`, and route/fallback counters proving:
 

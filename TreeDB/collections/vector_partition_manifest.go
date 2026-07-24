@@ -2694,6 +2694,8 @@ type VectorPartitionStatusV1 struct {
 	StaleReason                                             string
 	PartitionCount, GroupCount                              uint32
 	Memberships, OverlapMemberships, AssetBytes, ReaderPins uint64
+	Capacity, OverlapBudget, UnspentOverlapBudget           uint64
+	MissingAssets, CorruptAssets, StaleAssets               uint64
 }
 
 // PublishVectorPartitionManifestV1 binds the durable generation to this

@@ -22,12 +22,19 @@ type Membership struct {
 // OverlapResult is canonical (ordinal, partition order) and records budget
 // left unused when the capacity/affinity constraints prevent another move.
 type OverlapResult struct {
-	Memberships []Membership
-	Budget      int
-	Used        int
-	Unspent     int
-	Loads       []int
+	Memberships   []Membership
+	Budget        int
+	Used          int
+	Unspent       int
+	Loads         []int
+	EdgeCutBefore int
+	EdgeCutAfter  int
 }
+
+// MaxOverlapMembershipsPerVector matches the durable M1 manifest cap. The
+// builder treats the cap as a reason to leave budget unspent, never as a
+// post-build validation failure.
+const MaxOverlapMembershipsPerVector = 16
 
 // BuildOverlap derives bounded non-home memberships from a validated disjoint
 // artifact.  Each round observes one immutable membership snapshot, ranks all
@@ -58,6 +65,9 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 		// This proposal set is the bulk-synchronous round snapshot.
 		ps := make([]proposal, 0, n)
 		for i, ns := range a.Graph.Neighbors {
+			if len(members[i])-1 >= MaxOverlapMembershipsPerVector {
+				continue
+			}
 			counts := make([]int, a.Config.Partitions)
 			for _, j := range ns {
 				for p := range members[j] {
@@ -102,6 +112,9 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 			if loads[p.part] >= a.Metrics.Cap {
 				continue
 			}
+			if len(members[p.node])-1 >= MaxOverlapMembershipsPerVector {
+				continue
+			}
 			if _, exists := members[p.node][p.part]; exists {
 				continue
 			}
@@ -117,7 +130,13 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 			break
 		}
 	}
-	out := OverlapResult{Budget: budget, Used: used, Unspent: budget - used, Loads: loads}
+	out := OverlapResult{
+		Budget:        budget,
+		Used:          used,
+		Unspent:       budget - used,
+		Loads:         loads,
+		EdgeCutBefore: a.Metrics.EdgeCut,
+	}
 	for i, set := range members {
 		for p := range set {
 			out.Memberships = append(out.Memberships, Membership{VectorOrdinal: i, Partition: p, Home: p == a.Assignment[i]})
@@ -129,6 +148,7 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 		}
 		return out.Memberships[i].Partition < out.Memberships[j].Partition
 	})
+	out.EdgeCutAfter = overlapEdgeCut(a, out.Memberships)
 	if err := ValidateOverlap(a, cfg, out); err != nil {
 		return OverlapResult{}, err
 	}
@@ -165,7 +185,7 @@ func ValidateOverlap(a Artifact, cfg OverlapConfig, r OverlapResult) error {
 		return errors.New("overlap ratio must be finite in [0,1]")
 	}
 	wantBudget := int(math.Floor(cfg.Ratio * float64(len(a.IDs))))
-	if r.Budget != wantBudget || r.Budget < 0 || r.Used < 0 || r.Used > r.Budget || r.Unspent != r.Budget-r.Used || len(r.Loads) != a.Config.Partitions || len(r.Memberships) != len(a.IDs)+r.Used {
+	if r.Budget != wantBudget || r.Budget < 0 || r.Used < 0 || r.Used > r.Budget || r.Unspent != r.Budget-r.Used || len(r.Loads) != a.Config.Partitions || len(r.Memberships) != len(a.IDs)+r.Used || r.EdgeCutBefore != a.Metrics.EdgeCut {
 		return errors.New("invalid overlap accounting")
 	}
 	seen := make(map[[2]int]struct{}, len(r.Memberships))
@@ -190,7 +210,7 @@ func ValidateOverlap(a Artifact, cfg OverlapConfig, r OverlapResult) error {
 		loads[m.Partition]++
 		if !m.Home {
 			perVector[m.VectorOrdinal]++
-			if perVector[m.VectorOrdinal] > 16 {
+			if perVector[m.VectorOrdinal] > MaxOverlapMembershipsPerVector {
 				return errors.New("overlap membership per-vector cap exceeded")
 			}
 		}
@@ -205,5 +225,36 @@ func ValidateOverlap(a Artifact, cfg OverlapConfig, r OverlapResult) error {
 			return errors.New("overlap partition capacity exceeded")
 		}
 	}
+	if got := overlapEdgeCut(a, r.Memberships); got != r.EdgeCutAfter || got > r.EdgeCutBefore {
+		return errors.New("invalid overlap edge-cut accounting")
+	}
 	return nil
+}
+
+func overlapEdgeCut(a Artifact, memberships []Membership) int {
+	sets := make([]map[int]struct{}, len(a.IDs))
+	for i := range sets {
+		sets[i] = make(map[int]struct{})
+	}
+	for _, membership := range memberships {
+		if membership.VectorOrdinal >= 0 && membership.VectorOrdinal < len(sets) {
+			sets[membership.VectorOrdinal][membership.Partition] = struct{}{}
+		}
+	}
+	cut := 0
+	for i, neighbors := range a.Graph.Neighbors {
+		for _, neighbor := range neighbors {
+			shared := false
+			for partition := range sets[i] {
+				if _, ok := sets[neighbor][partition]; ok {
+					shared = true
+					break
+				}
+			}
+			if !shared {
+				cut++
+			}
+		}
+	}
+	return cut
 }
