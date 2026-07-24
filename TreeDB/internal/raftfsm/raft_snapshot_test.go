@@ -444,6 +444,9 @@ func TestRaftSnapshotV1InstallExtractionDoesNotDeadlockExport(t *testing.T) {
 // not advance the Raft source DB's applied-LSN outside durable Raft progress.
 func stageRaftSnapshotReadyVectorPartitionForTest(tb testing.TB, source *backenddb.DB, rows int) collections.VectorPartitionManifestV1 {
 	tb.Helper()
+	if !collections.VectorPartitionNamespacePersistenceSupportedForTestingV1() {
+		tb.Skip("vector partition namespace mutation is unsupported on this platform")
+	}
 	authorityDir := tb.TempDir()
 	authority := openRaftSnapshotFSMTestDB(tb, authorityDir, false)
 	defer authority.Close()
@@ -479,6 +482,9 @@ func copyRaftSnapshotFixtureTree(source, target string) error {
 
 func publishRaftSnapshotReadyVectorPartitionForTest(tb testing.TB, database *backenddb.DB, rows int) collections.VectorPartitionManifestV1 {
 	tb.Helper()
+	if !collections.VectorPartitionNamespacePersistenceSupportedForTestingV1() {
+		tb.Skip("vector partition namespace mutation is unsupported on this platform")
+	}
 	if rows < 1 {
 		tb.Fatal("ready vector partition requires at least one source row")
 	}

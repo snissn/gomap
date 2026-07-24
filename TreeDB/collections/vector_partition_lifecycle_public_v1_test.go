@@ -9,6 +9,7 @@ import (
 )
 
 func TestVectorPartitionLifecyclePublicV1PublishesAndReopensCheckpointAuthority(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	root := t.TempDir()
 	store, err := OpenVectorPartitionStoreV1(root)
 	if err != nil {
@@ -65,6 +66,7 @@ func TestVectorPartitionLifecyclePublicV1PublishesAndReopensCheckpointAuthority(
 }
 
 func TestVectorPartitionLifecyclePublicV1DeactivateAndDeletePrepare(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -106,6 +108,7 @@ func TestVectorPartitionLifecyclePublicV1DeactivateAndDeletePrepare(t *testing.T
 }
 
 func TestVectorPartitionLifecyclePublicV1ReadyActivationRetry(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -154,6 +157,7 @@ func TestVectorPartitionLifecyclePublicV1ReadyActivationRetry(t *testing.T) {
 }
 
 func TestVectorPartitionLifecyclePublicV1RejectsConflictsAndLegacyAuthority(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

@@ -2,7 +2,10 @@
 
 package collections
 
-import "os"
+import (
+	"os"
+	"runtime"
+)
 
 // syncDirVPM makes namespace changes durable on platforms with directory fsync.
 func syncDirVPM(path string) error {
@@ -16,4 +19,8 @@ func syncDirVPM(path string) error {
 
 func renameVPM(old, new string) error { return os.Rename(old, new) }
 
-func vpmNamespacePersistenceSupported() bool { return true }
+func vpmNamespacePersistenceSupported() bool {
+	// The immutable VCP1/VLC1 store requires anonymous exact-handle
+	// installation, which rootpublication currently proves only on Linux.
+	return runtime.GOOS == "linux"
+}
