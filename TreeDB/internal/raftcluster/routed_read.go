@@ -6,8 +6,10 @@ import (
 	"fmt"
 )
 
-// RoutedReadIndexCoordinator obtains a production read-index proof from the
-// selected owner group and waits for that same owner to apply through it.
+// RoutedReadIndexCoordinator validates a read-index proof from the selected
+// owner group and waits for that same owner to apply through it. This internal
+// contract does not bind a collection store to the proof and therefore does
+// not, by itself, authorize any public read path.
 type RoutedReadIndexCoordinator interface {
 	CoordinateRoutedReadIndex(context.Context, ReadIndexBarrier) (ReadIndexProof, AppliedProgress, error)
 }
@@ -27,9 +29,10 @@ type groupReadIndexCoordinatorV1 struct {
 	appliedIndexWaiter AppliedIndexReadBarrierWaiter
 }
 
-// GroupRoutedReadIndexCoordinator dispatches a strong read barrier to exactly
-// one statically registered owner group. It does not scatter or discover
-// ownership; callers must supply a catalog-derived group target.
+// GroupRoutedReadIndexCoordinator is internal coordination scaffolding that
+// dispatches a strong read barrier to exactly one statically registered owner
+// group. It does not scatter, discover ownership, or bind the serving
+// collection store; callers must supply a catalog-derived group target.
 type GroupRoutedReadIndexCoordinator struct {
 	byGroup map[GroupID]groupReadIndexCoordinatorV1
 }

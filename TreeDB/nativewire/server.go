@@ -976,14 +976,9 @@ func (s *Server) Stats() map[string]string {
 		"cluster_submit.ack_raft_committed_total",
 		"cluster_submit.nanos_total",
 		"cluster_read_route.requests_total",
-		"cluster_read_route.success_total",
 		"cluster_read_route.errors_total",
 		"cluster_read_route.unsupported_total",
-		"cluster_read_route.stale_rejected_total",
-		"cluster_read_route.linearizable_success_total",
-		"cluster_read_route.read_index_success_total",
-		"cluster_read_route.leader_success_total",
-		"cluster_read_route.follower_success_total",
+		"cluster_read_route.owner_store_unbound_total",
 	} {
 		out[nativeStatsPrefix+key] = "0"
 	}

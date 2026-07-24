@@ -554,14 +554,19 @@ func (s *Server) rejectClusterTokenRouteIndexedMutation(command iwire.CommandID,
 			iwire.ErrReadOnly,
 			request,
 			target,
-			"secondary_index_unsupported",
-			"cluster token/ring route cannot verify sharded index policy without a collection manager",
+			"index_policy_unverifiable",
+			"cluster token/ring mutation cannot verify sharded index policy because local collection metadata is unavailable",
 		)
 	}
 	col, err := s.collections.OpenCollection(request.Collection)
 	if errors.Is(err, collections.ErrCollectionNotFound) {
-		// Cluster-created collections are constrained to metadata without indexes.
-		return nil
+		return clusterRouteTargetProtocolError(
+			iwire.ErrReadOnly,
+			request,
+			target,
+			"index_policy_unverifiable",
+			"cluster token/ring mutation cannot verify sharded index policy because local collection metadata is unavailable",
+		)
 	}
 	if err != nil {
 		return err

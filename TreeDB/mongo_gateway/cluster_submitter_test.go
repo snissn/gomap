@@ -1081,7 +1081,7 @@ func TestClusterRoutePreflightMongoShardKeyFindMapsTokenThenFailsClosed(t *testi
 				{Key: "$db", Value: "app"},
 			})
 			assertCommandError(t, response, "NotWritablePrimary")
-			assertErrmsgContains(t, response, "Mongo gateway cluster route target for _id find requires the routed linearizable read-index/apply path")
+			assertErrmsgContains(t, response, "Mongo gateway cluster route target for _id find is disabled until the serving collection-store identity is bound to the owner Raft proof")
 			assertBool(t, response, "treedbClusterError", true)
 			assertStringField(t, response, "treedbErrorClass", "route_rejected")
 			routes := submitter.snapshotRoutes()
@@ -1205,10 +1205,13 @@ func TestClusterRoutePreflightMongoRejectsNonShardKeyWrites(t *testing.T) {
 
 func TestClusterRoutePreflightMongoRejectsTokenRingIndexedWrites(t *testing.T) {
 	tests := []struct {
-		name      string
-		index     collections.IndexDefinition
-		run       func(testing.TB, *Server) wire.Document
-		wantError string
+		name            string
+		index           collections.IndexDefinition
+		missingMetadata bool
+		nilManager      bool
+		run             func(testing.TB, *Server) wire.Document
+		wantError       string
+		wantRoutes      int
 	}{
 		{
 			name: "secondary_index_update",
@@ -1227,7 +1230,8 @@ func TestClusterRoutePreflightMongoRejectsTokenRingIndexedWrites(t *testing.T) {
 					{Key: "$db", Value: "app"},
 				})
 			},
-			wantError: "does not support secondary-index writes without shard-local index ownership",
+			wantError:  "does not support secondary-index writes without shard-local index ownership",
+			wantRoutes: 1,
 		},
 		{
 			name: "global_unique_insert",
@@ -1244,7 +1248,39 @@ func TestClusterRoutePreflightMongoRejectsTokenRingIndexedWrites(t *testing.T) {
 					{Key: "$db", Value: "app"},
 				})
 			},
-			wantError: "does not support global unique-index coordination",
+			wantError:  "does not support global unique-index coordination",
+			wantRoutes: 1,
+		},
+		{
+			name:            "missing_local_metadata",
+			missingMetadata: true,
+			run: func(tb testing.TB, server *Server) wire.Document {
+				return serveCommand(tb, server, 336113, bson.D{
+					{Key: "update", Value: "users"},
+					{Key: "updates", Value: bson.A{bson.D{
+						{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+						{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Ada"}}}}},
+					}}},
+					{Key: "$db", Value: "app"},
+				})
+			},
+			wantError: "cannot verify sharded index policy because local collection metadata is unavailable",
+		},
+		{
+			name:       "missing_collection_manager",
+			nilManager: true,
+			run: func(tb testing.TB, server *Server) wire.Document {
+				return serveCommand(tb, server, 336114, bson.D{
+					{Key: "update", Value: "users"},
+					{Key: "updates", Value: bson.A{bson.D{
+						{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+						{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Ada"}}}}},
+					}}},
+					{Key: "$db", Value: "app"},
+				})
+			},
+			wantError:  "cannot verify sharded index policy because local collection metadata is unavailable",
+			wantRoutes: 1,
 		},
 	}
 	for _, mode := range []raftplacement.PlacementModeV1{
@@ -1254,20 +1290,31 @@ func TestClusterRoutePreflightMongoRejectsTokenRingIndexedWrites(t *testing.T) {
 		for _, tc := range tests {
 			t.Run(string(mode)+"/"+tc.name, func(t *testing.T) {
 				server, submitter := newMongoPlacementRouteTestServer(t, mode)
-				col, err := server.Collections.OpenCollection("app.users")
-				if err != nil {
-					t.Fatalf("open app.users: %v", err)
-				}
-				if _, err := col.CreateIndex(tc.index); err != nil {
-					t.Fatalf("create test index: %v", err)
+				if tc.missingMetadata {
+					db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+					if err != nil {
+						t.Fatalf("open empty metadata db: %v", err)
+					}
+					t.Cleanup(func() { _ = db.Close() })
+					server.Collections = collections.NewCollectionManager(db)
+				} else if tc.nilManager {
+					server.Collections = nil
+				} else {
+					col, err := server.Collections.OpenCollection("app.users")
+					if err != nil {
+						t.Fatalf("open app.users: %v", err)
+					}
+					if _, err := col.CreateIndex(tc.index); err != nil {
+						t.Fatalf("create test index: %v", err)
+					}
 				}
 				response := tc.run(t, server)
 				assertCommandError(t, response, "NotWritablePrimary")
 				assertErrmsgContains(t, response, tc.wantError)
 				assertBool(t, response, "treedbClusterError", true)
 				assertStringField(t, response, "treedbErrorClass", "route_rejected")
-				if routes := submitter.snapshotRoutes(); len(routes) != 1 {
-					t.Fatalf("route calls=%d want 1", len(routes))
+				if routes := submitter.snapshotRoutes(); len(routes) != tc.wantRoutes {
+					t.Fatalf("route calls=%d want %d", len(routes), tc.wantRoutes)
 				}
 				if calls := submitter.snapshotCalls(); len(calls) != 0 {
 					t.Fatalf("submit calls=%d want 0", len(calls))

@@ -29,6 +29,22 @@ type recordingRoutedReadWaiter struct {
 	calls    []AppliedIndexReadBarrier
 }
 
+type benchmarkRoutedReadIndexProvider struct {
+	proof ReadIndexProof
+}
+
+func (p benchmarkRoutedReadIndexProvider) ReadIndex(context.Context, ReadIndexBarrier) (ReadIndexProof, error) {
+	return p.proof, nil
+}
+
+type benchmarkRoutedReadWaiter struct {
+	progress AppliedProgress
+}
+
+func (w benchmarkRoutedReadWaiter) WaitAppliedIndex(context.Context, AppliedIndexReadBarrier) (AppliedProgress, error) {
+	return w.progress, nil
+}
+
 func (w *recordingRoutedReadWaiter) WaitAppliedIndex(_ context.Context, barrier AppliedIndexReadBarrier) (AppliedProgress, error) {
 	w.calls = append(w.calls, barrier)
 	if w.events != nil {
@@ -158,5 +174,42 @@ func TestGroupRoutedReadIndexCoordinatorFailsClosedForStaleOrUnsupportedOwner(t 
 				t.Fatalf("rejected target reached owner provider/waiter: provider=%v waiter=%v", provider.calls, waiter.calls)
 			}
 		})
+	}
+}
+
+// BenchmarkInternalGroupRoutedReadIndexCoordinatorScaffold measures only the
+// internal static dispatcher and synthetic proof/apply validation. It is not an
+// enabled nativewire read-path, storage observation, network, or quorum benchmark.
+func BenchmarkInternalGroupRoutedReadIndexCoordinatorScaffold(b *testing.B) {
+	coordinator, err := NewGroupRoutedReadIndexCoordinator([]GroupReadIndexCoordinatorV1{{
+		GroupID: "group-b",
+		NodeID:  "node-c",
+		ReadIndexProvider: benchmarkRoutedReadIndexProvider{proof: ReadIndexProof{
+			NodeID:       "node-c",
+			GroupID:      "group-b",
+			Term:         7,
+			Index:        42,
+			HasQuorum:    true,
+			EvidenceKind: ReadIndexEvidenceProduction,
+		}},
+		AppliedIndexWaiter: benchmarkRoutedReadWaiter{progress: AppliedProgress{
+			NodeID:     "node-c",
+			GroupID:    "group-b",
+			Term:       7,
+			Index:      42,
+			HasApplied: true,
+		}},
+	}})
+	if err != nil {
+		b.Fatalf("NewGroupRoutedReadIndexCoordinator: %v", err)
+	}
+	ctx := context.Background()
+	target := ReadIndexBarrier{NodeID: "node-c", GroupID: "group-b"}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, _, err := coordinator.CoordinateRoutedReadIndex(ctx, target); err != nil {
+			b.Fatalf("CoordinateRoutedReadIndex: %v", err)
+		}
 	}
 }

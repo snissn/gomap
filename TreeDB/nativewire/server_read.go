@@ -9,25 +9,21 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 )
 
-func (s *Server) handleRead(ctx context.Context, header iwire.Header, state *connState, cmd iwire.ValidatedCommand) (responseSections []iwire.Section, responseBody []byte, responseBodySet bool, err error) {
+func (s *Server) handleRead(ctx context.Context, header iwire.Header, state *connState, cmd iwire.ValidatedCommand) ([]iwire.Section, []byte, bool, error) {
 	var readMeta ReadMetadata
-	var route ClusterRouteTarget
-	var routed bool
+	var err error
 	if cmd.Header.ID != iwire.CommandCursorNext {
-		route, routed, err = s.preflightClusterReadRoute(ctx, state, cmd)
-		if err != nil {
+		if err := s.preflightClusterReadRoute(ctx, state, cmd); err != nil {
 			return nil, nil, false, err
 		}
-		if routed {
-			defer func() {
-				s.recordClusterReadRouteOutcome(route, readMeta, err)
-			}()
-		}
-		readMeta, err = s.readMetadataForCommand(ctx, header, cmd, route, routed)
+		readMeta, err = s.readMetadataForCommand(ctx, header, cmd)
 		if err != nil {
 			return nil, nil, false, err
 		}
 	}
+	var responseSections []iwire.Section
+	var responseBody []byte
+	responseBodySet := false
 	switch cmd.Header.ID {
 	case iwire.CommandGetMany:
 		responseBody, err = s.handleGetManyBody(state, cmd.Known, state.responseScratch(), readMeta)
@@ -137,23 +133,23 @@ func coordinatedReadCommand(commandID iwire.CommandID) bool {
 	}
 }
 
-func (s *Server) preflightClusterReadRoute(ctx context.Context, state *connState, cmd iwire.ValidatedCommand) (ClusterRouteTarget, bool, error) {
+func (s *Server) preflightClusterReadRoute(ctx context.Context, state *connState, cmd iwire.ValidatedCommand) error {
 	if s == nil || s.clusterSubmitter == nil {
-		return ClusterRouteTarget{}, false, nil
+		return nil
 	}
 	if _, ok := s.clusterSubmitter.(ClusterRouteProvider); !ok {
-		return ClusterRouteTarget{}, false, nil
+		return nil
 	}
 	switch cmd.Header.ID {
 	case iwire.CommandGetMany, iwire.CommandIndexLookup, iwire.CommandIndexRange, iwire.CommandOpenScan:
 	default:
-		return ClusterRouteTarget{}, false, nil
+		return nil
 	}
 	s.counters.inc("cluster_read_route.requests_total")
 	request, err := clusterReadRouteRequest(state, cmd, s.limits)
 	if err != nil {
 		s.counters.inc("cluster_read_route.errors_total")
-		return ClusterRouteTarget{}, true, err
+		return err
 	}
 	target, routed, err := PreflightClusterRoute(ctx, s.clusterSubmitter, request)
 	if err != nil {
@@ -161,18 +157,27 @@ func (s *Server) preflightClusterReadRoute(ctx context.Context, state *connState
 		if request.Shape == ClusterRouteShapeQuery {
 			s.counters.inc("cluster_read_route.unsupported_total")
 		}
-		return ClusterRouteTarget{}, routed, err
+		return err
 	}
 	if !routed {
-		return ClusterRouteTarget{}, false, nil
+		return nil
 	}
 	if target.PlacementMode != string(raftplacement.PlacementModeTokenV1) &&
 		target.PlacementMode != string(raftplacement.PlacementModeRingV1) {
 		s.counters.inc("cluster_read_route.errors_total")
 		s.counters.inc("cluster_read_route.unsupported_total")
-		return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "cluster routed _id read requires token/ring placement; got %q", target.PlacementMode)
+		return protocolError(iwire.ErrReadOnly, "cluster routed _id read requires token/ring placement; got %q", target.PlacementMode)
 	}
-	return target, true, nil
+	s.counters.inc("cluster_read_route.errors_total")
+	s.counters.inc("cluster_read_route.unsupported_total")
+	s.counters.inc("cluster_read_route.owner_store_unbound_total")
+	return clusterRouteTargetProtocolError(
+		iwire.ErrReadOnly,
+		request,
+		target,
+		"owner_store_unbound",
+		"cluster token/ring public read is disabled until the serving collection-store identity is bound to the owner Raft proof",
+	)
 }
 
 func clusterReadRouteRequest(state *connState, cmd iwire.ValidatedCommand, limits iwire.Limits) (ClusterRouteRequest, error) {
@@ -210,54 +215,6 @@ func clusterReadRouteRequest(state *connState, cmd iwire.ValidatedCommand, limit
 	request.TokenKnown = true
 	request.Token = raftplacement.DocumentIDTokenV1(ids[0])
 	return request, nil
-}
-
-func (s *Server) recordClusterReadRouteOutcome(route ClusterRouteTarget, readMeta ReadMetadata, err error) {
-	if s == nil {
-		return
-	}
-	if err != nil {
-		s.counters.inc("cluster_read_route.errors_total")
-		return
-	}
-	s.counters.inc("cluster_read_route.success_total")
-	if readMeta.ActualConsistency == ConsistencyLinearizable {
-		s.counters.inc("cluster_read_route.linearizable_success_total")
-		s.counters.inc("cluster_read_route.read_index_success_total")
-	}
-	if readMeta.ServingNode != "" && readMeta.LeaderNode != "" {
-		if readMeta.ServingNode == readMeta.LeaderNode {
-			s.counters.inc("cluster_read_route.leader_success_total")
-		} else {
-			s.counters.inc("cluster_read_route.follower_success_total")
-		}
-	}
-	if group := clusterReadRouteCounterComponent(route.GroupID); group != "" {
-		s.counters.inc("cluster_read_route.group." + group + ".success_total")
-	}
-	if partition := clusterReadRouteCounterComponent(route.PartitionID); partition != "" {
-		s.counters.inc("cluster_read_route.partition." + partition + ".success_total")
-	}
-}
-
-func clusterReadRouteCounterComponent(value string) string {
-	if value == "" {
-		return ""
-	}
-	out := make([]byte, len(value))
-	for i := range value {
-		switch b := value[i]; {
-		case b >= 'a' && b <= 'z',
-			b >= 'A' && b <= 'Z',
-			b >= '0' && b <= '9',
-			b == '-',
-			b == '_':
-			out[i] = b
-		default:
-			out[i] = '_'
-		}
-	}
-	return string(out)
 }
 
 func clusterReadRouteCollection(state *connState, sections []iwire.Section) (string, error) {

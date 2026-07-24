@@ -47,8 +47,10 @@ transactions, change streams, aggregation, or full MongoDB compatibility.
 Cluster submitter mode does not turn this gateway into a sharded Mongo server.
 For token/ring placement, exact `_id` equality finds are mapped to one catalog
 token but fail closed before local observation because the gateway does not yet
-use nativewire's routed linearizable read-index/apply path. Non-shard-key and
-secondary-index reads remain non-scatter route rejections; indexed token/ring
-mutations and global-unique attempts also fail closed. See
+have a production owner-proof/collection-store identity binding. Nativewire's
+public token/ring read path is disabled for the same reason. Non-shard-key and
+secondary-index reads remain non-scatter route rejections; token/ring mutations
+also fail closed when local metadata is unavailable or indexes are present, and
+global-unique attempts fail closed. See
 [`COMPATIBILITY.md`](COMPATIBILITY.md#cluster-tokenring-read-and-index-policy)
-for the exact policy, counters, and static shared-store limitation.
+for the exact policy, counters, and internal-scaffold limitation.

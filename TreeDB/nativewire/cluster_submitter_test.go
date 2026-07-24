@@ -1226,7 +1226,8 @@ func TestClusterRoutePreflightTokenPlacementAcceptsSingleID(t *testing.T) {
 		fakeClusterSubmitter: &fakeClusterSubmitter{},
 		provider:             NewCatalogClusterRouteProvider(catalog),
 	}
-	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	createNativewireIndexlessJSONCollection(t, mgr, "users")
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := client.Hello(ctx); err != nil {
@@ -1334,7 +1335,8 @@ func TestClusterRoutePreflightTokenPlacementSingleIDMutationCommands(t *testing.
 					fakeClusterSubmitter: &fakeClusterSubmitter{},
 					provider:             NewCatalogClusterRouteProvider(catalog),
 				}
-				client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+				client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+				createNativewireIndexlessJSONCollection(t, mgr, "users")
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				defer cancel()
 				if err := client.Hello(ctx); err != nil {
@@ -1366,12 +1368,15 @@ func TestClusterRoutePreflightTokenPlacementSingleIDMutationCommands(t *testing.
 
 func TestClusterRoutePreflightTokenRingIndexedWritesFailClosed(t *testing.T) {
 	tests := []struct {
-		name      string
-		index     collections.IndexDefinition
-		wantError string
+		name             string
+		createCollection bool
+		nilManager       bool
+		index            collections.IndexDefinition
+		wantError        string
 	}{
 		{
-			name: "secondary_index",
+			name:             "secondary_index",
+			createCollection: true,
 			index: collections.IndexDefinition{
 				Name:      "name",
 				Field:     "name",
@@ -1380,7 +1385,8 @@ func TestClusterRoutePreflightTokenRingIndexedWritesFailClosed(t *testing.T) {
 			wantError: "does not support secondary-index writes without shard-local index ownership",
 		},
 		{
-			name: "global_unique",
+			name:             "global_unique",
+			createCollection: true,
 			index: collections.IndexDefinition{
 				Name:      "email",
 				Field:     "email",
@@ -1388,6 +1394,15 @@ func TestClusterRoutePreflightTokenRingIndexedWritesFailClosed(t *testing.T) {
 				Unique:    true,
 			},
 			wantError: "does not support global unique-index coordination",
+		},
+		{
+			name:      "missing_local_metadata",
+			wantError: "cannot verify sharded index policy because local collection metadata is unavailable",
+		},
+		{
+			name:       "missing_collection_manager",
+			nilManager: true,
+			wantError:  "cannot verify sharded index policy because local collection metadata is unavailable",
 		},
 	}
 	for _, mode := range []raftplacement.PlacementModeV1{
@@ -1402,15 +1417,20 @@ func TestClusterRoutePreflightTokenRingIndexedWritesFailClosed(t *testing.T) {
 						mustNativewireRouteTestCatalog(t, mode),
 					),
 				}
-				client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
-				if _, err := mgr.CreateCollection(&collections.CollectionMeta{
-					Name: "users",
-					Options: collections.CollectionOptions{
-						DocumentFormat: collections.DocumentFormatJSON,
-					},
-					Indexes: []collections.IndexDefinition{tc.index},
-				}); err != nil {
-					t.Fatalf("create indexed users collection: %v", err)
+				client, server, mgr, _ := serveCollectionPipeWithServerAndOptions(t, ServerOptions{ClusterSubmitter: submitter})
+				if tc.createCollection {
+					if _, err := mgr.CreateCollection(&collections.CollectionMeta{
+						Name: "users",
+						Options: collections.CollectionOptions{
+							DocumentFormat: collections.DocumentFormatJSON,
+						},
+						Indexes: []collections.IndexDefinition{tc.index},
+					}); err != nil {
+						t.Fatalf("create indexed users collection: %v", err)
+					}
+				}
+				if tc.nilManager {
+					server.collections = nil
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				defer cancel()
@@ -1700,6 +1720,18 @@ func mustNativewireTokenGroupRouteCatalog(tb testing.TB, mode raftplacement.Plac
 		tb.Fatalf("Validate token group route catalog: %v", err)
 	}
 	return catalog
+}
+
+func createNativewireIndexlessJSONCollection(tb testing.TB, mgr *collections.CollectionManager, name string) {
+	tb.Helper()
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{
+		Name: name,
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatJSON,
+		},
+	}); err != nil {
+		tb.Fatalf("create indexless %s collection: %v", name, err)
+	}
 }
 
 func nativewireRouteTestPlacement(mode raftplacement.PlacementModeV1) raftplacement.CollectionPlacementV1 {
@@ -2678,7 +2710,8 @@ func TestRaftClusterSubmitterGroupRoutedDispatcherRoutesSingleTokenWrite(t *test
 			PartitionID:   "p0",
 		},
 	}
-	client, groupA, groupB, _, _ := serveGroupRoutedRaftClusterBridgePipe(t, provider)
+	client, groupA, groupB, mgr, _ := serveGroupRoutedRaftClusterBridgePipe(t, provider)
+	createNativewireIndexlessJSONCollection(t, mgr, "users")
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := client.Hello(ctx); err != nil {
@@ -2735,7 +2768,8 @@ func TestRaftClusterSubmitterGroupRoutedDispatcherCatalogRoutesSingleTokenOwner(
 	id := []byte("u1")
 	token := raftplacement.DocumentIDTokenV1(id)
 	provider := NewCatalogClusterRouteProvider(mustNativewireTokenGroupRouteCatalog(t, raftplacement.PlacementModeRingV1, token))
-	client, groupA, groupB, _, _ := serveGroupRoutedRaftClusterBridgePipe(t, provider)
+	client, groupA, groupB, mgr, _ := serveGroupRoutedRaftClusterBridgePipe(t, provider)
+	createNativewireIndexlessJSONCollection(t, mgr, "users")
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := client.Hello(ctx); err != nil {
@@ -2772,7 +2806,8 @@ func TestRaftClusterSubmitterGroupRoutedDispatcherRejectsUnknownGroupBeforeSubmi
 			PartitionID:   "p0",
 		},
 	}
-	client, groupA, groupB, _, _ := serveGroupRoutedRaftClusterBridgePipe(t, provider)
+	client, groupA, groupB, mgr, _ := serveGroupRoutedRaftClusterBridgePipe(t, provider)
+	createNativewireIndexlessJSONCollection(t, mgr, "users")
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := client.Hello(ctx); err != nil {
@@ -2803,7 +2838,8 @@ func TestRaftClusterSubmitterGroupRoutedDispatcherUnknownOwnerErrorsBeforeSubmit
 			PartitionID:   "p0",
 		},
 	}
-	client, groupA, groupB, _, _ := serveGroupRoutedRaftClusterBridgePipe(t, provider)
+	client, groupA, groupB, mgr, _ := serveGroupRoutedRaftClusterBridgePipe(t, provider)
+	createNativewireIndexlessJSONCollection(t, mgr, "users")
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := client.Hello(ctx); err != nil {

@@ -147,6 +147,9 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	if !exists {
+		if s.clusterRouteProviderConfigured() {
+			return mongoClusterMutationCommandError(mongoClusterMissingCollectionMetadataError())
+		}
 		if err := rejectClusterMissingCollectionMajorityNoop(ack); err != nil {
 			return mongoClusterMutationCommandError(err)
 		}
@@ -213,6 +216,9 @@ func (s *Server) clusterDeleteResponse(ctx context.Context, command wire.Documen
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	if !exists {
+		if s.clusterRouteProviderConfigured() {
+			return mongoClusterMutationCommandError(mongoClusterMissingCollectionMetadataError())
+		}
 		if err := rejectClusterMissingCollectionMajorityNoop(ack); err != nil {
 			return mongoClusterMutationCommandError(err)
 		}
@@ -567,8 +573,8 @@ func (s *Server) preflightClusterFindRoute(ctx context.Context, db, collection s
 	}
 	return &iwire.ProtocolError{
 		Code: iwire.ErrReadOnly,
-		Reason: "Mongo gateway cluster route target for _id find requires the routed linearizable read-index/apply path; " +
-			"the Mongo gateway path remains disabled to prevent an unbarriered local read",
+		Reason: "Mongo gateway cluster route target for _id find is disabled until the serving collection-store identity " +
+			"is bound to the owner Raft proof; refusing an unbarriered local read",
 	}
 }
 
@@ -596,10 +602,7 @@ func (s *Server) rejectClusterTokenRouteIndexedMutation(command iwire.CommandID,
 		return nil
 	}
 	if s == nil || s.Collections == nil {
-		return &iwire.ProtocolError{
-			Code:   iwire.ErrReadOnly,
-			Reason: "Mongo gateway cluster route target cannot verify sharded index policy without a collection manager",
-		}
+		return mongoClusterMissingCollectionMetadataError()
 	}
 	name, err := gatewayCollectionName(request.Database, request.Collection)
 	if err != nil {
@@ -607,8 +610,7 @@ func (s *Server) rejectClusterTokenRouteIndexedMutation(command iwire.CommandID,
 	}
 	col, err := s.Collections.OpenCollection(name)
 	if errors.Is(err, collections.ErrCollectionNotFound) {
-		// Cluster-created collections are constrained to metadata without indexes.
-		return nil
+		return mongoClusterMissingCollectionMetadataError()
 	}
 	if err != nil {
 		return err
@@ -1245,4 +1247,11 @@ func mongoClusterUnsupportedIndexDDL() (wire.Document, error) {
 		"Mongo gateway cluster mode does not support secondary or global unique index DDL; "+
 			"shard-local index ownership and global unique coordination are not implemented",
 	)
+}
+
+func mongoClusterMissingCollectionMetadataError() error {
+	return &iwire.ProtocolError{
+		Code:   iwire.ErrReadOnly,
+		Reason: "Mongo gateway cluster route target cannot verify sharded index policy because local collection metadata is unavailable",
+	}
 }

@@ -20,11 +20,10 @@ type AppliedIndexReadBarrierProvider interface {
 // local apply through the proven read index. Lease reads remain unsupported
 // until a lease proof exists.
 type AppliedIndexReadCoordinator struct {
-	BarrierProvider            AppliedIndexReadBarrierProvider
-	Waiter                     raftcluster.AppliedIndexReadBarrierWaiter
-	ReadIndexTarget            raftcluster.ReadIndexBarrier
-	ReadIndexProvider          raftcluster.ReadIndexProvider
-	RoutedReadIndexCoordinator raftcluster.RoutedReadIndexCoordinator
+	BarrierProvider   AppliedIndexReadBarrierProvider
+	Waiter            raftcluster.AppliedIndexReadBarrierWaiter
+	ReadIndexTarget   raftcluster.ReadIndexBarrier
+	ReadIndexProvider raftcluster.ReadIndexProvider
 }
 
 func (c AppliedIndexReadCoordinator) CoordinateRead(ctx context.Context, request ClusterReadRequest) (ClusterReadResult, error) {
@@ -35,19 +34,12 @@ func (c AppliedIndexReadCoordinator) CoordinateRead(ctx context.Context, request
 	case ConsistencyLeaderRead:
 		return c.coordinateLeaderRead(ctx, request)
 	case ConsistencyLinearizable:
-		return c.coordinateLinearizableRead(ctx, request)
+		return c.coordinateLinearizableRead(ctx)
 	case ConsistencyLeaseRead:
 		return ClusterReadResult{}, errors.New("nativewire: lease reads require a lease proof")
 	default:
 		return ClusterReadResult{}, fmt.Errorf("nativewire: unsupported coordinated read policy %s", consistencyPolicyName(request.Policy))
 	}
-}
-
-func (c AppliedIndexReadCoordinator) CoordinateRoutedRead(ctx context.Context, request ClusterReadRequest) (ClusterReadResult, error) {
-	if !request.RouteKnown {
-		return ClusterReadResult{}, errors.New("nativewire: routed read request is missing a route target")
-	}
-	return c.CoordinateRead(ctx, request)
 }
 
 func (c AppliedIndexReadCoordinator) coordinateLeaderRead(ctx context.Context, request ClusterReadRequest) (ClusterReadResult, error) {
@@ -76,7 +68,6 @@ func (c AppliedIndexReadCoordinator) coordinateLeaderRead(ctx context.Context, r
 	}
 	return ClusterReadResult{
 		ActualConsistency: ConsistencyLeaderRead,
-		ServingGroup:      string(progress.GroupID),
 		ServingNode:       string(progress.NodeID),
 		LeaderNode:        string(barrier.NodeID),
 		AppliedIndex:      progress.Index,
@@ -84,10 +75,7 @@ func (c AppliedIndexReadCoordinator) coordinateLeaderRead(ctx context.Context, r
 	}, nil
 }
 
-func (c AppliedIndexReadCoordinator) coordinateLinearizableRead(ctx context.Context, request ClusterReadRequest) (ClusterReadResult, error) {
-	if request.RouteKnown {
-		return c.coordinateRoutedLinearizableRead(ctx, request.RouteTarget)
-	}
+func (c AppliedIndexReadCoordinator) coordinateLinearizableRead(ctx context.Context) (ClusterReadResult, error) {
 	if c.ReadIndexProvider == nil {
 		return ClusterReadResult{}, errors.New("nativewire: read-index provider is not configured")
 	}
@@ -114,32 +102,6 @@ func (c AppliedIndexReadCoordinator) coordinateLinearizableRead(ctx context.Cont
 	}
 	return ClusterReadResult{
 		ActualConsistency: ConsistencyLinearizable,
-		ServingGroup:      string(progress.GroupID),
-		ServingNode:       string(progress.NodeID),
-		LeaderNode:        string(proof.NodeID),
-		AppliedIndex:      progress.Index,
-		HasAppliedIndex:   true,
-	}, nil
-}
-
-func (c AppliedIndexReadCoordinator) coordinateRoutedLinearizableRead(ctx context.Context, route ClusterRouteTarget) (ClusterReadResult, error) {
-	if c.RoutedReadIndexCoordinator == nil {
-		return ClusterReadResult{}, errors.New("nativewire: routed read-index coordinator is not configured")
-	}
-	target := raftcluster.ReadIndexBarrier{
-		NodeID:  raftcluster.NodeID(route.LeaderHint),
-		GroupID: raftcluster.GroupID(route.GroupID),
-	}
-	proof, progress, err := c.RoutedReadIndexCoordinator.CoordinateRoutedReadIndex(ctx, target)
-	if err != nil {
-		return ClusterReadResult{}, err
-	}
-	if !progress.HasApplied {
-		return ClusterReadResult{}, fmt.Errorf("%w: no applied progress for routed linearizable read", raftcluster.ErrReadBarrierNotSatisfied)
-	}
-	return ClusterReadResult{
-		ActualConsistency: ConsistencyLinearizable,
-		ServingGroup:      string(progress.GroupID),
 		ServingNode:       string(progress.NodeID),
 		LeaderNode:        string(proof.NodeID),
 		AppliedIndex:      progress.Index,
