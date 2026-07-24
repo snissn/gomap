@@ -201,6 +201,102 @@ func TestVectorPartitionLifecyclePublicV1ReadyRetryCannotReactivateRetiredGenera
 	}
 }
 
+func TestVectorPartitionLifecyclePublicV1ActivationHighWaterSurvivesDeleteCheckpointAndReopen(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	root := t.TempDir()
+	store, err := OpenVectorPartitionStoreV1(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := testVectorPartitionManifestV1()
+	firstBuilding := cloneVectorPartitionManifestForCheckpointV1(first)
+	firstBuilding.State = "building"
+	firstBuilding.RouterGeneration = 0
+	firstBuilding.RouterAsset = VectorPartitionAssetV1{}
+	firstBuilding.ReadySetDigest = ""
+	firstBuilding.Canonicalize()
+	if err := store.publishValidatedBuilding(firstBuilding); err != nil {
+		t.Fatal(err)
+	}
+
+	forced := errors.New("interrupt first generation before activation")
+	deltaInstalls := 0
+	restore := setVectorPartitionLifecycleStoreHookForTestV1(func(boundary string) error {
+		if boundary == "before_delta_install" {
+			deltaInstalls++
+			if deltaInstalls == 2 {
+				return forced
+			}
+		}
+		return nil
+	})
+	err = store.publishValidatedReady(first)
+	restore()
+	if !errors.Is(err, forced) {
+		t.Fatalf("first activation interruption err=%v", err)
+	}
+
+	second := cloneVectorPartitionManifestForCheckpointV1(first)
+	second.Generation++
+	second.RouterGeneration++
+	second.Canonicalize()
+	if err := store.publishValidatedReady(second); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.deactivateLocked(second.Collection, second.IndexName); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.deleteLocked(second.Collection, second.IndexName, second.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, present, err := store.loadVectorPartitionLifecycleAuthorityV1(first.Collection, first.IndexName)
+	if err != nil || !present {
+		t.Fatalf("load post-delete authority present=%v err=%v", present, err)
+	}
+	if loaded.state.ActivationHighWater != second.Generation ||
+		loaded.state.ActiveGeneration != 0 ||
+		loaded.state.RetiredGeneration != 0 {
+		t.Fatalf("post-delete activation authority=%+v", loaded.state)
+	}
+
+	dir, err := store.openDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := vectorPartitionLifecycleCheckpointV1{
+		Epoch: loaded.checkpoint.Epoch + 1,
+		State: loaded.state,
+	}
+	if err := store.publishVectorPartitionLifecycleCheckpointV1(dir, loaded, checkpoint); err != nil {
+		_ = dir.Close()
+		t.Fatal(err)
+	}
+	if err := dir.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := OpenExistingVectorPartitionStoreV1(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopenedState, present, err := reopened.loadVectorPartitionLifecycleAuthorityV1(first.Collection, first.IndexName)
+	if err != nil || !present {
+		t.Fatalf("reopen authority present=%v err=%v", present, err)
+	}
+	if reopenedState.state.ActivationHighWater != second.Generation ||
+		reopenedState.state.ActiveGeneration != 0 ||
+		reopenedState.state.RetiredGeneration != 0 {
+		t.Fatalf("reopened activation authority=%+v", reopenedState.state)
+	}
+	if err := reopened.publishValidatedReady(first); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		t.Fatalf("stale first-generation retry err=%v", err)
+	}
+	if _, err := reopened.OpenActive(first.Collection, first.IndexName); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale retry installed active authority: %v", err)
+	}
+}
+
 func TestVectorPartitionLifecyclePublicV1RejectsConflictsAndLegacyAuthority(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	store, err := OpenVectorPartitionStoreV1(t.TempDir())

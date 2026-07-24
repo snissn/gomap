@@ -219,7 +219,12 @@ bytes are capped before allocation; unknown/trailing records fail closed.
 
 Local publication installs an immutable BUILD checkpoint, then READY and
 LOCAL_ACTIVATE deltas. A crash or retry therefore observes building, ready but
-inactive, or ready and active state—never a partially encoded manifest.
+inactive, or ready and active state—never a partially encoded manifest. Every
+LOCAL_ACTIVATE also advances the checkpointed activation high water. A READY
+retry at or below that watermark fails closed even after the newer active or
+retired generation has been deleted and its live pointer cleared; a prepared
+generation above the watermark may still complete an interrupted first
+activation.
 Raft snapshot archives include `db/vector_partitions`. Deletion requires an
 explicit proof that the generation is inactive and has no reader pin, snapshot
 reference, or catalog reference; M1 does not infer those external references.
@@ -262,10 +267,12 @@ memberships per vector, and
 total referenced bytes at 16 GiB. Count-derived allocations are checked against
 these limits before allocation.
 
-VCP1 checkpoints use version 1, a SHA-256 checksum, a 30 MiB cap, and at most
-two live generations. VLC1 version-1 records form a sequence- and
-previous-digest-bound immutable tail capped at 4 MiB per checkpoint epoch.
-The physical identity namespace is capped at 64 MiB and 4,096 entries.
+VCP1 checkpoints use version 1, a SHA-256 checksum, a 30 MiB cap, at most two
+live generations, and separate monotonic generation and activation high-water
+fields. The activation watermark survives deletion of all live generation
+pointers. VLC1 version-1 records form a sequence- and previous-digest-bound
+immutable tail capped at 4 MiB per checkpoint epoch. The physical identity
+namespace is capped at 64 MiB and 4,096 entries.
 
 ### Lifecycle, publication, and cleanup authority
 
@@ -273,7 +280,7 @@ The physical identity namespace is capped at 64 MiB and 4,096 entries.
 | --- | --- | --- |
 | absent -> building | BUILD in a new VCP1 checkpoint epoch | complete non-active building generation |
 | building -> ready | READY digest-bound promotion delta | complete prepared generation, still not active |
-| ready -> active | LOCAL_ACTIVATE delta | one complete ready generation is locally active |
+| ready -> active | LOCAL_ACTIVATE delta | one complete ready generation is locally active and the activation high water advances |
 | active -> retired | DEACTIVATE delta | generation remains prepared but is not active |
 | retired/building -> deleting | caller fences plus DELETE_PREPARE carrying VPR1 | generation no longer opens; retryable reclaim debt survives reopen |
 | deleting -> progress | RECLAIM_PROGRESS before mixed-segment remap publication | original and superseded debt remain protected and retryable |

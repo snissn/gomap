@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"testing"
 )
 
@@ -430,6 +431,73 @@ func TestReduceVectorPartitionLifecycleChainV1ActivationClearsStaleRetired(t *te
 	state, err := reduceVectorPartitionLifecycleChainV1(chain)
 	if err != nil || state.ActiveGeneration != ready2.Generation || state.RetiredGeneration != 0 {
 		t.Fatalf("state=%+v err=%v, want g2 active without stale retired", state, err)
+	}
+}
+
+func TestReduceVectorPartitionLifecycleChainV1ActivationHighWaterSurvivesDelete(t *testing.T) {
+	build1Raw, build1 := lifecycleManifestPayloadV1(t, "building")
+	_, ready1 := lifecycleManifestPayloadV1(t, "ready")
+	ready1Promotion := lifecycleReadyPromotionPayloadV1(t, build1, ready1)
+	ready2 := cloneVectorPartitionManifestForCheckpointV1(ready1)
+	ready2.Generation++
+	ready2.RouterGeneration++
+	ready2.Canonicalize()
+	build2 := cloneVectorPartitionManifestForCheckpointV1(ready2)
+	build2.State = "building"
+	build2.RouterGeneration = 0
+	build2.RouterAsset = VectorPartitionAssetV1{}
+	build2.ReadySetDigest = ""
+	build2.Canonicalize()
+	build2Raw, err := EncodeVectorPartitionManifestV1(build2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready2Promotion := lifecycleReadyPromotionPayloadV1(t, build2, ready2)
+	reclaim, err := newVectorPartitionReclaimStateV1(ready2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reclaimRaw, err := encodeVectorPartitionReclaimRecordV1(reclaim)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var chain []vectorPartitionLifecycleRecordV1
+	var previous [sha256.Size]byte
+	appendRecord := func(operation vectorPartitionLifecycleOperationV1, generation uint64, payload []byte) {
+		record := lifecycleRecordV1(t, uint64(len(chain)+1), previous, operation, generation, payload)
+		chain = append(chain, record)
+		previous = record.Digest
+	}
+	appendRecord(vectorPartitionLifecycleBuildV1, build1.Generation, build1Raw)
+	appendRecord(vectorPartitionLifecycleReadyV1, ready1.Generation, ready1Promotion)
+	appendRecord(vectorPartitionLifecycleBuildV1, build2.Generation, build2Raw)
+	appendRecord(vectorPartitionLifecycleReadyV1, ready2.Generation, ready2Promotion)
+	appendRecord(vectorPartitionLifecycleLocalActivateV1, ready2.Generation, nil)
+	appendRecord(vectorPartitionLifecycleDeactivateV1, ready2.Generation, nil)
+	appendRecord(vectorPartitionLifecycleDeletePrepareV1, ready2.Generation, reclaimRaw)
+	appendRecord(vectorPartitionLifecycleDeleteCompleteV1, ready2.Generation, nil)
+
+	state, err := reduceVectorPartitionLifecycleChainV1(chain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ActivationHighWater != ready2.Generation ||
+		state.ActiveGeneration != 0 ||
+		state.RetiredGeneration != 0 {
+		t.Fatalf("post-delete activation authority=%+v", state)
+	}
+
+	stale := append(append([]vectorPartitionLifecycleRecordV1(nil), chain...), lifecycleRecordV1(
+		t,
+		uint64(len(chain)+1),
+		previous,
+		vectorPartitionLifecycleLocalActivateV1,
+		ready1.Generation,
+		nil,
+	))
+	if _, err := reduceVectorPartitionLifecycleChainV1(stale); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		t.Fatalf("stale activation after newer deletion err=%v", err)
 	}
 }
 

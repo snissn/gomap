@@ -52,6 +52,7 @@ func lifecycleCheckpointFirstGenerationOffsetsV1(t *testing.T, raw []byte) (mani
 	_ = r.u64()
 	_ = r.u64()
 	_ = r.u64()
+	_ = r.u64()
 	if got := r.u32(); got == 0 {
 		t.Fatal("checkpoint has no generation")
 	}
@@ -80,6 +81,7 @@ func lifecycleCheckpointGenerationCountOffsetV1(t *testing.T, raw []byte) int {
 	_ = r.u64()
 	_ = r.u64()
 	r.off += sha256.Size
+	_ = r.u64()
 	_ = r.u64()
 	_ = r.u64()
 	_ = r.u64()
@@ -120,6 +122,7 @@ func TestVectorPartitionLifecycleCheckpointV1CanonicalRoundTripAndDeepCopy(t *te
 	generation := got.State.Generations[chain[0].Generation]
 	if !generation.Deleting || generation.Reclaim == nil || generation.Manifest == nil ||
 		got.State.GenerationHighWater != chain[0].Generation ||
+		got.State.ActivationHighWater != chain[0].Generation ||
 		got.State.LastSequence != 5 || got.State.LastDigest != chain[4].Digest {
 		t.Fatalf("decoded checkpoint state=%+v generation=%+v", got.State, generation)
 	}
@@ -190,6 +193,7 @@ func TestVectorPartitionLifecycleCheckpointV1ZeroLiveRoundTripPreservesHighWater
 	}
 	if len(decoded.State.Generations) != 0 ||
 		decoded.State.GenerationHighWater != chain[0].Generation ||
+		decoded.State.ActivationHighWater != chain[0].Generation ||
 		decoded.State.LastSequence != chain[len(chain)-1].Sequence ||
 		decoded.State.LastDigest != chain[len(chain)-1].Digest {
 		t.Fatalf("zero-live checkpoint state=%+v", decoded.State)
@@ -272,6 +276,12 @@ func TestVectorPartitionLifecycleCheckpointV1RejectsInvalidState(t *testing.T) {
 	for name, mutate := range map[string]func(*vectorPartitionLifecycleCheckpointV1){
 		"generation-above-high-water": func(c *vectorPartitionLifecycleCheckpointV1) {
 			c.State.GenerationHighWater = generation - 1
+		},
+		"activation-above-generation-high-water": func(c *vectorPartitionLifecycleCheckpointV1) {
+			c.State.ActivationHighWater = c.State.GenerationHighWater + 1
+		},
+		"active-does-not-match-activation-high-water": func(c *vectorPartitionLifecycleCheckpointV1) {
+			c.State.ActivationHighWater = generation - 1
 		},
 		"missing-active": func(c *vectorPartitionLifecycleCheckpointV1) {
 			c.State.ActiveGeneration = generation + 1
@@ -374,7 +384,9 @@ func TestReduceVectorPartitionLifecycleCheckpointTailV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	if state.LastSequence != uint64(len(chain)) || state.LastDigest != chain[len(chain)-1].Digest ||
-		state.GenerationHighWater != chain[0].Generation || len(state.Generations) != 0 {
+		state.GenerationHighWater != chain[0].Generation ||
+		state.ActivationHighWater != chain[0].Generation ||
+		len(state.Generations) != 0 {
 		t.Fatalf("replayed checkpoint state=%+v", state)
 	}
 

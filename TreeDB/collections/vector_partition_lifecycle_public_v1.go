@@ -166,16 +166,12 @@ func (s *VectorPartitionStoreV1) persistVectorPartitionManifestLifecycleV1(m Vec
 		if loaded.state.ActiveGeneration == m.Generation {
 			return nil
 		}
-		activationHighWater := loaded.state.ActiveGeneration
-		if loaded.state.RetiredGeneration > activationHighWater {
-			activationHighWater = loaded.state.RetiredGeneration
-		}
-		if m.Generation <= activationHighWater {
+		if m.Generation <= loaded.state.ActivationHighWater {
 			return fmt.Errorf(
 				"%w: generation %d cannot reactivate after generation %d reached lifecycle authority",
 				ErrVectorPartitionManifestInvalid,
 				m.Generation,
-				activationHighWater,
+				loaded.state.ActivationHighWater,
 			)
 		}
 		return s.persistVectorPartitionLifecycleOperationV1(

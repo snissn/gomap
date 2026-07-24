@@ -84,6 +84,7 @@ type vectorPartitionLifecycleStateV1 struct {
 	Collection, IndexName string
 	Generations           map[uint64]vectorPartitionLifecycleGenerationStateV1
 	GenerationHighWater   uint64
+	ActivationHighWater   uint64
 	ActiveGeneration      uint64
 	RetiredGeneration     uint64
 	LastSequence          uint64
@@ -429,15 +430,11 @@ func reduceVectorPartitionLifecycleRecordV1(state *vectorPartitionLifecycleState
 		state.Generations[r.Generation] = generation
 	case vectorPartitionLifecycleLocalActivateV1:
 		generation, present := state.Generations[r.Generation]
-		activationHighWater := state.ActiveGeneration
-		if state.RetiredGeneration > activationHighWater {
-			activationHighWater = state.RetiredGeneration
-		}
 		if !present ||
 			generation.Manifest == nil ||
 			generation.Manifest.State != "ready" ||
 			generation.Deleting ||
-			r.Generation <= activationHighWater {
+			r.Generation <= state.ActivationHighWater {
 			return fmt.Errorf("%w: activate transition", ErrVectorPartitionManifestInvalid)
 		}
 		if state.ActiveGeneration != 0 {
@@ -446,6 +443,7 @@ func reduceVectorPartitionLifecycleRecordV1(state *vectorPartitionLifecycleState
 			state.RetiredGeneration = 0
 		}
 		state.ActiveGeneration = r.Generation
+		state.ActivationHighWater = r.Generation
 	case vectorPartitionLifecycleDeactivateV1:
 		if state.ActiveGeneration != r.Generation {
 			return fmt.Errorf("%w: deactivate transition", ErrVectorPartitionManifestInvalid)
