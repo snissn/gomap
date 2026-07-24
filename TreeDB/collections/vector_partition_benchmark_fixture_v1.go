@@ -8,9 +8,11 @@ package collections
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // StageSyntheticReadyVectorPartitionForBenchmarkV1 publishes a canonical
@@ -30,6 +32,9 @@ func StageSyntheticReadyVectorPartitionForBenchmarkV1(root string, expected, rep
 		replacement.IndexName != expected.IndexName ||
 		replacement.Generation != expected.Generation {
 		return fmt.Errorf("collections: synthetic vector partition benchmark replacement identity mismatch")
+	}
+	if _, err := EncodeVectorPartitionManifestV1(replacement); err != nil {
+		return fmt.Errorf("collections: invalid synthetic vector partition benchmark replacement: %w", err)
 	}
 	return WithVectorPartitionStorageBarrierV1(root, func() error {
 		store, err := OpenExistingVectorPartitionStoreV1(root)
@@ -51,6 +56,9 @@ func StageSyntheticReadyVectorPartitionForBenchmarkV1(root string, expected, rep
 		if !bytes.Equal(activeRaw, expectedRaw) {
 			return fmt.Errorf("collections: synthetic vector partition benchmark fixture expectation mismatch")
 		}
+		if err := requireExclusiveVectorPartitionBenchmarkFixtureV1(store, expected); err != nil {
+			return err
+		}
 		if err := os.RemoveAll(vectorDir); err != nil {
 			return err
 		}
@@ -58,6 +66,40 @@ func StageSyntheticReadyVectorPartitionForBenchmarkV1(root string, expected, rep
 		if err != nil {
 			return err
 		}
-		return store.publishValidatedReady(replacement)
+		return store.publishLocked(replacement)
 	})
+}
+
+func requireExclusiveVectorPartitionBenchmarkFixtureV1(store *VectorPartitionStoreV1, expected VectorPartitionManifestV1) error {
+	dir, err := store.openDir()
+	if err != nil {
+		return err
+	}
+	selected, err := VectorPartitionSnapshotEntriesV1(dir)
+	if err != nil {
+		_ = dir.Close()
+		return err
+	}
+	all, err := readVectorPartitionDirEntriesBoundedV1(dir)
+	if err != nil {
+		_ = dir.Close()
+		return err
+	}
+	closeErr := dir.Close()
+	if closeErr != nil {
+		return closeErr
+	}
+	if len(all) != len(selected) {
+		return fmt.Errorf("collections: synthetic vector partition benchmark fixture contains audit history")
+	}
+	prefix := vectorPartitionLifecycleNamePrefixV1(expected.Collection, expected.IndexName)
+	for _, entry := range all {
+		if !strings.HasPrefix(entry.Name(), prefix) {
+			return fmt.Errorf("collections: synthetic vector partition benchmark fixture contains another identity")
+		}
+	}
+	if len(all) == 0 {
+		return errors.New("collections: synthetic vector partition benchmark fixture namespace is empty")
+	}
+	return nil
 }

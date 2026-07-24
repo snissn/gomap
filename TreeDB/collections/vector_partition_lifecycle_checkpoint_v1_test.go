@@ -53,6 +53,7 @@ func lifecycleCheckpointFirstGenerationOffsetsV1(t *testing.T, raw []byte) (mani
 	_ = r.u64()
 	_ = r.u64()
 	_ = r.u64()
+	_ = r.u64()
 	if got := r.u32(); got == 0 {
 		t.Fatal("checkpoint has no generation")
 	}
@@ -121,6 +122,7 @@ func TestVectorPartitionLifecycleCheckpointV1CanonicalRoundTripAndDeepCopy(t *te
 	}
 	generation := got.State.Generations[chain[0].Generation]
 	if !generation.Deleting || generation.Reclaim == nil || generation.Manifest == nil ||
+		got.State.GenerationFloor != chain[0].Generation ||
 		got.State.GenerationHighWater != chain[0].Generation ||
 		got.State.ActivationHighWater != chain[0].Generation ||
 		got.State.LastSequence != 5 || got.State.LastDigest != chain[4].Digest {
@@ -192,6 +194,7 @@ func TestVectorPartitionLifecycleCheckpointV1ZeroLiveRoundTripPreservesHighWater
 		t.Fatal(err)
 	}
 	if len(decoded.State.Generations) != 0 ||
+		decoded.State.GenerationFloor != chain[0].Generation ||
 		decoded.State.GenerationHighWater != chain[0].Generation ||
 		decoded.State.ActivationHighWater != chain[0].Generation ||
 		decoded.State.LastSequence != chain[len(chain)-1].Sequence ||
@@ -274,6 +277,12 @@ func TestVectorPartitionLifecycleCheckpointV1RejectsInvalidState(t *testing.T) {
 	base := lifecycleCheckpointV1(t, lifecycleLegalChainV1(t)[:3], 5)
 	generation := base.State.ActiveGeneration
 	for name, mutate := range map[string]func(*vectorPartitionLifecycleCheckpointV1){
+		"missing-generation-floor": func(c *vectorPartitionLifecycleCheckpointV1) {
+			c.State.GenerationFloor = 0
+		},
+		"generation-floor-above-high-water": func(c *vectorPartitionLifecycleCheckpointV1) {
+			c.State.GenerationFloor = c.State.GenerationHighWater + 1
+		},
 		"generation-above-high-water": func(c *vectorPartitionLifecycleCheckpointV1) {
 			c.State.GenerationHighWater = generation - 1
 		},

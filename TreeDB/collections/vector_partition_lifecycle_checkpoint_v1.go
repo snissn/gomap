@@ -53,7 +53,9 @@ func canonicalVectorPartitionLifecycleCheckpointV1(input vectorPartitionLifecycl
 		state.Collection == "" || state.IndexName == "" ||
 		len(state.Collection) > limits.MaxStringBytes || len(state.IndexName) > limits.MaxStringBytes ||
 		state.LastSequence == 0 || vectorPartitionLifecycleZeroDigestV1(state.LastDigest) ||
-		state.GenerationHighWater == 0 ||
+		state.GenerationFloor == 0 ||
+		state.GenerationHighWater < state.GenerationFloor ||
+		(state.ActivationHighWater != 0 && state.ActivationHighWater < state.GenerationFloor) ||
 		state.ActivationHighWater > state.GenerationHighWater ||
 		len(state.Generations) > vectorPartitionLifecycleCheckpointMaxLiveV1 ||
 		(state.ActiveGeneration != 0 && state.ActiveGeneration != state.ActivationHighWater) ||
@@ -77,6 +79,7 @@ func canonicalVectorPartitionLifecycleCheckpointV1(input vectorPartitionLifecycl
 		Collection:          state.Collection,
 		IndexName:           state.IndexName,
 		Generations:         make(map[uint64]vectorPartitionLifecycleGenerationStateV1, len(generations)),
+		GenerationFloor:     state.GenerationFloor,
 		GenerationHighWater: state.GenerationHighWater,
 		ActivationHighWater: state.ActivationHighWater,
 		ActiveGeneration:    state.ActiveGeneration,
@@ -87,7 +90,7 @@ func canonicalVectorPartitionLifecycleCheckpointV1(input vectorPartitionLifecycl
 	encoded := make([]vectorPartitionLifecycleCheckpointGenerationEncodingV1, 0, len(generations))
 	for _, generation := range generations {
 		entry := state.Generations[generation]
-		if generation == 0 || generation > state.GenerationHighWater || entry.Manifest == nil {
+		if generation < state.GenerationFloor || generation > state.GenerationHighWater || entry.Manifest == nil {
 			return zero, nil, fmt.Errorf("%w: lifecycle checkpoint generation", ErrVectorPartitionManifestInvalid)
 		}
 		manifestInput := cloneVectorPartitionManifestForCheckpointV1(*entry.Manifest)
@@ -171,7 +174,7 @@ func encodeVectorPartitionLifecycleCheckpointCanonicalV1(input vectorPartitionLi
 		return nil, err
 	}
 	state := checkpoint.State
-	payloadBytes := uint64(4 + len(state.Collection) + 4 + len(state.IndexName) + 8 + 8 + sha256.Size + 8 + 8 + 8 + 8 + 4)
+	payloadBytes := uint64(4 + len(state.Collection) + 4 + len(state.IndexName) + 8 + 8 + sha256.Size + 8 + 8 + 8 + 8 + 8 + 4)
 	add := func(n uint64) error {
 		maxPayload := uint64(vectorPartitionLifecycleCheckpointMaxBytesV1 - vectorPartitionLifecycleCheckpointHeaderBytesV1 - vectorPartitionLifecycleCheckpointChecksumBytesV1)
 		if n > maxPayload || payloadBytes > maxPayload-n {
@@ -195,6 +198,7 @@ func encodeVectorPartitionLifecycleCheckpointCanonicalV1(input vectorPartitionLi
 	putU64VPM(payload, checkpoint.Epoch)
 	putU64VPM(payload, state.LastSequence)
 	payload.Write(state.LastDigest[:])
+	putU64VPM(payload, state.GenerationFloor)
 	putU64VPM(payload, state.GenerationHighWater)
 	putU64VPM(payload, state.ActivationHighWater)
 	putU64VPM(payload, state.ActiveGeneration)
@@ -263,6 +267,7 @@ func decodeVectorPartitionLifecycleCheckpointCanonicalV1(raw []byte, collection,
 	}
 	copy(state.LastDigest[:], r.b[r.off:r.off+sha256.Size])
 	r.off += sha256.Size
+	state.GenerationFloor = r.u64()
 	state.GenerationHighWater = r.u64()
 	state.ActivationHighWater = r.u64()
 	state.ActiveGeneration = r.u64()

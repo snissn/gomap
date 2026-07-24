@@ -353,6 +353,25 @@ func TestRaftSnapshotV1InstallRejectsIncompleteVectorPartitionStateBeforeReplace
 				return true, raw
 			},
 		},
+		{
+			name: "corrupt router asset range",
+			rewrite: func(header *tar.Header, raw []byte) (bool, []byte) {
+				router := manifest.RouterAsset
+				routerPath := filepath.ToSlash(filepath.Join(
+					"db",
+					"column_assets",
+					router.Ref.Namespace,
+					"assets",
+					"segments",
+					fmt.Sprintf("segment-%06d.tca", router.Ref.FileID),
+				))
+				if header.Name == routerPath && router.Ref.Offset >= 0 && router.Ref.Offset < int64(len(raw)) {
+					raw = bytes.Clone(raw)
+					raw[router.Ref.Offset] ^= 0xff
+				}
+				return true, raw
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

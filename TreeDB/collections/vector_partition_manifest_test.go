@@ -1647,6 +1647,9 @@ func TestCollectionVectorPartitionReclaimV1ReclaimsCoResidentRecords(t *testing.
 			t.Fatal(err)
 		}
 	}
+	if _, err := col.ReclaimVectorPartitionGenerationV1(t.Context(), "embedding", 10); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("never-created generation below lifecycle floor reclaim err=%v", err)
+	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	injected := errors.New("post-install delete complete")

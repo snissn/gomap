@@ -272,11 +272,15 @@ total referenced bytes at 16 GiB. Count-derived allocations are checked against
 these limits before allocation.
 
 VCP1 checkpoints use version 1, a SHA-256 checksum, a 30 MiB cap, at most two
-live generations, and separate monotonic generation and activation high-water
-fields. The activation watermark survives deletion of all live generation
-pointers. VLC1 version-1 records form a sequence- and previous-digest-bound
-immutable tail capped at 4 MiB per checkpoint epoch. The physical identity
-namespace is capped at 64 MiB and 4,096 entries.
+live generations, a first-generation floor, and separate monotonic generation
+and activation high-water fields. BUILD may choose any positive initial
+generation, but every successor is exactly the prior high water plus one.
+Therefore, an absent generation inside the floor/high-water interval is exact
+completed-deletion proof; lower never-created IDs are not accepted as
+idempotent cleanup retries. The activation watermark survives deletion of all
+live generation pointers. VLC1 version-1 records form a sequence- and
+previous-digest-bound immutable tail capped at 4 MiB per checkpoint epoch. The
+physical identity namespace is capped at 64 MiB and 4,096 entries.
 
 ### Lifecycle, publication, and cleanup authority
 

@@ -76,7 +76,9 @@ func (s *VectorPartitionStoreV1) vectorPartitionLifecycleGenerationCompleteV1(co
 	if err != nil {
 		return false, err
 	}
-	if !present || generation > loaded.state.GenerationHighWater {
+	if !present ||
+		generation < loaded.state.GenerationFloor ||
+		generation > loaded.state.GenerationHighWater {
 		return false, nil
 	}
 	_, live := loaded.state.Generations[generation]

@@ -398,8 +398,47 @@ func TestReduceVectorPartitionLifecycleRecordV1InvalidBuildLeavesHighWaterUnchan
 	if err := reduceVectorPartitionLifecycleRecordV1(&state, r); err == nil {
 		t.Fatal("accepted invalid BUILD manifest")
 	}
-	if state.GenerationHighWater != 0 || len(state.Generations) != 0 {
+	if state.GenerationFloor != 0 || state.GenerationHighWater != 0 || len(state.Generations) != 0 {
 		t.Fatalf("invalid BUILD mutated state=%+v", state)
+	}
+}
+
+func TestReduceVectorPartitionLifecycleRecordV1RejectsGenerationGap(t *testing.T) {
+	firstRaw, first := lifecycleManifestPayloadV1(t, "building")
+	state := vectorPartitionLifecycleStateV1{
+		Collection:  first.Collection,
+		IndexName:   first.IndexName,
+		Generations: make(map[uint64]vectorPartitionLifecycleGenerationStateV1),
+	}
+	if err := reduceVectorPartitionLifecycleRecordV1(&state, vectorPartitionLifecycleRecordV1{
+		Collection: first.Collection,
+		IndexName:  first.IndexName,
+		Operation:  vectorPartitionLifecycleBuildV1,
+		Generation: first.Generation,
+		Payload:    firstRaw,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gap := cloneVectorPartitionManifestForCheckpointV1(first)
+	gap.Generation += 2
+	gap.Canonicalize()
+	gapRaw, err := EncodeVectorPartitionManifestV1(gap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reduceVectorPartitionLifecycleRecordV1(&state, vectorPartitionLifecycleRecordV1{
+		Collection: gap.Collection,
+		IndexName:  gap.IndexName,
+		Operation:  vectorPartitionLifecycleBuildV1,
+		Generation: gap.Generation,
+		Payload:    gapRaw,
+	}); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		t.Fatalf("generation gap err=%v", err)
+	}
+	if state.GenerationFloor != first.Generation ||
+		state.GenerationHighWater != first.Generation ||
+		len(state.Generations) != 1 {
+		t.Fatalf("rejected generation gap mutated state=%+v", state)
 	}
 }
 

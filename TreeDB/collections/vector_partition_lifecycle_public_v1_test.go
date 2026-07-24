@@ -525,3 +525,30 @@ func TestValidateVectorPartitionSnapshotNamespaceV1RejectsTotalEntryCap(t *testi
 		t.Fatalf("oversized snapshot namespace err=%v", err)
 	}
 }
+
+func TestReadVectorPartitionDirEntriesBoundedV1AcceptsExactCap(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	root := t.TempDir()
+	store, err := OpenVectorPartitionStoreV1(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < vectorPartitionStoreMaxEntriesV1; i++ {
+		name := fmt.Sprintf("foreign-%05d", i)
+		if err := os.WriteFile(filepath.Join(store.dir, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir, err := store.openDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := readVectorPartitionDirEntriesBoundedV1(dir)
+	closeErr := dir.Close()
+	if err != nil || closeErr != nil {
+		t.Fatal(errors.Join(err, closeErr))
+	}
+	if len(entries) != vectorPartitionStoreMaxEntriesV1 {
+		t.Fatalf("bounded scan entries=%d want=%d", len(entries), vectorPartitionStoreMaxEntriesV1)
+	}
+}

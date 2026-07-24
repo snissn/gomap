@@ -83,6 +83,7 @@ type vectorPartitionLifecycleGenerationStateV1 struct {
 type vectorPartitionLifecycleStateV1 struct {
 	Collection, IndexName string
 	Generations           map[uint64]vectorPartitionLifecycleGenerationStateV1
+	GenerationFloor       uint64
 	GenerationHighWater   uint64
 	ActivationHighWater   uint64
 	ActiveGeneration      uint64
@@ -408,7 +409,12 @@ func reduceVectorPartitionLifecycleRecordV1(state *vectorPartitionLifecycleState
 	}
 	switch r.Operation {
 	case vectorPartitionLifecycleBuildV1:
-		if _, present := state.Generations[r.Generation]; present || r.Generation <= state.GenerationHighWater || len(state.Generations) >= 2 {
+		_, present := state.Generations[r.Generation]
+		if present ||
+			(state.GenerationHighWater != 0 &&
+				(r.Generation <= state.GenerationHighWater ||
+					r.Generation-state.GenerationHighWater != 1)) ||
+			len(state.Generations) >= 2 {
 			return fmt.Errorf("%w: build transition", ErrVectorPartitionManifestInvalid)
 		}
 		m, err := manifest()
@@ -416,6 +422,9 @@ func reduceVectorPartitionLifecycleRecordV1(state *vectorPartitionLifecycleState
 			return err
 		}
 		state.Generations[r.Generation] = vectorPartitionLifecycleGenerationStateV1{Manifest: &m}
+		if state.GenerationFloor == 0 {
+			state.GenerationFloor = r.Generation
+		}
 		state.GenerationHighWater = r.Generation
 	case vectorPartitionLifecycleReadyV1:
 		generation, present := state.Generations[r.Generation]

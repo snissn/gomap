@@ -67,15 +67,18 @@ The highest checkpoint epoch is the sole authority; corruption never falls
 back to a lower epoch. BUILD creates a new checkpoint epoch. READY,
 LOCAL_ACTIVATE, DEACTIVATE, DELETE_PREPARE, RECLAIM_PROGRESS, and
 DELETE_COMPLETE append immutable deltas until the bounded tail is compacted
-into another checkpoint. A checkpoint contains the identity, generation high
-water, durable activation high water, at most two live generation states,
-active/retired generation, last sequence/digest, embedded canonical VPM1
-manifests, and any VPR1 reclaim debt. The activation high water records the
-newest generation that ever held local activation authority independently of
-the live pointers, so deletion and reclaim cannot make an older prepared
-generation eligible for reactivation. The checkpoint is capped at 30 MiB, its
-current tail at 4 MiB, the identity namespace at 64 MiB and 4,096 entries.
-Counts and lengths are checked before allocation.
+into another checkpoint. A checkpoint contains the identity, generation floor
+and high water, durable activation high water, at most two live generation
+states, active/retired generation, last sequence/digest, embedded canonical
+VPM1 manifests, and any VPR1 reclaim debt. The generation floor records the
+first accepted generation; successors must be contiguous, so an absent
+generation inside the durable floor/high-water interval is exact proof of
+completed deletion rather than an unrecorded gap. The activation high water
+records the newest generation that ever held local activation authority
+independently of the live pointers, so deletion and reclaim cannot make an
+older prepared generation eligible for reactivation. The checkpoint is capped
+at 30 MiB, its current tail at 4 MiB, the identity namespace at 64 MiB and
+4,096 entries. Counts and lengths are checked before allocation.
 
 Every file is installed no-replace from an exact synchronized anonymous handle,
 then the parent namespace is synchronized and reopened. Exact-byte retries are
