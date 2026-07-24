@@ -1,11 +1,13 @@
 # Vector-partition M4 evidence ledger
 
-This ledger binds the M4 local router measurement to implementation candidate
-`d74cf38144e28a45dc820f589805db41a735e8d3` on base
-`a2d7bd55808136beaea1b6f823668f7b5d28cad8`. It exercises the real persisted
+This ledger binds the M4 local router measurement to exact merge candidate
+`e1c3a83fc897cf4b26659d28feeb39b1f230dafd` on base
+`2292b334d5114f92859f4e0821f070837d719979`. It exercises the real persisted
 M4 build, mapped open, exact representative oracle, and native HNSW search-pack
-path. It is explicitly `production_evidence=false`: it does not measure RPC,
-the coordinator, Raft, shard search, or M8 end-to-end acceptance.
+path. The successor that checks in this ledger changes evidence files only; no
+production or benchmark code differs from the measured commit. The result is
+explicitly `production_evidence=false`: it does not measure RPC, the
+coordinator, Raft, shard search, or M8 end-to-end acceptance.
 
 The reproducible fixture is `vector_partition_10k`: 10,000 vectors, 128
 queries, 64 dimensions, cosine distance, seed 1, and checksum
@@ -17,9 +19,9 @@ representatives in total.
 
 | metric | measured value |
 | --- | ---: |
-| build wall time | 231,121,514 ns |
-| build CPU time | 3,391,478,000 ns |
-| process peak RSS | 134,594,560 bytes |
+| build wall time | 264,848,565 ns |
+| build CPU time | 3,481,298,000 ns |
+| process peak RSS | 121,511,936 bytes |
 | router asset | 174,752 bytes |
 | mapped bytes after open | 174,752 bytes |
 | heap-copy bytes after open | 0 bytes |
@@ -42,14 +44,14 @@ partitions, not HNSW loss.
 
 | probes | exact recall@10 | HNSW recall@10 | HNSW recall loss | exact p50/p95/p99 ns | HNSW p50/p95/p99 ns |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 0.08125 | 0.08125 | 0 | 21,641 / 27,950 / 32,966 | 75,255 / 84,019 / 106,897 |
-| 2 | 0.153125 | 0.153125 | 0 | 21,815 / 26,359 / 28,664 | 74,120 / 80,482 / 92,449 |
-| 4 | 0.2984375 | 0.2984375 | 0 | 21,968 / 27,124 / 28,217 | 74,414 / 83,546 / 114,359 |
-| 8 | 0.56171875 | 0.56171875 | 0 | 21,991 / 30,436 / 33,436 | 74,649 / 85,543 / 96,442 |
-| 16 | 1.0 | 1.0 | 0 | 21,664 / 25,462 / 33,506 | 75,208 / 86,733 / 97,179 |
+| 1 | 0.08125 | 0.08125 | 0 | 28,373 / 34,223 / 42,956 | 84,424 / 95,598 / 122,952 |
+| 2 | 0.153125 | 0.153125 | 0 | 23,382 / 29,003 / 44,681 | 78,623 / 88,776 / 105,093 |
+| 4 | 0.2984375 | 0.2984375 | 0 | 23,809 / 33,709 / 40,905 | 77,471 / 89,436 / 115,945 |
+| 8 | 0.56171875 | 0.56171875 | 0 | 23,153 / 33,923 / 52,037 | 78,320 / 102,613 / 115,441 |
+| 16 | 1.0 | 1.0 | 0 | 24,195 / 34,013 / 39,468 | 78,892 / 96,459 / 122,746 |
 
 Exact routing allocated 7,424--7,536 B/op and 13 allocs/op. Native HNSW
-allocated 11,512--12,626.5 B/op and 21--21.234375 allocs/op. Across 128
+allocated 11,512--12,174 B/op and 21--21.125 allocs/op. Across 128
 queries, each mode scored 32,768 candidates; the HNSW path visited 902,688
 edges.
 
@@ -77,8 +79,8 @@ GOWORK=off go run ./cmd/treedb_vector_partition_bench \
 ```
 
 The canonical machine-readable record is
-`vector-partition-m4-d74cf3814.raw.jsonl`, SHA-256
-`51309aafc1924393524cba8b3bac0bafa5a92d7fb3f814af6919c9e3cdbf2413`.
+`vector-partition-m4-e1c3a83fc.raw.jsonl`, SHA-256
+`2c020dbc8a1a38122d4fda006cfbcfdfcf999a8f10f0150bf128fa1bee80b1f5`.
 It contains the five exact emitted JSON objects, one for each probe count,
 including the command, fixture identity, candidate/base pair, timed boundary,
 build accounting, allocations, and latency percentiles.
