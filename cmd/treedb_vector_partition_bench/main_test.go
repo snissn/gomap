@@ -165,8 +165,8 @@ func TestM3FixtureAllowsMillionVectorsPlusBoundedQueriesV1(t *testing.T) {
 func TestM3SourceLoadBoundsColumnGraphPublicationsV1(t *testing.T) {
 	const acceptanceRows = 1_000_000
 	publications := (acceptanceRows + m3SourceInsertBatchRows - 1) / m3SourceInsertBatchRows
-	if publications != 62 {
-		t.Fatalf("1M-row M3 source publications=%d want 62", publications)
+	if publications != 123 {
+		t.Fatalf("1M-row M3 source publications=%d want 123", publications)
 	}
 }
 
