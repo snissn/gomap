@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -206,6 +207,57 @@ func TestCatalogMetaSnapshotRestorePreservesExactRetryIdentity(t *testing.T) {
 				t.Fatalf("install same-epoch snapshot error=%v want ErrCatalogMetaConflict", err)
 			}
 		})
+	}
+}
+
+func TestCatalogMetaBackupArchiveRestorePreservesIdentityPlacementAndFeatures(t *testing.T) {
+	source := NewCatalogMetaAuthorityV1()
+	command := mustCatalogMetaCommand(t, 0, 1, validCatalog())
+	sourceStatus, err := source.applyCommittedCatalogMetaV1(command, 9)
+	if err != nil {
+		t.Fatalf("apply source: %v", err)
+	}
+	archive, err := source.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatalf("export backup archive: %v", err)
+	}
+
+	// Backup transport treats the catalog snapshot as an opaque byte payload.
+	// Production restore feeds this payload through the Raft FSM restore
+	// capability; the package-private install models that final state-machine
+	// step without creating a follower-local activation API.
+	restored := NewCatalogMetaAuthorityV1()
+	if err := restored.installCatalogMetaSnapshotBytesV1(bytes.Clone(archive)); err != nil {
+		t.Fatalf("restore backup archive: %v", err)
+	}
+	restoredStatus, ok := restored.Status()
+	if !ok {
+		t.Fatal("restored backup catalog unavailable")
+	}
+	if restoredStatus.Epoch != sourceStatus.Epoch ||
+		restoredStatus.Digest != sourceStatus.Digest ||
+		restoredStatus.AppliedIndex != sourceStatus.AppliedIndex ||
+		restoredStatus.RetainedWireBytes != sourceStatus.RetainedWireBytes {
+		t.Fatalf("restored status=%+v want %+v", restoredStatus, sourceStatus)
+	}
+	if restoredStatus.Features.ConfigVersion != sourceStatus.Features.ConfigVersion ||
+		!slices.Equal(restoredStatus.Features.Required, sourceStatus.Features.Required) {
+		t.Fatalf("restored features=%+v want %+v", restoredStatus.Features, sourceStatus.Features)
+	}
+	proof, err := restored.CurrentCatalogProof(context.Background())
+	if err != nil {
+		t.Fatalf("restored proof: %v", err)
+	}
+	decision, err := restored.Route(context.Background(), proof, RouteRequestV1{
+		Collection: CollectionRefV1{Database: DefaultDatabase, Catalog: DefaultCatalog, Collection: "users"},
+		Shape:      RouteShapeCollectionV1,
+	})
+	if err != nil {
+		t.Fatalf("restored placement route: %v", err)
+	}
+	if decision.GroupID() != "group-a" ||
+		decision.PlacementMode != PlacementModeCollectionV1 {
+		t.Fatalf("restored placement decision=%+v proof=%+v", decision, proof)
 	}
 }
 

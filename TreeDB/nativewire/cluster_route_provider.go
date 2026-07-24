@@ -15,9 +15,10 @@ type CatalogClusterRouteProvider struct {
 	catalog raftplacement.ResolvedCatalogV1
 }
 
-// CatalogMetaProofProvider supplies a proof captured from a replicated catalog
-// authority. Returning an error (including an unavailable meta leader/view)
-// fails route preflight before the request reaches a local group submitter.
+// CatalogMetaProofProvider supplies a proof captured from the locally applied
+// replicated catalog authority. It does not require a meta-leader round trip;
+// an unavailable local view still fails preflight before the request reaches a
+// data-group submitter.
 type CatalogMetaProofProvider func(context.Context) (raftplacement.CatalogProofV1, error)
 
 // CatalogMetaClusterRouteProvider is the dynamic counterpart to
@@ -90,8 +91,10 @@ func (p CatalogMetaClusterRouteProvider) ClusterRoute(ctx context.Context, reque
 	}
 }
 
-// NewCatalogClusterRouteProvider returns a route provider backed by a validated
-// raftplacement catalog.
+// NewCatalogClusterRouteProvider returns the static bootstrap/test adapter
+// backed by a validated raftplacement catalog. Replicated deployments must use
+// NewCatalogMetaClusterRouteProvider so every decision carries the locally
+// applied catalog proof.
 func NewCatalogClusterRouteProvider(catalog raftplacement.ResolvedCatalogV1) CatalogClusterRouteProvider {
 	return CatalogClusterRouteProvider{catalog: catalog}
 }

@@ -210,16 +210,20 @@ choosing a multi-group submit target. Native-wire and Mongo gateway adapters may
 use those decisions as fail-closed request preflight metadata only; they are not
 live network routing or leadership proof.
 
-## Deferred Scope
-
 ## Replicated catalog/meta authority (M4A)
 
 `raftplacement.CatalogMetaAuthorityV1` is the generic M4A state-machine seam
 for the catalog. It replaces the unsafe idea that a process-local/static
 `ResolvedCatalogV1` can activate ownership. A deployment must designate one
-Raft meta group and deliver only that group's committed
-`CatalogMetaCommandV1` bytes to `ApplyCommittedCatalogMetaV1` on every
-replica. Constructing an authority does not install a catalog.
+fixed-peer Raft meta group and open it with
+`raftcluster.OpenCatalogMetaRaftProviderV1`. Only that provider can mint the
+capabilities accepted by `ApplyCatalogMetaCommittedV1` and
+`InstallCatalogMetaSnapshotBytesV1`; constructing an authority does not install
+a catalog, and neither a local file nor an adapter exposes an activation API.
+Every configured meta voter must declare
+`raftcluster.FeatureCatalogMetaAuthority` at the supported floor. Provider open
+fails before bootstrap, reopen, or participation when any fixed voter is
+missing that capability.
 
 Each generation contains a monotonic `Epoch`, the complete catalog, and a
 SHA-256 digest of its canonical JSON representation. Canonicalization sorts
@@ -238,27 +242,56 @@ non-canonical bytes before publication.
 Routed submit/read/lifecycle callers must present `CatalogProofV1{Epoch,
 Digest}`. `CatalogMetaAuthorityV1.Route` rejects an unavailable authority,
 missing proof, stale/future epoch, or digest mismatch before resolving a group.
+`CurrentCatalogProof` returns the exact locally applied proof under the same
+read lock as status/route access. It does not contact the meta group, so a
+steady-state request adds no meta-group round trip. Loss of the meta leader
+blocks new catalog commands; it does not invalidate an already-applied local
+generation. Before the first committed generation, or when the application
+cannot supply its locally applied proof, route admission remains unavailable.
+
 `nativewire.CatalogMetaClusterRouteProvider` is the corresponding preflight
-adapter: its proof provider is expected to read the locally applied replicated
-meta view, and it refuses a request before it reaches a group submitter. This
-does not add a meta-group round trip on a request; the provider reads the local
-authority under an RLock. Static `CatalogClusterRouteProvider` remains a test
-and bootstrap-only adapter and is not replicated authority.
+adapter for collection, single-token, and token-batch shapes. It refuses stale
+or missing proofs before request success. On the owner side,
+`raftcluster.NewCatalogMetaGroupRoutedSubmitter` is the production constructor:
+it re-resolves the request-only route fields against the same applied
+generation and requires exact equality for collection identity, route shape,
+group, members, leader hint, placement mode, route key, token/partition, epoch,
+and digest before group lookup or mutation. The legacy
+`NewGroupRoutedSubmitter` and static `CatalogClusterRouteProvider` constructors
+remain deprecated bootstrap/test adapters; they are not replicated authority
+and must not be used for the M4A production path.
 
 `ExportCatalogMetaSnapshotV1` serializes one canonical record plus its applied
-index. `InstallCatalogMetaSnapshotV1` validates the complete record before
-publication and rejects rollback or same-epoch conflicts, so a restore/rejoin
-cannot serve a mixed generation. The application integrating this seam must
-place that payload in its Raft snapshot and backup archive atomically with the
-meta group's apply progress; this issue deliberately does not add a second
-production Raft topology, rebalance workflow, or vector lifecycle state
-machine.
+index and exact last committed command. Restore validates the complete
+record/digest/command identity before one atomic publication, rejects rollback
+and same-epoch conflicts, and preserves exact-command retry identity. The Raft
+FSM bounds and installs that byte payload for snapshot/reopen/rejoin. Backup
+code must archive the same opaque payload atomically with meta-group apply
+progress and feed it back through Raft restore; the exported restore capability
+prevents backup tooling or a follower-local caller from directly activating a
+catalog. The backup round-trip contract verifies that epoch, digest, applied
+index, placement, and feature floors survive unchanged.
 
-Bootstrapping is conservative: until a committed epoch-1 record has applied,
-route admission is unavailable. Meta-leader unavailability or an inability to
-obtain a proof is likewise a refusal, not permission to fall back to a local
-catalog file. Nodes whose feature floors are unsupported are rejected by the
-existing catalog validation before a record is installed.
+The conservative failure matrix is:
+
+- a follower rejects catalog mutation with `ErrNotLeader`;
+- a node without a known meta leader/quorum rejects mutation with
+  `ErrAdmissionUnavailable`;
+- cancellation before enqueue is ordinary cancellation, while cancellation
+  after Raft enqueue is `ErrCommitAmbiguous`;
+- replay of the exact command is idempotent, while stale, skipped, conflicting,
+  partial, or mixed generations fail closed;
+- failover can commit the next generation, and rejoin/reopen restores or catches
+  up monotonically;
+- unsupported fixed voters fail provider open before local apply or routing;
+- missing, stale, future, digest-mismatched, or route-mismatched request
+  metadata is rejected before the data-group owner is selected.
+
+The complete test and capacity matrix and reproducible benchmark results are in
+[catalog-meta M4A closeout evidence](catalog-meta-m4a-closeout-3970.md).
+This issue deliberately does not add live membership changes, rebalance or
+migration, a second production Raft topology, or the vector-specific lifecycle
+state machine.
 
 ## Vector partition placement (M1)
 

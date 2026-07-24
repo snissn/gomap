@@ -110,6 +110,11 @@ type GroupRoutedSubmitter struct {
 	catalogRouteValidator CatalogRouteValidatorV1
 }
 
+// NewGroupRoutedSubmitter constructs the legacy bootstrap/test dispatcher.
+//
+// Deprecated: replicated catalog deployments must use
+// NewCatalogMetaGroupRoutedSubmitter so complete route metadata is revalidated
+// against the locally applied catalog generation before owner lookup.
 func NewGroupRoutedSubmitter(opts GroupRoutedSubmitterOptions) (*GroupRoutedSubmitter, error) {
 	if opts.Registry.empty() {
 		return nil, errors.Join(ErrInvalidSubmitter, fmt.Errorf("group submitter registry is required"))
