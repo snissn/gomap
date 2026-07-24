@@ -91,5 +91,18 @@ product enablement default: enablement remains disabled pending a clustered
 1M quality or fixed-probe win. No repository M3 1M corpus is currently
 available, so the report says unavailable rather than extrapolating.
 
+The checked-in 10k report is
+[`TreeDB/docs/spec/artifacts/vector-partition-m3-evidence-v1.json`](../TreeDB/docs/spec/artifacts/vector-partition-m3-evidence-v1.json).
+It was captured from implementation commit
+`9d62ae1aad292eb0880a52e603b57ba68fd31a75` over base
+`a2d7bd55808136beaea1b6f823668f7b5d28cad8`. The disjoint and requested
+`0.20` rows used 4,527,160 and 4,527,938 pack bytes respectively
+(`1.000172x`, passing the `1.35x` gate). Both exercised 2,048 native local
+searches with 135.75 candidates and 4,263.535 edges per search. The hard
+capacity admitted one overlap membership and left 1,999 budget units unspent;
+edge cut fell from 5,184 to 5,088, while exact-local recall remained
+`0.321631`. This fixture therefore supplies cost, lifecycle, and native-path
+evidence, not the clustered/1M enablement win required by the issue.
+
 Routing, RPC, Raft placement, distributed merge, and document fetch remain
 later milestones.

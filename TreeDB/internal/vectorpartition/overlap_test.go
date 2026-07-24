@@ -41,6 +41,24 @@ func TestOverlapDeterministicBoundaryAndZeroEquivalent(t *testing.T) {
 	if one.Used == 0 || one.Used > 2 {
 		t.Fatalf("used=%d want bounded positive reduction", one.Used)
 	}
+	want := OverlapResult{
+		Memberships: []Membership{
+			{VectorOrdinal: 0, Partition: 0, Home: true},
+			{VectorOrdinal: 1, Partition: 0, Home: true},
+			{VectorOrdinal: 2, Partition: 0},
+			{VectorOrdinal: 2, Partition: 1, Home: true},
+			{VectorOrdinal: 3, Partition: 1, Home: true},
+		},
+		Budget:        2,
+		Used:          1,
+		Unspent:       1,
+		Loads:         []int{3, 2},
+		EdgeCutBefore: 4,
+		EdgeCutAfter:  0,
+	}
+	if !reflect.DeepEqual(one, want) {
+		t.Fatalf("boundary overlap=%+v want %+v", one, want)
+	}
 }
 
 func TestOverlapSaturatedRecordsUnspent(t *testing.T) {
