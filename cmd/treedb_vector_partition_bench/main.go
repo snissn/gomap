@@ -204,58 +204,58 @@ type benchmarkMemoryPlan struct {
 // metricsV1 reserves every M0 evidence field. Simulation leaves production-only
 // measurements at zero and labels them not_measured instead of implying a Raft result.
 type metricsV1 struct {
-	MeasurementStatus                string  `json:"measurement_status"`
-	BuildWallNanos                   int64   `json:"build_wall_nanos"`
-	BuildCPUNanos                    int64   `json:"build_cpu_nanos"`
-	BuildCPUAvailable                bool    `json:"build_cpu_available"`
-	PeakRSSBytes                     int64   `json:"peak_rss_bytes"`
-	PeakRSSAvailable                 bool    `json:"peak_rss_available"`
-	TemporaryBytes                   int64   `json:"temporary_bytes"`
-	FinalBytes                       int64   `json:"final_bytes"`
-	BytesPerVector                   float64 `json:"bytes_per_vector"`
-	Balance                          float64 `json:"balance"`
-	MaxPartitionSize                 int     `json:"max_partition_size"`
-	EdgeCut                          int64   `json:"edge_cut"`
-	ReplicationFactor                float64 `json:"replication_factor"`
-	UnassignedOverlapBudget          float64 `json:"unassigned_overlap_budget"`
-	RepresentativeCount              int     `json:"representative_count"`
-	RouterBytes                      int64   `json:"router_bytes"`
-	RoutingLatencyNanos              int64   `json:"routing_latency_nanos"`
-	RoutedPartitionRecall            float64 `json:"routed_partition_recall"`
-	CoarseningRecall                 float64 `json:"coarsening_recall"`
-	CoarseningRecallAvailable        bool    `json:"coarsening_recall_available"`
-	ApproximateRouterRecall          float64 `json:"approximate_router_recall"`
-	ApproximateRouterRecallAvailable bool    `json:"approximate_router_recall_available"`
-	HNSWRecallLoss                   float64 `json:"hnsw_recall_loss"`
-	HNSWRecallLossAvailable          bool    `json:"hnsw_recall_loss_available"`
-	LloydIterations                  int     `json:"router_lloyd_iterations"`
-	EmptyRepairs                     int     `json:"router_empty_repairs"`
-	MinRepresentatives               int     `json:"min_representatives_per_partition"`
-	MaxRepresentatives               int     `json:"max_representatives_per_partition"`
-	HeapCopyBytes                    int64   `json:"heap_copy_bytes"`
-	SelectedPartitions               int     `json:"selected_partitions"`
-	SelectedGroups                   int     `json:"selected_groups"`
-	RPCs                             int     `json:"rpcs"`
-	RequestBytes                     int64   `json:"request_bytes"`
-	ResponseBytes                    int64   `json:"response_bytes"`
-	ShardP50Nanos                    int64   `json:"per_shard_p50_nanos"`
-	ShardP95Nanos                    int64   `json:"per_shard_p95_nanos"`
-	ShardP99Nanos                    int64   `json:"per_shard_p99_nanos"`
-	MergeDedupeNanos                 int64   `json:"merge_dedupe_nanos"`
-	Cancellations                    int64   `json:"cancellations"`
-	Timeouts                         int64   `json:"timeouts"`
-	Failures                         int64   `json:"failures"`
-	QPS                              float64 `json:"end_to_end_qps"`
-	P50Nanos                         int64   `json:"end_to_end_p50_nanos"`
-	P95Nanos                         int64   `json:"end_to_end_p95_nanos"`
-	P99Nanos                         int64   `json:"end_to_end_p99_nanos"`
-	RecallAt1                        float64 `json:"recall_at_1"`
-	RecallAt10                       float64 `json:"recall_at_10"`
-	RecallAt100                      float64 `json:"recall_at_100"`
-	BytesPerOp                       float64 `json:"bytes_per_op"`
-	AllocsPerOp                      float64 `json:"allocs_per_op"`
-	ResidentBytes                    int64   `json:"resident_bytes"`
-	MappedBytes                      int64   `json:"mapped_bytes"`
+	MeasurementStatus       string  `json:"measurement_status"`
+	BuildWallNanos          int64   `json:"build_wall_nanos"`
+	BuildCPUNanos           int64   `json:"build_cpu_nanos"`
+	BuildCPUAvailable       bool    `json:"build_cpu_available"`
+	PeakRSSBytes            int64   `json:"peak_rss_bytes"`
+	PeakRSSAvailable        bool    `json:"peak_rss_available"`
+	TemporaryBytes          int64   `json:"temporary_bytes"`
+	FinalBytes              int64   `json:"final_bytes"`
+	BytesPerVector          float64 `json:"bytes_per_vector"`
+	Balance                 float64 `json:"balance"`
+	MaxPartitionSize        int     `json:"max_partition_size"`
+	EdgeCut                 int64   `json:"edge_cut"`
+	ReplicationFactor       float64 `json:"replication_factor"`
+	UnassignedOverlapBudget float64 `json:"unassigned_overlap_budget"`
+	RepresentativeCount     int     `json:"representative_count"`
+	RouterBytes             int64   `json:"router_bytes"`
+	RoutingLatencyNanos     int64   `json:"routing_latency_nanos"`
+	RoutedPartitionRecall   float64 `json:"routed_partition_recall"`
+	CoarseningRecall        float64 `json:"coarsening_recall"`
+	CoarseningMeasured      bool    `json:"coarsening_recall_available"`
+	ApproximateRouterRecall float64 `json:"approximate_router_recall"`
+	ApproximateMeasured     bool    `json:"approximate_router_recall_available"`
+	HNSWRecallLoss          float64 `json:"hnsw_recall_loss"`
+	HNSWLossMeasured        bool    `json:"hnsw_recall_loss_available"`
+	LloydIterations         int     `json:"router_lloyd_iterations"`
+	EmptyRepairs            int     `json:"router_empty_repairs"`
+	MinRepresentatives      int     `json:"min_representatives_per_partition"`
+	MaxRepresentatives      int     `json:"max_representatives_per_partition"`
+	HeapCopyBytes           int64   `json:"heap_copy_bytes"`
+	SelectedPartitions      int     `json:"selected_partitions"`
+	SelectedGroups          int     `json:"selected_groups"`
+	RPCs                    int     `json:"rpcs"`
+	RequestBytes            int64   `json:"request_bytes"`
+	ResponseBytes           int64   `json:"response_bytes"`
+	ShardP50Nanos           int64   `json:"per_shard_p50_nanos"`
+	ShardP95Nanos           int64   `json:"per_shard_p95_nanos"`
+	ShardP99Nanos           int64   `json:"per_shard_p99_nanos"`
+	MergeDedupeNanos        int64   `json:"merge_dedupe_nanos"`
+	Cancellations           int64   `json:"cancellations"`
+	Timeouts                int64   `json:"timeouts"`
+	Failures                int64   `json:"failures"`
+	QPS                     float64 `json:"end_to_end_qps"`
+	P50Nanos                int64   `json:"end_to_end_p50_nanos"`
+	P95Nanos                int64   `json:"end_to_end_p95_nanos"`
+	P99Nanos                int64   `json:"end_to_end_p99_nanos"`
+	RecallAt1               float64 `json:"recall_at_1"`
+	RecallAt10              float64 `json:"recall_at_10"`
+	RecallAt100             float64 `json:"recall_at_100"`
+	BytesPerOp              float64 `json:"bytes_per_op"`
+	AllocsPerOp             float64 `json:"allocs_per_op"`
+	ResidentBytes           int64   `json:"resident_bytes"`
+	MappedBytes             int64   `json:"mapped_bytes"`
 }
 type runResult struct {
 	SchemaVersion      int             `json:"schema_version"`
@@ -2016,15 +2016,15 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 		}
 		if cfg.stages["exact_representative_routing"] {
 			metrics.CoarseningRecall = totals["exact_representative_routing"] / n
-			metrics.CoarseningRecallAvailable = true
+			metrics.CoarseningMeasured = true
 		}
 		if cfg.stages["approximate_representative_routing"] {
 			metrics.ApproximateRouterRecall = totals["approximate_representative_routing"] / n
-			metrics.ApproximateRouterRecallAvailable = true
+			metrics.ApproximateMeasured = true
 		}
-		if metrics.CoarseningRecallAvailable && metrics.ApproximateRouterRecallAvailable {
+		if metrics.CoarseningMeasured && metrics.ApproximateMeasured {
 			metrics.HNSWRecallLoss = metrics.CoarseningRecall - metrics.ApproximateRouterRecall
-			metrics.HNSWRecallLossAvailable = true
+			metrics.HNSWLossMeasured = true
 		}
 	}
 	r := runResult{
