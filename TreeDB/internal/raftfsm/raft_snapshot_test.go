@@ -1303,6 +1303,9 @@ func TestRaftSnapshotV1ExportRejectsVectorPartitionRootReplacementBeforeOpen(t *
 
 func stageRaftSnapshotLifecycleRootForRaceTest(t *testing.T) (string, string) {
 	t.Helper()
+	if !collections.VectorPartitionNamespacePersistenceSupportedForTestingV1() {
+		t.Skip("vector partition namespace mutation is unsupported on this platform")
+	}
 	databaseRoot := t.TempDir()
 	database := openRaftSnapshotFSMTestDB(t, databaseRoot, false)
 	publishRaftSnapshotReadyVectorPartitionForTest(t, database, 1)
