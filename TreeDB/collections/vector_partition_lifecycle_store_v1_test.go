@@ -49,10 +49,11 @@ func TestVectorPartitionLifecycleStoreV1AppendLoadAndIdempotentSlot(t *testing.T
 		t.Fatal(err)
 	}
 	buildRaw, build := lifecycleManifestPayloadV1(t, "building")
-	readyRaw, _ := lifecycleManifestPayloadV1(t, "ready")
+	_, ready := lifecycleManifestPayloadV1(t, "ready")
+	readyPromotion := lifecycleReadyPromotionPayloadV1(t, build, ready)
 	first, err := store.appendVectorPartitionLifecycleRecordV1("docs", "embedding", vectorPartitionLifecycleBuildV1, build.Generation, buildRaw)
 	requireLifecycleAppendSupportV1(t, err)
-	second, err := store.appendVectorPartitionLifecycleRecordV1("docs", "embedding", vectorPartitionLifecycleReadyV1, build.Generation, readyRaw)
+	second, err := store.appendVectorPartitionLifecycleRecordV1("docs", "embedding", vectorPartitionLifecycleReadyV1, build.Generation, readyPromotion)
 	if err != nil {
 		t.Fatal(err)
 	}

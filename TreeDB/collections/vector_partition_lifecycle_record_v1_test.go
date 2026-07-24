@@ -21,6 +21,15 @@ func lifecycleManifestPayloadV1(t *testing.T, state string) ([]byte, VectorParti
 	return raw, m
 }
 
+func lifecycleReadyPromotionPayloadV1(t *testing.T, building, ready VectorPartitionManifestV1) []byte {
+	t.Helper()
+	raw, err := makeVectorPartitionReadyPromotionPayloadV1(building, ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
 func lifecycleRecordV1(t *testing.T, seq uint64, prev [32]byte, op vectorPartitionLifecycleOperationV1, generation uint64, payload []byte) vectorPartitionLifecycleRecordV1 {
 	t.Helper()
 	raw, err := encodeVectorPartitionLifecycleRecordCanonicalV1(vectorPartitionLifecycleRecordV1{Collection: "docs", IndexName: "embedding", Sequence: seq, PreviousDigest: prev, Operation: op, Generation: generation, Payload: payload})
@@ -37,7 +46,8 @@ func lifecycleRecordV1(t *testing.T, seq uint64, prev [32]byte, op vectorPartiti
 func lifecycleLegalChainV1(t *testing.T) []vectorPartitionLifecycleRecordV1 {
 	t.Helper()
 	buildingRaw, building := lifecycleManifestPayloadV1(t, "building")
-	readyRaw, ready := lifecycleManifestPayloadV1(t, "ready")
+	_, ready := lifecycleManifestPayloadV1(t, "ready")
+	readyPromotion := lifecycleReadyPromotionPayloadV1(t, building, ready)
 	reclaim, err := encodeVectorPartitionReclaimRecordV1(vectorPartitionReclaimStateV1{Collection: "docs", IndexName: "embedding", Generation: ready.Generation, OriginalRefs: vectorPartitionReclaimRefsFromManifestV1(ready)})
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +57,7 @@ func lifecycleLegalChainV1(t *testing.T) []vectorPartitionLifecycleRecordV1 {
 		payload []byte
 	}{
 		{vectorPartitionLifecycleBuildV1, buildingRaw},
-		{vectorPartitionLifecycleReadyV1, readyRaw},
+		{vectorPartitionLifecycleReadyV1, readyPromotion},
 		{vectorPartitionLifecycleLocalActivateV1, nil},
 		{vectorPartitionLifecycleDeactivateV1, nil},
 		{vectorPartitionLifecycleDeletePrepareV1, reclaim},
@@ -81,6 +91,127 @@ func TestVectorPartitionLifecycleRecordV1CanonicalRoundTrip(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionReadyPromotionV1CanonicalRoundTripAndReconstruction(t *testing.T) {
+	_, building := lifecycleManifestPayloadV1(t, "building")
+	_, ready := lifecycleManifestPayloadV1(t, "ready")
+	raw := lifecycleReadyPromotionPayloadV1(t, building, ready)
+	promotion, err := decodeVectorPartitionReadyPromotionCanonicalV1(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := encodeVectorPartitionReadyPromotionCanonicalV1(promotion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(raw, again) {
+		t.Fatal("ready promotion encoding is not deterministic")
+	}
+	got, err := applyVectorPartitionReadyPromotionV1(building, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotRaw, err := EncodeVectorPartitionManifestV1(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRaw, err := EncodeVectorPartitionManifestV1(ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotRaw, wantRaw) {
+		t.Fatal("ready promotion did not reconstruct the exact canonical manifest")
+	}
+	if len(raw) >= len(wantRaw) {
+		t.Fatalf("promotion bytes=%d, full ready manifest=%d", len(raw), len(wantRaw))
+	}
+}
+
+func TestVectorPartitionReadyPromotionV1RejectsMalformedAndWrongDigests(t *testing.T) {
+	_, building := lifecycleManifestPayloadV1(t, "building")
+	readyRaw, ready := lifecycleManifestPayloadV1(t, "ready")
+	raw := lifecycleReadyPromotionPayloadV1(t, building, ready)
+	promotion, err := decodeVectorPartitionReadyPromotionCanonicalV1(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongGeneration := promotion
+	wrongGeneration.Generation++
+	wrongGeneration.RouterGeneration++
+	wrongGenerationRaw, err := encodeVectorPartitionReadyPromotionCanonicalV1(wrongGeneration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongBase := promotion
+	wrongBase.BuildingDigest[0] ^= 1
+	wrongBaseRaw, err := encodeVectorPartitionReadyPromotionCanonicalV1(wrongBase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongResult := promotion
+	wrongResult.ReadyDigest[0] ^= 1
+	wrongResultRaw, err := encodeVectorPartitionReadyPromotionCanonicalV1(wrongResult)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongReadySet := promotion
+	wrongReadySet.ReadySetDigest = string(bytes.Repeat([]byte{'0'}, sha256.Size*2))
+	wrongReadySetRaw, err := encodeVectorPartitionReadyPromotionCanonicalV1(wrongReadySet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, candidate := range map[string][]byte{
+		"old-full-ready-vpm": readyRaw,
+		"checksum": func() []byte {
+			x := append([]byte(nil), raw...)
+			x[len(x)-1] ^= 1
+			return x
+		}(),
+		"trailing": func() []byte {
+			x := append([]byte(nil), raw[:len(raw)-sha256.Size]...)
+			x = append(x, 0)
+			sum := sha256.Sum256(x)
+			return append(x, sum[:]...)
+		}(),
+		"truncated": append([]byte(nil), raw[:len(raw)-1]...),
+		"wrong-version": func() []byte {
+			x := append([]byte(nil), raw...)
+			x[7]++
+			sum := sha256.Sum256(x[:len(x)-sha256.Size])
+			copy(x[len(x)-sha256.Size:], sum[:])
+			return x
+		}(),
+		"wrong-generation": wrongGenerationRaw,
+		"wrong-base":       wrongBaseRaw,
+		"wrong-result":     wrongResultRaw,
+		"wrong-ready-set":  wrongReadySetRaw,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := applyVectorPartitionReadyPromotionV1(building, candidate); err == nil {
+				t.Fatal("accepted invalid ready promotion")
+			}
+		})
+	}
+}
+
+func TestVectorPartitionReadyPromotionV1RejectsIllegalRouterMutation(t *testing.T) {
+	_, building := lifecycleManifestPayloadV1(t, "building")
+	_, ready := lifecycleManifestPayloadV1(t, "ready")
+	promotionRaw := lifecycleReadyPromotionPayloadV1(t, building, ready)
+	promotion, err := decodeVectorPartitionReadyPromotionCanonicalV1(promotionRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	promotion.RouterAsset.PartitionID = 1
+	if _, err := encodeVectorPartitionReadyPromotionCanonicalV1(promotion); err == nil {
+		t.Fatal("accepted router asset with logical partition ID")
+	}
+	promotion.RouterAsset.PartitionID = 0
+	promotion.RouterGeneration++
+	if _, err := encodeVectorPartitionReadyPromotionCanonicalV1(promotion); err == nil {
+		t.Fatal("accepted router generation different from manifest generation")
+	}
+}
+
 func TestReduceVectorPartitionLifecycleChainV1LegalTransitionsAndCrashPrefixes(t *testing.T) {
 	chain := lifecycleLegalChainV1(t)
 	for n := 1; n <= len(chain); n++ {
@@ -110,7 +241,8 @@ func TestReduceVectorPartitionLifecycleChainV1LegalTransitionsAndCrashPrefixes(t
 
 func TestReduceVectorPartitionLifecycleChainV1MultiGenerationAuthority(t *testing.T) {
 	buildRaw, build := lifecycleManifestPayloadV1(t, "building")
-	readyRaw, ready := lifecycleManifestPayloadV1(t, "ready")
+	_, ready := lifecycleManifestPayloadV1(t, "ready")
+	readyPromotion := lifecycleReadyPromotionPayloadV1(t, build, ready)
 	ready2 := ready
 	ready2.Generation, ready2.RouterGeneration = ready.Generation+1, ready.Generation+1
 	ready2.Canonicalize()
@@ -121,10 +253,7 @@ func TestReduceVectorPartitionLifecycleChainV1MultiGenerationAuthority(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	ready2Raw, err := EncodeVectorPartitionManifestV1(ready2)
-	if err != nil {
-		t.Fatal(err)
-	}
+	ready2Promotion := lifecycleReadyPromotionPayloadV1(t, build2, ready2)
 	reclaim, err := encodeVectorPartitionReclaimRecordV1(vectorPartitionReclaimStateV1{Collection: "docs", IndexName: "embedding", Generation: ready.Generation, OriginalRefs: vectorPartitionReclaimRefsFromManifestV1(ready)})
 	if err != nil {
 		t.Fatal(err)
@@ -137,10 +266,10 @@ func TestReduceVectorPartitionLifecycleChainV1MultiGenerationAuthority(t *testin
 	}
 	var chain []vectorPartitionLifecycleRecordV1
 	appendRecord(&chain, vectorPartitionLifecycleBuildV1, build.Generation, buildRaw)
-	appendRecord(&chain, vectorPartitionLifecycleReadyV1, ready.Generation, readyRaw)
+	appendRecord(&chain, vectorPartitionLifecycleReadyV1, ready.Generation, readyPromotion)
 	appendRecord(&chain, vectorPartitionLifecycleLocalActivateV1, ready.Generation, nil)
 	appendRecord(&chain, vectorPartitionLifecycleBuildV1, build2.Generation, build2Raw)
-	appendRecord(&chain, vectorPartitionLifecycleReadyV1, ready2.Generation, ready2Raw)
+	appendRecord(&chain, vectorPartitionLifecycleReadyV1, ready2.Generation, ready2Promotion)
 	appendRecord(&chain, vectorPartitionLifecycleLocalActivateV1, ready2.Generation, nil)
 	appendRecord(&chain, vectorPartitionLifecycleDeletePrepareV1, ready.Generation, reclaim)
 	appendRecord(&chain, vectorPartitionLifecycleReclaimProgressV1, ready.Generation, reclaim)
@@ -171,7 +300,8 @@ func TestReduceVectorPartitionLifecycleChainV1MultiGenerationAuthority(t *testin
 
 func TestReduceVectorPartitionLifecycleChainV1ActivationClearsStaleRetired(t *testing.T) {
 	build1Raw, build1 := lifecycleManifestPayloadV1(t, "building")
-	ready1Raw, ready1 := lifecycleManifestPayloadV1(t, "ready")
+	_, ready1 := lifecycleManifestPayloadV1(t, "ready")
+	ready1Promotion := lifecycleReadyPromotionPayloadV1(t, build1, ready1)
 	ready2 := ready1
 	ready2.Generation, ready2.RouterGeneration = ready1.Generation+1, ready1.Generation+1
 	ready2.Canonicalize()
@@ -179,7 +309,7 @@ func TestReduceVectorPartitionLifecycleChainV1ActivationClearsStaleRetired(t *te
 	build2.State, build2.RouterGeneration, build2.RouterAsset, build2.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
 	build2.Canonicalize()
 	build2Raw, _ := EncodeVectorPartitionManifestV1(build2)
-	ready2Raw, _ := EncodeVectorPartitionManifestV1(ready2)
+	ready2Promotion := lifecycleReadyPromotionPayloadV1(t, build2, ready2)
 	var chain []vectorPartitionLifecycleRecordV1
 	var prev [32]byte
 	appendRecord := func(op vectorPartitionLifecycleOperationV1, generation uint64, payload []byte) {
@@ -187,11 +317,11 @@ func TestReduceVectorPartitionLifecycleChainV1ActivationClearsStaleRetired(t *te
 		chain, prev = append(chain, r), r.Digest
 	}
 	appendRecord(vectorPartitionLifecycleBuildV1, build1.Generation, build1Raw)
-	appendRecord(vectorPartitionLifecycleReadyV1, ready1.Generation, ready1Raw)
+	appendRecord(vectorPartitionLifecycleReadyV1, ready1.Generation, ready1Promotion)
 	appendRecord(vectorPartitionLifecycleLocalActivateV1, ready1.Generation, nil)
 	appendRecord(vectorPartitionLifecycleDeactivateV1, ready1.Generation, nil)
 	appendRecord(vectorPartitionLifecycleBuildV1, build2.Generation, build2Raw)
-	appendRecord(vectorPartitionLifecycleReadyV1, ready2.Generation, ready2Raw)
+	appendRecord(vectorPartitionLifecycleReadyV1, ready2.Generation, ready2Promotion)
 	appendRecord(vectorPartitionLifecycleLocalActivateV1, ready2.Generation, nil)
 	state, err := reduceVectorPartitionLifecycleChainV1(chain)
 	if err != nil || state.ActiveGeneration != ready2.Generation || state.RetiredGeneration != 0 {
@@ -274,12 +404,13 @@ func TestVectorPartitionLifecycleRecordV1RejectsMalformedAndUnbounded(t *testing
 
 func TestVectorPartitionLifecycleRecordV1RejectsOperationPayloadShapes(t *testing.T) {
 	buildingRaw, building := lifecycleManifestPayloadV1(t, "building")
-	readyRaw, _ := lifecycleManifestPayloadV1(t, "ready")
+	_, ready := lifecycleManifestPayloadV1(t, "ready")
+	readyPromotion := lifecycleReadyPromotionPayloadV1(t, building, ready)
 	for name, r := range map[string]vectorPartitionLifecycleRecordV1{
 		"invalid-operation":      {Collection: "docs", IndexName: "embedding", Sequence: 1, Operation: 99, Generation: building.Generation},
 		"build-missing-payload":  {Collection: "docs", IndexName: "embedding", Sequence: 1, Operation: vectorPartitionLifecycleBuildV1, Generation: building.Generation},
 		"ready-wrong-state":      {Collection: "docs", IndexName: "embedding", Sequence: 1, Operation: vectorPartitionLifecycleReadyV1, Generation: building.Generation, Payload: buildingRaw},
-		"ready-wrong-generation": {Collection: "docs", IndexName: "embedding", Sequence: 1, Operation: vectorPartitionLifecycleReadyV1, Generation: building.Generation + 1, Payload: readyRaw},
+		"ready-wrong-generation": {Collection: "docs", IndexName: "embedding", Sequence: 1, Operation: vectorPartitionLifecycleReadyV1, Generation: building.Generation + 1, Payload: readyPromotion},
 		"activate-unexpected":    {Collection: "docs", IndexName: "embedding", Sequence: 1, Operation: vectorPartitionLifecycleLocalActivateV1, Generation: building.Generation, Payload: []byte("x")},
 		"delete-missing-payload": {Collection: "docs", IndexName: "embedding", Sequence: 1, Operation: vectorPartitionLifecycleDeletePrepareV1, Generation: building.Generation},
 	} {
