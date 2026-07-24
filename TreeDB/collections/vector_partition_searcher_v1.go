@@ -60,10 +60,13 @@ type VectorPartitionSearchMetricsV1 struct {
 // VectorPartitionSearchOptionsV1 is the bounded M3 no-document search
 // contract consumed by routed serving layers. EfSearch is applied by the
 // native HNSW pack. The exact in-memory fallback validates it but does not need
-// a traversal frontier.
+// a traversal frontier. MaxStableIDBytes lets a serving boundary reject an
+// immutable asset before either route materializes result IDs; zero leaves the
+// local searcher uncapped.
 type VectorPartitionSearchOptionsV1 struct {
-	TopK     int
-	EfSearch int
+	TopK             int
+	EfSearch         int
+	MaxStableIDBytes int
 }
 
 const (
@@ -90,7 +93,7 @@ type VectorPartitionSearchStatusV1 struct {
 // layers use it before search so a small ef_search cannot conceal the
 // row-count-sized visit bitmap required by the native HNSW pack.
 func (s *VectorPartitionLocalSearcherV1) SearchScratchBytesV1(opts VectorPartitionSearchOptionsV1) (uint64, error) {
-	if s == nil || opts.TopK < 1 || opts.EfSearch < 0 {
+	if s == nil || opts.TopK < 1 || opts.EfSearch < 0 || opts.MaxStableIDBytes < 0 {
 		return 0, ErrVectorPartitionSearchUnavailable
 	}
 	s.mu.Lock()
@@ -435,9 +438,13 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context
 		return nil, VectorPartitionSearchMetricsV1{}, err
 	}
 	defer s.Release()
-	if opts.TopK < 1 || opts.EfSearch < 0 || len(query) != s.asset.Dimensions {
+	if opts.TopK < 1 || opts.EfSearch < 0 || opts.MaxStableIDBytes < 0 || len(query) != s.asset.Dimensions {
 		s.recordFailure()
 		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: query bounds", ErrVectorPartitionSearchUnavailable)
+	}
+	if opts.MaxStableIDBytes > 0 && s.maxStableIDBytes > opts.MaxStableIDBytes {
+		s.recordFailure()
+		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: stable ID bytes=%d exceeds limit=%d", ErrVectorPartitionSearchUnavailable, s.maxStableIDBytes, opts.MaxStableIDBytes)
 	}
 	var qn float64
 	for _, x := range query {

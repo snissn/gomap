@@ -661,10 +661,6 @@ func TestVectorPartitionShardSearchGenerationAndAssetFailuresAreWholeRequestV1(t
 				0: vectorPartitionShardSearchAssetTestV1(0, []string{strings.Repeat("x", DefaultVectorPartitionShardSearchLimitsV1().MaxStableIDBytes+1)}, [][]float32{{1, 0}}),
 			},
 		)
-		service.testSearchPartition = func(context.Context, *collections.VectorPartitionLocalSearcherV1, []float32, collections.VectorPartitionSearchOptionsV1) ([]collections.VectorPartitionSearchResultV1, collections.VectorPartitionSearchMetricsV1, error) {
-			t.Fatal("oversized stable ID reached search")
-			return nil, collections.VectorPartitionSearchMetricsV1{}, nil
-		}
 		response, err := service.Search(context.Background(), vectorPartitionShardSearchRequestTestV1([]uint32{0}))
 		assertVectorPartitionShardSearchCodeV1(t, err, VectorPartitionShardSearchErrorAssetsUnavailableV1)
 		if !vectorPartitionShardSearchResponseZeroTestV1(response) {
@@ -672,6 +668,12 @@ func TestVectorPartitionShardSearchGenerationAndAssetFailuresAreWholeRequestV1(t
 		}
 		if pins, releases, opens := source.counts(); pins != 1 || releases != 1 || opens != 1 {
 			t.Fatalf("oversized stable ID pin lifetime=%d/%d opens=%d", pins, releases, opens)
+		}
+		source.mu.Lock()
+		searcher := source.searchers[0]
+		source.mu.Unlock()
+		if status := searcher.Status(); status.Searches != 0 || status.Failures != 1 || status.ActivePins != 0 || !status.Retired {
+			t.Fatalf("oversized stable ID reached traversal or leaked resources: %+v", status)
 		}
 	})
 }

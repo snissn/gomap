@@ -466,19 +466,15 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 			response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
 			return response, s.wrapError(fmt.Errorf("%w: partition %d unknown search route %q", ErrVectorPartitionShardSearchAssetsUnavailable, partitionID, status.SearchRoute), groupID)
 		}
-		if status.MaxStableIDBytes > s.limits.MaxStableIDBytes {
-			_ = lease.Close()
-			response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
-			return response, s.wrapError(fmt.Errorf("%w: partition %d stable ID bytes=%d exceeds limit=%d", ErrVectorPartitionShardSearchAssetsUnavailable, partitionID, status.MaxStableIDBytes, s.limits.MaxStableIDBytes), groupID)
-		}
 		candidateCeiling := uint64(request.EfSearch)
 		if status.SearchRoute == collections.VectorPartitionSearchRouteExactFP32ScanV1 {
 			candidateCeiling = uint64(status.HomeMemberships + status.OverlapMemberships)
 		}
 		partitionCandidateBytes, ok := mulUint64V1(candidateCeiling, 64)
 		scratchBytes, scratchErr := searcher.SearchScratchBytesV1(collections.VectorPartitionSearchOptionsV1{
-			TopK:     request.TopK,
-			EfSearch: request.EfSearch,
+			TopK:             request.TopK,
+			EfSearch:         request.EfSearch,
+			MaxStableIDBytes: s.limits.MaxStableIDBytes,
 		})
 		if scratchErr != nil {
 			_ = lease.Close()
@@ -516,8 +512,9 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 			search = s.testSearchPartition
 		}
 		results, metrics, searchErr := search(ctx, searcher, request.Query, collections.VectorPartitionSearchOptionsV1{
-			TopK:     request.TopK,
-			EfSearch: request.EfSearch,
+			TopK:             request.TopK,
+			EfSearch:         request.EfSearch,
+			MaxStableIDBytes: s.limits.MaxStableIDBytes,
 		})
 		if searchErr != nil {
 			response.Timing.SearchNanos = elapsedNanosV1(searchStarted)

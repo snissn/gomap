@@ -7,7 +7,7 @@ import (
 )
 
 func TestVectorPartitionLocalSearcherV1ExactStableIDsAndPins(t *testing.T) {
-	a := VectorPartitionSearchAssetV1{ManifestChecksum: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Generation: 1, PartitionID: 2, Dimensions: 2, IDs: []string{"b", "a"}, Vectors: [][]float32{{1, 0}, {.9, .1}}, Kinds: []VectorPartitionMembershipKindV1{VectorPartitionMembershipHomeV1, VectorPartitionMembershipOverlapV1}, Adjacency: [][]uint32{{1}, {0}}}
+	a := VectorPartitionSearchAssetV1{ManifestChecksum: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Generation: 1, PartitionID: 2, Dimensions: 2, IDs: []string{"bb", "a"}, Vectors: [][]float32{{1, 0}, {.9, .1}}, Kinds: []VectorPartitionMembershipKindV1{VectorPartitionMembershipHomeV1, VectorPartitionMembershipOverlapV1}, Adjacency: [][]uint32{{1}, {0}}}
 	s, e := OpenVectorPartitionLocalSearcherV1(a)
 	if e != nil {
 		t.Fatal(e)
@@ -16,11 +16,17 @@ func TestVectorPartitionLocalSearcherV1ExactStableIDsAndPins(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if got[0].ID != "b" || got[0].Score <= got[1].Score {
+	if got[0].ID != "bb" || got[0].Score <= got[1].Score {
 		t.Fatalf("%+v", got)
 	}
-	if status := s.Status(); status.MaxStableIDBytes != 1 {
-		t.Fatalf("max stable ID bytes=%d want 1", status.MaxStableIDBytes)
+	if status := s.Status(); status.MaxStableIDBytes != 2 {
+		t.Fatalf("max stable ID bytes=%d want 2", status.MaxStableIDBytes)
+	}
+	if _, _, err := s.SearchWithOptionsV1(context.Background(), []float32{1, 0}, VectorPartitionSearchOptionsV1{TopK: 1, MaxStableIDBytes: 0}); err != nil {
+		t.Fatalf("uncapped stable ID search: %v", err)
+	}
+	if _, _, err := s.SearchWithOptionsV1(context.Background(), []float32{1, 0}, VectorPartitionSearchOptionsV1{TopK: 1, MaxStableIDBytes: 1}); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("capped stable ID search err=%v", err)
 	}
 	if e := s.Acquire(); e != nil {
 		t.Fatal(e)
