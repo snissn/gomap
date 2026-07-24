@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -238,6 +239,14 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 		return m3PartitionIndexRow{}, err
 	}
 	dbOpen = false
+	// A million-row source rebuild can leave several generations of HNSW build
+	// scratch reachable until the next GC cycle. The persistent-pack phase
+	// deliberately starts from a reopened DB, so release that closed phase
+	// before mapping the immutable source and materializing derived assets.
+	col = nil
+	manager = nil
+	db = nil
+	debug.FreeOSMemory()
 	sourcePhysicalBytes, err := m3DirectoryBytes(dir)
 	if err != nil || sourcePhysicalBytes <= 0 {
 		return m3PartitionIndexRow{}, fmt.Errorf("source physical footprint=%d: %w", sourcePhysicalBytes, err)
@@ -272,6 +281,12 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
+	sourceRows = nil
+	sourceOrdinals = nil
+	// Source-ordinal reconciliation owns large transient maps and stable-ID
+	// copies at the 1M acceptance shape. They are not part of the persistent
+	// pack build and retaining them needlessly raises the materializer's peak.
+	debug.FreeOSMemory()
 	inputs := make([]collections.VectorPartitionSearchAssetV1, cfg.partitions)
 	for partition := range inputs {
 		inputs[partition] = collections.VectorPartitionSearchAssetV1{
