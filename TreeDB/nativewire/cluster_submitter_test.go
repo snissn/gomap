@@ -1489,7 +1489,7 @@ func TestClusterRoutePreflightRejectsNativeQueryRouteBeforeLocalRead(t *testing.
 	}
 }
 
-func TestClusterRoutePreflightRejectsNativeGetManyBeforeLocalRead(t *testing.T) {
+func TestClusterRoutePreflightRejectsNativeMultiGetManyBeforeLocalRead(t *testing.T) {
 	catalog := mustNativewireRouteTestCatalog(t, raftplacement.PlacementModeRingV1)
 	submitter := &placementRouteClusterSubmitter{
 		fakeClusterSubmitter: &fakeClusterSubmitter{},
@@ -1502,9 +1502,9 @@ func TestClusterRoutePreflightRejectsNativeGetManyBeforeLocalRead(t *testing.T) 
 	if err := client.Hello(ctx); err != nil {
 		t.Fatalf("Hello: %v", err)
 	}
-	_, _, err := client.GetMany(ctx, "users", [][]byte{[]byte("u1")})
+	_, _, err := client.GetMany(ctx, "users", [][]byte{[]byte("u1"), []byte("u2")})
 	if !isRemoteError(err, iwire.ErrReadOnly) || !strings.Contains(err.Error(), "query route shape is not supported") {
-		t.Fatalf("GetMany cluster route err=%v want unsupported query read-only", err)
+		t.Fatalf("multi GetMany cluster route err=%v want unsupported query read-only", err)
 	}
 	if routes := submitter.snapshotRoutes(); len(routes) != 0 {
 		t.Fatalf("route calls=%d want 0 before unsupported query provider call", len(routes))
