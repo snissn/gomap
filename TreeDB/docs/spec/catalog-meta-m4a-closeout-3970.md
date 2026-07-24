@@ -12,20 +12,22 @@ scale results.
 | --- | --- | --- |
 | Deterministic record/command | Canonical round trip, duplicate/unknown/truncated input, digest, identity, and bounded decoder tests | One epoch has one canonical record and digest; invalid input fails before publication. |
 | Committed authority | `CatalogMetaRaftProviderV1` has the only usable apply/restore capabilities | Local files, static route adapters, and follower-local calls cannot activate ownership. |
-| Three fixed peers | Real HashiCorp in-memory transports and stores exercise follower refusal, leader loss, new-leader commit, convergence, rejoin, snapshot, and reopen | The next generation is committed by the elected meta leader and replicas never move backward. |
+| Three fixed peers | Three real `CatalogMetaAuthorityV1` instances over HashiCorp in-memory transports and durable stores exercise follower refusal, leader loss, new-leader commit, convergence, rejoin, snapshot, and reopen | Every authority preserves exact identity, feature floors, route decisions, retry identity, and monotonic generations. |
 | Availability and cancellation | Isolated voter, pre-enqueue cancellation, and blocked post-enqueue apply | No quorum is unavailable; only a post-enqueue cancellation is reported as commit-ambiguous. |
-| Snapshot and backup archive | Canonical snapshot bytes include the applied index, record, and exact last command | Snapshot/reopen/rejoin and opaque backup round trips preserve epoch, digest, retry identity, placement, and feature floors without mixed publication. |
+| Snapshot and backup archive | A leader exports a bounded checksummed HashiCorp snapshot; a fresh cluster restores it through HashiCorp Raft `Restore` | Restore propagates to all three authorities and survives reopen/failover/rejoin; follower, corrupt, and live rollback attempts fail closed. |
 | Voter capabilities | Every fixed peer must declare `FeatureCatalogMetaAuthority` at the supported floor | Unsupported voters fail provider open before bootstrap/reopen and before local apply or route admission. |
 | Owner admission | The replicated dispatcher re-resolves complete request metadata before registry lookup | Stale/missing proof and all route identity mismatches fail before owner mutation. |
 | Nativewire and Mongo | Real single-node meta Raft, dynamic route providers, shared submit, mutation, and routed-read proof matrices | Adapters carry the locally applied proof and reject stale/missing proof before local success. |
 | Crash/model safety | 64 deterministic seeds by 64 replay, apply, snapshot, and restart steps plus concurrent readers | Versions are monotonic and readers observe only complete generations. |
 
-The static `nativewire.CatalogClusterRouteProvider` and legacy
-`raftcluster.NewGroupRoutedSubmitter` remain bootstrap/test compatibility
-adapters. The replicated path is
-`NewCatalogMetaClusterRouteProvider` plus
-`NewCatalogMetaGroupRoutedSubmitter`; the latter requires complete route
-revalidation and has no nil-validator mode.
+`nativewire.CatalogRouteResolverV1` is a read-only bootstrap/inspection helper.
+Its method is not `ClusterRoute`, so it cannot satisfy the production
+`ClusterRouteProvider` interface. The only exported routed-dispatcher
+constructor is `NewCatalogMetaGroupRoutedSubmitter`, which requires complete
+route revalidation and has no nil-validator or proof-only mode. Permissive
+static route/provider adapters are confined to `_test.go` files. The legacy
+Mongo benchmark scaffold has no replicated catalog authority and therefore
+uses an always-fail-closed validator.
 
 ## Format and capacity accounting
 
@@ -52,73 +54,107 @@ GOWORK=off go test ./TreeDB/internal/raftplacement ./TreeDB/internal/raftcluster
 GOWORK=off go test -race ./TreeDB/internal/raftplacement ./TreeDB/internal/raftcluster ./TreeDB/internal/raftfsm ./TreeDB/nativewire ./TreeDB/mongo_gateway -count=1
 GOWORK=off go vet ./TreeDB/internal/raftplacement ./TreeDB/internal/raftcluster ./TreeDB/internal/raftfsm ./TreeDB/nativewire ./TreeDB/mongo_gateway
 GOWORK=off go test ./TreeDB/internal/raftplacement -run '^$' -fuzz '^FuzzDecodeCatalogMetaCommandV1$' -fuzztime=10s
+GOWORK=off go test ./cmd/mongo_gateway_bench ./TreeDB/docs -count=1
 ```
 
 The focused command passed in all five packages. Full non-race and full race
 runs of the same five affected packages also passed. The required focused race
-run passed, `go vet` reported no findings, and the 10-second decoder fuzz run
-completed 291,404 executions without a failure.
+run passed and `go vet` reported no findings. The docs and Mongo benchmark
+command packages passed their tests. The 10-second decoder fuzz run completed
+145,934 executions without a failure.
 
 ## Base/head steady-state comparison
 
-The identical comparison command was run at base `7590f5c2f` and implementation
-head `c772dbe8e`:
+The actual issue base is `a2d7bd558`, not the later feature merge
+`7590f5c2f`. The base has no catalog-meta implementation or catalog benchmark
+harness, so no catalog row is presented as a base/head comparison. The
+identical pre-existing read-coordinator and concrete Raft-bridge benchmarks
+were instead run in detached base and implementation-head (`b446c7091`)
+worktrees:
 
 ```sh
-GOWORK=off go test ./TreeDB/internal/raftplacement \
-  -run '^$' \
-  -bench 'BenchmarkCatalogMeta(StatusAndRoute|EncodeDecode)$' \
+GOWORK=off go test ./TreeDB/internal/raftcluster -run '^$' \
+  -bench '^BenchmarkInternalGroupRoutedReadIndexCoordinatorScaffold$' \
+  -benchmem -benchtime=2s -count=10
+GOWORK=off go test ./TreeDB/nativewire -run '^$' \
+  -bench '^BenchmarkRaftClusterSubmitterConcreteBridgeUpdateBSONSet$' \
   -benchmem -count=10
-benchstat catalog-meta-base.txt catalog-meta-head.txt
 ```
 
 Linux/amd64, Intel i5-11400F:
 
-| Benchmark | Base | Head | Result |
-| --- | ---: | ---: | --- |
-| Status and route | 264.5 ns/op | 258.3 ns/op | no significant difference, `p=0.078`, `n=10` |
-| Encode/decode | 77.23 us/op | 78.10 us/op | no significant difference, `p=0.063`, `n=10` |
-| Status and route bytes | 32 B/op | 32 B/op | unchanged |
-| Status and route allocations | 1 alloc/op | 1 alloc/op | unchanged |
-| Encode/decode bytes | 40.67 KiB/op | 40.67 KiB/op | unchanged |
-| Encode/decode allocations | 1,052 allocs/op | 1,052 allocs/op | unchanged |
+| Identical pre-existing benchmark | Base | Head | Allocation result | Statistical result |
+| --- | ---: | ---: | ---: | --- |
+| Internal routed read-index scaffold | 55.59 ns/op | 56.04 ns/op | 0 B/op, 0 allocs/op at both | +0.81%, `p=0.000`, `n=10` |
+| Concrete Raft bridge UpdateBSONSet | 9.546 ms/op | 10.264 ms/op | 244.7/244.6 KiB, 923.0/923.5 allocs; no significant difference | time `p=0.165`, bytes `p=0.436`, allocs `p=0.162`, `n=10` |
 
-No material regression was detected in the compatibility rows. These are local
-microbenchmarks, not production scale evidence.
+The read scaffold source is byte-for-byte unchanged between these commits; the
+measured sub-nanosecond shift is reported but is not attributed to catalog-meta
+code. The bridge timing and allocation distributions show no significant
+difference. Its custom `ops_total` metric is the benchmark calibration
+iteration count (`b.N`), not an operation outcome, so it is not used as a
+performance result. These are local microbenchmarks, not production scale
+evidence.
 
-## New operation and maximum-shape measurements
+## Implementation-only operation measurements
 
-The implementation-only matrix was captured at `c772dbe8e` with:
+All catalog rows are explicitly implementation-only. Ten-sample medians at
+`b446c7091` were captured with:
 
 ```sh
-GOWORK=off go test ./TreeDB/internal/raftplacement \
-  -run '^$' \
+GOWORK=off go test ./TreeDB/internal/raftplacement ./TreeDB/nativewire \
+  ./TreeDB/mongo_gateway -run '^$' \
+  -bench 'BenchmarkCatalogMeta(Route|Decode|NativewireAdmission|MongoMutationAdmission)$' \
+  -benchmem -count=10
+```
+
+| Operation | Median | Bytes/op | Allocs/op |
+| --- | ---: | ---: | ---: |
+| Catalog route only | 251.4 ns | 32 B | 1 |
+| Catalog command decode only | 77.67 us | 40.67 KiB | 1,052 |
+| Guarded owner dispatcher | 480.5 ns | 104 B | 4 |
+| Nativewire admission + route + guarded dispatch | 1.185 us | 264 B | 9 |
+| Nativewire routed-read admission | 466.5 ns | 96 B | 3 |
+| Mongo wire mutation admission + route + guarded dispatch | 43.20 us | 45.62 KiB | 356 |
+
+The route and decode benchmark names describe exactly what their timed bodies
+do. Nativewire and Mongo setup uses a real committed
+`CatalogMetaAuthorityV1`; the timed owner is a no-op/recording data-group
+submitter, so these rows measure adapter and admission overhead, not data
+storage or network consensus.
+
+## Maximum-shape directional measurements
+
+The maximum-shape matrix is also implementation-only and uses one iteration:
+
+```sh
+GOWORK=off go test ./TreeDB/internal/raftplacement -run '^$' \
   -bench 'BenchmarkCatalogMeta(StatusRouteAdmissionMatrix|EncodeDecodeApplyMatrix|SnapshotArchiveInstallWarmReopen)$' \
   -benchmem -benchtime=1x -count=1
 ```
 
 | Shape / operation | Time | Bytes/op | Allocs/op | Capacity metric |
 | --- | ---: | ---: | ---: | ---: |
-| small status | 1.007 us | 0 B | 0 | 1,329 retained wire B |
-| small route | 15.125 us | 32 B | 1 | 1,329 retained wire B |
-| small owner admission | 11.759 us | 32 B | 1 | 1,329 retained wire B |
-| maximum status | 6.729 us | 24 B | 1 | 1,278,713 retained wire B |
-| maximum route | 10.071 us | 48 B | 1 | 1,278,713 retained wire B |
-| maximum owner admission | 9.289 us | 48 B | 1 | 1,278,713 retained wire B |
-| small encode, 685-byte command | 76.930 us | 23,160 B | 516 | 685 command B |
-| small decode, 685-byte command | 129.602 us | 43,384 B | 1,054 | 685 command B |
-| small fresh apply, 685-byte command | 151.469 us | 71,760 B | 1,583 | 685 command B |
-| maximum encode, 639,377-byte command | 28.621 ms | 18,610,416 B | 414,123 | 639,377 command B |
-| maximum decode, 639,377-byte command | 65.148 ms | 36,577,048 B | 848,729 | 639,377 command B |
-| maximum fresh apply, 639,377-byte command | 115.655 ms | 55,999,240 B | 1,262,840 | 639,377 command B |
-| small snapshot archive, 1,836-byte snapshot | 40.522 us | 15,880 B | 73 | 1,836 snapshot B |
-| small snapshot install | 249.210 us | 131,248 B | 2,641 | 1,836 snapshot B |
-| small warm reopen/status/route | 479.048 us | 131,280 B | 2,642 | 1,836 snapshot B |
-| maximum snapshot archive, 1,705,012-byte snapshot | 10.121 ms | 11,126,152 B | 82 | 1,705,012 snapshot B |
-| maximum snapshot install | 183.617 ms | 106,442,000 B | 2,111,578 | 1,705,012 snapshot B |
-| maximum warm reopen/status/route | 179.071 ms | 104,342,768 B | 2,111,551 | 1,705,012 snapshot B |
+| small status | 2.944 us | 0 B | 0 | 1,329 retained wire B |
+| small route | 36.833 us | 32 B | 1 | 1,329 retained wire B |
+| small owner admission | 29.316 us | 32 B | 1 | 1,329 retained wire B |
+| maximum status | 23.790 us | 24 B | 1 | 1,278,713 retained wire B |
+| maximum route | 27.555 us | 48 B | 1 | 1,278,713 retained wire B |
+| maximum owner admission | 16.207 us | 48 B | 1 | 1,278,713 retained wire B |
+| small encode, 685-byte command | 166.429 us | 23,160 B | 516 | 685 command B |
+| small decode, 685-byte command | 285.332 us | 45,496 B | 1,063 | 685 command B |
+| small fresh apply, 685-byte command | 345.084 us | 71,760 B | 1,583 | 685 command B |
+| maximum encode, 639,377-byte command | 64.348 ms | 16,513,104 B | 414,100 | 639,377 command B |
+| maximum decode, 639,377-byte command | 195.941 ms | 34,479,880 B | 848,705 | 639,377 command B |
+| maximum fresh apply, 639,377-byte command | 367.260 ms | 58,098,768 B | 1,262,871 | 639,377 command B |
+| small snapshot export, 1,836-byte snapshot | 73.824 us | 15,880 B | 73 | 1,836 snapshot B |
+| small snapshot install | 529.548 us | 131,248 B | 2,641 | 1,836 snapshot B |
+| small warm reopen/status/route | 669.988 us | 126,112 B | 2,635 | 1,836 snapshot B |
+| maximum snapshot export, 1,705,012-byte snapshot | 16.980 ms | 11,126,168 B | 82 | 1,705,012 snapshot B |
+| maximum snapshot install | 330.792 ms | 106,442,112 B | 2,111,579 | 1,705,012 snapshot B |
+| maximum warm reopen/status/route | 229.307 ms | 104,342,784 B | 2,111,551 | 1,705,012 snapshot B |
 
 The "maximum" fixture exercises the declared 4,096-placement catalog limit.
-The new rows have no base equivalent because the replicated M4A operations did
-not exist at the base commit. They use one iteration and are directional
-capacity evidence, not confidence-interval performance claims.
+One-iteration timings are directional capacity evidence, not
+confidence-interval performance claims. The real Hashicorp backup/restore path
+is correctness-tested rather than presented as a microbenchmark.
