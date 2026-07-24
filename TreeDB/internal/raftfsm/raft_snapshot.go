@@ -39,7 +39,8 @@ var raftSnapshotAfterExtractForTest func()
 var raftSnapshotBeforeOpenForTest func(string)
 
 // raftSnapshotBeforeVectorPartitionRootOpenForTest makes the vector-partition
-// root discovery/open boundary observable to deterministic replacement tests.
+// root retained-open/path-revalidation boundary observable to deterministic
+// replacement tests.
 var raftSnapshotBeforeVectorPartitionRootOpenForTest func(string)
 
 var raftSnapshotMainDBEntriesV1 = []string{
@@ -554,9 +555,6 @@ func appendRaftSnapshotDirWithRootInfoV1(tw *tar.Writer, prefix, root string, ex
 // appendRaftSnapshotVectorPartitionDirV1 keeps discovery and child opens on
 // one exact retained directory handle. The VPM namespace is flat by contract.
 func appendRaftSnapshotVectorPartitionDirV1(tw *tar.Writer, prefix, root string, expectedRoot fs.FileInfo) error {
-	if raftSnapshotBeforeVectorPartitionRootOpenForTest != nil {
-		raftSnapshotBeforeVectorPartitionRootOpenForTest(root)
-	}
 	dir, err := rootpublication.OpenStableParent(root)
 	if err != nil {
 		return err
@@ -568,6 +566,25 @@ func appendRaftSnapshotVectorPartitionDirV1(tw *tar.Writer, prefix, root string,
 	}
 	if !openedRoot.IsDir() || !os.SameFile(expectedRoot, openedRoot) {
 		return fmt.Errorf("raftfsm: vector partition snapshot root %q changed while opening", root)
+	}
+	retainedIdentity, err := rootpublication.StableIdentityFromFile(dir)
+	if err != nil {
+		return fmt.Errorf("raftfsm: capture vector partition snapshot root %q identity: %w", root, err)
+	}
+	if raftSnapshotBeforeVectorPartitionRootOpenForTest != nil {
+		raftSnapshotBeforeVectorPartitionRootOpenForTest(root)
+	}
+	current, err := rootpublication.OpenStableParent(root)
+	if err != nil {
+		return fmt.Errorf("raftfsm: reopen vector partition snapshot root %q: %w", root, err)
+	}
+	currentIdentity, identityErr := rootpublication.StableIdentityFromFile(current)
+	closeErr := current.Close()
+	if err := errors.Join(identityErr, closeErr); err != nil {
+		return fmt.Errorf("raftfsm: revalidate vector partition snapshot root %q identity: %w", root, err)
+	}
+	if !rootpublication.SamePhysicalIdentity(retainedIdentity, currentIdentity) {
+		return fmt.Errorf("raftfsm: vector partition snapshot root %q changed after retained open", root)
 	}
 	if err := writeRaftSnapshotDirHeaderV1(tw, prefix); err != nil {
 		return err
