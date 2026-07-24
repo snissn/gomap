@@ -283,6 +283,9 @@ func TestVectorPartitionLifecycleCheckpointV1RejectsInvalidState(t *testing.T) {
 		"active-does-not-match-activation-high-water": func(c *vectorPartitionLifecycleCheckpointV1) {
 			c.State.ActivationHighWater = generation - 1
 		},
+		"live-activation-high-water-without-authority-pointer": func(c *vectorPartitionLifecycleCheckpointV1) {
+			c.State.ActiveGeneration = 0
+		},
 		"missing-active": func(c *vectorPartitionLifecycleCheckpointV1) {
 			c.State.ActiveGeneration = generation + 1
 		},

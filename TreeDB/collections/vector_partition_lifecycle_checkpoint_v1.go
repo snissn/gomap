@@ -156,6 +156,12 @@ func canonicalVectorPartitionLifecycleCheckpointV1(input vectorPartitionLifecycl
 	if err := validatePointer(canonicalState.RetiredGeneration, "retired"); err != nil {
 		return zero, nil, err
 	}
+	if watermark, present := canonicalState.Generations[canonicalState.ActivationHighWater]; present &&
+		!watermark.Deleting &&
+		canonicalState.ActiveGeneration != canonicalState.ActivationHighWater &&
+		canonicalState.RetiredGeneration != canonicalState.ActivationHighWater {
+		return zero, nil, fmt.Errorf("%w: lifecycle checkpoint live activation high water has no authority pointer", ErrVectorPartitionManifestInvalid)
+	}
 	return vectorPartitionLifecycleCheckpointV1{Epoch: input.Epoch, State: canonicalState}, encoded, nil
 }
 
