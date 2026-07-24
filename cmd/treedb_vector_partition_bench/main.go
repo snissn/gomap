@@ -325,6 +325,9 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		if cfg.topK > fixture.Vectors {
 			return errors.New("top-k cannot exceed fixture vectors")
 		}
+		if _, err := validateM3BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits); err != nil {
+			return err
+		}
 		vectors, queries := deterministicFixture(fixture)
 		if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 			return errors.New("fixture checksum does not match generated vector/query/truth stream")
@@ -736,6 +739,59 @@ type benchmarkWorkPlan struct {
 	VectorQueryPairs  int64
 	CorpusPasses      int64
 	VectorQueryVisits int64
+}
+
+type m3BenchmarkWorkPlan struct {
+	ChecksumVectorQueryVisits   int64
+	MembershipVectorQueryVisits int64
+	VectorQueryVisits           int64
+}
+
+func validateM3BenchmarkWork(cfg config, m fixtureManifest, capUnits int64) (m3BenchmarkWorkPlan, error) {
+	if capUnits < 1 || len(cfg.overlaps) == 0 {
+		return m3BenchmarkWorkPlan{}, errors.New("cannot plan M3 benchmark work without a positive cap and overlap rows")
+	}
+	vectors := int64(m.Vectors)
+	queries := int64(m.Queries)
+	checksumVisits, err := memoryMul(vectors, queries)
+	if err != nil {
+		return m3BenchmarkWorkPlan{}, err
+	}
+	var membershipUpperBound int64
+	for _, ratio := range cfg.overlaps {
+		if math.IsNaN(ratio) || math.IsInf(ratio, 0) || ratio < 0 || ratio > 1 {
+			return m3BenchmarkWorkPlan{}, errors.New("cannot plan M3 benchmark work with an invalid overlap ratio")
+		}
+		budget := int64(math.Floor(ratio * float64(m.Vectors)))
+		rowMemberships, err := memoryAdd(vectors, budget)
+		if err != nil {
+			return m3BenchmarkWorkPlan{}, err
+		}
+		membershipUpperBound, err = memoryAdd(membershipUpperBound, rowMemberships)
+		if err != nil {
+			return m3BenchmarkWorkPlan{}, err
+		}
+	}
+	// Each M3 row scans every local membership once for the exact partition
+	// oracle and once more to validate returned IDs/scores against authority.
+	membershipVisits, err := memoryMul(queries, membershipUpperBound, 2)
+	if err != nil {
+		return m3BenchmarkWorkPlan{}, err
+	}
+	totalVisits, err := memoryAdd(checksumVisits, membershipVisits)
+	if err != nil {
+		return m3BenchmarkWorkPlan{}, err
+	}
+	plan := m3BenchmarkWorkPlan{
+		ChecksumVectorQueryVisits:   checksumVisits,
+		MembershipVectorQueryVisits: membershipVisits,
+		VectorQueryVisits:           totalVisits,
+	}
+	if totalVisits > capUnits {
+		return plan, fmt.Errorf("modeled M3 benchmark work exceeds %d-unit cap (%s): checksum_visits=%d membership_visits=%d",
+			capUnits, benchmarkWorkScope, checksumVisits, membershipVisits)
+	}
+	return plan, nil
 }
 
 func validateBenchmarkWork(cfg config, m fixtureManifest, capUnits int64) (benchmarkWorkPlan, error) {
