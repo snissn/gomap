@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -24,6 +25,17 @@ func requireVectorPartitionPersistenceV1(t testing.TB) {
 	if !vpmNamespacePersistenceSupported() {
 		t.Skip("vector partition namespace persistence unsupported")
 	}
+}
+
+// These helpers exercise the store's private already-authorized primitives in
+// storage-format tests. Production lifecycle mutation must go through the
+// collection-owned APIs so it has DB maintenance authority.
+func deactivateVectorPartitionStoreForTest(s *VectorPartitionStoreV1, collection, index string) error {
+	return WithVectorPartitionStorageBarrierV1(s.root, func() error { return s.deactivateLocked(collection, index) })
+}
+
+func deleteVectorPartitionStoreForTest(s *VectorPartitionStoreV1, collection, index string, generation uint64, eligibility VectorPartitionCleanupEligibilityV1) error {
+	return WithVectorPartitionStorageBarrierV1(s.root, func() error { return s.deleteLocked(collection, index, generation, eligibility) })
 }
 
 func TestShouldRefreshVectorPartitionReclaimGCPlanV1(t *testing.T) {
@@ -190,18 +202,18 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	if activeGC.BytesEligible != 0 {
 		t.Fatalf("active VPM assets became reclaimable: %+v", activeGC)
 	}
-	if err := store.Deactivate(m.Collection, m.IndexName); err != nil {
+	if err := col.DeactivateVectorPartitionV1(m.IndexName); err != nil {
 		t.Fatal(err)
 	}
 	pin, err = col.AcquireVectorPartitionReaderPinV1(def.Name, m.Generation)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err == nil {
+	if err := col.DeleteVectorPartitionGenerationV1(m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err == nil {
 		t.Fatal("delete succeeded while partition reader was pinned")
 	}
 	pin.Release()
-	if err := store.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
+	if err := col.DeleteVectorPartitionGenerationV1(m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
 		t.Fatal(err)
 	}
 	retiredGC, err := col.ColumnAssetGC(t.Context(), ColumnAssetGCOptions{DryRun: true, CandidateRefs: refs})
@@ -307,7 +319,7 @@ func TestCollectionVectorPartitionReadyDeleteCrashWindowReopenReachability(t *te
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := store.Deactivate(m.Collection, m.IndexName); err != nil {
+		if err := col.DeactivateVectorPartitionV1(m.IndexName); err != nil {
 			t.Fatal(err)
 		}
 		return d, col, store, m, refs
@@ -348,11 +360,7 @@ func TestCollectionVectorPartitionReadyDeleteCrashWindowReopenReachability(t *te
 		if gc.BytesEligible != 0 {
 			t.Fatalf("tombstoned ready assets became eligible: %+v", gc)
 		}
-		reopenedStore, err := OpenExistingVectorPartitionStoreV1(reopenedDB.Dir())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := reopenedStore.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
+		if err := reopened.DeleteVectorPartitionGenerationV1(m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
 			t.Fatalf("retry exact delete: %v", err)
 		}
 	})
@@ -367,10 +375,10 @@ func TestCollectionVectorPartitionReadyDeleteCrashWindowReopenReachability(t *te
 			latestResources.Release()
 			t.Fatalf("publish latest ready generation: %v", err)
 		}
-		if err := store.Deactivate(latest.Collection, latest.IndexName); err != nil {
+		if err := col.DeactivateVectorPartitionV1(latest.IndexName); err != nil {
 			t.Fatal(err)
 		}
-		if err := store.Delete(latest.Collection, latest.IndexName, latest.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
+		if err := col.DeleteVectorPartitionGenerationV1(latest.IndexName, latest.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
 			t.Fatalf("delete latest ready generation: %v", err)
 		}
 		if _, err := col.ReclaimVectorPartitionGenerationV1(t.Context(), latest.IndexName, latest.Generation); err != nil {
@@ -420,11 +428,11 @@ func TestCollectionVectorPartitionReadyDeleteCrashWindowReopenReachability(t *te
 			reopenedDB.Close()
 			t.Fatalf("new active generation retained stale inactive marker: %v", err)
 		}
-		if err := reopenedStore.Deactivate(third.Collection, third.IndexName); err != nil {
+		if err := reopened.DeactivateVectorPartitionV1(third.IndexName); err != nil {
 			reopenedDB.Close()
 			t.Fatal(err)
 		}
-		if err := reopenedStore.Delete(third.Collection, third.IndexName, third.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
+		if err := reopened.DeleteVectorPartitionGenerationV1(third.IndexName, third.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
 			reopenedDB.Close()
 			t.Fatalf("delete republished generation: %v", err)
 		}
@@ -623,7 +631,7 @@ func TestVectorPartitionStoreV1CleanupRefusesReachableGeneration(t *testing.T) {
 	if err := s.publishLocked(m); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Delete("docs", "embedding", 7, VectorPartitionCleanupEligibilityV1{}); err == nil {
+	if err := deleteVectorPartitionStoreForTest(s, "docs", "embedding", 7, VectorPartitionCleanupEligibilityV1{}); err == nil {
 		t.Fatal("active generation deleted")
 	}
 	newer := m
@@ -634,17 +642,17 @@ func TestVectorPartitionStoreV1CleanupRefusesReachableGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range []VectorPartitionCleanupEligibilityV1{{Active: true}, {ReaderPins: 1}, {SnapshotReferences: 1}, {CatalogReferences: 1}} {
-		if err := s.Delete("docs", "embedding", 7, e); err == nil {
+		if err := deleteVectorPartitionStoreForTest(s, "docs", "embedding", 7, e); err == nil {
 			t.Fatalf("eligible=%+v deleted", e)
 		}
 	}
-	if err := s.Delete("docs", "embedding", 7, VectorPartitionCleanupEligibilityV1{}); err != nil {
+	if err := deleteVectorPartitionStoreForTest(s, "docs", "embedding", 7, VectorPartitionCleanupEligibilityV1{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(s.dir, safeVPM("docs")+"-"+safeVPM("embedding")+".active"), []byte("8\ntrailing"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Delete("docs", "embedding", 8, VectorPartitionCleanupEligibilityV1{}); err == nil {
+	if err := deleteVectorPartitionStoreForTest(s, "docs", "embedding", 8, VectorPartitionCleanupEligibilityV1{}); err == nil {
 		t.Fatal("corrupt active pointer did not fail closed")
 	}
 }
@@ -810,7 +818,7 @@ func TestVectorPartitionStoreV1DeactivateDurablyRetiresActiveGeneration(t *testi
 	if err := s.publishLocked(m); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Deactivate(m.Collection, m.IndexName); err != nil {
+	if err := deactivateVectorPartitionStoreForTest(s, m.Collection, m.IndexName); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.OpenActive(m.Collection, m.IndexName); !errors.Is(err, os.ErrNotExist) {
@@ -823,7 +831,7 @@ func TestVectorPartitionStoreV1DeactivateDurablyRetiresActiveGeneration(t *testi
 	if retired.Generation != m.Generation {
 		t.Fatalf("retired generation=%d want %d", retired.Generation, m.Generation)
 	}
-	if err := s.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
+	if err := deleteVectorPartitionStoreForTest(s, m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
 		t.Fatalf("retired generation should be cleanup eligible: %v", err)
 	}
 }
@@ -838,13 +846,13 @@ func TestVectorPartitionStoreV1CleanupResumesDurableTombstone(t *testing.T) {
 	if err := s.publishLocked(m); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Deactivate(m.Collection, m.IndexName); err != nil {
+	if err := deactivateVectorPartitionStoreForTest(s, m.Collection, m.IndexName); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.writeDeleteTombstone(m); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
+	if err := deleteVectorPartitionStoreForTest(s, m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(s.deleteTombstonePath(m.Collection, m.IndexName, m.Generation)); err != nil {
@@ -867,7 +875,7 @@ func TestVectorPartitionStoreV1BuildingPublicationCannotResurrectDeletingGenerat
 	if err := s.publishLocked(m); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
+	if err := deleteVectorPartitionStoreForTest(s, m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.publishValidatedBuilding(m); err == nil {
@@ -895,7 +903,7 @@ func TestVectorPartitionStoreV1DeleteSerializesBuildingPublication(t *testing.T)
 	defer restore()
 	deleteDone := make(chan error, 1)
 	go func() {
-		deleteDone <- s.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{})
+		deleteDone <- deleteVectorPartitionStoreForTest(s, m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{})
 	}()
 	select {
 	case <-entered:
@@ -983,7 +991,7 @@ func TestCollectionVectorPartitionReclaimV1ReclaimsCoResidentRecords(t *testing.
 		if err := store.publishLocked(m); err != nil {
 			t.Fatal(err)
 		}
-		if err := store.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
+		if err := col.DeleteVectorPartitionGenerationV1(m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1078,7 +1086,7 @@ func publishDeletedVectorPartitionReclaimCandidateV1(t *testing.T, d *backenddb.
 	if err := store.publishLocked(m); err != nil {
 		t.Fatalf("publish mixed reclaim manifest: %v", err)
 	}
-	if err := store.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
+	if err := col.DeleteVectorPartitionGenerationV1(m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
 		t.Fatalf("delete mixed reclaim manifest: %v", err)
 	}
 }
@@ -1540,6 +1548,98 @@ func TestCollectionVectorPartitionPublishRejectsReadOnlyWithoutNamespaceTrace(t 
 	}
 }
 
+func TestVectorPartitionLifecycleRawStoreRejectsReadOnlyWithoutNamespaceMutation(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	_, graph, _, err := col.columnVectorGraphPhysicalRowReaderSnapshotView(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testVectorPartitionManifestV1()
+	m.IndexName, m.IndexDefinitionDigest = def.Name, VectorIndexDefinitionDigestV1(def)
+	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
+	m, resources := vectorPartitionManifestWithFreshStableAssetsV1(t, d, col, m, 916)
+	if err := col.PublishVectorPartitionManifestV1(m, resources); err != nil {
+		resources.Release()
+		t.Fatal(err)
+	}
+	dir := d.Dir()
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	readonly, err := backenddb.Open(backenddb.Options{Dir: dir, ReadOnly: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readonly.Close()
+	readonlyCol, err := NewCollectionManager(readonly).OpenCollection(col.name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenExistingVectorPartitionStoreV1(readonly.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotVectorPartitionNamespaceV1(t, dir)
+	if err := store.Deactivate(m.Collection, m.IndexName); !errors.Is(err, ErrVectorPartitionCollectionAuthorityRequired) {
+		t.Fatalf("raw read-only deactivate err=%v", err)
+	}
+	if err := store.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); !errors.Is(err, ErrVectorPartitionCollectionAuthorityRequired) {
+		t.Fatalf("raw read-only delete err=%v", err)
+	}
+	operations := 0
+	restore := setVectorPartitionBarrierBeforeMutationHookForTestV1(func(string) { operations++ })
+	defer restore()
+	if err := readonlyCol.DeactivateVectorPartitionV1(m.IndexName); !errors.Is(err, backenddb.ErrReadOnly) {
+		t.Fatalf("collection read-only deactivate err=%v", err)
+	}
+	if err := readonlyCol.DeleteVectorPartitionGenerationV1(m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); !errors.Is(err, backenddb.ErrReadOnly) {
+		t.Fatalf("collection read-only delete err=%v", err)
+	}
+	if _, err := readonlyCol.ReclaimVectorPartitionGenerationV1(t.Context(), m.IndexName, m.Generation); !errors.Is(err, backenddb.ErrReadOnly) {
+		t.Fatalf("collection read-only reclaim err=%v", err)
+	}
+	if operations != 0 {
+		t.Fatalf("read-only lifecycle reached storage mutation hook %d times", operations)
+	}
+	if after := snapshotVectorPartitionNamespaceV1(t, dir); !bytes.Equal(before, after) {
+		t.Fatalf("read-only raw lifecycle changed vector-partition namespace: before=%q after=%q", before, after)
+	}
+}
+
+func snapshotVectorPartitionNamespaceV1(t testing.TB, root string) []byte {
+	t.Helper()
+	namespace := filepath.Join(root, "vector_partitions")
+	var snapshot []byte
+	if err := filepath.WalkDir(namespace, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(namespace, path)
+		if err != nil {
+			return err
+		}
+		snapshot = append(snapshot, rel...)
+		snapshot = append(snapshot, 0)
+		if entry.IsDir() {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		snapshot = append(snapshot, raw...)
+		snapshot = append(snapshot, 0)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
+}
+
 func TestCollectionVectorPartitionBuildingPublicationAndGCLinearize(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	newFixture := func(t *testing.T, fileID uint32) (*backenddb.DB, *Collection, VectorPartitionManifestV1, []ColumnAssetRef) {
@@ -1691,7 +1791,7 @@ func TestCollectionVectorPartitionDeleteFencesBuildingRetryEndToEnd(t *testing.T
 	defer restore()
 	deleteDone := make(chan error, 1)
 	go func() {
-		deleteDone <- store.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{})
+		deleteDone <- col.DeleteVectorPartitionGenerationV1(m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{})
 	}()
 	select {
 	case <-entered:

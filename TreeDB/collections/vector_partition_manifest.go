@@ -32,7 +32,10 @@ const vectorPartitionManifestMagicV1 uint32 = 0x56504d31 // VPM1
 const vectorPartitionMaxAssetBytesV1 uint64 = 1 << 33
 const vectorPartitionMaxReferencedBytesV1 uint64 = 1 << 34
 
-var ErrVectorPartitionManifestInvalid = errors.New("collections: invalid vector partition manifest")
+var (
+	ErrVectorPartitionManifestInvalid             = errors.New("collections: invalid vector partition manifest")
+	ErrVectorPartitionCollectionAuthorityRequired = errors.New("collections: vector partition lifecycle mutation requires collection authority")
+)
 
 const (
 	vectorPartitionMutationOperationPublishV1 = "publish"
@@ -1687,11 +1690,11 @@ func readVectorPartitionPointerGenerationV1(p string) (uint64, error) {
 	return generation, nil
 }
 
-// Deactivate replaces the active pointer with a durable retired marker. The
-// marker identifies the last active generation for audit/cleanup while making
-// its assets prepared-only rather than query-pinned after the directory sync.
+// Deactivate is unavailable on a raw store because it has no DB maintenance
+// authority and cannot reject read-only handles. Use
+// Collection.DeactivateVectorPartitionV1 instead.
 func (s *VectorPartitionStoreV1) Deactivate(collection, index string) error {
-	return WithVectorPartitionStorageBarrierV1(s.root, func() error { return s.deactivateLocked(collection, index) })
+	return ErrVectorPartitionCollectionAuthorityRequired
 }
 func (s *VectorPartitionStoreV1) deactivateLocked(collection, index string) error {
 	if !vpmNamespacePersistenceSupported() {
@@ -1805,8 +1808,11 @@ func (e VectorPartitionCleanupEligibilityV1) Deletable() bool {
 	return !e.Active && e.ReaderPins == 0 && e.SnapshotReferences == 0 && e.CatalogReferences == 0
 }
 
+// Delete is unavailable on a raw store because it has no DB maintenance
+// authority and cannot reject read-only handles. Use
+// Collection.DeleteVectorPartitionGenerationV1 instead.
 func (s *VectorPartitionStoreV1) Delete(collection, index string, generation uint64, eligibility VectorPartitionCleanupEligibilityV1) error {
-	return WithVectorPartitionStorageBarrierV1(s.root, func() error { return s.deleteLocked(collection, index, generation, eligibility) })
+	return ErrVectorPartitionCollectionAuthorityRequired
 }
 func (s *VectorPartitionStoreV1) deleteLocked(collection, index string, generation uint64, eligibility VectorPartitionCleanupEligibilityV1) error {
 	if !vpmNamespacePersistenceSupported() {
@@ -2132,6 +2138,44 @@ func shouldRefreshVectorPartitionReclaimGCPlanV1(err error, stats ColumnAssetGCS
 	return errors.Is(err, backenddb.ErrRecoverableRootSetStale) &&
 		stats.SegmentsDeleted == 0 &&
 		attempt+1 < vectorPartitionReclaimRecoverableRootAttemptsV1
+}
+
+// DeactivateVectorPartitionV1 retires the active generation under DB-owned
+// maintenance authority. It is the public lifecycle entrypoint; raw stores
+// deliberately cannot mutate a DB-owned namespace.
+func (c *Collection) DeactivateVectorPartitionV1(index string) error {
+	if c == nil || c.db == nil {
+		return errors.New("collections: closed collection")
+	}
+	if err := c.db.CheckStorageMaintenanceReady(); err != nil {
+		return err
+	}
+	return c.withVectorPartitionStorageMutationV1("deactivate", func() error {
+		s, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
+		if err != nil {
+			return err
+		}
+		return s.deactivateLocked(c.name, index)
+	})
+}
+
+// DeleteVectorPartitionGenerationV1 removes a retired manifest after the
+// caller has supplied every reachability fence. Reclaiming its asset debt is a
+// separate Collection.ReclaimVectorPartitionGenerationV1 operation.
+func (c *Collection) DeleteVectorPartitionGenerationV1(index string, generation uint64, eligibility VectorPartitionCleanupEligibilityV1) error {
+	if c == nil || c.db == nil {
+		return errors.New("collections: closed collection")
+	}
+	if err := c.db.CheckStorageMaintenanceReady(); err != nil {
+		return err
+	}
+	return c.withVectorPartitionStorageMutationV1("delete", func() error {
+		s, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
+		if err != nil {
+			return err
+		}
+		return s.deleteLocked(c.name, index, generation, eligibility)
+	})
 }
 
 // ReclaimVectorPartitionGenerationV1 is the only path that releases a

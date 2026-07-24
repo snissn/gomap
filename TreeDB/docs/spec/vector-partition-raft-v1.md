@@ -208,11 +208,12 @@ router generation and canonical SHA-256 ready-set digest over length-prefixed
 placement and asset descriptors, including the router's required canonical
 `partition_id=0`. It contains exactly one disjoint membership
 for every source ordinal and separately records bounded overlap memberships.
-Raw `VectorPartitionStoreV1.Publish` is fail-closed: both building and ready
-publication require collection authority, which verifies the current source
-identity and referenced assets while holding the collection mutation authority.
-Collection-authorized publication then takes the root storage barrier; deletion,
-deactivation, reader pins, and snapshots use that same barrier. A durable
+Raw `VectorPartitionStoreV1` lifecycle mutation is fail-closed: publication,
+deactivation, and deletion require collection authority. Collection-authorized
+publication verifies the current source identity and referenced assets, and all
+collection-owned lifecycle mutation takes the root storage barrier before the
+collection mutation authority. Reader pins and snapshots use that same barrier.
+A durable
 deletion tombstone rejects both building and ready retries before any temporary
 file, link, or rename, so a deleting generation cannot be resurrected.
 All decoded count-derived allocations, strings, assets, memberships and record

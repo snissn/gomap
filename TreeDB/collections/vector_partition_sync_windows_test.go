@@ -52,11 +52,15 @@ func TestVectorPartitionWindowsExistingNamespaceMutatorsLeaveNoTrace(t *testing.
 			mutate:                  func() error { return store.Publish(building) },
 			wantCollectionAuthority: true,
 		},
-		"deactivate": {mutate: func() error { return store.Deactivate(building.Collection, building.IndexName) }},
+		"deactivate": {
+			mutate:                  func() error { return store.Deactivate(building.Collection, building.IndexName) },
+			wantCollectionAuthority: true,
+		},
 		"delete": {
 			mutate: func() error {
 				return store.Delete(building.Collection, building.IndexName, building.Generation, VectorPartitionCleanupEligibilityV1{})
 			},
+			wantCollectionAuthority: true,
 		},
 	} {
 		err := tt.mutate()
