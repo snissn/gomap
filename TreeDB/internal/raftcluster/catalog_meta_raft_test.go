@@ -72,7 +72,7 @@ type catalogMetaRaftTestState struct {
 	index             uint64
 }
 
-func (s *catalogMetaRaftTestState) ApplyCatalogMetaCommittedV1(b []byte, index uint64) error {
+func (s *catalogMetaRaftTestState) ApplyCatalogMetaCommittedV1(_ CatalogMetaApplyCapabilityV1, b []byte, index uint64) error {
 	s.command = bytes.Clone(b)
 	s.index = index
 	return nil

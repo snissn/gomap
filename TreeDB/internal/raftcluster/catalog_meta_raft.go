@@ -15,10 +15,17 @@ import (
 // The dependency inversion keeps raftcluster independent of catalog schema
 // while ensuring only committed Raft Apply and Restore can publish state.
 type CatalogMetaCommittedStateV1 interface {
-	ApplyCatalogMetaCommittedV1([]byte, uint64) error
+	ApplyCatalogMetaCommittedV1(CatalogMetaApplyCapabilityV1, []byte, uint64) error
 	ExportCatalogMetaSnapshotBytesV1() ([]byte, error)
 	InstallCatalogMetaSnapshotBytesV1([]byte) error
 }
+
+type CatalogMetaApplyCapabilityV1 struct{ granted bool }
+
+func catalogMetaApplyCapabilityV1() CatalogMetaApplyCapabilityV1 {
+	return CatalogMetaApplyCapabilityV1{granted: true}
+}
+func (c CatalogMetaApplyCapabilityV1) Granted() bool { return c.granted }
 
 type CatalogMetaRaftProviderOptionsV1 struct {
 	Cluster        Config
@@ -166,7 +173,7 @@ func (f catalogMetaRaftFSMV1) Apply(log *hraft.Log) interface{} {
 	if log == nil || log.Type != hraft.LogCommand || f.state == nil {
 		return catalogMetaRaftApplyResponseV1{err: ErrHashicorpRaftLogEntry}
 	}
-	return catalogMetaRaftApplyResponseV1{term: log.Term, index: log.Index, err: f.state.ApplyCatalogMetaCommittedV1(bytes.Clone(log.Data), log.Index)}
+	return catalogMetaRaftApplyResponseV1{term: log.Term, index: log.Index, err: f.state.ApplyCatalogMetaCommittedV1(catalogMetaApplyCapabilityV1(), bytes.Clone(log.Data), log.Index)}
 }
 func (f catalogMetaRaftFSMV1) Snapshot() (hraft.FSMSnapshot, error) {
 	if f.state == nil {

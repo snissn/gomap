@@ -24,14 +24,14 @@ func TestCatalogMetaCanonicalCommandAndExactRetry(t *testing.T) {
 	}
 
 	a := NewCatalogMetaAuthorityV1()
-	first, err := a.ApplyCommittedCatalogMetaV1(command, 11)
+	first, err := a.applyCommittedCatalogMetaV1(command, 11)
 	if err != nil {
 		t.Fatalf("first apply: %v", err)
 	}
 	if first.Epoch != 1 || first.AppliedIndex != 11 || first.Digest != record.Digest {
 		t.Fatalf("first status=%+v", first)
 	}
-	retry, err := a.ApplyCommittedCatalogMetaV1(command, 12)
+	retry, err := a.applyCommittedCatalogMetaV1(command, 12)
 	if err != nil {
 		t.Fatalf("exact retry: %v", err)
 	}
@@ -43,18 +43,18 @@ func TestCatalogMetaCanonicalCommandAndExactRetry(t *testing.T) {
 func TestCatalogMetaRejectsStaleSkippedAndConflictingEpoch(t *testing.T) {
 	a := NewCatalogMetaAuthorityV1()
 	first := mustCatalogMetaCommand(t, 0, 1, validCatalog())
-	if _, err := a.ApplyCommittedCatalogMetaV1(first, 1); err != nil {
+	if _, err := a.applyCommittedCatalogMetaV1(first, 1); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.ApplyCommittedCatalogMetaV1(mustCatalogMetaCommand(t, 0, 2, validCatalog()), 2); !errors.Is(err, ErrCatalogMetaStaleEpoch) {
+	if _, err := a.applyCommittedCatalogMetaV1(mustCatalogMetaCommand(t, 0, 2, validCatalog()), 2); !errors.Is(err, ErrCatalogMetaStaleEpoch) {
 		t.Fatalf("stale err=%v", err)
 	}
-	if _, err := a.ApplyCommittedCatalogMetaV1(mustCatalogMetaCommand(t, 1, 3, validCatalog()), 3); !errors.Is(err, ErrCatalogMetaSkippedEpoch) {
+	if _, err := a.applyCommittedCatalogMetaV1(mustCatalogMetaCommand(t, 1, 3, validCatalog()), 3); !errors.Is(err, ErrCatalogMetaSkippedEpoch) {
 		t.Fatalf("skipped err=%v", err)
 	}
 	c := validCatalog()
 	c.Groups[0].LeaderHint = ""
-	if _, err := a.ApplyCommittedCatalogMetaV1(mustCatalogMetaCommand(t, 0, 1, c), 3); !errors.Is(err, ErrCatalogMetaConflict) {
+	if _, err := a.applyCommittedCatalogMetaV1(mustCatalogMetaCommand(t, 0, 1, c), 3); !errors.Is(err, ErrCatalogMetaConflict) {
 		t.Fatalf("conflict err=%v", err)
 	}
 }
@@ -62,7 +62,7 @@ func TestCatalogMetaRejectsStaleSkippedAndConflictingEpoch(t *testing.T) {
 func TestCatalogMetaRouteAdmissionFailsClosed(t *testing.T) {
 	a := NewCatalogMetaAuthorityV1()
 	command := mustCatalogMetaCommand(t, 0, 1, validCatalog())
-	if _, err := a.ApplyCommittedCatalogMetaV1(command, 7); err != nil {
+	if _, err := a.applyCommittedCatalogMetaV1(command, 7); err != nil {
 		t.Fatal(err)
 	}
 	status, ok := a.Status()
@@ -87,7 +87,7 @@ func TestCatalogMetaRouteAdmissionFailsClosed(t *testing.T) {
 
 func TestCatalogMetaSnapshotInstallNeverMovesBackward(t *testing.T) {
 	source := NewCatalogMetaAuthorityV1()
-	if _, err := source.ApplyCommittedCatalogMetaV1(mustCatalogMetaCommand(t, 0, 1, validCatalog()), 9); err != nil {
+	if _, err := source.applyCommittedCatalogMetaV1(mustCatalogMetaCommand(t, 0, 1, validCatalog()), 9); err != nil {
 		t.Fatal(err)
 	}
 	snapshot, err := source.ExportCatalogMetaSnapshotV1()
@@ -101,7 +101,7 @@ func TestCatalogMetaSnapshotInstallNeverMovesBackward(t *testing.T) {
 	if _, err := target.InstallCatalogMetaSnapshotV1(snapshot); err != nil {
 		t.Fatalf("same snapshot: %v", err)
 	}
-	if _, err := target.ApplyCommittedCatalogMetaV1(mustCatalogMetaCommand(t, 1, 2, validCatalog()), 10); err != nil {
+	if _, err := target.applyCommittedCatalogMetaV1(mustCatalogMetaCommand(t, 1, 2, validCatalog()), 10); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := target.InstallCatalogMetaSnapshotV1(snapshot); !errors.Is(err, ErrCatalogMetaStaleEpoch) {

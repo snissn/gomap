@@ -4,7 +4,7 @@ import "testing"
 
 func BenchmarkCatalogMetaStatusAndRoute(b *testing.B) {
 	a := NewCatalogMetaAuthorityV1()
-	if _, err := a.ApplyCommittedCatalogMetaV1(mustCatalogMetaCommand(b, 0, 1, validCatalog()), 1); err != nil {
+	if _, err := a.applyCommittedCatalogMetaV1(mustCatalogMetaCommand(b, 0, 1, validCatalog()), 1); err != nil {
 		b.Fatal(err)
 	}
 	status, ok := a.Status()

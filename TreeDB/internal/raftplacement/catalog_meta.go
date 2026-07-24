@@ -81,14 +81,18 @@ type CatalogMetaSnapshotV1 struct {
 	Format       uint16 `json:"format"`
 	AppliedIndex uint64 `json:"applied_index"`
 	Record       []byte `json:"record"`
+	LastCommand  []byte `json:"last_command"`
 }
 
 // ApplyCatalogMetaCommittedV1, ExportCatalogMetaSnapshotBytesV1, and
 // InstallCatalogMetaSnapshotBytesV1 are the narrow dependency-inverted hooks
 // used by raftcluster's HashiCorp meta-group adapter. They ensure the adapter
 // cannot mutate a catalog except through committed log Apply or Restore.
-func (a *CatalogMetaAuthorityV1) ApplyCatalogMetaCommittedV1(raw []byte, appliedIndex uint64) error {
-	_, err := a.ApplyCommittedCatalogMetaV1(raw, appliedIndex)
+func (a *CatalogMetaAuthorityV1) ApplyCatalogMetaCommittedV1(capability raftcluster.CatalogMetaApplyCapabilityV1, raw []byte, appliedIndex uint64) error {
+	if !capability.Granted() {
+		return ErrCatalogMetaUnavailable
+	}
+	_, err := a.applyCommittedCatalogMetaV1(raw, appliedIndex)
 	return err
 }
 
@@ -203,7 +207,7 @@ func DecodeCatalogMetaCommandV1(raw []byte) (CatalogMetaCommandV1, error) {
 	return command, nil
 }
 
-func (a *CatalogMetaAuthorityV1) ApplyCommittedCatalogMetaV1(raw []byte, appliedIndex uint64) (CatalogMetaStatusV1, error) {
+func (a *CatalogMetaAuthorityV1) applyCommittedCatalogMetaV1(raw []byte, appliedIndex uint64) (CatalogMetaStatusV1, error) {
 	if a == nil {
 		return CatalogMetaStatusV1{}, ErrCatalogMetaUnavailable
 	}
@@ -310,7 +314,7 @@ func (a *CatalogMetaAuthorityV1) ExportCatalogMetaSnapshotV1() (CatalogMetaSnaps
 	if a.record.Epoch == 0 {
 		return CatalogMetaSnapshotV1{}, ErrCatalogMetaUnavailable
 	}
-	return CatalogMetaSnapshotV1{Format: CatalogMetaFormatV1, AppliedIndex: a.applied, Record: bytes.Clone(a.recordBytes)}, nil
+	return CatalogMetaSnapshotV1{Format: CatalogMetaFormatV1, AppliedIndex: a.applied, Record: bytes.Clone(a.recordBytes), LastCommand: bytes.Clone(a.command)}, nil
 }
 
 func (a *CatalogMetaAuthorityV1) InstallCatalogMetaSnapshotV1(snapshot CatalogMetaSnapshotV1) (CatalogMetaStatusV1, error) {
@@ -339,10 +343,16 @@ func (a *CatalogMetaAuthorityV1) InstallCatalogMetaSnapshotV1(snapshot CatalogMe
 		}
 		return a.statusLocked(), nil
 	}
+	if len(snapshot.LastCommand) > 0 {
+		command, commandErr := DecodeCatalogMetaCommandV1(snapshot.LastCommand)
+		if commandErr != nil || command.Record.Epoch != record.Epoch || command.Record.Digest != record.Digest {
+			return CatalogMetaStatusV1{}, errors.Join(ErrInvalidCatalogMeta, ErrCatalogMetaConflict)
+		}
+	}
 	a.record = record
 	a.resolved = resolved
 	a.recordBytes = bytes.Clone(snapshot.Record)
-	a.command = nil
+	a.command = bytes.Clone(snapshot.LastCommand)
 	a.applied = snapshot.AppliedIndex
 	a.refusal = ""
 	return a.statusLocked(), nil
