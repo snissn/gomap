@@ -94,7 +94,7 @@ measured sub-nanosecond shift is reported but is not attributed to catalog-meta
 code. The bridge timing and allocation distributions show no significant
 difference. Its custom `ops_total` metric is the benchmark calibration
 iteration count (`b.N`), not an operation outcome, so it is not used as a
-performance result. These are local microbenchmarks, not production scale
+performance result. These are local microbenchmarks, not production-scale
 evidence.
 
 ## Implementation-only operation measurements
@@ -130,7 +130,7 @@ The maximum-shape matrix is also implementation-only and uses one iteration:
 
 ```sh
 GOWORK=off go test ./TreeDB/internal/raftplacement -run '^$' \
-  -bench 'BenchmarkCatalogMeta(StatusRouteAdmissionMatrix|EncodeDecodeApplyMatrix|SnapshotArchiveInstallWarmReopen)$' \
+  -bench 'BenchmarkCatalogMeta(StatusRouteAdmissionMatrix|EncodeDecodeApplyMatrix|SnapshotArchiveInstallStatusRoute)$' \
   -benchmem -benchtime=1x -count=1
 ```
 
@@ -150,12 +150,14 @@ GOWORK=off go test ./TreeDB/internal/raftplacement -run '^$' \
 | maximum fresh apply, 639,377-byte command | 367.260 ms | 58,098,768 B | 1,262,871 | 639,377 command B |
 | small snapshot export, 1,836-byte snapshot | 73.824 us | 15,880 B | 73 | 1,836 snapshot B |
 | small snapshot install | 529.548 us | 131,248 B | 2,641 | 1,836 snapshot B |
-| small warm reopen/status/route | 669.988 us | 126,112 B | 2,635 | 1,836 snapshot B |
+| small snapshot install/status/route | 669.988 us | 126,112 B | 2,635 | 1,836 snapshot B |
 | maximum snapshot export, 1,705,012-byte snapshot | 16.980 ms | 11,126,168 B | 82 | 1,705,012 snapshot B |
 | maximum snapshot install | 330.792 ms | 106,442,112 B | 2,111,579 | 1,705,012 snapshot B |
-| maximum warm reopen/status/route | 229.307 ms | 104,342,784 B | 2,111,551 | 1,705,012 snapshot B |
+| maximum snapshot install/status/route | 229.307 ms | 104,342,784 B | 2,111,551 | 1,705,012 snapshot B |
 
 The "maximum" fixture exercises the declared 4,096-placement catalog limit.
 One-iteration timings are directional capacity evidence, not
 confidence-interval performance claims. The real Hashicorp backup/restore path
-is correctness-tested rather than presented as a microbenchmark.
+and persisted provider reopen are correctness-tested rather than presented as
+microbenchmarks; the snapshot install/status/route rows do not measure provider
+restart.

@@ -514,21 +514,7 @@ func (s *Server) submitClusterMutation(ctx context.Context, command iwire.Comman
 		AckPolicy: ack,
 	}
 	if routed {
-		metadata.ClusterRouteKnown = true
-		metadata.ClusterRouteDatabase = routeReq.Database
-		metadata.ClusterRouteCatalog = routeReq.Catalog
-		metadata.ClusterRouteCollection = routeReq.Collection
-		metadata.ClusterRouteShape = string(route.Shape)
-		metadata.ClusterRouteGroupID = route.GroupID
-		metadata.ClusterRouteMembers = append([]string(nil), route.Members...)
-		metadata.ClusterRouteLeaderHint = route.LeaderHint
-		metadata.ClusterRoutePlacementMode = route.PlacementMode
-		metadata.ClusterRouteKey = route.RouteKey
-		metadata.ClusterRouteTokenKnown = route.TokenKnown
-		metadata.ClusterRouteToken = route.Token
-		metadata.ClusterRoutePartitionID = route.PartitionID
-		metadata.CatalogMetaEpoch = route.CatalogMetaEpoch
-		metadata.CatalogMetaDigest = route.CatalogMetaDigest
+		treenativewire.ApplyClusterRouteMetadata(&metadata, *routeReq, route)
 	}
 	if _, err := raftentry.DecodeCommandEntryV1(entry, raftentry.DecodeOptions{RequestMetadata: metadata}); err != nil {
 		return nil, err

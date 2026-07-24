@@ -172,7 +172,7 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 		if err := s.rejectClusterTokenRouteIndexedMutation(cmd.Header.ID, routeReq, route); err != nil {
 			return nil, err
 		}
-		applyClusterRouteMetadata(&metadata, routeReq, route)
+		ApplyClusterRouteMetadata(&metadata, routeReq, route)
 	}
 	result, err := s.clusterSubmitter.SubmitCommandEntryV1(ctx, entry, metadata)
 	if err != nil {
@@ -688,7 +688,10 @@ func clusterRequestMetadata(header iwire.Header, command iwire.CommandHeader, se
 	}, nil
 }
 
-func applyClusterRouteMetadata(metadata *ClusterRequestMetadata, request ClusterRouteRequest, target ClusterRouteTarget) {
+// ApplyClusterRouteMetadata copies one preflighted route and its catalog proof
+// into request-only submit metadata. Native-wire and adapter callers share this
+// mapper so new binding fields cannot silently drift between submit paths.
+func ApplyClusterRouteMetadata(metadata *ClusterRequestMetadata, request ClusterRouteRequest, target ClusterRouteTarget) {
 	if metadata == nil {
 		return
 	}

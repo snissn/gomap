@@ -111,7 +111,7 @@ func BenchmarkCatalogMetaEncodeDecodeApplyMatrix(b *testing.B) {
 	})
 }
 
-func BenchmarkCatalogMetaSnapshotArchiveInstallWarmReopen(b *testing.B) {
+func BenchmarkCatalogMetaSnapshotArchiveInstallStatusRoute(b *testing.B) {
 	benchmarkCatalogMetaShapes(b, func(b *testing.B, fixture catalogMetaBenchmarkFixture) {
 		snapshot, err := fixture.authority.ExportCatalogMetaSnapshotBytesV1()
 		if err != nil {
@@ -137,20 +137,20 @@ func BenchmarkCatalogMetaSnapshotArchiveInstallWarmReopen(b *testing.B) {
 				}
 			}
 		})
-		b.Run("warm_reopen_status_route", func(b *testing.B) {
+		b.Run("install_status_route", func(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(int64(len(snapshot)))
 			b.ReportMetric(float64(len(snapshot)), "snapshot_B")
 			for i := 0; i < b.N; i++ {
-				reopened := NewCatalogMetaAuthorityV1()
-				if err := reopened.installCatalogMetaSnapshotBytesV1(snapshot); err != nil {
+				installed := NewCatalogMetaAuthorityV1()
+				if err := installed.installCatalogMetaSnapshotBytesV1(snapshot); err != nil {
 					b.Fatal(err)
 				}
-				status, ok := reopened.Status()
+				status, ok := installed.Status()
 				if !ok {
-					b.Fatal("reopened status unavailable")
+					b.Fatal("installed status unavailable")
 				}
-				if _, err := reopened.Route(b.Context(), CatalogProofV1{Epoch: status.Epoch, Digest: status.Digest}, fixture.request); err != nil {
+				if _, err := installed.Route(b.Context(), CatalogProofV1{Epoch: status.Epoch, Digest: status.Digest}, fixture.request); err != nil {
 					b.Fatal(err)
 				}
 			}

@@ -3451,7 +3451,7 @@ func BenchmarkCatalogMetaNativewireAdmission(b *testing.B) {
 		b.Fatalf("initial route target=%+v routed=%v err=%v", target, routed, err)
 	}
 	metadata := ClusterRequestMetadata{AckPolicy: AckVisible}
-	applyClusterRouteMetadata(&metadata, mutationRequest, target)
+	ApplyClusterRouteMetadata(&metadata, mutationRequest, target)
 	entry := []byte{1}
 
 	b.Run("guarded_dispatcher", func(b *testing.B) {
@@ -3473,7 +3473,7 @@ func BenchmarkCatalogMetaNativewireAdmission(b *testing.B) {
 				b.Fatalf("route target=%+v routed=%v err=%v", target, routed, err)
 			}
 			admitted := ClusterRequestMetadata{AckPolicy: AckVisible}
-			applyClusterRouteMetadata(&admitted, mutationRequest, target)
+			ApplyClusterRouteMetadata(&admitted, mutationRequest, target)
 			if _, err := dispatcher.SubmitCommandEntryV1(ctx, entry, admitted); err != nil {
 				b.Fatal(err)
 			}

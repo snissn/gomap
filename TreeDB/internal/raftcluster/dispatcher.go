@@ -123,6 +123,9 @@ func (s *GroupRoutedSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	if s == nil || s.registry.empty() {
 		return SubmitResultV1{}, ErrInvalidSubmitter
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	target, err := routeDispatchTargetFromMetadata(metadata)
 	if err != nil {
 		return SubmitResultV1{}, err
@@ -136,9 +139,6 @@ func (s *GroupRoutedSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	submitter, ok := s.registry.Lookup(target.GroupID)
 	if !ok {
 		return SubmitResultV1{}, errors.Join(ErrRouteTargetUnknown, routeErrorWithMetadata(metadata, "route group %q is not configured locally", target.GroupID))
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	return submitter.SubmitCommandEntryV1(ctx, bytes.Clone(entry), cloneRequestMetadataV1(metadata))
 }

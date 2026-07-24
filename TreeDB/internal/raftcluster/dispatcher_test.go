@@ -28,12 +28,14 @@ type submitOnlyGroupSubmitter struct {
 }
 
 type recordingCatalogRouteValidator struct {
-	calls []raftentry.RequestMetadataV1
-	err   error
+	calls      []raftentry.RequestMetadataV1
+	nilContext bool
+	err        error
 }
 
-func (v *recordingCatalogRouteValidator) ValidateCatalogRouteMetadata(_ context.Context, metadata raftentry.RequestMetadataV1) error {
+func (v *recordingCatalogRouteValidator) ValidateCatalogRouteMetadata(ctx context.Context, metadata raftentry.RequestMetadataV1) error {
 	v.calls = append(v.calls, cloneRequestMetadataV1(metadata))
+	v.nilContext = ctx == nil
 	return v.err
 }
 
@@ -166,11 +168,35 @@ func TestCatalogMetaGroupRoutedSubmitterValidatesBeforeOwnerLookup(t *testing.T)
 	if _, err := dispatcher.SubmitCommandEntryV1(context.Background(), testClusterCommandEntry(t, 7), metadata); err == nil {
 		t.Fatal("catalog validator rejection unexpectedly admitted")
 	}
-	if len(validator.calls) != 1 || validator.calls[0].CatalogMetaEpoch != 3 {
-		t.Fatalf("validator calls=%+v want one call with epoch 3", validator.calls)
+	if len(validator.calls) != 1 ||
+		validator.calls[0].CatalogMetaEpoch != 3 ||
+		validator.calls[0].CatalogMetaDigest != "digest" {
+		t.Fatalf("validator calls=%+v want one call with epoch 3 and digest %q", validator.calls, "digest")
 	}
 	if got := len(groupA.snapshot()); got != 0 {
 		t.Fatalf("owner submit calls=%d want 0 before catalog validation", got)
+	}
+}
+
+func TestCatalogMetaGroupRoutedSubmitterNormalizesNilContextBeforeValidation(t *testing.T) {
+	groupA := &recordingGroupSubmitter{groupID: "group-a"}
+	registry, err := NewGroupSubmitterRegistryV1([]GroupSubmitterV1{{GroupID: "group-a", Submitter: groupA}})
+	if err != nil {
+		t.Fatalf("NewGroupSubmitterRegistryV1: %v", err)
+	}
+	validator := &recordingCatalogRouteValidator{}
+	dispatcher, err := NewCatalogMetaGroupRoutedSubmitter(registry, validator)
+	if err != nil {
+		t.Fatalf("NewCatalogMetaGroupRoutedSubmitter: %v", err)
+	}
+	if _, err := dispatcher.SubmitCommandEntryV1(nil, testClusterCommandEntry(t, 8), routeMetadata("group-a", iwire.AckRaftCommitted)); err != nil {
+		t.Fatalf("SubmitCommandEntryV1: %v", err)
+	}
+	if validator.nilContext {
+		t.Fatal("catalog validator received nil context")
+	}
+	if len(validator.calls) != 1 || len(groupA.snapshot()) != 1 {
+		t.Fatalf("validator/owner calls=%d/%d want 1/1", len(validator.calls), len(groupA.snapshot()))
 	}
 }
 
