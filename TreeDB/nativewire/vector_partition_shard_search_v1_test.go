@@ -834,6 +834,25 @@ func TestVectorPartitionShardSearchDeadlineIsStableAndNoMutationV1(t *testing.T)
 	}
 }
 
+func TestVectorPartitionShardSearchContextWithoutDeadlineReusesCallerV1(t *testing.T) {
+	caller, cancelCaller := context.WithCancel(context.Background())
+	got, cancelRequest, err := vectorPartitionShardSearchContextV1(caller, 0)
+	if err != nil {
+		t.Fatalf("context: %v", err)
+	}
+	if got != caller {
+		t.Fatal("request without a deadline did not reuse the caller context")
+	}
+	cancelRequest()
+	if err := got.Err(); err != nil {
+		t.Fatalf("no-op request cancel changed caller context: %v", err)
+	}
+	cancelCaller()
+	if err := got.Err(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("caller cancellation=%v want context.Canceled", err)
+	}
+}
+
 func BenchmarkVectorPartitionShardSearchServiceV1(b *testing.B) {
 	service, fakeSource, _ := newVectorPartitionShardSearchTestServiceV1(b,
 		[]raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},

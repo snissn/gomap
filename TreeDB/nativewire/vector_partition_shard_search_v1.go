@@ -627,8 +627,10 @@ func vectorPartitionShardSearchContextV1(ctx context.Context, deadlineUnixNano i
 		ctx = context.Background()
 	}
 	if deadlineUnixNano == 0 {
-		child, cancel := context.WithCancel(ctx)
-		return child, cancel, nil
+		// The caller context already carries connection/request cancellation.
+		// Avoid allocating a redundant child on the warm path when the wire
+		// request does not add its own deadline.
+		return ctx, func() {}, nil
 	}
 	deadline := time.Unix(0, deadlineUnixNano)
 	if !deadline.After(time.Now()) {
