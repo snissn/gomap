@@ -18,13 +18,23 @@ func stableRelativeNamespaceSupported() bool { return true }
 // sync.
 func stableNamespaceCreationPersistsThroughChild() bool { return false }
 
-func openStableParent(path string) (*os.File, error) { return os.Open(path) }
+func openStableParent(path string) (*os.File, error) {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), path), nil
+}
 
 func openStableChildFile(parent *os.File, name string, flags int, perm os.FileMode) (*os.File, error) {
 	if parent == nil {
 		return nil, os.ErrInvalid
 	}
-	fd, err := unix.Openat(int(parent.Fd()), name, flags|unix.O_CLOEXEC, uint32(perm.Perm()))
+	// Stable child operations are namespace operations, not path traversal.  A
+	// caller that needs to inspect a link must do so explicitly; following one
+	// here would silently rebind an exact-parent operation to an attacker chosen
+	// object (and can block on special files).
+	fd, err := unix.Openat(int(parent.Fd()), name, flags|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, uint32(perm.Perm()))
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +80,15 @@ func renameStableChildFile(parent *os.File, oldName, newName string) error {
 		if err == nil {
 			return nil
 		}
+		if err != unix.EINTR {
+			return err
+		}
+	}
+}
+
+func linkStableChildFileNoReplace(parent *os.File, oldName, newName string) error {
+	for {
+		err := unix.Linkat(int(parent.Fd()), oldName, int(parent.Fd()), newName, 0)
 		if err != unix.EINTR {
 			return err
 		}

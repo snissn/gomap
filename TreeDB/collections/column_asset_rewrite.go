@@ -37,6 +37,10 @@ type columnAssetRewriteOptions struct {
 	ColumnAssetRewriteOptions
 	afterCopyHookForTest       func() error
 	afterPrePublishHookForTest func() error
+	// beforeRemapPublish receives the complete old-ref set after copying and
+	// preflight, while an error can still guarantee that no remap is published.
+	beforeRemapPublish               func([]ColumnAssetRef) error
+	releaseVectorPartitionReclaimIDs map[string]struct{}
 }
 
 // ColumnAssetRewriteStats summarizes mixed-segment rewrite/remap.
@@ -103,17 +107,21 @@ func (c *Collection) columnAssetRewriteWithOptions(ctx context.Context, opts col
 }
 
 func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRewriteOptions) (ColumnAssetRewriteStats, error) {
-	planOpts := c.columnAssetLifecycleAugmentReachabilityOptions(ColumnAssetReachabilityOptions{
-		Detailed:           opts.Detailed,
-		SegmentDetails:     true,
-		CandidateRefs:      opts.CandidateRefs,
-		PendingRefs:        opts.PendingRefs,
-		PreparedRefs:       opts.PreparedRefs,
-		PreparedQueryRefs:  opts.PreparedQueryRefs,
-		QuarantineRefs:     opts.QuarantineRefs,
-		QuarantineSegments: opts.QuarantineSegments,
-		PinnedRefs:         opts.PinnedRefs,
+	planOpts, err := c.columnAssetLifecycleAugmentReachabilityOptions(ColumnAssetReachabilityOptions{
+		Detailed:                         opts.Detailed,
+		SegmentDetails:                   true,
+		CandidateRefs:                    opts.CandidateRefs,
+		PendingRefs:                      opts.PendingRefs,
+		PreparedRefs:                     opts.PreparedRefs,
+		PreparedQueryRefs:                opts.PreparedQueryRefs,
+		QuarantineRefs:                   opts.QuarantineRefs,
+		QuarantineSegments:               opts.QuarantineSegments,
+		PinnedRefs:                       opts.PinnedRefs,
+		releaseVectorPartitionReclaimIDs: opts.releaseVectorPartitionReclaimIDs,
 	})
+	if err != nil {
+		return ColumnAssetRewriteStats{}, err
+	}
 	plan, sourceMasks, err := c.planColumnAssetReachability(ctx, columnAssetReachabilityOptionsInternal{
 		ColumnAssetReachabilityOptions: planOpts,
 		omitDetailedEntrySources:       !opts.Detailed,
@@ -135,10 +143,11 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRew
 		if opts.DryRun {
 			return stats, nil
 		}
-		return stats, fmt.Errorf("%w: collection=%q namespace=%q unknown_segments=%d missing_segments=%d out_of_bounds_refs=%d quarantine_segment_mismatches=%d unconvertible_pins=%d",
+		return stats, fmt.Errorf("%w: collection=%q namespace=%q uncertain_refs=%d unknown_segments=%d missing_segments=%d out_of_bounds_refs=%d quarantine_segment_mismatches=%d unconvertible_pins=%d",
 			ErrColumnAssetReachabilityIncomplete,
 			plan.Collection,
 			plan.Namespace,
+			plan.Refs.Uncertain,
 			plan.Segments.Unknown,
 			plan.Segments.Missing,
 			plan.Segments.OutOfBoundsRefs,
@@ -231,6 +240,16 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRew
 			stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 			return stats, err
 		}
+	}
+	if opts.beforeRemapPublish != nil {
+		if err := opts.beforeRemapPublish(slices.Clone(remap.oldRefs)); err != nil {
+			stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
+			return stats, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
+		return stats, err
 	}
 
 	patchedRecords, patched, err := patchColumnAssetRewriteManifestRecordsInPlace(state.records, remap.byOldRef, state.cfg.AssetManager.Namespace)

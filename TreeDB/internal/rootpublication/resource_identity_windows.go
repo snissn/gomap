@@ -15,6 +15,14 @@ import (
 
 var stableReOpenFile = windows.NewLazySystemDLL("kernel32.dll").NewProc("ReOpenFile")
 
+func openStableAnonymousFile(*os.File, os.FileMode) (*os.File, error) {
+	return nil, ErrNamespacePersistenceUnsupported
+}
+
+func linkStableChildFileNoReplace(*os.File, string, string) error {
+	return ErrNamespacePersistenceUnsupported
+}
+
 func stableRelativeNamespaceSupported() bool { return false }
 
 // Windows does not provide the complete create/rename/remove plus parent-sync
@@ -36,7 +44,7 @@ func openStableParent(path string) (*os.File, error) {
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
 		nil,
 		windows.OPEN_EXISTING,
-		windows.FILE_FLAG_BACKUP_SEMANTICS,
+		windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT,
 		0,
 	)
 	if err != nil {
@@ -46,6 +54,14 @@ func openStableParent(path string) (*os.File, error) {
 	if file == nil {
 		_ = windows.CloseHandle(handle)
 		return nil, &os.PathError{Op: "open", Path: path, Err: errors.New("invalid Windows directory handle")}
+	}
+	info, statErr := file.Stat()
+	if statErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		_ = file.Close()
+		if statErr != nil {
+			return nil, &os.PathError{Op: "open", Path: path, Err: statErr}
+		}
+		return nil, &os.PathError{Op: "open", Path: path, Err: errors.New("stable parent is not an exact directory")}
 	}
 	return file, nil
 }
@@ -189,6 +205,10 @@ func stableCrossParentMoveNoReplaceSupported() bool { return false }
 
 func moveStableChildFileNoReplace(*os.File, *os.File, string, *os.File, string) (bool, error) {
 	return false, fmt.Errorf("%w: cross-parent no-replace move is unavailable", ErrNamespacePersistenceUnsupported)
+}
+
+func installStableFileHandleNoReplace(*os.File, *os.File, string) (bool, error) {
+	return false, fmt.Errorf("%w: exact-handle no-replace install is unavailable", ErrNamespacePersistenceUnsupported)
 }
 
 type stableWindowsFileIDInfo struct {

@@ -212,6 +212,14 @@ live network routing or leadership proof.
 
 ## Deferred Scope
 
+## Vector partition placement (M1)
+
+`VectorPartitionPlacementRecordV1` validates a complete generation-bound
+logical partition mapping against catalog-known groups. It binds collection,
+index name, SHA-256 index-definition digest, source generation and partition
+generation. It is deliberately not a `token`/`ring` placement and does not
+route, activate, or fan out a request.
+
 The v1 catalog validates token/ring placement shape and can return explicit
 route decisions over that validated catalog. It makes no server-routing,
 meta-group replication, rebalance execution, or horizontal-scale claim. Future

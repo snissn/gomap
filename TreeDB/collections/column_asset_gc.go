@@ -20,14 +20,15 @@ type ColumnAssetGCOptions struct {
 	Detailed bool
 	// SegmentDetails keeps segment-level entries in the returned plan without
 	// retaining per-ref entries.
-	SegmentDetails     bool
-	CandidateRefs      []ColumnAssetRef
-	PendingRefs        []ColumnAssetRef
-	PreparedRefs       []ColumnAssetRef
-	PreparedQueryRefs  []ColumnAssetRef
-	QuarantineRefs     []ColumnAssetRef
-	QuarantineSegments []ColumnAssetQuarantineSegment
-	PinnedRefs         []ColumnAssetRef
+	SegmentDetails                   bool
+	CandidateRefs                    []ColumnAssetRef
+	PendingRefs                      []ColumnAssetRef
+	PreparedRefs                     []ColumnAssetRef
+	PreparedQueryRefs                []ColumnAssetRef
+	QuarantineRefs                   []ColumnAssetRef
+	QuarantineSegments               []ColumnAssetQuarantineSegment
+	PinnedRefs                       []ColumnAssetRef
+	releaseVectorPartitionReclaimIDs map[string]struct{}
 }
 
 // ColumnAssetGCStats summarizes safe whole-segment column asset reclamation.
@@ -296,12 +297,18 @@ func (c *Collection) ColumnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		if err := c.db.CheckStorageMaintenanceReady(); err != nil {
 			return stats, err
 		}
-		// V1 destructive GC keeps planning under the mutation lock so the
-		// candidate/protection view cannot race with collection writes. A later
-		// planner snapshot handoff can narrow this lock once benchmark evidence
-		// justifies the extra complexity.
-		unlock := c.lockMutation()
-		defer unlock.Unlock()
+		// Destructive GC and durable vector-partition publication both protect
+		// column assets. Keep their shared order storage barrier -> collection
+		// mutation, including planning and recoverable-root revalidation. Taking
+		// only the mutation lock here would let publication reserve the storage
+		// barrier and then advance root-publication state between the GC plan and
+		// its delete witness.
+		var mutationErr error
+		mutationErr = c.withVectorPartitionStorageMutationV1("column_asset_gc", func() error {
+			stats, mutationErr = c.columnAssetGC(ctx, opts)
+			return mutationErr
+		})
+		return stats, mutationErr
 	}
 	return c.columnAssetGC(ctx, opts)
 }
@@ -311,7 +318,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed, opts.SegmentDetails)
 	}()
 	needSegmentEntries := !opts.DryRun || opts.Detailed || opts.SegmentDetails
-	planOpts := c.columnAssetLifecycleAugmentReachabilityOptions(ColumnAssetReachabilityOptions{
+	planOpts, err := c.columnAssetLifecycleAugmentReachabilityOptions(ColumnAssetReachabilityOptions{
 		Detailed:                              opts.Detailed,
 		SegmentDetails:                        needSegmentEntries,
 		ProtectCandidateRefsForOlderSnapshots: true,
@@ -322,8 +329,14 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		QuarantineRefs:                        opts.QuarantineRefs,
 		QuarantineSegments:                    opts.QuarantineSegments,
 		PinnedRefs:                            opts.PinnedRefs,
+		releaseVectorPartitionReclaimIDs:      opts.releaseVectorPartitionReclaimIDs,
 	})
-	plan, err := c.PlanColumnAssetReachability(ctx, planOpts)
+	if err != nil {
+		return ColumnAssetGCStats{}, err
+	}
+	plan, _, err := c.planColumnAssetReachability(ctx, columnAssetReachabilityOptionsInternal{
+		ColumnAssetReachabilityOptions: planOpts,
+	})
 	stats = ColumnAssetGCStats{
 		DryRun:           opts.DryRun,
 		Plan:             plan,
@@ -563,7 +576,10 @@ func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, root
 		if snapshot == nil {
 			return backenddb.ErrRecoverableRootSetStale
 		}
-		catalog, err := c.catalogForSnapshot(snapshot)
+		// Recoverable roots may intentionally be older than the collection's
+		// current catalog. Loading one is an audit operation: it must not replace
+		// the handle-local latest catalog cache with historical state.
+		catalog, err := loadCollectionCatalog(snapshot, c.collectionName())
 		if err != nil {
 			_ = snapshot.Close()
 			if errors.Is(err, errCollectionNotFound) {

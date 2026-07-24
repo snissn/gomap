@@ -1,7 +1,36 @@
-# Vector-partitioned ANN over Raft: M0 contract
+# Vector-partitioned ANN over Raft: M1 durable-manifest contract
 
-Status: **M0 executable contract** for #3908/#3909. This document deliberately
-defines boundaries and evidence before M1--M8 implement production assets.
+Status: **M1 durable identity and lifecycle contract** for #3908/#3910.
+M1 persists and validates generation manifests; it does not build, route, or
+search ANN packs.
+
+## M1 durable lifecycle
+
+Each ready manifest stores typed `ColumnAssetRef`s, not paths. Every partition
+asset has an explicit logical `partition_id`; every declared logical partition
+must have at least one asset, while the router is a separate asset. Asset refs,
+checksums, lengths, and aggregate referenced bytes are bounded and canonical.
+The reduced checkpoint state pins one ready active generation. `Deactivate`
+appends an immutable transition that changes it to retained/prepared-only;
+deletion then permits column-asset GC. Corrupt filenames, manifests, lifecycle
+records, physical aliases, or catalog-group mappings fail closed.
+
+An exact deletion appends DELETE_PREPARE with a durable, checksummed,
+identity-bound VPR1 reclaim payload. DELETE_COMPLETE removes the generation
+from the reduced live set while retaining its generation in the monotonic high
+water, which proves intentional no-active state and prevents resurrection.
+There are no mutable active, retired, inactive, or deleting pointer files.
+Recovery derives every state from the highest VCP1 checkpoint plus its exact
+VLC1 tail; it never falls back to an older checkpoint.
+
+`VectorPartitionStatusV1.Ready` means the stored generation is complete.
+`Active` additionally requires the reduced checkpoint state to select that
+generation and its source identity to remain valid. M1 provides explicit
+in-process reader-pin handles; status and deletion observe those pins.
+`SnapshotReferences` and `CatalogReferences` remain trusted caller-supplied
+cleanup authority inputs: M1 does not infer external backup or catalog
+reachability. M7 owns durable catalog/cutover derivation. Raft archives are
+self-contained copies and do not pin live side-store files after export.
 
 ## Identity and placement
 
@@ -160,6 +189,159 @@ partitioner, overlap membership, kRt, RPC/coordinator, Raft catalog, or routed
 Raft read. M1 owns persisted generation/placement; M2 partitions; M3 overlap
 and local packs; M4 router; M5 routed reads; M6 merge/fanout; M7 lifecycle; M8
 real multi-group matched-recall evidence.
+
+## M1 durable generation record
+
+`collections.VectorPartitionManifestV1` is the M1 binary record, with format
+`vector_partition_manifest_v1`. It binds a collection, the SHA-256 digest of
+the existing `VectorIndexDefinition`, source base generation/checksum/schema
+and row count, derived partition generation, and a complete logical
+partition-to-Raft-group mapping. Logical partition IDs are dense `[0,n)` and
+are not `_id` token partitions; multiple logical partitions can name one Raft
+group.
+
+The record separates `building` from `ready`. A building record has no router
+or ready-set reference and is never active. A ready record requires a matching
+router generation and canonical SHA-256 ready-set digest over length-prefixed
+placement and asset descriptors, including the router's required canonical
+`partition_id=0`. It contains exactly one disjoint membership
+for every source ordinal and separately records bounded overlap memberships.
+Raw `VectorPartitionStoreV1` lifecycle mutation is fail-closed: publication,
+deactivation, and deletion require collection authority. Collection-authorized
+publication verifies the current source identity and referenced assets, and all
+collection-owned lifecycle mutation takes the root storage barrier before the
+collection mutation authority. Reader pins and snapshots use that same barrier.
+A durable DELETE_PREPARE initially transitions any non-active building or ready
+generation, including a retired ready generation, to deleting. An identical
+DELETE_PREPARE retry is idempotent. Conflicting delete-preparation, BUILD, or
+READY retries against a deleting generation, and attempts to recreate a
+completed generation, fail before a new lifecycle entry can be installed.
+All decoded count-derived allocations, strings, assets, memberships and record
+bytes are capped before allocation; unknown/trailing records fail closed.
+
+Local publication installs an immutable BUILD checkpoint, then READY and
+LOCAL_ACTIVATE deltas. A crash or retry therefore observes building, ready but
+inactive, or ready and active state—never a partially encoded manifest. Every
+LOCAL_ACTIVATE also advances the checkpointed activation high water. A READY
+retry at or below that watermark fails closed even after the newer active or
+retired generation has been deleted and its live pointer cleared; a prepared
+generation above the watermark may still complete an interrupted first
+activation.
+Raft snapshot archives include `db/vector_partitions`. Deletion requires an
+explicit proof that the generation is inactive and has no reader pin, snapshot
+reference, or catalog reference; M1 does not infer those external references.
+DELETE_PREPARE stores the bounded, versioned, canonical, checksummed reclaim
+payload containing every original asset ref. If an original ref shares a
+physical segment with a live column-manifest ref, the mixed-segment rewrite
+appends RECLAIM_PROGRESS with those superseded live refs before the remap may
+be published. A persistence error, or cancellation observed before remap
+publication, leaves the old manifest mapping authoritative. Recovery retries
+with both original and superseded refs, and retains the reduced reclaim state
+until all segment debt is physically absent; the durable-root fallback
+generation can therefore delay, but never bypass, DELETE_COMPLETE.
+
+### V1 API/schema contract, VPM1 wire version 2, and bounds
+
+`V1` in public API, type, and schema names identifies that pre-alpha contract;
+it is distinct from the explicit VPM1 wire version.
+The canonical generation payload is binary `VPM1` (big-endian magic
+`0x56504d31`, version `2`), followed by fixed-order length-prefixed fields;
+there are no tagged optional fields. The JSON form is an inspection/exchange
+encoding of that same record: unknown fields, a second JSON value, trailing
+bytes, and non-canonical ordering fail closed. VPM1 is embedded in VCP1
+checkpoint state instead of published as a mutable `.vpm` file. Version 2 adds
+a whole-record SHA-256 integrity digest covering identity, policy, generations,
+placement, every membership family, and asset descriptors; this is separate
+from the ready-set asset contract.
+
+| Record area | Required content | Validation boundary |
+| --- | --- | --- |
+| identity | collection, index name, SHA-256 index-definition digest; source generation/checksum/schema/row count; partition and router generations | exact live TVIS/base identity; ready router generation equals partition generation |
+| placement | dense logical `partition_id` to one Raft group, with many logical partitions allowed per group | IDs are exactly `[0, partition_count)` and canonical |
+| memberships | one disjoint membership per source ordinal; bounded overlap and representatives | ordinal/partition coverage, sorted order, per-vector and per-partition caps |
+| assets | typed `ColumnAssetRef`, length, CRC, SHA-256 and logical asset ID for each partition plus router | references are namespace-bound, unique, streamed and checksum-verified before every collection-authorized publication; router partition ID is exactly zero |
+| ready set | SHA-256 over canonical placements, partition assets and router descriptor | mismatches, mixed router/generation, or missing partition asset reject |
+
+Default decode limits are 16 MiB encoded bytes, 65,536 partitions, 1,048,576
+source rows, and 2,097,152 aggregate memberships across disjoint, overlap,
+and representative lists (so the declared 1M-row fixture plus 20% overlap and
+representatives is representable), 262,144 assets, 4 KiB strings, 16
+memberships per vector, and
+65,536 representatives per partition. A single asset is capped at 8 GiB and
+total referenced bytes at 16 GiB. Count-derived allocations are checked against
+these limits before allocation.
+
+VCP1 checkpoints use version 1, a SHA-256 checksum, a 30 MiB cap, at most two
+live generations, a first-generation floor, and separate monotonic generation
+and activation high-water fields. BUILD may choose any positive initial
+generation, but every successor is exactly the prior high water plus one.
+Therefore, an absent generation inside the floor/high-water interval is exact
+completed-deletion proof; lower never-created IDs are not accepted as
+idempotent cleanup retries. The activation watermark survives deletion of all
+live generation pointers. VLC1 version-1 records form a sequence- and
+previous-digest-bound immutable tail capped at 4 MiB per checkpoint epoch. The
+physical identity namespace is capped at 64 MiB and 4,096 entries.
+
+### Lifecycle, publication, and cleanup authority
+
+| Transition | Immutable operation | Observable result |
+| --- | --- | --- |
+| absent -> building | BUILD in a new VCP1 checkpoint epoch | complete non-active building generation |
+| building -> ready | READY digest-bound promotion delta | complete prepared generation, still not active |
+| ready -> active | LOCAL_ACTIVATE delta | one complete ready generation is locally active and the activation high water advances |
+| active -> retired | DEACTIVATE delta | generation remains prepared but is not active |
+| non-active building/ready (including retired ready) -> deleting | caller fences plus DELETE_PREPARE carrying VPR1 | initial cleanup is accepted; an identical retry is idempotent; conflicting or resurrection transitions fail closed |
+| deleting -> progress | RECLAIM_PROGRESS before mixed-segment remap publication | original and superseded debt remain protected and retryable |
+| deleting -> absent | physical GC followed by DELETE_COMPLETE | generation leaves the live set; generation high water prevents resurrection |
+
+The storage barrier is canonical-root scoped (including symlink aliases) and
+serializes publication, deletion, reader acquisition, and snapshot export.
+`AcquireVectorPartitionReaderPinV1` returns an idempotently released handle;
+`VectorPartitionStatusV1` reports its count and deletion rechecks it under the
+same barrier. `SnapshotReferences` and `CatalogReferences` are deliberately
+external, caller-supplied proofs in M1. M7, not M1, owns their durable catalog
+derivation and cluster cutover authority.
+
+### Snapshot and portability semantics
+
+Raft export copies `db/vector_partitions` together with column assets while
+holding the same root barrier. For each identity it validates the complete live
+namespace, selects only the highest checkpoint plus its contiguous current
+tail, and omits lower audit epochs. It binds each selected regular file to its
+stable physical identity before and after streaming. Export writes an explicit
+empty `db/vector_partitions` directory when no lifecycle authority exists.
+Restore rejects a missing directory, legacy mutable files, symlinks, hard-link
+aliases, malformed chains, corrupt highest checkpoints, and extra audit epochs
+before replacing the target namespace. It also streams and verifies the exact
+ranges, CRC32 values, and SHA-256 digests of every asset referenced by a
+non-deleting manifest. A restored manifest’s typed refs resolve against the
+archived assets instead of the prior target directory. Snapshot archives are
+copies: exporting an archive does not create a live reader pin or a durable
+catalog reference. File names
+are opaque SHA-256-derived identities; checkpoint payloads, not host paths, are
+portable across restored DB roots.
+
+On Windows, M1 can open an already restored `vector_partitions` namespace but
+fails closed for creation, publication, activation, deletion, and reclaim
+journaling. The exact no-replace installation and parent-name persistence proof
+is not available there. This is an explicit platform capability boundary, not
+a claim of Unix directory durability.
+
+### M1 evidence boundary
+
+M1 correctness tests publish a genuinely authorized ready generation and prove
+that its checkpoint-reduced active state, router asset, and partition assets
+survive close/reopen and Raft snapshot/install before `OpenActive` succeeds.
+Scale measurements use canonical manifests with 10k, 100k, and 1M disjoint
+memberships; fixture and authority construction remain outside the timed
+operation. The measurement harness exposes no production authorization bypass
+and is not production Raft or ANN evidence.
+
+The evidence ledger reports encoded VPM1 manifest bytes separately from full
+snapshot archive bytes. Only the former is used for the metadata-bytes/vector
+gate; the latter also includes the archived side-store namespace and referenced
+assets. Full-process maximum RSS includes compile and setup, while `B/op` and
+allocations/op are scoped to the timed benchmark operation.
 
 `cmd/treedb_vector_dataset_export` also supports a declared 1M-vector local
 corpus (`-docs 1000000`) within its pre-allocation byte caps. Its manifest pins
