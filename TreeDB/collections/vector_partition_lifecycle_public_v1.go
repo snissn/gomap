@@ -419,6 +419,7 @@ func (c *Collection) vectorPartitionLifecycleReclaimRecordsV1(store *VectorParti
 	if len(records) > vectorPartitionStoreMaxEntriesV1 {
 		return nil, fmt.Errorf("%w: lifecycle reclaim record cap", ErrVectorPartitionManifestInvalid)
 	}
+	sort.Slice(records, func(i, j int) bool { return records[i].id < records[j].id })
 	return records, nil
 }
 
