@@ -15,7 +15,7 @@ func TestCatalogMetaRaftProviderCommitsOnlyAfterLeaderApplyAndSnapshots(t *testi
 	state := &catalogMetaRaftTestState{}
 	_, transport := hraft.NewInmemTransport("node-a")
 	defer transport.Close()
-	p, err := OpenCatalogMetaRaftProviderV1(CatalogMetaRaftProviderOptionsV1{Cluster: Config{Dir: t.TempDir(), NodeID: "node-a", GroupID: "meta", Peers: []Peer{{ID: "node-a", Address: "node-a"}}}, State: state, Transport: transport, Bootstrap: true})
+	p, err := OpenCatalogMetaRaftProviderV1(CatalogMetaRaftProviderOptionsV1{Cluster: Config{Dir: t.TempDir(), NodeID: "node-a", GroupID: "meta", Peers: []Peer{{ID: "node-a", Address: "node-a", Capabilities: FeatureSet{Required: []RequiredFeature{{Name: FeatureCatalogMetaAuthority, Version: Version{Major: 1, Minor: 0}}}}}}}, State: state, Transport: transport, Bootstrap: true})
 	if err != nil {
 		t.Fatal(err)
 	}

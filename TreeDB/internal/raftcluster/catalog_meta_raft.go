@@ -58,6 +58,11 @@ func OpenCatalogMetaRaftProviderV1(opts CatalogMetaRaftProviderOptionsV1) (*Cata
 	if opts.State == nil || opts.Transport == nil {
 		return nil, errors.Join(ErrInvalidHashicorpRaftProvider, fmt.Errorf("catalog meta state and transport are required"))
 	}
+	for _, peer := range cluster.Peers {
+		if !featureSetSupportsV1(peer.Capabilities, FeatureCatalogMetaAuthority) {
+			return nil, errors.Join(ErrInvalidHashicorpRaftProvider, ErrUnsupportedFeature, fmt.Errorf("catalog meta voter %q lacks %s", peer.ID, FeatureCatalogMetaAuthority))
+		}
+	}
 	address, ok := localPeerAddress(cluster)
 	if !ok || string(opts.Transport.LocalAddr()) != address {
 		return nil, errors.Join(ErrInvalidHashicorpRaftProvider, fmt.Errorf("local peer address does not match transport"))
@@ -88,6 +93,15 @@ func OpenCatalogMetaRaftProviderV1(opts CatalogMetaRaftProviderOptionsV1) (*Cata
 		timeout = hashicorpRaftDefaultApplyTimeout
 	}
 	return &CatalogMetaRaftProviderV1{cluster: cluster, raft: r, owned: stores.owned, applyTimeout: timeout}, nil
+}
+
+func featureSetSupportsV1(features FeatureSet, name FeatureName) bool {
+	for _, required := range features.Required {
+		if required.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *CatalogMetaRaftProviderV1) ClusterAdmissionStatus(ctx context.Context) (AdmissionStatus, error) {
