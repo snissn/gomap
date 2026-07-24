@@ -29,7 +29,7 @@ func serveCollectionPipeWithServer(t *testing.T) (*Client, *Server, *collections
 	return serveCollectionPipeWithServerAndOptions(t, ServerOptions{})
 }
 
-func serveCollectionPipeWithServerAndOptions(t *testing.T, opts ServerOptions) (*Client, *Server, *collections.CollectionManager, *backenddb.DB) {
+func serveCollectionPipeWithServerAndOptions(t testing.TB, opts ServerOptions) (*Client, *Server, *collections.CollectionManager, *backenddb.DB) {
 	t.Helper()
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

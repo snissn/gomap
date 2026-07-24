@@ -43,3 +43,12 @@ The gateway implements an intentionally narrow command subset around hello/ping,
 insert, find/getMore/killCursors, update, delete, and collection/index metadata.
 It does not provide authentication, replica set behavior, sharding, sessions,
 transactions, change streams, aggregation, or full MongoDB compatibility.
+
+Cluster submitter mode does not turn this gateway into a sharded Mongo server.
+For token/ring placement, exact `_id` equality finds are mapped to one catalog
+token but fail closed before local observation because the gateway does not yet
+use nativewire's routed linearizable read-index/apply path. Non-shard-key and
+secondary-index reads remain non-scatter route rejections; indexed token/ring
+mutations and global-unique attempts also fail closed. See
+[`COMPATIBILITY.md`](COMPATIBILITY.md#cluster-tokenring-read-and-index-policy)
+for the exact policy, counters, and static shared-store limitation.

@@ -3,10 +3,12 @@ package nativewire
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
@@ -167,6 +169,9 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 		}
 	}
 	if routed {
+		if err := s.rejectClusterTokenRouteIndexedMutation(cmd.Header.ID, routeReq, route); err != nil {
+			return nil, err
+		}
 		applyClusterRouteMetadata(&metadata, routeReq, route)
 	}
 	result, err := s.clusterSubmitter.SubmitCommandEntryV1(ctx, entry, metadata)
@@ -528,6 +533,64 @@ func clusterMutationRouteRequest(cmd iwire.ValidatedCommand, limits iwire.Limits
 		req.Tokens = tokens
 	}
 	return req, nil
+}
+
+func (s *Server) rejectClusterTokenRouteIndexedMutation(command iwire.CommandID, request ClusterRouteRequest, target ClusterRouteTarget) error {
+	switch target.PlacementMode {
+	case string(raftplacement.PlacementModeTokenV1), string(raftplacement.PlacementModeRingV1):
+	default:
+		return nil
+	}
+	switch command {
+	case iwire.CommandInsertBatch,
+		iwire.CommandReplaceBatch,
+		iwire.CommandDeleteBatch,
+		iwire.CommandUpdateBSONSet:
+	default:
+		return nil
+	}
+	if s == nil || s.collections == nil {
+		return clusterRouteTargetProtocolError(
+			iwire.ErrReadOnly,
+			request,
+			target,
+			"secondary_index_unsupported",
+			"cluster token/ring route cannot verify sharded index policy without a collection manager",
+		)
+	}
+	col, err := s.collections.OpenCollection(request.Collection)
+	if errors.Is(err, collections.ErrCollectionNotFound) {
+		// Cluster-created collections are constrained to metadata without indexes.
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	meta := col.MetaView()
+	for _, index := range meta.Indexes {
+		if index.Unique {
+			return clusterRouteTargetProtocolError(
+				iwire.ErrReadOnly,
+				request,
+				target,
+				"global_unique_unsupported",
+				fmt.Sprintf(
+					"cluster token/ring mutation does not support global unique-index coordination; index=%q",
+					index.Name,
+				),
+			)
+		}
+	}
+	if len(meta.Indexes) != 0 || len(meta.VectorIndexes) != 0 || len(meta.TextIndexes) != 0 {
+		return clusterRouteTargetProtocolError(
+			iwire.ErrReadOnly,
+			request,
+			target,
+			"secondary_index_unsupported",
+			"cluster token/ring mutation does not support secondary-index writes without shard-local index ownership",
+		)
+	}
+	return nil
 }
 
 func clusterMutationDocumentToken(cmd iwire.ValidatedCommand, limits iwire.Limits) (uint64, bool, error) {

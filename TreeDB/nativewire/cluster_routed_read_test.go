@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -45,6 +46,34 @@ func (p *routedReadIndexProvider) ReadIndex(_ context.Context, target raftcluste
 		*p.events = append(*p.events, "owner:read-index")
 	}
 	return p.proof, nil
+}
+
+type benchmarkRoutedReadIndexProvider struct {
+	proof raftcluster.ReadIndexProof
+}
+
+func (p benchmarkRoutedReadIndexProvider) ReadIndex(context.Context, raftcluster.ReadIndexBarrier) (raftcluster.ReadIndexProof, error) {
+	return p.proof, nil
+}
+
+type benchmarkRoutedReadApplyWaiter struct {
+	progress raftcluster.AppliedProgress
+}
+
+func (w benchmarkRoutedReadApplyWaiter) WaitAppliedIndex(context.Context, raftcluster.AppliedIndexReadBarrier) (raftcluster.AppliedProgress, error) {
+	return w.progress, nil
+}
+
+type benchmarkRoutedReadSubmitter struct {
+	provider CatalogClusterRouteProvider
+}
+
+func (s benchmarkRoutedReadSubmitter) SubmitCommandEntryV1(context.Context, []byte, ClusterRequestMetadata) (ClusterSubmitResult, error) {
+	return ClusterSubmitResult{}, fmt.Errorf("benchmark routed read unexpectedly submitted a mutation")
+}
+
+func (s benchmarkRoutedReadSubmitter) ClusterRoute(ctx context.Context, request ClusterRouteRequest) (ClusterRouteTarget, error) {
+	return s.provider.ClusterRoute(ctx, request)
 }
 
 func TestProductionRouteSingleIDReadSelectsOwnerAndWaitsForApplyBeforeLocalObservation(t *testing.T) {
@@ -166,6 +195,9 @@ func TestProductionRouteSingleIDReadSelectsOwnerAndWaitsForApplyBeforeLocalObser
 		"treedb.native_wire.cluster_read_route.group.group-b.success_total": "1",
 		"treedb.native_wire.cluster_read_route.partition.p1.success_total":  "1",
 		"treedb.native_wire.cluster_read_route.linearizable_success_total":  "1",
+		"treedb.native_wire.cluster_read_route.read_index_success_total":    "1",
+		"treedb.native_wire.cluster_read_route.leader_success_total":        "1",
+		"treedb.native_wire.cluster_read_route.follower_success_total":      "0",
 	} {
 		if got := stats[key]; got != want {
 			t.Fatalf("stats[%q]=%q want %q stats=%v", key, got, want, stats)
@@ -313,4 +345,95 @@ func TestProductionRouteSingleIDReadFailsClosedForStaleLeaderAndUnsupportedShape
 			t.Fatalf("unsupported routed read counter=%q want 2", got)
 		}
 	})
+}
+
+func BenchmarkRoutedSingleIDReadStaticInProcess(b *testing.B) {
+	id := []byte("u1")
+	token := raftplacement.DocumentIDTokenV1(id)
+	submitter := benchmarkRoutedReadSubmitter{
+		provider: NewCatalogClusterRouteProvider(
+			mustNativewireTokenGroupRouteCatalog(b, raftplacement.PlacementModeRingV1, token),
+		),
+	}
+	routedCoordinator, err := raftcluster.NewGroupRoutedReadIndexCoordinator([]raftcluster.GroupReadIndexCoordinatorV1{{
+		GroupID: "group-b",
+		NodeID:  "node-c",
+		ReadIndexProvider: benchmarkRoutedReadIndexProvider{proof: raftcluster.ReadIndexProof{
+			NodeID:       "node-c",
+			GroupID:      "group-b",
+			Term:         7,
+			Index:        42,
+			HasQuorum:    true,
+			EvidenceKind: raftcluster.ReadIndexEvidenceProduction,
+		}},
+		AppliedIndexWaiter: benchmarkRoutedReadApplyWaiter{progress: raftcluster.AppliedProgress{
+			NodeID:     "node-c",
+			GroupID:    "group-b",
+			Term:       7,
+			Index:      42,
+			HasApplied: true,
+		}},
+	}})
+	if err != nil {
+		b.Fatalf("NewGroupRoutedReadIndexCoordinator: %v", err)
+	}
+	client, _, mgr, _ := serveCollectionPipeWithServerAndOptions(b, ServerOptions{
+		ClusterSubmitter: submitter,
+		ClusterReadCoordinator: AppliedIndexReadCoordinator{
+			RoutedReadIndexCoordinator: routedCoordinator,
+		},
+	})
+	seedReadCollection(b, mgr)
+	ctx := context.Background()
+	if err := client.Hello(ctx); err != nil {
+		b.Fatalf("Hello: %v", err)
+	}
+	options := ReadOptions{ConsistencyPolicy: ConsistencyLinearizable}
+	const maxLatencySamples = 100_000
+	sampleCount := b.N
+	if sampleCount > maxLatencySamples {
+		sampleCount = maxLatencySamples
+	}
+	samples := make([]int64, sampleCount)
+	sampleEvery := 1
+	if b.N > sampleCount {
+		sampleEvery = b.N / sampleCount
+	}
+	sampleAt := 0
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		start := time.Now()
+		result, err := client.GetManyWithOptions(ctx, "users", [][]byte{id}, options)
+		elapsed := time.Since(start)
+		if err != nil {
+			b.Fatalf("GetManyWithOptions: %v", err)
+		}
+		if len(result.Docs) != 1 || len(result.Present) != 1 || !result.Present[0] {
+			b.Fatalf("routed result docs=%d present=%v", len(result.Docs), result.Present)
+		}
+		if sampleAt < sampleCount && i%sampleEvery == 0 {
+			samples[sampleAt] = elapsed.Nanoseconds()
+			sampleAt++
+		}
+	}
+	b.StopTimer()
+	samples = samples[:sampleAt]
+	sort.Slice(samples, func(i, j int) bool { return samples[i] < samples[j] })
+	reportRoutedReadLatencyPercentile(b, samples, 50, "p50-ns")
+	reportRoutedReadLatencyPercentile(b, samples, 95, "p95-ns")
+	reportRoutedReadLatencyPercentile(b, samples, 99, "p99-ns")
+	b.ReportMetric(float64(sampleAt), "latency-samples")
+}
+
+func reportRoutedReadLatencyPercentile(b *testing.B, samples []int64, percentile int, unit string) {
+	b.Helper()
+	if len(samples) == 0 {
+		return
+	}
+	index := (len(samples)*percentile + 99) / 100
+	if index > 0 {
+		index--
+	}
+	b.ReportMetric(float64(samples[index]), unit)
 }

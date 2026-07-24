@@ -486,6 +486,11 @@ func (s *Server) submitClusterMutation(ctx context.Context, command iwire.Comman
 		if err != nil {
 			return nil, err
 		}
+		if routed {
+			if err := s.rejectClusterTokenRouteIndexedMutation(command, *routeReq, route); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if row := raftentry.ClassifyNativeWireCommandV1(command); !row.Known || row.Decision != raftentry.DecisionAccepted {
 		return nil, fmt.Errorf("cluster submitter command %d is not accepted by R3a v1", command)
@@ -548,11 +553,86 @@ func (s *Server) preflightClusterRoute(ctx context.Context, routeReq *treenative
 	return err
 }
 
-func (s *Server) preflightClusterFindRoute(ctx context.Context, db, collection string) error {
+func (s *Server) preflightClusterFindRoute(ctx context.Context, db, collection string, plan findPlan) error {
 	if !s.clusterRouteProviderConfigured() {
 		return nil
 	}
-	return s.preflightClusterRoute(ctx, mongoClusterQueryRouteRequest(db, collection, 0, "find"))
+	routeReq, err := mongoClusterFindRouteRequest(db, collection, plan)
+	if err != nil {
+		return err
+	}
+	_, routed, err := treenativewire.PreflightClusterRoute(ctx, s.ClusterSubmitter, *routeReq)
+	if err != nil || !routed {
+		return err
+	}
+	return &iwire.ProtocolError{
+		Code: iwire.ErrReadOnly,
+		Reason: "Mongo gateway cluster route target for _id find requires the routed linearizable read-index/apply path; " +
+			"the Mongo gateway path remains disabled to prevent an unbarriered local read",
+	}
+}
+
+func mongoClusterFindRouteRequest(db, collection string, plan findPlan) (*treenativewire.ClusterRouteRequest, error) {
+	value, ok := simplePrimaryEqualityFindValue(plan)
+	if !ok {
+		return mongoClusterQueryRouteRequest(db, collection, 0, "find"), nil
+	}
+	key, err := encodePrimaryKey(value)
+	if err != nil {
+		return nil, err
+	}
+	return mongoClusterDocumentIDRouteRequest(db, collection, 0, "find", key), nil
+}
+
+func (s *Server) rejectClusterTokenRouteIndexedMutation(command iwire.CommandID, request treenativewire.ClusterRouteRequest, target treenativewire.ClusterRouteTarget) error {
+	switch target.PlacementMode {
+	case string(raftplacement.PlacementModeTokenV1), string(raftplacement.PlacementModeRingV1):
+	default:
+		return nil
+	}
+	switch command {
+	case iwire.CommandInsertBatch, iwire.CommandUpdateBSONSet, iwire.CommandDeleteBatch:
+	default:
+		return nil
+	}
+	if s == nil || s.Collections == nil {
+		return &iwire.ProtocolError{
+			Code:   iwire.ErrReadOnly,
+			Reason: "Mongo gateway cluster route target cannot verify sharded index policy without a collection manager",
+		}
+	}
+	name, err := gatewayCollectionName(request.Database, request.Collection)
+	if err != nil {
+		return err
+	}
+	col, err := s.Collections.OpenCollection(name)
+	if errors.Is(err, collections.ErrCollectionNotFound) {
+		// Cluster-created collections are constrained to metadata without indexes.
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	meta := col.MetaView()
+	for _, index := range meta.Indexes {
+		if index.Unique {
+			return &iwire.ProtocolError{
+				Code: iwire.ErrReadOnly,
+				Reason: fmt.Sprintf(
+					"Mongo gateway cluster route target for token/ring mutation does not support global unique-index coordination; index=%q",
+					index.Name,
+				),
+			}
+		}
+	}
+	if len(meta.Indexes) != 0 || len(meta.VectorIndexes) != 0 || len(meta.TextIndexes) != 0 {
+		return &iwire.ProtocolError{
+			Code: iwire.ErrReadOnly,
+			Reason: "Mongo gateway cluster route target for token/ring mutation does not support secondary-index writes " +
+				"without shard-local index ownership",
+		}
+	}
+	return nil
 }
 
 func mongoClusterRouteRequest(db, collection string, command iwire.CommandID, commandName string) *treenativewire.ClusterRouteRequest {
@@ -1155,5 +1235,14 @@ func mongoClusterUnsupportedLocalMutation(command string) (wire.Document, error)
 		commandCodeBadValue,
 		"BadValue",
 		"Mongo gateway cluster submitter mode does not support local "+command+" mutation",
+	)
+}
+
+func mongoClusterUnsupportedIndexDDL() (wire.Document, error) {
+	return commandError(
+		commandCodeBadValue,
+		"BadValue",
+		"Mongo gateway cluster mode does not support secondary or global unique index DDL; "+
+			"shard-local index ownership and global unique coordination are not implemented",
 	)
 }

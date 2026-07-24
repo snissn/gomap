@@ -674,7 +674,7 @@ func (s *Server) findResponsePayload(ctx context.Context, command wire.Document,
 		doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
 		return findResponsePayload{document: doc}, err
 	}
-	if err := s.preflightClusterFindRoute(ctx, db, collection); err != nil {
+	if err := s.preflightClusterFindRoute(ctx, db, collection, plan); err != nil {
 		doc, err := mongoClusterRouteCommandError(err)
 		return findResponsePayload{document: doc}, err
 	}
@@ -2107,7 +2107,7 @@ func mongoReadConcernLevelIsLocalStale(level string) bool {
 
 func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, error) {
 	if s.clusterSubmitterConfigured() {
-		return mongoClusterUnsupportedLocalMutation("createIndexes")
+		return mongoClusterUnsupportedIndexDDL()
 	}
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")

@@ -1364,6 +1364,78 @@ func TestClusterRoutePreflightTokenPlacementSingleIDMutationCommands(t *testing.
 	}
 }
 
+func TestClusterRoutePreflightTokenRingIndexedWritesFailClosed(t *testing.T) {
+	tests := []struct {
+		name      string
+		index     collections.IndexDefinition
+		wantError string
+	}{
+		{
+			name: "secondary_index",
+			index: collections.IndexDefinition{
+				Name:      "name",
+				Field:     "name",
+				ValueType: collections.IndexValueString,
+			},
+			wantError: "does not support secondary-index writes without shard-local index ownership",
+		},
+		{
+			name: "global_unique",
+			index: collections.IndexDefinition{
+				Name:      "email",
+				Field:     "email",
+				ValueType: collections.IndexValueString,
+				Unique:    true,
+			},
+			wantError: "does not support global unique-index coordination",
+		},
+	}
+	for _, mode := range []raftplacement.PlacementModeV1{
+		raftplacement.PlacementModeTokenV1,
+		raftplacement.PlacementModeRingV1,
+	} {
+		for _, tc := range tests {
+			t.Run(string(mode)+"/"+tc.name, func(t *testing.T) {
+				submitter := &placementRouteClusterSubmitter{
+					fakeClusterSubmitter: &fakeClusterSubmitter{},
+					provider: NewCatalogClusterRouteProvider(
+						mustNativewireRouteTestCatalog(t, mode),
+					),
+				}
+				client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+				if _, err := mgr.CreateCollection(&collections.CollectionMeta{
+					Name: "users",
+					Options: collections.CollectionOptions{
+						DocumentFormat: collections.DocumentFormatJSON,
+					},
+					Indexes: []collections.IndexDefinition{tc.index},
+				}); err != nil {
+					t.Fatalf("create indexed users collection: %v", err)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				if err := client.Hello(ctx); err != nil {
+					t.Fatalf("Hello: %v", err)
+				}
+				_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+					[][]byte{[]byte("u1")},
+					[][]byte{[]byte(`{"name":"Ada","email":"ada@example.test"}`)},
+					AckVisible,
+				)
+				if !isRemoteError(err, iwire.ErrReadOnly) || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("indexed InsertBatch err=%v want read-only containing %q", err, tc.wantError)
+				}
+				if routes := submitter.snapshotRoutes(); len(routes) != 1 {
+					t.Fatalf("route calls=%d want 1", len(routes))
+				}
+				if calls := submitter.snapshot(); len(calls) != 0 {
+					t.Fatalf("submitter calls=%d want 0", len(calls))
+				}
+			})
+		}
+	}
+}
+
 func TestClusterRoutePreflightCollectionPlacementAcceptsMultiIDBatch(t *testing.T) {
 	catalog := mustNativewireRouteTestCatalog(t, raftplacement.PlacementModeCollectionV1)
 	submitter := &placementRouteClusterSubmitter{

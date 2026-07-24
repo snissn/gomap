@@ -223,6 +223,14 @@ func (s *Server) recordClusterReadRouteOutcome(route ClusterRouteTarget, readMet
 	s.counters.inc("cluster_read_route.success_total")
 	if readMeta.ActualConsistency == ConsistencyLinearizable {
 		s.counters.inc("cluster_read_route.linearizable_success_total")
+		s.counters.inc("cluster_read_route.read_index_success_total")
+	}
+	if readMeta.ServingNode != "" && readMeta.LeaderNode != "" {
+		if readMeta.ServingNode == readMeta.LeaderNode {
+			s.counters.inc("cluster_read_route.leader_success_total")
+		} else {
+			s.counters.inc("cluster_read_route.follower_success_total")
+		}
 	}
 	if group := clusterReadRouteCounterComponent(route.GroupID); group != "" {
 		s.counters.inc("cluster_read_route.group." + group + ".success_total")

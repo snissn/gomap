@@ -1068,22 +1068,82 @@ func TestClusterRoutePreflightMongoTokenPlacementRejectsMultiIDWrites(t *testing
 	}
 }
 
-func TestClusterRoutePreflightMongoRejectsUnsupportedFindRoute(t *testing.T) {
-	server, submitter := newMongoPlacementRouteTestServer(t, raftplacement.PlacementModeRingV1)
-	response := serveCommand(t, server, 336108, bson.D{
-		{Key: "find", Value: "users"},
-		{Key: "filter", Value: bson.D{{Key: "name", Value: "Ada"}}},
-		{Key: "$db", Value: "app"},
-	})
-	assertCommandError(t, response, "NotWritablePrimary")
-	assertErrmsgContains(t, response, "query route shape is not supported")
-	assertBool(t, response, "treedbClusterError", true)
-	assertStringField(t, response, "treedbErrorClass", "route_rejected")
-	if routes := submitter.snapshotRoutes(); len(routes) != 0 {
-		t.Fatalf("route calls=%d want 0 before unsupported query provider call", len(routes))
+func TestClusterRoutePreflightMongoShardKeyFindMapsTokenThenFailsClosed(t *testing.T) {
+	for _, mode := range []raftplacement.PlacementModeV1{
+		raftplacement.PlacementModeTokenV1,
+		raftplacement.PlacementModeRingV1,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			server, submitter := newMongoPlacementRouteTestServer(t, mode)
+			response := serveCommand(t, server, 336108, bson.D{
+				{Key: "find", Value: "users"},
+				{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+				{Key: "$db", Value: "app"},
+			})
+			assertCommandError(t, response, "NotWritablePrimary")
+			assertErrmsgContains(t, response, "Mongo gateway cluster route target for _id find requires the routed linearizable read-index/apply path")
+			assertBool(t, response, "treedbClusterError", true)
+			assertStringField(t, response, "treedbErrorClass", "route_rejected")
+			routes := submitter.snapshotRoutes()
+			if len(routes) != 1 {
+				t.Fatalf("route calls=%d want 1", len(routes))
+			}
+			wantToken := mongoClusterRouteTokenForValue(t, "u1")
+			if got := routes[0]; got.Database != "app" || got.Catalog != "default" || got.Collection != "users" ||
+				got.CommandName != "find" || got.Shape != treenativewire.ClusterRouteShapeToken ||
+				!got.TokenKnown || got.Token != wantToken {
+				t.Fatalf("find route request=%+v want app/default/users token=%d", got, wantToken)
+			}
+			if calls := submitter.snapshotCalls(); len(calls) != 0 {
+				t.Fatalf("submit calls=%d want 0", len(calls))
+			}
+		})
 	}
-	if calls := submitter.snapshotCalls(); len(calls) != 0 {
-		t.Fatalf("submit calls=%d want 0", len(calls))
+}
+
+func TestClusterRoutePreflightMongoRejectsNonShardAndSecondaryIndexReads(t *testing.T) {
+	tests := []struct {
+		name  string
+		index *collections.IndexDefinition
+	}{
+		{name: "non_shard_key"},
+		{
+			name: "secondary_index",
+			index: &collections.IndexDefinition{
+				Name:      "name_1",
+				Field:     "name",
+				ValueType: collections.IndexValueString,
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server, submitter := newMongoPlacementRouteTestServer(t, raftplacement.PlacementModeRingV1)
+			if tc.index != nil {
+				col, err := server.Collections.OpenCollection("app.users")
+				if err != nil {
+					t.Fatalf("open app.users: %v", err)
+				}
+				if _, err := col.CreateIndex(*tc.index); err != nil {
+					t.Fatalf("create test index: %v", err)
+				}
+			}
+			response := serveCommand(t, server, 336109, bson.D{
+				{Key: "find", Value: "users"},
+				{Key: "filter", Value: bson.D{{Key: "name", Value: "Ada"}}},
+				{Key: "$db", Value: "app"},
+			})
+			assertCommandError(t, response, "NotWritablePrimary")
+			assertErrmsgContains(t, response, "query route shape is not supported")
+			assertBool(t, response, "treedbClusterError", true)
+			assertStringField(t, response, "treedbErrorClass", "route_rejected")
+			if routes := submitter.snapshotRoutes(); len(routes) != 0 {
+				t.Fatalf("route calls=%d want 0 before unsupported query provider call", len(routes))
+			}
+			if calls := submitter.snapshotCalls(); len(calls) != 0 {
+				t.Fatalf("submit calls=%d want 0", len(calls))
+			}
+		})
 	}
 }
 
@@ -1140,6 +1200,80 @@ func TestClusterRoutePreflightMongoRejectsNonShardKeyWrites(t *testing.T) {
 				t.Fatalf("submit calls=%d want 0", len(calls))
 			}
 		})
+	}
+}
+
+func TestClusterRoutePreflightMongoRejectsTokenRingIndexedWrites(t *testing.T) {
+	tests := []struct {
+		name      string
+		index     collections.IndexDefinition
+		run       func(testing.TB, *Server) wire.Document
+		wantError string
+	}{
+		{
+			name: "secondary_index_update",
+			index: collections.IndexDefinition{
+				Name:      "name_1",
+				Field:     "name",
+				ValueType: collections.IndexValueString,
+			},
+			run: func(tb testing.TB, server *Server) wire.Document {
+				return serveCommand(tb, server, 336111, bson.D{
+					{Key: "update", Value: "users"},
+					{Key: "updates", Value: bson.A{bson.D{
+						{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+						{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Ada"}}}}},
+					}}},
+					{Key: "$db", Value: "app"},
+				})
+			},
+			wantError: "does not support secondary-index writes without shard-local index ownership",
+		},
+		{
+			name: "global_unique_insert",
+			index: collections.IndexDefinition{
+				Name:      "email_1",
+				Field:     "email",
+				ValueType: collections.IndexValueString,
+				Unique:    true,
+			},
+			run: func(tb testing.TB, server *Server) wire.Document {
+				return serveCommand(tb, server, 336112, bson.D{
+					{Key: "insert", Value: "users"},
+					{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "ada@example.test"}}}},
+					{Key: "$db", Value: "app"},
+				})
+			},
+			wantError: "does not support global unique-index coordination",
+		},
+	}
+	for _, mode := range []raftplacement.PlacementModeV1{
+		raftplacement.PlacementModeTokenV1,
+		raftplacement.PlacementModeRingV1,
+	} {
+		for _, tc := range tests {
+			t.Run(string(mode)+"/"+tc.name, func(t *testing.T) {
+				server, submitter := newMongoPlacementRouteTestServer(t, mode)
+				col, err := server.Collections.OpenCollection("app.users")
+				if err != nil {
+					t.Fatalf("open app.users: %v", err)
+				}
+				if _, err := col.CreateIndex(tc.index); err != nil {
+					t.Fatalf("create test index: %v", err)
+				}
+				response := tc.run(t, server)
+				assertCommandError(t, response, "NotWritablePrimary")
+				assertErrmsgContains(t, response, tc.wantError)
+				assertBool(t, response, "treedbClusterError", true)
+				assertStringField(t, response, "treedbErrorClass", "route_rejected")
+				if routes := submitter.snapshotRoutes(); len(routes) != 1 {
+					t.Fatalf("route calls=%d want 1", len(routes))
+				}
+				if calls := submitter.snapshotCalls(); len(calls) != 0 {
+					t.Fatalf("submit calls=%d want 0", len(calls))
+				}
+			})
+		}
 	}
 }
 
@@ -2663,6 +2797,19 @@ func TestClusterSubmitterRejectsIndexDDLNoLocalMutation(t *testing.T) {
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, createResponse, "BadValue")
+	assertErrmsgContains(t, createResponse, "does not support secondary or global unique index DDL")
+	uniqueResponse := serveCommand(t, server, 325814, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+			{Key: "unique", Value: true},
+			{Key: "treedbValueType", Value: "string"},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, uniqueResponse, "BadValue")
+	assertErrmsgContains(t, uniqueResponse, "does not support secondary or global unique index DDL")
 	dropResponse := serveCommand(t, server, 325813, bson.D{
 		{Key: "dropIndexes", Value: "users"},
 		{Key: "index", Value: "name_1"},

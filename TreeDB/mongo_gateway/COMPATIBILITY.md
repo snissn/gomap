@@ -106,6 +106,51 @@ throughput check.
 | `not implemented` | Command/operator is not handled by the gateway. |
 | `benchmark-only` | Available in benchmark helpers, not part of the Mongo compatibility surface. |
 
+## Cluster Token/Ring Read And Index Policy
+
+The standalone compatibility rows below do not imply sharded Mongo behavior.
+When a cluster route provider reports `token` or `ring` placement, the current
+policy is deliberately narrower:
+
+- an exact single-predicate `_id` equality `find` is encoded with the same
+  primary-key bytes and `DocumentIDTokenV1` function as nativewire, and the
+  catalog is allowed to resolve exactly one owner;
+- the Mongo gateway then returns a stable `NotWritablePrimary` route rejection
+  before opening or reading the local collection, because it does not yet wire
+  that owner target through nativewire's routed linearizable
+  read-index/apply-barrier path;
+- non-`_id` filters, secondary-index equality/range reads, `_id` `$in`, scans,
+  and other possible scatter shapes remain query-route rejections. There is no
+  default scatter or global result coordination;
+- token/ring document mutations on a collection with secondary, vector, or text
+  indexes fail before cluster submission. A unique secondary index receives the
+  more specific global-unique-coordination rejection; and
+- `createIndexes` and `dropIndexes` remain local-mutation rejections in cluster
+  mode. No sharded secondary-index DDL or global unique-index claim is made.
+
+Nativewire's supported slice is only one `get_many` document ID with explicit
+`linearizable` consistency. It records:
+
+```text
+treedb.native_wire.cluster_read_route.requests_total
+treedb.native_wire.cluster_read_route.success_total
+treedb.native_wire.cluster_read_route.errors_total
+treedb.native_wire.cluster_read_route.unsupported_total
+treedb.native_wire.cluster_read_route.stale_rejected_total
+treedb.native_wire.cluster_read_route.linearizable_success_total
+treedb.native_wire.cluster_read_route.read_index_success_total
+treedb.native_wire.cluster_read_route.leader_success_total
+treedb.native_wire.cluster_read_route.follower_success_total
+treedb.native_wire.cluster_read_route.group.<group>.success_total
+treedb.native_wire.cluster_read_route.partition.<partition>.success_total
+```
+
+The implemented coordinator is a static in-process registry. Its local
+observation is valid only because the configured groups expose the same applied
+collection store to the serving nativewire server. It is not a remote read data
+plane, catalog/meta authority, rebalance or migration mechanism, cross-shard
+transaction layer, or production horizontal-scale proof.
+
 ## Command And Wire Matrix
 
 | Area | Surface | Status | Harness / evidence | Current gap |
@@ -179,7 +224,7 @@ before deciding whether to implement or reject them.
 
 | Surface | Status | Harness / evidence | Current gap |
 |---|---|---|---|
-| `_id` equality | `supported` | `TestMongoCompatibilityMatrix` | None for MVP. |
+| `_id` equality | `supported` standalone; `rejected` for cluster token/ring | `TestMongoCompatibilityMatrix`, `TestClusterRoutePreflightMongoShardKeyFindMapsTokenThenFailsClosed` | Cluster mode resolves the single token but has no Mongo routed read-index/apply integration, so it does not serve local data. |
 | `_id` `$in` | `supported subset` | find planner tests | No full query planner cost model. |
 | Indexed scalar equality | `supported subset` | `TestMongoCompatibilityMatrix` | Requires single-field TreeDB secondary index. |
 | Indexed scalar `$in` | `supported subset` | `TestMongoCompatibilityMatrix` | Null/missing has special scan behavior. |
@@ -222,8 +267,8 @@ before deciding whether to implement or reject them.
 | Surface | Status | Harness / evidence | Current gap |
 |---|---|---|---|
 | Built-in `_id_` index metadata | `supported subset` | `listIndexes` tests | Backed by primary key, not a user-created secondary index. |
-| Single-field ascending secondary index | `supported subset` | `TestMongoCompatibilityMatrix` | Requires `treedbValueType`. |
-| Unique single-field secondary index | `supported subset` | metadata/update tests | Unique conflict behavior is TreeDB-backed, not exhaustive Mongo parity. |
+| Single-field ascending secondary index | `supported subset` standalone; `rejected` for cluster token/ring reads/writes | `TestMongoCompatibilityMatrix`, `TestClusterRoutePreflightMongoRejectsNonShardAndSecondaryIndexReads`, `TestClusterRoutePreflightMongoRejectsTokenRingIndexedWrites` | Cluster mode has no shard-local secondary-index ownership or scatter policy. |
+| Unique single-field secondary index | `supported subset` standalone; `rejected` for cluster token/ring | metadata/update tests, `TestClusterRoutePreflightMongoRejectsTokenRingIndexedWrites`, `TestClusterSubmitterRejectsIndexDDLNoLocalMutation` | Global unique coordination is not implemented. |
 | Supported `treedbValueType` values | `supported subset` | metadata tests | `string`, `bool`, `int64`, `double`. |
 | Compound index | `rejected` | `TestMongoCompatibilityMatrix` | Needs collection index design work. |
 | Descending, hashed, text, wildcard, geospatial indexes | `rejected` / `not implemented` | Invalid index commands reject or command absent | Out of MVP scope. |

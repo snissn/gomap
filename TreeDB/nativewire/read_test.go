@@ -13,7 +13,7 @@ import (
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
-func seedReadCollection(t *testing.T, mgr *collections.CollectionManager) *collections.Collection {
+func seedReadCollection(t testing.TB, mgr *collections.CollectionManager) *collections.Collection {
 	t.Helper()
 	if _, err := mgr.CreateCollection(&collections.CollectionMeta{
 		Name: "users",

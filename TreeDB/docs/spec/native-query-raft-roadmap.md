@@ -285,6 +285,18 @@ read-index proof can land on no-op/config Raft log entries must add applied
 Raft-index tracking or translate the proof to the latest TreeDB command index at
 or below the proof before relying on the command FSM progress.
 
+The first routed implementation is intentionally smaller than the complete R4
+target. It accepts one nativewire `get_many` document ID for token/ring
+placement, selects the owner through a static in-process group registry, obtains
+that owner's production read-index proof, and waits for owner apply before
+reading. The serving process and routed groups must share the applied collection
+store. Mongo exact-`_id` finds derive the same token but remain fail closed
+because the gateway has not integrated this routed barrier. Non-shard-key,
+secondary/unique-index, multi-ID, scatter, follower, and remote data-plane reads
+remain deferred to explicit later work. Token/ring mutations on indexed
+collections likewise fail closed until shard-local secondary-index ownership
+and any global unique policy are implemented.
+
 `lease_read` is allowed only if leader leases are implemented and the server can
 prove the lease is valid.
 
