@@ -183,6 +183,9 @@ func TestRepresentativeRouterExactOracleStableTieAndBudgets(t *testing.T) {
 	if _, err := RouteExactV1(model, []float32{1, 0}, len(model.Representatives), 0); err == nil {
 		t.Fatal("expected zero partition probes to fail")
 	}
+	if _, err := RouteExactV1(model, []float32{1, 0}, len(model.Representatives), model.Metrics.Partitions+1); err == nil {
+		t.Fatal("expected oversized partition probes to fail")
+	}
 }
 
 func TestPartitionRouterModelValidationRejectsForgedMetadata(t *testing.T) {

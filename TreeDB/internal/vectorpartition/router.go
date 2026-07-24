@@ -500,6 +500,9 @@ func RouteExactV1(model RouterModelV1, query []float32, candidateBudget, partiti
 	if partitionProbes < 1 {
 		return result, errors.New("vectorpartition: partition probes must be positive")
 	}
+	if partitionProbes > model.Metrics.Partitions {
+		return result, fmt.Errorf("vectorpartition: partition probes=%d exceeds partitions=%d", partitionProbes, model.Metrics.Partitions)
+	}
 	normalized, err := normalizeRouterVectorV1(query)
 	if err != nil {
 		return result, fmt.Errorf("vectorpartition: router query: %w", err)
