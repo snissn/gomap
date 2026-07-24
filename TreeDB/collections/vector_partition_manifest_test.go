@@ -549,6 +549,40 @@ func TestCollectionVectorPartitionReadyDeleteCrashWindowReopenReachability(t *te
 			})
 		}
 	})
+	t.Run("stale_active_pointer_with_valid_inactive_and_retained_history_fails_closed", func(t *testing.T) {
+		d, col, store, m, _ := newFixture(t)
+		defer d.Close()
+		if err := store.writeInactiveMarker(m.Collection, m.IndexName, m.Generation); err != nil {
+			t.Fatal(err)
+		}
+		removeRetired(t, store, m)
+		activePath := filepath.Join(store.dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+".active")
+		if err := os.WriteFile(activePath, []byte("999\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := syncDirVPM(store.dir); err != nil {
+			t.Fatal(err)
+		}
+		status, err := col.VectorPartitionStatusV1(m.IndexName, m.Generation)
+		if err != nil || status.Active || status.StaleReason != "pointer_invalid" {
+			t.Fatalf("stale active status=%+v err=%v", status, err)
+		}
+		if _, err := col.PlanColumnAssetReachability(t.Context(), ColumnAssetReachabilityOptions{}); err == nil {
+			t.Fatal("stale active pointer with valid inactive marker passed reachability")
+		}
+		candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 917, []byte("must-not-delete-with-stale-active-pointer"))
+		candidatePath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stats, err := col.ColumnAssetGC(t.Context(), ColumnAssetGCOptions{CandidateRefs: []ColumnAssetRef{candidate}})
+		if err == nil || stats.SegmentsDeleted != 0 {
+			t.Fatalf("GC with stale active pointer stats=%+v err=%v", stats, err)
+		}
+		if _, err := os.Stat(candidatePath); err != nil {
+			t.Fatalf("GC removed candidate before rejecting stale active pointer: %v", err)
+		}
+	})
 }
 
 func TestVectorPartitionInactiveStateV1BoundedCodec(t *testing.T) {

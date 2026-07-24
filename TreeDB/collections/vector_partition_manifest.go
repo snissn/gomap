@@ -1337,6 +1337,9 @@ func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[str
 			if !errors.Is(err, os.ErrNotExist) {
 				return nil, nil, fmt.Errorf("collections: vector partition active pointer for %q: %w", index, err)
 			}
+			if _, present := activeNames[safeVPM(c.name)+"-"+safeVPM(index)+".active"]; present {
+				return nil, nil, fmt.Errorf("collections: vector partition active pointer for %q targets a missing generation", index)
+			}
 			retired, retiredErr := s.OpenRetired(c.name, index)
 			if errors.Is(retiredErr, os.ErrNotExist) {
 				if _, inactiveErr := s.readInactiveGeneration(c.name, index); inactiveErr == nil {
@@ -2513,6 +2516,12 @@ func (c *Collection) VectorPartitionStatusV1(index string, generation uint64) (V
 	if m.State == "ready" {
 		staleReason = "inactive"
 		current, activeErr := s.OpenActive(c.name, index)
+		activePointerPresent := false
+		if _, statErr := os.Lstat(filepath.Join(s.dir, safeVPM(c.name)+"-"+safeVPM(index)+".active")); statErr == nil {
+			activePointerPresent = true
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			staleReason = "pointer_invalid"
+		}
 		switch {
 		case activeErr == nil:
 			if current.Generation == generation {
@@ -2522,6 +2531,10 @@ func (c *Collection) VectorPartitionStatusV1(index string, generation uint64) (V
 			}
 		case !errors.Is(activeErr, os.ErrNotExist):
 			staleReason = "pointer_invalid"
+		case activePointerPresent:
+			staleReason = "pointer_invalid"
+		case staleReason == "pointer_invalid":
+			// Lstat could not establish whether the active pointer exists.
 		default:
 			retired, retiredErr := s.OpenRetired(c.name, index)
 			switch {
