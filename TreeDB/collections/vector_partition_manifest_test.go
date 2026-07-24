@@ -1256,8 +1256,8 @@ func TestVectorPartitionLifecycleContractDoc(t *testing.T) {
 	requireTextContains(t, "vector partition lifecycle contract", doc,
 		"Local publication installs an immutable BUILD checkpoint, then READY and\nLOCAL_ACTIVATE deltas.",
 		"A crash or retry therefore observes building, ready but\ninactive, or ready and active state",
-			"A durable DELETE_PREPARE initially transitions any non-active building or ready\ngeneration, including a retired ready generation, to deleting.",
-			"An identical\nDELETE_PREPARE retry is idempotent.",
+		"A durable DELETE_PREPARE initially transitions any non-active building or ready\ngeneration, including a retired ready generation, to deleting.",
+		"An identical\nDELETE_PREPARE retry is idempotent.",
 		"Recovery derives every state from the highest VCP1 checkpoint plus its exact\nVLC1 tail",
 	)
 }
