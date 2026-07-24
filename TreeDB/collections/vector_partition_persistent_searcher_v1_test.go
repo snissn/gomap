@@ -45,7 +45,7 @@ func TestVectorPartitionPersistentLocalSearcherReopenCorruptionAndPinsV1(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := s.Search([]float32{1, 0, 0}, 1); err != nil || len(got) != 1 || got[0].ID != "a" {
+	if got, err := s.Search([]float32{1, 0, 0}, 1); err != nil || len(got) != 1 || got[0].ID != "b" {
 		t.Fatalf("search=%+v err=%v", got, err)
 	}
 	if err := col.DeleteVectorPartitionGenerationV1(def.Name, m1.Generation, VectorPartitionCleanupEligibilityV1{}); err == nil {
@@ -79,10 +79,10 @@ func TestVectorPartitionPersistentLocalSearcherReopenCorruptionAndPinsV1(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := old.Search([]float32{1, 0, 0}, 1); err != nil || got[0].ID != "a" {
+	if got, err := old.Search([]float32{1, 0, 0}, 1); err != nil || got[0].ID != "b" {
 		t.Fatalf("old=%+v err=%v", got, err)
 	}
-	if got, err := newer.Search([]float32{0, 1, 0}, 1); err != nil || got[0].ID != "b" {
+	if got, err := newer.Search([]float32{0, 1, 0}, 1); err != nil || got[0].ID != "a" {
 		t.Fatalf("new=%+v err=%v", got, err)
 	}
 	_ = old.Close()

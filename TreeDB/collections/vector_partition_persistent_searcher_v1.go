@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
@@ -17,6 +18,20 @@ import (
 const vectorPartitionSearchAssetMagicV1 = "VPS1"
 const vectorPartitionSearchAssetVersionV1 uint32 = 1
 const vectorPartitionSearchAssetMaxBytesV1 int64 = 256 << 20
+
+func compactPartitionAdjacencyV1(in []uint32) []uint32 {
+	if len(in) < 2 {
+		return in
+	}
+	n := 1
+	for _, x := range in[1:] {
+		if x != in[n-1] {
+			in[n] = x
+			n++
+		}
+	}
+	return in[:n]
+}
 
 func vectorPartitionLocalAssetIDV1(partition uint32) string {
 	return fmt.Sprintf("hnsw_search_pack_v1/partition/%d", partition)
@@ -44,17 +59,83 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(index string,
 	if manifest.IndexDefinitionDigest != VectorIndexDefinitionDigestV1(def) {
 		return nil, nil, fmt.Errorf("%w: index definition digest", ErrVectorPartitionSearchUnavailable)
 	}
+	_, sourceGraph, _, err := c.columnVectorGraphPhysicalRowReaderSnapshotView(index)
+	if err != nil || sourceGraph.BaseManifestGeneration != manifest.SourceGeneration || sourceGraph.BaseManifestChecksum != manifest.SourceChecksum || sourceGraph.BaseSchemaHash != manifest.SourceSchemaHash || uint64(sourceGraph.RowCount) != manifest.SourceRowCount {
+		return nil, nil, fmt.Errorf("%w: stale authoritative source", ErrVectorPartitionSearchUnavailable)
+	}
+	reader, err := c.openColumnVectorGraphPhysicalRowReader(index, columnVectorGraphPhysicalRowReaderOptions{})
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: source reader: %v", ErrVectorPartitionSearchUnavailable, err)
+	}
+	defer reader.Close()
+	members := make(map[uint32][]struct {
+		ordinal int
+		kind    VectorPartitionMembershipKindV1
+	})
+	for _, x := range manifest.Memberships {
+		if x.VectorOrdinal >= manifest.SourceRowCount {
+			return nil, nil, fmt.Errorf("%w: source ordinal", ErrVectorPartitionSearchUnavailable)
+		}
+		members[x.PartitionID] = append(members[x.PartitionID], struct {
+			ordinal int
+			kind    VectorPartitionMembershipKindV1
+		}{int(x.VectorOrdinal), VectorPartitionMembershipHomeV1})
+	}
+	for _, x := range manifest.OverlapMemberships {
+		if x.VectorOrdinal >= manifest.SourceRowCount {
+			return nil, nil, fmt.Errorf("%w: source ordinal", ErrVectorPartitionSearchUnavailable)
+		}
+		members[x.PartitionID] = append(members[x.PartitionID], struct {
+			ordinal int
+			kind    VectorPartitionMembershipKindV1
+		}{int(x.VectorOrdinal), VectorPartitionMembershipOverlapV1})
+	}
 	items := make([]StableColumnPhysicalAssetAppend, len(inputs))
+	seenParts := make(map[uint32]struct{}, len(inputs))
 	for i, in := range inputs {
 		if in.Generation != generation || in.Dimensions != def.Dimensions || in.Source.Generation != manifest.SourceGeneration || in.Source.Checksum != manifest.SourceChecksum || in.Source.SchemaHash != manifest.SourceSchemaHash || in.Source.RowCount != manifest.SourceRowCount {
 			return nil, nil, fmt.Errorf("%w: generation mismatch", ErrVectorPartitionSearchUnavailable)
 		}
-		if err := validateVectorPartitionSearchAssetV1(in); err != nil {
-			return nil, nil, err
+		if _, duplicate := seenParts[in.PartitionID]; duplicate {
+			return nil, nil, fmt.Errorf("%w: duplicate partition", ErrVectorPartitionSearchUnavailable)
 		}
-		rows := make([]columnVectorGraphAssetRow, len(in.IDs))
-		for j := range rows {
-			rows[j] = columnVectorGraphAssetRow{ID: []byte(in.IDs[j]), Vector: in.Vectors[j], Adjacency: in.Adjacency[j], BaseRowRef: DocumentRowRef{DocumentID: []byte(in.IDs[j]), Generation: manifest.SourceGeneration, PartID: 1, RowIndex: j, AppliedCommandLSN: 1}}
+		seenParts[in.PartitionID] = struct{}{}
+		selected := members[in.PartitionID]
+		if len(selected) == 0 {
+			return nil, nil, fmt.Errorf("%w: partition has no canonical memberships", ErrVectorPartitionSearchUnavailable)
+		}
+		ordToLocal := make(map[int]int, len(selected))
+		for j, x := range selected {
+			if _, dup := ordToLocal[x.ordinal]; dup {
+				return nil, nil, fmt.Errorf("%w: duplicate membership ordinal", ErrVectorPartitionSearchUnavailable)
+			}
+			ordToLocal[x.ordinal] = j
+		}
+		rows := make([]columnVectorGraphAssetRow, len(selected))
+		scratch := &columnPhysicalRowReaderScratch{}
+		for j, x := range selected {
+			r, fetchErr := reader.FetchRow(x.ordinal, scratch)
+			if fetchErr != nil {
+				r = columnVectorGraphPhysicalRow{}
+			}
+			if len(r.Vector) != def.Dimensions {
+				r.Vector, _, _, _ = reader.typedVectorForOrdinal(x.ordinal)
+			}
+			if len(r.ID) == 0 {
+				r.ID, _ = reader.documentIDForOrdinal(x.ordinal)
+			}
+			if len(r.ID) == 0 || len(r.Vector) != def.Dimensions {
+				return nil, nil, fmt.Errorf("%w: authoritative typed row", ErrVectorPartitionSearchUnavailable)
+			}
+			adj := make([]uint32, 0, len(r.Adjacency))
+			for _, n := range r.Adjacency {
+				if local, ok := ordToLocal[int(n)]; ok && local != j {
+					adj = append(adj, uint32(local))
+				}
+			}
+			sort.Slice(adj, func(a, b int) bool { return adj[a] < adj[b] })
+			adj = compactPartitionAdjacencyV1(adj)
+			rows[j] = columnVectorGraphAssetRow{ID: append([]byte(nil), r.ID...), Vector: append([]float32(nil), r.Vector...), InvNorm: r.InvNorm, Adjacency: adj, BaseRowRef: DocumentRowRef{DocumentID: append([]byte(nil), r.ID...), Generation: manifest.SourceGeneration, PartID: 1, RowIndex: j, AppliedCommandLSN: 1}}
 		}
 		graph := columnVectorGraphManifestSnapshot{IndexName: def.Name, Field: def.Field, Metric: def.Metric, Encoding: def.Encoding, Dimensions: def.Dimensions, M: def.M, EfConstruction: def.EfConstruction, EfSearch: def.EfSearch, BaseManifestGeneration: manifest.SourceGeneration, BaseManifestChecksum: manifest.SourceChecksum, BaseSchemaHash: manifest.SourceSchemaHash, GraphSchemaHash: cfg.SchemaHash, RowCount: len(rows)}
 		pack, err := buildColumnHNSWSearchPackInput(def, graph, rows)
