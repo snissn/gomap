@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	internalcrc "github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	internalrouter "github.com/snissn/gomap/TreeDB/internal/vectorpartition"
@@ -732,10 +734,6 @@ func captureVectorPartitionRouterExistingAssetsV1(root string, assets []VectorPa
 	}
 	builder := rootpublication.NewStableResourceSetBuilder()
 	for _, asset := range assets {
-		if _, err := readColumnPhysicalAssetFromManager(root, asset.Ref); err != nil {
-			builder.Abandon()
-			return nil, fmt.Errorf("collections: vector partition router asset %q: %w", asset.ID, err)
-		}
 		path, err := columnAssetSegmentPath(root, asset.Ref)
 		if err != nil {
 			builder.Abandon()
@@ -751,6 +749,12 @@ func captureVectorPartitionRouterExistingAssetsV1(root string, assets []VectorPa
 			parent.Close()
 			builder.Abandon()
 			return nil, err
+		}
+		if err := verifyVectorPartitionRouterStableAssetV1(file, asset.Ref); err != nil {
+			file.Close()
+			parent.Close()
+			builder.Abandon()
+			return nil, fmt.Errorf("collections: vector partition router asset %q: %w", asset.ID, err)
 		}
 		namespace, err := stableColumnAssetNamespaceToken(parent, file, asset.Ref)
 		if err == nil {
@@ -785,6 +789,43 @@ func captureVectorPartitionRouterExistingAssetsV1(root string, assets []VectorPa
 		return nil, err
 	}
 	return resources, nil
+}
+
+// verifyVectorPartitionRouterStableAssetV1 verifies the exact stable child
+// handle in bounded memory. Partition packs may be multi-gigabyte assets, so
+// publication must never materialize an existing pack merely to recapture its
+// reachability token.
+func verifyVectorPartitionRouterStableAssetV1(file *os.File, ref ColumnAssetRef) error {
+	if file == nil {
+		return errors.New("collections: vector partition router stable asset file is nil")
+	}
+	if err := validateColumnAssetRefForPlan(ref); err != nil {
+		return err
+	}
+	reader := io.NewSectionReader(file, ref.Offset, ref.Length)
+	var buffer [64 << 10]byte
+	var checksum uint32
+	var total int64
+	for {
+		n, err := reader.Read(buffer[:])
+		if n > 0 {
+			checksum = internalcrc.Update(checksum, buffer[:n])
+			total += int64(n)
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if total != ref.Length {
+		return io.ErrUnexpectedEOF
+	}
+	if checksum != ref.Checksum {
+		return fmt.Errorf("collections: column physical asset checksum=%d does not match ref checksum=%d", checksum, ref.Checksum)
+	}
+	return nil
 }
 
 // OpenVectorPartitionRouterV1 validates and pins the currently active ready
@@ -1081,8 +1122,8 @@ func (r *VectorPartitionRouterV1) Search(query []float32, opts VectorPartitionRo
 	if opts.PartitionProbes < 1 {
 		return fail(errors.New("collections: vector partition router probes must be positive"))
 	}
-	if opts.CandidateBudget < 1 || opts.CandidateBudget > len(r.model.Representatives) {
-		return fail(fmt.Errorf("collections: vector partition router candidate budget=%d outside [1,%d]", opts.CandidateBudget, len(r.model.Representatives)))
+	if opts.CandidateBudget < 1 {
+		return fail(errors.New("collections: vector partition router candidate budget must be positive"))
 	}
 	normalized, err := normalizeVectorPartitionRouterQueryV1(query, r.model.Dimensions)
 	if err != nil {
@@ -1091,8 +1132,8 @@ func (r *VectorPartitionRouterV1) Search(query []float32, opts VectorPartitionRo
 	var candidates []vectorPartitionRouterCandidateV1
 	switch opts.Mode {
 	case VectorPartitionRouterModeExactV1:
-		if opts.CandidateBudget != len(r.model.Representatives) {
-			return fail(errors.New("collections: exact vector partition router requires all representatives"))
+		if opts.CandidateBudget < len(r.model.Representatives) {
+			return fail(fmt.Errorf("collections: exact vector partition router candidate budget=%d below representative count=%d", opts.CandidateBudget, len(r.model.Representatives)))
 		}
 		candidates = make([]vectorPartitionRouterCandidateV1, len(r.model.Representatives))
 		for ordinal, representative := range r.model.Representatives {
@@ -1102,6 +1143,9 @@ func (r *VectorPartitionRouterV1) Search(query []float32, opts VectorPartitionRo
 		}
 		result.Status.Candidates = uint64(len(candidates))
 	case VectorPartitionRouterModeApproxV1:
+		if opts.CandidateBudget > len(r.model.Representatives) {
+			return fail(fmt.Errorf("collections: approximate vector partition router candidate budget=%d outside [1,%d]", opts.CandidateBudget, len(r.model.Representatives)))
+		}
 		scratch := r.scratch.Get().(*columnVectorGraphNativeSearchScratch)
 		defer r.scratch.Put(scratch)
 		native, stats, err := r.view.searchCosine(query, columnVectorGraphNativeSearchOptions{

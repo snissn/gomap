@@ -6,13 +6,42 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"math"
+	"os"
 	"reflect"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	internalcrc "github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	internalrouter "github.com/snissn/gomap/TreeDB/internal/vectorpartition"
 )
+
+func TestVerifyVectorPartitionRouterStableAssetV1StreamsExactRange(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "router-stable-asset-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	prefix := []byte("unhashed-prefix")
+	payload := bytes.Repeat([]byte("bounded-stream"), (2<<20)/len("bounded-stream"))
+	if _, err := file.Write(append(append([]byte(nil), prefix...), payload...)); err != nil {
+		t.Fatal(err)
+	}
+	ref := ColumnAssetRef{
+		Kind: ColumnAssetKindTCS1HNSWSearchPack, Namespace: "router-stream-test",
+		Generation: 1, PartID: 1, FileID: 1,
+		Offset: int64(len(prefix)), Length: int64(len(payload)), Checksum: internalcrc.Checksum(payload),
+	}
+	if err := verifyVectorPartitionRouterStableAssetV1(file, ref); err != nil {
+		t.Fatalf("verify stable range: %v", err)
+	}
+	if _, err := file.WriteAt([]byte{payload[0] ^ 0xff}, ref.Offset); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyVectorPartitionRouterStableAssetV1(file, ref); err == nil {
+		t.Fatal("corrupt stable range passed streaming verification")
+	}
+}
 
 func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
@@ -184,6 +213,20 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 		Mode: VectorPartitionRouterModeExactV1, CandidateBudget: 3, PartitionProbes: 1,
 	}); err == nil {
 		t.Fatal("undersized exact candidate budget succeeded")
+	}
+	oversizedExact, err := router.Search([]float32{1, 0}, VectorPartitionRouterSearchOptionsV1{
+		Mode: VectorPartitionRouterModeExactV1, CandidateBudget: 1024, PartitionProbes: 2,
+	})
+	if err != nil {
+		t.Fatalf("oversized exact candidate budget: %v", err)
+	}
+	if oversizedExact.Status.CandidateBudget != 1024 || oversizedExact.Status.Candidates != 4 || oversizedExact.Status.Selected != 2 {
+		t.Fatalf("oversized exact status=%+v", oversizedExact.Status)
+	}
+	if _, err := router.Search([]float32{1, 0}, VectorPartitionRouterSearchOptionsV1{
+		Mode: VectorPartitionRouterModeApproxV1, CandidateBudget: 1024, PartitionProbes: 1,
+	}); err == nil {
+		t.Fatal("oversized approximate candidate budget succeeded")
 	}
 	if err := router.Close(); err != nil {
 		t.Fatal(err)

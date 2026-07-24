@@ -123,6 +123,26 @@ membership kinds. There are no optional tagged fields and this pre-alpha
 decoder accepts only version 3; older directories require rebuild rather than
 migration.
 
+VRP1 (the READY promotion payload, distinct from the VPR1 reclaim payload)
+uses ASCII magic `VRP1`, big-endian wire version `2`, and this fixed,
+untagged order:
+
+1. magic, `uint32` version, and `uint64` generation;
+2. the 32-byte building-manifest SHA-256 digest;
+3. `uint64` router generation and the 32-byte ready-manifest SHA-256 digest;
+4. the length-prefixed ready-set digest;
+5. a counted, canonically ordered representative-membership list;
+6. an asset list containing exactly one router asset encoded with the VPM1
+   asset frame; and
+7. a final 32-byte SHA-256 digest over all preceding bytes.
+
+The payload is capped at 16 MiB. Generation/router identity, digests, mapping
+order and bounds, the single router asset, trailing bytes, and canonical
+re-encoding are validated before the promotion is applied. Version 2 adds the
+representative mapping needed to reconstruct the ready manifest exactly.
+Current pre-alpha readers reject older VRP1 versions; rebuild old DB
+directories instead of migrating in place.
+
 VPR1 is the bounded, versioned, checksummed reclaim payload that retains
 original and rewritten asset debt until physical GC completes. Pre-alpha
 binaries reject old `.vpm`, `.active`, `.retired`, `.inactive`, and `.deleting`
