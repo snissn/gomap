@@ -107,10 +107,17 @@ report says unavailable rather than extrapolating.
 
 The checked-in 10k report is
 [`TreeDB/docs/spec/artifacts/vector-partition-m3-evidence-v1.json`](../TreeDB/docs/spec/artifacts/vector-partition-m3-evidence-v1.json).
-The exact implementation head and measured values are recorded in that
-machine-readable artifact. This fixture supplies cost, lifecycle, and
-native-path evidence, not the clustered/1M enablement win required by the
-issue.
+It was captured from implementation commit
+`c33d077f6b2eff677b8899425401835d0292758e` over base
+`a2d7bd55808136beaea1b6f823668f7b5d28cad8`. The disjoint and requested
+`0.20` rows consumed 4,653,462 and 4,654,264 final derived physical bytes
+respectively (`1.000172x`, passing the `1.35x` gate); their serialized pack
+payloads were 4,527,672 and 4,528,450 bytes. Both exercised 2,048 native local
+searches with 135.75 candidates and 4,263.535 edges per search. The hard
+capacity admitted one overlap membership and left 1,999 budget units unspent;
+edge cut fell from 5,184 to 5,088, while exact-local recall remained
+`0.321631`. This fixture supplies cost, lifecycle, and native-path evidence,
+not the clustered/1M enablement win required by the issue.
 
 Routing, RPC, Raft placement, distributed merge, and document fetch remain
 later milestones.
