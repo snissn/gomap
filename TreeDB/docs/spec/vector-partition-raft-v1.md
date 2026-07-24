@@ -211,11 +211,11 @@ deactivation, and deletion require collection authority. Collection-authorized
 publication verifies the current source identity and referenced assets, and all
 collection-owned lifecycle mutation takes the root storage barrier before the
 collection mutation authority. Reader pins and snapshots use that same barrier.
-A durable DELETE_PREPARE accepts the initial cleanup transition from any
-non-active building, ready, or retired generation. It rejects a repeated
-transition for a deleting generation and any attempt to recreate a completed
-generation before a new lifecycle entry can be installed, so neither state can
-be resurrected.
+A durable DELETE_PREPARE initially transitions any non-active building or ready
+generation, including a retired ready generation, to deleting. An identical
+DELETE_PREPARE retry is idempotent. Conflicting delete-preparation, BUILD, or
+READY retries against a deleting generation, and attempts to recreate a
+completed generation, fail before a new lifecycle entry can be installed.
 All decoded count-derived allocations, strings, assets, memberships and record
 bytes are capped before allocation; unknown/trailing records fail closed.
 
@@ -240,7 +240,7 @@ with both original and superseded refs, and retains the reduced reclaim state
 until all segment debt is physically absent; the durable-root fallback
 generation can therefore delay, but never bypass, DELETE_COMPLETE.
 
-### V1 API contract, VPM1 wire version 2, and bounds
+### V1 API/schema contract, VPM1 wire version 2, and bounds
 
 The canonical generation payload is binary `VPM1` (big-endian magic
 `0x56504d31`, version `2`), followed by fixed-order length-prefixed fields;
@@ -284,7 +284,7 @@ namespace is capped at 64 MiB and 4,096 entries.
 | building -> ready | READY digest-bound promotion delta | complete prepared generation, still not active |
 | ready -> active | LOCAL_ACTIVATE delta | one complete ready generation is locally active and the activation high water advances |
 | active -> retired | DEACTIVATE delta | generation remains prepared but is not active |
-| building/ready/retired -> deleting | caller fences plus DELETE_PREPARE carrying VPR1 | initial cleanup is accepted; repeated or resurrection transitions fail closed; retryable reclaim debt survives reopen |
+| non-active building/ready (including retired ready) -> deleting | caller fences plus DELETE_PREPARE carrying VPR1 | initial cleanup is accepted; an identical retry is idempotent; conflicting or resurrection transitions fail closed |
 | deleting -> progress | RECLAIM_PROGRESS before mixed-segment remap publication | original and superseded debt remain protected and retryable |
 | deleting -> absent | physical GC followed by DELETE_COMPLETE | generation leaves the live set; generation high water prevents resurrection |
 
