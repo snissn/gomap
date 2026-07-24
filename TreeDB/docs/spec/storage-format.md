@@ -93,8 +93,36 @@ batches, applies the 4,096-entry cap to all names, and verifies the ranges,
 CRC32 values, and SHA-256 digests of every asset referenced by a non-deleting
 manifest before replacing the target namespace.
 
-VPM1 has a fixed version, bounded length-prefixed fields and lists, one
-(exactly one) router-asset frame, canonical ordering, and an integrity digest.
+VPM1 uses big-endian magic `0x56504d31` and wire version `3`, bounded
+length-prefixed fields and lists, one (exactly one) router-asset frame,
+canonical ordering, and an integrity digest. Version 3 has this fixed,
+untagged order:
+
+1. magic and `uint32` version;
+2. eight `uint32`-length-prefixed UTF-8 strings: format, state, collection,
+   index name, index-definition digest, integrity digest, balance policy, and
+   ready-set digest;
+3. six `uint64` values: source generation, source checksum, source schema
+   hash, source row count, partition generation, and router generation,
+   followed by the `uint32` partition count;
+4. exactly one router asset;
+5. counted placement, disjoint-membership, overlap-membership,
+   representative-membership, and partition-asset lists, in that order.
+
+Each placement is a `uint32` partition ID plus a length-prefixed group ID.
+Each membership is a `uint64` source ordinal plus a `uint32` partition ID.
+Every asset descriptor is a partition ID; length-prefixed logical ID,
+SHA-256 checksum, and optional membership digest; a `uint64` byte length; and
+a `ColumnAssetRef` containing length-prefixed kind/namespace, `uint64`
+generation/part ID, `uint32` file ID, `uint64` offset/length, and `uint32`
+CRC, in that order. Version 3 adds the membership-digest string between the
+asset checksum and byte length.
+Native partition HNSW assets require that SHA-256 digest; it binds the
+generation, partition, ordered authoritative stable IDs, and home/overlap
+membership kinds. There are no optional tagged fields and this pre-alpha
+decoder accepts only version 3; older directories require rebuild rather than
+migration.
+
 VPR1 is the bounded, versioned, checksummed reclaim payload that retains
 original and rewritten asset debt until physical GC completes. Pre-alpha
 binaries reject old `.vpm`, `.active`, `.retired`, `.inactive`, and `.deleting`
