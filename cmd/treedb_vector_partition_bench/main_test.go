@@ -147,6 +147,93 @@ func TestPartitionStageWritesValidatedDeterministicArtifact(t *testing.T) {
 	}
 }
 
+func TestRouterStageUsesPersistedExactAndNativeHNSWPaths(t *testing.T) {
+	dataset := writeFixtureForTest(t, 32, 4, 8)
+	if err := runWithHermeticProvenance(t, []string{
+		"-dataset", dataset,
+		"-out", t.TempDir(),
+		"-partitions", "4",
+		"-probes", "2",
+		"-stage", "router",
+		"-router-representatives", "2",
+		"-router-leaf-size", "1",
+		"-router-max-bytes", "1",
+	}, io.Discard); err == nil || !strings.Contains(err.Error(), "estimated bytes") {
+		t.Fatalf("persisted router byte cap error=%v", err)
+	}
+	out := t.TempDir()
+	var stdout bytes.Buffer
+	args := []string{
+		"-dataset", dataset,
+		"-out", out,
+		"-partitions", "4",
+		"-probes", "2",
+		"-stage", "router",
+		"-router-representatives", "2",
+		"-router-leaf-size", "1",
+		"-router-candidates", "8",
+	}
+	if err := runWithHermeticProvenance(t, args, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	var result runResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateResult(result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ResultKind != "router_local_path_evidence" ||
+		result.ProductionEvidence ||
+		result.Metrics.MeasurementStatus != "router_local_production_path_no_raft" ||
+		result.Metrics.RepresentativeCount != 8 ||
+		result.Metrics.MinRepresentatives != 2 ||
+		result.Metrics.MaxRepresentatives != 2 ||
+		result.Metrics.RouterBytes <= 0 ||
+		result.Metrics.MappedBytes+result.Metrics.HeapCopyBytes <= 0 {
+		t.Fatalf("router result=%+v", result)
+	}
+	var exact, approximate stageResult
+	for _, stage := range result.Stages {
+		switch stage.Name {
+		case "exact_representative_routing":
+			exact = stage
+		case "approximate_representative_routing":
+			approximate = stage
+		}
+	}
+	if exact.Searches != 4 || approximate.Searches != 4 ||
+		exact.CandidateBudget != 8 || approximate.CandidateBudget != 8 ||
+		exact.Candidates != 32 || approximate.Candidates != 32 ||
+		exact.RecallAtK != approximate.RecallAtK ||
+		result.Metrics.HNSWRecallLoss != 0 ||
+		exact.P50Nanos == 0 || approximate.P50Nanos == 0 ||
+		exact.AllocsPerOp == 0 || approximate.AllocsPerOp == 0 {
+		t.Fatalf("exact=%+v approximate=%+v metrics=%+v", exact, approximate, result.Metrics)
+	}
+	entries, err := os.ReadDir(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("router artifacts=%d want 2", len(entries))
+	}
+	var markdownPath string
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".md") {
+			markdownPath = filepath.Join(out, entry.Name())
+		}
+	}
+	markdown, err := os.ReadFile(markdownPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(markdown, []byte("M4 local router evidence")) ||
+		!bytes.Contains(markdown, []byte("not production Raft or M8 acceptance evidence")) {
+		t.Fatalf("router Markdown has incorrect evidence boundary:\n%s", markdown)
+	}
+}
+
 func TestPartitionStageEdgeClampPreservesRepetitionCapacity(t *testing.T) {
 	cfg, err := parseConfig([]string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-probes", "1", "-stage", "partition", "-partition-repetitions", "4", "-partition-degree", "16"})
 	if err != nil {

@@ -1,8 +1,10 @@
-# Vector-partitioned ANN over Raft: M1 durable-manifest contract
+# Vector-partitioned ANN over Raft: M1 manifest and M4 router contracts
 
-Status: **M1 durable identity and lifecycle contract** for #3908/#3910.
-M1 persists and validates generation manifests; it does not build, route, or
-search ANN packs.
+Status: **M1 durable identity/lifecycle and M4 representative-router
+contracts** for #3908/#3910/#3913. M1 persists and validates generation
+manifests. M4 builds, persists, reopens, and searches the generation-bound
+representative router. Distributed routing, RPC, Raft reads, shard search, and
+merged top-k remain later milestones.
 
 ## M1 durable lifecycle
 
@@ -31,6 +33,85 @@ in-process reader-pin handles; status and deletion observe those pins.
 cleanup authority inputs: M1 does not infer external backup or catalog
 reachability. M7 owns durable catalog/cutover derivation. Raft archives are
 self-contained copies and do not pin live side-store files after export.
+
+## M4 deterministic representative router
+
+`BuildAndPublishVectorPartitionRouterV1` consumes a byte-identical durable M1
+`building` manifest plus the complete primary vector membership of every
+logical partition. It revalidates the live source identity, index-definition
+digest, dimensions, membership closure, and bounded router configuration before
+building. `ReadVectorPartitionRouterSourceRowsV1` exposes an owned
+ordinal/document-ID/FP32 snapshot for membership construction; publication
+reopens the current typed-column source and bit-verifies every supplied FP32
+component at its authoritative graph ordinal. Missing, duplicate, stale, or
+caller-modified input fails before model construction or append. The input
+order is not significant: partitions and source ordinals are canonicalized
+before deterministic hierarchical cosine k-means.
+
+`RouterConfigV1` persists the seed, branch factor, leaf-size stop,
+representative budget per partition, maximum depth, maximum Lloyd iterations,
+and vector/dimension/representative/scalar-work/persisted-byte caps. A
+conservative full 64-layer native-pack bound is checked before row or adjacency
+allocation, and the actual encoded length is checked again before append.
+Farthest-first initialization and all distance/ordinal ties are stable. Empty clusters are
+repaired deterministically by moving the farthest eligible member, with source
+ordinal as the tie break. Each partition stops when its representative budget
+is reached or no eligible leaf remains. The persisted build metrics distinguish
+leaf-size, depth, and no-split stops and record Lloyd iterations and repairs.
+The validator reconstructs root/member totals, parent/depth paths, leaves,
+per-partition representative caps, canonical node/representative order, and
+metric totals; forged hierarchy or build metadata fails closed.
+
+The router asset is a native TreeDB HNSW search pack, not a sidecar centroid
+file. Every normalized representative vector is accompanied by a strict
+versioned `VKR1` document-ID record containing:
+
+- router generation and canonical model SHA-256;
+- partition, source ordinal, leaf, depth, member count, and full root-to-leaf
+  node/member-count path;
+- the complete router configuration and build metrics; and
+- the native HNSW `M`, construction-ef, and search-ef values.
+
+The pack base identity binds the M1 source generation, checksum, and schema.
+The ready manifest binds its exact byte length, CRC-backed `ColumnAssetRef`,
+SHA-256, logical asset identity, router generation, and ready-set digest.
+Publication is one M1 `building` to `ready` transition. Cancellation or any
+input, append, resource-authority, or publication failure leaves the generation
+non-active and never exposes a partial router. Existing building-manifest
+fields cannot be rewritten during promotion. If M1 already declares
+representative memberships they must exactly match the computed source
+medoids; otherwise the digest-bound READY promotion fills the complete mapping.
+Every ready generation carries the mapping in both its manifest authority and
+the strict router records; open requires exact agreement.
+
+`OpenVectorPartitionRouterV1` runs under the M1 storage barrier. It requires
+the current active ready generation and source/index identity, verifies the
+asset range and SHA-256, opens a mapped or bounded heap-backed native pack,
+checks pack base identity and HNSW metadata, strictly decodes every `VKR1`
+record, reconstructs the canonical model, and recomputes its digest. It maps
+the HNSW locality row order back to canonical representative order before
+serving and acquires an M1 reader pin in the same barrier. `Close` excludes
+concurrent searches, closes the prepared view, and releases that pin.
+
+Exact routing is the correctness oracle and requires
+`candidate_budget >= representative_count`; it scans all persisted
+representatives. Approximate routing passes its explicit candidate budget as a
+hard distinct layer-0 scoring limit to the native prepared HNSW path. Candidate
+budget and partition-probe count are separate controls. Both paths reduce
+multiple representative hits to the minimum cosine distance per partition and
+return unique partitions ordered by `(distance, partition_id)`. A zero/invalid
+budget, non-finite or dimension-mismatched query, malformed asset, stale
+generation, closed handle, or candidate set that cannot supply the requested
+number of unique partitions is an error; no partial partition list is
+returned.
+
+Build, open, search, and cumulative runtime status report generation/digest,
+representative and hierarchy counts, build/append/publication/open/search
+time, router/mapped/heap bytes, candidates, edges, selected partitions,
+failures, and active handles. These counters describe the local persisted M4
+path only. The benchmark additionally reports process CPU and Linux `VmHWM`
+availability explicitly, per-path p50/p95/p99 from router-internal search time,
+and sequential-process `runtime.MemStats` allocation deltas per operation.
 
 ## Identity and placement
 
@@ -75,11 +156,22 @@ consistency, or shard failure is an explicit error with no incomplete result.
 
 ## M0 oracle and evidence boundary
 
-`cmd/treedb_vector_partition_bench` is a sequential **simulation**. It emits
+By default, `cmd/treedb_vector_partition_bench` is a sequential **simulation**. It emits
 `result_kind=simulation_only` and `production_evidence=false`; its Markdown
 artifacts repeat that it is not production Raft evidence. It records exact
 global top-k, partition oracle, representative routing, exact partition-local
 search, real TreeDB partition-local HNSW, and end-to-end simulation separately.
+
+`-stage router` is the distinct M4 local-path mode. It creates a temporary
+TreeDB source index and M1 building manifest, publishes the real persisted M4
+router, reopens it, and executes both the exact persisted representative oracle
+and native prepared-HNSW router. It emits
+`result_kind=router_local_path_evidence`, still with
+`production_evidence=false`. Exact coarsening recall and approximate-HNSW
+recall are separate fields; `hnsw_recall_loss` is their delta. Candidate and
+partition-probe budgets remain separate and every stage records searches,
+candidates, native edges, and search time. This timed boundary excludes RPC,
+coordinator, Raft, shard search, and the M8 matched-recall acceptance gate.
 
 The HNSW stage deterministically derives one collection per logical modulo
 partition in a temporary TreeDB. The harness uses the public lifecycle:
@@ -173,6 +265,8 @@ provenance is rejected.
 | IDs/scores only; no partial top-k | docs contract test | M5/M6 |
 | exact all-partition parity and stable ties | `TestTruthOracleTieOrderingAndAllPartitionParity` | M2--M6 |
 | real local HNSW and fail-closed route evidence | `TestTreeDBHNSWStageUsesExactSearchPackAndMatchesHighEFLocalTruth` | M3/M5 |
+| deterministic persisted representatives and exact/approximate routing | `TestPartitionRouterBuildPublishSearchReopenAndPinsV1` | M4 |
+| independent candidate/probe bounds and no partial routing | `TestPartitionRouterCandidateLimitIsHardV1` | M4/M5 |
 | cap-before-allocation/malformed input | `TestMalformedCapAndFiniteInputsRejectBeforeSimulation` | M1--M8 |
 | simulation is not production Raft evidence | `TestCanonicalRunWritesJSONAndMarkdown` | M8 |
 
@@ -369,4 +463,5 @@ exhaustive top-k benchmark.
 ```sh
 GOWORK=off go test ./cmd/treedb_vector_partition_bench ./cmd/treedb_vector_dataset_export ./TreeDB/docs -count=1
 GOWORK=off go test ./cmd/treedb_vector_partition_bench -run 'Test.*(Fixture|Truth|Oracle|Manifest|Deterministic|Malformed|Cap).*' -count=1
+GOWORK=off go test ./TreeDB/internal/vectorpartition ./TreeDB/collections -run 'Test.*(KMeans|Representative|PartitionRouter|HNSW).*' -count=1
 ```

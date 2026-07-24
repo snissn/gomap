@@ -71,8 +71,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 ### Canonical specs
 
 - `TreeDB/docs/spec/vector-partition-raft-v1.md`
-  - #3908/#3909 M0 contract for derived vector-partition identity, generation
-    invalidation, simulation-only oracle evidence, and clean-room provenance.
+  - #3908 M0/M1/M4 contracts for derived vector-partition identity, durable
+    generation lifecycle, deterministic persisted representative routing,
+    simulation/local-path evidence boundaries, and clean-room provenance.
 
 - `TreeDB/docs/spec/architecture.md`
   - system model, components, directory layout, side stores, lock model.

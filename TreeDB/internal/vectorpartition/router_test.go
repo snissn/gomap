@@ -1,0 +1,251 @@
+package vectorpartition
+
+import (
+	"math"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func TestPartitionRouterDeterministicBytesAndOrder(t *testing.T) {
+	cfg := routerTestConfigV1()
+	partitions := []RouterPartitionV1{
+		{PartitionID: 9, Vectors: []RouterVectorV1{
+			{Ordinal: 13, Values: []float32{0, 1}},
+			{Ordinal: 11, Values: []float32{1, 0}},
+			{Ordinal: 12, Values: []float32{.9, .1}},
+		}},
+		{PartitionID: 2, Vectors: []RouterVectorV1{
+			{Ordinal: 3, Values: []float32{-1, 0}},
+			{Ordinal: 1, Values: []float32{0, -1}},
+			{Ordinal: 2, Values: []float32{-.9, -.1}},
+		}},
+	}
+	first, err := BuildRouterV1(partitions, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	permuted := []RouterPartitionV1{
+		{PartitionID: 2, Vectors: []RouterVectorV1{partitions[1].Vectors[2], partitions[1].Vectors[0], partitions[1].Vectors[1]}},
+		{PartitionID: 9, Vectors: []RouterVectorV1{partitions[0].Vectors[1], partitions[0].Vectors[2], partitions[0].Vectors[0]}},
+	}
+	second, err := BuildRouterV1(permuted, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstBytes, err := CanonicalRouterJSONV1(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondBytes, err := CanonicalRouterJSONV1(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(firstBytes) != string(secondBytes) {
+		t.Fatalf("deterministic bytes differ\nfirst:  %s\nsecond: %s", firstBytes, secondBytes)
+	}
+	if first.Representatives[0].PartitionID != 2 {
+		t.Fatalf("representatives are not partition ordered: %+v", first.Representatives)
+	}
+}
+
+func TestKMeansRepresentativeRouterNonConvexFixture(t *testing.T) {
+	cfg := routerTestConfigV1()
+	cfg.RepresentativesPerPartition = 2
+	partitions := []RouterPartitionV1{
+		{PartitionID: 1, Vectors: []RouterVectorV1{
+			{Ordinal: 1, Values: []float32{1, .02}},
+			{Ordinal: 2, Values: []float32{1, -.02}},
+			{Ordinal: 3, Values: []float32{-1, .02}},
+			{Ordinal: 4, Values: []float32{-1, -.02}},
+		}},
+		{PartitionID: 2, Vectors: []RouterVectorV1{
+			{Ordinal: 5, Values: []float32{.02, 1}},
+			{Ordinal: 6, Values: []float32{-.02, 1}},
+			{Ordinal: 7, Values: []float32{.02, -1}},
+			{Ordinal: 8, Values: []float32{-.02, -1}},
+		}},
+	}
+	model, err := BuildRouterV1(partitions, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	singleConfig := cfg
+	singleConfig.RepresentativesPerPartition = 1
+	single, err := BuildRouterV1(partitions, singleConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	singleResult, err := RouteExactV1(single, []float32{-1, 0}, len(single.Representatives), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if singleResult.Partitions[0].PartitionID == 1 {
+		t.Fatalf("single-centroid fixture did not expose the non-convex routing loss: %+v", singleResult)
+	}
+	for _, test := range []struct {
+		query []float32
+		want  uint32
+	}{
+		{query: []float32{1, 0}, want: 1},
+		{query: []float32{-1, 0}, want: 1},
+		{query: []float32{0, 1}, want: 2},
+		{query: []float32{0, -1}, want: 2},
+	} {
+		result, err := RouteExactV1(model, test.query, len(model.Representatives), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Partitions) != 1 || result.Partitions[0].PartitionID != test.want {
+			t.Fatalf("query=%v got=%+v want partition=%d", test.query, result, test.want)
+		}
+	}
+}
+
+func TestKMeansRepresentativeRouterRepairsEmptyClusters(t *testing.T) {
+	cfg := routerTestConfigV1()
+	cfg.RepresentativesPerPartition = 3
+	model, err := BuildRouterV1([]RouterPartitionV1{{
+		PartitionID: 7,
+		Vectors: []RouterVectorV1{
+			{Ordinal: 1, Values: []float32{1, 0}},
+			{Ordinal: 2, Values: []float32{1, 0}},
+			{Ordinal: 3, Values: []float32{1, 0}},
+			{Ordinal: 4, Values: []float32{1, 0}},
+		},
+	}}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.Metrics.EmptyRepairs == 0 {
+		t.Fatal("expected deterministic empty-cluster repair")
+	}
+	if got := len(model.Representatives); got != 3 {
+		t.Fatalf("representatives=%d want 3", got)
+	}
+}
+
+func TestPartitionRouterRejectsMalformedAndBoundedInputs(t *testing.T) {
+	cfg := routerTestConfigV1()
+	valid := []RouterPartitionV1{{PartitionID: 1, Vectors: []RouterVectorV1{
+		{Ordinal: 1, Values: []float32{1, 0}},
+		{Ordinal: 2, Values: []float32{0, 1}},
+	}}}
+	tests := []struct {
+		name       string
+		partitions []RouterPartitionV1
+		mutate     func(*RouterConfigV1)
+		contains   string
+	}{
+		{name: "empty partition", partitions: []RouterPartitionV1{{PartitionID: 1}}, contains: "empty"},
+		{name: "non finite", partitions: []RouterPartitionV1{{PartitionID: 1, Vectors: []RouterVectorV1{{Ordinal: 1, Values: []float32{float32(math.NaN()), 1}}}}}, contains: "non-finite"},
+		{name: "zero norm", partitions: []RouterPartitionV1{{PartitionID: 1, Vectors: []RouterVectorV1{{Ordinal: 1, Values: []float32{0, 0}}}}}, contains: "norm"},
+		{name: "dimension mismatch", partitions: []RouterPartitionV1{{PartitionID: 1, Vectors: []RouterVectorV1{{Ordinal: 1, Values: []float32{1, 0}}, {Ordinal: 2, Values: []float32{1}}}}}, contains: "dimensions"},
+		{name: "duplicate ordinal", partitions: []RouterPartitionV1{{PartitionID: 1, Vectors: []RouterVectorV1{{Ordinal: 1, Values: []float32{1, 0}}, {Ordinal: 1, Values: []float32{0, 1}}}}}, contains: "duplicate"},
+		{name: "work budget", partitions: valid, mutate: func(c *RouterConfigV1) { c.MaxScalarWork = 1 }, contains: "scalar work"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			testConfig := cfg
+			if test.mutate != nil {
+				test.mutate(&testConfig)
+			}
+			_, err := BuildRouterV1(test.partitions, testConfig)
+			if err == nil || !strings.Contains(err.Error(), test.contains) {
+				t.Fatalf("err=%v want substring %q", err, test.contains)
+			}
+		})
+	}
+}
+
+func TestRepresentativeRouterExactOracleStableTieAndBudgets(t *testing.T) {
+	cfg := routerTestConfigV1()
+	cfg.RepresentativesPerPartition = 1
+	model, err := BuildRouterV1([]RouterPartitionV1{
+		{PartitionID: 8, Vectors: []RouterVectorV1{{Ordinal: 8, Values: []float32{1, 0}}}},
+		{PartitionID: 3, Vectors: []RouterVectorV1{{Ordinal: 3, Values: []float32{1, 0}}}},
+		{PartitionID: 5, Vectors: []RouterVectorV1{{Ordinal: 5, Values: []float32{0, 1}}}},
+	}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := RouteExactV1(model, []float32{1, 0}, len(model.Representatives), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := []uint32{result.Partitions[0].PartitionID, result.Partitions[1].PartitionID}
+	if want := []uint32{3, 8}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("stable tie order=%v want %v", got, want)
+	}
+	if _, err := RouteExactV1(model, []float32{1, 0}, len(model.Representatives)-1, 1); err == nil {
+		t.Fatal("expected undersized exact candidate budget to fail")
+	}
+	if _, err := RouteExactV1(model, []float32{1, 0}, len(model.Representatives), 0); err == nil {
+		t.Fatal("expected zero partition probes to fail")
+	}
+}
+
+func TestPartitionRouterModelValidationRejectsForgedMetadata(t *testing.T) {
+	cfg := routerTestConfigV1()
+	cfg.RepresentativesPerPartition = 2
+	model, err := BuildRouterV1([]RouterPartitionV1{{
+		PartitionID: 4,
+		Vectors: []RouterVectorV1{
+			{Ordinal: 1, Values: []float32{1, 0}},
+			{Ordinal: 2, Values: []float32{.9, .1}},
+			{Ordinal: 3, Values: []float32{0, 1}},
+		},
+	}}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(*RouterModelV1){
+		func(candidate *RouterModelV1) { candidate.Metrics.Vectors++ },
+		func(candidate *RouterModelV1) { candidate.Metrics.StoppedNoSplit++ },
+		func(candidate *RouterModelV1) {
+			candidate.Metrics.LloydIterations += candidate.Config.MaxIterations + 1
+		},
+		func(candidate *RouterModelV1) { candidate.Nodes[0].MemberCount-- },
+		func(candidate *RouterModelV1) { candidate.Nodes[1].ParentNodeID = 0 },
+		func(candidate *RouterModelV1) { candidate.Representatives[0].MemberCount++ },
+		func(candidate *RouterModelV1) {
+			leafID := candidate.Representatives[0].LeafNodeID
+			for i := range candidate.Nodes {
+				if candidate.Nodes[i].NodeID == leafID {
+					candidate.Nodes[i].MemberCount++
+				}
+			}
+			candidate.Representatives[0].MemberCount++
+		},
+		func(candidate *RouterModelV1) {
+			candidate.Representatives[1].SourceOrdinal = candidate.Representatives[0].SourceOrdinal
+		},
+		func(candidate *RouterModelV1) { candidate.Representatives[0].Values[1] *= .5 },
+	} {
+		candidate := model
+		candidate.Nodes = append([]RouterHierarchyNodeV1(nil), model.Nodes...)
+		candidate.Representatives = append([]RouterRepresentativeV1(nil), model.Representatives...)
+		for i := range candidate.Representatives {
+			candidate.Representatives[i].Path = append([]uint32(nil), model.Representatives[i].Path...)
+			candidate.Representatives[i].Values = append([]float32(nil), model.Representatives[i].Values...)
+		}
+		mutate(&candidate)
+		if err := ValidateRouterModelV1(candidate); err == nil {
+			t.Fatalf("accepted forged router model: %+v", candidate)
+		}
+	}
+}
+
+func routerTestConfigV1() RouterConfigV1 {
+	cfg := DefaultRouterConfigV1()
+	cfg.BranchFactor = 3
+	cfg.LeafSize = 1
+	cfg.RepresentativesPerPartition = 3
+	cfg.MaxDepth = 4
+	cfg.MaxIterations = 8
+	cfg.MaxVectors = 100
+	cfg.MaxDimensions = 16
+	cfg.MaxRepresentatives = 100
+	cfg.MaxScalarWork = 1_000_000
+	return cfg
+}

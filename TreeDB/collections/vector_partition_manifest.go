@@ -1880,9 +1880,15 @@ func (s *VectorPartitionStoreV1) vectorPartitionLegacyPublishLockedV1(m VectorPa
 
 func vectorPartitionBuildingPromotionIdentityV1(building, ready VectorPartitionManifestV1) bool {
 	// A generation-bound building record already owns all non-router topology
-	// and asset identity. Promotion may change only the ready-state fields.
+	// and asset identity. Promotion may fill an omitted representative mapping,
+	// but a mapping declared by BUILD is immutable.
+	if len(building.Representatives) != 0 &&
+		!equalVectorPartitionMembershipsV1(building.Representatives, ready.Representatives) {
+		return false
+	}
 	expected := ready
 	expected.State, expected.RouterGeneration, expected.RouterAsset, expected.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+	expected.Representatives = append([]VectorPartitionMembershipV1(nil), building.Representatives...)
 	expected.Canonicalize()
 	want, wantErr := EncodeVectorPartitionManifestV1(expected)
 	got, gotErr := EncodeVectorPartitionManifestV1(building)
