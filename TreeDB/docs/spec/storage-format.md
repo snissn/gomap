@@ -1917,11 +1917,16 @@ vector-index state instead. Do not add new storage features to this
 `TCGA`/`TCGL` compatibility path.
 
 Issue #1986 adds a separate vector-index state control record under
-`\x06vector-index-state/v1/index/<index_name>` with magic `TVIS` and version
-`2` (`1` is still accepted for pre-alpha compatibility). The record stores
-index identity, row count, base manifest identity, expected adjacency layer
-count, and typed-column asset refs by logical type plus physical encoding. Its
-asset roles include adjacency (`uint32_list` over
+`\x06vector-index-state/v1/index/<index_name>` with magic `TVIS`. Version `2`
+stores the logical record directly (`1` is still accepted for pre-alpha
+compatibility). When that representation exceeds the reserved inline manifest
+budget, version `3` stores the decoded v2 byte length followed by a Snappy block
+containing the complete v2 record. Writers cap both the decoded representation
+and the final v3 envelope and reject a state that still cannot fit inline;
+readers validate the declared and Snappy decoded lengths before allocation.
+The logical record stores index identity, row count, base manifest identity,
+expected adjacency layer count, and typed-column asset refs by logical type plus
+physical encoding. Its asset roles include adjacency (`uint32_list` over
 `raw_uint32_offsets_list`), inverse norms (`float32` over `raw_float32`),
 optional normalized vectors (`float32_vector` over `raw_float32_vector`), row
 references (`int64` over `raw_int64`), exact returned document IDs (`bytes`

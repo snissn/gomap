@@ -456,7 +456,12 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 			return fmt.Errorf("%w: current=%d next=%d", ErrCommandWALAppliedLSNNonContig, applied, frame.env.LSN)
 		}
 		if err := applyCommandWALFrame(db, frame.env, ridMap, inlineAppender, ensureReplayRIDMap, ensureReplayLogSupport); err != nil {
-			return err
+			return fmt.Errorf(
+				"treedb: replay command WAL frame lsn=%d kind=%d: %w",
+				frame.env.LSN,
+				frame.env.Kind,
+				err,
+			)
 		}
 		applied = frame.env.LSN
 		if target := db.testCommandWALRecoveryFailAfterLSN.Load(); target != 0 && frame.env.LSN == target {

@@ -1,8 +1,9 @@
 # Vector-Index State Manifest (#1986)
 
-Status: v2 control-record contract for durable vector-index derived state. This
-record is separate from authoritative collection field/part records and from the
-legacy `column_graph` graph-record trailers.
+Status: v2 logical control-record contract with a bounded v3 compression envelope
+for durable vector-index derived state. This record is separate from authoritative
+collection field/part records and from the legacy `column_graph` graph-record
+trailers.
 
 TreeDB is pre-alpha. Old graph records without vector-index state are treated as
 legacy fallback/rebuild-needed inputs rather than migrated in place.
@@ -16,8 +17,16 @@ separate control keyspace:
 \x06vector-index-state/v1/index/<index_name>
 ```
 
-The record value uses magic `TVIS` and current version `2` (`1` remains a
-read-only compatibility format). The keyspace is a
+The record value uses magic `TVIS`. Small current records use version `2`; version
+`1` remains a read-only compatibility format. A v2 representation larger than
+the reserved inline manifest budget is stored as version `3`: `TVIS`, version,
+the decoded v2 byte length, and a Snappy block containing the complete v2
+record. The decoded representation is capped at 1 MiB and the final envelope at
+3,824 bytes, leaving fixed 4 KiB leaf pages room for the key and entry metadata.
+Readers validate both the declared decoded length and Snappy's decoded length
+before allocating, then apply the ordinary v2 validation. A record that remains
+too large after compression is rejected instead of reaching the ordered-root
+publisher as an impossible inline leaf entry. The keyspace is a
 vector-index control layer: it is not a base field owner, not a synthetic user
 column, and not a graph-specific adjacency-source trailer. The active manifest
 checksum includes the state record for durability, while the state record's

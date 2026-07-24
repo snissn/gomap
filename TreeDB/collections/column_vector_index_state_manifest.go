@@ -5,13 +5,23 @@ import (
 	"errors"
 	"fmt"
 	"math"
+
+	"github.com/golang/snappy"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const (
 	columnVectorIndexStateRecordPrefix = "\x06vector-index-state/v1/index/"
 	columnVectorIndexStateMagic        = uint32(0x54564953) // TVIS
 	columnVectorIndexStateVersionV1    = uint16(1)
-	columnVectorIndexStateVersion      = uint16(2)
+	columnVectorIndexStateVersionV2    = uint16(2)
+	columnVectorIndexStateVersion      = uint16(3)
+
+	// Vector-index state is a manifest control record and must remain inline.
+	// Reserve ample leaf-entry/key/revision headroom instead of relying on the
+	// exact layout of one current leaf encoding.
+	columnVectorIndexStateMaxInlineRecordBytes = page.PageSize - page.PageHeaderSize - 256
+	columnVectorIndexStateMaxDecodedBytes      = 1 << 20
 
 	columnVectorIndexStateAssetRoleAdjacency         = "adjacency"
 	columnVectorIndexStateAssetRoleInverseNorm       = "inverse_norm"
@@ -109,9 +119,38 @@ func encodeColumnVectorIndexStateRecord(snapshot columnVectorIndexStateSnapshot)
 	if err := validateColumnVectorIndexStateSnapshot(snapshot); err != nil {
 		return nil, err
 	}
+	raw := encodeColumnVectorIndexStateRecordV2(snapshot)
+	if len(raw) <= columnVectorIndexStateMaxInlineRecordBytes {
+		return raw, nil
+	}
+	if len(raw) > columnVectorIndexStateMaxDecodedBytes {
+		return nil, fmt.Errorf(
+			"collections: vector-index state decoded bytes=%d exceed limit=%d",
+			len(raw),
+			columnVectorIndexStateMaxDecodedBytes,
+		)
+	}
+	compressed := snappy.Encode(nil, raw)
 	var b bytes.Buffer
 	writeManifestUint32(&b, columnVectorIndexStateMagic)
 	writeManifestUint16(&b, columnVectorIndexStateVersion)
+	writeManifestUint64(&b, uint64(len(raw)))
+	_, _ = b.Write(compressed)
+	if b.Len() > columnVectorIndexStateMaxInlineRecordBytes {
+		return nil, fmt.Errorf(
+			"collections: compressed vector-index state bytes=%d exceed inline manifest limit=%d (decoded=%d)",
+			b.Len(),
+			columnVectorIndexStateMaxInlineRecordBytes,
+			len(raw),
+		)
+	}
+	return b.Bytes(), nil
+}
+
+func encodeColumnVectorIndexStateRecordV2(snapshot columnVectorIndexStateSnapshot) []byte {
+	var b bytes.Buffer
+	writeManifestUint32(&b, columnVectorIndexStateMagic)
+	writeManifestUint16(&b, columnVectorIndexStateVersionV2)
 	writeManifestString(&b, snapshot.IndexName)
 	writeManifestString(&b, snapshot.Field)
 	writeManifestString(&b, snapshot.Metric.String())
@@ -143,7 +182,7 @@ func encodeColumnVectorIndexStateRecord(snapshot columnVectorIndexStateSnapshot)
 		writeManifestUint64(&b, uint64(asset.Ref.Checksum))
 		writeManifestUint64(&b, uint64(asset.AssetBytes))
 	}
-	return b.Bytes(), nil
+	return b.Bytes()
 }
 
 func decodeColumnVectorIndexStateRecord(raw []byte) (columnVectorIndexStateSnapshot, error) {
@@ -152,7 +191,46 @@ func decodeColumnVectorIndexStateRecord(raw []byte) (columnVectorIndexStateSnaps
 		return columnVectorIndexStateSnapshot{}, fmt.Errorf("collections: bad vector-index state magic=0x%08x", magic)
 	}
 	version := cur.u16()
-	if version != columnVectorIndexStateVersion && version != columnVectorIndexStateVersionV1 {
+	if version == columnVectorIndexStateVersion {
+		decodedBytes := cur.u64()
+		if err := cur.err; err != nil {
+			return columnVectorIndexStateSnapshot{}, err
+		}
+		if decodedBytes > columnVectorIndexStateMaxDecodedBytes {
+			return columnVectorIndexStateSnapshot{}, fmt.Errorf(
+				"collections: compressed vector-index state decoded bytes=%d exceed limit=%d",
+				decodedBytes,
+				columnVectorIndexStateMaxDecodedBytes,
+			)
+		}
+		compressed := raw[cur.pos:]
+		snappyDecodedBytes, err := snappy.DecodedLen(compressed)
+		if err != nil {
+			return columnVectorIndexStateSnapshot{}, fmt.Errorf("collections: decode compressed vector-index state length: %w", err)
+		}
+		if uint64(snappyDecodedBytes) != decodedBytes {
+			return columnVectorIndexStateSnapshot{}, fmt.Errorf(
+				"collections: compressed vector-index state decoded length=%d want %d",
+				snappyDecodedBytes,
+				decodedBytes,
+			)
+		}
+		decoded, err := snappy.Decode(make([]byte, 0, snappyDecodedBytes), compressed)
+		if err != nil {
+			return columnVectorIndexStateSnapshot{}, fmt.Errorf("collections: decode compressed vector-index state: %w", err)
+		}
+		return decodeColumnVectorIndexStateRecordUncompressed(decoded)
+	}
+	return decodeColumnVectorIndexStateRecordUncompressed(raw)
+}
+
+func decodeColumnVectorIndexStateRecordUncompressed(raw []byte) (columnVectorIndexStateSnapshot, error) {
+	cur := manifestCursor{raw: raw}
+	if magic := cur.u32(); magic != columnVectorIndexStateMagic {
+		return columnVectorIndexStateSnapshot{}, fmt.Errorf("collections: bad vector-index state magic=0x%08x", magic)
+	}
+	version := cur.u16()
+	if version != columnVectorIndexStateVersionV2 && version != columnVectorIndexStateVersionV1 {
 		return columnVectorIndexStateSnapshot{}, fmt.Errorf("collections: unsupported vector-index state version=%d", version)
 	}
 	snapshot := columnVectorIndexStateSnapshot{

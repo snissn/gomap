@@ -2,12 +2,15 @@ package collections
 
 import (
 	"bytes"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestColumnVectorIndexStateManifestRecordRoundTrip1986(t *testing.T) {
@@ -49,6 +52,58 @@ func TestColumnVectorIndexStateManifestRecordRoundTrip1986(t *testing.T) {
 	duplicate.Assets = append(append([]columnVectorIndexStateAssetSnapshot(nil), state.Assets...), state.Assets[0])
 	if _, err := encodeColumnVectorIndexStateRecord(duplicate); err == nil || !strings.Contains(err.Error(), "duplicate asset") {
 		t.Fatalf("encode duplicate err=%v want duplicate asset failure", err)
+	}
+}
+
+func TestColumnVectorIndexStateManifestOversizedControlRecordUsesBoundedCompression3914(t *testing.T) {
+	ctx := makeColumnVectorIndexStateStatusContext1986(t)
+	def := ctx.def
+	state := testColumnVectorIndexStateSnapshot1986(*ctx.cfg, def, 11, 1_000_000)
+	layer0 := state.Assets[0]
+	const layers = 32
+	for layer := 1; layer < layers; layer++ {
+		asset := layer0
+		asset.AssetID = fmt.Sprintf("hnsw/layer/%d", layer)
+		asset.Ref.PartID = uint64(100 + layer)
+		asset.Ref.FileID = uint32(1_000 + layer)
+		asset.Ref.Offset = int64(layer) * 4_096
+		asset.Ref.Checksum = uint32(10_000 + layer)
+		state.Assets = append(state.Assets, asset)
+	}
+	state.AdjacencyLayerCount = layers
+
+	rawV2 := encodeColumnVectorIndexStateRecordV2(state)
+	if len(rawV2) <= columnVectorIndexStateMaxInlineRecordBytes {
+		t.Fatalf("v2 bytes=%d want > inline limit=%d", len(rawV2), columnVectorIndexStateMaxInlineRecordBytes)
+	}
+	encoded, err := encodeColumnVectorIndexStateRecord(state)
+	if err != nil {
+		t.Fatalf("encodeColumnVectorIndexStateRecord: %v", err)
+	}
+	if len(encoded) > columnVectorIndexStateMaxInlineRecordBytes {
+		t.Fatalf("encoded bytes=%d exceed inline limit=%d", len(encoded), columnVectorIndexStateMaxInlineRecordBytes)
+	}
+	cur := manifestCursor{raw: encoded}
+	if magic, version := cur.u32(), cur.u16(); magic != columnVectorIndexStateMagic || version != columnVectorIndexStateVersion {
+		t.Fatalf("compressed envelope magic/version=(0x%08x,%d) want (0x%08x,%d)", magic, version, columnVectorIndexStateMagic, columnVectorIndexStateVersion)
+	}
+	decoded, err := decodeColumnVectorIndexStateRecord(encoded)
+	if err != nil {
+		t.Fatalf("decodeColumnVectorIndexStateRecord: %v", err)
+	}
+	if !reflect.DeepEqual(decoded, state) {
+		t.Fatalf("decoded oversized state differs from input")
+	}
+
+	builder := node.NewBuilder(make([]byte, page.PageSize), page.PageTypeLeaf)
+	if err := builder.AddLeafEntry(columnVectorIndexStateRecordKey(def.Name), encoded, 0, page.ValuePtr{}); err != nil {
+		t.Fatalf("compressed state does not fit an empty manifest leaf: %v", err)
+	}
+
+	corrupt := append([]byte(nil), encoded...)
+	corrupt = append(corrupt, 0)
+	if _, err := decodeColumnVectorIndexStateRecord(corrupt); err == nil {
+		t.Fatal("decode compressed state with trailing corruption err=nil")
 	}
 }
 
