@@ -83,7 +83,7 @@ type vectorPartitionLifecycleGenerationStateV1 struct {
 type vectorPartitionLifecycleStateV1 struct {
 	Collection, IndexName string
 	Generations           map[uint64]vectorPartitionLifecycleGenerationStateV1
-	CompletedGenerations  map[uint64]bool
+	GenerationHighWater   uint64
 	ActiveGeneration      uint64
 	RetiredGeneration     uint64
 	LastSequence          uint64
@@ -369,7 +369,6 @@ func reduceVectorPartitionLifecycleChainV1(records []vectorPartitionLifecycleRec
 		return state, fmt.Errorf("%w: lifecycle chain length", ErrVectorPartitionManifestInvalid)
 	}
 	state.Generations = make(map[uint64]vectorPartitionLifecycleGenerationStateV1, len(records))
-	state.CompletedGenerations = make(map[uint64]bool)
 	for i, r := range records {
 		unsigned, err := encodeVectorPartitionLifecycleRecordV1(r, false)
 		if err != nil {
@@ -408,7 +407,7 @@ func reduceVectorPartitionLifecycleRecordV1(state *vectorPartitionLifecycleState
 	}
 	switch r.Operation {
 	case vectorPartitionLifecycleBuildV1:
-		if _, present := state.Generations[r.Generation]; present || state.CompletedGenerations[r.Generation] {
+		if _, present := state.Generations[r.Generation]; present || r.Generation <= state.GenerationHighWater || len(state.Generations) >= 2 {
 			return fmt.Errorf("%w: build transition", ErrVectorPartitionManifestInvalid)
 		}
 		m, err := manifest()
@@ -416,6 +415,7 @@ func reduceVectorPartitionLifecycleRecordV1(state *vectorPartitionLifecycleState
 			return err
 		}
 		state.Generations[r.Generation] = vectorPartitionLifecycleGenerationStateV1{Manifest: &m}
+		state.GenerationHighWater = r.Generation
 	case vectorPartitionLifecycleReadyV1:
 		generation, present := state.Generations[r.Generation]
 		if !present || generation.Manifest == nil || generation.Manifest.State != "building" || generation.Deleting {
@@ -477,7 +477,6 @@ func reduceVectorPartitionLifecycleRecordV1(state *vectorPartitionLifecycleState
 		// Integration may append DELETE_COMPLETE only after physical reclaim debt
 		// is discharged. This pure reducer records logical completion only.
 		delete(state.Generations, r.Generation)
-		state.CompletedGenerations[r.Generation] = true
 		if state.RetiredGeneration == r.Generation {
 			state.RetiredGeneration = 0
 		}

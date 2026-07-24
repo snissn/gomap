@@ -232,7 +232,7 @@ func TestReduceVectorPartitionLifecycleChainV1LegalTransitionsAndCrashPrefixes(t
 			if n == 5 && (!state.Generations[chain[0].Generation].Deleting || state.Generations[chain[0].Generation].Reclaim == nil) {
 				t.Fatalf("delete state=%+v", state)
 			}
-			if n == 7 && (state.Generations[chain[0].Generation].Manifest != nil || !state.CompletedGenerations[chain[0].Generation]) {
+			if n == 7 && (state.Generations[chain[0].Generation].Manifest != nil || state.GenerationHighWater != chain[0].Generation) {
 				t.Fatalf("complete state=%+v", state)
 			}
 		})
@@ -283,7 +283,7 @@ func TestReduceVectorPartitionLifecycleChainV1MultiGenerationAuthority(t *testin
 		if n == 6 && (state.ActiveGeneration != ready2.Generation || state.RetiredGeneration != ready.Generation) {
 			t.Fatalf("replacement state=%+v", state)
 		}
-		if n == 9 && (!state.CompletedGenerations[ready.Generation] || state.ActiveGeneration != ready2.Generation || state.Generations[ready2.Generation].Manifest == nil) {
+		if n == 9 && (state.GenerationHighWater != ready2.Generation || state.ActiveGeneration != ready2.Generation || state.Generations[ready2.Generation].Manifest == nil) {
 			t.Fatalf("g1 delete disturbed g2: %+v", state)
 		}
 		if n == 10 && (state.ActiveGeneration != 0 || state.RetiredGeneration != ready2.Generation) {
@@ -295,6 +295,98 @@ func TestReduceVectorPartitionLifecycleChainV1MultiGenerationAuthority(t *testin
 	appendRecord(&bad, vectorPartitionLifecycleBuildV1, build.Generation, buildRaw)
 	if _, err := reduceVectorPartitionLifecycleChainV1(bad); err == nil {
 		t.Fatal("completed generation revived")
+	}
+}
+
+func TestReduceVectorPartitionLifecycleChainV1HighWaterAndLiveGenerationCap(t *testing.T) {
+	buildRaw, build := lifecycleManifestPayloadV1(t, "building")
+	buildAt := func(generation uint64) ([]byte, VectorPartitionManifestV1) {
+		m := build
+		m.Generation = generation
+		m.Canonicalize()
+		raw, err := EncodeVectorPartitionManifestV1(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw, m
+	}
+	build2Raw, build2 := buildAt(build.Generation + 1)
+	build3Raw, build3 := buildAt(build.Generation + 2)
+
+	first := lifecycleRecordV1(t, 1, [32]byte{}, vectorPartitionLifecycleBuildV1, build.Generation, buildRaw)
+	second := lifecycleRecordV1(t, 2, first.Digest, vectorPartitionLifecycleBuildV1, build2.Generation, build2Raw)
+	state, err := reduceVectorPartitionLifecycleChainV1([]vectorPartitionLifecycleRecordV1{first, second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.GenerationHighWater != build2.Generation || len(state.Generations) != 2 {
+		t.Fatalf("two-live state=%+v", state)
+	}
+	beforeHighWater := state.GenerationHighWater
+	third := lifecycleRecordV1(t, 3, second.Digest, vectorPartitionLifecycleBuildV1, build3.Generation, build3Raw)
+	if err := reduceVectorPartitionLifecycleRecordV1(&state, third); err == nil {
+		t.Fatal("accepted a third live generation")
+	}
+	if state.GenerationHighWater != beforeHighWater || len(state.Generations) != 2 {
+		t.Fatalf("rejected third generation mutated state=%+v", state)
+	}
+
+	completed := state.Generations[build.Generation]
+	completed.Deleting = true
+	state.Generations[build.Generation] = completed
+	completeFirst := third
+	completeFirst.Operation = vectorPartitionLifecycleDeleteCompleteV1
+	completeFirst.Generation = build.Generation
+	completeFirst.Payload = nil
+	if err := reduceVectorPartitionLifecycleRecordV1(&state, completeFirst); err != nil {
+		t.Fatal(err)
+	}
+	if err := reduceVectorPartitionLifecycleRecordV1(&state, third); err != nil {
+		t.Fatal(err)
+	}
+	if state.GenerationHighWater != build3.Generation || len(state.Generations) != 2 {
+		t.Fatalf("higher generation after completion state=%+v", state)
+	}
+
+	completed = state.Generations[build2.Generation]
+	completed.Deleting = true
+	state.Generations[build2.Generation] = completed
+	completeSecond := third
+	completeSecond.Operation = vectorPartitionLifecycleDeleteCompleteV1
+	completeSecond.Generation = build2.Generation
+	completeSecond.Payload = nil
+	if err := reduceVectorPartitionLifecycleRecordV1(&state, completeSecond); err != nil {
+		t.Fatal(err)
+	}
+	oldRaw, old := buildAt(build2.Generation)
+	oldRecord := third
+	oldRecord.Generation, oldRecord.Payload = old.Generation, oldRaw
+	if err := reduceVectorPartitionLifecycleRecordV1(&state, oldRecord); err == nil {
+		t.Fatal("generation at high-water was revived")
+	}
+	if state.GenerationHighWater != build3.Generation || len(state.Generations) != 1 {
+		t.Fatalf("rejected old generation mutated state=%+v", state)
+	}
+}
+
+func TestReduceVectorPartitionLifecycleRecordV1InvalidBuildLeavesHighWaterUnchanged(t *testing.T) {
+	state := vectorPartitionLifecycleStateV1{
+		Collection:  "docs",
+		IndexName:   "embedding",
+		Generations: make(map[uint64]vectorPartitionLifecycleGenerationStateV1),
+	}
+	r := vectorPartitionLifecycleRecordV1{
+		Collection: "docs",
+		IndexName:  "embedding",
+		Operation:  vectorPartitionLifecycleBuildV1,
+		Generation: 100,
+		Payload:    []byte("not-a-manifest"),
+	}
+	if err := reduceVectorPartitionLifecycleRecordV1(&state, r); err == nil {
+		t.Fatal("accepted invalid BUILD manifest")
+	}
+	if state.GenerationHighWater != 0 || len(state.Generations) != 0 {
+		t.Fatalf("invalid BUILD mutated state=%+v", state)
 	}
 }
 
