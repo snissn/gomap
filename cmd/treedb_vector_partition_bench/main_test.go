@@ -175,7 +175,7 @@ func TestM3OverlapPartitionIndexBuildsReopensAndSearchesNativePacks(t *testing.T
 		t.Fatalf("report=%+v", report)
 	}
 	for _, row := range report.Rows {
-		if row.PackBytes == 0 || row.PackBytes != uint64(row.FinalBytes) || row.LocalSearches != 8*4 || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 || row.ExactLocalRecallAtK <= 0 {
+		if row.PackBytes == 0 || row.PackBytes != uint64(row.FinalBytes) || row.LocalSearches != 8*4 || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 || row.ExactLocalRecallAtK <= 0 || row.EdgesPerOp <= 0 {
 			t.Fatalf("M3 row=%+v", row)
 		}
 	}

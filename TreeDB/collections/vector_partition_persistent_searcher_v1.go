@@ -116,12 +116,14 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(index string,
 			ordinal int
 			kind    VectorPartitionMembershipKindV1
 			row     columnVectorGraphPhysicalRow
+			ref     DocumentRowRef
 			level   int
 		}
 		sourceRows := make([]selectedRow, len(selected))
 		scratch := &columnPhysicalRowReaderScratch{}
 		for j, x := range selected {
 			r, fetchErr := reader.FetchRow(x.ordinal, scratch)
+			legacyAdjacencyAvailable := fetchErr == nil
 			if fetchErr != nil {
 				r = columnVectorGraphPhysicalRow{}
 			}
@@ -134,11 +136,29 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(index string,
 			if len(r.ID) == 0 || len(r.Vector) != def.Dimensions {
 				return nil, nil, fmt.Errorf("%w: authoritative typed row", ErrVectorPartitionSearchUnavailable)
 			}
+			adjacency, adjacencyErr := vectorPartitionSourceAdjacencyV1(reader, x.ordinal, r.Adjacency, legacyAdjacencyAvailable)
+			if adjacencyErr != nil {
+				return nil, nil, fmt.Errorf("%w: source adjacency: %v", ErrVectorPartitionSearchUnavailable, adjacencyErr)
+			}
+			r.Adjacency = adjacency
 			level, levelErr := columnVectorGraphAdjacencyMaxLayer(r.Adjacency)
 			if levelErr != nil {
 				return nil, nil, fmt.Errorf("%w: source adjacency: %v", ErrVectorPartitionSearchUnavailable, levelErr)
 			}
-			sourceRows[j] = selectedRow{ordinal: x.ordinal, kind: x.kind, row: r, level: level}
+			ref, refOK := reader.rowRefForOrdinal(x.ordinal)
+			if !refOK {
+				if fetchErr != nil || r.RowIndex < 0 {
+					return nil, nil, fmt.Errorf("%w: authoritative source row ref", ErrVectorPartitionSearchUnavailable)
+				}
+				ref = DocumentRowRef{Generation: manifest.SourceGeneration, PartID: 1, RowIndex: r.RowIndex, AppliedCommandLSN: 1}
+			}
+			ref.DocumentID = append([]byte(nil), r.ID...)
+			if invNorm, _, _, ok := reader.invNormForOrdinal(x.ordinal); ok {
+				r.InvNorm = invNorm
+			}
+			r.ID = append([]byte(nil), r.ID...)
+			r.Vector = append([]float32(nil), r.Vector...)
+			sourceRows[j] = selectedRow{ordinal: x.ordinal, kind: x.kind, row: r, ref: ref, level: level}
 		}
 		// HNSW packs require their entry node at local ordinal zero. Preserve the
 		// source graph's highest-level node in that position, then use stable
@@ -162,7 +182,7 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(index string,
 			if adjErr != nil {
 				return nil, nil, fmt.Errorf("%w: source adjacency: %v", ErrVectorPartitionSearchUnavailable, adjErr)
 			}
-			rows[j] = columnVectorGraphAssetRow{ID: append([]byte(nil), source.row.ID...), Vector: append([]float32(nil), source.row.Vector...), InvNorm: source.row.InvNorm, Adjacency: adj, BaseRowRef: DocumentRowRef{DocumentID: append([]byte(nil), source.row.ID...), Generation: manifest.SourceGeneration, PartID: 1, RowIndex: source.row.RowIndex, AppliedCommandLSN: 1}}
+			rows[j] = columnVectorGraphAssetRow{ID: append([]byte(nil), source.row.ID...), Vector: append([]float32(nil), source.row.Vector...), InvNorm: source.row.InvNorm, Adjacency: adj, BaseRowRef: source.ref}
 		}
 		graph := columnVectorGraphManifestSnapshot{IndexName: def.Name, Field: def.Field, Metric: def.Metric, Encoding: def.Encoding, Dimensions: def.Dimensions, M: def.M, EfConstruction: def.EfConstruction, EfSearch: def.EfSearch, BaseManifestGeneration: manifest.SourceGeneration, BaseManifestChecksum: manifest.SourceChecksum, BaseSchemaHash: manifest.SourceSchemaHash, GraphSchemaHash: cfg.SchemaHash, RowCount: len(rows)}
 		pack, err := buildColumnHNSWSearchPackInput(def, graph, rows)
@@ -497,4 +517,47 @@ func remapVectorPartitionAdjacencyV1(source []uint32, ordToLocal map[int]int, se
 		out = append(out, remapped...)
 	}
 	return out, nil
+}
+
+func vectorPartitionSourceAdjacencyV1(reader *columnVectorGraphPhysicalRowReader, ordinal int, legacy []uint32, legacyAvailable bool) ([]uint32, error) {
+	encodeLayers := func(maxLayer int, layer func(int) ([]uint32, error)) ([]uint32, error) {
+		if maxLayer < 0 {
+			return nil, errors.New("negative source adjacency layer")
+		}
+		out := []uint32{columnVectorGraphLayeredAdjacencyMagic, uint32(maxLayer)}
+		for current := 0; current <= maxLayer; current++ {
+			neighbors, err := layer(current)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, uint32(len(neighbors)))
+			out = append(out, neighbors...)
+		}
+		return out, nil
+	}
+	if reader != nil && reader.preparedSearch != nil {
+		maxLayer, _, err := reader.preparedSearch.maxAdjacencyLayerForOrdinal(ordinal)
+		if err != nil {
+			return nil, err
+		}
+		return encodeLayers(maxLayer, func(layer int) ([]uint32, error) {
+			neighbors, _, err := reader.preparedSearch.adjacencyLayerForOrdinal(ordinal, layer)
+			return neighbors, err
+		})
+	}
+	if reader != nil {
+		if maxLayer, _, _, _, ok := reader.maxDirectAdjacencyLayerForOrdinal(ordinal); ok {
+			return encodeLayers(maxLayer, func(layer int) ([]uint32, error) {
+				neighbors, _, reason, ok := reader.directAdjacencyLayerForOrdinal(ordinal, layer)
+				if !ok {
+					return nil, fmt.Errorf("direct source adjacency layer %d unavailable reason=%s", layer, reason)
+				}
+				return neighbors, nil
+			})
+		}
+	}
+	if legacyAvailable {
+		return append([]uint32(nil), legacy...), nil
+	}
+	return nil, errors.New("authoritative source adjacency unavailable")
 }
