@@ -212,6 +212,49 @@ live network routing or leadership proof.
 
 ## Deferred Scope
 
+## Replicated catalog/meta authority (M4A)
+
+`raftplacement.CatalogMetaAuthorityV1` is the generic M4A state-machine seam
+for the catalog. It replaces the unsafe idea that a process-local/static
+`ResolvedCatalogV1` can activate ownership. A deployment must designate one
+Raft meta group and deliver only that group's committed
+`CatalogMetaCommandV1` bytes to `ApplyCommittedCatalogMetaV1` on every
+replica. Constructing an authority does not install a catalog.
+
+Each generation contains a monotonic `Epoch`, the complete catalog, and a
+SHA-256 digest of its canonical JSON representation. Canonicalization sorts
+features, groups, group members, collection placements, and token partitions;
+therefore equivalent input has one byte representation and digest. The command
+envelope carries `ExpectedEpoch`: exact committed bytes are idempotent, stale
+writers, skipped epochs, and different bytes for a committed epoch fail closed.
+The bounded v1 payload limits command bytes, groups, members, features,
+placements, and token partitions before it is published.
+
+Routed submit/read/lifecycle callers must present `CatalogProofV1{Epoch,
+Digest}`. `CatalogMetaAuthorityV1.Route` rejects an unavailable authority,
+missing proof, stale/future epoch, or digest mismatch before resolving a group.
+`nativewire.CatalogMetaClusterRouteProvider` is the corresponding preflight
+adapter: its proof provider is expected to read the locally applied replicated
+meta view, and it refuses a request before it reaches a group submitter. This
+does not add a meta-group round trip on a request; the provider reads the local
+authority under an RLock. Static `CatalogClusterRouteProvider` remains a test
+and bootstrap-only adapter and is not replicated authority.
+
+`ExportCatalogMetaSnapshotV1` serializes one canonical record plus its applied
+index. `InstallCatalogMetaSnapshotV1` validates the complete record before
+publication and rejects rollback or same-epoch conflicts, so a restore/rejoin
+cannot serve a mixed generation. The application integrating this seam must
+place that payload in its Raft snapshot and backup archive atomically with the
+meta group's apply progress; this issue deliberately does not add a second
+production Raft topology, rebalance workflow, or vector lifecycle state
+machine.
+
+Bootstrapping is conservative: until a committed epoch-1 record has applied,
+route admission is unavailable. Meta-leader unavailability or an inability to
+obtain a proof is likewise a refusal, not permission to fall back to a local
+catalog file. Nodes whose feature floors are unsupported are rejected by the
+existing catalog validation before a record is installed.
+
 ## Vector partition placement (M1)
 
 `VectorPartitionPlacementRecordV1` validates a complete generation-bound

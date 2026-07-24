@@ -15,6 +15,59 @@ type CatalogClusterRouteProvider struct {
 	catalog raftplacement.ResolvedCatalogV1
 }
 
+// CatalogMetaProofProvider supplies a proof captured from a replicated catalog
+// authority. Returning an error (including an unavailable meta leader/view)
+// fails route preflight before the request reaches a local group submitter.
+type CatalogMetaProofProvider func(context.Context) (raftplacement.CatalogProofV1, error)
+
+// CatalogMetaClusterRouteProvider is the dynamic counterpart to
+// CatalogClusterRouteProvider. Unlike the static adapter it never activates a
+// constructor-local catalog: every route is admitted by the applied replicated
+// CatalogMetaAuthorityV1 against an exact epoch and digest proof.
+type CatalogMetaClusterRouteProvider struct {
+	authority *raftplacement.CatalogMetaAuthorityV1
+	proof     CatalogMetaProofProvider
+}
+
+func NewCatalogMetaClusterRouteProvider(authority *raftplacement.CatalogMetaAuthorityV1, proof CatalogMetaProofProvider) (CatalogMetaClusterRouteProvider, error) {
+	if authority == nil || proof == nil {
+		return CatalogMetaClusterRouteProvider{}, errors.New("nativewire: replicated catalog meta authority and proof provider are required")
+	}
+	return CatalogMetaClusterRouteProvider{authority: authority, proof: proof}, nil
+}
+
+func (p CatalogMetaClusterRouteProvider) ClusterRoute(ctx context.Context, request ClusterRouteRequest) (ClusterRouteTarget, error) {
+	if p.authority == nil || p.proof == nil {
+		return ClusterRouteTarget{}, raftplacement.ErrCatalogMetaUnavailable
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	proof, err := p.proof(ctx)
+	if err != nil {
+		return ClusterRouteTarget{}, errors.Join(raftplacement.ErrCatalogMetaUnavailable, err)
+	}
+	switch normalizeClusterRouteShape(request.Shape) {
+	case ClusterRouteShapeCollection:
+		decision, err := p.authority.Route(ctx, proof, raftplacement.RouteRequestV1{Collection: raftplacement.CollectionRefV1{Database: request.Database, Catalog: request.Catalog, Collection: request.Collection}, Shape: raftplacement.RouteShapeCollectionV1})
+		if err != nil {
+			return ClusterRouteTarget{}, err
+		}
+		return clusterRouteTargetFromCatalogDecision(decision), nil
+	case ClusterRouteShapeToken:
+		if !request.TokenKnown {
+			return ClusterRouteTarget{}, errors.Join(raftplacement.ErrInvalidRouteRequest, raftplacement.ErrMissingRouteToken)
+		}
+		decision, err := p.authority.Route(ctx, proof, raftplacement.RouteRequestV1{Collection: raftplacement.CollectionRefV1{Database: request.Database, Catalog: request.Catalog, Collection: request.Collection}, Shape: raftplacement.RouteShapeTokenV1, Token: &request.Token})
+		if err != nil {
+			return ClusterRouteTarget{}, err
+		}
+		return clusterRouteTargetFromCatalogDecision(decision), nil
+	default:
+		return ClusterRouteTarget{}, errors.Join(raftplacement.ErrInvalidRouteRequest, raftplacement.ErrUnsupportedRouteShape)
+	}
+}
+
 // NewCatalogClusterRouteProvider returns a route provider backed by a validated
 // raftplacement catalog.
 func NewCatalogClusterRouteProvider(catalog raftplacement.ResolvedCatalogV1) CatalogClusterRouteProvider {

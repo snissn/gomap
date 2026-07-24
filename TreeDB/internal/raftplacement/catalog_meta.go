@@ -1,0 +1,416 @@
+package raftplacement
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"sort"
+	"sync"
+
+	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
+)
+
+// The meta payload is deliberately small: it is replicated as one Raft entry,
+// retained in snapshots, and read on every routed request. Limits are checked
+// at the wire boundary before JSON decoding and again after decode.
+const (
+	CatalogMetaFormatV1             uint16 = 1
+	MaxCatalogMetaCommandBytesV1           = 1 << 20
+	MaxCatalogMetaGroupsV1                 = 128
+	MaxCatalogMetaMembersPerGroupV1        = 64
+	MaxCatalogMetaPlacementsV1             = 4096
+	MaxCatalogMetaPartitionsV1             = 16384
+	MaxCatalogMetaFeaturesV1               = 64
+)
+
+var (
+	ErrInvalidCatalogMeta        = errors.New("raftplacement: invalid catalog meta")
+	ErrCatalogMetaLimit          = errors.New("raftplacement: catalog meta limit")
+	ErrCatalogMetaUnavailable    = errors.New("raftplacement: catalog meta unavailable")
+	ErrCatalogMetaStaleEpoch     = errors.New("raftplacement: stale catalog meta epoch")
+	ErrCatalogMetaSkippedEpoch   = errors.New("raftplacement: skipped catalog meta epoch")
+	ErrCatalogMetaConflict       = errors.New("raftplacement: conflicting catalog meta epoch")
+	ErrCatalogMetaDigestMismatch = errors.New("raftplacement: catalog meta digest mismatch")
+	ErrCatalogMetaProofMissing   = errors.New("raftplacement: catalog meta proof missing")
+)
+
+// CatalogMetaRecordV1 is the complete, immutable generation installed by the
+// declared meta Raft group. Digest is the SHA-256 of the canonical record
+// payload without Digest.
+type CatalogMetaRecordV1 struct {
+	Format  uint16    `json:"format"`
+	Epoch   uint64    `json:"epoch"`
+	Catalog CatalogV1 `json:"catalog"`
+	Digest  string    `json:"digest"`
+}
+
+// CatalogMetaCommandV1 is the only mutation envelope accepted by the local
+// meta-state apply seam. ExpectedEpoch makes stale writers fail before a newer
+// generation can be made visible.
+type CatalogMetaCommandV1 struct {
+	Format        uint16              `json:"format"`
+	ExpectedEpoch uint64              `json:"expected_epoch"`
+	Record        CatalogMetaRecordV1 `json:"record"`
+}
+
+// CatalogProofV1 binds a routed read, write, or lifecycle request to an exact
+// catalog generation. Callers must obtain it from the status/read path; zero
+// values fail closed.
+type CatalogProofV1 struct {
+	Epoch  uint64
+	Digest string
+}
+
+type CatalogMetaStatusV1 struct {
+	Epoch        uint64
+	Digest       string
+	AppliedIndex uint64
+	Features     raftcluster.FeatureSet
+	Refusal      string
+}
+
+// CatalogMetaSnapshotV1 is an all-or-nothing snapshot payload. It contains a
+// canonical record rather than a local cache serialization, so rejoin and
+// backup/restore share the same validation path as Raft replay.
+type CatalogMetaSnapshotV1 struct {
+	Format       uint16 `json:"format"`
+	AppliedIndex uint64 `json:"applied_index"`
+	Record       []byte `json:"record"`
+}
+
+// CatalogMetaAuthorityV1 is the local applied view of one replicated meta
+// group. It never activates a catalog from a file or constructor argument:
+// only ApplyCommittedCatalogMetaV1 or InstallCatalogMetaSnapshotV1 may publish
+// a generation. Reads take an RLock and do not contact the meta leader.
+type CatalogMetaAuthorityV1 struct {
+	mu          sync.RWMutex
+	record      CatalogMetaRecordV1
+	resolved    ResolvedCatalogV1
+	recordBytes []byte
+	command     []byte
+	applied     uint64
+	refusal     string
+}
+
+func NewCatalogMetaAuthorityV1() *CatalogMetaAuthorityV1 { return &CatalogMetaAuthorityV1{} }
+
+func NewCatalogMetaRecordV1(epoch uint64, catalog CatalogV1) (CatalogMetaRecordV1, error) {
+	if epoch == 0 {
+		return CatalogMetaRecordV1{}, errors.Join(ErrInvalidCatalogMeta, fmt.Errorf("epoch is required"))
+	}
+	canonical, resolved, err := canonicalCatalogMetaCatalogV1(catalog)
+	if err != nil {
+		return CatalogMetaRecordV1{}, err
+	}
+	_ = resolved
+	record := CatalogMetaRecordV1{Format: CatalogMetaFormatV1, Epoch: epoch, Catalog: canonical}
+	digest, err := catalogMetaDigestV1(record)
+	if err != nil {
+		return CatalogMetaRecordV1{}, err
+	}
+	record.Digest = digest
+	return record, nil
+}
+
+func EncodeCatalogMetaCommandV1(command CatalogMetaCommandV1) ([]byte, error) {
+	command.Format = CatalogMetaFormatV1
+	record, err := validateCatalogMetaRecordV1(command.Record)
+	if err != nil {
+		return nil, err
+	}
+	command.Record = record
+	b, err := json.Marshal(command)
+	if err != nil {
+		return nil, errors.Join(ErrInvalidCatalogMeta, err)
+	}
+	if len(b) > MaxCatalogMetaCommandBytesV1 {
+		return nil, errors.Join(ErrCatalogMetaLimit, fmt.Errorf("command is %d bytes", len(b)))
+	}
+	return b, nil
+}
+
+func DecodeCatalogMetaCommandV1(raw []byte) (CatalogMetaCommandV1, error) {
+	if len(raw) == 0 || len(raw) > MaxCatalogMetaCommandBytesV1 {
+		return CatalogMetaCommandV1{}, errors.Join(ErrCatalogMetaLimit, fmt.Errorf("command is %d bytes", len(raw)))
+	}
+	var command CatalogMetaCommandV1
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&command); err != nil {
+		return CatalogMetaCommandV1{}, errors.Join(ErrInvalidCatalogMeta, err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return CatalogMetaCommandV1{}, errors.Join(ErrInvalidCatalogMeta, fmt.Errorf("trailing command data"))
+	}
+	if command.Format != CatalogMetaFormatV1 {
+		return CatalogMetaCommandV1{}, errors.Join(ErrInvalidCatalogMeta, ErrUnsupportedVersion, fmt.Errorf("format %d", command.Format))
+	}
+	record, err := validateCatalogMetaRecordV1(command.Record)
+	if err != nil {
+		return CatalogMetaCommandV1{}, err
+	}
+	command.Record = record
+	canonical, err := EncodeCatalogMetaCommandV1(command)
+	if err != nil {
+		return CatalogMetaCommandV1{}, err
+	}
+	if !bytes.Equal(raw, canonical) {
+		return CatalogMetaCommandV1{}, errors.Join(ErrInvalidCatalogMeta, fmt.Errorf("command is not canonical"))
+	}
+	return command, nil
+}
+
+func (a *CatalogMetaAuthorityV1) ApplyCommittedCatalogMetaV1(raw []byte, appliedIndex uint64) (CatalogMetaStatusV1, error) {
+	if a == nil {
+		return CatalogMetaStatusV1{}, ErrCatalogMetaUnavailable
+	}
+	command, err := DecodeCatalogMetaCommandV1(raw)
+	if err != nil {
+		return CatalogMetaStatusV1{}, err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.record.Epoch != 0 && bytes.Equal(a.command, raw) {
+		return a.statusLocked(), nil
+	}
+	if a.record.Epoch == 0 {
+		if command.ExpectedEpoch != 0 || command.Record.Epoch != 1 {
+			return CatalogMetaStatusV1{}, errors.Join(ErrCatalogMetaSkippedEpoch, fmt.Errorf("initial expected/record epoch %d/%d", command.ExpectedEpoch, command.Record.Epoch))
+		}
+	} else {
+		if command.Record.Epoch == a.record.Epoch {
+			return CatalogMetaStatusV1{}, errors.Join(ErrCatalogMetaConflict, fmt.Errorf("epoch %d differs from committed bytes", command.Record.Epoch))
+		}
+		if command.ExpectedEpoch != a.record.Epoch {
+			return CatalogMetaStatusV1{}, errors.Join(ErrCatalogMetaStaleEpoch, fmt.Errorf("expected %d current %d", command.ExpectedEpoch, a.record.Epoch))
+		}
+		if command.Record.Epoch != a.record.Epoch+1 {
+			return CatalogMetaStatusV1{}, errors.Join(ErrCatalogMetaSkippedEpoch, fmt.Errorf("record %d current %d", command.Record.Epoch, a.record.Epoch))
+		}
+	}
+	_, resolved, err := canonicalCatalogMetaCatalogV1(command.Record.Catalog)
+	if err != nil {
+		return CatalogMetaStatusV1{}, err
+	}
+	a.record = command.Record
+	a.resolved = resolved
+	a.recordBytes, _ = encodeCatalogMetaRecordV1(command.Record)
+	a.command = bytes.Clone(raw)
+	a.applied = appliedIndex
+	a.refusal = ""
+	return a.statusLocked(), nil
+}
+
+func (a *CatalogMetaAuthorityV1) Status() (CatalogMetaStatusV1, bool) {
+	if a == nil {
+		return CatalogMetaStatusV1{Refusal: ErrCatalogMetaUnavailable.Error()}, false
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.record.Epoch == 0 {
+		return CatalogMetaStatusV1{Refusal: ErrCatalogMetaUnavailable.Error()}, false
+	}
+	return a.statusLocked(), true
+}
+
+func (a *CatalogMetaAuthorityV1) CurrentCatalogVersion(context.Context) (uint64, bool, error) {
+	status, ok := a.Status()
+	if !ok {
+		return 0, false, nil
+	}
+	return status.Epoch, true, nil
+}
+
+func (a *CatalogMetaAuthorityV1) Route(_ context.Context, proof CatalogProofV1, request RouteRequestV1) (RouteDecisionV1, error) {
+	if a == nil {
+		return RouteDecisionV1{}, ErrCatalogMetaUnavailable
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if err := a.admitLocked(proof); err != nil {
+		return RouteDecisionV1{}, err
+	}
+	return a.resolved.Route(request)
+}
+
+func (a *CatalogMetaAuthorityV1) admitLocked(proof CatalogProofV1) error {
+	if a.record.Epoch == 0 {
+		return ErrCatalogMetaUnavailable
+	}
+	if proof.Epoch == 0 || proof.Digest == "" {
+		return ErrCatalogMetaProofMissing
+	}
+	if proof.Epoch != a.record.Epoch {
+		return errors.Join(ErrCatalogMetaStaleEpoch, fmt.Errorf("proof %d current %d", proof.Epoch, a.record.Epoch))
+	}
+	if proof.Digest != a.record.Digest {
+		return ErrCatalogMetaDigestMismatch
+	}
+	return nil
+}
+
+func (a *CatalogMetaAuthorityV1) ExportCatalogMetaSnapshotV1() (CatalogMetaSnapshotV1, error) {
+	if a == nil {
+		return CatalogMetaSnapshotV1{}, ErrCatalogMetaUnavailable
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.record.Epoch == 0 {
+		return CatalogMetaSnapshotV1{}, ErrCatalogMetaUnavailable
+	}
+	return CatalogMetaSnapshotV1{Format: CatalogMetaFormatV1, AppliedIndex: a.applied, Record: bytes.Clone(a.recordBytes)}, nil
+}
+
+func (a *CatalogMetaAuthorityV1) InstallCatalogMetaSnapshotV1(snapshot CatalogMetaSnapshotV1) (CatalogMetaStatusV1, error) {
+	if a == nil {
+		return CatalogMetaStatusV1{}, ErrCatalogMetaUnavailable
+	}
+	if snapshot.Format != CatalogMetaFormatV1 {
+		return CatalogMetaStatusV1{}, errors.Join(ErrInvalidCatalogMeta, ErrUnsupportedVersion)
+	}
+	record, err := decodeCatalogMetaRecordV1(snapshot.Record)
+	if err != nil {
+		return CatalogMetaStatusV1{}, err
+	}
+	_, resolved, err := canonicalCatalogMetaCatalogV1(record.Catalog)
+	if err != nil {
+		return CatalogMetaStatusV1{}, err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.record.Epoch > record.Epoch {
+		return CatalogMetaStatusV1{}, ErrCatalogMetaStaleEpoch
+	}
+	if a.record.Epoch == record.Epoch && a.record.Epoch != 0 {
+		if a.record.Digest != record.Digest || !bytes.Equal(a.recordBytes, snapshot.Record) {
+			return CatalogMetaStatusV1{}, ErrCatalogMetaConflict
+		}
+		return a.statusLocked(), nil
+	}
+	a.record = record
+	a.resolved = resolved
+	a.recordBytes = bytes.Clone(snapshot.Record)
+	a.command = nil
+	a.applied = snapshot.AppliedIndex
+	a.refusal = ""
+	return a.statusLocked(), nil
+}
+
+func (a *CatalogMetaAuthorityV1) statusLocked() CatalogMetaStatusV1 {
+	return CatalogMetaStatusV1{Epoch: a.record.Epoch, Digest: a.record.Digest, AppliedIndex: a.applied, Features: cloneFeatureSet(a.record.Catalog.Features), Refusal: a.refusal}
+}
+
+func validateCatalogMetaRecordV1(record CatalogMetaRecordV1) (CatalogMetaRecordV1, error) {
+	if record.Format != CatalogMetaFormatV1 || record.Epoch == 0 {
+		return CatalogMetaRecordV1{}, errors.Join(ErrInvalidCatalogMeta, fmt.Errorf("format/epoch %d/%d", record.Format, record.Epoch))
+	}
+	canonical, _, err := canonicalCatalogMetaCatalogV1(record.Catalog)
+	if err != nil {
+		return CatalogMetaRecordV1{}, err
+	}
+	record.Catalog = canonical
+	digest, err := catalogMetaDigestV1(record)
+	if err != nil {
+		return CatalogMetaRecordV1{}, err
+	}
+	if len(record.Digest) != sha256.Size*2 || record.Digest != digest {
+		return CatalogMetaRecordV1{}, ErrCatalogMetaDigestMismatch
+	}
+	return record, nil
+}
+
+func encodeCatalogMetaRecordV1(record CatalogMetaRecordV1) ([]byte, error) {
+	record, err := validateCatalogMetaRecordV1(record)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(record)
+}
+func decodeCatalogMetaRecordV1(raw []byte) (CatalogMetaRecordV1, error) {
+	if len(raw) == 0 || len(raw) > MaxCatalogMetaCommandBytesV1 {
+		return CatalogMetaRecordV1{}, ErrCatalogMetaLimit
+	}
+	var record CatalogMetaRecordV1
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&record); err != nil {
+		return CatalogMetaRecordV1{}, errors.Join(ErrInvalidCatalogMeta, err)
+	}
+	if err := d.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return CatalogMetaRecordV1{}, errors.Join(ErrInvalidCatalogMeta, fmt.Errorf("trailing record data"))
+	}
+	record, err := validateCatalogMetaRecordV1(record)
+	if err != nil {
+		return CatalogMetaRecordV1{}, err
+	}
+	canonical, err := encodeCatalogMetaRecordV1(record)
+	if err != nil {
+		return CatalogMetaRecordV1{}, err
+	}
+	if !bytes.Equal(raw, canonical) {
+		return CatalogMetaRecordV1{}, errors.Join(ErrInvalidCatalogMeta, fmt.Errorf("record is not canonical"))
+	}
+	return record, nil
+}
+func catalogMetaDigestV1(record CatalogMetaRecordV1) (string, error) {
+	record.Digest = ""
+	b, err := json.Marshal(record)
+	if err != nil {
+		return "", errors.Join(ErrInvalidCatalogMeta, err)
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func canonicalCatalogMetaCatalogV1(c CatalogV1) (CatalogV1, ResolvedCatalogV1, error) {
+	if len(c.Groups) > MaxCatalogMetaGroupsV1 || len(c.Placements) > MaxCatalogMetaPlacementsV1 || len(c.Features.Required) > MaxCatalogMetaFeaturesV1 {
+		return CatalogV1{}, ResolvedCatalogV1{}, ErrCatalogMetaLimit
+	}
+	for _, g := range c.Groups {
+		if len(g.Members) > MaxCatalogMetaMembersPerGroupV1 {
+			return CatalogV1{}, ResolvedCatalogV1{}, ErrCatalogMetaLimit
+		}
+	}
+	partitions := 0
+	for _, p := range c.Placements {
+		partitions += len(p.TokenPartitions)
+	}
+	if partitions > MaxCatalogMetaPartitionsV1 {
+		return CatalogV1{}, ResolvedCatalogV1{}, ErrCatalogMetaLimit
+	}
+	c.Groups = append([]GroupV1(nil), c.Groups...)
+	c.Placements = append([]CollectionPlacementV1(nil), c.Placements...)
+	c.Features.Required = append([]raftcluster.RequiredFeature(nil), c.Features.Required...)
+	for i := range c.Groups {
+		c.Groups[i].Members = append([]raftcluster.NodeID(nil), c.Groups[i].Members...)
+		sort.Slice(c.Groups[i].Members, func(a, b int) bool { return c.Groups[i].Members[a] < c.Groups[i].Members[b] })
+	}
+	for i := range c.Placements {
+		c.Placements[i].TokenPartitions = append([]TokenPartitionV1(nil), c.Placements[i].TokenPartitions...)
+		sort.Slice(c.Placements[i].TokenPartitions, func(a, b int) bool {
+			return c.Placements[i].TokenPartitions[a].ID < c.Placements[i].TokenPartitions[b].ID
+		})
+	}
+	sort.Slice(c.Groups, func(i, j int) bool { return c.Groups[i].ID < c.Groups[j].ID })
+	sort.Slice(c.Placements, func(i, j int) bool {
+		a, b := c.Placements[i].Collection, c.Placements[j].Collection
+		if a.Database != b.Database {
+			return a.Database < b.Database
+		}
+		if a.Catalog != b.Catalog {
+			return a.Catalog < b.Catalog
+		}
+		return a.Collection < b.Collection
+	})
+	sort.Slice(c.Features.Required, func(i, j int) bool { return c.Features.Required[i].Name < c.Features.Required[j].Name })
+	resolved, err := Validate(c)
+	if err != nil {
+		return CatalogV1{}, ResolvedCatalogV1{}, errors.Join(ErrInvalidCatalogMeta, err)
+	}
+	return c, resolved, nil
+}
