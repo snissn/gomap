@@ -678,5 +678,36 @@ func canonicalCatalogMetaCatalogV1(c CatalogV1) (CatalogV1, ResolvedCatalogV1, e
 	if err != nil {
 		return CatalogV1{}, ResolvedCatalogV1{}, errors.Join(ErrInvalidCatalogMeta, err)
 	}
-	return c, resolved, nil
+	canonical := CatalogV1{
+		Features:   cloneFeatureSet(resolved.Features),
+		Groups:     make([]GroupV1, len(resolved.Groups)),
+		Placements: make([]CollectionPlacementV1, len(resolved.Placements)),
+	}
+	for i, group := range resolved.Groups {
+		canonical.Groups[i] = GroupV1{
+			ID:         group.ID,
+			Members:    append([]raftcluster.NodeID(nil), group.Members...),
+			LeaderHint: group.LeaderHint,
+		}
+	}
+	for i, placement := range resolved.Placements {
+		canonical.Placements[i] = CollectionPlacementV1{
+			Collection: placement.Collection,
+			GroupID:    placement.GroupID,
+			Mode:       placement.Mode,
+			RouteKey:   placement.RouteKey,
+		}
+		if len(placement.TokenPartitions) != 0 {
+			canonical.Placements[i].TokenPartitions = make([]TokenPartitionV1, len(placement.TokenPartitions))
+			for j, partition := range placement.TokenPartitions {
+				canonical.Placements[i].TokenPartitions[j] = TokenPartitionV1{
+					ID:      partition.ID,
+					GroupID: partition.GroupID,
+					Start:   partition.Start,
+					End:     partition.End,
+				}
+			}
+		}
+	}
+	return canonical, resolved, nil
 }

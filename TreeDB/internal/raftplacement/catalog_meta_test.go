@@ -51,6 +51,71 @@ func TestCatalogMetaCanonicalCommandAndExactRetry(t *testing.T) {
 	}
 }
 
+func TestCatalogMetaCanonicalizesDefaultsBeforeDigest(t *testing.T) {
+	ref := CollectionRefV1{Database: DefaultDatabase, Catalog: DefaultCatalog, Collection: "events"}
+	implicit := validCatalog()
+	implicit.Placements = append(implicit.Placements, tokenPlacement(ref, PlacementModeTokenV1))
+
+	explicit := cloneCatalog(implicit)
+	explicit.Features = DefaultFeatureSet()
+	for i := range explicit.Placements {
+		if explicit.Placements[i].Mode == "" {
+			explicit.Placements[i].Mode = PlacementModeCollectionV1
+		}
+		if explicit.Placements[i].Mode == PlacementModeTokenV1 && explicit.Placements[i].RouteKey == "" {
+			explicit.Placements[i].RouteKey = RouteKeyDocumentIDV1
+		}
+	}
+
+	implicitRecord, err := NewCatalogMetaRecordV1(1, implicit)
+	if err != nil {
+		t.Fatalf("implicit defaults: %v", err)
+	}
+	explicitRecord, err := NewCatalogMetaRecordV1(1, explicit)
+	if err != nil {
+		t.Fatalf("explicit defaults: %v", err)
+	}
+	implicitBytes, err := encodeCatalogMetaRecordV1(implicitRecord)
+	if err != nil {
+		t.Fatalf("encode implicit: %v", err)
+	}
+	explicitBytes, err := encodeCatalogMetaRecordV1(explicitRecord)
+	if err != nil {
+		t.Fatalf("encode explicit: %v", err)
+	}
+	if implicitRecord.Digest != explicitRecord.Digest || !bytes.Equal(implicitBytes, explicitBytes) {
+		t.Fatalf("semantic defaults diverged: implicit=%s explicit=%s", implicitRecord.Digest, explicitRecord.Digest)
+	}
+	if implicitRecord.Catalog.Features.ConfigVersion != SupportedCatalogVersion ||
+		len(implicitRecord.Catalog.Features.Required) != 1 ||
+		implicitRecord.Catalog.Features.Required[0].Name != FeatureCollectionGroups {
+		t.Fatalf("canonical features=%+v", implicitRecord.Catalog.Features)
+	}
+	for _, placement := range implicitRecord.Catalog.Placements {
+		if placement.Mode == "" {
+			t.Fatalf("canonical placement retained empty mode: %+v", placement)
+		}
+		if placement.Mode == PlacementModeTokenV1 && placement.RouteKey != RouteKeyDocumentIDV1 {
+			t.Fatalf("canonical token route key=%q", placement.RouteKey)
+		}
+	}
+
+	authority := NewCatalogMetaAuthorityV1()
+	command, err := EncodeCatalogMetaCommandV1(CatalogMetaCommandV1{ExpectedEpoch: 0, Record: implicitRecord})
+	if err != nil {
+		t.Fatalf("encode command: %v", err)
+	}
+	if _, err := authority.applyCommittedCatalogMetaV1(command, 1); err != nil {
+		t.Fatalf("apply command: %v", err)
+	}
+	status, ok := authority.Status()
+	if !ok || status.Features.ConfigVersion != SupportedCatalogVersion ||
+		len(status.Features.Required) != 1 ||
+		status.Features.Required[0].Name != FeatureCollectionGroups {
+		t.Fatalf("status=%+v available=%v", status, ok)
+	}
+}
+
 func TestCatalogMetaRejectsStaleSkippedAndConflictingEpoch(t *testing.T) {
 	a := NewCatalogMetaAuthorityV1()
 	first := mustCatalogMetaCommand(t, 0, 1, validCatalog())
