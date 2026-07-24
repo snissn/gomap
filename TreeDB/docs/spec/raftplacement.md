@@ -119,15 +119,17 @@ is binding at the single-group submit boundary. A `SingleGroupSubmitter` for
 `group-a` must reject a request whose route metadata targets `group-b` before
 command preflight, commit-source invocation, or local apply.
 
-`nativewire.CatalogClusterRouteProvider` is the reusable adapter from
-`ResolvedCatalogV1` to `nativewire.ClusterRouteTarget`. It converts collection
-route decisions to collection targets, exactly-one-token token/ring decisions to
-token targets with partition metadata, and token-batch decisions to
-`token_batch` targets that carry the catalog classification
-(`same_partition`, `same_group_multi_partition`, or `fanout_required`).
-Non-fanout token-batch targets may include the single resolved group metadata,
-but adapters still reject token/ring multi-ID writes before submit until command
-split or fanout execution exists.
+`nativewire.CatalogRouteResolverV1` is a read-only bootstrap and inspection
+adapter from `ResolvedCatalogV1` to `nativewire.ClusterRouteTarget`. Its method
+is deliberately named `ResolveCatalogRouteV1`: it does not implement
+`ClusterRouteProvider` and therefore cannot be composed with a production
+routed submitter. Production adapters use
+`nativewire.CatalogMetaClusterRouteProvider`, which resolves the same
+collection, token, and token-batch shapes from the locally applied replicated
+authority and attaches its exact proof. Non-fanout token-batch targets may
+include the single resolved group metadata, but adapters still reject
+token/ring multi-ID writes before submit until command split or fanout
+execution exists.
 
 Native-wire route preflight uses the default database and catalog plus the
 collection name encoded in the deterministic command sections. `create_collection`
@@ -256,21 +258,27 @@ or missing proofs before request success. On the owner side,
 it re-resolves the request-only route fields against the same applied
 generation and requires exact equality for collection identity, route shape,
 group, members, leader hint, placement mode, route key, token/partition, epoch,
-and digest before group lookup or mutation. The legacy
-`NewGroupRoutedSubmitter` and static `CatalogClusterRouteProvider` constructors
-remain deprecated bootstrap/test adapters; they are not replicated authority
-and must not be used for the M4A production path.
+and digest before group lookup or mutation. It is the only exported routed
+dispatcher constructor. There is no zero-validator constructor or production
+static-catalog `ClusterRouteProvider`; test-only permissive adapters are
+confined to `_test.go` files.
 
 `ExportCatalogMetaSnapshotV1` serializes one canonical record plus its applied
 index and exact last committed command. Restore validates the complete
 record/digest/command identity before one atomic publication, rejects rollback
 and same-epoch conflicts, and preserves exact-command retry identity. The Raft
-FSM bounds and installs that byte payload for snapshot/reopen/rejoin. Backup
-code must archive the same opaque payload atomically with meta-group apply
-progress and feed it back through Raft restore; the exported restore capability
-prevents backup tooling or a follower-local caller from directly activating a
-catalog. The backup round-trip contract verifies that epoch, digest, applied
-index, placement, and feature floors survive unchanged.
+FSM bounds and installs that byte payload for snapshot/reopen/rejoin.
+`CatalogMetaRaftProviderV1.ExportCatalogMetaBackupV1` forces or reuses a
+retained HashiCorp snapshot and packages its version, term, index, bounded
+payload, and checksum. `RestoreCatalogMetaBackupV1` validates the complete
+archive and payload without mutation, requires the current meta leader and a
+fresh local authority, waits for the fixed-voter configuration to apply, and
+then invokes HashiCorp Raft `Restore`. HashiCorp propagates that snapshot to
+followers and commits a no-op before returning. Restore is a disaster-recovery
+operation for a fresh cluster only: a live generation rejects an old archive
+instead of rolling back. The integration contract verifies leader/follower
+behavior, corrupt archive refusal, all three real authorities, exact retry,
+feature and route identity, snapshot reopen, failover, and old-leader rejoin.
 
 The conservative failure matrix is:
 

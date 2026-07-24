@@ -52,6 +52,7 @@ type mongoRecordingRaftCommandSubmitter struct {
 	groupID raftcluster.GroupID
 	status  raftcluster.AdmissionStatus
 	err     error
+	discard bool
 	mu      sync.Mutex
 	calls   []mongoRecordingRaftCommandSubmitCall
 }
@@ -87,7 +88,9 @@ func (s *mongoRecordingRaftCommandSubmitter) SubmitCommandEntryV1(ctx context.Co
 	}
 	s.mu.Lock()
 	index := uint64(len(s.calls) + 1)
-	s.calls = append(s.calls, mongoRecordingRaftCommandSubmitCall{entry: decoded, metadata: cloneMongoClusterRequestMetadata(metadata)})
+	if !s.discard {
+		s.calls = append(s.calls, mongoRecordingRaftCommandSubmitCall{entry: decoded, metadata: cloneMongoClusterRequestMetadata(metadata)})
+	}
 	s.mu.Unlock()
 	if s.err != nil {
 		return raftcluster.SubmitResultV1{}, s.err
@@ -243,15 +246,37 @@ type mongoPlacementRouteClusterSubmitter struct {
 	*mongoClusterFakeSubmitter
 
 	routeMu  sync.Mutex
-	provider treenativewire.CatalogClusterRouteProvider
+	provider treenativewire.CatalogRouteResolverV1
 	routes   []treenativewire.ClusterRouteRequest
+}
+
+type mongoStaticCatalogRouteProviderForTest struct {
+	resolver treenativewire.CatalogRouteResolverV1
+}
+
+func newMongoStaticCatalogRouteProviderForTest(catalog raftplacement.ResolvedCatalogV1) mongoStaticCatalogRouteProviderForTest {
+	return mongoStaticCatalogRouteProviderForTest{
+		resolver: treenativewire.NewCatalogRouteResolverV1(catalog),
+	}
+}
+
+func (p mongoStaticCatalogRouteProviderForTest) ClusterRoute(ctx context.Context, req treenativewire.ClusterRouteRequest) (treenativewire.ClusterRouteTarget, error) {
+	return p.resolver.ResolveCatalogRouteV1(ctx, req)
+}
+
+// mongoTestCatalogRouteValidator is deliberately confined to this test file.
+// Production routed submitters must validate against CatalogMetaAuthorityV1.
+type mongoTestCatalogRouteValidator struct{}
+
+func (mongoTestCatalogRouteValidator) ValidateCatalogRouteMetadata(context.Context, raftentry.RequestMetadataV1) error {
+	return nil
 }
 
 func (p *mongoPlacementRouteClusterSubmitter) ClusterRoute(ctx context.Context, req treenativewire.ClusterRouteRequest) (treenativewire.ClusterRouteTarget, error) {
 	p.routeMu.Lock()
 	p.routes = append(p.routes, req)
 	p.routeMu.Unlock()
-	return p.provider.ClusterRoute(ctx, req)
+	return p.provider.ResolveCatalogRouteV1(ctx, req)
 }
 
 func (p *mongoPlacementRouteClusterSubmitter) snapshotRoutes() []treenativewire.ClusterRouteRequest {
@@ -605,7 +630,7 @@ func newMongoPlacementRouteTestServer(tb testing.TB, mode raftplacement.Placemen
 	}
 	submitter := &mongoPlacementRouteClusterSubmitter{
 		mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{},
-		provider:                  treenativewire.NewCatalogClusterRouteProvider(mustMongoRouteTestCatalog(tb, mode)),
+		provider:                  treenativewire.NewCatalogRouteResolverV1(mustMongoRouteTestCatalog(tb, mode)),
 	}
 	server.ClusterSubmitter = submitter
 	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(60)
@@ -634,9 +659,9 @@ func newMongoGroupRoutedDispatcherTestServer(tb testing.TB, provider treenativew
 	if err != nil {
 		tb.Fatalf("NewGroupSubmitterRegistryV1: %v", err)
 	}
-	dispatcher, err := raftcluster.NewGroupRoutedSubmitter(raftcluster.GroupRoutedSubmitterOptions{Registry: registry})
+	dispatcher, err := raftcluster.NewCatalogMetaGroupRoutedSubmitter(registry, mongoTestCatalogRouteValidator{})
 	if err != nil {
-		tb.Fatalf("NewGroupRoutedSubmitter: %v", err)
+		tb.Fatalf("NewCatalogMetaGroupRoutedSubmitter: %v", err)
 	}
 	server.ClusterSubmitter = treenativewire.NewRoutedRaftClusterSubmitter(dispatcher, provider, server.Collections)
 	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(60)
@@ -1611,34 +1636,39 @@ func TestMongoGroupRoutedDispatcherRejectsSingleTokenWriteWithoutOwnerBoundIndex
 	}
 }
 
-func TestMongoGroupRoutedDispatcherCatalogRoutesCollectionOwner(t *testing.T) {
-	provider := treenativewire.NewCatalogClusterRouteProvider(mustMongoCollectionGroupRouteCatalog(t))
-	server, groupA, groupB := newMongoGroupRoutedDispatcherTestServer(t, provider)
-	response := serveCommand(t, server, 336304, bson.D{
+func BenchmarkCatalogMetaMongoMutationAdmission(b *testing.B) {
+	authority, _ := newMongoCatalogMetaAuthority(b)
+	provider, err := treenativewire.NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof)
+	if err != nil {
+		b.Fatalf("NewCatalogMetaClusterRouteProvider: %v", err)
+	}
+	server, groupA, groupB := newMongoCatalogMetaGroupRoutedDispatcherTestServer(b, provider, authority)
+	groupA.discard = true
+	groupB.discard = true
+	request := bson.D{
 		{Key: "insert", Value: "users"},
 		{Key: "documents", Value: bson.A{
 			bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}},
 			bson.D{{Key: "_id", Value: "u2"}, {Key: "name", Value: "Grace"}},
 		}},
 		{Key: "$db", Value: "app"},
-	})
-	assertOK(t, response)
-	if calls := groupA.snapshotCalls(); len(calls) != 0 {
-		t.Fatalf("group-a calls=%d want 0", len(calls))
 	}
-	calls := groupB.snapshotCalls()
-	if len(calls) != 1 {
-		t.Fatalf("group-b calls=%d want 1", len(calls))
-	}
-	meta := calls[0].metadata
-	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(treenativewire.ClusterRouteShapeCollection) || meta.ClusterRouteGroupID != "group-b" || meta.ClusterRouteLeaderHint != "node-c" || meta.ClusterRoutePlacementMode != string(raftplacement.PlacementModeCollectionV1) {
-		t.Fatalf("group-b catalog route metadata=%+v want collection owner group-b/node-c", meta)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		response, err := serveCommandResult(server, 336500, request)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if ok, typeOK := bson.Raw(response).Lookup("ok").DoubleOK(); !typeOK || ok != 1 {
+			b.Fatalf("Mongo response ok=%v typeOK=%v", ok, typeOK)
+		}
 	}
 }
 
 func TestMongoGroupRoutedDispatcherCatalogRejectsSingleTokenOwnerWithoutIndexPolicy(t *testing.T) {
 	token := mongoClusterRouteTokenForValue(t, "u1")
-	provider := treenativewire.NewCatalogClusterRouteProvider(mustMongoTokenGroupRouteCatalog(t, raftplacement.PlacementModeRingV1, token))
+	provider := newMongoStaticCatalogRouteProviderForTest(mustMongoTokenGroupRouteCatalog(t, raftplacement.PlacementModeRingV1, token))
 	server, groupA, groupB := newMongoGroupRoutedDispatcherTestServer(t, provider)
 	response := serveCommand(t, server, 336305, bson.D{
 		{Key: "insert", Value: "users"},

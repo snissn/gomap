@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	hraft "github.com/hashicorp/raft"
@@ -24,6 +25,16 @@ type CatalogMetaCommittedStateV1 interface {
 	ApplyCatalogMetaCommittedV1(CatalogMetaApplyCapabilityV1, []byte, uint64) error
 	ExportCatalogMetaSnapshotBytesV1() ([]byte, error)
 	InstallCatalogMetaSnapshotBytesV1(CatalogMetaRestoreCapabilityV1, []byte) error
+}
+
+// CatalogMetaBackupStateV1 is the additional fail-closed contract required by
+// external backup/restore. Validation must be side-effect free, and restore
+// targets must reject any already-published catalog generation before
+// HashiCorp Raft enters its fatal-on-FSM-restore-error path.
+type CatalogMetaBackupStateV1 interface {
+	CatalogMetaCommittedStateV1
+	ValidateCatalogMetaSnapshotBytesV1([]byte) error
+	ValidateCatalogMetaBackupRestoreTargetV1() error
 }
 
 type CatalogMetaApplyCapabilityV1 struct{ granted bool }
@@ -57,8 +68,11 @@ type CatalogMetaRaftProviderOptionsV1 struct {
 type CatalogMetaRaftProviderV1 struct {
 	cluster      ResolvedConfig
 	raft         *hraft.Raft
+	state        CatalogMetaCommittedStateV1
+	snapshots    hraft.SnapshotStore
 	owned        []io.Closer
 	applyTimeout time.Duration
+	mutationMu   sync.Mutex
 }
 
 func (p *CatalogMetaRaftProviderV1) Config() ResolvedConfig {
@@ -110,7 +124,14 @@ func OpenCatalogMetaRaftProviderV1(opts CatalogMetaRaftProviderOptionsV1) (*Cata
 	if timeout <= 0 {
 		timeout = hashicorpRaftDefaultApplyTimeout
 	}
-	return &CatalogMetaRaftProviderV1{cluster: cluster, raft: r, owned: stores.owned, applyTimeout: timeout}, nil
+	return &CatalogMetaRaftProviderV1{
+		cluster:      cluster,
+		raft:         r,
+		state:        opts.State,
+		snapshots:    stores.snapshots,
+		owned:        stores.owned,
+		applyTimeout: timeout,
+	}, nil
 }
 
 func featureSetSupportsV1(features FeatureSet, name FeatureName) bool {
@@ -162,6 +183,8 @@ func (p *CatalogMetaRaftProviderV1) SubmitCatalogMetaCommandV1(ctx context.Conte
 	if p == nil || p.raft == nil {
 		return 0, 0, ErrInvalidHashicorpRaftProvider
 	}
+	p.mutationMu.Lock()
+	defer p.mutationMu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -197,6 +220,8 @@ func (p *CatalogMetaRaftProviderV1) SnapshotCatalogMetaV1(ctx context.Context) e
 	if p == nil || p.raft == nil {
 		return ErrInvalidHashicorpRaftProvider
 	}
+	p.mutationMu.Lock()
+	defer p.mutationMu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}

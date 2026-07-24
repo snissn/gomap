@@ -129,6 +129,33 @@ func (a *CatalogMetaAuthorityV1) InstallCatalogMetaSnapshotBytesV1(capability ra
 	return a.installCatalogMetaSnapshotBytesV1(raw)
 }
 
+// ValidateCatalogMetaSnapshotBytesV1 fully decodes and validates a snapshot
+// without publishing it. The Raft backup adapter uses this before entering
+// HashiCorp Raft's external Restore path, whose FSM restore callback is
+// intentionally fatal on error after the snapshot has been copied.
+func (a *CatalogMetaAuthorityV1) ValidateCatalogMetaSnapshotBytesV1(raw []byte) error {
+	if a == nil {
+		return ErrCatalogMetaUnavailable
+	}
+	return NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(raw)
+}
+
+// ValidateCatalogMetaBackupRestoreTargetV1 restricts external backup restore
+// to a fresh disaster-recovery authority. Normal epoch changes must flow
+// through committed catalog commands; restoring over live state could roll a
+// cluster back and violates HashiCorp Raft's own Restore safety contract.
+func (a *CatalogMetaAuthorityV1) ValidateCatalogMetaBackupRestoreTargetV1() error {
+	if a == nil {
+		return ErrCatalogMetaUnavailable
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.record.Epoch != 0 {
+		return errors.Join(ErrCatalogMetaConflict, fmt.Errorf("backup restore target already has catalog epoch %d", a.record.Epoch))
+	}
+	return nil
+}
+
 func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotBytesV1(raw []byte) error {
 	if len(raw) == 0 || len(raw) > MaxCatalogMetaSnapshotBytesV1 {
 		return errors.Join(ErrCatalogMetaLimit, fmt.Errorf("snapshot is %d bytes", len(raw)))

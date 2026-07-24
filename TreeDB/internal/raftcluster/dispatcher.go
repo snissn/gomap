@@ -84,18 +84,6 @@ func (r GroupSubmitterRegistryV1) empty() bool {
 	return len(r.byGroup) == 0
 }
 
-// GroupRoutedSubmitterOptions configures an in-process dispatcher over local
-// group submitters.
-type GroupRoutedSubmitterOptions struct {
-	Registry              GroupSubmitterRegistryV1
-	CatalogProofValidator CatalogProofValidatorV1
-	CatalogRouteValidator CatalogRouteValidatorV1
-}
-
-type CatalogProofValidatorV1 interface {
-	ValidateCatalogMetaProof(context.Context, uint64, string) error
-}
-
 type CatalogRouteValidatorV1 interface {
 	ValidateCatalogRouteMetadata(context.Context, raftentry.RequestMetadataV1) error
 }
@@ -106,41 +94,29 @@ type CatalogRouteValidatorV1 interface {
 // the entry.
 type GroupRoutedSubmitter struct {
 	registry              GroupSubmitterRegistryV1
-	catalogProofValidator CatalogProofValidatorV1
 	catalogRouteValidator CatalogRouteValidatorV1
 }
 
-// NewGroupRoutedSubmitter constructs the legacy bootstrap/test dispatcher.
-//
-// Deprecated: replicated catalog deployments must use
-// NewCatalogMetaGroupRoutedSubmitter so complete route metadata is revalidated
-// against the locally applied catalog generation before owner lookup.
-func NewGroupRoutedSubmitter(opts GroupRoutedSubmitterOptions) (*GroupRoutedSubmitter, error) {
-	if opts.Registry.empty() {
+func newCatalogMetaGroupRoutedSubmitter(registry GroupSubmitterRegistryV1, validator CatalogRouteValidatorV1) (*GroupRoutedSubmitter, error) {
+	if registry.empty() {
 		return nil, errors.Join(ErrInvalidSubmitter, fmt.Errorf("group submitter registry is required"))
 	}
-	if opts.CatalogProofValidator != nil && opts.CatalogRouteValidator != nil {
-		return nil, errors.Join(ErrInvalidSubmitter, fmt.Errorf("configure one catalog validator, not both"))
+	if validator == nil {
+		return nil, errors.Join(ErrInvalidSubmitter, fmt.Errorf("replicated catalog route validator is required"))
 	}
 	return &GroupRoutedSubmitter{
-		registry:              opts.Registry,
-		catalogProofValidator: opts.CatalogProofValidator,
-		catalogRouteValidator: opts.CatalogRouteValidator,
+		registry:              registry,
+		catalogRouteValidator: validator,
 	}, nil
 }
 
 // NewCatalogMetaGroupRoutedSubmitter constructs the production replicated
-// catalog path. Unlike the legacy bootstrap/test constructor, it requires a
-// validator that re-resolves the complete route against the applied catalog
-// generation before selecting a local group submitter.
+// catalog path. It is the only public constructor for a routed dispatcher and
+// requires a validator that re-resolves the complete route and current proof
+// against the applied catalog generation before selecting a local group
+// submitter.
 func NewCatalogMetaGroupRoutedSubmitter(registry GroupSubmitterRegistryV1, validator CatalogRouteValidatorV1) (*GroupRoutedSubmitter, error) {
-	if validator == nil {
-		return nil, errors.Join(ErrInvalidSubmitter, fmt.Errorf("replicated catalog route validator is required"))
-	}
-	return NewGroupRoutedSubmitter(GroupRoutedSubmitterOptions{
-		Registry:              registry,
-		CatalogRouteValidator: validator,
-	})
+	return newCatalogMetaGroupRoutedSubmitter(registry, validator)
 }
 
 func (s *GroupRoutedSubmitter) SubmitCommandEntryV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1) (SubmitResultV1, error) {
@@ -151,14 +127,11 @@ func (s *GroupRoutedSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	if err != nil {
 		return SubmitResultV1{}, err
 	}
-	if s.catalogRouteValidator != nil {
-		if err := s.catalogRouteValidator.ValidateCatalogRouteMetadata(ctx, cloneRequestMetadataV1(metadata)); err != nil {
-			return SubmitResultV1{}, err
-		}
-	} else if s.catalogProofValidator != nil {
-		if err := s.catalogProofValidator.ValidateCatalogMetaProof(ctx, metadata.CatalogMetaEpoch, metadata.CatalogMetaDigest); err != nil {
-			return SubmitResultV1{}, err
-		}
+	if s.catalogRouteValidator == nil {
+		return SubmitResultV1{}, errors.Join(ErrInvalidSubmitter, fmt.Errorf("replicated catalog route validator is unavailable"))
+	}
+	if err := s.catalogRouteValidator.ValidateCatalogRouteMetadata(ctx, cloneRequestMetadataV1(metadata)); err != nil {
+		return SubmitResultV1{}, err
 	}
 	submitter, ok := s.registry.Lookup(target.GroupID)
 	if !ok {

@@ -372,9 +372,9 @@ func TestGroupRoutedSubmitterAdmissionMissingProviderFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewGroupSubmitterRegistryV1: %v", err)
 	}
-	dispatcher, err := NewGroupRoutedSubmitter(GroupRoutedSubmitterOptions{Registry: registry})
+	dispatcher, err := NewCatalogMetaGroupRoutedSubmitter(registry, &recordingCatalogRouteValidator{})
 	if err != nil {
-		t.Fatalf("NewGroupRoutedSubmitter: %v", err)
+		t.Fatalf("NewCatalogMetaGroupRoutedSubmitter: %v", err)
 	}
 	status, err := dispatcher.ClusterAdmissionStatus(context.Background())
 	if err != nil {
@@ -395,9 +395,9 @@ func newTestGroupRoutedSubmitter(tb testing.TB, submitters ...*recordingGroupSub
 	if err != nil {
 		tb.Fatalf("NewGroupSubmitterRegistryV1: %v", err)
 	}
-	dispatcher, err := NewGroupRoutedSubmitter(GroupRoutedSubmitterOptions{Registry: registry})
+	dispatcher, err := NewCatalogMetaGroupRoutedSubmitter(registry, &recordingCatalogRouteValidator{})
 	if err != nil {
-		tb.Fatalf("NewGroupRoutedSubmitter: %v", err)
+		tb.Fatalf("NewCatalogMetaGroupRoutedSubmitter: %v", err)
 	}
 	return dispatcher
 }

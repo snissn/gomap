@@ -8,7 +8,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
 
-func BenchmarkCatalogMetaStatusAndRoute(b *testing.B) {
+func BenchmarkCatalogMetaRoute(b *testing.B) {
 	a := NewCatalogMetaAuthorityV1()
 	if _, err := a.applyCommittedCatalogMetaV1(mustCatalogMetaCommand(b, 0, 1, validCatalog()), 1); err != nil {
 		b.Fatal(err)
@@ -28,7 +28,7 @@ func BenchmarkCatalogMetaStatusAndRoute(b *testing.B) {
 	}
 }
 
-func BenchmarkCatalogMetaEncodeDecode(b *testing.B) {
+func BenchmarkCatalogMetaDecode(b *testing.B) {
 	command := mustCatalogMetaCommand(b, 0, 1, validCatalog())
 	b.ReportAllocs()
 	b.SetBytes(int64(len(command)))

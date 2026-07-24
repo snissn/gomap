@@ -8,10 +8,11 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 )
 
-// CatalogClusterRouteProvider adapts a validated raftplacement catalog to the
-// nativewire route-preflight interface. It only returns catalog-derived
-// metadata; it does not prove live leadership or submit routed commands.
-type CatalogClusterRouteProvider struct {
+// CatalogRouteResolverV1 is a read-only bootstrap/inspection utility over a
+// validated catalog. Its method deliberately differs from ClusterRoute so a
+// process-local catalog cannot be plugged into a production ClusterSubmitter
+// and activate routed ownership without a replicated proof.
+type CatalogRouteResolverV1 struct {
 	catalog raftplacement.ResolvedCatalogV1
 }
 
@@ -21,10 +22,10 @@ type CatalogClusterRouteProvider struct {
 // data-group submitter.
 type CatalogMetaProofProvider func(context.Context) (raftplacement.CatalogProofV1, error)
 
-// CatalogMetaClusterRouteProvider is the dynamic counterpart to
-// CatalogClusterRouteProvider. Unlike the static adapter it never activates a
-// constructor-local catalog: every route is admitted by the applied replicated
-// CatalogMetaAuthorityV1 against an exact epoch and digest proof.
+// CatalogMetaClusterRouteProvider is the production route provider. It never
+// activates a constructor-local catalog: every route is admitted by the
+// applied replicated CatalogMetaAuthorityV1 against an exact epoch and digest
+// proof.
 type CatalogMetaClusterRouteProvider struct {
 	authority *raftplacement.CatalogMetaAuthorityV1
 	proof     CatalogMetaProofProvider
@@ -91,20 +92,20 @@ func (p CatalogMetaClusterRouteProvider) ClusterRoute(ctx context.Context, reque
 	}
 }
 
-// NewCatalogClusterRouteProvider returns the static bootstrap/test adapter
-// backed by a validated raftplacement catalog. Replicated deployments must use
-// NewCatalogMetaClusterRouteProvider so every decision carries the locally
-// applied catalog proof.
-func NewCatalogClusterRouteProvider(catalog raftplacement.ResolvedCatalogV1) CatalogClusterRouteProvider {
-	return CatalogClusterRouteProvider{catalog: catalog}
+// NewCatalogRouteResolverV1 returns a static read-only resolver for bootstrap
+// inspection and tests. CatalogRouteResolverV1 does not implement
+// ClusterRouteProvider and therefore cannot be composed with a production
+// routed submitter.
+func NewCatalogRouteResolverV1(catalog raftplacement.ResolvedCatalogV1) CatalogRouteResolverV1 {
+	return CatalogRouteResolverV1{catalog: catalog}
 }
 
-// ClusterRoute resolves the request against the provider's catalog. Collection
-// placements can satisfy collection, single-token, and token-batch requests with
-// a collection target. Token/ring placements require a single token for submit
-// targets; multi-token batches return classification metadata so preflight can
-// fail closed before submit until split/fanout execution exists.
-func (p CatalogClusterRouteProvider) ClusterRoute(_ context.Context, request ClusterRouteRequest) (ClusterRouteTarget, error) {
+// ResolveCatalogRouteV1 resolves the request without producing a replicated
+// proof. Collection placements can satisfy collection, single-token, and
+// token-batch requests with a collection target. Token/ring placements require
+// a single token for submit targets; multi-token batches return classification
+// metadata for bootstrap inspection.
+func (p CatalogRouteResolverV1) ResolveCatalogRouteV1(_ context.Context, request ClusterRouteRequest) (ClusterRouteTarget, error) {
 	switch normalizeClusterRouteShape(request.Shape) {
 	case ClusterRouteShapeCollection:
 		decision, err := p.catalog.RouteCollection(request.Database, request.Catalog, request.Collection)
@@ -126,7 +127,7 @@ func (p CatalogClusterRouteProvider) ClusterRoute(_ context.Context, request Clu
 		}
 		return clusterRouteTargetFromCatalogDecision(decision), nil
 	case ClusterRouteShapeTokenBatch:
-		return p.clusterRouteTokenBatch(request)
+		return p.resolveCatalogRouteTokenBatchV1(request)
 	case ClusterRouteShapeQuery:
 		return ClusterRouteTarget{}, errors.Join(
 			raftplacement.ErrInvalidRouteRequest,
@@ -142,7 +143,7 @@ func (p CatalogClusterRouteProvider) ClusterRoute(_ context.Context, request Clu
 	}
 }
 
-func (p CatalogClusterRouteProvider) clusterRouteTokenBatch(request ClusterRouteRequest) (ClusterRouteTarget, error) {
+func (p CatalogRouteResolverV1) resolveCatalogRouteTokenBatchV1(request ClusterRouteRequest) (ClusterRouteTarget, error) {
 	ref := raftplacement.CollectionRefV1{
 		Database:   request.Database,
 		Catalog:    request.Catalog,
