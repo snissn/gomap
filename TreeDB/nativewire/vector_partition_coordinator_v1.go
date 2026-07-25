@@ -486,16 +486,12 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 		if !accumulateVectorPartitionCoordinatorResponseCountersV1(&counters, result.response) {
 			return response, c.wrapError(ErrVectorPartitionCoordinatorBudgetExceeded, "")
 		}
+		if !accumulateVectorPartitionCoordinatorTimingV1(&response.Timing, result) {
+			return response, c.wrapError(ErrVectorPartitionCoordinatorMalformedResponse, "")
+		}
 		counters.RPCs += result.rpcs
 		counters.Retries += result.retries
 		counters.Redirects += result.redirects
-		response.Timing.QueueNanos += result.queueNanos
-		response.Timing.RPCNanos += result.rpcNanos
-		response.Timing.NetworkNanos += result.networkNanos
-		response.Timing.ReadIndexApplyNanos += result.response.Timing.ReadIndexApplyNanos
-		response.Timing.GenerationOpenNanos += result.response.Timing.GenerationOpenNanos
-		response.Timing.ShardSearchNanos += result.response.Timing.SearchNanos
-		response.Timing.ResponseNanos += result.response.Timing.ResponseCopyNanos
 	}
 	if counters.ResponseBytes > request.ResponseBytesLimit ||
 		counters.CandidateBytes > request.CandidateBytesLimit {
@@ -558,6 +554,40 @@ func accumulateVectorPartitionCoordinatorResponseCountersV1(
 	counters.Candidates = candidates
 	counters.Edges = edges
 	counters.CandidateBytes = candidateBytes
+	return true
+}
+
+func accumulateVectorPartitionCoordinatorTimingV1(
+	timing *VectorPartitionCoordinatorTimingV1,
+	result vectorPartitionCoordinatorTaskResultV1,
+) bool {
+	if timing == nil {
+		return false
+	}
+	next := *timing
+	var ok bool
+	if next.QueueNanos, ok = addUint64V1(next.QueueNanos, result.queueNanos); !ok {
+		return false
+	}
+	if next.RPCNanos, ok = addUint64V1(next.RPCNanos, result.rpcNanos); !ok {
+		return false
+	}
+	if next.NetworkNanos, ok = addUint64V1(next.NetworkNanos, result.networkNanos); !ok {
+		return false
+	}
+	if next.ReadIndexApplyNanos, ok = addUint64V1(next.ReadIndexApplyNanos, result.response.Timing.ReadIndexApplyNanos); !ok {
+		return false
+	}
+	if next.GenerationOpenNanos, ok = addUint64V1(next.GenerationOpenNanos, result.response.Timing.GenerationOpenNanos); !ok {
+		return false
+	}
+	if next.ShardSearchNanos, ok = addUint64V1(next.ShardSearchNanos, result.response.Timing.SearchNanos); !ok {
+		return false
+	}
+	if next.ResponseNanos, ok = addUint64V1(next.ResponseNanos, result.response.Timing.ResponseCopyNanos); !ok {
+		return false
+	}
+	*timing = next
 	return true
 }
 

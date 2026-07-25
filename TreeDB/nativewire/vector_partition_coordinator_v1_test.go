@@ -926,6 +926,33 @@ func TestVectorPartitionCoordinatorRejectsCrossTaskEdgeCounterOverflowV1(t *test
 	}
 }
 
+func TestVectorPartitionCoordinatorRejectsCrossTaskTimingOverflowV1(t *testing.T) {
+	coordinator, _, dispatcher := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{
+			{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"},
+			{ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"},
+		},
+		[]raftcluster.GroupID{"group-a", "group-b"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{
+			0: {{ID: "a", Score: 1}},
+			1: {{ID: "b", Score: 1}},
+		},
+		VectorPartitionCoordinatorLimitsV1{},
+	)
+	dispatcher.editResponse = func(request VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+		response.Timing.ReadIndexApplyNanos = 1
+		if request.PartitionIDs[0] == 0 {
+			response.Timing.ReadIndexApplyNanos = math.MaxUint64
+		}
+	}
+
+	response, err := coordinator.Search(context.Background(), testVectorPartitionCoordinatorRequestV1(2))
+	if !errors.Is(err, ErrVectorPartitionCoordinatorMalformedResponse) ||
+		!vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
+		t.Fatalf("response=%+v err=%v", response, err)
+	}
+}
+
 func TestVectorPartitionCoordinatorResponseCounterAggregationRejectsOverflowV1(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -965,6 +992,33 @@ func TestVectorPartitionCoordinatorResponseCounterAggregationRejectsOverflowV1(t
 			}
 			if test.counters != before {
 				t.Fatalf("partial counters published: got=%+v want=%+v", test.counters, before)
+			}
+		})
+	}
+}
+
+func TestVectorPartitionCoordinatorTimingAggregationRejectsOverflowV1(t *testing.T) {
+	tests := []struct {
+		name   string
+		timing VectorPartitionCoordinatorTimingV1
+		result vectorPartitionCoordinatorTaskResultV1
+	}{
+		{name: "queue", timing: VectorPartitionCoordinatorTimingV1{QueueNanos: math.MaxUint64}, result: vectorPartitionCoordinatorTaskResultV1{queueNanos: 1}},
+		{name: "rpc", timing: VectorPartitionCoordinatorTimingV1{RPCNanos: math.MaxUint64}, result: vectorPartitionCoordinatorTaskResultV1{rpcNanos: 1}},
+		{name: "network", timing: VectorPartitionCoordinatorTimingV1{NetworkNanos: math.MaxUint64}, result: vectorPartitionCoordinatorTaskResultV1{networkNanos: 1}},
+		{name: "read_index_apply", timing: VectorPartitionCoordinatorTimingV1{ReadIndexApplyNanos: math.MaxUint64}, result: vectorPartitionCoordinatorTaskResultV1{response: VectorPartitionShardSearchResponseV1{Timing: VectorPartitionShardSearchTimingV1{ReadIndexApplyNanos: 1}}}},
+		{name: "generation_open", timing: VectorPartitionCoordinatorTimingV1{GenerationOpenNanos: math.MaxUint64}, result: vectorPartitionCoordinatorTaskResultV1{response: VectorPartitionShardSearchResponseV1{Timing: VectorPartitionShardSearchTimingV1{GenerationOpenNanos: 1}}}},
+		{name: "shard_search", timing: VectorPartitionCoordinatorTimingV1{ShardSearchNanos: math.MaxUint64}, result: vectorPartitionCoordinatorTaskResultV1{response: VectorPartitionShardSearchResponseV1{Timing: VectorPartitionShardSearchTimingV1{SearchNanos: 1}}}},
+		{name: "response", timing: VectorPartitionCoordinatorTimingV1{ResponseNanos: math.MaxUint64}, result: vectorPartitionCoordinatorTaskResultV1{response: VectorPartitionShardSearchResponseV1{Timing: VectorPartitionShardSearchTimingV1{ResponseCopyNanos: 1}}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before := test.timing
+			if accumulateVectorPartitionCoordinatorTimingV1(&test.timing, test.result) {
+				t.Fatal("overflow accepted")
+			}
+			if test.timing != before {
+				t.Fatalf("partial timing published: got=%+v want=%+v", test.timing, before)
 			}
 		})
 	}
