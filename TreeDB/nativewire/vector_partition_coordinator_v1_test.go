@@ -196,6 +196,11 @@ func testVectorPartitionCoordinatorV1(t *testing.T, groups []raftplacement.Group
 		partitionScores[partition] = collections.VectorPartitionRouterPartitionScoreV1{
 			PartitionID: uint32(partition), Distance: float64(partition) / 100,
 		}
+		for range neighbors[uint32(partition)] {
+			manifest.Memberships = append(manifest.Memberships, collections.VectorPartitionMembershipV1{
+				VectorOrdinal: uint64(len(manifest.Memberships)), PartitionID: uint32(partition),
+			})
+		}
 	}
 	router := &testVectorPartitionCoordinatorRouterV1{
 		status: collections.VectorPartitionRouterRuntimeStatusV1{
@@ -403,6 +408,39 @@ func TestVectorPartitionCoordinatorRejectsImpossibleRouterFanoutBeforeOpenV1(t *
 	}
 }
 
+func TestVectorPartitionCoordinatorRejectsUnrepresentableQueryNormBeforeOpenV1(t *testing.T) {
+	tests := []struct {
+		name  string
+		query []float32
+	}{
+		{name: "inverse_norm_above_float32", query: []float32{math.SmallestNonzeroFloat32}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
+				[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+				[]raftcluster.GroupID{"group-a"},
+				map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "a", Score: 1}}},
+				VectorPartitionCoordinatorLimitsV1{},
+			)
+			request := testVectorPartitionCoordinatorRequestV1(1)
+			request.Query = test.query
+
+			response, err := coordinator.Search(context.Background(), request)
+			var coordinatorErr *VectorPartitionCoordinatorErrorV1
+			if !errors.Is(err, ErrVectorPartitionCoordinatorInvalidRequest) ||
+				!errors.As(err, &coordinatorErr) ||
+				coordinatorErr.Code != VectorPartitionCoordinatorErrorInvalidRequestV1 ||
+				!vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
+				t.Fatalf("response=%+v err=%+v", response, err)
+			}
+			if source.opens != 0 || source.router.closeCount != 0 || len(dispatcher.calls) != 0 {
+				t.Fatalf("router opens=%d closes=%d dispatches=%d", source.opens, source.router.closeCount, len(dispatcher.calls))
+			}
+		})
+	}
+}
+
 func TestVectorPartitionCoordinatorWeightsCandidateBudgetByMembershipV1(t *testing.T) {
 	coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
 		[]raftplacement.GroupV1{
@@ -416,6 +454,12 @@ func TestVectorPartitionCoordinatorWeightsCandidateBudgetByMembershipV1(t *testi
 		},
 		VectorPartitionCoordinatorLimitsV1{},
 	)
+	source.router.status.Manifest.Memberships = nil
+	dispatcher.editResponse = func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+		for i := range response.Partials {
+			response.Partials[i].SearchRoute = collections.VectorPartitionSearchRouteHNSWSearchPackV1
+		}
+	}
 	for i := range 100 {
 		partitionID := uint32(0)
 		if i >= 90 {
@@ -469,6 +513,12 @@ func TestVectorPartitionCoordinatorReservesCandidateBaselineBeforeUnevenSurplusV
 		},
 		VectorPartitionCoordinatorLimitsV1{},
 	)
+	source.router.status.Manifest.Memberships = nil
+	dispatcher.editResponse = func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+		for i := range response.Partials {
+			response.Partials[i].SearchRoute = collections.VectorPartitionSearchRouteHNSWSearchPackV1
+		}
+	}
 	for i := range 1001 {
 		partitionID := uint32(0)
 		if i == 1000 {
@@ -592,6 +642,12 @@ func TestVectorPartitionCoordinatorRejectsCorruptShardProofsAndPartialsV1(t *tes
 			response.Partials[0].Candidates = 0
 			response.Candidates = 0
 		}},
+		{name: "underreported_exact_candidates_and_neighbors", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+			response.Partials[0].Neighbors = nil
+			response.Partials[0].Candidates = 0
+			response.Candidates = 0
+			response.ResponseBytes = vectorPartitionShardSearchResponseEnvelopeBytesV1 + vectorPartitionShardSearchPartialEnvelopeBytesV1
+		}},
 		{name: "dropped_neighbors", edit: func(request VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
 			response.Partials[0].Candidates = uint64(request.TopK)
 			response.Candidates = uint64(request.TopK)
@@ -667,6 +723,7 @@ func TestVectorPartitionCoordinatorClassifiesConsistentShardBudgetOverflowV1(t *
 			{ID: "b", Score: .75},
 			{ID: "c", Score: .5},
 		}
+		response.Partials[0].SearchRoute = collections.VectorPartitionSearchRouteHNSWSearchPackV1
 		response.Partials[0].Candidates = candidates
 		response.Candidates = candidates
 		responseBytes, err := MeasureVectorPartitionShardSearchResponseBytesV1(response.Partials)
@@ -695,8 +752,9 @@ func TestVectorPartitionCoordinatorClassifiesConsistentShardBudgetOverflowV1(t *
 	}
 	shardRequest.ResponseBytesLimit = shardResponse.ResponseBytes - 1
 	task := vectorPartitionCoordinatorTaskV1{
-		group:        coordinator.groups[shardRequest.TargetGroupID],
-		partitionIDs: slices.Clone(shardRequest.PartitionIDs),
+		group:         coordinator.groups[shardRequest.TargetGroupID],
+		partitionIDs:  slices.Clone(shardRequest.PartitionIDs),
+		candidateRows: []uint64{shardResponse.Partials[0].Candidates},
 	}
 	err = coordinator.wrapError(
 		coordinator.validateShardResponse(context.Background(), task, shardRequest, shardResponse),
@@ -878,6 +936,38 @@ func TestVectorPartitionCoordinatorRejectsCorruptAndOverBudgetResponsesV1(t *tes
 				dispatcher.neighbors[0] = []VectorPartitionShardSearchNeighborV1{{ID: "a", Score: float32(math.NaN())}}
 			},
 		},
+		{
+			name:    "timing_component_exceeds_total",
+			wantErr: ErrVectorPartitionCoordinatorMalformedResponse,
+			edit: func(dispatcher *testVectorPartitionCoordinatorDispatcherV1, _ *VectorPartitionCoordinatorRequestV1) {
+				dispatcher.editResponse = func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+					response.Timing.ReadIndexApplyNanos = response.Timing.TotalNanos + 1
+				}
+			},
+		},
+		{
+			name:    "timing_component_subtotal_exceeds_total",
+			wantErr: ErrVectorPartitionCoordinatorMalformedResponse,
+			edit: func(dispatcher *testVectorPartitionCoordinatorDispatcherV1, _ *VectorPartitionCoordinatorRequestV1) {
+				dispatcher.editResponse = func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+					response.Timing.ReadIndexApplyNanos = 2
+					response.Timing.SearchNanos = 2
+					response.Timing.ResponseCopyNanos = 0
+				}
+			},
+		},
+		{
+			name:    "timing_component_subtotal_overflow",
+			wantErr: ErrVectorPartitionCoordinatorMalformedResponse,
+			edit: func(dispatcher *testVectorPartitionCoordinatorDispatcherV1, _ *VectorPartitionCoordinatorRequestV1) {
+				dispatcher.editResponse = func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+					response.Timing.ReadIndexApplyNanos = math.MaxUint64
+					response.Timing.SearchNanos = 1
+					response.Timing.ResponseCopyNanos = 0
+					response.Timing.TotalNanos = math.MaxUint64
+				}
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -926,6 +1016,33 @@ func TestVectorPartitionCoordinatorRejectsCrossTaskEdgeCounterOverflowV1(t *test
 	}
 }
 
+func TestVectorPartitionCoordinatorRejectsCrossTaskTimingOverflowV1(t *testing.T) {
+	coordinator, _, dispatcher := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{
+			{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"},
+			{ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"},
+		},
+		[]raftcluster.GroupID{"group-a", "group-b"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{
+			0: {{ID: "a", Score: 1}},
+			1: {{ID: "b", Score: 1}},
+		},
+		VectorPartitionCoordinatorLimitsV1{},
+	)
+	dispatcher.editResponse = func(request VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+		response.Timing.ReadIndexApplyNanos = 1
+		if request.PartitionIDs[0] == 0 {
+			response.Timing.ReadIndexApplyNanos = math.MaxUint64
+		}
+	}
+
+	response, err := coordinator.Search(context.Background(), testVectorPartitionCoordinatorRequestV1(2))
+	if !errors.Is(err, ErrVectorPartitionCoordinatorMalformedResponse) ||
+		!vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
+		t.Fatalf("response=%+v err=%v", response, err)
+	}
+}
+
 func TestVectorPartitionCoordinatorResponseCounterAggregationRejectsOverflowV1(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -965,6 +1082,33 @@ func TestVectorPartitionCoordinatorResponseCounterAggregationRejectsOverflowV1(t
 			}
 			if test.counters != before {
 				t.Fatalf("partial counters published: got=%+v want=%+v", test.counters, before)
+			}
+		})
+	}
+}
+
+func TestVectorPartitionCoordinatorTimingAggregationRejectsOverflowV1(t *testing.T) {
+	tests := []struct {
+		name   string
+		timing VectorPartitionCoordinatorTimingV1
+		result vectorPartitionCoordinatorTaskResultV1
+	}{
+		{name: "queue", timing: VectorPartitionCoordinatorTimingV1{QueueNanos: math.MaxUint64}, result: vectorPartitionCoordinatorTaskResultV1{queueNanos: 1}},
+		{name: "rpc", timing: VectorPartitionCoordinatorTimingV1{RPCNanos: math.MaxUint64}, result: vectorPartitionCoordinatorTaskResultV1{rpcNanos: 1}},
+		{name: "network", timing: VectorPartitionCoordinatorTimingV1{NetworkNanos: math.MaxUint64}, result: vectorPartitionCoordinatorTaskResultV1{networkNanos: 1}},
+		{name: "read_index_apply", timing: VectorPartitionCoordinatorTimingV1{ReadIndexApplyNanos: math.MaxUint64}, result: vectorPartitionCoordinatorTaskResultV1{response: VectorPartitionShardSearchResponseV1{Timing: VectorPartitionShardSearchTimingV1{ReadIndexApplyNanos: 1}}}},
+		{name: "generation_open", timing: VectorPartitionCoordinatorTimingV1{GenerationOpenNanos: math.MaxUint64}, result: vectorPartitionCoordinatorTaskResultV1{response: VectorPartitionShardSearchResponseV1{Timing: VectorPartitionShardSearchTimingV1{GenerationOpenNanos: 1}}}},
+		{name: "shard_search", timing: VectorPartitionCoordinatorTimingV1{ShardSearchNanos: math.MaxUint64}, result: vectorPartitionCoordinatorTaskResultV1{response: VectorPartitionShardSearchResponseV1{Timing: VectorPartitionShardSearchTimingV1{SearchNanos: 1}}}},
+		{name: "response", timing: VectorPartitionCoordinatorTimingV1{ResponseNanos: math.MaxUint64}, result: vectorPartitionCoordinatorTaskResultV1{response: VectorPartitionShardSearchResponseV1{Timing: VectorPartitionShardSearchTimingV1{ResponseCopyNanos: 1}}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before := test.timing
+			if accumulateVectorPartitionCoordinatorTimingV1(&test.timing, test.result) {
+				t.Fatal("overflow accepted")
+			}
+			if test.timing != before {
+				t.Fatalf("partial timing published: got=%+v want=%+v", test.timing, before)
 			}
 		})
 	}
