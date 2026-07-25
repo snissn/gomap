@@ -3354,8 +3354,21 @@ type VectorPartitionStatusV1 struct {
 }
 
 // PublishVectorPartitionManifestV1 binds the durable generation to this
-// collection's currently declared vector-index definition before publication.
+// collection's currently declared vector-index definition before publication
+// and retains the standalone local-activation behavior.
 func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV1, resources *rootpublication.StableResourceSet) error {
+	return c.publishVectorPartitionManifestModeV1(m, resources, true)
+}
+
+// StageVectorPartitionManifestV1 durably publishes a building or ready
+// generation without changing the local active pointer. A ready generation is
+// therefore usable as M7 group-readiness evidence but cannot be served until
+// the replicated catalog/meta lifecycle activates it.
+func (c *Collection) StageVectorPartitionManifestV1(m VectorPartitionManifestV1, resources *rootpublication.StableResourceSet) error {
+	return c.publishVectorPartitionManifestModeV1(m, resources, false)
+}
+
+func (c *Collection) publishVectorPartitionManifestModeV1(m VectorPartitionManifestV1, resources *rootpublication.StableResourceSet, activate bool) error {
 	if c == nil || c.db == nil {
 		if resources != nil {
 			resources.Release()
@@ -3443,8 +3456,13 @@ func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV
 		if e != nil {
 			return e
 		}
-		mutationErr := s.persistVectorPartitionManifestLifecycleV1(m)
-		if m.State == "ready" {
+		var mutationErr error
+		if activate {
+			mutationErr = s.persistVectorPartitionManifestLifecycleV1(m)
+		} else {
+			mutationErr = s.stageVectorPartitionManifestLifecycleV1(m)
+		}
+		if activate && m.State == "ready" {
 			syncVectorPartitionActiveAuthorityFromStoreV1(c.db.Dir(), s, c.name, m.IndexName)
 		}
 		return mutationErr
