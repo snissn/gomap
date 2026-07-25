@@ -466,10 +466,10 @@ func encodeVectorPartitionLifecycleSnapshotV1(records map[VectorPartitionLifecyc
 		return a.IndexName < b.IndexName
 	})
 	for collection, barrier := range barriers {
-		if err := validateCollectionRef(collection); err != nil || barrier.Epoch == 0 || !isSHA256HexVectorPartitionV1(barrier.OperationDigest) {
+		if err := validateCollectionRef(collection); err != nil || validateVectorPartitionCollectionMutationBarrierStateV1(barrier) != nil {
 			return nil, errors.Join(ErrInvalidVectorPartitionLifecycle, fmt.Errorf("invalid collection mutation barrier"))
 		}
-		payload.CollectionMutationBarriers = append(payload.CollectionMutationBarriers, vectorPartitionCollectionMutationBarrierV1{Collection: collection, Epoch: barrier.Epoch, Pending: barrier.Pending, OperationDigest: barrier.OperationDigest})
+		payload.CollectionMutationBarriers = append(payload.CollectionMutationBarriers, vectorPartitionCollectionMutationBarrierV1{Collection: collection, Epoch: barrier.Epoch, Pending: barrier.Pending, OperationDigest: barrier.OperationDigest, Completed: append([]vectorPartitionCollectionCompletedMutationV1(nil), barrier.Completed...)})
 	}
 	sort.Slice(payload.CollectionMutationBarriers, func(i, j int) bool {
 		a, b := payload.CollectionMutationBarriers[i].Collection, payload.CollectionMutationBarriers[j].Collection
@@ -566,13 +566,14 @@ func decodeVectorPartitionLifecycleSnapshotV1(raw []byte, catalog CatalogMetaRec
 		fences[key] = vectorPartitionLifecycleMutationFenceStateV1{Epoch: fence.Epoch, Pending: fence.Pending}
 	}
 	for _, barrier := range payload.CollectionMutationBarriers {
-		if err := validateCollectionRef(barrier.Collection); err != nil || barrier.Epoch == 0 || !isSHA256HexVectorPartitionV1(barrier.OperationDigest) {
+		state := vectorPartitionCollectionMutationBarrierStateV1{Epoch: barrier.Epoch, Pending: barrier.Pending, OperationDigest: barrier.OperationDigest, Completed: append([]vectorPartitionCollectionCompletedMutationV1(nil), barrier.Completed...)}
+		if err := validateCollectionRef(barrier.Collection); err != nil || validateVectorPartitionCollectionMutationBarrierStateV1(state) != nil {
 			return nil, nil, nil, nil, nil, errors.Join(ErrInvalidVectorPartitionLifecycle, fmt.Errorf("invalid collection mutation barrier"))
 		}
 		if _, duplicate := barriers[barrier.Collection]; duplicate {
 			return nil, nil, nil, nil, nil, ErrVectorPartitionLifecycleConflict
 		}
-		barriers[barrier.Collection] = vectorPartitionCollectionMutationBarrierStateV1{Epoch: barrier.Epoch, Pending: barrier.Pending, OperationDigest: barrier.OperationDigest}
+		barriers[barrier.Collection] = state
 	}
 	canonical, err := encodeVectorPartitionLifecycleSnapshotV1(records, fences, barriers)
 	if err != nil {

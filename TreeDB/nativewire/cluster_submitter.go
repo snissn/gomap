@@ -90,9 +90,9 @@ type VectorPartitionMutationAdmissionProviderV1 interface {
 }
 
 // VectorPartitionMutationCommitProviderV1 is called only after the data
-// command has a definitive committed-and-recoverable result.  It releases the
-// replicated lifecycle freeze installed by admission; ambiguous or failed
-// submissions deliberately do not call it.
+// command has definitively committed and completed deterministic local apply.
+// It releases the replicated lifecycle freeze installed by admission;
+// ambiguous or failed submissions deliberately do not call it.
 type VectorPartitionMutationCommitProviderV1 interface {
 	ConfirmVectorPartitionMutationV1(context.Context, iwire.CommandID, []iwire.Section) error
 }

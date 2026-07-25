@@ -81,8 +81,8 @@ func (a CatalogVectorPartitionMutationAdmissionV1) AdmitVectorPartitionMutationV
 
 // ConfirmVectorPartitionMutationV1 releases pending fences for this affected
 // collection. The shared submitter calls this solely after the
-// data Raft bridge reports a committed and locally recoverable result; a
-// failed or ambiguous submit intentionally leaves the catalog frozen.
+// data Raft bridge proves commit plus deterministic local apply; a failed or
+// ambiguous submit intentionally leaves the catalog frozen.
 func (a CatalogVectorPartitionMutationAdmissionV1) ConfirmVectorPartitionMutationV1(ctx context.Context, command iwire.CommandID, sections []iwire.Section) error {
 	if a.Authority == nil || a.Coordinator.Authority != a.Authority || a.Coordinator.Committer == nil {
 		return errors.New("nativewire: vector partition lifecycle admission is incompletely configured")
@@ -106,7 +106,7 @@ func (a CatalogVectorPartitionMutationAdmissionV1) ConfirmVectorPartitionMutatio
 		return err
 	}
 	collectionRef := raftplacement.CollectionRefV1{Database: database, Catalog: catalog, Collection: collection}
-	barrier, exists, err := a.Authority.VectorPartitionCollectionMutationBarrierV1(collectionRef)
+	barrier, exists, err := a.Authority.VectorPartitionCollectionMutationOperationV1(collectionRef, operationDigest)
 	if err != nil {
 		return err
 	}

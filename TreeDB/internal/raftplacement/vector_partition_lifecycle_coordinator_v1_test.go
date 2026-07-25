@@ -184,6 +184,92 @@ func TestVectorPartitionCollectionMutationBarrierRetryConflictAndRestoreV1(t *te
 	}
 }
 
+func TestVectorPartitionCollectionMutationBarrierRetainsOlderCompletedRetryV1(t *testing.T) {
+	authority, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	committer := &lifecycleCoordinatorCommitterV1{authority: authority, index: 1}
+	coordinator := VectorPartitionLifecycleCoordinatorV1{Authority: authority, Committer: committer}
+	collection := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11).Index.Collection
+	opA := fmt.Sprintf("%064x", 1)
+	opB := fmt.Sprintf("%064x", 2)
+
+	first, err := coordinator.BeginRelevantCollectionMutationV1(t.Context(), collection, opA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.ConfirmRelevantCollectionMutationV1(t.Context(), collection, opA); err != nil {
+		t.Fatal(err)
+	}
+	second, err := coordinator.BeginRelevantCollectionMutationV1(t.Context(), collection, opB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.ConfirmRelevantCollectionMutationV1(t.Context(), collection, opB); err != nil {
+		t.Fatal(err)
+	}
+	if second.Epoch != first.Epoch+1 {
+		t.Fatalf("mutation epochs first=%d second=%d", first.Epoch, second.Epoch)
+	}
+
+	beforeReplay := committer.index
+	replay, err := coordinator.BeginRelevantCollectionMutationV1(t.Context(), collection, opA)
+	if err != nil || replay.Pending || replay.Epoch != first.Epoch || replay.OperationDigest != opA {
+		t.Fatalf("older completed replay=%+v err=%v", replay, err)
+	}
+	if err := coordinator.ConfirmRelevantCollectionMutationV1(t.Context(), collection, opA); err != nil {
+		t.Fatalf("older completed confirm: %v", err)
+	}
+	if committer.index != beforeReplay {
+		t.Fatalf("older completed replay committed new catalog entries: before=%d after=%d", beforeReplay, committer.index)
+	}
+
+	snapshot, err := authority.ExportCatalogMetaSnapshotV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := NewCatalogMetaAuthorityV1()
+	if _, err := restored.installCatalogMetaSnapshotV1(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	restoredCommitter := &lifecycleCoordinatorCommitterV1{authority: restored, index: snapshot.AppliedIndex}
+	restoredCoordinator := VectorPartitionLifecycleCoordinatorV1{Authority: restored, Committer: restoredCommitter}
+	restoredReplay, err := restoredCoordinator.BeginRelevantCollectionMutationV1(t.Context(), collection, opA)
+	if err != nil || restoredReplay.Pending || restoredReplay.Epoch != first.Epoch || restoredCommitter.index != snapshot.AppliedIndex {
+		t.Fatalf("restored older replay=%+v err=%v applied=%d", restoredReplay, err, restoredCommitter.index)
+	}
+}
+
+func TestVectorPartitionCollectionMutationCompletedReplayWindowIsBoundedV1(t *testing.T) {
+	authority, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	committer := &lifecycleCoordinatorCommitterV1{authority: authority, index: 1}
+	coordinator := VectorPartitionLifecycleCoordinatorV1{Authority: authority, Committer: committer}
+	collection := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11).Index.Collection
+	operations := make([]string, maxVectorPartitionCollectionCompletedMutationsV1+2)
+	for i := range operations {
+		operations[i] = fmt.Sprintf("%064x", i+1)
+		if _, err := coordinator.BeginRelevantCollectionMutationV1(t.Context(), collection, operations[i]); err != nil {
+			t.Fatalf("begin %d: %v", i, err)
+		}
+		if err := coordinator.ConfirmRelevantCollectionMutationV1(t.Context(), collection, operations[i]); err != nil {
+			t.Fatalf("confirm %d: %v", i, err)
+		}
+	}
+
+	barrier := authority.collectionMutationBarriers[collection]
+	if len(barrier.Completed) != maxVectorPartitionCollectionCompletedMutationsV1 {
+		t.Fatalf("completed history=%d want %d", len(barrier.Completed), maxVectorPartitionCollectionCompletedMutationsV1)
+	}
+	if _, found, err := authority.VectorPartitionCollectionMutationOperationV1(collection, operations[0]); err != nil || found {
+		t.Fatalf("evicted operation found=%v err=%v", found, err)
+	}
+	retained, found, err := authority.VectorPartitionCollectionMutationOperationV1(collection, operations[2])
+	if err != nil || !found || retained.Pending || retained.OperationDigest != operations[2] {
+		t.Fatalf("oldest retained operation=%+v found=%v err=%v", retained, found, err)
+	}
+	if _, err := authority.ExportCatalogMetaSnapshotV1(); err != nil {
+		t.Fatalf("bounded history snapshot: %v", err)
+	}
+}
+
 func TestVectorPartitionCollectionMutationBarrierOwnsIndexInvalidationV1(t *testing.T) {
 	authority, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
 	committer := &lifecycleCoordinatorCommitterV1{authority: authority, index: 1}

@@ -12,7 +12,10 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 )
 
-const maxVectorPartitionCollectionMutationBarriersV1 = 4096
+const (
+	maxVectorPartitionCollectionMutationBarriersV1   = 4096
+	maxVectorPartitionCollectionCompletedMutationsV1 = 64
+)
 
 type vectorPartitionCollectionMutationCommandKindV1 string
 
@@ -33,16 +36,23 @@ type vectorPartitionCollectionMutationCommandV1 struct {
 }
 
 type vectorPartitionCollectionMutationBarrierV1 struct {
-	Collection      CollectionRefV1 `json:"collection"`
-	Epoch           uint64          `json:"epoch"`
-	Pending         bool            `json:"pending"`
-	OperationDigest string          `json:"operation_digest"`
+	Collection      CollectionRefV1                                `json:"collection"`
+	Epoch           uint64                                         `json:"epoch"`
+	Pending         bool                                           `json:"pending"`
+	OperationDigest string                                         `json:"operation_digest"`
+	Completed       []vectorPartitionCollectionCompletedMutationV1 `json:"completed,omitempty"`
+}
+
+type vectorPartitionCollectionCompletedMutationV1 struct {
+	Epoch           uint64 `json:"epoch"`
+	OperationDigest string `json:"operation_digest"`
 }
 
 type vectorPartitionCollectionMutationBarrierStateV1 struct {
 	Epoch           uint64
 	Pending         bool
 	OperationDigest string
+	Completed       []vectorPartitionCollectionCompletedMutationV1
 }
 
 // VectorPartitionCollectionMutationBarrierStatusV1 is the durable collection-
@@ -53,6 +63,65 @@ type VectorPartitionCollectionMutationBarrierStatusV1 struct {
 	Epoch           uint64
 	Pending         bool
 	OperationDigest string
+}
+
+func cloneVectorPartitionCollectionMutationBarrierStateV1(state vectorPartitionCollectionMutationBarrierStateV1) vectorPartitionCollectionMutationBarrierStateV1 {
+	state.Completed = append([]vectorPartitionCollectionCompletedMutationV1(nil), state.Completed...)
+	return state
+}
+
+func findVectorPartitionCollectionCompletedMutationV1(state vectorPartitionCollectionMutationBarrierStateV1, operationDigest string) (vectorPartitionCollectionCompletedMutationV1, bool) {
+	for _, completed := range state.Completed {
+		if completed.OperationDigest == operationDigest {
+			return completed, true
+		}
+	}
+	return vectorPartitionCollectionCompletedMutationV1{}, false
+}
+
+func appendVectorPartitionCollectionCompletedMutationV1(state *vectorPartitionCollectionMutationBarrierStateV1, completed vectorPartitionCollectionCompletedMutationV1) {
+	if _, exists := findVectorPartitionCollectionCompletedMutationV1(*state, completed.OperationDigest); exists {
+		return
+	}
+	state.Completed = append(state.Completed, completed)
+	if len(state.Completed) > maxVectorPartitionCollectionCompletedMutationsV1 {
+		state.Completed = append([]vectorPartitionCollectionCompletedMutationV1(nil), state.Completed[len(state.Completed)-maxVectorPartitionCollectionCompletedMutationsV1:]...)
+	}
+}
+
+func validateVectorPartitionCollectionMutationBarrierStateV1(state vectorPartitionCollectionMutationBarrierStateV1) error {
+	if state.Epoch == 0 || !isSHA256HexVectorPartitionV1(state.OperationDigest) || len(state.Completed) > maxVectorPartitionCollectionCompletedMutationsV1 {
+		return ErrInvalidVectorPartitionLifecycle
+	}
+	seen := make(map[string]struct{}, len(state.Completed))
+	previousEpoch := uint64(0)
+	for _, completed := range state.Completed {
+		if completed.Epoch == 0 || completed.Epoch <= previousEpoch || completed.Epoch > state.Epoch || !isSHA256HexVectorPartitionV1(completed.OperationDigest) {
+			return ErrInvalidVectorPartitionLifecycle
+		}
+		if _, duplicate := seen[completed.OperationDigest]; duplicate {
+			return ErrVectorPartitionLifecycleConflict
+		}
+		seen[completed.OperationDigest] = struct{}{}
+		previousEpoch = completed.Epoch
+	}
+	if state.Pending {
+		if len(state.Completed) > 0 && state.Completed[len(state.Completed)-1].Epoch >= state.Epoch {
+			return ErrInvalidVectorPartitionLifecycle
+		}
+		if _, duplicate := seen[state.OperationDigest]; duplicate {
+			return ErrVectorPartitionLifecycleConflict
+		}
+		return nil
+	}
+	if len(state.Completed) == 0 {
+		return ErrInvalidVectorPartitionLifecycle
+	}
+	latest := state.Completed[len(state.Completed)-1]
+	if latest.Epoch != state.Epoch || latest.OperationDigest != state.OperationDigest {
+		return ErrInvalidVectorPartitionLifecycle
+	}
+	return nil
 }
 
 func encodeVectorPartitionCollectionMutationCommandV1(command vectorPartitionCollectionMutationCommandV1) ([]byte, error) {
@@ -161,11 +230,18 @@ func (a *CatalogMetaAuthorityV1) applyCommittedVectorPartitionCollectionMutation
 		a.collectionMutationBarriers = make(map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1)
 	}
 	current, exists := a.collectionMutationBarriers[command.Collection]
-	original := current
+	current = cloneVectorPartitionCollectionMutationBarrierStateV1(current)
+	original := cloneVectorPartitionCollectionMutationBarrierStateV1(current)
 	switch command.Kind {
 	case vectorPartitionBeginCollectionMutationV1:
 		if exists && current.OperationDigest == command.OperationDigest {
 			if current.Epoch != command.MutationEpoch {
+				return CatalogMetaStatusV1{}, ErrVectorPartitionLifecycleConflict
+			}
+			return a.statusLocked(), nil
+		}
+		if completed, ok := findVectorPartitionCollectionCompletedMutationV1(current, command.OperationDigest); ok {
+			if completed.Epoch != command.MutationEpoch {
 				return CatalogMetaStatusV1{}, ErrVectorPartitionLifecycleConflict
 			}
 			return a.statusLocked(), nil
@@ -189,8 +265,14 @@ func (a *CatalogMetaAuthorityV1) applyCommittedVectorPartitionCollectionMutation
 				return CatalogMetaStatusV1{}, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("generation %d source capture is in progress", identity.Generation))
 			}
 		}
-		a.collectionMutationBarriers[command.Collection] = vectorPartitionCollectionMutationBarrierStateV1{Epoch: command.MutationEpoch, Pending: true, OperationDigest: command.OperationDigest}
+		a.collectionMutationBarriers[command.Collection] = vectorPartitionCollectionMutationBarrierStateV1{Epoch: command.MutationEpoch, Pending: true, OperationDigest: command.OperationDigest, Completed: current.Completed}
 	case vectorPartitionConfirmCollectionMutationV1:
+		if completed, ok := findVectorPartitionCollectionCompletedMutationV1(current, command.OperationDigest); ok {
+			if completed.Epoch != command.MutationEpoch {
+				return CatalogMetaStatusV1{}, ErrVectorPartitionLifecycleConflict
+			}
+			return a.statusLocked(), nil
+		}
 		if !exists || current.Epoch != command.MutationEpoch || current.OperationDigest != command.OperationDigest {
 			return CatalogMetaStatusV1{}, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("collection mutation confirmation does not own the barrier"))
 		}
@@ -202,6 +284,7 @@ func (a *CatalogMetaAuthorityV1) applyCommittedVectorPartitionCollectionMutation
 				return CatalogMetaStatusV1{}, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("index %q mutation fence %d remains pending", key.IndexName, fence.Epoch))
 			}
 		}
+		appendVectorPartitionCollectionCompletedMutationV1(&current, vectorPartitionCollectionCompletedMutationV1{Epoch: current.Epoch, OperationDigest: current.OperationDigest})
 		current.Pending = false
 		a.collectionMutationBarriers[command.Collection] = current
 	}
@@ -226,6 +309,36 @@ func (a *CatalogMetaAuthorityV1) applyCommittedVectorPartitionCollectionMutation
 	a.lifecycleBytes = uint64(len(snapshot))
 	a.refusal = ""
 	return a.statusLocked(), nil
+}
+
+// VectorPartitionCollectionMutationOperationV1 resolves an exact operation
+// from the current barrier or the bounded durable completion window.
+func (a *CatalogMetaAuthorityV1) VectorPartitionCollectionMutationOperationV1(collection CollectionRefV1, operationDigest string) (VectorPartitionCollectionMutationBarrierStatusV1, bool, error) {
+	if a == nil {
+		return VectorPartitionCollectionMutationBarrierStatusV1{}, false, ErrCatalogMetaUnavailable
+	}
+	if err := validateCollectionRef(collection); err != nil {
+		return VectorPartitionCollectionMutationBarrierStatusV1{}, false, err
+	}
+	if !isSHA256HexVectorPartitionV1(operationDigest) {
+		return VectorPartitionCollectionMutationBarrierStatusV1{}, false, errors.Join(ErrInvalidVectorPartitionLifecycle, fmt.Errorf("invalid mutation operation digest"))
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.record.Epoch == 0 {
+		return VectorPartitionCollectionMutationBarrierStatusV1{}, false, ErrCatalogMetaUnavailable
+	}
+	barrier, ok := a.collectionMutationBarriers[collection]
+	if !ok {
+		return VectorPartitionCollectionMutationBarrierStatusV1{Collection: collection}, false, nil
+	}
+	if barrier.OperationDigest == operationDigest {
+		return VectorPartitionCollectionMutationBarrierStatusV1{Collection: collection, Epoch: barrier.Epoch, Pending: barrier.Pending, OperationDigest: barrier.OperationDigest}, true, nil
+	}
+	if completed, found := findVectorPartitionCollectionCompletedMutationV1(barrier, operationDigest); found {
+		return VectorPartitionCollectionMutationBarrierStatusV1{Collection: collection, Epoch: completed.Epoch, Pending: false, OperationDigest: completed.OperationDigest}, true, nil
+	}
+	return VectorPartitionCollectionMutationBarrierStatusV1{Collection: collection, Epoch: barrier.Epoch, Pending: barrier.Pending}, false, nil
 }
 
 func (a *CatalogMetaAuthorityV1) VectorPartitionCollectionMutationBarrierV1(collection CollectionRefV1) (VectorPartitionCollectionMutationBarrierStatusV1, bool, error) {
@@ -295,12 +408,16 @@ func (c VectorPartitionLifecycleCoordinatorV1) BeginRelevantCollectionMutationV1
 	if !isSHA256HexVectorPartitionV1(operationDigest) {
 		return VectorPartitionCollectionMutationBarrierStatusV1{}, errors.Join(ErrInvalidVectorPartitionLifecycle, fmt.Errorf("invalid mutation operation digest"))
 	}
-	current, exists, err := c.Authority.VectorPartitionCollectionMutationBarrierV1(collection)
+	exact, found, err := c.Authority.VectorPartitionCollectionMutationOperationV1(collection, operationDigest)
 	if err != nil {
 		return VectorPartitionCollectionMutationBarrierStatusV1{}, err
 	}
-	if exists && current.OperationDigest == operationDigest {
-		return current, nil
+	if found {
+		return exact, nil
+	}
+	current, _, err := c.Authority.VectorPartitionCollectionMutationBarrierV1(collection)
+	if err != nil {
+		return VectorPartitionCollectionMutationBarrierStatusV1{}, err
 	}
 	if current.Pending {
 		return VectorPartitionCollectionMutationBarrierStatusV1{}, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("different collection mutation epoch %d is pending", current.Epoch))
@@ -331,7 +448,7 @@ func (c VectorPartitionLifecycleCoordinatorV1) ConfirmRelevantCollectionMutation
 	if c.Authority == nil || c.Committer == nil {
 		return ErrCatalogMetaUnavailable
 	}
-	current, exists, err := c.Authority.VectorPartitionCollectionMutationBarrierV1(collection)
+	current, exists, err := c.Authority.VectorPartitionCollectionMutationOperationV1(collection, operationDigest)
 	if err != nil {
 		return err
 	}

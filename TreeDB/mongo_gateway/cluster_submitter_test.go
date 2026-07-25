@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -36,10 +37,32 @@ type mongoClusterFakeSubmitter struct {
 	calls                    []mongoClusterSubmitterCall
 	actualAck                iwire.AckPolicy
 	committedRecoverable     bool
+	committedApplied         bool
 	responseSections         []iwire.Section
 	overrideResponseSections bool
 	status                   treenativewire.ClusterAdmissionStatus
 	admissionErr             error
+}
+
+type mongoConfirmingVectorPartitionSubmitterV1 struct {
+	*mongoClusterFakeSubmitter
+	mu            sync.Mutex
+	confirmations []iwire.CommandID
+}
+
+func (s *mongoConfirmingVectorPartitionSubmitterV1) RequiresVectorPartitionMutationAdmissionV1(context.Context) (bool, error) {
+	return true, nil
+}
+
+func (s *mongoConfirmingVectorPartitionSubmitterV1) AdmitVectorPartitionMutationV1(context.Context, iwire.CommandID, []iwire.Section) error {
+	return nil
+}
+
+func (s *mongoConfirmingVectorPartitionSubmitterV1) ConfirmVectorPartitionMutationV1(_ context.Context, command iwire.CommandID, _ []iwire.Section) error {
+	s.mu.Lock()
+	s.confirmations = append(s.confirmations, command)
+	s.mu.Unlock()
+	return nil
 }
 
 type mongoClusterAdmissionSubmitter struct {
@@ -328,6 +351,7 @@ func (f *mongoClusterFakeSubmitter) SubmitCommandEntryV1(ctx context.Context, en
 	return treenativewire.ClusterSubmitResult{
 		ActualAck:            actualAck,
 		CommittedRecoverable: f.committedRecoverable,
+		CommittedApplied:     f.committedApplied,
 		ResponseSections:     responseSections,
 	}, nil
 }
@@ -2526,6 +2550,46 @@ func TestClusterSubmitterMajorityWriteConcernRejectsMissingCollectionNoops(t *te
 			t.Fatalf("submit calls=%d want 0", len(calls))
 		}
 	})
+}
+
+func TestClusterSubmitterVisibleAckConfirmsCommittedVectorMutationV1(t *testing.T) {
+	submitter := &mongoConfirmingVectorPartitionSubmitterV1{mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{committedApplied: true}}
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	server.ClusterSubmitter = submitter
+	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(32)
+
+	response := serveCommand(t, server, 325834, bson.D{
+		{Key: "create", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, response)
+	submitter.mu.Lock()
+	confirmations := append([]iwire.CommandID(nil), submitter.confirmations...)
+	submitter.mu.Unlock()
+	if !reflect.DeepEqual(confirmations, []iwire.CommandID{iwire.CommandCreateCollection}) {
+		t.Fatalf("confirmations=%v want create_collection", confirmations)
+	}
+}
+
+func TestClusterSubmitterRecoverableOnlyDoesNotConfirmVectorMutationV1(t *testing.T) {
+	submitter := &mongoConfirmingVectorPartitionSubmitterV1{mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{committedRecoverable: true}}
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	server.ClusterSubmitter = submitter
+	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(32)
+
+	response := serveCommand(t, server, 325835, bson.D{
+		{Key: "create", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, response)
+	submitter.mu.Lock()
+	confirmationCount := len(submitter.confirmations)
+	submitter.mu.Unlock()
+	if confirmationCount != 0 {
+		t.Fatalf("recoverable-only submission confirmations=%d want 0", confirmationCount)
+	}
 }
 
 func TestClusterSubmitterWriteConcernAccepted(t *testing.T) {
