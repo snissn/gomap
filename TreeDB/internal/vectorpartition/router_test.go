@@ -1,10 +1,15 @@
 package vectorpartition
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
 	"math"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPartitionRouterDeterministicBytesAndOrder(t *testing.T) {
@@ -46,6 +51,47 @@ func TestPartitionRouterDeterministicBytesAndOrder(t *testing.T) {
 	}
 	if first.Representatives[0].PartitionID != 2 {
 		t.Fatalf("representatives are not partition ordered: %+v", first.Representatives)
+	}
+	wantBytes, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(firstBytes, wantBytes) {
+		t.Fatalf("canonical streaming bytes changed\n got: %s\nwant: %s", firstBytes, wantBytes)
+	}
+}
+
+func TestPartitionRouterValidationAndDigestObserveContext(t *testing.T) {
+	cfg := routerTestConfigV1()
+	cfg.MaxVectors = 256
+	cfg.MaxRepresentatives = 256
+	partitions := make([]RouterPartitionV1, 128)
+	for i := range partitions {
+		partitions[i] = RouterPartitionV1{
+			PartitionID: uint32(i + 1),
+			Vectors: []RouterVectorV1{{
+				Ordinal: uint64(i + 1),
+				Values:  []float32{1, 0},
+			}},
+		}
+	}
+	model, err := BuildRouterV1(partitions, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	validationCanceled := &routerCancelAfterErrContextV1{cancelAt: 8}
+	if err := ValidateRouterModelWithContextV1(validationCanceled, model); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("validation err=%v want deadline exceeded", err)
+	}
+
+	validationCounter := &routerCancelAfterErrContextV1{}
+	if err := ValidateRouterModelWithContextV1(validationCounter, model); err != nil {
+		t.Fatal(err)
+	}
+	digestCanceled := &routerCancelAfterErrContextV1{cancelAt: validationCounter.calls + 3}
+	if _, err := RouterDigestWithContextV1(digestCanceled, model); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("digest err=%v want deadline exceeded", err)
 	}
 }
 
@@ -273,4 +319,20 @@ func routerTestConfigV1() RouterConfigV1 {
 	cfg.MaxRepresentatives = 100
 	cfg.MaxScalarWork = 1_000_000
 	return cfg
+}
+
+type routerCancelAfterErrContextV1 struct {
+	calls    int
+	cancelAt int
+}
+
+func (c *routerCancelAfterErrContextV1) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c *routerCancelAfterErrContextV1) Done() <-chan struct{}       { return nil }
+func (c *routerCancelAfterErrContextV1) Value(any) any               { return nil }
+func (c *routerCancelAfterErrContextV1) Err() error {
+	c.calls++
+	if c.cancelAt > 0 && c.calls >= c.cancelAt {
+		return context.DeadlineExceeded
+	}
+	return nil
 }

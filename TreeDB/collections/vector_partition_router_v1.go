@@ -282,7 +282,7 @@ func (c *Collection) BuildAndPublishVectorPartitionRouterV1(ctx context.Context,
 	if err != nil {
 		return fail(err)
 	}
-	modelDigest, err := internalrouter.RouterDigestV1(model)
+	modelDigest, err := internalrouter.RouterDigestWithContextV1(ctx, model)
 	if err != nil {
 		return fail(err)
 	}
@@ -1103,10 +1103,10 @@ func decodeVectorPartitionRouterModelWithContextV1(ctx context.Context, view *co
 		}
 		return model.Representatives[i].LeafNodeID < model.Representatives[j].LeafNodeID
 	})
-	if err := internalrouter.ValidateRouterModelV1(model); err != nil {
+	if err := internalrouter.ValidateRouterModelWithContextV1(ctx, model); err != nil {
 		return model, "", nil, err
 	}
-	gotDigest, err := internalrouter.RouterDigestV1(model)
+	gotDigest, err := internalrouter.RouterDigestWithContextV1(ctx, model)
 	if err != nil {
 		return model, "", nil, err
 	}
