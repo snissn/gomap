@@ -12,7 +12,10 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 )
 
-const maxVectorPartitionLifecycleSnapshotRecordsV1 = 4096
+const (
+	maxVectorPartitionLifecycleSnapshotRecordsV1 = 4096
+	maxVectorPartitionLifecycleMutationFencesV1  = 4096
+)
 
 type vectorPartitionLifecycleServingKeyV1 struct {
 	Collection CollectionRefV1
@@ -144,7 +147,12 @@ func (a *CatalogMetaAuthorityV1) applyCommittedVectorPartitionLifecycleV1(raw []
 	// submitted.  Checking both build and activation makes a candidate that
 	// raced that entry fail closed, including after restore/replay and after
 	// the invalidated record has been cleaned up.
-	fence := a.mutationFences[servingKey]
+	fence, fenceExists := a.mutationFences[servingKey]
+	if command.Kind == VectorPartitionLifecycleInvalidateV1 && !fenceExists &&
+		len(a.mutationFences) >= maxVectorPartitionLifecycleMutationFencesV1 {
+		return CatalogMetaStatusV1{}, errors.Join(ErrVectorPartitionLifecycleLimit,
+			fmt.Errorf("mutation fences=%d", len(a.mutationFences)))
+	}
 	if (command.Kind == VectorPartitionLifecycleBeginBuildV1 || command.Kind == VectorPartitionLifecycleActivateV1) && fence.Pending {
 		return CatalogMetaStatusV1{}, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("candidate source is blocked by pending mutation fence %d", fence.Epoch))
 	}
@@ -371,6 +379,9 @@ func encodeVectorPartitionLifecycleSnapshotV1(records map[VectorPartitionLifecyc
 	if len(records) > maxVectorPartitionLifecycleSnapshotRecordsV1 {
 		return nil, errors.Join(ErrVectorPartitionLifecycleLimit, fmt.Errorf("snapshot records=%d", len(records)))
 	}
+	if len(fences) > maxVectorPartitionLifecycleMutationFencesV1 {
+		return nil, errors.Join(ErrVectorPartitionLifecycleLimit, fmt.Errorf("snapshot mutation fences=%d", len(fences)))
+	}
 	payload := vectorPartitionLifecycleSnapshotV1{Format: VectorPartitionLifecycleFormatV1, Records: make([]VectorPartitionLifecycleRecordV1, 0, len(records)), MutationFences: make([]vectorPartitionLifecycleMutationFenceV1, 0, len(fences))}
 	for _, record := range records {
 		raw, err := EncodeVectorPartitionLifecycleRecordV1(record)
@@ -387,7 +398,8 @@ func encodeVectorPartitionLifecycleSnapshotV1(records map[VectorPartitionLifecyc
 		return vectorPartitionLifecycleIdentityLessV1(payload.Records[i].Identity, payload.Records[j].Identity)
 	})
 	for key, fence := range fences {
-		if err := validateCollectionRef(key.Collection); err != nil || key.IndexName == "" || fence.Epoch == 0 {
+		if err := validateCollectionRef(key.Collection); err != nil ||
+			validateVectorPartitionLifecycleNameV1("index name", key.IndexName) != nil || fence.Epoch == 0 {
 			return nil, errors.Join(ErrInvalidVectorPartitionLifecycle, fmt.Errorf("invalid mutation fence"))
 		}
 		payload.MutationFences = append(payload.MutationFences, vectorPartitionLifecycleMutationFenceV1{Collection: key.Collection, IndexName: key.IndexName, Epoch: fence.Epoch, Pending: fence.Pending})
@@ -441,7 +453,9 @@ func decodeVectorPartitionLifecycleSnapshotV1(raw []byte, catalog CatalogMetaRec
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return nil, nil, nil, nil, errors.Join(ErrInvalidVectorPartitionLifecycle, fmt.Errorf("trailing lifecycle snapshot data"))
 	}
-	if payload.Format != VectorPartitionLifecycleFormatV1 || len(payload.Records) > maxVectorPartitionLifecycleSnapshotRecordsV1 {
+	if payload.Format != VectorPartitionLifecycleFormatV1 ||
+		len(payload.Records) > maxVectorPartitionLifecycleSnapshotRecordsV1 ||
+		len(payload.MutationFences) > maxVectorPartitionLifecycleMutationFencesV1 {
 		return nil, nil, nil, nil, ErrVectorPartitionLifecycleLimit
 	}
 	for _, record := range payload.Records {
@@ -474,7 +488,8 @@ func decodeVectorPartitionLifecycleSnapshotV1(raw []byte, catalog CatalogMetaRec
 		}
 	}
 	for _, fence := range payload.MutationFences {
-		if err := validateCollectionRef(fence.Collection); err != nil || fence.IndexName == "" || fence.Epoch == 0 {
+		if err := validateCollectionRef(fence.Collection); err != nil ||
+			validateVectorPartitionLifecycleNameV1("index name", fence.IndexName) != nil || fence.Epoch == 0 {
 			return nil, nil, nil, nil, errors.Join(ErrInvalidVectorPartitionLifecycle, fmt.Errorf("invalid mutation fence"))
 		}
 		key := vectorPartitionLifecycleServingKeyV1{Collection: fence.Collection, IndexName: fence.IndexName}

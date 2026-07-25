@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -393,6 +394,43 @@ func TestCatalogMetaLifecycleGuardsCatalogTransitionUntilCleanup(t *testing.T) {
 	}
 	if statuses := authority.VectorPartitionLifecycleStatusesV1(); len(statuses) != 0 {
 		t.Fatalf("cleaned lifecycle tombstones survived catalog replacement: %+v", statuses)
+	}
+}
+
+func TestCatalogMetaLifecycleMutationFencesAreBoundedBeforePublicationV1(t *testing.T) {
+	collection := CollectionRefV1{Database: DefaultDatabase, Catalog: DefaultCatalog, Collection: "docs"}
+	fences := make(map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1, maxVectorPartitionLifecycleMutationFencesV1+1)
+	for i := 0; i <= maxVectorPartitionLifecycleMutationFencesV1; i++ {
+		fences[vectorPartitionLifecycleServingKeyV1{Collection: collection, IndexName: fmt.Sprintf("idx-%04d", i)}] =
+			vectorPartitionLifecycleMutationFenceStateV1{Epoch: 1}
+	}
+	if _, err := encodeVectorPartitionLifecycleSnapshotV1(nil, fences); !errors.Is(err, ErrVectorPartitionLifecycleLimit) {
+		t.Fatalf("oversized mutation-fence snapshot err=%v", err)
+	}
+
+	authority, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	applied := uint64(1)
+	identity := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11)
+	active := catalogMetaLifecycleBuildPreparedV1(t, authority, &applied, identity, 0, 9)
+	active = catalogMetaLifecycleApplyV1(t, authority, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleActivateV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.MutationEpoch = 9
+	}))
+	authority.mu.Lock()
+	authority.mutationFences = make(map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1, maxVectorPartitionLifecycleMutationFencesV1)
+	for i := 0; i < maxVectorPartitionLifecycleMutationFencesV1; i++ {
+		authority.mutationFences[vectorPartitionLifecycleServingKeyV1{Collection: collection, IndexName: fmt.Sprintf("idx-%04d", i)}] =
+			vectorPartitionLifecycleMutationFenceStateV1{Epoch: 1}
+	}
+	authority.mu.Unlock()
+	invalidate := catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleInvalidateV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.Reason = "bounded fence test"
+		command.InvalidationEpoch = 10
+	})
+	if _, err := authority.applyCommittedCatalogMetaV1(mustEncodeCatalogMetaLifecycleCommandV1(t, invalidate), applied+1); !errors.Is(err, ErrVectorPartitionLifecycleLimit) {
+		t.Fatalf("new mutation fence past cap err=%v", err)
+	}
+	if retained, ok := authority.VectorPartitionLifecycleRecordV1(identity); !ok || retained.State != VectorPartitionLifecycleActiveV1 || retained.Revision != active.Revision {
+		t.Fatalf("fence-cap refusal mutated active record: %+v available=%v", retained, ok)
 	}
 }
 
