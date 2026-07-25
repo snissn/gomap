@@ -93,14 +93,23 @@ type VectorPartitionSearchStatusV1 struct {
 // layers use it before search so a small ef_search cannot conceal the
 // row-count-sized visit bitmap required by the native HNSW pack.
 func (s *VectorPartitionLocalSearcherV1) SearchScratchBytesV1(opts VectorPartitionSearchOptionsV1) (uint64, error) {
+	_, scratchBytes, err := s.SearchPreflightV1(opts)
+	return scratchBytes, err
+}
+
+// SearchPreflightV1 returns one coherent status and scratch-bound snapshot.
+// Serving layers use it to validate a partition before any request traversal
+// without separately reacquiring the searcher mutex for Status.
+func (s *VectorPartitionLocalSearcherV1) SearchPreflightV1(opts VectorPartitionSearchOptionsV1) (VectorPartitionSearchStatusV1, uint64, error) {
 	if s == nil || opts.TopK < 1 || opts.EfSearch < 0 || opts.MaxStableIDBytes < 0 {
-		return 0, ErrVectorPartitionSearchUnavailable
+		return VectorPartitionSearchStatusV1{}, 0, ErrVectorPartitionSearchUnavailable
 	}
 	s.mu.Lock()
 	if s.retired {
 		s.mu.Unlock()
-		return 0, ErrVectorPartitionSearchUnavailable
+		return VectorPartitionSearchStatusV1{}, 0, ErrVectorPartitionSearchUnavailable
 	}
+	status := s.statusLockedV1()
 	prepared := s.prepared
 	exactRows := len(s.asset.IDs)
 	maxStableIDBytes := s.maxStableIDBytes
@@ -110,6 +119,11 @@ func (s *VectorPartitionLocalSearcherV1) SearchScratchBytesV1(opts VectorPartiti
 	}
 	s.mu.Unlock()
 
+	scratchBytes, err := vectorPartitionSearchScratchBytesV1(opts, prepared, exactRows, maxStableIDBytes, header)
+	return status, scratchBytes, err
+}
+
+func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, prepared *columnHNSWSearchPackPreparedView, exactRows, maxStableIDBytes int, header columnHNSWSearchPackHeader) (uint64, error) {
 	if opts.MaxStableIDBytes > 0 && maxStableIDBytes > opts.MaxStableIDBytes {
 		return 0, fmt.Errorf("%w: stable ID bytes=%d exceeds limit=%d", ErrVectorPartitionSearchUnavailable, maxStableIDBytes, opts.MaxStableIDBytes)
 	}
@@ -538,6 +552,10 @@ func (s *VectorPartitionLocalSearcherV1) Status() VectorPartitionSearchStatusV1 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.statusLockedV1()
+}
+
+func (s *VectorPartitionLocalSearcherV1) statusLockedV1() VectorPartitionSearchStatusV1 {
 	st := VectorPartitionSearchStatusV1{Generation: s.asset.Generation, PartitionID: s.asset.PartitionID, ActivePins: s.pins, Opened: s.opened, Searches: s.searches, Failures: s.failures, Retired: s.retired, HomeMemberships: s.homeMemberships, OverlapMemberships: s.overlapMemberships, MaxStableIDBytes: s.maxStableIDBytes, PackBytes: s.packBytes, MappedBytes: s.mappedBytes, HeapBytes: s.heapBytes, OpenNanos: s.openNanos, SearchRoute: s.searchRoute, Candidates: s.candidates, Edges: s.edges}
 	if s.prepared != nil {
 		return st

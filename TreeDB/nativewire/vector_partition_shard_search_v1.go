@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"math"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -257,6 +256,13 @@ type VectorPartitionPinnedGenerationV1 interface {
 	Close() error
 }
 
+// vectorPartitionPinnedManifestViewV1 is implemented only by the package-owned
+// immutable cache lease. External generation sources retain the defensive-copy
+// Manifest contract.
+type vectorPartitionPinnedManifestViewV1 interface {
+	immutableManifestViewV1() VectorPartitionPinnedManifestV1
+}
+
 type VectorPartitionGenerationSourceV1 interface {
 	PinVectorPartitionGenerationV1(context.Context, string, uint64) (VectorPartitionPinnedGenerationV1, error)
 }
@@ -422,7 +428,12 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 			resultErr = s.wrapError(fmt.Errorf("%w: close generation pin: %v", ErrVectorPartitionShardSearchAssetsUnavailable, closeErr), groupID)
 		}
 	}()
-	manifest := pinned.Manifest()
+	var manifest VectorPartitionPinnedManifestV1
+	if view, ok := pinned.(vectorPartitionPinnedManifestViewV1); ok {
+		manifest = view.immutableManifestViewV1()
+	} else {
+		manifest = pinned.Manifest()
+	}
 	if err := s.validatePinnedManifest(request, manifest); err != nil {
 		response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
 		return response, s.wrapError(err, groupID)
@@ -455,7 +466,11 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 			return response, s.wrapError(fmt.Errorf("%w: partition %d returned a nil search lease", ErrVectorPartitionShardSearchAssetsUnavailable, partitionID), groupID)
 		}
 		searcher := lease.Searcher
-		status := searcher.Status()
+		status, scratchBytes, scratchErr := searcher.SearchPreflightV1(collections.VectorPartitionSearchOptionsV1{
+			TopK:             request.TopK,
+			EfSearch:         request.EfSearch,
+			MaxStableIDBytes: s.limits.MaxStableIDBytes,
+		})
 		if status.Generation != request.PartitionGeneration || status.PartitionID != partitionID || status.Retired {
 			_ = lease.Close()
 			response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
@@ -467,21 +482,16 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 			response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
 			return response, s.wrapError(fmt.Errorf("%w: partition %d unknown search route %q", ErrVectorPartitionShardSearchAssetsUnavailable, partitionID, status.SearchRoute), groupID)
 		}
-		candidateCeiling := uint64(request.EfSearch)
-		if status.SearchRoute == collections.VectorPartitionSearchRouteExactFP32ScanV1 {
-			candidateCeiling = uint64(status.HomeMemberships + status.OverlapMemberships)
-		}
-		partitionCandidateBytes, ok := mulUint64V1(candidateCeiling, 64)
-		scratchBytes, scratchErr := searcher.SearchScratchBytesV1(collections.VectorPartitionSearchOptionsV1{
-			TopK:             request.TopK,
-			EfSearch:         request.EfSearch,
-			MaxStableIDBytes: s.limits.MaxStableIDBytes,
-		})
 		if scratchErr != nil {
 			_ = lease.Close()
 			response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
 			return response, s.wrapError(fmt.Errorf("%w: partition %d scratch bound: %v", ErrVectorPartitionShardSearchAssetsUnavailable, partitionID, scratchErr), groupID)
 		}
+		candidateCeiling := uint64(request.EfSearch)
+		if status.SearchRoute == collections.VectorPartitionSearchRouteExactFP32ScanV1 {
+			candidateCeiling = uint64(status.HomeMemberships + status.OverlapMemberships)
+		}
+		partitionCandidateBytes, ok := mulUint64V1(candidateCeiling, 64)
 		if scratchBytes > partitionCandidateBytes {
 			partitionCandidateBytes = scratchBytes
 		}
@@ -790,13 +800,14 @@ func (s *VectorPartitionShardSearchServiceV1) validatePinnedManifest(r VectorPar
 		return ErrVectorPartitionShardSearchGenerationMismatch
 	}
 	for _, partitionID := range r.PartitionIDs {
-		index := sort.Search(len(m.Placements), func(i int) bool {
-			return m.Placements[i].PartitionID >= partitionID
-		})
-		if index >= len(m.Placements) || m.Placements[index].PartitionID != partitionID ||
+		if uint64(partitionID) >= uint64(len(m.Placements)) {
+			return fmt.Errorf("%w: manifest partition %d owner=%q target=%q", ErrVectorPartitionShardSearchRouteMismatch, partitionID, "", r.TargetGroupID)
+		}
+		index := int(partitionID)
+		if m.Placements[index].PartitionID != partitionID ||
 			m.Placements[index].GroupID != string(r.TargetGroupID) {
 			owner := ""
-			if index < len(m.Placements) && m.Placements[index].PartitionID == partitionID {
+			if m.Placements[index].PartitionID == partitionID {
 				owner = m.Placements[index].GroupID
 			}
 			return fmt.Errorf("%w: manifest partition %d owner=%q target=%q", ErrVectorPartitionShardSearchRouteMismatch, partitionID, owner, r.TargetGroupID)
@@ -830,6 +841,7 @@ func (s *VectorPartitionShardSearchServiceV1) validateResponse(ctx context.Conte
 		if len(partial.Neighbors) > vectorPartitionDuplicateLinearThresholdV1 {
 			seenIDs = make(map[string]struct{}, len(partial.Neighbors))
 		}
+		var seenSmallBloom uint64
 		for neighborIndex, neighbor := range partial.Neighbors {
 			if neighbor.ID == "" || len(neighbor.ID) > s.limits.MaxStableIDBytes || math.IsNaN(float64(neighbor.Score)) || math.IsInf(float64(neighbor.Score), 0) {
 				return 0, fmt.Errorf("%w: malformed partition result", ErrVectorPartitionShardSearchAssetsUnavailable)
@@ -840,11 +852,15 @@ func (s *VectorPartitionShardSearchServiceV1) validateResponse(ctx context.Conte
 				}
 				seenIDs[neighbor.ID] = struct{}{}
 			} else {
-				for previous := 0; previous < neighborIndex; previous++ {
-					if partial.Neighbors[previous].ID == neighbor.ID {
-						return 0, fmt.Errorf("%w: duplicate stable ID", ErrVectorPartitionShardSearchAssetsUnavailable)
+				bit := vectorPartitionStableIDBloomBitV1(neighbor.ID)
+				if seenSmallBloom&bit != 0 {
+					for previous := 0; previous < neighborIndex; previous++ {
+						if partial.Neighbors[previous].ID == neighbor.ID {
+							return 0, fmt.Errorf("%w: duplicate stable ID", ErrVectorPartitionShardSearchAssetsUnavailable)
+						}
 					}
 				}
+				seenSmallBloom |= bit
 			}
 			itemBytes := uint64(len(neighbor.ID) + 16)
 			responseBytes, ok = addUint64V1(responseBytes, itemBytes)
@@ -854,6 +870,15 @@ func (s *VectorPartitionShardSearchServiceV1) validateResponse(ctx context.Conte
 		}
 	}
 	return responseBytes, nil
+}
+
+func vectorPartitionStableIDBloomBitV1(id string) uint64 {
+	fingerprint := uint64(len(id))*0x9e3779b97f4a7c15 ^
+		uint64(id[0])<<17 ^
+		uint64(id[len(id)/2])<<9 ^
+		uint64(id[len(id)-1])
+	fingerprint ^= fingerprint >> 33
+	return uint64(1) << (fingerprint & 63)
 }
 
 func addUint64V1(a, b uint64) (uint64, bool) {

@@ -390,6 +390,27 @@ func TestCollectionVectorPartitionGenerationCacheBoundsAuthorityRefreshV1(t *tes
 	}
 }
 
+func TestCollectionVectorPartitionGenerationManifestHandoffIsDefensiveV1(t *testing.T) {
+	entry := &collectionVectorPartitionGenerationCacheV1{
+		manifest: VectorPartitionPinnedManifestV1{
+			Generation: 7,
+			Placements: []collections.VectorPartitionPlacementV1{{
+				PartitionID: 0,
+				GroupID:     "group-a",
+			}},
+		},
+	}
+	lease := newCollectionVectorPartitionGenerationLeaseV1(&CollectionVectorPartitionGenerationSourceV1{}, entry)
+	manifest := lease.Manifest()
+	manifest.Placements[0].GroupID = "mutated"
+	if entry.manifest.Placements[0].GroupID != "group-a" {
+		t.Fatal("public manifest handoff aliased immutable cache memory")
+	}
+	if view := lease.immutableManifestViewV1(); view.Placements[0].GroupID != "group-a" {
+		t.Fatalf("internal immutable view=%+v", view)
+	}
+}
+
 func TestCollectionVectorPartitionGenerationSingleflightDoesNotShareCallerCancellationV1(t *testing.T) {
 	key := collectionVectorPartitionGenerationKeyV1{index: "embedding", generation: 7}
 	firstLoadStarted := make(chan struct{})
@@ -543,6 +564,53 @@ func TestVectorPartitionShardSearchLeaderGroupLocalReturnsOracleAndProofV1(t *te
 	}
 }
 
+func TestVectorPartitionShardSearchPinnedManifestDirectIndexFailsClosedV1(t *testing.T) {
+	service, source, _ := newVectorPartitionShardSearchTestServiceV1(t,
+		[]raftplacement.VectorPartitionGroupV1{
+			{PartitionID: 0, GroupID: "group-a"},
+			{PartitionID: 1, GroupID: "group-a"},
+		},
+		map[uint32]collections.VectorPartitionSearchAssetV1{},
+	)
+	request := vectorPartitionShardSearchRequestTestV1([]uint32{1})
+	manifest := pinnedVectorPartitionManifestV1(source.manifest)
+	if err := service.validatePinnedManifest(request, manifest); err != nil {
+		t.Fatalf("valid pinned manifest: %v", err)
+	}
+	tests := []struct {
+		name string
+		edit func(*VectorPartitionPinnedManifestV1)
+	}{
+		{
+			name: "missing direct slot",
+			edit: func(m *VectorPartitionPinnedManifestV1) {
+				m.Placements = m.Placements[:1]
+			},
+		},
+		{
+			name: "noncanonical direct slot",
+			edit: func(m *VectorPartitionPinnedManifestV1) {
+				m.Placements[0], m.Placements[1] = m.Placements[1], m.Placements[0]
+			},
+		},
+		{
+			name: "wrong owner",
+			edit: func(m *VectorPartitionPinnedManifestV1) {
+				m.Placements[1].GroupID = "group-b"
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := clonePinnedVectorPartitionManifestV1(manifest)
+			tt.edit(&candidate)
+			if err := service.validatePinnedManifest(request, candidate); !errors.Is(err, ErrVectorPartitionShardSearchRouteMismatch) {
+				t.Fatalf("malformed pinned manifest err=%v", err)
+			}
+		})
+	}
+}
+
 func TestVectorPartitionShardSearchResponseRejectsLargeDuplicateSetV1(t *testing.T) {
 	neighbors := make([]VectorPartitionShardSearchNeighborV1, vectorPartitionDuplicateLinearThresholdV1+2)
 	for i := range neighbors {
@@ -563,6 +631,42 @@ func TestVectorPartitionShardSearchResponseRejectsLargeDuplicateSetV1(t *testing
 	if !errors.Is(err, ErrVectorPartitionShardSearchAssetsUnavailable) ||
 		!strings.Contains(err.Error(), "duplicate stable ID") {
 		t.Fatalf("large duplicate response err=%v", err)
+	}
+}
+
+func TestVectorPartitionShardSearchResponseBloomCollisionStillExactV1(t *testing.T) {
+	var first, second string
+	seen := make(map[uint64]string)
+	for i := 0; second == ""; i++ {
+		id := fmt.Sprintf("collision-%d", i)
+		bit := vectorPartitionStableIDBloomBitV1(id)
+		if previous, ok := seen[bit]; ok {
+			first, second = previous, id
+			break
+		}
+		seen[bit] = id
+	}
+	service := &VectorPartitionShardSearchServiceV1{limits: DefaultVectorPartitionShardSearchLimitsV1()}
+	request := VectorPartitionShardSearchRequestV1{
+		PartitionIDs:       []uint32{0},
+		TopK:               3,
+		ResponseBytesLimit: 1 << 20,
+	}
+	partial := VectorPartitionShardSearchPartialV1{
+		PartitionID: 0,
+		Neighbors: []VectorPartitionShardSearchNeighborV1{
+			{ID: first, Score: 2},
+			{ID: second, Score: 1},
+		},
+		SearchRoute: collections.VectorPartitionSearchRouteHNSWSearchPackV1,
+	}
+	if _, err := service.validateResponse(t.Context(), request, []VectorPartitionShardSearchPartialV1{partial}); err != nil {
+		t.Fatalf("distinct bloom collision rejected: %v", err)
+	}
+	partial.Neighbors = append(partial.Neighbors, VectorPartitionShardSearchNeighborV1{ID: second, Score: 0})
+	if _, err := service.validateResponse(t.Context(), request, []VectorPartitionShardSearchPartialV1{partial}); !errors.Is(err, ErrVectorPartitionShardSearchAssetsUnavailable) ||
+		!strings.Contains(err.Error(), "duplicate stable ID") {
+		t.Fatalf("duplicate after bloom collision err=%v", err)
 	}
 }
 

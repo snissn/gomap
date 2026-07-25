@@ -31,6 +31,9 @@ func TestVectorPartitionLocalSearcherV1ExactStableIDsAndPins(t *testing.T) {
 	if _, err := s.SearchScratchBytesV1(VectorPartitionSearchOptionsV1{TopK: 1, MaxStableIDBytes: 1}); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
 		t.Fatalf("capped stable ID preflight err=%v", err)
 	}
+	if status, _, err := s.SearchPreflightV1(VectorPartitionSearchOptionsV1{TopK: 1, MaxStableIDBytes: 1}); !errors.Is(err, ErrVectorPartitionSearchUnavailable) || status.MaxStableIDBytes != 2 {
+		t.Fatalf("coherent capped preflight status=%+v err=%v", status, err)
+	}
 	if e := s.Acquire(); e != nil {
 		t.Fatal(e)
 	}

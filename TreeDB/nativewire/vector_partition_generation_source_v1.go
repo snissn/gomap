@@ -506,9 +506,12 @@ type collectionVectorPartitionGenerationLeaseV1 struct {
 
 func newCollectionVectorPartitionGenerationLeaseV1(source *CollectionVectorPartitionGenerationSourceV1, entry *collectionVectorPartitionGenerationCacheV1) *collectionVectorPartitionGenerationLeaseV1 {
 	return &collectionVectorPartitionGenerationLeaseV1{
-		source:   source,
-		entry:    entry,
-		manifest: clonePinnedVectorPartitionManifestV1(entry.manifest),
+		source: source,
+		entry:  entry,
+		// entry.manifest is immutable for the cache entry's lifetime. Manifest
+		// clones on handoff, so retaining the entry snapshot here avoids a
+		// redundant per-request placements copy without exposing cache memory.
+		manifest: entry.manifest,
 	}
 }
 
@@ -517,6 +520,13 @@ func (p *collectionVectorPartitionGenerationLeaseV1) Manifest() VectorPartitionP
 		return VectorPartitionPinnedManifestV1{}
 	}
 	return clonePinnedVectorPartitionManifestV1(p.manifest)
+}
+
+func (p *collectionVectorPartitionGenerationLeaseV1) immutableManifestViewV1() VectorPartitionPinnedManifestV1 {
+	if p == nil {
+		return VectorPartitionPinnedManifestV1{}
+	}
+	return p.manifest
 }
 
 func (p *collectionVectorPartitionGenerationLeaseV1) OpenPartition(ctx context.Context, partition uint32) (*VectorPartitionPartitionSearchLeaseV1, error) {
