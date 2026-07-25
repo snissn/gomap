@@ -356,12 +356,17 @@ type SingleGroupSubmitter struct {
 type SubmitResultV1 struct {
 	ActualAck            iwire.AckPolicy
 	CommittedRecoverable bool
-	DecodedEntry         raftentry.CommandEntryV1
-	ApplyResult          raftentry.ApplyResultV1
-	CommittedEntry       CommittedCommandEntryV1
-	Evidence             CommitEvidenceV1
-	CatalogVersion       uint64
-	HasCatalogVersion    bool
+	// CommittedApplied is independent of the client-selected acknowledgment
+	// policy. It is true only after this submitter has validated the committed
+	// entry and completed local deterministic apply, so lifecycle callers may
+	// close post-commit fences even when the response requests a local ack.
+	CommittedApplied  bool
+	DecodedEntry      raftentry.CommandEntryV1
+	ApplyResult       raftentry.ApplyResultV1
+	CommittedEntry    CommittedCommandEntryV1
+	Evidence          CommitEvidenceV1
+	CatalogVersion    uint64
+	HasCatalogVersion bool
 }
 
 // CommandSubmitterV1 is the in-process boundary for submitting deterministic
@@ -532,6 +537,7 @@ func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	result := SubmitResultV1{
 		ActualAck:            actualAck,
 		CommittedRecoverable: actualAck == iwire.AckRaftCommitted && s.syncLocalWAL,
+		CommittedApplied:     true,
 		DecodedEntry:         decoded,
 		ApplyResult:          applyResult,
 		CommittedEntry:       committed,

@@ -838,6 +838,37 @@ func (c *Collection) OpenVectorPartitionRouterV1(index string) (*VectorPartition
 // used by the bounded M6 coordinator. The legacy entry point remains a
 // background-context wrapper.
 func (c *Collection) OpenVectorPartitionRouterWithContextV1(ctx context.Context, index string) (*VectorPartitionRouterV1, VectorPartitionRouterOpenStatusV1, error) {
+	return c.openVectorPartitionRouterWithContextV1(ctx, index, func(ctx context.Context, store *VectorPartitionStoreV1) (VectorPartitionManifestV1, error) {
+		return store.OpenActiveWithContext(ctx, c.name, index)
+	})
+}
+
+// OpenPreparedVectorPartitionRouterForGenerationWithContextV1 opens one exact
+// locally prepared generation without consulting the standalone active
+// pointer. Replicated lifecycle authority remains responsible for admitting
+// that generation before the caller performs routing or shard dispatch.
+func (c *Collection) OpenPreparedVectorPartitionRouterForGenerationWithContextV1(ctx context.Context, index string, generation uint64) (*VectorPartitionRouterV1, VectorPartitionRouterOpenStatusV1, error) {
+	if generation == 0 {
+		return nil, VectorPartitionRouterOpenStatusV1{FailureReason: "collections: invalid vector partition router generation"}, errors.New("collections: invalid vector partition router generation")
+	}
+	return c.openVectorPartitionRouterWithContextV1(ctx, index, func(ctx context.Context, store *VectorPartitionStoreV1) (VectorPartitionManifestV1, error) {
+		loaded, present, err := store.loadVectorPartitionLifecycleAuthorityWithContextV1(ctx, c.name, index)
+		if err != nil {
+			return VectorPartitionManifestV1{}, err
+		}
+		entry, ok := loaded.state.Generations[generation]
+		if !present || !ok || entry.Manifest == nil || entry.Deleting || entry.Manifest.State != "ready" {
+			return VectorPartitionManifestV1{}, fmt.Errorf("%w: generation %d is not prepared and ready", ErrVectorPartitionManifestInvalid, generation)
+		}
+		return vectorPartitionLifecycleManifestWithContextV1(ctx, loaded.state, generation, false)
+	})
+}
+
+func (c *Collection) openVectorPartitionRouterWithContextV1(
+	ctx context.Context,
+	index string,
+	load func(context.Context, *VectorPartitionStoreV1) (VectorPartitionManifestV1, error),
+) (*VectorPartitionRouterV1, VectorPartitionRouterOpenStatusV1, error) {
 	var router *VectorPartitionRouterV1
 	var status VectorPartitionRouterOpenStatusV1
 	started := time.Now()
@@ -848,7 +879,7 @@ func (c *Collection) OpenVectorPartitionRouterWithContextV1(ctx context.Context,
 		status.FailureReason = err.Error()
 		return nil, status, err
 	}
-	if c == nil || c.db == nil {
+	if c == nil || c.db == nil || load == nil {
 		status.FailureReason = "collections: closed collection"
 		return nil, status, errors.New(status.FailureReason)
 	}
@@ -860,14 +891,14 @@ func (c *Collection) OpenVectorPartitionRouterWithContextV1(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		manifest, err := store.OpenActiveWithContext(ctx, c.name, index)
+		manifest, err := load(ctx, store)
 		if err != nil {
 			return err
 		}
 		if manifest.State != "ready" ||
 			manifest.RouterGeneration != manifest.Generation ||
 			manifest.RouterAsset.Ref.Generation != manifest.Generation {
-			return errors.New("collections: vector partition router active generation is not ready")
+			return errors.New("collections: vector partition router generation is not ready")
 		}
 		if len(manifest.Representatives) == 0 {
 			return errors.New("collections: vector partition router ready generation has no representative mapping")

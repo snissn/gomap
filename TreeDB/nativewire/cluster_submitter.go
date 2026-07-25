@@ -193,7 +193,11 @@ func ClusterUnavailableAdmission(reason string) ClusterAdmissionStatus {
 type ClusterSubmitResult struct {
 	ActualAck            AckPolicy
 	CommittedRecoverable bool
-	ResponseSections     []iwire.Section
+	// CommittedApplied is submitter-owned post-commit/apply evidence used only
+	// for lifecycle confirmation. Unlike CommittedRecoverable it does not
+	// depend on the acknowledgment policy selected by the client.
+	CommittedApplied bool
+	ResponseSections []iwire.Section
 	// CatalogVersion is internal post-apply evidence. It lets response shaping
 	// omit response_meta without hiding catalog-cache progress from the server.
 	CatalogVersion    uint64
@@ -271,7 +275,7 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 	if err != nil {
 		return nil, err
 	}
-	if result.CommittedRecoverable {
+	if result.CommittedApplied {
 		if err := ConfirmVectorPartitionMutationV1(ctx, s.clusterSubmitter, cmd.Header.ID, cmd.Known); err != nil {
 			return nil, err
 		}

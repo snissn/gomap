@@ -16,6 +16,8 @@ const collectionVectorPartitionMaxAuthorityRefreshesV1 = 3
 // VectorPartitionReplicatedLifecycleAuthorityV1 is the constant-time M7
 // serving guard. Local prepared assets are evidence, not activation authority;
 // every cold load and cache hit must match the single replicated active record.
+// Successful validation returns the replicated lifecycle ready-set digest,
+// which is distinct from the local manifest's asset/placement digest.
 type VectorPartitionReplicatedLifecycleAuthorityV1 interface {
 	ValidateVectorPartitionGenerationSearchV1(
 		context.Context,
@@ -27,8 +29,7 @@ type VectorPartitionReplicatedLifecycleAuthorityV1 interface {
 		uint64,
 		uint64,
 		uint64,
-		string,
-	) error
+	) (string, error)
 }
 
 // CollectionVectorPartitionGenerationSourceV1 binds M5 to one actual local
@@ -262,7 +263,8 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 		}
 		return nil, fmt.Errorf("%w: generation status: %v", ErrVectorPartitionShardSearchGenerationMismatch, err)
 	}
-	if err := s.validateReplicatedLifecycle(ctx, key, manifest); err != nil {
+	replicatedReadySetDigest, err := s.validateReplicatedLifecycle(ctx, key, manifest)
+	if err != nil {
 		authorityToken.Release()
 		return nil, vectorPartitionReplicatedLifecycleValidationErrorV1(ctx, err)
 	}
@@ -279,11 +281,13 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 		return nil, err
 	}
 	release = false
+	pinnedManifest := pinnedVectorPartitionManifestV1(manifest)
+	pinnedManifest.ReadySetDigest = replicatedReadySetDigest
 	return &collectionVectorPartitionGenerationCacheV1{
 		collection:     s.Collection,
 		index:          key.index,
 		generation:     key.generation,
-		manifest:       pinnedVectorPartitionManifestV1(manifest),
+		manifest:       pinnedManifest,
 		openPlan:       openPlan,
 		authorityToken: authorityToken,
 		pin:            pin,
@@ -310,7 +314,7 @@ func (s *CollectionVectorPartitionGenerationSourceV1) validateActive(ctx context
 		return ErrVectorPartitionShardSearchAssetsUnavailable
 	}
 	if s.replicatedLifecycle != nil {
-		return s.replicatedLifecycle.ValidateVectorPartitionGenerationSearchV1(
+		readySetDigest, err := s.replicatedLifecycle.ValidateVectorPartitionGenerationSearchV1(
 			ctx,
 			s.replicatedCollection,
 			entry.manifest.IndexName,
@@ -320,18 +324,24 @@ func (s *CollectionVectorPartitionGenerationSourceV1) validateActive(ctx context
 			entry.manifest.SourceChecksum,
 			entry.manifest.SourceSchemaHash,
 			entry.manifest.SourceRowCount,
-			entry.manifest.ReadySetDigest,
 		)
+		if err != nil {
+			return err
+		}
+		if readySetDigest != entry.manifest.ReadySetDigest {
+			return ErrVectorPartitionShardSearchGenerationMismatch
+		}
+		return nil
 	}
 	return s.Collection.ValidateActiveVectorPartitionAuthorityTokenWithContextV1(ctx, key.index, key.generation, entry.authorityToken)
 }
 
-func (s *CollectionVectorPartitionGenerationSourceV1) validateReplicatedLifecycle(ctx context.Context, key collectionVectorPartitionGenerationKeyV1, manifest collections.VectorPartitionManifestV1) error {
+func (s *CollectionVectorPartitionGenerationSourceV1) validateReplicatedLifecycle(ctx context.Context, key collectionVectorPartitionGenerationKeyV1, manifest collections.VectorPartitionManifestV1) (string, error) {
 	if s.replicatedLifecycle == nil {
-		return nil
+		return manifest.ReadySetDigest, nil
 	}
 	if manifest.Collection != s.replicatedCollection.Collection {
-		return ErrVectorPartitionShardSearchGenerationMismatch
+		return "", ErrVectorPartitionShardSearchGenerationMismatch
 	}
 	return s.replicatedLifecycle.ValidateVectorPartitionGenerationSearchV1(
 		ctx,
@@ -343,7 +353,6 @@ func (s *CollectionVectorPartitionGenerationSourceV1) validateReplicatedLifecycl
 		manifest.SourceChecksum,
 		manifest.SourceSchemaHash,
 		manifest.SourceRowCount,
-		manifest.ReadySetDigest,
 	)
 }
 

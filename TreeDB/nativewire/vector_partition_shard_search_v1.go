@@ -141,6 +141,7 @@ type VectorPartitionShardSearchRequestV1 struct {
 	RequestID, CancellationID        string
 	Database, Catalog, Collection    string
 	IndexName, IndexDefinitionDigest string
+	ReadySetDigest                   string
 
 	SourceGeneration, SourceChecksum, SourceSchemaHash, SourceRowCount uint64
 	PartitionGeneration, RouterGeneration                              uint64
@@ -182,6 +183,7 @@ type VectorPartitionShardSearchPartialV1 struct {
 type VectorPartitionShardSearchProofV1 struct {
 	ServingNode, LeaderNode                                            raftcluster.NodeID
 	GroupID                                                            raftcluster.GroupID
+	ReadySetDigest                                                     string
 	ReadTerm, ReadIndex                                                uint64
 	AppliedTerm, AppliedIndex                                          uint64
 	SourceGeneration, SourceChecksum, SourceSchemaHash, SourceRowCount uint64
@@ -623,6 +625,7 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 			ServingNode:         proof.NodeID,
 			LeaderNode:          proof.NodeID,
 			GroupID:             proof.GroupID,
+			ReadySetDigest:      request.ReadySetDigest,
 			ReadTerm:            proof.Term,
 			ReadIndex:           proof.Index,
 			AppliedTerm:         progress.Term,
@@ -707,6 +710,7 @@ func (s *VectorPartitionShardSearchServiceV1) validateRequest(r VectorPartitionS
 		r.RequestID == "" || r.CancellationID == "" ||
 		r.Database == "" || r.Catalog == "" || r.Collection == "" || r.IndexName == "" ||
 		!isVectorPartitionShardSearchDigestV1(r.IndexDefinitionDigest) ||
+		!isVectorPartitionShardSearchDigestV1(r.ReadySetDigest) ||
 		r.SourceGeneration == 0 || r.SourceRowCount == 0 || r.PartitionGeneration == 0 || r.RouterGeneration == 0 ||
 		len(r.PartitionIDs) < 1 || len(r.PartitionIDs) > l.MaxPartitions ||
 		len(r.Query) < 1 || len(r.Query) > l.MaxDimensions ||
@@ -716,7 +720,7 @@ func (s *VectorPartitionShardSearchServiceV1) validateRequest(r VectorPartitionS
 	if r.TargetGroupID == "" {
 		return errors.Join(ErrVectorPartitionShardSearchInvalidRequest, raftcluster.ErrRouteTargetMissing)
 	}
-	for _, identity := range []string{r.RequestID, r.CancellationID, r.Database, r.Catalog, r.Collection, r.IndexName, r.IndexDefinitionDigest, string(r.TargetGroupID), string(r.TargetNodeID)} {
+	for _, identity := range []string{r.RequestID, r.CancellationID, r.Database, r.Catalog, r.Collection, r.IndexName, r.IndexDefinitionDigest, r.ReadySetDigest, string(r.TargetGroupID), string(r.TargetNodeID)} {
 		if len(identity) > l.MaxIdentityBytes {
 			return fmt.Errorf("%w: identity bytes", ErrVectorPartitionShardSearchInvalidRequest)
 		}
@@ -756,7 +760,7 @@ func (s *VectorPartitionShardSearchServiceV1) validateRequest(r VectorPartitionS
 	if !ok {
 		return fmt.Errorf("%w: request byte overflow", ErrVectorPartitionShardSearchInvalidRequest)
 	}
-	for _, identity := range []string{r.RequestID, r.CancellationID, r.Database, r.Catalog, r.Collection, r.IndexName, r.IndexDefinitionDigest, string(r.TargetGroupID), string(r.TargetNodeID)} {
+	for _, identity := range []string{r.RequestID, r.CancellationID, r.Database, r.Catalog, r.Collection, r.IndexName, r.IndexDefinitionDigest, r.ReadySetDigest, string(r.TargetGroupID), string(r.TargetNodeID)} {
 		requestBytes, ok = addUint64V1(requestBytes, uint64(len(identity)))
 		if !ok {
 			return fmt.Errorf("%w: request byte overflow", ErrVectorPartitionShardSearchInvalidRequest)
@@ -829,7 +833,8 @@ func (s *VectorPartitionShardSearchServiceV1) validatePinnedManifest(r VectorPar
 		m.IndexDefinitionDigest != r.IndexDefinitionDigest ||
 		m.SourceGeneration != r.SourceGeneration || m.SourceChecksum != r.SourceChecksum ||
 		m.SourceSchemaHash != r.SourceSchemaHash || m.SourceRowCount != r.SourceRowCount ||
-		m.Generation != r.PartitionGeneration || m.RouterGeneration != r.RouterGeneration {
+		m.Generation != r.PartitionGeneration || m.RouterGeneration != r.RouterGeneration ||
+		m.ReadySetDigest != r.ReadySetDigest {
 		return ErrVectorPartitionShardSearchGenerationMismatch
 	}
 	for _, partitionID := range r.PartitionIDs {

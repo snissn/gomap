@@ -35,6 +35,23 @@ type fakeClusterSubmitter struct {
 	resultHook           func(raftentry.CommandEntryV1, ClusterRequestMetadata, ClusterSubmitResult) (ClusterSubmitResult, error)
 }
 
+type confirmingVectorPartitionClusterSubmitterV1 struct {
+	*fakeClusterSubmitter
+	mu            sync.Mutex
+	confirmations []iwire.CommandID
+}
+
+func (s *confirmingVectorPartitionClusterSubmitterV1) RequiresVectorPartitionMutationAdmissionV1(context.Context) (bool, error) {
+	return true, nil
+}
+
+func (s *confirmingVectorPartitionClusterSubmitterV1) ConfirmVectorPartitionMutationV1(_ context.Context, command iwire.CommandID, _ []iwire.Section) error {
+	s.mu.Lock()
+	s.confirmations = append(s.confirmations, command)
+	s.mu.Unlock()
+	return nil
+}
+
 func (s *fakeClusterSubmitter) AdmitVectorPartitionMutationV1(_ context.Context, command iwire.CommandID, _ []iwire.Section) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -151,6 +168,7 @@ func (s *recordingRaftCommandSubmitter) SubmitCommandEntryV1(ctx context.Context
 	return raftcluster.SubmitResultV1{
 		ActualAck:            actualAck,
 		CommittedRecoverable: actualAck == iwire.AckRaftCommitted,
+		CommittedApplied:     true,
 		DecodedEntry:         decoded,
 		ApplyResult:          applyResult,
 		CommittedEntry:       committed,
@@ -420,6 +438,7 @@ func fakeClusterSubmitResponse(entry raftentry.CommandEntryV1, metadata ClusterR
 	}
 	return ClusterSubmitResult{
 		ActualAck:        actualAck,
+		CommittedApplied: true,
 		ResponseSections: sections,
 	}, nil
 }
@@ -683,6 +702,26 @@ func TestClusterSubmitterVectorPartitionAdmissionRunsBeforeRaftSubmitV1(t *testi
 	}
 	if calls := submitter.snapshot(); len(calls) != 1 {
 		t.Fatalf("successful admission submitted %d Raft entries", len(calls))
+	}
+}
+
+func TestClusterSubmitterVisibleAckConfirmsCommittedVectorMutationV1(t *testing.T) {
+	submitter := &confirmingVectorPartitionClusterSubmitterV1{fakeClusterSubmitter: &fakeClusterSubmitter{}}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")}, [][]byte{[]byte(`{"embedding":[1,2]}`)}, AckVisible); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	submitter.mu.Lock()
+	confirmations := append([]iwire.CommandID(nil), submitter.confirmations...)
+	submitter.mu.Unlock()
+	if !reflect.DeepEqual(confirmations, []iwire.CommandID{iwire.CommandInsertBatch}) {
+		t.Fatalf("confirmations=%v want insert_batch", confirmations)
 	}
 }
 

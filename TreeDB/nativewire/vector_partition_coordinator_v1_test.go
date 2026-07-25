@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -50,12 +51,14 @@ func (r *testVectorPartitionCoordinatorRouterV1) Close() error {
 }
 
 type testVectorPartitionCoordinatorRouterSourceV1 struct {
-	router *testVectorPartitionCoordinatorRouterV1
-	opens  int
+	router      *testVectorPartitionCoordinatorRouterV1
+	opens       int
+	generations []uint64
 }
 
-func (s *testVectorPartitionCoordinatorRouterSourceV1) OpenVectorPartitionCoordinatorRouterV1(context.Context, string) (VectorPartitionCoordinatorRouterV1, error) {
+func (s *testVectorPartitionCoordinatorRouterSourceV1) OpenVectorPartitionCoordinatorRouterV1(_ context.Context, _ string, generation uint64) (VectorPartitionCoordinatorRouterV1, error) {
 	s.opens++
+	s.generations = append(s.generations, generation)
 	return s.router, nil
 }
 
@@ -143,7 +146,8 @@ func (d *testVectorPartitionCoordinatorDispatcherV1) DispatchVectorPartitionShar
 		Version: VectorPartitionShardSearchVersionV1, RequestID: request.RequestID,
 		Proof: VectorPartitionShardSearchProofV1{
 			ServingNode: request.TargetNodeID, LeaderNode: request.TargetNodeID, GroupID: request.TargetGroupID,
-			ReadTerm: 1, ReadIndex: 2, AppliedTerm: 1, AppliedIndex: 2,
+			ReadySetDigest: request.ReadySetDigest,
+			ReadTerm:       1, ReadIndex: 2, AppliedTerm: 1, AppliedIndex: 2,
 			SourceGeneration: request.SourceGeneration, SourceChecksum: request.SourceChecksum,
 			SourceSchemaHash: request.SourceSchemaHash, SourceRowCount: request.SourceRowCount,
 			PartitionGeneration: request.PartitionGeneration, RouterGeneration: request.RouterGeneration,
@@ -297,13 +301,15 @@ func TestVectorPartitionCoordinatorCoalescesChunksDedupesAndMergesV1(t *testing.
 
 func TestVectorPartitionCoordinatorUsesReplicatedLifecycleAdmissionV1(t *testing.T) {
 	owners := []raftcluster.GroupID{"group-a"}
-	coordinator, _, dispatcher := testVectorPartitionCoordinatorV1(t,
+	coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
 		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
 		owners, map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "doc", Score: 1}}}, VectorPartitionCoordinatorLimitsV1{},
 	)
-	authority := &recordingVectorPartitionReplicatedLifecycleAuthorityV1{}
+	replicatedReadySetDigest := strings.Repeat("c", 64)
+	authority := &recordingVectorPartitionReplicatedLifecycleAuthorityV1{readySetDigest: replicatedReadySetDigest}
 	coordinator.replicatedLifecycle = authority
-	if _, err := coordinator.Search(t.Context(), testVectorPartitionCoordinatorRequestV1(len(owners))); err != nil {
+	response, err := coordinator.Search(t.Context(), testVectorPartitionCoordinatorRequestV1(len(owners)))
+	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
 	if authority.calls != 1 {
@@ -311,6 +317,12 @@ func TestVectorPartitionCoordinatorUsesReplicatedLifecycleAdmissionV1(t *testing
 	}
 	if len(dispatcher.calls) == 0 {
 		t.Fatal("admitted search did not dispatch shard request")
+	}
+	if !reflect.DeepEqual(source.generations, []uint64{coordinator.placement.PartitionGeneration}) {
+		t.Fatalf("router generations=%v want exact placement generation %d", source.generations, coordinator.placement.PartitionGeneration)
+	}
+	if response.ReadySetDigest != replicatedReadySetDigest || dispatcher.calls[0].ReadySetDigest != replicatedReadySetDigest {
+		t.Fatalf("replicated ready-set response/request=%q/%q want %q", response.ReadySetDigest, dispatcher.calls[0].ReadySetDigest, replicatedReadySetDigest)
 	}
 
 	authority.err = errors.New("generation invalidated")
@@ -681,6 +693,9 @@ func TestVectorPartitionCoordinatorRejectsCorruptShardProofsAndPartialsV1(t *tes
 		}},
 		{name: "applied_index_precedes_read", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
 			response.Proof.ReadIndex = response.Proof.AppliedIndex + 1
+		}},
+		{name: "ready_set_digest", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+			response.Proof.ReadySetDigest = strings.Repeat("f", 64)
 		}},
 		{name: "underreported_candidates", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
 			response.Partials[0].Candidates = 0

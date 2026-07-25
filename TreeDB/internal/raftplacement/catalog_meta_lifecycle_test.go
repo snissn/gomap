@@ -711,12 +711,19 @@ func catalogMetaLifecycleTestCommandV1(
 }
 
 func catalogMetaLifecycleValidateSearchV1(authority *CatalogMetaAuthorityV1, identity VectorPartitionLifecycleIdentityV1, readySetDigest string) error {
-	return authority.ValidateVectorPartitionGenerationSearchV1(
+	got, err := authority.ValidateVectorPartitionGenerationSearchV1(
 		context.Background(), identity.Index.Collection, identity.Index.IndexName,
 		identity.Generation, identity.Index.IndexDefinitionDigest,
 		identity.Source.Generation, identity.Source.Checksum, identity.Source.SchemaHash,
-		identity.Source.RowCount, readySetDigest,
+		identity.Source.RowCount,
 	)
+	if err != nil {
+		return err
+	}
+	if got != readySetDigest {
+		return errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("ready-set digest mismatch"))
+	}
+	return nil
 }
 
 func mustEncodeCatalogMetaLifecycleCommandV1(t *testing.T, command VectorPartitionLifecycleCommandV1) []byte {

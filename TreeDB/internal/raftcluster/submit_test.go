@@ -48,8 +48,8 @@ func TestSingleGroupSubmitterLeaderCommitsAppliesAndReturnsRaftCommitted(t *test
 	if err != nil {
 		t.Fatalf("SubmitCommandEntryV1: %v", err)
 	}
-	if result.ActualAck != iwire.AckRaftCommitted || !result.CommittedRecoverable {
-		t.Fatalf("ack/recoverable=%d/%v want raft_committed/true", result.ActualAck, result.CommittedRecoverable)
+	if result.ActualAck != iwire.AckRaftCommitted || !result.CommittedRecoverable || !result.CommittedApplied {
+		t.Fatalf("ack/recoverable/applied=%d/%v/%v want raft_committed/true/true", result.ActualAck, result.CommittedRecoverable, result.CommittedApplied)
 	}
 	if result.Evidence.Kind != CommitEvidenceProductionConsensusV1 || !result.Evidence.ProvesProductionConsensus() {
 		t.Fatalf("evidence=%+v does not prove production consensus", result.Evidence)
@@ -95,8 +95,8 @@ func TestSingleGroupSubmitterLowerAckDoesNotClaimRaftCommitted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitCommandEntryV1 visible: %v", err)
 	}
-	if result.ActualAck != iwire.AckVisible || result.CommittedRecoverable {
-		t.Fatalf("ack/recoverable=%d/%v want visible/false", result.ActualAck, result.CommittedRecoverable)
+	if result.ActualAck != iwire.AckVisible || result.CommittedRecoverable || !result.CommittedApplied {
+		t.Fatalf("ack/recoverable/applied=%d/%v/%v want visible/false/true", result.ActualAck, result.CommittedRecoverable, result.CommittedApplied)
 	}
 	if len(applier.snapshot()) != 1 {
 		t.Fatal("visible submit did not apply through committed bridge")

@@ -466,12 +466,34 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open router after DB reopen: %v", err)
 	}
-	defer router.Close()
 	result, err := router.Search([]float32{0, 1}, VectorPartitionRouterSearchOptionsV1{
 		Mode: VectorPartitionRouterModeExactV1, CandidateBudget: 4, PartitionProbes: 1,
 	})
 	if err != nil || result.Partitions[0].PartitionID != 1 {
 		t.Fatalf("reopened exact result=%+v err=%v", result, err)
+	}
+	if err := router.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = OpenExistingVectorPartitionStoreV1(database.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.deactivateVectorPartitionLifecycleV1(collection.name, def.Name); err != nil {
+		t.Fatalf("deactivate standalone pointer: %v", err)
+	}
+	if _, _, err := collection.OpenVectorPartitionRouterWithContextV1(t.Context(), def.Name); err == nil {
+		t.Fatal("standalone router opened after local active pointer was removed")
+	}
+	preparedRouter, preparedStatus, err := collection.OpenPreparedVectorPartitionRouterForGenerationWithContextV1(t.Context(), def.Name, building.Generation)
+	if err != nil {
+		t.Fatalf("exact prepared router open status=%+v err=%v", preparedStatus, err)
+	}
+	if preparedStatus.Generation != building.Generation {
+		t.Fatalf("prepared router generation=%d want %d", preparedStatus.Generation, building.Generation)
+	}
+	if err := preparedRouter.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

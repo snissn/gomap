@@ -342,7 +342,8 @@ func catalogMetaFeatureEnabledV1(features raftcluster.FeatureSet, name raftclust
 
 // ValidateVectorPartitionGenerationSearchV1 implements nativewire's M7
 // constant-time replicated authority seam without importing the transport
-// package back into raftplacement.
+// package back into raftplacement. It returns the authoritative lifecycle
+// ready-set digest; callers must not substitute the local manifest digest.
 func (a *CatalogMetaAuthorityV1) ValidateVectorPartitionGenerationSearchV1(
 	ctx context.Context,
 	collection CollectionRefV1,
@@ -353,30 +354,32 @@ func (a *CatalogMetaAuthorityV1) ValidateVectorPartitionGenerationSearchV1(
 	sourceChecksum uint64,
 	sourceSchemaHash uint64,
 	sourceRowCount uint64,
-	readySetDigest string,
-) error {
+) (string, error) {
 	if a == nil {
-		return ErrCatalogMetaUnavailable
+		return "", ErrCatalogMetaUnavailable
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return "", err
 	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	identity, ok := a.activeNames[vectorPartitionLifecycleServingKeyV1{Collection: collection, IndexName: index}]
 	if !ok {
-		return errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("no active generation"))
+		return "", errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("no active generation"))
 	}
 	record, ok := a.lifecycle[identity]
 	if !ok || identity.Generation != generation || identity.Index.IndexDefinitionDigest != indexDefinitionDigest ||
 		identity.Source.Generation != sourceGeneration || identity.Source.Checksum != sourceChecksum ||
 		identity.Source.SchemaHash != sourceSchemaHash || identity.Source.RowCount != sourceRowCount {
-		return ErrVectorPartitionLifecycleIdentity
+		return "", ErrVectorPartitionLifecycleIdentity
 	}
-	return record.CanSearch(VectorPartitionLifecycleSearchProofV1{Identity: identity, ReadySetDigest: readySetDigest})
+	if err := record.CanSearch(VectorPartitionLifecycleSearchProofV1{Identity: identity, ReadySetDigest: record.ReadySetDigest}); err != nil {
+		return "", err
+	}
+	return record.ReadySetDigest, nil
 }
 
 func (a *CatalogMetaAuthorityV1) VectorPartitionLifecycleRecordV1(identity VectorPartitionLifecycleIdentityV1) (VectorPartitionLifecycleRecordV1, bool) {

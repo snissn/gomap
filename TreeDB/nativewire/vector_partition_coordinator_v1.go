@@ -114,7 +114,7 @@ type VectorPartitionCoordinatorRouterV1 interface {
 }
 
 type VectorPartitionCoordinatorRouterSourceV1 interface {
-	OpenVectorPartitionCoordinatorRouterV1(context.Context, string) (VectorPartitionCoordinatorRouterV1, error)
+	OpenVectorPartitionCoordinatorRouterV1(context.Context, string, uint64) (VectorPartitionCoordinatorRouterV1, error)
 }
 
 // CollectionVectorPartitionCoordinatorRouterSourceV1 adapts the real M4
@@ -123,11 +123,11 @@ type CollectionVectorPartitionCoordinatorRouterSourceV1 struct {
 	Collection *collections.Collection
 }
 
-func (s CollectionVectorPartitionCoordinatorRouterSourceV1) OpenVectorPartitionCoordinatorRouterV1(ctx context.Context, index string) (VectorPartitionCoordinatorRouterV1, error) {
+func (s CollectionVectorPartitionCoordinatorRouterSourceV1) OpenVectorPartitionCoordinatorRouterV1(ctx context.Context, index string, generation uint64) (VectorPartitionCoordinatorRouterV1, error) {
 	if s.Collection == nil {
 		return nil, ErrVectorPartitionCoordinatorUnavailable
 	}
-	router, _, err := s.Collection.OpenVectorPartitionRouterWithContextV1(ctx, index)
+	router, _, err := s.Collection.OpenPreparedVectorPartitionRouterForGenerationWithContextV1(ctx, index, generation)
 	if err != nil {
 		return nil, err
 	}
@@ -436,7 +436,7 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 	}
 
 	openStarted := time.Now()
-	router, err := c.routerSource.OpenVectorPartitionCoordinatorRouterV1(requestCtx, request.IndexName)
+	router, err := c.routerSource.OpenVectorPartitionCoordinatorRouterV1(requestCtx, request.IndexName, c.placement.PartitionGeneration)
 	response.Timing.RouterOpenNanos = elapsedNanosV1(openStarted)
 	if err != nil {
 		return response, c.wrapError(err, "")
@@ -453,7 +453,8 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 	if err := c.validateRouterStatus(request, status); err != nil {
 		return response, c.wrapError(err, "")
 	}
-	if err := c.validateReplicatedLifecycle(requestCtx, status); err != nil {
+	replicatedReadySetDigest, err := c.validateReplicatedLifecycle(requestCtx, status)
+	if err != nil {
 		return response, c.wrapError(err, "")
 	}
 
@@ -471,7 +472,7 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 	}
 
 	placementStarted := time.Now()
-	tasks, selectedPartitions, selectedGroups, budget, err := c.plan(requestCtx, request, status, routed.Partitions)
+	tasks, selectedPartitions, selectedGroups, budget, err := c.plan(requestCtx, request, status, replicatedReadySetDigest, routed.Partitions)
 	response.Timing.PlacementNanos = elapsedNanosV1(placementStarted)
 	if err != nil {
 		return response, c.wrapError(err, "")
@@ -533,7 +534,7 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 	response.PartitionGeneration = status.Manifest.Generation
 	response.RouterGeneration = status.Manifest.RouterGeneration
 	response.RouterModelDigest = status.ModelDigest
-	response.ReadySetDigest = status.Manifest.ReadySetDigest
+	response.ReadySetDigest = replicatedReadySetDigest
 	response.Consistency = VectorPartitionShardSearchConsistencySnapshotV1
 	response.Neighbors = neighbors
 	response.ProbedPartitions = selectedPartitions
@@ -549,15 +550,15 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 // RPCs. A nil authority preserves the standalone M6 test harness; M7 cluster
 // construction supplies the replicated authority and therefore fails closed
 // when it is unavailable.
-func (c *VectorPartitionCoordinatorV1) validateReplicatedLifecycle(ctx context.Context, status collections.VectorPartitionRouterRuntimeStatusV1) error {
+func (c *VectorPartitionCoordinatorV1) validateReplicatedLifecycle(ctx context.Context, status collections.VectorPartitionRouterRuntimeStatusV1) (string, error) {
 	if c == nil || c.replicatedLifecycle == nil {
-		return nil
+		return status.Manifest.ReadySetDigest, nil
 	}
 	m := status.Manifest
 	return c.replicatedLifecycle.ValidateVectorPartitionGenerationSearchV1(
 		ctx, c.placement.Collection, m.IndexName, m.Generation,
 		m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum,
-		m.SourceSchemaHash, m.SourceRowCount, m.ReadySetDigest,
+		m.SourceSchemaHash, m.SourceRowCount,
 	)
 }
 
@@ -755,7 +756,7 @@ type vectorPartitionCoordinatorTaskV1 struct {
 	queuedAt      time.Time
 }
 
-func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1, routed []collections.VectorPartitionRouterPartitionScoreV1) ([]vectorPartitionCoordinatorTaskV1, []uint32, []raftcluster.GroupID, vectorPartitionCoordinatorBudgetV1, error) {
+func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1, readySetDigest string, routed []collections.VectorPartitionRouterPartitionScoreV1) ([]vectorPartitionCoordinatorTaskV1, []uint32, []raftcluster.GroupID, vectorPartitionCoordinatorBudgetV1, error) {
 	var zero vectorPartitionCoordinatorBudgetV1
 	if ctx == nil {
 		ctx = context.Background()
@@ -765,6 +766,9 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 	}
 	if len(routed) < 1 || len(routed) > c.limits.MaxSelectedPartitions {
 		return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
+	}
+	if !isVectorPartitionShardSearchDigestV1(readySetDigest) {
+		return nil, nil, nil, zero, ErrVectorPartitionCoordinatorGenerationMismatch
 	}
 	selected := make([]uint32, len(routed))
 	byGroup := make(map[raftcluster.GroupID][]uint32)
@@ -855,7 +859,8 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 				SourceGeneration: status.Manifest.SourceGeneration, SourceChecksum: status.Manifest.SourceChecksum,
 				SourceSchemaHash: status.Manifest.SourceSchemaHash, SourceRowCount: status.Manifest.SourceRowCount,
 				PartitionGeneration: status.Manifest.Generation, RouterGeneration: status.Manifest.RouterGeneration,
-				TargetGroupID: groupID, TargetNodeID: target, PartitionIDs: ids,
+				ReadySetDigest: readySetDigest,
+				TargetGroupID:  groupID, TargetNodeID: target, PartitionIDs: ids,
 				Query: request.Query, Metric: request.Metric, Mode: VectorPartitionShardSearchModeNoDocumentV1,
 				Consistency: request.Consistency, StatsMode: VectorPartitionShardSearchStatsBasicV1,
 				TopK: request.TopK, EfSearch: request.EfSearch, DeadlineUnixNano: request.DeadlineUnixNano,
@@ -1042,7 +1047,7 @@ func vectorPartitionCoordinatorShardRequestBytesV1(request VectorPartitionShardS
 	}
 	for _, identity := range []string{
 		request.RequestID, request.CancellationID, request.Database, request.Catalog,
-		request.Collection, request.IndexName, request.IndexDefinitionDigest,
+		request.Collection, request.IndexName, request.IndexDefinitionDigest, request.ReadySetDigest,
 		string(request.TargetGroupID), string(request.TargetNodeID),
 	} {
 		size, ok = addUint64V1(size, uint64(len(identity)))
@@ -1186,6 +1191,7 @@ func (c *VectorPartitionCoordinatorV1) validateShardResponse(ctx context.Context
 		proof.SourceGeneration != request.SourceGeneration || proof.SourceChecksum != request.SourceChecksum ||
 		proof.SourceSchemaHash != request.SourceSchemaHash || proof.SourceRowCount != request.SourceRowCount ||
 		proof.PartitionGeneration != request.PartitionGeneration || proof.RouterGeneration != request.RouterGeneration ||
+		proof.ReadySetDigest != request.ReadySetDigest ||
 		proof.ReadTerm == 0 || proof.ReadIndex == 0 || proof.AppliedTerm == 0 || proof.AppliedIndex < proof.ReadIndex ||
 		proof.ServingNode == "" || proof.LeaderNode == "" ||
 		proof.LeaderNode != proof.ServingNode ||

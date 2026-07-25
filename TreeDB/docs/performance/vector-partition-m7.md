@@ -48,8 +48,9 @@ and begin-build rejects an epoch that the mutation advanced after capture.
 Once begin-build commits, later distinct mutations remain blocked through
 build, stage, and prepare. The mutation barrier is keyed by the deterministic
 command/idempotency identity, survives snapshot/restore, rejects distinct
-concurrent mutations, and is released only after committed-recoverable data
-submission and all per-index invalidation confirmations.
+concurrent mutations, and is released only after the data bridge proves commit
+plus deterministic local apply, independent of the requested response
+acknowledgment, and all per-index invalidation confirmations.
 
 ## Explicitly unavailable phases
 

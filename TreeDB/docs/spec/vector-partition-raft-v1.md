@@ -165,7 +165,10 @@ generation advances that fence and marks it **pending** before the relevant
 data command is admitted. While pending, lifecycle build and activation both
 fail closed, including a candidate whose claimed source epoch equals the
 fence. The shared nativewire and Mongo submitters confirm the fence only after
-their data-Raft bridge returns a committed, locally recoverable result.
+their data-Raft bridge proves commit and completes deterministic local apply.
+That proof is independent of the client-selected response acknowledgment:
+successful `visible`, `flushed`, and `synced` requests release the same fence
+as `raft_committed`; failed or ambiguous submits do not.
 
 A failed, ambiguous, or crashed data submit intentionally leaves the fence
 pending: serving remains unavailable until recovery proves the data outcome and
@@ -179,9 +182,11 @@ The per-index fences are coordinated by a second, collection-keyed replicated
 barrier. A build reads the collection mutation epoch before source capture and
 must commit that exact watermark at begin-build. A relevant data command opens
 the barrier only after local encoding and route preflight succeed, then owns it
-by deterministic command/idempotency digest until the data result is committed
-and recoverable and every affected per-index fence is confirmed. Exact retries
-reuse the same barrier; a distinct concurrent mutation is refused. This closes
+by deterministic command/idempotency digest until the data result is committed,
+deterministically applied, and every affected per-index fence is confirmed.
+This confirmation is independent of the client-selected response acknowledgment
+policy. Exact retries reuse the same barrier; a distinct concurrent mutation is
+refused. This closes
 the first-generation race where no active index record yet exists to invalidate.
 
 Fence state is included in the canonical catalog snapshot and is exposed to
@@ -191,6 +196,21 @@ this preserves the exact record required for confirmation. Thus crash,
 failover, replay, snapshot/rejoin, backup restore, and cleanup all preserve
 the same fail-closed recovery debt. The retained source watermark remains after
 confirmed cleanup, preventing an older delayed candidate from resurrecting.
+
+Serving keeps two SHA-256 identities distinct. The local manifest
+`ReadySetDigest` binds that generation's placements and assets. The replicated
+lifecycle ready-set digest binds the lifecycle identity plus every required
+group readiness proof. Catalog authority returns the latter after validating
+the exact active generation; the coordinator carries it through each shard
+request and response proof, while local asset opening continues to validate
+the manifest digest. They are never compared as though they were the same
+hash.
+
+Replicated activation also does not mutate or consult the standalone M1 active
+pointer. M6 opens the exact prepared router generation named by replicated
+placement, then M7 validates that router against catalog authority before any
+router search or shard dispatch. A missing, stale, corrupt, or locally
+unprepared exact generation fails closed.
 
 `VectorPartitionLifecycleCoordinatorV1` provides the bounded meta-Raft
 workflow: begin (with exact source/catalog/mutation identity), caller-owned
