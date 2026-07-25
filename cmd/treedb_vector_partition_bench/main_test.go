@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -461,6 +462,47 @@ func TestM6CoordinatorStageUsesRealM4M6AndLabelsLocalSimulation(t *testing.T) {
 			!bytes.Contains(markdown, []byte("Go memory limit:")) ||
 			!bytes.Contains(markdown, []byte("source HNSW degree: 4")) {
 			t.Fatalf("M6 Markdown has incorrect evidence boundary:\n%s", markdown)
+		}
+	}
+}
+
+func TestM6LocalDispatcherUsesCosineForFP32Vectors(t *testing.T) {
+	vectors := [][]float64{{1, 0}, {2, 0}}
+	norms, err := m6VectorNormsV1(vectors, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := &m6LocalShardDispatcherV1{
+		vectors: vectors, vectorNorms: norms, partitions: 1,
+	}
+	query := []float32{1, 0}
+	queryNorm, err := m6QueryNormV1(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	partition, visited, err := dispatcher.partitionTopKV1(context.Background(), query, queryNorm, 0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	global, err := dispatcher.globalTopKV1(context.Background(), query, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if visited != 2 || len(partition) != 2 || len(global) != 2 {
+		t.Fatalf("partition=%+v visited=%d global=%+v", partition, visited, global)
+	}
+	for name, got := range map[string][]string{
+		"partition": {partition[0].ID, partition[1].ID},
+		"global":    {global[0].ID, global[1].ID},
+	} {
+		if got[0] != "doc-000000" || got[1] != "doc-000001" {
+			t.Fatalf("%s order=%v; raw-dot scoring would incorrectly rank doc-000001 first", name, got)
+		}
+	}
+	for _, got := range []float32{partition[0].Score, partition[1].Score, global[0].Score, global[1].Score} {
+		if math.Float32bits(got) != math.Float32bits(1) {
+			t.Fatalf("cosine score=%v want=1", got)
 		}
 	}
 }

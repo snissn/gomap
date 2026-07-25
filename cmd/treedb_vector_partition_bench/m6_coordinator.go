@@ -115,6 +115,7 @@ type m6CoordinatorHarnessV1 struct {
 
 type m6LocalShardDispatcherV1 struct {
 	vectors          [][]float64
+	vectorNorms      []float32
 	partitions       int
 	groupByPartition []string
 	nodeByGroup      map[string]string
@@ -130,10 +131,9 @@ func newM6CoordinatorHarnessV1(router *treeDBRepresentativeRouter, vectors [][]f
 		return nil, errors.New("M6 local-service evidence requires nonempty vectors")
 	}
 	dimensions := len(vectors[0])
-	for _, vector := range vectors {
-		if len(vector) != dimensions {
-			return nil, errors.New("M6 local-service vectors have mixed dimensions")
-		}
+	vectorNorms, err := m6VectorNormsV1(vectors, dimensions)
+	if err != nil {
+		return nil, err
 	}
 	if partitions < 1 || partitions > m6CoordinatorMaxGroupsV1 {
 		return nil, fmt.Errorf("M6 local-service evidence requires 1..%d one-owner groups", m6CoordinatorMaxGroupsV1)
@@ -170,7 +170,7 @@ func newM6CoordinatorHarnessV1(router *treeDBRepresentativeRouter, vectors [][]f
 	}
 	topology.CollectionGroupID = topology.Groups[0].ID
 	dispatcher := &m6LocalShardDispatcherV1{
-		vectors: vectors, partitions: partitions,
+		vectors: vectors, vectorNorms: vectorNorms, partitions: partitions,
 		groupByPartition: groupByPartition, nodeByGroup: nodeByGroup,
 	}
 	coordinator, err := nativewire.NewVectorPartitionCoordinatorForTopologyV1(
@@ -228,7 +228,7 @@ func (d *m6LocalShardDispatcherV1) DispatchVectorPartitionShardSearchV1(ctx cont
 		len(request.PartitionIDs) < 1 || len(request.Query) != len(d.vectors[0]) {
 		return nativewire.VectorPartitionShardSearchResponseV1{}, errors.New("invalid local M5 dispatch")
 	}
-	normalized, err := normalizeM6QueryV1(request.Query)
+	queryNorm, err := m6QueryNormV1(request.Query)
 	if err != nil {
 		return nativewire.VectorPartitionShardSearchResponseV1{}, err
 	}
@@ -239,7 +239,7 @@ func (d *m6LocalShardDispatcherV1) DispatchVectorPartitionShardSearchV1(ctx cont
 			return nativewire.VectorPartitionShardSearchResponseV1{}, errors.New("local M5 route mismatch")
 		}
 		searchStarted := time.Now()
-		neighbors, visited, err := d.partitionTopKV1(ctx, normalized, partitionID, request.TopK)
+		neighbors, visited, err := d.partitionTopKV1(ctx, request.Query, queryNorm, partitionID, request.TopK)
 		searchNanos += elapsedM6NanosV1(searchStarted)
 		if err != nil {
 			return nativewire.VectorPartitionShardSearchResponseV1{}, err
@@ -326,7 +326,7 @@ func m6LocalCandidateWorseV1(left, right m6LocalCandidateV1) bool {
 	return left.Score < right.Score || left.Score == right.Score && left.ID > right.ID
 }
 
-func (d *m6LocalShardDispatcherV1) partitionTopKV1(ctx context.Context, query []float32, partitionID uint32, topK int) ([]nativewire.VectorPartitionShardSearchNeighborV1, uint64, error) {
+func (d *m6LocalShardDispatcherV1) partitionTopKV1(ctx context.Context, query []float32, queryNorm float64, partitionID uint32, topK int) ([]nativewire.VectorPartitionShardSearchNeighborV1, uint64, error) {
 	h := make(m6LocalWorstHeapV1, 0, topK)
 	heap.Init(&h)
 	var visited uint64
@@ -340,12 +340,9 @@ func (d *m6LocalShardDispatcherV1) partitionTopKV1(ctx context.Context, query []
 			}
 		}
 		visited++
-		var score float64
-		for dimension, value := range values {
-			score += float64(float32(value)) * float64(query[dimension])
-		}
 		candidate := m6LocalCandidateV1{
-			ID: fmt.Sprintf("doc-%06d", ordinal), Score: float32(score),
+			ID:    fmt.Sprintf("doc-%06d", ordinal),
+			Score: m6CosineScoreV1(values, query, queryNorm, d.vectorNorms[ordinal]),
 		}
 		if len(h) < topK {
 			heap.Push(&h, candidate)
@@ -362,23 +359,48 @@ func (d *m6LocalShardDispatcherV1) partitionTopKV1(ctx context.Context, query []
 	return out, visited, nil
 }
 
-func normalizeM6QueryV1(query []float32) ([]float32, error) {
+func m6QueryNormV1(query []float32) (float64, error) {
 	var norm float64
 	for _, value := range query {
 		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
-			return nil, errors.New("nonfinite local M5 query")
+			return 0, errors.New("nonfinite local M5 query")
 		}
 		norm += float64(value) * float64(value)
 	}
 	if norm == 0 {
-		return nil, errors.New("zero local M5 query")
+		return 0, errors.New("zero local M5 query")
 	}
-	inverse := 1 / math.Sqrt(norm)
-	out := make([]float32, len(query))
-	for i, value := range query {
-		out[i] = float32(float64(value) * inverse)
+	return math.Sqrt(norm), nil
+}
+
+func m6VectorNormsV1(vectors [][]float64, dimensions int) ([]float32, error) {
+	norms := make([]float32, len(vectors))
+	for ordinal, vector := range vectors {
+		if len(vector) != dimensions {
+			return nil, errors.New("M6 local-service vectors have mixed dimensions")
+		}
+		var squared float64
+		for _, value := range vector {
+			value32 := float32(value)
+			if math.IsNaN(float64(value32)) || math.IsInf(float64(value32), 0) {
+				return nil, errors.New("M6 local-service vectors contain a nonfinite value")
+			}
+			squared += float64(value32) * float64(value32)
+		}
+		norms[ordinal] = float32(math.Sqrt(squared))
+		if norms[ordinal] == 0 || math.IsInf(float64(norms[ordinal]), 0) {
+			return nil, errors.New("M6 local-service vectors contain an invalid norm")
+		}
 	}
-	return out, nil
+	return norms, nil
+}
+
+func m6CosineScoreV1(vector []float64, query []float32, queryNorm float64, vectorNorm float32) float32 {
+	var dot float64
+	for dimension, value := range vector {
+		dot += float64(float32(value)) * float64(query[dimension])
+	}
+	return float32(dot / (queryNorm * float64(vectorNorm)))
 }
 
 type m6EvidenceAccumulatorV1 struct {
@@ -531,11 +553,7 @@ func simulateM6CoordinatorV1(cfg config, m fixtureManifest, vectors, queries [][
 			for i, value := range query {
 				query32[i] = float32(value)
 			}
-			normalized, err := normalizeM6QueryV1(query32)
-			if err != nil {
-				return runResult{}, err
-			}
-			oracle, err := cfg.coordinator.dispatcher.globalTopKV1(context.Background(), normalized, cfg.topK)
+			oracle, err := cfg.coordinator.dispatcher.globalTopKV1(context.Background(), query32, cfg.topK)
 			if err != nil {
 				return runResult{}, err
 			}
@@ -620,6 +638,10 @@ func simulateM6CoordinatorV1(cfg config, m fixtureManifest, vectors, queries [][
 }
 
 func (d *m6LocalShardDispatcherV1) globalTopKV1(ctx context.Context, query []float32, topK int) ([]nativewire.VectorPartitionShardSearchNeighborV1, error) {
+	queryNorm, err := m6QueryNormV1(query)
+	if err != nil {
+		return nil, err
+	}
 	h := make(m6LocalWorstHeapV1, 0, topK)
 	heap.Init(&h)
 	for ordinal, values := range d.vectors {
@@ -628,11 +650,10 @@ func (d *m6LocalShardDispatcherV1) globalTopKV1(ctx context.Context, query []flo
 				return nil, err
 			}
 		}
-		var score float64
-		for dimension, value := range values {
-			score += float64(float32(value)) * float64(query[dimension])
+		candidate := m6LocalCandidateV1{
+			ID:    fmt.Sprintf("doc-%06d", ordinal),
+			Score: m6CosineScoreV1(values, query, queryNorm, d.vectorNorms[ordinal]),
 		}
-		candidate := m6LocalCandidateV1{ID: fmt.Sprintf("doc-%06d", ordinal), Score: float32(score)}
 		if len(h) < topK {
 			heap.Push(&h, candidate)
 		} else if m6LocalCandidateBetterV1(candidate, h[0]) {
