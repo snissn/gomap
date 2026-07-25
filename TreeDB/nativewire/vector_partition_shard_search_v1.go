@@ -542,7 +542,7 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 		searcher := lease.Searcher
 		search := searchVectorPartitionWithContextV1
 		if searcher.Status().SearchRoute == collections.VectorPartitionSearchRouteHNSWSearchPackV1 {
-			// The native pack checks cancellation before/after its bounded
+			// The native pack polls the caller context throughout its bounded
 			// traversal. Avoid a channel/goroutine on the performance path.
 			search = searchVectorPartitionDirectV1
 		}

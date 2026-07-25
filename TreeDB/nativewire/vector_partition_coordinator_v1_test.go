@@ -349,6 +349,106 @@ func TestVectorPartitionCoordinatorTopKLargerThanLiveCorpusV1(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionCoordinatorRejectsImpossibleRouterFanoutBeforeOpenV1(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(*VectorPartitionCoordinatorRequestV1)
+	}{
+		{
+			name: "partition_probes_above_topology",
+			edit: func(request *VectorPartitionCoordinatorRequestV1) {
+				request.PartitionProbes = 3
+				request.RouterCandidateBudget = 3
+				request.MergeEntriesLimit = 9
+			},
+		},
+		{
+			name: "approximate_candidates_below_probes",
+			edit: func(request *VectorPartitionCoordinatorRequestV1) {
+				request.RouterMode = collections.VectorPartitionRouterModeApproxV1
+				request.RouterCandidateBudget = 1
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
+				[]raftplacement.GroupV1{
+					{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"},
+					{ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"},
+				},
+				[]raftcluster.GroupID{"group-a", "group-b"},
+				map[uint32][]VectorPartitionShardSearchNeighborV1{
+					0: {{ID: "a", Score: 1}},
+					1: {{ID: "b", Score: .5}},
+				},
+				VectorPartitionCoordinatorLimitsV1{},
+			)
+			request := testVectorPartitionCoordinatorRequestV1(2)
+			test.edit(&request)
+
+			response, err := coordinator.Search(context.Background(), request)
+			var coordinatorErr *VectorPartitionCoordinatorErrorV1
+			if !errors.Is(err, ErrVectorPartitionCoordinatorInvalidRequest) ||
+				!errors.As(err, &coordinatorErr) ||
+				coordinatorErr.Code != VectorPartitionCoordinatorErrorInvalidRequestV1 ||
+				!vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
+				t.Fatalf("response=%+v err=%+v", response, err)
+			}
+			if source.opens != 0 || source.router.closeCount != 0 || len(dispatcher.calls) != 0 {
+				t.Fatalf("router opens=%d closes=%d dispatches=%d", source.opens, source.router.closeCount, len(dispatcher.calls))
+			}
+		})
+	}
+}
+
+func TestVectorPartitionCoordinatorWeightsCandidateBudgetByMembershipV1(t *testing.T) {
+	coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{
+			{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"},
+			{ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"},
+		},
+		[]raftcluster.GroupID{"group-a", "group-b"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{
+			0: {{ID: "a", Score: 1}},
+			1: {{ID: "b", Score: .5}},
+		},
+		VectorPartitionCoordinatorLimitsV1{},
+	)
+	for i := range 100 {
+		partitionID := uint32(0)
+		if i >= 90 {
+			partitionID = 1
+		}
+		source.router.status.Manifest.Memberships = append(
+			source.router.status.Manifest.Memberships,
+			collections.VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: partitionID},
+		)
+	}
+	request := testVectorPartitionCoordinatorRequestV1(2)
+	request.CandidateBytesLimit = 100 * 64
+
+	response, err := coordinator.Search(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Neighbors) != 2 || len(dispatcher.calls) != 2 {
+		t.Fatalf("response=%+v calls=%+v", response, dispatcher.calls)
+	}
+	budgets := make(map[uint32]uint64, len(dispatcher.calls))
+	var total uint64
+	for _, call := range dispatcher.calls {
+		if len(call.PartitionIDs) != 1 {
+			t.Fatalf("partition ids=%v", call.PartitionIDs)
+		}
+		budgets[call.PartitionIDs[0]] = call.CandidateBytesLimit
+		total += call.CandidateBytesLimit
+	}
+	if budgets[0] != 90*64 || budgets[1] != 10*64 || total != request.CandidateBytesLimit {
+		t.Fatalf("candidate budgets=%v total=%d", budgets, total)
+	}
+}
+
 func TestVectorPartitionCoordinatorRejectsMixedRouterGenerationBeforeDispatchV1(t *testing.T) {
 	tests := []struct {
 		name string
