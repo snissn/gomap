@@ -196,6 +196,11 @@ func testVectorPartitionCoordinatorV1(t *testing.T, groups []raftplacement.Group
 		partitionScores[partition] = collections.VectorPartitionRouterPartitionScoreV1{
 			PartitionID: uint32(partition), Distance: float64(partition) / 100,
 		}
+		for range neighbors[uint32(partition)] {
+			manifest.Memberships = append(manifest.Memberships, collections.VectorPartitionMembershipV1{
+				VectorOrdinal: uint64(len(manifest.Memberships)), PartitionID: uint32(partition),
+			})
+		}
 	}
 	router := &testVectorPartitionCoordinatorRouterV1{
 		status: collections.VectorPartitionRouterRuntimeStatusV1{
@@ -449,6 +454,12 @@ func TestVectorPartitionCoordinatorWeightsCandidateBudgetByMembershipV1(t *testi
 		},
 		VectorPartitionCoordinatorLimitsV1{},
 	)
+	source.router.status.Manifest.Memberships = nil
+	dispatcher.editResponse = func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+		for i := range response.Partials {
+			response.Partials[i].SearchRoute = collections.VectorPartitionSearchRouteHNSWSearchPackV1
+		}
+	}
 	for i := range 100 {
 		partitionID := uint32(0)
 		if i >= 90 {
@@ -502,6 +513,12 @@ func TestVectorPartitionCoordinatorReservesCandidateBaselineBeforeUnevenSurplusV
 		},
 		VectorPartitionCoordinatorLimitsV1{},
 	)
+	source.router.status.Manifest.Memberships = nil
+	dispatcher.editResponse = func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+		for i := range response.Partials {
+			response.Partials[i].SearchRoute = collections.VectorPartitionSearchRouteHNSWSearchPackV1
+		}
+	}
 	for i := range 1001 {
 		partitionID := uint32(0)
 		if i == 1000 {
@@ -625,6 +642,12 @@ func TestVectorPartitionCoordinatorRejectsCorruptShardProofsAndPartialsV1(t *tes
 			response.Partials[0].Candidates = 0
 			response.Candidates = 0
 		}},
+		{name: "underreported_exact_candidates_and_neighbors", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+			response.Partials[0].Neighbors = nil
+			response.Partials[0].Candidates = 0
+			response.Candidates = 0
+			response.ResponseBytes = vectorPartitionShardSearchResponseEnvelopeBytesV1 + vectorPartitionShardSearchPartialEnvelopeBytesV1
+		}},
 		{name: "dropped_neighbors", edit: func(request VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
 			response.Partials[0].Candidates = uint64(request.TopK)
 			response.Candidates = uint64(request.TopK)
@@ -700,6 +723,7 @@ func TestVectorPartitionCoordinatorClassifiesConsistentShardBudgetOverflowV1(t *
 			{ID: "b", Score: .75},
 			{ID: "c", Score: .5},
 		}
+		response.Partials[0].SearchRoute = collections.VectorPartitionSearchRouteHNSWSearchPackV1
 		response.Partials[0].Candidates = candidates
 		response.Candidates = candidates
 		responseBytes, err := MeasureVectorPartitionShardSearchResponseBytesV1(response.Partials)
@@ -728,8 +752,9 @@ func TestVectorPartitionCoordinatorClassifiesConsistentShardBudgetOverflowV1(t *
 	}
 	shardRequest.ResponseBytesLimit = shardResponse.ResponseBytes - 1
 	task := vectorPartitionCoordinatorTaskV1{
-		group:        coordinator.groups[shardRequest.TargetGroupID],
-		partitionIDs: slices.Clone(shardRequest.PartitionIDs),
+		group:         coordinator.groups[shardRequest.TargetGroupID],
+		partitionIDs:  slices.Clone(shardRequest.PartitionIDs),
+		candidateRows: []uint64{shardResponse.Partials[0].Candidates},
 	}
 	err = coordinator.wrapError(
 		coordinator.validateShardResponse(context.Background(), task, shardRequest, shardResponse),

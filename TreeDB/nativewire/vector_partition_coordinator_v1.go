@@ -718,11 +718,12 @@ type vectorPartitionCoordinatorBudgetV1 struct {
 }
 
 type vectorPartitionCoordinatorTaskV1 struct {
-	index        int
-	group        raftplacement.ResolvedGroupV1
-	partitionIDs []uint32
-	request      VectorPartitionShardSearchRequestV1
-	queuedAt     time.Time
+	index         int
+	group         raftplacement.ResolvedGroupV1
+	partitionIDs  []uint32
+	candidateRows []uint64
+	request       VectorPartitionShardSearchRequestV1
+	queuedAt      time.Time
 }
 
 func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1, routed []collections.VectorPartitionRouterPartitionScoreV1) ([]vectorPartitionCoordinatorTaskV1, []uint32, []raftcluster.GroupID, vectorPartitionCoordinatorBudgetV1, error) {
@@ -796,6 +797,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 		for start := 0; start < len(partitions); start += c.limits.MaxPartitionsPerRequest {
 			end := min(start+c.limits.MaxPartitionsPerRequest, len(partitions))
 			ids := slices.Clone(partitions[start:end])
+			rows := make([]uint64, len(ids))
 			taskIndex := len(tasks)
 			target := group.LeaderHint
 			if target == "" {
@@ -853,7 +855,8 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 			shardRequest.ResponseBytesLimit = responseReservation
 			var taskCandidateWeight uint64
 			var baseline uint64
-			for _, partitionID := range ids {
+			for i, partitionID := range ids {
+				rows[i] = candidateRows[partitionID]
 				taskCandidateWeight, ok = addUint64V1(taskCandidateWeight, candidateRows[partitionID])
 				if ok {
 					baseline, ok = addUint64V1(baseline, candidateFloors[partitionID])
@@ -878,7 +881,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 			}
 			shardRequest.CandidateBytesLimit = candidateShare
 			tasks = append(tasks, vectorPartitionCoordinatorTaskV1{
-				index: taskIndex, group: group, partitionIDs: ids, request: shardRequest,
+				index: taskIndex, group: group, partitionIDs: ids, candidateRows: rows, request: shardRequest,
 			})
 		}
 	}
@@ -1149,6 +1152,7 @@ func (c *VectorPartitionCoordinatorV1) validateShardResponse(ctx context.Context
 	// index, not an ordering between those terms, is the safety boundary.
 	if response.Version != VectorPartitionShardSearchVersionV1 || response.RequestID != request.RequestID ||
 		response.Partitions != uint64(len(task.partitionIDs)) || len(response.Partials) != len(task.partitionIDs) ||
+		len(task.candidateRows) != len(task.partitionIDs) ||
 		proof.GroupID != task.group.ID ||
 		proof.SourceGeneration != request.SourceGeneration || proof.SourceChecksum != request.SourceChecksum ||
 		proof.SourceSchemaHash != request.SourceSchemaHash || proof.SourceRowCount != request.SourceRowCount ||
@@ -1180,14 +1184,23 @@ func (c *VectorPartitionCoordinatorV1) validateShardResponse(ctx context.Context
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if partial.PartitionID != task.partitionIDs[i] ||
+			partial.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 &&
+				partial.SearchRoute != collections.VectorPartitionSearchRouteExactFP32ScanV1 {
+			return ErrVectorPartitionCoordinatorMalformedResponse
+		}
+		// Exact scan visits every manifest membership. Bind its candidate count
+		// to the coordinator's pinned manifest rather than trusting a shard to
+		// lower both Candidates and the required neighbor count consistently.
+		if partial.SearchRoute == collections.VectorPartitionSearchRouteExactFP32ScanV1 &&
+			partial.Candidates != task.candidateRows[i] {
+			return ErrVectorPartitionCoordinatorMalformedResponse
+		}
 		expectedNeighbors := uint64(request.TopK)
 		if partial.Candidates < expectedNeighbors {
 			expectedNeighbors = partial.Candidates
 		}
-		if partial.PartitionID != task.partitionIDs[i] ||
-			uint64(len(partial.Neighbors)) != expectedNeighbors ||
-			partial.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 &&
-				partial.SearchRoute != collections.VectorPartitionSearchRouteExactFP32ScanV1 {
+		if uint64(len(partial.Neighbors)) != expectedNeighbors {
 			return ErrVectorPartitionCoordinatorMalformedResponse
 		}
 		candidatesNext, ok := addUint64V1(candidates, partial.Candidates)
