@@ -64,7 +64,7 @@ stage attribution, p50/p95/p99/QPS harness, request/response byte accounting,
 candidate/edge counters, mapped/heap/open accounting, and normal/race tests.
 
 The required large-scale acceptance run was completed at clean final production
-head `3e0ae91c9db32cf917598e854d9623f6eaeff8fe`. It used the declared
+head `07ef127eb819ff66f0e36c72db6c03eb7235b633`. It used the declared
 1,000,000-vector, 16-dimensional, 16-partition persistent native HNSW
 generation, `top_k=10`, `ef_search=64`, and a three-node in-process
 HashiCorp-Raft group with a live leader, committed command, and production
@@ -72,22 +72,23 @@ read-index evidence.
 
 | Measurement | Accepted result |
 | --- | ---: |
-| cold service mean / p50 / p95 / p99 | 4.7452 s / 4.6952 s / 4.9645 s / 4.9645 s |
-| warm service mean / p50 / p95 / p99 | 53.285 us / 40.177 us / 84.351 us / 197.558 us |
-| warm service QPS | 18,767.12 |
-| mean read-index/apply | 17.191 us |
-| direct partition-local HNSW mean | 40.404 us |
-| warm service-only overhead | 2.781 us |
-| overhead ratio / gate | 6.8820% / **PASS** (limit 10%) |
+| cold service mean / p50 / p95 / p99 | 4.5314 s / 4.5286 s / 4.5520 s / 4.5520 s |
+| warm service mean / p50 / p95 / p99 | 54.327 us / 40.441 us / 107.863 us / 258.105 us |
+| warm service QPS | 18,406.98 |
+| mean read-index/apply | 17.715 us |
+| direct partition-local HNSW mean | 42.751 us |
+| warm service-only overhead | 2.841 us |
+| overhead ratio / gate | 6.6454% / **PASS** (limit 10%) |
 
 The retained JSON report is
-`/mnt/fast4tb/tmp/m5_artifacts_retry7_Pjdql5/vector_partition_m5_3200dafc3b75_294e61b5009b_3e0ae91c9.json`
+`/mnt/fast4tb/tmp/m5_artifacts_retry7_Pjdql5/vector_partition_m5_3200dafc3b75_294e61b5009b_07ef127eb.json`
 with SHA-256
-`29e855aa1355f23a0429b4da101528e2d2faa0113b6b9254657544d3155ddbb5`.
-This successor corrects stage attribution so `SearchNanos` covers only the
-partition search calls; result validation, allocation, and envelope
-materialization remain in the measured service overhead. The earlier
-`1fead9fed...` artifact is historical and is not used for acceptance.
+`47d0283abf89a7c58afb43f751f26a18881f0cf456096e6d31999646dec88bb1`.
+This successor retains the corrected stage attribution and makes large
+retained-manifest checkpoint re-encoding cancellable during cloning, sorting,
+digest construction, validation, and binary emission. The stable JSON digest
+and binary manifest formats remain unchanged. Earlier `1fead9fed...` and
+`3e0ae91c9...` artifacts are historical and are not used for acceptance.
 Only the first cold sample is OS-page-cache cold; every cold sample reopens the
 generation source and mapped search pack. The input M3 construction run
 completed successfully, but its first 97 seconds were externally contaminated
