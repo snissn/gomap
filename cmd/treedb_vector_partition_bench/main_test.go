@@ -162,6 +162,46 @@ func TestM3FixtureAllowsMillionVectorsPlusBoundedQueriesV1(t *testing.T) {
 	}
 }
 
+func TestM6PreflightAllowsBoundedMillionVectorEvidenceV1(t *testing.T) {
+	manifest := fixtureManifest{
+		SchemaVersion: schemaVersion,
+		Fixture:       "million-m6",
+		Generator:     fixtureGenerator,
+		Arithmetic:    fixtureArithmetic,
+		Vectors:       1_000_000,
+		Queries:       32,
+		Dimensions:    64,
+		Metric:        "cosine",
+		Seed:          1,
+		Checksum:      strings.Repeat("0", 64),
+	}
+	if err := validateM3FixtureWithCaps(manifest, maxVectors, maxFixtureBytes); err != nil {
+		t.Fatalf("declared 1M M6 fixture rejected: %v", err)
+	}
+	cfg := config{
+		stage: m6CoordinatorStageV1, partitions: 16, topK: 10,
+		probes: []int{16}, overlaps: []float64{0},
+		stages:       stageSet(m6CoordinatorAttributionStageV1),
+		routerConfig: vectorpartition.DefaultRouterConfigV1(),
+	}
+	work, err := validateBenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits)
+	if err != nil {
+		t.Fatalf("bounded 1M M6 work rejected: %v", err)
+	}
+	if work.CorpusPasses != 5 || work.VectorQueryVisits != 160_000_000 {
+		t.Fatalf("1M M6 work plan=%+v", work)
+	}
+	memory, err := planBenchmarkMemory(cfg, manifest)
+	if err != nil {
+		t.Fatalf("bounded 1M M6 memory rejected: %v", err)
+	}
+	if memory.RouterBuildWorkBytes == 0 ||
+		memory.ModeledPeakBytes <= memory.FixtureResidentBytes ||
+		memory.ModeledPeakBytes > maxFixtureBytes {
+		t.Fatalf("1M M6 memory plan=%+v cap=%d", memory, maxFixtureBytes)
+	}
+}
+
 func TestM3SourceLoadBoundsColumnGraphPublicationsV1(t *testing.T) {
 	const acceptanceRows = 1_000_000
 	publications := (acceptanceRows + m3SourceInsertBatchRows - 1) / m3SourceInsertBatchRows
@@ -341,6 +381,99 @@ func TestRouterStageFailsBeforePartialEvidenceWithoutNamespacePersistence(t *tes
 	}
 	if _, statErr := os.Stat(out); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("unsupported M4 router stage created partial evidence directory: %v", statErr)
+	}
+}
+
+func TestM6CoordinatorStageUsesRealM4M6AndLabelsLocalSimulation(t *testing.T) {
+	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
+		t.Skip("durable M1 lifecycle publication is unsupported; M6 coordinator coverage remains platform-neutral in TreeDB/nativewire")
+	}
+	dataset := writeFixtureForTest(t, 32, 4, 8)
+	out := t.TempDir()
+	var stdout bytes.Buffer
+	args := []string{
+		"-dataset", dataset,
+		"-out", out,
+		"-partitions", "4",
+		"-probes", "4",
+		"-top-k", "10",
+		"-stage", m6CoordinatorStageV1,
+		"-router-representatives", "2",
+		"-router-leaf-size", "1",
+	}
+	if err := runWithHermeticProvenance(t, args, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	var result runResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateResult(result); err != nil {
+		t.Fatal(err)
+	}
+	evidence := result.Coordinator
+	if result.ResultKind != m6CoordinatorResultKindV1 ||
+		result.ProductionEvidence || evidence == nil ||
+		evidence.ProductionEvidence ||
+		!evidence.ExactParityChecked || !evidence.ExactParityPassed ||
+		evidence.EvidenceKind != m6CoordinatorEvidenceKindV1 ||
+		evidence.Transport != "in_process_transport_neutral_m5_contract_simulation" ||
+		evidence.ReadProof != "synthetic_local_proof_not_measured" ||
+		evidence.Queries != 4 || evidence.Probes != 4 ||
+		evidence.Counters.SelectedPartitions != 16 ||
+		evidence.Counters.SelectedGroups != 16 ||
+		evidence.Counters.Requests != 16 ||
+		evidence.Counters.RPCs != 16 ||
+		evidence.Counters.Candidates != 128 ||
+		result.Metrics.MeasurementStatus != m6CoordinatorMeasurementV1 ||
+		result.Metrics.ShardP50Nanos <= 0 ||
+		result.Metrics.P50Nanos <= 0 {
+		t.Fatalf("M6 result=%+v evidence=%+v", result, evidence)
+	}
+	entries, err := os.ReadDir(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("M6 artifacts=%d want=2", len(entries))
+	}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), "m6_local_service_") {
+			t.Fatalf("M6 artifact lacks isolated identity: %q", entry.Name())
+		}
+		if !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		markdown, err := os.ReadFile(filepath.Join(out, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(markdown, []byte("M6 local-service simulation")) ||
+			!bytes.Contains(markdown, []byte("not production network, Raft read-proof, remote-service, or M8 acceptance evidence")) {
+			t.Fatalf("M6 Markdown has incorrect evidence boundary:\n%s", markdown)
+		}
+	}
+}
+
+func TestM6CoordinatorStageFailsBeforePartialEvidenceWithoutNamespacePersistence(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "evidence")
+	args := []string{
+		"-dataset", "must-not-be-read",
+		"-out", out,
+		"-partitions", "4",
+		"-probes", "4",
+		"-stage", m6CoordinatorStageV1,
+	}
+	var stdout bytes.Buffer
+	err := runWithRuntimeCapabilities(args, &stdout, benchmarkRuntimeCapabilities{})
+	if !errors.Is(err, collections.ErrVectorPartitionNamespacePersistenceUnsupportedV1) {
+		t.Fatalf("unsupported M6 coordinator stage err=%v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("unsupported M6 coordinator stage emitted stdout: %q", stdout.String())
+	}
+	if _, statErr := os.Stat(out); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("unsupported M6 coordinator stage created partial evidence directory: %v", statErr)
 	}
 }
 
