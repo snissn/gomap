@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -45,32 +46,264 @@ func vectorPartitionLocalAssetIDV1(partition uint32) string {
 }
 
 func vectorPartitionMembershipsForPartitionV1(manifest VectorPartitionManifestV1, partition uint32) []vectorPartitionMembershipSourceV1 {
-	members := make([]vectorPartitionMembershipSourceV1, 0)
-	for _, membership := range manifest.Memberships {
+	members, _ := vectorPartitionMembershipsForPartitionWithContextV1(context.Background(), manifest, partition)
+	return members
+}
+
+func vectorPartitionMembershipsForPartitionWithContextV1(ctx context.Context, manifest VectorPartitionManifestV1, partition uint32) ([]vectorPartitionMembershipSourceV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	count := 0
+	for i, membership := range manifest.Memberships {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
+		if membership.PartitionID == partition {
+			count++
+		}
+	}
+	for i, membership := range manifest.OverlapMemberships {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
+		if membership.PartitionID == partition {
+			count++
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	members := make([]vectorPartitionMembershipSourceV1, 0, count)
+	for i, membership := range manifest.Memberships {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		if membership.PartitionID == partition {
 			members = append(members, vectorPartitionMembershipSourceV1{ordinal: int(membership.VectorOrdinal), kind: VectorPartitionMembershipHomeV1})
 		}
 	}
-	for _, membership := range manifest.OverlapMemberships {
+	for i, membership := range manifest.OverlapMemberships {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		if membership.PartitionID == partition {
 			members = append(members, vectorPartitionMembershipSourceV1{ordinal: int(membership.VectorOrdinal), kind: VectorPartitionMembershipOverlapV1})
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	sort.Slice(members, func(i, j int) bool {
 		return members[i].ordinal < members[j].ordinal || members[i].ordinal == members[j].ordinal && members[i].kind < members[j].kind
 	})
-	return members
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return members, nil
+}
+
+// VectorPartitionGenerationSearchOpenPlanV1 is an immutable, generation-wide
+// cold-open plan. Routed serving builds it once from the manifest already
+// validated by the active-generation authority, then reuses its partition
+// asset lookup and membership index for every cold partition open.
+type VectorPartitionGenerationSearchOpenPlanV1 struct {
+	collection            string
+	indexName             string
+	indexDefinitionDigest string
+	sourceGeneration      uint64
+	sourceChecksum        uint64
+	sourceSchemaHash      uint64
+	generation            uint64
+	partitionCount        uint32
+	assets                []VectorPartitionAssetV1
+	assetPresent          []bool
+	members               []vectorPartitionMembershipSourceV1
+	memberOffsets         []int
+	homeCounts            []int
+	overlapCounts         []int
+}
+
+// NewVectorPartitionGenerationSearchOpenPlanWithContextV1 indexes a validated
+// generation manifest once for bounded per-partition lookup. The returned plan
+// does not retain or expose the caller's manifest slices.
+func NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx context.Context, manifest VectorPartitionManifestV1) (*VectorPartitionGenerationSearchOpenPlanV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if manifest.Collection == "" || manifest.IndexName == "" || manifest.IndexDefinitionDigest == "" || manifest.Generation == 0 || manifest.PartitionCount == 0 {
+		return nil, fmt.Errorf("%w: incomplete generation search-open plan", ErrVectorPartitionSearchUnavailable)
+	}
+	limits := DefaultVectorPartitionManifestLimits()
+	if uint64(manifest.PartitionCount) > uint64(limits.MaxPartitions) ||
+		len(manifest.Memberships) > limits.totalMembershipLimit() ||
+		len(manifest.OverlapMemberships) > limits.totalMembershipLimit()-min(len(manifest.Memberships), limits.totalMembershipLimit()) {
+		return nil, fmt.Errorf("%w: generation search-open plan exceeds manifest limits", ErrVectorPartitionSearchUnavailable)
+	}
+	partitionCount := int(manifest.PartitionCount)
+	plan := &VectorPartitionGenerationSearchOpenPlanV1{
+		collection:            manifest.Collection,
+		indexName:             manifest.IndexName,
+		indexDefinitionDigest: manifest.IndexDefinitionDigest,
+		sourceGeneration:      manifest.SourceGeneration,
+		sourceChecksum:        manifest.SourceChecksum,
+		sourceSchemaHash:      manifest.SourceSchemaHash,
+		generation:            manifest.Generation,
+		partitionCount:        manifest.PartitionCount,
+		assets:                make([]VectorPartitionAssetV1, partitionCount),
+		assetPresent:          make([]bool, partitionCount),
+		memberOffsets:         make([]int, partitionCount+1),
+		homeCounts:            make([]int, partitionCount),
+		overlapCounts:         make([]int, partitionCount),
+	}
+	for i, asset := range manifest.Assets {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
+		if asset.PartitionID >= manifest.PartitionCount || asset.ID != vectorPartitionLocalAssetIDV1(asset.PartitionID) {
+			continue
+		}
+		partition := int(asset.PartitionID)
+		if plan.assetPresent[partition] {
+			return nil, fmt.Errorf("%w: duplicate partition search asset %d", ErrVectorPartitionSearchUnavailable, asset.PartitionID)
+		}
+		plan.assets[partition] = asset
+		plan.assetPresent[partition] = true
+	}
+	countMembership := func(memberships []VectorPartitionMembershipV1, counts []int) error {
+		for i, membership := range memberships {
+			if i&1023 == 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
+			if membership.PartitionID >= manifest.PartitionCount {
+				return fmt.Errorf("%w: membership partition %d out of range", ErrVectorPartitionSearchUnavailable, membership.PartitionID)
+			}
+			counts[membership.PartitionID]++
+		}
+		return nil
+	}
+	if err := countMembership(manifest.Memberships, plan.homeCounts); err != nil {
+		return nil, err
+	}
+	if err := countMembership(manifest.OverlapMemberships, plan.overlapCounts); err != nil {
+		return nil, err
+	}
+	for partition := 0; partition < partitionCount; partition++ {
+		count := plan.homeCounts[partition] + plan.overlapCounts[partition]
+		if count < plan.homeCounts[partition] {
+			return nil, fmt.Errorf("%w: membership count overflow", ErrVectorPartitionSearchUnavailable)
+		}
+		plan.memberOffsets[partition+1] = plan.memberOffsets[partition] + count
+		if plan.memberOffsets[partition+1] < plan.memberOffsets[partition] {
+			return nil, fmt.Errorf("%w: membership offset overflow", ErrVectorPartitionSearchUnavailable)
+		}
+	}
+	plan.members = make([]vectorPartitionMembershipSourceV1, plan.memberOffsets[partitionCount])
+	next := append([]int(nil), plan.memberOffsets[:partitionCount]...)
+	if err := appendVectorPartitionMembershipsToPlanV1(ctx, plan, manifest.Memberships, VectorPartitionMembershipHomeV1, next); err != nil {
+		return nil, err
+	}
+	if err := appendVectorPartitionMembershipsToPlanV1(ctx, plan, manifest.OverlapMemberships, VectorPartitionMembershipOverlapV1, next); err != nil {
+		return nil, err
+	}
+	// The digest verifier makes and canonically sorts its own bounded copy.
+	// Keeping the grouped home/overlap runs here avoids another generation-wide
+	// sort during plan preparation.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return plan, nil
+}
+
+func appendVectorPartitionMembershipsToPlanV1(
+	ctx context.Context,
+	plan *VectorPartitionGenerationSearchOpenPlanV1,
+	memberships []VectorPartitionMembershipV1,
+	kind VectorPartitionMembershipKindV1,
+	next []int,
+) error {
+	partitionCount := int(plan.partitionCount)
+	for i, membership := range memberships {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		partition := int(membership.PartitionID)
+		if partition < 0 || partition >= partitionCount || partition+1 >= len(plan.memberOffsets) || partition >= len(next) {
+			return fmt.Errorf("%w: membership partition %d out of range", ErrVectorPartitionSearchUnavailable, membership.PartitionID)
+		}
+		offset := next[partition]
+		if offset < plan.memberOffsets[partition] || offset >= plan.memberOffsets[partition+1] || offset >= len(plan.members) {
+			return fmt.Errorf("%w: membership index changed during plan preparation", ErrVectorPartitionSearchUnavailable)
+		}
+		plan.members[offset] = vectorPartitionMembershipSourceV1{ordinal: int(membership.VectorOrdinal), kind: kind}
+		next[partition]++
+	}
+	return nil
+}
+
+func (p *VectorPartitionGenerationSearchOpenPlanV1) partition(partition uint32) (*VectorPartitionAssetV1, []vectorPartitionMembershipSourceV1, int, int, error) {
+	if p == nil || partition >= p.partitionCount || int(partition)+1 >= len(p.memberOffsets) || int(partition) >= len(p.assets) || !p.assetPresent[partition] {
+		return nil, nil, 0, 0, fmt.Errorf("%w: missing or stale partition asset", ErrVectorPartitionSearchUnavailable)
+	}
+	i := int(partition)
+	return &p.assets[i], p.members[p.memberOffsets[i]:p.memberOffsets[i+1]], p.homeCounts[i], p.overlapCounts[i], nil
 }
 
 func vectorPartitionMembershipDigestV1(reader *columnVectorGraphPhysicalRowReader, generation uint64, partition uint32, members []vectorPartitionMembershipSourceV1) ([sha256.Size]byte, error) {
+	return vectorPartitionMembershipDigestWithContextV1(context.Background(), reader, generation, partition, members)
+}
+
+func vectorPartitionMembershipDigestWithContextV1(ctx context.Context, reader *columnVectorGraphPhysicalRowReader, generation uint64, partition uint32, members []vectorPartitionMembershipSourceV1) ([sha256.Size]byte, error) {
 	var zero [sha256.Size]byte
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
 	if reader == nil || generation == 0 || len(members) == 0 {
 		return zero, fmt.Errorf("%w: membership digest input", ErrVectorPartitionSearchUnavailable)
 	}
-	canonical := append([]vectorPartitionMembershipSourceV1(nil), members...)
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
+	canonical := make([]vectorPartitionMembershipSourceV1, len(members))
+	for offset := 0; offset < len(members); offset += 1024 {
+		if err := ctx.Err(); err != nil {
+			return zero, err
+		}
+		end := min(offset+1024, len(members))
+		copy(canonical[offset:end], members[offset:end])
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
 	sort.Slice(canonical, func(i, j int) bool {
 		return canonical[i].ordinal < canonical[j].ordinal || canonical[i].ordinal == canonical[j].ordinal && canonical[i].kind < canonical[j].kind
 	})
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
 	h := sha256.New()
 	h.Write([]byte("treedb/vector-partition-membership/v1"))
 	var encoded [8]byte
@@ -81,7 +314,12 @@ func vectorPartitionMembershipDigestV1(reader *columnVectorGraphPhysicalRowReade
 	binary.BigEndian.PutUint64(encoded[:], uint64(len(canonical)))
 	h.Write(encoded[:])
 	lastOrdinal := -1
-	for _, member := range canonical {
+	for i, member := range canonical {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return zero, err
+			}
+		}
 		if member.ordinal < 0 || member.ordinal == lastOrdinal {
 			return zero, fmt.Errorf("%w: duplicate membership ordinal", ErrVectorPartitionSearchUnavailable)
 		}
@@ -103,6 +341,9 @@ func vectorPartitionMembershipDigestV1(reader *columnVectorGraphPhysicalRowReade
 		}
 		h.Write([]byte{kindByte})
 		lastOrdinal = member.ordinal
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, err
 	}
 	var digest [sha256.Size]byte
 	copy(digest[:], h.Sum(nil))
@@ -542,11 +783,29 @@ func decodeVectorPartitionSearchAssetV1(raw []byte) (VectorPartitionSearchAssetV
 }
 
 func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index string, generation uint64, partition uint32) (*VectorPartitionLocalSearcherV1, error) {
+	return c.OpenVectorPartitionLocalSearcherForGenerationWithContextV1(context.Background(), index, generation, partition)
+}
+
+// OpenVectorPartitionLocalSearcherForGenerationWithContextV1 is the
+// cancellation-aware cold-open boundary used by routed serving. Checks are
+// placed around lifecycle reads, membership scans, checksum streaming, and
+// mapped-resource preparation; any acquired pin or handle is released on a
+// canceled return.
+func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationWithContextV1(ctx context.Context, index string, generation uint64, partition uint32) (*VectorPartitionLocalSearcherV1, error) {
 	if c == nil || c.db == nil {
 		return nil, ErrVectorPartitionSearchUnavailable
 	}
-	pin, err := c.AcquireVectorPartitionReaderPinV1(index, generation)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	pin, err := c.AcquireVectorPartitionReaderPinWithContextV1(ctx, index, generation)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("%w: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
 	release := true
@@ -559,8 +818,11 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index strin
 	if err != nil {
 		return nil, err
 	}
-	m, err := store.Open(c.name, index, generation)
+	m, err := store.OpenWithContext(ctx, c.name, index, generation)
 	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	def, ok := findVectorIndex(c.meta.VectorIndexes, index)
@@ -574,6 +836,98 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index strin
 			break
 		}
 	}
+	members, err := vectorPartitionMembershipsForPartitionWithContextV1(ctx, m, partition)
+	if err != nil {
+		return nil, err
+	}
+	home, overlap := 0, 0
+	for _, member := range members {
+		if member.kind == VectorPartitionMembershipHomeV1 {
+			home++
+		} else if member.kind == VectorPartitionMembershipOverlapV1 {
+			overlap++
+		}
+	}
+	searcher, err := c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(
+		ctx, index, generation, partition,
+		m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash,
+		asset, members, home, overlap,
+	)
+	if err != nil {
+		return nil, err
+	}
+	searcher.partitionPin = pin
+	release = false
+	return searcher, nil
+}
+
+// OpenVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1 opens a
+// persistent local searcher from a generation-wide plan prepared during the
+// active-generation load. It clones the supplied validated generation pin for
+// the searcher without lifecycle I/O, while avoiding another manifest decode
+// and membership scan for every partition in one cold routed request.
+func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(ctx context.Context, index string, generation uint64, partition uint32, plan *VectorPartitionGenerationSearchOpenPlanV1, generationPin *VectorPartitionReaderPinV1) (*VectorPartitionLocalSearcherV1, error) {
+	if c == nil || c.db == nil {
+		return nil, ErrVectorPartitionSearchUnavailable
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if plan == nil || plan.collection != c.name || plan.indexName != index || plan.generation != generation {
+		return nil, fmt.Errorf("%w: stale generation search-open plan", ErrVectorPartitionSearchUnavailable)
+	}
+	pinKey := vectorPartitionReaderPinKeyV1(c.db.Dir(), c.name, index, generation)
+	pin, err := generationPin.cloneForKey(pinKey)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrVectorPartitionSearchUnavailable, err)
+	}
+	release := true
+	defer func() {
+		if release {
+			pin.Release()
+		}
+	}()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	asset, members, home, overlap, err := plan.partition(partition)
+	if err != nil {
+		return nil, err
+	}
+	searcher, err := c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(
+		ctx, index, generation, partition,
+		plan.indexDefinitionDigest, plan.sourceGeneration, plan.sourceChecksum, plan.sourceSchemaHash,
+		asset, members, home, overlap,
+	)
+	if err != nil {
+		return nil, err
+	}
+	searcher.partitionPin = pin
+	release = false
+	return searcher, nil
+}
+
+func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(
+	ctx context.Context,
+	index string,
+	generation uint64,
+	partition uint32,
+	indexDefinitionDigest string,
+	sourceGeneration uint64,
+	sourceChecksum uint64,
+	sourceSchemaHash uint64,
+	asset *VectorPartitionAssetV1,
+	members []vectorPartitionMembershipSourceV1,
+	home int,
+	overlap int,
+) (*VectorPartitionLocalSearcherV1, error) {
+	def, ok := findVectorIndex(c.meta.VectorIndexes, index)
+	if !ok || indexDefinitionDigest != VectorIndexDefinitionDigestV1(def) || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 {
+		return nil, fmt.Errorf("%w: stale index definition", ErrVectorPartitionSearchUnavailable)
+	}
 	if asset == nil || asset.Ref.Kind != ColumnAssetKindTCS1HNSWSearchPack || asset.Ref.Generation != generation || asset.Ref.PartID != uint64(partition)+1 || asset.Ref.Length > vectorPartitionSearchAssetMaxBytesV1 || asset.Ref.Length <= 0 {
 		return nil, fmt.Errorf("%w: missing or stale partition asset", ErrVectorPartitionSearchUnavailable)
 	}
@@ -585,16 +939,22 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index strin
 	if err != nil {
 		return nil, fmt.Errorf("%w: membership source reader: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
-	recomputedMembershipDigest, digestErr := vectorPartitionMembershipDigestV1(sourceReader, generation, partition, vectorPartitionMembershipsForPartitionV1(m, partition))
+	recomputedMembershipDigest, digestErr := vectorPartitionMembershipDigestWithContextV1(ctx, sourceReader, generation, partition, members)
 	closeErr := sourceReader.Close()
 	if digestErr != nil || closeErr != nil {
+		if errors.Is(digestErr, context.Canceled) || errors.Is(digestErr, context.DeadlineExceeded) {
+			return nil, digestErr
+		}
 		return nil, fmt.Errorf("%w: membership identity: %v", ErrVectorPartitionSearchUnavailable, errors.Join(digestErr, closeErr))
 	}
 	if recomputedMembershipDigest != expectedMembershipDigest {
 		return nil, fmt.Errorf("%w: descriptor membership digest mismatch", ErrVectorPartitionSearchUnavailable)
 	}
 	namespace := c.meta.Options.ColumnStore.AssetManager.Namespace
-	if err := verifyVectorPartitionAssetsV1(c.db.ColumnAssetRootDir(), namespace, []VectorPartitionAssetV1{*asset}); err != nil {
+	if err := verifyVectorPartitionAssetsWithContextV1(ctx, c.db.ColumnAssetRootDir(), namespace, []VectorPartitionAssetV1{*asset}); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("%w: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
 	path, err := columnAssetSegmentPath(c.db.ColumnAssetRootDir(), asset.Ref)
@@ -611,7 +971,11 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index strin
 	if err != nil {
 		return nil, err
 	}
-	view, err := newColumnHNSWSearchPackPreparedViewFromHandle(manager, h, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{ManifestGeneration: m.SourceGeneration, ManifestChecksum: m.SourceChecksum, SchemaHash: m.SourceSchemaHash}, ExpectedMembershipDigest: expectedMembershipDigest})
+	if err := ctx.Err(); err != nil {
+		_ = h.Release()
+		return nil, err
+	}
+	view, err := newColumnHNSWSearchPackPreparedViewFromHandle(manager, h, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{ManifestGeneration: sourceGeneration, ManifestChecksum: sourceChecksum, SchemaHash: sourceSchemaHash}, ExpectedMembershipDigest: expectedMembershipDigest})
 	if err != nil {
 		_ = h.Release()
 		return nil, fmt.Errorf("%w: %v", ErrVectorPartitionSearchUnavailable, err)
@@ -620,25 +984,21 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index strin
 		_ = view.Close()
 		return nil, ErrVectorPartitionSearchUnavailable
 	}
+	if err := ctx.Err(); err != nil {
+		_ = view.Close()
+		return nil, err
+	}
 	openNanos := time.Since(openStarted).Nanoseconds()
 	if openNanos < 1 {
 		openNanos = 1
 	}
 	view.openNanos = uint64(openNanos)
-	home, overlap := 0, 0
-	for _, x := range m.Memberships {
-		if x.PartitionID == partition {
-			home++
-		}
+	maxStableIDBytes, err := vectorPartitionPreparedMaxStableIDBytesV1(view)
+	if err != nil {
+		_ = view.Close()
+		return nil, fmt.Errorf("%w: stable ID bounds", ErrVectorPartitionSearchUnavailable)
 	}
-	for _, x := range m.OverlapMemberships {
-		if x.PartitionID == partition {
-			overlap++
-		}
-	}
-	s := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Generation: generation, PartitionID: partition, Dimensions: view.Header.Dimensions}, prepared: view, opened: 1, homeMemberships: home, overlapMemberships: overlap, packBytes: uint64(asset.Ref.Length), mappedBytes: view.mappedBytes, heapBytes: view.heapCopyBytes, openNanos: view.openNanos, searchRoute: VectorPartitionSearchRouteHNSWSearchPackV1}
-	s.partitionPin = pin
-	release = false
+	s := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Generation: generation, PartitionID: partition, Dimensions: view.Header.Dimensions}, prepared: view, opened: 1, homeMemberships: home, overlapMemberships: overlap, packBytes: uint64(asset.Ref.Length), mappedBytes: view.mappedBytes, heapBytes: view.heapCopyBytes, openNanos: view.openNanos, searchRoute: VectorPartitionSearchRouteHNSWSearchPackV1, maxStableIDBytes: maxStableIDBytes}
 	return s, nil
 }
 

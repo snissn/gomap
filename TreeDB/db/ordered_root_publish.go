@@ -2880,7 +2880,12 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 			if refDelta != nil {
 				releaseValueLogRefDelta(refDelta)
 			}
-			return 0, nil, err
+			return 0, nil, fmt.Errorf(
+				"treedb: command WAL ordered-root context apply root[%d] base=%d: %w",
+				idx,
+				allOrdered[idx].BaseRoot,
+				err,
+			)
 		}
 		if refDelta == nil {
 			exactValueLogRefDelta = false
@@ -2925,7 +2930,11 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		if systemRefDelta != nil {
 			releaseValueLogRefDelta(systemRefDelta)
 		}
-		return 0, nil, err
+		return 0, nil, fmt.Errorf(
+			"treedb: command WAL ordered-root context apply system root base=%d: %w",
+			baseSystemRoot,
+			err,
+		)
 	}
 	if systemRefDelta == nil {
 		exactValueLogRefDelta = false

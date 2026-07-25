@@ -182,7 +182,8 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 		t.Fatalf("ready manifest omitted representative mapping: %+v", manifest)
 	}
 	partitionStatus, err := collection.VectorPartitionStatusV1(def.Name, building.Generation)
-	if err != nil || partitionStatus.ReaderPins != 1 {
+	if err != nil || partitionStatus.ReaderPins != 1 || partitionStatus.StaleAssets != 0 ||
+		partitionStatus.Manifest.RouterAsset.Ref.Generation != building.Generation {
 		t.Fatalf("pinned status=%+v err=%v", partitionStatus, err)
 	}
 	var exactPartitionOrder []uint32
@@ -354,8 +355,8 @@ func vectorPartitionRouterBuildingFixtureV1(t *testing.T, database *backenddb.DB
 	refs, resources, err := AppendColumnPhysicalAssetsWithStableResources(
 		database.ColumnAssetRootDir(), cfg, 990,
 		[]StableColumnPhysicalAssetAppend{
-			{Payload: []byte("partition-router-fixture-0"), Kind: ColumnAssetKindTCS1PartImage, Generation: identity.Generation, PartID: 1},
-			{Payload: []byte("partition-router-fixture-1"), Kind: ColumnAssetKindTCS1PartImage, Generation: identity.Generation, PartID: 2},
+			{Payload: []byte("partition-router-fixture-0"), Kind: ColumnAssetKindTCS1PartImage, Generation: generation, PartID: 1},
+			{Payload: []byte("partition-router-fixture-1"), Kind: ColumnAssetKindTCS1PartImage, Generation: generation, PartID: 2},
 		},
 		database.StableResourceIdentityPinRegistry(), lease,
 	)

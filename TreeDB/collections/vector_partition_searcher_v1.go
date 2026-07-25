@@ -4,6 +4,7 @@ package collections
 // can be carried by a serving group without claiming canonical-row ownership.
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"math"
 	"sort"
 	"sync"
+	"unsafe"
 )
 
 var ErrVectorPartitionSearchUnavailable = errors.New("collections: vector partition search unavailable")
@@ -55,6 +57,18 @@ type VectorPartitionSearchMetricsV1 struct {
 	Route      string
 }
 
+// VectorPartitionSearchOptionsV1 is the bounded M3 no-document search
+// contract consumed by routed serving layers. EfSearch is applied by the
+// native HNSW pack. The exact in-memory fallback validates it but does not need
+// a traversal frontier. MaxStableIDBytes lets a serving boundary reject an
+// immutable asset before either route materializes result IDs; zero leaves the
+// local searcher uncapped.
+type VectorPartitionSearchOptionsV1 struct {
+	TopK             int
+	EfSearch         int
+	MaxStableIDBytes int
+}
+
 const (
 	VectorPartitionSearchRouteHNSWSearchPackV1 = "hnsw_search_pack_v1"
 	VectorPartitionSearchRouteExactFP32ScanV1  = "exact_fp32_scan_v1"
@@ -64,6 +78,7 @@ type VectorPartitionSearchStatusV1 struct {
 	Generation                          uint64
 	PartitionID                         uint32
 	HomeMemberships, OverlapMemberships int
+	MaxStableIDBytes                    int
 	PackBytes, MappedBytes, HeapBytes   uint64
 	OpenNanos                           uint64
 	SearchRoute                         string
@@ -71,6 +86,119 @@ type VectorPartitionSearchStatusV1 struct {
 	ActivePins                          uint64
 	Opened, Searches, Failures          uint64
 	Retired                             bool
+}
+
+// SearchScratchBytesV1 returns a conservative upper bound for the transient
+// candidate/search scratch allocated by one SearchWithOptionsV1 call. Serving
+// layers use it before search so a small ef_search cannot conceal the
+// row-count-sized visit bitmap required by the native HNSW pack.
+func (s *VectorPartitionLocalSearcherV1) SearchScratchBytesV1(opts VectorPartitionSearchOptionsV1) (uint64, error) {
+	_, scratchBytes, err := s.SearchPreflightV1(opts)
+	return scratchBytes, err
+}
+
+// SearchPreflightV1 returns one coherent status and scratch-bound snapshot.
+// Serving layers use it to validate a partition before any request traversal
+// without separately reacquiring the searcher mutex for Status.
+func (s *VectorPartitionLocalSearcherV1) SearchPreflightV1(opts VectorPartitionSearchOptionsV1) (VectorPartitionSearchStatusV1, uint64, error) {
+	if s == nil || opts.TopK < 1 || opts.EfSearch < 0 || opts.MaxStableIDBytes < 0 {
+		return VectorPartitionSearchStatusV1{}, 0, ErrVectorPartitionSearchUnavailable
+	}
+	s.mu.Lock()
+	if s.retired {
+		s.mu.Unlock()
+		return VectorPartitionSearchStatusV1{}, 0, ErrVectorPartitionSearchUnavailable
+	}
+	status := s.statusLockedV1()
+	prepared := s.prepared
+	exactRows := len(s.asset.IDs)
+	maxStableIDBytes := s.maxStableIDBytes
+	var header columnHNSWSearchPackHeader
+	if prepared != nil {
+		header = prepared.Header
+	}
+	s.mu.Unlock()
+
+	scratchBytes, err := vectorPartitionSearchScratchBytesV1(opts, prepared, exactRows, maxStableIDBytes, header)
+	return status, scratchBytes, err
+}
+
+func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, prepared *columnHNSWSearchPackPreparedView, exactRows, maxStableIDBytes int, header columnHNSWSearchPackHeader) (uint64, error) {
+	if opts.MaxStableIDBytes > 0 && maxStableIDBytes > opts.MaxStableIDBytes {
+		return 0, fmt.Errorf("%w: stable ID bytes=%d exceeds limit=%d", ErrVectorPartitionSearchUnavailable, maxStableIDBytes, opts.MaxStableIDBytes)
+	}
+	if prepared == nil {
+		return checkedVectorPartitionScratchProductV1(uint64(exactRows), uint64(unsafe.Sizeof(VectorPartitionSearchResultV1{})))
+	}
+	rowCount := header.Rows
+	if rowCount < 0 || header.VectorStride < 0 || header.M < 0 {
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
+	topK := opts.TopK
+	if topK > rowCount {
+		topK = rowCount
+	}
+	efSearch := opts.EfSearch
+	if efSearch == 0 {
+		efSearch = header.EfSearch
+	}
+	if efSearch < topK {
+		efSearch = topK
+	}
+	if efSearch > rowCount {
+		efSearch = rowCount
+	}
+	degree := header.M
+	if degree < 1 {
+		degree = 1
+	}
+	if degree <= math.MaxInt/2 {
+		degree *= 2
+	}
+	frontier := columnVectorGraphNativeSearchFrontierCapacity(rowCount, degree, topK, efSearch)
+
+	var total uint64
+	add := func(count int, width uintptr) error {
+		if count < 0 {
+			return ErrVectorPartitionSearchUnavailable
+		}
+		bytes, err := checkedVectorPartitionScratchProductV1(uint64(count), uint64(width))
+		if err != nil || math.MaxUint64-total < bytes {
+			return ErrVectorPartitionSearchUnavailable
+		}
+		total += bytes
+		return nil
+	}
+	for _, item := range []struct {
+		count int
+		width uintptr
+	}{
+		{rowCount, unsafe.Sizeof(uint64(0))},
+		{frontier, unsafe.Sizeof(columnVectorGraphSearchCandidate{})},
+		{efSearch, unsafe.Sizeof(columnVectorGraphSearchCandidate{})},
+		{topK, unsafe.Sizeof(columnVectorGraphNativeSearchResult{})},
+		{topK, unsafe.Sizeof([]byte(nil))},
+		{topK, unsafe.Sizeof(int(0))},
+		{topK, unsafe.Sizeof(int(0))},
+		{topK, unsafe.Sizeof(DocumentRowRef{})},
+		{topK, unsafe.Sizeof(bool(false))},
+		{degree, unsafe.Sizeof(float64(0))},
+		{degree, unsafe.Sizeof(uint32(0))},
+		{degree, unsafe.Sizeof(float32(0))},
+		{header.VectorStride, unsafe.Sizeof(float32(0))},
+	} {
+		if err := add(item.count, item.width); err != nil {
+			return 0, err
+		}
+	}
+	return total, nil
+}
+
+func checkedVectorPartitionScratchProductV1(left, right uint64) (uint64, error) {
+	if left != 0 && right > math.MaxUint64/left {
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
+	return left * right, nil
 }
 
 type VectorPartitionLocalSearcherV1 struct {
@@ -89,6 +217,7 @@ type VectorPartitionLocalSearcherV1 struct {
 	packBytes, mappedBytes, heapBytes   uint64
 	openNanos                           uint64
 	searchRoute                         string
+	maxStableIDBytes                    int
 	candidates, edges                   uint64
 }
 
@@ -153,7 +282,44 @@ func OpenVectorPartitionLocalSearcherV1(asset VectorPartitionSearchAssetV1) (*Ve
 			h.Write([]byte(fmt.Sprintf("%08x", math.Float32bits(x))))
 		}
 	}
-	return &VectorPartitionLocalSearcherV1{asset: clonePartitionSearchAsset(asset), norms: norms, digest: hex.EncodeToString(h.Sum(nil)), opened: 1, searchRoute: VectorPartitionSearchRouteExactFP32ScanV1}, nil
+	return &VectorPartitionLocalSearcherV1{
+		asset:            clonePartitionSearchAsset(asset),
+		norms:            norms,
+		digest:           hex.EncodeToString(h.Sum(nil)),
+		opened:           1,
+		searchRoute:      VectorPartitionSearchRouteExactFP32ScanV1,
+		maxStableIDBytes: vectorPartitionMaxStableIDBytesV1(asset.IDs),
+	}, nil
+}
+
+func vectorPartitionMaxStableIDBytesV1(ids []string) int {
+	maxBytes := 0
+	for _, id := range ids {
+		if len(id) > maxBytes {
+			maxBytes = len(id)
+		}
+	}
+	return maxBytes
+}
+
+func vectorPartitionPreparedMaxStableIDBytesV1(view *columnHNSWSearchPackPreparedView) (int, error) {
+	if view == nil || len(view.DocumentIDOffsets) != view.Header.Rows+1 {
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
+	maxBytes := uint64(0)
+	for i := 0; i < view.Header.Rows; i++ {
+		start, end := view.DocumentIDOffsets[i], view.DocumentIDOffsets[i+1]
+		if end < start || end > uint64(len(view.DocumentIDBytes)) {
+			return 0, ErrVectorPartitionSearchUnavailable
+		}
+		if width := end - start; width > maxBytes {
+			maxBytes = width
+		}
+	}
+	if maxBytes > uint64(math.MaxInt) {
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
+	return int(maxBytes), nil
 }
 
 func validateVectorPartitionSearchAssetV1(a VectorPartitionSearchAssetV1) error {
@@ -263,7 +429,7 @@ func (s *VectorPartitionLocalSearcherV1) Retire() error {
 	return nil
 }
 func (s *VectorPartitionLocalSearcherV1) Search(query []float32, topK int) ([]VectorPartitionSearchResultV1, error) {
-	results, _, err := s.SearchWithMetrics(query, topK)
+	results, _, err := s.SearchWithOptionsV1(context.Background(), query, VectorPartitionSearchOptionsV1{TopK: topK})
 	return results, err
 }
 
@@ -271,13 +437,32 @@ func (s *VectorPartitionLocalSearcherV1) Search(query []float32, topK int) ([]Ve
 // Search and returns native candidate/edge accounting for benchmark and status
 // attribution.
 func (s *VectorPartitionLocalSearcherV1) SearchWithMetrics(query []float32, topK int) ([]VectorPartitionSearchResultV1, VectorPartitionSearchMetricsV1, error) {
+	return s.SearchWithOptionsV1(context.Background(), query, VectorPartitionSearchOptionsV1{TopK: topK})
+}
+
+// SearchWithOptionsV1 executes M3's authoritative no-document path with an
+// explicit HNSW candidate frontier. It observes cancellation before acquiring
+// resources and before returning results. Serving layers that need to abandon
+// an in-flight native traversal may call this method in a goroutine: Close
+// defers the persistent generation-pin release until the search pin exits.
+func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context, query []float32, opts VectorPartitionSearchOptionsV1) ([]VectorPartitionSearchResultV1, VectorPartitionSearchMetricsV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, VectorPartitionSearchMetricsV1{}, err
+	}
 	if err := s.Acquire(); err != nil {
 		return nil, VectorPartitionSearchMetricsV1{}, err
 	}
 	defer s.Release()
-	if topK < 1 || len(query) != s.asset.Dimensions {
+	if opts.TopK < 1 || opts.EfSearch < 0 || opts.MaxStableIDBytes < 0 || len(query) != s.asset.Dimensions {
 		s.recordFailure()
 		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: query bounds", ErrVectorPartitionSearchUnavailable)
+	}
+	if opts.MaxStableIDBytes > 0 && s.maxStableIDBytes > opts.MaxStableIDBytes {
+		s.recordFailure()
+		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: stable ID bytes=%d exceeds limit=%d", ErrVectorPartitionSearchUnavailable, s.maxStableIDBytes, opts.MaxStableIDBytes)
 	}
 	var qn float64
 	for _, x := range query {
@@ -292,10 +477,14 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithMetrics(query []float32, topK
 		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: zero query", ErrVectorPartitionSearchUnavailable)
 	}
 	if s.prepared != nil {
-		results, stats, err := s.prepared.searchCosine(query, columnVectorGraphNativeSearchOptions{TopK: topK}, &columnVectorGraphNativeSearchScratch{})
+		results, stats, err := s.prepared.searchCosine(query, columnVectorGraphNativeSearchOptions{TopK: opts.TopK, EfSearch: opts.EfSearch}, &columnVectorGraphNativeSearchScratch{})
 		if err != nil {
 			s.recordFailure()
 			return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: native HNSW: %v", ErrVectorPartitionSearchUnavailable, err)
+		}
+		if err := ctx.Err(); err != nil {
+			s.recordFailure()
+			return nil, VectorPartitionSearchMetricsV1{}, err
 		}
 		out := make([]VectorPartitionSearchResultV1, len(results))
 		for i, r := range results {
@@ -312,6 +501,12 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithMetrics(query []float32, topK
 	out := make([]VectorPartitionSearchResultV1, len(s.asset.IDs))
 	var edges uint64
 	for i, v := range s.asset.Vectors {
+		if i&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				s.recordFailure()
+				return nil, VectorPartitionSearchMetricsV1{}, err
+			}
+		}
 		var d float64
 		for j, x := range v {
 			d += float64(x) * float64(query[j])
@@ -327,8 +522,12 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithMetrics(query []float32, topK
 		}
 		return out[i].ID < out[j].ID
 	})
-	if topK < len(out) {
-		out = out[:topK]
+	if err := ctx.Err(); err != nil {
+		s.recordFailure()
+		return nil, VectorPartitionSearchMetricsV1{}, err
+	}
+	if opts.TopK < len(out) {
+		out = out[:opts.TopK]
 	}
 	s.mu.Lock()
 	s.searches++
@@ -353,7 +552,11 @@ func (s *VectorPartitionLocalSearcherV1) Status() VectorPartitionSearchStatusV1 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st := VectorPartitionSearchStatusV1{Generation: s.asset.Generation, PartitionID: s.asset.PartitionID, ActivePins: s.pins, Opened: s.opened, Searches: s.searches, Failures: s.failures, Retired: s.retired, HomeMemberships: s.homeMemberships, OverlapMemberships: s.overlapMemberships, PackBytes: s.packBytes, MappedBytes: s.mappedBytes, HeapBytes: s.heapBytes, OpenNanos: s.openNanos, SearchRoute: s.searchRoute, Candidates: s.candidates, Edges: s.edges}
+	return s.statusLockedV1()
+}
+
+func (s *VectorPartitionLocalSearcherV1) statusLockedV1() VectorPartitionSearchStatusV1 {
+	st := VectorPartitionSearchStatusV1{Generation: s.asset.Generation, PartitionID: s.asset.PartitionID, ActivePins: s.pins, Opened: s.opened, Searches: s.searches, Failures: s.failures, Retired: s.retired, HomeMemberships: s.homeMemberships, OverlapMemberships: s.overlapMemberships, MaxStableIDBytes: s.maxStableIDBytes, PackBytes: s.packBytes, MappedBytes: s.mappedBytes, HeapBytes: s.heapBytes, OpenNanos: s.openNanos, SearchRoute: s.searchRoute, Candidates: s.candidates, Edges: s.edges}
 	if s.prepared != nil {
 		return st
 	}

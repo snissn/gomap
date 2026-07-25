@@ -251,6 +251,7 @@ func TestReduceVectorPartitionLifecycleChainV1MultiGenerationAuthority(t *testin
 	readyPromotion := lifecycleReadyPromotionPayloadV1(t, build, ready)
 	ready2 := ready
 	ready2.Generation, ready2.RouterGeneration = ready.Generation+1, ready.Generation+1
+	ready2.RouterAsset.Ref.Generation = ready2.Generation
 	ready2.Canonicalize()
 	build2 := ready2
 	build2.State, build2.RouterGeneration, build2.RouterAsset, build2.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
@@ -453,6 +454,7 @@ func TestReduceVectorPartitionLifecycleChainV1ActivationClearsStaleRetired(t *te
 	ready1Promotion := lifecycleReadyPromotionPayloadV1(t, build1, ready1)
 	ready2 := ready1
 	ready2.Generation, ready2.RouterGeneration = ready1.Generation+1, ready1.Generation+1
+	ready2.RouterAsset.Ref.Generation = ready2.Generation
 	ready2.Canonicalize()
 	build2 := ready2
 	build2.State, build2.RouterGeneration, build2.RouterAsset, build2.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
@@ -485,6 +487,7 @@ func TestReduceVectorPartitionLifecycleChainV1ActivationHighWaterSurvivesDelete(
 	ready2 := cloneVectorPartitionManifestForCheckpointV1(ready1)
 	ready2.Generation++
 	ready2.RouterGeneration++
+	ready2.RouterAsset.Ref.Generation = ready2.Generation
 	ready2.Canonicalize()
 	build2 := cloneVectorPartitionManifestForCheckpointV1(ready2)
 	build2.State = "building"

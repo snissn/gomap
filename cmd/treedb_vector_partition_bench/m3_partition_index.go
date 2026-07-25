@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -20,12 +22,16 @@ import (
 )
 
 const (
-	m3ReportSchemaVersion = 2
-	m3BenchmarkCollection = "m3_partition_source"
-	m3WarmupPasses        = 1
+	m3ReportSchemaVersion   = 3
+	m3BenchmarkCollection   = "m3_partition_source"
+	m3WarmupPasses          = 1
+	m3SourceInsertBatchRows = 8 * 1024
 	// m3PartitionAssetFileIDBase reserves a benchmark-owned column-asset
 	// segment range, separate from the collection package's production ranges.
 	m3PartitionAssetFileIDBase uint64 = 40_000
+	// Router assets use a disjoint benchmark-owned segment range so the M4
+	// ready-generation publication cannot alias an M3 partition-pack segment.
+	m3RouterAssetFileIDBase uint64 = 50_000
 )
 
 type m3PartitionIndexReport struct {
@@ -67,6 +73,7 @@ type m3PartitionIndexRow struct {
 	FinalDerivedPhysicalBytes    int64   `json:"final_derived_physical_bytes"`
 	PhysicalBytesPerSourceVector float64 `json:"physical_bytes_per_source_vector"`
 	PackBytes                    uint64  `json:"pack_payload_bytes"`
+	PartitionHNSWM               int     `json:"partition_hnsw_m"`
 	MappedBytes                  uint64  `json:"mapped_bytes"`
 	HeapBytes                    uint64  `json:"heap_bytes"`
 	SearcherOpenWallNanos        int64   `json:"searcher_open_wall_nanos"`
@@ -90,6 +97,7 @@ type m3PartitionIndexRow struct {
 	MissingAssets                uint64  `json:"missing_assets"`
 	CorruptAssets                uint64  `json:"corrupt_assets"`
 	StaleAssets                  uint64  `json:"stale_assets"`
+	PersistentDBDir              string  `json:"persistent_db_dir,omitempty"`
 }
 
 func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vectorpartition.Artifact, artifactDigest, suffix string, vectors, queries [][]float64, stdout io.Writer) error {
@@ -158,6 +166,14 @@ func m3PartitionAssetFileID(generation uint64) (uint32, error) {
 	return uint32(m3PartitionAssetFileIDBase + generation), nil
 }
 
+func m3RouterAssetFileID(generation uint64) (uint32, error) {
+	maxFileID := uint64(^uint32(0))
+	if generation == 0 || generation > maxFileID-m3RouterAssetFileIDBase {
+		return 0, fmt.Errorf("M3 router generation %d exceeds column-asset file-ID range", generation)
+	}
+	return uint32(m3RouterAssetFileIDBase + generation), nil
+}
+
 func closeM3PartitionSearchers(searchers []*collections.VectorPartitionLocalSearcherV1) error {
 	var resultErr error
 	for _, searcher := range searchers {
@@ -189,13 +205,15 @@ func openM3PartitionSearchers(count int, open func(uint32) (*collections.VectorP
 }
 
 func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, generation uint64) (_ m3PartitionIndexRow, resultErr error) {
-	dir, err := os.MkdirTemp("", "treedb-vector-partition-m3-*")
+	dir, cleanup, err := m3PartitionIndexDirectory(cfg.m3PersistDir)
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
-	defer func() {
-		resultErr = errors.Join(resultErr, os.RemoveAll(dir))
-	}()
+	if cleanup {
+		defer func() {
+			resultErr = errors.Join(resultErr, os.RemoveAll(dir))
+		}()
+	}
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
 		return m3PartitionIndexRow{}, err
 	}
@@ -211,6 +229,20 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 	}()
 	manager := collections.NewCollectionManager(db)
 	meta := partitionCollectionMeta(m3BenchmarkCollection, len(vectors[0]))
+	if cfg.partition.Degree < 2 {
+		return m3PartitionIndexRow{}, errors.New("M3 persistent HNSW degree must be at least 2")
+	}
+	foundIndex := false
+	for i := range meta.VectorIndexes {
+		if meta.VectorIndexes[i].Name == partitionHNSWIndex {
+			meta.VectorIndexes[i].M = cfg.partition.Degree
+			foundIndex = true
+			break
+		}
+	}
+	if !foundIndex {
+		return m3PartitionIndexRow{}, errors.New("M3 persistent HNSW index definition missing")
+	}
 	if _, err := manager.CreateCollection(meta); err != nil {
 		return m3PartitionIndexRow{}, err
 	}
@@ -235,6 +267,14 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 		return m3PartitionIndexRow{}, err
 	}
 	dbOpen = false
+	// A million-row source rebuild can leave several generations of HNSW build
+	// scratch reachable until the next GC cycle. The persistent-pack phase
+	// deliberately starts from a reopened DB, so release that closed phase
+	// before mapping the immutable source and materializing derived assets.
+	col = nil
+	manager = nil
+	db = nil
+	debug.FreeOSMemory()
 	sourcePhysicalBytes, err := m3DirectoryBytes(dir)
 	if err != nil || sourcePhysicalBytes <= 0 {
 		return m3PartitionIndexRow{}, fmt.Errorf("source physical footprint=%d: %w", sourcePhysicalBytes, err)
@@ -269,6 +309,16 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
+	routerPartitions, err := m3RouterPartitions(artifact, sourceOrdinals, vectors)
+	if err != nil {
+		return m3PartitionIndexRow{}, err
+	}
+	sourceRows = nil
+	sourceOrdinals = nil
+	// Source-ordinal reconciliation owns large transient maps and stable-ID
+	// copies at the 1M acceptance shape. They are not part of the persistent
+	// pack build and retaining them needlessly raises the materializer's peak.
+	debug.FreeOSMemory()
 	inputs := make([]collections.VectorPartitionSearchAssetV1, cfg.partitions)
 	for partition := range inputs {
 		inputs[partition] = collections.VectorPartitionSearchAssetV1{
@@ -297,6 +347,31 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 	if err := col.PublishVectorPartitionManifestV1(manifest, nil); err != nil {
 		return m3PartitionIndexRow{}, err
 	}
+	routerFileID, err := m3RouterAssetFileID(generation)
+	if err != nil {
+		return m3PartitionIndexRow{}, err
+	}
+	routerStatus, err := col.BuildAndPublishVectorPartitionRouterV1(
+		context.Background(),
+		manifest,
+		routerPartitions,
+		collections.VectorPartitionRouterBuildOptionsV1{
+			Config:         vectorpartition.DefaultRouterConfigV1(),
+			AssetFileID:    routerFileID,
+			AssetPartID:    uint64(manifest.PartitionCount) + 1,
+			M:              cfg.partition.Degree,
+			EfConstruction: 128,
+			EfSearch:       128,
+		},
+	)
+	if err != nil {
+		return m3PartitionIndexRow{}, err
+	}
+	if routerStatus.Generation != generation || routerStatus.RouterBytes == 0 {
+		return m3PartitionIndexRow{}, fmt.Errorf("M3 router publication status=%+v", routerStatus)
+	}
+	routerPartitions = nil
+	debug.FreeOSMemory()
 	if err := sampler.Sample(); err != nil {
 		return m3PartitionIndexRow{}, err
 	}
@@ -342,6 +417,10 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
+	if !lifecycle.Ready || !lifecycle.Active || lifecycle.Manifest.RouterGeneration != generation || lifecycle.Manifest.RouterAsset.Bytes == 0 {
+		return m3PartitionIndexRow{}, fmt.Errorf("reopened M3 router lifecycle=%+v", lifecycle)
+	}
+	manifest = lifecycle.Manifest
 	if lifecycle.Capacity != uint64(artifact.Metrics.Cap) || lifecycle.OverlapBudget != uint64(overlap.Budget) || lifecycle.UnspentOverlapBudget != uint64(overlap.Unspent) {
 		return m3PartitionIndexRow{}, fmt.Errorf("reopened lifecycle accounting=%+v", lifecycle)
 	}
@@ -424,12 +503,16 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 	for _, asset := range manifest.Assets {
 		packPayloadBytes += asset.Bytes
 	}
-	if packPayloadBytes != packBytes || lifecycle.AssetBytes != packPayloadBytes {
-		return m3PartitionIndexRow{}, fmt.Errorf("pack byte accounting manifest=%d status=%d lifecycle=%d", packPayloadBytes, packBytes, lifecycle.AssetBytes)
+	if packPayloadBytes != packBytes || lifecycle.AssetBytes != packPayloadBytes+manifest.RouterAsset.Bytes {
+		return m3PartitionIndexRow{}, fmt.Errorf("pack byte accounting partitions=%d status=%d router=%d lifecycle=%d", packPayloadBytes, packBytes, manifest.RouterAsset.Bytes, lifecycle.AssetBytes)
 	}
 	peakRSS, peakAvailable := m3PeakRSS()
 	resident, residentAvailable := m3ResidentBytes()
 	nsPerOp := float64(elapsed.Nanoseconds()) / float64(timedOps)
+	persistentDBDir := ""
+	if !cleanup {
+		persistentDBDir = dir
+	}
 	row := m3PartitionIndexRow{
 		Budget:                       overlap.Budget,
 		Used:                         overlap.Used,
@@ -449,6 +532,7 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 		FinalDerivedPhysicalBytes:    finalDerivedPhysicalBytes,
 		PhysicalBytesPerSourceVector: float64(finalDerivedPhysicalBytes) / float64(len(vectors)),
 		PackBytes:                    packBytes,
+		PartitionHNSWM:               cfg.partition.Degree,
 		MappedBytes:                  mappedBytes,
 		HeapBytes:                    heapBytes,
 		SearcherOpenWallNanos:        openWall,
@@ -472,14 +556,43 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 		MissingAssets:                lifecycle.MissingAssets,
 		CorruptAssets:                lifecycle.CorruptAssets,
 		StaleAssets:                  lifecycle.StaleAssets,
+		PersistentDBDir:              persistentDBDir,
 	}
 	return row, nil
 }
 
+func m3PartitionIndexDirectory(persist string) (dir string, cleanup bool, err error) {
+	if persist == "" {
+		dir, err = os.MkdirTemp("", "treedb-vector-partition-m3-*")
+		return dir, true, err
+	}
+	dir, err = filepath.Abs(persist)
+	if err != nil {
+		return "", false, err
+	}
+	entries, readErr := os.ReadDir(dir)
+	switch {
+	case readErr == nil && len(entries) != 0:
+		return "", false, fmt.Errorf("M3 persistent DB directory %q must be empty", dir)
+	case readErr == nil:
+	case errors.Is(readErr, os.ErrNotExist):
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return "", false, err
+		}
+	default:
+		return "", false, readErr
+	}
+	return dir, false, nil
+}
+
 func insertM3SourceRows(col *collections.Collection, vectors [][]float64) error {
-	const batchRows = 512
-	for base := 0; base < len(vectors); base += batchRows {
-		end := min(base+batchRows, len(vectors))
+	// Keep the acceptance load to a bounded number of physical column-graph
+	// publications. Tiny batches retain thousands of superseded generations
+	// until the benchmark's deliberate close/reopen boundary; 8K rows keeps
+	// individual command-WAL frames bounded while reducing the 1M-row load to
+	// 123 publications.
+	for base := 0; base < len(vectors); base += m3SourceInsertBatchRows {
+		end := min(base+m3SourceInsertBatchRows, len(vectors))
 		ids := make([][]byte, end-base)
 		documents := make([][]byte, end-base)
 		for i := base; i < end; i++ {
@@ -525,6 +638,45 @@ func m3SourceOrdinalsByArtifactID(artifact vectorpartition.Artifact, rows []coll
 		}
 	}
 	return sourceOrdinals, nil
+}
+
+func m3RouterPartitions(artifact vectorpartition.Artifact, sourceOrdinals []int, vectors [][]float64) ([]vectorpartition.RouterPartitionV1, error) {
+	if len(artifact.Assignment) == 0 || len(artifact.Assignment) != len(sourceOrdinals) || len(vectors) != len(sourceOrdinals) ||
+		artifact.Config.Partitions < 1 || len(vectors[0]) < 1 {
+		return nil, errors.New("M3 router source shape mismatch")
+	}
+	dimensions := len(vectors[0])
+	if len(vectors) > math.MaxInt/dimensions {
+		return nil, errors.New("M3 router vector backing size overflow")
+	}
+	counts := make([]int, artifact.Config.Partitions)
+	seenSourceOrdinals := make([]bool, len(sourceOrdinals))
+	for ordinal, partition := range artifact.Assignment {
+		if partition < 0 || partition >= len(counts) || sourceOrdinals[ordinal] < 0 || sourceOrdinals[ordinal] >= len(vectors) ||
+			seenSourceOrdinals[sourceOrdinals[ordinal]] || len(vectors[ordinal]) != dimensions {
+			return nil, errors.New("M3 router assignment or source ordinal is invalid")
+		}
+		seenSourceOrdinals[sourceOrdinals[ordinal]] = true
+		counts[partition]++
+	}
+	partitions := make([]vectorpartition.RouterPartitionV1, len(counts))
+	for partition := range partitions {
+		partitions[partition].PartitionID = uint32(partition)
+		partitions[partition].Vectors = make([]vectorpartition.RouterVectorV1, 0, counts[partition])
+	}
+	values := make([]float32, len(vectors)*dimensions)
+	for artifactOrdinal, partition := range artifact.Assignment {
+		offset := artifactOrdinal * dimensions
+		row := values[offset : offset+dimensions : offset+dimensions]
+		for dimension, value := range vectors[artifactOrdinal] {
+			row[dimension] = float32(value)
+		}
+		partitions[partition].Vectors = append(partitions[partition].Vectors, vectorpartition.RouterVectorV1{
+			Ordinal: uint64(sourceOrdinals[artifactOrdinal]),
+			Values:  row,
+		})
+	}
+	return partitions, nil
 }
 
 func m3BuildingManifest(meta collections.CollectionMeta, source collections.VectorPartitionSourceIdentityV1, artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, sourceOrdinals []int, generation uint64) (collections.VectorPartitionManifestV1, [][]int, error) {
@@ -684,7 +836,7 @@ func validateM3PartitionIndexReport(report m3PartitionIndexReport) error {
 		return errors.New("invalid M3 report identity")
 	}
 	for _, row := range report.Rows {
-		if row.Budget < 0 || row.Used < 0 || row.Unspent != row.Budget-row.Used || row.Capacity < 1 || row.ReplicationFactor < 1 || row.EdgeCutAfter > row.EdgeCutBefore || row.BuildWallNanos <= 0 || row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes <= 0 || row.PackBytes == 0 || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PhysicalBytesPerSourceVector <= 0 || row.SearcherOpenWallNanos <= 0 || row.PackOpenNanos == 0 || row.LocalSearches <= 0 || row.WarmNSPerOp <= 0 || row.WarmQPS <= 0 || row.CandidatesPerOp <= 0 || row.ExactLocalRecallAtK < 0 || row.ExactLocalRecallAtK > 1 || row.ManifestDigest == "" || row.SourceRows != uint64(report.Dataset.Vectors) || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 {
+		if row.Budget < 0 || row.Used < 0 || row.Unspent != row.Budget-row.Used || row.Capacity < 1 || row.ReplicationFactor < 1 || row.EdgeCutAfter > row.EdgeCutBefore || row.BuildWallNanos <= 0 || row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes <= 0 || row.PackBytes == 0 || row.PartitionHNSWM < 2 || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PhysicalBytesPerSourceVector <= 0 || row.SearcherOpenWallNanos <= 0 || row.PackOpenNanos == 0 || row.LocalSearches <= 0 || row.WarmNSPerOp <= 0 || row.WarmQPS <= 0 || row.CandidatesPerOp <= 0 || row.ExactLocalRecallAtK < 0 || row.ExactLocalRecallAtK > 1 || row.ManifestDigest == "" || row.SourceRows != uint64(report.Dataset.Vectors) || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 {
 			return fmt.Errorf("invalid M3 evidence row: %+v", row)
 		}
 		for _, value := range []float64{row.Ratio, row.ReplicationFactor, row.PhysicalBytesPerSourceVector, row.WarmNSPerOp, row.WarmQPS, row.WarmBytesPerOp, row.WarmAllocsPerOp, row.CandidatesPerOp, row.EdgesPerOp, row.ExactLocalRecallAtK} {

@@ -170,6 +170,7 @@ func TestVectorPartitionLifecyclePublicV1ReadyRetryCannotReactivateRetiredGenera
 	second := cloneVectorPartitionManifestForCheckpointV1(first)
 	second.Generation++
 	second.RouterGeneration++
+	second.RouterAsset.Ref.Generation = second.Generation
 	second.Canonicalize()
 	if err := store.publishValidatedReady(second); err != nil {
 		t.Fatal(err)
@@ -240,6 +241,7 @@ func TestVectorPartitionLifecyclePublicV1ActivationHighWaterSurvivesDeleteCheckp
 	second := cloneVectorPartitionManifestForCheckpointV1(first)
 	second.Generation++
 	second.RouterGeneration++
+	second.RouterAsset.Ref.Generation = second.Generation
 	second.Canonicalize()
 	if err := store.publishValidatedReady(second); err != nil {
 		t.Fatal(err)

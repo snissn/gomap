@@ -5,6 +5,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -37,16 +38,72 @@ type vectorPartitionLifecycleCheckpointGenerationEncodingV1 struct {
 }
 
 func cloneVectorPartitionManifestForCheckpointV1(m VectorPartitionManifestV1) VectorPartitionManifestV1 {
-	m.Placements = append([]VectorPartitionPlacementV1(nil), m.Placements...)
-	m.Memberships = append([]VectorPartitionMembershipV1(nil), m.Memberships...)
-	m.OverlapMemberships = append([]VectorPartitionMembershipV1(nil), m.OverlapMemberships...)
-	m.Representatives = append([]VectorPartitionMembershipV1(nil), m.Representatives...)
-	m.Assets = append([]VectorPartitionAssetV1(nil), m.Assets...)
-	return m
+	cloned, err := cloneVectorPartitionManifestForCheckpointWithContextV1(context.Background(), m)
+	if err != nil {
+		panic(err)
+	}
+	return cloned
+}
+
+func cloneVectorPartitionSliceWithContextV1[T any](ctx context.Context, source []T) ([]T, error) {
+	if source == nil {
+		return nil, ctx.Err()
+	}
+	destination := make([]T, len(source))
+	for start := 0; start < len(source); start += 4096 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		end := start + 4096
+		if end > len(source) {
+			end = len(source)
+		}
+		copy(destination[start:end], source[start:end])
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return destination, nil
+}
+
+func cloneVectorPartitionManifestForCheckpointWithContextV1(ctx context.Context, m VectorPartitionManifestV1) (VectorPartitionManifestV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	var err error
+	if m.Placements, err = cloneVectorPartitionSliceWithContextV1(ctx, m.Placements); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	if m.Memberships, err = cloneVectorPartitionSliceWithContextV1(ctx, m.Memberships); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	if m.OverlapMemberships, err = cloneVectorPartitionSliceWithContextV1(ctx, m.OverlapMemberships); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	if m.Representatives, err = cloneVectorPartitionSliceWithContextV1(ctx, m.Representatives); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	if m.Assets, err = cloneVectorPartitionSliceWithContextV1(ctx, m.Assets); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	return m, ctx.Err()
 }
 
 func canonicalVectorPartitionLifecycleCheckpointV1(input vectorPartitionLifecycleCheckpointV1) (vectorPartitionLifecycleCheckpointV1, []vectorPartitionLifecycleCheckpointGenerationEncodingV1, error) {
+	return canonicalVectorPartitionLifecycleCheckpointWithContextV1(context.Background(), input)
+}
+
+func canonicalVectorPartitionLifecycleCheckpointWithContextV1(ctx context.Context, input vectorPartitionLifecycleCheckpointV1) (vectorPartitionLifecycleCheckpointV1, []vectorPartitionLifecycleCheckpointGenerationEncodingV1, error) {
 	var zero vectorPartitionLifecycleCheckpointV1
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, nil, err
+	}
 	state := input.State
 	limits := DefaultVectorPartitionManifestLimits()
 	if input.Epoch == 0 ||
@@ -89,18 +146,41 @@ func canonicalVectorPartitionLifecycleCheckpointV1(input vectorPartitionLifecycl
 	}
 	encoded := make([]vectorPartitionLifecycleCheckpointGenerationEncodingV1, 0, len(generations))
 	for _, generation := range generations {
+		if err := ctx.Err(); err != nil {
+			return zero, nil, err
+		}
 		entry := state.Generations[generation]
 		if generation < state.GenerationFloor || generation > state.GenerationHighWater || entry.Manifest == nil {
 			return zero, nil, fmt.Errorf("%w: lifecycle checkpoint generation", ErrVectorPartitionManifestInvalid)
 		}
-		manifestInput := cloneVectorPartitionManifestForCheckpointV1(*entry.Manifest)
-		manifestRaw, err := EncodeVectorPartitionManifestV1(manifestInput)
-		if err != nil {
+		if err := preflightVectorPartitionManifestWithContextV1(ctx, *entry.Manifest, limits); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return zero, nil, ctxErr
+			}
 			return zero, nil, fmt.Errorf("%w: lifecycle checkpoint manifest", ErrVectorPartitionManifestInvalid)
 		}
-		manifest, err := DecodeVectorPartitionManifestV1(manifestRaw, limits)
-		if err != nil ||
-			manifest.Collection != state.Collection ||
+		manifestInput, err := cloneVectorPartitionManifestForCheckpointWithContextV1(ctx, *entry.Manifest)
+		if err != nil {
+			return zero, nil, err
+		}
+		manifestRaw, err := encodeVectorPartitionManifestWithContextV1(ctx, manifestInput)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return zero, nil, ctxErr
+			}
+			return zero, nil, fmt.Errorf("%w: lifecycle checkpoint manifest", ErrVectorPartitionManifestInvalid)
+		}
+		if err := ctx.Err(); err != nil {
+			return zero, nil, err
+		}
+		manifest, err := DecodeVectorPartitionManifestWithContextV1(ctx, manifestRaw, limits)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return zero, nil, ctxErr
+			}
+			return zero, nil, fmt.Errorf("%w: lifecycle checkpoint manifest identity", ErrVectorPartitionManifestInvalid)
+		}
+		if manifest.Collection != state.Collection ||
 			manifest.IndexName != state.IndexName ||
 			manifest.Generation != generation {
 			return zero, nil, fmt.Errorf("%w: lifecycle checkpoint manifest identity", ErrVectorPartitionManifestInvalid)
@@ -173,6 +253,10 @@ func encodeVectorPartitionLifecycleCheckpointCanonicalV1(input vectorPartitionLi
 	if err != nil {
 		return nil, err
 	}
+	return encodePreparedVectorPartitionLifecycleCheckpointV1(checkpoint, generations)
+}
+
+func encodePreparedVectorPartitionLifecycleCheckpointV1(checkpoint vectorPartitionLifecycleCheckpointV1, generations []vectorPartitionLifecycleCheckpointGenerationEncodingV1) ([]byte, error) {
 	state := checkpoint.State
 	payloadBytes := uint64(4 + len(state.Collection) + 4 + len(state.IndexName) + 8 + 8 + sha256.Size + 8 + 8 + 8 + 8 + 8 + 4)
 	add := func(n uint64) error {
@@ -231,7 +315,17 @@ func encodeVectorPartitionLifecycleCheckpointCanonicalV1(input vectorPartitionLi
 }
 
 func decodeVectorPartitionLifecycleCheckpointCanonicalV1(raw []byte, collection, index string, epoch uint64) (vectorPartitionLifecycleCheckpointV1, error) {
+	return decodeVectorPartitionLifecycleCheckpointCanonicalWithContextV1(context.Background(), raw, collection, index, epoch)
+}
+
+func decodeVectorPartitionLifecycleCheckpointCanonicalWithContextV1(ctx context.Context, raw []byte, collection, index string, epoch uint64) (vectorPartitionLifecycleCheckpointV1, error) {
 	var zero vectorPartitionLifecycleCheckpointV1
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
 	if collection == "" || index == "" || epoch == 0 ||
 		len(raw) < vectorPartitionLifecycleCheckpointHeaderBytesV1+vectorPartitionLifecycleCheckpointChecksumBytesV1 ||
 		len(raw) > vectorPartitionLifecycleCheckpointMaxBytesV1 ||
@@ -252,9 +346,12 @@ func decodeVectorPartitionLifecycleCheckpointCanonicalV1(raw []byte, collection,
 	if !bytes.Equal(sum[:], raw[contentBytes:]) {
 		return zero, fmt.Errorf("%w: lifecycle checkpoint checksum", ErrVectorPartitionManifestInvalid)
 	}
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
 
 	limits := DefaultVectorPartitionManifestLimits()
-	r := vpmReader{b: raw[vectorPartitionLifecycleCheckpointHeaderBytesV1:contentBytes], l: VectorPartitionManifestLimits{MaxStringBytes: limits.MaxStringBytes}}
+	r := vpmReader{b: raw[vectorPartitionLifecycleCheckpointHeaderBytesV1:contentBytes], l: VectorPartitionManifestLimits{MaxStringBytes: limits.MaxStringBytes}, ctx: ctx}
 	state := vectorPartitionLifecycleStateV1{
 		Collection:  r.str(),
 		IndexName:   r.str(),
@@ -263,6 +360,9 @@ func decodeVectorPartitionLifecycleCheckpointCanonicalV1(raw []byte, collection,
 	embeddedEpoch := r.u64()
 	state.LastSequence = r.u64()
 	if r.err != nil || r.off+sha256.Size > len(r.b) {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return zero, ctxErr
+		}
 		return zero, fmt.Errorf("%w: lifecycle checkpoint truncated digest", ErrVectorPartitionManifestInvalid)
 	}
 	copy(state.LastDigest[:], r.b[r.off:r.off+sha256.Size])
@@ -277,6 +377,9 @@ func decodeVectorPartitionLifecycleCheckpointCanonicalV1(raw []byte, collection,
 		state.Collection != collection ||
 		state.IndexName != index ||
 		embeddedEpoch != epoch {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return zero, ctxErr
+		}
 		return zero, fmt.Errorf("%w: lifecycle checkpoint embedded identity", ErrVectorPartitionManifestInvalid)
 	}
 
@@ -292,6 +395,9 @@ func decodeVectorPartitionLifecycleCheckpointCanonicalV1(raw []byte, collection,
 	}
 	var previousGeneration uint64
 	for i := 0; i < generationCount && r.err == nil; i++ {
+		if err := ctx.Err(); err != nil {
+			return zero, err
+		}
 		generation := r.u64()
 		var flags byte
 		if r.err == nil && r.off < len(r.b) {
@@ -309,7 +415,7 @@ func decodeVectorPartitionLifecycleCheckpointCanonicalV1(raw []byte, collection,
 		if r.err != nil || len(manifestRaw) == 0 {
 			break
 		}
-		manifest, err := DecodeVectorPartitionManifestV1(manifestRaw, limits)
+		manifest, err := DecodeVectorPartitionManifestWithContextV1(ctx, manifestRaw, limits)
 		if err != nil {
 			r.err = err
 			break
@@ -330,16 +436,25 @@ func decodeVectorPartitionLifecycleCheckpointCanonicalV1(raw []byte, collection,
 		previousGeneration = generation
 	}
 	if r.err != nil || r.off != len(r.b) || len(state.Generations) != generationCount {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return zero, ctxErr
+		}
 		return zero, fmt.Errorf("%w: lifecycle checkpoint truncated, over-cap, or trailing: %v", ErrVectorPartitionManifestInvalid, r.err)
 	}
 
-	checkpoint, _, err := canonicalVectorPartitionLifecycleCheckpointV1(vectorPartitionLifecycleCheckpointV1{Epoch: embeddedEpoch, State: state})
+	checkpoint, encoded, err := canonicalVectorPartitionLifecycleCheckpointWithContextV1(ctx, vectorPartitionLifecycleCheckpointV1{Epoch: embeddedEpoch, State: state})
 	if err != nil {
 		return zero, err
 	}
-	canonicalRaw, err := encodeVectorPartitionLifecycleCheckpointCanonicalV1(checkpoint)
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
+	canonicalRaw, err := encodePreparedVectorPartitionLifecycleCheckpointV1(checkpoint, encoded)
 	if err != nil || !bytes.Equal(canonicalRaw, raw) {
 		return zero, fmt.Errorf("%w: noncanonical lifecycle checkpoint", ErrVectorPartitionManifestInvalid)
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, err
 	}
 	return checkpoint, nil
 }

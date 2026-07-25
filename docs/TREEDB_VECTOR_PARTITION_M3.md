@@ -55,6 +55,14 @@ logical partition to its exact membership digest, asset ref, length, CRC, and
 SHA-256. Partition packs use wire version 2 of the existing pack format to
 persist the same membership digest in the header; ordinary non-partition packs
 remain wire version 1.
+
+The column manifest keeps vector-index control state inline. Small records retain
+the existing version-2 encoding; records that would exceed the reserved inline
+leaf budget use the bounded version-3 Snappy envelope and decode back to the same
+version-2 logical state. Decode size and final inline size are both capped, so a
+large HNSW layer/asset set cannot overflow a 4 KiB manifest leaf or trigger an
+unbounded allocation during reopen or command-WAL replay.
+
 `OpenVectorPartitionLocalSearcherForGenerationV1` rechecks that binding after
 database close/reopen, maps or bounded-copies the pack, verifies the source
 identity, recomputed membership set, descriptor, and native HNSW header, and

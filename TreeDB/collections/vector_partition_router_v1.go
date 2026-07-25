@@ -337,7 +337,7 @@ func (c *Collection) BuildAndPublishVectorPartitionRouterV1(ctx context.Context,
 		c.db.ColumnAssetRootDir(), *cfg, opts.AssetFileID,
 		[]StableColumnPhysicalAssetAppend{{
 			Payload: raw, Kind: ColumnAssetKindTCS1HNSWSearchPack,
-			Generation: building.SourceGeneration, PartID: opts.AssetPartID,
+			Generation: building.Generation, PartID: opts.AssetPartID,
 		}},
 		c.db.StableResourceIdentityPinRegistry(), lease,
 	)
@@ -847,7 +847,9 @@ func (c *Collection) OpenVectorPartitionRouterV1(index string) (*VectorPartition
 		if err != nil {
 			return err
 		}
-		if manifest.State != "ready" || manifest.RouterGeneration != manifest.Generation {
+		if manifest.State != "ready" ||
+			manifest.RouterGeneration != manifest.Generation ||
+			manifest.RouterAsset.Ref.Generation != manifest.Generation {
 			return errors.New("collections: vector partition router active generation is not ready")
 		}
 		if len(manifest.Representatives) == 0 {

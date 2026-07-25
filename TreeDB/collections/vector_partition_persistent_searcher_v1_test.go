@@ -1,12 +1,106 @@
 package collections
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestVectorPartitionGenerationSearchOpenPlanV1IndexesAndOwnsInputs(t *testing.T) {
+	manifest := VectorPartitionManifestV1{
+		Collection:            "docs",
+		IndexName:             "embedding",
+		IndexDefinitionDigest: "definition",
+		SourceGeneration:      11,
+		SourceChecksum:        22,
+		SourceSchemaHash:      33,
+		Generation:            7,
+		PartitionCount:        2,
+		Assets: []VectorPartitionAssetV1{
+			{ID: vectorPartitionLocalAssetIDV1(0), PartitionID: 0},
+			{ID: vectorPartitionLocalAssetIDV1(1), PartitionID: 1},
+		},
+		Memberships: []VectorPartitionMembershipV1{
+			{VectorOrdinal: 3, PartitionID: 1},
+			{VectorOrdinal: 0, PartitionID: 0},
+		},
+		OverlapMemberships: []VectorPartitionMembershipV1{
+			{VectorOrdinal: 2, PartitionID: 0},
+			{VectorOrdinal: 1, PartitionID: 1},
+		},
+	}
+	plan, err := NewVectorPartitionGenerationSearchOpenPlanWithContextV1(t.Context(), manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.Assets[0].ID = "mutated"
+	manifest.Memberships[0].VectorOrdinal = 99
+	asset, members, home, overlap, err := plan.partition(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asset.ID != vectorPartitionLocalAssetIDV1(0) || home != 1 || overlap != 1 || len(members) != 2 ||
+		members[0] != (vectorPartitionMembershipSourceV1{ordinal: 0, kind: VectorPartitionMembershipHomeV1}) ||
+		members[1] != (vectorPartitionMembershipSourceV1{ordinal: 2, kind: VectorPartitionMembershipOverlapV1}) {
+		t.Fatalf("partition plan asset=%+v members=%+v home=%d overlap=%d", asset, members, home, overlap)
+	}
+	if _, _, _, _, err := plan.partition(2); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("out-of-range partition err=%v", err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := NewVectorPartitionGenerationSearchOpenPlanWithContextV1(canceled, manifest); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled plan err=%v", err)
+	}
+	manifest.Memberships = append(manifest.Memberships, VectorPartitionMembershipV1{VectorOrdinal: 4, PartitionID: 2})
+	if _, err := NewVectorPartitionGenerationSearchOpenPlanWithContextV1(t.Context(), manifest); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("out-of-range membership err=%v", err)
+	}
+}
+
+func TestAppendVectorPartitionMembershipsToPlanV1FailsClosedOnChangedInput(t *testing.T) {
+	plan := &VectorPartitionGenerationSearchOpenPlanV1{
+		partitionCount: 2,
+		memberOffsets:  []int{0, 1, 2},
+		members:        make([]vectorPartitionMembershipSourceV1, 2),
+	}
+	next := []int{0, 1}
+	err := appendVectorPartitionMembershipsToPlanV1(t.Context(), plan, []VectorPartitionMembershipV1{
+		{VectorOrdinal: 1, PartitionID: 0},
+		{VectorOrdinal: 2, PartitionID: 0},
+	}, VectorPartitionMembershipHomeV1, next)
+	if !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("changed membership input err=%v", err)
+	}
+	if next[0] != 1 || plan.members[1] != (vectorPartitionMembershipSourceV1{}) {
+		t.Fatalf("changed membership input spilled into adjacent run: next=%v members=%+v", next, plan.members)
+	}
+
+	err = appendVectorPartitionMembershipsToPlanV1(t.Context(), plan, []VectorPartitionMembershipV1{{
+		VectorOrdinal: 3,
+		PartitionID:   2,
+	}}, VectorPartitionMembershipHomeV1, []int{0, 1})
+	if !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("out-of-range changed input err=%v", err)
+	}
+}
+
+func TestOpenVectorPartitionLocalSearcherForGenerationWithContextV1RejectsCanceledColdOpen(t *testing.T) {
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}})
+	defer func() {
+		if err := d.Close(); err != nil {
+			t.Errorf("close DB: %v", err)
+		}
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := col.OpenVectorPartitionLocalSearcherForGenerationWithContextV1(ctx, def.Name, 1, 0); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled cold open err=%v", err)
+	}
+}
 
 func TestVectorPartitionPersistentLocalSearcherReopenCorruptionAndPinsV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
@@ -43,6 +137,55 @@ func TestVectorPartitionPersistentLocalSearcherReopenCorruptionAndPinsV1(t *test
 		return m
 	}
 	m1 := makeGeneration(41, 941)
+	openPlan, err := NewVectorPartitionGenerationSearchOpenPlanWithContextV1(t.Context(), m1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generationPin, err := col.AcquireVectorPartitionReaderPinWithContextV1(t.Context(), def.Name, m1.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignPlan := *openPlan
+	foreignPlan.collection = "other"
+	if _, err := col.OpenVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(t.Context(), def.Name, m1.Generation, 0, &foreignPlan, generationPin); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("cross-collection plan err=%v", err)
+	}
+	// The generation cache must own an immutable index rather than retaining
+	// mutable caller slices.
+	m1.Assets[0].ID = "mutated-after-plan"
+	m1.Memberships[0].VectorOrdinal = ^uint64(0)
+	planned, err := col.OpenVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(t.Context(), def.Name, m1.Generation, 0, openPlan, generationPin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := planned.Search([]float32{1, 0, 0}, 1); err != nil || len(got) != 1 || got[0].ID != "b" {
+		t.Fatalf("planned search=%+v err=%v", got, err)
+	}
+	if err := planned.Close(); err != nil {
+		t.Fatal(err)
+	}
+	concurrentOpen := make(chan error, 2)
+	for partition := uint32(0); partition < 2; partition++ {
+		go func() {
+			searcher, err := col.OpenVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(t.Context(), def.Name, m1.Generation, partition, openPlan, generationPin)
+			if err == nil {
+				err = searcher.Close()
+			}
+			concurrentOpen <- err
+		}()
+	}
+	for range 2 {
+		if err := <-concurrentOpen; err != nil {
+			t.Fatalf("concurrent planned open: %v", err)
+		}
+	}
+	generationPin.Release()
+	if pins := vectorPartitionReaderPinCountV1(d.Dir(), col.name, def.Name, m1.Generation); pins != 0 {
+		t.Fatalf("planned reader pins after close=%d", pins)
+	}
+	if _, err := col.OpenVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(t.Context(), def.Name, m1.Generation, 0, openPlan, generationPin); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("released generation pin err=%v", err)
+	}
 	s, err := col.OpenVectorPartitionLocalSearcherForGenerationV1(def.Name, m1.Generation, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +197,7 @@ func TestVectorPartitionPersistentLocalSearcherReopenCorruptionAndPinsV1(t *test
 		t.Fatalf("search metrics=%+v err=%v", metrics, err)
 	}
 	searchStatus := s.Status()
-	if searchStatus.SearchRoute != VectorPartitionSearchRouteHNSWSearchPackV1 || searchStatus.PackBytes == 0 || searchStatus.MappedBytes+searchStatus.HeapBytes == 0 || searchStatus.OpenNanos == 0 || searchStatus.Candidates == 0 {
+	if searchStatus.SearchRoute != VectorPartitionSearchRouteHNSWSearchPackV1 || searchStatus.MaxStableIDBytes != 1 || searchStatus.PackBytes == 0 || searchStatus.MappedBytes+searchStatus.HeapBytes == 0 || searchStatus.OpenNanos == 0 || searchStatus.Candidates == 0 {
 		t.Fatalf("search status=%+v", searchStatus)
 	}
 	if err := col.DeleteVectorPartitionGenerationV1(def.Name, m1.Generation, VectorPartitionCleanupEligibilityV1{}); err == nil {

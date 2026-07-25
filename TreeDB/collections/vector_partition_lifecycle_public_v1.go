@@ -7,6 +7,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -14,8 +15,164 @@ import (
 	"strings"
 )
 
+// VectorPartitionActiveAuthorityTokenV1 is an opaque, comparable snapshot of
+// one active lifecycle generation and its coherently published DB source
+// state. Serving caches retain the token returned with the manifest and use it
+// for allocation-free warm checks without filesystem or catalog reads.
+//
+// The token owns a small process-local authority lease. Call Release when the
+// serving cache entry is closed.
+type VectorPartitionActiveAuthorityTokenV1 struct {
+	state            *vectorPartitionActiveAuthorityStateV1
+	lease            *vectorPartitionActiveAuthorityLeaseV1
+	owner            *Collection
+	index            string
+	revision         uint64
+	sourceCommitSeq  uint64
+	sourceSystemRoot uint64
+	generation       uint64
+}
+
+// Release drops the process-local authority lease retained by this token.
+// Copies of a token share one idempotent release.
+func (t VectorPartitionActiveAuthorityTokenV1) Release() {
+	releaseVectorPartitionActiveAuthorityV1(t.lease)
+}
+
+// ValidateActiveVectorPartitionGenerationWithContextV1 is the compatibility
+// entrypoint for callers that do not retain an authority token. Serving caches
+// should use ValidateActiveVectorPartitionAuthorityTokenWithContextV1.
+func (c *Collection) ValidateActiveVectorPartitionGenerationWithContextV1(ctx context.Context, index string, generation uint64) error {
+	_, err := c.ActiveVectorPartitionManifestWithContextV1(ctx, index, generation)
+	return err
+}
+
+func (c *Collection) ActiveVectorPartitionManifestWithContextV1(ctx context.Context, index string, generation uint64) (VectorPartitionManifestV1, error) {
+	manifest, token, err := c.ActiveVectorPartitionManifestAndAuthorityTokenWithContextV1(ctx, index, generation)
+	token.Release()
+	return manifest, err
+}
+
+// ActiveVectorPartitionManifestAndAuthorityTokenWithContextV1 opens the full
+// lifecycle and source authority once and returns the leased token used for
+// bounded warm checks. The caller must Release the token.
+func (c *Collection) ActiveVectorPartitionManifestAndAuthorityTokenWithContextV1(ctx context.Context, index string, generation uint64) (VectorPartitionManifestV1, VectorPartitionActiveAuthorityTokenV1, error) {
+	if c == nil || c.db == nil {
+		return VectorPartitionManifestV1{}, VectorPartitionActiveAuthorityTokenV1{}, errors.New("collections: closed collection")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return VectorPartitionManifestV1{}, VectorPartitionActiveAuthorityTokenV1{}, err
+	}
+	var manifest VectorPartitionManifestV1
+	var token VectorPartitionActiveAuthorityTokenV1
+	err := WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+		unlock := c.lockMutation()
+		defer unlock.Unlock()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		store, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
+		if err != nil {
+			return err
+		}
+		loaded, present, err := store.loadVectorPartitionLifecycleAuthorityWithContextV1(ctx, c.name, index)
+		if err != nil {
+			return err
+		}
+		if !present || loaded.state.ActiveGeneration != generation {
+			return fmt.Errorf("%w: generation %d is not active", ErrVectorPartitionManifestInvalid, generation)
+		}
+		entry, ok := loaded.state.Generations[generation]
+		if !ok || entry.Manifest == nil || entry.Deleting || entry.Manifest.State != "ready" {
+			return fmt.Errorf("%w: generation %d is not complete and ready", ErrVectorPartitionManifestInvalid, generation)
+		}
+		manifest, err = vectorPartitionLifecycleManifestWithContextV1(ctx, loaded.state, generation, false)
+		if err != nil {
+			return err
+		}
+		snap := c.db.AcquireSnapshot()
+		if snap == nil {
+			return errors.New("collections: vector partition source snapshot unavailable")
+		}
+		source, sourceErr := c.vectorPartitionSourceIdentityAtSnapshotV1(index, snap)
+		sourceState, sourceStateOK := snap.StateToken()
+		closeErr := snap.Close()
+		if sourceErr != nil || closeErr != nil {
+			return errors.Join(sourceErr, closeErr)
+		}
+		if !sourceStateOK {
+			return errors.New("collections: vector partition source state unavailable")
+		}
+		if manifest.SourceGeneration != source.Generation || manifest.SourceChecksum != source.Checksum || manifest.SourceSchemaHash != source.SchemaHash || manifest.SourceRowCount != source.RowCount {
+			return errors.New("collections: vector partition source identity mismatch")
+		}
+		token, err = registerVectorPartitionActiveAuthorityV1(c.db.Dir(), c.name, index, generation, sourceState.SystemRootPageID)
+		if err != nil {
+			return err
+		}
+		token.owner = c
+		token.sourceCommitSeq = sourceState.CommitSeq
+		if err := ctx.Err(); err != nil {
+			token.Release()
+			token = VectorPartitionActiveAuthorityTokenV1{}
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return VectorPartitionManifestV1{}, VectorPartitionActiveAuthorityTokenV1{}, err
+	}
+	return manifest, token, nil
+}
+
+// ValidateActiveVectorPartitionAuthorityTokenWithContextV1 validates a cached
+// generation using only mutation-driven process state and the DB's
+// allocation-free coherent state token. A DB publication asks the caller to
+// perform a new full authority open; an activation change is definitive.
+func (c *Collection) ValidateActiveVectorPartitionAuthorityTokenWithContextV1(ctx context.Context, index string, generation uint64, expected VectorPartitionActiveAuthorityTokenV1) error {
+	if c == nil || c.db == nil {
+		return errors.New("collections: closed collection")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if expected.owner != c || expected.index != index || expected.generation != generation || generation == 0 || expected.state == nil || expected.lease == nil || expected.lease.released.Load() {
+		return fmt.Errorf("%w: active authority token generation", ErrVectorPartitionManifestInvalid)
+	}
+	revisionBefore := expected.state.revision.Load()
+	active := expected.state.activeGeneration.Load()
+	revisionAfter := expected.state.revision.Load()
+	if revisionBefore != expected.revision || revisionAfter != expected.revision || active != generation {
+		return fmt.Errorf("%w: active lifecycle authority changed", ErrVectorPartitionManifestInvalid)
+	}
+	sourceState, ok := c.db.StateToken()
+	if !ok {
+		return errors.New("collections: vector partition source state unavailable")
+	}
+	if sourceState.CommitSeq != expected.sourceCommitSeq || sourceState.SystemRootPageID != expected.sourceSystemRoot {
+		return ErrVectorPartitionAuthorityRefreshRequiredV1
+	}
+	return ctx.Err()
+}
+
 func (s *VectorPartitionStoreV1) loadVectorPartitionLifecycleAuthorityV1(collection, index string) (vectorPartitionLifecycleCheckpointStoreStateV1, bool, error) {
+	return s.loadVectorPartitionLifecycleAuthorityWithContextV1(context.Background(), collection, index)
+}
+
+func (s *VectorPartitionStoreV1) loadVectorPartitionLifecycleAuthorityWithContextV1(ctx context.Context, collection, index string) (vectorPartitionLifecycleCheckpointStoreStateV1, bool, error) {
 	var zero vectorPartitionLifecycleCheckpointStoreStateV1
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, false, err
+	}
 	dir, err := s.openDir()
 	if err != nil {
 		return zero, false, err
@@ -29,6 +186,9 @@ func (s *VectorPartitionStoreV1) loadVectorPartitionLifecycleAuthorityV1(collect
 	lifecyclePrefix := vectorPartitionLifecycleNamePrefixV1(collection, index)
 	present := false
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return zero, false, err
+		}
 		if !strings.HasPrefix(entry.Name(), identityPrefix) {
 			continue
 		}
@@ -46,7 +206,7 @@ func (s *VectorPartitionStoreV1) loadVectorPartitionLifecycleAuthorityV1(collect
 			},
 		}, false, nil
 	}
-	loaded, err := s.loadVectorPartitionLifecycleCheckpointStateFromDirV1(dir, collection, index)
+	loaded, err := s.loadVectorPartitionLifecycleCheckpointStateFromDirWithContextV1(ctx, dir, collection, index)
 	if err != nil {
 		return zero, false, err
 	}
@@ -57,15 +217,76 @@ func (s *VectorPartitionStoreV1) loadVectorPartitionLifecycleAuthorityV1(collect
 }
 
 func vectorPartitionLifecycleManifestV1(state vectorPartitionLifecycleStateV1, generation uint64, allowDeleting bool) (VectorPartitionManifestV1, error) {
+	return vectorPartitionLifecycleManifestWithContextV1(context.Background(), state, generation, allowDeleting)
+}
+
+func vectorPartitionLifecycleManifestWithContextV1(ctx context.Context, state vectorPartitionLifecycleStateV1, generation uint64, allowDeleting bool) (VectorPartitionManifestV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
 	entry, present := state.Generations[generation]
 	if !present || entry.Manifest == nil || (!allowDeleting && entry.Deleting) {
 		return VectorPartitionManifestV1{}, os.ErrNotExist
 	}
-	raw, err := EncodeVectorPartitionManifestV1(*entry.Manifest)
-	if err != nil {
+	manifest := *entry.Manifest
+	copyChunked := func(length int, copyRange func(int, int)) error {
+		for offset := 0; offset < length; offset += 1024 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			copyRange(offset, min(offset+1024, length))
+		}
+		return ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
 		return VectorPartitionManifestV1{}, err
 	}
-	return DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits())
+	manifest.Placements = make([]VectorPartitionPlacementV1, len(entry.Manifest.Placements))
+	if err := copyChunked(len(manifest.Placements), func(start, end int) {
+		copy(manifest.Placements[start:end], entry.Manifest.Placements[start:end])
+	}); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	manifest.Memberships = make([]VectorPartitionMembershipV1, len(entry.Manifest.Memberships))
+	if err := copyChunked(len(manifest.Memberships), func(start, end int) {
+		copy(manifest.Memberships[start:end], entry.Manifest.Memberships[start:end])
+	}); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	manifest.OverlapMemberships = make([]VectorPartitionMembershipV1, len(entry.Manifest.OverlapMemberships))
+	if err := copyChunked(len(manifest.OverlapMemberships), func(start, end int) {
+		copy(manifest.OverlapMemberships[start:end], entry.Manifest.OverlapMemberships[start:end])
+	}); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	manifest.Representatives = make([]VectorPartitionMembershipV1, len(entry.Manifest.Representatives))
+	if err := copyChunked(len(manifest.Representatives), func(start, end int) {
+		copy(manifest.Representatives[start:end], entry.Manifest.Representatives[start:end])
+	}); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	manifest.Assets = make([]VectorPartitionAssetV1, len(entry.Manifest.Assets))
+	if err := copyChunked(len(manifest.Assets), func(start, end int) {
+		copy(manifest.Assets[start:end], entry.Manifest.Assets[start:end])
+	}); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	return manifest, nil
 }
 
 func (s *VectorPartitionStoreV1) vectorPartitionLifecycleGenerationCompleteV1(collection, index string, generation uint64) (bool, error) {
