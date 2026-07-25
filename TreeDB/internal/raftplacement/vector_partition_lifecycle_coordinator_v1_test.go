@@ -15,6 +15,15 @@ type lifecycleCoordinatorCommitterV1 struct {
 	fail      error
 }
 
+type lifecycleTestBuilderV1 struct {
+	ready VectorPartitionLifecycleGroupReadyV1
+	err   error
+}
+
+func (b lifecycleTestBuilderV1) BuildAndStageVectorPartitionGroupV1(context.Context, VectorPartitionLifecycleIdentityV1, raftcluster.GroupID) (VectorPartitionLifecycleGroupReadyV1, error) {
+	return b.ready, b.err
+}
+
 func (c *lifecycleCoordinatorCommitterV1) SubmitCatalogMetaCommandV1(_ context.Context, raw []byte) (uint64, uint64, error) {
 	if c.fail != nil {
 		return 0, 0, c.fail
@@ -137,6 +146,9 @@ func TestVectorPartitionLifecycleWorkflowRetriesV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if retry, err := c.MarkCleanableV1(t.Context(), identity, VectorPartitionLifecycleReferencesV1{}); err != nil || !reflect.DeepEqual(retry, r) {
+		t.Fatalf("cleanable retry=%+v err=%v", retry, err)
+	}
 	r, err = c.RecordGroupCleanupV1(t.Context(), identity, "group-a")
 	if err != nil {
 		t.Fatal(err)
@@ -153,6 +165,65 @@ func TestVectorPartitionLifecycleWorkflowRetriesV1(t *testing.T) {
 	}
 	if statuses, fences, err := c.RecoveryStatusV1(); err != nil || len(statuses) != 1 || len(fences) != 1 || fences[0].Pending {
 		t.Fatalf("recovery statuses=%+v fences=%+v err=%v", statuses, fences, err)
+	}
+}
+
+func TestVectorPartitionLifecycleWorkflowCutoverAbortAndBuilderV1(t *testing.T) {
+	a, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	committer := &lifecycleCoordinatorCommitterV1{authority: a, index: 1}
+	c := VectorPartitionLifecycleCoordinatorV1{Authority: a, Committer: committer}
+	oldID := catalogMetaLifecycleTestIdentityV1(catalog, 6, 10)
+	old := catalogMetaLifecycleBuildPreparedV1(t, a, &committer.index, oldID, 0, 9)
+	old = catalogMetaLifecycleApplyV1(t, a, &committer.index, catalogMetaLifecycleTestCommandV1(old, VectorPartitionLifecycleActivateV1, func(x *VectorPartitionLifecycleCommandV1) { x.MutationEpoch = 9 }))
+	newID := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11)
+	new := catalogMetaLifecycleBuildPreparedV1(t, a, &committer.index, newID, oldID.Generation, 10)
+	got, err := c.ActivateV1(t.Context(), newID)
+	if err != nil || got.State != VectorPartitionLifecycleActiveV1 {
+		t.Fatalf("cutover=%+v err=%v", got, err)
+	}
+	if retry, err := c.ActivateV1(t.Context(), newID); err != nil || !reflect.DeepEqual(retry, got) {
+		t.Fatalf("cutover retry=%+v err=%v", retry, err)
+	}
+	oldAfter, _ := a.VectorPartitionLifecycleRecordV1(oldID)
+	if oldAfter.State != VectorPartitionLifecycleRetiredV1 {
+		t.Fatalf("old=%q", oldAfter.State)
+	}
+	// A stale explicit predecessor cannot bypass the reducer guard.
+	bad := catalogMetaLifecycleTestCommandV1(new, VectorPartitionLifecycleActivateV1, func(x *VectorPartitionLifecycleCommandV1) {
+		x.PreviousActiveGeneration = oldID.Generation
+		x.PreviousActiveRevision = old.Revision + 1
+		x.MutationEpoch = 10
+	})
+	if _, err := a.applyCommittedCatalogMetaV1(mustEncodeCatalogMetaLifecycleCommandV1(t, bad), committer.index+1); !errors.Is(err, ErrVectorPartitionLifecycleStale) && !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("bad predecessor err=%v", err)
+	}
+
+	abortID := catalogMetaLifecycleTestIdentityV1(catalog, 8, 12)
+	if _, err := c.BeginBuildV1(t.Context(), abortID, []raftcluster.GroupID{"group-a"}, 0, 11); err != nil {
+		t.Fatal(err)
+	}
+	aborted, err := c.AbortV1(t.Context(), abortID, "cancelled")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry, err := c.AbortV1(t.Context(), abortID, "different"); err != nil || !reflect.DeepEqual(retry, aborted) {
+		t.Fatalf("abort retry=%+v err=%v", retry, err)
+	}
+
+	buildID := catalogMetaLifecycleTestIdentityV1(catalog, 9, 13)
+	if _, err := c.BeginBuildV1(t.Context(), buildID, []raftcluster.GroupID{"group-a"}, 0, 12); err != nil {
+		t.Fatal(err)
+	}
+	badBuilder := lifecycleTestBuilderV1{ready: VectorPartitionLifecycleGroupReadyV1{GroupID: "wrong", AppliedIndex: 1, AssetSetDigest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}
+	if _, err := c.BuildAndRecordGroupReadyV1(t.Context(), badBuilder, buildID, "group-a"); err == nil {
+		t.Fatal("wrong group builder accepted")
+	}
+	if r, _ := a.VectorPartitionLifecycleRecordV1(buildID); len(r.ReadyGroups) != 0 {
+		t.Fatal("bad builder published readiness")
+	}
+	good := lifecycleTestBuilderV1{ready: VectorPartitionLifecycleGroupReadyV1{GroupID: "group-a", AppliedIndex: 1, AssetSetDigest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}
+	if _, err := c.BuildAndRecordGroupReadyV1(t.Context(), good, buildID, "group-a"); err != nil {
+		t.Fatal(err)
 	}
 }
 
