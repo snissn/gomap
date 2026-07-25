@@ -483,17 +483,12 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 		RequestBytes: budget.requestBytes,
 	}
 	for _, result := range taskResults {
-		edges, ok := addUint64V1(counters.Edges, result.response.Edges)
-		if !ok {
+		if !accumulateVectorPartitionCoordinatorResponseCountersV1(&counters, result.response) {
 			return response, c.wrapError(ErrVectorPartitionCoordinatorBudgetExceeded, "")
 		}
 		counters.RPCs += result.rpcs
 		counters.Retries += result.retries
 		counters.Redirects += result.redirects
-		counters.ResponseBytes += result.response.ResponseBytes
-		counters.Candidates += result.response.Candidates
-		counters.Edges = edges
-		counters.CandidateBytes += result.response.Candidates * 64
 		response.Timing.QueueNanos += result.queueNanos
 		response.Timing.RPCNanos += result.rpcNanos
 		response.Timing.NetworkNanos += result.networkNanos
@@ -539,6 +534,31 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 	response.ProbedGroups = selectedGroups
 	response.Counters = counters
 	return response, nil
+}
+
+func accumulateVectorPartitionCoordinatorResponseCountersV1(
+	counters *VectorPartitionCoordinatorCountersV1,
+	response VectorPartitionShardSearchResponseV1,
+) bool {
+	if counters == nil {
+		return false
+	}
+	responseBytes, responseBytesOK := addUint64V1(counters.ResponseBytes, response.ResponseBytes)
+	candidates, candidatesOK := addUint64V1(counters.Candidates, response.Candidates)
+	edges, edgesOK := addUint64V1(counters.Edges, response.Edges)
+	candidateBytes, candidateBytesOK := mulUint64V1(response.Candidates, 64)
+	if !responseBytesOK || !candidatesOK || !edgesOK || !candidateBytesOK {
+		return false
+	}
+	candidateBytes, candidateBytesOK = addUint64V1(counters.CandidateBytes, candidateBytes)
+	if !candidateBytesOK {
+		return false
+	}
+	counters.ResponseBytes = responseBytes
+	counters.Candidates = candidates
+	counters.Edges = edges
+	counters.CandidateBytes = candidateBytes
+	return true
 }
 
 func vectorPartitionCoordinatorContextV1(

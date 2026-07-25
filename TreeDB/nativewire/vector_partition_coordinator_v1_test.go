@@ -921,6 +921,45 @@ func TestVectorPartitionCoordinatorRejectsCrossTaskEdgeCounterOverflowV1(t *test
 	}
 }
 
+func TestVectorPartitionCoordinatorResponseCounterAggregationRejectsOverflowV1(t *testing.T) {
+	tests := []struct {
+		name     string
+		counters VectorPartitionCoordinatorCountersV1
+		response VectorPartitionShardSearchResponseV1
+	}{
+		{
+			name:     "response_bytes",
+			counters: VectorPartitionCoordinatorCountersV1{ResponseBytes: math.MaxUint64},
+			response: VectorPartitionShardSearchResponseV1{ResponseBytes: 1},
+		},
+		{
+			name:     "candidates",
+			counters: VectorPartitionCoordinatorCountersV1{Candidates: math.MaxUint64},
+			response: VectorPartitionShardSearchResponseV1{Candidates: 1},
+		},
+		{
+			name:     "candidate_bytes_multiply",
+			response: VectorPartitionShardSearchResponseV1{Candidates: math.MaxUint64},
+		},
+		{
+			name:     "candidate_bytes_sum",
+			counters: VectorPartitionCoordinatorCountersV1{CandidateBytes: math.MaxUint64},
+			response: VectorPartitionShardSearchResponseV1{Candidates: 1},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before := test.counters
+			if accumulateVectorPartitionCoordinatorResponseCountersV1(&test.counters, test.response) {
+				t.Fatal("overflow accepted")
+			}
+			if test.counters != before {
+				t.Fatalf("partial counters published: got=%+v want=%+v", test.counters, before)
+			}
+		})
+	}
+}
+
 func TestVectorPartitionCoordinatorLowerStableIDCapUsesM5ResponseReservationV1(t *testing.T) {
 	coordinator, _, dispatcher := testVectorPartitionCoordinatorV1(t,
 		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
