@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"math"
 	"os"
 	"reflect"
@@ -15,6 +16,18 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	internalrouter "github.com/snissn/gomap/TreeDB/internal/vectorpartition"
 )
+
+func TestVectorPartitionRouterContextEntryPointsRejectCanceledWorkV1(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var collection *Collection
+	if _, _, err := collection.OpenVectorPartitionRouterWithContextV1(ctx, "embedding"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled open err=%v", err)
+	}
+	if _, err := rankVectorPartitionRouterCandidatesWithContextV1(ctx, nil, nil, 1); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled rank err=%v", err)
+	}
+}
 
 func TestVerifyVectorPartitionRouterStableAssetV1StreamsExactRange(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "router-stable-asset-*")
