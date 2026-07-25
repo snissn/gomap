@@ -844,6 +844,9 @@ func sortVectorPartitionSliceWithContextV1[T any](ctx context.Context, values []
 	if sorted {
 		return ctx.Err()
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	scratch := make([]T, len(values))
 	source, destination := values, scratch
 	for width := 1; width < len(values); {
@@ -882,7 +885,7 @@ func sortVectorPartitionSliceWithContextV1[T any](ctx context.Context, values []
 			}
 		}
 		source, destination = destination, source
-		if width > len(values)/2 {
+		if width >= len(values)-width {
 			break
 		}
 		width *= 2

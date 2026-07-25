@@ -3023,6 +3023,17 @@ func TestEncodeVectorPartitionManifestWithContextV1CancelsDuringLargeCanonicalSo
 	}
 }
 
+func TestSortVectorPartitionSliceWithContextV1CancelsBeforeScratchAllocation(t *testing.T) {
+	values := []int{2, 1}
+	ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 2}
+	if err := sortVectorPartitionSliceWithContextV1(ctx, values, func(a, b int) bool { return a < b }); !errors.Is(err, context.Canceled) {
+		t.Fatalf("sort cancellation err=%v want context.Canceled", err)
+	}
+	if !reflect.DeepEqual(values, []int{2, 1}) {
+		t.Fatalf("canceled pre-allocation sort mutated values=%v", values)
+	}
+}
+
 func BenchmarkVectorPartitionManifestV1Scale(b *testing.B) {
 	for _, rows := range []int{10_000, 100_000, 1_000_000} {
 		b.Run(fmt.Sprintf("rows=%d", rows), func(b *testing.B) {
