@@ -2,7 +2,7 @@
 
 Date: 2026-07-24  
 Host: Linux/amd64, Intel Core i5-11400F, 12 logical CPUs  
-Base: `2292b334d5114f92859f4e0821f070837d719979`
+Base: `294e61b5009b92009720ec166b4c3445828563bd`
 
 ## Small deterministic CI benchmark scope
 
@@ -63,8 +63,8 @@ The implementation provides the production-shaped bounded service contract,
 stage attribution, p50/p95/p99/QPS harness, request/response byte accounting,
 candidate/edge counters, mapped/heap/open accounting, and normal/race tests.
 
-The required large-scale acceptance run was subsequently completed at clean
-runner head `b4bc0ef79415e665022c59f83bf95d3a8aeb6536`. It used the declared
+The required large-scale acceptance run was completed at clean final production
+head `1fead9fed76d724082915db8dc88bf9b9d8f0208`. It used the declared
 1,000,000-vector, 16-dimensional, 16-partition persistent native HNSW
 generation, `top_k=10`, `ef_search=64`, and a three-node in-process
 HashiCorp-Raft group with a live leader, committed command, and production
@@ -72,18 +72,18 @@ read-index evidence.
 
 | Measurement | Accepted result |
 | --- | ---: |
-| cold service mean / p50 / p95 / p99 | 14.2745 s / 14.2844 s / 14.3388 s / 14.3388 s |
-| warm service mean / p50 / p95 / p99 | 45.011 us / 38.667 us / 82.658 us / 175.307 us |
-| warm service QPS | 22,216.62 |
-| mean read-index/apply | 14.511 us |
-| direct partition-local HNSW mean | 32.104 us |
-| warm service-only overhead | 2.735 us |
-| overhead ratio / gate | 8.519% / **PASS** (limit 10%) |
+| cold service mean / p50 / p95 / p99 | 4.6096 s / 4.6070 s / 4.7345 s / 4.7345 s |
+| warm service mean / p50 / p95 / p99 | 52.615 us / 39.790 us / 94.220 us / 208.147 us |
+| warm service QPS | 19,006.12 |
+| mean read-index/apply | 18.467 us |
+| direct partition-local HNSW mean | 37.152 us |
+| warm service-only overhead | 2.545 us |
+| overhead ratio / gate | 6.8511% / **PASS** (limit 10%) |
 
 The retained JSON report is
-`/mnt/fast4tb/tmp/m5_artifacts_retry7_Pjdql5/vector_partition_m5_3200dafc3b75_294e61b5009b_b4bc0ef79415.json`
+`/mnt/fast4tb/tmp/m5_artifacts_retry7_Pjdql5/vector_partition_m5_3200dafc3b75_294e61b5009b_1fead9fed76d.json`
 with SHA-256
-`c101ea02298da96c2abdcb5ba49d9e5e5466a5d28ffdc3473b39047fc7a64ee0`.
+`86b816e29b48231aca3003b0663851a86e8505e3be07661421c2f17972682880`.
 Only the first cold sample is OS-page-cache cold; every cold sample reopens the
 generation source and mapped search pack. The input M3 construction run
 completed successfully, but its first 97 seconds were externally contaminated
