@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 )
 
 type lifecycleCoordinatorCommitterV1 struct {
@@ -75,6 +77,66 @@ func TestSelectMutationProofRecordPrefersPendingGenerationDeterministicallyV1(t 
 		gotIdentity, gotRecord, ok := selectMutationProofRecordLockedV1(records, identity.Index)
 		if !ok || gotIdentity != older || gotRecord.InvalidationEpoch != 12 || gotRecord.MutationConfirmed {
 			t.Fatalf("selection %d identity=%+v record=%+v found=%v", i, gotIdentity, gotRecord, ok)
+		}
+	}
+}
+
+func BenchmarkVectorPartitionLifecycleCommandEncodeV1(b *testing.B) {
+	identity := vectorPartitionLifecycleTestIdentityV1()
+	command := VectorPartitionLifecycleCommandV1{
+		Kind: VectorPartitionLifecycleBeginBuildV1, ExpectedState: VectorPartitionLifecycleAbsentV1,
+		Identity: identity, RequiredGroups: []raftcluster.GroupID{"group-a"}, MutationEpoch: 9,
+	}
+	b.ReportAllocs()
+	b.SetBytes(512)
+	for b.Loop() {
+		if _, err := EncodeVectorPartitionLifecycleCommandV1(command); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkVectorPartitionLifecycleApplyBeginV1(b *testing.B) {
+	identity := vectorPartitionLifecycleTestIdentityV1()
+	command := VectorPartitionLifecycleCommandV1{
+		Kind: VectorPartitionLifecycleBeginBuildV1, ExpectedState: VectorPartitionLifecycleAbsentV1,
+		Identity: identity, RequiredGroups: []raftcluster.GroupID{"group-a"}, MutationEpoch: 9,
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := ApplyVectorPartitionLifecycleCommandV1(VectorPartitionLifecycleRecordV1{}, command); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkVectorPartitionLifecycleReadySetDigestV1(b *testing.B) {
+	identity := vectorPartitionLifecycleTestIdentityV1()
+	groups := []raftcluster.GroupID{"group-a"}
+	ready := []VectorPartitionLifecycleGroupReadyV1{{GroupID: "group-a", AppliedIndex: 17, AssetSetDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+	b.ReportAllocs()
+	b.SetBytes(128)
+	for b.Loop() {
+		if _, err := VectorPartitionLifecycleReadySetDigestV1(identity, groups, ready); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkVectorPartitionLifecycleMutationProofSelectV1(b *testing.B) {
+	identity := vectorPartitionLifecycleTestIdentityV1()
+	pending := identity
+	pending.Generation = 7
+	prepared := identity
+	prepared.Generation = 8
+	records := map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1{
+		pending:  {State: VectorPartitionLifecycleInvalidatedV1, Identity: pending, Revision: 4, InvalidationEpoch: 10},
+		prepared: {State: VectorPartitionLifecyclePreparedV1, Identity: prepared, Revision: 3},
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, _, ok := selectMutationProofRecordLockedV1(records, identity.Index); !ok {
+			b.Fatal("no selected lifecycle record")
 		}
 	}
 }

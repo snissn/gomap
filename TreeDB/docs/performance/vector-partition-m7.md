@@ -1,0 +1,49 @@
+# Vector partition M7 lifecycle microbenchmarks
+
+Date: 2026-07-25  
+Host: Linux/amd64, 11th Gen Intel Core i5-11400F @ 2.60GHz, 12 logical CPUs  
+Scope: bounded in-process lifecycle primitives only; M7 remains experimental.
+
+## Reproduction
+
+```sh
+GOWORK=off go test ./TreeDB/internal/raftplacement \
+  -run '^$' \
+  -bench '^BenchmarkVectorPartitionLifecycle' \
+  -benchtime=10000x \
+  -count=3 \
+  -benchmem
+```
+
+The benchmark uses one bounded group and the smallest valid lifecycle identity.
+It is not a network, disk, Raft quorum, builder, or upload measurement.
+
+## Result
+
+| Primitive | ns/op range | B/op | allocs/op | Notes |
+| --- | ---: | ---: | ---: | --- |
+| canonical begin-build command encode | 1,974-2,085 | 1,401-1,405 | 7 | deterministic wire encoding |
+| pure begin-build record apply | 15,628-15,810 | 6,416-6,417 | 49 | validation plus canonical record construction; no catalog lock or Raft submit |
+| one-group ready-set digest verification | 2,413-2,476 | 1,201 | 11 | canonical identity/group/readiness digest |
+| two-generation mutation-proof selection | 131.0-132.4 | 0 | 0 | pending invalidation preferred over prepared candidate |
+
+The test uses fixed iterations rather than a duration target, so these ranges
+are reproducible microbenchmark samples rather than a throughput acceptance
+claim. The encoded command and snapshot paths remain bounded by
+`MaxVectorPartitionLifecycleCommandBytesV1` (1 MiB),
+`MaxVectorPartitionLifecycleRecordBytesV1` (1 MiB), and
+`MaxCatalogMetaSnapshotBytesV1` (8 MiB); catalog status reports retained wire
+bytes for records, while `VectorPartitionLifecycleMutationFencesV1` exposes
+the bounded pending-fence operator state.
+
+## Explicitly unavailable phases
+
+M7 has no production generation-builder orchestration, remote asset upload
+pipeline, or distributed barrier implementation in this repository. Therefore
+there is no honest measurement for build, stage/upload, prepare barrier,
+catalog-meta Raft quorum submit, or multi-node failover/rejoin latency.
+Those phases are **not implemented/measured**, and this document must not be
+read as production readiness evidence. The implemented fail-closed lifecycle
+seams are command encoding/reduction, catalog-authority fencing, nativewire and
+Mongo mutation admission/confirmation, snapshot restoration, and cleanup
+guards.
