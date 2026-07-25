@@ -398,9 +398,20 @@ func TestVectorPartitionCoordinatorRejectsCorruptShardProofsAndPartialsV1(t *tes
 		{name: "leader_serving_disagree", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
 			response.Proof.LeaderNode = "node-b"
 		}},
-		{name: "applied_term_precedes_read", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
-			response.Proof.ReadTerm = 2
-			response.Proof.AppliedTerm = 1
+		{name: "missing_read_term", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+			response.Proof.ReadTerm = 0
+		}},
+		{name: "missing_read_index", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+			response.Proof.ReadIndex = 0
+		}},
+		{name: "missing_applied_term", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+			response.Proof.AppliedTerm = 0
+		}},
+		{name: "missing_applied_index", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+			response.Proof.AppliedIndex = 0
+		}},
+		{name: "applied_index_precedes_read", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+			response.Proof.ReadIndex = response.Proof.AppliedIndex + 1
 		}},
 		{name: "unrequested_partition", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
 			response.Partials[0].PartitionID = 99
@@ -425,10 +436,37 @@ func TestVectorPartitionCoordinatorRejectsCorruptShardProofsAndPartialsV1(t *tes
 			)
 			dispatcher.editResponse = test.edit
 			response, err := coordinator.Search(context.Background(), testVectorPartitionCoordinatorRequestV1(1))
-			if err == nil || !vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
+			if !errors.Is(err, ErrVectorPartitionCoordinatorMalformedResponse) ||
+				!vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
 				t.Fatalf("response=%+v err=%v", response, err)
 			}
 		})
+	}
+}
+
+func TestVectorPartitionCoordinatorAcceptsCommandFreeCurrentTermGapV1(t *testing.T) {
+	coordinator, _, dispatcher := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "a", Score: 1}}},
+		VectorPartitionCoordinatorLimitsV1{},
+	)
+	dispatcher.editResponse = func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+		// A newly elected HashiCorp leader can prove a current-term read while
+		// TreeDB's latest applied command remains in the prior term. The command-
+		// free gap is safe once applied progress covers the proof's read index.
+		response.Proof.ReadTerm = 7
+		response.Proof.ReadIndex = 42
+		response.Proof.AppliedTerm = 6
+		response.Proof.AppliedIndex = 42
+	}
+
+	response, err := coordinator.Search(context.Background(), testVectorPartitionCoordinatorRequestV1(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Neighbors) != 1 || response.Neighbors[0].ID != "a" || len(dispatcher.calls) != 1 {
+		t.Fatalf("response=%+v calls=%+v", response, dispatcher.calls)
 	}
 }
 

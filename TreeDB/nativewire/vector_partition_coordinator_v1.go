@@ -951,6 +951,9 @@ func (c *VectorPartitionCoordinatorV1) validateShardResponse(ctx context.Context
 		return err
 	}
 	proof := response.Proof
+	// M5 may prove a current-term read while the latest applied TreeDB command
+	// remains in an older term across a command-free committed gap. The applied
+	// index, not an ordering between those terms, is the safety boundary.
 	if response.Version != VectorPartitionShardSearchVersionV1 || response.RequestID != request.RequestID ||
 		response.Partitions != uint64(len(task.partitionIDs)) || len(response.Partials) != len(task.partitionIDs) ||
 		proof.GroupID != task.group.ID ||
@@ -959,7 +962,7 @@ func (c *VectorPartitionCoordinatorV1) validateShardResponse(ctx context.Context
 		proof.PartitionGeneration != request.PartitionGeneration || proof.RouterGeneration != request.RouterGeneration ||
 		proof.ReadTerm == 0 || proof.ReadIndex == 0 || proof.AppliedTerm == 0 || proof.AppliedIndex < proof.ReadIndex ||
 		proof.ServingNode == "" || proof.LeaderNode == "" ||
-		proof.LeaderNode != proof.ServingNode || proof.AppliedTerm < proof.ReadTerm ||
+		proof.LeaderNode != proof.ServingNode ||
 		!slices.Contains(task.group.Members, proof.ServingNode) ||
 		!slices.Contains(task.group.Members, proof.LeaderNode) ||
 		request.TargetNodeID != "" && proof.ServingNode != request.TargetNodeID {

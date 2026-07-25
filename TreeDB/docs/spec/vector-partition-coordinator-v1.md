@@ -222,7 +222,9 @@ Every accepted M5 response must match its planned task exactly:
 - group, serving node, and requested target;
 - source, partition, and router generation identity;
 - nonzero read term/index and applied term/index;
-- `applied_index >= read_index` and `applied_term >= read_term`;
+- `applied_index >= read_index`. The applied term may precede the read term
+  after an election when M5 has proved that the intervening committed prefix is
+  command-free;
 - leader equals serving node, and both belong to the resolved group;
 - one partial per requested partition in the planned order;
 - at most `top_k` neighbors per partial;
