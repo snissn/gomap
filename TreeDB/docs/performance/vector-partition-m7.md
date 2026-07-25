@@ -1,7 +1,8 @@
 # Vector partition M7 lifecycle microbenchmarks
 
-Date: 2026-07-25  
-Host: Linux/amd64, 11th Gen Intel Core i5-11400F @ 2.60GHz, 12 logical CPUs  
+Date: 2026-07-25
+
+Host: Linux/amd64, 11th Gen Intel Core i5-11400F @ 2.60GHz, 12 logical CPUs
 Scope: bounded in-process lifecycle primitives only; M7 remains experimental.
 
 ## Reproduction
