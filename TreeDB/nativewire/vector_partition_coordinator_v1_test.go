@@ -592,6 +592,10 @@ func TestVectorPartitionCoordinatorRejectsCorruptShardProofsAndPartialsV1(t *tes
 			response.Partials[0].Candidates = 0
 			response.Candidates = 0
 		}},
+		{name: "dropped_neighbors", edit: func(request VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+			response.Partials[0].Candidates = uint64(request.TopK)
+			response.Candidates = uint64(request.TopK)
+		}},
 		{name: "unrequested_partition", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
 			response.Partials[0].PartitionID = 99
 		}},
@@ -658,8 +662,18 @@ func TestVectorPartitionCoordinatorClassifiesConsistentShardBudgetOverflowV1(t *
 	)
 	dispatcher.editResponse = func(request VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
 		candidates := request.CandidateBytesLimit/64 + 1
+		response.Partials[0].Neighbors = []VectorPartitionShardSearchNeighborV1{
+			{ID: "a", Score: 1},
+			{ID: "b", Score: .75},
+			{ID: "c", Score: .5},
+		}
 		response.Partials[0].Candidates = candidates
 		response.Candidates = candidates
+		responseBytes, err := MeasureVectorPartitionShardSearchResponseBytesV1(response.Partials)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.ResponseBytes = responseBytes
 	}
 
 	response, err := coordinator.Search(context.Background(), testVectorPartitionCoordinatorRequestV1(1))
@@ -875,6 +889,35 @@ func TestVectorPartitionCoordinatorRejectsCorruptAndOverBudgetResponsesV1(t *tes
 				t.Fatalf("response=%+v err=%v", response, err)
 			}
 		})
+	}
+}
+
+func TestVectorPartitionCoordinatorRejectsCrossTaskEdgeCounterOverflowV1(t *testing.T) {
+	coordinator, _, dispatcher := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{
+			{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"},
+			{ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"},
+		},
+		[]raftcluster.GroupID{"group-a", "group-b"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{
+			0: {{ID: "a", Score: 1}},
+			1: {{ID: "b", Score: 1}},
+		},
+		VectorPartitionCoordinatorLimitsV1{},
+	)
+	dispatcher.editResponse = func(request VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+		edges := uint64(1)
+		if request.PartitionIDs[0] == 0 {
+			edges = math.MaxUint64
+		}
+		response.Partials[0].Edges = edges
+		response.Edges = edges
+	}
+
+	response, err := coordinator.Search(context.Background(), testVectorPartitionCoordinatorRequestV1(2))
+	if !errors.Is(err, ErrVectorPartitionCoordinatorBudgetExceeded) ||
+		!vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
+		t.Fatalf("response=%+v err=%v", response, err)
 	}
 }
 

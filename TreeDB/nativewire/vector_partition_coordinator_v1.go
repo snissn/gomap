@@ -483,12 +483,16 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 		RequestBytes: budget.requestBytes,
 	}
 	for _, result := range taskResults {
+		edges, ok := addUint64V1(counters.Edges, result.response.Edges)
+		if !ok {
+			return response, c.wrapError(ErrVectorPartitionCoordinatorBudgetExceeded, "")
+		}
 		counters.RPCs += result.rpcs
 		counters.Retries += result.retries
 		counters.Redirects += result.redirects
 		counters.ResponseBytes += result.response.ResponseBytes
 		counters.Candidates += result.response.Candidates
-		counters.Edges += result.response.Edges
+		counters.Edges = edges
 		counters.CandidateBytes += result.response.Candidates * 64
 		response.Timing.QueueNanos += result.queueNanos
 		response.Timing.RPCNanos += result.rpcNanos
@@ -1108,9 +1112,12 @@ func (c *VectorPartitionCoordinatorV1) validateShardResponse(ctx context.Context
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		expectedNeighbors := uint64(request.TopK)
+		if partial.Candidates < expectedNeighbors {
+			expectedNeighbors = partial.Candidates
+		}
 		if partial.PartitionID != task.partitionIDs[i] ||
-			len(partial.Neighbors) > request.TopK ||
-			partial.Candidates < uint64(len(partial.Neighbors)) ||
+			uint64(len(partial.Neighbors)) != expectedNeighbors ||
 			partial.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 &&
 				partial.SearchRoute != collections.VectorPartitionSearchRouteExactFP32ScanV1 {
 			return ErrVectorPartitionCoordinatorMalformedResponse
