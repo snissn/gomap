@@ -2,7 +2,7 @@
 
 Date: 2026-07-24
 
-Measured code head: `0ea66896889a96e005b8b8badfb0eb2a4bfcc1db`
+Measured code head: `95e5a7994a0852c895b99f23a94c42232e31c20c`
 
 Base M5 merge: `93f48763467aefdf9b45ba0f7d22847f7f0c66ed`
 
@@ -28,10 +28,12 @@ would reverse the required stable-ID tie order.
 
 The measured head also includes the latest review repairs: partition-local
 HNSW traversal polls the coordinator's caller context, impossible router
-fanout is rejected before opening the router, and every selected partition's
-`ef_search` baseline is reserved before the remaining candidate bytes are
-weighted by the pinned generation's home and overlap memberships. Candidate
-weighting itself polls the effective request context.
+fanout is rejected before opening the router, and active-manifest loading keeps
+the effective request context through the lifecycle authority. Every selected
+partition reserves a conservative HNSW search-scratch floor derived from its
+row count and `ef_search`; only the remaining candidate bytes are weighted by
+the pinned generation's home and overlap memberships. Candidate weighting
+itself polls the effective request context.
 
 Router open now observes that context throughout mapped-asset CRC and section
 validation, row/reference/document scans, cancellable stable sorts, model
@@ -39,6 +41,9 @@ validation, digesting, and incremental canonical JSON emission. Cancellation
 promptly releases the prepared view, and cleanup errors remain joined to the
 primary failure. The benchmark memory model also includes retained membership,
 router-vector, and seen-document state during the source/router build.
+Coordinator response validation requires every successful shard partial to
+contain exactly `min(top_k, candidates)` neighbors, and checked aggregate edge
+accounting rejects cross-task `uint64` overflow before accepting any result.
 
 These rows do **not** measure a network transport, remote service,
 serialization, production Raft read-index/apply, or a production M5 service.
@@ -84,8 +89,8 @@ the combined modeled corpus visits exceed its 200,000,000-unit cap. Each probe
 point therefore ran as an isolated process with identical fixture, source,
 seed, topology, code, and runtime controls. Every process rebuilt the same
 persisted source/router; each result's query timings exclude that reported
-build stage. Wall times were 2:08.71-2:11.97, maximum RSS was
-2,545,700-2,979,364 KiB, and every process recorded zero swaps.
+build stage. Wall times were 2:05.49-2:11.44, maximum RSS was
+2,574,076-2,743,576 KiB, and every process recorded zero swaps.
 
 The cancellable stable-sort helper uses bounded scratch proportional to the
 slice being sorted. At the absolute format caps, allocator retention across
@@ -101,11 +106,11 @@ failures.
 
 | Probes | Recall@1 | Recall@10 | End-to-end p50 / p95 / p99 | QPS | Peak RSS | Placement + dedupe + merge / total |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 0.093750 | 0.081250 | 1.872582 / 1.906417 / 1.933400 s | 0.532400 | 3,050,868,736 B | 0.075705% |
-| 2 | 0.125000 | 0.156250 | 1.886421 / 1.945273 / 1.977914 s | 0.528652 | 2,739,494,912 B | 0.068769% |
-| 4 | 0.281250 | 0.271875 | 1.897970 / 1.999101 / 2.041771 s | 0.524204 | 2,606,796,800 B | 0.066968% |
-| 8 | 0.531250 | 0.503125 | 1.848452 / 1.888510 / 1.892579 s | 0.540180 | 2,688,237,568 B | 0.068589% |
-| 16 | 1.000000 | 1.000000 | 1.897917 / 1.923833 / 1.925554 s | 0.527084 | 2,672,984,064 B | 0.066532% |
+| 1 | 0.093750 | 0.081250 | 1.821166 / 1.862120 / 1.867623 s | 0.548112 | 2,809,421,824 B | 0.075865% |
+| 2 | 0.125000 | 0.156250 | 1.814909 / 1.848562 / 1.850521 s | 0.550172 | 2,635,853,824 B | 0.066580% |
+| 4 | 0.281250 | 0.271875 | 1.835307 / 2.008795 / 2.057623 s | 0.538461 | 2,744,344,576 B | 0.064953% |
+| 8 | 0.531250 | 0.503125 | 1.837858 / 1.875855 / 1.901427 s | 0.542214 | 2,687,205,376 B | 0.069304% |
+| 16 | 1.000000 | 1.000000 | 1.880975 / 1.921939 / 1.928483 s | 0.531431 | 2,734,272,512 B | 0.065867% |
 
 The all-partition row passed both exact global gates:
 
@@ -137,25 +142,25 @@ under concurrency. Shard search uses 512 individual task samples.
 
 | Stage | p50 | p95 | p99 |
 | --- | ---: | ---: | ---: |
-| persisted M4 router open | 1,826,786,522 ns | 1,855,809,474 ns | 1,863,167,242 ns |
-| M4 router search | 9,174 ns | 10,290 ns | 17,899 ns |
-| M1 placement/group planning | 1,215,509 ns | 1,356,009 ns | 1,389,207 ns |
-| summed task queue | 298,117,642 ns | 395,190,071 ns | 480,365,625 ns |
-| summed in-process dispatcher RPC | 372,510,136 ns | 509,485,543 ns | 530,713,887 ns |
-| summed in-process residual | 12,026 ns | 20,080 ns | 21,744 ns |
+| persisted M4 router open | 1,811,766,948 ns | 1,862,130,014 ns | 1,866,282,998 ns |
+| M4 router search | 9,915 ns | 12,555 ns | 22,551 ns |
+| M1 placement/group planning | 1,202,158 ns | 1,289,491 ns | 1,300,540 ns |
+| summed task queue | 294,417,439 ns | 400,703,508 ns | 461,809,813 ns |
+| summed in-process dispatcher RPC | 375,112,234 ns | 485,997,752 ns | 541,235,305 ns |
+| summed in-process residual | 10,928 ns | 24,117 ns | 25,918,421 ns |
 | synthetic read proof | 0 ns | 0 ns | 0 ns |
-| partition-local exact scan (512 samples) | 18,415,825 ns | 44,112,508 ns | 59,686,758 ns |
-| response validation/materialization | 3,707 ns | 4,737 ns | 5,126 ns |
-| stable-ID dedupe | 15,720 ns | 29,462 ns | 35,570 ns |
-| top-k merge | 7,294 ns | 10,564 ns | 14,835 ns |
-| end to end | 1,897,916,615 ns | 1,923,833,047 ns | 1,925,554,355 ns |
+| partition-local exact scan (512 samples) | 18,765,554 ns | 45,927,191 ns | 60,690,934 ns |
+| response validation/materialization | 3,586 ns | 4,466 ns | 4,607 ns |
+| stable-ID dedupe | 16,517 ns | 35,901 ns | 38,221 ns |
+| top-k merge | 7,640 ns | 9,200 ns | 11,282 ns |
+| end to end | 1,880,975,128 ns | 1,921,939,368 ns | 1,928,483,342 ns |
 
 Membership-aware candidate planning scans the already-pinned generation
-memberships and accounts for about 1.22 ms at p50 in the all-partition row.
+memberships and accounts for about 1.20 ms at p50 in the all-partition row.
 This is included in the scoped coordinator-overhead ratio.
 
-The all-partition harness reports 1,181,494,167.25 B/op and
-2,067,928.75 allocs/op for the complete local operation. Those figures
+The all-partition harness reports 1,181,489,421 B/op and
+2,067,926.8125 allocs/op for the complete local operation. Those figures
 include the deliberately exhaustive in-process partition scans and their
 response construction. They are evidence for this simulator shape, not an
 allocation target for a production remote M5 implementation.
@@ -189,7 +194,7 @@ complete 1M candidate corpus and zero HNSW edges.
 ## Reproduction
 
 Run from the repository root at exact head
-`0ea66896889a96e005b8b8badfb0eb2a4bfcc1db`. The fixture manifest from the
+`95e5a7994a0852c895b99f23a94c42232e31c20c`. The fixture manifest from the
 prior deterministic generation is retained at
 `/mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture`. It can instead be
 regenerated with `generate-fixture` using 1,000,000 vectors, 32 queries,
@@ -206,7 +211,7 @@ for PROBES in 1 2 4 8 16; do
     env \
       TMPDIR="$ROW_ROOT/tmp" \
       BASE_SHA=93f48763467aefdf9b45ba0f7d22847f7f0c66ed \
-      GITHUB_SHA=0ea66896889a96e005b8b8badfb0eb2a4bfcc1db \
+      GITHUB_SHA=95e5a7994a0852c895b99f23a94c42232e31c20c \
       GITHUB_EVENT_PATH= \
       GOMAXPROCS=4 \
       GOMEMLIMIT=16GiB \
@@ -236,17 +241,17 @@ those positive runtime controls fails result validation.
 ## Retained records
 
 All records are under
-`/mnt/fast4tb/tmp/treedb_m6_1m_curve_final2_uKQ7Zo`. The canonical JSON files retain
+`/mnt/fast4tb/tmp/treedb_m6_1m_curve_final3_H3zIbY`. The canonical JSON files retain
 the full fixture checksum, exact command, base/head commits, stage
 attribution, counters, and latency distributions.
 
 | Probes | Canonical JSON SHA-256 | Resource log SHA-256 |
 | ---: | --- | --- |
-| 1 | `85c93525dabd270bbb6ae06d3d949257c9d3531e46f60f597af958a9802ba03c` | `a4c5f524e1cbe45c9222e67c4c1ffb2365bbc0d33f02e39db75ecc9416081f39` |
-| 2 | `6aa04561634ee8b7e8811b125d3b3fa3c3acccc376f3b1294f2ab39f63c537d0` | `c2403604312e44c31f39a49a9e8af0fd7befc9b0de2922e2fa24f8f926994dc4` |
-| 4 | `88728e928f5398e06e09dff182d31d6a92dc74c8ee0c99b14181089d231a715e` | `fa5783cff0dda70e37704e7a5e4bcd93f1a84142a88e12f446cec224afb89618` |
-| 8 | `250b09371679e8c747857df6cfadddb3c72e7477779f0981e372451b96bb1582` | `fda783799adbdc9ec7079d1881d62cca6921f8a0298493bcdb036cf0ff6648a0` |
-| 16 | `8555b33bf60cee427e036d74c4f94b1c960911d93deffa2e9910dd4fc3f3449b` | `3cb8d0eefc8e68b5253151bf1ef8777c8094b0973fcf2a14719ebc71eb633f71` |
+| 1 | `f86d54785c2499921f66e46f8231f778ad3328149c9e642f300de17150e8cd45` | `94217a06e6efcabda83a99e4c05a5ff0e0dd8d858b4fa57759c53985d462eaef` |
+| 2 | `f82231636bbcaffc276ba2a3f2c217639e1f13fe822d3d798f3f612f3a518004` | `58f0e0939e5d9b185b92ba92070edb4e5dae7be164055efa155349cb2f36b05d` |
+| 4 | `c656fd1157f2fe467b87de05ce9759f1835abe0f7e5b7f163bd3fc0db32d2f1d` | `d58bab0f5ee39caf0b932cb1a871067aa0eea83af42d166263011ac712f3b443` |
+| 8 | `132f68ede6e0e0eead62a3e35cf8ecea4b52ee8a4e3edc93bf220749cfed6429` | `5a2c567be3b930095d276b2f55f5ee51a87cb2c356be8c7e2d858cef369b3bfc` |
+| 16 | `40802e040c4b6b05d96613ccfe0f606daa3f1a336e76263bdbb0561a9f3da2b1` | `508f265abf7e50b960cab2b357d0c7925040f8810ea660a4791c92f58bfcecdc` |
 
 The checked-in ledger is a documentation-only successor to the measured code
 head. It does not relabel the local artifacts as production evidence.
