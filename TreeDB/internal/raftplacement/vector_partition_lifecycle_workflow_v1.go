@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 )
@@ -20,7 +21,11 @@ type VectorPartitionLifecycleGroupBuilderV1 interface {
 // assets can be accepted. Exact retry is handled by the catalog command digest.
 func (c VectorPartitionLifecycleCoordinatorV1) BeginBuildV1(ctx context.Context, identity VectorPartitionLifecycleIdentityV1, required []raftcluster.GroupID, previousGeneration, mutationEpoch uint64) (VectorPartitionLifecycleRecordV1, error) {
 	if r, ok := c.Authority.VectorPartitionLifecycleRecordV1(identity); ok && r.State != VectorPartitionLifecycleAbsentV1 {
-		if r.PreviousActiveGeneration == previousGeneration && r.MutationEpoch == mutationEpoch {
+		canonicalRequired, err := canonicalVectorPartitionLifecycleGroupsV1(required)
+		if err != nil {
+			return VectorPartitionLifecycleRecordV1{}, err
+		}
+		if r.PreviousActiveGeneration == previousGeneration && r.MutationEpoch == mutationEpoch && reflect.DeepEqual(r.RequiredGroups, canonicalRequired) {
 			return r, nil
 		}
 		return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleConflict

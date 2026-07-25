@@ -91,6 +91,9 @@ func TestVectorPartitionLifecycleWorkflowRetriesV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := c.BeginBuildV1(t.Context(), identity, []raftcluster.GroupID{"group-b"}, 0, 9); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("conflicting begin retry err=%v", err)
+	}
 	if retry, err := c.BeginBuildV1(t.Context(), identity, []raftcluster.GroupID{"group-a"}, 0, 9); err != nil || !reflect.DeepEqual(retry, r) {
 		t.Fatalf("begin retry=%+v err=%v", retry, err)
 	}
