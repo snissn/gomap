@@ -3,6 +3,7 @@ package raftplacement
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
@@ -78,6 +79,77 @@ func TestSelectMutationProofRecordPrefersPendingGenerationDeterministicallyV1(t 
 		if !ok || gotIdentity != older || gotRecord.InvalidationEpoch != 12 || gotRecord.MutationConfirmed {
 			t.Fatalf("selection %d identity=%+v record=%+v found=%v", i, gotIdentity, gotRecord, ok)
 		}
+	}
+}
+
+func TestVectorPartitionLifecycleWorkflowRetriesV1(t *testing.T) {
+	authority, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	committer := &lifecycleCoordinatorCommitterV1{authority: authority, index: 1}
+	c := VectorPartitionLifecycleCoordinatorV1{Authority: authority, Committer: committer}
+	identity := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11)
+	r, err := c.BeginBuildV1(t.Context(), identity, []raftcluster.GroupID{"group-a"}, 0, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry, err := c.BeginBuildV1(t.Context(), identity, []raftcluster.GroupID{"group-a"}, 0, 9); err != nil || !reflect.DeepEqual(retry, r) {
+		t.Fatalf("begin retry=%+v err=%v", retry, err)
+	}
+	ready := VectorPartitionLifecycleGroupReadyV1{GroupID: "group-a", AppliedIndex: 2, AssetSetDigest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	r, err = c.RecordGroupReadyV1(t.Context(), identity, ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry, err := c.RecordGroupReadyV1(t.Context(), identity, ready); err != nil || !reflect.DeepEqual(retry, r) {
+		t.Fatalf("ready retry=%+v err=%v", retry, err)
+	}
+	r, err = c.PrepareV1(t.Context(), identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry, err := c.PrepareV1(t.Context(), identity); err != nil || !reflect.DeepEqual(retry, r) {
+		t.Fatalf("prepare retry=%+v err=%v", retry, err)
+	}
+	r, err = c.ActivateV1(t.Context(), identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry, err := c.ActivateV1(t.Context(), identity); err != nil || !reflect.DeepEqual(retry, r) {
+		t.Fatalf("activate retry=%+v err=%v", retry, err)
+	}
+	proof, err := c.InvalidateBeforeRelevantMutationV1(t.Context(), identity.Index, "test mutation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ConfirmRelevantMutationV1(t.Context(), proof); err != nil {
+		t.Fatal(err)
+	}
+	r, err = c.RetireV1(t.Context(), identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry, err := c.RetireV1(t.Context(), identity); err != nil || !reflect.DeepEqual(retry, r) {
+		t.Fatalf("retire retry=%+v err=%v", retry, err)
+	}
+	r, err = c.MarkCleanableV1(t.Context(), identity, VectorPartitionLifecycleReferencesV1{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err = c.RecordGroupCleanupV1(t.Context(), identity, "group-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry, err := c.RecordGroupCleanupV1(t.Context(), identity, "group-a"); err != nil || !reflect.DeepEqual(retry, r) {
+		t.Fatalf("cleanup retry=%+v err=%v", retry, err)
+	}
+	r, err = c.CompleteCleanupV1(t.Context(), identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry, err := c.CompleteCleanupV1(t.Context(), identity); err != nil || !reflect.DeepEqual(retry, r) {
+		t.Fatalf("complete retry=%+v err=%v", retry, err)
+	}
+	if statuses, fences, err := c.RecoveryStatusV1(); err != nil || len(statuses) != 1 || len(fences) != 1 || fences[0].Pending {
+		t.Fatalf("recovery statuses=%+v fences=%+v err=%v", statuses, fences, err)
 	}
 }
 
