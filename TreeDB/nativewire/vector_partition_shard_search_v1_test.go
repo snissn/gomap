@@ -1081,6 +1081,46 @@ func TestVectorPartitionShardSearchDeadlineIsStableAndNoMutationV1(t *testing.T)
 	}
 }
 
+func TestVectorPartitionShardSearchPreservesPartitionOpenContextErrorsV1(t *testing.T) {
+	tests := []struct {
+		name         string
+		openErr      error
+		wantCode     VectorPartitionShardSearchErrorCodeV1
+		wantCanceled uint64
+		wantTimedOut uint64
+	}{
+		{name: "canceled", openErr: context.Canceled, wantCode: VectorPartitionShardSearchErrorCanceledV1, wantCanceled: 1},
+		{name: "deadline", openErr: context.DeadlineExceeded, wantCode: VectorPartitionShardSearchErrorDeadlineV1, wantTimedOut: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service, source, _ := newVectorPartitionShardSearchTestServiceV1(t,
+				[]raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},
+				map[uint32]collections.VectorPartitionSearchAssetV1{0: vectorPartitionShardSearchAssetTestV1(0, []string{"a"}, [][]float32{{1, 0}})},
+			)
+			source.openErr[0] = test.openErr
+			response, err := service.Search(context.Background(), vectorPartitionShardSearchRequestTestV1([]uint32{0}))
+			assertVectorPartitionShardSearchCodeV1(t, err, test.wantCode)
+			if !errors.Is(err, test.openErr) {
+				t.Fatalf("partition open err=%v does not preserve %v", err, test.openErr)
+			}
+			if errors.Is(err, ErrVectorPartitionShardSearchAssetsUnavailable) {
+				t.Fatalf("partition open context error also classified as assets unavailable: %v", err)
+			}
+			if !vectorPartitionShardSearchResponseZeroTestV1(response) {
+				t.Fatalf("partition open response=%+v", response)
+			}
+			if pins, releases, opens := source.counts(); pins != 1 || releases != 1 || opens != 1 {
+				t.Fatalf("partition open lifecycle pins=%d releases=%d opens=%d", pins, releases, opens)
+			}
+			stats := service.Stats()
+			if stats.Canceled != test.wantCanceled || stats.TimedOut != test.wantTimedOut || stats.AssetsUnavailable != 0 {
+				t.Fatalf("partition open stats=%+v", stats)
+			}
+		})
+	}
+}
+
 func TestVectorPartitionShardSearchContextWithoutDeadlineReusesCallerV1(t *testing.T) {
 	caller, cancelCaller := context.WithCancel(context.Background())
 	got, cancelRequest, err := vectorPartitionShardSearchContextV1(caller, 0)

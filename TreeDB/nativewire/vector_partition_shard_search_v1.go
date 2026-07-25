@@ -456,7 +456,10 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 		lease, openErr := pinned.OpenPartition(ctx, partitionID)
 		if openErr != nil {
 			response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
-			return response, s.wrapError(fmt.Errorf("%w: partition %d: %v", ErrVectorPartitionShardSearchAssetsUnavailable, partitionID, openErr), groupID)
+			if errors.Is(openErr, context.Canceled) || errors.Is(openErr, context.DeadlineExceeded) {
+				return response, s.wrapError(fmt.Errorf("partition %d: %w", partitionID, openErr), groupID)
+			}
+			return response, s.wrapError(fmt.Errorf("%w: partition %d: %w", ErrVectorPartitionShardSearchAssetsUnavailable, partitionID, openErr), groupID)
 		}
 		if lease == nil || lease.Searcher == nil {
 			if lease != nil {

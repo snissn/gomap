@@ -216,6 +216,14 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 		}
 		return nil, fmt.Errorf("%w: generation status: %v", ErrVectorPartitionShardSearchGenerationMismatch, err)
 	}
+	openPlan, err := collections.NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx, manifest)
+	if err != nil {
+		authorityToken.Release()
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: generation search-open plan: %v", ErrVectorPartitionShardSearchAssetsUnavailable, err)
+	}
 	if err := ctx.Err(); err != nil {
 		authorityToken.Release()
 		return nil, err
@@ -226,6 +234,7 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 		index:          key.index,
 		generation:     key.generation,
 		manifest:       pinnedVectorPartitionManifestV1(manifest),
+		openPlan:       openPlan,
 		authorityToken: authorityToken,
 		pin:            pin,
 		searchers:      make(map[uint32]*collections.VectorPartitionLocalSearcherV1),
@@ -378,6 +387,7 @@ type collectionVectorPartitionGenerationCacheV1 struct {
 	index          string
 	generation     uint64
 	manifest       VectorPartitionPinnedManifestV1
+	openPlan       *collections.VectorPartitionGenerationSearchOpenPlanV1
 	authorityToken collections.VectorPartitionActiveAuthorityTokenV1
 	pin            *collections.VectorPartitionReaderPinV1
 
@@ -438,7 +448,7 @@ func (e *collectionVectorPartitionGenerationCacheV1) openPartition(ctx context.C
 		e.opening[partition] = load
 		e.mu.Unlock()
 
-		searcher, err := e.collection.OpenVectorPartitionLocalSearcherForGenerationWithContextV1(ctx, e.index, e.generation, partition)
+		searcher, err := e.collection.OpenVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(ctx, e.index, e.generation, partition, e.openPlan, e.pin)
 		if err != nil {
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 				err = fmt.Errorf("%w: %v", ErrVectorPartitionShardSearchAssetsUnavailable, err)

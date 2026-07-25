@@ -2226,8 +2226,10 @@ func vectorPartitionReaderPinKeyV1(root, collection, index string, generation ui
 // routing is deferred, but any consumer that opens a generation can hold this
 // handle across use so status and cleanup observe real in-process readers.
 type VectorPartitionReaderPinV1 struct {
-	key  string
-	once sync.Once
+	key      string
+	mu       sync.Mutex
+	released bool
+	once     sync.Once
 }
 
 func (p *VectorPartitionReaderPinV1) Release() {
@@ -2235,6 +2237,9 @@ func (p *VectorPartitionReaderPinV1) Release() {
 		return
 	}
 	p.once.Do(func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		p.released = true
 		vectorPartitionReaderPinsV1.Lock()
 		defer vectorPartitionReaderPinsV1.Unlock()
 		if vectorPartitionReaderPinsV1.counts[p.key] <= 1 {
@@ -2243,6 +2248,25 @@ func (p *VectorPartitionReaderPinV1) Release() {
 			vectorPartitionReaderPinsV1.counts[p.key]--
 		}
 	})
+}
+
+// cloneForKey retains the exact generation already validated by a live parent
+// pin. It deliberately performs no lifecycle I/O, so generation-scoped serving
+// caches can give each mapped partition searcher an independent cleanup pin
+// without decoding the full manifest again.
+func (p *VectorPartitionReaderPinV1) cloneForKey(key string) (*VectorPartitionReaderPinV1, error) {
+	if p == nil || key == "" {
+		return nil, errors.New("collections: invalid vector partition parent pin")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.released || p.key != key {
+		return nil, errors.New("collections: stale vector partition parent pin")
+	}
+	vectorPartitionReaderPinsV1.Lock()
+	vectorPartitionReaderPinsV1.counts[key]++
+	vectorPartitionReaderPinsV1.Unlock()
+	return &VectorPartitionReaderPinV1{key: key}, nil
 }
 func vectorPartitionReaderPinCountV1(root, collection, index string, generation uint64) uint64 {
 	vectorPartitionReaderPinsV1.Lock()

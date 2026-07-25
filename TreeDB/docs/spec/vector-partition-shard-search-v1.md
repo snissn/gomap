@@ -118,15 +118,19 @@ deadline, or caller context loss. The production collection adapter caches the
 validated immutable generation, its long-lived M1 reader pin, and opened
 mapped/heap search packs. A cold generation load reads and validates lifecycle
 and vector-source authority once, then retains a generation-scoped in-memory
-activation lease and the DB's coherent scalar state token. Warm request leases
-perform only bounded in-memory activation/state comparisons, clone the bounded
-placement identity, and reuse the cached partition searchers; they do not scan
-the lifecycle directory or call operational vector-index status APIs. A normal
-replacement `BUILD` leaves the active generation lease valid. Successful
-`READY` activation or deactivation advances the mutation-driven activation
-revision. A DB state publication evicts the cache entry without permanently
-tombstoning it and forces one new full authority load, which either confirms
-the generation/source or fails closed.
+activation lease, the DB's coherent scalar state token, and a collection-bound
+partition asset/membership open plan. Distinct cold partition opens reuse that
+immutable plan instead of decoding the lifecycle manifest or scanning all
+generation memberships again; each open still acquires its own reader pin and
+revalidates the membership digest, asset bytes, and mapped-pack identity. Warm
+request leases perform only bounded in-memory activation/state comparisons,
+clone the bounded placement identity, and reuse the cached partition
+searchers; they do not scan the lifecycle directory or call operational
+vector-index status APIs. A normal replacement `BUILD` leaves the active
+generation lease valid. Successful `READY` activation or deactivation advances
+the mutation-driven activation revision. A DB state publication evicts the
+cache entry without permanently tombstoning it and forces one new full
+authority load, which either confirms the generation/source or fails closed.
 
 The catalog/lifecycle owner must call
 `InvalidateVectorPartitionGenerationV1` when it replaces the service's static

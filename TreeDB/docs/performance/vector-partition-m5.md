@@ -4,7 +4,7 @@ Date: 2026-07-24
 Host: Linux/amd64, Intel Core i5-11400F, 12 logical CPUs  
 Base: `2292b334d5114f92859f4e0821f070837d719979`
 
-## Scope
+## Small deterministic CI benchmark scope
 
 This evidence validates the M5 timing/accounting harness and a warm in-process
 service path over one 8-row, 2-dimensional exact-fallback M3 asset. It is
@@ -13,11 +13,11 @@ deliberately small so normal CI can run it. It is **not** the issue's required
 serialization, and does not justify a distributed-readiness or 10% overhead
 claim.
 
-The benchmark uses the real M5 request validation, M1 placement resolution,
-generic routed-read coordinator interface, generation/partition pin lifecycle,
-M3 no-document searcher, whole-response validation, counters, and response
-proof. Its deterministic coordinator supplies production-shaped proof fields;
-it does not perform a real Raft quorum exchange.
+This small CI benchmark uses the real M5 request validation, M1 placement
+resolution, generic routed-read coordinator interface, generation/partition
+pin lifecycle, M3 no-document searcher, whole-response validation, counters,
+and response proof. Its deterministic coordinator supplies production-shaped
+proof fields; it does not perform a real Raft quorum exchange.
 
 ## Reproduction
 
