@@ -686,6 +686,32 @@ func TestClusterSubmitterVectorPartitionAdmissionRunsBeforeRaftSubmitV1(t *testi
 	}
 }
 
+func TestClusterSubmitterRouteRefusalRunsBeforeVectorPartitionAdmissionV1(t *testing.T) {
+	submitter := &routingClusterSubmitter{
+		fakeClusterSubmitter: &fakeClusterSubmitter{},
+		err:                  errors.New("route lookup refused"),
+	}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")}, [][]byte{[]byte(`{"embedding":[1,2]}`)}, AckVisible); err == nil {
+		t.Fatal("InsertBatch succeeded despite route refusal")
+	}
+	if calls := submitter.snapshot(); len(calls) != 0 {
+		t.Fatalf("route refusal submitted %d Raft entries", len(calls))
+	}
+	submitter.mu.Lock()
+	admissions := append([]iwire.CommandID(nil), submitter.vectorAdmissionCalls...)
+	submitter.mu.Unlock()
+	if len(admissions) != 0 {
+		t.Fatalf("route refusal opened durable vector admission: %v", admissions)
+	}
+}
+
 func TestClusterSubmitterRequiredVectorAdmissionFailsClosedWhenMisconfiguredV1(t *testing.T) {
 	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: lifecycleRequiredNoAdmissionClusterSubmitter{}})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

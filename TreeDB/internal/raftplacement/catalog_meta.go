@@ -517,6 +517,28 @@ func (a *CatalogMetaAuthorityV1) ExportCatalogMetaSnapshotV1() (CatalogMetaSnaps
 	return CatalogMetaSnapshotV1{Format: CatalogMetaFormatV1, AppliedIndex: a.applied, Record: bytes.Clone(a.recordBytes), LastCommand: bytes.Clone(a.command), VectorPartitionLifecycle: lifecycle}, nil
 }
 
+// validateProspectiveCatalogMetaSnapshotLockedV1 proves that a lifecycle
+// mutation leaves the complete outer catalog snapshot exportable. The
+// lifecycle payload is itself encoded as base64 by encoding/json, so checking
+// only its decoded length is insufficient.
+func (a *CatalogMetaAuthorityV1) validateProspectiveCatalogMetaSnapshotLockedV1(lifecycle []byte, appliedIndex uint64) error {
+	snapshot := CatalogMetaSnapshotV1{
+		Format:                   CatalogMetaFormatV1,
+		AppliedIndex:             appliedIndex,
+		Record:                   a.recordBytes,
+		LastCommand:              a.command,
+		VectorPartitionLifecycle: lifecycle,
+	}
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		return errors.Join(ErrInvalidCatalogMeta, err)
+	}
+	if len(raw) > MaxCatalogMetaSnapshotBytesV1 {
+		return errors.Join(ErrCatalogMetaLimit, fmt.Errorf("snapshot is %d bytes", len(raw)))
+	}
+	return preflightCatalogMetaSnapshotJSONV1(raw)
+}
+
 func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMetaSnapshotV1) (CatalogMetaStatusV1, error) {
 	if a == nil {
 		return CatalogMetaStatusV1{}, ErrCatalogMetaUnavailable
@@ -580,7 +602,7 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 		a.activeNames = activeNames
 		a.mutationFences = mutationFences
 		a.collectionMutationBarriers = collectionMutationBarriers
-		a.lifecycleBytes = vectorPartitionLifecycleRetainedBytesV1(lifecycle)
+		a.lifecycleBytes = uint64(len(snapshot.VectorPartitionLifecycle))
 		a.applied = snapshot.AppliedIndex
 		a.refusal = ""
 		return a.statusLocked(), nil
@@ -604,7 +626,7 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 	a.activeNames = activeNames
 	a.mutationFences = mutationFences
 	a.collectionMutationBarriers = collectionMutationBarriers
-	a.lifecycleBytes = vectorPartitionLifecycleRetainedBytesV1(lifecycle)
+	a.lifecycleBytes = uint64(len(snapshot.VectorPartitionLifecycle))
 	return a.statusLocked(), nil
 }
 

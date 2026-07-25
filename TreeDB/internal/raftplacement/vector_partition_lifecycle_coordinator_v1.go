@@ -52,6 +52,17 @@ func (c VectorPartitionLifecycleCoordinatorV1) Submit(ctx context.Context, comma
 	return record, nil
 }
 
+func (c VectorPartitionLifecycleCoordinatorV1) validateConfirmedMutationProofV1(identity VectorPartitionLifecycleIndexIdentityV1, proof VectorPartitionLifecycleMutationProofV1, label string) error {
+	if proof.ActiveGeneration == 0 {
+		return nil
+	}
+	record, ok := c.Authority.lifecycleRecordForIndexGenerationV1(identity, proof.ActiveGeneration)
+	if !ok || !record.MutationConfirmed {
+		return errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("%s relevant mutation is pending outcome confirmation", label))
+	}
+	return nil
+}
+
 // MutationProofV1 returns a durable proof for a relevant mutation. It fails
 // closed for a build in progress or an identity that no longer names the
 // active generation. If the exact generation is active, callers must first
@@ -172,11 +183,8 @@ func (c VectorPartitionLifecycleCoordinatorV1) invalidateBeforeRelevantMutationV
 		return proof, err
 	}
 	if !active {
-		if proof.ActiveGeneration != 0 {
-			record, ok := c.Authority.lifecycleRecordForIndexGenerationV1(identity, proof.ActiveGeneration)
-			if !ok || !record.MutationConfirmed {
-				return VectorPartitionLifecycleMutationProofV1{}, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("prior relevant mutation is pending outcome confirmation"))
-			}
+		if err := c.validateConfirmedMutationProofV1(identity, proof, "prior"); err != nil {
+			return VectorPartitionLifecycleMutationProofV1{}, err
 		}
 		return proof, err
 	}
@@ -200,11 +208,8 @@ func (c VectorPartitionLifecycleCoordinatorV1) invalidateBeforeRelevantMutationV
 		// A concurrent/replayed invalidation is safe only if the newly applied
 		// record independently proves the ordering for this exact identity.
 		if retry, retryActive, retryErr := c.Authority.MutationProofV1(identity); retryErr == nil && !retryActive {
-			if retry.ActiveGeneration != 0 {
-				record, ok := c.Authority.lifecycleRecordForIndexGenerationV1(identity, retry.ActiveGeneration)
-				if !ok || !record.MutationConfirmed {
-					return VectorPartitionLifecycleMutationProofV1{}, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("concurrent relevant mutation is pending outcome confirmation"))
-				}
+			if confirmErr := c.validateConfirmedMutationProofV1(identity, retry, "concurrent"); confirmErr != nil {
+				return VectorPartitionLifecycleMutationProofV1{}, confirmErr
 			}
 			return retry, nil
 		}

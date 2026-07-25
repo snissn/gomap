@@ -144,6 +144,11 @@ are `building`, `ready`, `cutover`, and `invalidated`.
 length-capped before allocation on its declared owner. A `cutover` is atomic
 over the complete generation.
 
+The M7 state machine below refines this earlier coarse vocabulary. Its
+persisted states are `building`, `staged`, `prepared`, `active`, `invalidated`,
+`retired`, and `cleanable`; `cutover` is the guarded atomic operation that
+replaces one active generation with another, not a persisted state.
+
 V1 is snapshot-bound: insert, delete, embedding replacement, index-definition
 change, source snapshot replacement, or any committed mutation affecting a
 referenced vector invalidates the generation before the mutation becomes
@@ -169,6 +174,15 @@ is made. A second relevant mutation cannot reuse a pending proof. Relevant
 mutations are also refused while any generation for that collection/index is
 building, staged, or prepared, so source capture is never concurrent with a
 data mutation.
+
+The per-index fences are coordinated by a second, collection-keyed replicated
+barrier. A build reads the collection mutation epoch before source capture and
+must commit that exact watermark at begin-build. A relevant data command opens
+the barrier only after local encoding and route preflight succeed, then owns it
+by deterministic command/idempotency digest until the data result is committed
+and recoverable and every affected per-index fence is confirmed. Exact retries
+reuse the same barrier; a distinct concurrent mutation is refused. This closes
+the first-generation race where no active index record yet exists to invalidate.
 
 Fence state is included in the canonical catalog snapshot and is exposed to
 operators with its collection, index name, epoch, and pending bit. Retire and

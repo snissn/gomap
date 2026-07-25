@@ -161,6 +161,7 @@ func (a *CatalogMetaAuthorityV1) applyCommittedVectorPartitionCollectionMutation
 		a.collectionMutationBarriers = make(map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1)
 	}
 	current, exists := a.collectionMutationBarriers[command.Collection]
+	original := current
 	switch command.Kind {
 	case vectorPartitionBeginCollectionMutationV1:
 		if exists && current.OperationDigest == command.OperationDigest {
@@ -204,7 +205,25 @@ func (a *CatalogMetaAuthorityV1) applyCommittedVectorPartitionCollectionMutation
 		current.Pending = false
 		a.collectionMutationBarriers[command.Collection] = current
 	}
+	snapshot, err := encodeVectorPartitionLifecycleSnapshotV1(a.lifecycle, a.mutationFences, a.collectionMutationBarriers)
+	if err != nil {
+		if exists {
+			a.collectionMutationBarriers[command.Collection] = original
+		} else {
+			delete(a.collectionMutationBarriers, command.Collection)
+		}
+		return CatalogMetaStatusV1{}, err
+	}
+	if err := a.validateProspectiveCatalogMetaSnapshotLockedV1(snapshot, appliedIndex); err != nil {
+		if exists {
+			a.collectionMutationBarriers[command.Collection] = original
+		} else {
+			delete(a.collectionMutationBarriers, command.Collection)
+		}
+		return CatalogMetaStatusV1{}, err
+	}
 	a.applied = appliedIndex
+	a.lifecycleBytes = uint64(len(snapshot))
 	a.refusal = ""
 	return a.statusLocked(), nil
 }

@@ -296,6 +296,37 @@ type recordingVectorPartitionReplicatedLifecycleAuthorityV1 struct {
 	err   error
 }
 
+func TestVectorPartitionReplicatedLifecycleValidationErrorPreservesCancellationV1(t *testing.T) {
+	tests := []struct {
+		name string
+		ctx  context.Context
+		err  error
+		want error
+	}{
+		{name: "authority canceled", ctx: context.Background(), err: context.Canceled, want: context.Canceled},
+		{name: "authority deadline", ctx: context.Background(), err: context.DeadlineExceeded, want: context.DeadlineExceeded},
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	tests = append(tests, struct {
+		name string
+		ctx  context.Context
+		err  error
+		want error
+	}{name: "caller canceled", ctx: canceled, err: errors.New("authority unavailable"), want: context.Canceled})
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := vectorPartitionReplicatedLifecycleValidationErrorV1(test.ctx, test.err); !errors.Is(got, test.want) || errors.Is(got, ErrVectorPartitionShardSearchGenerationMismatch) {
+				t.Fatalf("validation error=%v want direct %v", got, test.want)
+			}
+		})
+	}
+	plain := errors.New("generation replaced")
+	if got := vectorPartitionReplicatedLifecycleValidationErrorV1(context.Background(), plain); !errors.Is(got, ErrVectorPartitionShardSearchGenerationMismatch) || errors.Is(got, plain) {
+		t.Fatalf("ordinary validation error=%v", got)
+	}
+}
+
 func (a *recordingVectorPartitionReplicatedLifecycleAuthorityV1) ValidateVectorPartitionGenerationSearchV1(
 	_ context.Context,
 	collection raftplacement.CollectionRefV1,

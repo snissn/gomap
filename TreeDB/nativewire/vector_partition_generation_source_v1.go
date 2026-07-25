@@ -264,7 +264,7 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 	}
 	if err := s.validateReplicatedLifecycle(ctx, key, manifest); err != nil {
 		authorityToken.Release()
-		return nil, fmt.Errorf("%w: replicated lifecycle: %v", ErrVectorPartitionShardSearchGenerationMismatch, err)
+		return nil, vectorPartitionReplicatedLifecycleValidationErrorV1(ctx, err)
 	}
 	openPlan, err := collections.NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx, manifest)
 	if err != nil {
@@ -290,6 +290,16 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 		searchers:      make(map[uint32]*collections.VectorPartitionLocalSearcherV1),
 		opening:        make(map[uint32]*collectionVectorPartitionSearchLoadV1),
 	}, nil
+}
+
+func vectorPartitionReplicatedLifecycleValidationErrorV1(ctx context.Context, err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return err
+	}
+	return fmt.Errorf("%w: replicated lifecycle: %v", ErrVectorPartitionShardSearchGenerationMismatch, err)
 }
 
 func (s *CollectionVectorPartitionGenerationSourceV1) validateActive(ctx context.Context, key collectionVectorPartitionGenerationKeyV1, entry *collectionVectorPartitionGenerationCacheV1) error {

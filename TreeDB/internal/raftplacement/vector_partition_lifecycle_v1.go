@@ -957,11 +957,6 @@ func findVectorPartitionLifecycleReadyGroupV1(groups []VectorPartitionLifecycleG
 	return i, i < len(groups) && groups[i].GroupID == group
 }
 
-func isSHA256HexVectorPartitionLifecycleV1(value string) bool {
-	decoded, err := hex.DecodeString(value)
-	return err == nil && len(decoded) == sha256.Size && value == strings.ToLower(value)
-}
-
 func sha256HexVectorPartitionLifecycleV1(value []byte) string {
 	sum := sha256.Sum256(value)
 	return hex.EncodeToString(sum[:])

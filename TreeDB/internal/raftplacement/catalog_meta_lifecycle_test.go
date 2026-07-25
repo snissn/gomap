@@ -397,6 +397,147 @@ func TestCatalogMetaLifecycleGuardsCatalogTransitionUntilCleanup(t *testing.T) {
 	}
 }
 
+func TestCatalogMetaLifecycleRefusesFenceMismatchBeforeReducerPublicationV1(t *testing.T) {
+	authority, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	applied := uint64(1)
+	identity := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11)
+	active := catalogMetaLifecycleBuildPreparedV1(t, authority, &applied, identity, 0, 9)
+	active = catalogMetaLifecycleApplyV1(t, authority, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleActivateV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.MutationEpoch = 9
+	}))
+	key := vectorPartitionLifecycleServingKeyV1{Collection: identity.Index.Collection, IndexName: identity.Index.IndexName}
+	authority.mu.Lock()
+	authority.mutationFences[key] = vectorPartitionLifecycleMutationFenceStateV1{Epoch: 11, Pending: true}
+	authority.mu.Unlock()
+
+	invalidate := catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleInvalidateV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.Reason = "stale invalidation"
+		command.InvalidationEpoch = 10
+	})
+	if _, err := authority.applyCommittedCatalogMetaV1(mustEncodeCatalogMetaLifecycleCommandV1(t, invalidate), applied+1); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("non-advancing durable invalidation err=%v", err)
+	}
+	if got, ok := authority.VectorPartitionLifecycleRecordV1(identity); !ok || !reflect.DeepEqual(got, active) {
+		t.Fatalf("refused invalidation published record=%+v available=%v want %+v", got, ok, active)
+	}
+	if got := authority.VectorPartitionLifecycleMutationFencesV1(); len(got) != 1 || got[0].Epoch != 11 || !got[0].Pending {
+		t.Fatalf("refused invalidation changed fence=%+v", got)
+	}
+
+	// A valid-looking record confirmation must also fail before reducer
+	// publication when it does not own the exact durable fence.
+	authority.mu.Lock()
+	invalidated, err := ApplyVectorPartitionLifecycleCommandV1(active, invalidate)
+	if err != nil {
+		authority.mu.Unlock()
+		t.Fatal(err)
+	}
+	authority.lifecycle[identity] = invalidated
+	authority.clearVectorPartitionLifecycleActiveLockedV1(identity)
+	authority.mu.Unlock()
+	confirm := catalogMetaLifecycleTestCommandV1(invalidated, VectorPartitionLifecycleConfirmMutationV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.MutationEpoch = 10
+	})
+	if _, err := authority.applyCommittedCatalogMetaV1(mustEncodeCatalogMetaLifecycleCommandV1(t, confirm), applied+1); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("non-owner confirmation err=%v", err)
+	}
+	if got, ok := authority.VectorPartitionLifecycleRecordV1(identity); !ok || !reflect.DeepEqual(got, invalidated) {
+		t.Fatalf("refused confirmation published record=%+v available=%v want %+v", got, ok, invalidated)
+	}
+}
+
+func TestCatalogMetaLifecycleCatalogTransitionRefusesPendingFenceWithoutRecordV1(t *testing.T) {
+	authority, _ := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	collection := CollectionRefV1{Database: DefaultDatabase, Catalog: DefaultCatalog, Collection: "docs"}
+	authority.mu.Lock()
+	authority.mutationFences = map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1{
+		{Collection: collection, IndexName: "embedding"}: {Epoch: 7, Pending: true},
+	}
+	authority.mu.Unlock()
+
+	nextCatalog := catalogMetaLifecycleCatalogV1(true)
+	nextCatalog.Groups[0].LeaderHint = "node-c"
+	if _, err := authority.applyCommittedCatalogMetaV1(mustCatalogMetaCommand(t, 1, 2, nextCatalog), 2); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("catalog transition with pending fence err=%v", err)
+	}
+	if status, ok := authority.Status(); !ok || status.Epoch != 1 {
+		t.Fatalf("pending-fence refusal published status=%+v available=%v", status, ok)
+	}
+}
+
+func TestVectorPartitionLifecycleIdentityComparatorIsTotalV1(t *testing.T) {
+	_, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	base := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11)
+	tests := []struct {
+		name string
+		edit func(*VectorPartitionLifecycleIdentityV1)
+	}{
+		{"index definition digest", func(v *VectorPartitionLifecycleIdentityV1) { v.Index.IndexDefinitionDigest = strings.Repeat("f", 64) }},
+		{"catalog digest", func(v *VectorPartitionLifecycleIdentityV1) { v.Index.CatalogDigest = strings.Repeat("f", 64) }},
+		{"generation", func(v *VectorPartitionLifecycleIdentityV1) { v.Generation++ }},
+		{"source generation", func(v *VectorPartitionLifecycleIdentityV1) { v.Source.Generation++ }},
+		{"source checksum", func(v *VectorPartitionLifecycleIdentityV1) { v.Source.Checksum++ }},
+		{"source schema", func(v *VectorPartitionLifecycleIdentityV1) { v.Source.SchemaHash++ }},
+		{"source row count", func(v *VectorPartitionLifecycleIdentityV1) { v.Source.RowCount++ }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			other := base
+			test.edit(&other)
+			if vectorPartitionLifecycleIdentityLessV1(base, other) == vectorPartitionLifecycleIdentityLessV1(other, base) {
+				t.Fatalf("distinct identities compare equal: base=%+v other=%+v", base, other)
+			}
+		})
+	}
+}
+
+func TestCatalogMetaLifecycleProspectiveOuterSnapshotIsBoundedV1(t *testing.T) {
+	authority, _ := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	// The decoded lifecycle payload is below 8 MiB, but base64 expansion makes
+	// the complete catalog snapshot exceed the durable outer bound.
+	lifecycle := bytes.Repeat([]byte{'x'}, MaxCatalogMetaSnapshotBytesV1*3/4)
+	authority.mu.RLock()
+	err := authority.validateProspectiveCatalogMetaSnapshotLockedV1(lifecycle, 2)
+	authority.mu.RUnlock()
+	if !errors.Is(err, ErrCatalogMetaLimit) {
+		t.Fatalf("prospective oversized outer snapshot err=%v", err)
+	}
+}
+
+func TestCatalogMetaLifecycleRecordCapRefusesBeforePublicationV1(t *testing.T) {
+	authority, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	base := catalogMetaLifecycleTestIdentityV1(catalog, 1, 1)
+	records := make(map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1, maxVectorPartitionLifecycleSnapshotRecordsV1)
+	for i := 0; i < maxVectorPartitionLifecycleSnapshotRecordsV1; i++ {
+		identity := base
+		identity.Generation = uint64(i + 1)
+		identity.Source.Generation = uint64(i + 1)
+		record, err := ApplyVectorPartitionLifecycleCommandV1(VectorPartitionLifecycleRecordV1{}, catalogMetaLifecycleTestBeginV1(identity, 0, 1))
+		if err != nil {
+			t.Fatalf("seed lifecycle %d: %v", i, err)
+		}
+		records[identity] = record
+	}
+	authority.mu.Lock()
+	authority.lifecycle = records
+	authority.mu.Unlock()
+
+	overflow := base
+	overflow.Generation = maxVectorPartitionLifecycleSnapshotRecordsV1 + 1
+	overflow.Source.Generation = overflow.Generation
+	before, _ := authority.Status()
+	if _, err := authority.applyCommittedCatalogMetaV1(mustEncodeCatalogMetaLifecycleCommandV1(t, catalogMetaLifecycleTestBeginV1(overflow, 0, 1)), before.AppliedIndex+1); !errors.Is(err, ErrVectorPartitionLifecycleLimit) {
+		t.Fatalf("lifecycle record overflow err=%v", err)
+	}
+	if _, ok := authority.VectorPartitionLifecycleRecordV1(overflow); ok {
+		t.Fatal("record overflow published the refused generation")
+	}
+	after, _ := authority.Status()
+	if after.AppliedIndex != before.AppliedIndex || len(authority.VectorPartitionLifecycleStatusesV1()) != maxVectorPartitionLifecycleSnapshotRecordsV1 {
+		t.Fatalf("record overflow changed authority before=%+v after=%+v records=%d", before, after, len(authority.VectorPartitionLifecycleStatusesV1()))
+	}
+}
+
 func TestCatalogMetaLifecycleMutationFencesAreBoundedBeforePublicationV1(t *testing.T) {
 	collection := CollectionRefV1{Database: DefaultDatabase, Catalog: DefaultCatalog, Collection: "docs"}
 	fences := make(map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1, maxVectorPartitionLifecycleMutationFencesV1+1)

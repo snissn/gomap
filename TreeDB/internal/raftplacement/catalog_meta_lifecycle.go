@@ -176,6 +176,13 @@ func (a *CatalogMetaAuthorityV1) applyCommittedVectorPartitionLifecycleV1(raw []
 	if current.LastCommandDigest == commandDigest {
 		return a.statusLocked(), nil
 	}
+	if command.Kind == VectorPartitionLifecycleInvalidateV1 && command.InvalidationEpoch <= fence.Epoch {
+		return CatalogMetaStatusV1{}, errors.Join(ErrVectorPartitionLifecycleGuard,
+			fmt.Errorf("invalidation epoch %d does not advance durable fence %d", command.InvalidationEpoch, fence.Epoch))
+	}
+	if command.Kind == VectorPartitionLifecycleConfirmMutationV1 && (fence.Epoch != command.MutationEpoch || !fence.Pending) {
+		return CatalogMetaStatusV1{}, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("mutation confirmation does not own a pending fence"))
+	}
 	// A pending fence is the durable recovery debt for a data mutation whose
 	// outcome has not yet been confirmed.  Lifecycle cleanup must not discard
 	// its invalidated source record: confirmation needs that exact record and
@@ -195,6 +202,10 @@ func (a *CatalogMetaAuthorityV1) applyCommittedVectorPartitionLifecycleV1(raw []
 			return CatalogMetaStatusV1{}, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("serving name is already active at generation %d", activeIdentity.Generation))
 		}
 	}
+	originalLifecycle := cloneVectorPartitionLifecycleRecordsV1(a.lifecycle)
+	originalActive := cloneVectorPartitionLifecycleActiveV1(a.active)
+	originalActiveNames := cloneVectorPartitionLifecycleActiveNamesV1(a.activeNames)
+	originalMutationFences := cloneVectorPartitionLifecycleMutationFencesV1(a.mutationFences)
 	if command.Kind == VectorPartitionLifecycleActivateV1 && command.PreviousActiveGeneration != 0 {
 		previousIdentity, previous, ok := findVectorPartitionLifecycleGenerationLockedV1(a.lifecycle, identity.Index, command.PreviousActiveGeneration)
 		if !ok {
@@ -234,18 +245,28 @@ func (a *CatalogMetaAuthorityV1) applyCommittedVectorPartitionLifecycleV1(raw []
 		}
 	}
 	if command.Kind == VectorPartitionLifecycleInvalidateV1 {
-		if command.InvalidationEpoch > fence.Epoch {
-			a.mutationFences[servingKey] = vectorPartitionLifecycleMutationFenceStateV1{Epoch: command.InvalidationEpoch, Pending: true}
-		}
+		a.mutationFences[servingKey] = vectorPartitionLifecycleMutationFenceStateV1{Epoch: command.InvalidationEpoch, Pending: true}
 	}
 	if command.Kind == VectorPartitionLifecycleConfirmMutationV1 {
-		if fence.Epoch != command.MutationEpoch || !fence.Pending {
-			return CatalogMetaStatusV1{}, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("mutation confirmation does not own a pending fence"))
-		}
 		a.mutationFences[servingKey] = vectorPartitionLifecycleMutationFenceStateV1{Epoch: fence.Epoch}
 	}
+	snapshot, err := encodeVectorPartitionLifecycleSnapshotV1(a.lifecycle, a.mutationFences, a.collectionMutationBarriers)
+	if err != nil {
+		a.lifecycle = originalLifecycle
+		a.active = originalActive
+		a.activeNames = originalActiveNames
+		a.mutationFences = originalMutationFences
+		return CatalogMetaStatusV1{}, err
+	}
+	if err := a.validateProspectiveCatalogMetaSnapshotLockedV1(snapshot, appliedIndex); err != nil {
+		a.lifecycle = originalLifecycle
+		a.active = originalActive
+		a.activeNames = originalActiveNames
+		a.mutationFences = originalMutationFences
+		return CatalogMetaStatusV1{}, err
+	}
 	a.applied = appliedIndex
-	a.lifecycleBytes = vectorPartitionLifecycleRetainedBytesV1(a.lifecycle)
+	a.lifecycleBytes = uint64(len(snapshot))
 	a.refusal = ""
 	return a.statusLocked(), nil
 }
@@ -254,6 +275,11 @@ func (a *CatalogMetaAuthorityV1) validateVectorPartitionLifecycleCatalogTransiti
 	for collection, barrier := range a.collectionMutationBarriers {
 		if barrier.Pending {
 			return errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("catalog transition blocked by collection %s/%s/%s mutation epoch %d", collection.Database, collection.Catalog, collection.Collection, barrier.Epoch))
+		}
+	}
+	for key, fence := range a.mutationFences {
+		if fence.Pending {
+			return errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("catalog transition blocked by collection %s/%s/%s index %q mutation epoch %d", key.Collection.Database, key.Collection.Catalog, key.Collection.Collection, key.IndexName, fence.Epoch))
 		}
 	}
 	for identity, record := range a.lifecycle {
@@ -577,16 +603,55 @@ func vectorPartitionLifecycleIdentityLessV1(a, b VectorPartitionLifecycleIdentit
 	if a.Index.CatalogEpoch != b.Index.CatalogEpoch {
 		return a.Index.CatalogEpoch < b.Index.CatalogEpoch
 	}
-	return a.Generation < b.Generation
+	if a.Index.IndexDefinitionDigest != b.Index.IndexDefinitionDigest {
+		return a.Index.IndexDefinitionDigest < b.Index.IndexDefinitionDigest
+	}
+	if a.Index.CatalogDigest != b.Index.CatalogDigest {
+		return a.Index.CatalogDigest < b.Index.CatalogDigest
+	}
+	if a.Generation != b.Generation {
+		return a.Generation < b.Generation
+	}
+	if a.Source.Generation != b.Source.Generation {
+		return a.Source.Generation < b.Source.Generation
+	}
+	if a.Source.Checksum != b.Source.Checksum {
+		return a.Source.Checksum < b.Source.Checksum
+	}
+	if a.Source.SchemaHash != b.Source.SchemaHash {
+		return a.Source.SchemaHash < b.Source.SchemaHash
+	}
+	return a.Source.RowCount < b.Source.RowCount
 }
 
-func vectorPartitionLifecycleRetainedBytesV1(records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1) uint64 {
-	var total uint64
-	for _, record := range records {
-		raw, err := EncodeVectorPartitionLifecycleRecordV1(record)
-		if err == nil {
-			total += uint64(len(raw))
-		}
+func cloneVectorPartitionLifecycleRecordsV1(source map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1) map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1 {
+	clone := make(map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1, len(source))
+	for key, value := range source {
+		clone[key] = value
 	}
-	return total
+	return clone
+}
+
+func cloneVectorPartitionLifecycleActiveV1(source map[VectorPartitionLifecycleIndexIdentityV1]VectorPartitionLifecycleIdentityV1) map[VectorPartitionLifecycleIndexIdentityV1]VectorPartitionLifecycleIdentityV1 {
+	clone := make(map[VectorPartitionLifecycleIndexIdentityV1]VectorPartitionLifecycleIdentityV1, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
+}
+
+func cloneVectorPartitionLifecycleActiveNamesV1(source map[vectorPartitionLifecycleServingKeyV1]VectorPartitionLifecycleIdentityV1) map[vectorPartitionLifecycleServingKeyV1]VectorPartitionLifecycleIdentityV1 {
+	clone := make(map[vectorPartitionLifecycleServingKeyV1]VectorPartitionLifecycleIdentityV1, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
+}
+
+func cloneVectorPartitionLifecycleMutationFencesV1(source map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1) map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1 {
+	clone := make(map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
 }

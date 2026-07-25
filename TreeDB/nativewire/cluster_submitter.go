@@ -222,9 +222,6 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 	if err != nil {
 		return nil, err
 	}
-	if err := AdmitVectorPartitionMutationV1(ctx, s.clusterSubmitter, cmd.Header.ID, cmd.Known); err != nil {
-		return nil, err
-	}
 	entry, err := iwire.AppendDeterministicEntryWithLimits(nil, cmd, s.limits)
 	if err != nil {
 		return nil, err
@@ -254,6 +251,12 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 			return nil, err
 		}
 		ApplyClusterRouteMetadata(&metadata, routeReq, route)
+	}
+	// Durable lifecycle admission is deliberately last: every fallible local
+	// encode/decode and route preflight has completed, so a refusal cannot
+	// strand a replicated pending mutation barrier without a data submission.
+	if err := AdmitVectorPartitionMutationV1(ctx, s.clusterSubmitter, cmd.Header.ID, cmd.Known); err != nil {
+		return nil, err
 	}
 	result, err := s.clusterSubmitter.SubmitCommandEntryV1(ctx, entry, metadata)
 	if err != nil {
