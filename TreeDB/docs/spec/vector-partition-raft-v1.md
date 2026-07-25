@@ -178,6 +178,13 @@ failover, replay, snapshot/rejoin, backup restore, and cleanup all preserve
 the same fail-closed recovery debt. The retained source watermark remains after
 confirmed cleanup, preventing an older delayed candidate from resurrecting.
 
+`VectorPartitionLifecycleCoordinatorV1` provides the bounded meta-Raft
+workflow: begin (with exact source/catalog/mutation identity), caller-owned
+group build/stage readiness callback, group-ready recording, prepare,
+activation/cutover, abort, retire, cleanability, per-group cleanup, completion,
+and recovery status. The callback returns only a validated bounded readiness
+proof; M7 does not fabricate remote asset upload or network transport.
+
 V1 distributed responses contain response-owned stable IDs and scores only.
 Missing owner, stale generation, malformed/capped asset, unsupported
 consistency, or shard failure is an explicit error with no incomplete result.
