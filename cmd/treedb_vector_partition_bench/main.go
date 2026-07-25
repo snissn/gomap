@@ -1239,6 +1239,9 @@ func planBenchmarkMemory(cfg config, m fixtureManifest) (benchmarkMemoryPlan, er
 			int64(m.Dimensions)*4,
 			documentIDStorageBytes,
 			int64(unsafe.Sizeof(collections.VectorPartitionRouterSourceRowV1{})),
+			int64(unsafe.Sizeof(collections.VectorPartitionMembershipV1{})),
+			int64(unsafe.Sizeof(vectorpartition.RouterVectorV1{})),
+			1, // seenDocuments
 		)
 		if addErr != nil {
 			return benchmarkMemoryPlan{}, addErr

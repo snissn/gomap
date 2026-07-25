@@ -128,7 +128,13 @@ func (s CollectionVectorPartitionCoordinatorRouterSourceV1) OpenVectorPartitionC
 		return nil, ErrVectorPartitionCoordinatorUnavailable
 	}
 	router, _, err := s.Collection.OpenVectorPartitionRouterWithContextV1(ctx, index)
-	return router, err
+	if err != nil {
+		return nil, err
+	}
+	if router == nil {
+		return nil, ErrVectorPartitionCoordinatorUnavailable
+	}
+	return router, nil
 }
 
 // VectorPartitionShardSearchDispatcherV1 owns transport and connection
@@ -455,7 +461,7 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 	}
 
 	placementStarted := time.Now()
-	tasks, selectedPartitions, selectedGroups, budget, err := c.plan(request, status, routed.Partitions)
+	tasks, selectedPartitions, selectedGroups, budget, err := c.plan(requestCtx, request, status, routed.Partitions)
 	response.Timing.PlacementNanos = elapsedNanosV1(placementStarted)
 	if err != nil {
 		return response, c.wrapError(err, "")
@@ -661,8 +667,14 @@ type vectorPartitionCoordinatorTaskV1 struct {
 	queuedAt     time.Time
 }
 
-func (c *VectorPartitionCoordinatorV1) plan(request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1, routed []collections.VectorPartitionRouterPartitionScoreV1) ([]vectorPartitionCoordinatorTaskV1, []uint32, []raftcluster.GroupID, vectorPartitionCoordinatorBudgetV1, error) {
+func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1, routed []collections.VectorPartitionRouterPartitionScoreV1) ([]vectorPartitionCoordinatorTaskV1, []uint32, []raftcluster.GroupID, vectorPartitionCoordinatorBudgetV1, error) {
 	var zero vectorPartitionCoordinatorBudgetV1
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, nil, zero, err
+	}
 	if len(routed) < 1 || len(routed) > c.limits.MaxSelectedPartitions {
 		return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 	}
@@ -713,11 +725,12 @@ func (c *VectorPartitionCoordinatorV1) plan(request VectorPartitionCoordinatorRe
 		return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 	}
 	candidateWeights, totalCandidateWeight, err := vectorPartitionCoordinatorCandidateWeightsV1(
-		status.Manifest, selected, request.EfSearch,
+		ctx, status.Manifest, selected, request.EfSearch,
 	)
 	if err != nil {
 		return nil, nil, nil, zero, err
 	}
+	candidateSurplus := request.CandidateBytesLimit - totalCandidateBaseline
 	var candidateWeightCursor uint64
 	for _, groupID := range groupIDs {
 		group := c.groups[groupID]
@@ -787,18 +800,25 @@ func (c *VectorPartitionCoordinatorV1) plan(request VectorPartitionCoordinatorRe
 					return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 				}
 			}
-			candidateShare := vectorPartitionCoordinatorWeightedBudgetShareV1(
-				request.CandidateBytesLimit, totalCandidateWeight, candidateWeightCursor, taskCandidateWeight,
-			)
-			candidateWeightCursor, ok = addUint64V1(candidateWeightCursor, taskCandidateWeight)
-			if !ok {
-				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
-			}
 			baseline, ok := mulUint64V1(uint64(len(ids)), uint64(request.EfSearch))
 			if ok {
 				baseline, ok = mulUint64V1(baseline, 64)
 			}
-			if !ok || candidateShare < baseline || candidateShare > shardLimits.MaxCandidateBytes {
+			if !ok {
+				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
+			}
+			weightedSurplus := vectorPartitionCoordinatorWeightedBudgetShareV1(
+				candidateSurplus, totalCandidateWeight, candidateWeightCursor, taskCandidateWeight,
+			)
+			candidateShare, ok := addUint64V1(baseline, weightedSurplus)
+			if !ok {
+				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
+			}
+			candidateWeightCursor, ok = addUint64V1(candidateWeightCursor, taskCandidateWeight)
+			if !ok {
+				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
+			}
+			if candidateShare > shardLimits.MaxCandidateBytes {
 				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 			}
 			shardRequest.CandidateBytesLimit = candidateShare
@@ -815,10 +835,17 @@ func (c *VectorPartitionCoordinatorV1) plan(request VectorPartitionCoordinatorRe
 }
 
 func vectorPartitionCoordinatorCandidateWeightsV1(
+	ctx context.Context,
 	manifest collections.VectorPartitionManifestV1,
 	selected []uint32,
 	efSearch int,
 ) ([]uint64, uint64, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
 	if manifest.PartitionCount == 0 || efSearch < 1 {
 		return nil, 0, ErrVectorPartitionCoordinatorGenerationMismatch
 	}
@@ -831,7 +858,12 @@ func vectorPartitionCoordinatorCandidateWeightsV1(
 		selectedSet[partitionID] = true
 	}
 	countMembership := func(memberships []collections.VectorPartitionMembershipV1) error {
-		for _, membership := range memberships {
+		for ordinal, membership := range memberships {
+			if ordinal&1023 == 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
 			if membership.PartitionID >= manifest.PartitionCount {
 				return ErrVectorPartitionCoordinatorGenerationMismatch
 			}
@@ -846,10 +878,11 @@ func vectorPartitionCoordinatorCandidateWeightsV1(
 		}
 		return nil
 	}
-	// Each selected partition starts with ef_search logical candidate units.
-	// Memberships above that traversal floor add proportional weight, so an
-	// uneven exact shard or row-sized HNSW scratch bound is not constrained by
-	// an equal split that only reflects partition count.
+	// The caller reserves each selected partition's ef_search baseline before
+	// reaching this helper. Only memberships above that traversal floor weight
+	// the remaining budget, so a tiny shard always retains its baseline while a
+	// much larger exact shard or row-sized HNSW scratch bound receives the
+	// surplus.
 	if err := countMembership(manifest.Memberships); err != nil {
 		return nil, 0, err
 	}
@@ -858,8 +891,10 @@ func vectorPartitionCoordinatorCandidateWeightsV1(
 	}
 	var total uint64
 	for _, partitionID := range selected {
-		if weights[partitionID] < uint64(efSearch) {
-			weights[partitionID] = uint64(efSearch)
+		if weights[partitionID] <= uint64(efSearch) {
+			weights[partitionID] = 0
+		} else {
+			weights[partitionID] -= uint64(efSearch)
 		}
 		var ok bool
 		total, ok = addUint64V1(total, weights[partitionID])
@@ -867,8 +902,8 @@ func vectorPartitionCoordinatorCandidateWeightsV1(
 			return nil, 0, ErrVectorPartitionCoordinatorBudgetExceeded
 		}
 	}
-	if total == 0 {
-		return nil, 0, ErrVectorPartitionCoordinatorBudgetExceeded
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
 	}
 	return weights, total, nil
 }

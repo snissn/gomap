@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"slices"
 	"sort"
 	"sync"
@@ -446,6 +447,65 @@ func TestVectorPartitionCoordinatorWeightsCandidateBudgetByMembershipV1(t *testi
 	}
 	if budgets[0] != 90*64 || budgets[1] != 10*64 || total != request.CandidateBytesLimit {
 		t.Fatalf("candidate budgets=%v total=%d", budgets, total)
+	}
+}
+
+func TestVectorPartitionCoordinatorReservesCandidateBaselineBeforeUnevenSurplusV1(t *testing.T) {
+	coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{
+			{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"},
+			{ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"},
+		},
+		[]raftcluster.GroupID{"group-a", "group-b"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{
+			0: {{ID: "a", Score: 1}},
+			1: {{ID: "b", Score: .5}},
+		},
+		VectorPartitionCoordinatorLimitsV1{},
+	)
+	for i := range 1001 {
+		partitionID := uint32(0)
+		if i == 1000 {
+			partitionID = 1
+		}
+		source.router.status.Manifest.Memberships = append(
+			source.router.status.Manifest.Memberships,
+			collections.VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: partitionID},
+		)
+	}
+	request := testVectorPartitionCoordinatorRequestV1(2)
+	request.CandidateBytesLimit = 1000*8 + 2*uint64(request.EfSearch)*64
+
+	response, err := coordinator.Search(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Neighbors) != 2 || len(dispatcher.calls) != 2 {
+		t.Fatalf("response=%+v calls=%+v", response, dispatcher.calls)
+	}
+	budgets := make(map[uint32]uint64, len(dispatcher.calls))
+	var total uint64
+	for _, call := range dispatcher.calls {
+		budgets[call.PartitionIDs[0]] = call.CandidateBytesLimit
+		total += call.CandidateBytesLimit
+	}
+	baseline := uint64(request.EfSearch) * 64
+	if budgets[0] != baseline+1000*8 || budgets[1] != baseline || total != request.CandidateBytesLimit {
+		t.Fatalf("candidate budgets=%v total=%d want large=%d tiny=%d total=%d",
+			budgets, total, baseline+1000*8, baseline, request.CandidateBytesLimit)
+	}
+}
+
+func TestVectorPartitionCoordinatorMembershipWeightsObserveContextV1(t *testing.T) {
+	manifest := collections.VectorPartitionManifestV1{
+		PartitionCount: 1,
+		Memberships:    make([]collections.VectorPartitionMembershipV1, 4096),
+	}
+	ctx := &vectorPartitionCoordinatorCancelAfterErrContextV1{cancelAt: 3}
+	if _, _, err := vectorPartitionCoordinatorCandidateWeightsV1(
+		ctx, manifest, []uint32{0}, 8,
+	); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("candidate weight err=%v want deadline exceeded", err)
 	}
 }
 
@@ -1058,16 +1118,29 @@ func TestVectorPartitionCoordinatorEnforcesConcurrentRequestCapV1(t *testing.T) 
 }
 
 func vectorPartitionCoordinatorResponseIsZeroTestV1(response VectorPartitionCoordinatorResponseV1) bool {
-	return response.Version == 0 &&
-		response.RequestID == "" &&
-		response.SourceGeneration == 0 &&
-		response.PartitionGeneration == 0 &&
-		response.RouterGeneration == 0 &&
-		response.RouterModelDigest == "" &&
-		response.ReadySetDigest == "" &&
-		len(response.Neighbors) == 0 &&
-		len(response.ProbedPartitions) == 0 &&
-		len(response.ProbedGroups) == 0 &&
-		response.Counters == (VectorPartitionCoordinatorCountersV1{}) &&
-		response.Timing == (VectorPartitionCoordinatorTimingV1{})
+	if len(response.Neighbors) != 0 || len(response.ProbedPartitions) != 0 || len(response.ProbedGroups) != 0 {
+		return false
+	}
+	response.Neighbors = nil
+	response.ProbedPartitions = nil
+	response.ProbedGroups = nil
+	return reflect.DeepEqual(response, VectorPartitionCoordinatorResponseV1{})
+}
+
+type vectorPartitionCoordinatorCancelAfterErrContextV1 struct {
+	calls    int
+	cancelAt int
+}
+
+func (c *vectorPartitionCoordinatorCancelAfterErrContextV1) Deadline() (time.Time, bool) {
+	return time.Time{}, false
+}
+func (c *vectorPartitionCoordinatorCancelAfterErrContextV1) Done() <-chan struct{} { return nil }
+func (c *vectorPartitionCoordinatorCancelAfterErrContextV1) Value(any) any         { return nil }
+func (c *vectorPartitionCoordinatorCancelAfterErrContextV1) Err() error {
+	c.calls++
+	if c.cancelAt > 0 && c.calls >= c.cancelAt {
+		return context.DeadlineExceeded
+	}
+	return nil
 }

@@ -95,6 +95,14 @@ func TestDocsVectorPartitionCoordinatorM6Contract(t *testing.T) {
 				"TreeDB/docs/performance/vector-partition-m6.md",
 			},
 		},
+		{
+			path: filepath.Join(root, "docs", "spec", "vector-partition-raft-v1.md"),
+			needles: []string{
+				"M5 now owns the bounded shard-search service contract",
+				"M6 owns transport-neutral coordinator fanout and merged top-k",
+				"remain M8 work",
+			},
+		},
 	}
 	for _, check := range checks {
 		b, err := os.ReadFile(check.path)

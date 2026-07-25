@@ -1103,9 +1103,6 @@ func decodeVectorPartitionRouterModelWithContextV1(ctx context.Context, view *co
 		}
 		return model.Representatives[i].LeafNodeID < model.Representatives[j].LeafNodeID
 	})
-	if err := internalrouter.ValidateRouterModelWithContextV1(ctx, model); err != nil {
-		return model, "", nil, err
-	}
 	gotDigest, err := internalrouter.RouterDigestWithContextV1(ctx, model)
 	if err != nil {
 		return model, "", nil, err
