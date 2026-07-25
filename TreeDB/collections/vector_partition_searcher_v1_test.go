@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
@@ -131,6 +132,24 @@ func TestVectorPartitionLocalSearcherV1HNSWCanonicalizesFP32TieOrder(t *testing.
 	}
 	if !handle.Released() {
 		t.Fatal("HNSW tie search retained prepared resource")
+	}
+}
+
+func TestVectorPartitionNativeResultsCanonicalizeCollapsedFP32TieV1(t *testing.T) {
+	higherFloat64 := math.Nextafter(1, 2)
+	if float32(higherFloat64) != float32(1) {
+		t.Fatal("test scores do not collapse to one float32 value")
+	}
+	results, err := canonicalizeVectorPartitionNativeResultsV1(context.Background(), []columnVectorGraphNativeSearchResult{
+		{Ordinal: 0, ID: []byte("z"), Score: higherFloat64},
+		{Ordinal: 1, ID: []byte("a"), Score: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 || results[0].ID != "a" || results[1].ID != "z" ||
+		results[0].Score != results[1].Score {
+		t.Fatalf("collapsed FP32 tie results=%+v want a,z", results)
 	}
 }
 

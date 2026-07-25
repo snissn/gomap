@@ -626,31 +626,8 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context
 			s.recordFailure()
 			return nil, VectorPartitionSearchMetricsV1{}, err
 		}
-		// Native HNSW ranks its float64 scores by row ordinal. The wire contract
-		// exposes float32 scores with stable-ID tie order, so two distinct native
-		// scores may collapse into a public tie. Rebuild the bounded result heap
-		// after conversion and drain it canonically before M5 publishes it.
-		top := make(vectorPartitionSearchResultMaxHeapV1, 0, len(results))
-		for i, r := range results {
-			if i&255 == 0 {
-				if err := ctx.Err(); err != nil {
-					s.recordFailure()
-					return nil, VectorPartitionSearchMetricsV1{}, err
-				}
-			}
-			top.pushBounded(len(results), VectorPartitionSearchResultV1{ID: string(r.ID), Score: float32(r.Score)})
-		}
-		out := []VectorPartitionSearchResultV1(top)
-		for completed, target := 0, len(out)-1; target >= 0; completed, target = completed+1, target-1 {
-			if completed&255 == 0 {
-				if err := ctx.Err(); err != nil {
-					s.recordFailure()
-					return nil, VectorPartitionSearchMetricsV1{}, err
-				}
-			}
-			out[target] = top.popWorst()
-		}
-		if err := ctx.Err(); err != nil {
+		out, err := canonicalizeVectorPartitionNativeResultsV1(ctx, results)
+		if err != nil {
 			s.recordFailure()
 			return nil, VectorPartitionSearchMetricsV1{}, err
 		}
@@ -704,6 +681,38 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context
 	s.edges += edges
 	s.mu.Unlock()
 	return out, VectorPartitionSearchMetricsV1{Candidates: uint64(len(s.asset.IDs)), Edges: edges, Route: VectorPartitionSearchRouteExactFP32ScanV1}, nil
+}
+
+func canonicalizeVectorPartitionNativeResultsV1(ctx context.Context, results []columnVectorGraphNativeSearchResult) ([]VectorPartitionSearchResultV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// Native HNSW ranks its float64 scores by row ordinal. The wire contract
+	// exposes float32 scores with stable-ID tie order, so two distinct native
+	// scores may collapse into a public tie. Rebuild the bounded result heap
+	// after conversion and drain it canonically before M5 publishes it.
+	top := make(vectorPartitionSearchResultMaxHeapV1, 0, len(results))
+	for i, result := range results {
+		if i&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
+		top.pushBounded(len(results), VectorPartitionSearchResultV1{ID: string(result.ID), Score: float32(result.Score)})
+	}
+	out := []VectorPartitionSearchResultV1(top)
+	for completed, target := 0, len(out)-1; target >= 0; completed, target = completed+1, target-1 {
+		if completed&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
+		out[target] = top.popWorst()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *VectorPartitionLocalSearcherV1) recordFailure() {
