@@ -121,7 +121,16 @@ func (c VectorPartitionLifecycleCoordinatorV1) InvalidateBeforeRelevantMutationV
 		return VectorPartitionLifecycleMutationProofV1{}, err
 	}
 	proof, active, err := c.Authority.MutationProofV1(identity)
-	if err != nil || !active {
+	if err != nil {
+		return proof, err
+	}
+	if !active {
+		if proof.ActiveGeneration != 0 {
+			record, ok := c.Authority.lifecycleRecordForIndexGenerationV1(identity, proof.ActiveGeneration)
+			if !ok || !record.MutationConfirmed {
+				return VectorPartitionLifecycleMutationProofV1{}, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("prior relevant mutation is pending outcome confirmation"))
+			}
+		}
 		return proof, err
 	}
 	record, ok := c.Authority.lifecycleRecordForIndexGenerationV1(identity, proof.ActiveGeneration)
@@ -137,6 +146,12 @@ func (c VectorPartitionLifecycleCoordinatorV1) InvalidateBeforeRelevantMutationV
 		// A concurrent/replayed invalidation is safe only if the newly applied
 		// record independently proves the ordering for this exact identity.
 		if retry, retryActive, retryErr := c.Authority.MutationProofV1(identity); retryErr == nil && !retryActive {
+			if retry.ActiveGeneration != 0 {
+				record, ok := c.Authority.lifecycleRecordForIndexGenerationV1(identity, retry.ActiveGeneration)
+				if !ok || !record.MutationConfirmed {
+					return VectorPartitionLifecycleMutationProofV1{}, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("concurrent relevant mutation is pending outcome confirmation"))
+				}
+			}
 			return retry, nil
 		}
 		return VectorPartitionLifecycleMutationProofV1{}, err

@@ -47,6 +47,10 @@ func (a CatalogVectorPartitionMutationAdmissionV1) AdmitVectorPartitionMutationV
 		if status.State == raftplacement.VectorPartitionLifecycleInvalidatedV1 && !status.MutationConfirmed {
 			return errors.New("nativewire: a prior vector-relevant mutation is pending outcome recovery")
 		}
+		switch status.State {
+		case raftplacement.VectorPartitionLifecycleBuildingV1, raftplacement.VectorPartitionLifecycleStagedV1, raftplacement.VectorPartitionLifecyclePreparedV1:
+			return errors.New("nativewire: vector generation source capture is in progress; relevant mutation is frozen")
+		}
 		if !status.Active {
 			continue
 		}
@@ -57,8 +61,8 @@ func (a CatalogVectorPartitionMutationAdmissionV1) AdmitVectorPartitionMutationV
 	return nil
 }
 
-// ConfirmVectorPartitionMutationV1 releases only the fences which this
-// request made pending.  The shared submitter calls this solely after the
+// ConfirmVectorPartitionMutationV1 releases pending fences for this affected
+// collection. The shared submitter calls this solely after the
 // data Raft bridge reports a committed and locally recoverable result; a
 // failed or ambiguous submit intentionally leaves the catalog frozen.
 func (a CatalogVectorPartitionMutationAdmissionV1) ConfirmVectorPartitionMutationV1(ctx context.Context, command iwire.CommandID, sections []iwire.Section) error {

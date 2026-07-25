@@ -48,12 +48,13 @@ func TestVectorPartitionLifecycleCoordinatorInvalidatesBeforeRelevantMutationV1(
 		t.Fatalf("proof did not admit mutation after durable invalidation: %v", err)
 	}
 
-	// A replay/retry is a no-op admission: no second invalidation command is
-	// needed and the exact first invalidation proof is retained.
+	// A concurrent retry cannot reuse a pending fence: only the data commit
+	// path may confirm it, so a second mutation is refused rather than sharing
+	// the first mutation's invalidation proof.
 	before := committer.index
 	retry, err := coordinator.InvalidateBeforeRelevantMutationV1(t.Context(), identity.Index, "vector field update")
-	if err != nil || retry != proof || committer.index != before {
-		t.Fatalf("retry proof=%+v err=%v index=%d want %+v/%d", retry, err, committer.index, proof, before)
+	if !errors.Is(err, ErrVectorPartitionLifecycleGuard) || committer.index != before {
+		t.Fatalf("retry proof=%+v err=%v index=%d", retry, err, committer.index)
 	}
 }
 

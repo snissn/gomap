@@ -59,6 +59,41 @@ type VectorPartitionLifecycleAuthorityStatusV1 struct {
 	RetainedWireBytes      uint64
 }
 
+// VectorPartitionLifecycleMutationFenceStatusV1 exposes durable pending
+// mutation recovery debt even after a generation record has been cleaned.
+type VectorPartitionLifecycleMutationFenceStatusV1 struct {
+	Collection CollectionRefV1
+	IndexName  string
+	Epoch      uint64
+	Pending    bool
+}
+
+func (a *CatalogMetaAuthorityV1) VectorPartitionLifecycleMutationFencesV1() []VectorPartitionLifecycleMutationFenceStatusV1 {
+	if a == nil {
+		return nil
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	statuses := make([]VectorPartitionLifecycleMutationFenceStatusV1, 0, len(a.mutationFences))
+	for key, fence := range a.mutationFences {
+		statuses = append(statuses, VectorPartitionLifecycleMutationFenceStatusV1{Collection: key.Collection, IndexName: key.IndexName, Epoch: fence.Epoch, Pending: fence.Pending})
+	}
+	sort.Slice(statuses, func(i, j int) bool {
+		a, b := statuses[i], statuses[j]
+		if a.Collection.Database != b.Collection.Database {
+			return a.Collection.Database < b.Collection.Database
+		}
+		if a.Collection.Catalog != b.Collection.Catalog {
+			return a.Collection.Catalog < b.Collection.Catalog
+		}
+		if a.Collection.Collection != b.Collection.Collection {
+			return a.Collection.Collection < b.Collection.Collection
+		}
+		return a.IndexName < b.IndexName
+	})
+	return statuses
+}
+
 func vectorPartitionLifecycleCommandBytesV1(raw []byte) bool {
 	if len(raw) == 0 || len(raw) > MaxVectorPartitionLifecycleCommandBytesV1 {
 		return false
