@@ -846,29 +846,34 @@ func TestVectorPartitionCoordinatorTerminalFailureCancelsAndReturnsNoPartialV1(t
 
 func TestVectorPartitionCoordinatorRejectsCorruptAndOverBudgetResponsesV1(t *testing.T) {
 	tests := []struct {
-		name string
-		edit func(*testVectorPartitionCoordinatorDispatcherV1, *VectorPartitionCoordinatorRequestV1)
+		name    string
+		wantErr error
+		edit    func(*testVectorPartitionCoordinatorDispatcherV1, *VectorPartitionCoordinatorRequestV1)
 	}{
 		{
-			name: "merge_entries",
+			name:    "merge_entries",
+			wantErr: ErrVectorPartitionCoordinatorBudgetExceeded,
 			edit: func(_ *testVectorPartitionCoordinatorDispatcherV1, request *VectorPartitionCoordinatorRequestV1) {
 				request.MergeEntriesLimit = 1
 			},
 		},
 		{
-			name: "response_bytes",
+			name:    "response_bytes",
+			wantErr: ErrVectorPartitionCoordinatorBudgetExceeded,
 			edit: func(_ *testVectorPartitionCoordinatorDispatcherV1, request *VectorPartitionCoordinatorRequestV1) {
 				request.ResponseBytesLimit = 1
 			},
 		},
 		{
-			name: "duplicate_partial_id",
+			name:    "duplicate_partial_id",
+			wantErr: ErrVectorPartitionCoordinatorMalformedResponse,
 			edit: func(dispatcher *testVectorPartitionCoordinatorDispatcherV1, _ *VectorPartitionCoordinatorRequestV1) {
 				dispatcher.neighbors[0] = []VectorPartitionShardSearchNeighborV1{{ID: "a", Score: 1}, {ID: "a", Score: .5}}
 			},
 		},
 		{
-			name: "nonfinite_score",
+			name:    "nonfinite_score",
+			wantErr: ErrVectorPartitionCoordinatorMalformedResponse,
 			edit: func(dispatcher *testVectorPartitionCoordinatorDispatcherV1, _ *VectorPartitionCoordinatorRequestV1) {
 				dispatcher.neighbors[0] = []VectorPartitionShardSearchNeighborV1{{ID: "a", Score: float32(math.NaN())}}
 			},
@@ -885,7 +890,7 @@ func TestVectorPartitionCoordinatorRejectsCorruptAndOverBudgetResponsesV1(t *tes
 			request := testVectorPartitionCoordinatorRequestV1(1)
 			test.edit(dispatcher, &request)
 			response, err := coordinator.Search(context.Background(), request)
-			if err == nil || !vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
+			if !errors.Is(err, test.wantErr) || !vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
 				t.Fatalf("response=%+v err=%v", response, err)
 			}
 		})
@@ -945,6 +950,11 @@ func TestVectorPartitionCoordinatorResponseCounterAggregationRejectsOverflowV1(t
 			name:     "candidate_bytes_sum",
 			counters: VectorPartitionCoordinatorCountersV1{CandidateBytes: math.MaxUint64},
 			response: VectorPartitionShardSearchResponseV1{Candidates: 1},
+		},
+		{
+			name:     "edges",
+			counters: VectorPartitionCoordinatorCountersV1{Edges: math.MaxUint64},
+			response: VectorPartitionShardSearchResponseV1{Edges: 1},
 		},
 	}
 	for _, test := range tests {
