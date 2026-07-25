@@ -240,6 +240,66 @@ func TestCatalogMetaLifecycleSnapshotCanonicalRoundTripAndFailClosed(t *testing.
 	})
 }
 
+func TestCatalogMetaLifecycleMutationFenceRejectsRacingCandidateAfterRestoreV1(t *testing.T) {
+	authority, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	applied := uint64(1)
+	activeIdentity := catalogMetaLifecycleTestIdentityV1(catalog, 6, 10)
+	active := catalogMetaLifecycleBuildPreparedV1(t, authority, &applied, activeIdentity, 0, 9)
+	active = catalogMetaLifecycleApplyV1(t, authority, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleActivateV1, func(c *VectorPartitionLifecycleCommandV1) {
+		c.MutationEpoch = 9
+	}))
+
+	// This candidate captured the old source while the active generation was
+	// still serving.  It is prepared before the data mutation admission races
+	// through its durable invalidation.
+	staleIdentity := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11)
+	stale := catalogMetaLifecycleBuildPreparedV1(t, authority, &applied, staleIdentity, activeIdentity.Generation, 9)
+	active = catalogMetaLifecycleApplyV1(t, authority, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleInvalidateV1, func(c *VectorPartitionLifecycleCommandV1) {
+		c.Reason, c.InvalidationEpoch = "relevant mutation", 10
+	}))
+
+	// Crash/failover after invalidation but before the data submit must retain
+	// the fence.  A replayed stale activation cannot re-open serving.
+	snapshot, err := authority.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatalf("export fenced snapshot: %v", err)
+	}
+	restored := NewCatalogMetaAuthorityV1()
+	if err := restored.installCatalogMetaSnapshotBytesV1(snapshot); err != nil {
+		t.Fatalf("restore fenced snapshot: %v", err)
+	}
+	activate := catalogMetaLifecycleTestCommandV1(stale, VectorPartitionLifecycleActivateV1, func(c *VectorPartitionLifecycleCommandV1) {
+		c.PreviousActiveGeneration, c.PreviousActiveRevision, c.MutationEpoch = activeIdentity.Generation, active.Revision, 9
+	})
+	if _, err := restored.applyCommittedCatalogMetaV1(mustEncodeCatalogMetaLifecycleCommandV1(t, activate), applied+1); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("stale activation after restore err=%v", err)
+	}
+	// Cleanup is allowed to reclaim the invalidated generation's assets, but
+	// not the durable mutation fence.  A delayed/replayed candidate remains
+	// refused after the source record has reached its terminal absent state.
+	active = catalogMetaLifecycleApplyV1(t, restored, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleRetireV1, nil))
+	active = catalogMetaLifecycleApplyV1(t, restored, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleMarkCleanableV1, nil))
+	active = catalogMetaLifecycleApplyV1(t, restored, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleRecordGroupCleanupV1, func(c *VectorPartitionLifecycleCommandV1) {
+		c.GroupID = "group-a"
+	}))
+	catalogMetaLifecycleApplyV1(t, restored, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleCompleteCleanupV1, nil))
+	if _, err := restored.applyCommittedCatalogMetaV1(mustEncodeCatalogMetaLifecycleCommandV1(t, activate), applied+1); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("stale activation after cleanup err=%v", err)
+	}
+
+	// A replacement built from the post-mutation source watermark is allowed;
+	// this is the recovery path after a submit failure leaves the old generation
+	// invalidated and the data writer retries/rebuilds.
+	freshIdentity := catalogMetaLifecycleTestIdentityV1(catalog, 8, 12)
+	fresh := catalogMetaLifecycleBuildPreparedV1(t, restored, &applied, freshIdentity, 0, 10)
+	fresh = catalogMetaLifecycleApplyV1(t, restored, &applied, catalogMetaLifecycleTestCommandV1(fresh, VectorPartitionLifecycleActivateV1, func(c *VectorPartitionLifecycleCommandV1) {
+		c.MutationEpoch = 10
+	}))
+	if fresh.State != VectorPartitionLifecycleActiveV1 {
+		t.Fatalf("fresh post-fence generation state=%q", fresh.State)
+	}
+}
+
 func TestCatalogMetaLifecycleSameCatalogSnapshotAdvancesButNeverRollsBack(t *testing.T) {
 	source, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
 	target, _ := newCatalogMetaLifecycleTestAuthorityV1(t, true)

@@ -201,6 +201,11 @@ type CatalogMetaAuthorityV1 struct {
 	lifecycle      map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1
 	active         map[VectorPartitionLifecycleIndexIdentityV1]VectorPartitionLifecycleIdentityV1
 	activeNames    map[vectorPartitionLifecycleServingKeyV1]VectorPartitionLifecycleIdentityV1
+	// mutationFences is a durable per-serving-name watermark.  An
+	// invalidation advances it before the corresponding data mutation is
+	// admitted, so a generation built from an older source cannot activate
+	// after a crash, replay, or a cleanup of the invalidated record.
+	mutationFences map[vectorPartitionLifecycleServingKeyV1]uint64
 }
 
 func NewCatalogMetaAuthorityV1() *CatalogMetaAuthorityV1 { return &CatalogMetaAuthorityV1{} }
@@ -498,7 +503,7 @@ func (a *CatalogMetaAuthorityV1) ExportCatalogMetaSnapshotV1() (CatalogMetaSnaps
 	if a.record.Epoch == 0 {
 		return CatalogMetaSnapshotV1{}, ErrCatalogMetaUnavailable
 	}
-	lifecycle, err := encodeVectorPartitionLifecycleSnapshotV1(a.lifecycle)
+	lifecycle, err := encodeVectorPartitionLifecycleSnapshotV1(a.lifecycle, a.mutationFences)
 	if err != nil {
 		return CatalogMetaSnapshotV1{}, err
 	}
@@ -537,7 +542,7 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 		!bytes.Equal(snapshot.Record, commandRecord) {
 		return CatalogMetaStatusV1{}, errors.Join(ErrInvalidCatalogMeta, ErrCatalogMetaConflict, fmt.Errorf("snapshot last command does not exactly install its record"))
 	}
-	lifecycle, active, activeNames, err := decodeVectorPartitionLifecycleSnapshotV1(snapshot.VectorPartitionLifecycle, record)
+	lifecycle, active, activeNames, mutationFences, err := decodeVectorPartitionLifecycleSnapshotV1(snapshot.VectorPartitionLifecycle, record)
 	if err != nil {
 		return CatalogMetaStatusV1{}, err
 	}
@@ -554,7 +559,7 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 			return CatalogMetaStatusV1{}, ErrCatalogMetaStaleEpoch
 		}
 		if snapshot.AppliedIndex == a.applied {
-			currentLifecycle, err := encodeVectorPartitionLifecycleSnapshotV1(a.lifecycle)
+			currentLifecycle, err := encodeVectorPartitionLifecycleSnapshotV1(a.lifecycle, a.mutationFences)
 			if err != nil {
 				return CatalogMetaStatusV1{}, err
 			}
@@ -566,6 +571,7 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 		a.lifecycle = lifecycle
 		a.active = active
 		a.activeNames = activeNames
+		a.mutationFences = mutationFences
 		a.lifecycleBytes = vectorPartitionLifecycleRetainedBytesV1(lifecycle)
 		a.applied = snapshot.AppliedIndex
 		a.refusal = ""
@@ -588,6 +594,7 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 	a.lifecycle = lifecycle
 	a.active = active
 	a.activeNames = activeNames
+	a.mutationFences = mutationFences
 	a.lifecycleBytes = vectorPartitionLifecycleRetainedBytesV1(lifecycle)
 	return a.statusLocked(), nil
 }
