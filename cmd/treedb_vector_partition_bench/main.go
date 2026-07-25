@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -274,6 +275,8 @@ type runResult struct {
 	HeadSHA            string                   `json:"head_sha"`
 	GoVersion          string                   `json:"go_version"`
 	Hardware           string                   `json:"hardware_context"`
+	GOMAXPROCS         int                      `json:"gomaxprocs"`
+	GoMemoryLimitBytes int64                    `json:"go_memory_limit_bytes"`
 	Dataset            fixtureManifest          `json:"dataset"`
 	Partitions         int                      `json:"partitions"`
 	Overlap            float64                  `json:"overlap"`
@@ -332,6 +335,10 @@ func currentBenchmarkRuntimeCapabilities() benchmarkRuntimeCapabilities {
 	return benchmarkRuntimeCapabilities{
 		vectorPartitionNamespacePersistence: collections.VectorPartitionNamespacePersistenceSupportedV1(),
 	}
+}
+
+func benchmarkRuntimeLimits() (int, int64) {
+	return runtime.GOMAXPROCS(0), debug.SetMemoryLimit(-1)
 }
 
 func run(args []string, stdout io.Writer) error {
@@ -2264,6 +2271,7 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 			metrics.HNSWLossMeasured = true
 		}
 	}
+	goMaxProcs, goMemoryLimitBytes := benchmarkRuntimeLimits()
 	r := runResult{
 		SchemaVersion:      schemaVersion,
 		ResultKind:         "simulation_only",
@@ -2273,6 +2281,8 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 		HeadSHA:            cfg.headSHA,
 		GoVersion:          runtime.Version(),
 		Hardware:           runtime.GOARCH + "/" + runtime.GOOS,
+		GOMAXPROCS:         goMaxProcs,
+		GoMemoryLimitBytes: goMemoryLimitBytes,
 		Dataset:            m,
 		Partitions:         cfg.partitions,
 		Overlap:            overlap,
@@ -2361,6 +2371,9 @@ func validateResult(r runResult) error {
 	}
 	if !validSHA(r.BaseSHA) || !validSHA(r.HeadSHA) {
 		return errors.New("result provenance must contain exact 40-hex base/head SHAs")
+	}
+	if r.GOMAXPROCS < 1 || r.GoMemoryLimitBytes < 1 {
+		return errors.New("result must record positive Go runtime concurrency and memory limits")
 	}
 	if len(r.Dataset.Checksum) != 64 {
 		return errors.New("result dataset must contain an exact SHA-256 checksum")
@@ -2454,7 +2467,7 @@ func writeArtifacts(out string, r runResult) error {
 		title = "TreeDB vector partition M6 local-service simulation"
 		disclaimer = "Local in-process M5 contract simulation only; not production network, Raft read-proof, remote-service, or M8 acceptance evidence."
 	}
-	md := fmt.Sprintf("# %s\n\n**%s**\n\n- fixture: `%s` (%s)\n- seed: %d\n- modeled benchmark-owned peak: %d/%d bytes\n- memory budget scope: %s\n- probes: %d/%d\n- overlap budget: %.6g\n- exact representative routing: %s\n- approximate representative routing: %s\n- TreeDB partition-local HNSW: %s\n- end-to-end simulation: %s\n- M6 coordinator local-service simulation: %s\n- timed boundary: %s\n", title, disclaimer, r.Dataset.Fixture, r.Dataset.Checksum, r.Seed, r.ModeledPeakBytes, r.MemoryBudgetBytes, r.MemoryBudgetScope, r.Probes, r.Partitions, r.Overlap, exactRouterSummary, approximateRouterSummary, hnswSummary, stageSummary, coordinatorSummary, r.TimedBoundary)
+	md := fmt.Sprintf("# %s\n\n**%s**\n\n- fixture: `%s` (%s)\n- seed: %d\n- GOMAXPROCS: %d\n- Go memory limit: %d bytes\n- source HNSW degree: %d\n- modeled benchmark-owned peak: %d/%d bytes\n- memory budget scope: %s\n- probes: %d/%d\n- overlap budget: %.6g\n- exact representative routing: %s\n- approximate representative routing: %s\n- TreeDB partition-local HNSW: %s\n- end-to-end simulation: %s\n- M6 coordinator local-service simulation: %s\n- timed boundary: %s\n", title, disclaimer, r.Dataset.Fixture, r.Dataset.Checksum, r.Seed, r.GOMAXPROCS, r.GoMemoryLimitBytes, r.Metrics.SourceHNSWDegree, r.ModeledPeakBytes, r.MemoryBudgetBytes, r.MemoryBudgetScope, r.Probes, r.Partitions, r.Overlap, exactRouterSummary, approximateRouterSummary, hnswSummary, stageSummary, coordinatorSummary, r.TimedBoundary)
 	return os.WriteFile(filepath.Join(out, name+".md"), []byte(md), 0644)
 }
 func artifactBasename(r runResult) string {

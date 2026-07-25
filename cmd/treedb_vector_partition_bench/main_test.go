@@ -431,6 +431,8 @@ func TestM6CoordinatorStageUsesRealM4M6AndLabelsLocalSimulation(t *testing.T) {
 		evidence.Counters.Candidates != 128 ||
 		result.Metrics.MeasurementStatus != m6CoordinatorMeasurementV1 ||
 		result.Metrics.SourceHNSWDegree != 4 ||
+		result.GOMAXPROCS < 1 ||
+		result.GoMemoryLimitBytes < 1 ||
 		result.Metrics.ShardP50Nanos <= 0 ||
 		result.Metrics.P50Nanos <= 0 {
 		t.Fatalf("M6 result=%+v evidence=%+v", result, evidence)
@@ -454,7 +456,10 @@ func TestM6CoordinatorStageUsesRealM4M6AndLabelsLocalSimulation(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !bytes.Contains(markdown, []byte("M6 local-service simulation")) ||
-			!bytes.Contains(markdown, []byte("not production network, Raft read-proof, remote-service, or M8 acceptance evidence")) {
+			!bytes.Contains(markdown, []byte("not production network, Raft read-proof, remote-service, or M8 acceptance evidence")) ||
+			!bytes.Contains(markdown, []byte("GOMAXPROCS:")) ||
+			!bytes.Contains(markdown, []byte("Go memory limit:")) ||
+			!bytes.Contains(markdown, []byte("source HNSW degree: 4")) {
 			t.Fatalf("M6 Markdown has incorrect evidence boundary:\n%s", markdown)
 		}
 	}
@@ -1735,17 +1740,19 @@ func TestHNSWEvidenceJSONIncludesExplicitZeroCounters(t *testing.T) {
 
 func TestValidateResultRequiresExactSHASeedAndMemoryEvidence(t *testing.T) {
 	r := runResult{
-		SchemaVersion:     schemaVersion,
-		ResultKind:        "simulation_only",
-		BaseSHA:           strings.Repeat("a", 40),
-		HeadSHA:           strings.Repeat("b", 40),
-		Dataset:           fixtureManifest{Seed: 1, Checksum: strings.Repeat("c", 64)},
-		Seed:              1,
-		MemoryBudgetBytes: 1024,
-		ModeledPeakBytes:  512,
-		MemoryBudgetScope: memoryBudgetScope,
-		Stages:            []stageResult{{Name: "exact_global_top_k", Method: "test", Enabled: true, Available: true}},
-		Metrics:           metricsV1{MeasurementStatus: "simulation_not_measured"},
+		SchemaVersion:      schemaVersion,
+		ResultKind:         "simulation_only",
+		BaseSHA:            strings.Repeat("a", 40),
+		HeadSHA:            strings.Repeat("b", 40),
+		Dataset:            fixtureManifest{Seed: 1, Checksum: strings.Repeat("c", 64)},
+		Seed:               1,
+		MemoryBudgetBytes:  1024,
+		ModeledPeakBytes:   512,
+		MemoryBudgetScope:  memoryBudgetScope,
+		GOMAXPROCS:         1,
+		GoMemoryLimitBytes: 1,
+		Stages:             []stageResult{{Name: "exact_global_top_k", Method: "test", Enabled: true, Available: true}},
+		Metrics:            metricsV1{MeasurementStatus: "simulation_not_measured"},
 	}
 	if err := validateResult(r); err != nil {
 		t.Fatalf("valid result rejected: %v", err)
@@ -1756,6 +1763,8 @@ func TestValidateResultRequiresExactSHASeedAndMemoryEvidence(t *testing.T) {
 		func(result *runResult) { result.Dataset.Checksum = "not-a-checksum" },
 		func(result *runResult) { result.Seed++ },
 		func(result *runResult) { result.ModeledPeakBytes = result.MemoryBudgetBytes + 1 },
+		func(result *runResult) { result.GOMAXPROCS = 0 },
+		func(result *runResult) { result.GoMemoryLimitBytes = 0 },
 	} {
 		bad := r
 		mutate(&bad)

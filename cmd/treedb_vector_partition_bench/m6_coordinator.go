@@ -604,10 +604,12 @@ func simulateM6CoordinatorV1(cfg config, m fixtureManifest, vectors, queries [][
 		RecallAt100: evidence.RecallAt100, BytesPerOp: evidence.BytesPerOp,
 		AllocsPerOp: evidence.AllocsPerOp,
 	}
+	goMaxProcs, goMemoryLimitBytes := benchmarkRuntimeLimits()
 	return runResult{
 		SchemaVersion: schemaVersion, ResultKind: m6CoordinatorResultKindV1,
 		ProductionEvidence: false, Command: cfg.command, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA,
 		GoVersion: runtime.Version(), Hardware: runtime.GOARCH + "/" + runtime.GOOS,
+		GOMAXPROCS: goMaxProcs, GoMemoryLimitBytes: goMemoryLimitBytes,
 		Dataset: m, Partitions: cfg.partitions, Overlap: overlap, Probes: probes, TopK: cfg.topK,
 		RecallTarget: cfg.recallTarget, Seed: cfg.seed,
 		MemoryBudgetBytes: cfg.maxBytes, ModeledPeakBytes: cfg.memory.ModeledPeakBytes,
