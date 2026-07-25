@@ -727,6 +727,15 @@ func (c *VectorPartitionCoordinatorV1) plan(request VectorPartitionCoordinatorRe
 				len(target) > c.limits.MaxIdentityBytes {
 				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 			}
+			longestTarget := target
+			for _, member := range group.Members {
+				if len(member) > c.limits.MaxIdentityBytes {
+					return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
+				}
+				if len(member) > len(longestTarget) {
+					longestTarget = member
+				}
+			}
 			shardRequest := VectorPartitionShardSearchRequestV1{
 				Version:   VectorPartitionShardSearchVersionV1,
 				RequestID: requestID, CancellationID: request.CancellationID,
@@ -740,7 +749,9 @@ func (c *VectorPartitionCoordinatorV1) plan(request VectorPartitionCoordinatorRe
 				Consistency: request.Consistency, StatsMode: VectorPartitionShardSearchStatsBasicV1,
 				TopK: request.TopK, EfSearch: request.EfSearch, DeadlineUnixNano: request.DeadlineUnixNano,
 			}
-			requestBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(shardRequest)
+			budgetRequest := shardRequest
+			budgetRequest.TargetNodeID = longestTarget
+			requestBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(budgetRequest)
 			if err != nil || requestBytes > shardLimits.MaxRequestBytes {
 				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 			}
@@ -749,7 +760,9 @@ func (c *VectorPartitionCoordinatorV1) plan(request VectorPartitionCoordinatorRe
 			if !ok || totalRequestBytes > request.RequestBytesLimit {
 				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 			}
-			responseReservation, err := vectorPartitionCoordinatorShardResponseReservationV1(len(ids), request.TopK, c.limits.MaxStableIDBytes)
+			responseReservation, err := vectorPartitionCoordinatorShardResponseReservationV1(
+				len(ids), request.TopK, shardLimits.MaxStableIDBytes,
+			)
 			if err != nil || responseReservation > shardLimits.MaxResponseBytes {
 				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 			}

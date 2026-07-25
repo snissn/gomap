@@ -47,6 +47,8 @@ func TestDocsVectorPartitionCoordinatorM6Contract(t *testing.T) {
 				"MaxWallClock",
 				"one retry and one redirect",
 				"approximate native HNSW traversal",
+				"longest valid group",
+				"M5's downstream stable-ID ceiling",
 				"total candidate bytes",
 				"bytewise lexicographically smaller stable ID",
 				"synthetic read proofs",

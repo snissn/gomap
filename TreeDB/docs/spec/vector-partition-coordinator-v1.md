@@ -195,13 +195,17 @@ and the wall-clock limit cannot be below 1 ms.
 Planning reserves resources before dispatch:
 
 - logical request bytes use an overflow-checked fixed envelope plus query,
-  partition, and identity bytes; every M5 request must also fit M5's 64 KiB
-  request ceiling;
+  partition, and identity bytes. Each task reserves its longest valid group
+  member as the target identity, so a bounded not-leader redirect cannot grow
+  past the task or aggregate request budget. Every M5 request must also fit
+  M5's 64 KiB request ceiling;
 - candidate baseline is
   `selected_partitions * ef_search * 64`, and the caller's candidate budget is
   divided deterministically by partition across chunks;
-- response reservation uses the maximum stable-ID size for every
-  `partition * top_k` result before sizing response slices;
+- response reservation uses M5's downstream stable-ID ceiling for every
+  `partition * top_k` result before sizing response slices. This remains true
+  when the coordinator's own accepted stable-ID cap is lower because M5 V1
+  preflight has no per-request stable-ID cap;
 - merge capacity requires `partition_probes * top_k` to fit both the request
   and coordinator merge limits.
 

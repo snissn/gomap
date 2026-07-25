@@ -232,6 +232,23 @@ func testVectorPartitionCoordinatorRequestV1(partitions int) VectorPartitionCoor
 	}
 }
 
+func testVectorPartitionCoordinatorUseM5PreflightV1(
+	coordinator *VectorPartitionCoordinatorV1,
+	dispatcher *testVectorPartitionCoordinatorDispatcherV1,
+) {
+	service := &VectorPartitionShardSearchServiceV1{
+		limits: DefaultVectorPartitionShardSearchLimitsV1(),
+	}
+	coordinator.dispatcher = VectorPartitionShardSearchDispatcherFuncV1(
+		func(ctx context.Context, request VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+			if err := service.validateRequest(request); err != nil {
+				return VectorPartitionShardSearchResponseV1{}, err
+			}
+			return dispatcher.DispatchVectorPartitionShardSearchV1(ctx, request)
+		},
+	)
+}
+
 func TestVectorPartitionCoordinatorCoalescesChunksDedupesAndMergesV1(t *testing.T) {
 	const partitions = 33
 	owners := make([]raftcluster.GroupID, partitions)
@@ -434,6 +451,60 @@ func TestVectorPartitionCoordinatorNotLeaderRedirectIsBoundedV1(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionCoordinatorRedirectReservesLongestGroupMemberV1(t *testing.T) {
+	const (
+		shortNode = raftcluster.NodeID("n")
+		longNode  = raftcluster.NodeID("node-with-a-substantially-longer-identity")
+	)
+	coordinator, _, dispatcher := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{
+			ID: "group-a", Members: []raftcluster.NodeID{shortNode, longNode}, LeaderHint: shortNode,
+		}},
+		[]raftcluster.GroupID{"group-a"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "a", Score: 1}}},
+		VectorPartitionCoordinatorLimitsV1{},
+	)
+	testVectorPartitionCoordinatorUseM5PreflightV1(coordinator, dispatcher)
+	dispatcher.notLeaderOnce["group-a"] = longNode
+
+	response, err := coordinator.Search(context.Background(), testVectorPartitionCoordinatorRequestV1(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dispatcher.calls) != 2 ||
+		dispatcher.calls[0].TargetNodeID != shortNode ||
+		dispatcher.calls[1].TargetNodeID != longNode {
+		t.Fatalf("redirect calls=%+v", dispatcher.calls)
+	}
+	wantBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(dispatcher.calls[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dispatcher.calls[0].RequestBytesLimit != wantBytes ||
+		dispatcher.calls[1].RequestBytesLimit != wantBytes ||
+		response.Counters.RequestBytes != wantBytes {
+		t.Fatalf("request limits=(%d,%d) counter=%d want longest-target reservation=%d",
+			dispatcher.calls[0].RequestBytesLimit,
+			dispatcher.calls[1].RequestBytesLimit,
+			response.Counters.RequestBytes,
+			wantBytes,
+		)
+	}
+	dispatcher.mu.Lock()
+	dispatcher.calls = nil
+	dispatcher.mu.Unlock()
+	underBudget := testVectorPartitionCoordinatorRequestV1(1)
+	underBudget.RequestBytesLimit = wantBytes - 1
+	underBudgetResponse, err := coordinator.Search(context.Background(), underBudget)
+	if !errors.Is(err, ErrVectorPartitionCoordinatorBudgetExceeded) ||
+		!vectorPartitionCoordinatorResponseIsZeroTestV1(underBudgetResponse) {
+		t.Fatalf("under-budget response=%+v err=%v", underBudgetResponse, err)
+	}
+	if len(dispatcher.calls) != 0 {
+		t.Fatalf("under-budget redirect reservation dispatched calls=%+v", dispatcher.calls)
+	}
+}
+
 func TestVectorPartitionCoordinatorTerminalFailureCancelsAndReturnsNoPartialV1(t *testing.T) {
 	block := make(chan struct{})
 	blocked := make(chan raftcluster.GroupID, 1)
@@ -539,6 +610,48 @@ func TestVectorPartitionCoordinatorRejectsCorruptAndOverBudgetResponsesV1(t *tes
 				t.Fatalf("response=%+v err=%v", response, err)
 			}
 		})
+	}
+}
+
+func TestVectorPartitionCoordinatorLowerStableIDCapUsesM5ResponseReservationV1(t *testing.T) {
+	coordinator, _, dispatcher := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "short", Score: 1}}},
+		VectorPartitionCoordinatorLimitsV1{MaxStableIDBytes: 8},
+	)
+	testVectorPartitionCoordinatorUseM5PreflightV1(coordinator, dispatcher)
+
+	request := testVectorPartitionCoordinatorRequestV1(1)
+	shardLimits := DefaultVectorPartitionShardSearchLimitsV1()
+	wantReservation, err := vectorPartitionCoordinatorShardResponseReservationV1(
+		1, request.TopK, shardLimits.MaxStableIDBytes,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.ResponseBytesLimit = wantReservation
+	response, err := coordinator.Search(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Neighbors) != 1 || response.Neighbors[0].ID != "short" ||
+		len(dispatcher.calls) != 1 {
+		t.Fatalf("response=%+v calls=%+v", response, dispatcher.calls)
+	}
+	coordinatorOnlyReservation, err := vectorPartitionCoordinatorShardResponseReservationV1(
+		1, request.TopK, 8,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dispatcher.calls[0].ResponseBytesLimit != wantReservation ||
+		wantReservation <= coordinatorOnlyReservation {
+		t.Fatalf("response reservation=%d want M5=%d coordinator-only=%d",
+			dispatcher.calls[0].ResponseBytesLimit,
+			wantReservation,
+			coordinatorOnlyReservation,
+		)
 	}
 }
 
