@@ -134,6 +134,9 @@ func (p *catalogMetaJSONPreflightV1) snapshot() error {
 		case "record", "last_command":
 			_, _, err := p.nullableString(maxCatalogMetaSnapshotFieldBytesV1, key)
 			return err
+		case "vector_partition_lifecycle":
+			_, _, err := p.nullableString(MaxCatalogMetaSnapshotBytesV1, key)
+			return err
 		default:
 			return p.unknownField(catalogMetaPreflightSnapshotV1, key)
 		}

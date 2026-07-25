@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 )
 
 const collectionVectorPartitionMaxAuthorityRefreshesV1 = 3
@@ -18,7 +19,7 @@ const collectionVectorPartitionMaxAuthorityRefreshesV1 = 3
 type VectorPartitionReplicatedLifecycleAuthorityV1 interface {
 	ValidateVectorPartitionGenerationSearchV1(
 		context.Context,
-		string,
+		raftplacement.CollectionRefV1,
 		string,
 		uint64,
 		string,
@@ -41,8 +42,9 @@ type VectorPartitionReplicatedLifecycleAuthorityV1 interface {
 // permanent for this source instance, so a stale service cannot reload the old
 // generation after the cutover.
 type CollectionVectorPartitionGenerationSourceV1 struct {
-	Collection          *collections.Collection
-	replicatedLifecycle VectorPartitionReplicatedLifecycleAuthorityV1
+	Collection           *collections.Collection
+	replicatedCollection raftplacement.CollectionRefV1
+	replicatedLifecycle  VectorPartitionReplicatedLifecycleAuthorityV1
 
 	mu          sync.Mutex
 	entries     map[collectionVectorPartitionGenerationKeyV1]*collectionVectorPartitionGenerationCacheV1
@@ -80,14 +82,16 @@ func NewCollectionVectorPartitionGenerationSourceV1(collection *collections.Coll
 // standalone LocalActivate pointer.
 func NewCollectionVectorPartitionGenerationSourceForReplicatedLifecycleV1(
 	collection *collections.Collection,
+	collectionRef raftplacement.CollectionRefV1,
 	authority VectorPartitionReplicatedLifecycleAuthorityV1,
 ) (*CollectionVectorPartitionGenerationSourceV1, error) {
-	if collection == nil || authority == nil {
+	if collection == nil || authority == nil || collectionRef.Database == "" || collectionRef.Catalog == "" || collectionRef.Collection == "" {
 		return nil, ErrVectorPartitionShardSearchAssetsUnavailable
 	}
 	return &CollectionVectorPartitionGenerationSourceV1{
-		Collection:          collection,
-		replicatedLifecycle: authority,
+		Collection:           collection,
+		replicatedCollection: collectionRef,
+		replicatedLifecycle:  authority,
 	}, nil
 }
 
@@ -298,7 +302,7 @@ func (s *CollectionVectorPartitionGenerationSourceV1) validateActive(ctx context
 	if s.replicatedLifecycle != nil {
 		return s.replicatedLifecycle.ValidateVectorPartitionGenerationSearchV1(
 			ctx,
-			entry.manifest.Collection,
+			s.replicatedCollection,
 			entry.manifest.IndexName,
 			entry.manifest.Generation,
 			entry.manifest.IndexDefinitionDigest,
@@ -316,9 +320,12 @@ func (s *CollectionVectorPartitionGenerationSourceV1) validateReplicatedLifecycl
 	if s.replicatedLifecycle == nil {
 		return nil
 	}
+	if manifest.Collection != s.replicatedCollection.Collection {
+		return ErrVectorPartitionShardSearchGenerationMismatch
+	}
 	return s.replicatedLifecycle.ValidateVectorPartitionGenerationSearchV1(
 		ctx,
-		manifest.Collection,
+		s.replicatedCollection,
 		key.index,
 		key.generation,
 		manifest.IndexDefinitionDigest,

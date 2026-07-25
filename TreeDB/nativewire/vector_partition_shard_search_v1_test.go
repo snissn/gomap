@@ -298,7 +298,7 @@ type recordingVectorPartitionReplicatedLifecycleAuthorityV1 struct {
 
 func (a *recordingVectorPartitionReplicatedLifecycleAuthorityV1) ValidateVectorPartitionGenerationSearchV1(
 	_ context.Context,
-	collection string,
+	collection raftplacement.CollectionRefV1,
 	index string,
 	generation uint64,
 	indexDigest string,
@@ -331,9 +331,10 @@ func TestCollectionVectorPartitionGenerationCacheUsesReplicatedAuthorityOnWarmHi
 		opening:   make(map[uint32]*collectionVectorPartitionSearchLoadV1),
 	}
 	source := &CollectionVectorPartitionGenerationSourceV1{
-		Collection:          new(collections.Collection),
-		replicatedLifecycle: authority,
-		entries:             map[collectionVectorPartitionGenerationKeyV1]*collectionVectorPartitionGenerationCacheV1{key: entry},
+		Collection:           new(collections.Collection),
+		replicatedCollection: raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "users"},
+		replicatedLifecycle:  authority,
+		entries:              map[collectionVectorPartitionGenerationKeyV1]*collectionVectorPartitionGenerationCacheV1{key: entry},
 	}
 
 	if _, err := source.PinVectorPartitionGenerationV1(t.Context(), key.index, key.generation); !errors.Is(err, ErrVectorPartitionShardSearchGenerationMismatch) {
@@ -342,7 +343,7 @@ func TestCollectionVectorPartitionGenerationCacheUsesReplicatedAuthorityOnWarmHi
 	if authority.calls != 1 {
 		t.Fatalf("replicated authority calls=%d want 1", authority.calls)
 	}
-	want := []any{"users", "embedding", uint64(7), strings.Repeat("a", 64), uint64(3), uint64(4), uint64(5), uint64(6), strings.Repeat("b", 64)}
+	want := []any{raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "users"}, "embedding", uint64(7), strings.Repeat("a", 64), uint64(3), uint64(4), uint64(5), uint64(6), strings.Repeat("b", 64)}
 	if !reflect.DeepEqual(authority.args, want) {
 		t.Fatalf("replicated authority args=%#v want %#v", authority.args, want)
 	}

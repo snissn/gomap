@@ -22,7 +22,7 @@ import (
 const (
 	CatalogMetaFormatV1                    uint16 = 1
 	MaxCatalogMetaCommandBytesV1                  = 1 << 20
-	MaxCatalogMetaSnapshotBytesV1                 = 3 << 20
+	MaxCatalogMetaSnapshotBytesV1                 = 8 << 20
 	MaxCatalogMetaStringBytesV1                   = 128
 	MaxCatalogMetaDigestBytesV1                   = sha256.Size * 2
 	MaxCatalogMetaNestingDepthV1                  = 8
@@ -87,10 +87,11 @@ type CatalogMetaStatusV1 struct {
 // canonical record rather than a local cache serialization, so rejoin and
 // backup/restore share the same validation path as Raft replay.
 type CatalogMetaSnapshotV1 struct {
-	Format       uint16 `json:"format"`
-	AppliedIndex uint64 `json:"applied_index"`
-	Record       []byte `json:"record"`
-	LastCommand  []byte `json:"last_command"`
+	Format                   uint16 `json:"format"`
+	AppliedIndex             uint64 `json:"applied_index"`
+	Record                   []byte `json:"record"`
+	LastCommand              []byte `json:"last_command"`
+	VectorPartitionLifecycle []byte `json:"vector_partition_lifecycle,omitempty"`
 }
 
 // ApplyCatalogMetaCommittedV1, ExportCatalogMetaSnapshotBytesV1, and
@@ -189,13 +190,17 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotBytesV1(raw []byte) e
 // only capability-bearing Raft Apply or Restore callbacks may publish a
 // generation. Reads take an RLock and do not contact the meta leader.
 type CatalogMetaAuthorityV1 struct {
-	mu          sync.RWMutex
-	record      CatalogMetaRecordV1
-	resolved    ResolvedCatalogV1
-	recordBytes []byte
-	command     []byte
-	applied     uint64
-	refusal     string
+	mu             sync.RWMutex
+	record         CatalogMetaRecordV1
+	resolved       ResolvedCatalogV1
+	recordBytes    []byte
+	command        []byte
+	applied        uint64
+	refusal        string
+	lifecycleBytes uint64
+	lifecycle      map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1
+	active         map[VectorPartitionLifecycleIndexIdentityV1]VectorPartitionLifecycleIdentityV1
+	activeNames    map[vectorPartitionLifecycleServingKeyV1]VectorPartitionLifecycleIdentityV1
 }
 
 func NewCatalogMetaAuthorityV1() *CatalogMetaAuthorityV1 { return &CatalogMetaAuthorityV1{} }
@@ -279,6 +284,9 @@ func (a *CatalogMetaAuthorityV1) applyCommittedCatalogMetaV1(raw []byte, applied
 	if a == nil {
 		return CatalogMetaStatusV1{}, ErrCatalogMetaUnavailable
 	}
+	if vectorPartitionLifecycleCommandBytesV1(raw) {
+		return a.applyCommittedVectorPartitionLifecycleV1(raw, appliedIndex)
+	}
 	command, err := DecodeCatalogMetaCommandV1(raw)
 	if err != nil {
 		return CatalogMetaStatusV1{}, err
@@ -311,6 +319,9 @@ func (a *CatalogMetaAuthorityV1) applyCommittedCatalogMetaV1(raw []byte, applied
 		if err := validateCatalogMetaTopologyTransitionV1(a.resolved, resolved); err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
+		if err := a.validateVectorPartitionLifecycleCatalogTransitionLockedV1(); err != nil {
+			return CatalogMetaStatusV1{}, err
+		}
 	}
 	a.record = command.Record
 	a.resolved = resolved
@@ -318,6 +329,7 @@ func (a *CatalogMetaAuthorityV1) applyCommittedCatalogMetaV1(raw []byte, applied
 	a.command = bytes.Clone(raw)
 	a.applied = appliedIndex
 	a.refusal = ""
+	a.clearVectorPartitionLifecycleLockedV1()
 	return a.statusLocked(), nil
 }
 
@@ -486,7 +498,11 @@ func (a *CatalogMetaAuthorityV1) ExportCatalogMetaSnapshotV1() (CatalogMetaSnaps
 	if a.record.Epoch == 0 {
 		return CatalogMetaSnapshotV1{}, ErrCatalogMetaUnavailable
 	}
-	return CatalogMetaSnapshotV1{Format: CatalogMetaFormatV1, AppliedIndex: a.applied, Record: bytes.Clone(a.recordBytes), LastCommand: bytes.Clone(a.command)}, nil
+	lifecycle, err := encodeVectorPartitionLifecycleSnapshotV1(a.lifecycle)
+	if err != nil {
+		return CatalogMetaSnapshotV1{}, err
+	}
+	return CatalogMetaSnapshotV1{Format: CatalogMetaFormatV1, AppliedIndex: a.applied, Record: bytes.Clone(a.recordBytes), LastCommand: bytes.Clone(a.command), VectorPartitionLifecycle: lifecycle}, nil
 }
 
 func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMetaSnapshotV1) (CatalogMetaStatusV1, error) {
@@ -521,6 +537,10 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 		!bytes.Equal(snapshot.Record, commandRecord) {
 		return CatalogMetaStatusV1{}, errors.Join(ErrInvalidCatalogMeta, ErrCatalogMetaConflict, fmt.Errorf("snapshot last command does not exactly install its record"))
 	}
+	lifecycle, active, activeNames, err := decodeVectorPartitionLifecycleSnapshotV1(snapshot.VectorPartitionLifecycle, record)
+	if err != nil {
+		return CatalogMetaStatusV1{}, err
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.record.Epoch > record.Epoch {
@@ -530,10 +550,32 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 		if a.record.Digest != record.Digest || !bytes.Equal(a.recordBytes, snapshot.Record) {
 			return CatalogMetaStatusV1{}, ErrCatalogMetaConflict
 		}
+		if snapshot.AppliedIndex < a.applied {
+			return CatalogMetaStatusV1{}, ErrCatalogMetaStaleEpoch
+		}
+		if snapshot.AppliedIndex == a.applied {
+			currentLifecycle, err := encodeVectorPartitionLifecycleSnapshotV1(a.lifecycle)
+			if err != nil {
+				return CatalogMetaStatusV1{}, err
+			}
+			if !bytes.Equal(currentLifecycle, snapshot.VectorPartitionLifecycle) {
+				return CatalogMetaStatusV1{}, ErrCatalogMetaConflict
+			}
+			return a.statusLocked(), nil
+		}
+		a.lifecycle = lifecycle
+		a.active = active
+		a.activeNames = activeNames
+		a.lifecycleBytes = vectorPartitionLifecycleRetainedBytesV1(lifecycle)
+		a.applied = snapshot.AppliedIndex
+		a.refusal = ""
 		return a.statusLocked(), nil
 	}
 	if a.record.Epoch != 0 {
 		if err := validateCatalogMetaTopologyTransitionV1(a.resolved, resolved); err != nil {
+			return CatalogMetaStatusV1{}, err
+		}
+		if err := a.validateVectorPartitionLifecycleCatalogTransitionLockedV1(); err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
 	}
@@ -543,6 +585,10 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 	a.command = bytes.Clone(snapshot.LastCommand)
 	a.applied = snapshot.AppliedIndex
 	a.refusal = ""
+	a.lifecycle = lifecycle
+	a.active = active
+	a.activeNames = activeNames
+	a.lifecycleBytes = vectorPartitionLifecycleRetainedBytesV1(lifecycle)
 	return a.statusLocked(), nil
 }
 
@@ -552,7 +598,7 @@ func (a *CatalogMetaAuthorityV1) statusLocked() CatalogMetaStatusV1 {
 		Digest:            a.record.Digest,
 		AppliedIndex:      a.applied,
 		Features:          cloneFeatureSet(a.record.Catalog.Features),
-		RetainedWireBytes: uint64(len(a.recordBytes) + len(a.command)),
+		RetainedWireBytes: uint64(len(a.recordBytes)+len(a.command)) + a.lifecycleBytes,
 		Refusal:           a.refusal,
 	}
 }

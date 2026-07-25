@@ -12,11 +12,11 @@ import (
 	hraft "github.com/hashicorp/raft"
 )
 
-// Catalog snapshots contain two independently command-bounded byte fields
-// encoded as base64 in a JSON envelope. Keep this transport boundary aligned
-// with raftplacement.MaxCatalogMetaSnapshotBytesV1 without importing the
-// schema package back into raftcluster.
-const catalogMetaRaftSnapshotMaxBytesV1 = 3 << 20
+// Catalog snapshots contain independently bounded catalog command/record and
+// vector-lifecycle byte fields encoded as base64 in a JSON envelope. Keep this
+// transport boundary aligned with raftplacement.MaxCatalogMetaSnapshotBytesV1
+// without importing the schema package back into raftcluster.
+const catalogMetaRaftSnapshotMaxBytesV1 = 8 << 20
 
 // CatalogMetaCommittedStateV1 is implemented by raftplacement's authority.
 // The dependency inversion keeps raftcluster independent of catalog schema
