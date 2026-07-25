@@ -64,7 +64,7 @@ stage attribution, p50/p95/p99/QPS harness, request/response byte accounting,
 candidate/edge counters, mapped/heap/open accounting, and normal/race tests.
 
 The required large-scale acceptance run was completed at clean final production
-head `07ef127eb819ff66f0e36c72db6c03eb7235b633`. It used the declared
+head `bd04ed74cdb788c7bd364e74a014cb94503137ba`. It used the declared
 1,000,000-vector, 16-dimensional, 16-partition persistent native HNSW
 generation, `top_k=10`, `ef_search=64`, and a three-node in-process
 HashiCorp-Raft group with a live leader, committed command, and production
@@ -72,23 +72,27 @@ read-index evidence.
 
 | Measurement | Accepted result |
 | --- | ---: |
-| cold service mean / p50 / p95 / p99 | 4.5314 s / 4.5286 s / 4.5520 s / 4.5520 s |
-| warm service mean / p50 / p95 / p99 | 54.327 us / 40.441 us / 107.863 us / 258.105 us |
-| warm service QPS | 18,406.98 |
-| mean read-index/apply | 17.715 us |
-| direct partition-local HNSW mean | 42.751 us |
-| warm service-only overhead | 2.841 us |
-| overhead ratio / gate | 6.6454% / **PASS** (limit 10%) |
+| cold service mean / p50 / p95 / p99 | 4.4316 s / 4.4045 s / 4.5047 s / 4.5047 s |
+| warm service mean / p50 / p95 / p99 | 49.299 us / 39.388 us / 88.163 us / 188.688 us |
+| warm service QPS | 20,284.49 |
+| mean read-index/apply | 17.848 us |
+| direct partition-local HNSW mean | 32.944 us |
+| warm service-only overhead | 2.812 us |
+| overhead ratio / gate | 8.5366% / **PASS** (limit 10%) |
 
 The retained JSON report is
-`/mnt/fast4tb/tmp/m5_artifacts_retry7_Pjdql5/vector_partition_m5_3200dafc3b75_294e61b5009b_07ef127eb.json`
+`/mnt/fast4tb/tmp/m5_artifacts_retry7_Pjdql5/vector_partition_m5_3200dafc3b75_294e61b5009b_bd04ed74c.json`
 with SHA-256
-`47d0283abf89a7c58afb43f751f26a18881f0cf456096e6d31999646dec88bb1`.
+`795b52288a5f9efbd112fde640f2b71bb10d73f132aa172cab69bd52a3580f21`.
 This successor retains the corrected stage attribution and makes large
 retained-manifest checkpoint re-encoding cancellable during cloning, sorting,
 digest construction, validation, and binary emission. The stable JSON digest
-and binary manifest formats remain unchanged. Earlier `1fead9fed...` and
-`3e0ae91c9...` artifacts are historical and are not used for acceptance.
+and binary manifest formats remain unchanged. It also guards the hand-written
+stable JSON digest against manifest-struct drift, fails closed if
+caller-owned membership input changes between count and materialization, and
+checks cancellation before allocating/copying response neighbors. Earlier
+`1fead9fed...`, `3e0ae91c9...`, and `07ef127eb...` artifacts are historical
+and are not used for acceptance.
 Only the first cold sample is OS-page-cache cold; every cold sample reopens the
 generation source and mapped search pack. The input M3 construction run
 completed successfully, but its first 97 seconds were externally contaminated
