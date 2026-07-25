@@ -18,7 +18,7 @@ import (
 type RaftClusterSubmitter struct {
 	Bridge                   raftcluster.CommandSubmitterV1
 	Collections              *collections.CollectionManager
-	VectorPartitionAdmission VectorPartitionMutationAdmissionProviderV1
+	VectorPartitionAdmission VectorPartitionMutationLifecycleProviderV1
 }
 
 // NewRaftClusterSubmitterWithVectorPartitionAdmissionV1 is the production M7
@@ -29,8 +29,12 @@ func NewRaftClusterSubmitterWithVectorPartitionAdmissionV1(bridge raftcluster.Co
 	if admission == nil {
 		return nil, errors.New("nativewire: vector partition admission provider is required")
 	}
+	lifecycle, ok := admission.(VectorPartitionMutationLifecycleProviderV1)
+	if !ok {
+		return nil, errors.New("nativewire: vector partition mutation confirmation provider is required")
+	}
 	submitter := NewRaftClusterSubmitter(bridge, managers...)
-	submitter.VectorPartitionAdmission = admission
+	submitter.VectorPartitionAdmission = lifecycle
 	return submitter, nil
 }
 
@@ -49,11 +53,7 @@ func (s *RaftClusterSubmitter) ConfirmVectorPartitionMutationV1(ctx context.Cont
 	if s == nil || s.VectorPartitionAdmission == nil {
 		return protocolError(iwire.ErrReadOnly, "vector partition lifecycle admission is not configured")
 	}
-	confirmer, ok := s.VectorPartitionAdmission.(VectorPartitionMutationCommitProviderV1)
-	if !ok {
-		return protocolError(iwire.ErrReadOnly, "vector partition lifecycle mutation confirmation is not configured")
-	}
-	return confirmer.ConfirmVectorPartitionMutationV1(ctx, command, sections)
+	return s.VectorPartitionAdmission.ConfirmVectorPartitionMutationV1(ctx, command, sections)
 }
 
 // RoutedRaftClusterSubmitter composes the concrete single-group Raft bridge

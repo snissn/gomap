@@ -97,6 +97,15 @@ type VectorPartitionMutationCommitProviderV1 interface {
 	ConfirmVectorPartitionMutationV1(context.Context, iwire.CommandID, []iwire.Section) error
 }
 
+// VectorPartitionMutationLifecycleProviderV1 is the complete M7 mutation
+// lifecycle contract. Production wiring must provide both admission and
+// post-commit confirmation so a committed data mutation cannot strand its
+// replicated lifecycle fence in the pending state.
+type VectorPartitionMutationLifecycleProviderV1 interface {
+	VectorPartitionMutationAdmissionProviderV1
+	VectorPartitionMutationCommitProviderV1
+}
+
 // VectorPartitionMutationAdmissionRequiredV1 marks an M7-enabled shared
 // submitter. It prevents a wiring error from degrading an active lifecycle to
 // the legacy optional path: a required submitter without an admission provider

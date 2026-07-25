@@ -726,6 +726,13 @@ func TestClusterSubmitterRequiredVectorAdmissionFailsClosedWhenMisconfiguredV1(t
 	}
 }
 
+func TestNewRaftClusterSubmitterWithVectorPartitionAdmissionRequiresConfirmationV1(t *testing.T) {
+	_, err := NewRaftClusterSubmitterWithVectorPartitionAdmissionV1(nil, &fakeClusterSubmitter{})
+	if err == nil || !strings.Contains(err.Error(), "confirmation provider is required") {
+		t.Fatalf("constructor err=%v want missing confirmation provider", err)
+	}
+}
+
 func TestClusterAdmissionFollowerRejectsNativeMutationsBeforeLocalMutation(t *testing.T) {
 	submitter := &admissionClusterSubmitter{
 		fakeClusterSubmitter: &fakeClusterSubmitter{},
