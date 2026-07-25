@@ -560,6 +560,25 @@ func TestVectorPartitionCoordinatorDeadlineBeforeDispatchV1(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionCoordinatorRejectsStatsNoneBeforeRouterOpenV1(t *testing.T) {
+	coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "a", Score: 1}}},
+		VectorPartitionCoordinatorLimitsV1{},
+	)
+	request := testVectorPartitionCoordinatorRequestV1(1)
+	request.StatsMode = VectorPartitionShardSearchStatsNoneV1
+	response, err := coordinator.Search(context.Background(), request)
+	if !errors.Is(err, ErrVectorPartitionCoordinatorInvalidRequest) ||
+		!vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
+		t.Fatalf("response=%+v err=%v", response, err)
+	}
+	if source.opens != 0 || len(dispatcher.calls) != 0 {
+		t.Fatalf("stats=none opened router or dispatched: opens=%d calls=%d", source.opens, len(dispatcher.calls))
+	}
+}
+
 func TestVectorPartitionCoordinatorPropagatesEffectiveDeadlineV1(t *testing.T) {
 	coordinator, _, dispatcher := testVectorPartitionCoordinatorV1(t,
 		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},

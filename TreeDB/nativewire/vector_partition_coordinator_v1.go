@@ -592,8 +592,7 @@ func (c *VectorPartitionCoordinatorV1) validateRequest(request VectorPartitionCo
 		request.RouterMode != collections.VectorPartitionRouterModeExactV1 &&
 			request.RouterMode != collections.VectorPartitionRouterModeApproxV1 ||
 		request.Consistency != VectorPartitionShardSearchConsistencySnapshotV1 ||
-		request.StatsMode != VectorPartitionShardSearchStatsNoneV1 &&
-			request.StatsMode != VectorPartitionShardSearchStatsBasicV1 {
+		request.StatsMode != VectorPartitionShardSearchStatsBasicV1 {
 		return ErrVectorPartitionCoordinatorInvalidRequest
 	}
 	var norm float64

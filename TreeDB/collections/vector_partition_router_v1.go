@@ -1247,7 +1247,7 @@ func (r *VectorPartitionRouterV1) SearchWithContextV1(ctx context.Context, query
 		}
 		scratch := r.scratch.Get().(*columnVectorGraphNativeSearchScratch)
 		defer r.scratch.Put(scratch)
-		native, stats, err := r.view.searchCosine(query, columnVectorGraphNativeSearchOptions{
+		native, stats, err := r.view.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{
 			TopK: opts.CandidateBudget, EfSearch: opts.CandidateBudget,
 			CandidateLimit: opts.CandidateBudget,
 			// Router search consumes only representative ordinals and scores.

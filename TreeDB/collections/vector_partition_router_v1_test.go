@@ -29,6 +29,94 @@ func TestVectorPartitionRouterContextEntryPointsRejectCanceledWorkV1(t *testing.
 	}
 }
 
+type vectorPartitionRouterDeadlineAfterErrContextV1 struct {
+	context.Context
+	calls         int
+	deadlineAfter int
+}
+
+func (c *vectorPartitionRouterDeadlineAfterErrContextV1) Err() error {
+	c.calls++
+	if c.calls >= c.deadlineAfter {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+func TestVectorPartitionRouterApproxDeadlineInterruptsNativeTraversalV1(t *testing.T) {
+	const rows = 4096
+	input := columnHNSWSearchPackBuildInput{
+		Rows: rows, Dimensions: 1, VectorStride: 4,
+		M: 1, EfConstruction: rows, EfSearch: rows,
+		EntryOrdinal: 0, MaxLayer: 0,
+		BaseIdentity: columnHNSWSearchPackBaseIdentity{
+			ManifestGeneration: 11,
+			ManifestChecksum:   12,
+			SchemaHash:         13,
+		},
+		NormalizedVectors:       make([]float32, rows*4),
+		Levels:                  make([]uint16, rows),
+		AdjacencyLayers:         []columnHNSWSearchPackLayerInput{{Offsets: make([]uint64, rows+1)}},
+		RowRefGenerations:       make([]int64, rows),
+		RowRefPartIDs:           make([]int64, rows),
+		RowRefRowIndexes:        make([]int64, rows),
+		RowRefAppliedCommandLSN: make([]int64, rows),
+		DocumentIDOffsets:       make([]uint64, rows+1),
+		DocumentIDBytes:         bytes.Repeat([]byte{'x'}, rows),
+	}
+	for ordinal := range rows {
+		input.NormalizedVectors[ordinal*4] = 1
+		input.RowRefGenerations[ordinal] = 11
+		input.RowRefPartIDs[ordinal] = 1
+		input.RowRefRowIndexes[ordinal] = int64(ordinal)
+		input.RowRefAppliedCommandLSN[ordinal] = 1
+		input.DocumentIDOffsets[ordinal] = uint64(ordinal)
+	}
+	input.DocumentIDOffsets[rows] = uint64(rows)
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, handle := testColumnHNSWSearchPackPreparedViewFromBytes2314(
+		t, raw, mappedresource.SourceHeapCopy, input.BaseIdentity,
+	)
+	scratch := &columnVectorGraphNativeSearchScratch{}
+	router := &VectorPartitionRouterV1{
+		model: internalrouter.RouterModelV1{
+			Dimensions:      1,
+			Representatives: make([]internalrouter.RouterRepresentativeV1, rows),
+		},
+		view:        view,
+		viewToModel: make([]int, rows),
+	}
+	router.scratch.New = func() any { return scratch }
+
+	// Five polls cover router/search preflight and scratch/query setup. The
+	// ninth poll fires only after the disconnected layer-0 traversal has seeded
+	// multiple representatives, making the deadline point deterministic.
+	ctx := &vectorPartitionRouterDeadlineAfterErrContextV1{
+		Context: context.Background(), deadlineAfter: 9,
+	}
+	result, err := router.SearchWithContextV1(ctx, []float32{1}, VectorPartitionRouterSearchOptionsV1{
+		Mode: VectorPartitionRouterModeApproxV1, CandidateBudget: rows, PartitionProbes: 1,
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("result=%+v err=%v want deadline exceeded", result, err)
+	}
+	if ctx.calls != ctx.deadlineAfter || len(scratch.top) <= 1 || len(scratch.top) >= rows {
+		t.Fatalf("deadline calls=%d partial candidates=%d rows=%d", ctx.calls, len(scratch.top), rows)
+	}
+	if result.Status.FailureReason != context.DeadlineExceeded.Error() {
+		t.Fatalf("failure reason=%q", result.Status.FailureReason)
+	}
+	if err := router.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !handle.Released() || router.Status().ActiveHandles != 0 {
+		t.Fatalf("deadline return retained router resource: released=%v status=%+v", handle.Released(), router.Status())
+	}
+}
+
 func TestVerifyVectorPartitionRouterStableAssetV1StreamsExactRange(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "router-stable-asset-*")
 	if err != nil {

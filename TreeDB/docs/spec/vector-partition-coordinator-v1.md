@@ -87,7 +87,9 @@ Search(context.Context, VectorPartitionCoordinatorRequestV1)
 - exact or approximate M4 router mode, an explicit representative-candidate
   budget, and a partition-probe count;
 - `linearizable_generation_snapshot` consistency;
-- `none` or `basic` stats mode;
+- `basic` stats mode; `none` is rejected because coordinator response
+  validation and budget enforcement require actual candidate/edge and stage
+  counters from every M5 partial;
 - `top_k`, `ef_search`, request/candidate/response byte limits, and a merge
   entry limit;
 - an optional Unix-nanosecond deadline.
@@ -132,8 +134,9 @@ result or generation state after return; only cumulative statistics remain.
 The effective deadline is the earliest of the caller context deadline, the
 request deadline, and `now + MaxWallClock`. The default wall-clock ceiling is
 30 seconds. The effective deadline is propagated to every M5 request.
-Cancellation is checked before work, during router operations, before and
-after dispatch, while validating partials, during dedupe, and periodically
+Both the exact representative scan and approximate native HNSW traversal poll
+that context during search. Cancellation is also checked before work, before
+and after dispatch, while validating partials, during dedupe, and periodically
 during heap merge.
 
 ## Deterministic planning and fanout
