@@ -49,6 +49,8 @@ func TestDocsVectorPartitionCoordinatorM6Contract(t *testing.T) {
 				"approximate native HNSW traversal",
 				"longest valid group",
 				"M5's downstream stable-ID ceiling",
+				"max(membership_rows[p] * 64, conservative_search_scratch_bytes(p), ef_search * 64)",
+				"only the remaining surplus is divided deterministically by membership weight",
 				"applied term may precede the read term",
 				"total candidate bytes",
 				"bytewise lexicographically smaller stable ID",

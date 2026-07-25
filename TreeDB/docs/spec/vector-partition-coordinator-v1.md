@@ -199,9 +199,14 @@ Planning reserves resources before dispatch:
   member as the target identity, so a bounded not-leader redirect cannot grow
   past the task or aggregate request budget. Every M5 request must also fit
   M5's 64 KiB request ceiling;
-- candidate baseline is
-  `selected_partitions * ef_search * 64`, and the caller's candidate budget is
-  divided deterministically by partition across chunks;
+- candidate reservation is computed per selected partition. For partition `p`,
+  the floor is
+  `max(membership_rows[p] * 64, conservative_search_scratch_bytes(p), ef_search * 64)`.
+  The request must cover the overflow-checked sum of those partition floors;
+  only the remaining surplus is divided deterministically by membership weight
+  and then combined across partitions in each M5 chunk. Consequently,
+  `selected_partitions * ef_search * 64` is only the traversal component, not a
+  sufficient general budget formula for exact scans or large partitions;
 - response reservation uses M5's downstream stable-ID ceiling for every
   `partition * top_k` result before sizing response slices. This remains true
   when the coordinator's own accepted stable-ID cap is lower because M5 V1
