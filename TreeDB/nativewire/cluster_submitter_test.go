@@ -72,6 +72,18 @@ func (noAdmissionClusterSubmitter) SubmitCommandEntryV1(context.Context, []byte,
 	panic("unexpected submit")
 }
 
+type lifecycleRequiredNoAdmissionClusterSubmitter struct{}
+
+func (lifecycleRequiredNoAdmissionClusterSubmitter) SubmitCommandEntryV1(context.Context, []byte, ClusterRequestMetadata) (ClusterSubmitResult, error) {
+	panic("unexpected submit")
+}
+func (lifecycleRequiredNoAdmissionClusterSubmitter) ClusterAdmissionStatus(context.Context) (ClusterAdmissionStatus, error) {
+	return ClusterLeaderAdmission(), nil
+}
+func (lifecycleRequiredNoAdmissionClusterSubmitter) RequiresVectorPartitionMutationAdmissionV1(context.Context) (bool, error) {
+	return true, nil
+}
+
 type recordingRaftCommandSubmitter struct {
 	groupID raftcluster.GroupID
 	manager *collections.CollectionManager
@@ -671,6 +683,20 @@ func TestClusterSubmitterVectorPartitionAdmissionRunsBeforeRaftSubmitV1(t *testi
 	}
 	if calls := submitter.snapshot(); len(calls) != 1 {
 		t.Fatalf("successful admission submitted %d Raft entries", len(calls))
+	}
+}
+
+func TestClusterSubmitterRequiredVectorAdmissionFailsClosedWhenMisconfiguredV1(t *testing.T) {
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: lifecycleRequiredNoAdmissionClusterSubmitter{}})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")}, [][]byte{[]byte(`{"embedding":[1,2]}`)}, AckVisible)
+	if err == nil {
+		t.Fatal("misconfigured M7 admission unexpectedly submitted mutation")
 	}
 }
 

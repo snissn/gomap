@@ -323,6 +323,22 @@ func TestVectorPartitionCoordinatorUsesReplicatedLifecycleAdmissionV1(t *testing
 	}
 }
 
+func TestVectorPartitionCoordinatorRequiresReplicatedLifecycleV1(t *testing.T) {
+	_, source, dispatcher := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"}, map[uint32][]VectorPartitionShardSearchNeighborV1{0: nil}, VectorPartitionCoordinatorLimitsV1{},
+	)
+	ref := raftplacement.CollectionRefV1{Database: "db", Catalog: "default", Collection: "docs"}
+	catalog, err := raftplacement.Validate(raftplacement.CatalogV1{Groups: []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}}, Placements: []raftplacement.CollectionPlacementV1{{Collection: ref, GroupID: "group-a", Mode: raftplacement.PlacementModeCollectionV1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewVectorPartitionCoordinatorV1(VectorPartitionCoordinatorOptionsV1{Catalog: catalog, Placement: raftplacement.VectorPartitionPlacementRecordV1{Collection: ref, IndexName: "embedding", IndexDefinitionDigest: fmt.Sprintf("%064x", 17), SourceGeneration: 11, SourceChecksum: 12, SourceSchemaHash: 13, SourceRowCount: 100, PartitionGeneration: 7, PartitionCount: 1, Partitions: []raftplacement.VectorPartitionGroupV1{{GroupID: "group-a"}}}, RouterSource: source, Dispatcher: dispatcher, RequireReplicatedLifecycle: true})
+	if !errors.Is(err, ErrVectorPartitionCoordinatorUnavailable) {
+		t.Fatalf("missing M7 authority err=%v", err)
+	}
+}
+
 func TestVectorPartitionCoordinatorAllPartitionParityAndStableTiesV1(t *testing.T) {
 	owners := []raftcluster.GroupID{"group-b", "group-a", "group-b", "group-a"}
 	neighbors := map[uint32][]VectorPartitionShardSearchNeighborV1{

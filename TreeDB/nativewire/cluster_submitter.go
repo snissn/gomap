@@ -89,6 +89,14 @@ type VectorPartitionMutationAdmissionProviderV1 interface {
 	AdmitVectorPartitionMutationV1(context.Context, iwire.CommandID, []iwire.Section) error
 }
 
+// VectorPartitionMutationAdmissionRequiredV1 marks an M7-enabled shared
+// submitter. It prevents a wiring error from degrading an active lifecycle to
+// the legacy optional path: a required submitter without an admission provider
+// is rejected before deterministic entry encoding.
+type VectorPartitionMutationAdmissionRequiredV1 interface {
+	RequiresVectorPartitionMutationAdmissionV1(context.Context) (bool, error)
+}
+
 // AdmitVectorPartitionMutationV1 invokes the optional M7 admission extension.
 // A plain cluster submitter remains valid for non-vector deployments; an M7
 // deployment installs this on its shared submitter so no frontend can bypass
@@ -99,6 +107,15 @@ func AdmitVectorPartitionMutationV1(ctx context.Context, submitter ClusterSubmit
 	}
 	admitter, ok := submitter.(VectorPartitionMutationAdmissionProviderV1)
 	if !ok {
+		if required, ok := submitter.(VectorPartitionMutationAdmissionRequiredV1); ok {
+			enabled, err := required.RequiresVectorPartitionMutationAdmissionV1(ctx)
+			if err != nil {
+				return err
+			}
+			if enabled {
+				return protocolError(iwire.ErrReadOnly, "vector partition lifecycle admission is required but not configured")
+			}
+		}
 		return nil
 	}
 	return admitter.AdmitVectorPartitionMutationV1(ctx, command, cloneSections(sections))

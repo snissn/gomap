@@ -151,12 +151,13 @@ func (f VectorPartitionShardSearchDispatcherFuncV1) DispatchVectorPartitionShard
 }
 
 type VectorPartitionCoordinatorOptionsV1 struct {
-	Catalog             raftplacement.ResolvedCatalogV1
-	Placement           raftplacement.VectorPartitionPlacementRecordV1
-	RouterSource        VectorPartitionCoordinatorRouterSourceV1
-	Dispatcher          VectorPartitionShardSearchDispatcherV1
-	ReplicatedLifecycle VectorPartitionReplicatedLifecycleAuthorityV1
-	Limits              VectorPartitionCoordinatorLimitsV1
+	Catalog                    raftplacement.ResolvedCatalogV1
+	Placement                  raftplacement.VectorPartitionPlacementRecordV1
+	RouterSource               VectorPartitionCoordinatorRouterSourceV1
+	Dispatcher                 VectorPartitionShardSearchDispatcherV1
+	ReplicatedLifecycle        VectorPartitionReplicatedLifecycleAuthorityV1
+	RequireReplicatedLifecycle bool
+	Limits                     VectorPartitionCoordinatorLimitsV1
 }
 
 // VectorPartitionCoordinatorTopologyV1 is the public, transport-neutral M1
@@ -273,6 +274,9 @@ func NewVectorPartitionCoordinatorV1(opts VectorPartitionCoordinatorOptionsV1) (
 	}
 	if opts.RouterSource == nil || opts.Dispatcher == nil {
 		return nil, fmt.Errorf("%w: incomplete coordinator dependencies", ErrVectorPartitionCoordinatorInvalidRequest)
+	}
+	if opts.RequireReplicatedLifecycle && opts.ReplicatedLifecycle == nil {
+		return nil, fmt.Errorf("%w: replicated lifecycle authority is required", ErrVectorPartitionCoordinatorUnavailable)
 	}
 	if err := opts.Catalog.ValidateVectorPartitionPlacementV1(opts.Placement); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrVectorPartitionCoordinatorRouteMismatch, err)
