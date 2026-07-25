@@ -1697,3 +1697,32 @@ archive inclusion, and column-asset GC eligibility after durable retirement.
 It does not claim ANN query serving. Reader pins cover only this generation's
 local cleanup lifecycle; they do not imply a query-serving or cluster-cutover
 contract.
+
+# Vector partition M6 coordinator verification
+
+M6 verification requires one exact M1/M4 generation per request, deterministic
+grouping and chunking, a fixed-size fanout pool, bounded not-leader retry,
+effective wall-clock deadline propagation, strict M5 response/read-proof
+validation, stable-ID dedupe, deterministic top-k, and all-or-error
+cancellation with every started worker joined. Caller, coordinator, and M5
+byte/count ceilings must all pass before a successful response is published.
+
+Coverage:
+
+- `TreeDB/nativewire/vector_partition_coordinator_v1_test.go` covers
+  deterministic grouping/chunking/dedupe/merge, all-partition parity and stable
+  ties, short live corpora, mixed-generation rejection before dispatch,
+  corrupt proofs/partials, bounded redirects, terminal sibling cancellation
+  with no partial response, actual response-byte/candidate enforcement,
+  deadline propagation/clamping, wall-clock cancellation/join, and the
+  concurrent-request cap.
+- `cmd/treedb_vector_partition_bench/main_test.go` covers the genuine M4/M6
+  composition and local-simulation labels, bounded 1M-vector M6 preflight, and
+  explicit source-HNSW-degree control with its legacy default.
+- `TreeDB/docs/vector_partition_raft_v1_test.go` pins the M6 spec, evidence
+  boundary, exact measured-head provenance, and retained-record hashes.
+
+The accepted 1M-vector row is an all-partition correctness row using an
+in-process M5-contract simulation and synthetic read proof. It is not network,
+production Raft, or M8 evidence. See
+`TreeDB/docs/performance/vector-partition-m6.md`.

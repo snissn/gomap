@@ -74,6 +74,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - #3908 M0/M1/M4 contracts for derived vector-partition identity, durable
     generation lifecycle, deterministic persisted representative routing,
     simulation/local-path evidence boundaries, and clean-room provenance.
+- `TreeDB/docs/spec/vector-partition-coordinator-v1.md`
+  - #3915 M6 contract for bounded transport-neutral fanout, strict M5 proof
+    validation, deterministic stable-ID merge, all-or-error cancellation, and
+    scoped local-service evidence.
 
 - `TreeDB/docs/spec/architecture.md`
   - system model, components, directory layout, side stores, lock model.
@@ -447,6 +451,7 @@ Docs lint treats this list as a manifest:
 - `TreeDB/docs/spec/raftcluster.md`
 - `TreeDB/docs/spec/raftplacement.md`
 - `TreeDB/docs/spec/typed-column-schema-evolution.md`
+- `TreeDB/docs/spec/vector-partition-coordinator-v1.md`
 
 ## Relationship to Existing Docs
 

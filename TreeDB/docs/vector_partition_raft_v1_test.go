@@ -27,6 +27,82 @@ func TestDocsVectorPartitionRaftM0Contract(t *testing.T) {
 	}
 }
 
+func TestDocsVectorPartitionCoordinatorM6Contract(t *testing.T) {
+	root, _ := repoRoots(t)
+	checks := []struct {
+		path    string
+		needles []string
+	}{
+		{
+			path: filepath.Join(root, "docs", "spec", "vector-partition-coordinator-v1.md"),
+			needles: []string{
+				"Status: internal, pre-alpha, experimental",
+				"VectorPartitionCoordinatorV1",
+				"NewVectorPartitionCoordinatorForTopologyV1",
+				"VectorPartitionShardSearchDispatcherV1",
+				"linearizable_generation_snapshot",
+				"There is no partially successful state",
+				"MaxConcurrentRequests",
+				"MaxWallClock",
+				"one retry and one redirect",
+				"total candidate bytes",
+				"bytewise lexicographically smaller stable ID",
+				"synthetic read proofs",
+				"no production network or",
+				"M8",
+			},
+		},
+		{
+			path: filepath.Join(root, "docs", "performance", "vector-partition-m6.md"),
+			needles: []string{
+				"c96a9b8b6b3a8aefe8257f26df10743d34ea6064",
+				"93f48763467aefdf9b45ba0f7d22847f7f0c66ed",
+				"result_kind=coordinator_local_service_simulation",
+				"production_evidence=false",
+				"in_process_no_production_network",
+				"synthetic_local_proof_not_measured",
+				"1,000,000 / 32 / 16",
+				"exact all-partition parity passed",
+				"0.0020718%",
+				"GOMAXPROCS",
+				"GOMEMLIMIT=16GiB",
+				"cc33c29cd79d47c42b55064649fdad623b0d36321e9de076d29f75dfdf28ce42",
+				"2e398d334e7515274fdf9c6bec5cc4e5f62bd17bc3f11646c420616e3816f664",
+				"38c5ba251396d32048b03f6aaa057c29c5251d3d97da30d8a2ae94d80995198d",
+				"e21109f2b143b8a9d7717434bb1d6556de062927e6b00a107ce7afa2326a6252",
+				"lower-probe recall/latency curve",
+			},
+		},
+		{
+			path: filepath.Join(root, "docs", "spec", "README.md"),
+			needles: []string{
+				"TreeDB/docs/spec/vector-partition-coordinator-v1.md",
+				"scoped local-service evidence",
+			},
+		},
+		{
+			path: filepath.Join(root, "docs", "spec", "verification.md"),
+			needles: []string{
+				"Vector partition M6 coordinator verification",
+				"all-or-error",
+				"not network,",
+				"TreeDB/docs/performance/vector-partition-m6.md",
+			},
+		},
+	}
+	for _, check := range checks {
+		b, err := os.ReadFile(check.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, needle := range check.needles {
+			if !strings.Contains(string(b), needle) {
+				t.Fatalf("%s missing %q", check.path, needle)
+			}
+		}
+	}
+}
+
 func TestVectorPartitionM1EvidenceSchema(t *testing.T) {
 	root, _ := repoRoots(t)
 	raw, err := os.ReadFile(filepath.Join(root, "docs", "performance", "vector-partition-m1-evidence.json"))
