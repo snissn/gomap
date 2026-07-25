@@ -177,6 +177,9 @@ func TestVectorIndexSearcherBRQQuantizedSearchWithBuffer2481(t *testing.T) {
 	}
 	assertBRQQuantizedRerankStats2481(t, rerankedShort.Stats, shortlist, def.Dimensions, plan.BytesPerCode())
 
+	if collectionsRaceEnabled {
+		t.Skip("exact allocation counts are unstable under race instrumentation")
+	}
 	for i := 0; i < 8; i++ {
 		if _, err := searcher.SearchWithBuffer(quantizedOnlyOpts, &buffer); err != nil {
 			t.Fatalf("warm brq quantized_only iteration %d: %v", i, err)
