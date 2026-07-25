@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"testing"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 )
@@ -173,6 +174,37 @@ func TestVectorPartitionLocalSearcherV1ScratchBoundIncludesRowSizedHNSWState(t *
 	}
 	if got <= 16*64 {
 		t.Fatalf("scratch bytes=%d incorrectly modeled only ef_search candidates", got)
+	}
+}
+
+func TestVectorPartitionHNSWSearchScratchIncludesConvertedResultsV1(t *testing.T) {
+	const (
+		rows         = 17
+		vectorStride = 32
+		degree       = 8
+		topK         = 7
+		efSearch     = 11
+	)
+	got, err := vectorPartitionHNSWSearchScratchBytesV1(rows, vectorStride, degree, topK, efSearch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frontier := columnVectorGraphNativeSearchFrontierCapacity(rows, degree, topK, efSearch)
+	withoutConverted := uint64(rows)*uint64(unsafe.Sizeof(uint64(0))) +
+		uint64(frontier)*uint64(unsafe.Sizeof(columnVectorGraphSearchCandidate{})) +
+		uint64(efSearch)*uint64(unsafe.Sizeof(columnVectorGraphSearchCandidate{})) +
+		uint64(topK)*uint64(unsafe.Sizeof(columnVectorGraphNativeSearchResult{})) +
+		uint64(topK)*uint64(unsafe.Sizeof([]byte(nil))) +
+		uint64(topK)*uint64(unsafe.Sizeof(int(0)))*2 +
+		uint64(topK)*uint64(unsafe.Sizeof(DocumentRowRef{})) +
+		uint64(topK)*uint64(unsafe.Sizeof(bool(false))) +
+		uint64(degree)*uint64(unsafe.Sizeof(float64(0))) +
+		uint64(degree)*uint64(unsafe.Sizeof(uint32(0))) +
+		uint64(degree)*uint64(unsafe.Sizeof(float32(0))) +
+		uint64(vectorStride)*uint64(unsafe.Sizeof(float32(0)))
+	wantConverted := uint64(topK) * uint64(unsafe.Sizeof(VectorPartitionSearchResultV1{}))
+	if got-withoutConverted != wantConverted {
+		t.Fatalf("converted result scratch=%d want=%d (total=%d)", got-withoutConverted, wantConverted, got)
 	}
 }
 

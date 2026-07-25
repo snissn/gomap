@@ -314,6 +314,9 @@ func vectorPartitionHNSWSearchScratchBytesV1(rowCount, vectorStride, degree, top
 		{frontier, unsafe.Sizeof(columnVectorGraphSearchCandidate{})},
 		{efSearch, unsafe.Sizeof(columnVectorGraphSearchCandidate{})},
 		{topK, unsafe.Sizeof(columnVectorGraphNativeSearchResult{})},
+		// Native results remain live while the public FP32/stable-ID buffer is
+		// built and canonically reordered.
+		{topK, unsafe.Sizeof(VectorPartitionSearchResultV1{})},
 		{topK, unsafe.Sizeof([]byte(nil))},
 		{topK, unsafe.Sizeof(int(0))},
 		{topK, unsafe.Sizeof(int(0))},
