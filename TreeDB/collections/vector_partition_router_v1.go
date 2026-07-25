@@ -880,13 +880,11 @@ func (c *Collection) OpenVectorPartitionRouterWithContextV1(ctx context.Context,
 			return err
 		}
 		if err := ctx.Err(); err != nil {
-			opened.view.Close()
-			return err
+			return closeVectorPartitionRouterViewAfterOpenErrorV1(opened.view, err)
 		}
 		key := vectorPartitionReaderPinKeyV1(c.db.Dir(), c.name, index, manifest.Generation)
 		if key == "" {
-			opened.view.Close()
-			return errors.New("collections: invalid vector partition router pin root")
+			return closeVectorPartitionRouterViewAfterOpenErrorV1(opened.view, errors.New("collections: invalid vector partition router pin root"))
 		}
 		vectorPartitionReaderPinsV1.Lock()
 		vectorPartitionReaderPinsV1.counts[key]++
@@ -969,7 +967,7 @@ func (c *Collection) openVectorPartitionRouterManifestWithContextV1(ctx context.
 	if err := ctx.Err(); err != nil {
 		return nil, errors.Join(err, handle.Release())
 	}
-	view, err := newColumnHNSWSearchPackPreparedViewFromHandle(manager, handle, columnHNSWSearchPackDecodeOptions{
+	view, err := openVectorPartitionRouterPreparedViewWithContextV1(ctx, manager, handle, columnHNSWSearchPackDecodeOptions{
 		ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{
 			ManifestGeneration: manifest.SourceGeneration,
 			ManifestChecksum:   manifest.SourceChecksum,
@@ -977,7 +975,7 @@ func (c *Collection) openVectorPartitionRouterManifestWithContextV1(ctx context.
 		},
 	})
 	if err != nil {
-		return nil, errors.Join(err, handle.Release())
+		return nil, err
 	}
 	hash := sha256.New()
 	raw := handle.Bytes()
@@ -1007,6 +1005,21 @@ func (c *Collection) openVectorPartitionRouterManifestWithContextV1(ctx context.
 	router := &VectorPartitionRouterV1{manifest: manifest, model: model, modelDigest: digest, view: view, viewToModel: viewToModel}
 	router.scratch.New = func() any { return &columnVectorGraphNativeSearchScratch{} }
 	return router, nil
+}
+
+func openVectorPartitionRouterPreparedViewWithContextV1(ctx context.Context, manager *mappedresource.Manager, handle *mappedresource.Handle, opts columnHNSWSearchPackDecodeOptions) (*columnHNSWSearchPackPreparedView, error) {
+	view, err := newColumnHNSWSearchPackPreparedViewFromHandleWithContext(ctx, manager, handle, opts)
+	if err != nil {
+		return nil, errors.Join(err, handle.Release())
+	}
+	return view, nil
+}
+
+func closeVectorPartitionRouterViewAfterOpenErrorV1(view *columnHNSWSearchPackPreparedView, cause error) error {
+	if view == nil {
+		return cause
+	}
+	return errors.Join(cause, view.Close())
 }
 
 func decodeVectorPartitionRouterModelV1(view *columnHNSWSearchPackPreparedView, manifest VectorPartitionManifestV1) (internalrouter.RouterModelV1, string, []int, error) {
@@ -1090,19 +1103,22 @@ func decodeVectorPartitionRouterModelWithContextV1(ctx context.Context, view *co
 			Path: path, Values: values,
 		})
 	}
+	nodeOrdinal := 0
 	for _, node := range nodes {
+		if nodeOrdinal&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return model, "", nil, err
+			}
+		}
 		model.Nodes = append(model.Nodes, node)
+		nodeOrdinal++
 	}
 	if err := ctx.Err(); err != nil {
 		return model, "", nil, err
 	}
-	sort.Slice(model.Nodes, func(i, j int) bool { return model.Nodes[i].NodeID < model.Nodes[j].NodeID })
-	sort.Slice(model.Representatives, func(i, j int) bool {
-		if model.Representatives[i].PartitionID != model.Representatives[j].PartitionID {
-			return model.Representatives[i].PartitionID < model.Representatives[j].PartitionID
-		}
-		return model.Representatives[i].LeafNodeID < model.Representatives[j].LeafNodeID
-	})
+	if err := sortDecodedVectorPartitionRouterModelWithContextV1(ctx, &model); err != nil {
+		return model, "", nil, err
+	}
 	gotDigest, err := internalrouter.RouterDigestWithContextV1(ctx, model)
 	if err != nil {
 		return model, "", nil, err
@@ -1121,12 +1137,14 @@ func decodeVectorPartitionRouterModelWithContextV1(ctx context.Context, view *co
 		}
 		actualRepresentatives[i] = VectorPartitionMembershipV1{VectorOrdinal: representative.SourceOrdinal, PartitionID: representative.PartitionID}
 	}
-	sort.Slice(actualRepresentatives, func(i, j int) bool {
-		if actualRepresentatives[i].VectorOrdinal != actualRepresentatives[j].VectorOrdinal {
-			return actualRepresentatives[i].VectorOrdinal < actualRepresentatives[j].VectorOrdinal
+	if err := sortVectorPartitionSliceWithContextV1(ctx, actualRepresentatives, func(a, b VectorPartitionMembershipV1) bool {
+		if a.VectorOrdinal != b.VectorOrdinal {
+			return a.VectorOrdinal < b.VectorOrdinal
 		}
-		return actualRepresentatives[i].PartitionID < actualRepresentatives[j].PartitionID
-	})
+		return a.PartitionID < b.PartitionID
+	}); err != nil {
+		return model, "", nil, err
+	}
 	if len(expectedRepresentatives) == 0 || !equalVectorPartitionMembershipsV1(actualRepresentatives, expectedRepresentatives) {
 		return model, "", nil, errors.New("collections: vector partition router representative manifest mismatch")
 	}
@@ -1153,6 +1171,23 @@ func decodeVectorPartitionRouterModelWithContextV1(ctx context.Context, view *co
 		viewToModel[ordinal] = mapped
 	}
 	return model, gotDigest, viewToModel, nil
+}
+
+func sortDecodedVectorPartitionRouterModelWithContextV1(ctx context.Context, model *internalrouter.RouterModelV1) error {
+	if model == nil {
+		return errors.New("collections: nil vector partition router model")
+	}
+	if err := sortVectorPartitionSliceWithContextV1(ctx, model.Nodes, func(a, b internalrouter.RouterHierarchyNodeV1) bool {
+		return a.NodeID < b.NodeID
+	}); err != nil {
+		return err
+	}
+	return sortVectorPartitionSliceWithContextV1(ctx, model.Representatives, func(a, b internalrouter.RouterRepresentativeV1) bool {
+		if a.PartitionID != b.PartitionID {
+			return a.PartitionID < b.PartitionID
+		}
+		return a.LeafNodeID < b.LeafNodeID
+	})
 }
 
 func equalVectorPartitionMembershipsV1(left, right []VectorPartitionMembershipV1) bool {

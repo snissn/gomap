@@ -29,6 +29,63 @@ func TestVectorPartitionRouterContextEntryPointsRejectCanceledWorkV1(t *testing.
 	}
 }
 
+func TestVectorPartitionRouterPreparedOpenCancelsMidChecksumAndReleasesHandleV1(t *testing.T) {
+	raw := bytes.Repeat([]byte{0x5a}, 3<<20)
+	manager := mappedresource.NewManager()
+	handle, err := manager.AcquireBytes(
+		testColumnHNSWSearchPackMappedResourceKey2314(0, int64(len(raw)), internalcrc.Checksum(raw)),
+		testColumnHNSWSearchPackScope2314(),
+		mappedresource.SourceHeapCopy,
+		raw,
+		mappedresource.AcquireOptions{Reason: "router cancellation test", ValidationMode: mappedresource.ValidationVerify},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := &vectorPartitionRouterDeadlineAfterErrContextV1{
+		Context: context.Background(), deadlineAfter: 4,
+	}
+	if _, err := openVectorPartitionRouterPreparedViewWithContextV1(ctx, manager, handle, columnHNSWSearchPackDecodeOptions{}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("prepared open err=%v want deadline exceeded", err)
+	}
+	if ctx.calls != ctx.deadlineAfter {
+		t.Fatalf("context calls=%d want %d", ctx.calls, ctx.deadlineAfter)
+	}
+	if !handle.Released() || manager.Stats().ActiveHandles != 0 {
+		t.Fatalf("canceled prepared open retained handle: released=%v stats=%+v", handle.Released(), manager.Stats())
+	}
+}
+
+func TestVectorPartitionRouterModelSortObservesContextV1(t *testing.T) {
+	const nodes = 8192
+	model := internalrouter.RouterModelV1{Nodes: make([]internalrouter.RouterHierarchyNodeV1, nodes)}
+	for i := range model.Nodes {
+		model.Nodes[i].NodeID = uint32(nodes - i)
+	}
+	ctx := &vectorPartitionRouterDeadlineAfterErrContextV1{
+		Context: context.Background(), deadlineAfter: 4,
+	}
+	if err := sortDecodedVectorPartitionRouterModelWithContextV1(ctx, &model); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("model sort err=%v want deadline exceeded", err)
+	}
+	if ctx.calls != ctx.deadlineAfter {
+		t.Fatalf("context calls=%d want %d", ctx.calls, ctx.deadlineAfter)
+	}
+}
+
+func TestVectorPartitionRouterOpenCleanupJoinsCloseErrorV1(t *testing.T) {
+	cause := context.Canceled
+	closeErr := errors.New("release failed")
+	view := &columnHNSWSearchPackPreparedView{closeErr: closeErr}
+	err := closeVectorPartitionRouterViewAfterOpenErrorV1(view, cause)
+	if !errors.Is(err, cause) || !errors.Is(err, closeErr) {
+		t.Fatalf("joined cleanup err=%v want cause=%v and close=%v", err, cause, closeErr)
+	}
+	if !view.closed.Load() {
+		t.Fatal("cleanup did not close prepared view")
+	}
+}
+
 type vectorPartitionRouterDeadlineAfterErrContextV1 struct {
 	context.Context
 	calls         int

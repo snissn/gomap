@@ -2,17 +2,19 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	internalcrc "github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
-	"github.com/snissn/gomap/TreeDB/page"
 )
 
 type columnHNSWSearchPackPreparedStatus string
@@ -160,6 +162,16 @@ func columnHNSWSearchPackMappedResourceKey(asset columnVectorIndexStateAssetSnap
 }
 
 func newColumnHNSWSearchPackPreparedViewFromHandle(manager *mappedresource.Manager, handle *mappedresource.Handle, opts columnHNSWSearchPackDecodeOptions) (*columnHNSWSearchPackPreparedView, error) {
+	return newColumnHNSWSearchPackPreparedViewFromHandleWithContext(context.Background(), manager, handle, opts)
+}
+
+func newColumnHNSWSearchPackPreparedViewFromHandleWithContext(ctx context.Context, manager *mappedresource.Manager, handle *mappedresource.Handle, opts columnHNSWSearchPackDecodeOptions) (*columnHNSWSearchPackPreparedView, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if manager == nil {
 		return nil, errors.New("collections: hnsw_search_pack_v1 prepared view requires mapped resource manager")
 	}
@@ -171,11 +183,15 @@ func newColumnHNSWSearchPackPreparedViewFromHandle(manager *mappedresource.Manag
 		return nil, errors.New("collections: hnsw_search_pack_v1 prepared view has empty bytes")
 	}
 	if key := handle.Key(); key.Checksum != 0 {
-		if got := page.Checksum(raw); got != uint32(key.Checksum) {
+		got, err := columnHNSWSearchPackChecksumWithContext(ctx, raw)
+		if err != nil {
+			return nil, err
+		}
+		if got != uint32(key.Checksum) {
 			return nil, fmt.Errorf("collections: hnsw_search_pack_v1 checksum=%08x want %08x", got, uint32(key.Checksum))
 		}
 	}
-	pack, opts, err := decodeColumnHNSWSearchPackEnvelope(raw, opts)
+	pack, opts, err := decodeColumnHNSWSearchPackEnvelopeWithContext(ctx, raw, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -198,17 +214,30 @@ func newColumnHNSWSearchPackPreparedViewFromHandle(manager *mappedresource.Manag
 	default:
 		return nil, fmt.Errorf("collections: hnsw_search_pack_v1 unsupported mapped resource source %q", view.source)
 	}
-	if err := view.prepareSectionViews(raw, opts); err != nil {
+	if err := view.prepareSectionViewsWithContext(ctx, raw, opts); err != nil {
 		return nil, err
 	}
 	if err := view.validateLive(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	return view, nil
 }
 
 func decodeColumnHNSWSearchPackEnvelope(raw []byte, opts columnHNSWSearchPackDecodeOptions) (columnHNSWSearchPack, columnHNSWSearchPackDecodeOptions, error) {
+	return decodeColumnHNSWSearchPackEnvelopeWithContext(context.Background(), raw, opts)
+}
+
+func decodeColumnHNSWSearchPackEnvelopeWithContext(ctx context.Context, raw []byte, opts columnHNSWSearchPackDecodeOptions) (columnHNSWSearchPack, columnHNSWSearchPackDecodeOptions, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	opts = opts.withDefaults()
+	if err := ctx.Err(); err != nil {
+		return columnHNSWSearchPack{}, opts, err
+	}
 	if len(raw) < columnHNSWSearchPackHeaderSize {
 		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: truncated hnsw_search_pack_v1 header bytes=%d want at least %d", len(raw), columnHNSWSearchPackHeaderSize)
 	}
@@ -328,18 +357,27 @@ func decodeColumnHNSWSearchPackEnvelope(raw []byte, opts columnHNSWSearchPackDec
 		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: hnsw_search_pack_v1 section directory exceeds pack length")
 	}
 	directory := raw[directoryOffset : directoryOffset+directoryLength]
-	if got, want := page.Checksum(directory), hnswPackU32(raw, columnHNSWSearchPackHeaderDirectoryChecksumOffset); got != want {
-		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: hnsw_search_pack_v1 section directory checksum=%08x want %08x", got, want)
+	directoryChecksum, err := columnHNSWSearchPackChecksumWithContext(ctx, directory)
+	if err != nil {
+		return columnHNSWSearchPack{}, opts, err
+	}
+	if want := hnswPackU32(raw, columnHNSWSearchPackHeaderDirectoryChecksumOffset); directoryChecksum != want {
+		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: hnsw_search_pack_v1 section directory checksum=%08x want %08x", directoryChecksum, want)
 	}
 	sections := make([]columnHNSWSearchPackSection, int(sectionCount32))
 	for i := range sections {
+		if i&63 == 0 {
+			if err := ctx.Err(); err != nil {
+				return columnHNSWSearchPack{}, opts, err
+			}
+		}
 		section, err := decodeColumnHNSWSearchPackSectionEntry(directory[i*columnHNSWSearchPackSectionEntrySize:])
 		if err != nil {
 			return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: hnsw_search_pack_v1 section[%d]: %w", i, err)
 		}
 		sections[i] = section
 	}
-	if err := validateColumnHNSWSearchPackSectionDirectory(raw, sections, dataOffset); err != nil {
+	if err := validateColumnHNSWSearchPackSectionDirectoryWithContext(ctx, raw, sections, dataOffset); err != nil {
 		return columnHNSWSearchPack{}, opts, err
 	}
 	pack := columnHNSWSearchPack{
@@ -367,10 +405,104 @@ func decodeColumnHNSWSearchPackEnvelope(raw []byte, opts columnHNSWSearchPackDec
 		pack.Header.EntryOrdinal = -1
 		pack.Header.MaxLayer = -1
 	}
+	if err := ctx.Err(); err != nil {
+		return columnHNSWSearchPack{}, opts, err
+	}
 	return pack, opts, nil
 }
 
+func columnHNSWSearchPackChecksumWithContext(ctx context.Context, raw []byte) (uint32, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var checksum uint32
+	const chunkBytes = 1 << 20
+	for start := 0; start < len(raw); start += chunkBytes {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		end := min(start+chunkBytes, len(raw))
+		checksum = internalcrc.Update(checksum, raw[start:end])
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return checksum, nil
+}
+
+func validateColumnHNSWSearchPackSectionDirectoryWithContext(ctx context.Context, raw []byte, sections []columnHNSWSearchPackSection, dataOffset uint64) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	seen := make(map[columnHNSWSearchPackSectionKey]struct{}, len(sections))
+	ranges := make([]columnHNSWSearchPackSectionRange, 0, len(sections))
+	for ordinal, section := range sections {
+		if ordinal&63 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		if section.Kind == 0 || section.Alignment == 0 {
+			return fmt.Errorf("collections: hnsw_search_pack_v1 section %s has missing kind/alignment", section.Kind)
+		}
+		if !columnHNSWSearchPackKnownSection(section.Kind) {
+			return fmt.Errorf("collections: hnsw_search_pack_v1 unknown section kind=%d", section.Kind)
+		}
+		if section.Offset < dataOffset || section.Offset > uint64(len(raw)) || section.Length > uint64(len(raw))-section.Offset {
+			return fmt.Errorf("collections: hnsw_search_pack_v1 section %s[%d] bounds offset=%d length=%d total=%d", section.Kind, section.Index, section.Offset, section.Length, len(raw))
+		}
+		if section.Offset%uint64(section.Alignment) != 0 {
+			return fmt.Errorf("collections: hnsw_search_pack_v1 section %s[%d] offset=%d is not aligned to %d", section.Kind, section.Index, section.Offset, section.Alignment)
+		}
+		if err := validateColumnHNSWSearchPackSectionAlignment(section.Kind, section.Alignment); err != nil {
+			return err
+		}
+		key := columnHNSWSearchPackSectionKey{kind: section.Kind, index: section.Index}
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("collections: hnsw_search_pack_v1 duplicate section %s[%d]", section.Kind, section.Index)
+		}
+		seen[key] = struct{}{}
+		payload := raw[section.Offset : section.Offset+section.Length]
+		checksum, err := columnHNSWSearchPackChecksumWithContext(ctx, payload)
+		if err != nil {
+			return err
+		}
+		if checksum != section.Checksum {
+			return fmt.Errorf("collections: hnsw_search_pack_v1 section %s[%d] checksum=%08x want %08x", section.Kind, section.Index, checksum, section.Checksum)
+		}
+		ranges = append(ranges, columnHNSWSearchPackSectionRange{start: section.Offset, end: section.Offset + section.Length, section: section})
+	}
+	slices.SortFunc(ranges, func(a, b columnHNSWSearchPackSectionRange) int {
+		if a.start < b.start {
+			return -1
+		}
+		if a.start > b.start {
+			return 1
+		}
+		return 0
+	})
+	for i := 1; i < len(ranges); i++ {
+		if ranges[i].start < ranges[i-1].end {
+			return fmt.Errorf("collections: hnsw_search_pack_v1 overlapping sections %s[%d] and %s[%d]", ranges[i-1].section.Kind, ranges[i-1].section.Index, ranges[i].section.Kind, ranges[i].section.Index)
+		}
+	}
+	return ctx.Err()
+}
+
 func (v *columnHNSWSearchPackPreparedView) prepareSectionViews(raw []byte, opts columnHNSWSearchPackDecodeOptions) error {
+	return v.prepareSectionViewsWithContext(context.Background(), raw, opts)
+}
+
+func (v *columnHNSWSearchPackPreparedView) prepareSectionViewsWithContext(ctx context.Context, raw []byte, opts columnHNSWSearchPackDecodeOptions) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	rows := uint64(v.Header.Rows)
 	stride := uint64(v.Header.VectorStride)
 	vectorCount, ok := checkedHNSWPackMulOK(rows, stride)
@@ -389,6 +521,11 @@ func (v *columnHNSWSearchPackPreparedView) prepareSectionViews(raw []byte, opts 
 		return fmt.Errorf("collections: hnsw_search_pack_v1 normalized_vectors direct view: %w", err)
 	}
 	for i, value := range v.NormalizedVectors {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
 			return fmt.Errorf("collections: hnsw_search_pack_v1 normalized vector[%d] is not finite", i)
 		}
@@ -405,12 +542,20 @@ func (v *columnHNSWSearchPackPreparedView) prepareSectionViews(raw []byte, opts 
 		return fmt.Errorf("collections: hnsw_search_pack_v1 levels direct view: %w", err)
 	}
 	for ordinal, level := range v.Levels {
+		if ordinal&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		if int(level) > v.Header.MaxLayer {
 			return fmt.Errorf("collections: hnsw_search_pack_v1 level[%d]=%d exceeds max_layer=%d", ordinal, level, v.Header.MaxLayer)
 		}
 	}
 	v.AdjacencyLayers = make([]columnHNSWSearchPackPreparedLayer, v.Header.AdjacencyLayerCount)
 	for layer := 0; layer < v.Header.AdjacencyLayerCount; layer++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		offsetsSection, err := columnHNSWSearchPackRequireSection(v.Sections, columnHNSWSearchPackSectionAdjacencyOffsets, uint16(layer), rows+1, 8)
 		if err != nil {
 			return err
@@ -441,7 +586,7 @@ func (v *columnHNSWSearchPackPreparedView) prepareSectionViews(raw []byte, opts 
 		if err != nil {
 			return fmt.Errorf("collections: hnsw_search_pack_v1 adjacency layer=%d neighbors direct view: %w", layer, err)
 		}
-		if err := validateColumnHNSWSearchPackAdjacency(layer, rows, offsets, neighbors); err != nil {
+		if err := validateColumnHNSWSearchPackAdjacencyWithContext(ctx, layer, rows, offsets, neighbors); err != nil {
 			return err
 		}
 		v.AdjacencyLayers[layer] = columnHNSWSearchPackPreparedLayer{Offsets: offsets, Neighbors: neighbors}
@@ -459,6 +604,11 @@ func (v *columnHNSWSearchPackPreparedView) prepareSectionViews(raw []byte, opts 
 		return err
 	}
 	for ordinal := 0; ordinal < v.Header.Rows; ordinal++ {
+		if ordinal&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		if v.RowRefGenerations[ordinal] <= 0 || v.RowRefPartIDs[ordinal] <= 0 || v.RowRefAppliedLSNs[ordinal] <= 0 || v.RowRefRowIndexes[ordinal] < 0 {
 			return fmt.Errorf("collections: hnsw_search_pack_v1 invalid row-ref ordinal=%d", ordinal)
 		}
@@ -490,7 +640,78 @@ func (v *columnHNSWSearchPackPreparedView) prepareSectionViews(raw []byte, opts 
 	if v.DocumentIDBytes, err = v.sectionDirectBytes(raw, docBytesSection, 1, "document_id_bytes"); err != nil {
 		return err
 	}
-	return validateColumnHNSWSearchPackDocumentIDs(rows, v.DocumentIDOffsets, v.DocumentIDBytes)
+	return validateColumnHNSWSearchPackDocumentIDsWithContext(ctx, rows, v.DocumentIDOffsets, v.DocumentIDBytes)
+}
+
+func validateColumnHNSWSearchPackAdjacencyWithContext(ctx context.Context, layer int, rows uint64, offsets []uint64, neighbors []uint32) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if uint64(len(offsets)) != rows+1 {
+		return fmt.Errorf("collections: hnsw_search_pack_v1 adjacency layer=%d offsets=%d want rows+1=%d", layer, len(offsets), rows+1)
+	}
+	if offsets[0] != 0 {
+		return fmt.Errorf("collections: hnsw_search_pack_v1 adjacency layer=%d first offset=%d want 0", layer, offsets[0])
+	}
+	for i := 1; i < len(offsets); i++ {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		if offsets[i] < offsets[i-1] {
+			return fmt.Errorf("collections: hnsw_search_pack_v1 adjacency layer=%d offsets are not monotonic at row=%d", layer, i-1)
+		}
+	}
+	if offsets[len(offsets)-1] != uint64(len(neighbors)) {
+		return fmt.Errorf("collections: hnsw_search_pack_v1 adjacency layer=%d last offset=%d want neighbors=%d", layer, offsets[len(offsets)-1], len(neighbors))
+	}
+	for i, neighbor := range neighbors {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		if uint64(neighbor) >= rows {
+			return fmt.Errorf("collections: hnsw_search_pack_v1 adjacency layer=%d neighbor ordinal[%d]=%d outside rows=%d", layer, i, neighbor, rows)
+		}
+	}
+	return ctx.Err()
+}
+
+func validateColumnHNSWSearchPackDocumentIDsWithContext(ctx context.Context, rows uint64, offsets []uint64, values []byte) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if uint64(len(offsets)) != rows+1 {
+		return fmt.Errorf("collections: hnsw_search_pack_v1 document id offsets=%d want rows+1=%d", len(offsets), rows+1)
+	}
+	if offsets[0] != 0 {
+		return fmt.Errorf("collections: hnsw_search_pack_v1 document id first offset=%d want 0", offsets[0])
+	}
+	for i := uint64(0); i < rows; i++ {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		if offsets[i+1] < offsets[i] {
+			return fmt.Errorf("collections: hnsw_search_pack_v1 document id offsets are not monotonic at row=%d", i)
+		}
+		if offsets[i+1] == offsets[i] {
+			return fmt.Errorf("collections: hnsw_search_pack_v1 document id row=%d is empty", i)
+		}
+	}
+	if offsets[len(offsets)-1] != uint64(len(values)) {
+		return fmt.Errorf("collections: hnsw_search_pack_v1 document id last offset=%d want bytes=%d", offsets[len(offsets)-1], len(values))
+	}
+	return ctx.Err()
 }
 
 func (v *columnHNSWSearchPackPreparedView) int64DirectView(raw []byte, kind columnHNSWSearchPackSectionKind, rows uint64) ([]int64, error) {
