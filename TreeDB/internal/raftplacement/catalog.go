@@ -20,7 +20,8 @@ const (
 var (
 	SupportedCatalogVersion = raftcluster.Version{Major: 1, Minor: 0}
 	SupportedFeatureFloors  = map[raftcluster.FeatureName]raftcluster.Version{
-		FeatureCollectionGroups: {Major: 1, Minor: 0},
+		FeatureCollectionGroups:                     {Major: 1, Minor: 0},
+		raftcluster.FeatureVectorPartitionLifecycle: {Major: 1, Minor: 0},
 	}
 
 	ErrInvalidCatalog           = errors.New("raftplacement: invalid catalog")

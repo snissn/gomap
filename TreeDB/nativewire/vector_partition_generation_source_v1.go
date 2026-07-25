@@ -12,6 +12,24 @@ import (
 
 const collectionVectorPartitionMaxAuthorityRefreshesV1 = 3
 
+// VectorPartitionReplicatedLifecycleAuthorityV1 is the constant-time M7
+// serving guard. Local prepared assets are evidence, not activation authority;
+// every cold load and cache hit must match the single replicated active record.
+type VectorPartitionReplicatedLifecycleAuthorityV1 interface {
+	ValidateVectorPartitionGenerationSearchV1(
+		context.Context,
+		string,
+		string,
+		uint64,
+		string,
+		uint64,
+		uint64,
+		uint64,
+		uint64,
+		string,
+	) error
+}
+
 // CollectionVectorPartitionGenerationSourceV1 binds M5 to one actual local
 // collection store. It keeps immutable ready generations and their opened
 // partition packs cached until explicit invalidation or Close. A request lease
@@ -23,7 +41,8 @@ const collectionVectorPartitionMaxAuthorityRefreshesV1 = 3
 // permanent for this source instance, so a stale service cannot reload the old
 // generation after the cutover.
 type CollectionVectorPartitionGenerationSourceV1 struct {
-	Collection *collections.Collection
+	Collection          *collections.Collection
+	replicatedLifecycle VectorPartitionReplicatedLifecycleAuthorityV1
 
 	mu          sync.Mutex
 	entries     map[collectionVectorPartitionGenerationKeyV1]*collectionVectorPartitionGenerationCacheV1
@@ -53,6 +72,23 @@ func NewCollectionVectorPartitionGenerationSourceV1(collection *collections.Coll
 		return nil, ErrVectorPartitionShardSearchAssetsUnavailable
 	}
 	return &CollectionVectorPartitionGenerationSourceV1{Collection: collection}, nil
+}
+
+// NewCollectionVectorPartitionGenerationSourceForReplicatedLifecycleV1 opens
+// locally prepared generations and admits them only through replicated M7
+// lifecycle authority. It deliberately does not consult or mutate M1's
+// standalone LocalActivate pointer.
+func NewCollectionVectorPartitionGenerationSourceForReplicatedLifecycleV1(
+	collection *collections.Collection,
+	authority VectorPartitionReplicatedLifecycleAuthorityV1,
+) (*CollectionVectorPartitionGenerationSourceV1, error) {
+	if collection == nil || authority == nil {
+		return nil, ErrVectorPartitionShardSearchAssetsUnavailable
+	}
+	return &CollectionVectorPartitionGenerationSourceV1{
+		Collection:          collection,
+		replicatedLifecycle: authority,
+	}, nil
 }
 
 type collectionVectorPartitionGenerationKeyV1 struct {
@@ -94,7 +130,7 @@ func (s *CollectionVectorPartitionGenerationSourceV1) PinVectorPartitionGenerati
 		if entry := s.entries[key]; entry != nil {
 			entry.refs++
 			s.mu.Unlock()
-			if err := s.validateActive(ctx, key, entry.authorityToken); err != nil {
+			if err := s.validateActive(ctx, key, entry); err != nil {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					_ = s.release(entry)
 					return nil, err
@@ -209,12 +245,22 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 			pin.Release()
 		}
 	}()
-	manifest, authorityToken, err := s.Collection.ActiveVectorPartitionManifestAndAuthorityTokenWithContextV1(ctx, key.index, key.generation)
+	var manifest collections.VectorPartitionManifestV1
+	var authorityToken collections.VectorPartitionActiveAuthorityTokenV1
+	if s.replicatedLifecycle != nil {
+		manifest, err = s.Collection.PreparedVectorPartitionManifestWithContextV1(ctx, key.index, key.generation)
+	} else {
+		manifest, authorityToken, err = s.Collection.ActiveVectorPartitionManifestAndAuthorityTokenWithContextV1(ctx, key.index, key.generation)
+	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, err
 		}
 		return nil, fmt.Errorf("%w: generation status: %v", ErrVectorPartitionShardSearchGenerationMismatch, err)
+	}
+	if err := s.validateReplicatedLifecycle(ctx, key, manifest); err != nil {
+		authorityToken.Release()
+		return nil, fmt.Errorf("%w: replicated lifecycle: %v", ErrVectorPartitionShardSearchGenerationMismatch, err)
 	}
 	openPlan, err := collections.NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx, manifest)
 	if err != nil {
@@ -242,11 +288,46 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 	}, nil
 }
 
-func (s *CollectionVectorPartitionGenerationSourceV1) validateActive(ctx context.Context, key collectionVectorPartitionGenerationKeyV1, authorityToken collections.VectorPartitionActiveAuthorityTokenV1) error {
+func (s *CollectionVectorPartitionGenerationSourceV1) validateActive(ctx context.Context, key collectionVectorPartitionGenerationKeyV1, entry *collectionVectorPartitionGenerationCacheV1) error {
 	if s.testValidateActive != nil {
 		return s.testValidateActive(ctx, key)
 	}
-	return s.Collection.ValidateActiveVectorPartitionAuthorityTokenWithContextV1(ctx, key.index, key.generation, authorityToken)
+	if entry == nil {
+		return ErrVectorPartitionShardSearchAssetsUnavailable
+	}
+	if s.replicatedLifecycle != nil {
+		return s.replicatedLifecycle.ValidateVectorPartitionGenerationSearchV1(
+			ctx,
+			entry.manifest.Collection,
+			entry.manifest.IndexName,
+			entry.manifest.Generation,
+			entry.manifest.IndexDefinitionDigest,
+			entry.manifest.SourceGeneration,
+			entry.manifest.SourceChecksum,
+			entry.manifest.SourceSchemaHash,
+			entry.manifest.SourceRowCount,
+			entry.manifest.ReadySetDigest,
+		)
+	}
+	return s.Collection.ValidateActiveVectorPartitionAuthorityTokenWithContextV1(ctx, key.index, key.generation, entry.authorityToken)
+}
+
+func (s *CollectionVectorPartitionGenerationSourceV1) validateReplicatedLifecycle(ctx context.Context, key collectionVectorPartitionGenerationKeyV1, manifest collections.VectorPartitionManifestV1) error {
+	if s.replicatedLifecycle == nil {
+		return nil
+	}
+	return s.replicatedLifecycle.ValidateVectorPartitionGenerationSearchV1(
+		ctx,
+		manifest.Collection,
+		key.index,
+		key.generation,
+		manifest.IndexDefinitionDigest,
+		manifest.SourceGeneration,
+		manifest.SourceChecksum,
+		manifest.SourceSchemaHash,
+		manifest.SourceRowCount,
+		manifest.ReadySetDigest,
+	)
 }
 
 func (s *CollectionVectorPartitionGenerationSourceV1) isInvalidatedLocked(key collectionVectorPartitionGenerationKeyV1) bool {
@@ -568,6 +649,7 @@ func pinnedVectorPartitionManifestV1(m collections.VectorPartitionManifestV1) Ve
 		SourceRowCount:        m.SourceRowCount,
 		Generation:            m.Generation,
 		RouterGeneration:      m.RouterGeneration,
+		ReadySetDigest:        m.ReadySetDigest,
 		PartitionCount:        m.PartitionCount,
 		Placements:            slices.Clone(m.Placements),
 	}

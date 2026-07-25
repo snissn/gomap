@@ -16,13 +16,18 @@ const (
 	// not imply a selected Raft library or production HA behavior.
 	FeatureSingleGroupProvider  FeatureName = "treedb.raftcluster.single_group_provider"
 	FeatureCatalogMetaAuthority FeatureName = "treedb.raftcluster.catalog_meta_authority"
+	// FeatureVectorPartitionLifecycle gates the M7 catalog/meta lifecycle and
+	// invalidation-before-mutation contract. It is opt-in during pre-alpha;
+	// legacy clusters do not acquire the new admission requirement implicitly.
+	FeatureVectorPartitionLifecycle FeatureName = "treedb.raftcluster.vector_partition_lifecycle"
 )
 
 var (
 	SupportedConfigVersion = Version{Major: 1, Minor: 0}
 	SupportedFeatureFloors = map[FeatureName]Version{
-		FeatureSingleGroupProvider:  {Major: 1, Minor: 0},
-		FeatureCatalogMetaAuthority: {Major: 1, Minor: 0},
+		FeatureSingleGroupProvider:      {Major: 1, Minor: 0},
+		FeatureCatalogMetaAuthority:     {Major: 1, Minor: 0},
+		FeatureVectorPartitionLifecycle: {Major: 1, Minor: 0},
 	}
 
 	ErrInvalidConfig       = errors.New("raftcluster: invalid config")

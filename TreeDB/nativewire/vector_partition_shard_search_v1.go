@@ -236,6 +236,7 @@ type VectorPartitionPinnedManifestV1 struct {
 	State, Collection, IndexName, IndexDefinitionDigest                string
 	SourceGeneration, SourceChecksum, SourceSchemaHash, SourceRowCount uint64
 	Generation, RouterGeneration                                       uint64
+	ReadySetDigest                                                     string
 	PartitionCount                                                     uint32
 	Placements                                                         []collections.VectorPartitionPlacementV1
 }

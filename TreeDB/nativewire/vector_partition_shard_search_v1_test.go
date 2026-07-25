@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -286,6 +287,67 @@ func TestCollectionVectorPartitionGenerationCacheRevalidatesWarmHitV1(t *testing
 	}
 	if _, ok := source.invalidated[key]; !ok {
 		t.Fatal("stale warm generation was not permanently invalidated")
+	}
+}
+
+type recordingVectorPartitionReplicatedLifecycleAuthorityV1 struct {
+	calls int
+	args  []any
+	err   error
+}
+
+func (a *recordingVectorPartitionReplicatedLifecycleAuthorityV1) ValidateVectorPartitionGenerationSearchV1(
+	_ context.Context,
+	collection string,
+	index string,
+	generation uint64,
+	indexDigest string,
+	sourceGeneration uint64,
+	sourceChecksum uint64,
+	sourceSchemaHash uint64,
+	sourceRowCount uint64,
+	readySetDigest string,
+) error {
+	a.calls++
+	a.args = []any{collection, index, generation, indexDigest, sourceGeneration, sourceChecksum, sourceSchemaHash, sourceRowCount, readySetDigest}
+	return a.err
+}
+
+func TestCollectionVectorPartitionGenerationCacheUsesReplicatedAuthorityOnWarmHitV1(t *testing.T) {
+	key := collectionVectorPartitionGenerationKeyV1{index: "embedding", generation: 7}
+	manifest := VectorPartitionPinnedManifestV1{
+		Collection: "users", IndexName: key.index, Generation: key.generation,
+		IndexDefinitionDigest: strings.Repeat("a", 64),
+		SourceGeneration:      3,
+		SourceChecksum:        4,
+		SourceSchemaHash:      5,
+		SourceRowCount:        6,
+		ReadySetDigest:        strings.Repeat("b", 64),
+	}
+	authority := &recordingVectorPartitionReplicatedLifecycleAuthorityV1{err: errors.New("generation invalidated")}
+	entry := &collectionVectorPartitionGenerationCacheV1{
+		index: key.index, generation: key.generation, manifest: manifest,
+		searchers: make(map[uint32]*collections.VectorPartitionLocalSearcherV1),
+		opening:   make(map[uint32]*collectionVectorPartitionSearchLoadV1),
+	}
+	source := &CollectionVectorPartitionGenerationSourceV1{
+		Collection:          new(collections.Collection),
+		replicatedLifecycle: authority,
+		entries:             map[collectionVectorPartitionGenerationKeyV1]*collectionVectorPartitionGenerationCacheV1{key: entry},
+	}
+
+	if _, err := source.PinVectorPartitionGenerationV1(t.Context(), key.index, key.generation); !errors.Is(err, ErrVectorPartitionShardSearchGenerationMismatch) {
+		t.Fatalf("warm invalidated generation err=%v", err)
+	}
+	if authority.calls != 1 {
+		t.Fatalf("replicated authority calls=%d want 1", authority.calls)
+	}
+	want := []any{"users", "embedding", uint64(7), strings.Repeat("a", 64), uint64(3), uint64(4), uint64(5), uint64(6), strings.Repeat("b", 64)}
+	if !reflect.DeepEqual(authority.args, want) {
+		t.Fatalf("replicated authority args=%#v want %#v", authority.args, want)
+	}
+	if _, ok := source.invalidated[key]; !ok {
+		t.Fatal("replicated invalidation did not permanently evict stale cache entry")
 	}
 }
 
