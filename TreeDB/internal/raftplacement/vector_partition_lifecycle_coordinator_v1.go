@@ -76,14 +76,13 @@ func (a *CatalogMetaAuthorityV1) MutationProofV1(identity VectorPartitionLifecyc
 		return VectorPartitionLifecycleMutationProofV1{}, false, ErrVectorPartitionLifecycleIdentity
 	}
 	if !hasActive {
-		for candidate, record := range a.lifecycle {
-			if candidate.Index == identity && record.State != VectorPartitionLifecycleAbsentV1 {
-				proof := VectorPartitionLifecycleMutationProofV1{IndexIdentity: identity, ActiveGeneration: candidate.Generation, InvalidationEpoch: record.InvalidationEpoch}
-				if err := record.CanCommitRelevantMutation(proof); err != nil {
-					return VectorPartitionLifecycleMutationProofV1{}, false, err
-				}
-				return proof, false, nil
+		candidate, record, found := selectMutationProofRecordLockedV1(a.lifecycle, identity)
+		if found {
+			proof := VectorPartitionLifecycleMutationProofV1{IndexIdentity: identity, ActiveGeneration: candidate.Generation, InvalidationEpoch: record.InvalidationEpoch}
+			if err := record.CanCommitRelevantMutation(proof); err != nil {
+				return VectorPartitionLifecycleMutationProofV1{}, false, err
 			}
+			return proof, false, nil
 		}
 		return VectorPartitionLifecycleMutationProofV1{IndexIdentity: identity}, false, nil
 	}
@@ -92,6 +91,40 @@ func (a *CatalogMetaAuthorityV1) MutationProofV1(identity VectorPartitionLifecyc
 		return VectorPartitionLifecycleMutationProofV1{}, false, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("active lifecycle record is unavailable"))
 	}
 	return VectorPartitionLifecycleMutationProofV1{IndexIdentity: identity, ActiveGeneration: active.Generation}, true, nil
+}
+
+// selectMutationProofRecordLockedV1 gives no-active mutation admission a
+// deterministic, safety-first meaning. A pending invalidation wins over every
+// other retained generation; otherwise the newest exact generation wins. Map
+// iteration must never choose which generation blocks or authorizes a write.
+func selectMutationProofRecordLockedV1(records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1, index VectorPartitionLifecycleIndexIdentityV1) (VectorPartitionLifecycleIdentityV1, VectorPartitionLifecycleRecordV1, bool) {
+	var selectedIdentity VectorPartitionLifecycleIdentityV1
+	var selectedRecord VectorPartitionLifecycleRecordV1
+	found := false
+	rank := func(record VectorPartitionLifecycleRecordV1) int {
+		if record.State == VectorPartitionLifecycleInvalidatedV1 && !record.MutationConfirmed {
+			return 3
+		}
+		switch record.State {
+		case VectorPartitionLifecycleBuildingV1, VectorPartitionLifecycleStagedV1, VectorPartitionLifecyclePreparedV1:
+			return 2
+		case VectorPartitionLifecycleInvalidatedV1, VectorPartitionLifecycleRetiredV1, VectorPartitionLifecycleCleanableV1:
+			return 1
+		default:
+			return 0
+		}
+	}
+	for candidate, record := range records {
+		if candidate.Index != index || record.State == VectorPartitionLifecycleAbsentV1 {
+			continue
+		}
+		if !found || rank(record) > rank(selectedRecord) ||
+			(rank(record) == rank(selectedRecord) && (candidate.Generation > selectedIdentity.Generation ||
+				(candidate.Generation == selectedIdentity.Generation && record.Revision > selectedRecord.Revision))) {
+			selectedIdentity, selectedRecord, found = candidate, record, true
+		}
+	}
+	return selectedIdentity, selectedRecord, found
 }
 
 func (a *CatalogMetaAuthorityV1) lifecycleRecordForIndexGenerationV1(index VectorPartitionLifecycleIndexIdentityV1, generation uint64) (VectorPartitionLifecycleRecordV1, bool) {

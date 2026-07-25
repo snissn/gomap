@@ -58,6 +58,27 @@ func TestVectorPartitionLifecycleCoordinatorInvalidatesBeforeRelevantMutationV1(
 	}
 }
 
+func TestSelectMutationProofRecordPrefersPendingGenerationDeterministicallyV1(t *testing.T) {
+	identity := vectorPartitionLifecycleTestIdentityV1()
+	older := identity
+	older.Generation = 7
+	newer := identity
+	newer.Generation = 9
+	prepared := identity
+	prepared.Generation = 10
+	records := map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1{
+		older:    {State: VectorPartitionLifecycleInvalidatedV1, Identity: older, Revision: 4, InvalidationEpoch: 12},
+		newer:    {State: VectorPartitionLifecycleInvalidatedV1, Identity: newer, Revision: 8, InvalidationEpoch: 11, MutationConfirmed: true},
+		prepared: {State: VectorPartitionLifecyclePreparedV1, Identity: prepared, Revision: 9},
+	}
+	for i := 0; i < 100; i++ {
+		gotIdentity, gotRecord, ok := selectMutationProofRecordLockedV1(records, identity.Index)
+		if !ok || gotIdentity != older || gotRecord.InvalidationEpoch != 12 || gotRecord.MutationConfirmed {
+			t.Fatalf("selection %d identity=%+v record=%+v found=%v", i, gotIdentity, gotRecord, ok)
+		}
+	}
+}
+
 func TestVectorPartitionLifecycleCoordinatorFailsClosedForPreparedOrStaleIdentityV1(t *testing.T) {
 	authority, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
 	committer := &lifecycleCoordinatorCommitterV1{authority: authority, index: 1}
