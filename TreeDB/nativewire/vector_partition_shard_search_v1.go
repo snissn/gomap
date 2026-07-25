@@ -27,6 +27,7 @@ const VectorPartitionShardSearchVersionV1 uint32 = 1
 const (
 	vectorPartitionShardSearchResponseEnvelopeBytesV1 uint64 = 256
 	vectorPartitionShardSearchPartialEnvelopeBytesV1  uint64 = 128
+	vectorPartitionDuplicateLinearThresholdV1                = 16
 )
 
 type VectorPartitionShardSearchMetricV1 string
@@ -825,13 +826,24 @@ func (s *VectorPartitionShardSearchServiceV1) validateResponse(ctx context.Conte
 				partial.SearchRoute != collections.VectorPartitionSearchRouteExactFP32ScanV1 {
 			return 0, fmt.Errorf("%w: malformed partition envelope", ErrVectorPartitionShardSearchAssetsUnavailable)
 		}
+		var seenIDs map[string]struct{}
+		if len(partial.Neighbors) > vectorPartitionDuplicateLinearThresholdV1 {
+			seenIDs = make(map[string]struct{}, len(partial.Neighbors))
+		}
 		for neighborIndex, neighbor := range partial.Neighbors {
 			if neighbor.ID == "" || len(neighbor.ID) > s.limits.MaxStableIDBytes || math.IsNaN(float64(neighbor.Score)) || math.IsInf(float64(neighbor.Score), 0) {
 				return 0, fmt.Errorf("%w: malformed partition result", ErrVectorPartitionShardSearchAssetsUnavailable)
 			}
-			for previous := 0; previous < neighborIndex; previous++ {
-				if partial.Neighbors[previous].ID == neighbor.ID {
+			if seenIDs != nil {
+				if _, duplicate := seenIDs[neighbor.ID]; duplicate {
 					return 0, fmt.Errorf("%w: duplicate stable ID", ErrVectorPartitionShardSearchAssetsUnavailable)
+				}
+				seenIDs[neighbor.ID] = struct{}{}
+			} else {
+				for previous := 0; previous < neighborIndex; previous++ {
+					if partial.Neighbors[previous].ID == neighbor.ID {
+						return 0, fmt.Errorf("%w: duplicate stable ID", ErrVectorPartitionShardSearchAssetsUnavailable)
+					}
 				}
 			}
 			itemBytes := uint64(len(neighbor.ID) + 16)
@@ -924,7 +936,7 @@ type VectorPartitionShardSearchServiceStatsV1 struct {
 	Invalid, UnsupportedConsistency, MissingOwner, UnknownOwner      uint64
 	RemoteOwner, RouteMismatch, NotLeader, Unavailable               uint64
 	GenerationMismatch, AssetsUnavailable, ResponseTooLarge          uint64
-	Canceled, TimedOut, MutationAttempts                             uint64
+	Canceled, TimedOut                                               uint64
 	RouteOwnerNanos, ReadIndexApplyNanos, GenerationOpenNanos        uint64
 	SearchNanos, ResponseCopyNanos, TotalNanos                       uint64
 }

@@ -237,10 +237,19 @@ func (e *benchmarkEnvironment) measureWarmAndBaseline(ctx context.Context, cfg c
 	if err != nil {
 		return serviceMeasurement{}, baselineMeasurement{}, sourceCacheReport{}, err
 	}
+	if pinned == nil {
+		return serviceMeasurement{}, baselineMeasurement{}, sourceCacheReport{}, errors.New("generation source returned a nil pinned generation")
+	}
 	defer pinned.Close()
 	lease, err := pinned.OpenPartition(ctx, e.request.PartitionIDs[0])
 	if err != nil {
 		return serviceMeasurement{}, baselineMeasurement{}, sourceCacheReport{}, err
+	}
+	if lease == nil || lease.Searcher == nil {
+		if lease != nil {
+			_ = lease.Close()
+		}
+		return serviceMeasurement{}, baselineMeasurement{}, sourceCacheReport{}, errors.New("pinned generation returned a nil partition lease or searcher")
 	}
 	defer lease.Close()
 	if lease.Searcher.Status().SearchRoute != m5RequiredRoute {

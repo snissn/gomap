@@ -173,9 +173,8 @@ mapped/heap bytes, and open time. Service totals count requests, successes,
 every fail-closed class, owner routes, read proofs, partitions, candidates,
 response bytes, mapped/heap opens, partition cache hits/misses, cancellation,
 and timeout. The collection generation source separately counts generation
-cache hits/misses, partition hits/misses, and invalidations. The
-`MutationAttempts` counter is structurally zero because this service has no
-mutation dependency.
+cache hits/misses, partition hits/misses, and invalidations. The service has no
+mutation API or mutation dependency.
 
 Read-index/apply time is always separate and must never be attributed to ANN
 search. See `../performance/vector-partition-m5.md` for the checked-in scoped

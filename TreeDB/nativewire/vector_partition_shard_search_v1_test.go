@@ -343,6 +343,53 @@ func TestCollectionVectorPartitionGenerationCacheRefreshIsNotPermanentInvalidati
 	}
 }
 
+func TestCollectionVectorPartitionGenerationCacheBoundsAuthorityRefreshV1(t *testing.T) {
+	key := collectionVectorPartitionGenerationKeyV1{index: "embedding", generation: 7}
+	newEntry := func() *collectionVectorPartitionGenerationCacheV1 {
+		return &collectionVectorPartitionGenerationCacheV1{
+			index:      key.index,
+			generation: key.generation,
+			manifest:   VectorPartitionPinnedManifestV1{Generation: key.generation},
+			searchers:  make(map[uint32]*collections.VectorPartitionLocalSearcherV1),
+			opening:    make(map[uint32]*collectionVectorPartitionSearchLoadV1),
+		}
+	}
+	source := &CollectionVectorPartitionGenerationSourceV1{
+		Collection: new(collections.Collection),
+		entries:    map[collectionVectorPartitionGenerationKeyV1]*collectionVectorPartitionGenerationCacheV1{key: newEntry()},
+	}
+	validations := 0
+	source.testValidateActive = func(context.Context, collectionVectorPartitionGenerationKeyV1) error {
+		validations++
+		return collections.ErrVectorPartitionAuthorityRefreshRequiredV1
+	}
+	refreshEvictions := 0
+	source.testAfterAuthorityRefreshEvict = func() {
+		refreshEvictions++
+		if refreshEvictions <= collectionVectorPartitionMaxAuthorityRefreshesV1 {
+			source.mu.Lock()
+			source.entries[key] = newEntry()
+			source.mu.Unlock()
+		}
+	}
+
+	_, err := source.PinVectorPartitionGenerationV1(t.Context(), key.index, key.generation)
+	if !errors.Is(err, ErrVectorPartitionShardSearchAssetsUnavailable) ||
+		!strings.Contains(err.Error(), "authority refresh retry budget exhausted") {
+		t.Fatalf("refresh exhaustion err=%v", err)
+	}
+	if validations != collectionVectorPartitionMaxAuthorityRefreshesV1+1 {
+		t.Fatalf("validations=%d want %d", validations, collectionVectorPartitionMaxAuthorityRefreshesV1+1)
+	}
+	source.mu.Lock()
+	_, cached := source.entries[key]
+	_, permanentlyInvalidated := source.invalidated[key]
+	source.mu.Unlock()
+	if cached || permanentlyInvalidated {
+		t.Fatalf("refresh exhaustion cached=%v permanently_invalidated=%v", cached, permanentlyInvalidated)
+	}
+}
+
 func TestCollectionVectorPartitionGenerationSingleflightDoesNotShareCallerCancellationV1(t *testing.T) {
 	key := collectionVectorPartitionGenerationKeyV1{index: "embedding", generation: 7}
 	firstLoadStarted := make(chan struct{})
@@ -491,8 +538,31 @@ func TestVectorPartitionShardSearchLeaderGroupLocalReturnsOracleAndProofV1(t *te
 	}
 	stats := service.Stats()
 	if stats.Requests != 1 || stats.Successes != 1 || stats.Errors != 0 || stats.Partitions != 2 ||
-		stats.ReadProofs != 1 || stats.MutationAttempts != 0 {
+		stats.ReadProofs != 1 {
 		t.Fatalf("stats=%+v", stats)
+	}
+}
+
+func TestVectorPartitionShardSearchResponseRejectsLargeDuplicateSetV1(t *testing.T) {
+	neighbors := make([]VectorPartitionShardSearchNeighborV1, vectorPartitionDuplicateLinearThresholdV1+2)
+	for i := range neighbors {
+		neighbors[i] = VectorPartitionShardSearchNeighborV1{ID: fmt.Sprintf("id-%d", i), Score: float32(i)}
+	}
+	neighbors[len(neighbors)-1].ID = neighbors[0].ID
+	service := &VectorPartitionShardSearchServiceV1{limits: DefaultVectorPartitionShardSearchLimitsV1()}
+	request := VectorPartitionShardSearchRequestV1{
+		PartitionIDs:       []uint32{0},
+		TopK:               len(neighbors),
+		ResponseBytesLimit: 1 << 20,
+	}
+	_, err := service.validateResponse(t.Context(), request, []VectorPartitionShardSearchPartialV1{{
+		PartitionID: 0,
+		Neighbors:   neighbors,
+		SearchRoute: collections.VectorPartitionSearchRouteHNSWSearchPackV1,
+	}})
+	if !errors.Is(err, ErrVectorPartitionShardSearchAssetsUnavailable) ||
+		!strings.Contains(err.Error(), "duplicate stable ID") {
+		t.Fatalf("large duplicate response err=%v", err)
 	}
 }
 
@@ -656,24 +726,33 @@ func TestVectorPartitionShardSearchGenerationAndAssetFailuresAreWholeRequestV1(t
 
 	t.Run("oversized_stable_id_rejected_before_search", func(t *testing.T) {
 		service, source, _ := newVectorPartitionShardSearchTestServiceV1(t,
-			[]raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},
+			[]raftplacement.VectorPartitionGroupV1{
+				{PartitionID: 0, GroupID: "group-a"},
+				{PartitionID: 1, GroupID: "group-a"},
+			},
 			map[uint32]collections.VectorPartitionSearchAssetV1{
-				0: vectorPartitionShardSearchAssetTestV1(0, []string{strings.Repeat("x", DefaultVectorPartitionShardSearchLimitsV1().MaxStableIDBytes+1)}, [][]float32{{1, 0}}),
+				0: vectorPartitionShardSearchAssetTestV1(0, []string{"valid"}, [][]float32{{1, 0}}),
+				1: vectorPartitionShardSearchAssetTestV1(1, []string{strings.Repeat("x", DefaultVectorPartitionShardSearchLimitsV1().MaxStableIDBytes+1)}, [][]float32{{1, 0}}),
 			},
 		)
-		response, err := service.Search(context.Background(), vectorPartitionShardSearchRequestTestV1([]uint32{0}))
+		response, err := service.Search(context.Background(), vectorPartitionShardSearchRequestTestV1([]uint32{0, 1}))
 		assertVectorPartitionShardSearchCodeV1(t, err, VectorPartitionShardSearchErrorAssetsUnavailableV1)
 		if !vectorPartitionShardSearchResponseZeroTestV1(response) {
 			t.Fatalf("oversized stable ID returned partial response=%+v", response)
 		}
-		if pins, releases, opens := source.counts(); pins != 1 || releases != 1 || opens != 1 {
+		if pins, releases, opens := source.counts(); pins != 1 || releases != 1 || opens != 2 {
 			t.Fatalf("oversized stable ID pin lifetime=%d/%d opens=%d", pins, releases, opens)
 		}
 		source.mu.Lock()
-		searcher := source.searchers[0]
+		searchers := []*collections.VectorPartitionLocalSearcherV1{source.searchers[0], source.searchers[1]}
 		source.mu.Unlock()
-		if status := searcher.Status(); status.Searches != 0 || status.Failures != 1 || status.ActivePins != 0 || !status.Retired {
-			t.Fatalf("oversized stable ID reached traversal or leaked resources: %+v", status)
+		for partition, searcher := range searchers {
+			if searcher == nil {
+				t.Fatalf("partition %d searcher was not opened", partition)
+			}
+			if status := searcher.Status(); status.Searches != 0 || status.Failures != 0 || status.ActivePins != 0 || !status.Retired {
+				t.Fatalf("partition %d oversized stable ID reached traversal or leaked resources: %+v", partition, status)
+			}
 		}
 	})
 }
@@ -893,7 +972,7 @@ func TestVectorPartitionShardSearchDeadlineIsStableAndNoMutationV1(t *testing.T)
 	if pins, releases, opens := source.counts(); pins != 0 || releases != 0 || opens != 0 {
 		t.Fatalf("expired request observed local state %d/%d/%d", pins, releases, opens)
 	}
-	if stats := service.Stats(); stats.TimedOut != 1 || stats.MutationAttempts != 0 {
+	if stats := service.Stats(); stats.TimedOut != 1 {
 		t.Fatalf("stats=%+v", stats)
 	}
 }

@@ -2,10 +2,30 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"testing"
+	"time"
 )
+
+type cancelAfterErrContextV1 struct {
+	context.Context
+	calls       int
+	cancelAfter int
+}
+
+func (c *cancelAfterErrContextV1) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c *cancelAfterErrContextV1) Done() <-chan struct{}       { return nil }
+func (c *cancelAfterErrContextV1) Value(key any) any           { return c.Context.Value(key) }
+func (c *cancelAfterErrContextV1) Err() error {
+	c.calls++
+	if c.calls >= c.cancelAfter {
+		return context.Canceled
+	}
+	return nil
+}
 
 func lifecycleCheckpointV1(t *testing.T, chain []vectorPartitionLifecycleRecordV1, epoch uint64) vectorPartitionLifecycleCheckpointV1 {
 	t.Helper()
@@ -134,6 +154,31 @@ func TestVectorPartitionLifecycleCheckpointV1CanonicalRoundTripAndDeepCopy(t *te
 	original := checkpoint.State.Generations[chain[0].Generation]
 	if original.Manifest.Placements[0].GroupID == "mutated" || original.Reclaim.OriginalRefs[0].Namespace == "mutated" {
 		t.Fatal("decoded checkpoint aliases caller-owned state")
+	}
+}
+
+func TestVectorPartitionLifecycleCheckpointPreservesManifestDecodeCancellationV1(t *testing.T) {
+	checkpoint := lifecycleCheckpointV1(t, lifecycleLegalChainV1(t)[:5], 7)
+	ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 4}
+	if _, _, err := canonicalVectorPartitionLifecycleCheckpointWithContextV1(ctx, checkpoint); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canonical cancellation err=%v want context.Canceled", err)
+	}
+
+	raw, err := encodeVectorPartitionLifecycleCheckpointCanonicalV1(checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for cancelAfter := 3; cancelAfter < 64; cancelAfter++ {
+		ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: cancelAfter}
+		_, err := decodeVectorPartitionLifecycleCheckpointCanonicalWithContextV1(ctx, raw, "docs", "embedding", 7)
+		if errors.Is(err, context.Canceled) && ctx.calls > 3 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("checkpoint decode did not preserve an in-stream context cancellation")
 	}
 }
 

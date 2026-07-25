@@ -116,8 +116,13 @@ func canonicalVectorPartitionLifecycleCheckpointWithContextV1(ctx context.Contex
 			return zero, nil, err
 		}
 		manifest, err := DecodeVectorPartitionManifestWithContextV1(ctx, manifestRaw, limits)
-		if err != nil ||
-			manifest.Collection != state.Collection ||
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return zero, nil, ctxErr
+			}
+			return zero, nil, fmt.Errorf("%w: lifecycle checkpoint manifest identity", ErrVectorPartitionManifestInvalid)
+		}
+		if manifest.Collection != state.Collection ||
 			manifest.IndexName != state.IndexName ||
 			manifest.Generation != generation {
 			return zero, nil, fmt.Errorf("%w: lifecycle checkpoint manifest identity", ErrVectorPartitionManifestInvalid)
@@ -297,6 +302,9 @@ func decodeVectorPartitionLifecycleCheckpointCanonicalWithContextV1(ctx context.
 	embeddedEpoch := r.u64()
 	state.LastSequence = r.u64()
 	if r.err != nil || r.off+sha256.Size > len(r.b) {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return zero, ctxErr
+		}
 		return zero, fmt.Errorf("%w: lifecycle checkpoint truncated digest", ErrVectorPartitionManifestInvalid)
 	}
 	copy(state.LastDigest[:], r.b[r.off:r.off+sha256.Size])
@@ -311,6 +319,9 @@ func decodeVectorPartitionLifecycleCheckpointCanonicalWithContextV1(ctx context.
 		state.Collection != collection ||
 		state.IndexName != index ||
 		embeddedEpoch != epoch {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return zero, ctxErr
+		}
 		return zero, fmt.Errorf("%w: lifecycle checkpoint embedded identity", ErrVectorPartitionManifestInvalid)
 	}
 
@@ -367,6 +378,9 @@ func decodeVectorPartitionLifecycleCheckpointCanonicalWithContextV1(ctx context.
 		previousGeneration = generation
 	}
 	if r.err != nil || r.off != len(r.b) || len(state.Generations) != generationCount {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return zero, ctxErr
+		}
 		return zero, fmt.Errorf("%w: lifecycle checkpoint truncated, over-cap, or trailing: %v", ErrVectorPartitionManifestInvalid, r.err)
 	}
 

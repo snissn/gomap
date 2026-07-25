@@ -10,6 +10,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 )
 
+const collectionVectorPartitionMaxAuthorityRefreshesV1 = 3
+
 // CollectionVectorPartitionGenerationSourceV1 binds M5 to one actual local
 // collection store. It keeps immutable ready generations and their opened
 // partition packs cached until explicit invalidation or Close. A request lease
@@ -34,9 +36,10 @@ type CollectionVectorPartitionGenerationSourceV1 struct {
 
 	// Narrow package-test seams for shared-load cancellation and cached-active
 	// validation. Production always uses the collection lifecycle authority.
-	testLoadGeneration func(context.Context, collectionVectorPartitionGenerationKeyV1) (*collectionVectorPartitionGenerationCacheV1, error)
-	testValidateActive func(context.Context, collectionVectorPartitionGenerationKeyV1) error
-	testBeforeLoadWait func()
+	testLoadGeneration             func(context.Context, collectionVectorPartitionGenerationKeyV1) (*collectionVectorPartitionGenerationCacheV1, error)
+	testValidateActive             func(context.Context, collectionVectorPartitionGenerationKeyV1) error
+	testBeforeLoadWait             func()
+	testAfterAuthorityRefreshEvict func()
 }
 
 type CollectionVectorPartitionGenerationCacheStatsV1 struct {
@@ -73,6 +76,7 @@ func (s *CollectionVectorPartitionGenerationSourceV1) PinVectorPartitionGenerati
 		return nil, err
 	}
 	key := collectionVectorPartitionGenerationKeyV1{index: index, generation: generation}
+	authorityRefreshes := 0
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -96,8 +100,15 @@ func (s *CollectionVectorPartitionGenerationSourceV1) PinVectorPartitionGenerati
 					return nil, err
 				}
 				if errors.Is(err, collections.ErrVectorPartitionAuthorityRefreshRequiredV1) {
+					authorityRefreshes++
 					if evictErr := s.evictForAuthorityRefresh(entry); evictErr != nil {
 						return nil, evictErr
+					}
+					if s.testAfterAuthorityRefreshEvict != nil {
+						s.testAfterAuthorityRefreshEvict()
+					}
+					if authorityRefreshes > collectionVectorPartitionMaxAuthorityRefreshesV1 {
+						return nil, fmt.Errorf("%w: authority refresh retry budget exhausted", ErrVectorPartitionShardSearchAssetsUnavailable)
 					}
 					continue
 				}

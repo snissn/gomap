@@ -270,22 +270,22 @@ func (m VectorPartitionManifestV1) validateWithContextV1(ctx context.Context, l 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	homeMemberships := make(map[VectorPartitionMembershipV1]struct{}, len(m.Memberships))
-	for i, membership := range m.Memberships {
-		if i&1023 == 0 {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-		}
-		homeMemberships[membership] = struct{}{}
-	}
+	homeIndex := 0
 	for i, membership := range m.OverlapMemberships {
 		if i&1023 == 0 {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 		}
-		if _, duplicate := homeMemberships[membership]; duplicate {
+		for homeIndex < len(m.Memberships) && vectorPartitionMembershipLessV1(m.Memberships[homeIndex], membership) {
+			if homeIndex&1023 == 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
+			homeIndex++
+		}
+		if homeIndex < len(m.Memberships) && m.Memberships[homeIndex] == membership {
 			return fmt.Errorf("%w: duplicate home/overlap membership", ErrVectorPartitionManifestInvalid)
 		}
 	}
@@ -548,16 +548,13 @@ func (m *VectorPartitionManifestV1) Canonicalize() {
 	}
 	sort.Slice(m.Placements, func(i, j int) bool { return m.Placements[i].PartitionID < m.Placements[j].PartitionID })
 	sort.Slice(m.Memberships, func(i, j int) bool {
-		a, b := m.Memberships[i], m.Memberships[j]
-		return a.VectorOrdinal < b.VectorOrdinal || a.VectorOrdinal == b.VectorOrdinal && a.PartitionID < b.PartitionID
+		return vectorPartitionMembershipLessV1(m.Memberships[i], m.Memberships[j])
 	})
 	sort.Slice(m.Representatives, func(i, j int) bool {
-		a, b := m.Representatives[i], m.Representatives[j]
-		return a.VectorOrdinal < b.VectorOrdinal || a.VectorOrdinal == b.VectorOrdinal && a.PartitionID < b.PartitionID
+		return vectorPartitionMembershipLessV1(m.Representatives[i], m.Representatives[j])
 	})
 	sort.Slice(m.OverlapMemberships, func(i, j int) bool {
-		a, b := m.OverlapMemberships[i], m.OverlapMemberships[j]
-		return a.VectorOrdinal < b.VectorOrdinal || a.VectorOrdinal == b.VectorOrdinal && a.PartitionID < b.PartitionID
+		return vectorPartitionMembershipLessV1(m.OverlapMemberships[i], m.OverlapMemberships[j])
 	})
 	sort.Slice(m.Assets, func(i, j int) bool {
 		return m.Assets[i].PartitionID < m.Assets[j].PartitionID || m.Assets[i].PartitionID == m.Assets[j].PartitionID && m.Assets[i].ID < m.Assets[j].ID
@@ -3095,6 +3092,9 @@ func verifyVectorPartitionAssetsWithContextV1(ctx context.Context, root, namespa
 		crc := crc32.NewIEEE()
 		written, err := io.CopyBuffer(io.MultiWriter(sha, crc), section, make([]byte, 64<<10))
 		closeErr := file.Close()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil || closeErr != nil || uint64(written) != a.Bytes {
 			return fmt.Errorf("collections: vector partition asset %q streaming read", a.ID)
 		}
@@ -3106,6 +3106,11 @@ func verifyVectorPartitionAssetsWithContextV1(ctx context.Context, root, namespa
 		}
 	}
 	return nil
+}
+
+func vectorPartitionMembershipLessV1(a, b VectorPartitionMembershipV1) bool {
+	return a.VectorOrdinal < b.VectorOrdinal ||
+		a.VectorOrdinal == b.VectorOrdinal && a.PartitionID < b.PartitionID
 }
 
 type vectorPartitionContextReaderV1 struct {

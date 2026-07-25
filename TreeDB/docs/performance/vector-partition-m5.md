@@ -63,18 +63,39 @@ The implementation provides the production-shaped bounded service contract,
 stage attribution, p50/p95/p99/QPS harness, request/response byte accounting,
 candidate/edge counters, mapped/heap/open accounting, and normal/race tests.
 
-Before #3914 can claim its performance gate, a follow-up run must use the
-declared 1M persistent native HNSW generation and a real local Raft leader. It
-must report cold and warm distributions, actual mapped/heap bytes, and prove
-that warm service overhead excluding read-index wait and HNSW search is at most
-10% of partition-local HNSW search time (or obtain explicit acceptance for a
-profiled protocol requirement). No such claim is made from this micro-shape.
+The required large-scale acceptance run was subsequently completed at clean
+runner head `b4bc0ef79415e665022c59f83bf95d3a8aeb6536`. It used the declared
+1,000,000-vector, 16-dimensional, 16-partition persistent native HNSW
+generation, `top_k=10`, `ef_search=64`, and a three-node in-process
+HashiCorp-Raft group with a live leader, committed command, and production
+read-index evidence.
+
+| Measurement | Accepted result |
+| --- | ---: |
+| cold service mean / p50 / p95 / p99 | 14.2745 s / 14.2844 s / 14.3388 s / 14.3388 s |
+| warm service mean / p50 / p95 / p99 | 45.011 us / 38.667 us / 82.658 us / 175.307 us |
+| warm service QPS | 22,216.62 |
+| mean read-index/apply | 14.511 us |
+| direct partition-local HNSW mean | 32.104 us |
+| warm service-only overhead | 2.735 us |
+| overhead ratio / gate | 8.519% / **PASS** (limit 10%) |
+
+The retained JSON report is
+`/mnt/fast4tb/tmp/m5_artifacts_retry7_Pjdql5/vector_partition_m5_3200dafc3b75_294e61b5009b_b4bc0ef79415.json`
+with SHA-256
+`c101ea02298da96c2abdcb5ba49d9e5e5466a5d28ffdc3473b39047fc7a64ee0`.
+Only the first cold sample is OS-page-cache cold; every cold sample reopens the
+generation source and mapped search pack. The input M3 construction run
+completed successfully, but its first 97 seconds were externally contaminated
+and are not used as timing evidence. The acceptance claim is limited to the
+reported local, in-process service shape and does not claim network
+serialization performance.
 
 ## Persistent 1M input path
 
-The M3 benchmark now has the smallest bounded path needed to construct and
-retain the declared persistent input database. This is an input-preparation
-path, not the missing real-Raft M5 result:
+The M3 benchmark has the smallest bounded path needed to construct and retain
+the declared persistent input database. This command prepares the input; the
+separate real-Raft M5 runner below produces the acceptance result:
 
 ```sh
 FIXTURE=$(mktemp -d /mnt/fast4tb/tmp/m5_fixture_XXXXXX)
@@ -138,6 +159,5 @@ GOWORK=off go run ./TreeDB/cmd/treedb_vector_partition_m5_bench \
 ```
 
 The runner fails by default when the measured service-only overhead exceeds
-10%. A checked large-scale acceptance artifact has not yet been produced; the
-retained M3 database plus the emitted M5 JSON report from this command remain
-the final #3914 acceptance gate.
+10% or when the required measurements are unavailable. It writes a
+machine-readable PASS or FAIL artifact before returning the gate error.

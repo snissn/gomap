@@ -103,12 +103,16 @@ func (s *VectorPartitionLocalSearcherV1) SearchScratchBytesV1(opts VectorPartiti
 	}
 	prepared := s.prepared
 	exactRows := len(s.asset.IDs)
+	maxStableIDBytes := s.maxStableIDBytes
 	var header columnHNSWSearchPackHeader
 	if prepared != nil {
 		header = prepared.Header
 	}
 	s.mu.Unlock()
 
+	if opts.MaxStableIDBytes > 0 && maxStableIDBytes > opts.MaxStableIDBytes {
+		return 0, fmt.Errorf("%w: stable ID bytes=%d exceeds limit=%d", ErrVectorPartitionSearchUnavailable, maxStableIDBytes, opts.MaxStableIDBytes)
+	}
 	if prepared == nil {
 		return checkedVectorPartitionScratchProductV1(uint64(exactRows), uint64(unsafe.Sizeof(VectorPartitionSearchResultV1{})))
 	}

@@ -201,6 +201,8 @@ type gateReport struct {
 	DirectMeanHNSWSearchNanos    float64 `json:"direct_mean_hnsw_search_nanos"`
 	ObservedRatio                float64 `json:"observed_ratio"`
 	Status                       string  `json:"status"`
+	MeasurementValid             bool    `json:"measurement_valid"`
+	FailureReason                string  `json:"failure_reason,omitempty"`
 	NumeratorDefinition          string  `json:"numerator_definition"`
 	DenominatorDefinition        string  `json:"denominator_definition"`
 }
@@ -355,7 +357,7 @@ func run(args []string, stdout io.Writer) error {
 		},
 		Raft: raftReport{
 			Provider:          "github.com/hashicorp/raft via raftcluster.HashicorpRaftProvider",
-			Peers:             []string{"node-a", "node-b", "node-c"},
+			Peers:             sortedNodeIDs(cluster.nodes),
 			Transport:         "three-node in-process HashiCorp Raft in-memory transport with live quorum exchange",
 			LogStableSnapshot: "caller-owned in-memory log, stable, and snapshot stores",
 			GroupID:           string(cluster.groupID),
@@ -390,6 +392,9 @@ func run(args []string, stdout io.Writer) error {
 	}
 	fmt.Fprintf(stdout, "m5 report=%s status=%s overhead_ratio=%.6f threshold=%.2f\n", mustAbs(cfg.out), result.Status, result.Gate.ObservedRatio, result.Gate.ThresholdRatio)
 	if cfg.failOnGate && result.Gate.Status != "PASS" {
+		if !result.Gate.MeasurementValid {
+			return fmt.Errorf("M5 overhead gate unmeasurable: %s (artifact written)", result.Gate.FailureReason)
+		}
 		return fmt.Errorf("M5 overhead gate failed: observed %.6f > %.6f (artifact written)", result.Gate.ObservedRatio, result.Gate.ThresholdRatio)
 	}
 	return nil
@@ -546,6 +551,20 @@ func percentile(sorted []uint64, quantile float64) uint64 {
 }
 
 func evaluateGate(stages stageSamples, baseline distribution) gateReport {
+	report := gateReport{
+		ThresholdRatio:        0.10,
+		Status:                "FAIL",
+		NumeratorDefinition:   "mean warm response TotalNanos minus ReadIndexApplyNanos minus SearchNanos, saturated at zero per request",
+		DenominatorDefinition: "mean wall time of direct SearchWithOptionsV1 on the same pinned persistent partition and query",
+	}
+	if len(stages.total) == 0 {
+		report.FailureReason = "no warm stage samples"
+		return report
+	}
+	if len(stages.readIndexApply) != len(stages.total) || len(stages.search) != len(stages.total) {
+		report.FailureReason = "incomplete warm stage samples"
+		return report
+	}
 	var overhead uint64
 	for i := range stages.total {
 		value := stages.total[i]
@@ -554,24 +573,18 @@ func evaluateGate(stages stageSamples, baseline distribution) gateReport {
 			overhead += value - excluded
 		}
 	}
-	meanOverhead := float64(overhead) / float64(len(stages.total))
-	ratio := math.Inf(1)
-	if baseline.MeanNanos > 0 {
-		ratio = meanOverhead / baseline.MeanNanos
+	report.WarmMeanServiceOverheadNanos = float64(overhead) / float64(len(stages.total))
+	report.DirectMeanHNSWSearchNanos = baseline.MeanNanos
+	if baseline.MeanNanos <= 0 {
+		report.FailureReason = "non-positive direct HNSW baseline"
+		return report
 	}
-	status := "FAIL"
-	if ratio <= 0.10 {
-		status = "PASS"
+	report.MeasurementValid = true
+	report.ObservedRatio = report.WarmMeanServiceOverheadNanos / baseline.MeanNanos
+	if report.ObservedRatio <= report.ThresholdRatio {
+		report.Status = "PASS"
 	}
-	return gateReport{
-		ThresholdRatio:               0.10,
-		WarmMeanServiceOverheadNanos: meanOverhead,
-		DirectMeanHNSWSearchNanos:    baseline.MeanNanos,
-		ObservedRatio:                ratio,
-		Status:                       status,
-		NumeratorDefinition:          "mean warm response TotalNanos minus ReadIndexApplyNanos minus SearchNanos, saturated at zero per request",
-		DenominatorDefinition:        "mean wall time of direct SearchWithOptionsV1 on the same pinned persistent partition and query",
-	}
+	return report
 }
 
 func writeReport(path string, report report) error {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"testing"
@@ -90,12 +91,42 @@ func TestEvaluateGateUsesOnlyNonReadNonSearchServiceOverhead(t *testing.T) {
 		total:          []uint64{1_190, 1_210},
 	}
 	gate := evaluateGate(stages, distribution{MeanNanos: 1_000})
-	if gate.WarmMeanServiceOverheadNanos != 100 || gate.ObservedRatio != 0.10 || gate.Status != "PASS" {
+	if gate.WarmMeanServiceOverheadNanos != 100 || gate.ObservedRatio != 0.10 || gate.Status != "PASS" || !gate.MeasurementValid {
 		t.Fatalf("gate=%+v", gate)
 	}
 	stages.total[1] = 1_211
 	if got := evaluateGate(stages, distribution{MeanNanos: 1_000}); got.Status != "FAIL" {
 		t.Fatalf("gate=%+v want FAIL", got)
+	}
+}
+
+func TestEvaluateGateWritesSerializableFailureForMissingMeasurements(t *testing.T) {
+	tests := []struct {
+		name     string
+		stages   stageSamples
+		baseline distribution
+	}{
+		{name: "no warm samples", baseline: distribution{MeanNanos: 1}},
+		{
+			name: "non-positive baseline",
+			stages: stageSamples{
+				readIndexApply: []uint64{0},
+				search:         []uint64{0},
+				total:          []uint64{1},
+			},
+		},
+		{name: "incomplete warm stages", stages: stageSamples{total: []uint64{1}}, baseline: distribution{MeanNanos: 1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gate := evaluateGate(tt.stages, tt.baseline)
+			if gate.Status != "FAIL" || gate.MeasurementValid || gate.FailureReason == "" {
+				t.Fatalf("gate=%+v want invalid FAIL with a reason", gate)
+			}
+			if _, err := json.Marshal(gate); err != nil {
+				t.Fatalf("marshal gate: %v", err)
+			}
+		})
 	}
 }
 
