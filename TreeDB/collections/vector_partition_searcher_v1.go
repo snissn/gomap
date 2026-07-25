@@ -155,6 +155,53 @@ func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, pr
 	if degree <= math.MaxInt/2 {
 		degree *= 2
 	}
+	if degree > rowCount {
+		// A graph cannot expose more distinct neighbors than it has rows.
+		// Capping here keeps the preflight bound identical to the scratch the
+		// native path actually prepares, even for a tiny shard whose persisted
+		// index definition has a much larger M.
+		degree = rowCount
+	}
+	return vectorPartitionHNSWSearchScratchBytesV1(rowCount, header.VectorStride, degree, topK, efSearch)
+}
+
+// VectorPartitionConservativeSearchScratchBytesV1 returns a transport-neutral
+// upper bound for either M3 search route when only durable membership
+// cardinality and request shape are available. Coordinators use it before
+// weighting surplus candidate memory so a small high-dimensional partition
+// cannot be starved by a larger peer.
+func VectorPartitionConservativeSearchScratchBytesV1(rows, dimensions int, opts VectorPartitionSearchOptionsV1) (uint64, error) {
+	if rows < 0 || dimensions <= 0 || opts.TopK < 1 || opts.EfSearch < opts.TopK || opts.MaxStableIDBytes < 0 {
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
+	exactBytes, err := checkedVectorPartitionScratchProductV1(
+		uint64(rows), uint64(unsafe.Sizeof(VectorPartitionSearchResultV1{})),
+	)
+	if err != nil {
+		return 0, err
+	}
+	vectorStride, err := columnHNSWSearchPackVectorStrideForDimensions(dimensions)
+	if err != nil {
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
+	topK := min(opts.TopK, rows)
+	efSearch := min(opts.EfSearch, rows)
+	if efSearch < topK {
+		efSearch = topK
+	}
+	// Search caps the doubled HNSW degree at row count. Using row count here
+	// therefore covers every persisted M without requiring shard-local headers.
+	hnswBytes, err := vectorPartitionHNSWSearchScratchBytesV1(rows, vectorStride, rows, topK, efSearch)
+	if err != nil {
+		return 0, err
+	}
+	return max(exactBytes, hnswBytes), nil
+}
+
+func vectorPartitionHNSWSearchScratchBytesV1(rowCount, vectorStride, degree, topK, efSearch int) (uint64, error) {
+	if rowCount < 0 || vectorStride < 0 || degree < 0 || topK < 0 || efSearch < 0 {
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
 	frontier := columnVectorGraphNativeSearchFrontierCapacity(rowCount, degree, topK, efSearch)
 
 	var total uint64
@@ -185,7 +232,7 @@ func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, pr
 		{degree, unsafe.Sizeof(float64(0))},
 		{degree, unsafe.Sizeof(uint32(0))},
 		{degree, unsafe.Sizeof(float32(0))},
-		{header.VectorStride, unsafe.Sizeof(float32(0))},
+		{vectorStride, unsafe.Sizeof(float32(0))},
 	} {
 		if err := add(item.count, item.width); err != nil {
 			return 0, err

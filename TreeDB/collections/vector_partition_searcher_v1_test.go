@@ -72,6 +72,28 @@ func TestVectorPartitionLocalSearcherV1ScratchBoundIncludesRowSizedHNSWState(t *
 	}
 }
 
+func TestVectorPartitionConservativeSearchScratchCoversActualRoutesV1(t *testing.T) {
+	opts := VectorPartitionSearchOptionsV1{TopK: 10, EfSearch: 16}
+	conservative, err := VectorPartitionConservativeSearchScratchBytesV1(17, 4096, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared := &columnHNSWSearchPackPreparedView{Header: columnHNSWSearchPackHeader{
+		Rows: 17, Dimensions: 4096, VectorStride: 4096, M: 256, EfSearch: 128,
+	}}
+	actualHNSW, err := vectorPartitionSearchScratchBytesV1(opts, prepared, 0, 0, prepared.Header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actualExact, err := vectorPartitionSearchScratchBytesV1(opts, nil, 17, 0, columnHNSWSearchPackHeader{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conservative < actualHNSW || conservative < actualExact {
+		t.Fatalf("conservative=%d actual hnsw=%d exact=%d", conservative, actualHNSW, actualExact)
+	}
+}
+
 func TestVectorPartitionLocalSearcherV1ExplicitOptionsAndCancellation(t *testing.T) {
 	asset := VectorPartitionSearchAssetV1{
 		ManifestChecksum: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

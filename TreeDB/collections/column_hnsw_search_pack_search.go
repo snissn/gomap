@@ -105,6 +105,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContext(ctx context.C
 	if degree <= math.MaxInt/2 {
 		degree *= 2
 	}
+	if degree > rowCount {
+		degree = rowCount
+	}
 	if err := scratch.prepareHNSWSearchPack(rowCount, v.Header.VectorStride, degree, topK, efSearch, 0, 0); err != nil {
 		return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 search scratch prepare: %w", err)
 	}

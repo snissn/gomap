@@ -427,7 +427,13 @@ func TestVectorPartitionCoordinatorWeightsCandidateBudgetByMembershipV1(t *testi
 		)
 	}
 	request := testVectorPartitionCoordinatorRequestV1(2)
-	request.CandidateBytesLimit = 100 * 64
+	floors, floorTotal, err := vectorPartitionCoordinatorCandidateFloorsV1(
+		[]uint64{90, 10}, []uint32{0, 1}, len(request.Query), request.TopK, request.EfSearch,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.CandidateBytesLimit = floorTotal + 100*64
 
 	response, err := coordinator.Search(context.Background(), request)
 	if err != nil {
@@ -445,7 +451,7 @@ func TestVectorPartitionCoordinatorWeightsCandidateBudgetByMembershipV1(t *testi
 		budgets[call.PartitionIDs[0]] = call.CandidateBytesLimit
 		total += call.CandidateBytesLimit
 	}
-	if budgets[0] != 90*64 || budgets[1] != 10*64 || total != request.CandidateBytesLimit {
+	if budgets[0] != floors[0]+90*64 || budgets[1] != floors[1]+10*64 || total != request.CandidateBytesLimit {
 		t.Fatalf("candidate budgets=%v total=%d", budgets, total)
 	}
 }
@@ -474,7 +480,15 @@ func TestVectorPartitionCoordinatorReservesCandidateBaselineBeforeUnevenSurplusV
 		)
 	}
 	request := testVectorPartitionCoordinatorRequestV1(2)
-	request.CandidateBytesLimit = 1000*8 + 2*uint64(request.EfSearch)*64
+	request.Query = make([]float32, 4096)
+	request.Query[0] = 1
+	floors, floorTotal, err := vectorPartitionCoordinatorCandidateFloorsV1(
+		[]uint64{1000, 1}, []uint32{0, 1}, len(request.Query), request.TopK, request.EfSearch,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.CandidateBytesLimit = floorTotal + 1000*8
 
 	response, err := coordinator.Search(context.Background(), request)
 	if err != nil {
@@ -489,10 +503,11 @@ func TestVectorPartitionCoordinatorReservesCandidateBaselineBeforeUnevenSurplusV
 		budgets[call.PartitionIDs[0]] = call.CandidateBytesLimit
 		total += call.CandidateBytesLimit
 	}
-	baseline := uint64(request.EfSearch) * 64
-	if budgets[0] != baseline+1000*8 || budgets[1] != baseline || total != request.CandidateBytesLimit {
+	largeSurplus := vectorPartitionCoordinatorWeightedBudgetShareV1(1000*8, 1001, 0, 1000)
+	tinySurplus := vectorPartitionCoordinatorWeightedBudgetShareV1(1000*8, 1001, 1000, 1)
+	if budgets[0] != floors[0]+largeSurplus || budgets[1] != floors[1]+tinySurplus || total != request.CandidateBytesLimit {
 		t.Fatalf("candidate budgets=%v total=%d want large=%d tiny=%d total=%d",
-			budgets, total, baseline+1000*8, baseline, request.CandidateBytesLimit)
+			budgets, total, floors[0]+largeSurplus, floors[1]+tinySurplus, request.CandidateBytesLimit)
 	}
 }
 
@@ -502,8 +517,8 @@ func TestVectorPartitionCoordinatorMembershipWeightsObserveContextV1(t *testing.
 		Memberships:    make([]collections.VectorPartitionMembershipV1, 4096),
 	}
 	ctx := &vectorPartitionCoordinatorCancelAfterErrContextV1{cancelAt: 3}
-	if _, _, err := vectorPartitionCoordinatorCandidateWeightsV1(
-		ctx, manifest, []uint32{0}, 8,
+	if _, _, err := vectorPartitionCoordinatorCandidateRowsV1(
+		ctx, manifest, []uint32{0},
 	); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("candidate weight err=%v want deadline exceeded", err)
 	}
