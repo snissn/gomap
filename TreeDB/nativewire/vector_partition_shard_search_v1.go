@@ -292,9 +292,10 @@ type VectorPartitionShardSearchServiceV1 struct {
 	route            vectorPartitionShardSearchRouteV1
 	stats            vectorPartitionShardSearchStatsAccumulatorV1
 
-	// Narrow package-test seam for cancellation at the response boundary.
-	testBeforeResponseCopy func()
-	testSearchPartition    func(context.Context, *collections.VectorPartitionLocalSearcherV1, []float32, collections.VectorPartitionSearchOptionsV1) ([]collections.VectorPartitionSearchResultV1, collections.VectorPartitionSearchMetricsV1, error)
+	// Narrow package-test seams for cancellation and timing at the response boundary.
+	testBeforePartialMaterialization func()
+	testBeforeResponseCopy           func()
+	testSearchPartition              func(context.Context, *collections.VectorPartitionLocalSearcherV1, []float32, collections.VectorPartitionSearchOptionsV1) ([]collections.VectorPartitionSearchResultV1, collections.VectorPartitionSearchMetricsV1, error)
 }
 
 func NewVectorPartitionShardSearchServiceV1(opts VectorPartitionShardSearchServiceOptionsV1) (*VectorPartitionShardSearchServiceV1, error) {
@@ -511,9 +512,9 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 	}
 	response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
 
-	searchStarted := time.Now()
+	responseWorkStarted := time.Now()
 	partials := make([]VectorPartitionShardSearchPartialV1, len(searchers))
-	var totalCandidates, totalEdges, actualCandidateBytes uint64
+	var totalCandidates, totalEdges, actualCandidateBytes, searchNanos uint64
 	for i, lease := range searchers {
 		searcher := lease.Searcher
 		search := searchVectorPartitionWithContextV1
@@ -525,29 +526,31 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 		if s.testSearchPartition != nil {
 			search = s.testSearchPartition
 		}
+		partitionSearchStarted := time.Now()
 		results, metrics, searchErr := search(ctx, searcher, request.Query, collections.VectorPartitionSearchOptionsV1{
 			TopK:             request.TopK,
 			EfSearch:         request.EfSearch,
 			MaxStableIDBytes: s.limits.MaxStableIDBytes,
 		})
+		searchNanos += elapsedNanosV1(partitionSearchStarted)
+		response.Timing.SearchNanos = searchNanos
 		if searchErr != nil {
-			response.Timing.SearchNanos = elapsedNanosV1(searchStarted)
 			return response, s.wrapError(searchErr, groupID)
+		}
+		if s.testBeforePartialMaterialization != nil {
+			s.testBeforePartialMaterialization()
 		}
 		status := searcher.Status()
 		if metrics.Route != status.SearchRoute {
-			response.Timing.SearchNanos = elapsedNanosV1(searchStarted)
 			return response, s.wrapError(fmt.Errorf("%w: partition %d reported route %q after opening as %q", ErrVectorPartitionShardSearchAssetsUnavailable, request.PartitionIDs[i], metrics.Route, status.SearchRoute), groupID)
 		}
 		var ok bool
 		totalCandidates, ok = addUint64V1(totalCandidates, metrics.Candidates)
 		if !ok {
-			response.Timing.SearchNanos = elapsedNanosV1(searchStarted)
 			return response, s.wrapError(ErrVectorPartitionShardSearchResponseTooLarge, groupID)
 		}
 		totalEdges, ok = addUint64V1(totalEdges, metrics.Edges)
 		if !ok {
-			response.Timing.SearchNanos = elapsedNanosV1(searchStarted)
 			return response, s.wrapError(ErrVectorPartitionShardSearchResponseTooLarge, groupID)
 		}
 		partitionCandidateBytes, ok := mulUint64V1(metrics.Candidates, 64)
@@ -555,7 +558,6 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 			actualCandidateBytes, ok = addUint64V1(actualCandidateBytes, partitionCandidateBytes)
 		}
 		if !ok || actualCandidateBytes > request.CandidateBytesLimit || actualCandidateBytes > s.limits.MaxCandidateBytes {
-			response.Timing.SearchNanos = elapsedNanosV1(searchStarted)
 			return response, s.wrapError(fmt.Errorf("%w: actual candidate bytes", ErrVectorPartitionShardSearchInvalidRequest), groupID)
 		}
 		partials[i] = VectorPartitionShardSearchPartialV1{
@@ -575,14 +577,15 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 			partials[i].Neighbors[j] = VectorPartitionShardSearchNeighborV1{ID: result.ID, Score: result.Score}
 		}
 	}
-	response.Timing.SearchNanos = elapsedNanosV1(searchStarted)
 
-	copyStarted := time.Now()
 	if s.testBeforeResponseCopy != nil {
 		s.testBeforeResponseCopy()
 	}
 	responseBytes, err := s.validateResponse(ctx, request, partials)
-	response.Timing.ResponseCopyNanos = elapsedNanosV1(copyStarted)
+	responseWorkNanos := elapsedNanosV1(responseWorkStarted)
+	if responseWorkNanos > searchNanos {
+		response.Timing.ResponseCopyNanos = responseWorkNanos - searchNanos
+	}
 	if err != nil {
 		return response, s.wrapError(err, groupID)
 	}

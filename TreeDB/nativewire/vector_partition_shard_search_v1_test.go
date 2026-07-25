@@ -564,6 +564,29 @@ func TestVectorPartitionShardSearchLeaderGroupLocalReturnsOracleAndProofV1(t *te
 	}
 }
 
+func TestVectorPartitionShardSearchTimingExcludesResponseMaterializationFromSearchV1(t *testing.T) {
+	service, _, _ := newVectorPartitionShardSearchTestServiceV1(t,
+		[]raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},
+		map[uint32]collections.VectorPartitionSearchAssetV1{
+			0: vectorPartitionShardSearchAssetTestV1(0, []string{"a"}, [][]float32{{1, 0}}),
+		},
+	)
+	const materializationDelay = 25 * time.Millisecond
+	service.testBeforePartialMaterialization = func() {
+		time.Sleep(materializationDelay)
+	}
+	response, err := service.Search(context.Background(), vectorPartitionShardSearchRequestTestV1([]uint32{0}))
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if response.Timing.ResponseCopyNanos < uint64(materializationDelay) {
+		t.Fatalf("response materialization timing=%d want >=%d", response.Timing.ResponseCopyNanos, materializationDelay)
+	}
+	if response.Timing.SearchNanos >= response.Timing.ResponseCopyNanos {
+		t.Fatalf("search timing includes response materialization: %+v", response.Timing)
+	}
+}
+
 func TestVectorPartitionShardSearchPinnedManifestDirectIndexFailsClosedV1(t *testing.T) {
 	service, source, _ := newVectorPartitionShardSearchTestServiceV1(t,
 		[]raftplacement.VectorPartitionGroupV1{
