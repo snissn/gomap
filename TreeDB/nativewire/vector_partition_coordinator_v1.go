@@ -665,8 +665,12 @@ func (c *VectorPartitionCoordinatorV1) validateRequest(request VectorPartitionCo
 		}
 		norm += float64(value) * float64(value)
 	}
-	if norm == 0 {
-		return fmt.Errorf("%w: zero query", ErrVectorPartitionCoordinatorInvalidRequest)
+	if norm == 0 || math.IsNaN(norm) || math.IsInf(norm, 0) {
+		return fmt.Errorf("%w: invalid query norm", ErrVectorPartitionCoordinatorInvalidRequest)
+	}
+	invNorm := 1 / math.Sqrt(norm)
+	if invNorm > math.MaxFloat32 || math.IsNaN(invNorm) || math.IsInf(invNorm, 0) {
+		return fmt.Errorf("%w: query inverse norm out of range", ErrVectorPartitionCoordinatorInvalidRequest)
 	}
 	mergeEntries, ok := mulUint64V1(uint64(request.PartitionProbes), uint64(request.TopK))
 	if !ok || mergeEntries > uint64(request.MergeEntriesLimit) {
@@ -1156,6 +1160,20 @@ func (c *VectorPartitionCoordinatorV1) validateShardResponse(ctx context.Context
 		!slices.Contains(task.group.Members, proof.LeaderNode) ||
 		request.TargetNodeID != "" && proof.ServingNode != request.TargetNodeID {
 		return ErrVectorPartitionCoordinatorMalformedResponse
+	}
+	var timingSubtotal uint64
+	for _, component := range [...]uint64{
+		response.Timing.RouteOwnerNanos,
+		response.Timing.ReadIndexApplyNanos,
+		response.Timing.GenerationOpenNanos,
+		response.Timing.SearchNanos,
+		response.Timing.ResponseCopyNanos,
+	} {
+		var ok bool
+		timingSubtotal, ok = addUint64V1(timingSubtotal, component)
+		if !ok || timingSubtotal > response.Timing.TotalNanos {
+			return ErrVectorPartitionCoordinatorMalformedResponse
+		}
 	}
 	var candidates, edges uint64
 	for i, partial := range response.Partials {
