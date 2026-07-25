@@ -41,10 +41,53 @@ func (a CatalogVectorPartitionMutationAdmissionV1) AdmitVectorPartitionMutationV
 	}
 	for _, status := range a.Authority.VectorPartitionLifecycleStatusesV1() {
 		identity := status.Identity
-		if !status.Active || identity.Index.Collection.Database != database || identity.Index.Collection.Catalog != catalog || identity.Index.Collection.Collection != collection {
+		if identity.Index.Collection.Database != database || identity.Index.Collection.Catalog != catalog || identity.Index.Collection.Collection != collection {
+			continue
+		}
+		if status.State == raftplacement.VectorPartitionLifecycleInvalidatedV1 && !status.MutationConfirmed {
+			return errors.New("nativewire: a prior vector-relevant mutation is pending outcome recovery")
+		}
+		if !status.Active {
 			continue
 		}
 		if _, err := a.Coordinator.InvalidateBeforeRelevantMutationV1(ctx, identity.Index, "nativewire relevant mutation"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ConfirmVectorPartitionMutationV1 releases only the fences which this
+// request made pending.  The shared submitter calls this solely after the
+// data Raft bridge reports a committed and locally recoverable result; a
+// failed or ambiguous submit intentionally leaves the catalog frozen.
+func (a CatalogVectorPartitionMutationAdmissionV1) ConfirmVectorPartitionMutationV1(ctx context.Context, command iwire.CommandID, sections []iwire.Section) error {
+	if a.Authority == nil || a.Coordinator.Authority != a.Authority || a.Coordinator.Committer == nil {
+		return errors.New("nativewire: vector partition lifecycle admission is incompletely configured")
+	}
+	if !vectorPartitionRelevantMutationCommandV1(command) {
+		return fmt.Errorf("nativewire: unclassified cluster mutation command %d", command)
+	}
+	collection, err := vectorPartitionMutationCollectionV1(command, sections)
+	if err != nil {
+		return err
+	}
+	database, catalog := a.Database, a.Catalog
+	if database == "" {
+		database = raftplacement.DefaultDatabase
+	}
+	if catalog == "" {
+		catalog = raftplacement.DefaultCatalog
+	}
+	for _, status := range a.Authority.VectorPartitionLifecycleStatusesV1() {
+		identity := status.Identity
+		if identity.Index.Collection.Database != database || identity.Index.Collection.Catalog != catalog || identity.Index.Collection.Collection != collection ||
+			status.State != raftplacement.VectorPartitionLifecycleInvalidatedV1 || status.MutationConfirmed {
+			continue
+		}
+		if err := a.Coordinator.ConfirmRelevantMutationV1(ctx, raftplacement.VectorPartitionLifecycleMutationProofV1{
+			IndexIdentity: identity.Index, ActiveGeneration: identity.Generation, InvalidationEpoch: status.InvalidationEpoch,
+		}); err != nil {
 			return err
 		}
 	}

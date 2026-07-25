@@ -57,6 +57,7 @@ const (
 	VectorPartitionLifecycleActivateV1           VectorPartitionLifecycleCommandKindV1 = "activate"
 	VectorPartitionLifecycleAbortBuildV1         VectorPartitionLifecycleCommandKindV1 = "abort_build"
 	VectorPartitionLifecycleInvalidateV1         VectorPartitionLifecycleCommandKindV1 = "invalidate"
+	VectorPartitionLifecycleConfirmMutationV1    VectorPartitionLifecycleCommandKindV1 = "confirm_mutation"
 	VectorPartitionLifecycleRetireV1             VectorPartitionLifecycleCommandKindV1 = "retire"
 	VectorPartitionLifecycleMarkCleanableV1      VectorPartitionLifecycleCommandKindV1 = "mark_cleanable"
 	VectorPartitionLifecycleRecordGroupCleanupV1 VectorPartitionLifecycleCommandKindV1 = "record_group_cleanup"
@@ -140,6 +141,7 @@ type VectorPartitionLifecycleRecordV1 struct {
 	ReadySetDigest           string                                 `json:"ready_set_digest"`
 	InvalidationReason       string                                 `json:"invalidation_reason"`
 	InvalidationEpoch        uint64                                 `json:"invalidation_epoch"`
+	MutationConfirmed        bool                                   `json:"mutation_confirmed"`
 	Aborted                  bool                                   `json:"aborted"`
 	RetirementReason         string                                 `json:"retirement_reason"`
 	SupersededByGeneration   uint64                                 `json:"superseded_by_generation"`
@@ -318,6 +320,11 @@ func ApplyVectorPartitionLifecycleCommandV1(record VectorPartitionLifecycleRecor
 		next.State = VectorPartitionLifecycleInvalidatedV1
 		next.InvalidationReason = command.Reason
 		next.InvalidationEpoch = command.InvalidationEpoch
+	case VectorPartitionLifecycleConfirmMutationV1:
+		if current.InvalidationEpoch == 0 || current.InvalidationEpoch != command.MutationEpoch {
+			return VectorPartitionLifecycleRecordV1{}, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("mutation confirmation does not match invalidation fence"))
+		}
+		next.MutationConfirmed = true
 	case VectorPartitionLifecycleRetireV1:
 		next.State = VectorPartitionLifecycleRetiredV1
 	case VectorPartitionLifecycleMarkCleanableV1:
@@ -633,6 +640,11 @@ func validateVectorPartitionLifecycleCommandShapeV1(c VectorPartitionLifecycleCo
 				return err
 			}
 			return errors.Join(ErrInvalidVectorPartitionLifecycle, fmt.Errorf("invalid invalidate command shape"))
+		}
+	case VectorPartitionLifecycleConfirmMutationV1:
+		if c.ExpectedState != VectorPartitionLifecycleInvalidatedV1 || c.MutationEpoch == 0 ||
+			!otherZero(c.PreviousActiveGeneration, 0, c.GroupReady, c.ReadySetDigest, c.Reason, c.InvalidationEpoch, c.References, c.GroupID) {
+			return errors.Join(ErrInvalidVectorPartitionLifecycle, fmt.Errorf("invalid mutation-confirm command shape"))
 		}
 	case VectorPartitionLifecycleRetireV1:
 		if c.ExpectedState != VectorPartitionLifecycleInvalidatedV1 ||

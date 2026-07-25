@@ -150,3 +150,26 @@ func (c VectorPartitionLifecycleCoordinatorV1) InvalidateBeforeRelevantMutationV
 	}
 	return proof, nil
 }
+
+// ConfirmRelevantMutationV1 clears the durable build/activation freeze only
+// after the caller has a definitive committed-data result.  If a process
+// crashes or a submit is ambiguous before this call, the fence intentionally
+// remains pending and recovery must prove the data outcome before confirming.
+func (c VectorPartitionLifecycleCoordinatorV1) ConfirmRelevantMutationV1(ctx context.Context, proof VectorPartitionLifecycleMutationProofV1) error {
+	if c.Authority == nil || c.Committer == nil {
+		return ErrCatalogMetaUnavailable
+	}
+	if proof.ActiveGeneration == 0 || proof.InvalidationEpoch == 0 {
+		return errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("mutation confirmation requires exact invalidation proof"))
+	}
+	record, ok := c.Authority.lifecycleRecordForIndexGenerationV1(proof.IndexIdentity, proof.ActiveGeneration)
+	if !ok || record.State != VectorPartitionLifecycleInvalidatedV1 || record.InvalidationEpoch != proof.InvalidationEpoch {
+		return errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("mutation confirmation has no matching invalidated generation"))
+	}
+	_, err := c.Submit(ctx, VectorPartitionLifecycleCommandV1{
+		Kind: VectorPartitionLifecycleConfirmMutationV1, ExpectedRevision: record.Revision,
+		ExpectedState: VectorPartitionLifecycleInvalidatedV1, Identity: record.Identity,
+		MutationEpoch: proof.InvalidationEpoch,
+	})
+	return err
+}

@@ -274,6 +274,22 @@ func TestCatalogMetaLifecycleMutationFenceRejectsRacingCandidateAfterRestoreV1(t
 	if _, err := restored.applyCommittedCatalogMetaV1(mustEncodeCatalogMetaLifecycleCommandV1(t, activate), applied+1); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
 		t.Fatalf("stale activation after restore err=%v", err)
 	}
+	// Equal-to-fence is adversarial too: the number alone cannot prove that
+	// the data entry committed, so build/source capture remains blocked while
+	// the durable mutation outcome is pending.
+	equalIdentity := catalogMetaLifecycleTestIdentityV1(catalog, 8, 12)
+	equalBegin := catalogMetaLifecycleTestBeginV1(equalIdentity, 0, 10)
+	if _, err := restored.applyCommittedCatalogMetaV1(mustEncodeCatalogMetaLifecycleCommandV1(t, equalBegin), applied+1); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("equal-fence build during pending mutation err=%v", err)
+	}
+	// This models the only release path: the data Raft result is definitive,
+	// then its exact invalidation proof is committed as confirmation.
+	active = catalogMetaLifecycleApplyV1(t, restored, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleConfirmMutationV1, func(c *VectorPartitionLifecycleCommandV1) {
+		c.MutationEpoch = 10
+	}))
+	if !active.MutationConfirmed {
+		t.Fatal("committed mutation did not release pending fence")
+	}
 	// Cleanup is allowed to reclaim the invalidated generation's assets, but
 	// not the durable mutation fence.  A delayed/replayed candidate remains
 	// refused after the source record has reached its terminal absent state.
@@ -290,7 +306,7 @@ func TestCatalogMetaLifecycleMutationFenceRejectsRacingCandidateAfterRestoreV1(t
 	// A replacement built from the post-mutation source watermark is allowed;
 	// this is the recovery path after a submit failure leaves the old generation
 	// invalidated and the data writer retries/rebuilds.
-	freshIdentity := catalogMetaLifecycleTestIdentityV1(catalog, 8, 12)
+	freshIdentity := catalogMetaLifecycleTestIdentityV1(catalog, 9, 13)
 	fresh := catalogMetaLifecycleBuildPreparedV1(t, restored, &applied, freshIdentity, 0, 10)
 	fresh = catalogMetaLifecycleApplyV1(t, restored, &applied, catalogMetaLifecycleTestCommandV1(fresh, VectorPartitionLifecycleActivateV1, func(c *VectorPartitionLifecycleCommandV1) {
 		c.MutationEpoch = 10

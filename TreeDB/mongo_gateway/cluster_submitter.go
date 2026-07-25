@@ -529,6 +529,11 @@ func (s *Server) submitClusterMutation(ctx context.Context, command iwire.Comman
 	if err != nil {
 		return nil, err
 	}
+	if result.CommittedRecoverable {
+		if err := treenativewire.ConfirmVectorPartitionMutationV1(ctx, s.ClusterSubmitter, command, cmd.Known); err != nil {
+			return nil, err
+		}
+	}
 	if err := validateMongoClusterSubmitResult(ack, result); err != nil {
 		return nil, err
 	}

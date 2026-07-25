@@ -45,6 +45,17 @@ func (s *RaftClusterSubmitter) AdmitVectorPartitionMutationV1(ctx context.Contex
 	return s.VectorPartitionAdmission.AdmitVectorPartitionMutationV1(ctx, command, sections)
 }
 
+func (s *RaftClusterSubmitter) ConfirmVectorPartitionMutationV1(ctx context.Context, command iwire.CommandID, sections []iwire.Section) error {
+	if s == nil || s.VectorPartitionAdmission == nil {
+		return protocolError(iwire.ErrReadOnly, "vector partition lifecycle admission is not configured")
+	}
+	confirmer, ok := s.VectorPartitionAdmission.(VectorPartitionMutationCommitProviderV1)
+	if !ok {
+		return protocolError(iwire.ErrReadOnly, "vector partition lifecycle mutation confirmation is not configured")
+	}
+	return confirmer.ConfirmVectorPartitionMutationV1(ctx, command, sections)
+}
+
 // RoutedRaftClusterSubmitter composes the concrete single-group Raft bridge
 // with a catalog-backed route provider. The base RaftClusterSubmitter does not
 // implement ClusterRouteProvider so existing no-provider behavior stays

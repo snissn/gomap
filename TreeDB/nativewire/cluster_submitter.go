@@ -89,6 +89,14 @@ type VectorPartitionMutationAdmissionProviderV1 interface {
 	AdmitVectorPartitionMutationV1(context.Context, iwire.CommandID, []iwire.Section) error
 }
 
+// VectorPartitionMutationCommitProviderV1 is called only after the data
+// command has a definitive committed-and-recoverable result.  It releases the
+// replicated lifecycle freeze installed by admission; ambiguous or failed
+// submissions deliberately do not call it.
+type VectorPartitionMutationCommitProviderV1 interface {
+	ConfirmVectorPartitionMutationV1(context.Context, iwire.CommandID, []iwire.Section) error
+}
+
 // VectorPartitionMutationAdmissionRequiredV1 marks an M7-enabled shared
 // submitter. It prevents a wiring error from degrading an active lifecycle to
 // the legacy optional path: a required submitter without an admission provider
@@ -122,6 +130,26 @@ func AdmitVectorPartitionMutationV1(ctx context.Context, submitter ClusterSubmit
 		return nil
 	}
 	return admitter.AdmitVectorPartitionMutationV1(ctx, command, cloneSections(sections))
+}
+
+func ConfirmVectorPartitionMutationV1(ctx context.Context, submitter ClusterSubmitter, command iwire.CommandID, sections []iwire.Section) error {
+	if required, ok := submitter.(VectorPartitionMutationAdmissionRequiredV1); ok {
+		enabled, err := required.RequiresVectorPartitionMutationAdmissionV1(ctx)
+		if err != nil {
+			return err
+		}
+		if !enabled {
+			return nil
+		}
+	}
+	confirmer, ok := submitter.(VectorPartitionMutationCommitProviderV1)
+	if !ok {
+		if _, required := submitter.(VectorPartitionMutationAdmissionRequiredV1); required {
+			return protocolError(iwire.ErrReadOnly, "vector partition lifecycle mutation confirmation is required but not configured")
+		}
+		return nil
+	}
+	return confirmer.ConfirmVectorPartitionMutationV1(ctx, command, cloneSections(sections))
 }
 
 // ClusterAdmissionStatus describes whether this node may accept cluster-owned
@@ -230,6 +258,11 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 	result, err := s.clusterSubmitter.SubmitCommandEntryV1(ctx, entry, metadata)
 	if err != nil {
 		return nil, err
+	}
+	if result.CommittedRecoverable {
+		if err := ConfirmVectorPartitionMutationV1(ctx, s.clusterSubmitter, cmd.Header.ID, cmd.Known); err != nil {
+			return nil, err
+		}
 	}
 	if err := validateClusterSubmitResult(metadata, result); err != nil {
 		return nil, err

@@ -205,7 +205,7 @@ type CatalogMetaAuthorityV1 struct {
 	// invalidation advances it before the corresponding data mutation is
 	// admitted, so a generation built from an older source cannot activate
 	// after a crash, replay, or a cleanup of the invalidated record.
-	mutationFences map[vectorPartitionLifecycleServingKeyV1]uint64
+	mutationFences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1
 }
 
 func NewCatalogMetaAuthorityV1() *CatalogMetaAuthorityV1 { return &CatalogMetaAuthorityV1{} }
