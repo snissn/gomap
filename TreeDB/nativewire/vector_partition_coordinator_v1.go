@@ -78,6 +78,7 @@ type VectorPartitionCoordinatorLimitsV1 struct {
 	MaxQueryBytes, MaxTopK, MaxEfSearch, MaxPartitionsPerRequest         int
 	MaxIdentityBytes, MaxStableIDBytes, MaxMergeEntries                  int
 	MaxRequestBytes, MaxCandidateBytes, MaxResponseBytes                 uint64
+	MaxWallClock                                                         time.Duration
 }
 
 func DefaultVectorPartitionCoordinatorLimitsV1() VectorPartitionCoordinatorLimitsV1 {
@@ -100,6 +101,7 @@ func DefaultVectorPartitionCoordinatorLimitsV1() VectorPartitionCoordinatorLimit
 		MaxRequestBytes:         4 << 20,
 		MaxCandidateBytes:       shard.MaxCandidateBytes,
 		MaxResponseBytes:        shard.MaxResponseBytes,
+		MaxWallClock:            30 * time.Second,
 	}
 }
 
@@ -364,6 +366,9 @@ func normalizeVectorPartitionCoordinatorLimitsV1(limits VectorPartitionCoordinat
 	fillUint(&limits.MaxRequestBytes, defaults.MaxRequestBytes)
 	fillUint(&limits.MaxCandidateBytes, defaults.MaxCandidateBytes)
 	fillUint(&limits.MaxResponseBytes, defaults.MaxResponseBytes)
+	if limits.MaxWallClock == 0 {
+		limits.MaxWallClock = defaults.MaxWallClock
+	}
 	shard := DefaultVectorPartitionShardSearchLimitsV1()
 	if limits.MaxSelectedPartitions < 1 || limits.MaxGroups < 1 || limits.MaxRequests < 1 ||
 		limits.MaxConcurrentRequests < 1 || limits.MaxConcurrentRequests > limits.MaxRequests ||
@@ -376,7 +381,8 @@ func normalizeVectorPartitionCoordinatorLimitsV1(limits VectorPartitionCoordinat
 		limits.MaxStableIDBytes < 1 || limits.MaxStableIDBytes > shard.MaxStableIDBytes ||
 		limits.MaxMergeEntries < 1 || limits.MaxRequestBytes == 0 ||
 		limits.MaxCandidateBytes == 0 || limits.MaxCandidateBytes > shard.MaxCandidateBytes ||
-		limits.MaxResponseBytes == 0 || limits.MaxResponseBytes > shard.MaxResponseBytes {
+		limits.MaxResponseBytes == 0 || limits.MaxResponseBytes > shard.MaxResponseBytes ||
+		limits.MaxWallClock < time.Millisecond {
 		return VectorPartitionCoordinatorLimitsV1{}, fmt.Errorf("%w: invalid coordinator limits", ErrVectorPartitionCoordinatorInvalidRequest)
 	}
 	return limits, nil
@@ -401,7 +407,9 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 		c.stats.succeed(response, total)
 	}()
 
-	requestCtx, cancel, err := vectorPartitionCoordinatorContextV1(ctx, request.DeadlineUnixNano)
+	requestCtx, cancel, err := vectorPartitionCoordinatorContextV1(
+		ctx, request.DeadlineUnixNano, c.limits.MaxWallClock,
+	)
 	if err != nil {
 		return response, c.wrapError(err, "")
 	}
@@ -523,19 +531,32 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 	return response, nil
 }
 
-func vectorPartitionCoordinatorContextV1(ctx context.Context, deadlineUnixNano int64) (context.Context, context.CancelFunc, error) {
+func vectorPartitionCoordinatorContextV1(
+	ctx context.Context,
+	deadlineUnixNano int64,
+	maxWallClock time.Duration,
+) (context.Context, context.CancelFunc, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, func() {}, err
 	}
-	if deadlineUnixNano == 0 {
-		child, cancel := context.WithCancel(ctx)
-		return child, cancel, nil
+	now := time.Now()
+	deadline := now.Add(maxWallClock)
+	if parentDeadline, ok := ctx.Deadline(); ok && parentDeadline.Before(deadline) {
+		deadline = parentDeadline
 	}
-	deadline := time.Unix(0, deadlineUnixNano)
-	if !deadline.After(time.Now()) {
+	if deadlineUnixNano != 0 {
+		requestDeadline := time.Unix(0, deadlineUnixNano)
+		if !requestDeadline.After(now) {
+			return nil, func() {}, context.DeadlineExceeded
+		}
+		if requestDeadline.Before(deadline) {
+			deadline = requestDeadline
+		}
+	}
+	if !deadline.After(now) {
 		return nil, func() {}, context.DeadlineExceeded
 	}
 	child, cancel := context.WithDeadline(ctx, deadline)

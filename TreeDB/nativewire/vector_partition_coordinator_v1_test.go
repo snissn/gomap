@@ -581,6 +581,160 @@ func TestVectorPartitionCoordinatorPropagatesEffectiveDeadlineV1(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionCoordinatorClampsDefaultAndExplicitDeadlineV1(t *testing.T) {
+	tests := []struct {
+		name            string
+		limits          VectorPartitionCoordinatorLimitsV1
+		requestDeadline time.Duration
+		wantWallClock   time.Duration
+	}{
+		{
+			name:          "default_without_request_deadline",
+			wantWallClock: DefaultVectorPartitionCoordinatorLimitsV1().MaxWallClock,
+		},
+		{
+			name:            "explicit_deadline_clamped_to_nonzero_limit",
+			limits:          VectorPartitionCoordinatorLimitsV1{MaxWallClock: 2 * time.Second},
+			requestDeadline: time.Hour,
+			wantWallClock:   2 * time.Second,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			coordinator, _, dispatcher := testVectorPartitionCoordinatorV1(t,
+				[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+				[]raftcluster.GroupID{"group-a"},
+				map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "a", Score: 1}}},
+				test.limits,
+			)
+			request := testVectorPartitionCoordinatorRequestV1(1)
+			before := time.Now()
+			if test.requestDeadline > 0 {
+				request.DeadlineUnixNano = before.Add(test.requestDeadline).UnixNano()
+			}
+			if _, err := coordinator.Search(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			after := time.Now()
+			if len(dispatcher.calls) != 1 {
+				t.Fatalf("calls=%d", len(dispatcher.calls))
+			}
+			got := time.Unix(0, dispatcher.calls[0].DeadlineUnixNano)
+			earliest := before.Add(test.wantWallClock)
+			latest := after.Add(test.wantWallClock)
+			if got.Before(earliest) || got.After(latest) {
+				t.Fatalf("effective deadline=%v want range [%v,%v]", got, earliest, latest)
+			}
+		})
+	}
+}
+
+func TestVectorPartitionCoordinatorWallClockTimeoutCancelsJoinsAndReturnsNoPartialV1(t *testing.T) {
+	block := make(chan struct{})
+	blocked := make(chan raftcluster.GroupID, 1)
+	coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "a", Score: 1}}},
+		VectorPartitionCoordinatorLimitsV1{MaxWallClock: 25 * time.Millisecond},
+	)
+	dispatcher.blockByGroup["group-a"] = block
+	dispatcher.blocked = blocked
+	type searchResult struct {
+		response VectorPartitionCoordinatorResponseV1
+		err      error
+	}
+	done := make(chan searchResult, 1)
+	go func() {
+		response, err := coordinator.Search(context.Background(), testVectorPartitionCoordinatorRequestV1(1))
+		done <- searchResult{response: response, err: err}
+	}()
+	select {
+	case <-blocked:
+	case <-time.After(time.Second):
+		t.Fatal("dispatch did not enter blocked call")
+	}
+	var result searchResult
+	select {
+	case result = <-done:
+	case <-time.After(time.Second):
+		t.Fatal("coordinator did not time out, cancel, and join dispatch")
+	}
+	if !errors.Is(result.err, context.DeadlineExceeded) {
+		t.Fatalf("err=%v", result.err)
+	}
+	if !vectorPartitionCoordinatorResponseIsZeroTestV1(result.response) {
+		t.Fatalf("partial response=%+v", result.response)
+	}
+	dispatcher.mu.Lock()
+	active := dispatcher.active
+	dispatcher.mu.Unlock()
+	if active != 0 || source.router.closeCount != 1 {
+		t.Fatalf("active=%d router closes=%d", active, source.router.closeCount)
+	}
+	stats := coordinator.Stats()
+	if stats.Requests != 1 || stats.Errors != 1 || stats.TimedOut != 1 || stats.Successes != 0 {
+		t.Fatalf("stats=%+v", stats)
+	}
+}
+
+func TestVectorPartitionCoordinatorEnforcesConcurrentRequestCapV1(t *testing.T) {
+	const taskCount = 6
+	groups := make([]raftplacement.GroupV1, taskCount)
+	owners := make([]raftcluster.GroupID, taskCount)
+	neighbors := make(map[uint32][]VectorPartitionShardSearchNeighborV1, taskCount)
+	block := make(chan struct{})
+	blocked := make(chan raftcluster.GroupID, taskCount)
+	for i := range taskCount {
+		groupID := raftcluster.GroupID(fmt.Sprintf("group-%02d", i))
+		nodeID := raftcluster.NodeID(fmt.Sprintf("node-%02d", i))
+		groups[i] = raftplacement.GroupV1{ID: groupID, Members: []raftcluster.NodeID{nodeID}, LeaderHint: nodeID}
+		owners[i] = groupID
+		neighbors[uint32(i)] = []VectorPartitionShardSearchNeighborV1{{ID: fmt.Sprintf("doc-%02d", i), Score: 1}}
+	}
+	coordinator, _, dispatcher := testVectorPartitionCoordinatorV1(
+		t, groups, owners, neighbors,
+		VectorPartitionCoordinatorLimitsV1{MaxConcurrentRequests: 2},
+	)
+	for _, group := range groups {
+		dispatcher.blockByGroup[group.ID] = block
+	}
+	dispatcher.blocked = blocked
+	done := make(chan error, 1)
+	go func() {
+		_, err := coordinator.Search(context.Background(), testVectorPartitionCoordinatorRequestV1(taskCount))
+		done <- err
+	}()
+	for range 2 {
+		select {
+		case <-blocked:
+		case <-time.After(time.Second):
+			t.Fatal("worker did not enter blocked dispatch")
+		}
+	}
+	dispatcher.mu.Lock()
+	active, maximum := dispatcher.active, dispatcher.maximum
+	dispatcher.mu.Unlock()
+	if active != 2 || maximum != 2 {
+		t.Fatalf("active=%d maximum=%d want=2", active, maximum)
+	}
+	close(block)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("coordinator did not join all bounded workers")
+	}
+	dispatcher.mu.Lock()
+	active, maximum, calls := dispatcher.active, dispatcher.maximum, len(dispatcher.calls)
+	dispatcher.mu.Unlock()
+	if active != 0 || maximum != 2 || calls != taskCount {
+		t.Fatalf("active=%d maximum=%d calls=%d", active, maximum, calls)
+	}
+}
+
 func vectorPartitionCoordinatorResponseIsZeroTestV1(response VectorPartitionCoordinatorResponseV1) bool {
 	return response.Version == 0 &&
 		response.RequestID == "" &&
