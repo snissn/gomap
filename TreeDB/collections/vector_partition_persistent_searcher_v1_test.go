@@ -10,7 +10,12 @@ import (
 )
 
 func TestOpenVectorPartitionLocalSearcherForGenerationWithContextV1RejectsCanceledColdOpen(t *testing.T) {
-	_, _, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}})
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}})
+	defer func() {
+		if err := d.Close(); err != nil {
+			t.Errorf("close DB: %v", err)
+		}
+	}()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := col.OpenVectorPartitionLocalSearcherForGenerationWithContextV1(ctx, def.Name, 1, 0); !errors.Is(err, context.Canceled) {
