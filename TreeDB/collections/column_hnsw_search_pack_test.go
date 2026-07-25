@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -521,6 +522,21 @@ func TestColumnHNSWSearchPackPreparedViewContracts2314(t *testing.T) {
 	})
 	if _, _, err := testColumnHNSWSearchPackPreparedViewFromBytesAllowErr2314(bad, mappedresource.SourceHeapCopy, base); err == nil || !strings.Contains(err.Error(), "neighbor ordinal") {
 		t.Fatalf("bad prepared view err=%v want neighbor ordinal", err)
+	}
+}
+
+func TestColumnHNSWSearchPackPreparedValidationObservesContext2314(t *testing.T) {
+	const rows = 8192
+	offsets := make([]uint64, rows+1)
+	ctx := &vectorPartitionRouterDeadlineAfterErrContextV1{
+		Context: context.Background(), deadlineAfter: 3,
+	}
+	err := validateColumnHNSWSearchPackAdjacencyWithContext(ctx, 0, rows, offsets, nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("adjacency validation err=%v want deadline exceeded", err)
+	}
+	if ctx.calls != ctx.deadlineAfter {
+		t.Fatalf("context calls=%d want %d", ctx.calls, ctx.deadlineAfter)
 	}
 }
 

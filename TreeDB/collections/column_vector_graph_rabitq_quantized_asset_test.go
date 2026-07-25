@@ -509,25 +509,27 @@ func TestCollectionSearchVectorIndexWithBufferRabitQQuantized2452(t *testing.T) 
 		t.Fatalf("cache after rabitq quantized_rerank=%+v afterOnly=%+v want shared prepared entry", afterRerank, afterOnly)
 	}
 
-	quantizedOnlyAllocs := testing.AllocsPerRun(100, func() {
-		got, err := col.SearchVectorIndexWithBuffer(quantizedOnlyOpts, &buffer)
-		if err != nil || len(got.Results) != quantizedOnlyOpts.TopK {
-			panic("unexpected rabitq quantized_only SearchVectorIndexWithBuffer allocation probe result")
+	if !collectionsRaceEnabled {
+		quantizedOnlyAllocs := testing.AllocsPerRun(100, func() {
+			got, err := col.SearchVectorIndexWithBuffer(quantizedOnlyOpts, &buffer)
+			if err != nil || len(got.Results) != quantizedOnlyOpts.TopK {
+				panic("unexpected rabitq quantized_only SearchVectorIndexWithBuffer allocation probe result")
+			}
+		})
+		if quantizedOnlyAllocs != 0 {
+			_ = d.Close()
+			t.Fatalf("rabitq quantized_only SearchVectorIndexWithBuffer steady-state allocs/run=%v want 0", quantizedOnlyAllocs)
 		}
-	})
-	if quantizedOnlyAllocs != 0 {
-		_ = d.Close()
-		t.Fatalf("rabitq quantized_only SearchVectorIndexWithBuffer steady-state allocs/run=%v want 0", quantizedOnlyAllocs)
-	}
-	rerankAllocs := testing.AllocsPerRun(100, func() {
-		got, err := col.SearchVectorIndexWithBuffer(rerankOpts, &buffer)
-		if err != nil || len(got.Results) != rerankOpts.TopK {
-			panic("unexpected rabitq quantized_rerank SearchVectorIndexWithBuffer allocation probe result")
+		rerankAllocs := testing.AllocsPerRun(100, func() {
+			got, err := col.SearchVectorIndexWithBuffer(rerankOpts, &buffer)
+			if err != nil || len(got.Results) != rerankOpts.TopK {
+				panic("unexpected rabitq quantized_rerank SearchVectorIndexWithBuffer allocation probe result")
+			}
+		})
+		if rerankAllocs != 0 {
+			_ = d.Close()
+			t.Fatalf("rabitq quantized_rerank SearchVectorIndexWithBuffer steady-state allocs/run=%v want 0", rerankAllocs)
 		}
-	})
-	if rerankAllocs != 0 {
-		_ = d.Close()
-		t.Fatalf("rabitq quantized_rerank SearchVectorIndexWithBuffer steady-state allocs/run=%v want 0", rerankAllocs)
 	}
 
 	beforeClose := col.collectionVectorIndexPreparedSearchCacheSnapshot()

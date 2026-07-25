@@ -45,10 +45,19 @@ func BuildRouterV1(p []RouterPartitionV1, c RouterConfigV1) (RouterModelV1, erro
 	return internal.BuildRouterV1(p, c)
 }
 func ValidateRouterModelV1(m RouterModelV1) error { return internal.ValidateRouterModelV1(m) }
+func ValidateRouterModelWithContextV1(ctx context.Context, m RouterModelV1) error {
+	return internal.ValidateRouterModelWithContextV1(ctx, m)
+}
 func CanonicalRouterJSONV1(m RouterModelV1) ([]byte, error) {
 	return internal.CanonicalRouterJSONV1(m)
 }
+func CanonicalRouterJSONWithContextV1(ctx context.Context, m RouterModelV1) ([]byte, error) {
+	return internal.CanonicalRouterJSONWithContextV1(ctx, m)
+}
 func RouterDigestV1(m RouterModelV1) (string, error) { return internal.RouterDigestV1(m) }
+func RouterDigestWithContextV1(ctx context.Context, m RouterModelV1) (string, error) {
+	return internal.RouterDigestWithContextV1(ctx, m)
+}
 func RouteExactV1(m RouterModelV1, query []float32, candidateBudget, partitionProbes int) (RouterRouteResultV1, error) {
 	return internal.RouteExactV1(m, query, candidateBudget, partitionProbes)
 }

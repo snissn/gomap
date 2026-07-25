@@ -282,7 +282,7 @@ func (c *Collection) BuildAndPublishVectorPartitionRouterV1(ctx context.Context,
 	if err != nil {
 		return fail(err)
 	}
-	modelDigest, err := internalrouter.RouterDigestV1(model)
+	modelDigest, err := internalrouter.RouterDigestWithContextV1(ctx, model)
 	if err != nil {
 		return fail(err)
 	}
@@ -831,19 +831,36 @@ func verifyVectorPartitionRouterStableAssetV1(file *os.File, ref ColumnAssetRef)
 // OpenVectorPartitionRouterV1 validates and pins the currently active ready
 // generation under the M1 storage barrier.
 func (c *Collection) OpenVectorPartitionRouterV1(index string) (*VectorPartitionRouterV1, VectorPartitionRouterOpenStatusV1, error) {
+	return c.OpenVectorPartitionRouterWithContextV1(context.Background(), index)
+}
+
+// OpenVectorPartitionRouterWithContextV1 is the cancellation-aware M4 open
+// used by the bounded M6 coordinator. The legacy entry point remains a
+// background-context wrapper.
+func (c *Collection) OpenVectorPartitionRouterWithContextV1(ctx context.Context, index string) (*VectorPartitionRouterV1, VectorPartitionRouterOpenStatusV1, error) {
 	var router *VectorPartitionRouterV1
 	var status VectorPartitionRouterOpenStatusV1
 	started := time.Now()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		status.FailureReason = err.Error()
+		return nil, status, err
+	}
 	if c == nil || c.db == nil {
 		status.FailureReason = "collections: closed collection"
 		return nil, status, errors.New(status.FailureReason)
 	}
-	err := WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+	err := WithVectorPartitionStorageBarrierWithContextV1(ctx, c.db.Dir(), func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		store, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
 		if err != nil {
 			return err
 		}
-		manifest, err := store.OpenActive(c.name, index)
+		manifest, err := store.OpenActiveWithContext(ctx, c.name, index)
 		if err != nil {
 			return err
 		}
@@ -858,14 +875,16 @@ func (c *Collection) OpenVectorPartitionRouterV1(index string) (*VectorPartition
 		if err := c.validateVectorPartitionSourceIdentityV1(manifest); err != nil {
 			return err
 		}
-		opened, err := c.openVectorPartitionRouterManifestV1(manifest)
+		opened, err := c.openVectorPartitionRouterManifestWithContextV1(ctx, manifest)
 		if err != nil {
 			return err
 		}
+		if err := ctx.Err(); err != nil {
+			return closeVectorPartitionRouterViewAfterOpenErrorV1(opened.view, err)
+		}
 		key := vectorPartitionReaderPinKeyV1(c.db.Dir(), c.name, index, manifest.Generation)
 		if key == "" {
-			opened.view.Close()
-			return errors.New("collections: invalid vector partition router pin root")
+			return closeVectorPartitionRouterViewAfterOpenErrorV1(opened.view, errors.New("collections: invalid vector partition router pin root"))
 		}
 		vectorPartitionReaderPinsV1.Lock()
 		vectorPartitionReaderPinsV1.counts[key]++
@@ -892,6 +911,16 @@ func (c *Collection) OpenVectorPartitionRouterV1(index string) (*VectorPartition
 }
 
 func (c *Collection) openVectorPartitionRouterManifestV1(manifest VectorPartitionManifestV1) (*VectorPartitionRouterV1, error) {
+	return c.openVectorPartitionRouterManifestWithContextV1(context.Background(), manifest)
+}
+
+func (c *Collection) openVectorPartitionRouterManifestWithContextV1(ctx context.Context, manifest VectorPartitionManifestV1) (*VectorPartitionRouterV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if manifest.RouterAsset.Bytes > internalrouter.DefaultRouterConfigV1().MaxRouterBytes {
 		return nil, errors.New("collections: vector partition router asset exceeds the format allocation cap")
 	}
@@ -935,7 +964,10 @@ func (c *Collection) openVectorPartitionRouterManifestV1(manifest VectorPartitio
 	if err != nil {
 		return nil, err
 	}
-	view, err := newColumnHNSWSearchPackPreparedViewFromHandle(manager, handle, columnHNSWSearchPackDecodeOptions{
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Join(err, handle.Release())
+	}
+	view, err := openVectorPartitionRouterPreparedViewWithContextV1(ctx, manager, handle, columnHNSWSearchPackDecodeOptions{
 		ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{
 			ManifestGeneration: manifest.SourceGeneration,
 			ManifestChecksum:   manifest.SourceChecksum,
@@ -943,17 +975,27 @@ func (c *Collection) openVectorPartitionRouterManifestV1(manifest VectorPartitio
 		},
 	})
 	if err != nil {
-		return nil, errors.Join(err, handle.Release())
+		return nil, err
 	}
-	sum := sha256.Sum256(handle.Bytes())
-	if hex.EncodeToString(sum[:]) != manifest.RouterAsset.Checksum {
+	hash := sha256.New()
+	raw := handle.Bytes()
+	for start := 0; start < len(raw); start += 1 << 20 {
+		if err := ctx.Err(); err != nil {
+			return nil, errors.Join(err, view.Close())
+		}
+		end := min(start+(1<<20), len(raw))
+		if _, err := hash.Write(raw[start:end]); err != nil {
+			return nil, errors.Join(err, view.Close())
+		}
+	}
+	if hex.EncodeToString(hash.Sum(nil)) != manifest.RouterAsset.Checksum {
 		return nil, errors.Join(errors.New("collections: vector partition router sha256 mismatch"), view.Close())
 	}
 	if view.Header.Dimensions != def.Dimensions || view.Header.Rows == 0 ||
 		len(manifest.Representatives) != 0 && view.Header.Rows != len(manifest.Representatives) {
 		return nil, errors.Join(errors.New("collections: vector partition router pack shape mismatch"), view.Close())
 	}
-	model, digest, viewToModel, err := decodeVectorPartitionRouterModelV1(view, manifest)
+	model, digest, viewToModel, err := decodeVectorPartitionRouterModelWithContextV1(ctx, view, manifest)
 	if err != nil {
 		return nil, errors.Join(err, view.Close())
 	}
@@ -965,8 +1007,33 @@ func (c *Collection) openVectorPartitionRouterManifestV1(manifest VectorPartitio
 	return router, nil
 }
 
+func openVectorPartitionRouterPreparedViewWithContextV1(ctx context.Context, manager *mappedresource.Manager, handle *mappedresource.Handle, opts columnHNSWSearchPackDecodeOptions) (*columnHNSWSearchPackPreparedView, error) {
+	view, err := newColumnHNSWSearchPackPreparedViewFromHandleWithContext(ctx, manager, handle, opts)
+	if err != nil {
+		return nil, errors.Join(err, handle.Release())
+	}
+	return view, nil
+}
+
+func closeVectorPartitionRouterViewAfterOpenErrorV1(view *columnHNSWSearchPackPreparedView, cause error) error {
+	if view == nil {
+		return cause
+	}
+	return errors.Join(cause, view.Close())
+}
+
 func decodeVectorPartitionRouterModelV1(view *columnHNSWSearchPackPreparedView, manifest VectorPartitionManifestV1) (internalrouter.RouterModelV1, string, []int, error) {
+	return decodeVectorPartitionRouterModelWithContextV1(context.Background(), view, manifest)
+}
+
+func decodeVectorPartitionRouterModelWithContextV1(ctx context.Context, view *columnHNSWSearchPackPreparedView, manifest VectorPartitionManifestV1) (internalrouter.RouterModelV1, string, []int, error) {
 	var model internalrouter.RouterModelV1
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return model, "", nil, err
+	}
 	if view == nil || len(view.DocumentIDOffsets) != view.Header.Rows+1 {
 		return model, "", nil, errors.New("collections: vector partition router record offsets are unavailable")
 	}
@@ -974,6 +1041,11 @@ func decodeVectorPartitionRouterModelV1(view *columnHNSWSearchPackPreparedView, 
 	var digest [sha256.Size]byte
 	viewKeys := make([]uint64, view.Header.Rows)
 	for ordinal := 0; ordinal < view.Header.Rows; ordinal++ {
+		if ordinal&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return model, "", nil, err
+			}
+		}
 		start, end := view.DocumentIDOffsets[ordinal], view.DocumentIDOffsets[ordinal+1]
 		if end < start || end > uint64(len(view.DocumentIDBytes)) {
 			return model, "", nil, errors.New("collections: vector partition router record range is invalid")
@@ -1031,20 +1103,23 @@ func decodeVectorPartitionRouterModelV1(view *columnHNSWSearchPackPreparedView, 
 			Path: path, Values: values,
 		})
 	}
+	nodeOrdinal := 0
 	for _, node := range nodes {
-		model.Nodes = append(model.Nodes, node)
-	}
-	sort.Slice(model.Nodes, func(i, j int) bool { return model.Nodes[i].NodeID < model.Nodes[j].NodeID })
-	sort.Slice(model.Representatives, func(i, j int) bool {
-		if model.Representatives[i].PartitionID != model.Representatives[j].PartitionID {
-			return model.Representatives[i].PartitionID < model.Representatives[j].PartitionID
+		if nodeOrdinal&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return model, "", nil, err
+			}
 		}
-		return model.Representatives[i].LeafNodeID < model.Representatives[j].LeafNodeID
-	})
-	if err := internalrouter.ValidateRouterModelV1(model); err != nil {
+		model.Nodes = append(model.Nodes, node)
+		nodeOrdinal++
+	}
+	if err := ctx.Err(); err != nil {
 		return model, "", nil, err
 	}
-	gotDigest, err := internalrouter.RouterDigestV1(model)
+	if err := sortDecodedVectorPartitionRouterModelWithContextV1(ctx, &model); err != nil {
+		return model, "", nil, err
+	}
+	gotDigest, err := internalrouter.RouterDigestWithContextV1(ctx, model)
 	if err != nil {
 		return model, "", nil, err
 	}
@@ -1055,23 +1130,40 @@ func decodeVectorPartitionRouterModelV1(view *columnHNSWSearchPackPreparedView, 
 	expectedRepresentatives := append([]VectorPartitionMembershipV1(nil), manifest.Representatives...)
 	actualRepresentatives := make([]VectorPartitionMembershipV1, len(model.Representatives))
 	for i, representative := range model.Representatives {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return model, "", nil, err
+			}
+		}
 		actualRepresentatives[i] = VectorPartitionMembershipV1{VectorOrdinal: representative.SourceOrdinal, PartitionID: representative.PartitionID}
 	}
-	sort.Slice(actualRepresentatives, func(i, j int) bool {
-		if actualRepresentatives[i].VectorOrdinal != actualRepresentatives[j].VectorOrdinal {
-			return actualRepresentatives[i].VectorOrdinal < actualRepresentatives[j].VectorOrdinal
+	if err := sortVectorPartitionSliceWithContextV1(ctx, actualRepresentatives, func(a, b VectorPartitionMembershipV1) bool {
+		if a.VectorOrdinal != b.VectorOrdinal {
+			return a.VectorOrdinal < b.VectorOrdinal
 		}
-		return actualRepresentatives[i].PartitionID < actualRepresentatives[j].PartitionID
-	})
+		return a.PartitionID < b.PartitionID
+	}); err != nil {
+		return model, "", nil, err
+	}
 	if len(expectedRepresentatives) == 0 || !equalVectorPartitionMembershipsV1(actualRepresentatives, expectedRepresentatives) {
 		return model, "", nil, errors.New("collections: vector partition router representative manifest mismatch")
 	}
 	modelOrdinal := make(map[uint64]int, len(model.Representatives))
 	for ordinal, representative := range model.Representatives {
+		if ordinal&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return model, "", nil, err
+			}
+		}
 		modelOrdinal[uint64(representative.PartitionID)<<32|uint64(representative.LeafNodeID)] = ordinal
 	}
 	viewToModel := make([]int, len(viewKeys))
 	for ordinal, key := range viewKeys {
+		if ordinal&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return model, "", nil, err
+			}
+		}
 		mapped, exists := modelOrdinal[key]
 		if !exists {
 			return model, "", nil, errors.New("collections: vector partition router view/model mapping is incomplete")
@@ -1079,6 +1171,23 @@ func decodeVectorPartitionRouterModelV1(view *columnHNSWSearchPackPreparedView, 
 		viewToModel[ordinal] = mapped
 	}
 	return model, gotDigest, viewToModel, nil
+}
+
+func sortDecodedVectorPartitionRouterModelWithContextV1(ctx context.Context, model *internalrouter.RouterModelV1) error {
+	if model == nil {
+		return errors.New("collections: nil vector partition router model")
+	}
+	if err := sortVectorPartitionSliceWithContextV1(ctx, model.Nodes, func(a, b internalrouter.RouterHierarchyNodeV1) bool {
+		return a.NodeID < b.NodeID
+	}); err != nil {
+		return err
+	}
+	return sortVectorPartitionSliceWithContextV1(ctx, model.Representatives, func(a, b internalrouter.RouterRepresentativeV1) bool {
+		if a.PartitionID != b.PartitionID {
+			return a.PartitionID < b.PartitionID
+		}
+		return a.LeafNodeID < b.LeafNodeID
+	})
 }
 
 func equalVectorPartitionMembershipsV1(left, right []VectorPartitionMembershipV1) bool {
@@ -1093,8 +1202,17 @@ func equalVectorPartitionMembershipsV1(left, right []VectorPartitionMembershipV1
 	return true
 }
 
-func (r *VectorPartitionRouterV1) Search(query []float32, opts VectorPartitionRouterSearchOptionsV1) (result VectorPartitionRouterSearchResultV1, resultErr error) {
+func (r *VectorPartitionRouterV1) Search(query []float32, opts VectorPartitionRouterSearchOptionsV1) (VectorPartitionRouterSearchResultV1, error) {
+	return r.SearchWithContextV1(context.Background(), query, opts)
+}
+
+// SearchWithContextV1 preserves M4 ordering while making representative scans
+// and ranking cancellable for M6 deadlines.
+func (r *VectorPartitionRouterV1) SearchWithContextV1(ctx context.Context, query []float32, opts VectorPartitionRouterSearchOptionsV1) (result VectorPartitionRouterSearchResultV1, resultErr error) {
 	started := time.Now()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	result.Status.Mode = opts.Mode
 	result.Status.CandidateBudget = uint64(max(opts.CandidateBudget, 0))
 	result.Status.PartitionProbes = uint64(max(opts.PartitionProbes, 0))
@@ -1110,6 +1228,9 @@ func (r *VectorPartitionRouterV1) Search(query []float32, opts VectorPartitionRo
 	}
 	if r == nil {
 		return fail(errors.New("collections: vector partition router is nil"))
+	}
+	if err := ctx.Err(); err != nil {
+		return fail(err)
 	}
 	r.closeMu.RLock()
 	defer r.closeMu.RUnlock()
@@ -1131,6 +1252,9 @@ func (r *VectorPartitionRouterV1) Search(query []float32, opts VectorPartitionRo
 	if err != nil {
 		return fail(err)
 	}
+	if err := ctx.Err(); err != nil {
+		return fail(err)
+	}
 	var candidates []vectorPartitionRouterCandidateV1
 	switch opts.Mode {
 	case VectorPartitionRouterModeExactV1:
@@ -1139,6 +1263,11 @@ func (r *VectorPartitionRouterV1) Search(query []float32, opts VectorPartitionRo
 		}
 		candidates = make([]vectorPartitionRouterCandidateV1, len(r.model.Representatives))
 		for ordinal, representative := range r.model.Representatives {
+			if ordinal&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return fail(err)
+				}
+			}
 			candidates[ordinal] = vectorPartitionRouterCandidateV1{
 				ordinal: ordinal, score: cosineDotVectorPartitionRouterV1(normalized, representative.Values),
 			}
@@ -1150,7 +1279,7 @@ func (r *VectorPartitionRouterV1) Search(query []float32, opts VectorPartitionRo
 		}
 		scratch := r.scratch.Get().(*columnVectorGraphNativeSearchScratch)
 		defer r.scratch.Put(scratch)
-		native, stats, err := r.view.searchCosine(query, columnVectorGraphNativeSearchOptions{
+		native, stats, err := r.view.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{
 			TopK: opts.CandidateBudget, EfSearch: opts.CandidateBudget,
 			CandidateLimit: opts.CandidateBudget,
 			// Router search consumes only representative ordinals and scores.
@@ -1158,6 +1287,9 @@ func (r *VectorPartitionRouterV1) Search(query []float32, opts VectorPartitionRo
 			OmitResultMaterialization: true,
 		}, scratch)
 		if err != nil {
+			return fail(err)
+		}
+		if err := ctx.Err(); err != nil {
 			return fail(err)
 		}
 		for _, candidate := range native {
@@ -1171,7 +1303,7 @@ func (r *VectorPartitionRouterV1) Search(query []float32, opts VectorPartitionRo
 	default:
 		return fail(fmt.Errorf("collections: unsupported vector partition router mode %q", opts.Mode))
 	}
-	result.Partitions, err = rankVectorPartitionRouterCandidatesV1(r.model.Representatives, candidates, opts.PartitionProbes)
+	result.Partitions, err = rankVectorPartitionRouterCandidatesWithContextV1(ctx, r.model.Representatives, candidates, opts.PartitionProbes)
 	if err != nil {
 		return fail(err)
 	}
@@ -1192,8 +1324,23 @@ type vectorPartitionRouterCandidateV1 struct {
 }
 
 func rankVectorPartitionRouterCandidatesV1(representatives []internalrouter.RouterRepresentativeV1, candidates []vectorPartitionRouterCandidateV1, probes int) ([]VectorPartitionRouterPartitionScoreV1, error) {
+	return rankVectorPartitionRouterCandidatesWithContextV1(context.Background(), representatives, candidates, probes)
+}
+
+func rankVectorPartitionRouterCandidatesWithContextV1(ctx context.Context, representatives []internalrouter.RouterRepresentativeV1, candidates []vectorPartitionRouterCandidateV1, probes int) ([]VectorPartitionRouterPartitionScoreV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	best := make(map[uint32]VectorPartitionRouterPartitionScoreV1)
-	for _, candidate := range candidates {
+	for i, candidate := range candidates {
+		if i&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		if candidate.ordinal < 0 || candidate.ordinal >= len(representatives) || math.IsNaN(candidate.score) || math.IsInf(candidate.score, 0) {
 			return nil, errors.New("collections: vector partition router candidate is invalid")
 		}
@@ -1218,12 +1365,18 @@ func rankVectorPartitionRouterCandidatesV1(representatives []internalrouter.Rout
 	for _, score := range best {
 		result = append(result, score)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].Distance != result[j].Distance {
 			return result[i].Distance < result[j].Distance
 		}
 		return result[i].PartitionID < result[j].PartitionID
 	})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return result[:probes], nil
 }
 

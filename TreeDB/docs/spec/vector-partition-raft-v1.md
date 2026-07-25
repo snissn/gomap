@@ -3,8 +3,10 @@
 Status: **M1 durable identity/lifecycle and M4 representative-router
 contracts** for #3908/#3910/#3913. M1 persists and validates generation
 manifests. M4 builds, persists, reopens, and searches the generation-bound
-representative router. Distributed routing, RPC, Raft reads, shard search, and
-merged top-k remain later milestones.
+representative router. M5 now owns the bounded shard-search service contract,
+and M6 owns transport-neutral coordinator fanout and merged top-k in
+`vector-partition-coordinator-v1.md`. A production remote transport and
+multi-group acceptance remain M8 work.
 
 ## M1 durable lifecycle
 

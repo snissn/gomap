@@ -205,6 +205,29 @@ type VectorPartitionShardSearchResponseV1 struct {
 	Timing        VectorPartitionShardSearchTimingV1
 }
 
+// MeasureVectorPartitionShardSearchResponseBytesV1 applies the M5 v1 logical
+// response accounting used by service and transport-neutral dispatchers. It
+// measures the decoded envelope, not a specific network framing.
+func MeasureVectorPartitionShardSearchResponseBytesV1(partials []VectorPartitionShardSearchPartialV1) (uint64, error) {
+	partialBytes, ok := mulUint64V1(uint64(len(partials)), vectorPartitionShardSearchPartialEnvelopeBytesV1)
+	if !ok {
+		return 0, ErrVectorPartitionShardSearchResponseTooLarge
+	}
+	responseBytes, ok := addUint64V1(vectorPartitionShardSearchResponseEnvelopeBytesV1, partialBytes)
+	if !ok {
+		return 0, ErrVectorPartitionShardSearchResponseTooLarge
+	}
+	for _, partial := range partials {
+		for _, neighbor := range partial.Neighbors {
+			responseBytes, ok = addUint64V1(responseBytes, uint64(len(neighbor.ID)+16))
+			if !ok {
+				return 0, ErrVectorPartitionShardSearchResponseTooLarge
+			}
+		}
+	}
+	return responseBytes, nil
+}
+
 // VectorPartitionPinnedManifestV1 is the bounded identity/placement subset M5
 // needs from M1. Memberships and asset descriptors stay inside the local
 // generation source so warm requests never clone a potentially 1M-row
@@ -519,7 +542,7 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 		searcher := lease.Searcher
 		search := searchVectorPartitionWithContextV1
 		if searcher.Status().SearchRoute == collections.VectorPartitionSearchRouteHNSWSearchPackV1 {
-			// The native pack checks cancellation before/after its bounded
+			// The native pack polls the caller context throughout its bounded
 			// traversal. Avoid a channel/goroutine on the performance path.
 			search = searchVectorPartitionDirectV1
 		}
@@ -829,12 +852,8 @@ func (s *VectorPartitionShardSearchServiceV1) validateResponse(ctx context.Conte
 	if len(partials) != len(r.PartitionIDs) {
 		return 0, fmt.Errorf("%w: partial count", ErrVectorPartitionShardSearchAssetsUnavailable)
 	}
-	partialBytes, ok := mulUint64V1(uint64(len(partials)), vectorPartitionShardSearchPartialEnvelopeBytesV1)
-	if !ok {
-		return 0, ErrVectorPartitionShardSearchResponseTooLarge
-	}
-	responseBytes, ok := addUint64V1(vectorPartitionShardSearchResponseEnvelopeBytesV1, partialBytes)
-	if !ok || responseBytes > r.ResponseBytesLimit || responseBytes > s.limits.MaxResponseBytes {
+	responseBytes, err := MeasureVectorPartitionShardSearchResponseBytesV1(partials)
+	if err != nil || responseBytes > r.ResponseBytesLimit || responseBytes > s.limits.MaxResponseBytes {
 		return 0, ErrVectorPartitionShardSearchResponseTooLarge
 	}
 	for i, partial := range partials {
@@ -870,11 +889,6 @@ func (s *VectorPartitionShardSearchServiceV1) validateResponse(ctx context.Conte
 					}
 				}
 				seenSmallBloom |= bit
-			}
-			itemBytes := uint64(len(neighbor.ID) + 16)
-			responseBytes, ok = addUint64V1(responseBytes, itemBytes)
-			if !ok || responseBytes > r.ResponseBytesLimit || responseBytes > s.limits.MaxResponseBytes {
-				return 0, ErrVectorPartitionShardSearchResponseTooLarge
 			}
 		}
 	}

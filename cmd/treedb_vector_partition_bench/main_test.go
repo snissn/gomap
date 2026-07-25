@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -162,6 +163,47 @@ func TestM3FixtureAllowsMillionVectorsPlusBoundedQueriesV1(t *testing.T) {
 	}
 }
 
+func TestM6PreflightAllowsBoundedMillionVectorEvidenceV1(t *testing.T) {
+	manifest := fixtureManifest{
+		SchemaVersion: schemaVersion,
+		Fixture:       "million-m6",
+		Generator:     fixtureGenerator,
+		Arithmetic:    fixtureArithmetic,
+		Vectors:       1_000_000,
+		Queries:       32,
+		Dimensions:    16,
+		Metric:        "cosine",
+		Seed:          1,
+		Checksum:      strings.Repeat("0", 64),
+	}
+	if err := validateM3FixtureWithCaps(manifest, maxVectors, maxFixtureBytes); err != nil {
+		t.Fatalf("declared 1M M6 fixture rejected: %v", err)
+	}
+	cfg := config{
+		stage: m6CoordinatorStageV1, partitions: 16, topK: 10,
+		probes: []int{16}, overlaps: []float64{0},
+		stages:           stageSet(m6CoordinatorAttributionStageV1),
+		routerConfig:     vectorpartition.DefaultRouterConfigV1(),
+		sourceHNSWDegree: 4,
+	}
+	work, err := validateBenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits)
+	if err != nil {
+		t.Fatalf("bounded 1M M6 work rejected: %v", err)
+	}
+	if work.CorpusPasses != 5 || work.VectorQueryVisits != 160_000_000 {
+		t.Fatalf("1M M6 work plan=%+v", work)
+	}
+	memory, err := planBenchmarkMemory(cfg, manifest)
+	if err != nil {
+		t.Fatalf("bounded 1M M6 memory rejected: %v", err)
+	}
+	if memory.RouterBuildWorkBytes == 0 ||
+		memory.ModeledPeakBytes <= memory.FixtureResidentBytes ||
+		memory.ModeledPeakBytes > maxFixtureBytes {
+		t.Fatalf("1M M6 memory plan=%+v cap=%d", memory, maxFixtureBytes)
+	}
+}
+
 func TestM3SourceLoadBoundsColumnGraphPublicationsV1(t *testing.T) {
 	const acceptanceRows = 1_000_000
 	publications := (acceptanceRows + m3SourceInsertBatchRows - 1) / m3SourceInsertBatchRows
@@ -254,6 +296,7 @@ func TestRouterStageUsesPersistedExactAndNativeHNSWPaths(t *testing.T) {
 	if result.ResultKind != "router_local_path_evidence" ||
 		result.ProductionEvidence ||
 		result.Metrics.MeasurementStatus != "router_local_production_path_no_raft" ||
+		result.Metrics.SourceHNSWDegree != partitionHNSWDegree ||
 		result.Metrics.RepresentativeCount != 8 ||
 		result.Metrics.MinRepresentatives != 2 ||
 		result.Metrics.MaxRepresentatives != 2 ||
@@ -341,6 +384,148 @@ func TestRouterStageFailsBeforePartialEvidenceWithoutNamespacePersistence(t *tes
 	}
 	if _, statErr := os.Stat(out); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("unsupported M4 router stage created partial evidence directory: %v", statErr)
+	}
+}
+
+func TestM6CoordinatorStageUsesRealM4M6AndLabelsLocalSimulation(t *testing.T) {
+	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
+		t.Skip("durable M1 lifecycle publication is unsupported; M6 coordinator coverage remains platform-neutral in TreeDB/nativewire")
+	}
+	dataset := writeFixtureForTest(t, 32, 4, 8)
+	out := t.TempDir()
+	var stdout bytes.Buffer
+	args := []string{
+		"-dataset", dataset,
+		"-out", out,
+		"-partitions", "4",
+		"-probes", "4",
+		"-top-k", "10",
+		"-stage", m6CoordinatorStageV1,
+		"-source-hnsw-degree", "4",
+		"-router-representatives", "2",
+		"-router-leaf-size", "1",
+	}
+	if err := runWithHermeticProvenance(t, args, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	var result runResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateResult(result); err != nil {
+		t.Fatal(err)
+	}
+	evidence := result.Coordinator
+	if result.ResultKind != m6CoordinatorResultKindV1 ||
+		result.ProductionEvidence || evidence == nil ||
+		evidence.ProductionEvidence ||
+		!evidence.ExactParityChecked || !evidence.ExactParityPassed ||
+		evidence.EvidenceKind != m6CoordinatorEvidenceKindV1 ||
+		evidence.Transport != "in_process_transport_neutral_m5_contract_simulation" ||
+		evidence.ReadProof != "synthetic_local_proof_not_measured" ||
+		evidence.SourceHNSWDegree != 4 ||
+		evidence.Queries != 4 || evidence.Probes != 4 ||
+		evidence.Counters.SelectedPartitions != 16 ||
+		evidence.Counters.SelectedGroups != 16 ||
+		evidence.Counters.Requests != 16 ||
+		evidence.Counters.RPCs != 16 ||
+		evidence.Counters.Candidates != 128 ||
+		result.Metrics.MeasurementStatus != m6CoordinatorMeasurementV1 ||
+		result.Metrics.SourceHNSWDegree != 4 ||
+		result.GOMAXPROCS < 1 ||
+		result.GoMemoryLimitBytes < 1 ||
+		result.Metrics.ShardP50Nanos <= 0 ||
+		result.Metrics.P50Nanos <= 0 {
+		t.Fatalf("M6 result=%+v evidence=%+v", result, evidence)
+	}
+	entries, err := os.ReadDir(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("M6 artifacts=%d want=2", len(entries))
+	}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), "m6_local_service_") {
+			t.Fatalf("M6 artifact lacks isolated identity: %q", entry.Name())
+		}
+		if !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		markdown, err := os.ReadFile(filepath.Join(out, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(markdown, []byte("M6 local-service simulation")) ||
+			!bytes.Contains(markdown, []byte("not production network, Raft read-proof, remote-service, or M8 acceptance evidence")) ||
+			!bytes.Contains(markdown, []byte("GOMAXPROCS:")) ||
+			!bytes.Contains(markdown, []byte("Go memory limit:")) ||
+			!bytes.Contains(markdown, []byte("source HNSW degree: 4")) {
+			t.Fatalf("M6 Markdown has incorrect evidence boundary:\n%s", markdown)
+		}
+	}
+}
+
+func TestM6LocalDispatcherUsesCosineForFP32Vectors(t *testing.T) {
+	vectors := [][]float64{{1, 0}, {2, 0}}
+	norms, err := m6VectorNormsV1(vectors, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := &m6LocalShardDispatcherV1{
+		vectors: vectors, vectorNorms: norms, partitions: 1,
+	}
+	query := []float32{1, 0}
+	queryNorm, err := m6QueryNormV1(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	partition, visited, err := dispatcher.partitionTopKV1(context.Background(), query, queryNorm, 0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	global, err := dispatcher.globalTopKV1(context.Background(), query, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if visited != 2 || len(partition) != 2 || len(global) != 2 {
+		t.Fatalf("partition=%+v visited=%d global=%+v", partition, visited, global)
+	}
+	for name, got := range map[string][]string{
+		"partition": {partition[0].ID, partition[1].ID},
+		"global":    {global[0].ID, global[1].ID},
+	} {
+		if got[0] != "doc-000000" || got[1] != "doc-000001" {
+			t.Fatalf("%s order=%v; raw-dot scoring would incorrectly rank doc-000001 first", name, got)
+		}
+	}
+	for _, got := range []float32{partition[0].Score, partition[1].Score, global[0].Score, global[1].Score} {
+		if math.Float32bits(got) != math.Float32bits(1) {
+			t.Fatalf("cosine score=%v want=1", got)
+		}
+	}
+}
+
+func TestM6CoordinatorStageFailsBeforePartialEvidenceWithoutNamespacePersistence(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "evidence")
+	args := []string{
+		"-dataset", "must-not-be-read",
+		"-out", out,
+		"-partitions", "4",
+		"-probes", "4",
+		"-stage", m6CoordinatorStageV1,
+	}
+	var stdout bytes.Buffer
+	err := runWithRuntimeCapabilities(args, &stdout, benchmarkRuntimeCapabilities{})
+	if !errors.Is(err, collections.ErrVectorPartitionNamespacePersistenceUnsupportedV1) {
+		t.Fatalf("unsupported M6 coordinator stage err=%v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("unsupported M6 coordinator stage emitted stdout: %q", stdout.String())
+	}
+	if _, statErr := os.Stat(out); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("unsupported M6 coordinator stage created partial evidence directory: %v", statErr)
 	}
 }
 
@@ -865,6 +1050,36 @@ func TestMalformedCapAndFiniteInputsRejectBeforeSimulation(t *testing.T) {
 	bad.Checksum = "bad"
 	if err := validateFixture(bad); err == nil {
 		t.Fatal("accepted malformed checksum")
+	}
+}
+
+func TestSourceHNSWDegreeIsExplicitlyBoundedWithLegacyDefaultV1(t *testing.T) {
+	base := []string{
+		"-dataset", fixturePath(t),
+		"-out", t.TempDir(),
+		"-partitions", "4",
+		"-probes", "1",
+		"-stage", "router",
+	}
+	cfg, err := parseConfig(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.sourceHNSWDegree != partitionHNSWDegree {
+		t.Fatalf("default source HNSW degree=%d want %d", cfg.sourceHNSWDegree, partitionHNSWDegree)
+	}
+	selected, err := parseConfig(append(append([]string(nil), base...), "-source-hnsw-degree", "4"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.sourceHNSWDegree != 4 {
+		t.Fatalf("selected source HNSW degree=%d want 4", selected.sourceHNSWDegree)
+	}
+	for _, degree := range []string{"0", strconv.Itoa(maxSourceHNSWDegree + 1)} {
+		args := append(append([]string(nil), base...), "-source-hnsw-degree", degree)
+		if _, err := parseConfig(args); err == nil {
+			t.Fatalf("accepted out-of-bounds source HNSW degree %s", degree)
+		}
 	}
 }
 
@@ -1567,17 +1782,19 @@ func TestHNSWEvidenceJSONIncludesExplicitZeroCounters(t *testing.T) {
 
 func TestValidateResultRequiresExactSHASeedAndMemoryEvidence(t *testing.T) {
 	r := runResult{
-		SchemaVersion:     schemaVersion,
-		ResultKind:        "simulation_only",
-		BaseSHA:           strings.Repeat("a", 40),
-		HeadSHA:           strings.Repeat("b", 40),
-		Dataset:           fixtureManifest{Seed: 1, Checksum: strings.Repeat("c", 64)},
-		Seed:              1,
-		MemoryBudgetBytes: 1024,
-		ModeledPeakBytes:  512,
-		MemoryBudgetScope: memoryBudgetScope,
-		Stages:            []stageResult{{Name: "exact_global_top_k", Method: "test", Enabled: true, Available: true}},
-		Metrics:           metricsV1{MeasurementStatus: "simulation_not_measured"},
+		SchemaVersion:      schemaVersion,
+		ResultKind:         "simulation_only",
+		BaseSHA:            strings.Repeat("a", 40),
+		HeadSHA:            strings.Repeat("b", 40),
+		Dataset:            fixtureManifest{Seed: 1, Checksum: strings.Repeat("c", 64)},
+		Seed:               1,
+		MemoryBudgetBytes:  1024,
+		ModeledPeakBytes:   512,
+		MemoryBudgetScope:  memoryBudgetScope,
+		GOMAXPROCS:         1,
+		GoMemoryLimitBytes: 1,
+		Stages:             []stageResult{{Name: "exact_global_top_k", Method: "test", Enabled: true, Available: true}},
+		Metrics:            metricsV1{MeasurementStatus: "simulation_not_measured"},
 	}
 	if err := validateResult(r); err != nil {
 		t.Fatalf("valid result rejected: %v", err)
@@ -1588,6 +1805,8 @@ func TestValidateResultRequiresExactSHASeedAndMemoryEvidence(t *testing.T) {
 		func(result *runResult) { result.Dataset.Checksum = "not-a-checksum" },
 		func(result *runResult) { result.Seed++ },
 		func(result *runResult) { result.ModeledPeakBytes = result.MemoryBudgetBytes + 1 },
+		func(result *runResult) { result.GOMAXPROCS = 0 },
+		func(result *runResult) { result.GoMemoryLimitBytes = 0 },
 	} {
 		bad := r
 		mutate(&bad)

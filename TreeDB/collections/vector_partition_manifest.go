@@ -2621,7 +2621,13 @@ func validateVectorPartitionDurableEntryV1(entry os.DirEntry) error {
 	return nil
 }
 func (s *VectorPartitionStoreV1) OpenActive(collection, index string) (VectorPartitionManifestV1, error) {
-	return s.openVectorPartitionLifecyclePointerV1(collection, index, true)
+	return s.OpenActiveWithContext(context.Background(), collection, index)
+}
+
+// OpenActiveWithContext loads the active lifecycle authority while honoring
+// cancellation during checkpoint I/O and manifest decoding.
+func (s *VectorPartitionStoreV1) OpenActiveWithContext(ctx context.Context, collection, index string) (VectorPartitionManifestV1, error) {
+	return s.openVectorPartitionLifecyclePointerWithContextV1(ctx, collection, index, true)
 }
 func (s *VectorPartitionStoreV1) OpenRetired(collection, index string) (VectorPartitionManifestV1, error) {
 	return s.openVectorPartitionLifecyclePointerV1(collection, index, false)

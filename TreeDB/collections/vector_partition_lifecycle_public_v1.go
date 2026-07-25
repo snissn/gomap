@@ -479,8 +479,21 @@ func (s *VectorPartitionStoreV1) deleteVectorPartitionLifecycleV1(collection, in
 }
 
 func (s *VectorPartitionStoreV1) openVectorPartitionLifecyclePointerV1(collection, index string, active bool) (VectorPartitionManifestV1, error) {
-	loaded, present, err := s.loadVectorPartitionLifecycleAuthorityV1(collection, index)
+	return s.openVectorPartitionLifecyclePointerWithContextV1(context.Background(), collection, index, active)
+}
+
+func (s *VectorPartitionStoreV1) openVectorPartitionLifecyclePointerWithContextV1(ctx context.Context, collection, index string, active bool) (VectorPartitionManifestV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	loaded, present, err := s.loadVectorPartitionLifecycleAuthorityWithContextV1(ctx, collection, index)
 	if err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	if err := ctx.Err(); err != nil {
 		return VectorPartitionManifestV1{}, err
 	}
 	if !present {
@@ -493,7 +506,7 @@ func (s *VectorPartitionStoreV1) openVectorPartitionLifecyclePointerV1(collectio
 	if generation == 0 {
 		return VectorPartitionManifestV1{}, os.ErrNotExist
 	}
-	manifest, err := vectorPartitionLifecycleManifestV1(loaded.state, generation, false)
+	manifest, err := vectorPartitionLifecycleManifestWithContextV1(ctx, loaded.state, generation, false)
 	if err != nil {
 		return VectorPartitionManifestV1{}, err
 	}

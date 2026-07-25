@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"math"
 	"os"
 	"reflect"
@@ -15,6 +16,216 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	internalrouter "github.com/snissn/gomap/TreeDB/internal/vectorpartition"
 )
+
+func TestVectorPartitionRouterContextEntryPointsRejectCanceledWorkV1(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var collection *Collection
+	if _, _, err := collection.OpenVectorPartitionRouterWithContextV1(ctx, "embedding"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled open err=%v", err)
+	}
+	if _, err := rankVectorPartitionRouterCandidatesWithContextV1(ctx, nil, nil, 1); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled rank err=%v", err)
+	}
+}
+
+func TestVectorPartitionRouterActiveLoadCancellationReleasesBarrierV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	database := openCollectionCommandWALDB(t, t.TempDir())
+	defer database.Close()
+
+	store, err := OpenVectorPartitionStoreV1(database.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := testVectorPartitionManifestV1()
+	if err := store.publishValidatedReady(ready); err != nil {
+		t.Fatal(err)
+	}
+	collection := &Collection{db: database, name: ready.Collection}
+	ctx, cancel := context.WithCancel(context.Background())
+	slotReads := 0
+	restore := setVectorPartitionLifecycleStoreHookForTestV1(func(boundary string) error {
+		if boundary == "after_slot_read" {
+			slotReads++
+			cancel()
+		}
+		return nil
+	})
+	router, status, err := collection.OpenVectorPartitionRouterWithContextV1(ctx, ready.IndexName)
+	restore()
+	if router != nil {
+		t.Fatal("canceled active-manifest load returned a router")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled active-manifest load err=%v status=%+v", err, status)
+	}
+	if slotReads != 1 {
+		t.Fatalf("lifecycle slot reads=%d want 1", slotReads)
+	}
+	if status.FailureReason != context.Canceled.Error() {
+		t.Fatalf("failure reason=%q", status.FailureReason)
+	}
+
+	barrierEntered := false
+	if err := WithVectorPartitionStorageBarrierWithContextV1(t.Context(), database.Dir(), func() error {
+		barrierEntered = true
+		return nil
+	}); err != nil {
+		t.Fatalf("reacquire storage barrier after cancellation: %v", err)
+	}
+	if !barrierEntered {
+		t.Fatal("storage barrier remained held after cancellation")
+	}
+	if pins := vectorPartitionReaderPinCountV1(database.Dir(), ready.Collection, ready.IndexName, ready.Generation); pins != 0 {
+		t.Fatalf("canceled active-manifest load retained %d reader pins", pins)
+	}
+}
+
+func TestVectorPartitionRouterPreparedOpenCancelsMidChecksumAndReleasesHandleV1(t *testing.T) {
+	raw := bytes.Repeat([]byte{0x5a}, 3<<20)
+	manager := mappedresource.NewManager()
+	handle, err := manager.AcquireBytes(
+		testColumnHNSWSearchPackMappedResourceKey2314(0, int64(len(raw)), internalcrc.Checksum(raw)),
+		testColumnHNSWSearchPackScope2314(),
+		mappedresource.SourceHeapCopy,
+		raw,
+		mappedresource.AcquireOptions{Reason: "router cancellation test", ValidationMode: mappedresource.ValidationVerify},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := &vectorPartitionRouterDeadlineAfterErrContextV1{
+		Context: context.Background(), deadlineAfter: 4,
+	}
+	if _, err := openVectorPartitionRouterPreparedViewWithContextV1(ctx, manager, handle, columnHNSWSearchPackDecodeOptions{}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("prepared open err=%v want deadline exceeded", err)
+	}
+	if ctx.calls != ctx.deadlineAfter {
+		t.Fatalf("context calls=%d want %d", ctx.calls, ctx.deadlineAfter)
+	}
+	if !handle.Released() || manager.Stats().ActiveHandles != 0 {
+		t.Fatalf("canceled prepared open retained handle: released=%v stats=%+v", handle.Released(), manager.Stats())
+	}
+}
+
+func TestVectorPartitionRouterModelSortObservesContextV1(t *testing.T) {
+	const nodes = 8192
+	model := internalrouter.RouterModelV1{Nodes: make([]internalrouter.RouterHierarchyNodeV1, nodes)}
+	for i := range model.Nodes {
+		model.Nodes[i].NodeID = uint32(nodes - i)
+	}
+	ctx := &vectorPartitionRouterDeadlineAfterErrContextV1{
+		Context: context.Background(), deadlineAfter: 4,
+	}
+	if err := sortDecodedVectorPartitionRouterModelWithContextV1(ctx, &model); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("model sort err=%v want deadline exceeded", err)
+	}
+	if ctx.calls != ctx.deadlineAfter {
+		t.Fatalf("context calls=%d want %d", ctx.calls, ctx.deadlineAfter)
+	}
+}
+
+func TestVectorPartitionRouterOpenCleanupJoinsCloseErrorV1(t *testing.T) {
+	cause := context.Canceled
+	closeErr := errors.New("release failed")
+	view := &columnHNSWSearchPackPreparedView{closeErr: closeErr}
+	err := closeVectorPartitionRouterViewAfterOpenErrorV1(view, cause)
+	if !errors.Is(err, cause) || !errors.Is(err, closeErr) {
+		t.Fatalf("joined cleanup err=%v want cause=%v and close=%v", err, cause, closeErr)
+	}
+	if !view.closed.Load() {
+		t.Fatal("cleanup did not close prepared view")
+	}
+}
+
+type vectorPartitionRouterDeadlineAfterErrContextV1 struct {
+	context.Context
+	calls         int
+	deadlineAfter int
+}
+
+func (c *vectorPartitionRouterDeadlineAfterErrContextV1) Err() error {
+	c.calls++
+	if c.calls >= c.deadlineAfter {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+func TestVectorPartitionRouterApproxDeadlineInterruptsNativeTraversalV1(t *testing.T) {
+	const rows = 4096
+	input := columnHNSWSearchPackBuildInput{
+		Rows: rows, Dimensions: 1, VectorStride: 4,
+		M: 1, EfConstruction: rows, EfSearch: rows,
+		EntryOrdinal: 0, MaxLayer: 0,
+		BaseIdentity: columnHNSWSearchPackBaseIdentity{
+			ManifestGeneration: 11,
+			ManifestChecksum:   12,
+			SchemaHash:         13,
+		},
+		NormalizedVectors:       make([]float32, rows*4),
+		Levels:                  make([]uint16, rows),
+		AdjacencyLayers:         []columnHNSWSearchPackLayerInput{{Offsets: make([]uint64, rows+1)}},
+		RowRefGenerations:       make([]int64, rows),
+		RowRefPartIDs:           make([]int64, rows),
+		RowRefRowIndexes:        make([]int64, rows),
+		RowRefAppliedCommandLSN: make([]int64, rows),
+		DocumentIDOffsets:       make([]uint64, rows+1),
+		DocumentIDBytes:         bytes.Repeat([]byte{'x'}, rows),
+	}
+	for ordinal := range rows {
+		input.NormalizedVectors[ordinal*4] = 1
+		input.RowRefGenerations[ordinal] = 11
+		input.RowRefPartIDs[ordinal] = 1
+		input.RowRefRowIndexes[ordinal] = int64(ordinal)
+		input.RowRefAppliedCommandLSN[ordinal] = 1
+		input.DocumentIDOffsets[ordinal] = uint64(ordinal)
+	}
+	input.DocumentIDOffsets[rows] = uint64(rows)
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, handle := testColumnHNSWSearchPackPreparedViewFromBytes2314(
+		t, raw, mappedresource.SourceHeapCopy, input.BaseIdentity,
+	)
+	scratch := &columnVectorGraphNativeSearchScratch{}
+	router := &VectorPartitionRouterV1{
+		model: internalrouter.RouterModelV1{
+			Dimensions:      1,
+			Representatives: make([]internalrouter.RouterRepresentativeV1, rows),
+		},
+		view:        view,
+		viewToModel: make([]int, rows),
+	}
+	router.scratch.New = func() any { return scratch }
+
+	// Five polls cover router/search preflight and scratch/query setup. The
+	// ninth poll fires only after the disconnected layer-0 traversal has seeded
+	// multiple representatives, making the deadline point deterministic.
+	ctx := &vectorPartitionRouterDeadlineAfterErrContextV1{
+		Context: context.Background(), deadlineAfter: 9,
+	}
+	result, err := router.SearchWithContextV1(ctx, []float32{1}, VectorPartitionRouterSearchOptionsV1{
+		Mode: VectorPartitionRouterModeApproxV1, CandidateBudget: rows, PartitionProbes: 1,
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("result=%+v err=%v want deadline exceeded", result, err)
+	}
+	if ctx.calls != ctx.deadlineAfter || len(scratch.top) <= 1 || len(scratch.top) >= rows {
+		t.Fatalf("deadline calls=%d partial candidates=%d rows=%d", ctx.calls, len(scratch.top), rows)
+	}
+	if result.Status.FailureReason != context.DeadlineExceeded.Error() {
+		t.Fatalf("failure reason=%q", result.Status.FailureReason)
+	}
+	if err := router.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !handle.Released() || router.Status().ActiveHandles != 0 {
+		t.Fatalf("deadline return retained router resource: released=%v status=%+v", handle.Released(), router.Status())
+	}
+}
 
 func TestVerifyVectorPartitionRouterStableAssetV1StreamsExactRange(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "router-stable-asset-*")

@@ -1,13 +1,17 @@
 package vectorpartition
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"sort"
+	"strconv"
 )
 
 const (
@@ -321,6 +325,16 @@ func BuildRouterV1(partitions []RouterPartitionV1, cfg RouterConfigV1) (RouterMo
 }
 
 func ValidateRouterModelV1(model RouterModelV1) error {
+	return ValidateRouterModelWithContextV1(context.Background(), model)
+}
+
+func ValidateRouterModelWithContextV1(ctx context.Context, model RouterModelV1) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if model.Format != "treedb_vector_partition_router_v1" {
 		return errors.New("vectorpartition: invalid router format")
 	}
@@ -357,6 +371,11 @@ func ValidateRouterModelV1(model RouterModelV1) error {
 	totalVectors := uint64(0)
 	internalNodes := 0
 	for ordinal, node := range model.Nodes {
+		if ordinal&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		if node.NodeID != uint32(ordinal+1) || node.MemberCount == 0 ||
 			int(node.Depth) > model.Config.MaxDepth {
 			return errors.New("vectorpartition: invalid router hierarchy node")
@@ -388,7 +407,12 @@ func ValidateRouterModelV1(model RouterModelV1) error {
 		}
 		nodes[node.NodeID] = node
 	}
-	for _, node := range model.Nodes {
+	for ordinal, node := range model.Nodes {
+		if ordinal&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		if node.Leaf {
 			if childCounts[node.NodeID] != 0 {
 				return fmt.Errorf("vectorpartition: router leaf %d has children", node.NodeID)
@@ -416,6 +440,11 @@ func ValidateRouterModelV1(model RouterModelV1) error {
 	representedLeaves := make(map[uint32]struct{}, len(model.Representatives))
 	representedSources := make(map[uint64]struct{}, len(model.Representatives))
 	for i, representative := range model.Representatives {
+		if i&63 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		if i > 0 && (representative.PartitionID < previousPartition ||
 			representative.PartitionID == previousPartition && representative.LeafNodeID <= previousLeaf) {
 			return errors.New("vectorpartition: router representatives are not canonically ordered")
@@ -460,6 +489,11 @@ func ValidateRouterModelV1(model RouterModelV1) error {
 			return fmt.Errorf("vectorpartition: representative leaf %d: %w", representative.LeafNodeID, err)
 		}
 		for dimension := range normalized {
+			if dimension&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
 			if math.Abs(float64(normalized[dimension]-representative.Values[dimension])) > 1e-5 {
 				return fmt.Errorf("vectorpartition: representative leaf %d is not cosine-normalized", representative.LeafNodeID)
 			}
@@ -468,23 +502,109 @@ func ValidateRouterModelV1(model RouterModelV1) error {
 	if len(representativesPerPartition) != len(roots) {
 		return errors.New("vectorpartition: router partition lacks a representative")
 	}
-	return nil
+	return ctx.Err()
 }
 
 func CanonicalRouterJSONV1(model RouterModelV1) ([]byte, error) {
-	if err := ValidateRouterModelV1(model); err != nil {
+	return CanonicalRouterJSONWithContextV1(context.Background(), model)
+}
+
+func CanonicalRouterJSONWithContextV1(ctx context.Context, model RouterModelV1) ([]byte, error) {
+	var raw bytes.Buffer
+	if err := writeCanonicalRouterJSONWithContextV1(ctx, &raw, model); err != nil {
 		return nil, err
 	}
-	return json.Marshal(model)
+	return raw.Bytes(), nil
 }
 
 func RouterDigestV1(model RouterModelV1) (string, error) {
-	raw, err := CanonicalRouterJSONV1(model)
-	if err != nil {
+	return RouterDigestWithContextV1(context.Background(), model)
+}
+
+func RouterDigestWithContextV1(ctx context.Context, model RouterModelV1) (string, error) {
+	hash := sha256.New()
+	if err := writeCanonicalRouterJSONWithContextV1(ctx, hash, model); err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:]), nil
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func writeCanonicalRouterJSONWithContextV1(ctx context.Context, dst io.Writer, model RouterModelV1) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ValidateRouterModelWithContextV1(ctx, model); err != nil {
+		return err
+	}
+	writeString := func(value string) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		_, err := io.WriteString(dst, value)
+		return err
+	}
+	writeValue := func(value any) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		_, err = dst.Write(raw)
+		return err
+	}
+	if err := writeString(`{"format":`); err != nil {
+		return err
+	}
+	if err := writeValue(model.Format); err != nil {
+		return err
+	}
+	if err := writeString(`,"config":`); err != nil {
+		return err
+	}
+	if err := writeValue(model.Config); err != nil {
+		return err
+	}
+	if err := writeString(`,"dimensions":` + strconv.Itoa(model.Dimensions) + `,"nodes":[`); err != nil {
+		return err
+	}
+	for ordinal, node := range model.Nodes {
+		if ordinal > 0 {
+			if err := writeString(","); err != nil {
+				return err
+			}
+		}
+		if err := writeValue(node); err != nil {
+			return err
+		}
+	}
+	if err := writeString(`],"representatives":[`); err != nil {
+		return err
+	}
+	for ordinal, representative := range model.Representatives {
+		if ordinal > 0 {
+			if err := writeString(","); err != nil {
+				return err
+			}
+		}
+		if err := writeValue(representative); err != nil {
+			return err
+		}
+	}
+	if err := writeString(`],"metrics":`); err != nil {
+		return err
+	}
+	if err := writeValue(model.Metrics); err != nil {
+		return err
+	}
+	if err := writeString("}"); err != nil {
+		return err
+	}
+	return ctx.Err()
 }
 
 // RouteExactV1 is the correctness oracle. Because it scores every persisted

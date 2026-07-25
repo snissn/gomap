@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"sync"
 	"unsafe"
 )
@@ -46,6 +45,81 @@ type VectorPartitionSearchAssetV1 struct {
 type VectorPartitionSearchResultV1 struct {
 	ID    string
 	Score float32
+}
+
+// vectorPartitionSearchResultMaxHeapV1 retains the worst selected result at
+// index zero so an exact scan can keep only top_k results. Draining the heap
+// from worst to best into a reverse output cursor yields the canonical
+// score-descending, stable-ID-ascending result order without one uninterruptible
+// full-partition sort.
+type vectorPartitionSearchResultMaxHeapV1 []VectorPartitionSearchResultV1
+
+func vectorPartitionSearchResultBetterV1(left, right VectorPartitionSearchResultV1) bool {
+	if left.Score != right.Score {
+		return left.Score > right.Score
+	}
+	return left.ID < right.ID
+}
+
+func vectorPartitionSearchResultWorseV1(left, right VectorPartitionSearchResultV1) bool {
+	return vectorPartitionSearchResultBetterV1(right, left)
+}
+
+func (h *vectorPartitionSearchResultMaxHeapV1) pushBounded(limit int, candidate VectorPartitionSearchResultV1) {
+	if limit <= 0 {
+		return
+	}
+	if len(*h) < limit {
+		*h = append(*h, candidate)
+		h.up(len(*h) - 1)
+		return
+	}
+	if !vectorPartitionSearchResultBetterV1(candidate, (*h)[0]) {
+		return
+	}
+	(*h)[0] = candidate
+	h.down(0)
+}
+
+func (h *vectorPartitionSearchResultMaxHeapV1) popWorst() VectorPartitionSearchResultV1 {
+	out := (*h)[0]
+	last := len(*h) - 1
+	(*h)[0] = (*h)[last]
+	*h = (*h)[:last]
+	if len(*h) > 0 {
+		h.down(0)
+	}
+	return out
+}
+
+func (h *vectorPartitionSearchResultMaxHeapV1) up(child int) {
+	for child > 0 {
+		parent := (child - 1) / 2
+		if !vectorPartitionSearchResultWorseV1((*h)[child], (*h)[parent]) {
+			return
+		}
+		(*h)[child], (*h)[parent] = (*h)[parent], (*h)[child]
+		child = parent
+	}
+}
+
+func (h *vectorPartitionSearchResultMaxHeapV1) down(parent int) {
+	for {
+		left := parent*2 + 1
+		if left >= len(*h) {
+			return
+		}
+		child := left
+		right := left + 1
+		if right < len(*h) && vectorPartitionSearchResultWorseV1((*h)[right], (*h)[left]) {
+			child = right
+		}
+		if !vectorPartitionSearchResultWorseV1((*h)[child], (*h)[parent]) {
+			return
+		}
+		(*h)[parent], (*h)[child] = (*h)[child], (*h)[parent]
+		parent = child
+	}
 }
 
 // VectorPartitionSearchMetricsV1 reports native traversal work for one local
@@ -128,7 +202,7 @@ func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, pr
 		return 0, fmt.Errorf("%w: stable ID bytes=%d exceeds limit=%d", ErrVectorPartitionSearchUnavailable, maxStableIDBytes, opts.MaxStableIDBytes)
 	}
 	if prepared == nil {
-		return checkedVectorPartitionScratchProductV1(uint64(exactRows), uint64(unsafe.Sizeof(VectorPartitionSearchResultV1{})))
+		return vectorPartitionExactSearchScratchBytesV1(exactRows, opts.TopK)
 	}
 	rowCount := header.Rows
 	if rowCount < 0 || header.VectorStride < 0 || header.M < 0 {
@@ -155,6 +229,69 @@ func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, pr
 	if degree <= math.MaxInt/2 {
 		degree *= 2
 	}
+	if degree > rowCount {
+		// A graph cannot expose more distinct neighbors than it has rows.
+		// Capping here keeps the preflight bound identical to the scratch the
+		// native path actually prepares, even for a tiny shard whose persisted
+		// index definition has a much larger M.
+		degree = rowCount
+	}
+	return vectorPartitionHNSWSearchScratchBytesV1(rowCount, header.VectorStride, degree, topK, efSearch)
+}
+
+func vectorPartitionExactSearchScratchBytesV1(rows, topK int) (uint64, error) {
+	if rows < 0 || topK < 1 {
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
+	width := uint64(unsafe.Sizeof(VectorPartitionSearchResultV1{}))
+	rowBytes, err := checkedVectorPartitionScratchProductV1(uint64(rows), width)
+	if err != nil {
+		return 0, err
+	}
+	selectedBytes, err := checkedVectorPartitionScratchProductV1(uint64(min(rows, topK)), width)
+	if err != nil || math.MaxUint64-selectedBytes < selectedBytes {
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
+	// Preserve the original row-sized conservative floor while covering the
+	// bounded heap and final output slice, which coexist during heap draining.
+	return max(rowBytes, selectedBytes+selectedBytes), nil
+}
+
+// VectorPartitionConservativeSearchScratchBytesV1 returns a transport-neutral
+// upper bound for either M3 search route when only durable membership
+// cardinality and request shape are available. Coordinators use it before
+// weighting surplus candidate memory so a small high-dimensional partition
+// cannot be starved by a larger peer.
+func VectorPartitionConservativeSearchScratchBytesV1(rows, dimensions int, opts VectorPartitionSearchOptionsV1) (uint64, error) {
+	if rows < 0 || dimensions <= 0 || opts.TopK < 1 || opts.EfSearch < opts.TopK || opts.MaxStableIDBytes < 0 {
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
+	exactBytes, err := vectorPartitionExactSearchScratchBytesV1(rows, opts.TopK)
+	if err != nil {
+		return 0, err
+	}
+	vectorStride, err := columnHNSWSearchPackVectorStrideForDimensions(dimensions)
+	if err != nil {
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
+	topK := min(opts.TopK, rows)
+	efSearch := min(opts.EfSearch, rows)
+	if efSearch < topK {
+		efSearch = topK
+	}
+	// Search caps the doubled HNSW degree at row count. Using row count here
+	// therefore covers every persisted M without requiring shard-local headers.
+	hnswBytes, err := vectorPartitionHNSWSearchScratchBytesV1(rows, vectorStride, rows, topK, efSearch)
+	if err != nil {
+		return 0, err
+	}
+	return max(exactBytes, hnswBytes), nil
+}
+
+func vectorPartitionHNSWSearchScratchBytesV1(rowCount, vectorStride, degree, topK, efSearch int) (uint64, error) {
+	if rowCount < 0 || vectorStride < 0 || degree < 0 || topK < 0 || efSearch < 0 {
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
 	frontier := columnVectorGraphNativeSearchFrontierCapacity(rowCount, degree, topK, efSearch)
 
 	var total uint64
@@ -177,6 +314,9 @@ func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, pr
 		{frontier, unsafe.Sizeof(columnVectorGraphSearchCandidate{})},
 		{efSearch, unsafe.Sizeof(columnVectorGraphSearchCandidate{})},
 		{topK, unsafe.Sizeof(columnVectorGraphNativeSearchResult{})},
+		// Native results remain live while the public FP32/stable-ID buffer is
+		// built and canonically reordered.
+		{topK, unsafe.Sizeof(VectorPartitionSearchResultV1{})},
 		{topK, unsafe.Sizeof([]byte(nil))},
 		{topK, unsafe.Sizeof(int(0))},
 		{topK, unsafe.Sizeof(int(0))},
@@ -185,7 +325,7 @@ func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, pr
 		{degree, unsafe.Sizeof(float64(0))},
 		{degree, unsafe.Sizeof(uint32(0))},
 		{degree, unsafe.Sizeof(float32(0))},
-		{header.VectorStride, unsafe.Sizeof(float32(0))},
+		{vectorStride, unsafe.Sizeof(float32(0))},
 	} {
 		if err := add(item.count, item.width); err != nil {
 			return 0, err
@@ -477,18 +617,22 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context
 		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: zero query", ErrVectorPartitionSearchUnavailable)
 	}
 	if s.prepared != nil {
-		results, stats, err := s.prepared.searchCosine(query, columnVectorGraphNativeSearchOptions{TopK: opts.TopK, EfSearch: opts.EfSearch}, &columnVectorGraphNativeSearchScratch{})
+		results, stats, err := s.prepared.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{TopK: opts.TopK, EfSearch: opts.EfSearch}, &columnVectorGraphNativeSearchScratch{})
 		if err != nil {
 			s.recordFailure()
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil, VectorPartitionSearchMetricsV1{}, err
+			}
 			return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: native HNSW: %v", ErrVectorPartitionSearchUnavailable, err)
 		}
 		if err := ctx.Err(); err != nil {
 			s.recordFailure()
 			return nil, VectorPartitionSearchMetricsV1{}, err
 		}
-		out := make([]VectorPartitionSearchResultV1, len(results))
-		for i, r := range results {
-			out[i] = VectorPartitionSearchResultV1{ID: string(r.ID), Score: float32(r.Score)}
+		out, err := canonicalizeVectorPartitionNativeResultsV1(ctx, results)
+		if err != nil {
+			s.recordFailure()
+			return nil, VectorPartitionSearchMetricsV1{}, err
 		}
 		metrics := VectorPartitionSearchMetricsV1{Candidates: stats.Candidates, Edges: stats.Edges, Route: VectorPartitionSearchRouteHNSWSearchPackV1}
 		s.mu.Lock()
@@ -498,7 +642,8 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context
 		s.mu.Unlock()
 		return out, metrics, nil
 	}
-	out := make([]VectorPartitionSearchResultV1, len(s.asset.IDs))
+	limit := min(opts.TopK, len(s.asset.IDs))
+	top := make(vectorPartitionSearchResultMaxHeapV1, 0, limit)
 	var edges uint64
 	for i, v := range s.asset.Vectors {
 		if i&255 == 0 {
@@ -511,23 +656,27 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context
 		for j, x := range v {
 			d += float64(x) * float64(query[j])
 		}
-		out[i] = VectorPartitionSearchResultV1{ID: s.asset.IDs[i], Score: float32(d / (math.Sqrt(qn) * float64(s.norms[i])))}
+		top.pushBounded(limit, VectorPartitionSearchResultV1{
+			ID:    s.asset.IDs[i],
+			Score: float32(d / (math.Sqrt(qn) * float64(s.norms[i]))),
+		})
 		if len(s.asset.Adjacency) > i {
 			edges += uint64(len(s.asset.Adjacency[i]))
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Score != out[j].Score {
-			return out[i].Score > out[j].Score
+	out := make([]VectorPartitionSearchResultV1, len(top))
+	for completed, target := 0, len(out)-1; target >= 0; completed, target = completed+1, target-1 {
+		if completed&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				s.recordFailure()
+				return nil, VectorPartitionSearchMetricsV1{}, err
+			}
 		}
-		return out[i].ID < out[j].ID
-	})
+		out[target] = top.popWorst()
+	}
 	if err := ctx.Err(); err != nil {
 		s.recordFailure()
 		return nil, VectorPartitionSearchMetricsV1{}, err
-	}
-	if opts.TopK < len(out) {
-		out = out[:opts.TopK]
 	}
 	s.mu.Lock()
 	s.searches++
@@ -535,6 +684,38 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context
 	s.edges += edges
 	s.mu.Unlock()
 	return out, VectorPartitionSearchMetricsV1{Candidates: uint64(len(s.asset.IDs)), Edges: edges, Route: VectorPartitionSearchRouteExactFP32ScanV1}, nil
+}
+
+func canonicalizeVectorPartitionNativeResultsV1(ctx context.Context, results []columnVectorGraphNativeSearchResult) ([]VectorPartitionSearchResultV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// Native HNSW ranks its float64 scores by row ordinal. The wire contract
+	// exposes float32 scores with stable-ID tie order, so two distinct native
+	// scores may collapse into a public tie. Rebuild the bounded result heap
+	// after conversion and drain it canonically before M5 publishes it.
+	top := make(vectorPartitionSearchResultMaxHeapV1, 0, len(results))
+	for i, result := range results {
+		if i&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
+		top.pushBounded(len(results), VectorPartitionSearchResultV1{ID: string(result.ID), Score: float32(result.Score)})
+	}
+	out := []VectorPartitionSearchResultV1(top)
+	for completed, target := 0, len(out)-1; target >= 0; completed, target = completed+1, target-1 {
+		if completed&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
+		out[target] = top.popWorst()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *VectorPartitionLocalSearcherV1) recordFailure() {

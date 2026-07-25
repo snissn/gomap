@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,31 +28,34 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/nativewire"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 const (
-	schemaVersion                   = 1
-	maxVectors                      = 1_000_000
-	maxDimensions                   = 4_096
-	maxPartitions                   = 16_384
-	maxFixtureBytes           int64 = 4 << 30
-	maxBenchmarkWorkUnits     int64 = 200_000_000
-	maxManifestBytes          int64 = 64 << 10
-	maxGitHubEventBytes       int64 = 2 << 20
-	partitionHNSWIndex              = "embedding_graph"
-	partitionHNSWDegree             = 16
-	fixtureGenerator                = "treedb_vector_partition_fixture_v2"
-	fixtureArithmetic               = "ieee754_binary64_explicit_fma_v1"
-	documentIDStorageBytes          = 16
-	hnswJSONFloatBytes              = 24
-	hnswJSONFixedBytes              = 64
-	hnswDecodedDimensionBytes       = 32
-	memoryMapEntryBytes             = 64
-	memorySlackNumerator            = 5
-	memorySlackDenominator          = 4
-	memoryBudgetScope               = "modeled_peak_live_bytes_v1: contiguous generated float64 fixture/query matrices and row headers; exact/selected top-k candidates; representative routing; HNSW partition JSON plus decoded JSON/vector batch; HNSW query merge and cache; 25% allocation slack; excludes TreeDB engine/index internals, Go runtime/GC metadata, and artifact/CLI encoding"
-	benchmarkWorkScope              = "benchmark_owned_vector_query_corpus_visits_v1: checksum exact truth once; mandatory truth plus enabled exhaustive/routing corpus passes for every probe/overlap row; excludes TreeDB HNSW engine-internal search work"
+	schemaVersion                        = 1
+	maxVectors                           = 1_000_000
+	maxDimensions                        = 4_096
+	maxPartitions                        = 16_384
+	maxFixtureBytes                int64 = 4 << 30
+	maxBenchmarkWorkUnits          int64 = 200_000_000
+	maxManifestBytes               int64 = 64 << 10
+	maxGitHubEventBytes            int64 = 2 << 20
+	partitionHNSWIndex                   = "embedding_graph"
+	partitionHNSWDegree                  = 16
+	maxSourceHNSWDegree                  = partitionHNSWDegree
+	fixtureGenerator                     = "treedb_vector_partition_fixture_v2"
+	fixtureArithmetic                    = "ieee754_binary64_explicit_fma_v1"
+	documentIDStorageBytes               = 16
+	hnswJSONFloatBytes                   = 24
+	hnswJSONFixedBytes                   = 64
+	hnswDecodedDimensionBytes            = 32
+	memoryMapEntryBytes                  = 64
+	vectorPartitionInsertBatchRows       = 8_192
+	memorySlackNumerator                 = 5
+	memorySlackDenominator               = 4
+	memoryBudgetScope                    = "modeled_peak_live_bytes_v1: contiguous generated float64 fixture/query matrices and row headers; exact/selected top-k candidates; representative routing; persisted router ingest JSON/IDs/slices and source-row capture; HNSW partition JSON plus decoded JSON/vector batch; HNSW query merge and cache; 25% allocation slack; excludes TreeDB engine/index internals, Go runtime/GC metadata, and artifact/CLI encoding"
+	benchmarkWorkScope                   = "benchmark_owned_vector_query_corpus_visits_v1: checksum exact truth once; mandatory truth plus enabled exhaustive/routing corpus passes for every probe/overlap row; excludes TreeDB HNSW engine-internal search work"
 )
 
 type config struct {
@@ -76,8 +80,10 @@ type config struct {
 	m3PersistDir     string
 	partition        vectorpartition.Config
 	router           *treeDBRepresentativeRouter
+	coordinator      *m6CoordinatorHarnessV1
 	routerConfig     vectorpartition.RouterConfigV1
 	routerCandidates int
+	sourceHNSWDegree int
 }
 
 type partitionRun struct {
@@ -197,6 +203,7 @@ type treeDBPartitionHNSW struct {
 type benchmarkMemoryPlan struct {
 	FixtureResidentBytes int64
 	SimulationWorkBytes  int64
+	RouterBuildWorkBytes int64
 	HNSWInsertWorkBytes  int64
 	HNSWCacheBytes       int64
 	ModeledPeakBytes     int64
@@ -220,6 +227,7 @@ type metricsV1 struct {
 	ReplicationFactor       float64 `json:"replication_factor"`
 	UnassignedOverlapBudget float64 `json:"unassigned_overlap_budget"`
 	RepresentativeCount     int     `json:"representative_count"`
+	SourceHNSWDegree        int     `json:"source_hnsw_degree"`
 	RouterBytes             int64   `json:"router_bytes"`
 	RoutingLatencyNanos     int64   `json:"routing_latency_nanos"`
 	RoutedPartitionRecall   float64 `json:"routed_partition_recall"`
@@ -259,43 +267,47 @@ type metricsV1 struct {
 	MappedBytes             int64   `json:"mapped_bytes"`
 }
 type runResult struct {
-	SchemaVersion      int             `json:"schema_version"`
-	ResultKind         string          `json:"result_kind"`
-	ProductionEvidence bool            `json:"production_evidence"`
-	Command            []string        `json:"command"`
-	BaseSHA            string          `json:"base_sha"`
-	HeadSHA            string          `json:"head_sha"`
-	GoVersion          string          `json:"go_version"`
-	Hardware           string          `json:"hardware_context"`
-	Dataset            fixtureManifest `json:"dataset"`
-	Partitions         int             `json:"partitions"`
-	Overlap            float64         `json:"overlap"`
-	Probes             int             `json:"probes"`
-	TopK               int             `json:"top_k"`
-	RecallTarget       float64         `json:"recall_target"`
-	Seed               int64           `json:"seed"`
-	MemoryBudgetBytes  int64           `json:"memory_budget_bytes"`
-	ModeledPeakBytes   int64           `json:"modeled_peak_bytes"`
-	MemoryBudgetScope  string          `json:"memory_budget_scope"`
-	Warmup             int             `json:"warmup"`
-	Samples            int             `json:"samples"`
-	TimedBoundary      string          `json:"timed_boundary"`
-	Stages             []stageResult   `json:"stages"`
-	Metrics            metricsV1       `json:"metrics"`
+	SchemaVersion      int                      `json:"schema_version"`
+	ResultKind         string                   `json:"result_kind"`
+	ProductionEvidence bool                     `json:"production_evidence"`
+	Command            []string                 `json:"command"`
+	BaseSHA            string                   `json:"base_sha"`
+	HeadSHA            string                   `json:"head_sha"`
+	GoVersion          string                   `json:"go_version"`
+	Hardware           string                   `json:"hardware_context"`
+	GOMAXPROCS         int                      `json:"gomaxprocs"`
+	GoMemoryLimitBytes int64                    `json:"go_memory_limit_bytes"`
+	Dataset            fixtureManifest          `json:"dataset"`
+	Partitions         int                      `json:"partitions"`
+	Overlap            float64                  `json:"overlap"`
+	Probes             int                      `json:"probes"`
+	TopK               int                      `json:"top_k"`
+	RecallTarget       float64                  `json:"recall_target"`
+	Seed               int64                    `json:"seed"`
+	MemoryBudgetBytes  int64                    `json:"memory_budget_bytes"`
+	ModeledPeakBytes   int64                    `json:"modeled_peak_bytes"`
+	MemoryBudgetScope  string                   `json:"memory_budget_scope"`
+	Warmup             int                      `json:"warmup"`
+	Samples            int                      `json:"samples"`
+	TimedBoundary      string                   `json:"timed_boundary"`
+	Stages             []stageResult            `json:"stages"`
+	Metrics            metricsV1                `json:"metrics"`
+	Coordinator        *m6CoordinatorEvidenceV1 `json:"coordinator,omitempty"`
 }
 
 type treeDBRepresentativeRouter struct {
-	dir        string
-	db         *backenddb.DB
-	collection *collections.Collection
-	router     *collections.VectorPartitionRouterV1
-	build      collections.VectorPartitionRouterBuildStatusV1
-	open       collections.VectorPartitionRouterOpenStatusV1
-	candidates int
-	buildCPU   int64
-	buildCPUOK bool
-	peakRSS    int64
-	peakRSSOK  bool
+	dir              string
+	db               *backenddb.DB
+	collection       *collections.Collection
+	router           *collections.VectorPartitionRouterV1
+	build            collections.VectorPartitionRouterBuildStatusV1
+	open             collections.VectorPartitionRouterOpenStatusV1
+	candidates       int
+	sourceHNSWDegree int
+	buildCPU         int64
+	buildCPUOK       bool
+	peakRSS          int64
+	peakRSSOK        bool
 }
 
 type routerSearchEvidence struct {
@@ -323,6 +335,10 @@ func currentBenchmarkRuntimeCapabilities() benchmarkRuntimeCapabilities {
 	return benchmarkRuntimeCapabilities{
 		vectorPartitionNamespacePersistence: collections.VectorPartitionNamespacePersistenceSupportedV1(),
 	}
+}
+
+func benchmarkRuntimeLimits() (int, int64) {
+	return runtime.GOMAXPROCS(0), debug.SetMemoryLimit(-1)
 }
 
 func run(args []string, stdout io.Writer) error {
@@ -404,8 +420,8 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 	if err != nil {
 		return err
 	}
-	if cfg.stage == "router" && !capabilities.vectorPartitionNamespacePersistence {
-		return fmt.Errorf("%w: M4 router evidence requires durable vector-partition lifecycle publication", collections.ErrVectorPartitionNamespacePersistenceUnsupportedV1)
+	if (cfg.stage == "router" || cfg.stage == m6CoordinatorStageV1) && !capabilities.vectorPartitionNamespacePersistence {
+		return fmt.Errorf("%w: persisted M4/M6 evidence requires durable vector-partition lifecycle publication", collections.ErrVectorPartitionNamespacePersistenceUnsupportedV1)
 	}
 	if cfg.stage == "overlap,partition_index" && !capabilities.vectorPartitionNamespacePersistence {
 		return fmt.Errorf("%w: M3 partition-index evidence requires durable vector-partition lifecycle publication", collections.ErrVectorPartitionNamespacePersistenceUnsupportedV1)
@@ -420,7 +436,7 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 	}
 	if cfg.stage == "partition" {
 		err = validatePartitionFixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes)
-	} else if cfg.stage == "overlap,partition_index" {
+	} else if cfg.stage == "overlap,partition_index" || cfg.stage == m6CoordinatorStageV1 {
 		err = validateM3FixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes)
 	} else {
 		err = validateFixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes)
@@ -487,9 +503,9 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 			runErr = errors.Join(runErr, cfg.hnsw.Close())
 		}()
 	}
-	if cfg.stage == "router" {
+	if cfg.stage == "router" || cfg.stage == m6CoordinatorStageV1 {
 		buildCPUStart, buildCPUAvailable := vectorPartitionBenchmarkCPUNanos()
-		cfg.router, err = newTreeDBRepresentativeRouter(vectors, cfg.partitions, cfg.routerConfig, cfg.routerCandidates)
+		cfg.router, err = newTreeDBRepresentativeRouter(vectors, cfg.partitions, cfg.routerConfig, cfg.routerCandidates, cfg.sourceHNSWDegree)
 		if err != nil {
 			return fmt.Errorf("build TreeDB representative router stage: %w", err)
 		}
@@ -504,6 +520,12 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		defer func() {
 			runErr = errors.Join(runErr, cfg.router.Close())
 		}()
+		if cfg.stage == m6CoordinatorStageV1 {
+			cfg.coordinator, err = newM6CoordinatorHarnessV1(cfg.router, vectors, cfg.partitions)
+			if err != nil {
+				return fmt.Errorf("build M6 local-service coordinator stage: %w", err)
+			}
+		}
 	}
 	for _, overlap := range cfg.overlaps {
 		for _, probes := range cfg.probes {
@@ -535,7 +557,7 @@ func parseConfig(args []string) (config, error) {
 	cfg := config{
 		format: "json", topK: 10, recallTarget: .9, seed: 1, stage: "simulation",
 		partition: vectorpartition.DefaultConfig(), routerConfig: vectorpartition.DefaultRouterConfigV1(),
-		routerCandidates: 1024,
+		routerCandidates: 1024, sourceHNSWDegree: partitionHNSWDegree,
 	}
 	var probes, overlap string
 	var stages string
@@ -549,7 +571,7 @@ func parseConfig(args []string) (config, error) {
 	fs.Int64Var(&cfg.seed, "seed", cfg.seed, "fixture generation seed (must match manifest)")
 	fs.StringVar(&cfg.format, "format", cfg.format, "json or text")
 	fs.StringVar(&cfg.out, "out", "", "artifact directory")
-	fs.StringVar(&cfg.stage, "stage", cfg.stage, "simulation, partition, overlap,partition_index, or router")
+	fs.StringVar(&cfg.stage, "stage", cfg.stage, "simulation, partition, overlap,partition_index, router, or distributed_simulation_or_cluster")
 	fs.StringVar(&cfg.m3PersistDir, "m3-persist-db", "", "retain the single overlap,partition_index row as a persistent TreeDB directory for downstream service benchmarks")
 	fs.IntVar(&cfg.partition.Repetitions, "partition-repetitions", cfg.partition.Repetitions, "dense-ball graph sketch repetitions")
 	fs.IntVar(&cfg.partition.Pivots, "partition-pivots", cfg.partition.Pivots, "dense-ball pivots per recursive level")
@@ -563,6 +585,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.routerConfig.MaxIterations, "router-max-iterations", cfg.routerConfig.MaxIterations, "router Lloyd iteration bound")
 	fs.Uint64Var(&cfg.routerConfig.MaxRouterBytes, "router-max-bytes", cfg.routerConfig.MaxRouterBytes, "hard conservative persisted router-pack byte cap")
 	fs.IntVar(&cfg.routerCandidates, "router-candidates", cfg.routerCandidates, "explicit approximate representative candidate budget")
+	fs.IntVar(&cfg.sourceHNSWDegree, "source-hnsw-degree", cfg.sourceHNSWDegree, "source column_graph HNSW degree (1..16; default 16)")
 	fs.StringVar(&stages, "stages", "all", "comma-separated independently enabled loss stages, or all")
 	fs.IntVar(&cfg.maxVectors, "max-vectors", maxVectors, "maximum combined fixture vector/query count before allocation")
 	fs.Int64Var(&cfg.maxBytes, "max-fixture-bytes", maxFixtureBytes, "maximum modeled peak bytes for benchmark-owned fixture and working material")
@@ -572,7 +595,7 @@ func parseConfig(args []string) (config, error) {
 	// The offline M2 builder does not execute M0 probe simulations. Preserve
 	// the simulation requirement while allowing the issue's partition-stage
 	// invocation to omit a meaningless -probes flag.
-	if (cfg.stage == "partition" || cfg.stage == "overlap,partition_index" || cfg.stage == "router") && probes == "" {
+	if (cfg.stage == "partition" || cfg.stage == "overlap,partition_index" || cfg.stage == "router" || cfg.stage == m6CoordinatorStageV1) && probes == "" {
 		probes = "1"
 	}
 	var err error
@@ -582,8 +605,11 @@ func parseConfig(args []string) (config, error) {
 	if cfg.overlaps, err = parseFloats(overlap); err != nil {
 		return config{}, fmt.Errorf("overlap: %w", err)
 	}
-	if cfg.dataset == "" || cfg.out == "" || cfg.partitions < 1 || cfg.partitions > maxPartitions || cfg.topK < 1 || cfg.maxVectors < 1 || cfg.maxVectors > maxVectors || cfg.maxBytes < 8 || cfg.maxBytes > maxFixtureBytes || cfg.format != "json" && cfg.format != "text" || cfg.stage != "simulation" && cfg.stage != "partition" && cfg.stage != "overlap,partition_index" && cfg.stage != "router" || cfg.routerCandidates < 1 {
+	if cfg.dataset == "" || cfg.out == "" || cfg.partitions < 1 || cfg.partitions > maxPartitions || cfg.topK < 1 || cfg.maxVectors < 1 || cfg.maxVectors > maxVectors || cfg.maxBytes < 8 || cfg.maxBytes > maxFixtureBytes || cfg.format != "json" && cfg.format != "text" || cfg.stage != "simulation" && cfg.stage != "partition" && cfg.stage != "overlap,partition_index" && cfg.stage != "router" && cfg.stage != m6CoordinatorStageV1 || cfg.routerCandidates < 1 {
 		return config{}, errors.New("dataset, out, positive bounded partitions/top-k, and json|text format are required")
+	}
+	if err := validateSourceHNSWDegree(cfg.sourceHNSWDegree); err != nil {
+		return config{}, err
 	}
 	if len(cfg.probes) == 0 || len(cfg.overlaps) == 0 || math.IsNaN(cfg.recallTarget) || math.IsInf(cfg.recallTarget, 0) || cfg.recallTarget < 0 || cfg.recallTarget > 1 {
 		return config{}, errors.New("probes/overlap must be non-empty and recall target must be in [0,1]")
@@ -604,9 +630,26 @@ func parseConfig(args []string) (config, error) {
 	if cfg.stage == "router" && stages == "all" {
 		stages = "exact_representative_routing,approximate_representative_routing"
 	}
+	if cfg.stage == m6CoordinatorStageV1 && stages == "all" {
+		stages = m6CoordinatorAttributionStageV1
+	}
 	cfg.stages = stageSet(stages)
 	if len(cfg.stages) == 0 {
 		return config{}, errors.New("stages must name known stages or all")
+	}
+	if cfg.stage == m6CoordinatorStageV1 &&
+		(len(cfg.stages) != 1 || !cfg.stages[m6CoordinatorAttributionStageV1]) {
+		return config{}, errors.New("distributed_simulation_or_cluster requires only the M6 local-service coordinator attribution stage")
+	}
+	if cfg.stage == m6CoordinatorStageV1 {
+		shardLimits := nativewire.DefaultVectorPartitionShardSearchLimitsV1()
+		if cfg.partitions > m6CoordinatorMaxGroupsV1 || cfg.topK > shardLimits.MaxTopK ||
+			len(cfg.overlaps) != 1 || cfg.overlaps[0] != 0 {
+			return config{}, fmt.Errorf(
+				"distributed_simulation_or_cluster local-service evidence requires at most %d partitions, top-k at most %d, and exactly one zero overlap row",
+				m6CoordinatorMaxGroupsV1, shardLimits.MaxTopK,
+			)
+		}
 	}
 	cfg.partition.Seed = cfg.seed
 	cfg.partition.Partitions = cfg.partitions
@@ -713,6 +756,10 @@ func stageSet(raw string) map[string]bool {
 	}
 	for _, s := range strings.Split(raw, ",") {
 		s = strings.TrimSpace(s)
+		if s == m6CoordinatorAttributionStageV1 {
+			out[s] = true
+			continue
+		}
 		matched := false
 		for _, known := range knownStages {
 			if s == known {
@@ -1011,6 +1058,11 @@ func validateBenchmarkWork(cfg config, m fixtureManifest, capUnits int64) (bench
 	if stages["treedb_partition_local_hnsw"] {
 		passesPerSimulation++ // representative selection; HNSW engine work is excluded
 	}
+	if stages[m6CoordinatorAttributionStageV1] {
+		// Persisted M4 representative scoring and local M5 exact shard scans.
+		// Reserve one additional pass for the all-partition FP32 parity oracle.
+		passesPerSimulation += 3
+	}
 
 	simulationRows, err := memoryMul(int64(len(cfg.probes)), int64(len(cfg.overlaps)))
 	if err != nil {
@@ -1089,7 +1141,8 @@ func planBenchmarkMemory(cfg config, m fixtureManifest) (benchmarkMemoryPlan, er
 		cfg.stages["exact_representative_routing"] ||
 		cfg.stages["approximate_representative_routing"] ||
 		cfg.stages["exact_partition_local"] ||
-		cfg.stages["end_to_end_distributed_simulation"]
+		cfg.stages["end_to_end_distributed_simulation"] ||
+		cfg.stages[m6CoordinatorAttributionStageV1]
 	if needsSelectedTopK {
 		simulationWork, err = memoryAdd(simulationWork, int64(cfg.partitions), int64(maxProbes)*8)
 		if err != nil {
@@ -1100,10 +1153,11 @@ func planBenchmarkMemory(cfg config, m fixtureManifest) (benchmarkMemoryPlan, er
 		cfg.stages["approximate_representative_routing"] ||
 		cfg.stages["exact_partition_local"] ||
 		cfg.stages["treedb_partition_local_hnsw"] ||
-		cfg.stages["end_to_end_distributed_simulation"]
+		cfg.stages["end_to_end_distributed_simulation"] ||
+		cfg.stages[m6CoordinatorAttributionStageV1]
 	if needsRepresentatives {
 		representativeCount := int64(cfg.partitions)
-		if cfg.stage == "router" {
+		if cfg.stage == "router" || cfg.stage == m6CoordinatorStageV1 {
 			representativeCount, err = memoryMul(representativeCount, int64(cfg.routerConfig.RepresentativesPerPartition))
 			if err != nil {
 				return benchmarkMemoryPlan{}, err
@@ -1129,10 +1183,74 @@ func planBenchmarkMemory(cfg config, m fixtureManifest) (benchmarkMemoryPlan, er
 			return benchmarkMemoryPlan{}, err
 		}
 	}
+	if cfg.stages[m6CoordinatorAttributionStageV1] {
+		mergeCandidates, mulErr := memoryMul(k, int64(maxProbes))
+		if mulErr != nil {
+			return benchmarkMemoryPlan{}, mulErr
+		}
+		coordinatorWork, mulErr := memoryMul(
+			mergeCandidates,
+			int64(unsafe.Sizeof(nativewire.VectorPartitionCoordinatorNeighborV1{}))+documentIDStorageBytes+memoryMapEntryBytes,
+		)
+		if mulErr != nil {
+			return benchmarkMemoryPlan{}, mulErr
+		}
+		simulationWork, err = memoryAdd(
+			simulationWork,
+			coordinatorWork,
+			int64(maxProbes)*256,
+			int64(m.Dimensions)*4,
+		)
+		if err != nil {
+			return benchmarkMemoryPlan{}, err
+		}
+	}
 
 	plan := benchmarkMemoryPlan{
 		FixtureResidentBytes: fixtureResident,
 		SimulationWorkBytes:  simulationWork,
+	}
+	if cfg.stage == "router" || cfg.stage == m6CoordinatorStageV1 {
+		jsonRowBytes, mulErr := memoryMul(int64(m.Dimensions), hnswJSONFloatBytes+1)
+		if mulErr != nil {
+			return benchmarkMemoryPlan{}, mulErr
+		}
+		jsonRowBytes, err = memoryAdd(jsonRowBytes, hnswJSONFixedBytes)
+		if err != nil {
+			return benchmarkMemoryPlan{}, err
+		}
+		perInsertRow, addErr := memoryAdd(
+			2*int64(unsafe.Sizeof([]byte{})),
+			documentIDStorageBytes,
+			2*jsonRowBytes,
+			int64(m.Dimensions)*hnswDecodedDimensionBytes,
+			int64(unsafe.Sizeof([]float32{})),
+			memoryMapEntryBytes,
+		)
+		if addErr != nil {
+			return benchmarkMemoryPlan{}, addErr
+		}
+		routerInsertRows := min(int64(m.Vectors), int64(vectorPartitionInsertBatchRows))
+		routerInsertWork, mulErr := memoryMul(routerInsertRows, perInsertRow)
+		if mulErr != nil {
+			return benchmarkMemoryPlan{}, mulErr
+		}
+		perSourceRow, addErr := memoryAdd(
+			int64(m.Dimensions)*4,
+			documentIDStorageBytes,
+			int64(unsafe.Sizeof(collections.VectorPartitionRouterSourceRowV1{})),
+			int64(unsafe.Sizeof(collections.VectorPartitionMembershipV1{})),
+			int64(unsafe.Sizeof(vectorpartition.RouterVectorV1{})),
+			1, // seenDocuments
+		)
+		if addErr != nil {
+			return benchmarkMemoryPlan{}, addErr
+		}
+		routerSourceWork, mulErr := memoryMul(int64(m.Vectors), perSourceRow)
+		if mulErr != nil {
+			return benchmarkMemoryPlan{}, mulErr
+		}
+		plan.RouterBuildWorkBytes = max(routerInsertWork, routerSourceWork)
 	}
 	hnswBaseBytes := int64(0)
 	if cfg.stages["treedb_partition_local_hnsw"] {
@@ -1164,7 +1282,8 @@ func planBenchmarkMemory(cfg config, m fixtureManifest) (benchmarkMemoryPlan, er
 		if err != nil {
 			return benchmarkMemoryPlan{}, err
 		}
-		plan.HNSWInsertWorkBytes, err = memoryMul(maxPartitionRows, perInsertRow)
+		insertRows := min(maxPartitionRows, int64(vectorPartitionInsertBatchRows))
+		plan.HNSWInsertWorkBytes, err = memoryMul(insertRows, perInsertRow)
 		if err != nil {
 			return benchmarkMemoryPlan{}, err
 		}
@@ -1216,11 +1335,15 @@ func planBenchmarkMemory(cfg config, m fixtureManifest) (benchmarkMemoryPlan, er
 	if err != nil {
 		return benchmarkMemoryPlan{}, err
 	}
+	routerBuildPhase, err := memoryAdd(plan.FixtureResidentBytes, plan.RouterBuildWorkBytes)
+	if err != nil {
+		return benchmarkMemoryPlan{}, err
+	}
 	simulationPhase, err := memoryAdd(plan.FixtureResidentBytes, hnswBaseBytes, plan.HNSWCacheBytes, plan.SimulationWorkBytes)
 	if err != nil {
 		return benchmarkMemoryPlan{}, err
 	}
-	peak := max(checksumPhase, max(hnswBuildPhase, simulationPhase))
+	peak := max(checksumPhase, max(routerBuildPhase, max(hnswBuildPhase, simulationPhase)))
 	plan.ModeledPeakBytes, err = memoryScaleCeil(peak, memorySlackNumerator, memorySlackDenominator)
 	if err != nil {
 		return benchmarkMemoryPlan{}, err
@@ -1419,9 +1542,19 @@ func representativePartitions(v [][]float64, q []float64, partitions, probes int
 }
 func parsePartitionID(id string) int { n, _ := strconv.Atoi(strings.TrimPrefix(id, "p-")); return n }
 
-func newTreeDBRepresentativeRouter(vectors [][]float64, partitions int, routerConfig vectorpartition.RouterConfigV1, candidateBudget int) (_ *treeDBRepresentativeRouter, err error) {
+func validateSourceHNSWDegree(degree int) error {
+	if degree < 1 || degree > maxSourceHNSWDegree {
+		return fmt.Errorf("-source-hnsw-degree must be in [1,%d]", maxSourceHNSWDegree)
+	}
+	return nil
+}
+
+func newTreeDBRepresentativeRouter(vectors [][]float64, partitions int, routerConfig vectorpartition.RouterConfigV1, candidateBudget, sourceHNSWDegree int) (_ *treeDBRepresentativeRouter, err error) {
 	if len(vectors) == 0 || partitions < 1 || partitions > len(vectors) || candidateBudget < 1 {
 		return nil, errors.New("invalid vector/partition/candidate count for TreeDB router stage")
+	}
+	if err := validateSourceHNSWDegree(sourceHNSWDegree); err != nil {
+		return nil, err
 	}
 	dimensions := len(vectors[0])
 	if dimensions < 1 {
@@ -1431,7 +1564,7 @@ func newTreeDBRepresentativeRouter(vectors [][]float64, partitions int, routerCo
 	if err != nil {
 		return nil, err
 	}
-	h := &treeDBRepresentativeRouter{dir: dir}
+	h := &treeDBRepresentativeRouter{dir: dir, sourceHNSWDegree: sourceHNSWDegree}
 	defer func() {
 		if err != nil {
 			_ = h.Close()
@@ -1446,7 +1579,7 @@ func newTreeDBRepresentativeRouter(vectors [][]float64, partitions int, routerCo
 	if err != nil {
 		return nil, err
 	}
-	meta := partitionCollectionMeta("router_source", dimensions)
+	meta := partitionCollectionMetaWithDegree("router_source", dimensions, sourceHNSWDegree)
 	meta.Options.ColumnStore.AssetManager = &collections.ColumnAssetManagerConfig{
 		Kind: collections.ColumnAssetManagerValueLogShaped, IsolatedNamespace: true,
 		Namespace: "router_bench_assets",
@@ -1707,6 +1840,10 @@ func partitionCollectionName(partition int) string {
 }
 
 func partitionCollectionMeta(name string, dims int) *collections.CollectionMeta {
+	return partitionCollectionMetaWithDegree(name, dims, partitionHNSWDegree)
+}
+
+func partitionCollectionMetaWithDegree(name string, dims, degree int) *collections.CollectionMeta {
 	return &collections.CollectionMeta{
 		Name: name,
 		Options: collections.CollectionOptions{
@@ -1726,7 +1863,7 @@ func partitionCollectionMeta(name string, dims int) *collections.CollectionMeta 
 			Field:          "embedding",
 			Metric:         collections.VectorMetricCosine,
 			Dimensions:     dims,
-			M:              partitionHNSWDegree,
+			M:              degree,
 			EfConstruction: 128,
 			EfSearch:       128,
 			Encoding:       collections.VectorIndexEncodingFloat32,
@@ -1737,35 +1874,46 @@ func partitionCollectionMeta(name string, dims int) *collections.CollectionMeta 
 
 func insertPartitionRows(col *collections.Collection, vectors [][]float64, partition, partitions int) error {
 	rowCount := moduloPartitionSize(len(vectors), partitions, partition)
-	ids := make([][]byte, 0, rowCount)
-	documents := make([][]byte, 0, rowCount)
-	for i := partition; i < len(vectors); i += partitions {
-		vector := make([]float32, len(vectors[i]))
-		for d, value := range vectors[i] {
-			if math.IsNaN(value) || math.IsInf(value, 0) {
-				return fmt.Errorf("vector %d dimension %d is non-finite", i, d)
+	inserted := 0
+	for next := partition; next < len(vectors); {
+		batchRows := min(vectorPartitionInsertBatchRows, rowCount-inserted)
+		ids := make([][]byte, 0, batchRows)
+		documents := make([][]byte, 0, batchRows)
+		for len(ids) < batchRows && next < len(vectors) {
+			vector := make([]float32, len(vectors[next]))
+			for dimension, value := range vectors[next] {
+				if math.IsNaN(value) || math.IsInf(value, 0) {
+					return fmt.Errorf("vector %d dimension %d is non-finite", next, dimension)
+				}
+				vector[dimension] = float32(value)
 			}
-			vector[d] = float32(value)
+			id := fmt.Sprintf("doc-%06d", next)
+			raw, err := json.Marshal(struct {
+				TimeUS    int64     `json:"time_us"`
+				Embedding []float32 `json:"embedding"`
+			}{
+				TimeUS:    int64(next + 1),
+				Embedding: vector,
+			})
+			if err != nil {
+				return err
+			}
+			ids = append(ids, []byte(id))
+			documents = append(documents, raw)
+			next += partitions
 		}
-		id := fmt.Sprintf("doc-%06d", i)
-		raw, err := json.Marshal(struct {
-			TimeUS    int64     `json:"time_us"`
-			Embedding []float32 `json:"embedding"`
-		}{
-			TimeUS:    int64(i + 1),
-			Embedding: vector,
-		})
-		if err != nil {
+		if len(ids) == 0 {
+			return fmt.Errorf("partition %d produced an empty insert batch", partition)
+		}
+		if _, err := col.InsertBatch(ids, documents); err != nil {
 			return err
 		}
-		ids = append(ids, []byte(id))
-		documents = append(documents, raw)
+		inserted += len(ids)
 	}
-	if len(ids) != rowCount {
-		return fmt.Errorf("partition %d rows=%d want %d", partition, len(ids), rowCount)
+	if inserted != rowCount {
+		return fmt.Errorf("partition %d rows=%d want %d", partition, inserted, rowCount)
 	}
-	_, err := col.InsertBatch(ids, documents)
-	return err
+	return nil
 }
 
 func moduloPartitionSize(vectors, partitions, partition int) int {
@@ -1946,6 +2094,9 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 	if cfg.stages == nil {
 		cfg.stages = stageSet("all")
 	}
+	if cfg.stage == m6CoordinatorStageV1 {
+		return simulateM6CoordinatorV1(cfg, m, v, q, probes, overlap)
+	}
 	if overlap != 0 { /* M0 reports budget only; M3 owns membership copies. */
 	}
 	totals := map[string]float64{}
@@ -2098,6 +2249,7 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 		metrics.FinalBytes = int64(cfg.router.build.RouterBytes)
 		metrics.BytesPerVector = float64(cfg.router.build.RouterBytes) / float64(len(v))
 		metrics.RepresentativeCount = int(cfg.router.open.Representatives)
+		metrics.SourceHNSWDegree = cfg.router.sourceHNSWDegree
 		metrics.LloydIterations = int(cfg.router.build.LloydIterations)
 		metrics.EmptyRepairs = int(cfg.router.build.EmptyRepairs)
 		metrics.MinRepresentatives = int(cfg.router.build.MinRepresentativesPerPartition)
@@ -2122,6 +2274,7 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 			metrics.HNSWLossMeasured = true
 		}
 	}
+	goMaxProcs, goMemoryLimitBytes := benchmarkRuntimeLimits()
 	r := runResult{
 		SchemaVersion:      schemaVersion,
 		ResultKind:         "simulation_only",
@@ -2131,6 +2284,8 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 		HeadSHA:            cfg.headSHA,
 		GoVersion:          runtime.Version(),
 		Hardware:           runtime.GOARCH + "/" + runtime.GOOS,
+		GOMAXPROCS:         goMaxProcs,
+		GoMemoryLimitBytes: goMemoryLimitBytes,
 		Dataset:            m,
 		Partitions:         cfg.partitions,
 		Overlap:            overlap,
@@ -2169,7 +2324,11 @@ func dedupeStable(in []neighbor) []neighbor {
 	return out
 }
 func validateResult(r runResult) error {
-	if r.SchemaVersion != schemaVersion || r.ResultKind != "simulation_only" && r.ResultKind != "router_local_path_evidence" || r.ProductionEvidence || len(r.Stages) == 0 {
+	if r.SchemaVersion != schemaVersion ||
+		r.ResultKind != "simulation_only" &&
+			r.ResultKind != "router_local_path_evidence" &&
+			r.ResultKind != m6CoordinatorResultKindV1 ||
+		r.ProductionEvidence || len(r.Stages) == 0 {
 		return errors.New("invalid result schema or production labeling")
 	}
 	for _, s := range r.Stages {
@@ -2189,7 +2348,7 @@ func validateResult(r runResult) error {
 			math.IsNaN(s.AllocsPerOp) || math.IsInf(s.AllocsPerOp, 0) || s.AllocsPerOp < 0 {
 			return errors.New("invalid stage allocation metric")
 		}
-		if r.ResultKind == "router_local_path_evidence" &&
+		if (r.ResultKind == "router_local_path_evidence" || r.ResultKind == m6CoordinatorResultKindV1) &&
 			(s.Name == "exact_representative_routing" || s.Name == "approximate_representative_routing") {
 			if s.Searches != uint64(s.Queries) || s.RepresentativeCount == 0 ||
 				s.CandidateBudget == 0 || s.CandidateBudget > s.RepresentativeCount ||
@@ -2216,6 +2375,9 @@ func validateResult(r runResult) error {
 	if !validSHA(r.BaseSHA) || !validSHA(r.HeadSHA) {
 		return errors.New("result provenance must contain exact 40-hex base/head SHAs")
 	}
+	if r.GOMAXPROCS < 1 || r.GoMemoryLimitBytes < 1 {
+		return errors.New("result must record positive Go runtime concurrency and memory limits")
+	}
 	if len(r.Dataset.Checksum) != 64 {
 		return errors.New("result dataset must contain an exact SHA-256 checksum")
 	}
@@ -2228,7 +2390,9 @@ func validateResult(r runResult) error {
 	if r.MemoryBudgetBytes < 1 || r.ModeledPeakBytes < 1 || r.ModeledPeakBytes > r.MemoryBudgetBytes || r.MemoryBudgetScope != memoryBudgetScope {
 		return errors.New("invalid benchmark-owned memory budget evidence")
 	}
-	if r.Metrics.MeasurementStatus != "simulation_not_measured" && r.Metrics.MeasurementStatus != "router_local_production_path_no_raft" {
+	if r.Metrics.MeasurementStatus != "simulation_not_measured" &&
+		r.Metrics.MeasurementStatus != "router_local_production_path_no_raft" &&
+		r.Metrics.MeasurementStatus != m6CoordinatorMeasurementV1 {
 		return errors.New("unknown metric measurement status")
 	}
 	for _, x := range []float64{r.Metrics.BytesPerVector, r.Metrics.Balance, r.Metrics.ReplicationFactor, r.Metrics.UnassignedOverlapBudget, r.Metrics.RoutedPartitionRecall, r.Metrics.CoarseningRecall, r.Metrics.ApproximateRouterRecall, r.Metrics.HNSWRecallLoss, r.Metrics.QPS, r.Metrics.RecallAt1, r.Metrics.RecallAt10, r.Metrics.RecallAt100, r.Metrics.BytesPerOp, r.Metrics.AllocsPerOp} {
@@ -2236,8 +2400,10 @@ func validateResult(r runResult) error {
 			return errors.New("non-finite metric")
 		}
 	}
-	if r.ResultKind == "router_local_path_evidence" {
+	if r.ResultKind == "router_local_path_evidence" || r.ResultKind == m6CoordinatorResultKindV1 {
 		if r.Metrics.BuildWallNanos <= 0 ||
+			r.Metrics.SourceHNSWDegree < 1 ||
+			r.Metrics.SourceHNSWDegree > maxSourceHNSWDegree ||
 			r.Metrics.RepresentativeCount < r.Partitions ||
 			r.Metrics.MinRepresentatives < 1 ||
 			r.Metrics.MaxRepresentatives < r.Metrics.MinRepresentatives ||
@@ -2247,6 +2413,13 @@ func validateResult(r runResult) error {
 			r.Metrics.PeakRSSAvailable && r.Metrics.PeakRSSBytes <= 0 {
 			return errors.New("router result lacks build/storage evidence")
 		}
+	}
+	if r.ResultKind == m6CoordinatorResultKindV1 {
+		if err := validateM6CoordinatorEvidenceV1(r); err != nil {
+			return err
+		}
+	} else if r.Coordinator != nil {
+		return errors.New("non-M6 result contains coordinator evidence")
 	}
 	return nil
 }
@@ -2266,6 +2439,7 @@ func writeArtifacts(out string, r runResult) error {
 	hnswSummary := "not selected"
 	exactRouterSummary := "not selected"
 	approximateRouterSummary := "not selected"
+	coordinatorSummary := "not selected"
 	for _, s := range r.Stages {
 		if s.Name == "end_to_end_distributed_simulation" && s.Available {
 			stageSummary = fmt.Sprintf("recall@%d: %.4f", r.TopK, s.RecallAtK)
@@ -2279,6 +2453,12 @@ func writeArtifacts(out string, r runResult) error {
 		if s.Name == "approximate_representative_routing" && s.Available {
 			approximateRouterSummary = fmt.Sprintf("recall@%d: %.4f; candidate_budget=%d; candidates=%d; edges=%d; p50/p95/p99=%d/%d/%d ns; bytes/op=%.1f; allocs/op=%.1f", r.TopK, s.RecallAtK, s.CandidateBudget, s.Candidates, s.Edges, s.P50Nanos, s.P95Nanos, s.P99Nanos, s.BytesPerOp, s.AllocsPerOp)
 		}
+		if s.Name == m6CoordinatorAttributionStageV1 && s.Available {
+			coordinatorSummary = fmt.Sprintf(
+				"recall@%d: %.4f; local-service p50/p95/p99=%d/%d/%d ns; candidates=%d",
+				r.TopK, s.RecallAtK, s.P50Nanos, s.P95Nanos, s.P99Nanos, s.Candidates,
+			)
+		}
 	}
 	title := "TreeDB vector partition M0 simulation"
 	disclaimer := "Simulation only; not production Raft evidence."
@@ -2286,11 +2466,19 @@ func writeArtifacts(out string, r runResult) error {
 		title = "TreeDB vector partition M4 local router evidence"
 		disclaimer = "Local persisted router-path evidence only; not production Raft or M8 acceptance evidence."
 	}
-	md := fmt.Sprintf("# %s\n\n**%s**\n\n- fixture: `%s` (%s)\n- seed: %d\n- modeled benchmark-owned peak: %d/%d bytes\n- memory budget scope: %s\n- probes: %d/%d\n- overlap budget: %.6g\n- exact representative routing: %s\n- approximate representative routing: %s\n- TreeDB partition-local HNSW: %s\n- end-to-end simulation: %s\n- timed boundary: %s\n", title, disclaimer, r.Dataset.Fixture, r.Dataset.Checksum, r.Seed, r.ModeledPeakBytes, r.MemoryBudgetBytes, r.MemoryBudgetScope, r.Probes, r.Partitions, r.Overlap, exactRouterSummary, approximateRouterSummary, hnswSummary, stageSummary, r.TimedBoundary)
+	if r.ResultKind == m6CoordinatorResultKindV1 {
+		title = "TreeDB vector partition M6 local-service simulation"
+		disclaimer = "Local in-process M5 contract simulation only; not production network, Raft read-proof, remote-service, or M8 acceptance evidence."
+	}
+	md := fmt.Sprintf("# %s\n\n**%s**\n\n- fixture: `%s` (%s)\n- seed: %d\n- GOMAXPROCS: %d\n- Go memory limit: %d bytes\n- source HNSW degree: %d\n- modeled benchmark-owned peak: %d/%d bytes\n- memory budget scope: %s\n- probes: %d/%d\n- overlap budget: %.6g\n- exact representative routing: %s\n- approximate representative routing: %s\n- TreeDB partition-local HNSW: %s\n- end-to-end simulation: %s\n- M6 coordinator local-service simulation: %s\n- timed boundary: %s\n", title, disclaimer, r.Dataset.Fixture, r.Dataset.Checksum, r.Seed, r.GOMAXPROCS, r.GoMemoryLimitBytes, r.Metrics.SourceHNSWDegree, r.ModeledPeakBytes, r.MemoryBudgetBytes, r.MemoryBudgetScope, r.Probes, r.Partitions, r.Overlap, exactRouterSummary, approximateRouterSummary, hnswSummary, stageSummary, coordinatorSummary, r.TimedBoundary)
 	return os.WriteFile(filepath.Join(out, name+".md"), []byte(md), 0644)
 }
 func artifactBasename(r runResult) string {
-	return fmt.Sprintf("simulation_f%s_s%016x_n%d_p%d_o%016x_t%s_k%d", r.Dataset.Checksum, uint64(r.Seed), r.Partitions, r.Probes, math.Float64bits(r.Overlap), artifactStageSetChecksum(r.Stages), r.TopK)
+	prefix := "simulation"
+	if r.ResultKind == m6CoordinatorResultKindV1 {
+		prefix = "m6_local_service"
+	}
+	return fmt.Sprintf("%s_f%s_s%016x_n%d_p%d_o%016x_t%s_k%d", prefix, r.Dataset.Checksum, uint64(r.Seed), r.Partitions, r.Probes, math.Float64bits(r.Overlap), artifactStageSetChecksum(r.Stages), r.TopK)
 }
 
 func artifactStageSetChecksum(stages []stageResult) string {
