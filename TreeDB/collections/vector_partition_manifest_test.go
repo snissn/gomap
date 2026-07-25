@@ -2970,6 +2970,9 @@ func scaledVectorPartitionManifestV1(rows int) VectorPartitionManifestV1 {
 }
 
 func TestVectorPartitionManifestContextDigestMatchesStableJSONV1(t *testing.T) {
+	if err := validateVectorPartitionManifestIntegrityShapeV1(); err != nil {
+		t.Fatal(err)
+	}
 	for _, m := range []VectorPartitionManifestV1{
 		testVectorPartitionManifestV1(),
 		{

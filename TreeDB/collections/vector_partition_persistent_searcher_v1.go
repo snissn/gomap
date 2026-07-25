@@ -218,24 +218,10 @@ func NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx context.Context
 	}
 	plan.members = make([]vectorPartitionMembershipSourceV1, plan.memberOffsets[partitionCount])
 	next := append([]int(nil), plan.memberOffsets[:partitionCount]...)
-	appendMemberships := func(memberships []VectorPartitionMembershipV1, kind VectorPartitionMembershipKindV1) error {
-		for i, membership := range memberships {
-			if i&1023 == 0 {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-			}
-			partition := int(membership.PartitionID)
-			offset := next[partition]
-			plan.members[offset] = vectorPartitionMembershipSourceV1{ordinal: int(membership.VectorOrdinal), kind: kind}
-			next[partition]++
-		}
-		return nil
-	}
-	if err := appendMemberships(manifest.Memberships, VectorPartitionMembershipHomeV1); err != nil {
+	if err := appendVectorPartitionMembershipsToPlanV1(ctx, plan, manifest.Memberships, VectorPartitionMembershipHomeV1, next); err != nil {
 		return nil, err
 	}
-	if err := appendMemberships(manifest.OverlapMemberships, VectorPartitionMembershipOverlapV1); err != nil {
+	if err := appendVectorPartitionMembershipsToPlanV1(ctx, plan, manifest.OverlapMemberships, VectorPartitionMembershipOverlapV1, next); err != nil {
 		return nil, err
 	}
 	// The digest verifier makes and canonically sorts its own bounded copy.
@@ -245,6 +231,34 @@ func NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx context.Context
 		return nil, err
 	}
 	return plan, nil
+}
+
+func appendVectorPartitionMembershipsToPlanV1(
+	ctx context.Context,
+	plan *VectorPartitionGenerationSearchOpenPlanV1,
+	memberships []VectorPartitionMembershipV1,
+	kind VectorPartitionMembershipKindV1,
+	next []int,
+) error {
+	partitionCount := int(plan.partitionCount)
+	for i, membership := range memberships {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		partition := int(membership.PartitionID)
+		if partition < 0 || partition >= partitionCount || partition+1 >= len(plan.memberOffsets) || partition >= len(next) {
+			return fmt.Errorf("%w: membership partition %d out of range", ErrVectorPartitionSearchUnavailable, membership.PartitionID)
+		}
+		offset := next[partition]
+		if offset < plan.memberOffsets[partition] || offset >= plan.memberOffsets[partition+1] || offset >= len(plan.members) {
+			return fmt.Errorf("%w: membership index changed during plan preparation", ErrVectorPartitionSearchUnavailable)
+		}
+		plan.members[offset] = vectorPartitionMembershipSourceV1{ordinal: int(membership.VectorOrdinal), kind: kind}
+		next[partition]++
+	}
+	return nil
 }
 
 func (p *VectorPartitionGenerationSearchOpenPlanV1) partition(partition uint32) (*VectorPartitionAssetV1, []vectorPartitionMembershipSourceV1, int, int, error) {

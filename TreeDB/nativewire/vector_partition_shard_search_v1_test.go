@@ -587,6 +587,24 @@ func TestVectorPartitionShardSearchTimingExcludesResponseMaterializationFromSear
 	}
 }
 
+func TestVectorPartitionShardSearchCancellationBeforePartialMaterializationV1(t *testing.T) {
+	service, _, _ := newVectorPartitionShardSearchTestServiceV1(t,
+		[]raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},
+		map[uint32]collections.VectorPartitionSearchAssetV1{
+			0: vectorPartitionShardSearchAssetTestV1(0, []string{"a"}, [][]float32{{1, 0}}),
+		},
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	service.testBeforePartialMaterialization = cancel
+	response, err := service.Search(ctx, vectorPartitionShardSearchRequestTestV1([]uint32{0}))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Search cancellation err=%v", err)
+	}
+	if response.Version != 0 || response.RequestID != "" || len(response.Partials) != 0 {
+		t.Fatalf("canceled response materialized: %+v", response)
+	}
+}
+
 func TestVectorPartitionShardSearchPinnedManifestDirectIndexFailsClosedV1(t *testing.T) {
 	service, source, _ := newVectorPartitionShardSearchTestServiceV1(t,
 		[]raftplacement.VectorPartitionGroupV1{

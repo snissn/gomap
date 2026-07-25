@@ -61,6 +61,33 @@ func TestVectorPartitionGenerationSearchOpenPlanV1IndexesAndOwnsInputs(t *testin
 	}
 }
 
+func TestAppendVectorPartitionMembershipsToPlanV1FailsClosedOnChangedInput(t *testing.T) {
+	plan := &VectorPartitionGenerationSearchOpenPlanV1{
+		partitionCount: 2,
+		memberOffsets:  []int{0, 1, 2},
+		members:        make([]vectorPartitionMembershipSourceV1, 2),
+	}
+	next := []int{0, 1}
+	err := appendVectorPartitionMembershipsToPlanV1(t.Context(), plan, []VectorPartitionMembershipV1{
+		{VectorOrdinal: 1, PartitionID: 0},
+		{VectorOrdinal: 2, PartitionID: 0},
+	}, VectorPartitionMembershipHomeV1, next)
+	if !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("changed membership input err=%v", err)
+	}
+	if next[0] != 1 || plan.members[1] != (vectorPartitionMembershipSourceV1{}) {
+		t.Fatalf("changed membership input spilled into adjacent run: next=%v members=%+v", next, plan.members)
+	}
+
+	err = appendVectorPartitionMembershipsToPlanV1(t.Context(), plan, []VectorPartitionMembershipV1{{
+		VectorOrdinal: 3,
+		PartitionID:   2,
+	}}, VectorPartitionMembershipHomeV1, []int{0, 1})
+	if !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("out-of-range changed input err=%v", err)
+	}
+}
+
 func TestOpenVectorPartitionLocalSearcherForGenerationWithContextV1RejectsCanceledColdOpen(t *testing.T) {
 	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}})
 	defer func() {

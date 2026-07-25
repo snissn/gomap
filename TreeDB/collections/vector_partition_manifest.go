@@ -18,6 +18,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -159,6 +160,46 @@ type VectorPartitionManifestV1 struct {
 	Assets                                                             []VectorPartitionAssetV1
 	RouterAsset                                                        VectorPartitionAssetV1
 	ReadySetDigest                                                     string
+}
+
+var vectorPartitionManifestIntegrityFieldNamesV1 = [...]string{
+	"Format",
+	"State",
+	"Collection",
+	"IndexName",
+	"IndexDefinitionDigest",
+	"IntegrityDigest",
+	"SourceGeneration",
+	"SourceChecksum",
+	"SourceSchemaHash",
+	"SourceRowCount",
+	"Generation",
+	"RouterGeneration",
+	"PartitionCount",
+	"BalancePolicy",
+	"Placements",
+	"Memberships",
+	"OverlapMemberships",
+	"Representatives",
+	"Assets",
+	"RouterAsset",
+	"ReadySetDigest",
+}
+
+var vectorPartitionManifestIntegrityShapeErrV1 = validateVectorPartitionManifestIntegrityShapeV1()
+
+func validateVectorPartitionManifestIntegrityShapeV1() error {
+	typ := reflect.TypeOf(VectorPartitionManifestV1{})
+	if typ.NumField() != len(vectorPartitionManifestIntegrityFieldNamesV1) {
+		return fmt.Errorf("%w: integrity field count %d want %d", ErrVectorPartitionManifestInvalid, typ.NumField(), len(vectorPartitionManifestIntegrityFieldNamesV1))
+	}
+	for i, want := range vectorPartitionManifestIntegrityFieldNamesV1 {
+		field := typ.Field(i)
+		if field.Name != want || field.PkgPath != "" || field.Tag.Get("json") != "" {
+			return fmt.Errorf("%w: integrity field %d is %q exported=%t json=%q want %q without tag", ErrVectorPartitionManifestInvalid, i, field.Name, field.PkgPath == "", field.Tag.Get("json"), want)
+		}
+	}
+	return nil
 }
 
 // VectorPartitionSourceIdentityV1 identifies the loaded vector-index
@@ -663,6 +704,9 @@ func (m VectorPartitionManifestV1) integrityDigestWithContextV1(ctx context.Cont
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
+	}
+	if vectorPartitionManifestIntegrityShapeErrV1 != nil {
+		return "", vectorPartitionManifestIntegrityShapeErrV1
 	}
 	m.IntegrityDigest = ""
 	h := sha256.New()

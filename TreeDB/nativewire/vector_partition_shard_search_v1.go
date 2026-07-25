@@ -540,6 +540,9 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 		if s.testBeforePartialMaterialization != nil {
 			s.testBeforePartialMaterialization()
 		}
+		if err := ctx.Err(); err != nil {
+			return response, s.wrapError(err, groupID)
+		}
 		status := searcher.Status()
 		if metrics.Route != status.SearchRoute {
 			return response, s.wrapError(fmt.Errorf("%w: partition %d reported route %q after opening as %q", ErrVectorPartitionShardSearchAssetsUnavailable, request.PartitionIDs[i], metrics.Route, status.SearchRoute), groupID)
