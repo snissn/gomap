@@ -25,7 +25,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosine(query []float32, opts co
 
 // searchCosineWithContext keeps the existing searchCosine API available to
 // callers without a context while making every potentially long traversal
-// phase interruptible for deadline-bound router searches.
+// phase interruptible for deadline-bound router and partition searches.
 func (v *columnHNSWSearchPackPreparedView) searchCosineWithContext(ctx context.Context, query []float32, opts columnVectorGraphNativeSearchOptions, scratch *columnVectorGraphNativeSearchScratch) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
 	var stats columnVectorGraphNativeSearchStats
 	if ctx == nil {

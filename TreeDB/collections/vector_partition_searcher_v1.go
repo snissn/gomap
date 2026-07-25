@@ -477,9 +477,12 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context
 		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: zero query", ErrVectorPartitionSearchUnavailable)
 	}
 	if s.prepared != nil {
-		results, stats, err := s.prepared.searchCosine(query, columnVectorGraphNativeSearchOptions{TopK: opts.TopK, EfSearch: opts.EfSearch}, &columnVectorGraphNativeSearchScratch{})
+		results, stats, err := s.prepared.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{TopK: opts.TopK, EfSearch: opts.EfSearch}, &columnVectorGraphNativeSearchScratch{})
 		if err != nil {
 			s.recordFailure()
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil, VectorPartitionSearchMetricsV1{}, err
+			}
 			return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: native HNSW: %v", ErrVectorPartitionSearchUnavailable, err)
 		}
 		if err := ctx.Err(); err != nil {

@@ -1,9 +1,12 @@
 package collections
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 )
 
 func TestVectorPartitionLocalSearcherV1ExactStableIDsAndPins(t *testing.T) {
@@ -97,6 +100,95 @@ func TestVectorPartitionLocalSearcherV1ExplicitOptionsAndCancellation(t *testing
 	}
 	if status := searcher.Status(); status.ActivePins != 0 {
 		t.Fatalf("canceled search leaked pins: %+v", status)
+	}
+}
+
+type vectorPartitionLocalSearcherDeadlineAfterErrContextV1 struct {
+	context.Context
+	calls         int
+	deadlineAfter int
+}
+
+func (c *vectorPartitionLocalSearcherDeadlineAfterErrContextV1) Err() error {
+	c.calls++
+	if c.calls >= c.deadlineAfter {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+func TestVectorPartitionLocalSearcherV1DeadlineInterruptsNativeTraversalAndReleasesResources(t *testing.T) {
+	const rows = 4096
+	input := columnHNSWSearchPackBuildInput{
+		Rows: rows, Dimensions: 1, VectorStride: 4,
+		M: 1, EfConstruction: rows, EfSearch: rows,
+		EntryOrdinal: 0, MaxLayer: 0,
+		BaseIdentity: columnHNSWSearchPackBaseIdentity{
+			ManifestGeneration: 11,
+			ManifestChecksum:   12,
+			SchemaHash:         13,
+		},
+		NormalizedVectors:       make([]float32, rows*4),
+		Levels:                  make([]uint16, rows),
+		AdjacencyLayers:         []columnHNSWSearchPackLayerInput{{Offsets: make([]uint64, rows+1)}},
+		RowRefGenerations:       make([]int64, rows),
+		RowRefPartIDs:           make([]int64, rows),
+		RowRefRowIndexes:        make([]int64, rows),
+		RowRefAppliedCommandLSN: make([]int64, rows),
+		DocumentIDOffsets:       make([]uint64, rows+1),
+		DocumentIDBytes:         bytes.Repeat([]byte{'x'}, rows),
+	}
+	for ordinal := range rows {
+		input.NormalizedVectors[ordinal*4] = 1
+		input.RowRefGenerations[ordinal] = 11
+		input.RowRefPartIDs[ordinal] = 1
+		input.RowRefRowIndexes[ordinal] = int64(ordinal)
+		input.RowRefAppliedCommandLSN[ordinal] = 1
+		input.DocumentIDOffsets[ordinal] = uint64(ordinal)
+	}
+	input.DocumentIDOffsets[rows] = uint64(rows)
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, handle := testColumnHNSWSearchPackPreparedViewFromBytes2314(
+		t, raw, mappedresource.SourceHeapCopy, input.BaseIdentity,
+	)
+	searcher := &VectorPartitionLocalSearcherV1{
+		asset:            VectorPartitionSearchAssetV1{Generation: 11, PartitionID: 2, Dimensions: 1},
+		prepared:         view,
+		opened:           1,
+		homeMemberships:  rows,
+		packBytes:        uint64(len(raw)),
+		heapBytes:        uint64(len(raw)),
+		searchRoute:      VectorPartitionSearchRouteHNSWSearchPackV1,
+		maxStableIDBytes: 1,
+	}
+	t.Cleanup(func() { _ = searcher.Close() })
+
+	// Four polls cover local-search preflight plus pack scratch/query setup.
+	// The ninth poll fires only after the disconnected layer-0 traversal has
+	// seeded multiple rows, making this a deterministic mid-traversal deadline.
+	ctx := &vectorPartitionLocalSearcherDeadlineAfterErrContextV1{
+		Context: context.Background(), deadlineAfter: 9,
+	}
+	results, metrics, err := searcher.SearchWithOptionsV1(ctx, []float32{1}, VectorPartitionSearchOptionsV1{
+		TopK: 1, EfSearch: rows,
+	})
+	if !errors.Is(err, context.DeadlineExceeded) || len(results) != 0 || metrics != (VectorPartitionSearchMetricsV1{}) {
+		t.Fatalf("results=%+v metrics=%+v err=%v want deadline and no partial result", results, metrics, err)
+	}
+	if ctx.calls != ctx.deadlineAfter {
+		t.Fatalf("deadline polls=%d want %d", ctx.calls, ctx.deadlineAfter)
+	}
+	if status := searcher.Status(); status.ActivePins != 0 || status.Searches != 0 || status.Failures != 1 {
+		t.Fatalf("deadline return retained search pin or stats: %+v", status)
+	}
+	if err := searcher.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !handle.Released() {
+		t.Fatal("deadline return retained prepared search resource after lease close")
 	}
 }
 
