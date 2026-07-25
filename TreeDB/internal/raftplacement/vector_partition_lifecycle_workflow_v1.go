@@ -151,3 +151,10 @@ func (c VectorPartitionLifecycleCoordinatorV1) RecoveryStatusV1() ([]VectorParti
 	}
 	return c.Authority.VectorPartitionLifecycleStatusesV1(), c.Authority.VectorPartitionLifecycleMutationFencesV1(), nil
 }
+
+func (c VectorPartitionLifecycleCoordinatorV1) RecoveryCollectionMutationBarriersV1() ([]VectorPartitionCollectionMutationBarrierStatusV1, error) {
+	if c.Authority == nil {
+		return nil, ErrCatalogMetaUnavailable
+	}
+	return c.Authority.VectorPartitionCollectionMutationBarriersV1(), nil
+}

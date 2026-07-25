@@ -34,15 +34,30 @@ claim. The encoded command and snapshot paths remain bounded by
 `MaxVectorPartitionLifecycleCommandBytesV1` (1 MiB),
 `MaxVectorPartitionLifecycleRecordBytesV1` (1 MiB), and
 `MaxCatalogMetaSnapshotBytesV1` (8 MiB); catalog status reports retained wire
-bytes for records, while `VectorPartitionLifecycleMutationFencesV1` exposes
-the bounded pending-fence operator state.
+bytes for records, while `VectorPartitionLifecycleMutationFencesV1` and
+`VectorPartitionCollectionMutationBarriersV1` expose the bounded pending-fence
+operator state.
+
+## Source-capture and mutation ordering
+
+The build coordinator reads `BuildSourceMutationEpochV1` before it captures
+group read/apply proofs, then supplies that epoch to `BeginBuildV1`. A relevant
+nativewire mutation first publishes a collection-keyed barrier through the
+catalog/meta Raft owner. The barrier rejects a build already in source capture,
+and begin-build rejects an epoch that the mutation advanced after capture.
+Once begin-build commits, later distinct mutations remain blocked through
+build, stage, and prepare. The mutation barrier is keyed by the deterministic
+command/idempotency identity, survives snapshot/restore, rejects distinct
+concurrent mutations, and is released only after committed-recoverable data
+submission and all per-index invalidation confirmations.
 
 ## Explicitly unavailable phases
 
 M7 has no production generation-builder orchestration, remote asset upload
-pipeline, or distributed barrier implementation in this repository. Therefore
-there is no honest measurement for build, stage/upload, prepare barrier,
-catalog-meta Raft quorum submit, or multi-node failover/rejoin latency.
+pipeline, or multi-group source-proof capture harness in this repository.
+Therefore there is no honest measurement for build, stage/upload, source-proof
+capture duration, catalog-meta Raft quorum submit, or multi-node
+failover/rejoin latency.
 Those phases are **not implemented/measured**, and this document must not be
 read as production readiness evidence. The implemented fail-closed lifecycle
 seams are command encoding/reduction, catalog-authority fencing, nativewire and

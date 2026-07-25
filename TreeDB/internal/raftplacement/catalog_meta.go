@@ -206,6 +206,10 @@ type CatalogMetaAuthorityV1 struct {
 	// admitted, so a generation built from an older source cannot activate
 	// after a crash, replay, or a cleanup of the invalidated record.
 	mutationFences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1
+	// collectionMutationBarriers serialize relevant data mutations against
+	// first-generation source capture. They are replicated and snapshotted;
+	// process-local admission locks are intentionally insufficient here.
+	collectionMutationBarriers map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1
 }
 
 func NewCatalogMetaAuthorityV1() *CatalogMetaAuthorityV1 { return &CatalogMetaAuthorityV1{} }
@@ -288,6 +292,9 @@ func DecodeCatalogMetaCommandV1(raw []byte) (CatalogMetaCommandV1, error) {
 func (a *CatalogMetaAuthorityV1) applyCommittedCatalogMetaV1(raw []byte, appliedIndex uint64) (CatalogMetaStatusV1, error) {
 	if a == nil {
 		return CatalogMetaStatusV1{}, ErrCatalogMetaUnavailable
+	}
+	if vectorPartitionCollectionMutationCommandBytesV1(raw) {
+		return a.applyCommittedVectorPartitionCollectionMutationV1(raw, appliedIndex)
 	}
 	if vectorPartitionLifecycleCommandBytesV1(raw) {
 		return a.applyCommittedVectorPartitionLifecycleV1(raw, appliedIndex)
@@ -503,7 +510,7 @@ func (a *CatalogMetaAuthorityV1) ExportCatalogMetaSnapshotV1() (CatalogMetaSnaps
 	if a.record.Epoch == 0 {
 		return CatalogMetaSnapshotV1{}, ErrCatalogMetaUnavailable
 	}
-	lifecycle, err := encodeVectorPartitionLifecycleSnapshotV1(a.lifecycle, a.mutationFences)
+	lifecycle, err := encodeVectorPartitionLifecycleSnapshotV1(a.lifecycle, a.mutationFences, a.collectionMutationBarriers)
 	if err != nil {
 		return CatalogMetaSnapshotV1{}, err
 	}
@@ -542,7 +549,7 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 		!bytes.Equal(snapshot.Record, commandRecord) {
 		return CatalogMetaStatusV1{}, errors.Join(ErrInvalidCatalogMeta, ErrCatalogMetaConflict, fmt.Errorf("snapshot last command does not exactly install its record"))
 	}
-	lifecycle, active, activeNames, mutationFences, err := decodeVectorPartitionLifecycleSnapshotV1(snapshot.VectorPartitionLifecycle, record)
+	lifecycle, active, activeNames, mutationFences, collectionMutationBarriers, err := decodeVectorPartitionLifecycleSnapshotV1(snapshot.VectorPartitionLifecycle, record)
 	if err != nil {
 		return CatalogMetaStatusV1{}, err
 	}
@@ -559,7 +566,7 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 			return CatalogMetaStatusV1{}, ErrCatalogMetaStaleEpoch
 		}
 		if snapshot.AppliedIndex == a.applied {
-			currentLifecycle, err := encodeVectorPartitionLifecycleSnapshotV1(a.lifecycle, a.mutationFences)
+			currentLifecycle, err := encodeVectorPartitionLifecycleSnapshotV1(a.lifecycle, a.mutationFences, a.collectionMutationBarriers)
 			if err != nil {
 				return CatalogMetaStatusV1{}, err
 			}
@@ -572,6 +579,7 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 		a.active = active
 		a.activeNames = activeNames
 		a.mutationFences = mutationFences
+		a.collectionMutationBarriers = collectionMutationBarriers
 		a.lifecycleBytes = vectorPartitionLifecycleRetainedBytesV1(lifecycle)
 		a.applied = snapshot.AppliedIndex
 		a.refusal = ""
@@ -595,6 +603,7 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 	a.active = active
 	a.activeNames = activeNames
 	a.mutationFences = mutationFences
+	a.collectionMutationBarriers = collectionMutationBarriers
 	a.lifecycleBytes = vectorPartitionLifecycleRetainedBytesV1(lifecycle)
 	return a.statusLocked(), nil
 }

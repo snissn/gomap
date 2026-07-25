@@ -147,6 +147,20 @@ func (a *CatalogMetaAuthorityV1) lifecycleRecordForIndexGenerationV1(index Vecto
 // command refusal. This makes retry idempotent without weakening the ordering
 // invariant.
 func (c VectorPartitionLifecycleCoordinatorV1) InvalidateBeforeRelevantMutationV1(ctx context.Context, identity VectorPartitionLifecycleIndexIdentityV1, reason string) (VectorPartitionLifecycleMutationProofV1, error) {
+	return c.invalidateBeforeRelevantMutationV1(ctx, identity, reason, 0)
+}
+
+// InvalidateBeforeRelevantMutationAtEpochV1 binds per-index invalidation to
+// the already-open collection mutation barrier. This prevents independent
+// index fences from being confirmed by different concurrent data mutations.
+func (c VectorPartitionLifecycleCoordinatorV1) InvalidateBeforeRelevantMutationAtEpochV1(ctx context.Context, identity VectorPartitionLifecycleIndexIdentityV1, reason string, mutationEpoch uint64) (VectorPartitionLifecycleMutationProofV1, error) {
+	if mutationEpoch == 0 {
+		return VectorPartitionLifecycleMutationProofV1{}, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("collection mutation epoch is required"))
+	}
+	return c.invalidateBeforeRelevantMutationV1(ctx, identity, reason, mutationEpoch)
+}
+
+func (c VectorPartitionLifecycleCoordinatorV1) invalidateBeforeRelevantMutationV1(ctx context.Context, identity VectorPartitionLifecycleIndexIdentityV1, reason string, mutationEpoch uint64) (VectorPartitionLifecycleMutationProofV1, error) {
 	if c.Authority == nil || c.Committer == nil {
 		return VectorPartitionLifecycleMutationProofV1{}, ErrCatalogMetaUnavailable
 	}
@@ -170,10 +184,17 @@ func (c VectorPartitionLifecycleCoordinatorV1) InvalidateBeforeRelevantMutationV
 	if !ok {
 		return VectorPartitionLifecycleMutationProofV1{}, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("active generation %d disappeared before invalidation", proof.ActiveGeneration))
 	}
+	invalidationEpoch := record.MutationEpoch + 1
+	if mutationEpoch != 0 {
+		if mutationEpoch <= record.MutationEpoch {
+			return VectorPartitionLifecycleMutationProofV1{}, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("collection mutation epoch %d does not follow source epoch %d", mutationEpoch, record.MutationEpoch))
+		}
+		invalidationEpoch = mutationEpoch
+	}
 	command := VectorPartitionLifecycleCommandV1{
 		Kind: VectorPartitionLifecycleInvalidateV1, ExpectedRevision: record.Revision,
 		ExpectedState: VectorPartitionLifecycleActiveV1, Identity: record.Identity,
-		Reason: reason, InvalidationEpoch: record.MutationEpoch + 1,
+		Reason: reason, InvalidationEpoch: invalidationEpoch,
 	}
 	if _, err := c.Submit(ctx, command); err != nil {
 		// A concurrent/replayed invalidation is safe only if the newly applied

@@ -23,9 +23,10 @@ type vectorPartitionLifecycleServingKeyV1 struct {
 }
 
 type vectorPartitionLifecycleSnapshotV1 struct {
-	Format         uint16                                    `json:"format"`
-	Records        []VectorPartitionLifecycleRecordV1        `json:"records"`
-	MutationFences []vectorPartitionLifecycleMutationFenceV1 `json:"mutation_fences"`
+	Format                     uint16                                       `json:"format"`
+	Records                    []VectorPartitionLifecycleRecordV1           `json:"records"`
+	MutationFences             []vectorPartitionLifecycleMutationFenceV1    `json:"mutation_fences"`
+	CollectionMutationBarriers []vectorPartitionCollectionMutationBarrierV1 `json:"collection_mutation_barriers"`
 }
 
 // vectorPartitionLifecycleMutationFenceV1 is retained independently of the
@@ -142,6 +143,7 @@ func (a *CatalogMetaAuthorityV1) applyCommittedVectorPartitionLifecycleV1(raw []
 
 	identity := command.Identity
 	servingKey := vectorPartitionLifecycleServingKeyV1{Collection: identity.Index.Collection, IndexName: identity.Index.IndexName}
+	collectionBarrier := a.collectionMutationBarriers[identity.Index.Collection]
 	// MutationEpoch is the immutable source watermark captured by the build.
 	// A durable invalidation fence is set before a relevant data entry may be
 	// submitted.  Checking both build and activation makes a candidate that
@@ -155,6 +157,14 @@ func (a *CatalogMetaAuthorityV1) applyCommittedVectorPartitionLifecycleV1(raw []
 	}
 	if (command.Kind == VectorPartitionLifecycleBeginBuildV1 || command.Kind == VectorPartitionLifecycleActivateV1) && fence.Pending {
 		return CatalogMetaStatusV1{}, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("candidate source is blocked by pending mutation fence %d", fence.Epoch))
+	}
+	if (command.Kind == VectorPartitionLifecycleBeginBuildV1 || command.Kind == VectorPartitionLifecycleActivateV1) && collectionBarrier.Pending {
+		return CatalogMetaStatusV1{}, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("candidate source is blocked by pending collection mutation barrier %d", collectionBarrier.Epoch))
+	}
+	if (command.Kind == VectorPartitionLifecycleBeginBuildV1 || command.Kind == VectorPartitionLifecycleActivateV1) &&
+		command.MutationEpoch < collectionBarrier.Epoch {
+		return CatalogMetaStatusV1{}, errors.Join(ErrVectorPartitionLifecycleGuard,
+			fmt.Errorf("candidate source mutation epoch %d predates collection mutation barrier %d", command.MutationEpoch, collectionBarrier.Epoch))
 	}
 	if (command.Kind == VectorPartitionLifecycleBeginBuildV1 || command.Kind == VectorPartitionLifecycleActivateV1) &&
 		command.MutationEpoch < fence.Epoch {
@@ -241,6 +251,11 @@ func (a *CatalogMetaAuthorityV1) applyCommittedVectorPartitionLifecycleV1(raw []
 }
 
 func (a *CatalogMetaAuthorityV1) validateVectorPartitionLifecycleCatalogTransitionLockedV1() error {
+	for collection, barrier := range a.collectionMutationBarriers {
+		if barrier.Pending {
+			return errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("catalog transition blocked by collection %s/%s/%s mutation epoch %d", collection.Database, collection.Catalog, collection.Collection, barrier.Epoch))
+		}
+	}
 	for identity, record := range a.lifecycle {
 		if record.State != VectorPartitionLifecycleAbsentV1 {
 			return errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("catalog transition blocked by generation %d in state %q", identity.Generation, record.State))
@@ -254,6 +269,7 @@ func (a *CatalogMetaAuthorityV1) clearVectorPartitionLifecycleLockedV1() {
 	a.active = nil
 	a.activeNames = nil
 	a.mutationFences = nil
+	a.collectionMutationBarriers = nil
 	a.lifecycleBytes = 0
 }
 
@@ -372,8 +388,8 @@ func (a *CatalogMetaAuthorityV1) VectorPartitionLifecycleStatusesV1() []VectorPa
 	return statuses
 }
 
-func encodeVectorPartitionLifecycleSnapshotV1(records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1, fences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1) ([]byte, error) {
-	if len(records) == 0 && len(fences) == 0 {
+func encodeVectorPartitionLifecycleSnapshotV1(records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1, fences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1, barriers map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1) ([]byte, error) {
+	if len(records) == 0 && len(fences) == 0 && len(barriers) == 0 {
 		return nil, nil
 	}
 	if len(records) > maxVectorPartitionLifecycleSnapshotRecordsV1 {
@@ -382,7 +398,10 @@ func encodeVectorPartitionLifecycleSnapshotV1(records map[VectorPartitionLifecyc
 	if len(fences) > maxVectorPartitionLifecycleMutationFencesV1 {
 		return nil, errors.Join(ErrVectorPartitionLifecycleLimit, fmt.Errorf("snapshot mutation fences=%d", len(fences)))
 	}
-	payload := vectorPartitionLifecycleSnapshotV1{Format: VectorPartitionLifecycleFormatV1, Records: make([]VectorPartitionLifecycleRecordV1, 0, len(records)), MutationFences: make([]vectorPartitionLifecycleMutationFenceV1, 0, len(fences))}
+	if len(barriers) > maxVectorPartitionCollectionMutationBarriersV1 {
+		return nil, errors.Join(ErrVectorPartitionLifecycleLimit, fmt.Errorf("snapshot collection mutation barriers=%d", len(barriers)))
+	}
+	payload := vectorPartitionLifecycleSnapshotV1{Format: VectorPartitionLifecycleFormatV1, Records: make([]VectorPartitionLifecycleRecordV1, 0, len(records)), MutationFences: make([]vectorPartitionLifecycleMutationFenceV1, 0, len(fences)), CollectionMutationBarriers: make([]vectorPartitionCollectionMutationBarrierV1, 0, len(barriers))}
 	for _, record := range records {
 		raw, err := EncodeVectorPartitionLifecycleRecordV1(record)
 		if err != nil {
@@ -417,6 +436,22 @@ func encodeVectorPartitionLifecycleSnapshotV1(records map[VectorPartitionLifecyc
 		}
 		return a.IndexName < b.IndexName
 	})
+	for collection, barrier := range barriers {
+		if err := validateCollectionRef(collection); err != nil || barrier.Epoch == 0 || !isSHA256HexVectorPartitionV1(barrier.OperationDigest) {
+			return nil, errors.Join(ErrInvalidVectorPartitionLifecycle, fmt.Errorf("invalid collection mutation barrier"))
+		}
+		payload.CollectionMutationBarriers = append(payload.CollectionMutationBarriers, vectorPartitionCollectionMutationBarrierV1{Collection: collection, Epoch: barrier.Epoch, Pending: barrier.Pending, OperationDigest: barrier.OperationDigest})
+	}
+	sort.Slice(payload.CollectionMutationBarriers, func(i, j int) bool {
+		a, b := payload.CollectionMutationBarriers[i].Collection, payload.CollectionMutationBarriers[j].Collection
+		if a.Database != b.Database {
+			return a.Database < b.Database
+		}
+		if a.Catalog != b.Catalog {
+			return a.Catalog < b.Catalog
+		}
+		return a.Collection < b.Collection
+	})
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return nil, errors.Join(ErrInvalidVectorPartitionLifecycle, err)
@@ -432,56 +467,59 @@ func decodeVectorPartitionLifecycleSnapshotV1(raw []byte, catalog CatalogMetaRec
 	map[VectorPartitionLifecycleIndexIdentityV1]VectorPartitionLifecycleIdentityV1,
 	map[vectorPartitionLifecycleServingKeyV1]VectorPartitionLifecycleIdentityV1,
 	map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1,
+	map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1,
 	error,
 ) {
 	records := make(map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1)
 	active := make(map[VectorPartitionLifecycleIndexIdentityV1]VectorPartitionLifecycleIdentityV1)
 	activeNames := make(map[vectorPartitionLifecycleServingKeyV1]VectorPartitionLifecycleIdentityV1)
 	fences := make(map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1)
+	barriers := make(map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1)
 	if len(raw) == 0 {
-		return records, active, activeNames, fences, nil
+		return records, active, activeNames, fences, barriers, nil
 	}
 	if len(raw) > MaxCatalogMetaSnapshotBytesV1 {
-		return nil, nil, nil, nil, ErrCatalogMetaLimit
+		return nil, nil, nil, nil, nil, ErrCatalogMetaLimit
 	}
 	var payload vectorPartitionLifecycleSnapshotV1
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&payload); err != nil {
-		return nil, nil, nil, nil, errors.Join(ErrInvalidVectorPartitionLifecycle, err)
+		return nil, nil, nil, nil, nil, errors.Join(ErrInvalidVectorPartitionLifecycle, err)
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return nil, nil, nil, nil, errors.Join(ErrInvalidVectorPartitionLifecycle, fmt.Errorf("trailing lifecycle snapshot data"))
+		return nil, nil, nil, nil, nil, errors.Join(ErrInvalidVectorPartitionLifecycle, fmt.Errorf("trailing lifecycle snapshot data"))
 	}
 	if payload.Format != VectorPartitionLifecycleFormatV1 ||
 		len(payload.Records) > maxVectorPartitionLifecycleSnapshotRecordsV1 ||
-		len(payload.MutationFences) > maxVectorPartitionLifecycleMutationFencesV1 {
-		return nil, nil, nil, nil, ErrVectorPartitionLifecycleLimit
+		len(payload.MutationFences) > maxVectorPartitionLifecycleMutationFencesV1 ||
+		len(payload.CollectionMutationBarriers) > maxVectorPartitionCollectionMutationBarriersV1 {
+		return nil, nil, nil, nil, nil, ErrVectorPartitionLifecycleLimit
 	}
 	for _, record := range payload.Records {
 		encoded, err := EncodeVectorPartitionLifecycleRecordV1(record)
 		if err != nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, nil, nil, nil, err
 		}
 		record, err = DecodeVectorPartitionLifecycleRecordV1(encoded)
 		if err != nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, nil, nil, nil, err
 		}
 		identity := record.Identity
 		if identity.Index.CatalogEpoch != catalog.Epoch || identity.Index.CatalogDigest != catalog.Digest {
-			return nil, nil, nil, nil, ErrVectorPartitionLifecycleIdentity
+			return nil, nil, nil, nil, nil, ErrVectorPartitionLifecycleIdentity
 		}
 		if _, duplicate := records[identity]; duplicate {
-			return nil, nil, nil, nil, ErrVectorPartitionLifecycleConflict
+			return nil, nil, nil, nil, nil, ErrVectorPartitionLifecycleConflict
 		}
 		records[identity] = record
 		if record.State == VectorPartitionLifecycleActiveV1 {
 			if _, duplicate := active[identity.Index]; duplicate {
-				return nil, nil, nil, nil, errors.Join(ErrVectorPartitionLifecycleConflict, fmt.Errorf("multiple active generations for one index"))
+				return nil, nil, nil, nil, nil, errors.Join(ErrVectorPartitionLifecycleConflict, fmt.Errorf("multiple active generations for one index"))
 			}
 			servingKey := vectorPartitionLifecycleServingKeyV1{Collection: identity.Index.Collection, IndexName: identity.Index.IndexName}
 			if _, duplicate := activeNames[servingKey]; duplicate {
-				return nil, nil, nil, nil, errors.Join(ErrVectorPartitionLifecycleConflict, fmt.Errorf("multiple active generations for one serving name"))
+				return nil, nil, nil, nil, nil, errors.Join(ErrVectorPartitionLifecycleConflict, fmt.Errorf("multiple active generations for one serving name"))
 			}
 			active[identity.Index] = identity
 			activeNames[servingKey] = identity
@@ -490,22 +528,31 @@ func decodeVectorPartitionLifecycleSnapshotV1(raw []byte, catalog CatalogMetaRec
 	for _, fence := range payload.MutationFences {
 		if err := validateCollectionRef(fence.Collection); err != nil ||
 			validateVectorPartitionLifecycleNameV1("index name", fence.IndexName) != nil || fence.Epoch == 0 {
-			return nil, nil, nil, nil, errors.Join(ErrInvalidVectorPartitionLifecycle, fmt.Errorf("invalid mutation fence"))
+			return nil, nil, nil, nil, nil, errors.Join(ErrInvalidVectorPartitionLifecycle, fmt.Errorf("invalid mutation fence"))
 		}
 		key := vectorPartitionLifecycleServingKeyV1{Collection: fence.Collection, IndexName: fence.IndexName}
 		if _, duplicate := fences[key]; duplicate {
-			return nil, nil, nil, nil, ErrVectorPartitionLifecycleConflict
+			return nil, nil, nil, nil, nil, ErrVectorPartitionLifecycleConflict
 		}
 		fences[key] = vectorPartitionLifecycleMutationFenceStateV1{Epoch: fence.Epoch, Pending: fence.Pending}
 	}
-	canonical, err := encodeVectorPartitionLifecycleSnapshotV1(records, fences)
+	for _, barrier := range payload.CollectionMutationBarriers {
+		if err := validateCollectionRef(barrier.Collection); err != nil || barrier.Epoch == 0 || !isSHA256HexVectorPartitionV1(barrier.OperationDigest) {
+			return nil, nil, nil, nil, nil, errors.Join(ErrInvalidVectorPartitionLifecycle, fmt.Errorf("invalid collection mutation barrier"))
+		}
+		if _, duplicate := barriers[barrier.Collection]; duplicate {
+			return nil, nil, nil, nil, nil, ErrVectorPartitionLifecycleConflict
+		}
+		barriers[barrier.Collection] = vectorPartitionCollectionMutationBarrierStateV1{Epoch: barrier.Epoch, Pending: barrier.Pending, OperationDigest: barrier.OperationDigest}
+	}
+	canonical, err := encodeVectorPartitionLifecycleSnapshotV1(records, fences, barriers)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	if !bytes.Equal(raw, canonical) {
-		return nil, nil, nil, nil, errors.Join(ErrInvalidVectorPartitionLifecycle, fmt.Errorf("lifecycle snapshot is not canonical"))
+		return nil, nil, nil, nil, nil, errors.Join(ErrInvalidVectorPartitionLifecycle, fmt.Errorf("lifecycle snapshot is not canonical"))
 	}
-	return records, active, activeNames, fences, nil
+	return records, active, activeNames, fences, barriers, nil
 }
 
 func vectorPartitionLifecycleIdentityLessV1(a, b VectorPartitionLifecycleIdentityV1) bool {

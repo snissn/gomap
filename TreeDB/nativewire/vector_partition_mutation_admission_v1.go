@@ -2,6 +2,9 @@ package nativewire
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 
@@ -39,12 +42,27 @@ func (a CatalogVectorPartitionMutationAdmissionV1) AdmitVectorPartitionMutationV
 	if catalog == "" {
 		catalog = raftplacement.DefaultCatalog
 	}
+	operationDigest, err := vectorPartitionMutationOperationDigestV1(command, sections)
+	if err != nil {
+		return err
+	}
+	collectionRef := raftplacement.CollectionRefV1{Database: database, Catalog: catalog, Collection: collection}
+	barrier, err := a.Coordinator.BeginRelevantCollectionMutationV1(ctx, collectionRef, operationDigest)
+	if err != nil {
+		return err
+	}
+	// A completed barrier with the same operation digest is an exact
+	// idempotency replay. The data Raft layer will return the already-applied
+	// result, so invalidating a generation built afterward would be spurious.
+	if !barrier.Pending {
+		return nil
+	}
 	for _, status := range a.Authority.VectorPartitionLifecycleStatusesV1() {
 		identity := status.Identity
 		if identity.Index.Collection.Database != database || identity.Index.Collection.Catalog != catalog || identity.Index.Collection.Collection != collection {
 			continue
 		}
-		if status.State == raftplacement.VectorPartitionLifecycleInvalidatedV1 && !status.MutationConfirmed {
+		if status.State == raftplacement.VectorPartitionLifecycleInvalidatedV1 && !status.MutationConfirmed && status.InvalidationEpoch != barrier.Epoch {
 			return errors.New("nativewire: a prior vector-relevant mutation is pending outcome recovery")
 		}
 		switch status.State {
@@ -54,7 +72,7 @@ func (a CatalogVectorPartitionMutationAdmissionV1) AdmitVectorPartitionMutationV
 		if !status.Active {
 			continue
 		}
-		if _, err := a.Coordinator.InvalidateBeforeRelevantMutationV1(ctx, identity.Index, "nativewire relevant mutation"); err != nil {
+		if _, err := a.Coordinator.InvalidateBeforeRelevantMutationAtEpochV1(ctx, identity.Index, "nativewire relevant mutation", barrier.Epoch); err != nil {
 			return err
 		}
 	}
@@ -83,11 +101,29 @@ func (a CatalogVectorPartitionMutationAdmissionV1) ConfirmVectorPartitionMutatio
 	if catalog == "" {
 		catalog = raftplacement.DefaultCatalog
 	}
+	operationDigest, err := vectorPartitionMutationOperationDigestV1(command, sections)
+	if err != nil {
+		return err
+	}
+	collectionRef := raftplacement.CollectionRefV1{Database: database, Catalog: catalog, Collection: collection}
+	barrier, exists, err := a.Authority.VectorPartitionCollectionMutationBarrierV1(collectionRef)
+	if err != nil {
+		return err
+	}
+	if !exists || barrier.OperationDigest != operationDigest {
+		return errors.New("nativewire: vector mutation confirmation has no matching collection barrier")
+	}
+	if !barrier.Pending {
+		return nil
+	}
 	for _, status := range a.Authority.VectorPartitionLifecycleStatusesV1() {
 		identity := status.Identity
 		if identity.Index.Collection.Database != database || identity.Index.Collection.Catalog != catalog || identity.Index.Collection.Collection != collection ||
 			status.State != raftplacement.VectorPartitionLifecycleInvalidatedV1 || status.MutationConfirmed {
 			continue
+		}
+		if status.InvalidationEpoch != barrier.Epoch {
+			return errors.New("nativewire: vector mutation confirmation found a mismatched index fence")
 		}
 		if err := a.Coordinator.ConfirmRelevantMutationV1(ctx, raftplacement.VectorPartitionLifecycleMutationProofV1{
 			IndexIdentity: identity.Index, ActiveGeneration: identity.Generation, InvalidationEpoch: status.InvalidationEpoch,
@@ -95,7 +131,23 @@ func (a CatalogVectorPartitionMutationAdmissionV1) ConfirmVectorPartitionMutatio
 			return err
 		}
 	}
-	return nil
+	return a.Coordinator.ConfirmRelevantCollectionMutationV1(ctx, collectionRef, operationDigest)
+}
+
+func vectorPartitionMutationOperationDigestV1(command iwire.CommandID, sections []iwire.Section) (string, error) {
+	idempotencyKey, ok, err := singletonSection(sections, iwire.SectionIdempotencyKey)
+	if err != nil {
+		return "", err
+	}
+	if !ok || len(idempotencyKey) == 0 {
+		return "", errors.New("nativewire: vector-relevant mutation requires an idempotency key")
+	}
+	h := sha256.New()
+	var commandBytes [8]byte
+	binary.BigEndian.PutUint64(commandBytes[:], uint64(command))
+	_, _ = h.Write(commandBytes[:])
+	_, _ = h.Write(idempotencyKey)
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func vectorPartitionRelevantMutationCommandV1(command iwire.CommandID) bool {

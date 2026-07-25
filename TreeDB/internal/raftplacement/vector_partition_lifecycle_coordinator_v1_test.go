@@ -3,6 +3,7 @@ package raftplacement
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -67,6 +68,124 @@ func TestVectorPartitionLifecycleCoordinatorInvalidatesBeforeRelevantMutationV1(
 	retry, err := coordinator.InvalidateBeforeRelevantMutationV1(t.Context(), identity.Index, "vector field update")
 	if !errors.Is(err, ErrVectorPartitionLifecycleGuard) || committer.index != before {
 		t.Fatalf("retry proof=%+v err=%v index=%d", retry, err, committer.index)
+	}
+}
+
+func TestVectorPartitionCollectionMutationBarrierClosesFirstGenerationSourceRaceV1(t *testing.T) {
+	authority, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	committer := &lifecycleCoordinatorCommitterV1{authority: authority, index: 1}
+	coordinator := VectorPartitionLifecycleCoordinatorV1{Authority: authority, Committer: committer}
+	collection := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11).Index.Collection
+	before, err := coordinator.BuildSourceMutationEpochV1(collection)
+	if err != nil || before != 1 {
+		t.Fatalf("initial build epoch=%d err=%v", before, err)
+	}
+	opA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	barrier, err := coordinator.BeginRelevantCollectionMutationV1(t.Context(), collection, opA)
+	if err != nil || !barrier.Pending || barrier.Epoch != before+1 {
+		t.Fatalf("barrier=%+v err=%v", barrier, err)
+	}
+	identity := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11)
+	if _, err := coordinator.BeginBuildV1(t.Context(), identity, []raftcluster.GroupID{"group-a"}, 0, before); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("pending barrier admitted stale first-generation build: %v", err)
+	}
+	if err := coordinator.ConfirmRelevantCollectionMutationV1(t.Context(), collection, opA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coordinator.BeginBuildV1(t.Context(), identity, []raftcluster.GroupID{"group-a"}, 0, before); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("completed barrier admitted stale captured source: %v", err)
+	}
+	if _, err := coordinator.BeginBuildV1(t.Context(), identity, []raftcluster.GroupID{"group-a"}, 0, barrier.Epoch); err != nil {
+		t.Fatalf("fresh source build: %v", err)
+	}
+	opB := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if _, err := coordinator.BeginRelevantCollectionMutationV1(t.Context(), collection, opB); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("mutation raced source capture: %v", err)
+	}
+}
+
+func TestVectorPartitionCollectionMutationBarrierRetryConflictAndRestoreV1(t *testing.T) {
+	authority, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	committer := &lifecycleCoordinatorCommitterV1{authority: authority, index: 1}
+	coordinator := VectorPartitionLifecycleCoordinatorV1{Authority: authority, Committer: committer}
+	collection := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11).Index.Collection
+	opA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	opB := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	first, err := coordinator.BeginRelevantCollectionMutationV1(t.Context(), collection, opA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeRetry := committer.index
+	retry, err := coordinator.BeginRelevantCollectionMutationV1(t.Context(), collection, opA)
+	if err != nil || retry != first || committer.index != beforeRetry {
+		t.Fatalf("exact retry=%+v err=%v applied=%d", retry, err, committer.index)
+	}
+	if _, err := coordinator.BeginRelevantCollectionMutationV1(t.Context(), collection, opB); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("distinct concurrent operation err=%v", err)
+	}
+	snapshot, err := authority.ExportCatalogMetaSnapshotV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := NewCatalogMetaAuthorityV1()
+	if _, err := restored.installCatalogMetaSnapshotV1(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	restoredCommitter := &lifecycleCoordinatorCommitterV1{authority: restored, index: snapshot.AppliedIndex}
+	restoredCoordinator := VectorPartitionLifecycleCoordinatorV1{Authority: restored, Committer: restoredCommitter}
+	if _, err := restoredCoordinator.BeginRelevantCollectionMutationV1(t.Context(), collection, opB); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("restored pending barrier admitted distinct operation: %v", err)
+	}
+	if err := restoredCoordinator.ConfirmRelevantCollectionMutationV1(t.Context(), collection, opA); err != nil {
+		t.Fatal(err)
+	}
+	completedReplay, err := restoredCoordinator.BeginRelevantCollectionMutationV1(t.Context(), collection, opA)
+	if err != nil || completedReplay.Pending || completedReplay.Epoch != first.Epoch {
+		t.Fatalf("completed replay=%+v err=%v", completedReplay, err)
+	}
+}
+
+func TestVectorPartitionCollectionMutationBarrierOwnsIndexInvalidationV1(t *testing.T) {
+	authority, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	committer := &lifecycleCoordinatorCommitterV1{authority: authority, index: 1}
+	coordinator := VectorPartitionLifecycleCoordinatorV1{Authority: authority, Committer: committer}
+	identity := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11)
+	active := catalogMetaLifecycleBuildPreparedV1(t, authority, &committer.index, identity, 0, 9)
+	_ = catalogMetaLifecycleApplyV1(t, authority, &committer.index, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleActivateV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.MutationEpoch = 9
+	}))
+	op := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	barrier, err := coordinator.BeginRelevantCollectionMutationV1(t.Context(), identity.Index.Collection, op)
+	if err != nil || barrier.Epoch != 10 {
+		t.Fatalf("barrier=%+v err=%v", barrier, err)
+	}
+	proof, err := coordinator.InvalidateBeforeRelevantMutationAtEpochV1(t.Context(), identity.Index, "vector update", barrier.Epoch)
+	if err != nil || proof.InvalidationEpoch != barrier.Epoch {
+		t.Fatalf("proof=%+v err=%v", proof, err)
+	}
+	if err := coordinator.ConfirmRelevantCollectionMutationV1(t.Context(), identity.Index.Collection, op); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("collection barrier cleared before index confirmation: %v", err)
+	}
+	if err := coordinator.ConfirmRelevantMutationV1(t.Context(), proof); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.ConfirmRelevantCollectionMutationV1(t.Context(), identity.Index.Collection, op); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVectorPartitionCollectionMutationBarriersAreBoundedBeforePublicationV1(t *testing.T) {
+	authority, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	authority.collectionMutationBarriers = make(map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1, maxVectorPartitionCollectionMutationBarriersV1)
+	for i := 0; i < maxVectorPartitionCollectionMutationBarriersV1; i++ {
+		collection := CollectionRefV1{Database: DefaultDatabase, Catalog: DefaultCatalog, Collection: fmt.Sprintf("collection-%04d", i)}
+		authority.collectionMutationBarriers[collection] = vectorPartitionCollectionMutationBarrierStateV1{Epoch: 2, OperationDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	}
+	committer := &lifecycleCoordinatorCommitterV1{authority: authority, index: 1}
+	coordinator := VectorPartitionLifecycleCoordinatorV1{Authority: authority, Committer: committer}
+	collection := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11).Index.Collection
+	if _, err := coordinator.BeginRelevantCollectionMutationV1(t.Context(), collection, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"); !errors.Is(err, ErrVectorPartitionLifecycleLimit) {
+		t.Fatalf("new barrier past cap err=%v", err)
 	}
 }
 

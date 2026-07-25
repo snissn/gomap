@@ -404,7 +404,7 @@ func TestCatalogMetaLifecycleMutationFencesAreBoundedBeforePublicationV1(t *test
 		fences[vectorPartitionLifecycleServingKeyV1{Collection: collection, IndexName: fmt.Sprintf("idx-%04d", i)}] =
 			vectorPartitionLifecycleMutationFenceStateV1{Epoch: 1}
 	}
-	if _, err := encodeVectorPartitionLifecycleSnapshotV1(nil, fences); !errors.Is(err, ErrVectorPartitionLifecycleLimit) {
+	if _, err := encodeVectorPartitionLifecycleSnapshotV1(nil, fences, nil); !errors.Is(err, ErrVectorPartitionLifecycleLimit) {
 		t.Fatalf("oversized mutation-fence snapshot err=%v", err)
 	}
 
