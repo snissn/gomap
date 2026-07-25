@@ -975,6 +975,7 @@ func (c *VectorPartitionCoordinatorV1) validateShardResponse(ctx context.Context
 		}
 		if partial.PartitionID != task.partitionIDs[i] ||
 			len(partial.Neighbors) > request.TopK ||
+			partial.Candidates < uint64(len(partial.Neighbors)) ||
 			partial.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 &&
 				partial.SearchRoute != collections.VectorPartitionSearchRouteExactFP32ScanV1 {
 			return ErrVectorPartitionCoordinatorMalformedResponse

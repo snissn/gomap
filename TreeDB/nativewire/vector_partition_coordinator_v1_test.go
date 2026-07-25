@@ -413,6 +413,10 @@ func TestVectorPartitionCoordinatorRejectsCorruptShardProofsAndPartialsV1(t *tes
 		{name: "applied_index_precedes_read", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
 			response.Proof.ReadIndex = response.Proof.AppliedIndex + 1
 		}},
+		{name: "underreported_candidates", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+			response.Partials[0].Candidates = 0
+			response.Candidates = 0
+		}},
 		{name: "unrequested_partition", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
 			response.Partials[0].PartitionID = 99
 		}},
