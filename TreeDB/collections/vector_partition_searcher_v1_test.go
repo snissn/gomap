@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
@@ -46,6 +47,42 @@ func TestVectorPartitionLocalSearcherV1ExactStableIDsAndPins(t *testing.T) {
 	s.Release()
 	if e := s.Retire(); e != nil {
 		t.Fatal(e)
+	}
+}
+
+func TestVectorPartitionLocalSearcherV1ExactTopKPreservesCutoffTieOrder(t *testing.T) {
+	asset := VectorPartitionSearchAssetV1{
+		ManifestChecksum: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Generation:       1,
+		PartitionID:      2,
+		Dimensions:       2,
+		IDs:              []string{"z", "b", "a", "c"},
+		Vectors:          [][]float32{{1, 0}, {1, 0}, {1, 0}, {0, 1}},
+		Kinds: []VectorPartitionMembershipKindV1{
+			VectorPartitionMembershipHomeV1,
+			VectorPartitionMembershipHomeV1,
+			VectorPartitionMembershipHomeV1,
+			VectorPartitionMembershipHomeV1,
+		},
+	}
+	searcher, err := OpenVectorPartitionLocalSearcherV1(asset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = searcher.Close() })
+
+	results, metrics, err := searcher.SearchWithOptionsV1(
+		context.Background(), []float32{1, 0}, VectorPartitionSearchOptionsV1{TopK: 2},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 || results[0].ID != "a" || results[1].ID != "b" ||
+		results[0].Score != results[1].Score {
+		t.Fatalf("cutoff tie results=%+v want a,b in stable-ID order", results)
+	}
+	if metrics.Candidates != 4 || metrics.Route != VectorPartitionSearchRouteExactFP32ScanV1 {
+		t.Fatalf("metrics=%+v", metrics)
 	}
 }
 
@@ -137,6 +174,59 @@ func (c *vectorPartitionLocalSearcherDeadlineAfterErrContextV1) Err() error {
 		return context.DeadlineExceeded
 	}
 	return nil
+}
+
+func TestVectorPartitionLocalSearcherV1DeadlineInterruptsExactRankingAndReleasesResources(t *testing.T) {
+	const rows = 4096
+	asset := VectorPartitionSearchAssetV1{
+		ManifestChecksum: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Generation:       11,
+		PartitionID:      2,
+		Dimensions:       1,
+		IDs:              make([]string, rows),
+		Vectors:          make([][]float32, rows),
+		Kinds:            make([]VectorPartitionMembershipKindV1, rows),
+	}
+	for i := range rows {
+		asset.IDs[i] = fmt.Sprintf("id-%04d", rows-i)
+		asset.Vectors[i] = []float32{1}
+		asset.Kinds[i] = VectorPartitionMembershipHomeV1
+	}
+	for _, tc := range []struct {
+		name          string
+		deadlineAfter int
+	}{
+		{name: "mid_heap_drain", deadlineAfter: 19},
+		{name: "before_stats_publication", deadlineAfter: 34},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			searcher, err := OpenVectorPartitionLocalSearcherV1(asset)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = searcher.Close() })
+
+			// Preflight and the exact scan make 17 cancellation polls. Heap
+			// draining polls 16 more times and the final poll precedes stats
+			// publication. The old full sort made only 18 total polls and
+			// would incorrectly return success for both cases.
+			ctx := &vectorPartitionLocalSearcherDeadlineAfterErrContextV1{
+				Context: context.Background(), deadlineAfter: tc.deadlineAfter,
+			}
+			results, metrics, err := searcher.SearchWithOptionsV1(ctx, []float32{1}, VectorPartitionSearchOptionsV1{
+				TopK: rows,
+			})
+			if !errors.Is(err, context.DeadlineExceeded) || len(results) != 0 || metrics != (VectorPartitionSearchMetricsV1{}) {
+				t.Fatalf("results=%+v metrics=%+v err=%v want deadline and no partial result", results, metrics, err)
+			}
+			if ctx.calls != ctx.deadlineAfter {
+				t.Fatalf("deadline polls=%d want %d", ctx.calls, ctx.deadlineAfter)
+			}
+			if status := searcher.Status(); status.ActivePins != 0 || status.Searches != 0 || status.Failures != 1 {
+				t.Fatalf("deadline return retained exact-search pin or stats: %+v", status)
+			}
+		})
+	}
 }
 
 func TestVectorPartitionLocalSearcherV1DeadlineInterruptsNativeTraversalAndReleasesResources(t *testing.T) {

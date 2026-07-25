@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"sync"
 	"unsafe"
 )
@@ -46,6 +45,81 @@ type VectorPartitionSearchAssetV1 struct {
 type VectorPartitionSearchResultV1 struct {
 	ID    string
 	Score float32
+}
+
+// vectorPartitionSearchResultMaxHeapV1 retains the worst selected result at
+// index zero so an exact scan can keep only top_k results. Draining the heap
+// from worst to best into a reverse output cursor yields the canonical
+// score-descending, stable-ID-ascending result order without one uninterruptible
+// full-partition sort.
+type vectorPartitionSearchResultMaxHeapV1 []VectorPartitionSearchResultV1
+
+func vectorPartitionSearchResultBetterV1(left, right VectorPartitionSearchResultV1) bool {
+	if left.Score != right.Score {
+		return left.Score > right.Score
+	}
+	return left.ID < right.ID
+}
+
+func vectorPartitionSearchResultWorseV1(left, right VectorPartitionSearchResultV1) bool {
+	return vectorPartitionSearchResultBetterV1(right, left)
+}
+
+func (h *vectorPartitionSearchResultMaxHeapV1) pushBounded(limit int, candidate VectorPartitionSearchResultV1) {
+	if limit <= 0 {
+		return
+	}
+	if len(*h) < limit {
+		*h = append(*h, candidate)
+		h.up(len(*h) - 1)
+		return
+	}
+	if !vectorPartitionSearchResultBetterV1(candidate, (*h)[0]) {
+		return
+	}
+	(*h)[0] = candidate
+	h.down(0)
+}
+
+func (h *vectorPartitionSearchResultMaxHeapV1) popWorst() VectorPartitionSearchResultV1 {
+	out := (*h)[0]
+	last := len(*h) - 1
+	(*h)[0] = (*h)[last]
+	*h = (*h)[:last]
+	if len(*h) > 0 {
+		h.down(0)
+	}
+	return out
+}
+
+func (h *vectorPartitionSearchResultMaxHeapV1) up(child int) {
+	for child > 0 {
+		parent := (child - 1) / 2
+		if !vectorPartitionSearchResultWorseV1((*h)[child], (*h)[parent]) {
+			return
+		}
+		(*h)[child], (*h)[parent] = (*h)[parent], (*h)[child]
+		child = parent
+	}
+}
+
+func (h *vectorPartitionSearchResultMaxHeapV1) down(parent int) {
+	for {
+		left := parent*2 + 1
+		if left >= len(*h) {
+			return
+		}
+		child := left
+		right := left + 1
+		if right < len(*h) && vectorPartitionSearchResultWorseV1((*h)[right], (*h)[left]) {
+			child = right
+		}
+		if !vectorPartitionSearchResultWorseV1((*h)[child], (*h)[parent]) {
+			return
+		}
+		(*h)[parent], (*h)[child] = (*h)[child], (*h)[parent]
+		parent = child
+	}
 }
 
 // VectorPartitionSearchMetricsV1 reports native traversal work for one local
@@ -128,7 +202,7 @@ func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, pr
 		return 0, fmt.Errorf("%w: stable ID bytes=%d exceeds limit=%d", ErrVectorPartitionSearchUnavailable, maxStableIDBytes, opts.MaxStableIDBytes)
 	}
 	if prepared == nil {
-		return checkedVectorPartitionScratchProductV1(uint64(exactRows), uint64(unsafe.Sizeof(VectorPartitionSearchResultV1{})))
+		return vectorPartitionExactSearchScratchBytesV1(exactRows, opts.TopK)
 	}
 	rowCount := header.Rows
 	if rowCount < 0 || header.VectorStride < 0 || header.M < 0 {
@@ -165,6 +239,24 @@ func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, pr
 	return vectorPartitionHNSWSearchScratchBytesV1(rowCount, header.VectorStride, degree, topK, efSearch)
 }
 
+func vectorPartitionExactSearchScratchBytesV1(rows, topK int) (uint64, error) {
+	if rows < 0 || topK < 1 {
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
+	width := uint64(unsafe.Sizeof(VectorPartitionSearchResultV1{}))
+	rowBytes, err := checkedVectorPartitionScratchProductV1(uint64(rows), width)
+	if err != nil {
+		return 0, err
+	}
+	selectedBytes, err := checkedVectorPartitionScratchProductV1(uint64(min(rows, topK)), width)
+	if err != nil || math.MaxUint64-selectedBytes < selectedBytes {
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
+	// Preserve the original row-sized conservative floor while covering the
+	// bounded heap and final output slice, which coexist during heap draining.
+	return max(rowBytes, selectedBytes+selectedBytes), nil
+}
+
 // VectorPartitionConservativeSearchScratchBytesV1 returns a transport-neutral
 // upper bound for either M3 search route when only durable membership
 // cardinality and request shape are available. Coordinators use it before
@@ -174,9 +266,7 @@ func VectorPartitionConservativeSearchScratchBytesV1(rows, dimensions int, opts 
 	if rows < 0 || dimensions <= 0 || opts.TopK < 1 || opts.EfSearch < opts.TopK || opts.MaxStableIDBytes < 0 {
 		return 0, ErrVectorPartitionSearchUnavailable
 	}
-	exactBytes, err := checkedVectorPartitionScratchProductV1(
-		uint64(rows), uint64(unsafe.Sizeof(VectorPartitionSearchResultV1{})),
-	)
+	exactBytes, err := vectorPartitionExactSearchScratchBytesV1(rows, opts.TopK)
 	if err != nil {
 		return 0, err
 	}
@@ -548,7 +638,8 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context
 		s.mu.Unlock()
 		return out, metrics, nil
 	}
-	out := make([]VectorPartitionSearchResultV1, len(s.asset.IDs))
+	limit := min(opts.TopK, len(s.asset.IDs))
+	top := make(vectorPartitionSearchResultMaxHeapV1, 0, limit)
 	var edges uint64
 	for i, v := range s.asset.Vectors {
 		if i&255 == 0 {
@@ -561,23 +652,27 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context
 		for j, x := range v {
 			d += float64(x) * float64(query[j])
 		}
-		out[i] = VectorPartitionSearchResultV1{ID: s.asset.IDs[i], Score: float32(d / (math.Sqrt(qn) * float64(s.norms[i])))}
+		top.pushBounded(limit, VectorPartitionSearchResultV1{
+			ID:    s.asset.IDs[i],
+			Score: float32(d / (math.Sqrt(qn) * float64(s.norms[i]))),
+		})
 		if len(s.asset.Adjacency) > i {
 			edges += uint64(len(s.asset.Adjacency[i]))
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Score != out[j].Score {
-			return out[i].Score > out[j].Score
+	out := make([]VectorPartitionSearchResultV1, len(top))
+	for completed, target := 0, len(out)-1; target >= 0; completed, target = completed+1, target-1 {
+		if completed&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				s.recordFailure()
+				return nil, VectorPartitionSearchMetricsV1{}, err
+			}
 		}
-		return out[i].ID < out[j].ID
-	})
+		out[target] = top.popWorst()
+	}
 	if err := ctx.Err(); err != nil {
 		s.recordFailure()
 		return nil, VectorPartitionSearchMetricsV1{}, err
-	}
-	if opts.TopK < len(out) {
-		out = out[:opts.TopK]
 	}
 	s.mu.Lock()
 	s.searches++
