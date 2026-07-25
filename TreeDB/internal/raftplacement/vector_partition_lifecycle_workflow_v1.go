@@ -20,6 +20,9 @@ type VectorPartitionLifecycleGroupBuilderV1 interface {
 // BeginBuildV1 records a source- and catalog-bound candidate before any group
 // assets can be accepted. Exact retry is handled by the catalog command digest.
 func (c VectorPartitionLifecycleCoordinatorV1) BeginBuildV1(ctx context.Context, identity VectorPartitionLifecycleIdentityV1, required []raftcluster.GroupID, previousGeneration, mutationEpoch uint64) (VectorPartitionLifecycleRecordV1, error) {
+	if err := c.validateConfiguredV1(); err != nil {
+		return VectorPartitionLifecycleRecordV1{}, err
+	}
 	if r, ok := c.Authority.VectorPartitionLifecycleRecordV1(identity); ok && r.State != VectorPartitionLifecycleAbsentV1 {
 		canonicalRequired, err := canonicalVectorPartitionLifecycleGroupsV1(required)
 		if err != nil {
@@ -34,6 +37,9 @@ func (c VectorPartitionLifecycleCoordinatorV1) BeginBuildV1(ctx context.Context,
 }
 
 func (c VectorPartitionLifecycleCoordinatorV1) RecordGroupReadyV1(ctx context.Context, identity VectorPartitionLifecycleIdentityV1, ready VectorPartitionLifecycleGroupReadyV1) (VectorPartitionLifecycleRecordV1, error) {
+	if err := c.validateConfiguredV1(); err != nil {
+		return VectorPartitionLifecycleRecordV1{}, err
+	}
 	record, ok := c.Authority.VectorPartitionLifecycleRecordV1(identity)
 	if !ok {
 		return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleGuard
@@ -49,6 +55,9 @@ func (c VectorPartitionLifecycleCoordinatorV1) RecordGroupReadyV1(ctx context.Co
 // BuildAndRecordGroupReadyV1 invokes a caller-owned staging implementation and
 // commits only its bounded readiness proof.
 func (c VectorPartitionLifecycleCoordinatorV1) BuildAndRecordGroupReadyV1(ctx context.Context, builder VectorPartitionLifecycleGroupBuilderV1, identity VectorPartitionLifecycleIdentityV1, group raftcluster.GroupID) (VectorPartitionLifecycleRecordV1, error) {
+	if err := c.validateConfiguredV1(); err != nil {
+		return VectorPartitionLifecycleRecordV1{}, err
+	}
 	if builder == nil {
 		return VectorPartitionLifecycleRecordV1{}, errors.New("raftplacement: lifecycle group builder is required")
 	}
@@ -63,6 +72,9 @@ func (c VectorPartitionLifecycleCoordinatorV1) BuildAndRecordGroupReadyV1(ctx co
 }
 
 func (c VectorPartitionLifecycleCoordinatorV1) PrepareV1(ctx context.Context, identity VectorPartitionLifecycleIdentityV1) (VectorPartitionLifecycleRecordV1, error) {
+	if err := c.validateConfiguredV1(); err != nil {
+		return VectorPartitionLifecycleRecordV1{}, err
+	}
 	r, ok := c.Authority.VectorPartitionLifecycleRecordV1(identity)
 	if !ok {
 		return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleGuard
@@ -78,6 +90,9 @@ func (c VectorPartitionLifecycleCoordinatorV1) PrepareV1(ctx context.Context, id
 }
 
 func (c VectorPartitionLifecycleCoordinatorV1) ActivateV1(ctx context.Context, identity VectorPartitionLifecycleIdentityV1) (VectorPartitionLifecycleRecordV1, error) {
+	if err := c.validateConfiguredV1(); err != nil {
+		return VectorPartitionLifecycleRecordV1{}, err
+	}
 	r, ok := c.Authority.VectorPartitionLifecycleRecordV1(identity)
 	if !ok {
 		return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleGuard
@@ -95,6 +110,9 @@ func (c VectorPartitionLifecycleCoordinatorV1) ActivateV1(ctx context.Context, i
 }
 
 func (c VectorPartitionLifecycleCoordinatorV1) transitionV1(ctx context.Context, identity VectorPartitionLifecycleIdentityV1, kind VectorPartitionLifecycleCommandKindV1, mutate func(*VectorPartitionLifecycleCommandV1)) (VectorPartitionLifecycleRecordV1, error) {
+	if err := c.validateConfiguredV1(); err != nil {
+		return VectorPartitionLifecycleRecordV1{}, err
+	}
 	r, ok := c.Authority.VectorPartitionLifecycleRecordV1(identity)
 	if !ok {
 		return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleGuard

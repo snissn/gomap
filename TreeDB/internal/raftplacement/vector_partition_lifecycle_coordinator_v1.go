@@ -23,14 +23,21 @@ type VectorPartitionLifecycleCoordinatorV1 struct {
 	Committer VectorPartitionLifecycleCommitterV1
 }
 
+func (c VectorPartitionLifecycleCoordinatorV1) validateConfiguredV1() error {
+	if c.Authority == nil || c.Committer == nil {
+		return ErrCatalogMetaUnavailable
+	}
+	return nil
+}
+
 // Submit commits one already-guarded deterministic lifecycle command and
 // returns its locally applied record. The meta-Raft provider only returns after
 // its Apply callback, so a missing record after a successful commit is treated
 // as a fail-closed configuration error rather than silently trusting a local
 // cache.
 func (c VectorPartitionLifecycleCoordinatorV1) Submit(ctx context.Context, command VectorPartitionLifecycleCommandV1) (VectorPartitionLifecycleRecordV1, error) {
-	if c.Authority == nil || c.Committer == nil {
-		return VectorPartitionLifecycleRecordV1{}, ErrCatalogMetaUnavailable
+	if err := c.validateConfiguredV1(); err != nil {
+		return VectorPartitionLifecycleRecordV1{}, err
 	}
 	if ctx == nil {
 		ctx = context.Background()

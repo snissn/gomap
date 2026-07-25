@@ -19,10 +19,49 @@ type lifecycleCoordinatorCommitterV1 struct {
 type lifecycleTestBuilderV1 struct {
 	ready VectorPartitionLifecycleGroupReadyV1
 	err   error
+	call  *bool
 }
 
 func (b lifecycleTestBuilderV1) BuildAndStageVectorPartitionGroupV1(context.Context, VectorPartitionLifecycleIdentityV1, raftcluster.GroupID) (VectorPartitionLifecycleGroupReadyV1, error) {
+	if b.call != nil {
+		*b.call = true
+	}
 	return b.ready, b.err
+}
+
+func TestVectorPartitionLifecycleWorkflowFailsClosedWhenUnconfiguredV1(t *testing.T) {
+	identity := VectorPartitionLifecycleIdentityV1{}
+	ready := VectorPartitionLifecycleGroupReadyV1{}
+	refs := VectorPartitionLifecycleReferencesV1{}
+	for _, coordinator := range []VectorPartitionLifecycleCoordinatorV1{
+		{},
+		{Authority: NewCatalogMetaAuthorityV1()},
+	} {
+		builderCalled := false
+		checks := []func() error{
+			func() error { _, err := coordinator.BeginBuildV1(t.Context(), identity, nil, 0, 0); return err },
+			func() error { _, err := coordinator.RecordGroupReadyV1(t.Context(), identity, ready); return err },
+			func() error {
+				_, err := coordinator.BuildAndRecordGroupReadyV1(t.Context(), lifecycleTestBuilderV1{call: &builderCalled}, identity, "group-a")
+				return err
+			},
+			func() error { _, err := coordinator.PrepareV1(t.Context(), identity); return err },
+			func() error { _, err := coordinator.ActivateV1(t.Context(), identity); return err },
+			func() error { _, err := coordinator.AbortV1(t.Context(), identity, "abort"); return err },
+			func() error { _, err := coordinator.RetireV1(t.Context(), identity); return err },
+			func() error { _, err := coordinator.MarkCleanableV1(t.Context(), identity, refs); return err },
+			func() error { _, err := coordinator.RecordGroupCleanupV1(t.Context(), identity, "group-a"); return err },
+			func() error { _, err := coordinator.CompleteCleanupV1(t.Context(), identity); return err },
+		}
+		for i, check := range checks {
+			if err := check(); !errors.Is(err, ErrCatalogMetaUnavailable) {
+				t.Fatalf("coordinator=%+v check=%d err=%v want catalog-meta unavailable", coordinator, i, err)
+			}
+		}
+		if builderCalled {
+			t.Fatalf("coordinator=%+v invoked builder before configuration validation", coordinator)
+		}
+	}
 }
 
 func (c *lifecycleCoordinatorCommitterV1) SubmitCatalogMetaCommandV1(_ context.Context, raw []byte) (uint64, uint64, error) {
