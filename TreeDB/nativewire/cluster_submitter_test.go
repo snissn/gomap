@@ -26,11 +26,20 @@ import (
 )
 
 type fakeClusterSubmitter struct {
-	mu           sync.Mutex
-	calls        []fakeClusterSubmitCall
-	status       ClusterAdmissionStatus
-	admissionErr error
-	resultHook   func(raftentry.CommandEntryV1, ClusterRequestMetadata, ClusterSubmitResult) (ClusterSubmitResult, error)
+	mu                   sync.Mutex
+	calls                []fakeClusterSubmitCall
+	status               ClusterAdmissionStatus
+	admissionErr         error
+	vectorAdmissionErr   error
+	vectorAdmissionCalls []iwire.CommandID
+	resultHook           func(raftentry.CommandEntryV1, ClusterRequestMetadata, ClusterSubmitResult) (ClusterSubmitResult, error)
+}
+
+func (s *fakeClusterSubmitter) AdmitVectorPartitionMutationV1(_ context.Context, command iwire.CommandID, _ []iwire.Section) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.vectorAdmissionCalls = append(s.vectorAdmissionCalls, command)
+	return s.vectorAdmissionErr
 }
 
 type testSensitiveClusterRouteError struct {
@@ -630,6 +639,38 @@ func TestClusterAdmissionLeaderRoutesThroughSubmitter(t *testing.T) {
 	}
 	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandInsertBatch {
 		t.Fatalf("command=%d want insert_batch", got)
+	}
+}
+
+func TestClusterSubmitterVectorPartitionAdmissionRunsBeforeRaftSubmitV1(t *testing.T) {
+	submitter := &fakeClusterSubmitter{vectorAdmissionErr: errors.New("vector generation must be invalidated first")}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")}, [][]byte{[]byte(`{"embedding":[1,2]}`)}, AckVisible)
+	if err == nil {
+		t.Fatal("InsertBatch succeeded despite vector admission refusal")
+	}
+	if calls := submitter.snapshot(); len(calls) != 0 {
+		t.Fatalf("admission refusal submitted %d Raft entries", len(calls))
+	}
+	submitter.mu.Lock()
+	admissions := append([]iwire.CommandID(nil), submitter.vectorAdmissionCalls...)
+	submitter.vectorAdmissionErr = nil
+	submitter.mu.Unlock()
+	if len(admissions) != 1 || admissions[0] != iwire.CommandInsertBatch {
+		t.Fatalf("admissions=%v", admissions)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")}, [][]byte{[]byte(`{"embedding":[1,2]}`)}, AckVisible); err != nil {
+		t.Fatalf("InsertBatch after durable admission: %v", err)
+	}
+	if calls := submitter.snapshot(); len(calls) != 1 {
+		t.Fatalf("successful admission submitted %d Raft entries", len(calls))
 	}
 }
 

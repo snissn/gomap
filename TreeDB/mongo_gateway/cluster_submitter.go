@@ -505,6 +505,9 @@ func (s *Server) submitClusterMutation(ctx context.Context, command iwire.Comman
 	if err != nil {
 		return nil, err
 	}
+	if err := treenativewire.AdmitVectorPartitionMutationV1(ctx, s.ClusterSubmitter, command, cmd.Known); err != nil {
+		return nil, err
+	}
 	entry, err := iwire.AppendDeterministicEntry(nil, cmd)
 	if err != nil {
 		return nil, err

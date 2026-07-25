@@ -295,6 +295,34 @@ func TestVectorPartitionCoordinatorCoalescesChunksDedupesAndMergesV1(t *testing.
 	}
 }
 
+func TestVectorPartitionCoordinatorUsesReplicatedLifecycleAdmissionV1(t *testing.T) {
+	owners := []raftcluster.GroupID{"group-a"}
+	coordinator, _, dispatcher := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		owners, map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "doc", Score: 1}}}, VectorPartitionCoordinatorLimitsV1{},
+	)
+	authority := &recordingVectorPartitionReplicatedLifecycleAuthorityV1{}
+	coordinator.replicatedLifecycle = authority
+	if _, err := coordinator.Search(t.Context(), testVectorPartitionCoordinatorRequestV1(len(owners))); err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if authority.calls != 1 {
+		t.Fatalf("replicated lifecycle calls=%d want 1", authority.calls)
+	}
+	if len(dispatcher.calls) == 0 {
+		t.Fatal("admitted search did not dispatch shard request")
+	}
+
+	authority.err = errors.New("generation invalidated")
+	before := len(dispatcher.calls)
+	if _, err := coordinator.Search(t.Context(), testVectorPartitionCoordinatorRequestV1(len(owners))); !errors.Is(err, authority.err) {
+		t.Fatalf("invalidated search err=%v", err)
+	}
+	if len(dispatcher.calls) != before {
+		t.Fatal("replicated lifecycle rejection dispatched shard request")
+	}
+}
+
 func TestVectorPartitionCoordinatorAllPartitionParityAndStableTiesV1(t *testing.T) {
 	owners := []raftcluster.GroupID{"group-b", "group-a", "group-b", "group-a"}
 	neighbors := map[uint32][]VectorPartitionShardSearchNeighborV1{

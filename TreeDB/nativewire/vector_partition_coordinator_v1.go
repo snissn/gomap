@@ -151,11 +151,12 @@ func (f VectorPartitionShardSearchDispatcherFuncV1) DispatchVectorPartitionShard
 }
 
 type VectorPartitionCoordinatorOptionsV1 struct {
-	Catalog      raftplacement.ResolvedCatalogV1
-	Placement    raftplacement.VectorPartitionPlacementRecordV1
-	RouterSource VectorPartitionCoordinatorRouterSourceV1
-	Dispatcher   VectorPartitionShardSearchDispatcherV1
-	Limits       VectorPartitionCoordinatorLimitsV1
+	Catalog             raftplacement.ResolvedCatalogV1
+	Placement           raftplacement.VectorPartitionPlacementRecordV1
+	RouterSource        VectorPartitionCoordinatorRouterSourceV1
+	Dispatcher          VectorPartitionShardSearchDispatcherV1
+	ReplicatedLifecycle VectorPartitionReplicatedLifecycleAuthorityV1
+	Limits              VectorPartitionCoordinatorLimitsV1
 }
 
 // VectorPartitionCoordinatorTopologyV1 is the public, transport-neutral M1
@@ -256,12 +257,13 @@ type vectorPartitionCoordinatorStatsAccumulatorV1 struct {
 }
 
 type VectorPartitionCoordinatorV1 struct {
-	placement    raftplacement.VectorPartitionPlacementRecordV1
-	routerSource VectorPartitionCoordinatorRouterSourceV1
-	dispatcher   VectorPartitionShardSearchDispatcherV1
-	limits       VectorPartitionCoordinatorLimitsV1
-	groups       map[raftcluster.GroupID]raftplacement.ResolvedGroupV1
-	stats        vectorPartitionCoordinatorStatsAccumulatorV1
+	placement           raftplacement.VectorPartitionPlacementRecordV1
+	routerSource        VectorPartitionCoordinatorRouterSourceV1
+	dispatcher          VectorPartitionShardSearchDispatcherV1
+	replicatedLifecycle VectorPartitionReplicatedLifecycleAuthorityV1
+	limits              VectorPartitionCoordinatorLimitsV1
+	groups              map[raftcluster.GroupID]raftplacement.ResolvedGroupV1
+	stats               vectorPartitionCoordinatorStatsAccumulatorV1
 }
 
 func NewVectorPartitionCoordinatorV1(opts VectorPartitionCoordinatorOptionsV1) (*VectorPartitionCoordinatorV1, error) {
@@ -284,7 +286,8 @@ func NewVectorPartitionCoordinatorV1(opts VectorPartitionCoordinatorOptionsV1) (
 	placement.Partitions = slices.Clone(opts.Placement.Partitions)
 	return &VectorPartitionCoordinatorV1{
 		placement: placement, routerSource: opts.RouterSource,
-		dispatcher: opts.Dispatcher, limits: limits, groups: groups,
+		dispatcher: opts.Dispatcher, replicatedLifecycle: opts.ReplicatedLifecycle,
+		limits: limits, groups: groups,
 	}, nil
 }
 
@@ -446,6 +449,9 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 	if err := c.validateRouterStatus(request, status); err != nil {
 		return response, c.wrapError(err, "")
 	}
+	if err := c.validateReplicatedLifecycle(requestCtx, status); err != nil {
+		return response, c.wrapError(err, "")
+	}
 
 	routerStarted := time.Now()
 	routed, err := router.SearchWithContextV1(requestCtx, request.Query, collections.VectorPartitionRouterSearchOptionsV1{
@@ -530,6 +536,25 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 	response.ProbedGroups = selectedGroups
 	response.Counters = counters
 	return response, nil
+}
+
+// validateReplicatedLifecycle binds the coordinator's locally opened router to
+// the single active catalog generation on every request. It is deliberately
+// after local manifest validation and before router search/dispatch: prepared,
+// invalidated, or failover-stale state cannot select partitions or issue shard
+// RPCs. A nil authority preserves the standalone M6 test harness; M7 cluster
+// construction supplies the replicated authority and therefore fails closed
+// when it is unavailable.
+func (c *VectorPartitionCoordinatorV1) validateReplicatedLifecycle(ctx context.Context, status collections.VectorPartitionRouterRuntimeStatusV1) error {
+	if c == nil || c.replicatedLifecycle == nil {
+		return nil
+	}
+	m := status.Manifest
+	return c.replicatedLifecycle.ValidateVectorPartitionGenerationSearchV1(
+		ctx, c.placement.Collection, m.IndexName, m.Generation,
+		m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum,
+		m.SourceSchemaHash, m.SourceRowCount, m.ReadySetDigest,
+	)
 }
 
 func accumulateVectorPartitionCoordinatorResponseCountersV1(

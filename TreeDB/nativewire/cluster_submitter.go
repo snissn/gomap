@@ -74,6 +74,36 @@ type ClusterAdmissionProvider interface {
 	ClusterAdmissionStatus(ctx context.Context) (ClusterAdmissionStatus, error)
 }
 
+// VectorPartitionMutationAdmissionProviderV1 is the M7 extension point for
+// submitters that own both a catalog/meta lifecycle coordinator and collection
+// schema knowledge. It receives the already registry-validated, bounded
+// native-wire command before deterministic entry encoding or Raft submission.
+// Implementations classify vector-field and DDL effects conservatively and
+// must return only after invalidation-before-mutation is durably proven.
+//
+// The interface deliberately receives command sections instead of a decoded
+// document graph: classification remains at the shared submit boundary used by
+// nativewire, Mongo, retry, and replay callers, while the registry's existing
+// bounds remain the sole wire-size authority.
+type VectorPartitionMutationAdmissionProviderV1 interface {
+	AdmitVectorPartitionMutationV1(context.Context, iwire.CommandID, []iwire.Section) error
+}
+
+// AdmitVectorPartitionMutationV1 invokes the optional M7 admission extension.
+// A plain cluster submitter remains valid for non-vector deployments; an M7
+// deployment installs this on its shared submitter so no frontend can bypass
+// classification or durable invalidation.
+func AdmitVectorPartitionMutationV1(ctx context.Context, submitter ClusterSubmitter, command iwire.CommandID, sections []iwire.Section) error {
+	if submitter == nil {
+		return protocolError(iwire.ErrInvalidCommand, "nativewire cluster submitter is not configured")
+	}
+	admitter, ok := submitter.(VectorPartitionMutationAdmissionProviderV1)
+	if !ok {
+		return nil
+	}
+	return admitter.AdmitVectorPartitionMutationV1(ctx, command, cloneSections(sections))
+}
+
 // ClusterAdmissionStatus describes whether this node may accept cluster-owned
 // writes. A provider must set Leader for write admission; the zero value fails
 // closed as not-leader when returned by a configured provider.
@@ -142,6 +172,9 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 	}
 	metadata, err := clusterRequestMetadata(header, cmd.Header, cmd.Known, ack)
 	if err != nil {
+		return nil, err
+	}
+	if err := AdmitVectorPartitionMutationV1(ctx, s.clusterSubmitter, cmd.Header.ID, cmd.Known); err != nil {
 		return nil, err
 	}
 	entry, err := iwire.AppendDeterministicEntryWithLimits(nil, cmd, s.limits)
