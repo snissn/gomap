@@ -410,6 +410,9 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 		return response, c.wrapError(err, "")
 	}
 	request.Query = slices.Clone(request.Query)
+	if deadline, ok := requestCtx.Deadline(); ok {
+		request.DeadlineUnixNano = deadline.UnixNano()
+	}
 
 	openStarted := time.Now()
 	router, err := c.routerSource.OpenVectorPartitionCoordinatorRouterV1(requestCtx, request.IndexName)
@@ -695,6 +698,9 @@ func (c *VectorPartitionCoordinatorV1) plan(request VectorPartitionCoordinatorRe
 			ids := slices.Clone(partitions[start:end])
 			taskIndex := len(tasks)
 			target := group.LeaderHint
+			if target == "" {
+				target = group.Members[0]
+			}
 			requestID := fmt.Sprintf("%s/%04d", request.RequestID, taskIndex)
 			if len(requestID) > c.limits.MaxIdentityBytes ||
 				len(groupID) > c.limits.MaxIdentityBytes ||
@@ -920,14 +926,17 @@ func (c *VectorPartitionCoordinatorV1) validateShardResponse(ctx context.Context
 		proof.PartitionGeneration != request.PartitionGeneration || proof.RouterGeneration != request.RouterGeneration ||
 		proof.ReadTerm == 0 || proof.ReadIndex == 0 || proof.AppliedTerm == 0 || proof.AppliedIndex < proof.ReadIndex ||
 		proof.ServingNode == "" || proof.LeaderNode == "" ||
+		proof.LeaderNode != proof.ServingNode || proof.AppliedTerm < proof.ReadTerm ||
 		!slices.Contains(task.group.Members, proof.ServingNode) ||
 		!slices.Contains(task.group.Members, proof.LeaderNode) ||
 		request.TargetNodeID != "" && proof.ServingNode != request.TargetNodeID {
 		return ErrVectorPartitionCoordinatorMalformedResponse
 	}
 	var candidates, edges uint64
-	responseBytes := vectorPartitionShardSearchResponseEnvelopeBytesV1 +
-		uint64(len(response.Partials))*vectorPartitionShardSearchPartialEnvelopeBytesV1
+	responseBytes, err := MeasureVectorPartitionShardSearchResponseBytesV1(response.Partials)
+	if err != nil {
+		return ErrVectorPartitionCoordinatorBudgetExceeded
+	}
 	for i, partial := range response.Partials {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -965,11 +974,6 @@ func (c *VectorPartitionCoordinatorV1) validateShardResponse(ctx context.Context
 					return ErrVectorPartitionCoordinatorMalformedResponse
 				}
 			}
-			nextBytes, ok := addUint64V1(responseBytes, uint64(len(neighbor.ID)+16))
-			if !ok {
-				return ErrVectorPartitionCoordinatorBudgetExceeded
-			}
-			responseBytes = nextBytes
 		}
 	}
 	candidateBytes, ok := mulUint64V1(response.Candidates, 64)

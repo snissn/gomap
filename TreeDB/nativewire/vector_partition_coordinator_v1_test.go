@@ -63,10 +63,13 @@ type testVectorPartitionCoordinatorDispatcherV1 struct {
 	neighbors       map[uint32][]VectorPartitionShardSearchNeighborV1
 	calls           []VectorPartitionShardSearchRequestV1
 	active, maximum int
-	block           <-chan struct{}
+	blockByGroup    map[raftcluster.GroupID]<-chan struct{}
+	blocked         chan<- raftcluster.GroupID
 	failGroup       raftcluster.GroupID
 	failErr         error
+	failAfter       <-chan struct{}
 	notLeaderOnce   map[raftcluster.GroupID]raftcluster.NodeID
+	editResponse    func(VectorPartitionShardSearchRequestV1, *VectorPartitionShardSearchResponseV1)
 }
 
 func (d *testVectorPartitionCoordinatorDispatcherV1) DispatchVectorPartitionShardSearchV1(ctx context.Context, request VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
@@ -76,9 +79,13 @@ func (d *testVectorPartitionCoordinatorDispatcherV1) DispatchVectorPartitionShar
 	if d.active > d.maximum {
 		d.maximum = d.active
 	}
+	defer func() {
+		d.mu.Lock()
+		d.active--
+		d.mu.Unlock()
+	}()
 	if hint, ok := d.notLeaderOnce[request.TargetGroupID]; ok {
 		delete(d.notLeaderOnce, request.TargetGroupID)
-		d.active--
 		d.mu.Unlock()
 		return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{
 			Code: VectorPartitionShardSearchErrorNotLeaderV1, GroupID: request.TargetGroupID,
@@ -87,23 +94,34 @@ func (d *testVectorPartitionCoordinatorDispatcherV1) DispatchVectorPartitionShar
 	}
 	fail := request.TargetGroupID == d.failGroup
 	failErr := d.failErr
-	block := d.block
+	failAfter := d.failAfter
+	block := d.blockByGroup[request.TargetGroupID]
+	blocked := d.blocked
+	editResponse := d.editResponse
 	d.mu.Unlock()
 
-	if block != nil {
+	if fail && failAfter != nil {
 		select {
 		case <-ctx.Done():
-			d.mu.Lock()
-			d.active--
-			d.mu.Unlock()
+			return VectorPartitionShardSearchResponseV1{}, ctx.Err()
+		case <-failAfter:
+		}
+	}
+	if block != nil {
+		if blocked != nil {
+			select {
+			case blocked <- request.TargetGroupID:
+			case <-ctx.Done():
+				return VectorPartitionShardSearchResponseV1{}, ctx.Err()
+			}
+		}
+		select {
+		case <-ctx.Done():
 			return VectorPartitionShardSearchResponseV1{}, ctx.Err()
 		case <-block:
 		}
 	}
 	if fail {
-		d.mu.Lock()
-		d.active--
-		d.mu.Unlock()
 		return VectorPartitionShardSearchResponseV1{}, failErr
 	}
 	partials := make([]VectorPartitionShardSearchPartialV1, len(request.PartitionIDs))
@@ -120,10 +138,7 @@ func (d *testVectorPartitionCoordinatorDispatcherV1) DispatchVectorPartitionShar
 			responseBytes += uint64(len(neighbor.ID) + 16)
 		}
 	}
-	d.mu.Lock()
-	d.active--
-	d.mu.Unlock()
-	return VectorPartitionShardSearchResponseV1{
+	response := VectorPartitionShardSearchResponseV1{
 		Version: VectorPartitionShardSearchVersionV1, RequestID: request.RequestID,
 		Proof: VectorPartitionShardSearchProofV1{
 			ServingNode: request.TargetNodeID, LeaderNode: request.TargetNodeID, GroupID: request.TargetGroupID,
@@ -137,7 +152,11 @@ func (d *testVectorPartitionCoordinatorDispatcherV1) DispatchVectorPartitionShar
 		Timing: VectorPartitionShardSearchTimingV1{
 			ReadIndexApplyNanos: 1, SearchNanos: 1, ResponseCopyNanos: 1, TotalNanos: 3,
 		},
-	}, nil
+	}
+	if editResponse != nil {
+		editResponse(request, &response)
+	}
+	return response, nil
 }
 
 func testVectorPartitionCoordinatorV1(t *testing.T, groups []raftplacement.GroupV1, owners []raftcluster.GroupID, neighbors map[uint32][]VectorPartitionShardSearchNeighborV1, limits VectorPartitionCoordinatorLimitsV1) (*VectorPartitionCoordinatorV1, *testVectorPartitionCoordinatorRouterSourceV1, *testVectorPartitionCoordinatorDispatcherV1) {
@@ -186,7 +205,8 @@ func testVectorPartitionCoordinatorV1(t *testing.T, groups []raftplacement.Group
 	}
 	source := &testVectorPartitionCoordinatorRouterSourceV1{router: router}
 	dispatcher := &testVectorPartitionCoordinatorDispatcherV1{
-		neighbors: neighbors, notLeaderOnce: make(map[raftcluster.GroupID]raftcluster.NodeID),
+		neighbors: neighbors, blockByGroup: make(map[raftcluster.GroupID]<-chan struct{}),
+		notLeaderOnce: make(map[raftcluster.GroupID]raftcluster.NodeID),
 	}
 	coordinator, err := NewVectorPartitionCoordinatorV1(VectorPartitionCoordinatorOptionsV1{
 		Catalog: catalog, Placement: placement, RouterSource: source, Dispatcher: dispatcher, Limits: limits,
@@ -285,9 +305,112 @@ func TestVectorPartitionCoordinatorAllPartitionParityAndStableTiesV1(t *testing.
 	}
 }
 
+func TestVectorPartitionCoordinatorTopKLargerThanLiveCorpusV1(t *testing.T) {
+	coordinator, _, _ := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{
+			{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"},
+			{ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"},
+		},
+		[]raftcluster.GroupID{"group-a", "group-b"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{
+			0: {{ID: "only-live-document", Score: .75}},
+			1: {},
+		},
+		VectorPartitionCoordinatorLimitsV1{},
+	)
+	request := testVectorPartitionCoordinatorRequestV1(2)
+	request.TopK = 5
+	request.MergeEntriesLimit = 10
+	response, err := coordinator.Search(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(response.Neighbors, []VectorPartitionCoordinatorNeighborV1{
+		{ID: "only-live-document", Score: .75},
+	}) {
+		t.Fatalf("neighbors=%+v", response.Neighbors)
+	}
+}
+
+func TestVectorPartitionCoordinatorRejectsMixedRouterGenerationBeforeDispatchV1(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(*collections.VectorPartitionRouterRuntimeStatusV1)
+	}{
+		{name: "source_generation", edit: func(status *collections.VectorPartitionRouterRuntimeStatusV1) {
+			status.Manifest.SourceGeneration++
+		}},
+		{name: "ready_set_digest", edit: func(status *collections.VectorPartitionRouterRuntimeStatusV1) {
+			status.Manifest.ReadySetDigest = "invalid"
+		}},
+		{name: "model_digest", edit: func(status *collections.VectorPartitionRouterRuntimeStatusV1) {
+			status.ModelDigest = "invalid"
+		}},
+		{name: "placement", edit: func(status *collections.VectorPartitionRouterRuntimeStatusV1) {
+			status.Manifest.Placements[0].GroupID = "wrong-group"
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
+				[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+				[]raftcluster.GroupID{"group-a"},
+				map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "a", Score: 1}}},
+				VectorPartitionCoordinatorLimitsV1{},
+			)
+			test.edit(&source.router.status)
+			response, err := coordinator.Search(context.Background(), testVectorPartitionCoordinatorRequestV1(1))
+			if err == nil || !vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
+				t.Fatalf("response=%+v err=%v", response, err)
+			}
+			if len(dispatcher.calls) != 0 || source.router.closeCount != 1 {
+				t.Fatalf("dispatch=%d closes=%d", len(dispatcher.calls), source.router.closeCount)
+			}
+		})
+	}
+}
+
+func TestVectorPartitionCoordinatorRejectsCorruptShardProofsAndPartialsV1(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(VectorPartitionShardSearchRequestV1, *VectorPartitionShardSearchResponseV1)
+	}{
+		{name: "generation", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+			response.Proof.SourceGeneration++
+		}},
+		{name: "leader_serving_disagree", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+			response.Proof.LeaderNode = "node-b"
+		}},
+		{name: "applied_term_precedes_read", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+			response.Proof.ReadTerm = 2
+			response.Proof.AppliedTerm = 1
+		}},
+		{name: "unrequested_partition", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+			response.Partials[0].PartitionID = 99
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			coordinator, _, dispatcher := testVectorPartitionCoordinatorV1(t,
+				[]raftplacement.GroupV1{{
+					ID: "group-a", Members: []raftcluster.NodeID{"node-a", "node-b"}, LeaderHint: "node-a",
+				}},
+				[]raftcluster.GroupID{"group-a"},
+				map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "a", Score: 1}}},
+				VectorPartitionCoordinatorLimitsV1{},
+			)
+			dispatcher.editResponse = test.edit
+			response, err := coordinator.Search(context.Background(), testVectorPartitionCoordinatorRequestV1(1))
+			if err == nil || !vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
+				t.Fatalf("response=%+v err=%v", response, err)
+			}
+		})
+	}
+}
+
 func TestVectorPartitionCoordinatorNotLeaderRedirectIsBoundedV1(t *testing.T) {
 	coordinator, _, dispatcher := testVectorPartitionCoordinatorV1(t,
-		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a", "node-b"}, LeaderHint: "node-a"}},
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-b", "node-a"}}},
 		[]raftcluster.GroupID{"group-a"},
 		map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "a", Score: 1}}},
 		VectorPartitionCoordinatorLimitsV1{},
@@ -298,13 +421,16 @@ func TestVectorPartitionCoordinatorNotLeaderRedirectIsBoundedV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	if response.Counters.Retries != 1 || response.Counters.Redirects != 1 || response.Counters.RPCs != 2 ||
-		len(dispatcher.calls) != 2 || dispatcher.calls[1].TargetNodeID != "node-b" {
+		len(dispatcher.calls) != 2 || dispatcher.calls[0].TargetNodeID != "node-a" ||
+		dispatcher.calls[1].TargetNodeID != "node-b" {
 		t.Fatalf("redirect response=%+v calls=%+v", response.Counters, dispatcher.calls)
 	}
 }
 
 func TestVectorPartitionCoordinatorTerminalFailureCancelsAndReturnsNoPartialV1(t *testing.T) {
 	block := make(chan struct{})
+	blocked := make(chan raftcluster.GroupID, 1)
+	failAfter := make(chan struct{})
 	coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
 		[]raftplacement.GroupV1{
 			{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"},
@@ -316,11 +442,36 @@ func TestVectorPartitionCoordinatorTerminalFailureCancelsAndReturnsNoPartialV1(t
 		},
 		VectorPartitionCoordinatorLimitsV1{MaxConcurrentRequests: 2},
 	)
-	dispatcher.block = block
+	dispatcher.blockByGroup["group-b"] = block
+	dispatcher.blocked = blocked
 	dispatcher.failGroup = "group-a"
 	dispatcher.failErr = errors.New("connection lost")
-	close(block)
-	response, err := coordinator.Search(context.Background(), testVectorPartitionCoordinatorRequestV1(2))
+	dispatcher.failAfter = failAfter
+	type searchResult struct {
+		response VectorPartitionCoordinatorResponseV1
+		err      error
+	}
+	done := make(chan searchResult, 1)
+	go func() {
+		response, err := coordinator.Search(context.Background(), testVectorPartitionCoordinatorRequestV1(2))
+		done <- searchResult{response: response, err: err}
+	}()
+	select {
+	case groupID := <-blocked:
+		if groupID != "group-b" {
+			t.Fatalf("blocked group=%q", groupID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("sibling request did not block")
+	}
+	close(failAfter)
+	var result searchResult
+	select {
+	case result = <-done:
+	case <-time.After(time.Second):
+		t.Fatal("coordinator did not cancel and join blocked sibling")
+	}
+	response, err := result.response, result.err
 	if err == nil {
 		t.Fatal("terminal dispatch error accepted")
 	}
@@ -399,6 +550,27 @@ func TestVectorPartitionCoordinatorDeadlineBeforeDispatchV1(t *testing.T) {
 	}
 	if source.opens != 0 || len(dispatcher.calls) != 0 {
 		t.Fatalf("expired request opened router or dispatched: opens=%d calls=%d", source.opens, len(dispatcher.calls))
+	}
+}
+
+func TestVectorPartitionCoordinatorPropagatesEffectiveDeadlineV1(t *testing.T) {
+	coordinator, _, dispatcher := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "a", Score: 1}}},
+		VectorPartitionCoordinatorLimitsV1{},
+	)
+	parentDeadline := time.Now().Add(5 * time.Second)
+	ctx, cancel := context.WithDeadline(context.Background(), parentDeadline)
+	defer cancel()
+	request := testVectorPartitionCoordinatorRequestV1(1)
+	request.DeadlineUnixNano = parentDeadline.Add(5 * time.Second).UnixNano()
+	if _, err := coordinator.Search(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	if len(dispatcher.calls) != 1 ||
+		dispatcher.calls[0].DeadlineUnixNano != parentDeadline.UnixNano() {
+		t.Fatalf("shard deadline=%d want=%d", dispatcher.calls[0].DeadlineUnixNano, parentDeadline.UnixNano())
 	}
 }
 

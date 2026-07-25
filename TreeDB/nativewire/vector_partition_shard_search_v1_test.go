@@ -1400,6 +1400,29 @@ func assertVectorPartitionShardSearchCodeV1(tb testing.TB, err error, want Vecto
 	}
 }
 
+func TestMeasureVectorPartitionShardSearchResponseBytesV1MatchesServiceAccounting(t *testing.T) {
+	partials := []VectorPartitionShardSearchPartialV1{
+		{
+			PartitionID: 1,
+			Neighbors: []VectorPartitionShardSearchNeighborV1{
+				{ID: "alpha", Score: 1},
+				{ID: "beta", Score: .5},
+			},
+		},
+		{PartitionID: 2},
+	}
+	got, err := MeasureVectorPartitionShardSearchResponseBytesV1(partials)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := vectorPartitionShardSearchResponseEnvelopeBytesV1 +
+		2*vectorPartitionShardSearchPartialEnvelopeBytesV1 +
+		uint64(len("alpha")+16+len("beta")+16)
+	if got != want {
+		t.Fatalf("response bytes=%d want=%d", got, want)
+	}
+}
+
 func vectorPartitionShardSearchResponseZeroTestV1(response VectorPartitionShardSearchResponseV1) bool {
 	return response.Version == 0 && response.RequestID == "" && len(response.Partials) == 0 &&
 		response.Partitions == 0 && response.Candidates == 0 && response.Edges == 0 &&
