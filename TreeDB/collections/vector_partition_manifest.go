@@ -339,13 +339,23 @@ func (m VectorPartitionManifestV1) validateWithContextV1(ctx context.Context, l 
 			return fmt.Errorf("%w: missing partition asset %d", ErrVectorPartitionManifestInvalid, partitionID)
 		}
 	}
-	if m.State == "ready" && m.ReadySetDigest != m.readyDigest() {
-		return fmt.Errorf("%w: ready-set digest mismatch", ErrVectorPartitionManifestInvalid)
+	if m.State == "ready" {
+		readyDigest, err := m.readyDigestWithContextV1(ctx)
+		if err != nil {
+			return err
+		}
+		if m.ReadySetDigest != readyDigest {
+			return fmt.Errorf("%w: ready-set digest mismatch", ErrVectorPartitionManifestInvalid)
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if m.IntegrityDigest != m.integrityDigest() {
+	integrityDigest, err := m.integrityDigestWithContextV1(ctx)
+	if err != nil {
+		return err
+	}
+	if m.IntegrityDigest != integrityDigest {
 		return fmt.Errorf("%w: record integrity digest mismatch", ErrVectorPartitionManifestInvalid)
 	}
 	if err := ctx.Err(); err != nil {
@@ -375,6 +385,16 @@ func validateAssetVPM(a VectorPartitionAssetV1, l VectorPartitionManifestLimits)
 }
 
 func encodedSizeVPM(m VectorPartitionManifestV1, l VectorPartitionManifestLimits) (int, error) {
+	return encodedSizeWithContextVPM(context.Background(), m, l)
+}
+
+func encodedSizeWithContextVPM(ctx context.Context, m VectorPartitionManifestV1, l VectorPartitionManifestLimits) (int, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	// Every addition is checked before allocating the encoder buffer. The
 	// decoder's byte cap is also the encoder's hard cap.
 	n := uint64(8) // magic + version
@@ -418,7 +438,12 @@ func encodedSizeVPM(m VectorPartitionManifestV1, l VectorPartitionManifestLimits
 	if err := add(4 + uint64(len(m.Placements))*4); err != nil {
 		return 0, err
 	}
-	for _, p := range m.Placements {
+	for i, p := range m.Placements {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+		}
 		if err := str(p.GroupID); err != nil {
 			return 0, err
 		}
@@ -431,10 +456,18 @@ func encodedSizeVPM(m VectorPartitionManifestV1, l VectorPartitionManifestLimits
 	if err := add(4); err != nil {
 		return 0, err
 	}
-	for _, a := range m.Assets {
+	for i, a := range m.Assets {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+		}
 		if err := asset(a); err != nil {
 			return 0, err
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
 	}
 	return int(n), nil
 }
@@ -496,12 +529,33 @@ func isSHA256VPM(s string) bool {
 	return e == nil
 }
 func (m VectorPartitionManifestV1) readyDigest() string {
+	digest, err := m.readyDigestWithContextV1(context.Background())
+	if err != nil {
+		panic(err)
+	}
+	return digest
+}
+
+func (m VectorPartitionManifestV1) readyDigestWithContextV1(ctx context.Context) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	h := sha256.New()
-	for _, p := range m.Placements {
+	for i, p := range m.Placements {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+		}
 		writeU32VPM(h, p.PartitionID)
 		writeStringVPM(h, p.GroupID)
 	}
-	for _, a := range m.Assets {
+	for i, a := range m.Assets {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+		}
 		writeU32VPM(h, a.PartitionID)
 		writeStringVPM(h, a.ID)
 		writeStringVPM(h, a.Checksum)
@@ -518,11 +572,26 @@ func (m VectorPartitionManifestV1) readyDigest() string {
 	writeStringVPM(h, a.MembershipDigest)
 	writeU64VPM(h, a.Bytes)
 	writeColumnAssetRefVPM(h, a.Ref)
-	return hex.EncodeToString(h.Sum(nil))
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // Canonicalize sorts caller-provided lists then fills the ready-set digest.
 func (m *VectorPartitionManifestV1) Canonicalize() {
+	if err := m.canonicalizeWithContextV1(context.Background()); err != nil {
+		panic(err)
+	}
+}
+
+func (m *VectorPartitionManifestV1) canonicalizeWithContextV1(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// Normalize empty lists so the semantic digest does not distinguish an
 	// in-memory nil from the decoder's zero-length allocation.
 	if m.Placements == nil {
@@ -546,46 +615,317 @@ func (m *VectorPartitionManifestV1) Canonicalize() {
 	if m.State == "" {
 		m.State = "building"
 	}
-	sort.Slice(m.Placements, func(i, j int) bool { return m.Placements[i].PartitionID < m.Placements[j].PartitionID })
-	sort.Slice(m.Memberships, func(i, j int) bool {
-		return vectorPartitionMembershipLessV1(m.Memberships[i], m.Memberships[j])
-	})
-	sort.Slice(m.Representatives, func(i, j int) bool {
-		return vectorPartitionMembershipLessV1(m.Representatives[i], m.Representatives[j])
-	})
-	sort.Slice(m.OverlapMemberships, func(i, j int) bool {
-		return vectorPartitionMembershipLessV1(m.OverlapMemberships[i], m.OverlapMemberships[j])
-	})
-	sort.Slice(m.Assets, func(i, j int) bool {
-		return m.Assets[i].PartitionID < m.Assets[j].PartitionID || m.Assets[i].PartitionID == m.Assets[j].PartitionID && m.Assets[i].ID < m.Assets[j].ID
-	})
-	if m.State == "ready" {
-		m.ReadySetDigest = m.readyDigest()
+	if err := sortVectorPartitionSliceWithContextV1(ctx, m.Placements, func(a, b VectorPartitionPlacementV1) bool {
+		return a.PartitionID < b.PartitionID
+	}); err != nil {
+		return err
 	}
-	m.IntegrityDigest = m.integrityDigest()
+	if err := sortVectorPartitionSliceWithContextV1(ctx, m.Memberships, vectorPartitionMembershipLessV1); err != nil {
+		return err
+	}
+	if err := sortVectorPartitionSliceWithContextV1(ctx, m.Representatives, vectorPartitionMembershipLessV1); err != nil {
+		return err
+	}
+	if err := sortVectorPartitionSliceWithContextV1(ctx, m.OverlapMemberships, vectorPartitionMembershipLessV1); err != nil {
+		return err
+	}
+	if err := sortVectorPartitionSliceWithContextV1(ctx, m.Assets, func(a, b VectorPartitionAssetV1) bool {
+		return a.PartitionID < b.PartitionID || a.PartitionID == b.PartitionID && a.ID < b.ID
+	}); err != nil {
+		return err
+	}
+	if m.State == "ready" {
+		digest, err := m.readyDigestWithContextV1(ctx)
+		if err != nil {
+			return err
+		}
+		m.ReadySetDigest = digest
+	}
+	digest, err := m.integrityDigestWithContextV1(ctx)
+	if err != nil {
+		return err
+	}
+	m.IntegrityDigest = digest
+	return ctx.Err()
 }
 
 func (m VectorPartitionManifestV1) integrityDigest() string {
-	m.IntegrityDigest = ""
-	raw, err := json.Marshal(m)
+	digest, err := m.integrityDigestWithContextV1(context.Background())
 	if err != nil {
 		panic(err)
 	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:])
+	return digest
+}
+
+func (m VectorPartitionManifestV1) integrityDigestWithContextV1(ctx context.Context) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	m.IntegrityDigest = ""
+	h := sha256.New()
+	if _, err := h.Write([]byte{'{'}); err != nil {
+		return "", err
+	}
+	writeField := func(name string, value any, first bool) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !first {
+			if _, err := h.Write([]byte{','}); err != nil {
+				return err
+			}
+		}
+		nameRaw, err := json.Marshal(name)
+		if err != nil {
+			return err
+		}
+		if _, err := h.Write(nameRaw); err != nil {
+			return err
+		}
+		if _, err := h.Write([]byte{':'}); err != nil {
+			return err
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		_, err = h.Write(raw)
+		return err
+	}
+	writeSliceField := func(name string, write func() error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		nameRaw, err := json.Marshal(name)
+		if err != nil {
+			return err
+		}
+		if _, err := h.Write([]byte{','}); err != nil {
+			return err
+		}
+		if _, err := h.Write(nameRaw); err != nil {
+			return err
+		}
+		if _, err := h.Write([]byte{':'}); err != nil {
+			return err
+		}
+		return write()
+	}
+	scalars := []struct {
+		name  string
+		value any
+	}{
+		{"Format", m.Format},
+		{"State", m.State},
+		{"Collection", m.Collection},
+		{"IndexName", m.IndexName},
+		{"IndexDefinitionDigest", m.IndexDefinitionDigest},
+		{"IntegrityDigest", m.IntegrityDigest},
+		{"SourceGeneration", m.SourceGeneration},
+		{"SourceChecksum", m.SourceChecksum},
+		{"SourceSchemaHash", m.SourceSchemaHash},
+		{"SourceRowCount", m.SourceRowCount},
+		{"Generation", m.Generation},
+		{"RouterGeneration", m.RouterGeneration},
+		{"PartitionCount", m.PartitionCount},
+		{"BalancePolicy", m.BalancePolicy},
+	}
+	for i, field := range scalars {
+		if err := writeField(field.name, field.value, i == 0); err != nil {
+			return "", err
+		}
+	}
+	if err := writeSliceField("Placements", func() error {
+		return writeVectorPartitionJSONSliceWithContextV1(ctx, h, m.Placements, 256)
+	}); err != nil {
+		return "", err
+	}
+	if err := writeSliceField("Memberships", func() error {
+		return writeVectorPartitionJSONSliceWithContextV1(ctx, h, m.Memberships, 1024)
+	}); err != nil {
+		return "", err
+	}
+	if err := writeSliceField("OverlapMemberships", func() error {
+		return writeVectorPartitionJSONSliceWithContextV1(ctx, h, m.OverlapMemberships, 1024)
+	}); err != nil {
+		return "", err
+	}
+	if err := writeSliceField("Representatives", func() error {
+		return writeVectorPartitionJSONSliceWithContextV1(ctx, h, m.Representatives, 1024)
+	}); err != nil {
+		return "", err
+	}
+	if err := writeSliceField("Assets", func() error {
+		return writeVectorPartitionJSONSliceWithContextV1(ctx, h, m.Assets, 64)
+	}); err != nil {
+		return "", err
+	}
+	if err := writeField("RouterAsset", m.RouterAsset, false); err != nil {
+		return "", err
+	}
+	if err := writeField("ReadySetDigest", m.ReadySetDigest, false); err != nil {
+		return "", err
+	}
+	if _, err := h.Write([]byte{'}'}); err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func writeVectorPartitionJSONSliceWithContextV1[T any](ctx context.Context, w io.Writer, values []T, chunkSize int) error {
+	if values == nil {
+		_, err := io.WriteString(w, "null")
+		return err
+	}
+	if chunkSize <= 0 {
+		chunkSize = 1
+	}
+	if _, err := io.WriteString(w, "["); err != nil {
+		return err
+	}
+	for start := 0; start < len(values); start += chunkSize {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		end := start + chunkSize
+		if end > len(values) {
+			end = len(values)
+		}
+		raw, err := json.Marshal(values[start:end])
+		if err != nil {
+			return err
+		}
+		if start > 0 {
+			if _, err := io.WriteString(w, ","); err != nil {
+				return err
+			}
+		}
+		if len(raw) < 2 || raw[0] != '[' || raw[len(raw)-1] != ']' {
+			return fmt.Errorf("%w: JSON slice encoding", ErrVectorPartitionManifestInvalid)
+		}
+		if _, err := w.Write(raw[1 : len(raw)-1]); err != nil {
+			return err
+		}
+	}
+	if _, err := io.WriteString(w, "]"); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+func sortVectorPartitionSliceWithContextV1[T any](ctx context.Context, values []T, less func(T, T) bool) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(values) < 2 {
+		return nil
+	}
+	sorted := true
+	for i := 1; i < len(values); i++ {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		if less(values[i], values[i-1]) {
+			sorted = false
+			break
+		}
+	}
+	if sorted {
+		return ctx.Err()
+	}
+	scratch := make([]T, len(values))
+	source, destination := values, scratch
+	for width := 1; width < len(values); {
+		moves := 0
+		for left := 0; left < len(values); left += 2 * width {
+			middle := left + width
+			if middle > len(values) {
+				middle = len(values)
+			}
+			right := left + 2*width
+			if right > len(values) {
+				right = len(values)
+			}
+			i, j := left, middle
+			for out := left; out < right; out++ {
+				if moves&1023 == 0 {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+				}
+				switch {
+				case i >= middle:
+					destination[out] = source[j]
+					j++
+				case j >= right:
+					destination[out] = source[i]
+					i++
+				case less(source[j], source[i]):
+					destination[out] = source[j]
+					j++
+				default:
+					destination[out] = source[i]
+					i++
+				}
+				moves++
+			}
+		}
+		source, destination = destination, source
+		if width > len(values)/2 {
+			break
+		}
+		width *= 2
+	}
+	if &source[0] != &values[0] {
+		for start := 0; start < len(values); start += 4096 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			end := start + 4096
+			if end > len(values) {
+				end = len(values)
+			}
+			copy(values[start:end], source[start:end])
+		}
+	}
+	return ctx.Err()
 }
 
 // EncodeVectorPartitionManifestV1 is a strict, stable binary record. There
 // are no tagged optional fields: newer records fail closed on this decoder.
 func EncodeVectorPartitionManifestV1(m VectorPartitionManifestV1) ([]byte, error) {
-	if err := preflightVectorPartitionManifestV1(m, DefaultVectorPartitionManifestLimits()); err != nil {
+	return encodeVectorPartitionManifestWithContextV1(context.Background(), m)
+}
+
+// encodeVectorPartitionManifestWithContextV1 preserves the stable V1 record
+// while polling cancellation throughout large-list sorting, digest
+// construction, validation, sizing, and binary emission.
+func encodeVectorPartitionManifestWithContextV1(ctx context.Context, m VectorPartitionManifestV1) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	limits := DefaultVectorPartitionManifestLimits()
+	if err := preflightVectorPartitionManifestWithContextV1(ctx, m, limits); err != nil {
 		return nil, err
 	}
-	m.Canonicalize()
-	if err := m.Validate(DefaultVectorPartitionManifestLimits()); err != nil {
+	if err := m.canonicalizeWithContextV1(ctx); err != nil {
 		return nil, err
 	}
-	size, err := encodedSizeVPM(m, DefaultVectorPartitionManifestLimits())
+	if err := m.validateWithContextV1(ctx, limits); err != nil {
+		return nil, err
+	}
+	size, err := encodedSizeWithContextVPM(ctx, m, limits)
 	if err != nil {
 		return nil, err
 	}
@@ -602,14 +942,37 @@ func EncodeVectorPartitionManifestV1(m VectorPartitionManifestV1) ([]byte, error
 	}
 	putU32VPM(b, m.PartitionCount)
 	putAssetsVPM(b, []VectorPartitionAssetV1{m.RouterAsset})
-	putPlacementsVPM(b, m.Placements)
-	putMembershipsVPM(b, m.Memberships)
-	putMembershipsVPM(b, m.OverlapMemberships)
-	putMembershipsVPM(b, m.Representatives)
-	putAssetsVPM(b, m.Assets)
+	if err := putPlacementsWithContextVPM(ctx, b, m.Placements); err != nil {
+		return nil, err
+	}
+	if err := putMembershipsWithContextVPM(ctx, b, m.Memberships); err != nil {
+		return nil, err
+	}
+	if err := putMembershipsWithContextVPM(ctx, b, m.OverlapMemberships); err != nil {
+		return nil, err
+	}
+	if err := putMembershipsWithContextVPM(ctx, b, m.Representatives); err != nil {
+		return nil, err
+	}
+	if err := putAssetsWithContextVPM(ctx, b, m.Assets); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return b.Bytes(), nil
 }
 func preflightVectorPartitionManifestV1(m VectorPartitionManifestV1, l VectorPartitionManifestLimits) error {
+	return preflightVectorPartitionManifestWithContextV1(context.Background(), m, l)
+}
+
+func preflightVectorPartitionManifestWithContextV1(ctx context.Context, m VectorPartitionManifestV1, l VectorPartitionManifestLimits) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(m.Placements) > l.MaxPartitions || len(m.Assets) > l.MaxAssets || len(m.Memberships) > l.MaxMemberships || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || totalMembershipsVPM(m.Memberships, m.OverlapMemberships, m.Representatives) > l.totalMembershipLimit() {
 		return fmt.Errorf("%w: list cap", ErrVectorPartitionManifestInvalid)
 	}
@@ -618,12 +981,22 @@ func preflightVectorPartitionManifestV1(m VectorPartitionManifestV1, l VectorPar
 			return fmt.Errorf("%w: string cap", ErrVectorPartitionManifestInvalid)
 		}
 	}
-	for _, p := range m.Placements {
+	for i, p := range m.Placements {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		if len(p.GroupID) > l.MaxStringBytes {
 			return fmt.Errorf("%w: string cap", ErrVectorPartitionManifestInvalid)
 		}
 	}
-	for _, a := range m.Assets {
+	for i, a := range m.Assets {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		if len(a.ID) > l.MaxStringBytes || len(a.Checksum) > l.MaxStringBytes || len(a.MembershipDigest) > l.MaxStringBytes || len(a.Ref.Namespace) > l.MaxStringBytes || len(a.Ref.Kind) > l.MaxStringBytes {
 			return fmt.Errorf("%w: string cap", ErrVectorPartitionManifestInvalid)
 		}
@@ -632,7 +1005,7 @@ func preflightVectorPartitionManifestV1(m VectorPartitionManifestV1, l VectorPar
 	if len(a.ID) > l.MaxStringBytes || len(a.Checksum) > l.MaxStringBytes || len(a.MembershipDigest) > l.MaxStringBytes || len(a.Ref.Namespace) > l.MaxStringBytes || len(a.Ref.Kind) > l.MaxStringBytes {
 		return fmt.Errorf("%w: string cap", ErrVectorPartitionManifestInvalid)
 	}
-	return nil
+	return ctx.Err()
 }
 func DecodeVectorPartitionManifestV1(raw []byte, l VectorPartitionManifestLimits) (VectorPartitionManifestV1, error) {
 	return DecodeVectorPartitionManifestWithContextV1(context.Background(), raw, l)
@@ -937,6 +1310,23 @@ func putAssetsVPM(b *bytes.Buffer, x []VectorPartitionAssetV1) {
 		putColumnAssetRefVPM(b, a.Ref)
 	}
 }
+func putAssetsWithContextVPM(ctx context.Context, b *bytes.Buffer, x []VectorPartitionAssetV1) error {
+	putU32VPM(b, uint32(len(x)))
+	for i, a := range x {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		putU32VPM(b, a.PartitionID)
+		putStringVPM(b, a.ID)
+		putStringVPM(b, a.Checksum)
+		putStringVPM(b, a.MembershipDigest)
+		putU64VPM(b, a.Bytes)
+		putColumnAssetRefVPM(b, a.Ref)
+	}
+	return ctx.Err()
+}
 func putColumnAssetRefVPM(b *bytes.Buffer, r ColumnAssetRef) {
 	putStringVPM(b, string(r.Kind))
 	putStringVPM(b, r.Namespace)
@@ -954,12 +1344,38 @@ func putPlacementsVPM(b *bytes.Buffer, x []VectorPartitionPlacementV1) {
 		putStringVPM(b, p.GroupID)
 	}
 }
+func putPlacementsWithContextVPM(ctx context.Context, b *bytes.Buffer, x []VectorPartitionPlacementV1) error {
+	putU32VPM(b, uint32(len(x)))
+	for i, p := range x {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		putU32VPM(b, p.PartitionID)
+		putStringVPM(b, p.GroupID)
+	}
+	return ctx.Err()
+}
 func putMembershipsVPM(b *bytes.Buffer, x []VectorPartitionMembershipV1) {
 	putU32VPM(b, uint32(len(x)))
 	for _, m := range x {
 		putU64VPM(b, m.VectorOrdinal)
 		putU32VPM(b, m.PartitionID)
 	}
+}
+func putMembershipsWithContextVPM(ctx context.Context, b *bytes.Buffer, x []VectorPartitionMembershipV1) error {
+	putU32VPM(b, uint32(len(x)))
+	for i, m := range x {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		putU64VPM(b, m.VectorOrdinal)
+		putU32VPM(b, m.PartitionID)
+	}
+	return ctx.Err()
 }
 
 // VectorPartitionStoreV1 uses write-sync-rename-sync publication. The active

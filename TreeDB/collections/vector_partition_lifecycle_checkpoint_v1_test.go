@@ -182,6 +182,22 @@ func TestVectorPartitionLifecycleCheckpointPreservesManifestDecodeCancellationV1
 	}
 }
 
+func TestCloneVectorPartitionManifestForCheckpointWithContextV1CancelsMidCopy(t *testing.T) {
+	manifest := scaledVectorPartitionManifestV1(32 << 10)
+	first := manifest.Memberships[0]
+	last := manifest.Memberships[len(manifest.Memberships)-1]
+	ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 6}
+	if _, err := cloneVectorPartitionManifestForCheckpointWithContextV1(ctx, manifest); !errors.Is(err, context.Canceled) {
+		t.Fatalf("clone cancellation err=%v want context.Canceled", err)
+	}
+	if ctx.calls < ctx.cancelAfter {
+		t.Fatalf("context calls=%d want at least %d", ctx.calls, ctx.cancelAfter)
+	}
+	if manifest.Memberships[0] != first || manifest.Memberships[len(manifest.Memberships)-1] != last {
+		t.Fatal("canceled checkpoint clone mutated caller-owned memberships")
+	}
+}
+
 func TestVectorPartitionLifecycleCheckpointV1MapOrderIsDeterministic(t *testing.T) {
 	first := lifecycleTwoBuildingCheckpointV1(t)
 	second := first

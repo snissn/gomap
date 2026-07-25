@@ -2954,6 +2954,75 @@ func testVectorPartitionManifestV1() VectorPartitionManifestV1 {
 	return m
 }
 
+func scaledVectorPartitionManifestV1(rows int) VectorPartitionManifestV1 {
+	m := testVectorPartitionManifestV1()
+	m.SourceRowCount = uint64(rows)
+	m.PartitionCount = 1
+	m.Placements = []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}}
+	m.Memberships = make([]VectorPartitionMembershipV1, rows)
+	for i := range m.Memberships {
+		m.Memberships[i] = VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 0}
+	}
+	m.Representatives = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}}
+	m.Assets = m.Assets[:1]
+	m.Canonicalize()
+	return m
+}
+
+func TestVectorPartitionManifestContextDigestMatchesStableJSONV1(t *testing.T) {
+	for _, m := range []VectorPartitionManifestV1{
+		testVectorPartitionManifestV1(),
+		{
+			Format:                "<format>&\u2028",
+			State:                 "building",
+			Collection:            "docs",
+			IndexName:             "embedding",
+			IndexDefinitionDigest: strings.Repeat("a", 64),
+			IntegrityDigest:       strings.Repeat("b", 64),
+			SourceGeneration:      1,
+			SourceChecksum:        2,
+			SourceSchemaHash:      3,
+			SourceRowCount:        4,
+			Generation:            5,
+			PartitionCount:        6,
+			BalancePolicy:         "test",
+			Placements:            nil,
+			Memberships:           []VectorPartitionMembershipV1{},
+			OverlapMemberships:    nil,
+			Representatives:       []VectorPartitionMembershipV1{},
+			Assets:                nil,
+			RouterAsset:           VectorPartitionAssetV1{ID: "<router>&", Ref: ColumnAssetRef{Kind: ColumnAssetKind("<kind>"), Offset: -1}},
+			ReadySetDigest:        "",
+		},
+	} {
+		m.IntegrityDigest = ""
+		raw, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(raw)
+		want := hex.EncodeToString(sum[:])
+		got, err := m.integrityDigestWithContextV1(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("context digest=%s want stable JSON digest=%s\njson=%s", got, want, raw)
+		}
+	}
+}
+
+func TestEncodeVectorPartitionManifestWithContextV1CancelsDuringLargeCanonicalSortScan(t *testing.T) {
+	m := scaledVectorPartitionManifestV1(32 << 10)
+	ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 24}
+	if _, err := encodeVectorPartitionManifestWithContextV1(ctx, m); !errors.Is(err, context.Canceled) {
+		t.Fatalf("encode cancellation err=%v want context.Canceled", err)
+	}
+	if ctx.calls < ctx.cancelAfter {
+		t.Fatalf("context calls=%d want at least %d", ctx.calls, ctx.cancelAfter)
+	}
+}
+
 func BenchmarkVectorPartitionManifestV1Scale(b *testing.B) {
 	for _, rows := range []int{10_000, 100_000, 1_000_000} {
 		b.Run(fmt.Sprintf("rows=%d", rows), func(b *testing.B) {
