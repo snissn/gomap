@@ -19,6 +19,12 @@ type VectorPartitionLifecycleGroupBuilderV1 interface {
 // BeginBuildV1 records a source- and catalog-bound candidate before any group
 // assets can be accepted. Exact retry is handled by the catalog command digest.
 func (c VectorPartitionLifecycleCoordinatorV1) BeginBuildV1(ctx context.Context, identity VectorPartitionLifecycleIdentityV1, required []raftcluster.GroupID, previousGeneration, mutationEpoch uint64) (VectorPartitionLifecycleRecordV1, error) {
+	if r, ok := c.Authority.VectorPartitionLifecycleRecordV1(identity); ok && r.State != VectorPartitionLifecycleAbsentV1 {
+		if r.PreviousActiveGeneration == previousGeneration && r.MutationEpoch == mutationEpoch {
+			return r, nil
+		}
+		return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleConflict
+	}
 	return c.Submit(ctx, VectorPartitionLifecycleCommandV1{Kind: VectorPartitionLifecycleBeginBuildV1, ExpectedState: VectorPartitionLifecycleAbsentV1, Identity: identity, RequiredGroups: required, PreviousActiveGeneration: previousGeneration, MutationEpoch: mutationEpoch})
 }
 
@@ -26,6 +32,11 @@ func (c VectorPartitionLifecycleCoordinatorV1) RecordGroupReadyV1(ctx context.Co
 	record, ok := c.Authority.VectorPartitionLifecycleRecordV1(identity)
 	if !ok {
 		return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleGuard
+	}
+	for _, existing := range record.ReadyGroups {
+		if existing.GroupID == ready.GroupID && existing == ready {
+			return record, nil
+		}
 	}
 	return c.Submit(ctx, VectorPartitionLifecycleCommandV1{Kind: VectorPartitionLifecycleRecordGroupReadyV1, ExpectedRevision: record.Revision, ExpectedState: record.State, Identity: identity, GroupReady: ready})
 }
@@ -51,6 +62,9 @@ func (c VectorPartitionLifecycleCoordinatorV1) PrepareV1(ctx context.Context, id
 	if !ok {
 		return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleGuard
 	}
+	if r.State == VectorPartitionLifecyclePreparedV1 {
+		return r, nil
+	}
 	digest, err := VectorPartitionLifecycleReadySetDigestV1(r.Identity, r.RequiredGroups, r.ReadyGroups)
 	if err != nil {
 		return VectorPartitionLifecycleRecordV1{}, err
@@ -62,6 +76,9 @@ func (c VectorPartitionLifecycleCoordinatorV1) ActivateV1(ctx context.Context, i
 	r, ok := c.Authority.VectorPartitionLifecycleRecordV1(identity)
 	if !ok {
 		return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleGuard
+	}
+	if r.State == VectorPartitionLifecycleActiveV1 {
+		return r, nil
 	}
 	cmd := VectorPartitionLifecycleCommandV1{Kind: VectorPartitionLifecycleActivateV1, ExpectedRevision: r.Revision, ExpectedState: r.State, Identity: identity, PreviousActiveGeneration: r.PreviousActiveGeneration, MutationEpoch: r.MutationEpoch}
 	for _, status := range c.Authority.VectorPartitionLifecycleStatusesV1() {
@@ -77,9 +94,32 @@ func (c VectorPartitionLifecycleCoordinatorV1) transitionV1(ctx context.Context,
 	if !ok {
 		return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleGuard
 	}
+	switch kind {
+	case VectorPartitionLifecycleAbortBuildV1:
+		if r.State == VectorPartitionLifecycleRetiredV1 && r.Aborted {
+			return r, nil
+		}
+	case VectorPartitionLifecycleRetireV1:
+		if r.State == VectorPartitionLifecycleRetiredV1 {
+			return r, nil
+		}
+	case VectorPartitionLifecycleMarkCleanableV1:
+		if r.State == VectorPartitionLifecycleCleanableV1 {
+			return r, nil
+		}
+	case VectorPartitionLifecycleRecordGroupCleanupV1:
+		// handled below after the requested group is known.
+	case VectorPartitionLifecycleCompleteCleanupV1:
+		if r.State == VectorPartitionLifecycleAbsentV1 {
+			return r, nil
+		}
+	}
 	cmd := VectorPartitionLifecycleCommandV1{Kind: kind, ExpectedRevision: r.Revision, ExpectedState: r.State, Identity: identity}
 	if mutate != nil {
 		mutate(&cmd)
+	}
+	if kind == VectorPartitionLifecycleRecordGroupCleanupV1 && containsVectorPartitionLifecycleGroupV1(r.CleanedGroups, cmd.GroupID) {
+		return r, nil
 	}
 	return c.Submit(ctx, cmd)
 }
