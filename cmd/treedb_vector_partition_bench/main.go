@@ -42,6 +42,7 @@ const (
 	maxGitHubEventBytes            int64 = 2 << 20
 	partitionHNSWIndex                   = "embedding_graph"
 	partitionHNSWDegree                  = 16
+	maxSourceHNSWDegree                  = partitionHNSWDegree
 	fixtureGenerator                     = "treedb_vector_partition_fixture_v2"
 	fixtureArithmetic                    = "ieee754_binary64_explicit_fma_v1"
 	documentIDStorageBytes               = 16
@@ -81,6 +82,7 @@ type config struct {
 	coordinator      *m6CoordinatorHarnessV1
 	routerConfig     vectorpartition.RouterConfigV1
 	routerCandidates int
+	sourceHNSWDegree int
 }
 
 type partitionRun struct {
@@ -224,6 +226,7 @@ type metricsV1 struct {
 	ReplicationFactor       float64 `json:"replication_factor"`
 	UnassignedOverlapBudget float64 `json:"unassigned_overlap_budget"`
 	RepresentativeCount     int     `json:"representative_count"`
+	SourceHNSWDegree        int     `json:"source_hnsw_degree"`
 	RouterBytes             int64   `json:"router_bytes"`
 	RoutingLatencyNanos     int64   `json:"routing_latency_nanos"`
 	RoutedPartitionRecall   float64 `json:"routed_partition_recall"`
@@ -290,17 +293,18 @@ type runResult struct {
 }
 
 type treeDBRepresentativeRouter struct {
-	dir        string
-	db         *backenddb.DB
-	collection *collections.Collection
-	router     *collections.VectorPartitionRouterV1
-	build      collections.VectorPartitionRouterBuildStatusV1
-	open       collections.VectorPartitionRouterOpenStatusV1
-	candidates int
-	buildCPU   int64
-	buildCPUOK bool
-	peakRSS    int64
-	peakRSSOK  bool
+	dir              string
+	db               *backenddb.DB
+	collection       *collections.Collection
+	router           *collections.VectorPartitionRouterV1
+	build            collections.VectorPartitionRouterBuildStatusV1
+	open             collections.VectorPartitionRouterOpenStatusV1
+	candidates       int
+	sourceHNSWDegree int
+	buildCPU         int64
+	buildCPUOK       bool
+	peakRSS          int64
+	peakRSSOK        bool
 }
 
 type routerSearchEvidence struct {
@@ -494,7 +498,7 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 	}
 	if cfg.stage == "router" || cfg.stage == m6CoordinatorStageV1 {
 		buildCPUStart, buildCPUAvailable := vectorPartitionBenchmarkCPUNanos()
-		cfg.router, err = newTreeDBRepresentativeRouter(vectors, cfg.partitions, cfg.routerConfig, cfg.routerCandidates)
+		cfg.router, err = newTreeDBRepresentativeRouter(vectors, cfg.partitions, cfg.routerConfig, cfg.routerCandidates, cfg.sourceHNSWDegree)
 		if err != nil {
 			return fmt.Errorf("build TreeDB representative router stage: %w", err)
 		}
@@ -546,7 +550,7 @@ func parseConfig(args []string) (config, error) {
 	cfg := config{
 		format: "json", topK: 10, recallTarget: .9, seed: 1, stage: "simulation",
 		partition: vectorpartition.DefaultConfig(), routerConfig: vectorpartition.DefaultRouterConfigV1(),
-		routerCandidates: 1024,
+		routerCandidates: 1024, sourceHNSWDegree: partitionHNSWDegree,
 	}
 	var probes, overlap string
 	var stages string
@@ -574,6 +578,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.routerConfig.MaxIterations, "router-max-iterations", cfg.routerConfig.MaxIterations, "router Lloyd iteration bound")
 	fs.Uint64Var(&cfg.routerConfig.MaxRouterBytes, "router-max-bytes", cfg.routerConfig.MaxRouterBytes, "hard conservative persisted router-pack byte cap")
 	fs.IntVar(&cfg.routerCandidates, "router-candidates", cfg.routerCandidates, "explicit approximate representative candidate budget")
+	fs.IntVar(&cfg.sourceHNSWDegree, "source-hnsw-degree", cfg.sourceHNSWDegree, "source column_graph HNSW degree (1..16; default 16)")
 	fs.StringVar(&stages, "stages", "all", "comma-separated independently enabled loss stages, or all")
 	fs.IntVar(&cfg.maxVectors, "max-vectors", maxVectors, "maximum combined fixture vector/query count before allocation")
 	fs.Int64Var(&cfg.maxBytes, "max-fixture-bytes", maxFixtureBytes, "maximum modeled peak bytes for benchmark-owned fixture and working material")
@@ -595,6 +600,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.dataset == "" || cfg.out == "" || cfg.partitions < 1 || cfg.partitions > maxPartitions || cfg.topK < 1 || cfg.maxVectors < 1 || cfg.maxVectors > maxVectors || cfg.maxBytes < 8 || cfg.maxBytes > maxFixtureBytes || cfg.format != "json" && cfg.format != "text" || cfg.stage != "simulation" && cfg.stage != "partition" && cfg.stage != "overlap,partition_index" && cfg.stage != "router" && cfg.stage != m6CoordinatorStageV1 || cfg.routerCandidates < 1 {
 		return config{}, errors.New("dataset, out, positive bounded partitions/top-k, and json|text format are required")
+	}
+	if err := validateSourceHNSWDegree(cfg.sourceHNSWDegree); err != nil {
+		return config{}, err
 	}
 	if len(cfg.probes) == 0 || len(cfg.overlaps) == 0 || math.IsNaN(cfg.recallTarget) || math.IsInf(cfg.recallTarget, 0) || cfg.recallTarget < 0 || cfg.recallTarget > 1 {
 		return config{}, errors.New("probes/overlap must be non-empty and recall target must be in [0,1]")
@@ -1524,9 +1532,19 @@ func representativePartitions(v [][]float64, q []float64, partitions, probes int
 }
 func parsePartitionID(id string) int { n, _ := strconv.Atoi(strings.TrimPrefix(id, "p-")); return n }
 
-func newTreeDBRepresentativeRouter(vectors [][]float64, partitions int, routerConfig vectorpartition.RouterConfigV1, candidateBudget int) (_ *treeDBRepresentativeRouter, err error) {
+func validateSourceHNSWDegree(degree int) error {
+	if degree < 1 || degree > maxSourceHNSWDegree {
+		return fmt.Errorf("-source-hnsw-degree must be in [1,%d]", maxSourceHNSWDegree)
+	}
+	return nil
+}
+
+func newTreeDBRepresentativeRouter(vectors [][]float64, partitions int, routerConfig vectorpartition.RouterConfigV1, candidateBudget, sourceHNSWDegree int) (_ *treeDBRepresentativeRouter, err error) {
 	if len(vectors) == 0 || partitions < 1 || partitions > len(vectors) || candidateBudget < 1 {
 		return nil, errors.New("invalid vector/partition/candidate count for TreeDB router stage")
+	}
+	if err := validateSourceHNSWDegree(sourceHNSWDegree); err != nil {
+		return nil, err
 	}
 	dimensions := len(vectors[0])
 	if dimensions < 1 {
@@ -1536,7 +1554,7 @@ func newTreeDBRepresentativeRouter(vectors [][]float64, partitions int, routerCo
 	if err != nil {
 		return nil, err
 	}
-	h := &treeDBRepresentativeRouter{dir: dir}
+	h := &treeDBRepresentativeRouter{dir: dir, sourceHNSWDegree: sourceHNSWDegree}
 	defer func() {
 		if err != nil {
 			_ = h.Close()
@@ -1551,7 +1569,7 @@ func newTreeDBRepresentativeRouter(vectors [][]float64, partitions int, routerCo
 	if err != nil {
 		return nil, err
 	}
-	meta := partitionCollectionMeta("router_source", dimensions)
+	meta := partitionCollectionMetaWithDegree("router_source", dimensions, sourceHNSWDegree)
 	meta.Options.ColumnStore.AssetManager = &collections.ColumnAssetManagerConfig{
 		Kind: collections.ColumnAssetManagerValueLogShaped, IsolatedNamespace: true,
 		Namespace: "router_bench_assets",
@@ -1812,6 +1830,10 @@ func partitionCollectionName(partition int) string {
 }
 
 func partitionCollectionMeta(name string, dims int) *collections.CollectionMeta {
+	return partitionCollectionMetaWithDegree(name, dims, partitionHNSWDegree)
+}
+
+func partitionCollectionMetaWithDegree(name string, dims, degree int) *collections.CollectionMeta {
 	return &collections.CollectionMeta{
 		Name: name,
 		Options: collections.CollectionOptions{
@@ -1831,7 +1853,7 @@ func partitionCollectionMeta(name string, dims int) *collections.CollectionMeta 
 			Field:          "embedding",
 			Metric:         collections.VectorMetricCosine,
 			Dimensions:     dims,
-			M:              partitionHNSWDegree,
+			M:              degree,
 			EfConstruction: 128,
 			EfSearch:       128,
 			Encoding:       collections.VectorIndexEncodingFloat32,
@@ -2217,6 +2239,7 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 		metrics.FinalBytes = int64(cfg.router.build.RouterBytes)
 		metrics.BytesPerVector = float64(cfg.router.build.RouterBytes) / float64(len(v))
 		metrics.RepresentativeCount = int(cfg.router.open.Representatives)
+		metrics.SourceHNSWDegree = cfg.router.sourceHNSWDegree
 		metrics.LloydIterations = int(cfg.router.build.LloydIterations)
 		metrics.EmptyRepairs = int(cfg.router.build.EmptyRepairs)
 		metrics.MinRepresentatives = int(cfg.router.build.MinRepresentativesPerPartition)
@@ -2363,6 +2386,8 @@ func validateResult(r runResult) error {
 	}
 	if r.ResultKind == "router_local_path_evidence" || r.ResultKind == m6CoordinatorResultKindV1 {
 		if r.Metrics.BuildWallNanos <= 0 ||
+			r.Metrics.SourceHNSWDegree < 1 ||
+			r.Metrics.SourceHNSWDegree > maxSourceHNSWDegree ||
 			r.Metrics.RepresentativeCount < r.Partitions ||
 			r.Metrics.MinRepresentatives < 1 ||
 			r.Metrics.MaxRepresentatives < r.Metrics.MinRepresentatives ||

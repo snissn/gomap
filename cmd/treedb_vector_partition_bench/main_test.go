@@ -170,7 +170,7 @@ func TestM6PreflightAllowsBoundedMillionVectorEvidenceV1(t *testing.T) {
 		Arithmetic:    fixtureArithmetic,
 		Vectors:       1_000_000,
 		Queries:       32,
-		Dimensions:    64,
+		Dimensions:    16,
 		Metric:        "cosine",
 		Seed:          1,
 		Checksum:      strings.Repeat("0", 64),
@@ -181,8 +181,9 @@ func TestM6PreflightAllowsBoundedMillionVectorEvidenceV1(t *testing.T) {
 	cfg := config{
 		stage: m6CoordinatorStageV1, partitions: 16, topK: 10,
 		probes: []int{16}, overlaps: []float64{0},
-		stages:       stageSet(m6CoordinatorAttributionStageV1),
-		routerConfig: vectorpartition.DefaultRouterConfigV1(),
+		stages:           stageSet(m6CoordinatorAttributionStageV1),
+		routerConfig:     vectorpartition.DefaultRouterConfigV1(),
+		sourceHNSWDegree: 4,
 	}
 	work, err := validateBenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits)
 	if err != nil {
@@ -294,6 +295,7 @@ func TestRouterStageUsesPersistedExactAndNativeHNSWPaths(t *testing.T) {
 	if result.ResultKind != "router_local_path_evidence" ||
 		result.ProductionEvidence ||
 		result.Metrics.MeasurementStatus != "router_local_production_path_no_raft" ||
+		result.Metrics.SourceHNSWDegree != partitionHNSWDegree ||
 		result.Metrics.RepresentativeCount != 8 ||
 		result.Metrics.MinRepresentatives != 2 ||
 		result.Metrics.MaxRepresentatives != 2 ||
@@ -398,6 +400,7 @@ func TestM6CoordinatorStageUsesRealM4M6AndLabelsLocalSimulation(t *testing.T) {
 		"-probes", "4",
 		"-top-k", "10",
 		"-stage", m6CoordinatorStageV1,
+		"-source-hnsw-degree", "4",
 		"-router-representatives", "2",
 		"-router-leaf-size", "1",
 	}
@@ -419,6 +422,7 @@ func TestM6CoordinatorStageUsesRealM4M6AndLabelsLocalSimulation(t *testing.T) {
 		evidence.EvidenceKind != m6CoordinatorEvidenceKindV1 ||
 		evidence.Transport != "in_process_transport_neutral_m5_contract_simulation" ||
 		evidence.ReadProof != "synthetic_local_proof_not_measured" ||
+		evidence.SourceHNSWDegree != 4 ||
 		evidence.Queries != 4 || evidence.Probes != 4 ||
 		evidence.Counters.SelectedPartitions != 16 ||
 		evidence.Counters.SelectedGroups != 16 ||
@@ -426,6 +430,7 @@ func TestM6CoordinatorStageUsesRealM4M6AndLabelsLocalSimulation(t *testing.T) {
 		evidence.Counters.RPCs != 16 ||
 		evidence.Counters.Candidates != 128 ||
 		result.Metrics.MeasurementStatus != m6CoordinatorMeasurementV1 ||
+		result.Metrics.SourceHNSWDegree != 4 ||
 		result.Metrics.ShardP50Nanos <= 0 ||
 		result.Metrics.P50Nanos <= 0 {
 		t.Fatalf("M6 result=%+v evidence=%+v", result, evidence)
@@ -998,6 +1003,36 @@ func TestMalformedCapAndFiniteInputsRejectBeforeSimulation(t *testing.T) {
 	bad.Checksum = "bad"
 	if err := validateFixture(bad); err == nil {
 		t.Fatal("accepted malformed checksum")
+	}
+}
+
+func TestSourceHNSWDegreeIsExplicitlyBoundedWithLegacyDefaultV1(t *testing.T) {
+	base := []string{
+		"-dataset", fixturePath(t),
+		"-out", t.TempDir(),
+		"-partitions", "4",
+		"-probes", "1",
+		"-stage", "router",
+	}
+	cfg, err := parseConfig(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.sourceHNSWDegree != partitionHNSWDegree {
+		t.Fatalf("default source HNSW degree=%d want %d", cfg.sourceHNSWDegree, partitionHNSWDegree)
+	}
+	selected, err := parseConfig(append(append([]string(nil), base...), "-source-hnsw-degree", "4"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.sourceHNSWDegree != 4 {
+		t.Fatalf("selected source HNSW degree=%d want 4", selected.sourceHNSWDegree)
+	}
+	for _, degree := range []string{"0", strconv.Itoa(maxSourceHNSWDegree + 1)} {
+		args := append(append([]string(nil), base...), "-source-hnsw-degree", degree)
+		if _, err := parseConfig(args); err == nil {
+			t.Fatalf("accepted out-of-bounds source HNSW degree %s", degree)
+		}
 	}
 }
 

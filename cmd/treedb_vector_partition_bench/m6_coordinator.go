@@ -66,6 +66,7 @@ type m6CoordinatorEvidenceV1 struct {
 	Queries            int  `json:"queries"`
 	Probes             int  `json:"probes"`
 	ShardSamples       int  `json:"shard_samples"`
+	SourceHNSWDegree   int  `json:"source_hnsw_degree"`
 	ExactParityChecked bool `json:"exact_all_partition_parity_checked"`
 	ExactParityPassed  bool `json:"exact_all_partition_parity_passed"`
 
@@ -447,6 +448,7 @@ func (a m6EvidenceAccumulatorV1) evidence(cfg config, queries int, probes int, p
 		Network:     "in_process_no_production_network",
 		Consistency: string(nativewire.VectorPartitionShardSearchConsistencySnapshotV1),
 		Queries:     queries, Probes: probes, ShardSamples: len(a.shardSearch),
+		SourceHNSWDegree:   cfg.router.sourceHNSWDegree,
 		ExactParityChecked: parityChecked, ExactParityPassed: parityPassed,
 		RecallAtK: a.recallK / n, RecallAt1: a.recall1 / n,
 		RecallAt10: a.recall10 / n, RecallAt100: a.recall100 / n,
@@ -573,6 +575,7 @@ func simulateM6CoordinatorV1(cfg config, m fixtureManifest, vectors, queries [][
 		BytesPerVector: float64(cfg.router.build.RouterBytes) / float64(len(vectors)),
 		Balance:        1, MaxPartitionSize: (len(vectors) + cfg.partitions - 1) / cfg.partitions,
 		ReplicationFactor: 1, RepresentativeCount: int(cfg.router.open.Representatives),
+		SourceHNSWDegree:   cfg.router.sourceHNSWDegree,
 		LloydIterations:    int(cfg.router.build.LloydIterations),
 		EmptyRepairs:       int(cfg.router.build.EmptyRepairs),
 		MinRepresentatives: int(cfg.router.build.MinRepresentativesPerPartition),
@@ -694,6 +697,9 @@ func validateM6CoordinatorEvidenceV1(r runResult) error {
 		evidence.Consistency != string(nativewire.VectorPartitionShardSearchConsistencySnapshotV1) ||
 		evidence.Queries != r.Samples || evidence.Queries < 1 ||
 		evidence.Probes != r.Probes || evidence.Probes < 1 ||
+		evidence.SourceHNSWDegree < 1 ||
+		evidence.SourceHNSWDegree > maxSourceHNSWDegree ||
+		evidence.SourceHNSWDegree != r.Metrics.SourceHNSWDegree ||
 		evidence.ShardSamples != evidence.Queries*evidence.Probes {
 		return errors.New("invalid M6 local-service evidence identity or labeling")
 	}
