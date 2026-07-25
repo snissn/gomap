@@ -933,10 +933,6 @@ func (c *VectorPartitionCoordinatorV1) validateShardResponse(ctx context.Context
 		return ErrVectorPartitionCoordinatorMalformedResponse
 	}
 	var candidates, edges uint64
-	responseBytes, err := MeasureVectorPartitionShardSearchResponseBytesV1(response.Partials)
-	if err != nil {
-		return ErrVectorPartitionCoordinatorBudgetExceeded
-	}
 	for i, partial := range response.Partials {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -975,6 +971,10 @@ func (c *VectorPartitionCoordinatorV1) validateShardResponse(ctx context.Context
 				}
 			}
 		}
+	}
+	responseBytes, err := MeasureVectorPartitionShardSearchResponseBytesV1(response.Partials)
+	if err != nil {
+		return ErrVectorPartitionCoordinatorBudgetExceeded
 	}
 	candidateBytes, ok := mulUint64V1(response.Candidates, 64)
 	if !ok || candidateBytes > request.CandidateBytesLimit ||

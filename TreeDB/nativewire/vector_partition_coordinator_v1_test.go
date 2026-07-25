@@ -388,6 +388,13 @@ func TestVectorPartitionCoordinatorRejectsCorruptShardProofsAndPartialsV1(t *tes
 		{name: "unrequested_partition", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
 			response.Partials[0].PartitionID = 99
 		}},
+		{name: "oversized_neighbor_slice", edit: func(_ VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+			response.Partials[0].Neighbors = append(response.Partials[0].Neighbors,
+				VectorPartitionShardSearchNeighborV1{ID: "b", Score: .75},
+				VectorPartitionShardSearchNeighborV1{ID: "c", Score: .5},
+				VectorPartitionShardSearchNeighborV1{ID: "d", Score: .25},
+			)
+		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
