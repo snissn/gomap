@@ -29,6 +29,59 @@ func TestVectorPartitionRouterContextEntryPointsRejectCanceledWorkV1(t *testing.
 	}
 }
 
+func TestVectorPartitionRouterActiveLoadCancellationReleasesBarrierV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	database := openCollectionCommandWALDB(t, t.TempDir())
+	defer database.Close()
+
+	store, err := OpenVectorPartitionStoreV1(database.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := testVectorPartitionManifestV1()
+	if err := store.publishValidatedReady(ready); err != nil {
+		t.Fatal(err)
+	}
+	collection := &Collection{db: database, name: ready.Collection}
+	ctx, cancel := context.WithCancel(context.Background())
+	slotReads := 0
+	restore := setVectorPartitionLifecycleStoreHookForTestV1(func(boundary string) error {
+		if boundary == "after_slot_read" {
+			slotReads++
+			cancel()
+		}
+		return nil
+	})
+	router, status, err := collection.OpenVectorPartitionRouterWithContextV1(ctx, ready.IndexName)
+	restore()
+	if router != nil {
+		t.Fatal("canceled active-manifest load returned a router")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled active-manifest load err=%v status=%+v", err, status)
+	}
+	if slotReads != 1 {
+		t.Fatalf("lifecycle slot reads=%d want 1", slotReads)
+	}
+	if status.FailureReason != context.Canceled.Error() {
+		t.Fatalf("failure reason=%q", status.FailureReason)
+	}
+
+	barrierEntered := false
+	if err := WithVectorPartitionStorageBarrierWithContextV1(t.Context(), database.Dir(), func() error {
+		barrierEntered = true
+		return nil
+	}); err != nil {
+		t.Fatalf("reacquire storage barrier after cancellation: %v", err)
+	}
+	if !barrierEntered {
+		t.Fatal("storage barrier remained held after cancellation")
+	}
+	if pins := vectorPartitionReaderPinCountV1(database.Dir(), ready.Collection, ready.IndexName, ready.Generation); pins != 0 {
+		t.Fatalf("canceled active-manifest load retained %d reader pins", pins)
+	}
+}
+
 func TestVectorPartitionRouterPreparedOpenCancelsMidChecksumAndReleasesHandleV1(t *testing.T) {
 	raw := bytes.Repeat([]byte{0x5a}, 3<<20)
 	manager := mappedresource.NewManager()

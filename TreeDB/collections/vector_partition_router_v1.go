@@ -860,7 +860,7 @@ func (c *Collection) OpenVectorPartitionRouterWithContextV1(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		manifest, err := store.OpenActive(c.name, index)
+		manifest, err := store.OpenActiveWithContext(ctx, c.name, index)
 		if err != nil {
 			return err
 		}
