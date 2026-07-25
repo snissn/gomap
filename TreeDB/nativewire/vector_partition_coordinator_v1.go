@@ -1013,11 +1013,14 @@ func (c *VectorPartitionCoordinatorV1) validateShardResponse(ctx context.Context
 	if err != nil {
 		return ErrVectorPartitionCoordinatorBudgetExceeded
 	}
-	candidateBytes, ok := mulUint64V1(response.Candidates, 64)
-	if !ok || candidateBytes > request.CandidateBytesLimit ||
-		response.ResponseBytes != responseBytes || responseBytes > request.ResponseBytesLimit ||
+	if response.ResponseBytes != responseBytes ||
 		response.Candidates != candidates || response.Edges != edges {
 		return ErrVectorPartitionCoordinatorMalformedResponse
+	}
+	candidateBytes, ok := mulUint64V1(response.Candidates, 64)
+	if !ok || candidateBytes > request.CandidateBytesLimit ||
+		responseBytes > request.ResponseBytesLimit {
+		return ErrVectorPartitionCoordinatorBudgetExceeded
 	}
 	return nil
 }

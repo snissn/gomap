@@ -474,6 +474,54 @@ func TestVectorPartitionCoordinatorAcceptsCommandFreeCurrentTermGapV1(t *testing
 	}
 }
 
+func TestVectorPartitionCoordinatorClassifiesConsistentShardBudgetOverflowV1(t *testing.T) {
+	coordinator, _, dispatcher := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "a", Score: 1}}},
+		VectorPartitionCoordinatorLimitsV1{},
+	)
+	dispatcher.editResponse = func(request VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) {
+		candidates := request.CandidateBytesLimit/64 + 1
+		response.Partials[0].Candidates = candidates
+		response.Candidates = candidates
+	}
+
+	response, err := coordinator.Search(context.Background(), testVectorPartitionCoordinatorRequestV1(1))
+	if !errors.Is(err, ErrVectorPartitionCoordinatorBudgetExceeded) ||
+		errors.Is(err, ErrVectorPartitionCoordinatorMalformedResponse) ||
+		!vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
+		t.Fatalf("response=%+v err=%v", response, err)
+	}
+	var serviceErr *VectorPartitionCoordinatorErrorV1
+	if !errors.As(err, &serviceErr) || serviceErr.Code != VectorPartitionCoordinatorErrorBudgetExceededV1 {
+		t.Fatalf("classified error=%+v", serviceErr)
+	}
+
+	dispatcher.editResponse = nil
+	shardRequest := dispatcher.calls[0]
+	shardResponse, err := dispatcher.DispatchVectorPartitionShardSearchV1(context.Background(), shardRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shardRequest.ResponseBytesLimit = shardResponse.ResponseBytes - 1
+	task := vectorPartitionCoordinatorTaskV1{
+		group:        coordinator.groups[shardRequest.TargetGroupID],
+		partitionIDs: slices.Clone(shardRequest.PartitionIDs),
+	}
+	err = coordinator.wrapError(
+		coordinator.validateShardResponse(context.Background(), task, shardRequest, shardResponse),
+		shardRequest.TargetGroupID,
+	)
+	serviceErr = nil
+	if !errors.Is(err, ErrVectorPartitionCoordinatorBudgetExceeded) ||
+		errors.Is(err, ErrVectorPartitionCoordinatorMalformedResponse) ||
+		!errors.As(err, &serviceErr) ||
+		serviceErr.Code != VectorPartitionCoordinatorErrorBudgetExceededV1 {
+		t.Fatalf("response-byte classified error=%+v", err)
+	}
+}
+
 func TestVectorPartitionCoordinatorNotLeaderRedirectIsBoundedV1(t *testing.T) {
 	coordinator, _, dispatcher := testVectorPartitionCoordinatorV1(t,
 		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-b", "node-a"}}},
