@@ -86,6 +86,54 @@ func TestVectorPartitionLocalSearcherV1ExactTopKPreservesCutoffTieOrder(t *testi
 	}
 }
 
+func TestVectorPartitionLocalSearcherV1HNSWCanonicalizesFP32TieOrder(t *testing.T) {
+	input := testColumnHNSWSearchPackInput2312()
+	input.NormalizedVectors = []float32{
+		1, 0, 0, 0,
+		1, 0, 0, 0,
+		0, 1, 0, 0,
+	}
+	input.DocumentIDOffsets = []uint64{0, 1, 2, 3}
+	input.DocumentIDBytes = []byte("zac")
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, handle := testColumnHNSWSearchPackPreparedViewFromBytes2314(
+		t, raw, mappedresource.SourceHeapCopy, input.BaseIdentity,
+	)
+	searcher := &VectorPartitionLocalSearcherV1{
+		asset:            VectorPartitionSearchAssetV1{Generation: 11, PartitionID: 2, Dimensions: 3},
+		prepared:         view,
+		opened:           1,
+		homeMemberships:  input.Rows,
+		packBytes:        uint64(len(raw)),
+		heapBytes:        uint64(len(raw)),
+		searchRoute:      VectorPartitionSearchRouteHNSWSearchPackV1,
+		maxStableIDBytes: 1,
+	}
+
+	results, metrics, err := searcher.SearchWithOptionsV1(
+		context.Background(), []float32{1, 0, 0}, VectorPartitionSearchOptionsV1{TopK: 2, EfSearch: 3},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 || results[0].ID != "a" || results[1].ID != "z" ||
+		results[0].Score != results[1].Score {
+		t.Fatalf("HNSW tie results=%+v want a,z in public FP32/stable-ID order", results)
+	}
+	if metrics.Route != VectorPartitionSearchRouteHNSWSearchPackV1 {
+		t.Fatalf("metrics=%+v", metrics)
+	}
+	if err := searcher.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !handle.Released() {
+		t.Fatal("HNSW tie search retained prepared resource")
+	}
+}
+
 func TestVectorPartitionLocalSearcherV1ScratchBoundIncludesRowSizedHNSWState(t *testing.T) {
 	searcher := &VectorPartitionLocalSearcherV1{
 		asset: VectorPartitionSearchAssetV1{Generation: 1, PartitionID: 2, Dimensions: 128},

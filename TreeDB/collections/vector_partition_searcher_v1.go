@@ -626,9 +626,33 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context
 			s.recordFailure()
 			return nil, VectorPartitionSearchMetricsV1{}, err
 		}
-		out := make([]VectorPartitionSearchResultV1, len(results))
+		// Native HNSW ranks its float64 scores by row ordinal. The wire contract
+		// exposes float32 scores with stable-ID tie order, so two distinct native
+		// scores may collapse into a public tie. Rebuild the bounded result heap
+		// after conversion and drain it canonically before M5 publishes it.
+		top := make(vectorPartitionSearchResultMaxHeapV1, 0, len(results))
 		for i, r := range results {
-			out[i] = VectorPartitionSearchResultV1{ID: string(r.ID), Score: float32(r.Score)}
+			if i&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					s.recordFailure()
+					return nil, VectorPartitionSearchMetricsV1{}, err
+				}
+			}
+			top.pushBounded(len(results), VectorPartitionSearchResultV1{ID: string(r.ID), Score: float32(r.Score)})
+		}
+		out := []VectorPartitionSearchResultV1(top)
+		for completed, target := 0, len(out)-1; target >= 0; completed, target = completed+1, target-1 {
+			if completed&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					s.recordFailure()
+					return nil, VectorPartitionSearchMetricsV1{}, err
+				}
+			}
+			out[target] = top.popWorst()
+		}
+		if err := ctx.Err(); err != nil {
+			s.recordFailure()
+			return nil, VectorPartitionSearchMetricsV1{}, err
 		}
 		metrics := VectorPartitionSearchMetricsV1{Candidates: stats.Candidates, Edges: stats.Edges, Route: VectorPartitionSearchRouteHNSWSearchPackV1}
 		s.mu.Lock()
