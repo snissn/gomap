@@ -105,16 +105,19 @@ func AdmitVectorPartitionMutationV1(ctx context.Context, submitter ClusterSubmit
 	if submitter == nil {
 		return protocolError(iwire.ErrInvalidCommand, "nativewire cluster submitter is not configured")
 	}
+	if required, ok := submitter.(VectorPartitionMutationAdmissionRequiredV1); ok {
+		enabled, err := required.RequiresVectorPartitionMutationAdmissionV1(ctx)
+		if err != nil {
+			return err
+		}
+		if !enabled {
+			return nil
+		}
+	}
 	admitter, ok := submitter.(VectorPartitionMutationAdmissionProviderV1)
 	if !ok {
-		if required, ok := submitter.(VectorPartitionMutationAdmissionRequiredV1); ok {
-			enabled, err := required.RequiresVectorPartitionMutationAdmissionV1(ctx)
-			if err != nil {
-				return err
-			}
-			if enabled {
-				return protocolError(iwire.ErrReadOnly, "vector partition lifecycle admission is required but not configured")
-			}
+		if _, required := submitter.(VectorPartitionMutationAdmissionRequiredV1); required {
+			return protocolError(iwire.ErrReadOnly, "vector partition lifecycle admission is required but not configured")
 		}
 		return nil
 	}

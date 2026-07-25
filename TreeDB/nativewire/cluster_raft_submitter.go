@@ -16,8 +16,33 @@ import (
 // RaftClusterSubmitter adapts the internal single-group raftcluster bridge to
 // the public nativewire ClusterSubmitter contract.
 type RaftClusterSubmitter struct {
-	Bridge      raftcluster.CommandSubmitterV1
-	Collections *collections.CollectionManager
+	Bridge                   raftcluster.CommandSubmitterV1
+	Collections              *collections.CollectionManager
+	VectorPartitionAdmission VectorPartitionMutationAdmissionProviderV1
+}
+
+// NewRaftClusterSubmitterWithVectorPartitionAdmissionV1 is the production M7
+// construction path. The supplied admission provider performs deterministic
+// schema classification and calls the replicated lifecycle coordinator before
+// this concrete shared submitter can encode a Raft command entry.
+func NewRaftClusterSubmitterWithVectorPartitionAdmissionV1(bridge raftcluster.CommandSubmitterV1, admission VectorPartitionMutationAdmissionProviderV1, managers ...*collections.CollectionManager) (*RaftClusterSubmitter, error) {
+	if admission == nil {
+		return nil, errors.New("nativewire: vector partition admission provider is required")
+	}
+	submitter := NewRaftClusterSubmitter(bridge, managers...)
+	submitter.VectorPartitionAdmission = admission
+	return submitter, nil
+}
+
+func (s *RaftClusterSubmitter) RequiresVectorPartitionMutationAdmissionV1(context.Context) (bool, error) {
+	return s != nil && s.VectorPartitionAdmission != nil, nil
+}
+
+func (s *RaftClusterSubmitter) AdmitVectorPartitionMutationV1(ctx context.Context, command iwire.CommandID, sections []iwire.Section) error {
+	if s == nil || s.VectorPartitionAdmission == nil {
+		return protocolError(iwire.ErrReadOnly, "vector partition lifecycle admission is not configured")
+	}
+	return s.VectorPartitionAdmission.AdmitVectorPartitionMutationV1(ctx, command, sections)
 }
 
 // RoutedRaftClusterSubmitter composes the concrete single-group Raft bridge
