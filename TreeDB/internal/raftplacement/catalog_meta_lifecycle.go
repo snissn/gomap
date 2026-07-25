@@ -158,6 +158,19 @@ func (a *CatalogMetaAuthorityV1) applyCommittedVectorPartitionLifecycleV1(raw []
 	if current.LastCommandDigest == commandDigest {
 		return a.statusLocked(), nil
 	}
+	// A pending fence is the durable recovery debt for a data mutation whose
+	// outcome has not yet been confirmed.  Lifecycle cleanup must not discard
+	// its invalidated source record: confirmation needs that exact record and
+	// proof, including after snapshot/rejoin.  Keep the pure per-record reducer
+	// generic; this cross-record safety rule belongs to catalog authority.
+	if fence.Pending && current.InvalidationEpoch != 0 {
+		switch command.Kind {
+		case VectorPartitionLifecycleRetireV1, VectorPartitionLifecycleMarkCleanableV1,
+			VectorPartitionLifecycleRecordGroupCleanupV1, VectorPartitionLifecycleCompleteCleanupV1:
+			return CatalogMetaStatusV1{}, errors.Join(ErrVectorPartitionLifecycleGuard,
+				fmt.Errorf("cleanup is blocked by pending mutation fence %d", fence.Epoch))
+		}
+	}
 	if command.Kind == VectorPartitionLifecycleActivateV1 {
 		if activeIdentity, ok := a.activeNames[servingKey]; ok && activeIdentity != identity &&
 			(command.PreviousActiveGeneration == 0 || activeIdentity.Index != identity.Index || activeIdentity.Generation != command.PreviousActiveGeneration) {

@@ -152,6 +152,32 @@ it MUST NOT mix generations or return partial top-k. A Raft read-index only
 proves the group applied point; it does not make an older snapshot-built
 generation fresh.
 
+### M7 replicated mutation fence
+
+The catalog authority records a bounded, canonical mutation fence per
+`(database, catalog, collection, index_name)`. Invalidating an active
+generation advances that fence and marks it **pending** before the relevant
+data command is admitted. While pending, lifecycle build and activation both
+fail closed, including a candidate whose claimed source epoch equals the
+fence. The shared nativewire and Mongo submitters confirm the fence only after
+their data-Raft bridge returns a committed, locally recoverable result.
+
+A failed, ambiguous, or crashed data submit intentionally leaves the fence
+pending: serving remains unavailable until recovery proves the data outcome and
+commits the exact confirmation, or a separately authorized repair disposition
+is made. A second relevant mutation cannot reuse a pending proof. Relevant
+mutations are also refused while any generation for that collection/index is
+building, staged, or prepared, so source capture is never concurrent with a
+data mutation.
+
+Fence state is included in the canonical catalog snapshot and is exposed to
+operators with its collection, index name, epoch, and pending bit. Retire and
+cleanup of an invalidated generation are blocked while its fence is pending;
+this preserves the exact record required for confirmation. Thus crash,
+failover, replay, snapshot/rejoin, backup restore, and cleanup all preserve
+the same fail-closed recovery debt. The retained source watermark remains after
+confirmed cleanup, preventing an older delayed candidate from resurrecting.
+
 V1 distributed responses contain response-owned stable IDs and scores only.
 Missing owner, stale generation, malformed/capped asset, unsupported
 consistency, or shard failure is an explicit error with no incomplete result.

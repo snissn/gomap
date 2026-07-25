@@ -268,6 +268,14 @@ func TestCatalogMetaLifecycleMutationFenceRejectsRacingCandidateAfterRestoreV1(t
 	if err := restored.installCatalogMetaSnapshotBytesV1(snapshot); err != nil {
 		t.Fatalf("restore fenced snapshot: %v", err)
 	}
+	fences := restored.VectorPartitionLifecycleMutationFencesV1()
+	if len(fences) != 1 || !fences[0].Pending || fences[0].Epoch != 10 || fences[0].Collection != activeIdentity.Index.Collection || fences[0].IndexName != activeIdentity.Index.IndexName {
+		t.Fatalf("restored pending-fence operator state=%+v", fences)
+	}
+	retireWhilePending := catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleRetireV1, nil)
+	if _, err := restored.applyCommittedCatalogMetaV1(mustEncodeCatalogMetaLifecycleCommandV1(t, retireWhilePending), applied+1); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("cleanup during pending mutation err=%v", err)
+	}
 	activate := catalogMetaLifecycleTestCommandV1(stale, VectorPartitionLifecycleActivateV1, func(c *VectorPartitionLifecycleCommandV1) {
 		c.PreviousActiveGeneration, c.PreviousActiveRevision, c.MutationEpoch = activeIdentity.Generation, active.Revision, 9
 	})
@@ -365,6 +373,9 @@ func TestCatalogMetaLifecycleGuardsCatalogTransitionUntilCleanup(t *testing.T) {
 	record = catalogMetaLifecycleApplyV1(t, authority, &applied, catalogMetaLifecycleTestCommandV1(record, VectorPartitionLifecycleInvalidateV1, func(command *VectorPartitionLifecycleCommandV1) {
 		command.Reason = "catalog transition"
 		command.InvalidationEpoch = 11
+	}))
+	record = catalogMetaLifecycleApplyV1(t, authority, &applied, catalogMetaLifecycleTestCommandV1(record, VectorPartitionLifecycleConfirmMutationV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.MutationEpoch = 11
 	}))
 	record = catalogMetaLifecycleApplyV1(t, authority, &applied, catalogMetaLifecycleTestCommandV1(record, VectorPartitionLifecycleRetireV1, nil))
 	record = catalogMetaLifecycleApplyV1(t, authority, &applied, catalogMetaLifecycleTestCommandV1(record, VectorPartitionLifecycleMarkCleanableV1, nil))
