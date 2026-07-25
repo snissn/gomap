@@ -1053,6 +1053,9 @@ func TestColumnGraphScalarU8QuantizedScoreOrdinalsUsesScalarU8BatchKernel2260(t 
 	if err != nil {
 		t.Fatalf("warm scoreOrdinals: %v", err)
 	}
+	if collectionsRaceEnabled {
+		t.Skip("exact allocation counts are unstable under race instrumentation")
+	}
 	var allocStats columnVectorGraphNativeSearchStats
 	allocs := testing.AllocsPerRun(1000, func() {
 		allocStats = columnVectorGraphNativeSearchStats{}
