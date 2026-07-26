@@ -120,6 +120,9 @@ func newM8ProductionMultiGroupAssetsV1(vectors [][]float64, groups []string, par
 		return nil, err
 	}
 	h.status = h.router.Status()
+	// Router publication returns the only canonical ready manifest: it includes
+	// the shared router asset and ready-set identity in addition to local packs.
+	h.manifest = h.status.Manifest
 	if h.status.Manifest.State != "ready" || h.status.Manifest.Generation != generation {
 		return nil, fmt.Errorf("M8 router status=%+v", h.status)
 	}
@@ -159,6 +162,9 @@ func m8GroupAssetSetDigestV1(group string, manifest collections.VectorPartitionM
 				fields = append(fields, fmt.Sprintf("%d/%s/%d/%s", asset.PartitionID, asset.ID, asset.Bytes, asset.Checksum))
 			}
 		}
+	}
+	if manifest.RouterAsset.ID != "" {
+		fields = append(fields, fmt.Sprintf("router/%s/%d/%s/%d/%d", manifest.RouterAsset.ID, manifest.RouterAsset.Bytes, manifest.RouterAsset.Checksum, manifest.RouterGeneration, manifest.Generation))
 	}
 	sort.Strings(fields)
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\n%s", group, fields)))
