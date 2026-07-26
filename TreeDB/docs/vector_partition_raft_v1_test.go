@@ -180,8 +180,10 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 			QuarterProbeRecall float64 `json:"quarter_probe_best_recall_at_10"`
 		} `json:"checked_in_10k"`
 		Retained1M struct {
-			Vectors int `json:"vectors"`
-			Groups  int `json:"raft_groups"`
+			Vectors                int `json:"vectors"`
+			Groups                 int `json:"raft_groups"`
+			MeasuredRows           int `json:"measured_rows"`
+			UnsupportedOverlapRows int `json:"unsupported_overlap_rows"`
 		} `json:"retained_1m"`
 		GateLedger struct {
 			ResourceBounds     string `json:"resource_bounds"`
@@ -196,6 +198,7 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 		evidence.CheckedIn10K.Vectors != 10_000 || evidence.CheckedIn10K.Queries != 128 ||
 		evidence.CheckedIn10K.QuarterProbeRecall != 0.24140625 ||
 		evidence.Retained1M.Vectors != 1_000_000 || evidence.Retained1M.Groups != 4 ||
+		evidence.Retained1M.MeasuredRows != 60 || evidence.Retained1M.UnsupportedOverlapRows != 1 ||
 		evidence.GateLedger.ResourceBounds != "measured_not_bounded" ||
 		!strings.Contains(evidence.GateLedger.ResourceBoundsNote, "no configured resource limit was compared") {
 		t.Fatalf("M8 evidence boundary changed: %+v", evidence)

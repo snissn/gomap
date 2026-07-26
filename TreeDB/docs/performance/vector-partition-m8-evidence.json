@@ -39,7 +39,7 @@
     "raft_nodes_per_group": 3,
     "leaders": ["node-a", "node-b", "node-c", "node-a"],
     "partitions": 16,
-    "measured_rows": 61,
+    "measured_rows": 60,
     "unsupported_overlap_rows": 1,
     "recall_at_10_min": 0,
     "recall_at_10_max": 0,
