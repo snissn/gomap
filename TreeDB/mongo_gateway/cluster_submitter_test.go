@@ -1585,7 +1585,7 @@ func TestCatalogMetaMongoAndSharedSubmitProofMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CurrentCatalogProof: %v", err)
 	}
-	provider, err := treenativewire.NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof)
+	provider, err := treenativewire.NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof, metaRaft)
 	if err != nil {
 		t.Fatalf("NewCatalogMetaClusterRouteProvider: %v", err)
 	}
@@ -1617,7 +1617,7 @@ func TestCatalogMetaMongoAndSharedSubmitProofMatrix(t *testing.T) {
 	}
 	staleProvider, err := treenativewire.NewCatalogMetaClusterRouteProvider(authority, func(context.Context) (raftplacement.CatalogProofV1, error) {
 		return proof, nil
-	})
+	}, metaRaft)
 	if err != nil {
 		t.Fatalf("NewCatalogMetaClusterRouteProvider stale: %v", err)
 	}
@@ -1668,8 +1668,8 @@ func TestMongoGroupRoutedDispatcherRejectsSingleTokenWriteWithoutOwnerBoundIndex
 }
 
 func BenchmarkCatalogMetaMongoMutationAdmission(b *testing.B) {
-	authority, _ := newMongoCatalogMetaAuthority(b)
-	provider, err := treenativewire.NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof)
+	authority, metaRaft := newMongoCatalogMetaAuthority(b)
+	provider, err := treenativewire.NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof, metaRaft)
 	if err != nil {
 		b.Fatalf("NewCatalogMetaClusterRouteProvider: %v", err)
 	}

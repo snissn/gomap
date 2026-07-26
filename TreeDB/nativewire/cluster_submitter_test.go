@@ -837,8 +837,8 @@ func TestLegacyRaftClusterSubmitterRequiresVectorAdmissionFromClusterFeatureV1(t
 }
 
 func TestCatalogRoutedLegacySubmitterRequiresVectorAdmissionFromCatalogFeatureV1(t *testing.T) {
-	authority, _ := newNativewireCatalogMetaAuthorityWithLifecycle(t, true)
-	provider, err := NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof)
+	authority, metaRaft := newNativewireCatalogMetaAuthorityWithLifecycle(t, true)
+	provider, err := NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof, metaRaft)
 	if err != nil {
 		t.Fatalf("NewCatalogMetaClusterRouteProvider: %v", err)
 	}
@@ -863,6 +863,37 @@ func TestCatalogRoutedLegacySubmitterRequiresVectorAdmissionFromCatalogFeatureV1
 	}
 	if calls := bridge.snapshotCalls(); len(calls) != 0 {
 		t.Fatalf("routed legacy constructor submitted %d entries before required lifecycle admission", len(calls))
+	}
+}
+
+func TestCatalogRoutedLegacySubmitterRejectsStaleFeatureViewV1(t *testing.T) {
+	authority, _ := newNativewireCatalogMetaAuthority(t)
+	status, ok := authority.Status()
+	if !ok {
+		t.Fatal("catalog authority status unavailable")
+	}
+	fence := &catalogMetaLinearizableAppliedIndexProviderTestV1{index: status.AppliedIndex + 1}
+	provider, err := NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof, fence)
+	if err != nil {
+		t.Fatalf("NewCatalogMetaClusterRouteProvider: %v", err)
+	}
+	bridge := &recordingRaftCommandSubmitter{groupID: "group-a"}
+	submitter := NewRoutedRaftClusterSubmitter(bridge, provider)
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")}, [][]byte{[]byte(`{"embedding":[1,2]}`)}, AckVisible); err == nil {
+		t.Fatal("InsertBatch succeeded while local catalog feature view lagged the linearizable meta-Raft index")
+	}
+	if fence.calls != 1 {
+		t.Fatalf("linearizable fence calls=%d want 1", fence.calls)
+	}
+	if calls := bridge.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("stale catalog feature view submitted %d entries before lifecycle admission", len(calls))
 	}
 }
 
@@ -3035,7 +3066,7 @@ func TestCatalogMetaNativewireMutationAndReadProofMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CurrentCatalogProof: %v", err)
 	}
-	provider, err := NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof)
+	provider, err := NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof, metaRaft)
 	if err != nil {
 		t.Fatalf("NewCatalogMetaClusterRouteProvider: %v", err)
 	}
@@ -3065,7 +3096,7 @@ func TestCatalogMetaNativewireMutationAndReadProofMatrix(t *testing.T) {
 
 	staleProvider, err := NewCatalogMetaClusterRouteProvider(authority, func(context.Context) (raftplacement.CatalogProofV1, error) {
 		return proof, nil
-	})
+	}, metaRaft)
 	if err != nil {
 		t.Fatalf("NewCatalogMetaClusterRouteProvider stale: %v", err)
 	}
@@ -3081,7 +3112,7 @@ func TestCatalogMetaNativewireMutationAndReadProofMatrix(t *testing.T) {
 	}
 	missingProvider, err := NewCatalogMetaClusterRouteProvider(authority, func(context.Context) (raftplacement.CatalogProofV1, error) {
 		return raftplacement.CatalogProofV1{}, nil
-	})
+	}, metaRaft)
 	if err != nil {
 		t.Fatalf("NewCatalogMetaClusterRouteProvider missing: %v", err)
 	}
@@ -3676,8 +3707,8 @@ func BenchmarkRaftClusterSubmitterConcreteBridgeUpdateBSONSet(b *testing.B) {
 }
 
 func BenchmarkCatalogMetaNativewireAdmission(b *testing.B) {
-	authority, _ := newNativewireCatalogMetaAuthority(b)
-	provider, err := NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof)
+	authority, metaRaft := newNativewireCatalogMetaAuthority(b)
+	provider, err := NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof, metaRaft)
 	if err != nil {
 		b.Fatalf("NewCatalogMetaClusterRouteProvider: %v", err)
 	}
