@@ -1151,6 +1151,25 @@ func TestM8ArtifactNameIncludesConfigurationV1(t *testing.T) {
 	}
 }
 
+func TestCanonicalExactNeighborsContractTiePrecisionAndDedupeV1(t *testing.T) {
+	got := canonicalExactNeighborsV1([]neighbor{
+		{ID: "duplicate", Distance: 0.2}, {ID: "z", Distance: 0.1}, {ID: "a", Distance: 0.1},
+		{ID: "duplicate", Distance: 0.05}, {ID: "near", Distance: 0.100000001},
+	}, 4)
+	want := []string{"duplicate", "a", "z", "near"}
+	if len(got) != len(want) {
+		t.Fatalf("got=%+v", got)
+	}
+	for i := range want {
+		if got[i].ID != want[i] {
+			t.Fatalf("rank %d got=%+v want=%s", i, got, want[i])
+		}
+	}
+	if got[0].Distance != 0.05 {
+		t.Fatalf("duplicate retained wrong score: %+v", got[0])
+	}
+}
+
 func TestM8ProfileCaptureWritesRequiredRuntimeArtifactsV1(t *testing.T) {
 	dir := t.TempDir()
 	capture, err := startM8ProfileCaptureV1(dir)
