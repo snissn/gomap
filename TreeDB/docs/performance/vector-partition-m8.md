@@ -27,11 +27,11 @@ probe reduction, matched-recall QPS, matched-recall tail latency, and overlap
 storage gates are red or unavailable rather than inferred.
 
 The linked measured blocker is per-request router reopen and full 1M-membership
-manifest verification. The differential allocation profile measured about
-67.8 GB allocated during the query/fault boundary; 52.7 GB (77.7%) is directly
+manifest verification. The fresh differential allocation profile measured
+67,964.72 MB allocated during the query/fault boundary; 52,974.66 MB (77.94%) is directly
 attributed to `encoding/json.Marshal`, with manifest validation, lifecycle
 reduction, memberships, and physical asset reads dominating the remainder.
-CPU is led by SHA-256 (20.7%) and JSON struct encoding (9.1% flat, 40.8%
+CPU is led by SHA-256 (20.98%) and JSON struct encoding (8.38% flat, 39.99%
 cumulative). This is an evidence-backed optimization owner, not an M8 passing
 claim.
 
@@ -98,8 +98,8 @@ configuration acceptance only and are not a concurrency throughput comparison.
 The 10k corpus has 128 queries and owns concurrency-shaped evidence.
 
 Every deep measured row had recall@10 `0`. QPS ranged from approximately
-`0.512` to `0.540`; no p95 range is asserted here without recomputing it from the fresh artifact. The
-similar timing across probe and `ef_search` budgets is consistent with the
+`0.512` to `0.540`, and p95 ranged from approximately `1.851` to `1.952`
+seconds. Similar timing across probe and `ef_search` budgets is consistent with the
 profiled router-open/verification bottleneck.
 
 ## Production topology and lifecycle proof
@@ -173,12 +173,12 @@ The dominant allocation paths are:
 
 | Path | Differential allocation |
 | --- | ---: |
-| `encoding/json.Marshal` | 52,734 MB |
-| manifest encode-with-context | 4,157 MB flat, 37,386 MB cumulative |
-| membership materialization | 3,727 MB |
-| membership slice cloning | 1,862 MB |
-| lifecycle checkpoint encoding | 1,397 MB |
-| physical asset reads | 1,381 MB |
+| `encoding/json.Marshal` | 52,974.66 MB |
+| manifest encode-with-context | 4,191.84 MB flat, 37,710.54 MB cumulative |
+| membership materialization | 3,727.32 MB |
+| membership slice cloning | 1,862.41 MB |
+| lifecycle checkpoint encoding | 1,397.28 MB |
+| physical asset reads | 1,403.95 MB |
 
 These profiles identify repeated persistent router validation as the narrow
 performance owner. They do not justify bypassing integrity checks; remediation
