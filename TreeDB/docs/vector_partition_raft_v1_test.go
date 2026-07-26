@@ -152,6 +152,19 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				"unavailable endpoint returned error, zero neighbors, zero groups",
 				"no configured process-resource limit was compared",
 				"Enablement stays off",
+				"3b52711665297c7396f1f86238840dee1ea2897b",
+				"fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1",
+				"9afad07fb8daf374076fe9fa630106ffdf6241ae746344349eb1885d37cdfbd1",
+				"its all-partition owner is partition-local HNSW",
+			},
+		},
+		{
+			path: filepath.Join(root, "docs", "spec", "vector-partition-raft-v1.md"),
+			needles: []string{
+				"Canonical V1 partition-result contract",
+				"VectorPartitionCanonicalScoreContractV1",
+				"candidate is rescored with the canonical contract",
+				"Production evidence schema 2",
 			},
 		},
 	}
@@ -189,6 +202,24 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 			ResourceBounds     string `json:"resource_bounds"`
 			ResourceBoundsNote string `json:"resource_bounds_note"`
 		} `json:"gate_ledger"`
+		Continuation struct {
+			Status           string `json:"status"`
+			SchemaVersion    int    `json:"schema_version"`
+			ResultKind       string `json:"result_kind"`
+			MeasuredCodeHead string `json:"measured_code_head"`
+			Contract         string `json:"canonical_contract"`
+			CheckedIn10K     struct {
+				ExhaustiveRecall float64 `json:"exhaustive_partition_union_recall_at_10"`
+				IDParity         bool    `json:"exhaustive_partition_union_id_parity"`
+				ScoreParity      bool    `json:"exhaustive_partition_union_score_parity"`
+			} `json:"checked_in_10k"`
+			Retained1M struct {
+				ExhaustiveRecall  float64 `json:"exhaustive_partition_union_recall_at_10"`
+				ExactRouterRecall float64 `json:"all_partition_exact_representative_recall_at_10"`
+				LocalHNSWRecall   float64 `json:"all_partition_local_hnsw_recall_at_10"`
+				LossOwner         string  `json:"all_partition_loss_owner"`
+			} `json:"retained_1m"`
+		} `json:"continuation_attribution"`
 	}
 	if err := json.Unmarshal(raw, &evidence); err != nil {
 		t.Fatal(err)
@@ -200,7 +231,14 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 		evidence.Retained1M.Vectors != 1_000_000 || evidence.Retained1M.Groups != 4 ||
 		evidence.Retained1M.MeasuredRows != 60 || evidence.Retained1M.UnsupportedOverlapRows != 1 ||
 		evidence.GateLedger.ResourceBounds != "measured_not_bounded" ||
-		!strings.Contains(evidence.GateLedger.ResourceBoundsNote, "no configured resource limit was compared") {
+		!strings.Contains(evidence.GateLedger.ResourceBoundsNote, "no configured resource limit was compared") ||
+		evidence.Continuation.Status != "diagnosed_experimental_off" || evidence.Continuation.SchemaVersion != 2 ||
+		evidence.Continuation.ResultKind != "m8_production_multi_group_evidence_v2" ||
+		evidence.Continuation.MeasuredCodeHead != "3b52711665297c7396f1f86238840dee1ea2897b" ||
+		evidence.Continuation.Contract != "fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1" ||
+		evidence.Continuation.CheckedIn10K.ExhaustiveRecall != 1 || !evidence.Continuation.CheckedIn10K.IDParity || !evidence.Continuation.CheckedIn10K.ScoreParity ||
+		evidence.Continuation.Retained1M.ExhaustiveRecall != 1 || evidence.Continuation.Retained1M.ExactRouterRecall != 1 ||
+		evidence.Continuation.Retained1M.LocalHNSWRecall != 0 || evidence.Continuation.Retained1M.LossOwner != "partition_local_hnsw" {
 		t.Fatalf("M8 evidence boundary changed: %+v", evidence)
 	}
 }

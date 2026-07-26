@@ -12,9 +12,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/nativewire"
@@ -1093,6 +1095,7 @@ func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 		{"-stage", "router", "-m8-existing-db", "/retained/m8-assets", "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-probes", "1"},
 		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4", "-warmup", "-1"},
 		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", strconv.Itoa(limit + 1), "-raft-groups", "2"},
+		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4", "-probes", "1,4", "-router-candidates", "2"},
 	} {
 		if _, err := parseConfig(args); err == nil {
 			t.Fatalf("accepted malformed M8 config %#v", args)
@@ -1101,31 +1104,181 @@ func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 }
 
 func TestM8BenchmarkWorkCapAndOverflowV1(t *testing.T) {
-	cfg := config{overlaps: []float64{0, .2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3}
-	plan, err := validateM8BenchmarkWork(cfg, fixtureManifest{Queries: 5}, 84)
-	if err != nil || plan.QueryRequests != 84 {
+	cfg := config{partitions: 4, overlaps: []float64{0, .2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3, topK: 2}
+	manifest := fixtureManifest{Vectors: 10, Queries: 5, Dimensions: 8}
+	plan, err := validateM8BenchmarkWork(cfg, manifest, 109, math.MaxInt64)
+	if err != nil || plan.QueryRequests != 109 || plan.MeasuredQueryRequests != 40 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 65 {
 		t.Fatalf("M8 work plan=%+v err=%v", plan, err)
 	}
-	if _, err := validateM8BenchmarkWork(cfg, fixtureManifest{Queries: 5}, 83); err == nil {
+	if plan.RetainedCoordinatorCells != 8 || plan.RetainedCoordinatorResults != 80 || plan.CurrentCellOutcomes != 5 || plan.CurrentCellOutcomeBytes == 0 || plan.FixtureResidentBytes == 0 || plan.SourceSnapshotBytes == 0 || plan.ExactTruthBytes == 0 || plan.RetainedCoordinatorBytes == 0 || plan.RetainedAttributionMatrices != 5 || plan.RetainedAttributionResults != 50 || plan.RetainedAttributionBytes == 0 || plan.AttributionMergeScratchResults != 16 || plan.AttributionMergeScratchBytes == 0 || plan.ModeledPeakBytes == 0 {
+		t.Fatalf("incomplete M8 memory plan=%+v", plan)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, manifest, 108, math.MaxInt64); err == nil {
 		t.Fatal("accepted oversized M8 sweep")
 	}
-	if _, err := validateM8BenchmarkWork(cfg, fixtureManifest{Queries: math.MaxInt}, maxBenchmarkWorkUnits); err == nil {
+	if _, err := validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 1, Queries: math.MaxInt, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64); err == nil {
 		t.Fatal("accepted overflowing M8 sweep")
 	}
-	if _, err := validateM8BenchmarkWork(config{overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}}, fixtureManifest{Queries: math.MaxInt}, maxBenchmarkWorkUnits); err == nil {
+	if _, err := validateM8BenchmarkWork(config{partitions: 1, overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}, fixtureManifest{Vectors: 1, Queries: math.MaxInt, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64); err == nil {
 		t.Fatal("accepted overflowing M8 preflight accounting")
+	}
+}
+
+func TestM8UnsupportedOverlapSkipsMeasuredAndAttributionWorkV1(t *testing.T) {
+	cfg := config{partitions: 4, overlaps: []float64{.2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3, topK: 2}
+	manifest := fixtureManifest{Vectors: 10, Queries: 5, Dimensions: 8}
+	plan, err := validateM8BenchmarkWork(cfg, manifest, 4, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.QueryRequests != 4 || plan.MeasuredQueryRequests != 0 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 0 || plan.RetainedCoordinatorCells != 0 || plan.RetainedCoordinatorResults != 0 || plan.CurrentCellOutcomes != 0 || plan.CurrentCellOutcomeBytes != 0 || plan.RetainedAttributionMatrices != 0 || plan.RetainedAttributionResults != 0 || plan.RetainedAttributionBytes != 0 || plan.AttributionMergeScratchResults != 0 || plan.AttributionMergeScratchBytes != 0 {
+		t.Fatalf("unsupported-only M8 work plan=%+v", plan)
+	}
+}
+
+func TestM8RetainedAttributionResultsRespectMemoryCapV1(t *testing.T) {
+	cfg := config{partitions: 16, overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1}, topK: 256}
+	manifest := fixtureManifest{Vectors: 10_000, Queries: 50_000, Dimensions: 8}
+	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	measurementBytes, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	measurementPeak, err := memoryScaleCeil(measurementBytes, memorySlackNumerator, memorySlackDenominator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if measurementPeak >= maxFixtureBytes || plan.RetainedAttributionMatrices != 5 || plan.RetainedAttributionResults != 64_000_000 || plan.RetainedAttributionBytes < 2_500_000_000 || plan.ModeledPeakBytes <= maxFixtureBytes {
+		t.Fatalf("M8 attribution retention plan=%+v measurement_peak=%d", plan, measurementPeak)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, maxFixtureBytes); err == nil || !strings.Contains(err.Error(), "retained_attribution_results=64000000") {
+		t.Fatalf("accepted oversized retained attribution sweep: %v", err)
+	}
+}
+
+func TestM8AttributionMergeScratchRespectsMemoryCapV1(t *testing.T) {
+	cfg := config{partitions: 256, overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 256}
+	manifest := fixtureManifest{Vectors: 256, Queries: 1, Dimensions: 8}
+	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutScratch, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorBytes, plan.RetainedAttributionBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceOracle, err := memoryAdd(plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutScratch, err = memoryScaleCeil(max(sourceOracle, withoutScratch), memorySlackNumerator, memorySlackDenominator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultStructBytes, err := memoryMul(plan.AttributionMergeScratchResults, int64(unsafe.Sizeof(m8CanonicalResultV1{})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownedIDBytes, err := memoryMul(int64(cfg.partitions), int64(cfg.topK), documentIDStorageBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapBytes, err := memoryMul(int64(cfg.topK), memoryMapEntryBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantScratchBytes, err := memoryAdd(resultStructBytes, ownedIDBytes, mapBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.AttributionMergeScratchResults != 131_072 || plan.AttributionMergeScratchBytes != wantScratchBytes || ownedIDBytes != 1_048_576 || plan.ModeledPeakBytes <= withoutScratch {
+		t.Fatalf("M8 attribution scratch plan=%+v without_scratch=%d", plan, withoutScratch)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, withoutScratch); err == nil || !strings.Contains(err.Error(), "attribution_merge_scratch_results=131072") {
+		t.Fatalf("accepted unmodeled attribution merge scratch: %v", err)
+	}
+}
+
+func TestM8CurrentCellOutcomesRespectMemoryCapV1(t *testing.T) {
+	cfg := config{partitions: 256, raftGroups: 4, overlaps: []float64{0}, probes: []int{256}, efSearch: []int{64}, concurrency: []int{64}, topK: 1}
+	manifest := fixtureManifest{Vectors: 256, Queries: 1_000_000, Dimensions: 1}
+	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutOutcomes, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attributionWithoutOutcomes, err := memoryAdd(withoutOutcomes, plan.RetainedAttributionBytes, plan.AttributionMergeScratchBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceOracle, err := memoryAdd(plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutOutcomes, err = memoryScaleCeil(max(sourceOracle, withoutOutcomes, attributionWithoutOutcomes), memorySlackNumerator, memorySlackDenominator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.CurrentCellOutcomes != 1_000_000 || plan.CurrentCellOutcomeBytes <= 1_500_000_000 || plan.ModeledPeakBytes <= withoutOutcomes {
+		t.Fatalf("M8 current-cell outcome plan=%+v without_outcomes=%d", plan, withoutOutcomes)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, withoutOutcomes); err == nil || !strings.Contains(err.Error(), "current_cell_outcomes=1000000") {
+		t.Fatalf("accepted unmodeled current-cell outcomes: %v", err)
+	}
+}
+
+func TestM8SourceOracleSnapshotRespectsMemoryCapV1(t *testing.T) {
+	cfg := config{partitions: 1, overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}
+	manifest := fixtureManifest{Vectors: 1_000_000, Queries: 1, Dimensions: 512}
+	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.FixtureResidentBytes >= maxFixtureBytes || plan.SourceSnapshotBytes < 2_000_000_000 {
+		t.Fatalf("M8 source snapshot plan=%+v", plan)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, maxFixtureBytes); err == nil || !strings.Contains(err.Error(), "source_snapshot_bytes=") {
+		t.Fatalf("accepted oversized source snapshot: %v", err)
+	}
+}
+
+func TestM8RetainedCoordinatorResultsRespectMemoryCapV1(t *testing.T) {
+	cfg := config{partitions: 16, overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, topK: 256}
+	manifest := fixtureManifest{Vectors: 10_000, Queries: 50_000, Dimensions: 8}
+	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.RetainedCoordinatorResults != 102_400_000 || plan.RetainedCoordinatorBytes < 4_000_000_000 {
+		t.Fatalf("M8 retained-result plan=%+v", plan)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, maxFixtureBytes); err == nil || !strings.Contains(err.Error(), "retained_coordinator_results=102400000") {
+		t.Fatalf("accepted oversized retained result sweep: %v", err)
 	}
 }
 
 func TestM8ProductionEvidenceJSONKeepsEveryTopologyDimensionV1(t *testing.T) {
 	raw, err := json.Marshal(m8ProductionReportV1{
-		Config: m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16},
-		Rows:   []m8ProductionRowV1{{Probes: 4, EfSearch: 128, Concurrency: 16, Samples: 32}},
+		Config: m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16, RouterCandidates: 256},
+		Rows: []m8ProductionRowV1{{Probes: 4, EfSearch: 128, Concurrency: 16, Samples: 32, RecallAtK: 0, Attribution: m8ProductionAttributionV1{
+			Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1, ExhaustivePartitionRecallAtK: 1,
+			ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
+			ExactRepresentativeRecallAtK: .9, ApproximateRepresentativeRecallAtK: .8,
+			LocalHNSWRecallAtK: .7, EndToEndRecallAtK: 0,
+			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
+			ApproximateRouterCandidateBudget: 256, ApproximateRouterPartitionCoverageComplete: true, ResidualLossOwners: []string{"partition_local_hnsw"},
+		}}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{`"raft_groups":4`, `"raft_nodes_per_group":3`, `"partitions":16`, `"probes":4`, `"ef_search":128`, `"concurrency":16`, `"samples":32`} {
+	for _, field := range []string{`"raft_groups":4`, `"raft_nodes_per_group":3`, `"partitions":16`, `"approximate_router_candidate_budget":256`, `"approximate_router_partition_coverage_complete":true`, `"probes":4`, `"ef_search":128`, `"concurrency":16`, `"samples":32`, `"recall_at_k":0`, `"contract":"` + m8CanonicalResultContractV1 + `"`, `"global_exact_recall_at_k":1`, `"exhaustive_partition_union_score_parity":true`, `"residual_loss_owners":["partition_local_hnsw"]`} {
 		if !bytes.Contains(raw, []byte(field)) {
 			t.Fatalf("missing %s in %s", field, raw)
 		}
@@ -1134,7 +1287,7 @@ func TestM8ProductionEvidenceJSONKeepsEveryTopologyDimensionV1(t *testing.T) {
 
 func TestM8ArtifactNameIncludesConfigurationV1(t *testing.T) {
 	fixture := fixtureManifest{Fixture: "x", Checksum: "y"}
-	base := config{headSHA: strings.Repeat("a", 40), raftGroups: 2, raftNodes: 3, partitions: 4, probes: []int{4}, overlaps: []float64{0}, topK: 10, concurrency: []int{1}, efSearch: []int{64}}
+	base := config{headSHA: strings.Repeat("a", 40), raftGroups: 2, raftNodes: 3, partitions: 4, probes: []int{4}, overlaps: []float64{0}, topK: 10, concurrency: []int{1}, efSearch: []int{64}, routerCandidates: 64}
 	first, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "a"})
 	if err != nil {
 		t.Fatal(err)
@@ -1148,6 +1301,283 @@ func TestM8ArtifactNameIncludesConfigurationV1(t *testing.T) {
 	third, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "different"})
 	if err != nil || first == third {
 		t.Fatalf("asset identities collided %q %q err=%v", first, third, err)
+	}
+	base.routerCandidates = 32
+	fourth, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "a"})
+	if err != nil || first == fourth {
+		t.Fatalf("router candidate budgets collided %q %q err=%v", first, fourth, err)
+	}
+}
+
+func TestCanonicalExactNeighborsContractTiePrecisionAndDedupeV1(t *testing.T) {
+	got := canonicalExactNeighborsV1([]neighbor{
+		{ID: "duplicate", Distance: 0.2}, {ID: "z", Distance: 0.1}, {ID: "a", Distance: 0.1},
+		{ID: "duplicate", Distance: 0.05}, {ID: "near", Distance: 0.100000001},
+	}, 4)
+	want := []string{"duplicate", "a", "near", "z"}
+	if len(got) != len(want) {
+		t.Fatalf("got=%+v", got)
+	}
+	for i := range want {
+		if got[i].ID != want[i] {
+			t.Fatalf("rank %d got=%+v want=%s", i, got, want[i])
+		}
+	}
+	if got[0].Distance != float64(float32(0.05)) {
+		t.Fatalf("duplicate retained wrong score: %+v", got[0])
+	}
+}
+
+func TestM8CanonicalFP32ScoreContractTiePrecisionAndDedupeV1(t *testing.T) {
+	near := math.Float32frombits(math.Float32bits(0.9))
+	got := m8CanonicalResultsV1([]m8CanonicalResultV1{
+		{ID: "duplicate", Score: 0.1},
+		{ID: "z", Score: near},
+		{ID: "a", Score: near},
+		{ID: "duplicate", Score: 0.95},
+		{ID: "lower", Score: math.Float32frombits(math.Float32bits(near) - 1)},
+	}, 4)
+	want := []string{"duplicate", "a", "z", "lower"}
+	if len(got) != len(want) {
+		t.Fatalf("got=%+v", got)
+	}
+	for i := range want {
+		if got[i].ID != want[i] {
+			t.Fatalf("rank %d got=%+v want=%s", i, got, want[i])
+		}
+	}
+	if got[0].Score != float32(0.95) {
+		t.Fatalf("duplicate retained wrong score: %+v", got[0])
+	}
+}
+
+func TestM8CanonicalRefPathMatchesOwnedTieDedupeAndLifetimeV1(t *testing.T) {
+	candidates := []m8CanonicalResultV1{
+		{ID: "duplicate", Score: 0.1},
+		{ID: "z", Score: 0.9},
+		{ID: "a", Score: 0.9},
+		{ID: "duplicate", Score: 0.95},
+		{ID: "lower", Score: math.Float32frombits(math.Float32bits(0.9) - 1)},
+	}
+	var owned []m8CanonicalResultV1
+	refs := newM8CanonicalRefTopKV1(4)
+	refIDs := make([][]byte, len(candidates))
+	for i, candidate := range candidates {
+		owned = m8AppendBoundedCanonicalV1(owned, candidate, 4)
+		refIDs[i] = []byte(candidate.ID)
+		if !refs.add(m8CanonicalRefResultV1{ID: refIDs[i], Score: candidate.Score}) {
+			t.Fatalf("rejected ref candidate %+v", candidate)
+		}
+	}
+	got := m8MaterializeCanonicalRefsV1(refs.results())
+	if len(got) != len(owned) {
+		t.Fatalf("ref results=%+v owned=%+v", got, owned)
+	}
+	for i := range owned {
+		if got[i] != owned[i] {
+			t.Fatalf("rank=%d ref=%+v owned=%+v", i, got, owned)
+		}
+	}
+	for i := range refIDs {
+		for j := range refIDs[i] {
+			refIDs[i][j] = 'x'
+		}
+	}
+	for i := range owned {
+		if got[i] != owned[i] {
+			t.Fatalf("materialized result changed after source mutation rank=%d ref=%+v owned=%+v", i, got, owned)
+		}
+	}
+}
+
+func TestM8CanonicalRefTopKUsesKeyedBoundedHeapV1(t *testing.T) {
+	const candidates = 10_000
+	top := newM8CanonicalRefTopKV1(256)
+	for i := 0; i < candidates; i++ {
+		id := []byte(fmt.Sprintf("doc-%06d", i))
+		if !top.add(m8CanonicalRefResultV1{ID: id, Score: float32(i)}) {
+			t.Fatalf("rejected candidate %d", i)
+		}
+	}
+	if len(top.heap) != 256 || len(top.results()) != 256 {
+		t.Fatalf("unbounded or short ref heap len=%d results=%d", len(top.heap), len(top.results()))
+	}
+	if top.idComparisons >= candidates {
+		t.Fatalf("ref duplicate comparisons=%d candidates=%d", top.idComparisons, candidates)
+	}
+}
+
+func TestM8CanonicalRefTopKMatchesCanonicalOrderWithDuplicatesV1(t *testing.T) {
+	const (
+		candidates = 10_000
+		topK       = 256
+	)
+	var want []m8CanonicalResultV1
+	top := newM8CanonicalRefTopKV1(topK)
+	for i := 0; i < candidates; i++ {
+		candidate := m8CanonicalResultV1{
+			ID:    fmt.Sprintf("doc-%06d", (i*37)%777),
+			Score: float32((i * 41) % 997),
+		}
+		want = m8AppendBoundedCanonicalV1(want, candidate, topK)
+		if !top.add(m8CanonicalRefResultV1{ID: []byte(candidate.ID), Score: candidate.Score}) {
+			t.Fatalf("rejected candidate %d", i)
+		}
+	}
+	got := m8MaterializeCanonicalRefsV1(top.results())
+	if !slices.Equal(got, want) {
+		t.Fatalf("ref top-k differs from canonical order\ngot=%+v\nwant=%+v", got, want)
+	}
+}
+
+func TestM8CanonicalContractRejectsInvalidBoundsAndScoresV1(t *testing.T) {
+	if got := m8CanonicalResultsV1([]m8CanonicalResultV1{{ID: "a", Score: 1}}, -1); got != nil {
+		t.Fatalf("negative top-k result=%+v", got)
+	}
+	if got := m8CanonicalResultsV1([]m8CanonicalResultV1{{ID: "a", Score: float32(math.NaN())}}, 1); got != nil {
+		t.Fatalf("nonfinite result=%+v", got)
+	}
+	oversized := make([]m8CanonicalResultV1, 256*256)
+	for i := range oversized {
+		oversized[i] = m8CanonicalResultV1{ID: fmt.Sprintf("doc-%06d", i), Score: float32(i)}
+	}
+	if got := m8CanonicalResultsV1(oversized, 256); len(got) != 256 || cap(got) != 256 {
+		t.Fatalf("canonical top-k retained oversized merge backing len=%d cap=%d", len(got), cap(got))
+	}
+}
+
+func TestValidM8AttributionPersistsExhaustiveUnionFailureV1(t *testing.T) {
+	attribution := m8ProductionAttributionV1{
+		Contract:                                   m8CanonicalResultContractV1,
+		GlobalExactRecallAtK:                       1,
+		ExhaustivePartitionRecallAtK:               .5,
+		ExhaustivePartitionIDParity:                false,
+		ExhaustivePartitionScoreParity:             false,
+		ExactRepresentativeRecallAtK:               .5,
+		ApproximateRepresentativeRecallAtK:         .5,
+		LocalHNSWRecallAtK:                         .5,
+		EndToEndRecallAtK:                          .5,
+		CoordinatorMergeIDParity:                   true,
+		CoordinatorMergeScoreParity:                true,
+		ApproximateRouterCandidateBudget:           1,
+		ApproximateRouterPartitionCoverageComplete: true,
+	}
+	attribution.ResidualLossOwners = m8AttributionLossOwnersV1(attribution)
+	if !validM8AttributionV1(attribution) {
+		t.Fatalf("rejected attributable exhaustive-union failure: %+v", attribution)
+	}
+	if !slices.Equal(attribution.ResidualLossOwners, []string{"partition_membership_or_score_contract"}) {
+		t.Fatalf("loss owners=%v", attribution.ResidualLossOwners)
+	}
+	attribution.ResidualLossOwners = nil
+	if validM8AttributionV1(attribution) {
+		t.Fatal("accepted exhaustive-union failure without its loss owner")
+	}
+}
+
+func TestM8AttachAttributionAfterMeasurementV1(t *testing.T) {
+	row := m8ProductionRowV1{Samples: 2, RecallAtK: .5}
+	cell := m8AttributionCellV1{
+		Evidence: m8ProductionAttributionV1{
+			Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1,
+			ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
+			ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: .5,
+			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
+			ApproximateRouterCandidateBudget: 2, ApproximateRouterPartitionCoverageComplete: true,
+		},
+		Local: [][]m8CanonicalResultV1{{{ID: "a", Score: 1}}, {{ID: "b", Score: 1}}},
+	}
+	coordinator := [][]m8CanonicalResultV1{{{ID: "a", Score: 1}}, {{ID: "z", Score: 1}}}
+	if err := m8AttachAttributionV1(&row, cell, coordinator); err != nil {
+		t.Fatal(err)
+	}
+	if row.Attribution.EndToEndRecallAtK != row.RecallAtK || row.Attribution.CoordinatorMergeIDParity || !row.Attribution.CoordinatorMergeScoreParity ||
+		!slices.Contains(row.Attribution.ResidualLossOwners, "coordinator_merge_or_transport") {
+		t.Fatalf("post-measurement attribution=%+v", row.Attribution)
+	}
+	if err := m8AttachAttributionV1(&m8ProductionRowV1{Samples: 1}, cell, coordinator); err == nil {
+		t.Fatal("accepted post-measurement attribution cardinality mismatch")
+	}
+}
+
+func TestM8AttributionApproximateCoverageShortfallIsOwnedV1(t *testing.T) {
+	attribution := m8ProductionAttributionV1{
+		Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1,
+		ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
+		ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 0, LocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1,
+		CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
+		ApproximateRouterCandidateBudget: 2, ApproximateRouterPartitionCoverageComplete: false,
+	}
+	attribution.ResidualLossOwners = m8AttributionLossOwnersV1(attribution)
+	if !validM8AttributionV1(attribution) || !slices.Equal(attribution.ResidualLossOwners, []string{"approximate_representative_routing"}) {
+		t.Fatalf("coverage-shortfall attribution=%+v", attribution)
+	}
+	if complete, err := m8ApproximateRouterCoverageV1(fmt.Errorf("wrapped: %w", collections.ErrVectorPartitionRouterCandidateCoverageV1)); err != nil || complete {
+		t.Fatalf("typed coverage result complete=%t err=%v", complete, err)
+	}
+	invalid := attribution
+	invalid.ApproximateRepresentativeRecallAtK = .5
+	invalid.ResidualLossOwners = m8AttributionLossOwnersV1(invalid)
+	if validM8AttributionV1(invalid) {
+		t.Fatalf("accepted nonzero approximate recall with incomplete coverage: %+v", invalid)
+	}
+	if _, err := m8ApproximateRouterCoverageV1(errors.New("router corruption")); err == nil {
+		t.Fatal("accepted non-coverage router error")
+	}
+}
+
+func TestM8CoordinatorResponseCanonicalShapeFailsClosedV1(t *testing.T) {
+	response := nativewire.VectorPartitionCoordinatorResponseV1{
+		Neighbors:        []nativewire.VectorPartitionCoordinatorNeighborV1{{ID: "a", Score: .9}, {ID: "b", Score: .8}},
+		ProbedPartitions: []uint32{0, 1},
+	}
+	response.ProbedGroups = append(response.ProbedGroups, "group-a")
+	manifest := collections.VectorPartitionManifestV1{SourceRowCount: 3, PartitionCount: 4, Placements: []collections.VectorPartitionPlacementV1{
+		{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-a"},
+		{PartitionID: 2, GroupID: "group-b"}, {PartitionID: 3, GroupID: "group-b"},
+	}, Memberships: []collections.VectorPartitionMembershipV1{
+		{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 1, PartitionID: 1},
+		{VectorOrdinal: 2, PartitionID: 2},
+	}}
+	if got, err := m8ValidateCoordinatorResponseV1(response, manifest, 2, 2); err != nil || len(got) != 2 {
+		t.Fatalf("valid response got=%+v err=%v", got, err)
+	}
+	response.Neighbors[0], response.Neighbors[1] = response.Neighbors[1], response.Neighbors[0]
+	if _, err := m8ValidateCoordinatorResponseV1(response, manifest, 2, 2); err == nil {
+		t.Fatal("accepted noncanonical response order")
+	}
+	response.Neighbors = []nativewire.VectorPartitionCoordinatorNeighborV1{{ID: "a", Score: .9}, {ID: "a", Score: .8}}
+	if _, err := m8ValidateCoordinatorResponseV1(response, manifest, 2, 2); err == nil {
+		t.Fatal("accepted duplicate response neighbor")
+	}
+	response.Neighbors = []nativewire.VectorPartitionCoordinatorNeighborV1{{ID: "a", Score: .9}, {ID: "b", Score: .8}}
+	response.ProbedPartitions = []uint32{0, 2}
+	if _, err := m8ValidateCoordinatorResponseV1(response, manifest, 2, 2); err == nil {
+		t.Fatal("accepted response missing an owning group")
+	}
+	response.ProbedPartitions = []uint32{0, 1}
+	response.ProbedGroups = append(response.ProbedGroups[:0], "group-b")
+	if _, err := m8ValidateCoordinatorResponseV1(response, manifest, 2, 2); err == nil {
+		t.Fatal("accepted a non-owner group")
+	}
+	response.ProbedGroups = append(response.ProbedGroups[:0], "group-a")
+	response.Neighbors = response.Neighbors[:1]
+	if _, err := m8ValidateCoordinatorResponseV1(response, manifest, 2, 2); err == nil {
+		t.Fatal("accepted truncated response for two unique selected rows")
+	}
+	sparseManifest := manifest
+	sparseManifest.SourceRowCount = 1
+	sparseManifest.Memberships = []collections.VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}}
+	sparseManifest.OverlapMemberships = []collections.VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 1}}
+	if got, err := m8ValidateCoordinatorResponseV1(response, sparseManifest, 2, 2); err != nil || len(got) != 1 {
+		t.Fatalf("valid sparse response got=%+v err=%v", got, err)
+	}
+	response.Neighbors = append(response.Neighbors,
+		nativewire.VectorPartitionCoordinatorNeighborV1{ID: "b", Score: .8},
+		nativewire.VectorPartitionCoordinatorNeighborV1{ID: "c", Score: .7},
+	)
+	if _, err := m8ValidateCoordinatorResponseV1(response, manifest, 2, 2); err == nil {
+		t.Fatal("accepted response longer than top-k")
 	}
 }
 

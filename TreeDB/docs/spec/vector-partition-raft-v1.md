@@ -235,6 +235,31 @@ consistency, or shard failure is an explicit error with no incomplete result.
 
 ## M0 oracle and evidence boundary
 
+### Canonical V1 partition-result contract
+
+`collections.VectorPartitionCanonicalScoreContractV1` is the executable
+production result contract. It normalizes both query and source vector in
+FP32, accumulates their normalized dot product left-to-right with explicit
+separately rounded binary64 products and additions, and
+rounds the final cosine score once to FP32. Across partition responses,
+duplicate stable IDs retain the highest canonical score. Final top-k order is
+descending score with bytewise ascending stable ID as the exact tie break.
+
+Generation-pinned exact scans operate only on the already validated persistent
+search pack and hold the same reader pin as HNSW search. Native HNSW traversal
+may use an optimized score kernel to discover candidates, but every published
+candidate is rescored with the canonical contract before shard and coordinator
+ordering. Empty IDs, non-finite scores, duplicate response IDs, noncanonical
+wire order, incomplete partition/group coverage, source-generation mismatch,
+or partial top-k fail closed.
+
+Production evidence schema 2 reports recall independently for the full-source
+oracle, exhaustive exact partition union, exact representative routing,
+approximate representative routing, partition-local HNSW, and end-to-end
+output. It also records exact coordinator ID/score parity and names every
+remaining loss owner. These attribution fields diagnose a red enablement gate;
+they do not turn approximate all-partition HNSW into an exact oracle.
+
 By default, `cmd/treedb_vector_partition_bench` is a sequential **simulation**. It emits
 `result_kind=simulation_only` and `production_evidence=false`; its Markdown
 artifacts repeat that it is not production Raft evidence. It records exact

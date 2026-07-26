@@ -56,6 +56,7 @@ const (
 	memorySlackDenominator               = 4
 	memoryBudgetScope                    = "modeled_peak_live_bytes_v1: contiguous generated float64 fixture/query matrices and row headers; exact/selected top-k candidates; representative routing; persisted router ingest JSON/IDs/slices and source-row capture; HNSW partition JSON plus decoded JSON/vector batch; HNSW query merge and cache; 25% allocation slack; excludes TreeDB engine/index internals, Go runtime/GC metadata, and artifact/CLI encoding"
 	benchmarkWorkScope                   = "benchmark_owned_vector_query_corpus_visits_v1: checksum exact truth once; mandatory truth plus enabled exhaustive/routing corpus passes for every probe/overlap row; excludes TreeDB HNSW engine-internal search work"
+	m8BenchmarkWorkScope                 = "m8_query_passes_v1: measured coordinator requests, warmup/endpoint preflight, cached exhaustive attribution, and exact/approximate/local-HNSW attribution passes; excludes the pre-existing canonical source oracle and engine-internal HNSW work"
 )
 
 type config struct {
@@ -465,7 +466,7 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		if cfg.topK > nativewire.DefaultVectorPartitionShardSearchLimitsV1().MaxTopK {
 			return fmt.Errorf("top-k cannot exceed M8 shard limit %d", nativewire.DefaultVectorPartitionShardSearchLimitsV1().MaxTopK)
 		}
-		if _, err := validateM8BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits); err != nil {
+		if _, err := validateM8BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits, cfg.maxBytes); err != nil {
 			return err
 		}
 		vectors, queries := deterministicFixture(fixture)
@@ -692,6 +693,11 @@ func parseConfig(args []string) (config, error) {
 		for _, value := range cfg.efSearch {
 			if value < cfg.topK || value > shardLimits.MaxEfSearch {
 				return config{}, fmt.Errorf("each ef-search must be in [%d,%d]", cfg.topK, shardLimits.MaxEfSearch)
+			}
+		}
+		for _, probes := range cfg.probes {
+			if probes > cfg.routerCandidates {
+				return config{}, errors.New("production_multi_group requires router-candidates >= every probe count")
 			}
 		}
 	}
@@ -1056,25 +1062,266 @@ type m3BenchmarkWorkPlan struct {
 	VectorQueryVisits           int64
 }
 
-type m8BenchmarkWorkPlan struct{ QueryRequests int64 }
+type m8BenchmarkWorkPlan struct {
+	MeasuredQueryRequests           int64
+	WarmupAndPreflightQueryRequests int64
+	AttributionQueryPasses          int64
+	QueryRequests                   int64
+	RetainedCoordinatorCells        int64
+	RetainedCoordinatorResults      int64
+	CurrentCellOutcomes             int64
+	CurrentCellOutcomeBytes         int64
+	FixtureResidentBytes            int64
+	SourceSnapshotBytes             int64
+	ExactTruthBytes                 int64
+	RetainedCoordinatorBytes        int64
+	RetainedAttributionMatrices     int64
+	RetainedAttributionResults      int64
+	RetainedAttributionBytes        int64
+	AttributionMergeScratchResults  int64
+	AttributionMergeScratchBytes    int64
+	ModeledPeakBytes                int64
+}
 
-func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits int64) (m8BenchmarkWorkPlan, error) {
-	if capUnits < 1 || len(cfg.overlaps) == 0 || len(cfg.probes) == 0 || len(cfg.efSearch) == 0 || len(cfg.concurrency) == 0 {
-		return m8BenchmarkWorkPlan{}, errors.New("cannot plan M8 benchmark work without a positive cap and complete sweeps")
+func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes int64) (m8BenchmarkWorkPlan, error) {
+	if capUnits < 1 || capBytes < 1 || cfg.partitions < 1 || cfg.topK < 1 || m.Vectors < 1 || m.Queries < 1 || m.Dimensions < 1 || len(cfg.overlaps) == 0 || len(cfg.probes) == 0 || len(cfg.efSearch) == 0 || len(cfg.concurrency) == 0 {
+		return m8BenchmarkWorkPlan{}, errors.New("cannot plan M8 benchmark work without positive caps, a valid fixture/top-k, and complete sweeps")
 	}
-	requests, err := memoryMul(int64(len(cfg.overlaps)), int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(m.Queries))
+	var supportedOverlaps int64
+	for _, overlap := range cfg.overlaps {
+		if overlap == 0 {
+			supportedOverlaps++
+		}
+	}
+	measured, err := memoryMul(supportedOverlaps, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(m.Queries))
 	if err != nil {
 		return m8BenchmarkWorkPlan{}, err
 	}
 	// Production M8 also performs one exhaustive endpoint preflight and the
 	// configured untimed warmup requests outside the measured cell sweep.
-	requests, err = memoryAdd(requests, int64(cfg.warmup), 1)
+	warmupAndPreflight, err := memoryAdd(int64(cfg.warmup), 1)
 	if err != nil {
 		return m8BenchmarkWorkPlan{}, err
 	}
-	plan := m8BenchmarkWorkPlan{QueryRequests: requests}
+	// Attribution runs once after measured overlap/concurrency rows. For every
+	// query/probe/ef cell it executes exact, approximate, and local-HNSW passes;
+	// the exhaustive partition-union pass is cached once per query.
+	var attribution int64
+	if supportedOverlaps > 0 {
+		attributionStages, stageErr := memoryMul(3, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(m.Queries))
+		if stageErr != nil {
+			return m8BenchmarkWorkPlan{}, stageErr
+		}
+		attribution, err = memoryAdd(int64(m.Queries), attributionStages)
+		if err != nil {
+			return m8BenchmarkWorkPlan{}, err
+		}
+	}
+	requests, err := memoryAdd(measured, warmupAndPreflight, attribution)
+	if err != nil {
+		return m8BenchmarkWorkPlan{}, err
+	}
+	plan := m8BenchmarkWorkPlan{MeasuredQueryRequests: measured, WarmupAndPreflightQueryRequests: warmupAndPreflight, AttributionQueryPasses: attribution, QueryRequests: requests}
 	if requests > capUnits {
-		return plan, fmt.Errorf("modeled M8 benchmark work exceeds %d-unit cap (%s): query_requests=%d", capUnits, benchmarkWorkScope, requests)
+		return plan, fmt.Errorf("modeled M8 benchmark work exceeds %d-unit cap (%s): measured_query_requests=%d warmup_and_preflight_query_requests=%d attribution_query_passes=%d query_requests=%d", capUnits, m8BenchmarkWorkScope, measured, warmupAndPreflight, attribution, requests)
+	}
+
+	rows, err := memoryAdd(int64(m.Vectors), int64(m.Queries))
+	if err != nil {
+		return plan, err
+	}
+	fixtureValues, err := memoryMul(rows, int64(m.Dimensions), 8)
+	if err != nil {
+		return plan, err
+	}
+	fixtureRows, err := memoryMul(rows, int64(unsafe.Sizeof([]float64{})))
+	if err != nil {
+		return plan, err
+	}
+	plan.FixtureResidentBytes, err = memoryAdd(fixtureValues, fixtureRows)
+	if err != nil {
+		return plan, err
+	}
+	sourceRowBytes, err := memoryAdd(
+		int64(unsafe.Sizeof(collections.VectorPartitionRouterSourceRowV1{})),
+		documentIDStorageBytes,
+		int64(m.Dimensions)*4,
+	)
+	if err != nil {
+		return plan, err
+	}
+	plan.SourceSnapshotBytes, err = memoryMul(int64(m.Vectors), sourceRowBytes)
+	if err != nil {
+		return plan, err
+	}
+
+	// M8 owns the deterministic doc-%06d corpus even when reopening retained
+	// assets, so documentIDStorageBytes bounds its result string storage. The
+	// much larger transport stable-ID limit is not reachable by this harness.
+	resultBytes, err := memoryAdd(int64(unsafe.Sizeof(m8CanonicalResultV1{})), documentIDStorageBytes)
+	if err != nil {
+		return plan, err
+	}
+	perQueryResults, err := memoryMul(int64(cfg.topK), resultBytes)
+	if err != nil {
+		return plan, err
+	}
+	perQueryResults, err = memoryAdd(int64(unsafe.Sizeof([]m8CanonicalResultV1{})), perQueryResults)
+	if err != nil {
+		return plan, err
+	}
+	plan.ExactTruthBytes, err = memoryMul(int64(m.Queries), perQueryResults)
+	if err != nil {
+		return plan, err
+	}
+
+	plan.RetainedCoordinatorCells, err = memoryMul(supportedOverlaps, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)))
+	if err != nil {
+		return plan, err
+	}
+	plan.RetainedCoordinatorResults, err = memoryMul(plan.RetainedCoordinatorCells, int64(m.Queries), int64(cfg.topK))
+	if err != nil {
+		return plan, err
+	}
+	perResultMatrix, err := memoryMul(int64(m.Queries), perQueryResults)
+	if err != nil {
+		return plan, err
+	}
+	perCellResults, err := memoryAdd(int64(unsafe.Sizeof(m8MeasuredCellV1{})), perResultMatrix)
+	if err != nil {
+		return plan, err
+	}
+	plan.RetainedCoordinatorBytes, err = memoryMul(plan.RetainedCoordinatorCells, perCellResults)
+	if err != nil {
+		return plan, err
+	}
+	if supportedOverlaps > 0 {
+		maxProbes, maxEFSearch, maxConcurrency := 0, 0, 0
+		for _, probes := range cfg.probes {
+			maxProbes = max(maxProbes, probes)
+		}
+		for _, efSearch := range cfg.efSearch {
+			maxEFSearch = max(maxEFSearch, efSearch)
+		}
+		for _, concurrency := range cfg.concurrency {
+			maxConcurrency = max(maxConcurrency, concurrency)
+		}
+		// m8RunProductionCellV1 retains every raw response until the full cell has
+		// completed. Bound the largest response shape, including the backing arrays
+		// and harness-owned identity strings that are not included in the response
+		// struct or the retained canonical top-k matrices.
+		neighborBytes, err := memoryMul(int64(cfg.topK), int64(unsafe.Sizeof(nativewire.VectorPartitionCoordinatorNeighborV1{}))+documentIDStorageBytes)
+		if err != nil {
+			return plan, err
+		}
+		partitionBytes, err := memoryMul(int64(maxProbes), int64(unsafe.Sizeof(uint32(0))))
+		if err != nil {
+			return plan, err
+		}
+		// Group IDs and the response digests reference generation-pinned topology
+		// storage; each response owns the group string headers, not duplicate backing
+		// strings. RequestID is formatted per query and remains owned by the outcome.
+		maxGroups := min(maxProbes, cfg.raftGroups)
+		if maxGroups < 1 {
+			maxGroups = maxProbes // conservative for direct planner callers without parsed defaults
+		}
+		groupBytes, err := memoryMul(int64(maxGroups), int64(unsafe.Sizeof("")))
+		if err != nil {
+			return plan, err
+		}
+		requestIDStorageBytes := int64(len(fmt.Sprintf("m8-q-%06d-p-%04d-ef-%06d-c-%03d", max(0, m.Queries-1), maxProbes, maxEFSearch, maxConcurrency)))
+		perOutcomeBytes, err := memoryAdd(
+			int64(unsafe.Sizeof(m8ProductionCellOutcomeV1{})),
+			neighborBytes,
+			partitionBytes,
+			groupBytes,
+			requestIDStorageBytes,
+		)
+		if err != nil {
+			return plan, err
+		}
+		plan.CurrentCellOutcomes = int64(m.Queries)
+		plan.CurrentCellOutcomeBytes, err = memoryMul(plan.CurrentCellOutcomes, perOutcomeBytes)
+		if err != nil {
+			return plan, err
+		}
+	}
+	if supportedOverlaps > 0 {
+		attributionCells, attributionErr := memoryMul(int64(len(cfg.probes)), int64(len(cfg.efSearch)))
+		if attributionErr != nil {
+			return plan, attributionErr
+		}
+		plan.RetainedAttributionMatrices, err = memoryAdd(attributionCells, 1) // local matrices plus cached exhaustive union
+		if err != nil {
+			return plan, err
+		}
+		plan.RetainedAttributionResults, err = memoryMul(plan.RetainedAttributionMatrices, int64(m.Queries), int64(cfg.topK))
+		if err != nil {
+			return plan, err
+		}
+		plan.RetainedAttributionBytes, err = memoryMul(plan.RetainedAttributionMatrices, perResultMatrix)
+		if err != nil {
+			return plan, err
+		}
+		attributionMetadata, err := memoryMul(attributionCells, int64(unsafe.Sizeof(m8AttributionCellV1{}))+memoryMapEntryBytes+32)
+		if err != nil {
+			return plan, err
+		}
+		plan.RetainedAttributionBytes, err = memoryAdd(plan.RetainedAttributionBytes, attributionMetadata)
+		if err != nil {
+			return plan, err
+		}
+		// The exhaustive attribution search is the largest merge. It reserves one
+		// partition-count by top-k input buffer, canonicalization copies that full
+		// buffer, and the input retains one owned document-ID allocation per
+		// candidate. Duplicate suppression holds at most top-k map entries. The
+		// returned top-k is copied into a right-sized retained matrix above.
+		plan.AttributionMergeScratchResults, err = memoryMul(2, int64(cfg.partitions), int64(cfg.topK))
+		if err != nil {
+			return plan, err
+		}
+		plan.AttributionMergeScratchBytes, err = memoryMul(plan.AttributionMergeScratchResults, int64(unsafe.Sizeof(m8CanonicalResultV1{})))
+		if err != nil {
+			return plan, err
+		}
+		attributionMergeIDBytes, err := memoryMul(int64(cfg.partitions), int64(cfg.topK), documentIDStorageBytes)
+		if err != nil {
+			return plan, err
+		}
+		attributionMergeMapBytes, err := memoryMul(int64(cfg.topK), memoryMapEntryBytes)
+		if err != nil {
+			return plan, err
+		}
+		plan.AttributionMergeScratchBytes, err = memoryAdd(plan.AttributionMergeScratchBytes, attributionMergeIDBytes, attributionMergeMapBytes)
+		if err != nil {
+			return plan, err
+		}
+	}
+	// The owned FP32 source snapshot remains live while exact truth accumulates;
+	// it is released before measured coordinator results begin accumulating.
+	sourceOraclePeak, err := memoryAdd(plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes)
+	if err != nil {
+		return plan, err
+	}
+	measurementBase, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorBytes)
+	if err != nil {
+		return plan, err
+	}
+	measurementPeak, err := memoryAdd(measurementBase, plan.CurrentCellOutcomeBytes)
+	if err != nil {
+		return plan, err
+	}
+	attributionPeak, err := memoryAdd(measurementBase, plan.RetainedAttributionBytes, plan.AttributionMergeScratchBytes)
+	if err != nil {
+		return plan, err
+	}
+	peak := max(sourceOraclePeak, measurementPeak, attributionPeak)
+	plan.ModeledPeakBytes, err = memoryScaleCeil(peak, memorySlackNumerator, memorySlackDenominator)
+	if err != nil {
+		return plan, err
+	}
+	if plan.ModeledPeakBytes > capBytes {
+		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d source_snapshot_bytes=%d exact_truth_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d current_cell_outcomes=%d current_cell_outcome_bytes=%d retained_attribution_matrices=%d retained_attribution_results=%d retained_attribution_bytes=%d attribution_merge_scratch_results=%d attribution_merge_scratch_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes, plan.CurrentCellOutcomes, plan.CurrentCellOutcomeBytes, plan.RetainedAttributionMatrices, plan.RetainedAttributionResults, plan.RetainedAttributionBytes, plan.AttributionMergeScratchResults, plan.AttributionMergeScratchBytes)
 	}
 	return plan, nil
 }
@@ -2142,6 +2389,28 @@ func dedupeSortedNeighbors(in []neighbor) []neighbor {
 		out = append(out, n)
 	}
 	return out
+}
+
+// canonicalExactNeighborsV1 keeps the legacy simulation distance representation
+// deterministic. Production M8 evidence uses m8CanonicalResultsV1 and the
+// executable collections.VectorPartitionCanonicalScoreContractV1 instead.
+func canonicalExactNeighborsV1(in []neighbor, topK int) []neighbor {
+	if topK <= 0 {
+		return nil
+	}
+	ordered := append([]neighbor(nil), in...)
+	for i := range ordered {
+		if ordered[i].ID == "" || math.IsNaN(ordered[i].Distance) || math.IsInf(ordered[i].Distance, 0) {
+			return nil
+		}
+		ordered[i].Distance = float64(float32(ordered[i].Distance))
+	}
+	sortNeighbors(ordered)
+	ordered = dedupeSortedNeighbors(ordered)
+	if topK < len(ordered) {
+		ordered = ordered[:topK]
+	}
+	return ordered
 }
 
 func recall(want, got []neighbor) float64 {
