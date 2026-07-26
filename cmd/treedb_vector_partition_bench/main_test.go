@@ -1282,6 +1282,31 @@ func TestValidM8AttributionPersistsExhaustiveUnionFailureV1(t *testing.T) {
 	}
 }
 
+func TestM8AttachAttributionAfterMeasurementV1(t *testing.T) {
+	row := m8ProductionRowV1{Samples: 2, RecallAtK: .5}
+	cell := m8AttributionCellV1{
+		Evidence: m8ProductionAttributionV1{
+			Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1,
+			ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
+			ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: .5,
+			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
+			ApproximateRouterCandidateBudget: 2, ApproximateRouterPartitionCoverageComplete: true,
+		},
+		Local: [][]m8CanonicalResultV1{{{ID: "a", Score: 1}}, {{ID: "b", Score: 1}}},
+	}
+	coordinator := [][]m8CanonicalResultV1{{{ID: "a", Score: 1}}, {{ID: "z", Score: 1}}}
+	if err := m8AttachAttributionV1(&row, cell, coordinator); err != nil {
+		t.Fatal(err)
+	}
+	if row.Attribution.EndToEndRecallAtK != row.RecallAtK || row.Attribution.CoordinatorMergeIDParity || !row.Attribution.CoordinatorMergeScoreParity ||
+		!slices.Contains(row.Attribution.ResidualLossOwners, "coordinator_merge_or_transport") {
+		t.Fatalf("post-measurement attribution=%+v", row.Attribution)
+	}
+	if err := m8AttachAttributionV1(&m8ProductionRowV1{Samples: 1}, cell, coordinator); err == nil {
+		t.Fatal("accepted post-measurement attribution cardinality mismatch")
+	}
+}
+
 func TestM8AttributionApproximateCoverageShortfallIsOwnedV1(t *testing.T) {
 	attribution := m8ProductionAttributionV1{
 		Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1,

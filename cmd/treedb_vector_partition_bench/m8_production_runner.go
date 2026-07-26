@@ -26,7 +26,10 @@ import (
 	"github.com/snissn/gomap/TreeDB/nativewire"
 )
 
-const m8ProductionMultiGroupModeV1 = "production_multi_group"
+const (
+	m8ProductionMultiGroupModeV1 = "production_multi_group"
+	m8PeakRSSScopeV1             = "process lifetime through measured query and endpoint-loss fault boundary; includes retained top-k coordinator results; excludes post-measurement attribution"
+)
 
 type m8ProductionReportV1 struct {
 	SchemaVersion      int                                                        `json:"schema_version"`
@@ -159,6 +162,7 @@ type m8ProductionResourceEvidenceV1 struct {
 	PersistentAssetBytes uint64 `json:"persistent_asset_bytes"`
 	PeakRSSBytes         int64  `json:"peak_rss_bytes,omitempty"`
 	PeakRSSMeasured      bool   `json:"peak_rss_measured"`
+	PeakRSSScope         string `json:"peak_rss_scope,omitempty"`
 	OverlapMemberships   int    `json:"overlap_memberships"`
 	MaxPartitionLoad     uint64 `json:"max_partition_load"`
 	BalanceHardCap       uint64 `json:"balance_hard_cap"`
@@ -198,35 +202,9 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 	if err != nil {
 		return err
 	}
-	attributionHarness, err := newM8AttributionHarnessV1(assets)
-	if err != nil {
-		return fmt.Errorf("open M8 attribution harness: %w", err)
-	}
-	attributionHarnessClosed := false
-	defer func() {
-		if !attributionHarnessClosed {
-			runErr = errors.Join(runErr, attributionHarness.Close())
-		}
-	}()
 	approximateCandidates := min(cfg.routerCandidates, int(assets.status.Representatives))
 	if approximateCandidates < 1 {
 		return errors.New("M8 attribution requires an approximate router candidate budget")
-	}
-	attribution := make(map[string]m8AttributionCellV1, len(cfg.probes)*len(cfg.efSearch))
-	exhaustive := make([][]m8CanonicalResultV1, len(queries))
-	for _, probes := range cfg.probes {
-		for _, efSearch := range cfg.efSearch {
-			cell, buildErr := m8BuildAttributionV1(context.Background(), assets, queries, truth, probes, efSearch, cfg.topK, approximateCandidates, exhaustive, attributionHarness)
-			if buildErr != nil {
-				return fmt.Errorf("build M8 attribution probes=%d ef=%d: %w", probes, efSearch, buildErr)
-			}
-			attribution[m8AttributionKeyV1(probes, efSearch)] = cell
-		}
-	}
-	attributionHarnessCloseErr := attributionHarness.Close()
-	attributionHarnessClosed = true
-	if attributionHarnessCloseErr != nil {
-		return fmt.Errorf("close M8 attribution harness: %w", attributionHarnessCloseErr)
 	}
 	report := m8ProductionReportV1{
 		SchemaVersion: 2, ResultKind: "m8_production_multi_group_evidence_v2", Status: "incomplete",
@@ -236,8 +214,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		Config:        m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), RouterCandidates: cfg.routerCandidates, Seed: cfg.seed},
 		BuildNanos:    buildNanos,
 		Profiles:      m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Status: "not_captured", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs requires the captured baseline for differential analysis"},
-		Resources:     m8ProductionResourcesV1(assets),
-		TimedBoundary: "wall-clock query cells after topology, exhaustive endpoint preflight, and generation warmup; includes router, coordinator, TCP M5 serialization, Raft read-index/apply, persistent HNSW search, response merge, and caller scheduling; excludes topology construction, exact truth, preflight, warmup, artifact encoding, and shutdown",
+		TimedBoundary: "wall-clock query cells after topology, exhaustive endpoint preflight, and generation warmup; includes router, coordinator, TCP M5 serialization, Raft read-index/apply, persistent HNSW search, response merge, and caller scheduling; excludes topology construction, exact truth, preflight, warmup, post-measurement attribution, artifact encoding, and shutdown",
 		Limitations: []string{
 			"loopback TCP with real serialized M5 messages and real in-memory HashiCorp Raft consensus; not a multi-host deployment",
 			"the checked-in 10k path materializes disjoint round-robin packs; -m8-existing-db reuses the retained graph-built M3 packs read-only",
@@ -262,6 +239,12 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 			runErr = errors.Join(runErr, closeErr)
 		}
 	}()
+	type measuredCellV1 struct {
+		rowIndex         int
+		probes, efSearch int
+		results          [][]m8CanonicalResultV1
+	}
+	measuredCells := make([]measuredCellV1, 0, len(cfg.overlaps)*len(cfg.probes)*len(cfg.efSearch)*len(cfg.concurrency))
 	for _, overlap := range cfg.overlaps {
 		if overlap != 0 {
 			report.Rows = append(report.Rows, m8ProductionRowV1{Status: "unsupported", UnsupportedReason: "overlap assets are not materialized by the initial M8 production topology checkpoint", Overlap: overlap})
@@ -270,12 +253,13 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		for _, probes := range cfg.probes {
 			for _, ef := range cfg.efSearch {
 				for _, concurrency := range cfg.concurrency {
-					row, rowErr := m8RunProductionCellV1(context.Background(), topology.Coordinator(), assets, queries, truth, attribution[m8AttributionKeyV1(probes, ef)], probes, ef, concurrency, cfg.topK)
+					row, results, rowErr := m8RunProductionCellV1(context.Background(), topology.Coordinator(), assets, queries, truth, probes, ef, concurrency, cfg.topK)
 					if rowErr != nil {
 						return fmt.Errorf("M8 production cell probes=%d ef=%d concurrency=%d: %w", probes, ef, concurrency, rowErr)
 					}
 					row.Overlap = overlap
 					report.Rows = append(report.Rows, row)
+					measuredCells = append(measuredCells, measuredCellV1{rowIndex: len(report.Rows) - 1, probes: probes, efSearch: ef, results: results})
 				}
 			}
 		}
@@ -290,6 +274,47 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		report.Profiles = m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Captured: captured, Status: "captured_production_query_and_fault_boundary", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs.pprof is cumulative and must be compared with allocs_baseline.pprof"}
 	}
 	report.Resources = m8ProductionResourcesV1(assets)
+
+	// Attribution deliberately runs after the timed query/fault boundary,
+	// profile capture, and peak-RSS snapshot. Its exhaustive mmap scans must not
+	// pre-fault the corpus or contaminate measured process-resource evidence.
+	// The snapshot does include the bounded top-k coordinator results retained
+	// from measured cells so post-measurement attribution can verify parity.
+	attributionHarness, err := newM8AttributionHarnessV1(assets)
+	if err != nil {
+		return fmt.Errorf("open M8 attribution harness: %w", err)
+	}
+	attributionHarnessClosed := false
+	defer func() {
+		if !attributionHarnessClosed {
+			runErr = errors.Join(runErr, attributionHarness.Close())
+		}
+	}()
+	attribution := make(map[string]m8AttributionCellV1, len(cfg.probes)*len(cfg.efSearch))
+	exhaustive := make([][]m8CanonicalResultV1, len(queries))
+	for _, probes := range cfg.probes {
+		for _, efSearch := range cfg.efSearch {
+			cell, buildErr := m8BuildAttributionV1(context.Background(), assets, queries, truth, probes, efSearch, cfg.topK, approximateCandidates, exhaustive, attributionHarness)
+			if buildErr != nil {
+				return fmt.Errorf("build M8 attribution probes=%d ef=%d: %w", probes, efSearch, buildErr)
+			}
+			attribution[m8AttributionKeyV1(probes, efSearch)] = cell
+		}
+	}
+	closeErr := attributionHarness.Close()
+	attributionHarnessClosed = true
+	if closeErr != nil {
+		return fmt.Errorf("close M8 attribution harness: %w", closeErr)
+	}
+	for _, measured := range measuredCells {
+		cell, ok := attribution[m8AttributionKeyV1(measured.probes, measured.efSearch)]
+		if !ok {
+			return fmt.Errorf("missing M8 attribution probes=%d ef=%d", measured.probes, measured.efSearch)
+		}
+		if err := m8AttachAttributionV1(&report.Rows[measured.rowIndex], cell, measured.results); err != nil {
+			return fmt.Errorf("attach M8 attribution probes=%d ef=%d: %w", measured.probes, measured.efSearch, err)
+		}
+	}
 	report.GateLedger = m8ProductionGateLedgerForReportV1(report)
 	if m8ProductionAllGatesPassV1(report.GateLedger) {
 		report.Status = "pass"
@@ -892,13 +917,14 @@ func m8ProductionResourcesV1(assets *m8ProductionMultiGroupAssetsV1) m8Productio
 	rows, partitions := assets.manifest.SourceRowCount, uint64(assets.manifest.PartitionCount)
 	out.BalanceHardCap = (rows*105 + partitions*100 - 1) / (partitions * 100)
 	out.MmapStatus = "not_captured_by_m8_runner; retained M3/M5 artifacts own mapped-pack evidence"
+	out.PeakRSSScope = m8PeakRSSScopeV1
 	if peak, ok := vectorPartitionBenchmarkPeakRSS(); ok {
 		out.PeakRSSBytes, out.PeakRSSMeasured = peak, true
 	}
 	return out
 }
 
-func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPartitionCoordinatorV1, assets *m8ProductionMultiGroupAssetsV1, queries [][]float64, truth [][]m8CanonicalResultV1, attribution m8AttributionCellV1, probes, efSearch, concurrency, topK int) (m8ProductionRowV1, error) {
+func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPartitionCoordinatorV1, assets *m8ProductionMultiGroupAssetsV1, queries [][]float64, truth [][]m8CanonicalResultV1, probes, efSearch, concurrency, topK int) (m8ProductionRowV1, [][]m8CanonicalResultV1, error) {
 	type outcome struct {
 		response nativewire.VectorPartitionCoordinatorResponseV1
 		err      error
@@ -918,21 +944,20 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 		outcomes[index].response, outcomes[index].err = coordinator.Search(requestCtx, m8ProductionRequestV1(assets, query, fmt.Sprintf("m8-q-%06d-p-%04d-ef-%06d-c-%03d", index, probes, efSearch, concurrency), probes, efSearch, topK))
 	})
 	elapsed := time.Since(started)
-	row := m8ProductionRowV1{Status: "pass", Probes: probes, EfSearch: efSearch, Concurrency: concurrency, RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidates: max(1, int(assets.status.Representatives)), Samples: len(queries), ExactParityChecked: probes == len(assets.manifest.Placements), ExactParityPassed: probes == len(assets.manifest.Placements), Attribution: attribution.Evidence}
+	row := m8ProductionRowV1{Status: "pass", Probes: probes, EfSearch: efSearch, Concurrency: concurrency, RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidates: max(1, int(assets.status.Representatives)), Samples: len(queries), ExactParityChecked: probes == len(assets.manifest.Placements), ExactParityPassed: probes == len(assets.manifest.Placements)}
+	canonicalResults := make([][]m8CanonicalResultV1, len(outcomes))
 	durations := make([]uint64, 0, len(outcomes))
 	var recallSum float64
 	for index, outcome := range outcomes {
 		if outcome.err != nil {
-			return row, fmt.Errorf("query %d: %w", index, outcome.err)
+			return row, nil, fmt.Errorf("query %d: %w", index, outcome.err)
 		}
 		got, shapeErr := m8ValidateCoordinatorResponseV1(outcome.response, assets.manifest, probes, topK)
 		if shapeErr != nil {
-			return row, fmt.Errorf("query %d response shape: %w", index, shapeErr)
+			return row, nil, fmt.Errorf("query %d response shape: %w", index, shapeErr)
 		}
+		canonicalResults[index] = got
 		recallSum += m8CanonicalRecallV1(truth[index], got)
-		idParity, scoreParity := m8CanonicalParityV1(attribution.Local[index], got)
-		row.Attribution.CoordinatorMergeIDParity = row.Attribution.CoordinatorMergeIDParity && idParity
-		row.Attribution.CoordinatorMergeScoreParity = row.Attribution.CoordinatorMergeScoreParity && scoreParity
 		globalIDParity, globalScoreParity := m8CanonicalParityV1(truth[index], got)
 		if row.ExactParityChecked && (!globalIDParity || !globalScoreParity) {
 			row.ExactParityPassed = false
@@ -946,11 +971,24 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 	}
 	row.NoPartialResults = true
 	row.RecallAtK = recallSum / float64(len(outcomes))
-	row.Attribution.EndToEndRecallAtK = row.RecallAtK
-	row.Attribution.ResidualLossOwners = m8AttributionLossOwnersV1(row.Attribution)
 	row.QPS = float64(len(outcomes)) / elapsed.Seconds()
 	row.P50Nanos, row.P95Nanos, row.P99Nanos = m8PercentileV1(durations, 50), m8PercentileV1(durations, 95), m8PercentileV1(durations, 99)
-	return row, nil
+	return row, canonicalResults, nil
+}
+
+func m8AttachAttributionV1(row *m8ProductionRowV1, attribution m8AttributionCellV1, coordinatorResults [][]m8CanonicalResultV1) error {
+	if row == nil || row.Samples < 1 || len(attribution.Local) != row.Samples || len(coordinatorResults) != row.Samples {
+		return errors.New("M8 attribution result cardinality mismatch")
+	}
+	row.Attribution = attribution.Evidence
+	for i := range coordinatorResults {
+		idParity, scoreParity := m8CanonicalParityV1(attribution.Local[i], coordinatorResults[i])
+		row.Attribution.CoordinatorMergeIDParity = row.Attribution.CoordinatorMergeIDParity && idParity
+		row.Attribution.CoordinatorMergeScoreParity = row.Attribution.CoordinatorMergeScoreParity && scoreParity
+	}
+	row.Attribution.EndToEndRecallAtK = row.RecallAtK
+	row.Attribution.ResidualLossOwners = m8AttributionLossOwnersV1(row.Attribution)
+	return nil
 }
 
 func m8ValidateCoordinatorResponseV1(response nativewire.VectorPartitionCoordinatorResponseV1, manifest collections.VectorPartitionManifestV1, probes, topK int) ([]m8CanonicalResultV1, error) {
@@ -1285,7 +1323,8 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 		}
 	}
 	if !report.Failure.Passed || report.Failure.Error == "" || report.Failure.ReturnedNeighbors != 0 || report.Failure.ReturnedGroups != 0 ||
-		report.GateLedger.FailureHonesty != "pass" || report.Resources.PersistentAssetBytes == 0 {
+		report.GateLedger.FailureHonesty != "pass" || report.Resources.PersistentAssetBytes == 0 ||
+		report.Resources.PeakRSSMeasured && report.Resources.PeakRSSScope != m8PeakRSSScopeV1 {
 		return errors.New("incomplete M8 failure or resource evidence")
 	}
 	if report.Profiles.Status == "captured_production_query_and_fault_boundary" {

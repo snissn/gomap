@@ -226,6 +226,15 @@ merge; its all-partition owner is partition-local HNSW.
 | clean 10k attribution JSON | `/mnt/fast4tb/tmp/treedb_vector_partition_3980_10k_clean_fvQhPj/vector_partition_m8_3b5271166529_0f33a1583ce3.json` | `c9d37aba290284b742f9e8189b429031146226a8cf9801370bd15754b80c81dc` |
 | clean retained 1M attribution JSON | `/mnt/fast4tb/tmp/treedb_vector_partition_3980_1m_clean_Wadji9/vector_partition_m8_3b5271166529_55786c770e98.json` | `9afad07fb8daf374076fe9fa630106ffdf6241ae746344349eb1885d37cdfbd1` |
 
+These two diagnostic records predate the runner-ordering repair and performed
+their exhaustive mmap-backed attribution scans before the timed sweep. They
+remain valid for exactness and recall-loss ownership, but their QPS, latency,
+profile, and peak-RSS fields are not clean performance evidence. The current
+runner completes the measured query/fault profile and snapshots peak RSS before
+opening the attribution harness. The peak-RSS scope still includes the bounded
+top-k coordinator results retained from measured cells for later parity checks;
+performance acceptance requires a new capture.
+
 These runs diagnose ownership; they do not pass the original exhaustive-HNSW,
 representative-recall, overlap, resource-bound, or matched-QPS enablement gates.
 Issue #3981 owns generation-pinned request-session caching. Issue #3982 owns

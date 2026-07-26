@@ -75,6 +75,15 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	if err := validateM8ProductionReportV1(report); err != nil {
 		t.Fatalf("valid endpoint coverage rejected: %v", err)
 	}
+	report.Resources.PeakRSSMeasured = true
+	if err := validateM8ProductionReportV1(report); err == nil {
+		t.Fatal("accepted measured peak RSS without an explicit scope")
+	}
+	report.Resources.PeakRSSScope = "forged measured boundary"
+	if err := validateM8ProductionReportV1(report); err == nil {
+		t.Fatal("accepted measured peak RSS with a forged scope")
+	}
+	report.Resources.PeakRSSScope = m8PeakRSSScopeV1
 	report.Topology.Groups[1].EndpointHits = 0
 	if err := validateM8ProductionReportV1(report); err == nil {
 		t.Fatal("accepted report with an unexercised data-group endpoint")
@@ -276,8 +285,11 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	row, err := m8RunProductionCellV1(ctx, topology.Coordinator(), assets, attributionQueries, truth, attribution, 4, 4096, 4, 10)
+	row, coordinatorResults, err := m8RunProductionCellV1(ctx, topology.Coordinator(), assets, attributionQueries, truth, 4, 4096, 4, 10)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m8AttachAttributionV1(&row, attribution, coordinatorResults); err != nil {
 		t.Fatal(err)
 	}
 	if row.Attribution.Contract != m8CanonicalResultContractV1 || row.Attribution.ExhaustivePartitionRecallAtK != 1 ||
