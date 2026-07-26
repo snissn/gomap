@@ -21,7 +21,11 @@ import (
 type testVectorPartitionCoordinatorRouterV1 struct {
 	status     collections.VectorPartitionRouterRuntimeStatusV1
 	partitions []collections.VectorPartitionRouterPartitionScoreV1
+	closeMu    sync.Mutex
 	closeCount int
+	closeErr   error
+	closeBlock <-chan struct{}
+	closeStart chan<- struct{}
 }
 
 func (r *testVectorPartitionCoordinatorRouterV1) SearchWithContextV1(ctx context.Context, _ []float32, opts collections.VectorPartitionRouterSearchOptionsV1) (collections.VectorPartitionRouterSearchResultV1, error) {
@@ -46,8 +50,17 @@ func (r *testVectorPartitionCoordinatorRouterV1) Status() collections.VectorPart
 }
 
 func (r *testVectorPartitionCoordinatorRouterV1) Close() error {
+	r.closeMu.Lock()
 	r.closeCount++
-	return nil
+	closeErr, closeBlock, closeStart := r.closeErr, r.closeBlock, r.closeStart
+	r.closeMu.Unlock()
+	if closeStart != nil {
+		closeStart <- struct{}{}
+	}
+	if closeBlock != nil {
+		<-closeBlock
+	}
+	return closeErr
 }
 
 type testVectorPartitionCoordinatorRouterSourceV1 struct {
@@ -58,13 +71,19 @@ type testVectorPartitionCoordinatorRouterSourceV1 struct {
 	openStarted chan<- struct{}
 	openBlock   <-chan struct{}
 	openErr     error
+	openRouters []VectorPartitionCoordinatorRouterV1
+	nextRouter  int
 }
 
 func (s *testVectorPartitionCoordinatorRouterSourceV1) OpenVectorPartitionCoordinatorRouterV1(ctx context.Context, _ string, generation uint64) (VectorPartitionCoordinatorRouterV1, error) {
 	s.mu.Lock()
 	s.opens++
 	s.generations = append(s.generations, generation)
-	started, block, openErr := s.openStarted, s.openBlock, s.openErr
+	started, block, openErr, router := s.openStarted, s.openBlock, s.openErr, VectorPartitionCoordinatorRouterV1(s.router)
+	if len(s.openRouters) > 0 {
+		router = s.openRouters[min(s.nextRouter, len(s.openRouters)-1)]
+		s.nextRouter++
+	}
 	s.mu.Unlock()
 	if started != nil {
 		select {
@@ -83,7 +102,7 @@ func (s *testVectorPartitionCoordinatorRouterSourceV1) OpenVectorPartitionCoordi
 	if openErr != nil {
 		return nil, openErr
 	}
-	return s.router, nil
+	return router, nil
 }
 
 func (s *testVectorPartitionCoordinatorRouterSourceV1) openCount() int {
@@ -486,6 +505,78 @@ func TestVectorPartitionCoordinatorRouterOpenCorruptionFailsClosedV1(t *testing.
 	stats := coordinator.Stats()
 	if len(stats.RouterSessions) != 1 || stats.RouterSessions[0].ColdOpens != 1 || stats.RouterSessions[0].ManifestOpenAttempts != 1 || stats.RouterSessions[0].Misses != 1 || stats.RouterSessions[0].OpenFailures != 1 || stats.RouterSessions[0].ReaderPins != 0 {
 		t.Fatalf("session stats=%+v", stats.RouterSessions)
+	}
+}
+
+func TestVectorPartitionCoordinatorRetiredRouterCloseErrorIsRetainedV1(t *testing.T) {
+	coordinator, source, _ := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"}, map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "doc", Score: 1}}}, VectorPartitionCoordinatorLimitsV1{},
+	)
+	sentinel := errors.New("retired router close failed")
+	source.router.closeErr = sentinel
+	source.router.status.Manifest.SourceChecksum++ // fail lifecycle after cache admission
+	response, err := coordinator.Search(t.Context(), testVectorPartitionCoordinatorRequestV1(1))
+	if !errors.Is(err, sentinel) || !vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
+		t.Fatalf("response=%+v err=%v", response, err)
+	}
+	if err := coordinator.Close(); !errors.Is(err, sentinel) {
+		t.Fatalf("Coordinator.Close err=%v want retained %v", err, sentinel)
+	}
+}
+
+func TestVectorPartitionCoordinatorRetirementAllowsDistinctReplacementOpenV1(t *testing.T) {
+	coordinator, source, _ := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"}, map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "doc", Score: 1}}}, VectorPartitionCoordinatorLimitsV1{},
+	)
+	oldRouter := source.router
+	newRouter := &testVectorPartitionCoordinatorRouterV1{status: oldRouter.status, partitions: slices.Clone(oldRouter.partitions)}
+	closeStarted, closeBlock := make(chan struct{}, 1), make(chan struct{})
+	oldRouter.closeStart, oldRouter.closeBlock = closeStarted, closeBlock
+	source.openRouters = []VectorPartitionCoordinatorRouterV1{oldRouter, newRouter}
+
+	oldLease, err := coordinator.acquireRouterSessionV1(t.Context(), "embedding", coordinator.placement.PartitionGeneration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.recordRouterSessionIdentityV1(oldLease, oldRouter.status, "ready-old")
+	coordinator.retireRouterSessionV1(oldLease)
+	oldClosed := make(chan error, 1)
+	go func() { oldClosed <- oldLease.Close() }()
+	select {
+	case <-closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("old router close did not begin")
+	}
+
+	newLease, err := coordinator.acquireRouterSessionV1(t.Context(), "embedding", coordinator.placement.PartitionGeneration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newLease.session.router != newRouter || source.openCount() != 2 {
+		t.Fatalf("replacement router=%p opens=%d", newLease.session.router, source.openCount())
+	}
+	newStatus := newRouter.status
+	newStatus.ModelDigest = "new-model"
+	coordinator.recordRouterSessionIdentityV1(newLease, newStatus, "ready-new")
+	close(closeBlock)
+	if err := <-oldClosed; err != nil {
+		t.Fatal(err)
+	}
+	if err := newLease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if oldRouter.closeCount != 1 || newRouter.closeCount != 1 {
+		t.Fatalf("old closes=%d new closes=%d", oldRouter.closeCount, newRouter.closeCount)
+	}
+	sessions := coordinator.Stats().RouterSessions
+	if len(sessions) != 2 || sessions[0].Identity.ReadySetDigest != "ready-new" || sessions[0].Identity.RouterModelDigest != "new-model" ||
+		sessions[1].Identity.ReadySetDigest != "ready-old" || sessions[1].Identity.RouterModelDigest != oldRouter.status.ModelDigest {
+		t.Fatalf("session stats=%+v", sessions)
 	}
 }
 

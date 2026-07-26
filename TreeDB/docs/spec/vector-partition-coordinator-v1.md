@@ -70,16 +70,20 @@ the replicated lifecycle authority before routing or M5 dispatch. Cold opens
 are singleflight and a waiting request may cancel without canceling a shared
 session. A runtime-status or lifecycle rejection retires that exact session:
 new leases cannot reuse it and its persistent reader pin is released after its
-last lease. `Close` rejects new searches, drains leases, then closes any
-remaining pinned router handles.
+last lease. A final router-close error is joined to the owning search result
+and retained for `Close`, so retirement cannot silently hide release failure.
+`Close` rejects new searches, drains leases, then closes any remaining pinned
+router handles.
 
 The coordinator is immutable for one accepted catalog/collection/index/source/
 partition epoch. Catalog or generation replacement constructs a replacement
 coordinator and drains the old coordinator before its sources retire; there is
 no cross-epoch or process-global router cache. `Stats` includes a deterministic
-sorted session snapshot with cold-open, hit/miss, open-failure, lease,
-reader-pin/release, invalidation, and close accounting for that accepted
-identity. `manifest_open_attempts` is the count of source calls that perform
+sorted snapshot of physical router sessions with cold-open, hit/miss,
+open-failure, lease, reader-pin/release, invalidation, and close accounting.
+Each successful session binds its accepted ready-set and router-model identity
+once; retirement and a same-epoch reopen cannot overwrite prior-session
+telemetry. `manifest_open_attempts` is the count of source calls that perform
 the manifest/asset validation-open boundary; repeated session hits perform no
 such open.
 

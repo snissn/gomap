@@ -66,8 +66,11 @@ The topology is immutable for its constructed catalog and generation epoch.
 Replacement builds a new topology/coordinator and closes the old one before
 retiring old sources. M8 records deterministic router-session snapshots before
 warmup, after warmup, and after measured cells so the cold/open versus
-steady-state manifest boundary is auditable; those snapshots are not a
-substitute for matched base/head performance evidence.
+steady-state manifest boundary is auditable. A valid measured snapshot keeps
+the exact warmed identity set and cold/open/miss/reader-pin counters unchanged,
+adds cache hits with balanced leases, and reports no lifecycle invalidation or
+close. Those snapshots are not a substitute for matched base/head performance
+evidence.
 
 ## Persistent retained-asset adapter
 

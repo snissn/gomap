@@ -294,12 +294,14 @@ type VectorPartitionCoordinatorV1 struct {
 	sessionCond         *sync.Cond
 	sessions            map[vectorPartitionCoordinatorRouterKeyV1]*vectorPartitionCoordinatorRouterSessionV1
 	loads               map[vectorPartitionCoordinatorRouterKeyV1]*vectorPartitionCoordinatorRouterLoadV1
-	sessionStats        map[vectorPartitionCoordinatorRouterKeyV1]*VectorPartitionCoordinatorRouterSessionStatsV1
+	sessionStats        map[uint64]*vectorPartitionCoordinatorRouterSessionStatsV1
+	nextSessionStatsID  uint64
 	closing             uint64
 	leases              uint64
 	closed              bool
 	closeOnce           sync.Once
 	closeErr            error
+	routerCloseErr      error
 }
 
 // A router session owns one generation-pinned M4 router for the lifetime of a
@@ -315,8 +317,17 @@ type vectorPartitionCoordinatorRouterKeyV1 struct {
 
 type vectorPartitionCoordinatorRouterSessionV1 struct {
 	router           VectorPartitionCoordinatorRouterV1
+	stats            *vectorPartitionCoordinatorRouterSessionStatsV1
 	refs             uint64
 	retired, closing bool
+}
+
+// vectorPartitionCoordinatorRouterSessionStatsV1 keeps the sorting tie-breaker
+// private while exposing stable, immutable accepted identities in Stats.
+type vectorPartitionCoordinatorRouterSessionStatsV1 struct {
+	id       uint64
+	accepted bool
+	value    VectorPartitionCoordinatorRouterSessionStatsV1
 }
 
 type vectorPartitionCoordinatorRouterLoadV1 struct {
@@ -328,6 +339,7 @@ type vectorPartitionCoordinatorRouterLeaseV1 struct {
 	key         vectorPartitionCoordinatorRouterKeyV1
 	session     *vectorPartitionCoordinatorRouterSessionV1
 	once        sync.Once
+	closeErr    error
 }
 
 func NewVectorPartitionCoordinatorV1(opts VectorPartitionCoordinatorOptionsV1) (*VectorPartitionCoordinatorV1, error) {
@@ -357,7 +369,7 @@ func NewVectorPartitionCoordinatorV1(opts VectorPartitionCoordinatorOptionsV1) (
 		limits: limits, groups: groups,
 		sessions:     make(map[vectorPartitionCoordinatorRouterKeyV1]*vectorPartitionCoordinatorRouterSessionV1),
 		loads:        make(map[vectorPartitionCoordinatorRouterKeyV1]*vectorPartitionCoordinatorRouterLoadV1),
-		sessionStats: make(map[vectorPartitionCoordinatorRouterKeyV1]*VectorPartitionCoordinatorRouterSessionStatsV1),
+		sessionStats: make(map[uint64]*vectorPartitionCoordinatorRouterSessionStatsV1),
 	}
 	coordinator.sessionCond = sync.NewCond(&coordinator.sessionMu)
 	return coordinator, nil
@@ -434,9 +446,8 @@ func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Contex
 		if session := c.sessions[key]; session != nil {
 			session.refs++
 			c.leases++
-			stats := c.sessionStatsForKeyLocked(key)
-			stats.Hits++
-			stats.LeasePins++
+			session.stats.value.Hits++
+			session.stats.value.LeasePins++
 			c.sessionMu.Unlock()
 			return &vectorPartitionCoordinatorRouterLeaseV1{coordinator: c, key: key, session: session}, nil
 		}
@@ -453,10 +464,10 @@ func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Contex
 		}
 		load := &vectorPartitionCoordinatorRouterLoadV1{ready: make(chan struct{})}
 		c.loads[key] = load
-		stats := c.sessionStatsForKeyLocked(key)
-		stats.ColdOpens++
-		stats.ManifestOpenAttempts++
-		stats.Misses++
+		stats := c.newRouterSessionStatsLocked(key)
+		stats.value.ColdOpens++
+		stats.value.ManifestOpenAttempts++
+		stats.value.Misses++
 		c.sessionMu.Unlock()
 
 		router, err := c.routerSource.OpenVectorPartitionCoordinatorRouterV1(ctx, index, generation)
@@ -469,12 +480,11 @@ func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Contex
 			err = fmt.Errorf("%w: coordinator closed", ErrVectorPartitionCoordinatorUnavailable)
 		}
 		if err == nil {
-			session := &vectorPartitionCoordinatorRouterSessionV1{router: router, refs: 1}
+			session := &vectorPartitionCoordinatorRouterSessionV1{router: router, stats: stats, refs: 1}
 			c.sessions[key] = session
 			c.leases++
-			stats := c.sessionStatsForKeyLocked(key)
-			stats.ReaderPins++
-			stats.LeasePins++
+			stats.value.ReaderPins++
+			stats.value.LeasePins++
 			close(load.ready)
 			c.sessionCond.Broadcast()
 			c.sessionMu.Unlock()
@@ -482,9 +492,9 @@ func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Contex
 		}
 		close(load.ready)
 		c.sessionCond.Broadcast()
-		c.sessionStatsForKeyLocked(key).OpenFailures++
+		stats.value.OpenFailures++
 		if router != nil {
-			c.sessionStatsForKeyLocked(key).ReaderPins++
+			stats.value.ReaderPins++
 			c.closing++
 		}
 		c.sessionMu.Unlock()
@@ -492,7 +502,7 @@ func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Contex
 			closeErr := router.Close()
 			c.sessionMu.Lock()
 			c.closing--
-			c.sessionStatsForKeyLocked(key).ReaderReleases++
+			stats.value.ReaderReleases++
 			c.sessionCond.Broadcast()
 			c.sessionMu.Unlock()
 			err = errors.Join(err, closeErr)
@@ -515,19 +525,16 @@ func (c *VectorPartitionCoordinatorV1) routerSessionKeyV1(index string, generati
 	}, true
 }
 
-func (c *VectorPartitionCoordinatorV1) sessionStatsForKeyLocked(key vectorPartitionCoordinatorRouterKeyV1) *VectorPartitionCoordinatorRouterSessionStatsV1 {
-	stats := c.sessionStats[key]
-	if stats != nil {
-		return stats
-	}
-	stats = &VectorPartitionCoordinatorRouterSessionStatsV1{Identity: VectorPartitionCoordinatorRouterSessionIdentityV1{
+func (c *VectorPartitionCoordinatorV1) newRouterSessionStatsLocked(key vectorPartitionCoordinatorRouterKeyV1) *vectorPartitionCoordinatorRouterSessionStatsV1 {
+	c.nextSessionStatsID++
+	stats := &vectorPartitionCoordinatorRouterSessionStatsV1{id: c.nextSessionStatsID, value: VectorPartitionCoordinatorRouterSessionStatsV1{Identity: VectorPartitionCoordinatorRouterSessionIdentityV1{
 		Database: key.database, Catalog: key.catalog, Collection: key.collection,
 		IndexName: key.index, IndexDefinitionDigest: key.indexDefinitionDigest,
 		SourceGeneration: key.sourceGeneration, SourceChecksum: key.sourceChecksum,
 		SourceSchemaHash: key.sourceSchemaHash, SourceRowCount: key.sourceRowCount,
 		PartitionGeneration: key.generation,
-	}}
-	c.sessionStats[key] = stats
+	}}}
+	c.sessionStats[stats.id] = stats
 	return stats
 }
 
@@ -536,9 +543,12 @@ func (c *VectorPartitionCoordinatorV1) recordRouterSessionIdentityV1(lease *vect
 		return
 	}
 	c.sessionMu.Lock()
-	stats := c.sessionStatsForKeyLocked(lease.key)
-	stats.Identity.ReadySetDigest = readySetDigest
-	stats.Identity.RouterModelDigest = status.ModelDigest
+	stats := lease.session.stats
+	if stats != nil && !stats.accepted {
+		stats.value.Identity.ReadySetDigest = readySetDigest
+		stats.value.Identity.RouterModelDigest = status.ModelDigest
+		stats.accepted = true
+	}
 	c.sessionMu.Unlock()
 }
 
@@ -553,15 +563,17 @@ func (c *VectorPartitionCoordinatorV1) retireRouterSessionV1(lease *vectorPartit
 		if c.sessions[lease.key] == session {
 			delete(c.sessions, lease.key)
 		}
-		c.sessionStatsForKeyLocked(lease.key).Invalidations++
+		if session.stats != nil {
+			session.stats.value.Invalidations++
+		}
 	}
 	c.sessionCond.Broadcast()
 	c.sessionMu.Unlock()
 }
 
-func (l *vectorPartitionCoordinatorRouterLeaseV1) Close() {
+func (l *vectorPartitionCoordinatorRouterLeaseV1) Close() error {
 	if l == nil || l.coordinator == nil || l.session == nil {
-		return
+		return nil
 	}
 	l.once.Do(func() {
 		c := l.coordinator
@@ -572,31 +584,41 @@ func (l *vectorPartitionCoordinatorRouterLeaseV1) Close() {
 		if c.leases > 0 {
 			c.leases--
 		}
-		c.sessionStatsForKeyLocked(l.key).LeaseReleases++
-		closeRouter := c.routerToCloseLocked(l.key, l.session)
+		if l.session.stats != nil {
+			l.session.stats.value.LeaseReleases++
+		}
+		closeRouter := c.routerToCloseLocked(l.session)
 		c.sessionCond.Broadcast()
 		c.sessionMu.Unlock()
 		if closeRouter != nil {
-			c.closeRouterSessionV1(l.key, closeRouter)
+			l.closeErr = c.closeRouterSessionV1(l.session.stats, closeRouter)
 		}
 	})
+	return l.closeErr
 }
 
-func (c *VectorPartitionCoordinatorV1) routerToCloseLocked(key vectorPartitionCoordinatorRouterKeyV1, session *vectorPartitionCoordinatorRouterSessionV1) VectorPartitionCoordinatorRouterV1 {
+func (c *VectorPartitionCoordinatorV1) routerToCloseLocked(session *vectorPartitionCoordinatorRouterSessionV1) VectorPartitionCoordinatorRouterV1 {
 	if session == nil || session.closing || session.refs != 0 || (!session.retired && !c.closed) || session.router == nil {
 		return nil
 	}
 	session.closing = true
 	c.closing++
-	c.sessionStatsForKeyLocked(key).Closes++
+	if session.stats != nil {
+		session.stats.value.Closes++
+	}
 	return session.router
 }
 
-func (c *VectorPartitionCoordinatorV1) closeRouterSessionV1(key vectorPartitionCoordinatorRouterKeyV1, router VectorPartitionCoordinatorRouterV1) error {
+func (c *VectorPartitionCoordinatorV1) closeRouterSessionV1(stats *vectorPartitionCoordinatorRouterSessionStatsV1, router VectorPartitionCoordinatorRouterV1) error {
 	err := router.Close()
 	c.sessionMu.Lock()
 	c.closing--
-	c.sessionStatsForKeyLocked(key).ReaderReleases++
+	if stats != nil {
+		stats.value.ReaderReleases++
+	}
+	if err != nil {
+		c.routerCloseErr = errors.Join(c.routerCloseErr, err)
+	}
 	c.sessionCond.Broadcast()
 	c.sessionMu.Unlock()
 	return err
@@ -615,25 +637,26 @@ func (c *VectorPartitionCoordinatorV1) Close() error {
 			c.sessionCond.Wait()
 		}
 		routers := make([]struct {
-			key    vectorPartitionCoordinatorRouterKeyV1
 			router VectorPartitionCoordinatorRouterV1
+			stats  *vectorPartitionCoordinatorRouterSessionStatsV1
 		}, 0, len(c.sessions))
 		for key, session := range c.sessions {
 			delete(c.sessions, key)
 			session.retired = true
-			if router := c.routerToCloseLocked(key, session); router != nil {
+			if router := c.routerToCloseLocked(session); router != nil {
 				routers = append(routers, struct {
-					key    vectorPartitionCoordinatorRouterKeyV1
 					router VectorPartitionCoordinatorRouterV1
-				}{key: key, router: router})
+					stats  *vectorPartitionCoordinatorRouterSessionStatsV1
+				}{router: router, stats: session.stats})
 			}
 		}
 		c.sessionMu.Unlock()
-		var errs []error
 		for _, item := range routers {
-			errs = append(errs, c.closeRouterSessionV1(item.key, item.router))
+			c.closeRouterSessionV1(item.stats, item.router)
 		}
-		c.closeErr = errors.Join(errs...)
+		c.sessionMu.Lock()
+		c.closeErr = c.routerCloseErr
+		c.sessionMu.Unlock()
 	})
 	return c.closeErr
 }
@@ -733,7 +756,11 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 	if err != nil {
 		return response, c.wrapError(err, "")
 	}
-	defer routerLease.Close()
+	defer func() {
+		if closeErr := routerLease.Close(); closeErr != nil {
+			resultErr = errors.Join(resultErr, closeErr)
+		}
+	}()
 	router := routerLease.session.router
 	status := router.Status()
 	if err := c.validateRouterStatus(request, status); err != nil {
@@ -1769,13 +1796,17 @@ func (c *VectorPartitionCoordinatorV1) Stats() VectorPartitionCoordinatorStatsV1
 	stats := c.stats.value
 	c.stats.mu.Unlock()
 	c.sessionMu.Lock()
-	stats.RouterSessions = make([]VectorPartitionCoordinatorRouterSessionStatsV1, 0, len(c.sessionStats))
+	type sessionStat struct {
+		id    uint64
+		value VectorPartitionCoordinatorRouterSessionStatsV1
+	}
+	sessions := make([]sessionStat, 0, len(c.sessionStats))
 	for _, session := range c.sessionStats {
-		stats.RouterSessions = append(stats.RouterSessions, *session)
+		sessions = append(sessions, sessionStat{id: session.id, value: session.value})
 	}
 	c.sessionMu.Unlock()
-	sort.Slice(stats.RouterSessions, func(i, j int) bool {
-		left, right := stats.RouterSessions[i].Identity, stats.RouterSessions[j].Identity
+	sort.Slice(sessions, func(i, j int) bool {
+		left, right := sessions[i].value.Identity, sessions[j].value.Identity
 		if left.Database != right.Database {
 			return left.Database < right.Database
 		}
@@ -1788,7 +1819,20 @@ func (c *VectorPartitionCoordinatorV1) Stats() VectorPartitionCoordinatorStatsV1
 		if left.IndexName != right.IndexName {
 			return left.IndexName < right.IndexName
 		}
-		return left.PartitionGeneration < right.PartitionGeneration
+		if left.PartitionGeneration != right.PartitionGeneration {
+			return left.PartitionGeneration < right.PartitionGeneration
+		}
+		if left.ReadySetDigest != right.ReadySetDigest {
+			return left.ReadySetDigest < right.ReadySetDigest
+		}
+		if left.RouterModelDigest != right.RouterModelDigest {
+			return left.RouterModelDigest < right.RouterModelDigest
+		}
+		return sessions[i].id < sessions[j].id
 	})
+	stats.RouterSessions = make([]VectorPartitionCoordinatorRouterSessionStatsV1, len(sessions))
+	for i := range sessions {
+		stats.RouterSessions[i] = sessions[i].value
+	}
 	return stats
 }
