@@ -56,6 +56,7 @@ const (
 	memorySlackDenominator               = 4
 	memoryBudgetScope                    = "modeled_peak_live_bytes_v1: contiguous generated float64 fixture/query matrices and row headers; exact/selected top-k candidates; representative routing; persisted router ingest JSON/IDs/slices and source-row capture; HNSW partition JSON plus decoded JSON/vector batch; HNSW query merge and cache; 25% allocation slack; excludes TreeDB engine/index internals, Go runtime/GC metadata, and artifact/CLI encoding"
 	benchmarkWorkScope                   = "benchmark_owned_vector_query_corpus_visits_v1: checksum exact truth once; mandatory truth plus enabled exhaustive/routing corpus passes for every probe/overlap row; excludes TreeDB HNSW engine-internal search work"
+	m8BenchmarkWorkScope                 = "m8_query_passes_v1: measured coordinator requests, warmup/endpoint preflight, cached exhaustive attribution, and exact/approximate/local-HNSW attribution passes; excludes the pre-existing canonical source oracle and engine-internal HNSW work"
 )
 
 type config struct {
@@ -1061,25 +1062,45 @@ type m3BenchmarkWorkPlan struct {
 	VectorQueryVisits           int64
 }
 
-type m8BenchmarkWorkPlan struct{ QueryRequests int64 }
+type m8BenchmarkWorkPlan struct {
+	MeasuredQueryRequests           int64
+	WarmupAndPreflightQueryRequests int64
+	AttributionQueryPasses          int64
+	QueryRequests                   int64
+}
 
 func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits int64) (m8BenchmarkWorkPlan, error) {
 	if capUnits < 1 || len(cfg.overlaps) == 0 || len(cfg.probes) == 0 || len(cfg.efSearch) == 0 || len(cfg.concurrency) == 0 {
 		return m8BenchmarkWorkPlan{}, errors.New("cannot plan M8 benchmark work without a positive cap and complete sweeps")
 	}
-	requests, err := memoryMul(int64(len(cfg.overlaps)), int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(m.Queries))
+	measured, err := memoryMul(int64(len(cfg.overlaps)), int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(m.Queries))
 	if err != nil {
 		return m8BenchmarkWorkPlan{}, err
 	}
 	// Production M8 also performs one exhaustive endpoint preflight and the
 	// configured untimed warmup requests outside the measured cell sweep.
-	requests, err = memoryAdd(requests, int64(cfg.warmup), 1)
+	warmupAndPreflight, err := memoryAdd(int64(cfg.warmup), 1)
 	if err != nil {
 		return m8BenchmarkWorkPlan{}, err
 	}
-	plan := m8BenchmarkWorkPlan{QueryRequests: requests}
+	// Attribution runs once before measured overlap/concurrency rows. For every
+	// query/probe/ef cell it executes exact, approximate, and local-HNSW passes;
+	// the exhaustive partition-union pass is cached once per query.
+	attributionStages, err := memoryMul(3, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(m.Queries))
+	if err != nil {
+		return m8BenchmarkWorkPlan{}, err
+	}
+	attribution, err := memoryAdd(int64(m.Queries), attributionStages)
+	if err != nil {
+		return m8BenchmarkWorkPlan{}, err
+	}
+	requests, err := memoryAdd(measured, warmupAndPreflight, attribution)
+	if err != nil {
+		return m8BenchmarkWorkPlan{}, err
+	}
+	plan := m8BenchmarkWorkPlan{MeasuredQueryRequests: measured, WarmupAndPreflightQueryRequests: warmupAndPreflight, AttributionQueryPasses: attribution, QueryRequests: requests}
 	if requests > capUnits {
-		return plan, fmt.Errorf("modeled M8 benchmark work exceeds %d-unit cap (%s): query_requests=%d", capUnits, benchmarkWorkScope, requests)
+		return plan, fmt.Errorf("modeled M8 benchmark work exceeds %d-unit cap (%s): measured_query_requests=%d warmup_and_preflight_query_requests=%d attribution_query_passes=%d query_requests=%d", capUnits, m8BenchmarkWorkScope, measured, warmupAndPreflight, attribution, requests)
 	}
 	return plan, nil
 }

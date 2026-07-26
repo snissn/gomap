@@ -31,6 +31,10 @@ const (
 	VectorPartitionRouterModeApproxV1    = "approximate"
 )
 
+// ErrVectorPartitionRouterCandidateCoverageV1 marks a bounded candidate set
+// that is valid but collapses to fewer distinct partitions than requested.
+var ErrVectorPartitionRouterCandidateCoverageV1 = errors.New("collections: vector partition router candidate coverage shortfall")
+
 type VectorPartitionRouterBuildOptionsV1 struct {
 	Config         internalrouter.RouterConfigV1
 	AssetFileID    uint32
@@ -1390,7 +1394,7 @@ func rankVectorPartitionRouterCandidatesWithContextV1(ctx context.Context, repre
 		}
 	}
 	if len(best) < probes {
-		return nil, fmt.Errorf("collections: vector partition router candidate budget reached only %d unique partitions for %d probes", len(best), probes)
+		return nil, fmt.Errorf("%w: candidate budget reached only %d unique partitions for %d probes", ErrVectorPartitionRouterCandidateCoverageV1, len(best), probes)
 	}
 	result := make([]VectorPartitionRouterPartitionScoreV1, 0, len(best))
 	for _, score := range best {

@@ -67,7 +67,7 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 			ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
 			ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1,
 			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
-			ApproximateRouterCandidateBudget: 1, ResidualLossOwners: []string{"none_observed"},
+			ApproximateRouterCandidateBudget: 1, ApproximateRouterPartitionCoverageComplete: true, ResidualLossOwners: []string{"none_observed"},
 		}}},
 		Failure: m8ProductionFailureEvidenceV1{Passed: true, Error: "unavailable group rejected"}, GateLedger: m8ProductionGateLedgerV1{FailureHonesty: "pass"},
 		Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1}, TimedBoundary: "measured", Limitations: []string{"test"},

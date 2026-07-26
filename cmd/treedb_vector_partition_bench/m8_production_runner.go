@@ -74,19 +74,20 @@ type m8ProductionConfigEvidenceV1 struct {
 // m8ProductionAttributionV1 keeps each lossy boundary visible. Recall is
 // always measured against the same canonical global FP32-score oracle.
 type m8ProductionAttributionV1 struct {
-	Contract                           string   `json:"contract"`
-	GlobalExactRecallAtK               float64  `json:"global_exact_recall_at_k"`
-	ExhaustivePartitionRecallAtK       float64  `json:"exhaustive_partition_union_recall_at_k"`
-	ExhaustivePartitionIDParity        bool     `json:"exhaustive_partition_union_id_parity"`
-	ExhaustivePartitionScoreParity     bool     `json:"exhaustive_partition_union_score_parity"`
-	ExactRepresentativeRecallAtK       float64  `json:"exact_representative_routing_recall_at_k"`
-	ApproximateRepresentativeRecallAtK float64  `json:"approximate_representative_routing_recall_at_k"`
-	LocalHNSWRecallAtK                 float64  `json:"partition_local_hnsw_recall_at_k"`
-	EndToEndRecallAtK                  float64  `json:"end_to_end_recall_at_k"`
-	CoordinatorMergeIDParity           bool     `json:"coordinator_merge_id_parity"`
-	CoordinatorMergeScoreParity        bool     `json:"coordinator_merge_score_parity"`
-	ApproximateRouterCandidateBudget   int      `json:"approximate_router_candidate_budget"`
-	ResidualLossOwners                 []string `json:"residual_loss_owners"`
+	Contract                                   string   `json:"contract"`
+	GlobalExactRecallAtK                       float64  `json:"global_exact_recall_at_k"`
+	ExhaustivePartitionRecallAtK               float64  `json:"exhaustive_partition_union_recall_at_k"`
+	ExhaustivePartitionIDParity                bool     `json:"exhaustive_partition_union_id_parity"`
+	ExhaustivePartitionScoreParity             bool     `json:"exhaustive_partition_union_score_parity"`
+	ExactRepresentativeRecallAtK               float64  `json:"exact_representative_routing_recall_at_k"`
+	ApproximateRepresentativeRecallAtK         float64  `json:"approximate_representative_routing_recall_at_k"`
+	LocalHNSWRecallAtK                         float64  `json:"partition_local_hnsw_recall_at_k"`
+	EndToEndRecallAtK                          float64  `json:"end_to_end_recall_at_k"`
+	CoordinatorMergeIDParity                   bool     `json:"coordinator_merge_id_parity"`
+	CoordinatorMergeScoreParity                bool     `json:"coordinator_merge_score_parity"`
+	ApproximateRouterCandidateBudget           int      `json:"approximate_router_candidate_budget"`
+	ApproximateRouterPartitionCoverageComplete bool     `json:"approximate_router_partition_coverage_complete"`
+	ResidualLossOwners                         []string `json:"residual_loss_owners"`
 }
 
 type m8ProductionRowV1 struct {
@@ -626,6 +627,19 @@ func (h *m8AttributionHarnessV1) route(ctx context.Context, query []float32, pro
 	return partitions, nil
 }
 
+// m8ApproximateRouterCoverageV1 converts only the typed bounded-candidate
+// shortfall into an attributable approximate-routing loss. Every other router
+// error remains fail-closed evidence construction failure.
+func m8ApproximateRouterCoverageV1(err error) (bool, error) {
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, collections.ErrVectorPartitionRouterCandidateCoverageV1) {
+		return false, nil
+	}
+	return false, err
+}
+
 func (h *m8AttributionHarnessV1) search(ctx context.Context, query []float32, partitions []uint32, topK, efSearch int, exact bool) ([]m8CanonicalResultV1, error) {
 	merged := make([]m8CanonicalResultV1, 0, len(partitions)*topK)
 	for _, partition := range partitions {
@@ -664,7 +678,8 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 		Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1,
 		ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
 		CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
-		ApproximateRouterCandidateBudget: approximateCandidates,
+		ApproximateRouterCandidateBudget:           approximateCandidates,
+		ApproximateRouterPartitionCoverageComplete: true,
 	}, Local: make([][]m8CanonicalResultV1, len(queries))}
 	allPartitions := make([]uint32, len(harness.searchers))
 	for i := range allPartitions {
@@ -692,17 +707,22 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 		if err != nil {
 			return cell, err
 		}
-		approximatePartitions, err := harness.route(ctx, query, probes, collections.VectorPartitionRouterModeApproxV1, approximateCandidates)
+		approximatePartitions, approximateRouteErr := harness.route(ctx, query, probes, collections.VectorPartitionRouterModeApproxV1, approximateCandidates)
+		approximateCoverageComplete, err := m8ApproximateRouterCoverageV1(approximateRouteErr)
 		if err != nil {
 			return cell, err
 		}
+		cell.Evidence.ApproximateRouterPartitionCoverageComplete = cell.Evidence.ApproximateRouterPartitionCoverageComplete && approximateCoverageComplete
 		exactResults, err := harness.search(ctx, query, exactPartitions, topK, efSearch, true)
 		if err != nil {
 			return cell, err
 		}
-		approximateResults, err := harness.search(ctx, query, approximatePartitions, topK, efSearch, true)
-		if err != nil {
-			return cell, err
+		var approximateResults []m8CanonicalResultV1
+		if approximateCoverageComplete {
+			approximateResults, err = harness.search(ctx, query, approximatePartitions, topK, efSearch, true)
+			if err != nil {
+				return cell, err
+			}
 		}
 		cell.Local[i], err = harness.search(ctx, query, exactPartitions, topK, efSearch, false)
 		if err != nil {
@@ -713,6 +733,12 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 		localRecall += m8CanonicalRecallV1(truth[i], cell.Local[i])
 	}
 	n := float64(len(queries))
+	if !cell.Evidence.ApproximateRouterPartitionCoverageComplete {
+		// A shortfall means this approximate attribution cell did not evaluate
+		// its requested partition coverage. Do not average successful partial
+		// queries into a deceptively nonzero approximate-routing recall.
+		approximateRecall = 0
+	}
 	cell.Evidence.ExhaustivePartitionRecallAtK = exhaustiveRecall / n
 	cell.Evidence.ExactRepresentativeRecallAtK = exactRecall / n
 	cell.Evidence.ApproximateRepresentativeRecallAtK = approximateRecall / n
@@ -946,7 +972,7 @@ func m8AttributionLossOwnersV1(attribution m8ProductionAttributionV1) []string {
 	if attribution.ExactRepresentativeRecallAtK+epsilon < attribution.ExhaustivePartitionRecallAtK {
 		owners = append(owners, "exact_representative_routing")
 	}
-	if attribution.ApproximateRepresentativeRecallAtK+epsilon < attribution.ExactRepresentativeRecallAtK {
+	if !attribution.ApproximateRouterPartitionCoverageComplete || attribution.ApproximateRepresentativeRecallAtK+epsilon < attribution.ExactRepresentativeRecallAtK {
 		owners = append(owners, "approximate_representative_routing")
 	}
 	if attribution.LocalHNSWRecallAtK+epsilon < attribution.ExactRepresentativeRecallAtK {
@@ -1217,6 +1243,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 func validM8AttributionV1(attribution m8ProductionAttributionV1) bool {
 	if attribution.Contract != m8CanonicalResultContractV1 || attribution.GlobalExactRecallAtK != 1 ||
 		attribution.ApproximateRouterCandidateBudget < 1 ||
+		(!attribution.ApproximateRouterPartitionCoverageComplete && attribution.ApproximateRepresentativeRecallAtK != 0) ||
 		!slices.Equal(attribution.ResidualLossOwners, m8AttributionLossOwnersV1(attribution)) {
 		return false
 	}

@@ -29,6 +29,18 @@ func TestVectorPartitionRouterContextEntryPointsRejectCanceledWorkV1(t *testing.
 	}
 }
 
+func TestRankVectorPartitionRouterCandidatesReportsUniqueCoverageShortfallV1(t *testing.T) {
+	representatives := []internalrouter.RouterRepresentativeV1{
+		{PartitionID: 0}, {PartitionID: 0}, {PartitionID: 1},
+	}
+	_, err := rankVectorPartitionRouterCandidatesWithContextV1(context.Background(), representatives, []vectorPartitionRouterCandidateV1{
+		{ordinal: 0, score: 1}, {ordinal: 1, score: .9},
+	}, 2)
+	if !errors.Is(err, ErrVectorPartitionRouterCandidateCoverageV1) {
+		t.Fatalf("coverage shortfall err=%v", err)
+	}
+}
+
 func TestVectorPartitionRouterActiveLoadCancellationReleasesBarrierV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	database := openCollectionCommandWALDB(t, t.TempDir())
