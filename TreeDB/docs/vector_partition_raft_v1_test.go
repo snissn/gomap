@@ -137,6 +137,7 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				"-m8-existing-db DIR",
 				"MUST return no partial neighbors",
 				"stable-ID/hash attribution are currently reported `unsupported`",
+				"`measured_not_bounded`",
 				"explicitly accepts the narrower result",
 			},
 		},
@@ -149,6 +150,7 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				"52,734 MB",
 				"e63bf9f8cb2f830504b97be3f5cc9c2ead7525ec9ecf61fd0979390fa9f6ece5",
 				"unavailable endpoint returned error, zero neighbors, zero groups",
+				"no configured process-resource limit was compared",
 				"Enablement stays off",
 			},
 		},
@@ -181,6 +183,10 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 			Vectors int `json:"vectors"`
 			Groups  int `json:"raft_groups"`
 		} `json:"retained_1m"`
+		GateLedger struct {
+			ResourceBounds     string `json:"resource_bounds"`
+			ResourceBoundsNote string `json:"resource_bounds_note"`
+		} `json:"gate_ledger"`
 	}
 	if err := json.Unmarshal(raw, &evidence); err != nil {
 		t.Fatal(err)
@@ -189,7 +195,9 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 		evidence.MeasuredCodeHead != "7733485cc216dee4c0a1acc907cf71e609d11b7b" ||
 		evidence.CheckedIn10K.Vectors != 10_000 || evidence.CheckedIn10K.Queries != 128 ||
 		evidence.CheckedIn10K.QuarterProbeRecall != 0.24140625 ||
-		evidence.Retained1M.Vectors != 1_000_000 || evidence.Retained1M.Groups != 4 {
+		evidence.Retained1M.Vectors != 1_000_000 || evidence.Retained1M.Groups != 4 ||
+		evidence.GateLedger.ResourceBounds != "measured_not_bounded" ||
+		!strings.Contains(evidence.GateLedger.ResourceBoundsNote, "no configured resource limit was compared") {
 		t.Fatalf("M8 evidence boundary changed: %+v", evidence)
 	}
 }

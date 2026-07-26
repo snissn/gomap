@@ -61,7 +61,8 @@
     "tail_latency": "fail",
     "balance": "pass",
     "overlap_storage": "fail_unsupported",
-    "resource_bounds": "pass",
+    "resource_bounds": "measured_not_bounded",
+    "resource_bounds_note": "Persistent asset bytes and peak RSS were observed, but no configured resource limit was compared; this is not a resource-bounds pass.",
     "existing_behavior": "incomplete_go1.26_race_runtime_crash_in_unrelated_allocs_test"
   },
   "measured_blocker": {

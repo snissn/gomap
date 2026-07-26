@@ -121,6 +121,9 @@ The report records persistent asset bytes, measured process peak RSS,
 membership load versus the default 5% hard-cap epsilon, request/response and
 logical candidate bytes, and retained M3 mapped-pack evidence. The current M8
 runner does not independently sample mmap residency and says so in the artifact.
+Observed persistent bytes and RSS are not a resource-bounds pass unless a
+configured resource limit is compared; otherwise the ledger MUST report
+`measured_not_bounded`.
 
 The feature remains experimental/off unless every #3917 north-star gate passes
 or the user explicitly accepts the narrower result with one linked measured

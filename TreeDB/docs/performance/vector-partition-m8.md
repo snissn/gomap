@@ -15,7 +15,9 @@ HashiCorp Raft data groups, a real three-node catalog-meta lifecycle group,
 distributed leaders, production commit/read/apply proofs, serialized loopback
 TCP M5 services, bounded M6 fanout, and M7 activation. The unavailable-endpoint
 fault and the broader lifecycle/failure test matrix return no partial or stale
-success. Placement balance and measured resource bounds pass.
+success. Placement balance passes. Persistent asset bytes and peak RSS were
+observed, but no configured process-resource limit was compared, so resource
+bounds remain measured/not-bounded rather than a pass.
 
 M8 does **not** enable graph routing. Exact all-partition HNSW results did not
 match the exhaustive collection oracle, the retained 1M query had zero
@@ -45,7 +47,7 @@ claim.
 | Balance epsilon 0.05 | **PASS** | max 63,292 rows; hard cap 65,625 |
 | Overlap 0.20 bytes <= 1.35x | **FAIL** | overlap assets are not materialized and are reported unsupported |
 | Failure honesty | **PASS** | unavailable endpoint returned error, zero neighbors, zero groups |
-| Resource bounds | **PASS** | 188,536,448 persistent bytes; measured peak RSS 1,162,182,656 bytes |
+| Resource bounds | **MEASURED, NOT BOUNDED** | 188,536,448 persistent bytes and peak RSS 1,162,182,656 bytes were observed; no configured resource limit was compared, so this is not a pass |
 | Existing behavior | **INCOMPLETE** | full normal suite and all M8-relevant race suites pass; full collections race command crashes in Go 1.26 runtime during unrelated `testing.AllocsPerRun` |
 
 This ledger deliberately treats unsupported required evidence as failure. A
@@ -186,7 +188,9 @@ pin semantics.
 The retained M3 record separately reports 188,427,800 mapped bytes,
 200,546,033 derived physical bytes, and 1,023,827,968 resident bytes after the
 build. Its build peak RSS was 2,793,459,712 bytes. The M8 process measured peak
-RSS independently but does not claim a second mmap sample.
+RSS independently but does not claim a second mmap sample or a configured
+process-resource ceiling. Those observations are retained as provenance only;
+they do not satisfy the resource-bounds gate.
 
 ## Reproduction
 
