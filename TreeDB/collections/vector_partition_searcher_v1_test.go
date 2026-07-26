@@ -25,8 +25,8 @@ func TestVectorPartitionLocalSearcherV1ExactStableIDsAndPins(t *testing.T) {
 	if got[0].ID != "bb" || got[0].Score <= got[1].Score {
 		t.Fatalf("%+v", got)
 	}
-	if status := s.Status(); status.MaxStableIDBytes != 2 {
-		t.Fatalf("max stable ID bytes=%d want 2", status.MaxStableIDBytes)
+	if status := s.Status(); status.MaxStableIDBytes != 2 || status.HeapBytes != 35 || status.PackBytes != 35 {
+		t.Fatalf("exact in-memory status=%+v want max ID 2 and 35-byte cloned+normalized payload", status)
 	}
 	if _, _, err := s.SearchWithOptionsV1(context.Background(), []float32{1, 0}, VectorPartitionSearchOptionsV1{TopK: 1, MaxStableIDBytes: 0}); err != nil {
 		t.Fatalf("uncapped stable ID search: %v", err)

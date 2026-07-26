@@ -895,7 +895,7 @@ func (s *VectorPartitionLocalSearcherV1) statusLockedV1() VectorPartitionSearchS
 		} else {
 			st.OverlapMemberships++
 		}
-		st.HeapBytes += uint64(4*len(s.asset.Vectors[i]) + len(s.asset.IDs[i]))
+		st.HeapBytes += uint64(4*len(s.asset.Vectors[i]) + 4*len(s.normalizedVectors[i]) + len(s.asset.IDs[i]))
 	}
 	st.PackBytes = st.HeapBytes
 	return st
