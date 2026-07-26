@@ -175,7 +175,7 @@ func NewVectorPartitionM8ProductionMultiGroupV1(ctx context.Context, opts Vector
 		if sourceErr != nil {
 			return nil, sourceErr
 		}
-		service, serviceErr := NewVectorPartitionShardSearchServiceV1(VectorPartitionShardSearchServiceOptionsV1{Catalog: resolved, Placement: placement, LocalNodeID: h.data[group].LeaderID(), LocalGroupID: group, ReadCoordinator: h.data[group].ReadCoordinator(), GenerationSource: source})
+		service, serviceErr := NewVectorPartitionShardSearchServiceV1(VectorPartitionShardSearchServiceOptionsV1{Catalog: resolved, Placement: placement, LocalNodeID: h.data[group].LeaderID(), LocalGroupID: group, ReadCoordinator: h.data[group].ReadCoordinator(), GenerationSource: vectorPartitionM8TopologyGenerationSourceV1{source: source, manifest: opts.Manifest}})
 		if serviceErr != nil {
 			return nil, serviceErr
 		}
@@ -205,6 +205,41 @@ func NewVectorPartitionM8ProductionMultiGroupV1(ctx context.Context, opts Vector
 	}
 	_ = active
 	return h, nil
+}
+
+// vectorPartitionM8TopologyGenerationSourceV1 keeps local M3 packs and their
+// source authority untouched while exposing the cloned M8 placement manifest
+// to M5. This is required when one persistent local asset set is exercised
+// through a different, ephemeral multi-group topology.
+type vectorPartitionM8TopologyGenerationSourceV1 struct {
+	source   VectorPartitionGenerationSourceV1
+	manifest collections.VectorPartitionManifestV1
+}
+
+func (s vectorPartitionM8TopologyGenerationSourceV1) PinVectorPartitionGenerationV1(ctx context.Context, index string, generation uint64) (VectorPartitionPinnedGenerationV1, error) {
+	pinned, err := s.source.PinVectorPartitionGenerationV1(ctx, index, generation)
+	if err != nil {
+		return nil, err
+	}
+	if s.manifest.IndexName != index || s.manifest.Generation != generation {
+		_ = pinned.Close()
+		return nil, ErrVectorPartitionShardSearchGenerationMismatch
+	}
+	// The replicated lifecycle owns the serving ready-set digest, while the
+	// topology clone owns only placement routing. Preserve the former from the
+	// real local source and replace only the latter.
+	manifest := pinned.Manifest()
+	manifest.Placements = append([]collections.VectorPartitionPlacementV1(nil), s.manifest.Placements...)
+	return vectorPartitionM8TopologyPinnedGenerationV1{VectorPartitionPinnedGenerationV1: pinned, manifest: manifest}, nil
+}
+
+type vectorPartitionM8TopologyPinnedGenerationV1 struct {
+	VectorPartitionPinnedGenerationV1
+	manifest VectorPartitionPinnedManifestV1
+}
+
+func (p vectorPartitionM8TopologyPinnedGenerationV1) Manifest() VectorPartitionPinnedManifestV1 {
+	return clonePinnedVectorPartitionManifestV1(p.manifest)
 }
 
 func vectorPartitionM8ValidateAssetsV1(m collections.VectorPartitionManifestV1, digests map[string]string) ([]raftcluster.GroupID, error) {
@@ -336,9 +371,14 @@ func (h *VectorPartitionM8ProductionMultiGroupV1) StopGroup(group string) error 
 	if listener == nil {
 		return fmt.Errorf("nativewire: M8 group %s endpoint unavailable", group)
 	}
-	errs := []error{listener.Close()}
+	var errs []error
+	if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		errs = append(errs, err)
+	}
 	for _, conn := range conns {
-		errs = append(errs, conn.Close())
+		if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			errs = append(errs, err)
+		}
 	}
 	return errors.Join(errs...)
 }
@@ -382,10 +422,14 @@ func (h *VectorPartitionM8ProductionMultiGroupV1) Close() error {
 		h.mu.Lock()
 		h.closed = true
 		for _, l := range h.listeners {
-			errs = append(errs, l.Close())
+			if err := l.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				errs = append(errs, err)
+			}
 		}
 		for conn := range h.conns {
-			errs = append(errs, conn.Close())
+			if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				errs = append(errs, err)
+			}
 		}
 		h.listeners = map[raftcluster.GroupID]net.Listener{}
 		h.mu.Unlock()

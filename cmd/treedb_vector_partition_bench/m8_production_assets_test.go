@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
 	"testing"
 	"time"
 
@@ -166,5 +167,62 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	failure, failureErr := topology.Coordinator().Search(ctx, nativewire.VectorPartitionCoordinatorRequestV1{Version: nativewire.VectorPartitionCoordinatorVersionV1, RequestID: "m8-e2e-failure", CancellationID: "m8-e2e-failure-cancel", Database: "default", Catalog: "default", Collection: assets.manifest.Collection, IndexName: assets.manifest.IndexName, IndexDefinitionDigest: assets.manifest.IndexDefinitionDigest, Query: query, Metric: nativewire.VectorPartitionShardSearchMetricCosineV1, RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: 10_000, PartitionProbes: 4, Consistency: nativewire.VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: nativewire.VectorPartitionShardSearchStatsBasicV1, TopK: 10, EfSearch: 4096, DeadlineUnixNano: time.Now().Add(2 * time.Second).UnixNano(), RequestBytesLimit: 4 << 20, CandidateBytesLimit: 64 << 20, ResponseBytesLimit: 64 << 20, MergeEntriesLimit: 40})
 	if failureErr == nil || len(failure.Neighbors) != 0 || len(failure.ProbedGroups) != 0 {
 		t.Fatalf("stopped group failure response=%+v err=%v", failure, failureErr)
+	}
+}
+
+func TestM8ExistingAssetsRelabelsTopologyWithoutMutatingLocalPacksV1(t *testing.T) {
+	fixture, err := loadFixture(fixturePath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	vectors := deterministicVectors(fixture)
+	local, err := newM8ProductionMultiGroupAssetsV1(vectors, []string{"local-a", "local-b"}, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, original := local.dir, local.manifest
+	local.owned = false
+	if err := local.Close(); err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	groups := []string{"topology-a", "topology-b", "topology-c", "topology-d"}
+	assets, err := openM8ProductionMultiGroupExistingAssetsV1(dir, groups, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if closeErr := assets.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
+	if assets.manifest.ReadySetDigest == original.ReadySetDigest {
+		t.Fatal("topology manifest retained local ready-set digest after placement relabel")
+	}
+	for i, placement := range assets.manifest.Placements {
+		if placement.GroupID != groups[int(placement.PartitionID)%len(groups)] || placement.GroupID == original.Placements[i].GroupID && len(groups) > 2 {
+			t.Fatalf("relabeled placement=%+v original=%+v", placement, original.Placements[i])
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	topology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(ctx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{Collection: assets.collection, Manifest: assets.manifest, RouterSource: assets.RouterSource(), GroupAssetSetDigests: assets.assetSetDigests, Database: "default", Catalog: "default"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer topology.Close()
+	query := make([]float32, len(vectors[0]))
+	for i, value := range vectors[17] {
+		query[i] = float32(value)
+	}
+	response, searchErr := topology.Coordinator().Search(ctx, nativewire.VectorPartitionCoordinatorRequestV1{Version: nativewire.VectorPartitionCoordinatorVersionV1, RequestID: "m8-existing-assets", CancellationID: "m8-existing-assets-cancel", Database: "default", Catalog: "default", Collection: assets.manifest.Collection, IndexName: assets.manifest.IndexName, IndexDefinitionDigest: assets.manifest.IndexDefinitionDigest, Query: query, Metric: nativewire.VectorPartitionShardSearchMetricCosineV1, RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: 10_000, PartitionProbes: 4, Consistency: nativewire.VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: nativewire.VectorPartitionShardSearchStatsBasicV1, TopK: 10, EfSearch: 4096, DeadlineUnixNano: time.Now().Add(30 * time.Second).UnixNano(), RequestBytesLimit: 4 << 20, CandidateBytesLimit: 64 << 20, ResponseBytesLimit: 64 << 20, MergeEntriesLimit: 40})
+	if searchErr != nil || len(response.Neighbors) != 10 || len(response.ProbedGroups) != 4 {
+		t.Fatalf("relabelled topology response=%+v err=%v", response, searchErr)
+	}
+	if err := topology.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("existing asset directory removed or inaccessible after topology cleanup: %v", err)
 	}
 }

@@ -19,6 +19,7 @@ import (
 // the later M8 topology. It deliberately contains no transport or Raft logic.
 type m8ProductionMultiGroupAssetsV1 struct {
 	dir             string
+	owned           bool
 	db              *backenddb.DB
 	collection      *collections.Collection
 	manifest        collections.VectorPartitionManifestV1
@@ -43,7 +44,7 @@ func newM8ProductionMultiGroupAssetsV1(vectors [][]float64, groups []string, par
 	if err != nil {
 		return nil, err
 	}
-	h := &m8ProductionMultiGroupAssetsV1{dir: dir, groups: append([]string(nil), groups...), assetSetDigests: map[string]string{}}
+	h := &m8ProductionMultiGroupAssetsV1{dir: dir, owned: true, groups: append([]string(nil), groups...), assetSetDigests: map[string]string{}}
 	defer func() {
 		if err != nil {
 			_ = h.Close()
@@ -133,7 +134,7 @@ func newM8ProductionMultiGroupAssetsV1(vectors [][]float64, groups []string, par
 }
 
 func (h *m8ProductionMultiGroupAssetsV1) RouterSource() nativewire.VectorPartitionCoordinatorRouterSourceV1 {
-	return nativewire.CollectionVectorPartitionCoordinatorRouterSourceV1{Collection: h.collection}
+	return m8TopologyRouterSourceV1{collection: h.collection, manifest: h.manifest}
 }
 func (h *m8ProductionMultiGroupAssetsV1) Close() error {
 	if h == nil {
@@ -148,11 +149,133 @@ func (h *m8ProductionMultiGroupAssetsV1) Close() error {
 		errs = append(errs, h.db.Close())
 		h.db = nil
 	}
-	if h.dir != "" {
+	if h.owned && h.dir != "" {
 		errs = append(errs, os.RemoveAll(h.dir))
-		h.dir = ""
 	}
+	h.dir = ""
 	return errors.Join(errs...)
+}
+
+// openM8ProductionMultiGroupExistingAssetsV1 opens an existing persistent M3
+// asset directory strictly read-only. The topology receives a canonical clone
+// of its manifest with only group placements relabeled; local pack files and
+// the retained source lifecycle stay unchanged.
+func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, partitions int) (_ *m8ProductionMultiGroupAssetsV1, err error) {
+	if dir == "" || len(groups) < 2 {
+		return nil, errors.New("M8 existing assets require a directory and two groups")
+	}
+	info, statErr := os.Stat(dir)
+	if statErr != nil {
+		return nil, fmt.Errorf("M8 existing assets directory: %w", statErr)
+	}
+	if !info.IsDir() {
+		return nil, errors.New("M8 existing assets path is not a directory")
+	}
+	h := &m8ProductionMultiGroupAssetsV1{dir: dir, groups: append([]string(nil), groups...), assetSetDigests: map[string]string{}}
+	defer func() {
+		if err != nil {
+			_ = h.Close()
+		}
+	}()
+	h.db, err = backenddb.Open(backenddb.Options{Dir: dir, ReadOnly: true, DisableBackgroundPrune: true})
+	if err != nil {
+		return nil, fmt.Errorf("open retained M8 assets read-only: %w", err)
+	}
+	manager := collections.NewCollectionManager(h.db)
+	collectionName, nameErr := m8ExistingCollectionNameV1(manager)
+	if nameErr != nil {
+		return nil, nameErr
+	}
+	h.collection, err = manager.OpenCollection(collectionName)
+	if err != nil {
+		return nil, fmt.Errorf("open retained M8 collection %q: %w", collectionName, err)
+	}
+	h.router, _, err = h.collection.OpenVectorPartitionRouterV1(partitionHNSWIndex)
+	if err != nil {
+		return nil, fmt.Errorf("open retained M8 router: %w", err)
+	}
+	h.status = h.router.Status()
+	if h.status.Manifest.PartitionCount != uint32(partitions) {
+		return nil, fmt.Errorf("retained M8 manifest partitions=%d want configured %d", h.status.Manifest.PartitionCount, partitions)
+	}
+	h.manifest, err = m8RelabelTopologyManifestV1(h.status.Manifest, groups)
+	if err != nil {
+		return nil, err
+	}
+	for _, group := range groups {
+		h.assetSetDigests[group] = m8GroupAssetSetDigestV1(group, h.manifest)
+	}
+	return h, nil
+}
+
+func m8ExistingCollectionNameV1(manager *collections.CollectionManager) (string, error) {
+	metas, err := manager.ListCollections()
+	if err != nil {
+		return "", fmt.Errorf("list retained M8 collections: %w", err)
+	}
+	var names []string
+	for _, meta := range metas {
+		for _, index := range meta.VectorIndexes {
+			if index.Name == partitionHNSWIndex {
+				names = append(names, meta.Name)
+				break
+			}
+		}
+	}
+	if len(names) != 1 {
+		return "", fmt.Errorf("retained M8 assets need exactly one collection with index %q, found %v", partitionHNSWIndex, names)
+	}
+	return names[0], nil
+}
+
+func m8RelabelTopologyManifestV1(local collections.VectorPartitionManifestV1, groups []string) (collections.VectorPartitionManifestV1, error) {
+	if len(groups) < 2 {
+		return collections.VectorPartitionManifestV1{}, errors.New("M8 topology requires two groups")
+	}
+	seen := map[string]bool{}
+	for _, group := range groups {
+		if group == "" || seen[group] {
+			return collections.VectorPartitionManifestV1{}, errors.New("M8 topology requires distinct nonempty groups")
+		}
+		seen[group] = true
+	}
+	if err := local.Validate(collections.DefaultVectorPartitionManifestLimits()); err != nil {
+		return collections.VectorPartitionManifestV1{}, fmt.Errorf("M8 retained local manifest: %w", err)
+	}
+	cloned := local
+	cloned.Placements = append([]collections.VectorPartitionPlacementV1(nil), local.Placements...)
+	for i := range cloned.Placements {
+		cloned.Placements[i].GroupID = groups[int(cloned.Placements[i].PartitionID)%len(groups)]
+	}
+	cloned.Canonicalize()
+	if err := cloned.Validate(collections.DefaultVectorPartitionManifestLimits()); err != nil {
+		return collections.VectorPartitionManifestV1{}, fmt.Errorf("M8 relabeled topology manifest: %w", err)
+	}
+	return cloned, nil
+}
+
+type m8TopologyRouterSourceV1 struct {
+	collection *collections.Collection
+	manifest   collections.VectorPartitionManifestV1
+}
+
+func (s m8TopologyRouterSourceV1) OpenVectorPartitionCoordinatorRouterV1(ctx context.Context, index string, generation uint64) (nativewire.VectorPartitionCoordinatorRouterV1, error) {
+	router, err := (nativewire.CollectionVectorPartitionCoordinatorRouterSourceV1{Collection: s.collection}).OpenVectorPartitionCoordinatorRouterV1(ctx, index, generation)
+	if err != nil {
+		return nil, err
+	}
+	return m8TopologyRouterV1{VectorPartitionCoordinatorRouterV1: router, manifest: s.manifest}, nil
+}
+
+type m8TopologyRouterV1 struct {
+	nativewire.VectorPartitionCoordinatorRouterV1
+	manifest collections.VectorPartitionManifestV1
+}
+
+func (r m8TopologyRouterV1) Status() collections.VectorPartitionRouterRuntimeStatusV1 {
+	status := r.VectorPartitionCoordinatorRouterV1.Status()
+	status.Manifest = r.manifest
+	return status
 }
 func m8GroupAssetSetDigestV1(group string, manifest collections.VectorPartitionManifestV1) string {
 	var fields []string

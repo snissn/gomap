@@ -118,9 +118,15 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		groups[i] = fmt.Sprintf("m8-data-group-%02d", i)
 	}
 	started := time.Now()
-	assets, err := newM8ProductionMultiGroupAssetsV1(vectors, groups, cfg.partitions)
+	var assets *m8ProductionMultiGroupAssetsV1
+	var err error
+	if cfg.m8ExistingDB != "" {
+		assets, err = openM8ProductionMultiGroupExistingAssetsV1(cfg.m8ExistingDB, groups, cfg.partitions)
+	} else {
+		assets, err = newM8ProductionMultiGroupAssetsV1(vectors, groups, cfg.partitions)
+	}
 	if err != nil {
-		return fmt.Errorf("build M8 production assets: %w", err)
+		return fmt.Errorf("open M8 production assets: %w", err)
 	}
 	defer func() { runErr = errors.Join(runErr, assets.Close()) }()
 	topologyCtx, cancelTopology := context.WithTimeout(context.Background(), 2*time.Minute)
