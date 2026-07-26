@@ -1100,6 +1100,20 @@ func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 	}
 }
 
+func TestM8BenchmarkWorkCapAndOverflowV1(t *testing.T) {
+	cfg := config{overlaps: []float64{0, .2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}}
+	plan, err := validateM8BenchmarkWork(cfg, fixtureManifest{Queries: 5}, 80)
+	if err != nil || plan.QueryRequests != 80 {
+		t.Fatalf("M8 work plan=%+v err=%v", plan, err)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, fixtureManifest{Queries: 5}, 79); err == nil {
+		t.Fatal("accepted oversized M8 sweep")
+	}
+	if _, err := validateM8BenchmarkWork(cfg, fixtureManifest{Queries: math.MaxInt}, maxBenchmarkWorkUnits); err == nil {
+		t.Fatal("accepted overflowing M8 sweep")
+	}
+}
+
 func TestM8ProductionEvidenceJSONKeepsEveryTopologyDimensionV1(t *testing.T) {
 	raw, err := json.Marshal(m8ProductionReportV1{
 		Config: m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16},

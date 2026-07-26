@@ -465,6 +465,9 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		if cfg.topK > nativewire.DefaultVectorPartitionShardSearchLimitsV1().MaxTopK {
 			return fmt.Errorf("top-k cannot exceed M8 shard limit %d", nativewire.DefaultVectorPartitionShardSearchLimitsV1().MaxTopK)
 		}
+		if _, err := validateM8BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits); err != nil {
+			return err
+		}
 		vectors, queries := deterministicFixture(fixture)
 		if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 			return errors.New("fixture checksum does not match generated vector/query/truth stream")
@@ -1051,6 +1054,23 @@ type m3BenchmarkWorkPlan struct {
 	ChecksumVectorQueryVisits   int64
 	MembershipVectorQueryVisits int64
 	VectorQueryVisits           int64
+}
+
+type m8BenchmarkWorkPlan struct{ QueryRequests int64 }
+
+func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits int64) (m8BenchmarkWorkPlan, error) {
+	if capUnits < 1 || len(cfg.overlaps) == 0 || len(cfg.probes) == 0 || len(cfg.efSearch) == 0 || len(cfg.concurrency) == 0 {
+		return m8BenchmarkWorkPlan{}, errors.New("cannot plan M8 benchmark work without a positive cap and complete sweeps")
+	}
+	requests, err := memoryMul(int64(len(cfg.overlaps)), int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(m.Queries))
+	if err != nil {
+		return m8BenchmarkWorkPlan{}, err
+	}
+	plan := m8BenchmarkWorkPlan{QueryRequests: requests}
+	if requests > capUnits {
+		return plan, fmt.Errorf("modeled M8 benchmark work exceeds %d-unit cap (%s): query_requests=%d", capUnits, benchmarkWorkScope, requests)
+	}
+	return plan, nil
 }
 
 func validateM3BenchmarkWork(cfg config, m fixtureManifest, capUnits int64) (m3BenchmarkWorkPlan, error) {

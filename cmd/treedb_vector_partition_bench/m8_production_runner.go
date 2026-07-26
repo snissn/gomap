@@ -438,27 +438,19 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 		err      error
 	}
 	outcomes := make([]outcome, len(queries))
-	sem := make(chan struct{}, concurrency)
-	var wg sync.WaitGroup
 	started := time.Now()
-	for index, query64 := range queries {
-		index, query := index, m8Query32V1(query64)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-ctx.Done():
-				outcomes[index].err = ctx.Err()
-				return
-			}
-			requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			defer cancel()
-			outcomes[index].response, outcomes[index].err = coordinator.Search(requestCtx, m8ProductionRequestV1(assets, query, fmt.Sprintf("m8-q-%06d-p-%04d-ef-%06d-c-%03d", index, probes, efSearch, concurrency), probes, efSearch, topK))
-		}()
-	}
-	wg.Wait()
+	m8RunBoundedWorkV1(len(queries), concurrency, func(index int) {
+		query := m8Query32V1(queries[index])
+		select {
+		case <-ctx.Done():
+			outcomes[index].err = ctx.Err()
+			return
+		default:
+		}
+		requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		outcomes[index].response, outcomes[index].err = coordinator.Search(requestCtx, m8ProductionRequestV1(assets, query, fmt.Sprintf("m8-q-%06d-p-%04d-ef-%06d-c-%03d", index, probes, efSearch, concurrency), probes, efSearch, topK))
+	})
 	elapsed := time.Since(started)
 	row := m8ProductionRowV1{Status: "pass", Probes: probes, EfSearch: efSearch, Concurrency: concurrency, RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidates: max(1, int(assets.status.Representatives)), Samples: len(queries), ExactParityChecked: probes == len(assets.manifest.Placements), ExactParityPassed: probes == len(assets.manifest.Placements), NoPartialResults: true}
 	durations := make([]uint64, 0, len(outcomes))
@@ -486,6 +478,31 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 	row.QPS = float64(len(outcomes)) / elapsed.Seconds()
 	row.P50Nanos, row.P95Nanos, row.P99Nanos = m8PercentileV1(durations, 50), m8PercentileV1(durations, 95), m8PercentileV1(durations, 99)
 	return row, nil
+}
+
+// m8RunBoundedWorkV1 starts no more than concurrency workers, rather than one
+// goroutine per query waiting behind a semaphore.
+func m8RunBoundedWorkV1(count, concurrency int, run func(int)) {
+	if count == 0 {
+		return
+	}
+	workers := min(count, concurrency)
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				run(index)
+			}
+		}()
+	}
+	for index := range count {
+		jobs <- index
+	}
+	close(jobs)
+	wg.Wait()
 }
 
 func m8ProductionRequestV1(assets *m8ProductionMultiGroupAssetsV1, query []float32, requestID string, probes, efSearch, topK int) nativewire.VectorPartitionCoordinatorRequestV1 {

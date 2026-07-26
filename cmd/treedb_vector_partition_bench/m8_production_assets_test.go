@@ -5,12 +5,31 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/nativewire"
 )
+
+func TestM8BoundedWorkUsesFixedWorkerPoolV1(t *testing.T) {
+	var active, peak int32
+	m8RunBoundedWorkV1(32, 3, func(int) {
+		current := atomic.AddInt32(&active, 1)
+		for {
+			observed := atomic.LoadInt32(&peak)
+			if current <= observed || atomic.CompareAndSwapInt32(&peak, observed, current) {
+				break
+			}
+		}
+		time.Sleep(time.Millisecond)
+		atomic.AddInt32(&active, -1)
+	})
+	if peak != 3 {
+		t.Fatalf("worker peak=%d want 3", peak)
+	}
+}
 
 func requireM8PersistentAssetSupportV1(t testing.TB) {
 	t.Helper()
