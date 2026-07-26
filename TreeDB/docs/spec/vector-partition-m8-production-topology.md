@@ -58,8 +58,9 @@ group list.
 
 `StopGroup(group)` is a test/fault-injection operation: it closes that group's
 listener and active connections. `Close()` is idempotent, waits for serving
-goroutines, closes generation readers before persistent assets, and treats an
-already-closed network connection as successful cleanup.
+goroutines, drains the coordinator's generation-pinned router sessions, then
+closes generation readers before persistent assets; an already-closed network
+connection is successful cleanup.
 
 ## Persistent retained-asset adapter
 

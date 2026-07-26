@@ -51,15 +51,41 @@ func (r *testVectorPartitionCoordinatorRouterV1) Close() error {
 }
 
 type testVectorPartitionCoordinatorRouterSourceV1 struct {
+	mu          sync.Mutex
 	router      *testVectorPartitionCoordinatorRouterV1
 	opens       int
 	generations []uint64
+	openStarted chan<- struct{}
+	openBlock   <-chan struct{}
 }
 
-func (s *testVectorPartitionCoordinatorRouterSourceV1) OpenVectorPartitionCoordinatorRouterV1(_ context.Context, _ string, generation uint64) (VectorPartitionCoordinatorRouterV1, error) {
+func (s *testVectorPartitionCoordinatorRouterSourceV1) OpenVectorPartitionCoordinatorRouterV1(ctx context.Context, _ string, generation uint64) (VectorPartitionCoordinatorRouterV1, error) {
+	s.mu.Lock()
 	s.opens++
 	s.generations = append(s.generations, generation)
+	started, block := s.openStarted, s.openBlock
+	s.mu.Unlock()
+	if started != nil {
+		select {
+		case started <- struct{}{}:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if block != nil {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-block:
+		}
+	}
 	return s.router, nil
+}
+
+func (s *testVectorPartitionCoordinatorRouterSourceV1) openCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.opens
 }
 
 type testVectorPartitionCoordinatorDispatcherV1 struct {
@@ -278,6 +304,9 @@ func TestVectorPartitionCoordinatorCoalescesChunksDedupesAndMergesV1(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := coordinator.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if source.opens != 1 || source.router.closeCount != 1 {
 		t.Fatalf("router lifecycle opens=%d closes=%d", source.opens, source.router.closeCount)
 	}
@@ -330,8 +359,140 @@ func TestVectorPartitionCoordinatorUsesReplicatedLifecycleAdmissionV1(t *testing
 	if _, err := coordinator.Search(t.Context(), testVectorPartitionCoordinatorRequestV1(len(owners))); !errors.Is(err, authority.err) {
 		t.Fatalf("invalidated search err=%v", err)
 	}
+	if authority.calls != 2 || source.openCount() != 1 {
+		t.Fatalf("per-request lifecycle calls=%d router opens=%d", authority.calls, source.openCount())
+	}
 	if len(dispatcher.calls) != before {
 		t.Fatal("replicated lifecycle rejection dispatched shard request")
+	}
+}
+
+func TestVectorPartitionCoordinatorRouterSessionSingleflightAndCancellationV1(t *testing.T) {
+	coordinator, source, _ := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"}, map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "doc", Score: 1}}}, VectorPartitionCoordinatorLimitsV1{},
+	)
+	started := make(chan struct{}, 1)
+	block := make(chan struct{})
+	source.openStarted, source.openBlock = started, block
+	first := make(chan *vectorPartitionCoordinatorRouterLeaseV1, 1)
+	firstErr := make(chan error, 1)
+	go func() {
+		lease, err := coordinator.acquireRouterSessionV1(context.Background(), "embedding", coordinator.placement.PartitionGeneration)
+		if err != nil {
+			firstErr <- err
+			return
+		}
+		first <- lease
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("cold router open did not start")
+	}
+	canceled, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := coordinator.acquireRouterSessionV1(canceled, "embedding", coordinator.placement.PartitionGeneration); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("waiting acquire err=%v want deadline exceeded", err)
+	}
+	if source.openCount() != 1 {
+		t.Fatalf("cold opens=%d want one", source.openCount())
+	}
+	close(block)
+	var lease *vectorPartitionCoordinatorRouterLeaseV1
+	select {
+	case err := <-firstErr:
+		t.Fatal(err)
+	case lease = <-first:
+	case <-time.After(time.Second):
+		t.Fatal("cold router open did not complete")
+	}
+	lease.Close()
+	if err := coordinator.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if source.router.closeCount != 1 {
+		t.Fatalf("router closes=%d want one", source.router.closeCount)
+	}
+}
+
+func TestVectorPartitionCoordinatorCloseDrainsRouterLeasesAndRejectsNewSearchesV1(t *testing.T) {
+	coordinator, source, _ := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"}, map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "doc", Score: 1}}}, VectorPartitionCoordinatorLimitsV1{},
+	)
+	lease, err := coordinator.acquireRouterSessionV1(context.Background(), "embedding", coordinator.placement.PartitionGeneration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- coordinator.Close() }()
+	select {
+	case err := <-closed:
+		t.Fatalf("Close returned before lease drain: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	lease.Close()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not drain router lease")
+	}
+	if source.router.closeCount != 1 {
+		t.Fatalf("router closes=%d want one", source.router.closeCount)
+	}
+	if _, err := coordinator.acquireRouterSessionV1(context.Background(), "embedding", coordinator.placement.PartitionGeneration); !errors.Is(err, ErrVectorPartitionCoordinatorUnavailable) {
+		t.Fatalf("acquire after Close err=%v", err)
+	}
+}
+
+func TestVectorPartitionCoordinatorCloseDrainsColdOpenV1(t *testing.T) {
+	coordinator, source, _ := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"}, map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "doc", Score: 1}}}, VectorPartitionCoordinatorLimitsV1{},
+	)
+	started := make(chan struct{}, 1)
+	block := make(chan struct{})
+	source.openStarted, source.openBlock = started, block
+	opened := make(chan error, 1)
+	go func() {
+		_, err := coordinator.acquireRouterSessionV1(context.Background(), "embedding", coordinator.placement.PartitionGeneration)
+		opened <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("cold router open did not start")
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- coordinator.Close() }()
+	select {
+	case err := <-closed:
+		t.Fatalf("Close returned before cold open drained: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(block)
+	select {
+	case err := <-opened:
+		if !errors.Is(err, ErrVectorPartitionCoordinatorUnavailable) {
+			t.Fatalf("cold acquire after Close err=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cold acquire did not return")
+	}
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not drain cold open")
+	}
+	if source.router.closeCount != 1 {
+		t.Fatalf("router closes=%d want one", source.router.closeCount)
 	}
 }
 
@@ -661,6 +822,9 @@ func TestVectorPartitionCoordinatorRejectsMixedRouterGenerationBeforeDispatchV1(
 			if err == nil || !vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
 				t.Fatalf("response=%+v err=%v", response, err)
 			}
+			if err := coordinator.Close(); err != nil {
+				t.Fatal(err)
+			}
 			if len(dispatcher.calls) != 0 || source.router.closeCount != 1 {
 				t.Fatalf("dispatch=%d closes=%d", len(dispatcher.calls), source.router.closeCount)
 			}
@@ -951,6 +1115,9 @@ func TestVectorPartitionCoordinatorTerminalFailureCancelsAndReturnsNoPartialV1(t
 	}
 	if !vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
 		t.Fatalf("partial response=%+v", response)
+	}
+	if err := coordinator.Close(); err != nil {
+		t.Fatal(err)
 	}
 	if source.router.closeCount != 1 || dispatcher.active != 0 {
 		t.Fatalf("lifecycle closes=%d active=%d", source.router.closeCount, dispatcher.active)
@@ -1361,6 +1528,9 @@ func TestVectorPartitionCoordinatorWallClockTimeoutCancelsJoinsAndReturnsNoParti
 	dispatcher.mu.Lock()
 	active := dispatcher.active
 	dispatcher.mu.Unlock()
+	if err := coordinator.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if active != 0 || source.router.closeCount != 1 {
 		t.Fatalf("active=%d router closes=%d", active, source.router.closeCount)
 	}

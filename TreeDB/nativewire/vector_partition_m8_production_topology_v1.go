@@ -434,6 +434,11 @@ func (h *VectorPartitionM8ProductionMultiGroupV1) Close() error {
 		h.listeners = map[raftcluster.GroupID]net.Listener{}
 		h.mu.Unlock()
 		h.wg.Wait()
+		// The coordinator owns generation-pinned M4 router sessions. Drain and
+		// close them before sources release their mapped persistent assets.
+		if h.coordinator != nil {
+			errs = append(errs, h.coordinator.Close())
+		}
 		// Sources own mapped persistent search assets and must retire before their DB.
 		for _, source := range h.sources {
 			errs = append(errs, source.Close())
