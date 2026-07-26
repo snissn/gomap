@@ -19,6 +19,35 @@ func requireM8PersistentAssetSupportV1(t testing.TB) {
 	}
 }
 
+func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
+	fixture, err := loadFixture(fixturePath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	group := func(id string, hits uint64) nativewire.VectorPartitionM8ProductionGroupEvidenceV1 {
+		return nativewire.VectorPartitionM8ProductionGroupEvidenceV1{
+			GroupID: id, LeaderID: id + "-leader", NodeIDs: []string{id + "-a", id + "-b", id + "-c"},
+			CommitIndex: 1, ReadIndex: 1, AppliedIndex: 1, ReadEvidenceKind: "production", ProvesProductionConsensus: true, EndpointHits: hits,
+		}
+	}
+	report := m8ProductionReportV1{
+		SchemaVersion: 1, ResultKind: "m8_production_multi_group_evidence_v1", Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true,
+		GeneratedAt: time.Now(), Command: []string{"m8-test"}, BaseSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		Dataset: fixture, Config: m8ProductionConfigEvidenceV1{RaftGroups: 2, RaftNodesPerGroup: 3, Partitions: 4, TopK: 10}, BuildNanos: 1,
+		Topology: nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{Network: "tcp_loopback_serialized_m5_v1", LifecycleState: "active", ReadySetDigest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", MetaNodes: []string{"meta-a", "meta-b", "meta-c"}, Groups: []nativewire.VectorPartitionM8ProductionGroupEvidenceV1{group("group-a", 1), group("group-b", 1)}},
+		Rows:     []m8ProductionRowV1{{Status: "pass", Probes: 4, EfSearch: 10, Concurrency: 1, Samples: fixture.Queries, QPS: 1, RouterMode: "exact", RouterCandidates: 1, ExactParityChecked: true}},
+		Failure:  m8ProductionFailureEvidenceV1{Passed: true, Error: "unavailable group rejected"}, GateLedger: m8ProductionGateLedgerV1{FailureHonesty: "pass"},
+		Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1}, TimedBoundary: "measured", Limitations: []string{"test"},
+	}
+	if err := validateM8ProductionReportV1(report); err != nil {
+		t.Fatalf("valid endpoint coverage rejected: %v", err)
+	}
+	report.Topology.Groups[1].EndpointHits = 0
+	if err := validateM8ProductionReportV1(report); err == nil {
+		t.Fatal("accepted report with an unexercised data-group endpoint")
+	}
+}
+
 func TestM8ProductionMultiGroupAssetsCheckedIn10kCISmokeV1(t *testing.T) {
 	requireM8PersistentAssetSupportV1(t)
 	fixture, err := loadFixture(fixturePath(t))
@@ -128,6 +157,21 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	for i, v := range vectors[17] {
 		query[i] = float32(v)
 	}
+	if err := m8WarmProductionTopologyV1(ctx, topology.Coordinator(), assets, [][]float64{vectors[17]}, config{topK: 10, efSearch: []int{4096}, warmup: 0}); err != nil {
+		t.Fatalf("warmup=0 endpoint preflight: %v", err)
+	}
+	for _, group := range topology.Evidence().Groups {
+		if group.EndpointHits != 1 {
+			t.Fatalf("preflight did not exercise group endpoint: %+v", group)
+		}
+	}
+	lowProbe, err := topology.Coordinator().Search(ctx, m8ProductionRequestV1(assets, query, "m8-low-probe", 1, 4096, 10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lowProbe.ProbedGroups) != 1 {
+		t.Fatalf("low-probe response=%+v", lowProbe)
+	}
 	response, err := topology.Coordinator().Search(ctx, nativewire.VectorPartitionCoordinatorRequestV1{Version: nativewire.VectorPartitionCoordinatorVersionV1, RequestID: "m8-e2e-000017", CancellationID: "m8-e2e-cancel", Database: "default", Catalog: "default", Collection: assets.manifest.Collection, IndexName: assets.manifest.IndexName, IndexDefinitionDigest: assets.manifest.IndexDefinitionDigest, Query: query, Metric: nativewire.VectorPartitionShardSearchMetricCosineV1, RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: 10_000, PartitionProbes: 4, Consistency: nativewire.VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: nativewire.VectorPartitionShardSearchStatsBasicV1, TopK: 10, EfSearch: 4096, DeadlineUnixNano: time.Now().Add(20 * time.Second).UnixNano(), RequestBytesLimit: 4 << 20, CandidateBytesLimit: 64 << 20, ResponseBytesLimit: 64 << 20, MergeEntriesLimit: 40})
 	if err != nil {
 		t.Fatal(err)
@@ -166,7 +210,7 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 		t.Fatalf("evidence=%+v", evidence)
 	}
 	for _, group := range evidence.Groups {
-		if len(group.NodeIDs) != 3 || group.EndpointHits != 1 || group.CommitIndex == 0 || group.ReadIndex == 0 || group.AppliedIndex < group.ReadIndex || group.ReadEvidenceKind != "production" || !group.ProvesProductionConsensus {
+		if len(group.NodeIDs) != 3 || group.EndpointHits < 2 || group.CommitIndex == 0 || group.ReadIndex == 0 || group.AppliedIndex < group.ReadIndex || group.ReadEvidenceKind != "production" || !group.ProvesProductionConsensus {
 			t.Fatalf("group evidence=%+v", group)
 		}
 	}

@@ -181,7 +181,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		BuildNanos:    buildNanos,
 		Profiles:      m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Status: "not_captured", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs requires the captured baseline for differential analysis"},
 		Resources:     m8ProductionResourcesV1(assets),
-		TimedBoundary: "wall-clock query cells after topology and generation warmup; includes router, coordinator, TCP M5 serialization, Raft read-index/apply, persistent HNSW search, response merge, and caller scheduling; excludes topology construction, exact truth, warmup, artifact encoding, and shutdown",
+		TimedBoundary: "wall-clock query cells after topology, exhaustive endpoint preflight, and generation warmup; includes router, coordinator, TCP M5 serialization, Raft read-index/apply, persistent HNSW search, response merge, and caller scheduling; excludes topology construction, exact truth, preflight, warmup, artifact encoding, and shutdown",
 		Limitations: []string{
 			"loopback TCP with real serialized M5 messages and real in-memory HashiCorp Raft consensus; not a multi-host deployment",
 			"the checked-in 10k path materializes disjoint round-robin packs; -m8-existing-db reuses the retained graph-built M3 packs read-only",
@@ -377,15 +377,22 @@ func m8ExactTruthV1(collection *collections.Collection, queries [][]float64, top
 }
 
 func m8WarmProductionTopologyV1(ctx context.Context, coordinator *nativewire.VectorPartitionCoordinatorV1, assets *m8ProductionMultiGroupAssetsV1, queries [][]float64, cfg config) error {
-	if cfg.warmup == 0 {
-		return nil
-	}
 	if len(queries) == 0 {
 		return errors.New("M8 warmup requires a query")
 	}
 	efSearch := cfg.topK
 	for _, value := range cfg.efSearch {
 		efSearch = max(efSearch, value)
+	}
+	// This untimed request is deliberately independent of -warmup: every
+	// advertised data group must be exercised before its evidence can support a
+	// production result, including runs with no user-configured warmup or only
+	// low-probe measured rows.
+	requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	_, err := coordinator.Search(requestCtx, m8ProductionRequestV1(assets, m8Query32V1(queries[0]), "m8-endpoint-preflight", len(assets.manifest.Placements), efSearch, cfg.topK))
+	cancel()
+	if err != nil {
+		return fmt.Errorf("M8 exhaustive endpoint preflight: %w", err)
 	}
 	for i := 0; i < cfg.warmup; i++ {
 		requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -661,7 +668,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 	for _, group := range report.Topology.Groups {
 		if group.GroupID == "" || owners[group.GroupID] || group.LeaderID == "" || len(group.NodeIDs) != 3 ||
 			group.CommitIndex == 0 || group.ReadIndex == 0 || group.AppliedIndex == 0 || !group.ProvesProductionConsensus ||
-			group.ReadEvidenceKind != "production" {
+			group.ReadEvidenceKind != "production" || group.EndpointHits == 0 {
 			return errors.New("invalid M8 data-group evidence")
 		}
 		owners[group.GroupID], leaders[group.LeaderID] = true, true
