@@ -388,10 +388,12 @@ func (h *VectorPartitionM8ProductionMultiGroupV1) Close() error {
 		for _, source := range h.sources {
 			errs = append(errs, source.Close())
 		}
+		// Evidence reads data/meta identities under this lock, so retire their
+		// providers only after an in-flight Evidence snapshot completes.
+		h.mu.Lock()
 		for _, data := range h.data {
 			errs = append(errs, data.Close())
 		}
-		h.mu.Lock()
 		meta := h.meta
 		h.meta = nil
 		h.mu.Unlock()
