@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/pprof"
+	"runtime/trace"
 	"sort"
 	"strings"
 	"sync"
@@ -121,12 +123,12 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		return fmt.Errorf("build M8 production assets: %w", err)
 	}
 	defer func() { runErr = errors.Join(runErr, assets.Close()) }()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	topology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(ctx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{
+	topologyCtx, cancelTopology := context.WithTimeout(context.Background(), 2*time.Minute)
+	topology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(topologyCtx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{
 		Collection: assets.collection, Manifest: assets.manifest, RouterSource: assets.RouterSource(),
 		GroupAssetSetDigests: assets.assetSetDigests, Database: "default", Catalog: "default",
 	})
+	cancelTopology()
 	if err != nil {
 		return fmt.Errorf("build M8 production topology: %w", err)
 	}
@@ -154,6 +156,16 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 			return fmt.Errorf("create M8 profiles directory: %w", err)
 		}
 	}
+	profileCapture, err := startM8ProfileCaptureV1(cfg.profiles)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if profileCapture != nil {
+			_, closeErr := profileCapture.Stop()
+			runErr = errors.Join(runErr, closeErr)
+		}
+	}()
 	for _, overlap := range cfg.overlaps {
 		if overlap != 0 {
 			report.Rows = append(report.Rows, m8ProductionRowV1{Status: "unsupported", UnsupportedReason: "overlap assets are not materialized by the initial M8 production topology checkpoint", Overlap: overlap})
@@ -162,7 +174,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		for _, probes := range cfg.probes {
 			for _, ef := range cfg.efSearch {
 				for _, concurrency := range cfg.concurrency {
-					row, rowErr := m8RunProductionCellV1(ctx, topology.Coordinator(), assets, queries, truth, probes, ef, concurrency, cfg.topK)
+					row, rowErr := m8RunProductionCellV1(context.Background(), topology.Coordinator(), assets, queries, truth, probes, ef, concurrency, cfg.topK)
 					if rowErr != nil {
 						return fmt.Errorf("M8 production cell probes=%d ef=%d concurrency=%d: %w", probes, ef, concurrency, rowErr)
 					}
@@ -173,7 +185,14 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		}
 	}
 	report.Topology = topology.Evidence()
-	report.Failure = m8RunUnavailableGroupV1(ctx, topology, assets, queries[0], cfg.topK)
+	report.Failure = m8RunUnavailableGroupV1(context.Background(), topology, assets, queries[0], cfg.topK)
+	if profileCapture != nil {
+		captured, stopErr := profileCapture.Stop()
+		if stopErr != nil {
+			return stopErr
+		}
+		report.Profiles = m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Captured: captured, Status: "captured_production_query_and_fault_boundary"}
+	}
 	report.GateLedger = m8InitialGateLedgerV1(report.Rows, report.Failure)
 	if report.GateLedger.ExhaustiveParity == "pass" && report.GateLedger.FailureHonesty == "pass" {
 		report.Status = "partial_pass_pending_deep_gates"
@@ -197,6 +216,83 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		_, err = fmt.Fprintf(stdout, "M8 status=%s artifact=%s rows=%d\n", report.Status, path, len(report.Rows))
 	}
 	return err
+}
+
+type m8ProfileCaptureV1 struct {
+	dir            string
+	cpu, traceFile *os.File
+	oldMutex       int
+	once           sync.Once
+	paths          []string
+	err            error
+}
+
+func startM8ProfileCaptureV1(dir string) (*m8ProfileCaptureV1, error) {
+	if dir == "" {
+		return nil, nil
+	}
+	capture := &m8ProfileCaptureV1{dir: dir}
+	var err error
+	capture.traceFile, err = os.Create(filepath.Join(dir, "trace.out"))
+	if err != nil {
+		return nil, fmt.Errorf("create M8 trace: %w", err)
+	}
+	if err = trace.Start(capture.traceFile); err != nil {
+		_ = capture.traceFile.Close()
+		return nil, fmt.Errorf("start M8 trace: %w", err)
+	}
+	capture.cpu, err = os.Create(filepath.Join(dir, "cpu.pprof"))
+	if err != nil {
+		trace.Stop()
+		_ = capture.traceFile.Close()
+		return nil, fmt.Errorf("create M8 CPU profile: %w", err)
+	}
+	if err = pprof.StartCPUProfile(capture.cpu); err != nil {
+		trace.Stop()
+		_ = capture.traceFile.Close()
+		_ = capture.cpu.Close()
+		return nil, fmt.Errorf("start M8 CPU profile: %w", err)
+	}
+	capture.oldMutex = runtime.SetMutexProfileFraction(1)
+	runtime.SetBlockProfileRate(1)
+	return capture, nil
+}
+
+func (c *m8ProfileCaptureV1) Stop() ([]string, error) {
+	if c == nil {
+		return nil, nil
+	}
+	c.once.Do(func() {
+		pprof.StopCPUProfile()
+		trace.Stop()
+		runtime.SetBlockProfileRate(0)
+		runtime.SetMutexProfileFraction(c.oldMutex)
+		c.err = errors.Join(c.cpu.Close(), c.traceFile.Close())
+		c.paths = []string{filepath.Join(c.dir, "cpu.pprof"), filepath.Join(c.dir, "trace.out")}
+		for _, item := range []struct {
+			name, file string
+		}{{"heap", "heap.pprof"}, {"allocs", "allocs.pprof"}, {"block", "block.pprof"}, {"mutex", "mutex.pprof"}} {
+			path := filepath.Join(c.dir, item.file)
+			file, err := os.Create(path)
+			if err == nil {
+				profile := pprof.Lookup(item.name)
+				if profile == nil {
+					err = fmt.Errorf("M8 runtime profile %s unavailable", item.name)
+				} else {
+					err = profile.WriteTo(file, 0)
+				}
+			}
+			if file != nil {
+				err = errors.Join(err, file.Close())
+			}
+			if err != nil {
+				c.err = errors.Join(c.err, fmt.Errorf("write M8 %s profile: %w", item.name, err))
+			} else {
+				c.paths = append(c.paths, path)
+			}
+		}
+	})
+	return append([]string(nil), c.paths...), c.err
 }
 
 func m8ExactTruthV1(collection *collections.Collection, queries [][]float64, topK int) ([][]string, error) {

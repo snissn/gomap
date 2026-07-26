@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -1098,6 +1099,31 @@ func TestM8ProductionEvidenceJSONKeepsEveryTopologyDimensionV1(t *testing.T) {
 		if !bytes.Contains(raw, []byte(field)) {
 			t.Fatalf("missing %s in %s", field, raw)
 		}
+	}
+}
+
+func TestM8ProfileCaptureWritesRequiredRuntimeArtifactsV1(t *testing.T) {
+	dir := t.TempDir()
+	capture, err := startM8ProfileCaptureV1(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.Gosched()
+	paths, err := capture.Stop()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 6 {
+		t.Fatalf("profile paths=%v", paths)
+	}
+	for _, path := range paths {
+		info, statErr := os.Stat(path)
+		if statErr != nil || info.Size() == 0 {
+			t.Fatalf("profile %s info=%v err=%v", path, info, statErr)
+		}
+	}
+	if again, err := capture.Stop(); err != nil || fmt.Sprint(again) != fmt.Sprint(paths) {
+		t.Fatalf("idempotent stop paths=%v err=%v", again, err)
 	}
 }
 
