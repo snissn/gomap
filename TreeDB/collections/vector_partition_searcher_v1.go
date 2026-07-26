@@ -64,10 +64,20 @@ func (s *CanonicalVectorPartitionCosineScorerV1) ScoreV1(vector []float32) (floa
 	if err != nil {
 		return 0, fmt.Errorf("%w: canonical vector norm: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
+	return canonicalVectorPartitionScoreWithInvNormV1(s.normalizedQuery, vector, invNorm)
+}
+
+func canonicalVectorPartitionScoreWithInvNormV1(normalizedQuery, vector []float32, invNorm float32) (float32, error) {
+	if len(normalizedQuery) == 0 || len(normalizedQuery) != len(vector) {
+		return 0, fmt.Errorf("%w: canonical score dimensions", ErrVectorPartitionSearchUnavailable)
+	}
+	if invNorm <= 0 || math.IsNaN(float64(invNorm)) || math.IsInf(float64(invNorm), 0) {
+		return 0, fmt.Errorf("%w: canonical vector inverse norm", ErrVectorPartitionSearchUnavailable)
+	}
 	var dot float64
 	for i := range vector {
 		normalized := vector[i] * invNorm
-		dot += float64(s.normalizedQuery[i]) * float64(normalized)
+		dot += float64(normalizedQuery[i]) * float64(normalized)
 	}
 	if math.IsNaN(dot) || math.IsInf(dot, 0) {
 		return 0, fmt.Errorf("%w: canonical score nonfinite", ErrVectorPartitionSearchUnavailable)
@@ -517,7 +527,7 @@ func checkedVectorPartitionScratchProductV1(left, right uint64) (uint64, error) 
 type VectorPartitionLocalSearcherV1 struct {
 	mu                                  sync.Mutex
 	asset                               VectorPartitionSearchAssetV1
-	normalizedVectors                   [][]float32
+	vectorInvNorms                      []float32
 	digest                              string
 	pins                                uint64
 	retired                             bool
@@ -576,13 +586,13 @@ func OpenVectorPartitionLocalSearcherV1(asset VectorPartitionSearchAssetV1) (*Ve
 	if err := validateVectorPartitionSearchAssetV1(asset); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
-	normalizedVectors := make([][]float32, len(asset.Vectors))
+	vectorInvNorms := make([]float32, len(asset.Vectors))
 	for i, v := range asset.Vectors {
-		normalized, err := canonicalVectorPartitionNormalizeV1(v)
+		invNorm, err := columnVectorGraphInvNorm(v)
 		if err != nil {
 			return nil, fmt.Errorf("%w: vector[%d] norm: %v", ErrVectorPartitionSearchUnavailable, i, err)
 		}
-		normalizedVectors[i] = normalized
+		vectorInvNorms[i] = invNorm
 	}
 	h := sha256.New()
 	h.Write([]byte(asset.ManifestChecksum))
@@ -593,12 +603,12 @@ func OpenVectorPartitionLocalSearcherV1(asset VectorPartitionSearchAssetV1) (*Ve
 		}
 	}
 	return &VectorPartitionLocalSearcherV1{
-		asset:             clonePartitionSearchAsset(asset),
-		normalizedVectors: normalizedVectors,
-		digest:            hex.EncodeToString(h.Sum(nil)),
-		opened:            1,
-		searchRoute:       VectorPartitionSearchRouteExactFP32ScanV1,
-		maxStableIDBytes:  vectorPartitionMaxStableIDBytesV1(asset.IDs),
+		asset:            clonePartitionSearchAsset(asset),
+		vectorInvNorms:   vectorInvNorms,
+		digest:           hex.EncodeToString(h.Sum(nil)),
+		opened:           1,
+		searchRoute:      VectorPartitionSearchRouteExactFP32ScanV1,
+		maxStableIDBytes: vectorPartitionMaxStableIDBytesV1(asset.IDs),
 	}, nil
 }
 
@@ -827,7 +837,7 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context
 				return nil, VectorPartitionSearchMetricsV1{}, err
 			}
 		}
-		score, err := canonicalVectorPartitionNormalizedScoreV1(normalizedQuery, s.normalizedVectors[i])
+		score, err := canonicalVectorPartitionScoreWithInvNormV1(normalizedQuery, s.asset.Vectors[i], s.vectorInvNorms[i])
 		if err != nil {
 			s.recordFailure()
 			return nil, VectorPartitionSearchMetricsV1{}, err
@@ -1020,8 +1030,9 @@ func (s *VectorPartitionLocalSearcherV1) statusLockedV1() VectorPartitionSearchS
 		} else {
 			st.OverlapMemberships++
 		}
-		st.HeapBytes += uint64(4*len(s.asset.Vectors[i]) + 4*len(s.normalizedVectors[i]) + len(s.asset.IDs[i]))
+		st.HeapBytes += uint64(4*len(s.asset.Vectors[i]) + len(s.asset.IDs[i]))
 	}
+	st.HeapBytes += uint64(4 * len(s.vectorInvNorms))
 	st.PackBytes = st.HeapBytes
 	return st
 }

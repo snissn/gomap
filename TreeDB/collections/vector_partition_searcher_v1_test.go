@@ -25,8 +25,8 @@ func TestVectorPartitionLocalSearcherV1ExactStableIDsAndPins(t *testing.T) {
 	if got[0].ID != "bb" || got[0].Score <= got[1].Score {
 		t.Fatalf("%+v", got)
 	}
-	if status := s.Status(); status.MaxStableIDBytes != 2 || status.HeapBytes != 35 || status.PackBytes != 35 {
-		t.Fatalf("exact in-memory status=%+v want max ID 2 and 35-byte cloned+normalized payload", status)
+	if status := s.Status(); status.MaxStableIDBytes != 2 || status.HeapBytes != 27 || status.PackBytes != 27 {
+		t.Fatalf("exact in-memory status=%+v want max ID 2 and 27-byte cloned+inverse-norm payload", status)
 	}
 	if _, _, err := s.SearchWithOptionsV1(context.Background(), []float32{1, 0}, VectorPartitionSearchOptionsV1{TopK: 1, MaxStableIDBytes: 0}); err != nil {
 		t.Fatalf("uncapped stable ID search: %v", err)
@@ -341,7 +341,7 @@ func TestVectorPartitionLocalSearcherV1ExactScanUsesCanonicalScoreBitsV1(t *test
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = searcher.Close() })
-	// The searcher owns its normalized snapshot; caller mutation after Open
+	// The searcher owns its vector snapshot and cached inverse norms; caller mutation after Open
 	// cannot change the generation-pinned score bits.
 	vector[0] = 0
 	got, _, err := searcher.SearchWithOptionsV1(context.Background(), query, VectorPartitionSearchOptionsV1{TopK: 1})
