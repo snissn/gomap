@@ -1191,6 +1191,9 @@ func TestRunRejectsTopKAboveFixtureBeforeOracleAllocation(t *testing.T) {
 }
 
 func TestM8RunRejectsTopKAboveFixtureAndShardLimitsBeforeTopologyV1(t *testing.T) {
+	t.Setenv("BASE_SHA", strings.Repeat("a", 40))
+	t.Setenv("GITHUB_SHA", strings.Repeat("b", 40))
+	t.Setenv("GITHUB_EVENT_PATH", "")
 	fixture := writeFixtureForTest(t, 32, 1, 8)
 	shardFixture := writeFixtureForTest(t, 512, 1, 8)
 	base := []string{
