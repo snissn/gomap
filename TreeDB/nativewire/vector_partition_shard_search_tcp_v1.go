@@ -80,11 +80,11 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShard
 	if err != nil {
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, err)
 	}
+	if frame.Request != nil || (frame.Response == nil) == (frame.Error == nil) {
+		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, errors.New("ambiguous M5 response frame"))
+	}
 	if frame.Error != nil {
 		return VectorPartitionShardSearchResponseV1{}, frame.Error.toError()
-	}
-	if frame.Response == nil {
-		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, errors.New("missing M5 response"))
 	}
 	return *frame.Response, nil
 }

@@ -144,6 +144,30 @@ func TestVectorPartitionShardSearchTCPDispatcherPreservesTypedServiceErrorV1(t *
 	}
 }
 
+func TestVectorPartitionShardSearchTCPDispatcherRejectsAmbiguousResponseFramesV1(t *testing.T) {
+	for name, frame := range map[string]vectorPartitionShardSearchTCPFrameV1{
+		"response_and_error":   {Response: &VectorPartitionShardSearchResponseV1{}, Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, Message: "also error"}},
+		"request_and_response": {Request: &VectorPartitionShardSearchRequestV1{RequestID: "unexpected"}, Response: &VectorPartitionShardSearchResponseV1{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			client, server := net.Pipe()
+			defer client.Close()
+			go func() {
+				defer server.Close()
+				_, _ = readVectorPartitionShardSearchTCPFrameV1(server, vectorPartitionShardSearchTCPMaxFrameBytesV1)
+				_ = writeVectorPartitionShardSearchTCPFrameV1(server, frame, vectorPartitionShardSearchTCPMaxFrameBytesV1)
+			}()
+			dispatcher := &VectorPartitionShardSearchTCPDispatcherV1{
+				endpoints: map[raftcluster.GroupID]string{"group-a": "pipe"}, maxFrame: vectorPartitionShardSearchTCPMaxFrameBytesV1,
+				dial: func(context.Context, string, string) (net.Conn, error) { return client, nil },
+			}
+			if _, err := dispatcher.DispatchVectorPartitionShardSearchV1(context.Background(), VectorPartitionShardSearchRequestV1{TargetGroupID: "group-a"}); err == nil {
+				t.Fatal("accepted ambiguous M5 response frame")
+			}
+		})
+	}
+}
+
 func TestVectorPartitionShardSearchTCPDispatcherCancellationWithoutDeadlineV1(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
