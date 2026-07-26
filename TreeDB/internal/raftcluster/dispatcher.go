@@ -148,6 +148,17 @@ func NewCatalogMetaGroupRoutedSubmitter(registry GroupSubmitterRegistryV1, valid
 }
 
 func (s *GroupRoutedSubmitter) SubmitCommandEntryV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1) (SubmitResultV1, error) {
+	return s.submitCommandEntryV1(ctx, entry, metadata, nil)
+}
+
+func (s *GroupRoutedSubmitter) SubmitCommandEntryWithPreCommitV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1, preCommit func(context.Context) error) (SubmitResultV1, error) {
+	if preCommit == nil {
+		return SubmitResultV1{}, errors.Join(ErrInvalidSubmitter, fmt.Errorf("pre-commit callback is required"))
+	}
+	return s.submitCommandEntryV1(ctx, entry, metadata, preCommit)
+}
+
+func (s *GroupRoutedSubmitter) submitCommandEntryV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1, preCommit func(context.Context) error) (SubmitResultV1, error) {
 	if s == nil || s.registry.empty() {
 		return SubmitResultV1{}, ErrInvalidSubmitter
 	}
@@ -167,6 +178,13 @@ func (s *GroupRoutedSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	submitter, ok := s.registry.Lookup(target.GroupID)
 	if !ok {
 		return SubmitResultV1{}, errors.Join(ErrRouteTargetUnknown, routeErrorWithMetadata(metadata, "route group %q is not configured locally", target.GroupID))
+	}
+	if preCommit != nil {
+		atomicSubmitter, ok := submitter.(CommandSubmitterWithPreCommitV1)
+		if !ok {
+			return SubmitResultV1{}, errors.Join(ErrInvalidSubmitter, fmt.Errorf("route group %q does not support serialized pre-commit callbacks", target.GroupID))
+		}
+		return atomicSubmitter.SubmitCommandEntryWithPreCommitV1(ctx, bytes.Clone(entry), cloneRequestMetadataV1(metadata), preCommit)
 	}
 	return submitter.SubmitCommandEntryV1(ctx, bytes.Clone(entry), cloneRequestMetadataV1(metadata))
 }

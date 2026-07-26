@@ -608,6 +608,75 @@ func TestSingleGroupSubmitterPreflightsBeforeCommitApply(t *testing.T) {
 	}
 }
 
+func TestSingleGroupSubmitterSerializesPreCommitAfterPreflightBeforeCommitV1(t *testing.T) {
+	entry := testClusterCommandEntry(t, 7)
+	preflightErr := errors.New("idempotency key conflicts with a different command")
+	var order []string
+	rejected := newTestSingleGroupSubmitter(t, SingleGroupSubmitterOptions{
+		AdmissionProvider: StaticAdmissionProvider{Status: LeaderAdmission()},
+		CommitSource: CommitSourceFunc(func(context.Context, CommitCommandEntryV1Request) (CommitCommandEntryV1Result, error) {
+			order = append(order, "commit")
+			return CommitCommandEntryV1Result{}, nil
+		}),
+		Preflight: CommandEntryPreflightFunc(func(context.Context, CommandEntryPreflightRequestV1) (CommandEntryPreflightResultV1, error) {
+			order = append(order, "preflight")
+			return CommandEntryPreflightResultV1{}, preflightErr
+		}),
+		Applier:                &recordingClusterApplier{result: raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied}},
+		CatalogVersionProvider: staticCatalogVersion(7),
+	})
+	_, err := rejected.SubmitCommandEntryWithPreCommitV1(context.Background(), entry, raftentry.RequestMetadataV1{AckPolicy: iwire.AckRaftCommitted}, func(context.Context) error {
+		order = append(order, "lifecycle-admission")
+		return nil
+	})
+	if !errors.Is(err, preflightErr) {
+		t.Fatalf("rejected submit err=%v want preflight conflict", err)
+	}
+	if got, want := strings.Join(order, ","), "preflight"; got != want {
+		t.Fatalf("rejected submit order=%q want %q", got, want)
+	}
+
+	order = nil
+	applier := &recordingClusterApplier{result: raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied}}
+	accepted := newTestSingleGroupSubmitter(t, SingleGroupSubmitterOptions{
+		AdmissionProvider: StaticAdmissionProvider{Status: LeaderAdmission()},
+		CommitSource: CommitSourceFunc(func(_ context.Context, req CommitCommandEntryV1Request) (CommitCommandEntryV1Result, error) {
+			order = append(order, "commit")
+			return CommitCommandEntryV1Result{
+				Entry: CommittedCommandEntryV1{
+					Term:                     1,
+					Index:                    1,
+					Bytes:                    bytes.Clone(req.EntryBytes),
+					CurrentCatalogVersion:    req.CurrentCatalogVersion,
+					HasCurrentCatalogVersion: req.HasCurrentCatalogVersion,
+					SyncLocalCommandWAL:      req.SyncLocalCommandWAL,
+					RequestMetadata:          cloneRequestMetadataV1(req.RequestMetadata),
+					ExpectedTarget:           req.ExpectedTarget,
+				},
+				Evidence: CommitEvidenceV1{
+					Kind: CommitEvidenceProductionConsensusV1, GroupID: "group-a", NodeID: "node-a", LeaderID: "node-a",
+					Term: 1, Index: 1, Committed: true, ProductionConsensus: true,
+				},
+			}, nil
+		}),
+		Preflight: CommandEntryPreflightFunc(func(context.Context, CommandEntryPreflightRequestV1) (CommandEntryPreflightResultV1, error) {
+			order = append(order, "preflight")
+			return CommandEntryPreflightResultV1{}, nil
+		}),
+		Applier:                applier,
+		CatalogVersionProvider: staticCatalogVersion(7),
+	})
+	if _, err := accepted.SubmitCommandEntryWithPreCommitV1(context.Background(), entry, raftentry.RequestMetadataV1{AckPolicy: iwire.AckRaftCommitted}, func(context.Context) error {
+		order = append(order, "lifecycle-admission")
+		return nil
+	}); err != nil {
+		t.Fatalf("accepted submit: %v", err)
+	}
+	if got, want := strings.Join(order, ","), "preflight,lifecycle-admission,commit"; got != want {
+		t.Fatalf("accepted submit order=%q want %q", got, want)
+	}
+}
+
 func TestSingleGroupSubmitterAdmissionRejectsBeforeCommitApply(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

@@ -16,7 +16,7 @@ import (
 // RaftClusterSubmitter. It resolves the bounded active lifecycle set from the
 // replicated catalog authority, rather than trusting a frontend-local index
 // cache, then invalidates every active index for the affected collection before
-// the shared submitter encodes its deterministic mutation entry.
+// the data command is offered to consensus.
 type CatalogVectorPartitionMutationAdmissionV1 struct {
 	Authority   *raftplacement.CatalogMetaAuthorityV1
 	Coordinator raftplacement.VectorPartitionLifecycleCoordinatorV1

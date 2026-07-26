@@ -46,6 +46,13 @@ func (s *confirmingVectorPartitionClusterSubmitterV1) RequiresVectorPartitionMut
 	return true, nil
 }
 
+func (s *confirmingVectorPartitionClusterSubmitterV1) SubmitCommandEntryWithPreCommitV1(ctx context.Context, entry []byte, metadata ClusterRequestMetadata, preCommit func(context.Context) error) (ClusterSubmitResult, error) {
+	if err := preCommit(ctx); err != nil {
+		return ClusterSubmitResult{}, err
+	}
+	return s.SubmitCommandEntryV1(ctx, entry, metadata)
+}
+
 func (s *confirmingVectorPartitionClusterSubmitterV1) ConfirmVectorPartitionMutationV1(ctx context.Context, command iwire.CommandID, _ []iwire.Section) error {
 	s.mu.Lock()
 	s.confirmations = append(s.confirmations, command)

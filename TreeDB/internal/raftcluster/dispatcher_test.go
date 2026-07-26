@@ -86,6 +86,13 @@ func (s *recordingGroupSubmitter) SubmitCommandEntryV1(_ context.Context, entry 
 	}, nil
 }
 
+func (s *recordingGroupSubmitter) SubmitCommandEntryWithPreCommitV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1, preCommit func(context.Context) error) (SubmitResultV1, error) {
+	if err := preCommit(ctx); err != nil {
+		return SubmitResultV1{}, err
+	}
+	return s.SubmitCommandEntryV1(ctx, entry, metadata)
+}
+
 func (s *recordingGroupSubmitter) snapshot() []recordingGroupSubmitCall {
 	out := make([]recordingGroupSubmitCall, len(s.calls))
 	for i := range s.calls {
@@ -428,6 +435,47 @@ func TestGroupRoutedSubmitterRequiresFeatureWhenAnyGroupEnablesIt(t *testing.T) 
 	}
 	if !required {
 		t.Fatal("vector partition lifecycle requirement=false want true from group-b config")
+	}
+}
+
+func TestGroupRoutedSubmitterDelegatesSerializedPreCommitV1(t *testing.T) {
+	groupA := &recordingGroupSubmitter{groupID: "group-a"}
+	dispatcher := newTestGroupRoutedSubmitter(t, groupA)
+	called := false
+	if _, err := dispatcher.SubmitCommandEntryWithPreCommitV1(context.Background(), testClusterCommandEntry(t, 7), routeMetadata("group-a", iwire.AckRaftCommitted), func(context.Context) error {
+		called = true
+		if calls := groupA.snapshot(); len(calls) != 0 {
+			t.Fatalf("data submit ran before pre-commit callback: calls=%d", len(calls))
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("SubmitCommandEntryWithPreCommitV1: %v", err)
+	}
+	if !called || len(groupA.snapshot()) != 1 {
+		t.Fatalf("callback/submits=%v/%d want true/1", called, len(groupA.snapshot()))
+	}
+}
+
+func TestGroupRoutedSubmitterRejectsMissingSerializedPreCommitV1(t *testing.T) {
+	groupA := &submitOnlyGroupSubmitter{groupID: "group-a"}
+	registry, err := NewGroupSubmitterRegistryV1([]GroupSubmitterV1{{GroupID: "group-a", Submitter: groupA}})
+	if err != nil {
+		t.Fatalf("NewGroupSubmitterRegistryV1: %v", err)
+	}
+	dispatcher, err := NewCatalogMetaGroupRoutedSubmitter(registry, &recordingCatalogRouteValidator{})
+	if err != nil {
+		t.Fatalf("NewCatalogMetaGroupRoutedSubmitter: %v", err)
+	}
+	called := false
+	_, err = dispatcher.SubmitCommandEntryWithPreCommitV1(context.Background(), testClusterCommandEntry(t, 7), routeMetadata("group-a", iwire.AckRaftCommitted), func(context.Context) error {
+		called = true
+		return nil
+	})
+	if !errors.Is(err, ErrInvalidSubmitter) {
+		t.Fatalf("SubmitCommandEntryWithPreCommitV1 err=%v want invalid submitter", err)
+	}
+	if called {
+		t.Fatal("pre-commit callback ran without a serialized target submitter")
 	}
 }
 

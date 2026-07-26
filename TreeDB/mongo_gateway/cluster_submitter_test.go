@@ -57,6 +57,13 @@ func (s *mongoConfirmingVectorPartitionSubmitterV1) RequiresVectorPartitionMutat
 	return true, nil
 }
 
+func (s *mongoConfirmingVectorPartitionSubmitterV1) SubmitCommandEntryWithPreCommitV1(ctx context.Context, entry []byte, metadata treenativewire.ClusterRequestMetadata, preCommit func(context.Context) error) (treenativewire.ClusterSubmitResult, error) {
+	if err := preCommit(ctx); err != nil {
+		return treenativewire.ClusterSubmitResult{}, err
+	}
+	return s.SubmitCommandEntryV1(ctx, entry, metadata)
+}
+
 func (s *mongoConfirmingVectorPartitionSubmitterV1) AdmitVectorPartitionMutationV1(context.Context, iwire.CommandID, []iwire.Section) error {
 	return nil
 }

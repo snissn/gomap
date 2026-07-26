@@ -23,8 +23,8 @@ type RaftClusterSubmitter struct {
 
 // NewRaftClusterSubmitterWithVectorPartitionAdmissionV1 is the production M7
 // construction path. The supplied admission provider performs deterministic
-// schema classification and calls the replicated lifecycle coordinator before
-// this concrete shared submitter can encode a Raft command entry.
+// schema classification and calls the replicated lifecycle coordinator inside
+// the data preflight-to-commit boundary.
 func NewRaftClusterSubmitterWithVectorPartitionAdmissionV1(bridge raftcluster.CommandSubmitterV1, admission VectorPartitionMutationAdmissionProviderV1, managers ...*collections.CollectionManager) (*RaftClusterSubmitter, error) {
 	if admission == nil {
 		return nil, errors.New("nativewire: vector partition admission provider is required")
@@ -66,6 +66,13 @@ func (s *RaftClusterSubmitter) ConfirmVectorPartitionMutationV1(ctx context.Cont
 		return protocolError(iwire.ErrReadOnly, "vector partition lifecycle admission is not configured")
 	}
 	return s.VectorPartitionAdmission.ConfirmVectorPartitionMutationV1(ctx, command, sections)
+}
+
+func (s *RaftClusterSubmitter) ValidateVectorPartitionMutationLifecycleV1() error {
+	if s == nil || s.VectorPartitionAdmission == nil {
+		return protocolError(iwire.ErrReadOnly, "vector partition lifecycle admission is not configured")
+	}
+	return nil
 }
 
 // RoutedRaftClusterSubmitter composes the concrete single-group Raft bridge
@@ -133,13 +140,34 @@ func (s *RaftClusterSubmitter) ClusterAdmissionStatus(ctx context.Context) (Clus
 }
 
 func (s *RaftClusterSubmitter) SubmitCommandEntryV1(ctx context.Context, entry []byte, metadata ClusterRequestMetadata) (ClusterSubmitResult, error) {
+	return s.submitCommandEntryV1(ctx, entry, metadata, nil)
+}
+
+func (s *RaftClusterSubmitter) SubmitCommandEntryWithPreCommitV1(ctx context.Context, entry []byte, metadata ClusterRequestMetadata, preCommit func(context.Context) error) (ClusterSubmitResult, error) {
+	if preCommit == nil {
+		return ClusterSubmitResult{}, protocolError(iwire.ErrInvalidCommand, "raft cluster submitter pre-commit callback is required")
+	}
+	return s.submitCommandEntryV1(ctx, entry, metadata, preCommit)
+}
+
+func (s *RaftClusterSubmitter) submitCommandEntryV1(ctx context.Context, entry []byte, metadata ClusterRequestMetadata, preCommit func(context.Context) error) (ClusterSubmitResult, error) {
 	if s == nil || s.Bridge == nil {
 		return ClusterSubmitResult{}, protocolError(iwire.ErrInvalidCommand, "raft cluster submitter is not configured")
 	}
 	if s.Collections == nil {
 		return ClusterSubmitResult{}, protocolError(iwire.ErrInvalidCommand, "raft cluster submitter collection manager is not configured")
 	}
-	result, err := s.Bridge.SubmitCommandEntryV1(ctx, entry, metadata)
+	var result raftcluster.SubmitResultV1
+	var err error
+	if preCommit == nil {
+		result, err = s.Bridge.SubmitCommandEntryV1(ctx, entry, metadata)
+	} else {
+		atomicBridge, ok := s.Bridge.(raftcluster.CommandSubmitterWithPreCommitV1)
+		if !ok {
+			return ClusterSubmitResult{}, protocolError(iwire.ErrReadOnly, "raft bridge does not support serialized pre-commit callbacks")
+		}
+		result, err = atomicBridge.SubmitCommandEntryWithPreCommitV1(ctx, entry, metadata, preCommit)
+	}
 	clusterResult := ClusterSubmitResult{
 		ActualAck:            AckPolicy(result.ActualAck),
 		CommittedRecoverable: result.CommittedRecoverable,

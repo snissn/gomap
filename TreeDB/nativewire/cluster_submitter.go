@@ -24,6 +24,13 @@ type ClusterSubmitter interface {
 	SubmitCommandEntryV1(ctx context.Context, entry []byte, metadata ClusterRequestMetadata) (ClusterSubmitResult, error)
 }
 
+// ClusterSubmitterWithPreCommitV1 is the M7-safe submit extension. The callback
+// must run after the data layer's deterministic preflight succeeds and before
+// the command is offered to consensus, under the same serialization boundary.
+type ClusterSubmitterWithPreCommitV1 interface {
+	SubmitCommandEntryWithPreCommitV1(ctx context.Context, entry []byte, metadata ClusterRequestMetadata, preCommit func(context.Context) error) (ClusterSubmitResult, error)
+}
+
 const committedVectorPartitionMutationConfirmationTimeoutV1 = 30 * time.Second
 
 // ClusterRouteProvider is an optional ClusterSubmitter extension for
@@ -109,6 +116,13 @@ type VectorPartitionMutationLifecycleProviderV1 interface {
 	VectorPartitionMutationCommitProviderV1
 }
 
+// VectorPartitionMutationLifecycleReadinessV1 lets a concrete submitter fail
+// closed when it exposes lifecycle methods but their backing coordinator is
+// not configured.
+type VectorPartitionMutationLifecycleReadinessV1 interface {
+	ValidateVectorPartitionMutationLifecycleV1() error
+}
+
 // VectorPartitionMutationAdmissionRequiredV1 marks an M7-enabled shared
 // submitter. It prevents a wiring error from degrading an active lifecycle to
 // the legacy optional path: a required submitter without an admission provider
@@ -142,6 +156,46 @@ func AdmitVectorPartitionMutationV1(ctx context.Context, submitter ClusterSubmit
 		return nil
 	}
 	return admitter.AdmitVectorPartitionMutationV1(ctx, command, cloneSections(sections))
+}
+
+// SubmitCommandEntryWithVectorPartitionAdmissionV1 orders lifecycle admission
+// inside the data submitter's deterministic preflight-to-commit boundary for
+// an M7-required deployment. A definite data-preflight rejection therefore
+// cannot publish a pending lifecycle barrier. Legacy optional admission remains
+// supported for non-M7 test and integration submitters.
+func SubmitCommandEntryWithVectorPartitionAdmissionV1(ctx context.Context, submitter ClusterSubmitter, command iwire.CommandID, sections []iwire.Section, entry []byte, metadata ClusterRequestMetadata) (ClusterSubmitResult, error) {
+	if submitter == nil {
+		return ClusterSubmitResult{}, protocolError(iwire.ErrInvalidCommand, "nativewire cluster submitter is not configured")
+	}
+	required, hasRequirement := submitter.(VectorPartitionMutationAdmissionRequiredV1)
+	if !hasRequirement {
+		if err := AdmitVectorPartitionMutationV1(ctx, submitter, command, sections); err != nil {
+			return ClusterSubmitResult{}, err
+		}
+		return submitter.SubmitCommandEntryV1(ctx, entry, metadata)
+	}
+	enabled, err := required.RequiresVectorPartitionMutationAdmissionV1(ctx)
+	if err != nil {
+		return ClusterSubmitResult{}, err
+	}
+	if !enabled {
+		return submitter.SubmitCommandEntryV1(ctx, entry, metadata)
+	}
+	if readiness, ok := submitter.(VectorPartitionMutationLifecycleReadinessV1); ok {
+		if err := readiness.ValidateVectorPartitionMutationLifecycleV1(); err != nil {
+			return ClusterSubmitResult{}, err
+		}
+	}
+	if _, ok := submitter.(VectorPartitionMutationLifecycleProviderV1); !ok {
+		return ClusterSubmitResult{}, protocolError(iwire.ErrReadOnly, "vector partition lifecycle admission and confirmation are required but not configured")
+	}
+	atomicSubmitter, ok := submitter.(ClusterSubmitterWithPreCommitV1)
+	if !ok {
+		return ClusterSubmitResult{}, protocolError(iwire.ErrReadOnly, "vector partition lifecycle requires serialized data preflight and admission")
+	}
+	return atomicSubmitter.SubmitCommandEntryWithPreCommitV1(ctx, entry, metadata, func(callbackCtx context.Context) error {
+		return AdmitVectorPartitionMutationV1(callbackCtx, submitter, command, sections)
+	})
 }
 
 func ConfirmVectorPartitionMutationV1(ctx context.Context, submitter ClusterSubmitter, command iwire.CommandID, sections []iwire.Section) error {
@@ -283,13 +337,10 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 		}
 		ApplyClusterRouteMetadata(&metadata, routeReq, route)
 	}
-	// Durable lifecycle admission is deliberately last: every fallible local
-	// encode/decode and route preflight has completed, so a refusal cannot
-	// strand a replicated pending mutation barrier without a data submission.
-	if err := AdmitVectorPartitionMutationV1(ctx, s.clusterSubmitter, cmd.Header.ID, cmd.Known); err != nil {
-		return nil, err
-	}
-	result, submitErr := s.clusterSubmitter.SubmitCommandEntryV1(ctx, entry, metadata)
+	// M7-required admission runs inside the submitter after deterministic data
+	// preflight and immediately before commit. This prevents a definite
+	// idempotency/schema rejection from stranding a replicated lifecycle fence.
+	result, submitErr := SubmitCommandEntryWithVectorPartitionAdmissionV1(ctx, s.clusterSubmitter, cmd.Header.ID, cmd.Known, entry, metadata)
 	if result.CommittedApplied {
 		if err := ConfirmCommittedVectorPartitionMutationV1(ctx, s.clusterSubmitter, cmd.Header.ID, cmd.Known); err != nil {
 			return nil, errors.Join(submitErr, err)
