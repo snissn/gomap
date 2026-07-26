@@ -1022,12 +1022,13 @@ func m8ProductionResourcesV1(assets *m8ProductionMultiGroupAssetsV1) m8Productio
 	return out
 }
 
+type m8ProductionCellOutcomeV1 struct {
+	response nativewire.VectorPartitionCoordinatorResponseV1
+	err      error
+}
+
 func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPartitionCoordinatorV1, assets *m8ProductionMultiGroupAssetsV1, queries [][]float64, truth [][]m8CanonicalResultV1, probes, efSearch, concurrency, topK int) (m8ProductionRowV1, [][]m8CanonicalResultV1, error) {
-	type outcome struct {
-		response nativewire.VectorPartitionCoordinatorResponseV1
-		err      error
-	}
-	outcomes := make([]outcome, len(queries))
+	outcomes := make([]m8ProductionCellOutcomeV1, len(queries))
 	started := time.Now()
 	m8RunBoundedWorkV1(len(queries), concurrency, func(index int) {
 		query := m8Query32V1(queries[index])

@@ -1069,6 +1069,8 @@ type m8BenchmarkWorkPlan struct {
 	QueryRequests                   int64
 	RetainedCoordinatorCells        int64
 	RetainedCoordinatorResults      int64
+	CurrentCellOutcomes             int64
+	CurrentCellOutcomeBytes         int64
 	FixtureResidentBytes            int64
 	SourceSnapshotBytes             int64
 	ExactTruthBytes                 int64
@@ -1190,6 +1192,55 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
+	maxProbes, maxEFSearch, maxConcurrency := 0, 0, 0
+	for _, probes := range cfg.probes {
+		maxProbes = max(maxProbes, probes)
+	}
+	for _, efSearch := range cfg.efSearch {
+		maxEFSearch = max(maxEFSearch, efSearch)
+	}
+	for _, concurrency := range cfg.concurrency {
+		maxConcurrency = max(maxConcurrency, concurrency)
+	}
+	// m8RunProductionCellV1 retains every raw response until the full cell has
+	// completed. Bound the largest response shape, including the backing arrays
+	// and harness-owned identity strings that are not included in the response
+	// struct or the retained canonical top-k matrices.
+	neighborBytes, err := memoryMul(int64(cfg.topK), int64(unsafe.Sizeof(nativewire.VectorPartitionCoordinatorNeighborV1{}))+documentIDStorageBytes)
+	if err != nil {
+		return plan, err
+	}
+	partitionBytes, err := memoryMul(int64(maxProbes), int64(unsafe.Sizeof(uint32(0))))
+	if err != nil {
+		return plan, err
+	}
+	// Group IDs and the response digests reference generation-pinned topology
+	// storage; each response owns the group string headers, not duplicate backing
+	// strings. RequestID is formatted per query and remains owned by the outcome.
+	maxGroups := min(maxProbes, cfg.raftGroups)
+	if maxGroups < 1 {
+		maxGroups = maxProbes // conservative for direct planner callers without parsed defaults
+	}
+	groupBytes, err := memoryMul(int64(maxGroups), int64(unsafe.Sizeof("")))
+	if err != nil {
+		return plan, err
+	}
+	requestIDStorageBytes := int64(len(fmt.Sprintf("m8-q-%06d-p-%04d-ef-%06d-c-%03d", max(0, m.Queries-1), maxProbes, maxEFSearch, maxConcurrency)))
+	perOutcomeBytes, err := memoryAdd(
+		int64(unsafe.Sizeof(m8ProductionCellOutcomeV1{})),
+		neighborBytes,
+		partitionBytes,
+		groupBytes,
+		requestIDStorageBytes,
+	)
+	if err != nil {
+		return plan, err
+	}
+	plan.CurrentCellOutcomes = int64(m.Queries)
+	plan.CurrentCellOutcomeBytes, err = memoryMul(plan.CurrentCellOutcomes, perOutcomeBytes)
+	if err != nil {
+		return plan, err
+	}
 	attributionCells, err := memoryMul(int64(len(cfg.probes)), int64(len(cfg.efSearch)))
 	if err != nil {
 		return plan, err
@@ -1245,21 +1296,25 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	measurementPeak, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorBytes)
+	measurementBase, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorBytes)
 	if err != nil {
 		return plan, err
 	}
-	attributionPeak, err := memoryAdd(measurementPeak, plan.RetainedAttributionBytes, plan.AttributionMergeScratchBytes)
+	measurementPeak, err := memoryAdd(measurementBase, plan.CurrentCellOutcomeBytes)
 	if err != nil {
 		return plan, err
 	}
-	peak := max(sourceOraclePeak, attributionPeak)
+	attributionPeak, err := memoryAdd(measurementBase, plan.RetainedAttributionBytes, plan.AttributionMergeScratchBytes)
+	if err != nil {
+		return plan, err
+	}
+	peak := max(sourceOraclePeak, measurementPeak, attributionPeak)
 	plan.ModeledPeakBytes, err = memoryScaleCeil(peak, memorySlackNumerator, memorySlackDenominator)
 	if err != nil {
 		return plan, err
 	}
 	if plan.ModeledPeakBytes > capBytes {
-		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d source_snapshot_bytes=%d exact_truth_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d retained_attribution_matrices=%d retained_attribution_results=%d retained_attribution_bytes=%d attribution_merge_scratch_results=%d attribution_merge_scratch_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes, plan.RetainedAttributionMatrices, plan.RetainedAttributionResults, plan.RetainedAttributionBytes, plan.AttributionMergeScratchResults, plan.AttributionMergeScratchBytes)
+		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d source_snapshot_bytes=%d exact_truth_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d current_cell_outcomes=%d current_cell_outcome_bytes=%d retained_attribution_matrices=%d retained_attribution_results=%d retained_attribution_bytes=%d attribution_merge_scratch_results=%d attribution_merge_scratch_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes, plan.CurrentCellOutcomes, plan.CurrentCellOutcomeBytes, plan.RetainedAttributionMatrices, plan.RetainedAttributionResults, plan.RetainedAttributionBytes, plan.AttributionMergeScratchResults, plan.AttributionMergeScratchBytes)
 	}
 	return plan, nil
 }

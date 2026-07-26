@@ -1110,7 +1110,7 @@ func TestM8BenchmarkWorkCapAndOverflowV1(t *testing.T) {
 	if err != nil || plan.QueryRequests != 149 || plan.MeasuredQueryRequests != 80 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 65 {
 		t.Fatalf("M8 work plan=%+v err=%v", plan, err)
 	}
-	if plan.RetainedCoordinatorCells != 8 || plan.RetainedCoordinatorResults != 80 || plan.FixtureResidentBytes == 0 || plan.SourceSnapshotBytes == 0 || plan.ExactTruthBytes == 0 || plan.RetainedCoordinatorBytes == 0 || plan.RetainedAttributionMatrices != 5 || plan.RetainedAttributionResults != 50 || plan.RetainedAttributionBytes == 0 || plan.AttributionMergeScratchResults != 16 || plan.AttributionMergeScratchBytes == 0 || plan.ModeledPeakBytes == 0 {
+	if plan.RetainedCoordinatorCells != 8 || plan.RetainedCoordinatorResults != 80 || plan.CurrentCellOutcomes != 5 || plan.CurrentCellOutcomeBytes == 0 || plan.FixtureResidentBytes == 0 || plan.SourceSnapshotBytes == 0 || plan.ExactTruthBytes == 0 || plan.RetainedCoordinatorBytes == 0 || plan.RetainedAttributionMatrices != 5 || plan.RetainedAttributionResults != 50 || plan.RetainedAttributionBytes == 0 || plan.AttributionMergeScratchResults != 16 || plan.AttributionMergeScratchBytes == 0 || plan.ModeledPeakBytes == 0 {
 		t.Fatalf("incomplete M8 memory plan=%+v", plan)
 	}
 	if _, err := validateM8BenchmarkWork(cfg, manifest, 148, math.MaxInt64); err == nil {
@@ -1187,6 +1187,37 @@ func TestM8AttributionMergeScratchRespectsMemoryCapV1(t *testing.T) {
 	}
 	if _, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, withoutScratch); err == nil || !strings.Contains(err.Error(), "attribution_merge_scratch_results=131072") {
 		t.Fatalf("accepted unmodeled attribution merge scratch: %v", err)
+	}
+}
+
+func TestM8CurrentCellOutcomesRespectMemoryCapV1(t *testing.T) {
+	cfg := config{partitions: 256, raftGroups: 4, overlaps: []float64{0}, probes: []int{256}, efSearch: []int{64}, concurrency: []int{64}, topK: 1}
+	manifest := fixtureManifest{Vectors: 256, Queries: 1_000_000, Dimensions: 1}
+	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutOutcomes, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attributionWithoutOutcomes, err := memoryAdd(withoutOutcomes, plan.RetainedAttributionBytes, plan.AttributionMergeScratchBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceOracle, err := memoryAdd(plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutOutcomes, err = memoryScaleCeil(max(sourceOracle, withoutOutcomes, attributionWithoutOutcomes), memorySlackNumerator, memorySlackDenominator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.CurrentCellOutcomes != 1_000_000 || plan.CurrentCellOutcomeBytes <= 1_500_000_000 || plan.ModeledPeakBytes <= withoutOutcomes {
+		t.Fatalf("M8 current-cell outcome plan=%+v without_outcomes=%d", plan, withoutOutcomes)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, withoutOutcomes); err == nil || !strings.Contains(err.Error(), "current_cell_outcomes=1000000") {
+		t.Fatalf("accepted unmodeled current-cell outcomes: %v", err)
 	}
 }
 
