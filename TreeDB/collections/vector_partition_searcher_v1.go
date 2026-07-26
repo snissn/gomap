@@ -686,6 +686,51 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context
 	return out, VectorPartitionSearchMetricsV1{Candidates: uint64(len(s.asset.IDs)), Edges: edges, Route: VectorPartitionSearchRouteExactFP32ScanV1}, nil
 }
 
+// SearchExactWithOptionsV1 scans the already generation-pinned prepared pack.
+// It is diagnostic attribution only; it never reopens mutable source state.
+func (s *VectorPartitionLocalSearcherV1) SearchExactWithOptionsV1(ctx context.Context, query []float32, opts VectorPartitionSearchOptionsV1) ([]VectorPartitionSearchResultV1, VectorPartitionSearchMetricsV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, VectorPartitionSearchMetricsV1{}, err
+	}
+	if err := s.Acquire(); err != nil {
+		return nil, VectorPartitionSearchMetricsV1{}, err
+	}
+	defer s.Release()
+	if s.prepared == nil || opts.TopK < 1 || len(query) != s.asset.Dimensions {
+		return nil, VectorPartitionSearchMetricsV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	var qn float64
+	for _, x := range query {
+		qn += float64(x) * float64(x)
+	}
+	if qn == 0 {
+		return nil, VectorPartitionSearchMetricsV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	rows, dims := int(s.prepared.Header.Rows), s.asset.Dimensions
+	top := make(vectorPartitionSearchResultMaxHeapV1, 0, min(opts.TopK, rows))
+	for row := 0; row < rows; row++ {
+		if row&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, VectorPartitionSearchMetricsV1{}, err
+			}
+		}
+		var dot float64
+		for col := 0; col < dims; col++ {
+			dot += float64(query[col]) * float64(s.prepared.NormalizedVectors[row*dims+col])
+		}
+		start, end := s.prepared.DocumentIDOffsets[row], s.prepared.DocumentIDOffsets[row+1]
+		top.pushBounded(min(opts.TopK, rows), VectorPartitionSearchResultV1{ID: string(s.prepared.DocumentIDBytes[start:end]), Score: float32(dot / math.Sqrt(qn))})
+	}
+	out := make([]VectorPartitionSearchResultV1, len(top))
+	for target := len(out) - 1; target >= 0; target-- {
+		out[target] = top.popWorst()
+	}
+	return out, VectorPartitionSearchMetricsV1{Candidates: uint64(rows), Route: VectorPartitionSearchRouteExactFP32ScanV1}, nil
+}
+
 func canonicalizeVectorPartitionNativeResultsV1(ctx context.Context, results []columnVectorGraphNativeSearchResult) ([]VectorPartitionSearchResultV1, error) {
 	if ctx == nil {
 		ctx = context.Background()
