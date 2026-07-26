@@ -229,18 +229,18 @@ func TestVectorPartitionLocalSearcherV1ExactScanAllocationsBoundedByTopKV1(t *te
 		rows = 512
 		topK = 5
 	)
-	vectors := make([]float32, rows*2)
+	vectors := make([]float32, rows*4)
 	offsets := make([]uint64, rows+1)
 	ids := make([]byte, 0, rows*8)
 	for row := 0; row < rows; row++ {
-		vectors[row*2] = 1
+		vectors[row*4] = 1
 		ids = fmt.Appendf(ids, "%08d", row)
 		offsets[row+1] = uint64(len(ids))
 	}
 	searcher := &VectorPartitionLocalSearcherV1{
 		asset: VectorPartitionSearchAssetV1{Generation: 11, PartitionID: 2, Dimensions: 2},
 		prepared: &columnHNSWSearchPackPreparedView{
-			Header:            columnHNSWSearchPackHeader{Rows: rows, Dimensions: 2, VectorStride: 2},
+			Header:            columnHNSWSearchPackHeader{Rows: rows, Dimensions: 2, VectorStride: 4},
 			NormalizedVectors: vectors,
 			DocumentIDOffsets: offsets,
 			DocumentIDBytes:   ids,
@@ -263,6 +263,40 @@ func TestVectorPartitionLocalSearcherV1ExactScanAllocationsBoundedByTopKV1(t *te
 	}
 	if allocs >= 32 {
 		t.Fatalf("exact scan allocs/run=%.1f want O(topK), not O(rows=%d)", allocs, rows)
+	}
+}
+
+func TestVectorPartitionLocalSearcherV1ExactScanRejectsPreparedShapeMismatchV1(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		dimensions int
+		stride     int
+	}{
+		{name: "dimensions", dimensions: 2, stride: 4},
+		{name: "stride", dimensions: 3, stride: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			searcher := &VectorPartitionLocalSearcherV1{
+				asset: VectorPartitionSearchAssetV1{Generation: 11, PartitionID: 2, Dimensions: 3},
+				prepared: &columnHNSWSearchPackPreparedView{
+					Header:            columnHNSWSearchPackHeader{Rows: 1, Dimensions: tc.dimensions, VectorStride: tc.stride},
+					NormalizedVectors: make([]float32, tc.stride),
+					DocumentIDOffsets: []uint64{0, 1},
+					DocumentIDBytes:   []byte("a"),
+				},
+				opened:           1,
+				maxStableIDBytes: 1,
+			}
+			results, metrics, err := searcher.SearchExactWithOptionsV1(
+				context.Background(), []float32{1, 0, 0}, VectorPartitionSearchOptionsV1{TopK: 1},
+			)
+			if !errors.Is(err, ErrVectorPartitionSearchUnavailable) || results != nil || metrics != (VectorPartitionSearchMetricsV1{}) {
+				t.Fatalf("results=%+v metrics=%+v err=%v want unavailable and no partial result", results, metrics, err)
+			}
+			if status := searcher.Status(); status.Failures != 1 || status.Searches != 0 || status.ActivePins != 0 {
+				t.Fatalf("status=%+v want one failure, no search, released pin", status)
+			}
+		})
 	}
 }
 

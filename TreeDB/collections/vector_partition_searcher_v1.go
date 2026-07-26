@@ -883,6 +883,18 @@ func (s *VectorPartitionLocalSearcherV1) SearchExactWithOptionsV1(ctx context.Co
 		s.recordFailure()
 		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: stable ID bytes=%d exceeds limit=%d", ErrVectorPartitionSearchUnavailable, s.maxStableIDBytes, opts.MaxStableIDBytes)
 	}
+	expectedStride, err := columnHNSWSearchPackVectorStrideForDimensions(s.asset.Dimensions)
+	if err != nil || s.prepared.Header.Dimensions != s.asset.Dimensions || s.prepared.Header.VectorStride != expectedStride {
+		s.recordFailure()
+		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf(
+			"%w: prepared dimensions/stride=(%d,%d) want (%d,%d)",
+			ErrVectorPartitionSearchUnavailable,
+			s.prepared.Header.Dimensions,
+			s.prepared.Header.VectorStride,
+			s.asset.Dimensions,
+			expectedStride,
+		)
+	}
 	normalizedQuery, err := canonicalVectorPartitionNormalizeV1(query)
 	if err != nil {
 		s.recordFailure()
