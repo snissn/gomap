@@ -530,7 +530,7 @@ func (s *Server) submitClusterMutation(ctx context.Context, command iwire.Comman
 		return nil, err
 	}
 	if result.CommittedApplied {
-		if err := treenativewire.ConfirmVectorPartitionMutationV1(ctx, s.ClusterSubmitter, command, cmd.Known); err != nil {
+		if err := treenativewire.ConfirmCommittedVectorPartitionMutationV1(ctx, s.ClusterSubmitter, command, cmd.Known); err != nil {
 			return nil, err
 		}
 	}

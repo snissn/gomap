@@ -42,12 +42,14 @@ type mongoClusterFakeSubmitter struct {
 	overrideResponseSections bool
 	status                   treenativewire.ClusterAdmissionStatus
 	admissionErr             error
+	submitHook               func()
 }
 
 type mongoConfirmingVectorPartitionSubmitterV1 struct {
 	*mongoClusterFakeSubmitter
-	mu            sync.Mutex
-	confirmations []iwire.CommandID
+	mu                        sync.Mutex
+	confirmations             []iwire.CommandID
+	confirmationContextErrors []error
 }
 
 func (s *mongoConfirmingVectorPartitionSubmitterV1) RequiresVectorPartitionMutationAdmissionV1(context.Context) (bool, error) {
@@ -58,9 +60,10 @@ func (s *mongoConfirmingVectorPartitionSubmitterV1) AdmitVectorPartitionMutation
 	return nil
 }
 
-func (s *mongoConfirmingVectorPartitionSubmitterV1) ConfirmVectorPartitionMutationV1(_ context.Context, command iwire.CommandID, _ []iwire.Section) error {
+func (s *mongoConfirmingVectorPartitionSubmitterV1) ConfirmVectorPartitionMutationV1(ctx context.Context, command iwire.CommandID, _ []iwire.Section) error {
 	s.mu.Lock()
 	s.confirmations = append(s.confirmations, command)
+	s.confirmationContextErrors = append(s.confirmationContextErrors, ctx.Err())
 	s.mu.Unlock()
 	return nil
 }
@@ -339,6 +342,9 @@ func (f *mongoClusterFakeSubmitter) SubmitCommandEntryV1(ctx context.Context, en
 	f.mu.Unlock()
 	if ctxErr != nil {
 		return treenativewire.ClusterSubmitResult{}, ctxErr
+	}
+	if f.submitHook != nil {
+		f.submitHook()
 	}
 	actualAck := f.actualAck
 	if actualAck == 0 {
@@ -2569,6 +2575,32 @@ func TestClusterSubmitterVisibleAckConfirmsCommittedVectorMutationV1(t *testing.
 	submitter.mu.Unlock()
 	if !reflect.DeepEqual(confirmations, []iwire.CommandID{iwire.CommandCreateCollection}) {
 		t.Fatalf("confirmations=%v want create_collection", confirmations)
+	}
+}
+
+func TestClusterSubmitterCommittedVectorConfirmationOutlivesClientCancellationV1(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	submitter := &mongoConfirmingVectorPartitionSubmitterV1{mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{committedApplied: true, submitHook: cancel}}
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	server.ClusterSubmitter = submitter
+	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(32)
+	raw, err := bson.Marshal(bson.D{{Key: "create", Value: "users"}, {Key: "$db", Value: "app"}})
+	if err != nil {
+		t.Fatalf("marshal command: %v", err)
+	}
+	response, err := server.clusterCreateCollectionResponse(ctx, wire.Document(raw))
+	if err != nil {
+		t.Fatalf("cluster create after client cancellation: %v", err)
+	}
+	assertOK(t, response)
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatalf("request context err=%v want canceled", ctx.Err())
+	}
+	submitter.mu.Lock()
+	defer submitter.mu.Unlock()
+	if len(submitter.confirmationContextErrors) != 1 || submitter.confirmationContextErrors[0] != nil {
+		t.Fatalf("confirmation context errors=%v want [nil]", submitter.confirmationContextErrors)
 	}
 }
 

@@ -340,12 +340,17 @@ func catalogMetaFeatureEnabledV1(features raftcluster.FeatureSet, name raftclust
 	return false
 }
 
-// ValidateVectorPartitionGenerationSearchV1 implements nativewire's M7
-// constant-time replicated authority seam without importing the transport
-// package back into raftplacement. It returns the authoritative lifecycle
-// ready-set digest; callers must not substitute the local manifest digest.
-func (a *CatalogMetaAuthorityV1) ValidateVectorPartitionGenerationSearchV1(
+// ValidateVectorPartitionGenerationSearchAtAppliedIndexV1 validates against a
+// local catalog view that has caught up through requiredAppliedIndex. The
+// required index must come from a fresh linearizable meta-Raft read fence; the
+// local applied index by itself is not proof of quorum freshness.
+//
+// This deliberately does not implement nativewire's serving interface. That
+// prevents a replica-local CatalogMetaAuthorityV1 from being wired directly
+// into search without the linearizable fence adapter.
+func (a *CatalogMetaAuthorityV1) ValidateVectorPartitionGenerationSearchAtAppliedIndexV1(
 	ctx context.Context,
+	requiredAppliedIndex uint64,
 	collection CollectionRefV1,
 	index string,
 	generation uint64,
@@ -366,6 +371,9 @@ func (a *CatalogMetaAuthorityV1) ValidateVectorPartitionGenerationSearchV1(
 	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
+	if requiredAppliedIndex == 0 || a.applied < requiredAppliedIndex {
+		return "", errors.Join(ErrCatalogMetaUnavailable, fmt.Errorf("catalog applied index %d is behind required linearizable index %d", a.applied, requiredAppliedIndex))
+	}
 	identity, ok := a.activeNames[vectorPartitionLifecycleServingKeyV1{Collection: collection, IndexName: index}]
 	if !ok {
 		return "", errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("no active generation"))

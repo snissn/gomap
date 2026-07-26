@@ -106,6 +106,18 @@ func (a *CatalogMetaAuthorityV1) ApplyCatalogMetaCommittedV1(capability raftclus
 	return err
 }
 
+// CatalogMetaAppliedIndexV1 returns the last catalog command index installed
+// in this local applied view. Raft read fences use it after a quorum-verified
+// barrier; callers must not treat the value alone as linearizability proof.
+func (a *CatalogMetaAuthorityV1) CatalogMetaAppliedIndexV1() (uint64, bool) {
+	if a == nil {
+		return 0, false
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.applied, true
+}
+
 func (a *CatalogMetaAuthorityV1) ExportCatalogMetaSnapshotBytesV1() ([]byte, error) {
 	s, err := a.ExportCatalogMetaSnapshotV1()
 	if err != nil {

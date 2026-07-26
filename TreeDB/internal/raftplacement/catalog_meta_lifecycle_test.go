@@ -105,6 +105,14 @@ func TestCatalogMetaLifecycleAtomicCutoverInvalidationCleanupAndStatus(t *testin
 	if err := catalogMetaLifecycleValidateSearchV1(authority, newIdentity, active.ReadySetDigest); err != nil {
 		t.Fatalf("active search: %v", err)
 	}
+	if _, err := authority.ValidateVectorPartitionGenerationSearchAtAppliedIndexV1(
+		context.Background(), applied+1, newIdentity.Index.Collection, newIdentity.Index.IndexName,
+		newIdentity.Generation, newIdentity.Index.IndexDefinitionDigest,
+		newIdentity.Source.Generation, newIdentity.Source.Checksum, newIdentity.Source.SchemaHash,
+		newIdentity.Source.RowCount,
+	); !errors.Is(err, ErrCatalogMetaUnavailable) {
+		t.Fatalf("search against stale local applied view err=%v want ErrCatalogMetaUnavailable", err)
+	}
 	if err := catalogMetaLifecycleValidateSearchV1(authority, newIdentity, strings.Repeat("f", 64)); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
 		t.Fatalf("wrong ready-set search err=%v", err)
 	}
@@ -711,8 +719,12 @@ func catalogMetaLifecycleTestCommandV1(
 }
 
 func catalogMetaLifecycleValidateSearchV1(authority *CatalogMetaAuthorityV1, identity VectorPartitionLifecycleIdentityV1, readySetDigest string) error {
-	got, err := authority.ValidateVectorPartitionGenerationSearchV1(
-		context.Background(), identity.Index.Collection, identity.Index.IndexName,
+	appliedIndex, ok := authority.CatalogMetaAppliedIndexV1()
+	if !ok {
+		return ErrCatalogMetaUnavailable
+	}
+	got, err := authority.ValidateVectorPartitionGenerationSearchAtAppliedIndexV1(
+		context.Background(), appliedIndex, identity.Index.Collection, identity.Index.IndexName,
 		identity.Generation, identity.Index.IndexDefinitionDigest,
 		identity.Source.Generation, identity.Source.Checksum, identity.Source.SchemaHash,
 		identity.Source.RowCount,

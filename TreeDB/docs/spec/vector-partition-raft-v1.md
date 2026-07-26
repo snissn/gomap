@@ -185,8 +185,10 @@ the barrier only after local encoding and route preflight succeed, then owns it
 by deterministic command/idempotency digest until the data result is committed,
 deterministically applied, and every affected per-index fence is confirmed.
 This confirmation is independent of the client-selected response acknowledgment
-policy. Exact retries reuse the same barrier; a distinct concurrent mutation is
-refused. This closes
+policy and runs under a bounded internal context after commit/apply, so client
+cancellation or deadline expiry cannot strand the fence between the data apply
+and catalog confirmation. Exact retries reuse the same barrier; a distinct
+concurrent mutation is refused. This closes
 the first-generation race where no active index record yet exists to invalidate.
 
 Fence state is included in the canonical catalog snapshot and is exposed to
@@ -211,6 +213,14 @@ pointer. M6 opens the exact prepared router generation named by replicated
 placement, then M7 validates that router against catalog authority before any
 router search or shard dispatch. A missing, stale, corrupt, or locally
 unprepared exact generation fails closed.
+
+Every replicated lifecycle validation first performs a fresh quorum-verified
+meta-Raft leader read and waits for the local catalog FSM through that fence.
+The concrete replica-local catalog authority intentionally does not implement
+the serving interface; only the linearizable adapter can do so. A follower
+without routed meta-leader proof, or a local catalog view behind the returned
+catalog command index, fails closed rather than serving its cached active
+generation.
 
 `VectorPartitionLifecycleCoordinatorV1` provides the bounded meta-Raft
 workflow: begin (with exact source/catalog/mutation identity), caller-owned

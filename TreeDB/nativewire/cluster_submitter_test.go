@@ -37,17 +37,19 @@ type fakeClusterSubmitter struct {
 
 type confirmingVectorPartitionClusterSubmitterV1 struct {
 	*fakeClusterSubmitter
-	mu            sync.Mutex
-	confirmations []iwire.CommandID
+	mu                        sync.Mutex
+	confirmations             []iwire.CommandID
+	confirmationContextErrors []error
 }
 
 func (s *confirmingVectorPartitionClusterSubmitterV1) RequiresVectorPartitionMutationAdmissionV1(context.Context) (bool, error) {
 	return true, nil
 }
 
-func (s *confirmingVectorPartitionClusterSubmitterV1) ConfirmVectorPartitionMutationV1(_ context.Context, command iwire.CommandID, _ []iwire.Section) error {
+func (s *confirmingVectorPartitionClusterSubmitterV1) ConfirmVectorPartitionMutationV1(ctx context.Context, command iwire.CommandID, _ []iwire.Section) error {
 	s.mu.Lock()
 	s.confirmations = append(s.confirmations, command)
+	s.confirmationContextErrors = append(s.confirmationContextErrors, ctx.Err())
 	s.mu.Unlock()
 	return nil
 }
@@ -722,6 +724,44 @@ func TestClusterSubmitterVisibleAckConfirmsCommittedVectorMutationV1(t *testing.
 	submitter.mu.Unlock()
 	if !reflect.DeepEqual(confirmations, []iwire.CommandID{iwire.CommandInsertBatch}) {
 		t.Fatalf("confirmations=%v want insert_batch", confirmations)
+	}
+}
+
+func TestClusterSubmitterCommittedVectorConfirmationOutlivesClientCancellationV1(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	submitter := &confirmingVectorPartitionClusterSubmitterV1{fakeClusterSubmitter: &fakeClusterSubmitter{}}
+	submitter.resultHook = func(_ raftentry.CommandEntryV1, _ ClusterRequestMetadata, result ClusterSubmitResult) (ClusterSubmitResult, error) {
+		cancel()
+		return result, nil
+	}
+	client, server, _, _ := serveCollectionPipeWithServerAndOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	setupCtx, setupCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer setupCancel()
+	if err := client.Hello(setupCtx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	body, err := appendCommandRequestBody(nil, iwire.CommandInsertBatch, clusterInsertBatchSections(t, client, setupCtx, AckVisible, "u1")...)
+	if err != nil {
+		t.Fatalf("append request body: %v", err)
+	}
+	sections, err := iwire.DecodeSections(body, server.limits)
+	if err != nil {
+		t.Fatalf("decode request body: %v", err)
+	}
+	cmd, err := server.registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("validate request sections: %v", err)
+	}
+	if _, err := server.handleClusterMutation(ctx, iwire.Header{Type: iwire.FrameRequest, RequestID: 1}, cmd); err != nil {
+		t.Fatalf("handle committed mutation after client cancellation: %v", err)
+	}
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatalf("request context err=%v want canceled", ctx.Err())
+	}
+	submitter.mu.Lock()
+	defer submitter.mu.Unlock()
+	if len(submitter.confirmationContextErrors) != 1 || submitter.confirmationContextErrors[0] != nil {
+		t.Fatalf("confirmation context errors=%v want [nil]", submitter.confirmationContextErrors)
 	}
 }
 

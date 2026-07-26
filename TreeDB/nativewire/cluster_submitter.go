@@ -23,6 +23,8 @@ type ClusterSubmitter interface {
 	SubmitCommandEntryV1(ctx context.Context, entry []byte, metadata ClusterRequestMetadata) (ClusterSubmitResult, error)
 }
 
+const committedVectorPartitionMutationConfirmationTimeoutV1 = 30 * time.Second
+
 // ClusterRouteProvider is an optional ClusterSubmitter extension for
 // collection-level route preflight. Providers should use catalog-derived route
 // decisions only; leader hints are metadata and are not live leadership proof.
@@ -161,6 +163,21 @@ func ConfirmVectorPartitionMutationV1(ctx context.Context, submitter ClusterSubm
 	return confirmer.ConfirmVectorPartitionMutationV1(ctx, command, cloneSections(sections))
 }
 
+// ConfirmCommittedVectorPartitionMutationV1 completes the lifecycle fence
+// after the data command is known committed and applied. At that point client
+// cancellation must not strand durable admission state, so confirmation uses
+// an internally bounded context detached from the request cancellation and
+// deadline while retaining request values for observability.
+func ConfirmCommittedVectorPartitionMutationV1(ctx context.Context, submitter ClusterSubmitter, command iwire.CommandID, sections []iwire.Section) error {
+	base := context.Background()
+	if ctx != nil {
+		base = context.WithoutCancel(ctx)
+	}
+	confirmCtx, cancel := context.WithTimeout(base, committedVectorPartitionMutationConfirmationTimeoutV1)
+	defer cancel()
+	return ConfirmVectorPartitionMutationV1(confirmCtx, submitter, command, sections)
+}
+
 // ClusterAdmissionStatus describes whether this node may accept cluster-owned
 // writes. A provider must set Leader for write admission; the zero value fails
 // closed as not-leader when returned by a configured provider.
@@ -276,7 +293,7 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 		return nil, err
 	}
 	if result.CommittedApplied {
-		if err := ConfirmVectorPartitionMutationV1(ctx, s.clusterSubmitter, cmd.Header.ID, cmd.Known); err != nil {
+		if err := ConfirmCommittedVectorPartitionMutationV1(ctx, s.clusterSubmitter, cmd.Header.ID, cmd.Known); err != nil {
 			return nil, err
 		}
 	}

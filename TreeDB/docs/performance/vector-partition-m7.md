@@ -56,6 +56,13 @@ after the data bridge proves commit plus deterministic local apply, independent
 of the requested response acknowledgment, and all per-index invalidation
 confirmations.
 
+Post-commit confirmation uses a bounded internal context detached from client
+cancellation and deadlines. Search admission likewise cannot consult the raw
+replica-local catalog cache: the serving adapter performs a quorum-verified
+meta-Raft leader fence and requires the local catalog applied index to have
+caught up before validating the active generation. Followers without a routed
+proof and replicas behind that fence fail closed.
+
 ## Explicitly unavailable phases
 
 M7 has no production generation-builder orchestration, remote asset upload
