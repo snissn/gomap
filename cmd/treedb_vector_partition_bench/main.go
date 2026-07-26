@@ -89,6 +89,7 @@ type config struct {
 	raftGroups       int
 	raftNodes        int
 	concurrency      []int
+	warmup           int
 	profiles         string
 	efSearch         []int
 }
@@ -570,6 +571,7 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 func parseConfig(args []string) (config, error) {
 	cfg := config{
 		format: "json", topK: 10, recallTarget: .9, seed: 1, stage: "simulation",
+		warmup:    1,
 		partition: vectorpartition.DefaultConfig(), routerConfig: vectorpartition.DefaultRouterConfigV1(),
 		routerCandidates: 1024, sourceHNSWDegree: partitionHNSWDegree,
 	}
@@ -590,6 +592,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.raftGroups, "raft-groups", 0, "M8 data Raft group count")
 	fs.IntVar(&cfg.raftNodes, "raft-nodes-per-group", 3, "M8 Raft members per data group (currently exactly 3)")
 	fs.StringVar(&concurrency, "concurrency", "1", "comma-separated M8 query concurrency")
+	fs.IntVar(&cfg.warmup, "warmup", cfg.warmup, "M8 untimed topology warmup requests before the measured sweep")
 	fs.StringVar(&efSearch, "ef-search", "128", "comma-separated M8 local HNSW ef_search values")
 	fs.StringVar(&cfg.profiles, "profiles", "", "M8 profile artifact directory")
 	fs.StringVar(&cfg.m3PersistDir, "m3-persist-db", "", "retain the single overlap,partition_index row as a persistent TreeDB directory for downstream service benchmarks")
@@ -664,7 +667,7 @@ func parseConfig(args []string) (config, error) {
 		if cfg.raftGroups < 2 || cfg.raftGroups > 64 || cfg.raftGroups > cfg.partitions || cfg.raftNodes != 3 || cfg.partitions < 4 {
 			return config{}, errors.New("production_multi_group requires 2..64 groups, exactly 3 nodes/group, at least 4 partitions, and groups <= partitions")
 		}
-		if len(cfg.concurrency) == 0 || len(cfg.efSearch) == 0 {
+		if len(cfg.concurrency) == 0 || len(cfg.efSearch) == 0 || cfg.warmup < 0 || cfg.warmup > 10_000 {
 			return config{}, errors.New("production_multi_group requires non-empty concurrency and ef-search sweeps")
 		}
 		for _, value := range cfg.concurrency {

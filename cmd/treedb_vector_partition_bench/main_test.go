@@ -1066,6 +1066,7 @@ func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 		"-probes", "1,4,16",
 		"-overlap", "0,0.20",
 		"-concurrency", "1,16,64",
+		"-warmup", "3",
 		"-ef-search", "64,4096",
 		"-m8-existing-db", "/retained/m8-assets",
 	})
@@ -1074,7 +1075,7 @@ func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 	}
 	if cfg.stage != m8ProductionMultiGroupModeV1 || cfg.raftGroups != 4 || cfg.raftNodes != 3 ||
 		fmt.Sprint(cfg.probes) != "[1 4 16]" || fmt.Sprint(cfg.overlaps) != "[0 0.2]" ||
-		fmt.Sprint(cfg.concurrency) != "[1 16 64]" || fmt.Sprint(cfg.efSearch) != "[64 4096]" || cfg.m8ExistingDB != "/retained/m8-assets" {
+		fmt.Sprint(cfg.concurrency) != "[1 16 64]" || cfg.warmup != 3 || fmt.Sprint(cfg.efSearch) != "[64 4096]" || cfg.m8ExistingDB != "/retained/m8-assets" {
 		t.Fatalf("M8 config=%+v", cfg)
 	}
 	for _, args := range [][]string{
@@ -1082,6 +1083,7 @@ func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4", "-raft-nodes-per-group", "2"},
 		{"-mode", m8ProductionMultiGroupModeV1, "-stage", "router", "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4"},
 		{"-stage", "router", "-m8-existing-db", "/retained/m8-assets", "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-probes", "1"},
+		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4", "-warmup", "-1"},
 	} {
 		if _, err := parseConfig(args); err == nil {
 			t.Fatalf("accepted malformed M8 config %#v", args)
@@ -1115,7 +1117,7 @@ func TestM8ProfileCaptureWritesRequiredRuntimeArtifactsV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 6 {
+	if len(paths) != 7 {
 		t.Fatalf("profile paths=%v", paths)
 	}
 	for _, path := range paths {
@@ -1126,6 +1128,28 @@ func TestM8ProfileCaptureWritesRequiredRuntimeArtifactsV1(t *testing.T) {
 	}
 	if again, err := capture.Stop(); err != nil || fmt.Sprint(again) != fmt.Sprint(paths) {
 		t.Fatalf("idempotent stop paths=%v err=%v", again, err)
+	}
+}
+
+func TestM8GateLedgerRequiresMatchedRecallQPSAndTailV1(t *testing.T) {
+	report := m8ProductionReportV1{
+		Config: m8ProductionConfigEvidenceV1{Partitions: 16, RecallTarget: 0.9},
+		Rows: []m8ProductionRowV1{
+			{Status: "pass", Probes: 16, EfSearch: 128, Concurrency: 16, RecallAtK: 0.99, QPS: 100, P95Nanos: 1000, ExactParityChecked: true, ExactParityPassed: true},
+			{Status: "pass", Probes: 4, EfSearch: 128, Concurrency: 16, RecallAtK: 0.92, QPS: 116, P95Nanos: 999},
+		},
+		Failure:   m8ProductionFailureEvidenceV1{Passed: true},
+		Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1, PeakRSSMeasured: true, MaxPartitionLoad: 65_000, BalanceHardCap: 65_625},
+	}
+	ledger := m8ProductionGateLedgerForReportV1(report)
+	if ledger.ExhaustiveParity != "pass" || ledger.FailureHonesty != "pass" || ledger.Recall != "pass" || ledger.ProbeReduction != "pass" || ledger.EndToEndQPS != "pass" || ledger.TailLatency != "pass" || ledger.Balance != "pass" || ledger.ResourceBounds != "pass" || ledger.OverlapStorage != "fail" {
+		t.Fatalf("ledger=%+v", ledger)
+	}
+	report.Rows[1].QPS = 114.9
+	report.Rows[1].P95Nanos = 1001
+	ledger = m8ProductionGateLedgerForReportV1(report)
+	if ledger.EndToEndQPS != "fail" || ledger.TailLatency != "fail" {
+		t.Fatalf("unmatched performance ledger=%+v", ledger)
 	}
 }
 

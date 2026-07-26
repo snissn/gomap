@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,6 +39,7 @@ type m8ProductionReportV1 struct {
 	GOOS               string                                                     `json:"goos"`
 	GOARCH             string                                                     `json:"goarch"`
 	LogicalCPUs        int                                                        `json:"logical_cpus"`
+	Host               m8ProductionHostEvidenceV1                                 `json:"host"`
 	Dataset            fixtureManifest                                            `json:"dataset"`
 	Config             m8ProductionConfigEvidenceV1                               `json:"config"`
 	BuildNanos         int64                                                      `json:"build_nanos"`
@@ -46,6 +48,8 @@ type m8ProductionReportV1 struct {
 	Failure            m8ProductionFailureEvidenceV1                              `json:"failure"`
 	GateLedger         m8ProductionGateLedgerV1                                   `json:"gate_ledger"`
 	Profiles           m8ProductionProfileEvidenceV1                              `json:"profiles"`
+	Resources          m8ProductionResourceEvidenceV1                             `json:"resources"`
+	TimedBoundary      string                                                     `json:"timed_boundary"`
 	Limitations        []string                                                   `json:"limitations"`
 }
 
@@ -58,6 +62,7 @@ type m8ProductionConfigEvidenceV1 struct {
 	TopK              int       `json:"top_k"`
 	RecallTarget      float64   `json:"recall_target"`
 	Concurrency       []int     `json:"concurrency"`
+	Warmup            int       `json:"warmup_requests"`
 	EfSearch          []int     `json:"ef_search"`
 	Seed              int64     `json:"seed"`
 }
@@ -69,6 +74,8 @@ type m8ProductionRowV1 struct {
 	Probes             int     `json:"probes,omitempty"`
 	EfSearch           int     `json:"ef_search,omitempty"`
 	Concurrency        int     `json:"concurrency,omitempty"`
+	RouterMode         string  `json:"router_mode,omitempty"`
+	RouterCandidates   int     `json:"router_candidate_budget,omitempty"`
 	Samples            int     `json:"samples,omitempty"`
 	RecallAtK          float64 `json:"recall_at_k,omitempty"`
 	QPS                float64 `json:"qps,omitempty"`
@@ -110,6 +117,26 @@ type m8ProductionProfileEvidenceV1 struct {
 	Directory string   `json:"directory,omitempty"`
 	Captured  []string `json:"captured"`
 	Status    string   `json:"status"`
+	Scope     string   `json:"scope"`
+}
+
+type m8ProductionHostEvidenceV1 struct {
+	CPUModel      string `json:"cpu_model"`
+	MemoryBytes   uint64 `json:"memory_bytes,omitempty"`
+	NUMANodes     string `json:"numa_nodes,omitempty"`
+	Kernel        string `json:"kernel,omitempty"`
+	ArtifactMount string `json:"artifact_mount,omitempty"`
+	DatasetMount  string `json:"dataset_mount,omitempty"`
+}
+
+type m8ProductionResourceEvidenceV1 struct {
+	PersistentAssetBytes uint64 `json:"persistent_asset_bytes"`
+	PeakRSSBytes         int64  `json:"peak_rss_bytes,omitempty"`
+	PeakRSSMeasured      bool   `json:"peak_rss_measured"`
+	OverlapMemberships   int    `json:"overlap_memberships"`
+	MaxPartitionLoad     uint64 `json:"max_partition_load"`
+	BalanceHardCap       uint64 `json:"balance_hard_cap"`
+	MmapStatus           string `json:"mmap_status"`
 }
 
 func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, queries [][]float64, stdout io.Writer) (runErr error) {
@@ -139,6 +166,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		return fmt.Errorf("build M8 production topology: %w", err)
 	}
 	defer func() { runErr = errors.Join(runErr, topology.Close()) }()
+	buildNanos := time.Since(started).Nanoseconds()
 
 	truth, err := m8ExactTruthV1(assets.collection, queries, cfg.topK)
 	if err != nil {
@@ -148,19 +176,25 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		SchemaVersion: 1, ResultKind: "m8_production_multi_group_evidence_v1", Status: "incomplete",
 		Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true, GeneratedAt: time.Now().UTC(),
 		Command: cfg.command, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dirty: m8GitDirtyV1(),
-		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), Dataset: fixture,
-		Config:     m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), EfSearch: append([]int(nil), cfg.efSearch...), Seed: cfg.seed},
-		BuildNanos: time.Since(started).Nanoseconds(),
-		Profiles:   m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Status: "not_captured_by_initial_topology_checkpoint"},
+		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), Host: m8ProductionHostV1(cfg), Dataset: fixture,
+		Config:        m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), Seed: cfg.seed},
+		BuildNanos:    buildNanos,
+		Profiles:      m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Status: "not_captured", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs requires the captured baseline for differential analysis"},
+		Resources:     m8ProductionResourcesV1(assets),
+		TimedBoundary: "wall-clock query cells after topology and generation warmup; includes router, coordinator, TCP M5 serialization, Raft read-index/apply, persistent HNSW search, response merge, and caller scheduling; excludes topology construction, exact truth, warmup, artifact encoding, and shutdown",
 		Limitations: []string{
 			"loopback TCP with real serialized M5 messages and real in-memory HashiCorp Raft consensus; not a multi-host deployment",
-			"initial runner materializes disjoint round-robin local packs; graph partition, overlap, stable-hash attribution, lifecycle matrix, deep profiles, and matched-recall acceptance remain pending",
+			"the checked-in 10k path materializes disjoint round-robin packs; -m8-existing-db reuses the retained graph-built M3 packs read-only",
+			"overlap 0.20 and stable-hash attribution are reported unsupported; the broader lifecycle matrix is separate test evidence and matched-recall acceptance remains gated",
 		},
 	}
 	if cfg.profiles != "" {
 		if err := os.MkdirAll(cfg.profiles, 0o755); err != nil {
 			return fmt.Errorf("create M8 profiles directory: %w", err)
 		}
+	}
+	if err := m8WarmProductionTopologyV1(context.Background(), topology.Coordinator(), assets, queries, cfg); err != nil {
+		return err
 	}
 	profileCapture, err := startM8ProfileCaptureV1(cfg.profiles)
 	if err != nil {
@@ -197,11 +231,17 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		if stopErr != nil {
 			return stopErr
 		}
-		report.Profiles = m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Captured: captured, Status: "captured_production_query_and_fault_boundary"}
+		report.Profiles = m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Captured: captured, Status: "captured_production_query_and_fault_boundary", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs.pprof is cumulative and must be compared with allocs_baseline.pprof"}
 	}
-	report.GateLedger = m8InitialGateLedgerV1(report.Rows, report.Failure)
-	if report.GateLedger.ExhaustiveParity == "pass" && report.GateLedger.FailureHonesty == "pass" {
-		report.Status = "partial_pass_pending_deep_gates"
+	report.Resources = m8ProductionResourcesV1(assets)
+	report.GateLedger = m8ProductionGateLedgerForReportV1(report)
+	if m8ProductionAllGatesPassV1(report.GateLedger) {
+		report.Status = "pass"
+	} else if m8ProductionAnyGateFailsV1(report.GateLedger) {
+		report.Status = "experimental_gate_failures"
+	}
+	if err := validateM8ProductionReportV1(report); err != nil {
+		return fmt.Errorf("validate M8 production report: %w", err)
 	}
 	if err := os.MkdirAll(cfg.out, 0o755); err != nil {
 		return err
@@ -238,6 +278,11 @@ func startM8ProfileCaptureV1(dir string) (*m8ProfileCaptureV1, error) {
 		return nil, nil
 	}
 	capture := &m8ProfileCaptureV1{dir: dir}
+	baseline := filepath.Join(dir, "allocs_baseline.pprof")
+	if err := writeM8RuntimeProfileV1("allocs", baseline); err != nil {
+		return nil, fmt.Errorf("write M8 allocation baseline: %w", err)
+	}
+	capture.paths = append(capture.paths, baseline)
 	var err error
 	capture.traceFile, err = os.Create(filepath.Join(dir, "trace.out"))
 	if err != nil {
@@ -274,7 +319,7 @@ func (c *m8ProfileCaptureV1) Stop() ([]string, error) {
 		runtime.SetBlockProfileRate(0)
 		runtime.SetMutexProfileFraction(c.oldMutex)
 		c.err = errors.Join(c.cpu.Close(), c.traceFile.Close())
-		c.paths = []string{filepath.Join(c.dir, "cpu.pprof"), filepath.Join(c.dir, "trace.out")}
+		c.paths = append(c.paths, filepath.Join(c.dir, "cpu.pprof"), filepath.Join(c.dir, "trace.out"))
 		for _, item := range []struct {
 			name, file string
 		}{{"heap", "heap.pprof"}, {"allocs", "allocs.pprof"}, {"block", "block.pprof"}, {"mutex", "mutex.pprof"}} {
@@ -301,6 +346,20 @@ func (c *m8ProfileCaptureV1) Stop() ([]string, error) {
 	return append([]string(nil), c.paths...), c.err
 }
 
+func writeM8RuntimeProfileV1(name, path string) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	profile := pprof.Lookup(name)
+	if profile == nil {
+		err = fmt.Errorf("M8 runtime profile %s unavailable", name)
+	} else {
+		err = profile.WriteTo(file, 0)
+	}
+	return errors.Join(err, file.Close())
+}
+
 func m8ExactTruthV1(collection *collections.Collection, queries [][]float64, topK int) ([][]string, error) {
 	truth := make([][]string, len(queries))
 	for i, query64 := range queries {
@@ -315,6 +374,55 @@ func m8ExactTruthV1(collection *collections.Collection, queries [][]float64, top
 		}
 	}
 	return truth, nil
+}
+
+func m8WarmProductionTopologyV1(ctx context.Context, coordinator *nativewire.VectorPartitionCoordinatorV1, assets *m8ProductionMultiGroupAssetsV1, queries [][]float64, cfg config) error {
+	if cfg.warmup == 0 {
+		return nil
+	}
+	if len(queries) == 0 {
+		return errors.New("M8 warmup requires a query")
+	}
+	efSearch := cfg.topK
+	for _, value := range cfg.efSearch {
+		efSearch = max(efSearch, value)
+	}
+	for i := 0; i < cfg.warmup; i++ {
+		requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		_, err := coordinator.Search(requestCtx, m8ProductionRequestV1(assets, m8Query32V1(queries[i%len(queries)]), fmt.Sprintf("m8-warmup-%06d", i), len(assets.manifest.Placements), efSearch, cfg.topK))
+		cancel()
+		if err != nil {
+			return fmt.Errorf("M8 topology warmup %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func m8ProductionResourcesV1(assets *m8ProductionMultiGroupAssetsV1) m8ProductionResourceEvidenceV1 {
+	var out m8ProductionResourceEvidenceV1
+	if assets == nil {
+		return out
+	}
+	for _, asset := range assets.manifest.Assets {
+		out.PersistentAssetBytes += asset.Bytes
+	}
+	out.PersistentAssetBytes += assets.manifest.RouterAsset.Bytes
+	out.OverlapMemberships = len(assets.manifest.OverlapMemberships)
+	loads := make([]uint64, assets.manifest.PartitionCount)
+	for _, membership := range assets.manifest.Memberships {
+		loads[membership.PartitionID]++
+	}
+	for _, load := range loads {
+		out.MaxPartitionLoad = max(out.MaxPartitionLoad, load)
+	}
+	// Integer ceiling of mean * 1.05, matching the default balance epsilon.
+	rows, partitions := assets.manifest.SourceRowCount, uint64(assets.manifest.PartitionCount)
+	out.BalanceHardCap = (rows*105 + partitions*100 - 1) / (partitions * 100)
+	out.MmapStatus = "not_captured_by_m8_runner; retained M3/M5 artifacts own mapped-pack evidence"
+	if peak, ok := vectorPartitionBenchmarkPeakRSS(); ok {
+		out.PeakRSSBytes, out.PeakRSSMeasured = peak, true
+	}
+	return out
 }
 
 func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPartitionCoordinatorV1, assets *m8ProductionMultiGroupAssetsV1, queries [][]float64, truth [][]string, probes, efSearch, concurrency, topK int) (m8ProductionRowV1, error) {
@@ -345,7 +453,7 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 	}
 	wg.Wait()
 	elapsed := time.Since(started)
-	row := m8ProductionRowV1{Status: "pass", Probes: probes, EfSearch: efSearch, Concurrency: concurrency, Samples: len(queries), ExactParityChecked: probes == len(assets.manifest.Placements), ExactParityPassed: probes == len(assets.manifest.Placements), NoPartialResults: true}
+	row := m8ProductionRowV1{Status: "pass", Probes: probes, EfSearch: efSearch, Concurrency: concurrency, RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidates: max(1, int(assets.status.Representatives)), Samples: len(queries), ExactParityChecked: probes == len(assets.manifest.Placements), ExactParityPassed: probes == len(assets.manifest.Placements), NoPartialResults: true}
 	durations := make([]uint64, 0, len(outcomes))
 	var recallSum float64
 	for index, outcome := range outcomes {
@@ -408,22 +516,75 @@ func m8RunUnavailableGroupV1(ctx context.Context, topology *nativewire.VectorPar
 	return result
 }
 
-func m8InitialGateLedgerV1(rows []m8ProductionRowV1, failure m8ProductionFailureEvidenceV1) m8ProductionGateLedgerV1 {
-	ledger := m8ProductionGateLedgerV1{ExhaustiveParity: "not_run", FailureHonesty: "fail", Recall: "not_evaluated", ProbeReduction: "not_evaluated", EndToEndQPS: "not_evaluated", TailLatency: "not_evaluated", Balance: "not_evaluated", OverlapStorage: "not_evaluated", ResourceBounds: "not_evaluated", ExistingBehavior: "pending_full_required_suites"}
-	for _, row := range rows {
+func m8ProductionGateLedgerForReportV1(report m8ProductionReportV1) m8ProductionGateLedgerV1 {
+	ledger := m8ProductionGateLedgerV1{ExhaustiveParity: "not_run", FailureHonesty: "fail", Recall: "fail", ProbeReduction: "fail", EndToEndQPS: "fail", TailLatency: "fail", Balance: "fail", OverlapStorage: "fail", ResourceBounds: "fail", ExistingBehavior: "pending_full_required_suites"}
+	var exhaustive []m8ProductionRowV1
+	var candidates []m8ProductionRowV1
+	for _, row := range report.Rows {
+		if row.Status == "unsupported" {
+			continue
+		}
 		if row.ExactParityChecked {
-			if row.ExactParityPassed {
-				ledger.ExhaustiveParity = "pass"
-			} else {
+			exhaustive = append(exhaustive, row)
+			if !row.ExactParityPassed {
 				ledger.ExhaustiveParity = "fail"
-				break
+			} else if ledger.ExhaustiveParity != "fail" {
+				ledger.ExhaustiveParity = "pass"
+			}
+		}
+		if row.RecallAtK >= report.Config.RecallTarget {
+			ledger.Recall = "pass"
+			if row.Probes*4 <= report.Config.Partitions {
+				ledger.ProbeReduction = "pass"
+				candidates = append(candidates, row)
 			}
 		}
 	}
-	if failure.Passed {
+	for _, candidate := range candidates {
+		for _, base := range exhaustive {
+			if candidate.EfSearch != base.EfSearch || candidate.Concurrency != base.Concurrency {
+				continue
+			}
+			if candidate.QPS >= base.QPS*1.15 {
+				ledger.EndToEndQPS = "pass"
+			}
+			if candidate.P95Nanos <= base.P95Nanos {
+				ledger.TailLatency = "pass"
+			}
+		}
+	}
+	if report.Failure.Passed {
 		ledger.FailureHonesty = "pass"
 	}
+	if report.Resources.BalanceHardCap > 0 && report.Resources.MaxPartitionLoad <= report.Resources.BalanceHardCap {
+		ledger.Balance = "pass"
+	}
+	if report.Resources.PersistentAssetBytes > 0 && report.Resources.PeakRSSMeasured {
+		ledger.ResourceBounds = "pass"
+	}
 	return ledger
+}
+
+func m8ProductionGateValuesV1(ledger m8ProductionGateLedgerV1) []string {
+	return []string{ledger.ExhaustiveParity, ledger.FailureHonesty, ledger.Recall, ledger.ProbeReduction, ledger.EndToEndQPS, ledger.TailLatency, ledger.Balance, ledger.OverlapStorage, ledger.ResourceBounds, ledger.ExistingBehavior}
+}
+
+func m8ProductionAllGatesPassV1(ledger m8ProductionGateLedgerV1) bool {
+	for _, value := range m8ProductionGateValuesV1(ledger) {
+		if value != "pass" {
+			return false
+		}
+	}
+	return true
+}
+
+func m8ProductionAnyGateFailsV1(ledger m8ProductionGateLedgerV1) bool {
+	for _, value := range m8ProductionGateValuesV1(ledger) {
+		if value == "fail" {
+			return true
+		}
+	}
+	return false
 }
 
 func m8Query32V1(in []float64) []float32 {
@@ -474,7 +635,76 @@ func m8PercentileV1(values []uint64, percentile int) uint64 {
 }
 
 func m8GitDirtyV1() bool {
-	command := exec.Command("git", "status", "--porcelain", "--untracked-files=no")
+	command := exec.Command("git", "status", "--porcelain")
 	raw, err := command.Output()
 	return err != nil || strings.TrimSpace(string(raw)) != ""
+}
+
+func validateM8ProductionReportV1(report m8ProductionReportV1) error {
+	if report.SchemaVersion != 1 || report.ResultKind != "m8_production_multi_group_evidence_v1" ||
+		report.Mode != m8ProductionMultiGroupModeV1 || !report.ProductionEvidence ||
+		report.GeneratedAt.IsZero() || len(report.Command) == 0 || !validSHA(report.BaseSHA) || !validSHA(report.HeadSHA) ||
+		report.Config.RaftGroups < 2 || report.Config.RaftNodesPerGroup != 3 || report.Config.Partitions < 4 ||
+		report.Config.Warmup < 0 || report.BuildNanos <= 0 || report.TimedBoundary == "" || len(report.Limitations) == 0 {
+		return errors.New("missing or invalid M8 identity, topology, or timing metadata")
+	}
+	if err := validateM3FixtureWithCaps(report.Dataset, maxVectors, maxFixtureBytes); err != nil {
+		return fmt.Errorf("dataset: %w", err)
+	}
+	if len(report.Topology.Groups) != report.Config.RaftGroups || report.Topology.Network != "tcp_loopback_serialized_m5_v1" ||
+		report.Topology.LifecycleState != "active" || !m8SHA256V1(report.Topology.ReadySetDigest) || len(report.Topology.MetaNodes) != 3 {
+		return errors.New("incomplete M8 production topology evidence")
+	}
+	owners, leaders := map[string]bool{}, map[string]bool{}
+	for _, group := range report.Topology.Groups {
+		if group.GroupID == "" || owners[group.GroupID] || group.LeaderID == "" || len(group.NodeIDs) != 3 ||
+			group.CommitIndex == 0 || group.ReadIndex == 0 || group.AppliedIndex == 0 || !group.ProvesProductionConsensus ||
+			group.ReadEvidenceKind != "production" {
+			return errors.New("invalid M8 data-group evidence")
+		}
+		owners[group.GroupID], leaders[group.LeaderID] = true, true
+	}
+	if report.Config.RaftGroups >= 4 && len(leaders) < 3 {
+		return errors.New("deep M8 topology did not distribute leaders")
+	}
+	if len(report.Rows) == 0 {
+		return errors.New("M8 report has no measurement rows")
+	}
+	for _, row := range report.Rows {
+		if row.Status == "unsupported" {
+			if row.UnsupportedReason == "" || row.Overlap == 0 {
+				return errors.New("malformed unsupported M8 row")
+			}
+			continue
+		}
+		if row.Status != "pass" && row.Status != "fail" || row.Probes < 1 || row.Probes > report.Config.Partitions ||
+			row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries || row.QPS <= 0 ||
+			row.RouterMode == "" || row.RouterCandidates < 1 || row.ExactParityChecked != (row.Probes == report.Config.Partitions) {
+			return errors.New("malformed measured M8 row")
+		}
+	}
+	if !report.Failure.Passed || report.Failure.Error == "" || report.Failure.ReturnedNeighbors != 0 || report.Failure.ReturnedGroups != 0 ||
+		report.GateLedger.FailureHonesty != "pass" || report.Resources.PersistentAssetBytes == 0 {
+		return errors.New("incomplete M8 failure or resource evidence")
+	}
+	if report.Profiles.Status == "captured_production_query_and_fault_boundary" {
+		if len(report.Profiles.Captured) != 7 || report.Profiles.Scope == "" {
+			return errors.New("incomplete M8 profile evidence")
+		}
+		for _, path := range report.Profiles.Captured {
+			info, err := os.Stat(path)
+			if err != nil || info.Size() == 0 {
+				return fmt.Errorf("M8 profile %q is missing or empty", path)
+			}
+		}
+	}
+	return nil
+}
+
+func m8SHA256V1(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
