@@ -1101,16 +1101,19 @@ func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 }
 
 func TestM8BenchmarkWorkCapAndOverflowV1(t *testing.T) {
-	cfg := config{overlaps: []float64{0, .2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}}
-	plan, err := validateM8BenchmarkWork(cfg, fixtureManifest{Queries: 5}, 80)
-	if err != nil || plan.QueryRequests != 80 {
+	cfg := config{overlaps: []float64{0, .2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3}
+	plan, err := validateM8BenchmarkWork(cfg, fixtureManifest{Queries: 5}, 84)
+	if err != nil || plan.QueryRequests != 84 {
 		t.Fatalf("M8 work plan=%+v err=%v", plan, err)
 	}
-	if _, err := validateM8BenchmarkWork(cfg, fixtureManifest{Queries: 5}, 79); err == nil {
+	if _, err := validateM8BenchmarkWork(cfg, fixtureManifest{Queries: 5}, 83); err == nil {
 		t.Fatal("accepted oversized M8 sweep")
 	}
 	if _, err := validateM8BenchmarkWork(cfg, fixtureManifest{Queries: math.MaxInt}, maxBenchmarkWorkUnits); err == nil {
 		t.Fatal("accepted overflowing M8 sweep")
+	}
+	if _, err := validateM8BenchmarkWork(config{overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}}, fixtureManifest{Queries: math.MaxInt}, maxBenchmarkWorkUnits); err == nil {
+		t.Fatal("accepted overflowing M8 preflight accounting")
 	}
 }
 

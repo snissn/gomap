@@ -31,6 +31,14 @@ func TestM8BoundedWorkUsesFixedWorkerPoolV1(t *testing.T) {
 	}
 }
 
+func TestM8BoundedWorkClampsInvalidConcurrencyV1(t *testing.T) {
+	var ran int32
+	m8RunBoundedWorkV1(4, 0, func(int) { atomic.AddInt32(&ran, 1) })
+	if ran != 4 {
+		t.Fatalf("ran=%d want 4", ran)
+	}
+}
+
 func requireM8PersistentAssetSupportV1(t testing.TB) {
 	t.Helper()
 	if !collections.VectorPartitionNamespacePersistenceSupportedForTestingV1() {

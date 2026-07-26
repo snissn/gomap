@@ -1066,6 +1066,12 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits int64) (m8B
 	if err != nil {
 		return m8BenchmarkWorkPlan{}, err
 	}
+	// Production M8 also performs one exhaustive endpoint preflight and the
+	// configured untimed warmup requests outside the measured cell sweep.
+	requests, err = memoryAdd(requests, int64(cfg.warmup), 1)
+	if err != nil {
+		return m8BenchmarkWorkPlan{}, err
+	}
 	plan := m8BenchmarkWorkPlan{QueryRequests: requests}
 	if requests > capUnits {
 		return plan, fmt.Errorf("modeled M8 benchmark work exceeds %d-unit cap (%s): query_requests=%d", capUnits, benchmarkWorkScope, requests)

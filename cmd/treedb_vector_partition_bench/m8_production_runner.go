@@ -486,6 +486,9 @@ func m8RunBoundedWorkV1(count, concurrency int, run func(int)) {
 	if count == 0 {
 		return
 	}
+	if concurrency < 1 {
+		concurrency = 1
+	}
 	workers := min(count, concurrency)
 	jobs := make(chan int)
 	var wg sync.WaitGroup
