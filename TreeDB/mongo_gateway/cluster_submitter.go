@@ -525,14 +525,14 @@ func (s *Server) submitClusterMutation(ctx context.Context, command iwire.Comman
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	result, err := s.ClusterSubmitter.SubmitCommandEntryV1(ctx, entry, metadata)
-	if err != nil {
-		return nil, err
-	}
+	result, submitErr := s.ClusterSubmitter.SubmitCommandEntryV1(ctx, entry, metadata)
 	if result.CommittedApplied {
 		if err := treenativewire.ConfirmCommittedVectorPartitionMutationV1(ctx, s.ClusterSubmitter, command, cmd.Known); err != nil {
-			return nil, err
+			return nil, errors.Join(submitErr, err)
 		}
+	}
+	if submitErr != nil {
+		return nil, submitErr
 	}
 	if err := validateMongoClusterSubmitResult(ack, result); err != nil {
 		return nil, err

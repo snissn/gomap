@@ -365,6 +365,44 @@ func TestCatalogMetaLifecycleMutationFenceRejectsRacingCandidateAfterRestoreV1(t
 	}
 }
 
+func TestCatalogMetaLifecycleSnapshotRejectsInconsistentPendingFenceV1(t *testing.T) {
+	authority, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	applied := uint64(1)
+	identity := catalogMetaLifecycleTestIdentityV1(catalog, 6, 10)
+	active := catalogMetaLifecycleBuildPreparedV1(t, authority, &applied, identity, 0, 9)
+	active = catalogMetaLifecycleApplyV1(t, authority, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleActivateV1, func(c *VectorPartitionLifecycleCommandV1) {
+		c.MutationEpoch = 9
+	}))
+	invalidated := catalogMetaLifecycleApplyV1(t, authority, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleInvalidateV1, func(c *VectorPartitionLifecycleCommandV1) {
+		c.Reason, c.InvalidationEpoch = "relevant mutation", 10
+	}))
+	key := vectorPartitionLifecycleServingKeyV1{Collection: identity.Index.Collection, IndexName: identity.Index.IndexName}
+	fences := map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1{
+		key: {Epoch: 10, Pending: true},
+	}
+	wrongEpoch := invalidated
+	wrongEpoch.InvalidationEpoch++
+	tests := []struct {
+		name    string
+		records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1
+	}{
+		{name: "missing invalidated record", records: map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1{}},
+		{name: "active record", records: map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1{identity: active}},
+		{name: "mismatched invalidation epoch", records: map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1{identity: wrongEpoch}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			raw, err := encodeVectorPartitionLifecycleSnapshotV1(test.records, fences, nil)
+			if err != nil {
+				t.Fatalf("encode adversarial snapshot: %v", err)
+			}
+			if _, _, _, _, _, err := decodeVectorPartitionLifecycleSnapshotV1(raw, catalog); !errors.Is(err, ErrInvalidVectorPartitionLifecycle) {
+				t.Fatalf("inconsistent pending fence err=%v", err)
+			}
+		})
+	}
+}
+
 func TestCatalogMetaLifecycleSameCatalogSnapshotAdvancesButNeverRollsBack(t *testing.T) {
 	source, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
 	target, _ := newCatalogMetaLifecycleTestAuthorityV1(t, true)

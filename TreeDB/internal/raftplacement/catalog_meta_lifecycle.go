@@ -574,6 +574,29 @@ func decodeVectorPartitionLifecycleSnapshotV1(raw []byte, catalog CatalogMetaRec
 		}
 		fences[key] = vectorPartitionLifecycleMutationFenceStateV1{Epoch: fence.Epoch, Pending: fence.Pending}
 	}
+	pendingMatches := make(map[vectorPartitionLifecycleServingKeyV1]int)
+	for _, record := range records {
+		key := vectorPartitionLifecycleServingKeyV1{Collection: record.Identity.Index.Collection, IndexName: record.Identity.Index.IndexName}
+		fence := fences[key]
+		if fence.Pending && record.State == VectorPartitionLifecycleInvalidatedV1 &&
+			record.InvalidationEpoch == fence.Epoch && !record.MutationConfirmed {
+			pendingMatches[key]++
+		}
+	}
+	for key, fence := range fences {
+		if !fence.Pending {
+			continue
+		}
+		if _, serving := activeNames[key]; serving {
+			return nil, nil, nil, nil, nil, errors.Join(ErrInvalidVectorPartitionLifecycle,
+				fmt.Errorf("pending mutation fence %d accompanies an active generation", fence.Epoch))
+		}
+		matching := pendingMatches[key]
+		if matching != 1 {
+			return nil, nil, nil, nil, nil, errors.Join(ErrInvalidVectorPartitionLifecycle,
+				fmt.Errorf("pending mutation fence %d has %d matching invalidated generation records", fence.Epoch, matching))
+		}
+	}
 	for _, barrier := range payload.CollectionMutationBarriers {
 		state := vectorPartitionCollectionMutationBarrierStateV1{Epoch: barrier.Epoch, Pending: barrier.Pending, OperationDigest: barrier.OperationDigest, Completed: append([]vectorPartitionCollectionCompletedMutationV1(nil), barrier.Completed...)}
 		if err := validateCollectionRef(barrier.Collection); err != nil || validateVectorPartitionCollectionMutationBarrierStateV1(state) != nil {

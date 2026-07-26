@@ -148,6 +148,28 @@ original and rewritten asset debt until physical GC completes. Pre-alpha
 binaries reject old `.vpm`, `.active`, `.retired`, `.inactive`, and `.deleting`
 authority; there is no fallback or migration path.
 
+### Catalog/meta Raft lifecycle snapshot
+
+The catalog/meta Raft FSM snapshot is canonical JSON format version 1 with an
+8 MiB outer limit. It stores `format`, `applied_index`, the canonical catalog
+`record`, the exact `last_command`, and an optional base64-encoded
+`vector_partition_lifecycle` byte payload. When the vector-partition lifecycle
+feature is enabled, that inner payload is itself canonical JSON format version
+1 containing ordered `records`, `mutation_fences`, and
+`collection_mutation_barriers` arrays.
+
+The lifecycle payload permits at most 4,096 generation records, 4,096
+per-index mutation fences, and 4,096 collection barriers. Each collection
+barrier retains at most 64 completed operation identities. These inner bounds
+are enforced before the complete base64-expanded outer snapshot is checked
+against the 8 MiB limit. Restore rejects unknown fields, duplicate identities,
+noncanonical ordering or encoding, catalog-identity mismatches, multiple active
+generations for an index or serving name, and malformed barriers or fences. A
+pending per-index fence must have exactly one matching unconfirmed invalidated
+generation record at the same mutation epoch and cannot coexist with an active
+generation. The snapshot is installed all-or-nothing; invalid lifecycle state
+never publishes the catalog record or applied index.
+
 Before a writable public open can succeed, TreeDB establishes the complete
 directory dependency chain from the outer database root through `maindb`,
 enabled side-store roots, and each backend's `wal`, `value_vlog`, `leaf_vlog`,

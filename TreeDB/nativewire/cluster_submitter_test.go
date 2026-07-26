@@ -728,6 +728,41 @@ func TestClusterSubmitterVisibleAckConfirmsCommittedVectorMutationV1(t *testing.
 	}
 }
 
+func TestClusterSubmitterConfirmsCommittedVectorMutationBeforeReturningPostApplyErrorV1(t *testing.T) {
+	submitErr := errors.New("post-apply catalog refresh failed")
+	submitter := &confirmingVectorPartitionClusterSubmitterV1{fakeClusterSubmitter: &fakeClusterSubmitter{}}
+	submitter.resultHook = func(_ raftentry.CommandEntryV1, _ ClusterRequestMetadata, result ClusterSubmitResult) (ClusterSubmitResult, error) {
+		return result, submitErr
+	}
+	client, server, _, _ := serveCollectionPipeWithServerAndOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	body, err := appendCommandRequestBody(nil, iwire.CommandInsertBatch, clusterInsertBatchSections(t, client, ctx, AckVisible, "u1")...)
+	if err != nil {
+		t.Fatalf("append request body: %v", err)
+	}
+	sections, err := iwire.DecodeSections(body, server.limits)
+	if err != nil {
+		t.Fatalf("decode request body: %v", err)
+	}
+	cmd, err := server.registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("validate request sections: %v", err)
+	}
+	if _, err := server.handleClusterMutation(ctx, iwire.Header{Type: iwire.FrameRequest, RequestID: 1}, cmd); !errors.Is(err, submitErr) {
+		t.Fatalf("post-apply error=%v want %v", err, submitErr)
+	}
+	submitter.mu.Lock()
+	confirmations := append([]iwire.CommandID(nil), submitter.confirmations...)
+	submitter.mu.Unlock()
+	if !reflect.DeepEqual(confirmations, []iwire.CommandID{iwire.CommandInsertBatch}) {
+		t.Fatalf("confirmations=%v want insert_batch", confirmations)
+	}
+}
+
 func TestClusterSubmitterCommittedVectorConfirmationOutlivesClientCancellationV1(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	submitter := &confirmingVectorPartitionClusterSubmitterV1{fakeClusterSubmitter: &fakeClusterSubmitter{}}

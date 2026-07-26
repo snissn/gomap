@@ -3,6 +3,7 @@ package nativewire
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -288,14 +289,14 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 	if err := AdmitVectorPartitionMutationV1(ctx, s.clusterSubmitter, cmd.Header.ID, cmd.Known); err != nil {
 		return nil, err
 	}
-	result, err := s.clusterSubmitter.SubmitCommandEntryV1(ctx, entry, metadata)
-	if err != nil {
-		return nil, err
-	}
+	result, submitErr := s.clusterSubmitter.SubmitCommandEntryV1(ctx, entry, metadata)
 	if result.CommittedApplied {
 		if err := ConfirmCommittedVectorPartitionMutationV1(ctx, s.clusterSubmitter, cmd.Header.ID, cmd.Known); err != nil {
-			return nil, err
+			return nil, errors.Join(submitErr, err)
 		}
+	}
+	if submitErr != nil {
+		return nil, submitErr
 	}
 	if err := validateClusterSubmitResult(metadata, result); err != nil {
 		return nil, err

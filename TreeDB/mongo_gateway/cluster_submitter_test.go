@@ -43,6 +43,7 @@ type mongoClusterFakeSubmitter struct {
 	status                   treenativewire.ClusterAdmissionStatus
 	admissionErr             error
 	submitHook               func()
+	submitErr                error
 }
 
 type mongoConfirmingVectorPartitionSubmitterV1 struct {
@@ -360,7 +361,7 @@ func (f *mongoClusterFakeSubmitter) SubmitCommandEntryV1(ctx context.Context, en
 		CommittedRecoverable: f.committedRecoverable,
 		CommittedApplied:     f.committedApplied,
 		ResponseSections:     responseSections,
-	}, nil
+	}, f.submitErr
 }
 
 func (f *mongoClusterFakeSubmitter) snapshotCalls() []mongoClusterSubmitterCall {
@@ -2571,6 +2572,30 @@ func TestClusterSubmitterVisibleAckConfirmsCommittedVectorMutationV1(t *testing.
 		{Key: "$db", Value: "app"},
 	})
 	assertOK(t, response)
+	submitter.mu.Lock()
+	confirmations := append([]iwire.CommandID(nil), submitter.confirmations...)
+	submitter.mu.Unlock()
+	if !reflect.DeepEqual(confirmations, []iwire.CommandID{iwire.CommandCreateCollection}) {
+		t.Fatalf("confirmations=%v want create_collection", confirmations)
+	}
+}
+
+func TestClusterSubmitterConfirmsCommittedVectorMutationBeforeReturningPostApplyErrorV1(t *testing.T) {
+	submitErr := errors.New("post-apply catalog refresh failed")
+	submitter := &mongoConfirmingVectorPartitionSubmitterV1{mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{committedApplied: true, submitErr: submitErr}}
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	server.ClusterSubmitter = submitter
+	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(32)
+	raw, err := bson.Marshal(bson.D{{Key: "create", Value: "users"}, {Key: "$db", Value: "app"}})
+	if err != nil {
+		t.Fatalf("marshal command: %v", err)
+	}
+	response, err := server.clusterCreateCollectionResponse(context.Background(), wire.Document(raw))
+	if err != nil {
+		t.Fatalf("cluster create response: %v", err)
+	}
+	assertErrmsgContains(t, response, submitErr.Error())
 	submitter.mu.Lock()
 	confirmations := append([]iwire.CommandID(nil), submitter.confirmations...)
 	submitter.mu.Unlock()
