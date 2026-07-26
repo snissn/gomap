@@ -1103,13 +1103,13 @@ func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 }
 
 func TestM8BenchmarkWorkCapAndOverflowV1(t *testing.T) {
-	cfg := config{overlaps: []float64{0, .2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3, topK: 2}
+	cfg := config{partitions: 4, overlaps: []float64{0, .2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3, topK: 2}
 	manifest := fixtureManifest{Vectors: 10, Queries: 5, Dimensions: 8}
 	plan, err := validateM8BenchmarkWork(cfg, manifest, 149, math.MaxInt64)
 	if err != nil || plan.QueryRequests != 149 || plan.MeasuredQueryRequests != 80 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 65 {
 		t.Fatalf("M8 work plan=%+v err=%v", plan, err)
 	}
-	if plan.RetainedCoordinatorCells != 8 || plan.RetainedCoordinatorResults != 80 || plan.FixtureResidentBytes == 0 || plan.SourceSnapshotBytes == 0 || plan.ExactTruthBytes == 0 || plan.RetainedCoordinatorBytes == 0 || plan.RetainedAttributionMatrices != 5 || plan.RetainedAttributionResults != 50 || plan.RetainedAttributionBytes == 0 || plan.ModeledPeakBytes == 0 {
+	if plan.RetainedCoordinatorCells != 8 || plan.RetainedCoordinatorResults != 80 || plan.FixtureResidentBytes == 0 || plan.SourceSnapshotBytes == 0 || plan.ExactTruthBytes == 0 || plan.RetainedCoordinatorBytes == 0 || plan.RetainedAttributionMatrices != 5 || plan.RetainedAttributionResults != 50 || plan.RetainedAttributionBytes == 0 || plan.AttributionMergeScratchResults != 16 || plan.AttributionMergeScratchBytes == 0 || plan.ModeledPeakBytes == 0 {
 		t.Fatalf("incomplete M8 memory plan=%+v", plan)
 	}
 	if _, err := validateM8BenchmarkWork(cfg, manifest, 148, math.MaxInt64); err == nil {
@@ -1118,13 +1118,13 @@ func TestM8BenchmarkWorkCapAndOverflowV1(t *testing.T) {
 	if _, err := validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 1, Queries: math.MaxInt, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64); err == nil {
 		t.Fatal("accepted overflowing M8 sweep")
 	}
-	if _, err := validateM8BenchmarkWork(config{overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}, fixtureManifest{Vectors: 1, Queries: math.MaxInt, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64); err == nil {
+	if _, err := validateM8BenchmarkWork(config{partitions: 1, overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}, fixtureManifest{Vectors: 1, Queries: math.MaxInt, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64); err == nil {
 		t.Fatal("accepted overflowing M8 preflight accounting")
 	}
 }
 
 func TestM8RetainedAttributionResultsRespectMemoryCapV1(t *testing.T) {
-	cfg := config{overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1}, topK: 256}
+	cfg := config{partitions: 16, overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1}, topK: 256}
 	manifest := fixtureManifest{Vectors: 10_000, Queries: 50_000, Dimensions: 8}
 	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
 	if err != nil {
@@ -1146,8 +1146,35 @@ func TestM8RetainedAttributionResultsRespectMemoryCapV1(t *testing.T) {
 	}
 }
 
+func TestM8AttributionMergeScratchRespectsMemoryCapV1(t *testing.T) {
+	cfg := config{partitions: 256, overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 256}
+	manifest := fixtureManifest{Vectors: 256, Queries: 1, Dimensions: 8}
+	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutScratch, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorBytes, plan.RetainedAttributionBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceOracle, err := memoryAdd(plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutScratch, err = memoryScaleCeil(max(sourceOracle, withoutScratch), memorySlackNumerator, memorySlackDenominator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.AttributionMergeScratchResults != 131_072 || plan.AttributionMergeScratchBytes < 3_000_000 || plan.ModeledPeakBytes <= withoutScratch {
+		t.Fatalf("M8 attribution scratch plan=%+v without_scratch=%d", plan, withoutScratch)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, withoutScratch); err == nil || !strings.Contains(err.Error(), "attribution_merge_scratch_results=131072") {
+		t.Fatalf("accepted unmodeled attribution merge scratch: %v", err)
+	}
+}
+
 func TestM8SourceOracleSnapshotRespectsMemoryCapV1(t *testing.T) {
-	cfg := config{overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}
+	cfg := config{partitions: 1, overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}
 	manifest := fixtureManifest{Vectors: 1_000_000, Queries: 1, Dimensions: 512}
 	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
 	if err != nil {
@@ -1162,7 +1189,7 @@ func TestM8SourceOracleSnapshotRespectsMemoryCapV1(t *testing.T) {
 }
 
 func TestM8RetainedCoordinatorResultsRespectMemoryCapV1(t *testing.T) {
-	cfg := config{overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, topK: 256}
+	cfg := config{partitions: 16, overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, topK: 256}
 	manifest := fixtureManifest{Vectors: 10_000, Queries: 50_000, Dimensions: 8}
 	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
 	if err != nil {
@@ -1349,6 +1376,13 @@ func TestM8CanonicalContractRejectsInvalidBoundsAndScoresV1(t *testing.T) {
 	}
 	if got := m8CanonicalResultsV1([]m8CanonicalResultV1{{ID: "a", Score: float32(math.NaN())}}, 1); got != nil {
 		t.Fatalf("nonfinite result=%+v", got)
+	}
+	oversized := make([]m8CanonicalResultV1, 256*256)
+	for i := range oversized {
+		oversized[i] = m8CanonicalResultV1{ID: fmt.Sprintf("doc-%06d", i), Score: float32(i)}
+	}
+	if got := m8CanonicalResultsV1(oversized, 256); len(got) != 256 || cap(got) != 256 {
+		t.Fatalf("canonical top-k retained oversized merge backing len=%d cap=%d", len(got), cap(got))
 	}
 }
 

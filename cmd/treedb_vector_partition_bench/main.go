@@ -1076,11 +1076,13 @@ type m8BenchmarkWorkPlan struct {
 	RetainedAttributionMatrices     int64
 	RetainedAttributionResults      int64
 	RetainedAttributionBytes        int64
+	AttributionMergeScratchResults  int64
+	AttributionMergeScratchBytes    int64
 	ModeledPeakBytes                int64
 }
 
 func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes int64) (m8BenchmarkWorkPlan, error) {
-	if capUnits < 1 || capBytes < 1 || cfg.topK < 1 || m.Vectors < 1 || m.Queries < 1 || m.Dimensions < 1 || len(cfg.overlaps) == 0 || len(cfg.probes) == 0 || len(cfg.efSearch) == 0 || len(cfg.concurrency) == 0 {
+	if capUnits < 1 || capBytes < 1 || cfg.partitions < 1 || cfg.topK < 1 || m.Vectors < 1 || m.Queries < 1 || m.Dimensions < 1 || len(cfg.overlaps) == 0 || len(cfg.probes) == 0 || len(cfg.efSearch) == 0 || len(cfg.concurrency) == 0 {
 		return m8BenchmarkWorkPlan{}, errors.New("cannot plan M8 benchmark work without positive caps, a valid fixture/top-k, and complete sweeps")
 	}
 	measured, err := memoryMul(int64(len(cfg.overlaps)), int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(m.Queries))
@@ -1212,6 +1214,26 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
+	// The exhaustive attribution search is the largest merge. It reserves one
+	// partition-count by top-k input buffer, canonicalization copies that full
+	// buffer, and duplicate suppression holds at most top-k map entries. The
+	// returned top-k is copied into a right-sized retained matrix above.
+	plan.AttributionMergeScratchResults, err = memoryMul(2, int64(cfg.partitions), int64(cfg.topK))
+	if err != nil {
+		return plan, err
+	}
+	plan.AttributionMergeScratchBytes, err = memoryMul(plan.AttributionMergeScratchResults, int64(unsafe.Sizeof(m8CanonicalResultV1{})))
+	if err != nil {
+		return plan, err
+	}
+	attributionMergeMapBytes, err := memoryMul(int64(cfg.topK), memoryMapEntryBytes)
+	if err != nil {
+		return plan, err
+	}
+	plan.AttributionMergeScratchBytes, err = memoryAdd(plan.AttributionMergeScratchBytes, attributionMergeMapBytes)
+	if err != nil {
+		return plan, err
+	}
 	// The owned FP32 source snapshot remains live while exact truth accumulates;
 	// it is released before measured coordinator results begin accumulating.
 	sourceOraclePeak, err := memoryAdd(plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes)
@@ -1222,7 +1244,7 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	attributionPeak, err := memoryAdd(measurementPeak, plan.RetainedAttributionBytes)
+	attributionPeak, err := memoryAdd(measurementPeak, plan.RetainedAttributionBytes, plan.AttributionMergeScratchBytes)
 	if err != nil {
 		return plan, err
 	}
@@ -1232,7 +1254,7 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		return plan, err
 	}
 	if plan.ModeledPeakBytes > capBytes {
-		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d source_snapshot_bytes=%d exact_truth_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d retained_attribution_matrices=%d retained_attribution_results=%d retained_attribution_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes, plan.RetainedAttributionMatrices, plan.RetainedAttributionResults, plan.RetainedAttributionBytes)
+		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d source_snapshot_bytes=%d exact_truth_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d retained_attribution_matrices=%d retained_attribution_results=%d retained_attribution_bytes=%d attribution_merge_scratch_results=%d attribution_merge_scratch_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes, plan.RetainedAttributionMatrices, plan.RetainedAttributionResults, plan.RetainedAttributionBytes, plan.AttributionMergeScratchResults, plan.AttributionMergeScratchBytes)
 	}
 	return plan, nil
 }

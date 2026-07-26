@@ -538,8 +538,8 @@ func m8CanonicalResultsV1(in []m8CanonicalResultV1, topK int) []m8CanonicalResul
 	sort.Slice(ordered, func(i, j int) bool {
 		return ordered[i].Score > ordered[j].Score || ordered[i].Score == ordered[j].Score && ordered[i].ID < ordered[j].ID
 	})
-	seen := make(map[string]struct{}, len(ordered))
-	out := ordered[:0]
+	seen := make(map[string]struct{}, min(topK, len(ordered)))
+	out := make([]m8CanonicalResultV1, 0, min(topK, len(ordered)))
 	for _, result := range ordered {
 		if _, ok := seen[result.ID]; ok {
 			continue
