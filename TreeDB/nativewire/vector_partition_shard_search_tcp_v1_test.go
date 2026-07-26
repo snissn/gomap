@@ -65,11 +65,17 @@ func TestVectorPartitionShardSearchTCPDispatcherPreservesTypedServiceErrorV1(t *
 func TestVectorPartitionShardSearchTCPDispatcherCancellationWithoutDeadlineV1(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
+	observed := make(chan error, 1)
 	defer close(release)
-	listener := newVectorPartitionShardSearchTCPListenerV1(t, vectorPartitionShardSearchHandlerFuncV1(func(context.Context, VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+	listener := newVectorPartitionShardSearchTCPListenerV1(t, vectorPartitionShardSearchHandlerFuncV1(func(ctx context.Context, _ VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
 		close(started)
-		<-release
-		return VectorPartitionShardSearchResponseV1{}, nil
+		select {
+		case <-ctx.Done():
+			observed <- ctx.Err()
+			return VectorPartitionShardSearchResponseV1{}, ctx.Err()
+		case <-release:
+			return VectorPartitionShardSearchResponseV1{}, nil
+		}
 	}))
 	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": listener.Addr().String()})
 	if err != nil {
@@ -104,6 +110,14 @@ func TestVectorPartitionShardSearchTCPDispatcherCancellationWithoutDeadlineV1(t 
 		}
 	case <-time.After(time.Second):
 		t.Fatal("cancellation did not interrupt TCP read")
+	}
+	select {
+	case err := <-observed:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("server handler context error=%v, want cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server handler did not observe client disconnect cancellation")
 	}
 }
 

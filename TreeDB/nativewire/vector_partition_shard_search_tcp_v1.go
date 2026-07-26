@@ -118,6 +118,8 @@ func (s VectorPartitionShardSearchTCPServerV1) ServeConn(ctx context.Context, co
 	}
 	requestCtx, cancel := vectorPartitionShardSearchTCPRequestContextV1(ctx, frame.Request.DeadlineUnixNano)
 	defer cancel()
+	stopPeerMonitor := vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn, cancel)
+	defer stopPeerMonitor()
 	response, err := s.Service.Search(requestCtx, *frame.Request)
 	if err != nil {
 		_ = writeVectorPartitionShardSearchTCPFrameV1(conn, vectorPartitionShardSearchTCPFrameV1{Error: vectorPartitionShardSearchTCPErrorFromErrorV1(err)}, maxFrame)
@@ -259,6 +261,54 @@ func vectorPartitionShardSearchTCPRequestContextV1(ctx context.Context, deadline
 		deadline = parentDeadline
 	}
 	return context.WithDeadline(ctx, deadline)
+}
+
+// vectorPartitionShardSearchTCPMonitorPeerDisconnectV1 is safe because the
+// framing contract carries exactly one request per connection.  After the
+// request has been decoded no further peer bytes are valid, so a bounded read
+// loop can turn an EOF/reset into cancellation of remote M5 work.  Read
+// deadlines are cleared when the normal request completes and do not affect
+// the response write deadline.
+func vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn net.Conn, cancel context.CancelFunc) func() {
+	if conn == nil || cancel == nil {
+		return func() {}
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var discard [1]byte
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+			_, err := conn.Read(discard[:])
+			if err == nil {
+				// Extra input is invalid under the one-request contract. Treat it
+				// as a disconnected/abandoned caller rather than extending work.
+				cancel()
+				return
+			}
+			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+				cancel()
+				return
+			}
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				select {
+				case <-stop:
+					return
+				default:
+					continue
+				}
+			}
+			cancel()
+			return
+		}
+	}()
+	return func() {
+		close(stop)
+		<-done
+		_ = conn.SetReadDeadline(time.Time{})
+	}
 }
 
 func vectorPartitionShardSearchTCPTransportErrorV1(ctx context.Context, groupID raftcluster.GroupID, err error) error {
