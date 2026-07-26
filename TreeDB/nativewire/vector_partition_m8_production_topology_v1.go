@@ -93,8 +93,9 @@ func NewVectorPartitionM8ProductionMultiGroupV1(ctx context.Context, opts Vector
 	features := raftplacement.DefaultFeatureSet()
 	features.Required = append(features.Required, raftcluster.RequiredFeature{Name: raftcluster.FeatureVectorPartitionLifecycle, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureVectorPartitionLifecycle]})
 	catalog := raftplacement.CatalogV1{Features: features}
-	for _, group := range groups {
-		data, openErr := raftcluster.OpenThreeNodeHarness(ctx, group)
+	for groupIndex, group := range groups {
+		preferredLeader := raftcluster.NodeID([]string{"node-a", "node-b", "node-c"}[groupIndex%3])
+		data, openErr := raftcluster.OpenThreeNodeHarnessWithOptions(ctx, group, raftcluster.ThreeNodeHarnessOptions{PreferredLeader: preferredLeader})
 		if openErr != nil {
 			return nil, openErr
 		}

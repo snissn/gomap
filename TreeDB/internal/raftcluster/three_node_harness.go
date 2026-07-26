@@ -20,6 +20,12 @@ import (
 
 const ThreeNodeHarnessCoordinationTimeout = 5 * time.Second
 
+// ThreeNodeHarnessOptions configures the bounded integration harness. Empty
+// PreferredLeader preserves the historic node-a election behavior.
+type ThreeNodeHarnessOptions struct {
+	PreferredLeader NodeID
+}
+
 type ThreeNodeHarness struct {
 	root, groupID string
 	nodes         []*threeNodeHarnessNode
@@ -96,8 +102,19 @@ func (a *threeNodeHarnessProgressApplier) WaitAppliedIndex(ctx context.Context, 
 }
 
 func OpenThreeNodeHarness(ctx context.Context, groupID GroupID) (*ThreeNodeHarness, error) {
+	return OpenThreeNodeHarnessWithOptions(ctx, groupID, ThreeNodeHarnessOptions{})
+}
+
+// OpenThreeNodeHarnessWithOptions opens the same actual three-member Raft
+// topology as OpenThreeNodeHarness, optionally directing the initial election
+// to one named member. It is deliberately limited to the fixed member set so
+// benchmark topology evidence cannot claim arbitrary membership behavior.
+func OpenThreeNodeHarnessWithOptions(ctx context.Context, groupID GroupID, opts ThreeNodeHarnessOptions) (*ThreeNodeHarness, error) {
 	if groupID == "" {
 		return nil, errors.New("three-node Raft harness group is empty")
+	}
+	if opts.PreferredLeader != "" && opts.PreferredLeader != "node-a" && opts.PreferredLeader != "node-b" && opts.PreferredLeader != "node-c" {
+		return nil, fmt.Errorf("three-node Raft harness preferred leader %q is not a member", opts.PreferredLeader)
 	}
 	root, err := os.MkdirTemp("", "treedb-three-node-raft-*")
 	if err != nil {
@@ -124,7 +141,15 @@ func OpenThreeNodeHarness(ctx context.Context, groupID GroupID) (*ThreeNodeHarne
 		}
 		h.nodes = append(h.nodes, &threeNodeHarnessNode{id: peer.ID, provider: provider, applier: applier, transport: transports[peer.ID]})
 	}
-	if err := transports["node-b"].TimeoutNow(hraft.ServerID("node-a"), hraft.ServerAddress("node-a"), &hraft.TimeoutNowRequest{RPCHeader: hraft.RPCHeader{ProtocolVersion: hraft.ProtocolVersionMax, ID: []byte("node-b"), Addr: []byte("node-b")}}, &hraft.TimeoutNowResponse{}); err != nil {
+	preferred := opts.PreferredLeader
+	if preferred == "" {
+		preferred = "node-a"
+	}
+	requester := NodeID("node-a")
+	if requester == preferred {
+		requester = "node-b"
+	}
+	if err := transports[requester].TimeoutNow(hraft.ServerID(preferred), hraft.ServerAddress(preferred), &hraft.TimeoutNowRequest{RPCHeader: hraft.RPCHeader{ProtocolVersion: hraft.ProtocolVersionMax, ID: []byte(requester), Addr: []byte(requester)}}, &hraft.TimeoutNowResponse{}); err != nil {
 		return fail(fmt.Errorf("start Raft election: %w", err))
 	}
 	leader, err := h.waitLeader(ctx)

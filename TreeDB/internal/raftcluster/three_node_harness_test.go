@@ -3,6 +3,7 @@ package raftcluster
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"testing"
 	"time"
 
@@ -35,6 +36,39 @@ func TestThreeNodeHarnessTwoIndependentGroupsProveReadIndexAndApply(t *testing.T
 		if err != nil || proof.EvidenceKind != ReadIndexEvidenceProduction || !proof.HasQuorum || progress.Index < proof.Index || progress.GroupID != harness.GroupID() {
 			t.Fatalf("read proof group=%q proof=%+v progress=%+v err=%v", harness.GroupID(), proof, progress, err)
 		}
+	}
+}
+
+func TestThreeNodeHarnessPreferredLeadersRotateAcrossGroups(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	preferred := []NodeID{"node-a", "node-b", "node-c", "node-a"}
+	leaders := map[NodeID]bool{}
+	entry := threeNodeHarnessProofEntry(t)
+	for i, want := range preferred {
+		harness, err := OpenThreeNodeHarnessWithOptions(ctx, GroupID(fmt.Sprintf("rotated-group-%d", i)), ThreeNodeHarnessOptions{PreferredLeader: want})
+		if err != nil {
+			t.Fatalf("open group %d: %v", i, err)
+		}
+		if got := harness.LeaderID(); got != want {
+			_ = harness.Close()
+			t.Fatalf("group %d leader=%q want %q", i, got, want)
+		}
+		commit, commitErr := harness.CommitAndProve(ctx, entry)
+		closeErr := harness.Close()
+		if commitErr != nil || closeErr != nil || !commit.Evidence.ProvesProductionConsensus() {
+			t.Fatalf("group %d commit=%+v err=%v close=%v", i, commit, commitErr, closeErr)
+		}
+		leaders[want] = true
+	}
+	if len(leaders) != 3 {
+		t.Fatalf("leaders=%v want all fixed members", leaders)
+	}
+}
+
+func TestThreeNodeHarnessPreferredLeaderRejectsNonMember(t *testing.T) {
+	if _, err := OpenThreeNodeHarnessWithOptions(context.Background(), "invalid-preferred", ThreeNodeHarnessOptions{PreferredLeader: "node-z"}); err == nil {
+		t.Fatal("accepted non-member preferred leader")
 	}
 }
 
