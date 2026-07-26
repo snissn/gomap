@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +30,72 @@ func TestVectorPartitionShardSearchTCPServerInitialReadTimeoutV1(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("slowloris initial frame kept M5 TCP server blocked")
 	}
+}
+
+func TestVectorPartitionShardSearchTCPServerInterruptsPeerReadBeforeSuccessfulResponseV1(t *testing.T) {
+	client, rawServer := net.Pipe()
+	defer client.Close()
+	server := &vectorPartitionShardSearchTCPReadDeadlineRecordingConnV1{Conn: rawServer}
+	serverDone := make(chan struct{})
+	go func() {
+		(VectorPartitionShardSearchTCPServerV1{
+			InitialTimeout: time.Second,
+			Service: vectorPartitionShardSearchHandlerFuncV1(func(_ context.Context, request VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+				return VectorPartitionShardSearchResponseV1{Version: VectorPartitionShardSearchVersionV1, RequestID: request.RequestID}, nil
+			}),
+		}).ServeConn(context.Background(), server)
+		close(serverDone)
+	}()
+	if err := writeVectorPartitionShardSearchTCPFrameV1(client, vectorPartitionShardSearchTCPFrameV1{Request: &VectorPartitionShardSearchRequestV1{RequestID: "immediate"}}, vectorPartitionShardSearchTCPMaxFrameBytesV1); err != nil {
+		t.Fatal(err)
+	}
+	frame, err := readVectorPartitionShardSearchTCPFrameV1(client, vectorPartitionShardSearchTCPMaxFrameBytesV1)
+	if err != nil || frame.Response == nil || frame.Response.RequestID != "immediate" {
+		t.Fatalf("response frame=%+v err=%v", frame, err)
+	}
+	select {
+	case <-serverDone:
+	case <-time.After(time.Second):
+		t.Fatal("server did not return after successful response")
+	}
+	if !server.interruptedReadBeforeWrite() {
+		t.Fatal("successful response was written without interrupting the peer-monitor read")
+	}
+}
+
+// vectorPartitionShardSearchTCPReadDeadlineRecordingConnV1 turns the
+// successful-response assertion into a transport ordering check rather than a
+// scheduler-sensitive wall-clock test. The monitor's stop path must set an
+// already-expired read deadline before ServeConn writes its response.
+type vectorPartitionShardSearchTCPReadDeadlineRecordingConnV1 struct {
+	net.Conn
+	mu                        sync.Mutex
+	interruptedReadDeadline   bool
+	wroteAfterInterruptedRead bool
+}
+
+func (c *vectorPartitionShardSearchTCPReadDeadlineRecordingConnV1) SetReadDeadline(deadline time.Time) error {
+	c.mu.Lock()
+	if !deadline.IsZero() && !deadline.After(time.Now()) {
+		c.interruptedReadDeadline = true
+	}
+	c.mu.Unlock()
+	return c.Conn.SetReadDeadline(deadline)
+}
+
+func (c *vectorPartitionShardSearchTCPReadDeadlineRecordingConnV1) Write(raw []byte) (int, error) {
+	c.mu.Lock()
+	if c.interruptedReadDeadline {
+		c.wroteAfterInterruptedRead = true
+	}
+	c.mu.Unlock()
+	return c.Conn.Write(raw)
+}
+
+func (c *vectorPartitionShardSearchTCPReadDeadlineRecordingConnV1) interruptedReadBeforeWrite() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.wroteAfterInterruptedRead
 }
 
 func TestVectorPartitionShardSearchTCPDispatcherRoundTripV1(t *testing.T) {

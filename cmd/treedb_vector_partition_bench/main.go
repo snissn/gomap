@@ -459,6 +459,12 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		return fmt.Errorf("-seed %d does not match fixture seed %d", cfg.seed, fixture.Seed)
 	}
 	if cfg.stage == m8ProductionMultiGroupModeV1 {
+		if cfg.topK > fixture.Vectors {
+			return errors.New("top-k cannot exceed fixture vectors")
+		}
+		if cfg.topK > nativewire.DefaultVectorPartitionShardSearchLimitsV1().MaxTopK {
+			return fmt.Errorf("top-k cannot exceed M8 shard limit %d", nativewire.DefaultVectorPartitionShardSearchLimitsV1().MaxTopK)
+		}
 		vectors, queries := deterministicFixture(fixture)
 		if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 			return errors.New("fixture checksum does not match generated vector/query/truth stream")

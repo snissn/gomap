@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
@@ -288,20 +289,32 @@ func vectorPartitionShardSearchTCPRequestContextV1(ctx context.Context, deadline
 // vectorPartitionShardSearchTCPMonitorPeerDisconnectV1 is safe because the
 // framing contract carries exactly one request per connection.  After the
 // request has been decoded no further peer bytes are valid, so a bounded read
-// loop can turn an EOF/reset into cancellation of remote M5 work.  Read
-// deadlines are cleared when the normal request completes and do not affect
-// the response write deadline.
+// loop can turn an EOF/reset into cancellation of remote M5 work. Stopping the
+// monitor interrupts its outstanding read before waiting, so an ordinary
+// successful response is not delayed by the polling deadline. Read deadlines
+// are cleared when the normal request completes and do not affect the response
+// write deadline.
 func vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn net.Conn, cancel context.CancelFunc) func() {
 	if conn == nil || cancel == nil {
 		return func() {}
 	}
 	stop := make(chan struct{})
 	done := make(chan struct{})
+	var deadlineMu sync.Mutex
+	var stopOnce sync.Once
 	go func() {
 		defer close(done)
 		var discard [1]byte
 		for {
+			deadlineMu.Lock()
+			select {
+			case <-stop:
+				deadlineMu.Unlock()
+				return
+			default:
+			}
 			_ = conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+			deadlineMu.Unlock()
 			_, err := conn.Read(discard[:])
 			if err == nil {
 				// Extra input is invalid under the one-request contract. Treat it
@@ -327,9 +340,16 @@ func vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn net.Conn, cancel 
 		}
 	}()
 	return func() {
-		close(stop)
-		<-done
-		_ = conn.SetReadDeadline(time.Time{})
+		stopOnce.Do(func() {
+			close(stop)
+			deadlineMu.Lock()
+			// Wake a currently blocked Read immediately; otherwise waiting for done
+			// can impose the full peer-poll timeout on a successful response.
+			_ = conn.SetReadDeadline(time.Now())
+			deadlineMu.Unlock()
+			<-done
+			_ = conn.SetReadDeadline(time.Time{})
+		})
 	}
 }
 

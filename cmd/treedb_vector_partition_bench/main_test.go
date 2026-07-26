@@ -1190,6 +1190,37 @@ func TestRunRejectsTopKAboveFixtureBeforeOracleAllocation(t *testing.T) {
 	}
 }
 
+func TestM8RunRejectsTopKAboveFixtureAndShardLimitsBeforeTopologyV1(t *testing.T) {
+	fixture := writeFixtureForTest(t, 32, 1, 8)
+	shardFixture := writeFixtureForTest(t, 512, 1, 8)
+	base := []string{
+		"-mode", m8ProductionMultiGroupModeV1,
+		"-out", t.TempDir(),
+		"-partitions", "4",
+		"-raft-groups", "2",
+		"-concurrency", "1",
+		"-warmup", "0",
+	}
+	for _, test := range []struct {
+		name    string
+		dataset string
+		topK    string
+		ef      string
+		want    string
+	}{
+		{name: "fixture", dataset: fixture, topK: "33", ef: "64", want: "top-k cannot exceed fixture vectors"},
+		{name: "shard", dataset: shardFixture, topK: "257", ef: "512", want: "top-k cannot exceed M8 shard limit 256"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			args := append(append([]string(nil), base...), "-dataset", test.dataset, "-top-k", test.topK, "-ef-search", test.ef)
+			err := runWithRuntimeCapabilities(args, io.Discard, benchmarkRuntimeCapabilities{vectorPartitionNamespacePersistence: true})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("run error=%v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestConfigurableFixtureCapsRejectBeforeAllocation(t *testing.T) {
 	cfg, err := parseConfig([]string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-probes", "1", "-max-vectors", "9999"})
 	if err != nil {
