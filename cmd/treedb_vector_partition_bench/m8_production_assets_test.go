@@ -166,6 +166,19 @@ func TestM8ProductionMultiGroupAssetsCheckedIn10kCISmokeV1(t *testing.T) {
 	}
 }
 
+func TestM8ExactPartitionUnionRejectsDuplicateOrMissingPlacementsV1(t *testing.T) {
+	assets := &m8ProductionMultiGroupAssetsV1{}
+	assets.manifest.PartitionCount = 2
+	assets.manifest.Placements = []collections.VectorPartitionPlacementV1{{PartitionID: 0}, {PartitionID: 0}}
+	if _, err := m8ExactPartitionUnionV1(context.Background(), assets, []float64{1}, 1); err == nil {
+		t.Fatal("accepted duplicate placement")
+	}
+	assets.manifest.Placements = []collections.VectorPartitionPlacementV1{{PartitionID: 0}}
+	if _, err := m8ExactPartitionUnionV1(context.Background(), assets, []float64{1}, 1); err == nil {
+		t.Fatal("accepted missing placement")
+	}
+}
+
 func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	requireM8PersistentAssetSupportV1(t)
 	fixture, err := loadFixture(fixturePath(t))
