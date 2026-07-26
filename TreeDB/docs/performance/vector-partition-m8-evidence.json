@@ -21,9 +21,9 @@
     "peak_rss_bytes": 117641216,
     "quarter_probe_best_recall_at_10": 0.24140625,
     "all_partition_ef4096": [
-      {"concurrency": 1, "recall_at_10": 0.96171875, "qps": 27.34082482043823, "p95_nanos": 45511119, "exact_parity": false},
-      {"concurrency": 16, "recall_at_10": 0.96171875, "qps": 51.80720898324862, "p95_nanos": 384064506, "exact_parity": false},
-      {"concurrency": 64, "recall_at_10": 0.96171875, "qps": 52.57499720357492, "p95_nanos": 1265248143, "exact_parity": false}
+      {"concurrency": 1, "recall_at_10": 0.9617187500000001, "qps": 28.552204658828483, "p95_nanos": 41910819, "exact_parity": false},
+      {"concurrency": 16, "recall_at_10": 0.9617187500000001, "qps": 54.730191393223826, "p95_nanos": 299556253, "exact_parity": false},
+      {"concurrency": 64, "recall_at_10": 0.9617187500000001, "qps": 52.34062841309967, "p95_nanos": 1272296981, "exact_parity": false}
     ]
   },
   "retained_1m": {
@@ -43,8 +43,8 @@
     "unsupported_overlap_rows": 1,
     "recall_at_10_min": 0,
     "recall_at_10_max": 0,
-    "qps_min": 0.507,
-    "qps_max": 0.539,
+    "qps_min": 0.5122759876145969,
+    "qps_max": 0.5401317148455739,
     "persistent_asset_bytes": 188536448,
     "peak_rss_bytes": 1244614656,
     "max_partition_load": 63292,
@@ -66,16 +66,11 @@
     "existing_behavior": "incomplete_go1.26_race_runtime_crash_in_unrelated_allocs_test"
   },
   "measured_blocker": {
-    "owner": "per_request_router_open_and_full_manifest_verification",
-    "differential_allocated_mb": 67848.56,
-    "json_marshal_flat_mb": 52734.35,
-    "json_marshal_flat_percent": 77.72,
-    "cpu_sha256_flat_percent": 20.74,
-    "cpu_json_struct_encoder_flat_percent": 9.08,
-    "allocs_baseline_sha256": "2c6c095da269c9ac1f7310fb762ae6ca78b3d13ea5e3d427ce5b13ada21ad37b",
-    "allocs_final_sha256": "0303957d60b2564417a30c582ed6c4043679cabd2eb7f39d3187cd5aa4d838ad",
-    "cpu_profile_sha256": "98b30c3104f486a28a2b4f0862988d29ac58ff440ee7e90b0d0600b3419059fb",
-    "trace_sha256": "7144327c5f3986f29910811986d1fe8162c42f1eab26a407ef84f1888e4bb57b"
+    "owner": "fresh profiles retained; attribution not recomputed in this index",
+    "allocs_baseline_sha256": "fc68e9ea269a4e4d56ded21ac9aa005e3bddeac4744ed0e713c8a1905e8fea11",
+    "allocs_final_sha256": "56c21400d0b4176f27f7be459c69f4be8db1dd889525dfa2869edc7e9e8ee755",
+    "cpu_profile_sha256": "46a106805b3795267bd50c868bec5a7c2d4023f445ca03254c857445ca62c963",
+    "trace_sha256": "13470d84b203738c49f7bba87c8fa52b80e0da0453d17b871e13a9347e54fe1e"
   },
   "unsupported": [
     "overlap_0.20_assets",

@@ -47,7 +47,7 @@ claim.
 | Balance epsilon 0.05 | **PASS** | max 63,292 rows; hard cap 65,625 |
 | Overlap 0.20 bytes <= 1.35x | **FAIL** | overlap assets are not materialized and are reported unsupported |
 | Failure honesty | **PASS** | unavailable endpoint returned error, zero neighbors, zero groups |
-| Resource bounds | **MEASURED, NOT BOUNDED** | 188,536,448 persistent bytes and peak RSS 1,162,182,656 bytes were observed; no configured resource limit was compared, so this is not a pass |
+| Resource bounds | **MEASURED, NOT BOUNDED** | 188,536,448 persistent bytes and peak RSS 1,244,614,656 bytes were observed; no configured resource limit was compared, so this is not a pass |
 | Existing behavior | **INCOMPLETE** | full normal suite and all M8-relevant race suites pass; full collections race command crashes in Go 1.26 runtime during unrelated `testing.AllocsPerRun` |
 
 This ledger deliberately treats unsupported required evidence as failure. A
@@ -66,13 +66,13 @@ satisfy a matched-recall or concurrency gate.
 | partitions / probes / overlap | 4 / 1, 2, 4 / 0 measured; 0.20 unsupported |
 | local `ef_search` / concurrency | 64, 128, 512, 4096 / 1, 16, 64 |
 | rows | 36 measured plus one unsupported overlap row |
-| persistent bytes / peak RSS | 1,752,856 / 100,642,816 |
+| persistent bytes / peak RSS | 1,752,856 / 117,641,216 |
 
 The best all-partition row used `ef_search=4096`: recall@10 was
 `0.96171875` at every concurrency, but exact ordered ID parity remained false.
-At concurrency 1 it measured 27.34 QPS and 45.51 ms p95; concurrency 16
-measured 51.81 QPS and 384.06 ms p95; concurrency 64 measured 52.57 QPS and
-1,265.25 ms p95. The best quarter-probe recall was only `0.24140625`, so no
+At concurrency 1 it measured 28.55 QPS and 41.91 ms p95; concurrency 16
+measured 54.73 QPS and 299.56 ms p95; concurrency 64 measured 52.34 QPS and
+1,272.30 ms p95. The best quarter-probe recall was only `0.24140625`, so no
 25%-probe row qualified for the matched-recall QPS/tail gates.
 
 ### Retained 1M deep shape
@@ -98,7 +98,7 @@ configuration acceptance only and are not a concurrency throughput comparison.
 The 10k corpus has 128 queries and owns concurrency-shaped evidence.
 
 Every deep measured row had recall@10 `0`. QPS ranged from approximately
-`0.507` to `0.539`, and p95 was approximately `1.856` to `1.971` seconds. The
+`0.512` to `0.540`; no p95 range is asserted here without recomputing it from the fresh artifact. The
 similar timing across probe and `ef_search` budgets is consistent with the
 profiled router-open/verification bottleneck.
 
@@ -222,10 +222,10 @@ mounts, fixture checksum, budgets, topology, gate ledger, and profile paths.
 | --- | --- | --- |
 | clean deep JSON | `/mnt/fast4tb/tmp/treedb_vector_partition_m8_refresh1m_20260725_231810/vector_partition_m8_9f3cb7c6f8d5.json` | `14a3e98ae8d4ab74bb4edb78e6858d8ce7e3d7733eebd3136b1321c0eda236b1` |
 | clean 10k JSON | `/mnt/fast4tb/tmp/treedb_vector_partition_m8_refresh10k_20260725_231532/vector_partition_m8_9f3cb7c6f8d5.json` | `ef141fea8e8cb1e80235423a486920a499f9d9683fa72ec33fbbc28cf0fb784e` |
-| CPU profile | `.../profiles/cpu.pprof` | `98b30c3104f486a28a2b4f0862988d29ac58ff440ee7e90b0d0600b3419059fb` |
-| allocation baseline | `.../profiles/allocs_baseline.pprof` | `2c6c095da269c9ac1f7310fb762ae6ca78b3d13ea5e3d427ce5b13ada21ad37b` |
-| allocation final | `.../profiles/allocs.pprof` | `0303957d60b2564417a30c582ed6c4043679cabd2eb7f39d3187cd5aa4d838ad` |
-| execution trace | `.../profiles/trace.out` | `7144327c5f3986f29910811986d1fe8162c42f1eab26a407ef84f1888e4bb57b` |
+| CPU profile | `.../profiles/cpu.pprof` | `46a106805b3795267bd50c868bec5a7c2d4023f445ca03254c857445ca62c963` |
+| allocation baseline | `.../profiles/allocs_baseline.pprof` | `fc68e9ea269a4e4d56ded21ac9aa005e3bddeac4744ed0e713c8a1905e8fea11` |
+| allocation final | `.../profiles/allocs.pprof` | `56c21400d0b4176f27f7be459c69f4be8db1dd889525dfa2869edc7e9e8ee755` |
+| execution trace | `.../profiles/trace.out` | `13470d84b203738c49f7bba87c8fa52b80e0da0453d17b871e13a9347e54fe1e` |
 
 The JSON artifact is clean exact-head evidence. Profile paths are host-local
 retained records, not portable repository assets; their hashes make later
