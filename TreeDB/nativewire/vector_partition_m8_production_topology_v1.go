@@ -31,20 +31,25 @@ type VectorPartitionM8ProductionMultiGroupOptionsV1 struct {
 }
 
 type VectorPartitionM8ProductionMultiGroupEvidenceV1 struct {
-	Network                        string
-	Groups                         []VectorPartitionM8ProductionGroupEvidenceV1
-	LifecycleState, ReadySetDigest string
-	MetaGroup                      string
-	MetaNodes                      []string
-	MetaLeader                     string
+	Network        string                                       `json:"network"`
+	Groups         []VectorPartitionM8ProductionGroupEvidenceV1 `json:"groups"`
+	LifecycleState string                                       `json:"lifecycle_state"`
+	ReadySetDigest string                                       `json:"ready_set_digest"`
+	MetaGroup      string                                       `json:"meta_group"`
+	MetaNodes      []string                                     `json:"meta_nodes"`
+	MetaLeader     string                                       `json:"meta_leader"`
 }
 type VectorPartitionM8ProductionGroupEvidenceV1 struct {
-	GroupID, LeaderID, Endpoint          string
-	NodeIDs                              []string
-	CommitIndex, ReadIndex, AppliedIndex uint64
-	ReadEvidenceKind                     string
-	ProvesProductionConsensus            bool
-	EndpointHits                         uint64
+	GroupID                   string   `json:"group_id"`
+	LeaderID                  string   `json:"leader_id"`
+	Endpoint                  string   `json:"endpoint"`
+	NodeIDs                   []string `json:"node_ids"`
+	CommitIndex               uint64   `json:"commit_index"`
+	ReadIndex                 uint64   `json:"read_index"`
+	AppliedIndex              uint64   `json:"applied_index"`
+	ReadEvidenceKind          string   `json:"read_evidence_kind"`
+	ProvesProductionConsensus bool     `json:"proves_production_consensus"`
+	EndpointHits              uint64   `json:"endpoint_hits"`
 }
 
 type VectorPartitionM8ProductionMultiGroupV1 struct {

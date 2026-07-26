@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -1050,6 +1051,53 @@ func TestMalformedCapAndFiniteInputsRejectBeforeSimulation(t *testing.T) {
 	bad.Checksum = "bad"
 	if err := validateFixture(bad); err == nil {
 		t.Fatal("accepted malformed checksum")
+	}
+}
+
+func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
+	cfg, err := parseConfig([]string{
+		"-mode", m8ProductionMultiGroupModeV1,
+		"-dataset", fixturePath(t),
+		"-out", t.TempDir(),
+		"-partitions", "16",
+		"-raft-groups", "4",
+		"-raft-nodes-per-group", "3",
+		"-probes", "1,4,16",
+		"-overlap", "0,0.20",
+		"-concurrency", "1,16,64",
+		"-ef-search", "64,4096",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.stage != m8ProductionMultiGroupModeV1 || cfg.raftGroups != 4 || cfg.raftNodes != 3 ||
+		fmt.Sprint(cfg.probes) != "[1 4 16]" || fmt.Sprint(cfg.overlaps) != "[0 0.2]" ||
+		fmt.Sprint(cfg.concurrency) != "[1 16 64]" || fmt.Sprint(cfg.efSearch) != "[64 4096]" {
+		t.Fatalf("M8 config=%+v", cfg)
+	}
+	for _, args := range [][]string{
+		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "1"},
+		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4", "-raft-nodes-per-group", "2"},
+		{"-mode", m8ProductionMultiGroupModeV1, "-stage", "router", "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4"},
+	} {
+		if _, err := parseConfig(args); err == nil {
+			t.Fatalf("accepted malformed M8 config %#v", args)
+		}
+	}
+}
+
+func TestM8ProductionEvidenceJSONKeepsEveryTopologyDimensionV1(t *testing.T) {
+	raw, err := json.Marshal(m8ProductionReportV1{
+		Config: m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16},
+		Rows:   []m8ProductionRowV1{{Probes: 4, EfSearch: 128, Concurrency: 16, Samples: 32}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{`"raft_groups":4`, `"raft_nodes_per_group":3`, `"partitions":16`, `"probes":4`, `"ef_search":128`, `"concurrency":16`, `"samples":32`} {
+		if !bytes.Contains(raw, []byte(field)) {
+			t.Fatalf("missing %s in %s", field, raw)
+		}
 	}
 }
 
