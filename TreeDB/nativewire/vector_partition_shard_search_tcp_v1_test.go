@@ -62,6 +62,78 @@ func TestVectorPartitionShardSearchTCPDispatcherPreservesTypedServiceErrorV1(t *
 	}
 }
 
+func TestVectorPartitionShardSearchTCPDispatcherCancellationWithoutDeadlineV1(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release)
+	listener := newVectorPartitionShardSearchTCPListenerV1(t, vectorPartitionShardSearchHandlerFuncV1(func(context.Context, VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+		close(started)
+		<-release
+		return VectorPartitionShardSearchResponseV1{}, nil
+	}))
+	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": listener.Addr().String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan struct {
+		response VectorPartitionShardSearchResponseV1
+		err      error
+	}, 1)
+	go func() {
+		response, dispatchErr := dispatcher.DispatchVectorPartitionShardSearchV1(ctx, VectorPartitionShardSearchRequestV1{TargetGroupID: "group-a"})
+		result <- struct {
+			response VectorPartitionShardSearchResponseV1
+			err      error
+		}{response, dispatchErr}
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("server handler did not start")
+	}
+	cancel()
+	select {
+	case got := <-result:
+		if got.response.Version != 0 || got.response.RequestID != "" || len(got.response.Partials) != 0 || got.response.Partitions != 0 {
+			t.Fatalf("cancellation returned partial response: %+v", got.response)
+		}
+		var shardErr *VectorPartitionShardSearchErrorV1
+		if !errors.As(got.err, &shardErr) || shardErr.Code != VectorPartitionShardSearchErrorCanceledV1 || !errors.Is(got.err, context.Canceled) {
+			t.Fatalf("error=%v, want typed cancellation", got.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancellation did not interrupt TCP read")
+	}
+}
+
+func TestVectorPartitionShardSearchTCPServerUsesRequestDeadlineV1(t *testing.T) {
+	observed := make(chan error, 1)
+	listener := newVectorPartitionShardSearchTCPListenerV1(t, vectorPartitionShardSearchHandlerFuncV1(func(ctx context.Context, _ VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+		<-ctx.Done()
+		observed <- ctx.Err()
+		return VectorPartitionShardSearchResponseV1{}, ctx.Err()
+	}))
+	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": listener.Addr().String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(25 * time.Millisecond)
+	_, err = dispatcher.DispatchVectorPartitionShardSearchV1(context.Background(), VectorPartitionShardSearchRequestV1{TargetGroupID: "group-a", DeadlineUnixNano: deadline.UnixNano()})
+	var shardErr *VectorPartitionShardSearchErrorV1
+	if !errors.As(err, &shardErr) || shardErr.Code != VectorPartitionShardSearchErrorDeadlineV1 {
+		t.Fatalf("error=%v, want typed deadline", err)
+	}
+	select {
+	case err := <-observed:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("handler context error=%v, want deadline exceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("handler did not observe request deadline")
+	}
+}
+
 func newVectorPartitionShardSearchTCPListenerV1(t *testing.T, handler VectorPartitionShardSearchHandlerV1) net.Listener {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

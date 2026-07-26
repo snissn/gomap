@@ -6,6 +6,7 @@ package nativewire
 // owns fanout, retry, and no-partial-result semantics.
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -62,25 +63,27 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShard
 	}
 	conn, err := d.dial(ctx, "tcp", endpoint)
 	if err != nil {
-		return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: request.TargetGroupID, Err: err}
+		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, err)
 	}
 	defer conn.Close()
+	stopCancelIO := vectorPartitionShardSearchTCPInterruptOnCancelV1(ctx, conn)
+	defer stopCancelIO()
 	if err := vectorPartitionShardSearchTCPDeadlineV1(ctx, request.DeadlineUnixNano, conn); err != nil {
-		return VectorPartitionShardSearchResponseV1{}, err
+		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, err)
 	}
 	frame := vectorPartitionShardSearchTCPFrameV1{Request: &request}
 	if err := writeVectorPartitionShardSearchTCPFrameV1(conn, frame, d.maxFrame); err != nil {
-		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(request.TargetGroupID, err)
+		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, err)
 	}
 	frame, err = readVectorPartitionShardSearchTCPFrameV1(conn, d.maxFrame)
 	if err != nil {
-		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(request.TargetGroupID, err)
+		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, err)
 	}
 	if frame.Error != nil {
 		return VectorPartitionShardSearchResponseV1{}, frame.Error.toError()
 	}
 	if frame.Response == nil {
-		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(request.TargetGroupID, errors.New("missing M5 response"))
+		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, errors.New("missing M5 response"))
 	}
 	return *frame.Response, nil
 }
@@ -113,7 +116,9 @@ func (s VectorPartitionShardSearchTCPServerV1) ServeConn(ctx context.Context, co
 		_ = writeVectorPartitionShardSearchTCPFrameV1(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: frame.Request.TargetGroupID, Message: "M5 service is unavailable"}}, maxFrame)
 		return
 	}
-	response, err := s.Service.Search(ctx, *frame.Request)
+	requestCtx, cancel := vectorPartitionShardSearchTCPRequestContextV1(ctx, frame.Request.DeadlineUnixNano)
+	defer cancel()
+	response, err := s.Service.Search(requestCtx, *frame.Request)
 	if err != nil {
 		_ = writeVectorPartitionShardSearchTCPFrameV1(conn, vectorPartitionShardSearchTCPFrameV1{Error: vectorPartitionShardSearchTCPErrorFromErrorV1(err)}, maxFrame)
 		return
@@ -193,8 +198,13 @@ func readVectorPartitionShardSearchTCPFrameV1(r io.Reader, max uint32) (vectorPa
 		return vectorPartitionShardSearchTCPFrameV1{}, err
 	}
 	var frame vectorPartitionShardSearchTCPFrameV1
-	if err := json.Unmarshal(raw, &frame); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&frame); err != nil {
 		return vectorPartitionShardSearchTCPFrameV1{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return vectorPartitionShardSearchTCPFrameV1{}, errors.New("M5 TCP frame has trailing JSON values")
 	}
 	return frame, nil
 }
@@ -221,7 +231,40 @@ func vectorPartitionShardSearchTCPDeadlineV1(ctx context.Context, deadlineUnixNa
 	return nil
 }
 
-func vectorPartitionShardSearchTCPTransportErrorV1(groupID raftcluster.GroupID, err error) error {
+func vectorPartitionShardSearchTCPInterruptOnCancelV1(ctx context.Context, conn net.Conn) func() {
+	if ctx == nil || ctx.Done() == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			// A deadline wakes both Read and Write without racing the deferred Close.
+			_ = conn.SetDeadline(time.Now())
+		case <-done:
+		}
+	}()
+	return func() { close(done) }
+}
+
+func vectorPartitionShardSearchTCPRequestContextV1(ctx context.Context, deadlineUnixNano int64) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if deadlineUnixNano == 0 {
+		return context.WithCancel(ctx)
+	}
+	deadline := time.Unix(0, deadlineUnixNano)
+	if parentDeadline, ok := ctx.Deadline(); ok && parentDeadline.Before(deadline) {
+		deadline = parentDeadline
+	}
+	return context.WithDeadline(ctx, deadline)
+}
+
+func vectorPartitionShardSearchTCPTransportErrorV1(ctx context.Context, groupID raftcluster.GroupID, err error) error {
+	if ctx != nil && ctx.Err() != nil {
+		err = ctx.Err()
+	}
 	if errors.Is(err, context.Canceled) {
 		return &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorCanceledV1, GroupID: groupID, Err: err}
 	}
