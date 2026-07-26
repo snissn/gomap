@@ -300,6 +300,27 @@ func TestVectorPartitionLocalSearcherV1ExactScanRejectsPreparedShapeMismatchV1(t
 	}
 }
 
+func TestVectorPartitionLocalSearcherV1ExactScanAcceptsAlignedOverpaddedStrideV1(t *testing.T) {
+	searcher := &VectorPartitionLocalSearcherV1{
+		asset: VectorPartitionSearchAssetV1{Generation: 11, PartitionID: 2, Dimensions: 3},
+		prepared: &columnHNSWSearchPackPreparedView{
+			Header:            columnHNSWSearchPackHeader{Rows: 1, Dimensions: 3, VectorStride: 8},
+			NormalizedVectors: []float32{1, 0, 0, 0, 0, 0, 0, 0},
+			DocumentIDOffsets: []uint64{0, 1},
+			DocumentIDBytes:   []byte("a"),
+		},
+		opened:           1,
+		maxStableIDBytes: 1,
+	}
+	results, metrics, err := searcher.SearchExactWithOptionsV1(
+		context.Background(), []float32{1, 0, 0}, VectorPartitionSearchOptionsV1{TopK: 1},
+	)
+	if err != nil || len(results) != 1 || results[0].ID != "a" || results[0].Score != 1 ||
+		metrics.Route != VectorPartitionSearchRouteExactFP32ScanV1 {
+		t.Fatalf("results=%+v metrics=%+v err=%v want valid overpadded exact result", results, metrics, err)
+	}
+}
+
 func TestVectorPartitionLocalSearcherV1ExactScanUsesCanonicalScoreBitsV1(t *testing.T) {
 	query := []float32{-17132608, 10416778, -5245998.5}
 	vector := []float32{40529192, 32163242, -2387782.25}
