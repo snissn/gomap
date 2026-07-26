@@ -269,12 +269,28 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 	return err
 }
 
+type m8ArtifactAssetIdentityV1 struct {
+	IntegrityDigest  string
+	ReadySetDigest   string
+	Generation       uint64
+	RouterGeneration uint64
+}
+
 func m8ArtifactNameV1(cfg config, fixture fixtureManifest, manifest collections.VectorPartitionManifestV1) (string, error) {
 	identity, err := json.Marshal(struct {
-		Fixture  fixtureManifest
-		Config   m8ProductionConfigEvidenceV1
-		Manifest collections.VectorPartitionManifestV1
-	}{fixture, m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: cfg.concurrency, Warmup: cfg.warmup, EfSearch: cfg.efSearch, Seed: cfg.seed}, manifest})
+		Fixture fixtureManifest
+		Config  m8ProductionConfigEvidenceV1
+		Assets  m8ArtifactAssetIdentityV1
+	}{
+		Fixture: fixture,
+		Config:  m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: cfg.concurrency, Warmup: cfg.warmup, EfSearch: cfg.efSearch, Seed: cfg.seed},
+		Assets: m8ArtifactAssetIdentityV1{
+			IntegrityDigest:  manifest.IntegrityDigest,
+			ReadySetDigest:   manifest.ReadySetDigest,
+			Generation:       manifest.Generation,
+			RouterGeneration: manifest.RouterGeneration,
+		},
+	})
 	if err != nil {
 		return "", err
 	}
