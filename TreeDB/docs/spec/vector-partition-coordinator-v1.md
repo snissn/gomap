@@ -68,8 +68,20 @@ session per index/generation and leases it to concurrent searches. Every lease
 still validates runtime status against the M1 snapshot and (when configured)
 the replicated lifecycle authority before routing or M5 dispatch. Cold opens
 are singleflight and a waiting request may cancel without canceling a shared
-session. `Close` rejects new searches, drains leases, then closes the pinned
-router handles.
+session. A runtime-status or lifecycle rejection retires that exact session:
+new leases cannot reuse it and its persistent reader pin is released after its
+last lease. `Close` rejects new searches, drains leases, then closes any
+remaining pinned router handles.
+
+The coordinator is immutable for one accepted catalog/collection/index/source/
+partition epoch. Catalog or generation replacement constructs a replacement
+coordinator and drains the old coordinator before its sources retire; there is
+no cross-epoch or process-global router cache. `Stats` includes a deterministic
+sorted session snapshot with cold-open, hit/miss, open-failure, lease,
+reader-pin/release, invalidation, and close accounting for that accepted
+identity. `manifest_open_attempts` is the count of source calls that perform
+the manifest/asset validation-open boundary; repeated session hits perform no
+such open.
 
 The execution API is:
 
@@ -134,9 +146,11 @@ The request state sequence is fail closed:
 
 There is no partially successful state. Any error zeroes the response, cancels
 the shared child context, waits for every started worker to exit, releases its
-router lease, and returns one classified error. The coordinator retains no
-query result after return; its only retained request-independent state is the
-generation-pinned router session until `Close`.
+router lease, and returns one classified error. Identity/lifecycle rejection
+also retires the session so its reader pin cannot indefinitely block generation
+cleanup. The coordinator retains no query result after return; its only
+retained request-independent state is a bounded session for its immutable
+accepted epoch until retirement or `Close`.
 
 The effective deadline is the earliest of the caller context deadline, the
 request deadline, and `now + MaxWallClock`. The default wall-clock ceiling is

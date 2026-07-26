@@ -62,6 +62,13 @@ goroutines, drains the coordinator's generation-pinned router sessions, then
 closes generation readers before persistent assets; an already-closed network
 connection is successful cleanup.
 
+The topology is immutable for its constructed catalog and generation epoch.
+Replacement builds a new topology/coordinator and closes the old one before
+retiring old sources. M8 records deterministic router-session snapshots before
+warmup, after warmup, and after measured cells so the cold/open versus
+steady-state manifest boundary is auditable; those snapshots are not a
+substitute for matched base/head performance evidence.
+
 ## Persistent retained-asset adapter
 
 The benchmark `-m8-existing-db DIR` path opens a prior M3 database read-only.

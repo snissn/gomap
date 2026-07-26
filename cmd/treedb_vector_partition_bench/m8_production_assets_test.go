@@ -61,7 +61,8 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		SchemaVersion: 2, ResultKind: "m8_production_multi_group_evidence_v2", Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true,
 		GeneratedAt: time.Now(), Command: []string{"m8-test"}, BaseSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		Dataset: fixture, Config: m8ProductionConfigEvidenceV1{RaftGroups: 2, RaftNodesPerGroup: 3, Partitions: 4, TopK: 10, RouterCandidates: 1}, BuildNanos: 1,
-		Topology: nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{Network: "tcp_loopback_serialized_m5_v1", LifecycleState: "active", ReadySetDigest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", MetaNodes: []string{"meta-a", "meta-b", "meta-c"}, Groups: []nativewire.VectorPartitionM8ProductionGroupEvidenceV1{group("group-a", 1), group("group-b", 1)}},
+		Topology:       nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{Network: "tcp_loopback_serialized_m5_v1", LifecycleState: "active", ReadySetDigest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", MetaNodes: []string{"meta-a", "meta-b", "meta-c"}, Groups: []nativewire.VectorPartitionM8ProductionGroupEvidenceV1{group("group-a", 1), group("group-b", 1)}},
+		RouterSessions: m8ProductionRouterSessionEvidenceV1{AfterWarmup: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, LeasePins: 1, LeaseReleases: 1}}, AfterMeasured: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, Hits: 1, LeasePins: 2, LeaseReleases: 2}}},
 		Rows: []m8ProductionRowV1{{Status: "pass", Probes: 4, EfSearch: 10, Concurrency: 1, Samples: fixture.Queries, RecallAtK: 1, QPS: 1, RouterMode: "exact", RouterCandidates: 1, ExactParityChecked: true, ExactParityPassed: true, NoPartialResults: true, Attribution: m8ProductionAttributionV1{
 			Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1, ExhaustivePartitionRecallAtK: 1,
 			ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
@@ -87,6 +88,43 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	report.Topology.Groups[1].EndpointHits = 0
 	if err := validateM8ProductionReportV1(report); err == nil {
 		t.Fatal("accepted report with an unexercised data-group endpoint")
+	}
+}
+
+func TestM8RouterSessionEvidenceRejectsColdWorkOrLeaseImbalanceV1(t *testing.T) {
+	identity := nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{
+		Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest",
+		SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5,
+		ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest",
+	}
+	warm := nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{
+		Identity: identity, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, LeasePins: 1, LeaseReleases: 1,
+	}
+	measured := warm
+	measured.Hits, measured.LeasePins, measured.LeaseReleases = 1, 2, 2
+	valid := m8ProductionRouterSessionEvidenceV1{AfterWarmup: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{warm}, AfterMeasured: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{measured}}
+	if !validM8RouterSessionEvidenceV1(valid) {
+		t.Fatal("rejected stable warmed router evidence")
+	}
+	for name, mutate := range map[string]func(*m8ProductionRouterSessionEvidenceV1){
+		"new cold open":     func(e *m8ProductionRouterSessionEvidenceV1) { e.AfterMeasured[0].ColdOpens++ },
+		"new manifest open": func(e *m8ProductionRouterSessionEvidenceV1) { e.AfterMeasured[0].ManifestOpenAttempts++ },
+		"new miss":          func(e *m8ProductionRouterSessionEvidenceV1) { e.AfterMeasured[0].Misses++ },
+		"new reader pin":    func(e *m8ProductionRouterSessionEvidenceV1) { e.AfterMeasured[0].ReaderPins++ },
+		"lease imbalance":   func(e *m8ProductionRouterSessionEvidenceV1) { e.AfterMeasured[0].LeaseReleases-- },
+		"identity replacement": func(e *m8ProductionRouterSessionEvidenceV1) {
+			e.AfterMeasured[0].Identity.RouterModelDigest = "other-model"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := valid
+			candidate.AfterWarmup = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), valid.AfterWarmup...)
+			candidate.AfterMeasured = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), valid.AfterMeasured...)
+			mutate(&candidate)
+			if validM8RouterSessionEvidenceV1(candidate) {
+				t.Fatal("accepted invalid router-session evidence")
+			}
+		})
 	}
 }
 
@@ -238,6 +276,17 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	}
 	if len(response.Neighbors) != 10 || len(response.ProbedGroups) != 2 {
 		t.Fatalf("response=%+v", response)
+	}
+	sessions := topology.Coordinator().Stats().RouterSessions
+	if len(sessions) != 1 {
+		t.Fatalf("router sessions=%+v", sessions)
+	}
+	session := sessions[0]
+	if session.ColdOpens != 1 || session.ManifestOpenAttempts != 1 || session.Misses != 1 || session.Hits < 2 ||
+		session.ReaderPins != 1 || session.ReaderReleases != 0 || session.LeasePins != session.LeaseReleases ||
+		session.Identity.Collection != assets.manifest.Collection || session.Identity.IndexName != assets.manifest.IndexName ||
+		session.Identity.PartitionGeneration != assets.manifest.Generation || session.Identity.ReadySetDigest == "" || session.Identity.RouterModelDigest == "" {
+		t.Fatalf("router session=%+v", session)
 	}
 	// Compare the raw TCP result with independently opened partition searchers;
 	// m8ExactTruthV1 below owns the full-source canonical oracle.

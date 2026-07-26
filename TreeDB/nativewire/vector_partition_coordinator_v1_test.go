@@ -57,13 +57,14 @@ type testVectorPartitionCoordinatorRouterSourceV1 struct {
 	generations []uint64
 	openStarted chan<- struct{}
 	openBlock   <-chan struct{}
+	openErr     error
 }
 
 func (s *testVectorPartitionCoordinatorRouterSourceV1) OpenVectorPartitionCoordinatorRouterV1(ctx context.Context, _ string, generation uint64) (VectorPartitionCoordinatorRouterV1, error) {
 	s.mu.Lock()
 	s.opens++
 	s.generations = append(s.generations, generation)
-	started, block := s.openStarted, s.openBlock
+	started, block, openErr := s.openStarted, s.openBlock, s.openErr
 	s.mu.Unlock()
 	if started != nil {
 		select {
@@ -78,6 +79,9 @@ func (s *testVectorPartitionCoordinatorRouterSourceV1) OpenVectorPartitionCoordi
 			return nil, ctx.Err()
 		case <-block:
 		}
+	}
+	if openErr != nil {
+		return nil, openErr
 	}
 	return s.router, nil
 }
@@ -365,6 +369,124 @@ func TestVectorPartitionCoordinatorUsesReplicatedLifecycleAdmissionV1(t *testing
 	if len(dispatcher.calls) != before {
 		t.Fatal("replicated lifecycle rejection dispatched shard request")
 	}
+	if source.router.closeCount != 1 {
+		t.Fatalf("invalidated router closes=%d want one", source.router.closeCount)
+	}
+	stats := coordinator.Stats()
+	if len(stats.RouterSessions) != 1 || stats.RouterSessions[0].Invalidations != 1 ||
+		stats.RouterSessions[0].ReaderPins != 1 || stats.RouterSessions[0].ReaderReleases != 1 ||
+		stats.RouterSessions[0].Hits != 1 {
+		t.Fatalf("invalidated session stats=%+v", stats.RouterSessions)
+	}
+	if err := coordinator.Close(); err != nil || source.router.closeCount != 1 {
+		t.Fatalf("post-invalidation close err=%v router closes=%d", err, source.router.closeCount)
+	}
+}
+
+func TestVectorPartitionCoordinatorRouterSessionConcurrentReuseAccountingV1(t *testing.T) {
+	coordinator, source, _ := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"}, map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "doc", Score: 1}}}, VectorPartitionCoordinatorLimitsV1{},
+	)
+	const requests = 16
+	start := make(chan struct{})
+	errs := make(chan error, requests)
+	for i := 0; i < requests; i++ {
+		go func(i int) {
+			<-start
+			request := testVectorPartitionCoordinatorRequestV1(1)
+			request.RequestID = fmt.Sprintf("concurrent-%d", i)
+			request.CancellationID = request.RequestID + "-cancel"
+			_, err := coordinator.Search(t.Context(), request)
+			errs <- err
+		}(i)
+	}
+	close(start)
+	for range requests {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if source.openCount() != 1 {
+		t.Fatalf("cold opens=%d want one", source.openCount())
+	}
+	stats := coordinator.Stats()
+	if len(stats.RouterSessions) != 1 {
+		t.Fatalf("session stats=%+v", stats.RouterSessions)
+	}
+	session := stats.RouterSessions[0]
+	if session.ColdOpens != 1 || session.ManifestOpenAttempts != 1 || session.Misses != 1 || session.Hits != requests-1 ||
+		session.ReaderPins != 1 || session.ReaderReleases != 0 ||
+		session.LeasePins != requests || session.LeaseReleases != requests || session.Invalidations != 0 {
+		t.Fatalf("session=%+v", session)
+	}
+	identity := session.Identity
+	if identity.Database != "db" || identity.Catalog != "default" || identity.Collection != "docs" ||
+		identity.IndexName != "embedding" || identity.IndexDefinitionDigest == "" ||
+		identity.SourceGeneration != coordinator.placement.SourceGeneration || identity.SourceChecksum != coordinator.placement.SourceChecksum ||
+		identity.SourceSchemaHash != coordinator.placement.SourceSchemaHash || identity.SourceRowCount != coordinator.placement.SourceRowCount ||
+		identity.PartitionGeneration != coordinator.placement.PartitionGeneration || identity.ReadySetDigest == "" || identity.RouterModelDigest == "" {
+		t.Fatalf("identity=%+v", identity)
+	}
+	if err := coordinator.Close(); err != nil {
+		t.Fatal(err)
+	}
+	session = coordinator.Stats().RouterSessions[0]
+	if source.router.closeCount != 1 || session.Closes != 1 || session.ReaderReleases != 1 {
+		t.Fatalf("post-close router closes=%d session=%+v", source.router.closeCount, session)
+	}
+}
+
+func TestVectorPartitionCoordinatorReplacementDrainsOldEpochV1(t *testing.T) {
+	old, oldSource, _ := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"}, map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "old", Score: 1}}}, VectorPartitionCoordinatorLimitsV1{},
+	)
+	if _, err := old.Search(t.Context(), testVectorPartitionCoordinatorRequestV1(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if oldSource.openCount() != 1 || oldSource.router.closeCount != 1 {
+		t.Fatalf("old epoch opens=%d closes=%d", oldSource.openCount(), oldSource.router.closeCount)
+	}
+
+	replacement, replacementSource, _ := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"}, map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "new", Score: 1}}}, VectorPartitionCoordinatorLimitsV1{},
+	)
+	if _, err := replacement.Search(t.Context(), testVectorPartitionCoordinatorRequestV1(1)); err != nil {
+		t.Fatal(err)
+	}
+	if replacementSource.openCount() != 1 || oldSource.openCount() != 1 {
+		t.Fatalf("replacement reused old epoch: replacement=%d old=%d", replacementSource.openCount(), oldSource.openCount())
+	}
+	if err := replacement.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if replacementSource.router.closeCount != 1 {
+		t.Fatalf("replacement closes=%d", replacementSource.router.closeCount)
+	}
+}
+
+func TestVectorPartitionCoordinatorRouterOpenCorruptionFailsClosedV1(t *testing.T) {
+	coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"}, map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "doc", Score: 1}}}, VectorPartitionCoordinatorLimitsV1{},
+	)
+	source.openErr = errors.New("router asset checksum corrupt")
+	response, err := coordinator.Search(t.Context(), testVectorPartitionCoordinatorRequestV1(1))
+	if err == nil || !vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
+		t.Fatalf("response=%+v err=%v", response, err)
+	}
+	if len(dispatcher.calls) != 0 || source.router.closeCount != 0 {
+		t.Fatalf("dispatch=%d closes=%d", len(dispatcher.calls), source.router.closeCount)
+	}
+	stats := coordinator.Stats()
+	if len(stats.RouterSessions) != 1 || stats.RouterSessions[0].ColdOpens != 1 || stats.RouterSessions[0].ManifestOpenAttempts != 1 || stats.RouterSessions[0].Misses != 1 || stats.RouterSessions[0].OpenFailures != 1 || stats.RouterSessions[0].ReaderPins != 0 {
+		t.Fatalf("session stats=%+v", stats.RouterSessions)
+	}
 }
 
 func TestVectorPartitionCoordinatorRouterSessionSingleflightAndCancellationV1(t *testing.T) {
@@ -446,6 +568,37 @@ func TestVectorPartitionCoordinatorCloseDrainsRouterLeasesAndRejectsNewSearchesV
 	}
 	if _, err := coordinator.acquireRouterSessionV1(context.Background(), "embedding", coordinator.placement.PartitionGeneration); !errors.Is(err, ErrVectorPartitionCoordinatorUnavailable) {
 		t.Fatalf("acquire after Close err=%v", err)
+	}
+}
+
+func TestVectorPartitionCoordinatorCloseDrainsRetiredRouterLeaseV1(t *testing.T) {
+	coordinator, source, _ := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"}, map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "doc", Score: 1}}}, VectorPartitionCoordinatorLimitsV1{},
+	)
+	lease, err := coordinator.acquireRouterSessionV1(context.Background(), "embedding", coordinator.placement.PartitionGeneration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.retireRouterSessionV1(lease)
+	closed := make(chan error, 1)
+	go func() { closed <- coordinator.Close() }()
+	select {
+	case err := <-closed:
+		t.Fatalf("Close returned before retired lease drain: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	lease.Close()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not drain retired lease")
+	}
+	if source.router.closeCount != 1 {
+		t.Fatalf("router closes=%d want one", source.router.closeCount)
 	}
 }
 
