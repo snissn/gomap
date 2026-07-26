@@ -410,6 +410,30 @@ func m8ExactTruthV1(collection *collections.Collection, queries [][]float64, top
 	return truth, nil
 }
 
+// m8ExactPartitionUnionV1 scans every generation-pinned partition pack and
+// fails closed unless the caller supplies the complete manifest partition set.
+func m8ExactPartitionUnionV1(ctx context.Context, assets *m8ProductionMultiGroupAssetsV1, query []float64, topK int) ([]neighbor, error) {
+	if assets == nil || len(assets.manifest.Placements) != int(assets.manifest.PartitionCount) {
+		return nil, errors.New("incomplete M8 partition manifest")
+	}
+	merged := make([]neighbor, 0, len(assets.manifest.Placements)*topK)
+	for partition := 0; partition < len(assets.manifest.Placements); partition++ {
+		searcher, err := assets.collection.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, assets.manifest.Generation, uint32(partition))
+		if err != nil {
+			return nil, err
+		}
+		results, _, searchErr := searcher.SearchExactWithOptionsV1(ctx, m8Query32V1(query), collections.VectorPartitionSearchOptionsV1{TopK: topK})
+		closeErr := searcher.Close()
+		if searchErr != nil || closeErr != nil {
+			return nil, errors.Join(searchErr, closeErr)
+		}
+		for _, result := range results {
+			merged = append(merged, neighbor{ID: result.ID, Distance: 1 - float64(result.Score)})
+		}
+	}
+	return canonicalExactNeighborsV1(merged, topK), nil
+}
+
 func m8WarmProductionTopologyV1(ctx context.Context, coordinator *nativewire.VectorPartitionCoordinatorV1, assets *m8ProductionMultiGroupAssetsV1, queries [][]float64, cfg config) error {
 	if len(queries) == 0 {
 		return errors.New("M8 warmup requires a query")

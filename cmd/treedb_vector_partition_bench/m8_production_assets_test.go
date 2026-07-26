@@ -129,6 +129,10 @@ func TestM8ProductionMultiGroupAssetsCheckedIn10kCISmokeV1(t *testing.T) {
 	for i, value := range vectors[17] {
 		query[i] = float32(value)
 	}
+	exactUnion, err := m8ExactPartitionUnionV1(context.Background(), assets, vectors[17], 10)
+	if err != nil {
+		t.Fatal(err)
+	}
 	merged := make([]neighbor, 0, 40)
 	for partition := 0; partition < 4; partition++ {
 		searcher, err := assets.collection.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, assets.manifest.Generation, uint32(partition))
@@ -153,6 +157,9 @@ func TestM8ProductionMultiGroupAssetsCheckedIn10kCISmokeV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range want {
+		if exactUnion[i].ID != string(want[i].DocumentID) {
+			t.Fatalf("exact union rank=%d got=%s want=%s", i, exactUnion[i].ID, want[i].DocumentID)
+		}
 		if merged[i].ID != string(want[i].DocumentID) {
 			t.Fatalf("parity rank=%d got=%s want=%s got_all=%s", i, merged[i].ID, want[i].DocumentID, fmt.Sprint(merged))
 		}
