@@ -185,6 +185,52 @@ performance owner. They do not justify bypassing integrity checks; remediation
 must retain snapshot/generation identity, cancellation, and fail-closed reader
 pin semantics.
 
+## #3980 exactness and recall-attribution continuation
+
+Measured production-code head: `3b52711665297c7396f1f86238840dee1ea2897b`
+(the documentation commit is subsequent). Status remains **experimental/off**.
+The continuation emits schema `2`, result kind
+`m8_production_multi_group_evidence_v2`, and persists zero recall explicitly.
+
+The executable score contract is
+`fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1`:
+query and source vectors are normalized in FP32, their dot product is
+accumulated left-to-right in binary64, the result is rounded once to FP32,
+duplicate stable IDs retain their best score, and results sort by descending
+score then ascending stable ID. The full-source oracle, generation-pinned exact
+partition scan, and published HNSW candidate rescoring share this contract.
+
+The clean 10k diagnostic used two data groups, four partitions, probes `1,4`,
+`ef_search=64,4096`, one measured concurrency, and 128 queries. The canonical
+source oracle and exhaustive exact partition union matched with recall `1.0`
+and exact ID/score parity in every row. Coordinator merge/transport also had
+exact ID/score parity. At four probes, exact and approximate representative
+routing both retained recall `1.0`; remaining recall was `0.25625` at
+`ef_search=64` and `0.96953125` at `ef_search=4096`, wholly owned by
+partition-local HNSW. At one probe, exact representative routing retained
+`0.25234375`; local HNSW reduced it further to `0.07109375` or `0.24375`.
+
+The retained 1M diagnostic used four data groups, 16 partitions, probes `1,16`,
+`ef_search=64,4096`, and the declared single smoke query. Its canonical source
+oracle and exhaustive exact union again matched at recall `1.0` with exact
+ID/score parity. At 16 probes, both representative-routing stages retained
+recall `1.0`, but partition-local HNSW and end-to-end recall were explicitly
+`0` at both search budgets. Coordinator ID/score parity remained exact. At one
+probe, representative routing itself retained no truth IDs. The former 1M zero
+is therefore explained: it is not caused by source identity, partition
+membership, the score contract, Raft/TCP transport, dedupe, or coordinator
+merge; its all-partition owner is partition-local HNSW.
+
+| Continuation record | Path | SHA-256 |
+| --- | --- | --- |
+| clean 10k attribution JSON | `/mnt/fast4tb/tmp/treedb_vector_partition_3980_10k_clean_fvQhPj/vector_partition_m8_3b5271166529_0f33a1583ce3.json` | `c9d37aba290284b742f9e8189b429031146226a8cf9801370bd15754b80c81dc` |
+| clean retained 1M attribution JSON | `/mnt/fast4tb/tmp/treedb_vector_partition_3980_1m_clean_Wadji9/vector_partition_m8_3b5271166529_55786c770e98.json` | `9afad07fb8daf374076fe9fa630106ffdf6241ae746344349eb1885d37cdfbd1` |
+
+These runs diagnose ownership; they do not pass the original exhaustive-HNSW,
+representative-recall, overlap, resource-bound, or matched-QPS enablement gates.
+#3981 owns generation-pinned request-session caching. #3982 owns remediation or
+explicit disposition of the local-HNSW loss plus the sole final local gate.
+
 The retained M3 record separately reports 188,427,800 mapped bytes,
 200,546,033 derived physical bytes, and 1,023,827,968 resident bytes after the
 build. Its build peak RSS was 2,793,459,712 bytes. The M8 process measured peak

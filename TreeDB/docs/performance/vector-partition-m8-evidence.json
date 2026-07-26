@@ -72,6 +72,44 @@
     "cpu_profile_sha256": "46a106805b3795267bd50c868bec5a7c2d4023f445ca03254c857445ca62c963",
     "trace_sha256": "13470d84b203738c49f7bba87c8fa52b80e0da0453d17b871e13a9347e54fe1e"
   },
+  "continuation_attribution": {
+    "status": "diagnosed_experimental_off",
+    "schema_version": 2,
+    "result_kind": "m8_production_multi_group_evidence_v2",
+    "measured_code_head": "3b52711665297c7396f1f86238840dee1ea2897b",
+    "canonical_contract": "fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1",
+    "checked_in_10k": {
+      "artifact_sha256": "c9d37aba290284b742f9e8189b429031146226a8cf9801370bd15754b80c81dc",
+      "artifact_retained_path": "/mnt/fast4tb/tmp/treedb_vector_partition_3980_10k_clean_fvQhPj/vector_partition_m8_3b5271166529_0f33a1583ce3.json",
+      "dirty": false,
+      "queries": 128,
+      "exhaustive_partition_union_recall_at_10": 1,
+      "exhaustive_partition_union_id_parity": true,
+      "exhaustive_partition_union_score_parity": true,
+      "all_partition_ef4096_local_hnsw_recall_at_10": 0.9695312500000001,
+      "all_partition_loss_owner": "partition_local_hnsw",
+      "coordinator_merge_id_parity": true,
+      "coordinator_merge_score_parity": true
+    },
+    "retained_1m": {
+      "artifact_sha256": "9afad07fb8daf374076fe9fa630106ffdf6241ae746344349eb1885d37cdfbd1",
+      "artifact_retained_path": "/mnt/fast4tb/tmp/treedb_vector_partition_3980_1m_clean_Wadji9/vector_partition_m8_3b5271166529_55786c770e98.json",
+      "dirty": false,
+      "queries": 1,
+      "exhaustive_partition_union_recall_at_10": 1,
+      "exhaustive_partition_union_id_parity": true,
+      "exhaustive_partition_union_score_parity": true,
+      "all_partition_exact_representative_recall_at_10": 1,
+      "all_partition_approximate_representative_recall_at_10": 1,
+      "all_partition_local_hnsw_recall_at_10": 0,
+      "all_partition_end_to_end_recall_at_10": 0,
+      "all_partition_loss_owner": "partition_local_hnsw",
+      "coordinator_merge_id_parity": true,
+      "coordinator_merge_score_parity": true
+    },
+    "disposition": "diagnosis_only_enablement_remains_off",
+    "next_owners": ["3981_generation_pinned_session_cache", "3982_local_hnsw_and_final_gate"]
+  },
   "unsupported": [
     "overlap_0.20_assets",
     "stable_id_hash_attribution",
