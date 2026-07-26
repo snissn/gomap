@@ -8,13 +8,14 @@ import (
 	"strings"
 )
 
-func m8ProductionHostV1(cfg config) m8ProductionHostEvidenceV1 {
+func m8ProductionHostV1(cfg config, assetDir string) m8ProductionHostEvidenceV1 {
 	host := m8ProductionHostEvidenceV1{
 		CPUModel:      m8FirstFieldV1("/proc/cpuinfo", "model name"),
 		NUMANodes:     m8ReadTrimmedV1("/sys/devices/system/node/online"),
 		Kernel:        m8CommandV1("uname", "-srmo"),
 		ArtifactMount: m8MountV1(cfg.out),
 		DatasetMount:  m8MountV1(cfg.dataset),
+		AssetMount:    m8MountV1(assetDir),
 	}
 	if raw := m8FirstFieldV1("/proc/meminfo", "MemTotal"); raw != "" {
 		fields := strings.Fields(raw)

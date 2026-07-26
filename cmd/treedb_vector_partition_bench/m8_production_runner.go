@@ -128,6 +128,7 @@ type m8ProductionHostEvidenceV1 struct {
 	Kernel        string `json:"kernel,omitempty"`
 	ArtifactMount string `json:"artifact_mount,omitempty"`
 	DatasetMount  string `json:"dataset_mount,omitempty"`
+	AssetMount    string `json:"persistent_asset_mount,omitempty"`
 }
 
 type m8ProductionResourceEvidenceV1 struct {
@@ -177,7 +178,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		SchemaVersion: 1, ResultKind: "m8_production_multi_group_evidence_v1", Status: "incomplete",
 		Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true, GeneratedAt: time.Now().UTC(),
 		Command: cfg.command, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dirty: m8GitDirtyV1(),
-		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), Host: m8ProductionHostV1(cfg), Dataset: fixture,
+		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), Host: m8ProductionHostV1(cfg, assets.dir), Dataset: fixture,
 		Config:        m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), Seed: cfg.seed},
 		BuildNanos:    buildNanos,
 		Profiles:      m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Status: "not_captured", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs requires the captured baseline for differential analysis"},
@@ -252,7 +253,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		return err
 	}
 	raw = append(raw, '\n')
-	name, err := m8ArtifactNameV1(cfg, fixture)
+	name, err := m8ArtifactNameV1(cfg, fixture, assets.manifest)
 	if err != nil {
 		return err
 	}
@@ -268,11 +269,12 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 	return err
 }
 
-func m8ArtifactNameV1(cfg config, fixture fixtureManifest) (string, error) {
+func m8ArtifactNameV1(cfg config, fixture fixtureManifest, manifest collections.VectorPartitionManifestV1) (string, error) {
 	identity, err := json.Marshal(struct {
-		Fixture fixtureManifest
-		Config  m8ProductionConfigEvidenceV1
-	}{fixture, m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: cfg.concurrency, Warmup: cfg.warmup, EfSearch: cfg.efSearch, Seed: cfg.seed}})
+		Fixture  fixtureManifest
+		Config   m8ProductionConfigEvidenceV1
+		Manifest collections.VectorPartitionManifestV1
+	}{fixture, m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: cfg.concurrency, Warmup: cfg.warmup, EfSearch: cfg.efSearch, Seed: cfg.seed}, manifest})
 	if err != nil {
 		return "", err
 	}
