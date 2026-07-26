@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 )
 
@@ -14,6 +15,26 @@ import (
 // and activate routed ownership without a replicated proof.
 type CatalogRouteResolverV1 struct {
 	catalog raftplacement.ResolvedCatalogV1
+}
+
+// RequiresVectorPartitionMutationAdmissionV1 derives the shared mutation
+// requirement from replicated catalog configuration, independently of whether
+// an admission provider was installed on the submitter.
+func (p CatalogMetaClusterRouteProvider) RequiresVectorPartitionMutationAdmissionV1(ctx context.Context) (bool, error) {
+	if p.authority == nil {
+		return false, raftplacement.ErrCatalogMetaUnavailable
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	status, ok := p.authority.Status()
+	if !ok {
+		return false, raftplacement.ErrCatalogMetaUnavailable
+	}
+	return raftcluster.FeatureSetRequiresV1(status.Features, raftcluster.FeatureVectorPartitionLifecycle), nil
 }
 
 // CatalogMetaProofProvider supplies a proof captured from the locally applied

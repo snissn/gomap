@@ -97,6 +97,34 @@ type GroupRoutedSubmitter struct {
 	catalogRouteValidator CatalogRouteValidatorV1
 }
 
+// RequiresFeatureV1 derives a composite requirement from the configured data
+// groups. A requirement on any group applies to the shared routed submit
+// boundary; otherwise one group could bypass a cluster-wide safety feature.
+func (s *GroupRoutedSubmitter) RequiresFeatureV1(name FeatureName) (bool, error) {
+	if s == nil || s.registry.empty() {
+		return false, ErrInvalidSubmitter
+	}
+	for _, groupID := range s.registry.GroupIDs() {
+		submitter, ok := s.registry.Lookup(groupID)
+		if !ok {
+			continue
+		}
+		if requirements, ok := submitter.(FeatureRequirementProviderV1); ok {
+			required, err := requirements.RequiresFeatureV1(name)
+			if err != nil {
+				return false, err
+			}
+			if required {
+				return true, nil
+			}
+		}
+		if provider, ok := submitter.(Provider); ok && FeatureSetRequiresV1(provider.Config().Features, name) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func newCatalogMetaGroupRoutedSubmitter(registry GroupSubmitterRegistryV1, validator CatalogRouteValidatorV1) (*GroupRoutedSubmitter, error) {
 	if registry.empty() {
 		return nil, errors.Join(ErrInvalidSubmitter, fmt.Errorf("group submitter registry is required"))

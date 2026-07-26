@@ -12,10 +12,11 @@ import (
 )
 
 type recordingGroupSubmitter struct {
-	groupID GroupID
-	status  AdmissionStatus
-	err     error
-	calls   []recordingGroupSubmitCall
+	groupID  GroupID
+	features FeatureSet
+	status   AdmissionStatus
+	err      error
+	calls    []recordingGroupSubmitCall
 }
 
 type recordingGroupSubmitCall struct {
@@ -48,7 +49,7 @@ func (s *submitOnlyGroupSubmitter) SubmitCommandEntryV1(context.Context, []byte,
 }
 
 func (s *recordingGroupSubmitter) Config() ResolvedConfig {
-	return ResolvedConfig{GroupID: s.groupID}
+	return ResolvedConfig{GroupID: s.groupID, Features: s.features}
 }
 
 func (s *recordingGroupSubmitter) ClusterAdmissionStatus(context.Context) (AdmissionStatus, error) {
@@ -408,6 +409,25 @@ func TestGroupRoutedSubmitterAdmissionMissingProviderFailsClosed(t *testing.T) {
 	}
 	if !status.Unavailable || !strings.Contains(status.Reason, "group \"group-b\" admission provider is unavailable") {
 		t.Fatalf("ClusterAdmissionStatus=%+v want unavailable missing group-b admission provider", status)
+	}
+}
+
+func TestGroupRoutedSubmitterRequiresFeatureWhenAnyGroupEnablesIt(t *testing.T) {
+	features := DefaultFeatureSet()
+	features.Required = append(features.Required, RequiredFeature{
+		Name:    FeatureVectorPartitionLifecycle,
+		Version: SupportedFeatureFloors[FeatureVectorPartitionLifecycle],
+	})
+	dispatcher := newTestGroupRoutedSubmitter(t,
+		&recordingGroupSubmitter{groupID: "group-a"},
+		&recordingGroupSubmitter{groupID: "group-b", features: features},
+	)
+	required, err := dispatcher.RequiresFeatureV1(FeatureVectorPartitionLifecycle)
+	if err != nil {
+		t.Fatalf("RequiresFeatureV1: %v", err)
+	}
+	if !required {
+		t.Fatal("vector partition lifecycle requirement=false want true from group-b config")
 	}
 }
 

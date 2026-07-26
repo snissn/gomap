@@ -39,7 +39,19 @@ func NewRaftClusterSubmitterWithVectorPartitionAdmissionV1(bridge raftcluster.Co
 }
 
 func (s *RaftClusterSubmitter) RequiresVectorPartitionMutationAdmissionV1(context.Context) (bool, error) {
-	return s != nil && s.VectorPartitionAdmission != nil, nil
+	if s == nil {
+		return false, raftcluster.ErrInvalidSubmitter
+	}
+	if s.VectorPartitionAdmission != nil {
+		return true, nil
+	}
+	if requirements, ok := s.Bridge.(raftcluster.FeatureRequirementProviderV1); ok {
+		return requirements.RequiresFeatureV1(raftcluster.FeatureVectorPartitionLifecycle)
+	}
+	if provider, ok := s.Bridge.(raftcluster.Provider); ok {
+		return raftcluster.FeatureSetRequiresV1(provider.Config().Features, raftcluster.FeatureVectorPartitionLifecycle), nil
+	}
+	return false, nil
 }
 
 func (s *RaftClusterSubmitter) AdmitVectorPartitionMutationV1(ctx context.Context, command iwire.CommandID, sections []iwire.Section) error {
@@ -63,6 +75,19 @@ func (s *RaftClusterSubmitter) ConfirmVectorPartitionMutationV1(ctx context.Cont
 type RoutedRaftClusterSubmitter struct {
 	*RaftClusterSubmitter
 	RouteProvider ClusterRouteProvider
+}
+
+func (s *RoutedRaftClusterSubmitter) RequiresVectorPartitionMutationAdmissionV1(ctx context.Context) (bool, error) {
+	if s == nil {
+		return false, raftcluster.ErrInvalidSubmitter
+	}
+	if requirements, ok := s.RouteProvider.(VectorPartitionMutationAdmissionRequiredV1); ok {
+		required, err := requirements.RequiresVectorPartitionMutationAdmissionV1(ctx)
+		if err != nil || required {
+			return required, err
+		}
+	}
+	return s.RaftClusterSubmitter.RequiresVectorPartitionMutationAdmissionV1(ctx)
 }
 
 func NewRaftClusterSubmitter(bridge raftcluster.CommandSubmitterV1, managers ...*collections.CollectionManager) *RaftClusterSubmitter {

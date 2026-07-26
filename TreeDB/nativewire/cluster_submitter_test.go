@@ -104,12 +104,13 @@ func (lifecycleRequiredNoAdmissionClusterSubmitter) RequiresVectorPartitionMutat
 }
 
 type recordingRaftCommandSubmitter struct {
-	groupID raftcluster.GroupID
-	manager *collections.CollectionManager
-	status  raftcluster.AdmissionStatus
-	err     error
-	mu      sync.Mutex
-	calls   []recordingRaftCommandSubmitCall
+	groupID  raftcluster.GroupID
+	features raftcluster.FeatureSet
+	manager  *collections.CollectionManager
+	status   raftcluster.AdmissionStatus
+	err      error
+	mu       sync.Mutex
+	calls    []recordingRaftCommandSubmitCall
 }
 
 type recordingRaftCommandSubmitCall struct {
@@ -118,7 +119,7 @@ type recordingRaftCommandSubmitCall struct {
 }
 
 func (s *recordingRaftCommandSubmitter) Config() raftcluster.ResolvedConfig {
-	return raftcluster.ResolvedConfig{GroupID: s.groupID}
+	return raftcluster.ResolvedConfig{GroupID: s.groupID, Features: s.features}
 }
 
 func (s *recordingRaftCommandSubmitter) ClusterAdmissionStatus(context.Context) (raftcluster.AdmissionStatus, error) {
@@ -802,6 +803,66 @@ func TestClusterSubmitterRequiredVectorAdmissionFailsClosedWhenMisconfiguredV1(t
 		[][]byte{[]byte("u1")}, [][]byte{[]byte(`{"embedding":[1,2]}`)}, AckVisible)
 	if err == nil {
 		t.Fatal("misconfigured M7 admission unexpectedly submitted mutation")
+	}
+}
+
+func TestLegacyRaftClusterSubmitterRequiresVectorAdmissionFromClusterFeatureV1(t *testing.T) {
+	features := raftcluster.DefaultFeatureSet()
+	features.Required = append(features.Required, raftcluster.RequiredFeature{
+		Name:    raftcluster.FeatureVectorPartitionLifecycle,
+		Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureVectorPartitionLifecycle],
+	})
+	bridge := &recordingRaftCommandSubmitter{groupID: "group-a", features: features}
+	submitter := NewRaftClusterSubmitter(bridge)
+	required, err := submitter.RequiresVectorPartitionMutationAdmissionV1(context.Background())
+	if err != nil {
+		t.Fatalf("RequiresVectorPartitionMutationAdmissionV1: %v", err)
+	}
+	if !required {
+		t.Fatal("vector partition admission requirement=false want true from bridge feature config")
+	}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")}, [][]byte{[]byte(`{"embedding":[1,2]}`)}, AckVisible); !isRemoteError(err, iwire.ErrReadOnly) {
+		t.Fatalf("InsertBatch err=%v want read-only missing lifecycle provider", err)
+	}
+	if calls := bridge.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("legacy constructor submitted %d entries before required lifecycle admission", len(calls))
+	}
+}
+
+func TestCatalogRoutedLegacySubmitterRequiresVectorAdmissionFromCatalogFeatureV1(t *testing.T) {
+	authority, _ := newNativewireCatalogMetaAuthorityWithLifecycle(t, true)
+	provider, err := NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof)
+	if err != nil {
+		t.Fatalf("NewCatalogMetaClusterRouteProvider: %v", err)
+	}
+	bridge := &recordingRaftCommandSubmitter{groupID: "group-a"}
+	submitter := NewRoutedRaftClusterSubmitter(bridge, provider)
+	required, err := submitter.RequiresVectorPartitionMutationAdmissionV1(context.Background())
+	if err != nil {
+		t.Fatalf("RequiresVectorPartitionMutationAdmissionV1: %v", err)
+	}
+	if !required {
+		t.Fatal("vector partition admission requirement=false want true from replicated catalog feature")
+	}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")}, [][]byte{[]byte(`{"embedding":[1,2]}`)}, AckVisible); !isRemoteError(err, iwire.ErrReadOnly) {
+		t.Fatalf("InsertBatch err=%v want read-only missing lifecycle provider", err)
+	}
+	if calls := bridge.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("routed legacy constructor submitted %d entries before required lifecycle admission", len(calls))
 	}
 }
 
@@ -3426,6 +3487,10 @@ func serveCatalogMetaGroupRoutedRaftClusterBridgePipe(t testing.TB, routeProvide
 }
 
 func newNativewireCatalogMetaAuthority(t testing.TB) (*raftplacement.CatalogMetaAuthorityV1, *raftcluster.CatalogMetaRaftProviderV1) {
+	return newNativewireCatalogMetaAuthorityWithLifecycle(t, false)
+}
+
+func newNativewireCatalogMetaAuthorityWithLifecycle(t testing.TB, lifecycle bool) (*raftplacement.CatalogMetaAuthorityV1, *raftcluster.CatalogMetaRaftProviderV1) {
 	t.Helper()
 	authority := raftplacement.NewCatalogMetaAuthorityV1()
 	_, transport := hraft.NewInmemTransport("meta-a")
@@ -3465,15 +3530,27 @@ func newNativewireCatalogMetaAuthority(t testing.TB) (*raftplacement.CatalogMeta
 		case <-time.After(time.Millisecond):
 		}
 	}
-	if _, _, err := provider.SubmitCatalogMetaCommandV1(ctx, nativewireCatalogMetaCommand(t, 0, 1)); err != nil {
+	if _, _, err := provider.SubmitCatalogMetaCommandV1(ctx, nativewireCatalogMetaCommandWithLifecycle(t, 0, 1, lifecycle)); err != nil {
 		t.Fatalf("submit initial catalog meta: %v", err)
 	}
 	return authority, provider
 }
 
 func nativewireCatalogMetaCommand(t testing.TB, expected, epoch uint64) []byte {
+	return nativewireCatalogMetaCommandWithLifecycle(t, expected, epoch, false)
+}
+
+func nativewireCatalogMetaCommandWithLifecycle(t testing.TB, expected, epoch uint64, lifecycle bool) []byte {
 	t.Helper()
+	features := raftplacement.DefaultFeatureSet()
+	if lifecycle {
+		features.Required = append(features.Required, raftcluster.RequiredFeature{
+			Name:    raftcluster.FeatureVectorPartitionLifecycle,
+			Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureVectorPartitionLifecycle],
+		})
+	}
 	record, err := raftplacement.NewCatalogMetaRecordV1(epoch, raftplacement.CatalogV1{
+		Features: features,
 		Groups: []raftplacement.GroupV1{
 			{ID: "group-a", Members: []raftcluster.NodeID{"node-a", "node-c"}, LeaderHint: "node-a"},
 			{ID: "group-b", Members: []raftcluster.NodeID{"node-b", "node-c"}, LeaderHint: "node-b"},

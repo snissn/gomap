@@ -150,6 +150,27 @@ type Provider interface {
 	Config() ResolvedConfig
 }
 
+// FeatureRequirementProviderV1 exposes feature requirements for composite
+// command submitters that do not have one single ResolvedConfig.
+type FeatureRequirementProviderV1 interface {
+	RequiresFeatureV1(FeatureName) (bool, error)
+}
+
+// FeatureSetRequiresV1 reports whether a validated feature set requires at
+// least the supported floor for name.
+func FeatureSetRequiresV1(features FeatureSet, name FeatureName) bool {
+	floor, known := SupportedFeatureFloors[name]
+	if !known {
+		return false
+	}
+	for _, required := range features.Required {
+		if required.Name == name && required.Version.Major == floor.Major && required.Version.Minor >= floor.Minor {
+			return true
+		}
+	}
+	return false
+}
+
 // ProviderFactory creates a provider from a validated single-group config. It
 // is a factory boundary, not an admission or consensus API.
 type ProviderFactory interface {

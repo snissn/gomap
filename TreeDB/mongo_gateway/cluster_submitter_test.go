@@ -75,12 +75,13 @@ type mongoClusterAdmissionSubmitter struct {
 }
 
 type mongoRecordingRaftCommandSubmitter struct {
-	groupID raftcluster.GroupID
-	status  raftcluster.AdmissionStatus
-	err     error
-	discard bool
-	mu      sync.Mutex
-	calls   []mongoRecordingRaftCommandSubmitCall
+	groupID  raftcluster.GroupID
+	features raftcluster.FeatureSet
+	status   raftcluster.AdmissionStatus
+	err      error
+	discard  bool
+	mu       sync.Mutex
+	calls    []mongoRecordingRaftCommandSubmitCall
 }
 
 type mongoRecordingRaftCommandSubmitCall struct {
@@ -89,7 +90,7 @@ type mongoRecordingRaftCommandSubmitCall struct {
 }
 
 func (s *mongoRecordingRaftCommandSubmitter) Config() raftcluster.ResolvedConfig {
-	return raftcluster.ResolvedConfig{GroupID: s.groupID}
+	return raftcluster.ResolvedConfig{GroupID: s.groupID, Features: s.features}
 }
 
 func (s *mongoRecordingRaftCommandSubmitter) ClusterAdmissionStatus(context.Context) (raftcluster.AdmissionStatus, error) {
@@ -2575,6 +2576,29 @@ func TestClusterSubmitterVisibleAckConfirmsCommittedVectorMutationV1(t *testing.
 	submitter.mu.Unlock()
 	if !reflect.DeepEqual(confirmations, []iwire.CommandID{iwire.CommandCreateCollection}) {
 		t.Fatalf("confirmations=%v want create_collection", confirmations)
+	}
+}
+
+func TestLegacyRaftClusterSubmitterMongoRequiresVectorAdmissionFromClusterFeatureV1(t *testing.T) {
+	features := raftcluster.DefaultFeatureSet()
+	features.Required = append(features.Required, raftcluster.RequiredFeature{
+		Name:    raftcluster.FeatureVectorPartitionLifecycle,
+		Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureVectorPartitionLifecycle],
+	})
+	bridge := &mongoRecordingRaftCommandSubmitter{groupID: "group-a", features: features}
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	server.ClusterSubmitter = treenativewire.NewRaftClusterSubmitter(bridge)
+	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(32)
+
+	response := serveCommand(t, server, 325836, bson.D{
+		{Key: "create", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "NotWritablePrimary")
+	assertErrmsgContains(t, response, "vector partition lifecycle admission is not configured")
+	if calls := bridge.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("legacy Mongo constructor submitted %d entries before required lifecycle admission", len(calls))
 	}
 }
 
