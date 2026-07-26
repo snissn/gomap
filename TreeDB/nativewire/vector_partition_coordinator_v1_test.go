@@ -517,7 +517,7 @@ func TestVectorPartitionCoordinatorRetiredRouterCloseErrorIsRetainedV1(t *testin
 	source.router.closeErr = sentinel
 	source.router.status.Manifest.SourceChecksum++ // fail lifecycle after cache admission
 	response, err := coordinator.Search(t.Context(), testVectorPartitionCoordinatorRequestV1(1))
-	if !errors.Is(err, sentinel) || !vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
+	if !errors.Is(err, sentinel) || !errors.Is(err, ErrVectorPartitionCoordinatorUnavailable) || !vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
 		t.Fatalf("response=%+v err=%v", response, err)
 	}
 	if err := coordinator.Close(); !errors.Is(err, sentinel) {
@@ -540,7 +540,9 @@ func TestVectorPartitionCoordinatorRetirementAllowsDistinctReplacementOpenV1(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	coordinator.recordRouterSessionIdentityV1(oldLease, oldRouter.status, "ready-old")
+	if err := coordinator.recordRouterSessionIdentityV1(oldLease, oldRouter.status, "ready-old"); err != nil {
+		t.Fatal(err)
+	}
 	coordinator.retireRouterSessionV1(oldLease)
 	oldClosed := make(chan error, 1)
 	go func() { oldClosed <- oldLease.Close() }()
@@ -559,7 +561,12 @@ func TestVectorPartitionCoordinatorRetirementAllowsDistinctReplacementOpenV1(t *
 	}
 	newStatus := newRouter.status
 	newStatus.ModelDigest = "new-model"
-	coordinator.recordRouterSessionIdentityV1(newLease, newStatus, "ready-new")
+	if err := coordinator.recordRouterSessionIdentityV1(newLease, newStatus, "ready-new"); !errors.Is(err, ErrVectorPartitionCoordinatorGenerationMismatch) {
+		t.Fatalf("changed identity err=%v", err)
+	}
+	if err := coordinator.recordRouterSessionIdentityV1(newLease, newRouter.status, "ready-old"); err != nil {
+		t.Fatal(err)
+	}
 	close(closeBlock)
 	if err := <-oldClosed; err != nil {
 		t.Fatal(err)
@@ -574,8 +581,10 @@ func TestVectorPartitionCoordinatorRetirementAllowsDistinctReplacementOpenV1(t *
 		t.Fatalf("old closes=%d new closes=%d", oldRouter.closeCount, newRouter.closeCount)
 	}
 	sessions := coordinator.Stats().RouterSessions
-	if len(sessions) != 2 || sessions[0].Identity.ReadySetDigest != "ready-new" || sessions[0].Identity.RouterModelDigest != "new-model" ||
-		sessions[1].Identity.ReadySetDigest != "ready-old" || sessions[1].Identity.RouterModelDigest != oldRouter.status.ModelDigest {
+	if len(sessions) != 1 || sessions[0].Identity.ReadySetDigest != "ready-old" || sessions[0].Identity.RouterModelDigest != oldRouter.status.ModelDigest ||
+		sessions[0].ColdOpens != 2 || sessions[0].ManifestOpenAttempts != 2 || sessions[0].Misses != 2 ||
+		sessions[0].ReaderPins != 2 || sessions[0].ReaderReleases != 2 || sessions[0].LeasePins != 2 || sessions[0].LeaseReleases != 2 ||
+		sessions[0].Invalidations != 1 || sessions[0].Closes != 2 {
 		t.Fatalf("session stats=%+v", sessions)
 	}
 }

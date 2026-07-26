@@ -79,13 +79,15 @@ The coordinator is immutable for one accepted catalog/collection/index/source/
 partition epoch. Catalog or generation replacement constructs a replacement
 coordinator and drains the old coordinator before its sources retire; there is
 no cross-epoch or process-global router cache. `Stats` includes a deterministic
-sorted snapshot of physical router sessions with cold-open, hit/miss,
+sorted snapshot of bounded per-placement router accounting with cold-open, hit/miss,
 open-failure, lease, reader-pin/release, invalidation, and close accounting.
-Each successful session binds its accepted ready-set and router-model identity
-once; retirement and a same-epoch reopen cannot overwrite prior-session
-telemetry. `manifest_open_attempts` is the count of source calls that perform
-the manifest/asset validation-open boundary; repeated session hits perform no
-such open.
+The coordinator admits exactly one immutable placement key, so repeated
+same-epoch reopens aggregate into one retained record instead of growing a
+session-history cache. Its first successful session binds the accepted
+ready-set and router-model digests; a reopen with changed digests fails closed
+as a generation mismatch. `manifest_open_attempts` is the cumulative count of
+source calls that perform the manifest/asset validation-open boundary;
+repeated session hits perform no such open.
 
 The execution API is:
 

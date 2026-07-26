@@ -294,8 +294,7 @@ type VectorPartitionCoordinatorV1 struct {
 	sessionCond         *sync.Cond
 	sessions            map[vectorPartitionCoordinatorRouterKeyV1]*vectorPartitionCoordinatorRouterSessionV1
 	loads               map[vectorPartitionCoordinatorRouterKeyV1]*vectorPartitionCoordinatorRouterLoadV1
-	sessionStats        map[uint64]*vectorPartitionCoordinatorRouterSessionStatsV1
-	nextSessionStatsID  uint64
+	sessionStats        map[vectorPartitionCoordinatorRouterKeyV1]*vectorPartitionCoordinatorRouterSessionStatsV1
 	closing             uint64
 	leases              uint64
 	closed              bool
@@ -322,10 +321,11 @@ type vectorPartitionCoordinatorRouterSessionV1 struct {
 	retired, closing bool
 }
 
-// vectorPartitionCoordinatorRouterSessionStatsV1 keeps the sorting tie-breaker
-// private while exposing stable, immutable accepted identities in Stats.
+// vectorPartitionCoordinatorRouterSessionStatsV1 aggregates every reopen for
+// the coordinator's one immutable placement identity. Keying this accounting
+// by the bounded placement key prevents repeated lifecycle rejection from
+// retaining an unbounded session history.
 type vectorPartitionCoordinatorRouterSessionStatsV1 struct {
-	id       uint64
 	accepted bool
 	value    VectorPartitionCoordinatorRouterSessionStatsV1
 }
@@ -369,7 +369,7 @@ func NewVectorPartitionCoordinatorV1(opts VectorPartitionCoordinatorOptionsV1) (
 		limits: limits, groups: groups,
 		sessions:     make(map[vectorPartitionCoordinatorRouterKeyV1]*vectorPartitionCoordinatorRouterSessionV1),
 		loads:        make(map[vectorPartitionCoordinatorRouterKeyV1]*vectorPartitionCoordinatorRouterLoadV1),
-		sessionStats: make(map[uint64]*vectorPartitionCoordinatorRouterSessionStatsV1),
+		sessionStats: make(map[vectorPartitionCoordinatorRouterKeyV1]*vectorPartitionCoordinatorRouterSessionStatsV1),
 	}
 	coordinator.sessionCond = sync.NewCond(&coordinator.sessionMu)
 	return coordinator, nil
@@ -526,30 +526,40 @@ func (c *VectorPartitionCoordinatorV1) routerSessionKeyV1(index string, generati
 }
 
 func (c *VectorPartitionCoordinatorV1) newRouterSessionStatsLocked(key vectorPartitionCoordinatorRouterKeyV1) *vectorPartitionCoordinatorRouterSessionStatsV1 {
-	c.nextSessionStatsID++
-	stats := &vectorPartitionCoordinatorRouterSessionStatsV1{id: c.nextSessionStatsID, value: VectorPartitionCoordinatorRouterSessionStatsV1{Identity: VectorPartitionCoordinatorRouterSessionIdentityV1{
+	if stats := c.sessionStats[key]; stats != nil {
+		return stats
+	}
+	stats := &vectorPartitionCoordinatorRouterSessionStatsV1{value: VectorPartitionCoordinatorRouterSessionStatsV1{Identity: VectorPartitionCoordinatorRouterSessionIdentityV1{
 		Database: key.database, Catalog: key.catalog, Collection: key.collection,
 		IndexName: key.index, IndexDefinitionDigest: key.indexDefinitionDigest,
 		SourceGeneration: key.sourceGeneration, SourceChecksum: key.sourceChecksum,
 		SourceSchemaHash: key.sourceSchemaHash, SourceRowCount: key.sourceRowCount,
 		PartitionGeneration: key.generation,
 	}}}
-	c.sessionStats[stats.id] = stats
+	c.sessionStats[key] = stats
 	return stats
 }
 
-func (c *VectorPartitionCoordinatorV1) recordRouterSessionIdentityV1(lease *vectorPartitionCoordinatorRouterLeaseV1, status collections.VectorPartitionRouterRuntimeStatusV1, readySetDigest string) {
-	if lease == nil || lease.coordinator != c {
-		return
+func (c *VectorPartitionCoordinatorV1) recordRouterSessionIdentityV1(lease *vectorPartitionCoordinatorRouterLeaseV1, status collections.VectorPartitionRouterRuntimeStatusV1, readySetDigest string) error {
+	if lease == nil || lease.coordinator != c || lease.session == nil {
+		return ErrVectorPartitionCoordinatorUnavailable
 	}
 	c.sessionMu.Lock()
+	defer c.sessionMu.Unlock()
 	stats := lease.session.stats
-	if stats != nil && !stats.accepted {
+	if stats == nil {
+		return ErrVectorPartitionCoordinatorUnavailable
+	}
+	if !stats.accepted {
 		stats.value.Identity.ReadySetDigest = readySetDigest
 		stats.value.Identity.RouterModelDigest = status.ModelDigest
 		stats.accepted = true
+		return nil
 	}
-	c.sessionMu.Unlock()
+	if stats.value.Identity.ReadySetDigest != readySetDigest || stats.value.Identity.RouterModelDigest != status.ModelDigest {
+		return ErrVectorPartitionCoordinatorGenerationMismatch
+	}
+	return nil
 }
 
 func (c *VectorPartitionCoordinatorV1) retireRouterSessionV1(lease *vectorPartitionCoordinatorRouterLeaseV1) {
@@ -758,7 +768,7 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 	}
 	defer func() {
 		if closeErr := routerLease.Close(); closeErr != nil {
-			resultErr = errors.Join(resultErr, closeErr)
+			resultErr = errors.Join(resultErr, c.wrapError(fmt.Errorf("%w: close router: %w", ErrVectorPartitionCoordinatorUnavailable, closeErr), ""))
 		}
 	}()
 	router := routerLease.session.router
@@ -772,7 +782,10 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 		c.retireRouterSessionV1(routerLease)
 		return response, c.wrapError(err, "")
 	}
-	c.recordRouterSessionIdentityV1(routerLease, status, replicatedReadySetDigest)
+	if err := c.recordRouterSessionIdentityV1(routerLease, status, replicatedReadySetDigest); err != nil {
+		c.retireRouterSessionV1(routerLease)
+		return response, c.wrapError(err, "")
+	}
 
 	routerStarted := time.Now()
 	routed, err := router.SearchWithContextV1(requestCtx, request.Query, collections.VectorPartitionRouterSearchOptionsV1{
@@ -1797,12 +1810,11 @@ func (c *VectorPartitionCoordinatorV1) Stats() VectorPartitionCoordinatorStatsV1
 	c.stats.mu.Unlock()
 	c.sessionMu.Lock()
 	type sessionStat struct {
-		id    uint64
 		value VectorPartitionCoordinatorRouterSessionStatsV1
 	}
 	sessions := make([]sessionStat, 0, len(c.sessionStats))
 	for _, session := range c.sessionStats {
-		sessions = append(sessions, sessionStat{id: session.id, value: session.value})
+		sessions = append(sessions, sessionStat{value: session.value})
 	}
 	c.sessionMu.Unlock()
 	sort.Slice(sessions, func(i, j int) bool {
@@ -1819,6 +1831,21 @@ func (c *VectorPartitionCoordinatorV1) Stats() VectorPartitionCoordinatorStatsV1
 		if left.IndexName != right.IndexName {
 			return left.IndexName < right.IndexName
 		}
+		if left.IndexDefinitionDigest != right.IndexDefinitionDigest {
+			return left.IndexDefinitionDigest < right.IndexDefinitionDigest
+		}
+		if left.SourceGeneration != right.SourceGeneration {
+			return left.SourceGeneration < right.SourceGeneration
+		}
+		if left.SourceChecksum != right.SourceChecksum {
+			return left.SourceChecksum < right.SourceChecksum
+		}
+		if left.SourceSchemaHash != right.SourceSchemaHash {
+			return left.SourceSchemaHash < right.SourceSchemaHash
+		}
+		if left.SourceRowCount != right.SourceRowCount {
+			return left.SourceRowCount < right.SourceRowCount
+		}
 		if left.PartitionGeneration != right.PartitionGeneration {
 			return left.PartitionGeneration < right.PartitionGeneration
 		}
@@ -1828,7 +1855,7 @@ func (c *VectorPartitionCoordinatorV1) Stats() VectorPartitionCoordinatorStatsV1
 		if left.RouterModelDigest != right.RouterModelDigest {
 			return left.RouterModelDigest < right.RouterModelDigest
 		}
-		return sessions[i].id < sessions[j].id
+		return false
 	})
 	stats.RouterSessions = make([]VectorPartitionCoordinatorRouterSessionStatsV1, len(sessions))
 	for i := range sessions {
