@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -251,7 +252,10 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		return err
 	}
 	raw = append(raw, '\n')
-	name := fmt.Sprintf("vector_partition_m8_%s.json", cfg.headSHA[:provenanceSuffixBytes])
+	name, err := m8ArtifactNameV1(cfg, fixture)
+	if err != nil {
+		return err
+	}
 	path := filepath.Join(cfg.out, name)
 	if err := os.WriteFile(path, raw, 0o644); err != nil {
 		return err
@@ -262,6 +266,18 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		_, err = fmt.Fprintf(stdout, "M8 status=%s artifact=%s rows=%d\n", report.Status, path, len(report.Rows))
 	}
 	return err
+}
+
+func m8ArtifactNameV1(cfg config, fixture fixtureManifest) (string, error) {
+	identity, err := json.Marshal(struct {
+		Fixture fixtureManifest
+		Config  m8ProductionConfigEvidenceV1
+	}{fixture, m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: cfg.concurrency, Warmup: cfg.warmup, EfSearch: cfg.efSearch, Seed: cfg.seed}})
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(identity)
+	return fmt.Sprintf("vector_partition_m8_%s_%x.json", cfg.headSHA[:provenanceSuffixBytes], digest[:6]), nil
 }
 
 type m8ProfileCaptureV1 struct {

@@ -78,6 +78,9 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShard
 	}
 	frame, err = readVectorPartitionShardSearchTCPFrameV1(conn, d.maxFrame)
 	if err != nil {
+		if request.DeadlineUnixNano != 0 && !time.Now().Before(time.Unix(0, request.DeadlineUnixNano)) {
+			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorDeadlineV1, GroupID: request.TargetGroupID, Err: context.DeadlineExceeded}
+		}
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, err)
 	}
 	if frame.Request != nil || (frame.Response == nil) == (frame.Error == nil) {
