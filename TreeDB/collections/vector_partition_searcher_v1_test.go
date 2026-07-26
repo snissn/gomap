@@ -290,12 +290,16 @@ func TestVectorPartitionLocalSearcherV1ScratchBoundIncludesRowSizedHNSWState(t *
 func TestVectorPartitionHNSWSearchScratchIncludesConvertedResultsV1(t *testing.T) {
 	const (
 		rows         = 17
+		dimensions   = 29
 		vectorStride = 32
 		degree       = 8
 		topK         = 7
 		efSearch     = 11
 	)
-	got, err := vectorPartitionHNSWSearchScratchBytesV1(rows, vectorStride, degree, topK, efSearch)
+	prepared := &columnHNSWSearchPackPreparedView{Header: columnHNSWSearchPackHeader{
+		Rows: rows, Dimensions: dimensions, VectorStride: vectorStride, M: degree / 2, EfSearch: efSearch,
+	}}
+	got, err := vectorPartitionSearchScratchBytesV1(VectorPartitionSearchOptionsV1{TopK: topK, EfSearch: efSearch}, prepared, 0, dimensions, 0, prepared.Header)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,8 +317,26 @@ func TestVectorPartitionHNSWSearchScratchIncludesConvertedResultsV1(t *testing.T
 		uint64(degree)*uint64(unsafe.Sizeof(float32(0))) +
 		uint64(vectorStride)*uint64(unsafe.Sizeof(float32(0)))
 	wantConverted := uint64(topK) * uint64(unsafe.Sizeof(VectorPartitionSearchResultV1{}))
-	if got-withoutConverted != wantConverted {
-		t.Fatalf("converted result scratch=%d want=%d (total=%d)", got-withoutConverted, wantConverted, got)
+	wantCanonicalQuery := uint64(dimensions) * uint64(unsafe.Sizeof(float32(0)))
+	if got-withoutConverted != wantConverted+wantCanonicalQuery {
+		t.Fatalf("converted result and canonical query scratch=%d want=%d (total=%d)", got-withoutConverted, wantConverted+wantCanonicalQuery, got)
+	}
+}
+
+func TestVectorPartitionExactSearchScratchIncludesCanonicalQueryV1(t *testing.T) {
+	const (
+		rows       = 3
+		dimensions = 29
+		topK       = 3
+	)
+	got, err := vectorPartitionSearchScratchBytesV1(VectorPartitionSearchOptionsV1{TopK: topK}, nil, rows, dimensions, 0, columnHNSWSearchPackHeader{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutCanonicalQuery := uint64(topK*2) * uint64(unsafe.Sizeof(VectorPartitionSearchResultV1{}))
+	wantCanonicalQuery := uint64(dimensions) * uint64(unsafe.Sizeof(float32(0)))
+	if got-withoutCanonicalQuery != wantCanonicalQuery {
+		t.Fatalf("canonical query scratch=%d want=%d (total=%d)", got-withoutCanonicalQuery, wantCanonicalQuery, got)
 	}
 }
 
@@ -327,11 +349,11 @@ func TestVectorPartitionConservativeSearchScratchCoversActualRoutesV1(t *testing
 	prepared := &columnHNSWSearchPackPreparedView{Header: columnHNSWSearchPackHeader{
 		Rows: 17, Dimensions: 4096, VectorStride: 4096, M: 256, EfSearch: 128,
 	}}
-	actualHNSW, err := vectorPartitionSearchScratchBytesV1(opts, prepared, 0, 0, prepared.Header)
+	actualHNSW, err := vectorPartitionSearchScratchBytesV1(opts, prepared, 0, 4096, 0, prepared.Header)
 	if err != nil {
 		t.Fatal(err)
 	}
-	actualExact, err := vectorPartitionSearchScratchBytesV1(opts, nil, 17, 0, columnHNSWSearchPackHeader{})
+	actualExact, err := vectorPartitionSearchScratchBytesV1(opts, nil, 17, 4096, 0, columnHNSWSearchPackHeader{})
 	if err != nil {
 		t.Fatal(err)
 	}

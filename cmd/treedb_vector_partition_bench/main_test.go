@@ -1250,9 +1250,12 @@ func TestM8CoordinatorResponseCanonicalShapeFailsClosedV1(t *testing.T) {
 		ProbedPartitions: []uint32{0, 1},
 	}
 	response.ProbedGroups = append(response.ProbedGroups, "group-a")
-	manifest := collections.VectorPartitionManifestV1{PartitionCount: 4, Placements: []collections.VectorPartitionPlacementV1{
+	manifest := collections.VectorPartitionManifestV1{SourceRowCount: 3, PartitionCount: 4, Placements: []collections.VectorPartitionPlacementV1{
 		{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-a"},
 		{PartitionID: 2, GroupID: "group-b"}, {PartitionID: 3, GroupID: "group-b"},
+	}, Memberships: []collections.VectorPartitionMembershipV1{
+		{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 1, PartitionID: 1},
+		{VectorOrdinal: 2, PartitionID: 2},
 	}}
 	if got, err := m8ValidateCoordinatorResponseV1(response, manifest, 2, 2); err != nil || len(got) != 2 {
 		t.Fatalf("valid response got=%+v err=%v", got, err)
@@ -1277,8 +1280,15 @@ func TestM8CoordinatorResponseCanonicalShapeFailsClosedV1(t *testing.T) {
 	}
 	response.ProbedGroups = append(response.ProbedGroups[:0], "group-a")
 	response.Neighbors = response.Neighbors[:1]
-	if got, err := m8ValidateCoordinatorResponseV1(response, manifest, 2, 2); err != nil || len(got) != 1 {
-		t.Fatalf("valid short response got=%+v err=%v", got, err)
+	if _, err := m8ValidateCoordinatorResponseV1(response, manifest, 2, 2); err == nil {
+		t.Fatal("accepted truncated response for two unique selected rows")
+	}
+	sparseManifest := manifest
+	sparseManifest.SourceRowCount = 1
+	sparseManifest.Memberships = []collections.VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}}
+	sparseManifest.OverlapMemberships = []collections.VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 1}}
+	if got, err := m8ValidateCoordinatorResponseV1(response, sparseManifest, 2, 2); err != nil || len(got) != 1 {
+		t.Fatalf("valid sparse response got=%+v err=%v", got, err)
 	}
 	response.Neighbors = append(response.Neighbors,
 		nativewire.VectorPartitionCoordinatorNeighborV1{ID: "b", Score: .8},

@@ -236,6 +236,7 @@ func (s *VectorPartitionLocalSearcherV1) SearchPreflightV1(opts VectorPartitionS
 	status := s.statusLockedV1()
 	prepared := s.prepared
 	exactRows := len(s.asset.IDs)
+	dimensions := s.asset.Dimensions
 	maxStableIDBytes := s.maxStableIDBytes
 	var header columnHNSWSearchPackHeader
 	if prepared != nil {
@@ -243,16 +244,16 @@ func (s *VectorPartitionLocalSearcherV1) SearchPreflightV1(opts VectorPartitionS
 	}
 	s.mu.Unlock()
 
-	scratchBytes, err := vectorPartitionSearchScratchBytesV1(opts, prepared, exactRows, maxStableIDBytes, header)
+	scratchBytes, err := vectorPartitionSearchScratchBytesV1(opts, prepared, exactRows, dimensions, maxStableIDBytes, header)
 	return status, scratchBytes, err
 }
 
-func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, prepared *columnHNSWSearchPackPreparedView, exactRows, maxStableIDBytes int, header columnHNSWSearchPackHeader) (uint64, error) {
+func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, prepared *columnHNSWSearchPackPreparedView, exactRows, dimensions, maxStableIDBytes int, header columnHNSWSearchPackHeader) (uint64, error) {
 	if opts.MaxStableIDBytes > 0 && maxStableIDBytes > opts.MaxStableIDBytes {
 		return 0, fmt.Errorf("%w: stable ID bytes=%d exceeds limit=%d", ErrVectorPartitionSearchUnavailable, maxStableIDBytes, opts.MaxStableIDBytes)
 	}
 	if prepared == nil {
-		return vectorPartitionExactSearchScratchBytesV1(exactRows, opts.TopK)
+		return vectorPartitionExactSearchScratchBytesV1(exactRows, dimensions, opts.TopK)
 	}
 	rowCount := header.Rows
 	if rowCount < 0 || header.VectorStride < 0 || header.M < 0 {
@@ -286,11 +287,11 @@ func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, pr
 		// index definition has a much larger M.
 		degree = rowCount
 	}
-	return vectorPartitionHNSWSearchScratchBytesV1(rowCount, header.VectorStride, degree, topK, efSearch)
+	return vectorPartitionHNSWSearchScratchBytesV1(rowCount, header.Dimensions, header.VectorStride, degree, topK, efSearch)
 }
 
-func vectorPartitionExactSearchScratchBytesV1(rows, topK int) (uint64, error) {
-	if rows < 0 || topK < 1 {
+func vectorPartitionExactSearchScratchBytesV1(rows, dimensions, topK int) (uint64, error) {
+	if rows < 0 || dimensions <= 0 || topK < 1 {
 		return 0, ErrVectorPartitionSearchUnavailable
 	}
 	width := uint64(unsafe.Sizeof(VectorPartitionSearchResultV1{}))
@@ -302,9 +303,18 @@ func vectorPartitionExactSearchScratchBytesV1(rows, topK int) (uint64, error) {
 	if err != nil || math.MaxUint64-selectedBytes < selectedBytes {
 		return 0, ErrVectorPartitionSearchUnavailable
 	}
+	queryBytes, err := checkedVectorPartitionScratchProductV1(uint64(dimensions), uint64(unsafe.Sizeof(float32(0))))
+	if err != nil {
+		return 0, err
+	}
 	// Preserve the original row-sized conservative floor while covering the
 	// bounded heap and final output slice, which coexist during heap draining.
-	return max(rowBytes, selectedBytes+selectedBytes), nil
+	// The canonical FP32 query copy remains live through the complete scan.
+	resultBytes := max(rowBytes, selectedBytes+selectedBytes)
+	if math.MaxUint64-resultBytes < queryBytes {
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
+	return resultBytes + queryBytes, nil
 }
 
 // VectorPartitionConservativeSearchScratchBytesV1 returns a transport-neutral
@@ -316,7 +326,7 @@ func VectorPartitionConservativeSearchScratchBytesV1(rows, dimensions int, opts 
 	if rows < 0 || dimensions <= 0 || opts.TopK < 1 || opts.EfSearch < opts.TopK || opts.MaxStableIDBytes < 0 {
 		return 0, ErrVectorPartitionSearchUnavailable
 	}
-	exactBytes, err := vectorPartitionExactSearchScratchBytesV1(rows, opts.TopK)
+	exactBytes, err := vectorPartitionExactSearchScratchBytesV1(rows, dimensions, opts.TopK)
 	if err != nil {
 		return 0, err
 	}
@@ -331,15 +341,15 @@ func VectorPartitionConservativeSearchScratchBytesV1(rows, dimensions int, opts 
 	}
 	// Search caps the doubled HNSW degree at row count. Using row count here
 	// therefore covers every persisted M without requiring shard-local headers.
-	hnswBytes, err := vectorPartitionHNSWSearchScratchBytesV1(rows, vectorStride, rows, topK, efSearch)
+	hnswBytes, err := vectorPartitionHNSWSearchScratchBytesV1(rows, dimensions, vectorStride, rows, topK, efSearch)
 	if err != nil {
 		return 0, err
 	}
 	return max(exactBytes, hnswBytes), nil
 }
 
-func vectorPartitionHNSWSearchScratchBytesV1(rowCount, vectorStride, degree, topK, efSearch int) (uint64, error) {
-	if rowCount < 0 || vectorStride < 0 || degree < 0 || topK < 0 || efSearch < 0 {
+func vectorPartitionHNSWSearchScratchBytesV1(rowCount, dimensions, vectorStride, degree, topK, efSearch int) (uint64, error) {
+	if rowCount < 0 || dimensions <= 0 || vectorStride < 0 || degree < 0 || topK < 0 || efSearch < 0 {
 		return 0, ErrVectorPartitionSearchUnavailable
 	}
 	frontier := columnVectorGraphNativeSearchFrontierCapacity(rowCount, degree, topK, efSearch)
@@ -376,6 +386,9 @@ func vectorPartitionHNSWSearchScratchBytesV1(rowCount, vectorStride, degree, top
 		{degree, unsafe.Sizeof(uint32(0))},
 		{degree, unsafe.Sizeof(float32(0))},
 		{vectorStride, unsafe.Sizeof(float32(0))},
+		// Canonical result scoring normalizes the request query into its own
+		// FP32 buffer after native traversal; it does not reuse native scratch.
+		{dimensions, unsafe.Sizeof(float32(0))},
 	} {
 		if err := add(item.count, item.width); err != nil {
 			return 0, err

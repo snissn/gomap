@@ -919,6 +919,21 @@ func m8ValidateCoordinatorResponseV1(response nativewire.VectorPartitionCoordina
 		}
 		seenGroups[string(group)] = struct{}{}
 	}
+	selectedOrdinals := make(map[uint64]struct{})
+	for _, memberships := range [][]collections.VectorPartitionMembershipV1{manifest.Memberships, manifest.OverlapMemberships} {
+		for _, membership := range memberships {
+			if membership.PartitionID >= manifest.PartitionCount || membership.VectorOrdinal >= manifest.SourceRowCount {
+				return nil, errors.New("manifest contains an invalid coordinator membership")
+			}
+			if _, selected := seenPartitions[membership.PartitionID]; selected {
+				selectedOrdinals[membership.VectorOrdinal] = struct{}{}
+			}
+		}
+	}
+	expectedNeighbors := min(topK, len(selectedOrdinals))
+	if len(response.Neighbors) != expectedNeighbors {
+		return nil, fmt.Errorf("truncated coordinator response: neighbors=%d want=%d", len(response.Neighbors), expectedNeighbors)
+	}
 	return raw, nil
 }
 
