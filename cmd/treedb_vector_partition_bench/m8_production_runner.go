@@ -416,6 +416,16 @@ func m8ExactPartitionUnionV1(ctx context.Context, assets *m8ProductionMultiGroup
 	if assets == nil || len(assets.manifest.Placements) != int(assets.manifest.PartitionCount) {
 		return nil, errors.New("incomplete M8 partition manifest")
 	}
+	seen := make(map[uint32]struct{}, assets.manifest.PartitionCount)
+	for _, placement := range assets.manifest.Placements {
+		if placement.PartitionID >= assets.manifest.PartitionCount {
+			return nil, errors.New("invalid M8 partition placement")
+		}
+		if _, duplicate := seen[placement.PartitionID]; duplicate {
+			return nil, errors.New("duplicate M8 partition placement")
+		}
+		seen[placement.PartitionID] = struct{}{}
+	}
 	merged := make([]neighbor, 0, len(assets.manifest.Placements)*topK)
 	for partition := 0; partition < len(assets.manifest.Placements); partition++ {
 		searcher, err := assets.collection.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, assets.manifest.Generation, uint32(partition))
