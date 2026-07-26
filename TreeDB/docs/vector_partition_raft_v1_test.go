@@ -119,6 +119,81 @@ func TestDocsVectorPartitionCoordinatorM6Contract(t *testing.T) {
 	}
 }
 
+func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
+	root, _ := repoRoots(t)
+	checks := []struct {
+		path    string
+		needles []string
+	}{
+		{
+			path: filepath.Join(root, "docs", "spec", "vector-partition-m8-production-topology.md"),
+			needles: []string{
+				"Status: internal, pre-alpha, experimental/off",
+				"VectorPartitionM8ProductionMultiGroupV1",
+				"real three-node HashiCorp Raft data groups",
+				"serialized M5 TCP services",
+				"production_multi_group",
+				"There is no standalone M8 administration command",
+				"-m8-existing-db DIR",
+				"MUST return no partial neighbors",
+				"stable-ID/hash attribution are currently reported `unsupported`",
+				"explicitly accepts the narrower result",
+			},
+		},
+		{
+			path: filepath.Join(root, "docs", "performance", "vector-partition-m8.md"),
+			needles: []string{
+				"7733485cc216dee4c0a1acc907cf71e609d11b7b",
+				"experimental/off; north-star gates did not pass",
+				"1,000,000 / 1 / 16",
+				"52,734 MB",
+				"e63bf9f8cb2f830504b97be3f5cc9c2ead7525ec9ecf61fd0979390fa9f6ece5",
+				"unavailable endpoint returned error, zero neighbors, zero groups",
+				"Enablement stays off",
+			},
+		},
+	}
+	for _, check := range checks {
+		b, err := os.ReadFile(check.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, needle := range check.needles {
+			if !strings.Contains(string(b), needle) {
+				t.Fatalf("%s missing %q", check.path, needle)
+			}
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "docs", "performance", "vector-partition-m8-evidence.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evidence struct {
+		Status           string `json:"status"`
+		FeatureEnabled   bool   `json:"feature_enabled"`
+		MeasuredCodeHead string `json:"measured_code_head"`
+		CheckedIn10K     struct {
+			Vectors            int     `json:"vectors"`
+			Queries            int     `json:"queries"`
+			QuarterProbeRecall float64 `json:"quarter_probe_best_recall_at_10"`
+		} `json:"checked_in_10k"`
+		Retained1M struct {
+			Vectors int `json:"vectors"`
+			Groups  int `json:"raft_groups"`
+		} `json:"retained_1m"`
+	}
+	if err := json.Unmarshal(raw, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Status != "experimental_off_gate_failures" || evidence.FeatureEnabled ||
+		evidence.MeasuredCodeHead != "7733485cc216dee4c0a1acc907cf71e609d11b7b" ||
+		evidence.CheckedIn10K.Vectors != 10_000 || evidence.CheckedIn10K.Queries != 128 ||
+		evidence.CheckedIn10K.QuarterProbeRecall != 0.24140625 ||
+		evidence.Retained1M.Vectors != 1_000_000 || evidence.Retained1M.Groups != 4 {
+		t.Fatalf("M8 evidence boundary changed: %+v", evidence)
+	}
+}
+
 func TestVectorPartitionM1EvidenceSchema(t *testing.T) {
 	root, _ := repoRoots(t)
 	raw, err := os.ReadFile(filepath.Join(root, "docs", "performance", "vector-partition-m1-evidence.json"))

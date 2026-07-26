@@ -79,8 +79,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     validation, deterministic stable-ID merge, all-or-error cancellation, and
     scoped local-service evidence.
 - `TreeDB/docs/spec/vector-partition-m8-production-topology.md`
-  - #3917 M8 TCP M5 transport foundation and the boundary between existing
-    simulation/local-service artifacts and future production multi-group evidence.
+  - #3917 M8 real multi-group Raft/TCP/lifecycle integration contract,
+    retained-asset boundary, operator model, benchmark evidence rules, and
+    experimental/off enablement gate.
 
 - `TreeDB/docs/spec/architecture.md`
   - system model, components, directory layout, side stores, lock model.
