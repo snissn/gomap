@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"container/heap"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -484,6 +485,44 @@ type m8CanonicalRefResultV1 struct {
 	Score float32
 }
 
+type m8CanonicalRefHeapEntryV1 struct {
+	result m8CanonicalRefResultV1
+	hash   uint64
+	index  int
+	next   *m8CanonicalRefHeapEntryV1
+}
+
+type m8CanonicalRefHeapV1 []*m8CanonicalRefHeapEntryV1
+
+func (h m8CanonicalRefHeapV1) Len() int { return len(h) }
+func (h m8CanonicalRefHeapV1) Less(i, j int) bool {
+	return m8CanonicalRefBetterV1(h[j].result, h[i].result)
+}
+func (h m8CanonicalRefHeapV1) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].index, h[j].index = i, j
+}
+func (h *m8CanonicalRefHeapV1) Push(value any) {
+	entry := value.(*m8CanonicalRefHeapEntryV1)
+	entry.index = len(*h)
+	*h = append(*h, entry)
+}
+func (h *m8CanonicalRefHeapV1) Pop() any {
+	old := *h
+	entry := old[len(old)-1]
+	old[len(old)-1] = nil
+	entry.index = -1
+	*h = old[:len(old)-1]
+	return entry
+}
+
+type m8CanonicalRefTopKV1 struct {
+	topK          int
+	heap          m8CanonicalRefHeapV1
+	byHash        map[uint64]*m8CanonicalRefHeapEntryV1
+	idComparisons uint64
+}
+
 const m8CanonicalResultContractV1 = collections.VectorPartitionCanonicalScoreContractV1
 
 func m8CanonicalResultsV1(in []m8CanonicalResultV1, topK int) []m8CanonicalResultV1 {
@@ -553,27 +592,83 @@ func m8CanonicalRefResultsV1(results []m8CanonicalRefResultV1, topK int) []m8Can
 	return results
 }
 
-func m8AppendBoundedCanonicalRefV1(results []m8CanonicalRefResultV1, candidate m8CanonicalRefResultV1, topK int) []m8CanonicalRefResultV1 {
-	if topK <= 0 || len(candidate.ID) == 0 || math.IsNaN(float64(candidate.Score)) || math.IsInf(float64(candidate.Score), 0) {
+func m8CanonicalRefBetterV1(a, b m8CanonicalRefResultV1) bool {
+	return a.Score > b.Score || a.Score == b.Score && bytes.Compare(a.ID, b.ID) < 0
+}
+
+func m8CanonicalRefIDHashV1(id []byte) uint64 {
+	const (
+		offset = uint64(14695981039346656037)
+		prime  = uint64(1099511628211)
+	)
+	hash := offset
+	for _, value := range id {
+		hash ^= uint64(value)
+		hash *= prime
+	}
+	return hash
+}
+
+func newM8CanonicalRefTopKV1(topK int) *m8CanonicalRefTopKV1 {
+	return &m8CanonicalRefTopKV1{topK: topK, heap: make(m8CanonicalRefHeapV1, 0, max(0, topK)), byHash: make(map[uint64]*m8CanonicalRefHeapEntryV1, max(0, topK))}
+}
+
+func (top *m8CanonicalRefTopKV1) add(candidate m8CanonicalRefResultV1) bool {
+	if top == nil || top.topK <= 0 || len(candidate.ID) == 0 || math.IsNaN(float64(candidate.Score)) || math.IsInf(float64(candidate.Score), 0) {
+		return false
+	}
+	hash := m8CanonicalRefIDHashV1(candidate.ID)
+	for entry := top.byHash[hash]; entry != nil; entry = entry.next {
+		top.idComparisons++
+		if bytes.Equal(entry.result.ID, candidate.ID) {
+			if candidate.Score > entry.result.Score {
+				entry.result.Score = candidate.Score
+				heap.Fix(&top.heap, entry.index)
+			}
+			return true
+		}
+	}
+	if len(top.heap) < top.topK {
+		entry := &m8CanonicalRefHeapEntryV1{result: candidate, hash: hash, index: -1, next: top.byHash[hash]}
+		top.byHash[hash] = entry
+		heap.Push(&top.heap, entry)
+		return true
+	}
+	worst := top.heap[0]
+	if !m8CanonicalRefBetterV1(candidate, worst.result) {
+		return true
+	}
+	chain := top.byHash[worst.hash]
+	if chain == worst {
+		if worst.next == nil {
+			delete(top.byHash, worst.hash)
+		} else {
+			top.byHash[worst.hash] = worst.next
+		}
+	} else {
+		for chain != nil && chain.next != worst {
+			chain = chain.next
+		}
+		if chain == nil {
+			return false
+		}
+		chain.next = worst.next
+	}
+	worst.result, worst.hash, worst.next = candidate, hash, top.byHash[hash]
+	top.byHash[hash] = worst
+	heap.Fix(&top.heap, worst.index)
+	return true
+}
+
+func (top *m8CanonicalRefTopKV1) results() []m8CanonicalRefResultV1 {
+	if top == nil || top.topK <= 0 {
 		return nil
 	}
-	for i := range results {
-		if bytes.Equal(results[i].ID, candidate.ID) {
-			if candidate.Score > results[i].Score {
-				results[i] = candidate
-			}
-			return m8CanonicalRefResultsV1(results, topK)
-		}
+	results := make([]m8CanonicalRefResultV1, len(top.heap))
+	for i := range top.heap {
+		results[i] = top.heap[i].result
 	}
-	if len(results) == topK {
-		worst := results[len(results)-1]
-		if candidate.Score < worst.Score || candidate.Score == worst.Score && bytes.Compare(candidate.ID, worst.ID) >= 0 {
-			return results
-		}
-		results[len(results)-1] = candidate
-		return m8CanonicalRefResultsV1(results, topK)
-	}
-	return m8CanonicalRefResultsV1(append(results, candidate), topK)
+	return m8CanonicalRefResultsV1(results, top.topK)
 }
 
 func m8MaterializeCanonicalRefsV1(refs []m8CanonicalRefResultV1) []m8CanonicalResultV1 {
@@ -602,15 +697,17 @@ func m8ExactTruthV1(collection *collections.Collection, manifest collections.Vec
 		if scoreErr != nil {
 			return nil, fmt.Errorf("M8 canonical source oracle query=%d: %w", i, scoreErr)
 		}
-		refs := make([]m8CanonicalRefResultV1, 0, min(topK, len(rows)))
+		refs := newM8CanonicalRefTopKV1(min(topK, len(rows)))
 		for ordinal, row := range rows {
 			score, scoreErr := scorer.ScoreV1(row.Values)
 			if scoreErr != nil {
 				return nil, fmt.Errorf("M8 canonical source oracle query=%d ordinal=%d: %w", i, ordinal, scoreErr)
 			}
-			refs = m8AppendBoundedCanonicalRefV1(refs, m8CanonicalRefResultV1{ID: row.DocumentID, Score: score}, topK)
+			if !refs.add(m8CanonicalRefResultV1{ID: row.DocumentID, Score: score}) {
+				return nil, fmt.Errorf("M8 canonical source oracle query=%d ordinal=%d: retain canonical result", i, ordinal)
+			}
 		}
-		truth[i] = m8MaterializeCanonicalRefsV1(refs)
+		truth[i] = m8MaterializeCanonicalRefsV1(refs.results())
 		if len(truth[i]) != min(topK, len(rows)) {
 			return nil, fmt.Errorf("M8 canonical source oracle query=%d results=%d", i, len(truth[i]))
 		}

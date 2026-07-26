@@ -1109,7 +1109,7 @@ func TestM8BenchmarkWorkCapAndOverflowV1(t *testing.T) {
 	if err != nil || plan.QueryRequests != 149 || plan.MeasuredQueryRequests != 80 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 65 {
 		t.Fatalf("M8 work plan=%+v err=%v", plan, err)
 	}
-	if plan.RetainedCoordinatorCells != 8 || plan.RetainedCoordinatorResults != 80 || plan.FixtureResidentBytes == 0 || plan.SourceSnapshotBytes == 0 || plan.ExactTruthBytes == 0 || plan.RetainedCoordinatorBytes == 0 || plan.ModeledPeakBytes == 0 {
+	if plan.RetainedCoordinatorCells != 8 || plan.RetainedCoordinatorResults != 80 || plan.FixtureResidentBytes == 0 || plan.SourceSnapshotBytes == 0 || plan.ExactTruthBytes == 0 || plan.RetainedCoordinatorBytes == 0 || plan.RetainedAttributionMatrices != 5 || plan.RetainedAttributionResults != 50 || plan.RetainedAttributionBytes == 0 || plan.ModeledPeakBytes == 0 {
 		t.Fatalf("incomplete M8 memory plan=%+v", plan)
 	}
 	if _, err := validateM8BenchmarkWork(cfg, manifest, 148, math.MaxInt64); err == nil {
@@ -1120,6 +1120,29 @@ func TestM8BenchmarkWorkCapAndOverflowV1(t *testing.T) {
 	}
 	if _, err := validateM8BenchmarkWork(config{overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}, fixtureManifest{Vectors: 1, Queries: math.MaxInt, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64); err == nil {
 		t.Fatal("accepted overflowing M8 preflight accounting")
+	}
+}
+
+func TestM8RetainedAttributionResultsRespectMemoryCapV1(t *testing.T) {
+	cfg := config{overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1}, topK: 256}
+	manifest := fixtureManifest{Vectors: 10_000, Queries: 50_000, Dimensions: 8}
+	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	measurementBytes, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	measurementPeak, err := memoryScaleCeil(measurementBytes, memorySlackNumerator, memorySlackDenominator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if measurementPeak >= maxFixtureBytes || plan.RetainedAttributionMatrices != 5 || plan.RetainedAttributionResults != 64_000_000 || plan.RetainedAttributionBytes < 2_500_000_000 || plan.ModeledPeakBytes <= maxFixtureBytes {
+		t.Fatalf("M8 attribution retention plan=%+v measurement_peak=%d", plan, measurementPeak)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, maxFixtureBytes); err == nil || !strings.Contains(err.Error(), "retained_attribution_results=64000000") {
+		t.Fatalf("accepted oversized retained attribution sweep: %v", err)
 	}
 }
 
@@ -1250,14 +1273,16 @@ func TestM8CanonicalRefPathMatchesOwnedTieDedupeAndLifetimeV1(t *testing.T) {
 		{ID: "lower", Score: math.Float32frombits(math.Float32bits(0.9) - 1)},
 	}
 	var owned []m8CanonicalResultV1
-	var refs []m8CanonicalRefResultV1
+	refs := newM8CanonicalRefTopKV1(4)
 	refIDs := make([][]byte, len(candidates))
 	for i, candidate := range candidates {
 		owned = m8AppendBoundedCanonicalV1(owned, candidate, 4)
 		refIDs[i] = []byte(candidate.ID)
-		refs = m8AppendBoundedCanonicalRefV1(refs, m8CanonicalRefResultV1{ID: refIDs[i], Score: candidate.Score}, 4)
+		if !refs.add(m8CanonicalRefResultV1{ID: refIDs[i], Score: candidate.Score}) {
+			t.Fatalf("rejected ref candidate %+v", candidate)
+		}
 	}
-	got := m8MaterializeCanonicalRefsV1(refs)
+	got := m8MaterializeCanonicalRefsV1(refs.results())
 	if len(got) != len(owned) {
 		t.Fatalf("ref results=%+v owned=%+v", got, owned)
 	}
@@ -1275,6 +1300,46 @@ func TestM8CanonicalRefPathMatchesOwnedTieDedupeAndLifetimeV1(t *testing.T) {
 		if got[i] != owned[i] {
 			t.Fatalf("materialized result changed after source mutation rank=%d ref=%+v owned=%+v", i, got, owned)
 		}
+	}
+}
+
+func TestM8CanonicalRefTopKUsesKeyedBoundedHeapV1(t *testing.T) {
+	const candidates = 10_000
+	top := newM8CanonicalRefTopKV1(256)
+	for i := 0; i < candidates; i++ {
+		id := []byte(fmt.Sprintf("doc-%06d", i))
+		if !top.add(m8CanonicalRefResultV1{ID: id, Score: float32(i)}) {
+			t.Fatalf("rejected candidate %d", i)
+		}
+	}
+	if len(top.heap) != 256 || len(top.results()) != 256 {
+		t.Fatalf("unbounded or short ref heap len=%d results=%d", len(top.heap), len(top.results()))
+	}
+	if top.idComparisons >= candidates {
+		t.Fatalf("ref duplicate comparisons=%d candidates=%d", top.idComparisons, candidates)
+	}
+}
+
+func TestM8CanonicalRefTopKMatchesCanonicalOrderWithDuplicatesV1(t *testing.T) {
+	const (
+		candidates = 10_000
+		topK       = 256
+	)
+	var want []m8CanonicalResultV1
+	top := newM8CanonicalRefTopKV1(topK)
+	for i := 0; i < candidates; i++ {
+		candidate := m8CanonicalResultV1{
+			ID:    fmt.Sprintf("doc-%06d", (i*37)%777),
+			Score: float32((i * 41) % 997),
+		}
+		want = m8AppendBoundedCanonicalV1(want, candidate, topK)
+		if !top.add(m8CanonicalRefResultV1{ID: []byte(candidate.ID), Score: candidate.Score}) {
+			t.Fatalf("rejected candidate %d", i)
+		}
+	}
+	got := m8MaterializeCanonicalRefsV1(top.results())
+	if !slices.Equal(got, want) {
+		t.Fatalf("ref top-k differs from canonical order\ngot=%+v\nwant=%+v", got, want)
 	}
 }
 

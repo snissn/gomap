@@ -1073,6 +1073,9 @@ type m8BenchmarkWorkPlan struct {
 	SourceSnapshotBytes             int64
 	ExactTruthBytes                 int64
 	RetainedCoordinatorBytes        int64
+	RetainedAttributionMatrices     int64
+	RetainedAttributionResults      int64
+	RetainedAttributionBytes        int64
 	ModeledPeakBytes                int64
 }
 
@@ -1173,15 +1176,39 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	perCellResults, err := memoryMul(int64(m.Queries), perQueryResults)
+	perResultMatrix, err := memoryMul(int64(m.Queries), perQueryResults)
 	if err != nil {
 		return plan, err
 	}
-	perCellResults, err = memoryAdd(int64(unsafe.Sizeof(m8MeasuredCellV1{})), perCellResults)
+	perCellResults, err := memoryAdd(int64(unsafe.Sizeof(m8MeasuredCellV1{})), perResultMatrix)
 	if err != nil {
 		return plan, err
 	}
 	plan.RetainedCoordinatorBytes, err = memoryMul(plan.RetainedCoordinatorCells, perCellResults)
+	if err != nil {
+		return plan, err
+	}
+	attributionCells, err := memoryMul(int64(len(cfg.probes)), int64(len(cfg.efSearch)))
+	if err != nil {
+		return plan, err
+	}
+	plan.RetainedAttributionMatrices, err = memoryAdd(attributionCells, 1) // local matrices plus cached exhaustive union
+	if err != nil {
+		return plan, err
+	}
+	plan.RetainedAttributionResults, err = memoryMul(plan.RetainedAttributionMatrices, int64(m.Queries), int64(cfg.topK))
+	if err != nil {
+		return plan, err
+	}
+	plan.RetainedAttributionBytes, err = memoryMul(plan.RetainedAttributionMatrices, perResultMatrix)
+	if err != nil {
+		return plan, err
+	}
+	attributionMetadata, err := memoryMul(attributionCells, int64(unsafe.Sizeof(m8AttributionCellV1{}))+memoryMapEntryBytes+32)
+	if err != nil {
+		return plan, err
+	}
+	plan.RetainedAttributionBytes, err = memoryAdd(plan.RetainedAttributionBytes, attributionMetadata)
 	if err != nil {
 		return plan, err
 	}
@@ -1195,13 +1222,17 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	peak := max(sourceOraclePeak, measurementPeak)
+	attributionPeak, err := memoryAdd(measurementPeak, plan.RetainedAttributionBytes)
+	if err != nil {
+		return plan, err
+	}
+	peak := max(sourceOraclePeak, attributionPeak)
 	plan.ModeledPeakBytes, err = memoryScaleCeil(peak, memorySlackNumerator, memorySlackDenominator)
 	if err != nil {
 		return plan, err
 	}
 	if plan.ModeledPeakBytes > capBytes {
-		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d source_snapshot_bytes=%d exact_truth_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes)
+		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d source_snapshot_bytes=%d exact_truth_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d retained_attribution_matrices=%d retained_attribution_results=%d retained_attribution_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes, plan.RetainedAttributionMatrices, plan.RetainedAttributionResults, plan.RetainedAttributionBytes)
 	}
 	return plan, nil
 }
