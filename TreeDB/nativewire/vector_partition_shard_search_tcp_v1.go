@@ -91,8 +91,9 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShard
 // VectorPartitionShardSearchTCPServerV1 serves one M5 service over the same
 // bounded framing contract used by the dispatcher.
 type VectorPartitionShardSearchTCPServerV1 struct {
-	Service  VectorPartitionShardSearchHandlerV1
-	MaxFrame uint32
+	Service        VectorPartitionShardSearchHandlerV1
+	MaxFrame       uint32
+	InitialTimeout time.Duration
 }
 
 // VectorPartitionShardSearchHandlerV1 is the narrow server dependency needed
@@ -107,8 +108,20 @@ func (s VectorPartitionShardSearchTCPServerV1) ServeConn(ctx context.Context, co
 	if maxFrame == 0 {
 		maxFrame = vectorPartitionShardSearchTCPMaxFrameBytesV1
 	}
+	initialTimeout := s.InitialTimeout
+	if initialTimeout < 0 {
+		return
+	}
+	if initialTimeout == 0 {
+		initialTimeout = 5 * time.Second
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(initialTimeout))
 	frame, err := readVectorPartitionShardSearchTCPFrameV1(conn, maxFrame)
+	_ = conn.SetReadDeadline(time.Time{})
 	if err != nil || frame.Request == nil || frame.Response != nil || frame.Error != nil {
+		// A peer that sends no frame (or never reads) must not strand this server
+		// goroutine while we try to report the bounded framing failure.
+		_ = conn.SetWriteDeadline(time.Now().Add(initialTimeout))
 		_ = writeVectorPartitionShardSearchTCPFrameV1(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, Message: "invalid M5 TCP request"}}, maxFrame)
 		return
 	}

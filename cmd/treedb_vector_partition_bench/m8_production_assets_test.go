@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"sort"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/nativewire"
 )
 
 func TestM8ProductionMultiGroupAssetsCheckedIn10kCISmokeV1(t *testing.T) {
@@ -64,7 +65,6 @@ func TestM8ProductionMultiGroupAssetsCheckedIn10kCISmokeV1(t *testing.T) {
 		query[i] = float32(value)
 	}
 	merged := make([]neighbor, 0, 40)
-	gotScores := map[string]float32{}
 	for partition := 0; partition < 4; partition++ {
 		searcher, err := assets.collection.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, assets.manifest.Generation, uint32(partition))
 		if err != nil {
@@ -80,37 +80,91 @@ func TestM8ProductionMultiGroupAssetsCheckedIn10kCISmokeV1(t *testing.T) {
 		}
 		for _, result := range results {
 			merged = append(merged, neighbor{ID: result.ID, Distance: 1 - float64(result.Score)})
-			gotScores[result.ID] = result.Score
 		}
 	}
 	sortNeighbors(merged)
 	merged = dedupeSortedNeighbors(merged)
 	merged = merged[:10]
-	want := m8ExactFP32TopKV1(vectors, query, 10)
+	want, err := assets.collection.SearchVectorsExact(query, collections.VectorSearchOptions{Field: "embedding", Metric: collections.VectorMetricCosine, TopK: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i := range want {
-		if merged[i].ID != want[i].id || math.Float32bits(gotScores[merged[i].ID]) != math.Float32bits(want[i].score) {
-			t.Fatalf("parity rank=%d got=%s score=%08x want=%s score=%08x got_all=%s", i, merged[i].ID, math.Float32bits(gotScores[merged[i].ID]), want[i].id, math.Float32bits(want[i].score), fmt.Sprint(merged))
+		if merged[i].ID != string(want[i].DocumentID) {
+			t.Fatalf("parity rank=%d got=%s want=%s got_all=%s", i, merged[i].ID, want[i].DocumentID, fmt.Sprint(merged))
 		}
 	}
 }
 
-type m8FP32NeighborV1 struct {
-	id    string
-	score float32
-}
-
-func m8ExactFP32TopKV1(vectors [][]float64, query []float32, topK int) []m8FP32NeighborV1 {
-	norm, _ := m6QueryNormV1(query)
-	norms, _ := m6VectorNormsV1(vectors, len(query))
-	out := make([]m8FP32NeighborV1, len(vectors))
-	for i := range vectors {
-		score := m6CosineScoreV1(vectors[i], query, norm, norms[i])
-		// Native packs use the persisted FP32 norm/dot path; its final division
-		// rounds one ULP below the float64-reference conversion.
-		out[i] = m8FP32NeighborV1{id: fmt.Sprintf("doc-%06d", i), score: math.Nextafter32(score, float32(math.Inf(-1)))}
+func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
+	fixture, err := loadFixture(fixturePath(t))
+	if err != nil {
+		t.Fatal(err)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].score > out[j].score || out[i].score == out[j].score && out[i].id < out[j].id
-	})
-	return out[:topK]
+	vectors := deterministicVectors(fixture)
+	assets, err := newM8ProductionMultiGroupAssetsV1(vectors, []string{"m8-data-group-a", "m8-data-group-b"}, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer assets.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	topology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(ctx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{Collection: assets.collection, Manifest: assets.manifest, RouterSource: assets.RouterSource(), GroupAssetSetDigests: assets.assetSetDigests, Database: "default", Catalog: "default"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer topology.Close()
+	query := make([]float32, len(vectors[0]))
+	for i, v := range vectors[17] {
+		query[i] = float32(v)
+	}
+	response, err := topology.Coordinator().Search(ctx, nativewire.VectorPartitionCoordinatorRequestV1{Version: nativewire.VectorPartitionCoordinatorVersionV1, RequestID: "m8-e2e-000017", CancellationID: "m8-e2e-cancel", Database: "default", Catalog: "default", Collection: assets.manifest.Collection, IndexName: assets.manifest.IndexName, IndexDefinitionDigest: assets.manifest.IndexDefinitionDigest, Query: query, Metric: nativewire.VectorPartitionShardSearchMetricCosineV1, RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: 10_000, PartitionProbes: 4, Consistency: nativewire.VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: nativewire.VectorPartitionShardSearchStatsBasicV1, TopK: 10, EfSearch: 4096, DeadlineUnixNano: time.Now().Add(20 * time.Second).UnixNano(), RequestBytesLimit: 4 << 20, CandidateBytesLimit: 64 << 20, ResponseBytesLimit: 64 << 20, MergeEntriesLimit: 40})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Neighbors) != 10 || len(response.ProbedGroups) != 2 {
+		t.Fatalf("response=%+v", response)
+	}
+	// The exhaustive collection scan is the independent ID/tie oracle; the
+	// persisted local packs are the score-bit oracle for the TCP coordinator.
+	direct := make([]neighbor, 0, 40)
+	directScores := make(map[string]float32, 40)
+	for partition := 0; partition < 4; partition++ {
+		searcher, openErr := assets.collection.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, assets.manifest.Generation, uint32(partition))
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		results, _, searchErr := searcher.SearchWithOptionsV1(ctx, query, collections.VectorPartitionSearchOptionsV1{TopK: 10, EfSearch: 4096})
+		closeErr := searcher.Close()
+		if searchErr != nil || closeErr != nil {
+			t.Fatalf("direct partition %d err=%v close=%v", partition, searchErr, closeErr)
+		}
+		for _, result := range results {
+			direct = append(direct, neighbor{ID: result.ID, Distance: 1 - float64(result.Score)})
+			directScores[result.ID] = result.Score
+		}
+	}
+	sortNeighbors(direct)
+	direct = dedupeSortedNeighbors(direct)[:10]
+	for i, got := range response.Neighbors {
+		if got.ID != direct[i].ID || math.Float32bits(got.Score) != math.Float32bits(directScores[direct[i].ID]) {
+			t.Fatalf("tcp parity rank=%d got=%+v direct=%+v", i, got, direct[i])
+		}
+	}
+	evidence := topology.Evidence()
+	if evidence.LifecycleState != "active" || len(evidence.Groups) != 2 {
+		t.Fatalf("evidence=%+v", evidence)
+	}
+	for _, group := range evidence.Groups {
+		if len(group.NodeIDs) != 3 || group.EndpointHits != 1 || group.CommitIndex == 0 || group.ReadIndex == 0 || group.AppliedIndex < group.ReadIndex || group.ReadEvidenceKind != "production" || !group.ProvesProductionConsensus {
+			t.Fatalf("group evidence=%+v", group)
+		}
+	}
+	if err := topology.StopGroup("m8-data-group-a"); err != nil {
+		t.Fatal(err)
+	}
+	failure, failureErr := topology.Coordinator().Search(ctx, nativewire.VectorPartitionCoordinatorRequestV1{Version: nativewire.VectorPartitionCoordinatorVersionV1, RequestID: "m8-e2e-failure", CancellationID: "m8-e2e-failure-cancel", Database: "default", Catalog: "default", Collection: assets.manifest.Collection, IndexName: assets.manifest.IndexName, IndexDefinitionDigest: assets.manifest.IndexDefinitionDigest, Query: query, Metric: nativewire.VectorPartitionShardSearchMetricCosineV1, RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: 10_000, PartitionProbes: 4, Consistency: nativewire.VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: nativewire.VectorPartitionShardSearchStatsBasicV1, TopK: 10, EfSearch: 4096, DeadlineUnixNano: time.Now().Add(2 * time.Second).UnixNano(), RequestBytesLimit: 4 << 20, CandidateBytesLimit: 64 << 20, ResponseBytesLimit: 64 << 20, MergeEntriesLimit: 40})
+	if failureErr == nil || len(failure.Neighbors) != 0 || len(failure.ProbedGroups) != 0 {
+		t.Fatalf("stopped group failure response=%+v err=%v", failure, failureErr)
+	}
 }

@@ -16,6 +16,21 @@ func (f vectorPartitionShardSearchHandlerFuncV1) Search(ctx context.Context, req
 	return f(ctx, request)
 }
 
+func TestVectorPartitionShardSearchTCPServerInitialReadTimeoutV1(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	done := make(chan struct{})
+	go func() {
+		(VectorPartitionShardSearchTCPServerV1{InitialTimeout: 20 * time.Millisecond}).ServeConn(context.Background(), server)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("slowloris initial frame kept M5 TCP server blocked")
+	}
+}
+
 func TestVectorPartitionShardSearchTCPDispatcherRoundTripV1(t *testing.T) {
 	listener := newVectorPartitionShardSearchTCPListenerV1(t, vectorPartitionShardSearchHandlerFuncV1(func(_ context.Context, request VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
 		if request.RequestID != "m8-round-trip" || request.TargetGroupID != "group-a" || request.TargetNodeID != "node-a" || len(request.PartitionIDs) != 1 || request.PartitionIDs[0] != 3 {

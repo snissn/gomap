@@ -200,6 +200,18 @@ func (h *ThreeNodeHarness) LeaderID() NodeID {
 	}
 	return h.leader.id
 }
+
+// NodeIDs returns the fixed three-member identity set for topology evidence.
+func (h *ThreeNodeHarness) NodeIDs() []NodeID {
+	if h == nil {
+		return nil
+	}
+	out := make([]NodeID, 0, len(h.nodes))
+	for _, node := range h.nodes {
+		out = append(out, node.id)
+	}
+	return out
+}
 func (h *ThreeNodeHarness) ReadCoordinator() RoutedReadIndexCoordinator {
 	if h == nil {
 		return nil
