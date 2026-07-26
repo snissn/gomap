@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/nativewire"
@@ -1165,7 +1166,23 @@ func TestM8AttributionMergeScratchRespectsMemoryCapV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.AttributionMergeScratchResults != 131_072 || plan.AttributionMergeScratchBytes < 3_000_000 || plan.ModeledPeakBytes <= withoutScratch {
+	resultStructBytes, err := memoryMul(plan.AttributionMergeScratchResults, int64(unsafe.Sizeof(m8CanonicalResultV1{})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownedIDBytes, err := memoryMul(int64(cfg.partitions), int64(cfg.topK), documentIDStorageBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapBytes, err := memoryMul(int64(cfg.topK), memoryMapEntryBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantScratchBytes, err := memoryAdd(resultStructBytes, ownedIDBytes, mapBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.AttributionMergeScratchResults != 131_072 || plan.AttributionMergeScratchBytes != wantScratchBytes || ownedIDBytes != 1_048_576 || plan.ModeledPeakBytes <= withoutScratch {
 		t.Fatalf("M8 attribution scratch plan=%+v without_scratch=%d", plan, withoutScratch)
 	}
 	if _, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, withoutScratch); err == nil || !strings.Contains(err.Error(), "attribution_merge_scratch_results=131072") {

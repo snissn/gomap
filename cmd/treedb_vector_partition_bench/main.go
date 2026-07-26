@@ -1216,7 +1216,8 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	}
 	// The exhaustive attribution search is the largest merge. It reserves one
 	// partition-count by top-k input buffer, canonicalization copies that full
-	// buffer, and duplicate suppression holds at most top-k map entries. The
+	// buffer, and the input retains one owned document-ID allocation per
+	// candidate. Duplicate suppression holds at most top-k map entries. The
 	// returned top-k is copied into a right-sized retained matrix above.
 	plan.AttributionMergeScratchResults, err = memoryMul(2, int64(cfg.partitions), int64(cfg.topK))
 	if err != nil {
@@ -1226,11 +1227,15 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
+	attributionMergeIDBytes, err := memoryMul(int64(cfg.partitions), int64(cfg.topK), documentIDStorageBytes)
+	if err != nil {
+		return plan, err
+	}
 	attributionMergeMapBytes, err := memoryMul(int64(cfg.topK), memoryMapEntryBytes)
 	if err != nil {
 		return plan, err
 	}
-	plan.AttributionMergeScratchBytes, err = memoryAdd(plan.AttributionMergeScratchBytes, attributionMergeMapBytes)
+	plan.AttributionMergeScratchBytes, err = memoryAdd(plan.AttributionMergeScratchBytes, attributionMergeIDBytes, attributionMergeMapBytes)
 	if err != nil {
 		return plan, err
 	}
