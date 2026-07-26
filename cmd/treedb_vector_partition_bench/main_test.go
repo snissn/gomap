@@ -1119,13 +1119,20 @@ func TestM8BenchmarkWorkCapAndOverflowV1(t *testing.T) {
 
 func TestM8ProductionEvidenceJSONKeepsEveryTopologyDimensionV1(t *testing.T) {
 	raw, err := json.Marshal(m8ProductionReportV1{
-		Config: m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16},
-		Rows:   []m8ProductionRowV1{{Probes: 4, EfSearch: 128, Concurrency: 16, Samples: 32}},
+		Config: m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16, RouterCandidates: 256},
+		Rows: []m8ProductionRowV1{{Probes: 4, EfSearch: 128, Concurrency: 16, Samples: 32, RecallAtK: 0, Attribution: m8ProductionAttributionV1{
+			Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1, ExhaustivePartitionRecallAtK: 1,
+			ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
+			ExactRepresentativeRecallAtK: .9, ApproximateRepresentativeRecallAtK: .8,
+			LocalHNSWRecallAtK: .7, EndToEndRecallAtK: 0,
+			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
+			ApproximateRouterCandidateBudget: 256, ResidualLossOwners: []string{"partition_local_hnsw"},
+		}}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{`"raft_groups":4`, `"raft_nodes_per_group":3`, `"partitions":16`, `"probes":4`, `"ef_search":128`, `"concurrency":16`, `"samples":32`} {
+	for _, field := range []string{`"raft_groups":4`, `"raft_nodes_per_group":3`, `"partitions":16`, `"approximate_router_candidate_budget":256`, `"probes":4`, `"ef_search":128`, `"concurrency":16`, `"samples":32`, `"recall_at_k":0`, `"contract":"` + m8CanonicalResultContractV1 + `"`, `"global_exact_recall_at_k":1`, `"exhaustive_partition_union_score_parity":true`, `"residual_loss_owners":["partition_local_hnsw"]`} {
 		if !bytes.Contains(raw, []byte(field)) {
 			t.Fatalf("missing %s in %s", field, raw)
 		}
@@ -1134,7 +1141,7 @@ func TestM8ProductionEvidenceJSONKeepsEveryTopologyDimensionV1(t *testing.T) {
 
 func TestM8ArtifactNameIncludesConfigurationV1(t *testing.T) {
 	fixture := fixtureManifest{Fixture: "x", Checksum: "y"}
-	base := config{headSHA: strings.Repeat("a", 40), raftGroups: 2, raftNodes: 3, partitions: 4, probes: []int{4}, overlaps: []float64{0}, topK: 10, concurrency: []int{1}, efSearch: []int{64}}
+	base := config{headSHA: strings.Repeat("a", 40), raftGroups: 2, raftNodes: 3, partitions: 4, probes: []int{4}, overlaps: []float64{0}, topK: 10, concurrency: []int{1}, efSearch: []int{64}, routerCandidates: 64}
 	first, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "a"})
 	if err != nil {
 		t.Fatal(err)
@@ -1148,6 +1155,11 @@ func TestM8ArtifactNameIncludesConfigurationV1(t *testing.T) {
 	third, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "different"})
 	if err != nil || first == third {
 		t.Fatalf("asset identities collided %q %q err=%v", first, third, err)
+	}
+	base.routerCandidates = 32
+	fourth, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "a"})
+	if err != nil || first == fourth {
+		t.Fatalf("router candidate budgets collided %q %q err=%v", first, fourth, err)
 	}
 }
 
@@ -1167,6 +1179,61 @@ func TestCanonicalExactNeighborsContractTiePrecisionAndDedupeV1(t *testing.T) {
 	}
 	if got[0].Distance != float64(float32(0.05)) {
 		t.Fatalf("duplicate retained wrong score: %+v", got[0])
+	}
+}
+
+func TestM8CanonicalFP32ScoreContractTiePrecisionAndDedupeV1(t *testing.T) {
+	near := math.Float32frombits(math.Float32bits(0.9))
+	got := m8CanonicalResultsV1([]m8CanonicalResultV1{
+		{ID: "duplicate", Score: 0.1},
+		{ID: "z", Score: near},
+		{ID: "a", Score: near},
+		{ID: "duplicate", Score: 0.95},
+		{ID: "lower", Score: math.Float32frombits(math.Float32bits(near) - 1)},
+	}, 4)
+	want := []string{"duplicate", "a", "z", "lower"}
+	if len(got) != len(want) {
+		t.Fatalf("got=%+v", got)
+	}
+	for i := range want {
+		if got[i].ID != want[i] {
+			t.Fatalf("rank %d got=%+v want=%s", i, got, want[i])
+		}
+	}
+	if got[0].Score != float32(0.95) {
+		t.Fatalf("duplicate retained wrong score: %+v", got[0])
+	}
+}
+
+func TestM8CanonicalContractRejectsInvalidBoundsAndScoresV1(t *testing.T) {
+	if got := m8CanonicalResultsV1([]m8CanonicalResultV1{{ID: "a", Score: 1}}, -1); got != nil {
+		t.Fatalf("negative top-k result=%+v", got)
+	}
+	if got := m8CanonicalResultsV1([]m8CanonicalResultV1{{ID: "a", Score: float32(math.NaN())}}, 1); got != nil {
+		t.Fatalf("nonfinite result=%+v", got)
+	}
+}
+
+func TestM8CoordinatorResponseCanonicalShapeFailsClosedV1(t *testing.T) {
+	response := nativewire.VectorPartitionCoordinatorResponseV1{
+		Neighbors:        []nativewire.VectorPartitionCoordinatorNeighborV1{{ID: "a", Score: .9}, {ID: "b", Score: .8}},
+		ProbedPartitions: []uint32{0, 1},
+	}
+	response.ProbedGroups = append(response.ProbedGroups, "group-a")
+	manifest := collections.VectorPartitionManifestV1{PartitionCount: 4, Placements: []collections.VectorPartitionPlacementV1{
+		{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-a"},
+		{PartitionID: 2, GroupID: "group-b"}, {PartitionID: 3, GroupID: "group-b"},
+	}}
+	if got, err := m8ValidateCoordinatorResponseV1(response, manifest, 2, 2); err != nil || len(got) != 2 {
+		t.Fatalf("valid response got=%+v err=%v", got, err)
+	}
+	response.Neighbors[0], response.Neighbors[1] = response.Neighbors[1], response.Neighbors[0]
+	if _, err := m8ValidateCoordinatorResponseV1(response, manifest, 2, 2); err == nil {
+		t.Fatal("accepted noncanonical response order")
+	}
+	response.Neighbors = []nativewire.VectorPartitionCoordinatorNeighborV1{{ID: "a", Score: .9}, {ID: "a", Score: .8}}
+	if _, err := m8ValidateCoordinatorResponseV1(response, manifest, 2, 2); err == nil {
+		t.Fatal("accepted duplicate response neighbor")
 	}
 }
 

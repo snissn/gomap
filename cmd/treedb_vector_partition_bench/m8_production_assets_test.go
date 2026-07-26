@@ -58,12 +58,18 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		}
 	}
 	report := m8ProductionReportV1{
-		SchemaVersion: 1, ResultKind: "m8_production_multi_group_evidence_v1", Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true,
+		SchemaVersion: 2, ResultKind: "m8_production_multi_group_evidence_v2", Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true,
 		GeneratedAt: time.Now(), Command: []string{"m8-test"}, BaseSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		Dataset: fixture, Config: m8ProductionConfigEvidenceV1{RaftGroups: 2, RaftNodesPerGroup: 3, Partitions: 4, TopK: 10}, BuildNanos: 1,
+		Dataset: fixture, Config: m8ProductionConfigEvidenceV1{RaftGroups: 2, RaftNodesPerGroup: 3, Partitions: 4, TopK: 10, RouterCandidates: 1}, BuildNanos: 1,
 		Topology: nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{Network: "tcp_loopback_serialized_m5_v1", LifecycleState: "active", ReadySetDigest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", MetaNodes: []string{"meta-a", "meta-b", "meta-c"}, Groups: []nativewire.VectorPartitionM8ProductionGroupEvidenceV1{group("group-a", 1), group("group-b", 1)}},
-		Rows:     []m8ProductionRowV1{{Status: "pass", Probes: 4, EfSearch: 10, Concurrency: 1, Samples: fixture.Queries, QPS: 1, RouterMode: "exact", RouterCandidates: 1, ExactParityChecked: true}},
-		Failure:  m8ProductionFailureEvidenceV1{Passed: true, Error: "unavailable group rejected"}, GateLedger: m8ProductionGateLedgerV1{FailureHonesty: "pass"},
+		Rows: []m8ProductionRowV1{{Status: "pass", Probes: 4, EfSearch: 10, Concurrency: 1, Samples: fixture.Queries, RecallAtK: 1, QPS: 1, RouterMode: "exact", RouterCandidates: 1, ExactParityChecked: true, ExactParityPassed: true, NoPartialResults: true, Attribution: m8ProductionAttributionV1{
+			Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1, ExhaustivePartitionRecallAtK: 1,
+			ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
+			ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1,
+			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
+			ApproximateRouterCandidateBudget: 1, ResidualLossOwners: []string{"none_observed"},
+		}}},
+		Failure: m8ProductionFailureEvidenceV1{Passed: true, Error: "unavailable group rejected"}, GateLedger: m8ProductionGateLedgerV1{FailureHonesty: "pass"},
 		Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1}, TimedBoundary: "measured", Limitations: []string{"test"},
 	}
 	if err := validateM8ProductionReportV1(report); err != nil {
@@ -224,8 +230,8 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	if len(response.Neighbors) != 10 || len(response.ProbedGroups) != 2 {
 		t.Fatalf("response=%+v", response)
 	}
-	// The exhaustive collection scan is the independent ID/tie oracle; the
-	// persisted local packs are the score-bit oracle for the TCP coordinator.
+	// Compare the raw TCP result with independently opened partition searchers;
+	// m8ExactTruthV1 below owns the full-source canonical oracle.
 	direct := make([]neighbor, 0, 40)
 	directScores := make(map[string]float32, 40)
 	for partition := 0; partition < 4; partition++ {
@@ -249,6 +255,37 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 		if got.ID != direct[i].ID || math.Float32bits(got.Score) != math.Float32bits(directScores[direct[i].ID]) {
 			t.Fatalf("tcp parity rank=%d got=%+v direct=%+v", i, got, direct[i])
 		}
+	}
+	attributionQueries := [][]float64{vectors[17], vectors[18], vectors[19], vectors[20]}
+	staleManifest := assets.manifest
+	staleManifest.SourceGeneration++
+	if _, err := m8ExactTruthV1(assets.collection, staleManifest, attributionQueries[:1], 10); err == nil {
+		t.Fatal("canonical source oracle accepted a mismatched source generation")
+	}
+	truth, err := m8ExactTruthV1(assets.collection, assets.manifest, attributionQueries, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness, err := newM8AttributionHarnessV1(assets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer harness.Close()
+	candidates := int(assets.status.Representatives)
+	attribution, err := m8BuildAttributionV1(ctx, assets, attributionQueries, truth, 4, 4096, 10, candidates, make([][]m8CanonicalResultV1, len(attributionQueries)), harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := m8RunProductionCellV1(ctx, topology.Coordinator(), assets, attributionQueries, truth, attribution, 4, 4096, 4, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Attribution.Contract != m8CanonicalResultContractV1 || row.Attribution.ExhaustivePartitionRecallAtK != 1 ||
+		row.Attribution.ExactRepresentativeRecallAtK != 1 || row.Attribution.ApproximateRepresentativeRecallAtK != 1 ||
+		row.Attribution.LocalHNSWRecallAtK != 1 || row.Attribution.EndToEndRecallAtK != 1 ||
+		!row.Attribution.ExhaustivePartitionIDParity || !row.Attribution.ExhaustivePartitionScoreParity ||
+		!row.Attribution.CoordinatorMergeIDParity || !row.Attribution.CoordinatorMergeScoreParity || !row.NoPartialResults {
+		t.Fatalf("attribution=%+v", row.Attribution)
 	}
 	evidence := topology.Evidence()
 	if evidence.LifecycleState != "active" || len(evidence.Groups) != 2 {

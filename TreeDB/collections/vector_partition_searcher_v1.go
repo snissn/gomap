@@ -4,6 +4,7 @@ package collections
 // can be carried by a serving group without claiming canonical-row ownership.
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -15,6 +16,62 @@ import (
 )
 
 var ErrVectorPartitionSearchUnavailable = errors.New("collections: vector partition search unavailable")
+
+// VectorPartitionCanonicalScoreContractV1 names the score bits published by
+// vector-partition search. Both operands are normalized in FP32, their dot
+// product is accumulated left-to-right in binary64, and the result is rounded
+// once to FP32.
+const VectorPartitionCanonicalScoreContractV1 = "fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1"
+
+// CanonicalVectorPartitionCosineScoreV1 executes the public V1 score contract
+// over caller-owned source vectors.
+func CanonicalVectorPartitionCosineScoreV1(query, vector []float32) (float32, error) {
+	if len(query) == 0 || len(query) != len(vector) {
+		return 0, fmt.Errorf("%w: canonical score dimensions", ErrVectorPartitionSearchUnavailable)
+	}
+	queryInvNorm, err := columnVectorGraphInvNorm(query)
+	if err != nil {
+		return 0, fmt.Errorf("%w: canonical query norm: %v", ErrVectorPartitionSearchUnavailable, err)
+	}
+	vectorInvNorm, err := columnVectorGraphInvNorm(vector)
+	if err != nil {
+		return 0, fmt.Errorf("%w: canonical vector norm: %v", ErrVectorPartitionSearchUnavailable, err)
+	}
+	var dot float64
+	for i := range query {
+		dot += float64(query[i]*queryInvNorm) * float64(vector[i]*vectorInvNorm)
+	}
+	if math.IsNaN(dot) || math.IsInf(dot, 0) {
+		return 0, fmt.Errorf("%w: canonical score nonfinite", ErrVectorPartitionSearchUnavailable)
+	}
+	return float32(dot), nil
+}
+
+func canonicalVectorPartitionNormalizeV1(vector []float32) ([]float32, error) {
+	invNorm, err := columnVectorGraphInvNorm(vector)
+	if err != nil {
+		return nil, fmt.Errorf("%w: canonical score norm: %v", ErrVectorPartitionSearchUnavailable, err)
+	}
+	normalized := make([]float32, len(vector))
+	for i := range vector {
+		normalized[i] = vector[i] * invNorm
+	}
+	return normalized, nil
+}
+
+func canonicalVectorPartitionNormalizedScoreV1(left, right []float32) (float32, error) {
+	if len(left) == 0 || len(left) != len(right) {
+		return 0, fmt.Errorf("%w: canonical normalized score dimensions", ErrVectorPartitionSearchUnavailable)
+	}
+	var dot float64
+	for i := range left {
+		dot += float64(left[i]) * float64(right[i])
+	}
+	if math.IsNaN(dot) || math.IsInf(dot, 0) {
+		return 0, fmt.Errorf("%w: canonical score nonfinite", ErrVectorPartitionSearchUnavailable)
+	}
+	return float32(dot), nil
+}
 
 type VectorPartitionMembershipKindV1 string
 
@@ -629,7 +686,7 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context
 			s.recordFailure()
 			return nil, VectorPartitionSearchMetricsV1{}, err
 		}
-		out, err := canonicalizeVectorPartitionNativeResultsV1(ctx, results)
+		out, err := canonicalizeVectorPartitionNativeResultsV1(ctx, s.prepared, query, results)
 		if err != nil {
 			s.recordFailure()
 			return nil, VectorPartitionSearchMetricsV1{}, err
@@ -699,57 +756,71 @@ func (s *VectorPartitionLocalSearcherV1) SearchExactWithOptionsV1(ctx context.Co
 		return nil, VectorPartitionSearchMetricsV1{}, err
 	}
 	defer s.Release()
-	if s.prepared == nil || opts.TopK < 1 || opts.MaxStableIDBytes < 0 || len(query) != s.asset.Dimensions {
-		return nil, VectorPartitionSearchMetricsV1{}, ErrVectorPartitionSearchUnavailable
+	if s.prepared == nil || opts.TopK < 1 || opts.EfSearch < 0 || opts.MaxStableIDBytes < 0 || len(query) != s.asset.Dimensions {
+		s.recordFailure()
+		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: query bounds", ErrVectorPartitionSearchUnavailable)
 	}
 	if opts.MaxStableIDBytes > 0 && s.maxStableIDBytes > opts.MaxStableIDBytes {
-		return nil, VectorPartitionSearchMetricsV1{}, ErrVectorPartitionSearchUnavailable
+		s.recordFailure()
+		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: stable ID bytes=%d exceeds limit=%d", ErrVectorPartitionSearchUnavailable, s.maxStableIDBytes, opts.MaxStableIDBytes)
 	}
-	var qn float64
-	for _, x := range query {
-		if math.IsNaN(float64(x)) || math.IsInf(float64(x), 0) {
-			return nil, VectorPartitionSearchMetricsV1{}, ErrVectorPartitionSearchUnavailable
-		}
-		qn += float64(x) * float64(x)
-	}
-	if qn == 0 {
-		return nil, VectorPartitionSearchMetricsV1{}, ErrVectorPartitionSearchUnavailable
+	normalizedQuery, err := canonicalVectorPartitionNormalizeV1(query)
+	if err != nil {
+		s.recordFailure()
+		return nil, VectorPartitionSearchMetricsV1{}, err
 	}
 	rows, dims, stride := int(s.prepared.Header.Rows), s.asset.Dimensions, int(s.prepared.Header.VectorStride)
 	top := make(vectorPartitionSearchResultMaxHeapV1, 0, min(opts.TopK, rows))
 	for row := 0; row < rows; row++ {
 		if row&255 == 0 {
 			if err := ctx.Err(); err != nil {
+				s.recordFailure()
 				return nil, VectorPartitionSearchMetricsV1{}, err
 			}
 		}
-		var dot float64
-		for col := 0; col < dims; col++ {
-			dot += float64(query[col]) * float64(s.prepared.NormalizedVectors[row*stride+col])
+		score, err := canonicalVectorPartitionNormalizedScoreV1(normalizedQuery, s.prepared.NormalizedVectors[row*stride:row*stride+dims])
+		if err != nil {
+			s.recordFailure()
+			return nil, VectorPartitionSearchMetricsV1{}, err
 		}
 		start, end := s.prepared.DocumentIDOffsets[row], s.prepared.DocumentIDOffsets[row+1]
-		top.pushBounded(min(opts.TopK, rows), VectorPartitionSearchResultV1{ID: string(append([]byte(nil), s.prepared.DocumentIDBytes[start:end]...)), Score: float32(dot / math.Sqrt(qn))})
+		top.pushBounded(min(opts.TopK, rows), VectorPartitionSearchResultV1{ID: string(append([]byte(nil), s.prepared.DocumentIDBytes[start:end]...)), Score: score})
 	}
 	out := make([]VectorPartitionSearchResultV1, len(top))
 	for target := len(out) - 1; target >= 0; target-- {
 		if target&255 == 0 {
 			if err := ctx.Err(); err != nil {
+				s.recordFailure()
 				return nil, VectorPartitionSearchMetricsV1{}, err
 			}
 		}
 		out[target] = top.popWorst()
 	}
+	if err := ctx.Err(); err != nil {
+		s.recordFailure()
+		return nil, VectorPartitionSearchMetricsV1{}, err
+	}
+	s.mu.Lock()
+	s.searches++
+	s.candidates += uint64(rows)
+	s.mu.Unlock()
 	return out, VectorPartitionSearchMetricsV1{Candidates: uint64(rows), Route: VectorPartitionSearchRouteExactFP32ScanV1}, nil
 }
 
-func canonicalizeVectorPartitionNativeResultsV1(ctx context.Context, results []columnVectorGraphNativeSearchResult) ([]VectorPartitionSearchResultV1, error) {
+func canonicalizeVectorPartitionNativeResultsV1(ctx context.Context, prepared *columnHNSWSearchPackPreparedView, query []float32, results []columnVectorGraphNativeSearchResult) ([]VectorPartitionSearchResultV1, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	// Native HNSW ranks its float64 scores by row ordinal. The wire contract
-	// exposes float32 scores with stable-ID tie order, so two distinct native
-	// scores may collapse into a public tie. Rebuild the bounded result heap
-	// after conversion and drain it canonically before M5 publishes it.
+	// Native HNSW traversal may use platform-optimized FP32 kernels. Recompute
+	// the returned candidate scores with the deterministic public contract, then
+	// rebuild and drain the bounded heap before M5 publishes owned results.
+	if prepared == nil || len(query) != prepared.Header.Dimensions {
+		return nil, ErrVectorPartitionSearchUnavailable
+	}
+	normalizedQuery, err := canonicalVectorPartitionNormalizeV1(query)
+	if err != nil {
+		return nil, err
+	}
 	top := make(vectorPartitionSearchResultMaxHeapV1, 0, len(results))
 	for i, result := range results {
 		if i&255 == 0 {
@@ -757,7 +828,19 @@ func canonicalizeVectorPartitionNativeResultsV1(ctx context.Context, results []c
 				return nil, err
 			}
 		}
-		top.pushBounded(len(results), VectorPartitionSearchResultV1{ID: string(result.ID), Score: float32(result.Score)})
+		if result.Ordinal < 0 || result.Ordinal >= prepared.Header.Rows {
+			return nil, ErrVectorPartitionSearchUnavailable
+		}
+		base := result.Ordinal * prepared.Header.VectorStride
+		idStart, idEnd := prepared.DocumentIDOffsets[result.Ordinal], prepared.DocumentIDOffsets[result.Ordinal+1]
+		if !bytes.Equal(result.ID, prepared.DocumentIDBytes[idStart:idEnd]) {
+			return nil, ErrVectorPartitionSearchUnavailable
+		}
+		score, err := canonicalVectorPartitionNormalizedScoreV1(normalizedQuery, prepared.NormalizedVectors[base:base+prepared.Header.Dimensions])
+		if err != nil {
+			return nil, err
+		}
+		top.pushBounded(len(results), VectorPartitionSearchResultV1{ID: string(result.ID), Score: score})
 	}
 	out := []VectorPartitionSearchResultV1(top)
 	for completed, target := 0, len(out)-1; target >= 0; completed, target = completed+1, target-1 {

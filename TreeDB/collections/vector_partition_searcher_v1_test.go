@@ -139,26 +139,37 @@ func TestVectorPartitionLocalSearcherV1HNSWCanonicalizesFP32TieOrder(t *testing.
 func TestVectorPartitionLocalSearcherV1PinnedExactPackScanV1(t *testing.T) {
 	input := testColumnHNSWSearchPackInput2312()
 	input.NormalizedVectors = []float32{1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0}
-	input.DocumentIDOffsets = []uint64{0, 1, 2, 3}
-	input.DocumentIDBytes = []byte("zac")
+	input.DocumentIDOffsets = []uint64{0, 4, 5, 6}
+	input.DocumentIDBytes = []byte("longac")
 	raw, err := encodeColumnHNSWSearchPack(input)
 	if err != nil {
 		t.Fatal(err)
 	}
 	view, handle := testColumnHNSWSearchPackPreparedViewFromBytes2314(t, raw, mappedresource.SourceHeapCopy, input.BaseIdentity)
-	searcher := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Generation: 11, PartitionID: 2, Dimensions: 3}, prepared: view, opened: 1, maxStableIDBytes: 1}
+	searcher := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Generation: 11, PartitionID: 2, Dimensions: 3}, prepared: view, opened: 1, maxStableIDBytes: 4}
 	results, metrics, err := searcher.SearchExactWithOptionsV1(context.Background(), []float32{1, 0, 0}, VectorPartitionSearchOptionsV1{TopK: 2})
-	if err != nil || len(results) != 2 || results[0].ID != "a" || results[1].ID != "z" || metrics.Route != VectorPartitionSearchRouteExactFP32ScanV1 {
+	if err != nil || len(results) != 2 || results[0].ID != "a" || results[1].ID != "long" || metrics.Route != VectorPartitionSearchRouteExactFP32ScanV1 {
 		t.Fatalf("results=%+v metrics=%+v err=%v", results, metrics, err)
 	}
-	if _, _, err := searcher.SearchExactWithOptionsV1(context.Background(), []float32{1, 0, 0}, VectorPartitionSearchOptionsV1{TopK: 1, MaxStableIDBytes: 0}); err != nil {
-		t.Fatal(err)
+	if _, _, err := searcher.SearchExactWithOptionsV1(context.Background(), []float32{1, 0, 0}, VectorPartitionSearchOptionsV1{TopK: 1, MaxStableIDBytes: 3}); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("stable-ID cap err=%v", err)
 	}
-	if _, _, err := searcher.SearchExactWithOptionsV1(context.Background(), []float32{1, 0, 0}, VectorPartitionSearchOptionsV1{TopK: 1, MaxStableIDBytes: 0}); err != nil {
-		t.Fatal(err)
+	if _, _, err := searcher.SearchExactWithOptionsV1(context.Background(), []float32{1, 0, 0}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: -1}); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("negative ef_search err=%v", err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := searcher.SearchExactWithOptionsV1(canceled, []float32{1, 0, 0}, VectorPartitionSearchOptionsV1{TopK: 1}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled context err=%v", err)
+	}
+	if status := searcher.Status(); status.Searches != 1 || status.Candidates != 3 || status.Failures != 2 || status.ActivePins != 0 {
+		t.Fatalf("exact diagnostic status=%+v", status)
 	}
 	if err := searcher.Close(); err != nil || !handle.Released() {
 		t.Fatalf("close=%v released=%v", err, handle.Released())
+	}
+	if len(results) != 2 || results[0].ID != "a" || results[1].ID != "long" {
+		t.Fatalf("caller-owned results changed after close: %+v", results)
 	}
 }
 
@@ -167,9 +178,15 @@ func TestVectorPartitionNativeResultsCanonicalizeCollapsedFP32TieV1(t *testing.T
 	if float32(higherFloat64) != float32(1) {
 		t.Fatal("test scores do not collapse to one float32 value")
 	}
-	results, err := canonicalizeVectorPartitionNativeResultsV1(context.Background(), []columnVectorGraphNativeSearchResult{
+	prepared := &columnHNSWSearchPackPreparedView{
+		Header:            columnHNSWSearchPackHeader{Rows: 2, Dimensions: 2, VectorStride: 2},
+		NormalizedVectors: []float32{1, 0, 1, 0},
+		DocumentIDOffsets: []uint64{0, 1, 2},
+		DocumentIDBytes:   []byte("za"),
+	}
+	results, err := canonicalizeVectorPartitionNativeResultsV1(context.Background(), prepared, []float32{1, 0}, []columnVectorGraphNativeSearchResult{
 		{Ordinal: 0, ID: []byte("z"), Score: higherFloat64},
-		{Ordinal: 1, ID: []byte("a"), Score: 1},
+		{Ordinal: 1, ID: []byte("a"), Score: -1},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -177,6 +194,18 @@ func TestVectorPartitionNativeResultsCanonicalizeCollapsedFP32TieV1(t *testing.T
 	if len(results) != 2 || results[0].ID != "a" || results[1].ID != "z" ||
 		results[0].Score != results[1].Score {
 		t.Fatalf("collapsed FP32 tie results=%+v want a,z", results)
+	}
+}
+
+func TestCanonicalVectorPartitionCosineScoreV1NormalizesInFP32V1(t *testing.T) {
+	query := []float32{3, 4}
+	vector := []float32{6, 8}
+	got, err := CanonicalVectorPartitionCosineScoreV1(query, vector)
+	if err != nil || got != 1 {
+		t.Fatalf("score=%v err=%v want 1", got, err)
+	}
+	if _, err := CanonicalVectorPartitionCosineScoreV1(query, []float32{0, 0}); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("zero-vector err=%v", err)
 	}
 }
 

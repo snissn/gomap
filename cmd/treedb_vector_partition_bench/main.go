@@ -2144,12 +2144,18 @@ func dedupeSortedNeighbors(in []neighbor) []neighbor {
 	return out
 }
 
-// canonicalExactNeighborsV1 freezes the benchmark's production-score contract:
-// distances are rounded through the FP32 search representation, then sort ascending, equal scores break by stable ID, and
-// duplicate IDs retain their best-scoring occurrence before top-k truncation.
+// canonicalExactNeighborsV1 keeps the legacy simulation distance representation
+// deterministic. Production M8 evidence uses m8CanonicalResultsV1 and the
+// executable collections.VectorPartitionCanonicalScoreContractV1 instead.
 func canonicalExactNeighborsV1(in []neighbor, topK int) []neighbor {
+	if topK <= 0 {
+		return nil
+	}
 	ordered := append([]neighbor(nil), in...)
 	for i := range ordered {
+		if ordered[i].ID == "" || math.IsNaN(ordered[i].Distance) || math.IsInf(ordered[i].Distance, 0) {
+			return nil
+		}
 		ordered[i].Distance = float64(float32(ordered[i].Distance))
 	}
 	sortNeighbors(ordered)
