@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -36,10 +37,43 @@ type mongoClusterFakeSubmitter struct {
 	calls                    []mongoClusterSubmitterCall
 	actualAck                iwire.AckPolicy
 	committedRecoverable     bool
+	committedApplied         bool
 	responseSections         []iwire.Section
 	overrideResponseSections bool
 	status                   treenativewire.ClusterAdmissionStatus
 	admissionErr             error
+	submitHook               func()
+	submitErr                error
+}
+
+type mongoConfirmingVectorPartitionSubmitterV1 struct {
+	*mongoClusterFakeSubmitter
+	mu                        sync.Mutex
+	confirmations             []iwire.CommandID
+	confirmationContextErrors []error
+}
+
+func (s *mongoConfirmingVectorPartitionSubmitterV1) RequiresVectorPartitionMutationAdmissionV1(context.Context) (bool, error) {
+	return true, nil
+}
+
+func (s *mongoConfirmingVectorPartitionSubmitterV1) SubmitCommandEntryWithPreCommitV1(ctx context.Context, entry []byte, metadata treenativewire.ClusterRequestMetadata, preCommit func(context.Context) error) (treenativewire.ClusterSubmitResult, error) {
+	if err := preCommit(ctx); err != nil {
+		return treenativewire.ClusterSubmitResult{}, err
+	}
+	return s.SubmitCommandEntryV1(ctx, entry, metadata)
+}
+
+func (s *mongoConfirmingVectorPartitionSubmitterV1) AdmitVectorPartitionMutationV1(context.Context, iwire.CommandID, []iwire.Section) error {
+	return nil
+}
+
+func (s *mongoConfirmingVectorPartitionSubmitterV1) ConfirmVectorPartitionMutationV1(ctx context.Context, command iwire.CommandID, _ []iwire.Section) error {
+	s.mu.Lock()
+	s.confirmations = append(s.confirmations, command)
+	s.confirmationContextErrors = append(s.confirmationContextErrors, ctx.Err())
+	s.mu.Unlock()
+	return nil
 }
 
 type mongoClusterAdmissionSubmitter struct {
@@ -49,12 +83,13 @@ type mongoClusterAdmissionSubmitter struct {
 }
 
 type mongoRecordingRaftCommandSubmitter struct {
-	groupID raftcluster.GroupID
-	status  raftcluster.AdmissionStatus
-	err     error
-	discard bool
-	mu      sync.Mutex
-	calls   []mongoRecordingRaftCommandSubmitCall
+	groupID  raftcluster.GroupID
+	features raftcluster.FeatureSet
+	status   raftcluster.AdmissionStatus
+	err      error
+	discard  bool
+	mu       sync.Mutex
+	calls    []mongoRecordingRaftCommandSubmitCall
 }
 
 type mongoRecordingRaftCommandSubmitCall struct {
@@ -63,7 +98,7 @@ type mongoRecordingRaftCommandSubmitCall struct {
 }
 
 func (s *mongoRecordingRaftCommandSubmitter) Config() raftcluster.ResolvedConfig {
-	return raftcluster.ResolvedConfig{GroupID: s.groupID}
+	return raftcluster.ResolvedConfig{GroupID: s.groupID, Features: s.features}
 }
 
 func (s *mongoRecordingRaftCommandSubmitter) ClusterAdmissionStatus(context.Context) (raftcluster.AdmissionStatus, error) {
@@ -317,6 +352,9 @@ func (f *mongoClusterFakeSubmitter) SubmitCommandEntryV1(ctx context.Context, en
 	if ctxErr != nil {
 		return treenativewire.ClusterSubmitResult{}, ctxErr
 	}
+	if f.submitHook != nil {
+		f.submitHook()
+	}
 	actualAck := f.actualAck
 	if actualAck == 0 {
 		actualAck = iwire.AckVisible
@@ -328,8 +366,9 @@ func (f *mongoClusterFakeSubmitter) SubmitCommandEntryV1(ctx context.Context, en
 	return treenativewire.ClusterSubmitResult{
 		ActualAck:            actualAck,
 		CommittedRecoverable: f.committedRecoverable,
+		CommittedApplied:     f.committedApplied,
 		ResponseSections:     responseSections,
-	}, nil
+	}, f.submitErr
 }
 
 func (f *mongoClusterFakeSubmitter) snapshotCalls() []mongoClusterSubmitterCall {
@@ -1554,7 +1593,7 @@ func TestCatalogMetaMongoAndSharedSubmitProofMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CurrentCatalogProof: %v", err)
 	}
-	provider, err := treenativewire.NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof)
+	provider, err := treenativewire.NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof, metaRaft)
 	if err != nil {
 		t.Fatalf("NewCatalogMetaClusterRouteProvider: %v", err)
 	}
@@ -1586,7 +1625,7 @@ func TestCatalogMetaMongoAndSharedSubmitProofMatrix(t *testing.T) {
 	}
 	staleProvider, err := treenativewire.NewCatalogMetaClusterRouteProvider(authority, func(context.Context) (raftplacement.CatalogProofV1, error) {
 		return proof, nil
-	})
+	}, metaRaft)
 	if err != nil {
 		t.Fatalf("NewCatalogMetaClusterRouteProvider stale: %v", err)
 	}
@@ -1637,8 +1676,8 @@ func TestMongoGroupRoutedDispatcherRejectsSingleTokenWriteWithoutOwnerBoundIndex
 }
 
 func BenchmarkCatalogMetaMongoMutationAdmission(b *testing.B) {
-	authority, _ := newMongoCatalogMetaAuthority(b)
-	provider, err := treenativewire.NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof)
+	authority, metaRaft := newMongoCatalogMetaAuthority(b)
+	provider, err := treenativewire.NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof, metaRaft)
 	if err != nil {
 		b.Fatalf("NewCatalogMetaClusterRouteProvider: %v", err)
 	}
@@ -2526,6 +2565,119 @@ func TestClusterSubmitterMajorityWriteConcernRejectsMissingCollectionNoops(t *te
 			t.Fatalf("submit calls=%d want 0", len(calls))
 		}
 	})
+}
+
+func TestClusterSubmitterVisibleAckConfirmsCommittedVectorMutationV1(t *testing.T) {
+	submitter := &mongoConfirmingVectorPartitionSubmitterV1{mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{committedApplied: true}}
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	server.ClusterSubmitter = submitter
+	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(32)
+
+	response := serveCommand(t, server, 325834, bson.D{
+		{Key: "create", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, response)
+	submitter.mu.Lock()
+	confirmations := append([]iwire.CommandID(nil), submitter.confirmations...)
+	submitter.mu.Unlock()
+	if !reflect.DeepEqual(confirmations, []iwire.CommandID{iwire.CommandCreateCollection}) {
+		t.Fatalf("confirmations=%v want create_collection", confirmations)
+	}
+}
+
+func TestClusterSubmitterConfirmsCommittedVectorMutationBeforeReturningPostApplyErrorV1(t *testing.T) {
+	submitErr := errors.New("post-apply catalog refresh failed")
+	submitter := &mongoConfirmingVectorPartitionSubmitterV1{mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{committedApplied: true, submitErr: submitErr}}
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	server.ClusterSubmitter = submitter
+	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(32)
+	raw, err := bson.Marshal(bson.D{{Key: "create", Value: "users"}, {Key: "$db", Value: "app"}})
+	if err != nil {
+		t.Fatalf("marshal command: %v", err)
+	}
+	response, err := server.clusterCreateCollectionResponse(context.Background(), wire.Document(raw))
+	if err != nil {
+		t.Fatalf("cluster create response: %v", err)
+	}
+	assertErrmsgContains(t, response, submitErr.Error())
+	submitter.mu.Lock()
+	confirmations := append([]iwire.CommandID(nil), submitter.confirmations...)
+	submitter.mu.Unlock()
+	if !reflect.DeepEqual(confirmations, []iwire.CommandID{iwire.CommandCreateCollection}) {
+		t.Fatalf("confirmations=%v want create_collection", confirmations)
+	}
+}
+
+func TestLegacyRaftClusterSubmitterMongoRequiresVectorAdmissionFromClusterFeatureV1(t *testing.T) {
+	features := raftcluster.DefaultFeatureSet()
+	features.Required = append(features.Required, raftcluster.RequiredFeature{
+		Name:    raftcluster.FeatureVectorPartitionLifecycle,
+		Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureVectorPartitionLifecycle],
+	})
+	bridge := &mongoRecordingRaftCommandSubmitter{groupID: "group-a", features: features}
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	server.ClusterSubmitter = treenativewire.NewRaftClusterSubmitter(bridge)
+	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(32)
+
+	response := serveCommand(t, server, 325836, bson.D{
+		{Key: "create", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "NotWritablePrimary")
+	assertErrmsgContains(t, response, "vector partition lifecycle admission is not configured")
+	if calls := bridge.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("legacy Mongo constructor submitted %d entries before required lifecycle admission", len(calls))
+	}
+}
+
+func TestClusterSubmitterCommittedVectorConfirmationOutlivesClientCancellationV1(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	submitter := &mongoConfirmingVectorPartitionSubmitterV1{mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{committedApplied: true, submitHook: cancel}}
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	server.ClusterSubmitter = submitter
+	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(32)
+	raw, err := bson.Marshal(bson.D{{Key: "create", Value: "users"}, {Key: "$db", Value: "app"}})
+	if err != nil {
+		t.Fatalf("marshal command: %v", err)
+	}
+	response, err := server.clusterCreateCollectionResponse(ctx, wire.Document(raw))
+	if err != nil {
+		t.Fatalf("cluster create after client cancellation: %v", err)
+	}
+	assertOK(t, response)
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatalf("request context err=%v want canceled", ctx.Err())
+	}
+	submitter.mu.Lock()
+	defer submitter.mu.Unlock()
+	if len(submitter.confirmationContextErrors) != 1 || submitter.confirmationContextErrors[0] != nil {
+		t.Fatalf("confirmation context errors=%v want [nil]", submitter.confirmationContextErrors)
+	}
+}
+
+func TestClusterSubmitterRecoverableOnlyDoesNotConfirmVectorMutationV1(t *testing.T) {
+	submitter := &mongoConfirmingVectorPartitionSubmitterV1{mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{committedRecoverable: true}}
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	server.ClusterSubmitter = submitter
+	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(32)
+
+	response := serveCommand(t, server, 325835, bson.D{
+		{Key: "create", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, response)
+	submitter.mu.Lock()
+	confirmationCount := len(submitter.confirmations)
+	submitter.mu.Unlock()
+	if confirmationCount != 0 {
+		t.Fatalf("recoverable-only submission confirmations=%d want 0", confirmationCount)
+	}
 }
 
 func TestClusterSubmitterWriteConcernAccepted(t *testing.T) {

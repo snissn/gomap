@@ -48,6 +48,10 @@ func TestCatalogMetaRaftProviderCommitsOnlyAfterLeaderApplyAndSnapshots(t *testi
 	if term == 0 || index == 0 || !bytes.Equal(state.command, []byte("generation-1")) || state.index != index {
 		t.Fatalf("term/index/state=%d/%d/%q/%d", term, index, state.command, state.index)
 	}
+	linearizableIndex, err := p.LinearizableCatalogMetaAppliedIndexV1(ctx)
+	if err != nil || linearizableIndex != index {
+		t.Fatalf("linearizable applied index=%d err=%v want %d", linearizableIndex, err, index)
+	}
 	if err := p.SnapshotCatalogMetaV1(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -69,6 +73,9 @@ func TestCatalogMetaRaftProviderFollowerAndCancellationFailClosed(t *testing.T) 
 	p := &CatalogMetaRaftProviderV1{}
 	if _, _, err := p.SubmitCatalogMetaCommandV1(context.Background(), []byte("x")); !errors.Is(err, ErrInvalidHashicorpRaftProvider) {
 		t.Fatalf("err=%v", err)
+	}
+	if _, err := p.LinearizableCatalogMetaAppliedIndexV1(context.Background()); !errors.Is(err, ErrInvalidHashicorpRaftProvider) {
+		t.Fatalf("linearizable read err=%v want ErrInvalidHashicorpRaftProvider", err)
 	}
 }
 
@@ -614,6 +621,9 @@ func (s *catalogMetaRaftTestState) InstallCatalogMetaSnapshotBytesV1(capability 
 	}
 	s.command = bytes.Clone(b)
 	return nil
+}
+func (s *catalogMetaRaftTestState) CatalogMetaAppliedIndexV1() (uint64, bool) {
+	return s.index, true
 }
 
 var _ io.Closer = (*catalogMetaNoopCloser)(nil)

@@ -12,10 +12,11 @@ import (
 )
 
 type recordingGroupSubmitter struct {
-	groupID GroupID
-	status  AdmissionStatus
-	err     error
-	calls   []recordingGroupSubmitCall
+	groupID  GroupID
+	features FeatureSet
+	status   AdmissionStatus
+	err      error
+	calls    []recordingGroupSubmitCall
 }
 
 type recordingGroupSubmitCall struct {
@@ -48,7 +49,7 @@ func (s *submitOnlyGroupSubmitter) SubmitCommandEntryV1(context.Context, []byte,
 }
 
 func (s *recordingGroupSubmitter) Config() ResolvedConfig {
-	return ResolvedConfig{GroupID: s.groupID}
+	return ResolvedConfig{GroupID: s.groupID, Features: s.features}
 }
 
 func (s *recordingGroupSubmitter) ClusterAdmissionStatus(context.Context) (AdmissionStatus, error) {
@@ -83,6 +84,13 @@ func (s *recordingGroupSubmitter) SubmitCommandEntryV1(_ context.Context, entry 
 			ProductionConsensus: true,
 		},
 	}, nil
+}
+
+func (s *recordingGroupSubmitter) SubmitCommandEntryWithPreCommitV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1, preCommit func(context.Context) error) (SubmitResultV1, error) {
+	if err := preCommit(ctx); err != nil {
+		return SubmitResultV1{}, err
+	}
+	return s.SubmitCommandEntryV1(ctx, entry, metadata)
 }
 
 func (s *recordingGroupSubmitter) snapshot() []recordingGroupSubmitCall {
@@ -408,6 +416,66 @@ func TestGroupRoutedSubmitterAdmissionMissingProviderFailsClosed(t *testing.T) {
 	}
 	if !status.Unavailable || !strings.Contains(status.Reason, "group \"group-b\" admission provider is unavailable") {
 		t.Fatalf("ClusterAdmissionStatus=%+v want unavailable missing group-b admission provider", status)
+	}
+}
+
+func TestGroupRoutedSubmitterRequiresFeatureWhenAnyGroupEnablesIt(t *testing.T) {
+	features := DefaultFeatureSet()
+	features.Required = append(features.Required, RequiredFeature{
+		Name:    FeatureVectorPartitionLifecycle,
+		Version: SupportedFeatureFloors[FeatureVectorPartitionLifecycle],
+	})
+	dispatcher := newTestGroupRoutedSubmitter(t,
+		&recordingGroupSubmitter{groupID: "group-a"},
+		&recordingGroupSubmitter{groupID: "group-b", features: features},
+	)
+	required, err := dispatcher.RequiresFeatureV1(FeatureVectorPartitionLifecycle)
+	if err != nil {
+		t.Fatalf("RequiresFeatureV1: %v", err)
+	}
+	if !required {
+		t.Fatal("vector partition lifecycle requirement=false want true from group-b config")
+	}
+}
+
+func TestGroupRoutedSubmitterDelegatesSerializedPreCommitV1(t *testing.T) {
+	groupA := &recordingGroupSubmitter{groupID: "group-a"}
+	dispatcher := newTestGroupRoutedSubmitter(t, groupA)
+	called := false
+	if _, err := dispatcher.SubmitCommandEntryWithPreCommitV1(context.Background(), testClusterCommandEntry(t, 7), routeMetadata("group-a", iwire.AckRaftCommitted), func(context.Context) error {
+		called = true
+		if calls := groupA.snapshot(); len(calls) != 0 {
+			t.Fatalf("data submit ran before pre-commit callback: calls=%d", len(calls))
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("SubmitCommandEntryWithPreCommitV1: %v", err)
+	}
+	if !called || len(groupA.snapshot()) != 1 {
+		t.Fatalf("callback/submits=%v/%d want true/1", called, len(groupA.snapshot()))
+	}
+}
+
+func TestGroupRoutedSubmitterRejectsMissingSerializedPreCommitV1(t *testing.T) {
+	groupA := &submitOnlyGroupSubmitter{groupID: "group-a"}
+	registry, err := NewGroupSubmitterRegistryV1([]GroupSubmitterV1{{GroupID: "group-a", Submitter: groupA}})
+	if err != nil {
+		t.Fatalf("NewGroupSubmitterRegistryV1: %v", err)
+	}
+	dispatcher, err := NewCatalogMetaGroupRoutedSubmitter(registry, &recordingCatalogRouteValidator{})
+	if err != nil {
+		t.Fatalf("NewCatalogMetaGroupRoutedSubmitter: %v", err)
+	}
+	called := false
+	_, err = dispatcher.SubmitCommandEntryWithPreCommitV1(context.Background(), testClusterCommandEntry(t, 7), routeMetadata("group-a", iwire.AckRaftCommitted), func(context.Context) error {
+		called = true
+		return nil
+	})
+	if !errors.Is(err, ErrInvalidSubmitter) {
+		t.Fatalf("SubmitCommandEntryWithPreCommitV1 err=%v want invalid submitter", err)
+	}
+	if called {
+		t.Fatal("pre-commit callback ran without a serialized target submitter")
 	}
 }
 

@@ -26,11 +26,46 @@ import (
 )
 
 type fakeClusterSubmitter struct {
-	mu           sync.Mutex
-	calls        []fakeClusterSubmitCall
-	status       ClusterAdmissionStatus
-	admissionErr error
-	resultHook   func(raftentry.CommandEntryV1, ClusterRequestMetadata, ClusterSubmitResult) (ClusterSubmitResult, error)
+	mu                   sync.Mutex
+	calls                []fakeClusterSubmitCall
+	status               ClusterAdmissionStatus
+	admissionErr         error
+	vectorAdmissionErr   error
+	vectorAdmissionCalls []iwire.CommandID
+	resultHook           func(raftentry.CommandEntryV1, ClusterRequestMetadata, ClusterSubmitResult) (ClusterSubmitResult, error)
+}
+
+type confirmingVectorPartitionClusterSubmitterV1 struct {
+	*fakeClusterSubmitter
+	mu                        sync.Mutex
+	confirmations             []iwire.CommandID
+	confirmationContextErrors []error
+}
+
+func (s *confirmingVectorPartitionClusterSubmitterV1) RequiresVectorPartitionMutationAdmissionV1(context.Context) (bool, error) {
+	return true, nil
+}
+
+func (s *confirmingVectorPartitionClusterSubmitterV1) SubmitCommandEntryWithPreCommitV1(ctx context.Context, entry []byte, metadata ClusterRequestMetadata, preCommit func(context.Context) error) (ClusterSubmitResult, error) {
+	if err := preCommit(ctx); err != nil {
+		return ClusterSubmitResult{}, err
+	}
+	return s.SubmitCommandEntryV1(ctx, entry, metadata)
+}
+
+func (s *confirmingVectorPartitionClusterSubmitterV1) ConfirmVectorPartitionMutationV1(ctx context.Context, command iwire.CommandID, _ []iwire.Section) error {
+	s.mu.Lock()
+	s.confirmations = append(s.confirmations, command)
+	s.confirmationContextErrors = append(s.confirmationContextErrors, ctx.Err())
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *fakeClusterSubmitter) AdmitVectorPartitionMutationV1(_ context.Context, command iwire.CommandID, _ []iwire.Section) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.vectorAdmissionCalls = append(s.vectorAdmissionCalls, command)
+	return s.vectorAdmissionErr
 }
 
 type testSensitiveClusterRouteError struct {
@@ -63,13 +98,35 @@ func (noAdmissionClusterSubmitter) SubmitCommandEntryV1(context.Context, []byte,
 	panic("unexpected submit")
 }
 
+type lifecycleRequiredNoAdmissionClusterSubmitter struct{}
+
+func (lifecycleRequiredNoAdmissionClusterSubmitter) SubmitCommandEntryV1(context.Context, []byte, ClusterRequestMetadata) (ClusterSubmitResult, error) {
+	panic("unexpected submit")
+}
+func (lifecycleRequiredNoAdmissionClusterSubmitter) ClusterAdmissionStatus(context.Context) (ClusterAdmissionStatus, error) {
+	return ClusterLeaderAdmission(), nil
+}
+func (lifecycleRequiredNoAdmissionClusterSubmitter) RequiresVectorPartitionMutationAdmissionV1(context.Context) (bool, error) {
+	return true, nil
+}
+
 type recordingRaftCommandSubmitter struct {
-	groupID raftcluster.GroupID
-	manager *collections.CollectionManager
-	status  raftcluster.AdmissionStatus
-	err     error
-	mu      sync.Mutex
-	calls   []recordingRaftCommandSubmitCall
+	groupID  raftcluster.GroupID
+	features raftcluster.FeatureSet
+	manager  *collections.CollectionManager
+	status   raftcluster.AdmissionStatus
+	err      error
+	mu       sync.Mutex
+	calls    []recordingRaftCommandSubmitCall
+}
+
+type fixedResultRaftCommandSubmitter struct {
+	result raftcluster.SubmitResultV1
+	err    error
+}
+
+func (s fixedResultRaftCommandSubmitter) SubmitCommandEntryV1(context.Context, []byte, raftentry.RequestMetadataV1) (raftcluster.SubmitResultV1, error) {
+	return s.result, s.err
 }
 
 type recordingRaftCommandSubmitCall struct {
@@ -78,7 +135,7 @@ type recordingRaftCommandSubmitCall struct {
 }
 
 func (s *recordingRaftCommandSubmitter) Config() raftcluster.ResolvedConfig {
-	return raftcluster.ResolvedConfig{GroupID: s.groupID}
+	return raftcluster.ResolvedConfig{GroupID: s.groupID, Features: s.features}
 }
 
 func (s *recordingRaftCommandSubmitter) ClusterAdmissionStatus(context.Context) (raftcluster.AdmissionStatus, error) {
@@ -130,6 +187,7 @@ func (s *recordingRaftCommandSubmitter) SubmitCommandEntryV1(ctx context.Context
 	return raftcluster.SubmitResultV1{
 		ActualAck:            actualAck,
 		CommittedRecoverable: actualAck == iwire.AckRaftCommitted,
+		CommittedApplied:     true,
 		DecodedEntry:         decoded,
 		ApplyResult:          applyResult,
 		CommittedEntry:       committed,
@@ -399,6 +457,7 @@ func fakeClusterSubmitResponse(entry raftentry.CommandEntryV1, metadata ClusterR
 	}
 	return ClusterSubmitResult{
 		ActualAck:        actualAck,
+		CommittedApplied: true,
 		ResponseSections: sections,
 	}, nil
 }
@@ -630,6 +689,269 @@ func TestClusterAdmissionLeaderRoutesThroughSubmitter(t *testing.T) {
 	}
 	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandInsertBatch {
 		t.Fatalf("command=%d want insert_batch", got)
+	}
+}
+
+func TestClusterSubmitterVectorPartitionAdmissionRunsBeforeRaftSubmitV1(t *testing.T) {
+	submitter := &fakeClusterSubmitter{vectorAdmissionErr: errors.New("vector generation must be invalidated first")}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")}, [][]byte{[]byte(`{"embedding":[1,2]}`)}, AckVisible)
+	if err == nil {
+		t.Fatal("InsertBatch succeeded despite vector admission refusal")
+	}
+	if calls := submitter.snapshot(); len(calls) != 0 {
+		t.Fatalf("admission refusal submitted %d Raft entries", len(calls))
+	}
+	submitter.mu.Lock()
+	admissions := append([]iwire.CommandID(nil), submitter.vectorAdmissionCalls...)
+	submitter.vectorAdmissionErr = nil
+	submitter.mu.Unlock()
+	if len(admissions) != 1 || admissions[0] != iwire.CommandInsertBatch {
+		t.Fatalf("admissions=%v", admissions)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")}, [][]byte{[]byte(`{"embedding":[1,2]}`)}, AckVisible); err != nil {
+		t.Fatalf("InsertBatch after durable admission: %v", err)
+	}
+	if calls := submitter.snapshot(); len(calls) != 1 {
+		t.Fatalf("successful admission submitted %d Raft entries", len(calls))
+	}
+}
+
+func TestClusterSubmitterVisibleAckConfirmsCommittedVectorMutationV1(t *testing.T) {
+	submitter := &confirmingVectorPartitionClusterSubmitterV1{fakeClusterSubmitter: &fakeClusterSubmitter{}}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")}, [][]byte{[]byte(`{"embedding":[1,2]}`)}, AckVisible); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	submitter.mu.Lock()
+	confirmations := append([]iwire.CommandID(nil), submitter.confirmations...)
+	submitter.mu.Unlock()
+	if !reflect.DeepEqual(confirmations, []iwire.CommandID{iwire.CommandInsertBatch}) {
+		t.Fatalf("confirmations=%v want insert_batch", confirmations)
+	}
+}
+
+func TestClusterSubmitterConfirmsCommittedVectorMutationBeforeReturningPostApplyErrorV1(t *testing.T) {
+	submitErr := errors.New("post-apply catalog refresh failed")
+	submitter := &confirmingVectorPartitionClusterSubmitterV1{fakeClusterSubmitter: &fakeClusterSubmitter{}}
+	submitter.resultHook = func(_ raftentry.CommandEntryV1, _ ClusterRequestMetadata, result ClusterSubmitResult) (ClusterSubmitResult, error) {
+		return result, submitErr
+	}
+	client, server, _, _ := serveCollectionPipeWithServerAndOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	body, err := appendCommandRequestBody(nil, iwire.CommandInsertBatch, clusterInsertBatchSections(t, client, ctx, AckVisible, "u1")...)
+	if err != nil {
+		t.Fatalf("append request body: %v", err)
+	}
+	sections, err := iwire.DecodeSections(body, server.limits)
+	if err != nil {
+		t.Fatalf("decode request body: %v", err)
+	}
+	cmd, err := server.registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("validate request sections: %v", err)
+	}
+	if _, err := server.handleClusterMutation(ctx, iwire.Header{Type: iwire.FrameRequest, RequestID: 1}, cmd); !errors.Is(err, submitErr) {
+		t.Fatalf("post-apply error=%v want %v", err, submitErr)
+	}
+	submitter.mu.Lock()
+	confirmations := append([]iwire.CommandID(nil), submitter.confirmations...)
+	submitter.mu.Unlock()
+	if !reflect.DeepEqual(confirmations, []iwire.CommandID{iwire.CommandInsertBatch}) {
+		t.Fatalf("confirmations=%v want insert_batch", confirmations)
+	}
+}
+
+func TestClusterSubmitterCommittedVectorConfirmationOutlivesClientCancellationV1(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	submitter := &confirmingVectorPartitionClusterSubmitterV1{fakeClusterSubmitter: &fakeClusterSubmitter{}}
+	submitter.resultHook = func(_ raftentry.CommandEntryV1, _ ClusterRequestMetadata, result ClusterSubmitResult) (ClusterSubmitResult, error) {
+		cancel()
+		return result, nil
+	}
+	client, server, _, _ := serveCollectionPipeWithServerAndOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	setupCtx, setupCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer setupCancel()
+	if err := client.Hello(setupCtx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	body, err := appendCommandRequestBody(nil, iwire.CommandInsertBatch, clusterInsertBatchSections(t, client, setupCtx, AckVisible, "u1")...)
+	if err != nil {
+		t.Fatalf("append request body: %v", err)
+	}
+	sections, err := iwire.DecodeSections(body, server.limits)
+	if err != nil {
+		t.Fatalf("decode request body: %v", err)
+	}
+	cmd, err := server.registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("validate request sections: %v", err)
+	}
+	if _, err := server.handleClusterMutation(ctx, iwire.Header{Type: iwire.FrameRequest, RequestID: 1}, cmd); err != nil {
+		t.Fatalf("handle committed mutation after client cancellation: %v", err)
+	}
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatalf("request context err=%v want canceled", ctx.Err())
+	}
+	submitter.mu.Lock()
+	defer submitter.mu.Unlock()
+	if len(submitter.confirmationContextErrors) != 1 || submitter.confirmationContextErrors[0] != nil {
+		t.Fatalf("confirmation context errors=%v want [nil]", submitter.confirmationContextErrors)
+	}
+}
+
+func TestClusterSubmitterRouteRefusalRunsBeforeVectorPartitionAdmissionV1(t *testing.T) {
+	submitter := &routingClusterSubmitter{
+		fakeClusterSubmitter: &fakeClusterSubmitter{},
+		err:                  errors.New("route lookup refused"),
+	}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")}, [][]byte{[]byte(`{"embedding":[1,2]}`)}, AckVisible); err == nil {
+		t.Fatal("InsertBatch succeeded despite route refusal")
+	}
+	if calls := submitter.snapshot(); len(calls) != 0 {
+		t.Fatalf("route refusal submitted %d Raft entries", len(calls))
+	}
+	submitter.mu.Lock()
+	admissions := append([]iwire.CommandID(nil), submitter.vectorAdmissionCalls...)
+	submitter.mu.Unlock()
+	if len(admissions) != 0 {
+		t.Fatalf("route refusal opened durable vector admission: %v", admissions)
+	}
+}
+
+func TestClusterSubmitterRequiredVectorAdmissionFailsClosedWhenMisconfiguredV1(t *testing.T) {
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: lifecycleRequiredNoAdmissionClusterSubmitter{}})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")}, [][]byte{[]byte(`{"embedding":[1,2]}`)}, AckVisible)
+	if err == nil {
+		t.Fatal("misconfigured M7 admission unexpectedly submitted mutation")
+	}
+}
+
+func TestLegacyRaftClusterSubmitterRequiresVectorAdmissionFromClusterFeatureV1(t *testing.T) {
+	features := raftcluster.DefaultFeatureSet()
+	features.Required = append(features.Required, raftcluster.RequiredFeature{
+		Name:    raftcluster.FeatureVectorPartitionLifecycle,
+		Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureVectorPartitionLifecycle],
+	})
+	bridge := &recordingRaftCommandSubmitter{groupID: "group-a", features: features}
+	submitter := NewRaftClusterSubmitter(bridge)
+	required, err := submitter.RequiresVectorPartitionMutationAdmissionV1(context.Background())
+	if err != nil {
+		t.Fatalf("RequiresVectorPartitionMutationAdmissionV1: %v", err)
+	}
+	if !required {
+		t.Fatal("vector partition admission requirement=false want true from bridge feature config")
+	}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")}, [][]byte{[]byte(`{"embedding":[1,2]}`)}, AckVisible); !isRemoteError(err, iwire.ErrReadOnly) {
+		t.Fatalf("InsertBatch err=%v want read-only missing lifecycle provider", err)
+	}
+	if calls := bridge.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("legacy constructor submitted %d entries before required lifecycle admission", len(calls))
+	}
+}
+
+func TestCatalogRoutedLegacySubmitterRequiresVectorAdmissionFromCatalogFeatureV1(t *testing.T) {
+	authority, metaRaft := newNativewireCatalogMetaAuthorityWithLifecycle(t, true)
+	provider, err := NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof, metaRaft)
+	if err != nil {
+		t.Fatalf("NewCatalogMetaClusterRouteProvider: %v", err)
+	}
+	bridge := &recordingRaftCommandSubmitter{groupID: "group-a"}
+	submitter := NewRoutedRaftClusterSubmitter(bridge, provider)
+	required, err := submitter.RequiresVectorPartitionMutationAdmissionV1(context.Background())
+	if err != nil {
+		t.Fatalf("RequiresVectorPartitionMutationAdmissionV1: %v", err)
+	}
+	if !required {
+		t.Fatal("vector partition admission requirement=false want true from replicated catalog feature")
+	}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")}, [][]byte{[]byte(`{"embedding":[1,2]}`)}, AckVisible); !isRemoteError(err, iwire.ErrReadOnly) {
+		t.Fatalf("InsertBatch err=%v want read-only missing lifecycle provider", err)
+	}
+	if calls := bridge.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("routed legacy constructor submitted %d entries before required lifecycle admission", len(calls))
+	}
+}
+
+func TestCatalogRoutedLegacySubmitterRejectsStaleFeatureViewV1(t *testing.T) {
+	authority, _ := newNativewireCatalogMetaAuthority(t)
+	status, ok := authority.Status()
+	if !ok {
+		t.Fatal("catalog authority status unavailable")
+	}
+	fence := &catalogMetaLinearizableAppliedIndexProviderTestV1{index: status.AppliedIndex + 1}
+	provider, err := NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof, fence)
+	if err != nil {
+		t.Fatalf("NewCatalogMetaClusterRouteProvider: %v", err)
+	}
+	bridge := &recordingRaftCommandSubmitter{groupID: "group-a"}
+	submitter := NewRoutedRaftClusterSubmitter(bridge, provider)
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")}, [][]byte{[]byte(`{"embedding":[1,2]}`)}, AckVisible); err == nil {
+		t.Fatal("InsertBatch succeeded while local catalog feature view lagged the linearizable meta-Raft index")
+	}
+	if fence.calls != 1 {
+		t.Fatalf("linearizable fence calls=%d want 1", fence.calls)
+	}
+	if calls := bridge.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("stale catalog feature view submitted %d entries before lifecycle admission", len(calls))
+	}
+}
+
+func TestNewRaftClusterSubmitterWithVectorPartitionAdmissionRequiresConfirmationV1(t *testing.T) {
+	_, err := NewRaftClusterSubmitterWithVectorPartitionAdmissionV1(nil, &fakeClusterSubmitter{})
+	if err == nil || !strings.Contains(err.Error(), "confirmation provider is required") {
+		t.Fatalf("constructor err=%v want missing confirmation provider", err)
 	}
 }
 
@@ -2544,6 +2866,38 @@ func TestRaftClusterSubmitterRequiresCollectionManagerBeforeSubmit(t *testing.T)
 	}
 }
 
+func TestRaftClusterSubmitterPreservesCommittedAppliedThroughErrorsV1(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open DB: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	base := raftcluster.SubmitResultV1{
+		ActualAck:        iwire.AckVisible,
+		CommittedApplied: true,
+		ApplyResult:      raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied},
+	}
+	tests := []struct {
+		name   string
+		bridge fixedResultRaftCommandSubmitter
+	}{
+		{name: "bridge error", bridge: fixedResultRaftCommandSubmitter{result: base, err: raftcluster.ErrLocalApplyNotRecoverable}},
+		{name: "response shaping error", bridge: fixedResultRaftCommandSubmitter{result: base}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := NewRaftClusterSubmitter(test.bridge, manager).SubmitCommandEntryV1(context.Background(), nil, ClusterRequestMetadata{})
+			if err == nil {
+				t.Fatal("SubmitCommandEntryV1 unexpectedly succeeded")
+			}
+			if !result.CommittedApplied {
+				t.Fatalf("error %v discarded committed-applied evidence", err)
+			}
+		})
+	}
+}
+
 func TestRaftClusterSubmitterConcreteBridgeMissingCollectionPreflightDoesNotConsumeIndex(t *testing.T) {
 	client, _, mgr, _ := serveRaftClusterBridgePipe(t, raftcluster.LeaderAdmission())
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -2795,7 +3149,7 @@ func TestCatalogMetaNativewireMutationAndReadProofMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CurrentCatalogProof: %v", err)
 	}
-	provider, err := NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof)
+	provider, err := NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof, metaRaft)
 	if err != nil {
 		t.Fatalf("NewCatalogMetaClusterRouteProvider: %v", err)
 	}
@@ -2825,7 +3179,7 @@ func TestCatalogMetaNativewireMutationAndReadProofMatrix(t *testing.T) {
 
 	staleProvider, err := NewCatalogMetaClusterRouteProvider(authority, func(context.Context) (raftplacement.CatalogProofV1, error) {
 		return proof, nil
-	})
+	}, metaRaft)
 	if err != nil {
 		t.Fatalf("NewCatalogMetaClusterRouteProvider stale: %v", err)
 	}
@@ -2841,7 +3195,7 @@ func TestCatalogMetaNativewireMutationAndReadProofMatrix(t *testing.T) {
 	}
 	missingProvider, err := NewCatalogMetaClusterRouteProvider(authority, func(context.Context) (raftplacement.CatalogProofV1, error) {
 		return raftplacement.CatalogProofV1{}, nil
-	})
+	}, metaRaft)
 	if err != nil {
 		t.Fatalf("NewCatalogMetaClusterRouteProvider missing: %v", err)
 	}
@@ -3247,6 +3601,10 @@ func serveCatalogMetaGroupRoutedRaftClusterBridgePipe(t testing.TB, routeProvide
 }
 
 func newNativewireCatalogMetaAuthority(t testing.TB) (*raftplacement.CatalogMetaAuthorityV1, *raftcluster.CatalogMetaRaftProviderV1) {
+	return newNativewireCatalogMetaAuthorityWithLifecycle(t, false)
+}
+
+func newNativewireCatalogMetaAuthorityWithLifecycle(t testing.TB, lifecycle bool) (*raftplacement.CatalogMetaAuthorityV1, *raftcluster.CatalogMetaRaftProviderV1) {
 	t.Helper()
 	authority := raftplacement.NewCatalogMetaAuthorityV1()
 	_, transport := hraft.NewInmemTransport("meta-a")
@@ -3286,15 +3644,27 @@ func newNativewireCatalogMetaAuthority(t testing.TB) (*raftplacement.CatalogMeta
 		case <-time.After(time.Millisecond):
 		}
 	}
-	if _, _, err := provider.SubmitCatalogMetaCommandV1(ctx, nativewireCatalogMetaCommand(t, 0, 1)); err != nil {
+	if _, _, err := provider.SubmitCatalogMetaCommandV1(ctx, nativewireCatalogMetaCommandWithLifecycle(t, 0, 1, lifecycle)); err != nil {
 		t.Fatalf("submit initial catalog meta: %v", err)
 	}
 	return authority, provider
 }
 
 func nativewireCatalogMetaCommand(t testing.TB, expected, epoch uint64) []byte {
+	return nativewireCatalogMetaCommandWithLifecycle(t, expected, epoch, false)
+}
+
+func nativewireCatalogMetaCommandWithLifecycle(t testing.TB, expected, epoch uint64, lifecycle bool) []byte {
 	t.Helper()
+	features := raftplacement.DefaultFeatureSet()
+	if lifecycle {
+		features.Required = append(features.Required, raftcluster.RequiredFeature{
+			Name:    raftcluster.FeatureVectorPartitionLifecycle,
+			Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureVectorPartitionLifecycle],
+		})
+	}
 	record, err := raftplacement.NewCatalogMetaRecordV1(epoch, raftplacement.CatalogV1{
+		Features: features,
 		Groups: []raftplacement.GroupV1{
 			{ID: "group-a", Members: []raftcluster.NodeID{"node-a", "node-c"}, LeaderHint: "node-a"},
 			{ID: "group-b", Members: []raftcluster.NodeID{"node-b", "node-c"}, LeaderHint: "node-b"},
@@ -3420,8 +3790,8 @@ func BenchmarkRaftClusterSubmitterConcreteBridgeUpdateBSONSet(b *testing.B) {
 }
 
 func BenchmarkCatalogMetaNativewireAdmission(b *testing.B) {
-	authority, _ := newNativewireCatalogMetaAuthority(b)
-	provider, err := NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof)
+	authority, metaRaft := newNativewireCatalogMetaAuthority(b)
+	provider, err := NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof, metaRaft)
 	if err != nil {
 		b.Fatalf("NewCatalogMetaClusterRouteProvider: %v", err)
 	}

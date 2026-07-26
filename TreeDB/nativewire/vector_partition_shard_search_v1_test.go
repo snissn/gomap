@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -289,6 +290,133 @@ func TestCollectionVectorPartitionGenerationCacheRevalidatesWarmHitV1(t *testing
 	}
 }
 
+type recordingVectorPartitionReplicatedLifecycleAuthorityV1 struct {
+	calls          int
+	args           []any
+	readySetDigest string
+	err            error
+}
+
+func TestVectorPartitionReplicatedLifecycleValidationErrorPreservesCancellationV1(t *testing.T) {
+	tests := []struct {
+		name string
+		ctx  context.Context
+		err  error
+		want error
+	}{
+		{name: "authority canceled", ctx: context.Background(), err: context.Canceled, want: context.Canceled},
+		{name: "authority deadline", ctx: context.Background(), err: context.DeadlineExceeded, want: context.DeadlineExceeded},
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	tests = append(tests, struct {
+		name string
+		ctx  context.Context
+		err  error
+		want error
+	}{name: "caller canceled", ctx: canceled, err: errors.New("authority unavailable"), want: context.Canceled})
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := vectorPartitionReplicatedLifecycleValidationErrorV1(test.ctx, test.err); !errors.Is(got, test.want) || errors.Is(got, ErrVectorPartitionShardSearchGenerationMismatch) {
+				t.Fatalf("validation error=%v want direct %v", got, test.want)
+			}
+		})
+	}
+	plain := errors.New("generation replaced")
+	if got := vectorPartitionReplicatedLifecycleValidationErrorV1(context.Background(), plain); !errors.Is(got, ErrVectorPartitionShardSearchGenerationMismatch) || errors.Is(got, plain) {
+		t.Fatalf("ordinary validation error=%v", got)
+	}
+}
+
+func (a *recordingVectorPartitionReplicatedLifecycleAuthorityV1) ValidateVectorPartitionGenerationSearchV1(
+	_ context.Context,
+	collection raftplacement.CollectionRefV1,
+	index string,
+	generation uint64,
+	indexDigest string,
+	sourceGeneration uint64,
+	sourceChecksum uint64,
+	sourceSchemaHash uint64,
+	sourceRowCount uint64,
+) (string, error) {
+	a.calls++
+	a.args = []any{collection, index, generation, indexDigest, sourceGeneration, sourceChecksum, sourceSchemaHash, sourceRowCount}
+	readySetDigest := a.readySetDigest
+	if readySetDigest == "" {
+		readySetDigest = strings.Repeat("b", 64)
+	}
+	return readySetDigest, a.err
+}
+
+func TestCollectionVectorPartitionGenerationCacheUsesReplicatedAuthorityOnWarmHitV1(t *testing.T) {
+	key := collectionVectorPartitionGenerationKeyV1{index: "embedding", generation: 7}
+	manifest := VectorPartitionPinnedManifestV1{
+		Collection: "users", IndexName: key.index, Generation: key.generation,
+		IndexDefinitionDigest: strings.Repeat("a", 64),
+		SourceGeneration:      3,
+		SourceChecksum:        4,
+		SourceSchemaHash:      5,
+		SourceRowCount:        6,
+		ReadySetDigest:        strings.Repeat("b", 64),
+	}
+	authority := &recordingVectorPartitionReplicatedLifecycleAuthorityV1{err: errors.New("generation invalidated")}
+	entry := &collectionVectorPartitionGenerationCacheV1{
+		index: key.index, generation: key.generation, manifest: manifest,
+		searchers: make(map[uint32]*collections.VectorPartitionLocalSearcherV1),
+		opening:   make(map[uint32]*collectionVectorPartitionSearchLoadV1),
+	}
+	source := &CollectionVectorPartitionGenerationSourceV1{
+		Collection:           new(collections.Collection),
+		replicatedCollection: raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "users"},
+		replicatedLifecycle:  authority,
+		entries:              map[collectionVectorPartitionGenerationKeyV1]*collectionVectorPartitionGenerationCacheV1{key: entry},
+	}
+
+	if _, err := source.PinVectorPartitionGenerationV1(t.Context(), key.index, key.generation); !errors.Is(err, ErrVectorPartitionShardSearchGenerationMismatch) {
+		t.Fatalf("warm invalidated generation err=%v", err)
+	}
+	if authority.calls != 1 {
+		t.Fatalf("replicated authority calls=%d want 1", authority.calls)
+	}
+	want := []any{raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "users"}, "embedding", uint64(7), strings.Repeat("a", 64), uint64(3), uint64(4), uint64(5), uint64(6)}
+	if !reflect.DeepEqual(authority.args, want) {
+		t.Fatalf("replicated authority args=%#v want %#v", authority.args, want)
+	}
+	if _, ok := source.invalidated[key]; !ok {
+		t.Fatal("replicated invalidation did not permanently evict stale cache entry")
+	}
+}
+
+func TestCollectionVectorPartitionGenerationCacheRejectsChangedReplicatedReadySetV1(t *testing.T) {
+	key := collectionVectorPartitionGenerationKeyV1{index: "embedding", generation: 7}
+	manifest := VectorPartitionPinnedManifestV1{
+		Collection: "users", IndexName: key.index, Generation: key.generation,
+		IndexDefinitionDigest: strings.Repeat("a", 64),
+		SourceGeneration:      3,
+		SourceChecksum:        4,
+		SourceSchemaHash:      5,
+		SourceRowCount:        6,
+		ReadySetDigest:        strings.Repeat("b", 64),
+	}
+	entry := &collectionVectorPartitionGenerationCacheV1{
+		index: key.index, generation: key.generation, manifest: manifest,
+		searchers: make(map[uint32]*collections.VectorPartitionLocalSearcherV1),
+		opening:   make(map[uint32]*collectionVectorPartitionSearchLoadV1),
+	}
+	source := &CollectionVectorPartitionGenerationSourceV1{
+		Collection:           new(collections.Collection),
+		replicatedCollection: raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "users"},
+		replicatedLifecycle:  &recordingVectorPartitionReplicatedLifecycleAuthorityV1{readySetDigest: strings.Repeat("c", 64)},
+		entries:              map[collectionVectorPartitionGenerationKeyV1]*collectionVectorPartitionGenerationCacheV1{key: entry},
+	}
+	if _, err := source.PinVectorPartitionGenerationV1(t.Context(), key.index, key.generation); !errors.Is(err, ErrVectorPartitionShardSearchGenerationMismatch) {
+		t.Fatalf("changed replicated ready-set err=%v", err)
+	}
+	if _, invalidated := source.invalidated[key]; !invalidated {
+		t.Fatal("changed replicated ready-set did not retire the cached generation")
+	}
+}
+
 func TestCollectionVectorPartitionGenerationCacheRefreshIsNotPermanentInvalidationV1(t *testing.T) {
 	oldSearcher, err := collections.OpenVectorPartitionLocalSearcherV1(
 		vectorPartitionShardSearchAssetTestV1(0, []string{"old"}, [][]float32{{1, 0}}),
@@ -538,6 +666,7 @@ func TestVectorPartitionShardSearchLeaderGroupLocalReturnsOracleAndProofV1(t *te
 		t.Fatalf("response identity=%+v", response)
 	}
 	if got := response.Proof; got.ServingNode != "node-a" || got.LeaderNode != "node-a" || got.GroupID != "group-a" ||
+		got.ReadySetDigest != request.ReadySetDigest ||
 		got.ReadTerm != 3 || got.ReadIndex != 41 || got.AppliedTerm != 3 || got.AppliedIndex != 43 ||
 		got.PartitionGeneration != 7 || got.RouterGeneration != 7 || got.SourceGeneration != 11 {
 		t.Fatalf("proof=%+v", got)
@@ -922,6 +1051,7 @@ func TestVectorPartitionShardSearchBoundsFailBeforeProofOrAllocationV1(t *testin
 		{name: "top_k", edit: func(r *VectorPartitionShardSearchRequestV1) { r.TopK = service.limits.MaxTopK + 1 }},
 		{name: "ef_search", edit: func(r *VectorPartitionShardSearchRequestV1) { r.EfSearch = service.limits.MaxEfSearch + 1 }},
 		{name: "partition_order", edit: func(r *VectorPartitionShardSearchRequestV1) { r.PartitionIDs = []uint32{0, 0} }},
+		{name: "ready_set_digest", edit: func(r *VectorPartitionShardSearchRequestV1) { r.ReadySetDigest = "" }},
 		{name: "request_bytes", edit: func(r *VectorPartitionShardSearchRequestV1) { r.RequestBytesLimit = 1 }},
 		{name: "candidate_bytes", edit: func(r *VectorPartitionShardSearchRequestV1) { r.CandidateBytesLimit = 1 }},
 		{name: "response_bytes", edit: func(r *VectorPartitionShardSearchRequestV1) { r.ResponseBytesLimit = 1 }, code: VectorPartitionShardSearchErrorResponseTooLargeV1},
@@ -1304,6 +1434,7 @@ func newVectorPartitionShardSearchTestServiceV1(tb testing.TB, parts []raftplace
 			SourceRowCount:        5,
 			Generation:            7,
 			RouterGeneration:      7,
+			ReadySetDigest:        vectorPartitionShardSearchDigestTestV1,
 			PartitionCount:        uint32(len(parts)),
 			Placements:            manifestParts,
 		},
@@ -1370,6 +1501,7 @@ func vectorPartitionShardSearchRequestTestV1(partitions []uint32) VectorPartitio
 		SourceRowCount:        5,
 		PartitionGeneration:   7,
 		RouterGeneration:      7,
+		ReadySetDigest:        vectorPartitionShardSearchDigestTestV1,
 		TargetGroupID:         "group-a",
 		TargetNodeID:          "node-a",
 		PartitionIDs:          append([]uint32(nil), partitions...),

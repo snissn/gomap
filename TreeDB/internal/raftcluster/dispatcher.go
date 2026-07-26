@@ -97,6 +97,34 @@ type GroupRoutedSubmitter struct {
 	catalogRouteValidator CatalogRouteValidatorV1
 }
 
+// RequiresFeatureV1 derives a composite requirement from the configured data
+// groups. A requirement on any group applies to the shared routed submit
+// boundary; otherwise one group could bypass a cluster-wide safety feature.
+func (s *GroupRoutedSubmitter) RequiresFeatureV1(name FeatureName) (bool, error) {
+	if s == nil || s.registry.empty() {
+		return false, ErrInvalidSubmitter
+	}
+	for _, groupID := range s.registry.GroupIDs() {
+		submitter, ok := s.registry.Lookup(groupID)
+		if !ok {
+			continue
+		}
+		if requirements, ok := submitter.(FeatureRequirementProviderV1); ok {
+			required, err := requirements.RequiresFeatureV1(name)
+			if err != nil {
+				return false, err
+			}
+			if required {
+				return true, nil
+			}
+		}
+		if provider, ok := submitter.(Provider); ok && FeatureSetRequiresV1(provider.Config().Features, name) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func newCatalogMetaGroupRoutedSubmitter(registry GroupSubmitterRegistryV1, validator CatalogRouteValidatorV1) (*GroupRoutedSubmitter, error) {
 	if registry.empty() {
 		return nil, errors.Join(ErrInvalidSubmitter, fmt.Errorf("group submitter registry is required"))
@@ -120,6 +148,17 @@ func NewCatalogMetaGroupRoutedSubmitter(registry GroupSubmitterRegistryV1, valid
 }
 
 func (s *GroupRoutedSubmitter) SubmitCommandEntryV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1) (SubmitResultV1, error) {
+	return s.submitCommandEntryV1(ctx, entry, metadata, nil)
+}
+
+func (s *GroupRoutedSubmitter) SubmitCommandEntryWithPreCommitV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1, preCommit func(context.Context) error) (SubmitResultV1, error) {
+	if preCommit == nil {
+		return SubmitResultV1{}, errors.Join(ErrInvalidSubmitter, fmt.Errorf("pre-commit callback is required"))
+	}
+	return s.submitCommandEntryV1(ctx, entry, metadata, preCommit)
+}
+
+func (s *GroupRoutedSubmitter) submitCommandEntryV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1, preCommit func(context.Context) error) (SubmitResultV1, error) {
 	if s == nil || s.registry.empty() {
 		return SubmitResultV1{}, ErrInvalidSubmitter
 	}
@@ -139,6 +178,13 @@ func (s *GroupRoutedSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	submitter, ok := s.registry.Lookup(target.GroupID)
 	if !ok {
 		return SubmitResultV1{}, errors.Join(ErrRouteTargetUnknown, routeErrorWithMetadata(metadata, "route group %q is not configured locally", target.GroupID))
+	}
+	if preCommit != nil {
+		atomicSubmitter, ok := submitter.(CommandSubmitterWithPreCommitV1)
+		if !ok {
+			return SubmitResultV1{}, errors.Join(ErrInvalidSubmitter, fmt.Errorf("route group %q does not support serialized pre-commit callbacks", target.GroupID))
+		}
+		return atomicSubmitter.SubmitCommandEntryWithPreCommitV1(ctx, bytes.Clone(entry), cloneRequestMetadataV1(metadata), preCommit)
 	}
 	return submitter.SubmitCommandEntryV1(ctx, bytes.Clone(entry), cloneRequestMetadataV1(metadata))
 }

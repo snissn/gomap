@@ -121,6 +121,7 @@ func newBenchmarkEnvironment(collection *collections.Collection, status collecti
 		SourceRowCount:        status.Manifest.SourceRowCount,
 		PartitionGeneration:   status.Manifest.Generation,
 		RouterGeneration:      status.Manifest.RouterGeneration,
+		ReadySetDigest:        status.Manifest.ReadySetDigest,
 		TargetGroupID:         cluster.groupID,
 		TargetNodeID:          cluster.leader.id,
 		PartitionIDs:          []uint32{partition},

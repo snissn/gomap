@@ -16,13 +16,18 @@ const (
 	// not imply a selected Raft library or production HA behavior.
 	FeatureSingleGroupProvider  FeatureName = "treedb.raftcluster.single_group_provider"
 	FeatureCatalogMetaAuthority FeatureName = "treedb.raftcluster.catalog_meta_authority"
+	// FeatureVectorPartitionLifecycle gates the M7 catalog/meta lifecycle and
+	// invalidation-before-mutation contract. It is opt-in during pre-alpha;
+	// legacy clusters do not acquire the new admission requirement implicitly.
+	FeatureVectorPartitionLifecycle FeatureName = "treedb.raftcluster.vector_partition_lifecycle"
 )
 
 var (
 	SupportedConfigVersion = Version{Major: 1, Minor: 0}
 	SupportedFeatureFloors = map[FeatureName]Version{
-		FeatureSingleGroupProvider:  {Major: 1, Minor: 0},
-		FeatureCatalogMetaAuthority: {Major: 1, Minor: 0},
+		FeatureSingleGroupProvider:      {Major: 1, Minor: 0},
+		FeatureCatalogMetaAuthority:     {Major: 1, Minor: 0},
+		FeatureVectorPartitionLifecycle: {Major: 1, Minor: 0},
 	}
 
 	ErrInvalidConfig       = errors.New("raftcluster: invalid config")
@@ -143,6 +148,27 @@ func (l StorageLayout) PeerDir(id NodeID) (string, bool) {
 // slice.
 type Provider interface {
 	Config() ResolvedConfig
+}
+
+// FeatureRequirementProviderV1 exposes feature requirements for composite
+// command submitters that do not have one single ResolvedConfig.
+type FeatureRequirementProviderV1 interface {
+	RequiresFeatureV1(FeatureName) (bool, error)
+}
+
+// FeatureSetRequiresV1 reports whether a validated feature set requires at
+// least the supported floor for name.
+func FeatureSetRequiresV1(features FeatureSet, name FeatureName) bool {
+	floor, known := SupportedFeatureFloors[name]
+	if !known {
+		return false
+	}
+	for _, required := range features.Required {
+		if required.Name == name && required.Version.Major == floor.Major && required.Version.Minor >= floor.Minor {
+			return true
+		}
+	}
+	return false
 }
 
 // ProviderFactory creates a provider from a validated single-group config. It

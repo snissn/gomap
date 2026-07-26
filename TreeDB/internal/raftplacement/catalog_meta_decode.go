@@ -13,15 +13,16 @@ import (
 )
 
 const (
-	maxCatalogMetaJSONKeyBytesV1       = 32
-	maxCatalogMetaJSONNumberBytesV1    = 20
-	maxCatalogMetaJSONObjectsV1        = 25000
-	maxCatalogMetaJSONArraysV1         = 5000
-	maxCatalogMetaJSONNestedElementsV1 = MaxCatalogMetaFeaturesV1 + MaxCatalogMetaGroupsV1 + MaxCatalogMetaPlacementsV1 + MaxCatalogMetaPartitionsV1 + MaxCatalogMetaGroupsV1*MaxCatalogMetaMembersPerGroupV1
-	maxCatalogMetaSnapshotFieldBytesV1 = ((MaxCatalogMetaCommandBytesV1 + 2) / 3) * 4
-	catalogMetaPreflightCommandV1      = "command"
-	catalogMetaPreflightRecordV1       = "record"
-	catalogMetaPreflightSnapshotV1     = "snapshot"
+	maxCatalogMetaJSONKeyBytesV1                = 32
+	maxCatalogMetaJSONNumberBytesV1             = 20
+	maxCatalogMetaJSONObjectsV1                 = 25000
+	maxCatalogMetaJSONArraysV1                  = 5000
+	maxCatalogMetaJSONNestedElementsV1          = MaxCatalogMetaFeaturesV1 + MaxCatalogMetaGroupsV1 + MaxCatalogMetaPlacementsV1 + MaxCatalogMetaPartitionsV1 + MaxCatalogMetaGroupsV1*MaxCatalogMetaMembersPerGroupV1
+	maxCatalogMetaSnapshotFieldBytesV1          = ((MaxCatalogMetaCommandBytesV1 + 2) / 3) * 4
+	maxCatalogMetaLifecycleSnapshotFieldBytesV1 = ((MaxCatalogMetaSnapshotBytesV1 + 2) / 3) * 4
+	catalogMetaPreflightCommandV1               = "command"
+	catalogMetaPreflightRecordV1                = "record"
+	catalogMetaPreflightSnapshotV1              = "snapshot"
 )
 
 // catalogMetaJSONPreflightV1 walks the complete JSON token stream before
@@ -133,6 +134,9 @@ func (p *catalogMetaJSONPreflightV1) snapshot() error {
 			return err
 		case "record", "last_command":
 			_, _, err := p.nullableString(maxCatalogMetaSnapshotFieldBytesV1, key)
+			return err
+		case "vector_partition_lifecycle":
+			_, _, err := p.nullableString(maxCatalogMetaLifecycleSnapshotFieldBytesV1, key)
 			return err
 		default:
 			return p.unknownField(catalogMetaPreflightSnapshotV1, key)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 )
 
@@ -16,6 +17,37 @@ type CatalogRouteResolverV1 struct {
 	catalog raftplacement.ResolvedCatalogV1
 }
 
+// RequiresVectorPartitionMutationAdmissionV1 derives the shared mutation
+// requirement from a quorum-fenced replicated catalog view, independently of
+// whether an admission provider was installed on the submitter. A node whose
+// local authority has not caught up through the fence fails closed.
+func (p CatalogMetaClusterRouteProvider) RequiresVectorPartitionMutationAdmissionV1(ctx context.Context) (bool, error) {
+	if p.authority == nil || p.readFence == nil {
+		return false, raftplacement.ErrCatalogMetaUnavailable
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	requiredAppliedIndex, err := p.readFence.LinearizableCatalogMetaAppliedIndexV1(ctx)
+	if err != nil {
+		return false, errors.Join(raftplacement.ErrCatalogMetaUnavailable, err)
+	}
+	status, ok := p.authority.Status()
+	if !ok {
+		return false, raftplacement.ErrCatalogMetaUnavailable
+	}
+	if requiredAppliedIndex == 0 || status.AppliedIndex < requiredAppliedIndex {
+		return false, errors.Join(
+			raftplacement.ErrCatalogMetaUnavailable,
+			fmt.Errorf("local catalog applied index %d is behind linearizable index %d", status.AppliedIndex, requiredAppliedIndex),
+		)
+	}
+	return raftcluster.FeatureSetRequiresV1(status.Features, raftcluster.FeatureVectorPartitionLifecycle), nil
+}
+
 // CatalogMetaProofProvider supplies a proof captured from the locally applied
 // replicated catalog authority. It does not require a meta-leader round trip;
 // an unavailable local view still fails preflight before the request reaches a
@@ -25,17 +57,23 @@ type CatalogMetaProofProvider func(context.Context) (raftplacement.CatalogProofV
 // CatalogMetaClusterRouteProvider is the production route provider. It never
 // activates a constructor-local catalog: every route is admitted by the
 // applied replicated CatalogMetaAuthorityV1 against an exact epoch and digest
-// proof.
+// proof. Mutation feature admission additionally requires a fresh linearizable
+// meta-Raft fence and local catch-up through that fence.
 type CatalogMetaClusterRouteProvider struct {
 	authority *raftplacement.CatalogMetaAuthorityV1
 	proof     CatalogMetaProofProvider
+	readFence CatalogMetaLinearizableAppliedIndexProviderV1
 }
 
-func NewCatalogMetaClusterRouteProvider(authority *raftplacement.CatalogMetaAuthorityV1, proof CatalogMetaProofProvider) (CatalogMetaClusterRouteProvider, error) {
-	if authority == nil || proof == nil {
-		return CatalogMetaClusterRouteProvider{}, errors.New("nativewire: replicated catalog meta authority and proof provider are required")
+func NewCatalogMetaClusterRouteProvider(
+	authority *raftplacement.CatalogMetaAuthorityV1,
+	proof CatalogMetaProofProvider,
+	readFence CatalogMetaLinearizableAppliedIndexProviderV1,
+) (CatalogMetaClusterRouteProvider, error) {
+	if authority == nil || proof == nil || readFence == nil {
+		return CatalogMetaClusterRouteProvider{}, errors.New("nativewire: replicated catalog meta authority, proof provider, and linearizable read fence are required")
 	}
-	return CatalogMetaClusterRouteProvider{authority: authority, proof: proof}, nil
+	return CatalogMetaClusterRouteProvider{authority: authority, proof: proof, readFence: readFence}, nil
 }
 
 func (p CatalogMetaClusterRouteProvider) ClusterRoute(ctx context.Context, request ClusterRouteRequest) (ClusterRouteTarget, error) {

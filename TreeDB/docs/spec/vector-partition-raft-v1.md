@@ -144,6 +144,11 @@ are `building`, `ready`, `cutover`, and `invalidated`.
 length-capped before allocation on its declared owner. A `cutover` is atomic
 over the complete generation.
 
+The M7 state machine below refines this earlier coarse vocabulary. Its
+persisted states are `building`, `staged`, `prepared`, `active`, `invalidated`,
+`retired`, and `cleanable`; `cutover` is the guarded atomic operation that
+replaces one active generation with another, not a persisted state.
+
 V1 is snapshot-bound: insert, delete, embedding replacement, index-definition
 change, source snapshot replacement, or any committed mutation affecting a
 referenced vector invalidates the generation before the mutation becomes
@@ -151,6 +156,78 @@ searchable. Until full rebuild and cutover, distributed search MUST fail closed;
 it MUST NOT mix generations or return partial top-k. A Raft read-index only
 proves the group applied point; it does not make an older snapshot-built
 generation fresh.
+
+### M7 replicated mutation fence
+
+The catalog authority records a bounded, canonical mutation fence per
+`(database, catalog, collection, index_name)`. Invalidating an active
+generation advances that fence and marks it **pending** before the relevant
+data command is admitted. While pending, lifecycle build and activation both
+fail closed, including a candidate whose claimed source epoch equals the
+fence. The shared nativewire and Mongo submitters confirm the fence only after
+their data-Raft bridge proves commit and completes deterministic local apply.
+That proof is independent of the client-selected response acknowledgment:
+successful `visible`, `flushed`, and `synced` requests release the same fence
+as `raft_committed`; failed or ambiguous submits do not.
+
+A failed, ambiguous, or crashed data submit intentionally leaves the fence
+pending: serving remains unavailable until recovery proves the data outcome and
+commits the exact confirmation, or a separately authorized repair disposition
+is made. A second relevant mutation cannot reuse a pending proof. Relevant
+mutations are also refused while any generation for that collection/index is
+building, staged, or prepared, so source capture is never concurrent with a
+data mutation.
+
+The per-index fences are coordinated by a second, collection-keyed replicated
+barrier. A build reads the collection mutation epoch before source capture and
+must commit that exact watermark at begin-build. A relevant data command opens
+the barrier only after local encoding and route preflight succeed, then owns it
+by deterministic command/idempotency digest until the data result is committed,
+deterministically applied, and every affected per-index fence is confirmed.
+This confirmation is independent of the client-selected response acknowledgment
+policy and runs under a bounded internal context after commit/apply, so client
+cancellation or deadline expiry cannot strand the fence between the data apply
+and catalog confirmation. Exact retries reuse the same barrier; a distinct
+concurrent mutation is refused. This closes
+the first-generation race where no active index record yet exists to invalidate.
+
+Fence state is included in the canonical catalog snapshot and is exposed to
+operators with its collection, index name, epoch, and pending bit. Retire and
+cleanup of an invalidated generation are blocked while its fence is pending;
+this preserves the exact record required for confirmation. Thus crash,
+failover, replay, snapshot/rejoin, backup restore, and cleanup all preserve
+the same fail-closed recovery debt. The retained source watermark remains after
+confirmed cleanup, preventing an older delayed candidate from resurrecting.
+
+Serving keeps two SHA-256 identities distinct. The local manifest
+`ReadySetDigest` binds that generation's placements and assets. The replicated
+lifecycle ready-set digest binds the lifecycle identity plus every required
+group readiness proof. Catalog authority returns the latter after validating
+the exact active generation; the coordinator carries it through each shard
+request and response proof, while local asset opening continues to validate
+the manifest digest. They are never compared as though they were the same
+hash.
+
+Replicated activation also does not mutate or consult the standalone M1 active
+pointer. M6 opens the exact prepared router generation named by replicated
+placement, then M7 validates that router against catalog authority before any
+router search or shard dispatch. A missing, stale, corrupt, or locally
+unprepared exact generation fails closed.
+
+Every replicated lifecycle validation first performs a fresh quorum-verified
+meta-Raft leader read and waits for the local catalog FSM through that fence.
+The concrete replica-local catalog authority intentionally does not implement
+the serving interface; only the linearizable adapter can do so. A follower
+without routed meta-leader proof, or a local catalog view behind the returned
+catalog command index, fails closed rather than serving its cached active
+generation.
+
+`VectorPartitionLifecycleCoordinatorV1` provides the bounded meta-Raft
+workflow: begin (with exact source/catalog/mutation identity), caller-owned
+group build/stage readiness callback, group-ready recording, prepare,
+activation/cutover, abort, retire, cleanability, per-group cleanup, completion,
+and recovery status. The callback returns only a validated bounded readiness
+proof; M7 does not fabricate remote asset upload or network transport.
 
 V1 distributed responses contain response-owned stable IDs and scores only.
 Missing owner, stale generation, malformed/capped asset, unsupported

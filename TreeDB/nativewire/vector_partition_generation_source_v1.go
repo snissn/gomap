@@ -8,9 +8,29 @@ import (
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 )
 
 const collectionVectorPartitionMaxAuthorityRefreshesV1 = 3
+
+// VectorPartitionReplicatedLifecycleAuthorityV1 is the constant-time M7
+// serving guard. Local prepared assets are evidence, not activation authority;
+// every cold load and cache hit must match the single replicated active record.
+// Successful validation returns the replicated lifecycle ready-set digest,
+// which is distinct from the local manifest's asset/placement digest.
+type VectorPartitionReplicatedLifecycleAuthorityV1 interface {
+	ValidateVectorPartitionGenerationSearchV1(
+		context.Context,
+		raftplacement.CollectionRefV1,
+		string,
+		uint64,
+		string,
+		uint64,
+		uint64,
+		uint64,
+		uint64,
+	) (string, error)
+}
 
 // CollectionVectorPartitionGenerationSourceV1 binds M5 to one actual local
 // collection store. It keeps immutable ready generations and their opened
@@ -23,7 +43,9 @@ const collectionVectorPartitionMaxAuthorityRefreshesV1 = 3
 // permanent for this source instance, so a stale service cannot reload the old
 // generation after the cutover.
 type CollectionVectorPartitionGenerationSourceV1 struct {
-	Collection *collections.Collection
+	Collection           *collections.Collection
+	replicatedCollection raftplacement.CollectionRefV1
+	replicatedLifecycle  VectorPartitionReplicatedLifecycleAuthorityV1
 
 	mu          sync.Mutex
 	entries     map[collectionVectorPartitionGenerationKeyV1]*collectionVectorPartitionGenerationCacheV1
@@ -53,6 +75,25 @@ func NewCollectionVectorPartitionGenerationSourceV1(collection *collections.Coll
 		return nil, ErrVectorPartitionShardSearchAssetsUnavailable
 	}
 	return &CollectionVectorPartitionGenerationSourceV1{Collection: collection}, nil
+}
+
+// NewCollectionVectorPartitionGenerationSourceForReplicatedLifecycleV1 opens
+// locally prepared generations and admits them only through replicated M7
+// lifecycle authority. It deliberately does not consult or mutate M1's
+// standalone LocalActivate pointer.
+func NewCollectionVectorPartitionGenerationSourceForReplicatedLifecycleV1(
+	collection *collections.Collection,
+	collectionRef raftplacement.CollectionRefV1,
+	authority VectorPartitionReplicatedLifecycleAuthorityV1,
+) (*CollectionVectorPartitionGenerationSourceV1, error) {
+	if collection == nil || authority == nil || collectionRef.Database == "" || collectionRef.Catalog == "" || collectionRef.Collection == "" {
+		return nil, ErrVectorPartitionShardSearchAssetsUnavailable
+	}
+	return &CollectionVectorPartitionGenerationSourceV1{
+		Collection:           collection,
+		replicatedCollection: collectionRef,
+		replicatedLifecycle:  authority,
+	}, nil
 }
 
 type collectionVectorPartitionGenerationKeyV1 struct {
@@ -94,7 +135,7 @@ func (s *CollectionVectorPartitionGenerationSourceV1) PinVectorPartitionGenerati
 		if entry := s.entries[key]; entry != nil {
 			entry.refs++
 			s.mu.Unlock()
-			if err := s.validateActive(ctx, key, entry.authorityToken); err != nil {
+			if err := s.validateActive(ctx, key, entry); err != nil {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					_ = s.release(entry)
 					return nil, err
@@ -209,12 +250,23 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 			pin.Release()
 		}
 	}()
-	manifest, authorityToken, err := s.Collection.ActiveVectorPartitionManifestAndAuthorityTokenWithContextV1(ctx, key.index, key.generation)
+	var manifest collections.VectorPartitionManifestV1
+	var authorityToken collections.VectorPartitionActiveAuthorityTokenV1
+	if s.replicatedLifecycle != nil {
+		manifest, err = s.Collection.PreparedVectorPartitionManifestWithContextV1(ctx, key.index, key.generation)
+	} else {
+		manifest, authorityToken, err = s.Collection.ActiveVectorPartitionManifestAndAuthorityTokenWithContextV1(ctx, key.index, key.generation)
+	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, err
 		}
 		return nil, fmt.Errorf("%w: generation status: %v", ErrVectorPartitionShardSearchGenerationMismatch, err)
+	}
+	replicatedReadySetDigest, err := s.validateReplicatedLifecycle(ctx, key, manifest)
+	if err != nil {
+		authorityToken.Release()
+		return nil, vectorPartitionReplicatedLifecycleValidationErrorV1(ctx, err)
 	}
 	openPlan, err := collections.NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx, manifest)
 	if err != nil {
@@ -229,11 +281,13 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 		return nil, err
 	}
 	release = false
+	pinnedManifest := pinnedVectorPartitionManifestV1(manifest)
+	pinnedManifest.ReadySetDigest = replicatedReadySetDigest
 	return &collectionVectorPartitionGenerationCacheV1{
 		collection:     s.Collection,
 		index:          key.index,
 		generation:     key.generation,
-		manifest:       pinnedVectorPartitionManifestV1(manifest),
+		manifest:       pinnedManifest,
 		openPlan:       openPlan,
 		authorityToken: authorityToken,
 		pin:            pin,
@@ -242,11 +296,64 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 	}, nil
 }
 
-func (s *CollectionVectorPartitionGenerationSourceV1) validateActive(ctx context.Context, key collectionVectorPartitionGenerationKeyV1, authorityToken collections.VectorPartitionActiveAuthorityTokenV1) error {
+func vectorPartitionReplicatedLifecycleValidationErrorV1(ctx context.Context, err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return err
+	}
+	return fmt.Errorf("%w: replicated lifecycle: %v", ErrVectorPartitionShardSearchGenerationMismatch, err)
+}
+
+func (s *CollectionVectorPartitionGenerationSourceV1) validateActive(ctx context.Context, key collectionVectorPartitionGenerationKeyV1, entry *collectionVectorPartitionGenerationCacheV1) error {
 	if s.testValidateActive != nil {
 		return s.testValidateActive(ctx, key)
 	}
-	return s.Collection.ValidateActiveVectorPartitionAuthorityTokenWithContextV1(ctx, key.index, key.generation, authorityToken)
+	if entry == nil {
+		return ErrVectorPartitionShardSearchAssetsUnavailable
+	}
+	if s.replicatedLifecycle != nil {
+		readySetDigest, err := s.replicatedLifecycle.ValidateVectorPartitionGenerationSearchV1(
+			ctx,
+			s.replicatedCollection,
+			entry.manifest.IndexName,
+			entry.manifest.Generation,
+			entry.manifest.IndexDefinitionDigest,
+			entry.manifest.SourceGeneration,
+			entry.manifest.SourceChecksum,
+			entry.manifest.SourceSchemaHash,
+			entry.manifest.SourceRowCount,
+		)
+		if err != nil {
+			return err
+		}
+		if readySetDigest != entry.manifest.ReadySetDigest {
+			return ErrVectorPartitionShardSearchGenerationMismatch
+		}
+		return nil
+	}
+	return s.Collection.ValidateActiveVectorPartitionAuthorityTokenWithContextV1(ctx, key.index, key.generation, entry.authorityToken)
+}
+
+func (s *CollectionVectorPartitionGenerationSourceV1) validateReplicatedLifecycle(ctx context.Context, key collectionVectorPartitionGenerationKeyV1, manifest collections.VectorPartitionManifestV1) (string, error) {
+	if s.replicatedLifecycle == nil {
+		return manifest.ReadySetDigest, nil
+	}
+	if manifest.Collection != s.replicatedCollection.Collection {
+		return "", ErrVectorPartitionShardSearchGenerationMismatch
+	}
+	return s.replicatedLifecycle.ValidateVectorPartitionGenerationSearchV1(
+		ctx,
+		s.replicatedCollection,
+		key.index,
+		key.generation,
+		manifest.IndexDefinitionDigest,
+		manifest.SourceGeneration,
+		manifest.SourceChecksum,
+		manifest.SourceSchemaHash,
+		manifest.SourceRowCount,
+	)
 }
 
 func (s *CollectionVectorPartitionGenerationSourceV1) isInvalidatedLocked(key collectionVectorPartitionGenerationKeyV1) bool {
@@ -568,6 +675,7 @@ func pinnedVectorPartitionManifestV1(m collections.VectorPartitionManifestV1) Ve
 		SourceRowCount:        m.SourceRowCount,
 		Generation:            m.Generation,
 		RouterGeneration:      m.RouterGeneration,
+		ReadySetDigest:        m.ReadySetDigest,
 		PartitionCount:        m.PartitionCount,
 		Placements:            slices.Clone(m.Placements),
 	}

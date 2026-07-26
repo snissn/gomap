@@ -12,11 +12,11 @@ import (
 	hraft "github.com/hashicorp/raft"
 )
 
-// Catalog snapshots contain two independently command-bounded byte fields
-// encoded as base64 in a JSON envelope. Keep this transport boundary aligned
-// with raftplacement.MaxCatalogMetaSnapshotBytesV1 without importing the
-// schema package back into raftcluster.
-const catalogMetaRaftSnapshotMaxBytesV1 = 3 << 20
+// Catalog snapshots contain independently bounded catalog command/record and
+// vector-lifecycle byte fields encoded as base64 in a JSON envelope. Keep this
+// transport boundary aligned with raftplacement.MaxCatalogMetaSnapshotBytesV1
+// without importing the schema package back into raftcluster.
+const catalogMetaRaftSnapshotMaxBytesV1 = 8 << 20
 
 // CatalogMetaCommittedStateV1 is implemented by raftplacement's authority.
 // The dependency inversion keeps raftcluster independent of catalog schema
@@ -35,6 +35,13 @@ type CatalogMetaBackupStateV1 interface {
 	CatalogMetaCommittedStateV1
 	ValidateCatalogMetaSnapshotBytesV1([]byte) error
 	ValidateCatalogMetaBackupRestoreTargetV1() error
+}
+
+// CatalogMetaAppliedStateV1 exposes the last catalog command installed in the
+// local applied view. A value is safe for serving only when returned after the
+// provider's quorum-verified linearizable read fence.
+type CatalogMetaAppliedStateV1 interface {
+	CatalogMetaAppliedIndexV1() (uint64, bool)
 }
 
 type CatalogMetaApplyCapabilityV1 struct{ granted bool }
@@ -167,6 +174,74 @@ func (p *CatalogMetaRaftProviderV1) ClusterAdmissionStatus(ctx context.Context) 
 		return FollowerAdmission(NodeID(leader), "catalog meta raft follower"), nil
 	}
 	return UnavailableAdmission("catalog meta leader unavailable"), nil
+}
+
+// LinearizableCatalogMetaAppliedIndexV1 verifies current leadership with the
+// voter quorum, waits for all prior committed FSM work locally, then returns
+// the catalog command index installed in that applied view. Followers fail
+// closed; a cross-node caller must route this operation to the meta leader and
+// arrange local catch-up before using the returned index.
+func (p *CatalogMetaRaftProviderV1) LinearizableCatalogMetaAppliedIndexV1(ctx context.Context) (uint64, error) {
+	if p == nil || p.raft == nil || p.state == nil {
+		return 0, ErrInvalidHashicorpRaftProvider
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	status, err := p.ClusterAdmissionStatus(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if status.Unavailable {
+		return 0, ErrHashicorpRaftUnavailable
+	}
+	if !status.Leader {
+		return 0, ErrNotLeader
+	}
+	if err := waitHashicorpRaftFuture(ctx, p.raft.VerifyLeader()); err != nil {
+		return 0, mapCatalogMetaLinearizableReadErrorV1(err)
+	}
+	if err := waitHashicorpRaftFuture(ctx, p.raft.Barrier(p.applyTimeout)); err != nil {
+		return 0, mapCatalogMetaLinearizableReadErrorV1(err)
+	}
+	status, err = p.ClusterAdmissionStatus(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if !status.Leader {
+		return 0, ErrNotLeader
+	}
+	appliedState, ok := p.state.(CatalogMetaAppliedStateV1)
+	if !ok {
+		return 0, errors.Join(ErrInvalidHashicorpRaftProvider, fmt.Errorf("catalog state does not expose applied index"))
+	}
+	applied, ok := appliedState.CatalogMetaAppliedIndexV1()
+	if !ok {
+		return 0, ErrHashicorpRaftUnavailable
+	}
+	return applied, nil
+}
+
+func mapCatalogMetaLinearizableReadErrorV1(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return err
+	case errors.Is(err, hraft.ErrNotLeader),
+		errors.Is(err, hraft.ErrLeadershipLost),
+		errors.Is(err, hraft.ErrLeadershipTransferInProgress):
+		return errors.Join(ErrNotLeader, err)
+	case errors.Is(err, hraft.ErrRaftShutdown),
+		errors.Is(err, hraft.ErrEnqueueTimeout),
+		errors.Is(err, hraft.ErrAbortedByRestore):
+		return errors.Join(ErrHashicorpRaftUnavailable, err)
+	default:
+		return errors.Join(ErrHashicorpRaftUnavailable, err)
+	}
 }
 func (p *CatalogMetaRaftProviderV1) Close() error {
 	if p == nil {

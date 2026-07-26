@@ -356,12 +356,17 @@ type SingleGroupSubmitter struct {
 type SubmitResultV1 struct {
 	ActualAck            iwire.AckPolicy
 	CommittedRecoverable bool
-	DecodedEntry         raftentry.CommandEntryV1
-	ApplyResult          raftentry.ApplyResultV1
-	CommittedEntry       CommittedCommandEntryV1
-	Evidence             CommitEvidenceV1
-	CatalogVersion       uint64
-	HasCatalogVersion    bool
+	// CommittedApplied is independent of the client-selected acknowledgment
+	// policy. It is true only after this submitter has validated the committed
+	// entry and completed local deterministic apply, so lifecycle callers may
+	// close post-commit fences even when the response requests a local ack.
+	CommittedApplied  bool
+	DecodedEntry      raftentry.CommandEntryV1
+	ApplyResult       raftentry.ApplyResultV1
+	CommittedEntry    CommittedCommandEntryV1
+	Evidence          CommitEvidenceV1
+	CatalogVersion    uint64
+	HasCatalogVersion bool
 }
 
 // CommandSubmitterV1 is the in-process boundary for submitting deterministic
@@ -369,6 +374,18 @@ type SubmitResultV1 struct {
 // implement this interface.
 type CommandSubmitterV1 interface {
 	SubmitCommandEntryV1(context.Context, []byte, raftentry.RequestMetadataV1) (SubmitResultV1, error)
+}
+
+// CommandSubmitterWithPreCommitV1 extends the submit boundary with a callback
+// that runs only after deterministic data preflight succeeds and immediately
+// before the command enters the commit source. Implementations must serialize
+// the callback with the corresponding preflight and commit attempt.
+//
+// The callback is used by cross-group lifecycle coordination that must not be
+// published for a command the data layer has already rejected as definitely
+// uncommitted.
+type CommandSubmitterWithPreCommitV1 interface {
+	SubmitCommandEntryWithPreCommitV1(context.Context, []byte, raftentry.RequestMetadataV1, func(context.Context) error) (SubmitResultV1, error)
 }
 
 func NewSingleGroupSubmitter(opts SingleGroupSubmitterOptions) (*SingleGroupSubmitter, error) {
@@ -424,6 +441,21 @@ func (s *SingleGroupSubmitter) ClusterAdmissionStatus(ctx context.Context) (Admi
 }
 
 func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1) (SubmitResultV1, error) {
+	return s.submitCommandEntryV1(ctx, entry, metadata, nil)
+}
+
+// SubmitCommandEntryWithPreCommitV1 runs preCommit after the deterministic
+// data preflight and before commit while holding the submitter serialization
+// boundary. A callback error is definitive: the data command was not offered
+// to the commit source.
+func (s *SingleGroupSubmitter) SubmitCommandEntryWithPreCommitV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1, preCommit func(context.Context) error) (SubmitResultV1, error) {
+	if preCommit == nil {
+		return SubmitResultV1{}, errors.Join(ErrInvalidSubmitter, fmt.Errorf("pre-commit callback is required"))
+	}
+	return s.submitCommandEntryV1(ctx, entry, metadata, preCommit)
+}
+
+func (s *SingleGroupSubmitter) submitCommandEntryV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1, preCommit func(context.Context) error) (SubmitResultV1, error) {
 	if s == nil || s.commit == nil || s.preflight == nil || s.applier == nil || s.catalogProvider == nil {
 		return SubmitResultV1{}, ErrInvalidSubmitter
 	}
@@ -491,6 +523,12 @@ func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 		s.submitMu.Unlock()
 		return SubmitResultV1{}, guardErr
 	}
+	if preCommit != nil {
+		if err := preCommit(ctx); err != nil {
+			s.submitMu.Unlock()
+			return SubmitResultV1{}, err
+		}
+	}
 	request := CommitCommandEntryV1Request{
 		GroupID:                  s.cluster.GroupID,
 		NodeID:                   s.cluster.NodeID,
@@ -520,25 +558,26 @@ func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 		s.submitMu.Unlock()
 		return SubmitResultV1{ApplyResult: applyResult, CommittedEntry: committed, Evidence: commitResult.Evidence}, errors.Join(ErrLocalApplyNotRecoverable, fmt.Errorf("apply status %s", applyResult.Status))
 	}
+	result := SubmitResultV1{
+		ActualAck:        actualAck,
+		CommittedApplied: true,
+		DecodedEntry:     decoded,
+		ApplyResult:      applyResult,
+		CommittedEntry:   committed,
+		Evidence:         commitResult.Evidence,
+	}
 	postCatalogVersion, postHasCatalogVersion, err := s.catalogProvider.CurrentCatalogVersion(ctx)
 	if err != nil {
 		s.submitMu.Unlock()
-		return SubmitResultV1{ApplyResult: applyResult, CommittedEntry: committed, Evidence: commitResult.Evidence}, errors.Join(ErrLocalApplyNotRecoverable, err)
+		return result, errors.Join(ErrLocalApplyNotRecoverable, err)
 	}
 	if !postHasCatalogVersion {
 		s.submitMu.Unlock()
-		return SubmitResultV1{ApplyResult: applyResult, CommittedEntry: committed, Evidence: commitResult.Evidence}, errors.Join(ErrLocalApplyNotRecoverable, ErrMissingCatalogVersion)
+		return result, errors.Join(ErrLocalApplyNotRecoverable, ErrMissingCatalogVersion)
 	}
-	result := SubmitResultV1{
-		ActualAck:            actualAck,
-		CommittedRecoverable: actualAck == iwire.AckRaftCommitted && s.syncLocalWAL,
-		DecodedEntry:         decoded,
-		ApplyResult:          applyResult,
-		CommittedEntry:       committed,
-		Evidence:             commitResult.Evidence,
-		CatalogVersion:       postCatalogVersion,
-		HasCatalogVersion:    postHasCatalogVersion,
-	}
+	result.CommittedRecoverable = actualAck == iwire.AckRaftCommitted && s.syncLocalWAL
+	result.CatalogVersion = postCatalogVersion
+	result.HasCatalogVersion = postHasCatalogVersion
 	s.submitMu.Unlock()
 	return result, nil
 }

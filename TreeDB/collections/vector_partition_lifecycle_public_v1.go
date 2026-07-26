@@ -53,6 +53,63 @@ func (c *Collection) ActiveVectorPartitionManifestWithContextV1(ctx context.Cont
 	return manifest, err
 }
 
+// PreparedVectorPartitionManifestWithContextV1 opens one complete local
+// generation without consulting the standalone active pointer. It is the M7
+// readiness seam: the returned bytes are exact-generation local evidence only,
+// never cluster activation authority.
+func (c *Collection) PreparedVectorPartitionManifestWithContextV1(ctx context.Context, index string, generation uint64) (VectorPartitionManifestV1, error) {
+	if c == nil || c.db == nil {
+		return VectorPartitionManifestV1{}, errors.New("collections: closed collection")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	var manifest VectorPartitionManifestV1
+	err := WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+		unlock := c.lockMutation()
+		defer unlock.Unlock()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		store, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
+		if err != nil {
+			return err
+		}
+		loaded, present, err := store.loadVectorPartitionLifecycleAuthorityWithContextV1(ctx, c.name, index)
+		if err != nil {
+			return err
+		}
+		entry, ok := loaded.state.Generations[generation]
+		if !present || !ok || entry.Manifest == nil || entry.Deleting || entry.Manifest.State != "ready" {
+			return fmt.Errorf("%w: generation %d is not prepared and ready", ErrVectorPartitionManifestInvalid, generation)
+		}
+		manifest, err = vectorPartitionLifecycleManifestWithContextV1(ctx, loaded.state, generation, false)
+		if err != nil {
+			return err
+		}
+		snap := c.db.AcquireSnapshot()
+		if snap == nil {
+			return errors.New("collections: vector partition source snapshot unavailable")
+		}
+		source, sourceErr := c.vectorPartitionSourceIdentityAtSnapshotV1(index, snap)
+		closeErr := snap.Close()
+		if sourceErr != nil || closeErr != nil {
+			return errors.Join(sourceErr, closeErr)
+		}
+		if manifest.SourceGeneration != source.Generation || manifest.SourceChecksum != source.Checksum || manifest.SourceSchemaHash != source.SchemaHash || manifest.SourceRowCount != source.RowCount {
+			return errors.New("collections: vector partition source identity mismatch")
+		}
+		return ctx.Err()
+	})
+	if err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	return manifest, nil
+}
+
 // ActiveVectorPartitionManifestAndAuthorityTokenWithContextV1 opens the full
 // lifecycle and source authority once and returns the leased token used for
 // bounded warm checks. The caller must Release the token.
@@ -313,6 +370,18 @@ func vectorPartitionManifestCanonicalEqualV1(a, b VectorPartitionManifestV1) boo
 }
 
 func (s *VectorPartitionStoreV1) persistVectorPartitionManifestLifecycleV1(m VectorPartitionManifestV1) error {
+	return s.persistVectorPartitionManifestLifecycleModeV1(m, true)
+}
+
+// stageVectorPartitionManifestLifecycleV1 publishes a complete local
+// generation without changing the standalone active pointer. M7 uses this
+// prepared-only seam while the replicated catalog/meta lifecycle collects
+// group readiness and decides the cluster-wide cutover.
+func (s *VectorPartitionStoreV1) stageVectorPartitionManifestLifecycleV1(m VectorPartitionManifestV1) error {
+	return s.persistVectorPartitionManifestLifecycleModeV1(m, false)
+}
+
+func (s *VectorPartitionStoreV1) persistVectorPartitionManifestLifecycleModeV1(m VectorPartitionManifestV1, activate bool) error {
 	loaded, present, err := s.loadVectorPartitionLifecycleAuthorityV1(m.Collection, m.IndexName)
 	if err != nil {
 		return err
@@ -381,6 +450,9 @@ func (s *VectorPartitionStoreV1) persistVectorPartitionManifestLifecycleV1(m Vec
 			}
 		} else if entry.Manifest.State != "ready" || !vectorPartitionManifestCanonicalEqualV1(*entry.Manifest, m) {
 			return fmt.Errorf("%w: generation %d already published with different bytes", ErrVectorPartitionManifestInvalid, m.Generation)
+		}
+		if !activate {
+			return nil
 		}
 		if loaded.state.ActiveGeneration == m.Generation {
 			return nil

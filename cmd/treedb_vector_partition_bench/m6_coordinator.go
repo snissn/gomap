@@ -268,7 +268,8 @@ func (d *m6LocalShardDispatcherV1) DispatchVectorPartitionShardSearchV1(ctx cont
 		Version: nativewire.VectorPartitionShardSearchVersionV1, RequestID: request.RequestID,
 		Proof: nativewire.VectorPartitionShardSearchProofV1{
 			ServingNode: request.TargetNodeID, LeaderNode: request.TargetNodeID, GroupID: request.TargetGroupID,
-			ReadTerm: 1, ReadIndex: 1, AppliedTerm: 1, AppliedIndex: 1,
+			ReadySetDigest: request.ReadySetDigest,
+			ReadTerm:       1, ReadIndex: 1, AppliedTerm: 1, AppliedIndex: 1,
 			SourceGeneration: request.SourceGeneration, SourceChecksum: request.SourceChecksum,
 			SourceSchemaHash: request.SourceSchemaHash, SourceRowCount: request.SourceRowCount,
 			PartitionGeneration: request.PartitionGeneration, RouterGeneration: request.RouterGeneration,
