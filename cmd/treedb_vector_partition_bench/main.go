@@ -694,6 +694,11 @@ func parseConfig(args []string) (config, error) {
 				return config{}, fmt.Errorf("each ef-search must be in [%d,%d]", cfg.topK, shardLimits.MaxEfSearch)
 			}
 		}
+		for _, probes := range cfg.probes {
+			if probes > cfg.routerCandidates {
+				return config{}, errors.New("production_multi_group requires router-candidates >= every probe count")
+			}
+		}
 	}
 	if cfg.m3PersistDir != "" && (cfg.stage != "overlap,partition_index" || len(cfg.overlaps) != 1) {
 		return config{}, errors.New("-m3-persist-db requires stage overlap,partition_index with exactly one overlap ratio")

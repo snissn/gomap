@@ -1094,6 +1094,7 @@ func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 		{"-stage", "router", "-m8-existing-db", "/retained/m8-assets", "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-probes", "1"},
 		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4", "-warmup", "-1"},
 		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", strconv.Itoa(limit + 1), "-raft-groups", "2"},
+		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4", "-probes", "1,4", "-router-candidates", "2"},
 	} {
 		if _, err := parseConfig(args); err == nil {
 			t.Fatalf("accepted malformed M8 config %#v", args)
