@@ -2144,11 +2144,14 @@ func dedupeSortedNeighbors(in []neighbor) []neighbor {
 	return out
 }
 
-// canonicalExactNeighborsV1 freezes the benchmark's exact result contract:
-// FP32-derived distances sort ascending, equal scores break by stable ID, and
+// canonicalExactNeighborsV1 freezes the benchmark's production-score contract:
+// distances are rounded through the FP32 search representation, then sort ascending, equal scores break by stable ID, and
 // duplicate IDs retain their best-scoring occurrence before top-k truncation.
 func canonicalExactNeighborsV1(in []neighbor, topK int) []neighbor {
 	ordered := append([]neighbor(nil), in...)
+	for i := range ordered {
+		ordered[i].Distance = float64(float32(ordered[i].Distance))
+	}
 	sortNeighbors(ordered)
 	ordered = dedupeSortedNeighbors(ordered)
 	if topK < len(ordered) {

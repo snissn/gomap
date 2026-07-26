@@ -1156,7 +1156,7 @@ func TestCanonicalExactNeighborsContractTiePrecisionAndDedupeV1(t *testing.T) {
 		{ID: "duplicate", Distance: 0.2}, {ID: "z", Distance: 0.1}, {ID: "a", Distance: 0.1},
 		{ID: "duplicate", Distance: 0.05}, {ID: "near", Distance: 0.100000001},
 	}, 4)
-	want := []string{"duplicate", "a", "z", "near"}
+	want := []string{"duplicate", "a", "near", "z"}
 	if len(got) != len(want) {
 		t.Fatalf("got=%+v", got)
 	}
@@ -1165,7 +1165,7 @@ func TestCanonicalExactNeighborsContractTiePrecisionAndDedupeV1(t *testing.T) {
 			t.Fatalf("rank %d got=%+v want=%s", i, got, want[i])
 		}
 	}
-	if got[0].Distance != 0.05 {
+	if got[0].Distance != float64(float32(0.05)) {
 		t.Fatalf("duplicate retained wrong score: %+v", got[0])
 	}
 }
