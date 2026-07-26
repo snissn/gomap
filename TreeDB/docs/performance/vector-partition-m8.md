@@ -195,7 +195,8 @@ The continuation emits schema `2`, result kind
 The executable score contract is
 `fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1`:
 query and source vectors are normalized in FP32, their dot product is
-accumulated left-to-right in binary64, the result is rounded once to FP32,
+accumulated left-to-right with explicit separately rounded binary64 products
+and additions, the result is rounded once to FP32,
 duplicate stable IDs retain their best score, and results sort by descending
 score then ascending stable ID. The full-source oracle, generation-pinned exact
 partition scan, and published HNSW candidate rescoring share this contract.

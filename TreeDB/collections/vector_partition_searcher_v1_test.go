@@ -223,6 +223,18 @@ func TestCanonicalVectorPartitionCosineScoreV1NormalizesInFP32V1(t *testing.T) {
 	}
 }
 
+func TestCanonicalVectorPartitionAccumulateV1RoundsProductAndSumV1(t *testing.T) {
+	sum := math.Float64frombits(0x3ff0000000000001)
+	left := math.Float32frombits(0x3f7fffff)
+	right := math.Float32frombits(0x3f000001)
+	product := math.Float64frombits(math.Float64bits(float64(left) * float64(right)))
+	want := math.Float64frombits(math.Float64bits(sum + product))
+	got := canonicalVectorPartitionAccumulateV1(sum, left, right)
+	if math.Float64bits(got) != math.Float64bits(want) {
+		t.Fatalf("canonical accumulation bits=%#x want=%#x", math.Float64bits(got), math.Float64bits(want))
+	}
+}
+
 func TestVectorPartitionLocalSearcherV1ExactScanAllocationsBoundedByTopKV1(t *testing.T) {
 	const (
 		rows = 512

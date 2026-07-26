@@ -239,7 +239,8 @@ consistency, or shard failure is an explicit error with no incomplete result.
 
 `collections.VectorPartitionCanonicalScoreContractV1` is the executable
 production result contract. It normalizes both query and source vector in
-FP32, accumulates their normalized dot product left-to-right in binary64, and
+FP32, accumulates their normalized dot product left-to-right with explicit
+separately rounded binary64 products and additions, and
 rounds the final cosine score once to FP32. Across partition responses,
 duplicate stable IDs retain the highest canonical score. Final top-k order is
 descending score with bytewise ascending stable ID as the exact tie break.

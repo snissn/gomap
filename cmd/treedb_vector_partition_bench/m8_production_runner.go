@@ -209,10 +209,6 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 	if err != nil {
 		return err
 	}
-	approximateCandidates := min(cfg.routerCandidates, int(assets.status.Representatives))
-	if approximateCandidates < 1 {
-		return errors.New("M8 attribution requires an approximate router candidate budget")
-	}
 	report := m8ProductionReportV1{
 		SchemaVersion: 2, ResultKind: "m8_production_multi_group_evidence_v2", Status: "incomplete",
 		Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true, GeneratedAt: time.Now().UTC(),
@@ -282,39 +278,45 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 	// pre-fault the corpus or contaminate measured process-resource evidence.
 	// The snapshot does include the bounded top-k coordinator results retained
 	// from measured cells so post-measurement attribution can verify parity.
-	attributionHarness, err := newM8AttributionHarnessV1(assets)
-	if err != nil {
-		return fmt.Errorf("open M8 attribution harness: %w", err)
-	}
-	attributionHarnessClosed := false
-	defer func() {
-		if !attributionHarnessClosed {
-			runErr = errors.Join(runErr, attributionHarness.Close())
+	if len(measuredCells) > 0 {
+		approximateCandidates := min(cfg.routerCandidates, int(assets.status.Representatives))
+		if approximateCandidates < 1 {
+			return errors.New("M8 attribution requires an approximate router candidate budget")
 		}
-	}()
-	attribution := make(map[string]m8AttributionCellV1, len(cfg.probes)*len(cfg.efSearch))
-	exhaustive := make([][]m8CanonicalResultV1, len(queries))
-	for _, probes := range cfg.probes {
-		for _, efSearch := range cfg.efSearch {
-			cell, buildErr := m8BuildAttributionV1(context.Background(), assets, queries, truth, probes, efSearch, cfg.topK, approximateCandidates, exhaustive, attributionHarness)
-			if buildErr != nil {
-				return fmt.Errorf("build M8 attribution probes=%d ef=%d: %w", probes, efSearch, buildErr)
+		attributionHarness, err := newM8AttributionHarnessV1(assets)
+		if err != nil {
+			return fmt.Errorf("open M8 attribution harness: %w", err)
+		}
+		attributionHarnessClosed := false
+		defer func() {
+			if !attributionHarnessClosed {
+				runErr = errors.Join(runErr, attributionHarness.Close())
 			}
-			attribution[m8AttributionKeyV1(probes, efSearch)] = cell
+		}()
+		attribution := make(map[string]m8AttributionCellV1, len(cfg.probes)*len(cfg.efSearch))
+		exhaustive := make([][]m8CanonicalResultV1, len(queries))
+		for _, probes := range cfg.probes {
+			for _, efSearch := range cfg.efSearch {
+				cell, buildErr := m8BuildAttributionV1(context.Background(), assets, queries, truth, probes, efSearch, cfg.topK, approximateCandidates, exhaustive, attributionHarness)
+				if buildErr != nil {
+					return fmt.Errorf("build M8 attribution probes=%d ef=%d: %w", probes, efSearch, buildErr)
+				}
+				attribution[m8AttributionKeyV1(probes, efSearch)] = cell
+			}
 		}
-	}
-	closeErr := attributionHarness.Close()
-	attributionHarnessClosed = true
-	if closeErr != nil {
-		return fmt.Errorf("close M8 attribution harness: %w", closeErr)
-	}
-	for _, measured := range measuredCells {
-		cell, ok := attribution[m8AttributionKeyV1(measured.probes, measured.efSearch)]
-		if !ok {
-			return fmt.Errorf("missing M8 attribution probes=%d ef=%d", measured.probes, measured.efSearch)
+		closeErr := attributionHarness.Close()
+		attributionHarnessClosed = true
+		if closeErr != nil {
+			return fmt.Errorf("close M8 attribution harness: %w", closeErr)
 		}
-		if err := m8AttachAttributionV1(&report.Rows[measured.rowIndex], cell, measured.results); err != nil {
-			return fmt.Errorf("attach M8 attribution probes=%d ef=%d: %w", measured.probes, measured.efSearch, err)
+		for _, measured := range measuredCells {
+			cell, ok := attribution[m8AttributionKeyV1(measured.probes, measured.efSearch)]
+			if !ok {
+				return fmt.Errorf("missing M8 attribution probes=%d ef=%d", measured.probes, measured.efSearch)
+			}
+			if err := m8AttachAttributionV1(&report.Rows[measured.rowIndex], cell, measured.results); err != nil {
+				return fmt.Errorf("attach M8 attribution probes=%d ef=%d: %w", measured.probes, measured.efSearch, err)
+			}
 		}
 	}
 	report.GateLedger = m8ProductionGateLedgerForReportV1(report)

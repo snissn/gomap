@@ -77,7 +77,7 @@ func canonicalVectorPartitionScoreWithInvNormV1(normalizedQuery, vector []float3
 	var dot float64
 	for i := range vector {
 		normalized := vector[i] * invNorm
-		dot += float64(normalizedQuery[i]) * float64(normalized)
+		dot = canonicalVectorPartitionAccumulateV1(dot, normalizedQuery[i], normalized)
 	}
 	if math.IsNaN(dot) || math.IsInf(dot, 0) {
 		return 0, fmt.Errorf("%w: canonical score nonfinite", ErrVectorPartitionSearchUnavailable)
@@ -103,12 +103,21 @@ func canonicalVectorPartitionNormalizedScoreV1(left, right []float32) (float32, 
 	}
 	var dot float64
 	for i := range left {
-		dot += float64(left[i]) * float64(right[i])
+		dot = canonicalVectorPartitionAccumulateV1(dot, left[i], right[i])
 	}
 	if math.IsNaN(dot) || math.IsInf(dot, 0) {
 		return 0, fmt.Errorf("%w: canonical score nonfinite", ErrVectorPartitionSearchUnavailable)
 	}
 	return float32(dot), nil
+}
+
+// canonicalVectorPartitionAccumulateV1 makes the public binary64 product and
+// left-to-right addition rounding points explicit. Float64bits/Float64frombits
+// are allocation-free compiler intrinsics and prevent a future compiler or
+// operand-type change from contracting the two public contract operations.
+func canonicalVectorPartitionAccumulateV1(sum float64, left, right float32) float64 {
+	product := math.Float64frombits(math.Float64bits(float64(left) * float64(right)))
+	return math.Float64frombits(math.Float64bits(sum + product))
 }
 
 type VectorPartitionMembershipKindV1 string
