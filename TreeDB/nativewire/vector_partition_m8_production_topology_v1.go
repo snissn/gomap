@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -203,7 +204,6 @@ func NewVectorPartitionM8ProductionMultiGroupV1(ctx context.Context, opts Vector
 	if err != nil {
 		return nil, err
 	}
-	_ = active
 	return h, nil
 }
 
@@ -299,7 +299,7 @@ func vectorPartitionM8GroupAssetSetDigestV1(group string, manifest collections.V
 	}
 	fields = append(fields, fmt.Sprintf("router/%s/%d/%s/%d/%d", manifest.RouterAsset.ID, manifest.RouterAsset.Bytes, manifest.RouterAsset.Checksum, manifest.RouterGeneration, manifest.Generation))
 	sort.Strings(fields)
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\n%s", group, fields)))
+	sum := sha256.Sum256([]byte(group + "\n" + strings.Join(fields, "\n")))
 	return hex.EncodeToString(sum[:])
 }
 func vectorPartitionM8ProofEntryV1() ([]byte, error) {

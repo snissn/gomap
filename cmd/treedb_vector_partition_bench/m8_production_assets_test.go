@@ -12,7 +12,15 @@ import (
 	"github.com/snissn/gomap/TreeDB/nativewire"
 )
 
+func requireM8PersistentAssetSupportV1(t testing.TB) {
+	t.Helper()
+	if !collections.VectorPartitionNamespacePersistenceSupportedForTestingV1() {
+		t.Skip("M8 persistent vector-partition assets unsupported on this platform")
+	}
+}
+
 func TestM8ProductionMultiGroupAssetsCheckedIn10kCISmokeV1(t *testing.T) {
+	requireM8PersistentAssetSupportV1(t)
 	fixture, err := loadFixture(fixturePath(t))
 	if err != nil {
 		t.Fatal(err)
@@ -98,6 +106,7 @@ func TestM8ProductionMultiGroupAssetsCheckedIn10kCISmokeV1(t *testing.T) {
 }
 
 func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
+	requireM8PersistentAssetSupportV1(t)
 	fixture, err := loadFixture(fixturePath(t))
 	if err != nil {
 		t.Fatal(err)
@@ -171,6 +180,7 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 }
 
 func TestM8ExistingAssetsRelabelsTopologyWithoutMutatingLocalPacksV1(t *testing.T) {
+	requireM8PersistentAssetSupportV1(t)
 	fixture, err := loadFixture(fixturePath(t))
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +197,7 @@ func TestM8ExistingAssetsRelabelsTopologyWithoutMutatingLocalPacksV1(t *testing.
 	}
 	defer os.RemoveAll(dir)
 	groups := []string{"topology-a", "topology-b", "topology-c", "topology-d"}
-	assets, err := openM8ProductionMultiGroupExistingAssetsV1(dir, groups, 4)
+	assets, err := openM8ProductionMultiGroupExistingAssetsV1(dir, groups, 4, fixture, vectors)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,5 +234,29 @@ func TestM8ExistingAssetsRelabelsTopologyWithoutMutatingLocalPacksV1(t *testing.
 	}
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatalf("existing asset directory removed or inaccessible after topology cleanup: %v", err)
+	}
+}
+
+func TestM8ExistingAssetsRejectsDifferentFixtureV1(t *testing.T) {
+	requireM8PersistentAssetSupportV1(t)
+	fixture, err := loadFixture(fixturePath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	vectors := deterministicVectors(fixture)
+	local, err := newM8ProductionMultiGroupAssetsV1(vectors, []string{"local-a", "local-b"}, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := local.dir
+	local.owned = false
+	if err := local.Close(); err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	different := fixture
+	different.Seed++
+	if _, err = openM8ProductionMultiGroupExistingAssetsV1(dir, []string{"topology-a", "topology-b"}, 4, different, deterministicVectors(different)); err == nil {
+		t.Fatal("accepted retained assets from a different fixture")
 	}
 }

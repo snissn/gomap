@@ -27,7 +27,7 @@ func openLocalRaftCluster(ctx context.Context, group string) (*localRaftCluster,
 	return &localRaftCluster{
 		harness: harness,
 		groupID: harness.GroupID(),
-		nodes:   []raftcluster.NodeID{"node-a", "node-b", "node-c"},
+		nodes:   harness.NodeIDs(),
 		leader:  harness.LeaderID(),
 	}, nil
 }

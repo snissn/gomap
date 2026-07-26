@@ -188,7 +188,11 @@ func (h *ThreeNodeHarness) waitLeader(ctx context.Context) (*threeNodeHarnessNod
 		for _, node := range h.nodes {
 			status, err := node.provider.ClusterAdmissionStatus(ctx)
 			if err != nil {
-				return nil, err
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return nil, fmt.Errorf("wait for stable Raft leader: %w", ctxErr)
+				}
+				leader = nil
+				break
 			}
 			if status.Leader {
 				if leader != nil {

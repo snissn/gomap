@@ -148,7 +148,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 	var assets *m8ProductionMultiGroupAssetsV1
 	var err error
 	if cfg.m8ExistingDB != "" {
-		assets, err = openM8ProductionMultiGroupExistingAssetsV1(cfg.m8ExistingDB, groups, cfg.partitions)
+		assets, err = openM8ProductionMultiGroupExistingAssetsV1(cfg.m8ExistingDB, groups, cfg.partitions, fixture, vectors)
 	} else {
 		assets, err = newM8ProductionMultiGroupAssetsV1(vectors, groups, cfg.partitions)
 	}
@@ -560,7 +560,9 @@ func m8ProductionGateLedgerForReportV1(report m8ProductionReportV1) m8Production
 		ledger.Balance = "pass"
 	}
 	if report.Resources.PersistentAssetBytes > 0 && report.Resources.PeakRSSMeasured {
-		ledger.ResourceBounds = "pass"
+		// The runner observes RSS but has no declared process-RSS ceiling. Do
+		// not convert an observation into a resource-bound pass claim.
+		ledger.ResourceBounds = "measured_not_bounded"
 	}
 	return ledger
 }

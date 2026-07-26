@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -160,7 +162,7 @@ func (h *m8ProductionMultiGroupAssetsV1) Close() error {
 // asset directory strictly read-only. The topology receives a canonical clone
 // of its manifest with only group placements relabeled; local pack files and
 // the retained source lifecycle stay unchanged.
-func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, partitions int) (_ *m8ProductionMultiGroupAssetsV1, err error) {
+func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, partitions int, fixture fixtureManifest, vectors [][]float64) (_ *m8ProductionMultiGroupAssetsV1, err error) {
 	if dir == "" || len(groups) < 2 {
 		return nil, errors.New("M8 existing assets require a directory and two groups")
 	}
@@ -195,6 +197,9 @@ func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, par
 		return nil, fmt.Errorf("open retained M8 router: %w", err)
 	}
 	h.status = h.router.Status()
+	if err = m8ValidateExistingAssetsFixtureV1(h.collection, h.status.Manifest, fixture, vectors); err != nil {
+		return nil, err
+	}
 	if h.status.Manifest.PartitionCount != uint32(partitions) {
 		return nil, fmt.Errorf("retained M8 manifest partitions=%d want configured %d", h.status.Manifest.PartitionCount, partitions)
 	}
@@ -206,6 +211,44 @@ func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, par
 		h.assetSetDigests[group] = m8GroupAssetSetDigestV1(group, h.manifest)
 	}
 	return h, nil
+}
+
+// m8ValidateExistingAssetsFixtureV1 prevents a retained M3 corpus from being
+// measured under an unrelated CLI fixture label. The fixture checksum covers
+// the generated corpus, so verify the authoritative FP32 source and stable
+// IDs directly before queries and exact truth are constructed from it.
+func m8ValidateExistingAssetsFixtureV1(collection *collections.Collection, manifest collections.VectorPartitionManifestV1, fixture fixtureManifest, vectors [][]float64) error {
+	if collection == nil || len(vectors) != fixture.Vectors || fixture.Dimensions < 1 {
+		return errors.New("retained M8 assets cannot verify fixture corpus")
+	}
+	source, rows, err := collection.ReadVectorPartitionRouterSourceRowsV1(partitionHNSWIndex)
+	if err != nil {
+		return fmt.Errorf("read retained M8 source rows: %w", err)
+	}
+	if source.Generation != manifest.SourceGeneration || source.Checksum != manifest.SourceChecksum || source.SchemaHash != manifest.SourceSchemaHash || source.RowCount != manifest.SourceRowCount {
+		return errors.New("retained M8 manifest source identity is stale")
+	}
+	if len(rows) != fixture.Vectors || source.RowCount != uint64(fixture.Vectors) {
+		return fmt.Errorf("retained M8 source rows=%d want fixture vectors=%d", len(rows), fixture.Vectors)
+	}
+	seen := make([]bool, fixture.Vectors)
+	for ordinal, row := range rows {
+		id := string(row.DocumentID)
+		if !strings.HasPrefix(id, "doc-") || len(row.Values) != fixture.Dimensions {
+			return fmt.Errorf("retained M8 source row %d does not match fixture shape", ordinal)
+		}
+		fixtureOrdinal, parseErr := strconv.Atoi(strings.TrimPrefix(id, "doc-"))
+		if parseErr != nil || fixtureOrdinal < 0 || fixtureOrdinal >= fixture.Vectors || seen[fixtureOrdinal] {
+			return fmt.Errorf("retained M8 source row %d has invalid fixture document ID %q", ordinal, id)
+		}
+		seen[fixtureOrdinal] = true
+		for dimension, value := range row.Values {
+			if value != float32(vectors[fixtureOrdinal][dimension]) {
+				return fmt.Errorf("retained M8 source row %d dimension %d does not match fixture", ordinal, dimension)
+			}
+		}
+	}
+	return nil
 }
 
 func m8ExistingCollectionNameV1(manager *collections.CollectionManager) (string, error) {
@@ -290,6 +333,6 @@ func m8GroupAssetSetDigestV1(group string, manifest collections.VectorPartitionM
 		fields = append(fields, fmt.Sprintf("router/%s/%d/%s/%d/%d", manifest.RouterAsset.ID, manifest.RouterAsset.Bytes, manifest.RouterAsset.Checksum, manifest.RouterGeneration, manifest.Generation))
 	}
 	sort.Strings(fields)
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\n%s", group, fields)))
+	sum := sha256.Sum256([]byte(group + "\n" + strings.Join(fields, "\n")))
 	return hex.EncodeToString(sum[:])
 }

@@ -126,19 +126,28 @@ func (s VectorPartitionShardSearchTCPServerV1) ServeConn(ctx context.Context, co
 		return
 	}
 	if s.Service == nil {
-		_ = writeVectorPartitionShardSearchTCPFrameV1(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: frame.Request.TargetGroupID, Message: "M5 service is unavailable"}}, maxFrame)
+		s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: frame.Request.TargetGroupID, Message: "M5 service is unavailable"}}, maxFrame, time.Now().Add(initialTimeout))
 		return
 	}
 	requestCtx, cancel := vectorPartitionShardSearchTCPRequestContextV1(ctx, frame.Request.DeadlineUnixNano)
 	defer cancel()
 	stopPeerMonitor := vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn, cancel)
-	defer stopPeerMonitor()
 	response, err := s.Service.Search(requestCtx, *frame.Request)
+	stopPeerMonitor()
+	writeDeadline := time.Now().Add(initialTimeout)
+	if deadline, ok := requestCtx.Deadline(); ok {
+		writeDeadline = deadline
+	}
 	if err != nil {
-		_ = writeVectorPartitionShardSearchTCPFrameV1(conn, vectorPartitionShardSearchTCPFrameV1{Error: vectorPartitionShardSearchTCPErrorFromErrorV1(err)}, maxFrame)
+		s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: vectorPartitionShardSearchTCPErrorFromErrorV1(err)}, maxFrame, writeDeadline)
 		return
 	}
-	_ = writeVectorPartitionShardSearchTCPFrameV1(conn, vectorPartitionShardSearchTCPFrameV1{Response: &response}, maxFrame)
+	s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Response: &response}, maxFrame, writeDeadline)
+}
+
+func (s VectorPartitionShardSearchTCPServerV1) writeFrame(conn net.Conn, frame vectorPartitionShardSearchTCPFrameV1, maxFrame uint32, deadline time.Time) {
+	_ = conn.SetWriteDeadline(deadline)
+	_ = writeVectorPartitionShardSearchTCPFrameV1(conn, frame, maxFrame)
 }
 
 type vectorPartitionShardSearchTCPFrameV1 struct {

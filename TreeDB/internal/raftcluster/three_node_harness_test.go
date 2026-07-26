@@ -3,12 +3,36 @@ package raftcluster
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
+
+func TestThreeNodeHarnessProgressApplierAppliesAndWaits(t *testing.T) {
+	applier := newThreeNodeHarnessProgressApplier("node-a", "group-a")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result, err := applier.ApplyCommittedCommandEntryV1(ctx, CommittedCommandEntryV1{Term: 2, Index: 7, Bytes: []byte("entry")})
+	if err != nil || result.Status != raftentry.ApplyStatusApplied {
+		t.Fatalf("apply result=%+v err=%v", result, err)
+	}
+	progress, err := applier.WaitAppliedIndex(ctx, AppliedIndexReadBarrier{NodeID: "node-a", GroupID: "group-a", MinAppliedIndex: 7})
+	if err != nil || progress.Term != 2 || progress.Index != 7 || !progress.HasApplied {
+		t.Fatalf("wait progress=%+v err=%v", progress, err)
+	}
+	result, err = applier.ApplyCommittedCommandEntryV1(ctx, CommittedCommandEntryV1{Term: 2, Index: 7, Bytes: []byte("entry")})
+	if err != nil || result.Status != raftentry.ApplyStatusAlreadyApplied {
+		t.Fatalf("repeat result=%+v err=%v", result, err)
+	}
+	_, err = applier.WaitAppliedIndex(ctx, AppliedIndexReadBarrier{NodeID: "node-b", GroupID: "group-a"})
+	if !errors.Is(err, ErrReadBarrierTargetMismatch) {
+		t.Fatalf("identity mismatch err=%v", err)
+	}
+}
 
 func TestThreeNodeHarnessTwoIndependentGroupsProveReadIndexAndApply(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
