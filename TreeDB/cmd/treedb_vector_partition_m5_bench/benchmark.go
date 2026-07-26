@@ -56,7 +56,7 @@ type serviceAccumulators struct {
 }
 
 func newBenchmarkEnvironment(collection *collections.Collection, status collections.VectorPartitionStatusV1, cluster *localRaftCluster, partition uint32, query []float32, cfg config) (*benchmarkEnvironment, error) {
-	if collection == nil || cluster == nil || cluster.leader == nil {
+	if collection == nil || cluster == nil || cluster.leader == "" {
 		return nil, errors.New("incomplete M5 benchmark environment")
 	}
 	ref := raftplacement.CollectionRefV1{
@@ -78,7 +78,7 @@ func newBenchmarkEnvironment(collection *collections.Collection, status collecti
 		leader := raftcluster.NodeID("node-a")
 		if groupID == cluster.groupID {
 			members = []raftcluster.NodeID{"node-a", "node-b", "node-c"}
-			leader = cluster.leader.id
+			leader = cluster.leader
 		}
 		groups = append(groups, raftplacement.GroupV1{ID: groupID, Members: members, LeaderHint: leader})
 	}
@@ -123,7 +123,7 @@ func newBenchmarkEnvironment(collection *collections.Collection, status collecti
 		RouterGeneration:      status.Manifest.RouterGeneration,
 		ReadySetDigest:        status.Manifest.ReadySetDigest,
 		TargetGroupID:         cluster.groupID,
-		TargetNodeID:          cluster.leader.id,
+		TargetNodeID:          cluster.leader,
 		PartitionIDs:          []uint32{partition},
 		Query:                 append([]float32(nil), query...),
 		Metric:                servicewire.VectorPartitionShardSearchMetricCosineV1,
@@ -154,9 +154,9 @@ func (e *benchmarkEnvironment) newService(source *servicewire.CollectionVectorPa
 	return servicewire.NewVectorPartitionShardSearchServiceV1(servicewire.VectorPartitionShardSearchServiceOptionsV1{
 		Catalog:          e.catalog,
 		Placement:        e.placement,
-		LocalNodeID:      e.cluster.leader.id,
+		LocalNodeID:      e.cluster.leader,
 		LocalGroupID:     e.cluster.groupID,
-		ReadCoordinator:  e.cluster.coordinator,
+		ReadCoordinator:  e.cluster.readCoordinator(),
 		GenerationSource: source,
 	})
 }

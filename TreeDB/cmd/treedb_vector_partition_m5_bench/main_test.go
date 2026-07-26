@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"math"
 	"testing"
 	"time"
@@ -130,37 +129,6 @@ func TestEvaluateGateWritesSerializableFailureForMissingMeasurements(t *testing.
 	}
 }
 
-func TestLocalProgressApplierAppliesAndWaits(t *testing.T) {
-	applier := newLocalProgressApplier("node-a", "group-a")
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if _, err := applier.ApplyCommittedCommandEntryV1(ctx, raftcluster.CommittedCommandEntryV1{
-		Term:  2,
-		Index: 7,
-		Bytes: []byte("entry"),
-	}); err != nil {
-		t.Fatalf("ApplyCommittedCommandEntryV1: %v", err)
-	}
-	progress, err := applier.WaitAppliedIndex(ctx, raftcluster.AppliedIndexReadBarrier{
-		NodeID:          "node-a",
-		GroupID:         "group-a",
-		MinAppliedIndex: 7,
-	})
-	if err != nil {
-		t.Fatalf("WaitAppliedIndex: %v", err)
-	}
-	if progress.Term != 2 || progress.Index != 7 || !progress.HasApplied {
-		t.Fatalf("progress=%+v", progress)
-	}
-	_, err = applier.WaitAppliedIndex(ctx, raftcluster.AppliedIndexReadBarrier{
-		NodeID:  "node-b",
-		GroupID: "group-a",
-	})
-	if !errors.Is(err, raftcluster.ErrReadBarrierTargetMismatch) {
-		t.Fatalf("identity mismatch err=%v", err)
-	}
-}
-
 func TestLocalRaftClusterCommitsAndCoordinatesProductionReadIndex(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -176,8 +144,8 @@ func TestLocalRaftClusterCommitsAndCoordinatesProductionReadIndex(t *testing.T) 
 	if !commit.Evidence.ProvesProductionConsensus() {
 		t.Fatalf("commit evidence=%+v", commit.Evidence)
 	}
-	proof, progress, err := cluster.coordinator.CoordinateRoutedReadIndex(ctx, raftcluster.ReadIndexBarrier{
-		NodeID:  cluster.leader.id,
+	proof, progress, err := cluster.readCoordinator().CoordinateRoutedReadIndex(ctx, raftcluster.ReadIndexBarrier{
+		NodeID:  cluster.leader,
 		GroupID: cluster.groupID,
 	})
 	if err != nil {
