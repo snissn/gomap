@@ -147,9 +147,7 @@ func TestM8ProductionMultiGroupAssetsCheckedIn10kCISmokeV1(t *testing.T) {
 			merged = append(merged, neighbor{ID: result.ID, Distance: 1 - float64(result.Score)})
 		}
 	}
-	sortNeighbors(merged)
-	merged = dedupeSortedNeighbors(merged)
-	merged = merged[:10]
+	merged = canonicalExactNeighborsV1(merged, 10)
 	want, err := assets.collection.SearchVectorsExact(query, collections.VectorSearchOptions{Field: "embedding", Metric: collections.VectorMetricCosine, TopK: 10})
 	if err != nil {
 		t.Fatal(err)
