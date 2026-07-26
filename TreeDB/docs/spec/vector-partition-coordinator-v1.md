@@ -27,8 +27,10 @@ vector-specific consistency mechanism.
 
 `VectorPartitionShardSearchDispatcherV1` deliberately owns transport and
 connection cancellation. An in-process registry can implement it for tests and
-local evidence. A real remote transport, production network measurements, and
-multi-group Raft acceptance are M8 concerns.
+local evidence. M8 now supplies a bounded TCP envelope adapter in
+`vector-partition-m8-production-topology.md`; production network measurements
+and multi-group Raft acceptance still require the topology harness and evidence
+defined there.
 
 ## Public construction and dependency APIs
 

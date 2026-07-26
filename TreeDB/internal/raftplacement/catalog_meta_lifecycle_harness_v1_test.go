@@ -1,0 +1,60 @@
+package raftplacement
+
+import (
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
+)
+
+func TestCatalogMetaLifecycleHarnessActivatesAndConvergesV1(t *testing.T) {
+	catalog := validCatalog()
+	catalog.Features = DefaultFeatureSet()
+	catalog.Features.Required = append(catalog.Features.Required, raftcluster.RequiredFeature{Name: raftcluster.FeatureVectorPartitionLifecycle, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureVectorPartitionLifecycle]})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	harness, err := OpenCatalogMetaLifecycleHarnessV1(ctx, CatalogMetaLifecycleHarnessOptionsV1{Catalog: catalog, Prefix: "m8-meta-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer harness.Close()
+	if len(harness.NodeIDs()) != 3 || harness.GroupID() != "catalog-meta" || harness.LeaderID() == "" || harness.LeaderAuthority() == nil || harness.LeaderFence() == nil {
+		t.Fatalf("harness identity is incomplete: group=%q nodes=%v leader=%q", harness.GroupID(), harness.NodeIDs(), harness.LeaderID())
+	}
+	status, ok := harness.LeaderAuthority().Status()
+	if !ok {
+		t.Fatal("leader catalog authority is unavailable")
+	}
+	identity := VectorPartitionLifecycleIdentityV1{Index: VectorPartitionLifecycleIndexIdentityV1{Collection: CollectionRefV1{Database: DefaultDatabase, Catalog: DefaultCatalog, Collection: "users"}, CollectionIncarnation: 1, IndexName: "embedding", IndexDefinitionDigest: fmt.Sprintf("%064x", 17), IndexEpoch: 1, CatalogEpoch: status.Epoch, CatalogDigest: status.Digest}, Source: VectorPartitionLifecycleSourceIdentityV1{Generation: 11, Checksum: 12, SchemaHash: 13, RowCount: 10_000}, Generation: 7}
+	coordinator := harness.LifecycleCoordinator()
+	if _, err := coordinator.BeginBuildV1(ctx, identity, []raftcluster.GroupID{"data-group-a", "data-group-b"}, 0, 1); err != nil {
+		t.Fatalf("BeginBuildV1: %v", err)
+	}
+	for i, group := range []raftcluster.GroupID{"data-group-a", "data-group-b"} {
+		if _, err := coordinator.RecordGroupReadyV1(ctx, identity, VectorPartitionLifecycleGroupReadyV1{GroupID: group, AppliedIndex: uint64(100 + i), AssetSetDigest: fmt.Sprintf("%064x", 100+i)}); err != nil {
+			t.Fatalf("RecordGroupReadyV1 %s: %v", group, err)
+		}
+	}
+	prepared, err := coordinator.PrepareV1(ctx, identity)
+	if err != nil {
+		t.Fatalf("PrepareV1: %v", err)
+	}
+	active, err := coordinator.ActivateV1(ctx, identity)
+	if err != nil {
+		t.Fatalf("ActivateV1: %v", err)
+	}
+	if active.State != VectorPartitionLifecycleActiveV1 || active.ReadySetDigest == "" || prepared.ReadySetDigest != active.ReadySetDigest {
+		t.Fatalf("active lifecycle=%+v prepared=%+v", active, prepared)
+	}
+	if _, err := harness.LeaderFence().LinearizableCatalogMetaAppliedIndexV1(ctx); err != nil {
+		t.Fatalf("fresh linearizable read fence: %v", err)
+	}
+	if err := harness.WaitForAuthorities(ctx, func(authority *CatalogMetaAuthorityV1) bool {
+		record, ok := authority.VectorPartitionLifecycleRecordV1(identity)
+		return ok && record.State == VectorPartitionLifecycleActiveV1 && record.Identity == identity && record.ReadySetDigest == active.ReadySetDigest
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

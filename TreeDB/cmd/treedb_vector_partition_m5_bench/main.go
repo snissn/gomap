@@ -361,7 +361,7 @@ func run(args []string, stdout io.Writer) error {
 			Transport:         "three-node in-process HashiCorp Raft in-memory transport with live quorum exchange",
 			LogStableSnapshot: "caller-owned in-memory log, stable, and snapshot stores",
 			GroupID:           string(cluster.groupID),
-			LeaderID:          string(cluster.leader.id),
+			LeaderID:          string(cluster.leader),
 			CommittedTerm:     commit.Entry.Term,
 			CommittedIndex:    commit.Entry.Index,
 			CommitEvidence:    string(commit.Evidence.Kind),

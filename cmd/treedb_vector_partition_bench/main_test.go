@@ -5,16 +5,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/nativewire"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
@@ -1053,6 +1056,148 @@ func TestMalformedCapAndFiniteInputsRejectBeforeSimulation(t *testing.T) {
 	}
 }
 
+func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
+	cfg, err := parseConfig([]string{
+		"-mode", m8ProductionMultiGroupModeV1,
+		"-dataset", fixturePath(t),
+		"-out", t.TempDir(),
+		"-partitions", "16",
+		"-raft-groups", "4",
+		"-raft-nodes-per-group", "3",
+		"-probes", "1,4,16",
+		"-overlap", "0,0.20",
+		"-concurrency", "1,16,64",
+		"-warmup", "3",
+		"-ef-search", "64,4096",
+		"-m8-existing-db", "/retained/m8-assets",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.stage != m8ProductionMultiGroupModeV1 || cfg.raftGroups != 4 || cfg.raftNodes != 3 ||
+		fmt.Sprint(cfg.probes) != "[1 4 16]" || fmt.Sprint(cfg.overlaps) != "[0 0.2]" ||
+		fmt.Sprint(cfg.concurrency) != "[1 16 64]" || cfg.warmup != 3 || fmt.Sprint(cfg.efSearch) != "[64 4096]" || cfg.m8ExistingDB != "/retained/m8-assets" {
+		t.Fatalf("M8 config=%+v", cfg)
+	}
+	limit := nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxSelectedPartitions
+	if _, err := parseConfig([]string{
+		"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(),
+		"-partitions", strconv.Itoa(limit), "-raft-groups", "2",
+	}); err != nil {
+		t.Fatalf("rejected M8 coordinator partition boundary %d: %v", limit, err)
+	}
+	for _, args := range [][]string{
+		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "1"},
+		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4", "-raft-nodes-per-group", "2"},
+		{"-mode", m8ProductionMultiGroupModeV1, "-stage", "router", "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4"},
+		{"-stage", "router", "-m8-existing-db", "/retained/m8-assets", "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-probes", "1"},
+		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4", "-warmup", "-1"},
+		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", strconv.Itoa(limit + 1), "-raft-groups", "2"},
+	} {
+		if _, err := parseConfig(args); err == nil {
+			t.Fatalf("accepted malformed M8 config %#v", args)
+		}
+	}
+}
+
+func TestM8BenchmarkWorkCapAndOverflowV1(t *testing.T) {
+	cfg := config{overlaps: []float64{0, .2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3}
+	plan, err := validateM8BenchmarkWork(cfg, fixtureManifest{Queries: 5}, 84)
+	if err != nil || plan.QueryRequests != 84 {
+		t.Fatalf("M8 work plan=%+v err=%v", plan, err)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, fixtureManifest{Queries: 5}, 83); err == nil {
+		t.Fatal("accepted oversized M8 sweep")
+	}
+	if _, err := validateM8BenchmarkWork(cfg, fixtureManifest{Queries: math.MaxInt}, maxBenchmarkWorkUnits); err == nil {
+		t.Fatal("accepted overflowing M8 sweep")
+	}
+	if _, err := validateM8BenchmarkWork(config{overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}}, fixtureManifest{Queries: math.MaxInt}, maxBenchmarkWorkUnits); err == nil {
+		t.Fatal("accepted overflowing M8 preflight accounting")
+	}
+}
+
+func TestM8ProductionEvidenceJSONKeepsEveryTopologyDimensionV1(t *testing.T) {
+	raw, err := json.Marshal(m8ProductionReportV1{
+		Config: m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16},
+		Rows:   []m8ProductionRowV1{{Probes: 4, EfSearch: 128, Concurrency: 16, Samples: 32}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{`"raft_groups":4`, `"raft_nodes_per_group":3`, `"partitions":16`, `"probes":4`, `"ef_search":128`, `"concurrency":16`, `"samples":32`} {
+		if !bytes.Contains(raw, []byte(field)) {
+			t.Fatalf("missing %s in %s", field, raw)
+		}
+	}
+}
+
+func TestM8ArtifactNameIncludesConfigurationV1(t *testing.T) {
+	fixture := fixtureManifest{Fixture: "x", Checksum: "y"}
+	base := config{headSHA: strings.Repeat("a", 40), raftGroups: 2, raftNodes: 3, partitions: 4, probes: []int{4}, overlaps: []float64{0}, topK: 10, concurrency: []int{1}, efSearch: []int{64}}
+	first, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.partitions = 8
+	second, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "a"})
+	if err != nil || first == second {
+		t.Fatalf("names %q %q err=%v", first, second, err)
+	}
+	base.partitions = 4
+	third, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "different"})
+	if err != nil || first == third {
+		t.Fatalf("asset identities collided %q %q err=%v", first, third, err)
+	}
+}
+
+func TestM8ProfileCaptureWritesRequiredRuntimeArtifactsV1(t *testing.T) {
+	dir := t.TempDir()
+	capture, err := startM8ProfileCaptureV1(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.Gosched()
+	paths, err := capture.Stop()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 7 {
+		t.Fatalf("profile paths=%v", paths)
+	}
+	for _, path := range paths {
+		info, statErr := os.Stat(path)
+		if statErr != nil || info.Size() == 0 {
+			t.Fatalf("profile %s info=%v err=%v", path, info, statErr)
+		}
+	}
+	if again, err := capture.Stop(); err != nil || fmt.Sprint(again) != fmt.Sprint(paths) {
+		t.Fatalf("idempotent stop paths=%v err=%v", again, err)
+	}
+}
+
+func TestM8GateLedgerRequiresMatchedRecallQPSAndTailV1(t *testing.T) {
+	report := m8ProductionReportV1{
+		Config: m8ProductionConfigEvidenceV1{Partitions: 16, RecallTarget: 0.9},
+		Rows: []m8ProductionRowV1{
+			{Status: "pass", Probes: 16, EfSearch: 128, Concurrency: 16, RecallAtK: 0.99, QPS: 100, P95Nanos: 1000, ExactParityChecked: true, ExactParityPassed: true},
+			{Status: "pass", Probes: 4, EfSearch: 128, Concurrency: 16, RecallAtK: 0.92, QPS: 116, P95Nanos: 999},
+		},
+		Failure:   m8ProductionFailureEvidenceV1{Passed: true},
+		Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1, PeakRSSMeasured: true, MaxPartitionLoad: 65_000, BalanceHardCap: 65_625},
+	}
+	ledger := m8ProductionGateLedgerForReportV1(report)
+	if ledger.ExhaustiveParity != "pass" || ledger.FailureHonesty != "pass" || ledger.Recall != "pass" || ledger.ProbeReduction != "pass" || ledger.EndToEndQPS != "pass" || ledger.TailLatency != "pass" || ledger.Balance != "pass" || ledger.ResourceBounds != "measured_not_bounded" || ledger.OverlapStorage != "fail" {
+		t.Fatalf("ledger=%+v", ledger)
+	}
+	report.Rows[1].QPS = 114.9
+	report.Rows[1].P95Nanos = 1001
+	ledger = m8ProductionGateLedgerForReportV1(report)
+	if ledger.EndToEndQPS != "fail" || ledger.TailLatency != "fail" {
+		t.Fatalf("unmatched performance ledger=%+v", ledger)
+	}
+}
+
 func TestSourceHNSWDegreeIsExplicitlyBoundedWithLegacyDefaultV1(t *testing.T) {
 	base := []string{
 		"-dataset", fixturePath(t),
@@ -1087,6 +1232,40 @@ func TestRunRejectsTopKAboveFixtureBeforeOracleAllocation(t *testing.T) {
 	err := runWithHermeticProvenance(t, []string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-probes", "1", "-top-k", "10001"}, io.Discard)
 	if err == nil {
 		t.Fatal("accepted top-k above fixture")
+	}
+}
+
+func TestM8RunRejectsTopKAboveFixtureAndShardLimitsBeforeTopologyV1(t *testing.T) {
+	t.Setenv("BASE_SHA", strings.Repeat("a", 40))
+	t.Setenv("GITHUB_SHA", strings.Repeat("b", 40))
+	t.Setenv("GITHUB_EVENT_PATH", "")
+	fixture := writeFixtureForTest(t, 32, 1, 8)
+	shardFixture := writeFixtureForTest(t, 512, 1, 8)
+	base := []string{
+		"-mode", m8ProductionMultiGroupModeV1,
+		"-out", t.TempDir(),
+		"-partitions", "4",
+		"-raft-groups", "2",
+		"-concurrency", "1",
+		"-warmup", "0",
+	}
+	for _, test := range []struct {
+		name    string
+		dataset string
+		topK    string
+		ef      string
+		want    string
+	}{
+		{name: "fixture", dataset: fixture, topK: "33", ef: "64", want: "top-k cannot exceed fixture vectors"},
+		{name: "shard", dataset: shardFixture, topK: "257", ef: "512", want: "top-k cannot exceed M8 shard limit 256"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			args := append(append([]string(nil), base...), "-dataset", test.dataset, "-top-k", test.topK, "-ef-search", test.ef)
+			err := runWithRuntimeCapabilities(args, io.Discard, benchmarkRuntimeCapabilities{vectorPartitionNamespacePersistence: true})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("run error=%v, want %q", err, test.want)
+			}
+		})
 	}
 }
 

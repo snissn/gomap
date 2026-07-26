@@ -119,6 +119,92 @@ func TestDocsVectorPartitionCoordinatorM6Contract(t *testing.T) {
 	}
 }
 
+func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
+	root, _ := repoRoots(t)
+	checks := []struct {
+		path    string
+		needles []string
+	}{
+		{
+			path: filepath.Join(root, "docs", "spec", "vector-partition-m8-production-topology.md"),
+			needles: []string{
+				"Status: internal, pre-alpha, experimental/off",
+				"VectorPartitionM8ProductionMultiGroupV1",
+				"real three-node HashiCorp Raft data groups",
+				"serialized M5 TCP services",
+				"production_multi_group",
+				"There is no standalone M8 administration command",
+				"-m8-existing-db DIR",
+				"MUST return no partial neighbors",
+				"stable-ID/hash attribution are currently reported `unsupported`",
+				"`measured_not_bounded`",
+				"explicitly accepts the narrower result",
+			},
+		},
+		{
+			path: filepath.Join(root, "docs", "performance", "vector-partition-m8.md"),
+			needles: []string{
+				"9f3cb7c6f8d5aa8283fe2342d9f341cbdbebab48",
+				"experimental/off; north-star gates did not pass",
+				"1,000,000 / 1 / 16",
+				"52,974.66 MB",
+				"14a3e98ae8d4ab74bb4edb78e6858d8ce7e3d7733eebd3136b1321c0eda236b1",
+				"unavailable endpoint returned error, zero neighbors, zero groups",
+				"no configured process-resource limit was compared",
+				"Enablement stays off",
+			},
+		},
+	}
+	for _, check := range checks {
+		b, err := os.ReadFile(check.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, needle := range check.needles {
+			if !strings.Contains(string(b), needle) {
+				t.Fatalf("%s missing %q", check.path, needle)
+			}
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "docs", "performance", "vector-partition-m8-evidence.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evidence struct {
+		Status           string `json:"status"`
+		FeatureEnabled   bool   `json:"feature_enabled"`
+		MeasuredCodeHead string `json:"measured_code_head"`
+		CheckedIn10K     struct {
+			Vectors            int     `json:"vectors"`
+			Queries            int     `json:"queries"`
+			QuarterProbeRecall float64 `json:"quarter_probe_best_recall_at_10"`
+		} `json:"checked_in_10k"`
+		Retained1M struct {
+			Vectors                int `json:"vectors"`
+			Groups                 int `json:"raft_groups"`
+			MeasuredRows           int `json:"measured_rows"`
+			UnsupportedOverlapRows int `json:"unsupported_overlap_rows"`
+		} `json:"retained_1m"`
+		GateLedger struct {
+			ResourceBounds     string `json:"resource_bounds"`
+			ResourceBoundsNote string `json:"resource_bounds_note"`
+		} `json:"gate_ledger"`
+	}
+	if err := json.Unmarshal(raw, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Status != "experimental_off_gate_failures" || evidence.FeatureEnabled ||
+		evidence.MeasuredCodeHead != "9f3cb7c6f8d5aa8283fe2342d9f341cbdbebab48" ||
+		evidence.CheckedIn10K.Vectors != 10_000 || evidence.CheckedIn10K.Queries != 128 ||
+		evidence.CheckedIn10K.QuarterProbeRecall != 0.24140625 ||
+		evidence.Retained1M.Vectors != 1_000_000 || evidence.Retained1M.Groups != 4 ||
+		evidence.Retained1M.MeasuredRows != 60 || evidence.Retained1M.UnsupportedOverlapRows != 1 ||
+		evidence.GateLedger.ResourceBounds != "measured_not_bounded" ||
+		!strings.Contains(evidence.GateLedger.ResourceBoundsNote, "no configured resource limit was compared") {
+		t.Fatalf("M8 evidence boundary changed: %+v", evidence)
+	}
+}
+
 func TestVectorPartitionM1EvidenceSchema(t *testing.T) {
 	root, _ := repoRoots(t)
 	raw, err := os.ReadFile(filepath.Join(root, "docs", "performance", "vector-partition-m1-evidence.json"))

@@ -78,6 +78,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - #3915 M6 contract for bounded transport-neutral fanout, strict M5 proof
     validation, deterministic stable-ID merge, all-or-error cancellation, and
     scoped local-service evidence.
+- `TreeDB/docs/spec/vector-partition-m8-production-topology.md`
+  - #3917 M8 real multi-group Raft/TCP/lifecycle integration contract,
+    retained-asset boundary, operator model, benchmark evidence rules, and
+    experimental/off enablement gate.
 
 - `TreeDB/docs/spec/architecture.md`
   - system model, components, directory layout, side stores, lock model.

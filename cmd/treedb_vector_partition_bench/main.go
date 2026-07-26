@@ -78,12 +78,20 @@ type config struct {
 	memory           benchmarkMemoryPlan
 	stage            string
 	m3PersistDir     string
+	m8ExistingDB     string
 	partition        vectorpartition.Config
 	router           *treeDBRepresentativeRouter
 	coordinator      *m6CoordinatorHarnessV1
 	routerConfig     vectorpartition.RouterConfigV1
 	routerCandidates int
 	sourceHNSWDegree int
+	mode             string
+	raftGroups       int
+	raftNodes        int
+	concurrency      []int
+	warmup           int
+	profiles         string
+	efSearch         []int
 }
 
 type partitionRun struct {
@@ -420,7 +428,7 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 	if err != nil {
 		return err
 	}
-	if (cfg.stage == "router" || cfg.stage == m6CoordinatorStageV1) && !capabilities.vectorPartitionNamespacePersistence {
+	if (cfg.stage == "router" || cfg.stage == m6CoordinatorStageV1 || cfg.stage == m8ProductionMultiGroupModeV1) && !capabilities.vectorPartitionNamespacePersistence {
 		return fmt.Errorf("%w: persisted M4/M6 evidence requires durable vector-partition lifecycle publication", collections.ErrVectorPartitionNamespacePersistenceUnsupportedV1)
 	}
 	if cfg.stage == "overlap,partition_index" && !capabilities.vectorPartitionNamespacePersistence {
@@ -436,7 +444,7 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 	}
 	if cfg.stage == "partition" {
 		err = validatePartitionFixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes)
-	} else if cfg.stage == "overlap,partition_index" || cfg.stage == m6CoordinatorStageV1 {
+	} else if cfg.stage == "overlap,partition_index" || cfg.stage == m6CoordinatorStageV1 || cfg.stage == m8ProductionMultiGroupModeV1 {
 		err = validateM3FixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes)
 	} else {
 		err = validateFixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes)
@@ -449,6 +457,22 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 	}
 	if cfg.seed != fixture.Seed {
 		return fmt.Errorf("-seed %d does not match fixture seed %d", cfg.seed, fixture.Seed)
+	}
+	if cfg.stage == m8ProductionMultiGroupModeV1 {
+		if cfg.topK > fixture.Vectors {
+			return errors.New("top-k cannot exceed fixture vectors")
+		}
+		if cfg.topK > nativewire.DefaultVectorPartitionShardSearchLimitsV1().MaxTopK {
+			return fmt.Errorf("top-k cannot exceed M8 shard limit %d", nativewire.DefaultVectorPartitionShardSearchLimitsV1().MaxTopK)
+		}
+		if _, err := validateM8BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits); err != nil {
+			return err
+		}
+		vectors, queries := deterministicFixture(fixture)
+		if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
+			return errors.New("fixture checksum does not match generated vector/query/truth stream")
+		}
+		return runM8ProductionMultiGroupV1(cfg, fixture, vectors, queries, stdout)
 	}
 	if cfg.stage == "partition" || cfg.stage == "overlap,partition_index" {
 		// The partition builder owns only the frozen vector corpus and its own
@@ -556,10 +580,11 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 func parseConfig(args []string) (config, error) {
 	cfg := config{
 		format: "json", topK: 10, recallTarget: .9, seed: 1, stage: "simulation",
+		warmup:    1,
 		partition: vectorpartition.DefaultConfig(), routerConfig: vectorpartition.DefaultRouterConfigV1(),
 		routerCandidates: 1024, sourceHNSWDegree: partitionHNSWDegree,
 	}
-	var probes, overlap string
+	var probes, overlap, concurrency, efSearch string
 	var stages string
 	fs := flag.NewFlagSet("treedb_vector_partition_bench", flag.ContinueOnError)
 	fs.StringVar(&cfg.dataset, "dataset", "", "fixture directory")
@@ -572,7 +597,15 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.format, "format", cfg.format, "json or text")
 	fs.StringVar(&cfg.out, "out", "", "artifact directory")
 	fs.StringVar(&cfg.stage, "stage", cfg.stage, "simulation, partition, overlap,partition_index, router, or distributed_simulation_or_cluster")
+	fs.StringVar(&cfg.mode, "mode", "", "production_multi_group (canonical M8 alias for -stage)")
+	fs.IntVar(&cfg.raftGroups, "raft-groups", 0, "M8 data Raft group count")
+	fs.IntVar(&cfg.raftNodes, "raft-nodes-per-group", 3, "M8 Raft members per data group (currently exactly 3)")
+	fs.StringVar(&concurrency, "concurrency", "1", "comma-separated M8 query concurrency")
+	fs.IntVar(&cfg.warmup, "warmup", cfg.warmup, "M8 untimed topology warmup requests before the measured sweep")
+	fs.StringVar(&efSearch, "ef-search", "128", "comma-separated M8 local HNSW ef_search values")
+	fs.StringVar(&cfg.profiles, "profiles", "", "M8 profile artifact directory")
 	fs.StringVar(&cfg.m3PersistDir, "m3-persist-db", "", "retain the single overlap,partition_index row as a persistent TreeDB directory for downstream service benchmarks")
+	fs.StringVar(&cfg.m8ExistingDB, "m8-existing-db", "", "read-only existing TreeDB M3 asset directory for production_multi_group; never rebuilt or deleted")
 	fs.IntVar(&cfg.partition.Repetitions, "partition-repetitions", cfg.partition.Repetitions, "dense-ball graph sketch repetitions")
 	fs.IntVar(&cfg.partition.Pivots, "partition-pivots", cfg.partition.Pivots, "dense-ball pivots per recursive level")
 	fs.IntVar(&cfg.partition.MaxLeafBucket, "partition-max-leaf-bucket", cfg.partition.MaxLeafBucket, "maximum dense-ball leaf bucket")
@@ -592,11 +625,20 @@ func parseConfig(args []string) (config, error) {
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
+	if cfg.mode != "" {
+		if cfg.mode != m8ProductionMultiGroupModeV1 || cfg.stage != "simulation" {
+			return config{}, errors.New("-mode supports only production_multi_group and cannot be combined with -stage")
+		}
+		cfg.stage = cfg.mode
+	}
 	// The offline M2 builder does not execute M0 probe simulations. Preserve
 	// the simulation requirement while allowing the issue's partition-stage
 	// invocation to omit a meaningless -probes flag.
 	if (cfg.stage == "partition" || cfg.stage == "overlap,partition_index" || cfg.stage == "router" || cfg.stage == m6CoordinatorStageV1) && probes == "" {
 		probes = "1"
+	}
+	if cfg.stage == m8ProductionMultiGroupModeV1 && probes == "" {
+		probes = strconv.Itoa(cfg.partitions)
 	}
 	var err error
 	if cfg.probes, err = parseInts(probes); err != nil {
@@ -605,7 +647,13 @@ func parseConfig(args []string) (config, error) {
 	if cfg.overlaps, err = parseFloats(overlap); err != nil {
 		return config{}, fmt.Errorf("overlap: %w", err)
 	}
-	if cfg.dataset == "" || cfg.out == "" || cfg.partitions < 1 || cfg.partitions > maxPartitions || cfg.topK < 1 || cfg.maxVectors < 1 || cfg.maxVectors > maxVectors || cfg.maxBytes < 8 || cfg.maxBytes > maxFixtureBytes || cfg.format != "json" && cfg.format != "text" || cfg.stage != "simulation" && cfg.stage != "partition" && cfg.stage != "overlap,partition_index" && cfg.stage != "router" && cfg.stage != m6CoordinatorStageV1 || cfg.routerCandidates < 1 {
+	if cfg.concurrency, err = parseInts(concurrency); err != nil {
+		return config{}, fmt.Errorf("concurrency: %w", err)
+	}
+	if cfg.efSearch, err = parseInts(efSearch); err != nil {
+		return config{}, fmt.Errorf("ef-search: %w", err)
+	}
+	if cfg.dataset == "" || cfg.out == "" || cfg.partitions < 1 || cfg.partitions > maxPartitions || cfg.topK < 1 || cfg.maxVectors < 1 || cfg.maxVectors > maxVectors || cfg.maxBytes < 8 || cfg.maxBytes > maxFixtureBytes || cfg.format != "json" && cfg.format != "text" || cfg.stage != "simulation" && cfg.stage != "partition" && cfg.stage != "overlap,partition_index" && cfg.stage != "router" && cfg.stage != m6CoordinatorStageV1 && cfg.stage != m8ProductionMultiGroupModeV1 || cfg.routerCandidates < 1 {
 		return config{}, errors.New("dataset, out, positive bounded partitions/top-k, and json|text format are required")
 	}
 	if err := validateSourceHNSWDegree(cfg.sourceHNSWDegree); err != nil {
@@ -624,8 +672,34 @@ func parseConfig(args []string) (config, error) {
 			return config{}, errors.New("overlap must be finite in [0,1]")
 		}
 	}
+	if cfg.stage == m8ProductionMultiGroupModeV1 {
+		if cfg.raftGroups < 2 || cfg.raftGroups > 64 || cfg.raftGroups > cfg.partitions || cfg.raftNodes != 3 || cfg.partitions < 4 {
+			return config{}, errors.New("production_multi_group requires 2..64 groups, exactly 3 nodes/group, at least 4 partitions, and groups <= partitions")
+		}
+		coordinatorLimits := nativewire.DefaultVectorPartitionCoordinatorLimitsV1()
+		if cfg.partitions > coordinatorLimits.MaxSelectedPartitions {
+			return config{}, fmt.Errorf("production_multi_group requires at most %d partitions", coordinatorLimits.MaxSelectedPartitions)
+		}
+		if len(cfg.concurrency) == 0 || len(cfg.efSearch) == 0 || cfg.warmup < 0 || cfg.warmup > 10_000 {
+			return config{}, errors.New("production_multi_group requires non-empty concurrency and ef-search sweeps")
+		}
+		for _, value := range cfg.concurrency {
+			if value < 1 || value > 256 {
+				return config{}, errors.New("each concurrency must be in [1,256]")
+			}
+		}
+		shardLimits := nativewire.DefaultVectorPartitionShardSearchLimitsV1()
+		for _, value := range cfg.efSearch {
+			if value < cfg.topK || value > shardLimits.MaxEfSearch {
+				return config{}, fmt.Errorf("each ef-search must be in [%d,%d]", cfg.topK, shardLimits.MaxEfSearch)
+			}
+		}
+	}
 	if cfg.m3PersistDir != "" && (cfg.stage != "overlap,partition_index" || len(cfg.overlaps) != 1) {
 		return config{}, errors.New("-m3-persist-db requires stage overlap,partition_index with exactly one overlap ratio")
+	}
+	if cfg.m8ExistingDB != "" && cfg.stage != m8ProductionMultiGroupModeV1 {
+		return config{}, errors.New("-m8-existing-db requires production_multi_group")
 	}
 	if cfg.stage == "router" && stages == "all" {
 		stages = "exact_representative_routing,approximate_representative_routing"
@@ -980,6 +1054,29 @@ type m3BenchmarkWorkPlan struct {
 	ChecksumVectorQueryVisits   int64
 	MembershipVectorQueryVisits int64
 	VectorQueryVisits           int64
+}
+
+type m8BenchmarkWorkPlan struct{ QueryRequests int64 }
+
+func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits int64) (m8BenchmarkWorkPlan, error) {
+	if capUnits < 1 || len(cfg.overlaps) == 0 || len(cfg.probes) == 0 || len(cfg.efSearch) == 0 || len(cfg.concurrency) == 0 {
+		return m8BenchmarkWorkPlan{}, errors.New("cannot plan M8 benchmark work without a positive cap and complete sweeps")
+	}
+	requests, err := memoryMul(int64(len(cfg.overlaps)), int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(m.Queries))
+	if err != nil {
+		return m8BenchmarkWorkPlan{}, err
+	}
+	// Production M8 also performs one exhaustive endpoint preflight and the
+	// configured untimed warmup requests outside the measured cell sweep.
+	requests, err = memoryAdd(requests, int64(cfg.warmup), 1)
+	if err != nil {
+		return m8BenchmarkWorkPlan{}, err
+	}
+	plan := m8BenchmarkWorkPlan{QueryRequests: requests}
+	if requests > capUnits {
+		return plan, fmt.Errorf("modeled M8 benchmark work exceeds %d-unit cap (%s): query_requests=%d", capUnits, benchmarkWorkScope, requests)
+	}
+	return plan, nil
 }
 
 func validateM3BenchmarkWork(cfg config, m fixtureManifest, capUnits int64) (m3BenchmarkWorkPlan, error) {
