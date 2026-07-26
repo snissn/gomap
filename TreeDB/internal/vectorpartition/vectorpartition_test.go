@@ -615,9 +615,28 @@ func TestExternalBackendStartedCancellationCleansPrivateTemp(t *testing.T) {
 	t.Setenv("TMPDIR", root)
 	t.Setenv("TREE_DB_START_MARKER", marker)
 	request, input := externalBackendRequest(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := RunExternalJSONForRequestWithLimits(ctx, []string{"sh", "-c", ": > \"$TREE_DB_START_MARKER\"; printf '{' > \"$1\"; sleep 1"}, input, ExternalJSONLimits{MaxInput: len(input), MaxOutput: 1024}, request)
+	done := make(chan error, 1)
+	go func() {
+		_, err := RunExternalJSONForRequestWithLimits(ctx, []string{"sh", "-c", ": > \"$TREE_DB_START_MARKER\"; printf '{' > \"$1\"; sleep 1"}, input, ExternalJSONLimits{MaxInput: len(input), MaxOutput: 1024}, request)
+		done <- err
+	}()
+	if err := waitForExternalBackendStartMarkerV1(ctx, marker, done); err != nil {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+		}
+		t.Fatal(err)
+	}
+	cancel()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(time.Second):
+		t.Fatal("started backend did not return after cancellation")
+	}
 	if err == nil {
 		t.Fatal("started backend cancellation accepted")
 	}
@@ -632,6 +651,29 @@ func TestExternalBackendStartedCancellationCleansPrivateTemp(t *testing.T) {
 		t.Fatalf("backend temporary directory leaked after start: %v", entries)
 	}
 }
+
+func waitForExternalBackendStartMarkerV1(ctx context.Context, marker string, done <-chan error) error {
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if _, err := os.Stat(marker); err == nil {
+			return nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("stat external backend start marker: %w", err)
+		}
+		select {
+		case err := <-done:
+			if err == nil {
+				return errors.New("external backend exited successfully before start marker")
+			}
+			return fmt.Errorf("external backend returned before start marker: %w", err)
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for external backend start marker: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
 func TestExternalBackendDeadlineKillsPipeHoldingDescendant(t *testing.T) {
 	root := t.TempDir()
 	marker := filepath.Join(t.TempDir(), "started")
