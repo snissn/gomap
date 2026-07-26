@@ -144,11 +144,11 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 		{
 			path: filepath.Join(root, "docs", "performance", "vector-partition-m8.md"),
 			needles: []string{
-				"7733485cc216dee4c0a1acc907cf71e609d11b7b",
+				"9f3cb7c6f8d5aa8283fe2342d9f341cbdbebab48",
 				"experimental/off; north-star gates did not pass",
 				"1,000,000 / 1 / 16",
-				"52,734 MB",
-				"e63bf9f8cb2f830504b97be3f5cc9c2ead7525ec9ecf61fd0979390fa9f6ece5",
+				"52,974.66 MB",
+				"14a3e98ae8d4ab74bb4edb78e6858d8ce7e3d7733eebd3136b1321c0eda236b1",
 				"unavailable endpoint returned error, zero neighbors, zero groups",
 				"no configured process-resource limit was compared",
 				"Enablement stays off",
@@ -192,7 +192,7 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	if evidence.Status != "experimental_off_gate_failures" || evidence.FeatureEnabled ||
-		evidence.MeasuredCodeHead != "7733485cc216dee4c0a1acc907cf71e609d11b7b" ||
+		evidence.MeasuredCodeHead != "9f3cb7c6f8d5aa8283fe2342d9f341cbdbebab48" ||
 		evidence.CheckedIn10K.Vectors != 10_000 || evidence.CheckedIn10K.Queries != 128 ||
 		evidence.CheckedIn10K.QuarterProbeRecall != 0.24140625 ||
 		evidence.Retained1M.Vectors != 1_000_000 || evidence.Retained1M.Groups != 4 ||
