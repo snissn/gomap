@@ -1207,6 +1207,43 @@ func TestM8CanonicalFP32ScoreContractTiePrecisionAndDedupeV1(t *testing.T) {
 	}
 }
 
+func TestM8CanonicalRefPathMatchesOwnedTieDedupeAndLifetimeV1(t *testing.T) {
+	candidates := []m8CanonicalResultV1{
+		{ID: "duplicate", Score: 0.1},
+		{ID: "z", Score: 0.9},
+		{ID: "a", Score: 0.9},
+		{ID: "duplicate", Score: 0.95},
+		{ID: "lower", Score: math.Float32frombits(math.Float32bits(0.9) - 1)},
+	}
+	var owned []m8CanonicalResultV1
+	var refs []m8CanonicalRefResultV1
+	refIDs := make([][]byte, len(candidates))
+	for i, candidate := range candidates {
+		owned = m8AppendBoundedCanonicalV1(owned, candidate, 4)
+		refIDs[i] = []byte(candidate.ID)
+		refs = m8AppendBoundedCanonicalRefV1(refs, m8CanonicalRefResultV1{ID: refIDs[i], Score: candidate.Score}, 4)
+	}
+	got := m8MaterializeCanonicalRefsV1(refs)
+	if len(got) != len(owned) {
+		t.Fatalf("ref results=%+v owned=%+v", got, owned)
+	}
+	for i := range owned {
+		if got[i] != owned[i] {
+			t.Fatalf("rank=%d ref=%+v owned=%+v", i, got, owned)
+		}
+	}
+	for i := range refIDs {
+		for j := range refIDs[i] {
+			refIDs[i][j] = 'x'
+		}
+	}
+	for i := range owned {
+		if got[i] != owned[i] {
+			t.Fatalf("materialized result changed after source mutation rank=%d ref=%+v owned=%+v", i, got, owned)
+		}
+	}
+}
+
 func TestM8CanonicalContractRejectsInvalidBoundsAndScoresV1(t *testing.T) {
 	if got := m8CanonicalResultsV1([]m8CanonicalResultV1{{ID: "a", Score: 1}}, -1); got != nil {
 		t.Fatalf("negative top-k result=%+v", got)

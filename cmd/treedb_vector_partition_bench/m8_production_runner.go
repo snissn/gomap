@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -452,6 +453,11 @@ type m8CanonicalResultV1 struct {
 	Score float32
 }
 
+type m8CanonicalRefResultV1 struct {
+	ID    []byte
+	Score float32
+}
+
 const m8CanonicalResultContractV1 = collections.VectorPartitionCanonicalScoreContractV1
 
 func m8CanonicalResultsV1(in []m8CanonicalResultV1, topK int) []m8CanonicalResultV1 {
@@ -505,7 +511,57 @@ func m8AppendBoundedCanonicalV1(results []m8CanonicalResultV1, candidate m8Canon
 	return m8CanonicalResultsV1(append(results, candidate), topK)
 }
 
+func m8CanonicalRefResultsV1(results []m8CanonicalRefResultV1, topK int) []m8CanonicalRefResultV1 {
+	slices.SortFunc(results, func(a, b m8CanonicalRefResultV1) int {
+		if a.Score > b.Score {
+			return -1
+		}
+		if a.Score < b.Score {
+			return 1
+		}
+		return bytes.Compare(a.ID, b.ID)
+	})
+	if len(results) > topK {
+		results = results[:topK]
+	}
+	return results
+}
+
+func m8AppendBoundedCanonicalRefV1(results []m8CanonicalRefResultV1, candidate m8CanonicalRefResultV1, topK int) []m8CanonicalRefResultV1 {
+	if topK <= 0 || len(candidate.ID) == 0 || math.IsNaN(float64(candidate.Score)) || math.IsInf(float64(candidate.Score), 0) {
+		return nil
+	}
+	for i := range results {
+		if bytes.Equal(results[i].ID, candidate.ID) {
+			if candidate.Score > results[i].Score {
+				results[i] = candidate
+			}
+			return m8CanonicalRefResultsV1(results, topK)
+		}
+	}
+	if len(results) == topK {
+		worst := results[len(results)-1]
+		if candidate.Score < worst.Score || candidate.Score == worst.Score && bytes.Compare(candidate.ID, worst.ID) >= 0 {
+			return results
+		}
+		results[len(results)-1] = candidate
+		return m8CanonicalRefResultsV1(results, topK)
+	}
+	return m8CanonicalRefResultsV1(append(results, candidate), topK)
+}
+
+func m8MaterializeCanonicalRefsV1(refs []m8CanonicalRefResultV1) []m8CanonicalResultV1 {
+	out := make([]m8CanonicalResultV1, len(refs))
+	for i := range refs {
+		out[i] = m8CanonicalResultV1{ID: string(refs[i].ID), Score: refs[i].Score}
+	}
+	return out
+}
+
 func m8ExactTruthV1(collection *collections.Collection, manifest collections.VectorPartitionManifestV1, queries [][]float64, topK int) ([][]m8CanonicalResultV1, error) {
+	if topK < 1 {
+		return nil, errors.New("M8 canonical source oracle requires positive top_k")
+	}
 	source, rows, err := collection.ReadVectorPartitionRouterSourceRowsV1(partitionHNSWIndex)
 	if err != nil {
 		return nil, fmt.Errorf("M8 canonical source oracle: %w", err)
@@ -516,13 +572,19 @@ func m8ExactTruthV1(collection *collections.Collection, manifest collections.Vec
 	truth := make([][]m8CanonicalResultV1, len(queries))
 	for i, query64 := range queries {
 		query := m8Query32V1(query64)
+		scorer, scoreErr := collections.NewCanonicalVectorPartitionCosineScorerV1(query)
+		if scoreErr != nil {
+			return nil, fmt.Errorf("M8 canonical source oracle query=%d: %w", i, scoreErr)
+		}
+		refs := make([]m8CanonicalRefResultV1, 0, min(topK, len(rows)))
 		for ordinal, row := range rows {
-			score, scoreErr := collections.CanonicalVectorPartitionCosineScoreV1(query, row.Values)
+			score, scoreErr := scorer.ScoreV1(row.Values)
 			if scoreErr != nil {
 				return nil, fmt.Errorf("M8 canonical source oracle query=%d ordinal=%d: %w", i, ordinal, scoreErr)
 			}
-			truth[i] = m8AppendBoundedCanonicalV1(truth[i], m8CanonicalResultV1{ID: string(row.DocumentID), Score: score}, topK)
+			refs = m8AppendBoundedCanonicalRefV1(refs, m8CanonicalRefResultV1{ID: row.DocumentID, Score: score}, topK)
 		}
+		truth[i] = m8MaterializeCanonicalRefsV1(refs)
 		if len(truth[i]) != min(topK, len(rows)) {
 			return nil, fmt.Errorf("M8 canonical source oracle query=%d results=%d", i, len(truth[i]))
 		}

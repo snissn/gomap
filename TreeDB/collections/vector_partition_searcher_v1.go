@@ -29,15 +29,50 @@ func CanonicalVectorPartitionCosineScoreV1(query, vector []float32) (float32, er
 	if len(query) == 0 || len(query) != len(vector) {
 		return 0, fmt.Errorf("%w: canonical score dimensions", ErrVectorPartitionSearchUnavailable)
 	}
+	scorer, err := NewCanonicalVectorPartitionCosineScorerV1(query)
+	if err != nil {
+		return 0, err
+	}
+	return scorer.ScoreV1(vector)
+}
+
+// CanonicalVectorPartitionCosineScorerV1 retains one normalized query so a
+// full-source exact oracle can score many caller-owned vectors without
+// allocating a normalized query and vector for every source row.
+type CanonicalVectorPartitionCosineScorerV1 struct {
+	normalizedQuery []float32
+}
+
+// NewCanonicalVectorPartitionCosineScorerV1 prepares one query for repeated
+// execution of VectorPartitionCanonicalScoreContractV1.
+func NewCanonicalVectorPartitionCosineScorerV1(query []float32) (*CanonicalVectorPartitionCosineScorerV1, error) {
 	normalizedQuery, err := canonicalVectorPartitionNormalizeV1(query)
 	if err != nil {
-		return 0, fmt.Errorf("%w: canonical query norm: %v", ErrVectorPartitionSearchUnavailable, err)
+		return nil, fmt.Errorf("%w: canonical query norm: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
-	normalizedVector, err := canonicalVectorPartitionNormalizeV1(vector)
+	return &CanonicalVectorPartitionCosineScorerV1{normalizedQuery: normalizedQuery}, nil
+}
+
+// ScoreV1 scores one source vector without allocating. Multiplication by the
+// FP32 inverse norm is rounded to FP32 before the binary64 dot accumulation,
+// preserving the public score bits produced by the one-shot helper.
+func (s *CanonicalVectorPartitionCosineScorerV1) ScoreV1(vector []float32) (float32, error) {
+	if s == nil || len(s.normalizedQuery) == 0 || len(s.normalizedQuery) != len(vector) {
+		return 0, fmt.Errorf("%w: canonical score dimensions", ErrVectorPartitionSearchUnavailable)
+	}
+	invNorm, err := columnVectorGraphInvNorm(vector)
 	if err != nil {
 		return 0, fmt.Errorf("%w: canonical vector norm: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
-	return canonicalVectorPartitionNormalizedScoreV1(normalizedQuery, normalizedVector)
+	var dot float64
+	for i := range vector {
+		normalized := vector[i] * invNorm
+		dot += float64(s.normalizedQuery[i]) * float64(normalized)
+	}
+	if math.IsNaN(dot) || math.IsInf(dot, 0) {
+		return 0, fmt.Errorf("%w: canonical score nonfinite", ErrVectorPartitionSearchUnavailable)
+	}
+	return float32(dot), nil
 }
 
 func canonicalVectorPartitionNormalizeV1(vector []float32) ([]float32, error) {
@@ -103,6 +138,81 @@ type VectorPartitionSearchResultV1 struct {
 // score-descending, stable-ID-ascending result order without one uninterruptible
 // full-partition sort.
 type vectorPartitionSearchResultMaxHeapV1 []VectorPartitionSearchResultV1
+
+type vectorPartitionSearchRefResultV1 struct {
+	ID    []byte
+	Score float32
+}
+
+type vectorPartitionSearchRefResultMaxHeapV1 []vectorPartitionSearchRefResultV1
+
+func vectorPartitionSearchRefResultBetterV1(left, right vectorPartitionSearchRefResultV1) bool {
+	if left.Score != right.Score {
+		return left.Score > right.Score
+	}
+	return bytes.Compare(left.ID, right.ID) < 0
+}
+
+func vectorPartitionSearchRefResultWorseV1(left, right vectorPartitionSearchRefResultV1) bool {
+	return vectorPartitionSearchRefResultBetterV1(right, left)
+}
+
+func (h *vectorPartitionSearchRefResultMaxHeapV1) pushBounded(limit int, candidate vectorPartitionSearchRefResultV1) {
+	if limit <= 0 {
+		return
+	}
+	if len(*h) < limit {
+		*h = append(*h, candidate)
+		h.up(len(*h) - 1)
+		return
+	}
+	if !vectorPartitionSearchRefResultBetterV1(candidate, (*h)[0]) {
+		return
+	}
+	(*h)[0] = candidate
+	h.down(0)
+}
+
+func (h *vectorPartitionSearchRefResultMaxHeapV1) popWorst() vectorPartitionSearchRefResultV1 {
+	out := (*h)[0]
+	last := len(*h) - 1
+	(*h)[0] = (*h)[last]
+	*h = (*h)[:last]
+	if len(*h) > 0 {
+		h.down(0)
+	}
+	return out
+}
+
+func (h *vectorPartitionSearchRefResultMaxHeapV1) up(child int) {
+	for child > 0 {
+		parent := (child - 1) / 2
+		if !vectorPartitionSearchRefResultWorseV1((*h)[child], (*h)[parent]) {
+			return
+		}
+		(*h)[child], (*h)[parent] = (*h)[parent], (*h)[child]
+		child = parent
+	}
+}
+
+func (h *vectorPartitionSearchRefResultMaxHeapV1) down(parent int) {
+	for {
+		left := parent*2 + 1
+		if left >= len(*h) {
+			return
+		}
+		child := left
+		right := left + 1
+		if right < len(*h) && vectorPartitionSearchRefResultWorseV1((*h)[right], (*h)[left]) {
+			child = right
+		}
+		if !vectorPartitionSearchRefResultWorseV1((*h)[child], (*h)[parent]) {
+			return
+		}
+		(*h)[parent], (*h)[child] = (*h)[child], (*h)[parent]
+		parent = child
+	}
+}
 
 func vectorPartitionSearchResultBetterV1(left, right VectorPartitionSearchResultV1) bool {
 	if left.Score != right.Score {
@@ -779,7 +889,8 @@ func (s *VectorPartitionLocalSearcherV1) SearchExactWithOptionsV1(ctx context.Co
 		return nil, VectorPartitionSearchMetricsV1{}, err
 	}
 	rows, dims, stride := int(s.prepared.Header.Rows), s.asset.Dimensions, int(s.prepared.Header.VectorStride)
-	top := make(vectorPartitionSearchResultMaxHeapV1, 0, min(opts.TopK, rows))
+	limit := min(opts.TopK, rows)
+	top := make(vectorPartitionSearchRefResultMaxHeapV1, 0, limit)
 	for row := 0; row < rows; row++ {
 		if row&255 == 0 {
 			if err := ctx.Err(); err != nil {
@@ -793,7 +904,7 @@ func (s *VectorPartitionLocalSearcherV1) SearchExactWithOptionsV1(ctx context.Co
 			return nil, VectorPartitionSearchMetricsV1{}, err
 		}
 		start, end := s.prepared.DocumentIDOffsets[row], s.prepared.DocumentIDOffsets[row+1]
-		top.pushBounded(min(opts.TopK, rows), VectorPartitionSearchResultV1{ID: string(append([]byte(nil), s.prepared.DocumentIDBytes[start:end]...)), Score: score})
+		top.pushBounded(limit, vectorPartitionSearchRefResultV1{ID: s.prepared.DocumentIDBytes[start:end], Score: score})
 	}
 	out := make([]VectorPartitionSearchResultV1, len(top))
 	for target := len(out) - 1; target >= 0; target-- {
@@ -803,7 +914,8 @@ func (s *VectorPartitionLocalSearcherV1) SearchExactWithOptionsV1(ctx context.Co
 				return nil, VectorPartitionSearchMetricsV1{}, err
 			}
 		}
-		out[target] = top.popWorst()
+		candidate := top.popWorst()
+		out[target] = VectorPartitionSearchResultV1{ID: string(candidate.ID), Score: candidate.Score}
 	}
 	if err := ctx.Err(); err != nil {
 		s.recordFailure()

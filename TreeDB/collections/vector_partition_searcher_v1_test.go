@@ -207,6 +207,63 @@ func TestCanonicalVectorPartitionCosineScoreV1NormalizesInFP32V1(t *testing.T) {
 	if _, err := CanonicalVectorPartitionCosineScoreV1(query, []float32{0, 0}); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
 		t.Fatalf("zero-vector err=%v", err)
 	}
+	scorer, err := NewCanonicalVectorPartitionCosineScorerV1(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := scorer.ScoreV1(vector)
+	if err != nil || math.Float32bits(prepared) != math.Float32bits(got) {
+		t.Fatalf("prepared score=%v bits=%#x err=%v want=%v bits=%#x", prepared, math.Float32bits(prepared), err, got, math.Float32bits(got))
+	}
+	var scoreErr error
+	allocs := testing.AllocsPerRun(100, func() {
+		_, scoreErr = scorer.ScoreV1(vector)
+	})
+	if scoreErr != nil || allocs != 0 {
+		t.Fatalf("prepared score err=%v allocs/run=%.1f want zero", scoreErr, allocs)
+	}
+}
+
+func TestVectorPartitionLocalSearcherV1ExactScanAllocationsBoundedByTopKV1(t *testing.T) {
+	const (
+		rows = 512
+		topK = 5
+	)
+	vectors := make([]float32, rows*2)
+	offsets := make([]uint64, rows+1)
+	ids := make([]byte, 0, rows*8)
+	for row := 0; row < rows; row++ {
+		vectors[row*2] = 1
+		ids = fmt.Appendf(ids, "%08d", row)
+		offsets[row+1] = uint64(len(ids))
+	}
+	searcher := &VectorPartitionLocalSearcherV1{
+		asset: VectorPartitionSearchAssetV1{Generation: 11, PartitionID: 2, Dimensions: 2},
+		prepared: &columnHNSWSearchPackPreparedView{
+			Header:            columnHNSWSearchPackHeader{Rows: rows, Dimensions: 2, VectorStride: 2},
+			NormalizedVectors: vectors,
+			DocumentIDOffsets: offsets,
+			DocumentIDBytes:   ids,
+		},
+		opened:           1,
+		maxStableIDBytes: 8,
+	}
+	var searchErr error
+	allocs := testing.AllocsPerRun(10, func() {
+		var results []VectorPartitionSearchResultV1
+		results, _, searchErr = searcher.SearchExactWithOptionsV1(
+			context.Background(), []float32{1, 0}, VectorPartitionSearchOptionsV1{TopK: topK},
+		)
+		if len(results) != topK {
+			searchErr = fmt.Errorf("results=%d want=%d", len(results), topK)
+		}
+	})
+	if searchErr != nil {
+		t.Fatal(searchErr)
+	}
+	if allocs >= 32 {
+		t.Fatalf("exact scan allocs/run=%.1f want O(topK), not O(rows=%d)", allocs, rows)
+	}
 }
 
 func TestVectorPartitionLocalSearcherV1ExactScanUsesCanonicalScoreBitsV1(t *testing.T) {
