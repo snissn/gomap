@@ -135,7 +135,7 @@ func (s VectorPartitionShardSearchTCPServerV1) ServeConn(ctx context.Context, co
 	}
 	requestCtx, cancel := vectorPartitionShardSearchTCPRequestContextV1(ctx, frame.Request.DeadlineUnixNano)
 	defer cancel()
-	stopPeerMonitor := vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn, cancel)
+	stopPeerMonitor := vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn, requestCtx, cancel)
 	response, err := s.Service.Search(requestCtx, *frame.Request)
 	stopPeerMonitor()
 	writeDeadline := time.Now().Add(initialTimeout)
@@ -297,7 +297,7 @@ func vectorPartitionShardSearchTCPRequestContextV1(ctx context.Context, deadline
 // successful response is not delayed by the polling deadline. Read deadlines
 // are cleared when the normal request completes and do not affect the response
 // write deadline.
-func vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn net.Conn, cancel context.CancelFunc) func() {
+func vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn net.Conn, ctx context.Context, cancel context.CancelFunc) func() {
 	if conn == nil || cancel == nil {
 		return func() {}
 	}
@@ -326,6 +326,9 @@ func vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn net.Conn, cancel 
 				return
 			}
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+				if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+					return
+				}
 				cancel()
 				return
 			}
