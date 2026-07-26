@@ -136,6 +136,32 @@ func TestVectorPartitionLocalSearcherV1HNSWCanonicalizesFP32TieOrder(t *testing.
 	}
 }
 
+func TestVectorPartitionLocalSearcherV1PinnedExactPackScanV1(t *testing.T) {
+	input := testColumnHNSWSearchPackInput2312()
+	input.NormalizedVectors = []float32{1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0}
+	input.DocumentIDOffsets = []uint64{0, 1, 2, 3}
+	input.DocumentIDBytes = []byte("zac")
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, handle := testColumnHNSWSearchPackPreparedViewFromBytes2314(t, raw, mappedresource.SourceHeapCopy, input.BaseIdentity)
+	searcher := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Generation: 11, PartitionID: 2, Dimensions: 3}, prepared: view, opened: 1, maxStableIDBytes: 1}
+	results, metrics, err := searcher.SearchExactWithOptionsV1(context.Background(), []float32{1, 0, 0}, VectorPartitionSearchOptionsV1{TopK: 2})
+	if err != nil || len(results) != 2 || results[0].ID != "a" || results[1].ID != "z" || metrics.Route != VectorPartitionSearchRouteExactFP32ScanV1 {
+		t.Fatalf("results=%+v metrics=%+v err=%v", results, metrics, err)
+	}
+	if _, _, err := searcher.SearchExactWithOptionsV1(context.Background(), []float32{1, 0, 0}, VectorPartitionSearchOptionsV1{TopK: 1, MaxStableIDBytes: 0}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := searcher.SearchExactWithOptionsV1(context.Background(), []float32{1, 0, 0}, VectorPartitionSearchOptionsV1{TopK: 1, MaxStableIDBytes: 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := searcher.Close(); err != nil || !handle.Released() {
+		t.Fatalf("close=%v released=%v", err, handle.Released())
+	}
+}
+
 func TestVectorPartitionNativeResultsCanonicalizeCollapsedFP32TieV1(t *testing.T) {
 	higherFloat64 := math.Nextafter(1, 2)
 	if float32(higherFloat64) != float32(1) {
