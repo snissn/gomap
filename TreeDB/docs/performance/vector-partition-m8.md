@@ -2,7 +2,7 @@
 
 Date: 2026-07-25
 
-Measured code head: `7733485cc216dee4c0a1acc907cf71e609d11b7b`
+Measured production-code head: `9f3cb7c6f8d5aa8283fe2342d9f341cbdbebab48` (the evidence-document commit is subsequent and is not the measured code).
 
 Base M7 merge: `03a5508e5df33ceaf2920839a670fb16652f633d`
 
@@ -220,8 +220,8 @@ mounts, fixture checksum, budgets, topology, gate ledger, and profile paths.
 
 | Record | Path | SHA-256 |
 | --- | --- | --- |
-| clean deep JSON | `/mnt/fast4tb/tmp/treedb_vector_partition_m8_deep_LdJ1kW/vector_partition_m8_7733485cc216.json` | `e63bf9f8cb2f830504b97be3f5cc9c2ead7525ec9ecf61fd0979390fa9f6ece5` |
-| clean 10k JSON | `/mnt/fast4tb/tmp/treedb_vector_partition_m8_cleanrun_1y5LOr/vector_partition_m8_7733485cc216.json` | `23d25017e37998f77edb1711d7a46e26f1380d308ae24c65f24bbe817dc0e56b` |
+| clean deep JSON | `/mnt/fast4tb/tmp/treedb_vector_partition_m8_refresh1m_20260725_231810/vector_partition_m8_9f3cb7c6f8d5.json` | `14a3e98ae8d4ab74bb4edb78e6858d8ce7e3d7733eebd3136b1321c0eda236b1` |
+| clean 10k JSON | `/mnt/fast4tb/tmp/treedb_vector_partition_m8_refresh10k_20260725_231532/vector_partition_m8_9f3cb7c6f8d5.json` | `ef141fea8e8cb1e80235423a486920a499f9d9683fa72ec33fbbc28cf0fb784e` |
 | CPU profile | `.../profiles/cpu.pprof` | `98b30c3104f486a28a2b4f0862988d29ac58ff440ee7e90b0d0600b3419059fb` |
 | allocation baseline | `.../profiles/allocs_baseline.pprof` | `2c6c095da269c9ac1f7310fb762ae6ca78b3d13ea5e3d427ce5b13ada21ad37b` |
 | allocation final | `.../profiles/allocs.pprof` | `0303957d60b2564417a30c582ed6c4043679cabd2eb7f39d3187cd5aa4d838ad` |
