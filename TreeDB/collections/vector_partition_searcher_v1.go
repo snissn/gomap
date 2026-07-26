@@ -699,17 +699,23 @@ func (s *VectorPartitionLocalSearcherV1) SearchExactWithOptionsV1(ctx context.Co
 		return nil, VectorPartitionSearchMetricsV1{}, err
 	}
 	defer s.Release()
-	if s.prepared == nil || opts.TopK < 1 || len(query) != s.asset.Dimensions {
+	if s.prepared == nil || opts.TopK < 1 || opts.MaxStableIDBytes < 0 || len(query) != s.asset.Dimensions {
+		return nil, VectorPartitionSearchMetricsV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	if opts.MaxStableIDBytes > 0 && s.maxStableIDBytes > opts.MaxStableIDBytes {
 		return nil, VectorPartitionSearchMetricsV1{}, ErrVectorPartitionSearchUnavailable
 	}
 	var qn float64
 	for _, x := range query {
+		if math.IsNaN(float64(x)) || math.IsInf(float64(x), 0) {
+			return nil, VectorPartitionSearchMetricsV1{}, ErrVectorPartitionSearchUnavailable
+		}
 		qn += float64(x) * float64(x)
 	}
 	if qn == 0 {
 		return nil, VectorPartitionSearchMetricsV1{}, ErrVectorPartitionSearchUnavailable
 	}
-	rows, dims := int(s.prepared.Header.Rows), s.asset.Dimensions
+	rows, dims, stride := int(s.prepared.Header.Rows), s.asset.Dimensions, int(s.prepared.Header.VectorStride)
 	top := make(vectorPartitionSearchResultMaxHeapV1, 0, min(opts.TopK, rows))
 	for row := 0; row < rows; row++ {
 		if row&255 == 0 {
@@ -719,13 +725,18 @@ func (s *VectorPartitionLocalSearcherV1) SearchExactWithOptionsV1(ctx context.Co
 		}
 		var dot float64
 		for col := 0; col < dims; col++ {
-			dot += float64(query[col]) * float64(s.prepared.NormalizedVectors[row*dims+col])
+			dot += float64(query[col]) * float64(s.prepared.NormalizedVectors[row*stride+col])
 		}
 		start, end := s.prepared.DocumentIDOffsets[row], s.prepared.DocumentIDOffsets[row+1]
-		top.pushBounded(min(opts.TopK, rows), VectorPartitionSearchResultV1{ID: string(s.prepared.DocumentIDBytes[start:end]), Score: float32(dot / math.Sqrt(qn))})
+		top.pushBounded(min(opts.TopK, rows), VectorPartitionSearchResultV1{ID: string(append([]byte(nil), s.prepared.DocumentIDBytes[start:end]...)), Score: float32(dot / math.Sqrt(qn))})
 	}
 	out := make([]VectorPartitionSearchResultV1, len(top))
 	for target := len(out) - 1; target >= 0; target-- {
+		if target&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, VectorPartitionSearchMetricsV1{}, err
+			}
+		}
 		out[target] = top.popWorst()
 	}
 	return out, VectorPartitionSearchMetricsV1{Candidates: uint64(rows), Route: VectorPartitionSearchRouteExactFP32ScanV1}, nil
