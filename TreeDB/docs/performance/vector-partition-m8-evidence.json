@@ -62,7 +62,7 @@
     "balance": "pass",
     "overlap_storage": "fail_unsupported",
     "resource_bounds": "pass",
-    "existing_behavior": "pending_final_required_suites"
+    "existing_behavior": "incomplete_go1.26_race_runtime_crash_in_unrelated_allocs_test"
   },
   "measured_blocker": {
     "owner": "per_request_router_open_and_full_manifest_verification",

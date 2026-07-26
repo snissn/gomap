@@ -46,7 +46,7 @@ claim.
 | Overlap 0.20 bytes <= 1.35x | **FAIL** | overlap assets are not materialized and are reported unsupported |
 | Failure honesty | **PASS** | unavailable endpoint returned error, zero neighbors, zero groups |
 | Resource bounds | **PASS** | 188,536,448 persistent bytes; measured peak RSS 1,162,182,656 bytes |
-| Existing behavior | **PENDING** | final required normal/race suites run after report integration |
+| Existing behavior | **INCOMPLETE** | full normal suite and all M8-relevant race suites pass; full collections race command crashes in Go 1.26 runtime during unrelated `testing.AllocsPerRun` |
 
 This ledger deliberately treats unsupported required evidence as failure. A
 stage-only win or a configuration sweep without multiple queries does not
@@ -133,6 +133,28 @@ and unavailable meta quorum.
 The benchmark injects endpoint loss after all measured rows. CPU, block, mutex,
 trace, and cumulative allocation profiles therefore cover both ordinary query
 work and that fault boundary.
+
+## Verification
+
+The required non-race command passed on the report-integrated head across
+collections, placement, Raft cluster/FSM, native wire, Mongo gateway, and the
+benchmark package. Default race runs passed for Raft cluster, native wire, and
+the benchmark package. The focused collections vector-partition race suite
+also passed:
+
+```sh
+GOWORK=off go test -race ./TreeDB/collections \
+  -run 'Test.*VectorPartition' -count=1
+```
+
+The required full collections race package did not complete. It reproduced
+the same segmentation fault twice inside Go 1.26's runtime while
+`testing.AllocsPerRun` called `runtime.GOMAXPROCS(1)` from the unrelated
+`TestColumnPhysicalAssetSerialScanNumericProjectionHasZeroAllocsM13A`; there
+was no race-detector report and no M8 frame. Forcing `GOMAXPROCS=1` avoided that
+runtime transition but invalidated unrelated tests that deliberately expect
+parallel query policies. This is disclosed as an incomplete full-suite gate,
+not counted as passing M8 evidence.
 
 ## Profile and resource findings
 
