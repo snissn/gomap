@@ -673,6 +673,10 @@ func parseConfig(args []string) (config, error) {
 		if cfg.raftGroups < 2 || cfg.raftGroups > 64 || cfg.raftGroups > cfg.partitions || cfg.raftNodes != 3 || cfg.partitions < 4 {
 			return config{}, errors.New("production_multi_group requires 2..64 groups, exactly 3 nodes/group, at least 4 partitions, and groups <= partitions")
 		}
+		coordinatorLimits := nativewire.DefaultVectorPartitionCoordinatorLimitsV1()
+		if cfg.partitions > coordinatorLimits.MaxSelectedPartitions {
+			return config{}, fmt.Errorf("production_multi_group requires at most %d partitions", coordinatorLimits.MaxSelectedPartitions)
+		}
 		if len(cfg.concurrency) == 0 || len(cfg.efSearch) == 0 || cfg.warmup < 0 || cfg.warmup > 10_000 {
 			return config{}, errors.New("production_multi_group requires non-empty concurrency and ef-search sweeps")
 		}

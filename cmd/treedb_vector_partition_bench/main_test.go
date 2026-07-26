@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/nativewire"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
@@ -1078,12 +1079,20 @@ func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 		fmt.Sprint(cfg.concurrency) != "[1 16 64]" || cfg.warmup != 3 || fmt.Sprint(cfg.efSearch) != "[64 4096]" || cfg.m8ExistingDB != "/retained/m8-assets" {
 		t.Fatalf("M8 config=%+v", cfg)
 	}
+	limit := nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxSelectedPartitions
+	if _, err := parseConfig([]string{
+		"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(),
+		"-partitions", strconv.Itoa(limit), "-raft-groups", "2",
+	}); err != nil {
+		t.Fatalf("rejected M8 coordinator partition boundary %d: %v", limit, err)
+	}
 	for _, args := range [][]string{
 		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "1"},
 		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4", "-raft-nodes-per-group", "2"},
 		{"-mode", m8ProductionMultiGroupModeV1, "-stage", "router", "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4"},
 		{"-stage", "router", "-m8-existing-db", "/retained/m8-assets", "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-probes", "1"},
 		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4", "-warmup", "-1"},
+		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", strconv.Itoa(limit + 1), "-raft-groups", "2"},
 	} {
 		if _, err := parseConfig(args); err == nil {
 			t.Fatalf("accepted malformed M8 config %#v", args)
