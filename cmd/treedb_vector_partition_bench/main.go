@@ -1070,6 +1070,7 @@ type m8BenchmarkWorkPlan struct {
 	RetainedCoordinatorCells        int64
 	RetainedCoordinatorResults      int64
 	FixtureResidentBytes            int64
+	SourceSnapshotBytes             int64
 	ExactTruthBytes                 int64
 	RetainedCoordinatorBytes        int64
 	ModeledPeakBytes                int64
@@ -1125,6 +1126,18 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
+	sourceRowBytes, err := memoryAdd(
+		int64(unsafe.Sizeof(collections.VectorPartitionRouterSourceRowV1{})),
+		documentIDStorageBytes,
+		int64(m.Dimensions)*4,
+	)
+	if err != nil {
+		return plan, err
+	}
+	plan.SourceSnapshotBytes, err = memoryMul(int64(m.Vectors), sourceRowBytes)
+	if err != nil {
+		return plan, err
+	}
 
 	// M8 owns the deterministic doc-%06d corpus even when reopening retained
 	// assets, so documentIDStorageBytes bounds its result string storage. The
@@ -1172,16 +1185,23 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	peak, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorBytes)
+	// The owned FP32 source snapshot remains live while exact truth accumulates;
+	// it is released before measured coordinator results begin accumulating.
+	sourceOraclePeak, err := memoryAdd(plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes)
 	if err != nil {
 		return plan, err
 	}
+	measurementPeak, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorBytes)
+	if err != nil {
+		return plan, err
+	}
+	peak := max(sourceOraclePeak, measurementPeak)
 	plan.ModeledPeakBytes, err = memoryScaleCeil(peak, memorySlackNumerator, memorySlackDenominator)
 	if err != nil {
 		return plan, err
 	}
 	if plan.ModeledPeakBytes > capBytes {
-		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d exact_truth_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes)
+		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d source_snapshot_bytes=%d exact_truth_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes)
 	}
 	return plan, nil
 }

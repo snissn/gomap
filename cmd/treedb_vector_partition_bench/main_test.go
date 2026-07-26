@@ -1109,7 +1109,7 @@ func TestM8BenchmarkWorkCapAndOverflowV1(t *testing.T) {
 	if err != nil || plan.QueryRequests != 149 || plan.MeasuredQueryRequests != 80 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 65 {
 		t.Fatalf("M8 work plan=%+v err=%v", plan, err)
 	}
-	if plan.RetainedCoordinatorCells != 8 || plan.RetainedCoordinatorResults != 80 || plan.FixtureResidentBytes == 0 || plan.ExactTruthBytes == 0 || plan.RetainedCoordinatorBytes == 0 || plan.ModeledPeakBytes == 0 {
+	if plan.RetainedCoordinatorCells != 8 || plan.RetainedCoordinatorResults != 80 || plan.FixtureResidentBytes == 0 || plan.SourceSnapshotBytes == 0 || plan.ExactTruthBytes == 0 || plan.RetainedCoordinatorBytes == 0 || plan.ModeledPeakBytes == 0 {
 		t.Fatalf("incomplete M8 memory plan=%+v", plan)
 	}
 	if _, err := validateM8BenchmarkWork(cfg, manifest, 148, math.MaxInt64); err == nil {
@@ -1120,6 +1120,21 @@ func TestM8BenchmarkWorkCapAndOverflowV1(t *testing.T) {
 	}
 	if _, err := validateM8BenchmarkWork(config{overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}, fixtureManifest{Vectors: 1, Queries: math.MaxInt, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64); err == nil {
 		t.Fatal("accepted overflowing M8 preflight accounting")
+	}
+}
+
+func TestM8SourceOracleSnapshotRespectsMemoryCapV1(t *testing.T) {
+	cfg := config{overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}
+	manifest := fixtureManifest{Vectors: 1_000_000, Queries: 1, Dimensions: 512}
+	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.FixtureResidentBytes >= maxFixtureBytes || plan.SourceSnapshotBytes < 2_000_000_000 {
+		t.Fatalf("M8 source snapshot plan=%+v", plan)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, maxFixtureBytes); err == nil || !strings.Contains(err.Error(), "source_snapshot_bytes=") {
+		t.Fatalf("accepted oversized source snapshot: %v", err)
 	}
 }
 
