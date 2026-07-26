@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1214,6 +1215,34 @@ func TestM8CanonicalContractRejectsInvalidBoundsAndScoresV1(t *testing.T) {
 	}
 }
 
+func TestValidM8AttributionPersistsExhaustiveUnionFailureV1(t *testing.T) {
+	attribution := m8ProductionAttributionV1{
+		Contract:                           m8CanonicalResultContractV1,
+		GlobalExactRecallAtK:               1,
+		ExhaustivePartitionRecallAtK:       .5,
+		ExhaustivePartitionIDParity:        false,
+		ExhaustivePartitionScoreParity:     false,
+		ExactRepresentativeRecallAtK:       .5,
+		ApproximateRepresentativeRecallAtK: .5,
+		LocalHNSWRecallAtK:                 .5,
+		EndToEndRecallAtK:                  .5,
+		CoordinatorMergeIDParity:           true,
+		CoordinatorMergeScoreParity:        true,
+		ApproximateRouterCandidateBudget:   1,
+	}
+	attribution.ResidualLossOwners = m8AttributionLossOwnersV1(attribution)
+	if !validM8AttributionV1(attribution) {
+		t.Fatalf("rejected attributable exhaustive-union failure: %+v", attribution)
+	}
+	if !slices.Equal(attribution.ResidualLossOwners, []string{"partition_membership_or_score_contract"}) {
+		t.Fatalf("loss owners=%v", attribution.ResidualLossOwners)
+	}
+	attribution.ResidualLossOwners = nil
+	if validM8AttributionV1(attribution) {
+		t.Fatal("accepted exhaustive-union failure without its loss owner")
+	}
+}
+
 func TestM8CoordinatorResponseCanonicalShapeFailsClosedV1(t *testing.T) {
 	response := nativewire.VectorPartitionCoordinatorResponseV1{
 		Neighbors:        []nativewire.VectorPartitionCoordinatorNeighborV1{{ID: "a", Score: .9}, {ID: "b", Score: .8}},
@@ -1234,6 +1263,28 @@ func TestM8CoordinatorResponseCanonicalShapeFailsClosedV1(t *testing.T) {
 	response.Neighbors = []nativewire.VectorPartitionCoordinatorNeighborV1{{ID: "a", Score: .9}, {ID: "a", Score: .8}}
 	if _, err := m8ValidateCoordinatorResponseV1(response, manifest, 2, 2); err == nil {
 		t.Fatal("accepted duplicate response neighbor")
+	}
+	response.Neighbors = []nativewire.VectorPartitionCoordinatorNeighborV1{{ID: "a", Score: .9}, {ID: "b", Score: .8}}
+	response.ProbedPartitions = []uint32{0, 2}
+	if _, err := m8ValidateCoordinatorResponseV1(response, manifest, 2, 2); err == nil {
+		t.Fatal("accepted response missing an owning group")
+	}
+	response.ProbedPartitions = []uint32{0, 1}
+	response.ProbedGroups = append(response.ProbedGroups[:0], "group-b")
+	if _, err := m8ValidateCoordinatorResponseV1(response, manifest, 2, 2); err == nil {
+		t.Fatal("accepted a non-owner group")
+	}
+	response.ProbedGroups = append(response.ProbedGroups[:0], "group-a")
+	response.Neighbors = response.Neighbors[:1]
+	if got, err := m8ValidateCoordinatorResponseV1(response, manifest, 2, 2); err != nil || len(got) != 1 {
+		t.Fatalf("valid short response got=%+v err=%v", got, err)
+	}
+	response.Neighbors = append(response.Neighbors,
+		nativewire.VectorPartitionCoordinatorNeighborV1{ID: "b", Score: .8},
+		nativewire.VectorPartitionCoordinatorNeighborV1{ID: "c", Score: .7},
+	)
+	if _, err := m8ValidateCoordinatorResponseV1(response, manifest, 2, 2); err == nil {
+		t.Fatal("accepted response longer than top-k")
 	}
 }
 

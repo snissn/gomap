@@ -209,6 +209,61 @@ func TestCanonicalVectorPartitionCosineScoreV1NormalizesInFP32V1(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionLocalSearcherV1ExactScanUsesCanonicalScoreBitsV1(t *testing.T) {
+	query := []float32{-17132608, 10416778, -5245998.5}
+	vector := []float32{40529192, 32163242, -2387782.25}
+	want, err := CanonicalVectorPartitionCosineScoreV1(query, vector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	searcher, err := OpenVectorPartitionLocalSearcherV1(VectorPartitionSearchAssetV1{
+		ManifestChecksum: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Generation:       1,
+		PartitionID:      2,
+		Dimensions:       len(query),
+		IDs:              []string{"a"},
+		Vectors:          [][]float32{vector},
+		Kinds:            []VectorPartitionMembershipKindV1{VectorPartitionMembershipHomeV1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = searcher.Close() })
+	// The searcher owns its normalized snapshot; caller mutation after Open
+	// cannot change the generation-pinned score bits.
+	vector[0] = 0
+	got, _, err := searcher.SearchWithOptionsV1(context.Background(), query, VectorPartitionSearchOptionsV1{TopK: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || math.Float32bits(got[0].Score) != math.Float32bits(want) {
+		t.Fatalf("exact score=%v bits=%#x want=%v bits=%#x", got, math.Float32bits(got[0].Score), want, math.Float32bits(want))
+	}
+}
+
+func TestCanonicalizeVectorPartitionNativeResultsRejectsUntrustedIdentityV1(t *testing.T) {
+	prepared := &columnHNSWSearchPackPreparedView{
+		Header:            columnHNSWSearchPackHeader{Rows: 2, Dimensions: 2, VectorStride: 2},
+		NormalizedVectors: []float32{1, 0, 0, 1},
+		DocumentIDOffsets: []uint64{0, 1, 2},
+		DocumentIDBytes:   []byte("ab"),
+	}
+	for _, tc := range []struct {
+		name   string
+		result columnVectorGraphNativeSearchResult
+	}{
+		{name: "negative ordinal", result: columnVectorGraphNativeSearchResult{Ordinal: -1, ID: []byte("a")}},
+		{name: "out of range ordinal", result: columnVectorGraphNativeSearchResult{Ordinal: 2, ID: []byte("a")}},
+		{name: "ID mismatch", result: columnVectorGraphNativeSearchResult{Ordinal: 0, ID: []byte("b")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := canonicalizeVectorPartitionNativeResultsV1(context.Background(), prepared, []float32{1, 0}, []columnVectorGraphNativeSearchResult{tc.result}); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+				t.Fatalf("err=%v want unavailable", err)
+			}
+		})
+	}
+}
+
 func TestVectorPartitionLocalSearcherV1ScratchBoundIncludesRowSizedHNSWState(t *testing.T) {
 	searcher := &VectorPartitionLocalSearcherV1{
 		asset: VectorPartitionSearchAssetV1{Generation: 1, PartitionID: 2, Dimensions: 128},

@@ -200,7 +200,12 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 	if err != nil {
 		return fmt.Errorf("open M8 attribution harness: %w", err)
 	}
-	defer func() { runErr = errors.Join(runErr, attributionHarness.Close()) }()
+	attributionHarnessClosed := false
+	defer func() {
+		if !attributionHarnessClosed {
+			runErr = errors.Join(runErr, attributionHarness.Close())
+		}
+	}()
 	approximateCandidates := min(cfg.routerCandidates, int(assets.status.Representatives))
 	if approximateCandidates < 1 {
 		return errors.New("M8 attribution requires an approximate router candidate budget")
@@ -215,6 +220,11 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 			}
 			attribution[m8AttributionKeyV1(probes, efSearch)] = cell
 		}
+	}
+	attributionHarnessCloseErr := attributionHarness.Close()
+	attributionHarnessClosed = true
+	if attributionHarnessCloseErr != nil {
+		return fmt.Errorf("close M8 attribution harness: %w", attributionHarnessCloseErr)
 	}
 	report := m8ProductionReportV1{
 		SchemaVersion: 2, ResultKind: "m8_production_multi_group_evidence_v2", Status: "incomplete",
@@ -857,7 +867,7 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 
 func m8ValidateCoordinatorResponseV1(response nativewire.VectorPartitionCoordinatorResponseV1, manifest collections.VectorPartitionManifestV1, probes, topK int) ([]m8CanonicalResultV1, error) {
 	partitionCount := int(manifest.PartitionCount)
-	if probes < 1 || partitionCount < probes || len(manifest.Placements) != partitionCount || topK < 1 || len(response.Neighbors) != topK || len(response.ProbedPartitions) != probes || len(response.ProbedGroups) == 0 || len(response.ProbedGroups) > probes {
+	if probes < 1 || partitionCount < probes || len(manifest.Placements) != partitionCount || topK < 1 || len(response.Neighbors) > topK || len(response.ProbedPartitions) != probes || len(response.ProbedGroups) == 0 || len(response.ProbedGroups) > probes {
 		return nil, errors.New("truncated or dimensionally invalid coordinator response")
 	}
 	raw := make([]m8CanonicalResultV1, len(response.Neighbors))
@@ -1191,8 +1201,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 
 func validM8AttributionV1(attribution m8ProductionAttributionV1) bool {
 	if attribution.Contract != m8CanonicalResultContractV1 || attribution.GlobalExactRecallAtK != 1 ||
-		attribution.ExhaustivePartitionRecallAtK != 1 || !attribution.ExhaustivePartitionIDParity ||
-		!attribution.ExhaustivePartitionScoreParity || attribution.ApproximateRouterCandidateBudget < 1 ||
+		attribution.ApproximateRouterCandidateBudget < 1 ||
 		!slices.Equal(attribution.ResidualLossOwners, m8AttributionLossOwnersV1(attribution)) {
 		return false
 	}

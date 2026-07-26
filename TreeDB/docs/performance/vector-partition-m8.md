@@ -228,8 +228,9 @@ merge; its all-partition owner is partition-local HNSW.
 
 These runs diagnose ownership; they do not pass the original exhaustive-HNSW,
 representative-recall, overlap, resource-bound, or matched-QPS enablement gates.
-#3981 owns generation-pinned request-session caching. #3982 owns remediation or
-explicit disposition of the local-HNSW loss plus the sole final local gate.
+Issue #3981 owns generation-pinned request-session caching. Issue #3982 owns
+remediation or explicit disposition of the local-HNSW loss plus the sole final
+local gate.
 
 The retained M3 record separately reports 188,427,800 mapped bytes,
 200,546,033 derived physical bytes, and 1,023,827,968 resident bytes after the
