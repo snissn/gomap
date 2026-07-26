@@ -722,6 +722,9 @@ func TestSingleGroupSubmitterRejectsMissingPostApplyCatalogVersion(t *testing.T)
 	if result.CommittedRecoverable {
 		t.Fatal("missing post-apply catalog version reported committed recoverable")
 	}
+	if !result.CommittedApplied {
+		t.Fatal("missing post-apply catalog version discarded committed-applied evidence")
+	}
 	if result.HasCatalogVersion {
 		t.Fatalf("result HasCatalogVersion=%v want false", result.HasCatalogVersion)
 	}

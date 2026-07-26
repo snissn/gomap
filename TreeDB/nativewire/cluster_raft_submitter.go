@@ -140,21 +140,22 @@ func (s *RaftClusterSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 		return ClusterSubmitResult{}, protocolError(iwire.ErrInvalidCommand, "raft cluster submitter collection manager is not configured")
 	}
 	result, err := s.Bridge.SubmitCommandEntryV1(ctx, entry, metadata)
-	if err != nil {
-		return ClusterSubmitResult{}, nativeErrorForRaftClusterSubmit(err)
-	}
-	sections, err := raftClusterResponseSections(result.DecodedEntry, metadata, result, s.Collections)
-	if err != nil {
-		return ClusterSubmitResult{}, err
-	}
-	return ClusterSubmitResult{
+	clusterResult := ClusterSubmitResult{
 		ActualAck:            AckPolicy(result.ActualAck),
 		CommittedRecoverable: result.CommittedRecoverable,
 		CommittedApplied:     result.CommittedApplied,
-		ResponseSections:     sections,
 		CatalogVersion:       result.CatalogVersion,
 		HasCatalogVersion:    result.HasCatalogVersion,
-	}, nil
+	}
+	if err != nil {
+		return clusterResult, nativeErrorForRaftClusterSubmit(err)
+	}
+	sections, err := raftClusterResponseSections(result.DecodedEntry, metadata, result, s.Collections)
+	if err != nil {
+		return clusterResult, err
+	}
+	clusterResult.ResponseSections = sections
+	return clusterResult, nil
 }
 
 func raftClusterResponseSections(entry raftentry.CommandEntryV1, metadata ClusterRequestMetadata, result raftcluster.SubmitResultV1, manager *collections.CollectionManager) ([]iwire.Section, error) {

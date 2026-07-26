@@ -525,26 +525,26 @@ func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 		s.submitMu.Unlock()
 		return SubmitResultV1{ApplyResult: applyResult, CommittedEntry: committed, Evidence: commitResult.Evidence}, errors.Join(ErrLocalApplyNotRecoverable, fmt.Errorf("apply status %s", applyResult.Status))
 	}
+	result := SubmitResultV1{
+		ActualAck:        actualAck,
+		CommittedApplied: true,
+		DecodedEntry:     decoded,
+		ApplyResult:      applyResult,
+		CommittedEntry:   committed,
+		Evidence:         commitResult.Evidence,
+	}
 	postCatalogVersion, postHasCatalogVersion, err := s.catalogProvider.CurrentCatalogVersion(ctx)
 	if err != nil {
 		s.submitMu.Unlock()
-		return SubmitResultV1{ApplyResult: applyResult, CommittedEntry: committed, Evidence: commitResult.Evidence}, errors.Join(ErrLocalApplyNotRecoverable, err)
+		return result, errors.Join(ErrLocalApplyNotRecoverable, err)
 	}
 	if !postHasCatalogVersion {
 		s.submitMu.Unlock()
-		return SubmitResultV1{ApplyResult: applyResult, CommittedEntry: committed, Evidence: commitResult.Evidence}, errors.Join(ErrLocalApplyNotRecoverable, ErrMissingCatalogVersion)
+		return result, errors.Join(ErrLocalApplyNotRecoverable, ErrMissingCatalogVersion)
 	}
-	result := SubmitResultV1{
-		ActualAck:            actualAck,
-		CommittedRecoverable: actualAck == iwire.AckRaftCommitted && s.syncLocalWAL,
-		CommittedApplied:     true,
-		DecodedEntry:         decoded,
-		ApplyResult:          applyResult,
-		CommittedEntry:       committed,
-		Evidence:             commitResult.Evidence,
-		CatalogVersion:       postCatalogVersion,
-		HasCatalogVersion:    postHasCatalogVersion,
-	}
+	result.CommittedRecoverable = actualAck == iwire.AckRaftCommitted && s.syncLocalWAL
+	result.CatalogVersion = postCatalogVersion
+	result.HasCatalogVersion = postHasCatalogVersion
 	s.submitMu.Unlock()
 	return result, nil
 }

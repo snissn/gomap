@@ -113,6 +113,15 @@ type recordingRaftCommandSubmitter struct {
 	calls    []recordingRaftCommandSubmitCall
 }
 
+type fixedResultRaftCommandSubmitter struct {
+	result raftcluster.SubmitResultV1
+	err    error
+}
+
+func (s fixedResultRaftCommandSubmitter) SubmitCommandEntryV1(context.Context, []byte, raftentry.RequestMetadataV1) (raftcluster.SubmitResultV1, error) {
+	return s.result, s.err
+}
+
 type recordingRaftCommandSubmitCall struct {
 	entry    raftentry.CommandEntryV1
 	metadata raftentry.RequestMetadataV1
@@ -2847,6 +2856,38 @@ func TestRaftClusterSubmitterRequiresCollectionManagerBeforeSubmit(t *testing.T)
 	}
 	if preflightCalls != 0 || commitCalls != 0 || applier.calls != 0 {
 		t.Fatalf("bridge touched before collection-manager validation: preflight=%d commit=%d apply=%d", preflightCalls, commitCalls, applier.calls)
+	}
+}
+
+func TestRaftClusterSubmitterPreservesCommittedAppliedThroughErrorsV1(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open DB: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	base := raftcluster.SubmitResultV1{
+		ActualAck:        iwire.AckVisible,
+		CommittedApplied: true,
+		ApplyResult:      raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied},
+	}
+	tests := []struct {
+		name   string
+		bridge fixedResultRaftCommandSubmitter
+	}{
+		{name: "bridge error", bridge: fixedResultRaftCommandSubmitter{result: base, err: raftcluster.ErrLocalApplyNotRecoverable}},
+		{name: "response shaping error", bridge: fixedResultRaftCommandSubmitter{result: base}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := NewRaftClusterSubmitter(test.bridge, manager).SubmitCommandEntryV1(context.Background(), nil, ClusterRequestMetadata{})
+			if err == nil {
+				t.Fatal("SubmitCommandEntryV1 unexpectedly succeeded")
+			}
+			if !result.CommittedApplied {
+				t.Fatalf("error %v discarded committed-applied evidence", err)
+			}
+		})
 	}
 }
 
