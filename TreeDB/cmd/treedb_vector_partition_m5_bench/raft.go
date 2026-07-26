@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -112,6 +111,7 @@ type localRaftNode struct {
 }
 
 type localRaftCluster struct {
+	harness     *raftcluster.ThreeNodeHarness
 	root        string
 	groupID     raftcluster.GroupID
 	nodes       []*localRaftNode
@@ -120,6 +120,20 @@ type localRaftCluster struct {
 }
 
 func openLocalRaftCluster(ctx context.Context, group string) (*localRaftCluster, error) {
+	// Keep the command's evidence shape stable while delegating the actual
+	// three-node HashiCorp Raft construction to the reusable M8 harness.
+	harness, err := raftcluster.OpenThreeNodeHarness(ctx, raftcluster.GroupID(group))
+	if err != nil {
+		return nil, err
+	}
+	nodes := []*localRaftNode{{id: "node-a"}, {id: "node-b"}, {id: "node-c"}}
+	return &localRaftCluster{
+		harness: harness, groupID: raftcluster.GroupID(group), nodes: nodes,
+		leader:      &localRaftNode{id: harness.LeaderID()},
+		coordinator: harness.ReadCoordinator().(*raftcluster.GroupRoutedReadIndexCoordinator),
+	}, nil
+
+	/* legacy construction retained below temporarily for reviewable diff context.
 	if group == "" {
 		return nil, errors.New("M5 target manifest group is empty")
 	}
@@ -227,6 +241,7 @@ func openLocalRaftCluster(ctx context.Context, group string) (*localRaftCluster,
 	cleanup = false
 	closeTransports = false
 	return cluster, nil
+	*/
 }
 
 func localRaftConfig() *hraft.Config {
@@ -286,6 +301,13 @@ func (c *localRaftCluster) waitForStableLeader(ctx context.Context) (*localRaftN
 }
 
 func (c *localRaftCluster) commitProofCommand(ctx context.Context) (raftcluster.CommitCommandEntryV1Result, error) {
+	if c != nil && c.harness != nil {
+		entry, err := proofCommandEntry()
+		if err != nil {
+			return raftcluster.CommitCommandEntryV1Result{}, err
+		}
+		return c.harness.CommitAndProve(ctx, entry)
+	}
 	if c == nil || c.leader == nil {
 		return raftcluster.CommitCommandEntryV1Result{}, errors.New("local Raft leader is unavailable")
 	}
@@ -338,6 +360,11 @@ func proofCommandEntry() ([]byte, error) {
 func (c *localRaftCluster) Close() error {
 	if c == nil {
 		return nil
+	}
+	if c.harness != nil {
+		err := c.harness.Close()
+		c.harness = nil
+		return err
 	}
 	var errs []error
 	for _, node := range c.nodes {
