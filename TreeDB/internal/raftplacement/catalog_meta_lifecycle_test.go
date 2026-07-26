@@ -57,6 +57,38 @@ func TestCatalogMetaLifecycleFeatureFloorAndExactRetry(t *testing.T) {
 	})
 }
 
+func TestCatalogMetaLifecycleRecordReturnsDeepCopy(t *testing.T) {
+	authority := NewCatalogMetaAuthorityV1()
+	identity := VectorPartitionLifecycleIdentityV1{Generation: 7}
+	authority.lifecycle = make(map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1)
+	authority.lifecycle[identity] = VectorPartitionLifecycleRecordV1{
+		Identity:       identity,
+		RequiredGroups: []raftcluster.GroupID{"group-a"},
+		ReadyGroups: []VectorPartitionLifecycleGroupReadyV1{{
+			GroupID:        "group-a",
+			AppliedIndex:   11,
+			AssetSetDigest: strings.Repeat("a", 64),
+		}},
+		CleanedGroups: []raftcluster.GroupID{"group-a"},
+	}
+
+	got, ok := authority.VectorPartitionLifecycleRecordV1(identity)
+	if !ok {
+		t.Fatal("VectorPartitionLifecycleRecordV1 record unavailable")
+	}
+	got.RequiredGroups[0] = "tampered-required"
+	got.ReadyGroups[0].GroupID = "tampered-ready"
+	got.CleanedGroups[0] = "tampered-cleaned"
+
+	retained, ok := authority.VectorPartitionLifecycleRecordV1(identity)
+	if !ok {
+		t.Fatal("VectorPartitionLifecycleRecordV1 retained record unavailable")
+	}
+	if retained.RequiredGroups[0] != "group-a" || retained.ReadyGroups[0].GroupID != "group-a" || retained.CleanedGroups[0] != "group-a" {
+		t.Fatalf("returned slice mutation changed authority record: %+v", retained)
+	}
+}
+
 func TestCatalogMetaLifecycleAtomicCutoverInvalidationCleanupAndStatus(t *testing.T) {
 	authority, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
 	applied := uint64(1)

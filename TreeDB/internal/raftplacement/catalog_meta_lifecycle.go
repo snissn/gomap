@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
@@ -397,7 +398,7 @@ func (a *CatalogMetaAuthorityV1) VectorPartitionLifecycleRecordV1(identity Vecto
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	record, ok := a.lifecycle[identity]
-	return record, ok
+	return cloneVectorPartitionLifecycleRecordV1(record), ok
 }
 
 func (a *CatalogMetaAuthorityV1) VectorPartitionLifecycleStatusesV1() []VectorPartitionLifecycleAuthorityStatusV1 {
@@ -639,9 +640,16 @@ func vectorPartitionLifecycleIdentityLessV1(a, b VectorPartitionLifecycleIdentit
 func cloneVectorPartitionLifecycleRecordsV1(source map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1) map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1 {
 	clone := make(map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1, len(source))
 	for key, value := range source {
-		clone[key] = value
+		clone[key] = cloneVectorPartitionLifecycleRecordV1(value)
 	}
 	return clone
+}
+
+func cloneVectorPartitionLifecycleRecordV1(record VectorPartitionLifecycleRecordV1) VectorPartitionLifecycleRecordV1 {
+	record.RequiredGroups = slices.Clone(record.RequiredGroups)
+	record.ReadyGroups = slices.Clone(record.ReadyGroups)
+	record.CleanedGroups = slices.Clone(record.CleanedGroups)
+	return record
 }
 
 func cloneVectorPartitionLifecycleActiveV1(source map[VectorPartitionLifecycleIndexIdentityV1]VectorPartitionLifecycleIdentityV1) map[VectorPartitionLifecycleIndexIdentityV1]VectorPartitionLifecycleIdentityV1 {
