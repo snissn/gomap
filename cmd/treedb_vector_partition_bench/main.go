@@ -466,7 +466,7 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		if cfg.topK > nativewire.DefaultVectorPartitionShardSearchLimitsV1().MaxTopK {
 			return fmt.Errorf("top-k cannot exceed M8 shard limit %d", nativewire.DefaultVectorPartitionShardSearchLimitsV1().MaxTopK)
 		}
-		if _, err := validateM8BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits); err != nil {
+		if _, err := validateM8BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits, cfg.maxBytes); err != nil {
 			return err
 		}
 		vectors, queries := deterministicFixture(fixture)
@@ -1067,11 +1067,17 @@ type m8BenchmarkWorkPlan struct {
 	WarmupAndPreflightQueryRequests int64
 	AttributionQueryPasses          int64
 	QueryRequests                   int64
+	RetainedCoordinatorCells        int64
+	RetainedCoordinatorResults      int64
+	FixtureResidentBytes            int64
+	ExactTruthBytes                 int64
+	RetainedCoordinatorBytes        int64
+	ModeledPeakBytes                int64
 }
 
-func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits int64) (m8BenchmarkWorkPlan, error) {
-	if capUnits < 1 || len(cfg.overlaps) == 0 || len(cfg.probes) == 0 || len(cfg.efSearch) == 0 || len(cfg.concurrency) == 0 {
-		return m8BenchmarkWorkPlan{}, errors.New("cannot plan M8 benchmark work without a positive cap and complete sweeps")
+func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes int64) (m8BenchmarkWorkPlan, error) {
+	if capUnits < 1 || capBytes < 1 || cfg.topK < 1 || m.Vectors < 1 || m.Queries < 1 || m.Dimensions < 1 || len(cfg.overlaps) == 0 || len(cfg.probes) == 0 || len(cfg.efSearch) == 0 || len(cfg.concurrency) == 0 {
+		return m8BenchmarkWorkPlan{}, errors.New("cannot plan M8 benchmark work without positive caps, a valid fixture/top-k, and complete sweeps")
 	}
 	measured, err := memoryMul(int64(len(cfg.overlaps)), int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(m.Queries))
 	if err != nil {
@@ -1101,6 +1107,81 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits int64) (m8B
 	plan := m8BenchmarkWorkPlan{MeasuredQueryRequests: measured, WarmupAndPreflightQueryRequests: warmupAndPreflight, AttributionQueryPasses: attribution, QueryRequests: requests}
 	if requests > capUnits {
 		return plan, fmt.Errorf("modeled M8 benchmark work exceeds %d-unit cap (%s): measured_query_requests=%d warmup_and_preflight_query_requests=%d attribution_query_passes=%d query_requests=%d", capUnits, m8BenchmarkWorkScope, measured, warmupAndPreflight, attribution, requests)
+	}
+
+	rows, err := memoryAdd(int64(m.Vectors), int64(m.Queries))
+	if err != nil {
+		return plan, err
+	}
+	fixtureValues, err := memoryMul(rows, int64(m.Dimensions), 8)
+	if err != nil {
+		return plan, err
+	}
+	fixtureRows, err := memoryMul(rows, int64(unsafe.Sizeof([]float64{})))
+	if err != nil {
+		return plan, err
+	}
+	plan.FixtureResidentBytes, err = memoryAdd(fixtureValues, fixtureRows)
+	if err != nil {
+		return plan, err
+	}
+
+	// M8 owns the deterministic doc-%06d corpus even when reopening retained
+	// assets, so documentIDStorageBytes bounds its result string storage. The
+	// much larger transport stable-ID limit is not reachable by this harness.
+	resultBytes, err := memoryAdd(int64(unsafe.Sizeof(m8CanonicalResultV1{})), documentIDStorageBytes)
+	if err != nil {
+		return plan, err
+	}
+	perQueryResults, err := memoryMul(int64(cfg.topK), resultBytes)
+	if err != nil {
+		return plan, err
+	}
+	perQueryResults, err = memoryAdd(int64(unsafe.Sizeof([]m8CanonicalResultV1{})), perQueryResults)
+	if err != nil {
+		return plan, err
+	}
+	plan.ExactTruthBytes, err = memoryMul(int64(m.Queries), perQueryResults)
+	if err != nil {
+		return plan, err
+	}
+
+	var supportedOverlaps int64
+	for _, overlap := range cfg.overlaps {
+		if overlap == 0 {
+			supportedOverlaps++
+		}
+	}
+	plan.RetainedCoordinatorCells, err = memoryMul(supportedOverlaps, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)))
+	if err != nil {
+		return plan, err
+	}
+	plan.RetainedCoordinatorResults, err = memoryMul(plan.RetainedCoordinatorCells, int64(m.Queries), int64(cfg.topK))
+	if err != nil {
+		return plan, err
+	}
+	perCellResults, err := memoryMul(int64(m.Queries), perQueryResults)
+	if err != nil {
+		return plan, err
+	}
+	perCellResults, err = memoryAdd(int64(unsafe.Sizeof(m8MeasuredCellV1{})), perCellResults)
+	if err != nil {
+		return plan, err
+	}
+	plan.RetainedCoordinatorBytes, err = memoryMul(plan.RetainedCoordinatorCells, perCellResults)
+	if err != nil {
+		return plan, err
+	}
+	peak, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorBytes)
+	if err != nil {
+		return plan, err
+	}
+	plan.ModeledPeakBytes, err = memoryScaleCeil(peak, memorySlackNumerator, memorySlackDenominator)
+	if err != nil {
+		return plan, err
+	}
+	if plan.ModeledPeakBytes > capBytes {
+		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d exact_truth_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes)
 	}
 	return plan, nil
 }

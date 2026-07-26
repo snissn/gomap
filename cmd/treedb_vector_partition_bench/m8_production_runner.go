@@ -169,6 +169,12 @@ type m8ProductionResourceEvidenceV1 struct {
 	MmapStatus           string `json:"mmap_status"`
 }
 
+type m8MeasuredCellV1 struct {
+	rowIndex         int
+	probes, efSearch int
+	results          [][]m8CanonicalResultV1
+}
+
 func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, queries [][]float64, stdout io.Writer) (runErr error) {
 	groups := make([]string, cfg.raftGroups)
 	for i := range groups {
@@ -239,12 +245,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 			runErr = errors.Join(runErr, closeErr)
 		}
 	}()
-	type measuredCellV1 struct {
-		rowIndex         int
-		probes, efSearch int
-		results          [][]m8CanonicalResultV1
-	}
-	measuredCells := make([]measuredCellV1, 0, len(cfg.overlaps)*len(cfg.probes)*len(cfg.efSearch)*len(cfg.concurrency))
+	measuredCells := make([]m8MeasuredCellV1, 0, len(cfg.overlaps)*len(cfg.probes)*len(cfg.efSearch)*len(cfg.concurrency))
 	for _, overlap := range cfg.overlaps {
 		if overlap != 0 {
 			report.Rows = append(report.Rows, m8ProductionRowV1{Status: "unsupported", UnsupportedReason: "overlap assets are not materialized by the initial M8 production topology checkpoint", Overlap: overlap})
@@ -259,7 +260,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 					}
 					row.Overlap = overlap
 					report.Rows = append(report.Rows, row)
-					measuredCells = append(measuredCells, measuredCellV1{rowIndex: len(report.Rows) - 1, probes: probes, efSearch: ef, results: results})
+					measuredCells = append(measuredCells, m8MeasuredCellV1{rowIndex: len(report.Rows) - 1, probes: probes, efSearch: ef, results: results})
 				}
 			}
 		}

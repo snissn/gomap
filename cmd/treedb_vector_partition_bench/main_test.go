@@ -1103,19 +1103,38 @@ func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 }
 
 func TestM8BenchmarkWorkCapAndOverflowV1(t *testing.T) {
-	cfg := config{overlaps: []float64{0, .2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3}
-	plan, err := validateM8BenchmarkWork(cfg, fixtureManifest{Queries: 5}, 149)
+	cfg := config{overlaps: []float64{0, .2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3, topK: 2}
+	manifest := fixtureManifest{Vectors: 10, Queries: 5, Dimensions: 8}
+	plan, err := validateM8BenchmarkWork(cfg, manifest, 149, math.MaxInt64)
 	if err != nil || plan.QueryRequests != 149 || plan.MeasuredQueryRequests != 80 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 65 {
 		t.Fatalf("M8 work plan=%+v err=%v", plan, err)
 	}
-	if _, err := validateM8BenchmarkWork(cfg, fixtureManifest{Queries: 5}, 148); err == nil {
+	if plan.RetainedCoordinatorCells != 8 || plan.RetainedCoordinatorResults != 80 || plan.FixtureResidentBytes == 0 || plan.ExactTruthBytes == 0 || plan.RetainedCoordinatorBytes == 0 || plan.ModeledPeakBytes == 0 {
+		t.Fatalf("incomplete M8 memory plan=%+v", plan)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, manifest, 148, math.MaxInt64); err == nil {
 		t.Fatal("accepted oversized M8 sweep")
 	}
-	if _, err := validateM8BenchmarkWork(cfg, fixtureManifest{Queries: math.MaxInt}, maxBenchmarkWorkUnits); err == nil {
+	if _, err := validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 1, Queries: math.MaxInt, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64); err == nil {
 		t.Fatal("accepted overflowing M8 sweep")
 	}
-	if _, err := validateM8BenchmarkWork(config{overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}}, fixtureManifest{Queries: math.MaxInt}, maxBenchmarkWorkUnits); err == nil {
+	if _, err := validateM8BenchmarkWork(config{overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}, fixtureManifest{Vectors: 1, Queries: math.MaxInt, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64); err == nil {
 		t.Fatal("accepted overflowing M8 preflight accounting")
+	}
+}
+
+func TestM8RetainedCoordinatorResultsRespectMemoryCapV1(t *testing.T) {
+	cfg := config{overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, topK: 256}
+	manifest := fixtureManifest{Vectors: 10_000, Queries: 50_000, Dimensions: 8}
+	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.RetainedCoordinatorResults != 102_400_000 || plan.RetainedCoordinatorBytes < 4_000_000_000 {
+		t.Fatalf("M8 retained-result plan=%+v", plan)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, maxFixtureBytes); err == nil || !strings.Contains(err.Error(), "retained_coordinator_results=102400000") {
+		t.Fatalf("accepted oversized retained result sweep: %v", err)
 	}
 }
 
