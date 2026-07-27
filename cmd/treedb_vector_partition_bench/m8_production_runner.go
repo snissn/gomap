@@ -1484,7 +1484,7 @@ func m8ProductionGateLedgerForReportV1(report m8ProductionReportV1) m8Production
 		}
 		if row.ExactParityChecked {
 			exhaustive = append(exhaustive, row)
-			if !row.Attribution.ExhaustivePartitionIDParity || !row.Attribution.ExhaustivePartitionScoreParity || row.Attribution.ExhaustivePartitionRecallAtK != 1 {
+			if !row.ExactParityPassed || !row.Attribution.ExhaustivePartitionIDParity || !row.Attribution.ExhaustivePartitionScoreParity || row.Attribution.ExhaustivePartitionRecallAtK != 1 {
 				ledger.ExhaustiveParity = "fail"
 			} else if ledger.ExhaustiveParity != "fail" {
 				ledger.ExhaustiveParity = "pass"

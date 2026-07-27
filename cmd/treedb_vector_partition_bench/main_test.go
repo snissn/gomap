@@ -1733,6 +1733,14 @@ func TestM8GateLedgerRequiresMatchedRecallQPSAndTailV1(t *testing.T) {
 	if ledger.ExhaustiveParity != "pass" || ledger.FailureHonesty != "pass" || ledger.Recall != "pass" || ledger.ProbeReduction != "pass" || ledger.EndToEndQPS != "pass" || ledger.TailLatency != "pass" || ledger.Balance != "pass" || ledger.ResourceBounds != "pass" || ledger.OverlapStorage != "fail" {
 		t.Fatalf("ledger=%+v", ledger)
 	}
+	report.Rows[0].Status = "fail"
+	report.Rows[0].ExactParityPassed = false
+	ledger = m8ProductionGateLedgerForReportV1(report)
+	if ledger.ExhaustiveParity != "fail" {
+		t.Fatalf("coordinator parity failure ledger=%+v", ledger)
+	}
+	report.Rows[0].Status = "pass"
+	report.Rows[0].ExactParityPassed = true
 	report.Rows[1].QPS = 114.9
 	report.Rows[1].P95Nanos = 1001
 	ledger = m8ProductionGateLedgerForReportV1(report)
