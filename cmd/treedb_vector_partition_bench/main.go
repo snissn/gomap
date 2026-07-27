@@ -1188,6 +1188,12 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 			supportedOverlaps++
 		}
 	}
+	if cfg.m8ExistingDB != "" {
+		// A retained descriptor supplies the materialized overlap policy. The
+		// single-variant runner validates that the one configured overlap equals
+		// that descriptor, including for a nonzero overlap child.
+		supportedOverlaps = 1
+	}
 	if len(cfg.m8VariantDBs) > 0 {
 		// Each immutable matrix variant executes the complete single-overlap
 		// child path in its own process. Work is cumulative across children,

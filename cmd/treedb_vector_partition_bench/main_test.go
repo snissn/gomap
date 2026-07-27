@@ -1209,6 +1209,21 @@ func TestM8UnsupportedOverlapSkipsMeasuredAndAttributionWorkV1(t *testing.T) {
 	}
 }
 
+func TestM8RetainedOverlapCountsMeasuredAndAttributionWorkV1(t *testing.T) {
+	cfg := config{partitions: 4, overlaps: []float64{.2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3, topK: 2, m8ExistingDB: "/retained/overlap"}
+	manifest := fixtureManifest{Vectors: 10, Queries: 5, Dimensions: 8}
+	plan, err := validateM8BenchmarkWork(cfg, manifest, 109, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.QueryRequests != 109 || plan.MeasuredQueryRequests != 40 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 65 {
+		t.Fatalf("retained-overlap M8 work plan=%+v", plan)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, manifest, 108, math.MaxInt64); err == nil {
+		t.Fatal("accepted retained overlap above complete work cap")
+	}
+}
+
 func TestM8VariantMatrixCountsCompleteChildWorkAndOneChildPeakV1(t *testing.T) {
 	cfg := config{partitions: 4, overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3, topK: 2}
 	manifest := fixtureManifest{Vectors: 10, Queries: 5, Dimensions: 8}
