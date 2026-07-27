@@ -550,6 +550,10 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 			if err != nil {
 				return fmt.Errorf("build M6 local-service coordinator stage: %w", err)
 			}
+			coordinator := cfg.coordinator
+			defer func() {
+				runErr = errors.Join(runErr, coordinator.Close())
+			}()
 		}
 	}
 	for _, overlap := range cfg.overlaps {

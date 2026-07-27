@@ -471,6 +471,46 @@ func TestM6CoordinatorStageUsesRealM4M6AndLabelsLocalSimulation(t *testing.T) {
 	}
 }
 
+func TestM6CoordinatorHarnessCloseReleasesCachedRouterSession(t *testing.T) {
+	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
+		t.Skip("durable M1 lifecycle publication is unsupported")
+	}
+	_, vectors, queries := smallFixtureForTest(32, 1, 8)
+	routerConfig := vectorpartition.DefaultRouterConfigV1()
+	routerConfig.LeafSize = 1
+	routerConfig.RepresentativesPerPartition = 2
+	routerConfig.MaxVectors = len(vectors)
+	router, err := newTreeDBRepresentativeRouter(vectors, 4, routerConfig, 2, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := router.Close(); err != nil {
+			t.Errorf("close backing router: %v", err)
+		}
+	})
+	harness, err := newM6CoordinatorHarnessV1(router, vectors, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := harness.search(t.Context(), queries[0], 4, 10, 0); err != nil {
+		t.Fatal(err)
+	}
+	sessions := harness.coordinator.Stats().RouterSessions
+	if len(sessions) != 1 || sessions[0].ReaderPins != 1 || sessions[0].ReaderReleases != 0 ||
+		sessions[0].Closes != 0 || sessions[0].LeasePins != sessions[0].LeaseReleases {
+		t.Fatalf("open router session stats=%+v", sessions)
+	}
+	if err := harness.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sessions = harness.coordinator.Stats().RouterSessions
+	if len(sessions) != 1 || sessions[0].ReaderPins != 1 || sessions[0].ReaderReleases != 1 ||
+		sessions[0].Closes != 1 || sessions[0].LeasePins != sessions[0].LeaseReleases {
+		t.Fatalf("closed router session stats=%+v", sessions)
+	}
+}
+
 func TestM6LocalDispatcherUsesCosineForFP32Vectors(t *testing.T) {
 	vectors := [][]float64{{1, 0}, {2, 0}}
 	norms, err := m6VectorNormsV1(vectors, 2)
