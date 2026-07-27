@@ -332,6 +332,7 @@ type vectorPartitionCoordinatorRouterSessionStatsV1 struct {
 
 type vectorPartitionCoordinatorRouterLoadV1 struct {
 	ready chan struct{}
+	err   error
 }
 
 type vectorPartitionCoordinatorRouterLeaseV1 struct {
@@ -459,6 +460,11 @@ func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Contex
 			case <-load.ready:
 				// A canceled cold open belongs only to its initiating request. Other
 				// callers retry their own open rather than inheriting cancellation.
+				// Every other failure is shared by the cold-open cohort so corrupt or
+				// otherwise invalid assets are not repeatedly reconstructed.
+				if load.err != nil && !errors.Is(load.err, context.Canceled) && !errors.Is(load.err, context.DeadlineExceeded) {
+					return nil, load.err
+				}
 				continue
 			}
 		}
@@ -490,6 +496,7 @@ func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Contex
 			c.sessionMu.Unlock()
 			return &vectorPartitionCoordinatorRouterLeaseV1{coordinator: c, key: key, session: session}, nil
 		}
+		load.err = err
 		close(load.ready)
 		c.sessionCond.Broadcast()
 		stats.value.OpenFailures++

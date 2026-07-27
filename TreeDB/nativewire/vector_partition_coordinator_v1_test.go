@@ -658,6 +658,123 @@ func TestVectorPartitionCoordinatorRouterSessionSingleflightAndCancellationV1(t 
 	}
 }
 
+func TestVectorPartitionCoordinatorRouterSessionSharesColdOpenFailureV1(t *testing.T) {
+	coordinator, source, _ := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"}, map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "doc", Score: 1}}}, VectorPartitionCoordinatorLimitsV1{},
+	)
+	started := make(chan struct{}, 1)
+	block := make(chan struct{})
+	sentinel := errors.New("router asset checksum corrupt")
+	source.openStarted, source.openBlock, source.openErr = started, block, sentinel
+
+	const requests = 16
+	start := make(chan struct{})
+	errs := make(chan error, requests)
+	for range requests {
+		go func() {
+			<-start
+			_, err := coordinator.acquireRouterSessionV1(context.Background(), "embedding", coordinator.placement.PartitionGeneration)
+			errs <- err
+		}()
+	}
+	close(start)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("cold router open did not start")
+	}
+	select {
+	case err := <-errs:
+		t.Fatalf("acquire returned before cold open completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(block)
+	for range requests {
+		if err := <-errs; !errors.Is(err, sentinel) {
+			t.Fatalf("shared cold-open err=%v want %v", err, sentinel)
+		}
+	}
+	if source.openCount() != 1 {
+		t.Fatalf("cold opens=%d want one shared failure", source.openCount())
+	}
+	sessions := coordinator.Stats().RouterSessions
+	if len(sessions) != 1 || sessions[0].ColdOpens != 1 || sessions[0].ManifestOpenAttempts != 1 ||
+		sessions[0].Misses != 1 || sessions[0].OpenFailures != 1 || sessions[0].ReaderPins != 0 {
+		t.Fatalf("shared failure stats=%+v", sessions)
+	}
+}
+
+func TestVectorPartitionCoordinatorRouterSessionRetriesCanceledColdOpenV1(t *testing.T) {
+	coordinator, source, _ := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"}, map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "doc", Score: 1}}}, VectorPartitionCoordinatorLimitsV1{},
+	)
+	started := make(chan struct{}, 2)
+	block := make(chan struct{})
+	source.openStarted, source.openBlock = started, block
+
+	initiatorCtx, cancelInitiator := context.WithCancel(context.Background())
+	initiatorErr := make(chan error, 1)
+	go func() {
+		_, err := coordinator.acquireRouterSessionV1(initiatorCtx, "embedding", coordinator.placement.PartitionGeneration)
+		initiatorErr <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("initiating cold router open did not start")
+	}
+	waiter := make(chan *vectorPartitionCoordinatorRouterLeaseV1, 1)
+	waiterErr := make(chan error, 1)
+	go func() {
+		lease, err := coordinator.acquireRouterSessionV1(context.Background(), "embedding", coordinator.placement.PartitionGeneration)
+		if err != nil {
+			waiterErr <- err
+			return
+		}
+		waiter <- lease
+	}()
+	select {
+	case err := <-waiterErr:
+		t.Fatalf("waiter returned before initiating cancellation: %v", err)
+	case <-waiter:
+		t.Fatal("waiter acquired before initiating cancellation")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	cancelInitiator()
+	select {
+	case err := <-initiatorErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("initiating cold-open err=%v want canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("initiating cold open did not cancel")
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("waiter did not retry canceled cold open")
+	}
+	close(block)
+	var lease *vectorPartitionCoordinatorRouterLeaseV1
+	select {
+	case err := <-waiterErr:
+		t.Fatal(err)
+	case lease = <-waiter:
+	case <-time.After(time.Second):
+		t.Fatal("waiter retry did not complete")
+	}
+	lease.Close()
+	if source.openCount() != 2 {
+		t.Fatalf("cold opens=%d want canceled attempt plus waiter retry", source.openCount())
+	}
+	if err := coordinator.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestVectorPartitionCoordinatorCloseDrainsRouterLeasesAndRejectsNewSearchesV1(t *testing.T) {
 	coordinator, source, _ := testVectorPartitionCoordinatorV1(t,
 		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
