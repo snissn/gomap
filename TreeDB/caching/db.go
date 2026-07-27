@@ -8884,6 +8884,8 @@ type DB struct {
 
 	valueLogDictTrainerMu      sync.RWMutex
 	valueLogDictApplyMu        sync.Mutex
+	valueLogDictQuiesceMu      sync.Mutex
+	valueLogDictQuiesced       atomic.Bool
 	valueLogDictTrainer        *compression.Trainer
 	valueLogDictTrainerByClass [vlogDictClassCount]*compression.Trainer
 	valueLogDictKickCh         chan struct{}
@@ -25212,6 +25214,9 @@ func (db *DB) Close() error {
 		}
 		closed[trainer] = struct{}{}
 		trainer.Close()
+	}
+	for trainer := range closed {
+		trainer.Wait()
 	}
 	if db.valueLogTemplateEngine != nil {
 		db.valueLogTemplateEngine.Close()
