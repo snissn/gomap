@@ -730,6 +730,8 @@ func TestVectorPartitionCoordinatorCloseDrainsColdOpenV1(t *testing.T) {
 	started := make(chan struct{}, 1)
 	block := make(chan struct{})
 	source.openStarted, source.openBlock = started, block
+	closeErr := errors.New("cold-open router close failed")
+	source.router.closeErr = closeErr
 	opened := make(chan error, 1)
 	go func() {
 		_, err := coordinator.acquireRouterSessionV1(context.Background(), "embedding", coordinator.placement.PartitionGeneration)
@@ -750,7 +752,7 @@ func TestVectorPartitionCoordinatorCloseDrainsColdOpenV1(t *testing.T) {
 	close(block)
 	select {
 	case err := <-opened:
-		if !errors.Is(err, ErrVectorPartitionCoordinatorUnavailable) {
+		if !errors.Is(err, ErrVectorPartitionCoordinatorUnavailable) || !errors.Is(err, closeErr) {
 			t.Fatalf("cold acquire after Close err=%v", err)
 		}
 	case <-time.After(time.Second):
@@ -758,14 +760,19 @@ func TestVectorPartitionCoordinatorCloseDrainsColdOpenV1(t *testing.T) {
 	}
 	select {
 	case err := <-closed:
-		if err != nil {
-			t.Fatal(err)
+		if !errors.Is(err, closeErr) {
+			t.Fatalf("Close err=%v want retained %v", err, closeErr)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Close did not drain cold open")
 	}
 	if source.router.closeCount != 1 {
 		t.Fatalf("router closes=%d want one", source.router.closeCount)
+	}
+	sessions := coordinator.Stats().RouterSessions
+	if len(sessions) != 1 || sessions[0].OpenFailures != 1 || sessions[0].ReaderPins != 1 ||
+		sessions[0].ReaderReleases != 1 || sessions[0].Closes != 1 {
+		t.Fatalf("cold-open close stats=%+v", sessions)
 	}
 }
 

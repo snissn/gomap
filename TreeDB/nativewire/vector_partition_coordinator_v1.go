@@ -495,16 +495,12 @@ func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Contex
 		stats.value.OpenFailures++
 		if router != nil {
 			stats.value.ReaderPins++
+			stats.value.Closes++
 			c.closing++
 		}
 		c.sessionMu.Unlock()
 		if router != nil {
-			closeErr := router.Close()
-			c.sessionMu.Lock()
-			c.closing--
-			stats.value.ReaderReleases++
-			c.sessionCond.Broadcast()
-			c.sessionMu.Unlock()
+			closeErr := c.closeRouterSessionV1(stats, router)
 			err = errors.Join(err, closeErr)
 		}
 		return nil, err
