@@ -1718,6 +1718,19 @@ func TestM8GateLedgerRequiresMatchedRecallQPSAndTailV1(t *testing.T) {
 	}
 }
 
+func TestM8ConfiguredConcurrentShardRequestsCoversClientConcurrencyV1(t *testing.T) {
+	got, err := m8ConfiguredConcurrentShardRequestsV1(8, []int{1, 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 128 {
+		t.Fatalf("configured aggregate shard concurrency=%d want 128", got)
+	}
+	if _, err := m8ConfiguredConcurrentShardRequestsV1(8, []int{0, 16}); err == nil {
+		t.Fatal("expected invalid client concurrency rejection")
+	}
+}
+
 func TestSourceHNSWDegreeIsExplicitlyBoundedWithLegacyDefaultV1(t *testing.T) {
 	base := []string{
 		"-dataset", fixturePath(t),

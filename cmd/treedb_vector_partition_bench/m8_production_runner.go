@@ -1105,7 +1105,8 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	add("coordinator_selected_partitions", uint64(cfg.m8CoordinatorLimits.MaxSelectedPartitions), maxProbes, "count", true)
 	add("coordinator_groups", uint64(cfg.m8CoordinatorLimits.MaxGroups), uint64(cfg.raftGroups), "count", true)
 	add("coordinator_requests", uint64(cfg.m8CoordinatorLimits.MaxRequests), maxRequestsPerQuery, "count", true)
-	add("coordinator_concurrent_requests", uint64(cfg.m8CoordinatorLimits.MaxConcurrentRequests), topology.MaxConcurrentShardRequests, "count", true)
+	configuredConcurrentRequests, _ := m8ConfiguredConcurrentShardRequestsV1(cfg.m8CoordinatorLimits.MaxConcurrentRequests, cfg.concurrency)
+	add("coordinator_concurrent_requests_across_clients", configuredConcurrentRequests, topology.MaxConcurrentShardRequests, "count", true)
 	add("coordinator_retries", uint64(cfg.m8CoordinatorLimits.MaxRetries), 0, "count", true)
 	add("coordinator_redirects", uint64(cfg.m8CoordinatorLimits.MaxRedirects), 0, "count", true)
 	add("coordinator_router_candidates", uint64(cfg.m8CoordinatorLimits.MaxRouterCandidates), uint64(cfg.routerCandidates), "count", true)
@@ -1133,6 +1134,24 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	add("shard_candidate_bytes", cfg.m8ShardLimits.MaxCandidateBytes, maxShardCandidateBytes, "bytes", true)
 	add("shard_response_bytes", cfg.m8ShardLimits.MaxResponseBytes, maxShardResponseBytes, "bytes", true)
 	return out
+}
+
+func m8ConfiguredConcurrentShardRequestsV1(perRequest int, clientConcurrency []int) (uint64, error) {
+	if perRequest < 1 || len(clientConcurrency) == 0 {
+		return 0, errors.New("M8 concurrent shard-request bound requires positive per-request and client concurrency")
+	}
+	maxClients := 0
+	for _, concurrency := range clientConcurrency {
+		if concurrency < 1 {
+			return 0, errors.New("M8 client concurrency must be positive")
+		}
+		maxClients = max(maxClients, concurrency)
+	}
+	configured, err := memoryMul(int64(perRequest), int64(maxClients))
+	if err != nil {
+		return 0, err
+	}
+	return uint64(configured), nil
 }
 
 func ceilDivM8V1(value, divisor uint64) uint64 {
