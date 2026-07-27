@@ -12,3 +12,12 @@ func PowerLossCertificationBackendForTest(database *DB) *backenddb.DB {
 	}
 	return database.backend
 }
+
+// PowerLossCertificationQuiesceValueLogDictionaryForTest stops future
+// asynchronous dictionary mutations without closing the public DB handle.
+func PowerLossCertificationQuiesceValueLogDictionaryForTest(database *DB) {
+	if database == nil || database.cached == nil {
+		return
+	}
+	database.cached.QuiesceValueLogDictTraining()
+}
