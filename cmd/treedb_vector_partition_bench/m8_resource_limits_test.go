@@ -72,7 +72,7 @@ func TestM8WallClockEvidenceUsesActualMaximumNotP99V1(t *testing.T) {
 	t.Fatal("missing coordinator_wall_clock comparison")
 }
 
-func TestM8ResourceEvidenceIncludesLargerFaultBoundaryV1(t *testing.T) {
+func TestM8ResourceEvidenceIncludesAllUntimedBoundariesV1(t *testing.T) {
 	cfg := config{
 		m8CoordinatorLimits: nativewire.DefaultVectorPartitionCoordinatorLimitsV1(),
 		m8ShardLimits:       nativewire.DefaultVectorPartitionShardSearchLimitsV1(),
@@ -103,7 +103,16 @@ func TestM8ResourceEvidenceIncludesLargerFaultBoundaryV1(t *testing.T) {
 			ShardPartitions: 2, ShardRequestBytes: 90, ShardCandidateBytes: 190, ShardResponseBytes: 290,
 		},
 	}
-	got := m8ProductionResourcesV1(cfg, fixtureManifest{Vectors: 4, Dimensions: 1}, assets, rows, fault, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})
+	preflight := m8ProductionResourceBoundaryV1{
+		SelectedPartitions: 4, EfSearch: 4096, WallClockNanos: 500,
+		Maxima: m8ProductionResourceObservedMaximaV1{
+			Requests: 4, RPCs: 5, Retries: 1, Redirects: 0,
+			RequestBytes: 110, CandidateBytes: 210, ResponseBytes: 310, MergeEntries: 41,
+			ShardPartitions: 3, ShardRequestBytes: 91, ShardCandidateBytes: 191, ShardResponseBytes: 291,
+		},
+	}
+	untimed := m8MergeProductionResourceBoundariesV1(preflight, fault)
+	got := m8ProductionResourcesV1(cfg, fixtureManifest{Vectors: 4, Dimensions: 1}, assets, rows, untimed, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})
 	seen := map[string]m8ProductionResourceLimitComparisonV1{}
 	for _, comparison := range got.LimitComparisons {
 		seen[comparison.Name] = comparison
@@ -111,21 +120,21 @@ func TestM8ResourceEvidenceIncludesLargerFaultBoundaryV1(t *testing.T) {
 	want := map[string]uint64{
 		"coordinator_selected_partitions":             4,
 		"coordinator_requests":                        4,
-		"coordinator_rpcs_across_shard_requests":      4,
+		"coordinator_rpcs_across_shard_requests":      5,
 		"coordinator_retries_across_shard_requests":   2,
 		"coordinator_redirects_across_shard_requests": 1,
 		"coordinator_ef_search":                       4096,
-		"coordinator_partitions_per_request":          2,
-		"coordinator_merge_entries":                   40,
-		"coordinator_request_bytes":                   100,
-		"coordinator_candidate_bytes":                 200,
-		"coordinator_response_bytes":                  300,
-		"coordinator_wall_clock":                      400,
-		"shard_partitions":                            2,
+		"coordinator_partitions_per_request":          3,
+		"coordinator_merge_entries":                   41,
+		"coordinator_request_bytes":                   110,
+		"coordinator_candidate_bytes":                 210,
+		"coordinator_response_bytes":                  310,
+		"coordinator_wall_clock":                      500,
+		"shard_partitions":                            3,
 		"shard_ef_search":                             4096,
-		"shard_request_bytes":                         90,
-		"shard_candidate_bytes":                       190,
-		"shard_response_bytes":                        290,
+		"shard_request_bytes":                         91,
+		"shard_candidate_bytes":                       191,
+		"shard_response_bytes":                        291,
 	}
 	for name, observed := range want {
 		if comparison, ok := seen[name]; !ok || comparison.Observed != observed {

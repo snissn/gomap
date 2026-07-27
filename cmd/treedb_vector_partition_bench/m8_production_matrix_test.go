@@ -130,7 +130,7 @@ func TestM8CoupledGraphGateRequiresOneMatchedOperatingPointV1(t *testing.T) {
 	}
 }
 
-func TestM8GitDirtyIgnoresDeclaredOutputsButPreservesSourceChangesV1(t *testing.T) {
+func TestM8GitDirtyRequiresExternalOutputsAndPreservesSourceChangesV1(t *testing.T) {
 	repo := t.TempDir()
 	runGit := func(args ...string) {
 		t.Helper()
@@ -149,7 +149,8 @@ func TestM8GitDirtyIgnoresDeclaredOutputsButPreservesSourceChangesV1(t *testing.
 	}
 	runGit("add", "tracked.txt")
 	runGit("commit", "-qm", "initial")
-	out, profiles := filepath.Join(repo, "out"), filepath.Join(repo, "profiles")
+	artifactRoot := t.TempDir()
+	out, profiles := filepath.Join(artifactRoot, "out"), filepath.Join(artifactRoot, "profiles")
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -159,22 +160,12 @@ func TestM8GitDirtyIgnoresDeclaredOutputsButPreservesSourceChangesV1(t *testing.
 	if m8GitDirtyInV1(repo, out, profiles) {
 		t.Fatal("declared benchmark output made clean repository dirty")
 	}
-	variantProfiles := filepath.Join(profiles, "graph-disjoint-v1")
-	siblingProfiles := filepath.Join(profiles, "stable-id-hash-disjoint-v1")
-	if err := os.MkdirAll(variantProfiles, 0o755); err != nil {
-		t.Fatal(err)
+	insideRoot := filepath.Join(repo, "TreeDB")
+	if !m8GitDirtyInV1(repo, insideRoot) {
+		t.Fatal("accepted an evidence root inside the source repository")
 	}
-	if err := os.MkdirAll(siblingProfiles, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(siblingProfiles, "cpu.pprof"), []byte("profile\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if !m8GitDirtyInV1(repo, out, variantProfiles) {
-		t.Fatal("test setup did not expose sibling matrix profile as dirty")
-	}
-	if m8GitDirtyInV1(repo, out, variantProfiles, profiles) {
-		t.Fatal("matrix-wide profile root did not exclude sibling profile artifacts")
+	if !m8GitDirtyInV1(repo, repo) {
+		t.Fatal("accepted the source repository itself as an evidence root")
 	}
 	if err := os.WriteFile(tracked, []byte("changed\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -184,7 +175,7 @@ func TestM8GitDirtyIgnoresDeclaredOutputsButPreservesSourceChangesV1(t *testing.
 	}
 }
 
-func TestM8GitDirtyCanonicalizesSymlinkedWorktreePathsV1(t *testing.T) {
+func TestM8GitDirtyRejectsSymlinkedInRepositoryOutputV1(t *testing.T) {
 	repo := t.TempDir()
 	runGit := func(args ...string) {
 		t.Helper()
@@ -213,8 +204,8 @@ func TestM8GitDirtyCanonicalizesSymlinkedWorktreePathsV1(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(out, "report.json"), []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if m8GitDirtyInV1(link, out, filepath.Join(link, "profiles")) {
-		t.Fatal("symlinked declared output made clean repository dirty")
+	if !m8GitDirtyInV1(link, out, filepath.Join(link, "profiles")) {
+		t.Fatal("accepted a symlinked evidence root inside the source repository")
 	}
 }
 

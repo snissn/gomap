@@ -70,7 +70,8 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
 			ApproximateRouterCandidateBudget: 1, ApproximateRouterPartitionCoverageComplete: true, ResidualLossOwners: []string{"none_observed"},
 		}}},
-		Failure: m8ProductionFailureEvidenceV1{Passed: true, Error: "unavailable group rejected", ResourceBoundary: m8ProductionFaultResourceBoundaryV1{SelectedPartitions: 4, EfSearch: 4096, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 2, RPCs: 1, RequestBytes: 1, ShardPartitions: 2, ShardRequestBytes: 1}}}, GateLedger: m8ProductionGateLedgerV1{FailureHonesty: "pass"},
+		UntimedBoundary: m8ProductionResourceBoundaryV1{SelectedPartitions: 4, EfSearch: 10, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 2, RPCs: 1, RequestBytes: 1, ShardPartitions: 2, ShardRequestBytes: 1}},
+		Failure:         m8ProductionFailureEvidenceV1{Passed: true, Error: "unavailable group rejected", ResourceBoundary: m8ProductionFaultResourceBoundaryV1{SelectedPartitions: 4, EfSearch: 4096, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 2, RPCs: 1, RequestBytes: 1, ShardPartitions: 2, ShardRequestBytes: 1}}}, GateLedger: m8ProductionGateLedgerV1{FailureHonesty: "pass"},
 		Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1}, TimedBoundary: "measured", Limitations: []string{"test"},
 	}
 	if err := validateM8ProductionReportV1(report); err != nil {
@@ -294,8 +295,14 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	for i, v := range vectors[17] {
 		query[i] = float32(v)
 	}
-	if err := m8WarmProductionTopologyV1(ctx, topology.Coordinator(), assets, [][]float64{vectors[17]}, config{topK: 10, efSearch: []int{4096}, warmup: 0}); err != nil {
+	untimedBoundary, err := m8WarmProductionTopologyV1(ctx, topology.Coordinator(), assets, [][]float64{vectors[17]}, config{topK: 10, efSearch: []int{4096}, warmup: 0})
+	if err != nil {
 		t.Fatalf("warmup=0 endpoint preflight: %v", err)
+	}
+	if untimedBoundary.SelectedPartitions != len(assets.manifest.Placements) || untimedBoundary.EfSearch != 4096 ||
+		untimedBoundary.WallClockNanos == 0 || untimedBoundary.Maxima.Requests == 0 || untimedBoundary.Maxima.RPCs == 0 ||
+		untimedBoundary.Maxima.RequestBytes == 0 || untimedBoundary.Maxima.ShardPartitions == 0 || untimedBoundary.Maxima.ShardRequestBytes == 0 {
+		t.Fatalf("untimed preflight resource boundary=%+v", untimedBoundary)
 	}
 	for _, group := range topology.Evidence().Groups {
 		if group.EndpointHits != 1 {
