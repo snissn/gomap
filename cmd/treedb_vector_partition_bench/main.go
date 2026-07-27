@@ -82,6 +82,7 @@ type config struct {
 	stage               string
 	m3PersistDir        string
 	m8ExistingDB        string
+	m8VariantDBs        []string
 	partitionAssignment string
 	partition           vectorpartition.Config
 	router              *treeDBRepresentativeRouter
@@ -473,7 +474,13 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		if cfg.topK > nativewire.DefaultVectorPartitionShardSearchLimitsV1().MaxTopK {
 			return fmt.Errorf("top-k cannot exceed M8 shard limit %d", nativewire.DefaultVectorPartitionShardSearchLimitsV1().MaxTopK)
 		}
-		if _, err := validateM8BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits, cfg.maxBytes); err != nil {
+		workCfg := cfg
+		if len(cfg.m8VariantDBs) > 0 {
+			// The variants execute sequentially, so peak memory remains one
+			// topology, but the cumulative query-work cap owns all three runs.
+			workCfg.overlaps = make([]float64, len(cfg.m8VariantDBs))
+		}
+		if _, err := validateM8BenchmarkWork(workCfg, fixture, maxBenchmarkWorkUnits, cfg.maxBytes); err != nil {
 			return err
 		}
 		vectors, queries := deterministicFixture(fixture)
@@ -600,7 +607,7 @@ func parseConfig(args []string) (config, error) {
 		m8CoordinatorLimits: nativewire.DefaultVectorPartitionCoordinatorLimitsV1(),
 		m8ShardLimits:       nativewire.DefaultVectorPartitionShardSearchLimitsV1(),
 	}
-	var probes, overlap, concurrency, efSearch string
+	var probes, overlap, concurrency, efSearch, m8VariantDBs string
 	var stages string
 	fs := flag.NewFlagSet("treedb_vector_partition_bench", flag.ContinueOnError)
 	fs.StringVar(&cfg.dataset, "dataset", "", "fixture directory")
@@ -622,6 +629,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.profiles, "profiles", "", "M8 profile artifact directory")
 	fs.StringVar(&cfg.m3PersistDir, "m3-persist-db", "", "retain the single overlap,partition_index row as a persistent TreeDB directory for downstream service benchmarks")
 	fs.StringVar(&cfg.m8ExistingDB, "m8-existing-db", "", "read-only existing TreeDB M3 asset directory for production_multi_group; never rebuilt or deleted")
+	fs.StringVar(&m8VariantDBs, "m8-variant-dbs", "", "comma-separated retained M3 directories for the strict three-variant production matrix")
 	fs.Uint64Var(&cfg.m8MaxRSSBytes, "m8-max-rss-bytes", cfg.m8MaxRSSBytes, "hard process peak-RSS acceptance bound for production_multi_group")
 	fs.Uint64Var(&cfg.m8MaxAssetBytes, "m8-max-persistent-asset-bytes", cfg.m8MaxAssetBytes, "hard persistent derived-asset byte bound for production_multi_group")
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
@@ -671,6 +679,17 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.efSearch, err = parseInts(efSearch); err != nil {
 		return config{}, fmt.Errorf("ef-search: %w", err)
+	}
+	if m8VariantDBs != "" {
+		seen := map[string]bool{}
+		for _, item := range strings.Split(m8VariantDBs, ",") {
+			item = strings.TrimSpace(item)
+			if item == "" || seen[item] {
+				return config{}, errors.New("-m8-variant-dbs requires distinct nonempty paths")
+			}
+			seen[item] = true
+			cfg.m8VariantDBs = append(cfg.m8VariantDBs, item)
+		}
 	}
 	if cfg.dataset == "" || cfg.out == "" || cfg.partitions < 1 || cfg.partitions > maxPartitions || cfg.topK < 1 || cfg.maxVectors < 1 || cfg.maxVectors > maxVectors || cfg.maxBytes < 8 || cfg.maxBytes > maxFixtureBytes || cfg.format != "json" && cfg.format != "text" || cfg.stage != "simulation" && cfg.stage != "partition" && cfg.stage != "overlap,partition_index" && cfg.stage != "router" && cfg.stage != m6CoordinatorStageV1 && cfg.stage != m8ProductionMultiGroupModeV1 || cfg.routerCandidates < 1 {
 		return config{}, errors.New("dataset, out, positive bounded partitions/top-k, and json|text format are required")
@@ -727,6 +746,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.m8ExistingDB != "" && cfg.stage != m8ProductionMultiGroupModeV1 {
 		return config{}, errors.New("-m8-existing-db requires production_multi_group")
+	}
+	if len(cfg.m8VariantDBs) > 0 && (cfg.stage != m8ProductionMultiGroupModeV1 || cfg.m8ExistingDB != "" || len(cfg.m8VariantDBs) != 3) {
+		return config{}, errors.New("-m8-variant-dbs requires production_multi_group, exactly three directories, and no -m8-existing-db")
 	}
 	if cfg.partitionAssignment != partitionAssignmentGraphV1 && cfg.partitionAssignment != partitionAssignmentStableIDHashV1 {
 		return config{}, errors.New("-partition-assignment must be graph or stable_id_hash")

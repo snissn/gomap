@@ -49,6 +49,7 @@ type m8ProductionReportV1 struct {
 	LogicalCPUs        int                                                        `json:"logical_cpus"`
 	Host               m8ProductionHostEvidenceV1                                 `json:"host"`
 	Dataset            fixtureManifest                                            `json:"dataset"`
+	Variant            *m3VariantDescriptorV1                                     `json:"variant,omitempty"`
 	Config             m8ProductionConfigEvidenceV1                               `json:"config"`
 	BuildNanos         int64                                                      `json:"build_nanos"`
 	Topology           nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1 `json:"topology"`
@@ -97,6 +98,7 @@ type m8ProductionAttributionV1 struct {
 }
 
 type m8ProductionRowV1 struct {
+	VariantID          string                    `json:"variant_id,omitempty"`
 	Status             string                    `json:"status"`
 	UnsupportedReason  string                    `json:"unsupported_reason,omitempty"`
 	Overlap            float64                   `json:"overlap"`
@@ -197,7 +199,7 @@ type m8MeasuredCellV1 struct {
 	results          [][]m8CanonicalResultV1
 }
 
-func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, queries [][]float64, stdout io.Writer) (runErr error) {
+func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors, queries [][]float64, stdout io.Writer) (runErr error) {
 	groups := make([]string, cfg.raftGroups)
 	for i := range groups {
 		groups[i] = fmt.Sprintf("m8-data-group-%02d", i)
@@ -214,6 +216,9 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		return fmt.Errorf("open M8 production assets: %w", err)
 	}
 	defer func() { runErr = errors.Join(runErr, assets.Close()) }()
+	if assets.descriptor != nil && (len(cfg.overlaps) != 1 || cfg.overlaps[0] != assets.descriptor.OverlapRatio) {
+		return fmt.Errorf("M8 configured overlap does not match retained variant %s", assets.descriptor.VariantID)
+	}
 	var persistentAssetBytes uint64
 	for _, asset := range assets.manifest.Assets {
 		if asset.Bytes > ^uint64(0)-persistentAssetBytes {
@@ -249,7 +254,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		SchemaVersion: 2, ResultKind: "m8_production_multi_group_evidence_v2", Status: "incomplete",
 		Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true, GeneratedAt: time.Now().UTC(),
 		Command: cfg.command, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dirty: m8GitDirtyV1(),
-		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), Host: m8ProductionHostV1(cfg, assets.dir), Dataset: fixture,
+		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), Host: m8ProductionHostV1(cfg, assets.dir), Dataset: fixture, Variant: assets.descriptor,
 		Config:        m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), RouterCandidates: cfg.routerCandidates, Seed: cfg.seed},
 		BuildNanos:    buildNanos,
 		Profiles:      m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Status: "not_captured", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs requires the captured baseline for differential analysis"},
@@ -257,7 +262,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		Limitations: []string{
 			"loopback TCP with real serialized M5 messages and real in-memory HashiCorp Raft consensus; not a multi-host deployment",
 			"the checked-in 10k path materializes disjoint round-robin packs; -m8-existing-db reuses the retained graph-built M3 packs read-only",
-			"overlap 0.20 and stable-hash attribution are reported unsupported; the broader lifecycle matrix is separate test evidence and matched-recall acceptance remains gated",
+			"multi-host qualification and external-system comparisons are explicitly outside this local gate",
 		},
 	}
 	report.RouterSessions.BeforeWarmup = topology.Coordinator().Stats().RouterSessions
@@ -282,8 +287,8 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 	}()
 	measuredCells := make([]m8MeasuredCellV1, 0, len(cfg.overlaps)*len(cfg.probes)*len(cfg.efSearch)*len(cfg.concurrency))
 	for _, overlap := range cfg.overlaps {
-		if overlap != 0 {
-			report.Rows = append(report.Rows, m8ProductionRowV1{Status: "unsupported", UnsupportedReason: "overlap assets are not materialized by the initial M8 production topology checkpoint", Overlap: overlap})
+		if assets.descriptor == nil && overlap != 0 {
+			report.Rows = append(report.Rows, m8ProductionRowV1{Status: "unsupported", UnsupportedReason: "nonzero overlap requires an immutable retained M3 variant descriptor", Overlap: overlap})
 			continue
 		}
 		for _, probes := range cfg.probes {
@@ -294,6 +299,9 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 						return fmt.Errorf("M8 production cell probes=%d ef=%d concurrency=%d: %w", probes, ef, concurrency, rowErr)
 					}
 					row.Overlap = overlap
+					if assets.descriptor != nil {
+						row.VariantID = assets.descriptor.VariantID
+					}
 					report.Rows = append(report.Rows, row)
 					measuredCells = append(measuredCells, m8MeasuredCellV1{rowIndex: len(report.Rows) - 1, probes: probes, efSearch: ef, results: results})
 				}
@@ -1486,6 +1494,13 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 	if err := validateM3FixtureWithCaps(report.Dataset, maxVectors, maxFixtureBytes); err != nil {
 		return fmt.Errorf("dataset: %w", err)
 	}
+	if report.Variant != nil {
+		if err := validateM3VariantDescriptorV1(*report.Variant); err != nil || len(report.Config.Overlap) != 1 ||
+			report.Config.Overlap[0] != report.Variant.OverlapRatio || report.Variant.FixtureChecksum != report.Dataset.Checksum ||
+			report.Variant.Partitions != uint32(report.Config.Partitions) || report.Variant.PersistentAssetBytes != report.Resources.PersistentAssetBytes {
+			return errors.New("M8 report variant identity is not bound to its configuration and resources")
+		}
+	}
 	if len(report.Topology.Groups) != report.Config.RaftGroups || report.Topology.Network != "tcp_loopback_serialized_m5_v1" ||
 		report.Topology.LifecycleState != "active" || !m8SHA256V1(report.Topology.ReadySetDigest) || len(report.Topology.MetaNodes) != 3 {
 		return errors.New("incomplete M8 production topology evidence")
@@ -1520,6 +1535,9 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 			math.Float64bits(row.RecallAtK) != math.Float64bits(row.Attribution.EndToEndRecallAtK) ||
 			!validM8AttributionV1(row.Attribution) {
 			return errors.New("malformed measured M8 row")
+		}
+		if report.Variant != nil && row.VariantID != report.Variant.VariantID {
+			return errors.New("M8 row variant identity mismatch")
 		}
 		rowSamples := uint64(row.Samples)
 		if rowSamples > ^uint64(0)-measuredSamples {

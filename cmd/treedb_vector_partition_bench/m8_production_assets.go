@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,6 +30,7 @@ type m8ProductionMultiGroupAssetsV1 struct {
 	status          collections.VectorPartitionRouterRuntimeStatusV1
 	groups          []string
 	assetSetDigests map[string]string
+	descriptor      *m3VariantDescriptorV1
 }
 
 func newM8ProductionMultiGroupAssetsV1(vectors [][]float64, groups []string, partitions int) (_ *m8ProductionMultiGroupAssetsV1, err error) {
@@ -199,6 +201,26 @@ func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, par
 	h.status = h.router.Status()
 	if err = m8ValidateExistingAssetsFixtureV1(h.collection, h.status.Manifest, fixture, vectors); err != nil {
 		return nil, err
+	}
+	descriptorPath := filepath.Join(dir, m3VariantDescriptorFileV1)
+	if _, statErr := os.Stat(descriptorPath); statErr == nil {
+		descriptor, readErr := m3ReadVariantDescriptorV1(dir)
+		if readErr != nil {
+			return nil, readErr
+		}
+		absoluteDir, absErr := filepath.Abs(dir)
+		if absErr != nil {
+			return nil, absErr
+		}
+		if filepath.Clean(descriptor.DatabaseDirectory) != filepath.Clean(absoluteDir) {
+			return nil, errors.New("retained M8 descriptor database directory does not match opened path")
+		}
+		if matchErr := m3DescriptorMatchesManifestV1(descriptor, fixture, h.status.Manifest, h.status.ModelDigest); matchErr != nil {
+			return nil, matchErr
+		}
+		h.descriptor = &descriptor
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return nil, fmt.Errorf("stat retained M8 descriptor: %w", statErr)
 	}
 	if h.status.Manifest.PartitionCount != uint32(partitions) {
 		return nil, fmt.Errorf("retained M8 manifest partitions=%d want configured %d", h.status.Manifest.PartitionCount, partitions)
