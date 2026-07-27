@@ -328,9 +328,8 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 			}
 		}
 	}
-	report.Topology = topology.Evidence()
 	report.RouterSessions.AfterMeasured = topology.Coordinator().Stats().RouterSessions
-	report.Failure = m8RunUnavailableGroupV1(context.Background(), topology, assets, queries[0], cfg.topK, cfg.m8CoordinatorLimits.MaxCandidateBytes)
+	report.Failure, report.Topology = m8RunUnavailableGroupV1(context.Background(), topology, assets, queries[0], cfg.topK, cfg.m8CoordinatorLimits.MaxCandidateBytes)
 	if profileCapture != nil {
 		captured, stopErr := profileCapture.Stop()
 		if stopErr != nil {
@@ -1451,17 +1450,17 @@ func m8ProductionRequestV1(assets *m8ProductionMultiGroupAssetsV1, query []float
 	}
 }
 
-func m8RunUnavailableGroupV1(ctx context.Context, topology *nativewire.VectorPartitionM8ProductionMultiGroupV1, assets *m8ProductionMultiGroupAssetsV1, query64 []float64, topK int, candidateBytesLimit uint64) m8ProductionFailureEvidenceV1 {
+func m8RunUnavailableGroupV1(ctx context.Context, topology *nativewire.VectorPartitionM8ProductionMultiGroupV1, assets *m8ProductionMultiGroupAssetsV1, query64 []float64, topK int, candidateBytesLimit uint64) (m8ProductionFailureEvidenceV1, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1) {
 	evidence := topology.Evidence()
 	result := m8ProductionFailureEvidenceV1{Class: "unavailable_group_endpoint"}
 	if len(evidence.Groups) == 0 {
 		result.Error = "topology exposed no groups"
-		return result
+		return result, topology.Evidence()
 	}
 	result.StoppedGroup = evidence.Groups[0].GroupID
 	if err := topology.StopGroup(result.StoppedGroup); err != nil {
 		result.Error = err.Error()
-		return result
+		return result, topology.Evidence()
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
@@ -1471,7 +1470,10 @@ func m8RunUnavailableGroupV1(ctx context.Context, topology *nativewire.VectorPar
 	}
 	result.ReturnedNeighbors, result.ReturnedGroups = len(response.Neighbors), len(response.ProbedGroups)
 	result.Passed = err != nil && result.ReturnedNeighbors == 0 && result.ReturnedGroups == 0
-	return result
+	// Capture topology evidence only after the stopped-group request completes.
+	// The resource ledger explicitly covers this fault boundary, including any
+	// higher shard-request concurrency it produces.
+	return result, topology.Evidence()
 }
 
 func m8ProductionGateLedgerForReportV1(report m8ProductionReportV1) m8ProductionGateLedgerV1 {

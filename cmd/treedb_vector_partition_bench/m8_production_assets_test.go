@@ -396,12 +396,12 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 			t.Fatalf("group evidence=%+v", group)
 		}
 	}
-	if err := topology.StopGroup("m8-data-group-a"); err != nil {
-		t.Fatal(err)
+	failure, postFaultTopology := m8RunUnavailableGroupV1(ctx, topology, assets, vectors[17], 10, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes)
+	if !failure.Passed || failure.StoppedGroup == "" || failure.Error == "" || failure.ReturnedNeighbors != 0 || failure.ReturnedGroups != 0 {
+		t.Fatalf("stopped group failure evidence=%+v", failure)
 	}
-	failure, failureErr := topology.Coordinator().Search(ctx, nativewire.VectorPartitionCoordinatorRequestV1{Version: nativewire.VectorPartitionCoordinatorVersionV1, RequestID: "m8-e2e-failure", CancellationID: "m8-e2e-failure-cancel", Database: "default", Catalog: "default", Collection: assets.manifest.Collection, IndexName: assets.manifest.IndexName, IndexDefinitionDigest: assets.manifest.IndexDefinitionDigest, Query: query, Metric: nativewire.VectorPartitionShardSearchMetricCosineV1, RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: 10_000, PartitionProbes: 4, Consistency: nativewire.VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: nativewire.VectorPartitionShardSearchStatsBasicV1, TopK: 10, EfSearch: 4096, DeadlineUnixNano: time.Now().Add(2 * time.Second).UnixNano(), RequestBytesLimit: 4 << 20, CandidateBytesLimit: 64 << 20, ResponseBytesLimit: 64 << 20, MergeEntriesLimit: 40})
-	if failureErr == nil || len(failure.Neighbors) != 0 || len(failure.ProbedGroups) != 0 {
-		t.Fatalf("stopped group failure response=%+v err=%v", failure, failureErr)
+	if len(postFaultTopology.Groups) != len(evidence.Groups) || postFaultTopology.MaxConcurrentShardRequests < evidence.MaxConcurrentShardRequests {
+		t.Fatalf("post-fault topology=%+v pre-fault topology=%+v", postFaultTopology, evidence)
 	}
 }
 
