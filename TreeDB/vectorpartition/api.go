@@ -75,6 +75,9 @@ func BuildWithPartitionerPhased(v []Vector, c Config, s Source, p Partitioner) (
 	return internal.BuildWithPartitionerPhased(v, c, s, p)
 }
 func ValidateArtifact(a Artifact) error { return internal.ValidateArtifact(a) }
+func BuildStableIDHashBaseline(a Artifact) (Artifact, error) {
+	return internal.BuildStableIDHashBaseline(a)
+}
 func BuildOverlap(a Artifact, c OverlapConfig) (OverlapResult, error) {
 	return internal.BuildOverlap(a, c)
 }

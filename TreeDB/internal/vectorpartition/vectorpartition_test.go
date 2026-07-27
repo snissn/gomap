@@ -61,6 +61,32 @@ func TestDenseBallGraphAndPartitionDeterministic(t *testing.T) {
 		t.Fatalf("tiny canonical graph/assignment bytes changed: got %s want %s", got, want)
 	}
 }
+func TestBuildStableIDHashBaselineOwnsAssignmentAndPreservesSource(t *testing.T) {
+	source, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := BuildStableIDHashBaseline(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if baseline.Backend != "stable_id_hash_baseline_v1" || baseline.Source != source.Source || baseline.Config != source.Config || !reflect.DeepEqual(baseline.Graph, source.Graph) {
+		t.Fatalf("baseline identity mismatch: %+v", baseline)
+	}
+	for i, id := range baseline.IDs {
+		if got, want := baseline.Assignment[i], stableIDPartition(id, baseline.Config.Partitions); got != want {
+			t.Fatalf("assignment[%d]=%d want %d", i, got, want)
+		}
+	}
+	if err := ValidateArtifact(baseline); err != nil {
+		t.Fatal(err)
+	}
+	baseline.Assignment[0] = (baseline.Assignment[0] + 1) % baseline.Config.Partitions
+	baseline.Graph.Neighbors[0] = append(baseline.Graph.Neighbors[0], 99)
+	if reflect.DeepEqual(baseline.Assignment, source.Assignment) || reflect.DeepEqual(baseline.Graph, source.Graph) {
+		t.Fatal("baseline retained mutable source slices")
+	}
+}
 func mustDigest(t *testing.T, a Artifact) string {
 	t.Helper()
 	d, err := Digest(a)
