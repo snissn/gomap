@@ -2,9 +2,10 @@
 
 Date: 2026-07-26
 
-Measured production-code head: `9f3cb7c6f8d5aa8283fe2342d9f341cbdbebab48` (the evidence-document commit is subsequent and is not the measured code).
+Historical M8 closeout code head: `9f3cb7c6f8d5aa8283fe2342d9f341cbdbebab48`
+(the evidence-document commit is subsequent and is not the measured code).
 
-Base M7 merge: `03a5508e5df33ceaf2920839a670fb16652f633d`
+Historical M7 base merge: `03a5508e5df33ceaf2920839a670fb16652f633d`
 
 Status: experimental/off; the #3982 final local matrix is complete and leaves
 enablement off with measured follow-up owners
@@ -12,23 +13,25 @@ enablement off with measured follow-up owners
 ## #3982 final local gate disposition
 
 Measured production-code head:
-`903a351d8f2f6c6462481312e21b30ac5bedecf1` (the documentation commit is
+`2934adf01601229b0e8eaef82507f6e45ea55798` (the documentation commit is
 subsequent). Base: `29d79894a84736757cc3fcdaf932f49ece060288`.
 
 The strict schema-3 matrix materialized and executed all three required
-immutable variants sequentially: graph/disjoint, graph/overlap `0.20`, and
-stable-ID-hash/disjoint. It used one declared 1M-vector fixture with 32 queries,
-16 dimensions, cosine distance, `top_k=10`, probes `1,2,4,8,16`,
+immutable descriptors sequentially in fresh OS processes: graph/disjoint,
+graph/overlap `0.20`, and stable-ID-hash/disjoint. The overlap descriptor is not
+a qualified required variant because it realized only 8,096 of the requested
+200,000 extra memberships. The matrix used one declared 1M-vector fixture with
+32 queries, 16 dimensions, cosine distance, `top_k=10`, probes `1,2,4,8,16`,
 `ef_search=64,4096`, concurrency `1,16`, four three-node data-Raft groups, and
 the three-node catalog-meta group. This is single-host loopback
 production-shaped evidence; multi-host qualification remains #3983. It is not
 an external-system comparison.
 
 Artifact:
-`/mnt/fast4tb/tmp/treedb_3982_1m_Kb5eot/m16/matrix3/vector_partition_m8_matrix_903a351d8f2f_4443cc84da59.json`
+`/mnt/fast4tb/tmp/treedb_3982_reviewfix_1m_2934_gCE3ahaQ/matrix/vector_partition_m8_matrix_2934adf01601_331ca0216476.json`
 
 Artifact SHA-256:
-`fc120fdcb3ac4aff58c455c65ad68bd70f4ce4358966ed4f98c0d62343d863b1`
+`7b33dfecb3bab70be1614326276988db0cc7b9e12d78247705dfd9b1693fa6ea`
 
 Fixture checksum:
 `71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f`
@@ -39,7 +42,7 @@ an enablement claim and not a review or performance waiver.
 
 | Gate | Result | Final evidence |
 | --- | --- | --- |
-| Required variants | **PASS** | all three immutable descriptors executed sequentially |
+| Required variants | **FAIL** | all three immutable descriptors executed, but graph/overlap realized `8,096 / 200,000` requested memberships |
 | Exhaustive correctness | **PASS** | canonical source truth and exact partition union have ID/score parity |
 | Failure honesty | **PASS** | unavailable endpoint returns no partial neighbors/groups |
 | Recall >= 0.90 | **FAIL** | graph all-partition recall@10 is `0.7125`; overlap is `0.715625` |
@@ -47,18 +50,22 @@ an enablement claim and not a review or performance waiver.
 | Matched-recall QPS | **FAIL** | no <=4-probe graph row reaches target recall |
 | Matched-recall p95 | **FAIL** | no <=4-probe graph row reaches target recall |
 | Balance epsilon 0.05 | **PASS** | disjoint max `63,292`; overlap max `63,918`; cap `65,625` |
-| Overlap bytes < 1.35x | **PASS** | `285,168,176 / 282,881,928 = 1.0080819868x` |
-| Resource bounds | **PASS** | 512 MiB asset and 4 GiB RSS ceilings plus coordinator/shard limits pass |
+| Overlap bytes < 1.35x | **FAIL** | raw `285,168,176 / 282,881,928 = 1.0080819868x`, but only `4.048%` of the requested overlap budget materialized, so the ratio is not qualified |
+| Resource bounds | **PASS** | fresh-process 4 GiB RSS and 512 MiB asset ceilings plus actual coordinator/shard request maxima pass |
 | Existing behavior | **PENDING** | latest-head required normal/race/hosted suites own final PR readiness |
 
-The graph/disjoint process peak was `2,085,953,536` bytes; the overlap and
-stable-hash sequential high-water mark was `2,327,613,440` bytes, below the
-configured 4 GiB ceiling. Aggregate shard concurrency was configured as eight
-workers per request times 16 clients (`128`) and observed at `64`. Persistent
+Corpus-exclusive fresh-process peak RSS was `1,791,590,400`, `1,931,898,880`,
+and `1,922,297,856` bytes for graph/disjoint, graph/overlap, and stable hash,
+respectively, below the configured 4 GiB ceiling. This supersedes the earlier
+sequential-process high-water attribution; the blocked matrix parent does not
+materialize or retain a second fixture corpus. Aggregate shard concurrency was
+configured as eight workers per request times 16 clients (`128`) and observed
+at `64`. Retry and redirect ceilings are the per-shard-task limit multiplied by
+the maximum observed four-task fanout (`4` each; `0` observed). Persistent
 assets were `282,881,928`, `285,168,176`, and `282,385,488` bytes for graph
 disjoint, graph overlap, and stable hash respectively. Each variant retained
 CPU, allocation baseline/final, heap, block, mutex, and trace profiles under
-`/mnt/fast4tb/tmp/treedb_3982_1m_Kb5eot/m16/profiles3/`.
+`/mnt/fast4tb/tmp/treedb_3982_reviewfix_1m_2934_gCE3ahaQ/profiles/`.
 
 At all 16 partitions, exact representative routing recall is `1.0`, while
 partition-local HNSW owns the remaining loss: `0.7125` graph/disjoint,
@@ -70,7 +77,8 @@ local-HNSW-only change cannot satisfy the quarter-probe target.
 Measured successors preserve these distinct owners:
 
 - #3998: graph partition/router locality at the quarter-probe budget;
-- #3999: partition-local HNSW reachability and recall at the 1M shape.
+- #3999: partition-local HNSW reachability and recall at the 1M shape;
+- #4001: reconcile the requested overlap treatment with the balance/capacity model.
 
 Reproduction command (the retained DB descriptors are immutable inputs):
 
@@ -79,14 +87,14 @@ GOMAXPROCS=16 GOMEMLIMIT=6GiB \
   ./bin/treedb_vector_partition_bench \
   -mode production_multi_group \
   -dataset /mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture \
-  -out /mnt/fast4tb/tmp/treedb_3982_1m_Kb5eot/m16/matrix3 \
+  -out /mnt/fast4tb/tmp/treedb_3982_reviewfix_1m_2934_gCE3ahaQ/matrix \
   -partitions 16 -raft-groups 4 -raft-nodes-per-group 3 \
   -probes 1,2,4,8,16 -top-k 10 -concurrency 1,16 -warmup 1 \
   -ef-search 64,4096 -router-candidates 1024 \
-  -profiles /mnt/fast4tb/tmp/treedb_3982_1m_Kb5eot/m16/profiles3 \
+  -profiles /mnt/fast4tb/tmp/treedb_3982_reviewfix_1m_2934_gCE3ahaQ/profiles \
   -m8-max-rss-bytes 4294967296 \
   -m8-max-persistent-asset-bytes 536870912 \
-  -m8-variant-dbs /path/graph-disjoint,/path/graph-overlap-020,/path/stable-id-hash-disjoint \
+  -m8-variant-dbs /mnt/fast4tb/tmp/treedb_3982_1m_Kb5eot/m16/db_graph_disjoint,/mnt/fast4tb/tmp/treedb_3982_1m_Kb5eot/m16/db_graph_overlap,/mnt/fast4tb/tmp/treedb_3982_1m_Kb5eot/m16/db_stable \
   -format text
 ```
 

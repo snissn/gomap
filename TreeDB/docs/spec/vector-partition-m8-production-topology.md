@@ -121,7 +121,10 @@ measured query cells plus the unavailable-endpoint fault.
 
 The checked-in 10k path materializes persistent HNSW packs for CI. The retained
 1M path reuses graph-built M3/M5 packs. `-m8-variant-dbs` requires exactly three
-distinct immutable descriptors and executes them sequentially:
+distinct immutable descriptors and executes them sequentially, one fresh OS
+process per variant so process peak RSS is attributable to that variant. The
+blocked matrix parent validates only the manifest and descriptors and does not
+materialize a second fixture corpus:
 
 1. graph assignment with disjoint memberships;
 2. graph assignment with bounded overlap `0.20`;
@@ -129,8 +132,12 @@ distinct immutable descriptors and executes them sequentially:
    baseline.
 
 The matrix rejects missing, duplicated, mutable, or identity-mismatched
-variants rather than silently substituting a disjoint row. Exact correctness is
-owned by canonical source truth versus the exhaustive exact partition union;
+variants rather than silently substituting a disjoint row. A declared overlap
+variant is incomplete unless its realized extra-membership count equals
+`floor(overlap_ratio * source_rows)`; incomplete materialization fails both the
+required-variant and overlap-storage gates even when its raw byte ratio is
+below the threshold. Exact correctness is owned by canonical source truth
+versus the exhaustive exact partition union;
 the router, partition-local HNSW, transport, and coordinator merge retain
 separate recall/parity attribution. Approximate HNSW recall is judged by the
 declared recall gate and is never described as exact exhaustive parity.
@@ -145,10 +152,16 @@ Observed persistent bytes and RSS are not a resource-bounds pass unless a
 configured resource limit is compared. The strict matrix compares configured
 persistent-asset and process-RSS ceilings plus every coordinator/shard count,
 byte, fanout, concurrency, result, search-budget, and wall-clock limit against
-the same request scope. Client concurrency scales the configured aggregate
-shard-request ceiling; a process-wide observed peak is not compared to the
-smaller per-request worker limit. Partition-load evidence includes both primary
-and overlap memberships.
+the same request scope. Both configured resource ceilings participate in the
+matrix artifact identity, so runs with different acceptance bounds cannot
+overwrite one another. Request, RPC, retry, redirect, merge, and byte limits
+use observed per-request/per-shard maxima rather than averages derived from
+aggregate throughput counters. Client concurrency scales the configured
+aggregate shard-request ceiling; a process-wide observed peak is not compared
+to the smaller per-request worker limit. Retry and redirect observations are
+per-query aggregates, so their ceilings are the independently enforced
+per-shard-task limit multiplied by the maximum observed shard-task fanout.
+Partition-load evidence includes both primary and overlap memberships.
 
 The feature remains experimental/off unless every #3917 north-star gate passes
 or the user explicitly accepts the narrower result with one linked measured

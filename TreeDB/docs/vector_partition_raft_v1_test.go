@@ -158,11 +158,12 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				"fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1",
 				"9afad07fb8daf374076fe9fa630106ffdf6241ae746344349eb1885d37cdfbd1",
 				"its all-partition owner is partition-local HNSW",
-				"903a351d8f2f6c6462481312e21b30ac5bedecf1",
-				"fc120fdcb3ac4aff58c455c65ad68bd70f4ce4358966ed4f98c0d62343d863b1",
+				"2934adf01601229b0e8eaef82507f6e45ea55798",
+				"7b33dfecb3bab70be1614326276988db0cc7b9e12d78247705dfd9b1693fa6ea",
 				"enablement_off_follow_up_required",
 				"#3998",
 				"#3999",
+				"#4001",
 			},
 		},
 		{
@@ -240,18 +241,28 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				Checksum string `json:"checksum"`
 			} `json:"fixture"`
 			GateLedger struct {
-				Exhaustive     string `json:"exhaustive_correctness"`
-				Recall         string `json:"recall"`
-				OverlapStorage string `json:"overlap_storage"`
-				Resources      string `json:"resource_bounds"`
+				RequiredVariants string `json:"required_variants"`
+				Exhaustive       string `json:"exhaustive_correctness"`
+				Recall           string `json:"recall"`
+				OverlapStorage   string `json:"overlap_storage"`
+				Resources        string `json:"resource_bounds"`
 			} `json:"gate_ledger"`
 			Variants []struct {
 				ID               string  `json:"variant_id"`
+				AssignmentBasis  string  `json:"assignment_basis"`
+				Overlap          float64 `json:"overlap"`
 				MaxLoad          uint64  `json:"max_partition_load"`
 				AllPartitionHNSW float64 `json:"all_partition_local_hnsw_recall_at_10"`
 			} `json:"variants"`
-			OverlapStorageRatio float64 `json:"overlap_storage_ratio"`
-			FollowUps           []int   `json:"follow_up_issues"`
+			OverlapRequestedMemberships int     `json:"overlap_requested_memberships"`
+			OverlapRealizedMemberships  int     `json:"overlap_realized_memberships"`
+			OverlapMaterializationRatio float64 `json:"overlap_materialization_ratio"`
+			OverlapBudgetUtilization    float64 `json:"overlap_budget_utilization"`
+			OverlapStorageRatio         float64 `json:"overlap_storage_ratio"`
+			ResourceMeasurementBasis    string  `json:"resource_measurement_basis"`
+			MatrixParentMaterializes    *bool   `json:"matrix_parent_materializes_fixture"`
+			RetryRedirectLimitBasis     string  `json:"retry_redirect_limit_basis"`
+			FollowUps                   []int   `json:"follow_up_issues"`
 		} `json:"continuation_final_local_gate"`
 	}
 	if err := json.Unmarshal(raw, &evidence); err != nil {
@@ -274,16 +285,25 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 		evidence.Continuation.Retained1M.LocalHNSWRecall != 0 || evidence.Continuation.Retained1M.LossOwner != "partition_local_hnsw" ||
 		evidence.FinalLocalGate.SchemaVersion != 3 || evidence.FinalLocalGate.ResultKind != "m8_production_multi_variant_matrix_v3" ||
 		evidence.FinalLocalGate.Status != "experimental_gate_failures" || evidence.FinalLocalGate.Disposition != "enablement_off_follow_up_required" ||
-		evidence.FinalLocalGate.MeasuredCodeHead != "903a351d8f2f6c6462481312e21b30ac5bedecf1" ||
-		evidence.FinalLocalGate.ArtifactSHA256 != "fc120fdcb3ac4aff58c455c65ad68bd70f4ce4358966ed4f98c0d62343d863b1" ||
+		evidence.FinalLocalGate.MeasuredCodeHead != "2934adf01601229b0e8eaef82507f6e45ea55798" ||
+		evidence.FinalLocalGate.ArtifactSHA256 != "7b33dfecb3bab70be1614326276988db0cc7b9e12d78247705dfd9b1693fa6ea" ||
 		evidence.FinalLocalGate.Fixture.Vectors != 1_000_000 || evidence.FinalLocalGate.Fixture.Queries != 32 ||
 		evidence.FinalLocalGate.Fixture.Checksum != "71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f" ||
-		evidence.FinalLocalGate.GateLedger.Exhaustive != "pass" || evidence.FinalLocalGate.GateLedger.Recall != "fail" ||
-		evidence.FinalLocalGate.GateLedger.OverlapStorage != "pass" || evidence.FinalLocalGate.GateLedger.Resources != "pass" ||
+		evidence.FinalLocalGate.GateLedger.RequiredVariants != "fail" || evidence.FinalLocalGate.GateLedger.Exhaustive != "pass" || evidence.FinalLocalGate.GateLedger.Recall != "fail" ||
+		evidence.FinalLocalGate.GateLedger.OverlapStorage != "fail" || evidence.FinalLocalGate.GateLedger.Resources != "pass" ||
 		len(evidence.FinalLocalGate.Variants) != 3 || evidence.FinalLocalGate.Variants[0].ID != "graph-disjoint-v1" ||
+		evidence.FinalLocalGate.Variants[0].AssignmentBasis != "graph" || evidence.FinalLocalGate.Variants[0].Overlap != 0 ||
 		evidence.FinalLocalGate.Variants[0].AllPartitionHNSW != 0.7124999999999999 ||
-		evidence.FinalLocalGate.Variants[1].MaxLoad != 63_918 || evidence.FinalLocalGate.OverlapStorageRatio >= 1.35 ||
-		!slices.Equal(evidence.FinalLocalGate.FollowUps, []int{3998, 3999}) {
+		evidence.FinalLocalGate.Variants[1].ID != "graph-overlap-020-v1" || evidence.FinalLocalGate.Variants[1].AssignmentBasis != "graph" ||
+		evidence.FinalLocalGate.Variants[1].Overlap != 0.2 || evidence.FinalLocalGate.Variants[1].MaxLoad != 63_918 ||
+		evidence.FinalLocalGate.Variants[2].ID != "stable-id-hash-disjoint-v1" || evidence.FinalLocalGate.Variants[2].AssignmentBasis != "stable_id_hash" ||
+		evidence.FinalLocalGate.Variants[2].Overlap != 0 || evidence.FinalLocalGate.OverlapRequestedMemberships != 200_000 ||
+		evidence.FinalLocalGate.OverlapRealizedMemberships != 8_096 || evidence.FinalLocalGate.OverlapMaterializationRatio != 0.008096 ||
+		evidence.FinalLocalGate.OverlapBudgetUtilization != 0.04048 || evidence.FinalLocalGate.OverlapStorageRatio >= 1.35 ||
+		evidence.FinalLocalGate.ResourceMeasurementBasis != "corpus_exclusive_fresh_process_per_variant_actual_per_request_and_per_shard_maxima" ||
+		evidence.FinalLocalGate.MatrixParentMaterializes == nil || *evidence.FinalLocalGate.MatrixParentMaterializes ||
+		evidence.FinalLocalGate.RetryRedirectLimitBasis != "per_task_limit_times_max_observed_shard_request_fanout" ||
+		!slices.Equal(evidence.FinalLocalGate.FollowUps, []int{3998, 3999, 4001}) {
 		t.Fatalf("M8 evidence boundary changed: %+v", evidence)
 	}
 }
