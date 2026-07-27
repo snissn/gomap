@@ -165,8 +165,8 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				"fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1",
 				"9afad07fb8daf374076fe9fa630106ffdf6241ae746344349eb1885d37cdfbd1",
 				"its all-partition owner is partition-local HNSW",
-				"6ca8adf8f6622110c20434feca5a698130a0fb9b",
-				"179027739699cc3e75e55d95356e1b5685ac5c9d07d6e3392f1ecd0d40c6519d",
+				"064fdf195f4381e6c85939ffcb87ac55e79c25f4",
+				"63698986d23f87ab4bc72e634038e18bdd5b50e68746243acf491b66925c0e1e",
 				"Each schema-3 descriptor binds",
 				"3c7a5665803b2f8f32f0187376b31faa74b7b712d8b7d94b28aea7114db6f556",
 				"Coupled graph acceptance",
@@ -291,6 +291,7 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 			OverlapBudgetUtilization    float64 `json:"overlap_budget_utilization"`
 			OverlapStorageRatio         float64 `json:"overlap_storage_ratio"`
 			ResourceMeasurementBasis    string  `json:"resource_measurement_basis"`
+			TopologySnapshotBoundary    string  `json:"topology_snapshot_boundary"`
 			MatrixParentMaterializes    *bool   `json:"matrix_parent_materializes_fixture"`
 			RetryRedirectLimitBasis     string  `json:"retry_redirect_limit_basis"`
 			AggregateCandidateBytes     struct {
@@ -322,8 +323,8 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 		evidence.Continuation.Retained1M.LocalHNSWRecall != 0 || evidence.Continuation.Retained1M.LossOwner != "partition_local_hnsw" ||
 		evidence.FinalLocalGate.SchemaVersion != 3 || evidence.FinalLocalGate.ResultKind != "m8_production_multi_variant_matrix_v3" ||
 		evidence.FinalLocalGate.Status != "experimental_gate_failures" || evidence.FinalLocalGate.Disposition != "enablement_off_follow_up_required" ||
-		evidence.FinalLocalGate.MeasuredCodeHead != "6ca8adf8f6622110c20434feca5a698130a0fb9b" ||
-		evidence.FinalLocalGate.ArtifactSHA256 != "179027739699cc3e75e55d95356e1b5685ac5c9d07d6e3392f1ecd0d40c6519d" ||
+		evidence.FinalLocalGate.MeasuredCodeHead != "064fdf195f4381e6c85939ffcb87ac55e79c25f4" ||
+		evidence.FinalLocalGate.ArtifactSHA256 != "63698986d23f87ab4bc72e634038e18bdd5b50e68746243acf491b66925c0e1e" ||
 		evidence.FinalLocalGate.VariantDescriptorSchemaVersion != 3 || evidence.FinalLocalGate.VariantDescriptorResultKind != "m3_persistent_variant_descriptor_v3" ||
 		!evidence.FinalLocalGate.DirtyChildReportsRejected || !evidence.FinalLocalGate.AllChildReportsClean ||
 		evidence.FinalLocalGate.Fixture.Vectors != 1_000_000 || evidence.FinalLocalGate.Fixture.Queries != 32 ||
@@ -353,11 +354,12 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 		evidence.FinalLocalGate.Variants[2].PartitionHNSWM != 16 || evidence.FinalLocalGate.OverlapRequestedMemberships != 200_000 ||
 		evidence.FinalLocalGate.OverlapRealizedMemberships != 8_096 || evidence.FinalLocalGate.OverlapMaterializationRatio != 0.008096 ||
 		evidence.FinalLocalGate.OverlapBudgetUtilization != 0.04048 || evidence.FinalLocalGate.OverlapStorageRatio >= 1.35 ||
-		evidence.FinalLocalGate.ResourceMeasurementBasis != "corpus_exclusive_fresh_process_per_variant_actual_per_request_and_per_shard_maxima" ||
+		evidence.FinalLocalGate.ResourceMeasurementBasis != "corpus_exclusive_fresh_process_per_variant_actual_per_request_and_per_shard_maxima_post_fault_snapshot" ||
+		evidence.FinalLocalGate.TopologySnapshotBoundary != "after_unavailable_group_request" ||
 		evidence.FinalLocalGate.MatrixParentMaterializes == nil || *evidence.FinalLocalGate.MatrixParentMaterializes ||
 		evidence.FinalLocalGate.RetryRedirectLimitBasis != "per_task_limit_times_max_observed_shard_request_fanout" ||
 		evidence.FinalLocalGate.AggregateCandidateBytes.Configured != 134_217_728 || evidence.FinalLocalGate.AggregateCandidateBytes.MaxObserved != 4_207_808 || !evidence.FinalLocalGate.AggregateCandidateBytes.Passed ||
-		evidence.FinalLocalGate.MaximumRequestWallClockNanos != 335_116_802 ||
+		evidence.FinalLocalGate.MaximumRequestWallClockNanos != 383_255_680 ||
 		!slices.Equal(evidence.FinalLocalGate.FollowUps, []int{3998, 3999, 4001}) {
 		t.Fatalf("M8 evidence boundary changed: %+v", evidence)
 	}
