@@ -1053,12 +1053,16 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	}
 	out.PersistentAssetBytes += assets.manifest.RouterAsset.Bytes
 	out.OverlapMemberships = len(assets.manifest.OverlapMemberships)
-	loads := make([]uint64, assets.manifest.PartitionCount)
-	for _, membership := range assets.manifest.Memberships {
-		loads[membership.PartitionID]++
-	}
-	for _, load := range loads {
-		out.MaxPartitionLoad = max(out.MaxPartitionLoad, load)
+	loads, loadErr := m8PartitionLoadsV1(assets.manifest)
+	if loadErr != nil {
+		// The serving path validates the manifest before this evidence pass. If
+		// that invariant ever regresses, force the balance comparison red rather
+		// than publishing a zero-load success.
+		out.MaxPartitionLoad = ^uint64(0)
+	} else {
+		for _, load := range loads {
+			out.MaxPartitionLoad = max(out.MaxPartitionLoad, load)
+		}
 	}
 	// Integer ceiling of mean * 1.05, matching the default balance epsilon.
 	sourceRows, partitions := assets.manifest.SourceRowCount, uint64(assets.manifest.PartitionCount)
@@ -1134,6 +1138,29 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	add("shard_candidate_bytes", cfg.m8ShardLimits.MaxCandidateBytes, maxShardCandidateBytes, "bytes", true)
 	add("shard_response_bytes", cfg.m8ShardLimits.MaxResponseBytes, maxShardResponseBytes, "bytes", true)
 	return out
+}
+
+func m8PartitionLoadsV1(manifest collections.VectorPartitionManifestV1) ([]uint64, error) {
+	if manifest.PartitionCount == 0 {
+		return nil, errors.New("M8 partition loads require a positive partition count")
+	}
+	loads := make([]uint64, manifest.PartitionCount)
+	add := func(memberships []collections.VectorPartitionMembershipV1) error {
+		for _, membership := range memberships {
+			if membership.PartitionID >= manifest.PartitionCount {
+				return errors.New("M8 membership partition is out of range")
+			}
+			loads[membership.PartitionID]++
+		}
+		return nil
+	}
+	if err := add(manifest.Memberships); err != nil {
+		return nil, err
+	}
+	if err := add(manifest.OverlapMemberships); err != nil {
+		return nil, err
+	}
+	return loads, nil
 }
 
 func m8ConfiguredConcurrentShardRequestsV1(perRequest int, clientConcurrency []int) (uint64, error) {

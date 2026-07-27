@@ -1731,6 +1731,26 @@ func TestM8ConfiguredConcurrentShardRequestsCoversClientConcurrencyV1(t *testing
 	}
 }
 
+func TestM8PartitionLoadsIncludeOverlapMembershipsV1(t *testing.T) {
+	manifest := collections.VectorPartitionManifestV1{
+		PartitionCount: 2,
+		Memberships: []collections.VectorPartitionMembershipV1{
+			{VectorOrdinal: 0, PartitionID: 0},
+			{VectorOrdinal: 1, PartitionID: 1},
+		},
+		OverlapMemberships: []collections.VectorPartitionMembershipV1{
+			{VectorOrdinal: 0, PartitionID: 1},
+		},
+	}
+	loads, err := m8PartitionLoadsV1(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(loads, []uint64{1, 2}) {
+		t.Fatalf("partition loads=%v want [1 2]", loads)
+	}
+}
+
 func TestSourceHNSWDegreeIsExplicitlyBoundedWithLegacyDefaultV1(t *testing.T) {
 	base := []string{
 		"-dataset", fixturePath(t),
