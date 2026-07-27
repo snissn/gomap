@@ -169,6 +169,30 @@ func TestM8ProductionResourcesFailClosedForZeroPartitionsV1(t *testing.T) {
 	}
 }
 
+func TestM8ProductionResourcesUsePersistedBalanceCapacityV1(t *testing.T) {
+	policy, err := collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{
+		Capacity: 75,
+		Budget:   20,
+		Unspent:  20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets := &m8ProductionMultiGroupAssetsV1{manifest: collections.VectorPartitionManifestV1{
+		SourceRowCount: 100,
+		PartitionCount: 2,
+		BalancePolicy:  policy,
+		Memberships: []collections.VectorPartitionMembershipV1{
+			{PartitionID: 0},
+			{PartitionID: 1},
+		},
+	}}
+	got := m8ProductionResourcesV1(config{}, fixtureManifest{}, assets, nil, m8ProductionFaultResourceBoundaryV1{}, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})
+	if got.BalanceHardCap != 75 {
+		t.Fatalf("balance hard cap=%d want persisted capacity 75", got.BalanceHardCap)
+	}
+}
+
 func TestM8ConfiguredAggregateTaskLimitMatchesPerTaskEnforcementV1(t *testing.T) {
 	if got, ok := m8ConfiguredAggregateTaskLimitV1(1, 2); !ok || got != 2 {
 		t.Fatalf("aggregate retry limit=(%d,%v) want=(2,true)", got, ok)

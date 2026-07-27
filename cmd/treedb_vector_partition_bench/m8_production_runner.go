@@ -1111,10 +1111,12 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 			out.MaxPartitionLoad = max(out.MaxPartitionLoad, load)
 		}
 	}
-	// Integer ceiling of mean * 1.05, matching the default balance epsilon.
-	sourceRows, partitions := assets.manifest.SourceRowCount, uint64(assets.manifest.PartitionCount)
-	if partitions > 0 {
-		out.BalanceHardCap = (sourceRows*105 + partitions*100 - 1) / (partitions * 100)
+	// The manifest-covered overlap policy owns the capacity admission used when
+	// the retained variant was built. Recomputing a source-row-only epsilon here
+	// would make any fully materialized overlap variant impossible to pass even
+	// when its persisted capacity deliberately admits those memberships.
+	if policy, ok := collections.ParseVectorPartitionOverlapPolicyV1(assets.manifest.BalancePolicy); ok {
+		out.BalanceHardCap = policy.Capacity
 	}
 	out.MmapStatus = "not_captured_by_m8_runner; retained M3/M5 artifacts own mapped-pack evidence"
 	out.PeakRSSScope = m8PeakRSSScopeV1
