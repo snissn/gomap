@@ -475,11 +475,23 @@ func (m *Model) observeNamespace(root string, event durabilitycut.Event) error {
 			return fmt.Errorf("powerlossoracle: read created file %q: %w", event.NewPath, err)
 		}
 		if id, exists := m.volatile[path]; exists {
+			node := m.inodes[id]
 			if _, stable := m.stable[path]; stable {
+				// Capture can race a background CreateTemp between the real
+				// namespace mutation and its synchronous observer callback. If
+				// both observations name the same physical file, reconcile the
+				// delayed callback with the captured baseline. A different inode
+				// remains a genuine duplicate-create error.
+				if validStableIdentity(node.stableIdentity) && validStableIdentity(identity) &&
+					rootpublication.SamePhysicalIdentity(node.stableIdentity, identity) {
+					node.volatile = clone(data)
+					m.trace = append(m.trace, "create-captured:"+path)
+					return nil
+				}
 				return fmt.Errorf("powerlossoracle: file already exists %q", path)
 			}
-			m.inodes[id].volatile = clone(data)
-			m.inodes[id].stableIdentity = physicalStableIdentity(identity)
+			node.volatile = clone(data)
+			node.stableIdentity = physicalStableIdentity(identity)
 			m.trace = append(m.trace, "create-observed:"+path)
 			return nil
 		}
