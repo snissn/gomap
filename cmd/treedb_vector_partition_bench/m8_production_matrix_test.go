@@ -143,8 +143,8 @@ func TestM8ProductionMatrixFailsWhenOverlapBudgetIsUnderMaterializedV1(t *testin
 	}
 }
 
-func TestM8MatrixIdentityIncludesResourceCapsV1(t *testing.T) {
-	cfg := config{headSHA: strings.Repeat("a", 40), m8MaxRSSBytes: 100, m8MaxAssetBytes: 200}
+func TestM8MatrixIdentityIncludesComparisonAndResourceCapsV1(t *testing.T) {
+	cfg := config{baseSHA: strings.Repeat("b", 40), headSHA: strings.Repeat("a", 40), m8MaxRSSBytes: 100, m8MaxAssetBytes: 200}
 	descriptors := []m3VariantDescriptorV1{testM3VariantDescriptorV1(t.TempDir())}
 	one, err := m8MatrixIdentityV1(cfg, descriptors, m8ProductionConfigEvidenceV1{Partitions: 4})
 	if err != nil {
@@ -166,5 +166,14 @@ func TestM8MatrixIdentityIncludesResourceCapsV1(t *testing.T) {
 	}
 	if one == three {
 		t.Fatal("matrix identity ignored the configured persistent-asset acceptance bound")
+	}
+	cfg.m8MaxAssetBytes--
+	cfg.baseSHA = strings.Repeat("c", 40)
+	four, err := m8MatrixIdentityV1(cfg, descriptors, m8ProductionConfigEvidenceV1{Partitions: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one == four {
+		t.Fatal("matrix identity ignored the comparison base SHA")
 	}
 }

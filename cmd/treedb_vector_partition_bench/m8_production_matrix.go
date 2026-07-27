@@ -216,12 +216,13 @@ func m8VariantProcessArgsV1(command []string, dir string, overlap float64, profi
 
 func m8MatrixIdentityV1(cfg config, variants []m3VariantDescriptorV1, evidence m8ProductionConfigEvidenceV1) ([sha256.Size]byte, error) {
 	identity, err := json.Marshal(struct {
+		BaseSHA                 string
 		HeadSHA                 string
 		Variants                []m3VariantDescriptorV1
 		Config                  m8ProductionConfigEvidenceV1
 		MaxRSSBytes             uint64
 		MaxPersistentAssetBytes uint64
-	}{HeadSHA: cfg.headSHA, Variants: variants, Config: evidence, MaxRSSBytes: cfg.m8MaxRSSBytes, MaxPersistentAssetBytes: cfg.m8MaxAssetBytes})
+	}{BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Variants: variants, Config: evidence, MaxRSSBytes: cfg.m8MaxRSSBytes, MaxPersistentAssetBytes: cfg.m8MaxAssetBytes})
 	if err != nil {
 		return [sha256.Size]byte{}, err
 	}
