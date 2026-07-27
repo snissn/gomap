@@ -1609,7 +1609,10 @@ func m8GitDirtyInV1(workDir string, ignoredPaths ...string) bool {
 	if err != nil {
 		return true
 	}
-	root := strings.TrimSpace(string(rootRaw))
+	root, err := m8CanonicalPathV1(strings.TrimSpace(string(rootRaw)))
+	if err != nil {
+		return true
+	}
 	args := []string{"status", "--porcelain", "--untracked-files=normal", "--", "."}
 	for _, path := range ignoredPaths {
 		if path == "" {
@@ -1618,7 +1621,7 @@ func m8GitDirtyInV1(workDir string, ignoredPaths ...string) bool {
 		if !filepath.IsAbs(path) && workDir != "" {
 			path = filepath.Join(workDir, path)
 		}
-		absolute, err := filepath.Abs(path)
+		absolute, err := m8CanonicalPathV1(path)
 		if err != nil {
 			return true
 		}
@@ -1633,6 +1636,30 @@ func m8GitDirtyInV1(workDir string, ignoredPaths ...string) bool {
 	command.Dir = root
 	raw, err := command.Output()
 	return err != nil || strings.TrimSpace(string(raw)) != ""
+}
+
+func m8CanonicalPathV1(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	current := absolute
+	var suffix []string
+	for {
+		resolved, resolveErr := filepath.EvalSymlinks(current)
+		if resolveErr == nil {
+			for i := len(suffix) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, suffix[i])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", resolveErr
+		}
+		suffix = append(suffix, filepath.Base(current))
+		current = parent
+	}
 }
 
 func validateM8ProductionReportV1(report m8ProductionReportV1) error {

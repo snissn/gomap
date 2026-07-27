@@ -167,6 +167,40 @@ func TestM8GitDirtyIgnoresDeclaredOutputsButPreservesSourceChangesV1(t *testing.
 	}
 }
 
+func TestM8GitDirtyCanonicalizesSymlinkedWorktreePathsV1(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		command := exec.Command("git", args...)
+		command.Dir = repo
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	runGit("init", "-q")
+	runGit("config", "user.name", "M8 Test")
+	runGit("config", "user.email", "m8@example.invalid")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("clean\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "tracked.txt")
+	runGit("commit", "-qm", "initial")
+	link := filepath.Join(t.TempDir(), "repo-link")
+	if err := os.Symlink(repo, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	out := filepath.Join(link, "out")
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(out, "report.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if m8GitDirtyInV1(link, out, filepath.Join(link, "profiles")) {
+		t.Fatal("symlinked declared output made clean repository dirty")
+	}
+}
+
 func TestM8VariantDBsParseStrictThreePathsV1(t *testing.T) {
 	base := []string{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4"}
 	cfg, err := parseConfig(append(append([]string(nil), base...), "-m8-variant-dbs", "/a,/b,/c"))
