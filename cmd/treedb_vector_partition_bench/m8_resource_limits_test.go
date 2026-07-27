@@ -113,6 +113,36 @@ func TestM8ConfiguredAggregateTaskLimitMatchesPerTaskEnforcementV1(t *testing.T)
 	}
 }
 
+func TestM8ConcurrentRequestEvidenceFailsClosedWhenAggregateLimitOverflowsV1(t *testing.T) {
+	cfg := config{
+		m8CoordinatorLimits: nativewire.DefaultVectorPartitionCoordinatorLimitsV1(),
+		m8ShardLimits:       nativewire.DefaultVectorPartitionShardSearchLimitsV1(),
+		m8MaxAssetBytes:     1,
+		m8MaxRSSBytes:       math.MaxUint64,
+		partitions:          1,
+		topK:                1,
+		routerCandidates:    1,
+		concurrency:         []int{2},
+	}
+	cfg.m8CoordinatorLimits.MaxConcurrentRequests = math.MaxInt
+	assets := &m8ProductionMultiGroupAssetsV1{manifest: collections.VectorPartitionManifestV1{
+		SourceRowCount: 1,
+		PartitionCount: 1,
+		Memberships:    []collections.VectorPartitionMembershipV1{{PartitionID: 0}},
+	}}
+	got := m8ProductionResourcesV1(cfg, fixtureManifest{Vectors: 1, Dimensions: 1}, assets, nil, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})
+	for _, comparison := range got.LimitComparisons {
+		if comparison.Name != "coordinator_concurrent_requests_across_clients" {
+			continue
+		}
+		if comparison.Configured != 0 || comparison.Enforced || comparison.Passed {
+			t.Fatalf("overflowing concurrent-request comparison=%+v", comparison)
+		}
+		return
+	}
+	t.Fatal("missing coordinator concurrent-request comparison")
+}
+
 func TestM8RetryRedirectEvidenceUsesAggregateShardRequestScopeV1(t *testing.T) {
 	cfg := config{
 		m8CoordinatorLimits: nativewire.DefaultVectorPartitionCoordinatorLimitsV1(),
