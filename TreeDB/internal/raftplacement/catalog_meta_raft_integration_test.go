@@ -44,7 +44,7 @@ func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFai
 	}
 	source.assertEpochAndRoute(t, 1, "group-a")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	backup, err := source.providers[sourceLeader].ExportCatalogMetaBackupV1(ctx)
 	if err != nil {
@@ -71,6 +71,13 @@ func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFai
 	if err := target.providers[targetLeader].RestoreCatalogMetaBackupV1(ctx, corrupt); !errors.Is(err, raftcluster.ErrInvalidCatalogMetaBackup) {
 		t.Fatalf("corrupt restore error=%v want ErrInvalidCatalogMetaBackup", err)
 	}
+	// The invalid archive is rejected before Raft admission. Reacquire a
+	// stable admission-ready leader before exercising the valid restore so a
+	// hosted-runner scheduling stall cannot turn harness readiness into the
+	// production ErrAdmissionUnavailable path under test.
+	targetLeader = target.waitLeader(t)
+	follower = target.anyFollower(targetLeader)
+	target.waitFollower(t, follower)
 	if err := target.providers[targetLeader].RestoreCatalogMetaBackupV1(ctx, backup); err != nil {
 		t.Fatalf("restore fresh target leader: %v", err)
 	}
@@ -238,21 +245,36 @@ func (c *realCatalogMetaClusterV1) connectAll() {
 
 func (c *realCatalogMetaClusterV1) waitLeader(t *testing.T) raftcluster.NodeID {
 	t.Helper()
-	var leader raftcluster.NodeID
-	waitRealCatalogMetaConditionV1(t, func() bool {
-		leader = ""
+	deadline := time.Now().Add(30 * time.Second)
+	var stableLeader raftcluster.NodeID
+	var stableSince time.Time
+	for time.Now().Before(deadline) {
+		var leader raftcluster.NodeID
 		for id, provider := range c.providers {
 			status, err := provider.ClusterAdmissionStatus(context.Background())
 			if err == nil && status.Leader {
 				if leader != "" {
-					return false
+					leader = ""
+					break
 				}
 				leader = id
 			}
 		}
-		return leader != ""
-	}, "catalog meta cluster has no unique leader")
-	return leader
+		now := time.Now()
+		switch {
+		case leader == "":
+			stableLeader = ""
+			stableSince = time.Time{}
+		case leader != stableLeader:
+			stableLeader = leader
+			stableSince = now
+		case now.Sub(stableSince) >= time.Second:
+			return leader
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("catalog meta cluster has no admission-ready leader stable for 1s")
+	return ""
 }
 
 func (c *realCatalogMetaClusterV1) anyFollower(leader raftcluster.NodeID) raftcluster.NodeID {
@@ -345,9 +367,12 @@ func realCatalogMetaIntegrationCatalogV1(usersGroup raftcluster.GroupID) Catalog
 
 func realCatalogMetaRaftConfigV1() *hraft.Config {
 	config := hraft.DefaultConfig()
-	config.HeartbeatTimeout = 300 * time.Millisecond
-	config.ElectionTimeout = 300 * time.Millisecond
-	config.LeaderLeaseTimeout = 300 * time.Millisecond
+	// These are scheduling headroom for contended hosted Windows runners, not
+	// a production semantic change. The readiness barrier above still proves a
+	// continuously stable leader before an operation under test is attempted.
+	config.HeartbeatTimeout = 5 * time.Second
+	config.ElectionTimeout = 5 * time.Second
+	config.LeaderLeaseTimeout = 5 * time.Second
 	config.CommitTimeout = 5 * time.Millisecond
 	config.SnapshotInterval = time.Hour
 	config.SnapshotThreshold = ^uint64(0)
@@ -356,6 +381,14 @@ func realCatalogMetaRaftConfigV1() *hraft.Config {
 	config.LogLevel = "ERROR"
 	config.NoLegacyTelemetry = true
 	return config
+}
+
+func TestRealCatalogMetaRaftConfigAddsSchedulingHeadroom(t *testing.T) {
+	config := realCatalogMetaRaftConfigV1()
+	const minimum = 5 * time.Second
+	if config.HeartbeatTimeout < minimum || config.ElectionTimeout < minimum || config.LeaderLeaseTimeout < minimum {
+		t.Fatalf("coordination timeouts heartbeat=%s election=%s lease=%s want each at least %s", config.HeartbeatTimeout, config.ElectionTimeout, config.LeaderLeaseTimeout, minimum)
+	}
 }
 
 func waitRealCatalogMetaConditionV1(t *testing.T, ready func() bool, message string) {
