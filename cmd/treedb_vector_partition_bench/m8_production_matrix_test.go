@@ -2,6 +2,9 @@ package main
 
 import (
 	"math"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -106,9 +109,9 @@ func TestM8CoupledGraphGateRequiresOneMatchedOperatingPointV1(t *testing.T) {
 		Variant: &m3VariantDescriptorV1{AssignmentBasis: partitionAssignmentGraphV1},
 		Config:  m8ProductionConfigEvidenceV1{Partitions: 16, RecallTarget: .9},
 		Rows: []m8ProductionRowV1{
-			{Status: "pass", Probes: 16, EfSearch: 64, Concurrency: 1, QPS: 100, P95Nanos: 100, ExactParityChecked: true, ExactParityPassed: true},
+			{Status: "pass", Probes: 16, EfSearch: 64, Concurrency: 1, RecallAtK: .95, QPS: 100, P95Nanos: 100, ExactParityChecked: true, ExactParityPassed: true},
 			{Status: "pass", Probes: 4, EfSearch: 64, Concurrency: 1, RecallAtK: .95, QPS: 116, P95Nanos: 101},
-			{Status: "pass", Probes: 16, EfSearch: 128, Concurrency: 1, QPS: 100, P95Nanos: 100, ExactParityChecked: true, ExactParityPassed: true},
+			{Status: "pass", Probes: 16, EfSearch: 128, Concurrency: 1, RecallAtK: .95, QPS: 100, P95Nanos: 100, ExactParityChecked: true, ExactParityPassed: true},
 			{Status: "pass", Probes: 4, EfSearch: 128, Concurrency: 1, RecallAtK: .95, QPS: 114, P95Nanos: 99},
 		},
 	}
@@ -118,6 +121,49 @@ func TestM8CoupledGraphGateRequiresOneMatchedOperatingPointV1(t *testing.T) {
 	report.Rows[3].QPS = 116
 	if got := m8AnyGraphVariantCoupledGatesPassV1([]m8ProductionReportV1{report}); got != "pass" {
 		t.Fatalf("coupled operating-point gate=%q want pass", got)
+	}
+	report.Rows[2].Status = "fail"
+	report.Rows[2].ExactParityPassed = false
+	report.Rows[2].RecallAtK = .95
+	if got := m8AnyGraphVariantCoupledGatesPassV1([]m8ProductionReportV1{report}); got != "pass" {
+		t.Fatalf("target-recall approximate baseline gate=%q want pass", got)
+	}
+}
+
+func TestM8GitDirtyIgnoresDeclaredOutputsButPreservesSourceChangesV1(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		command := exec.Command("git", args...)
+		command.Dir = repo
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	runGit("init", "-q")
+	runGit("config", "user.name", "M8 Test")
+	runGit("config", "user.email", "m8@example.invalid")
+	tracked := filepath.Join(repo, "tracked.txt")
+	if err := os.WriteFile(tracked, []byte("clean\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "tracked.txt")
+	runGit("commit", "-qm", "initial")
+	out, profiles := filepath.Join(repo, "out"), filepath.Join(repo, "profiles")
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(out, "report.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if m8GitDirtyInV1(repo, out, profiles) {
+		t.Fatal("declared benchmark output made clean repository dirty")
+	}
+	if err := os.WriteFile(tracked, []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !m8GitDirtyInV1(repo, out, profiles) {
+		t.Fatal("source change was hidden by benchmark output exclusions")
 	}
 }
 

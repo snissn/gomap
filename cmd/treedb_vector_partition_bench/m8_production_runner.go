@@ -273,7 +273,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	report := m8ProductionReportV1{
 		SchemaVersion: 2, ResultKind: "m8_production_multi_group_evidence_v2", Status: "incomplete",
 		Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true, GeneratedAt: time.Now().UTC(),
-		Command: cfg.command, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dirty: m8GitDirtyV1(),
+		Command: cfg.command, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dirty: m8GitDirtyV1(cfg.out, cfg.profiles),
 		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), Host: m8ProductionHostV1(cfg, assets.dir), Dataset: fixture, Variant: assets.descriptor,
 		Config:        m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), RouterCandidates: cfg.routerCandidates, Seed: cfg.seed},
 		BuildNanos:    buildNanos,
@@ -1598,8 +1598,39 @@ func m8PercentileV1(values []uint64, percentile int) uint64 {
 	return ordered[index]
 }
 
-func m8GitDirtyV1() bool {
-	command := exec.Command("git", "status", "--porcelain")
+func m8GitDirtyV1(ignoredPaths ...string) bool {
+	return m8GitDirtyInV1("", ignoredPaths...)
+}
+
+func m8GitDirtyInV1(workDir string, ignoredPaths ...string) bool {
+	rootCommand := exec.Command("git", "rev-parse", "--show-toplevel")
+	rootCommand.Dir = workDir
+	rootRaw, err := rootCommand.Output()
+	if err != nil {
+		return true
+	}
+	root := strings.TrimSpace(string(rootRaw))
+	args := []string{"status", "--porcelain", "--untracked-files=normal", "--", "."}
+	for _, path := range ignoredPaths {
+		if path == "" {
+			continue
+		}
+		if !filepath.IsAbs(path) && workDir != "" {
+			path = filepath.Join(workDir, path)
+		}
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return true
+		}
+		relative, err := filepath.Rel(root, absolute)
+		if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			continue
+		}
+		relative = filepath.ToSlash(relative)
+		args = append(args, ":(exclude)"+relative, ":(exclude)"+relative+"/**")
+	}
+	command := exec.Command("git", args...)
+	command.Dir = root
 	raw, err := command.Output()
 	return err != nil || strings.TrimSpace(string(raw)) != ""
 }

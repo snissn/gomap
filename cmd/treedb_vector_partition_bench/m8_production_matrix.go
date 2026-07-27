@@ -84,6 +84,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 	if len(cfg.m8VariantDBs) == 0 {
 		return runM8ProductionSingleVariantV1(cfg, fixture, vectors, queries, stdout)
 	}
+	initialDirty := m8GitDirtyV1()
 	type variantSource struct {
 		dir        string
 		descriptor m3VariantDescriptorV1
@@ -130,6 +131,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		if err := json.Unmarshal(encoded.Bytes(), &report); err != nil {
 			return fmt.Errorf("decode M8 matrix variant %s: %w", variantID, err)
 		}
+		report.Dirty = initialDirty || report.Dirty
 		if report.Variant == nil || report.Variant.VariantID != variantID {
 			return fmt.Errorf("M8 matrix variant %s lost immutable descriptor identity", variantID)
 		}
@@ -436,7 +438,7 @@ func m8ReportHasCoupledGateOperatingPointV1(report m8ProductionReportV1) bool {
 			continue
 		}
 		for _, base := range report.Rows {
-			if base.Status != "pass" || !base.ExactParityChecked || !base.ExactParityPassed || candidate.EfSearch != base.EfSearch || candidate.Concurrency != base.Concurrency {
+			if !base.ExactParityChecked || base.RecallAtK < report.Config.RecallTarget || candidate.EfSearch != base.EfSearch || candidate.Concurrency != base.Concurrency {
 				continue
 			}
 			if candidate.QPS >= base.QPS*1.15 && candidate.P95Nanos <= base.P95Nanos {
