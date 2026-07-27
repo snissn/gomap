@@ -125,6 +125,7 @@ type m8ProductionRowV1 struct {
 	MaxResponseBytes       uint64                    `json:"max_response_bytes_per_query,omitempty"`
 	MaxCandidateBytes      uint64                    `json:"max_candidate_bytes_per_query,omitempty"`
 	MaxMergeEntries        uint64                    `json:"max_merge_entries_per_query,omitempty"`
+	MaxShardPartitions     uint64                    `json:"max_shard_partitions,omitempty"`
 	MaxShardRequestBytes   uint64                    `json:"max_shard_request_bytes,omitempty"`
 	MaxShardResponseBytes  uint64                    `json:"max_shard_response_bytes,omitempty"`
 	MaxShardCandidateBytes uint64                    `json:"max_shard_candidate_bytes,omitempty"`
@@ -213,7 +214,7 @@ type m8MeasuredCellV1 struct {
 type m8ProductionResourceObservedMaximaV1 struct {
 	Requests, RPCs, Retries, Redirects                         uint64
 	RequestBytes, CandidateBytes, ResponseBytes                uint64
-	MergeEntries                                               uint64
+	MergeEntries, ShardPartitions                              uint64
 	ShardRequestBytes, ShardCandidateBytes, ShardResponseBytes uint64
 }
 
@@ -1127,7 +1128,7 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	add("coordinator_query_bytes", uint64(cfg.m8CoordinatorLimits.MaxQueryBytes), uint64(fixture.Dimensions*4), "bytes", true)
 	add("coordinator_top_k", uint64(cfg.m8CoordinatorLimits.MaxTopK), uint64(cfg.topK), "count", true)
 	add("coordinator_ef_search", uint64(cfg.m8CoordinatorLimits.MaxEfSearch), maxEf, "count", true)
-	add("coordinator_partitions_per_request", uint64(cfg.m8CoordinatorLimits.MaxPartitionsPerRequest), maxProbes, "count", true)
+	add("coordinator_partitions_per_request", uint64(cfg.m8CoordinatorLimits.MaxPartitionsPerRequest), observed.ShardPartitions, "count", true)
 	identityBytes := uint64(len("default")*2 + len(assets.manifest.Collection) + len(assets.manifest.IndexName) + len(assets.manifest.IndexDefinitionDigest) + len(assets.manifest.ReadySetDigest))
 	stableIDBytes := uint64(len(fmt.Sprintf("doc-%06d", max(0, fixture.Vectors-1))))
 	add("coordinator_identity_bytes", uint64(cfg.m8CoordinatorLimits.MaxIdentityBytes), identityBytes, "bytes", true)
@@ -1139,7 +1140,7 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	add("coordinator_wall_clock", uint64(cfg.m8CoordinatorLimits.MaxWallClock), maxP99, "nanoseconds", true)
 	add("shard_dimensions", uint64(cfg.m8ShardLimits.MaxDimensions), uint64(fixture.Dimensions), "count", true)
 	add("shard_query_bytes", uint64(cfg.m8ShardLimits.MaxQueryBytes), uint64(fixture.Dimensions*4), "bytes", true)
-	add("shard_partitions", uint64(cfg.m8ShardLimits.MaxPartitions), maxProbes, "count", true)
+	add("shard_partitions", uint64(cfg.m8ShardLimits.MaxPartitions), observed.ShardPartitions, "count", true)
 	add("shard_top_k", uint64(cfg.m8ShardLimits.MaxTopK), uint64(cfg.topK), "count", true)
 	add("shard_ef_search", uint64(cfg.m8ShardLimits.MaxEfSearch), maxEf, "count", true)
 	add("shard_identity_bytes", uint64(cfg.m8ShardLimits.MaxIdentityBytes), identityBytes, "bytes", true)
@@ -1164,6 +1165,7 @@ func m8ObservedResourceMaximaV1(rows []m8ProductionRowV1) m8ProductionResourceOb
 		out.CandidateBytes = max(out.CandidateBytes, row.MaxCandidateBytes)
 		out.ResponseBytes = max(out.ResponseBytes, row.MaxResponseBytes)
 		out.MergeEntries = max(out.MergeEntries, row.MaxMergeEntries)
+		out.ShardPartitions = max(out.ShardPartitions, row.MaxShardPartitions)
 		out.ShardRequestBytes = max(out.ShardRequestBytes, row.MaxShardRequestBytes)
 		out.ShardCandidateBytes = max(out.ShardCandidateBytes, row.MaxShardCandidateBytes)
 		out.ShardResponseBytes = max(out.ShardResponseBytes, row.MaxShardResponseBytes)
@@ -1240,6 +1242,7 @@ func m8AccumulateProductionRowCountersV1(row *m8ProductionRowV1, counters native
 	row.MaxResponseBytes = max(row.MaxResponseBytes, counters.ResponseBytes)
 	row.MaxCandidateBytes = max(row.MaxCandidateBytes, counters.CandidateBytes)
 	row.MaxMergeEntries = max(row.MaxMergeEntries, counters.MergeEntries)
+	row.MaxShardPartitions = max(row.MaxShardPartitions, counters.MaxShardPartitions)
 	row.MaxShardRequestBytes = max(row.MaxShardRequestBytes, counters.MaxShardRequestBytes)
 	row.MaxShardResponseBytes = max(row.MaxShardResponseBytes, counters.MaxShardResponseBytes)
 	row.MaxShardCandidateBytes = max(row.MaxShardCandidateBytes, counters.MaxShardCandidateBytes)

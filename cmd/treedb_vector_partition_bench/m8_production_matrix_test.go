@@ -48,6 +48,17 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 	if matrix.Status != "local_gate_pass" || matrix.Gates.OverlapStorage != "pass" || matrix.OverlapStorageRatio != 1.2 || len(matrix.Comparison) != 3 {
 		t.Fatalf("matrix=%+v", matrix)
 	}
+	reports[0].GateLedger.TailLatency = "fail"
+	reports[1].GateLedger.Recall = "fail"
+	matrix, err = m8BuildProductionMatrixV1(cfg, fixture, reports)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matrix.Status != "experimental_gate_failures" || matrix.Gates.Recall != "pass" || matrix.Gates.TailLatency != "pass" || matrix.Gates.CoupledGraph != "fail" {
+		t.Fatalf("split graph acceptance matrix=%+v", matrix)
+	}
+	reports[0].GateLedger.TailLatency = "pass"
+	reports[1].GateLedger.Recall = "pass"
 	reports[1].Resources.PersistentAssetBytes = 135
 	matrix, err = m8BuildProductionMatrixV1(cfg, fixture, reports)
 	if err != nil {

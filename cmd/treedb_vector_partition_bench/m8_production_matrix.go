@@ -72,6 +72,7 @@ type m8ProductionMatrixGatesV1 struct {
 	ProbeReduction   string `json:"probe_reduction"`
 	EndToEndQPS      string `json:"matched_recall_qps"`
 	TailLatency      string `json:"matched_recall_tail"`
+	CoupledGraph     string `json:"coupled_graph_acceptance"`
 	Balance          string `json:"balance"`
 	OverlapStorage   string `json:"overlap_storage"`
 	ResourceBounds   string `json:"resource_bounds"`
@@ -305,6 +306,7 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 		ProbeReduction:   m8AnyGraphVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.ProbeReduction }),
 		EndToEndQPS:      m8AnyGraphVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.EndToEndQPS }),
 		TailLatency:      m8AnyGraphVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.TailLatency }),
+		CoupledGraph:     m8AnyGraphVariantCoupledGatesPassV1(matrix.Variants),
 		Balance:          m8AggregateVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.Balance }),
 		OverlapStorage:   overlapGate,
 		ResourceBounds:   m8AggregateVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.ResourceBounds }),
@@ -312,7 +314,7 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 	}
 	matrix.Status = "local_gate_pass"
 	matrix.Disposition = "local_gate_pass_multi_host_still_deferred"
-	for _, gate := range []string{matrix.Gates.RequiredVariants, matrix.Gates.ExhaustiveParity, matrix.Gates.FailureHonesty, matrix.Gates.Recall, matrix.Gates.ProbeReduction, matrix.Gates.EndToEndQPS, matrix.Gates.TailLatency, matrix.Gates.Balance, matrix.Gates.OverlapStorage, matrix.Gates.ResourceBounds} {
+	for _, gate := range []string{matrix.Gates.RequiredVariants, matrix.Gates.ExhaustiveParity, matrix.Gates.FailureHonesty, matrix.Gates.Recall, matrix.Gates.ProbeReduction, matrix.Gates.EndToEndQPS, matrix.Gates.TailLatency, matrix.Gates.CoupledGraph, matrix.Gates.Balance, matrix.Gates.OverlapStorage, matrix.Gates.ResourceBounds} {
 		if gate != "pass" {
 			matrix.Status = "experimental_gate_failures"
 			matrix.Disposition = "enablement_off_follow_up_required"
@@ -347,6 +349,19 @@ func m8AggregateVariantGateV1(reports []m8ProductionReportV1, value func(m8Produ
 func m8AnyGraphVariantGateV1(reports []m8ProductionReportV1, value func(m8ProductionGateLedgerV1) string) string {
 	for _, report := range reports {
 		if report.Variant != nil && report.Variant.AssignmentBasis == partitionAssignmentGraphV1 && value(report.GateLedger) == "pass" {
+			return "pass"
+		}
+	}
+	return "fail"
+}
+
+func m8AnyGraphVariantCoupledGatesPassV1(reports []m8ProductionReportV1) string {
+	for _, report := range reports {
+		if report.Variant == nil || report.Variant.AssignmentBasis != partitionAssignmentGraphV1 {
+			continue
+		}
+		gates := report.GateLedger
+		if gates.Recall == "pass" && gates.ProbeReduction == "pass" && gates.EndToEndQPS == "pass" && gates.TailLatency == "pass" {
 			return "pass"
 		}
 	}

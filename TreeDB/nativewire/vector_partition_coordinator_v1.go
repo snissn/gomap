@@ -217,6 +217,7 @@ type VectorPartitionCoordinatorCountersV1 struct {
 	Cancellations, Failures            uint64
 	QueryBytes, RequestBytes           uint64
 	ResponseBytes, CandidateBytes      uint64
+	MaxShardPartitions                 uint64
 	MaxShardRequestBytes               uint64
 	MaxShardResponseBytes              uint64
 	MaxShardCandidateBytes             uint64
@@ -851,6 +852,9 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 		SelectedPartitions: uint64(len(selectedPartitions)), SelectedGroups: uint64(len(selectedGroups)),
 		Requests: uint64(len(tasks)), QueryBytes: uint64(len(request.Query)) * 4,
 		RequestBytes: budget.requestBytes,
+	}
+	for _, task := range tasks {
+		counters.MaxShardPartitions = max(counters.MaxShardPartitions, uint64(len(task.partitionIDs)))
 	}
 	for _, result := range taskResults {
 		if !accumulateVectorPartitionCoordinatorResponseCountersV1(&counters, result.response) {

@@ -356,6 +356,9 @@ func TestVectorPartitionCoordinatorCoalescesChunksDedupesAndMergesV1(t *testing.
 	if response.Counters.MaxShardRequestBytes != maxRequestBytes {
 		t.Fatalf("max shard request bytes=%d want=%d", response.Counters.MaxShardRequestBytes, maxRequestBytes)
 	}
+	if response.Counters.MaxShardPartitions != 32 {
+		t.Fatalf("max shard partitions=%d want=32", response.Counters.MaxShardPartitions)
+	}
 	if got := response.Neighbors; len(got) != 3 || got[0].ID != "doc-00" ||
 		got[1].ID != "doc-01" || got[2].ID != "doc-02" {
 		t.Fatalf("stable top-k=%+v", got)
