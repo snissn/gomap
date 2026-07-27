@@ -59,6 +59,11 @@ const (
 	m8BenchmarkWorkScope                    = "m8_query_passes_v1: measured coordinator requests, warmup/endpoint preflight, cached exhaustive attribution, and exact/approximate/local-HNSW attribution passes; excludes the pre-existing canonical source oracle and engine-internal HNSW work"
 	partitionAssignmentGraphV1              = "graph"
 	partitionAssignmentStableIDHashV1       = "stable_id_hash"
+	// The canonical M8 corpus permits up to maxVectors primary memberships and
+	// up to one full duplicate membership per source row. At 64 conservative
+	// candidate bytes per membership, 128 MiB keeps that complete comparison
+	// bounded while allowing the required 1M + 20% overlap preflight to run.
+	m8ProductionCandidateBudgetBytesV1 uint64 = 128 << 20
 )
 
 type config struct {
@@ -475,13 +480,7 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		if cfg.topK > nativewire.DefaultVectorPartitionShardSearchLimitsV1().MaxTopK {
 			return fmt.Errorf("top-k cannot exceed M8 shard limit %d", nativewire.DefaultVectorPartitionShardSearchLimitsV1().MaxTopK)
 		}
-		workCfg := cfg
-		if len(cfg.m8VariantDBs) > 0 {
-			// The variants execute sequentially, so peak memory remains one
-			// topology, but the cumulative query-work cap owns all three runs.
-			workCfg.overlaps = make([]float64, len(cfg.m8VariantDBs))
-		}
-		if _, err := validateM8BenchmarkWork(workCfg, fixture, maxBenchmarkWorkUnits, cfg.maxBytes); err != nil {
+		if _, err := validateM8BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits, cfg.maxBytes); err != nil {
 			return err
 		}
 		vectors, queries, err := m8ProductionFixtureDataV1(cfg, fixture)
@@ -623,6 +622,8 @@ func parseConfig(args []string) (config, error) {
 		m8CoordinatorLimits: nativewire.DefaultVectorPartitionCoordinatorLimitsV1(),
 		m8ShardLimits:       nativewire.DefaultVectorPartitionShardSearchLimitsV1(),
 	}
+	cfg.m8CoordinatorLimits.MaxCandidateBytes = m8ProductionCandidateBudgetBytesV1
+	cfg.m8ShardLimits.MaxCandidateBytes = m8ProductionCandidateBudgetBytesV1
 	var probes, overlap, concurrency, efSearch, m8VariantDBs string
 	var stages string
 	fs := flag.NewFlagSet("treedb_vector_partition_bench", flag.ContinueOnError)
@@ -1180,35 +1181,56 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if capUnits < 1 || capBytes < 1 || cfg.partitions < 1 || cfg.topK < 1 || m.Vectors < 1 || m.Queries < 1 || m.Dimensions < 1 || len(cfg.overlaps) == 0 || len(cfg.probes) == 0 || len(cfg.efSearch) == 0 || len(cfg.concurrency) == 0 {
 		return m8BenchmarkWorkPlan{}, errors.New("cannot plan M8 benchmark work without positive caps, a valid fixture/top-k, and complete sweeps")
 	}
+	variantRuns := int64(1)
 	var supportedOverlaps int64
 	for _, overlap := range cfg.overlaps {
 		if overlap == 0 {
 			supportedOverlaps++
 		}
 	}
-	measured, err := memoryMul(supportedOverlaps, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(m.Queries))
+	if len(cfg.m8VariantDBs) > 0 {
+		// Each immutable matrix variant executes the complete single-overlap
+		// child path in its own process. Work is cumulative across children,
+		// while all retained result and attribution matrices below model the
+		// peak of one sequential child.
+		variantRuns = int64(len(cfg.m8VariantDBs))
+		supportedOverlaps = 1
+	}
+	measuredPerRun, err := memoryMul(supportedOverlaps, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(m.Queries))
+	if err != nil {
+		return m8BenchmarkWorkPlan{}, err
+	}
+	measured, err := memoryMul(measuredPerRun, variantRuns)
 	if err != nil {
 		return m8BenchmarkWorkPlan{}, err
 	}
 	// Production M8 also performs one exhaustive endpoint preflight and the
 	// configured untimed warmup requests outside the measured cell sweep.
-	warmupAndPreflight, err := memoryAdd(int64(cfg.warmup), 1)
+	warmupAndPreflightPerRun, err := memoryAdd(int64(cfg.warmup), 1)
+	if err != nil {
+		return m8BenchmarkWorkPlan{}, err
+	}
+	warmupAndPreflight, err := memoryMul(warmupAndPreflightPerRun, variantRuns)
 	if err != nil {
 		return m8BenchmarkWorkPlan{}, err
 	}
 	// Attribution runs once after measured overlap/concurrency rows. For every
 	// query/probe/ef cell it executes exact, approximate, and local-HNSW passes;
 	// the exhaustive partition-union pass is cached once per query.
-	var attribution int64
+	var attributionPerRun int64
 	if supportedOverlaps > 0 {
 		attributionStages, stageErr := memoryMul(3, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(m.Queries))
 		if stageErr != nil {
 			return m8BenchmarkWorkPlan{}, stageErr
 		}
-		attribution, err = memoryAdd(int64(m.Queries), attributionStages)
+		attributionPerRun, err = memoryAdd(int64(m.Queries), attributionStages)
 		if err != nil {
 			return m8BenchmarkWorkPlan{}, err
 		}
+	}
+	attribution, err := memoryMul(attributionPerRun, variantRuns)
+	if err != nil {
+		return m8BenchmarkWorkPlan{}, err
 	}
 	requests, err := memoryAdd(measured, warmupAndPreflight, attribution)
 	if err != nil {

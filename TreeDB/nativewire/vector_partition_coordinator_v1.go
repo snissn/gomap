@@ -754,7 +754,7 @@ func normalizeVectorPartitionCoordinatorLimitsV1(limits VectorPartitionCoordinat
 		limits.MaxIdentityBytes < 1 || limits.MaxIdentityBytes > shard.MaxIdentityBytes ||
 		limits.MaxStableIDBytes < 1 || limits.MaxStableIDBytes > shard.MaxStableIDBytes ||
 		limits.MaxMergeEntries < 1 || limits.MaxRequestBytes == 0 ||
-		limits.MaxCandidateBytes == 0 || limits.MaxCandidateBytes > shard.MaxCandidateBytes ||
+		limits.MaxCandidateBytes == 0 ||
 		limits.MaxResponseBytes == 0 || limits.MaxResponseBytes > shard.MaxResponseBytes ||
 		limits.MaxWallClock < time.Millisecond {
 		return VectorPartitionCoordinatorLimitsV1{}, fmt.Errorf("%w: invalid coordinator limits", ErrVectorPartitionCoordinatorInvalidRequest)

@@ -302,7 +302,7 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 			t.Fatalf("preflight did not exercise group endpoint: %+v", group)
 		}
 	}
-	lowProbe, err := topology.Coordinator().Search(ctx, m8ProductionRequestV1(assets, query, "m8-low-probe", 1, 4096, 10))
+	lowProbe, err := topology.Coordinator().Search(ctx, m8ProductionRequestV1(assets, query, "m8-low-probe", 1, 4096, 10, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +373,7 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	row, coordinatorResults, err := m8RunProductionCellV1(ctx, topology.Coordinator(), assets, attributionQueries, truth, 4, 4096, 4, 10)
+	row, coordinatorResults, err := m8RunProductionCellV1(ctx, topology.Coordinator(), assets, attributionQueries, truth, 4, 4096, 4, 10, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes)
 	if err != nil {
 		t.Fatal(err)
 	}

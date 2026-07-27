@@ -56,6 +56,7 @@ type m8ProductionComparisonV1 struct {
 	P50Nanos             uint64  `json:"p50_nanos"`
 	P95Nanos             uint64  `json:"p95_nanos"`
 	P99Nanos             uint64  `json:"p99_nanos"`
+	MaxTotalNanos        uint64  `json:"max_total_nanos"`
 	RPCs                 uint64  `json:"rpcs"`
 	RequestBytes         uint64  `json:"request_bytes"`
 	CandidateBytes       uint64  `json:"candidate_bytes"`
@@ -320,7 +321,7 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 				VariantID: report.Variant.VariantID, AssignmentBasis: report.Variant.AssignmentBasis, Overlap: report.Variant.OverlapRatio,
 				ArtifactSHA256: report.Variant.ArtifactSHA256, ReadySetDigest: report.Variant.ReadySetDigest, RouterModelDigest: report.Variant.RouterModelDigest,
 				Probes: row.Probes, EfSearch: row.EfSearch, Concurrency: row.Concurrency, Samples: row.Samples, RecallAtK: row.RecallAtK,
-				QPS: row.QPS, P50Nanos: row.P50Nanos, P95Nanos: row.P95Nanos, P99Nanos: row.P99Nanos, RPCs: row.RPCs,
+				QPS: row.QPS, P50Nanos: row.P50Nanos, P95Nanos: row.P95Nanos, P99Nanos: row.P99Nanos, MaxTotalNanos: row.MaxTotalNanos, RPCs: row.RPCs,
 				RequestBytes: row.RequestBytes, CandidateBytes: row.CandidateBytes, ResponseBytes: row.ResponseBytes,
 				PersistentAssetBytes: report.Resources.PersistentAssetBytes, PeakRSSBytes: report.Resources.PeakRSSBytes,
 			})
@@ -416,10 +417,26 @@ func m8AnyGraphVariantCoupledGatesPassV1(reports []m8ProductionReportV1) string 
 		if report.Variant == nil || report.Variant.AssignmentBasis != partitionAssignmentGraphV1 {
 			continue
 		}
-		gates := report.GateLedger
-		if gates.Recall == "pass" && gates.ProbeReduction == "pass" && gates.EndToEndQPS == "pass" && gates.TailLatency == "pass" {
+		if m8ReportHasCoupledGateOperatingPointV1(report) {
 			return "pass"
 		}
 	}
 	return "fail"
+}
+
+func m8ReportHasCoupledGateOperatingPointV1(report m8ProductionReportV1) bool {
+	for _, candidate := range report.Rows {
+		if candidate.Status != "pass" || candidate.RecallAtK < report.Config.RecallTarget || candidate.Probes*4 > report.Config.Partitions {
+			continue
+		}
+		for _, base := range report.Rows {
+			if base.Status != "pass" || !base.ExactParityChecked || !base.ExactParityPassed || candidate.EfSearch != base.EfSearch || candidate.Concurrency != base.Concurrency {
+				continue
+			}
+			if candidate.QPS >= base.QPS*1.15 && candidate.P95Nanos <= base.P95Nanos {
+				return true
+			}
+		}
+	}
+	return false
 }

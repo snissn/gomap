@@ -124,7 +124,9 @@ The checked-in 10k path materializes persistent HNSW packs for CI. The retained
 distinct immutable descriptors and executes them sequentially, one fresh OS
 process per variant so process peak RSS is attributable to that variant. The
 blocked matrix parent validates only the manifest and descriptors and does not
-materialize a second fixture corpus:
+materialize a second fixture corpus. Preflight planning applies the memory cap
+to one child's complete peak and multiplies the complete measured,
+warmup/preflight, and attribution work by the number of children:
 
 1. graph assignment with disjoint memberships;
 2. graph assignment with bounded overlap `0.20`;
@@ -142,8 +144,9 @@ the router, partition-local HNSW, transport, and coordinator merge retain
 separate recall/parity attribution. Approximate HNSW recall is judged by the
 declared recall gate and is never described as exact exhaustive parity.
 The matrix may pass its coupled graph-acceptance gate only when one graph
-variant passes recall, probe reduction, matched-recall QPS, and matched-recall
-tail together; those gates cannot be assembled from different variants.
+variant at one `(probes, ef_search, concurrency)` operating point passes recall,
+probe reduction, matched-recall QPS, and matched-recall tail together; those
+gates cannot be assembled from different variants or different cells.
 
 The schema-2 retained descriptor records both the full assignment artifact and
 the pre-assignment source-graph artifact. Its canonical build-identity digest
@@ -181,6 +184,12 @@ Partition-load evidence includes both primary and overlap memberships.
 Query-wide selected partitions and the maximum partitions in an actual
 generated shard request are separate observations. Only the latter is compared
 with coordinator and shard per-request partition ceilings.
+The canonical M8 benchmark configures a bounded 128 MiB aggregate and
+per-shard candidate ceiling. This covers the maximum one-million-row fixture
+with a fully materialized 0.20 overlap (`76,800,000` conservative membership
+bytes), instead of failing before that required variant can produce evidence.
+Wall-clock resource evidence uses the actual slowest completed request; p99
+remains a latency statistic and is not substituted for the hard-limit maximum.
 Custom shard limits are normalized once and passed through the production
 topology to both the coordinator and shard services. The coordinator clamps
 query, result, `ef_search`, partition, identity, and stable-ID bounds to those

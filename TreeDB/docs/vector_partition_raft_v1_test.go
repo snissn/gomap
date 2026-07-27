@@ -139,6 +139,10 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				"-m8-variant-dbs",
 				"schema-2 retained descriptor",
 				"canonical build-identity digest",
+				"one `(probes, ef_search, concurrency)` operating point",
+				"multiplies the complete measured",
+				"bounded 128 MiB aggregate",
+				"actual slowest completed request",
 				"Custom shard limits are normalized once",
 				"MUST return no partial neighbors",
 				"stable-ID hash assignment",
@@ -190,6 +194,15 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 			if !strings.Contains(string(b), needle) {
 				t.Fatalf("%s missing %q", check.path, needle)
 			}
+		}
+	}
+	storage, err := os.ReadFile(filepath.Join(root, "docs", "spec", "storage-format.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, needle := range []string{"m3_bounded_overlap_v1:capacity=<u64>,budget=<u64>,unspent=<u64>", ",build_identity=<64-lowercase-hex-sha256>", "covered by the VPM1 integrity digest"} {
+		if !strings.Contains(string(storage), needle) {
+			t.Fatalf("storage format missing %q", needle)
 		}
 	}
 	raw, err := os.ReadFile(filepath.Join(root, "docs", "performance", "vector-partition-m8-evidence.json"))

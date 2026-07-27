@@ -1209,6 +1209,29 @@ func TestM8UnsupportedOverlapSkipsMeasuredAndAttributionWorkV1(t *testing.T) {
 	}
 }
 
+func TestM8VariantMatrixCountsCompleteChildWorkAndOneChildPeakV1(t *testing.T) {
+	cfg := config{partitions: 4, overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3, topK: 2}
+	manifest := fixtureManifest{Vectors: 10, Queries: 5, Dimensions: 8}
+	single, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.m8VariantDBs = []string{"/a", "/b", "/c"}
+	matrix, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matrix.MeasuredQueryRequests != single.MeasuredQueryRequests*3 || matrix.WarmupAndPreflightQueryRequests != single.WarmupAndPreflightQueryRequests*3 || matrix.AttributionQueryPasses != single.AttributionQueryPasses*3 || matrix.QueryRequests != single.QueryRequests*3 {
+		t.Fatalf("matrix cumulative work=%+v single=%+v", matrix, single)
+	}
+	if matrix.RetainedCoordinatorCells != single.RetainedCoordinatorCells || matrix.RetainedCoordinatorResults != single.RetainedCoordinatorResults || matrix.RetainedAttributionResults != single.RetainedAttributionResults || matrix.ModeledPeakBytes != single.ModeledPeakBytes {
+		t.Fatalf("matrix peak inflated matrix=%+v single=%+v", matrix, single)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, manifest, matrix.QueryRequests-1, math.MaxInt64); err == nil {
+		t.Fatal("accepted matrix above cumulative complete-child work cap")
+	}
+}
+
 func TestM8RetainedAttributionResultsRespectMemoryCapV1(t *testing.T) {
 	cfg := config{partitions: 16, overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1}, topK: 256}
 	manifest := fixtureManifest{Vectors: 10_000, Queries: 50_000, Dimensions: 8}

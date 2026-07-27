@@ -44,6 +44,52 @@ func TestM8ObservedResourceMaximaUseRecordedMaximaNotAveragesV1(t *testing.T) {
 	}
 }
 
+func TestM8WallClockEvidenceUsesActualMaximumNotP99V1(t *testing.T) {
+	cfg := config{
+		m8CoordinatorLimits: nativewire.DefaultVectorPartitionCoordinatorLimitsV1(),
+		m8ShardLimits:       nativewire.DefaultVectorPartitionShardSearchLimitsV1(),
+		m8MaxAssetBytes:     1,
+		m8MaxRSSBytes:       math.MaxUint64,
+		partitions:          1,
+		topK:                1,
+		routerCandidates:    1,
+		concurrency:         []int{1},
+	}
+	assets := &m8ProductionMultiGroupAssetsV1{manifest: collections.VectorPartitionManifestV1{
+		SourceRowCount: 1,
+		PartitionCount: 1,
+		Memberships:    []collections.VectorPartitionMembershipV1{{PartitionID: 0}},
+	}}
+	got := m8ProductionResourcesV1(cfg, fixtureManifest{Vectors: 1, Dimensions: 1}, assets, []m8ProductionRowV1{{Status: "pass", Probes: 1, EfSearch: 1, P99Nanos: 100, MaxTotalNanos: 200}}, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})
+	for _, comparison := range got.LimitComparisons {
+		if comparison.Name == "coordinator_wall_clock" {
+			if comparison.Observed != 200 {
+				t.Fatalf("wall-clock comparison=%+v want actual maximum 200", comparison)
+			}
+			return
+		}
+	}
+	t.Fatal("missing coordinator_wall_clock comparison")
+}
+
+func TestM8CanonicalCandidateBudgetCoversRequiredOverlapV1(t *testing.T) {
+	required := uint64(1_000_000+200_000) * 64
+	if m8ProductionCandidateBudgetBytesV1 < required {
+		t.Fatalf("candidate budget=%d below required overlap floor=%d", m8ProductionCandidateBudgetBytesV1, required)
+	}
+	cfg, err := parseConfig([]string{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.m8CoordinatorLimits.MaxCandidateBytes != m8ProductionCandidateBudgetBytesV1 || cfg.m8ShardLimits.MaxCandidateBytes != m8ProductionCandidateBudgetBytesV1 {
+		t.Fatalf("candidate limits coordinator=%d shard=%d", cfg.m8CoordinatorLimits.MaxCandidateBytes, cfg.m8ShardLimits.MaxCandidateBytes)
+	}
+	request := m8ProductionRequestV1(&m8ProductionMultiGroupAssetsV1{manifest: collections.VectorPartitionManifestV1{Collection: "docs", IndexName: "embedding"}}, []float32{1}, "candidate-budget", 16, 4096, 10, cfg.m8CoordinatorLimits.MaxCandidateBytes)
+	if request.CandidateBytesLimit != m8ProductionCandidateBudgetBytesV1 {
+		t.Fatalf("request candidate limit=%d", request.CandidateBytesLimit)
+	}
+}
+
 func TestM8ProductionResourcesFailClosedForZeroPartitionsV1(t *testing.T) {
 	assets := &m8ProductionMultiGroupAssetsV1{manifest: collections.VectorPartitionManifestV1{}}
 	got := m8ProductionResourcesV1(config{}, fixtureManifest{}, assets, nil, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})

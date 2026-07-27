@@ -54,18 +54,23 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 		reports = append(reports, m8ProductionReportV1{
 			BaseSHA: hash, HeadSHA: hash, Dataset: fixture, Config: config, Variant: &descriptor, GateLedger: variantGates,
 			Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: variant.bytes},
-			Rows:      []m8ProductionRowV1{{Status: "pass", VariantID: variant.id, Probes: 4, EfSearch: 128, Concurrency: 1, Samples: 32, RecallAtK: .95, QPS: 120, P95Nanos: 10}},
+			Rows: []m8ProductionRowV1{
+				{Status: "pass", VariantID: variant.id, Probes: 16, EfSearch: 128, Concurrency: 1, Samples: 32, RecallAtK: 1, QPS: 100, P95Nanos: 100, ExactParityChecked: true, ExactParityPassed: true},
+				{Status: "pass", VariantID: variant.id, Probes: 4, EfSearch: 128, Concurrency: 1, Samples: 32, RecallAtK: .95, QPS: 116, P95Nanos: 99},
+			},
 		})
 	}
 	matrix, err := m8BuildProductionMatrixV1(cfg, fixture, reports)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if matrix.Status != "local_gate_pass" || matrix.Gates.OverlapStorage != "pass" || matrix.OverlapStorageRatio != 1.2 || len(matrix.Comparison) != 3 {
+	if matrix.Status != "local_gate_pass" || matrix.Gates.OverlapStorage != "pass" || matrix.OverlapStorageRatio != 1.2 || len(matrix.Comparison) != 6 {
 		t.Fatalf("matrix=%+v", matrix)
 	}
 	reports[0].GateLedger.TailLatency = "fail"
 	reports[1].GateLedger.Recall = "fail"
+	reports[0].Rows[1].P95Nanos = 101
+	reports[1].Rows[1].QPS = 114
 	matrix, err = m8BuildProductionMatrixV1(cfg, fixture, reports)
 	if err != nil {
 		t.Fatal(err)
@@ -75,6 +80,8 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 	}
 	reports[0].GateLedger.TailLatency = "pass"
 	reports[1].GateLedger.Recall = "pass"
+	reports[0].Rows[1].P95Nanos = 99
+	reports[1].Rows[1].QPS = 116
 	reports[1].Resources.PersistentAssetBytes = 135
 	matrix, err = m8BuildProductionMatrixV1(cfg, fixture, reports)
 	if err != nil {
@@ -86,6 +93,26 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 	reports[2].Config.TopK = 11
 	if _, err := m8BuildProductionMatrixV1(cfg, fixture, reports); err == nil {
 		t.Fatal("accepted non-like-for-like variant configuration")
+	}
+}
+
+func TestM8CoupledGraphGateRequiresOneMatchedOperatingPointV1(t *testing.T) {
+	report := m8ProductionReportV1{
+		Variant: &m3VariantDescriptorV1{AssignmentBasis: partitionAssignmentGraphV1},
+		Config:  m8ProductionConfigEvidenceV1{Partitions: 16, RecallTarget: .9},
+		Rows: []m8ProductionRowV1{
+			{Status: "pass", Probes: 16, EfSearch: 64, Concurrency: 1, QPS: 100, P95Nanos: 100, ExactParityChecked: true, ExactParityPassed: true},
+			{Status: "pass", Probes: 4, EfSearch: 64, Concurrency: 1, RecallAtK: .95, QPS: 116, P95Nanos: 101},
+			{Status: "pass", Probes: 16, EfSearch: 128, Concurrency: 1, QPS: 100, P95Nanos: 100, ExactParityChecked: true, ExactParityPassed: true},
+			{Status: "pass", Probes: 4, EfSearch: 128, Concurrency: 1, RecallAtK: .95, QPS: 114, P95Nanos: 99},
+		},
+	}
+	if got := m8AnyGraphVariantCoupledGatesPassV1([]m8ProductionReportV1{report}); got != "fail" {
+		t.Fatalf("split operating-point gate=%q want fail", got)
+	}
+	report.Rows[3].QPS = 116
+	if got := m8AnyGraphVariantCoupledGatesPassV1([]m8ProductionReportV1{report}); got != "pass" {
+		t.Fatalf("coupled operating-point gate=%q want pass", got)
 	}
 }
 

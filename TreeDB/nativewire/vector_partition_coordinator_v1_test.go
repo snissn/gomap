@@ -395,6 +395,18 @@ func TestVectorPartitionCoordinatorPlansWithConfiguredShardLimitsV1(t *testing.T
 	}
 }
 
+func TestVectorPartitionCoordinatorAllowsBoundedAggregateCandidateLimitAboveShardDefaultV1(t *testing.T) {
+	limits := DefaultVectorPartitionCoordinatorLimitsV1()
+	limits.MaxCandidateBytes = 128 << 20
+	got, err := normalizeVectorPartitionCoordinatorLimitsV1(limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MaxCandidateBytes != 128<<20 {
+		t.Fatalf("aggregate candidate limit=%d", got.MaxCandidateBytes)
+	}
+}
+
 func TestVectorPartitionCoordinatorUsesReplicatedLifecycleAdmissionV1(t *testing.T) {
 	owners := []raftcluster.GroupID{"group-a"}
 	coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
