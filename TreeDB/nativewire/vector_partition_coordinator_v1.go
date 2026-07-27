@@ -787,7 +787,9 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 	}
 	replicatedReadySetDigest, err := c.validateReplicatedLifecycle(requestCtx, status)
 	if err != nil {
-		c.retireRouterSessionV1(routerLease)
+		if vectorPartitionCoordinatorReplicatedLifecycleInvalidatesSessionV1(err) {
+			c.retireRouterSessionV1(routerLease)
+		}
 		return response, c.wrapError(err, "")
 	}
 	if err := c.recordRouterSessionIdentityV1(routerLease, status, replicatedReadySetDigest); err != nil {
@@ -897,6 +899,12 @@ func (c *VectorPartitionCoordinatorV1) validateReplicatedLifecycle(ctx context.C
 		m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum,
 		m.SourceSchemaHash, m.SourceRowCount,
 	)
+}
+
+func vectorPartitionCoordinatorReplicatedLifecycleInvalidatesSessionV1(err error) bool {
+	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) &&
+		(errors.Is(err, raftplacement.ErrVectorPartitionLifecycleGuard) ||
+			errors.Is(err, raftplacement.ErrVectorPartitionLifecycleIdentity))
 }
 
 func accumulateVectorPartitionCoordinatorResponseCountersV1(
@@ -1822,16 +1830,13 @@ func (c *VectorPartitionCoordinatorV1) Stats() VectorPartitionCoordinatorStatsV1
 	stats := c.stats.value
 	c.stats.mu.Unlock()
 	c.sessionMu.Lock()
-	type sessionStat struct {
-		value VectorPartitionCoordinatorRouterSessionStatsV1
-	}
-	sessions := make([]sessionStat, 0, len(c.sessionStats))
+	sessions := make([]VectorPartitionCoordinatorRouterSessionStatsV1, 0, len(c.sessionStats))
 	for _, session := range c.sessionStats {
-		sessions = append(sessions, sessionStat{value: session.value})
+		sessions = append(sessions, session.value)
 	}
 	c.sessionMu.Unlock()
 	sort.Slice(sessions, func(i, j int) bool {
-		left, right := sessions[i].value.Identity, sessions[j].value.Identity
+		left, right := sessions[i].Identity, sessions[j].Identity
 		if left.Database != right.Database {
 			return left.Database < right.Database
 		}
@@ -1870,9 +1875,6 @@ func (c *VectorPartitionCoordinatorV1) Stats() VectorPartitionCoordinatorStatsV1
 		}
 		return false
 	})
-	stats.RouterSessions = make([]VectorPartitionCoordinatorRouterSessionStatsV1, len(sessions))
-	for i := range sessions {
-		stats.RouterSessions[i] = sessions[i].value
-	}
+	stats.RouterSessions = sessions
 	return stats
 }

@@ -62,7 +62,7 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		GeneratedAt: time.Now(), Command: []string{"m8-test"}, BaseSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		Dataset: fixture, Config: m8ProductionConfigEvidenceV1{RaftGroups: 2, RaftNodesPerGroup: 3, Partitions: 4, TopK: 10, RouterCandidates: 1}, BuildNanos: 1,
 		Topology:       nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{Network: "tcp_loopback_serialized_m5_v1", LifecycleState: "active", ReadySetDigest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", MetaNodes: []string{"meta-a", "meta-b", "meta-c"}, Groups: []nativewire.VectorPartitionM8ProductionGroupEvidenceV1{group("group-a", 1), group("group-b", 1)}},
-		RouterSessions: m8ProductionRouterSessionEvidenceV1{AfterWarmup: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, LeasePins: 1, LeaseReleases: 1}}, AfterMeasured: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, Hits: 1, LeasePins: 2, LeaseReleases: 2}}},
+		RouterSessions: m8ProductionRouterSessionEvidenceV1{AfterWarmup: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, LeasePins: 1, LeaseReleases: 1}}, AfterMeasured: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, Hits: uint64(fixture.Queries), LeasePins: uint64(fixture.Queries) + 1, LeaseReleases: uint64(fixture.Queries) + 1}}},
 		Rows: []m8ProductionRowV1{{Status: "pass", Probes: 4, EfSearch: 10, Concurrency: 1, Samples: fixture.Queries, RecallAtK: 1, QPS: 1, RouterMode: "exact", RouterCandidates: 1, ExactParityChecked: true, ExactParityPassed: true, NoPartialResults: true, Attribution: m8ProductionAttributionV1{
 			Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1, ExhaustivePartitionRecallAtK: 1,
 			ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
@@ -112,26 +112,26 @@ func TestM8RouterSessionEvidenceRejectsColdWorkOrLeaseImbalanceV1(t *testing.T) 
 	measured := warm
 	measured.Hits, measured.LeasePins, measured.LeaseReleases = 1, 2, 2
 	valid := m8ProductionRouterSessionEvidenceV1{AfterWarmup: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{warm}, AfterMeasured: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{measured}}
-	if !validM8RouterSessionEvidenceV1(valid, true) {
+	if !validM8RouterSessionEvidenceV1(valid, 1) {
 		t.Fatal("rejected stable warmed router evidence")
 	}
 	prewarmed := valid
 	prewarmed.BeforeWarmup = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), warm)
-	if validM8RouterSessionEvidenceV1(prewarmed, true) {
+	if validM8RouterSessionEvidenceV1(prewarmed, 1) {
 		t.Fatal("accepted nonempty pre-warm router evidence")
 	}
 	unsupportedOnly := valid
 	unsupportedOnly.AfterMeasured = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), valid.AfterWarmup...)
-	if !validM8RouterSessionEvidenceV1(unsupportedOnly, false) {
+	if !validM8RouterSessionEvidenceV1(unsupportedOnly, 0) {
 		t.Fatal("rejected unchanged unsupported-only router evidence")
 	}
-	if validM8RouterSessionEvidenceV1(unsupportedOnly, true) {
+	if validM8RouterSessionEvidenceV1(unsupportedOnly, 1) {
 		t.Fatal("accepted unchanged router evidence for measured rows")
 	}
 	unsupportedOnly.AfterMeasured[0].Hits++
 	unsupportedOnly.AfterMeasured[0].LeasePins++
 	unsupportedOnly.AfterMeasured[0].LeaseReleases++
-	if validM8RouterSessionEvidenceV1(unsupportedOnly, false) {
+	if validM8RouterSessionEvidenceV1(unsupportedOnly, 0) {
 		t.Fatal("accepted measured deltas for unsupported-only rows")
 	}
 	for name, mutate := range map[string]func(*m8ProductionRouterSessionEvidenceV1){
@@ -149,10 +149,21 @@ func TestM8RouterSessionEvidenceRejectsColdWorkOrLeaseImbalanceV1(t *testing.T) 
 			candidate.AfterWarmup = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), valid.AfterWarmup...)
 			candidate.AfterMeasured = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), valid.AfterMeasured...)
 			mutate(&candidate)
-			if validM8RouterSessionEvidenceV1(candidate, true) {
+			if validM8RouterSessionEvidenceV1(candidate, 1) {
 				t.Fatal("accepted invalid router-session evidence")
 			}
 		})
+	}
+	if validM8RouterSessionEvidenceV1(valid, 2) {
+		t.Fatal("accepted fewer measured router operations than report samples")
+	}
+	twoSamples := valid
+	twoSamples.AfterMeasured = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), valid.AfterMeasured...)
+	twoSamples.AfterMeasured[0].Hits++
+	twoSamples.AfterMeasured[0].LeasePins++
+	twoSamples.AfterMeasured[0].LeaseReleases++
+	if !validM8RouterSessionEvidenceV1(twoSamples, 2) {
+		t.Fatal("rejected exact two-sample router accounting")
 	}
 }
 

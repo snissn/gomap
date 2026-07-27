@@ -96,7 +96,7 @@ above.
 
 The measured head removes the per-request manifest/asset validation-open work
 from the warmed coordinator request path. On the one matched 128-query cell
-below, it increases throughput 2.20x and reduces cumulative allocation 94.9%.
+below, it increases throughput 3.20x (+219.6%) and reduces cumulative allocation 94.9%.
 The head router-session counters directly show that all 128 measured requests
 reused the warmed generation-pinned router; no measured request opened a
 manifest, missed the cache, pinned a reader, invalidated, or closed a session.

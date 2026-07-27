@@ -377,7 +377,7 @@ func TestVectorPartitionCoordinatorUsesReplicatedLifecycleAdmissionV1(t *testing
 		t.Fatalf("replicated ready-set response/request=%q/%q want %q", response.ReadySetDigest, dispatcher.calls[0].ReadySetDigest, replicatedReadySetDigest)
 	}
 
-	authority.err = errors.New("generation invalidated")
+	authority.err = errors.Join(raftplacement.ErrVectorPartitionLifecycleGuard, errors.New("generation invalidated"))
 	before := len(dispatcher.calls)
 	if _, err := coordinator.Search(t.Context(), testVectorPartitionCoordinatorRequestV1(len(owners))); !errors.Is(err, authority.err) {
 		t.Fatalf("invalidated search err=%v", err)
@@ -399,6 +399,49 @@ func TestVectorPartitionCoordinatorUsesReplicatedLifecycleAdmissionV1(t *testing
 	}
 	if err := coordinator.Close(); err != nil || source.router.closeCount != 1 {
 		t.Fatalf("post-invalidation close err=%v router closes=%d", err, source.router.closeCount)
+	}
+}
+
+func TestVectorPartitionCoordinatorReplicatedLifecycleCancellationPreservesWarmSessionV1(t *testing.T) {
+	for _, lifecycleErr := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(lifecycleErr.Error(), func(t *testing.T) {
+			owners := []raftcluster.GroupID{"group-a"}
+			coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
+				[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+				owners, map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "doc", Score: 1}}}, VectorPartitionCoordinatorLimitsV1{},
+			)
+			authority := &recordingVectorPartitionReplicatedLifecycleAuthorityV1{readySetDigest: strings.Repeat("c", 64)}
+			coordinator.replicatedLifecycle = authority
+			if _, err := coordinator.Search(t.Context(), testVectorPartitionCoordinatorRequestV1(len(owners))); err != nil {
+				t.Fatalf("warm Search: %v", err)
+			}
+
+			authority.err = lifecycleErr
+			before := len(dispatcher.calls)
+			if _, err := coordinator.Search(t.Context(), testVectorPartitionCoordinatorRequestV1(len(owners))); !errors.Is(err, lifecycleErr) {
+				t.Fatalf("lifecycle Search err=%v want %v", err, lifecycleErr)
+			}
+			if len(dispatcher.calls) != before || source.openCount() != 1 || source.router.closeCount != 0 {
+				t.Fatalf("lifecycle rejection dispatches=%d opens=%d closes=%d", len(dispatcher.calls)-before, source.openCount(), source.router.closeCount)
+			}
+			stats := coordinator.Stats()
+			if len(stats.RouterSessions) != 1 || stats.RouterSessions[0].Invalidations != 0 ||
+				stats.RouterSessions[0].ReaderPins != 1 || stats.RouterSessions[0].ReaderReleases != 0 || stats.RouterSessions[0].Hits != 1 {
+				t.Fatalf("preserved session stats=%+v", stats.RouterSessions)
+			}
+
+			authority.err = nil
+			if _, err := coordinator.Search(t.Context(), testVectorPartitionCoordinatorRequestV1(len(owners))); err != nil {
+				t.Fatalf("healthy reuse Search: %v", err)
+			}
+			stats = coordinator.Stats()
+			if source.openCount() != 1 || source.router.closeCount != 0 || len(stats.RouterSessions) != 1 || stats.RouterSessions[0].Hits != 2 {
+				t.Fatalf("healthy reuse opens=%d closes=%d sessions=%+v", source.openCount(), source.router.closeCount, stats.RouterSessions)
+			}
+			if err := coordinator.Close(); err != nil || source.router.closeCount != 1 {
+				t.Fatalf("Close err=%v closes=%d", err, source.router.closeCount)
+			}
+		})
 	}
 }
 

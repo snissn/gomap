@@ -1419,12 +1419,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 	if len(report.Rows) == 0 {
 		return errors.New("M8 report has no measurement rows")
 	}
-	hasMeasuredRows := slices.ContainsFunc(report.Rows, func(row m8ProductionRowV1) bool {
-		return row.Status != "unsupported"
-	})
-	if !validM8RouterSessionEvidenceV1(report.RouterSessions, hasMeasuredRows) {
-		return errors.New("incomplete M8 router-session evidence")
-	}
+	var measuredSamples uint64
 	for _, row := range report.Rows {
 		if row.Status == "unsupported" {
 			if row.UnsupportedReason == "" || row.Overlap == 0 {
@@ -1440,6 +1435,14 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 			!validM8AttributionV1(row.Attribution) {
 			return errors.New("malformed measured M8 row")
 		}
+		rowSamples := uint64(row.Samples)
+		if rowSamples > ^uint64(0)-measuredSamples {
+			return errors.New("M8 measured sample count overflow")
+		}
+		measuredSamples += rowSamples
+	}
+	if !validM8RouterSessionEvidenceV1(report.RouterSessions, measuredSamples) {
+		return errors.New("incomplete M8 router-session evidence")
 	}
 	if !report.Failure.Passed || report.Failure.Error == "" || report.Failure.ReturnedNeighbors != 0 || report.Failure.ReturnedGroups != 0 ||
 		report.GateLedger.FailureHonesty != "pass" || report.Resources.PersistentAssetBytes == 0 ||
@@ -1481,7 +1484,7 @@ func validM8AttributionV1(attribution m8ProductionAttributionV1) bool {
 	return true
 }
 
-func validM8RouterSessionEvidenceV1(evidence m8ProductionRouterSessionEvidenceV1, requireMeasuredDelta bool) bool {
+func validM8RouterSessionEvidenceV1(evidence m8ProductionRouterSessionEvidenceV1, expectedMeasuredSamples uint64) bool {
 	if len(evidence.BeforeWarmup) != 0 || len(evidence.AfterWarmup) == 0 || len(evidence.AfterMeasured) == 0 {
 		return false
 	}
@@ -1505,6 +1508,7 @@ func validM8RouterSessionEvidenceV1(evidence m8ProductionRouterSessionEvidenceV1
 		return false
 	}
 	seen := make(map[nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1]bool, len(evidence.AfterMeasured))
+	var measuredHits, measuredLeasePins, measuredLeaseReleases uint64
 	for _, measured := range evidence.AfterMeasured {
 		warm, ok := warmed[measured.Identity]
 		if !ok || seen[measured.Identity] ||
@@ -1514,15 +1518,23 @@ func validM8RouterSessionEvidenceV1(evidence m8ProductionRouterSessionEvidenceV1
 			measured.LeasePins != measured.LeaseReleases {
 			return false
 		}
-		if requireMeasuredDelta && (measured.Hits <= warm.Hits || measured.LeasePins <= warm.LeasePins) {
+		if measured.Hits < warm.Hits || measured.LeasePins < warm.LeasePins || measured.LeaseReleases < warm.LeaseReleases {
 			return false
 		}
-		if !requireMeasuredDelta && (measured.Hits != warm.Hits || measured.LeasePins != warm.LeasePins || measured.LeaseReleases != warm.LeaseReleases) {
+		hitDelta := measured.Hits - warm.Hits
+		pinDelta := measured.LeasePins - warm.LeasePins
+		releaseDelta := measured.LeaseReleases - warm.LeaseReleases
+		if hitDelta > ^uint64(0)-measuredHits || pinDelta > ^uint64(0)-measuredLeasePins ||
+			releaseDelta > ^uint64(0)-measuredLeaseReleases {
 			return false
 		}
+		measuredHits += hitDelta
+		measuredLeasePins += pinDelta
+		measuredLeaseReleases += releaseDelta
 		seen[measured.Identity] = true
 	}
-	return true
+	return measuredHits == expectedMeasuredSamples && measuredLeasePins == expectedMeasuredSamples &&
+		measuredLeaseReleases == expectedMeasuredSamples
 }
 
 func m8SHA256V1(value string) bool {
