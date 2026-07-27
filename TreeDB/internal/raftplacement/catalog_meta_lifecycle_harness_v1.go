@@ -22,6 +22,9 @@ import (
 
 var catalogMetaLifecycleHarnessSequenceV1 atomic.Uint64
 
+const catalogMetaLifecycleHarnessCoordinationTimeoutV1 = 5 * time.Second
+const catalogMetaLifecycleHarnessLeaderDwellV1 = time.Second
+
 type CatalogMetaLifecycleHarnessOptionsV1 struct {
 	Catalog CatalogV1
 	Prefix  string
@@ -108,9 +111,9 @@ func catalogMetaLifecycleHarnessFeaturesV1() raftcluster.FeatureSet {
 }
 func catalogMetaLifecycleHarnessRaftConfigV1() *hraft.Config {
 	cfg := hraft.DefaultConfig()
-	cfg.HeartbeatTimeout = 300 * time.Millisecond
-	cfg.ElectionTimeout = 300 * time.Millisecond
-	cfg.LeaderLeaseTimeout = 300 * time.Millisecond
+	cfg.HeartbeatTimeout = catalogMetaLifecycleHarnessCoordinationTimeoutV1
+	cfg.ElectionTimeout = catalogMetaLifecycleHarnessCoordinationTimeoutV1
+	cfg.LeaderLeaseTimeout = catalogMetaLifecycleHarnessCoordinationTimeoutV1
 	cfg.CommitTimeout = 5 * time.Millisecond
 	cfg.SnapshotInterval = time.Hour
 	cfg.SnapshotThreshold = ^uint64(0)
@@ -121,7 +124,9 @@ func catalogMetaLifecycleHarnessRaftConfigV1() *hraft.Config {
 	return cfg
 }
 func (h *CatalogMetaLifecycleHarnessV1) waitLeader(ctx context.Context) error {
-	tick := time.NewTicker(10 * time.Millisecond)
+	var prior raftcluster.NodeID
+	var since time.Time
+	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
 	for {
 		var leader raftcluster.NodeID
@@ -138,7 +143,12 @@ func (h *CatalogMetaLifecycleHarnessV1) waitLeader(ctx context.Context) error {
 				leader = id
 			}
 		}
-		if leader != "" {
+		now := time.Now()
+		if leader == "" {
+			prior = ""
+		} else if prior != leader {
+			prior, since = leader, now
+		} else if now.Sub(since) >= catalogMetaLifecycleHarnessLeaderDwellV1 {
 			h.leader = leader
 			return nil
 		}
