@@ -130,7 +130,7 @@ func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vect
 		if err != nil {
 			return fmt.Errorf("build bounded overlap ratio %.4f: %w", ratio, err)
 		}
-		row, err := benchmarkM3PartitionIndexRow(cfg, vectors, queries, artifact, overlap, uint64(i+1))
+		row, err := benchmarkM3PartitionIndexRow(cfg, fixture, artifactDigest, vectors, queries, artifact, overlap, ratio, uint64(i+1))
 		if err != nil {
 			return fmt.Errorf("benchmark native partition packs ratio %.4f: %w", ratio, err)
 		}
@@ -204,7 +204,7 @@ func openM3PartitionSearchers(count int, open func(uint32) (*collections.VectorP
 	return searchers, nil
 }
 
-func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, generation uint64) (_ m3PartitionIndexRow, resultErr error) {
+func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactDigest string, vectors, queries [][]float64, artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, ratio float64, generation uint64) (_ m3PartitionIndexRow, resultErr error) {
 	dir, cleanup, err := m3PartitionIndexDirectory(cfg.m3PersistDir)
 	if err != nil {
 		return m3PartitionIndexRow{}, err
@@ -424,6 +424,17 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 	if lifecycle.Capacity != uint64(artifact.Metrics.Cap) || lifecycle.OverlapBudget != uint64(overlap.Budget) || lifecycle.UnspentOverlapBudget != uint64(overlap.Unspent) {
 		return m3PartitionIndexRow{}, fmt.Errorf("reopened lifecycle accounting=%+v", lifecycle)
 	}
+	router, _, err := col.OpenVectorPartitionRouterV1(partitionHNSWIndex)
+	if err != nil {
+		return m3PartitionIndexRow{}, fmt.Errorf("reopen M3 router: %w", err)
+	}
+	routerRuntime := router.Status()
+	if err := router.Close(); err != nil {
+		return m3PartitionIndexRow{}, fmt.Errorf("close reopened M3 router: %w", err)
+	}
+	if routerRuntime.Manifest.ReadySetDigest != manifest.ReadySetDigest || routerRuntime.ModelDigest == "" {
+		return m3PartitionIndexRow{}, errors.New("reopened M3 router identity does not match ready manifest")
+	}
 	openStarted := time.Now()
 	searchers, err := openM3PartitionSearchers(cfg.partitions, func(partition uint32) (*collections.VectorPartitionLocalSearcherV1, error) {
 		return col.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, generation, partition)
@@ -557,6 +568,29 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 		CorruptAssets:                lifecycle.CorruptAssets,
 		StaleAssets:                  lifecycle.StaleAssets,
 		PersistentDBDir:              persistentDBDir,
+	}
+	if !cleanup {
+		variantID, err := m3VariantIDV1(cfg.partitionAssignment, ratio)
+		if err != nil {
+			return m3PartitionIndexRow{}, err
+		}
+		descriptor := m3VariantDescriptorV1{
+			SchemaVersion: 1, ResultKind: "m3_persistent_variant_descriptor_v1", VariantID: variantID,
+			AssignmentBasis: cfg.partitionAssignment, OverlapRatio: ratio, OverlapPolicy: manifest.BalancePolicy,
+			FixtureChecksum: fixture.Checksum, ArtifactSHA256: artifactDigest, ArtifactBackend: artifact.Backend, Source: artifact.Source,
+			DatabaseDirectory: dir, ManifestIntegrity: manifest.IntegrityDigest, ReadySetDigest: manifest.ReadySetDigest,
+			RouterAssetChecksum: manifest.RouterAsset.Checksum, RouterModelDigest: routerRuntime.ModelDigest,
+			SourceGeneration: manifest.SourceGeneration, SourceChecksum: manifest.SourceChecksum, SourceSchemaHash: manifest.SourceSchemaHash, SourceRows: manifest.SourceRowCount,
+			PartitionGeneration: manifest.Generation, RouterGeneration: manifest.RouterGeneration, Partitions: manifest.PartitionCount,
+			Capacity: artifact.Metrics.Cap, PartitionLoads: append([]int(nil), overlap.Loads...), OverlapMemberships: len(manifest.OverlapMemberships),
+			PersistentAssetBytes: packPayloadBytes + manifest.RouterAsset.Bytes,
+		}
+		if err := m3DescriptorMatchesManifestV1(descriptor, fixture, manifest, routerRuntime.ModelDigest); err != nil {
+			return m3PartitionIndexRow{}, err
+		}
+		if err := m3WriteVariantDescriptorV1(dir, descriptor); err != nil {
+			return m3PartitionIndexRow{}, err
+		}
 	}
 	return row, nil
 }

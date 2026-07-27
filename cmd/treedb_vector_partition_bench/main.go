@@ -33,66 +33,69 @@ import (
 )
 
 const (
-	schemaVersion                        = 1
-	maxVectors                           = 1_000_000
-	maxDimensions                        = 4_096
-	maxPartitions                        = 16_384
-	maxFixtureBytes                int64 = 4 << 30
-	maxBenchmarkWorkUnits          int64 = 200_000_000
-	maxManifestBytes               int64 = 64 << 10
-	maxGitHubEventBytes            int64 = 2 << 20
-	partitionHNSWIndex                   = "embedding_graph"
-	partitionHNSWDegree                  = 16
-	maxSourceHNSWDegree                  = partitionHNSWDegree
-	fixtureGenerator                     = "treedb_vector_partition_fixture_v2"
-	fixtureArithmetic                    = "ieee754_binary64_explicit_fma_v1"
-	documentIDStorageBytes               = 16
-	hnswJSONFloatBytes                   = 24
-	hnswJSONFixedBytes                   = 64
-	hnswDecodedDimensionBytes            = 32
-	memoryMapEntryBytes                  = 64
-	vectorPartitionInsertBatchRows       = 8_192
-	memorySlackNumerator                 = 5
-	memorySlackDenominator               = 4
-	memoryBudgetScope                    = "modeled_peak_live_bytes_v1: contiguous generated float64 fixture/query matrices and row headers; exact/selected top-k candidates; representative routing; persisted router ingest JSON/IDs/slices and source-row capture; HNSW partition JSON plus decoded JSON/vector batch; HNSW query merge and cache; 25% allocation slack; excludes TreeDB engine/index internals, Go runtime/GC metadata, and artifact/CLI encoding"
-	benchmarkWorkScope                   = "benchmark_owned_vector_query_corpus_visits_v1: checksum exact truth once; mandatory truth plus enabled exhaustive/routing corpus passes for every probe/overlap row; excludes TreeDB HNSW engine-internal search work"
-	m8BenchmarkWorkScope                 = "m8_query_passes_v1: measured coordinator requests, warmup/endpoint preflight, cached exhaustive attribution, and exact/approximate/local-HNSW attribution passes; excludes the pre-existing canonical source oracle and engine-internal HNSW work"
+	schemaVersion                           = 1
+	maxVectors                              = 1_000_000
+	maxDimensions                           = 4_096
+	maxPartitions                           = 16_384
+	maxFixtureBytes                   int64 = 4 << 30
+	maxBenchmarkWorkUnits             int64 = 200_000_000
+	maxManifestBytes                  int64 = 64 << 10
+	maxGitHubEventBytes               int64 = 2 << 20
+	partitionHNSWIndex                      = "embedding_graph"
+	partitionHNSWDegree                     = 16
+	maxSourceHNSWDegree                     = partitionHNSWDegree
+	fixtureGenerator                        = "treedb_vector_partition_fixture_v2"
+	fixtureArithmetic                       = "ieee754_binary64_explicit_fma_v1"
+	documentIDStorageBytes                  = 16
+	hnswJSONFloatBytes                      = 24
+	hnswJSONFixedBytes                      = 64
+	hnswDecodedDimensionBytes               = 32
+	memoryMapEntryBytes                     = 64
+	vectorPartitionInsertBatchRows          = 8_192
+	memorySlackNumerator                    = 5
+	memorySlackDenominator                  = 4
+	memoryBudgetScope                       = "modeled_peak_live_bytes_v1: contiguous generated float64 fixture/query matrices and row headers; exact/selected top-k candidates; representative routing; persisted router ingest JSON/IDs/slices and source-row capture; HNSW partition JSON plus decoded JSON/vector batch; HNSW query merge and cache; 25% allocation slack; excludes TreeDB engine/index internals, Go runtime/GC metadata, and artifact/CLI encoding"
+	benchmarkWorkScope                      = "benchmark_owned_vector_query_corpus_visits_v1: checksum exact truth once; mandatory truth plus enabled exhaustive/routing corpus passes for every probe/overlap row; excludes TreeDB HNSW engine-internal search work"
+	m8BenchmarkWorkScope                    = "m8_query_passes_v1: measured coordinator requests, warmup/endpoint preflight, cached exhaustive attribution, and exact/approximate/local-HNSW attribution passes; excludes the pre-existing canonical source oracle and engine-internal HNSW work"
+	partitionAssignmentGraphV1              = "graph"
+	partitionAssignmentStableIDHashV1       = "stable_id_hash"
 )
 
 type config struct {
-	dataset          string
-	partitions       int
-	probes           []int
-	overlaps         []float64
-	topK             int
-	recallTarget     float64
-	seed             int64
-	format           string
-	out              string
-	stages           map[string]bool
-	command          []string
-	maxVectors       int
-	maxBytes         int64
-	baseSHA          string
-	headSHA          string
-	hnsw             *treeDBPartitionHNSW
-	memory           benchmarkMemoryPlan
-	stage            string
-	m3PersistDir     string
-	m8ExistingDB     string
-	partition        vectorpartition.Config
-	router           *treeDBRepresentativeRouter
-	coordinator      *m6CoordinatorHarnessV1
-	routerConfig     vectorpartition.RouterConfigV1
-	routerCandidates int
-	sourceHNSWDegree int
-	mode             string
-	raftGroups       int
-	raftNodes        int
-	concurrency      []int
-	warmup           int
-	profiles         string
-	efSearch         []int
+	dataset             string
+	partitions          int
+	probes              []int
+	overlaps            []float64
+	topK                int
+	recallTarget        float64
+	seed                int64
+	format              string
+	out                 string
+	stages              map[string]bool
+	command             []string
+	maxVectors          int
+	maxBytes            int64
+	baseSHA             string
+	headSHA             string
+	hnsw                *treeDBPartitionHNSW
+	memory              benchmarkMemoryPlan
+	stage               string
+	m3PersistDir        string
+	m8ExistingDB        string
+	partitionAssignment string
+	partition           vectorpartition.Config
+	router              *treeDBRepresentativeRouter
+	coordinator         *m6CoordinatorHarnessV1
+	routerConfig        vectorpartition.RouterConfigV1
+	routerCandidates    int
+	sourceHNSWDegree    int
+	mode                string
+	raftGroups          int
+	raftNodes           int
+	concurrency         []int
+	warmup              int
+	profiles            string
+	efSearch            []int
 }
 
 type partitionRun struct {
@@ -585,8 +588,9 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 func parseConfig(args []string) (config, error) {
 	cfg := config{
 		format: "json", topK: 10, recallTarget: .9, seed: 1, stage: "simulation",
-		warmup:    1,
-		partition: vectorpartition.DefaultConfig(), routerConfig: vectorpartition.DefaultRouterConfigV1(),
+		warmup:              1,
+		partitionAssignment: partitionAssignmentGraphV1,
+		partition:           vectorpartition.DefaultConfig(), routerConfig: vectorpartition.DefaultRouterConfigV1(),
 		routerCandidates: 1024, sourceHNSWDegree: partitionHNSWDegree,
 	}
 	var probes, overlap, concurrency, efSearch string
@@ -611,6 +615,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.profiles, "profiles", "", "M8 profile artifact directory")
 	fs.StringVar(&cfg.m3PersistDir, "m3-persist-db", "", "retain the single overlap,partition_index row as a persistent TreeDB directory for downstream service benchmarks")
 	fs.StringVar(&cfg.m8ExistingDB, "m8-existing-db", "", "read-only existing TreeDB M3 asset directory for production_multi_group; never rebuilt or deleted")
+	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
 	fs.IntVar(&cfg.partition.Repetitions, "partition-repetitions", cfg.partition.Repetitions, "dense-ball graph sketch repetitions")
 	fs.IntVar(&cfg.partition.Pivots, "partition-pivots", cfg.partition.Pivots, "dense-ball pivots per recursive level")
 	fs.IntVar(&cfg.partition.MaxLeafBucket, "partition-max-leaf-bucket", cfg.partition.MaxLeafBucket, "maximum dense-ball leaf bucket")
@@ -711,6 +716,15 @@ func parseConfig(args []string) (config, error) {
 	if cfg.m8ExistingDB != "" && cfg.stage != m8ProductionMultiGroupModeV1 {
 		return config{}, errors.New("-m8-existing-db requires production_multi_group")
 	}
+	if cfg.partitionAssignment != partitionAssignmentGraphV1 && cfg.partitionAssignment != partitionAssignmentStableIDHashV1 {
+		return config{}, errors.New("-partition-assignment must be graph or stable_id_hash")
+	}
+	if cfg.partitionAssignment != partitionAssignmentGraphV1 && cfg.stage != "partition" && cfg.stage != "overlap,partition_index" {
+		return config{}, errors.New("-partition-assignment applies only to partition and overlap,partition_index stages")
+	}
+	if cfg.partitionAssignment == partitionAssignmentStableIDHashV1 && cfg.stage == "overlap,partition_index" && (len(cfg.overlaps) != 1 || cfg.overlaps[0] != 0) {
+		return config{}, errors.New("stable_id_hash M3 materialization requires exactly zero overlap")
+	}
 	if cfg.stage == "router" && stages == "all" {
 		stages = "exact_representative_routing,approximate_representative_routing"
 	}
@@ -765,6 +779,12 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][
 	artifact, err := vectorpartition.BuildWithPartitioner(input, cfg.partition, vectorpartition.Source{SourceID: "m0_fixture:" + fixture.Checksum}, vectorpartition.ReferencePartitioner{})
 	if err != nil {
 		return fmt.Errorf("build validated vector partition artifact: %w", err)
+	}
+	if cfg.partitionAssignment == partitionAssignmentStableIDHashV1 {
+		artifact, err = vectorpartition.BuildStableIDHashBaseline(artifact)
+		if err != nil {
+			return fmt.Errorf("build stable-ID hash partition baseline: %w", err)
+		}
 	}
 	bytes, err := vectorpartition.CanonicalJSON(artifact)
 	if err != nil {

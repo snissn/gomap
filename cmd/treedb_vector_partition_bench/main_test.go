@@ -1098,6 +1098,23 @@ func TestMalformedCapAndFiniteInputsRejectBeforeSimulation(t *testing.T) {
 	}
 }
 
+func TestPartitionAssignmentParsesOnlyMaterializationStagesV1(t *testing.T) {
+	base := []string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "overlap,partition_index", "-overlap", "0", "-partition-assignment", partitionAssignmentStableIDHashV1}
+	cfg, err := parseConfig(base)
+	if err != nil || cfg.partitionAssignment != partitionAssignmentStableIDHashV1 {
+		t.Fatalf("stable assignment config=%+v err=%v", cfg, err)
+	}
+	for _, args := range [][]string{
+		{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "overlap,partition_index", "-overlap", "0.2", "-partition-assignment", partitionAssignmentStableIDHashV1},
+		{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "simulation", "-probes", "1", "-partition-assignment", partitionAssignmentStableIDHashV1},
+		{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "partition", "-partition-assignment", "unknown"},
+	} {
+		if _, err := parseConfig(args); err == nil {
+			t.Fatalf("accepted malformed assignment config %#v", args)
+		}
+	}
+}
+
 func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 	cfg, err := parseConfig([]string{
 		"-mode", m8ProductionMultiGroupModeV1,
