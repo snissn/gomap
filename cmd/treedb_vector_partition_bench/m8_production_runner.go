@@ -1482,7 +1482,7 @@ func validM8AttributionV1(attribution m8ProductionAttributionV1) bool {
 }
 
 func validM8RouterSessionEvidenceV1(evidence m8ProductionRouterSessionEvidenceV1, requireMeasuredDelta bool) bool {
-	if len(evidence.AfterWarmup) == 0 || len(evidence.AfterMeasured) == 0 {
+	if len(evidence.BeforeWarmup) != 0 || len(evidence.AfterWarmup) == 0 || len(evidence.AfterMeasured) == 0 {
 		return false
 	}
 	warmed := make(map[nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1, len(evidence.AfterWarmup))

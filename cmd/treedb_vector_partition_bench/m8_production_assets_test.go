@@ -115,6 +115,11 @@ func TestM8RouterSessionEvidenceRejectsColdWorkOrLeaseImbalanceV1(t *testing.T) 
 	if !validM8RouterSessionEvidenceV1(valid, true) {
 		t.Fatal("rejected stable warmed router evidence")
 	}
+	prewarmed := valid
+	prewarmed.BeforeWarmup = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), warm)
+	if validM8RouterSessionEvidenceV1(prewarmed, true) {
+		t.Fatal("accepted nonempty pre-warm router evidence")
+	}
 	unsupportedOnly := valid
 	unsupportedOnly.AfterMeasured = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), valid.AfterWarmup...)
 	if !validM8RouterSessionEvidenceV1(unsupportedOnly, false) {
