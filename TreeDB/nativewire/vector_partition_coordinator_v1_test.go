@@ -525,6 +525,26 @@ func TestVectorPartitionCoordinatorRetiredRouterCloseErrorIsRetainedV1(t *testin
 	}
 }
 
+func TestVectorPartitionCoordinatorRetainsFirstRouterCloseErrorV1(t *testing.T) {
+	coordinator, _, _ := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"}, map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "doc", Score: 1}}}, VectorPartitionCoordinatorLimitsV1{},
+	)
+	first, second := errors.New("first router close failed"), errors.New("second router close failed")
+	coordinator.sessionMu.Lock()
+	coordinator.closing = 2
+	coordinator.sessionMu.Unlock()
+	if err := coordinator.closeRouterSessionV1(nil, &testVectorPartitionCoordinatorRouterV1{closeErr: first}); !errors.Is(err, first) {
+		t.Fatalf("first close err=%v", err)
+	}
+	if err := coordinator.closeRouterSessionV1(nil, &testVectorPartitionCoordinatorRouterV1{closeErr: second}); !errors.Is(err, second) {
+		t.Fatalf("second close err=%v", err)
+	}
+	if !errors.Is(coordinator.routerCloseErr, first) || errors.Is(coordinator.routerCloseErr, second) {
+		t.Fatalf("retained close err=%v", coordinator.routerCloseErr)
+	}
+}
+
 func TestVectorPartitionCoordinatorRetirementAllowsDistinctReplacementOpenV1(t *testing.T) {
 	coordinator, source, _ := testVectorPartitionCoordinatorV1(t,
 		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},

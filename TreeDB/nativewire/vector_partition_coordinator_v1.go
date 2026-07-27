@@ -626,8 +626,11 @@ func (c *VectorPartitionCoordinatorV1) closeRouterSessionV1(stats *vectorPartiti
 	if stats != nil {
 		stats.value.ReaderReleases++
 	}
-	if err != nil {
-		c.routerCloseErr = errors.Join(c.routerCloseErr, err)
+	if err != nil && c.routerCloseErr == nil {
+		// Every owning lease returns its own close error. Retain the first one
+		// for coordinator shutdown diagnostics without growing an unbounded
+		// joined-error chain across repeated rejected reopen attempts.
+		c.routerCloseErr = err
 	}
 	c.sessionCond.Broadcast()
 	c.sessionMu.Unlock()

@@ -70,8 +70,9 @@ the replicated lifecycle authority before routing or M5 dispatch. Cold opens
 are singleflight and a waiting request may cancel without canceling a shared
 session. A runtime-status or lifecycle rejection retires that exact session:
 new leases cannot reuse it and its persistent reader pin is released after its
-last lease. A final router-close error is joined to the owning search result
-and retained for `Close`, so retirement cannot silently hide release failure.
+last lease. Every router-close error is joined to its owning search result;
+the first is retained for `Close` without growing an unbounded error history,
+so retirement cannot silently hide release failure.
 `Close` rejects new searches, drains leases, then closes any remaining pinned
 router handles.
 
