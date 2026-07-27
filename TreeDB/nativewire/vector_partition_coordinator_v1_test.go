@@ -508,6 +508,60 @@ func TestVectorPartitionCoordinatorRouterOpenCorruptionFailsClosedV1(t *testing.
 	}
 }
 
+func TestVectorPartitionCoordinatorRouterBudgetRejectionKeepsHealthySessionV1(t *testing.T) {
+	coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a", "group-a"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{
+			0: {{ID: "a", Score: 1}},
+			1: {{ID: "b", Score: .5}},
+		},
+		VectorPartitionCoordinatorLimitsV1{},
+	)
+	underBudget := testVectorPartitionCoordinatorRequestV1(1)
+	underBudget.RouterCandidateBudget = 1
+	for i := range 2 {
+		underBudget.RequestID = fmt.Sprintf("under-budget-%d", i)
+		underBudget.CancellationID = underBudget.RequestID + "-cancel"
+		response, err := coordinator.Search(context.Background(), underBudget)
+		if !errors.Is(err, ErrVectorPartitionCoordinatorBudgetExceeded) ||
+			!vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
+			t.Fatalf("under-budget response=%+v err=%v", response, err)
+		}
+	}
+	if source.openCount() != 1 || source.router.closeCount != 0 || len(dispatcher.calls) != 0 {
+		t.Fatalf("under-budget opens=%d closes=%d dispatches=%d", source.openCount(), source.router.closeCount, len(dispatcher.calls))
+	}
+	sessions := coordinator.Stats().RouterSessions
+	if len(sessions) != 1 || sessions[0].ColdOpens != 1 || sessions[0].Hits != 1 ||
+		sessions[0].Invalidations != 0 || sessions[0].ReaderPins != 1 || sessions[0].ReaderReleases != 0 ||
+		sessions[0].LeasePins != 2 || sessions[0].LeaseReleases != 2 || sessions[0].Closes != 0 {
+		t.Fatalf("under-budget session stats=%+v", sessions)
+	}
+
+	healthy := testVectorPartitionCoordinatorRequestV1(2)
+	healthy.RequestID = "healthy-after-budget-rejection"
+	healthy.CancellationID = healthy.RequestID + "-cancel"
+	if _, err := coordinator.Search(context.Background(), healthy); err != nil {
+		t.Fatalf("healthy reuse: %v", err)
+	}
+	if source.openCount() != 1 || source.router.closeCount != 0 || len(dispatcher.calls) != 1 {
+		t.Fatalf("healthy reuse opens=%d closes=%d dispatches=%d", source.openCount(), source.router.closeCount, len(dispatcher.calls))
+	}
+	sessions = coordinator.Stats().RouterSessions
+	if len(sessions) != 1 || sessions[0].Hits != 2 || sessions[0].LeasePins != 3 ||
+		sessions[0].LeaseReleases != 3 || sessions[0].Invalidations != 0 {
+		t.Fatalf("healthy reuse session stats=%+v", sessions)
+	}
+	if err := coordinator.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sessions = coordinator.Stats().RouterSessions
+	if source.router.closeCount != 1 || sessions[0].ReaderReleases != 1 || sessions[0].Closes != 1 {
+		t.Fatalf("post-close router closes=%d sessions=%+v", source.router.closeCount, sessions)
+	}
+}
+
 func TestVectorPartitionCoordinatorRetiredRouterCloseErrorIsRetainedV1(t *testing.T) {
 	coordinator, source, _ := testVectorPartitionCoordinatorV1(t,
 		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},

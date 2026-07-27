@@ -780,7 +780,9 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 	router := routerLease.session.router
 	status := router.Status()
 	if err := c.validateRouterStatus(request, status); err != nil {
-		c.retireRouterSessionV1(routerLease)
+		if vectorPartitionCoordinatorRouterStatusInvalidatesSessionV1(err) {
+			c.retireRouterSessionV1(routerLease)
+		}
 		return response, c.wrapError(err, "")
 	}
 	replicatedReadySetDigest, err := c.validateReplicatedLifecycle(requestCtx, status)
@@ -1076,6 +1078,11 @@ func (c *VectorPartitionCoordinatorV1) validateRouterStatus(request VectorPartit
 		return fmt.Errorf("%w: exact router candidate budget", ErrVectorPartitionCoordinatorBudgetExceeded)
 	}
 	return nil
+}
+
+func vectorPartitionCoordinatorRouterStatusInvalidatesSessionV1(err error) bool {
+	return errors.Is(err, ErrVectorPartitionCoordinatorGenerationMismatch) ||
+		errors.Is(err, ErrVectorPartitionCoordinatorRouteMismatch)
 }
 
 type vectorPartitionCoordinatorBudgetV1 struct {
