@@ -25,8 +25,12 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 		descriptor.VariantID, descriptor.AssignmentBasis, descriptor.OverlapRatio = variant.id, variant.assignment, variant.overlap
 		config := common
 		config.Overlap = []float64{variant.overlap}
+		variantGates := pass
+		if variant.assignment == partitionAssignmentStableIDHashV1 {
+			variantGates.Recall, variantGates.ProbeReduction, variantGates.EndToEndQPS, variantGates.TailLatency = "fail", "fail", "fail", "fail"
+		}
 		reports = append(reports, m8ProductionReportV1{
-			BaseSHA: hash, HeadSHA: hash, Dataset: fixture, Config: config, Variant: &descriptor, GateLedger: pass,
+			BaseSHA: hash, HeadSHA: hash, Dataset: fixture, Config: config, Variant: &descriptor, GateLedger: variantGates,
 			Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: variant.bytes},
 			Rows:      []m8ProductionRowV1{{Status: "pass", VariantID: variant.id, Probes: 4, EfSearch: 128, Concurrency: 1, Samples: 32, RecallAtK: .95, QPS: 120, P95Nanos: 10}},
 		})

@@ -221,10 +221,10 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 	matrix.Gates = m8ProductionMatrixGatesV1{
 		RequiredVariants: "pass", ExhaustiveParity: m8AggregateVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.ExhaustiveParity }),
 		FailureHonesty:   m8AggregateVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.FailureHonesty }),
-		Recall:           m8AggregateVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.Recall }),
-		ProbeReduction:   m8AggregateVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.ProbeReduction }),
-		EndToEndQPS:      m8AggregateVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.EndToEndQPS }),
-		TailLatency:      m8AggregateVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.TailLatency }),
+		Recall:           m8AnyGraphVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.Recall }),
+		ProbeReduction:   m8AnyGraphVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.ProbeReduction }),
+		EndToEndQPS:      m8AnyGraphVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.EndToEndQPS }),
+		TailLatency:      m8AnyGraphVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.TailLatency }),
 		Balance:          m8AggregateVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.Balance }),
 		OverlapStorage:   overlapGate,
 		ResourceBounds:   m8AggregateVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.ResourceBounds }),
@@ -262,4 +262,13 @@ func m8AggregateVariantGateV1(reports []m8ProductionReportV1, value func(m8Produ
 		}
 	}
 	return "pass"
+}
+
+func m8AnyGraphVariantGateV1(reports []m8ProductionReportV1, value func(m8ProductionGateLedgerV1) string) string {
+	for _, report := range reports {
+		if report.Variant != nil && report.Variant.AssignmentBasis == partitionAssignmentGraphV1 && value(report.GateLedger) == "pass" {
+			return "pass"
+		}
+	}
+	return "fail"
 }

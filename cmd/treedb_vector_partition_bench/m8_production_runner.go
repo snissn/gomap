@@ -1068,17 +1068,26 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	if peak, ok := vectorPartitionBenchmarkPeakRSS(); ok {
 		out.PeakRSSBytes, out.PeakRSSMeasured = peak, true
 	}
-	var maxProbes, maxEf, maxRPCs, maxRequestBytes, maxCandidateBytes, maxResponseBytes, maxP99 uint64
+	var maxProbes, maxEf, maxRequestsPerQuery, maxCoordinatorRequestBytes, maxCoordinatorCandidateBytes, maxCoordinatorResponseBytes uint64
+	var maxShardRequestBytes, maxShardCandidateBytes, maxShardResponseBytes, maxP99 uint64
 	for _, row := range rows {
 		if row.Status == "unsupported" {
 			continue
 		}
 		maxProbes = max(maxProbes, uint64(row.Probes))
 		maxEf = max(maxEf, uint64(row.EfSearch))
-		maxRPCs = max(maxRPCs, row.RPCs)
-		maxRequestBytes = max(maxRequestBytes, row.RequestBytes)
-		maxCandidateBytes = max(maxCandidateBytes, row.CandidateBytes)
-		maxResponseBytes = max(maxResponseBytes, row.ResponseBytes)
+		if row.Samples > 0 {
+			samples := uint64(row.Samples)
+			maxRequestsPerQuery = max(maxRequestsPerQuery, ceilDivM8V1(row.RPCs, samples))
+			maxCoordinatorRequestBytes = max(maxCoordinatorRequestBytes, ceilDivM8V1(row.RequestBytes, samples))
+			maxCoordinatorCandidateBytes = max(maxCoordinatorCandidateBytes, ceilDivM8V1(row.CandidateBytes, samples))
+			maxCoordinatorResponseBytes = max(maxCoordinatorResponseBytes, ceilDivM8V1(row.ResponseBytes, samples))
+		}
+		if row.RPCs > 0 {
+			maxShardRequestBytes = max(maxShardRequestBytes, ceilDivM8V1(row.RequestBytes, row.RPCs))
+			maxShardCandidateBytes = max(maxShardCandidateBytes, ceilDivM8V1(row.CandidateBytes, row.RPCs))
+			maxShardResponseBytes = max(maxShardResponseBytes, ceilDivM8V1(row.ResponseBytes, row.RPCs))
+		}
 		maxP99 = max(maxP99, row.P99Nanos)
 	}
 	add := func(name string, configured, observed uint64, unit string, enforced bool) {
@@ -1095,7 +1104,7 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	}
 	add("coordinator_selected_partitions", uint64(cfg.m8CoordinatorLimits.MaxSelectedPartitions), maxProbes, "count", true)
 	add("coordinator_groups", uint64(cfg.m8CoordinatorLimits.MaxGroups), uint64(cfg.raftGroups), "count", true)
-	add("coordinator_requests", uint64(cfg.m8CoordinatorLimits.MaxRequests), maxRPCs, "count", true)
+	add("coordinator_requests", uint64(cfg.m8CoordinatorLimits.MaxRequests), maxRequestsPerQuery, "count", true)
 	add("coordinator_concurrent_requests", uint64(cfg.m8CoordinatorLimits.MaxConcurrentRequests), topology.MaxConcurrentShardRequests, "count", true)
 	add("coordinator_retries", uint64(cfg.m8CoordinatorLimits.MaxRetries), 0, "count", true)
 	add("coordinator_redirects", uint64(cfg.m8CoordinatorLimits.MaxRedirects), 0, "count", true)
@@ -1108,10 +1117,10 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	stableIDBytes := uint64(len(fmt.Sprintf("doc-%06d", max(0, fixture.Vectors-1))))
 	add("coordinator_identity_bytes", uint64(cfg.m8CoordinatorLimits.MaxIdentityBytes), identityBytes, "bytes", true)
 	add("coordinator_stable_id_bytes", uint64(cfg.m8CoordinatorLimits.MaxStableIDBytes), stableIDBytes, "bytes", true)
-	add("coordinator_merge_entries", uint64(cfg.m8CoordinatorLimits.MaxMergeEntries), maxRPCs*uint64(cfg.topK), "count", true)
-	add("coordinator_request_bytes", cfg.m8CoordinatorLimits.MaxRequestBytes, maxRequestBytes, "bytes", true)
-	add("coordinator_candidate_bytes", cfg.m8CoordinatorLimits.MaxCandidateBytes, maxCandidateBytes, "bytes", true)
-	add("coordinator_response_bytes", cfg.m8CoordinatorLimits.MaxResponseBytes, maxResponseBytes, "bytes", true)
+	add("coordinator_merge_entries", uint64(cfg.m8CoordinatorLimits.MaxMergeEntries), maxRequestsPerQuery*uint64(cfg.topK), "count", true)
+	add("coordinator_request_bytes", cfg.m8CoordinatorLimits.MaxRequestBytes, maxCoordinatorRequestBytes, "bytes", true)
+	add("coordinator_candidate_bytes", cfg.m8CoordinatorLimits.MaxCandidateBytes, maxCoordinatorCandidateBytes, "bytes", true)
+	add("coordinator_response_bytes", cfg.m8CoordinatorLimits.MaxResponseBytes, maxCoordinatorResponseBytes, "bytes", true)
 	add("coordinator_wall_clock", uint64(cfg.m8CoordinatorLimits.MaxWallClock), maxP99, "nanoseconds", true)
 	add("shard_dimensions", uint64(cfg.m8ShardLimits.MaxDimensions), uint64(fixture.Dimensions), "count", true)
 	add("shard_query_bytes", uint64(cfg.m8ShardLimits.MaxQueryBytes), uint64(fixture.Dimensions*4), "bytes", true)
@@ -1120,10 +1129,17 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	add("shard_ef_search", uint64(cfg.m8ShardLimits.MaxEfSearch), maxEf, "count", true)
 	add("shard_identity_bytes", uint64(cfg.m8ShardLimits.MaxIdentityBytes), identityBytes, "bytes", true)
 	add("shard_stable_id_bytes", uint64(cfg.m8ShardLimits.MaxStableIDBytes), stableIDBytes, "bytes", true)
-	add("shard_request_bytes", cfg.m8ShardLimits.MaxRequestBytes, maxRequestBytes, "bytes", true)
-	add("shard_candidate_bytes", cfg.m8ShardLimits.MaxCandidateBytes, maxCandidateBytes, "bytes", true)
-	add("shard_response_bytes", cfg.m8ShardLimits.MaxResponseBytes, maxResponseBytes, "bytes", true)
+	add("shard_request_bytes", cfg.m8ShardLimits.MaxRequestBytes, maxShardRequestBytes, "bytes", true)
+	add("shard_candidate_bytes", cfg.m8ShardLimits.MaxCandidateBytes, maxShardCandidateBytes, "bytes", true)
+	add("shard_response_bytes", cfg.m8ShardLimits.MaxResponseBytes, maxShardResponseBytes, "bytes", true)
 	return out
+}
+
+func ceilDivM8V1(value, divisor uint64) uint64 {
+	if divisor == 0 || value == 0 {
+		return 0
+	}
+	return 1 + (value-1)/divisor
 }
 
 type m8ProductionCellOutcomeV1 struct {
@@ -1363,7 +1379,7 @@ func m8ProductionGateLedgerForReportV1(report m8ProductionReportV1) m8Production
 		}
 		if row.ExactParityChecked {
 			exhaustive = append(exhaustive, row)
-			if !row.ExactParityPassed {
+			if !row.Attribution.ExhaustivePartitionIDParity || !row.Attribution.ExhaustivePartitionScoreParity || row.Attribution.ExhaustivePartitionRecallAtK != 1 {
 				ledger.ExhaustiveParity = "fail"
 			} else if ledger.ExhaustiveParity != "fail" {
 				ledger.ExhaustiveParity = "pass"
