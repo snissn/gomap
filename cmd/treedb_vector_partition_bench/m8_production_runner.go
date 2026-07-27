@@ -137,12 +137,23 @@ type m8ProductionRowV1 struct {
 }
 
 type m8ProductionFailureEvidenceV1 struct {
-	Class             string `json:"class"`
-	StoppedGroup      string `json:"stopped_group"`
-	Error             string `json:"error"`
-	ReturnedNeighbors int    `json:"returned_neighbors"`
-	ReturnedGroups    int    `json:"returned_groups"`
-	Passed            bool   `json:"passed"`
+	Class             string                              `json:"class"`
+	StoppedGroup      string                              `json:"stopped_group"`
+	Error             string                              `json:"error"`
+	ReturnedNeighbors int                                 `json:"returned_neighbors"`
+	ReturnedGroups    int                                 `json:"returned_groups"`
+	Passed            bool                                `json:"passed"`
+	ResourceBoundary  m8ProductionFaultResourceBoundaryV1 `json:"resource_boundary"`
+}
+
+// m8ProductionFaultResourceBoundaryV1 keeps the stopped-group request out of
+// recall and throughput rows while still making its larger resource boundary
+// authoritative for the resource gate.
+type m8ProductionFaultResourceBoundaryV1 struct {
+	SelectedPartitions int                                  `json:"selected_partitions"`
+	EfSearch           int                                  `json:"ef_search"`
+	WallClockNanos     uint64                               `json:"wall_clock_nanos"`
+	Maxima             m8ProductionResourceObservedMaximaV1 `json:"observed_maxima"`
 }
 
 type m8ProductionGateLedgerV1 struct {
@@ -213,10 +224,18 @@ type m8MeasuredCellV1 struct {
 }
 
 type m8ProductionResourceObservedMaximaV1 struct {
-	Requests, RPCs, Retries, Redirects                         uint64
-	RequestBytes, CandidateBytes, ResponseBytes                uint64
-	MergeEntries, ShardPartitions                              uint64
-	ShardRequestBytes, ShardCandidateBytes, ShardResponseBytes uint64
+	Requests            uint64 `json:"requests"`
+	RPCs                uint64 `json:"rpcs"`
+	Retries             uint64 `json:"retries"`
+	Redirects           uint64 `json:"redirects"`
+	RequestBytes        uint64 `json:"request_bytes"`
+	CandidateBytes      uint64 `json:"candidate_bytes"`
+	ResponseBytes       uint64 `json:"response_bytes"`
+	MergeEntries        uint64 `json:"merge_entries"`
+	ShardPartitions     uint64 `json:"shard_partitions"`
+	ShardRequestBytes   uint64 `json:"shard_request_bytes"`
+	ShardCandidateBytes uint64 `json:"shard_candidate_bytes"`
+	ShardResponseBytes  uint64 `json:"shard_response_bytes"`
 }
 
 func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors, queries [][]float64, stdout io.Writer) (runErr error) {
@@ -337,7 +356,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		}
 		report.Profiles = m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Captured: captured, Status: "captured_production_query_and_fault_boundary", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs.pprof is cumulative and must be compared with allocs_baseline.pprof"}
 	}
-	report.Resources = m8ProductionResourcesV1(cfg, fixture, assets, report.Rows, report.Topology)
+	report.Resources = m8ProductionResourcesV1(cfg, fixture, assets, report.Rows, report.Failure.ResourceBoundary, report.Topology)
 
 	// Attribution deliberately runs after the timed query/fault boundary,
 	// profile capture, and peak-RSS snapshot. Its exhaustive mmap scans must not
@@ -1062,7 +1081,7 @@ func m8WarmProductionTopologyV1(ctx context.Context, coordinator *nativewire.Vec
 	return nil
 }
 
-func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8ProductionMultiGroupAssetsV1, rows []m8ProductionRowV1, topology nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1) m8ProductionResourceEvidenceV1 {
+func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8ProductionMultiGroupAssetsV1, rows []m8ProductionRowV1, fault m8ProductionFaultResourceBoundaryV1, topology nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1) m8ProductionResourceEvidenceV1 {
 	out := m8ProductionResourceEvidenceV1{PersistentAssetCap: cfg.m8MaxAssetBytes, PeakRSSCapBytes: cfg.m8MaxRSSBytes}
 	if assets == nil {
 		return out
@@ -1102,7 +1121,12 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 		maxEf = max(maxEf, uint64(row.EfSearch))
 		maxTotalNanos = max(maxTotalNanos, row.MaxTotalNanos)
 	}
-	observed := m8ObservedResourceMaximaV1(rows)
+	maxProbes = max(maxProbes, uint64(fault.SelectedPartitions))
+	maxEf = max(maxEf, uint64(fault.EfSearch))
+	maxTotalNanos = max(maxTotalNanos, fault.WallClockNanos)
+	resourceRows := append([]m8ProductionRowV1(nil), rows...)
+	resourceRows = append(resourceRows, fault.resourceRowV1())
+	observed := m8ObservedResourceMaximaV1(resourceRows)
 	add := func(name string, configured, observed uint64, unit string, enforced bool) {
 		out.LimitComparisons = append(out.LimitComparisons, m8ProductionResourceLimitComparisonV1{Name: name, Configured: configured, Observed: observed, Unit: unit, Enforced: enforced, Passed: configured > 0 && observed <= configured})
 	}
@@ -1122,6 +1146,8 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	add("coordinator_concurrent_requests_across_clients", configuredConcurrentRequests, topology.MaxConcurrentShardRequests, "count", concurrentRequestsErr == nil)
 	configuredRetries, retriesOK := m8ConfiguredAggregateTaskLimitV1(cfg.m8CoordinatorLimits.MaxRetries, observed.Requests)
 	configuredRedirects, redirectsOK := m8ConfiguredAggregateTaskLimitV1(cfg.m8CoordinatorLimits.MaxRedirects, observed.Requests)
+	configuredRPCs, rpcsOK := m8ConfiguredRPCsV1(observed.Requests, configuredRetries, retriesOK)
+	add("coordinator_rpcs_across_shard_requests", configuredRPCs, observed.RPCs, "count", rpcsOK)
 	add("coordinator_retries_across_shard_requests", configuredRetries, observed.Retries, "count", retriesOK)
 	add("coordinator_redirects_across_shard_requests", configuredRedirects, observed.Redirects, "count", redirectsOK)
 	add("coordinator_router_candidates", uint64(cfg.m8CoordinatorLimits.MaxRouterCandidates), uint64(cfg.routerCandidates), "count", true)
@@ -1149,6 +1175,17 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	add("shard_candidate_bytes", cfg.m8ShardLimits.MaxCandidateBytes, observed.ShardCandidateBytes, "bytes", true)
 	add("shard_response_bytes", cfg.m8ShardLimits.MaxResponseBytes, observed.ShardResponseBytes, "bytes", true)
 	return out
+}
+
+func (e m8ProductionFaultResourceBoundaryV1) resourceRowV1() m8ProductionRowV1 {
+	return m8ProductionRowV1{
+		Status: "fault", Probes: e.SelectedPartitions, EfSearch: e.EfSearch, MaxTotalNanos: e.WallClockNanos,
+		MaxRequests: e.Maxima.Requests, MaxRPCs: e.Maxima.RPCs, MaxRetries: e.Maxima.Retries, MaxRedirects: e.Maxima.Redirects,
+		MaxRequestBytes: e.Maxima.RequestBytes, MaxCandidateBytes: e.Maxima.CandidateBytes, MaxResponseBytes: e.Maxima.ResponseBytes,
+		MaxMergeEntries: e.Maxima.MergeEntries, MaxShardPartitions: e.Maxima.ShardPartitions,
+		MaxShardRequestBytes: e.Maxima.ShardRequestBytes, MaxShardCandidateBytes: e.Maxima.ShardCandidateBytes,
+		MaxShardResponseBytes: e.Maxima.ShardResponseBytes,
+	}
 }
 
 func m8ObservedResourceMaximaV1(rows []m8ProductionRowV1) m8ProductionResourceObservedMaximaV1 {
@@ -1219,6 +1256,13 @@ func m8ConfiguredAggregateTaskLimitV1(perTask int, observedTasks uint64) (uint64
 		return 0, false
 	}
 	return uint64(perTask) * observedTasks, true
+}
+
+func m8ConfiguredRPCsV1(requests, retries uint64, retriesOK bool) (uint64, bool) {
+	if !retriesOK || requests > ^uint64(0)-retries {
+		return 0, false
+	}
+	return requests + retries, true
 }
 
 type m8ProductionCellOutcomeV1 struct {
@@ -1464,9 +1508,22 @@ func m8RunUnavailableGroupV1(ctx context.Context, topology *nativewire.VectorPar
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	started := time.Now()
 	response, err := topology.Coordinator().Search(requestCtx, m8ProductionRequestV1(assets, m8Query32V1(query64), "m8-unavailable-group", len(assets.manifest.Placements), 4096, topK, candidateBytesLimit))
+	result.ResourceBoundary.WallClockNanos = uint64(time.Since(started))
 	if err != nil {
 		result.Error = err.Error()
+		var coordinatorErr *nativewire.VectorPartitionCoordinatorErrorV1
+		if errors.As(err, &coordinatorErr) {
+			resourceRow := m8ProductionRowV1{}
+			m8AccumulateProductionRowCountersV1(&resourceRow, coordinatorErr.Counters)
+			result.ResourceBoundary.SelectedPartitions = int(coordinatorErr.Counters.SelectedPartitions)
+			result.ResourceBoundary.EfSearch = 4096
+			if coordinatorErr.Timing.TotalNanos > 0 {
+				result.ResourceBoundary.WallClockNanos = coordinatorErr.Timing.TotalNanos
+			}
+			result.ResourceBoundary.Maxima = m8ObservedResourceMaximaV1([]m8ProductionRowV1{resourceRow})
+		}
 	}
 	result.ReturnedNeighbors, result.ReturnedGroups = len(response.Neighbors), len(response.ProbedGroups)
 	result.Passed = err != nil && result.ReturnedNeighbors == 0 && result.ReturnedGroups == 0
@@ -1730,6 +1787,10 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 		return errors.New("incomplete M8 router-session evidence")
 	}
 	if !report.Failure.Passed || report.Failure.Error == "" || report.Failure.ReturnedNeighbors != 0 || report.Failure.ReturnedGroups != 0 ||
+		report.Failure.ResourceBoundary.SelectedPartitions != report.Config.Partitions || report.Failure.ResourceBoundary.EfSearch != 4096 ||
+		report.Failure.ResourceBoundary.WallClockNanos == 0 || report.Failure.ResourceBoundary.Maxima.Requests == 0 ||
+		report.Failure.ResourceBoundary.Maxima.RPCs == 0 || report.Failure.ResourceBoundary.Maxima.RequestBytes == 0 ||
+		report.Failure.ResourceBoundary.Maxima.ShardPartitions == 0 || report.Failure.ResourceBoundary.Maxima.ShardRequestBytes == 0 ||
 		report.GateLedger.FailureHonesty != "pass" || report.Resources.PersistentAssetBytes == 0 ||
 		report.Resources.PeakRSSMeasured && report.Resources.PeakRSSScope != m8PeakRSSScopeV1 {
 		return errors.New("incomplete M8 failure or resource evidence")

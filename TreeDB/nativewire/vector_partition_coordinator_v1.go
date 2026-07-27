@@ -49,6 +49,12 @@ type VectorPartitionCoordinatorErrorV1 struct {
 	Code    VectorPartitionCoordinatorErrorCodeV1
 	GroupID raftcluster.GroupID
 	Err     error
+
+	// Counters and Timing retain resource evidence for failed requests without
+	// exposing neighbors or routing results. Search still returns a zero
+	// response on every error.
+	Counters VectorPartitionCoordinatorCountersV1
+	Timing   VectorPartitionCoordinatorTimingV1
 }
 
 func (e *VectorPartitionCoordinatorErrorV1) Error() string {
@@ -774,6 +780,12 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 	defer func() {
 		total := elapsedNanosV1(started)
 		if resultErr != nil {
+			response.Timing.TotalNanos = total
+			var coordinatorErr *VectorPartitionCoordinatorErrorV1
+			if errors.As(resultErr, &coordinatorErr) {
+				coordinatorErr.Counters = response.Counters
+				coordinatorErr.Timing = response.Timing
+			}
 			response = VectorPartitionCoordinatorResponseV1{}
 			c.stats.fail(classifyVectorPartitionCoordinatorErrorV1(resultErr), total)
 			return
@@ -854,13 +866,6 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 		return response, c.wrapError(err, "")
 	}
 
-	taskResults, err := c.dispatch(requestCtx, tasks)
-	if err != nil {
-		return response, err
-	}
-	if err := requestCtx.Err(); err != nil {
-		return response, c.wrapError(err, "")
-	}
 	counters := VectorPartitionCoordinatorCountersV1{
 		SelectedPartitions: uint64(len(selectedPartitions)), SelectedGroups: uint64(len(selectedGroups)),
 		Requests: uint64(len(tasks)), QueryBytes: uint64(len(request.Query)) * 4,
@@ -869,6 +874,8 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 	for _, task := range tasks {
 		counters.MaxShardPartitions = max(counters.MaxShardPartitions, uint64(len(task.partitionIDs)))
 	}
+	response.Counters = counters
+	taskResults, dispatchErr := c.dispatch(requestCtx, tasks)
 	for _, result := range taskResults {
 		if !accumulateVectorPartitionCoordinatorResponseCountersV1(&counters, result.response) {
 			return response, c.wrapError(ErrVectorPartitionCoordinatorBudgetExceeded, "")
@@ -880,6 +887,13 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 		counters.Retries += result.retries
 		counters.Redirects += result.redirects
 		counters.MaxShardRequestBytes = max(counters.MaxShardRequestBytes, result.maxRequestBytes)
+	}
+	response.Counters = counters
+	if dispatchErr != nil {
+		return response, dispatchErr
+	}
+	if err := requestCtx.Err(); err != nil {
+		return response, c.wrapError(err, "")
 	}
 	if counters.ResponseBytes > request.ResponseBytesLimit ||
 		counters.CandidateBytes > request.CandidateBytesLimit {
@@ -1508,6 +1522,7 @@ func (c *VectorPartitionCoordinatorV1) dispatch(ctx context.Context, tasks []vec
 					continue
 				}
 				result, err := c.dispatchTask(child, tasks[taskIndex])
+				results[taskIndex] = result
 				if err != nil {
 					errorOnce.Do(func() {
 						firstErr = err
@@ -1515,20 +1530,19 @@ func (c *VectorPartitionCoordinatorV1) dispatch(ctx context.Context, tasks []vec
 					})
 					continue
 				}
-				results[taskIndex] = result
 			}
 		}()
 	}
 	wg.Wait()
 	if firstErr != nil {
-		return nil, firstErr
+		return results, firstErr
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, c.wrapError(err, "")
+		return results, c.wrapError(err, "")
 	}
 	for i := range results {
 		if results[i].response.Version == 0 {
-			return nil, c.wrapError(ErrVectorPartitionCoordinatorUnavailable, tasks[i].group.ID)
+			return results, c.wrapError(ErrVectorPartitionCoordinatorUnavailable, tasks[i].group.ID)
 		}
 	}
 	return results, nil

@@ -1724,6 +1724,16 @@ func TestVectorPartitionCoordinatorTerminalFailureCancelsAndReturnsNoPartialV1(t
 	if !vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
 		t.Fatalf("partial response=%+v", response)
 	}
+	var coordinatorErr *VectorPartitionCoordinatorErrorV1
+	if !errors.As(err, &coordinatorErr) {
+		t.Fatalf("terminal error type=%T want coordinator error", err)
+	}
+	if coordinatorErr.Counters.SelectedPartitions != 2 || coordinatorErr.Counters.SelectedGroups != 2 ||
+		coordinatorErr.Counters.Requests != 2 || coordinatorErr.Counters.RPCs == 0 ||
+		coordinatorErr.Counters.RequestBytes == 0 || coordinatorErr.Counters.MaxShardPartitions != 1 ||
+		coordinatorErr.Counters.MaxShardRequestBytes == 0 || coordinatorErr.Timing.TotalNanos == 0 {
+		t.Fatalf("terminal resource evidence counters=%+v timing=%+v", coordinatorErr.Counters, coordinatorErr.Timing)
+	}
 	if err := coordinator.Close(); err != nil {
 		t.Fatal(err)
 	}

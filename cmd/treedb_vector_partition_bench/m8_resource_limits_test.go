@@ -60,7 +60,7 @@ func TestM8WallClockEvidenceUsesActualMaximumNotP99V1(t *testing.T) {
 		PartitionCount: 1,
 		Memberships:    []collections.VectorPartitionMembershipV1{{PartitionID: 0}},
 	}}
-	got := m8ProductionResourcesV1(cfg, fixtureManifest{Vectors: 1, Dimensions: 1}, assets, []m8ProductionRowV1{{Status: "pass", Probes: 1, EfSearch: 1, P99Nanos: 100, MaxTotalNanos: 200}}, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})
+	got := m8ProductionResourcesV1(cfg, fixtureManifest{Vectors: 1, Dimensions: 1}, assets, []m8ProductionRowV1{{Status: "pass", Probes: 1, EfSearch: 1, P99Nanos: 100, MaxTotalNanos: 200}}, m8ProductionFaultResourceBoundaryV1{}, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})
 	for _, comparison := range got.LimitComparisons {
 		if comparison.Name == "coordinator_wall_clock" {
 			if comparison.Observed != 200 {
@@ -70,6 +70,68 @@ func TestM8WallClockEvidenceUsesActualMaximumNotP99V1(t *testing.T) {
 		}
 	}
 	t.Fatal("missing coordinator_wall_clock comparison")
+}
+
+func TestM8ResourceEvidenceIncludesLargerFaultBoundaryV1(t *testing.T) {
+	cfg := config{
+		m8CoordinatorLimits: nativewire.DefaultVectorPartitionCoordinatorLimitsV1(),
+		m8ShardLimits:       nativewire.DefaultVectorPartitionShardSearchLimitsV1(),
+		m8MaxAssetBytes:     1,
+		m8MaxRSSBytes:       math.MaxUint64,
+		partitions:          4,
+		topK:                1,
+		routerCandidates:    1,
+		concurrency:         []int{1},
+	}
+	assets := &m8ProductionMultiGroupAssetsV1{manifest: collections.VectorPartitionManifestV1{
+		SourceRowCount: 4,
+		PartitionCount: 4,
+		Memberships: []collections.VectorPartitionMembershipV1{
+			{PartitionID: 0}, {PartitionID: 1}, {PartitionID: 2}, {PartitionID: 3},
+		},
+	}}
+	rows := []m8ProductionRowV1{{
+		Status: "pass", Probes: 1, EfSearch: 32, MaxTotalNanos: 100,
+		MaxRequests: 1, MaxRPCs: 1, MaxRequestBytes: 10, MaxCandidateBytes: 20, MaxResponseBytes: 30,
+		MaxMergeEntries: 1, MaxShardPartitions: 1, MaxShardRequestBytes: 9, MaxShardCandidateBytes: 19, MaxShardResponseBytes: 29,
+	}}
+	fault := m8ProductionFaultResourceBoundaryV1{
+		SelectedPartitions: 4, EfSearch: 4096, WallClockNanos: 400,
+		Maxima: m8ProductionResourceObservedMaximaV1{
+			Requests: 4, RPCs: 4, Retries: 2, Redirects: 1,
+			RequestBytes: 100, CandidateBytes: 200, ResponseBytes: 300, MergeEntries: 40,
+			ShardPartitions: 2, ShardRequestBytes: 90, ShardCandidateBytes: 190, ShardResponseBytes: 290,
+		},
+	}
+	got := m8ProductionResourcesV1(cfg, fixtureManifest{Vectors: 4, Dimensions: 1}, assets, rows, fault, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})
+	seen := map[string]m8ProductionResourceLimitComparisonV1{}
+	for _, comparison := range got.LimitComparisons {
+		seen[comparison.Name] = comparison
+	}
+	want := map[string]uint64{
+		"coordinator_selected_partitions":             4,
+		"coordinator_requests":                        4,
+		"coordinator_rpcs_across_shard_requests":      4,
+		"coordinator_retries_across_shard_requests":   2,
+		"coordinator_redirects_across_shard_requests": 1,
+		"coordinator_ef_search":                       4096,
+		"coordinator_partitions_per_request":          2,
+		"coordinator_merge_entries":                   40,
+		"coordinator_request_bytes":                   100,
+		"coordinator_candidate_bytes":                 200,
+		"coordinator_response_bytes":                  300,
+		"coordinator_wall_clock":                      400,
+		"shard_partitions":                            2,
+		"shard_ef_search":                             4096,
+		"shard_request_bytes":                         90,
+		"shard_candidate_bytes":                       190,
+		"shard_response_bytes":                        290,
+	}
+	for name, observed := range want {
+		if comparison, ok := seen[name]; !ok || comparison.Observed != observed {
+			t.Fatalf("%s comparison=%+v present=%v want observed=%d", name, comparison, ok, observed)
+		}
+	}
 }
 
 func TestM8CanonicalCandidateBudgetCoversRequiredOverlapV1(t *testing.T) {
@@ -92,7 +154,7 @@ func TestM8CanonicalCandidateBudgetCoversRequiredOverlapV1(t *testing.T) {
 
 func TestM8ProductionResourcesFailClosedForZeroPartitionsV1(t *testing.T) {
 	assets := &m8ProductionMultiGroupAssetsV1{manifest: collections.VectorPartitionManifestV1{}}
-	got := m8ProductionResourcesV1(config{}, fixtureManifest{}, assets, nil, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})
+	got := m8ProductionResourcesV1(config{}, fixtureManifest{}, assets, nil, m8ProductionFaultResourceBoundaryV1{}, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})
 	if got.MaxPartitionLoad != math.MaxUint64 || got.BalanceHardCap != 0 {
 		t.Fatalf("zero-partition resources=%+v", got)
 	}
@@ -110,6 +172,15 @@ func TestM8ConfiguredAggregateTaskLimitMatchesPerTaskEnforcementV1(t *testing.T)
 	}
 	if _, ok := m8ConfiguredAggregateTaskLimitV1(2, math.MaxUint64); ok {
 		t.Fatal("accepted overflowing aggregate task limit")
+	}
+	if got, ok := m8ConfiguredRPCsV1(2, 2, true); !ok || got != 4 {
+		t.Fatalf("configured RPCs=(%d,%v) want=(4,true)", got, ok)
+	}
+	if _, ok := m8ConfiguredRPCsV1(math.MaxUint64, 1, true); ok {
+		t.Fatal("accepted overflowing configured RPC total")
+	}
+	if _, ok := m8ConfiguredRPCsV1(1, 1, false); ok {
+		t.Fatal("accepted RPC total with invalid retry scope")
 	}
 }
 
@@ -130,7 +201,7 @@ func TestM8ConcurrentRequestEvidenceFailsClosedWhenAggregateLimitOverflowsV1(t *
 		PartitionCount: 1,
 		Memberships:    []collections.VectorPartitionMembershipV1{{PartitionID: 0}},
 	}}
-	got := m8ProductionResourcesV1(cfg, fixtureManifest{Vectors: 1, Dimensions: 1}, assets, nil, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})
+	got := m8ProductionResourcesV1(cfg, fixtureManifest{Vectors: 1, Dimensions: 1}, assets, nil, m8ProductionFaultResourceBoundaryV1{}, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})
 	for _, comparison := range got.LimitComparisons {
 		if comparison.Name != "coordinator_concurrent_requests_across_clients" {
 			continue
@@ -160,7 +231,7 @@ func TestM8RetryRedirectEvidenceUsesAggregateShardRequestScopeV1(t *testing.T) {
 		Memberships:    []collections.VectorPartitionMembershipV1{{PartitionID: 0}},
 	}}
 	rows := []m8ProductionRowV1{{Status: "pass", Probes: 1, EfSearch: 1, MaxRequests: 2, MaxRetries: 2, MaxRedirects: 2}}
-	got := m8ProductionResourcesV1(cfg, fixtureManifest{Vectors: 1, Dimensions: 1}, assets, rows, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})
+	got := m8ProductionResourcesV1(cfg, fixtureManifest{Vectors: 1, Dimensions: 1}, assets, rows, m8ProductionFaultResourceBoundaryV1{}, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})
 	seen := map[string]m8ProductionResourceLimitComparisonV1{}
 	for _, comparison := range got.LimitComparisons {
 		seen[comparison.Name] = comparison
@@ -194,7 +265,7 @@ func TestM8PartitionLimitEvidenceUsesActualShardRequestScopeV1(t *testing.T) {
 		Memberships:    memberships,
 	}}
 	rows := []m8ProductionRowV1{{Status: "pass", Probes: 64, EfSearch: 1, MaxShardPartitions: 32}}
-	got := m8ProductionResourcesV1(cfg, fixtureManifest{Vectors: 64, Dimensions: 1}, assets, rows, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})
+	got := m8ProductionResourcesV1(cfg, fixtureManifest{Vectors: 64, Dimensions: 1}, assets, rows, m8ProductionFaultResourceBoundaryV1{}, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})
 	seen := map[string]m8ProductionResourceLimitComparisonV1{}
 	for _, comparison := range got.LimitComparisons {
 		seen[comparison.Name] = comparison

@@ -70,7 +70,7 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
 			ApproximateRouterCandidateBudget: 1, ApproximateRouterPartitionCoverageComplete: true, ResidualLossOwners: []string{"none_observed"},
 		}}},
-		Failure: m8ProductionFailureEvidenceV1{Passed: true, Error: "unavailable group rejected"}, GateLedger: m8ProductionGateLedgerV1{FailureHonesty: "pass"},
+		Failure: m8ProductionFailureEvidenceV1{Passed: true, Error: "unavailable group rejected", ResourceBoundary: m8ProductionFaultResourceBoundaryV1{SelectedPartitions: 4, EfSearch: 4096, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 2, RPCs: 1, RequestBytes: 1, ShardPartitions: 2, ShardRequestBytes: 1}}}, GateLedger: m8ProductionGateLedgerV1{FailureHonesty: "pass"},
 		Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1}, TimedBoundary: "measured", Limitations: []string{"test"},
 	}
 	if err := validateM8ProductionReportV1(report); err != nil {
@@ -399,6 +399,12 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	failure, postFaultTopology := m8RunUnavailableGroupV1(ctx, topology, assets, vectors[17], 10, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes)
 	if !failure.Passed || failure.StoppedGroup == "" || failure.Error == "" || failure.ReturnedNeighbors != 0 || failure.ReturnedGroups != 0 {
 		t.Fatalf("stopped group failure evidence=%+v", failure)
+	}
+	if failure.ResourceBoundary.SelectedPartitions != len(assets.manifest.Placements) || failure.ResourceBoundary.EfSearch != 4096 ||
+		failure.ResourceBoundary.WallClockNanos == 0 || failure.ResourceBoundary.Maxima.Requests == 0 ||
+		failure.ResourceBoundary.Maxima.RPCs == 0 || failure.ResourceBoundary.Maxima.RequestBytes == 0 ||
+		failure.ResourceBoundary.Maxima.ShardPartitions == 0 || failure.ResourceBoundary.Maxima.ShardRequestBytes == 0 {
+		t.Fatalf("stopped group resource boundary=%+v", failure.ResourceBoundary)
 	}
 	if len(postFaultTopology.Groups) != len(evidence.Groups) || postFaultTopology.MaxConcurrentShardRequests < evidence.MaxConcurrentShardRequests {
 		t.Fatalf("post-fault topology=%+v pre-fault topology=%+v", postFaultTopology, evidence)
