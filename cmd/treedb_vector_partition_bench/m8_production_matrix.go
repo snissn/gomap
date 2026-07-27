@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -181,7 +182,14 @@ func m8VariantProcessArgsV1(command []string, dir string, overlap float64, profi
 		return nil, errors.New("M8 variant process requires a command, database, and finite overlap in [0,1]")
 	}
 	drop := map[string]bool{"m8-variant-dbs": true, "m8-existing-db": true, "overlap": true, "format": true, "profiles": true}
-	args := make([]string, 0, len(command)+8)
+	// Forced child identity flags must precede every inherited argument. This is
+	// safe even for a defensively supplied positional argument because Go flag
+	// parsing stops at the first positional token.
+	args := []string{"-m8-existing-db", dir, "-overlap", strconv.FormatFloat(overlap, 'g', -1, 64), "-format", "json"}
+	if profiles != "" {
+		args = append(args, "-profiles", profiles)
+	}
+	args = slices.Grow(args, len(command)-1)
 	for i := 1; i < len(command); i++ {
 		arg := command[i]
 		if !strings.HasPrefix(arg, "-") {
@@ -202,10 +210,6 @@ func m8VariantProcessArgsV1(command []string, dir string, overlap float64, profi
 			continue
 		}
 		args = append(args, arg)
-	}
-	args = append(args, "-m8-existing-db", dir, "-overlap", strconv.FormatFloat(overlap, 'g', -1, 64), "-format", "json")
-	if profiles != "" {
-		args = append(args, "-profiles", profiles)
 	}
 	return args, nil
 }

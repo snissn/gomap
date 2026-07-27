@@ -51,3 +51,48 @@ func TestM8ProductionResourcesFailClosedForZeroPartitionsV1(t *testing.T) {
 		t.Fatalf("zero-partition resources=%+v", got)
 	}
 }
+
+func TestM8ConfiguredAggregateTaskLimitMatchesPerTaskEnforcementV1(t *testing.T) {
+	if got, ok := m8ConfiguredAggregateTaskLimitV1(1, 2); !ok || got != 2 {
+		t.Fatalf("aggregate retry limit=(%d,%v) want=(2,true)", got, ok)
+	}
+	if _, ok := m8ConfiguredAggregateTaskLimitV1(-1, 2); ok {
+		t.Fatal("accepted negative per-task limit")
+	}
+	if _, ok := m8ConfiguredAggregateTaskLimitV1(1, 0); ok {
+		t.Fatal("accepted zero observed task scope")
+	}
+	if _, ok := m8ConfiguredAggregateTaskLimitV1(2, math.MaxUint64); ok {
+		t.Fatal("accepted overflowing aggregate task limit")
+	}
+}
+
+func TestM8RetryRedirectEvidenceUsesAggregateShardRequestScopeV1(t *testing.T) {
+	cfg := config{
+		m8CoordinatorLimits: nativewire.DefaultVectorPartitionCoordinatorLimitsV1(),
+		m8ShardLimits:       nativewire.DefaultVectorPartitionShardSearchLimitsV1(),
+		m8MaxAssetBytes:     1,
+		m8MaxRSSBytes:       math.MaxUint64,
+		partitions:          1,
+		topK:                1,
+		routerCandidates:    1,
+		concurrency:         []int{1},
+	}
+	assets := &m8ProductionMultiGroupAssetsV1{manifest: collections.VectorPartitionManifestV1{
+		SourceRowCount: 1,
+		PartitionCount: 1,
+		Memberships:    []collections.VectorPartitionMembershipV1{{PartitionID: 0}},
+	}}
+	rows := []m8ProductionRowV1{{Status: "pass", Probes: 1, EfSearch: 1, MaxRequests: 2, MaxRetries: 2, MaxRedirects: 2}}
+	got := m8ProductionResourcesV1(cfg, fixtureManifest{Vectors: 1, Dimensions: 1}, assets, rows, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})
+	seen := map[string]m8ProductionResourceLimitComparisonV1{}
+	for _, comparison := range got.LimitComparisons {
+		seen[comparison.Name] = comparison
+	}
+	for _, name := range []string{"coordinator_retries_across_shard_requests", "coordinator_redirects_across_shard_requests"} {
+		comparison, ok := seen[name]
+		if !ok || comparison.Configured != 2 || comparison.Observed != 2 || !comparison.Enforced || !comparison.Passed {
+			t.Fatalf("%s comparison=%+v present=%v", name, comparison, ok)
+		}
+	}
+}

@@ -484,9 +484,9 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		if _, err := validateM8BenchmarkWork(workCfg, fixture, maxBenchmarkWorkUnits, cfg.maxBytes); err != nil {
 			return err
 		}
-		vectors, queries := deterministicFixture(fixture)
-		if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
-			return errors.New("fixture checksum does not match generated vector/query/truth stream")
+		vectors, queries, err := m8ProductionFixtureDataV1(cfg, fixture)
+		if err != nil {
+			return err
 		}
 		return runM8ProductionMultiGroupV1(cfg, fixture, vectors, queries, stdout)
 	}
@@ -597,6 +597,21 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 	return nil
 }
 
+func m8ProductionFixtureDataV1(cfg config, fixture fixtureManifest) ([][]float64, [][]float64, error) {
+	// The matrix parent owns descriptor validation and subprocess orchestration
+	// only. Each fresh child reconstructs and verifies the corpus, so retaining a
+	// second copy in the blocked parent would make machine peak memory exceed the
+	// independently reported child RSS.
+	if len(cfg.m8VariantDBs) > 0 {
+		return nil, nil, nil
+	}
+	vectors, queries := deterministicFixture(fixture)
+	if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
+		return nil, nil, errors.New("fixture checksum does not match generated vector/query/truth stream")
+	}
+	return vectors, queries, nil
+}
+
 func parseConfig(args []string) (config, error) {
 	cfg := config{
 		format: "json", topK: 10, recallTarget: .9, seed: 1, stage: "simulation",
@@ -653,6 +668,9 @@ func parseConfig(args []string) (config, error) {
 	fs.Int64Var(&cfg.maxBytes, "max-fixture-bytes", maxFixtureBytes, "maximum modeled peak bytes for benchmark-owned fixture and working material")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
+	}
+	if fs.NArg() != 0 {
+		return config{}, fmt.Errorf("unexpected positional arguments: %q", fs.Args())
 	}
 	if cfg.mode != "" {
 		if cfg.mode != m8ProductionMultiGroupModeV1 || cfg.stage != "simulation" {

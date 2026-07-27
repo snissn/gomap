@@ -73,6 +73,18 @@ func TestM8VariantDBsParseStrictThreePathsV1(t *testing.T) {
 			t.Fatalf("accepted malformed variant paths %q", value)
 		}
 	}
+	if _, err := parseConfig(append(append([]string(nil), base...), "positional")); err == nil {
+		t.Fatal("accepted positional argument")
+	}
+}
+
+func TestM8MatrixParentDoesNotMaterializeFixtureV1(t *testing.T) {
+	cfg := config{m8VariantDBs: []string{"/a", "/b", "/c"}}
+	fixture := fixtureManifest{Vectors: maxVectors, Queries: maxVectors, Dimensions: 4096}
+	vectors, queries, err := m8ProductionFixtureDataV1(cfg, fixture)
+	if err != nil || vectors != nil || queries != nil {
+		t.Fatalf("matrix parent fixture data vectors=%v queries=%v err=%v", vectors, queries, err)
+	}
 }
 
 func TestM8VariantProcessArgsForceFreshSingleVariantV1(t *testing.T) {
@@ -81,9 +93,9 @@ func TestM8VariantProcessArgsForceFreshSingleVariantV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantTail := []string{"-m8-existing-db", "/variant", "-overlap", "0.2", "-format", "json", "-profiles", "/profiles/variant"}
-	if len(got) < len(wantTail) || !reflect.DeepEqual(got[len(got)-len(wantTail):], wantTail) {
-		t.Fatalf("child args=%v want tail=%v", got, wantTail)
+	wantPrefix := []string{"-m8-existing-db", "/variant", "-overlap", "0.2", "-format", "json", "-profiles", "/profiles/variant"}
+	if len(got) < len(wantPrefix) || !reflect.DeepEqual(got[:len(wantPrefix)], wantPrefix) {
+		t.Fatalf("child args=%v want prefix=%v", got, wantPrefix)
 	}
 	for _, arg := range got {
 		if strings.HasPrefix(arg, "-m8-variant-dbs") || strings.HasPrefix(arg, "--m8-variant-dbs") || arg == "/a,/b,/c" || arg == "/old" {

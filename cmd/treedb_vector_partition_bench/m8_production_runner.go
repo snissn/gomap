@@ -1119,8 +1119,10 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	add("coordinator_requests", uint64(cfg.m8CoordinatorLimits.MaxRequests), observed.Requests, "count", true)
 	configuredConcurrentRequests, _ := m8ConfiguredConcurrentShardRequestsV1(cfg.m8CoordinatorLimits.MaxConcurrentRequests, cfg.concurrency)
 	add("coordinator_concurrent_requests_across_clients", configuredConcurrentRequests, topology.MaxConcurrentShardRequests, "count", true)
-	add("coordinator_retries", uint64(cfg.m8CoordinatorLimits.MaxRetries), observed.Retries, "count", true)
-	add("coordinator_redirects", uint64(cfg.m8CoordinatorLimits.MaxRedirects), observed.Redirects, "count", true)
+	configuredRetries, retriesOK := m8ConfiguredAggregateTaskLimitV1(cfg.m8CoordinatorLimits.MaxRetries, observed.Requests)
+	configuredRedirects, redirectsOK := m8ConfiguredAggregateTaskLimitV1(cfg.m8CoordinatorLimits.MaxRedirects, observed.Requests)
+	add("coordinator_retries_across_shard_requests", configuredRetries, observed.Retries, "count", retriesOK)
+	add("coordinator_redirects_across_shard_requests", configuredRedirects, observed.Redirects, "count", redirectsOK)
 	add("coordinator_router_candidates", uint64(cfg.m8CoordinatorLimits.MaxRouterCandidates), uint64(cfg.routerCandidates), "count", true)
 	add("coordinator_query_bytes", uint64(cfg.m8CoordinatorLimits.MaxQueryBytes), uint64(fixture.Dimensions*4), "bytes", true)
 	add("coordinator_top_k", uint64(cfg.m8CoordinatorLimits.MaxTopK), uint64(cfg.topK), "count", true)
@@ -1208,6 +1210,13 @@ func m8ConfiguredConcurrentShardRequestsV1(perRequest int, clientConcurrency []i
 		return 0, err
 	}
 	return uint64(configured), nil
+}
+
+func m8ConfiguredAggregateTaskLimitV1(perTask int, observedTasks uint64) (uint64, bool) {
+	if perTask < 0 || observedTasks == 0 || uint64(perTask) > ^uint64(0)/observedTasks {
+		return 0, false
+	}
+	return uint64(perTask) * observedTasks, true
 }
 
 type m8ProductionCellOutcomeV1 struct {
