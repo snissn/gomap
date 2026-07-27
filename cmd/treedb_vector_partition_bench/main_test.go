@@ -1751,6 +1751,13 @@ func TestM8PartitionLoadsIncludeOverlapMembershipsV1(t *testing.T) {
 	}
 }
 
+func TestM3InheritedPartitionHNSWMFailsBeforeMaterializationV1(t *testing.T) {
+	args := []string{"-stage", "overlap,partition_index", "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-overlap", "0", "-partition-degree", "32", "-m3-persist-db", t.TempDir()}
+	if _, err := parseConfig(args); err == nil || !strings.Contains(err.Error(), "effective partition HNSW M") {
+		t.Fatalf("parseConfig inherited M error=%v", err)
+	}
+}
+
 func TestSourceHNSWDegreeIsExplicitlyBoundedWithLegacyDefaultV1(t *testing.T) {
 	base := []string{
 		"-dataset", fixturePath(t),

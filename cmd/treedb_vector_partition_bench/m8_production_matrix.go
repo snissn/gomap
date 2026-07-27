@@ -7,31 +7,36 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 )
 
 var m8RequiredVariantIDsV1 = []string{"graph-disjoint-v1", "graph-overlap-020-v1", "stable-id-hash-disjoint-v1"}
 
 type m8ProductionMatrixV1 struct {
-	SchemaVersion       int                        `json:"schema_version"`
-	ResultKind          string                     `json:"result_kind"`
-	Status              string                     `json:"status"`
-	Disposition         string                     `json:"disposition"`
-	GeneratedAt         time.Time                  `json:"generated_at"`
-	Command             []string                   `json:"exact_command"`
-	BaseSHA             string                     `json:"base_sha"`
-	HeadSHA             string                     `json:"head_sha"`
-	Dataset             fixtureManifest            `json:"dataset"`
-	RequiredVariants    []string                   `json:"required_variants"`
-	Variants            []m8ProductionReportV1     `json:"variants"`
-	Comparison          []m8ProductionComparisonV1 `json:"comparison"`
-	Gates               m8ProductionMatrixGatesV1  `json:"gates"`
-	OverlapStorageRatio float64                    `json:"overlap_storage_ratio"`
-	Limitations         []string                   `json:"limitations"`
+	SchemaVersion               int                        `json:"schema_version"`
+	ResultKind                  string                     `json:"result_kind"`
+	Status                      string                     `json:"status"`
+	Disposition                 string                     `json:"disposition"`
+	GeneratedAt                 time.Time                  `json:"generated_at"`
+	Command                     []string                   `json:"exact_command"`
+	BaseSHA                     string                     `json:"base_sha"`
+	HeadSHA                     string                     `json:"head_sha"`
+	Dataset                     fixtureManifest            `json:"dataset"`
+	RequiredVariants            []string                   `json:"required_variants"`
+	Variants                    []m8ProductionReportV1     `json:"variants"`
+	Comparison                  []m8ProductionComparisonV1 `json:"comparison"`
+	Gates                       m8ProductionMatrixGatesV1  `json:"gates"`
+	OverlapMaterializationRatio float64                    `json:"overlap_materialization_ratio"`
+	OverlapStorageRatio         float64                    `json:"overlap_storage_ratio"`
+	Limitations                 []string                   `json:"limitations"`
 }
 
 type m8ProductionComparisonV1 struct {
@@ -102,16 +107,12 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		if err != nil {
 			return err
 		}
-		variantCfg := cfg
-		variantCfg.m8VariantDBs = nil
-		variantCfg.m8ExistingDB = pathsByVariant[variantID]
-		variantCfg.overlaps = []float64{descriptor.OverlapRatio}
-		variantCfg.format = "json"
-		if cfg.profiles != "" {
-			variantCfg.profiles = filepath.Join(cfg.profiles, variantID)
-		}
 		var encoded bytes.Buffer
-		if err := runM8ProductionSingleVariantV1(variantCfg, fixture, vectors, queries, &encoded); err != nil {
+		variantProfiles := ""
+		if cfg.profiles != "" {
+			variantProfiles = filepath.Join(cfg.profiles, variantID)
+		}
+		if err := runM8ProductionVariantProcessV1(cfg, pathsByVariant[variantID], descriptor.OverlapRatio, variantProfiles, &encoded); err != nil {
 			return fmt.Errorf("M8 matrix variant %s: %w", variantID, err)
 		}
 		var report m8ProductionReportV1
@@ -139,15 +140,10 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 	for i := range reports {
 		orderedDescriptors[i] = *reports[i].Variant
 	}
-	identity, err := json.Marshal(struct {
-		HeadSHA  string
-		Variants []m3VariantDescriptorV1
-		Config   m8ProductionConfigEvidenceV1
-	}{HeadSHA: cfg.headSHA, Variants: orderedDescriptors, Config: reports[0].Config})
+	digest, err := m8MatrixIdentityV1(cfg, orderedDescriptors, reports[0].Config)
 	if err != nil {
 		return err
 	}
-	digest := sha256.Sum256(identity)
 	path := filepath.Join(cfg.out, fmt.Sprintf("vector_partition_m8_matrix_%s_%x.json", cfg.headSHA[:provenanceSuffixBytes], digest[:6]))
 	if err := os.WriteFile(path, raw, 0o644); err != nil {
 		return err
@@ -158,6 +154,69 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		_, err = fmt.Fprintf(stdout, "M8 matrix status=%s disposition=%s artifact=%s rows=%d\n", matrix.Status, matrix.Disposition, path, len(matrix.Comparison))
 	}
 	return err
+}
+
+func runM8ProductionVariantProcessV1(cfg config, dir string, overlap float64, profiles string, stdout io.Writer) error {
+	args, err := m8VariantProcessArgsV1(cfg.command, dir, overlap, profiles)
+	if err != nil {
+		return err
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve M8 benchmark executable: %w", err)
+	}
+	cmd := exec.Command(executable, args...)
+	var stderr bytes.Buffer
+	cmd.Stdout = stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("fresh M8 variant process: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+func m8VariantProcessArgsV1(command []string, dir string, overlap float64, profiles string) ([]string, error) {
+	if len(command) == 0 || dir == "" || math.IsNaN(overlap) || math.IsInf(overlap, 0) || overlap < 0 || overlap > 1 {
+		return nil, errors.New("M8 variant process requires a command, database, and finite overlap in [0,1]")
+	}
+	drop := map[string]bool{"m8-variant-dbs": true, "m8-existing-db": true, "overlap": true, "format": true, "profiles": true}
+	args := make([]string, 0, len(command)+8)
+	for i := 1; i < len(command); i++ {
+		arg := command[i]
+		name := strings.TrimLeft(arg, "-")
+		if at := strings.IndexByte(name, '='); at >= 0 {
+			name = name[:at]
+			if drop[name] {
+				continue
+			}
+		} else if drop[name] {
+			if i+1 >= len(command) {
+				return nil, fmt.Errorf("M8 matrix command flag %q is missing its value", arg)
+			}
+			i++
+			continue
+		}
+		args = append(args, arg)
+	}
+	args = append(args, "-m8-existing-db", dir, "-overlap", strconv.FormatFloat(overlap, 'g', -1, 64), "-format", "json")
+	if profiles != "" {
+		args = append(args, "-profiles", profiles)
+	}
+	return args, nil
+}
+
+func m8MatrixIdentityV1(cfg config, variants []m3VariantDescriptorV1, evidence m8ProductionConfigEvidenceV1) ([sha256.Size]byte, error) {
+	identity, err := json.Marshal(struct {
+		HeadSHA                 string
+		Variants                []m3VariantDescriptorV1
+		Config                  m8ProductionConfigEvidenceV1
+		MaxRSSBytes             uint64
+		MaxPersistentAssetBytes uint64
+	}{HeadSHA: cfg.headSHA, Variants: variants, Config: evidence, MaxRSSBytes: cfg.m8MaxRSSBytes, MaxPersistentAssetBytes: cfg.m8MaxAssetBytes})
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	return sha256.Sum256(identity), nil
 }
 
 func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8ProductionReportV1) (m8ProductionMatrixV1, error) {
@@ -211,15 +270,26 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 		return m8ProductionMatrixV1{}, errors.New("M8 matrix disjoint persistent bytes are zero")
 	}
 	matrix.OverlapStorageRatio = float64(overlapBytes) / float64(disjointBytes)
+	overlapDescriptor := byID["graph-overlap-020-v1"].Variant
+	wantOverlapMemberships := uint64(math.Floor(overlapDescriptor.OverlapRatio * float64(overlapDescriptor.SourceRows)))
+	gotOverlapMemberships := uint64(overlapDescriptor.OverlapMemberships)
+	if overlapDescriptor.SourceRows > 0 {
+		matrix.OverlapMaterializationRatio = float64(gotOverlapMemberships) / float64(overlapDescriptor.SourceRows)
+	}
+	overlapMaterialized := wantOverlapMemberships > 0 && gotOverlapMemberships == wantOverlapMemberships
 	overlapGate := "fail"
-	if matrix.OverlapStorageRatio < 1.35 {
+	if overlapMaterialized && matrix.OverlapStorageRatio < 1.35 {
 		overlapGate = "pass"
 	}
 	for i := range matrix.Variants {
 		matrix.Variants[i].GateLedger.OverlapStorage = overlapGate
 	}
+	requiredVariantsGate := "fail"
+	if overlapMaterialized {
+		requiredVariantsGate = "pass"
+	}
 	matrix.Gates = m8ProductionMatrixGatesV1{
-		RequiredVariants: "pass", ExhaustiveParity: m8AggregateVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.ExhaustiveParity }),
+		RequiredVariants: requiredVariantsGate, ExhaustiveParity: m8AggregateVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.ExhaustiveParity }),
 		FailureHonesty:   m8AggregateVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.FailureHonesty }),
 		Recall:           m8AnyGraphVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.Recall }),
 		ProbeReduction:   m8AnyGraphVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.ProbeReduction }),

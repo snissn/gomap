@@ -761,8 +761,16 @@ func parseConfig(args []string) (config, error) {
 	if cfg.partitionAssignment == partitionAssignmentStableIDHashV1 && cfg.stage == "overlap,partition_index" && (len(cfg.overlaps) != 1 || cfg.overlaps[0] != 0) {
 		return config{}, errors.New("stable_id_hash M3 materialization requires exactly zero overlap")
 	}
-	if cfg.partitionHNSWM != 0 && (cfg.stage != "overlap,partition_index" || cfg.partitionHNSWM < 2 || cfg.partitionHNSWM > partitionHNSWDegree) {
-		return config{}, fmt.Errorf("-partition-hnsw-m applies only to M3 and must be in [2,%d]", partitionHNSWDegree)
+	if cfg.stage == "overlap,partition_index" {
+		effectivePartitionHNSWM := cfg.partitionHNSWM
+		if effectivePartitionHNSWM == 0 {
+			effectivePartitionHNSWM = cfg.partition.Degree
+		}
+		if effectivePartitionHNSWM < 2 || effectivePartitionHNSWM > partitionHNSWDegree {
+			return config{}, fmt.Errorf("effective partition HNSW M must be in [2,%d]", partitionHNSWDegree)
+		}
+	} else if cfg.partitionHNSWM != 0 {
+		return config{}, errors.New("-partition-hnsw-m applies only to M3")
 	}
 	if cfg.stage == "router" && stages == "all" {
 		stages = "exact_representative_routing,approximate_representative_routing"
