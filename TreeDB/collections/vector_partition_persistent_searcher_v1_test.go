@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -298,6 +300,165 @@ func TestVectorPartitionNativePackPreflightAndLayeredAdjacencyV1(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("remapped adjacency=%v want %v", got, want)
+		}
+	}
+}
+
+func TestVectorPartitionMaterializationBuildsPartitionLocalConnectedGraphV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	const sourceRows = 128
+	rows := make([]columnGraphRebuildInputRowV2A, sourceRows)
+	for i := range rows {
+		angle := 2 * math.Pi * float64(i) / sourceRows
+		rows[i] = columnGraphRebuildInputRowV2A{
+			id:     fmt.Sprintf("doc-%03d", i),
+			vector: []float32{float32(math.Cos(angle)), float32(math.Sin(angle)), 0.25},
+		}
+	}
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, rows)
+	defer d.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	source, authoritativeRows, err := col.ReadVectorPartitionRouterSourceRowsV1(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := testVectorPartitionManifestV1()
+	manifest.State, manifest.RouterGeneration, manifest.RouterAsset, manifest.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+	manifest.Generation = source.Generation + 1
+	manifest.IndexName = def.Name
+	manifest.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
+	manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, manifest.SourceRowCount = source.Generation, source.Checksum, source.SchemaHash, source.RowCount
+	manifest.PartitionCount = 2
+	manifest.Memberships = manifest.Memberships[:0]
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflicts := make([][]bool, len(authoritativeRows))
+	for i := range conflicts {
+		conflicts[i] = make([]bool, len(authoritativeRows))
+	}
+	for i := range conflicts {
+		adjacency, adjacencyErr := vectorPartitionSourceAdjacencyV1(reader, i, nil, false)
+		if adjacencyErr != nil {
+			reader.Close()
+			t.Fatal(adjacencyErr)
+		}
+		maxLayer, layerErr := columnVectorGraphAdjacencyMaxLayer(adjacency)
+		if layerErr != nil {
+			reader.Close()
+			t.Fatal(layerErr)
+		}
+		for layer := 0; layer <= maxLayer; layer++ {
+			neighbors, layerErr := columnVectorGraphAdjacencyLayer(adjacency, layer)
+			if layerErr != nil {
+				reader.Close()
+				t.Fatal(layerErr)
+			}
+			for _, neighbor := range neighbors {
+				if int(neighbor) >= len(conflicts) {
+					reader.Close()
+					t.Fatalf("source neighbor %d out of range", neighbor)
+				}
+				conflicts[i][neighbor] = true
+				conflicts[neighbor][i] = true
+			}
+		}
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	selectedOrdinals := make([]bool, len(authoritativeRows))
+	selectedCount := 0
+	for ordinal := range authoritativeRows {
+		allowed := true
+		for prior, selected := range selectedOrdinals {
+			if selected && conflicts[ordinal][prior] {
+				allowed = false
+				break
+			}
+		}
+		if allowed {
+			selectedOrdinals[ordinal] = true
+			selectedCount++
+		}
+	}
+	if selectedCount < 4 {
+		t.Fatalf("independent source membership count=%d want at least 4", selectedCount)
+	}
+	selected := make(map[string][]float32)
+	for _, row := range authoritativeRows {
+		partition := uint32(1)
+		if selectedOrdinals[row.VectorOrdinal] {
+			partition = 0
+			selected[string(row.DocumentID)] = append([]float32(nil), row.Values...)
+		}
+		manifest.Memberships = append(manifest.Memberships, VectorPartitionMembershipV1{VectorOrdinal: row.VectorOrdinal, PartitionID: partition})
+	}
+	manifest.Canonicalize()
+	inputs := []VectorPartitionSearchAssetV1{
+		{Source: source, Generation: manifest.Generation, PartitionID: 0, Dimensions: def.Dimensions},
+		{Source: source, Generation: manifest.Generation, PartitionID: 1, Dimensions: def.Dimensions},
+	}
+	assets, resources, err := col.MaterializeVectorPartitionLocalSearchAssetsV1(def.Name, manifest, 963, inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resources.Release()
+	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), assets[0].Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedDigest, err := decodeVectorPartitionMembershipDigestV1(assets[0].MembershipDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack, err := decodeColumnHNSWSearchPack(raw, columnHNSWSearchPackDecodeOptions{
+		ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{
+			ManifestGeneration: manifest.SourceGeneration,
+			ManifestChecksum:   manifest.SourceChecksum,
+			SchemaHash:         manifest.SourceSchemaHash,
+		},
+		ExpectedMembershipDigest: expectedDigest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visited := make([]bool, pack.Header.Rows)
+	queue := []int{pack.Header.EntryOrdinal}
+	visited[pack.Header.EntryOrdinal] = true
+	baseLayer := pack.AdjacencyLayers[0]
+	for head := 0; head < len(queue); head++ {
+		ordinal := queue[head]
+		for _, neighbor := range baseLayer.Neighbors[baseLayer.Offsets[ordinal]:baseLayer.Offsets[ordinal+1]] {
+			if !visited[neighbor] {
+				visited[neighbor] = true
+				queue = append(queue, int(neighbor))
+			}
+		}
+	}
+	if len(queue) != pack.Header.Rows {
+		t.Fatalf("partition-local graph reachable rows=%d want %d", len(queue), pack.Header.Rows)
+	}
+	manifest.Assets = assets
+	manifest.Canonicalize()
+	if err := col.PublishVectorPartitionManifestV1(manifest, nil); err != nil {
+		t.Fatal(err)
+	}
+	searcher, err := col.OpenVectorPartitionLocalSearcherForGenerationV1(def.Name, manifest.Generation, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer searcher.Close()
+	for id, query := range selected {
+		got, err := searcher.Search(query, 1)
+		if err != nil {
+			t.Fatalf("search %s: %v", id, err)
+		}
+		if len(got) != 1 || got[0].ID != id {
+			t.Fatalf("partition-local search for %s returned %+v", id, got)
 		}
 	}
 }

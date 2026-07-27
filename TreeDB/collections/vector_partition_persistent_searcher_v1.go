@@ -488,9 +488,7 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsV1(index string,
 		}
 		type selectedRow struct {
 			ordinal int
-			kind    VectorPartitionMembershipKindV1
 			id      []byte
-			level   int
 		}
 		sourceRows := make([]selectedRow, len(selected))
 		var documentIDBytes uint64
@@ -503,52 +501,23 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsV1(index string,
 				return nil, nil, fmt.Errorf("%w: stable ID byte overflow", ErrVectorPartitionSearchUnavailable)
 			}
 			documentIDBytes += uint64(len(id))
-			level, levelErr := vectorPartitionSourceMaxLayerV1(reader, x.ordinal)
-			if levelErr != nil {
-				return nil, nil, fmt.Errorf("%w: source adjacency: %v", ErrVectorPartitionSearchUnavailable, levelErr)
-			}
-			sourceRows[j] = selectedRow{ordinal: x.ordinal, kind: x.kind, id: id, level: level}
+			sourceRows[j] = selectedRow{ordinal: x.ordinal, id: id}
 		}
-		// HNSW packs require their entry node at local ordinal zero. Preserve the
-		// source graph's highest-level node in that position, then use stable
-		// source ordinals for deterministic order.
+		// The partition owns a fresh local HNSW. Source ordinals provide a stable
+		// insertion order; the native builder then applies its deterministic
+		// entry-first locality order before the pack is encoded.
 		sort.Slice(sourceRows, func(a, b int) bool {
-			if sourceRows[a].level != sourceRows[b].level {
-				return sourceRows[a].level > sourceRows[b].level
-			}
 			return sourceRows[a].ordinal < sourceRows[b].ordinal
 		})
-		ordToLocal := make(map[int]int, len(sourceRows))
 		for j, source := range sourceRows {
-			if _, dup := ordToLocal[source.ordinal]; dup {
+			if j > 0 && sourceRows[j-1].ordinal == source.ordinal {
 				return nil, nil, fmt.Errorf("%w: duplicate membership ordinal", ErrVectorPartitionSearchUnavailable)
 			}
-			ordToLocal[source.ordinal] = j
-		}
-		maxLayer := sourceRows[0].level
-		neighborCounts := make([]uint64, maxLayer+1)
-		for local, source := range sourceRows {
-			for layer := 0; layer <= source.level; layer++ {
-				neighbors, layerErr := vectorPartitionSourceAdjacencyLayerV1(reader, source.ordinal, layer)
-				if layerErr != nil {
-					return nil, nil, fmt.Errorf("%w: source adjacency: %v", ErrVectorPartitionSearchUnavailable, layerErr)
-				}
-				count := vectorPartitionRemappedNeighborCountV1(neighbors, ordToLocal, local)
-				if uint64(count) > ^uint64(0)-neighborCounts[layer] {
-					return nil, nil, fmt.Errorf("%w: neighbor count overflow", ErrVectorPartitionSearchUnavailable)
-				}
-				neighborCounts[layer] += uint64(count)
-			}
-		}
-		exactPackBytes, err := exactVectorPartitionNativePackBytesV1(len(sourceRows), def.Dimensions, neighborCounts, documentIDBytes, maxAssetBytes)
-		if err != nil {
-			return nil, nil, err
 		}
 		rows := make([]columnVectorGraphAssetRow, len(sourceRows))
 		scratch := &columnPhysicalRowReaderScratch{}
 		for j, source := range sourceRows {
 			r, fetchErr := reader.FetchRow(source.ordinal, scratch)
-			legacyAdjacencyAvailable := fetchErr == nil
 			if fetchErr != nil {
 				r = columnVectorGraphPhysicalRow{}
 			}
@@ -557,14 +526,6 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsV1(index string,
 			}
 			if len(r.Vector) != def.Dimensions {
 				return nil, nil, fmt.Errorf("%w: authoritative typed row", ErrVectorPartitionSearchUnavailable)
-			}
-			adjacency, adjacencyErr := vectorPartitionSourceAdjacencyV1(reader, source.ordinal, r.Adjacency, legacyAdjacencyAvailable)
-			if adjacencyErr != nil {
-				return nil, nil, fmt.Errorf("%w: source adjacency: %v", ErrVectorPartitionSearchUnavailable, adjacencyErr)
-			}
-			adj, adjErr := remapVectorPartitionAdjacencyV1(adjacency, ordToLocal, j)
-			if adjErr != nil {
-				return nil, nil, fmt.Errorf("%w: source adjacency: %v", ErrVectorPartitionSearchUnavailable, adjErr)
 			}
 			ref, refOK := reader.rowRefForOrdinal(source.ordinal)
 			if !refOK {
@@ -577,7 +538,39 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsV1(index string,
 			if invNorm, _, _, ok := reader.invNormForOrdinal(source.ordinal); ok {
 				r.InvNorm = invNorm
 			}
-			rows[j] = columnVectorGraphAssetRow{ID: append([]byte(nil), source.id...), Vector: append([]float32(nil), r.Vector...), InvNorm: r.InvNorm, Adjacency: adj, BaseRowRef: ref}
+			rows[j] = columnVectorGraphAssetRow{ID: append([]byte(nil), source.id...), Vector: append([]float32(nil), r.Vector...), InvNorm: r.InvNorm, BaseRowRef: ref}
+		}
+		if err := buildColumnVectorGraphAdjacency(rows, def); err != nil {
+			return nil, nil, fmt.Errorf("%w: build partition-local graph: %v", ErrVectorPartitionSearchUnavailable, err)
+		}
+		maxLayer := 0
+		rowMaxLayers := make([]int, len(rows))
+		for j := range rows {
+			rowMaxLayer, layerErr := columnVectorGraphAdjacencyMaxLayer(rows[j].Adjacency)
+			if layerErr != nil {
+				return nil, nil, fmt.Errorf("%w: partition-local adjacency: %v", ErrVectorPartitionSearchUnavailable, layerErr)
+			}
+			rowMaxLayers[j] = rowMaxLayer
+			if rowMaxLayer > maxLayer {
+				maxLayer = rowMaxLayer
+			}
+		}
+		neighborCounts := make([]uint64, maxLayer+1)
+		for j := range rows {
+			for layer := 0; layer <= rowMaxLayers[j]; layer++ {
+				neighbors, layerErr := columnVectorGraphAdjacencyLayer(rows[j].Adjacency, layer)
+				if layerErr != nil {
+					return nil, nil, fmt.Errorf("%w: partition-local adjacency: %v", ErrVectorPartitionSearchUnavailable, layerErr)
+				}
+				if uint64(len(neighbors)) > ^uint64(0)-neighborCounts[layer] {
+					return nil, nil, fmt.Errorf("%w: neighbor count overflow", ErrVectorPartitionSearchUnavailable)
+				}
+				neighborCounts[layer] += uint64(len(neighbors))
+			}
+		}
+		exactPackBytes, err := exactVectorPartitionNativePackBytesV1(len(rows), def.Dimensions, neighborCounts, documentIDBytes, maxAssetBytes)
+		if err != nil {
+			return nil, nil, err
 		}
 		graph := columnVectorGraphManifestSnapshot{IndexName: def.Name, Field: def.Field, Metric: def.Metric, Encoding: def.Encoding, Dimensions: def.Dimensions, M: def.M, EfConstruction: def.EfConstruction, EfSearch: def.EfSearch, BaseManifestGeneration: manifest.SourceGeneration, BaseManifestChecksum: manifest.SourceChecksum, BaseSchemaHash: manifest.SourceSchemaHash, GraphSchemaHash: cfg.SchemaHash, RowCount: len(rows)}
 		pack, err := buildColumnHNSWSearchPackInput(def, graph, rows)
