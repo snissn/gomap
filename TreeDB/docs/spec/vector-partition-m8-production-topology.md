@@ -152,9 +152,10 @@ Observed persistent bytes and RSS are not a resource-bounds pass unless a
 configured resource limit is compared. The strict matrix compares configured
 persistent-asset and process-RSS ceilings plus every coordinator/shard count,
 byte, fanout, concurrency, result, search-budget, and wall-clock limit against
-the same request scope. Both configured resource ceilings participate in the
-matrix artifact identity, so runs with different acceptance bounds cannot
-overwrite one another. Request, RPC, retry, redirect, merge, and byte limits
+the same request scope. Both the measured base and head Git SHAs and both
+configured resource ceilings participate in the matrix artifact identity, so
+runs from different code or with different acceptance bounds cannot overwrite
+one another. Request, RPC, retry, redirect, merge, and byte limits
 use observed per-request/per-shard maxima rather than averages derived from
 aggregate throughput counters. Client concurrency scales the configured
 aggregate shard-request ceiling; a process-wide observed peak is not compared

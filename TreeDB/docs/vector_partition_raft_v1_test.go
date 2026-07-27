@@ -158,8 +158,8 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				"fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1",
 				"9afad07fb8daf374076fe9fa630106ffdf6241ae746344349eb1885d37cdfbd1",
 				"its all-partition owner is partition-local HNSW",
-				"2934adf01601229b0e8eaef82507f6e45ea55798",
-				"7b33dfecb3bab70be1614326276988db0cc7b9e12d78247705dfd9b1693fa6ea",
+				"ab4fdb5c9017007382445ce48b88b4c335228bd7",
+				"94453e3c84c237f9847e0a60e0e663e73a3ffa8ab38b264505fedfdfbb5775a8",
 				"enablement_off_follow_up_required",
 				"#3998",
 				"#3999",
@@ -285,8 +285,8 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 		evidence.Continuation.Retained1M.LocalHNSWRecall != 0 || evidence.Continuation.Retained1M.LossOwner != "partition_local_hnsw" ||
 		evidence.FinalLocalGate.SchemaVersion != 3 || evidence.FinalLocalGate.ResultKind != "m8_production_multi_variant_matrix_v3" ||
 		evidence.FinalLocalGate.Status != "experimental_gate_failures" || evidence.FinalLocalGate.Disposition != "enablement_off_follow_up_required" ||
-		evidence.FinalLocalGate.MeasuredCodeHead != "2934adf01601229b0e8eaef82507f6e45ea55798" ||
-		evidence.FinalLocalGate.ArtifactSHA256 != "7b33dfecb3bab70be1614326276988db0cc7b9e12d78247705dfd9b1693fa6ea" ||
+		evidence.FinalLocalGate.MeasuredCodeHead != "ab4fdb5c9017007382445ce48b88b4c335228bd7" ||
+		evidence.FinalLocalGate.ArtifactSHA256 != "94453e3c84c237f9847e0a60e0e663e73a3ffa8ab38b264505fedfdfbb5775a8" ||
 		evidence.FinalLocalGate.Fixture.Vectors != 1_000_000 || evidence.FinalLocalGate.Fixture.Queries != 32 ||
 		evidence.FinalLocalGate.Fixture.Checksum != "71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f" ||
 		evidence.FinalLocalGate.GateLedger.RequiredVariants != "fail" || evidence.FinalLocalGate.GateLedger.Exhaustive != "pass" || evidence.FinalLocalGate.GateLedger.Recall != "fail" ||

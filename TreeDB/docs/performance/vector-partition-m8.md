@@ -13,7 +13,7 @@ enablement off with measured follow-up owners
 ## #3982 final local gate disposition
 
 Measured production-code head:
-`2934adf01601229b0e8eaef82507f6e45ea55798` (the documentation commit is
+`ab4fdb5c9017007382445ce48b88b4c335228bd7` (the documentation commit is
 subsequent). Base: `29d79894a84736757cc3fcdaf932f49ece060288`.
 
 The strict schema-3 matrix materialized and executed all three required
@@ -28,10 +28,10 @@ production-shaped evidence; multi-host qualification remains #3983. It is not
 an external-system comparison.
 
 Artifact:
-`/mnt/fast4tb/tmp/treedb_3982_reviewfix_1m_2934_gCE3ahaQ/matrix/vector_partition_m8_matrix_2934adf01601_331ca0216476.json`
+`/mnt/fast4tb/tmp/treedb_3982_reviewfix_1m_ab4f_jBKxdEnp/matrix/vector_partition_m8_matrix_ab4fdb5c9017_edf79f3232b2.json`
 
 Artifact SHA-256:
-`7b33dfecb3bab70be1614326276988db0cc7b9e12d78247705dfd9b1693fa6ea`
+`94453e3c84c237f9847e0a60e0e663e73a3ffa8ab38b264505fedfdfbb5775a8`
 
 Fixture checksum:
 `71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f`
@@ -54,8 +54,8 @@ an enablement claim and not a review or performance waiver.
 | Resource bounds | **PASS** | fresh-process 4 GiB RSS and 512 MiB asset ceilings plus actual coordinator/shard request maxima pass |
 | Existing behavior | **PENDING** | latest-head required normal/race/hosted suites own final PR readiness |
 
-Corpus-exclusive fresh-process peak RSS was `1,791,590,400`, `1,931,898,880`,
-and `1,922,297,856` bytes for graph/disjoint, graph/overlap, and stable hash,
+Corpus-exclusive fresh-process peak RSS was `1,793,445,888`, `1,932,206,080`,
+and `1,880,621,056` bytes for graph/disjoint, graph/overlap, and stable hash,
 respectively, below the configured 4 GiB ceiling. This supersedes the earlier
 sequential-process high-water attribution; the blocked matrix parent does not
 materialize or retain a second fixture corpus. Aggregate shard concurrency was
@@ -65,7 +65,7 @@ the maximum observed four-task fanout (`4` each; `0` observed). Persistent
 assets were `282,881,928`, `285,168,176`, and `282,385,488` bytes for graph
 disjoint, graph overlap, and stable hash respectively. Each variant retained
 CPU, allocation baseline/final, heap, block, mutex, and trace profiles under
-`/mnt/fast4tb/tmp/treedb_3982_reviewfix_1m_2934_gCE3ahaQ/profiles/`.
+`/mnt/fast4tb/tmp/treedb_3982_reviewfix_1m_ab4f_jBKxdEnp/profiles/`.
 
 At all 16 partitions, exact representative routing recall is `1.0`, while
 partition-local HNSW owns the remaining loss: `0.7125` graph/disjoint,
@@ -87,11 +87,11 @@ GOMAXPROCS=16 GOMEMLIMIT=6GiB \
   ./bin/treedb_vector_partition_bench \
   -mode production_multi_group \
   -dataset /mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture \
-  -out /mnt/fast4tb/tmp/treedb_3982_reviewfix_1m_2934_gCE3ahaQ/matrix \
+  -out /mnt/fast4tb/tmp/treedb_3982_reviewfix_1m_ab4f_jBKxdEnp/matrix \
   -partitions 16 -raft-groups 4 -raft-nodes-per-group 3 \
   -probes 1,2,4,8,16 -top-k 10 -concurrency 1,16 -warmup 1 \
   -ef-search 64,4096 -router-candidates 1024 \
-  -profiles /mnt/fast4tb/tmp/treedb_3982_reviewfix_1m_2934_gCE3ahaQ/profiles \
+  -profiles /mnt/fast4tb/tmp/treedb_3982_reviewfix_1m_ab4f_jBKxdEnp/profiles \
   -m8-max-rss-bytes 4294967296 \
   -m8-max-persistent-asset-bytes 536870912 \
   -m8-variant-dbs /mnt/fast4tb/tmp/treedb_3982_1m_Kb5eot/m16/db_graph_disjoint,/mnt/fast4tb/tmp/treedb_3982_1m_Kb5eot/m16/db_graph_overlap,/mnt/fast4tb/tmp/treedb_3982_1m_Kb5eot/m16/db_stable \
