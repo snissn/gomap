@@ -77,6 +77,8 @@ type Trainer struct {
 	sampleStride        uint64
 	sampleStrideCounter atomic.Uint64
 	sampleCh            chan trainerSample
+	trainWG             sync.WaitGroup
+	doneCh              chan struct{}
 	closed              atomic.Bool
 	closeOnce           sync.Once
 	measureCollect      bool
@@ -264,6 +266,7 @@ func NewTrainer(opts TrainConfig, cfg Config, readOnly bool, metricsEnabled bool
 		level:               cfg.Level,
 		sampleStride:        uint64(sampleStride),
 		sampleCh:            make(chan trainerSample, DefaultTrainQueue),
+		doneCh:              make(chan struct{}),
 		measureCollect:      metricsEnabled,
 		dictDedupWindow:     dedupWindow,
 		encodeNsPerRawByte:  opts.EncodeNsPerRawByte,
@@ -318,6 +321,15 @@ func (t *Trainer) Close() {
 		t.closed.Store(true)
 		close(t.sampleCh)
 	})
+}
+
+// Wait blocks until the trainer has drained every sample accepted before
+// Close and its background worker has stopped. Call Close before Wait.
+func (t *Trainer) Wait() {
+	if t == nil || t.doneCh == nil {
+		return
+	}
+	<-t.doneCh
 }
 
 func (t *Trainer) ShouldCollect() bool {
@@ -458,6 +470,10 @@ func (t *Trainer) run() {
 	for sample := range t.sampleCh {
 		t.appendSample(sample)
 	}
+	// appendSample is the only producer of asynchronous training jobs. Once the
+	// sample channel is closed and drained, no later Add can race this Wait.
+	t.trainWG.Wait()
+	close(t.doneCh)
 }
 
 func (t *Trainer) appendSample(sample trainerSample) {
@@ -511,7 +527,11 @@ func (t *Trainer) appendSample(sample trainerSample) {
 	if force {
 		t.forceNextTrain.Store(true)
 	}
-	go t.train(samples, dictBytes, level, slabID)
+	t.trainWG.Add(1)
+	go func() {
+		defer t.trainWG.Done()
+		t.train(samples, dictBytes, level, slabID)
+	}()
 }
 
 func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel, slabID uint32) {

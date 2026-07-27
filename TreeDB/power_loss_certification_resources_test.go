@@ -127,6 +127,12 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 	// persistence events rather than importing them as initially stable.
 	witness := prepareAuthoritativeResourceWitness(t, database, dir, backgroundErrors)
 	waitForAuthoritativeResourceObserverQuiescence(t, &observeMu, &observedEvents, backgroundErrors)
+	// Stop the trainer and drain its final accepted-profile callback before the
+	// replay window is armed. Published dictionaries remain live for the
+	// dictionary-encoded witness value, but no future asynchronous dictionary
+	// mutation can consume the selected terminal cut.
+	treedb.PowerLossCertificationQuiesceValueLogDictionaryForTest(database)
+	waitForAuthoritativeResourceObserverQuiescence(t, &observeMu, &observedEvents, backgroundErrors)
 	observeMu.Lock()
 	if err := model.BeginReplayWindow(authoritativeResourcesVariantID); err != nil {
 		observeMu.Unlock()
@@ -135,10 +141,10 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 	metaSyncs = 0
 	armed = true
 	observeMu.Unlock()
-	// Publish one deterministic terminal marker after all asynchronous resource
-	// work is quiescent. The selected cut is the marker's real maindb metadata
-	// sync and its occurrence is relative to the explicit replay window. The
-	// complete pre-window persistence trace remains in the evidence artifact.
+	// Publish one deterministic terminal marker after asynchronous dictionary
+	// work has been lifecycle-fenced. The selected cut is the marker's real
+	// maindb metadata sync and its occurrence is relative to the explicit replay
+	// window. The complete pre-window persistence trace remains in the evidence.
 	boundaryKey := []byte("certification/authoritative-resource-boundary")
 	boundaryValue := []byte("stable")
 	if err := database.SetSync(boundaryKey, boundaryValue); err != nil {

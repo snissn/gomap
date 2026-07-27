@@ -880,11 +880,14 @@ func (db *DB) valueLogDictCollectSampleForClass(value []byte, class vlogDictClas
 }
 
 func (db *DB) ensureValueLogDictTrainer() {
-	if db == nil || !db.valueLogDictTrainingEnabled() {
+	if db == nil || db.valueLogDictQuiesced.Load() || !db.valueLogDictTrainingEnabled() {
 		return
 	}
 	db.valueLogDictTrainerMu.Lock()
 	defer db.valueLogDictTrainerMu.Unlock()
+	if db.valueLogDictQuiesced.Load() {
+		return
+	}
 	if db.valueLogDictTrainerByClass[vlogDictClassSingleValue] != nil {
 		return
 	}
@@ -955,6 +958,63 @@ func (db *DB) ensureValueLogDictTrainer() {
 	db.valueLogDictMetrics.SetSlab(1)
 	db.wg.Add(1)
 	go db.valueLogDictLoop()
+}
+
+// QuiesceValueLogDictTraining permanently stops dictionary training and
+// profile publication for this DB handle while keeping published dictionaries
+// available for reads and writes. It is a lifecycle boundary for callers that
+// require a live handle with no future asynchronous dictionary mutations.
+func (db *DB) QuiesceValueLogDictTraining() {
+	if db == nil {
+		return
+	}
+	db.valueLogDictQuiesceMu.Lock()
+	defer db.valueLogDictQuiesceMu.Unlock()
+	if db.valueLogDictQuiesced.Load() {
+		return
+	}
+
+	// Match checkpoint/close lock order. Holding both locks prevents a writer or
+	// flush from retaining a trainer pointer while its sample channel is closed.
+	db.flushMu.Lock()
+	db.writeMu.Lock()
+	db.valueLogDictQuiesced.Store(true)
+	db.valueLogDictTrainerMu.Lock()
+	trainers := make([]*compression.Trainer, 0, 1+vlogDictClassCount)
+	if db.valueLogDictTrainer != nil {
+		trainers = append(trainers, db.valueLogDictTrainer)
+		db.valueLogDictTrainer = nil
+	}
+	for i := range db.valueLogDictTrainerByClass {
+		if tr := db.valueLogDictTrainerByClass[i]; tr != nil {
+			trainers = append(trainers, tr)
+			db.valueLogDictTrainerByClass[i] = nil
+		}
+	}
+	db.valueLogDictTrainerMu.Unlock()
+
+	closed := make(map[*compression.Trainer]struct{}, len(trainers))
+	for _, trainer := range trainers {
+		if trainer == nil {
+			continue
+		}
+		if _, ok := closed[trainer]; ok {
+			continue
+		}
+		closed[trainer] = struct{}{}
+		trainer.Close()
+	}
+	db.writeMu.Unlock()
+	db.flushMu.Unlock()
+	for trainer := range closed {
+		trainer.Wait()
+	}
+
+	// A final accepted-profile callback may already be inside publication when
+	// the trainers are detached. Drain it before returning. Later periodic-loop
+	// attempts see no trainer and cannot mutate the dictionary store.
+	db.valueLogDictApplyMu.Lock()
+	db.valueLogDictApplyMu.Unlock()
 }
 
 func (db *DB) valueLogDictCandidateK() []int {
