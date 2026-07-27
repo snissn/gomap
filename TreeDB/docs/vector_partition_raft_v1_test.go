@@ -158,8 +158,9 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				"fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1",
 				"9afad07fb8daf374076fe9fa630106ffdf6241ae746344349eb1885d37cdfbd1",
 				"its all-partition owner is partition-local HNSW",
-				"ab4fdb5c9017007382445ce48b88b4c335228bd7",
-				"94453e3c84c237f9847e0a60e0e663e73a3ffa8ab38b264505fedfdfbb5775a8",
+				"4f9a88031102e7ea4e8f6c0caf976d7212fc16bb",
+				"69da1c4e56fa129ff378500dd3c5af600d0217c711d646fd80d69e8dc5b40169",
+				"Coupled graph acceptance",
 				"enablement_off_follow_up_required",
 				"#3998",
 				"#3999",
@@ -245,6 +246,7 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				Exhaustive       string `json:"exhaustive_correctness"`
 				Recall           string `json:"recall"`
 				OverlapStorage   string `json:"overlap_storage"`
+				CoupledGraph     string `json:"coupled_graph_acceptance"`
 				Resources        string `json:"resource_bounds"`
 			} `json:"gate_ledger"`
 			Variants []struct {
@@ -285,12 +287,12 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 		evidence.Continuation.Retained1M.LocalHNSWRecall != 0 || evidence.Continuation.Retained1M.LossOwner != "partition_local_hnsw" ||
 		evidence.FinalLocalGate.SchemaVersion != 3 || evidence.FinalLocalGate.ResultKind != "m8_production_multi_variant_matrix_v3" ||
 		evidence.FinalLocalGate.Status != "experimental_gate_failures" || evidence.FinalLocalGate.Disposition != "enablement_off_follow_up_required" ||
-		evidence.FinalLocalGate.MeasuredCodeHead != "ab4fdb5c9017007382445ce48b88b4c335228bd7" ||
-		evidence.FinalLocalGate.ArtifactSHA256 != "94453e3c84c237f9847e0a60e0e663e73a3ffa8ab38b264505fedfdfbb5775a8" ||
+		evidence.FinalLocalGate.MeasuredCodeHead != "4f9a88031102e7ea4e8f6c0caf976d7212fc16bb" ||
+		evidence.FinalLocalGate.ArtifactSHA256 != "69da1c4e56fa129ff378500dd3c5af600d0217c711d646fd80d69e8dc5b40169" ||
 		evidence.FinalLocalGate.Fixture.Vectors != 1_000_000 || evidence.FinalLocalGate.Fixture.Queries != 32 ||
 		evidence.FinalLocalGate.Fixture.Checksum != "71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f" ||
 		evidence.FinalLocalGate.GateLedger.RequiredVariants != "fail" || evidence.FinalLocalGate.GateLedger.Exhaustive != "pass" || evidence.FinalLocalGate.GateLedger.Recall != "fail" ||
-		evidence.FinalLocalGate.GateLedger.OverlapStorage != "fail" || evidence.FinalLocalGate.GateLedger.Resources != "pass" ||
+		evidence.FinalLocalGate.GateLedger.OverlapStorage != "fail" || evidence.FinalLocalGate.GateLedger.CoupledGraph != "fail" || evidence.FinalLocalGate.GateLedger.Resources != "pass" ||
 		len(evidence.FinalLocalGate.Variants) != 3 || evidence.FinalLocalGate.Variants[0].ID != "graph-disjoint-v1" ||
 		evidence.FinalLocalGate.Variants[0].AssignmentBasis != "graph" || evidence.FinalLocalGate.Variants[0].Overlap != 0 ||
 		evidence.FinalLocalGate.Variants[0].AllPartitionHNSW != 0.7124999999999999 ||

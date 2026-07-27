@@ -141,6 +141,9 @@ versus the exhaustive exact partition union;
 the router, partition-local HNSW, transport, and coordinator merge retain
 separate recall/parity attribution. Approximate HNSW recall is judged by the
 declared recall gate and is never described as exact exhaustive parity.
+The matrix may pass its coupled graph-acceptance gate only when one graph
+variant passes recall, probe reduction, matched-recall QPS, and matched-recall
+tail together; those gates cannot be assembled from different variants.
 
 ## Capacity and enablement
 
@@ -163,6 +166,9 @@ to the smaller per-request worker limit. Retry and redirect observations are
 per-query aggregates, so their ceilings are the independently enforced
 per-shard-task limit multiplied by the maximum observed shard-task fanout.
 Partition-load evidence includes both primary and overlap memberships.
+Query-wide selected partitions and the maximum partitions in an actual
+generated shard request are separate observations. Only the latter is compared
+with coordinator and shard per-request partition ceilings.
 
 The feature remains experimental/off unless every #3917 north-star gate passes
 or the user explicitly accepts the narrower result with one linked measured
