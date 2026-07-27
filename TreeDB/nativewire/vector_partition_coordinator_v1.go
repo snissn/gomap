@@ -217,6 +217,9 @@ type VectorPartitionCoordinatorCountersV1 struct {
 	Cancellations, Failures            uint64
 	QueryBytes, RequestBytes           uint64
 	ResponseBytes, CandidateBytes      uint64
+	MaxShardRequestBytes               uint64
+	MaxShardResponseBytes              uint64
+	MaxShardCandidateBytes             uint64
 	Candidates, Edges, MergeEntries    uint64
 	Duplicates, ScoreDisagreements     uint64
 }
@@ -859,6 +862,7 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 		counters.RPCs += result.rpcs
 		counters.Retries += result.retries
 		counters.Redirects += result.redirects
+		counters.MaxShardRequestBytes = max(counters.MaxShardRequestBytes, result.maxRequestBytes)
 	}
 	if counters.ResponseBytes > request.ResponseBytesLimit ||
 		counters.CandidateBytes > request.CandidateBytesLimit {
@@ -938,6 +942,7 @@ func accumulateVectorPartitionCoordinatorResponseCountersV1(
 	if !responseBytesOK || !candidatesOK || !edgesOK || !candidateBytesOK {
 		return false
 	}
+	shardCandidateBytes := candidateBytes
 	candidateBytes, candidateBytesOK = addUint64V1(counters.CandidateBytes, candidateBytes)
 	if !candidateBytesOK {
 		return false
@@ -946,6 +951,8 @@ func accumulateVectorPartitionCoordinatorResponseCountersV1(
 	counters.Candidates = candidates
 	counters.Edges = edges
 	counters.CandidateBytes = candidateBytes
+	counters.MaxShardResponseBytes = max(counters.MaxShardResponseBytes, response.ResponseBytes)
+	counters.MaxShardCandidateBytes = max(counters.MaxShardCandidateBytes, shardCandidateBytes)
 	return true
 }
 
@@ -1450,6 +1457,7 @@ func vectorPartitionCoordinatorShardResponseReservationV1(partitions, topK, maxS
 type vectorPartitionCoordinatorTaskResultV1 struct {
 	response                           VectorPartitionShardSearchResponseV1
 	rpcs, retries, redirects           uint64
+	maxRequestBytes                    uint64
 	queueNanos, rpcNanos, networkNanos uint64
 }
 
@@ -1515,6 +1523,11 @@ func (c *VectorPartitionCoordinatorV1) dispatchTask(ctx context.Context, task ve
 		if err := ctx.Err(); err != nil {
 			return result, c.wrapError(err, task.group.ID)
 		}
+		requestBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(request)
+		if err != nil || requestBytes > request.RequestBytesLimit {
+			return result, c.wrapError(ErrVectorPartitionCoordinatorBudgetExceeded, task.group.ID)
+		}
+		result.maxRequestBytes = max(result.maxRequestBytes, requestBytes)
 		started := time.Now()
 		response, err := c.dispatcher.DispatchVectorPartitionShardSearchV1(ctx, request)
 		elapsed := elapsedNanosV1(started)

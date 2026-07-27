@@ -345,6 +345,17 @@ func TestVectorPartitionCoordinatorCoalescesChunksDedupesAndMergesV1(t *testing.
 		len(dispatcher.calls[1].PartitionIDs) != 1 {
 		t.Fatalf("calls=%+v", dispatcher.calls)
 	}
+	var maxRequestBytes uint64
+	for _, call := range dispatcher.calls {
+		requestBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(call)
+		if err != nil {
+			t.Fatal(err)
+		}
+		maxRequestBytes = max(maxRequestBytes, requestBytes)
+	}
+	if response.Counters.MaxShardRequestBytes != maxRequestBytes {
+		t.Fatalf("max shard request bytes=%d want=%d", response.Counters.MaxShardRequestBytes, maxRequestBytes)
+	}
 	if got := response.Neighbors; len(got) != 3 || got[0].ID != "doc-00" ||
 		got[1].ID != "doc-01" || got[2].ID != "doc-02" {
 		t.Fatalf("stable top-k=%+v", got)
@@ -1573,7 +1584,8 @@ func TestVectorPartitionCoordinatorRedirectReservesLongestGroupMemberV1(t *testi
 	}
 	if dispatcher.calls[0].RequestBytesLimit != wantBytes ||
 		dispatcher.calls[1].RequestBytesLimit != wantBytes ||
-		response.Counters.RequestBytes != wantBytes {
+		response.Counters.RequestBytes != wantBytes ||
+		response.Counters.MaxShardRequestBytes != wantBytes {
 		t.Fatalf("request limits=(%d,%d) counter=%d want longest-target reservation=%d",
 			dispatcher.calls[0].RequestBytesLimit,
 			dispatcher.calls[1].RequestBytesLimit,
@@ -1841,6 +1853,16 @@ func TestVectorPartitionCoordinatorResponseCounterAggregationRejectsOverflowV1(t
 				t.Fatalf("partial counters published: got=%+v want=%+v", test.counters, before)
 			}
 		})
+	}
+}
+
+func TestVectorPartitionCoordinatorResponseCountersTrackShardMaximaV1(t *testing.T) {
+	counters := VectorPartitionCoordinatorCountersV1{MaxShardCandidateBytes: 640, MaxShardResponseBytes: 200}
+	if !accumulateVectorPartitionCoordinatorResponseCountersV1(&counters, VectorPartitionShardSearchResponseV1{Candidates: 20, ResponseBytes: 150}) {
+		t.Fatal("valid shard counters rejected")
+	}
+	if counters.MaxShardCandidateBytes != 1280 || counters.MaxShardResponseBytes != 200 {
+		t.Fatalf("shard maxima=%+v", counters)
 	}
 }
 

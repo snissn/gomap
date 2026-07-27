@@ -98,29 +98,40 @@ type m8ProductionAttributionV1 struct {
 }
 
 type m8ProductionRowV1 struct {
-	VariantID          string                    `json:"variant_id,omitempty"`
-	Status             string                    `json:"status"`
-	UnsupportedReason  string                    `json:"unsupported_reason,omitempty"`
-	Overlap            float64                   `json:"overlap"`
-	Probes             int                       `json:"probes,omitempty"`
-	EfSearch           int                       `json:"ef_search,omitempty"`
-	Concurrency        int                       `json:"concurrency,omitempty"`
-	RouterMode         string                    `json:"router_mode,omitempty"`
-	RouterCandidates   int                       `json:"router_candidate_budget,omitempty"`
-	Samples            int                       `json:"samples,omitempty"`
-	RecallAtK          float64                   `json:"recall_at_k"`
-	QPS                float64                   `json:"qps,omitempty"`
-	P50Nanos           uint64                    `json:"p50_nanos,omitempty"`
-	P95Nanos           uint64                    `json:"p95_nanos,omitempty"`
-	P99Nanos           uint64                    `json:"p99_nanos,omitempty"`
-	RequestBytes       uint64                    `json:"request_bytes,omitempty"`
-	ResponseBytes      uint64                    `json:"response_bytes,omitempty"`
-	CandidateBytes     uint64                    `json:"candidate_bytes,omitempty"`
-	RPCs               uint64                    `json:"rpcs,omitempty"`
-	ExactParityChecked bool                      `json:"exact_all_partition_parity_checked"`
-	ExactParityPassed  bool                      `json:"exact_all_partition_parity_passed"`
-	NoPartialResults   bool                      `json:"no_partial_results"`
-	Attribution        m8ProductionAttributionV1 `json:"recall_attribution"`
+	VariantID              string                    `json:"variant_id,omitempty"`
+	Status                 string                    `json:"status"`
+	UnsupportedReason      string                    `json:"unsupported_reason,omitempty"`
+	Overlap                float64                   `json:"overlap"`
+	Probes                 int                       `json:"probes,omitempty"`
+	EfSearch               int                       `json:"ef_search,omitempty"`
+	Concurrency            int                       `json:"concurrency,omitempty"`
+	RouterMode             string                    `json:"router_mode,omitempty"`
+	RouterCandidates       int                       `json:"router_candidate_budget,omitempty"`
+	Samples                int                       `json:"samples,omitempty"`
+	RecallAtK              float64                   `json:"recall_at_k"`
+	QPS                    float64                   `json:"qps,omitempty"`
+	P50Nanos               uint64                    `json:"p50_nanos,omitempty"`
+	P95Nanos               uint64                    `json:"p95_nanos,omitempty"`
+	P99Nanos               uint64                    `json:"p99_nanos,omitempty"`
+	RequestBytes           uint64                    `json:"request_bytes,omitempty"`
+	ResponseBytes          uint64                    `json:"response_bytes,omitempty"`
+	CandidateBytes         uint64                    `json:"candidate_bytes,omitempty"`
+	RPCs                   uint64                    `json:"rpcs,omitempty"`
+	MaxRequests            uint64                    `json:"max_requests_per_query,omitempty"`
+	MaxRPCs                uint64                    `json:"max_rpcs_per_query,omitempty"`
+	MaxRetries             uint64                    `json:"max_retries_per_query,omitempty"`
+	MaxRedirects           uint64                    `json:"max_redirects_per_query,omitempty"`
+	MaxRequestBytes        uint64                    `json:"max_request_bytes_per_query,omitempty"`
+	MaxResponseBytes       uint64                    `json:"max_response_bytes_per_query,omitempty"`
+	MaxCandidateBytes      uint64                    `json:"max_candidate_bytes_per_query,omitempty"`
+	MaxMergeEntries        uint64                    `json:"max_merge_entries_per_query,omitempty"`
+	MaxShardRequestBytes   uint64                    `json:"max_shard_request_bytes,omitempty"`
+	MaxShardResponseBytes  uint64                    `json:"max_shard_response_bytes,omitempty"`
+	MaxShardCandidateBytes uint64                    `json:"max_shard_candidate_bytes,omitempty"`
+	ExactParityChecked     bool                      `json:"exact_all_partition_parity_checked"`
+	ExactParityPassed      bool                      `json:"exact_all_partition_parity_passed"`
+	NoPartialResults       bool                      `json:"no_partial_results"`
+	Attribution            m8ProductionAttributionV1 `json:"recall_attribution"`
 }
 
 type m8ProductionFailureEvidenceV1 struct {
@@ -197,6 +208,13 @@ type m8MeasuredCellV1 struct {
 	rowIndex         int
 	probes, efSearch int
 	results          [][]m8CanonicalResultV1
+}
+
+type m8ProductionResourceObservedMaximaV1 struct {
+	Requests, RPCs, Retries, Redirects                         uint64
+	RequestBytes, CandidateBytes, ResponseBytes                uint64
+	MergeEntries                                               uint64
+	ShardRequestBytes, ShardCandidateBytes, ShardResponseBytes uint64
 }
 
 func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors, queries [][]float64, stdout io.Writer) (runErr error) {
@@ -1072,28 +1090,16 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	if peak, ok := vectorPartitionBenchmarkPeakRSS(); ok {
 		out.PeakRSSBytes, out.PeakRSSMeasured = peak, true
 	}
-	var maxProbes, maxEf, maxRequestsPerQuery, maxCoordinatorRequestBytes, maxCoordinatorCandidateBytes, maxCoordinatorResponseBytes uint64
-	var maxShardRequestBytes, maxShardCandidateBytes, maxShardResponseBytes, maxP99 uint64
+	var maxProbes, maxEf, maxP99 uint64
 	for _, row := range rows {
 		if row.Status == "unsupported" {
 			continue
 		}
 		maxProbes = max(maxProbes, uint64(row.Probes))
 		maxEf = max(maxEf, uint64(row.EfSearch))
-		if row.Samples > 0 {
-			samples := uint64(row.Samples)
-			maxRequestsPerQuery = max(maxRequestsPerQuery, ceilDivM8V1(row.RPCs, samples))
-			maxCoordinatorRequestBytes = max(maxCoordinatorRequestBytes, ceilDivM8V1(row.RequestBytes, samples))
-			maxCoordinatorCandidateBytes = max(maxCoordinatorCandidateBytes, ceilDivM8V1(row.CandidateBytes, samples))
-			maxCoordinatorResponseBytes = max(maxCoordinatorResponseBytes, ceilDivM8V1(row.ResponseBytes, samples))
-		}
-		if row.RPCs > 0 {
-			maxShardRequestBytes = max(maxShardRequestBytes, ceilDivM8V1(row.RequestBytes, row.RPCs))
-			maxShardCandidateBytes = max(maxShardCandidateBytes, ceilDivM8V1(row.CandidateBytes, row.RPCs))
-			maxShardResponseBytes = max(maxShardResponseBytes, ceilDivM8V1(row.ResponseBytes, row.RPCs))
-		}
 		maxP99 = max(maxP99, row.P99Nanos)
 	}
+	observed := m8ObservedResourceMaximaV1(rows)
 	add := func(name string, configured, observed uint64, unit string, enforced bool) {
 		out.LimitComparisons = append(out.LimitComparisons, m8ProductionResourceLimitComparisonV1{Name: name, Configured: configured, Observed: observed, Unit: unit, Enforced: enforced, Passed: configured > 0 && observed <= configured})
 	}
@@ -1108,11 +1114,11 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	}
 	add("coordinator_selected_partitions", uint64(cfg.m8CoordinatorLimits.MaxSelectedPartitions), maxProbes, "count", true)
 	add("coordinator_groups", uint64(cfg.m8CoordinatorLimits.MaxGroups), uint64(cfg.raftGroups), "count", true)
-	add("coordinator_requests", uint64(cfg.m8CoordinatorLimits.MaxRequests), maxRequestsPerQuery, "count", true)
+	add("coordinator_requests", uint64(cfg.m8CoordinatorLimits.MaxRequests), observed.Requests, "count", true)
 	configuredConcurrentRequests, _ := m8ConfiguredConcurrentShardRequestsV1(cfg.m8CoordinatorLimits.MaxConcurrentRequests, cfg.concurrency)
 	add("coordinator_concurrent_requests_across_clients", configuredConcurrentRequests, topology.MaxConcurrentShardRequests, "count", true)
-	add("coordinator_retries", uint64(cfg.m8CoordinatorLimits.MaxRetries), 0, "count", true)
-	add("coordinator_redirects", uint64(cfg.m8CoordinatorLimits.MaxRedirects), 0, "count", true)
+	add("coordinator_retries", uint64(cfg.m8CoordinatorLimits.MaxRetries), observed.Retries, "count", true)
+	add("coordinator_redirects", uint64(cfg.m8CoordinatorLimits.MaxRedirects), observed.Redirects, "count", true)
 	add("coordinator_router_candidates", uint64(cfg.m8CoordinatorLimits.MaxRouterCandidates), uint64(cfg.routerCandidates), "count", true)
 	add("coordinator_query_bytes", uint64(cfg.m8CoordinatorLimits.MaxQueryBytes), uint64(fixture.Dimensions*4), "bytes", true)
 	add("coordinator_top_k", uint64(cfg.m8CoordinatorLimits.MaxTopK), uint64(cfg.topK), "count", true)
@@ -1122,10 +1128,10 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	stableIDBytes := uint64(len(fmt.Sprintf("doc-%06d", max(0, fixture.Vectors-1))))
 	add("coordinator_identity_bytes", uint64(cfg.m8CoordinatorLimits.MaxIdentityBytes), identityBytes, "bytes", true)
 	add("coordinator_stable_id_bytes", uint64(cfg.m8CoordinatorLimits.MaxStableIDBytes), stableIDBytes, "bytes", true)
-	add("coordinator_merge_entries", uint64(cfg.m8CoordinatorLimits.MaxMergeEntries), maxRequestsPerQuery*uint64(cfg.topK), "count", true)
-	add("coordinator_request_bytes", cfg.m8CoordinatorLimits.MaxRequestBytes, maxCoordinatorRequestBytes, "bytes", true)
-	add("coordinator_candidate_bytes", cfg.m8CoordinatorLimits.MaxCandidateBytes, maxCoordinatorCandidateBytes, "bytes", true)
-	add("coordinator_response_bytes", cfg.m8CoordinatorLimits.MaxResponseBytes, maxCoordinatorResponseBytes, "bytes", true)
+	add("coordinator_merge_entries", uint64(cfg.m8CoordinatorLimits.MaxMergeEntries), observed.MergeEntries, "count", true)
+	add("coordinator_request_bytes", cfg.m8CoordinatorLimits.MaxRequestBytes, observed.RequestBytes, "bytes", true)
+	add("coordinator_candidate_bytes", cfg.m8CoordinatorLimits.MaxCandidateBytes, observed.CandidateBytes, "bytes", true)
+	add("coordinator_response_bytes", cfg.m8CoordinatorLimits.MaxResponseBytes, observed.ResponseBytes, "bytes", true)
 	add("coordinator_wall_clock", uint64(cfg.m8CoordinatorLimits.MaxWallClock), maxP99, "nanoseconds", true)
 	add("shard_dimensions", uint64(cfg.m8ShardLimits.MaxDimensions), uint64(fixture.Dimensions), "count", true)
 	add("shard_query_bytes", uint64(cfg.m8ShardLimits.MaxQueryBytes), uint64(fixture.Dimensions*4), "bytes", true)
@@ -1134,9 +1140,30 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	add("shard_ef_search", uint64(cfg.m8ShardLimits.MaxEfSearch), maxEf, "count", true)
 	add("shard_identity_bytes", uint64(cfg.m8ShardLimits.MaxIdentityBytes), identityBytes, "bytes", true)
 	add("shard_stable_id_bytes", uint64(cfg.m8ShardLimits.MaxStableIDBytes), stableIDBytes, "bytes", true)
-	add("shard_request_bytes", cfg.m8ShardLimits.MaxRequestBytes, maxShardRequestBytes, "bytes", true)
-	add("shard_candidate_bytes", cfg.m8ShardLimits.MaxCandidateBytes, maxShardCandidateBytes, "bytes", true)
-	add("shard_response_bytes", cfg.m8ShardLimits.MaxResponseBytes, maxShardResponseBytes, "bytes", true)
+	add("shard_request_bytes", cfg.m8ShardLimits.MaxRequestBytes, observed.ShardRequestBytes, "bytes", true)
+	add("shard_candidate_bytes", cfg.m8ShardLimits.MaxCandidateBytes, observed.ShardCandidateBytes, "bytes", true)
+	add("shard_response_bytes", cfg.m8ShardLimits.MaxResponseBytes, observed.ShardResponseBytes, "bytes", true)
+	return out
+}
+
+func m8ObservedResourceMaximaV1(rows []m8ProductionRowV1) m8ProductionResourceObservedMaximaV1 {
+	var out m8ProductionResourceObservedMaximaV1
+	for _, row := range rows {
+		if row.Status == "unsupported" {
+			continue
+		}
+		out.Requests = max(out.Requests, row.MaxRequests)
+		out.RPCs = max(out.RPCs, row.MaxRPCs)
+		out.Retries = max(out.Retries, row.MaxRetries)
+		out.Redirects = max(out.Redirects, row.MaxRedirects)
+		out.RequestBytes = max(out.RequestBytes, row.MaxRequestBytes)
+		out.CandidateBytes = max(out.CandidateBytes, row.MaxCandidateBytes)
+		out.ResponseBytes = max(out.ResponseBytes, row.MaxResponseBytes)
+		out.MergeEntries = max(out.MergeEntries, row.MaxMergeEntries)
+		out.ShardRequestBytes = max(out.ShardRequestBytes, row.MaxShardRequestBytes)
+		out.ShardCandidateBytes = max(out.ShardCandidateBytes, row.MaxShardCandidateBytes)
+		out.ShardResponseBytes = max(out.ShardResponseBytes, row.MaxShardResponseBytes)
+	}
 	return out
 }
 
@@ -1181,16 +1208,30 @@ func m8ConfiguredConcurrentShardRequestsV1(perRequest int, clientConcurrency []i
 	return uint64(configured), nil
 }
 
-func ceilDivM8V1(value, divisor uint64) uint64 {
-	if divisor == 0 || value == 0 {
-		return 0
-	}
-	return 1 + (value-1)/divisor
-}
-
 type m8ProductionCellOutcomeV1 struct {
 	response nativewire.VectorPartitionCoordinatorResponseV1
 	err      error
+}
+
+func m8AccumulateProductionRowCountersV1(row *m8ProductionRowV1, counters nativewire.VectorPartitionCoordinatorCountersV1) {
+	if row == nil {
+		return
+	}
+	row.RequestBytes += counters.RequestBytes
+	row.ResponseBytes += counters.ResponseBytes
+	row.CandidateBytes += counters.CandidateBytes
+	row.RPCs += counters.RPCs
+	row.MaxRequests = max(row.MaxRequests, counters.Requests)
+	row.MaxRPCs = max(row.MaxRPCs, counters.RPCs)
+	row.MaxRetries = max(row.MaxRetries, counters.Retries)
+	row.MaxRedirects = max(row.MaxRedirects, counters.Redirects)
+	row.MaxRequestBytes = max(row.MaxRequestBytes, counters.RequestBytes)
+	row.MaxResponseBytes = max(row.MaxResponseBytes, counters.ResponseBytes)
+	row.MaxCandidateBytes = max(row.MaxCandidateBytes, counters.CandidateBytes)
+	row.MaxMergeEntries = max(row.MaxMergeEntries, counters.MergeEntries)
+	row.MaxShardRequestBytes = max(row.MaxShardRequestBytes, counters.MaxShardRequestBytes)
+	row.MaxShardResponseBytes = max(row.MaxShardResponseBytes, counters.MaxShardResponseBytes)
+	row.MaxShardCandidateBytes = max(row.MaxShardCandidateBytes, counters.MaxShardCandidateBytes)
 }
 
 func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPartitionCoordinatorV1, assets *m8ProductionMultiGroupAssetsV1, queries [][]float64, truth [][]m8CanonicalResultV1, probes, efSearch, concurrency, topK int) (m8ProductionRowV1, [][]m8CanonicalResultV1, error) {
@@ -1229,10 +1270,7 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 			row.Status = "fail"
 		}
 		durations = append(durations, outcome.response.Timing.TotalNanos)
-		row.RequestBytes += outcome.response.Counters.RequestBytes
-		row.ResponseBytes += outcome.response.Counters.ResponseBytes
-		row.CandidateBytes += outcome.response.Counters.CandidateBytes
-		row.RPCs += outcome.response.Counters.RPCs
+		m8AccumulateProductionRowCountersV1(&row, outcome.response.Counters)
 	}
 	row.NoPartialResults = true
 	row.RecallAtK = recallSum / float64(len(outcomes))
