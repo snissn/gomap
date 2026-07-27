@@ -56,6 +56,7 @@ type m8ProductionReportV1 struct {
 	Failure            m8ProductionFailureEvidenceV1                              `json:"failure"`
 	GateLedger         m8ProductionGateLedgerV1                                   `json:"gate_ledger"`
 	Profiles           m8ProductionProfileEvidenceV1                              `json:"profiles"`
+	RouterSessions     m8ProductionRouterSessionEvidenceV1                        `json:"router_sessions"`
 	Resources          m8ProductionResourceEvidenceV1                             `json:"resources"`
 	TimedBoundary      string                                                     `json:"timed_boundary"`
 	Limitations        []string                                                   `json:"limitations"`
@@ -149,6 +150,14 @@ type m8ProductionProfileEvidenceV1 struct {
 	Scope     string   `json:"scope"`
 }
 
+// m8ProductionRouterSessionEvidenceV1 makes the router-manifest cold/warm
+// boundary auditable without pretending that one run is a base/head comparison.
+type m8ProductionRouterSessionEvidenceV1 struct {
+	BeforeWarmup  []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1 `json:"before_warmup"`
+	AfterWarmup   []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1 `json:"after_warmup"`
+	AfterMeasured []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1 `json:"after_measured"`
+}
+
 type m8ProductionHostEvidenceV1 struct {
 	CPUModel      string `json:"cpu_model"`
 	MemoryBytes   uint64 `json:"memory_bytes,omitempty"`
@@ -224,6 +233,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 			"overlap 0.20 and stable-hash attribution are reported unsupported; the broader lifecycle matrix is separate test evidence and matched-recall acceptance remains gated",
 		},
 	}
+	report.RouterSessions.BeforeWarmup = topology.Coordinator().Stats().RouterSessions
 	if cfg.profiles != "" {
 		if err := os.MkdirAll(cfg.profiles, 0o755); err != nil {
 			return fmt.Errorf("create M8 profiles directory: %w", err)
@@ -232,6 +242,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 	if err := m8WarmProductionTopologyV1(context.Background(), topology.Coordinator(), assets, queries, cfg); err != nil {
 		return err
 	}
+	report.RouterSessions.AfterWarmup = topology.Coordinator().Stats().RouterSessions
 	profileCapture, err := startM8ProfileCaptureV1(cfg.profiles)
 	if err != nil {
 		return err
@@ -263,6 +274,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		}
 	}
 	report.Topology = topology.Evidence()
+	report.RouterSessions.AfterMeasured = topology.Coordinator().Stats().RouterSessions
 	report.Failure = m8RunUnavailableGroupV1(context.Background(), topology, assets, queries[0], cfg.topK)
 	if profileCapture != nil {
 		captured, stopErr := profileCapture.Stop()
@@ -1407,6 +1419,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 	if len(report.Rows) == 0 {
 		return errors.New("M8 report has no measurement rows")
 	}
+	var measuredSamples uint64
 	for _, row := range report.Rows {
 		if row.Status == "unsupported" {
 			if row.UnsupportedReason == "" || row.Overlap == 0 {
@@ -1422,6 +1435,14 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 			!validM8AttributionV1(row.Attribution) {
 			return errors.New("malformed measured M8 row")
 		}
+		rowSamples := uint64(row.Samples)
+		if rowSamples > ^uint64(0)-measuredSamples {
+			return errors.New("M8 measured sample count overflow")
+		}
+		measuredSamples += rowSamples
+	}
+	if !validM8RouterSessionEvidenceV1(report.RouterSessions, measuredSamples) {
+		return errors.New("incomplete M8 router-session evidence")
 	}
 	if !report.Failure.Passed || report.Failure.Error == "" || report.Failure.ReturnedNeighbors != 0 || report.Failure.ReturnedGroups != 0 ||
 		report.GateLedger.FailureHonesty != "pass" || report.Resources.PersistentAssetBytes == 0 ||
@@ -1461,6 +1482,59 @@ func validM8AttributionV1(attribution m8ProductionAttributionV1) bool {
 		}
 	}
 	return true
+}
+
+func validM8RouterSessionEvidenceV1(evidence m8ProductionRouterSessionEvidenceV1, expectedMeasuredSamples uint64) bool {
+	if len(evidence.BeforeWarmup) != 0 || len(evidence.AfterWarmup) == 0 || len(evidence.AfterMeasured) == 0 {
+		return false
+	}
+	warmed := make(map[nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1, len(evidence.AfterWarmup))
+	for _, session := range evidence.AfterWarmup {
+		identity := session.Identity
+		if identity.Database == "" || identity.Catalog == "" || identity.Collection == "" || identity.IndexName == "" || identity.IndexDefinitionDigest == "" ||
+			identity.SourceGeneration == 0 || identity.SourceChecksum == 0 || identity.SourceSchemaHash == 0 || identity.SourceRowCount == 0 || identity.PartitionGeneration == 0 ||
+			identity.ReadySetDigest == "" || identity.RouterModelDigest == "" ||
+			session.ColdOpens != 1 || session.ManifestOpenAttempts != 1 || session.Misses != 1 || session.ReaderPins != 1 ||
+			session.OpenFailures != 0 || session.Invalidations != 0 || session.Closes != 0 || session.ReaderReleases != 0 ||
+			session.LeasePins == 0 || session.LeasePins != session.LeaseReleases {
+			return false
+		}
+		if _, duplicate := warmed[identity]; duplicate {
+			return false
+		}
+		warmed[identity] = session
+	}
+	if len(warmed) != len(evidence.AfterMeasured) {
+		return false
+	}
+	seen := make(map[nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1]bool, len(evidence.AfterMeasured))
+	var measuredHits, measuredLeasePins, measuredLeaseReleases uint64
+	for _, measured := range evidence.AfterMeasured {
+		warm, ok := warmed[measured.Identity]
+		if !ok || seen[measured.Identity] ||
+			measured.ColdOpens != warm.ColdOpens || measured.ManifestOpenAttempts != warm.ManifestOpenAttempts || measured.Misses != warm.Misses ||
+			measured.ReaderPins != warm.ReaderPins || measured.ReaderReleases != warm.ReaderReleases || measured.OpenFailures != warm.OpenFailures ||
+			measured.Invalidations != warm.Invalidations || measured.Closes != warm.Closes ||
+			measured.LeasePins != measured.LeaseReleases {
+			return false
+		}
+		if measured.Hits < warm.Hits || measured.LeasePins < warm.LeasePins || measured.LeaseReleases < warm.LeaseReleases {
+			return false
+		}
+		hitDelta := measured.Hits - warm.Hits
+		pinDelta := measured.LeasePins - warm.LeasePins
+		releaseDelta := measured.LeaseReleases - warm.LeaseReleases
+		if hitDelta > ^uint64(0)-measuredHits || pinDelta > ^uint64(0)-measuredLeasePins ||
+			releaseDelta > ^uint64(0)-measuredLeaseReleases {
+			return false
+		}
+		measuredHits += hitDelta
+		measuredLeasePins += pinDelta
+		measuredLeaseReleases += releaseDelta
+		seen[measured.Identity] = true
+	}
+	return measuredHits == expectedMeasuredSamples && measuredLeasePins == expectedMeasuredSamples &&
+		measuredLeaseReleases == expectedMeasuredSamples
 }
 
 func m8SHA256V1(value string) bool {

@@ -123,6 +123,13 @@ type m6LocalShardDispatcherV1 struct {
 	durations        []uint64
 }
 
+func (h *m6CoordinatorHarnessV1) Close() error {
+	if h == nil || h.coordinator == nil {
+		return nil
+	}
+	return h.coordinator.Close()
+}
+
 func newM6CoordinatorHarnessV1(router *treeDBRepresentativeRouter, vectors [][]float64, partitions int) (*m6CoordinatorHarnessV1, error) {
 	if router == nil || router.router == nil || router.collection == nil {
 		return nil, errors.New("persisted M4 router is unavailable")

@@ -63,9 +63,32 @@ This adapter validates the public topology into the canonical M1
 catalog/placement representation before constructing the same coordinator.
 
 `CollectionVectorPartitionCoordinatorRouterSourceV1` adapts a real
-`collections.Collection`. Each `Search` opens a context-aware M4 router handle,
-validates its runtime status against the M1 snapshot, uses that one handle for
-the complete request, and closes it after all dispatch workers have joined.
+`collections.Collection`. The coordinator opens one context-aware M4 router
+session per index/generation and leases it to concurrent searches. Every lease
+still validates runtime status against the M1 snapshot and (when configured)
+the replicated lifecycle authority before routing or M5 dispatch. Cold opens
+are singleflight and a waiting request may cancel without canceling a shared
+session. A runtime-status or lifecycle rejection retires that exact session:
+new leases cannot reuse it and its persistent reader pin is released after its
+last lease. Every router-close error is joined to its owning search result;
+the first is retained for `Close` without growing an unbounded error history,
+so retirement cannot silently hide release failure.
+`Close` rejects new searches, drains leases, then closes any remaining pinned
+router handles.
+
+The coordinator is immutable for one accepted catalog/collection/index/source/
+partition epoch. Catalog or generation replacement constructs a replacement
+coordinator and drains the old coordinator before its sources retire; there is
+no cross-epoch or process-global router cache. `Stats` includes a deterministic
+sorted snapshot of bounded per-placement router accounting with cold-open, hit/miss,
+open-failure, lease, reader-pin/release, invalidation, and close accounting.
+The coordinator admits exactly one immutable placement key, so repeated
+same-epoch reopens aggregate into one retained record instead of growing a
+session-history cache. Its first successful session binds the accepted
+ready-set and router-model digests; a reopen with changed digests fails closed
+as a generation mismatch. `manifest_open_attempts` is the cumulative count of
+source calls that perform the manifest/asset validation-open boundary;
+repeated session hits perform no such open.
 
 The execution API is:
 
@@ -119,7 +142,7 @@ The request state sequence is fail closed:
 | State | Required transition |
 | --- | --- |
 | preflight | validate request identity, search shape, finite query, and caller budgets |
-| router pin | context-aware open of one persisted M4 handle and exact runtime-status validation |
+| router pin | acquire a generation-pinned M4 session and exact per-request runtime-status validation |
 | route | search that pinned router and require exactly the requested number of unique, finite partition scores |
 | plan | resolve every selected partition through M1, group and chunk deterministically, and reserve all budgets |
 | fanout | run every M5 task through the fixed worker pool, with one bounded not-leader retry path |
@@ -129,9 +152,12 @@ The request state sequence is fail closed:
 | success | publish one owned response with exact generation identity, probes, counters, and timings |
 
 There is no partially successful state. Any error zeroes the response, cancels
-the shared child context, waits for every started worker to exit, closes the
-router, and returns one classified error. The coordinator retains no query
-result or generation state after return; only cumulative statistics remain.
+the shared child context, waits for every started worker to exit, releases its
+router lease, and returns one classified error. Identity/lifecycle rejection
+also retires the session so its reader pin cannot indefinitely block generation
+cleanup. The coordinator retains no query result after return; its only
+retained request-independent state is a bounded session for its immutable
+accepted epoch until retirement or `Close`.
 
 The effective deadline is the earliest of the caller context deadline, the
 request deadline, and `now + MaxWallClock`. The default wall-clock ceiling is

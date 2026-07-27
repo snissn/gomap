@@ -250,11 +250,50 @@ type VectorPartitionCoordinatorStatsV1 struct {
 	SelectedPartitions, SelectedGroups, RPCs        uint64
 	Retries, Redirects, Duplicates, Disagreements   uint64
 	TotalNanos                                      uint64
+	RouterSessions                                  []VectorPartitionCoordinatorRouterSessionStatsV1
 }
 
 type vectorPartitionCoordinatorStatsAccumulatorV1 struct {
 	mu    sync.Mutex
 	value VectorPartitionCoordinatorStatsV1
+}
+
+// VectorPartitionCoordinatorRouterSessionIdentityV1 identifies the immutable
+// M1/M4 epoch a coordinator is allowed to retain. A coordinator is immutable
+// for this identity; a catalog or generation replacement constructs a new
+// coordinator and drains the old one.
+type VectorPartitionCoordinatorRouterSessionIdentityV1 struct {
+	Database              string `json:"database"`
+	Catalog               string `json:"catalog"`
+	Collection            string `json:"collection"`
+	IndexName             string `json:"index_name"`
+	IndexDefinitionDigest string `json:"index_definition_digest"`
+	SourceGeneration      uint64 `json:"source_generation"`
+	SourceChecksum        uint64 `json:"source_checksum"`
+	SourceSchemaHash      uint64 `json:"source_schema_hash"`
+	SourceRowCount        uint64 `json:"source_row_count"`
+	PartitionGeneration   uint64 `json:"partition_generation"`
+	ReadySetDigest        string `json:"ready_set_digest"`
+	RouterModelDigest     string `json:"router_model_digest"`
+}
+
+// VectorPartitionCoordinatorRouterSessionStatsV1 is a deterministic
+// cumulative accounting record for one accepted router identity. Reader pins
+// are the underlying persistent-generation pins; lease counters describe
+// request-level concurrent use of that pin.
+type VectorPartitionCoordinatorRouterSessionStatsV1 struct {
+	Identity             VectorPartitionCoordinatorRouterSessionIdentityV1 `json:"identity"`
+	ColdOpens            uint64                                            `json:"cold_opens"`
+	ManifestOpenAttempts uint64                                            `json:"manifest_open_attempts"`
+	Misses               uint64                                            `json:"misses"`
+	Hits                 uint64                                            `json:"hits"`
+	OpenFailures         uint64                                            `json:"open_failures"`
+	ReaderPins           uint64                                            `json:"reader_pins"`
+	ReaderReleases       uint64                                            `json:"reader_releases"`
+	LeasePins            uint64                                            `json:"lease_pins"`
+	LeaseReleases        uint64                                            `json:"lease_releases"`
+	Invalidations        uint64                                            `json:"invalidations"`
+	Closes               uint64                                            `json:"closes"`
 }
 
 type VectorPartitionCoordinatorV1 struct {
@@ -265,6 +304,57 @@ type VectorPartitionCoordinatorV1 struct {
 	limits              VectorPartitionCoordinatorLimitsV1
 	groups              map[raftcluster.GroupID]raftplacement.ResolvedGroupV1
 	stats               vectorPartitionCoordinatorStatsAccumulatorV1
+	sessionMu           sync.Mutex
+	sessionCond         *sync.Cond
+	sessions            map[vectorPartitionCoordinatorRouterKeyV1]*vectorPartitionCoordinatorRouterSessionV1
+	loads               map[vectorPartitionCoordinatorRouterKeyV1]*vectorPartitionCoordinatorRouterLoadV1
+	sessionStats        map[vectorPartitionCoordinatorRouterKeyV1]*vectorPartitionCoordinatorRouterSessionStatsV1
+	closing             uint64
+	leases              uint64
+	closed              bool
+	closeOnce           sync.Once
+	closeErr            error
+	routerCloseErr      error
+}
+
+// A router session owns one generation-pinned M4 router for the lifetime of a
+// coordinator. Individual searches hold leases, so Close can reject new work,
+// drain in-flight requests, and only then release the router's generation pin.
+type vectorPartitionCoordinatorRouterKeyV1 struct {
+	database, catalog, collection    string
+	index, indexDefinitionDigest     string
+	sourceGeneration, sourceChecksum uint64
+	sourceSchemaHash, sourceRowCount uint64
+	generation                       uint64
+}
+
+type vectorPartitionCoordinatorRouterSessionV1 struct {
+	router           VectorPartitionCoordinatorRouterV1
+	stats            *vectorPartitionCoordinatorRouterSessionStatsV1
+	refs             uint64
+	retired, closing bool
+}
+
+// vectorPartitionCoordinatorRouterSessionStatsV1 aggregates every reopen for
+// the coordinator's one immutable placement identity. Keying this accounting
+// by the bounded placement key prevents repeated lifecycle rejection from
+// retaining an unbounded session history.
+type vectorPartitionCoordinatorRouterSessionStatsV1 struct {
+	accepted bool
+	value    VectorPartitionCoordinatorRouterSessionStatsV1
+}
+
+type vectorPartitionCoordinatorRouterLoadV1 struct {
+	ready chan struct{}
+	err   error
+}
+
+type vectorPartitionCoordinatorRouterLeaseV1 struct {
+	coordinator *VectorPartitionCoordinatorV1
+	key         vectorPartitionCoordinatorRouterKeyV1
+	session     *vectorPartitionCoordinatorRouterSessionV1
+	once        sync.Once
+	closeErr    error
 }
 
 func NewVectorPartitionCoordinatorV1(opts VectorPartitionCoordinatorOptionsV1) (*VectorPartitionCoordinatorV1, error) {
@@ -288,11 +378,16 @@ func NewVectorPartitionCoordinatorV1(opts VectorPartitionCoordinatorOptionsV1) (
 	}
 	placement := opts.Placement
 	placement.Partitions = slices.Clone(opts.Placement.Partitions)
-	return &VectorPartitionCoordinatorV1{
+	coordinator := &VectorPartitionCoordinatorV1{
 		placement: placement, routerSource: opts.RouterSource,
 		dispatcher: opts.Dispatcher, replicatedLifecycle: opts.ReplicatedLifecycle,
 		limits: limits, groups: groups,
-	}, nil
+		sessions:     make(map[vectorPartitionCoordinatorRouterKeyV1]*vectorPartitionCoordinatorRouterSessionV1),
+		loads:        make(map[vectorPartitionCoordinatorRouterKeyV1]*vectorPartitionCoordinatorRouterLoadV1),
+		sessionStats: make(map[vectorPartitionCoordinatorRouterKeyV1]*vectorPartitionCoordinatorRouterSessionStatsV1),
+	}
+	coordinator.sessionCond = sync.NewCond(&coordinator.sessionMu)
+	return coordinator, nil
 }
 
 // NewVectorPartitionCoordinatorForTopologyV1 validates a public topology into
@@ -344,6 +439,256 @@ func NewVectorPartitionCoordinatorForTopologyV1(
 		Catalog: catalog, Placement: placement, RouterSource: routerSource,
 		Dispatcher: dispatcher, Limits: limits,
 	})
+}
+
+func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Context, index string, generation uint64) (*vectorPartitionCoordinatorRouterLeaseV1, error) {
+	if c == nil || index == "" || generation == 0 {
+		return nil, ErrVectorPartitionCoordinatorUnavailable
+	}
+	key, ok := c.routerSessionKeyV1(index, generation)
+	if !ok {
+		return nil, ErrVectorPartitionCoordinatorUnavailable
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		c.sessionMu.Lock()
+		if c.closed {
+			c.sessionMu.Unlock()
+			return nil, fmt.Errorf("%w: coordinator closed", ErrVectorPartitionCoordinatorUnavailable)
+		}
+		if session := c.sessions[key]; session != nil {
+			session.refs++
+			c.leases++
+			session.stats.value.Hits++
+			session.stats.value.LeasePins++
+			c.sessionMu.Unlock()
+			return &vectorPartitionCoordinatorRouterLeaseV1{coordinator: c, key: key, session: session}, nil
+		}
+		if load := c.loads[key]; load != nil {
+			c.sessionMu.Unlock()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-load.ready:
+				// A canceled cold open belongs only to its initiating request. Other
+				// callers retry their own open rather than inheriting cancellation.
+				// Every other failure is shared by the cold-open cohort so corrupt or
+				// otherwise invalid assets are not repeatedly reconstructed.
+				if load.err != nil && !errors.Is(load.err, context.Canceled) && !errors.Is(load.err, context.DeadlineExceeded) {
+					return nil, load.err
+				}
+				continue
+			}
+		}
+		load := &vectorPartitionCoordinatorRouterLoadV1{ready: make(chan struct{})}
+		c.loads[key] = load
+		stats := c.newRouterSessionStatsLocked(key)
+		stats.value.ColdOpens++
+		stats.value.ManifestOpenAttempts++
+		stats.value.Misses++
+		c.sessionMu.Unlock()
+
+		router, err := c.routerSource.OpenVectorPartitionCoordinatorRouterV1(ctx, index, generation)
+		c.sessionMu.Lock()
+		delete(c.loads, key)
+		if err == nil && router == nil {
+			err = ErrVectorPartitionCoordinatorUnavailable
+		}
+		if c.closed && err == nil {
+			err = fmt.Errorf("%w: coordinator closed", ErrVectorPartitionCoordinatorUnavailable)
+		}
+		if err == nil {
+			session := &vectorPartitionCoordinatorRouterSessionV1{router: router, stats: stats, refs: 1}
+			c.sessions[key] = session
+			c.leases++
+			stats.value.ReaderPins++
+			stats.value.LeasePins++
+			close(load.ready)
+			c.sessionCond.Broadcast()
+			c.sessionMu.Unlock()
+			return &vectorPartitionCoordinatorRouterLeaseV1{coordinator: c, key: key, session: session}, nil
+		}
+		load.err = err
+		close(load.ready)
+		c.sessionCond.Broadcast()
+		stats.value.OpenFailures++
+		if router != nil {
+			stats.value.ReaderPins++
+			stats.value.Closes++
+			c.closing++
+		}
+		c.sessionMu.Unlock()
+		if router != nil {
+			closeErr := c.closeRouterSessionV1(stats, router)
+			err = errors.Join(err, closeErr)
+		}
+		return nil, err
+	}
+}
+
+func (c *VectorPartitionCoordinatorV1) routerSessionKeyV1(index string, generation uint64) (vectorPartitionCoordinatorRouterKeyV1, bool) {
+	if c == nil || index != c.placement.IndexName || generation != c.placement.PartitionGeneration {
+		return vectorPartitionCoordinatorRouterKeyV1{}, false
+	}
+	p := c.placement
+	return vectorPartitionCoordinatorRouterKeyV1{
+		database: p.Collection.Database, catalog: p.Collection.Catalog, collection: p.Collection.Collection,
+		index: index, indexDefinitionDigest: p.IndexDefinitionDigest,
+		sourceGeneration: p.SourceGeneration, sourceChecksum: p.SourceChecksum,
+		sourceSchemaHash: p.SourceSchemaHash, sourceRowCount: p.SourceRowCount,
+		generation: generation,
+	}, true
+}
+
+func (c *VectorPartitionCoordinatorV1) newRouterSessionStatsLocked(key vectorPartitionCoordinatorRouterKeyV1) *vectorPartitionCoordinatorRouterSessionStatsV1 {
+	if stats := c.sessionStats[key]; stats != nil {
+		return stats
+	}
+	stats := &vectorPartitionCoordinatorRouterSessionStatsV1{value: VectorPartitionCoordinatorRouterSessionStatsV1{Identity: VectorPartitionCoordinatorRouterSessionIdentityV1{
+		Database: key.database, Catalog: key.catalog, Collection: key.collection,
+		IndexName: key.index, IndexDefinitionDigest: key.indexDefinitionDigest,
+		SourceGeneration: key.sourceGeneration, SourceChecksum: key.sourceChecksum,
+		SourceSchemaHash: key.sourceSchemaHash, SourceRowCount: key.sourceRowCount,
+		PartitionGeneration: key.generation,
+	}}}
+	c.sessionStats[key] = stats
+	return stats
+}
+
+func (c *VectorPartitionCoordinatorV1) recordRouterSessionIdentityV1(lease *vectorPartitionCoordinatorRouterLeaseV1, status collections.VectorPartitionRouterRuntimeStatusV1, readySetDigest string) error {
+	if lease == nil || lease.coordinator != c || lease.session == nil {
+		return ErrVectorPartitionCoordinatorUnavailable
+	}
+	c.sessionMu.Lock()
+	defer c.sessionMu.Unlock()
+	stats := lease.session.stats
+	if stats == nil {
+		return ErrVectorPartitionCoordinatorUnavailable
+	}
+	if !stats.accepted {
+		stats.value.Identity.ReadySetDigest = readySetDigest
+		stats.value.Identity.RouterModelDigest = status.ModelDigest
+		stats.accepted = true
+		return nil
+	}
+	if stats.value.Identity.ReadySetDigest != readySetDigest || stats.value.Identity.RouterModelDigest != status.ModelDigest {
+		return ErrVectorPartitionCoordinatorGenerationMismatch
+	}
+	return nil
+}
+
+func (c *VectorPartitionCoordinatorV1) retireRouterSessionV1(lease *vectorPartitionCoordinatorRouterLeaseV1) {
+	if lease == nil || lease.coordinator != c || lease.session == nil {
+		return
+	}
+	c.sessionMu.Lock()
+	session := lease.session
+	if !session.retired {
+		session.retired = true
+		if c.sessions[lease.key] == session {
+			delete(c.sessions, lease.key)
+		}
+		if session.stats != nil {
+			session.stats.value.Invalidations++
+		}
+	}
+	c.sessionCond.Broadcast()
+	c.sessionMu.Unlock()
+}
+
+func (l *vectorPartitionCoordinatorRouterLeaseV1) Close() error {
+	if l == nil || l.coordinator == nil || l.session == nil {
+		return nil
+	}
+	l.once.Do(func() {
+		c := l.coordinator
+		c.sessionMu.Lock()
+		if l.session.refs > 0 {
+			l.session.refs--
+		}
+		if c.leases > 0 {
+			c.leases--
+		}
+		if l.session.stats != nil {
+			l.session.stats.value.LeaseReleases++
+		}
+		closeRouter := c.routerToCloseLocked(l.session)
+		c.sessionCond.Broadcast()
+		c.sessionMu.Unlock()
+		if closeRouter != nil {
+			l.closeErr = c.closeRouterSessionV1(l.session.stats, closeRouter)
+		}
+	})
+	return l.closeErr
+}
+
+func (c *VectorPartitionCoordinatorV1) routerToCloseLocked(session *vectorPartitionCoordinatorRouterSessionV1) VectorPartitionCoordinatorRouterV1 {
+	if session == nil || session.closing || session.refs != 0 || (!session.retired && !c.closed) || session.router == nil {
+		return nil
+	}
+	session.closing = true
+	c.closing++
+	if session.stats != nil {
+		session.stats.value.Closes++
+	}
+	return session.router
+}
+
+func (c *VectorPartitionCoordinatorV1) closeRouterSessionV1(stats *vectorPartitionCoordinatorRouterSessionStatsV1, router VectorPartitionCoordinatorRouterV1) error {
+	err := router.Close()
+	c.sessionMu.Lock()
+	c.closing--
+	if stats != nil {
+		stats.value.ReaderReleases++
+	}
+	if err != nil && c.routerCloseErr == nil {
+		// Every owning lease returns its own close error. Retain the first one
+		// for coordinator shutdown diagnostics without growing an unbounded
+		// joined-error chain across repeated rejected reopen attempts.
+		c.routerCloseErr = err
+	}
+	c.sessionCond.Broadcast()
+	c.sessionMu.Unlock()
+	return err
+}
+
+// Close permanently rejects new searches, waits for in-flight leases and
+// cold opens to leave the coordinator, then closes every retained router.
+func (c *VectorPartitionCoordinatorV1) Close() error {
+	if c == nil {
+		return nil
+	}
+	c.closeOnce.Do(func() {
+		c.sessionMu.Lock()
+		c.closed = true
+		for len(c.loads) != 0 || c.closing != 0 || c.leases != 0 {
+			c.sessionCond.Wait()
+		}
+		routers := make([]struct {
+			router VectorPartitionCoordinatorRouterV1
+			stats  *vectorPartitionCoordinatorRouterSessionStatsV1
+		}, 0, len(c.sessions))
+		for key, session := range c.sessions {
+			delete(c.sessions, key)
+			session.retired = true
+			if router := c.routerToCloseLocked(session); router != nil {
+				routers = append(routers, struct {
+					router VectorPartitionCoordinatorRouterV1
+					stats  *vectorPartitionCoordinatorRouterSessionStatsV1
+				}{router: router, stats: session.stats})
+			}
+		}
+		c.sessionMu.Unlock()
+		for _, item := range routers {
+			c.closeRouterSessionV1(item.stats, item.router)
+		}
+		c.sessionMu.Lock()
+		c.closeErr = c.routerCloseErr
+		c.sessionMu.Unlock()
+	})
+	return c.closeErr
 }
 
 func normalizeVectorPartitionCoordinatorLimitsV1(limits VectorPartitionCoordinatorLimitsV1) (VectorPartitionCoordinatorLimitsV1, error) {
@@ -436,25 +781,36 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 	}
 
 	openStarted := time.Now()
-	router, err := c.routerSource.OpenVectorPartitionCoordinatorRouterV1(requestCtx, request.IndexName, c.placement.PartitionGeneration)
+	routerLease, err := c.acquireRouterSessionV1(requestCtx, request.IndexName, c.placement.PartitionGeneration)
 	response.Timing.RouterOpenNanos = elapsedNanosV1(openStarted)
 	if err != nil {
 		return response, c.wrapError(err, "")
 	}
-	if router == nil {
-		return response, c.wrapError(ErrVectorPartitionCoordinatorUnavailable, "")
-	}
 	defer func() {
-		if closeErr := router.Close(); closeErr != nil && resultErr == nil {
-			resultErr = c.wrapError(fmt.Errorf("%w: close router: %v", ErrVectorPartitionCoordinatorUnavailable, closeErr), "")
+		if closeErr := routerLease.Close(); closeErr != nil {
+			resultErr = errors.Join(resultErr, c.wrapError(fmt.Errorf("%w: close router: %w", ErrVectorPartitionCoordinatorUnavailable, closeErr), ""))
 		}
 	}()
+	router := routerLease.session.router
 	status := router.Status()
-	if err := c.validateRouterStatus(request, status); err != nil {
+	if err := c.validateRouterStatus(status); err != nil {
+		if vectorPartitionCoordinatorRouterStatusInvalidatesSessionV1(err) {
+			c.retireRouterSessionV1(routerLease)
+		}
 		return response, c.wrapError(err, "")
 	}
 	replicatedReadySetDigest, err := c.validateReplicatedLifecycle(requestCtx, status)
 	if err != nil {
+		if vectorPartitionCoordinatorReplicatedLifecycleInvalidatesSessionV1(err) {
+			c.retireRouterSessionV1(routerLease)
+		}
+		return response, c.wrapError(err, "")
+	}
+	if err := c.recordRouterSessionIdentityV1(routerLease, status, replicatedReadySetDigest); err != nil {
+		c.retireRouterSessionV1(routerLease)
+		return response, c.wrapError(err, "")
+	}
+	if err := validateVectorPartitionCoordinatorRouterRequestV1(request, status); err != nil {
 		return response, c.wrapError(err, "")
 	}
 
@@ -560,6 +916,12 @@ func (c *VectorPartitionCoordinatorV1) validateReplicatedLifecycle(ctx context.C
 		m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum,
 		m.SourceSchemaHash, m.SourceRowCount,
 	)
+}
+
+func vectorPartitionCoordinatorReplicatedLifecycleInvalidatesSessionV1(err error) bool {
+	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) &&
+		(errors.Is(err, raftplacement.ErrVectorPartitionLifecycleGuard) ||
+			errors.Is(err, raftplacement.ErrVectorPartitionLifecycleIdentity))
 }
 
 func accumulateVectorPartitionCoordinatorResponseCountersV1(
@@ -714,7 +1076,7 @@ func (c *VectorPartitionCoordinatorV1) validateRequest(request VectorPartitionCo
 	return nil
 }
 
-func (c *VectorPartitionCoordinatorV1) validateRouterStatus(request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1) error {
+func (c *VectorPartitionCoordinatorV1) validateRouterStatus(status collections.VectorPartitionRouterRuntimeStatusV1) error {
 	m := status.Manifest
 	p := c.placement
 	if m.State != "ready" || m.Collection != p.Collection.Collection ||
@@ -736,11 +1098,20 @@ func (c *VectorPartitionCoordinatorV1) validateRouterStatus(request VectorPartit
 			return fmt.Errorf("%w: partition %d placement", ErrVectorPartitionCoordinatorRouteMismatch, i)
 		}
 	}
+	return nil
+}
+
+func validateVectorPartitionCoordinatorRouterRequestV1(request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1) error {
 	if request.RouterMode == collections.VectorPartitionRouterModeExactV1 &&
 		request.RouterCandidateBudget < int(status.Representatives) {
 		return fmt.Errorf("%w: exact router candidate budget", ErrVectorPartitionCoordinatorBudgetExceeded)
 	}
 	return nil
+}
+
+func vectorPartitionCoordinatorRouterStatusInvalidatesSessionV1(err error) bool {
+	return errors.Is(err, ErrVectorPartitionCoordinatorGenerationMismatch) ||
+		errors.Is(err, ErrVectorPartitionCoordinatorRouteMismatch)
 }
 
 type vectorPartitionCoordinatorBudgetV1 struct {
@@ -1477,6 +1848,54 @@ func (c *VectorPartitionCoordinatorV1) Stats() VectorPartitionCoordinatorStatsV1
 		return VectorPartitionCoordinatorStatsV1{}
 	}
 	c.stats.mu.Lock()
-	defer c.stats.mu.Unlock()
-	return c.stats.value
+	stats := c.stats.value
+	c.stats.mu.Unlock()
+	c.sessionMu.Lock()
+	sessions := make([]VectorPartitionCoordinatorRouterSessionStatsV1, 0, len(c.sessionStats))
+	for _, session := range c.sessionStats {
+		sessions = append(sessions, session.value)
+	}
+	c.sessionMu.Unlock()
+	sort.Slice(sessions, func(i, j int) bool {
+		left, right := sessions[i].Identity, sessions[j].Identity
+		if left.Database != right.Database {
+			return left.Database < right.Database
+		}
+		if left.Catalog != right.Catalog {
+			return left.Catalog < right.Catalog
+		}
+		if left.Collection != right.Collection {
+			return left.Collection < right.Collection
+		}
+		if left.IndexName != right.IndexName {
+			return left.IndexName < right.IndexName
+		}
+		if left.IndexDefinitionDigest != right.IndexDefinitionDigest {
+			return left.IndexDefinitionDigest < right.IndexDefinitionDigest
+		}
+		if left.SourceGeneration != right.SourceGeneration {
+			return left.SourceGeneration < right.SourceGeneration
+		}
+		if left.SourceChecksum != right.SourceChecksum {
+			return left.SourceChecksum < right.SourceChecksum
+		}
+		if left.SourceSchemaHash != right.SourceSchemaHash {
+			return left.SourceSchemaHash < right.SourceSchemaHash
+		}
+		if left.SourceRowCount != right.SourceRowCount {
+			return left.SourceRowCount < right.SourceRowCount
+		}
+		if left.PartitionGeneration != right.PartitionGeneration {
+			return left.PartitionGeneration < right.PartitionGeneration
+		}
+		if left.ReadySetDigest != right.ReadySetDigest {
+			return left.ReadySetDigest < right.ReadySetDigest
+		}
+		if left.RouterModelDigest != right.RouterModelDigest {
+			return left.RouterModelDigest < right.RouterModelDigest
+		}
+		return false
+	})
+	stats.RouterSessions = sessions
+	return stats
 }

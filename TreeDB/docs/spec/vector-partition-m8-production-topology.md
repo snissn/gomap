@@ -58,8 +58,19 @@ group list.
 
 `StopGroup(group)` is a test/fault-injection operation: it closes that group's
 listener and active connections. `Close()` is idempotent, waits for serving
-goroutines, closes generation readers before persistent assets, and treats an
-already-closed network connection as successful cleanup.
+goroutines, drains the coordinator's generation-pinned router sessions, then
+closes generation readers before persistent assets; an already-closed network
+connection is successful cleanup.
+
+The topology is immutable for its constructed catalog and generation epoch.
+Replacement builds a new topology/coordinator and closes the old one before
+retiring old sources. M8 records deterministic router-session snapshots before
+warmup, after warmup, and after measured cells so the cold/open versus
+steady-state manifest boundary is auditable. A valid measured snapshot keeps
+the exact warmed identity set and cold/open/miss/reader-pin counters unchanged,
+adds cache hits with balanced leases, and reports no lifecycle invalidation or
+close. Those snapshots are not a substitute for matched base/head performance
+evidence.
 
 ## Persistent retained-asset adapter
 
