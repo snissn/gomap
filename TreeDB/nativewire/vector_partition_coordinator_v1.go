@@ -263,12 +263,18 @@ type vectorPartitionCoordinatorStatsAccumulatorV1 struct {
 // for this identity; a catalog or generation replacement constructs a new
 // coordinator and drains the old one.
 type VectorPartitionCoordinatorRouterSessionIdentityV1 struct {
-	Database, Catalog, Collection     string
-	IndexName, IndexDefinitionDigest  string
-	SourceGeneration, SourceChecksum  uint64
-	SourceSchemaHash, SourceRowCount  uint64
-	PartitionGeneration               uint64
-	ReadySetDigest, RouterModelDigest string
+	Database              string `json:"database"`
+	Catalog               string `json:"catalog"`
+	Collection            string `json:"collection"`
+	IndexName             string `json:"index_name"`
+	IndexDefinitionDigest string `json:"index_definition_digest"`
+	SourceGeneration      uint64 `json:"source_generation"`
+	SourceChecksum        uint64 `json:"source_checksum"`
+	SourceSchemaHash      uint64 `json:"source_schema_hash"`
+	SourceRowCount        uint64 `json:"source_row_count"`
+	PartitionGeneration   uint64 `json:"partition_generation"`
+	ReadySetDigest        string `json:"ready_set_digest"`
+	RouterModelDigest     string `json:"router_model_digest"`
 }
 
 // VectorPartitionCoordinatorRouterSessionStatsV1 is a deterministic
@@ -276,10 +282,18 @@ type VectorPartitionCoordinatorRouterSessionIdentityV1 struct {
 // are the underlying persistent-generation pins; lease counters describe
 // request-level concurrent use of that pin.
 type VectorPartitionCoordinatorRouterSessionStatsV1 struct {
-	Identity                                                    VectorPartitionCoordinatorRouterSessionIdentityV1
-	ColdOpens, ManifestOpenAttempts, Misses, Hits, OpenFailures uint64
-	ReaderPins, ReaderReleases, LeasePins, LeaseReleases        uint64
-	Invalidations, Closes                                       uint64
+	Identity             VectorPartitionCoordinatorRouterSessionIdentityV1 `json:"identity"`
+	ColdOpens            uint64                                            `json:"cold_opens"`
+	ManifestOpenAttempts uint64                                            `json:"manifest_open_attempts"`
+	Misses               uint64                                            `json:"misses"`
+	Hits                 uint64                                            `json:"hits"`
+	OpenFailures         uint64                                            `json:"open_failures"`
+	ReaderPins           uint64                                            `json:"reader_pins"`
+	ReaderReleases       uint64                                            `json:"reader_releases"`
+	LeasePins            uint64                                            `json:"lease_pins"`
+	LeaseReleases        uint64                                            `json:"lease_releases"`
+	Invalidations        uint64                                            `json:"invalidations"`
+	Closes               uint64                                            `json:"closes"`
 }
 
 type VectorPartitionCoordinatorV1 struct {

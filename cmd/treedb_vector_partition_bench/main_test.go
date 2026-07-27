@@ -1304,6 +1304,17 @@ func TestM8RetainedCoordinatorResultsRespectMemoryCapV1(t *testing.T) {
 }
 
 func TestM8ProductionEvidenceJSONKeepsEveryTopologyDimensionV1(t *testing.T) {
+	routerSession := nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{
+		Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{
+			Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding",
+			IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2,
+			SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5,
+			ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest",
+		},
+		ColdOpens: 1, ManifestOpenAttempts: 2, Misses: 3, Hits: 4, OpenFailures: 5,
+		ReaderPins: 6, ReaderReleases: 7, LeasePins: 8, LeaseReleases: 9,
+		Invalidations: 10, Closes: 11,
+	}
 	raw, err := json.Marshal(m8ProductionReportV1{
 		Config: m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16, RouterCandidates: 256},
 		Rows: []m8ProductionRowV1{{Probes: 4, EfSearch: 128, Concurrency: 16, Samples: 32, RecallAtK: 0, Attribution: m8ProductionAttributionV1{
@@ -1314,14 +1325,19 @@ func TestM8ProductionEvidenceJSONKeepsEveryTopologyDimensionV1(t *testing.T) {
 			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
 			ApproximateRouterCandidateBudget: 256, ApproximateRouterPartitionCoverageComplete: true, ResidualLossOwners: []string{"partition_local_hnsw"},
 		}}},
-		RouterSessions: m8ProductionRouterSessionEvidenceV1{AfterWarmup: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{ColdOpens: 1}}, AfterMeasured: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Hits: 32}}},
+		RouterSessions: m8ProductionRouterSessionEvidenceV1{AfterWarmup: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{routerSession}, AfterMeasured: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Hits: 32}}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{`"raft_groups":4`, `"raft_nodes_per_group":3`, `"partitions":16`, `"router_sessions"`, `"after_warmup"`, `"after_measured"`, `"approximate_router_candidate_budget":256`, `"approximate_router_partition_coverage_complete":true`, `"probes":4`, `"ef_search":128`, `"concurrency":16`, `"samples":32`, `"recall_at_k":0`, `"contract":"` + m8CanonicalResultContractV1 + `"`, `"global_exact_recall_at_k":1`, `"exhaustive_partition_union_score_parity":true`, `"residual_loss_owners":["partition_local_hnsw"]`} {
+	for _, field := range []string{`"raft_groups":4`, `"raft_nodes_per_group":3`, `"partitions":16`, `"router_sessions"`, `"after_warmup"`, `"after_measured"`, `"identity":{"database":"default","catalog":"default","collection":"docs","index_name":"embedding","index_definition_digest":"index-digest","source_generation":1,"source_checksum":2,"source_schema_hash":3,"source_row_count":4,"partition_generation":5,"ready_set_digest":"ready-digest","router_model_digest":"model-digest"}`, `"cold_opens":1`, `"manifest_open_attempts":2`, `"misses":3`, `"hits":4`, `"open_failures":5`, `"reader_pins":6`, `"reader_releases":7`, `"lease_pins":8`, `"lease_releases":9`, `"invalidations":10`, `"closes":11`, `"approximate_router_candidate_budget":256`, `"approximate_router_partition_coverage_complete":true`, `"probes":4`, `"ef_search":128`, `"concurrency":16`, `"samples":32`, `"recall_at_k":0`, `"contract":"` + m8CanonicalResultContractV1 + `"`, `"global_exact_recall_at_k":1`, `"exhaustive_partition_union_score_parity":true`, `"residual_loss_owners":["partition_local_hnsw"]`} {
 		if !bytes.Contains(raw, []byte(field)) {
 			t.Fatalf("missing %s in %s", field, raw)
+		}
+	}
+	for _, legacy := range []string{`"Identity"`, `"Database"`, `"ColdOpens"`, `"ReaderPins"`, `"LeaseReleases"`} {
+		if bytes.Contains(raw, []byte(legacy)) {
+			t.Fatalf("legacy router-session JSON field %s in %s", legacy, raw)
 		}
 	}
 }
