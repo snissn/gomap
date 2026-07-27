@@ -193,6 +193,22 @@ func TestM8ProductionResourcesUsePersistedBalanceCapacityV1(t *testing.T) {
 	}
 }
 
+func TestM8ProductionResourcesPreserveBuiltInDisjointBalanceCapacityV1(t *testing.T) {
+	assets := &m8ProductionMultiGroupAssetsV1{manifest: collections.VectorPartitionManifestV1{
+		SourceRowCount: 100,
+		PartitionCount: 2,
+		BalancePolicy:  "round_robin_disjoint_v1",
+		Memberships: []collections.VectorPartitionMembershipV1{
+			{PartitionID: 0},
+			{PartitionID: 1},
+		},
+	}}
+	got := m8ProductionResourcesV1(config{}, fixtureManifest{}, assets, nil, m8ProductionFaultResourceBoundaryV1{}, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})
+	if got.BalanceHardCap != 53 {
+		t.Fatalf("balance hard cap=%d want built-in disjoint capacity 53", got.BalanceHardCap)
+	}
+}
+
 func TestM8ConfiguredAggregateTaskLimitMatchesPerTaskEnforcementV1(t *testing.T) {
 	if got, ok := m8ConfiguredAggregateTaskLimitV1(1, 2); !ok || got != 2 {
 		t.Fatalf("aggregate retry limit=(%d,%v) want=(2,true)", got, ok)
