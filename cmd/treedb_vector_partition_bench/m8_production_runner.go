@@ -1419,7 +1419,10 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 	if len(report.Rows) == 0 {
 		return errors.New("M8 report has no measurement rows")
 	}
-	if !validM8RouterSessionEvidenceV1(report.RouterSessions) {
+	hasMeasuredRows := slices.ContainsFunc(report.Rows, func(row m8ProductionRowV1) bool {
+		return row.Status != "unsupported"
+	})
+	if !validM8RouterSessionEvidenceV1(report.RouterSessions, hasMeasuredRows) {
 		return errors.New("incomplete M8 router-session evidence")
 	}
 	for _, row := range report.Rows {
@@ -1478,7 +1481,7 @@ func validM8AttributionV1(attribution m8ProductionAttributionV1) bool {
 	return true
 }
 
-func validM8RouterSessionEvidenceV1(evidence m8ProductionRouterSessionEvidenceV1) bool {
+func validM8RouterSessionEvidenceV1(evidence m8ProductionRouterSessionEvidenceV1, requireMeasuredDelta bool) bool {
 	if len(evidence.AfterWarmup) == 0 || len(evidence.AfterMeasured) == 0 {
 		return false
 	}
@@ -1508,7 +1511,13 @@ func validM8RouterSessionEvidenceV1(evidence m8ProductionRouterSessionEvidenceV1
 			measured.ColdOpens != warm.ColdOpens || measured.ManifestOpenAttempts != warm.ManifestOpenAttempts || measured.Misses != warm.Misses ||
 			measured.ReaderPins != warm.ReaderPins || measured.ReaderReleases != warm.ReaderReleases || measured.OpenFailures != warm.OpenFailures ||
 			measured.Invalidations != warm.Invalidations || measured.Closes != warm.Closes ||
-			measured.Hits <= warm.Hits || measured.LeasePins <= warm.LeasePins || measured.LeasePins != measured.LeaseReleases {
+			measured.LeasePins != measured.LeaseReleases {
+			return false
+		}
+		if requireMeasuredDelta && (measured.Hits <= warm.Hits || measured.LeasePins <= warm.LeasePins) {
+			return false
+		}
+		if !requireMeasuredDelta && (measured.Hits != warm.Hits || measured.LeasePins != warm.LeasePins || measured.LeaseReleases != warm.LeaseReleases) {
 			return false
 		}
 		seen[measured.Identity] = true

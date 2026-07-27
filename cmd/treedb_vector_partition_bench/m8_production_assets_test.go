@@ -76,6 +76,15 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	if err := validateM8ProductionReportV1(report); err != nil {
 		t.Fatalf("valid endpoint coverage rejected: %v", err)
 	}
+	measuredRows := report.Rows
+	measuredAfter := report.RouterSessions.AfterMeasured
+	report.Rows = []m8ProductionRowV1{{Status: "unsupported", UnsupportedReason: "overlap assets unavailable", Overlap: .2}}
+	report.RouterSessions.AfterMeasured = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), report.RouterSessions.AfterWarmup...)
+	if err := validateM8ProductionReportV1(report); err != nil {
+		t.Fatalf("unsupported-only report rejected: %v", err)
+	}
+	report.Rows = measuredRows
+	report.RouterSessions.AfterMeasured = measuredAfter
 	report.Resources.PeakRSSMeasured = true
 	if err := validateM8ProductionReportV1(report); err == nil {
 		t.Fatal("accepted measured peak RSS without an explicit scope")
@@ -103,8 +112,22 @@ func TestM8RouterSessionEvidenceRejectsColdWorkOrLeaseImbalanceV1(t *testing.T) 
 	measured := warm
 	measured.Hits, measured.LeasePins, measured.LeaseReleases = 1, 2, 2
 	valid := m8ProductionRouterSessionEvidenceV1{AfterWarmup: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{warm}, AfterMeasured: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{measured}}
-	if !validM8RouterSessionEvidenceV1(valid) {
+	if !validM8RouterSessionEvidenceV1(valid, true) {
 		t.Fatal("rejected stable warmed router evidence")
+	}
+	unsupportedOnly := valid
+	unsupportedOnly.AfterMeasured = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), valid.AfterWarmup...)
+	if !validM8RouterSessionEvidenceV1(unsupportedOnly, false) {
+		t.Fatal("rejected unchanged unsupported-only router evidence")
+	}
+	if validM8RouterSessionEvidenceV1(unsupportedOnly, true) {
+		t.Fatal("accepted unchanged router evidence for measured rows")
+	}
+	unsupportedOnly.AfterMeasured[0].Hits++
+	unsupportedOnly.AfterMeasured[0].LeasePins++
+	unsupportedOnly.AfterMeasured[0].LeaseReleases++
+	if validM8RouterSessionEvidenceV1(unsupportedOnly, false) {
+		t.Fatal("accepted measured deltas for unsupported-only rows")
 	}
 	for name, mutate := range map[string]func(*m8ProductionRouterSessionEvidenceV1){
 		"new cold open":     func(e *m8ProductionRouterSessionEvidenceV1) { e.AfterMeasured[0].ColdOpens++ },
@@ -121,7 +144,7 @@ func TestM8RouterSessionEvidenceRejectsColdWorkOrLeaseImbalanceV1(t *testing.T) 
 			candidate.AfterWarmup = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), valid.AfterWarmup...)
 			candidate.AfterMeasured = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), valid.AfterMeasured...)
 			mutate(&candidate)
-			if validM8RouterSessionEvidenceV1(candidate) {
+			if validM8RouterSessionEvidenceV1(candidate, true) {
 				t.Fatal("accepted invalid router-session evidence")
 			}
 		})
