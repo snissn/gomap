@@ -165,8 +165,8 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				"fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1",
 				"9afad07fb8daf374076fe9fa630106ffdf6241ae746344349eb1885d37cdfbd1",
 				"its all-partition owner is partition-local HNSW",
-				"8006c2f2fecb4ca5c19ada6c7c68f717b1f5f59d",
-				"799fa5ed59de55d019c6f92bde38e819287381dafdf73a7d327a5261ed1b4add",
+				"6ca8adf8f6622110c20434feca5a698130a0fb9b",
+				"179027739699cc3e75e55d95356e1b5685ac5c9d07d6e3392f1ecd0d40c6519d",
 				"Each schema-3 descriptor binds",
 				"3c7a5665803b2f8f32f0187376b31faa74b7b712d8b7d94b28aea7114db6f556",
 				"Coupled graph acceptance",
@@ -322,13 +322,13 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 		evidence.Continuation.Retained1M.LocalHNSWRecall != 0 || evidence.Continuation.Retained1M.LossOwner != "partition_local_hnsw" ||
 		evidence.FinalLocalGate.SchemaVersion != 3 || evidence.FinalLocalGate.ResultKind != "m8_production_multi_variant_matrix_v3" ||
 		evidence.FinalLocalGate.Status != "experimental_gate_failures" || evidence.FinalLocalGate.Disposition != "enablement_off_follow_up_required" ||
-		evidence.FinalLocalGate.MeasuredCodeHead != "8006c2f2fecb4ca5c19ada6c7c68f717b1f5f59d" ||
-		evidence.FinalLocalGate.ArtifactSHA256 != "799fa5ed59de55d019c6f92bde38e819287381dafdf73a7d327a5261ed1b4add" ||
+		evidence.FinalLocalGate.MeasuredCodeHead != "6ca8adf8f6622110c20434feca5a698130a0fb9b" ||
+		evidence.FinalLocalGate.ArtifactSHA256 != "179027739699cc3e75e55d95356e1b5685ac5c9d07d6e3392f1ecd0d40c6519d" ||
 		evidence.FinalLocalGate.VariantDescriptorSchemaVersion != 3 || evidence.FinalLocalGate.VariantDescriptorResultKind != "m3_persistent_variant_descriptor_v3" ||
 		!evidence.FinalLocalGate.DirtyChildReportsRejected || !evidence.FinalLocalGate.AllChildReportsClean ||
 		evidence.FinalLocalGate.Fixture.Vectors != 1_000_000 || evidence.FinalLocalGate.Fixture.Queries != 32 ||
 		evidence.FinalLocalGate.Fixture.Checksum != "71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f" ||
-		evidence.FinalLocalGate.GateLedger.RequiredVariants != "fail" || evidence.FinalLocalGate.GateLedger.Exhaustive != "pass" || evidence.FinalLocalGate.GateLedger.Recall != "fail" ||
+		evidence.FinalLocalGate.GateLedger.RequiredVariants != "fail" || evidence.FinalLocalGate.GateLedger.Exhaustive != "fail" || evidence.FinalLocalGate.GateLedger.Recall != "fail" ||
 		evidence.FinalLocalGate.GateLedger.OverlapStorage != "fail" || evidence.FinalLocalGate.GateLedger.CoupledGraph != "fail" || evidence.FinalLocalGate.GateLedger.Resources != "pass" ||
 		len(evidence.FinalLocalGate.Variants) != 3 || evidence.FinalLocalGate.Variants[0].ID != "graph-disjoint-v1" ||
 		evidence.FinalLocalGate.Variants[0].AssignmentBasis != "graph" || evidence.FinalLocalGate.Variants[0].Overlap != 0 ||
@@ -357,7 +357,7 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 		evidence.FinalLocalGate.MatrixParentMaterializes == nil || *evidence.FinalLocalGate.MatrixParentMaterializes ||
 		evidence.FinalLocalGate.RetryRedirectLimitBasis != "per_task_limit_times_max_observed_shard_request_fanout" ||
 		evidence.FinalLocalGate.AggregateCandidateBytes.Configured != 134_217_728 || evidence.FinalLocalGate.AggregateCandidateBytes.MaxObserved != 4_207_808 || !evidence.FinalLocalGate.AggregateCandidateBytes.Passed ||
-		evidence.FinalLocalGate.MaximumRequestWallClockNanos != 310_014_423 ||
+		evidence.FinalLocalGate.MaximumRequestWallClockNanos != 335_116_802 ||
 		!slices.Equal(evidence.FinalLocalGate.FollowUps, []int{3998, 3999, 4001}) {
 		t.Fatalf("M8 evidence boundary changed: %+v", evidence)
 	}
