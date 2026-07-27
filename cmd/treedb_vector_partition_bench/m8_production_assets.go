@@ -218,6 +218,16 @@ func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, par
 		if matchErr := m3DescriptorMatchesManifestV1(descriptor, fixture, h.status.Manifest, h.status.ModelDigest); matchErr != nil {
 			return nil, matchErr
 		}
+		var partitionHNSWM int
+		for _, index := range h.collection.MetaView().VectorIndexes {
+			if index.Name == partitionHNSWIndex {
+				partitionHNSWM = index.M
+				break
+			}
+		}
+		if partitionHNSWM != descriptor.PartitionHNSWM {
+			return nil, errors.New("retained M8 descriptor local HNSW M does not match collection metadata")
+		}
 		h.descriptor = &descriptor
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return nil, fmt.Errorf("stat retained M8 descriptor: %w", statErr)

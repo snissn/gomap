@@ -229,13 +229,17 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	}()
 	manager := collections.NewCollectionManager(db)
 	meta := partitionCollectionMeta(m3BenchmarkCollection, len(vectors[0]))
-	if cfg.partition.Degree < 2 {
+	partitionHNSWM := cfg.partitionHNSWM
+	if partitionHNSWM == 0 {
+		partitionHNSWM = cfg.partition.Degree
+	}
+	if partitionHNSWM < 2 {
 		return m3PartitionIndexRow{}, errors.New("M3 persistent HNSW degree must be at least 2")
 	}
 	foundIndex := false
 	for i := range meta.VectorIndexes {
 		if meta.VectorIndexes[i].Name == partitionHNSWIndex {
-			meta.VectorIndexes[i].M = cfg.partition.Degree
+			meta.VectorIndexes[i].M = partitionHNSWM
 			foundIndex = true
 			break
 		}
@@ -359,7 +363,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 			Config:         vectorpartition.DefaultRouterConfigV1(),
 			AssetFileID:    routerFileID,
 			AssetPartID:    uint64(manifest.PartitionCount) + 1,
-			M:              cfg.partition.Degree,
+			M:              partitionHNSWM,
 			EfConstruction: 128,
 			EfSearch:       128,
 		},
@@ -543,7 +547,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		FinalDerivedPhysicalBytes:    finalDerivedPhysicalBytes,
 		PhysicalBytesPerSourceVector: float64(finalDerivedPhysicalBytes) / float64(len(vectors)),
 		PackBytes:                    packBytes,
-		PartitionHNSWM:               cfg.partition.Degree,
+		PartitionHNSWM:               partitionHNSWM,
 		MappedBytes:                  mappedBytes,
 		HeapBytes:                    heapBytes,
 		SearcherOpenWallNanos:        openWall,
@@ -583,6 +587,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 			SourceGeneration: manifest.SourceGeneration, SourceChecksum: manifest.SourceChecksum, SourceSchemaHash: manifest.SourceSchemaHash, SourceRows: manifest.SourceRowCount,
 			PartitionGeneration: manifest.Generation, RouterGeneration: manifest.RouterGeneration, Partitions: manifest.PartitionCount,
 			Capacity: artifact.Metrics.Cap, PartitionLoads: append([]int(nil), overlap.Loads...), OverlapMemberships: len(manifest.OverlapMemberships),
+			PartitionHNSWM:       partitionHNSWM,
 			PersistentAssetBytes: packPayloadBytes + manifest.RouterAsset.Bytes,
 		}
 		if err := m3DescriptorMatchesManifestV1(descriptor, fixture, manifest, routerRuntime.ModelDigest); err != nil {

@@ -87,6 +87,25 @@ func TestBuildStableIDHashBaselineOwnsAssignmentAndPreservesSource(t *testing.T)
 		t.Fatal("baseline retained mutable source slices")
 	}
 }
+
+func TestBuildStableIDHashBaselinePreservesEmptyAdjacencyArray(t *testing.T) {
+	cfg := config()
+	cfg.Partitions = 1
+	source, err := Build([]Vector{{ID: "only", Values: []float64{1, 0}}}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.Graph.Neighbors[0] == nil || len(source.Graph.Neighbors[0]) != 0 {
+		t.Fatalf("source empty adjacency=%v", source.Graph.Neighbors[0])
+	}
+	baseline, err := BuildStableIDHashBaseline(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if baseline.Graph.Neighbors[0] == nil || len(baseline.Graph.Neighbors[0]) != 0 {
+		t.Fatalf("baseline empty adjacency=%v", baseline.Graph.Neighbors[0])
+	}
+}
 func mustDigest(t *testing.T, a Artifact) string {
 	t.Helper()
 	d, err := Digest(a)

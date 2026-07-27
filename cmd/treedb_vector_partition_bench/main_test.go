@@ -1115,6 +1115,22 @@ func TestPartitionAssignmentParsesOnlyMaterializationStagesV1(t *testing.T) {
 	}
 }
 
+func TestPartitionLocalHNSWMIsIndependentAndM3OnlyV1(t *testing.T) {
+	base := []string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "overlap,partition_index", "-overlap", "0", "-partition-degree", "4", "-partition-hnsw-m", "16"}
+	cfg, err := parseConfig(base)
+	if err != nil || cfg.partition.Degree != 4 || cfg.partitionHNSWM != 16 {
+		t.Fatalf("partition config=%+v err=%v", cfg, err)
+	}
+	for _, args := range [][]string{
+		{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "partition", "-partition-hnsw-m", "16"},
+		{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "overlap,partition_index", "-overlap", "0", "-partition-hnsw-m", "1"},
+	} {
+		if _, err := parseConfig(args); err == nil {
+			t.Fatalf("accepted malformed local HNSW config %#v", args)
+		}
+	}
+}
+
 func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 	cfg, err := parseConfig([]string{
 		"-mode", m8ProductionMultiGroupModeV1,

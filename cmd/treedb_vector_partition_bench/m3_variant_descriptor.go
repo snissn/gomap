@@ -47,6 +47,7 @@ type m3VariantDescriptorV1 struct {
 	PartitionGeneration  uint64                 `json:"partition_generation"`
 	RouterGeneration     uint64                 `json:"router_generation"`
 	Partitions           uint32                 `json:"partitions"`
+	PartitionHNSWM       int                    `json:"partition_hnsw_m"`
 	Capacity             int                    `json:"capacity"`
 	PartitionLoads       []int                  `json:"partition_loads"`
 	OverlapMemberships   int                    `json:"overlap_memberships"`
@@ -135,7 +136,7 @@ func validateM3VariantDescriptorV1(d m3VariantDescriptorV1) error {
 		!m8SHA256V1(d.FixtureChecksum) || !m8SHA256V1(d.ArtifactSHA256) || d.ArtifactBackend == "" ||
 		!m8SHA256V1(d.Source.Checksum) || d.DatabaseDirectory == "" || !m8SHA256V1(d.ManifestIntegrity) || !m8SHA256V1(d.ReadySetDigest) ||
 		!m8SHA256V1(d.RouterAssetChecksum) || !m8SHA256V1(d.RouterModelDigest) || d.SourceGeneration == 0 || d.SourceRows == 0 ||
-		d.PartitionGeneration == 0 || d.RouterGeneration != d.PartitionGeneration || d.Partitions < 1 || d.Capacity < 1 ||
+		d.PartitionGeneration == 0 || d.RouterGeneration != d.PartitionGeneration || d.Partitions < 1 || d.PartitionHNSWM < 2 || d.PartitionHNSWM > partitionHNSWDegree || d.Capacity < 1 ||
 		len(d.PartitionLoads) != int(d.Partitions) || d.PersistentAssetBytes == 0 {
 		return errors.New("malformed M3 variant descriptor")
 	}

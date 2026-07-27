@@ -871,7 +871,8 @@ func BuildStableIDHashBaseline(a Artifact) (Artifact, error) {
 	out.IDs = append([]string(nil), a.IDs...)
 	out.Graph.Neighbors = make([][]int, len(a.Graph.Neighbors))
 	for i := range a.Graph.Neighbors {
-		out.Graph.Neighbors[i] = append([]int(nil), a.Graph.Neighbors[i]...)
+		out.Graph.Neighbors[i] = make([]int, len(a.Graph.Neighbors[i]))
+		copy(out.Graph.Neighbors[i], a.Graph.Neighbors[i])
 	}
 	out.Assignment = make([]int, len(a.IDs))
 	for i, id := range a.IDs {

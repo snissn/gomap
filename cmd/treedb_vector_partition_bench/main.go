@@ -85,6 +85,7 @@ type config struct {
 	m8VariantDBs        []string
 	partitionAssignment string
 	partition           vectorpartition.Config
+	partitionHNSWM      int
 	router              *treeDBRepresentativeRouter
 	coordinator         *m6CoordinatorHarnessV1
 	routerConfig        vectorpartition.RouterConfigV1
@@ -637,6 +638,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.partition.Pivots, "partition-pivots", cfg.partition.Pivots, "dense-ball pivots per recursive level")
 	fs.IntVar(&cfg.partition.MaxLeafBucket, "partition-max-leaf-bucket", cfg.partition.MaxLeafBucket, "maximum dense-ball leaf bucket")
 	fs.IntVar(&cfg.partition.Degree, "partition-degree", cfg.partition.Degree, "maximum canonical graph degree")
+	fs.IntVar(&cfg.partitionHNSWM, "partition-hnsw-m", 0, "persistent partition-local HNSW M for M3; zero inherits -partition-degree")
 	fs.Float64Var(&cfg.partition.Imbalance, "imbalance", cfg.partition.Imbalance, "partition imbalance epsilon")
 	fs.IntVar(&cfg.routerConfig.BranchFactor, "router-branch-factor", cfg.routerConfig.BranchFactor, "router hierarchical k-means branch factor")
 	fs.IntVar(&cfg.routerConfig.LeafSize, "router-leaf-size", cfg.routerConfig.LeafSize, "router leaf stop size")
@@ -758,6 +760,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.partitionAssignment == partitionAssignmentStableIDHashV1 && cfg.stage == "overlap,partition_index" && (len(cfg.overlaps) != 1 || cfg.overlaps[0] != 0) {
 		return config{}, errors.New("stable_id_hash M3 materialization requires exactly zero overlap")
+	}
+	if cfg.partitionHNSWM != 0 && (cfg.stage != "overlap,partition_index" || cfg.partitionHNSWM < 2 || cfg.partitionHNSWM > partitionHNSWDegree) {
+		return config{}, fmt.Errorf("-partition-hnsw-m applies only to M3 and must be in [2,%d]", partitionHNSWDegree)
 	}
 	if cfg.stage == "router" && stages == "all" {
 		stages = "exact_representative_routing,approximate_representative_routing"
