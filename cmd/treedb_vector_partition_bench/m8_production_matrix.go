@@ -81,38 +81,39 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 	if len(cfg.m8VariantDBs) == 0 {
 		return runM8ProductionSingleVariantV1(cfg, fixture, vectors, queries, stdout)
 	}
-	pathsByVariant := make(map[string]string, len(cfg.m8VariantDBs))
+	type variantSource struct {
+		dir        string
+		descriptor m3VariantDescriptorV1
+	}
+	sourcesByVariant := make(map[string]variantSource, len(cfg.m8VariantDBs))
 	for _, dir := range cfg.m8VariantDBs {
 		descriptor, err := m3ReadVariantDescriptorV1(dir)
 		if err != nil {
 			return fmt.Errorf("M8 matrix variant %q: %w", dir, err)
 		}
-		if descriptor.FixtureChecksum != fixture.Checksum || descriptor.Partitions != uint32(cfg.partitions) {
+		if cfg.partitions < 0 || descriptor.FixtureChecksum != fixture.Checksum || uint64(descriptor.Partitions) != uint64(cfg.partitions) {
 			return fmt.Errorf("M8 matrix variant %q does not match configured fixture/partitions", descriptor.VariantID)
 		}
-		if _, duplicate := pathsByVariant[descriptor.VariantID]; duplicate {
+		if _, duplicate := sourcesByVariant[descriptor.VariantID]; duplicate {
 			return fmt.Errorf("M8 matrix duplicate variant %q", descriptor.VariantID)
 		}
-		pathsByVariant[descriptor.VariantID] = dir
+		sourcesByVariant[descriptor.VariantID] = variantSource{dir: dir, descriptor: descriptor}
 	}
 	for _, required := range m8RequiredVariantIDsV1 {
-		if pathsByVariant[required] == "" {
+		if sourcesByVariant[required].dir == "" {
 			return fmt.Errorf("M8 matrix missing required variant %q", required)
 		}
 	}
 
 	reports := make([]m8ProductionReportV1, 0, len(m8RequiredVariantIDsV1))
 	for _, variantID := range m8RequiredVariantIDsV1 {
-		descriptor, err := m3ReadVariantDescriptorV1(pathsByVariant[variantID])
-		if err != nil {
-			return err
-		}
+		source := sourcesByVariant[variantID]
 		var encoded bytes.Buffer
 		variantProfiles := ""
 		if cfg.profiles != "" {
 			variantProfiles = filepath.Join(cfg.profiles, variantID)
 		}
-		if err := runM8ProductionVariantProcessV1(cfg, pathsByVariant[variantID], descriptor.OverlapRatio, variantProfiles, &encoded); err != nil {
+		if err := runM8ProductionVariantProcessV1(cfg, source.dir, source.descriptor.OverlapRatio, variantProfiles, &encoded); err != nil {
 			return fmt.Errorf("M8 matrix variant %s: %w", variantID, err)
 		}
 		var report m8ProductionReportV1
@@ -183,6 +184,10 @@ func m8VariantProcessArgsV1(command []string, dir string, overlap float64, profi
 	args := make([]string, 0, len(command)+8)
 	for i := 1; i < len(command); i++ {
 		arg := command[i]
+		if !strings.HasPrefix(arg, "-") {
+			args = append(args, arg)
+			continue
+		}
 		name := strings.TrimLeft(arg, "-")
 		if at := strings.IndexByte(name, '='); at >= 0 {
 			name = name[:at]

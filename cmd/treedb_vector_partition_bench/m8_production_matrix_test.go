@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -24,6 +25,10 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 	} {
 		descriptor := testM3VariantDescriptorV1(t.TempDir())
 		descriptor.VariantID, descriptor.AssignmentBasis, descriptor.OverlapRatio = variant.id, variant.assignment, variant.overlap
+		descriptor.SourceRows, descriptor.OverlapMemberships = 8, 0
+		if variant.overlap > 0 {
+			descriptor.OverlapMemberships = 1
+		}
 		config := common
 		config.Overlap = []float64{variant.overlap}
 		variantGates := pass
@@ -71,7 +76,7 @@ func TestM8VariantDBsParseStrictThreePathsV1(t *testing.T) {
 }
 
 func TestM8VariantProcessArgsForceFreshSingleVariantV1(t *testing.T) {
-	command := []string{"treedb_vector_partition_bench", "-mode", m8ProductionMultiGroupModeV1, "-m8-variant-dbs", "/a,/b,/c", "-overlap=.1", "-format", "text", "-profiles", "/old"}
+	command := []string{"treedb_vector_partition_bench", "-mode", m8ProductionMultiGroupModeV1, "-dataset", "format", "-m8-variant-dbs", "/a,/b,/c", "-overlap=.1", "-format", "text", "-profiles", "/old"}
 	got, err := m8VariantProcessArgsV1(command, "/variant", .2, "/profiles/variant")
 	if err != nil {
 		t.Fatal(err)
@@ -84,6 +89,9 @@ func TestM8VariantProcessArgsForceFreshSingleVariantV1(t *testing.T) {
 		if strings.HasPrefix(arg, "-m8-variant-dbs") || strings.HasPrefix(arg, "--m8-variant-dbs") || arg == "/a,/b,/c" || arg == "/old" {
 			t.Fatalf("child args retained matrix/old-profile argument: %v", got)
 		}
+	}
+	if !slices.Contains(got, "format") {
+		t.Fatalf("child args dropped positional value matching a filtered flag: %v", got)
 	}
 }
 

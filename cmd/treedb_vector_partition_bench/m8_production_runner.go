@@ -1084,7 +1084,9 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	}
 	// Integer ceiling of mean * 1.05, matching the default balance epsilon.
 	sourceRows, partitions := assets.manifest.SourceRowCount, uint64(assets.manifest.PartitionCount)
-	out.BalanceHardCap = (sourceRows*105 + partitions*100 - 1) / (partitions * 100)
+	if partitions > 0 {
+		out.BalanceHardCap = (sourceRows*105 + partitions*100 - 1) / (partitions * 100)
+	}
 	out.MmapStatus = "not_captured_by_m8_runner; retained M3/M5 artifacts own mapped-pack evidence"
 	out.PeakRSSScope = m8PeakRSSScopeV1
 	if peak, ok := vectorPartitionBenchmarkPeakRSS(); ok {
@@ -1108,10 +1110,10 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	if out.PeakRSSMeasured && out.PeakRSSBytes > 0 {
 		peak = uint64(out.PeakRSSBytes)
 	}
-	add("process_peak_rss", cfg.m8MaxRSSBytes, peak, "bytes", true)
-	if !out.PeakRSSMeasured {
-		out.LimitComparisons[len(out.LimitComparisons)-1].Passed = false
-	}
+	out.LimitComparisons = append(out.LimitComparisons, m8ProductionResourceLimitComparisonV1{
+		Name: "process_peak_rss", Configured: cfg.m8MaxRSSBytes, Observed: peak, Unit: "bytes", Enforced: true,
+		Passed: out.PeakRSSMeasured && cfg.m8MaxRSSBytes > 0 && peak <= cfg.m8MaxRSSBytes,
+	})
 	add("coordinator_selected_partitions", uint64(cfg.m8CoordinatorLimits.MaxSelectedPartitions), maxProbes, "count", true)
 	add("coordinator_groups", uint64(cfg.m8CoordinatorLimits.MaxGroups), uint64(cfg.raftGroups), "count", true)
 	add("coordinator_requests", uint64(cfg.m8CoordinatorLimits.MaxRequests), observed.Requests, "count", true)
@@ -1587,7 +1589,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 	if report.SchemaVersion != 2 || report.ResultKind != "m8_production_multi_group_evidence_v2" ||
 		report.Mode != m8ProductionMultiGroupModeV1 || !report.ProductionEvidence ||
 		report.GeneratedAt.IsZero() || len(report.Command) == 0 || !validSHA(report.BaseSHA) || !validSHA(report.HeadSHA) ||
-		report.Config.RaftGroups < 2 || report.Config.RaftNodesPerGroup != 3 || report.Config.Partitions < 4 ||
+		report.Config.RaftGroups < 2 || report.Config.RaftNodesPerGroup != 3 || report.Config.Partitions < 4 || report.Config.Partitions > maxPartitions ||
 		report.Config.Warmup < 0 || report.Config.RouterCandidates < 1 || report.BuildNanos <= 0 || report.TimedBoundary == "" || len(report.Limitations) == 0 {
 		return errors.New("missing or invalid M8 identity, topology, or timing metadata")
 	}
@@ -1597,7 +1599,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 	if report.Variant != nil {
 		if err := validateM3VariantDescriptorV1(*report.Variant); err != nil || len(report.Config.Overlap) != 1 ||
 			report.Config.Overlap[0] != report.Variant.OverlapRatio || report.Variant.FixtureChecksum != report.Dataset.Checksum ||
-			report.Variant.Partitions != uint32(report.Config.Partitions) || report.Variant.PersistentAssetBytes != report.Resources.PersistentAssetBytes {
+			uint64(report.Variant.Partitions) != uint64(report.Config.Partitions) || report.Variant.PersistentAssetBytes != report.Resources.PersistentAssetBytes {
 			return errors.New("M8 report variant identity is not bound to its configuration and resources")
 		}
 	}

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"math"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/nativewire"
 )
 
@@ -39,5 +41,13 @@ func TestM8ObservedResourceMaximaUseRecordedMaximaNotAveragesV1(t *testing.T) {
 		got.RequestBytes != 900 || got.CandidateBytes != 1800 || got.ResponseBytes != 2700 || got.MergeEntries != 25 ||
 		got.ShardRequestBytes != 800 || got.ShardCandidateBytes != 1700 || got.ShardResponseBytes != 2600 {
 		t.Fatalf("observed maxima=%+v", got)
+	}
+}
+
+func TestM8ProductionResourcesFailClosedForZeroPartitionsV1(t *testing.T) {
+	assets := &m8ProductionMultiGroupAssetsV1{manifest: collections.VectorPartitionManifestV1{}}
+	got := m8ProductionResourcesV1(config{}, fixtureManifest{}, assets, nil, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})
+	if got.MaxPartitionLoad != math.MaxUint64 || got.BalanceHardCap != 0 {
+		t.Fatalf("zero-partition resources=%+v", got)
 	}
 }

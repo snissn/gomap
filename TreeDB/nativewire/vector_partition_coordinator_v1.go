@@ -1524,7 +1524,10 @@ func (c *VectorPartitionCoordinatorV1) dispatchTask(ctx context.Context, task ve
 			return result, c.wrapError(err, task.group.ID)
 		}
 		requestBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(request)
-		if err != nil || requestBytes > request.RequestBytesLimit {
+		if err != nil {
+			return result, c.wrapError(err, task.group.ID)
+		}
+		if requestBytes > request.RequestBytesLimit {
 			return result, c.wrapError(ErrVectorPartitionCoordinatorBudgetExceeded, task.group.ID)
 		}
 		result.maxRequestBytes = max(result.maxRequestBytes, requestBytes)
