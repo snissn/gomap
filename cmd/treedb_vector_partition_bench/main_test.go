@@ -1688,10 +1688,10 @@ func TestM8GateLedgerRequiresMatchedRecallQPSAndTailV1(t *testing.T) {
 			{Status: "pass", Probes: 4, EfSearch: 128, Concurrency: 16, RecallAtK: 0.92, QPS: 116, P95Nanos: 999},
 		},
 		Failure:   m8ProductionFailureEvidenceV1{Passed: true},
-		Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1, PeakRSSMeasured: true, MaxPartitionLoad: 65_000, BalanceHardCap: 65_625},
+		Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1, PeakRSSMeasured: true, MaxPartitionLoad: 65_000, BalanceHardCap: 65_625, LimitComparisons: []m8ProductionResourceLimitComparisonV1{{Name: "bytes", Configured: 2, Observed: 1, Passed: true}}},
 	}
 	ledger := m8ProductionGateLedgerForReportV1(report)
-	if ledger.ExhaustiveParity != "pass" || ledger.FailureHonesty != "pass" || ledger.Recall != "pass" || ledger.ProbeReduction != "pass" || ledger.EndToEndQPS != "pass" || ledger.TailLatency != "pass" || ledger.Balance != "pass" || ledger.ResourceBounds != "measured_not_bounded" || ledger.OverlapStorage != "fail" {
+	if ledger.ExhaustiveParity != "pass" || ledger.FailureHonesty != "pass" || ledger.Recall != "pass" || ledger.ProbeReduction != "pass" || ledger.EndToEndQPS != "pass" || ledger.TailLatency != "pass" || ledger.Balance != "pass" || ledger.ResourceBounds != "pass" || ledger.OverlapStorage != "fail" {
 		t.Fatalf("ledger=%+v", ledger)
 	}
 	report.Rows[1].QPS = 114.9

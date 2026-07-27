@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -29,16 +30,19 @@ type VectorPartitionM8ProductionMultiGroupOptionsV1 struct {
 	RouterSource         VectorPartitionCoordinatorRouterSourceV1
 	GroupAssetSetDigests map[string]string
 	Database, Catalog    string
+	CoordinatorLimits    VectorPartitionCoordinatorLimitsV1
+	ShardLimits          VectorPartitionShardSearchLimitsV1
 }
 
 type VectorPartitionM8ProductionMultiGroupEvidenceV1 struct {
-	Network        string                                       `json:"network"`
-	Groups         []VectorPartitionM8ProductionGroupEvidenceV1 `json:"groups"`
-	LifecycleState string                                       `json:"lifecycle_state"`
-	ReadySetDigest string                                       `json:"ready_set_digest"`
-	MetaGroup      string                                       `json:"meta_group"`
-	MetaNodes      []string                                     `json:"meta_nodes"`
-	MetaLeader     string                                       `json:"meta_leader"`
+	Network                    string                                       `json:"network"`
+	Groups                     []VectorPartitionM8ProductionGroupEvidenceV1 `json:"groups"`
+	LifecycleState             string                                       `json:"lifecycle_state"`
+	ReadySetDigest             string                                       `json:"ready_set_digest"`
+	MetaGroup                  string                                       `json:"meta_group"`
+	MetaNodes                  []string                                     `json:"meta_nodes"`
+	MetaLeader                 string                                       `json:"meta_leader"`
+	MaxConcurrentShardRequests uint64                                       `json:"max_concurrent_shard_requests"`
 }
 type VectorPartitionM8ProductionGroupEvidenceV1 struct {
 	GroupID                   string   `json:"group_id"`
@@ -64,6 +68,8 @@ type VectorPartitionM8ProductionMultiGroupV1 struct {
 	conns       map[net.Conn]raftcluster.GroupID
 	mu          sync.Mutex
 	hits        map[raftcluster.GroupID]uint64
+	inflight    atomic.Uint64
+	maxInflight atomic.Uint64
 	lifecycle   raftplacement.VectorPartitionLifecycleRecordV1
 	wg          sync.WaitGroup
 	closed      bool
@@ -176,7 +182,7 @@ func NewVectorPartitionM8ProductionMultiGroupV1(ctx context.Context, opts Vector
 		if sourceErr != nil {
 			return nil, sourceErr
 		}
-		service, serviceErr := NewVectorPartitionShardSearchServiceV1(VectorPartitionShardSearchServiceOptionsV1{Catalog: resolved, Placement: placement, LocalNodeID: h.data[group].LeaderID(), LocalGroupID: group, ReadCoordinator: h.data[group].ReadCoordinator(), GenerationSource: vectorPartitionM8TopologyGenerationSourceV1{source: source, manifest: opts.Manifest}})
+		service, serviceErr := NewVectorPartitionShardSearchServiceV1(VectorPartitionShardSearchServiceOptionsV1{Catalog: resolved, Placement: placement, LocalNodeID: h.data[group].LeaderID(), LocalGroupID: group, ReadCoordinator: h.data[group].ReadCoordinator(), GenerationSource: vectorPartitionM8TopologyGenerationSourceV1{source: source, manifest: opts.Manifest}, Limits: opts.ShardLimits})
 		if serviceErr != nil {
 			return nil, serviceErr
 		}
@@ -195,12 +201,16 @@ func NewVectorPartitionM8ProductionMultiGroupV1(ctx context.Context, opts Vector
 		return nil, err
 	}
 	counting := VectorPartitionShardSearchDispatcherFuncV1(func(callCtx context.Context, request VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+		current := h.inflight.Add(1)
+		defer h.inflight.Add(^uint64(0))
+		for maximum := h.maxInflight.Load(); current > maximum && !h.maxInflight.CompareAndSwap(maximum, current); maximum = h.maxInflight.Load() {
+		}
 		h.mu.Lock()
 		h.hits[request.TargetGroupID]++
 		h.mu.Unlock()
 		return dispatcher.DispatchVectorPartitionShardSearchV1(callCtx, request)
 	})
-	h.coordinator, err = NewVectorPartitionCoordinatorV1(VectorPartitionCoordinatorOptionsV1{Catalog: resolved, Placement: placement, RouterSource: opts.RouterSource, Dispatcher: counting, ReplicatedLifecycle: replicated, RequireReplicatedLifecycle: true, Limits: DefaultVectorPartitionCoordinatorLimitsV1()})
+	h.coordinator, err = NewVectorPartitionCoordinatorV1(VectorPartitionCoordinatorOptionsV1{Catalog: resolved, Placement: placement, RouterSource: opts.RouterSource, Dispatcher: counting, ReplicatedLifecycle: replicated, RequireReplicatedLifecycle: true, Limits: opts.CoordinatorLimits})
 	if err != nil {
 		return nil, err
 	}
@@ -411,6 +421,7 @@ func (h *VectorPartitionM8ProductionMultiGroupV1) Evidence() VectorPartitionM8Pr
 		e.LifecycleState = string(h.lifecycle.State)
 		e.ReadySetDigest = h.lifecycle.ReadySetDigest
 	}
+	e.MaxConcurrentShardRequests = h.maxInflight.Load()
 	return e
 }
 func (h *VectorPartitionM8ProductionMultiGroupV1) Close() error {

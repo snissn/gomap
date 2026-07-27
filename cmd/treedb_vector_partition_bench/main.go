@@ -96,6 +96,10 @@ type config struct {
 	warmup              int
 	profiles            string
 	efSearch            []int
+	m8MaxRSSBytes       uint64
+	m8MaxAssetBytes     uint64
+	m8CoordinatorLimits nativewire.VectorPartitionCoordinatorLimitsV1
+	m8ShardLimits       nativewire.VectorPartitionShardSearchLimitsV1
 }
 
 type partitionRun struct {
@@ -592,6 +596,9 @@ func parseConfig(args []string) (config, error) {
 		partitionAssignment: partitionAssignmentGraphV1,
 		partition:           vectorpartition.DefaultConfig(), routerConfig: vectorpartition.DefaultRouterConfigV1(),
 		routerCandidates: 1024, sourceHNSWDegree: partitionHNSWDegree,
+		m8MaxRSSBytes: uint64(maxFixtureBytes), m8MaxAssetBytes: uint64(maxFixtureBytes),
+		m8CoordinatorLimits: nativewire.DefaultVectorPartitionCoordinatorLimitsV1(),
+		m8ShardLimits:       nativewire.DefaultVectorPartitionShardSearchLimitsV1(),
 	}
 	var probes, overlap, concurrency, efSearch string
 	var stages string
@@ -615,6 +622,8 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.profiles, "profiles", "", "M8 profile artifact directory")
 	fs.StringVar(&cfg.m3PersistDir, "m3-persist-db", "", "retain the single overlap,partition_index row as a persistent TreeDB directory for downstream service benchmarks")
 	fs.StringVar(&cfg.m8ExistingDB, "m8-existing-db", "", "read-only existing TreeDB M3 asset directory for production_multi_group; never rebuilt or deleted")
+	fs.Uint64Var(&cfg.m8MaxRSSBytes, "m8-max-rss-bytes", cfg.m8MaxRSSBytes, "hard process peak-RSS acceptance bound for production_multi_group")
+	fs.Uint64Var(&cfg.m8MaxAssetBytes, "m8-max-persistent-asset-bytes", cfg.m8MaxAssetBytes, "hard persistent derived-asset byte bound for production_multi_group")
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
 	fs.IntVar(&cfg.partition.Repetitions, "partition-repetitions", cfg.partition.Repetitions, "dense-ball graph sketch repetitions")
 	fs.IntVar(&cfg.partition.Pivots, "partition-pivots", cfg.partition.Pivots, "dense-ball pivots per recursive level")
@@ -683,6 +692,9 @@ func parseConfig(args []string) (config, error) {
 		}
 	}
 	if cfg.stage == m8ProductionMultiGroupModeV1 {
+		if cfg.m8MaxRSSBytes == 0 || cfg.m8MaxAssetBytes == 0 {
+			return config{}, errors.New("production_multi_group requires positive RSS and persistent-asset byte bounds")
+		}
 		if cfg.raftGroups < 2 || cfg.raftGroups > 64 || cfg.raftGroups > cfg.partitions || cfg.raftNodes != 3 || cfg.partitions < 4 {
 			return config{}, errors.New("production_multi_group requires 2..64 groups, exactly 3 nodes/group, at least 4 partitions, and groups <= partitions")
 		}

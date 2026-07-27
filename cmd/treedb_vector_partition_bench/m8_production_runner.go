@@ -169,14 +169,26 @@ type m8ProductionHostEvidenceV1 struct {
 }
 
 type m8ProductionResourceEvidenceV1 struct {
-	PersistentAssetBytes uint64 `json:"persistent_asset_bytes"`
-	PeakRSSBytes         int64  `json:"peak_rss_bytes,omitempty"`
-	PeakRSSMeasured      bool   `json:"peak_rss_measured"`
-	PeakRSSScope         string `json:"peak_rss_scope,omitempty"`
-	OverlapMemberships   int    `json:"overlap_memberships"`
-	MaxPartitionLoad     uint64 `json:"max_partition_load"`
-	BalanceHardCap       uint64 `json:"balance_hard_cap"`
-	MmapStatus           string `json:"mmap_status"`
+	PersistentAssetBytes uint64                                  `json:"persistent_asset_bytes"`
+	PersistentAssetCap   uint64                                  `json:"persistent_asset_cap_bytes"`
+	PeakRSSBytes         int64                                   `json:"peak_rss_bytes,omitempty"`
+	PeakRSSCapBytes      uint64                                  `json:"peak_rss_cap_bytes"`
+	PeakRSSMeasured      bool                                    `json:"peak_rss_measured"`
+	PeakRSSScope         string                                  `json:"peak_rss_scope,omitempty"`
+	OverlapMemberships   int                                     `json:"overlap_memberships"`
+	MaxPartitionLoad     uint64                                  `json:"max_partition_load"`
+	BalanceHardCap       uint64                                  `json:"balance_hard_cap"`
+	MmapStatus           string                                  `json:"mmap_status"`
+	LimitComparisons     []m8ProductionResourceLimitComparisonV1 `json:"limit_comparisons"`
+}
+
+type m8ProductionResourceLimitComparisonV1 struct {
+	Name       string `json:"name"`
+	Configured uint64 `json:"configured"`
+	Observed   uint64 `json:"observed"`
+	Unit       string `json:"unit"`
+	Enforced   bool   `json:"enforced"`
+	Passed     bool   `json:"passed"`
 }
 
 type m8MeasuredCellV1 struct {
@@ -202,10 +214,25 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		return fmt.Errorf("open M8 production assets: %w", err)
 	}
 	defer func() { runErr = errors.Join(runErr, assets.Close()) }()
+	var persistentAssetBytes uint64
+	for _, asset := range assets.manifest.Assets {
+		if asset.Bytes > ^uint64(0)-persistentAssetBytes {
+			return errors.New("M8 persistent asset byte accounting overflow")
+		}
+		persistentAssetBytes += asset.Bytes
+	}
+	if assets.manifest.RouterAsset.Bytes > ^uint64(0)-persistentAssetBytes {
+		return errors.New("M8 persistent router byte accounting overflow")
+	}
+	persistentAssetBytes += assets.manifest.RouterAsset.Bytes
+	if persistentAssetBytes > cfg.m8MaxAssetBytes {
+		return fmt.Errorf("M8 persistent assets=%d exceed configured cap=%d", persistentAssetBytes, cfg.m8MaxAssetBytes)
+	}
 	topologyCtx, cancelTopology := context.WithTimeout(context.Background(), 2*time.Minute)
 	topology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(topologyCtx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{
 		Collection: assets.collection, Manifest: assets.manifest, RouterSource: assets.RouterSource(),
 		GroupAssetSetDigests: assets.assetSetDigests, Database: "default", Catalog: "default",
+		CoordinatorLimits: cfg.m8CoordinatorLimits, ShardLimits: cfg.m8ShardLimits,
 	})
 	cancelTopology()
 	if err != nil {
@@ -283,7 +310,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		}
 		report.Profiles = m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Captured: captured, Status: "captured_production_query_and_fault_boundary", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs.pprof is cumulative and must be compared with allocs_baseline.pprof"}
 	}
-	report.Resources = m8ProductionResourcesV1(assets)
+	report.Resources = m8ProductionResourcesV1(cfg, fixture, assets, report.Rows, report.Topology)
 
 	// Attribution deliberately runs after the timed query/fault boundary,
 	// profile capture, and peak-RSS snapshot. Its exhaustive mmap scans must not
@@ -1008,8 +1035,8 @@ func m8WarmProductionTopologyV1(ctx context.Context, coordinator *nativewire.Vec
 	return nil
 }
 
-func m8ProductionResourcesV1(assets *m8ProductionMultiGroupAssetsV1) m8ProductionResourceEvidenceV1 {
-	var out m8ProductionResourceEvidenceV1
+func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8ProductionMultiGroupAssetsV1, rows []m8ProductionRowV1, topology nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1) m8ProductionResourceEvidenceV1 {
+	out := m8ProductionResourceEvidenceV1{PersistentAssetCap: cfg.m8MaxAssetBytes, PeakRSSCapBytes: cfg.m8MaxRSSBytes}
 	if assets == nil {
 		return out
 	}
@@ -1026,13 +1053,68 @@ func m8ProductionResourcesV1(assets *m8ProductionMultiGroupAssetsV1) m8Productio
 		out.MaxPartitionLoad = max(out.MaxPartitionLoad, load)
 	}
 	// Integer ceiling of mean * 1.05, matching the default balance epsilon.
-	rows, partitions := assets.manifest.SourceRowCount, uint64(assets.manifest.PartitionCount)
-	out.BalanceHardCap = (rows*105 + partitions*100 - 1) / (partitions * 100)
+	sourceRows, partitions := assets.manifest.SourceRowCount, uint64(assets.manifest.PartitionCount)
+	out.BalanceHardCap = (sourceRows*105 + partitions*100 - 1) / (partitions * 100)
 	out.MmapStatus = "not_captured_by_m8_runner; retained M3/M5 artifacts own mapped-pack evidence"
 	out.PeakRSSScope = m8PeakRSSScopeV1
 	if peak, ok := vectorPartitionBenchmarkPeakRSS(); ok {
 		out.PeakRSSBytes, out.PeakRSSMeasured = peak, true
 	}
+	var maxProbes, maxEf, maxRPCs, maxRequestBytes, maxCandidateBytes, maxResponseBytes, maxP99 uint64
+	for _, row := range rows {
+		if row.Status == "unsupported" {
+			continue
+		}
+		maxProbes = max(maxProbes, uint64(row.Probes))
+		maxEf = max(maxEf, uint64(row.EfSearch))
+		maxRPCs = max(maxRPCs, row.RPCs)
+		maxRequestBytes = max(maxRequestBytes, row.RequestBytes)
+		maxCandidateBytes = max(maxCandidateBytes, row.CandidateBytes)
+		maxResponseBytes = max(maxResponseBytes, row.ResponseBytes)
+		maxP99 = max(maxP99, row.P99Nanos)
+	}
+	add := func(name string, configured, observed uint64, unit string, enforced bool) {
+		out.LimitComparisons = append(out.LimitComparisons, m8ProductionResourceLimitComparisonV1{Name: name, Configured: configured, Observed: observed, Unit: unit, Enforced: enforced, Passed: configured > 0 && observed <= configured})
+	}
+	add("persistent_asset_bytes", cfg.m8MaxAssetBytes, out.PersistentAssetBytes, "bytes", true)
+	peak := uint64(0)
+	if out.PeakRSSMeasured && out.PeakRSSBytes > 0 {
+		peak = uint64(out.PeakRSSBytes)
+	}
+	add("process_peak_rss", cfg.m8MaxRSSBytes, peak, "bytes", true)
+	if !out.PeakRSSMeasured {
+		out.LimitComparisons[len(out.LimitComparisons)-1].Passed = false
+	}
+	add("coordinator_selected_partitions", uint64(cfg.m8CoordinatorLimits.MaxSelectedPartitions), maxProbes, "count", true)
+	add("coordinator_groups", uint64(cfg.m8CoordinatorLimits.MaxGroups), uint64(cfg.raftGroups), "count", true)
+	add("coordinator_requests", uint64(cfg.m8CoordinatorLimits.MaxRequests), maxRPCs, "count", true)
+	add("coordinator_concurrent_requests", uint64(cfg.m8CoordinatorLimits.MaxConcurrentRequests), topology.MaxConcurrentShardRequests, "count", true)
+	add("coordinator_retries", uint64(cfg.m8CoordinatorLimits.MaxRetries), 0, "count", true)
+	add("coordinator_redirects", uint64(cfg.m8CoordinatorLimits.MaxRedirects), 0, "count", true)
+	add("coordinator_router_candidates", uint64(cfg.m8CoordinatorLimits.MaxRouterCandidates), uint64(cfg.routerCandidates), "count", true)
+	add("coordinator_query_bytes", uint64(cfg.m8CoordinatorLimits.MaxQueryBytes), uint64(fixture.Dimensions*4), "bytes", true)
+	add("coordinator_top_k", uint64(cfg.m8CoordinatorLimits.MaxTopK), uint64(cfg.topK), "count", true)
+	add("coordinator_ef_search", uint64(cfg.m8CoordinatorLimits.MaxEfSearch), maxEf, "count", true)
+	add("coordinator_partitions_per_request", uint64(cfg.m8CoordinatorLimits.MaxPartitionsPerRequest), maxProbes, "count", true)
+	identityBytes := uint64(len("default")*2 + len(assets.manifest.Collection) + len(assets.manifest.IndexName) + len(assets.manifest.IndexDefinitionDigest) + len(assets.manifest.ReadySetDigest))
+	stableIDBytes := uint64(len(fmt.Sprintf("doc-%06d", max(0, fixture.Vectors-1))))
+	add("coordinator_identity_bytes", uint64(cfg.m8CoordinatorLimits.MaxIdentityBytes), identityBytes, "bytes", true)
+	add("coordinator_stable_id_bytes", uint64(cfg.m8CoordinatorLimits.MaxStableIDBytes), stableIDBytes, "bytes", true)
+	add("coordinator_merge_entries", uint64(cfg.m8CoordinatorLimits.MaxMergeEntries), maxRPCs*uint64(cfg.topK), "count", true)
+	add("coordinator_request_bytes", cfg.m8CoordinatorLimits.MaxRequestBytes, maxRequestBytes, "bytes", true)
+	add("coordinator_candidate_bytes", cfg.m8CoordinatorLimits.MaxCandidateBytes, maxCandidateBytes, "bytes", true)
+	add("coordinator_response_bytes", cfg.m8CoordinatorLimits.MaxResponseBytes, maxResponseBytes, "bytes", true)
+	add("coordinator_wall_clock", uint64(cfg.m8CoordinatorLimits.MaxWallClock), maxP99, "nanoseconds", true)
+	add("shard_dimensions", uint64(cfg.m8ShardLimits.MaxDimensions), uint64(fixture.Dimensions), "count", true)
+	add("shard_query_bytes", uint64(cfg.m8ShardLimits.MaxQueryBytes), uint64(fixture.Dimensions*4), "bytes", true)
+	add("shard_partitions", uint64(cfg.m8ShardLimits.MaxPartitions), maxProbes, "count", true)
+	add("shard_top_k", uint64(cfg.m8ShardLimits.MaxTopK), uint64(cfg.topK), "count", true)
+	add("shard_ef_search", uint64(cfg.m8ShardLimits.MaxEfSearch), maxEf, "count", true)
+	add("shard_identity_bytes", uint64(cfg.m8ShardLimits.MaxIdentityBytes), identityBytes, "bytes", true)
+	add("shard_stable_id_bytes", uint64(cfg.m8ShardLimits.MaxStableIDBytes), stableIDBytes, "bytes", true)
+	add("shard_request_bytes", cfg.m8ShardLimits.MaxRequestBytes, maxRequestBytes, "bytes", true)
+	add("shard_candidate_bytes", cfg.m8ShardLimits.MaxCandidateBytes, maxCandidateBytes, "bytes", true)
+	add("shard_response_bytes", cfg.m8ShardLimits.MaxResponseBytes, maxResponseBytes, "bytes", true)
 	return out
 }
 
@@ -1306,10 +1388,14 @@ func m8ProductionGateLedgerForReportV1(report m8ProductionReportV1) m8Production
 	if report.Resources.BalanceHardCap > 0 && report.Resources.MaxPartitionLoad <= report.Resources.BalanceHardCap {
 		ledger.Balance = "pass"
 	}
-	if report.Resources.PersistentAssetBytes > 0 && report.Resources.PeakRSSMeasured {
-		// The runner observes RSS but has no declared process-RSS ceiling. Do
-		// not convert an observation into a resource-bound pass claim.
-		ledger.ResourceBounds = "measured_not_bounded"
+	if report.Resources.PersistentAssetBytes > 0 && report.Resources.PeakRSSMeasured && len(report.Resources.LimitComparisons) > 0 {
+		ledger.ResourceBounds = "pass"
+		for _, comparison := range report.Resources.LimitComparisons {
+			if comparison.Configured == 0 || !comparison.Passed {
+				ledger.ResourceBounds = "fail"
+				break
+			}
+		}
 	}
 	return ledger
 }
