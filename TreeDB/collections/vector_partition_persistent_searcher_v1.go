@@ -503,6 +503,12 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsV1(index string,
 			documentIDBytes += uint64(len(id))
 			sourceRows[j] = selectedRow{ordinal: x.ordinal, id: id}
 		}
+		// The caller's cap can be narrower than the public maximum used by the
+		// shape-only preflight. Reject the known fixed-width and stable-ID lower
+		// bound before copying vectors or constructing the partition-local HNSW.
+		if err := preflightVectorPartitionNativePackKnownBytesV1(len(sourceRows), def.Dimensions, documentIDBytes, maxAssetBytes); err != nil {
+			return nil, nil, err
+		}
 		// The partition owns a fresh local HNSW. Source ordinals provide a stable
 		// insertion order; the native builder then applies its deterministic
 		// entry-first locality order before the pack is encoded.
@@ -1014,6 +1020,14 @@ func preflightVectorPartitionNativePackV1(rows, dimensions, degree int) error {
 		return fmt.Errorf("%w: native pack byte cap", ErrVectorPartitionSearchUnavailable)
 	}
 	return nil
+}
+
+func preflightVectorPartitionNativePackKnownBytesV1(rows, dimensions int, documentIDBytes uint64, capBytes int64) error {
+	// A single layer with no encoded neighbors is the smallest valid topology.
+	// The exact pass after graph construction still owns the final layer and
+	// adjacency counts; this pass only proves the already-known lower bound.
+	_, err := exactVectorPartitionNativePackBytesV1(rows, dimensions, []uint64{0}, documentIDBytes, capBytes)
+	return err
 }
 
 func exactVectorPartitionNativePackBytesV1(rows, dimensions int, neighborCounts []uint64, documentIDBytes uint64, capBytes int64) (int64, error) {

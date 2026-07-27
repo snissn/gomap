@@ -620,6 +620,20 @@ func TestVectorPartitionNativePackExactCapRejectsWithoutDurableTraceV1(t *testin
 	}
 }
 
+func TestVectorPartitionNativePackKnownBytesPreflightUsesCallerCapV1(t *testing.T) {
+	const rows, dimensions = 2, 3
+	baseBytes, err := exactVectorPartitionNativePackBytesV1(rows, dimensions, []uint64{0}, 0, vectorPartitionSearchAssetMaxBytesV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := preflightVectorPartitionNativePackKnownBytesV1(rows, dimensions, 1, baseBytes); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("known-byte preflight err=%v want caller-cap rejection", err)
+	}
+	if err := preflightVectorPartitionNativePackKnownBytesV1(rows, dimensions, 0, baseBytes); err != nil {
+		t.Fatalf("exact lower-bound preflight: %v", err)
+	}
+}
+
 func vectorPartitionTestDirectoryBytesV1(root string) (int64, error) {
 	var total int64
 	err := filepath.WalkDir(root, func(_ string, entry os.DirEntry, err error) error {
