@@ -292,6 +292,9 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 	}
 	descriptors := make([]m3VariantDescriptorV1, 0, len(reports))
 	for i := range reports {
+		if reports[i].Dirty {
+			return m8ProductionMatrixV1{}, errors.New("M8 matrix rejects dirty child reports")
+		}
 		if reports[i].Variant == nil {
 			return m8ProductionMatrixV1{}, errors.New("M8 matrix report is missing variant identity")
 		}

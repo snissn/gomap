@@ -395,6 +395,26 @@ func TestVectorPartitionCoordinatorPlansWithConfiguredShardLimitsV1(t *testing.T
 	}
 }
 
+func TestVectorPartitionCoordinatorRejectsQueryAboveConfiguredShardDimensionsV1(t *testing.T) {
+	shardLimits := DefaultVectorPartitionShardSearchLimitsV1()
+	shardLimits.MaxDimensions = 1
+	coordinator, _, dispatcher := testVectorPartitionCoordinatorWithShardLimitsV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "doc", Score: 1}}},
+		VectorPartitionCoordinatorLimitsV1{}, shardLimits,
+	)
+	if coordinator.limits.MaxQueryBytes != 4 {
+		t.Fatalf("effective query bytes=%d want=4", coordinator.limits.MaxQueryBytes)
+	}
+	if _, err := coordinator.Search(t.Context(), testVectorPartitionCoordinatorRequestV1(1)); !errors.Is(err, ErrVectorPartitionCoordinatorInvalidRequest) {
+		t.Fatalf("two-dimensional query err=%v want invalid request", err)
+	}
+	if len(dispatcher.calls) != 0 {
+		t.Fatalf("invalid query dispatched shard calls=%+v", dispatcher.calls)
+	}
+}
+
 func TestVectorPartitionCoordinatorAllowsBoundedAggregateCandidateLimitAboveShardDefaultV1(t *testing.T) {
 	limits := DefaultVectorPartitionCoordinatorLimitsV1()
 	limits.MaxCandidateBytes = 128 << 20

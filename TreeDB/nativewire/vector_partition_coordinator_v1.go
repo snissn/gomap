@@ -373,6 +373,7 @@ func NewVectorPartitionCoordinatorV1(opts VectorPartitionCoordinatorOptionsV1) (
 		return nil, err
 	}
 	limits.MaxQueryBytes = min(limits.MaxQueryBytes, shardLimits.MaxQueryBytes)
+	limits.MaxQueryBytes = min(limits.MaxQueryBytes, shardLimits.MaxDimensions*4)
 	limits.MaxTopK = min(limits.MaxTopK, shardLimits.MaxTopK)
 	limits.MaxEfSearch = min(limits.MaxEfSearch, shardLimits.MaxEfSearch)
 	limits.MaxPartitionsPerRequest = min(limits.MaxPartitionsPerRequest, shardLimits.MaxPartitions)
