@@ -214,6 +214,10 @@ func (d *testVectorPartitionCoordinatorDispatcherV1) DispatchVectorPartitionShar
 }
 
 func testVectorPartitionCoordinatorV1(t *testing.T, groups []raftplacement.GroupV1, owners []raftcluster.GroupID, neighbors map[uint32][]VectorPartitionShardSearchNeighborV1, limits VectorPartitionCoordinatorLimitsV1) (*VectorPartitionCoordinatorV1, *testVectorPartitionCoordinatorRouterSourceV1, *testVectorPartitionCoordinatorDispatcherV1) {
+	return testVectorPartitionCoordinatorWithShardLimitsV1(t, groups, owners, neighbors, limits, VectorPartitionShardSearchLimitsV1{})
+}
+
+func testVectorPartitionCoordinatorWithShardLimitsV1(t *testing.T, groups []raftplacement.GroupV1, owners []raftcluster.GroupID, neighbors map[uint32][]VectorPartitionShardSearchNeighborV1, limits VectorPartitionCoordinatorLimitsV1, shardLimits VectorPartitionShardSearchLimitsV1) (*VectorPartitionCoordinatorV1, *testVectorPartitionCoordinatorRouterSourceV1, *testVectorPartitionCoordinatorDispatcherV1) {
 	t.Helper()
 	ref := raftplacement.CollectionRefV1{Database: "db", Catalog: "default", Collection: "docs"}
 	catalogInput := raftplacement.CatalogV1{
@@ -268,7 +272,7 @@ func testVectorPartitionCoordinatorV1(t *testing.T, groups []raftplacement.Group
 		notLeaderOnce: make(map[raftcluster.GroupID]raftcluster.NodeID),
 	}
 	coordinator, err := NewVectorPartitionCoordinatorV1(VectorPartitionCoordinatorOptionsV1{
-		Catalog: catalog, Placement: placement, RouterSource: source, Dispatcher: dispatcher, Limits: limits,
+		Catalog: catalog, Placement: placement, RouterSource: source, Dispatcher: dispatcher, Limits: limits, ShardLimits: shardLimits,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -362,6 +366,32 @@ func TestVectorPartitionCoordinatorCoalescesChunksDedupesAndMergesV1(t *testing.
 	if got := response.Neighbors; len(got) != 3 || got[0].ID != "doc-00" ||
 		got[1].ID != "doc-01" || got[2].ID != "doc-02" {
 		t.Fatalf("stable top-k=%+v", got)
+	}
+}
+
+func TestVectorPartitionCoordinatorPlansWithConfiguredShardLimitsV1(t *testing.T) {
+	shardLimits := DefaultVectorPartitionShardSearchLimitsV1()
+	shardLimits.MaxPartitions = 1
+	coordinator, _, dispatcher := testVectorPartitionCoordinatorWithShardLimitsV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a", "group-a"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{
+			0: {{ID: "doc-0", Score: 1}},
+			1: {{ID: "doc-1", Score: .9}},
+		},
+		VectorPartitionCoordinatorLimitsV1{}, shardLimits,
+	)
+	response, err := coordinator.Search(context.Background(), testVectorPartitionCoordinatorRequestV1(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coordinator.limits.MaxPartitionsPerRequest != 1 || response.Counters.MaxShardPartitions != 1 || len(dispatcher.calls) != 2 {
+		t.Fatalf("effective coordinator limit=%d counters=%+v calls=%+v", coordinator.limits.MaxPartitionsPerRequest, response.Counters, dispatcher.calls)
+	}
+	for _, call := range dispatcher.calls {
+		if len(call.PartitionIDs) != 1 || call.CandidateBytesLimit > shardLimits.MaxCandidateBytes || call.ResponseBytesLimit > shardLimits.MaxResponseBytes || call.RequestBytesLimit > shardLimits.MaxRequestBytes {
+			t.Fatalf("custom shard-limit call=%+v", call)
+		}
 	}
 }
 

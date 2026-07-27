@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -678,6 +679,22 @@ func TestVectorPartitionOverlapPolicyCanonicalV1(t *testing.T) {
 	for _, bad := range []string{"", raw + "junk", "m3_bounded_overlap_v1:capacity=0,budget=1,unspent=0", "m3_bounded_overlap_v1:capacity=1,budget=0,unspent=1"} {
 		if _, ok := parseVectorPartitionOverlapPolicyV1(bad); ok {
 			t.Fatalf("accepted noncanonical policy %q", bad)
+		}
+	}
+}
+
+func TestVectorPartitionOverlapPolicyBuildIdentityCanonicalV1(t *testing.T) {
+	policy := VectorPartitionOverlapPolicyV1{Capacity: 100, Budget: 20, Unspent: 3, BuildIdentityDigest: strings.Repeat("a", 64)}
+	raw, err := FormatVectorPartitionOverlapPolicyV1(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := ParseVectorPartitionOverlapPolicyV1(raw); !ok || got != policy {
+		t.Fatalf("policy round trip got=%+v ok=%t", got, ok)
+	}
+	for _, bad := range []string{raw + ",trailing=true", strings.Replace(raw, strings.Repeat("a", 64), "not-a-digest", 1)} {
+		if _, ok := ParseVectorPartitionOverlapPolicyV1(bad); ok {
+			t.Fatalf("accepted malformed build identity policy %q", bad)
 		}
 	}
 }

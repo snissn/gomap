@@ -210,7 +210,7 @@ func NewVectorPartitionM8ProductionMultiGroupV1(ctx context.Context, opts Vector
 		h.mu.Unlock()
 		return dispatcher.DispatchVectorPartitionShardSearchV1(callCtx, request)
 	})
-	h.coordinator, err = NewVectorPartitionCoordinatorV1(VectorPartitionCoordinatorOptionsV1{Catalog: resolved, Placement: placement, RouterSource: opts.RouterSource, Dispatcher: counting, ReplicatedLifecycle: replicated, RequireReplicatedLifecycle: true, Limits: opts.CoordinatorLimits})
+	h.coordinator, err = NewVectorPartitionCoordinatorV1(VectorPartitionCoordinatorOptionsV1{Catalog: resolved, Placement: placement, RouterSource: opts.RouterSource, Dispatcher: counting, ReplicatedLifecycle: replicated, RequireReplicatedLifecycle: true, Limits: opts.CoordinatorLimits, ShardLimits: opts.ShardLimits})
 	if err != nil {
 		return nil, err
 	}

@@ -1,11 +1,23 @@
 package main
 
 import (
+	"math"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/collections"
 )
+
+func refreshTestM3VariantIdentityV1(t testing.TB, descriptor *m3VariantDescriptorV1) {
+	t.Helper()
+	descriptor.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(*descriptor)
+	descriptor.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{
+		Capacity: uint64(descriptor.Capacity), Budget: uint64(math.Floor(descriptor.OverlapRatio * float64(descriptor.SourceRows))),
+		BuildIdentityDigest: descriptor.BuildIdentityDigest,
+	})
+}
 
 func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *testing.T) {
 	hash := strings.Repeat("a", 40)
@@ -26,9 +38,13 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 		descriptor := testM3VariantDescriptorV1(t.TempDir())
 		descriptor.VariantID, descriptor.AssignmentBasis, descriptor.OverlapRatio = variant.id, variant.assignment, variant.overlap
 		descriptor.SourceRows, descriptor.OverlapMemberships = 8, 0
+		if variant.assignment == partitionAssignmentStableIDHashV1 {
+			descriptor.ArtifactSHA256 = strings.Repeat("c", 64)
+		}
 		if variant.overlap > 0 {
 			descriptor.OverlapMemberships = 1
 		}
+		refreshTestM3VariantIdentityV1(t, &descriptor)
 		config := common
 		config.Overlap = []float64{variant.overlap}
 		variantGates := pass
@@ -137,6 +153,10 @@ func TestM8ProductionMatrixFailsWhenOverlapBudgetIsUnderMaterializedV1(t *testin
 		descriptor := testM3VariantDescriptorV1(t.TempDir())
 		descriptor.VariantID, descriptor.AssignmentBasis, descriptor.OverlapRatio = variant.id, variant.assignment, variant.overlap
 		descriptor.SourceRows, descriptor.OverlapMemberships = 10, variant.memberships
+		if variant.assignment == partitionAssignmentStableIDHashV1 {
+			descriptor.ArtifactSHA256 = strings.Repeat("c", 64)
+		}
+		refreshTestM3VariantIdentityV1(t, &descriptor)
 		config := common
 		config.Overlap = []float64{variant.overlap}
 		reports = append(reports, m8ProductionReportV1{
@@ -186,5 +206,60 @@ func TestM8MatrixIdentityIncludesComparisonAndResourceCapsV1(t *testing.T) {
 	}
 	if one == four {
 		t.Fatal("matrix identity ignored the comparison base SHA")
+	}
+	cfg.baseSHA = strings.Repeat("b", 40)
+	descriptors[0].DatabaseDirectory = "/relocated/variant"
+	five, err := m8MatrixIdentityV1(cfg, descriptors, m8ProductionConfigEvidenceV1{Partitions: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one != five {
+		t.Fatal("matrix content identity changed after directory-only relocation")
+	}
+}
+
+func TestM8VariantBuildCompatibilityRejectsMixedRetainedBuildsV1(t *testing.T) {
+	makeVariants := func() []m3VariantDescriptorV1 {
+		variants := make([]m3VariantDescriptorV1, 0, 3)
+		for _, item := range []struct {
+			id, assignment string
+			overlap        float64
+		}{
+			{"graph-disjoint-v1", partitionAssignmentGraphV1, 0},
+			{"graph-overlap-020-v1", partitionAssignmentGraphV1, .2},
+			{"stable-id-hash-disjoint-v1", partitionAssignmentStableIDHashV1, 0},
+		} {
+			descriptor := testM3VariantDescriptorV1(t.TempDir())
+			descriptor.VariantID, descriptor.AssignmentBasis, descriptor.OverlapRatio = item.id, item.assignment, item.overlap
+			if item.assignment == partitionAssignmentStableIDHashV1 {
+				descriptor.ArtifactSHA256 = strings.Repeat("c", 64)
+			}
+			refreshTestM3VariantIdentityV1(t, &descriptor)
+			variants = append(variants, descriptor)
+		}
+		return variants
+	}
+	if err := m8ValidateVariantBuildCompatibilityV1(makeVariants()); err != nil {
+		t.Fatalf("compatible graph/stable build rejected: %v", err)
+	}
+	for name, mutate := range map[string]func([]m3VariantDescriptorV1){
+		"graph digest": func(variants []m3VariantDescriptorV1) { variants[2].GraphArtifactSHA256 = strings.Repeat("d", 64) },
+		"graph assignment artifact": func(variants []m3VariantDescriptorV1) {
+			variants[1].ArtifactSHA256 = strings.Repeat("d", 64)
+			variants[1].GraphArtifactSHA256 = variants[1].ArtifactSHA256
+		},
+		"source":       func(variants []m3VariantDescriptorV1) { variants[2].Source.SourceID = "different" },
+		"local HNSW M": func(variants []m3VariantDescriptorV1) { variants[2].PartitionHNSWM-- },
+	} {
+		t.Run(name, func(t *testing.T) {
+			variants := makeVariants()
+			mutate(variants)
+			for i := range variants {
+				refreshTestM3VariantIdentityV1(t, &variants[i])
+			}
+			if err := m8ValidateVariantBuildCompatibilityV1(variants); err == nil {
+				t.Fatal("accepted mixed retained variant builds")
+			}
+		})
 	}
 }

@@ -158,6 +158,7 @@ type VectorPartitionCoordinatorOptionsV1 struct {
 	ReplicatedLifecycle        VectorPartitionReplicatedLifecycleAuthorityV1
 	RequireReplicatedLifecycle bool
 	Limits                     VectorPartitionCoordinatorLimitsV1
+	ShardLimits                VectorPartitionShardSearchLimitsV1
 }
 
 // VectorPartitionCoordinatorTopologyV1 is the public, transport-neutral M1
@@ -306,6 +307,7 @@ type VectorPartitionCoordinatorV1 struct {
 	dispatcher          VectorPartitionShardSearchDispatcherV1
 	replicatedLifecycle VectorPartitionReplicatedLifecycleAuthorityV1
 	limits              VectorPartitionCoordinatorLimitsV1
+	shardLimits         VectorPartitionShardSearchLimitsV1
 	groups              map[raftcluster.GroupID]raftplacement.ResolvedGroupV1
 	stats               vectorPartitionCoordinatorStatsAccumulatorV1
 	sessionMu           sync.Mutex
@@ -366,6 +368,16 @@ func NewVectorPartitionCoordinatorV1(opts VectorPartitionCoordinatorOptionsV1) (
 	if err != nil {
 		return nil, err
 	}
+	shardLimits, err := normalizeVectorPartitionShardSearchLimitsV1(opts.ShardLimits)
+	if err != nil {
+		return nil, err
+	}
+	limits.MaxQueryBytes = min(limits.MaxQueryBytes, shardLimits.MaxQueryBytes)
+	limits.MaxTopK = min(limits.MaxTopK, shardLimits.MaxTopK)
+	limits.MaxEfSearch = min(limits.MaxEfSearch, shardLimits.MaxEfSearch)
+	limits.MaxPartitionsPerRequest = min(limits.MaxPartitionsPerRequest, shardLimits.MaxPartitions)
+	limits.MaxIdentityBytes = min(limits.MaxIdentityBytes, shardLimits.MaxIdentityBytes)
+	limits.MaxStableIDBytes = min(limits.MaxStableIDBytes, shardLimits.MaxStableIDBytes)
 	if opts.RouterSource == nil || opts.Dispatcher == nil {
 		return nil, fmt.Errorf("%w: incomplete coordinator dependencies", ErrVectorPartitionCoordinatorInvalidRequest)
 	}
@@ -385,7 +397,7 @@ func NewVectorPartitionCoordinatorV1(opts VectorPartitionCoordinatorOptionsV1) (
 	coordinator := &VectorPartitionCoordinatorV1{
 		placement: placement, routerSource: opts.RouterSource,
 		dispatcher: opts.Dispatcher, replicatedLifecycle: opts.ReplicatedLifecycle,
-		limits: limits, groups: groups,
+		limits: limits, shardLimits: shardLimits, groups: groups,
 		sessions:     make(map[vectorPartitionCoordinatorRouterKeyV1]*vectorPartitionCoordinatorRouterSessionV1),
 		loads:        make(map[vectorPartitionCoordinatorRouterKeyV1]*vectorPartitionCoordinatorRouterLoadV1),
 		sessionStats: make(map[vectorPartitionCoordinatorRouterKeyV1]*vectorPartitionCoordinatorRouterSessionStatsV1),
@@ -1188,7 +1200,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 		return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 	}
 
-	shardLimits := DefaultVectorPartitionShardSearchLimitsV1()
+	shardLimits := c.shardLimits
 	tasks := make([]vectorPartitionCoordinatorTaskV1, 0, taskCount)
 	var totalRequestBytes, totalResponseReservation uint64
 	var ok bool
@@ -1292,9 +1304,10 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 			if !ok {
 				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 			}
-			if candidateShare > shardLimits.MaxCandidateBytes {
+			if baseline > shardLimits.MaxCandidateBytes {
 				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 			}
+			candidateShare = min(candidateShare, shardLimits.MaxCandidateBytes)
 			shardRequest.CandidateBytesLimit = candidateShare
 			tasks = append(tasks, vectorPartitionCoordinatorTaskV1{
 				index: taskIndex, group: group, partitionIDs: ids, candidateRows: rows, request: shardRequest,

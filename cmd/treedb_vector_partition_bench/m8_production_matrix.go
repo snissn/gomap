@@ -106,6 +106,13 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 			return fmt.Errorf("M8 matrix missing required variant %q", required)
 		}
 	}
+	preflightDescriptors := make([]m3VariantDescriptorV1, 0, len(m8RequiredVariantIDsV1))
+	for _, required := range m8RequiredVariantIDsV1 {
+		preflightDescriptors = append(preflightDescriptors, sourcesByVariant[required].descriptor)
+	}
+	if err := m8ValidateVariantBuildCompatibilityV1(preflightDescriptors); err != nil {
+		return err
+	}
 
 	reports := make([]m8ProductionReportV1, 0, len(m8RequiredVariantIDsV1))
 	for _, variantID := range m8RequiredVariantIDsV1 {
@@ -216,6 +223,10 @@ func m8VariantProcessArgsV1(command []string, dir string, overlap float64, profi
 }
 
 func m8MatrixIdentityV1(cfg config, variants []m3VariantDescriptorV1, evidence m8ProductionConfigEvidenceV1) ([sha256.Size]byte, error) {
+	portableVariants := append([]m3VariantDescriptorV1(nil), variants...)
+	for i := range portableVariants {
+		portableVariants[i].DatabaseDirectory = ""
+	}
 	identity, err := json.Marshal(struct {
 		BaseSHA                 string
 		HeadSHA                 string
@@ -223,11 +234,46 @@ func m8MatrixIdentityV1(cfg config, variants []m3VariantDescriptorV1, evidence m
 		Config                  m8ProductionConfigEvidenceV1
 		MaxRSSBytes             uint64
 		MaxPersistentAssetBytes uint64
-	}{BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Variants: variants, Config: evidence, MaxRSSBytes: cfg.m8MaxRSSBytes, MaxPersistentAssetBytes: cfg.m8MaxAssetBytes})
+	}{BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Variants: portableVariants, Config: evidence, MaxRSSBytes: cfg.m8MaxRSSBytes, MaxPersistentAssetBytes: cfg.m8MaxAssetBytes})
 	if err != nil {
 		return [sha256.Size]byte{}, err
 	}
 	return sha256.Sum256(identity), nil
+}
+
+func m8ValidateVariantBuildCompatibilityV1(variants []m3VariantDescriptorV1) error {
+	if len(variants) != len(m8RequiredVariantIDsV1) {
+		return errors.New("M8 matrix build identity requires exactly three variants")
+	}
+	byID := make(map[string]m3VariantDescriptorV1, len(variants))
+	for _, variant := range variants {
+		if err := validateM3VariantDescriptorV1(variant); err != nil {
+			return fmt.Errorf("M8 matrix malformed variant build identity: %w", err)
+		}
+		if _, duplicate := byID[variant.VariantID]; duplicate {
+			return fmt.Errorf("M8 matrix duplicate variant build identity %q", variant.VariantID)
+		}
+		byID[variant.VariantID] = variant
+	}
+	base, ok := byID[m8RequiredVariantIDsV1[0]]
+	if !ok {
+		return fmt.Errorf("M8 matrix missing variant build identity %q", m8RequiredVariantIDsV1[0])
+	}
+	for _, required := range m8RequiredVariantIDsV1[1:] {
+		variant, ok := byID[required]
+		if !ok {
+			return fmt.Errorf("M8 matrix missing variant build identity %q", required)
+		}
+		if variant.FixtureChecksum != base.FixtureChecksum || variant.Source != base.Source || variant.Partitions != base.Partitions ||
+			variant.GraphArtifactSHA256 != base.GraphArtifactSHA256 || variant.PartitionHNSWM != base.PartitionHNSWM {
+			return fmt.Errorf("M8 matrix variant %q was not built from the common source, graph, partition count, and local HNSW configuration", required)
+		}
+	}
+	graphOverlap := byID["graph-overlap-020-v1"]
+	if graphOverlap.ArtifactSHA256 != base.ArtifactSHA256 {
+		return errors.New("M8 matrix graph variants do not share the same assignment artifact")
+	}
+	return nil
 }
 
 func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8ProductionReportV1) (m8ProductionMatrixV1, error) {
@@ -239,6 +285,16 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 	}
 	if len(reports) != len(m8RequiredVariantIDsV1) {
 		return m8ProductionMatrixV1{}, errors.New("M8 matrix requires exactly three reports")
+	}
+	descriptors := make([]m3VariantDescriptorV1, 0, len(reports))
+	for i := range reports {
+		if reports[i].Variant == nil {
+			return m8ProductionMatrixV1{}, errors.New("M8 matrix report is missing variant identity")
+		}
+		descriptors = append(descriptors, *reports[i].Variant)
+	}
+	if err := m8ValidateVariantBuildCompatibilityV1(descriptors); err != nil {
+		return m8ProductionMatrixV1{}, err
 	}
 	byID := make(map[string]*m8ProductionReportV1, len(reports))
 	commonConfig := reports[0].Config

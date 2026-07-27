@@ -208,13 +208,6 @@ func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, par
 		if readErr != nil {
 			return nil, readErr
 		}
-		absoluteDir, absErr := filepath.Abs(dir)
-		if absErr != nil {
-			return nil, absErr
-		}
-		if filepath.Clean(descriptor.DatabaseDirectory) != filepath.Clean(absoluteDir) {
-			return nil, errors.New("retained M8 descriptor database directory does not match opened path")
-		}
 		if matchErr := m3DescriptorMatchesManifestV1(descriptor, fixture, h.status.Manifest, h.status.ModelDigest); matchErr != nil {
 			return nil, matchErr
 		}

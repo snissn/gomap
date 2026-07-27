@@ -325,11 +325,8 @@ type VectorPartitionShardSearchServiceV1 struct {
 }
 
 func NewVectorPartitionShardSearchServiceV1(opts VectorPartitionShardSearchServiceOptionsV1) (*VectorPartitionShardSearchServiceV1, error) {
-	limits := opts.Limits
-	if limits == (VectorPartitionShardSearchLimitsV1{}) {
-		limits = DefaultVectorPartitionShardSearchLimitsV1()
-	}
-	if err := validateVectorPartitionShardSearchLimitsV1(limits); err != nil {
+	limits, err := normalizeVectorPartitionShardSearchLimitsV1(opts.Limits)
+	if err != nil {
 		return nil, err
 	}
 	if opts.LocalNodeID == "" || opts.LocalGroupID == "" || opts.ReadCoordinator == nil || opts.GenerationSource == nil {
@@ -370,6 +367,16 @@ func NewVectorPartitionShardSearchServiceV1(opts VectorPartitionShardSearchServi
 			hints:     hints,
 		},
 	}, nil
+}
+
+func normalizeVectorPartitionShardSearchLimitsV1(limits VectorPartitionShardSearchLimitsV1) (VectorPartitionShardSearchLimitsV1, error) {
+	if limits == (VectorPartitionShardSearchLimitsV1{}) {
+		limits = DefaultVectorPartitionShardSearchLimitsV1()
+	}
+	if err := validateVectorPartitionShardSearchLimitsV1(limits); err != nil {
+		return VectorPartitionShardSearchLimitsV1{}, err
+	}
+	return limits, nil
 }
 
 func validateVectorPartitionShardSearchLimitsV1(l VectorPartitionShardSearchLimitsV1) error {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -33,8 +35,10 @@ type m3VariantDescriptorV1 struct {
 	OverlapPolicy        string                 `json:"overlap_policy"`
 	FixtureChecksum      string                 `json:"fixture_checksum"`
 	ArtifactSHA256       string                 `json:"artifact_sha256"`
+	GraphArtifactSHA256  string                 `json:"graph_artifact_sha256"`
 	ArtifactBackend      string                 `json:"artifact_backend"`
 	Source               vectorpartition.Source `json:"source"`
+	BuildIdentityDigest  string                 `json:"build_identity_digest"`
 	DatabaseDirectory    string                 `json:"database_directory"`
 	ManifestIntegrity    string                 `json:"manifest_integrity_digest"`
 	ReadySetDigest       string                 `json:"ready_set_digest"`
@@ -52,6 +56,30 @@ type m3VariantDescriptorV1 struct {
 	PartitionLoads       []int                  `json:"partition_loads"`
 	OverlapMemberships   int                    `json:"overlap_memberships"`
 	PersistentAssetBytes uint64                 `json:"persistent_asset_bytes"`
+}
+
+func m3VariantBuildIdentityDigestV1(d m3VariantDescriptorV1) (string, error) {
+	identity := struct {
+		FixtureChecksum     string
+		VariantID           string
+		AssignmentBasis     string
+		OverlapRatio        float64
+		ArtifactSHA256      string
+		GraphArtifactSHA256 string
+		ArtifactBackend     string
+		Source              vectorpartition.Source
+		PartitionHNSWM      int
+	}{
+		FixtureChecksum: d.FixtureChecksum, VariantID: d.VariantID, AssignmentBasis: d.AssignmentBasis, OverlapRatio: d.OverlapRatio,
+		ArtifactSHA256: d.ArtifactSHA256, GraphArtifactSHA256: d.GraphArtifactSHA256, ArtifactBackend: d.ArtifactBackend,
+		Source: d.Source, PartitionHNSWM: d.PartitionHNSWM,
+	}
+	raw, err := json.Marshal(identity)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(raw)
+	return fmt.Sprintf("%x", digest[:]), nil
 }
 
 func m3VariantIDV1(assignment string, ratio float64) (string, error) {
@@ -132,13 +160,21 @@ func validateM3VariantDescriptorV1(d m3VariantDescriptorV1) error {
 	if err != nil {
 		return err
 	}
-	if d.SchemaVersion != 1 || d.ResultKind != "m3_persistent_variant_descriptor_v1" || d.VariantID != wantVariant ||
-		!m8SHA256V1(d.FixtureChecksum) || !m8SHA256V1(d.ArtifactSHA256) || d.ArtifactBackend == "" ||
+	wantBuildIdentity, err := m3VariantBuildIdentityDigestV1(d)
+	if err != nil {
+		return err
+	}
+	if d.SchemaVersion != 2 || d.ResultKind != "m3_persistent_variant_descriptor_v2" || d.VariantID != wantVariant ||
+		!m8SHA256V1(d.FixtureChecksum) || !m8SHA256V1(d.ArtifactSHA256) || !m8SHA256V1(d.GraphArtifactSHA256) || d.ArtifactBackend == "" ||
+		!m8SHA256V1(d.BuildIdentityDigest) || d.BuildIdentityDigest != wantBuildIdentity ||
 		!m8SHA256V1(d.Source.Checksum) || d.DatabaseDirectory == "" || !m8SHA256V1(d.ManifestIntegrity) || !m8SHA256V1(d.ReadySetDigest) ||
 		!m8SHA256V1(d.RouterAssetChecksum) || !m8SHA256V1(d.RouterModelDigest) || d.SourceGeneration == 0 || d.SourceRows == 0 ||
 		d.PartitionGeneration == 0 || d.RouterGeneration != d.PartitionGeneration || d.Partitions < 1 || d.PartitionHNSWM < 2 || d.PartitionHNSWM > partitionHNSWDegree || d.Capacity < 1 ||
 		len(d.PartitionLoads) != int(d.Partitions) || d.PersistentAssetBytes == 0 {
 		return errors.New("malformed M3 variant descriptor")
+	}
+	if d.AssignmentBasis == partitionAssignmentGraphV1 && d.ArtifactSHA256 != d.GraphArtifactSHA256 {
+		return errors.New("graph M3 variant artifact does not match its graph-build identity")
 	}
 	for _, load := range d.PartitionLoads {
 		if load < 0 || load > d.Capacity {
@@ -149,11 +185,51 @@ func validateM3VariantDescriptorV1(d m3VariantDescriptorV1) error {
 }
 
 func m3DescriptorMatchesManifestV1(d m3VariantDescriptorV1, fixture fixtureManifest, manifest collections.VectorPartitionManifestV1, routerModelDigest string) error {
+	if err := validateM3VariantDescriptorV1(d); err != nil {
+		return err
+	}
+	policy, ok := collections.ParseVectorPartitionOverlapPolicyV1(manifest.BalancePolicy)
+	if !ok || policy.BuildIdentityDigest == "" || policy.BuildIdentityDigest != d.BuildIdentityDigest || policy.Capacity != uint64(d.Capacity) {
+		return errors.New("M3 variant descriptor build identity or capacity is not manifest-authoritative")
+	}
+	wantBudget := uint64(math.Floor(d.OverlapRatio * float64(d.SourceRows)))
+	used := uint64(len(manifest.OverlapMemberships))
+	if policy.Budget != wantBudget || used > policy.Budget || policy.Unspent != policy.Budget-used {
+		return errors.New("M3 variant descriptor overlap accounting does not match the retained manifest")
+	}
+	loads := make([]int, manifest.PartitionCount)
+	for _, membership := range manifest.Memberships {
+		if membership.PartitionID >= manifest.PartitionCount {
+			return errors.New("M3 retained manifest has an out-of-range home membership")
+		}
+		loads[membership.PartitionID]++
+	}
+	for _, membership := range manifest.OverlapMemberships {
+		if membership.PartitionID >= manifest.PartitionCount {
+			return errors.New("M3 retained manifest has an out-of-range overlap membership")
+		}
+		loads[membership.PartitionID]++
+	}
+	if !slices.Equal(loads, d.PartitionLoads) {
+		return errors.New("M3 variant descriptor partition loads do not match the retained manifest")
+	}
+	var persistentAssetBytes uint64
+	for _, asset := range manifest.Assets {
+		if persistentAssetBytes > math.MaxUint64-asset.Bytes {
+			return errors.New("M3 retained manifest asset bytes overflow")
+		}
+		persistentAssetBytes += asset.Bytes
+	}
+	if persistentAssetBytes > math.MaxUint64-manifest.RouterAsset.Bytes {
+		return errors.New("M3 retained manifest router bytes overflow")
+	}
+	persistentAssetBytes += manifest.RouterAsset.Bytes
 	if d.FixtureChecksum != fixture.Checksum || d.ManifestIntegrity != manifest.IntegrityDigest || d.ReadySetDigest != manifest.ReadySetDigest ||
 		d.RouterAssetChecksum != manifest.RouterAsset.Checksum || d.RouterModelDigest != routerModelDigest ||
 		d.SourceGeneration != manifest.SourceGeneration || d.SourceChecksum != manifest.SourceChecksum || d.SourceSchemaHash != manifest.SourceSchemaHash ||
 		d.SourceRows != manifest.SourceRowCount || d.PartitionGeneration != manifest.Generation || d.RouterGeneration != manifest.RouterGeneration ||
-		d.Partitions != manifest.PartitionCount || d.OverlapPolicy != manifest.BalancePolicy || d.OverlapMemberships != len(manifest.OverlapMemberships) {
+		d.Partitions != manifest.PartitionCount || d.OverlapPolicy != manifest.BalancePolicy || d.OverlapMemberships != len(manifest.OverlapMemberships) ||
+		d.PersistentAssetBytes != persistentAssetBytes {
 		return errors.New("M3 variant descriptor does not bind the retained ready manifest")
 	}
 	return nil
