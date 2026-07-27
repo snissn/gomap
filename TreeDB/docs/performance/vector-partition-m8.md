@@ -1,12 +1,98 @@
 # Vector partition M8 production multi-group closeout
 
-Date: 2026-07-25
+Date: 2026-07-26
 
 Measured production-code head: `9f3cb7c6f8d5aa8283fe2342d9f341cbdbebab48` (the evidence-document commit is subsequent and is not the measured code).
 
 Base M7 merge: `03a5508e5df33ceaf2920839a670fb16652f633d`
 
-Status: experimental/off; north-star gates did not pass
+Status: experimental/off; the #3982 final local matrix is complete and leaves
+enablement off with measured follow-up owners
+
+## #3982 final local gate disposition
+
+Measured production-code head:
+`903a351d8f2f6c6462481312e21b30ac5bedecf1` (the documentation commit is
+subsequent). Base: `29d79894a84736757cc3fcdaf932f49ece060288`.
+
+The strict schema-3 matrix materialized and executed all three required
+immutable variants sequentially: graph/disjoint, graph/overlap `0.20`, and
+stable-ID-hash/disjoint. It used one declared 1M-vector fixture with 32 queries,
+16 dimensions, cosine distance, `top_k=10`, probes `1,2,4,8,16`,
+`ef_search=64,4096`, concurrency `1,16`, four three-node data-Raft groups, and
+the three-node catalog-meta group. This is single-host loopback
+production-shaped evidence; multi-host qualification remains #3983. It is not
+an external-system comparison.
+
+Artifact:
+`/mnt/fast4tb/tmp/treedb_3982_1m_Kb5eot/m16/matrix3/vector_partition_m8_matrix_903a351d8f2f_4443cc84da59.json`
+
+Artifact SHA-256:
+`fc120fdcb3ac4aff58c455c65ad68bd70f4ce4358966ed4f98c0d62343d863b1`
+
+Fixture checksum:
+`71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f`
+
+The final disposition is `experimental_gate_failures` /
+`enablement_off_follow_up_required`. This is a completed narrow local gate, not
+an enablement claim and not a review or performance waiver.
+
+| Gate | Result | Final evidence |
+| --- | --- | --- |
+| Required variants | **PASS** | all three immutable descriptors executed sequentially |
+| Exhaustive correctness | **PASS** | canonical source truth and exact partition union have ID/score parity |
+| Failure honesty | **PASS** | unavailable endpoint returns no partial neighbors/groups |
+| Recall >= 0.90 | **FAIL** | graph all-partition recall@10 is `0.7125`; overlap is `0.715625` |
+| Median probes <= 25% | **FAIL** | graph exact representative routing retains only `0.25625` recall at 4/16 probes |
+| Matched-recall QPS | **FAIL** | no <=4-probe graph row reaches target recall |
+| Matched-recall p95 | **FAIL** | no <=4-probe graph row reaches target recall |
+| Balance epsilon 0.05 | **PASS** | disjoint max `63,292`; overlap max `63,918`; cap `65,625` |
+| Overlap bytes < 1.35x | **PASS** | `285,168,176 / 282,881,928 = 1.0080819868x` |
+| Resource bounds | **PASS** | 512 MiB asset and 4 GiB RSS ceilings plus coordinator/shard limits pass |
+| Existing behavior | **PENDING** | latest-head required normal/race/hosted suites own final PR readiness |
+
+The graph/disjoint process peak was `2,085,953,536` bytes; the overlap and
+stable-hash sequential high-water mark was `2,327,613,440` bytes, below the
+configured 4 GiB ceiling. Aggregate shard concurrency was configured as eight
+workers per request times 16 clients (`128`) and observed at `64`. Persistent
+assets were `282,881,928`, `285,168,176`, and `282,385,488` bytes for graph
+disjoint, graph overlap, and stable hash respectively. Each variant retained
+CPU, allocation baseline/final, heap, block, mutex, and trace profiles under
+`/mnt/fast4tb/tmp/treedb_3982_1m_Kb5eot/m16/profiles3/`.
+
+At all 16 partitions, exact representative routing recall is `1.0`, while
+partition-local HNSW owns the remaining loss: `0.7125` graph/disjoint,
+`0.715625` graph/overlap, and `0.778125` stable hash at `ef_search=4096`.
+Increasing graph `ef_search` from 64 to 4096 did not change recall. At four
+probes, exact graph representative routing itself retains only `0.25625`, so a
+local-HNSW-only change cannot satisfy the quarter-probe target.
+
+Measured successors preserve these distinct owners:
+
+- #3998: graph partition/router locality at the quarter-probe budget;
+- #3999: partition-local HNSW reachability and recall at the 1M shape.
+
+Reproduction command (the retained DB descriptors are immutable inputs):
+
+```sh
+GOMAXPROCS=16 GOMEMLIMIT=6GiB \
+  ./bin/treedb_vector_partition_bench \
+  -mode production_multi_group \
+  -dataset /mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture \
+  -out /mnt/fast4tb/tmp/treedb_3982_1m_Kb5eot/m16/matrix3 \
+  -partitions 16 -raft-groups 4 -raft-nodes-per-group 3 \
+  -probes 1,2,4,8,16 -top-k 10 -concurrency 1,16 -warmup 1 \
+  -ef-search 64,4096 -router-candidates 1024 \
+  -profiles /mnt/fast4tb/tmp/treedb_3982_1m_Kb5eot/m16/profiles3 \
+  -m8-max-rss-bytes 4294967296 \
+  -m8-max-persistent-asset-bytes 536870912 \
+  -m8-variant-dbs /path/graph-disjoint,/path/graph-overlap-020,/path/stable-id-hash-disjoint \
+  -format text
+```
+
+The sections below retain the earlier M8 closeout and #3980 attribution
+history; their unsupported-row and pre-fix performance statements are
+historical rather than the current #3982 disposition.
 
 ## Executive result
 

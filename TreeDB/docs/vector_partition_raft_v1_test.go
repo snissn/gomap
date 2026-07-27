@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -135,9 +136,10 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				"production_multi_group",
 				"There is no standalone M8 administration command",
 				"-m8-existing-db DIR",
+				"-m8-variant-dbs",
 				"MUST return no partial neighbors",
-				"stable-ID/hash attribution are currently reported `unsupported`",
-				"`measured_not_bounded`",
+				"stable-ID hash assignment",
+				"shard-request ceiling",
 				"explicitly accepts the narrower result",
 			},
 		},
@@ -145,7 +147,7 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 			path: filepath.Join(root, "docs", "performance", "vector-partition-m8.md"),
 			needles: []string{
 				"9f3cb7c6f8d5aa8283fe2342d9f341cbdbebab48",
-				"experimental/off; north-star gates did not pass",
+				"final local matrix is complete",
 				"1,000,000 / 1 / 16",
 				"52,974.66 MB",
 				"14a3e98ae8d4ab74bb4edb78e6858d8ce7e3d7733eebd3136b1321c0eda236b1",
@@ -156,6 +158,11 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				"fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1",
 				"9afad07fb8daf374076fe9fa630106ffdf6241ae746344349eb1885d37cdfbd1",
 				"its all-partition owner is partition-local HNSW",
+				"903a351d8f2f6c6462481312e21b30ac5bedecf1",
+				"fc120fdcb3ac4aff58c455c65ad68bd70f4ce4358966ed4f98c0d62343d863b1",
+				"enablement_off_follow_up_required",
+				"#3998",
+				"#3999",
 			},
 		},
 		{
@@ -220,6 +227,32 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				LossOwner         string  `json:"all_partition_loss_owner"`
 			} `json:"retained_1m"`
 		} `json:"continuation_attribution"`
+		FinalLocalGate struct {
+			SchemaVersion    int    `json:"schema_version"`
+			ResultKind       string `json:"result_kind"`
+			Status           string `json:"status"`
+			Disposition      string `json:"disposition"`
+			MeasuredCodeHead string `json:"measured_code_head"`
+			ArtifactSHA256   string `json:"artifact_sha256"`
+			Fixture          struct {
+				Vectors  int    `json:"vectors"`
+				Queries  int    `json:"queries"`
+				Checksum string `json:"checksum"`
+			} `json:"fixture"`
+			GateLedger struct {
+				Exhaustive     string `json:"exhaustive_correctness"`
+				Recall         string `json:"recall"`
+				OverlapStorage string `json:"overlap_storage"`
+				Resources      string `json:"resource_bounds"`
+			} `json:"gate_ledger"`
+			Variants []struct {
+				ID               string  `json:"variant_id"`
+				MaxLoad          uint64  `json:"max_partition_load"`
+				AllPartitionHNSW float64 `json:"all_partition_local_hnsw_recall_at_10"`
+			} `json:"variants"`
+			OverlapStorageRatio float64 `json:"overlap_storage_ratio"`
+			FollowUps           []int   `json:"follow_up_issues"`
+		} `json:"continuation_final_local_gate"`
 	}
 	if err := json.Unmarshal(raw, &evidence); err != nil {
 		t.Fatal(err)
@@ -238,7 +271,19 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 		evidence.Continuation.Contract != "fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1" ||
 		evidence.Continuation.CheckedIn10K.ExhaustiveRecall != 1 || !evidence.Continuation.CheckedIn10K.IDParity || !evidence.Continuation.CheckedIn10K.ScoreParity ||
 		evidence.Continuation.Retained1M.ExhaustiveRecall != 1 || evidence.Continuation.Retained1M.ExactRouterRecall != 1 ||
-		evidence.Continuation.Retained1M.LocalHNSWRecall != 0 || evidence.Continuation.Retained1M.LossOwner != "partition_local_hnsw" {
+		evidence.Continuation.Retained1M.LocalHNSWRecall != 0 || evidence.Continuation.Retained1M.LossOwner != "partition_local_hnsw" ||
+		evidence.FinalLocalGate.SchemaVersion != 3 || evidence.FinalLocalGate.ResultKind != "m8_production_multi_variant_matrix_v3" ||
+		evidence.FinalLocalGate.Status != "experimental_gate_failures" || evidence.FinalLocalGate.Disposition != "enablement_off_follow_up_required" ||
+		evidence.FinalLocalGate.MeasuredCodeHead != "903a351d8f2f6c6462481312e21b30ac5bedecf1" ||
+		evidence.FinalLocalGate.ArtifactSHA256 != "fc120fdcb3ac4aff58c455c65ad68bd70f4ce4358966ed4f98c0d62343d863b1" ||
+		evidence.FinalLocalGate.Fixture.Vectors != 1_000_000 || evidence.FinalLocalGate.Fixture.Queries != 32 ||
+		evidence.FinalLocalGate.Fixture.Checksum != "71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f" ||
+		evidence.FinalLocalGate.GateLedger.Exhaustive != "pass" || evidence.FinalLocalGate.GateLedger.Recall != "fail" ||
+		evidence.FinalLocalGate.GateLedger.OverlapStorage != "pass" || evidence.FinalLocalGate.GateLedger.Resources != "pass" ||
+		len(evidence.FinalLocalGate.Variants) != 3 || evidence.FinalLocalGate.Variants[0].ID != "graph-disjoint-v1" ||
+		evidence.FinalLocalGate.Variants[0].AllPartitionHNSW != 0.7124999999999999 ||
+		evidence.FinalLocalGate.Variants[1].MaxLoad != 63_918 || evidence.FinalLocalGate.OverlapStorageRatio >= 1.35 ||
+		!slices.Equal(evidence.FinalLocalGate.FollowUps, []int{3998, 3999}) {
 		t.Fatalf("M8 evidence boundary changed: %+v", evidence)
 	}
 }

@@ -110,9 +110,96 @@
     "disposition": "diagnosis_only_enablement_remains_off",
     "next_owners": ["3981_generation_pinned_session_cache", "3982_local_hnsw_and_final_gate"]
   },
+  "continuation_final_local_gate": {
+    "schema_version": 3,
+    "result_kind": "m8_production_multi_variant_matrix_v3",
+    "status": "experimental_gate_failures",
+    "disposition": "enablement_off_follow_up_required",
+    "base_sha": "29d79894a84736757cc3fcdaf932f49ece060288",
+    "measured_code_head": "903a351d8f2f6c6462481312e21b30ac5bedecf1",
+    "artifact_sha256": "fc120fdcb3ac4aff58c455c65ad68bd70f4ce4358966ed4f98c0d62343d863b1",
+    "artifact_retained_path": "/mnt/fast4tb/tmp/treedb_3982_1m_Kb5eot/m16/matrix3/vector_partition_m8_matrix_903a351d8f2f_4443cc84da59.json",
+    "profiles_retained_path": "/mnt/fast4tb/tmp/treedb_3982_1m_Kb5eot/m16/profiles3",
+    "fixture": {
+      "name": "deterministic_1000000",
+      "checksum": "71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f",
+      "vectors": 1000000,
+      "queries": 32,
+      "dimensions": 16,
+      "metric": "cosine",
+      "top_k": 10
+    },
+    "matrix": {
+      "partitions": 16,
+      "raft_groups": 4,
+      "raft_nodes_per_group": 3,
+      "probes": [1, 2, 4, 8, 16],
+      "ef_search": [64, 4096],
+      "concurrency": [1, 16],
+      "measured_rows": 60
+    },
+    "gate_ledger": {
+      "required_variants": "pass",
+      "exhaustive_correctness": "pass",
+      "failure_honesty": "pass",
+      "recall": "fail",
+      "probe_reduction": "fail",
+      "matched_recall_qps": "fail",
+      "matched_recall_tail": "fail",
+      "balance": "pass",
+      "overlap_storage": "pass",
+      "resource_bounds": "pass",
+      "existing_behavior": "pending_latest_head_required_suites"
+    },
+    "variants": [
+      {
+        "variant_id": "graph-disjoint-v1",
+        "assignment_basis": "graph",
+        "overlap": 0,
+        "persistent_asset_bytes": 282881928,
+        "peak_rss_bytes": 2085953536,
+        "max_partition_load": 63292,
+        "balance_hard_cap": 65625,
+        "quarter_probe_exact_router_recall_at_10": 0.2562500000000001,
+        "quarter_probe_end_to_end_recall_at_10": 0.209375,
+        "all_partition_local_hnsw_recall_at_10": 0.7124999999999999
+      },
+      {
+        "variant_id": "graph-overlap-020-v1",
+        "assignment_basis": "graph",
+        "overlap": 0.2,
+        "overlap_memberships": 8096,
+        "persistent_asset_bytes": 285168176,
+        "peak_rss_bytes": 2327613440,
+        "max_partition_load": 63918,
+        "balance_hard_cap": 65625,
+        "quarter_probe_exact_router_recall_at_10": 0.2562500000000001,
+        "quarter_probe_end_to_end_recall_at_10": 0.209375,
+        "all_partition_local_hnsw_recall_at_10": 0.7156250000000001
+      },
+      {
+        "variant_id": "stable-id-hash-disjoint-v1",
+        "assignment_basis": "stable_id_hash",
+        "overlap": 0,
+        "persistent_asset_bytes": 282385488,
+        "peak_rss_bytes": 2327613440,
+        "max_partition_load": 62886,
+        "balance_hard_cap": 65625,
+        "quarter_probe_exact_router_recall_at_10": 0.25937499999999997,
+        "quarter_probe_end_to_end_recall_at_10": 0.17812499999999998,
+        "all_partition_local_hnsw_recall_at_10": 0.778125
+      }
+    ],
+    "overlap_storage_ratio": 1.0080819867715267,
+    "aggregate_shard_concurrency": {
+      "configured": 128,
+      "observed": 64,
+      "passed": true
+    },
+    "follow_up_issues": [3998, 3999],
+    "claim_boundary": "single_host_loopback_local_gate_complete_feature_remains_experimental_off"
+  },
   "unsupported": [
-    "overlap_0.20_assets",
-    "stable_id_hash_attribution",
     "multi_host_deployment",
     "billion_vector_claim"
   ]

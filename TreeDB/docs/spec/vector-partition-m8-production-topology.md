@@ -119,12 +119,21 @@ profile paths, limitations, and an explicit gate ledger. CPU, allocation
 baseline/final, heap, block, mutex, and execution trace profiles cover the
 measured query cells plus the unavailable-endpoint fault.
 
-The checked-in 10k path materializes disjoint round-robin HNSW packs for CI.
-The retained 1M path reuses the graph-built M3/M5 packs. Overlap `0.20` and
-stable-ID/hash attribution are currently reported `unsupported`; they MUST NOT
-be silently treated as disjoint rows. All-partition production HNSW is compared
-to independent exhaustive collection truth and MUST be exact to pass the
-exhaustive gate.
+The checked-in 10k path materializes persistent HNSW packs for CI. The retained
+1M path reuses graph-built M3/M5 packs. `-m8-variant-dbs` requires exactly three
+distinct immutable descriptors and executes them sequentially:
+
+1. graph assignment with disjoint memberships;
+2. graph assignment with bounded overlap `0.20`;
+3. stable-ID hash assignment with disjoint memberships as an attribution
+   baseline.
+
+The matrix rejects missing, duplicated, mutable, or identity-mismatched
+variants rather than silently substituting a disjoint row. Exact correctness is
+owned by canonical source truth versus the exhaustive exact partition union;
+the router, partition-local HNSW, transport, and coordinator merge retain
+separate recall/parity attribution. Approximate HNSW recall is judged by the
+declared recall gate and is never described as exact exhaustive parity.
 
 ## Capacity and enablement
 
@@ -133,8 +142,13 @@ membership load versus the default 5% hard-cap epsilon, request/response and
 logical candidate bytes, and retained M3 mapped-pack evidence. The current M8
 runner does not independently sample mmap residency and says so in the artifact.
 Observed persistent bytes and RSS are not a resource-bounds pass unless a
-configured resource limit is compared; otherwise the ledger MUST report
-`measured_not_bounded`.
+configured resource limit is compared. The strict matrix compares configured
+persistent-asset and process-RSS ceilings plus every coordinator/shard count,
+byte, fanout, concurrency, result, search-budget, and wall-clock limit against
+the same request scope. Client concurrency scales the configured aggregate
+shard-request ceiling; a process-wide observed peak is not compared to the
+smaller per-request worker limit. Partition-load evidence includes both primary
+and overlap memberships.
 
 The feature remains experimental/off unless every #3917 north-star gate passes
 or the user explicitly accepts the narrower result with one linked measured
