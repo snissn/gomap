@@ -159,6 +159,23 @@ func TestM8GitDirtyIgnoresDeclaredOutputsButPreservesSourceChangesV1(t *testing.
 	if m8GitDirtyInV1(repo, out, profiles) {
 		t.Fatal("declared benchmark output made clean repository dirty")
 	}
+	variantProfiles := filepath.Join(profiles, "graph-disjoint-v1")
+	siblingProfiles := filepath.Join(profiles, "stable-id-hash-disjoint-v1")
+	if err := os.MkdirAll(variantProfiles, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(siblingProfiles, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(siblingProfiles, "cpu.pprof"), []byte("profile\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !m8GitDirtyInV1(repo, out, variantProfiles) {
+		t.Fatal("test setup did not expose sibling matrix profile as dirty")
+	}
+	if m8GitDirtyInV1(repo, out, variantProfiles, profiles) {
+		t.Fatal("matrix-wide profile root did not exclude sibling profile artifacts")
+	}
 	if err := os.WriteFile(tracked, []byte("changed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -227,17 +244,17 @@ func TestM8MatrixParentDoesNotMaterializeFixtureV1(t *testing.T) {
 }
 
 func TestM8VariantProcessArgsForceFreshSingleVariantV1(t *testing.T) {
-	command := []string{"treedb_vector_partition_bench", "-mode", m8ProductionMultiGroupModeV1, "-dataset", "format", "-m8-variant-dbs", "/a,/b,/c", "-overlap=.1", "-format", "text", "-profiles", "/old"}
-	got, err := m8VariantProcessArgsV1(command, "/variant", .2, "/profiles/variant")
+	command := []string{"treedb_vector_partition_bench", "-mode", m8ProductionMultiGroupModeV1, "-dataset", "format", "-m8-variant-dbs", "/a,/b,/c", "-overlap=.1", "-format", "text", "-profiles", "/old", "-m8-matrix-out", "/old-out", "-m8-matrix-profiles", "/old-profiles"}
+	got, err := m8VariantProcessArgsV1(command, "/variant", .2, "/profiles/variant", "/matrix-out", "/matrix-profiles")
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantPrefix := []string{"-m8-existing-db", "/variant", "-overlap", "0.2", "-format", "json", "-profiles", "/profiles/variant"}
+	wantPrefix := []string{"-m8-existing-db", "/variant", "-overlap", "0.2", "-format", "json", "-profiles", "/profiles/variant", "-m8-matrix-out", "/matrix-out", "-m8-matrix-profiles", "/matrix-profiles"}
 	if len(got) < len(wantPrefix) || !reflect.DeepEqual(got[:len(wantPrefix)], wantPrefix) {
 		t.Fatalf("child args=%v want prefix=%v", got, wantPrefix)
 	}
 	for _, arg := range got {
-		if strings.HasPrefix(arg, "-m8-variant-dbs") || strings.HasPrefix(arg, "--m8-variant-dbs") || arg == "/a,/b,/c" || arg == "/old" {
+		if strings.HasPrefix(arg, "-m8-variant-dbs") || strings.HasPrefix(arg, "--m8-variant-dbs") || arg == "/a,/b,/c" || arg == "/old" || arg == "/old-out" || arg == "/old-profiles" {
 			t.Fatalf("child args retained matrix/old-profile argument: %v", got)
 		}
 	}

@@ -84,7 +84,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 	if len(cfg.m8VariantDBs) == 0 {
 		return runM8ProductionSingleVariantV1(cfg, fixture, vectors, queries, stdout)
 	}
-	initialDirty := m8GitDirtyV1()
+	initialDirty := m8GitDirtyV1(cfg.out, cfg.profiles)
 	type variantSource struct {
 		dir        string
 		descriptor m3VariantDescriptorV1
@@ -170,7 +170,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 }
 
 func runM8ProductionVariantProcessV1(cfg config, dir string, overlap float64, profiles string, stdout io.Writer) error {
-	args, err := m8VariantProcessArgsV1(cfg.command, dir, overlap, profiles)
+	args, err := m8VariantProcessArgsV1(cfg.command, dir, overlap, profiles, cfg.out, cfg.profiles)
 	if err != nil {
 		return err
 	}
@@ -188,17 +188,23 @@ func runM8ProductionVariantProcessV1(cfg config, dir string, overlap float64, pr
 	return nil
 }
 
-func m8VariantProcessArgsV1(command []string, dir string, overlap float64, profiles string) ([]string, error) {
+func m8VariantProcessArgsV1(command []string, dir string, overlap float64, profiles, matrixOut, matrixProfiles string) ([]string, error) {
 	if len(command) == 0 || dir == "" || math.IsNaN(overlap) || math.IsInf(overlap, 0) || overlap < 0 || overlap > 1 {
 		return nil, errors.New("M8 variant process requires a command, database, and finite overlap in [0,1]")
 	}
-	drop := map[string]bool{"m8-variant-dbs": true, "m8-existing-db": true, "overlap": true, "format": true, "profiles": true}
+	drop := map[string]bool{"m8-variant-dbs": true, "m8-existing-db": true, "overlap": true, "format": true, "profiles": true, "m8-matrix-out": true, "m8-matrix-profiles": true}
 	// Forced child identity flags must precede every inherited argument. This is
 	// safe even for a defensively supplied positional argument because Go flag
 	// parsing stops at the first positional token.
 	args := []string{"-m8-existing-db", dir, "-overlap", strconv.FormatFloat(overlap, 'g', -1, 64), "-format", "json"}
 	if profiles != "" {
 		args = append(args, "-profiles", profiles)
+	}
+	if matrixOut != "" {
+		args = append(args, "-m8-matrix-out", matrixOut)
+	}
+	if matrixProfiles != "" {
+		args = append(args, "-m8-matrix-profiles", matrixProfiles)
 	}
 	args = slices.Grow(args, len(command)-1)
 	for i := 1; i < len(command); i++ {

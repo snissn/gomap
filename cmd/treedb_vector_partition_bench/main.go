@@ -102,6 +102,8 @@ type config struct {
 	concurrency         []int
 	warmup              int
 	profiles            string
+	m8MatrixOut         string
+	m8MatrixProfiles    string
 	efSearch            []int
 	m8MaxRSSBytes       uint64
 	m8MaxAssetBytes     uint64
@@ -644,6 +646,8 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.warmup, "warmup", cfg.warmup, "M8 untimed topology warmup requests before the measured sweep")
 	fs.StringVar(&efSearch, "ef-search", "128", "comma-separated M8 local HNSW ef_search values")
 	fs.StringVar(&cfg.profiles, "profiles", "", "M8 profile artifact directory")
+	fs.StringVar(&cfg.m8MatrixOut, "m8-matrix-out", "", "internal matrix-wide output root for child cleanliness checks")
+	fs.StringVar(&cfg.m8MatrixProfiles, "m8-matrix-profiles", "", "internal matrix-wide profile root for child cleanliness checks")
 	fs.StringVar(&cfg.m3PersistDir, "m3-persist-db", "", "retain the single overlap,partition_index row as a persistent TreeDB directory for downstream service benchmarks")
 	fs.StringVar(&cfg.m8ExistingDB, "m8-existing-db", "", "read-only existing TreeDB M3 asset directory for production_multi_group; never rebuilt or deleted")
 	fs.StringVar(&m8VariantDBs, "m8-variant-dbs", "", "comma-separated retained M3 directories for the strict three-variant production matrix")
