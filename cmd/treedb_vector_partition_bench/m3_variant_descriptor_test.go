@@ -13,12 +13,12 @@ import (
 func testM3VariantDescriptorV1(dir string) m3VariantDescriptorV1 {
 	hash := strings.Repeat("a", 64)
 	d := m3VariantDescriptorV1{
-		SchemaVersion: 2, ResultKind: "m3_persistent_variant_descriptor_v2", VariantID: "graph-overlap-020-v1",
+		SchemaVersion: 3, ResultKind: "m3_persistent_variant_descriptor_v3", VariantID: "graph-overlap-020-v1",
 		AssignmentBasis: partitionAssignmentGraphV1, OverlapRatio: .2,
 		FixtureChecksum: hash, ArtifactSHA256: hash, GraphArtifactSHA256: hash, ArtifactBackend: "reference", Source: vectorpartition.Source{SourceID: "fixture", Checksum: hash, Vectors: 8, Dimensions: 2, Metric: "cosine"},
 		DatabaseDirectory: dir, ManifestIntegrity: hash, ReadySetDigest: hash, RouterAssetChecksum: hash, RouterModelDigest: hash,
 		SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRows: 8, PartitionGeneration: 4, RouterGeneration: 4,
-		Partitions: 4, PartitionHNSWM: 16, Capacity: 3, PartitionLoads: []int{3, 2, 2, 2}, OverlapMemberships: 1, PersistentAssetBytes: 1024,
+		Partitions: 4, IndexDefinitionDigest: hash, PartitionHNSWM: 16, Capacity: 3, PartitionLoads: []int{3, 2, 2, 2}, OverlapMemberships: 1, PersistentAssetBytes: 1024,
 	}
 	d.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(d)
 	d.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: 3, Budget: 1, BuildIdentityDigest: d.BuildIdentityDigest})
@@ -53,8 +53,9 @@ func TestM3VariantDescriptorBindsReadyManifestV1(t *testing.T) {
 	d := testM3VariantDescriptorV1(t.TempDir())
 	manifest := collections.VectorPartitionManifestV1{
 		IntegrityDigest: d.ManifestIntegrity, ReadySetDigest: d.ReadySetDigest,
-		RouterAsset:      collections.VectorPartitionAssetV1{Checksum: d.RouterAssetChecksum},
-		SourceGeneration: d.SourceGeneration, SourceChecksum: d.SourceChecksum, SourceSchemaHash: d.SourceSchemaHash, SourceRowCount: d.SourceRows,
+		IndexDefinitionDigest: d.IndexDefinitionDigest,
+		RouterAsset:           collections.VectorPartitionAssetV1{Checksum: d.RouterAssetChecksum},
+		SourceGeneration:      d.SourceGeneration, SourceChecksum: d.SourceChecksum, SourceSchemaHash: d.SourceSchemaHash, SourceRowCount: d.SourceRows,
 		Generation: d.PartitionGeneration, RouterGeneration: d.RouterGeneration, PartitionCount: d.Partitions, BalancePolicy: d.OverlapPolicy,
 		Memberships:        []collections.VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 1, PartitionID: 0}, {VectorOrdinal: 2, PartitionID: 1}, {VectorOrdinal: 3, PartitionID: 1}, {VectorOrdinal: 4, PartitionID: 2}, {VectorOrdinal: 5, PartitionID: 2}, {VectorOrdinal: 6, PartitionID: 3}, {VectorOrdinal: 7, PartitionID: 3}},
 		OverlapMemberships: []collections.VectorPartitionMembershipV1{{VectorOrdinal: 7, PartitionID: 0}},
@@ -76,10 +77,11 @@ func TestM3VariantDescriptorBindsReadyManifestV1(t *testing.T) {
 			candidate.OverlapRatio = 0
 			candidate.VariantID = "stable-id-hash-disjoint-v1"
 		},
-		"artifact":    func(candidate *m3VariantDescriptorV1) { candidate.ArtifactSHA256 = strings.Repeat("b", 64) },
-		"capacity":    func(candidate *m3VariantDescriptorV1) { candidate.Capacity++ },
-		"loads":       func(candidate *m3VariantDescriptorV1) { candidate.PartitionLoads[0]-- },
-		"asset bytes": func(candidate *m3VariantDescriptorV1) { candidate.PersistentAssetBytes++ },
+		"artifact":         func(candidate *m3VariantDescriptorV1) { candidate.ArtifactSHA256 = strings.Repeat("b", 64) },
+		"index definition": func(candidate *m3VariantDescriptorV1) { candidate.IndexDefinitionDigest = strings.Repeat("b", 64) },
+		"capacity":         func(candidate *m3VariantDescriptorV1) { candidate.Capacity++ },
+		"loads":            func(candidate *m3VariantDescriptorV1) { candidate.PartitionLoads[0]-- },
+		"asset bytes":      func(candidate *m3VariantDescriptorV1) { candidate.PersistentAssetBytes++ },
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := d

@@ -212,14 +212,16 @@ func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, par
 			return nil, matchErr
 		}
 		var partitionHNSWM int
+		var indexDefinitionDigest string
 		for _, index := range h.collection.MetaView().VectorIndexes {
 			if index.Name == partitionHNSWIndex {
 				partitionHNSWM = index.M
+				indexDefinitionDigest = collections.VectorIndexDefinitionDigestV1(index)
 				break
 			}
 		}
-		if partitionHNSWM != descriptor.PartitionHNSWM {
-			return nil, errors.New("retained M8 descriptor local HNSW M does not match collection metadata")
+		if partitionHNSWM != descriptor.PartitionHNSWM || indexDefinitionDigest != descriptor.IndexDefinitionDigest {
+			return nil, errors.New("retained M8 descriptor local HNSW definition does not match collection metadata")
 		}
 		h.descriptor = &descriptor
 	} else if !errors.Is(statErr, os.ErrNotExist) {

@@ -275,8 +275,10 @@ func TestM8VariantBuildCompatibilityRejectsMixedRetainedBuildsV1(t *testing.T) {
 			variants[1].ArtifactSHA256 = strings.Repeat("d", 64)
 			variants[1].GraphArtifactSHA256 = variants[1].ArtifactSHA256
 		},
-		"source":       func(variants []m3VariantDescriptorV1) { variants[2].Source.SourceID = "different" },
-		"local HNSW M": func(variants []m3VariantDescriptorV1) { variants[2].PartitionHNSWM-- },
+		"source":             func(variants []m3VariantDescriptorV1) { variants[2].Source.SourceID = "different" },
+		"index definition":   func(variants []m3VariantDescriptorV1) { variants[2].IndexDefinitionDigest = strings.Repeat("d", 64) },
+		"local HNSW M":       func(variants []m3VariantDescriptorV1) { variants[2].PartitionHNSWM-- },
+		"graph router model": func(variants []m3VariantDescriptorV1) { variants[1].RouterModelDigest = strings.Repeat("d", 64) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			variants := makeVariants()

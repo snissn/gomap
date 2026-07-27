@@ -266,13 +266,16 @@ func m8ValidateVariantBuildCompatibilityV1(variants []m3VariantDescriptorV1) err
 			return fmt.Errorf("M8 matrix missing variant build identity %q", required)
 		}
 		if variant.FixtureChecksum != base.FixtureChecksum || variant.Source != base.Source || variant.Partitions != base.Partitions ||
-			variant.GraphArtifactSHA256 != base.GraphArtifactSHA256 || variant.PartitionHNSWM != base.PartitionHNSWM {
+			variant.GraphArtifactSHA256 != base.GraphArtifactSHA256 || variant.IndexDefinitionDigest != base.IndexDefinitionDigest || variant.PartitionHNSWM != base.PartitionHNSWM {
 			return fmt.Errorf("M8 matrix variant %q was not built from the common source, graph, partition count, and local HNSW configuration", required)
 		}
 	}
 	graphOverlap := byID["graph-overlap-020-v1"]
 	if graphOverlap.ArtifactSHA256 != base.ArtifactSHA256 {
 		return errors.New("M8 matrix graph variants do not share the same assignment artifact")
+	}
+	if graphOverlap.RouterModelDigest != base.RouterModelDigest {
+		return errors.New("M8 matrix graph variants do not share the same router model")
 	}
 	return nil
 }

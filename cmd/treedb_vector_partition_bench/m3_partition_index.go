@@ -256,7 +256,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	identityDescriptor := m3VariantDescriptorV1{
 		FixtureChecksum: fixture.Checksum, VariantID: variantID, AssignmentBasis: cfg.partitionAssignment, OverlapRatio: ratio,
 		ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphArtifactDigest, ArtifactBackend: artifact.Backend,
-		Source: artifact.Source, PartitionHNSWM: partitionHNSWM,
+		Source: artifact.Source, IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(meta.VectorIndexes[0]), PartitionHNSWM: partitionHNSWM,
 	}
 	buildIdentityDigest, err := m3VariantBuildIdentityDigestV1(identityDescriptor)
 	if err != nil {
@@ -590,14 +590,14 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	}
 	if !cleanup {
 		descriptor := m3VariantDescriptorV1{
-			SchemaVersion: 2, ResultKind: "m3_persistent_variant_descriptor_v2", VariantID: variantID,
+			SchemaVersion: 3, ResultKind: "m3_persistent_variant_descriptor_v3", VariantID: variantID,
 			AssignmentBasis: cfg.partitionAssignment, OverlapRatio: ratio, OverlapPolicy: manifest.BalancePolicy,
 			FixtureChecksum: fixture.Checksum, ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphArtifactDigest, ArtifactBackend: artifact.Backend, Source: artifact.Source,
 			BuildIdentityDigest: buildIdentityDigest,
 			DatabaseDirectory:   dir, ManifestIntegrity: manifest.IntegrityDigest, ReadySetDigest: manifest.ReadySetDigest,
 			RouterAssetChecksum: manifest.RouterAsset.Checksum, RouterModelDigest: routerRuntime.ModelDigest,
 			SourceGeneration: manifest.SourceGeneration, SourceChecksum: manifest.SourceChecksum, SourceSchemaHash: manifest.SourceSchemaHash, SourceRows: manifest.SourceRowCount,
-			PartitionGeneration: manifest.Generation, RouterGeneration: manifest.RouterGeneration, Partitions: manifest.PartitionCount,
+			PartitionGeneration: manifest.Generation, RouterGeneration: manifest.RouterGeneration, Partitions: manifest.PartitionCount, IndexDefinitionDigest: manifest.IndexDefinitionDigest,
 			Capacity: artifact.Metrics.Cap, PartitionLoads: append([]int(nil), overlap.Loads...), OverlapMemberships: len(manifest.OverlapMemberships),
 			PartitionHNSWM:       partitionHNSWM,
 			PersistentAssetBytes: packPayloadBytes + manifest.RouterAsset.Bytes,
