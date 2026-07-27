@@ -58,3 +58,14 @@ func TestCatalogMetaLifecycleHarnessActivatesAndConvergesV1(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestCatalogMetaLifecycleHarnessRaftConfigProvidesSchedulingHeadroomV1(t *testing.T) {
+	config := catalogMetaLifecycleHarnessRaftConfigV1()
+	minimum := 5 * time.Second
+	if config.HeartbeatTimeout < minimum || config.ElectionTimeout < minimum || config.LeaderLeaseTimeout < minimum {
+		t.Fatalf("coordination timeouts heartbeat=%s election=%s lease=%s want each at least %s", config.HeartbeatTimeout, config.ElectionTimeout, config.LeaderLeaseTimeout, minimum)
+	}
+	if catalogMetaLifecycleHarnessLeaderDwellV1 < time.Second {
+		t.Fatalf("leader dwell=%s want at least 1s", catalogMetaLifecycleHarnessLeaderDwellV1)
+	}
+}
