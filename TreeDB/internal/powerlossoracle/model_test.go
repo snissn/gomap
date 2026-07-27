@@ -647,6 +647,56 @@ func TestObservedRenameRecoversSourceDetachedByEarlierOverlay(t *testing.T) {
 	}
 }
 
+func TestObservedCreateAcceptsSameFileCapturedBeforeCallback(t *testing.T) {
+	root := t.TempDir()
+	tmp := filepath.Join(root, "health.json.tmp.1")
+	if err := os.WriteFile(tmp, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	model, err := Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A background producer can complete CreateTemp while Capture is walking
+	// the directory, then deliver that create's synchronous observer callback
+	// after Capture returns. The callback describes the same physical file and
+	// must reconcile with the captured baseline instead of reporting EEXIST.
+	if err := model.Observe(root, durabilitycut.Event{
+		Namespace: durabilitycut.NamespaceCreate,
+		NewPath:   tmp,
+	}); err != nil {
+		t.Fatalf("observe delayed create for captured file: %v", err)
+	}
+}
+
+func TestObservedCreateRejectsDifferentFileAtCapturedPath(t *testing.T) {
+	root := t.TempDir()
+	tmp := filepath.Join(root, "health.json.tmp.1")
+	if err := os.WriteFile(tmp, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	model, err := Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Keep the captured inode alive under another name so recreating tmp cannot
+	// reuse its physical identity.
+	if err := os.Rename(tmp, filepath.Join(root, "captured-inode")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tmp, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Observe(root, durabilitycut.Event{
+		Namespace: durabilitycut.NamespaceCreate,
+		NewPath:   tmp,
+	}); err == nil || !strings.Contains(err.Error(), "file already exists") {
+		t.Fatalf("observe different file at captured path err=%v want duplicate-create error", err)
+	}
+}
+
 func TestCrossDirectoryRenameNeedsBothDirectorySyncs(t *testing.T) {
 	model := newModel()
 	if err := model.Create("from/value", []byte("payload")); err != nil {
