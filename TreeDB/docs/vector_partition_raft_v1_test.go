@@ -165,8 +165,8 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				"fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1",
 				"9afad07fb8daf374076fe9fa630106ffdf6241ae746344349eb1885d37cdfbd1",
 				"its all-partition owner is partition-local HNSW",
-				"4efd4ba4bbac9c32a405f5a5e3e2e94b2ecd73ec",
-				"02bd4648b6de94b3136447d7029b5c2873be19fb779ab2382b61c8b9bcf50b86",
+				"1216bfa26a4da6dcda2ea17ac61baf1860ab5a1a",
+				"cf587509e14b0ca014d5d617c8ab90b5617ca9ae56ff358ef2f4b8fea22cfae3",
 				"Each schema-3 descriptor binds",
 				"3c7a5665803b2f8f32f0187376b31faa74b7b712d8b7d94b28aea7114db6f556",
 				"Coupled graph acceptance",
@@ -284,6 +284,7 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				IndexDefinition  string  `json:"index_definition_digest"`
 				RouterModel      string  `json:"router_model_digest"`
 				PartitionHNSWM   int     `json:"partition_hnsw_m"`
+				PeakRSSBytes     uint64  `json:"peak_rss_bytes"`
 				MaxLoad          uint64  `json:"max_partition_load"`
 				AllPartitionHNSW float64 `json:"all_partition_local_hnsw_recall_at_10"`
 			} `json:"variants"`
@@ -301,7 +302,20 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				MaxObserved uint64 `json:"max_observed"`
 				Passed      bool   `json:"passed"`
 			} `json:"aggregate_candidate_bytes"`
-			MaximumRequestWallClockNanos      uint64 `json:"maximum_request_wall_clock_nanos"`
+			MaximumRequestWallClockNanos        uint64 `json:"maximum_request_wall_clock_nanos"`
+			SuccessfulUntimedResourceBoundaries []struct {
+				VariantID            string `json:"variant_id"`
+				SelectedPartitions   uint64 `json:"selected_partitions"`
+				EFSearch             uint64 `json:"ef_search"`
+				WallClockNanos       uint64 `json:"wall_clock_nanos"`
+				Requests             uint64 `json:"requests"`
+				RPCs                 uint64 `json:"rpcs"`
+				RequestBytes         uint64 `json:"request_bytes"`
+				CandidateBytes       uint64 `json:"candidate_bytes"`
+				ResponseBytes        uint64 `json:"response_bytes"`
+				MaxShardPartitions   uint64 `json:"max_shard_partitions"`
+				MaxShardRequestBytes uint64 `json:"max_shard_request_bytes"`
+			} `json:"successful_untimed_resource_boundaries"`
 			StoppedGroupFaultResourceBoundary struct {
 				SelectedPartitions   uint64   `json:"selected_partitions"`
 				EFSearch             uint64   `json:"ef_search"`
@@ -337,9 +351,9 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 		evidence.Continuation.Retained1M.LocalHNSWRecall != 0 || evidence.Continuation.Retained1M.LossOwner != "partition_local_hnsw" ||
 		evidence.FinalLocalGate.SchemaVersion != 3 || evidence.FinalLocalGate.ResultKind != "m8_production_multi_variant_matrix_v3" ||
 		evidence.FinalLocalGate.Status != "experimental_gate_failures" || evidence.FinalLocalGate.Disposition != "enablement_off_follow_up_required" ||
-		evidence.FinalLocalGate.MeasuredCodeHead != "4efd4ba4bbac9c32a405f5a5e3e2e94b2ecd73ec" ||
-		evidence.FinalLocalGate.ArtifactSHA256 != "02bd4648b6de94b3136447d7029b5c2873be19fb779ab2382b61c8b9bcf50b86" ||
-		evidence.FinalLocalGate.MeasuredBinarySHA256 != "dbbf1d86d257eaab21d7948913974c62991b5268a121dc83a7974e8ac477b407" ||
+		evidence.FinalLocalGate.MeasuredCodeHead != "1216bfa26a4da6dcda2ea17ac61baf1860ab5a1a" ||
+		evidence.FinalLocalGate.ArtifactSHA256 != "cf587509e14b0ca014d5d617c8ab90b5617ca9ae56ff358ef2f4b8fea22cfae3" ||
+		evidence.FinalLocalGate.MeasuredBinarySHA256 != "5cf0f4c6a8791981a0aa3cbfe03b19d47bbad05e050494c50c7aacdf517298b8" ||
 		evidence.FinalLocalGate.MeasuredBinaryBuild != "go build -buildvcs=false ./cmd/treedb_vector_partition_bench" ||
 		evidence.FinalLocalGate.VariantDescriptorSchemaVersion != 3 || evidence.FinalLocalGate.VariantDescriptorResultKind != "m3_persistent_variant_descriptor_v3" ||
 		!evidence.FinalLocalGate.DirtyChildReportsRejected || !evidence.FinalLocalGate.AllChildReportsClean ||
@@ -355,27 +369,28 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 		evidence.FinalLocalGate.Variants[0].ManifestIdentity != "d370a035ddb52823452728644020936b495641c79fcf261977e8dbe08c9ff4d6" ||
 		evidence.FinalLocalGate.Variants[0].IndexDefinition != "c51c99cdf93b98f5e0d22f7a4464c14c3f51f2563e33d3bd300f3fccab5955fc" ||
 		evidence.FinalLocalGate.Variants[0].RouterModel != "5c5492555c8ca7c5ff1b92e1bf07542130d12c5663ca6eb93ac6bb2b4b2074c4" || evidence.FinalLocalGate.Variants[0].PartitionHNSWM != 16 ||
+		evidence.FinalLocalGate.Variants[0].PeakRSSBytes != 1_913_835_520 ||
 		evidence.FinalLocalGate.Variants[0].AllPartitionHNSW != 0.7124999999999999 ||
 		evidence.FinalLocalGate.Variants[1].ID != "graph-overlap-020-v1" || evidence.FinalLocalGate.Variants[1].AssignmentBasis != "graph" ||
 		evidence.FinalLocalGate.Variants[1].Overlap != 0.2 || evidence.FinalLocalGate.Variants[1].GraphSHA256 != evidence.FinalLocalGate.Variants[0].GraphSHA256 ||
 		evidence.FinalLocalGate.Variants[1].ArtifactSHA256 != evidence.FinalLocalGate.Variants[0].ArtifactSHA256 || evidence.FinalLocalGate.Variants[1].BuildIdentity != "9f7cf71e9756fadf339b9df346dc6e2949acd702737c64b20a160226dbcb12d7" ||
 		evidence.FinalLocalGate.Variants[1].ManifestIdentity != "c39ddb9c5ab55d363ff968e45c60945cd0afcbea3550eb6b5c27e7a2ca5292db" ||
 		evidence.FinalLocalGate.Variants[1].IndexDefinition != evidence.FinalLocalGate.Variants[0].IndexDefinition || evidence.FinalLocalGate.Variants[1].RouterModel != evidence.FinalLocalGate.Variants[0].RouterModel ||
-		evidence.FinalLocalGate.Variants[1].PartitionHNSWM != 16 || evidence.FinalLocalGate.Variants[1].MaxLoad != 63_918 ||
+		evidence.FinalLocalGate.Variants[1].PartitionHNSWM != 16 || evidence.FinalLocalGate.Variants[1].PeakRSSBytes != 1_915_441_152 || evidence.FinalLocalGate.Variants[1].MaxLoad != 63_918 ||
 		evidence.FinalLocalGate.Variants[2].ID != "stable-id-hash-disjoint-v1" || evidence.FinalLocalGate.Variants[2].AssignmentBasis != "stable_id_hash" ||
 		evidence.FinalLocalGate.Variants[2].Overlap != 0 || evidence.FinalLocalGate.Variants[2].GraphSHA256 != evidence.FinalLocalGate.Variants[0].GraphSHA256 ||
 		evidence.FinalLocalGate.Variants[2].ArtifactSHA256 != "7a8ec9915de7acc6035024f3fc363c76678e8b27c529a2cba8a9861e764a49ad" || evidence.FinalLocalGate.Variants[2].BuildIdentity != "c5758e525e30bf5cef03a149fe28a9cf6e7206bd88580acde41ea74cc14aec99" ||
 		evidence.FinalLocalGate.Variants[2].ManifestIdentity != "05be67319eba00d006af4f28bfcadc7b163d7d3015fd4bb1a42a88cf253322e7" ||
-		evidence.FinalLocalGate.Variants[2].IndexDefinition != evidence.FinalLocalGate.Variants[0].IndexDefinition || evidence.FinalLocalGate.Variants[2].RouterModel != "e96bc5f62cefcd88a0e8674255c0a941bed4df9920fcb7b6e537249c67e802fa" ||
+		evidence.FinalLocalGate.Variants[2].IndexDefinition != evidence.FinalLocalGate.Variants[0].IndexDefinition || evidence.FinalLocalGate.Variants[2].RouterModel != "e96bc5f62cefcd88a0e8674255c0a941bed4df9920fcb7b6e537249c67e802fa" || evidence.FinalLocalGate.Variants[2].PeakRSSBytes != 1_932_980_224 ||
 		evidence.FinalLocalGate.Variants[2].PartitionHNSWM != 16 || evidence.FinalLocalGate.OverlapRequestedMemberships != 200_000 ||
 		evidence.FinalLocalGate.OverlapRealizedMemberships != 8_096 || evidence.FinalLocalGate.OverlapMaterializationRatio != 0.008096 ||
 		evidence.FinalLocalGate.OverlapBudgetUtilization != 0.04048 || evidence.FinalLocalGate.OverlapStorageRatio >= 1.35 ||
-		evidence.FinalLocalGate.ResourceMeasurementBasis != "corpus_exclusive_fresh_process_per_variant_actual_per_request_and_per_shard_maxima_including_stopped_group_fault_request" ||
+		evidence.FinalLocalGate.ResourceMeasurementBasis != "corpus_exclusive_fresh_process_per_variant_actual_per_request_and_per_shard_maxima_including_successful_preflight_warmup_and_stopped_group_fault_requests" ||
 		evidence.FinalLocalGate.TopologySnapshotBoundary != "after_unavailable_group_request" ||
 		evidence.FinalLocalGate.MatrixParentMaterializes == nil || *evidence.FinalLocalGate.MatrixParentMaterializes ||
 		evidence.FinalLocalGate.RetryRedirectLimitBasis != "per_task_limit_times_max_observed_shard_request_fanout" ||
 		evidence.FinalLocalGate.AggregateCandidateBytes.Configured != 134_217_728 || evidence.FinalLocalGate.AggregateCandidateBytes.MaxObserved != 4_207_808 || !evidence.FinalLocalGate.AggregateCandidateBytes.Passed ||
-		evidence.FinalLocalGate.MaximumRequestWallClockNanos != 398_632_387 ||
+		evidence.FinalLocalGate.MaximumRequestWallClockNanos != 20_873_930_551 ||
 		evidence.FinalLocalGate.StoppedGroupFaultResourceBoundary.SelectedPartitions != 16 ||
 		evidence.FinalLocalGate.StoppedGroupFaultResourceBoundary.EFSearch != 4096 ||
 		evidence.FinalLocalGate.StoppedGroupFaultResourceBoundary.Requests != 4 ||
@@ -385,9 +400,30 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 		evidence.FinalLocalGate.StoppedGroupFaultResourceBoundary.MaxShardRequestBytes != 586 ||
 		evidence.FinalLocalGate.StoppedGroupFaultResourceBoundary.CandidateBytes != 0 ||
 		evidence.FinalLocalGate.StoppedGroupFaultResourceBoundary.ResponseBytes != 0 ||
-		!slices.Equal(evidence.FinalLocalGate.StoppedGroupFaultResourceBoundary.WallClockByVariant, []uint64{8_976_405, 18_633_951, 14_727_952}) ||
+		!slices.Equal(evidence.FinalLocalGate.StoppedGroupFaultResourceBoundary.WallClockByVariant, []uint64{24_767_378, 18_661_161, 18_703_110}) ||
 		!slices.Equal(evidence.FinalLocalGate.FollowUps, []int{3998, 3999, 4001}) {
 		t.Fatalf("M8 evidence boundary changed: %+v", evidence)
+	}
+	expectedUntimed := []struct {
+		variantID      string
+		wallClockNanos uint64
+		candidateBytes uint64
+	}{
+		{"graph-disjoint-v1", 20_685_573_824, 4_205_184},
+		{"graph-overlap-020-v1", 20_873_930_551, 4_200_832},
+		{"stable-id-hash-disjoint-v1", 20_618_968_140, 4_205_376},
+	}
+	if len(evidence.FinalLocalGate.SuccessfulUntimedResourceBoundaries) != len(expectedUntimed) {
+		t.Fatalf("M8 successful untimed resource boundary count changed: %+v", evidence.FinalLocalGate.SuccessfulUntimedResourceBoundaries)
+	}
+	for i, want := range expectedUntimed {
+		got := evidence.FinalLocalGate.SuccessfulUntimedResourceBoundaries[i]
+		if got.VariantID != want.variantID || got.SelectedPartitions != 16 || got.EFSearch != 4096 ||
+			got.WallClockNanos != want.wallClockNanos || got.Requests != 4 || got.RPCs != 4 ||
+			got.RequestBytes != 2352 || got.CandidateBytes != want.candidateBytes || got.ResponseBytes != 7232 ||
+			got.MaxShardPartitions != 4 || got.MaxShardRequestBytes != 588 {
+			t.Fatalf("M8 successful untimed resource boundary %d changed: %+v", i, got)
+		}
 	}
 }
 
