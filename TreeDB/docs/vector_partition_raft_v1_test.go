@@ -137,6 +137,9 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				"There is no standalone M8 administration command",
 				"-m8-existing-db DIR",
 				"-m8-variant-dbs",
+				"schema-2 retained descriptor",
+				"canonical build-identity digest",
+				"Custom shard limits are normalized once",
 				"MUST return no partial neighbors",
 				"stable-ID hash assignment",
 				"shard-request ceiling",
@@ -158,8 +161,9 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				"fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1",
 				"9afad07fb8daf374076fe9fa630106ffdf6241ae746344349eb1885d37cdfbd1",
 				"its all-partition owner is partition-local HNSW",
-				"4f9a88031102e7ea4e8f6c0caf976d7212fc16bb",
-				"69da1c4e56fa129ff378500dd3c5af600d0217c711d646fd80d69e8dc5b40169",
+				"523144c99106148123f74c00570b6a6eb6633731",
+				"ca27fe66f538af54c56a366c6ba07eb1829145bbf1dfed7573e05a4a776227d0",
+				"3c7a5665803b2f8f32f0187376b31faa74b7b712d8b7d94b28aea7114db6f556",
 				"Coupled graph acceptance",
 				"enablement_off_follow_up_required",
 				"#3998",
@@ -253,6 +257,11 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				ID               string  `json:"variant_id"`
 				AssignmentBasis  string  `json:"assignment_basis"`
 				Overlap          float64 `json:"overlap"`
+				ArtifactSHA256   string  `json:"artifact_sha256"`
+				GraphSHA256      string  `json:"graph_artifact_sha256"`
+				BuildIdentity    string  `json:"build_identity_digest"`
+				ManifestIdentity string  `json:"manifest_integrity_digest"`
+				PartitionHNSWM   int     `json:"partition_hnsw_m"`
 				MaxLoad          uint64  `json:"max_partition_load"`
 				AllPartitionHNSW float64 `json:"all_partition_local_hnsw_recall_at_10"`
 			} `json:"variants"`
@@ -287,19 +296,27 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 		evidence.Continuation.Retained1M.LocalHNSWRecall != 0 || evidence.Continuation.Retained1M.LossOwner != "partition_local_hnsw" ||
 		evidence.FinalLocalGate.SchemaVersion != 3 || evidence.FinalLocalGate.ResultKind != "m8_production_multi_variant_matrix_v3" ||
 		evidence.FinalLocalGate.Status != "experimental_gate_failures" || evidence.FinalLocalGate.Disposition != "enablement_off_follow_up_required" ||
-		evidence.FinalLocalGate.MeasuredCodeHead != "4f9a88031102e7ea4e8f6c0caf976d7212fc16bb" ||
-		evidence.FinalLocalGate.ArtifactSHA256 != "69da1c4e56fa129ff378500dd3c5af600d0217c711d646fd80d69e8dc5b40169" ||
+		evidence.FinalLocalGate.MeasuredCodeHead != "523144c99106148123f74c00570b6a6eb6633731" ||
+		evidence.FinalLocalGate.ArtifactSHA256 != "ca27fe66f538af54c56a366c6ba07eb1829145bbf1dfed7573e05a4a776227d0" ||
 		evidence.FinalLocalGate.Fixture.Vectors != 1_000_000 || evidence.FinalLocalGate.Fixture.Queries != 32 ||
 		evidence.FinalLocalGate.Fixture.Checksum != "71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f" ||
 		evidence.FinalLocalGate.GateLedger.RequiredVariants != "fail" || evidence.FinalLocalGate.GateLedger.Exhaustive != "pass" || evidence.FinalLocalGate.GateLedger.Recall != "fail" ||
 		evidence.FinalLocalGate.GateLedger.OverlapStorage != "fail" || evidence.FinalLocalGate.GateLedger.CoupledGraph != "fail" || evidence.FinalLocalGate.GateLedger.Resources != "pass" ||
 		len(evidence.FinalLocalGate.Variants) != 3 || evidence.FinalLocalGate.Variants[0].ID != "graph-disjoint-v1" ||
 		evidence.FinalLocalGate.Variants[0].AssignmentBasis != "graph" || evidence.FinalLocalGate.Variants[0].Overlap != 0 ||
+		evidence.FinalLocalGate.Variants[0].ArtifactSHA256 != "3c7a5665803b2f8f32f0187376b31faa74b7b712d8b7d94b28aea7114db6f556" ||
+		evidence.FinalLocalGate.Variants[0].GraphSHA256 != "3c7a5665803b2f8f32f0187376b31faa74b7b712d8b7d94b28aea7114db6f556" ||
+		evidence.FinalLocalGate.Variants[0].BuildIdentity != "18c5a580f85a5284f4199b87bf975c7e9d31d027dece0102a21dfd2a43b66ab3" ||
+		evidence.FinalLocalGate.Variants[0].ManifestIdentity != "f9c87ae901ef0bfd3245f920dca1998e2ee2fb8d5ea2b76d6a062d39ef72b6b2" || evidence.FinalLocalGate.Variants[0].PartitionHNSWM != 16 ||
 		evidence.FinalLocalGate.Variants[0].AllPartitionHNSW != 0.7124999999999999 ||
 		evidence.FinalLocalGate.Variants[1].ID != "graph-overlap-020-v1" || evidence.FinalLocalGate.Variants[1].AssignmentBasis != "graph" ||
-		evidence.FinalLocalGate.Variants[1].Overlap != 0.2 || evidence.FinalLocalGate.Variants[1].MaxLoad != 63_918 ||
+		evidence.FinalLocalGate.Variants[1].Overlap != 0.2 || evidence.FinalLocalGate.Variants[1].GraphSHA256 != evidence.FinalLocalGate.Variants[0].GraphSHA256 ||
+		evidence.FinalLocalGate.Variants[1].ArtifactSHA256 != evidence.FinalLocalGate.Variants[0].ArtifactSHA256 || evidence.FinalLocalGate.Variants[1].BuildIdentity != "811e08b401a51e4f6b38edeb22c4f154dc36c6dc121558f70dd5bdfbeff7dbdb" ||
+		evidence.FinalLocalGate.Variants[1].ManifestIdentity != "d14f3ee5881b93c40ccb459080f662cb860bedefb00b08f811dc1874ad0e64ea" || evidence.FinalLocalGate.Variants[1].PartitionHNSWM != 16 || evidence.FinalLocalGate.Variants[1].MaxLoad != 63_918 ||
 		evidence.FinalLocalGate.Variants[2].ID != "stable-id-hash-disjoint-v1" || evidence.FinalLocalGate.Variants[2].AssignmentBasis != "stable_id_hash" ||
-		evidence.FinalLocalGate.Variants[2].Overlap != 0 || evidence.FinalLocalGate.OverlapRequestedMemberships != 200_000 ||
+		evidence.FinalLocalGate.Variants[2].Overlap != 0 || evidence.FinalLocalGate.Variants[2].GraphSHA256 != evidence.FinalLocalGate.Variants[0].GraphSHA256 ||
+		evidence.FinalLocalGate.Variants[2].ArtifactSHA256 != "7a8ec9915de7acc6035024f3fc363c76678e8b27c529a2cba8a9861e764a49ad" || evidence.FinalLocalGate.Variants[2].BuildIdentity != "1eda08e9bcd79f25dd133a0ad50719a1d6c8b3aa327ce1b0d98083aeff715183" ||
+		evidence.FinalLocalGate.Variants[2].ManifestIdentity != "3d750f5e7077e0912557e07cc1e494e408257c63c03eb257cd12f7a282b6c67a" || evidence.FinalLocalGate.Variants[2].PartitionHNSWM != 16 || evidence.FinalLocalGate.OverlapRequestedMemberships != 200_000 ||
 		evidence.FinalLocalGate.OverlapRealizedMemberships != 8_096 || evidence.FinalLocalGate.OverlapMaterializationRatio != 0.008096 ||
 		evidence.FinalLocalGate.OverlapBudgetUtilization != 0.04048 || evidence.FinalLocalGate.OverlapStorageRatio >= 1.35 ||
 		evidence.FinalLocalGate.ResourceMeasurementBasis != "corpus_exclusive_fresh_process_per_variant_actual_per_request_and_per_shard_maxima" ||

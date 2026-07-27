@@ -145,6 +145,18 @@ The matrix may pass its coupled graph-acceptance gate only when one graph
 variant passes recall, probe reduction, matched-recall QPS, and matched-recall
 tail together; those gates cannot be assembled from different variants.
 
+The schema-2 retained descriptor records both the full assignment artifact and
+the pre-assignment source-graph artifact. Its canonical build-identity digest
+covers fixture, variant, assignment, overlap, backend/source configuration,
+and partition-local HNSW construction parameters; that digest is persisted in
+the manifest-covered balance policy. Matrix validation derives capacity,
+overlap budget/usage, partition loads, and persistent bytes from the opened
+manifest instead of trusting duplicated descriptor fields. All required
+variants must share source, fixture, source-graph digest, partition count, and
+HNSW `M`; graph variants must additionally share the full graph-assignment
+artifact. A retained database directory is provenance, not content identity,
+and the matrix content digest excludes that relocatable path.
+
 ## Capacity and enablement
 
 The report records persistent asset bytes, measured process peak RSS,
@@ -169,6 +181,11 @@ Partition-load evidence includes both primary and overlap memberships.
 Query-wide selected partitions and the maximum partitions in an actual
 generated shard request are separate observations. Only the latter is compared
 with coordinator and shard per-request partition ceilings.
+Custom shard limits are normalized once and passed through the production
+topology to both the coordinator and shard services. The coordinator clamps
+query, result, `ef_search`, partition, identity, and stable-ID bounds to those
+same limits, chunks generated shard requests by the shard partition ceiling,
+and rejects a per-shard candidate baseline above the configured shard maximum.
 
 The feature remains experimental/off unless every #3917 north-star gate passes
 or the user explicitly accepts the narrower result with one linked measured

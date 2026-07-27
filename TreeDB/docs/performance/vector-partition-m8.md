@@ -13,7 +13,7 @@ enablement off with measured follow-up owners
 ## #3982 final local gate disposition
 
 Measured production-code head:
-`4f9a88031102e7ea4e8f6c0caf976d7212fc16bb` (the documentation commit is
+`523144c99106148123f74c00570b6a6eb6633731` (the documentation commit is
 subsequent). Base: `29d79894a84736757cc3fcdaf932f49ece060288`.
 
 The strict schema-3 matrix materialized and executed all three required
@@ -27,11 +27,23 @@ the three-node catalog-meta group. This is single-host loopback
 production-shaped evidence; multi-host qualification remains #3983. It is not
 an external-system comparison.
 
+Each schema-2 descriptor binds a manifest-authoritative canonical build
+identity covering the fixture, source graph, assignment, overlap policy,
+backend/source configuration, and partition-local HNSW `M=16`. All variants
+share graph artifact
+`3c7a5665803b2f8f32f0187376b31faa74b7b712d8b7d94b28aea7114db6f556`.
+The two graph-assignment variants also share that full assignment artifact;
+the stable-ID control has full artifact
+`7a8ec9915de7acc6035024f3fc363c76678e8b27c529a2cba8a9861e764a49ad`
+while retaining the same source graph. Database paths are provenance only and
+do not participate in content identity, so retained descriptors remain valid
+after directory relocation.
+
 Artifact:
-`/mnt/fast4tb/tmp/treedb_3982_reviewfix_1m_4f9a_q90ynAqL/matrix/vector_partition_m8_matrix_4f9a88031102_71f736704deb.json`
+`/mnt/fast4tb/tmp/treedb_3982_identity_1m_5231_9JGoHV/matrix/vector_partition_m8_matrix_523144c99106_1b669e89169b.json`
 
 Artifact SHA-256:
-`69da1c4e56fa129ff378500dd3c5af600d0217c711d646fd80d69e8dc5b40169`
+`ca27fe66f538af54c56a366c6ba07eb1829145bbf1dfed7573e05a4a776227d0`
 
 Fixture checksum:
 `71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f`
@@ -55,8 +67,8 @@ an enablement claim and not a review or performance waiver.
 | Resource bounds | **PASS** | fresh-process 4 GiB RSS and 512 MiB asset ceilings plus actual coordinator/shard request maxima pass |
 | Existing behavior | **PENDING** | latest-head required normal/race/hosted suites own final PR readiness |
 
-Corpus-exclusive fresh-process peak RSS was `1,907,974,144`, `1,921,888,256`,
-and `1,861,615,616` bytes for graph/disjoint, graph/overlap, and stable hash,
+Corpus-exclusive fresh-process peak RSS was `1,911,808,000`, `1,791,225,856`,
+and `1,942,966,272` bytes for graph/disjoint, graph/overlap, and stable hash,
 respectively, below the configured 4 GiB ceiling. This supersedes the earlier
 sequential-process high-water attribution; the blocked matrix parent does not
 materialize or retain a second fixture corpus. Aggregate shard concurrency was
@@ -68,7 +80,7 @@ the maximum observed four-task fanout (`4` each; `0` observed). Persistent
 assets were `282,881,928`, `285,168,176`, and `282,385,488` bytes for graph
 disjoint, graph overlap, and stable hash respectively. Each variant retained
 CPU, allocation baseline/final, heap, block, mutex, and trace profiles under
-`/mnt/fast4tb/tmp/treedb_3982_reviewfix_1m_4f9a_q90ynAqL/profiles/`.
+`/mnt/fast4tb/tmp/treedb_3982_identity_1m_5231_9JGoHV/profiles/`.
 
 At all 16 partitions, exact representative routing recall is `1.0`, while
 partition-local HNSW owns the remaining loss: `0.7125` graph/disjoint,
@@ -90,14 +102,14 @@ GOMAXPROCS=16 GOMEMLIMIT=6GiB \
   ./bin/treedb_vector_partition_bench \
   -mode production_multi_group \
   -dataset /mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture \
-  -out /mnt/fast4tb/tmp/treedb_3982_reviewfix_1m_4f9a_q90ynAqL/matrix \
+  -out /mnt/fast4tb/tmp/treedb_3982_identity_1m_5231_9JGoHV/matrix \
   -partitions 16 -raft-groups 4 -raft-nodes-per-group 3 \
   -probes 1,2,4,8,16 -top-k 10 -concurrency 1,16 -warmup 1 \
   -ef-search 64,4096 -router-candidates 1024 \
-  -profiles /mnt/fast4tb/tmp/treedb_3982_reviewfix_1m_4f9a_q90ynAqL/profiles \
+  -profiles /mnt/fast4tb/tmp/treedb_3982_identity_1m_5231_9JGoHV/profiles \
   -m8-max-rss-bytes 4294967296 \
   -m8-max-persistent-asset-bytes 536870912 \
-  -m8-variant-dbs /mnt/fast4tb/tmp/treedb_3982_1m_Kb5eot/m16/db_graph_disjoint,/mnt/fast4tb/tmp/treedb_3982_1m_Kb5eot/m16/db_graph_overlap,/mnt/fast4tb/tmp/treedb_3982_1m_Kb5eot/m16/db_stable \
+  -m8-variant-dbs /mnt/fast4tb/tmp/treedb_3982_identity_1m_5231_9JGoHV/db_graph_disjoint,/mnt/fast4tb/tmp/treedb_3982_identity_1m_5231_9JGoHV/db_graph_overlap,/mnt/fast4tb/tmp/treedb_3982_identity_1m_5231_9JGoHV/db_stable \
   -format text
 ```
 
