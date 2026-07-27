@@ -605,6 +605,43 @@ func TestVectorPartitionCoordinatorRouterBudgetRejectionKeepsHealthySessionV1(t 
 	}
 }
 
+func TestVectorPartitionCoordinatorRouterBudgetRejectionStillRunsLifecycleAdmissionV1(t *testing.T) {
+	coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a", "group-a"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{
+			0: {{ID: "a", Score: 1}},
+			1: {{ID: "b", Score: .5}},
+		},
+		VectorPartitionCoordinatorLimitsV1{},
+	)
+	invalidated := errors.Join(raftplacement.ErrVectorPartitionLifecycleGuard, errors.New("generation invalidated"))
+	authority := &recordingVectorPartitionReplicatedLifecycleAuthorityV1{
+		readySetDigest: strings.Repeat("c", 64),
+		err:            invalidated,
+	}
+	coordinator.replicatedLifecycle = authority
+	underBudget := testVectorPartitionCoordinatorRequestV1(1)
+	underBudget.RouterCandidateBudget = 1
+
+	response, err := coordinator.Search(t.Context(), underBudget)
+	if !errors.Is(err, invalidated) || !vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
+		t.Fatalf("under-budget invalidated response=%+v err=%v", response, err)
+	}
+	if authority.calls != 1 || source.openCount() != 1 || source.router.closeCount != 1 || len(dispatcher.calls) != 0 {
+		t.Fatalf("lifecycle calls=%d opens=%d closes=%d dispatches=%d", authority.calls, source.openCount(), source.router.closeCount, len(dispatcher.calls))
+	}
+	sessions := coordinator.Stats().RouterSessions
+	if len(sessions) != 1 || sessions[0].ColdOpens != 1 || sessions[0].Invalidations != 1 ||
+		sessions[0].ReaderPins != 1 || sessions[0].ReaderReleases != 1 ||
+		sessions[0].LeasePins != 1 || sessions[0].LeaseReleases != 1 || sessions[0].Closes != 1 {
+		t.Fatalf("invalidated session stats=%+v", sessions)
+	}
+	if err := coordinator.Close(); err != nil || source.router.closeCount != 1 {
+		t.Fatalf("Close err=%v closes=%d", err, source.router.closeCount)
+	}
+}
+
 func TestVectorPartitionCoordinatorRetiredRouterCloseErrorIsRetainedV1(t *testing.T) {
 	coordinator, source, _ := testVectorPartitionCoordinatorV1(t,
 		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},

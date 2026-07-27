@@ -779,7 +779,7 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 	}()
 	router := routerLease.session.router
 	status := router.Status()
-	if err := c.validateRouterStatus(request, status); err != nil {
+	if err := c.validateRouterStatus(status); err != nil {
 		if vectorPartitionCoordinatorRouterStatusInvalidatesSessionV1(err) {
 			c.retireRouterSessionV1(routerLease)
 		}
@@ -794,6 +794,9 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 	}
 	if err := c.recordRouterSessionIdentityV1(routerLease, status, replicatedReadySetDigest); err != nil {
 		c.retireRouterSessionV1(routerLease)
+		return response, c.wrapError(err, "")
+	}
+	if err := validateVectorPartitionCoordinatorRouterRequestV1(request, status); err != nil {
 		return response, c.wrapError(err, "")
 	}
 
@@ -1059,7 +1062,7 @@ func (c *VectorPartitionCoordinatorV1) validateRequest(request VectorPartitionCo
 	return nil
 }
 
-func (c *VectorPartitionCoordinatorV1) validateRouterStatus(request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1) error {
+func (c *VectorPartitionCoordinatorV1) validateRouterStatus(status collections.VectorPartitionRouterRuntimeStatusV1) error {
 	m := status.Manifest
 	p := c.placement
 	if m.State != "ready" || m.Collection != p.Collection.Collection ||
@@ -1081,6 +1084,10 @@ func (c *VectorPartitionCoordinatorV1) validateRouterStatus(request VectorPartit
 			return fmt.Errorf("%w: partition %d placement", ErrVectorPartitionCoordinatorRouteMismatch, i)
 		}
 	}
+	return nil
+}
+
+func validateVectorPartitionCoordinatorRouterRequestV1(request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1) error {
 	if request.RouterMode == collections.VectorPartitionRouterModeExactV1 &&
 		request.RouterCandidateBudget < int(status.Representatives) {
 		return fmt.Errorf("%w: exact router candidate budget", ErrVectorPartitionCoordinatorBudgetExceeded)
