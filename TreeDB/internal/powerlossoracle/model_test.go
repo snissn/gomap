@@ -707,6 +707,96 @@ func TestObservedCreateAcceptsSameFileCapturedBeforeCallback(t *testing.T) {
 	}
 }
 
+func TestObservedCreatePreservesSyncsSerializedBeforeDelayedCallback(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		beforeCallback  func(t *testing.T, model *Model)
+		afterCallback   func(t *testing.T, model *Model)
+		wantStableName  bool
+		wantStableBytes string
+	}{
+		{
+			name: "file-sync",
+			beforeCallback: func(t *testing.T, model *Model) {
+				t.Helper()
+				if err := model.SyncFile("health.json.tmp.1"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			afterCallback: func(t *testing.T, model *Model) {
+				t.Helper()
+				if err := model.SyncDir("."); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantStableName:  true,
+			wantStableBytes: "captured",
+		},
+		{
+			name: "parent-directory-sync",
+			beforeCallback: func(t *testing.T, model *Model) {
+				t.Helper()
+				if err := model.SyncDir("."); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantStableName:  true,
+			wantStableBytes: "",
+		},
+		{
+			name: "file-and-parent-directory-sync",
+			beforeCallback: func(t *testing.T, model *Model) {
+				t.Helper()
+				if err := model.SyncFile("health.json.tmp.1"); err != nil {
+					t.Fatal(err)
+				}
+				if err := model.SyncDir("."); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantStableName:  true,
+			wantStableBytes: "captured",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			tmp := filepath.Join(root, "health.json.tmp.1")
+			if err := os.WriteFile(tmp, []byte("captured"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			model, err := Capture(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.beforeCallback(t, model)
+			if err := model.Observe(root, durabilitycut.Event{
+				Namespace: durabilitycut.NamespaceCreate,
+				NewPath:   tmp,
+			}); err != nil {
+				t.Fatalf("observe delayed create: %v", err)
+			}
+			if tc.afterCallback != nil {
+				tc.afterCallback(t, model)
+			}
+
+			stable := t.TempDir()
+			if err := model.MaterializeStable(stable); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(stable, "health.json.tmp.1")
+			if !tc.wantStableName {
+				if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("stable file after delayed create stat err=%v want not exist", err)
+				}
+				return
+			}
+			if got, err := os.ReadFile(path); err != nil || string(got) != tc.wantStableBytes {
+				t.Fatalf("stable file after delayed create=%q err=%v want=%q", got, err, tc.wantStableBytes)
+			}
+		})
+	}
+}
+
 func TestObservedCreateRejectsDifferentFileAtCapturedPath(t *testing.T) {
 	root := t.TempDir()
 	tmp := filepath.Join(root, "health.json.tmp.1")

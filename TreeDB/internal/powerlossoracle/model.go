@@ -91,6 +91,11 @@ type Model struct {
 	inodes    map[uint64]*inode
 	volatile  map[string]uint64
 	stable    map[string]uint64
+	// Sync callbacks that have been serialized after Capture. A delayed
+	// same-inode create callback may invalidate Capture's provisional stable
+	// baseline, but it must not roll back these later completed promotions.
+	syncedFiles map[uint64]struct{}
+	syncedDirs  map[string]struct{}
 	// overlayDetached retains the inode behind a process-visible name that a
 	// post-operation scan no longer sees. Concurrent producers can complete a
 	// rename before their synchronous observation callbacks acquire the test's
@@ -190,6 +195,8 @@ func newModel() *Model {
 		inodes:          make(map[uint64]*inode),
 		volatile:        make(map[string]uint64),
 		stable:          make(map[string]uint64),
+		syncedFiles:     make(map[uint64]struct{}),
+		syncedDirs:      make(map[string]struct{}),
 		overlayDetached: make(map[string]uint64),
 		volatileDirs:    map[string]rootpublication.StableIdentity{".": rootIdentity},
 		stableDirs:      map[string]rootpublication.StableIdentity{".": rootIdentity},
@@ -228,6 +235,12 @@ func (m *Model) Clone() *Model {
 	}
 	for path, id := range m.stable {
 		out.stable[path] = id
+	}
+	for id := range m.syncedFiles {
+		out.syncedFiles[id] = struct{}{}
+	}
+	for dir := range m.syncedDirs {
+		out.syncedDirs[dir] = struct{}{}
 	}
 	for path, id := range m.overlayDetached {
 		out.overlayDetached[path] = id
@@ -470,17 +483,22 @@ func (m *Model) observeNamespace(root string, event durabilitycut.Event) error {
 				// the volatile and stable names still reference the same model
 				// inode and both observations name the same physical file,
 				// reconcile the delayed callback with the captured baseline.
-				// The callback precedes both file and parent-directory sync, so
-				// demote the bytes and name that Capture initially imported as
-				// stable; SyncFile and SyncDir can promote them independently.
+				// The captured stable baseline is provisional. Demote only the
+				// portions that no later serialized sync has promoted: a file
+				// sync preserves bytes and a parent-directory sync preserves the
+				// name independently.
 				// A replacement overlay or different physical inode remains a
 				// genuine duplicate-create error.
 				if id == stableID &&
 					validStableIdentity(node.stableIdentity) && validStableIdentity(identity) &&
 					rootpublication.SamePhysicalIdentity(node.stableIdentity, identity) {
 					node.volatile = clone(data)
-					node.stable = nil
-					delete(m.stable, path)
+					if _, synced := m.syncedFiles[id]; !synced {
+						node.stable = nil
+					}
+					if _, synced := m.syncedDirs[cleanInternal(pathpkg.Dir(path))]; !synced {
+						delete(m.stable, path)
+					}
 					m.trace = append(m.trace, "create-captured:"+path)
 					return nil
 				}
@@ -717,6 +735,7 @@ func (m *Model) SyncFile(path string) error {
 		return fmt.Errorf("powerlossoracle: sync missing file %q", path)
 	}
 	m.inodes[id].stable = clone(m.inodes[id].volatile)
+	m.syncedFiles[id] = struct{}{}
 	m.trace = append(m.trace, "sync-file:"+path)
 	return nil
 }
@@ -731,6 +750,7 @@ func (m *Model) SyncDir(dir string) error {
 	if _, ok := m.volatileDirs[dir]; !ok {
 		return fmt.Errorf("powerlossoracle: sync missing directory %q", dir)
 	}
+	m.syncedDirs[dir] = struct{}{}
 	for path := range m.stable {
 		if cleanInternal(pathpkg.Dir(path)) == dir {
 			delete(m.stable, path)
