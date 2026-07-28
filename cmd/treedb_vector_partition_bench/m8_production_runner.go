@@ -54,6 +54,7 @@ type m8ProductionReportV1 struct {
 	BuildNanos         int64                                                      `json:"build_nanos"`
 	Topology           nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1 `json:"topology"`
 	Rows               []m8ProductionRowV1                                        `json:"rows"`
+	PackDiagnostics    []m8PartitionPackDiagnosticsV1                             `json:"partition_pack_diagnostics,omitempty"`
 	Failure            m8ProductionFailureEvidenceV1                              `json:"failure"`
 	GateLedger         m8ProductionGateLedgerV1                                   `json:"gate_ledger"`
 	Profiles           m8ProductionProfileEvidenceV1                              `json:"profiles"`
@@ -90,12 +91,31 @@ type m8ProductionAttributionV1 struct {
 	ExactRepresentativeRecallAtK               float64  `json:"exact_representative_routing_recall_at_k"`
 	ApproximateRepresentativeRecallAtK         float64  `json:"approximate_representative_routing_recall_at_k"`
 	LocalHNSWRecallAtK                         float64  `json:"partition_local_hnsw_recall_at_k"`
+	LocalHNSWSearches                          uint64   `json:"partition_local_hnsw_searches"`
+	LocalHNSWCandidates                        uint64   `json:"partition_local_hnsw_candidates"`
+	LocalHNSWEdges                             uint64   `json:"partition_local_hnsw_edges"`
 	EndToEndRecallAtK                          float64  `json:"end_to_end_recall_at_k"`
 	CoordinatorMergeIDParity                   bool     `json:"coordinator_merge_id_parity"`
 	CoordinatorMergeScoreParity                bool     `json:"coordinator_merge_score_parity"`
 	ApproximateRouterCandidateBudget           int      `json:"approximate_router_candidate_budget"`
 	ApproximateRouterPartitionCoverageComplete bool     `json:"approximate_router_partition_coverage_complete"`
 	ResidualLossOwners                         []string `json:"residual_loss_owners"`
+}
+
+// m8PartitionPackDiagnosticsV1 records offline topology facts for each
+// generation-pinned local pack. It is deliberately separate from recall: a
+// directed layer-0 traversal can reveal an unreachable entry-reachable subset,
+// but is not a substitute for the exact-oracle quality measurement.
+type m8PartitionPackDiagnosticsV1 struct {
+	PartitionID         uint32   `json:"partition_id"`
+	Rows                uint64   `json:"rows"`
+	ReachableRows       uint64   `json:"reachable_rows"`
+	TraversalRoots      uint64   `json:"traversal_roots"`
+	MaxLayer            int      `json:"max_layer"`
+	RowsByLayer         []uint64 `json:"rows_by_layer"`
+	EdgesByLayer        []uint64 `json:"edges_by_layer"`
+	Layer0DegreeLimit   uint64   `json:"layer0_degree_limit"`
+	Layer0SaturatedRows uint64   `json:"layer0_saturated_rows"`
 }
 
 type m8ProductionRowV1 struct {
@@ -384,6 +404,11 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 				runErr = errors.Join(runErr, attributionHarness.Close())
 			}
 		}()
+		diagnostics, diagnosticsErr := attributionHarness.packDiagnostics()
+		if diagnosticsErr != nil {
+			return fmt.Errorf("collect M8 partition-pack diagnostics: %w", diagnosticsErr)
+		}
+		report.PackDiagnostics = diagnostics
 		attribution := make(map[string]m8AttributionCellV1, len(cfg.probes)*len(cfg.efSearch))
 		exhaustive := make([][]m8CanonicalResultV1, len(queries))
 		for _, probes := range cfg.probes {
@@ -919,27 +944,58 @@ func m8ApproximateRouterCoverageV1(err error) (bool, error) {
 }
 
 func (h *m8AttributionHarnessV1) search(ctx context.Context, query []float32, partitions []uint32, topK, efSearch int, exact bool) ([]m8CanonicalResultV1, error) {
+	results, _, err := h.searchWithMetrics(ctx, query, partitions, topK, efSearch, exact)
+	return results, err
+}
+
+func (h *m8AttributionHarnessV1) searchWithMetrics(ctx context.Context, query []float32, partitions []uint32, topK, efSearch int, exact bool) ([]m8CanonicalResultV1, collections.VectorPartitionSearchMetricsV1, error) {
 	merged := make([]m8CanonicalResultV1, 0, len(partitions)*topK)
+	var metrics collections.VectorPartitionSearchMetricsV1
 	for _, partition := range partitions {
 		if partition >= uint32(len(h.searchers)) || h.searchers[partition] == nil {
-			return nil, errors.New("M8 attribution partition coverage is incomplete")
+			return nil, metrics, errors.New("M8 attribution partition coverage is incomplete")
 		}
 		opts := collections.VectorPartitionSearchOptionsV1{TopK: topK, EfSearch: efSearch}
 		var results []collections.VectorPartitionSearchResultV1
 		var err error
+		var partitionMetrics collections.VectorPartitionSearchMetricsV1
 		if exact {
 			results, _, err = h.searchers[partition].SearchExactWithOptionsV1(ctx, query, opts)
 		} else {
-			results, _, err = h.searchers[partition].SearchWithOptionsV1(ctx, query, opts)
+			results, partitionMetrics, err = h.searchers[partition].SearchWithOptionsV1(ctx, query, opts)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("M8 attribution partition %d: %w", partition, err)
+			return nil, metrics, fmt.Errorf("M8 attribution partition %d: %w", partition, err)
+		}
+		if !exact {
+			metrics.Candidates += partitionMetrics.Candidates
+			metrics.Edges += partitionMetrics.Edges
 		}
 		for _, result := range results {
 			merged = append(merged, m8CanonicalResultV1{ID: result.ID, Score: result.Score})
 		}
 	}
-	return m8CanonicalResultsV1(merged, topK), nil
+	return m8CanonicalResultsV1(merged, topK), metrics, nil
+}
+
+func (h *m8AttributionHarnessV1) packDiagnostics() ([]m8PartitionPackDiagnosticsV1, error) {
+	diagnostics := make([]m8PartitionPackDiagnosticsV1, len(h.searchers))
+	for partition, searcher := range h.searchers {
+		if searcher == nil {
+			return nil, fmt.Errorf("M8 partition %d diagnostics: missing searcher", partition)
+		}
+		pack, err := searcher.PackDiagnosticsV1()
+		if err != nil {
+			return nil, fmt.Errorf("M8 partition %d diagnostics: %w", partition, err)
+		}
+		diagnostics[partition] = m8PartitionPackDiagnosticsV1{
+			PartitionID: uint32(partition), Rows: pack.Rows, ReachableRows: pack.ReachableRows,
+			TraversalRoots: pack.TraversalRoots, MaxLayer: pack.MaxLayer,
+			RowsByLayer: append([]uint64(nil), pack.RowsByLayer...), EdgesByLayer: append([]uint64(nil), pack.EdgesByLayer...),
+			Layer0DegreeLimit: pack.Layer0DegreeLimit, Layer0SaturatedRows: pack.Layer0SaturatedRows,
+		}
+	}
+	return diagnostics, nil
 }
 
 type m8AttributionCellV1 struct {
@@ -1002,10 +1058,14 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 				return cell, err
 			}
 		}
-		cell.Local[i], err = harness.search(ctx, query, exactPartitions, topK, efSearch, false)
+		var localMetrics collections.VectorPartitionSearchMetricsV1
+		cell.Local[i], localMetrics, err = harness.searchWithMetrics(ctx, query, exactPartitions, topK, efSearch, false)
 		if err != nil {
 			return cell, err
 		}
+		cell.Evidence.LocalHNSWSearches += uint64(len(exactPartitions))
+		cell.Evidence.LocalHNSWCandidates += localMetrics.Candidates
+		cell.Evidence.LocalHNSWEdges += localMetrics.Edges
 		exactRecall += m8CanonicalRecallV1(truth[i], exactResults)
 		approximateRecall += m8CanonicalRecallV1(truth[i], approximateResults)
 		localRecall += m8CanonicalRecallV1(truth[i], cell.Local[i])

@@ -453,6 +453,13 @@ func TestVectorPartitionMaterializationBuildsPartitionLocalConnectedGraphV1(t *t
 		t.Fatal(err)
 	}
 	defer searcher.Close()
+	diagnostics, err := searcher.PackDiagnosticsV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnostics.Rows != uint64(len(selected)) || diagnostics.ReachableRows != diagnostics.Rows || diagnostics.TraversalRoots != 1 || len(diagnostics.RowsByLayer) == 0 || len(diagnostics.EdgesByLayer) == 0 {
+		t.Fatalf("partition-local pack diagnostics=%+v", diagnostics)
+	}
 	for id, query := range selected {
 		got, err := searcher.Search(query, 1)
 		if err != nil {
