@@ -23,7 +23,7 @@ import (
 var catalogMetaLifecycleHarnessSequenceV1 atomic.Uint64
 
 const catalogMetaLifecycleHarnessCoordinationTimeoutV1 = 5 * time.Second
-const catalogMetaLifecycleHarnessLeaderDwellV1 = time.Second
+const catalogMetaLifecycleHarnessLeaderDwellV1 = catalogMetaLifecycleHarnessCoordinationTimeoutV1
 
 type CatalogMetaLifecycleHarnessOptionsV1 struct {
 	Catalog CatalogV1
@@ -67,7 +67,7 @@ func OpenCatalogMetaLifecycleHarnessV1(ctx context.Context, opts CatalogMetaLife
 	for _, suffix := range []string{"a", "b", "c"} {
 		id := raftcluster.NodeID(prefix + "-" + suffix)
 		h.peers = append(h.peers, raftcluster.Peer{ID: id, Address: string(id), Capabilities: features})
-		_, tr := hraft.NewInmemTransportWithTimeout(hraft.ServerAddress(id), 2*time.Second)
+		_, tr := hraft.NewInmemTransportWithTimeout(hraft.ServerAddress(id), catalogMetaLifecycleHarnessCoordinationTimeoutV1)
 		h.transports[id] = tr
 	}
 	for _, from := range h.peers {
