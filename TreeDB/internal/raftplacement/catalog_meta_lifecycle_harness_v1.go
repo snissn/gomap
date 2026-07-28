@@ -23,7 +23,37 @@ import (
 var catalogMetaLifecycleHarnessSequenceV1 atomic.Uint64
 
 const catalogMetaLifecycleHarnessCoordinationTimeoutV1 = 5 * time.Second
-const catalogMetaLifecycleHarnessLeaderDwellV1 = time.Second
+const catalogMetaLifecycleHarnessLeaderDwellV1 = catalogMetaLifecycleHarnessCoordinationTimeoutV1
+const catalogMetaLeaderObservationMaxGapV1 = time.Second
+
+// catalogMetaLeaderDwellV1 records continuous observation of one unique
+// leader. A long scheduling gap cannot prove that the same node retained
+// leadership: it could have stepped down and been re-elected while no probe
+// ran. Reset the dwell in that case instead of carrying wall-clock time
+// through the gap.
+type catalogMetaLeaderDwellV1 struct {
+	leader          raftcluster.NodeID
+	since           time.Time
+	lastObservation time.Time
+}
+
+func (d *catalogMetaLeaderDwellV1) Observe(now time.Time, complete bool, leader raftcluster.NodeID, dwell, maxGap time.Duration) bool {
+	gapTooLarge := !d.lastObservation.IsZero() && now.Sub(d.lastObservation) > maxGap
+	if !complete || leader == "" {
+		d.leader = ""
+		d.since = time.Time{}
+		d.lastObservation = now
+		return false
+	}
+	if leader != d.leader || gapTooLarge {
+		d.leader = leader
+		d.since = now
+		d.lastObservation = now
+		return false
+	}
+	d.lastObservation = now
+	return !d.since.IsZero() && now.Sub(d.since) >= dwell
+}
 
 type CatalogMetaLifecycleHarnessOptionsV1 struct {
 	Catalog CatalogV1
@@ -67,7 +97,7 @@ func OpenCatalogMetaLifecycleHarnessV1(ctx context.Context, opts CatalogMetaLife
 	for _, suffix := range []string{"a", "b", "c"} {
 		id := raftcluster.NodeID(prefix + "-" + suffix)
 		h.peers = append(h.peers, raftcluster.Peer{ID: id, Address: string(id), Capabilities: features})
-		_, tr := hraft.NewInmemTransportWithTimeout(hraft.ServerAddress(id), 2*time.Second)
+		_, tr := hraft.NewInmemTransportWithTimeout(hraft.ServerAddress(id), catalogMetaLifecycleHarnessCoordinationTimeoutV1)
 		h.transports[id] = tr
 	}
 	for _, from := range h.peers {
@@ -124,16 +154,17 @@ func catalogMetaLifecycleHarnessRaftConfigV1() *hraft.Config {
 	return cfg
 }
 func (h *CatalogMetaLifecycleHarnessV1) waitLeader(ctx context.Context) error {
-	var prior raftcluster.NodeID
-	var since time.Time
+	var dwell catalogMetaLeaderDwellV1
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
 	for {
 		var leader raftcluster.NodeID
+		complete := true
 		for id, p := range h.providers {
 			status, err := p.ClusterAdmissionStatus(ctx)
 			if err != nil {
-				continue
+				complete = false
+				break
 			}
 			if status.Leader {
 				if leader != "" {
@@ -143,12 +174,7 @@ func (h *CatalogMetaLifecycleHarnessV1) waitLeader(ctx context.Context) error {
 				leader = id
 			}
 		}
-		now := time.Now()
-		if leader == "" {
-			prior = ""
-		} else if prior != leader {
-			prior, since = leader, now
-		} else if now.Sub(since) >= catalogMetaLifecycleHarnessLeaderDwellV1 {
+		if dwell.Observe(time.Now(), complete, leader, catalogMetaLifecycleHarnessLeaderDwellV1, catalogMetaLeaderObservationMaxGapV1) {
 			h.leader = leader
 			return nil
 		}

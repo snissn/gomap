@@ -15,13 +15,15 @@ import (
 )
 
 func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFailoverRejoin(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), realCatalogMetaIntegrationTestTimeoutV1)
+	defer cancel()
 	source := newRealCatalogMetaClusterV1(t, "source")
-	sourceLeader := source.waitLeader(t)
+	sourceLeader := source.waitLeader(t, ctx)
 	command1 := mustCatalogMetaCommand(t, 0, 1, realCatalogMetaIntegrationCatalogV1("group-a"))
-	if _, _, err := source.providers[sourceLeader].SubmitCatalogMetaCommandV1(context.Background(), command1); err != nil {
+	if _, _, err := source.providers[sourceLeader].SubmitCatalogMetaCommandV1(ctx, command1); err != nil {
 		t.Fatalf("source epoch 1: %v", err)
 	}
-	source.waitEpoch(t, 1)
+	source.waitEpoch(t, ctx, 1)
 	firstStatus, ok := source.authorities[sourceLeader].Status()
 	if !ok {
 		t.Fatal("source leader status unavailable")
@@ -29,23 +31,20 @@ func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFai
 
 	// An exact command retry is idempotent even though Raft commits another
 	// entry; the catalog's original applied index remains authoritative.
-	if _, _, err := source.providers[sourceLeader].SubmitCatalogMetaCommandV1(context.Background(), command1); err != nil {
+	if _, _, err := source.providers[sourceLeader].SubmitCatalogMetaCommandV1(ctx, command1); err != nil {
 		t.Fatalf("source exact retry: %v", err)
 	}
-	source.waitEpoch(t, 1)
+	source.waitEpoch(t, ctx, 1)
 	retryStatus, _ := source.authorities[sourceLeader].Status()
 	if retryStatus.AppliedIndex != firstStatus.AppliedIndex {
 		t.Fatalf("exact retry applied index=%d want original %d", retryStatus.AppliedIndex, firstStatus.AppliedIndex)
 	}
 
 	stale := mustCatalogMetaCommand(t, 0, 2, realCatalogMetaIntegrationCatalogV1("group-b"))
-	if _, _, err := source.providers[sourceLeader].SubmitCatalogMetaCommandV1(context.Background(), stale); !errors.Is(err, ErrCatalogMetaStaleEpoch) {
+	if _, _, err := source.providers[sourceLeader].SubmitCatalogMetaCommandV1(ctx, stale); !errors.Is(err, ErrCatalogMetaStaleEpoch) {
 		t.Fatalf("stale source transition error=%v want ErrCatalogMetaStaleEpoch", err)
 	}
-	source.assertEpochAndRoute(t, 1, "group-a")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	source.assertEpochAndRoute(t, ctx, 1, "group-a")
 	backup, err := source.providers[sourceLeader].ExportCatalogMetaBackupV1(ctx)
 	if err != nil {
 		t.Fatalf("export source backup: %v", err)
@@ -55,9 +54,9 @@ func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFai
 	}
 
 	target := newRealCatalogMetaClusterV1(t, "target")
-	targetLeader := target.waitLeader(t)
+	targetLeader := target.waitLeader(t, ctx)
 	follower := target.anyFollower(targetLeader)
-	target.waitFollower(t, follower)
+	target.waitFollower(t, ctx, follower)
 	if err := target.providers[follower].RestoreCatalogMetaBackupV1(ctx, backup); !errors.Is(err, raftcluster.ErrNotLeader) {
 		t.Fatalf("follower restore error=%v want ErrNotLeader", err)
 	}
@@ -75,14 +74,14 @@ func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFai
 	// stable admission-ready leader before exercising the valid restore so a
 	// hosted-runner scheduling stall cannot turn harness readiness into the
 	// production ErrAdmissionUnavailable path under test.
-	targetLeader = target.waitLeader(t)
+	targetLeader = target.waitLeader(t, ctx)
 	follower = target.anyFollower(targetLeader)
-	target.waitFollower(t, follower)
+	target.waitFollower(t, ctx, follower)
 	if err := target.providers[targetLeader].RestoreCatalogMetaBackupV1(ctx, backup); err != nil {
 		t.Fatalf("restore fresh target leader: %v", err)
 	}
-	target.waitEpoch(t, 1)
-	target.assertEpochAndRoute(t, 1, "group-a")
+	target.waitEpoch(t, ctx, 1)
+	target.assertEpochAndRoute(t, ctx, 1, "group-a")
 
 	// The restored last command retains exact-retry semantics in the new
 	// cluster, including its original applied-index identity.
@@ -90,7 +89,7 @@ func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFai
 	if _, _, err := target.providers[targetLeader].SubmitCatalogMetaCommandV1(ctx, command1); err != nil {
 		t.Fatalf("restored exact retry: %v", err)
 	}
-	target.waitEpoch(t, 1)
+	target.waitEpoch(t, ctx, 1)
 	afterRetry, _ := target.authorities[targetLeader].Status()
 	if afterRetry.AppliedIndex != restoredStatus.AppliedIndex {
 		t.Fatalf("restored exact retry applied index=%d want %d", afterRetry.AppliedIndex, restoredStatus.AppliedIndex)
@@ -100,19 +99,19 @@ func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFai
 	target.closeNode(t, follower)
 	target.reopenNode(t, follower)
 	target.connectAll()
-	target.waitEpochOn(t, follower, 1)
-	target.assertAuthorityIdentityAndRoute(t, follower, 1, "group-a")
+	target.waitEpochOn(t, ctx, follower, 1)
+	target.assertAuthorityIdentityAndRoute(t, ctx, follower, 1, "group-a")
 
 	// Fail over and prove that an epoch-valid owner move still fails closed:
 	// M4A has no migration workflow that could transfer the collection data,
 	// apply progress, and idempotency state before publishing the new route.
 	target.closeNode(t, targetLeader)
-	newLeader := target.waitLeader(t)
+	newLeader := target.waitLeader(t, ctx)
 	unsafeCommand2 := mustCatalogMetaCommand(t, 1, 2, realCatalogMetaIntegrationCatalogV1("group-b"))
 	if _, _, err := target.providers[newLeader].SubmitCatalogMetaCommandV1(ctx, unsafeCommand2); !errors.Is(err, ErrCatalogMetaTopologyChange) {
 		t.Fatalf("target owner move error=%v want ErrCatalogMetaTopologyChange", err)
 	}
-	target.assertEpochAndRoute(t, 1, "group-a")
+	target.assertEpochAndRoute(t, ctx, 1, "group-a")
 
 	// The refused log entry does not prevent a safe metadata generation from
 	// advancing monotonically, and the old backup still cannot roll it back.
@@ -120,20 +119,24 @@ func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFai
 	if _, _, err := target.providers[newLeader].SubmitCatalogMetaCommandV1(ctx, command2); err != nil {
 		t.Fatalf("target epoch 2 after failover: %v", err)
 	}
-	target.waitEpoch(t, 2)
-	target.assertEpochAndRoute(t, 2, "group-a")
+	target.waitEpoch(t, ctx, 2)
+	target.assertEpochAndRoute(t, ctx, 2, "group-a")
 	if err := target.providers[newLeader].RestoreCatalogMetaBackupV1(ctx, backup); !errors.Is(err, raftcluster.ErrCatalogMetaBackupRestoreTarget) || !errors.Is(err, ErrCatalogMetaConflict) {
 		t.Fatalf("live rollback restore error=%v want restore-target conflict", err)
 	}
-	target.assertEpochAndRoute(t, 2, "group-a")
+	target.assertEpochAndRoute(t, ctx, 2, "group-a")
 
 	// Rejoin the former leader with a new real authority and prove it receives
 	// the newer snapshot/log state and exact identity.
 	target.reopenNode(t, targetLeader)
 	target.connectAll()
-	target.waitEpochOn(t, targetLeader, 2)
-	target.assertEpochAndRoute(t, 2, "group-a")
+	target.waitEpochOn(t, ctx, targetLeader, 2)
+	target.assertEpochAndRoute(t, ctx, 2, "group-a")
 }
+
+const realCatalogMetaIntegrationCoordinationTimeoutV1 = 5 * time.Second
+const realCatalogMetaIntegrationLeaderDwellV1 = realCatalogMetaIntegrationCoordinationTimeoutV1
+const realCatalogMetaIntegrationTestTimeoutV1 = 4*realCatalogMetaIntegrationCoordinationTimeoutV1 + 60*time.Second
 
 type realCatalogMetaClusterV1 struct {
 	peers       []raftcluster.Peer
@@ -166,7 +169,7 @@ func newRealCatalogMetaClusterV1(t *testing.T, prefix string) *realCatalogMetaCl
 			Address:      string(id),
 			Capabilities: features,
 		})
-		_, transport := hraft.NewInmemTransportWithTimeout(hraft.ServerAddress(id), 2*time.Second)
+		_, transport := hraft.NewInmemTransportWithTimeout(hraft.ServerAddress(id), realCatalogMetaIntegrationCoordinationTimeoutV1)
 		cluster.transports[id] = transport
 	}
 	cluster.connectAll()
@@ -243,16 +246,21 @@ func (c *realCatalogMetaClusterV1) connectAll() {
 	}
 }
 
-func (c *realCatalogMetaClusterV1) waitLeader(t *testing.T) raftcluster.NodeID {
+func (c *realCatalogMetaClusterV1) waitLeader(t *testing.T, ctx context.Context) raftcluster.NodeID {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
-	var stableLeader raftcluster.NodeID
-	var stableSince time.Time
-	for time.Now().Before(deadline) {
+	var dwell catalogMetaLeaderDwellV1
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for {
 		var leader raftcluster.NodeID
+		complete := true
 		for id, provider := range c.providers {
-			status, err := provider.ClusterAdmissionStatus(context.Background())
-			if err == nil && status.Leader {
+			status, err := provider.ClusterAdmissionStatus(ctx)
+			if err != nil {
+				complete = false
+				break
+			}
+			if status.Leader {
 				if leader != "" {
 					leader = ""
 					break
@@ -260,21 +268,15 @@ func (c *realCatalogMetaClusterV1) waitLeader(t *testing.T) raftcluster.NodeID {
 				leader = id
 			}
 		}
-		now := time.Now()
-		switch {
-		case leader == "":
-			stableLeader = ""
-			stableSince = time.Time{}
-		case leader != stableLeader:
-			stableLeader = leader
-			stableSince = now
-		case now.Sub(stableSince) >= time.Second:
+		if dwell.Observe(time.Now(), complete, leader, realCatalogMetaIntegrationLeaderDwellV1, catalogMetaLeaderObservationMaxGapV1) {
 			return leader
 		}
-		time.Sleep(20 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			t.Fatalf("catalog meta cluster has no admission-ready leader stable for %s: %v", realCatalogMetaIntegrationLeaderDwellV1, ctx.Err())
+		case <-tick.C:
+		}
 	}
-	t.Fatalf("catalog meta cluster has no admission-ready leader stable for 1s")
-	return ""
 }
 
 func (c *realCatalogMetaClusterV1) anyFollower(leader raftcluster.NodeID) raftcluster.NodeID {
@@ -286,17 +288,17 @@ func (c *realCatalogMetaClusterV1) anyFollower(leader raftcluster.NodeID) raftcl
 	return ""
 }
 
-func (c *realCatalogMetaClusterV1) waitFollower(t *testing.T, id raftcluster.NodeID) {
+func (c *realCatalogMetaClusterV1) waitFollower(t *testing.T, ctx context.Context, id raftcluster.NodeID) {
 	t.Helper()
-	waitRealCatalogMetaConditionV1(t, func() bool {
-		status, err := c.providers[id].ClusterAdmissionStatus(context.Background())
+	waitRealCatalogMetaConditionV1(t, ctx, func() bool {
+		status, err := c.providers[id].ClusterAdmissionStatus(ctx)
 		return err == nil && !status.Leader && !status.Unavailable && status.LeaderHint != ""
 	}, fmt.Sprintf("%s did not observe the catalog leader", id))
 }
 
-func (c *realCatalogMetaClusterV1) waitEpoch(t *testing.T, epoch uint64) {
+func (c *realCatalogMetaClusterV1) waitEpoch(t *testing.T, ctx context.Context, epoch uint64) {
 	t.Helper()
-	waitRealCatalogMetaConditionV1(t, func() bool {
+	waitRealCatalogMetaConditionV1(t, ctx, func() bool {
 		for id := range c.providers {
 			status, ok := c.authorities[id].Status()
 			if !ok || status.Epoch != epoch {
@@ -307,22 +309,22 @@ func (c *realCatalogMetaClusterV1) waitEpoch(t *testing.T, epoch uint64) {
 	}, fmt.Sprintf("catalog authorities did not converge to epoch %d", epoch))
 }
 
-func (c *realCatalogMetaClusterV1) waitEpochOn(t *testing.T, id raftcluster.NodeID, epoch uint64) {
+func (c *realCatalogMetaClusterV1) waitEpochOn(t *testing.T, ctx context.Context, id raftcluster.NodeID, epoch uint64) {
 	t.Helper()
-	waitRealCatalogMetaConditionV1(t, func() bool {
+	waitRealCatalogMetaConditionV1(t, ctx, func() bool {
 		status, ok := c.authorities[id].Status()
 		return ok && status.Epoch == epoch
 	}, fmt.Sprintf("%s did not converge to epoch %d", id, epoch))
 }
 
-func (c *realCatalogMetaClusterV1) assertEpochAndRoute(t *testing.T, epoch uint64, groupID raftcluster.GroupID) {
+func (c *realCatalogMetaClusterV1) assertEpochAndRoute(t *testing.T, ctx context.Context, epoch uint64, groupID raftcluster.GroupID) {
 	t.Helper()
 	for id := range c.providers {
-		c.assertAuthorityIdentityAndRoute(t, id, epoch, groupID)
+		c.assertAuthorityIdentityAndRoute(t, ctx, id, epoch, groupID)
 	}
 }
 
-func (c *realCatalogMetaClusterV1) assertAuthorityIdentityAndRoute(t *testing.T, id raftcluster.NodeID, epoch uint64, groupID raftcluster.GroupID) {
+func (c *realCatalogMetaClusterV1) assertAuthorityIdentityAndRoute(t *testing.T, ctx context.Context, id raftcluster.NodeID, epoch uint64, groupID raftcluster.GroupID) {
 	t.Helper()
 	authority := c.authorities[id]
 	status, ok := authority.Status()
@@ -336,7 +338,7 @@ func (c *realCatalogMetaClusterV1) assertAuthorityIdentityAndRoute(t *testing.T,
 		t.Fatalf("%s catalog features=%+v want collection-groups v1", id, status.Features)
 	}
 	proof := CatalogProofV1{Epoch: status.Epoch, Digest: status.Digest}
-	decision, err := authority.Route(context.Background(), proof, RouteRequestV1{
+	decision, err := authority.Route(ctx, proof, RouteRequestV1{
 		Collection: CollectionRefV1{Database: DefaultDatabase, Catalog: DefaultCatalog, Collection: "users"},
 		Shape:      RouteShapeCollectionV1,
 	})
@@ -370,9 +372,9 @@ func realCatalogMetaRaftConfigV1() *hraft.Config {
 	// These are scheduling headroom for contended hosted Windows runners, not
 	// a production semantic change. The readiness barrier above still proves a
 	// continuously stable leader before an operation under test is attempted.
-	config.HeartbeatTimeout = 5 * time.Second
-	config.ElectionTimeout = 5 * time.Second
-	config.LeaderLeaseTimeout = 5 * time.Second
+	config.HeartbeatTimeout = realCatalogMetaIntegrationCoordinationTimeoutV1
+	config.ElectionTimeout = realCatalogMetaIntegrationCoordinationTimeoutV1
+	config.LeaderLeaseTimeout = realCatalogMetaIntegrationCoordinationTimeoutV1
 	config.CommitTimeout = 5 * time.Millisecond
 	config.SnapshotInterval = time.Hour
 	config.SnapshotThreshold = ^uint64(0)
@@ -389,16 +391,26 @@ func TestRealCatalogMetaRaftConfigAddsSchedulingHeadroom(t *testing.T) {
 	if config.HeartbeatTimeout < minimum || config.ElectionTimeout < minimum || config.LeaderLeaseTimeout < minimum {
 		t.Fatalf("coordination timeouts heartbeat=%s election=%s lease=%s want each at least %s", config.HeartbeatTimeout, config.ElectionTimeout, config.LeaderLeaseTimeout, minimum)
 	}
+	if realCatalogMetaIntegrationLeaderDwellV1 < config.LeaderLeaseTimeout {
+		t.Fatalf("leader dwell=%s want at least leader lease=%s", realCatalogMetaIntegrationLeaderDwellV1, config.LeaderLeaseTimeout)
+	}
+	if catalogMetaLeaderObservationMaxGapV1 >= config.ElectionTimeout || catalogMetaLeaderObservationMaxGapV1 >= config.LeaderLeaseTimeout {
+		t.Fatalf("leader observation max gap=%s want below election=%s and lease=%s", catalogMetaLeaderObservationMaxGapV1, config.ElectionTimeout, config.LeaderLeaseTimeout)
+	}
 }
 
-func waitRealCatalogMetaConditionV1(t *testing.T, ready func() bool, message string) {
+func waitRealCatalogMetaConditionV1(t *testing.T, ctx context.Context, ready func() bool, message string) {
 	t.Helper()
-	deadline := time.Now().Add(12 * time.Second)
-	for time.Now().Before(deadline) {
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	for {
 		if ready() {
 			return
 		}
-		time.Sleep(5 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			t.Fatalf("%s: %v", message, ctx.Err())
+		case <-tick.C:
+		}
 	}
-	t.Fatal(message)
 }

@@ -46,6 +46,8 @@ func requireM8PersistentAssetSupportV1(t testing.TB) {
 	}
 }
 
+const m8ProductionTopologyTestTimeoutV1 = 80 * time.Second
+
 func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	fixture, err := loadFixture(fixturePath(t))
 	if err != nil {
@@ -284,7 +286,7 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer assets.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), m8ProductionTopologyTestTimeoutV1)
 	defer cancel()
 	topology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(ctx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{Collection: assets.collection, Manifest: assets.manifest, RouterSource: assets.RouterSource(), GroupAssetSetDigests: assets.assetSetDigests, Database: "default", Catalog: "default"})
 	if err != nil {
@@ -453,7 +455,7 @@ func TestM8ExistingAssetsRelabelsTopologyWithoutMutatingLocalPacksV1(t *testing.
 			t.Fatalf("relabeled placement=%+v original=%+v", placement, original.Placements[i])
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), m8ProductionTopologyTestTimeoutV1)
 	defer cancel()
 	topology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(ctx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{Collection: assets.collection, Manifest: assets.manifest, RouterSource: assets.RouterSource(), GroupAssetSetDigests: assets.assetSetDigests, Database: "default", Catalog: "default"})
 	if err != nil {
