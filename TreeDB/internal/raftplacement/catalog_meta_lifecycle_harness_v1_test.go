@@ -117,12 +117,19 @@ func TestCatalogMetaLeaderDwellRestartsAfterProbeFailureV1(t *testing.T) {
 	if dwell.Observe(failureAt, false, "node-a", lease, maxGap) {
 		t.Fatal("failed probe unexpectedly satisfies dwell")
 	}
-	for elapsed := 500 * time.Millisecond; elapsed < lease; elapsed += 500 * time.Millisecond {
+	firstComplete := failureAt.Add(500 * time.Millisecond)
+	if dwell.Observe(firstComplete, true, "node-a", lease, maxGap) {
+		t.Fatal("first complete post-failure observation unexpectedly satisfies dwell")
+	}
+	for elapsed := time.Second; elapsed < lease; elapsed += 500 * time.Millisecond {
 		if dwell.Observe(failureAt.Add(elapsed), true, "node-a", lease, maxGap) {
 			t.Fatal("same node inherited dwell from before the probe failure")
 		}
 	}
-	if !dwell.Observe(failureAt.Add(lease), true, "node-a", lease, maxGap) {
+	if dwell.Observe(failureAt.Add(lease), true, "node-a", lease, maxGap) {
+		t.Fatal("same node inherited the failed-probe timestamp")
+	}
+	if !dwell.Observe(firstComplete.Add(lease), true, "node-a", lease, maxGap) {
 		t.Fatal("continuous post-failure observation did not satisfy a full dwell")
 	}
 }

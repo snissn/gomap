@@ -39,7 +39,13 @@ type catalogMetaLeaderDwellV1 struct {
 
 func (d *catalogMetaLeaderDwellV1) Observe(now time.Time, complete bool, leader raftcluster.NodeID, dwell, maxGap time.Duration) bool {
 	gapTooLarge := !d.lastObservation.IsZero() && now.Sub(d.lastObservation) > maxGap
-	if !complete || leader == "" || leader != d.leader || gapTooLarge {
+	if !complete || leader == "" {
+		d.leader = ""
+		d.since = time.Time{}
+		d.lastObservation = now
+		return false
+	}
+	if leader != d.leader || gapTooLarge {
 		d.leader = leader
 		d.since = now
 		d.lastObservation = now
