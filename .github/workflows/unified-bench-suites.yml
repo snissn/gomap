@@ -10,7 +10,10 @@ jobs:
   suites:
     name: suites (linux)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Hosted runs have reached the 20-minute outer limit while bigkeys_guard
+    # remained within its own 15-minute fail-closed wall cap. Keep 5 minutes
+    # of orchestration headroom without changing any suite-owned guard.
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,6 +25,11 @@ jobs:
           cache: true
           cache-dependency-path: |
             go.sum
+
+      - name: Unified suite headroom contract
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 .github/scripts/test_unified_bench_suites_headroom.py
 
       - name: Build unified-bench
         run: make unified-bench
