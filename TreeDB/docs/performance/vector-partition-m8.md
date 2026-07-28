@@ -437,6 +437,30 @@ identity checks deterministic.
 
 ## Comparison boundary and disposition
 
+## #3999 partition-local HNSW reachability refresh
+
+Commit `357e40c62` rebuilds only persistent partition-local packs with a
+bounded, deterministic layer-0 navigation overlay. It preserves the `2*M`
+layer-0 cap (32 at M=16) while providing a logarithmic-hop route from the pack
+entry to every local row; global column-graph and router construction are
+unchanged.
+
+Fresh graph/disjoint 1M evidence used
+`/mnt/fast4tb/tmp/issue3999_m3_lk3imU/db_graph_disjoint`. The all-16-partition
+M8 `ef_search=4096` cell recorded recall@10 `0.975`, local-HNSW recall@10
+`0.975`, exact representative-routing recall `1.0`, and all 16 packs with
+`reachable_rows == rows` and `traversal_roots == 1`. The profiled artifact is
+`/mnt/fast4tb/tmp/issue3999_m8_profile_IYajgs/vector_partition_m8_357e40c6217a_ca6f595a28e8.json`
+(SHA-256 `3f23892f99d096dd25e83a747d5b2ea17fca46fb35b7f95820c10d881f066bf0`).
+Its CPU, block, mutex, trace, heap, and allocation artifacts were captured;
+the run overlapped a local test suite, so its timing profiles are contextual,
+not a baseline comparison.
+
+The report remains `experimental_gate_failures`: probe reduction is #3998,
+overlap storage is #4001, while exhaustive-correctness, end-to-end QPS, and
+tail-latency gates are still unsatisfied M8-system evidence rather than
+partition-local reachability/recall failures.
+
 This report compares only TreeDB's own exhaustive oracle and graph-routed
 production-shaped loopback path on the stated host and retained fixtures. It
 makes no paper-QPS, multi-host, billion-vector, online mutation freshness,
