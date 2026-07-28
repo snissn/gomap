@@ -23,6 +23,11 @@ jobs:
           cache-dependency-path: |
             go.sum
 
+      - name: Unified suite headroom contract
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 .github/scripts/test_unified_bench_suites_headroom.py
+
       - name: Build unified-bench
         run: make unified-bench
 
@@ -31,6 +36,34 @@ jobs:
 
       - name: "Suite: longmix"
         run: ./bin/unified-bench -suite longmix -keys 100001 -seed 1 -progress=false
+
+  bigkeys_guard:
+    name: bigkeys_guard (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Keep this job's 15-minute fail-closed suite cap independent from the
+    # build/flushthrash/longmix orchestration budget.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Unified suite headroom contract
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 .github/scripts/test_unified_bench_suites_headroom.py
+
+      - name: Build unified-bench
+        run: make unified-bench
 
       - name: "Suite: bigkeys_guard"
         run: ./bin/unified-bench -suite bigkeys_guard -keys 1000000 -seed 1 -progress=false -max-wall 15m -max-rss-mb 4096
