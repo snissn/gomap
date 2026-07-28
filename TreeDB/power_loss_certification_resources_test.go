@@ -35,10 +35,14 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 	opts.DisableSideStores = false
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.MaxWALBytes = -1
+	opts.BackgroundIndexVacuumInterval = -1
 	opts.IndexOuterLeavesInValueLog = true
 	opts.FlushThreshold = 1 << 20
 	opts.ValueLog.ForcePointers = true
 	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationOff
 	opts.ValueLog.Compression = treedb.ValueLogCompressionDict
 	opts.ValueLog.CompressionAutotune = treedb.AutotuneOptions{Mode: treedb.AutotuneOff}
 	opts.ValueLog.DictAdaptiveRatio = -1
@@ -61,6 +65,7 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	requireAuthoritativeResourceAutonomousPublishersDisabled(t, database)
 	backend := treedb.PowerLossCertificationBackendForTest(database)
 	if backend == nil {
 		_ = database.Close()
@@ -86,6 +91,8 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 	dictDBPersistenceEvents := 0
 	authoritativeAssetPersistenceEvents := 0
 	armed := false
+	phase := "witness"
+	armedTerminalCuts := 0
 	var observeMu sync.Mutex
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		observeMu.Lock()
@@ -113,6 +120,10 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 			occurrence := metaSyncs
 			metaSyncs++
 			if armed && filepath.Clean(event.Root) == mainDir {
+				if phase != "terminal-checkpoint" {
+					return fmt.Errorf("armed authoritative-resource meta sync during %s, want terminal-checkpoint", phase)
+				}
+				armedTerminalCuts++
 				selectedOccurrence = occurrence
 				return cutErr
 			}
@@ -127,30 +138,62 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 	// persistence events rather than importing them as initially stable.
 	witness := prepareAuthoritativeResourceWitness(t, database, dir, backgroundErrors)
 	waitForAuthoritativeResourceObserverQuiescence(t, &observeMu, &observedEvents, backgroundErrors)
-	// Stop the trainer and drain its final accepted-profile callback before the
-	// replay window is armed. Published dictionaries remain live for the
-	// dictionary-encoded witness value, but no future asynchronous dictionary
-	// mutation can consume the selected terminal cut.
+	// Stop the trainer and drain its final accepted-profile callback. Published
+	// dictionaries remain live for the dictionary-encoded witness value, but no
+	// future asynchronous dictionary mutation can consume the terminal cut.
 	treedb.PowerLossCertificationQuiesceValueLogDictionaryForTest(database)
-	waitForAuthoritativeResourceObserverQuiescence(t, &observeMu, &observedEvents, backgroundErrors)
+	// Drain every pre-window cached/root-publication obligation through the
+	// public checkpoint before the marker is written. This is the operation
+	// boundary; the preceding quiet observation only lets the witness finish
+	// materializing its dictionary resource and is not used to claim ownership
+	// of a later durability event.
+	observeMu.Lock()
+	phase = "pre-window-drain"
+	if armed {
+		observeMu.Unlock()
+		t.Fatal("authoritative-resource replay cut armed before pre-window drain")
+	}
+	observeMu.Unlock()
+	if err := database.Checkpoint(); err != nil {
+		restoreObserver()
+		t.Fatalf("drain authoritative resource witness before replay window: %v", err)
+	}
+	select {
+	case err := <-backgroundErrors:
+		restoreObserver()
+		t.Fatalf("authoritative resource background error after pre-window drain: %v", err)
+	default:
+	}
+	// The marker is a durable command-WAL write, but is deliberately placed
+	// before arming. With autonomous checkpoint, vacuum, prune, value-log
+	// generation, and dictionary-training publishers disabled or quiesced above,
+	// the explicit Checkpoint below owns the marker's cached frontier and its
+	// main-root metadata publication.
+	boundaryKey := []byte("certification/authoritative-resource-boundary")
+	boundaryValue := []byte("stable")
+	observeMu.Lock()
+	phase = "boundary-set"
+	if armed {
+		observeMu.Unlock()
+		t.Fatal("authoritative-resource replay cut armed during boundary SetSync")
+	}
+	observeMu.Unlock()
+	if err := database.SetSync(boundaryKey, boundaryValue); err != nil {
+		restoreObserver()
+		t.Fatalf("write authoritative resource boundary: %v", err)
+	}
 	observeMu.Lock()
 	if err := model.BeginReplayWindow(authoritativeResourcesVariantID); err != nil {
 		observeMu.Unlock()
 		t.Fatal(err)
 	}
 	metaSyncs = 0
+	phase = "terminal-checkpoint"
 	armed = true
 	observeMu.Unlock()
-	// Publish one deterministic terminal marker after asynchronous dictionary
-	// work has been lifecycle-fenced. The selected cut is the marker's real
-	// maindb metadata sync and its occurrence is relative to the explicit replay
-	// window. The complete pre-window persistence trace remains in the evidence.
-	boundaryKey := []byte("certification/authoritative-resource-boundary")
-	boundaryValue := []byte("stable")
-	if err := database.SetSync(boundaryKey, boundaryValue); err != nil {
-		restoreObserver()
-		t.Fatalf("write authoritative resource boundary: %v", err)
-	}
+	// The selected cut is the marker's real maindb metadata sync in this explicit
+	// terminal checkpoint. The complete pre-window persistence trace remains in
+	// the evidence.
 	err = database.Checkpoint()
 	restoreObserver()
 	if !errors.Is(err, cutErr) {
@@ -158,6 +201,9 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 	}
 	if selectedOccurrence < 0 {
 		t.Fatal("authoritative-resource checkpoint did not select a maindb meta-sync occurrence")
+	}
+	if armedTerminalCuts != 1 {
+		t.Fatalf("armed terminal checkpoint cuts=%d want=1", armedTerminalCuts)
 	}
 	wantCutID := "cut/" + authoritativeResourcesVariantID + "/after-meta-sync/" + fmt.Sprintf("%03d", selectedOccurrence)
 	if selector != (powerlossoracle.ReplaySelector{}) {
@@ -191,6 +237,21 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 	}
 	if err := closeReopened(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func requireAuthoritativeResourceAutonomousPublishersDisabled(t *testing.T, database *treedb.DB) {
+	t.Helper()
+	stats := database.Stats()
+	for key, want := range map[string]string{
+		"treedb.cache.auto_checkpoint.count":   "0",
+		"treedb.cache.vlog_generation.enabled": "false",
+		"treedb.bg_vacuum.enabled":             "false",
+		"treedb.prune.enabled":                 "false",
+	} {
+		if got := stats[key]; got != want {
+			t.Fatalf("authoritative resource autonomous publisher %s=%q want=%q", key, got, want)
+		}
 	}
 }
 
