@@ -660,7 +660,7 @@ func TestObservedRenameRecoversSourceDetachedByEarlierOverlay(t *testing.T) {
 func TestObservedCreateAcceptsSameFileCapturedBeforeCallback(t *testing.T) {
 	root := t.TempDir()
 	tmp := filepath.Join(root, "health.json.tmp.1")
-	if err := os.WriteFile(tmp, nil, 0o600); err != nil {
+	if err := os.WriteFile(tmp, []byte("captured"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	model, err := Capture(root)
@@ -677,6 +677,23 @@ func TestObservedCreateAcceptsSameFileCapturedBeforeCallback(t *testing.T) {
 		NewPath:   tmp,
 	}); err != nil {
 		t.Fatalf("observe delayed create for captured file: %v", err)
+	}
+	beforeSync := t.TempDir()
+	if err := model.MaterializeStable(beforeSync); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(beforeSync, "health.json.tmp.1")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("captured create became durable before directory sync: %v", err)
+	}
+	if err := model.SyncDir("."); err != nil {
+		t.Fatal(err)
+	}
+	afterSync := t.TempDir()
+	if err := model.MaterializeStable(afterSync); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(afterSync, "health.json.tmp.1")); err != nil || string(got) != "captured" {
+		t.Fatalf("captured create after directory sync=%q err=%v want captured", got, err)
 	}
 }
 

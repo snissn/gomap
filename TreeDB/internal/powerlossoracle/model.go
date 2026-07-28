@@ -469,13 +469,16 @@ func (m *Model) observeNamespace(root string, event durabilitycut.Event) error {
 				// namespace mutation and its synchronous observer callback. If
 				// the volatile and stable names still reference the same model
 				// inode and both observations name the same physical file,
-				// reconcile the delayed callback with the captured baseline. A
-				// replacement overlay or different physical inode remains a
-				// genuine duplicate-create error.
+				// reconcile the delayed callback with the captured baseline.
+				// The callback precedes parent-directory sync, so demote the
+				// name that Capture initially imported as stable; SyncDir can
+				// promote it again. A replacement overlay or different physical
+				// inode remains a genuine duplicate-create error.
 				if id == stableID &&
 					validStableIdentity(node.stableIdentity) && validStableIdentity(identity) &&
 					rootpublication.SamePhysicalIdentity(node.stableIdentity, identity) {
 					node.volatile = clone(data)
+					delete(m.stable, path)
 					m.trace = append(m.trace, "create-captured:"+path)
 					return nil
 				}
