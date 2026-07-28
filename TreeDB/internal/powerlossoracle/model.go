@@ -168,7 +168,7 @@ func capture(root string, excludeLockFiles bool, excluded []string) (*Model, err
 		if !entry.Type().IsRegular() {
 			return fmt.Errorf("powerlossoracle: unsupported entry %q (%s)", rel, entry.Type())
 		}
-		_, data, identity, err := capturePathSnapshot(path)
+		data, identity, err := captureRegularPathSnapshot(path)
 		if err != nil {
 			return err
 		}
@@ -301,7 +301,7 @@ func (m *Model) Overlay(root string) error {
 		if !entry.Type().IsRegular() {
 			return fmt.Errorf("powerlossoracle: unsupported entry %q (%s)", rel, entry.Type())
 		}
-		_, data, identity, err := capturePathSnapshot(path)
+		data, identity, err := captureRegularPathSnapshot(path)
 		if err != nil {
 			return err
 		}
@@ -1031,6 +1031,17 @@ func capturePathSnapshot(path string) (fs.FileInfo, []byte, rootpublication.Stab
 	}
 	defer file.Close()
 	return captureOpenFileSnapshot(file)
+}
+
+func captureRegularPathSnapshot(path string) ([]byte, rootpublication.StableIdentity, error) {
+	info, data, identity, err := capturePathSnapshot(path)
+	if err != nil {
+		return nil, rootpublication.StableIdentity{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, rootpublication.StableIdentity{}, fmt.Errorf("powerlossoracle: regular file %q rebound to %s", path, info.Mode())
+	}
+	return data, identity, nil
 }
 
 func captureOpenFileSnapshot(file *os.File) (fs.FileInfo, []byte, rootpublication.StableIdentity, error) {

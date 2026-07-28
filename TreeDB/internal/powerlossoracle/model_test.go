@@ -92,6 +92,16 @@ func TestCaptureExcludingKeepsNonExcludedNestedLock(t *testing.T) {
 	}
 }
 
+func TestCaptureRegularPathSnapshotRejectsDirectoryRebind(t *testing.T) {
+	_, _, err := captureRegularPathSnapshot(t.TempDir())
+	if err == nil {
+		t.Fatal("regular-file snapshot accepted a directory rebound")
+	}
+	if !strings.Contains(err.Error(), "rebound to") {
+		t.Fatalf("regular-file snapshot err=%v, want rebound diagnostic", err)
+	}
+}
+
 func TestCapturedModelObserveContinuesToOmitNestedLocks(t *testing.T) {
 	root := t.TempDir()
 	dictDir := filepath.Join(root, "dictdb")
