@@ -935,6 +935,46 @@ func TestColumnGraphRebuildVectorIndexAdjacencyValidatesAllDimsBeforeScoringV2A(
 	}
 }
 
+// This compact ordered fixture used to reproduce the directed entry-reachability
+// collapse that was observed in retained partition-local packs. The assertion
+// is deliberately structural: exact scoring cannot compensate for a pack whose
+// native entry cannot traverse to its stored rows.
+func TestVectorPartitionLocalGraphAdjacencyKeepsLayer0EntryReachable(t *testing.T) {
+	const count = 4096
+	def := columnGraphRebuildVectorIndexDefinitionV2A(16, 16)
+	rows := make([]columnVectorGraphAssetRow, count)
+	for i := range rows {
+		vector := make([]float32, 16)
+		cluster := (i / 97) % 4
+		vector[cluster] = 1
+		for d := 4; d < len(vector); d++ {
+			vector[d] = float32(((i+1)*(d+3)+1)%31) / 310
+		}
+		rows[i] = columnVectorGraphAssetRow{ID: []byte(fmt.Sprintf("ordered-%05d", i)), Vector: vector, InvNorm: 1}
+	}
+	if err := buildVectorPartitionLocalGraphAdjacencyV1(rows, def); err != nil {
+		t.Fatalf("buildVectorPartitionLocalGraphAdjacencyV1: %v", err)
+	}
+	seen := make([]bool, len(rows))
+	seen[0] = true
+	queue := []int{0}
+	for head := 0; head < len(queue); head++ {
+		adjacency := rows[queue[head]].Adjacency
+		if len(adjacency) > 0 && adjacency[0] == columnVectorGraphLayeredAdjacencyMagic {
+			adjacency = adjacency[3 : 3+int(adjacency[2])]
+		}
+		for _, neighbor := range adjacency {
+			if int(neighbor) < len(rows) && !seen[neighbor] {
+				seen[neighbor] = true
+				queue = append(queue, int(neighbor))
+			}
+		}
+	}
+	if len(queue) != len(rows) {
+		t.Fatalf("layer-0 entry reaches %d/%d rows", len(queue), len(rows))
+	}
+}
+
 func TestColumnGraphRebuildVectorIndexReachabilityReclaimsSupersededGraphSegmentV2A(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
