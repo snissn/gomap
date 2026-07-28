@@ -21,26 +21,37 @@ class UnifiedBenchSuitesHeadroomContractTests(unittest.TestCase):
 
     def test_bigkeys_has_an_independent_bounded_job(self) -> None:
         self.assertIn("name: bigkeys_guard (linux)", self.bigkeys)
-        self.assertIn("timeout-minutes: 20", self.bigkeys)
+        self.assertRegex(self.bigkeys, r"(?m)^    timeout-minutes: 20$")
+        self.assertRegex(self.suites, r"(?m)^    timeout-minutes: 20$")
         self.assertNotIn("Suite: bigkeys_guard", self.suites)
+        self.assertNotIn(
+            "run: ./bin/unified-bench -suite bigkeys_guard",
+            self.suites,
+        )
 
     def test_suite_gates_and_fail_closed_limits_are_preserved(self) -> None:
         self.assertIn(
-            "./bin/unified-bench -suite flushthrash -keys 200000 -seed 1 -progress=false",
+            "run: ./bin/unified-bench -suite flushthrash -keys 200000 -seed 1 -progress=false",
             self.suites,
         )
         self.assertIn(
-            "./bin/unified-bench -suite longmix -keys 100001 -seed 1 -progress=false",
+            "run: ./bin/unified-bench -suite longmix -keys 100001 -seed 1 -progress=false",
             self.suites,
         )
         self.assertIn(
-            "./bin/unified-bench -suite bigkeys_guard -keys 1000000 -seed 1 -progress=false -max-wall 15m -max-rss-mb 4096",
+            "run: ./bin/unified-bench -suite bigkeys_guard -keys 1000000 -seed 1 -progress=false -max-wall 15m -max-rss-mb 4096",
             self.bigkeys,
         )
 
     def test_profile_gates_remain_enabled(self) -> None:
-        self.assertIn("timeout-minutes: 20", self.profiles)
+        self.assertRegex(self.profiles, r"(?m)^    timeout-minutes: 20$")
         self.assertIn("profile: [balanced, fast, durable]", self.profiles)
+        self.assertIn(
+            "run: ./bin/unified-bench -dbs treedb -profile ${{ matrix.profile }} "
+            "-test write_rand,read_rand -keys 20000 -seed 1 -progress=false "
+            "-checkpoint-between-tests",
+            self.profiles,
+        )
 
 
 if __name__ == "__main__":
