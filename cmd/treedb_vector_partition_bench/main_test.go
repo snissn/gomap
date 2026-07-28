@@ -1098,6 +1098,39 @@ func TestMalformedCapAndFiniteInputsRejectBeforeSimulation(t *testing.T) {
 	}
 }
 
+func TestPartitionAssignmentParsesOnlyMaterializationStagesV1(t *testing.T) {
+	base := []string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "overlap,partition_index", "-overlap", "0", "-partition-assignment", partitionAssignmentStableIDHashV1}
+	cfg, err := parseConfig(base)
+	if err != nil || cfg.partitionAssignment != partitionAssignmentStableIDHashV1 {
+		t.Fatalf("stable assignment config=%+v err=%v", cfg, err)
+	}
+	for _, args := range [][]string{
+		{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "overlap,partition_index", "-overlap", "0.2", "-partition-assignment", partitionAssignmentStableIDHashV1},
+		{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "simulation", "-probes", "1", "-partition-assignment", partitionAssignmentStableIDHashV1},
+		{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "partition", "-partition-assignment", "unknown"},
+	} {
+		if _, err := parseConfig(args); err == nil {
+			t.Fatalf("accepted malformed assignment config %#v", args)
+		}
+	}
+}
+
+func TestPartitionLocalHNSWMIsIndependentAndM3OnlyV1(t *testing.T) {
+	base := []string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "overlap,partition_index", "-overlap", "0", "-partition-degree", "4", "-partition-hnsw-m", "16"}
+	cfg, err := parseConfig(base)
+	if err != nil || cfg.partition.Degree != 4 || cfg.partitionHNSWM != 16 {
+		t.Fatalf("partition config=%+v err=%v", cfg, err)
+	}
+	for _, args := range [][]string{
+		{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "partition", "-partition-hnsw-m", "16"},
+		{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "overlap,partition_index", "-overlap", "0", "-partition-hnsw-m", "1"},
+	} {
+		if _, err := parseConfig(args); err == nil {
+			t.Fatalf("accepted malformed local HNSW config %#v", args)
+		}
+	}
+}
+
 func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 	cfg, err := parseConfig([]string{
 		"-mode", m8ProductionMultiGroupModeV1,
@@ -1173,6 +1206,44 @@ func TestM8UnsupportedOverlapSkipsMeasuredAndAttributionWorkV1(t *testing.T) {
 	}
 	if plan.QueryRequests != 4 || plan.MeasuredQueryRequests != 0 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 0 || plan.RetainedCoordinatorCells != 0 || plan.RetainedCoordinatorResults != 0 || plan.CurrentCellOutcomes != 0 || plan.CurrentCellOutcomeBytes != 0 || plan.RetainedAttributionMatrices != 0 || plan.RetainedAttributionResults != 0 || plan.RetainedAttributionBytes != 0 || plan.AttributionMergeScratchResults != 0 || plan.AttributionMergeScratchBytes != 0 {
 		t.Fatalf("unsupported-only M8 work plan=%+v", plan)
+	}
+}
+
+func TestM8RetainedOverlapCountsMeasuredAndAttributionWorkV1(t *testing.T) {
+	cfg := config{partitions: 4, overlaps: []float64{.2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3, topK: 2, m8ExistingDB: "/retained/overlap"}
+	manifest := fixtureManifest{Vectors: 10, Queries: 5, Dimensions: 8}
+	plan, err := validateM8BenchmarkWork(cfg, manifest, 109, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.QueryRequests != 109 || plan.MeasuredQueryRequests != 40 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 65 {
+		t.Fatalf("retained-overlap M8 work plan=%+v", plan)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, manifest, 108, math.MaxInt64); err == nil {
+		t.Fatal("accepted retained overlap above complete work cap")
+	}
+}
+
+func TestM8VariantMatrixCountsCompleteChildWorkAndOneChildPeakV1(t *testing.T) {
+	cfg := config{partitions: 4, overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3, topK: 2}
+	manifest := fixtureManifest{Vectors: 10, Queries: 5, Dimensions: 8}
+	single, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.m8VariantDBs = []string{"/a", "/b", "/c"}
+	matrix, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matrix.MeasuredQueryRequests != single.MeasuredQueryRequests*3 || matrix.WarmupAndPreflightQueryRequests != single.WarmupAndPreflightQueryRequests*3 || matrix.AttributionQueryPasses != single.AttributionQueryPasses*3 || matrix.QueryRequests != single.QueryRequests*3 {
+		t.Fatalf("matrix cumulative work=%+v single=%+v", matrix, single)
+	}
+	if matrix.RetainedCoordinatorCells != single.RetainedCoordinatorCells || matrix.RetainedCoordinatorResults != single.RetainedCoordinatorResults || matrix.RetainedAttributionResults != single.RetainedAttributionResults || matrix.ModeledPeakBytes != single.ModeledPeakBytes {
+		t.Fatalf("matrix peak inflated matrix=%+v single=%+v", matrix, single)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, manifest, matrix.QueryRequests-1, math.MaxInt64); err == nil {
+		t.Fatal("accepted matrix above cumulative complete-child work cap")
 	}
 }
 
@@ -1317,6 +1388,14 @@ func TestM8ProductionEvidenceJSONKeepsEveryTopologyDimensionV1(t *testing.T) {
 	}
 	raw, err := json.Marshal(m8ProductionReportV1{
 		Config: m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16, RouterCandidates: 256},
+		UntimedBoundary: m8ProductionResourceBoundaryV1{
+			SelectedPartitions: 16, EfSearch: 4096, WallClockNanos: 88,
+			Maxima: m8ProductionResourceObservedMaximaV1{Requests: 4, RPCs: 4, RequestBytes: 6, CandidateBytes: 7},
+		},
+		Failure: m8ProductionFailureEvidenceV1{ResourceBoundary: m8ProductionFaultResourceBoundaryV1{
+			SelectedPartitions: 16, EfSearch: 4096, WallClockNanos: 99,
+			Maxima: m8ProductionResourceObservedMaximaV1{Requests: 4, RPCs: 5, RequestBytes: 6, CandidateBytes: 7},
+		}},
 		Rows: []m8ProductionRowV1{{Probes: 4, EfSearch: 128, Concurrency: 16, Samples: 32, RecallAtK: 0, Attribution: m8ProductionAttributionV1{
 			Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1, ExhaustivePartitionRecallAtK: 1,
 			ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
@@ -1330,7 +1409,7 @@ func TestM8ProductionEvidenceJSONKeepsEveryTopologyDimensionV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{`"raft_groups":4`, `"raft_nodes_per_group":3`, `"partitions":16`, `"router_sessions"`, `"after_warmup"`, `"after_measured"`, `"identity":{"database":"default","catalog":"default","collection":"docs","index_name":"embedding","index_definition_digest":"index-digest","source_generation":1,"source_checksum":2,"source_schema_hash":3,"source_row_count":4,"partition_generation":5,"ready_set_digest":"ready-digest","router_model_digest":"model-digest"}`, `"cold_opens":1`, `"manifest_open_attempts":2`, `"misses":3`, `"hits":4`, `"open_failures":5`, `"reader_pins":6`, `"reader_releases":7`, `"lease_pins":8`, `"lease_releases":9`, `"invalidations":10`, `"closes":11`, `"approximate_router_candidate_budget":256`, `"approximate_router_partition_coverage_complete":true`, `"probes":4`, `"ef_search":128`, `"concurrency":16`, `"samples":32`, `"recall_at_k":0`, `"contract":"` + m8CanonicalResultContractV1 + `"`, `"global_exact_recall_at_k":1`, `"exhaustive_partition_union_score_parity":true`, `"residual_loss_owners":["partition_local_hnsw"]`} {
+	for _, field := range []string{`"raft_groups":4`, `"raft_nodes_per_group":3`, `"partitions":16`, `"router_sessions"`, `"after_warmup"`, `"after_measured"`, `"identity":{"database":"default","catalog":"default","collection":"docs","index_name":"embedding","index_definition_digest":"index-digest","source_generation":1,"source_checksum":2,"source_schema_hash":3,"source_row_count":4,"partition_generation":5,"ready_set_digest":"ready-digest","router_model_digest":"model-digest"}`, `"cold_opens":1`, `"manifest_open_attempts":2`, `"misses":3`, `"hits":4`, `"open_failures":5`, `"reader_pins":6`, `"reader_releases":7`, `"lease_pins":8`, `"lease_releases":9`, `"invalidations":10`, `"closes":11`, `"untimed_resource_boundary":{"selected_partitions":16,"ef_search":4096,"wall_clock_nanos":88`, `"resource_boundary":{"selected_partitions":16,"ef_search":4096,"wall_clock_nanos":99,"observed_maxima":{"requests":4,"rpcs":5,"retries":0,"redirects":0,"request_bytes":6,"candidate_bytes":7`, `"approximate_router_candidate_budget":256`, `"approximate_router_partition_coverage_complete":true`, `"probes":4`, `"ef_search":128`, `"concurrency":16`, `"samples":32`, `"recall_at_k":0`, `"contract":"` + m8CanonicalResultContractV1 + `"`, `"global_exact_recall_at_k":1`, `"exhaustive_partition_union_score_parity":true`, `"residual_loss_owners":["partition_local_hnsw"]`} {
 		if !bytes.Contains(raw, []byte(field)) {
 			t.Fatalf("missing %s in %s", field, raw)
 		}
@@ -1667,21 +1746,69 @@ func TestM8GateLedgerRequiresMatchedRecallQPSAndTailV1(t *testing.T) {
 	report := m8ProductionReportV1{
 		Config: m8ProductionConfigEvidenceV1{Partitions: 16, RecallTarget: 0.9},
 		Rows: []m8ProductionRowV1{
-			{Status: "pass", Probes: 16, EfSearch: 128, Concurrency: 16, RecallAtK: 0.99, QPS: 100, P95Nanos: 1000, ExactParityChecked: true, ExactParityPassed: true},
+			{Status: "pass", Probes: 16, EfSearch: 128, Concurrency: 16, RecallAtK: 0.99, QPS: 100, P95Nanos: 1000, ExactParityChecked: true, ExactParityPassed: true, Attribution: m8ProductionAttributionV1{ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true}},
 			{Status: "pass", Probes: 4, EfSearch: 128, Concurrency: 16, RecallAtK: 0.92, QPS: 116, P95Nanos: 999},
 		},
 		Failure:   m8ProductionFailureEvidenceV1{Passed: true},
-		Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1, PeakRSSMeasured: true, MaxPartitionLoad: 65_000, BalanceHardCap: 65_625},
+		Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1, PeakRSSMeasured: true, MaxPartitionLoad: 65_000, BalanceHardCap: 65_625, LimitComparisons: []m8ProductionResourceLimitComparisonV1{{Name: "bytes", Configured: 2, Observed: 1, Passed: true}}},
 	}
 	ledger := m8ProductionGateLedgerForReportV1(report)
-	if ledger.ExhaustiveParity != "pass" || ledger.FailureHonesty != "pass" || ledger.Recall != "pass" || ledger.ProbeReduction != "pass" || ledger.EndToEndQPS != "pass" || ledger.TailLatency != "pass" || ledger.Balance != "pass" || ledger.ResourceBounds != "measured_not_bounded" || ledger.OverlapStorage != "fail" {
+	if ledger.ExhaustiveParity != "pass" || ledger.FailureHonesty != "pass" || ledger.Recall != "pass" || ledger.ProbeReduction != "pass" || ledger.EndToEndQPS != "pass" || ledger.TailLatency != "pass" || ledger.Balance != "pass" || ledger.ResourceBounds != "pass" || ledger.OverlapStorage != "fail" {
 		t.Fatalf("ledger=%+v", ledger)
 	}
+	report.Rows[0].Status = "fail"
+	report.Rows[0].ExactParityPassed = false
+	ledger = m8ProductionGateLedgerForReportV1(report)
+	if ledger.ExhaustiveParity != "fail" {
+		t.Fatalf("coordinator parity failure ledger=%+v", ledger)
+	}
+	report.Rows[0].Status = "pass"
+	report.Rows[0].ExactParityPassed = true
 	report.Rows[1].QPS = 114.9
 	report.Rows[1].P95Nanos = 1001
 	ledger = m8ProductionGateLedgerForReportV1(report)
 	if ledger.EndToEndQPS != "fail" || ledger.TailLatency != "fail" {
 		t.Fatalf("unmatched performance ledger=%+v", ledger)
+	}
+}
+
+func TestM8ConfiguredConcurrentShardRequestsCoversClientConcurrencyV1(t *testing.T) {
+	got, err := m8ConfiguredConcurrentShardRequestsV1(8, []int{1, 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 128 {
+		t.Fatalf("configured aggregate shard concurrency=%d want 128", got)
+	}
+	if _, err := m8ConfiguredConcurrentShardRequestsV1(8, []int{0, 16}); err == nil {
+		t.Fatal("expected invalid client concurrency rejection")
+	}
+}
+
+func TestM8PartitionLoadsIncludeOverlapMembershipsV1(t *testing.T) {
+	manifest := collections.VectorPartitionManifestV1{
+		PartitionCount: 2,
+		Memberships: []collections.VectorPartitionMembershipV1{
+			{VectorOrdinal: 0, PartitionID: 0},
+			{VectorOrdinal: 1, PartitionID: 1},
+		},
+		OverlapMemberships: []collections.VectorPartitionMembershipV1{
+			{VectorOrdinal: 0, PartitionID: 1},
+		},
+	}
+	loads, err := m8PartitionLoadsV1(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(loads, []uint64{1, 2}) {
+		t.Fatalf("partition loads=%v want [1 2]", loads)
+	}
+}
+
+func TestM3InheritedPartitionHNSWMFailsBeforeMaterializationV1(t *testing.T) {
+	args := []string{"-stage", "overlap,partition_index", "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-overlap", "0", "-partition-degree", "32", "-m3-persist-db", t.TempDir()}
+	if _, err := parseConfig(args); err == nil || !strings.Contains(err.Error(), "effective partition HNSW M") {
+		t.Fatalf("parseConfig inherited M error=%v", err)
 	}
 }
 

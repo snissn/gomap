@@ -1,12 +1,159 @@
 # Vector partition M8 production multi-group closeout
 
-Date: 2026-07-25
+Date: 2026-07-26
 
-Measured production-code head: `9f3cb7c6f8d5aa8283fe2342d9f341cbdbebab48` (the evidence-document commit is subsequent and is not the measured code).
+Historical M8 closeout code head: `9f3cb7c6f8d5aa8283fe2342d9f341cbdbebab48`
+(the evidence-document commit is subsequent and is not the measured code).
 
-Base M7 merge: `03a5508e5df33ceaf2920839a670fb16652f633d`
+Historical M7 base merge: `03a5508e5df33ceaf2920839a670fb16652f633d`
 
-Status: experimental/off; north-star gates did not pass
+Status: experimental/off; the #3982 final local matrix is complete and leaves
+enablement off with measured follow-up owners
+
+## #3982 final local gate disposition
+
+Measured production-code head:
+`8ad06a6e95423c8992638965230862e1ce917d30` (the documentation commit is
+subsequent). Base: `a11060f91534958e119ba79284d201027c11e040`.
+
+The strict schema-3 matrix materialized and executed all three required
+immutable descriptors sequentially in fresh OS processes: graph/disjoint,
+graph/overlap `0.20`, and stable-ID-hash/disjoint. The overlap descriptor is not
+a qualified required variant because it realized only 8,096 of the requested
+200,000 extra memberships. The matrix used one declared 1M-vector fixture with
+32 queries, 16 dimensions, cosine distance, `top_k=10`, probes `1,2,4,8,16`,
+`ef_search=64,4096`, concurrency `1,16`, four three-node data-Raft groups, and
+the three-node catalog-meta group. This is single-host loopback
+production-shaped evidence; multi-host qualification remains #3983. It is not
+an external-system comparison.
+
+Each schema-3 descriptor binds a manifest-authoritative canonical build
+identity covering the fixture, source graph, assignment, overlap policy,
+backend/source configuration, and the full vector-index definition. All three
+share index-definition digest
+`c51c99cdf93b98f5e0d22f7a4464c14c3f51f2563e33d3bd300f3fccab5955fc`,
+including cosine metric, FP32 encoding, 16 dimensions, strategy, schema
+generation, and partition-local HNSW `M=16` / construction/search settings.
+All variants share graph artifact
+`3c7a5665803b2f8f32f0187376b31faa74b7b712d8b7d94b28aea7114db6f556`.
+The two graph-assignment variants also share that full assignment artifact and
+router-model digest
+`5c5492555c8ca7c5ff1b92e1bf07542130d12c5663ca6eb93ac6bb2b4b2074c4`;
+the stable-ID control has full artifact
+`7a8ec9915de7acc6035024f3fc363c76678e8b27c529a2cba8a9861e764a49ad`
+while retaining the same source graph. Database paths are provenance only and
+do not participate in content identity, so retained descriptors remain valid
+after directory relocation.
+
+The balance gate reads its hard cap from the manifest-integrity-covered
+persisted overlap-policy capacity. It does not recompute a source-row-only
+epsilon at measurement time; #4001 still owns choosing and materializing a
+feasible `0.20` overlap policy.
+
+Artifact:
+`/mnt/fast4tb/tmp/gomap-3982-router-budget-matrix-root-8kZWas/run/matrix/vector_partition_m8_matrix_8ad06a6e9542_04f97bc80f2d.json`
+
+Artifact SHA-256:
+`d3347736200332cd2a81333a9053899f725eb66309a3b3ca3743376e60d030d2`
+
+Measured benchmark binary SHA-256:
+`86645edacdfeda86d00160d32de47a6bc44c712948757aae6d110dc5ead8d0d9`
+(built from the clean detached measured head with `go build -buildvcs=false`).
+
+Fixture checksum:
+`71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f`
+
+The final disposition is `experimental_gate_failures` /
+`enablement_off_follow_up_required`. This is a completed narrow local gate, not
+an enablement claim and not a review or performance waiver.
+
+| Gate | Result | Final evidence |
+| --- | --- | --- |
+| Required variants | **FAIL** | all three immutable descriptors executed, but graph/overlap realized `8,096 / 200,000` requested memberships |
+| Exhaustive correctness | **FAIL** | the actual all-partition coordinator response does not have canonical-oracle ID/score parity; the independent exact partition union still has ID/score parity and isolates the loss to partition-local HNSW |
+| Failure honesty | **PASS** | unavailable endpoint returns no partial neighbors/groups |
+| Recall >= 0.90 | **FAIL** | graph all-partition recall@10 is `0.7125`; overlap is `0.715625` |
+| Median probes <= 25% | **FAIL** | graph exact representative routing retains only `0.25625` recall at 4/16 probes |
+| Matched-recall QPS | **FAIL** | no <=4-probe graph row reaches target recall |
+| Matched-recall p95 | **FAIL** | no <=4-probe graph row reaches target recall |
+| Coupled graph acceptance | **FAIL** | neither graph variant passes recall, probe reduction, matched-recall QPS, and matched-recall tail together |
+| Balance epsilon 0.05 | **PASS** | disjoint max `63,292`; overlap max `63,918`; manifest-covered persisted capacity `65,625` |
+| Overlap bytes < 1.35x | **FAIL** | raw `285,168,176 / 282,881,928 = 1.0080819868x`, but only `4.048%` of the requested overlap budget materialized, so the ratio is not qualified |
+| Resource bounds | **PASS** | fresh-process 4 GiB RSS and 512 MiB asset ceilings plus actual coordinator/shard request maxima pass |
+| Existing behavior | **PENDING** | latest-head required normal/race/hosted suites own final PR readiness |
+
+Corpus-exclusive fresh-process peak RSS was `1,610,182,656`, `1,759,191,040`,
+and `1,642,389,504` bytes for graph/disjoint, graph/overlap, and stable hash,
+respectively, below the configured 4 GiB ceiling. This supersedes the earlier
+sequential-process high-water attribution; the blocked matrix parent does not
+materialize or retain a second fixture corpus. Aggregate shard concurrency was
+configured as eight workers per request times 16 clients (`128`) and observed
+at `64`. The production coordinator request budget was the actual `256`
+retained router representatives for every variant, below the configured
+`1,000,000` ceiling. The `-router-candidates 1024` flag controls attribution;
+it is not the request budget. The topology maximum includes a separate
+stopped-group fault request, so the resource ledger covers both measured cells
+and the endpoint-loss fault.
+Successful exhaustive preflight and configured warmup requests have a separate
+untimed resource boundary and participate in the same maximum calculation.
+Their per-variant wall times were `21,227,422,286`, `20,872,708,413`, and
+`21,325,331,988` ns; each selected all `16` partitions at `ef_search=4096`
+and used `4` requests / `4` RPCs. The largest untimed coordinator request was
+`2,352` bytes, with `4,205,376` candidate bytes, `7,232` response bytes, and a
+maximum `588`-byte shard request across `4` partitions.
+
+The stopped-group fault selected all `16` partitions at `ef_search=4096`,
+attempted `4` requests and `4` RPCs, and returned zero candidates and response
+bytes. Its
+maximum coordinator request was `2,344` bytes, its maximum shard request was
+`586` bytes across at most `4` partitions, and per-variant fault wall times
+were `15,970,857`, `28,464,324`, and `15,091,465` ns.
+Query-wide selected partitions reached `16`; actual generated shard
+requests contained at most `4` partitions against both 32-partition request
+ceilings. Retry and redirect ceilings are the per-shard-task limit multiplied by
+the maximum observed four-task fanout (`4` each; `0` observed). Persistent
+assets were `282,881,928`, `285,168,176`, and `282,385,488` bytes for graph
+disjoint, graph overlap, and stable hash respectively. Each variant retained
+CPU, allocation baseline/final, heap, block, mutex, and trace profiles under
+`/mnt/fast4tb/tmp/gomap-3982-router-budget-matrix-root-8kZWas/run/profiles/`.
+The bounded aggregate candidate ceiling was `134,217,728` bytes, with a maximum
+observed request value of `4,207,808` bytes. The slowest actual completed
+request was the successful stable-hash preflight at `21,325,331,988` ns
+against the `30,000,000,000` ns hard limit.
+
+At all 16 partitions, exact representative routing recall is `1.0`, while
+partition-local HNSW owns the remaining loss: `0.7125` graph/disjoint,
+`0.715625` graph/overlap, and `0.778125` stable hash at `ef_search=4096`.
+Increasing graph `ef_search` from 64 to 4096 did not change recall. At four
+probes, exact graph representative routing itself retains only `0.25625`, so a
+local-HNSW-only change cannot satisfy the quarter-probe target.
+
+Measured successors preserve these distinct owners:
+
+- #3998: graph partition/router locality at the quarter-probe budget;
+- #3999: partition-local HNSW reachability and recall at the 1M shape;
+- #4001: reconcile the requested overlap treatment with the balance/capacity model.
+
+Reproduction command (the retained DB descriptors are immutable inputs):
+
+```sh
+./bin/treedb_vector_partition_bench \
+  -mode production_multi_group \
+  -dataset /mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture \
+  -out /mnt/fast4tb/tmp/gomap-3982-router-budget-matrix-root-8kZWas/run/matrix \
+  -partitions 16 -raft-groups 4 -raft-nodes-per-group 3 \
+  -probes 1,2,4,8,16 -top-k 10 -concurrency 1,16 -warmup 1 \
+  -ef-search 64,4096 -router-candidates 1024 \
+  -profiles /mnt/fast4tb/tmp/gomap-3982-router-budget-matrix-root-8kZWas/run/profiles \
+  -m8-max-rss-bytes 4294967296 \
+  -m8-max-persistent-asset-bytes 536870912 \
+  -m8-variant-dbs /mnt/fast4tb/tmp/treedb_3982_identity3_1m_5060_vXlTip/db_graph_disjoint,/mnt/fast4tb/tmp/treedb_3982_identity3_1m_5060_vXlTip/db_graph_overlap,/mnt/fast4tb/tmp/treedb_3982_identity3_1m_5060_vXlTip/db_stable \
+  -format text
+```
+
+The sections below retain the earlier M8 closeout and #3980 attribution
+history; their unsupported-row and pre-fix performance statements are
+historical rather than the current #3982 disposition.
 
 ## Executive result
 

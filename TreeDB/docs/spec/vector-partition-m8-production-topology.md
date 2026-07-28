@@ -119,12 +119,48 @@ profile paths, limitations, and an explicit gate ledger. CPU, allocation
 baseline/final, heap, block, mutex, and execution trace profiles cover the
 measured query cells plus the unavailable-endpoint fault.
 
-The checked-in 10k path materializes disjoint round-robin HNSW packs for CI.
-The retained 1M path reuses the graph-built M3/M5 packs. Overlap `0.20` and
-stable-ID/hash attribution are currently reported `unsupported`; they MUST NOT
-be silently treated as disjoint rows. All-partition production HNSW is compared
-to independent exhaustive collection truth and MUST be exact to pass the
-exhaustive gate.
+The checked-in 10k path materializes persistent HNSW packs for CI. The retained
+1M path reuses graph-built M3/M5 packs. `-m8-variant-dbs` requires exactly three
+distinct immutable descriptors and executes them sequentially, one fresh OS
+process per variant so process peak RSS is attributable to that variant. The
+blocked matrix parent validates only the manifest and descriptors and does not
+materialize a second fixture corpus. Preflight planning applies the memory cap
+to one child's complete peak and multiplies the complete measured,
+warmup/preflight, and attribution work by the number of children:
+
+1. graph assignment with disjoint memberships;
+2. graph assignment with bounded overlap `0.20`;
+3. stable-ID hash assignment with disjoint memberships as an attribution
+   baseline.
+
+The matrix rejects missing, duplicated, mutable, or identity-mismatched
+variants rather than silently substituting a disjoint row. A declared overlap
+variant is incomplete unless its realized extra-membership count equals
+`floor(overlap_ratio * source_rows)`; incomplete materialization fails both the
+required-variant and overlap-storage gates even when its raw byte ratio is
+below the threshold. Exact correctness is owned by canonical source truth
+versus the exhaustive exact partition union;
+the router, partition-local HNSW, transport, and coordinator merge retain
+separate recall/parity attribution. Approximate HNSW recall is judged by the
+declared recall gate and is never described as exact exhaustive parity.
+The matrix may pass its coupled graph-acceptance gate only when one graph
+variant at one `(probes, ef_search, concurrency)` operating point passes recall,
+probe reduction, matched-recall QPS, and matched-recall tail together; those
+gates cannot be assembled from different variants or different cells.
+
+The schema-3 retained descriptor records both the full assignment artifact and
+the pre-assignment source-graph artifact. Its canonical build-identity digest
+covers fixture, variant, assignment, overlap, backend/source configuration,
+and the complete persisted vector-index definition digest (name, field, metric,
+encoding, strategy, dimensions, HNSW `M`, construction/search budgets, schema
+generation, and quantized definitions); that digest is persisted in the
+manifest-covered balance policy. Matrix validation derives capacity,
+overlap budget/usage, partition loads, and persistent bytes from the opened
+manifest instead of trusting duplicated descriptor fields. All required
+variants must share source, fixture, source-graph digest, partition count, and
+the complete vector-index definition; graph variants must additionally share
+the full graph-assignment artifact and router-model digest. A retained database directory is provenance, not content identity,
+and the matrix content digest excludes that relocatable path.
 
 ## Capacity and enablement
 
@@ -133,8 +169,34 @@ membership load versus the default 5% hard-cap epsilon, request/response and
 logical candidate bytes, and retained M3 mapped-pack evidence. The current M8
 runner does not independently sample mmap residency and says so in the artifact.
 Observed persistent bytes and RSS are not a resource-bounds pass unless a
-configured resource limit is compared; otherwise the ledger MUST report
-`measured_not_bounded`.
+configured resource limit is compared. The strict matrix compares configured
+persistent-asset and process-RSS ceilings plus every coordinator/shard count,
+byte, fanout, concurrency, result, search-budget, and wall-clock limit against
+the same request scope. Both the measured base and head Git SHAs and both
+configured resource ceilings participate in the matrix artifact identity, so
+runs from different code or with different acceptance bounds cannot overwrite
+one another. Request, RPC, retry, redirect, merge, and byte limits
+use observed per-request/per-shard maxima rather than averages derived from
+aggregate throughput counters. Client concurrency scales the configured
+aggregate shard-request ceiling; a process-wide observed peak is not compared
+to the smaller per-request worker limit. Retry and redirect observations are
+per-query aggregates, so their ceilings are the independently enforced
+per-shard-task limit multiplied by the maximum observed shard-task fanout.
+Partition-load evidence includes both primary and overlap memberships.
+Query-wide selected partitions and the maximum partitions in an actual
+generated shard request are separate observations. Only the latter is compared
+with coordinator and shard per-request partition ceilings.
+The canonical M8 benchmark configures a bounded 128 MiB aggregate and
+per-shard candidate ceiling. This covers the maximum one-million-row fixture
+with a fully materialized 0.20 overlap (`76,800,000` conservative membership
+bytes), instead of failing before that required variant can produce evidence.
+Wall-clock resource evidence uses the actual slowest completed request; p99
+remains a latency statistic and is not substituted for the hard-limit maximum.
+Custom shard limits are normalized once and passed through the production
+topology to both the coordinator and shard services. The coordinator clamps
+query, result, `ef_search`, partition, identity, and stable-ID bounds to those
+same limits, chunks generated shard requests by the shard partition ceiling,
+and rejects a per-shard candidate baseline above the configured shard maximum.
 
 The feature remains experimental/off unless every #3917 north-star gate passes
 or the user explicitly accepts the narrower result with one linked measured

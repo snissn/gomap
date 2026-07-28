@@ -35,22 +35,23 @@ const (
 )
 
 type m3PartitionIndexReport struct {
-	SchemaVersion     int                   `json:"schema_version"`
-	ResultKind        string                `json:"result_kind"`
-	Dataset           fixtureManifest       `json:"dataset"`
-	ArtifactSHA256    string                `json:"artifact_sha256"`
-	BaseSHA           string                `json:"base_sha"`
-	HeadSHA           string                `json:"head_sha"`
-	GoVersion         string                `json:"go_version"`
-	Hardware          string                `json:"hardware_context"`
-	Partitions        int                   `json:"partitions"`
-	TopK              int                   `json:"top_k"`
-	Rows              []m3PartitionIndexRow `json:"rows"`
-	ReplicationGate   string                `json:"replication_gate"`
-	MillionCorpus     string                `json:"million_corpus"`
-	EnablementPolicy  string                `json:"enablement_policy"`
-	OwnershipBoundary string                `json:"ownership_boundary"`
-	ExactCommand      []string              `json:"exact_command"`
+	SchemaVersion       int                   `json:"schema_version"`
+	ResultKind          string                `json:"result_kind"`
+	Dataset             fixtureManifest       `json:"dataset"`
+	ArtifactSHA256      string                `json:"artifact_sha256"`
+	GraphArtifactSHA256 string                `json:"graph_artifact_sha256"`
+	BaseSHA             string                `json:"base_sha"`
+	HeadSHA             string                `json:"head_sha"`
+	GoVersion           string                `json:"go_version"`
+	Hardware            string                `json:"hardware_context"`
+	Partitions          int                   `json:"partitions"`
+	TopK                int                   `json:"top_k"`
+	Rows                []m3PartitionIndexRow `json:"rows"`
+	ReplicationGate     string                `json:"replication_gate"`
+	MillionCorpus       string                `json:"million_corpus"`
+	EnablementPolicy    string                `json:"enablement_policy"`
+	OwnershipBoundary   string                `json:"ownership_boundary"`
+	ExactCommand        []string              `json:"exact_command"`
 }
 
 type m3PartitionIndexRow struct {
@@ -100,27 +101,28 @@ type m3PartitionIndexRow struct {
 	PersistentDBDir              string  `json:"persistent_db_dir,omitempty"`
 }
 
-func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vectorpartition.Artifact, artifactDigest, suffix string, vectors, queries [][]float64, stdout io.Writer) error {
+func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vectorpartition.Artifact, artifactDigest, graphArtifactDigest, suffix string, vectors, queries [][]float64, stdout io.Writer) error {
 	if len(queries) == 0 {
 		return errors.New("M3 partition-index stage requires exact-oracle queries")
 	}
 	ratios := append([]float64(nil), cfg.overlaps...)
 	sort.Float64s(ratios)
 	report := m3PartitionIndexReport{
-		SchemaVersion:     m3ReportSchemaVersion,
-		ResultKind:        "m3_native_partition_hnsw_evidence",
-		Dataset:           fixture,
-		ArtifactSHA256:    artifactDigest,
-		BaseSHA:           cfg.baseSHA,
-		HeadSHA:           cfg.headSHA,
-		GoVersion:         runtime.Version(),
-		Hardware:          runtime.GOARCH + "/" + runtime.GOOS,
-		Partitions:        cfg.partitions,
-		TopK:              cfg.topK,
-		MillionCorpus:     "unavailable: no 1M corpus was supplied",
-		EnablementPolicy:  "disabled_pending_clustered_1m_quality_or_probe_win",
-		OwnershipBoundary: "derived stable IDs, validated FP32 vectors, and native HNSW packs only; canonical documents and Raft token ownership are unchanged",
-		ExactCommand:      append([]string(nil), cfg.command...),
+		SchemaVersion:       m3ReportSchemaVersion,
+		ResultKind:          "m3_native_partition_hnsw_evidence",
+		Dataset:             fixture,
+		ArtifactSHA256:      artifactDigest,
+		GraphArtifactSHA256: graphArtifactDigest,
+		BaseSHA:             cfg.baseSHA,
+		HeadSHA:             cfg.headSHA,
+		GoVersion:           runtime.Version(),
+		Hardware:            runtime.GOARCH + "/" + runtime.GOOS,
+		Partitions:          cfg.partitions,
+		TopK:                cfg.topK,
+		MillionCorpus:       "unavailable: no 1M corpus was supplied",
+		EnablementPolicy:    "disabled_pending_clustered_1m_quality_or_probe_win",
+		OwnershipBoundary:   "derived stable IDs, validated FP32 vectors, and native HNSW packs only; canonical documents and Raft token ownership are unchanged",
+		ExactCommand:        append([]string(nil), cfg.command...),
 	}
 	if fixture.Vectors >= 1_000_000 {
 		report.MillionCorpus = "measured from supplied 1M corpus"
@@ -130,7 +132,7 @@ func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vect
 		if err != nil {
 			return fmt.Errorf("build bounded overlap ratio %.4f: %w", ratio, err)
 		}
-		row, err := benchmarkM3PartitionIndexRow(cfg, vectors, queries, artifact, overlap, uint64(i+1))
+		row, err := benchmarkM3PartitionIndexRow(cfg, fixture, artifactDigest, graphArtifactDigest, vectors, queries, artifact, overlap, ratio, uint64(i+1))
 		if err != nil {
 			return fmt.Errorf("benchmark native partition packs ratio %.4f: %w", ratio, err)
 		}
@@ -204,7 +206,7 @@ func openM3PartitionSearchers(count int, open func(uint32) (*collections.VectorP
 	return searchers, nil
 }
 
-func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, generation uint64) (_ m3PartitionIndexRow, resultErr error) {
+func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactDigest, graphArtifactDigest string, vectors, queries [][]float64, artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, ratio float64, generation uint64) (_ m3PartitionIndexRow, resultErr error) {
 	dir, cleanup, err := m3PartitionIndexDirectory(cfg.m3PersistDir)
 	if err != nil {
 		return m3PartitionIndexRow{}, err
@@ -229,19 +231,36 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 	}()
 	manager := collections.NewCollectionManager(db)
 	meta := partitionCollectionMeta(m3BenchmarkCollection, len(vectors[0]))
-	if cfg.partition.Degree < 2 {
+	partitionHNSWM := cfg.partitionHNSWM
+	if partitionHNSWM == 0 {
+		partitionHNSWM = cfg.partition.Degree
+	}
+	if partitionHNSWM < 2 {
 		return m3PartitionIndexRow{}, errors.New("M3 persistent HNSW degree must be at least 2")
 	}
 	foundIndex := false
 	for i := range meta.VectorIndexes {
 		if meta.VectorIndexes[i].Name == partitionHNSWIndex {
-			meta.VectorIndexes[i].M = cfg.partition.Degree
+			meta.VectorIndexes[i].M = partitionHNSWM
 			foundIndex = true
 			break
 		}
 	}
 	if !foundIndex {
 		return m3PartitionIndexRow{}, errors.New("M3 persistent HNSW index definition missing")
+	}
+	variantID, err := m3VariantIDV1(cfg.partitionAssignment, ratio)
+	if err != nil {
+		return m3PartitionIndexRow{}, err
+	}
+	identityDescriptor := m3VariantDescriptorV1{
+		FixtureChecksum: fixture.Checksum, VariantID: variantID, AssignmentBasis: cfg.partitionAssignment, OverlapRatio: ratio,
+		ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphArtifactDigest, ArtifactBackend: artifact.Backend,
+		Source: artifact.Source, IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(meta.VectorIndexes[0]), PartitionHNSWM: partitionHNSWM,
+	}
+	buildIdentityDigest, err := m3VariantBuildIdentityDigestV1(identityDescriptor)
+	if err != nil {
+		return m3PartitionIndexRow{}, err
 	}
 	if _, err := manager.CreateCollection(meta); err != nil {
 		return m3PartitionIndexRow{}, err
@@ -305,7 +324,7 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
-	manifest, membershipOrdinals, err := m3BuildingManifest(*meta, source, artifact, overlap, sourceOrdinals, generation)
+	manifest, membershipOrdinals, err := m3BuildingManifest(*meta, source, artifact, overlap, sourceOrdinals, generation, buildIdentityDigest)
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
@@ -359,7 +378,7 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 			Config:         vectorpartition.DefaultRouterConfigV1(),
 			AssetFileID:    routerFileID,
 			AssetPartID:    uint64(manifest.PartitionCount) + 1,
-			M:              cfg.partition.Degree,
+			M:              partitionHNSWM,
 			EfConstruction: 128,
 			EfSearch:       128,
 		},
@@ -423,6 +442,17 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 	manifest = lifecycle.Manifest
 	if lifecycle.Capacity != uint64(artifact.Metrics.Cap) || lifecycle.OverlapBudget != uint64(overlap.Budget) || lifecycle.UnspentOverlapBudget != uint64(overlap.Unspent) {
 		return m3PartitionIndexRow{}, fmt.Errorf("reopened lifecycle accounting=%+v", lifecycle)
+	}
+	router, _, err := col.OpenVectorPartitionRouterV1(partitionHNSWIndex)
+	if err != nil {
+		return m3PartitionIndexRow{}, fmt.Errorf("reopen M3 router: %w", err)
+	}
+	routerRuntime := router.Status()
+	if err := router.Close(); err != nil {
+		return m3PartitionIndexRow{}, fmt.Errorf("close reopened M3 router: %w", err)
+	}
+	if routerRuntime.Manifest.ReadySetDigest != manifest.ReadySetDigest || routerRuntime.ModelDigest == "" {
+		return m3PartitionIndexRow{}, errors.New("reopened M3 router identity does not match ready manifest")
 	}
 	openStarted := time.Now()
 	searchers, err := openM3PartitionSearchers(cfg.partitions, func(partition uint32) (*collections.VectorPartitionLocalSearcherV1, error) {
@@ -532,7 +562,7 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 		FinalDerivedPhysicalBytes:    finalDerivedPhysicalBytes,
 		PhysicalBytesPerSourceVector: float64(finalDerivedPhysicalBytes) / float64(len(vectors)),
 		PackBytes:                    packBytes,
-		PartitionHNSWM:               cfg.partition.Degree,
+		PartitionHNSWM:               partitionHNSWM,
 		MappedBytes:                  mappedBytes,
 		HeapBytes:                    heapBytes,
 		SearcherOpenWallNanos:        openWall,
@@ -557,6 +587,27 @@ func benchmarkM3PartitionIndexRow(cfg config, vectors, queries [][]float64, arti
 		CorruptAssets:                lifecycle.CorruptAssets,
 		StaleAssets:                  lifecycle.StaleAssets,
 		PersistentDBDir:              persistentDBDir,
+	}
+	if !cleanup {
+		descriptor := m3VariantDescriptorV1{
+			SchemaVersion: 3, ResultKind: "m3_persistent_variant_descriptor_v3", VariantID: variantID,
+			AssignmentBasis: cfg.partitionAssignment, OverlapRatio: ratio, OverlapPolicy: manifest.BalancePolicy,
+			FixtureChecksum: fixture.Checksum, ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphArtifactDigest, ArtifactBackend: artifact.Backend, Source: artifact.Source,
+			BuildIdentityDigest: buildIdentityDigest,
+			DatabaseDirectory:   dir, ManifestIntegrity: manifest.IntegrityDigest, ReadySetDigest: manifest.ReadySetDigest,
+			RouterAssetChecksum: manifest.RouterAsset.Checksum, RouterModelDigest: routerRuntime.ModelDigest,
+			SourceGeneration: manifest.SourceGeneration, SourceChecksum: manifest.SourceChecksum, SourceSchemaHash: manifest.SourceSchemaHash, SourceRows: manifest.SourceRowCount,
+			PartitionGeneration: manifest.Generation, RouterGeneration: manifest.RouterGeneration, Partitions: manifest.PartitionCount, IndexDefinitionDigest: manifest.IndexDefinitionDigest,
+			Capacity: artifact.Metrics.Cap, PartitionLoads: append([]int(nil), overlap.Loads...), OverlapMemberships: len(manifest.OverlapMemberships),
+			PartitionHNSWM:       partitionHNSWM,
+			PersistentAssetBytes: packPayloadBytes + manifest.RouterAsset.Bytes,
+		}
+		if err := m3DescriptorMatchesManifestV1(descriptor, fixture, manifest, routerRuntime.ModelDigest); err != nil {
+			return m3PartitionIndexRow{}, err
+		}
+		if err := m3WriteVariantDescriptorV1(dir, descriptor); err != nil {
+			return m3PartitionIndexRow{}, err
+		}
 	}
 	return row, nil
 }
@@ -679,11 +730,11 @@ func m3RouterPartitions(artifact vectorpartition.Artifact, sourceOrdinals []int,
 	return partitions, nil
 }
 
-func m3BuildingManifest(meta collections.CollectionMeta, source collections.VectorPartitionSourceIdentityV1, artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, sourceOrdinals []int, generation uint64) (collections.VectorPartitionManifestV1, [][]int, error) {
+func m3BuildingManifest(meta collections.CollectionMeta, source collections.VectorPartitionSourceIdentityV1, artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, sourceOrdinals []int, generation uint64, buildIdentityDigest string) (collections.VectorPartitionManifestV1, [][]int, error) {
 	if len(sourceOrdinals) != len(artifact.IDs) {
 		return collections.VectorPartitionManifestV1{}, nil, errors.New("M3 source ordinal mapping length mismatch")
 	}
-	policy, err := collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: uint64(artifact.Metrics.Cap), Budget: uint64(overlap.Budget), Unspent: uint64(overlap.Unspent)})
+	policy, err := collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: uint64(artifact.Metrics.Cap), Budget: uint64(overlap.Budget), Unspent: uint64(overlap.Unspent), BuildIdentityDigest: buildIdentityDigest})
 	if err != nil {
 		return collections.VectorPartitionManifestV1{}, nil, err
 	}
@@ -832,7 +883,7 @@ func m3ReplicationGate(rows []m3PartitionIndexRow) string {
 }
 
 func validateM3PartitionIndexReport(report m3PartitionIndexReport) error {
-	if report.SchemaVersion != m3ReportSchemaVersion || report.ResultKind != "m3_native_partition_hnsw_evidence" || len(report.Rows) == 0 || !validSHA(report.BaseSHA) || !validSHA(report.HeadSHA) {
+	if report.SchemaVersion != m3ReportSchemaVersion || report.ResultKind != "m3_native_partition_hnsw_evidence" || len(report.Rows) == 0 || !m8SHA256V1(report.ArtifactSHA256) || !m8SHA256V1(report.GraphArtifactSHA256) || !validSHA(report.BaseSHA) || !validSHA(report.HeadSHA) {
 		return errors.New("invalid M3 report identity")
 	}
 	for _, row := range report.Rows {

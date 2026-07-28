@@ -214,6 +214,10 @@ func (d *testVectorPartitionCoordinatorDispatcherV1) DispatchVectorPartitionShar
 }
 
 func testVectorPartitionCoordinatorV1(t *testing.T, groups []raftplacement.GroupV1, owners []raftcluster.GroupID, neighbors map[uint32][]VectorPartitionShardSearchNeighborV1, limits VectorPartitionCoordinatorLimitsV1) (*VectorPartitionCoordinatorV1, *testVectorPartitionCoordinatorRouterSourceV1, *testVectorPartitionCoordinatorDispatcherV1) {
+	return testVectorPartitionCoordinatorWithShardLimitsV1(t, groups, owners, neighbors, limits, VectorPartitionShardSearchLimitsV1{})
+}
+
+func testVectorPartitionCoordinatorWithShardLimitsV1(t *testing.T, groups []raftplacement.GroupV1, owners []raftcluster.GroupID, neighbors map[uint32][]VectorPartitionShardSearchNeighborV1, limits VectorPartitionCoordinatorLimitsV1, shardLimits VectorPartitionShardSearchLimitsV1) (*VectorPartitionCoordinatorV1, *testVectorPartitionCoordinatorRouterSourceV1, *testVectorPartitionCoordinatorDispatcherV1) {
 	t.Helper()
 	ref := raftplacement.CollectionRefV1{Database: "db", Catalog: "default", Collection: "docs"}
 	catalogInput := raftplacement.CatalogV1{
@@ -268,7 +272,7 @@ func testVectorPartitionCoordinatorV1(t *testing.T, groups []raftplacement.Group
 		notLeaderOnce: make(map[raftcluster.GroupID]raftcluster.NodeID),
 	}
 	coordinator, err := NewVectorPartitionCoordinatorV1(VectorPartitionCoordinatorOptionsV1{
-		Catalog: catalog, Placement: placement, RouterSource: source, Dispatcher: dispatcher, Limits: limits,
+		Catalog: catalog, Placement: placement, RouterSource: source, Dispatcher: dispatcher, Limits: limits, ShardLimits: shardLimits,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -345,9 +349,113 @@ func TestVectorPartitionCoordinatorCoalescesChunksDedupesAndMergesV1(t *testing.
 		len(dispatcher.calls[1].PartitionIDs) != 1 {
 		t.Fatalf("calls=%+v", dispatcher.calls)
 	}
+	var maxRequestBytes uint64
+	for _, call := range dispatcher.calls {
+		requestBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(call)
+		if err != nil {
+			t.Fatal(err)
+		}
+		maxRequestBytes = max(maxRequestBytes, requestBytes)
+	}
+	if response.Counters.MaxShardRequestBytes != maxRequestBytes {
+		t.Fatalf("max shard request bytes=%d want=%d", response.Counters.MaxShardRequestBytes, maxRequestBytes)
+	}
+	if response.Counters.MaxShardPartitions != 32 {
+		t.Fatalf("max shard partitions=%d want=32", response.Counters.MaxShardPartitions)
+	}
 	if got := response.Neighbors; len(got) != 3 || got[0].ID != "doc-00" ||
 		got[1].ID != "doc-01" || got[2].ID != "doc-02" {
 		t.Fatalf("stable top-k=%+v", got)
+	}
+}
+
+func TestVectorPartitionCoordinatorPlansWithConfiguredShardLimitsV1(t *testing.T) {
+	shardLimits := DefaultVectorPartitionShardSearchLimitsV1()
+	shardLimits.MaxPartitions = 1
+	coordinator, _, dispatcher := testVectorPartitionCoordinatorWithShardLimitsV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a", "group-a"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{
+			0: {{ID: "doc-0", Score: 1}},
+			1: {{ID: "doc-1", Score: .9}},
+		},
+		VectorPartitionCoordinatorLimitsV1{}, shardLimits,
+	)
+	response, err := coordinator.Search(context.Background(), testVectorPartitionCoordinatorRequestV1(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coordinator.limits.MaxPartitionsPerRequest != 1 || response.Counters.MaxShardPartitions != 1 || len(dispatcher.calls) != 2 {
+		t.Fatalf("effective coordinator limit=%d counters=%+v calls=%+v", coordinator.limits.MaxPartitionsPerRequest, response.Counters, dispatcher.calls)
+	}
+	for _, call := range dispatcher.calls {
+		if len(call.PartitionIDs) != 1 || call.CandidateBytesLimit > shardLimits.MaxCandidateBytes || call.ResponseBytesLimit > shardLimits.MaxResponseBytes || call.RequestBytesLimit > shardLimits.MaxRequestBytes {
+			t.Fatalf("custom shard-limit call=%+v", call)
+		}
+	}
+}
+
+func TestVectorPartitionCoordinatorAcceptsLimitsAboveShardDefaultsWhenConfiguredV1(t *testing.T) {
+	shardLimits := DefaultVectorPartitionShardSearchLimitsV1()
+	shardLimits.MaxPartitions = 64
+	shardLimits.MaxTopK = 512
+	shardLimits.MaxEfSearch = 8192
+	shardLimits.MaxIdentityBytes = 8192
+	shardLimits.MaxStableIDBytes = 8192
+	shardLimits.MaxResponseBytes = 128 << 20
+	limits := DefaultVectorPartitionCoordinatorLimitsV1()
+	limits.MaxPartitionsPerRequest = shardLimits.MaxPartitions
+	limits.MaxTopK = shardLimits.MaxTopK
+	limits.MaxEfSearch = shardLimits.MaxEfSearch
+	limits.MaxIdentityBytes = shardLimits.MaxIdentityBytes
+	limits.MaxStableIDBytes = shardLimits.MaxStableIDBytes
+	limits.MaxResponseBytes = shardLimits.MaxResponseBytes
+
+	coordinator, _, _ := testVectorPartitionCoordinatorWithShardLimitsV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "doc", Score: 1}}},
+		limits, shardLimits,
+	)
+	if coordinator.limits.MaxPartitionsPerRequest != shardLimits.MaxPartitions ||
+		coordinator.limits.MaxTopK != shardLimits.MaxTopK ||
+		coordinator.limits.MaxEfSearch != shardLimits.MaxEfSearch ||
+		coordinator.limits.MaxIdentityBytes != shardLimits.MaxIdentityBytes ||
+		coordinator.limits.MaxStableIDBytes != shardLimits.MaxStableIDBytes ||
+		coordinator.limits.MaxResponseBytes != shardLimits.MaxResponseBytes {
+		t.Fatalf("effective coordinator limits=%+v want custom shard limits=%+v", coordinator.limits, shardLimits)
+	}
+}
+
+func TestVectorPartitionCoordinatorRejectsQueryAboveConfiguredShardDimensionsV1(t *testing.T) {
+	shardLimits := DefaultVectorPartitionShardSearchLimitsV1()
+	shardLimits.MaxDimensions = 1
+	coordinator, _, dispatcher := testVectorPartitionCoordinatorWithShardLimitsV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "doc", Score: 1}}},
+		VectorPartitionCoordinatorLimitsV1{}, shardLimits,
+	)
+	if coordinator.limits.MaxQueryBytes != 4 {
+		t.Fatalf("effective query bytes=%d want=4", coordinator.limits.MaxQueryBytes)
+	}
+	if _, err := coordinator.Search(t.Context(), testVectorPartitionCoordinatorRequestV1(1)); !errors.Is(err, ErrVectorPartitionCoordinatorInvalidRequest) {
+		t.Fatalf("two-dimensional query err=%v want invalid request", err)
+	}
+	if len(dispatcher.calls) != 0 {
+		t.Fatalf("invalid query dispatched shard calls=%+v", dispatcher.calls)
+	}
+}
+
+func TestVectorPartitionCoordinatorAllowsBoundedAggregateCandidateLimitAboveShardDefaultV1(t *testing.T) {
+	limits := DefaultVectorPartitionCoordinatorLimitsV1()
+	limits.MaxCandidateBytes = 128 << 20
+	got, err := normalizeVectorPartitionCoordinatorLimitsV1(limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MaxCandidateBytes != 128<<20 {
+		t.Fatalf("aggregate candidate limit=%d", got.MaxCandidateBytes)
 	}
 }
 
@@ -1573,7 +1681,8 @@ func TestVectorPartitionCoordinatorRedirectReservesLongestGroupMemberV1(t *testi
 	}
 	if dispatcher.calls[0].RequestBytesLimit != wantBytes ||
 		dispatcher.calls[1].RequestBytesLimit != wantBytes ||
-		response.Counters.RequestBytes != wantBytes {
+		response.Counters.RequestBytes != wantBytes ||
+		response.Counters.MaxShardRequestBytes != wantBytes {
 		t.Fatalf("request limits=(%d,%d) counter=%d want longest-target reservation=%d",
 			dispatcher.calls[0].RequestBytesLimit,
 			dispatcher.calls[1].RequestBytesLimit,
@@ -1646,6 +1755,16 @@ func TestVectorPartitionCoordinatorTerminalFailureCancelsAndReturnsNoPartialV1(t
 	}
 	if !vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
 		t.Fatalf("partial response=%+v", response)
+	}
+	var coordinatorErr *VectorPartitionCoordinatorErrorV1
+	if !errors.As(err, &coordinatorErr) {
+		t.Fatalf("terminal error type=%T want coordinator error", err)
+	}
+	if coordinatorErr.Counters.SelectedPartitions != 2 || coordinatorErr.Counters.SelectedGroups != 2 ||
+		coordinatorErr.Counters.Requests != 2 || coordinatorErr.Counters.RPCs == 0 ||
+		coordinatorErr.Counters.RequestBytes == 0 || coordinatorErr.Counters.MaxShardPartitions != 1 ||
+		coordinatorErr.Counters.MaxShardRequestBytes == 0 || coordinatorErr.Timing.TotalNanos == 0 {
+		t.Fatalf("terminal resource evidence counters=%+v timing=%+v", coordinatorErr.Counters, coordinatorErr.Timing)
 	}
 	if err := coordinator.Close(); err != nil {
 		t.Fatal(err)
@@ -1841,6 +1960,16 @@ func TestVectorPartitionCoordinatorResponseCounterAggregationRejectsOverflowV1(t
 				t.Fatalf("partial counters published: got=%+v want=%+v", test.counters, before)
 			}
 		})
+	}
+}
+
+func TestVectorPartitionCoordinatorResponseCountersTrackShardMaximaV1(t *testing.T) {
+	counters := VectorPartitionCoordinatorCountersV1{MaxShardCandidateBytes: 640, MaxShardResponseBytes: 200}
+	if !accumulateVectorPartitionCoordinatorResponseCountersV1(&counters, VectorPartitionShardSearchResponseV1{Candidates: 20, ResponseBytes: 150}) {
+		t.Fatal("valid shard counters rejected")
+	}
+	if counters.MaxShardCandidateBytes != 1280 || counters.MaxShardResponseBytes != 200 {
+		t.Fatalf("shard maxima=%+v", counters)
 	}
 }
 

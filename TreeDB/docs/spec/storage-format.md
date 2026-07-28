@@ -123,6 +123,18 @@ membership kinds. There are no optional tagged fields and this pre-alpha
 decoder accepts only version 3; older directories require rebuild rather than
 migration.
 
+For M3 bounded-overlap manifests, the canonical balance-policy grammar is
+`m3_bounded_overlap_v1:capacity=<u64>,budget=<u64>,unspent=<u64>` followed by
+the optional suffix `,build_identity=<64-lowercase-hex-sha256>`. The optional
+build identity binds the fixture, source graph, assignment, overlap, and index
+construction configuration without adding a sidecar; because `BalancePolicy`
+is covered by the VPM1 integrity digest, editing or relabeling that identity
+invalidates the manifest. Readers accept the historical form without the
+suffix, but evidence paths that require an authoritative build identity reject
+its absence. Noncanonical field order, additional fields, invalid digests,
+zero capacity, or `unspent > budget` fail closed. TreeDB is pre-alpha, so new
+M3 evidence directories may require rebuilding when this identity is required.
+
 VRP1 (the READY promotion payload, distinct from the VPR1 reclaim payload)
 uses ASCII magic `VRP1`, big-endian wire version `2`, and this fixed,
 untagged order:

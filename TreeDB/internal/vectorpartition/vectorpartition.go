@@ -857,6 +857,34 @@ func stableIDPartition(id string, partitions int) int {
 	return int(binary.BigEndian.Uint64(sum[:8]) % uint64(partitions))
 }
 
+// BuildStableIDHashBaseline preserves an artifact's immutable source graph and
+// config while replacing only its assignment with the deterministic stable-ID
+// hash baseline. The result must satisfy the same partition cap as the graph
+// assignment or it is rejected rather than silently rebalanced.
+func BuildStableIDHashBaseline(a Artifact) (Artifact, error) {
+	if err := ValidateArtifact(a); err != nil {
+		return Artifact{}, fmt.Errorf("stable-ID hash baseline source: %w", err)
+	}
+	out := a
+	out.Backend = "stable_id_hash_baseline_v1"
+	out.BackendLicense = "gomap deterministic SHA-256 stable-ID baseline"
+	out.IDs = append([]string(nil), a.IDs...)
+	out.Graph.Neighbors = make([][]int, len(a.Graph.Neighbors))
+	for i := range a.Graph.Neighbors {
+		out.Graph.Neighbors[i] = make([]int, len(a.Graph.Neighbors[i]))
+		copy(out.Graph.Neighbors[i], a.Graph.Neighbors[i])
+	}
+	out.Assignment = make([]int, len(a.IDs))
+	for i, id := range a.IDs {
+		out.Assignment[i] = stableIDPartition(id, a.Config.Partitions)
+	}
+	out.Metrics = metrics(out)
+	if err := ValidateArtifact(out); err != nil {
+		return Artifact{}, fmt.Errorf("stable-ID hash baseline: %w", err)
+	}
+	return out, nil
+}
+
 func ValidateArtifact(a Artifact) error {
 	if a.SchemaVersion != SchemaVersion || a.Backend == "" || !utf8.ValidString(a.Backend) || len(a.Backend) > 256 || a.BackendLicense == "" || !utf8.ValidString(a.BackendLicense) || len(a.BackendLicense) > 1024 || a.Source.SourceID == "" || !utf8.ValidString(a.Source.SourceID) || len(a.Source.SourceID) > 1024 || len(a.Source.Checksum) != 64 || strings.ToLower(a.Source.Checksum) != a.Source.Checksum || a.Source.Vectors != len(a.IDs) || a.Source.Dimensions < 1 || a.Source.Dimensions > maxDimensions || a.Source.Metric != a.Config.Metric || len(a.IDs) == 0 || len(a.IDs) != len(a.Graph.Neighbors) || len(a.IDs) != len(a.Assignment) {
 		return errors.New("malformed partition artifact")

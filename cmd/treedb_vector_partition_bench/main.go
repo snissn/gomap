@@ -33,66 +33,82 @@ import (
 )
 
 const (
-	schemaVersion                        = 1
-	maxVectors                           = 1_000_000
-	maxDimensions                        = 4_096
-	maxPartitions                        = 16_384
-	maxFixtureBytes                int64 = 4 << 30
-	maxBenchmarkWorkUnits          int64 = 200_000_000
-	maxManifestBytes               int64 = 64 << 10
-	maxGitHubEventBytes            int64 = 2 << 20
-	partitionHNSWIndex                   = "embedding_graph"
-	partitionHNSWDegree                  = 16
-	maxSourceHNSWDegree                  = partitionHNSWDegree
-	fixtureGenerator                     = "treedb_vector_partition_fixture_v2"
-	fixtureArithmetic                    = "ieee754_binary64_explicit_fma_v1"
-	documentIDStorageBytes               = 16
-	hnswJSONFloatBytes                   = 24
-	hnswJSONFixedBytes                   = 64
-	hnswDecodedDimensionBytes            = 32
-	memoryMapEntryBytes                  = 64
-	vectorPartitionInsertBatchRows       = 8_192
-	memorySlackNumerator                 = 5
-	memorySlackDenominator               = 4
-	memoryBudgetScope                    = "modeled_peak_live_bytes_v1: contiguous generated float64 fixture/query matrices and row headers; exact/selected top-k candidates; representative routing; persisted router ingest JSON/IDs/slices and source-row capture; HNSW partition JSON plus decoded JSON/vector batch; HNSW query merge and cache; 25% allocation slack; excludes TreeDB engine/index internals, Go runtime/GC metadata, and artifact/CLI encoding"
-	benchmarkWorkScope                   = "benchmark_owned_vector_query_corpus_visits_v1: checksum exact truth once; mandatory truth plus enabled exhaustive/routing corpus passes for every probe/overlap row; excludes TreeDB HNSW engine-internal search work"
-	m8BenchmarkWorkScope                 = "m8_query_passes_v1: measured coordinator requests, warmup/endpoint preflight, cached exhaustive attribution, and exact/approximate/local-HNSW attribution passes; excludes the pre-existing canonical source oracle and engine-internal HNSW work"
+	schemaVersion                           = 1
+	maxVectors                              = 1_000_000
+	maxDimensions                           = 4_096
+	maxPartitions                           = 16_384
+	maxFixtureBytes                   int64 = 4 << 30
+	maxBenchmarkWorkUnits             int64 = 200_000_000
+	maxManifestBytes                  int64 = 64 << 10
+	maxGitHubEventBytes               int64 = 2 << 20
+	partitionHNSWIndex                      = "embedding_graph"
+	partitionHNSWDegree                     = 16
+	maxSourceHNSWDegree                     = partitionHNSWDegree
+	fixtureGenerator                        = "treedb_vector_partition_fixture_v2"
+	fixtureArithmetic                       = "ieee754_binary64_explicit_fma_v1"
+	documentIDStorageBytes                  = 16
+	hnswJSONFloatBytes                      = 24
+	hnswJSONFixedBytes                      = 64
+	hnswDecodedDimensionBytes               = 32
+	memoryMapEntryBytes                     = 64
+	vectorPartitionInsertBatchRows          = 8_192
+	memorySlackNumerator                    = 5
+	memorySlackDenominator                  = 4
+	memoryBudgetScope                       = "modeled_peak_live_bytes_v1: contiguous generated float64 fixture/query matrices and row headers; exact/selected top-k candidates; representative routing; persisted router ingest JSON/IDs/slices and source-row capture; HNSW partition JSON plus decoded JSON/vector batch; HNSW query merge and cache; 25% allocation slack; excludes TreeDB engine/index internals, Go runtime/GC metadata, and artifact/CLI encoding"
+	benchmarkWorkScope                      = "benchmark_owned_vector_query_corpus_visits_v1: checksum exact truth once; mandatory truth plus enabled exhaustive/routing corpus passes for every probe/overlap row; excludes TreeDB HNSW engine-internal search work"
+	m8BenchmarkWorkScope                    = "m8_query_passes_v1: measured coordinator requests, warmup/endpoint preflight, cached exhaustive attribution, and exact/approximate/local-HNSW attribution passes; excludes the pre-existing canonical source oracle and engine-internal HNSW work"
+	partitionAssignmentGraphV1              = "graph"
+	partitionAssignmentStableIDHashV1       = "stable_id_hash"
+	// The canonical M8 corpus permits up to maxVectors primary memberships and
+	// up to one full duplicate membership per source row. At 64 conservative
+	// candidate bytes per membership, 128 MiB keeps that complete comparison
+	// bounded while allowing the required 1M + 20% overlap preflight to run.
+	m8ProductionCandidateBudgetBytesV1 uint64 = 128 << 20
 )
 
 type config struct {
-	dataset          string
-	partitions       int
-	probes           []int
-	overlaps         []float64
-	topK             int
-	recallTarget     float64
-	seed             int64
-	format           string
-	out              string
-	stages           map[string]bool
-	command          []string
-	maxVectors       int
-	maxBytes         int64
-	baseSHA          string
-	headSHA          string
-	hnsw             *treeDBPartitionHNSW
-	memory           benchmarkMemoryPlan
-	stage            string
-	m3PersistDir     string
-	m8ExistingDB     string
-	partition        vectorpartition.Config
-	router           *treeDBRepresentativeRouter
-	coordinator      *m6CoordinatorHarnessV1
-	routerConfig     vectorpartition.RouterConfigV1
-	routerCandidates int
-	sourceHNSWDegree int
-	mode             string
-	raftGroups       int
-	raftNodes        int
-	concurrency      []int
-	warmup           int
-	profiles         string
-	efSearch         []int
+	dataset             string
+	partitions          int
+	probes              []int
+	overlaps            []float64
+	topK                int
+	recallTarget        float64
+	seed                int64
+	format              string
+	out                 string
+	stages              map[string]bool
+	command             []string
+	maxVectors          int
+	maxBytes            int64
+	baseSHA             string
+	headSHA             string
+	hnsw                *treeDBPartitionHNSW
+	memory              benchmarkMemoryPlan
+	stage               string
+	m3PersistDir        string
+	m8ExistingDB        string
+	m8VariantDBs        []string
+	partitionAssignment string
+	partition           vectorpartition.Config
+	partitionHNSWM      int
+	router              *treeDBRepresentativeRouter
+	coordinator         *m6CoordinatorHarnessV1
+	routerConfig        vectorpartition.RouterConfigV1
+	routerCandidates    int
+	sourceHNSWDegree    int
+	mode                string
+	raftGroups          int
+	raftNodes           int
+	concurrency         []int
+	warmup              int
+	profiles            string
+	m8MatrixOut         string
+	m8MatrixProfiles    string
+	efSearch            []int
+	m8MaxRSSBytes       uint64
+	m8MaxAssetBytes     uint64
+	m8CoordinatorLimits nativewire.VectorPartitionCoordinatorLimitsV1
+	m8ShardLimits       nativewire.VectorPartitionShardSearchLimitsV1
 }
 
 type partitionRun struct {
@@ -469,9 +485,9 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		if _, err := validateM8BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits, cfg.maxBytes); err != nil {
 			return err
 		}
-		vectors, queries := deterministicFixture(fixture)
-		if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
-			return errors.New("fixture checksum does not match generated vector/query/truth stream")
+		vectors, queries, err := m8ProductionFixtureDataV1(cfg, fixture)
+		if err != nil {
+			return err
 		}
 		return runM8ProductionMultiGroupV1(cfg, fixture, vectors, queries, stdout)
 	}
@@ -582,14 +598,35 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 	return nil
 }
 
+func m8ProductionFixtureDataV1(cfg config, fixture fixtureManifest) ([][]float64, [][]float64, error) {
+	// The matrix parent owns descriptor validation and subprocess orchestration
+	// only. Each fresh child reconstructs and verifies the corpus, so retaining a
+	// second copy in the blocked parent would make machine peak memory exceed the
+	// independently reported child RSS.
+	if len(cfg.m8VariantDBs) > 0 {
+		return nil, nil, nil
+	}
+	vectors, queries := deterministicFixture(fixture)
+	if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
+		return nil, nil, errors.New("fixture checksum does not match generated vector/query/truth stream")
+	}
+	return vectors, queries, nil
+}
+
 func parseConfig(args []string) (config, error) {
 	cfg := config{
 		format: "json", topK: 10, recallTarget: .9, seed: 1, stage: "simulation",
-		warmup:    1,
-		partition: vectorpartition.DefaultConfig(), routerConfig: vectorpartition.DefaultRouterConfigV1(),
+		warmup:              1,
+		partitionAssignment: partitionAssignmentGraphV1,
+		partition:           vectorpartition.DefaultConfig(), routerConfig: vectorpartition.DefaultRouterConfigV1(),
 		routerCandidates: 1024, sourceHNSWDegree: partitionHNSWDegree,
+		m8MaxRSSBytes: uint64(maxFixtureBytes), m8MaxAssetBytes: uint64(maxFixtureBytes),
+		m8CoordinatorLimits: nativewire.DefaultVectorPartitionCoordinatorLimitsV1(),
+		m8ShardLimits:       nativewire.DefaultVectorPartitionShardSearchLimitsV1(),
 	}
-	var probes, overlap, concurrency, efSearch string
+	cfg.m8CoordinatorLimits.MaxCandidateBytes = m8ProductionCandidateBudgetBytesV1
+	cfg.m8ShardLimits.MaxCandidateBytes = m8ProductionCandidateBudgetBytesV1
+	var probes, overlap, concurrency, efSearch, m8VariantDBs string
 	var stages string
 	fs := flag.NewFlagSet("treedb_vector_partition_bench", flag.ContinueOnError)
 	fs.StringVar(&cfg.dataset, "dataset", "", "fixture directory")
@@ -609,12 +646,19 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.warmup, "warmup", cfg.warmup, "M8 untimed topology warmup requests before the measured sweep")
 	fs.StringVar(&efSearch, "ef-search", "128", "comma-separated M8 local HNSW ef_search values")
 	fs.StringVar(&cfg.profiles, "profiles", "", "M8 profile artifact directory")
+	fs.StringVar(&cfg.m8MatrixOut, "m8-matrix-out", "", "internal matrix-wide output root for child cleanliness checks")
+	fs.StringVar(&cfg.m8MatrixProfiles, "m8-matrix-profiles", "", "internal matrix-wide profile root for child cleanliness checks")
 	fs.StringVar(&cfg.m3PersistDir, "m3-persist-db", "", "retain the single overlap,partition_index row as a persistent TreeDB directory for downstream service benchmarks")
 	fs.StringVar(&cfg.m8ExistingDB, "m8-existing-db", "", "read-only existing TreeDB M3 asset directory for production_multi_group; never rebuilt or deleted")
+	fs.StringVar(&m8VariantDBs, "m8-variant-dbs", "", "comma-separated retained M3 directories for the strict three-variant production matrix")
+	fs.Uint64Var(&cfg.m8MaxRSSBytes, "m8-max-rss-bytes", cfg.m8MaxRSSBytes, "hard process peak-RSS acceptance bound for production_multi_group")
+	fs.Uint64Var(&cfg.m8MaxAssetBytes, "m8-max-persistent-asset-bytes", cfg.m8MaxAssetBytes, "hard persistent derived-asset byte bound for production_multi_group")
+	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
 	fs.IntVar(&cfg.partition.Repetitions, "partition-repetitions", cfg.partition.Repetitions, "dense-ball graph sketch repetitions")
 	fs.IntVar(&cfg.partition.Pivots, "partition-pivots", cfg.partition.Pivots, "dense-ball pivots per recursive level")
 	fs.IntVar(&cfg.partition.MaxLeafBucket, "partition-max-leaf-bucket", cfg.partition.MaxLeafBucket, "maximum dense-ball leaf bucket")
 	fs.IntVar(&cfg.partition.Degree, "partition-degree", cfg.partition.Degree, "maximum canonical graph degree")
+	fs.IntVar(&cfg.partitionHNSWM, "partition-hnsw-m", 0, "persistent partition-local HNSW M for M3; zero inherits -partition-degree")
 	fs.Float64Var(&cfg.partition.Imbalance, "imbalance", cfg.partition.Imbalance, "partition imbalance epsilon")
 	fs.IntVar(&cfg.routerConfig.BranchFactor, "router-branch-factor", cfg.routerConfig.BranchFactor, "router hierarchical k-means branch factor")
 	fs.IntVar(&cfg.routerConfig.LeafSize, "router-leaf-size", cfg.routerConfig.LeafSize, "router leaf stop size")
@@ -629,6 +673,9 @@ func parseConfig(args []string) (config, error) {
 	fs.Int64Var(&cfg.maxBytes, "max-fixture-bytes", maxFixtureBytes, "maximum modeled peak bytes for benchmark-owned fixture and working material")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
+	}
+	if fs.NArg() != 0 {
+		return config{}, fmt.Errorf("unexpected positional arguments: %q", fs.Args())
 	}
 	if cfg.mode != "" {
 		if cfg.mode != m8ProductionMultiGroupModeV1 || cfg.stage != "simulation" {
@@ -658,6 +705,17 @@ func parseConfig(args []string) (config, error) {
 	if cfg.efSearch, err = parseInts(efSearch); err != nil {
 		return config{}, fmt.Errorf("ef-search: %w", err)
 	}
+	if m8VariantDBs != "" {
+		seen := map[string]bool{}
+		for _, item := range strings.Split(m8VariantDBs, ",") {
+			item = strings.TrimSpace(item)
+			if item == "" || seen[item] {
+				return config{}, errors.New("-m8-variant-dbs requires distinct nonempty paths")
+			}
+			seen[item] = true
+			cfg.m8VariantDBs = append(cfg.m8VariantDBs, item)
+		}
+	}
 	if cfg.dataset == "" || cfg.out == "" || cfg.partitions < 1 || cfg.partitions > maxPartitions || cfg.topK < 1 || cfg.maxVectors < 1 || cfg.maxVectors > maxVectors || cfg.maxBytes < 8 || cfg.maxBytes > maxFixtureBytes || cfg.format != "json" && cfg.format != "text" || cfg.stage != "simulation" && cfg.stage != "partition" && cfg.stage != "overlap,partition_index" && cfg.stage != "router" && cfg.stage != m6CoordinatorStageV1 && cfg.stage != m8ProductionMultiGroupModeV1 || cfg.routerCandidates < 1 {
 		return config{}, errors.New("dataset, out, positive bounded partitions/top-k, and json|text format are required")
 	}
@@ -678,6 +736,9 @@ func parseConfig(args []string) (config, error) {
 		}
 	}
 	if cfg.stage == m8ProductionMultiGroupModeV1 {
+		if cfg.m8MaxRSSBytes == 0 || cfg.m8MaxAssetBytes == 0 {
+			return config{}, errors.New("production_multi_group requires positive RSS and persistent-asset byte bounds")
+		}
 		if cfg.raftGroups < 2 || cfg.raftGroups > 64 || cfg.raftGroups > cfg.partitions || cfg.raftNodes != 3 || cfg.partitions < 4 {
 			return config{}, errors.New("production_multi_group requires 2..64 groups, exactly 3 nodes/group, at least 4 partitions, and groups <= partitions")
 		}
@@ -710,6 +771,29 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.m8ExistingDB != "" && cfg.stage != m8ProductionMultiGroupModeV1 {
 		return config{}, errors.New("-m8-existing-db requires production_multi_group")
+	}
+	if len(cfg.m8VariantDBs) > 0 && (cfg.stage != m8ProductionMultiGroupModeV1 || cfg.m8ExistingDB != "" || len(cfg.m8VariantDBs) != 3) {
+		return config{}, errors.New("-m8-variant-dbs requires production_multi_group, exactly three directories, and no -m8-existing-db")
+	}
+	if cfg.partitionAssignment != partitionAssignmentGraphV1 && cfg.partitionAssignment != partitionAssignmentStableIDHashV1 {
+		return config{}, errors.New("-partition-assignment must be graph or stable_id_hash")
+	}
+	if cfg.partitionAssignment != partitionAssignmentGraphV1 && cfg.stage != "partition" && cfg.stage != "overlap,partition_index" {
+		return config{}, errors.New("-partition-assignment applies only to partition and overlap,partition_index stages")
+	}
+	if cfg.partitionAssignment == partitionAssignmentStableIDHashV1 && cfg.stage == "overlap,partition_index" && (len(cfg.overlaps) != 1 || cfg.overlaps[0] != 0) {
+		return config{}, errors.New("stable_id_hash M3 materialization requires exactly zero overlap")
+	}
+	if cfg.stage == "overlap,partition_index" {
+		effectivePartitionHNSWM := cfg.partitionHNSWM
+		if effectivePartitionHNSWM == 0 {
+			effectivePartitionHNSWM = cfg.partition.Degree
+		}
+		if effectivePartitionHNSWM < 2 || effectivePartitionHNSWM > partitionHNSWDegree {
+			return config{}, fmt.Errorf("effective partition HNSW M must be in [2,%d]", partitionHNSWDegree)
+		}
+	} else if cfg.partitionHNSWM != 0 {
+		return config{}, errors.New("-partition-hnsw-m applies only to M3")
 	}
 	if cfg.stage == "router" && stages == "all" {
 		stages = "exact_representative_routing,approximate_representative_routing"
@@ -766,6 +850,16 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][
 	if err != nil {
 		return fmt.Errorf("build validated vector partition artifact: %w", err)
 	}
+	graphArtifactDigest, err := vectorpartition.Digest(artifact)
+	if err != nil {
+		return err
+	}
+	if cfg.partitionAssignment == partitionAssignmentStableIDHashV1 {
+		artifact, err = vectorpartition.BuildStableIDHashBaseline(artifact)
+		if err != nil {
+			return fmt.Errorf("build stable-ID hash partition baseline: %w", err)
+		}
+	}
 	bytes, err := vectorpartition.CanonicalJSON(artifact)
 	if err != nil {
 		return err
@@ -809,7 +903,7 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][
 		return err
 	}
 	if cfg.stage == "overlap,partition_index" {
-		return runM3PartitionIndexStage(cfg, fixture, artifact, digest, suffix, vectors, queries, stdout)
+		return runM3PartitionIndexStage(cfg, fixture, artifact, digest, graphArtifactDigest, suffix, vectors, queries, stdout)
 	}
 	if cfg.format == "json" {
 		_, err = fmt.Fprintln(stdout, string(raw))
@@ -1091,35 +1185,62 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if capUnits < 1 || capBytes < 1 || cfg.partitions < 1 || cfg.topK < 1 || m.Vectors < 1 || m.Queries < 1 || m.Dimensions < 1 || len(cfg.overlaps) == 0 || len(cfg.probes) == 0 || len(cfg.efSearch) == 0 || len(cfg.concurrency) == 0 {
 		return m8BenchmarkWorkPlan{}, errors.New("cannot plan M8 benchmark work without positive caps, a valid fixture/top-k, and complete sweeps")
 	}
+	variantRuns := int64(1)
 	var supportedOverlaps int64
 	for _, overlap := range cfg.overlaps {
 		if overlap == 0 {
 			supportedOverlaps++
 		}
 	}
-	measured, err := memoryMul(supportedOverlaps, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(m.Queries))
+	if cfg.m8ExistingDB != "" {
+		// A retained descriptor supplies the materialized overlap policy. The
+		// single-variant runner validates that the one configured overlap equals
+		// that descriptor, including for a nonzero overlap child.
+		supportedOverlaps = 1
+	}
+	if len(cfg.m8VariantDBs) > 0 {
+		// Each immutable matrix variant executes the complete single-overlap
+		// child path in its own process. Work is cumulative across children,
+		// while all retained result and attribution matrices below model the
+		// peak of one sequential child.
+		variantRuns = int64(len(cfg.m8VariantDBs))
+		supportedOverlaps = 1
+	}
+	measuredPerRun, err := memoryMul(supportedOverlaps, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(m.Queries))
+	if err != nil {
+		return m8BenchmarkWorkPlan{}, err
+	}
+	measured, err := memoryMul(measuredPerRun, variantRuns)
 	if err != nil {
 		return m8BenchmarkWorkPlan{}, err
 	}
 	// Production M8 also performs one exhaustive endpoint preflight and the
 	// configured untimed warmup requests outside the measured cell sweep.
-	warmupAndPreflight, err := memoryAdd(int64(cfg.warmup), 1)
+	warmupAndPreflightPerRun, err := memoryAdd(int64(cfg.warmup), 1)
+	if err != nil {
+		return m8BenchmarkWorkPlan{}, err
+	}
+	warmupAndPreflight, err := memoryMul(warmupAndPreflightPerRun, variantRuns)
 	if err != nil {
 		return m8BenchmarkWorkPlan{}, err
 	}
 	// Attribution runs once after measured overlap/concurrency rows. For every
 	// query/probe/ef cell it executes exact, approximate, and local-HNSW passes;
 	// the exhaustive partition-union pass is cached once per query.
-	var attribution int64
+	var attributionPerRun int64
 	if supportedOverlaps > 0 {
 		attributionStages, stageErr := memoryMul(3, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(m.Queries))
 		if stageErr != nil {
 			return m8BenchmarkWorkPlan{}, stageErr
 		}
-		attribution, err = memoryAdd(int64(m.Queries), attributionStages)
+		attributionPerRun, err = memoryAdd(int64(m.Queries), attributionStages)
 		if err != nil {
 			return m8BenchmarkWorkPlan{}, err
 		}
+	}
+	attribution, err := memoryMul(attributionPerRun, variantRuns)
+	if err != nil {
+		return m8BenchmarkWorkPlan{}, err
 	}
 	requests, err := memoryAdd(measured, warmupAndPreflight, attribution)
 	if err != nil {

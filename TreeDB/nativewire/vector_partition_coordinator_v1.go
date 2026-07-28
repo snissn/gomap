@@ -49,6 +49,12 @@ type VectorPartitionCoordinatorErrorV1 struct {
 	Code    VectorPartitionCoordinatorErrorCodeV1
 	GroupID raftcluster.GroupID
 	Err     error
+
+	// Counters and Timing retain resource evidence for failed requests without
+	// exposing neighbors or routing results. Search still returns a zero
+	// response on every error.
+	Counters VectorPartitionCoordinatorCountersV1
+	Timing   VectorPartitionCoordinatorTimingV1
 }
 
 func (e *VectorPartitionCoordinatorErrorV1) Error() string {
@@ -158,6 +164,7 @@ type VectorPartitionCoordinatorOptionsV1 struct {
 	ReplicatedLifecycle        VectorPartitionReplicatedLifecycleAuthorityV1
 	RequireReplicatedLifecycle bool
 	Limits                     VectorPartitionCoordinatorLimitsV1
+	ShardLimits                VectorPartitionShardSearchLimitsV1
 }
 
 // VectorPartitionCoordinatorTopologyV1 is the public, transport-neutral M1
@@ -217,6 +224,10 @@ type VectorPartitionCoordinatorCountersV1 struct {
 	Cancellations, Failures            uint64
 	QueryBytes, RequestBytes           uint64
 	ResponseBytes, CandidateBytes      uint64
+	MaxShardPartitions                 uint64
+	MaxShardRequestBytes               uint64
+	MaxShardResponseBytes              uint64
+	MaxShardCandidateBytes             uint64
 	Candidates, Edges, MergeEntries    uint64
 	Duplicates, ScoreDisagreements     uint64
 }
@@ -302,6 +313,7 @@ type VectorPartitionCoordinatorV1 struct {
 	dispatcher          VectorPartitionShardSearchDispatcherV1
 	replicatedLifecycle VectorPartitionReplicatedLifecycleAuthorityV1
 	limits              VectorPartitionCoordinatorLimitsV1
+	shardLimits         VectorPartitionShardSearchLimitsV1
 	groups              map[raftcluster.GroupID]raftplacement.ResolvedGroupV1
 	stats               vectorPartitionCoordinatorStatsAccumulatorV1
 	sessionMu           sync.Mutex
@@ -362,6 +374,17 @@ func NewVectorPartitionCoordinatorV1(opts VectorPartitionCoordinatorOptionsV1) (
 	if err != nil {
 		return nil, err
 	}
+	shardLimits, err := normalizeVectorPartitionShardSearchLimitsV1(opts.ShardLimits)
+	if err != nil {
+		return nil, err
+	}
+	limits.MaxQueryBytes = min(limits.MaxQueryBytes, shardLimits.MaxQueryBytes)
+	limits.MaxQueryBytes = min(limits.MaxQueryBytes, shardLimits.MaxDimensions*4)
+	limits.MaxTopK = min(limits.MaxTopK, shardLimits.MaxTopK)
+	limits.MaxEfSearch = min(limits.MaxEfSearch, shardLimits.MaxEfSearch)
+	limits.MaxPartitionsPerRequest = min(limits.MaxPartitionsPerRequest, shardLimits.MaxPartitions)
+	limits.MaxIdentityBytes = min(limits.MaxIdentityBytes, shardLimits.MaxIdentityBytes)
+	limits.MaxStableIDBytes = min(limits.MaxStableIDBytes, shardLimits.MaxStableIDBytes)
 	if opts.RouterSource == nil || opts.Dispatcher == nil {
 		return nil, fmt.Errorf("%w: incomplete coordinator dependencies", ErrVectorPartitionCoordinatorInvalidRequest)
 	}
@@ -381,7 +404,7 @@ func NewVectorPartitionCoordinatorV1(opts VectorPartitionCoordinatorOptionsV1) (
 	coordinator := &VectorPartitionCoordinatorV1{
 		placement: placement, routerSource: opts.RouterSource,
 		dispatcher: opts.Dispatcher, replicatedLifecycle: opts.ReplicatedLifecycle,
-		limits: limits, groups: groups,
+		limits: limits, shardLimits: shardLimits, groups: groups,
 		sessions:     make(map[vectorPartitionCoordinatorRouterKeyV1]*vectorPartitionCoordinatorRouterSessionV1),
 		loads:        make(map[vectorPartitionCoordinatorRouterKeyV1]*vectorPartitionCoordinatorRouterLoadV1),
 		sessionStats: make(map[vectorPartitionCoordinatorRouterKeyV1]*vectorPartitionCoordinatorRouterSessionStatsV1),
@@ -727,19 +750,18 @@ func normalizeVectorPartitionCoordinatorLimitsV1(limits VectorPartitionCoordinat
 	if limits.MaxWallClock == 0 {
 		limits.MaxWallClock = defaults.MaxWallClock
 	}
-	shard := DefaultVectorPartitionShardSearchLimitsV1()
 	if limits.MaxSelectedPartitions < 1 || limits.MaxGroups < 1 || limits.MaxRequests < 1 ||
 		limits.MaxConcurrentRequests < 1 || limits.MaxConcurrentRequests > limits.MaxRequests ||
 		limits.MaxRetries < 0 || limits.MaxRedirects < 0 || limits.MaxRouterCandidates < 1 ||
-		limits.MaxQueryBytes < 4 || limits.MaxQueryBytes > shard.MaxQueryBytes ||
-		limits.MaxTopK < 1 || limits.MaxTopK > shard.MaxTopK ||
-		limits.MaxEfSearch < limits.MaxTopK || limits.MaxEfSearch > shard.MaxEfSearch ||
-		limits.MaxPartitionsPerRequest < 1 || limits.MaxPartitionsPerRequest > shard.MaxPartitions ||
-		limits.MaxIdentityBytes < 1 || limits.MaxIdentityBytes > shard.MaxIdentityBytes ||
-		limits.MaxStableIDBytes < 1 || limits.MaxStableIDBytes > shard.MaxStableIDBytes ||
+		limits.MaxQueryBytes < 4 ||
+		limits.MaxTopK < 1 ||
+		limits.MaxEfSearch < limits.MaxTopK ||
+		limits.MaxPartitionsPerRequest < 1 ||
+		limits.MaxIdentityBytes < 1 ||
+		limits.MaxStableIDBytes < 1 ||
 		limits.MaxMergeEntries < 1 || limits.MaxRequestBytes == 0 ||
-		limits.MaxCandidateBytes == 0 || limits.MaxCandidateBytes > shard.MaxCandidateBytes ||
-		limits.MaxResponseBytes == 0 || limits.MaxResponseBytes > shard.MaxResponseBytes ||
+		limits.MaxCandidateBytes == 0 ||
+		limits.MaxResponseBytes == 0 ||
 		limits.MaxWallClock < time.Millisecond {
 		return VectorPartitionCoordinatorLimitsV1{}, fmt.Errorf("%w: invalid coordinator limits", ErrVectorPartitionCoordinatorInvalidRequest)
 	}
@@ -757,6 +779,12 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 	defer func() {
 		total := elapsedNanosV1(started)
 		if resultErr != nil {
+			response.Timing.TotalNanos = total
+			var coordinatorErr *VectorPartitionCoordinatorErrorV1
+			if errors.As(resultErr, &coordinatorErr) {
+				coordinatorErr.Counters = response.Counters
+				coordinatorErr.Timing = response.Timing
+			}
 			response = VectorPartitionCoordinatorResponseV1{}
 			c.stats.fail(classifyVectorPartitionCoordinatorErrorV1(resultErr), total)
 			return
@@ -837,18 +865,16 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 		return response, c.wrapError(err, "")
 	}
 
-	taskResults, err := c.dispatch(requestCtx, tasks)
-	if err != nil {
-		return response, err
-	}
-	if err := requestCtx.Err(); err != nil {
-		return response, c.wrapError(err, "")
-	}
 	counters := VectorPartitionCoordinatorCountersV1{
 		SelectedPartitions: uint64(len(selectedPartitions)), SelectedGroups: uint64(len(selectedGroups)),
 		Requests: uint64(len(tasks)), QueryBytes: uint64(len(request.Query)) * 4,
 		RequestBytes: budget.requestBytes,
 	}
+	for _, task := range tasks {
+		counters.MaxShardPartitions = max(counters.MaxShardPartitions, uint64(len(task.partitionIDs)))
+	}
+	response.Counters = counters
+	taskResults, dispatchErr := c.dispatch(requestCtx, tasks)
 	for _, result := range taskResults {
 		if !accumulateVectorPartitionCoordinatorResponseCountersV1(&counters, result.response) {
 			return response, c.wrapError(ErrVectorPartitionCoordinatorBudgetExceeded, "")
@@ -859,6 +885,14 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 		counters.RPCs += result.rpcs
 		counters.Retries += result.retries
 		counters.Redirects += result.redirects
+		counters.MaxShardRequestBytes = max(counters.MaxShardRequestBytes, result.maxRequestBytes)
+	}
+	response.Counters = counters
+	if dispatchErr != nil {
+		return response, dispatchErr
+	}
+	if err := requestCtx.Err(); err != nil {
+		return response, c.wrapError(err, "")
 	}
 	if counters.ResponseBytes > request.ResponseBytesLimit ||
 		counters.CandidateBytes > request.CandidateBytesLimit {
@@ -938,6 +972,7 @@ func accumulateVectorPartitionCoordinatorResponseCountersV1(
 	if !responseBytesOK || !candidatesOK || !edgesOK || !candidateBytesOK {
 		return false
 	}
+	shardCandidateBytes := candidateBytes
 	candidateBytes, candidateBytesOK = addUint64V1(counters.CandidateBytes, candidateBytes)
 	if !candidateBytesOK {
 		return false
@@ -946,6 +981,8 @@ func accumulateVectorPartitionCoordinatorResponseCountersV1(
 	counters.Candidates = candidates
 	counters.Edges = edges
 	counters.CandidateBytes = candidateBytes
+	counters.MaxShardResponseBytes = max(counters.MaxShardResponseBytes, response.ResponseBytes)
+	counters.MaxShardCandidateBytes = max(counters.MaxShardCandidateBytes, shardCandidateBytes)
 	return true
 }
 
@@ -1177,7 +1214,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 		return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 	}
 
-	shardLimits := DefaultVectorPartitionShardSearchLimitsV1()
+	shardLimits := c.shardLimits
 	tasks := make([]vectorPartitionCoordinatorTaskV1, 0, taskCount)
 	var totalRequestBytes, totalResponseReservation uint64
 	var ok bool
@@ -1281,9 +1318,10 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 			if !ok {
 				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 			}
-			if candidateShare > shardLimits.MaxCandidateBytes {
+			if baseline > shardLimits.MaxCandidateBytes {
 				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 			}
+			candidateShare = min(candidateShare, shardLimits.MaxCandidateBytes)
 			shardRequest.CandidateBytesLimit = candidateShare
 			tasks = append(tasks, vectorPartitionCoordinatorTaskV1{
 				index: taskIndex, group: group, partitionIDs: ids, candidateRows: rows, request: shardRequest,
@@ -1450,6 +1488,7 @@ func vectorPartitionCoordinatorShardResponseReservationV1(partitions, topK, maxS
 type vectorPartitionCoordinatorTaskResultV1 struct {
 	response                           VectorPartitionShardSearchResponseV1
 	rpcs, retries, redirects           uint64
+	maxRequestBytes                    uint64
 	queueNanos, rpcNanos, networkNanos uint64
 }
 
@@ -1482,6 +1521,7 @@ func (c *VectorPartitionCoordinatorV1) dispatch(ctx context.Context, tasks []vec
 					continue
 				}
 				result, err := c.dispatchTask(child, tasks[taskIndex])
+				results[taskIndex] = result
 				if err != nil {
 					errorOnce.Do(func() {
 						firstErr = err
@@ -1489,20 +1529,19 @@ func (c *VectorPartitionCoordinatorV1) dispatch(ctx context.Context, tasks []vec
 					})
 					continue
 				}
-				results[taskIndex] = result
 			}
 		}()
 	}
 	wg.Wait()
 	if firstErr != nil {
-		return nil, firstErr
+		return results, firstErr
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, c.wrapError(err, "")
+		return results, c.wrapError(err, "")
 	}
 	for i := range results {
 		if results[i].response.Version == 0 {
-			return nil, c.wrapError(ErrVectorPartitionCoordinatorUnavailable, tasks[i].group.ID)
+			return results, c.wrapError(ErrVectorPartitionCoordinatorUnavailable, tasks[i].group.ID)
 		}
 	}
 	return results, nil
@@ -1515,6 +1554,14 @@ func (c *VectorPartitionCoordinatorV1) dispatchTask(ctx context.Context, task ve
 		if err := ctx.Err(); err != nil {
 			return result, c.wrapError(err, task.group.ID)
 		}
+		requestBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(request)
+		if err != nil {
+			return result, c.wrapError(err, task.group.ID)
+		}
+		if requestBytes > request.RequestBytesLimit {
+			return result, c.wrapError(ErrVectorPartitionCoordinatorBudgetExceeded, task.group.ID)
+		}
+		result.maxRequestBytes = max(result.maxRequestBytes, requestBytes)
 		started := time.Now()
 		response, err := c.dispatcher.DispatchVectorPartitionShardSearchV1(ctx, request)
 		elapsed := elapsedNanosV1(started)

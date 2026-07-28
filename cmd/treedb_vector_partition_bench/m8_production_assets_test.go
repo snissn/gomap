@@ -72,7 +72,8 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
 			ApproximateRouterCandidateBudget: 1, ApproximateRouterPartitionCoverageComplete: true, ResidualLossOwners: []string{"none_observed"},
 		}}},
-		Failure: m8ProductionFailureEvidenceV1{Passed: true, Error: "unavailable group rejected"}, GateLedger: m8ProductionGateLedgerV1{FailureHonesty: "pass"},
+		UntimedBoundary: m8ProductionResourceBoundaryV1{SelectedPartitions: 4, EfSearch: 10, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 2, RPCs: 1, RequestBytes: 1, ShardPartitions: 2, ShardRequestBytes: 1}},
+		Failure:         m8ProductionFailureEvidenceV1{Passed: true, Error: "unavailable group rejected", ResourceBoundary: m8ProductionFaultResourceBoundaryV1{SelectedPartitions: 4, EfSearch: 4096, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 2, RPCs: 1, RequestBytes: 1, ShardPartitions: 2, ShardRequestBytes: 1}}}, GateLedger: m8ProductionGateLedgerV1{FailureHonesty: "pass"},
 		Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1}, TimedBoundary: "measured", Limitations: []string{"test"},
 	}
 	if err := validateM8ProductionReportV1(report); err != nil {
@@ -296,15 +297,21 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	for i, v := range vectors[17] {
 		query[i] = float32(v)
 	}
-	if err := m8WarmProductionTopologyV1(ctx, topology.Coordinator(), assets, [][]float64{vectors[17]}, config{topK: 10, efSearch: []int{4096}, warmup: 0}); err != nil {
+	untimedBoundary, err := m8WarmProductionTopologyV1(ctx, topology.Coordinator(), assets, [][]float64{vectors[17]}, config{topK: 10, efSearch: []int{4096}, warmup: 0})
+	if err != nil {
 		t.Fatalf("warmup=0 endpoint preflight: %v", err)
+	}
+	if untimedBoundary.SelectedPartitions != len(assets.manifest.Placements) || untimedBoundary.EfSearch != 4096 ||
+		untimedBoundary.WallClockNanos == 0 || untimedBoundary.Maxima.Requests == 0 || untimedBoundary.Maxima.RPCs == 0 ||
+		untimedBoundary.Maxima.RequestBytes == 0 || untimedBoundary.Maxima.ShardPartitions == 0 || untimedBoundary.Maxima.ShardRequestBytes == 0 {
+		t.Fatalf("untimed preflight resource boundary=%+v", untimedBoundary)
 	}
 	for _, group := range topology.Evidence().Groups {
 		if group.EndpointHits != 1 {
 			t.Fatalf("preflight did not exercise group endpoint: %+v", group)
 		}
 	}
-	lowProbe, err := topology.Coordinator().Search(ctx, m8ProductionRequestV1(assets, query, "m8-low-probe", 1, 4096, 10))
+	lowProbe, err := topology.Coordinator().Search(ctx, m8ProductionRequestV1(assets, query, "m8-low-probe", 1, 4096, 10, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -375,7 +382,7 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	row, coordinatorResults, err := m8RunProductionCellV1(ctx, topology.Coordinator(), assets, attributionQueries, truth, 4, 4096, 4, 10)
+	row, coordinatorResults, err := m8RunProductionCellV1(ctx, topology.Coordinator(), assets, attributionQueries, truth, 4, 4096, 4, 10, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,12 +405,18 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 			t.Fatalf("group evidence=%+v", group)
 		}
 	}
-	if err := topology.StopGroup("m8-data-group-a"); err != nil {
-		t.Fatal(err)
+	failure, postFaultTopology := m8RunUnavailableGroupV1(ctx, topology, assets, vectors[17], 10, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes)
+	if !failure.Passed || failure.StoppedGroup == "" || failure.Error == "" || failure.ReturnedNeighbors != 0 || failure.ReturnedGroups != 0 {
+		t.Fatalf("stopped group failure evidence=%+v", failure)
 	}
-	failure, failureErr := topology.Coordinator().Search(ctx, nativewire.VectorPartitionCoordinatorRequestV1{Version: nativewire.VectorPartitionCoordinatorVersionV1, RequestID: "m8-e2e-failure", CancellationID: "m8-e2e-failure-cancel", Database: "default", Catalog: "default", Collection: assets.manifest.Collection, IndexName: assets.manifest.IndexName, IndexDefinitionDigest: assets.manifest.IndexDefinitionDigest, Query: query, Metric: nativewire.VectorPartitionShardSearchMetricCosineV1, RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: 10_000, PartitionProbes: 4, Consistency: nativewire.VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: nativewire.VectorPartitionShardSearchStatsBasicV1, TopK: 10, EfSearch: 4096, DeadlineUnixNano: time.Now().Add(2 * time.Second).UnixNano(), RequestBytesLimit: 4 << 20, CandidateBytesLimit: 64 << 20, ResponseBytesLimit: 64 << 20, MergeEntriesLimit: 40})
-	if failureErr == nil || len(failure.Neighbors) != 0 || len(failure.ProbedGroups) != 0 {
-		t.Fatalf("stopped group failure response=%+v err=%v", failure, failureErr)
+	if failure.ResourceBoundary.SelectedPartitions != len(assets.manifest.Placements) || failure.ResourceBoundary.EfSearch != 4096 ||
+		failure.ResourceBoundary.WallClockNanos == 0 || failure.ResourceBoundary.Maxima.Requests == 0 ||
+		failure.ResourceBoundary.Maxima.RPCs == 0 || failure.ResourceBoundary.Maxima.RequestBytes == 0 ||
+		failure.ResourceBoundary.Maxima.ShardPartitions == 0 || failure.ResourceBoundary.Maxima.ShardRequestBytes == 0 {
+		t.Fatalf("stopped group resource boundary=%+v", failure.ResourceBoundary)
+	}
+	if len(postFaultTopology.Groups) != len(evidence.Groups) || postFaultTopology.MaxConcurrentShardRequests < evidence.MaxConcurrentShardRequests {
+		t.Fatalf("post-fault topology=%+v pre-fault topology=%+v", postFaultTopology, evidence)
 	}
 }
 
