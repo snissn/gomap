@@ -13,7 +13,7 @@ func TestCatalogMetaLifecycleHarnessActivatesAndConvergesV1(t *testing.T) {
 	catalog := validCatalog()
 	catalog.Features = DefaultFeatureSet()
 	catalog.Features.Required = append(catalog.Features.Required, raftcluster.RequiredFeature{Name: raftcluster.FeatureVectorPartitionLifecycle, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureVectorPartitionLifecycle]})
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), realCatalogMetaIntegrationTestTimeoutV1)
 	defer cancel()
 	harness, err := OpenCatalogMetaLifecycleHarnessV1(ctx, CatalogMetaLifecycleHarnessOptionsV1{Catalog: catalog, Prefix: "m8-meta-test"})
 	if err != nil {
