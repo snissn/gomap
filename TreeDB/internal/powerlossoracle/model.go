@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	pathpkg "path"
@@ -90,6 +91,11 @@ type Model struct {
 	inodes    map[uint64]*inode
 	volatile  map[string]uint64
 	stable    map[string]uint64
+	// Sync callbacks that have been serialized after Capture. A delayed
+	// same-inode create callback may invalidate Capture's provisional stable
+	// baseline, but it must not roll back these later completed promotions.
+	syncedFiles map[uint64]struct{}
+	syncedDirs  map[string]struct{}
 	// overlayDetached retains the inode behind a process-visible name that a
 	// post-operation scan no longer sees. Concurrent producers can complete a
 	// rename before their synchronous observation callbacks acquire the test's
@@ -153,9 +159,12 @@ func capture(root string, excludeLockFiles bool, excluded []string) (*Model, err
 			return nil
 		}
 		if entry.IsDir() {
-			identity, err := captureStableIdentity(path)
+			info, _, identity, err := capturePathSnapshot(path)
 			if err != nil {
 				return err
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("powerlossoracle: captured directory %q rebound to %s", rel, info.Mode())
 			}
 			m.volatileDirs[rel] = identity
 			m.stableDirs[rel] = identity
@@ -164,11 +173,7 @@ func capture(root string, excludeLockFiles bool, excluded []string) (*Model, err
 		if !entry.Type().IsRegular() {
 			return fmt.Errorf("powerlossoracle: unsupported entry %q (%s)", rel, entry.Type())
 		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		identity, err := captureStableIdentity(path)
+		data, identity, err := captureRegularPathSnapshot(path)
 		if err != nil {
 			return err
 		}
@@ -190,6 +195,8 @@ func newModel() *Model {
 		inodes:          make(map[uint64]*inode),
 		volatile:        make(map[string]uint64),
 		stable:          make(map[string]uint64),
+		syncedFiles:     make(map[uint64]struct{}),
+		syncedDirs:      make(map[string]struct{}),
 		overlayDetached: make(map[string]uint64),
 		volatileDirs:    map[string]rootpublication.StableIdentity{".": rootIdentity},
 		stableDirs:      map[string]rootpublication.StableIdentity{".": rootIdentity},
@@ -228,6 +235,12 @@ func (m *Model) Clone() *Model {
 	}
 	for path, id := range m.stable {
 		out.stable[path] = id
+	}
+	for id := range m.syncedFiles {
+		out.syncedFiles[id] = struct{}{}
+	}
+	for dir := range m.syncedDirs {
+		out.syncedDirs[dir] = struct{}{}
 	}
 	for path, id := range m.overlayDetached {
 		out.overlayDetached[path] = id
@@ -288,9 +301,12 @@ func (m *Model) Overlay(root string) error {
 			return nil
 		}
 		if entry.IsDir() {
-			identity, err := captureStableIdentity(path)
+			info, _, identity, err := capturePathSnapshot(path)
 			if err != nil {
 				return err
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("powerlossoracle: overlaid directory %q rebound to %s", rel, info.Mode())
 			}
 			seenDirs[rel] = identity
 			return nil
@@ -298,11 +314,7 @@ func (m *Model) Overlay(root string) error {
 		if !entry.Type().IsRegular() {
 			return fmt.Errorf("powerlossoracle: unsupported entry %q (%s)", rel, entry.Type())
 		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		identity, err := captureStableIdentity(path)
+		data, identity, err := captureRegularPathSnapshot(path)
 		if err != nil {
 			return err
 		}
@@ -453,13 +465,9 @@ func (m *Model) observeNamespace(root string, event durabilitycut.Event) error {
 		if err != nil {
 			return err
 		}
-		info, err := os.Stat(event.NewPath)
+		info, data, identity, err := capturePathSnapshot(event.NewPath)
 		if err != nil {
-			return fmt.Errorf("powerlossoracle: stat created path %q: %w", event.NewPath, err)
-		}
-		identity, err := captureStableIdentity(event.NewPath)
-		if err != nil {
-			return err
+			return fmt.Errorf("powerlossoracle: capture created path %q: %w", event.NewPath, err)
 		}
 		if info.IsDir() {
 			m.ensureVolatileParents(path)
@@ -467,24 +475,30 @@ func (m *Model) observeNamespace(root string, event durabilitycut.Event) error {
 			m.trace = append(m.trace, "create-dir:"+path)
 			return nil
 		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("powerlossoracle: created path %q is unsupported type %s", event.NewPath, info.Mode())
-		}
-		data, err := os.ReadFile(event.NewPath)
-		if err != nil {
-			return fmt.Errorf("powerlossoracle: read created file %q: %w", event.NewPath, err)
-		}
 		if id, exists := m.volatile[path]; exists {
 			node := m.inodes[id]
-			if _, stable := m.stable[path]; stable {
+			if stableID, stable := m.stable[path]; stable {
 				// Capture can race a background CreateTemp between the real
 				// namespace mutation and its synchronous observer callback. If
-				// both observations name the same physical file, reconcile the
-				// delayed callback with the captured baseline. A different inode
-				// remains a genuine duplicate-create error.
-				if validStableIdentity(node.stableIdentity) && validStableIdentity(identity) &&
+				// the volatile and stable names still reference the same model
+				// inode and both observations name the same physical file,
+				// reconcile the delayed callback with the captured baseline.
+				// The captured stable baseline is provisional. Demote only the
+				// portions that no later serialized sync has promoted: a file
+				// sync preserves bytes and a parent-directory sync preserves the
+				// name independently.
+				// A replacement overlay or different physical inode remains a
+				// genuine duplicate-create error.
+				if id == stableID &&
+					validStableIdentity(node.stableIdentity) && validStableIdentity(identity) &&
 					rootpublication.SamePhysicalIdentity(node.stableIdentity, identity) {
 					node.volatile = clone(data)
+					if _, synced := m.syncedFiles[id]; !synced {
+						node.stable = nil
+					}
+					if _, synced := m.syncedDirs[cleanInternal(pathpkg.Dir(path))]; !synced {
+						delete(m.stable, path)
+					}
 					m.trace = append(m.trace, "create-captured:"+path)
 					return nil
 				}
@@ -721,6 +735,7 @@ func (m *Model) SyncFile(path string) error {
 		return fmt.Errorf("powerlossoracle: sync missing file %q", path)
 	}
 	m.inodes[id].stable = clone(m.inodes[id].volatile)
+	m.syncedFiles[id] = struct{}{}
 	m.trace = append(m.trace, "sync-file:"+path)
 	return nil
 }
@@ -735,6 +750,7 @@ func (m *Model) SyncDir(dir string) error {
 	if _, ok := m.volatileDirs[dir]; !ok {
 		return fmt.Errorf("powerlossoracle: sync missing directory %q", dir)
 	}
+	m.syncedDirs[dir] = struct{}{}
 	for path := range m.stable {
 		if cleanInternal(pathpkg.Dir(path)) == dir {
 			delete(m.stable, path)
@@ -1033,12 +1049,55 @@ func syntheticDirectoryIdentity(id uint64) rootpublication.StableIdentity {
 	return rootpublication.StableIdentity{Platform: "powerlossoracle", ObjectID: objectID}
 }
 
-func captureStableIdentity(path string) (rootpublication.StableIdentity, error) {
+func capturePathSnapshot(path string) (fs.FileInfo, []byte, rootpublication.StableIdentity, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return rootpublication.StableIdentity{}, err
+		return nil, nil, rootpublication.StableIdentity{}, err
 	}
 	defer file.Close()
+	return captureOpenFileSnapshot(file)
+}
+
+func captureRegularPathSnapshot(path string) ([]byte, rootpublication.StableIdentity, error) {
+	info, data, identity, err := capturePathSnapshot(path)
+	if err != nil {
+		return nil, rootpublication.StableIdentity{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, rootpublication.StableIdentity{}, fmt.Errorf("powerlossoracle: regular file %q rebound to %s", path, info.Mode())
+	}
+	return data, identity, nil
+}
+
+func captureOpenFileSnapshot(file *os.File) (fs.FileInfo, []byte, rootpublication.StableIdentity, error) {
+	if file == nil {
+		return nil, nil, rootpublication.StableIdentity{}, os.ErrInvalid
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return nil, nil, rootpublication.StableIdentity{}, err
+	}
+	identity, err := captureStableIdentityFromFile(file)
+	if err != nil {
+		return nil, nil, rootpublication.StableIdentity{}, err
+	}
+	if info.IsDir() {
+		return info, nil, identity, nil
+	}
+	if !info.Mode().IsRegular() {
+		return nil, nil, rootpublication.StableIdentity{}, fmt.Errorf("powerlossoracle: path %q is unsupported type %s", file.Name(), info.Mode())
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return nil, nil, rootpublication.StableIdentity{}, err
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return nil, nil, rootpublication.StableIdentity{}, err
+	}
+	return info, data, identity, nil
+}
+
+func captureStableIdentityFromFile(file *os.File) (rootpublication.StableIdentity, error) {
 	identity, err := rootpublication.StableIdentityFromFile(file)
 	if errors.Is(err, rootpublication.ErrStableIdentityUnsupported) {
 		return rootpublication.StableIdentity{}, nil
