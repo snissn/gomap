@@ -13,7 +13,7 @@ enablement off with measured follow-up owners
 ## #3982 final local gate disposition
 
 Measured production-code head:
-`0db1c861d5b28a8525b44273581e2b4947f6a624` (the documentation commit is
+`d1a4073cc9d26184d73aedc5af3744867f12a112` (the documentation commit is
 subsequent). Base: `29d79894a84736757cc3fcdaf932f49ece060288`.
 
 The strict schema-3 matrix materialized and executed all three required
@@ -51,13 +51,13 @@ epsilon at measurement time; #4001 still owns choosing and materializing a
 feasible `0.20` overlap policy.
 
 Artifact:
-`/mnt/fast4tb/tmp/gomap-3982-0db-matrix-root-argpYX/run/matrix/vector_partition_m8_matrix_0db1c861d5b2_009873bda212.json`
+`/mnt/fast4tb/tmp/gomap-3982-d1a-matrix-root-ZYJCKE/run/matrix/vector_partition_m8_matrix_d1a4073cc9d2_c844a15c2ed0.json`
 
 Artifact SHA-256:
-`e82812fd7f6dddc28988a23b62e55e5e25df20e6f8d5e2dd33bc5bc631a38ff0`
+`b7b4025e01edcdd1c546548db10a8cd1c5f29c6ab9669465953098ad541def11`
 
 Measured benchmark binary SHA-256:
-`61e1ceb09dc3568da4bab18684b73e560fcbb162807dfa1e4d7306396065a276`
+`e852f9d142ba2e87e861c18618b3e7c026e6e62f8bd9f113a251646388e18275`
 (built from the clean detached measured head with `go build -buildvcs=false`).
 
 Fixture checksum:
@@ -82,8 +82,8 @@ an enablement claim and not a review or performance waiver.
 | Resource bounds | **PASS** | fresh-process 4 GiB RSS and 512 MiB asset ceilings plus actual coordinator/shard request maxima pass |
 | Existing behavior | **PENDING** | latest-head required normal/race/hosted suites own final PR readiness |
 
-Corpus-exclusive fresh-process peak RSS was `1,919,918,080`, `1,915,912,192`,
-and `1,938,292,736` bytes for graph/disjoint, graph/overlap, and stable hash,
+Corpus-exclusive fresh-process peak RSS was `1,812,930,560`, `1,765,478,400`,
+and `1,786,302,464` bytes for graph/disjoint, graph/overlap, and stable hash,
 respectively, below the configured 4 GiB ceiling. This supersedes the earlier
 sequential-process high-water attribution; the blocked matrix parent does not
 materialize or retain a second fixture corpus. Aggregate shard concurrency was
@@ -92,8 +92,8 @@ at `64`. The topology maximum includes a separate stopped-group fault request,
 so the resource ledger covers both measured cells and the endpoint-loss fault.
 Successful exhaustive preflight and configured warmup requests have a separate
 untimed resource boundary and participate in the same maximum calculation.
-Their per-variant wall times were `21,894,566,618`, `21,694,865,709`, and
-`21,271,597,132` ns; each selected all `16` partitions at `ef_search=4096`
+Their per-variant wall times were `22,050,264,236`, `22,392,761,157`, and
+`21,662,827,795` ns; each selected all `16` partitions at `ef_search=4096`
 and used `4` requests / `4` RPCs. The largest untimed coordinator request was
 `2,352` bytes, with `4,205,376` candidate bytes, `7,232` response bytes, and a
 maximum `588`-byte shard request across `4` partitions.
@@ -103,7 +103,7 @@ attempted `4` requests and `4` RPCs, and returned zero candidates and response
 bytes. Its
 maximum coordinator request was `2,344` bytes, its maximum shard request was
 `586` bytes across at most `4` partitions, and per-variant fault wall times
-were `18,813,335`, `18,968,027`, and `19,000,937` ns.
+were `9,057,778`, `9,041,399`, and `18,414,341` ns.
 Query-wide selected partitions reached `16`; actual generated shard
 requests contained at most `4` partitions against both 32-partition request
 ceilings. Retry and redirect ceilings are the per-shard-task limit multiplied by
@@ -111,10 +111,10 @@ the maximum observed four-task fanout (`4` each; `0` observed). Persistent
 assets were `282,881,928`, `285,168,176`, and `282,385,488` bytes for graph
 disjoint, graph overlap, and stable hash respectively. Each variant retained
 CPU, allocation baseline/final, heap, block, mutex, and trace profiles under
-`/mnt/fast4tb/tmp/gomap-3982-0db-matrix-root-argpYX/run/profiles/`.
+`/mnt/fast4tb/tmp/gomap-3982-d1a-matrix-root-ZYJCKE/run/profiles/`.
 The bounded aggregate candidate ceiling was `134,217,728` bytes, with a maximum
 observed request value of `4,207,808` bytes. The slowest actual completed
-request was the successful graph/disjoint preflight at `21,894,566,618` ns
+request was the successful graph/overlap preflight at `22,392,761,157` ns
 against the `30,000,000,000` ns hard limit.
 
 At all 16 partitions, exact representative routing recall is `1.0`, while
@@ -133,15 +133,14 @@ Measured successors preserve these distinct owners:
 Reproduction command (the retained DB descriptors are immutable inputs):
 
 ```sh
-GOMAXPROCS=16 GOMEMLIMIT=6GiB \
-  ./bin/treedb_vector_partition_bench \
+./bin/treedb_vector_partition_bench \
   -mode production_multi_group \
   -dataset /mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture \
-  -out /mnt/fast4tb/tmp/gomap-3982-0db-matrix-root-argpYX/run/matrix \
+  -out /mnt/fast4tb/tmp/gomap-3982-d1a-matrix-root-ZYJCKE/run/matrix \
   -partitions 16 -raft-groups 4 -raft-nodes-per-group 3 \
   -probes 1,2,4,8,16 -top-k 10 -concurrency 1,16 -warmup 1 \
   -ef-search 64,4096 -router-candidates 1024 \
-  -profiles /mnt/fast4tb/tmp/gomap-3982-0db-matrix-root-argpYX/run/profiles \
+  -profiles /mnt/fast4tb/tmp/gomap-3982-d1a-matrix-root-ZYJCKE/run/profiles \
   -m8-max-rss-bytes 4294967296 \
   -m8-max-persistent-asset-bytes 536870912 \
   -m8-variant-dbs /mnt/fast4tb/tmp/treedb_3982_identity3_1m_5060_vXlTip/db_graph_disjoint,/mnt/fast4tb/tmp/treedb_3982_identity3_1m_5060_vXlTip/db_graph_overlap,/mnt/fast4tb/tmp/treedb_3982_identity3_1m_5060_vXlTip/db_stable \
