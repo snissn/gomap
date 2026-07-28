@@ -435,8 +435,6 @@ The JSON artifact is clean exact-head evidence. Profile paths are host-local
 retained records, not portable repository assets; their hashes make later
 identity checks deterministic.
 
-## Comparison boundary and disposition
-
 ## #3999 partition-local HNSW reachability refresh
 
 Commit `357e40c62` rebuilds only persistent partition-local packs with a
@@ -460,6 +458,8 @@ The report remains `experimental_gate_failures`: probe reduction is #3998,
 overlap storage is #4001, while exhaustive-correctness, end-to-end QPS, and
 tail-latency gates are still unsatisfied M8-system evidence rather than
 partition-local reachability/recall failures.
+
+## Comparison boundary and disposition
 
 This report compares only TreeDB's own exhaustive oracle and graph-routed
 production-shaped loopback path on the stated host and retained fixtures. It

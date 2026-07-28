@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -952,27 +953,80 @@ func TestVectorPartitionLocalGraphAdjacencyKeepsLayer0EntryReachable(t *testing.
 		}
 		rows[i] = columnVectorGraphAssetRow{ID: []byte(fmt.Sprintf("ordered-%05d", i)), Vector: vector, InvNorm: 1}
 	}
+	native := cloneColumnVectorGraphAssetRows3999(rows)
+	repeated := cloneColumnVectorGraphAssetRows3999(rows)
+	if err := buildColumnVectorGraphAdjacency(native, def); err != nil {
+		t.Fatalf("buildColumnVectorGraphAdjacency: %v", err)
+	}
+	if got, err := vectorPartitionLayer0Reachability3999(native); err != nil {
+		t.Fatalf("native layer-0 reachability: %v", err)
+	} else if got >= len(native) {
+		t.Fatalf("native layer-0 entry reaches %d/%d rows; fixture no longer reproduces the base failure", got, len(native))
+	}
 	if err := buildVectorPartitionLocalGraphAdjacencyV1(rows, def); err != nil {
 		t.Fatalf("buildVectorPartitionLocalGraphAdjacencyV1: %v", err)
 	}
-	seen := make([]bool, len(rows))
-	seen[0] = true
-	queue := []int{0}
-	for head := 0; head < len(queue); head++ {
-		adjacency := rows[queue[head]].Adjacency
-		if len(adjacency) > 0 && adjacency[0] == columnVectorGraphLayeredAdjacencyMagic {
-			adjacency = adjacency[3 : 3+int(adjacency[2])]
+	if err := buildVectorPartitionLocalGraphAdjacencyV1(repeated, def); err != nil {
+		t.Fatalf("repeat buildVectorPartitionLocalGraphAdjacencyV1: %v", err)
+	}
+	if got, err := vectorPartitionLayer0Reachability3999(rows); err != nil {
+		t.Fatalf("repaired layer-0 reachability: %v", err)
+	} else if got != len(rows) {
+		t.Fatalf("repaired layer-0 entry reaches %d/%d rows", got, len(rows))
+	}
+	for row := range rows {
+		layer0, repairedSuffix, err := vectorPartitionLayer0AdjacencySplitV1(rows[row].Adjacency)
+		if err != nil || len(layer0) > 2*def.M {
+			t.Fatalf("repaired row=%d layer-0 degree=%d err=%v", row, len(layer0), err)
 		}
-		for _, neighbor := range adjacency {
-			if int(neighbor) < len(rows) && !seen[neighbor] {
+		_, nativeSuffix, nativeErr := vectorPartitionLayer0AdjacencySplitV1(native[row].Adjacency)
+		if nativeErr != nil || !slices.Equal(repairedSuffix, nativeSuffix) {
+			t.Fatalf("repaired row=%d higher-layer encoding changed repaired=%v native=%v err=%v", row, repairedSuffix, nativeSuffix, nativeErr)
+		}
+		for _, neighbor := range layer0 {
+			if int(neighbor) >= len(rows) || neighbor == uint32(row) {
+				t.Fatalf("repaired row=%d invalid neighbor=%d", row, neighbor)
+			}
+		}
+		if !slices.Equal(rows[row].Adjacency, repeated[row].Adjacency) {
+			t.Fatalf("repaired adjacency is nondeterministic at row=%d", row)
+		}
+	}
+}
+
+func cloneColumnVectorGraphAssetRows3999(in []columnVectorGraphAssetRow) []columnVectorGraphAssetRow {
+	out := make([]columnVectorGraphAssetRow, len(in))
+	for i := range in {
+		out[i] = in[i]
+		out[i].ID = append([]byte(nil), in[i].ID...)
+		out[i].Vector = append([]float32(nil), in[i].Vector...)
+	}
+	return out
+}
+
+func vectorPartitionLayer0Reachability3999(rows []columnVectorGraphAssetRow) (int, error) {
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	seen := make([]bool, len(rows))
+	queue := []int{0}
+	seen[0] = true
+	for head := 0; head < len(queue); head++ {
+		layer0, _, err := vectorPartitionLayer0AdjacencySplitV1(rows[queue[head]].Adjacency)
+		if err != nil {
+			return 0, err
+		}
+		for _, neighbor := range layer0 {
+			if int(neighbor) >= len(rows) {
+				return 0, fmt.Errorf("neighbor=%d out of range rows=%d", neighbor, len(rows))
+			}
+			if !seen[neighbor] {
 				seen[neighbor] = true
 				queue = append(queue, int(neighbor))
 			}
 		}
 	}
-	if len(queue) != len(rows) {
-		t.Fatalf("layer-0 entry reaches %d/%d rows", len(queue), len(rows))
-	}
+	return len(queue), nil
 }
 
 func TestColumnGraphRebuildVectorIndexReachabilityReclaimsSupersededGraphSegmentV2A(t *testing.T) {
