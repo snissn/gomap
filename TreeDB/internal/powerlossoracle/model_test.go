@@ -92,6 +92,16 @@ func TestCaptureExcludingKeepsNonExcludedNestedLock(t *testing.T) {
 	}
 }
 
+func TestCaptureRegularPathSnapshotRejectsDirectoryRebind(t *testing.T) {
+	_, _, err := captureRegularPathSnapshot(t.TempDir())
+	if err == nil {
+		t.Fatal("regular-file snapshot accepted a directory rebound")
+	}
+	if !strings.Contains(err.Error(), "rebound to") {
+		t.Fatalf("regular-file snapshot err=%v, want rebound diagnostic", err)
+	}
+}
+
 func TestCapturedModelObserveContinuesToOmitNestedLocks(t *testing.T) {
 	root := t.TempDir()
 	dictDir := filepath.Join(root, "dictdb")
@@ -644,6 +654,206 @@ func TestObservedRenameRecoversSourceDetachedByEarlierOverlay(t *testing.T) {
 	}
 	if got, err := os.ReadFile(filepath.Join(after, "health.json")); err != nil || string(got) != "new" {
 		t.Fatalf("post-directory-sync target=%q err=%v want new", got, err)
+	}
+}
+
+func TestObservedCreateAcceptsSameFileCapturedBeforeCallback(t *testing.T) {
+	root := t.TempDir()
+	tmp := filepath.Join(root, "health.json.tmp.1")
+	if err := os.WriteFile(tmp, []byte("captured"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	model, err := Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A background producer can complete CreateTemp while Capture is walking
+	// the directory, then deliver that create's synchronous observer callback
+	// after Capture returns. The callback describes the same physical file and
+	// must reconcile with the captured baseline instead of reporting EEXIST.
+	if err := model.Observe(root, durabilitycut.Event{
+		Namespace: durabilitycut.NamespaceCreate,
+		NewPath:   tmp,
+	}); err != nil {
+		t.Fatalf("observe delayed create for captured file: %v", err)
+	}
+	beforeSync := t.TempDir()
+	if err := model.MaterializeStable(beforeSync); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(beforeSync, "health.json.tmp.1")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("captured create became durable before directory sync: %v", err)
+	}
+	if err := model.SyncDir("."); err != nil {
+		t.Fatal(err)
+	}
+	afterSync := t.TempDir()
+	if err := model.MaterializeStable(afterSync); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(afterSync, "health.json.tmp.1")); err != nil || len(got) != 0 {
+		t.Fatalf("captured create after directory-only sync=%q err=%v want empty unsynced bytes", got, err)
+	}
+	if err := model.SyncFile("health.json.tmp.1"); err != nil {
+		t.Fatal(err)
+	}
+	afterFileSync := t.TempDir()
+	if err := model.MaterializeStable(afterFileSync); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(afterFileSync, "health.json.tmp.1")); err != nil || string(got) != "captured" {
+		t.Fatalf("captured create after file sync=%q err=%v want captured", got, err)
+	}
+}
+
+func TestObservedCreatePreservesSyncsSerializedBeforeDelayedCallback(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		beforeCallback  func(t *testing.T, model *Model)
+		afterCallback   func(t *testing.T, model *Model)
+		wantStableName  bool
+		wantStableBytes string
+	}{
+		{
+			name: "file-sync",
+			beforeCallback: func(t *testing.T, model *Model) {
+				t.Helper()
+				if err := model.SyncFile("health.json.tmp.1"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			afterCallback: func(t *testing.T, model *Model) {
+				t.Helper()
+				if err := model.SyncDir("."); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantStableName:  true,
+			wantStableBytes: "captured",
+		},
+		{
+			name: "parent-directory-sync",
+			beforeCallback: func(t *testing.T, model *Model) {
+				t.Helper()
+				if err := model.SyncDir("."); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantStableName:  true,
+			wantStableBytes: "",
+		},
+		{
+			name: "file-and-parent-directory-sync",
+			beforeCallback: func(t *testing.T, model *Model) {
+				t.Helper()
+				if err := model.SyncFile("health.json.tmp.1"); err != nil {
+					t.Fatal(err)
+				}
+				if err := model.SyncDir("."); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantStableName:  true,
+			wantStableBytes: "captured",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			tmp := filepath.Join(root, "health.json.tmp.1")
+			if err := os.WriteFile(tmp, []byte("captured"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			model, err := Capture(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.beforeCallback(t, model)
+			if err := model.Observe(root, durabilitycut.Event{
+				Namespace: durabilitycut.NamespaceCreate,
+				NewPath:   tmp,
+			}); err != nil {
+				t.Fatalf("observe delayed create: %v", err)
+			}
+			if tc.afterCallback != nil {
+				tc.afterCallback(t, model)
+			}
+
+			stable := t.TempDir()
+			if err := model.MaterializeStable(stable); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(stable, "health.json.tmp.1")
+			if !tc.wantStableName {
+				if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("stable file after delayed create stat err=%v want not exist", err)
+				}
+				return
+			}
+			if got, err := os.ReadFile(path); err != nil || string(got) != tc.wantStableBytes {
+				t.Fatalf("stable file after delayed create=%q err=%v want=%q", got, err, tc.wantStableBytes)
+			}
+		})
+	}
+}
+
+func TestObservedCreateRejectsDifferentFileAtCapturedPath(t *testing.T) {
+	root := t.TempDir()
+	tmp := filepath.Join(root, "health.json.tmp.1")
+	if err := os.WriteFile(tmp, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	model, err := Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Keep the captured inode alive under another name so recreating tmp cannot
+	// reuse its physical identity.
+	if err := os.Rename(tmp, filepath.Join(root, "captured-inode")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tmp, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Observe(root, durabilitycut.Event{
+		Namespace: durabilitycut.NamespaceCreate,
+		NewPath:   tmp,
+	}); err == nil || !strings.Contains(err.Error(), "file already exists") {
+		t.Fatalf("observe different file at captured path err=%v want duplicate-create error", err)
+	}
+}
+
+func TestObservedCreateRejectsReplacementOverlaidAtCapturedPath(t *testing.T) {
+	root := t.TempDir()
+	tmp := filepath.Join(root, "health.json.tmp.1")
+	if err := os.WriteFile(tmp, []byte("captured"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	model, err := Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate another serialized callback overlaying the filesystem after the
+	// captured path was rebound but before the delayed create callback arrives.
+	// The volatile name now points at the replacement while the stable name
+	// still points at the captured inode.
+	if err := os.Rename(tmp, filepath.Join(root, "captured-inode")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tmp, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Overlay(root); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := model.Observe(root, durabilitycut.Event{
+		Namespace: durabilitycut.NamespaceCreate,
+		NewPath:   tmp,
+	}); err == nil || !strings.Contains(err.Error(), "file already exists") {
+		t.Fatalf("observe delayed create after replacement overlay err=%v want duplicate-create error", err)
 	}
 }
 
