@@ -37,9 +37,9 @@ type catalogMetaLeaderDwellV1 struct {
 	lastObservation time.Time
 }
 
-func (d *catalogMetaLeaderDwellV1) Observe(now time.Time, leader raftcluster.NodeID, dwell, maxGap time.Duration) bool {
+func (d *catalogMetaLeaderDwellV1) Observe(now time.Time, complete bool, leader raftcluster.NodeID, dwell, maxGap time.Duration) bool {
 	gapTooLarge := !d.lastObservation.IsZero() && now.Sub(d.lastObservation) > maxGap
-	if leader == "" || leader != d.leader || gapTooLarge {
+	if !complete || leader == "" || leader != d.leader || gapTooLarge {
 		d.leader = leader
 		d.since = now
 		d.lastObservation = now
@@ -153,10 +153,12 @@ func (h *CatalogMetaLifecycleHarnessV1) waitLeader(ctx context.Context) error {
 	defer tick.Stop()
 	for {
 		var leader raftcluster.NodeID
+		complete := true
 		for id, p := range h.providers {
 			status, err := p.ClusterAdmissionStatus(ctx)
 			if err != nil {
-				continue
+				complete = false
+				break
 			}
 			if status.Leader {
 				if leader != "" {
@@ -166,7 +168,7 @@ func (h *CatalogMetaLifecycleHarnessV1) waitLeader(ctx context.Context) error {
 				leader = id
 			}
 		}
-		if dwell.Observe(time.Now(), leader, catalogMetaLifecycleHarnessLeaderDwellV1, catalogMetaLeaderObservationMaxGapV1) {
+		if dwell.Observe(time.Now(), complete, leader, catalogMetaLifecycleHarnessLeaderDwellV1, catalogMetaLeaderObservationMaxGapV1) {
 			h.leader = leader
 			return nil
 		}

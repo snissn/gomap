@@ -253,9 +253,14 @@ func (c *realCatalogMetaClusterV1) waitLeader(t *testing.T, ctx context.Context)
 	defer tick.Stop()
 	for {
 		var leader raftcluster.NodeID
+		complete := true
 		for id, provider := range c.providers {
 			status, err := provider.ClusterAdmissionStatus(ctx)
-			if err == nil && status.Leader {
+			if err != nil {
+				complete = false
+				break
+			}
+			if status.Leader {
 				if leader != "" {
 					leader = ""
 					break
@@ -263,7 +268,7 @@ func (c *realCatalogMetaClusterV1) waitLeader(t *testing.T, ctx context.Context)
 				leader = id
 			}
 		}
-		if dwell.Observe(time.Now(), leader, realCatalogMetaIntegrationLeaderDwellV1, catalogMetaLeaderObservationMaxGapV1) {
+		if dwell.Observe(time.Now(), complete, leader, realCatalogMetaIntegrationLeaderDwellV1, catalogMetaLeaderObservationMaxGapV1) {
 			return leader
 		}
 		select {

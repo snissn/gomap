@@ -78,24 +78,51 @@ func TestCatalogMetaLeaderDwellRestartsAfterObservationGapV1(t *testing.T) {
 	const maxGap = time.Second
 	start := time.Unix(0, 0)
 	var dwell catalogMetaLeaderDwellV1
-	if dwell.Observe(start, "node-a", lease, maxGap) {
+	if dwell.Observe(start, true, "node-a", lease, maxGap) {
 		t.Fatal("initial observation unexpectedly satisfies dwell")
 	}
-	if dwell.Observe(start.Add(500*time.Millisecond), "node-a", lease, maxGap) {
+	if dwell.Observe(start.Add(500*time.Millisecond), true, "node-a", lease, maxGap) {
 		t.Fatal("pre-lease observation unexpectedly satisfies dwell")
 	}
 	// This same node could have stepped down and been re-elected while the
 	// polling goroutine was stalled, so its former wall-clock dwell is invalid.
 	afterGap := start.Add(2 * time.Second)
-	if dwell.Observe(afterGap, "node-a", lease, maxGap) {
+	if dwell.Observe(afterGap, true, "node-a", lease, maxGap) {
 		t.Fatal("same node after an observation gap unexpectedly satisfies dwell")
 	}
 	for elapsed := 500 * time.Millisecond; elapsed < lease; elapsed += 500 * time.Millisecond {
-		if dwell.Observe(afterGap.Add(elapsed), "node-a", lease, maxGap) {
+		if dwell.Observe(afterGap.Add(elapsed), true, "node-a", lease, maxGap) {
 			t.Fatal("same node inherited dwell from before the observation gap")
 		}
 	}
-	if !dwell.Observe(afterGap.Add(lease), "node-a", lease, maxGap) {
+	if !dwell.Observe(afterGap.Add(lease), true, "node-a", lease, maxGap) {
 		t.Fatal("continuous post-gap observation did not satisfy a full dwell")
+	}
+}
+
+func TestCatalogMetaLeaderDwellRestartsAfterProbeFailureV1(t *testing.T) {
+	const lease = 5 * time.Second
+	const maxGap = time.Second
+	start := time.Unix(0, 0)
+	var dwell catalogMetaLeaderDwellV1
+	if dwell.Observe(start, true, "node-a", lease, maxGap) {
+		t.Fatal("initial observation unexpectedly satisfies dwell")
+	}
+	if dwell.Observe(start.Add(500*time.Millisecond), true, "node-a", lease, maxGap) {
+		t.Fatal("pre-lease observation unexpectedly satisfies dwell")
+	}
+	// A probe error makes the cluster sample incomplete: the apparently same
+	// leader cannot carry any earlier dwell through that unknown interval.
+	failureAt := start.Add(time.Second)
+	if dwell.Observe(failureAt, false, "node-a", lease, maxGap) {
+		t.Fatal("failed probe unexpectedly satisfies dwell")
+	}
+	for elapsed := 500 * time.Millisecond; elapsed < lease; elapsed += 500 * time.Millisecond {
+		if dwell.Observe(failureAt.Add(elapsed), true, "node-a", lease, maxGap) {
+			t.Fatal("same node inherited dwell from before the probe failure")
+		}
+	}
+	if !dwell.Observe(failureAt.Add(lease), true, "node-a", lease, maxGap) {
+		t.Fatal("continuous post-failure observation did not satisfy a full dwell")
 	}
 }
