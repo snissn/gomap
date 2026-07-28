@@ -248,8 +248,7 @@ func (c *realCatalogMetaClusterV1) connectAll() {
 
 func (c *realCatalogMetaClusterV1) waitLeader(t *testing.T, ctx context.Context) raftcluster.NodeID {
 	t.Helper()
-	var stableLeader raftcluster.NodeID
-	var stableSince time.Time
+	var dwell catalogMetaLeaderDwellV1
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -264,15 +263,7 @@ func (c *realCatalogMetaClusterV1) waitLeader(t *testing.T, ctx context.Context)
 				leader = id
 			}
 		}
-		now := time.Now()
-		switch {
-		case leader == "":
-			stableLeader = ""
-			stableSince = time.Time{}
-		case leader != stableLeader:
-			stableLeader = leader
-			stableSince = now
-		case now.Sub(stableSince) >= realCatalogMetaIntegrationLeaderDwellV1:
+		if dwell.Observe(time.Now(), leader, realCatalogMetaIntegrationLeaderDwellV1, catalogMetaLeaderObservationMaxGapV1) {
 			return leader
 		}
 		select {
@@ -397,6 +388,9 @@ func TestRealCatalogMetaRaftConfigAddsSchedulingHeadroom(t *testing.T) {
 	}
 	if realCatalogMetaIntegrationLeaderDwellV1 < config.LeaderLeaseTimeout {
 		t.Fatalf("leader dwell=%s want at least leader lease=%s", realCatalogMetaIntegrationLeaderDwellV1, config.LeaderLeaseTimeout)
+	}
+	if catalogMetaLeaderObservationMaxGapV1 >= config.ElectionTimeout || catalogMetaLeaderObservationMaxGapV1 >= config.LeaderLeaseTimeout {
+		t.Fatalf("leader observation max gap=%s want below election=%s and lease=%s", catalogMetaLeaderObservationMaxGapV1, config.ElectionTimeout, config.LeaderLeaseTimeout)
 	}
 }
 

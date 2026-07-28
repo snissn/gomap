@@ -68,4 +68,34 @@ func TestCatalogMetaLifecycleHarnessRaftConfigProvidesSchedulingHeadroomV1(t *te
 	if catalogMetaLifecycleHarnessLeaderDwellV1 < config.LeaderLeaseTimeout {
 		t.Fatalf("leader dwell=%s want at least leader lease=%s", catalogMetaLifecycleHarnessLeaderDwellV1, config.LeaderLeaseTimeout)
 	}
+	if catalogMetaLeaderObservationMaxGapV1 >= config.ElectionTimeout || catalogMetaLeaderObservationMaxGapV1 >= config.LeaderLeaseTimeout {
+		t.Fatalf("leader observation max gap=%s want below election=%s and lease=%s", catalogMetaLeaderObservationMaxGapV1, config.ElectionTimeout, config.LeaderLeaseTimeout)
+	}
+}
+
+func TestCatalogMetaLeaderDwellRestartsAfterObservationGapV1(t *testing.T) {
+	const lease = 5 * time.Second
+	const maxGap = time.Second
+	start := time.Unix(0, 0)
+	var dwell catalogMetaLeaderDwellV1
+	if dwell.Observe(start, "node-a", lease, maxGap) {
+		t.Fatal("initial observation unexpectedly satisfies dwell")
+	}
+	if dwell.Observe(start.Add(500*time.Millisecond), "node-a", lease, maxGap) {
+		t.Fatal("pre-lease observation unexpectedly satisfies dwell")
+	}
+	// This same node could have stepped down and been re-elected while the
+	// polling goroutine was stalled, so its former wall-clock dwell is invalid.
+	afterGap := start.Add(2 * time.Second)
+	if dwell.Observe(afterGap, "node-a", lease, maxGap) {
+		t.Fatal("same node after an observation gap unexpectedly satisfies dwell")
+	}
+	for elapsed := 500 * time.Millisecond; elapsed < lease; elapsed += 500 * time.Millisecond {
+		if dwell.Observe(afterGap.Add(elapsed), "node-a", lease, maxGap) {
+			t.Fatal("same node inherited dwell from before the observation gap")
+		}
+	}
+	if !dwell.Observe(afterGap.Add(lease), "node-a", lease, maxGap) {
+		t.Fatal("continuous post-gap observation did not satisfy a full dwell")
+	}
 }
