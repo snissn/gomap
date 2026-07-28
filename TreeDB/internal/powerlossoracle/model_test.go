@@ -692,8 +692,18 @@ func TestObservedCreateAcceptsSameFileCapturedBeforeCallback(t *testing.T) {
 	if err := model.MaterializeStable(afterSync); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := os.ReadFile(filepath.Join(afterSync, "health.json.tmp.1")); err != nil || string(got) != "captured" {
-		t.Fatalf("captured create after directory sync=%q err=%v want captured", got, err)
+	if got, err := os.ReadFile(filepath.Join(afterSync, "health.json.tmp.1")); err != nil || len(got) != 0 {
+		t.Fatalf("captured create after directory-only sync=%q err=%v want empty unsynced bytes", got, err)
+	}
+	if err := model.SyncFile("health.json.tmp.1"); err != nil {
+		t.Fatal(err)
+	}
+	afterFileSync := t.TempDir()
+	if err := model.MaterializeStable(afterFileSync); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(afterFileSync, "health.json.tmp.1")); err != nil || string(got) != "captured" {
+		t.Fatalf("captured create after file sync=%q err=%v want captured", got, err)
 	}
 }
 
