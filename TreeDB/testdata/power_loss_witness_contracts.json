@@ -499,17 +499,17 @@
       "failure_classes": [
         "dependency_closed_reopen"
       ],
-      "expected_durable_horizon": "behaviorally queried collection and side-store resources select commit 13 and applied command LSN 19",
+      "expected_durable_horizon": "behaviorally queried collection and side-store resources select commit 14 and applied command LSN 19",
       "expected_outcome": "accepted:stable-root",
       "expected_typed_error": "none",
       "state": {
-        "root_meta_generation": "selected_commit_seq=13 fallback_commit_seq=12",
+        "root_meta_generation": "selected_commit_seq=14 fallback_commit_seq=13",
         "freelist_generation": "generation=persisted",
         "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=9",
         "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
         "wal_lineage": "profile=command_wal_durable applied_lsn=19",
-        "durable_lsn": "durable_wal_lsn=0 durable_root_commit_seq=13",
-        "cleanup_maintenance_pins": "selected_commit_seq=13 fallback_commit_seq=12"
+        "durable_lsn": "durable_wal_lsn=0 durable_root_commit_seq=14",
+        "cleanup_maintenance_pins": "selected_commit_seq=14 fallback_commit_seq=13"
       },
       "state_comparison": "logical_horizon",
       "seed": 3674,
@@ -521,7 +521,7 @@
       "expected_recovery": {
         "rejected": false,
         "error_type": "",
-        "commit_seq": 13,
+        "commit_seq": 14,
         "applied_lsn": 19
       },
       "claim_boundary": "normal public read-only reopen behaviorally queries primary, secondary, text, physical column, vector, TemplateV1, and maindb dictionary-compressed value-log resources; live templatedb value-log compression is not claimed"
