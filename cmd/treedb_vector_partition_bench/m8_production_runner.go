@@ -1169,7 +1169,7 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	add("coordinator_rpcs_across_shard_requests", configuredRPCs, observed.RPCs, "count", rpcsOK)
 	add("coordinator_retries_across_shard_requests", configuredRetries, observed.Retries, "count", retriesOK)
 	add("coordinator_redirects_across_shard_requests", configuredRedirects, observed.Redirects, "count", redirectsOK)
-	add("coordinator_router_candidates", uint64(cfg.m8CoordinatorLimits.MaxRouterCandidates), uint64(cfg.routerCandidates), "count", true)
+	add("coordinator_router_candidates", uint64(cfg.m8CoordinatorLimits.MaxRouterCandidates), uint64(m8ProductionRouterCandidateBudgetV1(assets)), "count", true)
 	add("coordinator_query_bytes", uint64(cfg.m8CoordinatorLimits.MaxQueryBytes), uint64(fixture.Dimensions*4), "bytes", true)
 	add("coordinator_top_k", uint64(cfg.m8CoordinatorLimits.MaxTopK), uint64(cfg.topK), "count", true)
 	add("coordinator_ef_search", uint64(cfg.m8CoordinatorLimits.MaxEfSearch), maxEf, "count", true)
@@ -1523,6 +1523,10 @@ func m8RunBoundedWorkV1(count, concurrency int, run func(int)) {
 	wg.Wait()
 }
 
+func m8ProductionRouterCandidateBudgetV1(assets *m8ProductionMultiGroupAssetsV1) int {
+	return max(1, int(assets.status.Representatives))
+}
+
 func m8ProductionRequestV1(assets *m8ProductionMultiGroupAssetsV1, query []float32, requestID string, probes, efSearch, topK int, candidateBytesLimit uint64) nativewire.VectorPartitionCoordinatorRequestV1 {
 	if candidateBytesLimit == 0 {
 		candidateBytesLimit = nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes
@@ -1531,7 +1535,7 @@ func m8ProductionRequestV1(assets *m8ProductionMultiGroupAssetsV1, query []float
 		Version: nativewire.VectorPartitionCoordinatorVersionV1, RequestID: requestID, CancellationID: requestID + "-cancel",
 		Database: "default", Catalog: "default", Collection: assets.manifest.Collection, IndexName: assets.manifest.IndexName,
 		IndexDefinitionDigest: assets.manifest.IndexDefinitionDigest, Query: query, Metric: nativewire.VectorPartitionShardSearchMetricCosineV1,
-		RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: max(1, int(assets.status.Representatives)), PartitionProbes: probes,
+		RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: m8ProductionRouterCandidateBudgetV1(assets), PartitionProbes: probes,
 		Consistency: nativewire.VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: nativewire.VectorPartitionShardSearchStatsBasicV1,
 		TopK: topK, EfSearch: efSearch, DeadlineUnixNano: time.Now().Add(30 * time.Second).UnixNano(), RequestBytesLimit: 4 << 20,
 		CandidateBytesLimit: candidateBytesLimit, ResponseBytesLimit: 64 << 20, MergeEntriesLimit: probes * topK,

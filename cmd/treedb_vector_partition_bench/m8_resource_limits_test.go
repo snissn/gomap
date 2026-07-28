@@ -72,6 +72,42 @@ func TestM8WallClockEvidenceUsesActualMaximumNotP99V1(t *testing.T) {
 	t.Fatal("missing coordinator_wall_clock comparison")
 }
 
+func TestM8ProductionResourcesReportRequestRouterBudgetV1(t *testing.T) {
+	cfg := config{
+		m8CoordinatorLimits: nativewire.DefaultVectorPartitionCoordinatorLimitsV1(),
+		m8ShardLimits:       nativewire.DefaultVectorPartitionShardSearchLimitsV1(),
+		m8MaxAssetBytes:     1,
+		m8MaxRSSBytes:       math.MaxUint64,
+		partitions:          1,
+		topK:                1,
+		routerCandidates:    7,
+		concurrency:         []int{1},
+	}
+	assets := &m8ProductionMultiGroupAssetsV1{
+		manifest: collections.VectorPartitionManifestV1{
+			SourceRowCount: 1,
+			PartitionCount: 1,
+			Memberships:    []collections.VectorPartitionMembershipV1{{PartitionID: 0}},
+		},
+		status: collections.VectorPartitionRouterRuntimeStatusV1{Representatives: 19},
+	}
+	request := m8ProductionRequestV1(assets, []float32{1}, "router-budget", 1, 1, 1, 1)
+	if request.RouterCandidateBudget != 19 {
+		t.Fatalf("request router budget=%d want retained representative count 19", request.RouterCandidateBudget)
+	}
+	got := m8ProductionResourcesV1(cfg, fixtureManifest{Vectors: 1, Dimensions: 1}, assets, nil, m8ProductionFaultResourceBoundaryV1{}, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})
+	for _, comparison := range got.LimitComparisons {
+		if comparison.Name != "coordinator_router_candidates" {
+			continue
+		}
+		if comparison.Observed != uint64(request.RouterCandidateBudget) {
+			t.Fatalf("router comparison=%+v want actual request budget %d", comparison, request.RouterCandidateBudget)
+		}
+		return
+	}
+	t.Fatal("missing coordinator_router_candidates comparison")
+}
+
 func TestM8ResourceEvidenceIncludesAllUntimedBoundariesV1(t *testing.T) {
 	cfg := config{
 		m8CoordinatorLimits: nativewire.DefaultVectorPartitionCoordinatorLimitsV1(),
