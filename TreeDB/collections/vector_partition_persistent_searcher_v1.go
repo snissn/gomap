@@ -51,14 +51,19 @@ func buildVectorPartitionLocalGraphAdjacencyV1(rows []columnVectorGraphAssetRow,
 	if err := buildColumnVectorGraphAdjacency(rows, def); err != nil {
 		return err
 	}
-	return addVectorPartitionLocalNavigationOverlayV1(rows, max(1, def.M*2))
+	return addVectorPartitionLocalNavigationOverlayV1(rows, def.M*2)
 }
 
 func addVectorPartitionLocalNavigationOverlayV1(rows []columnVectorGraphAssetRow, degreeLimit int) error {
 	if len(rows) < 2 {
 		return nil
 	}
-	branch := max(1, min(vectorPartitionLocalNavigationBranchV1, degreeLimit-1))
+	if degreeLimit < 3 {
+		return fmt.Errorf("partition-local navigation degree limit=%d cannot reserve a native edge", degreeLimit)
+	}
+	// Reserve one layer-0 native edge for every row. M=16 keeps the existing
+	// branch=8 layout byte-for-byte; lower M reduces the overlay fanout.
+	branch := min(vectorPartitionLocalNavigationBranchV1, degreeLimit-2)
 	children := make([][]uint32, len(rows))
 	for child := 1; child < len(rows); child++ {
 		parent := (child - 1) / branch
@@ -79,7 +84,7 @@ func addVectorPartitionLocalNavigationOverlayV1(rows []columnVectorGraphAssetRow
 		}
 		out := append([]uint32(nil), overlay...)
 		for _, neighbor := range native {
-			if int(neighbor) >= len(rows) || neighbor == uint32(row) {
+			if uint64(neighbor) >= uint64(len(rows)) || neighbor == uint32(row) {
 				return fmt.Errorf("partition-local native neighbor row=%d neighbor=%d", row, neighbor)
 			}
 			duplicate := false

@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -302,6 +303,45 @@ func TestVectorPartitionNativePackPreflightAndLayeredAdjacencyV1(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("remapped adjacency=%v want %v", got, want)
 		}
+	}
+}
+
+func TestVectorPartitionLocalNavigationOverlayReservesNativeEdgeAtM2V1(t *testing.T) {
+	rows := make([]columnVectorGraphAssetRow, 8)
+	nativeEdges := []uint32{4, 5, 7, 0, 0, 1, 3, 4}
+	for i := range rows {
+		// Every value is outside this row's parent/child overlay set.
+		rows[i].Adjacency = []uint32{nativeEdges[i]}
+	}
+	if err := addVectorPartitionLocalNavigationOverlayV1(rows, 4); err != nil {
+		t.Fatal(err)
+	}
+	for i := range rows {
+		layer0, _, err := vectorPartitionLayer0AdjacencySplitV1(rows[i].Adjacency)
+		if err != nil || len(layer0) > 4 || len(layer0) == 0 {
+			t.Fatalf("row=%d layer0=%v err=%v", i, layer0, err)
+		}
+		native := nativeEdges[i]
+		if !slices.Contains(layer0, native) {
+			t.Fatalf("row=%d lost reserved native edge=%d: %v", i, native, layer0)
+		}
+	}
+	if got, err := vectorPartitionLayer0Reachability3999(rows); err != nil || got != len(rows) {
+		t.Fatalf("M=2 overlay reachability=%d err=%v want=%d", got, err, len(rows))
+	}
+	if err := addVectorPartitionLocalNavigationOverlayV1(rows, 2); err == nil {
+		t.Fatal("M=1 layer-0 degree=2 overlay unexpectedly accepted")
+	}
+}
+
+func TestVectorPartitionPackDiagnosticsMaxLayerFailsClosedV1(t *testing.T) {
+	for _, tc := range []struct{ maxLayer, layers int }{{-1, 1}, {1, 1}} {
+		if err := validateVectorPartitionPackDiagnosticsMaxLayerV1(tc.maxLayer, tc.layers); err == nil {
+			t.Fatalf("maxLayer=%d layers=%d unexpectedly accepted", tc.maxLayer, tc.layers)
+		}
+	}
+	if err := validateVectorPartitionPackDiagnosticsMaxLayerV1(0, 1); err != nil {
+		t.Fatalf("valid max layer: %v", err)
 	}
 }
 

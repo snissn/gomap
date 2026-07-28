@@ -380,6 +380,9 @@ func (s *VectorPartitionLocalSearcherV1) PackDiagnosticsV1() (VectorPartitionPac
 	if rows <= 0 || len(pack.AdjacencyLayers) == 0 || pack.Header.EntryOrdinal < 0 || pack.Header.EntryOrdinal >= rows {
 		return VectorPartitionPackDiagnosticsV1{}, ErrVectorPartitionSearchUnavailable
 	}
+	if err := validateVectorPartitionPackDiagnosticsMaxLayerV1(pack.Header.MaxLayer, len(pack.AdjacencyLayers)); err != nil {
+		return VectorPartitionPackDiagnosticsV1{}, err
+	}
 	d := VectorPartitionPackDiagnosticsV1{Rows: uint64(rows), MaxLayer: pack.Header.MaxLayer, RowsByLayer: make([]uint64, pack.Header.MaxLayer+1), EdgesByLayer: make([]uint64, len(pack.AdjacencyLayers)), Layer0DegreeLimit: uint64(max(1, pack.Header.M*2))}
 	for ordinal, level := range pack.Levels {
 		if int(level) > pack.Header.MaxLayer || ordinal >= rows {
@@ -410,7 +413,7 @@ func (s *VectorPartitionLocalSearcherV1) PackDiagnosticsV1() (VectorPartitionPac
 				d.Layer0SaturatedRows++
 			}
 			for _, neighbor := range base.Neighbors[startOffset:endOffset] {
-				if int(neighbor) >= rows {
+				if uint64(neighbor) >= uint64(rows) {
 					return 0, ErrVectorPartitionSearchUnavailable
 				}
 				if !seen[neighbor] {
@@ -437,6 +440,13 @@ func (s *VectorPartitionLocalSearcherV1) PackDiagnosticsV1() (VectorPartitionPac
 		d.TraversalRoots++
 	}
 	return d, nil
+}
+
+func validateVectorPartitionPackDiagnosticsMaxLayerV1(maxLayer, adjacencyLayers int) error {
+	if maxLayer < 0 || maxLayer >= adjacencyLayers {
+		return fmt.Errorf("%w: pack max layer=%d adjacency layers=%d", ErrVectorPartitionSearchUnavailable, maxLayer, adjacencyLayers)
+	}
+	return nil
 }
 
 // SearchScratchBytesV1 returns a conservative upper bound for the transient
