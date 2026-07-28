@@ -395,6 +395,38 @@ func TestVectorPartitionCoordinatorPlansWithConfiguredShardLimitsV1(t *testing.T
 	}
 }
 
+func TestVectorPartitionCoordinatorAcceptsLimitsAboveShardDefaultsWhenConfiguredV1(t *testing.T) {
+	shardLimits := DefaultVectorPartitionShardSearchLimitsV1()
+	shardLimits.MaxPartitions = 64
+	shardLimits.MaxTopK = 512
+	shardLimits.MaxEfSearch = 8192
+	shardLimits.MaxIdentityBytes = 8192
+	shardLimits.MaxStableIDBytes = 8192
+	shardLimits.MaxResponseBytes = 128 << 20
+	limits := DefaultVectorPartitionCoordinatorLimitsV1()
+	limits.MaxPartitionsPerRequest = shardLimits.MaxPartitions
+	limits.MaxTopK = shardLimits.MaxTopK
+	limits.MaxEfSearch = shardLimits.MaxEfSearch
+	limits.MaxIdentityBytes = shardLimits.MaxIdentityBytes
+	limits.MaxStableIDBytes = shardLimits.MaxStableIDBytes
+	limits.MaxResponseBytes = shardLimits.MaxResponseBytes
+
+	coordinator, _, _ := testVectorPartitionCoordinatorWithShardLimitsV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "doc", Score: 1}}},
+		limits, shardLimits,
+	)
+	if coordinator.limits.MaxPartitionsPerRequest != shardLimits.MaxPartitions ||
+		coordinator.limits.MaxTopK != shardLimits.MaxTopK ||
+		coordinator.limits.MaxEfSearch != shardLimits.MaxEfSearch ||
+		coordinator.limits.MaxIdentityBytes != shardLimits.MaxIdentityBytes ||
+		coordinator.limits.MaxStableIDBytes != shardLimits.MaxStableIDBytes ||
+		coordinator.limits.MaxResponseBytes != shardLimits.MaxResponseBytes {
+		t.Fatalf("effective coordinator limits=%+v want custom shard limits=%+v", coordinator.limits, shardLimits)
+	}
+}
+
 func TestVectorPartitionCoordinatorRejectsQueryAboveConfiguredShardDimensionsV1(t *testing.T) {
 	shardLimits := DefaultVectorPartitionShardSearchLimitsV1()
 	shardLimits.MaxDimensions = 1

@@ -750,19 +750,18 @@ func normalizeVectorPartitionCoordinatorLimitsV1(limits VectorPartitionCoordinat
 	if limits.MaxWallClock == 0 {
 		limits.MaxWallClock = defaults.MaxWallClock
 	}
-	shard := DefaultVectorPartitionShardSearchLimitsV1()
 	if limits.MaxSelectedPartitions < 1 || limits.MaxGroups < 1 || limits.MaxRequests < 1 ||
 		limits.MaxConcurrentRequests < 1 || limits.MaxConcurrentRequests > limits.MaxRequests ||
 		limits.MaxRetries < 0 || limits.MaxRedirects < 0 || limits.MaxRouterCandidates < 1 ||
-		limits.MaxQueryBytes < 4 || limits.MaxQueryBytes > shard.MaxQueryBytes ||
-		limits.MaxTopK < 1 || limits.MaxTopK > shard.MaxTopK ||
-		limits.MaxEfSearch < limits.MaxTopK || limits.MaxEfSearch > shard.MaxEfSearch ||
-		limits.MaxPartitionsPerRequest < 1 || limits.MaxPartitionsPerRequest > shard.MaxPartitions ||
-		limits.MaxIdentityBytes < 1 || limits.MaxIdentityBytes > shard.MaxIdentityBytes ||
-		limits.MaxStableIDBytes < 1 || limits.MaxStableIDBytes > shard.MaxStableIDBytes ||
+		limits.MaxQueryBytes < 4 ||
+		limits.MaxTopK < 1 ||
+		limits.MaxEfSearch < limits.MaxTopK ||
+		limits.MaxPartitionsPerRequest < 1 ||
+		limits.MaxIdentityBytes < 1 ||
+		limits.MaxStableIDBytes < 1 ||
 		limits.MaxMergeEntries < 1 || limits.MaxRequestBytes == 0 ||
 		limits.MaxCandidateBytes == 0 ||
-		limits.MaxResponseBytes == 0 || limits.MaxResponseBytes > shard.MaxResponseBytes ||
+		limits.MaxResponseBytes == 0 ||
 		limits.MaxWallClock < time.Millisecond {
 		return VectorPartitionCoordinatorLimitsV1{}, fmt.Errorf("%w: invalid coordinator limits", ErrVectorPartitionCoordinatorInvalidRequest)
 	}
