@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	pathpkg "path"
@@ -153,9 +154,12 @@ func capture(root string, excludeLockFiles bool, excluded []string) (*Model, err
 			return nil
 		}
 		if entry.IsDir() {
-			identity, err := captureStableIdentity(path)
+			info, _, identity, err := capturePathSnapshot(path)
 			if err != nil {
 				return err
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("powerlossoracle: captured directory %q rebound to %s", rel, info.Mode())
 			}
 			m.volatileDirs[rel] = identity
 			m.stableDirs[rel] = identity
@@ -164,11 +168,7 @@ func capture(root string, excludeLockFiles bool, excluded []string) (*Model, err
 		if !entry.Type().IsRegular() {
 			return fmt.Errorf("powerlossoracle: unsupported entry %q (%s)", rel, entry.Type())
 		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		identity, err := captureStableIdentity(path)
+		_, data, identity, err := capturePathSnapshot(path)
 		if err != nil {
 			return err
 		}
@@ -288,9 +288,12 @@ func (m *Model) Overlay(root string) error {
 			return nil
 		}
 		if entry.IsDir() {
-			identity, err := captureStableIdentity(path)
+			info, _, identity, err := capturePathSnapshot(path)
 			if err != nil {
 				return err
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("powerlossoracle: overlaid directory %q rebound to %s", rel, info.Mode())
 			}
 			seenDirs[rel] = identity
 			return nil
@@ -298,11 +301,7 @@ func (m *Model) Overlay(root string) error {
 		if !entry.Type().IsRegular() {
 			return fmt.Errorf("powerlossoracle: unsupported entry %q (%s)", rel, entry.Type())
 		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		identity, err := captureStableIdentity(path)
+		_, data, identity, err := capturePathSnapshot(path)
 		if err != nil {
 			return err
 		}
@@ -453,26 +452,15 @@ func (m *Model) observeNamespace(root string, event durabilitycut.Event) error {
 		if err != nil {
 			return err
 		}
-		info, err := os.Stat(event.NewPath)
+		info, data, identity, err := capturePathSnapshot(event.NewPath)
 		if err != nil {
-			return fmt.Errorf("powerlossoracle: stat created path %q: %w", event.NewPath, err)
-		}
-		identity, err := captureStableIdentity(event.NewPath)
-		if err != nil {
-			return err
+			return fmt.Errorf("powerlossoracle: capture created path %q: %w", event.NewPath, err)
 		}
 		if info.IsDir() {
 			m.ensureVolatileParents(path)
 			m.volatileDirs[path] = identity
 			m.trace = append(m.trace, "create-dir:"+path)
 			return nil
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("powerlossoracle: created path %q is unsupported type %s", event.NewPath, info.Mode())
-		}
-		data, err := os.ReadFile(event.NewPath)
-		if err != nil {
-			return fmt.Errorf("powerlossoracle: read created file %q: %w", event.NewPath, err)
 		}
 		if id, exists := m.volatile[path]; exists {
 			node := m.inodes[id]
@@ -1036,12 +1024,44 @@ func syntheticDirectoryIdentity(id uint64) rootpublication.StableIdentity {
 	return rootpublication.StableIdentity{Platform: "powerlossoracle", ObjectID: objectID}
 }
 
-func captureStableIdentity(path string) (rootpublication.StableIdentity, error) {
+func capturePathSnapshot(path string) (fs.FileInfo, []byte, rootpublication.StableIdentity, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return rootpublication.StableIdentity{}, err
+		return nil, nil, rootpublication.StableIdentity{}, err
 	}
 	defer file.Close()
+	return captureOpenFileSnapshot(file)
+}
+
+func captureOpenFileSnapshot(file *os.File) (fs.FileInfo, []byte, rootpublication.StableIdentity, error) {
+	if file == nil {
+		return nil, nil, rootpublication.StableIdentity{}, os.ErrInvalid
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return nil, nil, rootpublication.StableIdentity{}, err
+	}
+	identity, err := captureStableIdentityFromFile(file)
+	if err != nil {
+		return nil, nil, rootpublication.StableIdentity{}, err
+	}
+	if info.IsDir() {
+		return info, nil, identity, nil
+	}
+	if !info.Mode().IsRegular() {
+		return nil, nil, rootpublication.StableIdentity{}, fmt.Errorf("powerlossoracle: path %q is unsupported type %s", file.Name(), info.Mode())
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return nil, nil, rootpublication.StableIdentity{}, err
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return nil, nil, rootpublication.StableIdentity{}, err
+	}
+	return info, data, identity, nil
+}
+
+func captureStableIdentityFromFile(file *os.File) (rootpublication.StableIdentity, error) {
 	identity, err := rootpublication.StableIdentityFromFile(file)
 	if errors.Is(err, rootpublication.ErrStableIdentityUnsupported) {
 		return rootpublication.StableIdentity{}, nil
