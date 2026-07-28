@@ -329,8 +329,26 @@ func TestVectorPartitionLocalNavigationOverlayReservesNativeEdgeAtM2V1(t *testin
 	if got, err := vectorPartitionLayer0Reachability3999(rows); err != nil || got != len(rows) {
 		t.Fatalf("M=2 overlay reachability=%d err=%v want=%d", got, err, len(rows))
 	}
-	if err := addVectorPartitionLocalNavigationOverlayV1(rows, 2); err == nil {
-		t.Fatal("M=1 layer-0 degree=2 overlay unexpectedly accepted")
+	m1a := make([]columnVectorGraphAssetRow, len(rows))
+	m1b := make([]columnVectorGraphAssetRow, len(rows))
+	for i := range rows {
+		m1a[i].Adjacency = []uint32{nativeEdges[i]}
+		m1b[i].Adjacency = []uint32{nativeEdges[i]}
+	}
+	if err := addVectorPartitionLocalNavigationOverlayV1(m1a, 2); err != nil {
+		t.Fatalf("M=1 overlay: %v", err)
+	}
+	if err := addVectorPartitionLocalNavigationOverlayV1(m1b, 2); err != nil {
+		t.Fatalf("repeat M=1 overlay: %v", err)
+	}
+	if got, err := vectorPartitionLayer0Reachability3999(m1a); err != nil || got != len(m1a) {
+		t.Fatalf("M=1 overlay reachability=%d err=%v want=%d", got, err, len(m1a))
+	}
+	for i := range m1a {
+		layer0, _, err := vectorPartitionLayer0AdjacencySplitV1(m1a[i].Adjacency)
+		if err != nil || len(layer0) > 2 || !slices.Contains(layer0, nativeEdges[i]) || !slices.Equal(m1a[i].Adjacency, m1b[i].Adjacency) {
+			t.Fatalf("M=1 row=%d layer0=%v err=%v repeat=%v", i, layer0, err, m1b[i].Adjacency)
+		}
 	}
 }
 

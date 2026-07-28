@@ -58,8 +58,30 @@ func addVectorPartitionLocalNavigationOverlayV1(rows []columnVectorGraphAssetRow
 	if len(rows) < 2 {
 		return nil
 	}
-	if degreeLimit < 3 {
-		return fmt.Errorf("partition-local navigation degree limit=%d cannot reserve a native edge", degreeLimit)
+	if degreeLimit < 2 {
+		return fmt.Errorf("partition-local navigation degree limit=%d", degreeLimit)
+	}
+	if degreeLimit == 2 {
+		// M=1 has room for exactly a navigation successor plus one native edge.
+		// The directed ring reaches every row without widening the declared cap.
+		for row := range rows {
+			native, suffix, err := vectorPartitionLayer0AdjacencySplitV1(rows[row].Adjacency)
+			if err != nil {
+				return err
+			}
+			out := []uint32{uint32((row + 1) % len(rows))}
+			for _, neighbor := range native {
+				if uint64(neighbor) >= uint64(len(rows)) || neighbor == uint32(row) {
+					return fmt.Errorf("partition-local native neighbor row=%d neighbor=%d", row, neighbor)
+				}
+				if neighbor != out[0] {
+					out = append(out, neighbor)
+					break
+				}
+			}
+			rows[row].Adjacency = vectorPartitionLayer0AdjacencyJoinV1(out, suffix)
+		}
+		return nil
 	}
 	// Reserve one layer-0 native edge for every row. M=16 keeps the existing
 	// branch=8 layout byte-for-byte; lower M reduces the overlay fanout.
