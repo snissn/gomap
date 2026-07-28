@@ -697,6 +697,39 @@ func TestObservedCreateRejectsDifferentFileAtCapturedPath(t *testing.T) {
 	}
 }
 
+func TestObservedCreateRejectsReplacementOverlaidAtCapturedPath(t *testing.T) {
+	root := t.TempDir()
+	tmp := filepath.Join(root, "health.json.tmp.1")
+	if err := os.WriteFile(tmp, []byte("captured"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	model, err := Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate another serialized callback overlaying the filesystem after the
+	// captured path was rebound but before the delayed create callback arrives.
+	// The volatile name now points at the replacement while the stable name
+	// still points at the captured inode.
+	if err := os.Rename(tmp, filepath.Join(root, "captured-inode")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tmp, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Overlay(root); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := model.Observe(root, durabilitycut.Event{
+		Namespace: durabilitycut.NamespaceCreate,
+		NewPath:   tmp,
+	}); err == nil || !strings.Contains(err.Error(), "file already exists") {
+		t.Fatalf("observe delayed create after replacement overlay err=%v want duplicate-create error", err)
+	}
+}
+
 func TestCrossDirectoryRenameNeedsBothDirectorySyncs(t *testing.T) {
 	model := newModel()
 	if err := model.Create("from/value", []byte("payload")); err != nil {

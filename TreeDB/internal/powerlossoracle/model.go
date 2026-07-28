@@ -476,13 +476,16 @@ func (m *Model) observeNamespace(root string, event durabilitycut.Event) error {
 		}
 		if id, exists := m.volatile[path]; exists {
 			node := m.inodes[id]
-			if _, stable := m.stable[path]; stable {
+			if stableID, stable := m.stable[path]; stable {
 				// Capture can race a background CreateTemp between the real
 				// namespace mutation and its synchronous observer callback. If
-				// both observations name the same physical file, reconcile the
-				// delayed callback with the captured baseline. A different inode
-				// remains a genuine duplicate-create error.
-				if validStableIdentity(node.stableIdentity) && validStableIdentity(identity) &&
+				// the volatile and stable names still reference the same model
+				// inode and both observations name the same physical file,
+				// reconcile the delayed callback with the captured baseline. A
+				// replacement overlay or different physical inode remains a
+				// genuine duplicate-create error.
+				if id == stableID &&
+					validStableIdentity(node.stableIdentity) && validStableIdentity(identity) &&
 					rootpublication.SamePhysicalIdentity(node.stableIdentity, identity) {
 					node.volatile = clone(data)
 					m.trace = append(m.trace, "create-captured:"+path)
