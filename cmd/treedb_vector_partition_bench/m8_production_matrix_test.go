@@ -269,7 +269,7 @@ func TestM8VariantProcessArgsForceFreshSingleVariantV1(t *testing.T) {
 	}
 }
 
-func TestM8ProductionMatrixFailsWhenOverlapBudgetIsUnderMaterializedV1(t *testing.T) {
+func TestM8ProductionMatrixRejectsUnderMaterializedOverlapDescriptorV1(t *testing.T) {
 	hash := strings.Repeat("a", 40)
 	fixture := fixtureManifest{Checksum: strings.Repeat("b", 64)}
 	cfg := config{baseSHA: hash, headSHA: hash, partitions: 16, command: []string{"bench"}}
@@ -301,11 +301,8 @@ func TestM8ProductionMatrixFailsWhenOverlapBudgetIsUnderMaterializedV1(t *testin
 		})
 	}
 	matrix, err := m8BuildProductionMatrixV1(cfg, fixture, reports)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if matrix.Gates.RequiredVariants != "fail" || matrix.Gates.OverlapStorage != "fail" || matrix.Status != "experimental_gate_failures" || matrix.OverlapMaterializationRatio != .1 {
-		t.Fatalf("under-materialized overlap matrix=%+v", matrix)
+	if err == nil || !strings.Contains(err.Error(), "malformed M3 variant descriptor") {
+		t.Fatalf("under-materialized overlap err=%v matrix=%+v", err, matrix)
 	}
 }
 
