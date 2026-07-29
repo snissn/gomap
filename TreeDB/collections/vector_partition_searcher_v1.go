@@ -341,6 +341,114 @@ type VectorPartitionSearchStatusV1 struct {
 	Retired                             bool
 }
 
+// VectorPartitionPackDiagnosticsV1 is an explicit offline inspection result
+// for one immutable local HNSW pack. It is intentionally separate from Status:
+// computing connectivity walks the full persisted graph and must never become
+// request-path work.
+type VectorPartitionPackDiagnosticsV1 struct {
+	Rows                uint64   `json:"rows"`
+	ReachableRows       uint64   `json:"reachable_rows"`
+	TraversalRoots      uint64   `json:"traversal_roots"`
+	MaxLayer            int      `json:"max_layer"`
+	RowsByLayer         []uint64 `json:"rows_by_layer"`
+	EdgesByLayer        []uint64 `json:"edges_by_layer"`
+	Layer0DegreeLimit   uint64   `json:"layer0_degree_limit"`
+	Layer0SaturatedRows uint64   `json:"layer0_saturated_rows"`
+}
+
+// PackDiagnosticsV1 scans the immutable prepared pack and reports topology
+// evidence needed to distinguish construction/reachability defects from a
+// request ef_search budget. It fails closed when no native pack is active.
+func (s *VectorPartitionLocalSearcherV1) PackDiagnosticsV1() (VectorPartitionPackDiagnosticsV1, error) {
+	if s == nil {
+		return VectorPartitionPackDiagnosticsV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	if err := s.Acquire(); err != nil {
+		return VectorPartitionPackDiagnosticsV1{}, err
+	}
+	defer s.Release()
+	s.mu.Lock()
+	pack := s.prepared
+	s.mu.Unlock()
+	if pack == nil {
+		return VectorPartitionPackDiagnosticsV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	if err := pack.validateLive(); err != nil {
+		return VectorPartitionPackDiagnosticsV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	rows := pack.Header.Rows
+	if rows <= 0 || len(pack.AdjacencyLayers) == 0 || pack.Header.EntryOrdinal < 0 || pack.Header.EntryOrdinal >= rows {
+		return VectorPartitionPackDiagnosticsV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	if err := validateVectorPartitionPackDiagnosticsMaxLayerV1(pack.Header.MaxLayer, len(pack.AdjacencyLayers)); err != nil {
+		return VectorPartitionPackDiagnosticsV1{}, err
+	}
+	d := VectorPartitionPackDiagnosticsV1{Rows: uint64(rows), MaxLayer: pack.Header.MaxLayer, RowsByLayer: make([]uint64, pack.Header.MaxLayer+1), EdgesByLayer: make([]uint64, len(pack.AdjacencyLayers)), Layer0DegreeLimit: uint64(max(1, pack.Header.M*2))}
+	for ordinal, level := range pack.Levels {
+		if int(level) > pack.Header.MaxLayer || ordinal >= rows {
+			return VectorPartitionPackDiagnosticsV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		for layer := 0; layer <= int(level); layer++ {
+			d.RowsByLayer[layer]++
+		}
+	}
+	for layer, adjacency := range pack.AdjacencyLayers {
+		if len(adjacency.Offsets) != rows+1 {
+			return VectorPartitionPackDiagnosticsV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		d.EdgesByLayer[layer] = uint64(len(adjacency.Neighbors))
+	}
+	base := pack.AdjacencyLayers[0]
+	seen := make([]bool, rows)
+	visit := func(start int) (int, error) {
+		queue := []int{start}
+		seen[start] = true
+		for head := 0; head < len(queue); head++ {
+			ordinal := queue[head]
+			startOffset, endOffset := base.Offsets[ordinal], base.Offsets[ordinal+1]
+			if endOffset < startOffset || endOffset > uint64(len(base.Neighbors)) {
+				return 0, ErrVectorPartitionSearchUnavailable
+			}
+			if uint64(endOffset-startOffset) >= d.Layer0DegreeLimit {
+				d.Layer0SaturatedRows++
+			}
+			for _, neighbor := range base.Neighbors[startOffset:endOffset] {
+				if uint64(neighbor) >= uint64(rows) {
+					return 0, ErrVectorPartitionSearchUnavailable
+				}
+				if !seen[neighbor] {
+					seen[neighbor] = true
+					queue = append(queue, int(neighbor))
+				}
+			}
+		}
+		return len(queue), nil
+	}
+	reachable, err := visit(pack.Header.EntryOrdinal)
+	if err != nil {
+		return VectorPartitionPackDiagnosticsV1{}, err
+	}
+	d.ReachableRows = uint64(reachable)
+	d.TraversalRoots = 1
+	for ordinal := range seen {
+		if seen[ordinal] {
+			continue
+		}
+		if _, err := visit(ordinal); err != nil {
+			return VectorPartitionPackDiagnosticsV1{}, err
+		}
+		d.TraversalRoots++
+	}
+	return d, nil
+}
+
+func validateVectorPartitionPackDiagnosticsMaxLayerV1(maxLayer, adjacencyLayers int) error {
+	if maxLayer < 0 || maxLayer >= adjacencyLayers {
+		return fmt.Errorf("%w: pack max layer=%d adjacency layers=%d", ErrVectorPartitionSearchUnavailable, maxLayer, adjacencyLayers)
+	}
+	return nil
+}
+
 // SearchScratchBytesV1 returns a conservative upper bound for the transient
 // candidate/search scratch allocated by one SearchWithOptionsV1 call. Serving
 // layers use it before search so a small ef_search cannot conceal the

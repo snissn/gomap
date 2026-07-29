@@ -1745,15 +1745,25 @@ func TestM8ProfileCaptureWritesRequiredRuntimeArtifactsV1(t *testing.T) {
 func TestM8GateLedgerRequiresMatchedRecallQPSAndTailV1(t *testing.T) {
 	report := m8ProductionReportV1{
 		Config: m8ProductionConfigEvidenceV1{Partitions: 16, RecallTarget: 0.9},
+		PackDiagnostics: func() []m8PartitionPackDiagnosticsV1 {
+			diagnostics := make([]m8PartitionPackDiagnosticsV1, 16)
+			for partition := range diagnostics {
+				diagnostics[partition] = m8PartitionPackDiagnosticsV1{PartitionID: uint32(partition), Rows: 1, ReachableRows: 1, TraversalRoots: 1}
+			}
+			return diagnostics
+		}(),
 		Rows: []m8ProductionRowV1{
 			{Status: "pass", Probes: 16, EfSearch: 128, Concurrency: 16, RecallAtK: 0.99, QPS: 100, P95Nanos: 1000, ExactParityChecked: true, ExactParityPassed: true, Attribution: m8ProductionAttributionV1{ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true}},
 			{Status: "pass", Probes: 4, EfSearch: 128, Concurrency: 16, RecallAtK: 0.92, QPS: 116, P95Nanos: 999},
 		},
 		Failure:   m8ProductionFailureEvidenceV1{Passed: true},
-		Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1, PeakRSSMeasured: true, MaxPartitionLoad: 65_000, BalanceHardCap: 65_625, LimitComparisons: []m8ProductionResourceLimitComparisonV1{{Name: "bytes", Configured: 2, Observed: 1, Passed: true}}},
+		Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1, PartitionLoads: make([]uint64, 16), PeakRSSMeasured: true, MaxPartitionLoad: 65_000, BalanceHardCap: 65_625, LimitComparisons: []m8ProductionResourceLimitComparisonV1{{Name: "bytes", Configured: 2, Observed: 1, Passed: true}}},
+	}
+	for partition := range report.Resources.PartitionLoads {
+		report.Resources.PartitionLoads[partition] = 1
 	}
 	ledger := m8ProductionGateLedgerForReportV1(report)
-	if ledger.ExhaustiveParity != "pass" || ledger.FailureHonesty != "pass" || ledger.Recall != "pass" || ledger.ProbeReduction != "pass" || ledger.EndToEndQPS != "pass" || ledger.TailLatency != "pass" || ledger.Balance != "pass" || ledger.ResourceBounds != "pass" || ledger.OverlapStorage != "fail" {
+	if ledger.ExhaustiveParity != "pass" || ledger.FailureHonesty != "pass" || ledger.PartitionPackReachability != "pass" || ledger.Recall != "pass" || ledger.ProbeReduction != "pass" || ledger.EndToEndQPS != "pass" || ledger.TailLatency != "pass" || ledger.Balance != "pass" || ledger.ResourceBounds != "pass" || ledger.OverlapStorage != "fail" {
 		t.Fatalf("ledger=%+v", ledger)
 	}
 	report.Rows[0].Status = "fail"

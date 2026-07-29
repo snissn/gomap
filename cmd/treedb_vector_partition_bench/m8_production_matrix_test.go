@@ -27,7 +27,7 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 	fixture := fixtureManifest{Checksum: strings.Repeat("b", 64)}
 	cfg := config{baseSHA: hash, headSHA: hash, partitions: 16, command: []string{"bench"}}
 	common := m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16, Probes: []int{4, 16}, TopK: 10, RecallTarget: .9, Concurrency: []int{1}, Warmup: 1, EfSearch: []int{128}, RouterCandidates: 1024, Seed: 1}
-	pass := m8ProductionGateLedgerV1{ExhaustiveParity: "pass", FailureHonesty: "pass", Recall: "pass", ProbeReduction: "pass", EndToEndQPS: "pass", TailLatency: "pass", Balance: "pass", ResourceBounds: "pass"}
+	pass := m8ProductionGateLedgerV1{ExhaustiveParity: "pass", FailureHonesty: "pass", PartitionPackReachability: "pass", Recall: "pass", ProbeReduction: "pass", EndToEndQPS: "pass", TailLatency: "pass", Balance: "pass", ResourceBounds: "pass"}
 	reports := make([]m8ProductionReportV1, 0, 3)
 	for _, variant := range []struct {
 		id, assignment string
@@ -67,9 +67,20 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if matrix.Status != "local_gate_pass" || matrix.Gates.OverlapStorage != "pass" || matrix.OverlapStorageRatio != 1.2 || len(matrix.Comparison) != 6 {
+	if matrix.Status != "local_gate_pass" || matrix.Gates.PartitionPackReachability != "pass" || matrix.Gates.OverlapStorage != "pass" || matrix.OverlapStorageRatio != 1.2 || len(matrix.Comparison) != 6 {
 		t.Fatalf("matrix=%+v", matrix)
 	}
+	for _, reachability := range []string{"", "fail"} {
+		reports[0].GateLedger.PartitionPackReachability = reachability
+		matrix, err = m8BuildProductionMatrixV1(cfg, fixture, reports)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if matrix.Status != "experimental_gate_failures" || matrix.Gates.PartitionPackReachability != "fail" {
+			t.Fatalf("reachability=%q matrix=%+v", reachability, matrix)
+		}
+	}
+	reports[0].GateLedger.PartitionPackReachability = "pass"
 	reports[0].Dirty = true
 	if _, err := m8BuildProductionMatrixV1(cfg, fixture, reports); err == nil || !strings.Contains(err.Error(), "dirty") {
 		t.Fatalf("dirty child report err=%v", err)
@@ -259,7 +270,7 @@ func TestM8ProductionMatrixFailsWhenOverlapBudgetIsUnderMaterializedV1(t *testin
 	fixture := fixtureManifest{Checksum: strings.Repeat("b", 64)}
 	cfg := config{baseSHA: hash, headSHA: hash, partitions: 16, command: []string{"bench"}}
 	common := m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16, Probes: []int{4}, TopK: 10, RecallTarget: .9, Concurrency: []int{1}, Warmup: 1, EfSearch: []int{128}, RouterCandidates: 1024, Seed: 1}
-	pass := m8ProductionGateLedgerV1{ExhaustiveParity: "pass", FailureHonesty: "pass", Recall: "pass", ProbeReduction: "pass", EndToEndQPS: "pass", TailLatency: "pass", Balance: "pass", ResourceBounds: "pass"}
+	pass := m8ProductionGateLedgerV1{ExhaustiveParity: "pass", FailureHonesty: "pass", PartitionPackReachability: "pass", Recall: "pass", ProbeReduction: "pass", EndToEndQPS: "pass", TailLatency: "pass", Balance: "pass", ResourceBounds: "pass"}
 	reports := make([]m8ProductionReportV1, 0, 3)
 	for _, variant := range []struct {
 		id, assignment string

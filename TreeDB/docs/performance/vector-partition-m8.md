@@ -435,6 +435,48 @@ The JSON artifact is clean exact-head evidence. Profile paths are host-local
 retained records, not portable repository assets; their hashes make later
 identity checks deterministic.
 
+## #3999 partition-local HNSW reachability refresh
+
+The measured implementation head `2ec108a625419a3a3f372a0eb5dca29c433052f5`
+rebuilds only persistent partition-local packs with a bounded, deterministic
+layer-0 navigation overlay. It preserves the `2*M` layer-0 cap (32 at M=16)
+while providing a route from the pack entry to every local row; global
+column-graph and router construction are unchanged. A subsequent
+documentation-only record commit does not change this implementation or its
+runtime behavior.
+
+The authoritative uncontended evidence uses the fresh graph/disjoint 1M DB
+`/mnt/fast4tb/tmp/issue3999_m3_lk3imU/db_graph_disjoint`. The all-16-partition
+M8 `ef_search=4096` cell recorded recall@10 and local-HNSW recall@10 `0.975`,
+exact representative-routing recall `1.0`, QPS `11.158`, and p50/p95/p99
+`87.586/111.463/121.120ms`. Its measured query wall clock was `20.251s`
+(`133.31s` command wall clock; `19.609s` build).
+
+The profiled artifact is
+`/mnt/fast4tb/tmp/issue3999_m8_2ec_UxtWPM/vector_partition_m8_2ec108a62541_ca6f595a28e8.json`
+(SHA-256 `84bb62aeb9cebcc4c6bba733bfacbc68f6a3a46be4709264e723d748f777c36c`).
+It records `dirty=false` and `partition_pack_reachability=pass`: exactly 16
+diagnostics bind to the 16 manifest partition loads, every diagnostic `rows`
+matches its load, the diagnostic/load/retained-variant totals are each
+`1,000,000`, and every pack has `reachable_rows == rows` and
+`traversal_roots == 1`. Resource bounds pass with peak RSS
+`1,731,821,568 / 4,294,967,296` bytes and persistent assets
+`282,881,928 / 536,870,912` bytes.
+
+The seven captured profile hashes are: allocation baseline
+`aba4330b3185456dba3c34fe3dc14a4073742a88e3efe510b8470e1d85b23b74`,
+allocation final `f9c5e3141e60c702e5cbe79d23e67245402334d5819c6b419e2b2399b4d10b13`,
+CPU `f809683540eaac0051ee4271b945aad74ff71508fbafff1c21a354b44325338f`,
+heap `a5748e085dbc7734f8ee5365632e8fbcacede12853d7588315ccbabf4b105116`,
+block `a641bf71369e47f80f53517ffce258202b1f0bdaebf53ffea9cb145b7a037bd7`,
+mutex `881ea506a541d1742651a4fa3155937df01146e03e68e4b54bd4f231a3b744b8`,
+and trace `5a15d8304b5f7bf73b3a9c713bfe95fb7197b75d7414bfb2e6ff2496c47a3c6c`.
+
+The report remains `experimental_gate_failures`: probe reduction is #3998,
+overlap storage is #4001, while exhaustive-correctness, end-to-end QPS, and
+tail-latency gates are still unsatisfied M8-system evidence rather than
+partition-local reachability/recall failures.
+
 ## Comparison boundary and disposition
 
 This report compares only TreeDB's own exhaustive oracle and graph-routed

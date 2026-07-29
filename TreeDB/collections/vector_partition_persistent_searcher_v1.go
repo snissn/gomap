@@ -41,6 +41,125 @@ func compactPartitionAdjacencyV1(in []uint32) []uint32 {
 	return in[:n]
 }
 
+const vectorPartitionLocalNavigationBranchV1 = 8
+
+// buildVectorPartitionLocalGraphAdjacencyV1 retains the shared native graph
+// construction, then reserves a bounded layer-0 navigation tree in the
+// partition-only pack. It gives the entry a logarithmic-hop route to every
+// local row while leaving global column-graph and router assets unchanged.
+func buildVectorPartitionLocalGraphAdjacencyV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition) error {
+	if err := buildColumnVectorGraphAdjacency(rows, def); err != nil {
+		return err
+	}
+	return addVectorPartitionLocalNavigationOverlayV1(rows, def.M*2)
+}
+
+func addVectorPartitionLocalNavigationOverlayV1(rows []columnVectorGraphAssetRow, degreeLimit int) error {
+	if len(rows) < 2 {
+		return nil
+	}
+	if degreeLimit < 2 {
+		return fmt.Errorf("partition-local navigation degree limit=%d", degreeLimit)
+	}
+	if degreeLimit == 2 {
+		// M=1 has room for exactly a navigation successor plus one native edge.
+		// The directed ring reaches every row without widening the declared cap.
+		for row := range rows {
+			native, suffix, err := vectorPartitionLayer0AdjacencySplitV1(rows[row].Adjacency)
+			if err != nil {
+				return err
+			}
+			out := []uint32{uint32((row + 1) % len(rows))}
+			for _, neighbor := range native {
+				if uint64(neighbor) >= uint64(len(rows)) || neighbor == uint32(row) {
+					return fmt.Errorf("partition-local native neighbor row=%d neighbor=%d", row, neighbor)
+				}
+			}
+			for _, neighbor := range native {
+				if neighbor != out[0] {
+					out = append(out, neighbor)
+					break
+				}
+			}
+			rows[row].Adjacency = vectorPartitionLayer0AdjacencyJoinV1(out, suffix)
+		}
+		return nil
+	}
+	// Reserve one layer-0 native edge for every row. M=16 keeps the existing
+	// branch=8 layout byte-for-byte; lower M reduces the overlay fanout.
+	branch := min(vectorPartitionLocalNavigationBranchV1, degreeLimit-2)
+	children := make([][]uint32, len(rows))
+	for child := 1; child < len(rows); child++ {
+		parent := (child - 1) / branch
+		children[parent] = append(children[parent], uint32(child))
+	}
+	for row := range rows {
+		native, suffix, err := vectorPartitionLayer0AdjacencySplitV1(rows[row].Adjacency)
+		if err != nil {
+			return err
+		}
+		overlay := make([]uint32, 0, len(children[row])+1)
+		if row != 0 {
+			overlay = append(overlay, uint32((row-1)/branch))
+		}
+		overlay = append(overlay, children[row]...)
+		if len(overlay) > degreeLimit {
+			return fmt.Errorf("partition-local navigation row=%d degree=%d exceeds limit=%d", row, len(overlay), degreeLimit)
+		}
+		out := append([]uint32(nil), overlay...)
+		for _, neighbor := range native {
+			if uint64(neighbor) >= uint64(len(rows)) || neighbor == uint32(row) {
+				return fmt.Errorf("partition-local native neighbor row=%d neighbor=%d", row, neighbor)
+			}
+			duplicate := false
+			for _, existing := range out {
+				if existing == neighbor {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate && len(out) < degreeLimit {
+				out = append(out, neighbor)
+			}
+		}
+		rows[row].Adjacency = vectorPartitionLayer0AdjacencyJoinV1(out, suffix)
+	}
+	return nil
+}
+
+// split returns the layer-0 neighbors plus the exact encoded higher-layer
+// suffix. A nil suffix denotes the legacy layer-0-only representation.
+func vectorPartitionLayer0AdjacencySplitV1(adjacency []uint32) ([]uint32, []uint32, error) {
+	if len(adjacency) == 0 {
+		return nil, nil, nil
+	}
+	if adjacency[0] != columnVectorGraphLayeredAdjacencyMagic {
+		return append([]uint32(nil), adjacency...), nil, nil
+	}
+	if len(adjacency) < 3 {
+		return nil, nil, errors.New("partition-local layered adjacency header")
+	}
+	count := int(adjacency[2])
+	if count < 0 || count > len(adjacency)-3 {
+		return nil, nil, errors.New("partition-local layered adjacency layer-0 count")
+	}
+	suffix := make([]uint32, 1, 1+len(adjacency)-(3+count))
+	suffix[0] = adjacency[1]
+	suffix = append(suffix, adjacency[3+count:]...)
+	return append([]uint32(nil), adjacency[3:3+count]...), suffix, nil
+}
+
+func vectorPartitionLayer0AdjacencyJoinV1(layer0, suffix []uint32) []uint32 {
+	if suffix == nil {
+		return layer0
+	}
+	out := make([]uint32, 0, 3+len(layer0)+len(suffix))
+	out = append(out, columnVectorGraphLayeredAdjacencyMagic, suffix[0], uint32(len(layer0)))
+	out = append(out, layer0...)
+	out = append(out, suffix[1:]...)
+	return out
+}
+
 func vectorPartitionLocalAssetIDV1(partition uint32) string {
 	return fmt.Sprintf("hnsw_search_pack_v1/partition/%d", partition)
 }
@@ -546,7 +665,7 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsV1(index string,
 			}
 			rows[j] = columnVectorGraphAssetRow{ID: append([]byte(nil), source.id...), Vector: append([]float32(nil), r.Vector...), InvNorm: r.InvNorm, BaseRowRef: ref}
 		}
-		if err := buildColumnVectorGraphAdjacency(rows, def); err != nil {
+		if err := buildVectorPartitionLocalGraphAdjacencyV1(rows, def); err != nil {
 			return nil, nil, fmt.Errorf("%w: build partition-local graph: %v", ErrVectorPartitionSearchUnavailable, err)
 		}
 		maxLayer := 0
