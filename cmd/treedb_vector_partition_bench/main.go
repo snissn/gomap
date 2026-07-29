@@ -67,48 +67,49 @@ const (
 )
 
 type config struct {
-	dataset             string
-	partitions          int
-	probes              []int
-	overlaps            []float64
-	topK                int
-	recallTarget        float64
-	seed                int64
-	format              string
-	out                 string
-	stages              map[string]bool
-	command             []string
-	maxVectors          int
-	maxBytes            int64
-	baseSHA             string
-	headSHA             string
-	hnsw                *treeDBPartitionHNSW
-	memory              benchmarkMemoryPlan
-	stage               string
-	m3PersistDir        string
-	m8ExistingDB        string
-	m8VariantDBs        []string
-	partitionAssignment string
-	partition           vectorpartition.Config
-	partitionHNSWM      int
-	router              *treeDBRepresentativeRouter
-	coordinator         *m6CoordinatorHarnessV1
-	routerConfig        vectorpartition.RouterConfigV1
-	routerCandidates    int
-	sourceHNSWDegree    int
-	mode                string
-	raftGroups          int
-	raftNodes           int
-	concurrency         []int
-	warmup              int
-	profiles            string
-	m8MatrixOut         string
-	m8MatrixProfiles    string
-	efSearch            []int
-	m8MaxRSSBytes       uint64
-	m8MaxAssetBytes     uint64
-	m8CoordinatorLimits nativewire.VectorPartitionCoordinatorLimitsV1
-	m8ShardLimits       nativewire.VectorPartitionShardSearchLimitsV1
+	dataset              string
+	partitions           int
+	probes               []int
+	overlaps             []float64
+	topK                 int
+	recallTarget         float64
+	seed                 int64
+	format               string
+	out                  string
+	stages               map[string]bool
+	command              []string
+	maxVectors           int
+	maxBytes             int64
+	baseSHA              string
+	headSHA              string
+	hnsw                 *treeDBPartitionHNSW
+	memory               benchmarkMemoryPlan
+	stage                string
+	m3PersistDir         string
+	m8ExistingDB         string
+	m8VariantDBs         []string
+	partitionAssignment  string
+	partitionTruthOracle bool
+	partition            vectorpartition.Config
+	partitionHNSWM       int
+	router               *treeDBRepresentativeRouter
+	coordinator          *m6CoordinatorHarnessV1
+	routerConfig         vectorpartition.RouterConfigV1
+	routerCandidates     int
+	sourceHNSWDegree     int
+	mode                 string
+	raftGroups           int
+	raftNodes            int
+	concurrency          []int
+	warmup               int
+	profiles             string
+	m8MatrixOut          string
+	m8MatrixProfiles     string
+	efSearch             []int
+	m8MaxRSSBytes        uint64
+	m8MaxAssetBytes      uint64
+	m8CoordinatorLimits  nativewire.VectorPartitionCoordinatorLimitsV1
+	m8ShardLimits        nativewire.VectorPartitionShardSearchLimitsV1
 }
 
 type partitionRun struct {
@@ -126,6 +127,14 @@ type partitionRun struct {
 	ArtifactBytes  int64                   `json:"artifact_bytes"`
 	ReportBytes    int64                   `json:"report_bytes"`
 	FinalBytes     int64                   `json:"final_bytes"`
+	TruthOracle    *partitionTruthOracleV1 `json:"truth_partition_oracle,omitempty"`
+}
+
+type partitionTruthOracleV1 struct {
+	TopK                         int     `json:"top_k"`
+	ProbeBudget                  int     `json:"probe_budget"`
+	BestProbeCoverageAtK         float64 `json:"best_probe_primary_partition_coverage_at_k"`
+	TruthPrimaryHomePairColocate float64 `json:"truth_primary_home_pair_colocation_at_k"`
 }
 
 type fixtureManifest struct {
@@ -144,6 +153,7 @@ type fixtureManifest struct {
 type neighbor struct {
 	ID       string  `json:"id"`
 	Distance float64 `json:"distance"`
+	Ordinal  int     `json:"-"`
 }
 type stageResult struct {
 	Name                      string  `json:"name"`
@@ -504,7 +514,12 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		// simulation-only query/truth stream, so verifying it here would recreate
 		// queries and exact truth that this stage deliberately does not own.
 		if cfg.stage == "partition" {
-			return runPartitionStage(cfg, fixture, deterministicVectors(fixture), nil, stdout)
+			vectors := deterministicVectors(fixture)
+			var queries [][]float64
+			if cfg.partitionTruthOracle {
+				vectors, queries = deterministicFixture(fixture)
+			}
+			return runPartitionStage(cfg, fixture, vectors, queries, stdout)
 		}
 		if cfg.topK > fixture.Vectors {
 			return errors.New("top-k cannot exceed fixture vectors")
@@ -654,6 +669,7 @@ func parseConfig(args []string) (config, error) {
 	fs.Uint64Var(&cfg.m8MaxRSSBytes, "m8-max-rss-bytes", cfg.m8MaxRSSBytes, "hard process peak-RSS acceptance bound for production_multi_group")
 	fs.Uint64Var(&cfg.m8MaxAssetBytes, "m8-max-persistent-asset-bytes", cfg.m8MaxAssetBytes, "hard persistent derived-asset byte bound for production_multi_group")
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
+	fs.BoolVar(&cfg.partitionTruthOracle, "partition-truth-oracle", false, "emit exact truth primary-partition coverage diagnostic for -stage partition")
 	fs.IntVar(&cfg.partition.Repetitions, "partition-repetitions", cfg.partition.Repetitions, "dense-ball graph sketch repetitions")
 	fs.IntVar(&cfg.partition.Pivots, "partition-pivots", cfg.partition.Pivots, "dense-ball pivots per recursive level")
 	fs.IntVar(&cfg.partition.MaxLeafBucket, "partition-max-leaf-bucket", cfg.partition.MaxLeafBucket, "maximum dense-ball leaf bucket")
@@ -781,6 +797,9 @@ func parseConfig(args []string) (config, error) {
 	if cfg.partitionAssignment != partitionAssignmentGraphV1 && cfg.stage != "partition" && cfg.stage != "overlap,partition_index" {
 		return config{}, errors.New("-partition-assignment applies only to partition and overlap,partition_index stages")
 	}
+	if cfg.partitionTruthOracle && cfg.stage != "partition" {
+		return config{}, errors.New("-partition-truth-oracle requires -stage partition")
+	}
 	if cfg.partitionAssignment == partitionAssignmentStableIDHashV1 && cfg.stage == "overlap,partition_index" && (len(cfg.overlaps) != 1 || cfg.overlaps[0] != 0) {
 		return config{}, errors.New("stable_id_hash M3 materialization requires exactly zero overlap")
 	}
@@ -881,6 +900,13 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][
 		return err
 	}
 	report := partitionRun{SchemaVersion: 1, ResultKind: "offline_partition_builder", Dataset: fixture, Source: artifact.Source, Config: artifact.Config, Metrics: artifact.Metrics, BuildNanos: time.Since(started).Nanoseconds(), ArtifactSHA256: digest, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, ArtifactPath: path, ArtifactBytes: int64(len(bytes))}
+	if len(queries) != 0 {
+		oracle, err := partitionTruthOracleForArtifactV1(vectors, queries, artifact.Assignment, cfg.partitions, cfg.topK)
+		if err != nil {
+			return err
+		}
+		report.TruthOracle = &oracle
+	}
 	raw, err := json.Marshal(report)
 	if err != nil {
 		return err
@@ -911,6 +937,38 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][
 	}
 	_, err = fmt.Fprintf(stdout, "partition artifact=%s edges=%d cut=%d cap=%d\n", path, artifact.Metrics.GraphEdges, artifact.Metrics.EdgeCut, artifact.Metrics.Cap)
 	return err
+}
+
+func partitionTruthOracleForArtifactV1(vectors, queries [][]float64, assignment []int, partitions, topK int) (partitionTruthOracleV1, error) {
+	if len(vectors) == 0 || len(queries) == 0 || len(assignment) != len(vectors) || partitions < 1 || topK < 1 {
+		return partitionTruthOracleV1{}, errors.New("invalid partition truth oracle input")
+	}
+	probes := min(4, partitions)
+	var coverage, pairColocation float64
+	for _, query := range queries {
+		truth := exactTopK(vectors, query, topK)
+		counts := make([]int, partitions)
+		for _, result := range truth {
+			if result.Ordinal < 0 || result.Ordinal >= len(assignment) || assignment[result.Ordinal] < 0 || assignment[result.Ordinal] >= partitions {
+				return partitionTruthOracleV1{}, errors.New("invalid truth partition assignment")
+			}
+			counts[assignment[result.Ordinal]]++
+		}
+		sort.Slice(counts, func(i, j int) bool { return counts[i] > counts[j] })
+		best := 0
+		for i := 0; i < probes; i++ {
+			best += counts[i]
+		}
+		coverage += float64(best) / float64(len(truth))
+		pairs, matched := len(truth)*(len(truth)-1)/2, 0
+		for _, count := range counts {
+			matched += count * (count - 1) / 2
+		}
+		if pairs > 0 {
+			pairColocation += float64(matched) / float64(pairs)
+		}
+	}
+	return partitionTruthOracleV1{TopK: topK, ProbeBudget: probes, BestProbeCoverageAtK: coverage / float64(len(queries)), TruthPrimaryHomePairColocate: pairColocation / float64(len(queries))}, nil
 }
 
 const provenanceSuffixBytes = 12
@@ -1945,7 +2003,7 @@ func boundedVectorTopK(v [][]float64, q []float64, k int, include func(int) bool
 	})
 	out := make([]neighbor, len(candidates))
 	for i, candidate := range candidates {
-		out[i] = neighbor{ID: fmt.Sprintf("doc-%06d", candidate.Index), Distance: candidate.Distance}
+		out[i] = neighbor{ID: fmt.Sprintf("doc-%06d", candidate.Index), Distance: candidate.Distance, Ordinal: candidate.Index}
 	}
 	return out
 }
