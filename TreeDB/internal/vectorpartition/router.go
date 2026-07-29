@@ -43,26 +43,17 @@ type RouterConfigV1 struct {
 
 func DefaultRouterConfigV1() RouterConfigV1 {
 	return RouterConfigV1{
-		Seed:         1,
-		BranchFactor: 4,
-		LeafSize:     64,
-		// Quarter-probe routing selects four of sixteen partitions from the
-		// best per-partition representatives. Sixteen leaves per roughly
-		// 62.5k-row partition under-samples the partition geometry and made
-		// exact routing indistinguishable from random partition selection on
-		// the declared 1M fixture. Sixty-four remains a fixed, bounded
-		// 1,024-representative total at the 16-partition production shape.
-		RepresentativesPerPartition: 64,
+		Seed:                        1,
+		BranchFactor:                4,
+		LeafSize:                    64,
+		RepresentativesPerPartition: 16,
 		MaxDepth:                    8,
-		// Four deterministic Lloyd iterations keep that 1M/16-partition
-		// production shape within the 20B scalar-work cap (rather than
-		// silently making the default unable to build its declared model).
-		MaxIterations:      4,
-		MaxVectors:         routerMaxVectors,
-		MaxDimensions:      routerMaxDimensions,
-		MaxRepresentatives: routerMaxRepresentatives,
-		MaxScalarWork:      routerMaxScalarWork,
-		MaxRouterBytes:     routerMaxBytes,
+		MaxIterations:               16,
+		MaxVectors:                  routerMaxVectors,
+		MaxDimensions:               routerMaxDimensions,
+		MaxRepresentatives:          routerMaxRepresentatives,
+		MaxScalarWork:               routerMaxScalarWork,
+		MaxRouterBytes:              routerMaxBytes,
 	}
 }
 
