@@ -486,16 +486,35 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 	// class into an ordinal chain before materializing the degree-bounded graph.
 	// This is corpus-only, deterministic, and adds at most two candidates per
 	// row; zero-distance links displace farther sketch candidates when needed.
-	classes := make(map[[32]byte][]int)
+	type duplicateClass struct {
+		values  []float64
+		members []int
+	}
+	classes := make(map[[32]byte][]duplicateClass)
 	for i := range v {
 		fingerprint := vectorFingerprintV1(v[i].Values)
-		classes[fingerprint] = append(classes[fingerprint], i)
+		bucket := classes[fingerprint]
+		matched := -1
+		for class := range bucket {
+			if vectorBitsEqualV1(bucket[class].values, v[i].Values) {
+				matched = class
+				break
+			}
+		}
+		if matched < 0 {
+			bucket = append(bucket, duplicateClass{values: v[i].Values})
+			matched = len(bucket) - 1
+		}
+		bucket[matched].members = append(bucket[matched].members, i)
+		classes[fingerprint] = bucket
 	}
-	for _, members := range classes {
-		for i := 1; i < len(members); i++ {
-			left, right := members[i-1], members[i]
-			addCandidateBounded(sets[left], right, 0, c.Degree)
-			addCandidateBounded(sets[right], left, 0, c.Degree)
+	for _, bucket := range classes {
+		for _, class := range bucket {
+			for i := 1; i < len(class.members); i++ {
+				left, right := class.members[i-1], class.members[i]
+				addCandidateBounded(sets[left], right, 0, c.Degree)
+				addCandidateBounded(sets[right], left, 0, c.Degree)
+			}
 		}
 	}
 	g := Graph{Neighbors: make([][]int, n)}
@@ -516,6 +535,18 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 		}
 	}
 	return g, nil
+}
+
+func vectorBitsEqualV1(left, right []float64) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if math.Float64bits(left[i]) != math.Float64bits(right[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func vectorFingerprintV1(values []float64) [32]byte {
