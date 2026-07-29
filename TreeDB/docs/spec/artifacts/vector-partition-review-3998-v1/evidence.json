@@ -1,0 +1,193 @@
+{
+  "schema_version": 1,
+  "issue": 3998,
+  "base_sha": "53cc1c338636ba8168aa13cc70c2aa167257f361",
+  "measured_implementation_sha": "866e08035bdc7b98c34ab31641f0d794d937dd9d",
+  "post_measurement_review_changes": "documentation-only ledger and README refresh; all runtime and semantic review fixes are included in the measured implementation SHA",
+  "binary_sha256": "2f0896113893eecfb4936f28d0ab8b14d67e8d94c3d47aed060b247bb332e9e0",
+  "build_command": "go build -buildvcs=false -o /mnt/fast4tb/tmp/issue3998_866e_bench ./cmd/treedb_vector_partition_bench",
+  "fixture": {
+    "path_hint": "/mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture",
+    "checksum": "71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f",
+    "source_checksum": "149f812b473d2007653cee6890ca112dd9719e77dcd7ec0c399b2d32e81e761c",
+    "source_rows": 1000000,
+    "queries": 32,
+    "dimensions": 16,
+    "unique_normalized_vector_bit_patterns": 124,
+    "zero_distance_exact_truth_share_at_k": 1
+  },
+  "environment": {
+    "go_version": "go1.26.0",
+    "goos": "linux",
+    "goarch": "amd64",
+    "logical_cpus": 12,
+    "cpu": "11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz",
+    "memory_bytes": 33512759296,
+    "kernel": "Linux 6.8.0-124-generic x86_64 GNU/Linux",
+    "artifact_mount": "/mnt/fast4tb /dev/nvme0n1p1 ext4 rw,noatime"
+  },
+  "graph_attribution": {
+    "exact_command": "/mnt/fast4tb/tmp/issue3998_866e_bench -dataset /mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture -out /mnt/fast4tb/tmp/issue3998_866e_graph_truth_out_eROmKk -format json -stage partition -partition-truth-oracle -partitions 16 -top-k 10 -partition-assignment graph -partition-repetitions 1 -partition-pivots 8 -partition-max-leaf-bucket 32 -partition-degree 4",
+    "report_sha256": "a63c9af88d9a5244a5db00068819628f680255b0308e24bae960a0863e9be90b",
+    "time_log_sha256": "a2cc5ef31435f6b36a2e0f2b70a60ee0557373a1eedd59a5e74edff7993e7b83",
+    "wall_seconds": 26.61,
+    "artifact_sha256": "a8bda5d21a95e1fa10536c4d964c3d20f183db3b662c5b4c1668bcd70e99cf9a",
+    "edge_cut": 84594,
+    "stable_id_hash_edge_cut": 3749271,
+    "best_four_primary_partition_coverage_at_k": 1,
+    "truth_primary_home_pair_colocation_at_k": 1
+  },
+  "stable_hash_attribution": {
+    "exact_command": "/mnt/fast4tb/tmp/issue3998_866e_bench -dataset /mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture -out /mnt/fast4tb/tmp/issue3998_866e_hash_truth_out_iKRU9P -format json -stage partition -partition-truth-oracle -partitions 16 -top-k 10 -partition-assignment stable_id_hash -partition-repetitions 1 -partition-pivots 8 -partition-max-leaf-bucket 32 -partition-degree 4",
+    "report_sha256": "f39dc3033cecb616ad675953c5137d90d41bc8811d82957fe78e2a34d207265c",
+    "time_log_sha256": "ab2d7a4fe3ad99083e194ee181e4069ddeae245ca8154ade0cb2ef3c23b793bc",
+    "wall_seconds": 29.82,
+    "artifact_sha256": "98e954485b68a94a7c1857b6a50b77cb099f9fc294ae3a5d02bdbfd9acebee56",
+    "best_four_primary_partition_coverage_at_k": 0.65625,
+    "truth_primary_home_pair_colocation_at_k": 0.06944444444444445,
+    "scope": "attribution baseline only; no production M8 stable-hash variant was claimed"
+  },
+  "variants": [
+    {
+      "name": "graph_disjoint",
+      "m3": {
+        "exact_command": "/mnt/fast4tb/tmp/issue3998_866e_bench -dataset /mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture -out /mnt/fast4tb/tmp/issue3998_866e_graph_m3_out_e9h7kl -m3-persist-db /mnt/fast4tb/tmp/issue3998_866e_graph_m3_db_a3RFzk -format json -stage overlap,partition_index -partitions 16 -top-k 10 -overlap 0 -partition-assignment graph -partition-repetitions 1 -partition-pivots 8 -partition-max-leaf-bucket 32 -partition-degree 4 -partition-hnsw-m 16",
+        "report_sha256": "f733fbcc740816063ada57b252c26f9f9b39bdbdce31c26079a0f1d17596bbfb",
+        "time_log_sha256": "4012fa0956c50226592b223ff5eff9cb1f60298228dc91770670bb409788f37a",
+        "overlap_requested": 0,
+        "overlap_realized": 0,
+        "cap": 65625,
+        "max_partition_load": 65625,
+        "edge_cut_before": 84594,
+        "edge_cut_after": 84594,
+        "final_derived_physical_bytes": 294317856,
+        "pack_payload_bytes": 282182224,
+        "wall_seconds": 691.29,
+        "peak_rss_bytes": 3343130624
+      },
+      "m8": {
+        "exact_command": "/mnt/fast4tb/tmp/issue3998_866e_bench -mode production_multi_group -dataset /mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture -out /mnt/fast4tb/tmp/issue3998_866e_graph_m8_out_OnL5kO -profiles /mnt/fast4tb/tmp/issue3998_866e_graph_m8_profiles_r6VTC5 -m8-existing-db /mnt/fast4tb/tmp/issue3998_866e_graph_m3_db_a3RFzk -format json -partitions 16 -top-k 10 -probes 4,16 -overlap 0 -raft-groups 4 -raft-nodes-per-group 3 -concurrency 1 -ef-search 4096 -warmup 0 -router-candidates 256",
+        "report_sha256": "a88fc7a30ebf1eb8c90932beca139538e53f08eb66aab438feec0928e4ab1289",
+        "time_log_sha256": "083a2a9c23e4e6271b7cb587a7a63ac2e4f518fdc67e668ec0508af77c9c76d5",
+        "wall_seconds": 144.2,
+        "peak_rss_bytes": 2247274496,
+        "peak_rss_scope": "process lifetime through preflight, warmup, measured query, endpoint-loss fault, and post-measurement attribution boundaries; includes retained top-k coordinator results and cached truth-home attribution mapping",
+        "persistent_asset_bytes": 282308128,
+        "probes_4": {
+          "exact_representative_routing_recall_at_k": 1,
+          "end_to_end_recall_at_k": 0.96875,
+          "qps": 21.508621573003598,
+          "p50_nanos": 46386280,
+          "p95_nanos": 63438580,
+          "p99_nanos": 68531015,
+          "residual_loss_owner": "partition_local_hnsw"
+        },
+        "probes_16": {
+          "exact_representative_routing_recall_at_k": 1,
+          "end_to_end_recall_at_k": 0.96875,
+          "qps": 10.93565136444662,
+          "p50_nanos": 91007436,
+          "p95_nanos": 112658169,
+          "p99_nanos": 112730127,
+          "exhaustive_partition_union_id_parity": true,
+          "exhaustive_partition_union_score_parity": true,
+          "residual_loss_owner": "partition_local_hnsw"
+        }
+      }
+    },
+    {
+      "name": "graph_overlap_020",
+      "m3": {
+        "exact_command": "/mnt/fast4tb/tmp/issue3998_866e_bench -dataset /mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture -out /mnt/fast4tb/tmp/issue3998_866e_overlap_m3_out_piftIc -m3-persist-db /mnt/fast4tb/tmp/issue3998_866e_overlap_m3_db_ym7h7G -format json -stage overlap,partition_index -partitions 16 -top-k 10 -overlap 0.2 -partition-assignment graph -partition-repetitions 1 -partition-pivots 8 -partition-max-leaf-bucket 32 -partition-degree 4 -partition-hnsw-m 16",
+        "report_sha256": "9af27f6f3848619e75e45db691616a1a8b4741fe2846789711b17ba7e76e7e97",
+        "time_log_sha256": "eedeb2dc5a2492d2f9c56cb165cb467745b21d0791293d6930027a052520ee28",
+        "overlap_requested": 200000,
+        "overlap_realized": 200000,
+        "overlap_rejected": 0,
+        "cap": 75000,
+        "all_partition_loads": 75000,
+        "edge_cut_before": 84594,
+        "edge_cut_after": 0,
+        "final_derived_physical_bytes": 353250992,
+        "pack_payload_bytes": 338715392,
+        "derived_storage_ratio_to_disjoint": 1.2002363594276795,
+        "wall_seconds": 764.28,
+        "peak_rss_bytes": 3761696768
+      },
+      "m8": {
+        "exact_command": "/mnt/fast4tb/tmp/issue3998_866e_bench -mode production_multi_group -dataset /mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture -out /mnt/fast4tb/tmp/issue3998_866e_overlap_m8_out_CbhUJk -profiles /mnt/fast4tb/tmp/issue3998_866e_overlap_m8_profiles_0hYg4J -m8-existing-db /mnt/fast4tb/tmp/issue3998_866e_overlap_m3_db_ym7h7G -format json -partitions 16 -top-k 10 -probes 4,16 -overlap .2 -raft-groups 4 -raft-nodes-per-group 3 -concurrency 1 -ef-search 4096 -warmup 0 -router-candidates 256",
+        "report_sha256": "b1238fd39491ea52ae876f2c883b555c75f264e85ba0d87957feb3a3233c1a44",
+        "time_log_sha256": "c492bd21c31fc8e2b9f9145cd2abb15f6d656b9a1ba2262771a25ce3888f3b0f",
+        "wall_seconds": 162.61,
+        "peak_rss_bytes": 2003255296,
+        "peak_rss_scope": "process lifetime through preflight, warmup, measured query, endpoint-loss fault, and post-measurement attribution boundaries; includes retained top-k coordinator results and cached truth-home attribution mapping",
+        "persistent_asset_bytes": 338841296,
+        "persistent_storage_ratio_to_disjoint": 1.2002534195543955,
+        "probes_4": {
+          "exact_representative_routing_recall_at_k": 1,
+          "end_to_end_recall_at_k": 0.99375,
+          "qps": 20.70790927477191,
+          "p50_nanos": 45748783,
+          "p95_nanos": 64599921,
+          "p99_nanos": 68074972,
+          "residual_loss_owner": "partition_local_hnsw"
+        },
+        "probes_16": {
+          "exact_representative_routing_recall_at_k": 1,
+          "end_to_end_recall_at_k": 1,
+          "qps": 10.411703314154163,
+          "p50_nanos": 95377070,
+          "p95_nanos": 112926810,
+          "p99_nanos": 120318757,
+          "exhaustive_partition_union_id_parity": true,
+          "exhaustive_partition_union_score_parity": true,
+          "residual_loss_owner": "none_observed"
+        }
+      }
+    }
+  ],
+  "profiles": {
+    "scope": "CPU, block, mutex, and trace cover measured query cells plus endpoint-loss fault; heap is an end snapshot; allocs is cumulative and paired with allocs_baseline",
+    "graph_disjoint": {
+      "status": "captured_production_query_and_fault_boundary",
+      "allocs.pprof": "d29cfac8c3be16e7d55a277e93a89afdf8ef0df3905666153d10a1ad701de62b",
+      "allocs_baseline.pprof": "8751ade1c170529bd8afc9417fcae5f8005f66b4fbe6f490f8fbdae3a3a4a76e",
+      "block.pprof": "03226f362c6ab29ed3894471859b2d161e48ffbe2d65ebe9cb12cdf8318dab14",
+      "cpu.pprof": "daff2daa955a1c027e835ba1aa79ee79fde94efd3b5f8d231c083aa59d469742",
+      "heap.pprof": "7e30323532053efeba3cb848371d44054a7404d1b35bf0ea0cabba3c61689eff",
+      "mutex.pprof": "1a62217b20fb4bebb4312d30c9bbf196ed82de3ee9347a2081c8cd1c30dad534",
+      "trace.out": "c022c8546e65cde0a4f609200a45e91768b4b9c1b5202308c9b86360769c38c7"
+    },
+    "graph_overlap_020": {
+      "status": "captured_production_query_and_fault_boundary",
+      "allocs.pprof": "24714421496d4a189659bb2bbece4f6760d9296777446c1ba6dc76d102672951",
+      "allocs_baseline.pprof": "3b7c2ff0bc705a6e3150b4588018b95c5a67c2c8c3aed1fd9925adabd1edbf2d",
+      "block.pprof": "de659c0abd344ef1cbd90a6ebcb595795515a7f44254cca4800c1a9420157678",
+      "cpu.pprof": "7b6dda09341aa79b480f9282d38b6c26a68826d2d05d19b10d39134d048bcc39",
+      "heap.pprof": "a8cafd2abc6b756e09c61235fda68e63a137c8cf50e4d1961ffd3088d261b7e8",
+      "mutex.pprof": "cd207a8f78e3596606a722129d5513361122b80a462454ee729dcc7c52956cc7",
+      "trace.out": "431e56ca83efd67efd01564a90ea1ba63e2f11f44ca82f99f4f2be08118f195f"
+    }
+  },
+  "gate_disposition": {
+    "exact_routing_recall_at_least_0_90_at_4_of_16": "pass",
+    "qualified_overlap_benefit_and_derived_bytes_below_1_35x": "pass",
+    "balance_and_resource_bounds": "pass",
+    "exhaustive_overlap_id_score_parity": "pass",
+    "existing_behavior": "pass_local_normal_and_race; pending_latest_head_ci",
+    "exact_head_ai_review": "pending_exact_head_review"
+  },
+  "negative_experiments": [
+    "Router representatives 64 with 16 Lloyd iterations exceeded the 20B scalar-work guard; 64 representatives with four iterations produced 0.278125 exact routing recall and was reverted.",
+    "Increasing graph degree from four to eight left the pre-fix truth oracle unchanged at 0.484375 and was reverted.",
+    "Stratified partition seeds left the pre-fix truth oracle unchanged at 0.484375 and was reverted.",
+    "Sorting graph candidates before encoding was non-causal because candidate sets were already degree bounded and was reverted."
+  ],
+  "limitations": [
+    "The fixture has only 124 unique normalized vector bit patterns and queries copy corpus vectors, so this proves the issue declared fixture-scoped duplicate-link behavior, not population-level routing quality.",
+    "The disjoint all-partition row retains 0.96875 partition-local HNSW recall; issue 3998 explicitly assigns local HNSW quality to issue 3999, while exact representative routing and exhaustive exact-union parity are 1.0.",
+    "Single-variant M8 reports cannot independently evaluate a cross-variant storage ratio and therefore retain a broad overlap-storage gate failure; this durable combined ledger computes both M3 and persistent M8 ratios from the two exact-head reports.",
+    "The disjoint M8 broad exhaustive measured-HNSW parity gate remains red because local HNSW recall is 0.96875; the issue-scoped exact representative and exact-union parity gates pass, and the qualified overlap row reaches 1.0 at all partitions.",
+    "This is loopback four-group evidence, not multi-host qualification; issue 3983 remains deferred."
+  ]
+}

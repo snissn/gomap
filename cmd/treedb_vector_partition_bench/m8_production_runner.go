@@ -29,7 +29,7 @@ import (
 
 const (
 	m8ProductionMultiGroupModeV1 = "production_multi_group"
-	m8PeakRSSScopeV1             = "process lifetime through preflight, warmup, measured query, and endpoint-loss fault boundaries; includes retained top-k coordinator results; excludes post-measurement attribution"
+	m8PeakRSSScopeV1             = "process lifetime through preflight, warmup, measured query, endpoint-loss fault, and post-measurement attribution boundaries; includes retained top-k coordinator results and cached truth-home attribution mapping"
 )
 
 type m8ProductionReportV1 struct {
@@ -83,12 +83,19 @@ type m8ProductionConfigEvidenceV1 struct {
 // m8ProductionAttributionV1 keeps each lossy boundary visible. Recall is
 // always measured against the same canonical global FP32-score oracle.
 type m8ProductionAttributionV1 struct {
-	Contract                                   string   `json:"contract"`
-	GlobalExactRecallAtK                       float64  `json:"global_exact_recall_at_k"`
-	ExhaustivePartitionRecallAtK               float64  `json:"exhaustive_partition_union_recall_at_k"`
-	ExhaustivePartitionIDParity                bool     `json:"exhaustive_partition_union_id_parity"`
-	ExhaustivePartitionScoreParity             bool     `json:"exhaustive_partition_union_score_parity"`
-	ExactRepresentativeRecallAtK               float64  `json:"exact_representative_routing_recall_at_k"`
+	Contract                       string  `json:"contract"`
+	GlobalExactRecallAtK           float64 `json:"global_exact_recall_at_k"`
+	ExhaustivePartitionRecallAtK   float64 `json:"exhaustive_partition_union_recall_at_k"`
+	ExhaustivePartitionIDParity    bool    `json:"exhaustive_partition_union_id_parity"`
+	ExhaustivePartitionScoreParity bool    `json:"exhaustive_partition_union_score_parity"`
+	ExactRepresentativeRecallAtK   float64 `json:"exact_representative_routing_recall_at_k"`
+	// Truth-home diagnostics separate partition placement from representative
+	// ranking: coverage is the share of exact truth neighbors whose primary
+	// home was selected, while pair co-location describes how concentrated the
+	// exact truth set already is in that primary partitioning.
+	ExactRepresentativeTruthHomeCoverageAtK    float64  `json:"exact_representative_truth_home_partition_coverage_at_k"`
+	TruthNeighborHomePartitionsAtK             float64  `json:"truth_neighbor_primary_home_partitions_at_k"`
+	TruthNeighborHomePairColocationAtK         float64  `json:"truth_neighbor_primary_home_pair_colocation_at_k"`
 	ApproximateRepresentativeRecallAtK         float64  `json:"approximate_representative_routing_recall_at_k"`
 	LocalHNSWRecallAtK                         float64  `json:"partition_local_hnsw_recall_at_k"`
 	LocalHNSWSearches                          uint64   `json:"partition_local_hnsw_searches"`
@@ -384,13 +391,12 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		report.Profiles = m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Captured: captured, Status: "captured_production_query_and_fault_boundary", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs.pprof is cumulative and must be compared with allocs_baseline.pprof"}
 	}
 	allUntimed := m8MergeProductionResourceBoundariesV1(report.UntimedBoundary, report.Failure.ResourceBoundary)
-	report.Resources = m8ProductionResourcesV1(cfg, fixture, assets, report.Rows, allUntimed, report.Topology)
 
-	// Diagnostics and attribution deliberately run after the timed query/fault boundary,
-	// profile capture, and peak-RSS snapshot. Its exhaustive mmap scans must not
+	// Diagnostics and attribution deliberately run after the timed query/fault boundary
+	// and profile capture. Their exhaustive mmap scans must not
 	// pre-fault the corpus or contaminate measured process-resource evidence.
-	// The snapshot does include the bounded top-k coordinator results retained
-	// from measured cells so post-measurement attribution can verify parity.
+	// Peak RSS remains process-lifetime evidence and is captured after attribution,
+	// including the bounded top-k results and cached truth-home map retained here.
 	attributionHarness, err := newM8AttributionHarnessV1(assets)
 	if err != nil {
 		return fmt.Errorf("open M8 attribution harness: %w", err)
@@ -407,6 +413,10 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	}
 	report.PackDiagnostics = diagnostics
 	if len(measuredCells) > 0 {
+		primaryHomes, homesErr := m8PrimaryHomePartitionsByDocumentIDV1(assets)
+		if homesErr != nil {
+			return fmt.Errorf("build M8 truth-home attribution mapping: %w", homesErr)
+		}
 		approximateCandidates := min(cfg.routerCandidates, int(assets.status.Representatives))
 		if approximateCandidates < 1 {
 			return errors.New("M8 attribution requires an approximate router candidate budget")
@@ -415,7 +425,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		exhaustive := make([][]m8CanonicalResultV1, len(queries))
 		for _, probes := range cfg.probes {
 			for _, efSearch := range cfg.efSearch {
-				cell, buildErr := m8BuildAttributionV1(context.Background(), assets, queries, truth, probes, efSearch, cfg.topK, approximateCandidates, exhaustive, attributionHarness)
+				cell, buildErr := m8BuildAttributionV1(context.Background(), assets, primaryHomes, queries, truth, probes, efSearch, cfg.topK, approximateCandidates, exhaustive, attributionHarness)
 				if buildErr != nil {
 					return fmt.Errorf("build M8 attribution probes=%d ef=%d: %w", probes, efSearch, buildErr)
 				}
@@ -437,6 +447,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	if closeErr != nil {
 		return fmt.Errorf("close M8 attribution harness: %w", closeErr)
 	}
+	report.Resources = m8ProductionResourcesV1(cfg, fixture, assets, report.Rows, allUntimed, report.Topology)
 	report.GateLedger = m8ProductionGateLedgerForReportV1(report)
 	if m8ProductionAllGatesPassV1(report.GateLedger) {
 		report.Status = "pass"
@@ -1009,7 +1020,79 @@ func m8AttributionKeyV1(probes, efSearch int) string {
 	return fmt.Sprintf("%d/%d", probes, efSearch)
 }
 
-func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAssetsV1, queries [][]float64, truth [][]m8CanonicalResultV1, probes, efSearch, topK, approximateCandidates int, exhaustive [][]m8CanonicalResultV1, harness *m8AttributionHarnessV1) (m8AttributionCellV1, error) {
+// m8PrimaryHomePartitionsByDocumentIDV1 binds canonical truth IDs to the
+// primary (non-overlap) partition membership of the pinned generation.
+func m8PrimaryHomePartitionsByDocumentIDV1(assets *m8ProductionMultiGroupAssetsV1) (map[string]uint32, error) {
+	if assets == nil || assets.collection == nil || assets.manifest.SourceRowCount == 0 {
+		return nil, errors.New("missing M8 assets for truth-home diagnostics")
+	}
+	source, rows, err := assets.collection.ReadVectorPartitionRouterSourceRowsV1(partitionHNSWIndex)
+	if err != nil {
+		return nil, err
+	}
+	if source.Generation != assets.manifest.SourceGeneration || source.Checksum != assets.manifest.SourceChecksum || source.SchemaHash != assets.manifest.SourceSchemaHash || source.RowCount != assets.manifest.SourceRowCount || len(rows) != int(source.RowCount) {
+		return nil, errors.New("source identity does not match pinned partition generation")
+	}
+	homesByOrdinal := make([]uint32, source.RowCount)
+	seen := make([]bool, source.RowCount)
+	for _, membership := range assets.manifest.Memberships {
+		if membership.VectorOrdinal >= source.RowCount || membership.PartitionID >= assets.manifest.PartitionCount || seen[membership.VectorOrdinal] {
+			return nil, errors.New("invalid primary partition membership")
+		}
+		seen[membership.VectorOrdinal] = true
+		homesByOrdinal[membership.VectorOrdinal] = membership.PartitionID
+	}
+	homes := make(map[string]uint32, len(rows))
+	for ordinal, row := range rows {
+		id := string(row.DocumentID)
+		if !seen[ordinal] || id == "" {
+			return nil, errors.New("incomplete primary partition membership")
+		}
+		if _, duplicate := homes[id]; duplicate {
+			return nil, fmt.Errorf("duplicate source document ID %q", id)
+		}
+		homes[id] = homesByOrdinal[ordinal]
+	}
+	return homes, nil
+}
+
+// m8TruthHomePartitionDiagnosticsV1 measures the selected-partition coverage
+// of the canonical truth set and the truth set's primary-home concentration.
+func m8TruthHomePartitionDiagnosticsV1(truth []m8CanonicalResultV1, selected []uint32, homes map[string]uint32) (coverage, distinctHomes, pairColocation float64, err error) {
+	if len(truth) == 0 || len(selected) == 0 || len(homes) == 0 {
+		return 0, 0, 0, errors.New("empty truth-home diagnostic input")
+	}
+	selectedSet := make(map[uint32]struct{}, len(selected))
+	for _, partition := range selected {
+		selectedSet[partition] = struct{}{}
+	}
+	homeCounts := make(map[uint32]int, len(truth))
+	covered := 0
+	for _, result := range truth {
+		home, ok := homes[result.ID]
+		if !ok {
+			return 0, 0, 0, fmt.Errorf("canonical truth ID %q has no primary home", result.ID)
+		}
+		homeCounts[home]++
+		if _, ok := selectedSet[home]; ok {
+			covered++
+		}
+	}
+	pairs := len(truth) * (len(truth) - 1) / 2
+	matchingPairs := 0
+	for _, count := range homeCounts {
+		matchingPairs += count * (count - 1) / 2
+	}
+	if pairs > 0 {
+		pairColocation = float64(matchingPairs) / float64(pairs)
+	}
+	return float64(covered) / float64(len(truth)), float64(len(homeCounts)), pairColocation, nil
+}
+
+func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAssetsV1, primaryHomes map[string]uint32, queries [][]float64, truth [][]m8CanonicalResultV1, probes, efSearch, topK, approximateCandidates int, exhaustive [][]m8CanonicalResultV1, harness *m8AttributionHarnessV1) (m8AttributionCellV1, error) {
+	if len(primaryHomes) == 0 {
+		return m8AttributionCellV1{}, errors.New("M8 attribution requires a cached truth-home mapping")
+	}
 	cell := m8AttributionCellV1{Evidence: m8ProductionAttributionV1{
 		Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1,
 		ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
@@ -1021,7 +1104,7 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 	for i := range allPartitions {
 		allPartitions[i] = uint32(i)
 	}
-	var exhaustiveRecall, exactRecall, approximateRecall, localRecall float64
+	var exhaustiveRecall, exactRecall, exactTruthHomeCoverage, truthHomePartitions, truthHomePairColocation, approximateRecall, localRecall float64
 	for i, query64 := range queries {
 		if err := ctx.Err(); err != nil {
 			return cell, err
@@ -1043,6 +1126,13 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 		if err != nil {
 			return cell, err
 		}
+		coverage, homes, pairColocation, err := m8TruthHomePartitionDiagnosticsV1(truth[i], exactPartitions, primaryHomes)
+		if err != nil {
+			return cell, fmt.Errorf("M8 exact routing truth-home diagnostics query=%d: %w", i, err)
+		}
+		exactTruthHomeCoverage += coverage
+		truthHomePartitions += homes
+		truthHomePairColocation += pairColocation
 		approximatePartitions, approximateRouteErr := harness.route(ctx, query, probes, collections.VectorPartitionRouterModeApproxV1, approximateCandidates)
 		approximateCoverageComplete, err := m8ApproximateRouterCoverageV1(approximateRouteErr)
 		if err != nil {
@@ -1081,6 +1171,9 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 	}
 	cell.Evidence.ExhaustivePartitionRecallAtK = exhaustiveRecall / n
 	cell.Evidence.ExactRepresentativeRecallAtK = exactRecall / n
+	cell.Evidence.ExactRepresentativeTruthHomeCoverageAtK = exactTruthHomeCoverage / n
+	cell.Evidence.TruthNeighborHomePartitionsAtK = truthHomePartitions / n
+	cell.Evidence.TruthNeighborHomePairColocationAtK = truthHomePairColocation / n
 	cell.Evidence.ApproximateRepresentativeRecallAtK = approximateRecall / n
 	cell.Evidence.LocalHNSWRecallAtK = localRecall / n
 	return cell, nil

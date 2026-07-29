@@ -27,20 +27,21 @@ import (
 )
 
 const (
-	SchemaVersion    = 1
-	maxVectors       = 1_000_000
-	maxDimensions    = 4096
-	maxEdges         = 64_000_000
-	maxRepetitions   = 32
-	maxPivots        = 1024
-	maxLeafBucket    = 65536
-	maxDegree        = 1024
-	maxPartitions    = 16384
-	maxIDBytes       = 1 << 20
-	maxTotalIDBytes  = 64 << 20
-	maxDistanceWork  = int64(20_000_000_000) // scalar cosine dimensions
-	maxPartitionWork = int64(250_000_000)
-	maxCarveDepth    = 64
+	SchemaVersion                   = 1
+	maxVectors                      = 1_000_000
+	maxDimensions                   = 4096
+	maxEdges                        = 64_000_000
+	maxRepetitions                  = 32
+	maxPivots                       = 1024
+	maxLeafBucket                   = 65536
+	maxDegree                       = 1024
+	maxPartitions                   = 16384
+	maxIDBytes                      = 1 << 20
+	maxTotalIDBytes                 = 64 << 20
+	maxDistanceWork                 = int64(20_000_000_000) // scalar cosine dimensions
+	maxPartitionWork                = int64(250_000_000)
+	maxCarveDepth                   = 64
+	maxDuplicateFingerprintVariants = 64
 )
 
 const externalJSONFixedSyntaxBytes = 1 << 20
@@ -481,6 +482,67 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 			return Graph{}, err
 		}
 	}
+	// Exact duplicate vectors can be separated by the bounded pivot leaves even
+	// though their cosine distance is zero. Link each canonical fingerprint
+	// class into an ordinal chain before materializing the degree-bounded graph.
+	// This is corpus-only, deterministic, and adds at most two candidates per
+	// row; zero-distance links displace farther sketch candidates when needed.
+	type duplicateClass struct {
+		values  []float64
+		members []int
+	}
+	classes := make(map[[32]byte][]duplicateClass)
+	duplicateLinks := make([]map[int]struct{}, n)
+	for i := range v {
+		fingerprint := VectorBitsFingerprintV1(v[i].Values)
+		bucket := classes[fingerprint]
+		matched := -1
+		for class := range bucket {
+			if vectorBitsEqualV1(bucket[class].values, v[i].Values) {
+				matched = class
+				break
+			}
+		}
+		if matched < 0 {
+			if len(bucket) >= maxDuplicateFingerprintVariants {
+				return Graph{}, fmt.Errorf("duplicate fingerprint collision variants exceed bound: bound=%d observed=%d fingerprint=%x", maxDuplicateFingerprintVariants, len(bucket)+1, fingerprint)
+			}
+			bucket = append(bucket, duplicateClass{values: v[i].Values})
+			matched = len(bucket) - 1
+		}
+		bucket[matched].members = append(bucket[matched].members, i)
+		classes[fingerprint] = bucket
+	}
+	for _, bucket := range classes {
+		for _, class := range bucket {
+			if len(class.members) < 2 {
+				continue
+			}
+			if c.Degree == 1 {
+				// A directed ordinal cycle is the only way to keep a class larger
+				// than two strongly connected with one outgoing edge per row.
+				for i, from := range class.members {
+					to := class.members[(i+1)%len(class.members)]
+					duplicateLinks[from] = map[int]struct{}{to: {}}
+					sets[from][to] = 0
+				}
+				continue
+			}
+			for i := 1; i < len(class.members); i++ {
+				left, right := class.members[i-1], class.members[i]
+				if duplicateLinks[left] == nil {
+					duplicateLinks[left] = make(map[int]struct{}, 2)
+				}
+				if duplicateLinks[right] == nil {
+					duplicateLinks[right] = make(map[int]struct{}, 2)
+				}
+				duplicateLinks[left][right] = struct{}{}
+				duplicateLinks[right][left] = struct{}{}
+				sets[left][right] = 0
+				sets[right][left] = 0
+			}
+		}
+	}
 	g := Graph{Neighbors: make([][]int, n)}
 	for i := range g.Neighbors {
 		// Canonical artifacts represent every zero-degree row as [] rather
@@ -488,6 +550,9 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 		g.Neighbors[i] = make([]int, 0)
 	}
 	for i, s := range sets {
+		if err := pruneCandidatesPreservingRequired(s, duplicateLinks[i], c.Degree); err != nil {
+			return Graph{}, err
+		}
 		for j := range s {
 			if i != j {
 				g.Neighbors[i] = append(g.Neighbors[i], j)
@@ -499,6 +564,56 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 		}
 	}
 	return g, nil
+}
+
+func pruneCandidatesPreservingRequired(s map[int]float64, required map[int]struct{}, cap int) error {
+	if len(required) > cap {
+		return errors.New("required duplicate links exceed graph degree")
+	}
+	for len(s) > cap {
+		worst := -1
+		worstD := 0.0
+		for ordinal, distance := range s {
+			if _, keep := required[ordinal]; keep {
+				continue
+			}
+			if worst < 0 || distance > worstD || distance == worstD && ordinal > worst {
+				worst, worstD = ordinal, distance
+			}
+		}
+		if worst < 0 {
+			return errors.New("cannot prune graph candidates without removing required duplicate links")
+		}
+		delete(s, worst)
+	}
+	return nil
+}
+
+func vectorBitsEqualV1(left, right []float64) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if math.Float64bits(left[i]) != math.Float64bits(right[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// VectorBitsFingerprintV1 returns the canonical SHA-256 fingerprint used to
+// narrow exact float-bit vector classes. Callers must still compare vector
+// bits before treating equal fingerprints as equal vectors.
+func VectorBitsFingerprintV1(values []float64) [32]byte {
+	h := sha256.New()
+	var raw [8]byte
+	for _, value := range values {
+		binary.BigEndian.PutUint64(raw[:], math.Float64bits(value))
+		_, _ = h.Write(raw[:])
+	}
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
 }
 
 // distanceBudget bounds scalar operations in the pivot and leaf phases.

@@ -607,6 +607,76 @@ func TestGraphPartitionBeatsStableIDHashOnClusteredFixture(t *testing.T) {
 		t.Fatalf("graph cut=%d hash=%d", a.Metrics.EdgeCut, a.Metrics.StableIDHashEdgeCut)
 	}
 }
+func TestGraphConnectsExactDuplicateClassAcrossLeaves(t *testing.T) {
+	v := make([]Vector, 16)
+	for i := range v {
+		values := []float64{0, 1}
+		if i == 0 || i == 15 {
+			values = []float64{1, 0}
+		}
+		v[i] = Vector{ID: fmt.Sprintf("v-%02d", i), Values: values}
+	}
+	c := config()
+	c.Partitions, c.Repetitions, c.Pivots, c.MaxLeafBucket, c.Degree = 2, 1, 2, 2, 2
+	c.MaxEdges = len(v) * c.Degree
+	a, err := Build(v, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contains := func(values []int, want int) bool {
+		for _, value := range values {
+			if value == want {
+				return true
+			}
+		}
+		return false
+	}
+	if !contains(a.Graph.Neighbors[0], 15) || !contains(a.Graph.Neighbors[15], 0) {
+		t.Fatalf("duplicate endpoints not linked: first=%v last=%v", a.Graph.Neighbors[0], a.Graph.Neighbors[15])
+	}
+}
+
+func TestGraphConnectsDuplicateClassLargerThanDegree(t *testing.T) {
+	const duplicateCount = 20
+	v := make([]Vector, duplicateCount*2)
+	for i := 0; i < duplicateCount; i++ {
+		v[i] = Vector{ID: fmt.Sprintf("a-duplicate-%02d", i), Values: []float64{1, 0, 0}}
+		v[duplicateCount+i] = Vector{ID: fmt.Sprintf("z-distractor-%02d", i), Values: []float64{0, 1, float64(i + 1)}}
+	}
+	for _, degree := range []int{1, 4} {
+		t.Run(fmt.Sprintf("degree-%d", degree), func(t *testing.T) {
+			c := config()
+			c.Partitions, c.Repetitions, c.Pivots, c.MaxLeafBucket, c.Degree = 4, 2, 3, 2, degree
+			c.MaxVectors, c.MaxEdges = len(v), len(v)*c.Degree*c.Repetitions
+			a, err := Build(v, c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen := make([]bool, duplicateCount)
+			queue := []int{0}
+			seen[0] = true
+			for len(queue) > 0 {
+				ordinal := queue[0]
+				queue = queue[1:]
+				if len(a.Graph.Neighbors[ordinal]) > c.Degree {
+					t.Fatalf("duplicate ordinal %d exceeds degree: neighbors=%v", ordinal, a.Graph.Neighbors[ordinal])
+				}
+				for _, neighbor := range a.Graph.Neighbors[ordinal] {
+					if neighbor < duplicateCount && !seen[neighbor] {
+						seen[neighbor] = true
+						queue = append(queue, neighbor)
+					}
+				}
+			}
+			for ordinal, reachable := range seen {
+				if !reachable {
+					t.Fatalf("duplicate class larger than degree is disconnected at ordinal %d", ordinal)
+				}
+			}
+		})
+	}
+}
+
 func TestGraphPartitionBeatsStableIDHashOnDeterministic10kClusters(t *testing.T) {
 	const n = 10_000
 	v := make([]Vector, n)

@@ -10,8 +10,16 @@ unique stable IDs. It orders IDs canonically, repeatedly samples pivots from a
 seeded permutation, permits the two nearest pivots at depth zero, uses one
 nearest pivot at deeper levels, chunks degenerate duplicate buckets, computes
 exact neighbors in bounded leaves, and unions them into a bounded directed
-graph. `symmetric=false` is the sole supported policy in v1; it is recorded in
-the artifact rather than pretending bounded reverse insertion is symmetric.
+graph. After the leaf sketch, exact duplicate bit-pattern classes receive
+deterministic zero-distance links between adjacent canonical ordinals. Required
+links are preserved while farther sketch candidates are pruned to the
+configured degree; degree one uses a directed ordinal cycle. These links are
+corpus-only and keep identical vectors connected even when the class is larger
+than the degree or bounded pivot leaves separate its members. A
+SHA-256 fingerprint narrows candidate classes, exact float-bit comparison
+verifies membership, and collision variants fail closed at a fixed bound.
+`symmetric=false` is the sole supported policy in v1; it is recorded in the
+artifact rather than pretending bounded reverse insertion is symmetric.
 
 The deterministic `treedb_reference_greedy_v1` backend is CI-safe and has no
 third-party backend provenance: its license is the repository license. It
@@ -59,6 +67,13 @@ or `vector_partition_build_v1.json`).
 The latter is a local offline builder report, not production routing or a
 universal speedup claim. The command's existing `-stage simulation` remains
 the M0 sequential simulator and continues to use its frozen M0 vocabulary.
+For diagnosis only, `-partition-truth-oracle` may be added to `-stage
+partition`; it reports exact truth-neighbor primary-home coverage, pair
+co-location, unique vector bit patterns, and zero-distance truth share. The
+flag does not affect partition construction and is rejected for other stages.
+Its query count, generated matrix bytes, exact corpus-by-query work, top-k, and
+fixture checksum are validated before the diagnostic data is allocated or
+used.
 
 Before a production backend can be chosen, pin its version, source and license,
 input/output command, resource limits, and independent validator evidence.

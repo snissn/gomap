@@ -321,6 +321,16 @@ func routerTestConfigV1() RouterConfigV1 {
 	return cfg
 }
 
+func TestDefaultRouterConfigV1(t *testing.T) {
+	cfg := DefaultRouterConfigV1()
+	if cfg.RepresentativesPerPartition != 16 {
+		t.Fatalf("representatives per partition=%d want 16", cfg.RepresentativesPerPartition)
+	}
+	if cfg.MaxIterations != 16 {
+		t.Fatalf("max iterations=%d want 16", cfg.MaxIterations)
+	}
+}
+
 type routerCancelAfterErrContextV1 struct {
 	calls    int
 	cancelAt int
