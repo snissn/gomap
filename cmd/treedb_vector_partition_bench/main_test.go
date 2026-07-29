@@ -114,6 +114,44 @@ func TestFixtureArithmeticUsesExplicitFMA(t *testing.T) {
 	}
 }
 
+func TestQualificationFixtureGeneratorsHaveIndependentHeldoutQueriesV1(t *testing.T) {
+	for _, generator := range []string{qualificationSyntheticGeneratorV1, qualificationEmbeddingGeneratorV1} {
+		m := fixtureManifest{SchemaVersion: schemaVersion, Fixture: "qualification", Generator: generator, Arithmetic: fixtureArithmetic, Vectors: 128, Queries: 64, Dimensions: 32, Metric: "cosine", Seed: 17}
+		vectors, queries := fixtureData(m)
+		if len(vectors) != m.Vectors || len(queries) != m.Queries || !supportedFixtureGeneratorV1(generator) {
+			t.Fatalf("generator=%s generated malformed shape", generator)
+		}
+		for qi, query := range queries {
+			for vi, vector := range vectors {
+				if slices.Equal(query, vector) {
+					t.Fatalf("generator=%s heldout query %d copied corpus vector %d", generator, qi, vi)
+				}
+			}
+		}
+		m.Checksum = fixtureChecksumFromData(vectors, queries)
+		if err := validateM3FixtureWithCaps(m, maxVectors, maxFixtureBytes); err != nil {
+			t.Fatalf("generator=%s fixture rejected: %v", generator, err)
+		}
+		vectorsAgain, queriesAgain := fixtureData(m)
+		if fixtureChecksumFromData(vectorsAgain, queriesAgain) != m.Checksum {
+			t.Fatalf("generator=%s not reproducible", generator)
+		}
+	}
+}
+
+func TestCommittedHighEntropyQualificationIdentityV1(t *testing.T) {
+	m, err := loadFixture(filepath.Join("..", "..", "testdata", "vector_partition_qualification_high_entropy_1m"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateM3FixtureWithCaps(m, maxVectors, maxFixtureBytes); err != nil {
+		t.Fatal(err)
+	}
+	if m.Generator != qualificationSyntheticGeneratorV1 || m.Vectors != 1_000_000 || m.Queries < 1_000 || m.Dimensions != 128 || m.Seed != 4015 {
+		t.Fatalf("unexpected qualification identity: %+v", m)
+	}
+}
+
 func TestTruthHomePartitionDiagnosticsV1(t *testing.T) {
 	truth := []m8CanonicalResultV1{{ID: "a"}, {ID: "b"}, {ID: "c"}, {ID: "d"}}
 	homes := map[string]uint32{"a": 0, "b": 0, "c": 1, "d": 2}

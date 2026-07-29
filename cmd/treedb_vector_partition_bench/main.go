@@ -45,6 +45,8 @@ const (
 	partitionHNSWDegree                     = 16
 	maxSourceHNSWDegree                     = partitionHNSWDegree
 	fixtureGenerator                        = "treedb_vector_partition_fixture_v2"
+	qualificationSyntheticGeneratorV1       = "treedb_vector_partition_high_entropy_synthetic_v1"
+	qualificationEmbeddingGeneratorV1       = "treedb_vector_partition_embedding_mixture_v1"
 	fixtureArithmetic                       = "ieee754_binary64_explicit_fma_v1"
 	documentIDStorageBytes                  = 16
 	hnswJSONFloatBytes                      = 24
@@ -392,6 +394,7 @@ func runGenerateFixture(args []string, stdout io.Writer) error {
 		queries    int
 		dimensions int
 		seed       int64
+		generator  string
 	)
 	fs := flag.NewFlagSet("treedb_vector_partition_bench generate-fixture", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -400,10 +403,11 @@ func runGenerateFixture(args []string, stdout io.Writer) error {
 	fs.IntVar(&queries, "queries", 1, "number of deterministic queries")
 	fs.IntVar(&dimensions, "dimensions", 16, "vector dimensions")
 	fs.Int64Var(&seed, "seed", 1, "fixture generation seed")
+	fs.StringVar(&generator, "generator", fixtureGenerator, "fixture generator identity")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 || out == "" || vectors < 1 || vectors > maxVectors || queries < 1 || queries > maxVectors || dimensions < 1 || dimensions > maxDimensions {
+	if fs.NArg() != 0 || out == "" || !supportedFixtureGeneratorV1(generator) || vectors < 1 || vectors > maxVectors || queries < 1 || queries > maxVectors || dimensions < 1 || dimensions > maxDimensions {
 		return errors.New("generate-fixture requires -out and positive bounded vectors, queries, and dimensions")
 	}
 	rows := int64(vectors) + int64(queries)
@@ -413,7 +417,7 @@ func runGenerateFixture(args []string, stdout io.Writer) error {
 	manifest := fixtureManifest{
 		SchemaVersion: schemaVersion,
 		Fixture:       fmt.Sprintf("deterministic_%d", vectors),
-		Generator:     fixtureGenerator,
+		Generator:     generator,
 		Arithmetic:    fixtureArithmetic,
 		Vectors:       vectors,
 		Queries:       queries,
@@ -421,7 +425,7 @@ func runGenerateFixture(args []string, stdout io.Writer) error {
 		Metric:        "cosine",
 		Seed:          seed,
 	}
-	corpus, querySet := deterministicFixture(manifest)
+	corpus, querySet := fixtureData(manifest)
 	manifest.Checksum = fixtureChecksumFromData(corpus, querySet)
 	if err := validateM3FixtureWithCaps(manifest, maxVectors, maxFixtureBytes); err != nil {
 		return err
@@ -519,10 +523,10 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		// simulation-only query/truth stream, so verifying it here would recreate
 		// queries and exact truth that this stage deliberately does not own.
 		if cfg.stage == "partition" {
-			vectors := deterministicVectors(fixture)
+			vectors := fixtureVectors(fixture)
 			var queries [][]float64
 			if cfg.partitionTruthOracle {
-				vectors, queries = deterministicFixture(fixture)
+				vectors, queries = fixtureData(fixture)
 				if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 					return errors.New("fixture checksum does not match generated vector/query/truth stream")
 				}
@@ -535,7 +539,7 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		if _, err := validateM3BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits); err != nil {
 			return err
 		}
-		vectors, queries := deterministicFixture(fixture)
+		vectors, queries := fixtureData(fixture)
 		if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 			return errors.New("fixture checksum does not match generated vector/query/truth stream")
 		}
@@ -554,7 +558,7 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 	if cfg.memory.ModeledPeakBytes > cfg.maxBytes {
 		return fmt.Errorf("modeled peak benchmark-owned memory %d exceeds -max-fixture-bytes %d", cfg.memory.ModeledPeakBytes, cfg.maxBytes)
 	}
-	vectors, queries := deterministicFixture(fixture)
+	vectors, queries := fixtureData(fixture)
 	if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 		return errors.New("fixture checksum does not match generated vector/query/truth stream")
 	}
@@ -629,7 +633,7 @@ func m8ProductionFixtureDataV1(cfg config, fixture fixtureManifest) ([][]float64
 	if len(cfg.m8VariantDBs) > 0 {
 		return nil, nil, nil
 	}
-	vectors, queries := deterministicFixture(fixture)
+	vectors, queries := fixtureData(fixture)
 	if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 		return nil, nil, errors.New("fixture checksum does not match generated vector/query/truth stream")
 	}
@@ -1235,11 +1239,15 @@ func validateM3FixtureWithCaps(m fixtureManifest, capVectors int, capBytes int64
 }
 
 func validateFixtureSyntax(m fixtureManifest, capVectors int) error {
-	if m.SchemaVersion != schemaVersion || m.Fixture == "" || m.Generator != fixtureGenerator || m.Arithmetic != fixtureArithmetic || m.Vectors < 1 || m.Vectors > capVectors || m.Queries < 1 || m.Dimensions < 1 || m.Dimensions > maxDimensions || m.Metric != "cosine" || len(m.Checksum) != 64 {
+	if m.SchemaVersion != schemaVersion || m.Fixture == "" || !supportedFixtureGeneratorV1(m.Generator) || m.Arithmetic != fixtureArithmetic || m.Vectors < 1 || m.Vectors > capVectors || m.Queries < 1 || m.Dimensions < 1 || m.Dimensions > maxDimensions || m.Metric != "cosine" || len(m.Checksum) != 64 {
 		return errors.New("unsupported or malformed fixture manifest")
 	}
 	_, e := hex.DecodeString(m.Checksum)
 	return e
+}
+
+func supportedFixtureGeneratorV1(generator string) bool {
+	return generator == fixtureGenerator || generator == qualificationSyntheticGeneratorV1 || generator == qualificationEmbeddingGeneratorV1
 }
 
 type benchmarkWorkPlan struct {
@@ -1967,6 +1975,70 @@ func memoryScaleCeil(value, numerator, denominator int64) (int64, error) {
 func deterministicFixture(m fixtureManifest) ([][]float64, [][]float64) {
 	v := deterministicVectors(m)
 	return v, deterministicQueries(v, m)
+}
+
+// fixtureData dispatches a fixture's durable generator identity. The
+// qualification generators deliberately derive corpus and held-out queries
+// from separate domains; unlike the legacy fixture they never copy a corpus
+// row into a query.
+func fixtureData(m fixtureManifest) ([][]float64, [][]float64) {
+	if m.Generator == fixtureGenerator {
+		return deterministicFixture(m)
+	}
+	return fixtureVectors(m), qualificationQueriesV1(m)
+}
+
+func fixtureVectors(m fixtureManifest) [][]float64 {
+	if m.Generator == fixtureGenerator {
+		return deterministicVectors(m)
+	}
+	return qualificationVectorsV1(m, 0x9e3779b97f4a7c15)
+}
+
+func qualificationVectorsV1(m fixtureManifest, domain uint64) [][]float64 {
+	v := contiguousFloat64Matrix(m.Vectors, m.Dimensions)
+	for i := range v {
+		qualificationVectorV1(v[i], m, uint64(i), domain)
+	}
+	return v
+}
+
+func qualificationQueriesV1(m fixtureManifest) [][]float64 {
+	q := contiguousFloat64Matrix(m.Queries, m.Dimensions)
+	for i := range q {
+		qualificationVectorV1(q[i], m, uint64(i), 0xd1b54a32d192ed03)
+	}
+	return q
+}
+
+func qualificationVectorV1(dst []float64, m fixtureManifest, ordinal, domain uint64) {
+	state := uint64(m.Seed) ^ domain ^ (ordinal * 0x94d049bb133111eb)
+	cluster := int((state >> 32) % 32)
+	for d := range dst {
+		state += 0x9e3779b97f4a7c15
+		u := float64(splitMix64V1(state)>>11) * (1.0 / (1 << 53))
+		state += 0x9e3779b97f4a7c15
+		v := float64(splitMix64V1(state)>>11)*(1.0/(1<<53))*2 - 1
+		if m.Generator == qualificationEmbeddingGeneratorV1 {
+			// Directional topics plus continuous noise model an embedding-shaped
+			// distribution; the manifest names it accurately rather than claiming
+			// it is a licensed external embedding corpus.
+			topic := -0.35
+			if d%32 == cluster {
+				topic = 1
+			}
+			dst[d] = topic + 0.18*v + 0.04*(u-0.5)
+		} else {
+			dst[d] = v + 0.02*(u-0.5)
+		}
+	}
+	normalize(dst)
+}
+
+func splitMix64V1(x uint64) uint64 {
+	x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9
+	x = (x ^ (x >> 27)) * 0x94d049bb133111eb
+	return x ^ (x >> 31)
 }
 
 // deterministicVectors is the partition-stage corpus generator. It must not
