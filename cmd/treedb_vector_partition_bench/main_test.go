@@ -127,6 +127,17 @@ func TestTruthHomePartitionDiagnosticsV1(t *testing.T) {
 	}
 }
 
+func TestPartitionTruthOracleForArtifactV1(t *testing.T) {
+	vectors := [][]float64{{1, 0}, {.99, .01}, {0, 1}, {-.9, .1}}
+	oracle, err := partitionTruthOracleForArtifactV1(vectors, [][]float64{{1, 0}}, []int{0, 0, 1, 1}, 2, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oracle.ProbeBudget != 2 || oracle.BestProbeCoverageAtK != 1 || oracle.TruthPrimaryHomePairColocate != 1.0/3.0 {
+		t.Fatalf("oracle=%+v", oracle)
+	}
+}
+
 func TestGenerateFixtureWritesValidatedDeterministicManifestV1(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "fixture")
 	var stdout bytes.Buffer
