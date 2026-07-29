@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "result_kind": "vector_partition_v1_qualification_attribution_v1",
+  "status": "experimental_off_gate_failures_not_1m_qualified",
+  "measured_code_head": "a2b2ad40b796",
+  "fixture": {"kind":"local_embedding_mixture_calibration","vectors":100000,"queries":1000,"dimensions":128,"metric":"cosine","seed":4017,"checksum":"ecc2224f386932e580e4956f2cfa852140d3134625971c3511bc0d5feddf9b95","scope":"not_required_1m"},
+  "truth": {"contract":"fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1","cache_identity":"3a8605017166fca50d4a85d28ad44e17e9abac9828a6795cdae25f238042624a","disjoint_compute_nanos":46531550247,"overlap_reuse_load_nanos":6761515},
+  "topology": {"partitions":16,"raft_groups":4,"nodes_per_group":3,"transport":"tcp_loopback_serialized_m5_v1"},
+  "attribution": {"stable_hash_p4":0.2578,"graph_overlap_p4":0.7201,"exact_routing_p4":0.7291,"ef_p4":{"64":0.7201,"128":0.7279,"256":0.7289},"ef_p16":{"64":0.9924,"128":0.999,"256":0.9998},"owner":"graph_router_primary_partition_locality_at_quarter_probe_budget"},
+  "gates": {"exact_partition_union_parity":"pass","failure_honesty":"pass","balance":"pass","overlap_storage":"pass_1.2002x","quarter_probe_recall_ge_090":"fail_0.7201","probe_reduction":"fail","matched_recall_qps":"fail_no_target_row","matched_recall_tail":"fail_no_target_row","required_1m":"deferred_requires_explicit_work_time_resource_calibration"},
+  "repeats": {"runs":3,"p4":{"recall":0.7201,"qps_median":50.96762724566287,"qps_range":[38.957053307919566,51.0583649126661],"p95_ms_median":30.980773,"p95_ms_range":[29.590312,46.256897]},"p16":{"recall":0.9924,"qps_median":45.444061581835896,"qps_range":[38.30153640654342,46.672391648155234],"p95_ms_median":34.493601,"p95_ms_range":[33.704847,47.056089]}},
+  "concurrency": {"p4_c16":{"recall":0.7201,"qps":126.40229642716955,"p95_ms":218.700072},"p4_c64":{"recall":0.7201,"qps":93.50123186722921,"p95_ms":978.510104},"p16_c16":{"recall":0.9924,"qps":91.25145855053826,"p95_ms":299.688544},"p16_c64":{"recall":0.9924,"qps":163.95218587968898,"p95_ms":524.46338}},
+  "artifact_root": "/mnt/fast4tb/gomap-4015-embedding100k",
+  "commands": {"canonical":"go run ./cmd/treedb_vector_partition_bench -mode production_multi_group -dataset /mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k -m8-truth-cache /mnt/fast4tb/gomap-4015-embedding100k/truth-cache -m8-existing-db <retained-M3-asset> -partitions 16 -raft-groups 4 -probes <cells> -overlap <ratio> -ef-search <cells> -concurrency <cells> -top-k 10 -seed 4017 -m8-max-exact-truth-visits 100000000 -format text"},
+  "artifacts": {"disjoint_sha256":"123c9135f3374827c16e52946dde138860bcfbf49b3985b7a235e75c35c7198e","overlap_sha256":"4a6c794f78df3512de1b925769bd2c2f8eddb3ff05d80017e0bee3db5fa77cbd","repeat2_sha256":"919abe7ab4d372afc9293c50716148ef080b05a8e61fe00c27c590fbca3ff6c3","repeat3_sha256":"b0ae43d4b68cc4e57e9d3b74d5308657b61a7d9be238e870182c1b5d22190cc5"}
+}
