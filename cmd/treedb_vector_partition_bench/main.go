@@ -135,6 +135,8 @@ type partitionTruthOracleV1 struct {
 	ProbeBudget                  int     `json:"probe_budget"`
 	BestProbeCoverageAtK         float64 `json:"best_probe_primary_partition_coverage_at_k"`
 	TruthPrimaryHomePairColocate float64 `json:"truth_primary_home_pair_colocation_at_k"`
+	UniqueVectorBitPatterns      int     `json:"unique_normalized_vector_bit_patterns"`
+	ZeroDistanceTruthShareAtK    float64 `json:"zero_distance_exact_truth_share_at_k"`
 }
 
 type fixtureManifest struct {
@@ -945,10 +947,18 @@ func partitionTruthOracleForArtifactV1(vectors, queries [][]float64, assignment 
 	}
 	probes := min(4, partitions)
 	var coverage, pairColocation float64
+	var zeroDistance int
+	classes := make(map[[32]byte]struct{}, len(vectors))
+	for _, vector := range vectors {
+		classes[partitionVectorFingerprintV1(vector)] = struct{}{}
+	}
 	for _, query := range queries {
 		truth := exactTopK(vectors, query, topK)
 		counts := make([]int, partitions)
 		for _, result := range truth {
+			if result.Distance == 0 {
+				zeroDistance++
+			}
 			if result.Ordinal < 0 || result.Ordinal >= len(assignment) || assignment[result.Ordinal] < 0 || assignment[result.Ordinal] >= partitions {
 				return partitionTruthOracleV1{}, errors.New("invalid truth partition assignment")
 			}
@@ -968,7 +978,19 @@ func partitionTruthOracleForArtifactV1(vectors, queries [][]float64, assignment 
 			pairColocation += float64(matched) / float64(pairs)
 		}
 	}
-	return partitionTruthOracleV1{TopK: topK, ProbeBudget: probes, BestProbeCoverageAtK: coverage / float64(len(queries)), TruthPrimaryHomePairColocate: pairColocation / float64(len(queries))}, nil
+	return partitionTruthOracleV1{TopK: topK, ProbeBudget: probes, BestProbeCoverageAtK: coverage / float64(len(queries)), TruthPrimaryHomePairColocate: pairColocation / float64(len(queries)), UniqueVectorBitPatterns: len(classes), ZeroDistanceTruthShareAtK: float64(zeroDistance) / float64(len(queries)*topK)}, nil
+}
+
+func partitionVectorFingerprintV1(values []float64) [32]byte {
+	h := sha256.New()
+	var raw [8]byte
+	for _, value := range values {
+		binary.BigEndian.PutUint64(raw[:], math.Float64bits(value))
+		_, _ = h.Write(raw[:])
+	}
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
 }
 
 const provenanceSuffixBytes = 12
