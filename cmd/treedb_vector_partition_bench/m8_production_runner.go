@@ -853,6 +853,16 @@ func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection,
 	}
 	if path != "" {
 		started := time.Now()
+		info, statErr := os.Stat(path)
+		if statErr == nil {
+			maxBytes, err := m8TruthCacheMaxBytesV1(len(queries), topK)
+			if err != nil {
+				return nil, evidence, err
+			}
+			if info.Size() > maxBytes {
+				return nil, evidence, fmt.Errorf("canonical truth cache exceeds %d-byte bound before decode", maxBytes)
+			}
+		}
 		raw, err := os.ReadFile(path)
 		if err == nil {
 			var file m8TruthCacheFileV1
@@ -868,6 +878,9 @@ func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection,
 		} else if !os.IsNotExist(err) {
 			return nil, evidence, fmt.Errorf("read canonical truth cache: %w", err)
 		}
+	}
+	if collection == nil {
+		return nil, evidence, errors.New("canonical truth cache miss requires a collection")
 	}
 	started := time.Now()
 	truth, err := m8ExactTruthV1(collection, manifest, queries, topK)
@@ -912,6 +925,27 @@ func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection,
 		}
 	}
 	return truth, evidence, nil
+}
+
+// m8TruthCacheMaxBytesV1 bounds untrusted cache input before ReadFile/JSON
+// allocation. It deliberately allows generous canonical IDs and JSON overhead.
+func m8TruthCacheMaxBytesV1(queryCount, topK int) (int64, error) {
+	if queryCount < 0 || topK < 1 {
+		return 0, errors.New("invalid canonical truth cache shape")
+	}
+	results, err := memoryMul(int64(queryCount), int64(topK))
+	if err != nil {
+		return 0, err
+	}
+	resultBytes, err := memoryMul(results, 512)
+	if err != nil {
+		return 0, err
+	}
+	queryBytes, err := memoryMul(int64(queryCount), 128)
+	if err != nil {
+		return 0, err
+	}
+	return memoryAdd(64<<10, resultBytes, queryBytes)
 }
 
 func m8TruthContentSHA256V1(truth [][]m8CanonicalResultV1) (string, error) {
@@ -1893,7 +1927,7 @@ func m8ProductionGateLedgerForReportV1(report m8ProductionReportV1) m8Production
 	var exhaustive []m8ProductionRowV1
 	var candidates []m8ProductionRowV1
 	for _, row := range report.Rows {
-		if row.Status == "unsupported" {
+		if row.Status != "pass" {
 			continue
 		}
 		if row.Probes == report.Config.Partitions {
@@ -2193,7 +2227,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 		}
 		if row.Status != "pass" && row.Status != "fail" || row.Probes < 1 || row.Probes > report.Config.Partitions ||
 			row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries || row.QPS <= 0 ||
-			row.RouterMode == "" || row.RouterCandidates < 1 || row.ExactParityPassed && !row.ExactParityChecked || !row.NoPartialResults ||
+			row.RouterMode == "" || row.RouterCandidates < 1 || row.ExactParityPassed && !row.ExactParityChecked || row.ExactParityChecked && row.Probes != report.Config.Partitions || !row.NoPartialResults ||
 			math.Float64bits(row.RecallAtK) != math.Float64bits(row.Attribution.EndToEndRecallAtK) ||
 			!validM8AttributionV1(row.Attribution) {
 			return errors.New("malformed measured M8 row")

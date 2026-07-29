@@ -392,12 +392,13 @@ func run(args []string, stdout io.Writer) error {
 
 func runGenerateFixture(args []string, stdout io.Writer) error {
 	var (
-		out        string
-		vectors    int
-		queries    int
-		dimensions int
-		seed       int64
-		generator  string
+		out               string
+		vectors           int
+		queries           int
+		dimensions        int
+		seed              int64
+		generator         string
+		maxChecksumVisits int64
 	)
 	fs := flag.NewFlagSet("treedb_vector_partition_bench generate-fixture", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -407,11 +408,15 @@ func runGenerateFixture(args []string, stdout io.Writer) error {
 	fs.IntVar(&dimensions, "dimensions", 16, "vector dimensions")
 	fs.Int64Var(&seed, "seed", 1, "fixture generation seed")
 	fs.StringVar(&generator, "generator", fixtureGenerator, "fixture generator identity")
+	fs.Int64Var(&maxChecksumVisits, "max-checksum-visits", maxBenchmarkWorkUnits, "explicit exact checksum visit bound for fixture generation")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 || out == "" || !supportedFixtureGeneratorV1(generator) || vectors < 1 || vectors > maxVectors || queries < 1 || queries > maxVectors || dimensions < 1 || dimensions > maxDimensions {
+	if fs.NArg() != 0 || out == "" || vectors < 1 || vectors > maxVectors || queries < 1 || queries > maxVectors || dimensions < 1 || dimensions > maxDimensions {
 		return errors.New("generate-fixture requires -out and positive bounded vectors, queries, and dimensions")
+	}
+	if !supportedFixtureGeneratorV1(generator) {
+		return fmt.Errorf("unsupported fixture generator %q; supported generators are %s, %s, and %s", generator, fixtureGenerator, qualificationSyntheticGeneratorV1, qualificationEmbeddingGeneratorV1)
 	}
 	rows := int64(vectors) + int64(queries)
 	if rows > maxFixtureBytes/(int64(dimensions)*8) {
@@ -429,6 +434,9 @@ func runGenerateFixture(args []string, stdout io.Writer) error {
 		Seed:          seed,
 	}
 	corpus, querySet := fixtureData(manifest)
+	if visits, err := memoryMul(int64(vectors), int64(queries)); err != nil || maxChecksumVisits < 1 || visits > maxChecksumVisits {
+		return fmt.Errorf("generated fixture checksum exact work exceeds %d-visit cap; set -max-checksum-visits explicitly for a declared qualification generation", maxChecksumVisits)
+	}
 	manifest.Checksum = fixtureChecksumFromData(corpus, querySet)
 	if err := validateM3FixtureWithCaps(manifest, maxVectors, maxFixtureBytes); err != nil {
 		return err
@@ -689,6 +697,7 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.partitionTruthOracle, "partition-truth-oracle", false, "emit exact truth primary-partition coverage diagnostic for -stage partition")
 	fs.IntVar(&cfg.partition.Repetitions, "partition-repetitions", cfg.partition.Repetitions, "dense-ball graph sketch repetitions")
 	fs.Int64Var(&cfg.partition.MaxDistanceWork, "partition-max-distance-work", cfg.partition.MaxDistanceWork, "explicit reference graph scalar-work bound")
+	fs.Int64Var(&cfg.partition.MaxPartitionWork, "partition-max-partition-work", cfg.partition.MaxPartitionWork, "qualification-only reference partition work bound; default remains conservative")
 	fs.Int64Var(&cfg.m3MaxBenchmarkVisits, "m3-max-benchmark-visits", maxBenchmarkWorkUnits, "explicit M3 checksum and membership visit bound")
 	fs.IntVar(&cfg.partition.Pivots, "partition-pivots", cfg.partition.Pivots, "dense-ball pivots per recursive level")
 	fs.IntVar(&cfg.partition.MaxLeafBucket, "partition-max-leaf-bucket", cfg.partition.MaxLeafBucket, "maximum dense-ball leaf bucket")
@@ -712,8 +721,8 @@ func parseConfig(args []string) (config, error) {
 	if fs.NArg() != 0 {
 		return config{}, fmt.Errorf("unexpected positional arguments: %q", fs.Args())
 	}
-	if cfg.partition.MaxDistanceWork < 1 || cfg.m3MaxBenchmarkVisits < 1 {
-		return config{}, errors.New("partition scalar-work and M3 benchmark-visit limits must be positive")
+	if cfg.partition.MaxDistanceWork < 1 || cfg.partition.MaxPartitionWork < 1 || cfg.m3MaxBenchmarkVisits < 1 {
+		return config{}, errors.New("partition work and M3 benchmark-visit limits must be positive")
 	}
 	if cfg.mode != "" {
 		if cfg.mode != m8ProductionMultiGroupModeV1 || cfg.stage != "simulation" {
@@ -1273,7 +1282,9 @@ type m3BenchmarkWorkPlan struct {
 }
 
 type m8BenchmarkWorkPlan struct {
+	FixtureChecksumVectorVisits      int64
 	ExactTruthVectorVisits           int64
+	ExactWorkVectorVisits            int64
 	MeasuredQueryRequests            int64
 	WarmupAndPreflightQueryRequests  int64
 	AttributionQueryPasses           int64
@@ -1301,15 +1312,12 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		return m8BenchmarkWorkPlan{}, errors.New("cannot plan M8 benchmark work without positive caps, a valid fixture/top-k, and complete sweeps")
 	}
 	truthCap := cfg.m8MaxExactTruthVisits
-	if truthCap == 0 { // permits direct unit construction; parsed production configs are always explicit.
-		truthCap = capUnits
+	if truthCap == 0 { // direct planner callers retain an independent conservative cap.
+		truthCap = maxBenchmarkWorkUnits
 	}
 	exactTruthVisits, err := memoryMul(int64(m.Vectors), int64(m.Queries))
 	if err != nil {
 		return m8BenchmarkWorkPlan{}, err
-	}
-	if exactTruthVisits > truthCap {
-		return m8BenchmarkWorkPlan{ExactTruthVectorVisits: exactTruthVisits}, fmt.Errorf("modeled M8 exact truth exceeds %d-visit cap: exact_truth_vector_visits=%d; set -m8-max-exact-truth-visits explicitly for a declared qualification run", truthCap, exactTruthVisits)
 	}
 	variantRuns := int64(1)
 	var supportedOverlaps int64
@@ -1331,6 +1339,24 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		// peak of one sequential child.
 		variantRuns = int64(len(cfg.m8VariantDBs))
 		supportedOverlaps = 1
+	}
+	// Every child reconstructs and checksum-binds its fixture, then computes the
+	// canonical exact oracle. Cache reuse avoids a compute in the common path but
+	// never weakens the preflight bound for the worst admissible execution.
+	fixtureChecksumVisits, err := memoryMul(exactTruthVisits, variantRuns)
+	if err != nil {
+		return m8BenchmarkWorkPlan{}, err
+	}
+	canonicalTruthVisits, err := memoryMul(exactTruthVisits, variantRuns)
+	if err != nil {
+		return m8BenchmarkWorkPlan{}, err
+	}
+	exactWorkVisits, err := memoryAdd(fixtureChecksumVisits, canonicalTruthVisits)
+	if err != nil {
+		return m8BenchmarkWorkPlan{}, err
+	}
+	if exactWorkVisits > truthCap {
+		return m8BenchmarkWorkPlan{FixtureChecksumVectorVisits: fixtureChecksumVisits, ExactTruthVectorVisits: canonicalTruthVisits, ExactWorkVectorVisits: exactWorkVisits}, fmt.Errorf("modeled M8 exact source-query work exceeds %d-visit cap: fixture_checksum_vector_visits=%d exact_truth_vector_visits=%d exact_work_vector_visits=%d; set -m8-max-exact-truth-visits explicitly for a declared qualification run", truthCap, fixtureChecksumVisits, canonicalTruthVisits, exactWorkVisits)
 	}
 	measuredPerRun, err := memoryMul(supportedOverlaps, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(m.Queries))
 	if err != nil {
@@ -1372,7 +1398,7 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return m8BenchmarkWorkPlan{}, err
 	}
-	plan := m8BenchmarkWorkPlan{ExactTruthVectorVisits: exactTruthVisits, MeasuredQueryRequests: measured, WarmupAndPreflightQueryRequests: warmupAndPreflight, AttributionQueryPasses: attribution, QueryRequests: requests}
+	plan := m8BenchmarkWorkPlan{FixtureChecksumVectorVisits: fixtureChecksumVisits, ExactTruthVectorVisits: canonicalTruthVisits, ExactWorkVectorVisits: exactWorkVisits, MeasuredQueryRequests: measured, WarmupAndPreflightQueryRequests: warmupAndPreflight, AttributionQueryPasses: attribution, QueryRequests: requests}
 	if requests > capUnits {
 		return plan, fmt.Errorf("modeled M8 benchmark work exceeds %d-unit cap (%s): measured_query_requests=%d warmup_and_preflight_query_requests=%d attribution_query_passes=%d query_requests=%d", capUnits, m8BenchmarkWorkScope, measured, warmupAndPreflight, attribution, requests)
 	}

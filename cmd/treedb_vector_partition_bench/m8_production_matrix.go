@@ -446,7 +446,7 @@ func m8ReportHasCoupledGateOperatingPointV1(report m8ProductionReportV1) bool {
 			continue
 		}
 		for _, base := range report.Rows {
-			if !base.ExactParityChecked || base.RecallAtK < report.Config.RecallTarget || candidate.EfSearch != base.EfSearch || candidate.Concurrency != base.Concurrency {
+			if base.Status != "pass" || base.Probes != report.Config.Partitions || !base.Attribution.ExhaustivePartitionIDParity || !base.Attribution.ExhaustivePartitionScoreParity || base.Attribution.ExhaustivePartitionRecallAtK != 1 || base.RecallAtK < report.Config.RecallTarget || candidate.EfSearch != base.EfSearch || candidate.Concurrency != base.Concurrency {
 				continue
 			}
 			if candidate.QPS >= base.QPS*1.15 && candidate.P95Nanos <= base.P95Nanos {

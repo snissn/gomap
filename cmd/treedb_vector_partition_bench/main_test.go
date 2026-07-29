@@ -165,18 +165,40 @@ func TestCommittedEmbeddingQualificationIdentityV1(t *testing.T) {
 	}
 }
 
+func TestCommittedM3QualificationShapesRequireExplicitVisitOverrideV1(t *testing.T) {
+	for _, name := range []string{"vector_partition_qualification_high_entropy_1m", "vector_partition_qualification_embedding_mixture_250k"} {
+		m, err := loadFixture(filepath.Join("..", "..", "testdata", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := validateM3BenchmarkWork(config{partitions: 16, overlaps: []float64{0}}, m, maxBenchmarkWorkUnits); err == nil {
+			t.Fatalf("%s accepted without explicit M3 visit override", name)
+		}
+		if _, err := validateM3BenchmarkWork(config{partitions: 16, overlaps: []float64{0}}, m, 3_000_000_000); err != nil {
+			t.Fatalf("%s explicit M3 visit override: %v", name, err)
+		}
+	}
+}
+
+func TestM8DirectPlannerUsesIndependentExactWorkCapV1(t *testing.T) {
+	cfg := config{partitions: 1, probes: []int{1}, overlaps: []float64{0}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}
+	if _, err := validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 1_000_000, Queries: 1_000, Dimensions: 1}, math.MaxInt64, math.MaxInt64); err == nil {
+		t.Fatal("direct planner inherited unrelated request cap")
+	}
+}
+
 func TestM8ExactTruthVisitBudgetRequiresQualificationOverrideV1(t *testing.T) {
 	cfg := config{partitions: 16, probes: []int{1, 2, 4, 8, 16}, overlaps: []float64{0}, efSearch: []int{64}, concurrency: []int{1}, topK: 10, m8MaxExactTruthVisits: maxBenchmarkWorkUnits}
 	m := fixtureManifest{Vectors: 1_000_000, Queries: 1_000, Dimensions: 128}
 	if _, err := validateM8BenchmarkWork(cfg, m, maxBenchmarkWorkUnits, maxFixtureBytes); err == nil || !strings.Contains(err.Error(), "exact_truth_vector_visits=1000000000") {
 		t.Fatalf("missing exact truth refusal: %v", err)
 	}
-	cfg.m8MaxExactTruthVisits = 1_000_000_000
+	cfg.m8MaxExactTruthVisits = 2_000_000_000
 	plan, err := validateM8BenchmarkWork(cfg, m, maxBenchmarkWorkUnits, maxFixtureBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.ExactTruthVectorVisits != 1_000_000_000 {
+	if plan.ExactTruthVectorVisits != 1_000_000_000 || plan.FixtureChecksumVectorVisits != 1_000_000_000 || plan.ExactWorkVectorVisits != 2_000_000_000 {
 		t.Fatalf("exact truth visits=%d", plan.ExactTruthVectorVisits)
 	}
 }
@@ -1448,6 +1470,9 @@ func TestM8VariantMatrixCountsCompleteChildWorkAndOneChildPeakV1(t *testing.T) {
 	}
 	if matrix.MeasuredQueryRequests != single.MeasuredQueryRequests*3 || matrix.WarmupAndPreflightQueryRequests != single.WarmupAndPreflightQueryRequests*3 || matrix.AttributionQueryPasses != single.AttributionQueryPasses*3 || matrix.QueryRequests != single.QueryRequests*3 {
 		t.Fatalf("matrix cumulative work=%+v single=%+v", matrix, single)
+	}
+	if matrix.ExactWorkVectorVisits != single.ExactWorkVectorVisits*3 {
+		t.Fatalf("matrix exact scans=%d single=%d", matrix.ExactWorkVectorVisits, single.ExactWorkVectorVisits)
 	}
 	if matrix.RetainedCoordinatorCells != single.RetainedCoordinatorCells || matrix.RetainedCoordinatorResults != single.RetainedCoordinatorResults || matrix.RetainedAttributionResults != single.RetainedAttributionResults || matrix.ModeledPeakBytes != single.ModeledPeakBytes {
 		t.Fatalf("matrix peak inflated matrix=%+v single=%+v", matrix, single)

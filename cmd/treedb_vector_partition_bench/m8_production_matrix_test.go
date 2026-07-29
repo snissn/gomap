@@ -252,6 +252,9 @@ func TestCommittedV1QualificationLedgerArtifactsV1(t *testing.T) {
 		ParentAcceptance string              `json:"parent_acceptance"`
 		Gates            map[string]string   `json:"gates"`
 		Artifacts        []publishedArtifact `json:"raw_artifacts"`
+		Commands         struct {
+			Canonical string `json:"canonical"`
+		} `json:"commands"`
 	}
 	root := filepath.Join("..", "..")
 	ledgerPath := filepath.Join(root, "TreeDB", "docs", "spec", "artifacts", "vector-partition-v1-qualification-4015.json")
@@ -268,6 +271,11 @@ func TestCommittedV1QualificationLedgerArtifactsV1(t *testing.T) {
 	}
 	if got.Gates["quarter_probe_recall_ge_090"] == "pass" || got.Gates["required_1m"] == "pass" || !strings.HasPrefix(got.Gates["required_1m"], "deferred") {
 		t.Fatalf("ledger incorrectly permits qualification: gates=%v", got.Gates)
+	}
+	for _, required := range []string{"-mode", "-dataset", "-out", "-m8-existing-db", "-m8-max-exact-truth-visits"} {
+		if !strings.Contains(got.Commands.Canonical, required) {
+			t.Fatalf("canonical replay command omits %s: %s", required, got.Commands.Canonical)
+		}
 	}
 	if len(got.Artifacts) != 13 {
 		t.Fatalf("published artifact count=%d want 13", len(got.Artifacts))

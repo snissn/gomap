@@ -110,22 +110,23 @@ type Vector struct {
 // is intentionally in-process and deterministic, so CI never needs a native
 // partitioner or runtime FFI.
 type Config struct {
-	Metric          string  `json:"metric"`
-	Seed            int64   `json:"seed"`
-	Repetitions     int     `json:"repetitions"`
-	Pivots          int     `json:"pivots"`
-	MaxLeafBucket   int     `json:"max_leaf_bucket"`
-	Degree          int     `json:"degree"`
-	Partitions      int     `json:"partitions"`
-	Imbalance       float64 `json:"imbalance"`
-	Symmetric       bool    `json:"symmetric"`
-	MaxVectors      int     `json:"max_vectors"`
-	MaxEdges        int     `json:"max_edges"`
-	MaxDistanceWork int64   `json:"max_distance_work"`
+	Metric           string  `json:"metric"`
+	Seed             int64   `json:"seed"`
+	Repetitions      int     `json:"repetitions"`
+	Pivots           int     `json:"pivots"`
+	MaxLeafBucket    int     `json:"max_leaf_bucket"`
+	Degree           int     `json:"degree"`
+	Partitions       int     `json:"partitions"`
+	Imbalance        float64 `json:"imbalance"`
+	Symmetric        bool    `json:"symmetric"`
+	MaxVectors       int     `json:"max_vectors"`
+	MaxEdges         int     `json:"max_edges"`
+	MaxDistanceWork  int64   `json:"max_distance_work"`
+	MaxPartitionWork int64   `json:"max_partition_work"`
 }
 
 func DefaultConfig() Config {
-	return Config{Metric: "cosine", Seed: 1, Repetitions: 4, Pivots: 8, MaxLeafBucket: 128, Degree: 16, Partitions: 16, Imbalance: .05, Symmetric: false, MaxVectors: maxVectors, MaxEdges: maxEdges, MaxDistanceWork: maxDistanceWork}
+	return Config{Metric: "cosine", Seed: 1, Repetitions: 4, Pivots: 8, MaxLeafBucket: 128, Degree: 16, Partitions: 16, Imbalance: .05, Symmetric: false, MaxVectors: maxVectors, MaxEdges: maxEdges, MaxDistanceWork: maxDistanceWork, MaxPartitionWork: maxPartitionWork}
 }
 
 type Graph struct {
@@ -181,7 +182,7 @@ type Partitioner interface {
 	License() string
 	Partition(Graph, int, int) ([]int, error)
 }
-type ReferencePartitioner struct{}
+type ReferencePartitioner struct{ maxPartitionWork int64 }
 
 func (ReferencePartitioner) Name() string    { return "treedb_reference_greedy_v1" }
 func (ReferencePartitioner) License() string { return "TreeDB repository license" }
@@ -201,6 +202,10 @@ func BuildWithPartitionerPhased(vectors []Vector, cfg Config, source Source, bac
 	var phases PhaseMetrics
 	if backend == nil {
 		return Artifact{}, phases, errors.New("partition backend identity is required")
+	}
+	if reference, ok := backend.(ReferencePartitioner); ok {
+		reference.maxPartitionWork = cfg.MaxPartitionWork
+		backend = reference
 	}
 	backendName, backendLicense := backend.Name(), backend.License()
 	if backendName == "" || !utf8.ValidString(backendName) || len(backendName) > 256 || backendLicense == "" || !utf8.ValidString(backendLicense) || len(backendLicense) > 1024 {
@@ -438,7 +443,7 @@ func ValidateReferenceInputShape(c Config, vectors, dimensions int) error {
 	if err := ValidateInputShape(c, vectors, dimensions); err != nil {
 		return err
 	}
-	if partitionWorkExceeded(vectors, c.Partitions, c.Degree) {
+	if partitionWorkExceededWithCap(vectors, c.Partitions, c.Degree, c.MaxPartitionWork) {
 		return errors.New("partition work bound exceeded before allocation")
 	}
 	return nil
@@ -805,7 +810,7 @@ func addCandidateBounded(s map[int]float64, x int, d float64, cap int) {
 	}
 }
 
-func (ReferencePartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
+func (r ReferencePartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
 	n := len(g.Neighbors)
 	if parts < 1 || cap < 1 || n < parts {
 		return nil, errors.New("invalid partition request")
@@ -817,7 +822,7 @@ func (ReferencePartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
 	if err != nil {
 		return nil, err
 	}
-	if partitionWorkExceeded(n, parts, degree) {
+	if partitionWorkExceededWithCap(n, parts, degree, r.maxPartitionWork) {
 		return nil, errors.New("partition work bound exceeded before allocation")
 	}
 	// Degree is bounded, so bucket ordering is a deterministic O(n+degree)
@@ -901,9 +906,15 @@ func (ReferencePartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
 	}
 	return out, nil
 }
-func partitionWorkExceeded(n, parts, degree int) bool {
+func partitionWorkExceededWithCap(n, parts, degree int, cap int64) bool {
 	work, overflow := partitionWorkUnits(n, parts, degree)
-	return overflow || work > maxPartitionWork
+	if cap == 0 {
+		cap = maxPartitionWork
+	}
+	return overflow || cap < 1 || work > cap
+}
+func partitionWorkExceeded(n, parts, degree int) bool {
+	return partitionWorkExceededWithCap(n, parts, degree, maxPartitionWork)
 }
 func partitionWorkUnits(n, parts, degree int) (int64, bool) {
 	if n < 0 || parts < 0 || degree < 0 {
