@@ -3,6 +3,7 @@ package vectorpartition
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -144,5 +145,20 @@ func TestOverlapSaturatedRecordsUnspent(t *testing.T) {
 	}
 	if r.Unspent == 0 {
 		t.Fatalf("want unspent at saturated cap: %+v", r)
+	}
+}
+
+func TestValidateOverlapCapacityBelowHomeCapReportsBothValuesV1(t *testing.T) {
+	c := Config{Metric: "cosine", Seed: 1, Repetitions: 1, Pivots: 2, MaxLeafBucket: 2, Degree: 3, Partitions: 2, Imbalance: 0, MaxVectors: 4, MaxEdges: 12}
+	v := []Vector{{"a", []float64{1}}, {"b", []float64{.9}}, {"c", []float64{.8}}, {"d", []float64{.7}}}
+	built, err := Build(v, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := Artifact{SchemaVersion: SchemaVersion, Backend: "test", BackendLicense: "test", Source: built.Source, Config: c, IDs: []string{"a", "b", "c", "d"}, Graph: Graph{Neighbors: [][]int{{}, {}, {}, {}}}, Assignment: []int{0, 0, 1, 1}}
+	a.Metrics = metrics(a)
+	err = ValidateOverlap(a, OverlapConfig{Capacity: a.Metrics.Cap - 1}, OverlapResult{})
+	if err == nil || !strings.Contains(err.Error(), "capacity 1 below immutable home load cap 2") {
+		t.Fatalf("err=%v", err)
 	}
 }

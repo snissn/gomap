@@ -214,6 +214,9 @@ func fillExactOverlapSlots(a Artifact, members []map[int]struct{}, loads []int, 
 			members[i][partition] = struct{}{}
 			loads[partition]++
 			used++
+			if used == remaining {
+				return used
+			}
 		}
 	}
 	return used
@@ -255,7 +258,7 @@ func ValidateOverlap(a Artifact, cfg OverlapConfig, r OverlapResult) error {
 		capacity = a.Metrics.Cap
 	}
 	if capacity < a.Metrics.Cap {
-		return errors.New("overlap capacity below immutable home load cap")
+		return fmt.Errorf("overlap capacity %d below immutable home load cap %d", capacity, a.Metrics.Cap)
 	}
 	if r.Budget != wantBudget || r.Budget < 0 || r.Used < 0 || r.Used > r.Budget || r.Unspent != r.Budget-r.Used || r.Capacity != capacity || len(r.Loads) != a.Config.Partitions || len(r.Memberships) != len(a.IDs)+r.Used || r.EdgeCutBefore != a.Metrics.EdgeCut {
 		return errors.New("invalid overlap accounting")
