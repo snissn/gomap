@@ -54,12 +54,15 @@ func DefaultRouterConfigV1() RouterConfigV1 {
 		// 1,024-representative total at the 16-partition production shape.
 		RepresentativesPerPartition: 64,
 		MaxDepth:                    8,
-		MaxIterations:               16,
-		MaxVectors:                  routerMaxVectors,
-		MaxDimensions:               routerMaxDimensions,
-		MaxRepresentatives:          routerMaxRepresentatives,
-		MaxScalarWork:               routerMaxScalarWork,
-		MaxRouterBytes:              routerMaxBytes,
+		// Four deterministic Lloyd iterations keep that 1M/16-partition
+		// production shape within the 20B scalar-work cap (rather than
+		// silently making the default unable to build its declared model).
+		MaxIterations:      4,
+		MaxVectors:         routerMaxVectors,
+		MaxDimensions:      routerMaxDimensions,
+		MaxRepresentatives: routerMaxRepresentatives,
+		MaxScalarWork:      routerMaxScalarWork,
+		MaxRouterBytes:     routerMaxBytes,
 	}
 }
 

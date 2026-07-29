@@ -329,6 +329,9 @@ func TestDefaultRouterConfigQuarterProbeRepresentativeBudgetV1(t *testing.T) {
 	if cfg.RepresentativesPerPartition*16 != 1024 {
 		t.Fatalf("16-partition representative total=%d want 1024", cfg.RepresentativesPerPartition*16)
 	}
+	if cfg.MaxIterations != 4 {
+		t.Fatalf("max iterations=%d want 4", cfg.MaxIterations)
+	}
 }
 
 type routerCancelAfterErrContextV1 struct {
