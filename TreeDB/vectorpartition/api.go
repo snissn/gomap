@@ -30,6 +30,7 @@ type RouterRouteResultV1 = internal.RouterRouteResultV1
 type OverlapConfig = internal.OverlapConfig
 type Membership = internal.Membership
 type OverlapResult = internal.OverlapResult
+type OverlapShortfallError = internal.OverlapShortfallError
 
 const SchemaVersion = internal.SchemaVersion
 

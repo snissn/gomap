@@ -1,6 +1,7 @@
 package vectorpartition
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -52,12 +53,39 @@ func TestOverlapDeterministicBoundaryAndZeroEquivalent(t *testing.T) {
 		Budget:        2,
 		Used:          1,
 		Unspent:       1,
+		Capacity:      4,
 		Loads:         []int{3, 2},
 		EdgeCutBefore: 4,
 		EdgeCutAfter:  0,
 	}
 	if !reflect.DeepEqual(one, want) {
 		t.Fatalf("boundary overlap=%+v want %+v", one, want)
+	}
+}
+
+func TestOverlapExactCapacityTreatmentV1(t *testing.T) {
+	c := Config{Metric: "cosine", Seed: 1, Repetitions: 1, Pivots: 2, MaxLeafBucket: 2, Degree: 3, Partitions: 2, Imbalance: 0, MaxVectors: 4, MaxEdges: 12}
+	v := []Vector{{"a", []float64{1}}, {"b", []float64{.9}}, {"c", []float64{.8}}, {"d", []float64{.7}}}
+	built, err := Build(v, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := Artifact{SchemaVersion: SchemaVersion, Backend: "test", BackendLicense: "test", Source: built.Source, Config: c, IDs: []string{"a", "b", "c", "d"}, Graph: Graph{Neighbors: [][]int{{1, 2}, {0, 2}, {0, 1, 3}, {2}}}, Assignment: []int{0, 0, 1, 1}}
+	a.Metrics = metrics(a)
+	short, err := BuildOverlap(a, OverlapConfig{Ratio: .5, Capacity: 2, RequireExact: true})
+	if err == nil || short.Budget != 0 {
+		t.Fatalf("short=%+v err=%v", short, err)
+	}
+	var shortfall *OverlapShortfallError
+	if !errors.As(err, &shortfall) || shortfall.Requested != 2 || shortfall.Realized != 0 || shortfall.Rejected != 2 || shortfall.Capacity != 2 {
+		t.Fatalf("shortfall=%+v err=%v", shortfall, err)
+	}
+	got, err := BuildOverlap(a, OverlapConfig{Ratio: .25, Capacity: 3, RequireExact: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Budget != 1 || got.Used != 1 || got.Unspent != 0 || got.Capacity != 3 {
+		t.Fatalf("exact=%+v", got)
 	}
 }
 

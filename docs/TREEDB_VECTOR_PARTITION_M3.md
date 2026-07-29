@@ -14,16 +14,22 @@ cut-edge reduction, orders proposals by reduction, stable ID, and partition
 ID, and rechecks every proposal against the immutable round snapshot before
 applying it. The result enforces:
 
-- global budget `floor(ratio * source_count)`;
-- the original M2 per-partition capacity;
+- global requested extra-membership target `floor(ratio * source_count)`;
+- a declared total-membership capacity for the overlap variant (the immutable
+  M2 home assignment and its original epsilon cap are not changed);
 - at most 16 overlap memberships for one vector; and
 - edge cut after overlap no greater than the disjoint edge cut.
 
-Capacity saturation or the per-vector cap leaves budget explicitly unspent.
-Ratio zero emits only home memberships and therefore preserves exact M2
-partition loads and edge cut. Capacity, budget, and unspent budget are stored
-in the integrity-bound M1 `BalancePolicy` as canonical
-`m3_bounded_overlap_v1` accounting and are reported again after reopen.
+The production M3 runner derives the narrow target-aware capacity
+`max(m2_cap, ceil((source_count + requested)/partitions))` and requires exact
+realization. If affinity or the per-vector cap still prevents the target, the
+build fails closed with requested, realized, rejected, and capacity evidence;
+it never publishes a silently under-filled overlap variant. Ratio zero emits
+only home memberships and therefore preserves exact M2 partition loads and
+edge cut. The integrity-bound M1 `BalancePolicy`, retained M3 descriptor, and
+machine report carry requested, realized, rejected, and declared-capacity
+accounting; the target and capacity are also part of the variant build
+identity.
 
 ## Native pack construction and reopen
 

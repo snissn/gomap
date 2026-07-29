@@ -757,7 +757,7 @@ func TestVectorPartitionSourceOrdinalsBindNativeStableIDsV1(t *testing.T) {
 }
 
 func TestVectorPartitionOverlapPolicyCanonicalV1(t *testing.T) {
-	policy := VectorPartitionOverlapPolicyV1{Capacity: 100, Budget: 20, Unspent: 3}
+	policy := VectorPartitionOverlapPolicyV1{Capacity: 100, Budget: 20, Realized: 17, Unspent: 3}
 	raw, err := FormatVectorPartitionOverlapPolicyV1(policy)
 	if err != nil {
 		t.Fatal(err)
@@ -773,7 +773,7 @@ func TestVectorPartitionOverlapPolicyCanonicalV1(t *testing.T) {
 }
 
 func TestVectorPartitionOverlapPolicyBuildIdentityCanonicalV1(t *testing.T) {
-	policy := VectorPartitionOverlapPolicyV1{Capacity: 100, Budget: 20, Unspent: 3, BuildIdentityDigest: strings.Repeat("a", 64)}
+	policy := VectorPartitionOverlapPolicyV1{Capacity: 100, Budget: 20, Realized: 17, Unspent: 3, BuildIdentityDigest: strings.Repeat("a", 64)}
 	raw, err := FormatVectorPartitionOverlapPolicyV1(policy)
 	if err != nil {
 		t.Fatal(err)

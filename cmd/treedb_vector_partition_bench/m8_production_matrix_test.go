@@ -15,9 +15,13 @@ import (
 
 func refreshTestM3VariantIdentityV1(t testing.TB, descriptor *m3VariantDescriptorV1) {
 	t.Helper()
+	descriptor.OverlapRequested = int(math.Floor(descriptor.OverlapRatio * float64(descriptor.SourceRows)))
+	descriptor.OverlapRealized = descriptor.OverlapMemberships
+	descriptor.OverlapRejected = descriptor.OverlapRequested - descriptor.OverlapRealized
 	descriptor.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(*descriptor)
 	descriptor.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{
 		Capacity: uint64(descriptor.Capacity), Budget: uint64(math.Floor(descriptor.OverlapRatio * float64(descriptor.SourceRows))),
+		Realized: uint64(descriptor.OverlapMemberships), Unspent: uint64(descriptor.OverlapRejected),
 		BuildIdentityDigest: descriptor.BuildIdentityDigest,
 	})
 }

@@ -18,10 +18,10 @@ func testM3VariantDescriptorV1(dir string) m3VariantDescriptorV1 {
 		FixtureChecksum: hash, ArtifactSHA256: hash, GraphArtifactSHA256: hash, ArtifactBackend: "reference", Source: vectorpartition.Source{SourceID: "fixture", Checksum: hash, Vectors: 8, Dimensions: 2, Metric: "cosine"},
 		DatabaseDirectory: dir, ManifestIntegrity: hash, ReadySetDigest: hash, RouterAssetChecksum: hash, RouterModelDigest: hash,
 		SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRows: 8, PartitionGeneration: 4, RouterGeneration: 4,
-		Partitions: 4, IndexDefinitionDigest: hash, PartitionHNSWM: 16, Capacity: 3, PartitionLoads: []int{3, 2, 2, 2}, OverlapMemberships: 1, PersistentAssetBytes: 1024,
+		Partitions: 4, IndexDefinitionDigest: hash, PartitionHNSWM: 16, Capacity: 3, OverlapRequested: 1, OverlapRealized: 1, OverlapRejected: 0, PartitionLoads: []int{3, 2, 2, 2}, OverlapMemberships: 1, PersistentAssetBytes: 1024,
 	}
 	d.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(d)
-	d.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: 3, Budget: 1, BuildIdentityDigest: d.BuildIdentityDigest})
+	d.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: 3, Budget: 1, Realized: 1, BuildIdentityDigest: d.BuildIdentityDigest})
 	return d
 }
 
@@ -46,6 +46,40 @@ func TestM3VariantDescriptorRoundTripAndImmutableCreateV1(t *testing.T) {
 	}
 	if _, err := m3ReadVariantDescriptorV1(dir); err == nil {
 		t.Fatal("accepted trailing or malformed descriptor JSON")
+	}
+}
+
+func TestM3VariantBuildIdentityBindsExactOverlapTargetAndCapacityV1(t *testing.T) {
+	d := testM3VariantDescriptorV1(t.TempDir())
+	baseline, err := m3VariantBuildIdentityDigestV1(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetChanged := d
+	targetChanged.OverlapRequested++
+	targetDigest, err := m3VariantBuildIdentityDigestV1(targetChanged)
+	if err != nil || targetDigest == baseline {
+		t.Fatalf("target identity baseline=%s changed=%s err=%v", baseline, targetDigest, err)
+	}
+	capacityChanged := d
+	capacityChanged.Capacity++
+	capacityDigest, err := m3VariantBuildIdentityDigestV1(capacityChanged)
+	if err != nil || capacityDigest == baseline {
+		t.Fatalf("capacity identity baseline=%s changed=%s err=%v", baseline, capacityDigest, err)
+	}
+}
+
+func TestM3OverlapCapacityUsesExactGlobalTargetV1(t *testing.T) {
+	artifact := vectorpartition.Artifact{IDs: make([]string, 1_000_000), Config: vectorpartition.Config{Partitions: 16}, Metrics: vectorpartition.Metrics{Cap: 65_625}}
+	capacity, err := m3OverlapCapacityV1(artifact, .2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capacity != 75_000 {
+		t.Fatalf("capacity=%d want 75000", capacity)
+	}
+	if capacity, err = m3OverlapCapacityV1(artifact, 0); err != nil || capacity != 65_625 {
+		t.Fatalf("disjoint capacity=%d err=%v", capacity, err)
 	}
 }
 
