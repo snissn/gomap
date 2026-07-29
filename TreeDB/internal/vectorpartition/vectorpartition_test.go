@@ -607,6 +607,35 @@ func TestGraphPartitionBeatsStableIDHashOnClusteredFixture(t *testing.T) {
 		t.Fatalf("graph cut=%d hash=%d", a.Metrics.EdgeCut, a.Metrics.StableIDHashEdgeCut)
 	}
 }
+func TestGraphConnectsExactDuplicateClassAcrossLeaves(t *testing.T) {
+	v := make([]Vector, 16)
+	for i := range v {
+		values := []float64{0, 1}
+		if i == 0 || i == 15 {
+			values = []float64{1, 0}
+		}
+		v[i] = Vector{ID: fmt.Sprintf("v-%02d", i), Values: values}
+	}
+	c := config()
+	c.Partitions, c.Repetitions, c.Pivots, c.MaxLeafBucket, c.Degree = 2, 1, 2, 2, 2
+	c.MaxEdges = len(v) * c.Degree
+	a, err := Build(v, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contains := func(values []int, want int) bool {
+		for _, value := range values {
+			if value == want {
+				return true
+			}
+		}
+		return false
+	}
+	if !contains(a.Graph.Neighbors[0], 15) || !contains(a.Graph.Neighbors[15], 0) {
+		t.Fatalf("duplicate endpoints not linked: first=%v last=%v", a.Graph.Neighbors[0], a.Graph.Neighbors[15])
+	}
+}
+
 func TestGraphPartitionBeatsStableIDHashOnDeterministic10kClusters(t *testing.T) {
 	const n = 10_000
 	v := make([]Vector, n)

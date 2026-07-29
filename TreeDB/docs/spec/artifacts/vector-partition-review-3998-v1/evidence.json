@@ -1,0 +1,175 @@
+{
+  "schema_version": 1,
+  "issue": 3998,
+  "base_sha": "53cc1c338636ba8168aa13cc70c2aa167257f361",
+  "implementation_sha": "60fa60efbd5497433444f46a519c7751ba7108ca",
+  "binary_sha256": "f7f27cd0bf25fd10c0d499ec7e6d9df982abad0d8b155ab1d6271bf56e4b9a2d",
+  "build_command": "go build -o /mnt/fast4tb/tmp/issue3998_60fa_bench ./cmd/treedb_vector_partition_bench",
+  "fixture": {
+    "path_hint": "/mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture",
+    "checksum": "71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f",
+    "source_checksum": "149f812b473d2007653cee6890ca112dd9719e77dcd7ec0c399b2d32e81e761c",
+    "source_rows": 1000000,
+    "queries": 32,
+    "dimensions": 16,
+    "unique_normalized_vector_bit_patterns": 124,
+    "zero_distance_exact_truth_share_at_k": 1
+  },
+  "environment": {
+    "go_version": "go1.26.0",
+    "goos": "linux",
+    "goarch": "amd64",
+    "logical_cpus": 12,
+    "cpu": "11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz",
+    "memory_bytes": 33512759296,
+    "kernel": "Linux 6.8.0-124-generic x86_64 GNU/Linux",
+    "artifact_mount": "/mnt/fast4tb /dev/nvme0n1p1 ext4 rw,noatime"
+  },
+  "graph_attribution": {
+    "artifact_sha256": "6ef78d6a45583314cbc6df86037ebc24c2e24ea2888826891a519fafb1918a60",
+    "best_four_primary_partition_coverage_at_k": 1,
+    "truth_primary_home_pair_colocation_at_k": 1
+  },
+  "stable_hash_attribution": {
+    "artifact_sha256": "71436ea9582efc61dd32e37fb530cf0e7f4602138d2d2d47b0a281a66f839a26",
+    "best_four_primary_partition_coverage_at_k": 0.65625,
+    "truth_primary_home_pair_colocation_at_k": 0.06944444444444445,
+    "scope": "attribution baseline only; no production M8 stable-hash variant was claimed"
+  },
+  "variants": [
+    {
+      "name": "graph_disjoint",
+      "m3": {
+        "exact_command": "/mnt/fast4tb/tmp/issue3998_60fa_bench -dataset /mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture -out /mnt/fast4tb/tmp/issue3998_60fa_m3_out_8nKjZ3 -m3-persist-db /mnt/fast4tb/tmp/issue3998_60fa_m3_db_jETPBp -format json -stage overlap,partition_index -partitions 16 -top-k 10 -overlap 0 -partition-assignment graph -partition-repetitions 1 -partition-pivots 8 -partition-max-leaf-bucket 32 -partition-degree 4 -partition-hnsw-m 16",
+        "report_sha256": "ba1152d4d42955c321bc441e7369784526e3b79ab5d920e6ba3045de50ef3678",
+        "time_log_sha256": "57155a1b9f63b7976bb0b96b5b1eccc3c74d6438dc9babeb61cbd3a216755f63",
+        "overlap_requested": 0,
+        "overlap_realized": 0,
+        "cap": 65625,
+        "max_partition_load": 65625,
+        "edge_cut_before": 126503,
+        "edge_cut_after": 126503,
+        "final_derived_physical_bytes": 294357520,
+        "pack_payload_bytes": 282218672,
+        "wall_seconds": 671.69,
+        "peak_rss_bytes": 3941011456
+      },
+      "m8": {
+        "exact_command": "/mnt/fast4tb/tmp/issue3998_60fa_bench -mode production_multi_group -dataset /mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture -out /mnt/fast4tb/tmp/issue3998_60fa_m8_out_7t957i -profiles /mnt/fast4tb/tmp/issue3998_60fa_m8_profiles_YUXVpk -m8-existing-db /mnt/fast4tb/tmp/issue3998_60fa_m3_db_jETPBp -format json -partitions 16 -top-k 10 -probes 4,16 -overlap 0 -raft-groups 4 -raft-nodes-per-group 3 -concurrency 1 -ef-search 4096 -warmup 0 -router-candidates 256",
+        "report_sha256": "685e49b85a603d174a894b8967ce900ff1ea6a6b49832d1a071c1610085953ff",
+        "time_log_sha256": "d7ea82a51baf74955d526f1c011406bdac5b0f994a00e15c24cb02143da95453",
+        "wall_seconds": 137.81,
+        "peak_rss_bytes": 1852100608,
+        "persistent_asset_bytes": 282347792,
+        "probes_4": {
+          "exact_representative_routing_recall_at_k": 1,
+          "end_to_end_recall_at_k": 0.90625,
+          "qps": 23.26093343812878,
+          "p50_nanos": 41627364,
+          "p95_nanos": 55885230,
+          "p99_nanos": 60624430,
+          "residual_loss_owner": "partition_local_hnsw"
+        },
+        "probes_16": {
+          "exact_representative_routing_recall_at_k": 1,
+          "end_to_end_recall_at_k": 0.90625,
+          "exhaustive_partition_union_id_parity": true,
+          "exhaustive_partition_union_score_parity": true,
+          "residual_loss_owner": "partition_local_hnsw"
+        }
+      }
+    },
+    {
+      "name": "graph_overlap_020",
+      "m3": {
+        "exact_command": "/mnt/fast4tb/tmp/issue3998_60fa_bench -dataset /mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture -out /mnt/fast4tb/tmp/issue3998_60fa_overlap_m3_out_iDuf38 -m3-persist-db /mnt/fast4tb/tmp/issue3998_60fa_overlap_m3_db_GiObUz -format json -stage overlap,partition_index -partitions 16 -top-k 10 -overlap 0.2 -partition-assignment graph -partition-repetitions 1 -partition-pivots 8 -partition-max-leaf-bucket 32 -partition-degree 4 -partition-hnsw-m 16",
+        "report_sha256": "67c44c3fe8475964f220721d9d965b067fca18b8bb4e9040ebd759b2be0b6328",
+        "time_log_sha256": "a6da4c477d0489e1dc268dbd1dfa8711bc43885684a0726dbe9a09af2f8b4dbe",
+        "overlap_requested": 200000,
+        "overlap_realized": 200000,
+        "overlap_rejected": 0,
+        "cap": 75000,
+        "all_partition_loads": 75000,
+        "edge_cut_before": 126503,
+        "edge_cut_after": 0,
+        "final_derived_physical_bytes": 353255504,
+        "pack_payload_bytes": 338716688,
+        "derived_storage_ratio_to_disjoint": 1.200089958633,
+        "wall_seconds": 742,
+        "peak_rss_bytes": 3681226752
+      },
+      "m8": {
+        "exact_command": "/mnt/fast4tb/tmp/issue3998_60fa_bench -mode production_multi_group -dataset /mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture -out /mnt/fast4tb/tmp/issue3998_60fa_overlap_m8_out_Jih2ZD -profiles /mnt/fast4tb/tmp/issue3998_60fa_overlap_m8_profiles_8jPGTV -m8-existing-db /mnt/fast4tb/tmp/issue3998_60fa_overlap_m3_db_GiObUz -format json -partitions 16 -top-k 10 -probes 4,16 -overlap .2 -raft-groups 4 -raft-nodes-per-group 3 -concurrency 1 -ef-search 4096 -warmup 0 -router-candidates 256",
+        "report_sha256": "a7f932a06f2488982dc0a8a17497e909faf963f5ad5fae234f3339b0281460f0",
+        "time_log_sha256": "74faf1870ad77883c76575206c58c6786b5bbcd7c3b602a33363865237f13692",
+        "wall_seconds": 157.41,
+        "peak_rss_bytes": 2011746304,
+        "persistent_asset_bytes": 338845808,
+        "persistent_storage_ratio_to_disjoint": 1.200100789171,
+        "probes_4": {
+          "exact_representative_routing_recall_at_k": 1,
+          "end_to_end_recall_at_k": 0.996875,
+          "qps": 20.960004630065022,
+          "p50_nanos": 47412411,
+          "p95_nanos": 63066062,
+          "p99_nanos": 63468207,
+          "residual_loss_owner": "partition_local_hnsw"
+        },
+        "probes_16": {
+          "exact_representative_routing_recall_at_k": 1,
+          "end_to_end_recall_at_k": 1,
+          "qps": 11.034828099273726,
+          "p50_nanos": 92226592,
+          "p95_nanos": 114728653,
+          "p99_nanos": 123585867,
+          "exhaustive_partition_union_id_parity": true,
+          "exhaustive_partition_union_score_parity": true,
+          "residual_loss_owner": "none_observed"
+        }
+      }
+    }
+  ],
+  "profiles": {
+    "scope": "CPU, block, mutex, and trace cover measured query cells plus endpoint-loss fault; heap is an end snapshot; allocs is cumulative and paired with allocs_baseline",
+    "graph_disjoint": {
+      "status": "captured_production_query_and_fault_boundary",
+      "allocs.pprof": "7443c022d7f8cfaea4c87406c9e74a1faab584b4d3902af2e167783de4aea5a0",
+      "allocs_baseline.pprof": "7c075a29f57e535707ff7e81818d320fc7444d6b31f118bbb568168b6e19c591",
+      "block.pprof": "ac281ea3f97b619f7b2d48214f386beba69103e5270023e44d7af7c46ef08ebe",
+      "cpu.pprof": "300e91c31e58bf740e38456c3947474c0c011c621de8bb7a2ccbafdaeb427c5d",
+      "heap.pprof": "612697352b5cbf564834451f95cd84bbc2ff12554a44f7bb5c2b27eb0284ed20",
+      "mutex.pprof": "7e63dd471a5abe0e823f6eb04531ae167cf274f1773d97f90930ca2fdb4cc9aa",
+      "trace.out": "4259272a4101f03677707eebdd904f820170d19bc6fb5319f66f6af6cb87ba8a"
+    },
+    "graph_overlap_020": {
+      "status": "captured_production_query_and_fault_boundary",
+      "allocs.pprof": "840a30a64e497332bde60626a0a5345254516b34d63925cc6c90790952b55a46",
+      "allocs_baseline.pprof": "fb4d712510fc31c13bd88e19b88f25fb442396f1ee28edc174afa0487e4af3fa",
+      "block.pprof": "85d480bd6c5a12466a437d73acdc4fbcb6262541d3ec6584c230527eacc7554e",
+      "cpu.pprof": "8069405711f198961c696d3aaa207dbbfd8e25e9be8fd4953e8c9360448784c0",
+      "heap.pprof": "5cd630c86aa3e47843e421eb1685bf75fadee7d4257dbd6375d3ae01870e9fa6",
+      "mutex.pprof": "70c5384204fe4102344bb3924eb1754ef15ea52b44c1dd1b96a5a34961b8c374",
+      "trace.out": "7a1b8b236c6c2b33cd430029ef48953080c134054a64fcdd84cdebbca588625f"
+    }
+  },
+  "gate_disposition": {
+    "exact_routing_recall_at_least_0_90_at_4_of_16": "pass",
+    "qualified_overlap_benefit_and_derived_bytes_below_1_35x": "pass",
+    "balance_and_resource_bounds": "pass",
+    "exhaustive_overlap_id_score_parity": "pass",
+    "existing_behavior": "pending_latest_head_ci",
+    "exact_head_ai_review": "pending_pr"
+  },
+  "negative_experiments": [
+    "Router representatives 64 with 16 Lloyd iterations exceeded the 20B scalar-work guard; 64 representatives with four iterations produced 0.278125 exact routing recall and was reverted.",
+    "Increasing graph degree from four to eight left the pre-fix truth oracle unchanged at 0.484375 and was reverted.",
+    "Stratified partition seeds left the pre-fix truth oracle unchanged at 0.484375 and was reverted.",
+    "Sorting graph candidates before encoding was non-causal because candidate sets were already degree bounded and was reverted."
+  ],
+  "limitations": [
+    "The fixture has only 124 unique normalized vector bit patterns and queries copy corpus vectors, so this proves the issue's declared fixture-scoped duplicate-link behavior, not population-level routing quality.",
+    "The disjoint all-partition M8 row retains 0.90625 partition-local HNSW recall; this is not an exact-routing loss and the qualified overlap row reaches 1.0 at all partitions.",
+    "The single-variant M8 reports cannot independently evaluate a cross-variant storage ratio; this durable combined ledger computes both M3 and persistent M8 ratios from the two exact-head reports.",
+    "This is loopback four-group evidence, not multi-host qualification; issue 3983 remains deferred."
+  ]
+}
