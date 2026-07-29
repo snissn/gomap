@@ -1,7 +1,7 @@
 # Graph-partitioned vector search V1 contract
 
-Status: internal, pre-alpha, experimental/off  
-Owner: #4013 (V1 contract)  
+Status: internal, pre-alpha, experimental/off
+Owner: #4013 (V1 contract)
 Consumes: the M1/M4/M5/M6 contracts in `vector-partition-raft-v1.md`,
 `vector-partition-shard-search-v1.md`, and `vector-partition-coordinator-v1.md`
 
