@@ -4,6 +4,10 @@ Date: 2026-07-29
 
 Status: **experimental gate failures; not a V1 qualification pass.**
 
+The live routing/locality follow-up is [#4022](https://github.com/snissn/gomap/issues/4022),
+which blocks #4019. Parent #4012 acceptance remains pending/being recorded;
+this report does not claim that parent acceptance or a V1 enablement decision.
+
 This report records a reproducible, production-shaped attribution run completed
 while qualifying the #4015 contract.  It is deliberately narrower than the
 required 1M qualification: the corpus has 100,000 vectors, not 1,000,000.

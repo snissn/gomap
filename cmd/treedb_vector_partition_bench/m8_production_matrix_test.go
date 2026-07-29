@@ -246,10 +246,12 @@ func TestCommittedV1QualificationLedgerArtifactsV1(t *testing.T) {
 		SHA256 string `json:"sha256"`
 	}
 	type ledger struct {
-		SchemaVersion int                 `json:"schema_version"`
-		Status        string              `json:"status"`
-		Gates         map[string]string   `json:"gates"`
-		Artifacts     []publishedArtifact `json:"raw_artifacts"`
+		SchemaVersion    int                 `json:"schema_version"`
+		Status           string              `json:"status"`
+		BlockingFollowUp string              `json:"blocking_follow_up"`
+		ParentAcceptance string              `json:"parent_acceptance"`
+		Gates            map[string]string   `json:"gates"`
+		Artifacts        []publishedArtifact `json:"raw_artifacts"`
 	}
 	root := filepath.Join("..", "..")
 	ledgerPath := filepath.Join(root, "TreeDB", "docs", "spec", "artifacts", "vector-partition-v1-qualification-4015.json")
@@ -261,8 +263,8 @@ func TestCommittedV1QualificationLedgerArtifactsV1(t *testing.T) {
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.SchemaVersion != 1 || got.Status != "experimental_off_gate_failures_not_1m_qualified" {
-		t.Fatalf("ledger schema/status=%d/%q", got.SchemaVersion, got.Status)
+	if got.SchemaVersion != 1 || got.Status != "experimental_off_gate_failures_not_1m_qualified" || got.BlockingFollowUp != "#4022" || got.ParentAcceptance != "#4012_pending_being_recorded" {
+		t.Fatalf("ledger linkage/schema/status=%+v", got)
 	}
 	if got.Gates["quarter_probe_recall_ge_090"] == "pass" || got.Gates["required_1m"] == "pass" || !strings.HasPrefix(got.Gates["required_1m"], "deferred") {
 		t.Fatalf("ledger incorrectly permits qualification: gates=%v", got.Gates)
