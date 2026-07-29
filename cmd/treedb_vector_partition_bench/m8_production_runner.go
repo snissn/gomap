@@ -1180,8 +1180,9 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 }
 
 // m8ExactPartitionUnionV1 scans every generation-pinned partition pack and
-// fails closed unless the caller supplies the complete manifest partition set.
-func m8ExactPartitionUnionV1(ctx context.Context, assets *m8ProductionMultiGroupAssetsV1, query []float64, topK int) ([]neighbor, error) {
+// returns canonical FP32 score results. It fails closed unless the caller
+// supplies the complete manifest partition set.
+func m8ExactPartitionUnionV1(ctx context.Context, assets *m8ProductionMultiGroupAssetsV1, query []float64, topK int) ([]m8CanonicalResultV1, error) {
 	if assets == nil || len(assets.manifest.Placements) != int(assets.manifest.PartitionCount) {
 		return nil, errors.New("incomplete M8 partition manifest")
 	}
@@ -1195,7 +1196,7 @@ func m8ExactPartitionUnionV1(ctx context.Context, assets *m8ProductionMultiGroup
 		}
 		seen[placement.PartitionID] = struct{}{}
 	}
-	merged := make([]neighbor, 0, len(assets.manifest.Placements)*topK)
+	merged := make([]m8CanonicalResultV1, 0, len(assets.manifest.Placements)*topK)
 	for partition := 0; partition < len(assets.manifest.Placements); partition++ {
 		searcher, err := assets.collection.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, assets.manifest.Generation, uint32(partition))
 		if err != nil {
@@ -1207,10 +1208,10 @@ func m8ExactPartitionUnionV1(ctx context.Context, assets *m8ProductionMultiGroup
 			return nil, errors.Join(searchErr, closeErr)
 		}
 		for _, result := range results {
-			merged = append(merged, neighbor{ID: result.ID, Distance: 1 - float64(result.Score)})
+			merged = append(merged, m8CanonicalResultV1{ID: result.ID, Score: result.Score})
 		}
 	}
-	return canonicalExactNeighborsV1(merged, topK), nil
+	return m8CanonicalResultsV1(merged, topK), nil
 }
 
 func m8WarmProductionTopologyV1(ctx context.Context, coordinator *nativewire.VectorPartitionCoordinatorV1, assets *m8ProductionMultiGroupAssetsV1, queries [][]float64, cfg config) (m8ProductionResourceBoundaryV1, error) {

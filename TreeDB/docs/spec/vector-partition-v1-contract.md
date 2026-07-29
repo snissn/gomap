@@ -31,9 +31,10 @@ An `exact_partition_union_v1` result is conformant only when all of these hold:
    index definition digest, source generation/checksum/schema/row count,
    partition generation, router generation, ready-set digest, and complete
    canonical partition placement. A missing, stale, mixed, or source_mismatch
-   identity is rejected before routing or fanout; the public M5/M6 class is
+   manifest/source/generation identity is rejected before routing or fanout as
    `generation_mismatch` (with the failed identity in detail), not a partial
-   result.
+   result. Exact placement partition/group drift is separately
+   `route_mismatch`; it is not folded into `generation_mismatch`.
 2. Where routing is used, the exact representative route scores every persisted
    representative and selects unique partitions deterministically by
    `(distance, partition_id)`. Representative selection is not a substitute for
@@ -54,13 +55,22 @@ An `exact_partition_union_v1` result is conformant only when all of these hold:
    mixed proof/identity, unavailable partition, corrupt asset, cancellation, or
    failed search returns an error and an empty response; no partial top-k is
    returned. Stable public classes include `generation_mismatch` and
-   `assets_unavailable` (plus the route/owner and availability classes listed by
-   M5/M6).
+   `assets_unavailable` for missing/corrupt local assets and the M5/M6
+   availability classes for unavailable owners/groups. Placement partition/group
+   drift is `route_mismatch`, while manifest/source/generation identity drift is
+   `generation_mismatch`.
 
-The executable exact-union/tie oracle is
-`TestTruthOracleTieOrderingAndAllPartitionParity`. M5 and M6 additionally
-validate response identity, partition order, no within-partial duplicates, and
-the same global merge ordering before accepting a response.
+The production-path exact-union gate is
+`TestM8ProductionMultiGroupAssetsCheckedIn10kCISmokeV1`: it opens every
+generation-pinned persistent partition pack, calls `SearchExactWithOptionsV1`,
+and compares all IDs and FP32 score bits against the canonical source oracle.
+The companion `TestM8CanonicalFP32ScoreContractTiePrecisionAndDedupeV1` locks
+the best-duplicate and stable-ID tie merge rule. The older
+`TestTruthOracleTieOrderingAndAllPartitionParity` remains historical
+float64/modulo-fixture coverage, not the canonical persisted V1 gate. M5 and
+M6 additionally validate response identity, partition order, no
+within-partial duplicates, and the same global merge ordering before accepting
+a response.
 
 ## ANN obligations and the all-partition HNSW disposition
 
