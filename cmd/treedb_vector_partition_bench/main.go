@@ -2785,7 +2785,7 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 	stage := func(name, method string, lossy bool, value float64, p int) stageResult {
 		return stageResult{Name: name, Method: method, Enabled: cfg.stages[name], Lossy: lossy, RecallAtK: value, Queries: len(q), Probes: p, Available: true}
 	}
-	hnswStage := stage("treedb_partition_local_hnsw", "treedb_column_graph_exact_hnsw_search_pack_v1", true, totals["treedb_partition_local_hnsw"]/n, probes)
+	hnswStage := stage("treedb_partition_local_hnsw", "treedb_column_graph_hnsw_recall_qualified_v1", true, totals["treedb_partition_local_hnsw"]/n, probes)
 	hnswStage.RouteKind = string(collections.VectorIndexSearchRouteExactHNSWSearchPackV1)
 	hnswStage.Searches = hnswEvidence.Searches
 	hnswStage.ExecutedSearches = hnswEvidence.ExecutedSearches
@@ -2967,7 +2967,7 @@ func validateResult(r runResult) error {
 				s.SearchRouteHNSWSearchPack != s.Searches ||
 				s.HNSWSearchPackActive != s.Searches ||
 				s.HNSWSearchPackFallbacks != 0 {
-				return fmt.Errorf("TreeDB HNSW stage lacks exact search-pack route evidence: %+v", s)
+				return fmt.Errorf("TreeDB HNSW stage lacks declared native search-pack route evidence: %+v", s)
 			}
 		}
 	}

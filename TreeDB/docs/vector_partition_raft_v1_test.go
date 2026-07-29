@@ -28,6 +28,46 @@ func TestDocsVectorPartitionRaftM0Contract(t *testing.T) {
 	}
 }
 
+func TestDocsVectorPartitionV1CorrectnessAndApproximationContract(t *testing.T) {
+	root, _ := repoRoots(t)
+	b, err := os.ReadFile(filepath.Join(root, "docs", "spec", "vector-partition-v1-contract.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, needle := range []string{
+		"Status: internal, pre-alpha, experimental/off",
+		"exact_partition_union_v1",
+		"approximate_hnsw_recall_qualified_v1",
+		"not an exact or rerank-rescued path",
+		"manifest/source identity",
+		"(score descending, stable ID bytewise ascending)",
+		"all-or-error",
+		"generation_mismatch",
+		"assets_unavailable",
+		"source_mismatch",
+		"mutation invalidates",
+		"IDs/scores-only",
+		"must not fetch or materialize documents",
+		"#3999",
+		"historical scoped HNSW evidence",
+		"#4013 owns this V1 contract",
+		"TestTruthOracleTieOrderingAndAllPartitionParity",
+		"TestTreeDBHNSWStageUsesExactSearchPackAndMatchesHighEFLocalTruth",
+		"TestDocsVectorPartitionV1CorrectnessAndApproximationContract",
+	} {
+		if !strings.Contains(string(b), needle) {
+			t.Fatalf("V1 contract missing %q", needle)
+		}
+	}
+	index, err := os.ReadFile(filepath.Join(root, "docs", "spec", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(index), "TreeDB/docs/spec/vector-partition-v1-contract.md") {
+		t.Fatal("spec index does not admit the V1 vector-partition contract")
+	}
+}
+
 func TestDocsVectorPartitionCoordinatorM6Contract(t *testing.T) {
 	root, _ := repoRoots(t)
 	checks := []struct {

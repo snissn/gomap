@@ -1190,6 +1190,33 @@ func TestTreeDBHNSWStageUsesExactSearchPackAndMatchesHighEFLocalTruth(t *testing
 	}
 }
 
+func TestPartitionLocalHNSWStageIsRecallQualifiedNotExact(t *testing.T) {
+	m, vectors, queries := smallFixtureForTest(32, 4, 8)
+	hnsw, err := newTreeDBPartitionHNSW(vectors, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = hnsw.Close() }()
+	r, err := simulate(config{
+		partitions:   4,
+		topK:         4,
+		recallTarget: .9,
+		seed:         1,
+		stages:       stageSet("treedb_partition_local_hnsw"),
+		hnsw:         hnsw,
+	}, m, vectors, queries, 4, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Stages) != 1 {
+		t.Fatalf("stages=%+v", r.Stages)
+	}
+	stage := r.Stages[0]
+	if !stage.Lossy || !strings.Contains(stage.Method, "recall_qualified") || strings.Contains(stage.Method, "exact") {
+		t.Fatalf("partition-local HNSW must remain recall-qualified, got %+v", stage)
+	}
+}
+
 func TestMalformedCapAndFiniteInputsRejectBeforeSimulation(t *testing.T) {
 	for _, raw := range [][]string{{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "0", "-probes", "1"}, {"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-probes", "5"}, {"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-probes", "1", "-overlap", "NaN"}, {"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-probes", "1", "-recall-target", "NaN"}, {"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-probes", "1", "-stages", "unknown"}} {
 		if _, err := parseConfig(raw); err == nil {
