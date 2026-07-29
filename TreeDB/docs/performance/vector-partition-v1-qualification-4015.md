@@ -164,3 +164,8 @@ graph/overlap `.20` full sweeps; stable-hash probes `4,16`; graph-overlap EF
 `4,16`; and two graph-overlap EF-64 single-client repeats at probes `4,16`.
 The ledger maps every published repo-relative path to its SHA-256, while `/mnt`
 is retained only as provenance.
+
+The published measurement artifacts predate cache hardening. Their historical
+cache identity is preserved only as provenance; the current implementation
+binds new cache files to the authoritative score-contract identity and refuses
+those historical files rather than silently reusing them.
