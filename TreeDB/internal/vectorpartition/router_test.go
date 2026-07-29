@@ -321,6 +321,16 @@ func routerTestConfigV1() RouterConfigV1 {
 	return cfg
 }
 
+func TestDefaultRouterConfigQuarterProbeRepresentativeBudgetV1(t *testing.T) {
+	cfg := DefaultRouterConfigV1()
+	if cfg.RepresentativesPerPartition != 64 {
+		t.Fatalf("representatives per partition=%d want 64", cfg.RepresentativesPerPartition)
+	}
+	if cfg.RepresentativesPerPartition*16 != 1024 {
+		t.Fatalf("16-partition representative total=%d want 1024", cfg.RepresentativesPerPartition*16)
+	}
+}
+
 type routerCancelAfterErrContextV1 struct {
 	calls    int
 	cancelAt int
