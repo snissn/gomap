@@ -112,6 +112,21 @@ func TestFixtureArithmeticUsesExplicitFMA(t *testing.T) {
 	}
 }
 
+func TestTruthHomePartitionDiagnosticsV1(t *testing.T) {
+	truth := []m8CanonicalResultV1{{ID: "a"}, {ID: "b"}, {ID: "c"}, {ID: "d"}}
+	homes := map[string]uint32{"a": 0, "b": 0, "c": 1, "d": 2}
+	coverage, distinct, colocation, err := m8TruthHomePartitionDiagnosticsV1(truth, []uint32{0, 2}, homes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coverage != .75 || distinct != 3 || colocation != 1.0/6.0 {
+		t.Fatalf("coverage=%v distinct=%v colocation=%v", coverage, distinct, colocation)
+	}
+	if _, _, _, err := m8TruthHomePartitionDiagnosticsV1(truth, []uint32{0}, map[string]uint32{"a": 0}); err == nil {
+		t.Fatal("missing truth home accepted")
+	}
+}
+
 func TestGenerateFixtureWritesValidatedDeterministicManifestV1(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "fixture")
 	var stdout bytes.Buffer
