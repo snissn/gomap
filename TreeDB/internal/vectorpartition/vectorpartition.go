@@ -481,6 +481,23 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 			return Graph{}, err
 		}
 	}
+	// Exact duplicate vectors can be separated by the bounded pivot leaves even
+	// though their cosine distance is zero. Link each canonical fingerprint
+	// class into an ordinal chain before materializing the degree-bounded graph.
+	// This is corpus-only, deterministic, and adds at most two candidates per
+	// row; zero-distance links displace farther sketch candidates when needed.
+	classes := make(map[[32]byte][]int)
+	for i := range v {
+		fingerprint := vectorFingerprintV1(v[i].Values)
+		classes[fingerprint] = append(classes[fingerprint], i)
+	}
+	for _, members := range classes {
+		for i := 1; i < len(members); i++ {
+			left, right := members[i-1], members[i]
+			addCandidateBounded(sets[left], right, 0, c.Degree)
+			addCandidateBounded(sets[right], left, 0, c.Degree)
+		}
+	}
 	g := Graph{Neighbors: make([][]int, n)}
 	for i := range g.Neighbors {
 		// Canonical artifacts represent every zero-degree row as [] rather
@@ -499,6 +516,18 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 		}
 	}
 	return g, nil
+}
+
+func vectorFingerprintV1(values []float64) [32]byte {
+	h := sha256.New()
+	var raw [8]byte
+	for _, value := range values {
+		binary.BigEndian.PutUint64(raw[:], math.Float64bits(value))
+		_, _ = h.Write(raw[:])
+	}
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
 }
 
 // distanceBudget bounds scalar operations in the pivot and leaf phases.
