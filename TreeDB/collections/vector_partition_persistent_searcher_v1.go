@@ -74,6 +74,8 @@ func addVectorPartitionLocalNavigationOverlayV1(rows []columnVectorGraphAssetRow
 				if uint64(neighbor) >= uint64(len(rows)) || neighbor == uint32(row) {
 					return fmt.Errorf("partition-local native neighbor row=%d neighbor=%d", row, neighbor)
 				}
+			}
+			for _, neighbor := range native {
 				if neighbor != out[0] {
 					out = append(out, neighbor)
 					break

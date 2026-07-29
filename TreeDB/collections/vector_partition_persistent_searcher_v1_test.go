@@ -352,6 +352,16 @@ func TestVectorPartitionLocalNavigationOverlayReservesNativeEdgeAtM2V1(t *testin
 	}
 }
 
+func TestVectorPartitionLocalNavigationOverlayM1ValidatesEveryNativeEdgeV1(t *testing.T) {
+	rows := make([]columnVectorGraphAssetRow, 3)
+	// The first edge is eligible for retention. The later invalid edge must
+	// still be checked before M=1 chooses at most one native edge.
+	rows[0].Adjacency = []uint32{1, 3}
+	if err := addVectorPartitionLocalNavigationOverlayV1(rows, 2); err == nil {
+		t.Fatal("accepted later invalid M=1 native edge")
+	}
+}
+
 func TestVectorPartitionPackDiagnosticsMaxLayerFailsClosedV1(t *testing.T) {
 	for _, tc := range []struct{ maxLayer, layers int }{{-1, 1}, {1, 1}} {
 		if err := validateVectorPartitionPackDiagnosticsMaxLayerV1(tc.maxLayer, tc.layers); err == nil {

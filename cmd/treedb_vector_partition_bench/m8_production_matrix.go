@@ -66,18 +66,19 @@ type m8ProductionComparisonV1 struct {
 }
 
 type m8ProductionMatrixGatesV1 struct {
-	RequiredVariants string `json:"required_variants"`
-	ExhaustiveParity string `json:"exhaustive_correctness"`
-	FailureHonesty   string `json:"failure_honesty"`
-	Recall           string `json:"recall"`
-	ProbeReduction   string `json:"probe_reduction"`
-	EndToEndQPS      string `json:"matched_recall_qps"`
-	TailLatency      string `json:"matched_recall_tail"`
-	CoupledGraph     string `json:"coupled_graph_acceptance"`
-	Balance          string `json:"balance"`
-	OverlapStorage   string `json:"overlap_storage"`
-	ResourceBounds   string `json:"resource_bounds"`
-	ExistingBehavior string `json:"existing_behavior"`
+	RequiredVariants          string `json:"required_variants"`
+	ExhaustiveParity          string `json:"exhaustive_correctness"`
+	FailureHonesty            string `json:"failure_honesty"`
+	PartitionPackReachability string `json:"partition_pack_reachability"`
+	Recall                    string `json:"recall"`
+	ProbeReduction            string `json:"probe_reduction"`
+	EndToEndQPS               string `json:"matched_recall_qps"`
+	TailLatency               string `json:"matched_recall_tail"`
+	CoupledGraph              string `json:"coupled_graph_acceptance"`
+	Balance                   string `json:"balance"`
+	OverlapStorage            string `json:"overlap_storage"`
+	ResourceBounds            string `json:"resource_bounds"`
+	ExistingBehavior          string `json:"existing_behavior"`
 }
 
 func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, queries [][]float64, stdout io.Writer) error {
@@ -372,20 +373,21 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 	}
 	matrix.Gates = m8ProductionMatrixGatesV1{
 		RequiredVariants: requiredVariantsGate, ExhaustiveParity: m8AggregateVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.ExhaustiveParity }),
-		FailureHonesty:   m8AggregateVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.FailureHonesty }),
-		Recall:           m8AnyGraphVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.Recall }),
-		ProbeReduction:   m8AnyGraphVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.ProbeReduction }),
-		EndToEndQPS:      m8AnyGraphVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.EndToEndQPS }),
-		TailLatency:      m8AnyGraphVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.TailLatency }),
-		CoupledGraph:     m8AnyGraphVariantCoupledGatesPassV1(matrix.Variants),
-		Balance:          m8AggregateVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.Balance }),
-		OverlapStorage:   overlapGate,
-		ResourceBounds:   m8AggregateVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.ResourceBounds }),
-		ExistingBehavior: "pending_latest_head_required_suites",
+		FailureHonesty:            m8AggregateVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.FailureHonesty }),
+		PartitionPackReachability: m8AggregateVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.PartitionPackReachability }),
+		Recall:                    m8AnyGraphVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.Recall }),
+		ProbeReduction:            m8AnyGraphVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.ProbeReduction }),
+		EndToEndQPS:               m8AnyGraphVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.EndToEndQPS }),
+		TailLatency:               m8AnyGraphVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.TailLatency }),
+		CoupledGraph:              m8AnyGraphVariantCoupledGatesPassV1(matrix.Variants),
+		Balance:                   m8AggregateVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.Balance }),
+		OverlapStorage:            overlapGate,
+		ResourceBounds:            m8AggregateVariantGateV1(matrix.Variants, func(l m8ProductionGateLedgerV1) string { return l.ResourceBounds }),
+		ExistingBehavior:          "pending_latest_head_required_suites",
 	}
 	matrix.Status = "local_gate_pass"
 	matrix.Disposition = "local_gate_pass_multi_host_still_deferred"
-	for _, gate := range []string{matrix.Gates.RequiredVariants, matrix.Gates.ExhaustiveParity, matrix.Gates.FailureHonesty, matrix.Gates.Recall, matrix.Gates.ProbeReduction, matrix.Gates.EndToEndQPS, matrix.Gates.TailLatency, matrix.Gates.CoupledGraph, matrix.Gates.Balance, matrix.Gates.OverlapStorage, matrix.Gates.ResourceBounds} {
+	for _, gate := range []string{matrix.Gates.RequiredVariants, matrix.Gates.ExhaustiveParity, matrix.Gates.FailureHonesty, matrix.Gates.PartitionPackReachability, matrix.Gates.Recall, matrix.Gates.ProbeReduction, matrix.Gates.EndToEndQPS, matrix.Gates.TailLatency, matrix.Gates.CoupledGraph, matrix.Gates.Balance, matrix.Gates.OverlapStorage, matrix.Gates.ResourceBounds} {
 		if gate != "pass" {
 			matrix.Status = "experimental_gate_failures"
 			matrix.Disposition = "enablement_off_follow_up_required"
