@@ -32,6 +32,27 @@ const (
 	m8PeakRSSScopeV1             = "process lifetime through preflight, warmup, measured query, endpoint-loss fault, and post-measurement attribution boundaries; includes retained top-k coordinator results and cached truth-home attribution mapping"
 )
 
+const m8CanonicalTruthContractV1 = "canonical_fp32_exact_topk_score_tie_v1"
+
+type m8TruthCacheEvidenceV1 struct {
+	Status         string `json:"status"`
+	Identity       string `json:"identity"`
+	ArtifactSHA256 string `json:"artifact_sha256"`
+	ComputeNanos   int64  `json:"compute_nanos"`
+	LoadNanos      int64  `json:"load_nanos"`
+}
+
+type m8TruthCacheFileV1 struct {
+	SchemaVersion   int                     `json:"schema_version"`
+	Identity        string                  `json:"identity"`
+	Contract        string                  `json:"contract"`
+	DatasetChecksum string                  `json:"dataset_checksum"`
+	Dimensions      int                     `json:"dimensions"`
+	Metric          string                  `json:"metric"`
+	TopK            int                     `json:"top_k"`
+	Truth           [][]m8CanonicalResultV1 `json:"truth"`
+}
+
 type m8ProductionReportV1 struct {
 	SchemaVersion      int                                                        `json:"schema_version"`
 	ResultKind         string                                                     `json:"result_kind"`
@@ -61,6 +82,7 @@ type m8ProductionReportV1 struct {
 	RouterSessions     m8ProductionRouterSessionEvidenceV1                        `json:"router_sessions"`
 	UntimedBoundary    m8ProductionResourceBoundaryV1                             `json:"untimed_resource_boundary"`
 	Resources          m8ProductionResourceEvidenceV1                             `json:"resources"`
+	TruthCache         m8TruthCacheEvidenceV1                                     `json:"canonical_truth_cache"`
 	TimedBoundary      string                                                     `json:"timed_boundary"`
 	Limitations        []string                                                   `json:"limitations"`
 }
@@ -318,7 +340,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	defer func() { runErr = errors.Join(runErr, topology.Close()) }()
 	buildNanos := time.Since(started).Nanoseconds()
 
-	truth, err := m8ExactTruthV1(assets.collection, assets.manifest, queries, cfg.topK)
+	truth, truthCache, err := m8LoadOrComputeTruthV1(cfg.m8TruthCache, assets.collection, assets.manifest, fixture, queries, cfg.topK)
 	if err != nil {
 		return err
 	}
@@ -329,6 +351,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), Host: m8ProductionHostV1(cfg, assets.dir), Dataset: fixture, Variant: assets.descriptor,
 		Config:        m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), RouterCandidates: cfg.routerCandidates, Seed: cfg.seed},
 		BuildNanos:    buildNanos,
+		TruthCache:    truthCache,
 		Profiles:      m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Status: "not_captured", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs requires the captured baseline for differential analysis"},
 		TimedBoundary: "wall-clock query cells after topology, exhaustive endpoint preflight, and generation warmup; includes router, coordinator, TCP M5 serialization, Raft read-index/apply, persistent HNSW search, response merge, and caller scheduling; excludes topology construction, exact truth, preflight, warmup, post-measurement attribution, artifact encoding, and shutdown",
 		Limitations: []string{
@@ -808,6 +831,62 @@ func m8MaterializeCanonicalRefsV1(refs []m8CanonicalRefResultV1) []m8CanonicalRe
 		out[i] = m8CanonicalResultV1{ID: string(refs[i].ID), Score: refs[i].Score}
 	}
 	return out
+}
+
+func m8TruthCacheIdentityV1(fixture fixtureManifest, topK int) string {
+	b, _ := json.Marshal(struct {
+		Checksum         string
+		Dimensions, TopK int
+		Metric, Contract string
+	}{fixture.Checksum, fixture.Dimensions, topK, fixture.Metric, m8CanonicalTruthContractV1})
+	s := sha256.Sum256(b)
+	return hex.EncodeToString(s[:])
+}
+
+func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection, manifest collections.VectorPartitionManifestV1, fixture fixtureManifest, queries [][]float64, topK int) ([][]m8CanonicalResultV1, m8TruthCacheEvidenceV1, error) {
+	identity := m8TruthCacheIdentityV1(fixture, topK)
+	evidence := m8TruthCacheEvidenceV1{Identity: identity}
+	path := ""
+	if cacheDir != "" {
+		path = filepath.Join(cacheDir, "m8_canonical_truth_"+identity+".json")
+	}
+	if path != "" {
+		started := time.Now()
+		raw, err := os.ReadFile(path)
+		if err == nil {
+			var file m8TruthCacheFileV1
+			if json.Unmarshal(raw, &file) != nil || file.SchemaVersion != 1 || file.Identity != identity || file.Contract != m8CanonicalTruthContractV1 || file.DatasetChecksum != fixture.Checksum || file.Dimensions != fixture.Dimensions || file.Metric != fixture.Metric || file.TopK != topK || len(file.Truth) != len(queries) {
+				return nil, evidence, errors.New("canonical truth cache identity/schema mismatch")
+			}
+			d := sha256.Sum256(raw)
+			evidence.Status, evidence.LoadNanos, evidence.ArtifactSHA256 = "reused", time.Since(started).Nanoseconds(), hex.EncodeToString(d[:])
+			return file.Truth, evidence, nil
+		} else if !os.IsNotExist(err) {
+			return nil, evidence, fmt.Errorf("read canonical truth cache: %w", err)
+		}
+	}
+	started := time.Now()
+	truth, err := m8ExactTruthV1(collection, manifest, queries, topK)
+	if err != nil {
+		return nil, evidence, err
+	}
+	evidence.ComputeNanos = time.Since(started).Nanoseconds()
+	evidence.Status = "computed"
+	if path != "" {
+		if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+			return nil, evidence, err
+		}
+		raw, err := json.Marshal(m8TruthCacheFileV1{1, identity, m8CanonicalTruthContractV1, fixture.Checksum, fixture.Dimensions, fixture.Metric, topK, truth})
+		if err != nil {
+			return nil, evidence, err
+		}
+		d := sha256.Sum256(raw)
+		evidence.ArtifactSHA256 = hex.EncodeToString(d[:])
+		if err := os.WriteFile(path, raw, 0o644); err != nil {
+			return nil, evidence, err
+		}
+	}
+	return truth, evidence, nil
 }
 
 func m8ExactTruthV1(collection *collections.Collection, manifest collections.VectorPartitionManifestV1, queries [][]float64, topK int) ([][]m8CanonicalResultV1, error) {

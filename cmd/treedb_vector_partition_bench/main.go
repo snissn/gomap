@@ -111,6 +111,7 @@ type config struct {
 	m8MaxRSSBytes         uint64
 	m8MaxAssetBytes       uint64
 	m8MaxExactTruthVisits int64
+	m8TruthCache          string
 	m8CoordinatorLimits   nativewire.VectorPartitionCoordinatorLimitsV1
 	m8ShardLimits         nativewire.VectorPartitionShardSearchLimitsV1
 }
@@ -682,6 +683,7 @@ func parseConfig(args []string) (config, error) {
 	fs.Uint64Var(&cfg.m8MaxRSSBytes, "m8-max-rss-bytes", cfg.m8MaxRSSBytes, "hard process peak-RSS acceptance bound for production_multi_group")
 	fs.Uint64Var(&cfg.m8MaxAssetBytes, "m8-max-persistent-asset-bytes", cfg.m8MaxAssetBytes, "hard persistent derived-asset byte bound for production_multi_group")
 	fs.Int64Var(&cfg.m8MaxExactTruthVisits, "m8-max-exact-truth-visits", cfg.m8MaxExactTruthVisits, "hard exact source-query visit bound for production_multi_group")
+	fs.StringVar(&cfg.m8TruthCache, "m8-truth-cache", "", "external canonical exact-truth cache directory; identity-bound and fail-closed")
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
 	fs.BoolVar(&cfg.partitionTruthOracle, "partition-truth-oracle", false, "emit exact truth primary-partition coverage diagnostic for -stage partition")
 	fs.IntVar(&cfg.partition.Repetitions, "partition-repetitions", cfg.partition.Repetitions, "dense-ball graph sketch repetitions")

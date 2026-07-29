@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"math"
 	"os"
 	"os/exec"
@@ -158,6 +159,39 @@ func TestM8AllPartitionANNDoesNotOwnExactParityV1(t *testing.T) {
 	}
 	if got := m8ProductionGateLedgerForReportV1(report).ExhaustiveParity; got != "pass" {
 		t.Fatalf("all-partition ANN conflated with exact union: %q", got)
+	}
+}
+
+func TestM8TruthCacheIdentityMismatchFailsClosedV1(t *testing.T) {
+	fixture := fixtureManifest{Checksum: strings.Repeat("a", 64), Dimensions: 128, Metric: "cosine"}
+	identity := m8TruthCacheIdentityV1(fixture, 10)
+	dir := t.TempDir()
+	raw, err := json.Marshal(m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: m8CanonicalTruthContractV1, DatasetChecksum: strings.Repeat("b", 64), Dimensions: 128, Metric: "cosine", TopK: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "m8_canonical_truth_"+identity+".json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{}, fixture, [][]float64{{1}}, 10); err == nil || !strings.Contains(err.Error(), "identity/schema mismatch") {
+		t.Fatalf("cache mismatch err=%v", err)
+	}
+}
+
+func TestM8TruthCacheHitReusesCanonicalRowsV1(t *testing.T) {
+	fixture := fixtureManifest{Checksum: strings.Repeat("c", 64), Dimensions: 2, Metric: "cosine"}
+	identity, dir := m8TruthCacheIdentityV1(fixture, 1), t.TempDir()
+	want := [][]m8CanonicalResultV1{{{ID: "doc-000001", Score: .5}}}
+	raw, err := json.Marshal(m8TruthCacheFileV1{1, identity, m8CanonicalTruthContractV1, fixture.Checksum, 2, "cosine", 1, want})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "m8_canonical_truth_"+identity+".json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, evidence, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{}, fixture, [][]float64{{1, 0}}, 1)
+	if err != nil || evidence.Status != "reused" || !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%v evidence=%+v err=%v", got, evidence, err)
 	}
 }
 
