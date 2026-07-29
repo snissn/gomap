@@ -48,7 +48,7 @@ func TestDocsVectorPartitionV1CorrectnessAndApproximationContract(t *testing.T) 
 		"mutation invalidates",
 		"IDs/scores-only",
 		"must not fetch or materialize documents",
-		"#3999",
+		"Issue #3999",
 		"historical scoped HNSW evidence",
 		"#4013 owns this V1 contract",
 		"TestTruthOracleTieOrderingAndAllPartitionParity",

@@ -1196,7 +1196,11 @@ func TestPartitionLocalHNSWStageIsRecallQualifiedNotExact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = hnsw.Close() }()
+	t.Cleanup(func() {
+		if err := hnsw.Close(); err != nil {
+			t.Errorf("close partition-local HNSW: %v", err)
+		}
+	})
 	r, err := simulate(config{
 		partitions:   4,
 		topK:         4,
@@ -1212,7 +1216,7 @@ func TestPartitionLocalHNSWStageIsRecallQualifiedNotExact(t *testing.T) {
 		t.Fatalf("stages=%+v", r.Stages)
 	}
 	stage := r.Stages[0]
-	if !stage.Lossy || !strings.Contains(stage.Method, "recall_qualified") || strings.Contains(stage.Method, "exact") {
+	if !stage.Lossy || stage.Method != "treedb_column_graph_hnsw_recall_qualified_v1" {
 		t.Fatalf("partition-local HNSW must remain recall-qualified, got %+v", stage)
 	}
 }
