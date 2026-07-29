@@ -727,21 +727,10 @@ func (ReferencePartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
 	// matches ValidateArtifact's exact-coverage invariant even on graphs whose
 	// edges all prefer a small subset of partitions.
 	for partition := 0; partition < parts; partition++ {
-		// Spread seeds over the deterministic graph order. Taking the first
-		// `parts` rows biases equal-degree inputs toward one ordinal-local
-		// geometry region before affinity propagation begins.
-		seed := order[partition*n/parts]
-		out[seed] = partition
+		out[order[partition]] = partition
 		loads[partition] = 1
 	}
-	seeded := make([]bool, n)
-	for partition := 0; partition < parts; partition++ {
-		seeded[order[partition*n/parts]] = true
-	}
-	for _, node := range order {
-		if seeded[node] {
-			continue
-		}
+	for _, node := range order[parts:] {
 		// Only partitions already represented by a neighbor can have a positive
 		// affinity. Add the globally least-loaded admissible partition so a
 		// zero-affinity choice remains deterministic and balanced without a

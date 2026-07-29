@@ -57,7 +57,7 @@ func TestDenseBallGraphAndPartitionDeterministic(t *testing.T) {
 	if e := ValidateArtifact(a); e != nil {
 		t.Fatal(e)
 	}
-	if got, want := mustDigest(t, a), "c58b05853d9b3d5d2251dd379a0bc42aa1952fca070b35f4fba2168b89b3f2d1"; got != want {
+	if got, want := mustDigest(t, a), "9ec528eff2020ba0d6af5a73b069ce9ba2368850270fb7b561a27d45c889e80e"; got != want {
 		t.Fatalf("tiny canonical graph/assignment bytes changed: got %s want %s", got, want)
 	}
 }
