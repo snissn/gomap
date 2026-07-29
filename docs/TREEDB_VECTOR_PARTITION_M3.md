@@ -236,6 +236,40 @@ reduction, matched-recall QPS/tail, and coupled graph acceptance fail, while
 existing behavior remains pending latest-head required suites. These outcomes
 are retained evidence, not waived enablement gates.
 
+The superseding exact-invariants runtime build is
+`8c966e0898f2c646777e8ff15e425063029ac328`, compiled as
+`/mnt/fast4tb/tmp/issue4001_exactinvariants_bench` (SHA-256
+`b04878f3f82765dc9237efcfb118f3e140fbcbc8452c779e6af4658125f393b7`).
+Its fresh graph-overlap build is
+`/mnt/fast4tb/tmp/issue4001_exactinvariants_overlap_out_TALe4v/vector_partition_m3_3c7a5665803b_7a2ec9d690c1_8c966e0898f2.json`
+(SHA-256 `e1c79c4349f745ecea46ab80b5d86e9625a23f4d1bef94303c877e94c5eb5284`)
+with descriptor
+`/mnt/fast4tb/tmp/issue4001_exactinvariants_overlap_db_72Xw7b/vector_partition_variant_v1.json`
+(SHA-256 `2147eec04d412f64732c39b3420e9423a82d05f606c9cf0d60112ed8fe937f79`).
+It exits `0` after `13:09.77`, has empty stderr, maximum RSS `3815924 KiB`,
+and retains stdout/stderr/time SHA-256 values
+`e1c79c4349f745ecea46ab80b5d86e9625a23f4d1bef94303c877e94c5eb5284`,
+`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`, and
+`c8f069ea919a87d1bac94a5339c39568fe1031cc4015870ca90fd735a859ce88`.
+The report proves exact `200000/200000/0` requested/realized/rejected overlap,
+capacity `75000`, and sixteen loads of `75000`.
+
+The following M8 matrix uses that fresh overlap directory with the retained
+disjoint directories:
+`/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_out_QZBwWq/vector_partition_m8_matrix_042a9f054ca3_6d84a8a4f286.json`
+(SHA-256 `a008bddcc4bf6db69dd9947f57caeacd9c2b93bba5a11a2a684a7c917d14a8d5`).
+It was executed by the exact-invariants binary, while its recorded checkout
+head is `042a9f054ca331a807818a3e683525b430ae4755` (the subsequent
+policy-test-only commit). It exits `0` after `7:03.85`, maximum RSS
+`2191836 KiB`, with empty stderr. The retained stdout has the matrix digest;
+stderr and time SHA-256 values are
+`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` and
+`2da846b83d2e07bc9c5eb574fcfa7add11c7497522a7fe70bc4562c43a4ff62b`.
+Required variants, overlap storage (`1.1998982982x`), materialization `0.2`,
+and resource bounds pass. Its aggregate disposition remains
+`experimental_gate_failures` / `enablement_off_follow_up_required`; the
+deferred #3998 gates and disjoint exact-parity requirement are not waived.
+
 The checked-in 10k report is a historical non-acceptance diagnostic, not
 exact-target or enablement evidence: its saturated-cap row admits one overlap
 membership and leaves 1,999 requested memberships unspent. The current exact
