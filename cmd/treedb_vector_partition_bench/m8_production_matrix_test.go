@@ -143,8 +143,8 @@ func TestM8CoupledGraphGateRequiresOneMatchedOperatingPointV1(t *testing.T) {
 	report.Rows[2].Status = "fail"
 	report.Rows[2].ExactParityPassed = false
 	report.Rows[2].RecallAtK = .95
-	if got := m8AnyGraphVariantCoupledGatesPassV1([]m8ProductionReportV1{report}); got != "pass" {
-		t.Fatalf("target-recall approximate baseline gate=%q want pass", got)
+	if got := m8AnyGraphVariantCoupledGatesPassV1([]m8ProductionReportV1{report}); got != "fail" {
+		t.Fatalf("failed exhaustive baseline must be excluded: gate=%q want fail", got)
 	}
 }
 
