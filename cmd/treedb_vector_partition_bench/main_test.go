@@ -165,6 +165,22 @@ func TestCommittedEmbeddingQualificationIdentityV1(t *testing.T) {
 	}
 }
 
+func TestM8ExactTruthVisitBudgetRequiresQualificationOverrideV1(t *testing.T) {
+	cfg := config{partitions: 16, probes: []int{1, 2, 4, 8, 16}, overlaps: []float64{0}, efSearch: []int{64}, concurrency: []int{1}, topK: 10, m8MaxExactTruthVisits: maxBenchmarkWorkUnits}
+	m := fixtureManifest{Vectors: 1_000_000, Queries: 1_000, Dimensions: 128}
+	if _, err := validateM8BenchmarkWork(cfg, m, maxBenchmarkWorkUnits, maxFixtureBytes); err == nil || !strings.Contains(err.Error(), "exact_truth_vector_visits=1000000000") {
+		t.Fatalf("missing exact truth refusal: %v", err)
+	}
+	cfg.m8MaxExactTruthVisits = 1_000_000_000
+	plan, err := validateM8BenchmarkWork(cfg, m, maxBenchmarkWorkUnits, maxFixtureBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.ExactTruthVectorVisits != 1_000_000_000 {
+		t.Fatalf("exact truth visits=%d", plan.ExactTruthVectorVisits)
+	}
+}
+
 func TestTruthHomePartitionDiagnosticsV1(t *testing.T) {
 	truth := []m8CanonicalResultV1{{ID: "a"}, {ID: "b"}, {ID: "c"}, {ID: "d"}}
 	homes := map[string]uint32{"a": 0, "b": 0, "c": 1, "d": 2}

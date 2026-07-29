@@ -69,49 +69,50 @@ const (
 )
 
 type config struct {
-	dataset              string
-	partitions           int
-	probes               []int
-	overlaps             []float64
-	topK                 int
-	recallTarget         float64
-	seed                 int64
-	format               string
-	out                  string
-	stages               map[string]bool
-	command              []string
-	maxVectors           int
-	maxBytes             int64
-	baseSHA              string
-	headSHA              string
-	hnsw                 *treeDBPartitionHNSW
-	memory               benchmarkMemoryPlan
-	stage                string
-	m3PersistDir         string
-	m8ExistingDB         string
-	m8VariantDBs         []string
-	partitionAssignment  string
-	partitionTruthOracle bool
-	partition            vectorpartition.Config
-	partitionHNSWM       int
-	router               *treeDBRepresentativeRouter
-	coordinator          *m6CoordinatorHarnessV1
-	routerConfig         vectorpartition.RouterConfigV1
-	routerCandidates     int
-	sourceHNSWDegree     int
-	mode                 string
-	raftGroups           int
-	raftNodes            int
-	concurrency          []int
-	warmup               int
-	profiles             string
-	m8MatrixOut          string
-	m8MatrixProfiles     string
-	efSearch             []int
-	m8MaxRSSBytes        uint64
-	m8MaxAssetBytes      uint64
-	m8CoordinatorLimits  nativewire.VectorPartitionCoordinatorLimitsV1
-	m8ShardLimits        nativewire.VectorPartitionShardSearchLimitsV1
+	dataset               string
+	partitions            int
+	probes                []int
+	overlaps              []float64
+	topK                  int
+	recallTarget          float64
+	seed                  int64
+	format                string
+	out                   string
+	stages                map[string]bool
+	command               []string
+	maxVectors            int
+	maxBytes              int64
+	baseSHA               string
+	headSHA               string
+	hnsw                  *treeDBPartitionHNSW
+	memory                benchmarkMemoryPlan
+	stage                 string
+	m3PersistDir          string
+	m8ExistingDB          string
+	m8VariantDBs          []string
+	partitionAssignment   string
+	partitionTruthOracle  bool
+	partition             vectorpartition.Config
+	partitionHNSWM        int
+	router                *treeDBRepresentativeRouter
+	coordinator           *m6CoordinatorHarnessV1
+	routerConfig          vectorpartition.RouterConfigV1
+	routerCandidates      int
+	sourceHNSWDegree      int
+	mode                  string
+	raftGroups            int
+	raftNodes             int
+	concurrency           []int
+	warmup                int
+	profiles              string
+	m8MatrixOut           string
+	m8MatrixProfiles      string
+	efSearch              []int
+	m8MaxRSSBytes         uint64
+	m8MaxAssetBytes       uint64
+	m8MaxExactTruthVisits int64
+	m8CoordinatorLimits   nativewire.VectorPartitionCoordinatorLimitsV1
+	m8ShardLimits         nativewire.VectorPartitionShardSearchLimitsV1
 }
 
 type partitionRun struct {
@@ -647,7 +648,7 @@ func parseConfig(args []string) (config, error) {
 		partitionAssignment: partitionAssignmentGraphV1,
 		partition:           vectorpartition.DefaultConfig(), routerConfig: vectorpartition.DefaultRouterConfigV1(),
 		routerCandidates: 1024, sourceHNSWDegree: partitionHNSWDegree,
-		m8MaxRSSBytes: uint64(maxFixtureBytes), m8MaxAssetBytes: uint64(maxFixtureBytes),
+		m8MaxRSSBytes: uint64(maxFixtureBytes), m8MaxAssetBytes: uint64(maxFixtureBytes), m8MaxExactTruthVisits: maxBenchmarkWorkUnits,
 		m8CoordinatorLimits: nativewire.DefaultVectorPartitionCoordinatorLimitsV1(),
 		m8ShardLimits:       nativewire.DefaultVectorPartitionShardSearchLimitsV1(),
 	}
@@ -680,6 +681,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&m8VariantDBs, "m8-variant-dbs", "", "comma-separated retained M3 directories for the strict three-variant production matrix")
 	fs.Uint64Var(&cfg.m8MaxRSSBytes, "m8-max-rss-bytes", cfg.m8MaxRSSBytes, "hard process peak-RSS acceptance bound for production_multi_group")
 	fs.Uint64Var(&cfg.m8MaxAssetBytes, "m8-max-persistent-asset-bytes", cfg.m8MaxAssetBytes, "hard persistent derived-asset byte bound for production_multi_group")
+	fs.Int64Var(&cfg.m8MaxExactTruthVisits, "m8-max-exact-truth-visits", cfg.m8MaxExactTruthVisits, "hard exact source-query visit bound for production_multi_group")
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
 	fs.BoolVar(&cfg.partitionTruthOracle, "partition-truth-oracle", false, "emit exact truth primary-partition coverage diagnostic for -stage partition")
 	fs.IntVar(&cfg.partition.Repetitions, "partition-repetitions", cfg.partition.Repetitions, "dense-ball graph sketch repetitions")
@@ -764,8 +766,8 @@ func parseConfig(args []string) (config, error) {
 		}
 	}
 	if cfg.stage == m8ProductionMultiGroupModeV1 {
-		if cfg.m8MaxRSSBytes == 0 || cfg.m8MaxAssetBytes == 0 {
-			return config{}, errors.New("production_multi_group requires positive RSS and persistent-asset byte bounds")
+		if cfg.m8MaxRSSBytes == 0 || cfg.m8MaxAssetBytes == 0 || cfg.m8MaxExactTruthVisits < 1 {
+			return config{}, errors.New("production_multi_group requires positive RSS, persistent-asset, and exact-truth bounds")
 		}
 		if cfg.raftGroups < 2 || cfg.raftGroups > 64 || cfg.raftGroups > cfg.partitions || cfg.raftNodes != 3 || cfg.partitions < 4 {
 			return config{}, errors.New("production_multi_group requires 2..64 groups, exactly 3 nodes/group, at least 4 partitions, and groups <= partitions")
@@ -1263,6 +1265,7 @@ type m3BenchmarkWorkPlan struct {
 }
 
 type m8BenchmarkWorkPlan struct {
+	ExactTruthVectorVisits           int64
 	MeasuredQueryRequests            int64
 	WarmupAndPreflightQueryRequests  int64
 	AttributionQueryPasses           int64
@@ -1288,6 +1291,17 @@ type m8BenchmarkWorkPlan struct {
 func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes int64) (m8BenchmarkWorkPlan, error) {
 	if capUnits < 1 || capBytes < 1 || cfg.partitions < 1 || cfg.topK < 1 || m.Vectors < 1 || m.Queries < 1 || m.Dimensions < 1 || len(cfg.overlaps) == 0 || len(cfg.probes) == 0 || len(cfg.efSearch) == 0 || len(cfg.concurrency) == 0 {
 		return m8BenchmarkWorkPlan{}, errors.New("cannot plan M8 benchmark work without positive caps, a valid fixture/top-k, and complete sweeps")
+	}
+	truthCap := cfg.m8MaxExactTruthVisits
+	if truthCap == 0 { // permits direct unit construction; parsed production configs are always explicit.
+		truthCap = capUnits
+	}
+	exactTruthVisits, err := memoryMul(int64(m.Vectors), int64(m.Queries))
+	if err != nil {
+		return m8BenchmarkWorkPlan{}, err
+	}
+	if exactTruthVisits > truthCap {
+		return m8BenchmarkWorkPlan{ExactTruthVectorVisits: exactTruthVisits}, fmt.Errorf("modeled M8 exact truth exceeds %d-visit cap: exact_truth_vector_visits=%d; set -m8-max-exact-truth-visits explicitly for a declared qualification run", truthCap, exactTruthVisits)
 	}
 	variantRuns := int64(1)
 	var supportedOverlaps int64
@@ -1350,7 +1364,7 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return m8BenchmarkWorkPlan{}, err
 	}
-	plan := m8BenchmarkWorkPlan{MeasuredQueryRequests: measured, WarmupAndPreflightQueryRequests: warmupAndPreflight, AttributionQueryPasses: attribution, QueryRequests: requests}
+	plan := m8BenchmarkWorkPlan{ExactTruthVectorVisits: exactTruthVisits, MeasuredQueryRequests: measured, WarmupAndPreflightQueryRequests: warmupAndPreflight, AttributionQueryPasses: attribution, QueryRequests: requests}
 	if requests > capUnits {
 		return plan, fmt.Errorf("modeled M8 benchmark work exceeds %d-unit cap (%s): measured_query_requests=%d warmup_and_preflight_query_requests=%d attribution_query_passes=%d query_requests=%d", capUnits, m8BenchmarkWorkScope, measured, warmupAndPreflight, attribution, requests)
 	}

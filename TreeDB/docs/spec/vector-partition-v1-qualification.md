@@ -44,6 +44,7 @@ recall, QPS >= 1.15x exhaustive at matched recall, p95 no worse, and overlap
 assets < 1.35x disjoint.  A failed, unsupported, or resource-bounded row is a
 qualification failure or limitation, never a silent gate relaxation.
 
-The prior 200M M8 work guard intentionally rejects the required 1M x 1,000
-exact-truth shape (1B source-query visits).  Any execution must record the
-raised bound and the calibrated runtime before the full retained-asset sweep.
+The M8 request-work guard does not count exact source-query vector visits. The
+required 1M x 1,000 exact-truth shape therefore adds 1B such visits outside
+that request count; any execution must record its calibrated runtime before
+the full retained-asset sweep.
