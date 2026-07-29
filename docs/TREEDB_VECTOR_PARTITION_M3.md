@@ -24,7 +24,12 @@ The production M3 runner derives the narrow target-aware capacity
 `max(m2_cap, ceil((source_count + requested)/partitions))` and requires exact
 realization. If affinity or the per-vector cap still prevents the target, the
 build fails closed with requested, realized, rejected, and capacity evidence;
-it never publishes a silently under-filled overlap variant. Ratio zero emits
+it never publishes a silently under-filled overlap variant. Exact M3 builds
+first prioritize cut-reducing memberships, then deterministically fill any
+remaining legal non-home slots in canonical ID/partition order. Those fills
+cannot increase edge cut and make the declared global target materially mean
+the requested membership count rather than only the graph's affinity gain.
+Ratio zero emits
 only home memberships and therefore preserves exact M2 partition loads and
 edge cut. The integrity-bound M1 `BalancePolicy`, retained M3 descriptor, and
 machine report carry requested, realized, rejected, and declared-capacity

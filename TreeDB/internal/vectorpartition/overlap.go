@@ -127,6 +127,13 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 			return ps[i].part < ps[j].part
 		})
 		if len(ps) == 0 {
+			// Exact M3 experiments declare a global membership target, not a
+			// "beneficial edges only" target. Once every cut-reducing proposal
+			// is exhausted, deterministically fill remaining legal non-home
+			// slots. Adding memberships cannot increase the overlap edge cut.
+			if cfg.RequireExact {
+				used += fillExactOverlapSlots(a, members, loads, capacity, budget-used)
+			}
 			break
 		}
 		applied := 0
@@ -152,6 +159,9 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 			applied++
 		}
 		if applied == 0 {
+			if cfg.RequireExact {
+				used += fillExactOverlapSlots(a, members, loads, capacity, budget-used)
+			}
 			break
 		}
 	}
@@ -182,6 +192,31 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 		return OverlapResult{}, &OverlapShortfallError{Requested: out.Budget, Realized: out.Used, Rejected: out.Unspent, Capacity: out.Capacity}
 	}
 	return out, nil
+}
+
+// fillExactOverlapSlots deterministically completes an exact global target
+// after affinity has no further cut-reducing proposal. IDs are canonical in a
+// validated artifact; partition order is stable. A vector's durable cap and
+// the declared total-membership cap are both rechecked at application time.
+func fillExactOverlapSlots(a Artifact, members []map[int]struct{}, loads []int, capacity, remaining int) int {
+	used := 0
+	for i := range a.IDs {
+		if used == remaining || len(members[i])-1 >= MaxOverlapMembershipsPerVector {
+			continue
+		}
+		for partition := 0; partition < a.Config.Partitions && used < remaining; partition++ {
+			if loads[partition] >= capacity || len(members[i])-1 >= MaxOverlapMembershipsPerVector {
+				continue
+			}
+			if _, exists := members[i][partition]; exists {
+				continue
+			}
+			members[i][partition] = struct{}{}
+			loads[partition]++
+			used++
+		}
+	}
+	return used
 }
 
 // overlapCutReduction scores only directed cut edges that membership in

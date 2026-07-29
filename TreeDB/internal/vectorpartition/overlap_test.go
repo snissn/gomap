@@ -89,6 +89,46 @@ func TestOverlapExactCapacityTreatmentV1(t *testing.T) {
 	}
 }
 
+func TestOverlapExactTreatmentFillsLegalNonAffinitySlotsV1(t *testing.T) {
+	c := Config{Metric: "cosine", Seed: 1, Repetitions: 1, Pivots: 2, MaxLeafBucket: 2, Degree: 3, Partitions: 2, Imbalance: 0, MaxVectors: 4, MaxEdges: 12}
+	v := []Vector{{"a", []float64{1}}, {"b", []float64{.9}}, {"c", []float64{.8}}, {"d", []float64{.7}}}
+	built, err := Build(v, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := Artifact{SchemaVersion: SchemaVersion, Backend: "test", BackendLicense: "test", Source: built.Source, Config: c, IDs: []string{"a", "b", "c", "d"}, Graph: Graph{Neighbors: [][]int{{}, {}, {}, {}}}, Assignment: []int{0, 0, 1, 1}}
+	a.Metrics = metrics(a)
+	got, err := BuildOverlap(a, OverlapConfig{Ratio: .5, Capacity: 3, RequireExact: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Budget != 2 || got.Used != 2 || got.Unspent != 0 || got.EdgeCutBefore != 0 || got.EdgeCutAfter != 0 {
+		t.Fatalf("exact fallback=%+v", got)
+	}
+}
+
+func TestOverlapExactTreatmentFillsUnevenHomeDeficitsDeterministicallyV1(t *testing.T) {
+	c := Config{Metric: "cosine", Seed: 1, Repetitions: 1, Pivots: 2, MaxLeafBucket: 2, Degree: 3, Partitions: 3, Imbalance: 1, MaxVectors: 5, MaxEdges: 15}
+	v := []Vector{{"a", []float64{1}}, {"b", []float64{.9}}, {"c", []float64{.8}}, {"d", []float64{.7}}, {"e", []float64{.6}}}
+	built, err := Build(v, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := Artifact{SchemaVersion: SchemaVersion, Backend: "test", BackendLicense: "test", Source: built.Source, Config: c, IDs: []string{"a", "b", "c", "d", "e"}, Graph: Graph{Neighbors: [][]int{{}, {}, {}, {}, {}}}, Assignment: []int{0, 0, 0, 1, 2}}
+	a.Metrics = metrics(a)
+	first, err := BuildOverlap(a, OverlapConfig{Ratio: .4, Capacity: 4, RequireExact: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := BuildOverlap(a, OverlapConfig{Ratio: .4, Capacity: 4, RequireExact: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(first, second) || first.Used != 2 || first.Unspent != 0 || !reflect.DeepEqual(first.Loads, []int{3, 2, 2}) {
+		t.Fatalf("uneven exact fill first=%+v second=%+v", first, second)
+	}
+}
+
 func TestOverlapSaturatedRecordsUnspent(t *testing.T) {
 	c := Config{Metric: "cosine", Seed: 1, Repetitions: 1, Pivots: 2, MaxLeafBucket: 2, Degree: 3, Partitions: 2, Imbalance: 0, MaxVectors: 4, MaxEdges: 12}
 	v := []Vector{{"a", []float64{1}}, {"b", []float64{.9}}, {"c", []float64{.8}}, {"d", []float64{.7}}}
