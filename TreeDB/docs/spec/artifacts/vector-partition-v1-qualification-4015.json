@@ -3,7 +3,7 @@
   "result_kind": "vector_partition_v1_qualification_attribution_v1",
   "status": "experimental_off_gate_failures_not_1m_qualified",
   "blocking_follow_up": "#4022",
-  "parent_acceptance": "#4012_pending_being_recorded",
+  "parent_acceptance": "https://github.com/snissn/gomap/issues/4012#issuecomment-5123955990",
   "measured_code_head": "a2b2ad40b796",
   "fixture": {"kind":"local_embedding_mixture_calibration","vectors":100000,"queries":1000,"dimensions":128,"metric":"cosine","seed":4017,"checksum":"ecc2224f386932e580e4956f2cfa852140d3134625971c3511bc0d5feddf9b95","scope":"not_required_1m"},
   "truth": {"contract":"fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1","authoritative_cache_identity":"accdb76c693e2da99333b9327efc0e3d83ba630b25a8ba2b6820f5a6f6e38937","historical_pre_hardening_cache_identity":"3a8605017166fca50d4a85d28ad44e17e9abac9828a6795cdae25f238042624a","historical_artifact_reuse_not_reusable_after_hardening":true,"disjoint_compute_nanos":46531550247,"overlap_reuse_load_nanos":6761515},

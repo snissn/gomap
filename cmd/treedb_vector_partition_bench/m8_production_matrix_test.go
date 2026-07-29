@@ -263,7 +263,7 @@ func TestCommittedV1QualificationLedgerArtifactsV1(t *testing.T) {
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.SchemaVersion != 1 || got.Status != "experimental_off_gate_failures_not_1m_qualified" || got.BlockingFollowUp != "#4022" || got.ParentAcceptance != "#4012_pending_being_recorded" {
+	if got.SchemaVersion != 1 || got.Status != "experimental_off_gate_failures_not_1m_qualified" || got.BlockingFollowUp != "#4022" || got.ParentAcceptance != "https://github.com/snissn/gomap/issues/4012#issuecomment-5123955990" {
 		t.Fatalf("ledger linkage/schema/status=%+v", got)
 	}
 	if got.Gates["quarter_probe_recall_ge_090"] == "pass" || got.Gates["required_1m"] == "pass" || !strings.HasPrefix(got.Gates["required_1m"], "deferred") {
