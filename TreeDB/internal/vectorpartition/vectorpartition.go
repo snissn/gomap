@@ -110,21 +110,22 @@ type Vector struct {
 // is intentionally in-process and deterministic, so CI never needs a native
 // partitioner or runtime FFI.
 type Config struct {
-	Metric        string  `json:"metric"`
-	Seed          int64   `json:"seed"`
-	Repetitions   int     `json:"repetitions"`
-	Pivots        int     `json:"pivots"`
-	MaxLeafBucket int     `json:"max_leaf_bucket"`
-	Degree        int     `json:"degree"`
-	Partitions    int     `json:"partitions"`
-	Imbalance     float64 `json:"imbalance"`
-	Symmetric     bool    `json:"symmetric"`
-	MaxVectors    int     `json:"max_vectors"`
-	MaxEdges      int     `json:"max_edges"`
+	Metric          string  `json:"metric"`
+	Seed            int64   `json:"seed"`
+	Repetitions     int     `json:"repetitions"`
+	Pivots          int     `json:"pivots"`
+	MaxLeafBucket   int     `json:"max_leaf_bucket"`
+	Degree          int     `json:"degree"`
+	Partitions      int     `json:"partitions"`
+	Imbalance       float64 `json:"imbalance"`
+	Symmetric       bool    `json:"symmetric"`
+	MaxVectors      int     `json:"max_vectors"`
+	MaxEdges        int     `json:"max_edges"`
+	MaxDistanceWork int64   `json:"max_distance_work"`
 }
 
 func DefaultConfig() Config {
-	return Config{Metric: "cosine", Seed: 1, Repetitions: 4, Pivots: 8, MaxLeafBucket: 128, Degree: 16, Partitions: 16, Imbalance: .05, Symmetric: false, MaxVectors: maxVectors, MaxEdges: maxEdges}
+	return Config{Metric: "cosine", Seed: 1, Repetitions: 4, Pivots: 8, MaxLeafBucket: 128, Degree: 16, Partitions: 16, Imbalance: .05, Symmetric: false, MaxVectors: maxVectors, MaxEdges: maxEdges, MaxDistanceWork: maxDistanceWork}
 }
 
 type Graph struct {
@@ -450,11 +451,15 @@ func ValidateReferenceInputShape(c Config, vectors, dimensions int) error {
 // are at least two top-level pivots. Recursive carve work is
 // geometry-dependent and remains guarded by distanceBudget at runtime.
 func graphDistanceWorkExceeds(c Config, vectors, dimensions int) bool {
+	limit := c.MaxDistanceWork
+	if limit == 0 {
+		limit = maxDistanceWork
+	}
 	topLevelPivots := 0
 	if vectors > c.MaxLeafBucket {
 		topLevelPivots = min(c.Pivots, vectors)
 	}
-	if exceedsProduct(maxDistanceWork, int64(vectors), int64(topLevelPivots), int64(c.Repetitions), int64(dimensions)) {
+	if exceedsProduct(limit, int64(vectors), int64(topLevelPivots), int64(c.Repetitions), int64(dimensions)) {
 		return true
 	}
 	topLevelPivotWork := int64(vectors) * int64(topLevelPivots) * int64(c.Repetitions) * int64(dimensions)
@@ -464,7 +469,7 @@ func graphDistanceWorkExceeds(c Config, vectors, dimensions int) bool {
 		topLevelMemberships = 2
 	}
 	leafComparisons := max(0, min(c.MaxLeafBucket, vectors)-1)
-	return exceedsProduct(maxDistanceWork-topLevelPivotWork, int64(vectors), int64(topLevelMemberships), int64(leafComparisons), int64(c.Repetitions), int64(dimensions))
+	return exceedsProduct(limit-topLevelPivotWork, int64(vectors), int64(topLevelMemberships), int64(leafComparisons), int64(c.Repetitions), int64(dimensions))
 }
 func finite(x float64) bool { return !math.IsNaN(x) && !math.IsInf(x, 0) }
 
@@ -474,7 +479,11 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 	for i := range sets {
 		sets[i] = make(map[int]float64, c.Degree)
 	}
-	budget := distanceBudget{remaining: maxDistanceWork}
+	limit := c.MaxDistanceWork
+	if limit == 0 {
+		limit = maxDistanceWork
+	}
+	budget := distanceBudget{remaining: limit}
 	for rep := 0; rep < c.Repetitions; rep++ {
 		r := rand.New(rand.NewSource(c.Seed + int64(rep)*0x9e3779b))
 		order := r.Perm(n)

@@ -112,6 +112,7 @@ type config struct {
 	m8MaxAssetBytes       uint64
 	m8MaxExactTruthVisits int64
 	m8TruthCache          string
+	m3MaxBenchmarkVisits  int64
 	m8CoordinatorLimits   nativewire.VectorPartitionCoordinatorLimitsV1
 	m8ShardLimits         nativewire.VectorPartitionShardSearchLimitsV1
 }
@@ -538,7 +539,7 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		if cfg.topK > fixture.Vectors {
 			return errors.New("top-k cannot exceed fixture vectors")
 		}
-		if _, err := validateM3BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits); err != nil {
+		if _, err := validateM3BenchmarkWork(cfg, fixture, cfg.m3MaxBenchmarkVisits); err != nil {
 			return err
 		}
 		vectors, queries := fixtureData(fixture)
@@ -687,6 +688,8 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
 	fs.BoolVar(&cfg.partitionTruthOracle, "partition-truth-oracle", false, "emit exact truth primary-partition coverage diagnostic for -stage partition")
 	fs.IntVar(&cfg.partition.Repetitions, "partition-repetitions", cfg.partition.Repetitions, "dense-ball graph sketch repetitions")
+	fs.Int64Var(&cfg.partition.MaxDistanceWork, "partition-max-distance-work", cfg.partition.MaxDistanceWork, "explicit reference graph scalar-work bound")
+	fs.Int64Var(&cfg.m3MaxBenchmarkVisits, "m3-max-benchmark-visits", maxBenchmarkWorkUnits, "explicit M3 checksum and membership visit bound")
 	fs.IntVar(&cfg.partition.Pivots, "partition-pivots", cfg.partition.Pivots, "dense-ball pivots per recursive level")
 	fs.IntVar(&cfg.partition.MaxLeafBucket, "partition-max-leaf-bucket", cfg.partition.MaxLeafBucket, "maximum dense-ball leaf bucket")
 	fs.IntVar(&cfg.partition.Degree, "partition-degree", cfg.partition.Degree, "maximum canonical graph degree")
@@ -708,6 +711,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if fs.NArg() != 0 {
 		return config{}, fmt.Errorf("unexpected positional arguments: %q", fs.Args())
+	}
+	if cfg.partition.MaxDistanceWork < 1 || cfg.m3MaxBenchmarkVisits < 1 {
+		return config{}, errors.New("partition scalar-work and M3 benchmark-visit limits must be positive")
 	}
 	if cfg.mode != "" {
 		if cfg.mode != m8ProductionMultiGroupModeV1 || cfg.stage != "simulation" {
