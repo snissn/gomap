@@ -1698,6 +1698,35 @@ It does not claim ANN query serving. Reader pins cover only this generation's
 local cleanup lifecycle; they do not imply a query-serving or cluster-cutover
 contract.
 
+# Vector partition V1 correctness and approximation verification
+
+The snapshot-bound V1 admission contract has disjoint exact and ANN gates. The
+production-path exact-union gate opens every generation-pinned persistent pack
+and requires canonical FP32 stable-ID and score-bit parity with the canonical
+source oracle; it does not use the historical float64/modulo fixture oracle as
+the V1 production gate. Partition-local HNSW remains recall-qualified
+approximate even when every partition is probed. Documentation admission pins
+the public identity/route/asset error taxonomy and the IDs/scores-only,
+all-or-error, mutation-invalidation boundary.
+
+Coverage and commands:
+
+- `cmd/treedb_vector_partition_bench/m8_production_assets_test.go`:
+  `TestM8ProductionMultiGroupAssetsCheckedIn10kCISmokeV1` proves the
+  generation-pinned exact union against the canonical source oracle, including
+  FP32 score bits, stable-ID ties, and dedupe.
+- `cmd/treedb_vector_partition_bench/main_test.go`:
+  `TestPartitionLocalHNSWStageIsRecallQualifiedNotExact` prevents the
+  all-partition HNSW result label from drifting into an exact claim.
+- `TreeDB/docs/vector_partition_raft_v1_test.go`:
+  `TestDocsVectorPartitionV1CorrectnessAndApproximationContract` admits the
+  frozen V1 specification and this verification entry.
+
+```sh
+GOWORK=off go test -count=1 ./cmd/treedb_vector_partition_bench -run 'Test(M8ProductionMultiGroupAssetsCheckedIn10kCISmokeV1|PartitionLocalHNSWStageIsRecallQualifiedNotExact)'
+GOWORK=off go test -count=1 ./TreeDB/docs -run TestDocsVectorPartitionV1CorrectnessAndApproximationContract
+```
+
 # Vector partition M6 coordinator verification
 
 M6 verification requires one exact M1/M4 generation per request, deterministic

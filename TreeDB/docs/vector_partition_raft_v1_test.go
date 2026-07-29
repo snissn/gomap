@@ -68,6 +68,22 @@ func TestDocsVectorPartitionV1CorrectnessAndApproximationContract(t *testing.T) 
 	if !strings.Contains(string(index), "TreeDB/docs/spec/vector-partition-v1-contract.md") {
 		t.Fatal("spec index does not admit the V1 vector-partition contract")
 	}
+	verification, err := os.ReadFile(filepath.Join(root, "docs", "spec", "verification.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, needle := range []string{
+		"Vector partition V1 correctness and approximation verification",
+		"TestM8ProductionMultiGroupAssetsCheckedIn10kCISmokeV1",
+		"TestPartitionLocalHNSWStageIsRecallQualifiedNotExact",
+		"TestDocsVectorPartitionV1CorrectnessAndApproximationContract",
+		"GOWORK=off go test -count=1 ./cmd/treedb_vector_partition_bench",
+		"GOWORK=off go test -count=1 ./TreeDB/docs",
+	} {
+		if !strings.Contains(string(verification), needle) {
+			t.Fatalf("verification matrix missing %q", needle)
+		}
+	}
 }
 
 func TestDocsVectorPartitionCoordinatorM6Contract(t *testing.T) {
