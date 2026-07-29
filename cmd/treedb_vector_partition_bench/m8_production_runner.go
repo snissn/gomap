@@ -181,16 +181,17 @@ type m8ProductionResourceBoundaryV1 struct {
 type m8ProductionFaultResourceBoundaryV1 = m8ProductionResourceBoundaryV1
 
 type m8ProductionGateLedgerV1 struct {
-	ExhaustiveParity string `json:"exhaustive_correctness"`
-	FailureHonesty   string `json:"failure_honesty"`
-	Recall           string `json:"recall"`
-	ProbeReduction   string `json:"probe_reduction"`
-	EndToEndQPS      string `json:"end_to_end_qps"`
-	TailLatency      string `json:"tail_latency"`
-	Balance          string `json:"balance"`
-	OverlapStorage   string `json:"overlap_storage"`
-	ResourceBounds   string `json:"resource_bounds"`
-	ExistingBehavior string `json:"existing_behavior"`
+	ExhaustiveParity          string `json:"exhaustive_correctness"`
+	FailureHonesty            string `json:"failure_honesty"`
+	PartitionPackReachability string `json:"partition_pack_reachability"`
+	Recall                    string `json:"recall"`
+	ProbeReduction            string `json:"probe_reduction"`
+	EndToEndQPS               string `json:"end_to_end_qps"`
+	TailLatency               string `json:"tail_latency"`
+	Balance                   string `json:"balance"`
+	OverlapStorage            string `json:"overlap_storage"`
+	ResourceBounds            string `json:"resource_bounds"`
+	ExistingBehavior          string `json:"existing_behavior"`
 }
 
 type m8ProductionProfileEvidenceV1 struct {
@@ -1642,7 +1643,10 @@ func m8RunUnavailableGroupV1(ctx context.Context, topology *nativewire.VectorPar
 }
 
 func m8ProductionGateLedgerForReportV1(report m8ProductionReportV1) m8ProductionGateLedgerV1 {
-	ledger := m8ProductionGateLedgerV1{ExhaustiveParity: "not_run", FailureHonesty: "fail", Recall: "fail", ProbeReduction: "fail", EndToEndQPS: "fail", TailLatency: "fail", Balance: "fail", OverlapStorage: "fail", ResourceBounds: "fail", ExistingBehavior: "pending_full_required_suites"}
+	ledger := m8ProductionGateLedgerV1{ExhaustiveParity: "not_run", FailureHonesty: "fail", PartitionPackReachability: "fail", Recall: "fail", ProbeReduction: "fail", EndToEndQPS: "fail", TailLatency: "fail", Balance: "fail", OverlapStorage: "fail", ResourceBounds: "fail", ExistingBehavior: "pending_full_required_suites"}
+	if validM8PartitionPackDiagnosticsV1(report.PackDiagnostics, report.Config.Partitions) {
+		ledger.PartitionPackReachability = "pass"
+	}
 	var exhaustive []m8ProductionRowV1
 	var candidates []m8ProductionRowV1
 	for _, row := range report.Rows {
@@ -1697,7 +1701,28 @@ func m8ProductionGateLedgerForReportV1(report m8ProductionReportV1) m8Production
 }
 
 func m8ProductionGateValuesV1(ledger m8ProductionGateLedgerV1) []string {
-	return []string{ledger.ExhaustiveParity, ledger.FailureHonesty, ledger.Recall, ledger.ProbeReduction, ledger.EndToEndQPS, ledger.TailLatency, ledger.Balance, ledger.OverlapStorage, ledger.ResourceBounds, ledger.ExistingBehavior}
+	return []string{ledger.ExhaustiveParity, ledger.FailureHonesty, ledger.PartitionPackReachability, ledger.Recall, ledger.ProbeReduction, ledger.EndToEndQPS, ledger.TailLatency, ledger.Balance, ledger.OverlapStorage, ledger.ResourceBounds, ledger.ExistingBehavior}
+}
+
+// validM8PartitionPackDiagnosticsV1 makes the partition-local persistent graph
+// topology an acceptance condition, not merely an informational artifact. A
+// structurally readable older pack can still contain disconnected directed
+// layer-0 components, so every configured partition must be reported exactly
+// once as a nonempty, fully reachable, single-root pack.
+func validM8PartitionPackDiagnosticsV1(diagnostics []m8PartitionPackDiagnosticsV1, partitions int) bool {
+	if partitions < 1 || len(diagnostics) != partitions {
+		return false
+	}
+	seen := make([]bool, partitions)
+	for _, diagnostic := range diagnostics {
+		partition := int(diagnostic.PartitionID)
+		if partition < 0 || partition >= partitions || seen[partition] || diagnostic.Rows == 0 ||
+			diagnostic.ReachableRows == 0 || diagnostic.ReachableRows != diagnostic.Rows || diagnostic.TraversalRoots != 1 {
+			return false
+		}
+		seen[partition] = true
+	}
+	return true
 }
 
 func m8ProductionAllGatesPassV1(ledger m8ProductionGateLedgerV1) bool {
@@ -1871,6 +1896,9 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 	}
 	if len(report.Rows) == 0 {
 		return errors.New("M8 report has no measurement rows")
+	}
+	if !validM8PartitionPackDiagnosticsV1(report.PackDiagnostics, report.Config.Partitions) || report.GateLedger.PartitionPackReachability != "pass" {
+		return errors.New("M8 report has incomplete or unreachable partition-pack diagnostics")
 	}
 	var measuredSamples uint64
 	for _, row := range report.Rows {

@@ -59,6 +59,13 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 			CommitIndex: 1, ReadIndex: 1, AppliedIndex: 1, ReadEvidenceKind: "production", ProvesProductionConsensus: true, EndpointHits: hits,
 		}
 	}
+	diagnostics := func(partitions int) []m8PartitionPackDiagnosticsV1 {
+		out := make([]m8PartitionPackDiagnosticsV1, partitions)
+		for partition := range out {
+			out[partition] = m8PartitionPackDiagnosticsV1{PartitionID: uint32(partition), Rows: 1, ReachableRows: 1, TraversalRoots: 1}
+		}
+		return out
+	}
 	report := m8ProductionReportV1{
 		SchemaVersion: 2, ResultKind: "m8_production_multi_group_evidence_v2", Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true,
 		GeneratedAt: time.Now(), Command: []string{"m8-test"}, BaseSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -72,12 +79,27 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
 			ApproximateRouterCandidateBudget: 1, ApproximateRouterPartitionCoverageComplete: true, ResidualLossOwners: []string{"none_observed"},
 		}}},
+		PackDiagnostics: diagnostics(4),
 		UntimedBoundary: m8ProductionResourceBoundaryV1{SelectedPartitions: 4, EfSearch: 10, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 2, RPCs: 1, RequestBytes: 1, ShardPartitions: 2, ShardRequestBytes: 1}},
-		Failure:         m8ProductionFailureEvidenceV1{Passed: true, Error: "unavailable group rejected", ResourceBoundary: m8ProductionFaultResourceBoundaryV1{SelectedPartitions: 4, EfSearch: 4096, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 2, RPCs: 1, RequestBytes: 1, ShardPartitions: 2, ShardRequestBytes: 1}}}, GateLedger: m8ProductionGateLedgerV1{FailureHonesty: "pass"},
+		Failure:         m8ProductionFailureEvidenceV1{Passed: true, Error: "unavailable group rejected", ResourceBoundary: m8ProductionFaultResourceBoundaryV1{SelectedPartitions: 4, EfSearch: 4096, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 2, RPCs: 1, RequestBytes: 1, ShardPartitions: 2, ShardRequestBytes: 1}}}, GateLedger: m8ProductionGateLedgerV1{FailureHonesty: "pass", PartitionPackReachability: "pass"},
 		Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1}, TimedBoundary: "measured", Limitations: []string{"test"},
 	}
 	if err := validateM8ProductionReportV1(report); err != nil {
 		t.Fatalf("valid endpoint coverage rejected: %v", err)
+	}
+	for name, diagnostics := range map[string][]m8PartitionPackDiagnosticsV1{
+		"missing":      report.PackDiagnostics[:3],
+		"duplicate":    {report.PackDiagnostics[0], report.PackDiagnostics[0], report.PackDiagnostics[2], report.PackDiagnostics[3]},
+		"disconnected": {report.PackDiagnostics[0], {PartitionID: 1, Rows: 1, ReachableRows: 0, TraversalRoots: 2}, report.PackDiagnostics[2], report.PackDiagnostics[3]},
+	} {
+		t.Run("rejects_"+name+"_pack_diagnostics", func(t *testing.T) {
+			invalid := report
+			invalid.PackDiagnostics = diagnostics
+			invalid.GateLedger = m8ProductionGateLedgerForReportV1(invalid)
+			if err := validateM8ProductionReportV1(invalid); err == nil {
+				t.Fatalf("accepted %s partition-pack diagnostics", name)
+			}
+		})
 	}
 	measuredRows := report.Rows
 	measuredAfter := report.RouterSessions.AfterMeasured
@@ -100,6 +122,28 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	report.Topology.Groups[1].EndpointHits = 0
 	if err := validateM8ProductionReportV1(report); err == nil {
 		t.Fatal("accepted report with an unexercised data-group endpoint")
+	}
+}
+
+func TestM8PartitionPackDiagnosticsFailClosedV1(t *testing.T) {
+	valid := []m8PartitionPackDiagnosticsV1{
+		{PartitionID: 0, Rows: 3, ReachableRows: 3, TraversalRoots: 1},
+		{PartitionID: 1, Rows: 2, ReachableRows: 2, TraversalRoots: 1},
+	}
+	if !validM8PartitionPackDiagnosticsV1(valid, 2) {
+		t.Fatal("rejected complete reachable diagnostics")
+	}
+	for name, diagnostics := range map[string][]m8PartitionPackDiagnosticsV1{
+		"missing":      valid[:1],
+		"duplicate":    {valid[0], {PartitionID: 0, Rows: 2, ReachableRows: 2, TraversalRoots: 1}},
+		"disconnected": {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2}},
+		"empty":        {{PartitionID: 0, Rows: 0, ReachableRows: 0, TraversalRoots: 1}, valid[1]},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if validM8PartitionPackDiagnosticsV1(diagnostics, 2) {
+				t.Fatalf("accepted %s diagnostics: %+v", name, diagnostics)
+			}
+		})
 	}
 }
 
