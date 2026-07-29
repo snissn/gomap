@@ -11,6 +11,15 @@
   "repeats": {"runs":3,"p4":{"recall":0.7201,"qps_median":50.96762724566287,"qps_range":[38.957053307919566,51.0583649126661],"p95_ms_median":30.980773,"p95_ms_range":[29.590312,46.256897]},"p16":{"recall":0.9924,"qps_median":45.444061581835896,"qps_range":[38.30153640654342,46.672391648155234],"p95_ms_median":34.493601,"p95_ms_range":[33.704847,47.056089]}},
   "concurrency": {"p4_c16":{"recall":0.7201,"qps":126.40229642716955,"p95_ms":218.700072},"p4_c64":{"recall":0.7201,"qps":93.50123186722921,"p95_ms":978.510104},"p16_c16":{"recall":0.9924,"qps":91.25145855053826,"p95_ms":299.688544},"p16_c64":{"recall":0.9924,"qps":163.95218587968898,"p95_ms":524.46338}},
   "artifact_root": "/mnt/fast4tb/gomap-4015-embedding100k",
+  "retained_runs": [
+    {"role":"graph_disjoint","out":"m8-default","asset":"graph-default","probes":"1,2,4,8,16","overlap":"0","ef_search":"64","concurrency":"1"},
+    {"role":"graph_overlap","out":"m8-overlap","asset":"graph-overlap-020","probes":"1,2,4,8,16","overlap":".2","ef_search":"64","concurrency":"1"},
+    {"role":"stable_hash","out":"m8-stable-id-hash","asset":"stable-id-hash-disjoint","probes":"4,16","overlap":"0","ef_search":"64","concurrency":"1"},
+    {"role":"overlap_ef","out":"m8-overlap-ef128-256","asset":"graph-overlap-020","probes":"4,16","overlap":".2","ef_search":"128,256","concurrency":"1"},
+    {"role":"overlap_concurrency","out":"m8-overlap-concurrency16-64","asset":"graph-overlap-020","probes":"4,16","overlap":".2","ef_search":"64","concurrency":"16,64"},
+    {"role":"overlap_repeat_2","out":"m8-overlap-repeat-2","asset":"graph-overlap-020","probes":"4,16","overlap":".2","ef_search":"64","concurrency":"1"},
+    {"role":"overlap_repeat_3","out":"m8-overlap-repeat-3","asset":"graph-overlap-020","probes":"4,16","overlap":".2","ef_search":"64","concurrency":"1"}
+  ],
   "commands": {"canonical":"go run ./cmd/treedb_vector_partition_bench -mode production_multi_group -dataset /mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k -m8-truth-cache /mnt/fast4tb/gomap-4015-embedding100k/truth-cache -m8-existing-db <retained-M3-asset> -partitions 16 -raft-groups 4 -probes <cells> -overlap <ratio> -ef-search <cells> -concurrency <cells> -top-k 10 -seed 4017 -m8-max-exact-truth-visits 100000000 -format text"},
   "artifacts": {"disjoint_sha256":"123c9135f3374827c16e52946dde138860bcfbf49b3985b7a235e75c35c7198e","overlap_sha256":"4a6c794f78df3512de1b925769bd2c2f8eddb3ff05d80017e0bee3db5fa77cbd","repeat2_sha256":"919abe7ab4d372afc9293c50716148ef080b05a8e61fe00c27c590fbca3ff6c3","repeat3_sha256":"b0ae43d4b68cc4e57e9d3b74d5308657b61a7d9be238e870182c1b5d22190cc5"}
 }
