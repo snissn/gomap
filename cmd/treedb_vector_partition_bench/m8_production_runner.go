@@ -854,37 +854,53 @@ func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection,
 	}
 	if path != "" {
 		started := time.Now()
-		maxBytes, boundErr := m8TruthCacheMaxBytesV1(len(queries), topK)
+		maxBytes, boundErr := m8TruthCacheMaxBytesV1(len(queries), topK, fixture.Vectors)
 		if boundErr != nil {
 			return nil, evidence, boundErr
 		}
 		fileHandle, openErr := os.Open(path)
-		var raw []byte
 		var err error
 		if openErr == nil {
-			raw, err = io.ReadAll(io.LimitReader(fileHandle, maxBytes+1))
+			counter := &m8CountingReaderV1{Reader: io.LimitReader(fileHandle, maxBytes+1)}
+			hasher := sha256.New()
+			stream := io.TeeReader(counter, hasher)
+			decoder := json.NewDecoder(stream)
+			var file m8TruthCacheFileV1
+			err = decoder.Decode(&file)
+			if err == nil {
+				var trailing json.RawMessage
+				if trailingErr := decoder.Decode(&trailing); trailingErr != io.EOF {
+					if trailingErr == nil {
+						err = errors.New("canonical truth cache contains trailing JSON")
+					} else {
+						err = trailingErr
+					}
+				}
+			}
+			if _, copyErr := io.Copy(io.Discard, stream); err == nil && copyErr != nil {
+				err = copyErr
+			}
 			closeErr := fileHandle.Close()
 			if err == nil && closeErr != nil {
 				err = closeErr
 			}
-			if err == nil && int64(len(raw)) > maxBytes {
+			if counter.N > maxBytes {
 				return nil, evidence, fmt.Errorf("canonical truth cache exceeds %d-byte bound before decode", maxBytes)
+			}
+			if err == nil {
+				if file.SchemaVersion != 1 || file.Identity != identity || file.Contract != collections.VectorPartitionCanonicalScoreContractV1 || file.DatasetChecksum != fixture.Checksum || file.Dimensions != fixture.Dimensions || file.Metric != fixture.Metric || file.TopK != topK || len(file.Truth) != len(queries) {
+					return nil, evidence, errors.New("canonical truth cache identity/schema mismatch")
+				}
+				if err := m8ValidateCachedTruthV1(file.Truth, file.TruthSHA256, topK, manifest.SourceRowCount, fixture.Vectors); err != nil {
+					return nil, evidence, fmt.Errorf("canonical truth cache semantic mismatch: %w", err)
+				}
+				evidence.Status, evidence.LoadNanos, evidence.ArtifactSHA256 = "reused", time.Since(started).Nanoseconds(), hex.EncodeToString(hasher.Sum(nil))
+				return file.Truth, evidence, nil
 			}
 		} else {
 			err = openErr
 		}
-		if err == nil {
-			var file m8TruthCacheFileV1
-			if json.Unmarshal(raw, &file) != nil || file.SchemaVersion != 1 || file.Identity != identity || file.Contract != collections.VectorPartitionCanonicalScoreContractV1 || file.DatasetChecksum != fixture.Checksum || file.Dimensions != fixture.Dimensions || file.Metric != fixture.Metric || file.TopK != topK || len(file.Truth) != len(queries) {
-				return nil, evidence, errors.New("canonical truth cache identity/schema mismatch")
-			}
-			if err := m8ValidateCachedTruthV1(file.Truth, file.TruthSHA256, topK, manifest.SourceRowCount, fixture.Vectors); err != nil {
-				return nil, evidence, fmt.Errorf("canonical truth cache semantic mismatch: %w", err)
-			}
-			d := sha256.Sum256(raw)
-			evidence.Status, evidence.LoadNanos, evidence.ArtifactSHA256 = "reused", time.Since(started).Nanoseconds(), hex.EncodeToString(d[:])
-			return file.Truth, evidence, nil
-		} else if !os.IsNotExist(err) {
+		if !os.IsNotExist(err) {
 			return nil, evidence, fmt.Errorf("read canonical truth cache: %w", err)
 		}
 	}
@@ -938,23 +954,39 @@ func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection,
 
 // m8TruthCacheMaxBytesV1 bounds untrusted cache input before ReadFile/JSON
 // allocation. It deliberately allows generous canonical IDs and JSON overhead.
-func m8TruthCacheMaxBytesV1(queryCount, topK int) (int64, error) {
-	if queryCount < 0 || topK < 1 {
+type m8CountingReaderV1 struct {
+	io.Reader
+	N int64
+}
+
+func (r *m8CountingReaderV1) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	r.N += int64(n)
+	return n, err
+}
+
+// m8TruthCacheMaxBytesV1 tightly bounds canonical JSON from the declared
+// deterministic ID domain; raw cache bytes are streamed, never retained.
+func m8TruthCacheMaxBytesV1(queryCount, topK, fixtureVectors int) (int64, error) {
+	if queryCount < 0 || topK < 1 || fixtureVectors < 1 {
 		return 0, errors.New("invalid canonical truth cache shape")
 	}
-	results, err := memoryMul(int64(queryCount), int64(topK))
+	perQuery := min(topK, fixtureVectors)
+	results, err := memoryMul(int64(queryCount), int64(perQuery))
 	if err != nil {
 		return 0, err
 	}
-	resultBytes, err := memoryMul(results, 512)
+	idBytes := int64(len(fmt.Sprintf("doc-%06d", fixtureVectors-1)))
+	// 64 covers JSON punctuation/key names plus a maximal float32 spelling.
+	resultBytes, err := memoryMul(results, 64+idBytes)
 	if err != nil {
 		return 0, err
 	}
-	queryBytes, err := memoryMul(int64(queryCount), 128)
+	queryBytes, err := memoryMul(int64(queryCount), 4)
 	if err != nil {
 		return 0, err
 	}
-	return memoryAdd(64<<10, resultBytes, queryBytes)
+	return memoryAdd(4<<10, resultBytes, queryBytes)
 }
 
 func m8TruthContentSHA256V1(truth [][]m8CanonicalResultV1) (string, error) {
