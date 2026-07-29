@@ -27,20 +27,21 @@ import (
 )
 
 const (
-	SchemaVersion    = 1
-	maxVectors       = 1_000_000
-	maxDimensions    = 4096
-	maxEdges         = 64_000_000
-	maxRepetitions   = 32
-	maxPivots        = 1024
-	maxLeafBucket    = 65536
-	maxDegree        = 1024
-	maxPartitions    = 16384
-	maxIDBytes       = 1 << 20
-	maxTotalIDBytes  = 64 << 20
-	maxDistanceWork  = int64(20_000_000_000) // scalar cosine dimensions
-	maxPartitionWork = int64(250_000_000)
-	maxCarveDepth    = 64
+	SchemaVersion                   = 1
+	maxVectors                      = 1_000_000
+	maxDimensions                   = 4096
+	maxEdges                        = 64_000_000
+	maxRepetitions                  = 32
+	maxPivots                       = 1024
+	maxLeafBucket                   = 65536
+	maxDegree                       = 1024
+	maxPartitions                   = 16384
+	maxIDBytes                      = 1 << 20
+	maxTotalIDBytes                 = 64 << 20
+	maxDistanceWork                 = int64(20_000_000_000) // scalar cosine dimensions
+	maxPartitionWork                = int64(250_000_000)
+	maxCarveDepth                   = 64
+	maxDuplicateFingerprintVariants = 64
 )
 
 const externalJSONFixedSyntaxBytes = 1 << 20
@@ -502,6 +503,9 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 			}
 		}
 		if matched < 0 {
+			if len(bucket) >= maxDuplicateFingerprintVariants {
+				return Graph{}, errors.New("duplicate fingerprint collision variants exceed bound")
+			}
 			bucket = append(bucket, duplicateClass{values: v[i].Values})
 			matched = len(bucket) - 1
 		}

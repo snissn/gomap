@@ -956,7 +956,7 @@ func partitionTruthOracleForArtifactV1(vectors, queries [][]float64, assignment 
 		truth := exactTopK(vectors, query, topK)
 		counts := make([]int, partitions)
 		for _, result := range truth {
-			if result.Distance == 0 {
+			if result.Distance <= 1e-12 {
 				zeroDistance++
 			}
 			if result.Ordinal < 0 || result.Ordinal >= len(assignment) || assignment[result.Ordinal] < 0 || assignment[result.Ordinal] >= partitions {
