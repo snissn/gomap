@@ -865,11 +865,11 @@ func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection,
 			hasher := sha256.New()
 			stream := io.TeeReader(counter, hasher)
 			decoder := json.NewDecoder(stream)
+			decoder.UseNumber()
 			var file m8TruthCacheFileV1
-			err = decoder.Decode(&file)
+			err = m8DecodeTruthCacheStreamV1(decoder, &file, len(queries), topK)
 			if err == nil {
-				var trailing json.RawMessage
-				if trailingErr := decoder.Decode(&trailing); trailingErr != io.EOF {
+				if _, trailingErr := decoder.Token(); trailingErr != io.EOF {
 					if trailingErr == nil {
 						err = errors.New("canonical truth cache contains trailing JSON")
 					} else {
@@ -950,6 +950,175 @@ func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection,
 		}
 	}
 	return truth, evidence, nil
+}
+
+// m8DecodeTruthCacheStreamV1 parses every container token explicitly. In
+// particular, it never Decode's the cache or truth arrays as one buffered value.
+func m8DecodeTruthCacheStreamV1(d *json.Decoder, file *m8TruthCacheFileV1, queryCount, topK int) error {
+	token, err := d.Token()
+	if err != nil {
+		return err
+	}
+	if token != json.Delim('{') {
+		return errors.New("canonical truth cache must be an object")
+	}
+	seen := map[string]bool{}
+	for d.More() {
+		keyToken, err := d.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := keyToken.(string)
+		if !ok || seen[key] {
+			return errors.New("canonical truth cache has duplicate or invalid field")
+		}
+		seen[key] = true
+		switch key {
+		case "schema_version":
+			file.SchemaVersion, err = m8DecodeIntTokenV1(d)
+		case "identity":
+			file.Identity, err = m8DecodeStringTokenV1(d)
+		case "contract":
+			file.Contract, err = m8DecodeStringTokenV1(d)
+		case "dataset_checksum":
+			file.DatasetChecksum, err = m8DecodeStringTokenV1(d)
+		case "dimensions":
+			file.Dimensions, err = m8DecodeIntTokenV1(d)
+		case "metric":
+			file.Metric, err = m8DecodeStringTokenV1(d)
+		case "top_k":
+			file.TopK, err = m8DecodeIntTokenV1(d)
+		case "truth_sha256":
+			file.TruthSHA256, err = m8DecodeStringTokenV1(d)
+		case "truth":
+			file.Truth, err = m8DecodeTruthRowsStreamV1(d, queryCount, topK)
+		default:
+			return fmt.Errorf("canonical truth cache has unknown field %q", key)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if _, err := d.Token(); err != nil {
+		return err
+	}
+	if len(seen) != 9 {
+		return errors.New("canonical truth cache missing required field")
+	}
+	return nil
+}
+func m8DecodeStringTokenV1(d *json.Decoder) (string, error) {
+	token, err := d.Token()
+	if err != nil {
+		return "", err
+	}
+	value, ok := token.(string)
+	if !ok {
+		return "", errors.New("canonical truth cache field must be string")
+	}
+	return value, nil
+}
+func m8DecodeIntTokenV1(d *json.Decoder) (int, error) {
+	token, err := d.Token()
+	if err != nil {
+		return 0, err
+	}
+	number, ok := token.(json.Number)
+	if !ok {
+		return 0, errors.New("canonical truth cache field must be integer")
+	}
+	value, err := strconv.Atoi(string(number))
+	return value, err
+}
+func m8DecodeTruthRowsStreamV1(d *json.Decoder, queryCount, topK int) ([][]m8CanonicalResultV1, error) {
+	token, err := d.Token()
+	if err != nil {
+		return nil, err
+	}
+	if token == nil {
+		return nil, nil
+	}
+	if token != json.Delim('[') {
+		return nil, errors.New("canonical truth cache truth must be array")
+	}
+	truth := make([][]m8CanonicalResultV1, 0, queryCount)
+	for d.More() {
+		if len(truth) >= queryCount {
+			return nil, errors.New("canonical truth cache has too many query rows")
+		}
+		row, err := m8DecodeTruthRowStreamV1(d, topK)
+		if err != nil {
+			return nil, err
+		}
+		truth = append(truth, row)
+	}
+	if _, err := d.Token(); err != nil {
+		return nil, err
+	}
+	return truth, nil
+}
+func m8DecodeTruthRowStreamV1(d *json.Decoder, topK int) ([]m8CanonicalResultV1, error) {
+	token, err := d.Token()
+	if err != nil || token != json.Delim('[') {
+		return nil, errors.New("canonical truth cache row must be array")
+	}
+	row := make([]m8CanonicalResultV1, 0, topK)
+	for d.More() {
+		if len(row) >= topK {
+			return nil, errors.New("canonical truth cache row exceeds top_k")
+		}
+		token, err := d.Token()
+		if err != nil || token != json.Delim('{') {
+			return nil, errors.New("canonical truth cache result must be object")
+		}
+		var result m8CanonicalResultV1
+		fields := map[string]bool{}
+		for d.More() {
+			keyToken, err := d.Token()
+			if err != nil {
+				return nil, err
+			}
+			key, ok := keyToken.(string)
+			if !ok || fields[key] {
+				return nil, errors.New("canonical truth cache result has duplicate field")
+			}
+			fields[key] = true
+			if key == "ID" {
+				result.ID, err = m8DecodeStringTokenV1(d)
+			} else if key == "Score" {
+				var token any
+				token, err = d.Token()
+				number, ok := token.(json.Number)
+				if err == nil && !ok {
+					err = errors.New("canonical truth cache score must be number")
+				}
+				if err == nil {
+					value, parseErr := strconv.ParseFloat(string(number), 32)
+					if parseErr != nil {
+						err = parseErr
+					} else {
+						result.Score = float32(value)
+					}
+				}
+			} else {
+				return nil, fmt.Errorf("canonical truth cache result unknown field %q", key)
+			}
+			if err != nil {
+				return nil, err
+			}
+		}
+		if _, err := d.Token(); err != nil {
+			return nil, err
+		}
+		if len(fields) != 2 {
+			return nil, errors.New("canonical truth cache result missing field")
+		}
+		row = append(row, result)
+	}
+	if _, err := d.Token(); err != nil {
+		return nil, err
+	}
+	return row, nil
 }
 
 // m8TruthCacheMaxBytesV1 bounds untrusted cache input before streaming JSON
