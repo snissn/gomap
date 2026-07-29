@@ -214,10 +214,10 @@ func TestM8TruthCacheHitReusesCanonicalRowsV1(t *testing.T) {
 }
 
 func TestM8TruthCacheRefusesContentCorruptionAndSemanticMalformationV1(t *testing.T) {
-	fixture := fixtureManifest{Checksum: strings.Repeat("d", 64), Dimensions: 2, Metric: "cosine"}
+	fixture := fixtureManifest{Checksum: strings.Repeat("d", 64), Vectors: 2, Dimensions: 2, Metric: "cosine"}
 	identity, dir := m8TruthCacheIdentityV1(fixture, 2), t.TempDir()
 	path := filepath.Join(dir, "m8_canonical_truth_"+identity+".json")
-	good := [][]m8CanonicalResultV1{{{ID: "a", Score: .9}, {ID: "b", Score: .8}}}
+	good := [][]m8CanonicalResultV1{{{ID: "doc-000000", Score: .9}, {ID: "doc-000001", Score: .8}}}
 	contentSHA, err := m8TruthContentSHA256V1(good)
 	if err != nil {
 		t.Fatal(err)
