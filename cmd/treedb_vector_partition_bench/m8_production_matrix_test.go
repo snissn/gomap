@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -234,6 +235,32 @@ func TestM8TruthCacheWorstCanonicalEncodingFitsBoundV1(t *testing.T) {
 	}
 	if got, evidence, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 1}, fixture, [][]float64{{1, 0}}, 1); err != nil || evidence.Status != "reused" || !reflect.DeepEqual(got, truth) {
 		t.Fatalf("got=%v evidence=%+v err=%v", got, evidence, err)
+	}
+}
+
+func TestM8TruthCacheStreamEncodingMatchesJSONV1(t *testing.T) {
+	truth := [][]m8CanonicalResultV1{{{ID: "doc-1000000", Score: math.MaxFloat32}, {ID: "doc-000000", Score: -math.MaxFloat32}}, {}}
+	wantTruth, err := json.Marshal(truth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotTruth bytes.Buffer
+	if err := m8WriteTruthJSONV1(&gotTruth, truth); err != nil || !bytes.Equal(gotTruth.Bytes(), wantTruth) {
+		t.Fatalf("truth bytes=%q want=%q err=%v", gotTruth.Bytes(), wantTruth, err)
+	}
+	file := m8TruthCacheFileV1{SchemaVersion: 1, Identity: "id", Contract: m8CanonicalTruthContractV1, DatasetChecksum: strings.Repeat("a", 64), Dimensions: 2, Metric: "cosine", TopK: 2, TruthSHA256: "digest", Truth: truth}
+	wantFile, err := json.Marshal(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotFile bytes.Buffer
+	if err := m8WriteTruthCacheJSONV1(&gotFile, file); err != nil || !bytes.Equal(gotFile.Bytes(), wantFile) {
+		t.Fatalf("file bytes=%q want=%q err=%v", gotFile.Bytes(), wantFile, err)
+	}
+	digest, err := m8TruthContentSHA256V1(truth)
+	sum := sha256.Sum256(wantTruth)
+	if err != nil || digest != hex.EncodeToString(sum[:]) {
+		t.Fatalf("digest=%q err=%v", digest, err)
 	}
 }
 

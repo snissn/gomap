@@ -922,22 +922,18 @@ func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection,
 		if err != nil {
 			return nil, evidence, err
 		}
-		raw, err := json.Marshal(m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: collections.VectorPartitionCanonicalScoreContractV1, DatasetChecksum: fixture.Checksum, Dimensions: fixture.Dimensions, Metric: fixture.Metric, TopK: topK, TruthSHA256: truthSHA256, Truth: truth})
-		if err != nil {
-			return nil, evidence, err
-		}
-		d := sha256.Sum256(raw)
-		evidence.ArtifactSHA256 = hex.EncodeToString(d[:])
 		temp, err := os.CreateTemp(cacheDir, ".m8_canonical_truth_*.tmp")
 		if err != nil {
 			return nil, evidence, err
 		}
 		tempPath := temp.Name()
 		defer os.Remove(tempPath)
-		if _, err := temp.Write(raw); err != nil {
+		artifactHash := sha256.New()
+		if err := m8WriteTruthCacheJSONV1(io.MultiWriter(temp, artifactHash), m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: collections.VectorPartitionCanonicalScoreContractV1, DatasetChecksum: fixture.Checksum, Dimensions: fixture.Dimensions, Metric: fixture.Metric, TopK: topK, TruthSHA256: truthSHA256, Truth: truth}); err != nil {
 			temp.Close()
 			return nil, evidence, err
 		}
+		evidence.ArtifactSHA256 = hex.EncodeToString(artifactHash.Sum(nil))
 		if err := temp.Chmod(0o644); err != nil {
 			temp.Close()
 			return nil, evidence, err
@@ -1159,12 +1155,81 @@ func m8TruthCacheMaxBytesV1(queryCount, topK, fixtureVectors int) (int64, error)
 }
 
 func m8TruthContentSHA256V1(truth [][]m8CanonicalResultV1) (string, error) {
-	raw, err := json.Marshal(truth)
-	if err != nil {
-		return "", fmt.Errorf("marshal canonical truth content: %w", err)
+	h := sha256.New()
+	if err := m8WriteTruthJSONV1(h, truth); err != nil {
+		return "", err
 	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:]), nil
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func m8WriteTruthJSONV1(w io.Writer, truth [][]m8CanonicalResultV1) error {
+	if _, err := io.WriteString(w, "["); err != nil {
+		return err
+	}
+	for i, row := range truth {
+		if i > 0 {
+			if _, err := io.WriteString(w, ","); err != nil {
+				return err
+			}
+		}
+		if _, err := io.WriteString(w, "["); err != nil {
+			return err
+		}
+		for j, result := range row {
+			if j > 0 {
+				if _, err := io.WriteString(w, ","); err != nil {
+					return err
+				}
+			}
+			raw, err := json.Marshal(result)
+			if err != nil {
+				return err
+			}
+			if _, err := w.Write(raw); err != nil {
+				return err
+			}
+		}
+		if _, err := io.WriteString(w, "]"); err != nil {
+			return err
+		}
+	}
+	_, err := io.WriteString(w, "]")
+	return err
+}
+func m8WriteTruthCacheJSONV1(w io.Writer, file m8TruthCacheFileV1) error {
+	quote := func(value any) error {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		_, err = w.Write(raw)
+		return err
+	}
+	if _, err := io.WriteString(w, `{"schema_version":`); err != nil {
+		return err
+	}
+	if err := quote(file.SchemaVersion); err != nil {
+		return err
+	}
+	for _, field := range []struct {
+		name  string
+		value any
+	}{{"identity", file.Identity}, {"contract", file.Contract}, {"dataset_checksum", file.DatasetChecksum}, {"dimensions", file.Dimensions}, {"metric", file.Metric}, {"top_k", file.TopK}, {"truth_sha256", file.TruthSHA256}} {
+		if _, err := io.WriteString(w, `,"`+field.name+`":`); err != nil {
+			return err
+		}
+		if err := quote(field.value); err != nil {
+			return err
+		}
+	}
+	if _, err := io.WriteString(w, `,"truth":`); err != nil {
+		return err
+	}
+	if err := m8WriteTruthJSONV1(w, file.Truth); err != nil {
+		return err
+	}
+	_, err := io.WriteString(w, "}")
+	return err
 }
 
 func m8ValidateCachedTruthV1(truth [][]m8CanonicalResultV1, wantSHA256 string, topK int, sourceRows uint64, fixtureVectors int) error {
