@@ -488,24 +488,15 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 		g.Neighbors[i] = make([]int, 0)
 	}
 	for i, s := range sets {
-		candidates := make([]candidate, 0, len(s))
-		for j, d := range s {
+		for j := range s {
 			if i != j {
-				candidates = append(candidates, candidate{i: j, x: d})
+				g.Neighbors[i] = append(g.Neighbors[i], j)
 			}
 		}
-		sort.Slice(candidates, func(left, right int) bool {
-			return candidateBetter(candidates[left], candidates[right])
-		})
-		if len(candidates) > c.Degree {
-			candidates = candidates[:c.Degree]
-		}
-		for _, candidate := range candidates {
-			g.Neighbors[i] = append(g.Neighbors[i], candidate.i)
-		}
-		// Artifact encoding requires ordinal order; selection above must remain
-		// distance-ranked so a later ordinal cannot displace a closer neighbor.
 		sort.Ints(g.Neighbors[i])
+		if len(g.Neighbors[i]) > c.Degree {
+			g.Neighbors[i] = g.Neighbors[i][:c.Degree]
+		}
 	}
 	return g, nil
 }

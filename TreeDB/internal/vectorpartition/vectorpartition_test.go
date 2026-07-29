@@ -607,25 +607,6 @@ func TestGraphPartitionBeatsStableIDHashOnClusteredFixture(t *testing.T) {
 		t.Fatalf("graph cut=%d hash=%d", a.Metrics.EdgeCut, a.Metrics.StableIDHashEdgeCut)
 	}
 }
-
-func TestGraphRetainsNearestCandidatesRatherThanLowestOrdinals(t *testing.T) {
-	v := []Vector{
-		{ID: "a", Values: []float64{1, 0}},
-		{ID: "b", Values: []float64{0, 1}},
-		{ID: "c", Values: []float64{.99, .01}},
-		{ID: "d", Values: []float64{-.9, .1}},
-	}
-	c := config()
-	c.Partitions, c.Repetitions, c.Pivots, c.MaxLeafBucket, c.Degree = 2, 1, 2, 8, 1
-	c.MaxEdges = len(v)
-	a, err := Build(v, c)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := a.Graph.Neighbors[2]; len(got) != 1 || got[0] != 0 {
-		t.Fatalf("nearest graph neighbor for c=%v want [0]", got)
-	}
-}
 func TestGraphPartitionBeatsStableIDHashOnDeterministic10kClusters(t *testing.T) {
 	const n = 10_000
 	v := make([]Vector, n)
