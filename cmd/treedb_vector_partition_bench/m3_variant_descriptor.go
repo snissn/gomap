@@ -168,6 +168,11 @@ func validateM3VariantDescriptorV1(d m3VariantDescriptorV1) error {
 	if err != nil {
 		return err
 	}
+	wantBudgetFloat := math.Floor(d.OverlapRatio * float64(d.SourceRows))
+	if wantBudgetFloat > float64(math.MaxInt) {
+		return errors.New("M3 variant overlap target exceeds host integer range")
+	}
+	wantBudget := int(wantBudgetFloat)
 	wantBuildIdentity, err := m3VariantBuildIdentityDigestV1(d)
 	if err != nil {
 		return err
@@ -177,9 +182,13 @@ func validateM3VariantDescriptorV1(d m3VariantDescriptorV1) error {
 		!m8SHA256V1(d.BuildIdentityDigest) || d.BuildIdentityDigest != wantBuildIdentity ||
 		!m8SHA256V1(d.Source.Checksum) || d.DatabaseDirectory == "" || !m8SHA256V1(d.ManifestIntegrity) || !m8SHA256V1(d.ReadySetDigest) ||
 		!m8SHA256V1(d.RouterAssetChecksum) || !m8SHA256V1(d.RouterModelDigest) || d.SourceGeneration == 0 || d.SourceRows == 0 ||
-		d.PartitionGeneration == 0 || d.RouterGeneration != d.PartitionGeneration || d.Partitions < 1 || !m8SHA256V1(d.IndexDefinitionDigest) || d.PartitionHNSWM < 2 || d.PartitionHNSWM > partitionHNSWDegree || d.Capacity < 1 || d.OverlapRequested < 0 || d.OverlapRealized < 0 || d.OverlapRejected < 0 || d.OverlapRequested != d.OverlapRealized+d.OverlapRejected || d.OverlapMemberships != d.OverlapRealized ||
+		d.PartitionGeneration == 0 || d.RouterGeneration != d.PartitionGeneration || d.Partitions < 1 || !m8SHA256V1(d.IndexDefinitionDigest) || d.PartitionHNSWM < 2 || d.PartitionHNSWM > partitionHNSWDegree || d.Capacity < 1 || d.OverlapRequested != wantBudget || d.OverlapRealized != wantBudget || d.OverlapRequested < 0 || d.OverlapRealized < 0 || d.OverlapRejected < 0 || d.OverlapRequested != d.OverlapRealized+d.OverlapRejected || d.OverlapMemberships != d.OverlapRealized ||
 		len(d.PartitionLoads) != int(d.Partitions) || d.PersistentAssetBytes == 0 {
 		return errors.New("malformed M3 variant descriptor")
+	}
+	policy, ok := collections.ParseVectorPartitionOverlapPolicyV1(d.OverlapPolicy)
+	if !ok || policy.Capacity != uint64(d.Capacity) || policy.Budget != uint64(wantBudget) || policy.Realized != uint64(wantBudget) || policy.Unspent != 0 || policy.BuildIdentityDigest != d.BuildIdentityDigest {
+		return errors.New("M3 variant descriptor overlap policy is not exact-target canonical")
 	}
 	if d.AssignmentBasis == partitionAssignmentGraphV1 && d.ArtifactSHA256 != d.GraphArtifactSHA256 {
 		return errors.New("graph M3 variant artifact does not match its graph-build identity")

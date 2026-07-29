@@ -101,7 +101,7 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 			}
 			best, gain := -1, 0
 			for p, count := range counts {
-				if _, exists := members[i][p]; exists || count == 0 {
+				if _, exists := members[i][p]; exists || count == 0 || loads[p] >= capacity {
 					continue
 				}
 				if count > gain || count == gain && (best < 0 || p < best) {
@@ -185,11 +185,11 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 		return out.Memberships[i].Partition < out.Memberships[j].Partition
 	})
 	out.EdgeCutAfter = overlapEdgeCut(a, out.Memberships)
-	if err := ValidateOverlap(a, cfg, out); err != nil {
-		return OverlapResult{}, err
-	}
 	if cfg.RequireExact && out.Unspent != 0 {
 		return OverlapResult{}, &OverlapShortfallError{Requested: out.Budget, Realized: out.Used, Rejected: out.Unspent, Capacity: out.Capacity}
+	}
+	if err := ValidateOverlap(a, cfg, out); err != nil {
+		return OverlapResult{}, err
 	}
 	return out, nil
 }
@@ -262,6 +262,9 @@ func ValidateOverlap(a Artifact, cfg OverlapConfig, r OverlapResult) error {
 	}
 	if r.Budget != wantBudget || r.Budget < 0 || r.Used < 0 || r.Used > r.Budget || r.Unspent != r.Budget-r.Used || r.Capacity != capacity || len(r.Loads) != a.Config.Partitions || len(r.Memberships) != len(a.IDs)+r.Used || r.EdgeCutBefore != a.Metrics.EdgeCut {
 		return errors.New("invalid overlap accounting")
+	}
+	if cfg.RequireExact && r.Unspent != 0 {
+		return &OverlapShortfallError{Requested: r.Budget, Realized: r.Used, Rejected: r.Unspent, Capacity: r.Capacity}
 	}
 	seen := make(map[[2]int]struct{}, len(r.Memberships))
 	homes := make([]int, len(a.IDs))

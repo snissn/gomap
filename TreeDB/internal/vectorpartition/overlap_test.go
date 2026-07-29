@@ -146,6 +146,31 @@ func TestOverlapSaturatedRecordsUnspent(t *testing.T) {
 	if r.Unspent == 0 {
 		t.Fatalf("want unspent at saturated cap: %+v", r)
 	}
+	var shortfall *OverlapShortfallError
+	if err := ValidateOverlap(a, OverlapConfig{Ratio: .5, RequireExact: true}, r); !errors.As(err, &shortfall) || shortfall.Requested != r.Budget || shortfall.Realized != r.Used || shortfall.Rejected != r.Unspent {
+		t.Fatalf("exact validation err=%v shortfall=%+v", err, shortfall)
+	}
+}
+
+func TestOverlapAffinitySkipsFullPreferredPartitionV1(t *testing.T) {
+	c := Config{Metric: "cosine", Seed: 1, Repetitions: 1, Pivots: 2, MaxLeafBucket: 2, Degree: 3, Partitions: 3, Imbalance: 0, MaxVectors: 4, MaxEdges: 12}
+	v := []Vector{{"a", []float64{1}}, {"b", []float64{.9}}, {"c", []float64{.8}}, {"d", []float64{.7}}}
+	built, err := Build(v, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := Artifact{SchemaVersion: SchemaVersion, Backend: "test", BackendLicense: "test", Source: built.Source, Config: c, IDs: []string{"a", "b", "c", "d"}, Graph: Graph{Neighbors: [][]int{{}, {}, {0, 1, 3}, {}}}, Assignment: []int{0, 0, 1, 2}}
+	a.Metrics = metrics(a)
+	got, err := BuildOverlap(a, OverlapConfig{Ratio: .25, Capacity: 2, RequireExact: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Used != 1 || got.Unspent != 0 || got.Loads[0] != 2 || got.Loads[2] != 2 {
+		t.Fatalf("overlap=%+v", got)
+	}
+	if !reflect.DeepEqual(got.Memberships, []Membership{{VectorOrdinal: 0, Partition: 0, Home: true}, {VectorOrdinal: 1, Partition: 0, Home: true}, {VectorOrdinal: 2, Partition: 1, Home: true}, {VectorOrdinal: 2, Partition: 2}, {VectorOrdinal: 3, Partition: 2, Home: true}}) {
+		t.Fatalf("memberships=%+v", got.Memberships)
+	}
 }
 
 func TestValidateOverlapCapacityBelowHomeCapReportsBothValuesV1(t *testing.T) {

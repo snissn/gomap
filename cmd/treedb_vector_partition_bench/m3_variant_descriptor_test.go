@@ -50,6 +50,34 @@ func TestM3VariantDescriptorRoundTripAndImmutableCreateV1(t *testing.T) {
 	}
 }
 
+func TestM3VariantDescriptorRejectsMalformedOverlapPolicyAccountingV1(t *testing.T) {
+	d := testM3VariantDescriptorV1(t.TempDir())
+	for name, policy := range map[string]string{
+		"realized exceeds budget": strings.Replace(d.OverlapPolicy, "realized=1", "realized=2", 1),
+		"unspent mismatch":        strings.Replace(d.OverlapPolicy, "unspent=0", "unspent=1", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := d
+			candidate.OverlapPolicy = policy
+			if err := validateM3VariantDescriptorV1(candidate); err == nil {
+				t.Fatalf("accepted malformed policy %q", policy)
+			}
+		})
+	}
+}
+
+func TestM3VariantDescriptorRequiresDerivedExactTargetV1(t *testing.T) {
+	d := testM3VariantDescriptorV1(t.TempDir())
+	d.OverlapRequested = 0
+	d.OverlapRealized = 0
+	d.OverlapMemberships = 0
+	d.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(d)
+	d.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: uint64(d.Capacity), Budget: 0, Realized: 0, BuildIdentityDigest: d.BuildIdentityDigest})
+	if err := validateM3VariantDescriptorV1(d); err == nil {
+		t.Fatal("accepted descriptor whose self-consistent accounting misses the ratio-derived target")
+	}
+}
+
 func TestM3VariantBuildIdentityBindsExactOverlapTargetAndCapacityV1(t *testing.T) {
 	d := testM3VariantDescriptorV1(t.TempDir())
 	baseline, err := m3VariantBuildIdentityDigestV1(d)

@@ -195,7 +195,52 @@ tests, latest-head CI, and exact-head review apply to the final PR head, while
 the performance artifacts above remain explicitly bound to the runtime-code
 head.
 
-The checked-in 10k report is
+## Review-remediation runtime-head supplement
+
+The review-remediation runtime-code head
+`0caae2d946506d12f4ca5469c6050415246ff8ad` was rebuilt with
+`go build -buildvcs=false`; the resulting
+`/mnt/fast4tb/tmp/issue4001_reviewfix_bench` has SHA-256
+`dedd4e8bb648f66951b0fc947c09aa16c68ceedc0998d1d5b5b091da51e1e25d`.
+It freshly rebuilt the graph-overlap `0.20` variant at
+`/mnt/fast4tb/tmp/issue4001_reviewfix_overlap_db_rDS6C6`. The M3 report is
+`/mnt/fast4tb/tmp/issue4001_reviewfix_overlap_out_qqJLGX/vector_partition_m3_3c7a5665803b_7a2ec9d690c1_0caae2d94650.json`
+(SHA-256 `fc1fe5b2ebedd89680bb06c8a1ce47a1626d66b8ac8839c7483ba3c25b96ca10`),
+and its descriptor is SHA-256
+`6143381db887056ccd62d2940ce81cdc688f16a7138a3a34139235d4d3c22a43`.
+It records requested/realized/rejected overlap `200000/200000/0`, capacity
+`75000`, sixteen loads of `75000`, and `353839232` final derived physical
+bytes. The explicit M3 stdout, stderr, and `/usr/bin/time -v` records are
+retained alongside that report; their SHA-256 values are respectively
+`fc1fe5b2ebedd89680bb06c8a1ce47a1626d66b8ac8839c7483ba3c25b96ca10`,
+`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`, and
+`6b04e0e6b54b082dfa49c311eefbf35a9b2806950eb669e6dde80115048737ae`.
+
+The same rebuilt binary then ran the M8 production matrix with the new
+graph-overlap directory and the retained graph-disjoint and stable-ID-hash
+directories from the preceding final-head evidence. This is deliberately a
+mixed-construction, new-runtime-head matrix; it is not a claim that all three
+variants were rebuilt at this head. The complete matrix is
+`/mnt/fast4tb/tmp/issue4001_reviewfix_matrix_out_hQyY0c/vector_partition_m8_matrix_0caae2d94650_224a15b4e23b.json`
+(SHA-256 `c1b06336650a5b3ef41af20712f32f38ecfcfc57963925313c2e0f1ee59f9d2f`).
+It exited `0` in `7:54.81`, with maximum RSS `2211488 KiB`; explicit stdout
+has that same digest, stderr is empty (SHA-256
+`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`), and
+the time record is SHA-256
+`9b6068f6c3d0ca536e3f24df707f181fe1483ca78ba7c8a3fd8c120bb21ca91e`.
+Required variants, failure honesty, pack reachability, recall, balance,
+overlap storage (`1.1998982982x`), and resource bounds pass. The disposition
+remains `experimental_gate_failures` /
+`enablement_off_follow_up_required`: exhaustive correctness, fixed-probe
+reduction, matched-recall QPS/tail, and coupled graph acceptance fail, while
+existing behavior remains pending latest-head required suites. These outcomes
+are retained evidence, not waived enablement gates.
+
+The checked-in 10k report is a historical non-acceptance diagnostic, not
+exact-target or enablement evidence: its saturated-cap row admits one overlap
+membership and leaves 1,999 requested memberships unspent. The current exact
+M3 policy rejects that underfill rather than treating it as a passing overlap
+row. The report is
 [`TreeDB/docs/spec/artifacts/vector-partition-m3-evidence-v1.json`](../TreeDB/docs/spec/artifacts/vector-partition-m3-evidence-v1.json).
 It was captured from implementation commit
 `c33d077f6b2eff677b8899425401835d0292758e` over base
