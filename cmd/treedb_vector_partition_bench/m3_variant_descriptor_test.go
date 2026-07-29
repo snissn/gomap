@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,6 +81,13 @@ func TestM3OverlapCapacityUsesExactGlobalTargetV1(t *testing.T) {
 	}
 	if capacity, err = m3OverlapCapacityV1(artifact, 0); err != nil || capacity != 65_625 {
 		t.Fatalf("disjoint capacity=%d err=%v", capacity, err)
+	}
+}
+
+func TestM3OverlapCapacityAvoidsCeilAdditionOverflowV1(t *testing.T) {
+	capacity, err := m3OverlapCapacityForRequestedV1(math.MaxInt-1, 1, 2, 0)
+	if err != nil || capacity != math.MaxInt/2+1 {
+		t.Fatalf("capacity=%d err=%v", capacity, err)
 	}
 }
 

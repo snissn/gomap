@@ -178,12 +178,19 @@ func m3OverlapCapacityV1(artifact vectorpartition.Artifact, ratio float64) (int,
 		return 0, errors.New("invalid M3 overlap capacity inputs")
 	}
 	requested := int(math.Floor(ratio * float64(len(artifact.IDs))))
-	if requested < 0 || len(artifact.IDs) > math.MaxInt-requested {
+	return m3OverlapCapacityForRequestedV1(len(artifact.IDs), requested, artifact.Config.Partitions, artifact.Metrics.Cap)
+}
+
+func m3OverlapCapacityForRequestedV1(rows, requested, partitions, baseCapacity int) (int, error) {
+	if rows < 0 || requested < 0 || partitions < 1 || baseCapacity < 0 || rows > math.MaxInt-requested {
 		return 0, errors.New("M3 overlap capacity overflows int")
 	}
-	total := len(artifact.IDs) + requested
-	capacity := (total + artifact.Config.Partitions - 1) / artifact.Config.Partitions
-	return max(artifact.Metrics.Cap, capacity), nil
+	total := rows + requested
+	capacity := total / partitions
+	if total%partitions != 0 {
+		capacity++
+	}
+	return max(baseCapacity, capacity), nil
 }
 
 func m3PartitionAssetFileID(generation uint64) (uint32, error) {
