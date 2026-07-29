@@ -222,6 +222,7 @@ type m8ProductionHostEvidenceV1 struct {
 type m8ProductionResourceEvidenceV1 struct {
 	PersistentAssetBytes uint64                                  `json:"persistent_asset_bytes"`
 	PersistentAssetCap   uint64                                  `json:"persistent_asset_cap_bytes"`
+	PartitionLoads       []uint64                                `json:"partition_loads"`
 	PeakRSSBytes         int64                                   `json:"peak_rss_bytes,omitempty"`
 	PeakRSSCapBytes      uint64                                  `json:"peak_rss_cap_bytes"`
 	PeakRSSMeasured      bool                                    `json:"peak_rss_measured"`
@@ -385,31 +386,31 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	allUntimed := m8MergeProductionResourceBoundariesV1(report.UntimedBoundary, report.Failure.ResourceBoundary)
 	report.Resources = m8ProductionResourcesV1(cfg, fixture, assets, report.Rows, allUntimed, report.Topology)
 
-	// Attribution deliberately runs after the timed query/fault boundary,
+	// Diagnostics and attribution deliberately run after the timed query/fault boundary,
 	// profile capture, and peak-RSS snapshot. Its exhaustive mmap scans must not
 	// pre-fault the corpus or contaminate measured process-resource evidence.
 	// The snapshot does include the bounded top-k coordinator results retained
 	// from measured cells so post-measurement attribution can verify parity.
+	attributionHarness, err := newM8AttributionHarnessV1(assets)
+	if err != nil {
+		return fmt.Errorf("open M8 attribution harness: %w", err)
+	}
+	attributionHarnessClosed := false
+	defer func() {
+		if !attributionHarnessClosed {
+			runErr = errors.Join(runErr, attributionHarness.Close())
+		}
+	}()
+	diagnostics, diagnosticsErr := attributionHarness.packDiagnostics()
+	if diagnosticsErr != nil {
+		return fmt.Errorf("collect M8 partition-pack diagnostics: %w", diagnosticsErr)
+	}
+	report.PackDiagnostics = diagnostics
 	if len(measuredCells) > 0 {
 		approximateCandidates := min(cfg.routerCandidates, int(assets.status.Representatives))
 		if approximateCandidates < 1 {
 			return errors.New("M8 attribution requires an approximate router candidate budget")
 		}
-		attributionHarness, err := newM8AttributionHarnessV1(assets)
-		if err != nil {
-			return fmt.Errorf("open M8 attribution harness: %w", err)
-		}
-		attributionHarnessClosed := false
-		defer func() {
-			if !attributionHarnessClosed {
-				runErr = errors.Join(runErr, attributionHarness.Close())
-			}
-		}()
-		diagnostics, diagnosticsErr := attributionHarness.packDiagnostics()
-		if diagnosticsErr != nil {
-			return fmt.Errorf("collect M8 partition-pack diagnostics: %w", diagnosticsErr)
-		}
-		report.PackDiagnostics = diagnostics
 		attribution := make(map[string]m8AttributionCellV1, len(cfg.probes)*len(cfg.efSearch))
 		exhaustive := make([][]m8CanonicalResultV1, len(queries))
 		for _, probes := range cfg.probes {
@@ -421,11 +422,6 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 				attribution[m8AttributionKeyV1(probes, efSearch)] = cell
 			}
 		}
-		closeErr := attributionHarness.Close()
-		attributionHarnessClosed = true
-		if closeErr != nil {
-			return fmt.Errorf("close M8 attribution harness: %w", closeErr)
-		}
 		for _, measured := range measuredCells {
 			cell, ok := attribution[m8AttributionKeyV1(measured.probes, measured.efSearch)]
 			if !ok {
@@ -435,6 +431,11 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 				return fmt.Errorf("attach M8 attribution probes=%d ef=%d: %w", measured.probes, measured.efSearch, err)
 			}
 		}
+	}
+	closeErr := attributionHarness.Close()
+	attributionHarnessClosed = true
+	if closeErr != nil {
+		return fmt.Errorf("close M8 attribution harness: %w", closeErr)
 	}
 	report.GateLedger = m8ProductionGateLedgerForReportV1(report)
 	if m8ProductionAllGatesPassV1(report.GateLedger) {
@@ -1168,6 +1169,7 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 		// than publishing a zero-load success.
 		out.MaxPartitionLoad = ^uint64(0)
 	} else {
+		out.PartitionLoads = loads
 		for _, load := range loads {
 			out.MaxPartitionLoad = max(out.MaxPartitionLoad, load)
 		}
@@ -1644,7 +1646,7 @@ func m8RunUnavailableGroupV1(ctx context.Context, topology *nativewire.VectorPar
 
 func m8ProductionGateLedgerForReportV1(report m8ProductionReportV1) m8ProductionGateLedgerV1 {
 	ledger := m8ProductionGateLedgerV1{ExhaustiveParity: "not_run", FailureHonesty: "fail", PartitionPackReachability: "fail", Recall: "fail", ProbeReduction: "fail", EndToEndQPS: "fail", TailLatency: "fail", Balance: "fail", OverlapStorage: "fail", ResourceBounds: "fail", ExistingBehavior: "pending_full_required_suites"}
-	if validM8PartitionPackDiagnosticsV1(report.PackDiagnostics, report.Config.Partitions) {
+	if validM8PartitionPackDiagnosticsV1(report.PackDiagnostics, report.Config.Partitions, report.Resources.PartitionLoads) {
 		ledger.PartitionPackReachability = "pass"
 	}
 	var exhaustive []m8ProductionRowV1
@@ -1709,18 +1711,58 @@ func m8ProductionGateValuesV1(ledger m8ProductionGateLedgerV1) []string {
 // structurally readable older pack can still contain disconnected directed
 // layer-0 components, so every configured partition must be reported exactly
 // once as a nonempty, fully reachable, single-root pack.
-func validM8PartitionPackDiagnosticsV1(diagnostics []m8PartitionPackDiagnosticsV1, partitions int) bool {
-	if partitions < 1 || len(diagnostics) != partitions {
+func validM8PartitionPackDiagnosticsV1(diagnostics []m8PartitionPackDiagnosticsV1, partitions int, loads []uint64) bool {
+	if partitions < 1 || len(diagnostics) != partitions || len(loads) != partitions {
 		return false
 	}
 	seen := make([]bool, partitions)
 	for _, diagnostic := range diagnostics {
 		partition := int(diagnostic.PartitionID)
 		if partition < 0 || partition >= partitions || seen[partition] || diagnostic.Rows == 0 ||
-			diagnostic.ReachableRows == 0 || diagnostic.ReachableRows != diagnostic.Rows || diagnostic.TraversalRoots != 1 {
+			diagnostic.Rows != loads[partition] || diagnostic.ReachableRows == 0 || diagnostic.ReachableRows != diagnostic.Rows || diagnostic.TraversalRoots != 1 {
 			return false
 		}
 		seen[partition] = true
+	}
+	return true
+}
+
+// validM8PartitionLoadsV1 binds diagnostic row counts to manifest-derived
+// evidence. Retained variants have an independently validated descriptor; for
+// non-variant runs the manifest-derived total must still account for every
+// fixture row and declared overlap membership, rather than accepting a small
+// self-consistent fabricated subset.
+func validM8PartitionLoadsV1(report m8ProductionReportV1) bool {
+	loads := report.Resources.PartitionLoads
+	if report.Config.Partitions < 1 || len(loads) != report.Config.Partitions || report.Dataset.Vectors < 1 || report.Resources.OverlapMemberships < 0 {
+		return false
+	}
+	expected := uint64(report.Dataset.Vectors)
+	overlap := uint64(report.Resources.OverlapMemberships)
+	if overlap > ^uint64(0)-expected {
+		return false
+	}
+	expected += overlap
+	var total uint64
+	for _, load := range loads {
+		if load == 0 || load > ^uint64(0)-total {
+			return false
+		}
+		total += load
+	}
+	if total != expected {
+		return false
+	}
+	if report.Variant == nil {
+		return true
+	}
+	if len(report.Variant.PartitionLoads) != len(loads) {
+		return false
+	}
+	for partition, load := range loads {
+		if report.Variant.PartitionLoads[partition] < 0 || load != uint64(report.Variant.PartitionLoads[partition]) {
+			return false
+		}
 	}
 	return true
 }
@@ -1897,7 +1939,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 	if len(report.Rows) == 0 {
 		return errors.New("M8 report has no measurement rows")
 	}
-	if !validM8PartitionPackDiagnosticsV1(report.PackDiagnostics, report.Config.Partitions) || report.GateLedger.PartitionPackReachability != "pass" {
+	if !validM8PartitionLoadsV1(report) || !validM8PartitionPackDiagnosticsV1(report.PackDiagnostics, report.Config.Partitions, report.Resources.PartitionLoads) || report.GateLedger.PartitionPackReachability != "pass" {
 		return errors.New("M8 report has incomplete or unreachable partition-pack diagnostics")
 	}
 	var measuredSamples uint64

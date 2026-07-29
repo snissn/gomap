@@ -59,10 +59,14 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 			CommitIndex: 1, ReadIndex: 1, AppliedIndex: 1, ReadEvidenceKind: "production", ProvesProductionConsensus: true, EndpointHits: hits,
 		}
 	}
-	diagnostics := func(partitions int) []m8PartitionPackDiagnosticsV1 {
-		out := make([]m8PartitionPackDiagnosticsV1, partitions)
-		for partition := range out {
-			out[partition] = m8PartitionPackDiagnosticsV1{PartitionID: uint32(partition), Rows: 1, ReachableRows: 1, TraversalRoots: 1}
+	loads := make([]uint64, 4)
+	for row := 0; row < fixture.Vectors; row++ {
+		loads[row%len(loads)]++
+	}
+	diagnostics := func(loads []uint64) []m8PartitionPackDiagnosticsV1 {
+		out := make([]m8PartitionPackDiagnosticsV1, len(loads))
+		for partition, load := range loads {
+			out[partition] = m8PartitionPackDiagnosticsV1{PartitionID: uint32(partition), Rows: load, ReachableRows: load, TraversalRoots: 1}
 		}
 		return out
 	}
@@ -79,10 +83,10 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
 			ApproximateRouterCandidateBudget: 1, ApproximateRouterPartitionCoverageComplete: true, ResidualLossOwners: []string{"none_observed"},
 		}}},
-		PackDiagnostics: diagnostics(4),
+		PackDiagnostics: diagnostics(loads),
 		UntimedBoundary: m8ProductionResourceBoundaryV1{SelectedPartitions: 4, EfSearch: 10, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 2, RPCs: 1, RequestBytes: 1, ShardPartitions: 2, ShardRequestBytes: 1}},
 		Failure:         m8ProductionFailureEvidenceV1{Passed: true, Error: "unavailable group rejected", ResourceBoundary: m8ProductionFaultResourceBoundaryV1{SelectedPartitions: 4, EfSearch: 4096, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 2, RPCs: 1, RequestBytes: 1, ShardPartitions: 2, ShardRequestBytes: 1}}}, GateLedger: m8ProductionGateLedgerV1{FailureHonesty: "pass", PartitionPackReachability: "pass"},
-		Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1}, TimedBoundary: "measured", Limitations: []string{"test"},
+		Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1, PartitionLoads: loads}, TimedBoundary: "measured", Limitations: []string{"test"},
 	}
 	if err := validateM8ProductionReportV1(report); err != nil {
 		t.Fatalf("valid endpoint coverage rejected: %v", err)
@@ -91,6 +95,7 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		"missing":      report.PackDiagnostics[:3],
 		"duplicate":    {report.PackDiagnostics[0], report.PackDiagnostics[0], report.PackDiagnostics[2], report.PackDiagnostics[3]},
 		"disconnected": {report.PackDiagnostics[0], {PartitionID: 1, Rows: 1, ReachableRows: 0, TraversalRoots: 2}, report.PackDiagnostics[2], report.PackDiagnostics[3]},
+		"row_mismatch": {report.PackDiagnostics[0], {PartitionID: 1, Rows: report.PackDiagnostics[1].Rows - 1, ReachableRows: report.PackDiagnostics[1].Rows - 1, TraversalRoots: 1}, report.PackDiagnostics[2], report.PackDiagnostics[3]},
 	} {
 		t.Run("rejects_"+name+"_pack_diagnostics", func(t *testing.T) {
 			invalid := report
@@ -130,7 +135,7 @@ func TestM8PartitionPackDiagnosticsFailClosedV1(t *testing.T) {
 		{PartitionID: 0, Rows: 3, ReachableRows: 3, TraversalRoots: 1},
 		{PartitionID: 1, Rows: 2, ReachableRows: 2, TraversalRoots: 1},
 	}
-	if !validM8PartitionPackDiagnosticsV1(valid, 2) {
+	if !validM8PartitionPackDiagnosticsV1(valid, 2, []uint64{3, 2}) {
 		t.Fatal("rejected complete reachable diagnostics")
 	}
 	for name, diagnostics := range map[string][]m8PartitionPackDiagnosticsV1{
@@ -138,9 +143,10 @@ func TestM8PartitionPackDiagnosticsFailClosedV1(t *testing.T) {
 		"duplicate":    {valid[0], {PartitionID: 0, Rows: 2, ReachableRows: 2, TraversalRoots: 1}},
 		"disconnected": {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2}},
 		"empty":        {{PartitionID: 0, Rows: 0, ReachableRows: 0, TraversalRoots: 1}, valid[1]},
+		"row_mismatch": {valid[0], {PartitionID: 1, Rows: 1, ReachableRows: 1, TraversalRoots: 1}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if validM8PartitionPackDiagnosticsV1(diagnostics, 2) {
+			if validM8PartitionPackDiagnosticsV1(diagnostics, 2, []uint64{3, 2}) {
 				t.Fatalf("accepted %s diagnostics: %+v", name, diagnostics)
 			}
 		})
