@@ -952,8 +952,8 @@ func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection,
 	return truth, evidence, nil
 }
 
-// m8TruthCacheMaxBytesV1 bounds untrusted cache input before ReadFile/JSON
-// allocation. It deliberately allows generous canonical IDs and JSON overhead.
+// m8TruthCacheMaxBytesV1 bounds untrusted cache input before streaming JSON
+// decode. The raw encoding is never retained alongside decoded truth.
 type m8CountingReaderV1 struct {
 	io.Reader
 	N int64

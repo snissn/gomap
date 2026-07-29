@@ -213,6 +213,65 @@ func TestM8TruthCacheHitReusesCanonicalRowsV1(t *testing.T) {
 	}
 }
 
+func TestM8TruthCacheWorstCanonicalEncodingFitsBoundV1(t *testing.T) {
+	fixture := fixtureManifest{Checksum: strings.Repeat("g", 64), Vectors: 1_000_001, Dimensions: 2, Metric: "cosine"}
+	identity, dir := m8TruthCacheIdentityV1(fixture, 1), t.TempDir()
+	truth := [][]m8CanonicalResultV1{{{ID: "doc-1000000", Score: math.MaxFloat32}}}
+	digest, err := m8TruthContentSHA256V1(truth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: m8CanonicalTruthContractV1, DatasetChecksum: fixture.Checksum, Dimensions: 2, Metric: "cosine", TopK: 1, TruthSHA256: digest, Truth: truth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := m8TruthCacheMaxBytesV1(1, 1, fixture.Vectors)
+	if err != nil || int64(len(raw)) > bound {
+		t.Fatalf("raw=%d bound=%d err=%v", len(raw), bound, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "m8_canonical_truth_"+identity+".json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, evidence, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 1}, fixture, [][]float64{{1, 0}}, 1); err != nil || evidence.Status != "reused" || !reflect.DeepEqual(got, truth) {
+		t.Fatalf("got=%v evidence=%+v err=%v", got, evidence, err)
+	}
+}
+
+func TestM8TruthCacheWhitespaceBoundAndExactByteDigestV1(t *testing.T) {
+	fixture := fixtureManifest{Checksum: strings.Repeat("h", 64), Vectors: 1, Dimensions: 2, Metric: "cosine"}
+	identity, dir := m8TruthCacheIdentityV1(fixture, 1), t.TempDir()
+	truth := [][]m8CanonicalResultV1{{{ID: "doc-000000", Score: .5}}}
+	digest, err := m8TruthContentSHA256V1(truth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: m8CanonicalTruthContractV1, DatasetChecksum: fixture.Checksum, Dimensions: 2, Metric: "cosine", TopK: 1, TruthSHA256: digest, Truth: truth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := m8TruthCacheMaxBytesV1(1, 1, fixture.Vectors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "m8_canonical_truth_"+identity+".json")
+	over := append(append([]byte(nil), raw...), []byte(strings.Repeat(" ", int(bound-int64(len(raw))+1)))...)
+	if err := os.WriteFile(path, over, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 1}, fixture, [][]float64{{1, 0}}, 1); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("padded cache err=%v", err)
+	}
+	within := append(append([]byte(nil), raw...), []byte(" \n\t")...)
+	if err := os.WriteFile(path, within, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, evidence, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 1}, fixture, [][]float64{{1, 0}}, 1)
+	sum := sha256.Sum256(within)
+	if err != nil || evidence.Status != "reused" || evidence.ArtifactSHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("evidence=%+v err=%v", evidence, err)
+	}
+}
+
 func TestM8TruthCacheRejectsTrailingJSONV1(t *testing.T) {
 	fixture := fixtureManifest{Checksum: strings.Repeat("f", 64), Vectors: 1, Dimensions: 2, Metric: "cosine"}
 	identity, dir := m8TruthCacheIdentityV1(fixture, 1), t.TempDir()
