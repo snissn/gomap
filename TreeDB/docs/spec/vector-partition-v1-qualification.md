@@ -11,6 +11,8 @@ matrices are FP64 only as deterministic benchmark input.
 procedurally generated 1,000,000-vector, 128-dimensional high-entropy cosine
 corpus with 1,000 independently generated held-out queries.  Its generator
 uses distinct corpus and query domains, so queries are not copied corpus rows.
+It is intentionally uniform/unclustered after normalization: it is a
+generalization and routing-stress corpus, not a semantic-cluster proxy.
 
 `testdata/vector_partition_qualification_embedding_mixture_250k` is the
 second distribution: 250,000 vectors and 1,000 held-out queries generated with
@@ -43,6 +45,11 @@ is recall@k >= .90 (stretch .95), median probes <= 25% of partitions at target
 recall, QPS >= 1.15x exhaustive at matched recall, p95 no worse, and overlap
 assets < 1.35x disjoint.  A failed, unsupported, or resource-bounded row is a
 qualification failure or limitation, never a silent gate relaxation.
+
+Apply these gates separately to each declared corpus and then state the
+aggregate disposition. A clustered-distribution success does not erase a
+uniform-data routing failure; it can support only an explicitly narrower
+experimental or opt-in disposition.
 
 The M8 request-work guard does not count exact source-query vector visits. The
 required 1M x 1,000 exact-truth shape therefore adds 1B such visits outside
