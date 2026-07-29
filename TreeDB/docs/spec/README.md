@@ -70,6 +70,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 
 ### Canonical specs
 
+- `TreeDB/docs/spec/vector-partition-v1-contract.md`
+  - #4013 admission contract separating snapshot-bound exact partition-union
+    correctness from recall-qualified representative and partition-local HNSW
+    evidence, with lifecycle, error, and IDs/scores-only boundaries.
 - `TreeDB/docs/spec/vector-partition-raft-v1.md`
   - #3908 M0/M1/M4 contracts for derived vector-partition identity, durable
     generation lifecycle, deterministic persisted representative routing,

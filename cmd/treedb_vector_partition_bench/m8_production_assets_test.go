@@ -274,9 +274,26 @@ func TestM8ProductionMultiGroupAssetsCheckedIn10kCISmokeV1(t *testing.T) {
 	for i, value := range vectors[17] {
 		query[i] = float32(value)
 	}
+	truth, err := m8ExactTruthV1(assets.collection, assets.manifest, [][]float64{vectors[17]}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
 	exactUnion, err := m8ExactPartitionUnionV1(context.Background(), assets, vectors[17], 10)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if idParity, scoreParity := m8CanonicalParityV1(truth[0], exactUnion); !idParity || !scoreParity {
+		t.Fatalf("generation-pinned exact-union parity IDs=%v scores=%v\nwant=%+v\ngot=%+v", idParity, scoreParity, truth[0], exactUnion)
+	}
+	if len(exactUnion) < 2 || exactUnion[0].Score != exactUnion[1].Score || exactUnion[0].ID >= exactUnion[1].ID {
+		t.Fatalf("exact-union fixture must preserve canonical FP32 ties: %+v", exactUnion)
+	}
+	seenExactIDs := make(map[string]struct{}, len(exactUnion))
+	for _, result := range exactUnion {
+		if _, duplicate := seenExactIDs[result.ID]; duplicate {
+			t.Fatalf("exact union retained duplicate overlap ID %q: %+v", result.ID, exactUnion)
+		}
+		seenExactIDs[result.ID] = struct{}{}
 	}
 	merged := make([]neighbor, 0, 40)
 	for partition := 0; partition < 4; partition++ {
@@ -297,16 +314,9 @@ func TestM8ProductionMultiGroupAssetsCheckedIn10kCISmokeV1(t *testing.T) {
 		}
 	}
 	merged = canonicalExactNeighborsV1(merged, 10)
-	want, err := assets.collection.SearchVectorsExact(query, collections.VectorSearchOptions{Field: "embedding", Metric: collections.VectorMetricCosine, TopK: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := range want {
-		if exactUnion[i].ID != string(want[i].DocumentID) {
-			t.Fatalf("exact union rank=%d got=%s want=%s", i, exactUnion[i].ID, want[i].DocumentID)
-		}
-		if merged[i].ID != string(want[i].DocumentID) {
-			t.Fatalf("parity rank=%d got=%s want=%s got_all=%s", i, merged[i].ID, want[i].DocumentID, fmt.Sprint(merged))
+	for i := range truth[0] {
+		if merged[i].ID != truth[0][i].ID {
+			t.Fatalf("HNSW parity rank=%d got=%s want=%s got_all=%s", i, merged[i].ID, truth[0][i].ID, fmt.Sprint(merged))
 		}
 	}
 }
