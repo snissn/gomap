@@ -1509,7 +1509,10 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 		outcomes[index].response, outcomes[index].err = coordinator.Search(requestCtx, m8ProductionRequestV1(assets, query, fmt.Sprintf("m8-q-%06d-p-%04d-ef-%06d-c-%03d", index, probes, efSearch, concurrency), probes, efSearch, topK, candidateBytesLimit))
 	})
 	elapsed := time.Since(started)
-	row := m8ProductionRowV1{Status: "pass", Probes: probes, EfSearch: efSearch, Concurrency: concurrency, RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidates: max(1, int(assets.status.Representatives)), Samples: len(queries), ExactParityChecked: probes == len(assets.manifest.Placements), ExactParityPassed: probes == len(assets.manifest.Placements)}
+	// Coordinator.Search is an ANN/HNSW path even when every partition is
+	// selected. Exact V1 parity is owned by m8ExactPartitionUnionV1 during
+	// attribution, never by this measured all-partition ANN row.
+	row := m8ProductionRowV1{Status: "pass", Probes: probes, EfSearch: efSearch, Concurrency: concurrency, RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidates: max(1, int(assets.status.Representatives)), Samples: len(queries)}
 	canonicalResults := make([][]m8CanonicalResultV1, len(outcomes))
 	durations := make([]uint64, 0, len(outcomes))
 	var recallSum float64
@@ -1523,11 +1526,6 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 		}
 		canonicalResults[index] = got
 		recallSum += m8CanonicalRecallV1(truth[index], got)
-		globalIDParity, globalScoreParity := m8CanonicalParityV1(truth[index], got)
-		if row.ExactParityChecked && (!globalIDParity || !globalScoreParity) {
-			row.ExactParityPassed = false
-			row.Status = "fail"
-		}
 		durations = append(durations, outcome.response.Timing.TotalNanos)
 		m8AccumulateProductionRowCountersV1(&row, outcome.response.Counters)
 	}
@@ -1749,9 +1747,9 @@ func m8ProductionGateLedgerForReportV1(report m8ProductionReportV1) m8Production
 		if row.Status == "unsupported" {
 			continue
 		}
-		if row.ExactParityChecked {
+		if row.Probes == report.Config.Partitions {
 			exhaustive = append(exhaustive, row)
-			if !row.ExactParityPassed || !row.Attribution.ExhaustivePartitionIDParity || !row.Attribution.ExhaustivePartitionScoreParity || row.Attribution.ExhaustivePartitionRecallAtK != 1 {
+			if !row.Attribution.ExhaustivePartitionIDParity || !row.Attribution.ExhaustivePartitionScoreParity || row.Attribution.ExhaustivePartitionRecallAtK != 1 {
 				ledger.ExhaustiveParity = "fail"
 			} else if ledger.ExhaustiveParity != "fail" {
 				ledger.ExhaustiveParity = "pass"
@@ -2046,8 +2044,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 		}
 		if row.Status != "pass" && row.Status != "fail" || row.Probes < 1 || row.Probes > report.Config.Partitions ||
 			row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries || row.QPS <= 0 ||
-			row.RouterMode == "" || row.RouterCandidates < 1 || row.ExactParityChecked != (row.Probes == report.Config.Partitions) ||
-			(!row.ExactParityChecked && row.ExactParityPassed) || !row.NoPartialResults ||
+			row.RouterMode == "" || row.RouterCandidates < 1 || row.ExactParityPassed && !row.ExactParityChecked || !row.NoPartialResults ||
 			math.Float64bits(row.RecallAtK) != math.Float64bits(row.Attribution.EndToEndRecallAtK) ||
 			!validM8AttributionV1(row.Attribution) {
 			return errors.New("malformed measured M8 row")

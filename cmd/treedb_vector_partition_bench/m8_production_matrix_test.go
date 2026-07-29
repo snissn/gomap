@@ -145,6 +145,22 @@ func TestM8CoupledGraphGateRequiresOneMatchedOperatingPointV1(t *testing.T) {
 	}
 }
 
+func TestM8AllPartitionANNDoesNotOwnExactParityV1(t *testing.T) {
+	report := m8ProductionReportV1{
+		Config: m8ProductionConfigEvidenceV1{Partitions: 16, RecallTarget: .9},
+		Rows: []m8ProductionRowV1{{
+			Status: "pass", Probes: 16, EfSearch: 64, Concurrency: 1, Samples: 1,
+			// The measured all-partition HNSW path is approximate: it may miss a
+			// neighbor without turning the exact-union correctness gate into fail.
+			RecallAtK: .9998, ExactParityChecked: false, ExactParityPassed: false,
+			Attribution: m8ProductionAttributionV1{ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true, ExhaustivePartitionRecallAtK: 1},
+		}},
+	}
+	if got := m8ProductionGateLedgerForReportV1(report).ExhaustiveParity; got != "pass" {
+		t.Fatalf("all-partition ANN conflated with exact union: %q", got)
+	}
+}
+
 func TestM8GitDirtyRequiresExternalOutputsAndPreservesSourceChangesV1(t *testing.T) {
 	repo := t.TempDir()
 	runGit := func(args ...string) {
