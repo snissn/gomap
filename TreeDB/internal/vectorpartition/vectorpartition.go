@@ -492,6 +492,7 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 		members []int
 	}
 	classes := make(map[[32]byte][]duplicateClass)
+	duplicateLinks := make([]map[int]struct{}, n)
 	for i := range v {
 		fingerprint := VectorBitsFingerprintV1(v[i].Values)
 		bucket := classes[fingerprint]
@@ -514,10 +515,31 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 	}
 	for _, bucket := range classes {
 		for _, class := range bucket {
+			if len(class.members) < 2 {
+				continue
+			}
+			if c.Degree == 1 {
+				// A directed ordinal cycle is the only way to keep a class larger
+				// than two strongly connected with one outgoing edge per row.
+				for i, from := range class.members {
+					to := class.members[(i+1)%len(class.members)]
+					duplicateLinks[from] = map[int]struct{}{to: {}}
+					sets[from][to] = 0
+				}
+				continue
+			}
 			for i := 1; i < len(class.members); i++ {
 				left, right := class.members[i-1], class.members[i]
-				addCandidateBounded(sets[left], right, 0, c.Degree)
-				addCandidateBounded(sets[right], left, 0, c.Degree)
+				if duplicateLinks[left] == nil {
+					duplicateLinks[left] = make(map[int]struct{}, 2)
+				}
+				if duplicateLinks[right] == nil {
+					duplicateLinks[right] = make(map[int]struct{}, 2)
+				}
+				duplicateLinks[left][right] = struct{}{}
+				duplicateLinks[right][left] = struct{}{}
+				sets[left][right] = 0
+				sets[right][left] = 0
 			}
 		}
 	}
@@ -528,6 +550,9 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 		g.Neighbors[i] = make([]int, 0)
 	}
 	for i, s := range sets {
+		if err := pruneCandidatesPreservingRequired(s, duplicateLinks[i], c.Degree); err != nil {
+			return Graph{}, err
+		}
 		for j := range s {
 			if i != j {
 				g.Neighbors[i] = append(g.Neighbors[i], j)
@@ -539,6 +564,29 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 		}
 	}
 	return g, nil
+}
+
+func pruneCandidatesPreservingRequired(s map[int]float64, required map[int]struct{}, cap int) error {
+	if len(required) > cap {
+		return errors.New("required duplicate links exceed graph degree")
+	}
+	for len(s) > cap {
+		worst := -1
+		worstD := 0.0
+		for ordinal, distance := range s {
+			if _, keep := required[ordinal]; keep {
+				continue
+			}
+			if worst < 0 || distance > worstD || distance == worstD && ordinal > worst {
+				worst, worstD = ordinal, distance
+			}
+		}
+		if worst < 0 {
+			return errors.New("cannot prune graph candidates without removing required duplicate links")
+		}
+		delete(s, worst)
+	}
+	return nil
 }
 
 func vectorBitsEqualV1(left, right []float64) bool {

@@ -473,6 +473,9 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 	}
 	if cfg.stage == "partition" {
 		err = validatePartitionFixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes)
+		if err == nil && cfg.partitionTruthOracle {
+			err = validatePartitionTruthOracleWithCaps(fixture, cfg.topK, cfg.maxVectors, maxBenchmarkWorkUnits, cfg.maxBytes)
+		}
 	} else if cfg.stage == "overlap,partition_index" || cfg.stage == m6CoordinatorStageV1 || cfg.stage == m8ProductionMultiGroupModeV1 {
 		err = validateM3FixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes)
 	} else {
@@ -520,6 +523,9 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 			var queries [][]float64
 			if cfg.partitionTruthOracle {
 				vectors, queries = deterministicFixture(fixture)
+				if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
+					return errors.New("fixture checksum does not match generated vector/query/truth stream")
+				}
 			}
 			return runPartitionStage(cfg, fixture, vectors, queries, stdout)
 		}
@@ -1190,6 +1196,26 @@ func validatePartitionFixtureWithCaps(m fixtureManifest, capVectors int, capByte
 	return nil
 }
 
+// validatePartitionTruthOracleWithCaps preflights the query matrix and the
+// corpus-by-query exact scan that partition-only mode otherwise deliberately
+// avoids. It must run before deterministicFixture allocates either matrix.
+func validatePartitionTruthOracleWithCaps(m fixtureManifest, topK, capVectors int, capWork, capBytes int64) error {
+	if topK < 1 || topK > m.Vectors {
+		return errors.New("partition truth oracle top-k must be positive and cannot exceed fixture vectors")
+	}
+	if err := validateM3FixtureWithCaps(m, capVectors, capBytes); err != nil {
+		return fmt.Errorf("partition truth oracle fixture: %w", err)
+	}
+	work, err := memoryMul(int64(m.Vectors), int64(m.Queries))
+	if err != nil {
+		return fmt.Errorf("partition truth oracle work: %w", err)
+	}
+	if capWork < 1 || work > capWork {
+		return fmt.Errorf("partition truth oracle exact scan exceeds %d-unit cap: vector_query_pairs=%d", capWork, work)
+	}
+	return nil
+}
+
 // validateM3FixtureWithCaps permits the declared 1M-vector corpus plus a
 // separately bounded query set. Unlike simulation mode, M3's corpus cap is a
 // vector count rather than a combined vector/query count; the byte cap still
@@ -1229,24 +1255,26 @@ type m3BenchmarkWorkPlan struct {
 }
 
 type m8BenchmarkWorkPlan struct {
-	MeasuredQueryRequests           int64
-	WarmupAndPreflightQueryRequests int64
-	AttributionQueryPasses          int64
-	QueryRequests                   int64
-	RetainedCoordinatorCells        int64
-	RetainedCoordinatorResults      int64
-	CurrentCellOutcomes             int64
-	CurrentCellOutcomeBytes         int64
-	FixtureResidentBytes            int64
-	SourceSnapshotBytes             int64
-	ExactTruthBytes                 int64
-	RetainedCoordinatorBytes        int64
-	RetainedAttributionMatrices     int64
-	RetainedAttributionResults      int64
-	RetainedAttributionBytes        int64
-	AttributionMergeScratchResults  int64
-	AttributionMergeScratchBytes    int64
-	ModeledPeakBytes                int64
+	MeasuredQueryRequests            int64
+	WarmupAndPreflightQueryRequests  int64
+	AttributionQueryPasses           int64
+	QueryRequests                    int64
+	RetainedCoordinatorCells         int64
+	RetainedCoordinatorResults       int64
+	CurrentCellOutcomes              int64
+	CurrentCellOutcomeBytes          int64
+	FixtureResidentBytes             int64
+	SourceSnapshotBytes              int64
+	ExactTruthBytes                  int64
+	RetainedCoordinatorBytes         int64
+	RetainedAttributionMatrices      int64
+	RetainedAttributionResults       int64
+	RetainedAttributionBytes         int64
+	AttributionMergeScratchResults   int64
+	AttributionMergeScratchBytes     int64
+	AttributionPrimaryHomeMapBytes   int64
+	AttributionHomeBuildScratchBytes int64
+	ModeledPeakBytes                 int64
 }
 
 func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes int64) (m8BenchmarkWorkPlan, error) {
@@ -1440,6 +1468,14 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		}
 	}
 	if supportedOverlaps > 0 {
+		plan.AttributionPrimaryHomeMapBytes, err = memoryMul(int64(m.Vectors), memoryMapEntryBytes+documentIDStorageBytes)
+		if err != nil {
+			return plan, err
+		}
+		plan.AttributionHomeBuildScratchBytes, err = memoryMul(int64(m.Vectors), int64(unsafe.Sizeof(uint32(0)))+int64(unsafe.Sizeof(bool(false))))
+		if err != nil {
+			return plan, err
+		}
 		attributionCells, attributionErr := memoryMul(int64(len(cfg.probes)), int64(len(cfg.efSearch)))
 		if attributionErr != nil {
 			return plan, attributionErr
@@ -1504,17 +1540,21 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	attributionPeak, err := memoryAdd(measurementBase, plan.RetainedAttributionBytes, plan.AttributionMergeScratchBytes)
+	attributionHomeBuildPeak, err := memoryAdd(measurementBase, plan.SourceSnapshotBytes, plan.AttributionPrimaryHomeMapBytes, plan.AttributionHomeBuildScratchBytes)
 	if err != nil {
 		return plan, err
 	}
-	peak := max(sourceOraclePeak, measurementPeak, attributionPeak)
+	attributionPeak, err := memoryAdd(measurementBase, plan.AttributionPrimaryHomeMapBytes, plan.RetainedAttributionBytes, plan.AttributionMergeScratchBytes)
+	if err != nil {
+		return plan, err
+	}
+	peak := max(sourceOraclePeak, measurementPeak, attributionHomeBuildPeak, attributionPeak)
 	plan.ModeledPeakBytes, err = memoryScaleCeil(peak, memorySlackNumerator, memorySlackDenominator)
 	if err != nil {
 		return plan, err
 	}
 	if plan.ModeledPeakBytes > capBytes {
-		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d source_snapshot_bytes=%d exact_truth_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d current_cell_outcomes=%d current_cell_outcome_bytes=%d retained_attribution_matrices=%d retained_attribution_results=%d retained_attribution_bytes=%d attribution_merge_scratch_results=%d attribution_merge_scratch_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes, plan.CurrentCellOutcomes, plan.CurrentCellOutcomeBytes, plan.RetainedAttributionMatrices, plan.RetainedAttributionResults, plan.RetainedAttributionBytes, plan.AttributionMergeScratchResults, plan.AttributionMergeScratchBytes)
+		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d source_snapshot_bytes=%d exact_truth_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d current_cell_outcomes=%d current_cell_outcome_bytes=%d retained_attribution_matrices=%d retained_attribution_results=%d retained_attribution_bytes=%d attribution_merge_scratch_results=%d attribution_merge_scratch_bytes=%d attribution_primary_home_map_bytes=%d attribution_home_build_scratch_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes, plan.CurrentCellOutcomes, plan.CurrentCellOutcomeBytes, plan.RetainedAttributionMatrices, plan.RetainedAttributionResults, plan.RetainedAttributionBytes, plan.AttributionMergeScratchResults, plan.AttributionMergeScratchBytes, plan.AttributionPrimaryHomeMapBytes, plan.AttributionHomeBuildScratchBytes)
 	}
 	return plan, nil
 }

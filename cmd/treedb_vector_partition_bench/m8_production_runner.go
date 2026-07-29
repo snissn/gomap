@@ -29,7 +29,7 @@ import (
 
 const (
 	m8ProductionMultiGroupModeV1 = "production_multi_group"
-	m8PeakRSSScopeV1             = "process lifetime through preflight, warmup, measured query, and endpoint-loss fault boundaries; includes retained top-k coordinator results; excludes post-measurement attribution"
+	m8PeakRSSScopeV1             = "process lifetime through preflight, warmup, measured query, endpoint-loss fault, and post-measurement attribution boundaries; includes retained top-k coordinator results and cached truth-home attribution mapping"
 )
 
 type m8ProductionReportV1 struct {
@@ -391,13 +391,12 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		report.Profiles = m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Captured: captured, Status: "captured_production_query_and_fault_boundary", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs.pprof is cumulative and must be compared with allocs_baseline.pprof"}
 	}
 	allUntimed := m8MergeProductionResourceBoundariesV1(report.UntimedBoundary, report.Failure.ResourceBoundary)
-	report.Resources = m8ProductionResourcesV1(cfg, fixture, assets, report.Rows, allUntimed, report.Topology)
 
-	// Diagnostics and attribution deliberately run after the timed query/fault boundary,
-	// profile capture, and peak-RSS snapshot. Its exhaustive mmap scans must not
+	// Diagnostics and attribution deliberately run after the timed query/fault boundary
+	// and profile capture. Their exhaustive mmap scans must not
 	// pre-fault the corpus or contaminate measured process-resource evidence.
-	// The snapshot does include the bounded top-k coordinator results retained
-	// from measured cells so post-measurement attribution can verify parity.
+	// Peak RSS remains process-lifetime evidence and is captured after attribution,
+	// including the bounded top-k results and cached truth-home map retained here.
 	attributionHarness, err := newM8AttributionHarnessV1(assets)
 	if err != nil {
 		return fmt.Errorf("open M8 attribution harness: %w", err)
@@ -414,6 +413,10 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	}
 	report.PackDiagnostics = diagnostics
 	if len(measuredCells) > 0 {
+		primaryHomes, homesErr := m8PrimaryHomePartitionsByDocumentIDV1(assets)
+		if homesErr != nil {
+			return fmt.Errorf("build M8 truth-home attribution mapping: %w", homesErr)
+		}
 		approximateCandidates := min(cfg.routerCandidates, int(assets.status.Representatives))
 		if approximateCandidates < 1 {
 			return errors.New("M8 attribution requires an approximate router candidate budget")
@@ -422,7 +425,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		exhaustive := make([][]m8CanonicalResultV1, len(queries))
 		for _, probes := range cfg.probes {
 			for _, efSearch := range cfg.efSearch {
-				cell, buildErr := m8BuildAttributionV1(context.Background(), assets, queries, truth, probes, efSearch, cfg.topK, approximateCandidates, exhaustive, attributionHarness)
+				cell, buildErr := m8BuildAttributionV1(context.Background(), assets, primaryHomes, queries, truth, probes, efSearch, cfg.topK, approximateCandidates, exhaustive, attributionHarness)
 				if buildErr != nil {
 					return fmt.Errorf("build M8 attribution probes=%d ef=%d: %w", probes, efSearch, buildErr)
 				}
@@ -444,6 +447,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	if closeErr != nil {
 		return fmt.Errorf("close M8 attribution harness: %w", closeErr)
 	}
+	report.Resources = m8ProductionResourcesV1(cfg, fixture, assets, report.Rows, allUntimed, report.Topology)
 	report.GateLedger = m8ProductionGateLedgerForReportV1(report)
 	if m8ProductionAllGatesPassV1(report.GateLedger) {
 		report.Status = "pass"
@@ -1085,10 +1089,9 @@ func m8TruthHomePartitionDiagnosticsV1(truth []m8CanonicalResultV1, selected []u
 	return float64(covered) / float64(len(truth)), float64(len(homeCounts)), pairColocation, nil
 }
 
-func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAssetsV1, queries [][]float64, truth [][]m8CanonicalResultV1, probes, efSearch, topK, approximateCandidates int, exhaustive [][]m8CanonicalResultV1, harness *m8AttributionHarnessV1) (m8AttributionCellV1, error) {
-	primaryHomes, err := m8PrimaryHomePartitionsByDocumentIDV1(assets)
-	if err != nil {
-		return m8AttributionCellV1{}, err
+func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAssetsV1, primaryHomes map[string]uint32, queries [][]float64, truth [][]m8CanonicalResultV1, probes, efSearch, topK, approximateCandidates int, exhaustive [][]m8CanonicalResultV1, harness *m8AttributionHarnessV1) (m8AttributionCellV1, error) {
+	if len(primaryHomes) == 0 {
+		return m8AttributionCellV1{}, errors.New("M8 attribution requires a cached truth-home mapping")
 	}
 	cell := m8AttributionCellV1{Evidence: m8ProductionAttributionV1{
 		Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1,

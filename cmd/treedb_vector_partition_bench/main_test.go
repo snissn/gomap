@@ -888,9 +888,9 @@ func TestCheckedIn10kFixtureGraphCutBeatsStableHash(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatal(err)
 	}
-	// Exact-duplicate zero-distance links intentionally change the frozen graph
+	// Required exact-duplicate links intentionally change the frozen graph
 	// artifact while retaining the graph-vs-hash cut advantage.
-	if report.Dataset.Checksum != "2413ef7c2f65a4b5ce8ecc3846f473fd85d337a87511538f962af7cdf6aec291" || report.Source.Checksum != "6515025f540b955d453de99cf13f1efc002fd91135b2745b722c19e8d736e386" || report.ArtifactSHA256 != "fe9f1a79a267e8bcc058247d34095b2b838d4e842411be84a9c175445773d27c" || report.Metrics.EdgeCut != 5110 || report.Metrics.StableIDHashEdgeCut != 149853 {
+	if report.Dataset.Checksum != "2413ef7c2f65a4b5ce8ecc3846f473fd85d337a87511538f962af7cdf6aec291" || report.Source.Checksum != "6515025f540b955d453de99cf13f1efc002fd91135b2745b722c19e8d736e386" || report.ArtifactSHA256 != "76fd71f3df6b13e10ceab2f63a972d574d2d4e47368f4ef11d8432666d014002" || report.Metrics.EdgeCut != 4928 || report.Metrics.StableIDHashEdgeCut != 149873 {
 		t.Fatalf("frozen 10k regression changed: report=%+v", report)
 	}
 }
@@ -995,6 +995,29 @@ func TestPartitionFixtureValidationUsesVectorOnlyCaps(t *testing.T) {
 	overBytes.Dimensions = 2
 	if err := validatePartitionFixtureWithCaps(overBytes, maxVectors, 8); err == nil {
 		t.Fatal("partition mode accepted over-byte vector corpus")
+	}
+}
+
+func TestPartitionTruthOraclePreflightsQueriesBytesAndExactWork(t *testing.T) {
+	manifest := fixtureManifest{
+		SchemaVersion: schemaVersion, Fixture: "partition-truth-preflight",
+		Generator: fixtureGenerator, Arithmetic: fixtureArithmetic,
+		Vectors: 50, Queries: 3, Dimensions: 2, Metric: "cosine",
+		Checksum: strings.Repeat("0", 64),
+	}
+	if err := validatePartitionTruthOracleWithCaps(manifest, 10, 100, 150, 53*2*8); err != nil {
+		t.Fatalf("valid truth-oracle plan rejected: %v", err)
+	}
+	queryHeavy := manifest
+	queryHeavy.Queries = 101
+	if err := validatePartitionTruthOracleWithCaps(queryHeavy, 10, 100, math.MaxInt64, math.MaxInt64); err == nil {
+		t.Fatal("partition truth oracle accepted query count above the pre-allocation cap")
+	}
+	if err := validatePartitionTruthOracleWithCaps(manifest, 10, 100, math.MaxInt64, 53*2*8-1); err == nil {
+		t.Fatal("partition truth oracle accepted query matrix above the byte cap")
+	}
+	if err := validatePartitionTruthOracleWithCaps(manifest, 10, 100, 149, math.MaxInt64); err == nil || !strings.Contains(err.Error(), "vector_query_pairs=150") {
+		t.Fatalf("partition truth oracle accepted excessive exact work: %v", err)
 	}
 }
 
@@ -1443,6 +1466,26 @@ func TestM8SourceOracleSnapshotRespectsMemoryCapV1(t *testing.T) {
 	}
 	if _, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, maxFixtureBytes); err == nil || !strings.Contains(err.Error(), "source_snapshot_bytes=") {
 		t.Fatalf("accepted oversized source snapshot: %v", err)
+	}
+}
+
+func TestM8AttributionPrimaryHomeMappingIsModeledV1(t *testing.T) {
+	cfg := config{partitions: 16, overlaps: []float64{0}, probes: []int{4}, efSearch: []int{128}, concurrency: []int{1}, topK: 10}
+	manifest := fixtureManifest{Vectors: 1_000_000, Queries: 32, Dimensions: 16}
+	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantMap, err := memoryMul(int64(manifest.Vectors), memoryMapEntryBytes+documentIDStorageBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantScratch, err := memoryMul(int64(manifest.Vectors), int64(unsafe.Sizeof(uint32(0)))+int64(unsafe.Sizeof(bool(false))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.AttributionPrimaryHomeMapBytes != wantMap || plan.AttributionHomeBuildScratchBytes != wantScratch {
+		t.Fatalf("truth-home attribution memory is not fully modeled: plan=%+v", plan)
 	}
 }
 
