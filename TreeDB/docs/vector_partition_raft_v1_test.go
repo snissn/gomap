@@ -201,7 +201,7 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, needle := range []string{"m3_bounded_overlap_v1:capacity=<u64>,budget=<u64>,unspent=<u64>", ",build_identity=<64-lowercase-hex-sha256>", "covered by the VPM1 integrity digest"} {
+	for _, needle := range []string{"m3_bounded_overlap_v1:capacity=<u64>,budget=<u64>,realized=<u64>,unspent=<u64>", "budget = realized + unspent", ",build_identity=<64-lowercase-hex-sha256>", "covered by the VPM1 integrity digest"} {
 		if !strings.Contains(string(storage), needle) {
 			t.Fatalf("storage format missing %q", needle)
 		}

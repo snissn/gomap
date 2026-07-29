@@ -54,6 +54,9 @@ type m3VariantDescriptorV1 struct {
 	IndexDefinitionDigest string                 `json:"index_definition_digest"`
 	PartitionHNSWM        int                    `json:"partition_hnsw_m"`
 	Capacity              int                    `json:"capacity"`
+	OverlapRequested      int                    `json:"overlap_requested"`
+	OverlapRealized       int                    `json:"overlap_realized"`
+	OverlapRejected       int                    `json:"overlap_rejected"`
 	PartitionLoads        []int                  `json:"partition_loads"`
 	OverlapMemberships    int                    `json:"overlap_memberships"`
 	PersistentAssetBytes  uint64                 `json:"persistent_asset_bytes"`
@@ -71,10 +74,13 @@ func m3VariantBuildIdentityDigestV1(d m3VariantDescriptorV1) (string, error) {
 		Source                vectorpartition.Source
 		IndexDefinitionDigest string
 		PartitionHNSWM        int
+		Capacity              int
+		OverlapRequested      int
 	}{
 		FixtureChecksum: d.FixtureChecksum, VariantID: d.VariantID, AssignmentBasis: d.AssignmentBasis, OverlapRatio: d.OverlapRatio,
 		ArtifactSHA256: d.ArtifactSHA256, GraphArtifactSHA256: d.GraphArtifactSHA256, ArtifactBackend: d.ArtifactBackend,
 		Source: d.Source, IndexDefinitionDigest: d.IndexDefinitionDigest, PartitionHNSWM: d.PartitionHNSWM,
+		Capacity: d.Capacity, OverlapRequested: d.OverlapRequested,
 	}
 	raw, err := json.Marshal(identity)
 	if err != nil {
@@ -162,6 +168,11 @@ func validateM3VariantDescriptorV1(d m3VariantDescriptorV1) error {
 	if err != nil {
 		return err
 	}
+	wantBudgetFloat := math.Floor(d.OverlapRatio * float64(d.SourceRows))
+	if wantBudgetFloat > float64(math.MaxInt) {
+		return errors.New("M3 variant overlap target exceeds host integer range")
+	}
+	wantBudget := int(wantBudgetFloat)
 	wantBuildIdentity, err := m3VariantBuildIdentityDigestV1(d)
 	if err != nil {
 		return err
@@ -171,9 +182,13 @@ func validateM3VariantDescriptorV1(d m3VariantDescriptorV1) error {
 		!m8SHA256V1(d.BuildIdentityDigest) || d.BuildIdentityDigest != wantBuildIdentity ||
 		!m8SHA256V1(d.Source.Checksum) || d.DatabaseDirectory == "" || !m8SHA256V1(d.ManifestIntegrity) || !m8SHA256V1(d.ReadySetDigest) ||
 		!m8SHA256V1(d.RouterAssetChecksum) || !m8SHA256V1(d.RouterModelDigest) || d.SourceGeneration == 0 || d.SourceRows == 0 ||
-		d.PartitionGeneration == 0 || d.RouterGeneration != d.PartitionGeneration || d.Partitions < 1 || !m8SHA256V1(d.IndexDefinitionDigest) || d.PartitionHNSWM < 2 || d.PartitionHNSWM > partitionHNSWDegree || d.Capacity < 1 ||
+		d.PartitionGeneration == 0 || d.RouterGeneration != d.PartitionGeneration || d.Partitions < 1 || !m8SHA256V1(d.IndexDefinitionDigest) || d.PartitionHNSWM < 2 || d.PartitionHNSWM > partitionHNSWDegree || d.Capacity < 1 || d.OverlapRequested != wantBudget || d.OverlapRealized != wantBudget || d.OverlapRequested < 0 || d.OverlapRealized < 0 || d.OverlapRejected < 0 || d.OverlapRequested != d.OverlapRealized+d.OverlapRejected || d.OverlapMemberships != d.OverlapRealized ||
 		len(d.PartitionLoads) != int(d.Partitions) || d.PersistentAssetBytes == 0 {
 		return errors.New("malformed M3 variant descriptor")
+	}
+	policy, ok := collections.ParseVectorPartitionOverlapPolicyV1(d.OverlapPolicy)
+	if !ok || policy.Capacity != uint64(d.Capacity) || policy.Budget != uint64(wantBudget) || policy.Realized != uint64(wantBudget) || policy.Unspent != 0 || policy.BuildIdentityDigest != d.BuildIdentityDigest {
+		return errors.New("M3 variant descriptor overlap policy is not exact-target canonical")
 	}
 	if d.AssignmentBasis == partitionAssignmentGraphV1 && d.ArtifactSHA256 != d.GraphArtifactSHA256 {
 		return errors.New("graph M3 variant artifact does not match its graph-build identity")
@@ -196,7 +211,7 @@ func m3DescriptorMatchesManifestV1(d m3VariantDescriptorV1, fixture fixtureManif
 	}
 	wantBudget := uint64(math.Floor(d.OverlapRatio * float64(d.SourceRows)))
 	used := uint64(len(manifest.OverlapMemberships))
-	if policy.Budget != wantBudget || used > policy.Budget || policy.Unspent != policy.Budget-used {
+	if policy.Budget != wantBudget || policy.Realized != used || policy.Unspent != policy.Budget-used || d.OverlapRequested != int(policy.Budget) || d.OverlapRealized != int(policy.Realized) || d.OverlapRejected != int(policy.Unspent) {
 		return errors.New("M3 variant descriptor overlap accounting does not match the retained manifest")
 	}
 	loads := make([]int, manifest.PartitionCount)

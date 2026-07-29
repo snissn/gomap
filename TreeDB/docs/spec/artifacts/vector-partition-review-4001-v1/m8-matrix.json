@@ -1,0 +1,3352 @@
+{
+  "schema_version": 3,
+  "result_kind": "m8_production_multi_variant_matrix_v3",
+  "status": "experimental_gate_failures",
+  "disposition": "enablement_off_follow_up_required",
+  "generated_at": "2026-07-29T06:10:22.266429471Z",
+  "exact_command": [
+    "treedb_vector_partition_bench",
+    "-dataset",
+    "/mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture",
+    "-out",
+    "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_out_QZBwWq",
+    "-profiles",
+    "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew",
+    "-format",
+    "json",
+    "-mode",
+    "production_multi_group",
+    "-m8-variant-dbs",
+    "/mnt/fast4tb/tmp/issue4001_fh_graph_disjoint_db_1wK4gE,/mnt/fast4tb/tmp/issue4001_exactinvariants_overlap_db_72Xw7b,/mnt/fast4tb/tmp/issue4001_fh_stable_db_dBMCDV",
+    "-partitions",
+    "16",
+    "-top-k",
+    "10",
+    "-overlap",
+    "0.20",
+    "-raft-groups",
+    "4",
+    "-raft-nodes-per-group",
+    "3",
+    "-probes",
+    "16",
+    "-ef-search",
+    "4096",
+    "-concurrency",
+    "1",
+    "-warmup",
+    "0",
+    "-router-candidates",
+    "1024",
+    "-m8-max-rss-bytes",
+    "4294967296",
+    "-m8-max-persistent-asset-bytes",
+    "536870912"
+  ],
+  "base_sha": "7a2ec9d690c1a65dc3d768a3114805bec7e8f95c",
+  "head_sha": "042a9f054ca331a807818a3e683525b430ae4755",
+  "dataset": {
+    "schema_version": 1,
+    "fixture": "deterministic_1000000",
+    "generator": "treedb_vector_partition_fixture_v2",
+    "arithmetic": "ieee754_binary64_explicit_fma_v1",
+    "vectors": 1000000,
+    "queries": 32,
+    "dimensions": 16,
+    "metric": "cosine",
+    "seed": 1,
+    "checksum": "71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f"
+  },
+  "required_variants": [
+    "graph-disjoint-v1",
+    "graph-overlap-020-v1",
+    "stable-id-hash-disjoint-v1"
+  ],
+  "variants": [
+    {
+      "schema_version": 2,
+      "result_kind": "m8_production_multi_group_evidence_v2",
+      "status": "experimental_gate_failures",
+      "mode": "production_multi_group",
+      "production_evidence": true,
+      "generated_at": "2026-07-29T06:03:40.871455298Z",
+      "exact_command": [
+        "treedb_vector_partition_bench",
+        "-m8-existing-db",
+        "/mnt/fast4tb/tmp/issue4001_fh_graph_disjoint_db_1wK4gE",
+        "-overlap",
+        "0",
+        "-format",
+        "json",
+        "-profiles",
+        "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/graph-disjoint-v1",
+        "-m8-matrix-out",
+        "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_out_QZBwWq",
+        "-m8-matrix-profiles",
+        "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew",
+        "-dataset",
+        "/mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture",
+        "-out",
+        "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_out_QZBwWq",
+        "-mode",
+        "production_multi_group",
+        "-partitions",
+        "16",
+        "-top-k",
+        "10",
+        "-raft-groups",
+        "4",
+        "-raft-nodes-per-group",
+        "3",
+        "-probes",
+        "16",
+        "-ef-search",
+        "4096",
+        "-concurrency",
+        "1",
+        "-warmup",
+        "0",
+        "-router-candidates",
+        "1024",
+        "-m8-max-rss-bytes",
+        "4294967296",
+        "-m8-max-persistent-asset-bytes",
+        "536870912"
+      ],
+      "base_sha": "7a2ec9d690c1a65dc3d768a3114805bec7e8f95c",
+      "head_sha": "042a9f054ca331a807818a3e683525b430ae4755",
+      "dirty": false,
+      "go_version": "go1.26.0",
+      "goos": "linux",
+      "goarch": "amd64",
+      "logical_cpus": 12,
+      "host": {
+        "cpu_model": "11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz",
+        "memory_bytes": 33512759296,
+        "numa_nodes": "0",
+        "kernel": "Linux 6.8.0-124-generic x86_64 GNU/Linux",
+        "artifact_mount": "/mnt/fast4tb /dev/nvme0n1p1 ext4   rw,noatime",
+        "dataset_mount": "/mnt/fast4tb /dev/nvme0n1p1 ext4   rw,noatime",
+        "persistent_asset_mount": "/mnt/fast4tb /dev/nvme0n1p1 ext4   rw,noatime"
+      },
+      "dataset": {
+        "schema_version": 1,
+        "fixture": "deterministic_1000000",
+        "generator": "treedb_vector_partition_fixture_v2",
+        "arithmetic": "ieee754_binary64_explicit_fma_v1",
+        "vectors": 1000000,
+        "queries": 32,
+        "dimensions": 16,
+        "metric": "cosine",
+        "seed": 1,
+        "checksum": "71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f"
+      },
+      "variant": {
+        "schema_version": 3,
+        "result_kind": "m3_persistent_variant_descriptor_v3",
+        "variant_id": "graph-disjoint-v1",
+        "assignment_basis": "graph",
+        "overlap_ratio": 0,
+        "overlap_policy": "m3_bounded_overlap_v1:capacity=65625,budget=0,realized=0,unspent=0,build_identity=f4b13553ebac39199d8d29d7db9717f08f33530545e456e96e70856fcf006fd8",
+        "fixture_checksum": "71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f",
+        "artifact_sha256": "3c7a5665803b2f8f32f0187376b31faa74b7b712d8b7d94b28aea7114db6f556",
+        "graph_artifact_sha256": "3c7a5665803b2f8f32f0187376b31faa74b7b712d8b7d94b28aea7114db6f556",
+        "artifact_backend": "treedb_reference_greedy_v1",
+        "source": {
+          "source_id": "m0_fixture:71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f",
+          "checksum": "149f812b473d2007653cee6890ca112dd9719e77dcd7ec0c399b2d32e81e761c",
+          "vectors": 1000000,
+          "dimensions": 16,
+          "metric": "cosine"
+        },
+        "build_identity_digest": "f4b13553ebac39199d8d29d7db9717f08f33530545e456e96e70856fcf006fd8",
+        "database_directory": "/mnt/fast4tb/tmp/issue4001_fh_graph_disjoint_db_1wK4gE",
+        "manifest_integrity_digest": "bb97c72badf771873a791e0c6a53c010e10cd4a06c2cbb9bd62dae649a7b4d26",
+        "ready_set_digest": "284e121601c44df5e6e382db7a62a9f818962f47e9d9244179199e758d4e1eb0",
+        "router_asset_checksum": "0c30c67934f40564f7556ce8944ba74aa0acdef062ba28ed4f617c3f08b526be",
+        "router_model_digest": "5c5492555c8ca7c5ff1b92e1bf07542130d12c5663ca6eb93ac6bb2b4b2074c4",
+        "source_generation": 123,
+        "source_checksum": 348520691405712784,
+        "source_schema_hash": 5042445602574199399,
+        "source_rows": 1000000,
+        "partition_generation": 1,
+        "router_generation": 1,
+        "partitions": 16,
+        "index_definition_digest": "c51c99cdf93b98f5e0d22f7a4464c14c3f51f2563e33d3bd300f3fccab5955fc",
+        "partition_hnsw_m": 16,
+        "capacity": 65625,
+        "overlap_requested": 0,
+        "overlap_realized": 0,
+        "overlap_rejected": 0,
+        "partition_loads": [
+          62157,
+          62747,
+          63292,
+          62644,
+          61615,
+          63064,
+          62553,
+          62976,
+          61908,
+          62950,
+          62381,
+          62715,
+          61662,
+          62679,
+          62426,
+          62231
+        ],
+        "overlap_memberships": 0,
+        "persistent_asset_bytes": 282881928
+      },
+      "config": {
+        "raft_groups": 4,
+        "raft_nodes_per_group": 3,
+        "partitions": 16,
+        "probes": [
+          16
+        ],
+        "overlap": [
+          0
+        ],
+        "top_k": 10,
+        "recall_target": 0.9,
+        "concurrency": [
+          1
+        ],
+        "warmup_requests": 0,
+        "ef_search": [
+          4096
+        ],
+        "approximate_router_candidate_budget": 1024,
+        "seed": 1
+      },
+      "build_nanos": 18335411252,
+      "topology": {
+        "network": "tcp_loopback_serialized_m5_v1",
+        "groups": [
+          {
+            "group_id": "m8-data-group-00",
+            "leader_id": "node-a",
+            "endpoint": "127.0.0.1:33533",
+            "node_ids": [
+              "node-a",
+              "node-b",
+              "node-c"
+            ],
+            "commit_index": 3,
+            "read_index": 3,
+            "applied_index": 3,
+            "read_evidence_kind": "production",
+            "proves_production_consensus": true,
+            "endpoint_hits": 34
+          },
+          {
+            "group_id": "m8-data-group-01",
+            "leader_id": "node-b",
+            "endpoint": "127.0.0.1:43079",
+            "node_ids": [
+              "node-a",
+              "node-b",
+              "node-c"
+            ],
+            "commit_index": 3,
+            "read_index": 3,
+            "applied_index": 3,
+            "read_evidence_kind": "production",
+            "proves_production_consensus": true,
+            "endpoint_hits": 34
+          },
+          {
+            "group_id": "m8-data-group-02",
+            "leader_id": "node-c",
+            "endpoint": "127.0.0.1:39121",
+            "node_ids": [
+              "node-a",
+              "node-b",
+              "node-c"
+            ],
+            "commit_index": 3,
+            "read_index": 3,
+            "applied_index": 3,
+            "read_evidence_kind": "production",
+            "proves_production_consensus": true,
+            "endpoint_hits": 34
+          },
+          {
+            "group_id": "m8-data-group-03",
+            "leader_id": "node-a",
+            "endpoint": "127.0.0.1:41479",
+            "node_ids": [
+              "node-a",
+              "node-b",
+              "node-c"
+            ],
+            "commit_index": 3,
+            "read_index": 3,
+            "applied_index": 3,
+            "read_evidence_kind": "production",
+            "proves_production_consensus": true,
+            "endpoint_hits": 34
+          }
+        ],
+        "lifecycle_state": "active",
+        "ready_set_digest": "42be8d0a5d621663792ee6531c77f5b4ff906462690c716c08973b8adc8386aa",
+        "meta_group": "catalog-meta",
+        "meta_nodes": [
+          "m8-meta-1-a",
+          "m8-meta-1-b",
+          "m8-meta-1-c"
+        ],
+        "meta_leader": "m8-meta-1-a",
+        "max_concurrent_shard_requests": 4
+      },
+      "rows": [
+        {
+          "variant_id": "graph-disjoint-v1",
+          "status": "fail",
+          "overlap": 0,
+          "probes": 16,
+          "ef_search": 4096,
+          "concurrency": 1,
+          "router_mode": "exact",
+          "router_candidate_budget": 256,
+          "samples": 32,
+          "recall_at_k": 0.975,
+          "qps": 10.265995675799648,
+          "p50_nanos": 96380041,
+          "p95_nanos": 125242330,
+          "p99_nanos": 128534983,
+          "max_total_nanos": 128534983,
+          "request_bytes": 78592,
+          "response_bytes": 231424,
+          "candidate_bytes": 421745088,
+          "rpcs": 128,
+          "max_requests_per_query": 4,
+          "max_rpcs_per_query": 4,
+          "max_request_bytes_per_query": 2456,
+          "max_response_bytes_per_query": 7232,
+          "max_candidate_bytes_per_query": 13882944,
+          "max_merge_entries_per_query": 160,
+          "max_shard_partitions": 4,
+          "max_shard_request_bytes": 614,
+          "max_shard_response_bytes": 1808,
+          "max_shard_candidate_bytes": 3603776,
+          "exact_all_partition_parity_checked": true,
+          "exact_all_partition_parity_passed": false,
+          "no_partial_results": true,
+          "recall_attribution": {
+            "contract": "fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1",
+            "global_exact_recall_at_k": 1,
+            "exhaustive_partition_union_recall_at_k": 1,
+            "exhaustive_partition_union_id_parity": true,
+            "exhaustive_partition_union_score_parity": true,
+            "exact_representative_routing_recall_at_k": 1,
+            "approximate_representative_routing_recall_at_k": 1,
+            "partition_local_hnsw_recall_at_k": 0.975,
+            "partition_local_hnsw_searches": 512,
+            "partition_local_hnsw_candidates": 6589767,
+            "partition_local_hnsw_edges": 69299488,
+            "end_to_end_recall_at_k": 0.975,
+            "coordinator_merge_id_parity": true,
+            "coordinator_merge_score_parity": true,
+            "approximate_router_candidate_budget": 256,
+            "approximate_router_partition_coverage_complete": true,
+            "residual_loss_owners": [
+              "partition_local_hnsw"
+            ]
+          }
+        }
+      ],
+      "partition_pack_diagnostics": [
+        {
+          "partition_id": 0,
+          "rows": 62157,
+          "reachable_rows": 62157,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            62157,
+            3868,
+            240,
+            16
+          ],
+          "edges_by_layer": [
+            1989024,
+            61888,
+            3840,
+            240
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62157
+        },
+        {
+          "partition_id": 1,
+          "rows": 62747,
+          "reachable_rows": 62747,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            62747,
+            3895,
+            231,
+            10
+          ],
+          "edges_by_layer": [
+            2007904,
+            62320,
+            3696,
+            90
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62747
+        },
+        {
+          "partition_id": 2,
+          "rows": 63292,
+          "reachable_rows": 63292,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            63292,
+            3982,
+            264,
+            11
+          ],
+          "edges_by_layer": [
+            2025344,
+            63712,
+            4224,
+            110
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 63292
+        },
+        {
+          "partition_id": 3,
+          "rows": 62644,
+          "reachable_rows": 62644,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            62644,
+            3915,
+            250,
+            19
+          ],
+          "edges_by_layer": [
+            2004608,
+            62640,
+            4000,
+            304
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62644
+        },
+        {
+          "partition_id": 4,
+          "rows": 61615,
+          "reachable_rows": 61615,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            61615,
+            3869,
+            236,
+            15
+          ],
+          "edges_by_layer": [
+            1971680,
+            61904,
+            3776,
+            210
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 61615
+        },
+        {
+          "partition_id": 5,
+          "rows": 63064,
+          "reachable_rows": 63064,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            63064,
+            3964,
+            242,
+            17
+          ],
+          "edges_by_layer": [
+            2018048,
+            63424,
+            3872,
+            272
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 63064
+        },
+        {
+          "partition_id": 6,
+          "rows": 62553,
+          "reachable_rows": 62553,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            62553,
+            3792,
+            230,
+            18
+          ],
+          "edges_by_layer": [
+            2001696,
+            60672,
+            3680,
+            288
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62553
+        },
+        {
+          "partition_id": 7,
+          "rows": 62976,
+          "reachable_rows": 62976,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            62976,
+            3893,
+            263,
+            21
+          ],
+          "edges_by_layer": [
+            2015232,
+            62288,
+            4208,
+            336
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62976
+        },
+        {
+          "partition_id": 8,
+          "rows": 61908,
+          "reachable_rows": 61908,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            61908,
+            3805,
+            268,
+            17
+          ],
+          "edges_by_layer": [
+            1981056,
+            60880,
+            4288,
+            272
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 61908
+        },
+        {
+          "partition_id": 9,
+          "rows": 62950,
+          "reachable_rows": 62950,
+          "traversal_roots": 1,
+          "max_layer": 4,
+          "rows_by_layer": [
+            62950,
+            3980,
+            272,
+            13,
+            4
+          ],
+          "edges_by_layer": [
+            2014400,
+            63680,
+            4352,
+            156,
+            12
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62950
+        },
+        {
+          "partition_id": 10,
+          "rows": 62381,
+          "reachable_rows": 62381,
+          "traversal_roots": 1,
+          "max_layer": 4,
+          "rows_by_layer": [
+            62381,
+            3893,
+            260,
+            12,
+            2
+          ],
+          "edges_by_layer": [
+            1996192,
+            62288,
+            4160,
+            132,
+            2
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62381
+        },
+        {
+          "partition_id": 11,
+          "rows": 62715,
+          "reachable_rows": 62715,
+          "traversal_roots": 1,
+          "max_layer": 4,
+          "rows_by_layer": [
+            62715,
+            3854,
+            242,
+            16,
+            2
+          ],
+          "edges_by_layer": [
+            2006880,
+            61664,
+            3872,
+            240,
+            2
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62715
+        },
+        {
+          "partition_id": 12,
+          "rows": 61662,
+          "reachable_rows": 61662,
+          "traversal_roots": 1,
+          "max_layer": 4,
+          "rows_by_layer": [
+            61662,
+            3812,
+            235,
+            14,
+            2
+          ],
+          "edges_by_layer": [
+            1973184,
+            60992,
+            3760,
+            182,
+            2
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 61662
+        },
+        {
+          "partition_id": 13,
+          "rows": 62679,
+          "reachable_rows": 62679,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            62679,
+            3850,
+            252,
+            13
+          ],
+          "edges_by_layer": [
+            2005728,
+            61600,
+            4032,
+            156
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62679
+        },
+        {
+          "partition_id": 14,
+          "rows": 62426,
+          "reachable_rows": 62426,
+          "traversal_roots": 1,
+          "max_layer": 4,
+          "rows_by_layer": [
+            62426,
+            3891,
+            246,
+            16,
+            2
+          ],
+          "edges_by_layer": [
+            1997632,
+            62256,
+            3936,
+            240,
+            2
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62426
+        },
+        {
+          "partition_id": 15,
+          "rows": 62231,
+          "reachable_rows": 62231,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            62231,
+            3871,
+            217,
+            13
+          ],
+          "edges_by_layer": [
+            1991392,
+            61936,
+            3472,
+            156
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62231
+        }
+      ],
+      "failure": {
+        "class": "unavailable_group_endpoint",
+        "stopped_group": "m8-data-group-00",
+        "error": "nativewire: vector partition coordinator unavailable group=\"m8-data-group-00\": nativewire: vector partition shard search group_unavailable group=\"m8-data-group-00\": dial tcp 127.0.0.1:33533: connect: connection refused",
+        "returned_neighbors": 0,
+        "returned_groups": 0,
+        "passed": true,
+        "resource_boundary": {
+          "selected_partitions": 16,
+          "ef_search": 4096,
+          "wall_clock_nanos": 13643499,
+          "observed_maxima": {
+            "requests": 4,
+            "rpcs": 4,
+            "retries": 0,
+            "redirects": 0,
+            "request_bytes": 2344,
+            "candidate_bytes": 0,
+            "response_bytes": 0,
+            "merge_entries": 0,
+            "shard_partitions": 4,
+            "shard_request_bytes": 586,
+            "shard_candidate_bytes": 0,
+            "shard_response_bytes": 0
+          }
+        }
+      },
+      "gate_ledger": {
+        "exhaustive_correctness": "fail",
+        "failure_honesty": "pass",
+        "partition_pack_reachability": "pass",
+        "recall": "pass",
+        "probe_reduction": "fail",
+        "end_to_end_qps": "fail",
+        "tail_latency": "fail",
+        "balance": "pass",
+        "overlap_storage": "pass",
+        "resource_bounds": "pass",
+        "existing_behavior": "pending_full_required_suites"
+      },
+      "profiles": {
+        "directory": "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/graph-disjoint-v1",
+        "captured": [
+          "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/graph-disjoint-v1/allocs_baseline.pprof",
+          "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/graph-disjoint-v1/cpu.pprof",
+          "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/graph-disjoint-v1/trace.out",
+          "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/graph-disjoint-v1/heap.pprof",
+          "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/graph-disjoint-v1/allocs.pprof",
+          "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/graph-disjoint-v1/block.pprof",
+          "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/graph-disjoint-v1/mutex.pprof"
+        ],
+        "status": "captured_production_query_and_fault_boundary",
+        "scope": "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs.pprof is cumulative and must be compared with allocs_baseline.pprof"
+      },
+      "router_sessions": {
+        "before_warmup": [],
+        "after_warmup": [
+          {
+            "identity": {
+              "database": "default",
+              "catalog": "default",
+              "collection": "m3_partition_source",
+              "index_name": "embedding_graph",
+              "index_definition_digest": "c51c99cdf93b98f5e0d22f7a4464c14c3f51f2563e33d3bd300f3fccab5955fc",
+              "source_generation": 123,
+              "source_checksum": 348520691405712784,
+              "source_schema_hash": 5042445602574199399,
+              "source_row_count": 1000000,
+              "partition_generation": 1,
+              "ready_set_digest": "42be8d0a5d621663792ee6531c77f5b4ff906462690c716c08973b8adc8386aa",
+              "router_model_digest": "5c5492555c8ca7c5ff1b92e1bf07542130d12c5663ca6eb93ac6bb2b4b2074c4"
+            },
+            "cold_opens": 1,
+            "manifest_open_attempts": 1,
+            "misses": 1,
+            "hits": 0,
+            "open_failures": 0,
+            "reader_pins": 1,
+            "reader_releases": 0,
+            "lease_pins": 1,
+            "lease_releases": 1,
+            "invalidations": 0,
+            "closes": 0
+          }
+        ],
+        "after_measured": [
+          {
+            "identity": {
+              "database": "default",
+              "catalog": "default",
+              "collection": "m3_partition_source",
+              "index_name": "embedding_graph",
+              "index_definition_digest": "c51c99cdf93b98f5e0d22f7a4464c14c3f51f2563e33d3bd300f3fccab5955fc",
+              "source_generation": 123,
+              "source_checksum": 348520691405712784,
+              "source_schema_hash": 5042445602574199399,
+              "source_row_count": 1000000,
+              "partition_generation": 1,
+              "ready_set_digest": "42be8d0a5d621663792ee6531c77f5b4ff906462690c716c08973b8adc8386aa",
+              "router_model_digest": "5c5492555c8ca7c5ff1b92e1bf07542130d12c5663ca6eb93ac6bb2b4b2074c4"
+            },
+            "cold_opens": 1,
+            "manifest_open_attempts": 1,
+            "misses": 1,
+            "hits": 32,
+            "open_failures": 0,
+            "reader_pins": 1,
+            "reader_releases": 0,
+            "lease_pins": 33,
+            "lease_releases": 33,
+            "invalidations": 0,
+            "closes": 0
+          }
+        ]
+      },
+      "untimed_resource_boundary": {
+        "selected_partitions": 16,
+        "ef_search": 4096,
+        "wall_clock_nanos": 20538726214,
+        "observed_maxima": {
+          "requests": 4,
+          "rpcs": 4,
+          "retries": 0,
+          "redirects": 0,
+          "request_bytes": 2352,
+          "candidate_bytes": 13090368,
+          "response_bytes": 7232,
+          "merge_entries": 160,
+          "shard_partitions": 4,
+          "shard_request_bytes": 588,
+          "shard_candidate_bytes": 3365632,
+          "shard_response_bytes": 1808
+        }
+      },
+      "resources": {
+        "persistent_asset_bytes": 282881928,
+        "persistent_asset_cap_bytes": 536870912,
+        "partition_loads": [
+          62157,
+          62747,
+          63292,
+          62644,
+          61615,
+          63064,
+          62553,
+          62976,
+          61908,
+          62950,
+          62381,
+          62715,
+          61662,
+          62679,
+          62426,
+          62231
+        ],
+        "peak_rss_bytes": 1720635392,
+        "peak_rss_cap_bytes": 4294967296,
+        "peak_rss_measured": true,
+        "peak_rss_scope": "process lifetime through preflight, warmup, measured query, and endpoint-loss fault boundaries; includes retained top-k coordinator results; excludes post-measurement attribution",
+        "overlap_memberships": 0,
+        "max_partition_load": 63292,
+        "balance_hard_cap": 65625,
+        "mmap_status": "not_captured_by_m8_runner; retained M3/M5 artifacts own mapped-pack evidence",
+        "limit_comparisons": [
+          {
+            "name": "persistent_asset_bytes",
+            "configured": 536870912,
+            "observed": 282881928,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "process_peak_rss",
+            "configured": 4294967296,
+            "observed": 1720635392,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_selected_partitions",
+            "configured": 256,
+            "observed": 16,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_groups",
+            "configured": 64,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_requests",
+            "configured": 256,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_concurrent_requests_across_clients",
+            "configured": 8,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_rpcs_across_shard_requests",
+            "configured": 8,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_retries_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_redirects_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_router_candidates",
+            "configured": 1000000,
+            "observed": 256,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_query_bytes",
+            "configured": 16384,
+            "observed": 64,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_partitions_per_request",
+            "configured": 32,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_merge_entries",
+            "configured": 65536,
+            "observed": 160,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_request_bytes",
+            "configured": 4194304,
+            "observed": 2456,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_candidate_bytes",
+            "configured": 134217728,
+            "observed": 13882944,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_response_bytes",
+            "configured": 67108864,
+            "observed": 7232,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_wall_clock",
+            "configured": 30000000000,
+            "observed": 20538726214,
+            "unit": "nanoseconds",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_dimensions",
+            "configured": 4096,
+            "observed": 16,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_query_bytes",
+            "configured": 16384,
+            "observed": 64,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_partitions",
+            "configured": 32,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_request_bytes",
+            "configured": 65536,
+            "observed": 614,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_candidate_bytes",
+            "configured": 134217728,
+            "observed": 3603776,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_response_bytes",
+            "configured": 67108864,
+            "observed": 1808,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          }
+        ]
+      },
+      "timed_boundary": "wall-clock query cells after topology, exhaustive endpoint preflight, and generation warmup; includes router, coordinator, TCP M5 serialization, Raft read-index/apply, persistent HNSW search, response merge, and caller scheduling; excludes topology construction, exact truth, preflight, warmup, post-measurement attribution, artifact encoding, and shutdown",
+      "limitations": [
+        "loopback TCP with real serialized M5 messages and real in-memory HashiCorp Raft consensus; not a multi-host deployment",
+        "the checked-in 10k path materializes disjoint round-robin packs; -m8-existing-db reuses the retained graph-built M3 packs read-only",
+        "multi-host qualification and external-system comparisons are explicitly outside this local gate"
+      ]
+    },
+    {
+      "schema_version": 2,
+      "result_kind": "m8_production_multi_group_evidence_v2",
+      "status": "experimental_gate_failures",
+      "mode": "production_multi_group",
+      "production_evidence": true,
+      "generated_at": "2026-07-29T06:05:57.992763521Z",
+      "exact_command": [
+        "treedb_vector_partition_bench",
+        "-m8-existing-db",
+        "/mnt/fast4tb/tmp/issue4001_exactinvariants_overlap_db_72Xw7b",
+        "-overlap",
+        "0.2",
+        "-format",
+        "json",
+        "-profiles",
+        "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/graph-overlap-020-v1",
+        "-m8-matrix-out",
+        "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_out_QZBwWq",
+        "-m8-matrix-profiles",
+        "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew",
+        "-dataset",
+        "/mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture",
+        "-out",
+        "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_out_QZBwWq",
+        "-mode",
+        "production_multi_group",
+        "-partitions",
+        "16",
+        "-top-k",
+        "10",
+        "-raft-groups",
+        "4",
+        "-raft-nodes-per-group",
+        "3",
+        "-probes",
+        "16",
+        "-ef-search",
+        "4096",
+        "-concurrency",
+        "1",
+        "-warmup",
+        "0",
+        "-router-candidates",
+        "1024",
+        "-m8-max-rss-bytes",
+        "4294967296",
+        "-m8-max-persistent-asset-bytes",
+        "536870912"
+      ],
+      "base_sha": "7a2ec9d690c1a65dc3d768a3114805bec7e8f95c",
+      "head_sha": "042a9f054ca331a807818a3e683525b430ae4755",
+      "dirty": false,
+      "go_version": "go1.26.0",
+      "goos": "linux",
+      "goarch": "amd64",
+      "logical_cpus": 12,
+      "host": {
+        "cpu_model": "11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz",
+        "memory_bytes": 33512759296,
+        "numa_nodes": "0",
+        "kernel": "Linux 6.8.0-124-generic x86_64 GNU/Linux",
+        "artifact_mount": "/mnt/fast4tb /dev/nvme0n1p1 ext4   rw,noatime",
+        "dataset_mount": "/mnt/fast4tb /dev/nvme0n1p1 ext4   rw,noatime",
+        "persistent_asset_mount": "/mnt/fast4tb /dev/nvme0n1p1 ext4   rw,noatime"
+      },
+      "dataset": {
+        "schema_version": 1,
+        "fixture": "deterministic_1000000",
+        "generator": "treedb_vector_partition_fixture_v2",
+        "arithmetic": "ieee754_binary64_explicit_fma_v1",
+        "vectors": 1000000,
+        "queries": 32,
+        "dimensions": 16,
+        "metric": "cosine",
+        "seed": 1,
+        "checksum": "71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f"
+      },
+      "variant": {
+        "schema_version": 3,
+        "result_kind": "m3_persistent_variant_descriptor_v3",
+        "variant_id": "graph-overlap-020-v1",
+        "assignment_basis": "graph",
+        "overlap_ratio": 0.2,
+        "overlap_policy": "m3_bounded_overlap_v1:capacity=75000,budget=200000,realized=200000,unspent=0,build_identity=760c05e3e2d5e6b69750180d2042df6e2cb14f8355e15d2f8f21a6faaea5337d",
+        "fixture_checksum": "71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f",
+        "artifact_sha256": "3c7a5665803b2f8f32f0187376b31faa74b7b712d8b7d94b28aea7114db6f556",
+        "graph_artifact_sha256": "3c7a5665803b2f8f32f0187376b31faa74b7b712d8b7d94b28aea7114db6f556",
+        "artifact_backend": "treedb_reference_greedy_v1",
+        "source": {
+          "source_id": "m0_fixture:71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f",
+          "checksum": "149f812b473d2007653cee6890ca112dd9719e77dcd7ec0c399b2d32e81e761c",
+          "vectors": 1000000,
+          "dimensions": 16,
+          "metric": "cosine"
+        },
+        "build_identity_digest": "760c05e3e2d5e6b69750180d2042df6e2cb14f8355e15d2f8f21a6faaea5337d",
+        "database_directory": "/mnt/fast4tb/tmp/issue4001_exactinvariants_overlap_db_72Xw7b",
+        "manifest_integrity_digest": "f975d3d5d7e37cfcf1797f9e8d1a1b1326a95c8cf465849a4d1cfe05d9d0481a",
+        "ready_set_digest": "0bd012d36551d972bcf770e7c94dd5f9e89e4fd680570c51928546963ac0034d",
+        "router_asset_checksum": "0c30c67934f40564f7556ce8944ba74aa0acdef062ba28ed4f617c3f08b526be",
+        "router_model_digest": "5c5492555c8ca7c5ff1b92e1bf07542130d12c5663ca6eb93ac6bb2b4b2074c4",
+        "source_generation": 123,
+        "source_checksum": 348520691405712784,
+        "source_schema_hash": 5042445602574199399,
+        "source_rows": 1000000,
+        "partition_generation": 1,
+        "router_generation": 1,
+        "partitions": 16,
+        "index_definition_digest": "c51c99cdf93b98f5e0d22f7a4464c14c3f51f2563e33d3bd300f3fccab5955fc",
+        "partition_hnsw_m": 16,
+        "capacity": 75000,
+        "overlap_requested": 200000,
+        "overlap_realized": 200000,
+        "overlap_rejected": 0,
+        "partition_loads": [
+          75000,
+          75000,
+          75000,
+          75000,
+          75000,
+          75000,
+          75000,
+          75000,
+          75000,
+          75000,
+          75000,
+          75000,
+          75000,
+          75000,
+          75000,
+          75000
+        ],
+        "overlap_memberships": 200000,
+        "persistent_asset_bytes": 339429544
+      },
+      "config": {
+        "raft_groups": 4,
+        "raft_nodes_per_group": 3,
+        "partitions": 16,
+        "probes": [
+          16
+        ],
+        "overlap": [
+          0.2
+        ],
+        "top_k": 10,
+        "recall_target": 0.9,
+        "concurrency": [
+          1
+        ],
+        "warmup_requests": 0,
+        "ef_search": [
+          4096
+        ],
+        "approximate_router_candidate_budget": 1024,
+        "seed": 1
+      },
+      "build_nanos": 20461087784,
+      "topology": {
+        "network": "tcp_loopback_serialized_m5_v1",
+        "groups": [
+          {
+            "group_id": "m8-data-group-00",
+            "leader_id": "node-a",
+            "endpoint": "127.0.0.1:45203",
+            "node_ids": [
+              "node-a",
+              "node-b",
+              "node-c"
+            ],
+            "commit_index": 3,
+            "read_index": 3,
+            "applied_index": 3,
+            "read_evidence_kind": "production",
+            "proves_production_consensus": true,
+            "endpoint_hits": 34
+          },
+          {
+            "group_id": "m8-data-group-01",
+            "leader_id": "node-b",
+            "endpoint": "127.0.0.1:33067",
+            "node_ids": [
+              "node-a",
+              "node-b",
+              "node-c"
+            ],
+            "commit_index": 3,
+            "read_index": 3,
+            "applied_index": 3,
+            "read_evidence_kind": "production",
+            "proves_production_consensus": true,
+            "endpoint_hits": 34
+          },
+          {
+            "group_id": "m8-data-group-02",
+            "leader_id": "node-c",
+            "endpoint": "127.0.0.1:33457",
+            "node_ids": [
+              "node-a",
+              "node-b",
+              "node-c"
+            ],
+            "commit_index": 3,
+            "read_index": 3,
+            "applied_index": 3,
+            "read_evidence_kind": "production",
+            "proves_production_consensus": true,
+            "endpoint_hits": 34
+          },
+          {
+            "group_id": "m8-data-group-03",
+            "leader_id": "node-a",
+            "endpoint": "127.0.0.1:40711",
+            "node_ids": [
+              "node-a",
+              "node-b",
+              "node-c"
+            ],
+            "commit_index": 3,
+            "read_index": 3,
+            "applied_index": 3,
+            "read_evidence_kind": "production",
+            "proves_production_consensus": true,
+            "endpoint_hits": 34
+          }
+        ],
+        "lifecycle_state": "active",
+        "ready_set_digest": "a01ffb996fc869cba3aaa3b3e130ce916336de69465f5f3170fc3c18c8f42467",
+        "meta_group": "catalog-meta",
+        "meta_nodes": [
+          "m8-meta-1-a",
+          "m8-meta-1-b",
+          "m8-meta-1-c"
+        ],
+        "meta_leader": "m8-meta-1-b",
+        "max_concurrent_shard_requests": 4
+      },
+      "rows": [
+        {
+          "variant_id": "graph-overlap-020-v1",
+          "status": "pass",
+          "overlap": 0.2,
+          "probes": 16,
+          "ef_search": 4096,
+          "concurrency": 1,
+          "router_mode": "exact",
+          "router_candidate_budget": 256,
+          "samples": 32,
+          "recall_at_k": 1,
+          "qps": 9.16534865706917,
+          "p50_nanos": 107118108,
+          "p95_nanos": 135005807,
+          "p99_nanos": 148502939,
+          "max_total_nanos": 148502939,
+          "request_bytes": 78592,
+          "response_bytes": 231424,
+          "candidate_bytes": 429067008,
+          "rpcs": 128,
+          "max_requests_per_query": 4,
+          "max_rpcs_per_query": 4,
+          "max_request_bytes_per_query": 2456,
+          "max_response_bytes_per_query": 7232,
+          "max_candidate_bytes_per_query": 14618624,
+          "max_merge_entries_per_query": 42,
+          "max_shard_partitions": 4,
+          "max_shard_request_bytes": 614,
+          "max_shard_response_bytes": 1808,
+          "max_shard_candidate_bytes": 3821056,
+          "exact_all_partition_parity_checked": true,
+          "exact_all_partition_parity_passed": true,
+          "no_partial_results": true,
+          "recall_attribution": {
+            "contract": "fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1",
+            "global_exact_recall_at_k": 1,
+            "exhaustive_partition_union_recall_at_k": 1,
+            "exhaustive_partition_union_id_parity": true,
+            "exhaustive_partition_union_score_parity": true,
+            "exact_representative_routing_recall_at_k": 1,
+            "approximate_representative_routing_recall_at_k": 1,
+            "partition_local_hnsw_recall_at_k": 1,
+            "partition_local_hnsw_searches": 512,
+            "partition_local_hnsw_candidates": 6704172,
+            "partition_local_hnsw_edges": 69131321,
+            "end_to_end_recall_at_k": 1,
+            "coordinator_merge_id_parity": true,
+            "coordinator_merge_score_parity": true,
+            "approximate_router_candidate_budget": 256,
+            "approximate_router_partition_coverage_complete": true,
+            "residual_loss_owners": [
+              "none_observed"
+            ]
+          }
+        }
+      ],
+      "partition_pack_diagnostics": [
+        {
+          "partition_id": 0,
+          "rows": 75000,
+          "reachable_rows": 75000,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            75000,
+            4648,
+            299,
+            18
+          ],
+          "edges_by_layer": [
+            2400000,
+            74368,
+            4784,
+            288
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 75000
+        },
+        {
+          "partition_id": 1,
+          "rows": 75000,
+          "reachable_rows": 75000,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            75000,
+            4651,
+            285,
+            11
+          ],
+          "edges_by_layer": [
+            2400000,
+            74416,
+            4560,
+            110
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 75000
+        },
+        {
+          "partition_id": 2,
+          "rows": 75000,
+          "reachable_rows": 75000,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            75000,
+            4697,
+            312,
+            12
+          ],
+          "edges_by_layer": [
+            2400000,
+            75152,
+            4992,
+            132
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 75000
+        },
+        {
+          "partition_id": 3,
+          "rows": 75000,
+          "reachable_rows": 75000,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            75000,
+            4669,
+            304,
+            19
+          ],
+          "edges_by_layer": [
+            2400000,
+            74704,
+            4864,
+            304
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 75000
+        },
+        {
+          "partition_id": 4,
+          "rows": 75000,
+          "reachable_rows": 75000,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            75000,
+            4682,
+            293,
+            17
+          ],
+          "edges_by_layer": [
+            2400000,
+            74912,
+            4688,
+            272
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 75000
+        },
+        {
+          "partition_id": 5,
+          "rows": 75000,
+          "reachable_rows": 75000,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            75000,
+            4698,
+            295,
+            18
+          ],
+          "edges_by_layer": [
+            2400000,
+            75168,
+            4720,
+            288
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 75000
+        },
+        {
+          "partition_id": 6,
+          "rows": 75000,
+          "reachable_rows": 75000,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            75000,
+            4547,
+            287,
+            19
+          ],
+          "edges_by_layer": [
+            2400000,
+            72752,
+            4592,
+            304
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 75000
+        },
+        {
+          "partition_id": 7,
+          "rows": 75000,
+          "reachable_rows": 75000,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            75000,
+            4627,
+            309,
+            23
+          ],
+          "edges_by_layer": [
+            2400000,
+            74032,
+            4944,
+            368
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 75000
+        },
+        {
+          "partition_id": 8,
+          "rows": 75000,
+          "reachable_rows": 75000,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            75000,
+            4605,
+            328,
+            19
+          ],
+          "edges_by_layer": [
+            2400000,
+            73680,
+            5248,
+            304
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 75000
+        },
+        {
+          "partition_id": 9,
+          "rows": 75000,
+          "reachable_rows": 75000,
+          "traversal_roots": 1,
+          "max_layer": 4,
+          "rows_by_layer": [
+            75000,
+            4735,
+            324,
+            14,
+            4
+          ],
+          "edges_by_layer": [
+            2400000,
+            75760,
+            5184,
+            182,
+            12
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 75000
+        },
+        {
+          "partition_id": 10,
+          "rows": 75000,
+          "reachable_rows": 75000,
+          "traversal_roots": 1,
+          "max_layer": 4,
+          "rows_by_layer": [
+            75000,
+            4678,
+            317,
+            14,
+            2
+          ],
+          "edges_by_layer": [
+            2400000,
+            74848,
+            5072,
+            182,
+            2
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 75000
+        },
+        {
+          "partition_id": 11,
+          "rows": 75000,
+          "reachable_rows": 75000,
+          "traversal_roots": 1,
+          "max_layer": 4,
+          "rows_by_layer": [
+            75000,
+            4624,
+            297,
+            17,
+            2
+          ],
+          "edges_by_layer": [
+            2400000,
+            73984,
+            4752,
+            272,
+            2
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 75000
+        },
+        {
+          "partition_id": 12,
+          "rows": 75000,
+          "reachable_rows": 75000,
+          "traversal_roots": 1,
+          "max_layer": 4,
+          "rows_by_layer": [
+            75000,
+            4625,
+            295,
+            16,
+            2
+          ],
+          "edges_by_layer": [
+            2400000,
+            74000,
+            4720,
+            240,
+            2
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 75000
+        },
+        {
+          "partition_id": 13,
+          "rows": 75000,
+          "reachable_rows": 75000,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            75000,
+            4609,
+            308,
+            14
+          ],
+          "edges_by_layer": [
+            2400000,
+            73744,
+            4928,
+            182
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 75000
+        },
+        {
+          "partition_id": 14,
+          "rows": 75000,
+          "reachable_rows": 75000,
+          "traversal_roots": 1,
+          "max_layer": 4,
+          "rows_by_layer": [
+            75000,
+            4672,
+            301,
+            17,
+            2
+          ],
+          "edges_by_layer": [
+            2400000,
+            74752,
+            4816,
+            272,
+            2
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 75000
+        },
+        {
+          "partition_id": 15,
+          "rows": 75000,
+          "reachable_rows": 75000,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            75000,
+            4652,
+            275,
+            15
+          ],
+          "edges_by_layer": [
+            2400000,
+            74432,
+            4400,
+            210
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 75000
+        }
+      ],
+      "failure": {
+        "class": "unavailable_group_endpoint",
+        "stopped_group": "m8-data-group-00",
+        "error": "nativewire: vector partition coordinator unavailable group=\"m8-data-group-00\": nativewire: vector partition shard search group_unavailable group=\"m8-data-group-00\": dial tcp 127.0.0.1:45203: connect: connection refused",
+        "returned_neighbors": 0,
+        "returned_groups": 0,
+        "passed": true,
+        "resource_boundary": {
+          "selected_partitions": 16,
+          "ef_search": 4096,
+          "wall_clock_nanos": 26019050,
+          "observed_maxima": {
+            "requests": 4,
+            "rpcs": 4,
+            "retries": 0,
+            "redirects": 0,
+            "request_bytes": 2344,
+            "candidate_bytes": 0,
+            "response_bytes": 0,
+            "merge_entries": 0,
+            "shard_partitions": 4,
+            "shard_request_bytes": 586,
+            "shard_candidate_bytes": 0,
+            "shard_response_bytes": 0
+          }
+        }
+      },
+      "gate_ledger": {
+        "exhaustive_correctness": "pass",
+        "failure_honesty": "pass",
+        "partition_pack_reachability": "pass",
+        "recall": "pass",
+        "probe_reduction": "fail",
+        "end_to_end_qps": "fail",
+        "tail_latency": "fail",
+        "balance": "pass",
+        "overlap_storage": "pass",
+        "resource_bounds": "pass",
+        "existing_behavior": "pending_full_required_suites"
+      },
+      "profiles": {
+        "directory": "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/graph-overlap-020-v1",
+        "captured": [
+          "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/graph-overlap-020-v1/allocs_baseline.pprof",
+          "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/graph-overlap-020-v1/cpu.pprof",
+          "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/graph-overlap-020-v1/trace.out",
+          "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/graph-overlap-020-v1/heap.pprof",
+          "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/graph-overlap-020-v1/allocs.pprof",
+          "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/graph-overlap-020-v1/block.pprof",
+          "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/graph-overlap-020-v1/mutex.pprof"
+        ],
+        "status": "captured_production_query_and_fault_boundary",
+        "scope": "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs.pprof is cumulative and must be compared with allocs_baseline.pprof"
+      },
+      "router_sessions": {
+        "before_warmup": [],
+        "after_warmup": [
+          {
+            "identity": {
+              "database": "default",
+              "catalog": "default",
+              "collection": "m3_partition_source",
+              "index_name": "embedding_graph",
+              "index_definition_digest": "c51c99cdf93b98f5e0d22f7a4464c14c3f51f2563e33d3bd300f3fccab5955fc",
+              "source_generation": 123,
+              "source_checksum": 348520691405712784,
+              "source_schema_hash": 5042445602574199399,
+              "source_row_count": 1000000,
+              "partition_generation": 1,
+              "ready_set_digest": "a01ffb996fc869cba3aaa3b3e130ce916336de69465f5f3170fc3c18c8f42467",
+              "router_model_digest": "5c5492555c8ca7c5ff1b92e1bf07542130d12c5663ca6eb93ac6bb2b4b2074c4"
+            },
+            "cold_opens": 1,
+            "manifest_open_attempts": 1,
+            "misses": 1,
+            "hits": 0,
+            "open_failures": 0,
+            "reader_pins": 1,
+            "reader_releases": 0,
+            "lease_pins": 1,
+            "lease_releases": 1,
+            "invalidations": 0,
+            "closes": 0
+          }
+        ],
+        "after_measured": [
+          {
+            "identity": {
+              "database": "default",
+              "catalog": "default",
+              "collection": "m3_partition_source",
+              "index_name": "embedding_graph",
+              "index_definition_digest": "c51c99cdf93b98f5e0d22f7a4464c14c3f51f2563e33d3bd300f3fccab5955fc",
+              "source_generation": 123,
+              "source_checksum": 348520691405712784,
+              "source_schema_hash": 5042445602574199399,
+              "source_row_count": 1000000,
+              "partition_generation": 1,
+              "ready_set_digest": "a01ffb996fc869cba3aaa3b3e130ce916336de69465f5f3170fc3c18c8f42467",
+              "router_model_digest": "5c5492555c8ca7c5ff1b92e1bf07542130d12c5663ca6eb93ac6bb2b4b2074c4"
+            },
+            "cold_opens": 1,
+            "manifest_open_attempts": 1,
+            "misses": 1,
+            "hits": 32,
+            "open_failures": 0,
+            "reader_pins": 1,
+            "reader_releases": 0,
+            "lease_pins": 33,
+            "lease_releases": 33,
+            "invalidations": 0,
+            "closes": 0
+          }
+        ]
+      },
+      "untimed_resource_boundary": {
+        "selected_partitions": 16,
+        "ef_search": 4096,
+        "wall_clock_nanos": 24755838353,
+        "observed_maxima": {
+          "requests": 4,
+          "rpcs": 4,
+          "retries": 0,
+          "redirects": 0,
+          "request_bytes": 2352,
+          "candidate_bytes": 12895360,
+          "response_bytes": 7232,
+          "merge_entries": 12,
+          "shard_partitions": 4,
+          "shard_request_bytes": 588,
+          "shard_candidate_bytes": 3381440,
+          "shard_response_bytes": 1808
+        }
+      },
+      "resources": {
+        "persistent_asset_bytes": 339429544,
+        "persistent_asset_cap_bytes": 536870912,
+        "partition_loads": [
+          75000,
+          75000,
+          75000,
+          75000,
+          75000,
+          75000,
+          75000,
+          75000,
+          75000,
+          75000,
+          75000,
+          75000,
+          75000,
+          75000,
+          75000,
+          75000
+        ],
+        "peak_rss_bytes": 1981431808,
+        "peak_rss_cap_bytes": 4294967296,
+        "peak_rss_measured": true,
+        "peak_rss_scope": "process lifetime through preflight, warmup, measured query, and endpoint-loss fault boundaries; includes retained top-k coordinator results; excludes post-measurement attribution",
+        "overlap_memberships": 200000,
+        "max_partition_load": 75000,
+        "balance_hard_cap": 75000,
+        "mmap_status": "not_captured_by_m8_runner; retained M3/M5 artifacts own mapped-pack evidence",
+        "limit_comparisons": [
+          {
+            "name": "persistent_asset_bytes",
+            "configured": 536870912,
+            "observed": 339429544,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "process_peak_rss",
+            "configured": 4294967296,
+            "observed": 1981431808,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_selected_partitions",
+            "configured": 256,
+            "observed": 16,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_groups",
+            "configured": 64,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_requests",
+            "configured": 256,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_concurrent_requests_across_clients",
+            "configured": 8,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_rpcs_across_shard_requests",
+            "configured": 8,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_retries_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_redirects_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_router_candidates",
+            "configured": 1000000,
+            "observed": 256,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_query_bytes",
+            "configured": 16384,
+            "observed": 64,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_partitions_per_request",
+            "configured": 32,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_merge_entries",
+            "configured": 65536,
+            "observed": 42,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_request_bytes",
+            "configured": 4194304,
+            "observed": 2456,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_candidate_bytes",
+            "configured": 134217728,
+            "observed": 14618624,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_response_bytes",
+            "configured": 67108864,
+            "observed": 7232,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_wall_clock",
+            "configured": 30000000000,
+            "observed": 24755838353,
+            "unit": "nanoseconds",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_dimensions",
+            "configured": 4096,
+            "observed": 16,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_query_bytes",
+            "configured": 16384,
+            "observed": 64,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_partitions",
+            "configured": 32,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_request_bytes",
+            "configured": 65536,
+            "observed": 614,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_candidate_bytes",
+            "configured": 134217728,
+            "observed": 3821056,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_response_bytes",
+            "configured": 67108864,
+            "observed": 1808,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          }
+        ]
+      },
+      "timed_boundary": "wall-clock query cells after topology, exhaustive endpoint preflight, and generation warmup; includes router, coordinator, TCP M5 serialization, Raft read-index/apply, persistent HNSW search, response merge, and caller scheduling; excludes topology construction, exact truth, preflight, warmup, post-measurement attribution, artifact encoding, and shutdown",
+      "limitations": [
+        "loopback TCP with real serialized M5 messages and real in-memory HashiCorp Raft consensus; not a multi-host deployment",
+        "the checked-in 10k path materializes disjoint round-robin packs; -m8-existing-db reuses the retained graph-built M3 packs read-only",
+        "multi-host qualification and external-system comparisons are explicitly outside this local gate"
+      ]
+    },
+    {
+      "schema_version": 2,
+      "result_kind": "m8_production_multi_group_evidence_v2",
+      "status": "experimental_gate_failures",
+      "mode": "production_multi_group",
+      "production_evidence": true,
+      "generated_at": "2026-07-29T06:08:30.968654485Z",
+      "exact_command": [
+        "treedb_vector_partition_bench",
+        "-m8-existing-db",
+        "/mnt/fast4tb/tmp/issue4001_fh_stable_db_dBMCDV",
+        "-overlap",
+        "0",
+        "-format",
+        "json",
+        "-profiles",
+        "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/stable-id-hash-disjoint-v1",
+        "-m8-matrix-out",
+        "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_out_QZBwWq",
+        "-m8-matrix-profiles",
+        "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew",
+        "-dataset",
+        "/mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture",
+        "-out",
+        "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_out_QZBwWq",
+        "-mode",
+        "production_multi_group",
+        "-partitions",
+        "16",
+        "-top-k",
+        "10",
+        "-raft-groups",
+        "4",
+        "-raft-nodes-per-group",
+        "3",
+        "-probes",
+        "16",
+        "-ef-search",
+        "4096",
+        "-concurrency",
+        "1",
+        "-warmup",
+        "0",
+        "-router-candidates",
+        "1024",
+        "-m8-max-rss-bytes",
+        "4294967296",
+        "-m8-max-persistent-asset-bytes",
+        "536870912"
+      ],
+      "base_sha": "7a2ec9d690c1a65dc3d768a3114805bec7e8f95c",
+      "head_sha": "042a9f054ca331a807818a3e683525b430ae4755",
+      "dirty": false,
+      "go_version": "go1.26.0",
+      "goos": "linux",
+      "goarch": "amd64",
+      "logical_cpus": 12,
+      "host": {
+        "cpu_model": "11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz",
+        "memory_bytes": 33512759296,
+        "numa_nodes": "0",
+        "kernel": "Linux 6.8.0-124-generic x86_64 GNU/Linux",
+        "artifact_mount": "/mnt/fast4tb /dev/nvme0n1p1 ext4   rw,noatime",
+        "dataset_mount": "/mnt/fast4tb /dev/nvme0n1p1 ext4   rw,noatime",
+        "persistent_asset_mount": "/mnt/fast4tb /dev/nvme0n1p1 ext4   rw,noatime"
+      },
+      "dataset": {
+        "schema_version": 1,
+        "fixture": "deterministic_1000000",
+        "generator": "treedb_vector_partition_fixture_v2",
+        "arithmetic": "ieee754_binary64_explicit_fma_v1",
+        "vectors": 1000000,
+        "queries": 32,
+        "dimensions": 16,
+        "metric": "cosine",
+        "seed": 1,
+        "checksum": "71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f"
+      },
+      "variant": {
+        "schema_version": 3,
+        "result_kind": "m3_persistent_variant_descriptor_v3",
+        "variant_id": "stable-id-hash-disjoint-v1",
+        "assignment_basis": "stable_id_hash",
+        "overlap_ratio": 0,
+        "overlap_policy": "m3_bounded_overlap_v1:capacity=65625,budget=0,realized=0,unspent=0,build_identity=9a6048cadb3e94b9cf149965a2f78699861a815be0ad64df8ae3f0fb2a5c9869",
+        "fixture_checksum": "71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f",
+        "artifact_sha256": "7a8ec9915de7acc6035024f3fc363c76678e8b27c529a2cba8a9861e764a49ad",
+        "graph_artifact_sha256": "3c7a5665803b2f8f32f0187376b31faa74b7b712d8b7d94b28aea7114db6f556",
+        "artifact_backend": "stable_id_hash_baseline_v1",
+        "source": {
+          "source_id": "m0_fixture:71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f",
+          "checksum": "149f812b473d2007653cee6890ca112dd9719e77dcd7ec0c399b2d32e81e761c",
+          "vectors": 1000000,
+          "dimensions": 16,
+          "metric": "cosine"
+        },
+        "build_identity_digest": "9a6048cadb3e94b9cf149965a2f78699861a815be0ad64df8ae3f0fb2a5c9869",
+        "database_directory": "/mnt/fast4tb/tmp/issue4001_fh_stable_db_dBMCDV",
+        "manifest_integrity_digest": "d79d037ceb53c8d02623703c901a62064075785ff15550a636c53310aad232cb",
+        "ready_set_digest": "b3673c47550f9fc7040bb06b310755e17607ddc3644ae140723267edeed47c6a",
+        "router_asset_checksum": "6fa9e30075e9274a9ded93afd64ccbbb67cba2ddd6741b922162f0a937ef1d39",
+        "router_model_digest": "e96bc5f62cefcd88a0e8674255c0a941bed4df9920fcb7b6e537249c67e802fa",
+        "source_generation": 123,
+        "source_checksum": 348520691405712784,
+        "source_schema_hash": 5042445602574199399,
+        "source_rows": 1000000,
+        "partition_generation": 1,
+        "router_generation": 1,
+        "partitions": 16,
+        "index_definition_digest": "c51c99cdf93b98f5e0d22f7a4464c14c3f51f2563e33d3bd300f3fccab5955fc",
+        "partition_hnsw_m": 16,
+        "capacity": 65625,
+        "overlap_requested": 0,
+        "overlap_realized": 0,
+        "overlap_rejected": 0,
+        "partition_loads": [
+          62434,
+          62422,
+          62784,
+          62339,
+          62167,
+          62486,
+          62117,
+          62646,
+          62465,
+          62431,
+          62886,
+          62447,
+          62690,
+          62237,
+          62770,
+          62679
+        ],
+        "overlap_memberships": 0,
+        "persistent_asset_bytes": 282385488
+      },
+      "config": {
+        "raft_groups": 4,
+        "raft_nodes_per_group": 3,
+        "partitions": 16,
+        "probes": [
+          16
+        ],
+        "overlap": [
+          0
+        ],
+        "top_k": 10,
+        "recall_target": 0.9,
+        "concurrency": [
+          1
+        ],
+        "warmup_requests": 0,
+        "ef_search": [
+          4096
+        ],
+        "approximate_router_candidate_budget": 1024,
+        "seed": 1
+      },
+      "build_nanos": 18283539939,
+      "topology": {
+        "network": "tcp_loopback_serialized_m5_v1",
+        "groups": [
+          {
+            "group_id": "m8-data-group-00",
+            "leader_id": "node-a",
+            "endpoint": "127.0.0.1:43345",
+            "node_ids": [
+              "node-a",
+              "node-b",
+              "node-c"
+            ],
+            "commit_index": 3,
+            "read_index": 3,
+            "applied_index": 3,
+            "read_evidence_kind": "production",
+            "proves_production_consensus": true,
+            "endpoint_hits": 34
+          },
+          {
+            "group_id": "m8-data-group-01",
+            "leader_id": "node-b",
+            "endpoint": "127.0.0.1:39187",
+            "node_ids": [
+              "node-a",
+              "node-b",
+              "node-c"
+            ],
+            "commit_index": 3,
+            "read_index": 3,
+            "applied_index": 3,
+            "read_evidence_kind": "production",
+            "proves_production_consensus": true,
+            "endpoint_hits": 34
+          },
+          {
+            "group_id": "m8-data-group-02",
+            "leader_id": "node-c",
+            "endpoint": "127.0.0.1:41837",
+            "node_ids": [
+              "node-a",
+              "node-b",
+              "node-c"
+            ],
+            "commit_index": 3,
+            "read_index": 3,
+            "applied_index": 3,
+            "read_evidence_kind": "production",
+            "proves_production_consensus": true,
+            "endpoint_hits": 34
+          },
+          {
+            "group_id": "m8-data-group-03",
+            "leader_id": "node-a",
+            "endpoint": "127.0.0.1:39275",
+            "node_ids": [
+              "node-a",
+              "node-b",
+              "node-c"
+            ],
+            "commit_index": 3,
+            "read_index": 3,
+            "applied_index": 3,
+            "read_evidence_kind": "production",
+            "proves_production_consensus": true,
+            "endpoint_hits": 34
+          }
+        ],
+        "lifecycle_state": "active",
+        "ready_set_digest": "1a3b4902cc9999bc8f1ce112b6197d9e3f895454183f41e6f8e47d41b415d045",
+        "meta_group": "catalog-meta",
+        "meta_nodes": [
+          "m8-meta-1-a",
+          "m8-meta-1-b",
+          "m8-meta-1-c"
+        ],
+        "meta_leader": "m8-meta-1-a",
+        "max_concurrent_shard_requests": 4
+      },
+      "rows": [
+        {
+          "variant_id": "stable-id-hash-disjoint-v1",
+          "status": "fail",
+          "overlap": 0,
+          "probes": 16,
+          "ef_search": 4096,
+          "concurrency": 1,
+          "router_mode": "exact",
+          "router_candidate_budget": 256,
+          "samples": 32,
+          "recall_at_k": 0.9874999999999999,
+          "qps": 10.863549028957852,
+          "p50_nanos": 90484317,
+          "p95_nanos": 110489700,
+          "p99_nanos": 120380914,
+          "max_total_nanos": 120380914,
+          "request_bytes": 78592,
+          "response_bytes": 231424,
+          "candidate_bytes": 421946368,
+          "rpcs": 128,
+          "max_requests_per_query": 4,
+          "max_rpcs_per_query": 4,
+          "max_request_bytes_per_query": 2456,
+          "max_response_bytes_per_query": 7232,
+          "max_candidate_bytes_per_query": 13754688,
+          "max_merge_entries_per_query": 160,
+          "max_shard_partitions": 4,
+          "max_shard_request_bytes": 614,
+          "max_shard_response_bytes": 1808,
+          "max_shard_candidate_bytes": 3533248,
+          "exact_all_partition_parity_checked": true,
+          "exact_all_partition_parity_passed": false,
+          "no_partial_results": true,
+          "recall_attribution": {
+            "contract": "fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1",
+            "global_exact_recall_at_k": 1,
+            "exhaustive_partition_union_recall_at_k": 1,
+            "exhaustive_partition_union_id_parity": true,
+            "exhaustive_partition_union_score_parity": true,
+            "exact_representative_routing_recall_at_k": 1,
+            "approximate_representative_routing_recall_at_k": 1,
+            "partition_local_hnsw_recall_at_k": 0.9874999999999999,
+            "partition_local_hnsw_searches": 512,
+            "partition_local_hnsw_candidates": 6592912,
+            "partition_local_hnsw_edges": 69228252,
+            "end_to_end_recall_at_k": 0.9874999999999999,
+            "coordinator_merge_id_parity": true,
+            "coordinator_merge_score_parity": true,
+            "approximate_router_candidate_budget": 256,
+            "approximate_router_partition_coverage_complete": true,
+            "residual_loss_owners": [
+              "partition_local_hnsw"
+            ]
+          }
+        }
+      ],
+      "partition_pack_diagnostics": [
+        {
+          "partition_id": 0,
+          "rows": 62434,
+          "reachable_rows": 62434,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            62434,
+            3783,
+            241,
+            19
+          ],
+          "edges_by_layer": [
+            1997888,
+            60528,
+            3856,
+            304
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62434
+        },
+        {
+          "partition_id": 1,
+          "rows": 62422,
+          "reachable_rows": 62422,
+          "traversal_roots": 1,
+          "max_layer": 4,
+          "rows_by_layer": [
+            62422,
+            3879,
+            258,
+            12,
+            2
+          ],
+          "edges_by_layer": [
+            1997504,
+            62064,
+            4128,
+            132,
+            2
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62422
+        },
+        {
+          "partition_id": 2,
+          "rows": 62784,
+          "reachable_rows": 62784,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            62784,
+            3958,
+            260,
+            16
+          ],
+          "edges_by_layer": [
+            2009088,
+            63328,
+            4160,
+            240
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62784
+        },
+        {
+          "partition_id": 3,
+          "rows": 62339,
+          "reachable_rows": 62339,
+          "traversal_roots": 1,
+          "max_layer": 4,
+          "rows_by_layer": [
+            62339,
+            3847,
+            236,
+            22,
+            3
+          ],
+          "edges_by_layer": [
+            1994848,
+            61552,
+            3776,
+            352,
+            6
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62339
+        },
+        {
+          "partition_id": 4,
+          "rows": 62167,
+          "reachable_rows": 62167,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            62167,
+            3853,
+            239,
+            15
+          ],
+          "edges_by_layer": [
+            1989344,
+            61648,
+            3824,
+            210
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62167
+        },
+        {
+          "partition_id": 5,
+          "rows": 62486,
+          "reachable_rows": 62486,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            62486,
+            3931,
+            250,
+            16
+          ],
+          "edges_by_layer": [
+            1999552,
+            62896,
+            4000,
+            240
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62486
+        },
+        {
+          "partition_id": 6,
+          "rows": 62117,
+          "reachable_rows": 62117,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            62117,
+            3917,
+            263,
+            11
+          ],
+          "edges_by_layer": [
+            1987744,
+            62672,
+            4208,
+            110
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62117
+        },
+        {
+          "partition_id": 7,
+          "rows": 62646,
+          "reachable_rows": 62646,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            62646,
+            3947,
+            267,
+            16
+          ],
+          "edges_by_layer": [
+            2004672,
+            63152,
+            4272,
+            240
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62646
+        },
+        {
+          "partition_id": 8,
+          "rows": 62465,
+          "reachable_rows": 62465,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            62465,
+            3853,
+            249,
+            11
+          ],
+          "edges_by_layer": [
+            1998880,
+            61648,
+            3984,
+            110
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62465
+        },
+        {
+          "partition_id": 9,
+          "rows": 62431,
+          "reachable_rows": 62431,
+          "traversal_roots": 1,
+          "max_layer": 4,
+          "rows_by_layer": [
+            62431,
+            3877,
+            234,
+            14,
+            2
+          ],
+          "edges_by_layer": [
+            1997792,
+            62032,
+            3744,
+            182,
+            2
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62431
+        },
+        {
+          "partition_id": 10,
+          "rows": 62886,
+          "reachable_rows": 62886,
+          "traversal_roots": 1,
+          "max_layer": 4,
+          "rows_by_layer": [
+            62886,
+            3902,
+            228,
+            18,
+            2
+          ],
+          "edges_by_layer": [
+            2012352,
+            62432,
+            3648,
+            288,
+            2
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62886
+        },
+        {
+          "partition_id": 11,
+          "rows": 62447,
+          "reachable_rows": 62447,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            62447,
+            3870,
+            247,
+            15
+          ],
+          "edges_by_layer": [
+            1998304,
+            61920,
+            3952,
+            210
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62447
+        },
+        {
+          "partition_id": 12,
+          "rows": 62690,
+          "reachable_rows": 62690,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            62690,
+            3882,
+            246,
+            18
+          ],
+          "edges_by_layer": [
+            2006080,
+            62112,
+            3936,
+            288
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62690
+        },
+        {
+          "partition_id": 13,
+          "rows": 62237,
+          "reachable_rows": 62237,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            62237,
+            3898,
+            235,
+            11
+          ],
+          "edges_by_layer": [
+            1991584,
+            62368,
+            3760,
+            110
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62237
+        },
+        {
+          "partition_id": 14,
+          "rows": 62770,
+          "reachable_rows": 62770,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            62770,
+            3929,
+            268,
+            16
+          ],
+          "edges_by_layer": [
+            2008640,
+            62864,
+            4288,
+            240
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62770
+        },
+        {
+          "partition_id": 15,
+          "rows": 62679,
+          "reachable_rows": 62679,
+          "traversal_roots": 1,
+          "max_layer": 3,
+          "rows_by_layer": [
+            62679,
+            3808,
+            227,
+            11
+          ],
+          "edges_by_layer": [
+            2005728,
+            60928,
+            3632,
+            110
+          ],
+          "layer0_degree_limit": 32,
+          "layer0_saturated_rows": 62679
+        }
+      ],
+      "failure": {
+        "class": "unavailable_group_endpoint",
+        "stopped_group": "m8-data-group-00",
+        "error": "nativewire: vector partition coordinator unavailable group=\"m8-data-group-00\": nativewire: vector partition shard search group_unavailable group=\"m8-data-group-00\": dial tcp 127.0.0.1:43345: connect: connection refused",
+        "returned_neighbors": 0,
+        "returned_groups": 0,
+        "passed": true,
+        "resource_boundary": {
+          "selected_partitions": 16,
+          "ef_search": 4096,
+          "wall_clock_nanos": 9201350,
+          "observed_maxima": {
+            "requests": 4,
+            "rpcs": 4,
+            "retries": 0,
+            "redirects": 0,
+            "request_bytes": 2344,
+            "candidate_bytes": 0,
+            "response_bytes": 0,
+            "merge_entries": 0,
+            "shard_partitions": 4,
+            "shard_request_bytes": 586,
+            "shard_candidate_bytes": 0,
+            "shard_response_bytes": 0
+          }
+        }
+      },
+      "gate_ledger": {
+        "exhaustive_correctness": "fail",
+        "failure_honesty": "pass",
+        "partition_pack_reachability": "pass",
+        "recall": "pass",
+        "probe_reduction": "fail",
+        "end_to_end_qps": "fail",
+        "tail_latency": "fail",
+        "balance": "pass",
+        "overlap_storage": "pass",
+        "resource_bounds": "pass",
+        "existing_behavior": "pending_full_required_suites"
+      },
+      "profiles": {
+        "directory": "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/stable-id-hash-disjoint-v1",
+        "captured": [
+          "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/stable-id-hash-disjoint-v1/allocs_baseline.pprof",
+          "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/stable-id-hash-disjoint-v1/cpu.pprof",
+          "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/stable-id-hash-disjoint-v1/trace.out",
+          "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/stable-id-hash-disjoint-v1/heap.pprof",
+          "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/stable-id-hash-disjoint-v1/allocs.pprof",
+          "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/stable-id-hash-disjoint-v1/block.pprof",
+          "/mnt/fast4tb/tmp/issue4001_exactinvariants_matrix_profiles_G3Feew/stable-id-hash-disjoint-v1/mutex.pprof"
+        ],
+        "status": "captured_production_query_and_fault_boundary",
+        "scope": "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs.pprof is cumulative and must be compared with allocs_baseline.pprof"
+      },
+      "router_sessions": {
+        "before_warmup": [],
+        "after_warmup": [
+          {
+            "identity": {
+              "database": "default",
+              "catalog": "default",
+              "collection": "m3_partition_source",
+              "index_name": "embedding_graph",
+              "index_definition_digest": "c51c99cdf93b98f5e0d22f7a4464c14c3f51f2563e33d3bd300f3fccab5955fc",
+              "source_generation": 123,
+              "source_checksum": 348520691405712784,
+              "source_schema_hash": 5042445602574199399,
+              "source_row_count": 1000000,
+              "partition_generation": 1,
+              "ready_set_digest": "1a3b4902cc9999bc8f1ce112b6197d9e3f895454183f41e6f8e47d41b415d045",
+              "router_model_digest": "e96bc5f62cefcd88a0e8674255c0a941bed4df9920fcb7b6e537249c67e802fa"
+            },
+            "cold_opens": 1,
+            "manifest_open_attempts": 1,
+            "misses": 1,
+            "hits": 0,
+            "open_failures": 0,
+            "reader_pins": 1,
+            "reader_releases": 0,
+            "lease_pins": 1,
+            "lease_releases": 1,
+            "invalidations": 0,
+            "closes": 0
+          }
+        ],
+        "after_measured": [
+          {
+            "identity": {
+              "database": "default",
+              "catalog": "default",
+              "collection": "m3_partition_source",
+              "index_name": "embedding_graph",
+              "index_definition_digest": "c51c99cdf93b98f5e0d22f7a4464c14c3f51f2563e33d3bd300f3fccab5955fc",
+              "source_generation": 123,
+              "source_checksum": 348520691405712784,
+              "source_schema_hash": 5042445602574199399,
+              "source_row_count": 1000000,
+              "partition_generation": 1,
+              "ready_set_digest": "1a3b4902cc9999bc8f1ce112b6197d9e3f895454183f41e6f8e47d41b415d045",
+              "router_model_digest": "e96bc5f62cefcd88a0e8674255c0a941bed4df9920fcb7b6e537249c67e802fa"
+            },
+            "cold_opens": 1,
+            "manifest_open_attempts": 1,
+            "misses": 1,
+            "hits": 32,
+            "open_failures": 0,
+            "reader_pins": 1,
+            "reader_releases": 0,
+            "lease_pins": 33,
+            "lease_releases": 33,
+            "invalidations": 0,
+            "closes": 0
+          }
+        ]
+      },
+      "untimed_resource_boundary": {
+        "selected_partitions": 16,
+        "ef_search": 4096,
+        "wall_clock_nanos": 20807130800,
+        "observed_maxima": {
+          "requests": 4,
+          "rpcs": 4,
+          "retries": 0,
+          "redirects": 0,
+          "request_bytes": 2352,
+          "candidate_bytes": 12982784,
+          "response_bytes": 7232,
+          "merge_entries": 160,
+          "shard_partitions": 4,
+          "shard_request_bytes": 588,
+          "shard_candidate_bytes": 3290240,
+          "shard_response_bytes": 1808
+        }
+      },
+      "resources": {
+        "persistent_asset_bytes": 282385488,
+        "persistent_asset_cap_bytes": 536870912,
+        "partition_loads": [
+          62434,
+          62422,
+          62784,
+          62339,
+          62167,
+          62486,
+          62117,
+          62646,
+          62465,
+          62431,
+          62886,
+          62447,
+          62690,
+          62237,
+          62770,
+          62679
+        ],
+        "peak_rss_bytes": 1856385024,
+        "peak_rss_cap_bytes": 4294967296,
+        "peak_rss_measured": true,
+        "peak_rss_scope": "process lifetime through preflight, warmup, measured query, and endpoint-loss fault boundaries; includes retained top-k coordinator results; excludes post-measurement attribution",
+        "overlap_memberships": 0,
+        "max_partition_load": 62886,
+        "balance_hard_cap": 65625,
+        "mmap_status": "not_captured_by_m8_runner; retained M3/M5 artifacts own mapped-pack evidence",
+        "limit_comparisons": [
+          {
+            "name": "persistent_asset_bytes",
+            "configured": 536870912,
+            "observed": 282385488,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "process_peak_rss",
+            "configured": 4294967296,
+            "observed": 1856385024,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_selected_partitions",
+            "configured": 256,
+            "observed": 16,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_groups",
+            "configured": 64,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_requests",
+            "configured": 256,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_concurrent_requests_across_clients",
+            "configured": 8,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_rpcs_across_shard_requests",
+            "configured": 8,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_retries_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_redirects_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_router_candidates",
+            "configured": 1000000,
+            "observed": 256,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_query_bytes",
+            "configured": 16384,
+            "observed": 64,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_partitions_per_request",
+            "configured": 32,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_merge_entries",
+            "configured": 65536,
+            "observed": 160,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_request_bytes",
+            "configured": 4194304,
+            "observed": 2456,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_candidate_bytes",
+            "configured": 134217728,
+            "observed": 13754688,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_response_bytes",
+            "configured": 67108864,
+            "observed": 7232,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_wall_clock",
+            "configured": 30000000000,
+            "observed": 20807130800,
+            "unit": "nanoseconds",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_dimensions",
+            "configured": 4096,
+            "observed": 16,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_query_bytes",
+            "configured": 16384,
+            "observed": 64,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_partitions",
+            "configured": 32,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_request_bytes",
+            "configured": 65536,
+            "observed": 614,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_candidate_bytes",
+            "configured": 134217728,
+            "observed": 3533248,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_response_bytes",
+            "configured": 67108864,
+            "observed": 1808,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          }
+        ]
+      },
+      "timed_boundary": "wall-clock query cells after topology, exhaustive endpoint preflight, and generation warmup; includes router, coordinator, TCP M5 serialization, Raft read-index/apply, persistent HNSW search, response merge, and caller scheduling; excludes topology construction, exact truth, preflight, warmup, post-measurement attribution, artifact encoding, and shutdown",
+      "limitations": [
+        "loopback TCP with real serialized M5 messages and real in-memory HashiCorp Raft consensus; not a multi-host deployment",
+        "the checked-in 10k path materializes disjoint round-robin packs; -m8-existing-db reuses the retained graph-built M3 packs read-only",
+        "multi-host qualification and external-system comparisons are explicitly outside this local gate"
+      ]
+    }
+  ],
+  "comparison": [
+    {
+      "variant_id": "graph-disjoint-v1",
+      "assignment_basis": "graph",
+      "overlap": 0,
+      "artifact_sha256": "3c7a5665803b2f8f32f0187376b31faa74b7b712d8b7d94b28aea7114db6f556",
+      "ready_set_digest": "284e121601c44df5e6e382db7a62a9f818962f47e9d9244179199e758d4e1eb0",
+      "router_model_digest": "5c5492555c8ca7c5ff1b92e1bf07542130d12c5663ca6eb93ac6bb2b4b2074c4",
+      "probes": 16,
+      "ef_search": 4096,
+      "concurrency": 1,
+      "samples": 32,
+      "recall_at_k": 0.975,
+      "qps": 10.265995675799648,
+      "p50_nanos": 96380041,
+      "p95_nanos": 125242330,
+      "p99_nanos": 128534983,
+      "max_total_nanos": 128534983,
+      "rpcs": 128,
+      "request_bytes": 78592,
+      "candidate_bytes": 421745088,
+      "response_bytes": 231424,
+      "persistent_asset_bytes": 282881928,
+      "peak_rss_bytes": 1720635392
+    },
+    {
+      "variant_id": "graph-overlap-020-v1",
+      "assignment_basis": "graph",
+      "overlap": 0.2,
+      "artifact_sha256": "3c7a5665803b2f8f32f0187376b31faa74b7b712d8b7d94b28aea7114db6f556",
+      "ready_set_digest": "0bd012d36551d972bcf770e7c94dd5f9e89e4fd680570c51928546963ac0034d",
+      "router_model_digest": "5c5492555c8ca7c5ff1b92e1bf07542130d12c5663ca6eb93ac6bb2b4b2074c4",
+      "probes": 16,
+      "ef_search": 4096,
+      "concurrency": 1,
+      "samples": 32,
+      "recall_at_k": 1,
+      "qps": 9.16534865706917,
+      "p50_nanos": 107118108,
+      "p95_nanos": 135005807,
+      "p99_nanos": 148502939,
+      "max_total_nanos": 148502939,
+      "rpcs": 128,
+      "request_bytes": 78592,
+      "candidate_bytes": 429067008,
+      "response_bytes": 231424,
+      "persistent_asset_bytes": 339429544,
+      "peak_rss_bytes": 1981431808
+    },
+    {
+      "variant_id": "stable-id-hash-disjoint-v1",
+      "assignment_basis": "stable_id_hash",
+      "overlap": 0,
+      "artifact_sha256": "7a8ec9915de7acc6035024f3fc363c76678e8b27c529a2cba8a9861e764a49ad",
+      "ready_set_digest": "b3673c47550f9fc7040bb06b310755e17607ddc3644ae140723267edeed47c6a",
+      "router_model_digest": "e96bc5f62cefcd88a0e8674255c0a941bed4df9920fcb7b6e537249c67e802fa",
+      "probes": 16,
+      "ef_search": 4096,
+      "concurrency": 1,
+      "samples": 32,
+      "recall_at_k": 0.9874999999999999,
+      "qps": 10.863549028957852,
+      "p50_nanos": 90484317,
+      "p95_nanos": 110489700,
+      "p99_nanos": 120380914,
+      "max_total_nanos": 120380914,
+      "rpcs": 128,
+      "request_bytes": 78592,
+      "candidate_bytes": 421946368,
+      "response_bytes": 231424,
+      "persistent_asset_bytes": 282385488,
+      "peak_rss_bytes": 1856385024
+    }
+  ],
+  "gates": {
+    "required_variants": "pass",
+    "exhaustive_correctness": "fail",
+    "failure_honesty": "pass",
+    "partition_pack_reachability": "pass",
+    "recall": "pass",
+    "probe_reduction": "fail",
+    "matched_recall_qps": "fail",
+    "matched_recall_tail": "fail",
+    "coupled_graph_acceptance": "fail",
+    "balance": "pass",
+    "overlap_storage": "pass",
+    "resource_bounds": "pass",
+    "existing_behavior": "pending_latest_head_required_suites"
+  },
+  "overlap_materialization_ratio": 0.2,
+  "overlap_storage_ratio": 1.1998982982044721,
+  "limitations": [
+    "single-host loopback production-shaped topology; multi-host qualification remains owned by #3983",
+    "no external-system or paper-scale comparison is claimed"
+  ]
+}

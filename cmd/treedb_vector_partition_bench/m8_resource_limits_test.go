@@ -209,6 +209,7 @@ func TestM8ProductionResourcesUsePersistedBalanceCapacityV1(t *testing.T) {
 	policy, err := collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{
 		Capacity: 75,
 		Budget:   20,
+		Realized: 0,
 		Unspent:  20,
 	})
 	if err != nil {

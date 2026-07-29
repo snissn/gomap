@@ -15,9 +15,13 @@ import (
 
 func refreshTestM3VariantIdentityV1(t testing.TB, descriptor *m3VariantDescriptorV1) {
 	t.Helper()
+	descriptor.OverlapRequested = int(math.Floor(descriptor.OverlapRatio * float64(descriptor.SourceRows)))
+	descriptor.OverlapRealized = descriptor.OverlapMemberships
+	descriptor.OverlapRejected = descriptor.OverlapRequested - descriptor.OverlapRealized
 	descriptor.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(*descriptor)
 	descriptor.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{
 		Capacity: uint64(descriptor.Capacity), Budget: uint64(math.Floor(descriptor.OverlapRatio * float64(descriptor.SourceRows))),
+		Realized: uint64(descriptor.OverlapMemberships), Unspent: uint64(descriptor.OverlapRejected),
 		BuildIdentityDigest: descriptor.BuildIdentityDigest,
 	})
 }
@@ -265,7 +269,7 @@ func TestM8VariantProcessArgsForceFreshSingleVariantV1(t *testing.T) {
 	}
 }
 
-func TestM8ProductionMatrixFailsWhenOverlapBudgetIsUnderMaterializedV1(t *testing.T) {
+func TestM8ProductionMatrixRejectsUnderMaterializedOverlapDescriptorV1(t *testing.T) {
 	hash := strings.Repeat("a", 40)
 	fixture := fixtureManifest{Checksum: strings.Repeat("b", 64)}
 	cfg := config{baseSHA: hash, headSHA: hash, partitions: 16, command: []string{"bench"}}
@@ -297,11 +301,8 @@ func TestM8ProductionMatrixFailsWhenOverlapBudgetIsUnderMaterializedV1(t *testin
 		})
 	}
 	matrix, err := m8BuildProductionMatrixV1(cfg, fixture, reports)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if matrix.Gates.RequiredVariants != "fail" || matrix.Gates.OverlapStorage != "fail" || matrix.Status != "experimental_gate_failures" || matrix.OverlapMaterializationRatio != .1 {
-		t.Fatalf("under-materialized overlap matrix=%+v", matrix)
+	if err == nil || !strings.Contains(err.Error(), "malformed M3 variant descriptor") {
+		t.Fatalf("under-materialized overlap err=%v matrix=%+v", err, matrix)
 	}
 }
 
@@ -362,6 +363,7 @@ func TestM8VariantBuildCompatibilityRejectsMixedRetainedBuildsV1(t *testing.T) {
 		} {
 			descriptor := testM3VariantDescriptorV1(t.TempDir())
 			descriptor.VariantID, descriptor.AssignmentBasis, descriptor.OverlapRatio = item.id, item.assignment, item.overlap
+			descriptor.OverlapMemberships = int(math.Floor(item.overlap * float64(descriptor.SourceRows)))
 			if item.assignment == partitionAssignmentStableIDHashV1 {
 				descriptor.ArtifactSHA256 = strings.Repeat("c", 64)
 			}
