@@ -2272,6 +2272,35 @@ func TestM3BenchmarkWorkBudgetBoundary(t *testing.T) {
 	}
 }
 
+func TestExplicitPartitionCapacityOverridesV1(t *testing.T) {
+	base := []string{
+		"-dataset", fixturePath(t),
+		"-out", t.TempDir(),
+		"-partitions", "4",
+		"-probes", "1",
+		"-stage", "partition",
+	}
+	for _, flag := range []string{"-partition-max-distance-work", "-m3-max-benchmark-visits"} {
+		args := append(append([]string(nil), base...), flag, "0")
+		if _, err := parseConfig(args); err == nil || !strings.Contains(err.Error(), "must be positive") {
+			t.Fatalf("%s=0 error=%v; want positive-limit rejection", flag, err)
+		}
+	}
+	cfg, err := parseConfig(append(base,
+		"-partition-max-distance-work", "134000000000",
+		"-m3-max-benchmark-visits", "3000000000",
+	))
+	if err != nil {
+		t.Fatalf("explicit capacity overrides rejected: %v", err)
+	}
+	if got, want := cfg.partition.MaxDistanceWork, int64(134_000_000_000); got != want {
+		t.Fatalf("MaxDistanceWork=%d want %d", got, want)
+	}
+	if got, want := cfg.m3MaxBenchmarkVisits, int64(3_000_000_000); got != want {
+		t.Fatalf("m3MaxBenchmarkVisits=%d want %d", got, want)
+	}
+}
+
 func TestPathologicalBenchmarkWorkRejectsBeforeGenerationOrEvidence(t *testing.T) {
 	dataset := t.TempDir()
 	fixture := fixtureManifest{
