@@ -1,7 +1,7 @@
 # Draft tracker: recover graph/router locality at the V1 quarter-probe budget
 
-Parent: #4012  
-Evidence source: #4015 / PR #4021  
+Parent: #4012
+Evidence source: #4015 / PR #4021
 Blocks: #4019
 
 ## Authoritative gate

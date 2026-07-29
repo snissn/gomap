@@ -957,7 +957,9 @@ func TestCheckedIn10kFixtureGraphCutBeatsStableHash(t *testing.T) {
 	}
 	// Required exact-duplicate links intentionally change the frozen graph
 	// artifact while retaining the graph-vs-hash cut advantage.
-	if report.Dataset.Checksum != "2413ef7c2f65a4b5ce8ecc3846f473fd85d337a87511538f962af7cdf6aec291" || report.Source.Checksum != "6515025f540b955d453de99cf13f1efc002fd91135b2745b722c19e8d736e386" || report.ArtifactSHA256 != "76fd71f3df6b13e10ceab2f63a972d574d2d4e47368f4ef11d8432666d014002" || report.Metrics.EdgeCut != 4928 || report.Metrics.StableIDHashEdgeCut != 149873 {
+	// The artifact digest changes because MaxDistanceWork is now serialized as
+	// deliberate construction provenance; graph quality metrics do not change.
+	if report.Dataset.Checksum != "2413ef7c2f65a4b5ce8ecc3846f473fd85d337a87511538f962af7cdf6aec291" || report.Source.Checksum != "6515025f540b955d453de99cf13f1efc002fd91135b2745b722c19e8d736e386" || report.ArtifactSHA256 != "9f3738ff05599835eb7f9d22fc32a85bd7f244e51dda663348a4404cab0dc74f" || report.Metrics.EdgeCut != 4928 || report.Metrics.StableIDHashEdgeCut != 149873 {
 		t.Fatalf("frozen 10k regression changed: report=%+v", report)
 	}
 }
@@ -1406,7 +1408,7 @@ func TestM8BenchmarkWorkCapAndOverflowV1(t *testing.T) {
 }
 
 func TestM8UnsupportedOverlapSkipsMeasuredAndAttributionWorkV1(t *testing.T) {
-	cfg := config{partitions: 4, overlaps: []float64{.2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3, topK: 2}
+	cfg := config{partitions: 4, overlaps: []float64{.2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3, topK: 2, m8MaxExactTruthVisits: math.MaxInt64}
 	manifest := fixtureManifest{Vectors: 10, Queries: 5, Dimensions: 8}
 	plan, err := validateM8BenchmarkWork(cfg, manifest, 4, math.MaxInt64)
 	if err != nil {
@@ -1456,7 +1458,7 @@ func TestM8VariantMatrixCountsCompleteChildWorkAndOneChildPeakV1(t *testing.T) {
 }
 
 func TestM8RetainedAttributionResultsRespectMemoryCapV1(t *testing.T) {
-	cfg := config{partitions: 16, overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1}, topK: 256}
+	cfg := config{partitions: 16, overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1}, topK: 256, m8MaxExactTruthVisits: math.MaxInt64}
 	manifest := fixtureManifest{Vectors: 10_000, Queries: 50_000, Dimensions: 8}
 	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
 	if err != nil {
@@ -1522,7 +1524,7 @@ func TestM8AttributionMergeScratchRespectsMemoryCapV1(t *testing.T) {
 }
 
 func TestM8CurrentCellOutcomesRespectMemoryCapV1(t *testing.T) {
-	cfg := config{partitions: 256, raftGroups: 4, overlaps: []float64{0}, probes: []int{256}, efSearch: []int{64}, concurrency: []int{64}, topK: 1}
+	cfg := config{partitions: 256, raftGroups: 4, overlaps: []float64{0}, probes: []int{256}, efSearch: []int{64}, concurrency: []int{64}, topK: 1, m8MaxExactTruthVisits: math.MaxInt64}
 	manifest := fixtureManifest{Vectors: 256, Queries: 1_000_000, Dimensions: 1}
 	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
 	if err != nil {
@@ -1588,7 +1590,7 @@ func TestM8AttributionPrimaryHomeMappingIsModeledV1(t *testing.T) {
 }
 
 func TestM8RetainedCoordinatorResultsRespectMemoryCapV1(t *testing.T) {
-	cfg := config{partitions: 16, overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, topK: 256}
+	cfg := config{partitions: 16, overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, topK: 256, m8MaxExactTruthVisits: math.MaxInt64}
 	manifest := fixtureManifest{Vectors: 10_000, Queries: 50_000, Dimensions: 8}
 	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
 	if err != nil {
@@ -1994,14 +1996,12 @@ func TestM8GateLedgerRequiresMatchedRecallQPSAndTailV1(t *testing.T) {
 	if ledger.ExhaustiveParity != "pass" || ledger.FailureHonesty != "pass" || ledger.PartitionPackReachability != "pass" || ledger.Recall != "pass" || ledger.ProbeReduction != "pass" || ledger.EndToEndQPS != "pass" || ledger.TailLatency != "pass" || ledger.Balance != "pass" || ledger.ResourceBounds != "pass" || ledger.OverlapStorage != "fail" {
 		t.Fatalf("ledger=%+v", ledger)
 	}
-	report.Rows[0].Status = "fail"
-	report.Rows[0].ExactParityPassed = false
+	report.Rows[0].Attribution.ExhaustivePartitionIDParity = false
 	ledger = m8ProductionGateLedgerForReportV1(report)
 	if ledger.ExhaustiveParity != "fail" {
 		t.Fatalf("coordinator parity failure ledger=%+v", ledger)
 	}
-	report.Rows[0].Status = "pass"
-	report.Rows[0].ExactParityPassed = true
+	report.Rows[0].Attribution.ExhaustivePartitionIDParity = true
 	report.Rows[1].QPS = 114.9
 	report.Rows[1].P95Nanos = 1001
 	ledger = m8ProductionGateLedgerForReportV1(report)

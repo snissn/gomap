@@ -19,6 +19,15 @@ It was generated outside the checkout at
 `/mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k`; it is therefore a
 local calibration corpus rather than a committed qualification fixture.
 
+It was generated reproducibly as:
+
+```sh
+go run ./cmd/treedb_vector_partition_bench generate-fixture \
+  -out /mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k \
+  -vectors 100000 -queries 1000 -dimensions 128 -seed 4017 \
+  -generator treedb_vector_partition_embedding_mixture_v1
+```
+
 Both rows use 16 partitions, four three-node data Raft groups, serialized
 loopback M5 transport, `top_k=10`, `ef_search=64`, concurrency 1, and exact
 FP32 canonical truth. The canonical-truth cache identity is

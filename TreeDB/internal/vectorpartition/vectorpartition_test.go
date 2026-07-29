@@ -57,7 +57,9 @@ func TestDenseBallGraphAndPartitionDeterministic(t *testing.T) {
 	if e := ValidateArtifact(a); e != nil {
 		t.Fatal(e)
 	}
-	if got, want := mustDigest(t, a), "9ec528eff2020ba0d6af5a73b069ce9ba2368850270fb7b561a27d45c889e80e"; got != want {
+	// MaxDistanceWork is intentionally persisted in Config so an artifact
+	// records the scalar-work safety envelope that constructed it.
+	if got, want := mustDigest(t, a), "12ff4a22d519b2db04f5fa58b9b6dc2f44626b6b2dbd7528b3099eb3dfb33901"; got != want {
 		t.Fatalf("tiny canonical graph/assignment bytes changed: got %s want %s", got, want)
 	}
 }
