@@ -123,12 +123,13 @@ payload is retained as a separate diagnostic. Evidence is not a product
 enablement default: enablement remains disabled pending a clustered 1M quality
 or fixed-probe win.
 
-## Final-head 1M retained evidence
+## Final runtime-code 1M retained evidence
 
 The deterministic 1,000,000-vector fixture at
 `/mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture` (32 queries, dimension 16,
 checksum `71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f`)
-was built at `acdaaadff7e4c1341ad5fb792360620deac9faa0` with
+was built at measured runtime-code head
+`acdaaadff7e4c1341ad5fb792360620deac9faa0` with
 `/mnt/fast4tb/tmp/issue4001_finalhead_bench` using:
 
 ```sh
@@ -186,6 +187,13 @@ graph-disjoint child emitted a report and before graph-overlap began. Its outer
 stderr was not redirected, so no exact text was retained. It is a diagnostic
 artifact only; the retry above retains explicit stdout, stderr, time, child
 reports, and profiles.
+
+Commits after `acdaaadff7e4c1341ad5fb792360620deac9faa0` only align test-fixture
+accounting with the new descriptor schema and retain this evidence in the
+documentation; they do not change the measured production code. Required
+tests, latest-head CI, and exact-head review apply to the final PR head, while
+the performance artifacts above remain explicitly bound to the runtime-code
+head.
 
 The checked-in 10k report is
 [`TreeDB/docs/spec/artifacts/vector-partition-m3-evidence-v1.json`](../TreeDB/docs/spec/artifacts/vector-partition-m3-evidence-v1.json).
