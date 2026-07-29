@@ -321,6 +321,17 @@ func TestGenerateFixtureWritesValidatedDeterministicManifestV1(t *testing.T) {
 	}
 }
 
+func TestGenerateFixtureRejectsChecksumWorkBeforeWritingV1(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "refused")
+	err := run([]string{"generate-fixture", "-out", out, "-vectors", "32", "-queries", "2", "-dimensions", "8", "-max-checksum-visits", "1"}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "checksum exact work") {
+		t.Fatalf("generation cap err=%v", err)
+	}
+	if _, statErr := os.Stat(out); !os.IsNotExist(statErr) {
+		t.Fatalf("refused generation created output: %v", statErr)
+	}
+}
+
 func TestM3FixtureAllowsMillionVectorsPlusBoundedQueriesV1(t *testing.T) {
 	manifest := fixtureManifest{
 		SchemaVersion: schemaVersion,

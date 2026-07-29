@@ -193,9 +193,9 @@ func TestM8TruthCacheOversizedInputFailsBeforeDecodeV1(t *testing.T) {
 }
 
 func TestM8TruthCacheHitReusesCanonicalRowsV1(t *testing.T) {
-	fixture := fixtureManifest{Checksum: strings.Repeat("c", 64), Dimensions: 2, Metric: "cosine"}
+	fixture := fixtureManifest{Checksum: strings.Repeat("c", 64), Vectors: 1, Dimensions: 2, Metric: "cosine"}
 	identity, dir := m8TruthCacheIdentityV1(fixture, 1), t.TempDir()
-	want := [][]m8CanonicalResultV1{{{ID: "doc-000001", Score: .5}}}
+	want := [][]m8CanonicalResultV1{{{ID: "doc-000000", Score: .5}}}
 	truthSHA256, err := m8TruthContentSHA256V1(want)
 	if err != nil {
 		t.Fatal(err)
@@ -248,6 +248,26 @@ func TestM8TruthCacheRefusesContentCorruptionAndSemanticMalformationV1(t *testin
 	write(t, file)
 	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 2}, fixture, [][]float64{{1, 0}}, 2); err == nil || !strings.Contains(err.Error(), "noncanonical") {
 		t.Fatalf("semantic malformation err=%v", err)
+	}
+}
+
+func TestM8TruthCacheRefusesIDsOutsideFixtureDomainV1(t *testing.T) {
+	fixture := fixtureManifest{Checksum: strings.Repeat("e", 64), Vectors: 1, Dimensions: 2, Metric: "cosine"}
+	identity, dir := m8TruthCacheIdentityV1(fixture, 1), t.TempDir()
+	truth := [][]m8CanonicalResultV1{{{ID: "doc-000001", Score: .5}}}
+	digest, err := m8TruthContentSHA256V1(truth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: m8CanonicalTruthContractV1, DatasetChecksum: fixture.Checksum, Dimensions: 2, Metric: "cosine", TopK: 1, TruthSHA256: digest, Truth: truth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "m8_canonical_truth_"+identity+".json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 1}, fixture, [][]float64{{1, 0}}, 1); err == nil || !strings.Contains(err.Error(), "outside deterministic fixture domain") {
+		t.Fatalf("out-of-range cache ID err=%v", err)
 	}
 }
 

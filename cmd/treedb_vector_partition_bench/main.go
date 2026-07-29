@@ -422,6 +422,9 @@ func runGenerateFixture(args []string, stdout io.Writer) error {
 	if rows > maxFixtureBytes/(int64(dimensions)*8) {
 		return fmt.Errorf("generated fixture float64 data exceeds %d-byte cap", maxFixtureBytes)
 	}
+	if visits, err := memoryMul(int64(vectors), int64(queries)); err != nil || maxChecksumVisits < 1 || visits > maxChecksumVisits {
+		return fmt.Errorf("generated fixture checksum exact work exceeds %d-visit cap; set -max-checksum-visits explicitly for a declared qualification generation", maxChecksumVisits)
+	}
 	manifest := fixtureManifest{
 		SchemaVersion: schemaVersion,
 		Fixture:       fmt.Sprintf("deterministic_%d", vectors),
@@ -434,9 +437,6 @@ func runGenerateFixture(args []string, stdout io.Writer) error {
 		Seed:          seed,
 	}
 	corpus, querySet := fixtureData(manifest)
-	if visits, err := memoryMul(int64(vectors), int64(queries)); err != nil || maxChecksumVisits < 1 || visits > maxChecksumVisits {
-		return fmt.Errorf("generated fixture checksum exact work exceeds %d-visit cap; set -max-checksum-visits explicitly for a declared qualification generation", maxChecksumVisits)
-	}
 	manifest.Checksum = fixtureChecksumFromData(corpus, querySet)
 	if err := validateM3FixtureWithCaps(manifest, maxVectors, maxFixtureBytes); err != nil {
 		return err

@@ -1240,6 +1240,19 @@ func TestNegativeMaxPartitionWorkFailsConfigValidation(t *testing.T) {
 	if err := ValidateConfig(c); err == nil {
 		t.Fatal("negative MaxPartitionWork accepted")
 	}
+	c = config()
+	c.MaxDistanceWork = -1
+	if err := ValidateConfig(c); err == nil {
+		t.Fatal("negative MaxDistanceWork accepted")
+	}
+	a, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Config.MaxDistanceWork = -1
+	if err := ValidateArtifact(a); err == nil {
+		t.Fatal("artifact with negative MaxDistanceWork accepted")
+	}
 }
 func TestReferencePartitionerCoversEveryPartition(t *testing.T) {
 	g := emptyGraph(8)

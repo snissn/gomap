@@ -19,6 +19,7 @@ import (
 	"runtime/trace"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -877,7 +878,7 @@ func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection,
 			if json.Unmarshal(raw, &file) != nil || file.SchemaVersion != 1 || file.Identity != identity || file.Contract != collections.VectorPartitionCanonicalScoreContractV1 || file.DatasetChecksum != fixture.Checksum || file.Dimensions != fixture.Dimensions || file.Metric != fixture.Metric || file.TopK != topK || len(file.Truth) != len(queries) {
 				return nil, evidence, errors.New("canonical truth cache identity/schema mismatch")
 			}
-			if err := m8ValidateCachedTruthV1(file.Truth, file.TruthSHA256, topK, manifest.SourceRowCount); err != nil {
+			if err := m8ValidateCachedTruthV1(file.Truth, file.TruthSHA256, topK, manifest.SourceRowCount, fixture.Vectors); err != nil {
 				return nil, evidence, fmt.Errorf("canonical truth cache semantic mismatch: %w", err)
 			}
 			d := sha256.Sum256(raw)
@@ -965,7 +966,7 @@ func m8TruthContentSHA256V1(truth [][]m8CanonicalResultV1) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func m8ValidateCachedTruthV1(truth [][]m8CanonicalResultV1, wantSHA256 string, topK int, sourceRows uint64) error {
+func m8ValidateCachedTruthV1(truth [][]m8CanonicalResultV1, wantSHA256 string, topK int, sourceRows uint64, fixtureVectors int) error {
 	if wantSHA256 == "" {
 		return errors.New("missing truth_sha256")
 	}
@@ -992,6 +993,9 @@ func m8ValidateCachedTruthV1(truth [][]m8CanonicalResultV1, wantSHA256 string, t
 			if _, duplicate := seen[result.ID]; duplicate {
 				return fmt.Errorf("query=%d duplicate ID %q", query, result.ID)
 			}
+			if !m8FixtureDocumentIDValidV1(result.ID, fixtureVectors) {
+				return fmt.Errorf("query=%d result=%d ID %q outside deterministic fixture domain", query, i, result.ID)
+			}
 			seen[result.ID] = struct{}{}
 			if i > 0 && (row[i-1].Score < result.Score || (row[i-1].Score == result.Score && row[i-1].ID > result.ID)) {
 				return fmt.Errorf("query=%d noncanonical result order", query)
@@ -999,6 +1003,17 @@ func m8ValidateCachedTruthV1(truth [][]m8CanonicalResultV1, wantSHA256 string, t
 		}
 	}
 	return nil
+}
+
+func m8FixtureDocumentIDValidV1(id string, vectors int) bool {
+	if vectors < 1 {
+		return false
+	}
+	if !strings.HasPrefix(id, "doc-") {
+		return false
+	}
+	ordinal, err := strconv.Atoi(strings.TrimPrefix(id, "doc-"))
+	return err == nil && ordinal >= 0 && ordinal < vectors && id == fmt.Sprintf("doc-%06d", ordinal)
 }
 
 func m8ExactTruthV1(collection *collections.Collection, manifest collections.VectorPartitionManifestV1, queries [][]float64, topK int) ([][]m8CanonicalResultV1, error) {
