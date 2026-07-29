@@ -437,22 +437,40 @@ identity checks deterministic.
 
 ## #3999 partition-local HNSW reachability refresh
 
-Commit `357e40c62` rebuilds only persistent partition-local packs with a
-bounded, deterministic layer-0 navigation overlay. It preserves the `2*M`
-layer-0 cap (32 at M=16) while providing a logarithmic-hop route from the pack
-entry to every local row; global column-graph and router construction are
-unchanged.
+The measured implementation head `f565ae97a7fbbb659941fdf28cf75d45ddbc9397`
+rebuilds only persistent partition-local packs with a bounded, deterministic
+layer-0 navigation overlay. It preserves the `2*M` layer-0 cap (32 at M=16)
+while providing a route from the pack entry to every local row; global
+column-graph and router construction are unchanged. A subsequent
+documentation-only record commit does not change this implementation or its
+runtime behavior.
 
-Fresh graph/disjoint 1M evidence used
+The authoritative uncontended evidence uses the fresh graph/disjoint 1M DB
 `/mnt/fast4tb/tmp/issue3999_m3_lk3imU/db_graph_disjoint`. The all-16-partition
-M8 `ef_search=4096` cell recorded recall@10 `0.975`, local-HNSW recall@10
-`0.975`, exact representative-routing recall `1.0`, and all 16 packs with
-`reachable_rows == rows` and `traversal_roots == 1`. The profiled artifact is
-`/mnt/fast4tb/tmp/issue3999_m8_profile_IYajgs/vector_partition_m8_357e40c6217a_ca6f595a28e8.json`
-(SHA-256 `3f23892f99d096dd25e83a747d5b2ea17fca46fb35b7f95820c10d881f066bf0`).
-Its CPU, block, mutex, trace, heap, and allocation artifacts were captured;
-the run overlapped a local test suite, so its timing profiles are contextual,
-not a baseline comparison.
+M8 `ef_search=4096` cell recorded recall@10 and local-HNSW recall@10 `0.975`,
+exact representative-routing recall `1.0`, QPS `10.255`, and p50/p95/p99
+`97.266/117.941/123.513ms`. Its measured query wall clock was `20.581s`
+(`137.93s` command wall clock; `18.191s` build).
+
+The profiled artifact is
+`/mnt/fast4tb/tmp/issue3999_m8_f565_VAXFRv/vector_partition_m8_f565ae97a7fb_ca6f595a28e8.json`
+(SHA-256 `0cf4ab84c8a361e51aa18ab55b32fccd93a46ec4e8f824207bec086e89d563bd`).
+It records `dirty=false` and `partition_pack_reachability=pass`: exactly 16
+diagnostics bind to the 16 manifest partition loads, every diagnostic `rows`
+matches its load, the diagnostic/load/retained-variant totals are each
+`1,000,000`, and every pack has `reachable_rows == rows` and
+`traversal_roots == 1`. Resource bounds pass with peak RSS
+`1,851,252,736 / 4,294,967,296` bytes and persistent assets
+`282,881,928 / 536,870,912` bytes.
+
+The seven captured profile hashes are: allocation baseline
+`f7501feb7deca692be86e5a12e4d8c373f43fc8ff45c8cca281ff04ffb72f31c`,
+allocation final `8a1601bb027e92c8678154a001fe20f7f67af08a550328ede9af071c1a09da06`,
+CPU `30eb7e1134a8d093b698f0df6b6c98151ddec6cafc7fd56dc5861dd7417399df`,
+heap `cb7a46593c934492025b12511400a6d7d64872af02bc5eee21e18db5b44d0dfa`,
+block `abf56de37cad70a49f00cf1b10935ee947143bfe57f21ac3b3d174d7b8fc33ce`,
+mutex `8361a5d397693209a5c61dac8a3b6a1a9e710501f9cb50a71700946daf2f09c3`,
+and trace `25acfe82dbfae31ba6777ac0c8245a3b7a4af4591bdc43d82dc4094260e08c41`.
 
 The report remains `experimental_gate_failures`: probe reduction is #3998,
 overlap storage is #4001, while exhaustive-correctness, end-to-end QPS, and
