@@ -493,7 +493,7 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 	}
 	classes := make(map[[32]byte][]duplicateClass)
 	for i := range v {
-		fingerprint := vectorFingerprintV1(v[i].Values)
+		fingerprint := VectorBitsFingerprintV1(v[i].Values)
 		bucket := classes[fingerprint]
 		matched := -1
 		for class := range bucket {
@@ -504,7 +504,7 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 		}
 		if matched < 0 {
 			if len(bucket) >= maxDuplicateFingerprintVariants {
-				return Graph{}, errors.New("duplicate fingerprint collision variants exceed bound")
+				return Graph{}, fmt.Errorf("duplicate fingerprint collision variants exceed bound: bound=%d observed=%d fingerprint=%x", maxDuplicateFingerprintVariants, len(bucket)+1, fingerprint)
 			}
 			bucket = append(bucket, duplicateClass{values: v[i].Values})
 			matched = len(bucket) - 1
@@ -553,7 +553,10 @@ func vectorBitsEqualV1(left, right []float64) bool {
 	return true
 }
 
-func vectorFingerprintV1(values []float64) [32]byte {
+// VectorBitsFingerprintV1 returns the canonical SHA-256 fingerprint used to
+// narrow exact float-bit vector classes. Callers must still compare vector
+// bits before treating equal fingerprints as equal vectors.
+func VectorBitsFingerprintV1(values []float64) [32]byte {
 	h := sha256.New()
 	var raw [8]byte
 	for _, value := range values {

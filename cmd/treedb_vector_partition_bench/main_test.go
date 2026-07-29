@@ -138,6 +138,9 @@ func TestPartitionTruthOracleForArtifactV1(t *testing.T) {
 	if oracle.ProbeBudget != 2 || oracle.BestProbeCoverageAtK != 1 || oracle.TruthPrimaryHomePairColocate != 1.0/3.0 {
 		t.Fatalf("oracle=%+v", oracle)
 	}
+	if _, err := partitionTruthOracleForArtifactV1(vectors, [][]float64{{1, 0}}, []int{0, 0, 1, 1}, 2, len(vectors)+1); err == nil {
+		t.Fatal("truth oracle accepted top-k above corpus size")
+	}
 }
 
 func TestDuplicateAwareGraphBeatsStableHashTruthCoverageAtQuarterProbeBudget(t *testing.T) {

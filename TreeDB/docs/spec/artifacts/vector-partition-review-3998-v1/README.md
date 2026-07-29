@@ -7,6 +7,10 @@ measured implementation is `60fa60efbd5497433444f46a519c7751ba7108ca`
 (binary SHA-256
 `f7f27cd0bf25fd10c0d499ec7e6d9df982abad0d8b155ab1d6271bf56e4b9a2d`)
 on base `53cc1c338636ba8168aa13cc70c2aa167257f361`.
+Post-measurement review changes share the same fingerprint helper between the
+builder and diagnostics, reject an invalid diagnostic `top-k`, and enrich only
+the collision-cap error. They do not change accepted-corpus graph or routing
+semantics; the frozen 10k artifact regression verifies the graph identity.
 
 On fixture checksum
 `71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f`,

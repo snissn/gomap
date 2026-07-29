@@ -2,7 +2,8 @@
   "schema_version": 1,
   "issue": 3998,
   "base_sha": "53cc1c338636ba8168aa13cc70c2aa167257f361",
-  "implementation_sha": "60fa60efbd5497433444f46a519c7751ba7108ca",
+  "measured_implementation_sha": "60fa60efbd5497433444f46a519c7751ba7108ca",
+  "post_measurement_review_changes": "shared the byte-identical fingerprint helper through the public command shim, rejected diagnostic top-k above corpus size, and enriched only the collision-cap error; accepted-corpus graph and routing semantics are unchanged",
   "binary_sha256": "f7f27cd0bf25fd10c0d499ec7e6d9df982abad0d8b155ab1d6271bf56e4b9a2d",
   "build_command": "go build -o /mnt/fast4tb/tmp/issue3998_60fa_bench ./cmd/treedb_vector_partition_bench",
   "fixture": {

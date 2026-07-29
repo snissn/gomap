@@ -942,7 +942,7 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][
 }
 
 func partitionTruthOracleForArtifactV1(vectors, queries [][]float64, assignment []int, partitions, topK int) (partitionTruthOracleV1, error) {
-	if len(vectors) == 0 || len(queries) == 0 || len(assignment) != len(vectors) || partitions < 1 || topK < 1 {
+	if len(vectors) == 0 || len(queries) == 0 || len(assignment) != len(vectors) || partitions < 1 || topK < 1 || topK > len(vectors) {
 		return partitionTruthOracleV1{}, errors.New("invalid partition truth oracle input")
 	}
 	probes := min(4, partitions)
@@ -950,7 +950,7 @@ func partitionTruthOracleForArtifactV1(vectors, queries [][]float64, assignment 
 	var zeroDistance int
 	classes := make(map[[32]byte]struct{}, len(vectors))
 	for _, vector := range vectors {
-		classes[partitionVectorFingerprintV1(vector)] = struct{}{}
+		classes[vectorpartition.VectorBitsFingerprintV1(vector)] = struct{}{}
 	}
 	for _, query := range queries {
 		truth := exactTopK(vectors, query, topK)
@@ -979,18 +979,6 @@ func partitionTruthOracleForArtifactV1(vectors, queries [][]float64, assignment 
 		}
 	}
 	return partitionTruthOracleV1{TopK: topK, ProbeBudget: probes, BestProbeCoverageAtK: coverage / float64(len(queries)), TruthPrimaryHomePairColocate: pairColocation / float64(len(queries)), UniqueVectorBitPatterns: len(classes), ZeroDistanceTruthShareAtK: float64(zeroDistance) / float64(len(queries)*topK)}, nil
-}
-
-func partitionVectorFingerprintV1(values []float64) [32]byte {
-	h := sha256.New()
-	var raw [8]byte
-	for _, value := range values {
-		binary.BigEndian.PutUint64(raw[:], math.Float64bits(value))
-		_, _ = h.Write(raw[:])
-	}
-	var out [32]byte
-	copy(out[:], h.Sum(nil))
-	return out
 }
 
 const provenanceSuffixBytes = 12

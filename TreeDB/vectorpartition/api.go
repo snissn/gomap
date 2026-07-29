@@ -68,6 +68,12 @@ func ValidateInputShape(c Config, vectors, dimensions int) error {
 func ValidateReferenceInputShape(c Config, vectors, dimensions int) error {
 	return internal.ValidateReferenceInputShape(c, vectors, dimensions)
 }
+
+// VectorBitsFingerprintV1 exposes the builder's canonical float-bit
+// fingerprint to repository commands that emit matching diagnostics.
+func VectorBitsFingerprintV1(values []float64) [32]byte {
+	return internal.VectorBitsFingerprintV1(values)
+}
 func Build(v []Vector, c Config) (Artifact, error) { return internal.Build(v, c) }
 func BuildWithPartitioner(v []Vector, c Config, s Source, p Partitioner) (Artifact, error) {
 	return internal.BuildWithPartitioner(v, c, s, p)
