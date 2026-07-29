@@ -12,11 +12,13 @@ procedurally generated 1,000,000-vector, 128-dimensional high-entropy cosine
 corpus with 1,000 independently generated held-out queries.  Its generator
 uses distinct corpus and query domains, so queries are not copied corpus rows.
 
-The second required distribution is generated with
-`treedb_vector_partition_embedding_mixture_v1`.  It is an embedding-shaped
+`testdata/vector_partition_qualification_embedding_mixture_250k` is the
+second distribution: 250,000 vectors and 1,000 held-out queries generated with
+`treedb_vector_partition_embedding_mixture_v1`. It is an embedding-shaped
 mixture of directional topics with continuous noise, explicitly not a claim
-about a licensed external corpus.  Qualification records its generator, seed,
-dimension, counts, and checksum in the fixture manifest before execution.
+about a licensed external corpus. The smaller corpus makes the second,
+diversifying distribution practical while the high-entropy corpus supplies the
+required 1M qualification shape.
 
 ## Required artifact rows
 

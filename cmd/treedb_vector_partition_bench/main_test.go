@@ -152,6 +152,19 @@ func TestCommittedHighEntropyQualificationIdentityV1(t *testing.T) {
 	}
 }
 
+func TestCommittedEmbeddingQualificationIdentityV1(t *testing.T) {
+	m, err := loadFixture(filepath.Join("..", "..", "testdata", "vector_partition_qualification_embedding_mixture_250k"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateM3FixtureWithCaps(m, maxVectors, maxFixtureBytes); err != nil {
+		t.Fatal(err)
+	}
+	if m.Generator != qualificationEmbeddingGeneratorV1 || m.Vectors != 250_000 || m.Queries < 1_000 || m.Dimensions != 128 || m.Seed != 4016 {
+		t.Fatalf("unexpected qualification identity: %+v", m)
+	}
+}
+
 func TestTruthHomePartitionDiagnosticsV1(t *testing.T) {
 	truth := []m8CanonicalResultV1{{ID: "a"}, {ID: "b"}, {ID: "c"}, {ID: "d"}}
 	homes := map[string]uint32{"a": 0, "b": 0, "c": 1, "d": 2}
