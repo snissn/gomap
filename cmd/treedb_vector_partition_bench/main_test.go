@@ -981,7 +981,7 @@ func TestCheckedIn10kFixtureGraphCutBeatsStableHash(t *testing.T) {
 	// artifact while retaining the graph-vs-hash cut advantage.
 	// The artifact digest changes because MaxDistanceWork is now serialized as
 	// deliberate construction provenance; graph quality metrics do not change.
-	if report.Dataset.Checksum != "2413ef7c2f65a4b5ce8ecc3846f473fd85d337a87511538f962af7cdf6aec291" || report.Source.Checksum != "6515025f540b955d453de99cf13f1efc002fd91135b2745b722c19e8d736e386" || report.ArtifactSHA256 != "9f3738ff05599835eb7f9d22fc32a85bd7f244e51dda663348a4404cab0dc74f" || report.Metrics.EdgeCut != 4928 || report.Metrics.StableIDHashEdgeCut != 149873 {
+	if report.Dataset.Checksum != "2413ef7c2f65a4b5ce8ecc3846f473fd85d337a87511538f962af7cdf6aec291" || report.Source.Checksum != "6515025f540b955d453de99cf13f1efc002fd91135b2745b722c19e8d736e386" || report.ArtifactSHA256 != "17ddb6cda87306b148ae4aceee91a2ed99671fb78cbc1905eb2050f8ec73f8aa" || report.Metrics.EdgeCut != 4928 || report.Metrics.StableIDHashEdgeCut != 149873 {
 		t.Fatalf("frozen 10k regression changed: report=%+v", report)
 	}
 }
@@ -2305,7 +2305,7 @@ func TestExplicitPartitionCapacityOverridesV1(t *testing.T) {
 		"-probes", "1",
 		"-stage", "partition",
 	}
-	for _, flag := range []string{"-partition-max-distance-work", "-m3-max-benchmark-visits"} {
+	for _, flag := range []string{"-partition-max-distance-work", "-partition-max-partition-work", "-m3-max-benchmark-visits"} {
 		args := append(append([]string(nil), base...), flag, "0")
 		if _, err := parseConfig(args); err == nil || !strings.Contains(err.Error(), "must be positive") {
 			t.Fatalf("%s=0 error=%v; want positive-limit rejection", flag, err)
@@ -2313,6 +2313,7 @@ func TestExplicitPartitionCapacityOverridesV1(t *testing.T) {
 	}
 	cfg, err := parseConfig(append(base,
 		"-partition-max-distance-work", "134000000000",
+		"-partition-max-partition-work", "400000000",
 		"-m3-max-benchmark-visits", "3000000000",
 	))
 	if err != nil {
@@ -2320,6 +2321,9 @@ func TestExplicitPartitionCapacityOverridesV1(t *testing.T) {
 	}
 	if got, want := cfg.partition.MaxDistanceWork, int64(134_000_000_000); got != want {
 		t.Fatalf("MaxDistanceWork=%d want %d", got, want)
+	}
+	if got, want := cfg.partition.MaxPartitionWork, int64(400_000_000); got != want {
+		t.Fatalf("MaxPartitionWork=%d want %d", got, want)
 	}
 	if got, want := cfg.m3MaxBenchmarkVisits, int64(3_000_000_000); got != want {
 		t.Fatalf("m3MaxBenchmarkVisits=%d want %d", got, want)

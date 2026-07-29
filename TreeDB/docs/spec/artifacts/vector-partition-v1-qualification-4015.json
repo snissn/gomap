@@ -23,7 +23,7 @@
     {"role":"overlap_repeat_2","out":"m8-overlap-repeat-2","asset":"graph-overlap-020","probes":"4,16","overlap":".2","ef_search":"64","concurrency":"1"},
     {"role":"overlap_repeat_3","out":"m8-overlap-repeat-3","asset":"graph-overlap-020","probes":"4,16","overlap":".2","ef_search":"64","concurrency":"1"}
   ],
-  "commands": {"canonical":"go run ./cmd/treedb_vector_partition_bench -mode production_multi_group -dataset /mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k -out <artifact-out> -m8-truth-cache /mnt/fast4tb/gomap-4015-embedding100k/truth-cache -m8-existing-db <retained-M3-asset> -partitions 16 -raft-groups 4 -probes <cells> -overlap <ratio> -ef-search <cells> -concurrency <cells> -top-k 10 -seed 4017 -m8-max-exact-truth-visits 100000000 -format text"},
+  "commands": {"canonical":"go run ./cmd/treedb_vector_partition_bench -mode production_multi_group -dataset /mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k -out <artifact-out> -m8-truth-cache /mnt/fast4tb/gomap-4015-embedding100k/truth-cache -m8-existing-db <retained-M3-asset> -partitions 16 -raft-groups 4 -probes <cells> -overlap <ratio> -ef-search <cells> -concurrency <cells> -top-k 10 -seed 4017 -m8-max-exact-truth-visits 200000000 -format text"},
   "raw_artifacts": [
     {"role":"graph_disjoint_m2","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/graph-disjoint-m2.json","sha256":"2cd948e3b6c6edc2aac232d40074992e7638bb95851bd74ea04ae8015b092154"},
     {"role":"graph_disjoint_m3","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/graph-disjoint-m3.json","sha256":"d417eacafc99216c535500df327c1e428929ca44c458592a6160a08331b64b1c"},

@@ -207,6 +207,11 @@ func BuildWithPartitionerPhased(vectors []Vector, cfg Config, source Source, bac
 		reference.maxPartitionWork = cfg.MaxPartitionWork
 		backend = reference
 	}
+	if reference, ok := backend.(*ReferencePartitioner); ok {
+		copy := *reference // never mutate a caller-owned backend through preflight.
+		copy.maxPartitionWork = cfg.MaxPartitionWork
+		backend = copy
+	}
 	backendName, backendLicense := backend.Name(), backend.License()
 	if backendName == "" || !utf8.ValidString(backendName) || len(backendName) > 256 || backendLicense == "" || !utf8.ValidString(backendLicense) || len(backendLicense) > 1024 {
 		return Artifact{}, phases, errors.New("partition backend identity is required")
@@ -410,7 +415,7 @@ func ValidateConfig(c Config) error {
 	if c.Symmetric {
 		return errors.New("symmetric graph policy is not supported")
 	}
-	if c.Metric != "cosine" || c.Repetitions < 1 || c.Repetitions > maxRepetitions || c.Pivots < 2 || c.Pivots > maxPivots || c.MaxLeafBucket < 2 || c.MaxLeafBucket > maxLeafBucket || c.Degree < 1 || c.Degree > maxDegree || c.Partitions < 1 || c.Partitions > maxPartitions || !finite(c.Imbalance) || c.Imbalance < 0 || c.Imbalance > 1 || c.MaxVectors < 1 || c.MaxVectors > maxVectors || c.MaxEdges < 1 || c.MaxEdges > maxEdges {
+	if c.Metric != "cosine" || c.Repetitions < 1 || c.Repetitions > maxRepetitions || c.Pivots < 2 || c.Pivots > maxPivots || c.MaxLeafBucket < 2 || c.MaxLeafBucket > maxLeafBucket || c.Degree < 1 || c.Degree > maxDegree || c.Partitions < 1 || c.Partitions > maxPartitions || !finite(c.Imbalance) || c.Imbalance < 0 || c.Imbalance > 1 || c.MaxVectors < 1 || c.MaxVectors > maxVectors || c.MaxEdges < 1 || c.MaxEdges > maxEdges || c.MaxPartitionWork < 0 {
 		return errors.New("invalid vector partition configuration")
 	}
 	return nil

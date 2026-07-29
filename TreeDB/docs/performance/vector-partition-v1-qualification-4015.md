@@ -153,7 +153,7 @@ treedb_vector_partition_bench -mode production_multi_group \
   -profiles /mnt/fast4tb/gomap-4015-calibration/profiles \
   -partitions 16 -raft-groups 4 -probes 1,2,4,8,16 -overlap 0 \
   -ef-search 64 -concurrency 1 -top-k 10 -seed 4015 \
-  -m8-max-exact-truth-visits 10000000 -format text
+  -m8-max-exact-truth-visits 20000000 -format text
 ```
 
 Profile coverage is limited to that 10k calibration, not the 100k retained

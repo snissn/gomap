@@ -65,7 +65,7 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 			BaseSHA: hash, HeadSHA: hash, Dataset: fixture, Config: config, Variant: &descriptor, GateLedger: variantGates,
 			Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: variant.bytes},
 			Rows: []m8ProductionRowV1{
-				{Status: "pass", VariantID: variant.id, Probes: 16, EfSearch: 128, Concurrency: 1, Samples: 32, RecallAtK: 1, QPS: 100, P95Nanos: 100, ExactParityChecked: true, ExactParityPassed: true},
+				{Status: "pass", VariantID: variant.id, Probes: 16, EfSearch: 128, Concurrency: 1, Samples: 32, RecallAtK: 1, QPS: 100, P95Nanos: 100, Attribution: m8ProductionAttributionV1{ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true}},
 				{Status: "pass", VariantID: variant.id, Probes: 4, EfSearch: 128, Concurrency: 1, Samples: 32, RecallAtK: .95, QPS: 116, P95Nanos: 99},
 			},
 		})
@@ -127,9 +127,9 @@ func TestM8CoupledGraphGateRequiresOneMatchedOperatingPointV1(t *testing.T) {
 		Variant: &m3VariantDescriptorV1{AssignmentBasis: partitionAssignmentGraphV1},
 		Config:  m8ProductionConfigEvidenceV1{Partitions: 16, RecallTarget: .9},
 		Rows: []m8ProductionRowV1{
-			{Status: "pass", Probes: 16, EfSearch: 64, Concurrency: 1, RecallAtK: .95, QPS: 100, P95Nanos: 100, ExactParityChecked: true, ExactParityPassed: true},
+			{Status: "pass", Probes: 16, EfSearch: 64, Concurrency: 1, RecallAtK: .95, QPS: 100, P95Nanos: 100, Attribution: m8ProductionAttributionV1{ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true}},
 			{Status: "pass", Probes: 4, EfSearch: 64, Concurrency: 1, RecallAtK: .95, QPS: 116, P95Nanos: 101},
-			{Status: "pass", Probes: 16, EfSearch: 128, Concurrency: 1, RecallAtK: .95, QPS: 100, P95Nanos: 100, ExactParityChecked: true, ExactParityPassed: true},
+			{Status: "pass", Probes: 16, EfSearch: 128, Concurrency: 1, RecallAtK: .95, QPS: 100, P95Nanos: 100, Attribution: m8ProductionAttributionV1{ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true}},
 			{Status: "pass", Probes: 4, EfSearch: 128, Concurrency: 1, RecallAtK: .95, QPS: 114, P95Nanos: 99},
 		},
 	}
@@ -177,6 +177,18 @@ func TestM8TruthCacheIdentityMismatchFailsClosedV1(t *testing.T) {
 	}
 	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{}, fixture, [][]float64{{1}}, 10); err == nil || !strings.Contains(err.Error(), "identity/schema mismatch") {
 		t.Fatalf("cache mismatch err=%v", err)
+	}
+}
+
+func TestM8TruthCacheOversizedInputFailsBeforeDecodeV1(t *testing.T) {
+	fixture := fixtureManifest{Checksum: strings.Repeat("a", 64), Dimensions: 2, Metric: "cosine"}
+	identity, dir := m8TruthCacheIdentityV1(fixture, 1), t.TempDir()
+	path := filepath.Join(dir, "m8_canonical_truth_"+identity+".json")
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", 70<<10)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{}, fixture, [][]float64{{1, 0}}, 1); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized cache err=%v", err)
 	}
 }
 

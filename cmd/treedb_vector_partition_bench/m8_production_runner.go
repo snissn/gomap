@@ -853,17 +853,25 @@ func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection,
 	}
 	if path != "" {
 		started := time.Now()
-		info, statErr := os.Stat(path)
-		if statErr == nil {
-			maxBytes, err := m8TruthCacheMaxBytesV1(len(queries), topK)
-			if err != nil {
-				return nil, evidence, err
+		maxBytes, boundErr := m8TruthCacheMaxBytesV1(len(queries), topK)
+		if boundErr != nil {
+			return nil, evidence, boundErr
+		}
+		fileHandle, openErr := os.Open(path)
+		var raw []byte
+		var err error
+		if openErr == nil {
+			raw, err = io.ReadAll(io.LimitReader(fileHandle, maxBytes+1))
+			closeErr := fileHandle.Close()
+			if err == nil && closeErr != nil {
+				err = closeErr
 			}
-			if info.Size() > maxBytes {
+			if err == nil && int64(len(raw)) > maxBytes {
 				return nil, evidence, fmt.Errorf("canonical truth cache exceeds %d-byte bound before decode", maxBytes)
 			}
+		} else {
+			err = openErr
 		}
-		raw, err := os.ReadFile(path)
 		if err == nil {
 			var file m8TruthCacheFileV1
 			if json.Unmarshal(raw, &file) != nil || file.SchemaVersion != 1 || file.Identity != identity || file.Contract != collections.VectorPartitionCanonicalScoreContractV1 || file.DatasetChecksum != fixture.Checksum || file.Dimensions != fixture.Dimensions || file.Metric != fixture.Metric || file.TopK != topK || len(file.Truth) != len(queries) {

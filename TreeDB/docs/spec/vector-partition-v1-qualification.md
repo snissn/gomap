@@ -52,6 +52,8 @@ uniform-data routing failure; it can support only an explicitly narrower
 experimental or opt-in disposition.
 
 The M8 request-work guard does not count exact source-query vector visits. The
-required 1M x 1,000 exact-truth shape therefore adds 1B such visits outside
-that request count; any execution must record its calibrated runtime before
-the full retained-asset sweep.
+required 1M x 1,000 shape performs both fixture checksum binding and canonical
+exact truth, so one retained-asset run charges 2B visits outside that request
+count. The strict three-variant matrix charges 6B. Any such execution requires
+an explicit `-m8-max-exact-truth-visits` override and must record its calibrated
+runtime before the full retained-asset sweep.
