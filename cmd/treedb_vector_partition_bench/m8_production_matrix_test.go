@@ -366,6 +366,7 @@ func TestM8VariantBuildCompatibilityRejectsMixedRetainedBuildsV1(t *testing.T) {
 		} {
 			descriptor := testM3VariantDescriptorV1(t.TempDir())
 			descriptor.VariantID, descriptor.AssignmentBasis, descriptor.OverlapRatio = item.id, item.assignment, item.overlap
+			descriptor.OverlapMemberships = int(math.Floor(item.overlap * float64(descriptor.SourceRows)))
 			if item.assignment == partitionAssignmentStableIDHashV1 {
 				descriptor.ArtifactSHA256 = strings.Repeat("c", 64)
 			}

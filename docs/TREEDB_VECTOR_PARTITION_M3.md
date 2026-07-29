@@ -121,8 +121,71 @@ and alignment plus the M1 lifecycle/manifest state. The overlap `0.20` final
 derived physical bytes must remain at or below `1.35x` the disjoint row; pack
 payload is retained as a separate diagnostic. Evidence is not a product
 enablement default: enablement remains disabled pending a clustered 1M quality
-or fixed-probe win. No repository M3 1M corpus is currently available, so the
-report says unavailable rather than extrapolating.
+or fixed-probe win.
+
+## Final-head 1M retained evidence
+
+The deterministic 1,000,000-vector fixture at
+`/mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture` (32 queries, dimension 16,
+checksum `71239d1335ddd724835d415f57acae7f8bb36a6af52642d1e710392a883b2d6f`)
+was built at `acdaaadff7e4c1341ad5fb792360620deac9faa0` with
+`/mnt/fast4tb/tmp/issue4001_finalhead_bench` using:
+
+```sh
+/mnt/fast4tb/tmp/issue4001_finalhead_bench \
+  -dataset /mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture \
+  -out "$OUT" -m3-persist-db "$DB" -format json \
+  -stage overlap,partition_index -partitions 16 -top-k 10 -overlap "$OVERLAP" \
+  -partition-assignment "$ASSIGNMENT" -partition-repetitions 1 \
+  -partition-pivots 8 -partition-max-leaf-bucket 32 -partition-degree 4 \
+  -partition-hnsw-m 16
+```
+
+The graph-disjoint, graph-overlap-`0.20`, and stable-ID-hash-disjoint reports
+are respectively
+`/mnt/fast4tb/tmp/issue4001_fh_graph_disjoint_out_guHDMc/vector_partition_m3_3c7a5665803b_7a2ec9d690c1_acdaaadff7e4.json`
+(SHA-256 `56ec4a78c444a4edeb06f3a795d1441fa2b1ed15ac257abbdde678162f1a75d3`),
+`/mnt/fast4tb/tmp/issue4001_fh_overlap_out_TssY5Z/vector_partition_m3_3c7a5665803b_7a2ec9d690c1_acdaaadff7e4.json`
+(`4838c692a01ef5ef238c6dcd8149660049b99c47775403a91af1c0f2a37492ea`),
+and
+`/mnt/fast4tb/tmp/issue4001_fh_stable_out_zcCOa6/vector_partition_m3_7a8ec9915de7_7a2ec9d690c1_acdaaadff7e4.json`
+(`fd1c43716c60290744817102f549a6681eed5ca27484c3558e4d97d9d50f151c`).
+The overlap descriptor records `requested=200000`, `realized=200000`,
+`rejected=0`, capacity `75000`, and sixteen loads of `75000`; its final
+derived bytes are `353839232` versus `294891612` for graph-disjoint
+(`1.1998958858x`, below the M3 `1.35x` bound).
+
+The M8 matrix used exactly those immutable directories:
+
+```sh
+/usr/bin/time -v -o "$OUT/time-v.log" /mnt/fast4tb/tmp/issue4001_finalhead_bench \
+  -dataset /mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture -out "$OUT" \
+  -profiles "$PROFILES" -format json -mode production_multi_group \
+  -m8-variant-dbs /mnt/fast4tb/tmp/issue4001_fh_graph_disjoint_db_1wK4gE,/mnt/fast4tb/tmp/issue4001_fh_overlap_db_JSViB8,/mnt/fast4tb/tmp/issue4001_fh_stable_db_dBMCDV \
+  -partitions 16 -top-k 10 -overlap 0.20 -raft-groups 4 -raft-nodes-per-group 3 \
+  -probes 16 -ef-search 4096 -concurrency 1 -warmup 0 -router-candidates 1024 \
+  -m8-max-rss-bytes 4294967296 -m8-max-persistent-asset-bytes 536870912
+```
+
+The successful retained matrix is
+`/mnt/fast4tb/tmp/issue4001_fh_matrix_retry_out_49yzvN/vector_partition_m8_matrix_acdaaadff7e4_3c30f06adbe8.json`
+(SHA-256 `704cf98926f2778eb0aeee4be6978d56ba815e665f28781473113b682cf4e01c`).
+Its `stderr.log` is empty and `time-v.log` records exit `0` after `7:49.42`,
+with maximum RSS `2195688 KiB`. Required variants, failure honesty, pack
+reachability, recall, balance, overlap storage, and resource bounds pass. The
+matrix-level overlap materialization is `0.2` and storage ratio is
+`1.1998982982`. It deliberately remains
+`experimental_gate_failures` / `enablement_off_follow_up_required`: exhaustive
+correctness, fixed-probe reduction, matched-recall QPS/tail, and coupled graph
+acceptance do not pass, and existing behavior is pending latest-head required
+suites. These are evidence dispositions, not waived gates.
+
+An earlier final-head attempt remains preserved at
+`/mnt/fast4tb/tmp/issue4001_fh_matrix_out_k2ebQ0`: it exited `1` after its
+graph-disjoint child emitted a report and before graph-overlap began. Its outer
+stderr was not redirected, so no exact text was retained. It is a diagnostic
+artifact only; the retry above retains explicit stdout, stderr, time, child
+reports, and profiles.
 
 The checked-in 10k report is
 [`TreeDB/docs/spec/artifacts/vector-partition-m3-evidence-v1.json`](../TreeDB/docs/spec/artifacts/vector-partition-m3-evidence-v1.json).
