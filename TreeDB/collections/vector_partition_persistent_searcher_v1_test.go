@@ -765,7 +765,13 @@ func TestVectorPartitionOverlapPolicyCanonicalV1(t *testing.T) {
 	if got, ok := parseVectorPartitionOverlapPolicyV1(raw); !ok || got != policy {
 		t.Fatalf("policy=%+v ok=%v want %+v", got, ok, policy)
 	}
-	for _, bad := range []string{"", raw + "junk", "m3_bounded_overlap_v1:capacity=0,budget=1,unspent=0", "m3_bounded_overlap_v1:capacity=1,budget=0,unspent=1"} {
+	for _, bad := range []string{
+		"",
+		raw + "junk",
+		"m3_bounded_overlap_v1:capacity=0,budget=1,realized=1,unspent=0",
+		"m3_bounded_overlap_v1:capacity=1,budget=1,realized=2,unspent=0",
+		"m3_bounded_overlap_v1:capacity=1,budget=2,realized=1,unspent=2",
+	} {
 		if _, ok := parseVectorPartitionOverlapPolicyV1(bad); ok {
 			t.Fatalf("accepted noncanonical policy %q", bad)
 		}
