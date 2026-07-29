@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"math"
 	"os"
@@ -182,16 +184,104 @@ func TestM8TruthCacheHitReusesCanonicalRowsV1(t *testing.T) {
 	fixture := fixtureManifest{Checksum: strings.Repeat("c", 64), Dimensions: 2, Metric: "cosine"}
 	identity, dir := m8TruthCacheIdentityV1(fixture, 1), t.TempDir()
 	want := [][]m8CanonicalResultV1{{{ID: "doc-000001", Score: .5}}}
-	raw, err := json.Marshal(m8TruthCacheFileV1{1, identity, m8CanonicalTruthContractV1, fixture.Checksum, 2, "cosine", 1, want})
+	truthSHA256, err := m8TruthContentSHA256V1(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: collections.VectorPartitionCanonicalScoreContractV1, DatasetChecksum: fixture.Checksum, Dimensions: 2, Metric: "cosine", TopK: 1, TruthSHA256: truthSHA256, Truth: want})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "m8_canonical_truth_"+identity+".json"), raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, evidence, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{}, fixture, [][]float64{{1, 0}}, 1)
+	got, evidence, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 1}, fixture, [][]float64{{1, 0}}, 1)
 	if err != nil || evidence.Status != "reused" || !reflect.DeepEqual(got, want) {
 		t.Fatalf("got=%v evidence=%+v err=%v", got, evidence, err)
+	}
+}
+
+func TestM8TruthCacheRefusesContentCorruptionAndSemanticMalformationV1(t *testing.T) {
+	fixture := fixtureManifest{Checksum: strings.Repeat("d", 64), Dimensions: 2, Metric: "cosine"}
+	identity, dir := m8TruthCacheIdentityV1(fixture, 2), t.TempDir()
+	path := filepath.Join(dir, "m8_canonical_truth_"+identity+".json")
+	good := [][]m8CanonicalResultV1{{{ID: "a", Score: .9}, {ID: "b", Score: .8}}}
+	contentSHA, err := m8TruthContentSHA256V1(good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: collections.VectorPartitionCanonicalScoreContractV1, DatasetChecksum: fixture.Checksum, Dimensions: 2, Metric: "cosine", TopK: 2, TruthSHA256: contentSHA, Truth: good}
+	write := func(t *testing.T, file m8TruthCacheFileV1) {
+		t.Helper()
+		raw, marshalErr := json.Marshal(file)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		if writeErr := os.WriteFile(path, raw, 0o644); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}
+	write(t, file)
+	file.Truth[0][0].Score = .7 // JSON remains valid but the content digest does not.
+	write(t, file)
+	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 2}, fixture, [][]float64{{1, 0}}, 2); err == nil || !strings.Contains(err.Error(), "truth_sha256") {
+		t.Fatalf("content corruption err=%v", err)
+	}
+	file.Truth[0][0].Score = .7
+	file.Truth[0][1].Score = .8 // ascending scores are semantically malformed.
+	file.TruthSHA256, err = m8TruthContentSHA256V1(file.Truth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, file)
+	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 2}, fixture, [][]float64{{1, 0}}, 2); err == nil || !strings.Contains(err.Error(), "noncanonical") {
+		t.Fatalf("semantic malformation err=%v", err)
+	}
+}
+
+func TestCommittedV1QualificationLedgerArtifactsV1(t *testing.T) {
+	type publishedArtifact struct {
+		Role   string `json:"role"`
+		Path   string `json:"path"`
+		SHA256 string `json:"sha256"`
+	}
+	type ledger struct {
+		SchemaVersion int                 `json:"schema_version"`
+		Status        string              `json:"status"`
+		Gates         map[string]string   `json:"gates"`
+		Artifacts     []publishedArtifact `json:"raw_artifacts"`
+	}
+	root := filepath.Join("..", "..")
+	ledgerPath := filepath.Join(root, "TreeDB", "docs", "spec", "artifacts", "vector-partition-v1-qualification-4015.json")
+	raw, err := os.ReadFile(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got ledger
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.SchemaVersion != 1 || got.Status != "experimental_off_gate_failures_not_1m_qualified" {
+		t.Fatalf("ledger schema/status=%d/%q", got.SchemaVersion, got.Status)
+	}
+	if got.Gates["quarter_probe_recall_ge_090"] == "pass" || got.Gates["required_1m"] == "pass" || !strings.HasPrefix(got.Gates["required_1m"], "deferred") {
+		t.Fatalf("ledger incorrectly permits qualification: gates=%v", got.Gates)
+	}
+	if len(got.Artifacts) != 13 {
+		t.Fatalf("published artifact count=%d want 13", len(got.Artifacts))
+	}
+	for _, artifact := range got.Artifacts {
+		if artifact.Role == "" || artifact.Path == "" || artifact.SHA256 == "" || filepath.IsAbs(artifact.Path) {
+			t.Fatalf("invalid published artifact=%+v", artifact)
+		}
+		content, err := os.ReadFile(filepath.Join(root, artifact.Path))
+		if err != nil {
+			t.Fatalf("read %s: %v", artifact.Path, err)
+		}
+		sum := sha256.Sum256(content)
+		if hex.EncodeToString(sum[:]) != artifact.SHA256 {
+			t.Fatalf("digest mismatch %s", artifact.Path)
+		}
 	}
 }
 

@@ -32,7 +32,7 @@ const (
 	m8PeakRSSScopeV1             = "process lifetime through preflight, warmup, measured query, endpoint-loss fault, and post-measurement attribution boundaries; includes retained top-k coordinator results and cached truth-home attribution mapping"
 )
 
-const m8CanonicalTruthContractV1 = "canonical_fp32_exact_topk_score_tie_v1"
+const m8CanonicalTruthContractV1 = collections.VectorPartitionCanonicalScoreContractV1
 
 type m8TruthCacheEvidenceV1 struct {
 	Status         string `json:"status"`
@@ -50,6 +50,7 @@ type m8TruthCacheFileV1 struct {
 	Dimensions      int                     `json:"dimensions"`
 	Metric          string                  `json:"metric"`
 	TopK            int                     `json:"top_k"`
+	TruthSHA256     string                  `json:"truth_sha256"`
 	Truth           [][]m8CanonicalResultV1 `json:"truth"`
 }
 
@@ -838,7 +839,7 @@ func m8TruthCacheIdentityV1(fixture fixtureManifest, topK int) string {
 		Checksum         string
 		Dimensions, TopK int
 		Metric, Contract string
-	}{fixture.Checksum, fixture.Dimensions, topK, fixture.Metric, m8CanonicalTruthContractV1})
+	}{fixture.Checksum, fixture.Dimensions, topK, fixture.Metric, collections.VectorPartitionCanonicalScoreContractV1})
 	s := sha256.Sum256(b)
 	return hex.EncodeToString(s[:])
 }
@@ -855,8 +856,11 @@ func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection,
 		raw, err := os.ReadFile(path)
 		if err == nil {
 			var file m8TruthCacheFileV1
-			if json.Unmarshal(raw, &file) != nil || file.SchemaVersion != 1 || file.Identity != identity || file.Contract != m8CanonicalTruthContractV1 || file.DatasetChecksum != fixture.Checksum || file.Dimensions != fixture.Dimensions || file.Metric != fixture.Metric || file.TopK != topK || len(file.Truth) != len(queries) {
+			if json.Unmarshal(raw, &file) != nil || file.SchemaVersion != 1 || file.Identity != identity || file.Contract != collections.VectorPartitionCanonicalScoreContractV1 || file.DatasetChecksum != fixture.Checksum || file.Dimensions != fixture.Dimensions || file.Metric != fixture.Metric || file.TopK != topK || len(file.Truth) != len(queries) {
 				return nil, evidence, errors.New("canonical truth cache identity/schema mismatch")
+			}
+			if err := m8ValidateCachedTruthV1(file.Truth, file.TruthSHA256, topK, manifest.SourceRowCount); err != nil {
+				return nil, evidence, fmt.Errorf("canonical truth cache semantic mismatch: %w", err)
 			}
 			d := sha256.Sum256(raw)
 			evidence.Status, evidence.LoadNanos, evidence.ArtifactSHA256 = "reused", time.Since(started).Nanoseconds(), hex.EncodeToString(d[:])
@@ -876,17 +880,83 @@ func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection,
 		if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 			return nil, evidence, err
 		}
-		raw, err := json.Marshal(m8TruthCacheFileV1{1, identity, m8CanonicalTruthContractV1, fixture.Checksum, fixture.Dimensions, fixture.Metric, topK, truth})
+		truthSHA256, err := m8TruthContentSHA256V1(truth)
+		if err != nil {
+			return nil, evidence, err
+		}
+		raw, err := json.Marshal(m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: collections.VectorPartitionCanonicalScoreContractV1, DatasetChecksum: fixture.Checksum, Dimensions: fixture.Dimensions, Metric: fixture.Metric, TopK: topK, TruthSHA256: truthSHA256, Truth: truth})
 		if err != nil {
 			return nil, evidence, err
 		}
 		d := sha256.Sum256(raw)
 		evidence.ArtifactSHA256 = hex.EncodeToString(d[:])
-		if err := os.WriteFile(path, raw, 0o644); err != nil {
+		temp, err := os.CreateTemp(cacheDir, ".m8_canonical_truth_*.tmp")
+		if err != nil {
+			return nil, evidence, err
+		}
+		tempPath := temp.Name()
+		defer os.Remove(tempPath)
+		if _, err := temp.Write(raw); err != nil {
+			temp.Close()
+			return nil, evidence, err
+		}
+		if err := temp.Chmod(0o644); err != nil {
+			temp.Close()
+			return nil, evidence, err
+		}
+		if err := temp.Close(); err != nil {
+			return nil, evidence, err
+		}
+		if err := os.Rename(tempPath, path); err != nil {
 			return nil, evidence, err
 		}
 	}
 	return truth, evidence, nil
+}
+
+func m8TruthContentSHA256V1(truth [][]m8CanonicalResultV1) (string, error) {
+	raw, err := json.Marshal(truth)
+	if err != nil {
+		return "", fmt.Errorf("marshal canonical truth content: %w", err)
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func m8ValidateCachedTruthV1(truth [][]m8CanonicalResultV1, wantSHA256 string, topK int, sourceRows uint64) error {
+	if wantSHA256 == "" {
+		return errors.New("missing truth_sha256")
+	}
+	gotSHA256, err := m8TruthContentSHA256V1(truth)
+	if err != nil {
+		return err
+	}
+	if gotSHA256 != wantSHA256 {
+		return errors.New("truth_sha256 mismatch")
+	}
+	expected := topK
+	if sourceRows > 0 && uint64(expected) > sourceRows {
+		expected = int(sourceRows)
+	}
+	for query, row := range truth {
+		if len(row) == 0 || len(row) > topK || (sourceRows > 0 && len(row) != expected) {
+			return fmt.Errorf("query=%d result count=%d", query, len(row))
+		}
+		seen := make(map[string]struct{}, len(row))
+		for i, result := range row {
+			if result.ID == "" || math.IsNaN(float64(result.Score)) || math.IsInf(float64(result.Score), 0) {
+				return fmt.Errorf("query=%d result=%d invalid ID or score", query, i)
+			}
+			if _, duplicate := seen[result.ID]; duplicate {
+				return fmt.Errorf("query=%d duplicate ID %q", query, result.ID)
+			}
+			seen[result.ID] = struct{}{}
+			if i > 0 && (row[i-1].Score < result.Score || (row[i-1].Score == result.Score && row[i-1].ID > result.ID)) {
+				return fmt.Errorf("query=%d noncanonical result order", query)
+			}
+		}
+	}
+	return nil
 }
 
 func m8ExactTruthV1(collection *collections.Collection, manifest collections.VectorPartitionManifestV1, queries [][]float64, topK int) ([][]m8CanonicalResultV1, error) {

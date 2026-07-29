@@ -107,3 +107,60 @@ Additional retained artifacts: `m8-stable-id-hash`, `m8-overlap-ef128-256`,
 `m8-overlap-concurrency16-64`, `m8-overlap-repeat-2`, and
 `m8-overlap-repeat-3` under `/mnt/fast4tb/gomap-4015-embedding100k`.
 Their paths, hashes, gates, and exact commands are indexed in the JSON ledger.
+
+## Reproducibility and calibration context
+
+The bounded M8 runs used an 11th Gen Intel Core i5-11400F (12 logical CPUs),
+31.21 GiB RAM, Linux 6.8.0-124-generic amd64, and `/mnt/fast4tb` on
+`/dev/nvme0n1p1` ext4 with `rw,noatime`. The topology is four three-node data
+Raft groups over serialized loopback TCP M5 messages. Timed cells include
+router/coordinator, M5 serialization, Raft read-index/apply, persistent HNSW,
+merge, and caller scheduling; they exclude topology construction, canonical
+truth computation, preflight, warmup, artifact encoding, attribution, and
+shutdown.
+
+The 100k calibration fixture uses the distinct-domain
+`treedb_vector_partition_embedding_mixture_v1` generator (seed 4017) so held
+out queries are not copied corpus rows. Its role is to expose a clustered,
+embedding-shaped routing case; it is not a licensed external corpus and cannot
+replace the committed 1M high-entropy identity
+`treedb_vector_partition_high_entropy_synthetic_v1` (seed 4015, checksum
+`08a920e81d8ce5a0b19d1a4d051d5f408a688192eee971cbfc09d1b8c362a3c3`).
+
+An earlier 10k high-entropy calibration found `.3004` recall@10 at four probes
+and `.9999` at 16 probes. It is a uniform/unclustered negative calibration,
+not a qualification row and not pooled with the 100k result. The direct
+profiled 10k capture command was:
+
+```sh
+treedb_vector_partition_bench -mode production_multi_group \
+  -dataset /mnt/fast4tb/gomap-4015-fixtures/high_entropy_10k \
+  -out /mnt/fast4tb/gomap-4015-calibration/out \
+  -profiles /mnt/fast4tb/gomap-4015-calibration/profiles \
+  -partitions 16 -raft-groups 4 -probes 1,2,4,8,16 -overlap 0 \
+  -ef-search 64 -concurrency 1 -top-k 10 -seed 4015 \
+  -m8-max-exact-truth-visits 10000000 -format text
+```
+
+Profile coverage is limited to that 10k calibration, not the 100k retained
+rows. CPU profile (99.82 s wall, 22.62 s samples) is led by Linux syscall6
+(23.12% flat), AVX512 dot product (3.93%), futex (3.49%), and prepared HNSW
+cosine search (12.02% cumulative). The cumulative allocation snapshot totals
+5.67 GiB; leading flat contributors are coordinator-response validation
+(1.05 GiB), bbolt inode reads (367 MiB), candidate scratch growth (322 MiB),
+and JSON marshal (252 MiB). The binary profiles and trace are intentionally
+not committed: CPU `915f08ad41eb8f63ab5383bc6ccc7ca7830212696e6078301cf2a323d8b50ab0`,
+allocs `95bb1016270299b63572bacd07d09c061d9671a557856f28ed2677b2ed7decb8`,
+alloc baseline `1f4105f34057cd8172be60da6d91f98e8a881fecbf801eb1c57ef3a0590a4d51`,
+heap `55161019ac9cf8e680b16b877d8e2c032750a090012b0ba7cbb348547d90d58c`,
+block `d3af88821c7810d410359482be38ee4fdd0397bf90758c9139673216cd701df2`,
+and mutex `d627a756f3908c3c674b7fd3cd558a722fdd224ff951e1034114959455068413`.
+
+Every 100k raw JSON artifact is checked in under
+`TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/`; each
+contains its exact command. The command variants are graph/disjoint and
+graph/overlap `.20` full sweeps; stable-hash probes `4,16`; graph-overlap EF
+`128,256` at probes `4,16`; graph-overlap concurrency `16,64` at probes
+`4,16`; and two graph-overlap EF-64 single-client repeats at probes `4,16`.
+The ledger maps every published repo-relative path to its SHA-256, while `/mnt`
+is retained only as provenance.

@@ -10,7 +10,8 @@
   "gates": {"exact_partition_union_parity":"pass","failure_honesty":"pass","balance":"pass","overlap_storage":"pass_1.2002x","quarter_probe_recall_ge_090":"fail_0.7201","probe_reduction":"fail","matched_recall_qps":"fail_no_target_row","matched_recall_tail":"fail_no_target_row","required_1m":"deferred_requires_explicit_work_time_resource_calibration"},
   "repeats": {"runs":3,"p4":{"recall":0.7201,"qps_median":50.96762724566287,"qps_range":[38.957053307919566,51.0583649126661],"p95_ms_median":30.980773,"p95_ms_range":[29.590312,46.256897]},"p16":{"recall":0.9924,"qps_median":45.444061581835896,"qps_range":[38.30153640654342,46.672391648155234],"p95_ms_median":34.493601,"p95_ms_range":[33.704847,47.056089]}},
   "concurrency": {"p4_c16":{"recall":0.7201,"qps":126.40229642716955,"p95_ms":218.700072},"p4_c64":{"recall":0.7201,"qps":93.50123186722921,"p95_ms":978.510104},"p16_c16":{"recall":0.9924,"qps":91.25145855053826,"p95_ms":299.688544},"p16_c64":{"recall":0.9924,"qps":163.95218587968898,"p95_ms":524.46338}},
-  "artifact_root": "/mnt/fast4tb/gomap-4015-embedding100k",
+  "published_artifact_root": "TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015",
+  "local_provenance_root": "/mnt/fast4tb/gomap-4015-embedding100k",
   "retained_runs": [
     {"role":"graph_disjoint","out":"m8-default","asset":"graph-default","probes":"1,2,4,8,16","overlap":"0","ef_search":"64","concurrency":"1"},
     {"role":"graph_overlap","out":"m8-overlap","asset":"graph-overlap-020","probes":"1,2,4,8,16","overlap":".2","ef_search":"64","concurrency":"1"},
@@ -21,5 +22,19 @@
     {"role":"overlap_repeat_3","out":"m8-overlap-repeat-3","asset":"graph-overlap-020","probes":"4,16","overlap":".2","ef_search":"64","concurrency":"1"}
   ],
   "commands": {"canonical":"go run ./cmd/treedb_vector_partition_bench -mode production_multi_group -dataset /mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k -m8-truth-cache /mnt/fast4tb/gomap-4015-embedding100k/truth-cache -m8-existing-db <retained-M3-asset> -partitions 16 -raft-groups 4 -probes <cells> -overlap <ratio> -ef-search <cells> -concurrency <cells> -top-k 10 -seed 4017 -m8-max-exact-truth-visits 100000000 -format text"},
-  "artifacts": {"disjoint_sha256":"123c9135f3374827c16e52946dde138860bcfbf49b3985b7a235e75c35c7198e","overlap_sha256":"4a6c794f78df3512de1b925769bd2c2f8eddb3ff05d80017e0bee3db5fa77cbd","repeat2_sha256":"919abe7ab4d372afc9293c50716148ef080b05a8e61fe00c27c590fbca3ff6c3","repeat3_sha256":"b0ae43d4b68cc4e57e9d3b74d5308657b61a7d9be238e870182c1b5d22190cc5"}
+  "raw_artifacts": [
+    {"role":"graph_disjoint_m2","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/graph-disjoint-m2.json","sha256":"2cd948e3b6c6edc2aac232d40074992e7638bb95851bd74ea04ae8015b092154"},
+    {"role":"graph_disjoint_m3","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/graph-disjoint-m3.json","sha256":"d417eacafc99216c535500df327c1e428929ca44c458592a6160a08331b64b1c"},
+    {"role":"graph_disjoint_m8","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/graph-disjoint-m8.json","sha256":"123c9135f3374827c16e52946dde138860bcfbf49b3985b7a235e75c35c7198e"},
+    {"role":"graph_overlap_020_m2","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/graph-overlap-020-m2.json","sha256":"4b4870b8ca350fb503ea630cf7af9ddb28c5d98e65104fc8df35bea2d2b946b8"},
+    {"role":"graph_overlap_020_m3","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/graph-overlap-020-m3.json","sha256":"129bccba7d5bbe619c1d495458a9c945370b56913f61e5de2e3c93bdf5ea819b"},
+    {"role":"graph_overlap_020_m8","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/graph-overlap-020-m8.json","sha256":"4a6c794f78df3512de1b925769bd2c2f8eddb3ff05d80017e0bee3db5fa77cbd"},
+    {"role":"graph_overlap_020_ef_m8","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/graph-overlap-020-ef-m8.json","sha256":"4e542184ab00e77e2f44e4e7d59992e99b16d25dc06f037509221d8d0f4422a1"},
+    {"role":"graph_overlap_020_concurrency_m8","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/graph-overlap-020-concurrency-m8.json","sha256":"bab1d706684af6817f948c6412b42c56d17efe1c5f56c3ba40c679ceb6ededdc"},
+    {"role":"graph_overlap_020_repeat_2_m8","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/graph-overlap-020-repeat-2-m8.json","sha256":"919abe7ab4d372afc9293c50716148ef080b05a8e61fe00c27c590fbca3ff6c3"},
+    {"role":"graph_overlap_020_repeat_3_m8","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/graph-overlap-020-repeat-3-m8.json","sha256":"b0ae43d4b68cc4e57e9d3b74d5308657b61a7d9be238e870182c1b5d22190cc5"},
+    {"role":"stable_id_hash_disjoint_m2","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/stable-id-hash-disjoint-m2.json","sha256":"473bec607a8f8c90036b28d9694a6dc1bc083c8cc3eb974682ad2f0deff76519"},
+    {"role":"stable_id_hash_disjoint_m3","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/stable-id-hash-disjoint-m3.json","sha256":"86ec0afa0d7740cb51f0e7e4e095c13d5e1ff4dbca5177408b28e7fdd82849f3"},
+    {"role":"stable_id_hash_disjoint_m8","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/stable-id-hash-disjoint-m8.json","sha256":"9ad6c8de7a3432a6f8ce49c5f29eaf1a9629247eb725a59a4203ee341d30875d"}
+  ]
 }
