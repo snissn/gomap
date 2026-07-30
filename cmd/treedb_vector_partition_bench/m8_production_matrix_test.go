@@ -412,7 +412,7 @@ func TestCommittedV1QualificationLedgerArtifactsV1(t *testing.T) {
 	if got.Gates["quarter_probe_recall_ge_090"] == "pass" || got.Gates["required_1m"] == "pass" || !strings.HasPrefix(got.Gates["required_1m"], "deferred") {
 		t.Fatalf("ledger incorrectly permits qualification: gates=%v", got.Gates)
 	}
-	for _, required := range []string{"-mode", "-dataset", "-out", "-m8-existing-db", "-m8-max-exact-truth-visits"} {
+	for _, required := range []string{"-mode", "-dataset", "-out", "-m8-existing-db", "-m8-max-exact-truth-visits", "-m8-truth-cache-sha256 bf59243ed023eb4f1770a01373113b5f0f5a845d554d8b47318285dd7f8a4a62"} {
 		if !strings.Contains(got.Commands.Canonical, required) {
 			t.Fatalf("canonical replay command omits %s: %s", required, got.Commands.Canonical)
 		}
