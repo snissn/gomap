@@ -146,7 +146,10 @@ type m8ProductionAttributionV1 struct {
 	ApproximateRouterCandidateBudget              int       `json:"approximate_router_candidate_budget"`
 	ApproximateRouterPartitionCoverageComplete    bool      `json:"approximate_router_partition_coverage_complete"`
 	ResidualLossOwners                            []string  `json:"residual_loss_owners"`
+	StageOwners                                    []m8AttributionStageOwnerV1 `json:"stage_owners"`
 }
+
+type m8AttributionStageOwnerV1 struct { Stage string `json:"stage"`; Owner string `json:"owner"` }
 
 // m8PartitionPackDiagnosticsV1 records offline topology facts for each
 // generation-pinned local pack. It is deliberately separate from recall: a
@@ -2197,6 +2200,7 @@ func m8AttachAttributionV1(row *m8ProductionRowV1, attribution m8AttributionCell
 		row.Attribution.LocalHNSWToEndToEndLossAtK = row.Attribution.LocalHNSWRecallAtK - row.Attribution.EndToEndRecallAtK
 	}
 	row.Attribution.ResidualLossOwners = m8AttributionLossOwnersV1(row.Attribution)
+	row.Attribution.StageOwners = m8AttributionStageOwnersV1(row.Attribution)
 	return nil
 }
 
@@ -2300,6 +2304,17 @@ func m8AttributionLossOwnersV1(attribution m8ProductionAttributionV1) []string {
 		return []string{"none_observed"}
 	}
 	return owners
+}
+
+func m8AttributionStageOwnersV1(attribution m8ProductionAttributionV1) []m8AttributionStageOwnerV1 {
+	owners := m8AttributionLossOwnersV1(attribution)
+	out := make([]m8AttributionStageOwnerV1, 0, len(owners))
+	for _, owner := range owners {
+		stage := map[string]string{"primary_placement": "global_to_primary", "overlap_or_placement_membership": "primary_to_final_membership", "exact_representative_routing": "final_membership_to_exact_routing", "approximate_representative_routing": "exact_to_approximate_routing", "partition_local_hnsw": "exact_routing_to_local_hnsw", "coordinator_merge_or_transport": "local_hnsw_to_end_to_end"}[owner]
+		if stage == "" { stage = "none" }
+		out = append(out, m8AttributionStageOwnerV1{Stage: stage, Owner: owner})
+	}
+	return out
 }
 
 // m8RunBoundedWorkV1 starts no more than concurrency workers, rather than one
@@ -2744,7 +2759,7 @@ func validM8AttributionV1(attribution m8ProductionAttributionV1) bool {
 	if attribution.Contract != m8CanonicalResultContractV1 || attribution.GlobalExactRecallAtK != 1 ||
 		attribution.ApproximateRouterCandidateBudget < 1 ||
 		(!attribution.ApproximateRouterPartitionCoverageComplete && attribution.ApproximateRepresentativeRecallAtK != 0) ||
-		!slices.Equal(attribution.ResidualLossOwners, m8AttributionLossOwnersV1(attribution)) {
+		!slices.Equal(attribution.ResidualLossOwners, m8AttributionLossOwnersV1(attribution)) || !slices.Equal(attribution.StageOwners, m8AttributionStageOwnersV1(attribution)) {
 		return false
 	}
 	for _, recall := range []float64{
@@ -2767,6 +2782,8 @@ func validM8AttributionV1(attribution m8ProductionAttributionV1) bool {
 		if math.IsNaN(attribution.ExactToApproximateLossAtK) || math.IsInf(attribution.ExactToApproximateLossAtK, 0) || attribution.ExactToApproximateLossAtK < -1 || attribution.ExactToApproximateLossAtK > 1 {
 			return false
 		}
+		near := func(a, b float64) bool { return math.Abs(a-b) <= 1e-12 }
+		if attribution.FinalMembershipOracleRecallAtK+1e-12 < attribution.PrimaryHomeOracleRecallAtK || attribution.FinalMembershipOracleRecallAtK+1e-12 < attribution.ExactRepresentativeRecallAtK || attribution.ExactRepresentativeRecallAtK+1e-12 < attribution.LocalHNSWRecallAtK || !near(attribution.PrimaryHomeOracleRegretAtK, 1-attribution.PrimaryHomeOracleRecallAtK) || !near(attribution.FinalMembershipOracleRegretAtK, 1-attribution.FinalMembershipOracleRecallAtK) || !near(attribution.PrimaryToFinalMembershipGainAtK, attribution.FinalMembershipOracleRecallAtK-attribution.PrimaryHomeOracleRecallAtK) || !near(attribution.FinalMembershipToExactLossAtK, attribution.FinalMembershipOracleRecallAtK-attribution.ExactRepresentativeRecallAtK) || !near(attribution.ExactToApproximateLossAtK, attribution.ExactRepresentativeRecallAtK-attribution.ApproximateRepresentativeRecallAtK) || !near(attribution.ExactToLocalHNSWLossAtK, attribution.ExactRepresentativeRecallAtK-attribution.LocalHNSWRecallAtK) || !near(attribution.LocalHNSWToEndToEndLossAtK, attribution.LocalHNSWRecallAtK-attribution.EndToEndRecallAtK) { return false }
 	}
 	return true
 }
