@@ -137,7 +137,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		if report.Variant == nil || report.Variant.VariantID != variantID {
 			return fmt.Errorf("M8 matrix variant %s lost immutable descriptor identity", variantID)
 		}
-		if expectedTruthCacheDigest == "" {
+		if cfg.m8TruthCache != "" && expectedTruthCacheDigest == "" {
 			if report.TruthCache.Status != "computed" || report.TruthCache.ArtifactSHA256 == "" {
 				return errors.New("first M8 matrix child must compute authoritative truth cache")
 			}
@@ -178,12 +178,9 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 }
 
 func runM8ProductionVariantProcessV1(cfg config, dir string, overlap float64, profiles, expectedTruthCacheDigest string, stdout io.Writer) error {
-	args, err := m8VariantProcessArgsV1(cfg.command, dir, overlap, profiles, cfg.out, cfg.profiles)
+	args, err := m8VariantProcessArgsV1(cfg.command, dir, overlap, profiles, cfg.out, cfg.profiles, expectedTruthCacheDigest)
 	if err != nil {
 		return err
-	}
-	if expectedTruthCacheDigest != "" {
-		args = append(args, "-m8-truth-cache-sha256", expectedTruthCacheDigest)
 	}
 	executable, err := os.Executable()
 	if err != nil {
@@ -199,7 +196,7 @@ func runM8ProductionVariantProcessV1(cfg config, dir string, overlap float64, pr
 	return nil
 }
 
-func m8VariantProcessArgsV1(command []string, dir string, overlap float64, profiles, matrixOut, matrixProfiles string) ([]string, error) {
+func m8VariantProcessArgsV1(command []string, dir string, overlap float64, profiles, matrixOut, matrixProfiles string, expectedTruthCacheDigest ...string) ([]string, error) {
 	if len(command) == 0 || dir == "" || math.IsNaN(overlap) || math.IsInf(overlap, 0) || overlap < 0 || overlap > 1 {
 		return nil, errors.New("M8 variant process requires a command, database, and finite overlap in [0,1]")
 	}
@@ -208,6 +205,9 @@ func m8VariantProcessArgsV1(command []string, dir string, overlap float64, profi
 	// safe even for a defensively supplied positional argument because Go flag
 	// parsing stops at the first positional token.
 	args := []string{"-m8-existing-db", dir, "-overlap", strconv.FormatFloat(overlap, 'g', -1, 64), "-format", "json"}
+	if len(expectedTruthCacheDigest) > 0 && expectedTruthCacheDigest[0] != "" {
+		args = append(args, "-m8-truth-cache-sha256", expectedTruthCacheDigest[0])
+	}
 	if profiles != "" {
 		args = append(args, "-profiles", profiles)
 	}

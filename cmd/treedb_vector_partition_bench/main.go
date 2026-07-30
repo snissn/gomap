@@ -726,8 +726,13 @@ func parseConfig(args []string) (config, error) {
 	if cfg.partition.MaxDistanceWork < 1 || cfg.partition.MaxPartitionWork < 1 || cfg.m3MaxBenchmarkVisits < 1 {
 		return config{}, errors.New("partition work and M3 benchmark-visit limits must be positive")
 	}
-	if cfg.m8TruthCacheSHA256 != "" && (len(cfg.m8TruthCacheSHA256) != sha256.Size*2 || strings.ToLower(cfg.m8TruthCacheSHA256) != cfg.m8TruthCacheSHA256) {
+	if cfg.m8TruthCacheSHA256 != "" && (cfg.m8TruthCache == "" || len(cfg.m8TruthCacheSHA256) != sha256.Size*2 || strings.ToLower(cfg.m8TruthCacheSHA256) != cfg.m8TruthCacheSHA256) {
 		return config{}, errors.New("-m8-truth-cache-sha256 must be lowercase 64-hex")
+	}
+	if cfg.m8TruthCacheSHA256 != "" {
+		if decoded, err := hex.DecodeString(cfg.m8TruthCacheSHA256); err != nil || len(decoded) != sha256.Size {
+			return config{}, errors.New("-m8-truth-cache-sha256 must be lowercase 64-hex")
+		}
 	}
 	if cfg.mode != "" {
 		if cfg.mode != m8ProductionMultiGroupModeV1 || cfg.stage != "simulation" {

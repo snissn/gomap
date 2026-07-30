@@ -942,6 +942,9 @@ func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection,
 			return nil, evidence, err
 		}
 		evidence.ArtifactSHA256 = hex.EncodeToString(artifactHash.Sum(nil))
+		if expectedDigest != "" && evidence.ArtifactSHA256 != expectedDigest {
+			return nil, evidence, errors.New("computed canonical truth cache artifact does not match independently trusted digest")
+		}
 		if err := temp.Chmod(0o644); err != nil {
 			temp.Close()
 			return nil, evidence, err
