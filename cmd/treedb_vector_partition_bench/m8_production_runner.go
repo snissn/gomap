@@ -342,7 +342,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	defer func() { runErr = errors.Join(runErr, topology.Close()) }()
 	buildNanos := time.Since(started).Nanoseconds()
 
-	truth, truthCache, err := m8LoadOrComputeTruthV1(cfg.m8TruthCache, assets.collection, assets.manifest, fixture, queries, cfg.topK)
+	truth, truthCache, err := m8LoadOrComputeTruthV1(cfg.m8TruthCache, assets.collection, assets.manifest, fixture, queries, cfg.topK, cfg.m8TruthCacheSHA256)
 	if err != nil {
 		return err
 	}
@@ -845,7 +845,11 @@ func m8TruthCacheIdentityV1(fixture fixtureManifest, topK int) string {
 	return hex.EncodeToString(s[:])
 }
 
-func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection, manifest collections.VectorPartitionManifestV1, fixture fixtureManifest, queries [][]float64, topK int) ([][]m8CanonicalResultV1, m8TruthCacheEvidenceV1, error) {
+func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection, manifest collections.VectorPartitionManifestV1, fixture fixtureManifest, queries [][]float64, topK int, expectedArtifactSHA256 ...string) ([][]m8CanonicalResultV1, m8TruthCacheEvidenceV1, error) {
+	expectedDigest := ""
+	if len(expectedArtifactSHA256) > 0 {
+		expectedDigest = expectedArtifactSHA256[0]
+	}
 	identity := m8TruthCacheIdentityV1(fixture, topK)
 	evidence := m8TruthCacheEvidenceV1{Identity: identity}
 	path := ""
@@ -894,7 +898,11 @@ func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection,
 				if err := m8ValidateCachedTruthV1(file.Truth, file.TruthSHA256, topK, manifest.SourceRowCount, fixture.Vectors); err != nil {
 					return nil, evidence, fmt.Errorf("canonical truth cache semantic mismatch: %w", err)
 				}
-				evidence.Status, evidence.LoadNanos, evidence.ArtifactSHA256 = "reused", time.Since(started).Nanoseconds(), hex.EncodeToString(hasher.Sum(nil))
+				artifactSHA := hex.EncodeToString(hasher.Sum(nil))
+				if expectedDigest == "" || artifactSHA != expectedDigest {
+					return nil, evidence, errors.New("canonical truth cache artifact digest is absent or does not match independently trusted digest")
+				}
+				evidence.Status, evidence.LoadNanos, evidence.ArtifactSHA256 = "reused", time.Since(started).Nanoseconds(), artifactSHA
 				return file.Truth, evidence, nil
 			}
 		} else {

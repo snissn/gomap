@@ -112,6 +112,7 @@ type config struct {
 	m8MaxAssetBytes       uint64
 	m8MaxExactTruthVisits int64
 	m8TruthCache          string
+	m8TruthCacheSHA256    string
 	m3MaxBenchmarkVisits  int64
 	m8CoordinatorLimits   nativewire.VectorPartitionCoordinatorLimitsV1
 	m8ShardLimits         nativewire.VectorPartitionShardSearchLimitsV1
@@ -693,6 +694,7 @@ func parseConfig(args []string) (config, error) {
 	fs.Uint64Var(&cfg.m8MaxAssetBytes, "m8-max-persistent-asset-bytes", cfg.m8MaxAssetBytes, "hard persistent derived-asset byte bound for production_multi_group")
 	fs.Int64Var(&cfg.m8MaxExactTruthVisits, "m8-max-exact-truth-visits", cfg.m8MaxExactTruthVisits, "hard exact source-query visit bound for production_multi_group")
 	fs.StringVar(&cfg.m8TruthCache, "m8-truth-cache", "", "external canonical exact-truth cache directory; identity-bound and fail-closed")
+	fs.StringVar(&cfg.m8TruthCacheSHA256, "m8-truth-cache-sha256", "", "independently trusted SHA-256 of the canonical truth-cache artifact required for cache reuse")
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
 	fs.BoolVar(&cfg.partitionTruthOracle, "partition-truth-oracle", false, "emit exact truth primary-partition coverage diagnostic for -stage partition")
 	fs.IntVar(&cfg.partition.Repetitions, "partition-repetitions", cfg.partition.Repetitions, "dense-ball graph sketch repetitions")
@@ -723,6 +725,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.partition.MaxDistanceWork < 1 || cfg.partition.MaxPartitionWork < 1 || cfg.m3MaxBenchmarkVisits < 1 {
 		return config{}, errors.New("partition work and M3 benchmark-visit limits must be positive")
+	}
+	if cfg.m8TruthCacheSHA256 != "" && (len(cfg.m8TruthCacheSHA256) != sha256.Size*2 || strings.ToLower(cfg.m8TruthCacheSHA256) != cfg.m8TruthCacheSHA256) {
+		return config{}, errors.New("-m8-truth-cache-sha256 must be lowercase 64-hex")
 	}
 	if cfg.mode != "" {
 		if cfg.mode != m8ProductionMultiGroupModeV1 || cfg.stage != "simulation" {

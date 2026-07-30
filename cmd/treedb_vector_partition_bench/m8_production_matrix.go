@@ -118,6 +118,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 	}
 
 	reports := make([]m8ProductionReportV1, 0, len(m8RequiredVariantIDsV1))
+	expectedTruthCacheDigest := cfg.m8TruthCacheSHA256
 	for _, variantID := range m8RequiredVariantIDsV1 {
 		source := sourcesByVariant[variantID]
 		var encoded bytes.Buffer
@@ -125,7 +126,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		if cfg.profiles != "" {
 			variantProfiles = filepath.Join(cfg.profiles, variantID)
 		}
-		if err := runM8ProductionVariantProcessV1(cfg, source.dir, source.descriptor.OverlapRatio, variantProfiles, &encoded); err != nil {
+		if err := runM8ProductionVariantProcessV1(cfg, source.dir, source.descriptor.OverlapRatio, variantProfiles, expectedTruthCacheDigest, &encoded); err != nil {
 			return fmt.Errorf("M8 matrix variant %s: %w", variantID, err)
 		}
 		var report m8ProductionReportV1
@@ -135,6 +136,12 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		report.Dirty = initialDirty || report.Dirty
 		if report.Variant == nil || report.Variant.VariantID != variantID {
 			return fmt.Errorf("M8 matrix variant %s lost immutable descriptor identity", variantID)
+		}
+		if expectedTruthCacheDigest == "" {
+			if report.TruthCache.Status != "computed" || report.TruthCache.ArtifactSHA256 == "" {
+				return errors.New("first M8 matrix child must compute authoritative truth cache")
+			}
+			expectedTruthCacheDigest = report.TruthCache.ArtifactSHA256
 		}
 		reports = append(reports, report)
 	}
@@ -170,10 +177,13 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 	return err
 }
 
-func runM8ProductionVariantProcessV1(cfg config, dir string, overlap float64, profiles string, stdout io.Writer) error {
+func runM8ProductionVariantProcessV1(cfg config, dir string, overlap float64, profiles, expectedTruthCacheDigest string, stdout io.Writer) error {
 	args, err := m8VariantProcessArgsV1(cfg.command, dir, overlap, profiles, cfg.out, cfg.profiles)
 	if err != nil {
 		return err
+	}
+	if expectedTruthCacheDigest != "" {
+		args = append(args, "-m8-truth-cache-sha256", expectedTruthCacheDigest)
 	}
 	executable, err := os.Executable()
 	if err != nil {
@@ -193,7 +203,7 @@ func m8VariantProcessArgsV1(command []string, dir string, overlap float64, profi
 	if len(command) == 0 || dir == "" || math.IsNaN(overlap) || math.IsInf(overlap, 0) || overlap < 0 || overlap > 1 {
 		return nil, errors.New("M8 variant process requires a command, database, and finite overlap in [0,1]")
 	}
-	drop := map[string]bool{"m8-variant-dbs": true, "m8-existing-db": true, "overlap": true, "format": true, "profiles": true, "m8-matrix-out": true, "m8-matrix-profiles": true}
+	drop := map[string]bool{"m8-variant-dbs": true, "m8-existing-db": true, "overlap": true, "format": true, "profiles": true, "m8-matrix-out": true, "m8-matrix-profiles": true, "m8-truth-cache-sha256": true}
 	// Forced child identity flags must precede every inherited argument. This is
 	// safe even for a defensively supplied positional argument because Go flag
 	// parsing stops at the first positional token.

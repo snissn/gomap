@@ -208,7 +208,8 @@ func TestM8TruthCacheHitReusesCanonicalRowsV1(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "m8_canonical_truth_"+identity+".json"), raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, evidence, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 1}, fixture, [][]float64{{1, 0}}, 1)
+	artifact := sha256.Sum256(raw)
+	got, evidence, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 1}, fixture, [][]float64{{1, 0}}, 1, hex.EncodeToString(artifact[:]))
 	if err != nil || evidence.Status != "reused" || !reflect.DeepEqual(got, want) {
 		t.Fatalf("got=%v evidence=%+v err=%v", got, evidence, err)
 	}
@@ -233,7 +234,8 @@ func TestM8TruthCacheWorstCanonicalEncodingFitsBoundV1(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "m8_canonical_truth_"+identity+".json"), raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got, evidence, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 1}, fixture, [][]float64{{1, 0}}, 1); err != nil || evidence.Status != "reused" || !reflect.DeepEqual(got, truth) {
+	artifact := sha256.Sum256(raw)
+	if got, evidence, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 1}, fixture, [][]float64{{1, 0}}, 1, hex.EncodeToString(artifact[:])); err != nil || evidence.Status != "reused" || !reflect.DeepEqual(got, truth) {
 		t.Fatalf("got=%v evidence=%+v err=%v", got, evidence, err)
 	}
 }
@@ -292,8 +294,8 @@ func TestM8TruthCacheWhitespaceBoundAndExactByteDigestV1(t *testing.T) {
 	if err := os.WriteFile(path, within, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, evidence, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 1}, fixture, [][]float64{{1, 0}}, 1)
 	sum := sha256.Sum256(within)
+	_, evidence, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 1}, fixture, [][]float64{{1, 0}}, 1, hex.EncodeToString(sum[:]))
 	if err != nil || evidence.Status != "reused" || evidence.ArtifactSHA256 != hex.EncodeToString(sum[:]) {
 		t.Fatalf("evidence=%+v err=%v", evidence, err)
 	}
