@@ -129,27 +129,30 @@ type m8ProductionAttributionV1 struct {
 	// ranking: coverage is the share of exact truth neighbors whose primary
 	// home was selected, while pair co-location describes how concentrated the
 	// exact truth set already is in that primary partitioning.
-	ExactRepresentativeTruthHomeCoverageAtK       float64   `json:"exact_representative_truth_home_partition_coverage_at_k"`
-	TruthNeighborHomePartitionsAtK                float64   `json:"truth_neighbor_primary_home_partitions_at_k"`
-	TruthNeighborHomePairColocationAtK            float64   `json:"truth_neighbor_primary_home_pair_colocation_at_k"`
-	ExactRepresentativeFinalMembershipCoverageAtK float64   `json:"exact_representative_truth_final_membership_coverage_at_k"`
-	TruthNeighborFinalMembershipPartitionsAtK     float64   `json:"truth_neighbor_final_membership_partitions_at_k"`
-	TruthNeighborRankRetentionAtK                 []float64 `json:"truth_neighbor_rank_final_membership_retention_at_k"`
-	ApproximateRepresentativeRecallAtK            float64   `json:"approximate_representative_routing_recall_at_k"`
-	LocalHNSWRecallAtK                            float64   `json:"partition_local_hnsw_recall_at_k"`
-	LocalHNSWSearches                             uint64    `json:"partition_local_hnsw_searches"`
-	LocalHNSWCandidates                           uint64    `json:"partition_local_hnsw_candidates"`
-	LocalHNSWEdges                                uint64    `json:"partition_local_hnsw_edges"`
-	EndToEndRecallAtK                             float64   `json:"end_to_end_recall_at_k"`
-	CoordinatorMergeIDParity                      bool      `json:"coordinator_merge_id_parity"`
-	CoordinatorMergeScoreParity                   bool      `json:"coordinator_merge_score_parity"`
-	ApproximateRouterCandidateBudget              int       `json:"approximate_router_candidate_budget"`
-	ApproximateRouterPartitionCoverageComplete    bool      `json:"approximate_router_partition_coverage_complete"`
-	ResidualLossOwners                            []string  `json:"residual_loss_owners"`
-	StageOwners                                    []m8AttributionStageOwnerV1 `json:"stage_owners"`
+	ExactRepresentativeTruthHomeCoverageAtK       float64                     `json:"exact_representative_truth_home_partition_coverage_at_k"`
+	TruthNeighborHomePartitionsAtK                float64                     `json:"truth_neighbor_primary_home_partitions_at_k"`
+	TruthNeighborHomePairColocationAtK            float64                     `json:"truth_neighbor_primary_home_pair_colocation_at_k"`
+	ExactRepresentativeFinalMembershipCoverageAtK float64                     `json:"exact_representative_truth_final_membership_coverage_at_k"`
+	TruthNeighborFinalMembershipPartitionsAtK     float64                     `json:"truth_neighbor_final_membership_partitions_at_k"`
+	TruthNeighborRankRetentionAtK                 []float64                   `json:"truth_neighbor_rank_final_membership_retention_at_k"`
+	ApproximateRepresentativeRecallAtK            float64                     `json:"approximate_representative_routing_recall_at_k"`
+	LocalHNSWRecallAtK                            float64                     `json:"partition_local_hnsw_recall_at_k"`
+	LocalHNSWSearches                             uint64                      `json:"partition_local_hnsw_searches"`
+	LocalHNSWCandidates                           uint64                      `json:"partition_local_hnsw_candidates"`
+	LocalHNSWEdges                                uint64                      `json:"partition_local_hnsw_edges"`
+	EndToEndRecallAtK                             float64                     `json:"end_to_end_recall_at_k"`
+	CoordinatorMergeIDParity                      bool                        `json:"coordinator_merge_id_parity"`
+	CoordinatorMergeScoreParity                   bool                        `json:"coordinator_merge_score_parity"`
+	ApproximateRouterCandidateBudget              int                         `json:"approximate_router_candidate_budget"`
+	ApproximateRouterPartitionCoverageComplete    bool                        `json:"approximate_router_partition_coverage_complete"`
+	ResidualLossOwners                            []string                    `json:"residual_loss_owners"`
+	StageOwners                                   []m8AttributionStageOwnerV1 `json:"stage_owners"`
 }
 
-type m8AttributionStageOwnerV1 struct { Stage string `json:"stage"`; Owner string `json:"owner"` }
+type m8AttributionStageOwnerV1 struct {
+	Stage string `json:"stage"`
+	Owner string `json:"owner"`
+}
 
 // m8PartitionPackDiagnosticsV1 records offline topology facts for each
 // generation-pinned local pack. It is deliberately separate from recall: a
@@ -2311,7 +2314,9 @@ func m8AttributionStageOwnersV1(attribution m8ProductionAttributionV1) []m8Attri
 	out := make([]m8AttributionStageOwnerV1, 0, len(owners))
 	for _, owner := range owners {
 		stage := map[string]string{"primary_placement": "global_to_primary", "overlap_or_placement_membership": "primary_to_final_membership", "exact_representative_routing": "final_membership_to_exact_routing", "approximate_representative_routing": "exact_to_approximate_routing", "partition_local_hnsw": "exact_routing_to_local_hnsw", "coordinator_merge_or_transport": "local_hnsw_to_end_to_end"}[owner]
-		if stage == "" { stage = "none" }
+		if stage == "" {
+			stage = "none"
+		}
 		out = append(out, m8AttributionStageOwnerV1{Stage: stage, Owner: owner})
 	}
 	return out
@@ -2783,7 +2788,9 @@ func validM8AttributionV1(attribution m8ProductionAttributionV1) bool {
 			return false
 		}
 		near := func(a, b float64) bool { return math.Abs(a-b) <= 1e-12 }
-		if attribution.FinalMembershipOracleRecallAtK+1e-12 < attribution.PrimaryHomeOracleRecallAtK || attribution.FinalMembershipOracleRecallAtK+1e-12 < attribution.ExactRepresentativeRecallAtK || attribution.ExactRepresentativeRecallAtK+1e-12 < attribution.LocalHNSWRecallAtK || !near(attribution.PrimaryHomeOracleRegretAtK, 1-attribution.PrimaryHomeOracleRecallAtK) || !near(attribution.FinalMembershipOracleRegretAtK, 1-attribution.FinalMembershipOracleRecallAtK) || !near(attribution.PrimaryToFinalMembershipGainAtK, attribution.FinalMembershipOracleRecallAtK-attribution.PrimaryHomeOracleRecallAtK) || !near(attribution.FinalMembershipToExactLossAtK, attribution.FinalMembershipOracleRecallAtK-attribution.ExactRepresentativeRecallAtK) || !near(attribution.ExactToApproximateLossAtK, attribution.ExactRepresentativeRecallAtK-attribution.ApproximateRepresentativeRecallAtK) || !near(attribution.ExactToLocalHNSWLossAtK, attribution.ExactRepresentativeRecallAtK-attribution.LocalHNSWRecallAtK) || !near(attribution.LocalHNSWToEndToEndLossAtK, attribution.LocalHNSWRecallAtK-attribution.EndToEndRecallAtK) { return false }
+		if attribution.FinalMembershipOracleRecallAtK+1e-12 < attribution.PrimaryHomeOracleRecallAtK || attribution.FinalMembershipOracleRecallAtK+1e-12 < attribution.ExactRepresentativeRecallAtK || attribution.ExactRepresentativeRecallAtK+1e-12 < attribution.LocalHNSWRecallAtK || !near(attribution.PrimaryHomeOracleRegretAtK, 1-attribution.PrimaryHomeOracleRecallAtK) || !near(attribution.FinalMembershipOracleRegretAtK, 1-attribution.FinalMembershipOracleRecallAtK) || !near(attribution.PrimaryToFinalMembershipGainAtK, attribution.FinalMembershipOracleRecallAtK-attribution.PrimaryHomeOracleRecallAtK) || !near(attribution.FinalMembershipToExactLossAtK, attribution.FinalMembershipOracleRecallAtK-attribution.ExactRepresentativeRecallAtK) || !near(attribution.ExactToApproximateLossAtK, attribution.ExactRepresentativeRecallAtK-attribution.ApproximateRepresentativeRecallAtK) || !near(attribution.ExactToLocalHNSWLossAtK, attribution.ExactRepresentativeRecallAtK-attribution.LocalHNSWRecallAtK) || !near(attribution.LocalHNSWToEndToEndLossAtK, attribution.LocalHNSWRecallAtK-attribution.EndToEndRecallAtK) {
+			return false
+		}
 	}
 	return true
 }
