@@ -206,10 +206,15 @@ func validateM3VariantDescriptorV1(d m3VariantDescriptorV1) error {
 	if d.AssignmentBasis == partitionAssignmentGraphV1 && d.ArtifactSHA256 != d.GraphArtifactSHA256 {
 		return errors.New("graph M3 variant artifact does not match its graph-build identity")
 	}
+	var loadTotal uint64
 	for _, load := range d.PartitionLoads {
 		if load < 0 || load > d.Capacity {
 			return errors.New("M3 variant descriptor partition load exceeds capacity")
 		}
+		loadTotal += uint64(load)
+	}
+	if loadTotal != usedCapacity {
+		return errors.New("M3 variant descriptor partition loads do not match memberships")
 	}
 	return nil
 }

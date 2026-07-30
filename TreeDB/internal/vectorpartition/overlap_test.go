@@ -113,8 +113,19 @@ func TestExactFillerReclassifiesLaterCutReductionV1(t *testing.T) {
 	a := Artifact{IDs: []string{"a", "b", "c", "d"}, Graph: Graph{Neighbors: [][]int{{2}, {}, {0}, {}}}, Config: Config{Partitions: 3}, Assignment: []int{0, 0, 1, 1}}
 	members := []map[int]struct{}{{0: {}}, {0: {}}, {1: {}}, {1: {}}}
 	loads := []int{2, 2, 0}
-	used, useful, filler := fillExactOverlapSlots(a, members, loads, 3, 3)
+	incoming := [][]int{{2}, nil, {0}, nil}
+	used, useful, filler := fillExactOverlapSlots(a, members, incoming, loads, 3, 3)
 	if used != 3 || useful != 1 || filler != 2 {
+		t.Fatalf("filled used=%d useful=%d filler=%d", used, useful, filler)
+	}
+}
+
+func TestExactFillerCountsIncomingCutReductionAsUsefulV1(t *testing.T) {
+	a := Artifact{IDs: []string{"a", "b"}, Graph: Graph{Neighbors: [][]int{{}, {0}}}, Config: Config{Partitions: 2}, Assignment: []int{0, 1}}
+	members := []map[int]struct{}{{0: {}}, {1: {}}}
+	loads := []int{1, 1}
+	used, useful, filler := fillExactOverlapSlots(a, members, [][]int{{1}, nil}, loads, 2, 1)
+	if used != 1 || useful != 1 || filler != 0 {
 		t.Fatalf("filled used=%d useful=%d filler=%d", used, useful, filler)
 	}
 }
@@ -176,10 +187,10 @@ func TestOverlapAffinitySkipsFullPreferredPartitionV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Used != 1 || got.Unspent != 0 || got.Loads[0] != 2 || got.Loads[2] != 2 {
+	if got.Used != 1 || got.Unspent != 0 || !reflect.DeepEqual(got.Loads, []int{2, 2, 1}) {
 		t.Fatalf("overlap=%+v", got)
 	}
-	if !reflect.DeepEqual(got.Memberships, []Membership{{VectorOrdinal: 0, Partition: 0, Home: true}, {VectorOrdinal: 1, Partition: 0, Home: true}, {VectorOrdinal: 2, Partition: 1, Home: true}, {VectorOrdinal: 2, Partition: 2}, {VectorOrdinal: 3, Partition: 2, Home: true}}) {
+	if !reflect.DeepEqual(got.Memberships, []Membership{{VectorOrdinal: 0, Partition: 0, Home: true}, {VectorOrdinal: 0, Partition: 1}, {VectorOrdinal: 1, Partition: 0, Home: true}, {VectorOrdinal: 2, Partition: 1, Home: true}, {VectorOrdinal: 3, Partition: 2, Home: true}}) {
 		t.Fatalf("memberships=%+v", got.Memberships)
 	}
 }

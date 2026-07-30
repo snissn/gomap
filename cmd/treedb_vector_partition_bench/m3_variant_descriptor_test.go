@@ -78,6 +78,24 @@ func TestM3VariantDescriptorRequiresDerivedExactTargetV1(t *testing.T) {
 	}
 }
 
+func TestM3VariantDescriptorRejectsMalformedPartitionLoadsV1(t *testing.T) {
+	base := testM3VariantDescriptorV1(t.TempDir())
+	for name, mutate := range map[string]func([]int){
+		"negative":       func(loads []int) { loads[0] = -1 },
+		"over capacity":  func(loads []int) { loads[0] = base.Capacity + 1 },
+		"total mismatch": func(loads []int) { loads[0]-- },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := base
+			candidate.PartitionLoads = append([]int(nil), base.PartitionLoads...)
+			mutate(candidate.PartitionLoads)
+			if err := validateM3VariantDescriptorV1(candidate); err == nil {
+				t.Fatalf("accepted malformed loads %v", candidate.PartitionLoads)
+			}
+		})
+	}
+}
+
 func TestM3VariantBuildIdentityBindsExactOverlapTargetAndCapacityV1(t *testing.T) {
 	d := testM3VariantDescriptorV1(t.TempDir())
 	baseline, err := m3VariantBuildIdentityDigestV1(d)

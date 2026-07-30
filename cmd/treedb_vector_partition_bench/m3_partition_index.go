@@ -953,6 +953,16 @@ func validateM3PartitionIndexReport(report m3PartitionIndexReport) error {
 		if capacityErr != nil || row.SourceRows > math.MaxInt || totalCapacity < int64(row.SourceRows)+int64(row.OverlapRealized) {
 			return fmt.Errorf("invalid M3 overlap capacity evidence: %+v", row)
 		}
+		var loadTotal int64
+		for _, load := range row.PartitionLoads {
+			if load < 0 || load > row.Capacity {
+				return fmt.Errorf("invalid M3 partition load evidence: %+v", row)
+			}
+			loadTotal += int64(load)
+		}
+		if loadTotal != int64(row.SourceRows)+int64(row.OverlapRealized) {
+			return fmt.Errorf("invalid M3 partition load total: %+v", row)
+		}
 		wantUnusedCapacity := int(totalCapacity - int64(row.SourceRows) - int64(row.OverlapRealized))
 		wantCutReductionPerUseful := 0.0
 		if row.OverlapUseful > 0 {

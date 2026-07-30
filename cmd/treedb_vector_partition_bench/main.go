@@ -1517,7 +1517,7 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		variantRuns = int64(len(cfg.m8VariantDBs))
 		supportedOverlaps = 1
 	}
-	plan.MembershipOracleSubsetEvaluations, err = memoryMul(membershipOracleSubsetsPerSweep, int64(m.Queries), int64(len(cfg.efSearch)), supportedOverlaps, variantRuns)
+	plan.MembershipOracleSubsetEvaluations, err = memoryMul(membershipOracleSubsetsPerSweep, int64(m.Queries), supportedOverlaps, variantRuns)
 	if err != nil {
 		return plan, err
 	}

@@ -479,6 +479,7 @@ func m8DecisionReportV1(reports []m8ProductionReportV1) []m8DecisionRowV1 {
 			selected = row
 		}
 		if selected == nil {
+			out = append(out, m8DecisionRowV1{VariantID: report.Variant.VariantID, Probes: targetProbes, Stage: "none", Owner: "no_quarter_probe_operating_point"})
 			continue
 		}
 		added := false

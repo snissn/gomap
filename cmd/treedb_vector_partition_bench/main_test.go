@@ -240,6 +240,9 @@ func TestM8MembershipOraclesSeparatePrimaryAndOverlapCeilingsV1(t *testing.T) {
 }
 
 func TestM8MembershipOracleCombinationBoundIsPreflightedV1(t *testing.T) {
+	if got, err := m8MembershipOracleCombinationCountV1(27, 12, 20_000_000); err != nil || got != 17_383_860 {
+		t.Fatalf("C(27,12)=%d err=%v", got, err)
+	}
 	cfg := config{partitions: 64, overlaps: []float64{0}, probes: []int{32}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}
 	_, err := validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 64, Queries: 1, Dimensions: 1}, math.MaxInt64, math.MaxInt64)
 	if err == nil || !strings.Contains(err.Error(), "membership oracle C(64,32)") {
@@ -249,6 +252,11 @@ func TestM8MembershipOracleCombinationBoundIsPreflightedV1(t *testing.T) {
 	_, err = validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 16, Queries: 20_000, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64)
 	if err == nil || !strings.Contains(err.Error(), "membership-oracle work") {
 		t.Fatalf("missing aggregate membership-oracle refusal: %v", err)
+	}
+	cfg.efSearch = []int{64, 128}
+	plan, err := validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 16, Queries: 10_000, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64)
+	if err != nil || plan.MembershipOracleSubsetEvaluations != 128_700_000 {
+		t.Fatalf("ef-independent oracle plan=%+v err=%v", plan, err)
 	}
 }
 
@@ -867,6 +875,21 @@ func TestM3OverlapPartitionIndexBuildsReopensAndSearchesNativePacks(t *testing.T
 	}
 	if report.ResultKind != "m3_native_partition_hnsw_evidence" || len(report.Rows) != 2 || !strings.HasPrefix(report.ReplicationGate, "passed:") {
 		t.Fatalf("report=%+v", report)
+	}
+	for name, mutate := range map[string]func(*m3PartitionIndexRow){
+		"negative":       func(row *m3PartitionIndexRow) { row.PartitionLoads[0] = -1 },
+		"over capacity":  func(row *m3PartitionIndexRow) { row.PartitionLoads[0] = row.Capacity + 1 },
+		"total mismatch": func(row *m3PartitionIndexRow) { row.PartitionLoads[0]-- },
+	} {
+		t.Run("invalid loads "+name, func(t *testing.T) {
+			candidate := report
+			candidate.Rows = append([]m3PartitionIndexRow(nil), report.Rows...)
+			candidate.Rows[0].PartitionLoads = append([]int(nil), report.Rows[0].PartitionLoads...)
+			mutate(&candidate.Rows[0])
+			if err := validateM3PartitionIndexReport(candidate); err == nil {
+				t.Fatalf("accepted malformed loads %v", candidate.Rows[0].PartitionLoads)
+			}
+		})
 	}
 	for _, row := range report.Rows {
 		if row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PackBytes == 0 || row.PartitionHNSWM != 4 || row.LocalSearches != 8*4 || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 || row.ExactLocalRecallAtK <= 0 || row.EdgesPerOp <= 0 {
@@ -1958,6 +1981,17 @@ func TestValidM8AttributionPersistsExhaustiveUnionFailureV1(t *testing.T) {
 	attribution.ResidualLossOwners = nil
 	if validM8AttributionV1(attribution) {
 		t.Fatal("accepted exhaustive-union failure without its loss owner")
+	}
+	legacy := m8ProductionAttributionV1{
+		Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1,
+		ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
+		ExactRepresentativeRecallAtK: .5, ApproximateRepresentativeRecallAtK: .5, LocalHNSWRecallAtK: .5, EndToEndRecallAtK: .5,
+		CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
+		ApproximateRouterCandidateBudget: 1, ApproximateRouterPartitionCoverageComplete: true,
+	}
+	legacy.ResidualLossOwners = m8AttributionLossOwnersV1(legacy)
+	if !validM8AttributionV1(legacy) || !slices.Equal(legacy.ResidualLossOwners, []string{"exact_representative_routing"}) {
+		t.Fatalf("legacy attribution=%+v", legacy)
 	}
 }
 

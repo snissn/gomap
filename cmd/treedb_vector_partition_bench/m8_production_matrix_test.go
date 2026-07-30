@@ -25,6 +25,10 @@ func refreshTestM3VariantIdentityV1(t testing.TB, descriptor *m3VariantDescripto
 	descriptor.OverlapUseful = descriptor.OverlapRealized
 	descriptor.OverlapFiller = 0
 	descriptor.OverlapUnusedCapacity = descriptor.Capacity*int(descriptor.Partitions) - int(descriptor.SourceRows) - descriptor.OverlapRealized
+	descriptor.PartitionLoads = make([]int, descriptor.Partitions)
+	for i := 0; i < int(descriptor.SourceRows)+descriptor.OverlapRealized; i++ {
+		descriptor.PartitionLoads[i%int(descriptor.Partitions)]++
+	}
 	descriptor.EdgeCutAfter = descriptor.EdgeCutBefore - descriptor.OverlapUseful
 	descriptor.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(*descriptor)
 	descriptor.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{
@@ -170,6 +174,15 @@ func TestM8DecisionReportUsesLowestQuarterProbeOperatingPointV1(t *testing.T) {
 		if row.Probes != 8 || row.EfSearch != 64 || row.VariantID != descriptor.VariantID {
 			t.Fatalf("decision row=%+v", row)
 		}
+	}
+}
+
+func TestM8DecisionReportRetainsVariantWithoutQuarterProbeRowV1(t *testing.T) {
+	descriptor := testM3VariantDescriptorV1(t.TempDir())
+	report := m8ProductionReportV1{Variant: &descriptor, Config: m8ProductionConfigEvidenceV1{Partitions: 16}, Rows: []m8ProductionRowV1{{Status: "fail", Probes: 4}}}
+	got := m8DecisionReportV1([]m8ProductionReportV1{report})
+	if len(got) != 1 || got[0].VariantID != descriptor.VariantID || got[0].Probes != 4 || got[0].Stage != "none" || got[0].Owner != "no_quarter_probe_operating_point" {
+		t.Fatalf("decision=%+v", got)
 	}
 }
 

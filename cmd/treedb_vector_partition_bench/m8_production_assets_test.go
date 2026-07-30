@@ -442,7 +442,11 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	attribution, err := m8BuildAttributionV1(ctx, assets, primaryHomes, finalMemberships, attributionQueries, truth, 4, 4096, 10, candidates, make([][]m8CanonicalResultV1, len(attributionQueries)), harness)
+	membershipOracles, err := m8MembershipOracleRecallCacheV1(truth, primaryHomes, finalMemberships, len(harness.searchers), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attribution, err := m8BuildAttributionV1(ctx, assets, primaryHomes, finalMemberships, attributionQueries, truth, membershipOracles, 4, 4096, 10, candidates, make([][]m8CanonicalResultV1, len(attributionQueries)), harness)
 	if err != nil {
 		t.Fatal(err)
 	}
