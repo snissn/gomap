@@ -176,7 +176,7 @@ func TestM8TruthCacheIdentityMismatchFailsClosedV1(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "m8_canonical_truth_"+identity+".json"), raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{}, fixture, [][]float64{{1}}, 10); err == nil || !strings.Contains(err.Error(), "identity/schema mismatch") {
+	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{}, fixture, [][]float64{{1}}, 10, ""); err == nil || !strings.Contains(err.Error(), "identity/schema mismatch") {
 		t.Fatalf("cache mismatch err=%v", err)
 	}
 }
@@ -188,7 +188,7 @@ func TestM8TruthCacheOversizedInputFailsBeforeDecodeV1(t *testing.T) {
 	if err := os.WriteFile(path, []byte(strings.Repeat("x", 70<<10)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{}, fixture, [][]float64{{1, 0}}, 1); err == nil || !strings.Contains(err.Error(), "exceeds") {
+	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{}, fixture, [][]float64{{1, 0}}, 1, ""); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("oversized cache err=%v", err)
 	}
 }
@@ -287,7 +287,7 @@ func TestM8TruthCacheWhitespaceBoundAndExactByteDigestV1(t *testing.T) {
 	if err := os.WriteFile(path, over, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 1}, fixture, [][]float64{{1, 0}}, 1); err == nil || !strings.Contains(err.Error(), "exceeds") {
+	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 1}, fixture, [][]float64{{1, 0}}, 1, ""); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("padded cache err=%v", err)
 	}
 	within := append(append([]byte(nil), raw...), []byte(" \n\t")...)
@@ -317,7 +317,7 @@ func TestM8TruthCacheRejectsTrailingJSONV1(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "m8_canonical_truth_"+identity+".json"), raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 1}, fixture, [][]float64{{1, 0}}, 1); err == nil || !strings.Contains(err.Error(), "trailing JSON") {
+	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 1}, fixture, [][]float64{{1, 0}}, 1, ""); err == nil || !strings.Contains(err.Error(), "trailing JSON") {
 		t.Fatalf("trailing JSON err=%v", err)
 	}
 }
@@ -345,7 +345,7 @@ func TestM8TruthCacheRefusesContentCorruptionAndSemanticMalformationV1(t *testin
 	write(t, file)
 	file.Truth[0][0].Score = .7 // JSON remains valid but the content digest does not.
 	write(t, file)
-	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 2}, fixture, [][]float64{{1, 0}}, 2); err == nil || !strings.Contains(err.Error(), "truth_sha256") {
+	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 2}, fixture, [][]float64{{1, 0}}, 2, ""); err == nil || !strings.Contains(err.Error(), "truth_sha256") {
 		t.Fatalf("content corruption err=%v", err)
 	}
 	file.Truth[0][0].Score = .7
@@ -355,7 +355,7 @@ func TestM8TruthCacheRefusesContentCorruptionAndSemanticMalformationV1(t *testin
 		t.Fatal(err)
 	}
 	write(t, file)
-	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 2}, fixture, [][]float64{{1, 0}}, 2); err == nil || !strings.Contains(err.Error(), "noncanonical") {
+	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 2}, fixture, [][]float64{{1, 0}}, 2, ""); err == nil || !strings.Contains(err.Error(), "noncanonical") {
 		t.Fatalf("semantic malformation err=%v", err)
 	}
 }
@@ -375,7 +375,7 @@ func TestM8TruthCacheRefusesIDsOutsideFixtureDomainV1(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "m8_canonical_truth_"+identity+".json"), raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 1}, fixture, [][]float64{{1, 0}}, 1); err == nil || !strings.Contains(err.Error(), "outside deterministic fixture domain") {
+	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 1}, fixture, [][]float64{{1, 0}}, 1, ""); err == nil || !strings.Contains(err.Error(), "outside deterministic fixture domain") {
 		t.Fatalf("out-of-range cache ID err=%v", err)
 	}
 }
@@ -542,7 +542,7 @@ func TestM8MatrixParentDoesNotMaterializeFixtureV1(t *testing.T) {
 
 func TestM8VariantProcessArgsForceFreshSingleVariantV1(t *testing.T) {
 	command := []string{"treedb_vector_partition_bench", "-mode", m8ProductionMultiGroupModeV1, "-dataset", "format", "-m8-variant-dbs", "/a,/b,/c", "-overlap=.1", "-format", "text", "-profiles", "/old", "-m8-matrix-out", "/old-out", "-m8-matrix-profiles", "/old-profiles"}
-	got, err := m8VariantProcessArgsV1(command, "/variant", .2, "/profiles/variant", "/matrix-out", "/matrix-profiles")
+	got, err := m8VariantProcessArgsV1(command, "/variant", .2, "/profiles/variant", "/matrix-out", "/matrix-profiles", "")
 	if err != nil {
 		t.Fatal(err)
 	}

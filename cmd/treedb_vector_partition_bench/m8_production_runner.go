@@ -845,11 +845,7 @@ func m8TruthCacheIdentityV1(fixture fixtureManifest, topK int) string {
 	return hex.EncodeToString(s[:])
 }
 
-func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection, manifest collections.VectorPartitionManifestV1, fixture fixtureManifest, queries [][]float64, topK int, expectedArtifactSHA256 ...string) ([][]m8CanonicalResultV1, m8TruthCacheEvidenceV1, error) {
-	expectedDigest := ""
-	if len(expectedArtifactSHA256) > 0 {
-		expectedDigest = expectedArtifactSHA256[0]
-	}
+func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection, manifest collections.VectorPartitionManifestV1, fixture fixtureManifest, queries [][]float64, topK int, expectedDigest string) ([][]m8CanonicalResultV1, m8TruthCacheEvidenceV1, error) {
 	identity := m8TruthCacheIdentityV1(fixture, topK)
 	evidence := m8TruthCacheEvidenceV1{Identity: identity}
 	path := ""
@@ -942,15 +938,15 @@ func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection,
 			return nil, evidence, err
 		}
 		evidence.ArtifactSHA256 = hex.EncodeToString(artifactHash.Sum(nil))
-		if expectedDigest != "" && evidence.ArtifactSHA256 != expectedDigest {
-			return nil, evidence, errors.New("computed canonical truth cache artifact does not match independently trusted digest")
-		}
 		if err := temp.Chmod(0o644); err != nil {
 			temp.Close()
 			return nil, evidence, err
 		}
 		if err := temp.Close(); err != nil {
 			return nil, evidence, err
+		}
+		if expectedDigest != "" && evidence.ArtifactSHA256 != expectedDigest {
+			return nil, evidence, errors.New("computed canonical truth cache artifact does not match independently trusted digest")
 		}
 		if err := os.Rename(tempPath, path); err != nil {
 			return nil, evidence, err

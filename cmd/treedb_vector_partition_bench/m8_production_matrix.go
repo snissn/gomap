@@ -196,7 +196,7 @@ func runM8ProductionVariantProcessV1(cfg config, dir string, overlap float64, pr
 	return nil
 }
 
-func m8VariantProcessArgsV1(command []string, dir string, overlap float64, profiles, matrixOut, matrixProfiles string, expectedTruthCacheDigest ...string) ([]string, error) {
+func m8VariantProcessArgsV1(command []string, dir string, overlap float64, profiles, matrixOut, matrixProfiles, expectedTruthCacheDigest string) ([]string, error) {
 	if len(command) == 0 || dir == "" || math.IsNaN(overlap) || math.IsInf(overlap, 0) || overlap < 0 || overlap > 1 {
 		return nil, errors.New("M8 variant process requires a command, database, and finite overlap in [0,1]")
 	}
@@ -205,8 +205,8 @@ func m8VariantProcessArgsV1(command []string, dir string, overlap float64, profi
 	// safe even for a defensively supplied positional argument because Go flag
 	// parsing stops at the first positional token.
 	args := []string{"-m8-existing-db", dir, "-overlap", strconv.FormatFloat(overlap, 'g', -1, 64), "-format", "json"}
-	if len(expectedTruthCacheDigest) > 0 && expectedTruthCacheDigest[0] != "" {
-		args = append(args, "-m8-truth-cache-sha256", expectedTruthCacheDigest[0])
+	if expectedTruthCacheDigest != "" {
+		args = append(args, "-m8-truth-cache-sha256", expectedTruthCacheDigest)
 	}
 	if profiles != "" {
 		args = append(args, "-profiles", profiles)
