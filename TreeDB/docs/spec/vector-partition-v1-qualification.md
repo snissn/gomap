@@ -57,3 +57,12 @@ exact truth, so one retained-asset run charges 2B visits outside that request
 count. The strict three-variant matrix charges 6B. Any such execution requires
 an explicit `-m8-max-exact-truth-visits` override and must record its calibrated
 runtime before the full retained-asset sweep.
+
+An external exact-truth cache is never self-authenticating. A cache hit requires
+`-m8-truth-cache-sha256` to match the exact streamed cache artifact; the digest
+must come from an independently trusted, source-computed run. In a strict
+three-variant matrix with a new cache, the first child computes truth from the
+authoritative source and the parent forces its reported artifact digest into
+every later child. A pre-existing cache without that supplied digest fails
+closed, as does a newly computed artifact that disagrees with a supplied
+digest.

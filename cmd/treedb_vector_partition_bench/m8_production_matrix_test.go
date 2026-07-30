@@ -209,6 +209,12 @@ func TestM8TruthCacheHitReusesCanonicalRowsV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	artifact := sha256.Sum256(raw)
+	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 1}, fixture, [][]float64{{1, 0}}, 1, ""); err == nil || !strings.Contains(err.Error(), "independently trusted digest") {
+		t.Fatalf("cache without trusted digest err=%v", err)
+	}
+	if _, _, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 1}, fixture, [][]float64{{1, 0}}, 1, strings.Repeat("0", 64)); err == nil || !strings.Contains(err.Error(), "independently trusted digest") {
+		t.Fatalf("cache with wrong trusted digest err=%v", err)
+	}
 	got, evidence, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 1}, fixture, [][]float64{{1, 0}}, 1, hex.EncodeToString(artifact[:]))
 	if err != nil || evidence.Status != "reused" || !reflect.DeepEqual(got, want) {
 		t.Fatalf("got=%v evidence=%+v err=%v", got, evidence, err)
@@ -531,6 +537,21 @@ func TestM8VariantDBsParseStrictThreePathsV1(t *testing.T) {
 	}
 }
 
+func TestM8TruthCacheDigestConfigRequiresIndependentValidSHA256V1(t *testing.T) {
+	base := []string{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4"}
+	digest := strings.Repeat("a", 64)
+	if _, err := parseConfig(append(append([]string(nil), base...), "-m8-truth-cache-sha256", digest)); err == nil || !strings.Contains(err.Error(), "m8-truth-cache-sha256") {
+		t.Fatalf("digest without cache err=%v", err)
+	}
+	if _, err := parseConfig(append(append([]string(nil), base...), "-m8-truth-cache", t.TempDir(), "-m8-truth-cache-sha256", strings.Repeat("z", 64))); err == nil || !strings.Contains(err.Error(), "64-hex") {
+		t.Fatalf("non-hex digest err=%v", err)
+	}
+	cfg, err := parseConfig(append(append([]string(nil), base...), "-m8-truth-cache", t.TempDir(), "-m8-truth-cache-sha256", digest))
+	if err != nil || cfg.m8TruthCacheSHA256 != digest {
+		t.Fatalf("trusted digest=%q err=%v", cfg.m8TruthCacheSHA256, err)
+	}
+}
+
 func TestM8MatrixParentDoesNotMaterializeFixtureV1(t *testing.T) {
 	cfg := config{m8VariantDBs: []string{"/a", "/b", "/c"}}
 	fixture := fixtureManifest{Vectors: maxVectors, Queries: maxVectors, Dimensions: 4096}
@@ -541,22 +562,28 @@ func TestM8MatrixParentDoesNotMaterializeFixtureV1(t *testing.T) {
 }
 
 func TestM8VariantProcessArgsForceFreshSingleVariantV1(t *testing.T) {
-	command := []string{"treedb_vector_partition_bench", "-mode", m8ProductionMultiGroupModeV1, "-dataset", "format", "-m8-variant-dbs", "/a,/b,/c", "-overlap=.1", "-format", "text", "-profiles", "/old", "-m8-matrix-out", "/old-out", "-m8-matrix-profiles", "/old-profiles"}
-	got, err := m8VariantProcessArgsV1(command, "/variant", .2, "/profiles/variant", "/matrix-out", "/matrix-profiles", "")
+	oldDigest := strings.Repeat("a", 64)
+	trustedDigest := strings.Repeat("b", 64)
+	command := []string{"treedb_vector_partition_bench", "-mode", m8ProductionMultiGroupModeV1, "-dataset", "format", "-m8-variant-dbs", "/a,/b,/c", "-overlap=.1", "-format", "text", "-profiles", "/old", "-m8-matrix-out", "/old-out", "-m8-matrix-profiles", "/old-profiles", "-m8-truth-cache-sha256", oldDigest, "positional"}
+	got, err := m8VariantProcessArgsV1(command, "/variant", .2, "/profiles/variant", "/matrix-out", "/matrix-profiles", trustedDigest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantPrefix := []string{"-m8-existing-db", "/variant", "-overlap", "0.2", "-format", "json", "-profiles", "/profiles/variant", "-m8-matrix-out", "/matrix-out", "-m8-matrix-profiles", "/matrix-profiles"}
+	wantPrefix := []string{"-m8-existing-db", "/variant", "-overlap", "0.2", "-format", "json", "-m8-truth-cache-sha256", trustedDigest, "-profiles", "/profiles/variant", "-m8-matrix-out", "/matrix-out", "-m8-matrix-profiles", "/matrix-profiles"}
 	if len(got) < len(wantPrefix) || !reflect.DeepEqual(got[:len(wantPrefix)], wantPrefix) {
 		t.Fatalf("child args=%v want prefix=%v", got, wantPrefix)
 	}
 	for _, arg := range got {
-		if strings.HasPrefix(arg, "-m8-variant-dbs") || strings.HasPrefix(arg, "--m8-variant-dbs") || arg == "/a,/b,/c" || arg == "/old" || arg == "/old-out" || arg == "/old-profiles" {
+		if strings.HasPrefix(arg, "-m8-variant-dbs") || strings.HasPrefix(arg, "--m8-variant-dbs") || arg == "/a,/b,/c" || arg == "/old" || arg == "/old-out" || arg == "/old-profiles" || arg == oldDigest {
 			t.Fatalf("child args retained matrix/old-profile argument: %v", got)
 		}
 	}
 	if !slices.Contains(got, "format") {
 		t.Fatalf("child args dropped positional value matching a filtered flag: %v", got)
+	}
+	trustedAt, positionalAt := slices.Index(got, trustedDigest), slices.Index(got, "positional")
+	if trustedAt < 0 || positionalAt < 0 || trustedAt > positionalAt {
+		t.Fatalf("trusted digest must precede positional token: %v", got)
 	}
 }
 
