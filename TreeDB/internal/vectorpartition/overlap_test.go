@@ -58,6 +58,7 @@ func TestOverlapDeterministicBoundaryAndZeroEquivalent(t *testing.T) {
 		Loads:         []int{3, 2},
 		EdgeCutBefore: 4,
 		EdgeCutAfter:  0,
+		Useful:        1,
 	}
 	if !reflect.DeepEqual(one, want) {
 		t.Fatalf("boundary overlap=%+v want %+v", one, want)

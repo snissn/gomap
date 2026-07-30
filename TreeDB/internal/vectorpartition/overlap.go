@@ -36,6 +36,8 @@ type OverlapResult struct {
 	Loads         []int
 	EdgeCutBefore int
 	EdgeCutAfter  int
+	Useful        int // memberships applied with a positive directed cut reduction
+	Filler        int // exact-target memberships added after useful proposals ended
 }
 
 // OverlapShortfallError reports an exact-build request that could not be
@@ -81,7 +83,7 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 		loads[p]++
 		members[i] = map[int]struct{}{p: {}}
 	}
-	used := 0
+	used, useful, filler := 0, 0, 0
 	type proposal struct {
 		node, part, gain int
 		id               string
@@ -132,7 +134,9 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 			// is exhausted, deterministically fill remaining legal non-home
 			// slots. Adding memberships cannot increase the overlap edge cut.
 			if cfg.RequireExact {
-				used += fillExactOverlapSlots(a, members, loads, capacity, budget-used)
+				filled := fillExactOverlapSlots(a, members, loads, capacity, budget-used)
+				used += filled
+				filler += filled
 			}
 			break
 		}
@@ -156,11 +160,14 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 			members[p.node][p.part] = struct{}{}
 			loads[p.part]++
 			used++
+			useful++
 			applied++
 		}
 		if applied == 0 {
 			if cfg.RequireExact {
-				used += fillExactOverlapSlots(a, members, loads, capacity, budget-used)
+				filled := fillExactOverlapSlots(a, members, loads, capacity, budget-used)
+				used += filled
+				filler += filled
 			}
 			break
 		}
@@ -172,6 +179,8 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 		Capacity:      capacity,
 		Loads:         loads,
 		EdgeCutBefore: a.Metrics.EdgeCut,
+		Useful:        useful,
+		Filler:        filler,
 	}
 	for i, set := range members {
 		for p := range set {
@@ -260,7 +269,7 @@ func ValidateOverlap(a Artifact, cfg OverlapConfig, r OverlapResult) error {
 	if capacity < a.Metrics.Cap {
 		return fmt.Errorf("overlap capacity %d below immutable home load cap %d", capacity, a.Metrics.Cap)
 	}
-	if r.Budget != wantBudget || r.Budget < 0 || r.Used < 0 || r.Used > r.Budget || r.Unspent != r.Budget-r.Used || r.Capacity != capacity || len(r.Loads) != a.Config.Partitions || len(r.Memberships) != len(a.IDs)+r.Used || r.EdgeCutBefore != a.Metrics.EdgeCut {
+	if r.Budget != wantBudget || r.Budget < 0 || r.Used < 0 || r.Used > r.Budget || r.Useful < 0 || r.Filler < 0 || r.Useful+r.Filler != r.Used || r.Unspent != r.Budget-r.Used || r.Capacity != capacity || len(r.Loads) != a.Config.Partitions || len(r.Memberships) != len(a.IDs)+r.Used || r.EdgeCutBefore != a.Metrics.EdgeCut {
 		return errors.New("invalid overlap accounting")
 	}
 	if cfg.RequireExact && r.Unspent != 0 {

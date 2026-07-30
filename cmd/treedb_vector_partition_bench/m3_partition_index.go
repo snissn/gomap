@@ -63,6 +63,8 @@ type m3PartitionIndexRow struct {
 	OverlapRequested             int     `json:"overlap_requested"`
 	OverlapRealized              int     `json:"overlap_realized"`
 	OverlapRejected              int     `json:"overlap_rejected"`
+	OverlapUseful                int     `json:"overlap_useful"`
+	OverlapFiller                int     `json:"overlap_filler"`
 	ReplicationFactor            float64 `json:"replication_factor"`
 	PartitionLoads               []int   `json:"partition_loads"`
 	EdgeCutBefore                int     `json:"edge_cut_before"`
@@ -585,6 +587,8 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		OverlapRequested:             overlap.Budget,
 		OverlapRealized:              overlap.Used,
 		OverlapRejected:              overlap.Unspent,
+		OverlapUseful:                overlap.Useful,
+		OverlapFiller:                overlap.Filler,
 		ReplicationFactor:            float64(len(overlap.Memberships)) / float64(len(artifact.IDs)),
 		PartitionLoads:               append([]int(nil), overlap.Loads...),
 		EdgeCutBefore:                overlap.EdgeCutBefore,

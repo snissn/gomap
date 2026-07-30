@@ -37,6 +37,7 @@ type m8ProductionMatrixV1 struct {
 	Gates                       m8ProductionMatrixGatesV1  `json:"gates"`
 	OverlapMaterializationRatio float64                    `json:"overlap_materialization_ratio"`
 	OverlapStorageRatio         float64                    `json:"overlap_storage_ratio"`
+	Decision                    []string                   `json:"decision_report"`
 	Limitations                 []string                   `json:"limitations"`
 }
 
@@ -404,6 +405,7 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 			break
 		}
 	}
+	matrix.Decision = m8DecisionReportV1(matrix.Variants)
 	sort.Slice(matrix.Comparison, func(i, j int) bool {
 		a, b := matrix.Comparison[i], matrix.Comparison[j]
 		if a.VariantID != b.VariantID {
@@ -418,6 +420,30 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 		return a.Concurrency < b.Concurrency
 	})
 	return matrix, nil
+}
+
+// m8DecisionReportV1 is intentionally terse: it names only observed owners,
+// never turns a benchmark ceiling into a product enablement claim.
+func m8DecisionReportV1(reports []m8ProductionReportV1) []string {
+	seen := make(map[string]bool)
+	for _, report := range reports {
+		for _, row := range report.Rows {
+			for _, owner := range row.Attribution.ResidualLossOwners {
+				if owner != "none_observed" {
+					seen[owner] = true
+				}
+			}
+		}
+	}
+	if len(seen) == 0 {
+		return []string{"no_attributable_loss_observed"}
+	}
+	owners := make([]string, 0, len(seen))
+	for owner := range seen {
+		owners = append(owners, "owner="+owner)
+	}
+	sort.Strings(owners)
+	return owners
 }
 
 func m8AggregateVariantGateV1(reports []m8ProductionReportV1, value func(m8ProductionGateLedgerV1) string) string {
