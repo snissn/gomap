@@ -22,6 +22,10 @@ func refreshTestM3VariantIdentityV1(t testing.TB, descriptor *m3VariantDescripto
 	descriptor.OverlapRequested = int(math.Floor(descriptor.OverlapRatio * float64(descriptor.SourceRows)))
 	descriptor.OverlapRealized = descriptor.OverlapMemberships
 	descriptor.OverlapRejected = descriptor.OverlapRequested - descriptor.OverlapRealized
+	descriptor.OverlapUseful = descriptor.OverlapRealized
+	descriptor.OverlapFiller = 0
+	descriptor.OverlapUnusedCapacity = descriptor.Capacity*int(descriptor.Partitions) - int(descriptor.SourceRows) - descriptor.OverlapRealized
+	descriptor.EdgeCutAfter = descriptor.EdgeCutBefore - descriptor.OverlapUseful
 	descriptor.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(*descriptor)
 	descriptor.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{
 		Capacity: uint64(descriptor.Capacity), Budget: uint64(math.Floor(descriptor.OverlapRatio * float64(descriptor.SourceRows))),
@@ -146,6 +150,26 @@ func TestM8CoupledGraphGateRequiresOneMatchedOperatingPointV1(t *testing.T) {
 	report.Rows[2].RecallAtK = .95
 	if got := m8AnyGraphVariantCoupledGatesPassV1([]m8ProductionReportV1{report}); got != "fail" {
 		t.Fatalf("failed exhaustive baseline must be excluded: gate=%q want fail", got)
+	}
+}
+
+func TestM8DecisionReportUsesLowestQuarterProbeOperatingPointV1(t *testing.T) {
+	descriptor := testM3VariantDescriptorV1(t.TempDir())
+	attribution := m8ProductionAttributionV1{GlobalExactRecallAtK: 1, OracleStagesComplete: true, PrimaryHomeOracleRecallAtK: .8, FinalMembershipOracleRecallAtK: .9, ExactRepresentativeRecallAtK: .7, ApproximateRepresentativeRecallAtK: .7, LocalHNSWRecallAtK: .7, EndToEndRecallAtK: .7}
+	attribution.StageOwners = m8AttributionStageOwnersV1(attribution)
+	report := m8ProductionReportV1{Variant: &descriptor, Config: m8ProductionConfigEvidenceV1{Partitions: 16}, Rows: []m8ProductionRowV1{
+		{Status: "pass", Probes: 4, EfSearch: 128, Concurrency: 1, Attribution: attribution},
+		{Status: "pass", Probes: 4, EfSearch: 64, Concurrency: 1, Attribution: attribution},
+		{Status: "pass", Probes: 8, EfSearch: 32, Concurrency: 1, Attribution: attribution},
+	}}
+	got := m8DecisionReportV1([]m8ProductionReportV1{report})
+	if len(got) != 4 {
+		t.Fatalf("decision=%+v", got)
+	}
+	for _, row := range got {
+		if row.Probes != 4 || row.EfSearch != 64 || row.VariantID != descriptor.VariantID {
+			t.Fatalf("decision row=%+v", row)
+		}
 	}
 }
 

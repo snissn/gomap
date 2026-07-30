@@ -233,26 +233,57 @@ func TestM8MembershipOraclesSeparatePrimaryAndOverlapCeilingsV1(t *testing.T) {
 	if _, err := m8BestMembershipOracleRecallV1(truth, final, 4, 5); err == nil {
 		t.Fatal("accepted probe budget above partition count")
 	}
+	malformed := map[string][]uint32{"a": {0}, "b": {1}, "c": {2}, "d": {4}}
+	if _, err := m8BestMembershipOracleRecallV1(truth, malformed, 4, 1); err == nil {
+		t.Fatal("accepted out-of-range truth membership")
+	}
+}
+
+func TestM8AttributionOwnersKeepRouterAndLocalLossSeparateV1(t *testing.T) {
+	for _, test := range []struct {
+		name                         string
+		primary, final, exact, local float64
+		owner, stage                 string
+		delta                        float64
+	}{
+		{"primary ceiling", .6, .6, .6, .6, "primary_placement", "global_to_primary_home", .4},
+		{"representative router", 1, 1, .75, .75, "exact_representative_routing", "final_membership_to_exact_routing", .25},
+		{"local HNSW only", 1, 1, 1, .75, "partition_local_hnsw", "exact_routing_to_local_hnsw", .25},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			attribution := m8ProductionAttributionV1{GlobalExactRecallAtK: 1, OracleStagesComplete: true, PrimaryHomeOracleRecallAtK: test.primary, FinalMembershipOracleRecallAtK: test.final, ExactRepresentativeRecallAtK: test.exact, ApproximateRepresentativeRecallAtK: test.exact, LocalHNSWRecallAtK: test.local, EndToEndRecallAtK: test.local, ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true, CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true, ApproximateRouterPartitionCoverageComplete: true}
+			if !slices.Contains(m8AttributionLossOwnersV1(attribution), test.owner) {
+				t.Fatalf("owners=%v want %q", m8AttributionLossOwnersV1(attribution), test.owner)
+			}
+			for _, got := range m8AttributionStageOwnersV1(attribution) {
+				if got.Stage == test.stage && got.Owner == test.owner && got.Active && got.Delta == test.delta {
+					return
+				}
+			}
+			t.Fatalf("stages=%+v want active %q delta=%v", m8AttributionStageOwnersV1(attribution), test.stage, test.delta)
+		})
+	}
 }
 
 func TestM8FinalMembershipDiagnosticsRetainsRankAndCoverageV1(t *testing.T) {
 	truth := []m8CanonicalResultV1{{ID: "a"}, {ID: "b"}, {ID: "c"}}
-	coverage, distinct, retained, err := m8TruthFinalMembershipDiagnosticsV1(truth, []uint32{1}, map[string][]uint32{"a": {0, 1}, "b": {2}, "c": {1, 3}})
-	if err != nil || coverage != 2.0/3.0 || distinct != 4 || !slices.Equal(retained, []float64{1, 0, 1}) {
-		t.Fatalf("coverage=%v distinct=%v retained=%v err=%v", coverage, distinct, retained, err)
+	coverage, distinct, colocated, overlapOnly, duplicated, retained, err := m8TruthFinalMembershipDiagnosticsV1(truth, []uint32{0, 1}, map[string][]uint32{"a": {0, 1}, "b": {2}, "c": {1, 3}}, map[string]uint32{"a": 0, "b": 2, "c": 3})
+	if err != nil || coverage != 2.0/3.0 || distinct != 4 || colocated != 1.0/3.0 || overlapOnly != 1.0/3.0 || duplicated != 1.0/3.0 || !slices.Equal(retained, []float64{1, 0, 1}) {
+		t.Fatalf("coverage=%v distinct=%v colocated=%v overlap=%v duplicate=%v retained=%v err=%v", coverage, distinct, colocated, overlapOnly, duplicated, retained, err)
 	}
 }
 
 func TestPartitionTruthOracleForArtifactV1(t *testing.T) {
 	vectors := [][]float64{{1, 0}, {.99, .01}, {0, 1}, {-.9, .1}}
-	oracle, err := partitionTruthOracleForArtifactV1(vectors, [][]float64{{1, 0}}, []int{0, 0, 1, 1}, 2, 3)
+	graph := [][]int{{1, 2}, {0}, {0, 3}, {2}}
+	oracle, err := partitionTruthOracleForArtifactV1(vectors, [][]float64{{1, 0}}, []int{0, 0, 1, 1}, graph, 2, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if oracle.ProbeBudget != 2 || oracle.BestProbeCoverageAtK != 1 || oracle.TruthPrimaryHomePairColocate != 1.0/3.0 {
+	if oracle.ProbeBudget != 2 || oracle.BestProbeCoverageAtK != 1 || oracle.TruthPrimaryHomePairColocate != 1.0/3.0 || len(oracle.Probes) != 2 || oracle.Probes[0].BestPrimaryHomeCoverageAtK != 2.0/3.0 || oracle.Graph.DirectedEdges != 6 || oracle.Graph.DirectedCutEdges != 2 || oracle.Graph.SymmetricEdges != 3 || oracle.Graph.SymmetricCutEdges != 1 || oracle.Graph.ApproximateGraphTruthNeighborEdges != 2 || oracle.Graph.RetainedApproximateGraphTruthNeighborEdges != 1 || !slices.Equal(oracle.Graph.PartitionLoads, []int{2, 2}) {
 		t.Fatalf("oracle=%+v", oracle)
 	}
-	if _, err := partitionTruthOracleForArtifactV1(vectors, [][]float64{{1, 0}}, []int{0, 0, 1, 1}, 2, len(vectors)+1); err == nil {
+	if _, err := partitionTruthOracleForArtifactV1(vectors, [][]float64{{1, 0}}, []int{0, 0, 1, 1}, graph, 2, len(vectors)+1); err == nil {
 		t.Fatal("truth oracle accepted top-k above corpus size")
 	}
 }
@@ -298,11 +329,11 @@ func TestDuplicateAwareGraphBeatsStableHashTruthCoverageAtQuarterProbeBudget(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	graphOracle, err := partitionTruthOracleForArtifactV1(vectors, queries, graph.Assignment, partitions, topK)
+	graphOracle, err := partitionTruthOracleForArtifactV1(vectors, queries, graph.Assignment, graph.Graph.Neighbors, partitions, topK)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hashOracle, err := partitionTruthOracleForArtifactV1(vectors, queries, hash.Assignment, partitions, topK)
+	hashOracle, err := partitionTruthOracleForArtifactV1(vectors, queries, hash.Assignment, hash.Graph.Neighbors, partitions, topK)
 	if err != nil {
 		t.Fatal(err)
 	}

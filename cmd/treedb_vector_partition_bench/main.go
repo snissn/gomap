@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -137,12 +138,39 @@ type partitionRun struct {
 }
 
 type partitionTruthOracleV1 struct {
-	TopK                         int     `json:"top_k"`
-	ProbeBudget                  int     `json:"probe_budget"`
-	BestProbeCoverageAtK         float64 `json:"best_probe_primary_partition_coverage_at_k"`
-	TruthPrimaryHomePairColocate float64 `json:"truth_primary_home_pair_colocation_at_k"`
-	UniqueVectorBitPatterns      int     `json:"unique_normalized_vector_bit_patterns"`
-	ZeroDistanceTruthShareAtK    float64 `json:"zero_distance_exact_truth_share_at_k"`
+	TopK                         int                         `json:"top_k"`
+	ProbeBudget                  int                         `json:"probe_budget"`
+	BestProbeCoverageAtK         float64                     `json:"best_probe_primary_partition_coverage_at_k"`
+	TruthPrimaryHomePairColocate float64                     `json:"truth_primary_home_pair_colocation_at_k"`
+	UniqueVectorBitPatterns      int                         `json:"unique_normalized_vector_bit_patterns"`
+	ZeroDistanceTruthShareAtK    float64                     `json:"zero_distance_exact_truth_share_at_k"`
+	Probes                       []partitionTruthProbeV1     `json:"probe_ladder"`
+	Graph                        partitionGraphDiagnosticsV1 `json:"graph_diagnostics"`
+}
+
+type partitionTruthProbeV1 struct {
+	ProbeBudget                   int       `json:"probe_budget"`
+	BestPrimaryHomeCoverageAtK    float64   `json:"best_primary_home_coverage_at_k"`
+	TruthNeighborRankRetentionAtK []float64 `json:"truth_neighbor_rank_primary_home_retention_at_k"`
+}
+
+type partitionGraphDiagnosticsV1 struct {
+	DirectedEdges                                     int       `json:"directed_edges"`
+	DirectedCutEdges                                  int       `json:"directed_cut_edges"`
+	DirectedCutRatio                                  float64   `json:"directed_cut_ratio"`
+	SymmetricEdges                                    int       `json:"symmetric_edges"`
+	SymmetricCutEdges                                 int       `json:"symmetric_cut_edges"`
+	SymmetricCutRatio                                 float64   `json:"symmetric_cut_ratio"`
+	ApproximateAdjacencyRankPartitionRetention        []float64 `json:"approximate_graph_adjacency_rank_partition_retention"`
+	ApproximateGraphRecallByTruthNeighborRank         []float64 `json:"approximate_graph_recall_by_truth_neighbor_rank_2_through_k"`
+	RetainedApproximateGraphTruthNeighborRank         []float64 `json:"retained_approximate_graph_truth_neighbor_rank_2_through_k"`
+	PartitionLoads                                    []int     `json:"partition_loads"`
+	TruthNeighborPairs                                int       `json:"truth_neighbor_pairs"`
+	RetainedTruthNeighborPairs                        int       `json:"retained_truth_neighbor_pairs"`
+	RetainedTruthNeighborPairShareAtK                 float64   `json:"retained_truth_neighbor_pair_share_at_k"`
+	ApproximateGraphTruthNeighborEdges                int       `json:"approximate_graph_truth_neighbor_edges"`
+	RetainedApproximateGraphTruthNeighborEdges        int       `json:"retained_approximate_graph_truth_neighbor_edges"`
+	RetainedApproximateGraphTruthNeighborEdgeShareAtK float64   `json:"retained_approximate_graph_truth_neighbor_edge_share_at_k"`
 }
 
 type fixtureManifest struct {
@@ -942,7 +970,7 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][
 	}
 	report := partitionRun{SchemaVersion: 1, ResultKind: "offline_partition_builder", Dataset: fixture, Source: artifact.Source, Config: artifact.Config, Metrics: artifact.Metrics, BuildNanos: time.Since(started).Nanoseconds(), ArtifactSHA256: digest, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, ArtifactPath: path, ArtifactBytes: int64(len(bytes))}
 	if len(queries) != 0 {
-		oracle, err := partitionTruthOracleForArtifactV1(vectors, queries, artifact.Assignment, cfg.partitions, cfg.topK)
+		oracle, err := partitionTruthOracleForArtifactV1(vectors, queries, artifact.Assignment, artifact.Graph.Neighbors, cfg.partitions, cfg.topK)
 		if err != nil {
 			return err
 		}
@@ -980,12 +1008,24 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][
 	return err
 }
 
-func partitionTruthOracleForArtifactV1(vectors, queries [][]float64, assignment []int, partitions, topK int) (partitionTruthOracleV1, error) {
-	if len(vectors) == 0 || len(queries) == 0 || len(assignment) != len(vectors) || partitions < 1 || topK < 1 || topK > len(vectors) {
+func partitionTruthOracleForArtifactV1(vectors, queries [][]float64, assignment []int, graph [][]int, partitions, topK int) (partitionTruthOracleV1, error) {
+	if len(vectors) == 0 || len(queries) == 0 || len(assignment) != len(vectors) || len(graph) != len(vectors) || partitions < 1 || topK < 1 || topK > len(vectors) {
 		return partitionTruthOracleV1{}, errors.New("invalid partition truth oracle input")
 	}
-	probes := min(4, partitions)
-	var coverage, pairColocation float64
+	probeBudgets := make([]int, 0, 5)
+	for _, probes := range []int{1, 2, 4, 8, 16} {
+		probes = min(probes, partitions)
+		if len(probeBudgets) == 0 || probeBudgets[len(probeBudgets)-1] != probes {
+			probeBudgets = append(probeBudgets, probes)
+		}
+	}
+	probeRows := make([]partitionTruthProbeV1, len(probeBudgets))
+	for i, probes := range probeBudgets {
+		probeRows[i] = partitionTruthProbeV1{ProbeBudget: probes, TruthNeighborRankRetentionAtK: make([]float64, topK)}
+	}
+	var pairColocation float64
+	truthPairs, retainedTruthPairs := 0, 0
+	graphTruthRankHits, retainedGraphTruthRankHits := make([]int, max(0, topK-1)), make([]int, max(0, topK-1))
 	var zeroDistance int
 	classes := make(map[[32]byte]struct{}, len(vectors))
 	for _, vector := range vectors {
@@ -994,30 +1034,154 @@ func partitionTruthOracleForArtifactV1(vectors, queries [][]float64, assignment 
 	for _, query := range queries {
 		truth := exactTopK(vectors, query, topK)
 		counts := make([]int, partitions)
-		for _, result := range truth {
+		truthPartitions := make([]int, len(truth))
+		for rank, result := range truth {
 			if result.Distance <= 1e-12 {
 				zeroDistance++
 			}
 			if result.Ordinal < 0 || result.Ordinal >= len(assignment) || assignment[result.Ordinal] < 0 || assignment[result.Ordinal] >= partitions {
 				return partitionTruthOracleV1{}, errors.New("invalid truth partition assignment")
 			}
-			counts[assignment[result.Ordinal]]++
+			partition := assignment[result.Ordinal]
+			counts[partition]++
+			truthPartitions[rank] = partition
 		}
-		sort.Slice(counts, func(i, j int) bool { return counts[i] > counts[j] })
-		best := 0
-		for i := 0; i < probes; i++ {
-			best += counts[i]
+		ordered := make([]int, partitions)
+		for partition := range ordered {
+			ordered[partition] = partition
 		}
-		coverage += float64(best) / float64(len(truth))
+		sort.Slice(ordered, func(i, j int) bool {
+			if counts[ordered[i]] != counts[ordered[j]] {
+				return counts[ordered[i]] > counts[ordered[j]]
+			}
+			return ordered[i] < ordered[j]
+		})
+		for row := range probeRows {
+			selected := make(map[int]struct{}, probeRows[row].ProbeBudget)
+			for i := 0; i < probeRows[row].ProbeBudget; i++ {
+				selected[ordered[i]] = struct{}{}
+			}
+			covered := 0
+			for rank, partition := range truthPartitions {
+				if _, ok := selected[partition]; ok {
+					covered++
+					probeRows[row].TruthNeighborRankRetentionAtK[rank]++
+				}
+			}
+			probeRows[row].BestPrimaryHomeCoverageAtK += float64(covered) / float64(len(truth))
+		}
 		pairs, matched := len(truth)*(len(truth)-1)/2, 0
 		for _, count := range counts {
 			matched += count * (count - 1) / 2
+		}
+		truthPairs += pairs
+		retainedTruthPairs += matched
+		// Treat the held-out query's exact top-1 document as the graph anchor;
+		// ranks 2..k then measure approximate adjacency and partition retention.
+		anchor := truth[0].Ordinal
+		for rank := 1; rank < len(truth); rank++ {
+			neighbor := truth[rank].Ordinal
+			if slices.Contains(graph[anchor], neighbor) {
+				graphTruthRankHits[rank-1]++
+				if assignment[anchor] == assignment[neighbor] {
+					retainedGraphTruthRankHits[rank-1]++
+				}
+			}
 		}
 		if pairs > 0 {
 			pairColocation += float64(matched) / float64(pairs)
 		}
 	}
-	return partitionTruthOracleV1{TopK: topK, ProbeBudget: probes, BestProbeCoverageAtK: coverage / float64(len(queries)), TruthPrimaryHomePairColocate: pairColocation / float64(len(queries)), UniqueVectorBitPatterns: len(classes), ZeroDistanceTruthShareAtK: float64(zeroDistance) / float64(len(queries)*topK)}, nil
+	for i := range probeRows {
+		probeRows[i].BestPrimaryHomeCoverageAtK /= float64(len(queries))
+		for rank := range probeRows[i].TruthNeighborRankRetentionAtK {
+			probeRows[i].TruthNeighborRankRetentionAtK[rank] /= float64(len(queries))
+		}
+	}
+	graphDiagnostics, err := partitionGraphDiagnosticsForArtifactV1(graph, assignment, partitions, truthPairs, retainedTruthPairs)
+	if err != nil {
+		return partitionTruthOracleV1{}, err
+	}
+	graphDiagnostics.ApproximateGraphRecallByTruthNeighborRank = make([]float64, len(graphTruthRankHits))
+	graphDiagnostics.RetainedApproximateGraphTruthNeighborRank = make([]float64, len(graphTruthRankHits))
+	for rank := range graphTruthRankHits {
+		graphDiagnostics.ApproximateGraphRecallByTruthNeighborRank[rank] = float64(graphTruthRankHits[rank]) / float64(len(queries))
+		graphDiagnostics.RetainedApproximateGraphTruthNeighborRank[rank] = float64(retainedGraphTruthRankHits[rank]) / float64(len(queries))
+		graphDiagnostics.ApproximateGraphTruthNeighborEdges += graphTruthRankHits[rank]
+		graphDiagnostics.RetainedApproximateGraphTruthNeighborEdges += retainedGraphTruthRankHits[rank]
+	}
+	if graphDiagnostics.ApproximateGraphTruthNeighborEdges > 0 {
+		graphDiagnostics.RetainedApproximateGraphTruthNeighborEdgeShareAtK = float64(graphDiagnostics.RetainedApproximateGraphTruthNeighborEdges) / float64(graphDiagnostics.ApproximateGraphTruthNeighborEdges)
+	}
+	quarterProbes := min(4, partitions)
+	quarterCoverage := 0.0
+	for _, row := range probeRows {
+		if row.ProbeBudget == quarterProbes {
+			quarterCoverage = row.BestPrimaryHomeCoverageAtK
+			break
+		}
+	}
+	return partitionTruthOracleV1{TopK: topK, ProbeBudget: quarterProbes, BestProbeCoverageAtK: quarterCoverage, TruthPrimaryHomePairColocate: pairColocation / float64(len(queries)), UniqueVectorBitPatterns: len(classes), ZeroDistanceTruthShareAtK: float64(zeroDistance) / float64(len(queries)*topK), Probes: probeRows, Graph: graphDiagnostics}, nil
+}
+
+func partitionGraphDiagnosticsForArtifactV1(graph [][]int, assignment []int, partitions, truthPairs, retainedTruthPairs int) (partitionGraphDiagnosticsV1, error) {
+	if len(graph) == 0 || len(graph) != len(assignment) || partitions < 1 || truthPairs < 0 || retainedTruthPairs < 0 || retainedTruthPairs > truthPairs {
+		return partitionGraphDiagnosticsV1{}, errors.New("invalid partition graph diagnostic input")
+	}
+	out := partitionGraphDiagnosticsV1{PartitionLoads: make([]int, partitions)}
+	maxRank := 0
+	for node, neighbors := range graph {
+		if assignment[node] < 0 || assignment[node] >= partitions {
+			return partitionGraphDiagnosticsV1{}, errors.New("invalid graph partition assignment")
+		}
+		out.PartitionLoads[assignment[node]]++
+		maxRank = max(maxRank, len(neighbors))
+	}
+	rankTotals, rankRetained := make([]int, maxRank), make([]int, maxRank)
+	for node, neighbors := range graph {
+		seen := make(map[int]struct{}, len(neighbors))
+		for rank, neighbor := range neighbors {
+			if neighbor < 0 || neighbor >= len(graph) || neighbor == node {
+				return partitionGraphDiagnosticsV1{}, errors.New("invalid approximate graph edge")
+			}
+			if _, duplicate := seen[neighbor]; duplicate {
+				return partitionGraphDiagnosticsV1{}, errors.New("duplicate approximate graph edge")
+			}
+			seen[neighbor] = struct{}{}
+			cut := assignment[node] != assignment[neighbor]
+			out.DirectedEdges++
+			rankTotals[rank]++
+			if cut {
+				out.DirectedCutEdges++
+			} else {
+				rankRetained[rank]++
+			}
+			if node < neighbor || !slices.Contains(graph[neighbor], node) {
+				out.SymmetricEdges++
+				if cut {
+					out.SymmetricCutEdges++
+				}
+			}
+		}
+	}
+	if out.DirectedEdges > 0 {
+		out.DirectedCutRatio = float64(out.DirectedCutEdges) / float64(out.DirectedEdges)
+	}
+	if out.SymmetricEdges > 0 {
+		out.SymmetricCutRatio = float64(out.SymmetricCutEdges) / float64(out.SymmetricEdges)
+	}
+	out.ApproximateAdjacencyRankPartitionRetention = make([]float64, maxRank)
+	for rank := range rankTotals {
+		if rankTotals[rank] > 0 {
+			out.ApproximateAdjacencyRankPartitionRetention[rank] = float64(rankRetained[rank]) / float64(rankTotals[rank])
+		}
+	}
+	out.TruthNeighborPairs = truthPairs
+	out.RetainedTruthNeighborPairs = retainedTruthPairs
+	if truthPairs > 0 {
+		out.RetainedTruthNeighborPairShareAtK = float64(retainedTruthPairs) / float64(truthPairs)
+	}
+	return out, nil
 }
 
 const provenanceSuffixBytes = 12
