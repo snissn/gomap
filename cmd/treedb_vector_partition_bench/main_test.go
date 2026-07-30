@@ -235,6 +235,14 @@ func TestM8MembershipOraclesSeparatePrimaryAndOverlapCeilingsV1(t *testing.T) {
 	}
 }
 
+func TestM8FinalMembershipDiagnosticsRetainsRankAndCoverageV1(t *testing.T) {
+	truth := []m8CanonicalResultV1{{ID: "a"}, {ID: "b"}, {ID: "c"}}
+	coverage, distinct, retained, err := m8TruthFinalMembershipDiagnosticsV1(truth, []uint32{1}, map[string][]uint32{"a": {0, 1}, "b": {2}, "c": {1, 3}})
+	if err != nil || coverage != 2.0/3.0 || distinct != 4 || !slices.Equal(retained, []float64{1, 0, 1}) {
+		t.Fatalf("coverage=%v distinct=%v retained=%v err=%v", coverage, distinct, retained, err)
+	}
+}
+
 func TestPartitionTruthOracleForArtifactV1(t *testing.T) {
 	vectors := [][]float64{{1, 0}, {.99, .01}, {0, 1}, {-.9, .1}}
 	oracle, err := partitionTruthOracleForArtifactV1(vectors, [][]float64{{1, 0}}, []int{0, 0, 1, 1}, 2, 3)

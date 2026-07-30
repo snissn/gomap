@@ -129,20 +129,23 @@ type m8ProductionAttributionV1 struct {
 	// ranking: coverage is the share of exact truth neighbors whose primary
 	// home was selected, while pair co-location describes how concentrated the
 	// exact truth set already is in that primary partitioning.
-	ExactRepresentativeTruthHomeCoverageAtK    float64  `json:"exact_representative_truth_home_partition_coverage_at_k"`
-	TruthNeighborHomePartitionsAtK             float64  `json:"truth_neighbor_primary_home_partitions_at_k"`
-	TruthNeighborHomePairColocationAtK         float64  `json:"truth_neighbor_primary_home_pair_colocation_at_k"`
-	ApproximateRepresentativeRecallAtK         float64  `json:"approximate_representative_routing_recall_at_k"`
-	LocalHNSWRecallAtK                         float64  `json:"partition_local_hnsw_recall_at_k"`
-	LocalHNSWSearches                          uint64   `json:"partition_local_hnsw_searches"`
-	LocalHNSWCandidates                        uint64   `json:"partition_local_hnsw_candidates"`
-	LocalHNSWEdges                             uint64   `json:"partition_local_hnsw_edges"`
-	EndToEndRecallAtK                          float64  `json:"end_to_end_recall_at_k"`
-	CoordinatorMergeIDParity                   bool     `json:"coordinator_merge_id_parity"`
-	CoordinatorMergeScoreParity                bool     `json:"coordinator_merge_score_parity"`
-	ApproximateRouterCandidateBudget           int      `json:"approximate_router_candidate_budget"`
-	ApproximateRouterPartitionCoverageComplete bool     `json:"approximate_router_partition_coverage_complete"`
-	ResidualLossOwners                         []string `json:"residual_loss_owners"`
+	ExactRepresentativeTruthHomeCoverageAtK       float64   `json:"exact_representative_truth_home_partition_coverage_at_k"`
+	TruthNeighborHomePartitionsAtK                float64   `json:"truth_neighbor_primary_home_partitions_at_k"`
+	TruthNeighborHomePairColocationAtK            float64   `json:"truth_neighbor_primary_home_pair_colocation_at_k"`
+	ExactRepresentativeFinalMembershipCoverageAtK float64   `json:"exact_representative_truth_final_membership_coverage_at_k"`
+	TruthNeighborFinalMembershipPartitionsAtK     float64   `json:"truth_neighbor_final_membership_partitions_at_k"`
+	TruthNeighborRankRetentionAtK                 []float64 `json:"truth_neighbor_rank_final_membership_retention_at_k"`
+	ApproximateRepresentativeRecallAtK            float64   `json:"approximate_representative_routing_recall_at_k"`
+	LocalHNSWRecallAtK                            float64   `json:"partition_local_hnsw_recall_at_k"`
+	LocalHNSWSearches                             uint64    `json:"partition_local_hnsw_searches"`
+	LocalHNSWCandidates                           uint64    `json:"partition_local_hnsw_candidates"`
+	LocalHNSWEdges                                uint64    `json:"partition_local_hnsw_edges"`
+	EndToEndRecallAtK                             float64   `json:"end_to_end_recall_at_k"`
+	CoordinatorMergeIDParity                      bool      `json:"coordinator_merge_id_parity"`
+	CoordinatorMergeScoreParity                   bool      `json:"coordinator_merge_score_parity"`
+	ApproximateRouterCandidateBudget              int       `json:"approximate_router_candidate_budget"`
+	ApproximateRouterPartitionCoverageComplete    bool      `json:"approximate_router_partition_coverage_complete"`
+	ResidualLossOwners                            []string  `json:"residual_loss_owners"`
 }
 
 // m8PartitionPackDiagnosticsV1 records offline topology facts for each
@@ -1659,6 +1662,32 @@ func m8TruthHomePartitionDiagnosticsV1(truth []m8CanonicalResultV1, selected []u
 	return float64(covered) / float64(len(truth)), float64(len(homeCounts)), pairColocation, nil
 }
 
+func m8TruthFinalMembershipDiagnosticsV1(truth []m8CanonicalResultV1, selected []uint32, memberships map[string][]uint32) (coverage, distinct float64, retained []float64, err error) {
+	if len(truth) == 0 || len(selected) == 0 || len(memberships) == 0 {
+		return 0, 0, nil, errors.New("empty truth final-membership diagnostic input")
+	}
+	selectedSet := make(map[uint32]struct{}, len(selected))
+	for _, partition := range selected {
+		selectedSet[partition] = struct{}{}
+	}
+	all := make(map[uint32]struct{})
+	retained = make([]float64, len(truth))
+	for rank, result := range truth {
+		parts, ok := memberships[result.ID]
+		if !ok || len(parts) == 0 {
+			return 0, 0, nil, fmt.Errorf("canonical truth ID %q has no final membership", result.ID)
+		}
+		for _, partition := range parts {
+			all[partition] = struct{}{}
+			if _, ok := selectedSet[partition]; ok {
+				retained[rank] = 1
+			}
+		}
+		coverage += retained[rank]
+	}
+	return coverage / float64(len(truth)), float64(len(all)), retained, nil
+}
+
 func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAssetsV1, primaryHomes map[string]uint32, queries [][]float64, truth [][]m8CanonicalResultV1, probes, efSearch, topK, approximateCandidates int, exhaustive [][]m8CanonicalResultV1, harness *m8AttributionHarnessV1) (m8AttributionCellV1, error) {
 	if len(primaryHomes) == 0 {
 		return m8AttributionCellV1{}, errors.New("M8 attribution requires a cached truth-home mapping")
@@ -1683,7 +1712,7 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 	for i := range allPartitions {
 		allPartitions[i] = uint32(i)
 	}
-	var primaryOracle, finalOracle, exhaustiveRecall, exactRecall, exactTruthHomeCoverage, truthHomePartitions, truthHomePairColocation, approximateRecall, localRecall float64
+	var primaryOracle, finalOracle, exhaustiveRecall, exactRecall, exactTruthHomeCoverage, exactFinalCoverage, truthHomePartitions, truthFinalPartitions, truthHomePairColocation, approximateRecall, localRecall float64
 	for i, query64 := range queries {
 		if err := ctx.Err(); err != nil {
 			return cell, err
@@ -1722,6 +1751,18 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 		exactTruthHomeCoverage += coverage
 		truthHomePartitions += homes
 		truthHomePairColocation += pairColocation
+		finalCoverage, finalPartitions, retained, err := m8TruthFinalMembershipDiagnosticsV1(truth[i], exactPartitions, finalMemberships)
+		if err != nil {
+			return cell, fmt.Errorf("M8 exact routing final-membership diagnostics query=%d: %w", i, err)
+		}
+		exactFinalCoverage += finalCoverage
+		truthFinalPartitions += finalPartitions
+		if cell.Evidence.TruthNeighborRankRetentionAtK == nil {
+			cell.Evidence.TruthNeighborRankRetentionAtK = make([]float64, len(retained))
+		}
+		for rank := range retained {
+			cell.Evidence.TruthNeighborRankRetentionAtK[rank] += retained[rank]
+		}
 		approximatePartitions, approximateRouteErr := harness.route(ctx, query, probes, collections.VectorPartitionRouterModeApproxV1, approximateCandidates)
 		approximateCoverageComplete, err := m8ApproximateRouterCoverageV1(approximateRouteErr)
 		if err != nil {
@@ -1771,6 +1812,11 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 	cell.Evidence.ExactRepresentativeTruthHomeCoverageAtK = exactTruthHomeCoverage / n
 	cell.Evidence.TruthNeighborHomePartitionsAtK = truthHomePartitions / n
 	cell.Evidence.TruthNeighborHomePairColocationAtK = truthHomePairColocation / n
+	cell.Evidence.ExactRepresentativeFinalMembershipCoverageAtK = exactFinalCoverage / n
+	cell.Evidence.TruthNeighborFinalMembershipPartitionsAtK = truthFinalPartitions / n
+	for rank := range cell.Evidence.TruthNeighborRankRetentionAtK {
+		cell.Evidence.TruthNeighborRankRetentionAtK[rank] /= n
+	}
 	cell.Evidence.ApproximateRepresentativeRecallAtK = approximateRecall / n
 	cell.Evidence.LocalHNSWRecallAtK = localRecall / n
 	return cell, nil
