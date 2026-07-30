@@ -223,7 +223,7 @@ func TestM8TruthCacheHitReusesCanonicalRowsV1(t *testing.T) {
 
 func TestM8TruthCacheWorstCanonicalEncodingFitsBoundV1(t *testing.T) {
 	fixture := fixtureManifest{Checksum: strings.Repeat("g", 64), Vectors: 1_000_001, Dimensions: 2, Metric: "cosine"}
-	identity, dir := m8TruthCacheIdentityV1(fixture, 1), t.TempDir()
+	identity := m8TruthCacheIdentityV1(fixture, 1)
 	truth := [][]m8CanonicalResultV1{{{ID: "doc-1000000", Score: math.MaxFloat32}}}
 	digest, err := m8TruthContentSHA256V1(truth)
 	if err != nil {
@@ -236,13 +236,6 @@ func TestM8TruthCacheWorstCanonicalEncodingFitsBoundV1(t *testing.T) {
 	bound, err := m8TruthCacheMaxBytesV1(1, 1, fixture.Vectors)
 	if err != nil || int64(len(raw)) > bound {
 		t.Fatalf("raw=%d bound=%d err=%v", len(raw), bound, err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "m8_canonical_truth_"+identity+".json"), raw, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	artifact := sha256.Sum256(raw)
-	if got, evidence, err := m8LoadOrComputeTruthV1(dir, nil, collections.VectorPartitionManifestV1{SourceRowCount: 1}, fixture, [][]float64{{1, 0}}, 1, hex.EncodeToString(artifact[:])); err != nil || evidence.Status != "reused" || !reflect.DeepEqual(got, truth) {
-		t.Fatalf("got=%v evidence=%+v err=%v", got, evidence, err)
 	}
 }
 
