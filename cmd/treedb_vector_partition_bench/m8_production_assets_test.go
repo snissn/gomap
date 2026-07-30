@@ -438,11 +438,11 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	}
 	defer harness.Close()
 	candidates := int(assets.status.Representatives)
-	primaryHomes, err := m8PrimaryHomePartitionsByDocumentIDV1(assets)
+	primaryHomes, finalMemberships, err := m8TruthPartitionMembershipsByDocumentIDV1(assets, truth)
 	if err != nil {
 		t.Fatal(err)
 	}
-	attribution, err := m8BuildAttributionV1(ctx, assets, primaryHomes, attributionQueries, truth, 4, 4096, 10, candidates, make([][]m8CanonicalResultV1, len(attributionQueries)), harness)
+	attribution, err := m8BuildAttributionV1(ctx, assets, primaryHomes, finalMemberships, attributionQueries, truth, 4, 4096, 10, candidates, make([][]m8CanonicalResultV1, len(attributionQueries)), harness)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -134,9 +134,10 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 			// is exhausted, deterministically fill remaining legal non-home
 			// slots. Adding memberships cannot increase the overlap edge cut.
 			if cfg.RequireExact {
-				filled := fillExactOverlapSlots(a, members, loads, capacity, budget-used)
+				filled, usefulFilled, fillerFilled := fillExactOverlapSlots(a, members, loads, capacity, budget-used)
 				used += filled
-				filler += filled
+				useful += usefulFilled
+				filler += fillerFilled
 			}
 			break
 		}
@@ -165,9 +166,10 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 		}
 		if applied == 0 {
 			if cfg.RequireExact {
-				filled := fillExactOverlapSlots(a, members, loads, capacity, budget-used)
+				filled, usefulFilled, fillerFilled := fillExactOverlapSlots(a, members, loads, capacity, budget-used)
 				used += filled
-				filler += filled
+				useful += usefulFilled
+				filler += fillerFilled
 			}
 			break
 		}
@@ -207,8 +209,7 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 // after affinity has no further cut-reducing proposal. IDs are canonical in a
 // validated artifact; partition order is stable. A vector's durable cap and
 // the declared total-membership cap are both rechecked at application time.
-func fillExactOverlapSlots(a Artifact, members []map[int]struct{}, loads []int, capacity, remaining int) int {
-	used := 0
+func fillExactOverlapSlots(a Artifact, members []map[int]struct{}, loads []int, capacity, remaining int) (used, useful, filler int) {
 	for i := range a.IDs {
 		if used == remaining || len(members[i])-1 >= MaxOverlapMembershipsPerVector {
 			continue
@@ -220,15 +221,20 @@ func fillExactOverlapSlots(a Artifact, members []map[int]struct{}, loads []int, 
 			if _, exists := members[i][partition]; exists {
 				continue
 			}
+			if overlapCutReduction(members, i, partition, a.Graph.Neighbors[i]) > 0 {
+				useful++
+			} else {
+				filler++
+			}
 			members[i][partition] = struct{}{}
 			loads[partition]++
 			used++
 			if used == remaining {
-				return used
+				return used, useful, filler
 			}
 		}
 	}
-	return used
+	return used, useful, filler
 }
 
 // overlapCutReduction scores only directed cut edges that membership in

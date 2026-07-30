@@ -104,8 +104,18 @@ func TestOverlapExactTreatmentFillsLegalNonAffinitySlotsV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Budget != 2 || got.Used != 2 || got.Unspent != 0 || got.EdgeCutBefore != 0 || got.EdgeCutAfter != 0 {
+	if got.Budget != 2 || got.Used != 2 || got.Useful != 0 || got.Filler != 2 || got.Unspent != 0 || got.EdgeCutBefore != 0 || got.EdgeCutAfter != 0 {
 		t.Fatalf("exact fallback=%+v", got)
+	}
+}
+
+func TestExactFillerReclassifiesLaterCutReductionV1(t *testing.T) {
+	a := Artifact{IDs: []string{"a", "b", "c", "d"}, Graph: Graph{Neighbors: [][]int{{2}, {}, {0}, {}}}, Config: Config{Partitions: 3}, Assignment: []int{0, 0, 1, 1}}
+	members := []map[int]struct{}{{0: {}}, {0: {}}, {1: {}}, {1: {}}}
+	loads := []int{2, 2, 0}
+	used, useful, filler := fillExactOverlapSlots(a, members, loads, 3, 3)
+	if used != 3 || useful != 1 || filler != 2 {
+		t.Fatalf("filled used=%d useful=%d filler=%d", used, useful, filler)
 	}
 }
 

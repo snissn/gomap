@@ -220,9 +220,9 @@ func TestTruthHomePartitionDiagnosticsV1(t *testing.T) {
 
 func TestM8MembershipOraclesSeparatePrimaryAndOverlapCeilingsV1(t *testing.T) {
 	truth := []m8CanonicalResultV1{{ID: "a"}, {ID: "b"}, {ID: "c"}, {ID: "d"}}
-	primary := map[string][]uint32{"a": {0}, "b": {1}, "c": {2}, "d": {3}}
+	primary := map[string]uint32{"a": 0, "b": 1, "c": 2, "d": 3}
 	final := map[string][]uint32{"a": {0, 1}, "b": {1}, "c": {2}, "d": {3}}
-	gotPrimary, err := m8BestMembershipOracleRecallV1(truth, primary, 4, 1)
+	gotPrimary, err := m8BestPrimaryHomeOracleRecallV1(truth, primary, 4, 1)
 	if err != nil || gotPrimary != .25 {
 		t.Fatalf("primary oracle=%v err=%v", gotPrimary, err)
 	}
@@ -236,6 +236,19 @@ func TestM8MembershipOraclesSeparatePrimaryAndOverlapCeilingsV1(t *testing.T) {
 	malformed := map[string][]uint32{"a": {0}, "b": {1}, "c": {2}, "d": {4}}
 	if _, err := m8BestMembershipOracleRecallV1(truth, malformed, 4, 1); err == nil {
 		t.Fatal("accepted out-of-range truth membership")
+	}
+}
+
+func TestM8MembershipOracleCombinationBoundIsPreflightedV1(t *testing.T) {
+	cfg := config{partitions: 64, overlaps: []float64{0}, probes: []int{32}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}
+	_, err := validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 64, Queries: 1, Dimensions: 1}, math.MaxInt64, math.MaxInt64)
+	if err == nil || !strings.Contains(err.Error(), "membership oracle C(64,32)") {
+		t.Fatalf("missing combination preflight refusal: %v", err)
+	}
+	cfg = config{partitions: 16, overlaps: []float64{0}, probes: []int{8}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}
+	_, err = validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 16, Queries: 20_000, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64)
+	if err == nil || !strings.Contains(err.Error(), "membership-oracle work") {
+		t.Fatalf("missing aggregate membership-oracle refusal: %v", err)
 	}
 }
 
@@ -263,6 +276,16 @@ func TestM8AttributionOwnersKeepRouterAndLocalLossSeparateV1(t *testing.T) {
 			t.Fatalf("stages=%+v want active %q delta=%v", m8AttributionStageOwnersV1(attribution), test.stage, test.delta)
 		})
 	}
+}
+
+func TestM8PartitionContractFailureHasExplicitStageV1(t *testing.T) {
+	attribution := m8ProductionAttributionV1{GlobalExactRecallAtK: 1, OracleStagesComplete: true, PrimaryHomeOracleRecallAtK: 1, FinalMembershipOracleRecallAtK: 1, ExhaustivePartitionRecallAtK: 1, ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1}
+	for _, stage := range m8AttributionStageOwnersV1(attribution) {
+		if stage.Owner == "partition_membership_or_score_contract" && stage.Active {
+			return
+		}
+	}
+	t.Fatalf("stages=%+v", m8AttributionStageOwnersV1(attribution))
 }
 
 func TestM8FinalMembershipDiagnosticsRetainsRankAndCoverageV1(t *testing.T) {
@@ -1668,16 +1691,21 @@ func TestM8AttributionPrimaryHomeMappingIsModeledV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantMap, err := memoryMul(int64(manifest.Vectors), memoryMapEntryBytes+documentIDStorageBytes)
+	truthIDs := int64(manifest.Queries * cfg.topK)
+	wantMap, err := memoryMul(truthIDs, memoryMapEntryBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantScratch, err := memoryMul(int64(manifest.Vectors), int64(unsafe.Sizeof(uint32(0)))+int64(unsafe.Sizeof(bool(false))))
+	wantFinal, err := memoryAdd(truthIDs*(memoryMapEntryBytes+int64(unsafe.Sizeof([]uint32{}))), 2*(truthIDs+int64(manifest.Vectors))*int64(unsafe.Sizeof(uint32(0))))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.AttributionPrimaryHomeMapBytes != wantMap || plan.AttributionHomeBuildScratchBytes != wantScratch {
-		t.Fatalf("truth-home attribution memory is not fully modeled: plan=%+v", plan)
+	wantScratch, err := memoryMul(truthIDs, 3*memoryMapEntryBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.AttributionPrimaryHomeMapBytes != wantMap || plan.AttributionFinalMembershipBytes != wantFinal || plan.AttributionHomeBuildScratchBytes != wantScratch {
+		t.Fatalf("truth-membership attribution memory is not fully modeled: plan=%+v", plan)
 	}
 }
 

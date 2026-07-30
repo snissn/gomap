@@ -461,7 +461,7 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 	return matrix, nil
 }
 
-// m8DecisionReportV1 emits one deterministic quarter-probe attribution view
+// m8DecisionReportV1 emits one deterministic quarter-budget attribution view
 // per retained variant, never a product-enablement claim.
 func m8DecisionReportV1(reports []m8ProductionReportV1) []m8DecisionRowV1 {
 	out := make([]m8DecisionRowV1, 0, len(reports)*6)
@@ -469,7 +469,7 @@ func m8DecisionReportV1(reports []m8ProductionReportV1) []m8DecisionRowV1 {
 		if report.Variant == nil {
 			continue
 		}
-		targetProbes := min(4, report.Config.Partitions)
+		targetProbes := max(1, report.Config.Partitions/4)
 		var selected *m8ProductionRowV1
 		for i := range report.Rows {
 			row := &report.Rows[i]

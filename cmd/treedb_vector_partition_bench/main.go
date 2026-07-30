@@ -161,7 +161,6 @@ type partitionGraphDiagnosticsV1 struct {
 	SymmetricEdges                                    int       `json:"symmetric_edges"`
 	SymmetricCutEdges                                 int       `json:"symmetric_cut_edges"`
 	SymmetricCutRatio                                 float64   `json:"symmetric_cut_ratio"`
-	ApproximateAdjacencyRankPartitionRetention        []float64 `json:"approximate_graph_adjacency_rank_partition_retention"`
 	ApproximateGraphRecallByTruthNeighborRank         []float64 `json:"approximate_graph_recall_by_truth_neighbor_rank_2_through_k"`
 	RetainedApproximateGraphTruthNeighborRank         []float64 `json:"retained_approximate_graph_truth_neighbor_rank_2_through_k"`
 	PartitionLoads                                    []int     `json:"partition_loads"`
@@ -1129,18 +1128,15 @@ func partitionGraphDiagnosticsForArtifactV1(graph [][]int, assignment []int, par
 		return partitionGraphDiagnosticsV1{}, errors.New("invalid partition graph diagnostic input")
 	}
 	out := partitionGraphDiagnosticsV1{PartitionLoads: make([]int, partitions)}
-	maxRank := 0
-	for node, neighbors := range graph {
+	for node := range graph {
 		if assignment[node] < 0 || assignment[node] >= partitions {
 			return partitionGraphDiagnosticsV1{}, errors.New("invalid graph partition assignment")
 		}
 		out.PartitionLoads[assignment[node]]++
-		maxRank = max(maxRank, len(neighbors))
 	}
-	rankTotals, rankRetained := make([]int, maxRank), make([]int, maxRank)
 	for node, neighbors := range graph {
 		seen := make(map[int]struct{}, len(neighbors))
-		for rank, neighbor := range neighbors {
+		for _, neighbor := range neighbors {
 			if neighbor < 0 || neighbor >= len(graph) || neighbor == node {
 				return partitionGraphDiagnosticsV1{}, errors.New("invalid approximate graph edge")
 			}
@@ -1150,11 +1146,8 @@ func partitionGraphDiagnosticsForArtifactV1(graph [][]int, assignment []int, par
 			seen[neighbor] = struct{}{}
 			cut := assignment[node] != assignment[neighbor]
 			out.DirectedEdges++
-			rankTotals[rank]++
 			if cut {
 				out.DirectedCutEdges++
-			} else {
-				rankRetained[rank]++
 			}
 			if node < neighbor || !slices.Contains(graph[neighbor], node) {
 				out.SymmetricEdges++
@@ -1169,12 +1162,6 @@ func partitionGraphDiagnosticsForArtifactV1(graph [][]int, assignment []int, par
 	}
 	if out.SymmetricEdges > 0 {
 		out.SymmetricCutRatio = float64(out.SymmetricCutEdges) / float64(out.SymmetricEdges)
-	}
-	out.ApproximateAdjacencyRankPartitionRetention = make([]float64, maxRank)
-	for rank := range rankTotals {
-		if rankTotals[rank] > 0 {
-			out.ApproximateAdjacencyRankPartitionRetention[rank] = float64(rankRetained[rank]) / float64(rankTotals[rank])
-		}
 	}
 	out.TruthNeighborPairs = truthPairs
 	out.RetainedTruthNeighborPairs = retainedTruthPairs
@@ -1456,34 +1443,50 @@ type m3BenchmarkWorkPlan struct {
 }
 
 type m8BenchmarkWorkPlan struct {
-	FixtureChecksumVectorVisits      int64
-	ExactTruthVectorVisits           int64
-	ExactWorkVectorVisits            int64
-	MeasuredQueryRequests            int64
-	WarmupAndPreflightQueryRequests  int64
-	AttributionQueryPasses           int64
-	QueryRequests                    int64
-	RetainedCoordinatorCells         int64
-	RetainedCoordinatorResults       int64
-	CurrentCellOutcomes              int64
-	CurrentCellOutcomeBytes          int64
-	FixtureResidentBytes             int64
-	SourceSnapshotBytes              int64
-	ExactTruthBytes                  int64
-	RetainedCoordinatorBytes         int64
-	RetainedAttributionMatrices      int64
-	RetainedAttributionResults       int64
-	RetainedAttributionBytes         int64
-	AttributionMergeScratchResults   int64
-	AttributionMergeScratchBytes     int64
-	AttributionPrimaryHomeMapBytes   int64
-	AttributionHomeBuildScratchBytes int64
-	ModeledPeakBytes                 int64
+	FixtureChecksumVectorVisits       int64
+	ExactTruthVectorVisits            int64
+	ExactWorkVectorVisits             int64
+	MeasuredQueryRequests             int64
+	WarmupAndPreflightQueryRequests   int64
+	AttributionQueryPasses            int64
+	MaxMembershipOracleSubsets        int64
+	MembershipOracleSubsetEvaluations int64
+	QueryRequests                     int64
+	RetainedCoordinatorCells          int64
+	RetainedCoordinatorResults        int64
+	CurrentCellOutcomes               int64
+	CurrentCellOutcomeBytes           int64
+	FixtureResidentBytes              int64
+	SourceSnapshotBytes               int64
+	ExactTruthBytes                   int64
+	RetainedCoordinatorBytes          int64
+	RetainedAttributionMatrices       int64
+	RetainedAttributionResults        int64
+	RetainedAttributionBytes          int64
+	AttributionMergeScratchResults    int64
+	AttributionMergeScratchBytes      int64
+	AttributionPrimaryHomeMapBytes    int64
+	AttributionFinalMembershipBytes   int64
+	AttributionHomeBuildScratchBytes  int64
+	ModeledPeakBytes                  int64
 }
 
 func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes int64) (m8BenchmarkWorkPlan, error) {
 	if capUnits < 1 || capBytes < 1 || cfg.partitions < 1 || cfg.topK < 1 || m.Vectors < 1 || m.Queries < 1 || m.Dimensions < 1 || len(cfg.overlaps) == 0 || len(cfg.probes) == 0 || len(cfg.efSearch) == 0 || len(cfg.concurrency) == 0 {
 		return m8BenchmarkWorkPlan{}, errors.New("cannot plan M8 benchmark work without positive caps, a valid fixture/top-k, and complete sweeps")
+	}
+	plan := m8BenchmarkWorkPlan{}
+	var membershipOracleSubsetsPerSweep int64
+	for _, probes := range cfg.probes {
+		combinations, err := m8MembershipOracleCombinationCountV1(cfg.partitions, probes, maxBenchmarkWorkUnits)
+		if err != nil {
+			return plan, err
+		}
+		plan.MaxMembershipOracleSubsets = max(plan.MaxMembershipOracleSubsets, combinations)
+		membershipOracleSubsetsPerSweep, err = memoryAdd(membershipOracleSubsetsPerSweep, combinations)
+		if err != nil {
+			return plan, err
+		}
 	}
 	truthCap := cfg.m8MaxExactTruthVisits
 	if truthCap == 0 { // direct planner callers retain an independent conservative cap.
@@ -1513,6 +1516,13 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		// peak of one sequential child.
 		variantRuns = int64(len(cfg.m8VariantDBs))
 		supportedOverlaps = 1
+	}
+	plan.MembershipOracleSubsetEvaluations, err = memoryMul(membershipOracleSubsetsPerSweep, int64(m.Queries), int64(len(cfg.efSearch)), supportedOverlaps, variantRuns)
+	if err != nil {
+		return plan, err
+	}
+	if plan.MembershipOracleSubsetEvaluations > capUnits {
+		return plan, fmt.Errorf("modeled M8 membership-oracle work exceeds %d-subset cap: max_subsets_per_query=%d subset_evaluations=%d", capUnits, plan.MaxMembershipOracleSubsets, plan.MembershipOracleSubsetEvaluations)
 	}
 	// Every child reconstructs and checksum-binds its fixture, then computes the
 	// canonical exact oracle. Cache reuse avoids a compute in the common path but
@@ -1572,7 +1582,13 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return m8BenchmarkWorkPlan{}, err
 	}
-	plan := m8BenchmarkWorkPlan{FixtureChecksumVectorVisits: fixtureChecksumVisits, ExactTruthVectorVisits: canonicalTruthVisits, ExactWorkVectorVisits: exactWorkVisits, MeasuredQueryRequests: measured, WarmupAndPreflightQueryRequests: warmupAndPreflight, AttributionQueryPasses: attribution, QueryRequests: requests}
+	plan.FixtureChecksumVectorVisits = fixtureChecksumVisits
+	plan.ExactTruthVectorVisits = canonicalTruthVisits
+	plan.ExactWorkVectorVisits = exactWorkVisits
+	plan.MeasuredQueryRequests = measured
+	plan.WarmupAndPreflightQueryRequests = warmupAndPreflight
+	plan.AttributionQueryPasses = attribution
+	plan.QueryRequests = requests
 	if requests > capUnits {
 		return plan, fmt.Errorf("modeled M8 benchmark work exceeds %d-unit cap (%s): measured_query_requests=%d warmup_and_preflight_query_requests=%d attribution_query_passes=%d query_requests=%d", capUnits, m8BenchmarkWorkScope, measured, warmupAndPreflight, attribution, requests)
 	}
@@ -1698,11 +1714,35 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		}
 	}
 	if supportedOverlaps > 0 {
-		plan.AttributionPrimaryHomeMapBytes, err = memoryMul(int64(m.Vectors), memoryMapEntryBytes+documentIDStorageBytes)
+		truthIDs, truthIDErr := memoryMul(int64(m.Queries), int64(cfg.topK))
+		if truthIDErr != nil {
+			return plan, truthIDErr
+		}
+		truthIDs = min(truthIDs, int64(m.Vectors))
+		plan.AttributionPrimaryHomeMapBytes, err = memoryMul(truthIDs, memoryMapEntryBytes)
 		if err != nil {
 			return plan, err
 		}
-		plan.AttributionHomeBuildScratchBytes, err = memoryMul(int64(m.Vectors), int64(unsafe.Sizeof(uint32(0)))+int64(unsafe.Sizeof(bool(false))))
+		// Conservatively allow every overlap membership in the corpus to land on
+		// a truth result; actual M1 per-vector caps only reduce this bound.
+		membershipValues, membershipErr := memoryAdd(truthIDs, int64(m.Vectors))
+		if membershipErr != nil {
+			return plan, membershipErr
+		}
+		finalMapEntries, mapErr := memoryMul(truthIDs, memoryMapEntryBytes+int64(unsafe.Sizeof([]uint32{})))
+		if mapErr != nil {
+			return plan, mapErr
+		}
+		// append growth keeps backing capacity below twice the retained length.
+		membershipStorage, storageErr := memoryMul(2, membershipValues, int64(unsafe.Sizeof(uint32(0))))
+		if storageErr != nil {
+			return plan, storageErr
+		}
+		plan.AttributionFinalMembershipBytes, err = memoryAdd(finalMapEntries, membershipStorage)
+		if err != nil {
+			return plan, err
+		}
+		plan.AttributionHomeBuildScratchBytes, err = memoryMul(truthIDs, 3*memoryMapEntryBytes)
 		if err != nil {
 			return plan, err
 		}
@@ -1770,11 +1810,11 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	attributionHomeBuildPeak, err := memoryAdd(measurementBase, plan.SourceSnapshotBytes, plan.AttributionPrimaryHomeMapBytes, plan.AttributionHomeBuildScratchBytes)
+	attributionHomeBuildPeak, err := memoryAdd(measurementBase, plan.SourceSnapshotBytes, plan.AttributionPrimaryHomeMapBytes, plan.AttributionFinalMembershipBytes, plan.AttributionHomeBuildScratchBytes)
 	if err != nil {
 		return plan, err
 	}
-	attributionPeak, err := memoryAdd(measurementBase, plan.AttributionPrimaryHomeMapBytes, plan.RetainedAttributionBytes, plan.AttributionMergeScratchBytes)
+	attributionPeak, err := memoryAdd(measurementBase, plan.AttributionPrimaryHomeMapBytes, plan.AttributionFinalMembershipBytes, plan.RetainedAttributionBytes, plan.AttributionMergeScratchBytes)
 	if err != nil {
 		return plan, err
 	}
@@ -1784,7 +1824,7 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		return plan, err
 	}
 	if plan.ModeledPeakBytes > capBytes {
-		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d source_snapshot_bytes=%d exact_truth_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d current_cell_outcomes=%d current_cell_outcome_bytes=%d retained_attribution_matrices=%d retained_attribution_results=%d retained_attribution_bytes=%d attribution_merge_scratch_results=%d attribution_merge_scratch_bytes=%d attribution_primary_home_map_bytes=%d attribution_home_build_scratch_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes, plan.CurrentCellOutcomes, plan.CurrentCellOutcomeBytes, plan.RetainedAttributionMatrices, plan.RetainedAttributionResults, plan.RetainedAttributionBytes, plan.AttributionMergeScratchResults, plan.AttributionMergeScratchBytes, plan.AttributionPrimaryHomeMapBytes, plan.AttributionHomeBuildScratchBytes)
+		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d source_snapshot_bytes=%d exact_truth_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d current_cell_outcomes=%d current_cell_outcome_bytes=%d retained_attribution_matrices=%d retained_attribution_results=%d retained_attribution_bytes=%d attribution_merge_scratch_results=%d attribution_merge_scratch_bytes=%d attribution_primary_home_map_bytes=%d attribution_final_membership_bytes=%d attribution_home_build_scratch_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes, plan.CurrentCellOutcomes, plan.CurrentCellOutcomeBytes, plan.RetainedAttributionMatrices, plan.RetainedAttributionResults, plan.RetainedAttributionBytes, plan.AttributionMergeScratchResults, plan.AttributionMergeScratchBytes, plan.AttributionPrimaryHomeMapBytes, plan.AttributionFinalMembershipBytes, plan.AttributionHomeBuildScratchBytes)
 	}
 	return plan, nil
 }

@@ -30,7 +30,7 @@ import (
 
 const (
 	m8ProductionMultiGroupModeV1 = "production_multi_group"
-	m8PeakRSSScopeV1             = "process lifetime through preflight, warmup, measured query, endpoint-loss fault, and post-measurement attribution boundaries; includes retained top-k coordinator results and cached truth-home attribution mapping"
+	m8PeakRSSScopeV1             = "process lifetime through preflight, warmup, measured query, endpoint-loss fault, and post-measurement attribution boundaries; includes retained top-k coordinator results and cached truth-membership attribution mappings"
 )
 
 const m8CanonicalTruthContractV1 = collections.VectorPartitionCanonicalScoreContractV1
@@ -449,7 +449,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	// and profile capture. Their exhaustive mmap scans must not
 	// pre-fault the corpus or contaminate measured process-resource evidence.
 	// Peak RSS remains process-lifetime evidence and is captured after attribution,
-	// including the bounded top-k results and cached truth-home map retained here.
+	// including the bounded top-k results and cached truth-membership maps retained here.
 	attributionHarness, err := newM8AttributionHarnessV1(assets)
 	if err != nil {
 		return fmt.Errorf("open M8 attribution harness: %w", err)
@@ -466,9 +466,9 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	}
 	report.PackDiagnostics = diagnostics
 	if len(measuredCells) > 0 {
-		primaryHomes, homesErr := m8PrimaryHomePartitionsByDocumentIDV1(assets)
+		primaryHomes, finalMemberships, homesErr := m8TruthPartitionMembershipsByDocumentIDV1(assets, truth)
 		if homesErr != nil {
-			return fmt.Errorf("build M8 truth-home attribution mapping: %w", homesErr)
+			return fmt.Errorf("build M8 truth-membership attribution mapping: %w", homesErr)
 		}
 		approximateCandidates := min(cfg.routerCandidates, int(assets.status.Representatives))
 		if approximateCandidates < 1 {
@@ -478,7 +478,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		exhaustive := make([][]m8CanonicalResultV1, len(queries))
 		for _, probes := range cfg.probes {
 			for _, efSearch := range cfg.efSearch {
-				cell, buildErr := m8BuildAttributionV1(context.Background(), assets, primaryHomes, queries, truth, probes, efSearch, cfg.topK, approximateCandidates, exhaustive, attributionHarness)
+				cell, buildErr := m8BuildAttributionV1(context.Background(), assets, primaryHomes, finalMemberships, queries, truth, probes, efSearch, cfg.topK, approximateCandidates, exhaustive, attributionHarness)
 				if buildErr != nil {
 					return fmt.Errorf("build M8 attribution probes=%d ef=%d: %w", probes, efSearch, buildErr)
 				}
@@ -1527,82 +1527,105 @@ func m8AttributionKeyV1(probes, efSearch int) string {
 	return fmt.Sprintf("%d/%d", probes, efSearch)
 }
 
-// m8PrimaryHomePartitionsByDocumentIDV1 binds canonical truth IDs to the
-// primary (non-overlap) partition membership of the pinned generation.
-func m8PrimaryHomePartitionsByDocumentIDV1(assets *m8ProductionMultiGroupAssetsV1) (map[string]uint32, error) {
+// m8TruthPartitionMembershipsByDocumentIDV1 binds only canonical truth IDs to
+// the pinned generation's primary and final membership relations.
+func m8TruthPartitionMembershipsByDocumentIDV1(assets *m8ProductionMultiGroupAssetsV1, truth [][]m8CanonicalResultV1) (map[string]uint32, map[string][]uint32, error) {
 	if assets == nil || assets.collection == nil || assets.manifest.SourceRowCount == 0 {
-		return nil, errors.New("missing M8 assets for truth-home diagnostics")
+		return nil, nil, errors.New("missing M8 assets for truth-membership diagnostics")
+	}
+	wanted := make(map[string]string)
+	for _, results := range truth {
+		for _, result := range results {
+			if result.ID == "" {
+				return nil, nil, errors.New("canonical truth contains an empty document ID")
+			}
+			wanted[result.ID] = result.ID
+		}
+	}
+	if len(wanted) == 0 {
+		return nil, nil, errors.New("canonical truth contains no document IDs")
 	}
 	source, rows, err := assets.collection.ReadVectorPartitionRouterSourceRowsV1(partitionHNSWIndex)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if source.Generation != assets.manifest.SourceGeneration || source.Checksum != assets.manifest.SourceChecksum || source.SchemaHash != assets.manifest.SourceSchemaHash || source.RowCount != assets.manifest.SourceRowCount || len(rows) != int(source.RowCount) {
-		return nil, errors.New("source identity does not match pinned partition generation")
+		return nil, nil, errors.New("source identity does not match pinned partition generation")
 	}
-	homesByOrdinal := make([]uint32, source.RowCount)
-	seen := make([]bool, source.RowCount)
-	for _, membership := range assets.manifest.Memberships {
-		if membership.VectorOrdinal >= source.RowCount || membership.PartitionID >= assets.manifest.PartitionCount || seen[membership.VectorOrdinal] {
-			return nil, errors.New("invalid primary partition membership")
-		}
-		seen[membership.VectorOrdinal] = true
-		homesByOrdinal[membership.VectorOrdinal] = membership.PartitionID
-	}
-	homes := make(map[string]uint32, len(rows))
+	ordinalIDs := make(map[uint64]string, len(wanted))
+	found := make(map[string]struct{}, len(wanted))
 	for ordinal, row := range rows {
-		id := string(row.DocumentID)
-		if !seen[ordinal] || id == "" {
-			return nil, errors.New("incomplete primary partition membership")
+		id, ok := wanted[string(row.DocumentID)]
+		if !ok {
+			continue
+		}
+		if _, duplicate := found[id]; duplicate {
+			return nil, nil, fmt.Errorf("duplicate canonical truth document ID %q in source", id)
+		}
+		found[id] = struct{}{}
+		ordinalIDs[uint64(ordinal)] = id
+	}
+	if len(found) != len(wanted) {
+		return nil, nil, errors.New("canonical truth document ID is absent from pinned source")
+	}
+	homes := make(map[string]uint32, len(wanted))
+	memberships := make(map[string][]uint32, len(wanted))
+	for _, membership := range assets.manifest.Memberships {
+		if membership.VectorOrdinal >= source.RowCount || membership.PartitionID >= assets.manifest.PartitionCount {
+			return nil, nil, errors.New("invalid primary partition membership")
+		}
+		id, ok := ordinalIDs[membership.VectorOrdinal]
+		if !ok {
+			continue
 		}
 		if _, duplicate := homes[id]; duplicate {
-			return nil, fmt.Errorf("duplicate source document ID %q", id)
+			return nil, nil, fmt.Errorf("duplicate primary partition membership for %q", id)
 		}
-		homes[id] = homesByOrdinal[ordinal]
+		homes[id] = membership.PartitionID
+		memberships[id] = append(memberships[id], membership.PartitionID)
 	}
-	return homes, nil
+	for _, member := range assets.manifest.OverlapMemberships {
+		if member.VectorOrdinal >= source.RowCount || member.PartitionID >= assets.manifest.PartitionCount {
+			return nil, nil, errors.New("invalid overlap partition membership")
+		}
+		id, ok := ordinalIDs[member.VectorOrdinal]
+		if !ok {
+			continue
+		}
+		for _, existing := range memberships[id] {
+			if existing == member.PartitionID {
+				return nil, nil, fmt.Errorf("duplicate final partition membership for %q", id)
+			}
+		}
+		memberships[id] = append(memberships[id], member.PartitionID)
+	}
+	for id := range wanted {
+		if _, ok := homes[id]; !ok || len(memberships[id]) == 0 {
+			return nil, nil, fmt.Errorf("canonical truth document ID %q has incomplete membership", id)
+		}
+		sort.Slice(memberships[id], func(i, j int) bool { return memberships[id][i] < memberships[id][j] })
+	}
+	return homes, memberships, nil
 }
 
-// m8MembershipPartitionsByDocumentIDV1 returns the final, persisted membership
-// relation: immutable primary homes plus any overlap replicas.
-func m8MembershipPartitionsByDocumentIDV1(assets *m8ProductionMultiGroupAssetsV1) (map[string][]uint32, error) {
-	if assets == nil || assets.collection == nil {
-		return nil, errors.New("missing M8 assets for membership oracle")
+func m8BestPrimaryHomeOracleRecallV1(truth []m8CanonicalResultV1, homes map[string]uint32, partitions, probes int) (float64, error) {
+	if len(truth) == 0 || partitions < 1 || probes < 1 || probes > partitions {
+		return 0, errors.New("invalid primary-home oracle bounds")
 	}
-	source, rows, err := assets.collection.ReadVectorPartitionRouterSourceRowsV1(partitionHNSWIndex)
-	if err != nil {
-		return nil, err
-	}
-	if source.Generation != assets.manifest.SourceGeneration || source.Checksum != assets.manifest.SourceChecksum || source.SchemaHash != assets.manifest.SourceSchemaHash || source.RowCount != assets.manifest.SourceRowCount || len(rows) != int(source.RowCount) {
-		return nil, errors.New("membership oracle source identity does not match pinned partition generation")
-	}
-	byOrdinal := make([][]uint32, len(rows))
-	for _, set := range [][]collections.VectorPartitionMembershipV1{assets.manifest.Memberships, assets.manifest.OverlapMemberships} {
-		for _, member := range set {
-			if member.VectorOrdinal >= uint64(len(rows)) || member.PartitionID >= assets.manifest.PartitionCount {
-				return nil, errors.New("invalid final partition membership")
-			}
-			for _, existing := range byOrdinal[member.VectorOrdinal] {
-				if existing == member.PartitionID {
-					return nil, errors.New("duplicate final partition membership")
-				}
-			}
-			byOrdinal[member.VectorOrdinal] = append(byOrdinal[member.VectorOrdinal], member.PartitionID)
+	counts := make([]int, partitions)
+	for _, result := range truth {
+		home, ok := homes[result.ID]
+		if !ok || home >= uint32(partitions) {
+			return 0, fmt.Errorf("canonical truth ID %q has no valid primary home", result.ID)
 		}
+		counts[home]++
 	}
-	out := make(map[string][]uint32, len(rows))
-	for ordinal, row := range rows {
-		if len(row.DocumentID) == 0 || len(byOrdinal[ordinal]) == 0 {
-			return nil, errors.New("incomplete final partition membership")
-		}
-		id := string(row.DocumentID)
-		if _, duplicate := out[id]; duplicate {
-			return nil, fmt.Errorf("duplicate source document ID %q", id)
-		}
-		sort.Slice(byOrdinal[ordinal], func(i, j int) bool { return byOrdinal[ordinal][i] < byOrdinal[ordinal][j] })
-		out[id] = byOrdinal[ordinal]
+	sort.Sort(sort.Reverse(sort.IntSlice(counts)))
+	covered := 0
+	for _, count := range counts[:probes] {
+		covered += count
 	}
-	return out, nil
+	return float64(covered) / float64(len(truth)), nil
 }
 
 // m8BestMembershipOracleRecallV1 exhausts the small, fixed partition domain
@@ -1627,16 +1650,8 @@ func m8BestMembershipOracleRecallV1(truth []m8CanonicalResultV1, memberships map
 			seen[partition] = struct{}{}
 		}
 	}
-	combinations := int64(1)
-	for i := 1; i <= min(probes, partitions-probes); i++ {
-		if combinations > maxBenchmarkWorkUnits/int64(partitions-min(probes, partitions-probes)+i) {
-			return 0, errors.New("membership oracle combination bound exceeds benchmark work cap")
-		}
-		combinations *= int64(partitions - min(probes, partitions-probes) + i)
-		combinations /= int64(i)
-		if combinations > maxBenchmarkWorkUnits {
-			return 0, errors.New("membership oracle combination bound exceeds benchmark work cap")
-		}
+	if _, err := m8MembershipOracleCombinationCountV1(partitions, probes, maxBenchmarkWorkUnits); err != nil {
+		return 0, err
 	}
 	best := 0
 	selected := make([]bool, partitions)
@@ -1664,6 +1679,25 @@ func m8BestMembershipOracleRecallV1(truth []m8CanonicalResultV1, memberships map
 	}
 	visit(0, probes)
 	return float64(best) / float64(len(truth)), nil
+}
+
+func m8MembershipOracleCombinationCountV1(partitions, probes int, cap int64) (int64, error) {
+	if partitions < 1 || probes < 1 || probes > partitions || cap < 1 {
+		return 0, errors.New("invalid membership oracle combination bound")
+	}
+	combinations := int64(1)
+	k := min(probes, partitions-probes)
+	for i := 1; i <= k; i++ {
+		factor := int64(partitions - k + i)
+		if combinations > cap/factor {
+			return 0, fmt.Errorf("membership oracle C(%d,%d) exceeds %d-subset benchmark work cap", partitions, probes, cap)
+		}
+		combinations = combinations * factor / int64(i)
+		if combinations > cap {
+			return 0, fmt.Errorf("membership oracle C(%d,%d) exceeds %d-subset benchmark work cap", partitions, probes, cap)
+		}
+	}
+	return combinations, nil
 }
 
 // m8TruthHomePartitionDiagnosticsV1 measures the selected-partition coverage
@@ -1762,8 +1796,8 @@ func m8MembershipsIntersectV1(a, b []uint32) bool {
 	return false
 }
 
-func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAssetsV1, primaryHomes map[string]uint32, queries [][]float64, truth [][]m8CanonicalResultV1, probes, efSearch, topK, approximateCandidates int, exhaustive [][]m8CanonicalResultV1, harness *m8AttributionHarnessV1) (m8AttributionCellV1, error) {
-	if len(primaryHomes) == 0 {
+func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAssetsV1, primaryHomes map[string]uint32, finalMemberships map[string][]uint32, queries [][]float64, truth [][]m8CanonicalResultV1, probes, efSearch, topK, approximateCandidates int, exhaustive [][]m8CanonicalResultV1, harness *m8AttributionHarnessV1) (m8AttributionCellV1, error) {
+	if len(primaryHomes) == 0 || len(finalMemberships) == 0 {
 		return m8AttributionCellV1{}, errors.New("M8 attribution requires a cached truth-home mapping")
 	}
 	cell := m8AttributionCellV1{Evidence: m8ProductionAttributionV1{
@@ -1774,14 +1808,6 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 		ApproximateRouterCandidateBudget:           approximateCandidates,
 		ApproximateRouterPartitionCoverageComplete: true,
 	}, Local: make([][]m8CanonicalResultV1, len(queries))}
-	finalMemberships, err := m8MembershipPartitionsByDocumentIDV1(assets)
-	if err != nil {
-		return cell, err
-	}
-	primaryMemberships := make(map[string][]uint32, len(primaryHomes))
-	for id, home := range primaryHomes {
-		primaryMemberships[id] = []uint32{home}
-	}
 	allPartitions := make([]uint32, len(harness.searchers))
 	for i := range allPartitions {
 		allPartitions[i] = uint32(i)
@@ -1792,7 +1818,7 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 			return cell, err
 		}
 		query := m8Query32V1(query64)
-		primary, err := m8BestMembershipOracleRecallV1(truth[i], primaryMemberships, len(harness.searchers), probes)
+		primary, err := m8BestPrimaryHomeOracleRecallV1(truth[i], primaryHomes, len(harness.searchers), probes)
 		if err != nil {
 			return cell, fmt.Errorf("M8 primary-home oracle query=%d: %w", i, err)
 		}
@@ -2396,12 +2422,14 @@ func m8AttributionStageOwnersV1(attribution m8ProductionAttributionV1) []m8Attri
 		stage("global_to_primary_home", "primary_placement", attribution.GlobalExactRecallAtK, attribution.PrimaryHomeOracleRecallAtK),
 		stage("primary_home_to_final_membership", "overlap_materialization", attribution.PrimaryHomeOracleRecallAtK, attribution.FinalMembershipOracleRecallAtK),
 		stage("global_to_final_membership_ceiling", "overlap_or_placement_membership", attribution.GlobalExactRecallAtK, attribution.FinalMembershipOracleRecallAtK),
+		stage("global_exact_to_exhaustive_partition_union", "partition_membership_or_score_contract", attribution.GlobalExactRecallAtK, attribution.ExhaustivePartitionRecallAtK),
 		stage("final_membership_to_exact_routing", "exact_representative_routing", attribution.FinalMembershipOracleRecallAtK, attribution.ExactRepresentativeRecallAtK),
 		stage("exact_to_approximate_routing", "approximate_representative_routing", attribution.ExactRepresentativeRecallAtK, attribution.ApproximateRepresentativeRecallAtK),
 		stage("exact_routing_to_local_hnsw", "partition_local_hnsw", attribution.ExactRepresentativeRecallAtK, attribution.LocalHNSWRecallAtK),
 		stage("local_hnsw_to_end_to_end", "coordinator_merge_or_transport", attribution.LocalHNSWRecallAtK, attribution.EndToEndRecallAtK),
 	}
 	out[1].Active = math.Abs(out[1].Delta) > epsilon
+	out[3].Active = out[3].Active || !attribution.ExhaustivePartitionIDParity || !attribution.ExhaustivePartitionScoreParity
 	return out
 }
 

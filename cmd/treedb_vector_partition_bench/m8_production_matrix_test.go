@@ -155,19 +155,19 @@ func TestM8CoupledGraphGateRequiresOneMatchedOperatingPointV1(t *testing.T) {
 
 func TestM8DecisionReportUsesLowestQuarterProbeOperatingPointV1(t *testing.T) {
 	descriptor := testM3VariantDescriptorV1(t.TempDir())
-	attribution := m8ProductionAttributionV1{GlobalExactRecallAtK: 1, OracleStagesComplete: true, PrimaryHomeOracleRecallAtK: .8, FinalMembershipOracleRecallAtK: .9, ExactRepresentativeRecallAtK: .7, ApproximateRepresentativeRecallAtK: .7, LocalHNSWRecallAtK: .7, EndToEndRecallAtK: .7}
+	attribution := m8ProductionAttributionV1{GlobalExactRecallAtK: 1, OracleStagesComplete: true, PrimaryHomeOracleRecallAtK: .8, FinalMembershipOracleRecallAtK: .9, ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true, ExactRepresentativeRecallAtK: .7, ApproximateRepresentativeRecallAtK: .7, LocalHNSWRecallAtK: .7, EndToEndRecallAtK: .7}
 	attribution.StageOwners = m8AttributionStageOwnersV1(attribution)
-	report := m8ProductionReportV1{Variant: &descriptor, Config: m8ProductionConfigEvidenceV1{Partitions: 16}, Rows: []m8ProductionRowV1{
-		{Status: "pass", Probes: 4, EfSearch: 128, Concurrency: 1, Attribution: attribution},
-		{Status: "pass", Probes: 4, EfSearch: 64, Concurrency: 1, Attribution: attribution},
-		{Status: "pass", Probes: 8, EfSearch: 32, Concurrency: 1, Attribution: attribution},
+	report := m8ProductionReportV1{Variant: &descriptor, Config: m8ProductionConfigEvidenceV1{Partitions: 32}, Rows: []m8ProductionRowV1{
+		{Status: "pass", Probes: 8, EfSearch: 128, Concurrency: 1, Attribution: attribution},
+		{Status: "pass", Probes: 8, EfSearch: 64, Concurrency: 1, Attribution: attribution},
+		{Status: "pass", Probes: 4, EfSearch: 32, Concurrency: 1, Attribution: attribution},
 	}}
 	got := m8DecisionReportV1([]m8ProductionReportV1{report})
 	if len(got) != 4 {
 		t.Fatalf("decision=%+v", got)
 	}
 	for _, row := range got {
-		if row.Probes != 4 || row.EfSearch != 64 || row.VariantID != descriptor.VariantID {
+		if row.Probes != 8 || row.EfSearch != 64 || row.VariantID != descriptor.VariantID {
 			t.Fatalf("decision row=%+v", row)
 		}
 	}
