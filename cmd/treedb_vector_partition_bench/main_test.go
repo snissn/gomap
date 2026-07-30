@@ -218,6 +218,23 @@ func TestTruthHomePartitionDiagnosticsV1(t *testing.T) {
 	}
 }
 
+func TestM8MembershipOraclesSeparatePrimaryAndOverlapCeilingsV1(t *testing.T) {
+	truth := []m8CanonicalResultV1{{ID: "a"}, {ID: "b"}, {ID: "c"}, {ID: "d"}}
+	primary := map[string][]uint32{"a": {0}, "b": {1}, "c": {2}, "d": {3}}
+	final := map[string][]uint32{"a": {0, 1}, "b": {1}, "c": {2}, "d": {3}}
+	gotPrimary, err := m8BestMembershipOracleRecallV1(truth, primary, 4, 1)
+	if err != nil || gotPrimary != .25 {
+		t.Fatalf("primary oracle=%v err=%v", gotPrimary, err)
+	}
+	gotFinal, err := m8BestMembershipOracleRecallV1(truth, final, 4, 1)
+	if err != nil || gotFinal != .5 {
+		t.Fatalf("final oracle=%v err=%v", gotFinal, err)
+	}
+	if _, err := m8BestMembershipOracleRecallV1(truth, final, 4, 5); err == nil {
+		t.Fatal("accepted probe budget above partition count")
+	}
+}
+
 func TestPartitionTruthOracleForArtifactV1(t *testing.T) {
 	vectors := [][]float64{{1, 0}, {.99, .01}, {0, 1}, {-.9, .1}}
 	oracle, err := partitionTruthOracleForArtifactV1(vectors, [][]float64{{1, 0}}, []int{0, 0, 1, 1}, 2, 3)
