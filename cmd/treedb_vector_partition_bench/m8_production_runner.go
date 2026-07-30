@@ -19,6 +19,7 @@ import (
 	"runtime/trace"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,28 @@ const (
 	m8ProductionMultiGroupModeV1 = "production_multi_group"
 	m8PeakRSSScopeV1             = "process lifetime through preflight, warmup, measured query, endpoint-loss fault, and post-measurement attribution boundaries; includes retained top-k coordinator results and cached truth-home attribution mapping"
 )
+
+const m8CanonicalTruthContractV1 = collections.VectorPartitionCanonicalScoreContractV1
+
+type m8TruthCacheEvidenceV1 struct {
+	Status         string `json:"status"`
+	Identity       string `json:"identity"`
+	ArtifactSHA256 string `json:"artifact_sha256"`
+	ComputeNanos   int64  `json:"compute_nanos"`
+	LoadNanos      int64  `json:"load_nanos"`
+}
+
+type m8TruthCacheFileV1 struct {
+	SchemaVersion   int                     `json:"schema_version"`
+	Identity        string                  `json:"identity"`
+	Contract        string                  `json:"contract"`
+	DatasetChecksum string                  `json:"dataset_checksum"`
+	Dimensions      int                     `json:"dimensions"`
+	Metric          string                  `json:"metric"`
+	TopK            int                     `json:"top_k"`
+	TruthSHA256     string                  `json:"truth_sha256"`
+	Truth           [][]m8CanonicalResultV1 `json:"truth"`
+}
 
 type m8ProductionReportV1 struct {
 	SchemaVersion      int                                                        `json:"schema_version"`
@@ -61,6 +84,7 @@ type m8ProductionReportV1 struct {
 	RouterSessions     m8ProductionRouterSessionEvidenceV1                        `json:"router_sessions"`
 	UntimedBoundary    m8ProductionResourceBoundaryV1                             `json:"untimed_resource_boundary"`
 	Resources          m8ProductionResourceEvidenceV1                             `json:"resources"`
+	TruthCache         m8TruthCacheEvidenceV1                                     `json:"canonical_truth_cache"`
 	TimedBoundary      string                                                     `json:"timed_boundary"`
 	Limitations        []string                                                   `json:"limitations"`
 }
@@ -318,7 +342,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	defer func() { runErr = errors.Join(runErr, topology.Close()) }()
 	buildNanos := time.Since(started).Nanoseconds()
 
-	truth, err := m8ExactTruthV1(assets.collection, assets.manifest, queries, cfg.topK)
+	truth, truthCache, err := m8LoadOrComputeTruthV1(cfg.m8TruthCache, assets.collection, assets.manifest, fixture, queries, cfg.topK, cfg.m8TruthCacheSHA256)
 	if err != nil {
 		return err
 	}
@@ -329,6 +353,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), Host: m8ProductionHostV1(cfg, assets.dir), Dataset: fixture, Variant: assets.descriptor,
 		Config:        m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), RouterCandidates: cfg.routerCandidates, Seed: cfg.seed},
 		BuildNanos:    buildNanos,
+		TruthCache:    truthCache,
 		Profiles:      m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Status: "not_captured", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs requires the captured baseline for differential analysis"},
 		TimedBoundary: "wall-clock query cells after topology, exhaustive endpoint preflight, and generation warmup; includes router, coordinator, TCP M5 serialization, Raft read-index/apply, persistent HNSW search, response merge, and caller scheduling; excludes topology construction, exact truth, preflight, warmup, post-measurement attribution, artifact encoding, and shutdown",
 		Limitations: []string{
@@ -808,6 +833,460 @@ func m8MaterializeCanonicalRefsV1(refs []m8CanonicalRefResultV1) []m8CanonicalRe
 		out[i] = m8CanonicalResultV1{ID: string(refs[i].ID), Score: refs[i].Score}
 	}
 	return out
+}
+
+func m8TruthCacheIdentityV1(fixture fixtureManifest, topK int) string {
+	b, _ := json.Marshal(struct {
+		Checksum         string
+		Dimensions, TopK int
+		Metric, Contract string
+	}{fixture.Checksum, fixture.Dimensions, topK, fixture.Metric, collections.VectorPartitionCanonicalScoreContractV1})
+	s := sha256.Sum256(b)
+	return hex.EncodeToString(s[:])
+}
+
+func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection, manifest collections.VectorPartitionManifestV1, fixture fixtureManifest, queries [][]float64, topK int, expectedDigest string) ([][]m8CanonicalResultV1, m8TruthCacheEvidenceV1, error) {
+	identity := m8TruthCacheIdentityV1(fixture, topK)
+	evidence := m8TruthCacheEvidenceV1{Identity: identity}
+	path := ""
+	if cacheDir != "" {
+		path = filepath.Join(cacheDir, "m8_canonical_truth_"+identity+".json")
+	}
+	if path != "" {
+		started := time.Now()
+		maxBytes, boundErr := m8TruthCacheMaxBytesV1(len(queries), topK, fixture.Vectors)
+		if boundErr != nil {
+			return nil, evidence, boundErr
+		}
+		fileHandle, openErr := os.Open(path)
+		var err error
+		if openErr == nil {
+			counter := &m8CountingReaderV1{Reader: io.LimitReader(fileHandle, maxBytes+1)}
+			hasher := sha256.New()
+			stream := io.TeeReader(counter, hasher)
+			decoder := json.NewDecoder(stream)
+			decoder.UseNumber()
+			var file m8TruthCacheFileV1
+			err = m8DecodeTruthCacheStreamV1(decoder, &file, len(queries), topK)
+			if err == nil {
+				if _, trailingErr := decoder.Token(); trailingErr != io.EOF {
+					if trailingErr == nil {
+						err = errors.New("canonical truth cache contains trailing JSON")
+					} else {
+						err = trailingErr
+					}
+				}
+			}
+			if _, copyErr := io.Copy(io.Discard, stream); err == nil && copyErr != nil {
+				err = copyErr
+			}
+			closeErr := fileHandle.Close()
+			if err == nil && closeErr != nil {
+				err = closeErr
+			}
+			if counter.N > maxBytes {
+				return nil, evidence, fmt.Errorf("canonical truth cache exceeds %d-byte bound before decode", maxBytes)
+			}
+			if err == nil {
+				if file.SchemaVersion != 1 || file.Identity != identity || file.Contract != collections.VectorPartitionCanonicalScoreContractV1 || file.DatasetChecksum != fixture.Checksum || file.Dimensions != fixture.Dimensions || file.Metric != fixture.Metric || file.TopK != topK || len(file.Truth) != len(queries) {
+					return nil, evidence, errors.New("canonical truth cache identity/schema mismatch")
+				}
+				if err := m8ValidateCachedTruthV1(file.Truth, file.TruthSHA256, topK, manifest.SourceRowCount, fixture.Vectors); err != nil {
+					return nil, evidence, fmt.Errorf("canonical truth cache semantic mismatch: %w", err)
+				}
+				artifactSHA := hex.EncodeToString(hasher.Sum(nil))
+				if expectedDigest == "" || artifactSHA != expectedDigest {
+					return nil, evidence, errors.New("canonical truth cache artifact digest is absent or does not match independently trusted digest")
+				}
+				evidence.Status, evidence.LoadNanos, evidence.ArtifactSHA256 = "reused", time.Since(started).Nanoseconds(), artifactSHA
+				return file.Truth, evidence, nil
+			}
+		} else {
+			err = openErr
+		}
+		if !os.IsNotExist(err) {
+			return nil, evidence, fmt.Errorf("read canonical truth cache: %w", err)
+		}
+	}
+	if collection == nil {
+		return nil, evidence, errors.New("canonical truth cache miss requires a collection")
+	}
+	started := time.Now()
+	truth, err := m8ExactTruthV1(collection, manifest, queries, topK)
+	if err != nil {
+		return nil, evidence, err
+	}
+	evidence.ComputeNanos = time.Since(started).Nanoseconds()
+	evidence.Status = "computed"
+	if path != "" {
+		if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+			return nil, evidence, err
+		}
+		truthSHA256, err := m8TruthContentSHA256V1(truth)
+		if err != nil {
+			return nil, evidence, err
+		}
+		temp, err := os.CreateTemp(cacheDir, ".m8_canonical_truth_*.tmp")
+		if err != nil {
+			return nil, evidence, err
+		}
+		tempPath := temp.Name()
+		defer os.Remove(tempPath)
+		artifactHash := sha256.New()
+		if err := m8WriteTruthCacheJSONV1(io.MultiWriter(temp, artifactHash), m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: collections.VectorPartitionCanonicalScoreContractV1, DatasetChecksum: fixture.Checksum, Dimensions: fixture.Dimensions, Metric: fixture.Metric, TopK: topK, TruthSHA256: truthSHA256, Truth: truth}); err != nil {
+			temp.Close()
+			return nil, evidence, err
+		}
+		evidence.ArtifactSHA256 = hex.EncodeToString(artifactHash.Sum(nil))
+		if err := temp.Chmod(0o644); err != nil {
+			temp.Close()
+			return nil, evidence, err
+		}
+		if err := temp.Close(); err != nil {
+			return nil, evidence, err
+		}
+		if expectedDigest != "" && evidence.ArtifactSHA256 != expectedDigest {
+			return nil, evidence, errors.New("computed canonical truth cache artifact does not match independently trusted digest")
+		}
+		if err := os.Rename(tempPath, path); err != nil {
+			return nil, evidence, err
+		}
+	}
+	return truth, evidence, nil
+}
+
+// m8DecodeTruthCacheStreamV1 parses every container token explicitly. In
+// particular, it never Decode's the cache or truth arrays as one buffered value.
+func m8DecodeTruthCacheStreamV1(d *json.Decoder, file *m8TruthCacheFileV1, queryCount, topK int) error {
+	token, err := d.Token()
+	if err != nil {
+		return err
+	}
+	if token != json.Delim('{') {
+		return errors.New("canonical truth cache must be an object")
+	}
+	seen := map[string]bool{}
+	for d.More() {
+		keyToken, err := d.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := keyToken.(string)
+		if !ok || seen[key] {
+			return errors.New("canonical truth cache has duplicate or invalid field")
+		}
+		seen[key] = true
+		switch key {
+		case "schema_version":
+			file.SchemaVersion, err = m8DecodeIntTokenV1(d)
+		case "identity":
+			file.Identity, err = m8DecodeStringTokenV1(d)
+		case "contract":
+			file.Contract, err = m8DecodeStringTokenV1(d)
+		case "dataset_checksum":
+			file.DatasetChecksum, err = m8DecodeStringTokenV1(d)
+		case "dimensions":
+			file.Dimensions, err = m8DecodeIntTokenV1(d)
+		case "metric":
+			file.Metric, err = m8DecodeStringTokenV1(d)
+		case "top_k":
+			file.TopK, err = m8DecodeIntTokenV1(d)
+		case "truth_sha256":
+			file.TruthSHA256, err = m8DecodeStringTokenV1(d)
+		case "truth":
+			file.Truth, err = m8DecodeTruthRowsStreamV1(d, queryCount, topK)
+		default:
+			return fmt.Errorf("canonical truth cache has unknown field %q", key)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if _, err := d.Token(); err != nil {
+		return err
+	}
+	if len(seen) != 9 {
+		return errors.New("canonical truth cache missing required field")
+	}
+	return nil
+}
+func m8DecodeStringTokenV1(d *json.Decoder) (string, error) {
+	token, err := d.Token()
+	if err != nil {
+		return "", err
+	}
+	value, ok := token.(string)
+	if !ok {
+		return "", errors.New("canonical truth cache field must be string")
+	}
+	return value, nil
+}
+func m8DecodeIntTokenV1(d *json.Decoder) (int, error) {
+	token, err := d.Token()
+	if err != nil {
+		return 0, err
+	}
+	number, ok := token.(json.Number)
+	if !ok {
+		return 0, errors.New("canonical truth cache field must be integer")
+	}
+	value, err := strconv.Atoi(string(number))
+	return value, err
+}
+func m8DecodeTruthRowsStreamV1(d *json.Decoder, queryCount, topK int) ([][]m8CanonicalResultV1, error) {
+	token, err := d.Token()
+	if err != nil {
+		return nil, err
+	}
+	if token == nil {
+		return nil, nil
+	}
+	if token != json.Delim('[') {
+		return nil, errors.New("canonical truth cache truth must be array")
+	}
+	truth := make([][]m8CanonicalResultV1, 0, queryCount)
+	for d.More() {
+		if len(truth) >= queryCount {
+			return nil, errors.New("canonical truth cache has too many query rows")
+		}
+		row, err := m8DecodeTruthRowStreamV1(d, topK)
+		if err != nil {
+			return nil, err
+		}
+		truth = append(truth, row)
+	}
+	if _, err := d.Token(); err != nil {
+		return nil, err
+	}
+	return truth, nil
+}
+func m8DecodeTruthRowStreamV1(d *json.Decoder, topK int) ([]m8CanonicalResultV1, error) {
+	token, err := d.Token()
+	if err != nil || token != json.Delim('[') {
+		return nil, errors.New("canonical truth cache row must be array")
+	}
+	row := make([]m8CanonicalResultV1, 0, topK)
+	for d.More() {
+		if len(row) >= topK {
+			return nil, errors.New("canonical truth cache row exceeds top_k")
+		}
+		token, err := d.Token()
+		if err != nil || token != json.Delim('{') {
+			return nil, errors.New("canonical truth cache result must be object")
+		}
+		var result m8CanonicalResultV1
+		fields := map[string]bool{}
+		for d.More() {
+			keyToken, err := d.Token()
+			if err != nil {
+				return nil, err
+			}
+			key, ok := keyToken.(string)
+			if !ok || fields[key] {
+				return nil, errors.New("canonical truth cache result has duplicate field")
+			}
+			fields[key] = true
+			if key == "ID" {
+				result.ID, err = m8DecodeStringTokenV1(d)
+			} else if key == "Score" {
+				var token any
+				token, err = d.Token()
+				number, ok := token.(json.Number)
+				if err == nil && !ok {
+					err = errors.New("canonical truth cache score must be number")
+				}
+				if err == nil {
+					value, parseErr := strconv.ParseFloat(string(number), 32)
+					if parseErr != nil {
+						err = parseErr
+					} else {
+						result.Score = float32(value)
+					}
+				}
+			} else {
+				return nil, fmt.Errorf("canonical truth cache result unknown field %q", key)
+			}
+			if err != nil {
+				return nil, err
+			}
+		}
+		if _, err := d.Token(); err != nil {
+			return nil, err
+		}
+		if len(fields) != 2 {
+			return nil, errors.New("canonical truth cache result missing field")
+		}
+		row = append(row, result)
+	}
+	if _, err := d.Token(); err != nil {
+		return nil, err
+	}
+	return row, nil
+}
+
+// m8TruthCacheMaxBytesV1 bounds untrusted cache input before streaming JSON
+// decode. The raw encoding is never retained alongside decoded truth.
+type m8CountingReaderV1 struct {
+	io.Reader
+	N int64
+}
+
+func (r *m8CountingReaderV1) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	r.N += int64(n)
+	return n, err
+}
+
+// m8TruthCacheMaxBytesV1 tightly bounds canonical JSON from the declared
+// deterministic ID domain; raw cache bytes are streamed, never retained.
+func m8TruthCacheMaxBytesV1(queryCount, topK, fixtureVectors int) (int64, error) {
+	if queryCount < 0 || topK < 1 || fixtureVectors < 1 {
+		return 0, errors.New("invalid canonical truth cache shape")
+	}
+	perQuery := min(topK, fixtureVectors)
+	results, err := memoryMul(int64(queryCount), int64(perQuery))
+	if err != nil {
+		return 0, err
+	}
+	idBytes := int64(len(fmt.Sprintf("doc-%06d", fixtureVectors-1)))
+	// 64 covers JSON punctuation/key names plus a maximal float32 spelling.
+	resultBytes, err := memoryMul(results, 64+idBytes)
+	if err != nil {
+		return 0, err
+	}
+	queryBytes, err := memoryMul(int64(queryCount), 4)
+	if err != nil {
+		return 0, err
+	}
+	return memoryAdd(4<<10, resultBytes, queryBytes)
+}
+
+func m8TruthContentSHA256V1(truth [][]m8CanonicalResultV1) (string, error) {
+	h := sha256.New()
+	if err := m8WriteTruthJSONV1(h, truth); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func m8WriteTruthJSONV1(w io.Writer, truth [][]m8CanonicalResultV1) error {
+	if _, err := io.WriteString(w, "["); err != nil {
+		return err
+	}
+	for i, row := range truth {
+		if i > 0 {
+			if _, err := io.WriteString(w, ","); err != nil {
+				return err
+			}
+		}
+		if _, err := io.WriteString(w, "["); err != nil {
+			return err
+		}
+		for j, result := range row {
+			if j > 0 {
+				if _, err := io.WriteString(w, ","); err != nil {
+					return err
+				}
+			}
+			raw, err := json.Marshal(result)
+			if err != nil {
+				return err
+			}
+			if _, err := w.Write(raw); err != nil {
+				return err
+			}
+		}
+		if _, err := io.WriteString(w, "]"); err != nil {
+			return err
+		}
+	}
+	_, err := io.WriteString(w, "]")
+	return err
+}
+func m8WriteTruthCacheJSONV1(w io.Writer, file m8TruthCacheFileV1) error {
+	quote := func(value any) error {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		_, err = w.Write(raw)
+		return err
+	}
+	if _, err := io.WriteString(w, `{"schema_version":`); err != nil {
+		return err
+	}
+	if err := quote(file.SchemaVersion); err != nil {
+		return err
+	}
+	for _, field := range []struct {
+		name  string
+		value any
+	}{{"identity", file.Identity}, {"contract", file.Contract}, {"dataset_checksum", file.DatasetChecksum}, {"dimensions", file.Dimensions}, {"metric", file.Metric}, {"top_k", file.TopK}, {"truth_sha256", file.TruthSHA256}} {
+		if _, err := io.WriteString(w, `,"`+field.name+`":`); err != nil {
+			return err
+		}
+		if err := quote(field.value); err != nil {
+			return err
+		}
+	}
+	if _, err := io.WriteString(w, `,"truth":`); err != nil {
+		return err
+	}
+	if err := m8WriteTruthJSONV1(w, file.Truth); err != nil {
+		return err
+	}
+	_, err := io.WriteString(w, "}")
+	return err
+}
+
+func m8ValidateCachedTruthV1(truth [][]m8CanonicalResultV1, wantSHA256 string, topK int, sourceRows uint64, fixtureVectors int) error {
+	if wantSHA256 == "" {
+		return errors.New("missing truth_sha256")
+	}
+	gotSHA256, err := m8TruthContentSHA256V1(truth)
+	if err != nil {
+		return err
+	}
+	if gotSHA256 != wantSHA256 {
+		return errors.New("truth_sha256 mismatch")
+	}
+	expected := topK
+	if sourceRows > 0 && uint64(expected) > sourceRows {
+		expected = int(sourceRows)
+	}
+	for query, row := range truth {
+		if len(row) == 0 || len(row) > topK || (sourceRows > 0 && len(row) != expected) {
+			return fmt.Errorf("query=%d result count=%d", query, len(row))
+		}
+		seen := make(map[string]struct{}, len(row))
+		for i, result := range row {
+			if result.ID == "" || math.IsNaN(float64(result.Score)) || math.IsInf(float64(result.Score), 0) {
+				return fmt.Errorf("query=%d result=%d invalid ID or score", query, i)
+			}
+			if _, duplicate := seen[result.ID]; duplicate {
+				return fmt.Errorf("query=%d duplicate ID %q", query, result.ID)
+			}
+			if !m8FixtureDocumentIDValidV1(result.ID, fixtureVectors) {
+				return fmt.Errorf("query=%d result=%d ID %q outside deterministic fixture domain", query, i, result.ID)
+			}
+			seen[result.ID] = struct{}{}
+			if i > 0 && (row[i-1].Score < result.Score || (row[i-1].Score == result.Score && row[i-1].ID > result.ID)) {
+				return fmt.Errorf("query=%d noncanonical result order", query)
+			}
+		}
+	}
+	return nil
+}
+
+func m8FixtureDocumentIDValidV1(id string, vectors int) bool {
+	if vectors < 1 {
+		return false
+	}
+	if !strings.HasPrefix(id, "doc-") {
+		return false
+	}
+	ordinal, err := strconv.Atoi(strings.TrimPrefix(id, "doc-"))
+	return err == nil && ordinal >= 0 && ordinal < vectors && id == fmt.Sprintf("doc-%06d", ordinal)
 }
 
 func m8ExactTruthV1(collection *collections.Collection, manifest collections.VectorPartitionManifestV1, queries [][]float64, topK int) ([][]m8CanonicalResultV1, error) {
@@ -1509,7 +1988,10 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 		outcomes[index].response, outcomes[index].err = coordinator.Search(requestCtx, m8ProductionRequestV1(assets, query, fmt.Sprintf("m8-q-%06d-p-%04d-ef-%06d-c-%03d", index, probes, efSearch, concurrency), probes, efSearch, topK, candidateBytesLimit))
 	})
 	elapsed := time.Since(started)
-	row := m8ProductionRowV1{Status: "pass", Probes: probes, EfSearch: efSearch, Concurrency: concurrency, RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidates: max(1, int(assets.status.Representatives)), Samples: len(queries), ExactParityChecked: probes == len(assets.manifest.Placements), ExactParityPassed: probes == len(assets.manifest.Placements)}
+	// Coordinator.Search is an ANN/HNSW path even when every partition is
+	// selected. Exact V1 parity is owned by m8ExactPartitionUnionV1 during
+	// attribution, never by this measured all-partition ANN row.
+	row := m8ProductionRowV1{Status: "pass", Probes: probes, EfSearch: efSearch, Concurrency: concurrency, RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidates: max(1, int(assets.status.Representatives)), Samples: len(queries)}
 	canonicalResults := make([][]m8CanonicalResultV1, len(outcomes))
 	durations := make([]uint64, 0, len(outcomes))
 	var recallSum float64
@@ -1523,11 +2005,6 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 		}
 		canonicalResults[index] = got
 		recallSum += m8CanonicalRecallV1(truth[index], got)
-		globalIDParity, globalScoreParity := m8CanonicalParityV1(truth[index], got)
-		if row.ExactParityChecked && (!globalIDParity || !globalScoreParity) {
-			row.ExactParityPassed = false
-			row.Status = "fail"
-		}
 		durations = append(durations, outcome.response.Timing.TotalNanos)
 		m8AccumulateProductionRowCountersV1(&row, outcome.response.Counters)
 	}
@@ -1746,12 +2223,12 @@ func m8ProductionGateLedgerForReportV1(report m8ProductionReportV1) m8Production
 	var exhaustive []m8ProductionRowV1
 	var candidates []m8ProductionRowV1
 	for _, row := range report.Rows {
-		if row.Status == "unsupported" {
+		if row.Status != "pass" {
 			continue
 		}
-		if row.ExactParityChecked {
+		if row.Probes == report.Config.Partitions {
 			exhaustive = append(exhaustive, row)
-			if !row.ExactParityPassed || !row.Attribution.ExhaustivePartitionIDParity || !row.Attribution.ExhaustivePartitionScoreParity || row.Attribution.ExhaustivePartitionRecallAtK != 1 {
+			if !row.Attribution.ExhaustivePartitionIDParity || !row.Attribution.ExhaustivePartitionScoreParity || row.Attribution.ExhaustivePartitionRecallAtK != 1 {
 				ledger.ExhaustiveParity = "fail"
 			} else if ledger.ExhaustiveParity != "fail" {
 				ledger.ExhaustiveParity = "pass"
@@ -2046,8 +2523,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 		}
 		if row.Status != "pass" && row.Status != "fail" || row.Probes < 1 || row.Probes > report.Config.Partitions ||
 			row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries || row.QPS <= 0 ||
-			row.RouterMode == "" || row.RouterCandidates < 1 || row.ExactParityChecked != (row.Probes == report.Config.Partitions) ||
-			(!row.ExactParityChecked && row.ExactParityPassed) || !row.NoPartialResults ||
+			row.RouterMode == "" || row.RouterCandidates < 1 || row.ExactParityPassed && !row.ExactParityChecked || row.ExactParityChecked && row.Probes != report.Config.Partitions || !row.NoPartialResults ||
 			math.Float64bits(row.RecallAtK) != math.Float64bits(row.Attribution.EndToEndRecallAtK) ||
 			!validM8AttributionV1(row.Attribution) {
 			return errors.New("malformed measured M8 row")

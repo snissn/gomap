@@ -57,7 +57,9 @@ func TestDenseBallGraphAndPartitionDeterministic(t *testing.T) {
 	if e := ValidateArtifact(a); e != nil {
 		t.Fatal(e)
 	}
-	if got, want := mustDigest(t, a), "9ec528eff2020ba0d6af5a73b069ce9ba2368850270fb7b561a27d45c889e80e"; got != want {
+	// MaxDistanceWork is intentionally persisted in Config so an artifact
+	// records the scalar-work safety envelope that constructed it.
+	if got, want := mustDigest(t, a), "b8a79eb002035b5104793e86e0c993fb4514350f37f60e49c0d5d19e983ef7c7"; got != want {
 		t.Fatalf("tiny canonical graph/assignment bytes changed: got %s want %s", got, want)
 	}
 }
@@ -1229,6 +1231,32 @@ func TestSymmetricConfigFailsBeforeInputOrBackendWork(t *testing.T) {
 	}
 	if _, err := Build(fixture(), config()); err != nil {
 		t.Fatalf("directed build regressed: %v", err)
+	}
+}
+
+func TestNegativeMaxPartitionWorkFailsConfigValidation(t *testing.T) {
+	c := config()
+	c.MaxPartitionWork = -1
+	if err := ValidateConfig(c); err == nil {
+		t.Fatal("negative MaxPartitionWork accepted")
+	}
+	c = config()
+	c.MaxDistanceWork = -1
+	if err := ValidateConfig(c); err == nil {
+		t.Fatal("negative MaxDistanceWork accepted")
+	}
+	a, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Config.MaxDistanceWork = -1
+	if err := ValidateArtifact(a); err == nil {
+		t.Fatal("artifact with negative MaxDistanceWork accepted")
+	}
+	a.Config = config()
+	a.Config.MaxPartitionWork = -1
+	if err := ValidateArtifact(a); err == nil {
+		t.Fatal("artifact with negative MaxPartitionWork accepted")
 	}
 }
 func TestReferencePartitionerCoversEveryPartition(t *testing.T) {

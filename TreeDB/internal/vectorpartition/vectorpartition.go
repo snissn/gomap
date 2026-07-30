@@ -110,21 +110,23 @@ type Vector struct {
 // is intentionally in-process and deterministic, so CI never needs a native
 // partitioner or runtime FFI.
 type Config struct {
-	Metric        string  `json:"metric"`
-	Seed          int64   `json:"seed"`
-	Repetitions   int     `json:"repetitions"`
-	Pivots        int     `json:"pivots"`
-	MaxLeafBucket int     `json:"max_leaf_bucket"`
-	Degree        int     `json:"degree"`
-	Partitions    int     `json:"partitions"`
-	Imbalance     float64 `json:"imbalance"`
-	Symmetric     bool    `json:"symmetric"`
-	MaxVectors    int     `json:"max_vectors"`
-	MaxEdges      int     `json:"max_edges"`
+	Metric           string  `json:"metric"`
+	Seed             int64   `json:"seed"`
+	Repetitions      int     `json:"repetitions"`
+	Pivots           int     `json:"pivots"`
+	MaxLeafBucket    int     `json:"max_leaf_bucket"`
+	Degree           int     `json:"degree"`
+	Partitions       int     `json:"partitions"`
+	Imbalance        float64 `json:"imbalance"`
+	Symmetric        bool    `json:"symmetric"`
+	MaxVectors       int     `json:"max_vectors"`
+	MaxEdges         int     `json:"max_edges"`
+	MaxDistanceWork  int64   `json:"max_distance_work"`
+	MaxPartitionWork int64   `json:"max_partition_work"`
 }
 
 func DefaultConfig() Config {
-	return Config{Metric: "cosine", Seed: 1, Repetitions: 4, Pivots: 8, MaxLeafBucket: 128, Degree: 16, Partitions: 16, Imbalance: .05, Symmetric: false, MaxVectors: maxVectors, MaxEdges: maxEdges}
+	return Config{Metric: "cosine", Seed: 1, Repetitions: 4, Pivots: 8, MaxLeafBucket: 128, Degree: 16, Partitions: 16, Imbalance: .05, Symmetric: false, MaxVectors: maxVectors, MaxEdges: maxEdges, MaxDistanceWork: maxDistanceWork, MaxPartitionWork: maxPartitionWork}
 }
 
 type Graph struct {
@@ -180,7 +182,7 @@ type Partitioner interface {
 	License() string
 	Partition(Graph, int, int) ([]int, error)
 }
-type ReferencePartitioner struct{}
+type ReferencePartitioner struct{ maxPartitionWork int64 }
 
 func (ReferencePartitioner) Name() string    { return "treedb_reference_greedy_v1" }
 func (ReferencePartitioner) License() string { return "TreeDB repository license" }
@@ -200,6 +202,15 @@ func BuildWithPartitionerPhased(vectors []Vector, cfg Config, source Source, bac
 	var phases PhaseMetrics
 	if backend == nil {
 		return Artifact{}, phases, errors.New("partition backend identity is required")
+	}
+	if reference, ok := backend.(ReferencePartitioner); ok {
+		reference.maxPartitionWork = cfg.MaxPartitionWork
+		backend = reference
+	}
+	if reference, ok := backend.(*ReferencePartitioner); ok {
+		copy := *reference // never mutate a caller-owned backend through preflight.
+		copy.maxPartitionWork = cfg.MaxPartitionWork
+		backend = copy
 	}
 	backendName, backendLicense := backend.Name(), backend.License()
 	if backendName == "" || !utf8.ValidString(backendName) || len(backendName) > 256 || backendLicense == "" || !utf8.ValidString(backendLicense) || len(backendLicense) > 1024 {
@@ -404,7 +415,7 @@ func ValidateConfig(c Config) error {
 	if c.Symmetric {
 		return errors.New("symmetric graph policy is not supported")
 	}
-	if c.Metric != "cosine" || c.Repetitions < 1 || c.Repetitions > maxRepetitions || c.Pivots < 2 || c.Pivots > maxPivots || c.MaxLeafBucket < 2 || c.MaxLeafBucket > maxLeafBucket || c.Degree < 1 || c.Degree > maxDegree || c.Partitions < 1 || c.Partitions > maxPartitions || !finite(c.Imbalance) || c.Imbalance < 0 || c.Imbalance > 1 || c.MaxVectors < 1 || c.MaxVectors > maxVectors || c.MaxEdges < 1 || c.MaxEdges > maxEdges {
+	if c.Metric != "cosine" || c.Repetitions < 1 || c.Repetitions > maxRepetitions || c.Pivots < 2 || c.Pivots > maxPivots || c.MaxLeafBucket < 2 || c.MaxLeafBucket > maxLeafBucket || c.Degree < 1 || c.Degree > maxDegree || c.Partitions < 1 || c.Partitions > maxPartitions || !finite(c.Imbalance) || c.Imbalance < 0 || c.Imbalance > 1 || c.MaxVectors < 1 || c.MaxVectors > maxVectors || c.MaxEdges < 1 || c.MaxEdges > maxEdges || c.MaxDistanceWork < 0 || c.MaxPartitionWork < 0 {
 		return errors.New("invalid vector partition configuration")
 	}
 	return nil
@@ -437,7 +448,7 @@ func ValidateReferenceInputShape(c Config, vectors, dimensions int) error {
 	if err := ValidateInputShape(c, vectors, dimensions); err != nil {
 		return err
 	}
-	if partitionWorkExceeded(vectors, c.Partitions, c.Degree) {
+	if partitionWorkExceededWithCap(vectors, c.Partitions, c.Degree, c.MaxPartitionWork) {
 		return errors.New("partition work bound exceeded before allocation")
 	}
 	return nil
@@ -450,11 +461,15 @@ func ValidateReferenceInputShape(c Config, vectors, dimensions int) error {
 // are at least two top-level pivots. Recursive carve work is
 // geometry-dependent and remains guarded by distanceBudget at runtime.
 func graphDistanceWorkExceeds(c Config, vectors, dimensions int) bool {
+	limit := c.MaxDistanceWork
+	if limit == 0 {
+		limit = maxDistanceWork
+	}
 	topLevelPivots := 0
 	if vectors > c.MaxLeafBucket {
 		topLevelPivots = min(c.Pivots, vectors)
 	}
-	if exceedsProduct(maxDistanceWork, int64(vectors), int64(topLevelPivots), int64(c.Repetitions), int64(dimensions)) {
+	if exceedsProduct(limit, int64(vectors), int64(topLevelPivots), int64(c.Repetitions), int64(dimensions)) {
 		return true
 	}
 	topLevelPivotWork := int64(vectors) * int64(topLevelPivots) * int64(c.Repetitions) * int64(dimensions)
@@ -464,7 +479,7 @@ func graphDistanceWorkExceeds(c Config, vectors, dimensions int) bool {
 		topLevelMemberships = 2
 	}
 	leafComparisons := max(0, min(c.MaxLeafBucket, vectors)-1)
-	return exceedsProduct(maxDistanceWork-topLevelPivotWork, int64(vectors), int64(topLevelMemberships), int64(leafComparisons), int64(c.Repetitions), int64(dimensions))
+	return exceedsProduct(limit-topLevelPivotWork, int64(vectors), int64(topLevelMemberships), int64(leafComparisons), int64(c.Repetitions), int64(dimensions))
 }
 func finite(x float64) bool { return !math.IsNaN(x) && !math.IsInf(x, 0) }
 
@@ -474,7 +489,11 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 	for i := range sets {
 		sets[i] = make(map[int]float64, c.Degree)
 	}
-	budget := distanceBudget{remaining: maxDistanceWork}
+	limit := c.MaxDistanceWork
+	if limit == 0 {
+		limit = maxDistanceWork
+	}
+	budget := distanceBudget{remaining: limit}
 	for rep := 0; rep < c.Repetitions; rep++ {
 		r := rand.New(rand.NewSource(c.Seed + int64(rep)*0x9e3779b))
 		order := r.Perm(n)
@@ -796,7 +815,7 @@ func addCandidateBounded(s map[int]float64, x int, d float64, cap int) {
 	}
 }
 
-func (ReferencePartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
+func (r ReferencePartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
 	n := len(g.Neighbors)
 	if parts < 1 || cap < 1 || n < parts {
 		return nil, errors.New("invalid partition request")
@@ -808,7 +827,7 @@ func (ReferencePartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
 	if err != nil {
 		return nil, err
 	}
-	if partitionWorkExceeded(n, parts, degree) {
+	if partitionWorkExceededWithCap(n, parts, degree, r.maxPartitionWork) {
 		return nil, errors.New("partition work bound exceeded before allocation")
 	}
 	// Degree is bounded, so bucket ordering is a deterministic O(n+degree)
@@ -892,9 +911,15 @@ func (ReferencePartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
 	}
 	return out, nil
 }
-func partitionWorkExceeded(n, parts, degree int) bool {
+func partitionWorkExceededWithCap(n, parts, degree int, cap int64) bool {
 	work, overflow := partitionWorkUnits(n, parts, degree)
-	return overflow || work > maxPartitionWork
+	if cap == 0 {
+		cap = maxPartitionWork
+	}
+	return overflow || cap < 1 || work > cap
+}
+func partitionWorkExceeded(n, parts, degree int) bool {
+	return partitionWorkExceededWithCap(n, parts, degree, maxPartitionWork)
 }
 func partitionWorkUnits(n, parts, degree int) (int64, bool) {
 	if n < 0 || parts < 0 || degree < 0 {
@@ -1056,7 +1081,7 @@ func validateArtifactConfig(ids []string, c Config) error {
 	if c.Symmetric {
 		return errors.New("symmetric graph policy is not supported")
 	}
-	if c.Metric != "cosine" || c.Repetitions < 1 || c.Repetitions > maxRepetitions || c.Pivots < 2 || c.Pivots > maxPivots || c.MaxLeafBucket < 2 || c.MaxLeafBucket > maxLeafBucket || c.Degree < 1 || c.Degree > maxDegree || c.Partitions < 1 || c.Partitions > maxPartitions || !finite(c.Imbalance) || c.Imbalance < 0 || c.Imbalance > 1 || c.MaxVectors < 1 || c.MaxVectors > maxVectors || c.MaxEdges < 1 || c.MaxEdges > maxEdges || len(ids) < c.Partitions || len(ids) > c.MaxVectors {
+	if c.Metric != "cosine" || c.Repetitions < 1 || c.Repetitions > maxRepetitions || c.Pivots < 2 || c.Pivots > maxPivots || c.MaxLeafBucket < 2 || c.MaxLeafBucket > maxLeafBucket || c.Degree < 1 || c.Degree > maxDegree || c.Partitions < 1 || c.Partitions > maxPartitions || !finite(c.Imbalance) || c.Imbalance < 0 || c.Imbalance > 1 || c.MaxVectors < 1 || c.MaxVectors > maxVectors || c.MaxEdges < 1 || c.MaxEdges > maxEdges || c.MaxDistanceWork < 0 || c.MaxPartitionWork < 0 || len(ids) < c.Partitions || len(ids) > c.MaxVectors {
 		return errors.New("invalid artifact configuration")
 	}
 	if int64(len(ids))*int64(c.Degree) > int64(c.MaxEdges) || int64(len(ids))*int64(c.Degree) > int64(c.MaxEdges)/int64(c.Repetitions) {

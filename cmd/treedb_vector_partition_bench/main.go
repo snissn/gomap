@@ -45,6 +45,8 @@ const (
 	partitionHNSWDegree                     = 16
 	maxSourceHNSWDegree                     = partitionHNSWDegree
 	fixtureGenerator                        = "treedb_vector_partition_fixture_v2"
+	qualificationSyntheticGeneratorV1       = "treedb_vector_partition_high_entropy_synthetic_v1"
+	qualificationEmbeddingGeneratorV1       = "treedb_vector_partition_embedding_mixture_v1"
 	fixtureArithmetic                       = "ieee754_binary64_explicit_fma_v1"
 	documentIDStorageBytes                  = 16
 	hnswJSONFloatBytes                      = 24
@@ -67,49 +69,53 @@ const (
 )
 
 type config struct {
-	dataset              string
-	partitions           int
-	probes               []int
-	overlaps             []float64
-	topK                 int
-	recallTarget         float64
-	seed                 int64
-	format               string
-	out                  string
-	stages               map[string]bool
-	command              []string
-	maxVectors           int
-	maxBytes             int64
-	baseSHA              string
-	headSHA              string
-	hnsw                 *treeDBPartitionHNSW
-	memory               benchmarkMemoryPlan
-	stage                string
-	m3PersistDir         string
-	m8ExistingDB         string
-	m8VariantDBs         []string
-	partitionAssignment  string
-	partitionTruthOracle bool
-	partition            vectorpartition.Config
-	partitionHNSWM       int
-	router               *treeDBRepresentativeRouter
-	coordinator          *m6CoordinatorHarnessV1
-	routerConfig         vectorpartition.RouterConfigV1
-	routerCandidates     int
-	sourceHNSWDegree     int
-	mode                 string
-	raftGroups           int
-	raftNodes            int
-	concurrency          []int
-	warmup               int
-	profiles             string
-	m8MatrixOut          string
-	m8MatrixProfiles     string
-	efSearch             []int
-	m8MaxRSSBytes        uint64
-	m8MaxAssetBytes      uint64
-	m8CoordinatorLimits  nativewire.VectorPartitionCoordinatorLimitsV1
-	m8ShardLimits        nativewire.VectorPartitionShardSearchLimitsV1
+	dataset               string
+	partitions            int
+	probes                []int
+	overlaps              []float64
+	topK                  int
+	recallTarget          float64
+	seed                  int64
+	format                string
+	out                   string
+	stages                map[string]bool
+	command               []string
+	maxVectors            int
+	maxBytes              int64
+	baseSHA               string
+	headSHA               string
+	hnsw                  *treeDBPartitionHNSW
+	memory                benchmarkMemoryPlan
+	stage                 string
+	m3PersistDir          string
+	m8ExistingDB          string
+	m8VariantDBs          []string
+	partitionAssignment   string
+	partitionTruthOracle  bool
+	partition             vectorpartition.Config
+	partitionHNSWM        int
+	router                *treeDBRepresentativeRouter
+	coordinator           *m6CoordinatorHarnessV1
+	routerConfig          vectorpartition.RouterConfigV1
+	routerCandidates      int
+	sourceHNSWDegree      int
+	mode                  string
+	raftGroups            int
+	raftNodes             int
+	concurrency           []int
+	warmup                int
+	profiles              string
+	m8MatrixOut           string
+	m8MatrixProfiles      string
+	efSearch              []int
+	m8MaxRSSBytes         uint64
+	m8MaxAssetBytes       uint64
+	m8MaxExactTruthVisits int64
+	m8TruthCache          string
+	m8TruthCacheSHA256    string
+	m3MaxBenchmarkVisits  int64
+	m8CoordinatorLimits   nativewire.VectorPartitionCoordinatorLimitsV1
+	m8ShardLimits         nativewire.VectorPartitionShardSearchLimitsV1
 }
 
 type partitionRun struct {
@@ -387,11 +393,13 @@ func run(args []string, stdout io.Writer) error {
 
 func runGenerateFixture(args []string, stdout io.Writer) error {
 	var (
-		out        string
-		vectors    int
-		queries    int
-		dimensions int
-		seed       int64
+		out               string
+		vectors           int
+		queries           int
+		dimensions        int
+		seed              int64
+		generator         string
+		maxChecksumVisits int64
 	)
 	fs := flag.NewFlagSet("treedb_vector_partition_bench generate-fixture", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -400,20 +408,28 @@ func runGenerateFixture(args []string, stdout io.Writer) error {
 	fs.IntVar(&queries, "queries", 1, "number of deterministic queries")
 	fs.IntVar(&dimensions, "dimensions", 16, "vector dimensions")
 	fs.Int64Var(&seed, "seed", 1, "fixture generation seed")
+	fs.StringVar(&generator, "generator", fixtureGenerator, "fixture generator identity")
+	fs.Int64Var(&maxChecksumVisits, "max-checksum-visits", maxBenchmarkWorkUnits, "explicit exact checksum visit bound for fixture generation")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 || out == "" || vectors < 1 || vectors > maxVectors || queries < 1 || queries > maxVectors || dimensions < 1 || dimensions > maxDimensions {
 		return errors.New("generate-fixture requires -out and positive bounded vectors, queries, and dimensions")
 	}
+	if !supportedFixtureGeneratorV1(generator) {
+		return fmt.Errorf("unsupported fixture generator %q; supported generators are %s, %s, and %s", generator, fixtureGenerator, qualificationSyntheticGeneratorV1, qualificationEmbeddingGeneratorV1)
+	}
 	rows := int64(vectors) + int64(queries)
 	if rows > maxFixtureBytes/(int64(dimensions)*8) {
 		return fmt.Errorf("generated fixture float64 data exceeds %d-byte cap", maxFixtureBytes)
 	}
+	if visits, err := memoryMul(int64(vectors), int64(queries)); err != nil || maxChecksumVisits < 1 || visits > maxChecksumVisits {
+		return fmt.Errorf("generated fixture checksum exact work exceeds %d-visit cap; set -max-checksum-visits explicitly for a declared qualification generation", maxChecksumVisits)
+	}
 	manifest := fixtureManifest{
 		SchemaVersion: schemaVersion,
 		Fixture:       fmt.Sprintf("deterministic_%d", vectors),
-		Generator:     fixtureGenerator,
+		Generator:     generator,
 		Arithmetic:    fixtureArithmetic,
 		Vectors:       vectors,
 		Queries:       queries,
@@ -421,7 +437,7 @@ func runGenerateFixture(args []string, stdout io.Writer) error {
 		Metric:        "cosine",
 		Seed:          seed,
 	}
-	corpus, querySet := deterministicFixture(manifest)
+	corpus, querySet := fixtureData(manifest)
 	manifest.Checksum = fixtureChecksumFromData(corpus, querySet)
 	if err := validateM3FixtureWithCaps(manifest, maxVectors, maxFixtureBytes); err != nil {
 		return err
@@ -519,10 +535,10 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		// simulation-only query/truth stream, so verifying it here would recreate
 		// queries and exact truth that this stage deliberately does not own.
 		if cfg.stage == "partition" {
-			vectors := deterministicVectors(fixture)
+			vectors := fixtureVectors(fixture)
 			var queries [][]float64
 			if cfg.partitionTruthOracle {
-				vectors, queries = deterministicFixture(fixture)
+				vectors, queries = fixtureData(fixture)
 				if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 					return errors.New("fixture checksum does not match generated vector/query/truth stream")
 				}
@@ -532,10 +548,10 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		if cfg.topK > fixture.Vectors {
 			return errors.New("top-k cannot exceed fixture vectors")
 		}
-		if _, err := validateM3BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits); err != nil {
+		if _, err := validateM3BenchmarkWork(cfg, fixture, cfg.m3MaxBenchmarkVisits); err != nil {
 			return err
 		}
-		vectors, queries := deterministicFixture(fixture)
+		vectors, queries := fixtureData(fixture)
 		if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 			return errors.New("fixture checksum does not match generated vector/query/truth stream")
 		}
@@ -554,7 +570,7 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 	if cfg.memory.ModeledPeakBytes > cfg.maxBytes {
 		return fmt.Errorf("modeled peak benchmark-owned memory %d exceeds -max-fixture-bytes %d", cfg.memory.ModeledPeakBytes, cfg.maxBytes)
 	}
-	vectors, queries := deterministicFixture(fixture)
+	vectors, queries := fixtureData(fixture)
 	if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 		return errors.New("fixture checksum does not match generated vector/query/truth stream")
 	}
@@ -629,7 +645,7 @@ func m8ProductionFixtureDataV1(cfg config, fixture fixtureManifest) ([][]float64
 	if len(cfg.m8VariantDBs) > 0 {
 		return nil, nil, nil
 	}
-	vectors, queries := deterministicFixture(fixture)
+	vectors, queries := fixtureData(fixture)
 	if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 		return nil, nil, errors.New("fixture checksum does not match generated vector/query/truth stream")
 	}
@@ -643,7 +659,7 @@ func parseConfig(args []string) (config, error) {
 		partitionAssignment: partitionAssignmentGraphV1,
 		partition:           vectorpartition.DefaultConfig(), routerConfig: vectorpartition.DefaultRouterConfigV1(),
 		routerCandidates: 1024, sourceHNSWDegree: partitionHNSWDegree,
-		m8MaxRSSBytes: uint64(maxFixtureBytes), m8MaxAssetBytes: uint64(maxFixtureBytes),
+		m8MaxRSSBytes: uint64(maxFixtureBytes), m8MaxAssetBytes: uint64(maxFixtureBytes), m8MaxExactTruthVisits: maxBenchmarkWorkUnits,
 		m8CoordinatorLimits: nativewire.DefaultVectorPartitionCoordinatorLimitsV1(),
 		m8ShardLimits:       nativewire.DefaultVectorPartitionShardSearchLimitsV1(),
 	}
@@ -676,9 +692,15 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&m8VariantDBs, "m8-variant-dbs", "", "comma-separated retained M3 directories for the strict three-variant production matrix")
 	fs.Uint64Var(&cfg.m8MaxRSSBytes, "m8-max-rss-bytes", cfg.m8MaxRSSBytes, "hard process peak-RSS acceptance bound for production_multi_group")
 	fs.Uint64Var(&cfg.m8MaxAssetBytes, "m8-max-persistent-asset-bytes", cfg.m8MaxAssetBytes, "hard persistent derived-asset byte bound for production_multi_group")
+	fs.Int64Var(&cfg.m8MaxExactTruthVisits, "m8-max-exact-truth-visits", cfg.m8MaxExactTruthVisits, "hard exact source-query visit bound for production_multi_group")
+	fs.StringVar(&cfg.m8TruthCache, "m8-truth-cache", "", "external canonical exact-truth cache directory; identity-bound and fail-closed")
+	fs.StringVar(&cfg.m8TruthCacheSHA256, "m8-truth-cache-sha256", "", "independently trusted SHA-256 of the canonical truth-cache artifact required for cache reuse")
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
 	fs.BoolVar(&cfg.partitionTruthOracle, "partition-truth-oracle", false, "emit exact truth primary-partition coverage diagnostic for -stage partition")
 	fs.IntVar(&cfg.partition.Repetitions, "partition-repetitions", cfg.partition.Repetitions, "dense-ball graph sketch repetitions")
+	fs.Int64Var(&cfg.partition.MaxDistanceWork, "partition-max-distance-work", cfg.partition.MaxDistanceWork, "explicit reference graph scalar-work bound")
+	fs.Int64Var(&cfg.partition.MaxPartitionWork, "partition-max-partition-work", cfg.partition.MaxPartitionWork, "qualification-only reference partition work bound; default remains conservative")
+	fs.Int64Var(&cfg.m3MaxBenchmarkVisits, "m3-max-benchmark-visits", maxBenchmarkWorkUnits, "explicit M3 checksum and membership visit bound")
 	fs.IntVar(&cfg.partition.Pivots, "partition-pivots", cfg.partition.Pivots, "dense-ball pivots per recursive level")
 	fs.IntVar(&cfg.partition.MaxLeafBucket, "partition-max-leaf-bucket", cfg.partition.MaxLeafBucket, "maximum dense-ball leaf bucket")
 	fs.IntVar(&cfg.partition.Degree, "partition-degree", cfg.partition.Degree, "maximum canonical graph degree")
@@ -700,6 +722,17 @@ func parseConfig(args []string) (config, error) {
 	}
 	if fs.NArg() != 0 {
 		return config{}, fmt.Errorf("unexpected positional arguments: %q", fs.Args())
+	}
+	if cfg.partition.MaxDistanceWork < 1 || cfg.partition.MaxPartitionWork < 1 || cfg.m3MaxBenchmarkVisits < 1 {
+		return config{}, errors.New("partition work and M3 benchmark-visit limits must be positive")
+	}
+	if cfg.m8TruthCacheSHA256 != "" && (cfg.m8TruthCache == "" || len(cfg.m8TruthCacheSHA256) != sha256.Size*2 || strings.ToLower(cfg.m8TruthCacheSHA256) != cfg.m8TruthCacheSHA256) {
+		return config{}, errors.New("-m8-truth-cache-sha256 must be lowercase 64-hex")
+	}
+	if cfg.m8TruthCacheSHA256 != "" {
+		if decoded, err := hex.DecodeString(cfg.m8TruthCacheSHA256); err != nil || len(decoded) != sha256.Size {
+			return config{}, errors.New("-m8-truth-cache-sha256 must be lowercase 64-hex")
+		}
 	}
 	if cfg.mode != "" {
 		if cfg.mode != m8ProductionMultiGroupModeV1 || cfg.stage != "simulation" {
@@ -760,8 +793,8 @@ func parseConfig(args []string) (config, error) {
 		}
 	}
 	if cfg.stage == m8ProductionMultiGroupModeV1 {
-		if cfg.m8MaxRSSBytes == 0 || cfg.m8MaxAssetBytes == 0 {
-			return config{}, errors.New("production_multi_group requires positive RSS and persistent-asset byte bounds")
+		if cfg.m8MaxRSSBytes == 0 || cfg.m8MaxAssetBytes == 0 || cfg.m8MaxExactTruthVisits < 1 {
+			return config{}, errors.New("production_multi_group requires positive RSS, persistent-asset, and exact-truth bounds")
 		}
 		if cfg.raftGroups < 2 || cfg.raftGroups > 64 || cfg.raftGroups > cfg.partitions || cfg.raftNodes != 3 || cfg.partitions < 4 {
 			return config{}, errors.New("production_multi_group requires 2..64 groups, exactly 3 nodes/group, at least 4 partitions, and groups <= partitions")
@@ -1235,11 +1268,15 @@ func validateM3FixtureWithCaps(m fixtureManifest, capVectors int, capBytes int64
 }
 
 func validateFixtureSyntax(m fixtureManifest, capVectors int) error {
-	if m.SchemaVersion != schemaVersion || m.Fixture == "" || m.Generator != fixtureGenerator || m.Arithmetic != fixtureArithmetic || m.Vectors < 1 || m.Vectors > capVectors || m.Queries < 1 || m.Dimensions < 1 || m.Dimensions > maxDimensions || m.Metric != "cosine" || len(m.Checksum) != 64 {
+	if m.SchemaVersion != schemaVersion || m.Fixture == "" || !supportedFixtureGeneratorV1(m.Generator) || m.Arithmetic != fixtureArithmetic || m.Vectors < 1 || m.Vectors > capVectors || m.Queries < 1 || m.Dimensions < 1 || m.Dimensions > maxDimensions || m.Metric != "cosine" || len(m.Checksum) != 64 {
 		return errors.New("unsupported or malformed fixture manifest")
 	}
 	_, e := hex.DecodeString(m.Checksum)
 	return e
+}
+
+func supportedFixtureGeneratorV1(generator string) bool {
+	return generator == fixtureGenerator || generator == qualificationSyntheticGeneratorV1 || generator == qualificationEmbeddingGeneratorV1
 }
 
 type benchmarkWorkPlan struct {
@@ -1255,6 +1292,9 @@ type m3BenchmarkWorkPlan struct {
 }
 
 type m8BenchmarkWorkPlan struct {
+	FixtureChecksumVectorVisits      int64
+	ExactTruthVectorVisits           int64
+	ExactWorkVectorVisits            int64
 	MeasuredQueryRequests            int64
 	WarmupAndPreflightQueryRequests  int64
 	AttributionQueryPasses           int64
@@ -1281,6 +1321,14 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if capUnits < 1 || capBytes < 1 || cfg.partitions < 1 || cfg.topK < 1 || m.Vectors < 1 || m.Queries < 1 || m.Dimensions < 1 || len(cfg.overlaps) == 0 || len(cfg.probes) == 0 || len(cfg.efSearch) == 0 || len(cfg.concurrency) == 0 {
 		return m8BenchmarkWorkPlan{}, errors.New("cannot plan M8 benchmark work without positive caps, a valid fixture/top-k, and complete sweeps")
 	}
+	truthCap := cfg.m8MaxExactTruthVisits
+	if truthCap == 0 { // direct planner callers retain an independent conservative cap.
+		truthCap = maxBenchmarkWorkUnits
+	}
+	exactTruthVisits, err := memoryMul(int64(m.Vectors), int64(m.Queries))
+	if err != nil {
+		return m8BenchmarkWorkPlan{}, err
+	}
 	variantRuns := int64(1)
 	var supportedOverlaps int64
 	for _, overlap := range cfg.overlaps {
@@ -1301,6 +1349,24 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		// peak of one sequential child.
 		variantRuns = int64(len(cfg.m8VariantDBs))
 		supportedOverlaps = 1
+	}
+	// Every child reconstructs and checksum-binds its fixture, then computes the
+	// canonical exact oracle. Cache reuse avoids a compute in the common path but
+	// never weakens the preflight bound for the worst admissible execution.
+	fixtureChecksumVisits, err := memoryMul(exactTruthVisits, variantRuns)
+	if err != nil {
+		return m8BenchmarkWorkPlan{}, err
+	}
+	canonicalTruthVisits, err := memoryMul(exactTruthVisits, variantRuns)
+	if err != nil {
+		return m8BenchmarkWorkPlan{}, err
+	}
+	exactWorkVisits, err := memoryAdd(fixtureChecksumVisits, canonicalTruthVisits)
+	if err != nil {
+		return m8BenchmarkWorkPlan{}, err
+	}
+	if exactWorkVisits > truthCap {
+		return m8BenchmarkWorkPlan{FixtureChecksumVectorVisits: fixtureChecksumVisits, ExactTruthVectorVisits: canonicalTruthVisits, ExactWorkVectorVisits: exactWorkVisits}, fmt.Errorf("modeled M8 exact source-query work exceeds %d-visit cap: fixture_checksum_vector_visits=%d exact_truth_vector_visits=%d exact_work_vector_visits=%d; set -m8-max-exact-truth-visits explicitly for a declared qualification run", truthCap, fixtureChecksumVisits, canonicalTruthVisits, exactWorkVisits)
 	}
 	measuredPerRun, err := memoryMul(supportedOverlaps, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(m.Queries))
 	if err != nil {
@@ -1342,7 +1408,7 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return m8BenchmarkWorkPlan{}, err
 	}
-	plan := m8BenchmarkWorkPlan{MeasuredQueryRequests: measured, WarmupAndPreflightQueryRequests: warmupAndPreflight, AttributionQueryPasses: attribution, QueryRequests: requests}
+	plan := m8BenchmarkWorkPlan{FixtureChecksumVectorVisits: fixtureChecksumVisits, ExactTruthVectorVisits: canonicalTruthVisits, ExactWorkVectorVisits: exactWorkVisits, MeasuredQueryRequests: measured, WarmupAndPreflightQueryRequests: warmupAndPreflight, AttributionQueryPasses: attribution, QueryRequests: requests}
 	if requests > capUnits {
 		return plan, fmt.Errorf("modeled M8 benchmark work exceeds %d-unit cap (%s): measured_query_requests=%d warmup_and_preflight_query_requests=%d attribution_query_passes=%d query_requests=%d", capUnits, m8BenchmarkWorkScope, measured, warmupAndPreflight, attribution, requests)
 	}
@@ -1967,6 +2033,70 @@ func memoryScaleCeil(value, numerator, denominator int64) (int64, error) {
 func deterministicFixture(m fixtureManifest) ([][]float64, [][]float64) {
 	v := deterministicVectors(m)
 	return v, deterministicQueries(v, m)
+}
+
+// fixtureData dispatches a fixture's durable generator identity. The
+// qualification generators deliberately derive corpus and held-out queries
+// from separate domains; unlike the legacy fixture they never copy a corpus
+// row into a query.
+func fixtureData(m fixtureManifest) ([][]float64, [][]float64) {
+	if m.Generator == fixtureGenerator {
+		return deterministicFixture(m)
+	}
+	return fixtureVectors(m), qualificationQueriesV1(m)
+}
+
+func fixtureVectors(m fixtureManifest) [][]float64 {
+	if m.Generator == fixtureGenerator {
+		return deterministicVectors(m)
+	}
+	return qualificationVectorsV1(m, 0x9e3779b97f4a7c15)
+}
+
+func qualificationVectorsV1(m fixtureManifest, domain uint64) [][]float64 {
+	v := contiguousFloat64Matrix(m.Vectors, m.Dimensions)
+	for i := range v {
+		qualificationVectorV1(v[i], m, uint64(i), domain)
+	}
+	return v
+}
+
+func qualificationQueriesV1(m fixtureManifest) [][]float64 {
+	q := contiguousFloat64Matrix(m.Queries, m.Dimensions)
+	for i := range q {
+		qualificationVectorV1(q[i], m, uint64(i), 0xd1b54a32d192ed03)
+	}
+	return q
+}
+
+func qualificationVectorV1(dst []float64, m fixtureManifest, ordinal, domain uint64) {
+	state := uint64(m.Seed) ^ domain ^ (ordinal * 0x94d049bb133111eb)
+	cluster := int((state >> 32) % 32)
+	for d := range dst {
+		state += 0x9e3779b97f4a7c15
+		u := float64(splitMix64V1(state)>>11) * (1.0 / (1 << 53))
+		state += 0x9e3779b97f4a7c15
+		v := float64(splitMix64V1(state)>>11)*(1.0/(1<<53))*2 - 1
+		if m.Generator == qualificationEmbeddingGeneratorV1 {
+			// Directional topics plus continuous noise model an embedding-shaped
+			// distribution; the manifest names it accurately rather than claiming
+			// it is a licensed external embedding corpus.
+			topic := -0.35
+			if d%32 == cluster {
+				topic = 1
+			}
+			dst[d] = topic + 0.18*v + 0.04*(u-0.5)
+		} else {
+			dst[d] = v + 0.02*(u-0.5)
+		}
+	}
+	normalize(dst)
+}
+
+func splitMix64V1(x uint64) uint64 {
+	x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9
+	x = (x ^ (x >> 27)) * 0x94d049bb133111eb
+	return x ^ (x >> 31)
 }
 
 // deterministicVectors is the partition-stage corpus generator. It must not

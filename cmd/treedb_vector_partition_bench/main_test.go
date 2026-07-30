@@ -114,6 +114,95 @@ func TestFixtureArithmeticUsesExplicitFMA(t *testing.T) {
 	}
 }
 
+func TestQualificationFixtureGeneratorsHaveIndependentHeldoutQueriesV1(t *testing.T) {
+	for _, generator := range []string{qualificationSyntheticGeneratorV1, qualificationEmbeddingGeneratorV1} {
+		m := fixtureManifest{SchemaVersion: schemaVersion, Fixture: "qualification", Generator: generator, Arithmetic: fixtureArithmetic, Vectors: 128, Queries: 64, Dimensions: 32, Metric: "cosine", Seed: 17}
+		vectors, queries := fixtureData(m)
+		if len(vectors) != m.Vectors || len(queries) != m.Queries || !supportedFixtureGeneratorV1(generator) {
+			t.Fatalf("generator=%s generated malformed shape", generator)
+		}
+		for qi, query := range queries {
+			for vi, vector := range vectors {
+				if slices.Equal(query, vector) {
+					t.Fatalf("generator=%s heldout query %d copied corpus vector %d", generator, qi, vi)
+				}
+			}
+		}
+		m.Checksum = fixtureChecksumFromData(vectors, queries)
+		if err := validateM3FixtureWithCaps(m, maxVectors, maxFixtureBytes); err != nil {
+			t.Fatalf("generator=%s fixture rejected: %v", generator, err)
+		}
+		vectorsAgain, queriesAgain := fixtureData(m)
+		if fixtureChecksumFromData(vectorsAgain, queriesAgain) != m.Checksum {
+			t.Fatalf("generator=%s not reproducible", generator)
+		}
+	}
+}
+
+func TestCommittedHighEntropyQualificationIdentityV1(t *testing.T) {
+	m, err := loadFixture(filepath.Join("..", "..", "testdata", "vector_partition_qualification_high_entropy_1m"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateM3FixtureWithCaps(m, maxVectors, maxFixtureBytes); err != nil {
+		t.Fatal(err)
+	}
+	if m.Generator != qualificationSyntheticGeneratorV1 || m.Vectors != 1_000_000 || m.Queries < 1_000 || m.Dimensions != 128 || m.Seed != 4015 {
+		t.Fatalf("unexpected qualification identity: %+v", m)
+	}
+}
+
+func TestCommittedEmbeddingQualificationIdentityV1(t *testing.T) {
+	m, err := loadFixture(filepath.Join("..", "..", "testdata", "vector_partition_qualification_embedding_mixture_250k"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateM3FixtureWithCaps(m, maxVectors, maxFixtureBytes); err != nil {
+		t.Fatal(err)
+	}
+	if m.Generator != qualificationEmbeddingGeneratorV1 || m.Vectors != 250_000 || m.Queries < 1_000 || m.Dimensions != 128 || m.Seed != 4016 {
+		t.Fatalf("unexpected qualification identity: %+v", m)
+	}
+}
+
+func TestCommittedM3QualificationShapesRequireExplicitVisitOverrideV1(t *testing.T) {
+	for _, name := range []string{"vector_partition_qualification_high_entropy_1m", "vector_partition_qualification_embedding_mixture_250k"} {
+		m, err := loadFixture(filepath.Join("..", "..", "testdata", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := validateM3BenchmarkWork(config{partitions: 16, overlaps: []float64{0}}, m, maxBenchmarkWorkUnits); err == nil {
+			t.Fatalf("%s accepted without explicit M3 visit override", name)
+		}
+		if _, err := validateM3BenchmarkWork(config{partitions: 16, overlaps: []float64{0}}, m, 3_000_000_000); err != nil {
+			t.Fatalf("%s explicit M3 visit override: %v", name, err)
+		}
+	}
+}
+
+func TestM8DirectPlannerUsesIndependentExactWorkCapV1(t *testing.T) {
+	cfg := config{partitions: 1, probes: []int{1}, overlaps: []float64{0}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}
+	if _, err := validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 1_000_000, Queries: 1_000, Dimensions: 1}, math.MaxInt64, math.MaxInt64); err == nil {
+		t.Fatal("direct planner inherited unrelated request cap")
+	}
+}
+
+func TestM8ExactTruthVisitBudgetRequiresQualificationOverrideV1(t *testing.T) {
+	cfg := config{partitions: 16, probes: []int{1, 2, 4, 8, 16}, overlaps: []float64{0}, efSearch: []int{64}, concurrency: []int{1}, topK: 10, m8MaxExactTruthVisits: maxBenchmarkWorkUnits}
+	m := fixtureManifest{Vectors: 1_000_000, Queries: 1_000, Dimensions: 128}
+	if _, err := validateM8BenchmarkWork(cfg, m, maxBenchmarkWorkUnits, maxFixtureBytes); err == nil || !strings.Contains(err.Error(), "exact_truth_vector_visits=1000000000") {
+		t.Fatalf("missing exact truth refusal: %v", err)
+	}
+	cfg.m8MaxExactTruthVisits = 2_000_000_000
+	plan, err := validateM8BenchmarkWork(cfg, m, maxBenchmarkWorkUnits, maxFixtureBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.ExactTruthVectorVisits != 1_000_000_000 || plan.FixtureChecksumVectorVisits != 1_000_000_000 || plan.ExactWorkVectorVisits != 2_000_000_000 {
+		t.Fatalf("exact truth visits=%d", plan.ExactTruthVectorVisits)
+	}
+}
+
 func TestTruthHomePartitionDiagnosticsV1(t *testing.T) {
 	truth := []m8CanonicalResultV1{{ID: "a"}, {ID: "b"}, {ID: "c"}, {ID: "d"}}
 	homes := map[string]uint32{"a": 0, "b": 0, "c": 1, "d": 2}
@@ -229,6 +318,17 @@ func TestGenerateFixtureWritesValidatedDeterministicManifestV1(t *testing.T) {
 	}
 	if err := run([]string{"generate-fixture", "-out", out, "-vectors", "32"}, io.Discard); err == nil {
 		t.Fatal("fixture generator overwrote an existing manifest")
+	}
+}
+
+func TestGenerateFixtureRejectsChecksumWorkBeforeWritingV1(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "refused")
+	err := run([]string{"generate-fixture", "-out", out, "-vectors", "32", "-queries", "2", "-dimensions", "8", "-max-checksum-visits", "1"}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "checksum exact work") {
+		t.Fatalf("generation cap err=%v", err)
+	}
+	if _, statErr := os.Stat(out); !os.IsNotExist(statErr) {
+		t.Fatalf("refused generation created output: %v", statErr)
 	}
 }
 
@@ -890,7 +990,9 @@ func TestCheckedIn10kFixtureGraphCutBeatsStableHash(t *testing.T) {
 	}
 	// Required exact-duplicate links intentionally change the frozen graph
 	// artifact while retaining the graph-vs-hash cut advantage.
-	if report.Dataset.Checksum != "2413ef7c2f65a4b5ce8ecc3846f473fd85d337a87511538f962af7cdf6aec291" || report.Source.Checksum != "6515025f540b955d453de99cf13f1efc002fd91135b2745b722c19e8d736e386" || report.ArtifactSHA256 != "76fd71f3df6b13e10ceab2f63a972d574d2d4e47368f4ef11d8432666d014002" || report.Metrics.EdgeCut != 4928 || report.Metrics.StableIDHashEdgeCut != 149873 {
+	// The artifact digest changes because MaxDistanceWork is now serialized as
+	// deliberate construction provenance; graph quality metrics do not change.
+	if report.Dataset.Checksum != "2413ef7c2f65a4b5ce8ecc3846f473fd85d337a87511538f962af7cdf6aec291" || report.Source.Checksum != "6515025f540b955d453de99cf13f1efc002fd91135b2745b722c19e8d736e386" || report.ArtifactSHA256 != "17ddb6cda87306b148ae4aceee91a2ed99671fb78cbc1905eb2050f8ec73f8aa" || report.Metrics.EdgeCut != 4928 || report.Metrics.StableIDHashEdgeCut != 149873 {
 		t.Fatalf("frozen 10k regression changed: report=%+v", report)
 	}
 }
@@ -1339,7 +1441,7 @@ func TestM8BenchmarkWorkCapAndOverflowV1(t *testing.T) {
 }
 
 func TestM8UnsupportedOverlapSkipsMeasuredAndAttributionWorkV1(t *testing.T) {
-	cfg := config{partitions: 4, overlaps: []float64{.2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3, topK: 2}
+	cfg := config{partitions: 4, overlaps: []float64{.2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3, topK: 2, m8MaxExactTruthVisits: math.MaxInt64}
 	manifest := fixtureManifest{Vectors: 10, Queries: 5, Dimensions: 8}
 	plan, err := validateM8BenchmarkWork(cfg, manifest, 4, math.MaxInt64)
 	if err != nil {
@@ -1380,6 +1482,9 @@ func TestM8VariantMatrixCountsCompleteChildWorkAndOneChildPeakV1(t *testing.T) {
 	if matrix.MeasuredQueryRequests != single.MeasuredQueryRequests*3 || matrix.WarmupAndPreflightQueryRequests != single.WarmupAndPreflightQueryRequests*3 || matrix.AttributionQueryPasses != single.AttributionQueryPasses*3 || matrix.QueryRequests != single.QueryRequests*3 {
 		t.Fatalf("matrix cumulative work=%+v single=%+v", matrix, single)
 	}
+	if matrix.ExactWorkVectorVisits != single.ExactWorkVectorVisits*3 {
+		t.Fatalf("matrix exact scans=%d single=%d", matrix.ExactWorkVectorVisits, single.ExactWorkVectorVisits)
+	}
 	if matrix.RetainedCoordinatorCells != single.RetainedCoordinatorCells || matrix.RetainedCoordinatorResults != single.RetainedCoordinatorResults || matrix.RetainedAttributionResults != single.RetainedAttributionResults || matrix.ModeledPeakBytes != single.ModeledPeakBytes {
 		t.Fatalf("matrix peak inflated matrix=%+v single=%+v", matrix, single)
 	}
@@ -1389,7 +1494,7 @@ func TestM8VariantMatrixCountsCompleteChildWorkAndOneChildPeakV1(t *testing.T) {
 }
 
 func TestM8RetainedAttributionResultsRespectMemoryCapV1(t *testing.T) {
-	cfg := config{partitions: 16, overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1}, topK: 256}
+	cfg := config{partitions: 16, overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1}, topK: 256, m8MaxExactTruthVisits: math.MaxInt64}
 	manifest := fixtureManifest{Vectors: 10_000, Queries: 50_000, Dimensions: 8}
 	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
 	if err != nil {
@@ -1455,7 +1560,7 @@ func TestM8AttributionMergeScratchRespectsMemoryCapV1(t *testing.T) {
 }
 
 func TestM8CurrentCellOutcomesRespectMemoryCapV1(t *testing.T) {
-	cfg := config{partitions: 256, raftGroups: 4, overlaps: []float64{0}, probes: []int{256}, efSearch: []int{64}, concurrency: []int{64}, topK: 1}
+	cfg := config{partitions: 256, raftGroups: 4, overlaps: []float64{0}, probes: []int{256}, efSearch: []int{64}, concurrency: []int{64}, topK: 1, m8MaxExactTruthVisits: math.MaxInt64}
 	manifest := fixtureManifest{Vectors: 256, Queries: 1_000_000, Dimensions: 1}
 	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
 	if err != nil {
@@ -1521,7 +1626,7 @@ func TestM8AttributionPrimaryHomeMappingIsModeledV1(t *testing.T) {
 }
 
 func TestM8RetainedCoordinatorResultsRespectMemoryCapV1(t *testing.T) {
-	cfg := config{partitions: 16, overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, topK: 256}
+	cfg := config{partitions: 16, overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, topK: 256, m8MaxExactTruthVisits: math.MaxInt64}
 	manifest := fixtureManifest{Vectors: 10_000, Queries: 50_000, Dimensions: 8}
 	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
 	if err != nil {
@@ -1927,14 +2032,12 @@ func TestM8GateLedgerRequiresMatchedRecallQPSAndTailV1(t *testing.T) {
 	if ledger.ExhaustiveParity != "pass" || ledger.FailureHonesty != "pass" || ledger.PartitionPackReachability != "pass" || ledger.Recall != "pass" || ledger.ProbeReduction != "pass" || ledger.EndToEndQPS != "pass" || ledger.TailLatency != "pass" || ledger.Balance != "pass" || ledger.ResourceBounds != "pass" || ledger.OverlapStorage != "fail" {
 		t.Fatalf("ledger=%+v", ledger)
 	}
-	report.Rows[0].Status = "fail"
-	report.Rows[0].ExactParityPassed = false
+	report.Rows[0].Attribution.ExhaustivePartitionIDParity = false
 	ledger = m8ProductionGateLedgerForReportV1(report)
 	if ledger.ExhaustiveParity != "fail" {
 		t.Fatalf("coordinator parity failure ledger=%+v", ledger)
 	}
-	report.Rows[0].Status = "pass"
-	report.Rows[0].ExactParityPassed = true
+	report.Rows[0].Attribution.ExhaustivePartitionIDParity = true
 	report.Rows[1].QPS = 114.9
 	report.Rows[1].P95Nanos = 1001
 	ledger = m8ProductionGateLedgerForReportV1(report)
@@ -2202,6 +2305,39 @@ func TestM3BenchmarkWorkBudgetBoundary(t *testing.T) {
 	}
 	if canonicalPlan.VectorQueryVisits != 6_912_000 {
 		t.Fatalf("canonical M3 work plan=%+v", canonicalPlan)
+	}
+}
+
+func TestExplicitPartitionCapacityOverridesV1(t *testing.T) {
+	base := []string{
+		"-dataset", fixturePath(t),
+		"-out", t.TempDir(),
+		"-partitions", "4",
+		"-probes", "1",
+		"-stage", "partition",
+	}
+	for _, flag := range []string{"-partition-max-distance-work", "-partition-max-partition-work", "-m3-max-benchmark-visits"} {
+		args := append(append([]string(nil), base...), flag, "0")
+		if _, err := parseConfig(args); err == nil || !strings.Contains(err.Error(), "must be positive") {
+			t.Fatalf("%s=0 error=%v; want positive-limit rejection", flag, err)
+		}
+	}
+	cfg, err := parseConfig(append(base,
+		"-partition-max-distance-work", "134000000000",
+		"-partition-max-partition-work", "400000000",
+		"-m3-max-benchmark-visits", "3000000000",
+	))
+	if err != nil {
+		t.Fatalf("explicit capacity overrides rejected: %v", err)
+	}
+	if got, want := cfg.partition.MaxDistanceWork, int64(134_000_000_000); got != want {
+		t.Fatalf("MaxDistanceWork=%d want %d", got, want)
+	}
+	if got, want := cfg.partition.MaxPartitionWork, int64(400_000_000); got != want {
+		t.Fatalf("MaxPartitionWork=%d want %d", got, want)
+	}
+	if got, want := cfg.m3MaxBenchmarkVisits, int64(3_000_000_000); got != want {
+		t.Fatalf("m3MaxBenchmarkVisits=%d want %d", got, want)
 	}
 }
 
