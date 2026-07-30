@@ -459,6 +459,55 @@ func TestCommittedV1QualificationLedgerArtifactsV1(t *testing.T) {
 	}
 }
 
+func TestCommitted4023AttributionLedgerArtifactsV1(t *testing.T) {
+	type publishedArtifact struct {
+		Role   string `json:"role"`
+		Path   string `json:"path"`
+		SHA256 string `json:"sha256"`
+	}
+	var got struct {
+		SchemaVersion    int                 `json:"schema_version"`
+		Status           string              `json:"status"`
+		Disposition      string              `json:"disposition"`
+		MeasuredCodeHead string              `json:"measured_code_head"`
+		Gates            map[string]string   `json:"gates"`
+		Commands         map[string]string   `json:"commands"`
+		Artifacts        []publishedArtifact `json:"raw_artifacts"`
+	}
+	root := filepath.Join("..", "..")
+	raw, err := os.ReadFile(filepath.Join(root, "TreeDB", "docs", "spec", "artifacts", "vector-partition-attribution-4023.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.SchemaVersion != 1 || got.Status != "experimental_gate_failures" || got.Disposition != "enablement_off_follow_up_required" || got.MeasuredCodeHead != "270ce2f706a60191447af4382a28a194d7352af0" {
+		t.Fatalf("ledger linkage/schema/status=%+v", got)
+	}
+	if got.Gates["exhaustive_correctness"] != "pass" || got.Gates["probe_reduction"] != "fail" || got.Gates["existing_behavior"] != "pending_latest_head_required_suites" {
+		t.Fatalf("ledger gates=%v", got.Gates)
+	}
+	for _, required := range []string{"-m8-variant-dbs", "-probes 1,2,4,8,16", "-m8-max-exact-truth-visits 600000000"} {
+		if !strings.Contains(got.Commands["matrix"], required) {
+			t.Fatalf("matrix replay command omits %s: %s", required, got.Commands["matrix"])
+		}
+	}
+	if len(got.Artifacts) != 6 {
+		t.Fatalf("published artifact count=%d want 6", len(got.Artifacts))
+	}
+	for _, artifact := range got.Artifacts {
+		content, err := os.ReadFile(filepath.Join(root, artifact.Path))
+		if err != nil {
+			t.Fatalf("read %s: %v", artifact.Path, err)
+		}
+		sum := sha256.Sum256(content)
+		if artifact.Role == "" || artifact.SHA256 == "" || filepath.IsAbs(artifact.Path) || hex.EncodeToString(sum[:]) != artifact.SHA256 {
+			t.Fatalf("invalid published artifact=%+v", artifact)
+		}
+	}
+}
+
 func TestM8GitDirtyRequiresExternalOutputsAndPreservesSourceChangesV1(t *testing.T) {
 	repo := t.TempDir()
 	runGit := func(args ...string) {

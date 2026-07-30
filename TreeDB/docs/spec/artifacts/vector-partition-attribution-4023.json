@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "result_kind": "vector_partition_recall_attribution_closeout_v1",
+  "status": "experimental_gate_failures",
+  "disposition": "enablement_off_follow_up_required",
+  "issue": "https://github.com/snissn/gomap/issues/4023",
+  "pull_request": "https://github.com/snissn/gomap/pull/4028",
+  "base_sha": "765616d3d20e5fa612376711fd9628e3d8f7c9ee",
+  "measured_code_head": "270ce2f706a60191447af4382a28a194d7352af0",
+  "fixture": {
+    "vectors": 100000,
+    "queries": 1000,
+    "dimensions": 128,
+    "metric": "cosine",
+    "seed": 4017,
+    "checksum": "ecc2224f386932e580e4956f2cfa852140d3134625971c3511bc0d5feddf9b95"
+  },
+  "truth": {
+    "contract": "fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1",
+    "identity": "accdb76c693e2da99333b9327efc0e3d83ba630b25a8ba2b6820f5a6f6e38937",
+    "sha256": "0e9bce9465c9e1fa70c7833364e88c332bc831cfc52c628c90085e1c3068763c"
+  },
+  "topology": {
+    "scope": "single_host_multi_daemon_loopback",
+    "partitions": 16,
+    "raft_groups": 4,
+    "nodes_per_group": 3,
+    "probes": [1, 2, 4, 8, 16],
+    "top_k": 10,
+    "ef_search": 64,
+    "concurrency": 1
+  },
+  "quarter_probe_attribution": {
+    "variant": "graph-overlap-020-v1",
+    "global_exact_recall_at_k": 1,
+    "primary_home_oracle_recall_at_k": 0.8303,
+    "final_membership_oracle_recall_at_k": 0.8983,
+    "exact_representative_routing_recall_at_k": 0.7291,
+    "approximate_representative_routing_recall_at_k": 0.7291,
+    "partition_local_hnsw_recall_at_k": 0.7201,
+    "end_to_end_recall_at_k": 0.7201,
+    "dominant_active_owner": "exact_representative_routing"
+  },
+  "overlap": {
+    "requested": 20000,
+    "realized": 20000,
+    "positive_gain": 20000,
+    "forced_or_filler": 0,
+    "rejected": 0,
+    "unused_capacity": 0,
+    "edge_cut_before": 1122051,
+    "edge_cut_after": 857881,
+    "cut_reduction_per_useful_replica": 13.2085,
+    "persistent_asset_ratio": 1.200160915233184
+  },
+  "gates": {
+    "required_variants": "pass",
+    "exhaustive_correctness": "pass",
+    "failure_honesty": "pass",
+    "partition_pack_reachability": "pass",
+    "recall": "pass",
+    "probe_reduction": "fail",
+    "matched_recall_qps": "fail",
+    "matched_recall_tail": "fail",
+    "coupled_graph_acceptance": "fail",
+    "balance": "pass",
+    "overlap_storage": "pass",
+    "resource_bounds": "pass",
+    "existing_behavior": "pending_latest_head_required_suites"
+  },
+  "commands": {
+    "graph_disjoint_m3": "go run ./cmd/treedb_vector_partition_bench -stage overlap,partition_index -dataset /mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k -out /mnt/fast4tb/gomap-4023-100k-270ce2f70/out-graph-disjoint -m3-persist-db /mnt/fast4tb/gomap-4023-100k-270ce2f70/graph-disjoint -partitions 16 -overlap 0 -m3-max-benchmark-visits 300000000 -top-k 10 -seed 4017 -format text",
+    "graph_overlap_020_m3": "go run ./cmd/treedb_vector_partition_bench -stage overlap,partition_index -dataset /mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k -out /mnt/fast4tb/gomap-4023-100k-270ce2f70/out-graph-overlap-020 -m3-persist-db /mnt/fast4tb/gomap-4023-100k-270ce2f70/graph-overlap-020 -partitions 16 -overlap .2 -m3-max-benchmark-visits 340000000 -top-k 10 -seed 4017 -format text",
+    "stable_id_hash_disjoint_m3": "go run ./cmd/treedb_vector_partition_bench -stage overlap,partition_index -dataset /mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k -out /mnt/fast4tb/gomap-4023-100k-270ce2f70/out-stable-id-hash-disjoint -m3-persist-db /mnt/fast4tb/gomap-4023-100k-270ce2f70/stable-id-hash-disjoint -partitions 16 -overlap 0 -partition-assignment stable_id_hash -partition-max-distance-work 20000000000 -m3-max-benchmark-visits 300000000 -top-k 10 -seed 4017 -format text",
+    "matrix": "go run ./cmd/treedb_vector_partition_bench -mode production_multi_group -dataset /mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k -out /mnt/fast4tb/gomap-4023-100k-270ce2f70/m8-matrix -m8-truth-cache /mnt/fast4tb/gomap-4023-100k-270ce2f70/truth-cache -m8-variant-dbs /mnt/fast4tb/gomap-4023-100k-270ce2f70/graph-disjoint,/mnt/fast4tb/gomap-4023-100k-270ce2f70/graph-overlap-020,/mnt/fast4tb/gomap-4023-100k-270ce2f70/stable-id-hash-disjoint -partitions 16 -raft-groups 4 -probes 1,2,4,8,16 -ef-search 64 -concurrency 1 -top-k 10 -seed 4017 -m8-max-exact-truth-visits 600000000 -format text"
+  },
+  "published_artifact_root": "TreeDB/docs/spec/artifacts/vector-partition-attribution-4023",
+  "raw_artifacts": [
+    {"role":"graph_disjoint_m2","path":"TreeDB/docs/spec/artifacts/vector-partition-attribution-4023/graph-disjoint-m2.json","sha256":"3018ae8978ae73d0dc5ad83b6a3d7ded3a4bd2c7a01b74cc9ae0b3ef46fc0f40"},
+    {"role":"graph_disjoint_m3","path":"TreeDB/docs/spec/artifacts/vector-partition-attribution-4023/graph-disjoint-m3.json","sha256":"a6c8aac68dd55521b983d2dfd8ec3f356b8a36da2de0d101b81d092681afe7aa"},
+    {"role":"graph_overlap_020_m3","path":"TreeDB/docs/spec/artifacts/vector-partition-attribution-4023/graph-overlap-020-m3.json","sha256":"230c4cc2ebe5a93c35e99301b1d67ea8f601e285b5ccf6fc2923495c59655d3b"},
+    {"role":"stable_id_hash_disjoint_m2","path":"TreeDB/docs/spec/artifacts/vector-partition-attribution-4023/stable-id-hash-disjoint-m2.json","sha256":"1217d3e499b7f174d5fc17b047fb0bd9f9320ade43e7bd94f829dfb9cad865ec"},
+    {"role":"stable_id_hash_disjoint_m3","path":"TreeDB/docs/spec/artifacts/vector-partition-attribution-4023/stable-id-hash-disjoint-m3.json","sha256":"df608ba282efc0baea38cd911f448a29306f3e2fd8ca5b126cdea1d7774b71c3"},
+    {"role":"m8_matrix","path":"TreeDB/docs/spec/artifacts/vector-partition-attribution-4023/m8-matrix.json","sha256":"e85d2db0684e6d43539540507124e29d542a26b46ede41f22bfb72c15c4e2b9b"}
+  ]
+}
