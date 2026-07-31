@@ -174,7 +174,7 @@ func TestCommittedM3QualificationShapesRequireExplicitVisitOverrideV1(t *testing
 		if _, err := validateM3BenchmarkWork(config{partitions: 16, overlaps: []float64{0}, topK: 10, partition: vectorpartition.Config{Degree: 16}}, m, maxBenchmarkWorkUnits); err == nil {
 			t.Fatalf("%s accepted without explicit M3 visit override", name)
 		}
-		if _, err := validateM3BenchmarkWork(config{partitions: 16, overlaps: []float64{0}, topK: 10, partition: vectorpartition.Config{Degree: 16}}, m, 3_113_045_000); err != nil {
+		if _, err := validateM3BenchmarkWork(config{partitions: 16, overlaps: []float64{0}, topK: 10, partition: vectorpartition.Config{Degree: 16}}, m, 3_113_430_000); err != nil {
 			t.Fatalf("%s explicit M3 visit override: %v", name, err)
 		}
 	}
@@ -1247,22 +1247,25 @@ func TestPartitionTruthOraclePreflightsQueriesBytesAndExactWork(t *testing.T) {
 		Vectors: 50, Queries: 3, Dimensions: 2, Metric: "cosine",
 		Checksum: strings.Repeat("0", 64),
 	}
-	if err := validatePartitionTruthOracleWithCaps(manifest, 10, 16, 100, 5935, 53*2*8); err != nil {
+	if err := validatePartitionTruthOracleWithCaps(manifest, 16, 10, 16, 100, 7090, 53*2*8); err != nil {
 		t.Fatalf("valid truth-oracle plan rejected: %v", err)
 	}
 	queryHeavy := manifest
 	queryHeavy.Queries = 101
-	if err := validatePartitionTruthOracleWithCaps(queryHeavy, 10, 16, 100, math.MaxInt64, math.MaxInt64); err == nil {
+	if err := validatePartitionTruthOracleWithCaps(queryHeavy, 16, 10, 16, 100, math.MaxInt64, math.MaxInt64); err == nil {
 		t.Fatal("partition truth oracle accepted query count above the pre-allocation cap")
 	}
-	if err := validatePartitionTruthOracleWithCaps(manifest, 10, 16, 100, math.MaxInt64, 53*2*8-1); err == nil {
+	if err := validatePartitionTruthOracleWithCaps(manifest, 16, 10, 16, 100, math.MaxInt64, 53*2*8-1); err == nil {
 		t.Fatal("partition truth oracle accepted query matrix above the byte cap")
 	}
-	if err := validatePartitionTruthOracleWithCaps(manifest, 10, 16, 100, 5934, math.MaxInt64); err == nil || !strings.Contains(err.Error(), "graph_diagnostic_work=5650") {
+	if err := validatePartitionTruthOracleWithCaps(manifest, 16, 10, 16, 100, 7089, math.MaxInt64); err == nil || !strings.Contains(err.Error(), "partition_ranking_work=1155") {
 		t.Fatalf("partition truth oracle accepted excessive aggregate work: %v", err)
 	}
-	if err := validatePartitionTruthOracleWithCaps(fixtureManifest{SchemaVersion: schemaVersion, Fixture: "large-top-k", Generator: fixtureGenerator, Arithmetic: fixtureArithmetic, Vectors: 1000, Queries: 200000, Dimensions: 1, Metric: "cosine", Checksum: strings.Repeat("0", 64)}, 1000, 500, 200000, maxBenchmarkWorkUnits, math.MaxInt64); err == nil || !strings.Contains(err.Error(), "adjacency_comparisons=") {
+	if err := validatePartitionTruthOracleWithCaps(fixtureManifest{SchemaVersion: schemaVersion, Fixture: "large-top-k", Generator: fixtureGenerator, Arithmetic: fixtureArithmetic, Vectors: 1000, Queries: 200000, Dimensions: 1, Metric: "cosine", Checksum: strings.Repeat("0", 64)}, 16, 1000, 500, 200000, maxBenchmarkWorkUnits, math.MaxInt64); err == nil || !strings.Contains(err.Error(), "adjacency_comparisons=") {
 		t.Fatalf("partition truth oracle accepted unbounded adjacency scans: %v", err)
+	}
+	if err := validatePartitionTruthOracleWithCaps(fixtureManifest{SchemaVersion: schemaVersion, Fixture: "partition-sort-heavy", Generator: fixtureGenerator, Arithmetic: fixtureArithmetic, Vectors: 10000, Queries: 18000, Dimensions: 1, Metric: "cosine", Checksum: strings.Repeat("0", 64)}, 10000, 1000, 1, 20000, maxBenchmarkWorkUnits, math.MaxInt64); err == nil || !strings.Contains(err.Error(), "partition_ranking_work=") {
+		t.Fatalf("partition truth oracle accepted unbounded partition ranking: %v", err)
 	}
 }
 
@@ -2446,15 +2449,15 @@ func TestBenchmarkWorkBudgetBoundaryAndCanonicalShape(t *testing.T) {
 
 func TestM3BenchmarkWorkBudgetBoundary(t *testing.T) {
 	fixture := fixtureManifest{Vectors: 10, Queries: 10}
-	cfg := config{overlaps: []float64{0, .2}, topK: 10, partition: vectorpartition.Config{Degree: 16}}
-	plan, err := validateM3BenchmarkWork(cfg, fixture, 2120)
+	cfg := config{partitions: 4, overlaps: []float64{0, .2}, topK: 10, partition: vectorpartition.Config{Degree: 16}}
+	plan, err := validateM3BenchmarkWork(cfg, fixture, 2770)
 	if err != nil {
 		t.Fatalf("exact M3 work-budget boundary rejected: %v", err)
 	}
-	if plan.ChecksumVectorQueryVisits != 100 || plan.MembershipVectorQueryVisits != 440 || plan.TruthAdjacencyComparisons != 450 || plan.GraphDiagnosticWorkUnits != 1130 || plan.VectorQueryVisits != 2120 {
+	if plan.ChecksumVectorQueryVisits != 100 || plan.MembershipVectorQueryVisits != 440 || plan.TruthAdjacencyComparisons != 450 || plan.GraphDiagnosticWorkUnits != 1130 || plan.TruthPartitionRankingWork != 650 || plan.VectorQueryVisits != 2770 {
 		t.Fatalf("M3 boundary work plan=%+v", plan)
 	}
-	if _, err := validateM3BenchmarkWork(cfg, fixture, 2119); err == nil {
+	if _, err := validateM3BenchmarkWork(cfg, fixture, 2769); err == nil {
 		t.Fatal("accepted M3 work plan above exact boundary")
 	}
 	canonical, err := loadFixture(fixturePath(t))
@@ -2465,7 +2468,7 @@ func TestM3BenchmarkWorkBudgetBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("canonical M3 work plan rejected: %v", err)
 	}
-	if canonicalPlan.VectorQueryVisits != 8_047_760 {
+	if canonicalPlan.VectorQueryVisits != 8_056_080 {
 		t.Fatalf("canonical M3 work plan=%+v", canonicalPlan)
 	}
 }
