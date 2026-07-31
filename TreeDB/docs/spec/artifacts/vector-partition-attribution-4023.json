@@ -6,7 +6,7 @@
   "issue": "https://github.com/snissn/gomap/issues/4023",
   "pull_request": "https://github.com/snissn/gomap/pull/4028",
   "base_sha": "765616d3d20e5fa612376711fd9628e3d8f7c9ee",
-  "measured_code_head": "fb9f9004e427ebffe8dbf653de8195dae8fee821",
+  "measured_code_head": "adc631f309f23f137f3ca6abf960a6e3ba6621b2",
   "fixture": {
     "vectors": 100000,
     "queries": 1000,
@@ -69,18 +69,18 @@
     "existing_behavior": "pending_latest_head_required_suites"
   },
   "commands": {
-    "graph_disjoint_m3": "go run ./cmd/treedb_vector_partition_bench -stage overlap,partition_index -dataset /mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k -out /mnt/fast4tb/gomap-4023-100k-fb9f9004e/out-graph-disjoint -m3-persist-db /mnt/fast4tb/gomap-4023-100k-fb9f9004e/graph-disjoint -partitions 16 -overlap 0 -m3-max-benchmark-visits 300045000 -top-k 10 -seed 4017 -format text",
-    "graph_overlap_020_m3": "go run ./cmd/treedb_vector_partition_bench -stage overlap,partition_index -dataset /mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k -out /mnt/fast4tb/gomap-4023-100k-fb9f9004e/out-graph-overlap-020 -m3-persist-db /mnt/fast4tb/gomap-4023-100k-fb9f9004e/graph-overlap-020 -partitions 16 -overlap .2 -m3-max-benchmark-visits 340045000 -top-k 10 -seed 4017 -format text",
-    "stable_id_hash_disjoint_m3": "go run ./cmd/treedb_vector_partition_bench -stage overlap,partition_index -dataset /mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k -out /mnt/fast4tb/gomap-4023-100k-fb9f9004e/out-stable-id-hash-disjoint -m3-persist-db /mnt/fast4tb/gomap-4023-100k-fb9f9004e/stable-id-hash-disjoint -partitions 16 -overlap 0 -partition-assignment stable_id_hash -partition-max-distance-work 20000000000 -m3-max-benchmark-visits 300045000 -top-k 10 -seed 4017 -format text",
-    "matrix": "go run ./cmd/treedb_vector_partition_bench -mode production_multi_group -dataset /mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k -out /mnt/fast4tb/gomap-4023-100k-fb9f9004e/m8-matrix -m8-truth-cache /mnt/fast4tb/gomap-4023-100k-fb9f9004e/truth-cache -m8-variant-dbs /mnt/fast4tb/gomap-4023-100k-fb9f9004e/graph-disjoint,/mnt/fast4tb/gomap-4023-100k-fb9f9004e/graph-overlap-020,/mnt/fast4tb/gomap-4023-100k-fb9f9004e/stable-id-hash-disjoint -partitions 16 -raft-groups 4 -probes 1,2,4,8,16 -ef-search 64 -concurrency 1 -top-k 10 -seed 4017 -m8-max-exact-truth-visits 600000000 -format text"
+    "graph_disjoint_m3": "go run ./cmd/treedb_vector_partition_bench -stage overlap,partition_index -dataset /mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k -out /mnt/fast4tb/gomap-4023-100k-adc631f30/out-graph-disjoint -m3-persist-db /mnt/fast4tb/gomap-4023-100k-adc631f30/graph-disjoint -partitions 16 -overlap 0 -m3-max-benchmark-visits 311345000 -top-k 10 -seed 4017 -format text",
+    "graph_overlap_020_m3": "go run ./cmd/treedb_vector_partition_bench -stage overlap,partition_index -dataset /mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k -out /mnt/fast4tb/gomap-4023-100k-adc631f30/out-graph-overlap-020 -m3-persist-db /mnt/fast4tb/gomap-4023-100k-adc631f30/graph-overlap-020 -partitions 16 -overlap .2 -m3-max-benchmark-visits 351345000 -top-k 10 -seed 4017 -format text",
+    "stable_id_hash_disjoint_m3": "go run ./cmd/treedb_vector_partition_bench -stage overlap,partition_index -dataset /mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k -out /mnt/fast4tb/gomap-4023-100k-adc631f30/out-stable-id-hash-disjoint -m3-persist-db /mnt/fast4tb/gomap-4023-100k-adc631f30/stable-id-hash-disjoint -partitions 16 -overlap 0 -partition-assignment stable_id_hash -partition-max-distance-work 20000000000 -m3-max-benchmark-visits 311345000 -top-k 10 -seed 4017 -format text",
+    "matrix": "go run ./cmd/treedb_vector_partition_bench -mode production_multi_group -dataset /mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k -out /mnt/fast4tb/gomap-4023-100k-adc631f30/m8-matrix -m8-truth-cache /mnt/fast4tb/gomap-4023-100k-adc631f30/truth-cache -m8-variant-dbs /mnt/fast4tb/gomap-4023-100k-adc631f30/graph-disjoint,/mnt/fast4tb/gomap-4023-100k-adc631f30/graph-overlap-020,/mnt/fast4tb/gomap-4023-100k-adc631f30/stable-id-hash-disjoint -partitions 16 -raft-groups 4 -probes 1,2,4,8,16 -ef-search 64 -concurrency 1 -top-k 10 -seed 4017 -m8-max-exact-truth-visits 600000000 -format text"
   },
   "published_artifact_root": "TreeDB/docs/spec/artifacts/vector-partition-attribution-4023",
   "raw_artifacts": [
     {"role":"graph_disjoint_m2","path":"TreeDB/docs/spec/artifacts/vector-partition-attribution-4023/graph-disjoint-m2.json","sha256":"5a095727ed0f82815643daddb47bd11a08c9630ede6f9b1d7e7ec427dc8e9937"},
-    {"role":"graph_disjoint_m3","path":"TreeDB/docs/spec/artifacts/vector-partition-attribution-4023/graph-disjoint-m3.json","sha256":"7ffcd15f569d99908459bdb4050754aa6eb9ee6b5915b27f2703eb02a7fbdc54"},
-    {"role":"graph_overlap_020_m3","path":"TreeDB/docs/spec/artifacts/vector-partition-attribution-4023/graph-overlap-020-m3.json","sha256":"5a066dc8b2a28162e2c97c01f8c9c1452b4ce1022160eb110d10096f86855abc"},
+    {"role":"graph_disjoint_m3","path":"TreeDB/docs/spec/artifacts/vector-partition-attribution-4023/graph-disjoint-m3.json","sha256":"937117863bc89983f14adf464a1ca6878c81987971209ebc33c76b03074758f6"},
+    {"role":"graph_overlap_020_m3","path":"TreeDB/docs/spec/artifacts/vector-partition-attribution-4023/graph-overlap-020-m3.json","sha256":"2fb8308eed41f413fc58950200ded4e5a7a38e25c70256e6ecade3bf86532108"},
     {"role":"stable_id_hash_disjoint_m2","path":"TreeDB/docs/spec/artifacts/vector-partition-attribution-4023/stable-id-hash-disjoint-m2.json","sha256":"35c727d799bb7c99ce2fd04813cb64d61d57128eb3fc9f4348f5fb2c2f681af1"},
-    {"role":"stable_id_hash_disjoint_m3","path":"TreeDB/docs/spec/artifacts/vector-partition-attribution-4023/stable-id-hash-disjoint-m3.json","sha256":"76bcf2628c7c307d623c472ca0dbd1ab4a1b29c89e1390a5f58bddc62232d77a"},
-    {"role":"m8_matrix","path":"TreeDB/docs/spec/artifacts/vector-partition-attribution-4023/m8-matrix.json","sha256":"4fa790ef143bb1f9117ce0527ffdcec388306204c23f7ef4ab1beeff86fe85ae"}
+    {"role":"stable_id_hash_disjoint_m3","path":"TreeDB/docs/spec/artifacts/vector-partition-attribution-4023/stable-id-hash-disjoint-m3.json","sha256":"6e18efe845181782fe53cd2ee92e037db9f182778151e1c98739708142f277dd"},
+    {"role":"m8_matrix","path":"TreeDB/docs/spec/artifacts/vector-partition-attribution-4023/m8-matrix.json","sha256":"942d4ea278f763cfed7c8afbb6e9d60044271439ee8c92bca3d3774d9aeae5a5"}
   ]
 }
