@@ -1511,10 +1511,18 @@ func TestPartitionAssignmentParsesOnlyMaterializationStagesV1(t *testing.T) {
 }
 
 func TestKaHIPOfflineSelectorIsLimitedToGraphMaterializationV1(t *testing.T) {
-	base := []string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-partition-kahip-python", "/tmp/kahip-python", "-partition-kahip-script", "/tmp/kahip.py"}
+	python := filepath.Join(t.TempDir(), "kahip-python")
+	if err := os.WriteFile(python, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(t.TempDir(), "kahip.py")
+	if err := os.WriteFile(script, []byte("# adapter\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := []string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-partition-kahip-python", python, "-partition-kahip-script", script}
 	for _, stage := range []string{"partition", "overlap,partition_index"} {
 		cfg, err := parseConfig(append(append([]string(nil), base...), "-stage", stage))
-		if err != nil || cfg.kahipPython == "" {
+		if err != nil || cfg.kahipPython != python || cfg.kahipScript != script {
 			t.Fatalf("stage=%s cfg=%+v err=%v", stage, cfg, err)
 		}
 	}
@@ -1522,6 +1530,8 @@ func TestKaHIPOfflineSelectorIsLimitedToGraphMaterializationV1(t *testing.T) {
 		append(append([]string(nil), base...), "-stage", "simulation"),
 		append(append([]string(nil), base...), "-stage", "partition", "-partition-assignment", partitionAssignmentStableIDHashV1),
 		append(append([]string(nil), base...), "-stage", "partition", "-imbalance", "0.04"),
+		append(append([]string(nil), base...), "-stage", "partition", "-partition-kahip-python", filepath.Join(t.TempDir(), "missing-python")),
+		append(append([]string(nil), base...), "-stage", "partition", "-partition-kahip-script", t.TempDir()),
 	} {
 		if _, err := parseConfig(args); err == nil {
 			t.Fatalf("accepted KaHIP outside graph materialization: %#v", args)

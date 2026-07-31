@@ -894,6 +894,24 @@ func parseConfig(args []string) (config, error) {
 	if (cfg.kahipPython == "") != (cfg.kahipScript == "") {
 		return config{}, errors.New("-partition-kahip-python and -partition-kahip-script must be provided together")
 	}
+	if cfg.kahipPython != "" {
+		python, err := exec.LookPath(cfg.kahipPython)
+		if err != nil {
+			return config{}, fmt.Errorf("-partition-kahip-python: %w", err)
+		}
+		if cfg.kahipPython, err = filepath.Abs(python); err != nil {
+			return config{}, fmt.Errorf("-partition-kahip-python: %w", err)
+		}
+		script, err := filepath.Abs(cfg.kahipScript)
+		if err != nil {
+			return config{}, fmt.Errorf("-partition-kahip-script: %w", err)
+		}
+		info, err := os.Stat(script)
+		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0444 == 0 {
+			return config{}, errors.New("-partition-kahip-script must be a readable regular file")
+		}
+		cfg.kahipScript = script
+	}
 	if cfg.partitionAssignment != partitionAssignmentGraphV1 && cfg.stage != "partition" && cfg.stage != "overlap,partition_index" {
 		return config{}, errors.New("-partition-assignment applies only to partition and overlap,partition_index stages")
 	}
