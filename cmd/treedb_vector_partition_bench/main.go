@@ -121,6 +121,21 @@ type config struct {
 	m8ShardLimits         nativewire.VectorPartitionShardSearchLimitsV1
 }
 
+type kahipRequestPartitioner struct{}
+
+func (kahipRequestPartitioner) Name() string    { return "kahip_request_seed_v1" }
+func (kahipRequestPartitioner) License() string { return "request-only" }
+func (kahipRequestPartitioner) Partition(g vectorpartition.Graph, parts, cap int) ([]int, error) {
+	if parts < 1 || cap < 1 || len(g.Neighbors) < parts {
+		return nil, errors.New("invalid KaHIP request shape")
+	}
+	out := make([]int, len(g.Neighbors))
+	for i := range out {
+		out[i] = i % parts
+	}
+	return out, nil
+}
+
 type partitionRun struct {
 	SchemaVersion  int                     `json:"schema_version"`
 	ResultKind     string                  `json:"result_kind"`
@@ -556,7 +571,11 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		// graph controls. Simulation probes, stage selection, and simulation
 		// memory planning are intentionally irrelevant here; M3 separately
 		// consumes explicit overlap ratios, queries, and top-k.
-		if err := vectorpartition.ValidateReferenceInputShape(cfg.partition, fixture.Vectors, fixture.Dimensions); err != nil {
+		validateShape := vectorpartition.ValidateReferenceInputShape
+		if cfg.kahipPython != "" {
+			validateShape = vectorpartition.ValidateInputShape
+		}
+		if err := validateShape(cfg.partition, fixture.Vectors, fixture.Dimensions); err != nil {
 			return err
 		}
 		// The artifact's Source.Checksum is computed over these generated vectors
@@ -943,7 +962,11 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][
 		input[i] = vectorpartition.Vector{ID: fmt.Sprintf("doc-%06d", i), Values: values}
 	}
 	started := time.Now()
-	artifact, err := vectorpartition.BuildWithPartitioner(input, cfg.partition, vectorpartition.Source{SourceID: "m0_fixture:" + fixture.Checksum}, vectorpartition.ReferencePartitioner{})
+	backend := vectorpartition.Partitioner(vectorpartition.ReferencePartitioner{})
+	if cfg.kahipPython != "" {
+		backend = kahipRequestPartitioner{}
+	}
+	artifact, err := vectorpartition.BuildWithPartitioner(input, cfg.partition, vectorpartition.Source{SourceID: "m0_fixture:" + fixture.Checksum}, backend)
 	if err != nil {
 		return fmt.Errorf("build validated vector partition artifact: %w", err)
 	}

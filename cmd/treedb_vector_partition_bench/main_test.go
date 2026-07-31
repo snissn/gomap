@@ -1580,6 +1580,18 @@ func TestKaHIPAdapterRoundTripV1(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "pinned kahip") {
 		t.Fatalf("same-version wrong distribution identity accepted: %v", err)
 	}
+	badPayload := strings.Replace(string(adapter), "hashlib.sha256(payload).digest() != expected", "hashlib.sha256(payload).digest() == expected", 1)
+	if badPayload == string(adapter) {
+		t.Fatal("test did not replace KaHIP payload integrity check")
+	}
+	badScript = filepath.Join(t.TempDir(), "kahip_wrong_payload.py")
+	if err := os.WriteFile(badScript, []byte(badPayload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = vectorpartition.RunExternalJSONForRequestWithLimits(ctx, []string{python, badScript}, raw, vectorpartition.ExternalJSONLimits{MaxInput: len(raw), MaxOutput: len(raw) + 1024}, request)
+	if err == nil || !strings.Contains(err.Error(), "payload integrity") {
+		t.Fatalf("tampered installed payload accepted: %v", err)
+	}
 }
 
 func TestPartitionLocalHNSWMIsIndependentAndM3OnlyV1(t *testing.T) {

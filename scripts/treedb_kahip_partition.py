@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Pinned offline KaHIP 3.25 adapter for TreeDB's validated JSON contract."""
 
+import base64
+import csv
 import hashlib
 import importlib.metadata
 import json
@@ -19,7 +21,8 @@ RECORD_SHA256 = "7ff011253147286fcebc9185573662bf31dbcfbab1944f9b4940032f49ea521
 def pinned_kahip():
     distribution = importlib.metadata.distribution("kahip")
     record = next(path for path in distribution.files if str(path).endswith("RECORD"))
-    record_hash = hashlib.sha256(distribution.locate_file(record).read_bytes()).hexdigest()
+    record_bytes = distribution.locate_file(record).read_bytes()
+    record_hash = hashlib.sha256(record_bytes).hexdigest()
     if (
         kahip.__version__ != "3.25"
         or distribution.version != "3.25"
@@ -27,6 +30,16 @@ def pinned_kahip():
         or record_hash != RECORD_SHA256
     ):
         raise SystemExit("requires pinned kahip==3.25 MIT distribution")
+    for path, digest, size in csv.reader(record_bytes.decode("utf-8").splitlines()):
+        if not digest:
+            continue
+        algorithm, encoded = digest.split("=", 1)
+        if algorithm != "sha256" or not size.isdecimal():
+            raise SystemExit("unsupported KaHIP RECORD entry")
+        payload = distribution.locate_file(path).read_bytes()
+        expected = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+        if len(payload) != int(size) or hashlib.sha256(payload).digest() != expected:
+            raise SystemExit("KaHIP RECORD payload integrity mismatch")
 
 
 if len(sys.argv) != 3:
