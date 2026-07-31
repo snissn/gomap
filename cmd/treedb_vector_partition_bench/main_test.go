@@ -1508,25 +1508,6 @@ func TestPartitionAssignmentParsesOnlyMaterializationStagesV1(t *testing.T) {
 			t.Fatalf("accepted malformed assignment config %#v", args)
 		}
 	}
-	if runtime.GOOS != "windows" && os.Geteuid() != 0 {
-		t.Run("unreadable_script", func(t *testing.T) {
-			unreadable := filepath.Join(t.TempDir(), "unreadable.py")
-			if err := os.WriteFile(unreadable, []byte("# adapter\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Chmod(unreadable, 0); err != nil {
-				t.Fatal(err)
-			}
-			file, err := os.Open(unreadable)
-			if err == nil {
-				_ = file.Close()
-				t.Skip("current credentials can read a mode-000 regular file")
-			}
-			if _, err := parseConfig(append(append([]string(nil), base...), "-stage", "partition", "-partition-kahip-script", unreadable)); err == nil {
-				t.Fatal("accepted unreadable KaHIP adapter")
-			}
-		})
-	}
 }
 
 func TestKaHIPOfflineSelectorIsLimitedToGraphMaterializationV1(t *testing.T) {
@@ -1539,6 +1520,31 @@ func TestKaHIPOfflineSelectorIsLimitedToGraphMaterializationV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := []string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-partition-kahip-python", python, "-partition-kahip-script", script}
+	if runtime.GOOS != "windows" && os.Geteuid() != 0 {
+		t.Run("unreadable_script", func(t *testing.T) {
+			unreadable := filepath.Join(t.TempDir(), "unreadable.py")
+			if err := os.WriteFile(unreadable, []byte("# adapter\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			args := append([]string(nil), base...)
+			args[len(args)-1] = unreadable
+			args = append(args, "-stage", "partition")
+			if _, err := parseConfig(args); err != nil {
+				t.Fatalf("readable KaHIP adapter rejected: %v", err)
+			}
+			if err := os.Chmod(unreadable, 0); err != nil {
+				t.Fatal(err)
+			}
+			file, err := os.Open(unreadable)
+			if err == nil {
+				_ = file.Close()
+				t.Skip("current credentials can read a mode-000 regular file")
+			}
+			if _, err := parseConfig(args); err == nil {
+				t.Fatal("accepted unreadable KaHIP adapter")
+			}
+		})
+	}
 	for _, stage := range []string{"partition", "overlap,partition_index"} {
 		cfg, err := parseConfig(append(append([]string(nil), base...), "-stage", stage))
 		if err != nil || cfg.kahipPython != python || cfg.kahipScript != script {
