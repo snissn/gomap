@@ -24,7 +24,7 @@ and SHA-256
 `0e9bce9465c9e1fa70c7833364e88c332bc831cfc52c628c90085e1c3068763c`.
 
 The measured implementation head is
-`8f441120b1d952fc777db48f247f8d446ffdebdf`, based on
+`d801573b9901b73f956a7d713b0d340d54c01b0c`, based on
 `765616d3d20e5fa612376711fd9628e3d8f7c9ee`. Exact M3 and M8 commands are
 embedded in the retained JSON artifacts.
 
@@ -99,12 +99,12 @@ under `TreeDB/docs/spec/artifacts/vector-partition-attribution-4023/`:
 
 | Artifact | SHA-256 |
 | --- | --- |
-| `graph-disjoint-m2.json` | `b76f93a2428cff9d824a2b000532abb6272343f79b0338ef1d51ddfbe4615605` |
-| `graph-disjoint-m3.json` | `6220ec9a3a94f06df13b041c279269a40d5e893d6b5c3478dbeaa7ad1521d689` |
-| `graph-overlap-020-m3.json` | `8d08ea26d2ea4c1765e46f75cdc2537ff5aacf54589ceaab60330b2702bf47a6` |
-| `stable-id-hash-disjoint-m2.json` | `a5bacd296735d11c5f80690cbb433b692cc8c28512602997d18b7940ee6cc778` |
-| `stable-id-hash-disjoint-m3.json` | `eca7146942418feb904835a79b4c9dcf8342dcf5784ca885167ea84762248ac2` |
-| `m8-matrix.json` | `a512eed938ec1787fa228335701c3509995a625ffb28fb766b542934d39f8ed3` |
+| `graph-disjoint-m2.json` | `5a095727ed0f82815643daddb47bd11a08c9630ede6f9b1d7e7ec427dc8e9937` |
+| `graph-disjoint-m3.json` | `3a3913041cb02ad168968d4107a3535f0f81991903afcb5512226a0279c38767` |
+| `graph-overlap-020-m3.json` | `eb85022d48c23868ae0e463bff0b39d1fe8f6bbdba2b43033b0aa9668885b6a7` |
+| `stable-id-hash-disjoint-m2.json` | `35c727d799bb7c99ce2fd04813cb64d61d57128eb3fc9f4348f5fb2c2f681af1` |
+| `stable-id-hash-disjoint-m3.json` | `ea02bd0f9f362d628de594e1935e80f7d6ebe3a7e5369864a3749d393c5d2a53` |
+| `m8-matrix.json` | `45dd7e0b2e9b205e27f40f32267295dfa16f0bfd84113839aec38ef2f174662a` |
 
 The matrix records the host, resource limits and observations, variant
 identities, topology, exact commands, all probe rows, stage ledger, gate
