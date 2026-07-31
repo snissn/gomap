@@ -1511,7 +1511,7 @@ func TestPartitionAssignmentParsesOnlyMaterializationStagesV1(t *testing.T) {
 }
 
 func TestKaHIPOfflineSelectorIsLimitedToGraphMaterializationV1(t *testing.T) {
-	base := []string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-partition-kahip-python", "/tmp/kahip-python"}
+	base := []string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-partition-kahip-python", "/tmp/kahip-python", "-partition-kahip-script", "/tmp/kahip.py"}
 	for _, stage := range []string{"partition", "overlap,partition_index"} {
 		cfg, err := parseConfig(append(append([]string(nil), base...), "-stage", stage))
 		if err != nil || cfg.kahipPython == "" {
@@ -1525,6 +1525,13 @@ func TestKaHIPOfflineSelectorIsLimitedToGraphMaterializationV1(t *testing.T) {
 		if _, err := parseConfig(args); err == nil {
 			t.Fatalf("accepted KaHIP outside graph materialization: %#v", args)
 		}
+	}
+}
+
+func TestKaHIPOutputCapAllowsCanonicalLabelGrowthV1(t *testing.T) {
+	a := vectorpartition.Artifact{IDs: make([]string, 1_000_000)}
+	if got, want := kahipOutputCap(make([]byte, 10), a), 5_001_034; got != want {
+		t.Fatalf("cap=%d want=%d", got, want)
 	}
 }
 

@@ -94,6 +94,7 @@ type config struct {
 	partitionAssignment   string
 	partitionTruthOracle  bool
 	kahipPython           string
+	kahipScript           string
 	partition             vectorpartition.Config
 	partitionHNSWM        int
 	router                *treeDBRepresentativeRouter
@@ -726,6 +727,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
 	fs.BoolVar(&cfg.partitionTruthOracle, "partition-truth-oracle", false, "emit exact truth primary-partition coverage diagnostic for -stage partition")
 	fs.StringVar(&cfg.kahipPython, "partition-kahip-python", "", "offline KaHIP 3.25 Python executable for partition/M3 build stages; never used online; adapter is scripts/treedb_kahip_partition.py")
+	fs.StringVar(&cfg.kahipScript, "partition-kahip-script", "", "explicit offline KaHIP adapter script path required with -partition-kahip-python")
 	fs.IntVar(&cfg.partition.Repetitions, "partition-repetitions", cfg.partition.Repetitions, "dense-ball graph sketch repetitions")
 	fs.Int64Var(&cfg.partition.MaxDistanceWork, "partition-max-distance-work", cfg.partition.MaxDistanceWork, "explicit reference graph scalar-work bound")
 	fs.Int64Var(&cfg.partition.MaxPartitionWork, "partition-max-partition-work", cfg.partition.MaxPartitionWork, "qualification-only reference partition work bound; default remains conservative")
@@ -867,6 +869,9 @@ func parseConfig(args []string) (config, error) {
 	if cfg.kahipPython != "" && ((cfg.stage != "partition" && cfg.stage != "overlap,partition_index") || cfg.partitionAssignment != partitionAssignmentGraphV1) {
 		return config{}, errors.New("-partition-kahip-python requires partition or overlap,partition_index stage with graph assignment")
 	}
+	if (cfg.kahipPython == "") != (cfg.kahipScript == "") {
+		return config{}, errors.New("-partition-kahip-python and -partition-kahip-script must be provided together")
+	}
 	if cfg.partitionAssignment != partitionAssignmentGraphV1 && cfg.stage != "partition" && cfg.stage != "overlap,partition_index" {
 		return config{}, errors.New("-partition-assignment applies only to partition and overlap,partition_index stages")
 	}
@@ -950,7 +955,7 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		artifact, err = vectorpartition.RunExternalJSONForRequestWithLimits(ctx, []string{cfg.kahipPython, "scripts/treedb_kahip_partition.py"}, input, vectorpartition.ExternalJSONLimits{MaxInput: len(input), MaxOutput: len(input) + 1024}, request)
+		artifact, err = vectorpartition.RunExternalJSONForRequestWithLimits(ctx, []string{cfg.kahipPython, cfg.kahipScript}, input, vectorpartition.ExternalJSONLimits{MaxInput: len(input), MaxOutput: kahipOutputCap(input, request)}, request)
 		if err != nil {
 			return fmt.Errorf("KaHIP 3.25 offline partition: %w", err)
 		}
@@ -1023,6 +1028,12 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][
 	}
 	_, err = fmt.Fprintf(stdout, "partition artifact=%s edges=%d cut=%d cap=%d\n", path, artifact.Metrics.GraphEdges, artifact.Metrics.EdgeCut, artifact.Metrics.Cap)
 	return err
+}
+
+func kahipOutputCap(input []byte, a vectorpartition.Artifact) int {
+	// Each canonical JSON assignment label may grow from one digit to five
+	// (partitions are capped at 16384); reserve a small fixed metadata delta.
+	return len(input) + len(a.IDs)*5 + 1024
 }
 
 func partitionTruthOracleForArtifactV1(vectors, queries [][]float64, assignment []int, graph [][]int, partitions, topK int) (partitionTruthOracleV1, error) {
