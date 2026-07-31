@@ -49,8 +49,8 @@ malformed output, or success. On Unix it also kills the dedicated process group
 after `Wait`, including when the root exits normally while a same-group child
 holds an inherited pipe. A child that deliberately calls `setsid` escapes that
 OS process-group boundary; the portable Go adapter cannot claim containment of
-such hostile descendants. No external partitioner is currently selected or
-required.
+such hostile descendants. The selected KaHIP backend below is offline only;
+no online external partitioner is selected or required.
 
 ## Reproducible M0 fixture invocation
 
@@ -75,8 +75,27 @@ Its query count, generated matrix bytes, exact corpus-by-query work, top-k, and
 fixture checksum are validated before the diagnostic data is allocated or
 used.
 
-Before a production backend can be chosen, pin its version, source and license,
-input/output command, resource limits, and independent validator evidence.
+The selected offline comparison backend is `kahip==3.25` (MIT Python module,
+wheel SHA-256 `e6ea76524e9fc01b27e6f5c5f00b7eec71c94cbd1e84678ce2a14d64dfc9eda4`),
+ECO mode, single OpenMP worker, seed from the validated request, epsilon .05,
+and an unweighted symmetrized copy of the directed graph. It is invoked only
+through an explicit `-partition-kahip-script` path (normally
+`scripts/treedb_kahip_partition.py`) and the bound external JSON seam; it is
+never an online dependency. The adapter rejects any distribution version other than
+3.25 or RECORD SHA-256
+`7ff011253147286fcebc9185573662bf31dbcfbab1944f9b4940032f49ea5217`, and requests above the V1 1M-by-degree-16 (16M directed edge)
+envelope, above `16384` partitions, or with more partitions than vectors.
+`-partition-kahip-python` is a trusted local offline execution substrate. V1
+attests the pinned adapter bytes and installed KaHIP RECORD payloads, not the
+Python interpreter, OS, shared-library loader, or container; results from an
+untrusted runtime are outside this evidence contract.
+On the retained 100k embedding-mixture graph
+`5a095727ed0f82815643daddb47bd11a08c9630ede6f9b1d7e7ec427dc8e9937`,
+the reference greedy result was p4 `.8303`, cut `1122051`, load `6521/6563`;
+the KaHIP artifact
+`022359b1aedfa738cde7f2e82e01263c855eb72075b1f2a927d3a5753d6fde9c`
+was p1/p2/p4/p8/p16 `1.0`, cut `0`, load `6283/6563`. This is a bounded
+offline placement result, not a claim about graph quality or online serving.
 
 ## Exporter-corpus builder and reproducibility evidence
 

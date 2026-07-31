@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -1506,6 +1507,244 @@ func TestPartitionAssignmentParsesOnlyMaterializationStagesV1(t *testing.T) {
 		if _, err := parseConfig(args); err == nil {
 			t.Fatalf("accepted malformed assignment config %#v", args)
 		}
+	}
+}
+
+func TestKaHIPOfflineSelectorIsLimitedToGraphMaterializationV1(t *testing.T) {
+	python := filepath.Join(t.TempDir(), "kahip-python")
+	if err := os.WriteFile(python, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	adapterSource, err := filepath.Abs(filepath.Join("..", "..", "scripts", "treedb_kahip_partition.py"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := os.ReadFile(adapterSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(t.TempDir(), "kahip.py")
+	if err := os.WriteFile(script, adapter, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := []string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-partition-kahip-python", python, "-partition-kahip-script", script}
+	if runtime.GOOS != "windows" && os.Geteuid() != 0 {
+		t.Run("unreadable_script", func(t *testing.T) {
+			unreadable := filepath.Join(t.TempDir(), "unreadable.py")
+			if err := os.WriteFile(unreadable, adapter, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			args := append([]string(nil), base...)
+			args[len(args)-1] = unreadable
+			args = append(args, "-stage", "partition")
+			if _, err := parseConfig(args); err != nil {
+				t.Fatalf("readable KaHIP adapter rejected: %v", err)
+			}
+			if err := os.Chmod(unreadable, 0); err != nil {
+				t.Fatal(err)
+			}
+			file, err := os.Open(unreadable)
+			if err == nil {
+				_ = file.Close()
+				t.Skip("current credentials can read a mode-000 regular file")
+			}
+			if _, err := parseConfig(args); err == nil {
+				t.Fatal("accepted unreadable KaHIP adapter")
+			}
+		})
+	}
+	for _, stage := range []string{"partition", "overlap,partition_index"} {
+		cfg, err := parseConfig(append(append([]string(nil), base...), "-stage", stage))
+		if err != nil || cfg.kahipPython != python || cfg.kahipScript != script || cfg.kahipSource != string(adapter) || cfg.kahipTimeout != kahipDefaultTimeout {
+			t.Fatalf("stage=%s cfg=%+v err=%v", stage, cfg, err)
+		}
+		if command := kahipAdapterCommand(cfg); len(command) != 3 || command[0] != python || command[1] != "-c" || command[2] != string(adapter) {
+			t.Fatalf("KaHIP command=%q", command)
+		}
+	}
+	for _, args := range [][]string{
+		append(append([]string(nil), base...), "-stage", "simulation"),
+		append(append([]string(nil), base...), "-stage", "partition", "-partition-assignment", partitionAssignmentStableIDHashV1),
+		append(append([]string(nil), base...), "-stage", "partition", "-imbalance", "0.04"),
+		append(append([]string(nil), base...), "-stage", "partition", "-partition-kahip-python", filepath.Join(t.TempDir(), "missing-python")),
+		append(append([]string(nil), base...), "-stage", "partition", "-partition-kahip-script", t.TempDir()),
+		append(append([]string(nil), base...), "-stage", "partition", "-partition-kahip-timeout", "0s"),
+		append(append([]string(nil), base...), "-stage", "partition", "-seed", "2147483648"),
+	} {
+		if _, err := parseConfig(args); err == nil {
+			t.Fatalf("accepted KaHIP outside graph materialization: %#v", args)
+		}
+	}
+	configured, err := parseConfig(append(append([]string(nil), base...), "-stage", "partition", "-partition-kahip-timeout", "45m"))
+	if err != nil || configured.kahipTimeout != 45*time.Minute {
+		t.Fatalf("KaHIP timeout config=%+v err=%v", configured, err)
+	}
+	tampered := filepath.Join(t.TempDir(), "kahip-tampered.py")
+	if err := os.WriteFile(tampered, append(adapter, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := append([]string(nil), base...)
+	args[len(args)-1] = tampered
+	args = append(args, "-stage", "partition")
+	if _, err := parseConfig(args); err == nil {
+		t.Fatal("accepted modified KaHIP adapter")
+	}
+}
+
+func TestKaHIPOutputCapAllowsCanonicalLabelGrowthV1(t *testing.T) {
+	a := vectorpartition.Artifact{IDs: make([]string, 1_000_000)}
+	if got, want := kahipOutputCap(make([]byte, 10), a), 5_001_034; got != want {
+		t.Fatalf("cap=%d want=%d", got, want)
+	}
+}
+
+func TestKaHIPFinalGraphEnvelopePreflightsBeforeBuildV1(t *testing.T) {
+	manifest := fixtureManifest{
+		SchemaVersion: schemaVersion, Fixture: "kahip-envelope", Generator: fixtureGenerator,
+		Arithmetic: fixtureArithmetic, Vectors: 250_001, Queries: 1, Dimensions: 1,
+		Metric: "cosine", Seed: 1, Checksum: strings.Repeat("0", 64),
+	}
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataset := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dataset, "fixture_manifest.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	python := filepath.Join(t.TempDir(), "kahip-python")
+	if err := os.WriteFile(python, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script, err := filepath.Abs(filepath.Join("..", "..", "scripts", "treedb_kahip_partition.py"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = runWithHermeticProvenance(t, []string{
+		"-dataset", dataset, "-out", t.TempDir(), "-stage", "partition", "-partitions", "1",
+		"-partition-degree", "64", "-partition-repetitions", "1",
+		"-partition-kahip-python", python, "-partition-kahip-script", script,
+	}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "KaHIP final directed-edge envelope") {
+		t.Fatalf("over-envelope KaHIP fixture reached build: %v", err)
+	}
+	if err := validateKaHIPFinalGraphEnvelopeV1(250_000, 64); err != nil {
+		t.Fatalf("16M degree-64 KaHIP shape rejected: %v", err)
+	}
+}
+
+func TestKaHIPAdapterRoundTripV1(t *testing.T) {
+	python := os.Getenv("TREEDB_KAHIP_PYTHON")
+	if python == "" {
+		t.Skip("set TREEDB_KAHIP_PYTHON to run the pinned offline KaHIP adapter")
+	}
+	cfg := vectorpartition.DefaultConfig()
+	cfg.Partitions, cfg.Pivots, cfg.MaxLeafBucket, cfg.Degree, cfg.Repetitions, cfg.MaxVectors, cfg.MaxEdges = 2, 2, 2, 2, 1, 16, 32
+	v := []vectorpartition.Vector{{ID: "a", Values: []float64{1, 0}}, {ID: "b", Values: []float64{.99, .01}}, {ID: "c", Values: []float64{0, 1}}, {ID: "d", Values: []float64{.01, .99}}}
+	request, err := vectorpartition.Build(v, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := vectorpartition.CanonicalJSON(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, err := filepath.Abs(filepath.Join("..", "..", "scripts", "treedb_kahip_partition.py"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	got, err := vectorpartition.RunExternalJSONForRequestWithLimits(ctx, []string{python, "-c", string(adapter)}, raw, vectorpartition.ExternalJSONLimits{MaxInput: len(raw), MaxOutput: len(raw) + 1024}, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Backend != "kahip_python_3.25_eco_symmetrized_v1_seed_1" || got.Metrics.MaxPartitionSize > got.Metrics.Cap {
+		t.Fatalf("invalid KaHIP artifact: %+v", got)
+	}
+	wrongRecord := strings.Replace(string(adapter), "RECORD_SHA256 = \"7ff011253147286fcebc9185573662bf31dbcfbab1944f9b4940032f49ea5217\"", "RECORD_SHA256 = \"0000000000000000000000000000000000000000000000000000000000000000\"", 1)
+	if wrongRecord == string(adapter) {
+		t.Fatal("test did not replace pinned KaHIP distribution identity")
+	}
+	badScript := filepath.Join(t.TempDir(), "kahip_wrong_record.py")
+	if err := os.WriteFile(badScript, []byte(wrongRecord), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = vectorpartition.RunExternalJSONForRequestWithLimits(ctx, []string{python, badScript}, raw, vectorpartition.ExternalJSONLimits{MaxInput: len(raw), MaxOutput: len(raw) + 1024}, request)
+	if err == nil || !strings.Contains(err.Error(), "pinned kahip") {
+		t.Fatalf("same-version wrong distribution identity accepted: %v", err)
+	}
+	badPayload := strings.Replace(string(adapter), "payload = distribution.locate_file(path).read_bytes()", "payload = distribution.locate_file(path).read_bytes() + b\"x\"", 1)
+	if badPayload == string(adapter) {
+		t.Fatal("test did not replace KaHIP payload integrity check")
+	}
+	badScript = filepath.Join(t.TempDir(), "kahip_wrong_payload.py")
+	if err := os.WriteFile(badScript, []byte(badPayload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = vectorpartition.RunExternalJSONForRequestWithLimits(ctx, []string{python, badScript}, raw, vectorpartition.ExternalJSONLimits{MaxInput: len(raw), MaxOutput: len(raw) + 1024}, request)
+	if err == nil || !strings.Contains(err.Error(), "payload integrity") {
+		t.Fatalf("tampered installed payload accepted: %v", err)
+	}
+	for _, forgedCase := range []struct {
+		name, want string
+		partitions int
+	}{
+		{"partition_cap", "configuration mismatch", 16_385},
+		{"more_partitions_than_nodes", "invalid graph", len(request.IDs) + 1},
+	} {
+		var forged map[string]any
+		if err := json.Unmarshal(raw, &forged); err != nil {
+			t.Fatal(err)
+		}
+		forged["config"].(map[string]any)["partitions"] = forgedCase.partitions
+		forgedRaw, err := json.Marshal(forged)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input := filepath.Join(t.TempDir(), forgedCase.name+".json")
+		if err := os.WriteFile(input, forgedRaw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		output, err := exec.CommandContext(ctx, python, script, input, filepath.Join(t.TempDir(), "out.json")).CombinedOutput()
+		if err == nil || !bytes.Contains(output, []byte(forgedCase.want)) {
+			t.Fatalf("forged %s request reached KaHIP: err=%v output=%s", forgedCase.name, err, output)
+		}
+	}
+	var forgedSeed map[string]any
+	if err := json.Unmarshal(raw, &forgedSeed); err != nil {
+		t.Fatal(err)
+	}
+	forgedSeed["config"].(map[string]any)["seed"] = int64(2_147_483_648)
+	forgedRaw, err := json.Marshal(forgedSeed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := filepath.Join(t.TempDir(), "seed_out_of_range.json")
+	if err := os.WriteFile(input, forgedRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.CommandContext(ctx, python, script, input, filepath.Join(t.TempDir(), "out.json")).CombinedOutput()
+	if err == nil || !bytes.Contains(output, []byte("configuration mismatch")) {
+		t.Fatalf("out-of-range KaHIP seed reached native call: err=%v output=%s", err, output)
+	}
+	shadowDir := t.TempDir()
+	shadowMarker := filepath.Join(shadowDir, "loaded")
+	if err := os.WriteFile(filepath.Join(shadowDir, "kahip.py"), []byte("open(__import__('os').environ['KAHIP_SHADOW_MARKER'], 'w').write('loaded')\nraise RuntimeError('shadow imported')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PYTHONPATH", shadowDir)
+	t.Setenv("KAHIP_SHADOW_MARKER", shadowMarker)
+	got, err = vectorpartition.RunExternalJSONForRequestWithLimits(ctx, []string{python, script}, raw, vectorpartition.ExternalJSONLimits{MaxInput: len(raw), MaxOutput: len(raw) + 1024}, request)
+	if err != nil || got.Backend != "kahip_python_3.25_eco_symmetrized_v1_seed_1" {
+		t.Fatalf("verified KaHIP adapter failed with shadow module: artifact=%+v err=%v", got, err)
+	}
+	if _, err := os.Stat(shadowMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("shadow kahip module was imported: %v", err)
 	}
 }
 

@@ -38,6 +38,12 @@ const (
 	maxVectors                              = 1_000_000
 	maxDimensions                           = 4_096
 	maxPartitions                           = 16_384
+	kahipMaxDirectedEdges             int64 = 16_000_000
+	kahipAdapterMaxBytes                    = 64 << 10
+	kahipAdapterSHA256                      = "ae4ca8f5f26bd510a507a0f4ba50adaf1e5514ee9e20340cb9d494aba8f54825"
+	kahipDefaultTimeout                     = 5 * time.Minute
+	kahipMinSeed                      int64 = -1 << 31
+	kahipMaxSeed                      int64 = 1<<31 - 1
 	maxFixtureBytes                   int64 = 4 << 30
 	maxBenchmarkWorkUnits             int64 = 200_000_000
 	maxManifestBytes                  int64 = 64 << 10
@@ -93,6 +99,10 @@ type config struct {
 	m8VariantDBs          []string
 	partitionAssignment   string
 	partitionTruthOracle  bool
+	kahipPython           string
+	kahipScript           string
+	kahipSource           string
+	kahipTimeout          time.Duration
 	partition             vectorpartition.Config
 	partitionHNSWM        int
 	router                *treeDBRepresentativeRouter
@@ -117,6 +127,21 @@ type config struct {
 	m3MaxBenchmarkVisits  int64
 	m8CoordinatorLimits   nativewire.VectorPartitionCoordinatorLimitsV1
 	m8ShardLimits         nativewire.VectorPartitionShardSearchLimitsV1
+}
+
+type kahipRequestPartitioner struct{}
+
+func (kahipRequestPartitioner) Name() string    { return "kahip_request_seed_v1" }
+func (kahipRequestPartitioner) License() string { return "request-only" }
+func (kahipRequestPartitioner) Partition(g vectorpartition.Graph, parts, cap int) ([]int, error) {
+	if parts < 1 || cap < 1 || len(g.Neighbors) < parts {
+		return nil, errors.New("invalid KaHIP request shape")
+	}
+	out := make([]int, len(g.Neighbors))
+	for i := range out {
+		out[i] = i % parts
+	}
+	return out, nil
 }
 
 type partitionRun struct {
@@ -527,6 +552,11 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 	if err != nil {
 		return err
 	}
+	if cfg.kahipPython != "" {
+		if err := validateKaHIPSeedV1(fixture.Seed); err != nil {
+			return err
+		}
+	}
 	if cfg.partitions > fixture.Vectors {
 		return errors.New("partitions cannot exceed fixture vectors")
 	}
@@ -554,8 +584,17 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		// graph controls. Simulation probes, stage selection, and simulation
 		// memory planning are intentionally irrelevant here; M3 separately
 		// consumes explicit overlap ratios, queries, and top-k.
-		if err := vectorpartition.ValidateReferenceInputShape(cfg.partition, fixture.Vectors, fixture.Dimensions); err != nil {
+		validateShape := vectorpartition.ValidateReferenceInputShape
+		if cfg.kahipPython != "" {
+			validateShape = vectorpartition.ValidateInputShape
+		}
+		if err := validateShape(cfg.partition, fixture.Vectors, fixture.Dimensions); err != nil {
 			return err
+		}
+		if cfg.kahipPython != "" {
+			if err := validateKaHIPFinalGraphEnvelopeV1(fixture.Vectors, cfg.partition.Degree); err != nil {
+				return err
+			}
 		}
 		// The artifact's Source.Checksum is computed over these generated vectors
 		// by BuildWithPartitioner. The manifest checksum additionally commits the
@@ -684,6 +723,7 @@ func parseConfig(args []string) (config, error) {
 		format: "json", topK: 10, recallTarget: .9, seed: 1, stage: "simulation",
 		warmup:              1,
 		partitionAssignment: partitionAssignmentGraphV1,
+		kahipTimeout:        kahipDefaultTimeout,
 		partition:           vectorpartition.DefaultConfig(), routerConfig: vectorpartition.DefaultRouterConfigV1(),
 		routerCandidates: 1024, sourceHNSWDegree: partitionHNSWDegree,
 		m8MaxRSSBytes: uint64(maxFixtureBytes), m8MaxAssetBytes: uint64(maxFixtureBytes), m8MaxExactTruthVisits: maxBenchmarkWorkUnits,
@@ -724,6 +764,9 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.m8TruthCacheSHA256, "m8-truth-cache-sha256", "", "independently trusted SHA-256 of the canonical truth-cache artifact required for cache reuse")
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
 	fs.BoolVar(&cfg.partitionTruthOracle, "partition-truth-oracle", false, "emit exact truth primary-partition coverage diagnostic for -stage partition")
+	fs.StringVar(&cfg.kahipPython, "partition-kahip-python", "", "trusted local offline Python for KaHIP 3.25 partition/M3 build stages; never used online; adapter is scripts/treedb_kahip_partition.py")
+	fs.StringVar(&cfg.kahipScript, "partition-kahip-script", "", "explicit offline KaHIP adapter script path required with -partition-kahip-python")
+	fs.DurationVar(&cfg.kahipTimeout, "partition-kahip-timeout", cfg.kahipTimeout, "positive offline KaHIP execution timeout")
 	fs.IntVar(&cfg.partition.Repetitions, "partition-repetitions", cfg.partition.Repetitions, "dense-ball graph sketch repetitions")
 	fs.Int64Var(&cfg.partition.MaxDistanceWork, "partition-max-distance-work", cfg.partition.MaxDistanceWork, "explicit reference graph scalar-work bound")
 	fs.Int64Var(&cfg.partition.MaxPartitionWork, "partition-max-partition-work", cfg.partition.MaxPartitionWork, "qualification-only reference partition work bound; default remains conservative")
@@ -862,6 +905,61 @@ func parseConfig(args []string) (config, error) {
 	if cfg.partitionAssignment != partitionAssignmentGraphV1 && cfg.partitionAssignment != partitionAssignmentStableIDHashV1 {
 		return config{}, errors.New("-partition-assignment must be graph or stable_id_hash")
 	}
+	if cfg.kahipPython != "" && ((cfg.stage != "partition" && cfg.stage != "overlap,partition_index") || cfg.partitionAssignment != partitionAssignmentGraphV1) {
+		return config{}, errors.New("-partition-kahip-python requires partition or overlap,partition_index stage with graph assignment")
+	}
+	if cfg.kahipPython != "" && cfg.partition.Imbalance != 0.05 {
+		return config{}, errors.New("-partition-kahip-python requires -imbalance 0.05")
+	}
+	if (cfg.kahipPython == "") != (cfg.kahipScript == "") {
+		return config{}, errors.New("-partition-kahip-python and -partition-kahip-script must be provided together")
+	}
+	if cfg.kahipPython != "" && cfg.kahipTimeout <= 0 {
+		return config{}, errors.New("-partition-kahip-timeout must be positive")
+	}
+	if cfg.kahipPython != "" {
+		if err := validateKaHIPSeedV1(cfg.seed); err != nil {
+			return config{}, err
+		}
+	}
+	if cfg.kahipPython != "" {
+		python, err := exec.LookPath(cfg.kahipPython)
+		if err != nil {
+			return config{}, fmt.Errorf("-partition-kahip-python: %w", err)
+		}
+		if cfg.kahipPython, err = filepath.Abs(python); err != nil {
+			return config{}, fmt.Errorf("-partition-kahip-python: %w", err)
+		}
+		script, err := filepath.Abs(cfg.kahipScript)
+		if err != nil {
+			return config{}, fmt.Errorf("-partition-kahip-script: %w", err)
+		}
+		info, err := os.Stat(script)
+		if err != nil || !info.Mode().IsRegular() {
+			return config{}, errors.New("-partition-kahip-script must be a regular file")
+		}
+		file, err := os.Open(script)
+		if err != nil {
+			return config{}, fmt.Errorf("-partition-kahip-script: %w", err)
+		}
+		scriptBytes, readErr := io.ReadAll(io.LimitReader(file, kahipAdapterMaxBytes+1))
+		closeErr := file.Close()
+		if readErr != nil {
+			return config{}, fmt.Errorf("-partition-kahip-script: %w", readErr)
+		}
+		if closeErr != nil {
+			return config{}, fmt.Errorf("-partition-kahip-script: %w", closeErr)
+		}
+		if len(scriptBytes) > kahipAdapterMaxBytes {
+			return config{}, fmt.Errorf("-partition-kahip-script exceeds %d-byte cap", kahipAdapterMaxBytes)
+		}
+		sum := sha256.Sum256(scriptBytes)
+		if hex.EncodeToString(sum[:]) != kahipAdapterSHA256 {
+			return config{}, errors.New("-partition-kahip-script does not match the pinned adapter")
+		}
+		cfg.kahipScript = script
+		cfg.kahipSource = string(scriptBytes)
+	}
 	if cfg.partitionAssignment != partitionAssignmentGraphV1 && cfg.stage != "partition" && cfg.stage != "overlap,partition_index" {
 		return config{}, errors.New("-partition-assignment applies only to partition and overlap,partition_index stages")
 	}
@@ -933,9 +1031,26 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][
 		input[i] = vectorpartition.Vector{ID: fmt.Sprintf("doc-%06d", i), Values: values}
 	}
 	started := time.Now()
-	artifact, err := vectorpartition.BuildWithPartitioner(input, cfg.partition, vectorpartition.Source{SourceID: "m0_fixture:" + fixture.Checksum}, vectorpartition.ReferencePartitioner{})
+	backend := vectorpartition.Partitioner(vectorpartition.ReferencePartitioner{})
+	if cfg.kahipPython != "" {
+		backend = kahipRequestPartitioner{}
+	}
+	artifact, err := vectorpartition.BuildWithPartitioner(input, cfg.partition, vectorpartition.Source{SourceID: "m0_fixture:" + fixture.Checksum}, backend)
 	if err != nil {
 		return fmt.Errorf("build validated vector partition artifact: %w", err)
+	}
+	if cfg.kahipPython != "" {
+		request := artifact
+		input, err := vectorpartition.CanonicalJSON(request)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.kahipTimeout)
+		defer cancel()
+		artifact, err = vectorpartition.RunExternalJSONForRequestWithLimits(ctx, kahipAdapterCommand(cfg), input, vectorpartition.ExternalJSONLimits{MaxInput: len(input), MaxOutput: kahipOutputCap(input, request)}, request)
+		if err != nil {
+			return fmt.Errorf("KaHIP 3.25 offline partition: %w", err)
+		}
 	}
 	graphArtifactDigest, err := vectorpartition.Digest(artifact)
 	if err != nil {
@@ -1005,6 +1120,31 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][
 	}
 	_, err = fmt.Fprintf(stdout, "partition artifact=%s edges=%d cut=%d cap=%d\n", path, artifact.Metrics.GraphEdges, artifact.Metrics.EdgeCut, artifact.Metrics.Cap)
 	return err
+}
+
+func kahipOutputCap(input []byte, a vectorpartition.Artifact) int {
+	// Each canonical JSON assignment label may grow from one digit to five
+	// (partitions are capped at 16384); reserve a small fixed metadata delta.
+	return len(input) + len(a.IDs)*5 + 1024
+}
+
+func kahipAdapterCommand(cfg config) []string {
+	return []string{cfg.kahipPython, "-c", cfg.kahipSource}
+}
+
+func validateKaHIPFinalGraphEnvelopeV1(vectors, degree int) error {
+	directedEdges, err := memoryMul(int64(vectors), int64(degree))
+	if err != nil || directedEdges > kahipMaxDirectedEdges {
+		return fmt.Errorf("KaHIP final directed-edge envelope exceeds %d", kahipMaxDirectedEdges)
+	}
+	return nil
+}
+
+func validateKaHIPSeedV1(seed int64) error {
+	if seed < kahipMinSeed || seed > kahipMaxSeed {
+		return fmt.Errorf("KaHIP seed must be in [%d,%d]", kahipMinSeed, kahipMaxSeed)
+	}
+	return nil
 }
 
 func partitionTruthOracleForArtifactV1(vectors, queries [][]float64, assignment []int, graph [][]int, partitions, topK int) (partitionTruthOracleV1, error) {
