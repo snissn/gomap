@@ -280,8 +280,8 @@ func TestM8MembershipOracleCombinationBoundIsPreflightedV1(t *testing.T) {
 		t.Fatalf("primary-home oracle work escaped aggregate cap: %v", err)
 	}
 	cfg = config{partitions: 16, overlaps: []float64{0}, probes: []int{16}, efSearch: []int{64}, concurrency: []int{1}, topK: 256, m8MaxExactTruthVisits: math.MaxInt64}
-	if _, err := validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 256, Queries: 30_000, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64); err == nil || !strings.Contains(err.Error(), "final-membership pair diagnostics") {
-		t.Fatalf("final-membership pair diagnostics escaped aggregate cap: %v", err)
+	if _, err := validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 256, Queries: 30_000, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64); err == nil || !strings.Contains(err.Error(), "final-membership diagnostics") {
+		t.Fatalf("final-membership diagnostics escaped aggregate cap: %v", err)
 	}
 }
 
@@ -1572,7 +1572,7 @@ func TestM8BenchmarkWorkCapAndOverflowV1(t *testing.T) {
 	if err != nil || plan.QueryRequests != 109 || plan.MeasuredQueryRequests != 40 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 65 {
 		t.Fatalf("M8 work plan=%+v err=%v", plan, err)
 	}
-	if plan.FinalMembershipPairComparisons != 40 || plan.RetainedCoordinatorCells != 8 || plan.RetainedCoordinatorResults != 80 || plan.CurrentCellOutcomes != 5 || plan.CurrentCellOutcomeBytes == 0 || plan.FixtureResidentBytes == 0 || plan.SourceSnapshotBytes == 0 || plan.ExactTruthBytes == 0 || plan.RetainedCoordinatorBytes == 0 || plan.RetainedAttributionMatrices != 5 || plan.RetainedAttributionResults != 50 || plan.RetainedAttributionBytes == 0 || plan.AttributionMergeScratchResults != 16 || plan.AttributionMergeScratchBytes == 0 || plan.ModeledPeakBytes == 0 {
+	if plan.FinalMembershipLinearScans != 40 || plan.FinalMembershipPairComparisons != 40 || plan.RetainedCoordinatorCells != 8 || plan.RetainedCoordinatorResults != 80 || plan.CurrentCellOutcomes != 5 || plan.CurrentCellOutcomeBytes == 0 || plan.FixtureResidentBytes == 0 || plan.SourceSnapshotBytes == 0 || plan.ExactTruthBytes == 0 || plan.RetainedCoordinatorBytes == 0 || plan.RetainedAttributionMatrices != 5 || plan.RetainedAttributionResults != 50 || plan.RetainedAttributionBytes == 0 || plan.AttributionMergeScratchResults != 16 || plan.AttributionMergeScratchBytes == 0 || plan.ModeledPeakBytes == 0 {
 		t.Fatalf("incomplete M8 memory plan=%+v", plan)
 	}
 	if _, err := validateM8BenchmarkWork(cfg, manifest, 324, math.MaxInt64); err == nil {
@@ -1583,6 +1583,18 @@ func TestM8BenchmarkWorkCapAndOverflowV1(t *testing.T) {
 	}
 	if _, err := validateM8BenchmarkWork(config{partitions: 1, overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}, fixtureManifest{Vectors: 1, Queries: math.MaxInt, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64); err == nil {
 		t.Fatal("accepted overflowing M8 preflight accounting")
+	}
+}
+
+func TestM8FinalMembershipLinearScansArePreflightedV1(t *testing.T) {
+	efSearch := make([]int, 100)
+	for i := range efSearch {
+		efSearch[i] = 64
+	}
+	cfg := config{partitions: 16, overlaps: []float64{.2}, probes: []int{1}, efSearch: efSearch, concurrency: []int{1}, topK: 1, m8ExistingDB: "/retained/overlap", m8MaxExactTruthVisits: math.MaxInt64}
+	_, err := validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 1, Queries: 200_000, Dimensions: 1}, 300_000_000, math.MaxInt64)
+	if err == nil || !strings.Contains(err.Error(), "linear_membership_scans=340000000") {
+		t.Fatalf("accepted uncharged final-membership scans: %v", err)
 	}
 }
 
@@ -1601,14 +1613,14 @@ func TestM8UnsupportedOverlapSkipsMeasuredAndAttributionWorkV1(t *testing.T) {
 func TestM8RetainedOverlapCountsMeasuredAndAttributionWorkV1(t *testing.T) {
 	cfg := config{partitions: 4, overlaps: []float64{.2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3, topK: 2, m8ExistingDB: "/retained/overlap"}
 	manifest := fixtureManifest{Vectors: 10, Queries: 5, Dimensions: 8}
-	plan, err := validateM8BenchmarkWork(cfg, manifest, 680, math.MaxInt64)
+	plan, err := validateM8BenchmarkWork(cfg, manifest, 1360, math.MaxInt64)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.QueryRequests != 109 || plan.MeasuredQueryRequests != 40 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 65 || plan.FinalMembershipPairComparisons != 680 {
+	if plan.QueryRequests != 109 || plan.MeasuredQueryRequests != 40 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 65 || plan.FinalMembershipLinearScans != 680 || plan.FinalMembershipPairComparisons != 680 {
 		t.Fatalf("retained-overlap M8 work plan=%+v", plan)
 	}
-	if _, err := validateM8BenchmarkWork(cfg, manifest, 679, math.MaxInt64); err == nil {
+	if _, err := validateM8BenchmarkWork(cfg, manifest, 1359, math.MaxInt64); err == nil {
 		t.Fatal("accepted retained overlap above complete work cap")
 	}
 }
@@ -1631,8 +1643,8 @@ func TestM8VariantMatrixCountsCompleteChildWorkAndOneChildPeakV1(t *testing.T) {
 	if matrix.ExactWorkVectorVisits != single.ExactWorkVectorVisits*3 {
 		t.Fatalf("matrix exact scans=%d single=%d", matrix.ExactWorkVectorVisits, single.ExactWorkVectorVisits)
 	}
-	if single.FinalMembershipPairComparisons != 40 || matrix.FinalMembershipPairComparisons != 2040 {
-		t.Fatalf("matrix final-membership comparisons=%d single=%d", matrix.FinalMembershipPairComparisons, single.FinalMembershipPairComparisons)
+	if single.FinalMembershipLinearScans != 40 || single.FinalMembershipPairComparisons != 40 || matrix.FinalMembershipLinearScans != 2040 || matrix.FinalMembershipPairComparisons != 2040 {
+		t.Fatalf("matrix final-membership diagnostics=%+v single=%+v", matrix, single)
 	}
 	if matrix.RetainedCoordinatorCells != single.RetainedCoordinatorCells || matrix.RetainedCoordinatorResults != single.RetainedCoordinatorResults || matrix.RetainedAttributionResults != single.RetainedAttributionResults || matrix.ModeledPeakBytes != single.ModeledPeakBytes {
 		t.Fatalf("matrix peak inflated matrix=%+v single=%+v", matrix, single)

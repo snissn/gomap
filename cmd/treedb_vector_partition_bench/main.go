@@ -1542,6 +1542,7 @@ type m8BenchmarkWorkPlan struct {
 	MaxMembershipOracleSubsets        int64
 	MembershipOracleSubsetEvaluations int64
 	MembershipOracleWorkUnits         int64
+	FinalMembershipLinearScans        int64
 	FinalMembershipPairComparisons    int64
 	QueryRequests                     int64
 	RetainedCoordinatorCells          int64
@@ -1665,12 +1666,20 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
+	plan.FinalMembershipLinearScans, err = memoryMul(int64(m.Queries), int64(cfg.topK), attributionCells, maxFinalMemberships)
+	if err != nil {
+		return plan, err
+	}
 	plan.FinalMembershipPairComparisons, err = memoryMul(int64(m.Queries), truthPairs, attributionCells, 2*maxFinalMemberships)
 	if err != nil {
 		return plan, err
 	}
-	if plan.FinalMembershipPairComparisons > capUnits {
-		return plan, fmt.Errorf("modeled M8 final-membership pair diagnostics exceed %d-comparison cap: truth_pairs_per_query=%d attribution_cells=%d max_memberships_per_truth_result=%d comparisons=%d", capUnits, truthPairs, attributionCells, maxFinalMemberships, plan.FinalMembershipPairComparisons)
+	finalMembershipWork, err := memoryAdd(plan.FinalMembershipLinearScans, plan.FinalMembershipPairComparisons)
+	if err != nil {
+		return plan, err
+	}
+	if finalMembershipWork > capUnits {
+		return plan, fmt.Errorf("modeled M8 final-membership diagnostics exceed %d-operation cap: truth_results_per_query=%d truth_pairs_per_query=%d attribution_cells=%d max_memberships_per_truth_result=%d linear_membership_scans=%d pair_comparisons=%d total=%d", capUnits, cfg.topK, truthPairs, attributionCells, maxFinalMemberships, plan.FinalMembershipLinearScans, plan.FinalMembershipPairComparisons, finalMembershipWork)
 	}
 	plan.MembershipOracleSubsetEvaluations, err = memoryMul(membershipOracleSubsetsPerSweep, int64(m.Queries), supportedOverlaps, variantRuns)
 	if err != nil {
