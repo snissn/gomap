@@ -764,7 +764,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.m8TruthCacheSHA256, "m8-truth-cache-sha256", "", "independently trusted SHA-256 of the canonical truth-cache artifact required for cache reuse")
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
 	fs.BoolVar(&cfg.partitionTruthOracle, "partition-truth-oracle", false, "emit exact truth primary-partition coverage diagnostic for -stage partition")
-	fs.StringVar(&cfg.kahipPython, "partition-kahip-python", "", "offline KaHIP 3.25 Python executable for partition/M3 build stages; never used online; adapter is scripts/treedb_kahip_partition.py")
+	fs.StringVar(&cfg.kahipPython, "partition-kahip-python", "", "trusted local offline Python for KaHIP 3.25 partition/M3 build stages; never used online; adapter is scripts/treedb_kahip_partition.py")
 	fs.StringVar(&cfg.kahipScript, "partition-kahip-script", "", "explicit offline KaHIP adapter script path required with -partition-kahip-python")
 	fs.DurationVar(&cfg.kahipTimeout, "partition-kahip-timeout", cfg.kahipTimeout, "positive offline KaHIP execution timeout")
 	fs.IntVar(&cfg.partition.Repetitions, "partition-repetitions", cfg.partition.Repetitions, "dense-ball graph sketch repetitions")

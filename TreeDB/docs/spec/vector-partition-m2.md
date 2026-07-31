@@ -85,6 +85,10 @@ never an online dependency. The adapter rejects any distribution version other t
 3.25 or RECORD SHA-256
 `7ff011253147286fcebc9185573662bf31dbcfbab1944f9b4940032f49ea5217`, and requests above the V1 1M-by-degree-16 (16M directed edge)
 envelope, above `16384` partitions, or with more partitions than vectors.
+`-partition-kahip-python` is a trusted local offline execution substrate. V1
+attests the pinned adapter bytes and installed KaHIP RECORD payloads, not the
+Python interpreter, OS, shared-library loader, or container; results from an
+untrusted runtime are outside this evidence contract.
 On the retained 100k embedding-mixture graph
 `5a095727ed0f82815643daddb47bd11a08c9630ede6f9b1d7e7ec427dc8e9937`,
 the reference greedy result was p4 `.8303`, cut `1122051`, load `6521/6563`;
