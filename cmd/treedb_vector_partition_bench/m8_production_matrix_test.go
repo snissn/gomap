@@ -495,7 +495,7 @@ func TestCommitted4023AttributionLedgerArtifactsV1(t *testing.T) {
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.SchemaVersion != 1 || got.Status != "experimental_gate_failures" || got.Disposition != "enablement_off_follow_up_required" || got.MeasuredCodeHead != "adc631f309f23f137f3ca6abf960a6e3ba6621b2" {
+	if got.SchemaVersion != 1 || got.Status != "experimental_gate_failures" || got.Disposition != "enablement_off_follow_up_required" || got.MeasuredCodeHead != "3593fe5f2ea4761eecc7d6319c0b4048a920e695" {
 		t.Fatalf("ledger linkage/schema/status=%+v", got)
 	}
 	if got.Gates["exhaustive_correctness"] != "pass" || got.Gates["probe_reduction"] != "fail" || got.Gates["existing_behavior"] != "pending_latest_head_required_suites" {
