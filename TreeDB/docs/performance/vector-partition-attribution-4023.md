@@ -24,7 +24,7 @@ and SHA-256
 `0e9bce9465c9e1fa70c7833364e88c332bc831cfc52c628c90085e1c3068763c`.
 
 The measured implementation head is
-`3593fe5f2ea4761eecc7d6319c0b4048a920e695`, based on
+`9225c35e5778c14b62bc7087498ddfc7a59323d5`, based on
 `765616d3d20e5fa612376711fd9628e3d8f7c9ee`. Exact M3 and M8 commands are
 embedded in the retained JSON artifacts.
 
