@@ -81,7 +81,7 @@ ECO mode, single OpenMP worker, seed from the validated request, epsilon .05,
 and an unweighted symmetrized copy of the directed graph. It is invoked only
 through an explicit `-partition-kahip-script` path (normally
 `scripts/treedb_kahip_partition.py`) and the bound external JSON seam; it is
-never an online dependency. The adapter rejects any module version other than
+never an online dependency. The adapter rejects any distribution version other than
 3.25 or RECORD SHA-256
 `7ff011253147286fcebc9185573662bf31dbcfbab1944f9b4940032f49ea5217`, and requests above the V1 1M-by-degree-16 (16M directed edge)
 envelope, above `16384` partitions, or with more partitions than vectors.

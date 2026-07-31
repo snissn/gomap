@@ -1618,6 +1618,20 @@ func TestKaHIPAdapterRoundTripV1(t *testing.T) {
 			t.Fatalf("forged %s request reached KaHIP: err=%v output=%s", forgedCase.name, err, output)
 		}
 	}
+	shadowDir := t.TempDir()
+	shadowMarker := filepath.Join(shadowDir, "loaded")
+	if err := os.WriteFile(filepath.Join(shadowDir, "kahip.py"), []byte("open(__import__('os').environ['KAHIP_SHADOW_MARKER'], 'w').write('loaded')\nraise RuntimeError('shadow imported')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PYTHONPATH", shadowDir)
+	t.Setenv("KAHIP_SHADOW_MARKER", shadowMarker)
+	got, err = vectorpartition.RunExternalJSONForRequestWithLimits(ctx, []string{python, script}, raw, vectorpartition.ExternalJSONLimits{MaxInput: len(raw), MaxOutput: len(raw) + 1024}, request)
+	if err != nil || got.Backend != "kahip_python_3.25_eco_symmetrized_v1_seed_1" {
+		t.Fatalf("verified KaHIP adapter failed with shadow module: artifact=%+v err=%v", got, err)
+	}
+	if _, err := os.Stat(shadowMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("shadow kahip module was imported: %v", err)
+	}
 }
 
 func TestPartitionLocalHNSWMIsIndependentAndM3OnlyV1(t *testing.T) {

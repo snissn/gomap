@@ -4,8 +4,8 @@
 import base64
 import csv
 import hashlib
-import importlib
 import importlib.metadata
+import importlib.util
 import json
 import os
 import sys
@@ -29,6 +29,7 @@ def pinned_kahip():
         or record_hash != RECORD_SHA256
     ):
         raise SystemExit("requires pinned kahip==3.25 MIT distribution")
+    extension_path = None
     for path, digest, size in csv.reader(record_bytes.decode("utf-8").splitlines()):
         if not digest:
             continue
@@ -39,15 +40,21 @@ def pinned_kahip():
         expected = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
         if len(payload) != int(size) or hashlib.sha256(payload).digest() != expected:
             raise SystemExit("KaHIP RECORD payload integrity mismatch")
+        if str(path).startswith("kahip/kahip."):
+            extension_path = distribution.locate_file(path)
+    if extension_path is None:
+        raise SystemExit("pinned KaHIP native extension is missing")
+    return extension_path
 
 
 if len(sys.argv) != 3:
     raise SystemExit("usage: treedb_kahip_partition.py INPUT OUTPUT")
-pinned_kahip()
-kahip = importlib.import_module("kahip")
-
-if kahip.__version__ != "3.25":
-    raise SystemExit("requires pinned kahip==3.25 MIT distribution")
+extension_path = pinned_kahip()
+spec = importlib.util.spec_from_file_location("kahip.kahip", extension_path)
+if spec is None or spec.loader is None:
+    raise SystemExit("pinned KaHIP native extension is invalid")
+kahip = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(kahip)
 with open(sys.argv[1], encoding="utf-8") as input_file:
     artifact = json.load(input_file)
 config = artifact["config"]
@@ -90,7 +97,7 @@ _, assignment = kahip.kaffpa(
     config["imbalance"],
     False,
     config["seed"],
-    kahip.ECO,
+    1,  # KaHIP ECO mode
 )
 if len(assignment) != nodes or any(not isinstance(partition, int) or partition < 0 or partition >= partitions for partition in assignment):
     raise SystemExit("invalid KaHIP assignment")
