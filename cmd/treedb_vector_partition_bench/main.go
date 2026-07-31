@@ -38,6 +38,7 @@ const (
 	maxVectors                              = 1_000_000
 	maxDimensions                           = 4_096
 	maxPartitions                           = 16_384
+	kahipMaxDirectedEdges             int64 = 16_000_000
 	maxFixtureBytes                   int64 = 4 << 30
 	maxBenchmarkWorkUnits             int64 = 200_000_000
 	maxManifestBytes                  int64 = 64 << 10
@@ -578,6 +579,11 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		if err := validateShape(cfg.partition, fixture.Vectors, fixture.Dimensions); err != nil {
 			return err
 		}
+		if cfg.kahipPython != "" {
+			if err := validateKaHIPFinalGraphEnvelopeV1(fixture.Vectors, cfg.partition.Degree); err != nil {
+				return err
+			}
+		}
 		// The artifact's Source.Checksum is computed over these generated vectors
 		// by BuildWithPartitioner. The manifest checksum additionally commits the
 		// simulation-only query/truth stream, so verifying it here would recreate
@@ -1078,6 +1084,14 @@ func kahipOutputCap(input []byte, a vectorpartition.Artifact) int {
 	// Each canonical JSON assignment label may grow from one digit to five
 	// (partitions are capped at 16384); reserve a small fixed metadata delta.
 	return len(input) + len(a.IDs)*5 + 1024
+}
+
+func validateKaHIPFinalGraphEnvelopeV1(vectors, degree int) error {
+	directedEdges, err := memoryMul(int64(vectors), int64(degree))
+	if err != nil || directedEdges > kahipMaxDirectedEdges {
+		return fmt.Errorf("KaHIP final directed-edge envelope exceeds %d", kahipMaxDirectedEdges)
+	}
+	return nil
 }
 
 func partitionTruthOracleForArtifactV1(vectors, queries [][]float64, assignment []int, graph [][]int, partitions, topK int) (partitionTruthOracleV1, error) {

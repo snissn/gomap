@@ -1546,6 +1546,41 @@ func TestKaHIPOutputCapAllowsCanonicalLabelGrowthV1(t *testing.T) {
 	}
 }
 
+func TestKaHIPFinalGraphEnvelopePreflightsBeforeBuildV1(t *testing.T) {
+	manifest := fixtureManifest{
+		SchemaVersion: schemaVersion, Fixture: "kahip-envelope", Generator: fixtureGenerator,
+		Arithmetic: fixtureArithmetic, Vectors: 250_001, Queries: 1, Dimensions: 1,
+		Metric: "cosine", Seed: 1, Checksum: strings.Repeat("0", 64),
+	}
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataset := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dataset, "fixture_manifest.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	python := filepath.Join(t.TempDir(), "kahip-python")
+	if err := os.WriteFile(python, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(t.TempDir(), "kahip.py")
+	if err := os.WriteFile(script, []byte("# adapter\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = runWithHermeticProvenance(t, []string{
+		"-dataset", dataset, "-out", t.TempDir(), "-stage", "partition", "-partitions", "1",
+		"-partition-degree", "64", "-partition-repetitions", "1",
+		"-partition-kahip-python", python, "-partition-kahip-script", script,
+	}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "KaHIP final directed-edge envelope") {
+		t.Fatalf("over-envelope KaHIP fixture reached build: %v", err)
+	}
+	if err := validateKaHIPFinalGraphEnvelopeV1(250_000, 64); err != nil {
+		t.Fatalf("16M degree-64 KaHIP shape rejected: %v", err)
+	}
+}
+
 func TestKaHIPAdapterRoundTripV1(t *testing.T) {
 	python := os.Getenv("TREEDB_KAHIP_PYTHON")
 	if python == "" {
