@@ -49,8 +49,8 @@ malformed output, or success. On Unix it also kills the dedicated process group
 after `Wait`, including when the root exits normally while a same-group child
 holds an inherited pipe. A child that deliberately calls `setsid` escapes that
 OS process-group boundary; the portable Go adapter cannot claim containment of
-such hostile descendants. No external partitioner is currently selected or
-required.
+such hostile descendants. The selected KaHIP backend below is offline only;
+no online external partitioner is selected or required.
 
 ## Reproducible M0 fixture invocation
 

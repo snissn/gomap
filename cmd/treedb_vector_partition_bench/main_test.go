@@ -1521,6 +1521,7 @@ func TestKaHIPOfflineSelectorIsLimitedToGraphMaterializationV1(t *testing.T) {
 	for _, args := range [][]string{
 		append(append([]string(nil), base...), "-stage", "simulation"),
 		append(append([]string(nil), base...), "-stage", "partition", "-partition-assignment", partitionAssignmentStableIDHashV1),
+		append(append([]string(nil), base...), "-stage", "partition", "-imbalance", "0.04"),
 	} {
 		if _, err := parseConfig(args); err == nil {
 			t.Fatalf("accepted KaHIP outside graph materialization: %#v", args)

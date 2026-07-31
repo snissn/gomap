@@ -888,6 +888,9 @@ func parseConfig(args []string) (config, error) {
 	if cfg.kahipPython != "" && ((cfg.stage != "partition" && cfg.stage != "overlap,partition_index") || cfg.partitionAssignment != partitionAssignmentGraphV1) {
 		return config{}, errors.New("-partition-kahip-python requires partition or overlap,partition_index stage with graph assignment")
 	}
+	if cfg.kahipPython != "" && cfg.partition.Imbalance != 0.05 {
+		return config{}, errors.New("-partition-kahip-python requires -imbalance 0.05")
+	}
 	if (cfg.kahipPython == "") != (cfg.kahipScript == "") {
 		return config{}, errors.New("-partition-kahip-python and -partition-kahip-script must be provided together")
 	}
