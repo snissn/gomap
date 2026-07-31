@@ -98,6 +98,7 @@ type config struct {
 	partitionTruthOracle  bool
 	kahipPython           string
 	kahipScript           string
+	kahipSource           string
 	partition             vectorpartition.Config
 	partitionHNSWM        int
 	router                *treeDBRepresentativeRouter
@@ -938,6 +939,7 @@ func parseConfig(args []string) (config, error) {
 			return config{}, errors.New("-partition-kahip-script does not match the pinned adapter")
 		}
 		cfg.kahipScript = script
+		cfg.kahipSource = string(scriptBytes)
 	}
 	if cfg.partitionAssignment != partitionAssignmentGraphV1 && cfg.stage != "partition" && cfg.stage != "overlap,partition_index" {
 		return config{}, errors.New("-partition-assignment applies only to partition and overlap,partition_index stages")
@@ -1026,7 +1028,7 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		artifact, err = vectorpartition.RunExternalJSONForRequestWithLimits(ctx, []string{cfg.kahipPython, cfg.kahipScript}, input, vectorpartition.ExternalJSONLimits{MaxInput: len(input), MaxOutput: kahipOutputCap(input, request)}, request)
+		artifact, err = vectorpartition.RunExternalJSONForRequestWithLimits(ctx, kahipAdapterCommand(cfg), input, vectorpartition.ExternalJSONLimits{MaxInput: len(input), MaxOutput: kahipOutputCap(input, request)}, request)
 		if err != nil {
 			return fmt.Errorf("KaHIP 3.25 offline partition: %w", err)
 		}
@@ -1105,6 +1107,10 @@ func kahipOutputCap(input []byte, a vectorpartition.Artifact) int {
 	// Each canonical JSON assignment label may grow from one digit to five
 	// (partitions are capped at 16384); reserve a small fixed metadata delta.
 	return len(input) + len(a.IDs)*5 + 1024
+}
+
+func kahipAdapterCommand(cfg config) []string {
+	return []string{cfg.kahipPython, "-c", cfg.kahipSource}
 }
 
 func validateKaHIPFinalGraphEnvelopeV1(vectors, degree int) error {

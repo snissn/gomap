@@ -1555,8 +1555,11 @@ func TestKaHIPOfflineSelectorIsLimitedToGraphMaterializationV1(t *testing.T) {
 	}
 	for _, stage := range []string{"partition", "overlap,partition_index"} {
 		cfg, err := parseConfig(append(append([]string(nil), base...), "-stage", stage))
-		if err != nil || cfg.kahipPython != python || cfg.kahipScript != script {
+		if err != nil || cfg.kahipPython != python || cfg.kahipScript != script || cfg.kahipSource != string(adapter) {
 			t.Fatalf("stage=%s cfg=%+v err=%v", stage, cfg, err)
+		}
+		if command := kahipAdapterCommand(cfg); len(command) != 3 || command[0] != python || command[1] != "-c" || command[2] != string(adapter) {
+			t.Fatalf("KaHIP command=%q", command)
 		}
 	}
 	for _, args := range [][]string{
@@ -1644,18 +1647,18 @@ func TestKaHIPAdapterRoundTripV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	adapter, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	got, err := vectorpartition.RunExternalJSONForRequestWithLimits(ctx, []string{python, script}, raw, vectorpartition.ExternalJSONLimits{MaxInput: len(raw), MaxOutput: len(raw) + 1024}, request)
+	got, err := vectorpartition.RunExternalJSONForRequestWithLimits(ctx, []string{python, "-c", string(adapter)}, raw, vectorpartition.ExternalJSONLimits{MaxInput: len(raw), MaxOutput: len(raw) + 1024}, request)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Backend != "kahip_python_3.25_eco_symmetrized_v1_seed_1" || got.Metrics.MaxPartitionSize > got.Metrics.Cap {
 		t.Fatalf("invalid KaHIP artifact: %+v", got)
-	}
-	adapter, err := os.ReadFile(script)
-	if err != nil {
-		t.Fatal(err)
 	}
 	wrongRecord := strings.Replace(string(adapter), "RECORD_SHA256 = \"7ff011253147286fcebc9185573662bf31dbcfbab1944f9b4940032f49ea5217\"", "RECORD_SHA256 = \"0000000000000000000000000000000000000000000000000000000000000000\"", 1)
 	if wrongRecord == string(adapter) {
