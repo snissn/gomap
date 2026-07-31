@@ -4,6 +4,7 @@
 import base64
 import csv
 import hashlib
+import importlib
 import importlib.metadata
 import json
 import os
@@ -43,7 +44,7 @@ def pinned_kahip():
 if len(sys.argv) != 3:
     raise SystemExit("usage: treedb_kahip_partition.py INPUT OUTPUT")
 pinned_kahip()
-import kahip
+kahip = importlib.import_module("kahip")
 
 if kahip.__version__ != "3.25":
     raise SystemExit("requires pinned kahip==3.25 MIT distribution")
