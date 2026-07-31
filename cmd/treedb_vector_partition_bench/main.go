@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/bits"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -517,7 +518,7 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 	if cfg.stage == "partition" {
 		err = validatePartitionFixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes)
 		if err == nil && cfg.partitionTruthOracle {
-			err = validatePartitionTruthOracleWithCaps(fixture, cfg.topK, cfg.maxVectors, maxBenchmarkWorkUnits, cfg.maxBytes)
+			err = validatePartitionTruthOracleWithCaps(fixture, cfg.topK, cfg.partition.Degree, cfg.maxVectors, maxBenchmarkWorkUnits, cfg.maxBytes)
 		}
 	} else if cfg.stage == "overlap,partition_index" || cfg.stage == m6CoordinatorStageV1 || cfg.stage == m8ProductionMultiGroupModeV1 {
 		err = validateM3FixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes)
@@ -1083,7 +1084,8 @@ func partitionTruthOracleForArtifactV1(vectors, queries [][]float64, assignment 
 		anchor := truth[0].Ordinal
 		for rank := 1; rank < len(truth); rank++ {
 			neighbor := truth[rank].Ordinal
-			if slices.Contains(graph[anchor], neighbor) {
+			neighbors := graph[anchor]
+			if at := sort.SearchInts(neighbors, neighbor); at < len(neighbors) && neighbors[at] == neighbor {
 				graphTruthRankHits[rank-1]++
 				if assignment[anchor] == assignment[neighbor] {
 					retainedGraphTruthRankHits[rank-1]++
@@ -1382,24 +1384,39 @@ func validatePartitionFixtureWithCaps(m fixtureManifest, capVectors int, capByte
 	return nil
 }
 
-// validatePartitionTruthOracleWithCaps preflights the query matrix and the
-// corpus-by-query exact scan that partition-only mode otherwise deliberately
-// avoids. It must run before deterministicFixture allocates either matrix.
-func validatePartitionTruthOracleWithCaps(m fixtureManifest, topK, capVectors int, capWork, capBytes int64) error {
+// validatePartitionTruthOracleWithCaps preflights the query matrix, exact scan,
+// and bounded binary searches over canonical graph rows. It must run before
+// deterministicFixture allocates either matrix.
+func validatePartitionTruthOracleWithCaps(m fixtureManifest, topK, graphDegree, capVectors int, capWork, capBytes int64) error {
 	if topK < 1 || topK > m.Vectors {
 		return errors.New("partition truth oracle top-k must be positive and cannot exceed fixture vectors")
 	}
 	if err := validateM3FixtureWithCaps(m, capVectors, capBytes); err != nil {
 		return fmt.Errorf("partition truth oracle fixture: %w", err)
 	}
-	work, err := memoryMul(int64(m.Vectors), int64(m.Queries))
+	exactWork, err := memoryMul(int64(m.Vectors), int64(m.Queries))
+	if err != nil {
+		return fmt.Errorf("partition truth oracle work: %w", err)
+	}
+	adjacencyWork, err := partitionTruthAdjacencyComparisons(m.Queries, topK, graphDegree)
+	if err != nil {
+		return fmt.Errorf("partition truth oracle work: %w", err)
+	}
+	work, err := memoryAdd(exactWork, adjacencyWork)
 	if err != nil {
 		return fmt.Errorf("partition truth oracle work: %w", err)
 	}
 	if capWork < 1 || work > capWork {
-		return fmt.Errorf("partition truth oracle exact scan exceeds %d-unit cap: vector_query_pairs=%d", capWork, work)
+		return fmt.Errorf("partition truth oracle exceeds %d-unit cap: exact_vector_query_pairs=%d adjacency_comparisons=%d total=%d", capWork, exactWork, adjacencyWork, work)
 	}
 	return nil
+}
+
+func partitionTruthAdjacencyComparisons(queries, topK, graphDegree int) (int64, error) {
+	if queries < 1 || topK < 1 || graphDegree < 1 {
+		return 0, errors.New("invalid partition truth adjacency work input")
+	}
+	return memoryMul(int64(queries), int64(topK-1), int64(bits.Len(uint(graphDegree))))
 }
 
 // validateM3FixtureWithCaps permits the declared 1M-vector corpus plus a
@@ -1441,6 +1458,7 @@ type benchmarkWorkPlan struct {
 type m3BenchmarkWorkPlan struct {
 	ChecksumVectorQueryVisits   int64
 	MembershipVectorQueryVisits int64
+	TruthAdjacencyComparisons   int64
 	VectorQueryVisits           int64
 }
 
@@ -1910,18 +1928,23 @@ func validateM3BenchmarkWork(cfg config, m fixtureManifest, capUnits int64) (m3B
 	if err != nil {
 		return m3BenchmarkWorkPlan{}, err
 	}
-	totalVisits, err := memoryAdd(checksumVisits, membershipVisits)
+	adjacencyComparisons, err := partitionTruthAdjacencyComparisons(m.Queries, cfg.topK, cfg.partition.Degree)
+	if err != nil {
+		return m3BenchmarkWorkPlan{}, err
+	}
+	totalVisits, err := memoryAdd(checksumVisits, membershipVisits, adjacencyComparisons)
 	if err != nil {
 		return m3BenchmarkWorkPlan{}, err
 	}
 	plan := m3BenchmarkWorkPlan{
 		ChecksumVectorQueryVisits:   checksumVisits,
 		MembershipVectorQueryVisits: membershipVisits,
+		TruthAdjacencyComparisons:   adjacencyComparisons,
 		VectorQueryVisits:           totalVisits,
 	}
 	if totalVisits > capUnits {
-		return plan, fmt.Errorf("modeled M3 benchmark work exceeds %d-unit cap (%s): checksum_visits=%d membership_visits=%d",
-			capUnits, benchmarkWorkScope, checksumVisits, membershipVisits)
+		return plan, fmt.Errorf("modeled M3 benchmark work exceeds %d-unit cap: checksum_visits=%d membership_visits=%d truth_adjacency_comparisons=%d",
+			capUnits, checksumVisits, membershipVisits, adjacencyComparisons)
 	}
 	return plan, nil
 }
