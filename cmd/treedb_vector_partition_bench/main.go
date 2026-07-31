@@ -1542,8 +1542,11 @@ type m8BenchmarkWorkPlan struct {
 	MaxMembershipOracleSubsets        int64
 	MembershipOracleSubsetEvaluations int64
 	MembershipOracleWorkUnits         int64
+	SelectedPartitionSetupWorkUnits   int64
+	AttributionLinearWorkUnits        int64
 	FinalMembershipLinearScans        int64
 	FinalMembershipPairComparisons    int64
+	AttributionDiagnosticWorkUnits    int64
 	QueryRequests                     int64
 	RetainedCoordinatorCells          int64
 	RetainedCoordinatorResults        int64
@@ -1571,8 +1574,14 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	plan := m8BenchmarkWorkPlan{}
 	var membershipOracleSubsetsPerSweep int64
 	var membershipOracleWorkPerQuerySweep int64
+	var probeSum int64
 	truthWords := int64((cfg.topK + 63) / 64)
 	for _, probes := range cfg.probes {
+		nextProbeSum, err := memoryAdd(probeSum, int64(probes))
+		if err != nil {
+			return plan, err
+		}
+		probeSum = nextProbeSum
 		combinations, err := m8MembershipOracleCombinationCountV1(cfg.partitions, probes, maxBenchmarkWorkUnits)
 		if err != nil {
 			return plan, err
@@ -1666,7 +1675,42 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	plan.FinalMembershipLinearScans, err = memoryMul(int64(m.Queries), int64(cfg.topK), attributionCells, maxFinalMemberships)
+	// Every attribution cell builds selected-partition sets twice. The remaining
+	// linear work charges query conversion, result parity/recall, primary-home
+	// truth/count scans, final-membership truth/rank scans, cell setup, and the
+	// coordinator parity pass. The 21 truth-result passes are 1 parity pass,
+	// four 4-pass recall calculations, and two passes in each diagnostic.
+	plan.SelectedPartitionSetupWorkUnits, err = memoryMul(int64(m.Queries), supportedOverlaps, variantRuns, int64(len(cfg.efSearch)), 2, probeSum)
+	if err != nil {
+		return plan, err
+	}
+	queryProjectionWork, err := memoryMul(int64(m.Queries), int64(m.Dimensions), attributionCells)
+	if err != nil {
+		return plan, err
+	}
+	truthResultWork, err := memoryMul(int64(m.Queries), int64(cfg.topK), attributionCells, 21)
+	if err != nil {
+		return plan, err
+	}
+	cellSetupPerCell, err := memoryAdd(int64(cfg.partitions), int64(cfg.topK))
+	if err != nil {
+		return plan, err
+	}
+	cellSetupWork, err := memoryMul(attributionCells, cellSetupPerCell)
+	if err != nil {
+		return plan, err
+	}
+	coordinatorParityWork, err := memoryMul(int64(m.Queries), int64(cfg.topK), supportedOverlaps, variantRuns, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)))
+	if err != nil {
+		return plan, err
+	}
+	plan.AttributionLinearWorkUnits, err = memoryAdd(queryProjectionWork, truthResultWork, cellSetupWork, coordinatorParityWork)
+	if err != nil {
+		return plan, err
+	}
+	// Each final-membership list is first validated as sorted, then visited to
+	// compute coverage. Pair intersections remain a separate two-list bound.
+	plan.FinalMembershipLinearScans, err = memoryMul(int64(m.Queries), int64(cfg.topK), attributionCells, 2*maxFinalMemberships)
 	if err != nil {
 		return plan, err
 	}
@@ -1674,12 +1718,12 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	finalMembershipWork, err := memoryAdd(plan.FinalMembershipLinearScans, plan.FinalMembershipPairComparisons)
+	plan.AttributionDiagnosticWorkUnits, err = memoryAdd(plan.SelectedPartitionSetupWorkUnits, plan.AttributionLinearWorkUnits, plan.FinalMembershipLinearScans, plan.FinalMembershipPairComparisons)
 	if err != nil {
 		return plan, err
 	}
-	if finalMembershipWork > capUnits {
-		return plan, fmt.Errorf("modeled M8 final-membership diagnostics exceed %d-operation cap: truth_results_per_query=%d truth_pairs_per_query=%d attribution_cells=%d max_memberships_per_truth_result=%d linear_membership_scans=%d pair_comparisons=%d total=%d", capUnits, cfg.topK, truthPairs, attributionCells, maxFinalMemberships, plan.FinalMembershipLinearScans, plan.FinalMembershipPairComparisons, finalMembershipWork)
+	if plan.AttributionDiagnosticWorkUnits > capUnits {
+		return plan, fmt.Errorf("modeled M8 attribution diagnostics exceed %d-operation cap: truth_results_per_query=%d truth_pairs_per_query=%d attribution_cells=%d max_memberships_per_truth_result=%d selected_partition_setup=%d linear_bookkeeping=%d linear_membership_scans=%d pair_comparisons=%d total=%d", capUnits, cfg.topK, truthPairs, attributionCells, maxFinalMemberships, plan.SelectedPartitionSetupWorkUnits, plan.AttributionLinearWorkUnits, plan.FinalMembershipLinearScans, plan.FinalMembershipPairComparisons, plan.AttributionDiagnosticWorkUnits)
 	}
 	plan.MembershipOracleSubsetEvaluations, err = memoryMul(membershipOracleSubsetsPerSweep, int64(m.Queries), supportedOverlaps, variantRuns)
 	if err != nil {
