@@ -93,6 +93,7 @@ type config struct {
 	m8VariantDBs          []string
 	partitionAssignment   string
 	partitionTruthOracle  bool
+	kahipPython           string
 	partition             vectorpartition.Config
 	partitionHNSWM        int
 	router                *treeDBRepresentativeRouter
@@ -724,6 +725,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.m8TruthCacheSHA256, "m8-truth-cache-sha256", "", "independently trusted SHA-256 of the canonical truth-cache artifact required for cache reuse")
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
 	fs.BoolVar(&cfg.partitionTruthOracle, "partition-truth-oracle", false, "emit exact truth primary-partition coverage diagnostic for -stage partition")
+	fs.StringVar(&cfg.kahipPython, "partition-kahip-python", "", "offline KaHIP 3.25 Python executable for partition/M3 build stages; never used online; adapter is scripts/treedb_kahip_partition.py")
 	fs.IntVar(&cfg.partition.Repetitions, "partition-repetitions", cfg.partition.Repetitions, "dense-ball graph sketch repetitions")
 	fs.Int64Var(&cfg.partition.MaxDistanceWork, "partition-max-distance-work", cfg.partition.MaxDistanceWork, "explicit reference graph scalar-work bound")
 	fs.Int64Var(&cfg.partition.MaxPartitionWork, "partition-max-partition-work", cfg.partition.MaxPartitionWork, "qualification-only reference partition work bound; default remains conservative")
@@ -862,6 +864,9 @@ func parseConfig(args []string) (config, error) {
 	if cfg.partitionAssignment != partitionAssignmentGraphV1 && cfg.partitionAssignment != partitionAssignmentStableIDHashV1 {
 		return config{}, errors.New("-partition-assignment must be graph or stable_id_hash")
 	}
+	if cfg.kahipPython != "" && ((cfg.stage != "partition" && cfg.stage != "overlap,partition_index") || cfg.partitionAssignment != partitionAssignmentGraphV1) {
+		return config{}, errors.New("-partition-kahip-python requires partition or overlap,partition_index stage with graph assignment")
+	}
 	if cfg.partitionAssignment != partitionAssignmentGraphV1 && cfg.stage != "partition" && cfg.stage != "overlap,partition_index" {
 		return config{}, errors.New("-partition-assignment applies only to partition and overlap,partition_index stages")
 	}
@@ -936,6 +941,19 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][
 	artifact, err := vectorpartition.BuildWithPartitioner(input, cfg.partition, vectorpartition.Source{SourceID: "m0_fixture:" + fixture.Checksum}, vectorpartition.ReferencePartitioner{})
 	if err != nil {
 		return fmt.Errorf("build validated vector partition artifact: %w", err)
+	}
+	if cfg.kahipPython != "" {
+		request := artifact
+		input, err := vectorpartition.CanonicalJSON(request)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		artifact, err = vectorpartition.RunExternalJSONForRequestWithLimits(ctx, []string{cfg.kahipPython, "scripts/treedb_kahip_partition.py"}, input, vectorpartition.ExternalJSONLimits{MaxInput: len(input), MaxOutput: len(input) + 1024}, request)
+		if err != nil {
+			return fmt.Errorf("KaHIP 3.25 offline partition: %w", err)
+		}
 	}
 	graphArtifactDigest, err := vectorpartition.Digest(artifact)
 	if err != nil {

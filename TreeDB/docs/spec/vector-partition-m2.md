@@ -75,8 +75,20 @@ Its query count, generated matrix bytes, exact corpus-by-query work, top-k, and
 fixture checksum are validated before the diagnostic data is allocated or
 used.
 
-Before a production backend can be chosen, pin its version, source and license,
-input/output command, resource limits, and independent validator evidence.
+The selected offline comparison backend is `kahip==3.25` (MIT Python module,
+wheel SHA-256 `e6ea76524e9fc01b27e6f5c5f00b7eec71c94cbd1e84678ce2a14d64dfc9eda4`),
+ECO mode, single OpenMP worker, seed from the validated request, epsilon .05,
+and an unweighted symmetrized copy of the directed graph. It is invoked only
+through `scripts/treedb_kahip_partition.py` and the bound external JSON seam;
+it is never an online dependency. The adapter rejects any module version other
+than 3.25 and requests above the V1 1M-by-degree-16 (16M directed edge)
+envelope. On the retained 100k embedding-mixture graph
+`5a095727ed0f82815643daddb47bd11a08c9630ede6f9b1d7e7ec427dc8e9937`,
+the reference greedy result was p4 `.8303`, cut `1122051`, load `6521/6563`;
+the KaHIP artifact
+`954591a9f21e166e78c19a7f8885a74b2faf6bb0e85a26a1fe13dab3191a1a1e`
+was p1/p2/p4/p8/p16 `1.0`, cut `0`, load `6283/6563`. This is a bounded
+offline placement result, not a claim about graph quality or online serving.
 
 ## Exporter-corpus builder and reproducibility evidence
 

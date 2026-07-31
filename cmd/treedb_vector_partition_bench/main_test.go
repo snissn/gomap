@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -1506,6 +1507,55 @@ func TestPartitionAssignmentParsesOnlyMaterializationStagesV1(t *testing.T) {
 		if _, err := parseConfig(args); err == nil {
 			t.Fatalf("accepted malformed assignment config %#v", args)
 		}
+	}
+}
+
+func TestKaHIPOfflineSelectorIsLimitedToGraphMaterializationV1(t *testing.T) {
+	base := []string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-partition-kahip-python", "/tmp/kahip-python"}
+	for _, stage := range []string{"partition", "overlap,partition_index"} {
+		cfg, err := parseConfig(append(append([]string(nil), base...), "-stage", stage))
+		if err != nil || cfg.kahipPython == "" {
+			t.Fatalf("stage=%s cfg=%+v err=%v", stage, cfg, err)
+		}
+	}
+	for _, args := range [][]string{
+		append(append([]string(nil), base...), "-stage", "simulation"),
+		append(append([]string(nil), base...), "-stage", "partition", "-partition-assignment", partitionAssignmentStableIDHashV1),
+	} {
+		if _, err := parseConfig(args); err == nil {
+			t.Fatalf("accepted KaHIP outside graph materialization: %#v", args)
+		}
+	}
+}
+
+func TestKaHIPAdapterRoundTripV1(t *testing.T) {
+	python := os.Getenv("TREEDB_KAHIP_PYTHON")
+	if python == "" {
+		t.Skip("set TREEDB_KAHIP_PYTHON to run the pinned offline KaHIP adapter")
+	}
+	cfg := vectorpartition.DefaultConfig()
+	cfg.Partitions, cfg.Pivots, cfg.MaxLeafBucket, cfg.Degree, cfg.Repetitions, cfg.MaxVectors, cfg.MaxEdges = 2, 2, 2, 2, 1, 16, 32
+	v := []vectorpartition.Vector{{ID: "a", Values: []float64{1, 0}}, {ID: "b", Values: []float64{.99, .01}}, {ID: "c", Values: []float64{0, 1}}, {ID: "d", Values: []float64{.01, .99}}}
+	request, err := vectorpartition.Build(v, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := vectorpartition.CanonicalJSON(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, err := filepath.Abs(filepath.Join("..", "..", "scripts", "treedb_kahip_partition.py"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	got, err := vectorpartition.RunExternalJSONForRequestWithLimits(ctx, []string{python, script}, raw, vectorpartition.ExternalJSONLimits{MaxInput: len(raw), MaxOutput: len(raw) + 1024}, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Backend != "kahip_python_3.25_eco_symmetrized_v1_seed_1" || got.Metrics.MaxPartitionSize > got.Metrics.Cap {
+		t.Fatalf("invalid KaHIP artifact: %+v", got)
 	}
 }
 
