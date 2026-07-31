@@ -1011,8 +1011,11 @@ func partitionTruthOracleForArtifactV1(vectors, queries [][]float64, assignment 
 	if len(vectors) == 0 || len(queries) == 0 || len(assignment) != len(vectors) || len(graph) != len(vectors) || partitions < 1 || topK < 1 || topK > len(vectors) {
 		return partitionTruthOracleV1{}, errors.New("invalid partition truth oracle input")
 	}
-	probeBudgets := make([]int, 0, 5)
-	for _, probes := range []int{1, 2, 4, 8, 16} {
+	quarterProbes := max(1, partitions/4)
+	probeCandidates := []int{1, 2, 4, 8, 16, quarterProbes}
+	sort.Ints(probeCandidates)
+	probeBudgets := make([]int, 0, len(probeCandidates))
+	for _, probes := range probeCandidates {
 		probes = min(probes, partitions)
 		if len(probeBudgets) == 0 || probeBudgets[len(probeBudgets)-1] != probes {
 			probeBudgets = append(probeBudgets, probes)
@@ -1112,7 +1115,6 @@ func partitionTruthOracleForArtifactV1(vectors, queries [][]float64, assignment 
 	if graphDiagnostics.ApproximateGraphTruthNeighborEdges > 0 {
 		graphDiagnostics.RetainedApproximateGraphTruthNeighborEdgeShareAtK = float64(graphDiagnostics.RetainedApproximateGraphTruthNeighborEdges) / float64(graphDiagnostics.ApproximateGraphTruthNeighborEdges)
 	}
-	quarterProbes := min(4, partitions)
 	quarterCoverage := 0.0
 	for _, row := range probeRows {
 		if row.ProbeBudget == quarterProbes {

@@ -332,8 +332,15 @@ func TestPartitionTruthOracleForArtifactV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if oracle.ProbeBudget != 2 || oracle.BestProbeCoverageAtK != 1 || oracle.TruthPrimaryHomePairColocate != 1.0/3.0 || len(oracle.Probes) != 2 || oracle.Probes[0].BestPrimaryHomeCoverageAtK != 2.0/3.0 || oracle.Graph.DirectedEdges != 6 || oracle.Graph.DirectedCutEdges != 2 || oracle.Graph.SymmetricEdges != 3 || oracle.Graph.SymmetricCutEdges != 1 || oracle.Graph.ApproximateGraphTruthNeighborEdges != 2 || oracle.Graph.RetainedApproximateGraphTruthNeighborEdges != 1 || !slices.Equal(oracle.Graph.PartitionLoads, []int{2, 2}) {
+	if oracle.ProbeBudget != 1 || oracle.BestProbeCoverageAtK != 2.0/3.0 || oracle.TruthPrimaryHomePairColocate != 1.0/3.0 || len(oracle.Probes) != 2 || oracle.Probes[0].BestPrimaryHomeCoverageAtK != 2.0/3.0 || oracle.Graph.DirectedEdges != 6 || oracle.Graph.DirectedCutEdges != 2 || oracle.Graph.SymmetricEdges != 3 || oracle.Graph.SymmetricCutEdges != 1 || oracle.Graph.ApproximateGraphTruthNeighborEdges != 2 || oracle.Graph.RetainedApproximateGraphTruthNeighborEdges != 1 || !slices.Equal(oracle.Graph.PartitionLoads, []int{2, 2}) {
 		t.Fatalf("oracle=%+v", oracle)
+	}
+	wide, err := partitionTruthOracleForArtifactV1(vectors, [][]float64{{1, 0}}, []int{0, 0, 1, 1}, graph, 12, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wide.ProbeBudget != 3 || len(wide.Probes) != 6 || wide.Probes[2].ProbeBudget != 3 || wide.BestProbeCoverageAtK != 1 {
+		t.Fatalf("derived quarter probe oracle=%+v", wide)
 	}
 	if _, err := partitionTruthOracleForArtifactV1(vectors, [][]float64{{1, 0}}, []int{0, 0, 1, 1}, graph, 2, len(vectors)+1); err == nil {
 		t.Fatal("truth oracle accepted top-k above corpus size")
