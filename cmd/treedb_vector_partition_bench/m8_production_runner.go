@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/bits"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1637,12 +1638,15 @@ func m8BestPrimaryHomeOracleRecallV1(truth []m8CanonicalResultV1, homes map[stri
 }
 
 // m8BestMembershipOracleRecallV1 exhausts the small, fixed partition domain
-// to find the best truth-neighbor coverage obtainable with this probe budget.
+// using packed truth coverage, so each subset costs bounded uint64 operations
+// instead of rescanning every truth result's membership slice.
 func m8BestMembershipOracleRecallV1(truth []m8CanonicalResultV1, memberships map[string][]uint32, partitions, probes int) (float64, error) {
 	if len(truth) == 0 || partitions < 1 || probes < 1 || probes > partitions {
 		return 0, errors.New("invalid membership oracle bounds")
 	}
-	for _, result := range truth {
+	truthWords := (len(truth) + 63) / 64
+	partitionCoverage := make([]uint64, partitions*truthWords)
+	for rank, result := range truth {
 		parts, ok := memberships[result.ID]
 		if !ok || len(parts) == 0 {
 			return 0, fmt.Errorf("canonical truth ID %q has no partition membership", result.ID)
@@ -1656,36 +1660,38 @@ func m8BestMembershipOracleRecallV1(truth []m8CanonicalResultV1, memberships map
 				return 0, fmt.Errorf("canonical truth ID %q has duplicate partition membership", result.ID)
 			}
 			seen[partition] = struct{}{}
+			partitionCoverage[int(partition)*truthWords+rank/64] |= uint64(1) << (rank % 64)
 		}
+	}
+	if probes == partitions {
+		return 1, nil
 	}
 	if _, err := m8MembershipOracleCombinationCountV1(partitions, probes, maxBenchmarkWorkUnits); err != nil {
 		return 0, err
 	}
 	best := 0
-	selected := make([]bool, partitions)
-	var visit func(int, int)
-	visit = func(next, remaining int) {
+	coverageByDepth := make([]uint64, (probes+1)*truthWords)
+	var visit func(int, int, int)
+	visit = func(next, remaining, depth int) {
 		if remaining == 0 {
 			covered := 0
-			for _, result := range truth {
-				parts := memberships[result.ID]
-				for _, partition := range parts {
-					if selected[partition] {
-						covered++
-						break
-					}
-				}
+			for _, word := range coverageByDepth[depth*truthWords : (depth+1)*truthWords] {
+				covered += bits.OnesCount64(word)
 			}
 			best = max(best, covered)
 			return
 		}
 		for partition := next; partition <= partitions-remaining; partition++ {
-			selected[partition] = true
-			visit(partition+1, remaining-1)
-			selected[partition] = false
+			current := coverageByDepth[depth*truthWords : (depth+1)*truthWords]
+			combined := coverageByDepth[(depth+1)*truthWords : (depth+2)*truthWords]
+			partitionWords := partitionCoverage[partition*truthWords : (partition+1)*truthWords]
+			for word := range combined {
+				combined[word] = current[word] | partitionWords[word]
+			}
+			visit(partition+1, remaining-1, depth+1)
 		}
 	}
-	visit(0, probes)
+	visit(0, probes, 0)
 	return float64(best) / float64(len(truth)), nil
 }
 

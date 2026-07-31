@@ -1451,6 +1451,7 @@ type m8BenchmarkWorkPlan struct {
 	AttributionQueryPasses            int64
 	MaxMembershipOracleSubsets        int64
 	MembershipOracleSubsetEvaluations int64
+	MembershipOracleWorkUnits         int64
 	QueryRequests                     int64
 	RetainedCoordinatorCells          int64
 	RetainedCoordinatorResults        int64
@@ -1477,6 +1478,8 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	}
 	plan := m8BenchmarkWorkPlan{}
 	var membershipOracleSubsetsPerSweep int64
+	var membershipOracleWorkPerQuerySweep int64
+	truthWords := int64((cfg.topK + 63) / 64)
 	for _, probes := range cfg.probes {
 		combinations, err := m8MembershipOracleCombinationCountV1(cfg.partitions, probes, maxBenchmarkWorkUnits)
 		if err != nil {
@@ -1484,6 +1487,31 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		}
 		plan.MaxMembershipOracleSubsets = max(plan.MaxMembershipOracleSubsets, combinations)
 		membershipOracleSubsetsPerSweep, err = memoryAdd(membershipOracleSubsetsPerSweep, combinations)
+		if err != nil {
+			return plan, err
+		}
+		membershipPreparation, err := memoryMul(int64(cfg.topK), int64(cfg.partitions))
+		if err != nil {
+			return plan, err
+		}
+		oracleWork := membershipPreparation
+		if probes != cfg.partitions {
+			// The pruned combination walk has C(partitions+1, probes)
+			// calls including its root and one popcount per leaf.
+			nodes, err := m8MembershipOracleCombinationCountV1(cfg.partitions+1, probes, maxBenchmarkWorkUnits)
+			if err != nil {
+				return plan, err
+			}
+			wordOperations, err := memoryMul(nodes-1+combinations, truthWords)
+			if err != nil {
+				return plan, err
+			}
+			oracleWork, err = memoryAdd(oracleWork, wordOperations)
+			if err != nil {
+				return plan, err
+			}
+		}
+		membershipOracleWorkPerQuerySweep, err = memoryAdd(membershipOracleWorkPerQuerySweep, oracleWork)
 		if err != nil {
 			return plan, err
 		}
@@ -1521,8 +1549,12 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	if plan.MembershipOracleSubsetEvaluations > capUnits {
-		return plan, fmt.Errorf("modeled M8 membership-oracle work exceeds %d-subset cap: max_subsets_per_query=%d subset_evaluations=%d", capUnits, plan.MaxMembershipOracleSubsets, plan.MembershipOracleSubsetEvaluations)
+	plan.MembershipOracleWorkUnits, err = memoryMul(membershipOracleWorkPerQuerySweep, int64(m.Queries), supportedOverlaps, variantRuns)
+	if err != nil {
+		return plan, err
+	}
+	if plan.MembershipOracleWorkUnits > capUnits {
+		return plan, fmt.Errorf("modeled M8 membership-oracle work exceeds %d-operation cap: max_subsets_per_query=%d subset_evaluations=%d bounded_operations=%d", capUnits, plan.MaxMembershipOracleSubsets, plan.MembershipOracleSubsetEvaluations, plan.MembershipOracleWorkUnits)
 	}
 	// Every child reconstructs and checksum-binds its fixture, then computes the
 	// canonical exact oracle. Cache reuse avoids a compute in the common path but

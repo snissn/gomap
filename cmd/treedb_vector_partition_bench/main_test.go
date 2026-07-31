@@ -237,6 +237,15 @@ func TestM8MembershipOraclesSeparatePrimaryAndOverlapCeilingsV1(t *testing.T) {
 	if _, err := m8BestMembershipOracleRecallV1(truth, malformed, 4, 1); err == nil {
 		t.Fatal("accepted out-of-range truth membership")
 	}
+	wideTruth := make([]m8CanonicalResultV1, 70)
+	wideMemberships := make(map[string][]uint32, len(wideTruth))
+	for i := range wideTruth {
+		wideTruth[i].ID = fmt.Sprintf("wide-%d", i)
+		wideMemberships[wideTruth[i].ID] = []uint32{uint32(i % 4)}
+	}
+	if got, err := m8BestMembershipOracleRecallV1(wideTruth, wideMemberships, 4, 2); err != nil || got != 36.0/70.0 {
+		t.Fatalf("multiword final oracle=%v err=%v", got, err)
+	}
 }
 
 func TestM8MembershipOracleCombinationBoundIsPreflightedV1(t *testing.T) {
@@ -254,9 +263,17 @@ func TestM8MembershipOracleCombinationBoundIsPreflightedV1(t *testing.T) {
 		t.Fatalf("missing aggregate membership-oracle refusal: %v", err)
 	}
 	cfg.efSearch = []int{64, 128}
-	plan, err := validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 16, Queries: 10_000, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64)
-	if err != nil || plan.MembershipOracleSubsetEvaluations != 128_700_000 {
+	plan, err := validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 16, Queries: 5_000, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64)
+	if err != nil || plan.MembershipOracleSubsetEvaluations != 64_350_000 || plan.MembershipOracleWorkUnits != 185_975_000 {
 		t.Fatalf("ef-independent oracle plan=%+v err=%v", plan, err)
+	}
+	cfg = config{partitions: 16, overlaps: []float64{0}, probes: []int{8}, efSearch: []int{64}, concurrency: []int{1}, topK: 256}
+	plan, err = validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 256, Queries: 1_000, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64)
+	if err != nil || plan.MembershipOracleWorkUnits != 152_812_000 {
+		t.Fatalf("bounded bitset oracle plan=%+v err=%v", plan, err)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 256, Queries: 2_000, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64); err == nil || !strings.Contains(err.Error(), "bounded_operations=") {
+		t.Fatalf("missing bounded bitset-oracle refusal: %v", err)
 	}
 }
 
@@ -1524,14 +1541,14 @@ func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 func TestM8BenchmarkWorkCapAndOverflowV1(t *testing.T) {
 	cfg := config{partitions: 4, overlaps: []float64{0, .2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3, topK: 2}
 	manifest := fixtureManifest{Vectors: 10, Queries: 5, Dimensions: 8}
-	plan, err := validateM8BenchmarkWork(cfg, manifest, 109, math.MaxInt64)
+	plan, err := validateM8BenchmarkWork(cfg, manifest, 120, math.MaxInt64)
 	if err != nil || plan.QueryRequests != 109 || plan.MeasuredQueryRequests != 40 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 65 {
 		t.Fatalf("M8 work plan=%+v err=%v", plan, err)
 	}
 	if plan.RetainedCoordinatorCells != 8 || plan.RetainedCoordinatorResults != 80 || plan.CurrentCellOutcomes != 5 || plan.CurrentCellOutcomeBytes == 0 || plan.FixtureResidentBytes == 0 || plan.SourceSnapshotBytes == 0 || plan.ExactTruthBytes == 0 || plan.RetainedCoordinatorBytes == 0 || plan.RetainedAttributionMatrices != 5 || plan.RetainedAttributionResults != 50 || plan.RetainedAttributionBytes == 0 || plan.AttributionMergeScratchResults != 16 || plan.AttributionMergeScratchBytes == 0 || plan.ModeledPeakBytes == 0 {
 		t.Fatalf("incomplete M8 memory plan=%+v", plan)
 	}
-	if _, err := validateM8BenchmarkWork(cfg, manifest, 108, math.MaxInt64); err == nil {
+	if _, err := validateM8BenchmarkWork(cfg, manifest, 119, math.MaxInt64); err == nil {
 		t.Fatal("accepted oversized M8 sweep")
 	}
 	if _, err := validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 1, Queries: math.MaxInt, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64); err == nil {
@@ -1557,14 +1574,14 @@ func TestM8UnsupportedOverlapSkipsMeasuredAndAttributionWorkV1(t *testing.T) {
 func TestM8RetainedOverlapCountsMeasuredAndAttributionWorkV1(t *testing.T) {
 	cfg := config{partitions: 4, overlaps: []float64{.2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3, topK: 2, m8ExistingDB: "/retained/overlap"}
 	manifest := fixtureManifest{Vectors: 10, Queries: 5, Dimensions: 8}
-	plan, err := validateM8BenchmarkWork(cfg, manifest, 109, math.MaxInt64)
+	plan, err := validateM8BenchmarkWork(cfg, manifest, 120, math.MaxInt64)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if plan.QueryRequests != 109 || plan.MeasuredQueryRequests != 40 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 65 {
 		t.Fatalf("retained-overlap M8 work plan=%+v", plan)
 	}
-	if _, err := validateM8BenchmarkWork(cfg, manifest, 108, math.MaxInt64); err == nil {
+	if _, err := validateM8BenchmarkWork(cfg, manifest, 119, math.MaxInt64); err == nil {
 		t.Fatal("accepted retained overlap above complete work cap")
 	}
 }
@@ -1598,7 +1615,7 @@ func TestM8VariantMatrixCountsCompleteChildWorkAndOneChildPeakV1(t *testing.T) {
 func TestM8RetainedAttributionResultsRespectMemoryCapV1(t *testing.T) {
 	cfg := config{partitions: 16, overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1}, topK: 256, m8MaxExactTruthVisits: math.MaxInt64}
 	manifest := fixtureManifest{Vectors: 10_000, Queries: 50_000, Dimensions: 8}
-	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
+	plan, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, math.MaxInt64)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1613,7 +1630,7 @@ func TestM8RetainedAttributionResultsRespectMemoryCapV1(t *testing.T) {
 	if measurementPeak >= maxFixtureBytes || plan.RetainedAttributionMatrices != 5 || plan.RetainedAttributionResults != 64_000_000 || plan.RetainedAttributionBytes < 2_500_000_000 || plan.ModeledPeakBytes <= maxFixtureBytes {
 		t.Fatalf("M8 attribution retention plan=%+v measurement_peak=%d", plan, measurementPeak)
 	}
-	if _, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, maxFixtureBytes); err == nil || !strings.Contains(err.Error(), "retained_attribution_results=64000000") {
+	if _, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, maxFixtureBytes); err == nil || !strings.Contains(err.Error(), "retained_attribution_results=64000000") {
 		t.Fatalf("accepted oversized retained attribution sweep: %v", err)
 	}
 }
@@ -1664,7 +1681,7 @@ func TestM8AttributionMergeScratchRespectsMemoryCapV1(t *testing.T) {
 func TestM8CurrentCellOutcomesRespectMemoryCapV1(t *testing.T) {
 	cfg := config{partitions: 256, raftGroups: 4, overlaps: []float64{0}, probes: []int{256}, efSearch: []int{64}, concurrency: []int{64}, topK: 1, m8MaxExactTruthVisits: math.MaxInt64}
 	manifest := fixtureManifest{Vectors: 256, Queries: 1_000_000, Dimensions: 1}
-	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
+	plan, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, math.MaxInt64)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1687,7 +1704,7 @@ func TestM8CurrentCellOutcomesRespectMemoryCapV1(t *testing.T) {
 	if plan.CurrentCellOutcomes != 1_000_000 || plan.CurrentCellOutcomeBytes <= 1_500_000_000 || plan.ModeledPeakBytes <= withoutOutcomes {
 		t.Fatalf("M8 current-cell outcome plan=%+v without_outcomes=%d", plan, withoutOutcomes)
 	}
-	if _, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, withoutOutcomes); err == nil || !strings.Contains(err.Error(), "current_cell_outcomes=1000000") {
+	if _, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, withoutOutcomes); err == nil || !strings.Contains(err.Error(), "current_cell_outcomes=1000000") {
 		t.Fatalf("accepted unmodeled current-cell outcomes: %v", err)
 	}
 }
@@ -1735,14 +1752,14 @@ func TestM8AttributionPrimaryHomeMappingIsModeledV1(t *testing.T) {
 func TestM8RetainedCoordinatorResultsRespectMemoryCapV1(t *testing.T) {
 	cfg := config{partitions: 16, overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, topK: 256, m8MaxExactTruthVisits: math.MaxInt64}
 	manifest := fixtureManifest{Vectors: 10_000, Queries: 50_000, Dimensions: 8}
-	plan, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, math.MaxInt64)
+	plan, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, math.MaxInt64)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if plan.RetainedCoordinatorResults != 102_400_000 || plan.RetainedCoordinatorBytes < 4_000_000_000 {
 		t.Fatalf("M8 retained-result plan=%+v", plan)
 	}
-	if _, err := validateM8BenchmarkWork(cfg, manifest, maxBenchmarkWorkUnits, maxFixtureBytes); err == nil || !strings.Contains(err.Error(), "retained_coordinator_results=102400000") {
+	if _, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, maxFixtureBytes); err == nil || !strings.Contains(err.Error(), "retained_coordinator_results=102400000") {
 		t.Fatalf("accepted oversized retained result sweep: %v", err)
 	}
 }
