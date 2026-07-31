@@ -24,17 +24,17 @@ and SHA-256
 `0e9bce9465c9e1fa70c7833364e88c332bc831cfc52c628c90085e1c3068763c`.
 
 The measured implementation head is
-`270ce2f706a60191447af4382a28a194d7352af0`, based on
+`8f441120b1d952fc777db48f247f8d446ffdebdf`, based on
 `765616d3d20e5fa612376711fd9628e3d8f7c9ee`. Exact M3 and M8 commands are
 embedded in the retained JSON artifacts.
 
 | Probes | Graph/disjoint | Graph/overlap .20 | Stable-ID-hash/disjoint |
 | ---: | ---: | ---: | ---: |
-| 1 | .2323 | .3063 | .0730 |
-| 2 | .4072 | .5049 | .1332 |
-| 4 | .6211 | .7201 | .2578 |
-| 8 | .8316 | .8814 | .4979 |
-| 16 | .9971 | .9924 | 1.0000 |
+| 1 | .2323 | .3972 | .0730 |
+| 2 | .4072 | .6266 | .1332 |
+| 4 | .6211 | .8220 | .2578 |
+| 8 | .8316 | .9192 | .4979 |
+| 16 | .9971 | .9894 | 1.0000 |
 
 These are production-shaped end-to-end recall@10 values. All-partition exact
 ID and score parity pass for every variant.
@@ -48,24 +48,24 @@ attribution:
 | --- | ---: | ---: |
 | Global exact | 1.0000 | - |
 | Best primary-home oracle | .8303 | -.1697 |
-| Best final home+overlap oracle | .8983 | +.0680 from overlap |
-| Exact representative routing + exhaustive local exact | .7291 | -.1692 |
-| Approximate representative routing + exhaustive local exact | .7291 | .0000 |
-| Partition-local HNSW | .7201 | -.0090 |
-| Production end to end | .7201 | .0000 |
+| Best final home+overlap oracle | .9637 | +.1334 from overlap |
+| Exact representative routing + exhaustive local exact | .8342 | -.1295 |
+| Approximate representative routing + exhaustive local exact | .8342 | .0000 |
+| Partition-local HNSW | .8220 | -.0122 |
+| Production end to end | .8220 | .0000 |
 
 The largest active loss after overlap materialization is exact representative
 routing, followed by the remaining placement/membership ceiling. Local HNSW
 is a smaller secondary loss, and this candidate budget introduces no
 approximate-router loss at four probes. The graph/overlap membership ceiling
-is .8983, only .0017 below the .90 target, but the served result remains .7201;
-therefore this is a diagnostic success, not an enablement pass.
+is .9637, above the .90 target, but the served result remains .8220; therefore
+this is a diagnostic success, not an enablement pass.
 
-Overlap accounts for .1056 exact-route truth coverage at four probes, with
-.0587 duplicate coverage. It materializes 20,000 positive-gain replicas, no
+Overlap accounts for .2107 exact-route truth coverage at four probes, with
+.2206 duplicate-membership coverage. It materializes 20,000 positive-gain replicas, no
 filler or rejected replicas, and no unused capacity. Directed graph cut falls
-from 1,122,051 to 857,881 edges, or 13.2085 cut edges per useful replica. The
-persistent asset ratio is 1.20016x.
+from 1,122,051 to 773,414 edges, or 17.43185 cut edges per useful replica. The
+persistent asset ratio is 1.20181x.
 
 Graph assignment retains 17.6822% of exact truth-neighbor pairs versus 6.1644%
 for stable-ID hash. Its directed cut ratio is .70128 versus .93754, and its
@@ -99,12 +99,12 @@ under `TreeDB/docs/spec/artifacts/vector-partition-attribution-4023/`:
 
 | Artifact | SHA-256 |
 | --- | --- |
-| `graph-disjoint-m2.json` | `3018ae8978ae73d0dc5ad83b6a3d7ded3a4bd2c7a01b74cc9ae0b3ef46fc0f40` |
-| `graph-disjoint-m3.json` | `a6c8aac68dd55521b983d2dfd8ec3f356b8a36da2de0d101b81d092681afe7aa` |
-| `graph-overlap-020-m3.json` | `230c4cc2ebe5a93c35e99301b1d67ea8f601e285b5ccf6fc2923495c59655d3b` |
-| `stable-id-hash-disjoint-m2.json` | `1217d3e499b7f174d5fc17b047fb0bd9f9320ade43e7bd94f829dfb9cad865ec` |
-| `stable-id-hash-disjoint-m3.json` | `df608ba282efc0baea38cd911f448a29306f3e2fd8ca5b126cdea1d7774b71c3` |
-| `m8-matrix.json` | `e85d2db0684e6d43539540507124e29d542a26b46ede41f22bfb72c15c4e2b9b` |
+| `graph-disjoint-m2.json` | `b76f93a2428cff9d824a2b000532abb6272343f79b0338ef1d51ddfbe4615605` |
+| `graph-disjoint-m3.json` | `6220ec9a3a94f06df13b041c279269a40d5e893d6b5c3478dbeaa7ad1521d689` |
+| `graph-overlap-020-m3.json` | `8d08ea26d2ea4c1765e46f75cdc2537ff5aacf54589ceaab60330b2702bf47a6` |
+| `stable-id-hash-disjoint-m2.json` | `a5bacd296735d11c5f80690cbb433b692cc8c28512602997d18b7940ee6cc778` |
+| `stable-id-hash-disjoint-m3.json` | `eca7146942418feb904835a79b4c9dcf8342dcf5784ca885167ea84762248ac2` |
+| `m8-matrix.json` | `a512eed938ec1787fa228335701c3509995a625ffb28fb766b542934d39f8ed3` |
 
 The matrix records the host, resource limits and observations, variant
 identities, topology, exact commands, all probe rows, stage ledger, gate
