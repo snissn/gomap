@@ -32,7 +32,10 @@ type Membership = internal.Membership
 type OverlapResult = internal.OverlapResult
 type OverlapShortfallError = internal.OverlapShortfallError
 
-const SchemaVersion = internal.SchemaVersion
+const (
+	SchemaVersion                  = internal.SchemaVersion
+	MaxOverlapMembershipsPerVector = internal.MaxOverlapMembershipsPerVector
+)
 
 func DefaultConfig() Config         { return internal.DefaultConfig() }
 func ValidateConfig(c Config) error { return internal.ValidateConfig(c) }

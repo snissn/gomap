@@ -817,6 +817,9 @@ func TestColumnGraphRabitQQuantizedScorerMatchesOracle2451(t *testing.T) {
 	if err != nil {
 		t.Fatalf("warm scoreOrdinals: %v", err)
 	}
+	if collectionsRaceEnabled {
+		t.Skip("exact allocation counts are unstable under race instrumentation")
+	}
 	allocs := testing.AllocsPerRun(1000, func() {
 		got, err := scorer.scoreOrdinals(ordinals, scores[:0], &scratch, &columnVectorGraphNativeSearchStats{})
 		if err != nil {

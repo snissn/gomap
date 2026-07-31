@@ -36,6 +36,8 @@ type OverlapResult struct {
 	Loads         []int
 	EdgeCutBefore int
 	EdgeCutAfter  int
+	Useful        int // memberships applied with a positive directed cut reduction
+	Filler        int // exact-target memberships added after useful proposals ended
 }
 
 // OverlapShortfallError reports an exact-build request that could not be
@@ -77,11 +79,15 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 	}
 	loads := make([]int, a.Config.Partitions)
 	members := make([]map[int]struct{}, n)
+	incoming := make([][]int, n)
 	for i, p := range a.Assignment {
 		loads[p]++
 		members[i] = map[int]struct{}{p: {}}
+		for _, neighbor := range a.Graph.Neighbors[i] {
+			incoming[neighbor] = append(incoming[neighbor], i)
+		}
 	}
-	used := 0
+	used, useful, filler := 0, 0, 0
 	type proposal struct {
 		node, part, gain int
 		id               string
@@ -99,6 +105,11 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 					counts[p]++
 				}
 			}
+			for _, j := range incoming[i] {
+				for p := range members[j] {
+					counts[p]++
+				}
+			}
 			best, gain := -1, 0
 			for p, count := range counts {
 				if _, exists := members[i][p]; exists || count == 0 || loads[p] >= capacity {
@@ -111,7 +122,7 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 			if best >= 0 {
 				// A plurality alone is insufficient: score only directed cut
 				// edges newly satisfied by this membership.
-				reduction := overlapCutReduction(members, i, best, ns)
+				reduction := overlapCutReduction(members, i, best, ns, incoming[i])
 				if reduction > 0 {
 					ps = append(ps, proposal{i, best, reduction, a.IDs[i]})
 				}
@@ -132,7 +143,10 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 			// is exhausted, deterministically fill remaining legal non-home
 			// slots. Adding memberships cannot increase the overlap edge cut.
 			if cfg.RequireExact {
-				used += fillExactOverlapSlots(a, members, loads, capacity, budget-used)
+				filled, usefulFilled, fillerFilled := fillExactOverlapSlots(a, members, incoming, loads, capacity, budget-used)
+				used += filled
+				useful += usefulFilled
+				filler += fillerFilled
 			}
 			break
 		}
@@ -150,17 +164,21 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 			if _, exists := members[p.node][p.part]; exists {
 				continue
 			}
-			if overlapCutReduction(members, p.node, p.part, a.Graph.Neighbors[p.node]) == 0 {
+			if overlapCutReduction(members, p.node, p.part, a.Graph.Neighbors[p.node], incoming[p.node]) == 0 {
 				continue
 			}
 			members[p.node][p.part] = struct{}{}
 			loads[p.part]++
 			used++
+			useful++
 			applied++
 		}
 		if applied == 0 {
 			if cfg.RequireExact {
-				used += fillExactOverlapSlots(a, members, loads, capacity, budget-used)
+				filled, usefulFilled, fillerFilled := fillExactOverlapSlots(a, members, incoming, loads, capacity, budget-used)
+				used += filled
+				useful += usefulFilled
+				filler += fillerFilled
 			}
 			break
 		}
@@ -172,6 +190,8 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 		Capacity:      capacity,
 		Loads:         loads,
 		EdgeCutBefore: a.Metrics.EdgeCut,
+		Useful:        useful,
+		Filler:        filler,
 	}
 	for i, set := range members {
 		for p := range set {
@@ -198,8 +218,7 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 // after affinity has no further cut-reducing proposal. IDs are canonical in a
 // validated artifact; partition order is stable. A vector's durable cap and
 // the declared total-membership cap are both rechecked at application time.
-func fillExactOverlapSlots(a Artifact, members []map[int]struct{}, loads []int, capacity, remaining int) int {
-	used := 0
+func fillExactOverlapSlots(a Artifact, members []map[int]struct{}, incoming [][]int, loads []int, capacity, remaining int) (used, useful, filler int) {
 	for i := range a.IDs {
 		if used == remaining || len(members[i])-1 >= MaxOverlapMembershipsPerVector {
 			continue
@@ -211,25 +230,44 @@ func fillExactOverlapSlots(a Artifact, members []map[int]struct{}, loads []int, 
 			if _, exists := members[i][partition]; exists {
 				continue
 			}
+			if overlapCutReduction(members, i, partition, a.Graph.Neighbors[i], incoming[i]) > 0 {
+				useful++
+			} else {
+				filler++
+			}
 			members[i][partition] = struct{}{}
 			loads[partition]++
 			used++
 			if used == remaining {
-				return used
+				return used, useful, filler
 			}
 		}
 	}
-	return used
+	return used, useful, filler
 }
 
-// overlapCutReduction scores only directed cut edges that membership in
-// partition would newly satisfy for node.
-func overlapCutReduction(members []map[int]struct{}, node, partition int, neighbors []int) int {
+// overlapCutReduction scores every directed cut edge that membership in
+// partition would newly satisfy for node, including edges directed into it.
+func overlapCutReduction(members []map[int]struct{}, node, partition int, outgoing, incoming []int) int {
 	reduction := 0
-	for _, neighbor := range neighbors {
+	for _, neighbor := range outgoing {
 		already := false
 		for p := range members[node] {
 			if _, ok := members[neighbor][p]; ok {
+				already = true
+				break
+			}
+		}
+		if !already {
+			if _, ok := members[neighbor][partition]; ok {
+				reduction++
+			}
+		}
+	}
+	for _, neighbor := range incoming {
+		already := false
+		for p := range members[neighbor] {
+			if _, ok := members[node][p]; ok {
 				already = true
 				break
 			}
@@ -260,7 +298,7 @@ func ValidateOverlap(a Artifact, cfg OverlapConfig, r OverlapResult) error {
 	if capacity < a.Metrics.Cap {
 		return fmt.Errorf("overlap capacity %d below immutable home load cap %d", capacity, a.Metrics.Cap)
 	}
-	if r.Budget != wantBudget || r.Budget < 0 || r.Used < 0 || r.Used > r.Budget || r.Unspent != r.Budget-r.Used || r.Capacity != capacity || len(r.Loads) != a.Config.Partitions || len(r.Memberships) != len(a.IDs)+r.Used || r.EdgeCutBefore != a.Metrics.EdgeCut {
+	if r.Budget != wantBudget || r.Budget < 0 || r.Used < 0 || r.Used > r.Budget || r.Useful < 0 || r.Filler < 0 || r.Useful+r.Filler != r.Used || r.Unspent != r.Budget-r.Used || r.Capacity != capacity || len(r.Loads) != a.Config.Partitions || len(r.Memberships) != len(a.IDs)+r.Used || r.EdgeCutBefore != a.Metrics.EdgeCut {
 		return errors.New("invalid overlap accounting")
 	}
 	if cfg.RequireExact && r.Unspent != 0 {

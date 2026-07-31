@@ -22,6 +22,14 @@ func refreshTestM3VariantIdentityV1(t testing.TB, descriptor *m3VariantDescripto
 	descriptor.OverlapRequested = int(math.Floor(descriptor.OverlapRatio * float64(descriptor.SourceRows)))
 	descriptor.OverlapRealized = descriptor.OverlapMemberships
 	descriptor.OverlapRejected = descriptor.OverlapRequested - descriptor.OverlapRealized
+	descriptor.OverlapUseful = descriptor.OverlapRealized
+	descriptor.OverlapFiller = 0
+	descriptor.OverlapUnusedCapacity = descriptor.Capacity*int(descriptor.Partitions) - int(descriptor.SourceRows) - descriptor.OverlapRealized
+	descriptor.PartitionLoads = make([]int, descriptor.Partitions)
+	for i := 0; i < int(descriptor.SourceRows)+descriptor.OverlapRealized; i++ {
+		descriptor.PartitionLoads[i%int(descriptor.Partitions)]++
+	}
+	descriptor.EdgeCutAfter = descriptor.EdgeCutBefore - descriptor.OverlapUseful
 	descriptor.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(*descriptor)
 	descriptor.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{
 		Capacity: uint64(descriptor.Capacity), Budget: uint64(math.Floor(descriptor.OverlapRatio * float64(descriptor.SourceRows))),
@@ -146,6 +154,35 @@ func TestM8CoupledGraphGateRequiresOneMatchedOperatingPointV1(t *testing.T) {
 	report.Rows[2].RecallAtK = .95
 	if got := m8AnyGraphVariantCoupledGatesPassV1([]m8ProductionReportV1{report}); got != "fail" {
 		t.Fatalf("failed exhaustive baseline must be excluded: gate=%q want fail", got)
+	}
+}
+
+func TestM8DecisionReportUsesLowestQuarterProbeOperatingPointV1(t *testing.T) {
+	descriptor := testM3VariantDescriptorV1(t.TempDir())
+	attribution := m8ProductionAttributionV1{GlobalExactRecallAtK: 1, OracleStagesComplete: true, PrimaryHomeOracleRecallAtK: .8, FinalMembershipOracleRecallAtK: .9, ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true, ExactRepresentativeRecallAtK: .7, ApproximateRepresentativeRecallAtK: .7, LocalHNSWRecallAtK: .7, EndToEndRecallAtK: .7}
+	attribution.StageOwners = m8AttributionStageOwnersV1(attribution)
+	report := m8ProductionReportV1{Variant: &descriptor, Config: m8ProductionConfigEvidenceV1{Partitions: 32}, Rows: []m8ProductionRowV1{
+		{Status: "pass", Probes: 8, EfSearch: 128, Concurrency: 1, Attribution: attribution},
+		{Status: "pass", Probes: 8, EfSearch: 64, Concurrency: 1, Attribution: attribution},
+		{Status: "pass", Probes: 4, EfSearch: 32, Concurrency: 1, Attribution: attribution},
+	}}
+	got := m8DecisionReportV1([]m8ProductionReportV1{report})
+	if len(got) != 4 {
+		t.Fatalf("decision=%+v", got)
+	}
+	for _, row := range got {
+		if row.Probes != 8 || row.EfSearch != 64 || row.VariantID != descriptor.VariantID {
+			t.Fatalf("decision row=%+v", row)
+		}
+	}
+}
+
+func TestM8DecisionReportRetainsVariantWithoutQuarterProbeRowV1(t *testing.T) {
+	descriptor := testM3VariantDescriptorV1(t.TempDir())
+	report := m8ProductionReportV1{Variant: &descriptor, Config: m8ProductionConfigEvidenceV1{Partitions: 16}, Rows: []m8ProductionRowV1{{Status: "fail", Probes: 4}}}
+	got := m8DecisionReportV1([]m8ProductionReportV1{report})
+	if len(got) != 1 || got[0].VariantID != descriptor.VariantID || got[0].Probes != 4 || got[0].Stage != "none" || got[0].Owner != "no_quarter_probe_operating_point" {
+		t.Fatalf("decision=%+v", got)
 	}
 }
 
@@ -431,6 +468,55 @@ func TestCommittedV1QualificationLedgerArtifactsV1(t *testing.T) {
 		sum := sha256.Sum256(content)
 		if hex.EncodeToString(sum[:]) != artifact.SHA256 {
 			t.Fatalf("digest mismatch %s", artifact.Path)
+		}
+	}
+}
+
+func TestCommitted4023AttributionLedgerArtifactsV1(t *testing.T) {
+	type publishedArtifact struct {
+		Role   string `json:"role"`
+		Path   string `json:"path"`
+		SHA256 string `json:"sha256"`
+	}
+	var got struct {
+		SchemaVersion    int                 `json:"schema_version"`
+		Status           string              `json:"status"`
+		Disposition      string              `json:"disposition"`
+		MeasuredCodeHead string              `json:"measured_code_head"`
+		Gates            map[string]string   `json:"gates"`
+		Commands         map[string]string   `json:"commands"`
+		Artifacts        []publishedArtifact `json:"raw_artifacts"`
+	}
+	root := filepath.Join("..", "..")
+	raw, err := os.ReadFile(filepath.Join(root, "TreeDB", "docs", "spec", "artifacts", "vector-partition-attribution-4023.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.SchemaVersion != 1 || got.Status != "experimental_gate_failures" || got.Disposition != "enablement_off_follow_up_required" || got.MeasuredCodeHead != "6d69bb99ab2e30ff33045fc39e3041780fc63be3" {
+		t.Fatalf("ledger linkage/schema/status=%+v", got)
+	}
+	if got.Gates["exhaustive_correctness"] != "pass" || got.Gates["probe_reduction"] != "fail" || got.Gates["existing_behavior"] != "pending_latest_head_required_suites" {
+		t.Fatalf("ledger gates=%v", got.Gates)
+	}
+	for _, required := range []string{"-m8-variant-dbs", "-probes 1,2,4,8,16", "-m8-max-exact-truth-visits 600000000"} {
+		if !strings.Contains(got.Commands["matrix"], required) {
+			t.Fatalf("matrix replay command omits %s: %s", required, got.Commands["matrix"])
+		}
+	}
+	if len(got.Artifacts) != 6 {
+		t.Fatalf("published artifact count=%d want 6", len(got.Artifacts))
+	}
+	for _, artifact := range got.Artifacts {
+		content, err := os.ReadFile(filepath.Join(root, artifact.Path))
+		if err != nil {
+			t.Fatalf("read %s: %v", artifact.Path, err)
+		}
+		sum := sha256.Sum256(content)
+		if artifact.Role == "" || artifact.SHA256 == "" || filepath.IsAbs(artifact.Path) || hex.EncodeToString(sum[:]) != artifact.SHA256 {
+			t.Fatalf("invalid published artifact=%+v", artifact)
 		}
 	}
 }

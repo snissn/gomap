@@ -37,7 +37,32 @@ type m8ProductionMatrixV1 struct {
 	Gates                       m8ProductionMatrixGatesV1  `json:"gates"`
 	OverlapMaterializationRatio float64                    `json:"overlap_materialization_ratio"`
 	OverlapStorageRatio         float64                    `json:"overlap_storage_ratio"`
+	OverlapDiagnostics          m8OverlapDiagnosticsV1     `json:"overlap_diagnostics"`
+	Decision                    []m8DecisionRowV1          `json:"decision_report"`
 	Limitations                 []string                   `json:"limitations"`
+}
+
+type m8OverlapDiagnosticsV1 struct {
+	Requested                    int     `json:"requested_replicas"`
+	Useful                       int     `json:"positive_gain_replicas"`
+	Filler                       int     `json:"forced_or_filler_replicas"`
+	Rejected                     int     `json:"rejected_replicas"`
+	UnusedCapacity               int     `json:"unused_capacity"`
+	EdgeCutBefore                int     `json:"directed_edge_cut_before"`
+	EdgeCutAfter                 int     `json:"directed_edge_cut_after"`
+	CutReductionPerUsefulReplica float64 `json:"directed_cut_reduction_per_useful_replica"`
+}
+
+type m8DecisionRowV1 struct {
+	VariantID   string  `json:"variant_id"`
+	Probes      int     `json:"probes"`
+	EfSearch    int     `json:"ef_search"`
+	Concurrency int     `json:"concurrency"`
+	Stage       string  `json:"stage"`
+	Owner       string  `json:"owner"`
+	FromRecall  float64 `json:"from_recall_at_k"`
+	ToRecall    float64 `json:"to_recall_at_k"`
+	Delta       float64 `json:"delta_at_k"`
 }
 
 type m8ProductionComparisonV1 struct {
@@ -172,7 +197,14 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 	if cfg.format == "json" {
 		_, err = stdout.Write(raw)
 	} else {
-		_, err = fmt.Fprintf(stdout, "M8 matrix status=%s disposition=%s artifact=%s rows=%d\n", matrix.Status, matrix.Disposition, path, len(matrix.Comparison))
+		if _, err = fmt.Fprintf(stdout, "M8 matrix status=%s disposition=%s artifact=%s rows=%d\n", matrix.Status, matrix.Disposition, path, len(matrix.Comparison)); err == nil {
+			for _, decision := range matrix.Decision {
+				_, err = fmt.Fprintf(stdout, "decision variant=%s probes=%d ef=%d concurrency=%d stage=%s owner=%s delta=%+.6f\n", decision.VariantID, decision.Probes, decision.EfSearch, decision.Concurrency, decision.Stage, decision.Owner, decision.Delta)
+				if err != nil {
+					break
+				}
+			}
+		}
 	}
 	return err
 }
@@ -301,7 +333,7 @@ func m8ValidateVariantBuildCompatibilityV1(variants []m3VariantDescriptorV1) err
 
 func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8ProductionReportV1) (m8ProductionMatrixV1, error) {
 	matrix := m8ProductionMatrixV1{
-		SchemaVersion: 3, ResultKind: "m8_production_multi_variant_matrix_v3", Status: "incomplete", GeneratedAt: time.Now().UTC(),
+		SchemaVersion: 4, ResultKind: "m8_production_multi_variant_matrix_v4", Status: "incomplete", GeneratedAt: time.Now().UTC(),
 		Command: append([]string(nil), cfg.command...), BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dataset: fixture,
 		RequiredVariants: append([]string(nil), m8RequiredVariantIDsV1...), Variants: reports,
 		Limitations: []string{"single-host loopback production-shaped topology; multi-host qualification remains owned by #3983", "no external-system or paper-scale comparison is claimed"},
@@ -364,6 +396,14 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 	}
 	matrix.OverlapStorageRatio = float64(overlapBytes) / float64(disjointBytes)
 	overlapDescriptor := byID["graph-overlap-020-v1"].Variant
+	matrix.OverlapDiagnostics = m8OverlapDiagnosticsV1{
+		Requested: overlapDescriptor.OverlapRequested, Useful: overlapDescriptor.OverlapUseful, Filler: overlapDescriptor.OverlapFiller,
+		Rejected: overlapDescriptor.OverlapRejected, UnusedCapacity: overlapDescriptor.OverlapUnusedCapacity,
+		EdgeCutBefore: overlapDescriptor.EdgeCutBefore, EdgeCutAfter: overlapDescriptor.EdgeCutAfter,
+	}
+	if overlapDescriptor.OverlapUseful > 0 {
+		matrix.OverlapDiagnostics.CutReductionPerUsefulReplica = float64(overlapDescriptor.EdgeCutBefore-overlapDescriptor.EdgeCutAfter) / float64(overlapDescriptor.OverlapUseful)
+	}
 	wantOverlapMemberships := uint64(math.Floor(overlapDescriptor.OverlapRatio * float64(overlapDescriptor.SourceRows)))
 	gotOverlapMemberships := uint64(overlapDescriptor.OverlapMemberships)
 	if overlapDescriptor.SourceRows > 0 {
@@ -404,6 +444,7 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 			break
 		}
 	}
+	matrix.Decision = m8DecisionReportV1(matrix.Variants)
 	sort.Slice(matrix.Comparison, func(i, j int) bool {
 		a, b := matrix.Comparison[i], matrix.Comparison[j]
 		if a.VariantID != b.VariantID {
@@ -418,6 +459,48 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 		return a.Concurrency < b.Concurrency
 	})
 	return matrix, nil
+}
+
+// m8DecisionReportV1 emits one deterministic quarter-budget attribution view
+// per retained variant, never a product-enablement claim.
+func m8DecisionReportV1(reports []m8ProductionReportV1) []m8DecisionRowV1 {
+	out := make([]m8DecisionRowV1, 0, len(reports)*6)
+	for _, report := range reports {
+		if report.Variant == nil {
+			continue
+		}
+		targetProbes := max(1, report.Config.Partitions/4)
+		var selected *m8ProductionRowV1
+		for i := range report.Rows {
+			row := &report.Rows[i]
+			if row.Status != "pass" || row.Probes != targetProbes || selected != nil && (row.EfSearch > selected.EfSearch || row.EfSearch == selected.EfSearch && row.Concurrency >= selected.Concurrency) {
+				continue
+			}
+			selected = row
+		}
+		if selected == nil {
+			out = append(out, m8DecisionRowV1{VariantID: report.Variant.VariantID, Probes: targetProbes, Stage: "none", Owner: "no_quarter_probe_operating_point"})
+			continue
+		}
+		added := false
+		for _, stage := range selected.Attribution.StageOwners {
+			if !stage.Active {
+				continue
+			}
+			out = append(out, m8DecisionRowV1{VariantID: report.Variant.VariantID, Probes: selected.Probes, EfSearch: selected.EfSearch, Concurrency: selected.Concurrency, Stage: stage.Stage, Owner: stage.Owner, FromRecall: stage.FromRecall, ToRecall: stage.ToRecall, Delta: stage.Delta})
+			added = true
+		}
+		if !added {
+			out = append(out, m8DecisionRowV1{VariantID: report.Variant.VariantID, Probes: selected.Probes, EfSearch: selected.EfSearch, Concurrency: selected.Concurrency, Stage: "none", Owner: "none_observed"})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].VariantID != out[j].VariantID {
+			return out[i].VariantID < out[j].VariantID
+		}
+		return out[i].Stage < out[j].Stage
+	})
+	return out
 }
 
 func m8AggregateVariantGateV1(reports []m8ProductionReportV1, value func(m8ProductionGateLedgerV1) string) string {
