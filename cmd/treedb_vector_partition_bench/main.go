@@ -1572,16 +1572,43 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		return m8BenchmarkWorkPlan{}, errors.New("cannot plan M8 benchmark work without positive caps, a valid fixture/top-k, and complete sweeps")
 	}
 	plan := m8BenchmarkWorkPlan{}
+	variantRuns := int64(1)
+	var supportedOverlaps int64
+	for _, overlap := range cfg.overlaps {
+		if overlap == 0 {
+			supportedOverlaps++
+		}
+	}
+	if cfg.m8ExistingDB != "" {
+		// A retained descriptor supplies the materialized overlap policy. The
+		// single-variant runner validates that the one configured overlap equals
+		// that descriptor, including for a nonzero overlap child.
+		supportedOverlaps = 1
+	}
+	if len(cfg.m8VariantDBs) > 0 {
+		// Each immutable matrix variant executes the complete single-overlap
+		// child path in its own process. Work is cumulative across children,
+		// while all retained result and attribution matrices below model the
+		// peak of one sequential child.
+		variantRuns = int64(len(cfg.m8VariantDBs))
+		supportedOverlaps = 1
+	}
 	var membershipOracleSubsetsPerSweep int64
 	var membershipOracleWorkPerQuerySweep int64
 	var probeSum int64
 	truthWords := int64((cfg.topK + 63) / 64)
 	for _, probes := range cfg.probes {
+		if probes < 1 || probes > cfg.partitions {
+			return plan, errors.New("cannot plan M8 benchmark work with an invalid probe count")
+		}
 		nextProbeSum, err := memoryAdd(probeSum, int64(probes))
 		if err != nil {
 			return plan, err
 		}
 		probeSum = nextProbeSum
+		if supportedOverlaps == 0 {
+			continue
+		}
 		combinations, err := m8MembershipOracleCombinationCountV1(cfg.partitions, probes, maxBenchmarkWorkUnits)
 		if err != nil {
 			return plan, err
@@ -1640,27 +1667,6 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	exactTruthVisits, err := memoryMul(int64(m.Vectors), int64(m.Queries))
 	if err != nil {
 		return m8BenchmarkWorkPlan{}, err
-	}
-	variantRuns := int64(1)
-	var supportedOverlaps int64
-	for _, overlap := range cfg.overlaps {
-		if overlap == 0 {
-			supportedOverlaps++
-		}
-	}
-	if cfg.m8ExistingDB != "" {
-		// A retained descriptor supplies the materialized overlap policy. The
-		// single-variant runner validates that the one configured overlap equals
-		// that descriptor, including for a nonzero overlap child.
-		supportedOverlaps = 1
-	}
-	if len(cfg.m8VariantDBs) > 0 {
-		// Each immutable matrix variant executes the complete single-overlap
-		// child path in its own process. Work is cumulative across children,
-		// while all retained result and attribution matrices below model the
-		// peak of one sequential child.
-		variantRuns = int64(len(cfg.m8VariantDBs))
-		supportedOverlaps = 1
 	}
 	maxFinalMemberships := int64(1)
 	if cfg.m8ExistingDB != "" || len(cfg.m8VariantDBs) > 0 {

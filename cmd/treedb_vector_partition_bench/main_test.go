@@ -257,13 +257,18 @@ func TestM8MembershipOracleCombinationBoundIsPreflightedV1(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "membership oracle C(64,32)") {
 		t.Fatalf("missing combination preflight refusal: %v", err)
 	}
+	cfg.overlaps = []float64{.2}
+	plan, err := validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 64, Queries: 1, Dimensions: 1}, math.MaxInt64, math.MaxInt64)
+	if err != nil || plan.MaxMembershipOracleSubsets != 0 || plan.MembershipOracleWorkUnits != 0 {
+		t.Fatalf("unsupported-only run planned membership-oracle work: plan=%+v err=%v", plan, err)
+	}
 	cfg = config{partitions: 16, overlaps: []float64{0}, probes: []int{8}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}
 	_, err = validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 16, Queries: 20_000, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64)
 	if err == nil || !strings.Contains(err.Error(), "membership-oracle work") {
 		t.Fatalf("missing aggregate membership-oracle refusal: %v", err)
 	}
 	cfg.efSearch = []int{64, 128}
-	plan, err := validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 16, Queries: 5_000, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64)
+	plan, err = validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 16, Queries: 5_000, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64)
 	if err != nil || plan.MembershipOracleSubsetEvaluations != 64_350_000 || plan.MembershipOracleWorkUnits != 187_300_000 {
 		t.Fatalf("ef-independent oracle plan=%+v err=%v", plan, err)
 	}
