@@ -1564,6 +1564,22 @@ func TestKaHIPAdapterRoundTripV1(t *testing.T) {
 	if got.Backend != "kahip_python_3.25_eco_symmetrized_v1_seed_1" || got.Metrics.MaxPartitionSize > got.Metrics.Cap {
 		t.Fatalf("invalid KaHIP artifact: %+v", got)
 	}
+	adapter, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongRecord := strings.Replace(string(adapter), "RECORD_SHA256 = \"7ff011253147286fcebc9185573662bf31dbcfbab1944f9b4940032f49ea5217\"", "RECORD_SHA256 = \"0000000000000000000000000000000000000000000000000000000000000000\"", 1)
+	if wrongRecord == string(adapter) {
+		t.Fatal("test did not replace pinned KaHIP distribution identity")
+	}
+	badScript := filepath.Join(t.TempDir(), "kahip_wrong_record.py")
+	if err := os.WriteFile(badScript, []byte(wrongRecord), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = vectorpartition.RunExternalJSONForRequestWithLimits(ctx, []string{python, badScript}, raw, vectorpartition.ExternalJSONLimits{MaxInput: len(raw), MaxOutput: len(raw) + 1024}, request)
+	if err == nil || !strings.Contains(err.Error(), "pinned kahip") {
+		t.Fatalf("same-version wrong distribution identity accepted: %v", err)
+	}
 }
 
 func TestPartitionLocalHNSWMIsIndependentAndM3OnlyV1(t *testing.T) {
