@@ -96,16 +96,9 @@ being pooled into one end-to-end number.
 ## Retained artifacts
 
 The complete machine-readable matrix and compact M2/M3 reports are committed
-under `TreeDB/docs/spec/artifacts/vector-partition-attribution-4023/`:
-
-| Artifact | SHA-256 |
-| --- | --- |
-| `graph-disjoint-m2.json` | `5a095727ed0f82815643daddb47bd11a08c9630ede6f9b1d7e7ec427dc8e9937` |
-| `graph-disjoint-m3.json` | `b6528ba72fd291371f330e687dc456eb89d48979af6e19492fd6ea4fc3b4ab88` |
-| `graph-overlap-020-m3.json` | `6fe8dc31dc3888f103c93032dab687640f86f994c9f39dff0f95a90d50f189ad` |
-| `stable-id-hash-disjoint-m2.json` | `35c727d799bb7c99ce2fd04813cb64d61d57128eb3fc9f4348f5fb2c2f681af1` |
-| `stable-id-hash-disjoint-m3.json` | `195f51e6722d11c79d234197d9b7da7683cc94077466475f2493fe83b3a123fe` |
-| `m8-matrix.json` | `d3a71483ce0e9ea49d2cc3f2621feaa36b3e9d7a6162545e99ba4f544e87a88f` |
+under `TreeDB/docs/spec/artifacts/vector-partition-attribution-4023/`. The
+adjacent `vector-partition-attribution-4023.json` ledger is the authoritative
+path and SHA-256 index; its linkage test verifies all six published artifacts.
 
 The matrix records the host, resource limits and observations, variant
 identities, topology, exact commands, all probe rows, stage ledger, gate

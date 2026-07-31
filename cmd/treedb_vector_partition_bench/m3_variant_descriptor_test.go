@@ -96,7 +96,7 @@ func TestM3VariantDescriptorRejectsMalformedPartitionLoadsV1(t *testing.T) {
 	}
 }
 
-func TestM3VariantBuildIdentityBindsExactOverlapTargetAndCapacityV1(t *testing.T) {
+func TestM3VariantBuildIdentityBindsOverlapInputsAndOutcomesV1(t *testing.T) {
 	d := testM3VariantDescriptorV1(t.TempDir())
 	baseline, err := m3VariantBuildIdentityDigestV1(d)
 	if err != nil {
@@ -113,6 +113,21 @@ func TestM3VariantBuildIdentityBindsExactOverlapTargetAndCapacityV1(t *testing.T
 	capacityDigest, err := m3VariantBuildIdentityDigestV1(capacityChanged)
 	if err != nil || capacityDigest == baseline {
 		t.Fatalf("capacity identity baseline=%s changed=%s err=%v", baseline, capacityDigest, err)
+	}
+	for name, mutate := range map[string]func(*m3VariantDescriptorV1){
+		"useful":     func(candidate *m3VariantDescriptorV1) { candidate.OverlapUseful-- },
+		"filler":     func(candidate *m3VariantDescriptorV1) { candidate.OverlapFiller++ },
+		"cut before": func(candidate *m3VariantDescriptorV1) { candidate.EdgeCutBefore++ },
+		"cut after":  func(candidate *m3VariantDescriptorV1) { candidate.EdgeCutAfter++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := d
+			mutate(&candidate)
+			changed, err := m3VariantBuildIdentityDigestV1(candidate)
+			if err != nil || changed == baseline {
+				t.Fatalf("outcome identity baseline=%s changed=%s err=%v", baseline, changed, err)
+			}
+		})
 	}
 }
 

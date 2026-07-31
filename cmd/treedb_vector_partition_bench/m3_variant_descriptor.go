@@ -81,11 +81,17 @@ func m3VariantBuildIdentityDigestV1(d m3VariantDescriptorV1) (string, error) {
 		PartitionHNSWM        int
 		Capacity              int
 		OverlapRequested      int
+		OverlapUseful         int
+		OverlapFiller         int
+		EdgeCutBefore         int
+		EdgeCutAfter          int
 	}{
 		FixtureChecksum: d.FixtureChecksum, VariantID: d.VariantID, AssignmentBasis: d.AssignmentBasis, OverlapRatio: d.OverlapRatio,
 		ArtifactSHA256: d.ArtifactSHA256, GraphArtifactSHA256: d.GraphArtifactSHA256, ArtifactBackend: d.ArtifactBackend,
 		Source: d.Source, IndexDefinitionDigest: d.IndexDefinitionDigest, PartitionHNSWM: d.PartitionHNSWM,
 		Capacity: d.Capacity, OverlapRequested: d.OverlapRequested,
+		OverlapUseful: d.OverlapUseful, OverlapFiller: d.OverlapFiller,
+		EdgeCutBefore: d.EdgeCutBefore, EdgeCutAfter: d.EdgeCutAfter,
 	}
 	raw, err := json.Marshal(identity)
 	if err != nil {
