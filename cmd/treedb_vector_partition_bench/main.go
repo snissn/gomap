@@ -1511,6 +1511,22 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 				return plan, err
 			}
 		}
+		// The primary-home oracle counts each truth result, sorts every
+		// partition count, and walks the selected probe counts. Charge a
+		// conservative quadratic sort bound so the shared oracle cap covers
+		// both the primary-home and final-membership ladders.
+		primarySortWork, err := memoryMul(int64(cfg.partitions), int64(cfg.partitions))
+		if err != nil {
+			return plan, err
+		}
+		primaryOracleWork, err := memoryAdd(int64(cfg.topK), primarySortWork, int64(probes))
+		if err != nil {
+			return plan, err
+		}
+		oracleWork, err = memoryAdd(oracleWork, primaryOracleWork)
+		if err != nil {
+			return plan, err
+		}
 		membershipOracleWorkPerQuerySweep, err = memoryAdd(membershipOracleWorkPerQuerySweep, oracleWork)
 		if err != nil {
 			return plan, err

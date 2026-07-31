@@ -36,8 +36,9 @@ embedded in the retained JSON artifacts.
 | 8 | .8316 | .9192 | .4979 |
 | 16 | .9971 | .9894 | 1.0000 |
 
-These are production-shaped end-to-end recall@10 values. All-partition exact
-ID and score parity pass for every variant.
+These are production-shaped end-to-end recall@10 values. Exhaustive
+partition-union ID and score parity (`exhaustive_partition_union_id_parity`,
+`exhaustive_partition_union_score_parity`) pass for every variant.
 
 ## Quarter-probe ownership
 
