@@ -25,19 +25,35 @@ type Membership struct {
 	Home          bool
 }
 
+const overlapReplicaPolicyV1 = "boundary_utility_v1"
+
+// Replica records the construction reason for one non-home membership. It is
+// diagnostic construction metadata only: no held-out query data contributes to
+// Gain or Class.
+type Replica struct {
+	VectorOrdinal int
+	Partition     int
+	Policy        string
+	Gain          int
+	Class         string // positive_gain or zero_utility
+}
+
 // OverlapResult is canonical (ordinal, partition order) and records budget
 // left unused when the capacity/affinity constraints prevent another move.
 type OverlapResult struct {
-	Memberships   []Membership
-	Budget        int
-	Used          int
-	Unspent       int
-	Capacity      int
-	Loads         []int
-	EdgeCutBefore int
-	EdgeCutAfter  int
-	Useful        int // memberships applied with a positive directed cut reduction
-	Filler        int // exact-target memberships added after useful proposals ended
+	Memberships          []Membership
+	Budget               int
+	Used                 int
+	Unspent              int
+	Capacity             int
+	Loads                []int
+	EdgeCutBefore        int
+	EdgeCutAfter         int
+	Useful               int // memberships applied with a positive directed cut reduction
+	Filler               int // exact-target memberships added after useful proposals ended
+	Replicas             []Replica
+	CumulativeUtility    int
+	DestinationDiversity []int
 }
 
 // OverlapShortfallError reports an exact-build request that could not be
@@ -88,6 +104,7 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 		}
 	}
 	used, useful, filler := 0, 0, 0
+	replicas := make([]Replica, 0, budget)
 	type proposal struct {
 		node, part, gain int
 		id               string
@@ -143,7 +160,7 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 			// is exhausted, deterministically fill remaining legal non-home
 			// slots. Adding memberships cannot increase the overlap edge cut.
 			if cfg.RequireExact {
-				filled, usefulFilled, fillerFilled := fillExactOverlapSlots(a, members, incoming, loads, capacity, budget-used)
+				filled, usefulFilled, fillerFilled := fillExactOverlapSlotsWithReplicas(a, members, incoming, loads, capacity, budget-used, &replicas)
 				used += filled
 				useful += usefulFilled
 				filler += fillerFilled
@@ -164,18 +181,20 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 			if _, exists := members[p.node][p.part]; exists {
 				continue
 			}
-			if overlapCutReduction(members, p.node, p.part, a.Graph.Neighbors[p.node], incoming[p.node]) == 0 {
+			gain := overlapCutReduction(members, p.node, p.part, a.Graph.Neighbors[p.node], incoming[p.node])
+			if gain == 0 {
 				continue
 			}
 			members[p.node][p.part] = struct{}{}
 			loads[p.part]++
 			used++
 			useful++
+			replicas = append(replicas, Replica{VectorOrdinal: p.node, Partition: p.part, Policy: overlapReplicaPolicyV1, Gain: gain, Class: "positive_gain"})
 			applied++
 		}
 		if applied == 0 {
 			if cfg.RequireExact {
-				filled, usefulFilled, fillerFilled := fillExactOverlapSlots(a, members, incoming, loads, capacity, budget-used)
+				filled, usefulFilled, fillerFilled := fillExactOverlapSlotsWithReplicas(a, members, incoming, loads, capacity, budget-used, &replicas)
 				used += filled
 				useful += usefulFilled
 				filler += fillerFilled
@@ -192,6 +211,7 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 		EdgeCutBefore: a.Metrics.EdgeCut,
 		Useful:        useful,
 		Filler:        filler,
+		Replicas:      replicas,
 	}
 	for i, set := range members {
 		for p := range set {
@@ -204,6 +224,24 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 		}
 		return out.Memberships[i].Partition < out.Memberships[j].Partition
 	})
+	sort.Slice(out.Replicas, func(i, j int) bool {
+		if out.Replicas[i].VectorOrdinal != out.Replicas[j].VectorOrdinal {
+			return out.Replicas[i].VectorOrdinal < out.Replicas[j].VectorOrdinal
+		}
+		return out.Replicas[i].Partition < out.Replicas[j].Partition
+	})
+	out.DestinationDiversity = make([]int, a.Config.Partitions)
+	destinations := make([]map[int]struct{}, a.Config.Partitions)
+	for partition := range destinations {
+		destinations[partition] = make(map[int]struct{})
+	}
+	for _, replica := range out.Replicas {
+		out.CumulativeUtility += replica.Gain
+		destinations[replica.Partition][a.Assignment[replica.VectorOrdinal]] = struct{}{}
+	}
+	for partition := range destinations {
+		out.DestinationDiversity[partition] = len(destinations[partition])
+	}
 	out.EdgeCutAfter = overlapEdgeCut(a, out.Memberships)
 	if cfg.RequireExact && out.Unspent != 0 {
 		return OverlapResult{}, &OverlapShortfallError{Requested: out.Budget, Realized: out.Used, Rejected: out.Unspent, Capacity: out.Capacity}
@@ -219,6 +257,10 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 // validated artifact; partition order is stable. A vector's durable cap and
 // the declared total-membership cap are both rechecked at application time.
 func fillExactOverlapSlots(a Artifact, members []map[int]struct{}, incoming [][]int, loads []int, capacity, remaining int) (used, useful, filler int) {
+	return fillExactOverlapSlotsWithReplicas(a, members, incoming, loads, capacity, remaining, nil)
+}
+
+func fillExactOverlapSlotsWithReplicas(a Artifact, members []map[int]struct{}, incoming [][]int, loads []int, capacity, remaining int, replicas *[]Replica) (used, useful, filler int) {
 	for i := range a.IDs {
 		if used == remaining || len(members[i])-1 >= MaxOverlapMembershipsPerVector {
 			continue
@@ -230,10 +272,16 @@ func fillExactOverlapSlots(a Artifact, members []map[int]struct{}, incoming [][]
 			if _, exists := members[i][partition]; exists {
 				continue
 			}
-			if overlapCutReduction(members, i, partition, a.Graph.Neighbors[i], incoming[i]) > 0 {
+			gain := overlapCutReduction(members, i, partition, a.Graph.Neighbors[i], incoming[i])
+			class := "zero_utility"
+			if gain > 0 {
 				useful++
+				class = "positive_gain"
 			} else {
 				filler++
+			}
+			if replicas != nil {
+				*replicas = append(*replicas, Replica{VectorOrdinal: i, Partition: partition, Policy: overlapReplicaPolicyV1, Gain: gain, Class: class})
 			}
 			members[i][partition] = struct{}{}
 			loads[partition]++
@@ -298,13 +346,39 @@ func ValidateOverlap(a Artifact, cfg OverlapConfig, r OverlapResult) error {
 	if capacity < a.Metrics.Cap {
 		return fmt.Errorf("overlap capacity %d below immutable home load cap %d", capacity, a.Metrics.Cap)
 	}
-	if r.Budget != wantBudget || r.Budget < 0 || r.Used < 0 || r.Used > r.Budget || r.Useful < 0 || r.Filler < 0 || r.Useful+r.Filler != r.Used || r.Unspent != r.Budget-r.Used || r.Capacity != capacity || len(r.Loads) != a.Config.Partitions || len(r.Memberships) != len(a.IDs)+r.Used || r.EdgeCutBefore != a.Metrics.EdgeCut {
+	if r.Budget != wantBudget || r.Budget < 0 || r.Used < 0 || r.Used > r.Budget || r.Useful < 0 || r.Filler < 0 || r.Useful+r.Filler != r.Used || r.Unspent != r.Budget-r.Used || r.Capacity != capacity || len(r.Loads) != a.Config.Partitions || len(r.Memberships) != len(a.IDs)+r.Used || len(r.Replicas) != r.Used || len(r.DestinationDiversity) != a.Config.Partitions || r.EdgeCutBefore != a.Metrics.EdgeCut {
 		return errors.New("invalid overlap accounting")
 	}
 	if cfg.RequireExact && r.Unspent != 0 {
 		return &OverlapShortfallError{Requested: r.Budget, Realized: r.Used, Rejected: r.Unspent, Capacity: r.Capacity}
 	}
 	seen := make(map[[2]int]struct{}, len(r.Memberships))
+	replicas := make(map[[2]int]Replica, len(r.Replicas))
+	utility := 0
+	destinations := make([]map[int]struct{}, a.Config.Partitions)
+	for partition := range destinations {
+		destinations[partition] = make(map[int]struct{})
+	}
+	for i, replica := range r.Replicas {
+		if replica.VectorOrdinal < 0 || replica.VectorOrdinal >= len(a.IDs) || replica.Partition < 0 || replica.Partition >= a.Config.Partitions || replica.Policy != overlapReplicaPolicyV1 || replica.Gain < 0 || (replica.Gain == 0 && replica.Class != "zero_utility") || (replica.Gain > 0 && replica.Class != "positive_gain") || (i > 0 && (replica.VectorOrdinal < r.Replicas[i-1].VectorOrdinal || replica.VectorOrdinal == r.Replicas[i-1].VectorOrdinal && replica.Partition <= r.Replicas[i-1].Partition)) {
+			return errors.New("invalid overlap replica")
+		}
+		key := [2]int{replica.VectorOrdinal, replica.Partition}
+		if _, exists := replicas[key]; exists {
+			return errors.New("duplicate overlap replica")
+		}
+		replicas[key] = replica
+		utility += replica.Gain
+		destinations[replica.Partition][a.Assignment[replica.VectorOrdinal]] = struct{}{}
+	}
+	if utility != r.CumulativeUtility {
+		return errors.New("overlap utility accounting mismatch")
+	}
+	for partition := range destinations {
+		if r.DestinationDiversity[partition] != len(destinations[partition]) {
+			return errors.New("overlap destination diversity mismatch")
+		}
+	}
 	homes := make([]int, len(a.IDs))
 	loads := make([]int, a.Config.Partitions)
 	perVector := make([]int, len(a.IDs))
@@ -325,6 +399,9 @@ func ValidateOverlap(a Artifact, cfg OverlapConfig, r OverlapResult) error {
 		}
 		loads[m.Partition]++
 		if !m.Home {
+			if _, exists := replicas[key]; !exists {
+				return errors.New("overlap replica membership is missing")
+			}
 			perVector[m.VectorOrdinal]++
 			if perVector[m.VectorOrdinal] > MaxOverlapMembershipsPerVector {
 				return errors.New("overlap membership per-vector cap exceeded")

@@ -99,7 +99,11 @@ func newM8ProductionMultiGroupAssetsV1(vectors [][]float64, groups []string, par
 	for _, row := range rows {
 		part := int(row.VectorOrdinal % uint64(partitions))
 		h.manifest.Memberships = append(h.manifest.Memberships, collections.VectorPartitionMembershipV1{VectorOrdinal: row.VectorOrdinal, PartitionID: uint32(part)})
-		routerParts[part].Vectors = append(routerParts[part].Vectors, vectorpartition.RouterVectorV1{Ordinal: row.VectorOrdinal, Values: row.Values})
+		routerParts[part].Vectors = append(routerParts[part].Vectors, vectorpartition.RouterVectorV1{
+			Ordinal:        row.VectorOrdinal,
+			Values:         row.Values,
+			MembershipKind: string(collections.VectorPartitionMembershipHomeV1),
+		})
 	}
 	h.manifest.Canonicalize()
 	inputs := make([]collections.VectorPartitionSearchAssetV1, partitions)

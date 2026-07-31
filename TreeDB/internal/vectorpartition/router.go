@@ -15,7 +15,9 @@ import (
 )
 
 const (
-	routerMaxVectors         = 1_000_000
+	// A 1M-source V1 build can carry its exact 20% overlap membership into
+	// router construction without relaxing the bounded envelope.
+	routerMaxVectors         = 1_200_000
 	routerMaxDimensions      = 4096
 	routerMaxPartitions      = 16384
 	routerMaxRepresentatives = 1_000_000
@@ -58,8 +60,9 @@ func DefaultRouterConfigV1() RouterConfigV1 {
 }
 
 type RouterVectorV1 struct {
-	Ordinal uint64    `json:"ordinal"`
-	Values  []float32 `json:"values"`
+	Ordinal        uint64    `json:"ordinal"`
+	Values         []float32 `json:"values"`
+	MembershipKind string    `json:"membership_kind,omitempty"`
 }
 
 type RouterPartitionV1 struct {
@@ -161,9 +164,9 @@ func ValidateRouterConfigV1(cfg RouterConfigV1) error {
 	}
 }
 
-// BuildRouterV1 deterministically coarsens each disjoint partition into a
-// bounded hierarchy of cosine representatives. Input order does not affect the
-// result.
+// BuildRouterV1 deterministically coarsens each partition's canonical final
+// membership set into a bounded hierarchy of cosine representatives. A source
+// ordinal may occur in more than one partition, but never twice in one.
 func BuildRouterV1(partitions []RouterPartitionV1, cfg RouterConfigV1) (RouterModelV1, error) {
 	var model RouterModelV1
 	if err := ValidateRouterConfigV1(cfg); err != nil {
@@ -186,7 +189,6 @@ func BuildRouterV1(partitions []RouterPartitionV1, cfg RouterConfigV1) (RouterMo
 	dimensions := 0
 	totalVectors := 0
 	totalRepresentativeBudget := 0
-	seenOrdinals := make(map[uint64]struct{})
 	normalized := make([][]routerBuildVectorV1, len(input))
 	for partitionOrdinal, partition := range input {
 		if len(partition.Vectors) == 0 {
@@ -199,10 +201,6 @@ func BuildRouterV1(partitions []RouterPartitionV1, cfg RouterConfigV1) (RouterMo
 			if vectorOrdinal > 0 && vector.Ordinal == vectors[vectorOrdinal-1].Ordinal {
 				return model, fmt.Errorf("vectorpartition: duplicate router vector ordinal %d", vector.Ordinal)
 			}
-			if _, exists := seenOrdinals[vector.Ordinal]; exists {
-				return model, fmt.Errorf("vectorpartition: router vector ordinal %d appears in multiple partitions", vector.Ordinal)
-			}
-			seenOrdinals[vector.Ordinal] = struct{}{}
 			if dimensions == 0 {
 				dimensions = len(vector.Values)
 				if dimensions == 0 || dimensions > cfg.MaxDimensions {
@@ -438,7 +436,7 @@ func ValidateRouterModelWithContextV1(ctx context.Context, model RouterModelV1) 
 	var previousLeaf uint32
 	representativesPerPartition := make(map[uint32]int, len(roots))
 	representedLeaves := make(map[uint32]struct{}, len(model.Representatives))
-	representedSources := make(map[uint64]struct{}, len(model.Representatives))
+	representedSources := make(map[[2]uint64]struct{}, len(model.Representatives))
 	for i, representative := range model.Representatives {
 		if i&63 == 0 {
 			if err := ctx.Err(); err != nil {
@@ -459,10 +457,11 @@ func ValidateRouterModelWithContextV1(ctx context.Context, model RouterModelV1) 
 			return fmt.Errorf("vectorpartition: duplicate representative leaf %d", representative.LeafNodeID)
 		}
 		representedLeaves[representative.LeafNodeID] = struct{}{}
-		if _, exists := representedSources[representative.SourceOrdinal]; exists {
-			return fmt.Errorf("vectorpartition: duplicate representative source ordinal %d", representative.SourceOrdinal)
+		sourceKey := [2]uint64{uint64(representative.PartitionID), representative.SourceOrdinal}
+		if _, exists := representedSources[sourceKey]; exists {
+			return fmt.Errorf("vectorpartition: duplicate representative source ordinal %d in partition %d", representative.SourceOrdinal, representative.PartitionID)
 		}
-		representedSources[representative.SourceOrdinal] = struct{}{}
+		representedSources[sourceKey] = struct{}{}
 		representativesPerPartition[representative.PartitionID]++
 		if representativesPerPartition[representative.PartitionID] > model.Config.RepresentativesPerPartition {
 			return fmt.Errorf("vectorpartition: partition %d exceeds representative budget", representative.PartitionID)

@@ -2972,7 +2972,9 @@ func newTreeDBRepresentativeRouter(vectors [][]float64, partitions int, routerCo
 		})
 		routerPartitions[partition].PartitionID = uint32(partition)
 		routerPartitions[partition].Vectors = append(routerPartitions[partition].Vectors, vectorpartition.RouterVectorV1{
-			Ordinal: sourceRow.VectorOrdinal, Values: sourceRow.Values,
+			Ordinal:        sourceRow.VectorOrdinal,
+			Values:         sourceRow.Values,
+			MembershipKind: string(collections.VectorPartitionMembershipHomeV1),
 		})
 	}
 	for documentOrdinal, seen := range seenDocuments {

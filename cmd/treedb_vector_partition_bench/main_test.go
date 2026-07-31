@@ -936,7 +936,7 @@ func TestM3OverlapPartitionIndexBuildsReopensAndSearchesNativePacks(t *testing.T
 		})
 	}
 	for _, row := range report.Rows {
-		if row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PackBytes == 0 || row.PartitionHNSWM != 4 || row.LocalSearches != 8*4 || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 || row.ExactLocalRecallAtK <= 0 || row.EdgesPerOp <= 0 {
+		if row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PackBytes == 0 || row.PartitionHNSWM != 4 || row.LocalSearches != 8*4 || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 || row.ExactLocalRecallAtK <= 0 || row.EdgesPerOp <= 0 || len(row.OverlapReplicas) != row.OverlapRealized || len(row.OverlapDestinationDiversity) != len(row.PartitionLoads) {
 			t.Fatalf("M3 row=%+v", row)
 		}
 	}
@@ -1010,8 +1010,12 @@ func TestM3RouterPartitionsBindArtifactToNativeOrdinalsV1(t *testing.T) {
 		Config:     vectorpartition.Config{Partitions: 2},
 		Assignment: []int{1, 0, 1},
 	}
+	overlap := vectorpartition.OverlapResult{Memberships: []vectorpartition.Membership{
+		{VectorOrdinal: 0, Partition: 1, Home: true}, {VectorOrdinal: 1, Partition: 0, Home: true}, {VectorOrdinal: 1, Partition: 1}, {VectorOrdinal: 2, Partition: 1, Home: true},
+	}}
 	partitions, err := m3RouterPartitions(
 		artifact,
+		overlap,
 		[]int{2, 0, 1},
 		[][]float64{{1, 2}, {3, 4}, {5, 6}},
 	)
@@ -1019,7 +1023,7 @@ func TestM3RouterPartitionsBindArtifactToNativeOrdinalsV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(partitions) != 2 || partitions[0].PartitionID != 0 || partitions[1].PartitionID != 1 ||
-		len(partitions[0].Vectors) != 1 || len(partitions[1].Vectors) != 2 {
+		len(partitions[0].Vectors) != 1 || len(partitions[1].Vectors) != 3 {
 		t.Fatalf("router partitions=%+v", partitions)
 	}
 	if got := partitions[0].Vectors[0]; got.Ordinal != 0 || len(got.Values) != 2 || got.Values[0] != 3 || got.Values[1] != 4 {
@@ -1028,8 +1032,11 @@ func TestM3RouterPartitionsBindArtifactToNativeOrdinalsV1(t *testing.T) {
 	if got := partitions[1].Vectors[0]; got.Ordinal != 2 || got.Values[0] != 1 || got.Values[1] != 2 {
 		t.Fatalf("partition 1 first vector=%+v", got)
 	}
-	if got := partitions[1].Vectors[1]; got.Ordinal != 1 || got.Values[0] != 5 || got.Values[1] != 6 {
-		t.Fatalf("partition 1 second vector=%+v", got)
+	if got := partitions[1].Vectors[1]; got.Ordinal != 0 || got.Values[0] != 3 || got.Values[1] != 4 || got.MembershipKind != string(collections.VectorPartitionMembershipOverlapV1) {
+		t.Fatalf("partition 1 overlap vector=%+v", got)
+	}
+	if got := partitions[1].Vectors[2]; got.Ordinal != 1 || got.Values[0] != 5 || got.Values[1] != 6 {
+		t.Fatalf("partition 1 third vector=%+v", got)
 	}
 }
 

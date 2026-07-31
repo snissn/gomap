@@ -250,8 +250,12 @@ func (c *Collection) BuildAndPublishVectorPartitionRouterV1(ctx context.Context,
 	if err != nil {
 		return fail(err)
 	}
+	finalMemberships := uint64(len(building.Memberships) + len(building.OverlapMemberships))
+	if finalMemberships > uint64(opts.Config.MaxVectors) {
+		return fail(fmt.Errorf("collections: vector partition router final memberships=%d exceed configured limit=%d", finalMemberships, opts.Config.MaxVectors))
+	}
 	maxRepresentatives, ok := checkedVectorPartitionRouterRepresentativeBoundV1(
-		building.SourceRowCount, building.PartitionCount, opts.Config.RepresentativesPerPartition,
+		finalMemberships, building.PartitionCount, opts.Config.RepresentativesPerPartition,
 	)
 	if !ok {
 		return fail(errors.New("collections: vector partition router representative preflight overflow"))
@@ -496,12 +500,15 @@ func validateVectorPartitionRouterInputV1(manifest VectorPartitionManifestV1, pa
 	if len(partitions) != int(manifest.PartitionCount) {
 		return fmt.Errorf("collections: vector partition router inputs=%d want partitions=%d", len(partitions), manifest.PartitionCount)
 	}
-	expected := make(map[uint32]map[uint64]struct{}, manifest.PartitionCount)
+	expected := make(map[uint32]map[uint64]string, manifest.PartitionCount)
 	for partitionID := uint32(0); partitionID < manifest.PartitionCount; partitionID++ {
-		expected[partitionID] = make(map[uint64]struct{})
+		expected[partitionID] = make(map[uint64]string)
 	}
 	for _, membership := range manifest.Memberships {
-		expected[membership.PartitionID][membership.VectorOrdinal] = struct{}{}
+		expected[membership.PartitionID][membership.VectorOrdinal] = string(VectorPartitionMembershipHomeV1)
+	}
+	for _, membership := range manifest.OverlapMemberships {
+		expected[membership.PartitionID][membership.VectorOrdinal] = string(VectorPartitionMembershipOverlapV1)
 	}
 	seenPartitions := make(map[uint32]struct{}, len(partitions))
 	for _, partition := range partitions {
@@ -513,15 +520,21 @@ func validateVectorPartitionRouterInputV1(manifest VectorPartitionManifestV1, pa
 		}
 		seenPartitions[partition.PartitionID] = struct{}{}
 		if len(partition.Vectors) != len(expected[partition.PartitionID]) {
-			return fmt.Errorf("collections: vector partition router partition %d vectors=%d want primary memberships=%d", partition.PartitionID, len(partition.Vectors), len(expected[partition.PartitionID]))
+			return fmt.Errorf("collections: vector partition router partition %d vectors=%d want final memberships=%d", partition.PartitionID, len(partition.Vectors), len(expected[partition.PartitionID]))
 		}
+		seenVectors := make(map[uint64]struct{}, len(partition.Vectors))
 		for _, vector := range partition.Vectors {
 			if len(vector.Values) != dimensions {
 				return fmt.Errorf("collections: vector partition router vector %d dimensions=%d want %d", vector.Ordinal, len(vector.Values), dimensions)
 			}
-			if _, exists := expected[partition.PartitionID][vector.Ordinal]; !exists {
-				return fmt.Errorf("collections: vector partition router vector %d is not a primary member of partition %d", vector.Ordinal, partition.PartitionID)
+			kind, exists := expected[partition.PartitionID][vector.Ordinal]
+			if !exists || vector.MembershipKind != string(kind) {
+				return fmt.Errorf("collections: vector partition router vector %d is not a final member of partition %d", vector.Ordinal, partition.PartitionID)
 			}
+			if _, exists := seenVectors[vector.Ordinal]; exists {
+				return fmt.Errorf("collections: duplicate vector partition router vector %d in partition %d", vector.Ordinal, partition.PartitionID)
+			}
+			seenVectors[vector.Ordinal] = struct{}{}
 		}
 	}
 	return nil
@@ -562,8 +575,9 @@ func (c *Collection) authoritativeVectorPartitionRouterInputV1(manifest VectorPa
 				}
 			}
 			authoritative[partitionOrdinal].Vectors[vectorOrdinal] = internalrouter.RouterVectorV1{
-				Ordinal: vector.Ordinal,
-				Values:  append([]float32(nil), source...),
+				Ordinal:        vector.Ordinal,
+				Values:         append([]float32(nil), source...),
+				MembershipKind: vector.MembershipKind,
 			}
 		}
 	}
@@ -636,7 +650,37 @@ func buildVectorPartitionRouterPackV1(manifest VectorPartitionManifestV1, model 
 	if err != nil {
 		return nil, err
 	}
+	input.MembershipDigest = vectorPartitionRouterFinalMembershipDigestV1(manifest)
 	return encodeColumnHNSWSearchPack(input)
+}
+
+// vectorPartitionRouterFinalMembershipDigestV1 binds a router asset to the
+// exact canonical home-plus-overlap relation, independently of its selected
+// representatives. Source identity is included so an ordinal cannot be reused
+// against a different vector generation.
+func vectorPartitionRouterFinalMembershipDigestV1(manifest VectorPartitionManifestV1) [sha256.Size]byte {
+	h := sha256.New()
+	h.Write([]byte("treedb/vector-partition-router-final-membership/v1"))
+	var encoded [8]byte
+	for _, value := range []uint64{manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, manifest.SourceRowCount, manifest.Generation} {
+		binary.BigEndian.PutUint64(encoded[:], value)
+		h.Write(encoded[:])
+	}
+	for kind, memberships := range [][]VectorPartitionMembershipV1{manifest.Memberships, manifest.OverlapMemberships} {
+		binary.BigEndian.PutUint64(encoded[:], uint64(kind))
+		h.Write(encoded[:])
+		binary.BigEndian.PutUint64(encoded[:], uint64(len(memberships)))
+		h.Write(encoded[:])
+		for _, membership := range memberships {
+			binary.BigEndian.PutUint64(encoded[:], membership.VectorOrdinal)
+			h.Write(encoded[:])
+			binary.BigEndian.PutUint32(encoded[:4], membership.PartitionID)
+			h.Write(encoded[:4])
+		}
+	}
+	var digest [sha256.Size]byte
+	copy(digest[:], h.Sum(nil))
+	return digest
 }
 
 func checkedVectorPartitionRouterRepresentativeBoundV1(sourceRows uint64, partitions uint32, representativesPerPartition int) (uint64, bool) {
@@ -659,6 +703,12 @@ func checkedVectorPartitionRouterScalarWorkV1(manifest VectorPartitionManifestV1
 	}
 	counts := make([]uint64, manifest.PartitionCount)
 	for _, membership := range manifest.Memberships {
+		if membership.PartitionID >= manifest.PartitionCount {
+			return 0, false
+		}
+		counts[membership.PartitionID]++
+	}
+	for _, membership := range manifest.OverlapMemberships {
 		if membership.PartitionID >= manifest.PartitionCount {
 			return 0, false
 		}
@@ -1008,6 +1058,7 @@ func (c *Collection) openVectorPartitionRouterManifestWithContextV1(ctx context.
 			ManifestChecksum:   manifest.SourceChecksum,
 			SchemaHash:         manifest.SourceSchemaHash,
 		},
+		ExpectedMembershipDigest: vectorPartitionRouterFinalMembershipDigestV1(manifest),
 	})
 	if err != nil {
 		return nil, err

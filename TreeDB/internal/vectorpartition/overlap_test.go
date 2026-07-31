@@ -51,14 +51,17 @@ func TestOverlapDeterministicBoundaryAndZeroEquivalent(t *testing.T) {
 			{VectorOrdinal: 2, Partition: 1, Home: true},
 			{VectorOrdinal: 3, Partition: 1, Home: true},
 		},
-		Budget:        2,
-		Used:          1,
-		Unspent:       1,
-		Capacity:      4,
-		Loads:         []int{3, 2},
-		EdgeCutBefore: 4,
-		EdgeCutAfter:  0,
-		Useful:        1,
+		Budget:               2,
+		Used:                 1,
+		Unspent:              1,
+		Capacity:             4,
+		Loads:                []int{3, 2},
+		EdgeCutBefore:        4,
+		EdgeCutAfter:         0,
+		Useful:               1,
+		Replicas:             []Replica{{VectorOrdinal: 2, Partition: 0, Policy: overlapReplicaPolicyV1, Gain: 4, Class: "positive_gain"}},
+		CumulativeUtility:    4,
+		DestinationDiversity: []int{1, 0},
 	}
 	if !reflect.DeepEqual(one, want) {
 		t.Fatalf("boundary overlap=%+v want %+v", one, want)
@@ -106,6 +109,33 @@ func TestOverlapExactTreatmentFillsLegalNonAffinitySlotsV1(t *testing.T) {
 	}
 	if got.Budget != 2 || got.Used != 2 || got.Useful != 0 || got.Filler != 2 || got.Unspent != 0 || got.EdgeCutBefore != 0 || got.EdgeCutAfter != 0 {
 		t.Fatalf("exact fallback=%+v", got)
+	}
+	for _, replica := range got.Replicas {
+		if replica.Policy != overlapReplicaPolicyV1 || replica.Gain != 0 || replica.Class != "zero_utility" {
+			t.Fatalf("zero-cut replica was not honestly classified: %+v", replica)
+		}
+	}
+}
+
+func TestOverlapExactTreatmentRanksUtilityBeforeOrdinalFillV1(t *testing.T) {
+	c := Config{Metric: "cosine", Seed: 1, Repetitions: 1, Pivots: 2, MaxLeafBucket: 2, Degree: 3, Partitions: 2, Imbalance: 1, MaxVectors: 5, MaxEdges: 15}
+	v := []Vector{{"a", []float64{1}}, {"b", []float64{.9}}, {"c", []float64{.8}}, {"d", []float64{.7}}, {"e", []float64{.6}}}
+	built, err := Build(v, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := Artifact{SchemaVersion: SchemaVersion, Backend: "test", BackendLicense: "test", Source: built.Source, Config: c, IDs: []string{"a", "b", "c", "d", "e"}, Graph: Graph{Neighbors: [][]int{{}, {}, {}, {0, 1}, {}}}, Assignment: []int{0, 0, 1, 1, 1}}
+	a.Metrics = metrics(a)
+	got, err := BuildOverlap(a, OverlapConfig{Ratio: .4, Capacity: 5, RequireExact: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Replica{
+		{VectorOrdinal: 0, Partition: 1, Policy: overlapReplicaPolicyV1, Gain: 0, Class: "zero_utility"},
+		{VectorOrdinal: 3, Partition: 0, Policy: overlapReplicaPolicyV1, Gain: 2, Class: "positive_gain"},
+	}
+	if got.Used != 2 || got.Useful != 1 || got.Filler != 1 || got.CumulativeUtility != 2 || !reflect.DeepEqual(got.Replicas, want) {
+		t.Fatalf("utility order/fill=%+v want replicas=%+v", got, want)
 	}
 }
 
