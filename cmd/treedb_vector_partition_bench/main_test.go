@@ -1515,15 +1515,23 @@ func TestKaHIPOfflineSelectorIsLimitedToGraphMaterializationV1(t *testing.T) {
 	if err := os.WriteFile(python, []byte("#!/bin/sh\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	adapterSource, err := filepath.Abs(filepath.Join("..", "..", "scripts", "treedb_kahip_partition.py"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := os.ReadFile(adapterSource)
+	if err != nil {
+		t.Fatal(err)
+	}
 	script := filepath.Join(t.TempDir(), "kahip.py")
-	if err := os.WriteFile(script, []byte("# adapter\n"), 0o600); err != nil {
+	if err := os.WriteFile(script, adapter, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	base := []string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-partition-kahip-python", python, "-partition-kahip-script", script}
 	if runtime.GOOS != "windows" && os.Geteuid() != 0 {
 		t.Run("unreadable_script", func(t *testing.T) {
 			unreadable := filepath.Join(t.TempDir(), "unreadable.py")
-			if err := os.WriteFile(unreadable, []byte("# adapter\n"), 0o600); err != nil {
+			if err := os.WriteFile(unreadable, adapter, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			args := append([]string(nil), base...)
@@ -1562,6 +1570,16 @@ func TestKaHIPOfflineSelectorIsLimitedToGraphMaterializationV1(t *testing.T) {
 			t.Fatalf("accepted KaHIP outside graph materialization: %#v", args)
 		}
 	}
+	tampered := filepath.Join(t.TempDir(), "kahip-tampered.py")
+	if err := os.WriteFile(tampered, append(adapter, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := append([]string(nil), base...)
+	args[len(args)-1] = tampered
+	args = append(args, "-stage", "partition")
+	if _, err := parseConfig(args); err == nil {
+		t.Fatal("accepted modified KaHIP adapter")
+	}
 }
 
 func TestKaHIPOutputCapAllowsCanonicalLabelGrowthV1(t *testing.T) {
@@ -1589,8 +1607,8 @@ func TestKaHIPFinalGraphEnvelopePreflightsBeforeBuildV1(t *testing.T) {
 	if err := os.WriteFile(python, []byte("#!/bin/sh\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	script := filepath.Join(t.TempDir(), "kahip.py")
-	if err := os.WriteFile(script, []byte("# adapter\n"), 0o600); err != nil {
+	script, err := filepath.Abs(filepath.Join("..", "..", "scripts", "treedb_kahip_partition.py"))
+	if err != nil {
 		t.Fatal(err)
 	}
 	err = runWithHermeticProvenance(t, []string{

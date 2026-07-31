@@ -39,6 +39,8 @@ const (
 	maxDimensions                           = 4_096
 	maxPartitions                           = 16_384
 	kahipMaxDirectedEdges             int64 = 16_000_000
+	kahipAdapterMaxBytes                    = 64 << 10
+	kahipAdapterSHA256                      = "1403cdc2e3ffffc6395dd563bb97a760ba7d6be761a19a2ebd273625ca7914e3"
 	maxFixtureBytes                   int64 = 4 << 30
 	maxBenchmarkWorkUnits             int64 = 200_000_000
 	maxManifestBytes                  int64 = 64 << 10
@@ -920,8 +922,20 @@ func parseConfig(args []string) (config, error) {
 		if err != nil {
 			return config{}, fmt.Errorf("-partition-kahip-script: %w", err)
 		}
-		if err := file.Close(); err != nil {
-			return config{}, fmt.Errorf("-partition-kahip-script: %w", err)
+		scriptBytes, readErr := io.ReadAll(io.LimitReader(file, kahipAdapterMaxBytes+1))
+		closeErr := file.Close()
+		if readErr != nil {
+			return config{}, fmt.Errorf("-partition-kahip-script: %w", readErr)
+		}
+		if closeErr != nil {
+			return config{}, fmt.Errorf("-partition-kahip-script: %w", closeErr)
+		}
+		if len(scriptBytes) > kahipAdapterMaxBytes {
+			return config{}, fmt.Errorf("-partition-kahip-script exceeds %d-byte cap", kahipAdapterMaxBytes)
+		}
+		sum := sha256.Sum256(scriptBytes)
+		if hex.EncodeToString(sum[:]) != kahipAdapterSHA256 {
+			return config{}, errors.New("-partition-kahip-script does not match the pinned adapter")
 		}
 		cfg.kahipScript = script
 	}
