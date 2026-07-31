@@ -84,7 +84,8 @@ through an explicit `-partition-kahip-script` path (normally
 never an online dependency. The adapter rejects any module version other than
 3.25 or RECORD SHA-256
 `7ff011253147286fcebc9185573662bf31dbcfbab1944f9b4940032f49ea5217`, and requests above the V1 1M-by-degree-16 (16M directed edge)
-envelope. On the retained 100k embedding-mixture graph
+envelope, above `16384` partitions, or with more partitions than vectors.
+On the retained 100k embedding-mixture graph
 `5a095727ed0f82815643daddb47bd11a08c9630ede6f9b1d7e7ec427dc8e9937`,
 the reference greedy result was p4 `.8303`, cut `1122051`, load `6521/6563`;
 the KaHIP artifact

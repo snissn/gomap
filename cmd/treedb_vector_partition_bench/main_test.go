@@ -1592,6 +1592,31 @@ func TestKaHIPAdapterRoundTripV1(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "payload integrity") {
 		t.Fatalf("tampered installed payload accepted: %v", err)
 	}
+	for _, forgedCase := range []struct {
+		name, want string
+		partitions int
+	}{
+		{"partition_cap", "configuration mismatch", 16_385},
+		{"more_partitions_than_nodes", "invalid graph", len(request.IDs) + 1},
+	} {
+		var forged map[string]any
+		if err := json.Unmarshal(raw, &forged); err != nil {
+			t.Fatal(err)
+		}
+		forged["config"].(map[string]any)["partitions"] = forgedCase.partitions
+		forgedRaw, err := json.Marshal(forged)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input := filepath.Join(t.TempDir(), forgedCase.name+".json")
+		if err := os.WriteFile(input, forgedRaw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		output, err := exec.CommandContext(ctx, python, script, input, filepath.Join(t.TempDir(), "out.json")).CombinedOutput()
+		if err == nil || !bytes.Contains(output, []byte(forgedCase.want)) {
+			t.Fatalf("forged %s request reached KaHIP: err=%v output=%s", forgedCase.name, err, output)
+		}
+	}
 }
 
 func TestPartitionLocalHNSWMIsIndependentAndM3OnlyV1(t *testing.T) {

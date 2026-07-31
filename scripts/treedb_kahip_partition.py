@@ -51,11 +51,17 @@ if kahip.__version__ != "3.25":
 with open(sys.argv[1], encoding="utf-8") as input_file:
     artifact = json.load(input_file)
 config = artifact["config"]
-if config["imbalance"] != 0.05 or config["partitions"] < 1:
+partitions = config["partitions"]
+if (
+    config["imbalance"] != 0.05
+    or type(partitions) is not int
+    or partitions < 1
+    or partitions > 16_384
+):
     raise SystemExit("KaHIP request identity/configuration mismatch")
 nodes = len(artifact["ids"])
 neighbors = artifact["graph"]["neighbors"]
-if nodes == 0 or nodes > 1_000_000 or len(neighbors) != nodes:
+if nodes == 0 or nodes > 1_000_000 or partitions > nodes or len(neighbors) != nodes:
     raise SystemExit("invalid graph")
 rows = [set() for _ in range(nodes)]
 directed = 0
@@ -80,15 +86,15 @@ _, assignment = kahip.kaffpa(
     xadj,
     [1] * len(adjncy),
     adjncy,
-    config["partitions"],
+    partitions,
     config["imbalance"],
     False,
     config["seed"],
     kahip.ECO,
 )
-if len(assignment) != nodes or any(not isinstance(partition, int) or partition < 0 or partition >= config["partitions"] for partition in assignment):
+if len(assignment) != nodes or any(not isinstance(partition, int) or partition < 0 or partition >= partitions for partition in assignment):
     raise SystemExit("invalid KaHIP assignment")
-loads = [0] * config["partitions"]
+loads = [0] * partitions
 for partition in assignment:
     loads[partition] += 1
 if max(loads) > artifact["metrics"]["cap"] or min(loads) < 1:
