@@ -1580,7 +1580,7 @@ func TestKaHIPAdapterRoundTripV1(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "pinned kahip") {
 		t.Fatalf("same-version wrong distribution identity accepted: %v", err)
 	}
-	badPayload := strings.Replace(string(adapter), "hashlib.sha256(payload).digest() != expected", "hashlib.sha256(payload).digest() == expected", 1)
+	badPayload := strings.Replace(string(adapter), "payload = distribution.locate_file(path).read_bytes()", "payload = distribution.locate_file(path).read_bytes() + b\"x\"", 1)
 	if badPayload == string(adapter) {
 		t.Fatal("test did not replace KaHIP payload integrity check")
 	}

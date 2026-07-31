@@ -12,7 +12,6 @@ import sys
 # KaHIP's Python extension reads OpenMP settings during import. Force a single
 # worker so its offline output identity does not depend on host scheduling.
 os.environ["OMP_NUM_THREADS"] = "1"
-import kahip
 
 WHEEL_SHA256 = "e6ea76524e9fc01b27e6f5c5f00b7eec71c94cbd1e84678ce2a14d64dfc9eda4"
 RECORD_SHA256 = "7ff011253147286fcebc9185573662bf31dbcfbab1944f9b4940032f49ea5217"
@@ -24,8 +23,7 @@ def pinned_kahip():
     record_bytes = distribution.locate_file(record).read_bytes()
     record_hash = hashlib.sha256(record_bytes).hexdigest()
     if (
-        kahip.__version__ != "3.25"
-        or distribution.version != "3.25"
+        distribution.version != "3.25"
         or distribution.metadata["License"] != "MIT"
         or record_hash != RECORD_SHA256
     ):
@@ -45,6 +43,10 @@ def pinned_kahip():
 if len(sys.argv) != 3:
     raise SystemExit("usage: treedb_kahip_partition.py INPUT OUTPUT")
 pinned_kahip()
+import kahip
+
+if kahip.__version__ != "3.25":
+    raise SystemExit("requires pinned kahip==3.25 MIT distribution")
 with open(sys.argv[1], encoding="utf-8") as input_file:
     artifact = json.load(input_file)
 config = artifact["config"]
