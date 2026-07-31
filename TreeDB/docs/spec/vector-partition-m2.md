@@ -88,7 +88,7 @@ envelope. On the retained 100k embedding-mixture graph
 `5a095727ed0f82815643daddb47bd11a08c9630ede6f9b1d7e7ec427dc8e9937`,
 the reference greedy result was p4 `.8303`, cut `1122051`, load `6521/6563`;
 the KaHIP artifact
-`954591a9f21e166e78c19a7f8885a74b2faf6bb0e85a26a1fe13dab3191a1a1e`
+`022359b1aedfa738cde7f2e82e01263c855eb72075b1f2a927d3a5753d6fde9c`
 was p1/p2/p4/p8/p16 `1.0`, cut `0`, load `6283/6563`. This is a bounded
 offline placement result, not a claim about graph quality or online serving.
 
