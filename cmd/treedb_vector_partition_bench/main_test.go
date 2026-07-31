@@ -2036,14 +2036,14 @@ func TestValidM8AttributionPersistsExhaustiveUnionFailureV1(t *testing.T) {
 		ApproximateRouterPartitionCoverageComplete: true,
 	}
 	attribution.ResidualLossOwners = m8AttributionLossOwnersV1(attribution)
-	if !validM8AttributionV1(attribution) {
+	if !validM8AttributionV1(attribution, 10) {
 		t.Fatalf("rejected attributable exhaustive-union failure: %+v", attribution)
 	}
 	if !slices.Equal(attribution.ResidualLossOwners, []string{"partition_membership_or_score_contract"}) {
 		t.Fatalf("loss owners=%v", attribution.ResidualLossOwners)
 	}
 	attribution.ResidualLossOwners = nil
-	if validM8AttributionV1(attribution) {
+	if validM8AttributionV1(attribution, 10) {
 		t.Fatal("accepted exhaustive-union failure without its loss owner")
 	}
 	legacy := m8ProductionAttributionV1{
@@ -2054,8 +2054,28 @@ func TestValidM8AttributionPersistsExhaustiveUnionFailureV1(t *testing.T) {
 		ApproximateRouterCandidateBudget: 1, ApproximateRouterPartitionCoverageComplete: true,
 	}
 	legacy.ResidualLossOwners = m8AttributionLossOwnersV1(legacy)
-	if !validM8AttributionV1(legacy) || !slices.Equal(legacy.ResidualLossOwners, []string{"exact_representative_routing"}) {
+	if !validM8AttributionV1(legacy, 10) || !slices.Equal(legacy.ResidualLossOwners, []string{"exact_representative_routing"}) {
 		t.Fatalf("legacy attribution=%+v", legacy)
+	}
+}
+
+func TestValidM8AttributionRequiresEveryTruthRankV1(t *testing.T) {
+	attribution := m8ProductionAttributionV1{
+		Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1, OracleStagesComplete: true,
+		PrimaryHomeOracleRecallAtK: 1, FinalMembershipOracleRecallAtK: 1,
+		ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
+		ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1,
+		CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
+		ApproximateRouterCandidateBudget: 1, ApproximateRouterPartitionCoverageComplete: true,
+		TruthNeighborRankRetentionAtK: []float64{1, 1},
+	}
+	attribution.ResidualLossOwners = m8AttributionLossOwnersV1(attribution)
+	attribution.StageOwners = m8AttributionStageOwnersV1(attribution)
+	if !validM8AttributionV1(attribution, 2) {
+		t.Fatal("rejected complete truth-rank retention")
+	}
+	if validM8AttributionV1(attribution, 1) || validM8AttributionV1(attribution, 3) {
+		t.Fatal("accepted truth-rank retention with the wrong top-k cardinality")
 	}
 }
 
@@ -2093,7 +2113,7 @@ func TestM8AttributionApproximateCoverageShortfallIsOwnedV1(t *testing.T) {
 		ApproximateRouterCandidateBudget: 2, ApproximateRouterPartitionCoverageComplete: false,
 	}
 	attribution.ResidualLossOwners = m8AttributionLossOwnersV1(attribution)
-	if !validM8AttributionV1(attribution) || !slices.Equal(attribution.ResidualLossOwners, []string{"approximate_representative_routing"}) {
+	if !validM8AttributionV1(attribution, 10) || !slices.Equal(attribution.ResidualLossOwners, []string{"approximate_representative_routing"}) {
 		t.Fatalf("coverage-shortfall attribution=%+v", attribution)
 	}
 	if complete, err := m8ApproximateRouterCoverageV1(fmt.Errorf("wrapped: %w", collections.ErrVectorPartitionRouterCandidateCoverageV1)); err != nil || complete {
@@ -2102,7 +2122,7 @@ func TestM8AttributionApproximateCoverageShortfallIsOwnedV1(t *testing.T) {
 	invalid := attribution
 	invalid.ApproximateRepresentativeRecallAtK = .5
 	invalid.ResidualLossOwners = m8AttributionLossOwnersV1(invalid)
-	if validM8AttributionV1(invalid) {
+	if validM8AttributionV1(invalid, 10) {
 		t.Fatalf("accepted nonzero approximate recall with incomplete coverage: %+v", invalid)
 	}
 	if _, err := m8ApproximateRouterCoverageV1(errors.New("router corruption")); err == nil {

@@ -2874,7 +2874,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 			row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries || row.QPS <= 0 ||
 			row.RouterMode == "" || row.RouterCandidates < 1 || row.ExactParityPassed && !row.ExactParityChecked || row.ExactParityChecked && row.Probes != report.Config.Partitions || !row.NoPartialResults ||
 			math.Float64bits(row.RecallAtK) != math.Float64bits(row.Attribution.EndToEndRecallAtK) ||
-			!validM8AttributionV1(row.Attribution) {
+			!validM8AttributionV1(row.Attribution, report.Config.TopK) {
 			return errors.New("malformed measured M8 row")
 		}
 		if report.Variant != nil && row.VariantID != report.Variant.VariantID {
@@ -2916,7 +2916,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 	return nil
 }
 
-func validM8AttributionV1(attribution m8ProductionAttributionV1) bool {
+func validM8AttributionV1(attribution m8ProductionAttributionV1, topK int) bool {
 	if attribution.Contract != m8CanonicalResultContractV1 || attribution.GlobalExactRecallAtK != 1 ||
 		attribution.ApproximateRouterCandidateBudget < 1 ||
 		(!attribution.ApproximateRouterPartitionCoverageComplete && attribution.ApproximateRepresentativeRecallAtK != 0) ||
@@ -2940,7 +2940,7 @@ func validM8AttributionV1(attribution m8ProductionAttributionV1) bool {
 				return false
 			}
 		}
-		if len(attribution.TruthNeighborRankRetentionAtK) == 0 {
+		if topK < 1 || len(attribution.TruthNeighborRankRetentionAtK) != topK {
 			return false
 		}
 		for _, value := range attribution.TruthNeighborRankRetentionAtK {
