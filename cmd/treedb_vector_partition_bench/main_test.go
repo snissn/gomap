@@ -1555,7 +1555,7 @@ func TestKaHIPOfflineSelectorIsLimitedToGraphMaterializationV1(t *testing.T) {
 	}
 	for _, stage := range []string{"partition", "overlap,partition_index"} {
 		cfg, err := parseConfig(append(append([]string(nil), base...), "-stage", stage))
-		if err != nil || cfg.kahipPython != python || cfg.kahipScript != script || cfg.kahipSource != string(adapter) {
+		if err != nil || cfg.kahipPython != python || cfg.kahipScript != script || cfg.kahipSource != string(adapter) || cfg.kahipTimeout != kahipDefaultTimeout {
 			t.Fatalf("stage=%s cfg=%+v err=%v", stage, cfg, err)
 		}
 		if command := kahipAdapterCommand(cfg); len(command) != 3 || command[0] != python || command[1] != "-c" || command[2] != string(adapter) {
@@ -1568,10 +1568,16 @@ func TestKaHIPOfflineSelectorIsLimitedToGraphMaterializationV1(t *testing.T) {
 		append(append([]string(nil), base...), "-stage", "partition", "-imbalance", "0.04"),
 		append(append([]string(nil), base...), "-stage", "partition", "-partition-kahip-python", filepath.Join(t.TempDir(), "missing-python")),
 		append(append([]string(nil), base...), "-stage", "partition", "-partition-kahip-script", t.TempDir()),
+		append(append([]string(nil), base...), "-stage", "partition", "-partition-kahip-timeout", "0s"),
+		append(append([]string(nil), base...), "-stage", "partition", "-seed", "2147483648"),
 	} {
 		if _, err := parseConfig(args); err == nil {
 			t.Fatalf("accepted KaHIP outside graph materialization: %#v", args)
 		}
+	}
+	configured, err := parseConfig(append(append([]string(nil), base...), "-stage", "partition", "-partition-kahip-timeout", "45m"))
+	if err != nil || configured.kahipTimeout != 45*time.Minute {
+		t.Fatalf("KaHIP timeout config=%+v err=%v", configured, err)
 	}
 	tampered := filepath.Join(t.TempDir(), "kahip-tampered.py")
 	if err := os.WriteFile(tampered, append(adapter, '\n'), 0o600); err != nil {
@@ -1708,6 +1714,23 @@ func TestKaHIPAdapterRoundTripV1(t *testing.T) {
 		if err == nil || !bytes.Contains(output, []byte(forgedCase.want)) {
 			t.Fatalf("forged %s request reached KaHIP: err=%v output=%s", forgedCase.name, err, output)
 		}
+	}
+	var forgedSeed map[string]any
+	if err := json.Unmarshal(raw, &forgedSeed); err != nil {
+		t.Fatal(err)
+	}
+	forgedSeed["config"].(map[string]any)["seed"] = int64(2_147_483_648)
+	forgedRaw, err := json.Marshal(forgedSeed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := filepath.Join(t.TempDir(), "seed_out_of_range.json")
+	if err := os.WriteFile(input, forgedRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.CommandContext(ctx, python, script, input, filepath.Join(t.TempDir(), "out.json")).CombinedOutput()
+	if err == nil || !bytes.Contains(output, []byte("configuration mismatch")) {
+		t.Fatalf("out-of-range KaHIP seed reached native call: err=%v output=%s", err, output)
 	}
 	shadowDir := t.TempDir()
 	shadowMarker := filepath.Join(shadowDir, "loaded")

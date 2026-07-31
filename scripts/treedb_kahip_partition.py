@@ -59,11 +59,15 @@ with open(sys.argv[1], encoding="utf-8") as input_file:
     artifact = json.load(input_file)
 config = artifact["config"]
 partitions = config["partitions"]
+seed = config["seed"]
 if (
     config["imbalance"] != 0.05
     or type(partitions) is not int
     or partitions < 1
     or partitions > 16_384
+    or type(seed) is not int
+    or seed < -2_147_483_648
+    or seed > 2_147_483_647
 ):
     raise SystemExit("KaHIP request identity/configuration mismatch")
 nodes = len(artifact["ids"])
@@ -96,7 +100,7 @@ _, assignment = kahip.kaffpa(
     partitions,
     config["imbalance"],
     False,
-    config["seed"],
+    seed,
     1,  # KaHIP ECO mode
 )
 if len(assignment) != nodes or any(not isinstance(partition, int) or partition < 0 or partition >= partitions for partition in assignment):
@@ -112,7 +116,7 @@ directed_cut = sum(
     for target in targets
 )
 artifact["assignment"] = assignment
-artifact["backend"] = "kahip_python_3.25_eco_symmetrized_v1_seed_%d" % config["seed"]
+artifact["backend"] = "kahip_python_3.25_eco_symmetrized_v1_seed_%d" % seed
 artifact["backend_license"] = "MIT; kahip==3.25; wheel_sha256=%s; record_sha256=%s; ECO; epsilon=0.05; symmetrized_unweighted_v1" % (WHEEL_SHA256, RECORD_SHA256)
 artifact["metrics"]["edge_cut"] = directed_cut
 artifact["metrics"]["max_partition_size"] = max(loads)
