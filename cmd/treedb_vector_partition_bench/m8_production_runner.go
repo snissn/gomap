@@ -1788,6 +1788,9 @@ func m8TruthFinalMembershipDiagnosticsV1(truth []m8CanonicalResultV1, selected [
 		if !ok || len(parts) == 0 {
 			return 0, 0, 0, 0, 0, nil, fmt.Errorf("canonical truth ID %q has no final membership", result.ID)
 		}
+		if !slices.IsSorted(parts) {
+			return 0, 0, 0, 0, 0, nil, fmt.Errorf("canonical truth ID %q has noncanonical final memberships", result.ID)
+		}
 		home, ok := homes[result.ID]
 		if !ok {
 			return 0, 0, 0, 0, 0, nil, fmt.Errorf("canonical truth ID %q has no primary home", result.ID)
@@ -1826,11 +1829,14 @@ func m8TruthFinalMembershipDiagnosticsV1(truth []m8CanonicalResultV1, selected [
 }
 
 func m8MembershipsIntersectV1(a, b []uint32) bool {
-	for _, left := range a {
-		for _, right := range b {
-			if left == right {
-				return true
-			}
+	for left, right := 0, 0; left < len(a) && right < len(b); {
+		switch {
+		case a[left] == b[right]:
+			return true
+		case a[left] < b[right]:
+			left++
+		default:
+			right++
 		}
 	}
 	return false

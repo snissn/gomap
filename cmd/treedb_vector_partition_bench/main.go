@@ -21,7 +21,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1132,28 +1131,29 @@ func partitionGraphDiagnosticsForArtifactV1(graph [][]int, assignment []int, par
 		return partitionGraphDiagnosticsV1{}, errors.New("invalid partition graph diagnostic input")
 	}
 	out := partitionGraphDiagnosticsV1{PartitionLoads: make([]int, partitions)}
-	for node := range graph {
+	for node, neighbors := range graph {
 		if assignment[node] < 0 || assignment[node] >= partitions {
 			return partitionGraphDiagnosticsV1{}, errors.New("invalid graph partition assignment")
 		}
 		out.PartitionLoads[assignment[node]]++
-	}
-	for node, neighbors := range graph {
-		seen := make(map[int]struct{}, len(neighbors))
+		previous := -1
 		for _, neighbor := range neighbors {
-			if neighbor < 0 || neighbor >= len(graph) || neighbor == node {
+			if neighbor < 0 || neighbor >= len(graph) || neighbor == node || neighbor <= previous {
 				return partitionGraphDiagnosticsV1{}, errors.New("invalid approximate graph edge")
 			}
-			if _, duplicate := seen[neighbor]; duplicate {
-				return partitionGraphDiagnosticsV1{}, errors.New("duplicate approximate graph edge")
-			}
-			seen[neighbor] = struct{}{}
+			previous = neighbor
+		}
+	}
+	for node, neighbors := range graph {
+		for _, neighbor := range neighbors {
 			cut := assignment[node] != assignment[neighbor]
 			out.DirectedEdges++
 			if cut {
 				out.DirectedCutEdges++
 			}
-			if node < neighbor || !slices.Contains(graph[neighbor], node) {
+			reverse := graph[neighbor]
+			at := sort.SearchInts(reverse, node)
+			if node < neighbor || at == len(reverse) || reverse[at] != node {
 				out.SymmetricEdges++
 				if cut {
 					out.SymmetricCutEdges++
@@ -1402,12 +1402,16 @@ func validatePartitionTruthOracleWithCaps(m fixtureManifest, topK, graphDegree, 
 	if err != nil {
 		return fmt.Errorf("partition truth oracle work: %w", err)
 	}
-	work, err := memoryAdd(exactWork, adjacencyWork)
+	graphWork, err := partitionTruthGraphDiagnosticWork(m.Vectors, graphDegree)
+	if err != nil {
+		return fmt.Errorf("partition truth oracle work: %w", err)
+	}
+	work, err := memoryAdd(exactWork, adjacencyWork, graphWork)
 	if err != nil {
 		return fmt.Errorf("partition truth oracle work: %w", err)
 	}
 	if capWork < 1 || work > capWork {
-		return fmt.Errorf("partition truth oracle exceeds %d-unit cap: exact_vector_query_pairs=%d adjacency_comparisons=%d total=%d", capWork, exactWork, adjacencyWork, work)
+		return fmt.Errorf("partition truth oracle exceeds %d-unit cap: exact_vector_query_pairs=%d adjacency_comparisons=%d graph_diagnostic_work=%d total=%d", capWork, exactWork, adjacencyWork, graphWork, work)
 	}
 	return nil
 }
@@ -1417,6 +1421,21 @@ func partitionTruthAdjacencyComparisons(queries, topK, graphDegree int) (int64, 
 		return 0, errors.New("invalid partition truth adjacency work input")
 	}
 	return memoryMul(int64(queries), int64(topK-1), int64(bits.Len(uint(graphDegree))))
+}
+
+func partitionTruthGraphDiagnosticWork(vectors, graphDegree int) (int64, error) {
+	if vectors < 1 || graphDegree < 1 {
+		return 0, errors.New("invalid partition graph diagnostic work input")
+	}
+	edges, err := memoryMul(int64(vectors), int64(graphDegree))
+	if err != nil {
+		return 0, err
+	}
+	edgeWork, err := memoryMul(edges, int64(2+bits.Len(uint(graphDegree))))
+	if err != nil {
+		return 0, err
+	}
+	return memoryAdd(int64(vectors), edgeWork)
 }
 
 // validateM3FixtureWithCaps permits the declared 1M-vector corpus plus a
@@ -1459,6 +1478,7 @@ type m3BenchmarkWorkPlan struct {
 	ChecksumVectorQueryVisits   int64
 	MembershipVectorQueryVisits int64
 	TruthAdjacencyComparisons   int64
+	GraphDiagnosticWorkUnits    int64
 	VectorQueryVisits           int64
 }
 
@@ -1472,6 +1492,7 @@ type m8BenchmarkWorkPlan struct {
 	MaxMembershipOracleSubsets        int64
 	MembershipOracleSubsetEvaluations int64
 	MembershipOracleWorkUnits         int64
+	FinalMembershipPairComparisons    int64
 	QueryRequests                     int64
 	RetainedCoordinatorCells          int64
 	RetainedCoordinatorResults        int64
@@ -1580,6 +1601,26 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		// peak of one sequential child.
 		variantRuns = int64(len(cfg.m8VariantDBs))
 		supportedOverlaps = 1
+	}
+	maxFinalMemberships := int64(1)
+	if cfg.m8ExistingDB != "" || len(cfg.m8VariantDBs) > 0 {
+		maxFinalMemberships += vectorpartition.MaxOverlapMembershipsPerVector
+	}
+	truthPairs, err := memoryMul(int64(cfg.topK), int64(cfg.topK-1))
+	if err != nil {
+		return plan, err
+	}
+	truthPairs /= 2
+	attributionCells, err := memoryMul(supportedOverlaps, variantRuns, int64(len(cfg.probes)), int64(len(cfg.efSearch)))
+	if err != nil {
+		return plan, err
+	}
+	plan.FinalMembershipPairComparisons, err = memoryMul(int64(m.Queries), truthPairs, attributionCells, 2*maxFinalMemberships)
+	if err != nil {
+		return plan, err
+	}
+	if plan.FinalMembershipPairComparisons > capUnits {
+		return plan, fmt.Errorf("modeled M8 final-membership pair diagnostics exceed %d-comparison cap: truth_pairs_per_query=%d attribution_cells=%d max_memberships_per_truth_result=%d comparisons=%d", capUnits, truthPairs, attributionCells, maxFinalMemberships, plan.FinalMembershipPairComparisons)
 	}
 	plan.MembershipOracleSubsetEvaluations, err = memoryMul(membershipOracleSubsetsPerSweep, int64(m.Queries), supportedOverlaps, variantRuns)
 	if err != nil {
@@ -1932,7 +1973,11 @@ func validateM3BenchmarkWork(cfg config, m fixtureManifest, capUnits int64) (m3B
 	if err != nil {
 		return m3BenchmarkWorkPlan{}, err
 	}
-	totalVisits, err := memoryAdd(checksumVisits, membershipVisits, adjacencyComparisons)
+	graphWork, err := partitionTruthGraphDiagnosticWork(m.Vectors, cfg.partition.Degree)
+	if err != nil {
+		return m3BenchmarkWorkPlan{}, err
+	}
+	totalVisits, err := memoryAdd(checksumVisits, membershipVisits, adjacencyComparisons, graphWork)
 	if err != nil {
 		return m3BenchmarkWorkPlan{}, err
 	}
@@ -1940,11 +1985,12 @@ func validateM3BenchmarkWork(cfg config, m fixtureManifest, capUnits int64) (m3B
 		ChecksumVectorQueryVisits:   checksumVisits,
 		MembershipVectorQueryVisits: membershipVisits,
 		TruthAdjacencyComparisons:   adjacencyComparisons,
+		GraphDiagnosticWorkUnits:    graphWork,
 		VectorQueryVisits:           totalVisits,
 	}
 	if totalVisits > capUnits {
-		return plan, fmt.Errorf("modeled M3 benchmark work exceeds %d-unit cap: checksum_visits=%d membership_visits=%d truth_adjacency_comparisons=%d",
-			capUnits, checksumVisits, membershipVisits, adjacencyComparisons)
+		return plan, fmt.Errorf("modeled M3 benchmark work exceeds %d-unit cap: checksum_visits=%d membership_visits=%d truth_adjacency_comparisons=%d graph_diagnostic_work=%d",
+			capUnits, checksumVisits, membershipVisits, adjacencyComparisons, graphWork)
 	}
 	return plan, nil
 }
