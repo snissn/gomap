@@ -1508,6 +1508,25 @@ func TestPartitionAssignmentParsesOnlyMaterializationStagesV1(t *testing.T) {
 			t.Fatalf("accepted malformed assignment config %#v", args)
 		}
 	}
+	if runtime.GOOS != "windows" && os.Geteuid() != 0 {
+		t.Run("unreadable_script", func(t *testing.T) {
+			unreadable := filepath.Join(t.TempDir(), "unreadable.py")
+			if err := os.WriteFile(unreadable, []byte("# adapter\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(unreadable, 0); err != nil {
+				t.Fatal(err)
+			}
+			file, err := os.Open(unreadable)
+			if err == nil {
+				_ = file.Close()
+				t.Skip("current credentials can read a mode-000 regular file")
+			}
+			if _, err := parseConfig(append(append([]string(nil), base...), "-stage", "partition", "-partition-kahip-script", unreadable)); err == nil {
+				t.Fatal("accepted unreadable KaHIP adapter")
+			}
+		})
+	}
 }
 
 func TestKaHIPOfflineSelectorIsLimitedToGraphMaterializationV1(t *testing.T) {

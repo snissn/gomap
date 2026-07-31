@@ -913,8 +913,15 @@ func parseConfig(args []string) (config, error) {
 			return config{}, fmt.Errorf("-partition-kahip-script: %w", err)
 		}
 		info, err := os.Stat(script)
-		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0444 == 0 {
-			return config{}, errors.New("-partition-kahip-script must be a readable regular file")
+		if err != nil || !info.Mode().IsRegular() {
+			return config{}, errors.New("-partition-kahip-script must be a regular file")
+		}
+		file, err := os.Open(script)
+		if err != nil {
+			return config{}, fmt.Errorf("-partition-kahip-script: %w", err)
+		}
+		if err := file.Close(); err != nil {
+			return config{}, fmt.Errorf("-partition-kahip-script: %w", err)
 		}
 		cfg.kahipScript = script
 	}
