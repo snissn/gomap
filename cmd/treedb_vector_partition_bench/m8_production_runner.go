@@ -2059,7 +2059,7 @@ func m8WarmProductionTopologyV1(ctx context.Context, coordinator *nativewire.Vec
 	m8AccumulateProductionResourceBoundaryV1(&boundary, response, efSearch)
 	for i := 0; i < cfg.warmup; i++ {
 		requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		response, err := coordinator.Search(requestCtx, m8ProductionRequestV1(assets, m8Query32V1(queries[i%len(queries)]), fmt.Sprintf("m8-warmup-%06d", i), len(assets.manifest.Placements), efSearch, cfg.topK, cfg.m8CoordinatorLimits.MaxCandidateBytes))
+		response, err := coordinator.Search(requestCtx, m8ProductionWarmupRequestV1(assets, m8Query32V1(queries[i%len(queries)]), fmt.Sprintf("m8-warmup-%06d", i), efSearch, cfg))
 		cancel()
 		if err != nil {
 			return boundary, fmt.Errorf("M8 topology warmup %d: %w", i, err)
@@ -2597,6 +2597,14 @@ func m8ProductionApproximateRequestV1(assets *m8ProductionMultiGroupAssetsV1, qu
 	request.RouterMode = collections.VectorPartitionRouterModeApproxV1
 	request.RouterCandidateBudget = m8ProductionApproximateRouterCandidateBudgetV1(assets, routerCandidates)
 	return request
+}
+
+func m8ProductionWarmupRequestV1(assets *m8ProductionMultiGroupAssetsV1, query []float32, requestID string, efSearch int, cfg config) nativewire.VectorPartitionCoordinatorRequestV1 {
+	probes := 1
+	for _, value := range cfg.probes {
+		probes = max(probes, value)
+	}
+	return m8ProductionApproximateRequestV1(assets, query, requestID, probes, efSearch, cfg.topK, cfg.routerCandidates, cfg.m8CoordinatorLimits.MaxCandidateBytes)
 }
 
 func m8RunUnavailableGroupV1(ctx context.Context, topology *nativewire.VectorPartitionM8ProductionMultiGroupV1, assets *m8ProductionMultiGroupAssetsV1, query64 []float64, topK int, candidateBytesLimit uint64) (m8ProductionFailureEvidenceV1, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1) {
