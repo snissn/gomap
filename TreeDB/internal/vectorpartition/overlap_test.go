@@ -66,6 +66,13 @@ func TestOverlapDeterministicBoundaryAndZeroEquivalent(t *testing.T) {
 	if !reflect.DeepEqual(one, want) {
 		t.Fatalf("boundary overlap=%+v want %+v", one, want)
 	}
+	tampered := one
+	tampered.Replicas = append([]Replica(nil), one.Replicas...)
+	tampered.Replicas[0].Gain++
+	tampered.CumulativeUtility++
+	if err := ValidateOverlap(a, OverlapConfig{Ratio: .5}, tampered); err == nil {
+		t.Fatal("utility detached from edge-cut reduction accepted")
+	}
 }
 
 func TestOverlapExactCapacityTreatmentV1(t *testing.T) {

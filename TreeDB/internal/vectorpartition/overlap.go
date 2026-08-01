@@ -434,6 +434,8 @@ func ValidateOverlap(a Artifact, cfg OverlapConfig, r OverlapResult) error {
 	}
 	if got := overlapEdgeCut(a, r.Memberships); got != r.EdgeCutAfter || got > r.EdgeCutBefore {
 		return errors.New("invalid overlap edge-cut accounting")
+	} else if r.CumulativeUtility != r.EdgeCutBefore-got {
+		return errors.New("overlap utility does not match edge-cut reduction")
 	}
 	return nil
 }
