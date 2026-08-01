@@ -116,12 +116,23 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 	if err := validateM8ProductionMatrixV1(decoded); err != nil {
 		t.Fatalf("round-tripped shortfall matrix rejected: %v", err)
 	}
-	for _, status := range []string{"pass", "fail", ""} {
+	for _, mutation := range []struct {
+		name  string
+		apply func(*m8ProductionComparisonV1)
+	}{
+		{"status_pass", func(comparison *m8ProductionComparisonV1) { comparison.Status = "pass" }},
+		{"status_fail", func(comparison *m8ProductionComparisonV1) { comparison.Status = "fail" }},
+		{"status_blank", func(comparison *m8ProductionComparisonV1) { comparison.Status = "" }},
+		{"recall", func(comparison *m8ProductionComparisonV1) { comparison.RecallAtK = .5 }},
+		{"qps", func(comparison *m8ProductionComparisonV1) { comparison.QPS++ }},
+		{"resource", func(comparison *m8ProductionComparisonV1) { comparison.PersistentAssetBytes++ }},
+		{"artifact_digest", func(comparison *m8ProductionComparisonV1) { comparison.ArtifactSHA256 = strings.Repeat("d", 64) }},
+	} {
 		invalid := decoded
 		invalid.Comparison = append([]m8ProductionComparisonV1(nil), decoded.Comparison...)
-		invalid.Comparison[shortfallAt].Status = status
+		mutation.apply(&invalid.Comparison[shortfallAt])
 		if err := validateM8ProductionMatrixV1(invalid); err == nil {
-			t.Fatalf("accepted shortfall comparison status %q", status)
+			t.Fatalf("accepted tampered shortfall comparison %s", mutation.name)
 		}
 	}
 	for _, reachability := range []string{"", "fail"} {

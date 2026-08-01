@@ -375,14 +375,7 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 			if row.Status == "unsupported" {
 				return m8ProductionMatrixV1{}, errors.New("M8 matrix contains an unsupported comparison row")
 			}
-			matrix.Comparison = append(matrix.Comparison, m8ProductionComparisonV1{
-				VariantID: report.Variant.VariantID, Status: row.Status, AssignmentBasis: report.Variant.AssignmentBasis, Overlap: report.Variant.OverlapRatio,
-				ArtifactSHA256: report.Variant.ArtifactSHA256, ReadySetDigest: report.Variant.ReadySetDigest, RouterModelDigest: report.Variant.RouterModelDigest,
-				Probes: row.Probes, EfSearch: row.EfSearch, Concurrency: row.Concurrency, Samples: row.Samples, RecallAtK: row.RecallAtK,
-				QPS: row.QPS, P50Nanos: row.P50Nanos, P95Nanos: row.P95Nanos, P99Nanos: row.P99Nanos, MaxTotalNanos: row.MaxTotalNanos, RPCs: row.RPCs,
-				RequestBytes: row.RequestBytes, CandidateBytes: row.CandidateBytes, ResponseBytes: row.ResponseBytes,
-				PersistentAssetBytes: report.Resources.PersistentAssetBytes, PeakRSSBytes: report.Resources.PeakRSSBytes,
-			})
+			matrix.Comparison = append(matrix.Comparison, m8ProductionComparisonForRowV1(*report, row))
 		}
 	}
 	for _, required := range m8RequiredVariantIDsV1 {
@@ -465,6 +458,17 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 	return matrix, nil
 }
 
+func m8ProductionComparisonForRowV1(report m8ProductionReportV1, row m8ProductionRowV1) m8ProductionComparisonV1 {
+	return m8ProductionComparisonV1{
+		VariantID: report.Variant.VariantID, Status: row.Status, AssignmentBasis: report.Variant.AssignmentBasis, Overlap: report.Variant.OverlapRatio,
+		ArtifactSHA256: report.Variant.ArtifactSHA256, ReadySetDigest: report.Variant.ReadySetDigest, RouterModelDigest: report.Variant.RouterModelDigest,
+		Probes: row.Probes, EfSearch: row.EfSearch, Concurrency: row.Concurrency, Samples: row.Samples, RecallAtK: row.RecallAtK,
+		QPS: row.QPS, P50Nanos: row.P50Nanos, P95Nanos: row.P95Nanos, P99Nanos: row.P99Nanos, MaxTotalNanos: row.MaxTotalNanos, RPCs: row.RPCs,
+		RequestBytes: row.RequestBytes, CandidateBytes: row.CandidateBytes, ResponseBytes: row.ResponseBytes,
+		PersistentAssetBytes: report.Resources.PersistentAssetBytes, PeakRSSBytes: report.Resources.PeakRSSBytes,
+	}
+}
+
 // validateM8ProductionMatrixV1 binds every flattened comparison row to its
 // source child measurement, including its measured outcome.
 func validateM8ProductionMatrixV1(matrix m8ProductionMatrixV1) error {
@@ -472,7 +476,7 @@ func validateM8ProductionMatrixV1(matrix m8ProductionMatrixV1) error {
 		variantID               string
 		probes, ef, concurrency int
 	}
-	sources := make(map[key]string)
+	sources := make(map[key]m8ProductionComparisonV1)
 	for _, report := range matrix.Variants {
 		if report.Variant == nil {
 			return errors.New("M8 matrix report is missing variant identity")
@@ -488,7 +492,7 @@ func validateM8ProductionMatrixV1(matrix m8ProductionMatrixV1) error {
 			if _, exists := sources[k]; exists {
 				return errors.New("M8 matrix contains duplicate child comparison rows")
 			}
-			sources[k] = row.Status
+			sources[k] = m8ProductionComparisonForRowV1(report, row)
 		}
 	}
 	if len(matrix.Comparison) != len(sources) {
@@ -499,8 +503,8 @@ func validateM8ProductionMatrixV1(matrix m8ProductionMatrixV1) error {
 			return errors.New("M8 matrix comparison has an invalid measured status")
 		}
 		k := key{comparison.VariantID, comparison.Probes, comparison.EfSearch, comparison.Concurrency}
-		if status, ok := sources[k]; !ok || comparison.Status != status {
-			return errors.New("M8 matrix comparison status does not match child measurement")
+		if expected, ok := sources[k]; !ok || comparison != expected {
+			return errors.New("M8 matrix comparison does not match child measurement")
 		}
 		delete(sources, k)
 	}
