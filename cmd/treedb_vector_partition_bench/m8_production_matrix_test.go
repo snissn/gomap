@@ -665,6 +665,23 @@ func TestM8VariantDBsParseStrictThreePathsV1(t *testing.T) {
 	}
 }
 
+func TestM8ProductionSweepsRejectDuplicateCoordinatesV1(t *testing.T) {
+	base := []string{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4"}
+	for _, sweep := range [][]string{
+		{"-probes", "4,4"},
+		{"-ef-search", "128,128"},
+		{"-concurrency", "1,1"},
+		{"-overlap", "0,0"},
+	} {
+		if _, err := parseConfig(append(append([]string(nil), base...), sweep...)); err == nil {
+			t.Fatalf("accepted duplicate production sweep %v", sweep)
+		}
+	}
+	if _, err := parseConfig([]string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-probes", "1,1"}); err != nil {
+		t.Fatalf("unrelated simulation duplicate probes: %v", err)
+	}
+}
+
 func TestM8TruthCacheDigestConfigRequiresIndependentValidSHA256V1(t *testing.T) {
 	base := []string{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4"}
 	digest := strings.Repeat("a", 64)

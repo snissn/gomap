@@ -906,6 +906,9 @@ func parseConfig(args []string) (config, error) {
 				return config{}, errors.New("production_multi_group requires router-candidates >= every probe count")
 			}
 		}
+		if !allUnique(cfg.probes) || !allUnique(cfg.efSearch) || !allUnique(cfg.concurrency) || !allUnique(cfg.overlaps) {
+			return config{}, errors.New("production_multi_group requires distinct probes, ef-search, concurrency, and overlap values")
+		}
 	}
 	if cfg.m3PersistDir != "" && (cfg.stage != "overlap,partition_index" || len(cfg.overlaps) != 1) {
 		return config{}, errors.New("-m3-persist-db requires stage overlap,partition_index with exactly one overlap ratio")
@@ -1370,6 +1373,18 @@ func parseInts(raw string) ([]int, error) {
 	}
 	return out, nil
 }
+
+func allUnique[T comparable](values []T) bool {
+	seen := make(map[T]struct{}, len(values))
+	for _, value := range values {
+		if _, exists := seen[value]; exists {
+			return false
+		}
+		seen[value] = struct{}{}
+	}
+	return true
+}
+
 func parseFloats(raw string) ([]float64, error) {
 	var out []float64
 	for _, s := range strings.Split(raw, ",") {
