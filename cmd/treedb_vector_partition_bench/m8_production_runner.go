@@ -2070,6 +2070,8 @@ func m8WarmProductionTopologyV1(ctx context.Context, coordinator *nativewire.Vec
 		requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		response, err := coordinator.Search(requestCtx, m8ProductionWarmupRequestV1(assets, m8Query32V1(queries[i%len(queries)]), fmt.Sprintf("m8-warmup-%06d", i), efSearch, cfg))
 		cancel()
+		responseSummary := nativewire.VectorPartitionCoordinatorResponseV1{Counters: response.Counters, Timing: response.Timing}
+		response = nativewire.VectorPartitionCoordinatorResponseV1{}
 		warmupMu.Lock()
 		defer warmupMu.Unlock()
 		if err != nil {
@@ -2090,7 +2092,7 @@ func m8WarmProductionTopologyV1(ctx context.Context, coordinator *nativewire.Vec
 			}
 			return
 		}
-		m8AccumulateProductionResourceBoundaryV1(&boundary, response, efSearch)
+		m8AccumulateProductionResourceBoundaryV1(&boundary, responseSummary, efSearch)
 	})
 	if firstOrdinaryErr != nil {
 		return boundary, fmt.Errorf("M8 topology warmup %d: %w", firstOrdinaryIndex, firstOrdinaryErr)
