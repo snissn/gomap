@@ -51,17 +51,27 @@ func TestOverlapDeterministicBoundaryAndZeroEquivalent(t *testing.T) {
 			{VectorOrdinal: 2, Partition: 1, Home: true},
 			{VectorOrdinal: 3, Partition: 1, Home: true},
 		},
-		Budget:        2,
-		Used:          1,
-		Unspent:       1,
-		Capacity:      4,
-		Loads:         []int{3, 2},
-		EdgeCutBefore: 4,
-		EdgeCutAfter:  0,
-		Useful:        1,
+		Budget:               2,
+		Used:                 1,
+		Unspent:              1,
+		Capacity:             4,
+		Loads:                []int{3, 2},
+		EdgeCutBefore:        4,
+		EdgeCutAfter:         0,
+		Useful:               1,
+		Replicas:             []Replica{{VectorOrdinal: 2, Partition: 0, Policy: overlapReplicaPolicyV1, Gain: 4, Class: ReplicaUtilityPositiveGainV1}},
+		CumulativeUtility:    4,
+		DestinationDiversity: []int{1, 0},
 	}
 	if !reflect.DeepEqual(one, want) {
 		t.Fatalf("boundary overlap=%+v want %+v", one, want)
+	}
+	tampered := one
+	tampered.Replicas = append([]Replica(nil), one.Replicas...)
+	tampered.Replicas[0].Gain++
+	tampered.CumulativeUtility++
+	if err := ValidateOverlap(a, OverlapConfig{Ratio: .5}, tampered); err == nil {
+		t.Fatal("utility detached from edge-cut reduction accepted")
 	}
 }
 
@@ -106,6 +116,38 @@ func TestOverlapExactTreatmentFillsLegalNonAffinitySlotsV1(t *testing.T) {
 	}
 	if got.Budget != 2 || got.Used != 2 || got.Useful != 0 || got.Filler != 2 || got.Unspent != 0 || got.EdgeCutBefore != 0 || got.EdgeCutAfter != 0 {
 		t.Fatalf("exact fallback=%+v", got)
+	}
+	for _, replica := range got.Replicas {
+		if replica.Policy != overlapReplicaPolicyV1 || replica.Gain != 0 || replica.Class != ReplicaUtilityZeroUtilityV1 {
+			t.Fatalf("zero-cut replica was not honestly classified: %+v", replica)
+		}
+	}
+	tampered := got
+	tampered.Useful, tampered.Filler = got.Filler, got.Useful
+	if err := ValidateOverlap(a, OverlapConfig{Ratio: .5, Capacity: 3, RequireExact: true}, tampered); err == nil {
+		t.Fatal("aggregate replica-class swap accepted")
+	}
+}
+
+func TestOverlapExactTreatmentRanksUtilityBeforeOrdinalFillV1(t *testing.T) {
+	c := Config{Metric: "cosine", Seed: 1, Repetitions: 1, Pivots: 2, MaxLeafBucket: 2, Degree: 3, Partitions: 2, Imbalance: 1, MaxVectors: 5, MaxEdges: 15}
+	v := []Vector{{"a", []float64{1}}, {"b", []float64{.9}}, {"c", []float64{.8}}, {"d", []float64{.7}}, {"e", []float64{.6}}}
+	built, err := Build(v, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := Artifact{SchemaVersion: SchemaVersion, Backend: "test", BackendLicense: "test", Source: built.Source, Config: c, IDs: []string{"a", "b", "c", "d", "e"}, Graph: Graph{Neighbors: [][]int{{}, {}, {}, {0, 1}, {}}}, Assignment: []int{0, 0, 1, 1, 1}}
+	a.Metrics = metrics(a)
+	got, err := BuildOverlap(a, OverlapConfig{Ratio: .4, Capacity: 5, RequireExact: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Replica{
+		{VectorOrdinal: 0, Partition: 1, Policy: overlapReplicaPolicyV1, Gain: 0, Class: ReplicaUtilityZeroUtilityV1},
+		{VectorOrdinal: 3, Partition: 0, Policy: overlapReplicaPolicyV1, Gain: 2, Class: ReplicaUtilityPositiveGainV1},
+	}
+	if got.Used != 2 || got.Useful != 1 || got.Filler != 1 || got.CumulativeUtility != 2 || !reflect.DeepEqual(got.Replicas, want) {
+		t.Fatalf("utility order/fill=%+v want replicas=%+v", got, want)
 	}
 }
 

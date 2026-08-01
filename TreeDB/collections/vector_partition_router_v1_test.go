@@ -293,15 +293,18 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 	for partition := range partitions {
 		partitions[partition].PartitionID = uint32(partition)
 	}
-	for _, sourceRow := range sourceRows {
-		membership := building.Memberships[sourceRow.VectorOrdinal]
-		if membership.VectorOrdinal != sourceRow.VectorOrdinal {
-			t.Fatalf("noncanonical test membership ordinal=%d source=%d", membership.VectorOrdinal, sourceRow.VectorOrdinal)
+	for kind, memberships := range [][]VectorPartitionMembershipV1{building.Memberships, building.OverlapMemberships} {
+		for _, membership := range memberships {
+			if membership.VectorOrdinal >= uint64(len(sourceRows)) {
+				t.Fatalf("test membership ordinal=%d outside source rows", membership.VectorOrdinal)
+			}
+			sourceRow := sourceRows[membership.VectorOrdinal]
+			partitions[membership.PartitionID].Vectors = append(partitions[membership.PartitionID].Vectors, internalrouter.RouterVectorV1{
+				Ordinal:        sourceRow.VectorOrdinal,
+				Values:         sourceRow.Values,
+				MembershipKind: []string{string(VectorPartitionMembershipHomeV1), string(VectorPartitionMembershipOverlapV1)}[kind],
+			})
 		}
-		partitions[membership.PartitionID].Vectors = append(partitions[membership.PartitionID].Vectors, internalrouter.RouterVectorV1{
-			Ordinal: sourceRow.VectorOrdinal,
-			Values:  sourceRow.Values,
-		})
 	}
 	cfg := internalrouter.DefaultRouterConfigV1()
 	cfg.BranchFactor = 2
@@ -342,6 +345,15 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 		ManifestGeneration: building.SourceGeneration,
 		ManifestChecksum:   building.SourceChecksum,
 		SchemaHash:         building.SourceSchemaHash,
+	}
+	wrongMembership := building
+	wrongMembership.OverlapMemberships = nil
+	wrongMembership.Canonicalize()
+	if _, err := decodeColumnHNSWSearchPack(firstPack, columnHNSWSearchPackDecodeOptions{
+		ExpectedBaseIdentity:     baseIdentity,
+		ExpectedMembershipDigest: vectorPartitionRouterFinalMembershipDigestV1(wrongMembership),
+	}); err == nil {
+		t.Fatal("router pack accepted a stale final-membership digest")
 	}
 	prepared, _ := testColumnHNSWSearchPackPreparedViewFromBytes2314(t, firstPack, mappedresource.SourceHeapCopy, baseIdentity)
 	stale := building
@@ -516,8 +528,9 @@ func cloneVectorPartitionRouterInputsV1(input []internalrouter.RouterPartitionV1
 		cloned[partitionOrdinal].Vectors = make([]internalrouter.RouterVectorV1, len(partition.Vectors))
 		for vectorOrdinal, vector := range partition.Vectors {
 			cloned[partitionOrdinal].Vectors[vectorOrdinal] = internalrouter.RouterVectorV1{
-				Ordinal: vector.Ordinal,
-				Values:  append([]float32(nil), vector.Values...),
+				Ordinal:        vector.Ordinal,
+				Values:         append([]float32(nil), vector.Values...),
+				MembershipKind: vector.MembershipKind,
 			}
 		}
 	}
@@ -636,6 +649,12 @@ func vectorPartitionRouterBuildingFixtureV1(t *testing.T, database *backenddb.DB
 		manifest.Memberships = append(manifest.Memberships, VectorPartitionMembershipV1{
 			VectorOrdinal: sourceRow.VectorOrdinal, PartitionID: uint32(inputOrdinal / 2),
 		})
+	}
+	for _, membership := range manifest.Memberships {
+		if membership.PartitionID == 0 {
+			manifest.OverlapMemberships = append(manifest.OverlapMemberships, VectorPartitionMembershipV1{VectorOrdinal: membership.VectorOrdinal, PartitionID: 1})
+			break
+		}
 	}
 	for ordinal, ref := range refs {
 		raw, err := readColumnPhysicalAssetFromManager(database.ColumnAssetRootDir(), ref)

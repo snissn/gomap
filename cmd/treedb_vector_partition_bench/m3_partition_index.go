@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	m3ReportSchemaVersion   = 3
+	m3ReportSchemaVersion   = 4
 	m3BenchmarkCollection   = "m3_partition_source"
 	m3WarmupPasses          = 1
 	m3SourceInsertBatchRows = 8 * 1024
@@ -55,57 +55,68 @@ type m3PartitionIndexReport struct {
 }
 
 type m3PartitionIndexRow struct {
-	Ratio                        float64 `json:"ratio"`
-	Budget                       int     `json:"budget"`
-	Used                         int     `json:"used"`
-	Unspent                      int     `json:"unspent"`
-	Capacity                     int     `json:"capacity"`
-	OverlapRequested             int     `json:"overlap_requested"`
-	OverlapRealized              int     `json:"overlap_realized"`
-	OverlapRejected              int     `json:"overlap_rejected"`
-	OverlapUseful                int     `json:"overlap_useful"`
-	OverlapFiller                int     `json:"overlap_filler"`
-	OverlapUnusedCapacity        int     `json:"overlap_unused_capacity"`
-	CutReductionPerUsefulReplica float64 `json:"cut_reduction_per_useful_replica"`
-	ReplicationFactor            float64 `json:"replication_factor"`
-	PartitionLoads               []int   `json:"partition_loads"`
-	EdgeCutBefore                int     `json:"edge_cut_before"`
-	EdgeCutAfter                 int     `json:"edge_cut_after"`
-	BuildWallNanos               int64   `json:"build_wall_nanos"`
-	PeakRSSBytes                 int64   `json:"peak_rss_bytes"`
-	PeakRSSAvailable             bool    `json:"peak_rss_available"`
-	ResidentBytes                int64   `json:"resident_bytes"`
-	ResidentBytesAvailable       bool    `json:"resident_bytes_available"`
-	SourcePhysicalBytes          int64   `json:"source_physical_bytes"`
-	PeakDerivedTemporaryBytes    int64   `json:"peak_derived_temporary_bytes"`
-	FinalDerivedPhysicalBytes    int64   `json:"final_derived_physical_bytes"`
-	PhysicalBytesPerSourceVector float64 `json:"physical_bytes_per_source_vector"`
-	PackBytes                    uint64  `json:"pack_payload_bytes"`
-	PartitionHNSWM               int     `json:"partition_hnsw_m"`
-	MappedBytes                  uint64  `json:"mapped_bytes"`
-	HeapBytes                    uint64  `json:"heap_bytes"`
-	SearcherOpenWallNanos        int64   `json:"searcher_open_wall_nanos"`
-	PackOpenNanos                uint64  `json:"pack_open_nanos"`
-	Queries                      int     `json:"queries"`
-	LocalSearches                int     `json:"local_searches"`
-	WarmupPasses                 int     `json:"warmup_passes"`
-	WarmNSPerOp                  float64 `json:"warm_ns_per_op"`
-	WarmQPS                      float64 `json:"warm_qps"`
-	WarmBytesPerOp               float64 `json:"warm_bytes_per_op"`
-	WarmAllocsPerOp              float64 `json:"warm_allocs_per_op"`
-	CandidatesPerOp              float64 `json:"candidates_per_op"`
-	EdgesPerOp                   float64 `json:"edges_per_op"`
-	ExactLocalRecallAtK          float64 `json:"exact_local_recall_at_k"`
-	ManifestDigest               string  `json:"manifest_digest"`
-	SourceGeneration             uint64  `json:"source_generation"`
-	SourceChecksum               uint64  `json:"source_checksum"`
-	SourceSchemaHash             uint64  `json:"source_schema_hash"`
-	SourceRows                   uint64  `json:"source_rows"`
-	SearchRoute                  string  `json:"search_route"`
-	MissingAssets                uint64  `json:"missing_assets"`
-	CorruptAssets                uint64  `json:"corrupt_assets"`
-	StaleAssets                  uint64  `json:"stale_assets"`
-	PersistentDBDir              string  `json:"persistent_db_dir,omitempty"`
+	Ratio                        float64            `json:"ratio"`
+	Budget                       int                `json:"budget"`
+	Used                         int                `json:"used"`
+	Unspent                      int                `json:"unspent"`
+	Capacity                     int                `json:"capacity"`
+	OverlapRequested             int                `json:"overlap_requested"`
+	OverlapRealized              int                `json:"overlap_realized"`
+	OverlapRejected              int                `json:"overlap_rejected"`
+	OverlapUseful                int                `json:"overlap_useful"`
+	OverlapFiller                int                `json:"overlap_filler"`
+	OverlapCumulativeUtility     int                `json:"overlap_cumulative_utility"`
+	OverlapDestinationDiversity  []int              `json:"overlap_destination_diversity"`
+	OverlapReplicas              []m3OverlapReplica `json:"overlap_replicas"`
+	OverlapUnusedCapacity        int                `json:"overlap_unused_capacity"`
+	CutReductionPerUsefulReplica float64            `json:"cut_reduction_per_useful_replica"`
+	ReplicationFactor            float64            `json:"replication_factor"`
+	PartitionLoads               []int              `json:"partition_loads"`
+	EdgeCutBefore                int                `json:"edge_cut_before"`
+	EdgeCutAfter                 int                `json:"edge_cut_after"`
+	BuildWallNanos               int64              `json:"build_wall_nanos"`
+	PeakRSSBytes                 int64              `json:"peak_rss_bytes"`
+	PeakRSSAvailable             bool               `json:"peak_rss_available"`
+	ResidentBytes                int64              `json:"resident_bytes"`
+	ResidentBytesAvailable       bool               `json:"resident_bytes_available"`
+	SourcePhysicalBytes          int64              `json:"source_physical_bytes"`
+	PeakDerivedTemporaryBytes    int64              `json:"peak_derived_temporary_bytes"`
+	FinalDerivedPhysicalBytes    int64              `json:"final_derived_physical_bytes"`
+	PhysicalBytesPerSourceVector float64            `json:"physical_bytes_per_source_vector"`
+	PackBytes                    uint64             `json:"pack_payload_bytes"`
+	PartitionHNSWM               int                `json:"partition_hnsw_m"`
+	MappedBytes                  uint64             `json:"mapped_bytes"`
+	HeapBytes                    uint64             `json:"heap_bytes"`
+	SearcherOpenWallNanos        int64              `json:"searcher_open_wall_nanos"`
+	PackOpenNanos                uint64             `json:"pack_open_nanos"`
+	Queries                      int                `json:"queries"`
+	LocalSearches                int                `json:"local_searches"`
+	WarmupPasses                 int                `json:"warmup_passes"`
+	WarmNSPerOp                  float64            `json:"warm_ns_per_op"`
+	WarmQPS                      float64            `json:"warm_qps"`
+	WarmBytesPerOp               float64            `json:"warm_bytes_per_op"`
+	WarmAllocsPerOp              float64            `json:"warm_allocs_per_op"`
+	CandidatesPerOp              float64            `json:"candidates_per_op"`
+	EdgesPerOp                   float64            `json:"edges_per_op"`
+	ExactLocalRecallAtK          float64            `json:"exact_local_recall_at_k"`
+	ManifestDigest               string             `json:"manifest_digest"`
+	SourceGeneration             uint64             `json:"source_generation"`
+	SourceChecksum               uint64             `json:"source_checksum"`
+	SourceSchemaHash             uint64             `json:"source_schema_hash"`
+	SourceRows                   uint64             `json:"source_rows"`
+	SearchRoute                  string             `json:"search_route"`
+	MissingAssets                uint64             `json:"missing_assets"`
+	CorruptAssets                uint64             `json:"corrupt_assets"`
+	StaleAssets                  uint64             `json:"stale_assets"`
+	PersistentDBDir              string             `json:"persistent_db_dir,omitempty"`
+}
+
+type m3OverlapReplica struct {
+	SourceOrdinal uint64 `json:"source_ordinal"`
+	Destination   int    `json:"destination"`
+	Policy        string `json:"policy"`
+	Gain          int    `json:"gain"`
+	Class         string `json:"class"`
 }
 
 func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vectorpartition.Artifact, artifactDigest, graphArtifactDigest, suffix string, vectors, queries [][]float64, stdout io.Writer) error {
@@ -368,9 +379,16 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
-	routerPartitions, err := m3RouterPartitions(artifact, sourceOrdinals, vectors)
+	routerPartitions, err := m3RouterPartitions(artifact, overlap, sourceOrdinals, vectors)
 	if err != nil {
 		return m3PartitionIndexRow{}, err
+	}
+	replicaSourceOrdinals := make([]uint64, len(overlap.Replicas))
+	for i, replica := range overlap.Replicas {
+		if replica.VectorOrdinal < 0 || replica.VectorOrdinal >= len(sourceOrdinals) {
+			return m3PartitionIndexRow{}, errors.New("M3 overlap replica ordinal is invalid")
+		}
+		replicaSourceOrdinals[i] = uint64(sourceOrdinals[replica.VectorOrdinal])
 	}
 	sourceRows = nil
 	sourceOrdinals = nil
@@ -602,6 +620,8 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		OverlapRejected:              overlap.Unspent,
 		OverlapUseful:                overlap.Useful,
 		OverlapFiller:                overlap.Filler,
+		OverlapCumulativeUtility:     overlap.CumulativeUtility,
+		OverlapDestinationDiversity:  append([]int(nil), overlap.DestinationDiversity...),
 		OverlapUnusedCapacity:        unusedCapacity,
 		CutReductionPerUsefulReplica: cutReductionPerUseful,
 		ReplicationFactor:            float64(len(overlap.Memberships)) / float64(len(artifact.IDs)),
@@ -643,6 +663,10 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		CorruptAssets:                lifecycle.CorruptAssets,
 		StaleAssets:                  lifecycle.StaleAssets,
 		PersistentDBDir:              persistentDBDir,
+	}
+	row.OverlapReplicas = make([]m3OverlapReplica, len(overlap.Replicas))
+	for i, replica := range overlap.Replicas {
+		row.OverlapReplicas[i] = m3OverlapReplica{SourceOrdinal: replicaSourceOrdinals[i], Destination: replica.Partition, Policy: replica.Policy, Gain: replica.Gain, Class: string(replica.Class)}
 	}
 	if !cleanup {
 		descriptor := m3VariantDescriptorV1{
@@ -750,9 +774,9 @@ func m3SourceOrdinalsByArtifactID(artifact vectorpartition.Artifact, rows []coll
 	return sourceOrdinals, nil
 }
 
-func m3RouterPartitions(artifact vectorpartition.Artifact, sourceOrdinals []int, vectors [][]float64) ([]vectorpartition.RouterPartitionV1, error) {
+func m3RouterPartitions(artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, sourceOrdinals []int, vectors [][]float64) ([]vectorpartition.RouterPartitionV1, error) {
 	if len(artifact.Assignment) == 0 || len(artifact.Assignment) != len(sourceOrdinals) || len(vectors) != len(sourceOrdinals) ||
-		artifact.Config.Partitions < 1 || len(vectors[0]) < 1 {
+		artifact.Config.Partitions < 1 || len(vectors[0]) < 1 || len(overlap.Memberships) < len(artifact.Assignment) {
 		return nil, errors.New("M3 router source shape mismatch")
 	}
 	dimensions := len(vectors[0])
@@ -762,12 +786,22 @@ func m3RouterPartitions(artifact vectorpartition.Artifact, sourceOrdinals []int,
 	counts := make([]int, artifact.Config.Partitions)
 	seenSourceOrdinals := make([]bool, len(sourceOrdinals))
 	for ordinal, partition := range artifact.Assignment {
-		if partition < 0 || partition >= len(counts) || sourceOrdinals[ordinal] < 0 || sourceOrdinals[ordinal] >= len(vectors) ||
-			seenSourceOrdinals[sourceOrdinals[ordinal]] || len(vectors[ordinal]) != dimensions {
+		if partition < 0 || partition >= len(counts) || sourceOrdinals[ordinal] < 0 || sourceOrdinals[ordinal] >= len(vectors) || seenSourceOrdinals[sourceOrdinals[ordinal]] || len(vectors[ordinal]) != dimensions {
 			return nil, errors.New("M3 router assignment or source ordinal is invalid")
 		}
 		seenSourceOrdinals[sourceOrdinals[ordinal]] = true
-		counts[partition]++
+	}
+	seenMemberships := make(map[[2]int]struct{}, len(overlap.Memberships))
+	for _, membership := range overlap.Memberships {
+		if membership.VectorOrdinal < 0 || membership.VectorOrdinal >= len(vectors) || membership.Partition < 0 || membership.Partition >= len(counts) || membership.Home != (membership.Partition == artifact.Assignment[membership.VectorOrdinal]) {
+			return nil, errors.New("M3 final router membership is invalid")
+		}
+		key := [2]int{membership.VectorOrdinal, membership.Partition}
+		if _, duplicate := seenMemberships[key]; duplicate {
+			return nil, errors.New("M3 final router membership is duplicate")
+		}
+		seenMemberships[key] = struct{}{}
+		counts[membership.Partition]++
 	}
 	partitions := make([]vectorpartition.RouterPartitionV1, len(counts))
 	for partition := range partitions {
@@ -775,15 +809,21 @@ func m3RouterPartitions(artifact vectorpartition.Artifact, sourceOrdinals []int,
 		partitions[partition].Vectors = make([]vectorpartition.RouterVectorV1, 0, counts[partition])
 	}
 	values := make([]float32, len(vectors)*dimensions)
-	for artifactOrdinal, partition := range artifact.Assignment {
+	for _, membership := range overlap.Memberships {
+		artifactOrdinal, partition := membership.VectorOrdinal, membership.Partition
 		offset := artifactOrdinal * dimensions
 		row := values[offset : offset+dimensions : offset+dimensions]
 		for dimension, value := range vectors[artifactOrdinal] {
 			row[dimension] = float32(value)
 		}
+		kind := string(collections.VectorPartitionMembershipOverlapV1)
+		if membership.Home {
+			kind = string(collections.VectorPartitionMembershipHomeV1)
+		}
 		partitions[partition].Vectors = append(partitions[partition].Vectors, vectorpartition.RouterVectorV1{
-			Ordinal: uint64(sourceOrdinals[artifactOrdinal]),
-			Values:  row,
+			Ordinal:        uint64(sourceOrdinals[artifactOrdinal]),
+			Values:         row,
+			MembershipKind: kind,
 		})
 	}
 	return partitions, nil
@@ -972,6 +1012,41 @@ func validateM3PartitionIndexReport(report m3PartitionIndexReport) error {
 		}
 		if row.Budget != wantBudget || row.Used != wantBudget || row.OverlapRequested != wantBudget || row.OverlapRealized != wantBudget || row.Budget < 0 || row.Used < 0 || row.Unspent != row.Budget-row.Used || row.Capacity < 1 || row.OverlapRejected != row.Unspent || row.OverlapRejected != 0 || row.OverlapUseful < 0 || row.OverlapFiller < 0 || row.OverlapUseful+row.OverlapFiller != row.OverlapRealized || row.OverlapUnusedCapacity != wantUnusedCapacity || row.CutReductionPerUsefulReplica != wantCutReductionPerUseful || row.ReplicationFactor < 1 || row.EdgeCutAfter > row.EdgeCutBefore || row.BuildWallNanos <= 0 || row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes <= 0 || row.PackBytes == 0 || row.PartitionHNSWM < 2 || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PhysicalBytesPerSourceVector <= 0 || row.SearcherOpenWallNanos <= 0 || row.PackOpenNanos == 0 || row.LocalSearches <= 0 || row.WarmNSPerOp <= 0 || row.WarmQPS <= 0 || row.CandidatesPerOp <= 0 || row.ExactLocalRecallAtK < 0 || row.ExactLocalRecallAtK > 1 || row.ManifestDigest == "" || row.SourceRows != uint64(report.Dataset.Vectors) || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 {
 			return fmt.Errorf("invalid M3 evidence row: %+v", row)
+		}
+		if len(row.OverlapReplicas) != row.OverlapRealized || len(row.OverlapDestinationDiversity) != len(row.PartitionLoads) {
+			return fmt.Errorf("invalid M3 overlap replica evidence: %+v", row)
+		}
+		utility, useful, filler := 0, 0, 0
+		seenReplica := make(map[[2]uint64]struct{}, len(row.OverlapReplicas))
+		for _, replica := range row.OverlapReplicas {
+			key := [2]uint64{replica.SourceOrdinal, uint64(replica.Destination)}
+			if replica.Destination < 0 || replica.Destination >= len(row.PartitionLoads) || replica.Policy == "" || replica.Gain < 0 || (replica.Class != string(vectorpartition.ReplicaUtilityPositiveGainV1) && replica.Class != string(vectorpartition.ReplicaUtilityZeroUtilityV1)) {
+				return fmt.Errorf("invalid M3 overlap replica: %+v", replica)
+			}
+			if _, duplicate := seenReplica[key]; duplicate {
+				return fmt.Errorf("duplicate M3 overlap replica: %+v", replica)
+			}
+			seenReplica[key] = struct{}{}
+			utility += replica.Gain
+			if replica.Class == string(vectorpartition.ReplicaUtilityPositiveGainV1) {
+				if replica.Gain == 0 {
+					return fmt.Errorf("zero-gain positive M3 overlap replica: %+v", replica)
+				}
+				useful++
+			} else {
+				if replica.Gain != 0 {
+					return fmt.Errorf("positive-gain filler M3 overlap replica: %+v", replica)
+				}
+				filler++
+			}
+		}
+		if utility != row.OverlapCumulativeUtility || useful != row.OverlapUseful || filler != row.OverlapFiller {
+			return fmt.Errorf("invalid M3 overlap utility evidence: %+v", row)
+		}
+		for _, diversity := range row.OverlapDestinationDiversity {
+			if diversity < 0 || diversity > row.OverlapRealized {
+				return fmt.Errorf("invalid M3 overlap diversity evidence: %+v", row)
+			}
 		}
 		for _, value := range []float64{row.Ratio, row.ReplicationFactor, row.PhysicalBytesPerSourceVector, row.WarmNSPerOp, row.WarmQPS, row.WarmBytesPerOp, row.WarmAllocsPerOp, row.CandidatesPerOp, row.EdgesPerOp, row.ExactLocalRecallAtK} {
 			if math.IsNaN(value) || math.IsInf(value, 0) {
