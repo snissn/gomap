@@ -2399,6 +2399,11 @@ func TestM8AttributionApproximateCoverageShortfallIsOwnedV1(t *testing.T) {
 	if validM8AttributionV1(invalid, 10) {
 		t.Fatalf("accepted nonzero approximate recall with incomplete coverage: %+v", invalid)
 	}
+	invalid = attribution
+	invalid.ApproximateLocalHNSWRecallAtK = .5
+	if validM8AttributionV1(invalid, 10) {
+		t.Fatalf("accepted approximate local recall with incomplete coverage: %+v", invalid)
+	}
 	if _, err := m8ApproximateRouterCoverageV1(errors.New("router corruption")); err == nil {
 		t.Fatal("accepted non-coverage router error")
 	}
