@@ -5,11 +5,66 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 )
+
+func TestVectorPartitionShardSearchTCPDispatcherReusesConnectionV1(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	var accepts atomic.Uint64
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			accepts.Add(1)
+			go (VectorPartitionShardSearchTCPServerV1{Service: vectorPartitionShardSearchHandlerFuncV1(func(_ context.Context, r VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+				return VectorPartitionShardSearchResponseV1{Version: 1, RequestID: r.RequestID}, nil
+			})}).ServeConn(context.Background(), conn)
+		}
+	}()
+	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": listener.Addr().String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dispatcher.Close()
+	for _, id := range []string{"first", "second"} {
+		if _, err := dispatcher.DispatchVectorPartitionShardSearchV1(context.Background(), VectorPartitionShardSearchRequestV1{TargetGroupID: "group-a", RequestID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := accepts.Load(); got != 1 {
+		t.Fatalf("connections=%d want one reused connection", got)
+	}
+}
+
+func TestVectorPartitionShardSearchTCPDispatcherUsesLeaderNodeEndpointV1(t *testing.T) {
+	leader := newVectorPartitionShardSearchTCPListenerV1(t, vectorPartitionShardSearchHandlerFuncV1(func(_ context.Context, r VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+		return VectorPartitionShardSearchResponseV1{Version: 1, RequestID: r.RequestID}, nil
+	}))
+	stale := newVectorPartitionShardSearchTCPListenerV1(t, vectorPartitionShardSearchHandlerFuncV1(func(context.Context, VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+		return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorNotLeaderV1, GroupID: "group-a", LeaderHint: "node-b", Err: errors.New("moved")}
+	}))
+	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherWithNodeEndpointsV1(map[raftcluster.GroupID]string{"group-a": stale.Addr().String()}, map[raftcluster.GroupID]map[raftcluster.NodeID]string{"group-a": {"node-a": stale.Addr().String(), "node-b": leader.Addr().String()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dispatcher.Close()
+	if _, err := dispatcher.DispatchVectorPartitionShardSearchV1(context.Background(), VectorPartitionShardSearchRequestV1{TargetGroupID: "group-a", TargetNodeID: "node-a"}); err == nil {
+		t.Fatal("stale leader endpoint succeeded")
+	}
+	if response, err := dispatcher.DispatchVectorPartitionShardSearchV1(context.Background(), VectorPartitionShardSearchRequestV1{TargetGroupID: "group-a", TargetNodeID: "node-b", RequestID: "leader"}); err != nil || response.RequestID != "leader" {
+		t.Fatalf("leader endpoint response=%+v err=%v", response, err)
+	}
+}
 
 type vectorPartitionShardSearchHandlerFuncV1 func(context.Context, VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error)
 
@@ -53,13 +108,15 @@ func TestVectorPartitionShardSearchTCPServerInterruptsPeerReadBeforeSuccessfulRe
 	if err != nil || frame.Response == nil || frame.Response.RequestID != "immediate" {
 		t.Fatalf("response frame=%+v err=%v", frame, err)
 	}
+	// The production transport keeps a healthy connection for the next request.
+	// Closing the peer must still release the server goroutine deterministically.
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case <-serverDone:
 	case <-time.After(time.Second):
-		t.Fatal("server did not return after successful response")
-	}
-	if !server.interruptedReadBeforeWrite() {
-		t.Fatal("successful response was written without interrupting the peer-monitor read")
+		t.Fatal("server did not return after peer close")
 	}
 }
 

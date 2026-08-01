@@ -27,15 +27,30 @@ const vectorPartitionShardSearchTCPMaxFrameBytesV1 uint32 = 64 << 20
 // in-process registry: every request and response crosses a serialized socket
 // boundary before the coordinator can consume it.
 type VectorPartitionShardSearchTCPDispatcherV1 struct {
-	endpoints map[raftcluster.GroupID]string
-	dial      func(context.Context, string, string) (net.Conn, error)
-	maxFrame  uint32
+	endpoints     map[raftcluster.GroupID]string
+	nodeEndpoints map[raftcluster.GroupID]map[raftcluster.NodeID]string
+	dial          func(context.Context, string, string) (net.Conn, error)
+	maxFrame      uint32
+	mu            sync.Mutex
+	conns         map[string]*vectorPartitionShardSearchTCPPooledConnV1
+}
+
+type vectorPartitionShardSearchTCPPooledConnV1 struct {
+	conn net.Conn
+	mu   sync.Mutex
 }
 
 // NewVectorPartitionShardSearchTCPDispatcherV1 validates and copies one TCP
 // endpoint per group.  Endpoints are normally loopback addresses for the M8 CI
 // topology and may be separate hosts in a deeper deployment.
 func NewVectorPartitionShardSearchTCPDispatcherV1(endpoints map[raftcluster.GroupID]string) (*VectorPartitionShardSearchTCPDispatcherV1, error) {
+	return NewVectorPartitionShardSearchTCPDispatcherWithNodeEndpointsV1(endpoints, nil)
+}
+
+// NewVectorPartitionShardSearchTCPDispatcherWithNodeEndpointsV1 additionally
+// routes a coordinator retry to the leader-hinted node when that endpoint is
+// known. Group endpoints remain the safe fallback for one service per group.
+func NewVectorPartitionShardSearchTCPDispatcherWithNodeEndpointsV1(endpoints map[raftcluster.GroupID]string, nodeEndpoints map[raftcluster.GroupID]map[raftcluster.NodeID]string) (*VectorPartitionShardSearchTCPDispatcherV1, error) {
 	if len(endpoints) == 0 {
 		return nil, errors.New("nativewire: M5 TCP dispatcher requires endpoints")
 	}
@@ -47,10 +62,26 @@ func NewVectorPartitionShardSearchTCPDispatcherV1(endpoints map[raftcluster.Grou
 		copyEndpoints[group] = endpoint
 	}
 	dialer := &net.Dialer{}
+	copyNodeEndpoints := make(map[raftcluster.GroupID]map[raftcluster.NodeID]string, len(nodeEndpoints))
+	for group, nodes := range nodeEndpoints {
+		if _, ok := copyEndpoints[group]; !ok {
+			return nil, errors.New("nativewire: M5 TCP node endpoint owner is unknown")
+		}
+		copyNodes := make(map[raftcluster.NodeID]string, len(nodes))
+		for node, endpoint := range nodes {
+			if node == "" || endpoint == "" {
+				return nil, errors.New("nativewire: M5 TCP node endpoint is incomplete")
+			}
+			copyNodes[node] = endpoint
+		}
+		copyNodeEndpoints[group] = copyNodes
+	}
 	return &VectorPartitionShardSearchTCPDispatcherV1{
-		endpoints: copyEndpoints,
-		dial:      dialer.DialContext,
-		maxFrame:  vectorPartitionShardSearchTCPMaxFrameBytesV1,
+		endpoints:     copyEndpoints,
+		nodeEndpoints: copyNodeEndpoints,
+		dial:          dialer.DialContext,
+		maxFrame:      vectorPartitionShardSearchTCPMaxFrameBytesV1,
+		conns:         make(map[string]*vectorPartitionShardSearchTCPPooledConnV1),
 	}, nil
 }
 
@@ -58,38 +89,102 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShard
 	if d == nil || d.dial == nil || d.maxFrame == 0 {
 		return VectorPartitionShardSearchResponseV1{}, errors.New("nativewire: M5 TCP dispatcher is not configured")
 	}
-	endpoint, ok := d.endpoints[request.TargetGroupID]
+	endpoint, ok := d.endpoint(request.TargetGroupID, request.TargetNodeID)
 	if !ok {
 		return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorUnknownOwnerV1, GroupID: request.TargetGroupID, Err: ErrVectorPartitionShardSearchRouteMismatch}
 	}
-	conn, err := d.dial(ctx, "tcp", endpoint)
+	pooled, err := d.acquire(ctx, endpoint)
 	if err != nil {
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, err)
 	}
-	defer conn.Close()
+	pooled.mu.Lock()
+	defer pooled.mu.Unlock()
+	conn := pooled.conn
 	stopCancelIO := vectorPartitionShardSearchTCPInterruptOnCancelV1(ctx, conn)
 	defer stopCancelIO()
 	if err := vectorPartitionShardSearchTCPDeadlineV1(ctx, request.DeadlineUnixNano, conn); err != nil {
+		d.discard(endpoint, pooled)
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, err)
 	}
 	frame := vectorPartitionShardSearchTCPFrameV1{Request: &request}
 	if err := writeVectorPartitionShardSearchTCPFrameV1(conn, frame, d.maxFrame); err != nil {
+		d.discard(endpoint, pooled)
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, err)
 	}
 	frame, err = readVectorPartitionShardSearchTCPFrameV1(conn, d.maxFrame)
 	if err != nil {
+		d.discard(endpoint, pooled)
 		if request.DeadlineUnixNano != 0 && !time.Now().Before(time.Unix(0, request.DeadlineUnixNano)) {
 			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorDeadlineV1, GroupID: request.TargetGroupID, Err: context.DeadlineExceeded}
 		}
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, err)
 	}
 	if frame.Request != nil || (frame.Response == nil) == (frame.Error == nil) {
+		d.discard(endpoint, pooled)
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, errors.New("ambiguous M5 response frame"))
 	}
 	if frame.Error != nil {
 		return VectorPartitionShardSearchResponseV1{}, frame.Error.toError()
 	}
+	_ = conn.SetDeadline(time.Time{})
 	return *frame.Response, nil
+}
+
+func (d *VectorPartitionShardSearchTCPDispatcherV1) endpoint(group raftcluster.GroupID, node raftcluster.NodeID) (string, bool) {
+	if nodes := d.nodeEndpoints[group]; nodes != nil && node != "" {
+		if endpoint, ok := nodes[node]; ok {
+			return endpoint, true
+		}
+	}
+	endpoint, ok := d.endpoints[group]
+	return endpoint, ok
+}
+func (d *VectorPartitionShardSearchTCPDispatcherV1) acquire(ctx context.Context, endpoint string) (*vectorPartitionShardSearchTCPPooledConnV1, error) {
+	d.mu.Lock()
+	if pooled := d.conns[endpoint]; pooled != nil {
+		d.mu.Unlock()
+		return pooled, nil
+	}
+	d.mu.Unlock()
+	conn, err := d.dial(ctx, "tcp", endpoint)
+	if err != nil {
+		return nil, err
+	}
+	pooled := &vectorPartitionShardSearchTCPPooledConnV1{conn: conn}
+	d.mu.Lock()
+	if existing := d.conns[endpoint]; existing != nil {
+		d.mu.Unlock()
+		_ = conn.Close()
+		return existing, nil
+	}
+	if d.conns == nil {
+		d.conns = make(map[string]*vectorPartitionShardSearchTCPPooledConnV1)
+	}
+	d.conns[endpoint] = pooled
+	d.mu.Unlock()
+	return pooled, nil
+}
+func (d *VectorPartitionShardSearchTCPDispatcherV1) discard(endpoint string, pooled *vectorPartitionShardSearchTCPPooledConnV1) {
+	d.mu.Lock()
+	if d.conns[endpoint] == pooled {
+		delete(d.conns, endpoint)
+	}
+	d.mu.Unlock()
+	_ = pooled.conn.Close()
+}
+func (d *VectorPartitionShardSearchTCPDispatcherV1) Close() error {
+	if d == nil {
+		return nil
+	}
+	d.mu.Lock()
+	conns := d.conns
+	d.conns = make(map[string]*vectorPartitionShardSearchTCPPooledConnV1)
+	d.mu.Unlock()
+	var errs []error
+	for _, pooled := range conns {
+		errs = append(errs, pooled.conn.Close())
+	}
+	return errors.Join(errs...)
 }
 
 // VectorPartitionShardSearchTCPServerV1 serves one M5 service over the same
@@ -119,34 +214,39 @@ func (s VectorPartitionShardSearchTCPServerV1) ServeConn(ctx context.Context, co
 	if initialTimeout == 0 {
 		initialTimeout = 5 * time.Second
 	}
-	_ = conn.SetReadDeadline(time.Now().Add(initialTimeout))
-	frame, err := readVectorPartitionShardSearchTCPFrameV1(conn, maxFrame)
-	_ = conn.SetReadDeadline(time.Time{})
-	if err != nil || frame.Request == nil || frame.Response != nil || frame.Error != nil {
-		// A peer that sends no frame (or never reads) must not strand this server
-		// goroutine while we try to report the bounded framing failure.
-		_ = conn.SetWriteDeadline(time.Now().Add(initialTimeout))
-		_ = writeVectorPartitionShardSearchTCPFrameV1(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, Message: "invalid M5 TCP request"}}, maxFrame)
-		return
+	for {
+		_ = conn.SetReadDeadline(time.Now().Add(initialTimeout))
+		frame, err := readVectorPartitionShardSearchTCPFrameV1(conn, maxFrame)
+		_ = conn.SetReadDeadline(time.Time{})
+		if err != nil {
+			return
+		}
+		if frame.Request == nil || frame.Response != nil || frame.Error != nil {
+			// A peer that sends no frame (or never reads) must not strand this server
+			// goroutine while we try to report the bounded framing failure.
+			_ = conn.SetWriteDeadline(time.Now().Add(initialTimeout))
+			_ = writeVectorPartitionShardSearchTCPFrameV1(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, Message: "invalid M5 TCP request"}}, maxFrame)
+			return
+		}
+		if s.Service == nil {
+			s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: frame.Request.TargetGroupID, Message: "M5 service is unavailable"}}, maxFrame, time.Now().Add(initialTimeout))
+			return
+		}
+		requestCtx, cancel := vectorPartitionShardSearchTCPRequestContextV1(ctx, frame.Request.DeadlineUnixNano)
+		stopPeerMonitor := vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn, requestCtx, cancel)
+		response, err := s.Service.Search(requestCtx, *frame.Request)
+		stopPeerMonitor()
+		cancel()
+		writeDeadline := time.Now().Add(initialTimeout)
+		if deadline, ok := requestCtx.Deadline(); ok {
+			writeDeadline = deadline
+		}
+		if err != nil {
+			s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: vectorPartitionShardSearchTCPErrorFromErrorV1(err)}, maxFrame, writeDeadline)
+			continue
+		}
+		s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Response: &response}, maxFrame, writeDeadline)
 	}
-	if s.Service == nil {
-		s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: frame.Request.TargetGroupID, Message: "M5 service is unavailable"}}, maxFrame, time.Now().Add(initialTimeout))
-		return
-	}
-	requestCtx, cancel := vectorPartitionShardSearchTCPRequestContextV1(ctx, frame.Request.DeadlineUnixNano)
-	defer cancel()
-	stopPeerMonitor := vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn, requestCtx, cancel)
-	response, err := s.Service.Search(requestCtx, *frame.Request)
-	stopPeerMonitor()
-	writeDeadline := time.Now().Add(initialTimeout)
-	if deadline, ok := requestCtx.Deadline(); ok {
-		writeDeadline = deadline
-	}
-	if err != nil {
-		s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: vectorPartitionShardSearchTCPErrorFromErrorV1(err)}, maxFrame, writeDeadline)
-		return
-	}
-	s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Response: &response}, maxFrame, writeDeadline)
 }
 
 func (s VectorPartitionShardSearchTCPServerV1) writeFrame(conn net.Conn, frame vectorPartitionShardSearchTCPFrameV1, maxFrame uint32, deadline time.Time) {
