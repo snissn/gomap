@@ -195,6 +195,7 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	shortfall.Rows[0].Status = "candidate_coverage_shortfall"
 	shortfall.Rows[0].RouterCandidates = 4
 	shortfall.Rows[0].Attribution.ApproximateRouterCandidateBudget = 4
+	shortfall.Rows[0].MaxTotalNanos = 1
 	shortfall.Rows[0].RecallAtK, shortfall.Rows[0].QPS = 0, 0
 	shortfall.Rows[0].ExactParityChecked, shortfall.Rows[0].ExactParityPassed, shortfall.Rows[0].NoPartialResults = false, false, false
 	shortfall.Rows[0].Attribution.ApproximateRepresentativeRecallAtK = 0
@@ -210,6 +211,12 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	shortfall.GateLedger = m8ProductionGateLedgerForReportV1(shortfall)
 	if err := validateM8ProductionReportV1(shortfall); err != nil {
 		t.Fatalf("valid candidate-coverage shortfall rejected: %v", err)
+	}
+	zeroTiming := shortfall
+	zeroTiming.Rows = append([]m8ProductionRowV1(nil), shortfall.Rows...)
+	zeroTiming.Rows[0].MaxTotalNanos = 0
+	if err := validateM8ProductionReportV1(zeroTiming); err == nil {
+		t.Fatal("accepted candidate-coverage shortfall without timing evidence")
 	}
 	shortfall.Rows[0].VariantID = "wrong-variant"
 	if err := validateM8ProductionReportV1(shortfall); err == nil {
