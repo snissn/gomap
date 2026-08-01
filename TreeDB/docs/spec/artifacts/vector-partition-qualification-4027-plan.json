@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "result_kind": "vector_partition_structured_qualification_campaign_plan_v1",
+  "status": "planned_no_measurement",
+  "issue": "https://github.com/snissn/gomap/issues/4027",
+  "base_sha": "03e7a26e56100964f14f603f0248a1a6ccc50a68",
+  "candidate": {
+    "variant": "graph-overlap-020-v1",
+    "assignment_backend": "kahip_python_3.25_eco_symmetrized_v1",
+    "overlap": 0.2,
+    "partitions": 16,
+    "router_candidates": 64,
+    "probes": [4, 16],
+    "ef_search": 64,
+    "concurrency": 1,
+    "repetitions": 3
+  },
+  "required_variants": ["graph-disjoint-v1", "graph-overlap-020-v1", "stable-id-hash-disjoint-v1"],
+  "corpora": [
+    {
+      "id": "retained_embedding_mixture_100k_calibration",
+      "dataset": "/mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k",
+      "vectors": 100000,
+      "queries": 1000,
+      "dimensions": 128,
+      "seed": 4017,
+      "checksum": "ecc2224f386932e580e4956f2cfa852140d3134625971c3511bc0d5feddf9b95",
+      "truth_cache": "/mnt/fast4tb/gomap-4023-100k-9225c35e5/truth-cache",
+      "truth_cache_sha256": "0e9bce9465c9e1fa70c7833364e88c332bc831cfc52c628c90085e1c3068763c",
+      "m3_max_benchmark_visits": 400000000,
+      "m8_max_exact_truth_visits": 600000000
+    },
+    {
+      "id": "committed_embedding_mixture_250k_qualification",
+      "dataset": "testdata/vector_partition_qualification_embedding_mixture_250k",
+      "vectors": 250000,
+      "queries": 1000,
+      "dimensions": 128,
+      "seed": 4016,
+      "checksum": "d0c7c82ba868853aae9a4280161003d72714ad1701d41ed3169c2fa94d470d69",
+      "truth_cache": "<campaign-root>/250k/truth-cache",
+      "truth_cache_sha256": "source-computed-and-recorded-before-reuse",
+      "m3_max_benchmark_visits": 900000000,
+      "m8_max_exact_truth_visits": 1500000000
+    }
+  ],
+  "resource_envelope": {
+    "m8_max_rss_bytes": 4294967296,
+    "m8_max_persistent_asset_bytes": 2147483648,
+    "required_storage_ratio_lt": 1.35,
+    "minimum_available_disk_bytes": 21474836480,
+    "execution": "serial_only"
+  },
+  "commands": {
+    "m3_graph_disjoint": "GOWORK=off go run ./cmd/treedb_vector_partition_bench -stage overlap,partition_index -dataset <dataset> -out <campaign-root>/<corpus>/graph-disjoint-out -m3-persist-db <campaign-root>/<corpus>/graph-disjoint-db -partitions 16 -overlap 0 -partition-assignment graph -partition-kahip-python /mnt/fast4tb/gomap-4024-kahip-3.25/bin/python -partition-kahip-script scripts/treedb_kahip_partition.py -partition-kahip-timeout 5m -m3-max-benchmark-visits <m3-cap> -top-k 10 -seed <seed> -format json",
+    "m3_graph_overlap": "GOWORK=off go run ./cmd/treedb_vector_partition_bench -stage overlap,partition_index -dataset <dataset> -out <campaign-root>/<corpus>/graph-overlap-020-out -m3-persist-db <campaign-root>/<corpus>/graph-overlap-020-db -partitions 16 -overlap .2 -partition-assignment graph -partition-kahip-python /mnt/fast4tb/gomap-4024-kahip-3.25/bin/python -partition-kahip-script scripts/treedb_kahip_partition.py -partition-kahip-timeout 5m -m3-max-benchmark-visits <m3-cap> -top-k 10 -seed <seed> -format json",
+    "m3_stable_hash_disjoint": "GOWORK=off go run ./cmd/treedb_vector_partition_bench -stage overlap,partition_index -dataset <dataset> -out <campaign-root>/<corpus>/stable-id-hash-disjoint-out -m3-persist-db <campaign-root>/<corpus>/stable-id-hash-disjoint-db -partitions 16 -overlap 0 -partition-assignment stable_id_hash -partition-max-distance-work 20000000000 -m3-max-benchmark-visits <m3-cap> -top-k 10 -seed <seed> -format json",
+    "m8_matrix_repeat": "GOWORK=off go run ./cmd/treedb_vector_partition_bench -mode production_multi_group -dataset <dataset> -out <campaign-root>/<corpus>/repeat-<1|2|3> -profiles <campaign-root>/<corpus>/repeat-<1|2|3>/profiles -m8-truth-cache <truth-cache> -m8-truth-cache-sha256 <truth-cache-sha256> -m8-variant-dbs <graph-disjoint-db>,<graph-overlap-020-db>,<stable-id-hash-disjoint-db> -partitions 16 -raft-groups 4 -raft-nodes-per-group 3 -probes 4,16 -overlap .2 -top-k 10 -recall-target .90 -concurrency 1 -warmup 0 -ef-search 64 -router-candidates 64 -seed <seed> -m8-max-rss-bytes 4294967296 -m8-max-persistent-asset-bytes 2147483648 -m8-max-exact-truth-visits <m8-exact-truth-cap> -format json"
+  },
+  "validation": "m8ValidateQualificationCampaignV1 binds the three retained matrix SHA-256s, one exact head, corpus identity, child truth/variant identity, p4/p16 selected rows, p4 final-membership and end-to-end recall, approximate regret, QPS/p95 comparison, and resource/exact/failure/storage gates before summary median/spread claims.",
+  "scope": "structured embedding-mixture qualification only; #4030 separately owns high-entropy p8/p16 and no universal claim is permitted"
+}

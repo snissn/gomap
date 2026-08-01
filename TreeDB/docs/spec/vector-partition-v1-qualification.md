@@ -7,20 +7,20 @@ matrices are FP64 only as deterministic benchmark input.
 
 ## Dataset identities
 
-`testdata/vector_partition_qualification_high_entropy_1m` is a committed,
-procedurally generated 1,000,000-vector, 128-dimensional high-entropy cosine
-corpus with 1,000 independently generated held-out queries.  Its generator
-uses distinct corpus and query domains, so queries are not copied corpus rows.
-It is intentionally uniform/unclustered after normalization: it is a
-generalization and routing-stress corpus, not a semantic-cluster proxy.
-
-`testdata/vector_partition_qualification_embedding_mixture_250k` is the
-second distribution: 250,000 vectors and 1,000 held-out queries generated with
+The live structured qualification owned by #4027 uses the retained 100,000-row
+embedding-mixture calibration and
+`testdata/vector_partition_qualification_embedding_mixture_250k`: 250,000
+vectors and 1,000 held-out queries generated with
 `treedb_vector_partition_embedding_mixture_v1`. It is an embedding-shaped
 mixture of directional topics with continuous noise, explicitly not a claim
-about a licensed external corpus. The smaller corpus makes the second,
-diversifying distribution practical while the high-entropy corpus supplies the
-required 1M qualification shape.
+about a licensed external corpus. The committed 250k manifest is the required
+second structured corpus for this node; the retained 100k corpus is
+calibration, not a substitute for it.
+
+`testdata/vector_partition_qualification_high_entropy_1m` remains a committed
+high-entropy routing-stress fixture. Its p8/p16 work is separately owned by
+#4030 and is neither pooled with nor a blocker for the #4027 structured
+qualification claim.
 
 ## Required artifact rows
 
@@ -29,12 +29,14 @@ hardware and topology, variant descriptor and asset digest, probes, ef-search,
 concurrency, samples, timing boundary, profiles, and exact command.  A
 comparable matrix includes graph-disjoint, graph-overlap-020, stable-ID-hash
 disjoint, and exhaustive all-partition rows under the same topology and local
-search settings.  Sweep probes `1,2,4,8,16`; include an ef sweep and
-concurrency `1,16,64` when the host supports it.
+search settings. For #4027 each repeated structured comparison includes p4 and
+p16 at `ef_search=64`, concurrency `1`, and approximate router candidate
+budget `64`; the retained matrix continues to bind the exhaustive control.
 
-Repeat the important target-recall and exhaustive comparison rows three times;
-the report must identify repetitions rather than implying that every sweep row
-was repeated.
+Repeat the p4/p16 comparison three times per structured corpus. The campaign
+index hashes every matrix, requires one exact head and corpus/truth/variant
+identity across the repeats, and derives median/min/max QPS plus p95 spread;
+it must not imply that unlisted sweep rows were repeated.
 
 ## Gates and disposition
 
@@ -51,12 +53,11 @@ aggregate disposition. A clustered-distribution success does not erase a
 uniform-data routing failure; it can support only an explicitly narrower
 experimental or opt-in disposition.
 
-The M8 request-work guard does not count exact source-query vector visits. The
-required 1M x 1,000 shape performs both fixture checksum binding and canonical
-exact truth, so one retained-asset run charges 2B visits outside that request
-count. The strict three-variant matrix charges 6B. Any such execution requires
-an explicit `-m8-max-exact-truth-visits` override and must record its calibrated
-runtime before the full retained-asset sweep.
+The M8 request-work guard does not count exact source-query vector visits. One
+250k x 1,000 child charges 500M visits for fixture checksum binding plus
+canonical exact truth; its strict three-variant matrix therefore requires a
+1.5B explicit `-m8-max-exact-truth-visits` bound. Record its calibrated
+runtime/resource envelope before the full repeated campaign.
 
 An external exact-truth cache is never self-authenticating. A cache hit requires
 `-m8-truth-cache-sha256` to match the exact streamed cache artifact; the digest
