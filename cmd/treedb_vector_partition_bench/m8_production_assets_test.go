@@ -198,6 +198,7 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 			row.RouterCandidates = 5
 			row.Attribution.ApproximateRouterCandidateBudget = 5
 		},
+		"nonfinite_qps": func(row *m8ProductionRowV1) { row.QPS = math.NaN() },
 		"missing_exact_local_work": func(row *m8ProductionRowV1) {
 			row.Attribution.LocalHNSWSearches = 0
 		},

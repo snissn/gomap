@@ -105,9 +105,10 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 	var p4QPS, p16QPS []float64
 	var p4P95, p16P95 []uint64
 	var summary m8QualificationCampaignSummaryV1
-	variantArtifacts := make(map[string]string, len(m8RequiredVariantIDsV1))
+	variantDescriptors := make(map[string]m3VariantDescriptorV1, len(m8RequiredVariantIDsV1))
 	truthArtifact := ""
 	var dataset fixtureManifest
+	var environment *m8QualificationEnvironmentV1
 	configs := make(map[string]m8ProductionConfigEvidenceV1, len(m8RequiredVariantIDsV1))
 	paths, digests := make(map[string]bool, len(campaign.Runs)), make(map[string]bool, len(campaign.Runs))
 	for runIndex, run := range campaign.Runs {
@@ -143,14 +144,14 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 		if err := json.Unmarshal(raw, &matrix); err != nil {
 			return summary, fmt.Errorf("decode qualification matrix %s: %w", run.Path, err)
 		}
-		if matrix.SchemaVersion != 4 || matrix.ResultKind != "m8_production_multi_variant_matrix_v4" || matrix.Status != "local_gate_pass" || matrix.BaseSHA != campaign.BaseSHA || matrix.HeadSHA != campaign.HeadSHA || !m8QualificationGitSHAV1(matrix.BaseSHA) || !m8QualificationGitSHAV1(matrix.HeadSHA) {
+		if matrix.SchemaVersion != 4 || matrix.ResultKind != "m8_production_multi_variant_matrix_v4" || matrix.BaseSHA != campaign.BaseSHA || matrix.HeadSHA != campaign.HeadSHA || !m8QualificationGitSHAV1(matrix.BaseSHA) || !m8QualificationGitSHAV1(matrix.HeadSHA) {
 			return summary, fmt.Errorf("qualification matrix %s has invalid schema/provenance/status", cleanPath)
 		}
 		if err := validateM8ProductionMatrixV1(matrix); err != nil {
 			return summary, fmt.Errorf("validate qualification matrix %s: %w", run.Path, err)
 		}
-		if matrix.Dataset.Checksum != campaign.FixtureChecksum || !m8QualificationFixtureV1(matrix.Dataset) || len(matrix.Variants) != len(m8RequiredVariantIDsV1) || !slices.Equal(matrix.RequiredVariants, m8RequiredVariantIDsV1) || matrix.Gates.RequiredVariants != "pass" || matrix.Gates.ExhaustiveParity != "pass" || matrix.Gates.FailureHonesty != "pass" || matrix.Gates.PartitionPackReachability != "pass" || matrix.Gates.Balance != "pass" || matrix.Gates.ResourceBounds != "pass" || matrix.Gates.OverlapStorage != "pass" || matrix.OverlapStorageRatio >= 1.35 {
-			return summary, fmt.Errorf("qualification matrix %s does not bind the required identity/gates", run.Path)
+		if matrix.Dataset.Checksum != campaign.FixtureChecksum || !m8QualificationFixtureV1(matrix.Dataset) || len(matrix.Variants) != len(m8RequiredVariantIDsV1) || !slices.Equal(matrix.RequiredVariants, m8RequiredVariantIDsV1) || matrix.OverlapStorageRatio >= 1.35 {
+			return summary, fmt.Errorf("qualification matrix %s does not bind the required identity/storage", run.Path)
 		}
 		if dataset.Checksum != "" && dataset != matrix.Dataset {
 			return summary, fmt.Errorf("qualification matrix %s changes dataset manifest", cleanPath)
@@ -169,6 +170,14 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 			if report.BaseSHA != campaign.BaseSHA || report.HeadSHA != campaign.HeadSHA || report.Dataset != matrix.Dataset || report.Dirty || !m8QualificationSHA256V1(report.TruthCache.ArtifactSHA256) || report.Variant == nil || seenVariants[report.Variant.VariantID] || !slices.Contains(m8RequiredVariantIDsV1, report.Variant.VariantID) || !m8QualificationSHA256V1(report.Variant.ArtifactSHA256) || !m8QualificationConfigV1(report.Config, report.Dataset, report.Variant.OverlapRatio, runIndex) {
 				return summary, fmt.Errorf("qualification matrix %s has unbound child identity", run.Path)
 			}
+			if !m8QualificationResourcesV1(*report, report.Dataset) {
+				return summary, fmt.Errorf("qualification matrix %s has unbound environment or resources", run.Path)
+			}
+			currentEnvironment := m8QualificationEnvironmentV1{GoVersion: report.GoVersion, GOOS: report.GOOS, GOARCH: report.GOARCH, LogicalCPUs: report.LogicalCPUs, Host: report.Host, PeakRSSCapBytes: report.Resources.PeakRSSCapBytes, PersistentAssetCap: report.Resources.PersistentAssetCap}
+			if environment != nil && *environment != currentEnvironment {
+				return summary, fmt.Errorf("qualification matrix %s changes environment or resources", cleanPath)
+			}
+			environment = &currentEnvironment
 			seenVariants[report.Variant.VariantID] = true
 			config := report.Config
 			config.Probes = nil // repeat one records the full p1/2/4/8/16 ladder; repeats two and three retain p4/p16.
@@ -176,10 +185,10 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 				return summary, fmt.Errorf("qualification matrix %s changes %s topology/configuration", cleanPath, report.Variant.VariantID)
 			}
 			configs[report.Variant.VariantID] = config
-			if prior := variantArtifacts[report.Variant.VariantID]; prior != "" && prior != report.Variant.ArtifactSHA256 {
-				return summary, fmt.Errorf("qualification matrix %s changes variant identity", run.Path)
+			if prior, ok := variantDescriptors[report.Variant.VariantID]; ok && !reflect.DeepEqual(prior, *report.Variant) {
+				return summary, fmt.Errorf("qualification matrix %s changes retained M3 descriptor", run.Path)
 			}
-			variantArtifacts[report.Variant.VariantID] = report.Variant.ArtifactSHA256
+			variantDescriptors[report.Variant.VariantID] = *report.Variant
 			if truthArtifact != "" && truthArtifact != report.TruthCache.ArtifactSHA256 {
 				return summary, fmt.Errorf("qualification matrix %s changes truth identity", run.Path)
 			}
@@ -197,6 +206,9 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 		p4, p16 := m8QualificationRowsV1(*selected)
 		if p4 == nil || p16 == nil || p4.RecallAtK < .90 || p16.RecallAtK < .90 || p4.Attribution.FinalMembershipOracleRecallAtK < .90 || math.Abs(p4.Attribution.ExactToApproximateLossAtK) > .01 || p4.QPS < p16.QPS*1.15 || p4.P95Nanos > p16.P95Nanos {
 			return summary, fmt.Errorf("qualification matrix %s misses the selected p4/p16 gate", run.Path)
+		}
+		if matrix.Status != "local_gate_pass" || matrix.Gates.RequiredVariants != "pass" || matrix.Gates.ExhaustiveParity != "pass" || matrix.Gates.FailureHonesty != "pass" || matrix.Gates.PartitionPackReachability != "pass" || matrix.Gates.Balance != "pass" || matrix.Gates.ResourceBounds != "pass" || matrix.Gates.OverlapStorage != "pass" {
+			return summary, fmt.Errorf("qualification matrix %s does not bind the required gates", run.Path)
 		}
 		p4QPS, p16QPS = append(p4QPS, p4.QPS), append(p16QPS, p16.QPS)
 		p4P95, p16P95 = append(p4P95, p4.P95Nanos), append(p16P95, p16.P95Nanos)
@@ -244,7 +256,30 @@ func m8QualificationConfigV1(cfg m8ProductionConfigEvidenceV1, fixture fixtureMa
 	if repeat == 0 {
 		probes = []int{1, 2, 4, 8, 16}
 	}
-	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterCandidates == 64 && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, probes) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{64}) && slices.Equal(cfg.Overlap, []float64{overlap})
+	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterCandidates == 64 && cfg.MaxExactTruthVisits == m8QualificationExactTruthCapV1(fixture) && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, probes) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{64}) && slices.Equal(cfg.Overlap, []float64{overlap})
+}
+
+func m8QualificationExactTruthCapV1(fixture fixtureManifest) int64 {
+	if fixture.Vectors == 250000 {
+		return 1_500_000_000
+	}
+	return 600_000_000
+}
+
+type m8QualificationEnvironmentV1 struct {
+	GoVersion, GOOS, GOARCH string
+	LogicalCPUs             int
+	Host                    m8ProductionHostEvidenceV1
+	PeakRSSCapBytes         uint64
+	PersistentAssetCap      uint64
+}
+
+func m8QualificationResourcesV1(report m8ProductionReportV1, fixture fixtureManifest) bool {
+	resources := report.Resources
+	return report.GoVersion != "" && report.GOOS != "" && report.GOARCH != "" && report.LogicalCPUs > 0 && report.Host.CPUModel != "" &&
+		resources.PeakRSSMeasured && resources.PeakRSSBytes > 0 && resources.PeakRSSCapBytes == 4<<30 && uint64(resources.PeakRSSBytes) <= resources.PeakRSSCapBytes &&
+		resources.PersistentAssetBytes > 0 && resources.PersistentAssetCap == 2<<30 && resources.PersistentAssetBytes <= resources.PersistentAssetCap &&
+		m8QualificationExactTruthCapV1(fixture) == report.Config.MaxExactTruthVisits
 }
 
 func m8ValidateQualificationMatrixDerivationV1(matrix m8ProductionMatrixV1) error {
@@ -265,11 +300,15 @@ func m8ValidateQualificationMatrixDerivationV1(matrix m8ProductionMatrixV1) erro
 func m8QualificationHasFullLadderV1(report m8ProductionReportV1) bool {
 	seen := make(map[int]bool, 5)
 	for _, row := range report.Rows {
-		if row.Status == "pass" && row.EfSearch == 64 && row.Concurrency == 1 && row.RouterMode == collections.VectorPartitionRouterModeApproxV1 && row.RouterCandidates == 64 {
+		if m8QualificationQualifiedRowV1(report, row) {
 			seen[row.Probes] = true
 		}
 	}
 	return seen[1] && seen[2] && seen[4] && seen[8] && seen[16]
+}
+
+func m8QualificationQualifiedRowV1(report m8ProductionReportV1, row m8ProductionRowV1) bool {
+	return row.Status == "pass" && row.EfSearch == 64 && row.Concurrency == 1 && row.RouterMode == collections.VectorPartitionRouterModeApproxV1 && row.RouterCandidates == 64 && row.Attribution.OracleStagesComplete
 }
 
 func m8QualificationSHA256V1(value string) bool {
@@ -284,7 +323,7 @@ func m8QualificationRowsV1(report m8ProductionReportV1) (*m8ProductionRowV1, *m8
 	var p4, p16 *m8ProductionRowV1
 	for i := range report.Rows {
 		row := &report.Rows[i]
-		if row.Status != "pass" || row.EfSearch != 64 || row.Concurrency != 1 || row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates != 64 {
+		if !m8QualificationQualifiedRowV1(report, *row) {
 			continue
 		}
 		switch row.Probes {

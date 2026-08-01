@@ -19,7 +19,7 @@ calibration, not a substitute for it.
 
 `testdata/vector_partition_qualification_high_entropy_1m` remains a committed
 high-entropy routing-stress fixture. Its p8/p16 work is separately owned by
-#4030 and is neither pooled with nor a blocker for the #4027 structured
+`#4030` and is neither pooled with nor a blocker for the #4027 structured
 qualification claim.
 
 ## Required artifact rows

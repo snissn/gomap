@@ -509,8 +509,11 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	if err := router.Close(); err != nil {
 		return m3PartitionIndexRow{}, fmt.Errorf("close reopened M3 router: %w", err)
 	}
-	if routerRuntime.Manifest.ReadySetDigest != manifest.ReadySetDigest || routerRuntime.ModelDigest == "" || routerRuntime.Config != cfg.routerConfig {
-		return m3PartitionIndexRow{}, errors.New("reopened M3 router identity does not match ready manifest")
+	if routerRuntime.Manifest.ReadySetDigest != manifest.ReadySetDigest || routerRuntime.ModelDigest == "" {
+		return m3PartitionIndexRow{}, errors.New("reopened M3 router manifest/model identity does not match ready manifest")
+	}
+	if routerRuntime.Config != cfg.routerConfig {
+		return m3PartitionIndexRow{}, errors.New("reopened M3 router configuration does not match parsed configuration")
 	}
 	openStarted := time.Now()
 	searchers, err := openM3PartitionSearchers(cfg.partitions, func(partition uint32) (*collections.VectorPartitionLocalSearcherV1, error) {
