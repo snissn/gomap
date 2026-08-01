@@ -86,6 +86,44 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 	if matrix.Status != "local_gate_pass" || matrix.Gates.PartitionPackReachability != "pass" || matrix.Gates.OverlapStorage != "pass" || matrix.OverlapStorageRatio != 1.2 || len(matrix.Comparison) != 6 {
 		t.Fatalf("matrix=%+v", matrix)
 	}
+	shortfallReports := append([]m8ProductionReportV1(nil), reports...)
+	shortfallReports[0].Rows = append([]m8ProductionRowV1(nil), reports[0].Rows...)
+	shortfallReports[0].Rows[1].Status = "candidate_coverage_shortfall"
+	shortfallMatrix, err := m8BuildProductionMatrixV1(cfg, fixture, shortfallReports)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shortfallAt = -1
+	for i, comparison := range shortfallMatrix.Comparison {
+		if comparison.VariantID == shortfallReports[0].Variant.VariantID && comparison.Probes == shortfallReports[0].Rows[1].Probes && comparison.EfSearch == shortfallReports[0].Rows[1].EfSearch && comparison.Concurrency == shortfallReports[0].Rows[1].Concurrency {
+			shortfallAt = i
+			if comparison.Status != "candidate_coverage_shortfall" {
+				t.Fatalf("shortfall comparison status=%q", comparison.Status)
+			}
+		}
+	}
+	if shortfallAt < 0 {
+		t.Fatal("missing shortfall comparison")
+	}
+	raw, err := json.Marshal(shortfallMatrix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded m8ProductionMatrixV1
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateM8ProductionMatrixV1(decoded); err != nil {
+		t.Fatalf("round-tripped shortfall matrix rejected: %v", err)
+	}
+	for _, status := range []string{"pass", "fail", ""} {
+		invalid := decoded
+		invalid.Comparison = append([]m8ProductionComparisonV1(nil), decoded.Comparison...)
+		invalid.Comparison[shortfallAt].Status = status
+		if err := validateM8ProductionMatrixV1(invalid); err == nil {
+			t.Fatalf("accepted shortfall comparison status %q", status)
+		}
+	}
 	for _, reachability := range []string{"", "fail"} {
 		reports[0].GateLedger.PartitionPackReachability = reachability
 		matrix, err = m8BuildProductionMatrixV1(cfg, fixture, reports)
