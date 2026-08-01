@@ -133,6 +133,9 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		"missing_exact_local_work": func(row *m8ProductionRowV1) {
 			row.Attribution.LocalHNSWSearches = 0
 		},
+		"missing_approximate_local_candidates": func(row *m8ProductionRowV1) {
+			row.Attribution.ApproximateLocalHNSWCandidates = 0
+		},
 	} {
 		t.Run("rejects_"+name, func(t *testing.T) {
 			invalid := report
@@ -142,6 +145,13 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 				t.Fatalf("accepted measured row with %s", name)
 			}
 		})
+	}
+	zeroEdges := report
+	zeroEdges.Rows = append([]m8ProductionRowV1(nil), report.Rows...)
+	zeroEdges.Rows[0].Attribution.LocalHNSWEdges = 0
+	zeroEdges.Rows[0].Attribution.ApproximateLocalHNSWEdges = 0
+	if err := validateM8ProductionReportV1(zeroEdges); err != nil {
+		t.Fatalf("valid zero-edge local searches rejected: %v", err)
 	}
 	shortfall := report
 	shortfall.Rows = append([]m8ProductionRowV1(nil), report.Rows...)
@@ -558,7 +568,11 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	}
 	defer shortfallTopology.Close()
 	shortfallQueries := [][]float64{tiedVectors[0], tiedVectors[0], tiedVectors[0], tiedVectors[0]}
-	shortfall, shortfallResults, err := m8RunProductionCellV1(ctx, shortfallTopology.Coordinator(), shortfallAssets, shortfallQueries, make([][]m8CanonicalResultV1, len(shortfallQueries)), 4, 4096, 4, 10, 4, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes)
+	// The router contract accepts a positive approximate candidate budget below
+	// probes and returns the typed coverage error when it cannot cover them.
+	// One candidate can select at most one partition, so it deterministically
+	// shortfalls four requested probes on every platform.
+	shortfall, shortfallResults, err := m8RunProductionCellV1(ctx, shortfallTopology.Coordinator(), shortfallAssets, shortfallQueries, make([][]m8CanonicalResultV1, len(shortfallQueries)), 4, 4096, 4, 10, 1, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
