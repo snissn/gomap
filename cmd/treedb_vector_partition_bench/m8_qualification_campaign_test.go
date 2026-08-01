@@ -88,6 +88,10 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	}
 	derivedTamper := testM8QualificationMatrixV1(t, head, fixture, 120, true)
 	derivedTamper.Variants[0].GateLedger.Balance = "fail"
+	derivedTamper, err = m8BuildProductionMatrixV1(config{baseSHA: head, headSHA: head, partitions: 16, command: []string{"m8-test"}}, fixture, derivedTamper.Variants)
+	if err != nil {
+		t.Fatal(err)
+	}
 	raw, err = json.Marshal(derivedTamper)
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +103,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
 	bad.Runs[0] = m8QualificationCampaignRunV1{Path: "derived-tamper.json", SHA256: hex.EncodeToString(digest[:])}
 	if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
-		t.Fatal("accepted stale matrix gates after a child-ledger change")
+		t.Fatal("accepted coordinated stale child and matrix ledgers")
 	}
 	for name, mutate := range map[string]func(*m8ProductionMatrixV1){
 		"wrong_corpus": func(matrix *m8ProductionMatrixV1) {
@@ -264,6 +268,7 @@ func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManif
 		}
 		refreshTestM3VariantIdentityV1(t, &descriptor)
 		report := testM8QualificationReportV1(t, head, fixture, descriptor, p4QPS, fullLadder)
+		report.GateLedger = m8ProductionGateLedgerForReportV1(report)
 		matrix.Variants = append(matrix.Variants, report)
 	}
 	built, err := m8BuildProductionMatrixV1(config{baseSHA: head, headSHA: head, partitions: 16, command: []string{"m8-test"}}, fixture, matrix.Variants)
