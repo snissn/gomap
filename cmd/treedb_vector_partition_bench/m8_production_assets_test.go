@@ -91,6 +91,34 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		Failure:         m8ProductionFailureEvidenceV1{Passed: true, Error: "unavailable group rejected", ResourceBoundary: m8ProductionFaultResourceBoundaryV1{SelectedPartitions: 4, EfSearch: 4096, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 2, RPCs: 1, RequestBytes: 1, ShardPartitions: 2, ShardRequestBytes: 1}}}, GateLedger: m8ProductionGateLedgerV1{FailureHonesty: "pass", PartitionPackReachability: "pass"},
 		Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1, PartitionLoads: loads}, TimedBoundary: "measured", Limitations: []string{"test"},
 	}
+	variant := testM3VariantDescriptorV1(t.TempDir())
+	variant.OverlapRatio, variant.OverlapRequested, variant.OverlapRealized, variant.OverlapMemberships = 0, 0, 0, 0
+	variant.OverlapUseful, variant.OverlapFiller = 0, 0
+	variant.PartitionLoads = make([]int, len(loads))
+	for i, load := range loads {
+		variant.PartitionLoads[i] = int(load)
+		variant.SourceRows += uint64(load)
+		variant.Capacity = max(variant.Capacity, int(load))
+	}
+	variant.SourceRows -= 8 // test descriptor starts with eight source rows.
+	variant.Source.Vectors = int(variant.SourceRows)
+	variant.OverlapUnusedCapacity = int(uint64(variant.Capacity)*uint64(variant.Partitions) - variant.SourceRows)
+	variant.FixtureChecksum, variant.PersistentAssetBytes = fixture.Checksum, report.Resources.PersistentAssetBytes
+	variant.VariantID, err = m3VariantIDV1(variant.AssignmentBasis, variant.OverlapRatio)
+	if err != nil {
+		t.Fatal(err)
+	}
+	variant.BuildIdentityDigest, err = m3VariantBuildIdentityDigestV1(variant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	variant.OverlapPolicy, err = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: uint64(variant.Capacity), BuildIdentityDigest: variant.BuildIdentityDigest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report.Variant = &variant
+	report.Config.Overlap = []float64{0}
+	report.Rows[0].VariantID = variant.VariantID
 	if err := validateM8ProductionReportV1(report); err != nil {
 		t.Fatalf("valid endpoint coverage rejected: %v", err)
 	}
@@ -134,6 +162,11 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	if err := validateM8ProductionReportV1(shortfall); err != nil {
 		t.Fatalf("valid candidate-coverage shortfall rejected: %v", err)
 	}
+	shortfall.Rows[0].VariantID = "wrong-variant"
+	if err := validateM8ProductionReportV1(shortfall); err == nil {
+		t.Fatal("accepted shortfall row with mismatched variant identity")
+	}
+	shortfall.Rows[0].VariantID = variant.VariantID
 	shortfall.Rows[0].NoPartialResults = true
 	if err := validateM8ProductionReportV1(shortfall); err == nil {
 		t.Fatal("accepted candidate-coverage shortfall with a partial-result claim")

@@ -1865,6 +1865,24 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 	for i := range allPartitions {
 		allPartitions[i] = uint32(i)
 	}
+	// Route every query before starting either approximate search stage. A
+	// candidate-coverage shortfall invalidates the cell's approximate evidence,
+	// so retaining complete-query approximate work would be misleading.
+	approximatePartitions := make([][]uint32, len(queries))
+	for i, query64 := range queries {
+		if err := ctx.Err(); err != nil {
+			return cell, err
+		}
+		partitions, routeErr := harness.route(ctx, m8Query32V1(query64), probes, collections.VectorPartitionRouterModeApproxV1, approximateCandidates)
+		coverageComplete, err := m8ApproximateRouterCoverageV1(routeErr)
+		if err != nil {
+			return cell, err
+		}
+		cell.Evidence.ApproximateRouterPartitionCoverageComplete = cell.Evidence.ApproximateRouterPartitionCoverageComplete && coverageComplete
+		if coverageComplete {
+			approximatePartitions[i] = partitions
+		}
+	}
 	var primaryOracle, finalOracle, exhaustiveRecall, exactRecall, exactTruthHomeCoverage, exactFinalCoverage, truthHomePartitions, truthFinalPartitions, truthHomePairColocation, truthFinalPairColocation, overlapTruthContribution, duplicateMembershipCoverage, approximateRecall, exactLocalRecall, approximateLocalRecall float64
 	for i, query64 := range queries {
 		if err := ctx.Err(); err != nil {
@@ -1914,19 +1932,13 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 		for rank := range retained {
 			cell.Evidence.TruthNeighborRankRetentionAtK[rank] += retained[rank]
 		}
-		approximatePartitions, approximateRouteErr := harness.route(ctx, query, probes, collections.VectorPartitionRouterModeApproxV1, approximateCandidates)
-		approximateCoverageComplete, err := m8ApproximateRouterCoverageV1(approximateRouteErr)
-		if err != nil {
-			return cell, err
-		}
-		cell.Evidence.ApproximateRouterPartitionCoverageComplete = cell.Evidence.ApproximateRouterPartitionCoverageComplete && approximateCoverageComplete
 		exactResults, err := harness.search(ctx, query, exactPartitions, topK, efSearch, true)
 		if err != nil {
 			return cell, err
 		}
 		var approximateResults []m8CanonicalResultV1
-		if approximateCoverageComplete {
-			approximateResults, err = harness.search(ctx, query, approximatePartitions, topK, efSearch, true)
+		if cell.Evidence.ApproximateRouterPartitionCoverageComplete {
+			approximateResults, err = harness.search(ctx, query, approximatePartitions[i], topK, efSearch, true)
 			if err != nil {
 				return cell, err
 			}
@@ -1939,13 +1951,13 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 		cell.Evidence.LocalHNSWSearches += uint64(len(exactPartitions))
 		cell.Evidence.LocalHNSWCandidates += exactLocalMetrics.Candidates
 		cell.Evidence.LocalHNSWEdges += exactLocalMetrics.Edges
-		if approximateCoverageComplete {
+		if cell.Evidence.ApproximateRouterPartitionCoverageComplete {
 			var approximateLocalMetrics collections.VectorPartitionSearchMetricsV1
-			cell.Local[i], approximateLocalMetrics, err = harness.searchWithMetrics(ctx, query, approximatePartitions, topK, efSearch, false)
+			cell.Local[i], approximateLocalMetrics, err = harness.searchWithMetrics(ctx, query, approximatePartitions[i], topK, efSearch, false)
 			if err != nil {
 				return cell, err
 			}
-			cell.Evidence.ApproximateLocalHNSWSearches += uint64(len(approximatePartitions))
+			cell.Evidence.ApproximateLocalHNSWSearches += uint64(len(approximatePartitions[i]))
 			cell.Evidence.ApproximateLocalHNSWCandidates += approximateLocalMetrics.Candidates
 			cell.Evidence.ApproximateLocalHNSWEdges += approximateLocalMetrics.Edges
 		}
@@ -2932,6 +2944,9 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 			}
 			continue
 		}
+		if report.Variant != nil && row.VariantID != report.Variant.VariantID {
+			return errors.New("M8 row variant identity mismatch")
+		}
 		if row.Status == "candidate_coverage_shortfall" {
 			if row.Probes < 1 || row.Probes > report.Config.Partitions ||
 				row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries ||
@@ -2955,9 +2970,6 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 			math.Float64bits(row.RecallAtK) != math.Float64bits(row.Attribution.EndToEndRecallAtK) || row.Attribution.LocalHNSWSearches == 0 || row.Attribution.LocalHNSWCandidates == 0 || row.Attribution.LocalHNSWEdges == 0 || row.Attribution.ApproximateLocalHNSWSearches == 0 || row.Attribution.ApproximateLocalHNSWCandidates == 0 || row.Attribution.ApproximateLocalHNSWEdges == 0 ||
 			!validM8AttributionV1(row.Attribution, report.Config.TopK) {
 			return errors.New("malformed measured M8 row")
-		}
-		if report.Variant != nil && row.VariantID != report.Variant.VariantID {
-			return errors.New("M8 row variant identity mismatch")
 		}
 		rowSamples := uint64(row.Samples)
 		if rowSamples > ^uint64(0)-measuredSamples {

@@ -1715,6 +1715,9 @@ type m8BenchmarkWorkPlan struct {
 	RetainedAttributionBytes          int64
 	AttributionMergeScratchResults    int64
 	AttributionMergeScratchBytes      int64
+	AttributionLiveResultSets         int64
+	AttributionLiveResultBytes        int64
+	AttributionApproximateRouteBytes  int64
 	AttributionPrimaryHomeMapBytes    int64
 	AttributionFinalMembershipBytes   int64
 	AttributionHomeBuildScratchBytes  int64
@@ -1835,7 +1838,10 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	// Every attribution cell builds selected-partition sets twice. The remaining
+	// Every attribution cell builds selected-partition sets twice. Approximate
+	// routing is preflighted across the complete query set before approximate
+	// searches, so query conversion also runs once for that preflight and once
+	// for the exact/diagnostic pass. The remaining
 	// linear work charges query conversion, result parity/recall, primary-home
 	// truth/count scans, final-membership truth/rank scans, cell setup, and the
 	// coordinator parity pass. The 25 truth-result passes are 1 parity pass,
@@ -1844,7 +1850,7 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	queryProjectionWork, err := memoryMul(int64(m.Queries), int64(m.Dimensions), attributionCells)
+	queryProjectionWork, err := memoryMul(2, int64(m.Queries), int64(m.Dimensions), attributionCells)
 	if err != nil {
 		return plan, err
 	}
@@ -2087,6 +2093,10 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		}
 	}
 	if supportedOverlaps > 0 {
+		maxProbes := 0
+		for _, probes := range cfg.probes {
+			maxProbes = max(maxProbes, probes)
+		}
 		truthIDs, truthIDErr := memoryMul(int64(m.Queries), int64(cfg.topK))
 		if truthIDErr != nil {
 			return plan, truthIDErr
@@ -2143,6 +2153,30 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		if err != nil {
 			return plan, err
 		}
+		// Exact-route exact, approximate-route exact, and exact-route local
+		// results remain live while approximate-route local search runs. Each
+		// result owns its canonical IDs; the approximate local result is retained
+		// directly in its matrix and is already included above.
+		plan.AttributionLiveResultSets = 3
+		plan.AttributionLiveResultBytes, err = memoryMul(plan.AttributionLiveResultSets, perQueryResults)
+		if err != nil {
+			return plan, err
+		}
+		// The all-query approximate-route preflight retains one selected partition
+		// slice per query until coverage is known, avoiding a second route before
+		// the approximate search stages.
+		routeValues, routeErr := memoryMul(int64(m.Queries), int64(maxProbes), int64(unsafe.Sizeof(uint32(0))))
+		if routeErr != nil {
+			return plan, routeErr
+		}
+		routeHeaders, routeErr := memoryMul(int64(m.Queries), int64(unsafe.Sizeof([]uint32{})))
+		if routeErr != nil {
+			return plan, routeErr
+		}
+		plan.AttributionApproximateRouteBytes, err = memoryAdd(routeValues, routeHeaders)
+		if err != nil {
+			return plan, err
+		}
 		// The exhaustive attribution search is the largest merge. It reserves one
 		// partition-count by top-k input buffer, canonicalization copies that full
 		// buffer, and the input retains one owned document-ID allocation per
@@ -2187,7 +2221,7 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	attributionPeak, err := memoryAdd(measurementBase, plan.AttributionPrimaryHomeMapBytes, plan.AttributionFinalMembershipBytes, plan.RetainedAttributionBytes, plan.AttributionMergeScratchBytes)
+	attributionPeak, err := memoryAdd(measurementBase, plan.AttributionPrimaryHomeMapBytes, plan.AttributionFinalMembershipBytes, plan.RetainedAttributionBytes, plan.AttributionMergeScratchBytes, plan.AttributionLiveResultBytes, plan.AttributionApproximateRouteBytes)
 	if err != nil {
 		return plan, err
 	}
@@ -2197,7 +2231,7 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		return plan, err
 	}
 	if plan.ModeledPeakBytes > capBytes {
-		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d source_snapshot_bytes=%d exact_truth_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d current_cell_outcomes=%d current_cell_outcome_bytes=%d retained_attribution_matrices=%d retained_attribution_results=%d retained_attribution_bytes=%d attribution_merge_scratch_results=%d attribution_merge_scratch_bytes=%d attribution_primary_home_map_bytes=%d attribution_final_membership_bytes=%d attribution_home_build_scratch_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes, plan.CurrentCellOutcomes, plan.CurrentCellOutcomeBytes, plan.RetainedAttributionMatrices, plan.RetainedAttributionResults, plan.RetainedAttributionBytes, plan.AttributionMergeScratchResults, plan.AttributionMergeScratchBytes, plan.AttributionPrimaryHomeMapBytes, plan.AttributionFinalMembershipBytes, plan.AttributionHomeBuildScratchBytes)
+		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d source_snapshot_bytes=%d exact_truth_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d current_cell_outcomes=%d current_cell_outcome_bytes=%d retained_attribution_matrices=%d retained_attribution_results=%d retained_attribution_bytes=%d attribution_merge_scratch_results=%d attribution_merge_scratch_bytes=%d attribution_live_result_sets=%d attribution_live_result_bytes=%d attribution_approximate_route_bytes=%d attribution_primary_home_map_bytes=%d attribution_final_membership_bytes=%d attribution_home_build_scratch_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes, plan.CurrentCellOutcomes, plan.CurrentCellOutcomeBytes, plan.RetainedAttributionMatrices, plan.RetainedAttributionResults, plan.RetainedAttributionBytes, plan.AttributionMergeScratchResults, plan.AttributionMergeScratchBytes, plan.AttributionLiveResultSets, plan.AttributionLiveResultBytes, plan.AttributionApproximateRouteBytes, plan.AttributionPrimaryHomeMapBytes, plan.AttributionFinalMembershipBytes, plan.AttributionHomeBuildScratchBytes)
 	}
 	return plan, nil
 }
