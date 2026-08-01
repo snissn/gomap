@@ -421,7 +421,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		for _, probes := range cfg.probes {
 			for _, ef := range cfg.efSearch {
 				for _, concurrency := range cfg.concurrency {
-					row, results, rowErr := m8RunProductionCellV1(context.Background(), topology.Coordinator(), assets, queries, truth, probes, ef, concurrency, cfg.topK, cfg.m8CoordinatorLimits.MaxCandidateBytes)
+					row, results, rowErr := m8RunProductionCellV1(context.Background(), topology.Coordinator(), assets, queries, truth, probes, ef, concurrency, cfg.topK, cfg.routerCandidates, cfg.m8CoordinatorLimits.MaxCandidateBytes)
 					if rowErr != nil {
 						return fmt.Errorf("M8 production cell probes=%d ef=%d concurrency=%d: %w", probes, ef, concurrency, rowErr)
 					}
@@ -2116,7 +2116,7 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	add("coordinator_rpcs_across_shard_requests", configuredRPCs, observed.RPCs, "count", rpcsOK)
 	add("coordinator_retries_across_shard_requests", configuredRetries, observed.Retries, "count", retriesOK)
 	add("coordinator_redirects_across_shard_requests", configuredRedirects, observed.Redirects, "count", redirectsOK)
-	add("coordinator_router_candidates", uint64(cfg.m8CoordinatorLimits.MaxRouterCandidates), uint64(m8ProductionRouterCandidateBudgetV1(assets)), "count", true)
+	add("coordinator_router_candidates", uint64(cfg.m8CoordinatorLimits.MaxRouterCandidates), uint64(m8ProductionApproximateRouterCandidateBudgetV1(assets, cfg.routerCandidates)), "count", true)
 	add("coordinator_query_bytes", uint64(cfg.m8CoordinatorLimits.MaxQueryBytes), uint64(fixture.Dimensions*4), "bytes", true)
 	add("coordinator_top_k", uint64(cfg.m8CoordinatorLimits.MaxTopK), uint64(cfg.topK), "count", true)
 	add("coordinator_ef_search", uint64(cfg.m8CoordinatorLimits.MaxEfSearch), maxEf, "count", true)
@@ -2283,7 +2283,7 @@ func m8AccumulateProductionRowCountersV1(row *m8ProductionRowV1, counters native
 	row.MaxShardCandidateBytes = max(row.MaxShardCandidateBytes, counters.MaxShardCandidateBytes)
 }
 
-func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPartitionCoordinatorV1, assets *m8ProductionMultiGroupAssetsV1, queries [][]float64, truth [][]m8CanonicalResultV1, probes, efSearch, concurrency, topK int, candidateBytesLimit uint64) (m8ProductionRowV1, [][]m8CanonicalResultV1, error) {
+func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPartitionCoordinatorV1, assets *m8ProductionMultiGroupAssetsV1, queries [][]float64, truth [][]m8CanonicalResultV1, probes, efSearch, concurrency, topK, routerCandidates int, candidateBytesLimit uint64) (m8ProductionRowV1, [][]m8CanonicalResultV1, error) {
 	outcomes := make([]m8ProductionCellOutcomeV1, len(queries))
 	started := time.Now()
 	m8RunBoundedWorkV1(len(queries), concurrency, func(index int) {
@@ -2296,13 +2296,13 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 		}
 		requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		outcomes[index].response, outcomes[index].err = coordinator.Search(requestCtx, m8ProductionRequestV1(assets, query, fmt.Sprintf("m8-q-%06d-p-%04d-ef-%06d-c-%03d", index, probes, efSearch, concurrency), probes, efSearch, topK, candidateBytesLimit))
+		outcomes[index].response, outcomes[index].err = coordinator.Search(requestCtx, m8ProductionApproximateRequestV1(assets, query, fmt.Sprintf("m8-q-%06d-p-%04d-ef-%06d-c-%03d", index, probes, efSearch, concurrency), probes, efSearch, topK, routerCandidates, candidateBytesLimit))
 	})
 	elapsed := time.Since(started)
 	// Coordinator.Search is an ANN/HNSW path even when every partition is
 	// selected. Exact V1 parity is owned by m8ExactPartitionUnionV1 during
 	// attribution, never by this measured all-partition ANN row.
-	row := m8ProductionRowV1{Status: "pass", Probes: probes, EfSearch: efSearch, Concurrency: concurrency, RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidates: max(1, int(assets.status.Representatives)), Samples: len(queries)}
+	row := m8ProductionRowV1{Status: "pass", Probes: probes, EfSearch: efSearch, Concurrency: concurrency, RouterMode: collections.VectorPartitionRouterModeApproxV1, RouterCandidates: m8ProductionApproximateRouterCandidateBudgetV1(assets, routerCandidates), Samples: len(queries)}
 	canonicalResults := make([][]m8CanonicalResultV1, len(outcomes))
 	durations := make([]uint64, 0, len(outcomes))
 	var recallSum float64
@@ -2510,6 +2510,10 @@ func m8ProductionRouterCandidateBudgetV1(assets *m8ProductionMultiGroupAssetsV1)
 	return max(1, int(assets.status.Representatives))
 }
 
+func m8ProductionApproximateRouterCandidateBudgetV1(assets *m8ProductionMultiGroupAssetsV1, requested int) int {
+	return min(max(1, requested), m8ProductionRouterCandidateBudgetV1(assets))
+}
+
 func m8ProductionRequestV1(assets *m8ProductionMultiGroupAssetsV1, query []float32, requestID string, probes, efSearch, topK int, candidateBytesLimit uint64) nativewire.VectorPartitionCoordinatorRequestV1 {
 	if candidateBytesLimit == 0 {
 		candidateBytesLimit = nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes
@@ -2523,6 +2527,13 @@ func m8ProductionRequestV1(assets *m8ProductionMultiGroupAssetsV1, query []float
 		TopK: topK, EfSearch: efSearch, DeadlineUnixNano: time.Now().Add(30 * time.Second).UnixNano(), RequestBytesLimit: 4 << 20,
 		CandidateBytesLimit: candidateBytesLimit, ResponseBytesLimit: 64 << 20, MergeEntriesLimit: probes * topK,
 	}
+}
+
+func m8ProductionApproximateRequestV1(assets *m8ProductionMultiGroupAssetsV1, query []float32, requestID string, probes, efSearch, topK, routerCandidates int, candidateBytesLimit uint64) nativewire.VectorPartitionCoordinatorRequestV1 {
+	request := m8ProductionRequestV1(assets, query, requestID, probes, efSearch, topK, candidateBytesLimit)
+	request.RouterMode = collections.VectorPartitionRouterModeApproxV1
+	request.RouterCandidateBudget = m8ProductionApproximateRouterCandidateBudgetV1(assets, routerCandidates)
+	return request
 }
 
 func m8RunUnavailableGroupV1(ctx context.Context, topology *nativewire.VectorPartitionM8ProductionMultiGroupV1, assets *m8ProductionMultiGroupAssetsV1, query64 []float64, topK int, candidateBytesLimit uint64) (m8ProductionFailureEvidenceV1, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1) {

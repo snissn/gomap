@@ -91,9 +91,9 @@ func TestM8ProductionResourcesReportRequestRouterBudgetV1(t *testing.T) {
 		},
 		status: collections.VectorPartitionRouterRuntimeStatusV1{Representatives: 19},
 	}
-	request := m8ProductionRequestV1(assets, []float32{1}, "router-budget", 1, 1, 1, 1)
-	if request.RouterCandidateBudget != 19 {
-		t.Fatalf("request router budget=%d want retained representative count 19", request.RouterCandidateBudget)
+	request := m8ProductionApproximateRequestV1(assets, []float32{1}, "router-budget", 1, 1, 1, cfg.routerCandidates, 1)
+	if request.RouterMode != collections.VectorPartitionRouterModeApproxV1 || request.RouterCandidateBudget != 7 {
+		t.Fatalf("request=%+v want approximate router budget 7", request)
 	}
 	got := m8ProductionResourcesV1(cfg, fixtureManifest{Vectors: 1, Dimensions: 1}, assets, nil, m8ProductionFaultResourceBoundaryV1{}, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})
 	for _, comparison := range got.LimitComparisons {

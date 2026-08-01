@@ -725,7 +725,7 @@ func parseConfig(args []string) (config, error) {
 		partitionAssignment: partitionAssignmentGraphV1,
 		kahipTimeout:        kahipDefaultTimeout,
 		partition:           vectorpartition.DefaultConfig(), routerConfig: vectorpartition.DefaultRouterConfigV1(),
-		routerCandidates: 1024, sourceHNSWDegree: partitionHNSWDegree,
+		routerCandidates: 64, sourceHNSWDegree: partitionHNSWDegree,
 		m8MaxRSSBytes: uint64(maxFixtureBytes), m8MaxAssetBytes: uint64(maxFixtureBytes), m8MaxExactTruthVisits: maxBenchmarkWorkUnits,
 		m8CoordinatorLimits: nativewire.DefaultVectorPartitionCoordinatorLimitsV1(),
 		m8ShardLimits:       nativewire.DefaultVectorPartitionShardSearchLimitsV1(),
