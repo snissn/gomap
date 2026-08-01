@@ -2084,6 +2084,7 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	for _, concurrency := range cfg.concurrency {
 		maxConcurrency = max(maxConcurrency, concurrency)
 	}
+	maxProbes = max(maxProbes, cfg.partitions)
 	// m8RunProductionCellV1 retains every raw response until the full cell has
 	// completed. Bound the largest response shape, including the backing arrays
 	// and harness-owned identity strings that are not included in the response

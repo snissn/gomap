@@ -2068,6 +2068,27 @@ func TestM8AttributionQueryConversionRespectsMemoryCapV1(t *testing.T) {
 	}
 }
 
+func TestM8PreflightResponseRespectsMemoryCapV1(t *testing.T) {
+	manifest := fixtureManifest{Vectors: 16, Queries: 1, Dimensions: 1}
+	cfg := config{partitions: 16, raftGroups: 4, overlaps: []float64{0.2}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}
+	plan, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowProbe := cfg
+	lowProbe.partitions = 1
+	lowProbePlan, err := validateM8BenchmarkWork(lowProbe, manifest, math.MaxInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.CurrentCellOutcomes != 1 || plan.CurrentCellOutcomeBytes <= lowProbePlan.CurrentCellOutcomeBytes {
+		t.Fatalf("preflight response plan=%+v low_probe=%+v", plan, lowProbePlan)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, plan.ModeledPeakBytes-1); err == nil || !strings.Contains(err.Error(), "current_cell_outcome_bytes=") {
+		t.Fatalf("accepted unmodeled preflight response: %v", err)
+	}
+}
+
 func TestM8SourceOracleSnapshotRespectsMemoryCapV1(t *testing.T) {
 	cfg := config{partitions: 1, overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}
 	manifest := fixtureManifest{Vectors: 1_000_000, Queries: 1, Dimensions: 512}
