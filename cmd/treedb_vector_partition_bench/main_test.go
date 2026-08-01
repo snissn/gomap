@@ -2040,6 +2040,17 @@ func TestM8WarmupResponsesRespectMemoryCapV1(t *testing.T) {
 	if _, err := validateM8BenchmarkWork(base, manifest, math.MaxInt64, unsupported.ModeledPeakBytes-1); err == nil || !strings.Contains(err.Error(), "current_query_conversion_bytes=131072") {
 		t.Fatalf("accepted unmodeled unsupported-overlap warmup: %v", err)
 	}
+	base.warmup = 0
+	preflightOnly, err := validateM8BenchmarkWork(base, manifest, math.MaxInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preflightOnly.CurrentCellOutcomes != 1 || preflightOnly.CurrentQueryConversionBytes != 512 {
+		t.Fatalf("unsupported-overlap preflight plan=%+v", preflightOnly)
+	}
+	if _, err := validateM8BenchmarkWork(base, manifest, math.MaxInt64, preflightOnly.ModeledPeakBytes-1); err == nil || !strings.Contains(err.Error(), "current_query_conversion_bytes=512") {
+		t.Fatalf("accepted unmodeled unsupported-overlap preflight: %v", err)
+	}
 }
 
 func TestM8AttributionQueryConversionRespectsMemoryCapV1(t *testing.T) {

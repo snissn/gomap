@@ -2125,13 +2125,13 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if supportedOverlaps > 0 {
 		measuredOutcomes, activeMeasuredWorkers = m.Queries, min(m.Queries, maxConcurrency)
 	}
-	plan.CurrentCellOutcomes = int64(max(measuredOutcomes, min(warmupCount, warmupConcurrency)))
+	plan.CurrentCellOutcomes = int64(max(1, measuredOutcomes, min(warmupCount, warmupConcurrency)))
 	plan.CurrentCellOutcomeBytes, err = memoryMul(plan.CurrentCellOutcomes, perOutcomeBytes)
 	if err != nil {
 		return plan, err
 	}
 	activeWarmupWorkers := min(warmupCount, warmupConcurrency)
-	plan.CurrentQueryConversionBytes, err = memoryMul(int64(max(activeMeasuredWorkers, activeWarmupWorkers)), int64(m.Dimensions), 4)
+	plan.CurrentQueryConversionBytes, err = memoryMul(int64(max(1, activeMeasuredWorkers, activeWarmupWorkers)), int64(m.Dimensions), 4)
 	if err != nil {
 		return plan, err
 	}
