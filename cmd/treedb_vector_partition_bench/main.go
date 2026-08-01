@@ -784,6 +784,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.routerConfig.RepresentativesPerPartition, "router-representatives", cfg.routerConfig.RepresentativesPerPartition, "router representative budget per partition")
 	fs.IntVar(&cfg.routerConfig.MaxDepth, "router-max-depth", cfg.routerConfig.MaxDepth, "router hierarchy depth bound")
 	fs.IntVar(&cfg.routerConfig.MaxIterations, "router-max-iterations", cfg.routerConfig.MaxIterations, "router Lloyd iteration bound")
+	fs.Int64Var(&cfg.routerConfig.MaxScalarWork, "router-max-scalar-work", cfg.routerConfig.MaxScalarWork, "offline router scalar-work cap (1..50000000000)")
 	fs.Uint64Var(&cfg.routerConfig.MaxRouterBytes, "router-max-bytes", cfg.routerConfig.MaxRouterBytes, "hard conservative persisted router-pack byte cap")
 	fs.IntVar(&cfg.routerCandidates, "router-candidates", cfg.routerCandidates, "explicit approximate representative candidate budget")
 	fs.IntVar(&cfg.sourceHNSWDegree, "source-hnsw-degree", cfg.sourceHNSWDegree, "source column_graph HNSW degree (1..16; default 16)")

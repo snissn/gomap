@@ -29,6 +29,7 @@
       "truth_cache": "/mnt/fast4tb/gomap-4023-100k-9225c35e5/truth-cache",
       "truth_cache_sha256": "0e9bce9465c9e1fa70c7833364e88c332bc831cfc52c628c90085e1c3068763c",
       "partition_max_distance_work": 20000000000,
+      "router_max_scalar_work": 20000000000,
       "m3_max_benchmark_visits": 400000000,
       "m8_max_exact_truth_visits": 600000000
     },
@@ -43,6 +44,7 @@
       "truth_cache": "<campaign-root>/250k/truth-cache",
       "truth_cache_sha256": "source-computed-and-recorded-before-reuse",
       "partition_max_distance_work": 50000000000,
+      "router_max_scalar_work": 50000000000,
       "m3_max_benchmark_visits": 900000000,
       "m8_max_exact_truth_visits": 1500000000
     }
@@ -55,9 +57,9 @@
     "execution": "serial_only"
   },
   "commands": {
-    "m3_graph_disjoint": "GOWORK=off go run ./cmd/treedb_vector_partition_bench -stage overlap,partition_index -dataset <dataset> -out <campaign-root>/<corpus>/graph-disjoint-out -m3-persist-db <campaign-root>/<corpus>/graph-disjoint-db -partitions 16 -overlap 0 -partition-assignment graph -partition-kahip-python /mnt/fast4tb/gomap-4024-kahip-3.25/bin/python -partition-kahip-script scripts/treedb_kahip_partition.py -partition-kahip-timeout 5m -partition-max-distance-work <graph-cap> -m3-max-benchmark-visits <m3-cap> -top-k 10 -seed <seed> -format json",
-    "m3_graph_overlap": "GOWORK=off go run ./cmd/treedb_vector_partition_bench -stage overlap,partition_index -dataset <dataset> -out <campaign-root>/<corpus>/graph-overlap-020-out -m3-persist-db <campaign-root>/<corpus>/graph-overlap-020-db -partitions 16 -overlap .2 -partition-assignment graph -partition-kahip-python /mnt/fast4tb/gomap-4024-kahip-3.25/bin/python -partition-kahip-script scripts/treedb_kahip_partition.py -partition-kahip-timeout 5m -partition-max-distance-work <graph-cap> -m3-max-benchmark-visits <m3-cap> -top-k 10 -seed <seed> -format json",
-    "m3_stable_hash_disjoint": "GOWORK=off go run ./cmd/treedb_vector_partition_bench -stage overlap,partition_index -dataset <dataset> -out <campaign-root>/<corpus>/stable-id-hash-disjoint-out -m3-persist-db <campaign-root>/<corpus>/stable-id-hash-disjoint-db -partitions 16 -overlap 0 -partition-assignment stable_id_hash -partition-max-distance-work 20000000000 -m3-max-benchmark-visits <m3-cap> -top-k 10 -seed <seed> -format json",
+    "m3_graph_disjoint": "GOWORK=off go run ./cmd/treedb_vector_partition_bench -stage overlap,partition_index -dataset <dataset> -out <campaign-root>/<corpus>/graph-disjoint-out -m3-persist-db <campaign-root>/<corpus>/graph-disjoint-db -partitions 16 -overlap 0 -partition-assignment graph -partition-kahip-python /mnt/fast4tb/gomap-4024-kahip-3.25/bin/python -partition-kahip-script scripts/treedb_kahip_partition.py -partition-kahip-timeout 5m -partition-max-distance-work <graph-cap> -router-max-scalar-work <router-cap> -m3-max-benchmark-visits <m3-cap> -top-k 10 -seed <seed> -format json",
+    "m3_graph_overlap": "GOWORK=off go run ./cmd/treedb_vector_partition_bench -stage overlap,partition_index -dataset <dataset> -out <campaign-root>/<corpus>/graph-overlap-020-out -m3-persist-db <campaign-root>/<corpus>/graph-overlap-020-db -partitions 16 -overlap .2 -partition-assignment graph -partition-kahip-python /mnt/fast4tb/gomap-4024-kahip-3.25/bin/python -partition-kahip-script scripts/treedb_kahip_partition.py -partition-kahip-timeout 5m -partition-max-distance-work <graph-cap> -router-max-scalar-work <router-cap> -m3-max-benchmark-visits <m3-cap> -top-k 10 -seed <seed> -format json",
+    "m3_stable_hash_disjoint": "GOWORK=off go run ./cmd/treedb_vector_partition_bench -stage overlap,partition_index -dataset <dataset> -out <campaign-root>/<corpus>/stable-id-hash-disjoint-out -m3-persist-db <campaign-root>/<corpus>/stable-id-hash-disjoint-db -partitions 16 -overlap 0 -partition-assignment stable_id_hash -partition-max-distance-work 20000000000 -router-max-scalar-work <router-cap> -m3-max-benchmark-visits <m3-cap> -top-k 10 -seed <seed> -format json",
     "m8_matrix_repeat_1_full_ladder": "GOWORK=off go run ./cmd/treedb_vector_partition_bench -mode production_multi_group -dataset <dataset> -out <campaign-root>/<corpus>/repeat-1 -profiles <campaign-root>/<corpus>/repeat-1/profiles -m8-truth-cache <truth-cache> -m8-truth-cache-sha256 <truth-cache-sha256> -m8-variant-dbs <graph-disjoint-db>,<graph-overlap-020-db>,<stable-id-hash-disjoint-db> -partitions 16 -raft-groups 4 -raft-nodes-per-group 3 -probes 1,2,4,8,16 -overlap .2 -top-k 10 -recall-target .90 -concurrency 1 -warmup 0 -ef-search 64 -router-candidates 64 -seed <seed> -m8-max-rss-bytes 4294967296 -m8-max-persistent-asset-bytes 2147483648 -m8-max-exact-truth-visits <m8-exact-truth-cap> -format json",
     "m8_matrix_repeats_2_3_p4_p16": "GOWORK=off go run ./cmd/treedb_vector_partition_bench -mode production_multi_group -dataset <dataset> -out <campaign-root>/<corpus>/repeat-<2|3> -profiles <campaign-root>/<corpus>/repeat-<2|3>/profiles -m8-truth-cache <truth-cache> -m8-truth-cache-sha256 <truth-cache-sha256> -m8-variant-dbs <graph-disjoint-db>,<graph-overlap-020-db>,<stable-id-hash-disjoint-db> -partitions 16 -raft-groups 4 -raft-nodes-per-group 3 -probes 4,16 -overlap .2 -top-k 10 -recall-target .90 -concurrency 1 -warmup 0 -ef-search 64 -router-candidates 64 -seed <seed> -m8-max-rss-bytes 4294967296 -m8-max-persistent-asset-bytes 2147483648 -m8-max-exact-truth-visits <m8-exact-truth-cap> -format json"
   },

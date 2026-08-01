@@ -315,7 +315,7 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 	cfg.MaxVectors = 100
 	cfg.MaxDimensions = 8
 	cfg.MaxRepresentatives = 100
-	cfg.MaxScalarWork = 1_000_000
+	cfg.MaxScalarWork = 50_000_000_000
 	model, err := internalrouter.BuildRouterV1(partitions, cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -539,6 +539,7 @@ func cloneVectorPartitionRouterInputsV1(input []internalrouter.RouterPartitionV1
 
 func TestPartitionRouterRecordRejectsMalformedFiniteAndHierarchyV1(t *testing.T) {
 	cfg := internalrouter.DefaultRouterConfigV1()
+	cfg.MaxScalarWork = 50_000_000_000
 	record := vectorPartitionRouterRecordV1{
 		RouterGeneration: 7,
 		PartitionID:      1,
