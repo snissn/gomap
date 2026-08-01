@@ -2937,16 +2937,18 @@ func TestExplicitPartitionCapacityOverridesV1(t *testing.T) {
 		"-probes", "1",
 		"-stage", "partition",
 	}
+	args := func(extra ...string) []string {
+		return append(append([]string(nil), base...), extra...)
+	}
 	for _, flag := range []string{"-partition-max-distance-work", "-partition-max-partition-work", "-m3-max-benchmark-visits"} {
-		args := append(append([]string(nil), base...), flag, "0")
-		if _, err := parseConfig(args); err == nil || !strings.Contains(err.Error(), "must be positive") {
+		if _, err := parseConfig(args(flag, "0")); err == nil || !strings.Contains(err.Error(), "must be positive") {
 			t.Fatalf("%s=0 error=%v; want positive-limit rejection", flag, err)
 		}
 	}
-	if _, err := parseConfig(append(base, "-router-max-scalar-work", "0")); err == nil || !strings.Contains(err.Error(), "router max scalar work") {
+	if _, err := parseConfig(args("-router-max-scalar-work", "0")); err == nil || !strings.Contains(err.Error(), "router max scalar work") {
 		t.Fatalf("router scalar zero-cap error=%v", err)
 	}
-	cfg, err := parseConfig(append(base,
+	cfg, err := parseConfig(args(
 		"-partition-max-distance-work", "134000000000",
 		"-partition-max-partition-work", "400000000",
 		"-router-max-scalar-work", "50000000000",
@@ -2964,7 +2966,7 @@ func TestExplicitPartitionCapacityOverridesV1(t *testing.T) {
 	if got, want := cfg.routerConfig.MaxScalarWork, int64(50_000_000_000); got != want {
 		t.Fatalf("Router MaxScalarWork=%d want %d", got, want)
 	}
-	if _, err := parseConfig(append(base, "-router-max-scalar-work", "50000000001")); err == nil || !strings.Contains(err.Error(), "router max scalar work") {
+	if _, err := parseConfig(args("-router-max-scalar-work", "50000000001")); err == nil || !strings.Contains(err.Error(), "router max scalar work") {
 		t.Fatalf("router scalar hard-cap error=%v", err)
 	}
 	if got, want := cfg.m3MaxBenchmarkVisits, int64(3_000_000_000); got != want {

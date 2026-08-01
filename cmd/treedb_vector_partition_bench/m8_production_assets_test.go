@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -157,7 +158,7 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		PackDiagnostics: diagnostics(loads),
 		UntimedBoundary: m8ProductionResourceBoundaryV1{SelectedPartitions: 4, EfSearch: 10, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 2, RPCs: 1, RequestBytes: 1, ShardPartitions: 2, ShardRequestBytes: 1}},
 		Failure:         m8ProductionFailureEvidenceV1{Passed: true, Error: "unavailable group rejected", ResourceBoundary: m8ProductionFaultResourceBoundaryV1{SelectedPartitions: 4, EfSearch: 4096, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 2, RPCs: 1, RequestBytes: 1, ShardPartitions: 2, ShardRequestBytes: 1}}}, GateLedger: m8ProductionGateLedgerV1{FailureHonesty: "pass", PartitionPackReachability: "pass"},
-		Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1, PartitionLoads: loads}, TimedBoundary: "measured", Limitations: []string{"test"},
+		Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1, PartitionLoads: loads}, TruthCache: m8TruthCacheEvidenceV1{Status: "computed", Identity: m8TruthCacheIdentityV1(fixture, 10), ArtifactSHA256: strings.Repeat("d", 64), ComputeNanos: 1}, TimedBoundary: "measured", Limitations: []string{"test"},
 	}
 	variant := testM3VariantDescriptorV1(t.TempDir())
 	variant.OverlapRatio, variant.OverlapRequested, variant.OverlapRealized, variant.OverlapMemberships = 0, 0, 0, 0
@@ -189,6 +190,18 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	report.Rows[0].VariantID = variant.VariantID
 	if err := validateM8ProductionReportV1(report); err != nil {
 		t.Fatalf("valid endpoint coverage rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*m8TruthCacheEvidenceV1){
+		"identity": func(evidence *m8TruthCacheEvidenceV1) { evidence.Identity = strings.Repeat("e", 64) },
+		"status":   func(evidence *m8TruthCacheEvidenceV1) { evidence.Status = "forged" },
+	} {
+		t.Run("rejects_truth_cache_"+name, func(t *testing.T) {
+			invalid := report
+			mutate(&invalid.TruthCache)
+			if err := validateM8ProductionReportV1(invalid); err == nil {
+				t.Fatalf("accepted malformed truth-cache %s", name)
+			}
+		})
 	}
 	for name, mutate := range map[string]func(*m8ProductionRowV1){
 		"exact_router_mode": func(row *m8ProductionRowV1) {

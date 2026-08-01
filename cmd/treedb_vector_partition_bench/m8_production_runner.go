@@ -2975,6 +2975,9 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 	if err := validateM3FixtureWithCaps(report.Dataset, maxVectors, maxFixtureBytes); err != nil {
 		return fmt.Errorf("dataset: %w", err)
 	}
+	if !validM8TruthCacheEvidenceV1(report.TruthCache, report.Dataset, report.Config.TopK) {
+		return errors.New("M8 canonical truth-cache evidence is not identity-bound")
+	}
 	if report.Variant != nil {
 		if err := validateM3VariantDescriptorV1(*report.Variant); err != nil || len(report.Config.Overlap) != 1 ||
 			report.Config.Overlap[0] != report.Variant.OverlapRatio || report.Variant.FixtureChecksum != report.Dataset.Checksum ||
@@ -3077,6 +3080,21 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 		}
 	}
 	return nil
+}
+
+func validM8TruthCacheEvidenceV1(evidence m8TruthCacheEvidenceV1, fixture fixtureManifest, topK int) bool {
+	if evidence.Identity != m8TruthCacheIdentityV1(fixture, topK) {
+		return false
+	}
+	switch evidence.Status {
+	case "computed":
+		return evidence.ComputeNanos > 0 && evidence.LoadNanos == 0 &&
+			(evidence.ArtifactSHA256 == "" || m8SHA256V1(evidence.ArtifactSHA256))
+	case "reused":
+		return evidence.ComputeNanos == 0 && evidence.LoadNanos > 0 && m8SHA256V1(evidence.ArtifactSHA256)
+	default:
+		return false
+	}
 }
 
 func m8ExpectedLocalSearchesV1(samples, probes int) (uint64, bool) {
