@@ -355,6 +355,9 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 	if err := m8ValidateVariantBuildCompatibilityV1(descriptors); err != nil {
 		return m8ProductionMatrixV1{}, err
 	}
+	for i := range matrix.Variants {
+		matrix.Variants[i].GateLedger = m8ProductionGateLedgerForReportV1(matrix.Variants[i])
+	}
 	byID := make(map[string]*m8ProductionReportV1, len(reports))
 	commonConfig := reports[0].Config
 	commonConfig.Overlap = nil

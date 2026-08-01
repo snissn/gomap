@@ -106,6 +106,7 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 	var p4P95, p16P95 []uint64
 	var summary m8QualificationCampaignSummaryV1
 	variantDescriptors := make(map[string]m3VariantDescriptorV1, len(m8RequiredVariantIDsV1))
+	topologyReadySets := make(map[string]string, len(m8RequiredVariantIDsV1))
 	truthArtifact := ""
 	var dataset fixtureManifest
 	var environment *m8QualificationEnvironmentV1
@@ -164,6 +165,11 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 			if err := validateM8ProductionReportV1(*report); err != nil {
 				return summary, fmt.Errorf("validate qualification child %s: %w", cleanPath, err)
 			}
+			derivedLedger := m8ProductionGateLedgerForReportV1(*report)
+			derivedLedger.OverlapStorage = report.GateLedger.OverlapStorage
+			if report.GateLedger != derivedLedger {
+				return summary, fmt.Errorf("qualification matrix %s has stale child gate ledger", cleanPath)
+			}
 			if runIndex == 0 && !m8QualificationHasFullLadderV1(*report) {
 				return summary, fmt.Errorf("qualification matrix %s omits the required p1/2/4/8/16 ladder", cleanPath)
 			}
@@ -189,6 +195,10 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 				return summary, fmt.Errorf("qualification matrix %s changes retained M3 descriptor", run.Path)
 			}
 			variantDescriptors[report.Variant.VariantID] = *report.Variant
+			if prior, ok := topologyReadySets[report.Variant.VariantID]; ok && prior != report.Topology.ReadySetDigest {
+				return summary, fmt.Errorf("qualification matrix %s changes retained topology", cleanPath)
+			}
+			topologyReadySets[report.Variant.VariantID] = report.Topology.ReadySetDigest
 			if truthArtifact != "" && truthArtifact != report.TruthCache.ArtifactSHA256 {
 				return summary, fmt.Errorf("qualification matrix %s changes truth identity", run.Path)
 			}

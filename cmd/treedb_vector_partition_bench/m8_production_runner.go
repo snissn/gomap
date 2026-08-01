@@ -3041,6 +3041,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 		}
 		if row.Status != "pass" && row.Status != "fail" || row.Probes < 1 || row.Probes > report.Config.Partitions ||
 			row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries || math.IsNaN(row.QPS) || math.IsInf(row.QPS, 0) || row.QPS <= 0 ||
+			row.P50Nanos == 0 || row.P50Nanos > row.P95Nanos || row.P95Nanos > row.P99Nanos || row.P99Nanos > row.MaxTotalNanos ||
 			row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates < row.Probes || row.RouterCandidates > report.Config.RouterCandidates || row.RouterCandidates != row.Attribution.ApproximateRouterCandidateBudget || !row.Attribution.ApproximateRouterPartitionCoverageComplete || row.ExactParityPassed && !row.ExactParityChecked || row.ExactParityChecked && row.Probes != report.Config.Partitions || !row.NoPartialResults ||
 			math.Float64bits(row.RecallAtK) != math.Float64bits(row.Attribution.EndToEndRecallAtK) || row.Attribution.LocalHNSWSearches != expectedLocalSearches || row.Attribution.LocalHNSWCandidates == 0 || row.Attribution.ApproximateLocalHNSWSearches != expectedLocalSearches || row.Attribution.ApproximateLocalHNSWCandidates == 0 ||
 			!validM8AttributionV1(row.Attribution, report.Config.TopK) {
