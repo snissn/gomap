@@ -908,6 +908,7 @@ func TestM3OverlapPartitionIndexBuildsReopensAndSearchesNativePacks(t *testing.T
 		"-partition-pivots", "2",
 		"-partition-max-leaf-bucket", "8",
 		"-partition-degree", "4",
+		"-router-max-scalar-work", "50000000000",
 	}
 	var stdout bytes.Buffer
 	if err := runWithHermeticProvenance(t, args, &stdout); err != nil {

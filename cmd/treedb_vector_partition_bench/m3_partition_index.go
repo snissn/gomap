@@ -433,7 +433,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		manifest,
 		routerPartitions,
 		collections.VectorPartitionRouterBuildOptionsV1{
-			Config:         vectorpartition.DefaultRouterConfigV1(),
+			Config:         cfg.routerConfig,
 			AssetFileID:    routerFileID,
 			AssetPartID:    uint64(manifest.PartitionCount) + 1,
 			M:              partitionHNSWM,
@@ -509,7 +509,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	if err := router.Close(); err != nil {
 		return m3PartitionIndexRow{}, fmt.Errorf("close reopened M3 router: %w", err)
 	}
-	if routerRuntime.Manifest.ReadySetDigest != manifest.ReadySetDigest || routerRuntime.ModelDigest == "" {
+	if routerRuntime.Manifest.ReadySetDigest != manifest.ReadySetDigest || routerRuntime.ModelDigest == "" || routerRuntime.Config != cfg.routerConfig {
 		return m3PartitionIndexRow{}, errors.New("reopened M3 router identity does not match ready manifest")
 	}
 	openStarted := time.Now()
