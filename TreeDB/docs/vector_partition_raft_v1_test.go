@@ -240,7 +240,8 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				"Canonical V1 partition-result contract",
 				"VectorPartitionCanonicalScoreContractV1",
 				"candidate is rescored with the canonical contract",
-				"Production evidence schema 2",
+				"Production evidence schema 3",
+				"approximate-route local HNSW",
 			},
 		},
 	}

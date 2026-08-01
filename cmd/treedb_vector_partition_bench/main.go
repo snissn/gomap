@@ -749,7 +749,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.raftGroups, "raft-groups", 0, "M8 data Raft group count")
 	fs.IntVar(&cfg.raftNodes, "raft-nodes-per-group", 3, "M8 Raft members per data group (currently exactly 3)")
 	fs.StringVar(&concurrency, "concurrency", "1", "comma-separated M8 query concurrency")
-	fs.IntVar(&cfg.warmup, "warmup", cfg.warmup, "M8 untimed topology warmup requests before the measured sweep")
+	fs.IntVar(&cfg.warmup, "warmup", cfg.warmup, "M8 minimum untimed topology warmup requests before the measured sweep (0 disables approximate warmup)")
 	fs.StringVar(&efSearch, "ef-search", "128", "comma-separated M8 local HNSW ef_search values")
 	fs.StringVar(&cfg.profiles, "profiles", "", "M8 profile artifact directory")
 	fs.StringVar(&cfg.m8MatrixOut, "m8-matrix-out", "", "internal matrix-wide output root for child cleanliness checks")
@@ -790,6 +790,12 @@ func parseConfig(args []string) (config, error) {
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
+	routerCandidatesSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "router-candidates" {
+			routerCandidatesSet = true
+		}
+	})
 	if fs.NArg() != 0 {
 		return config{}, fmt.Errorf("unexpected positional arguments: %q", fs.Args())
 	}
@@ -822,6 +828,14 @@ func parseConfig(args []string) (config, error) {
 	var err error
 	if cfg.probes, err = parseInts(probes); err != nil {
 		return config{}, fmt.Errorf("probes: %w", err)
+	}
+	if cfg.stage == m8ProductionMultiGroupModeV1 && !routerCandidatesSet {
+		cfg.routerCandidates = 64
+		for _, probes := range cfg.probes {
+			if probes > cfg.routerCandidates {
+				cfg.routerCandidates = probes
+			}
+		}
 	}
 	if cfg.overlaps, err = parseFloats(overlap); err != nil {
 		return config{}, fmt.Errorf("overlap: %w", err)
@@ -891,6 +905,9 @@ func parseConfig(args []string) (config, error) {
 			if probes > cfg.routerCandidates {
 				return config{}, errors.New("production_multi_group requires router-candidates >= every probe count")
 			}
+		}
+		if !allUnique(cfg.probes) || !allUnique(cfg.efSearch) || !allUnique(cfg.concurrency) || !allUnique(cfg.overlaps) {
+			return config{}, errors.New("production_multi_group requires distinct probes, ef-search, concurrency, and overlap values")
 		}
 	}
 	if cfg.m3PersistDir != "" && (cfg.stage != "overlap,partition_index" || len(cfg.overlaps) != 1) {
@@ -1356,6 +1373,32 @@ func parseInts(raw string) ([]int, error) {
 	}
 	return out, nil
 }
+
+func allUnique[T comparable](values []T) bool {
+	seen := make(map[T]struct{}, len(values))
+	for _, value := range values {
+		if _, exists := seen[value]; exists {
+			return false
+		}
+		seen[value] = struct{}{}
+	}
+	return true
+}
+
+// m8WarmupCountAndConcurrencyV1 preserves an explicit zero-warmup request;
+// otherwise it primes the approximate router at the greatest measured client
+// concurrency before timed cells begin.
+func m8WarmupCountAndConcurrencyV1(cfg config) (count, concurrency int) {
+	concurrency = 1
+	for _, value := range cfg.concurrency {
+		concurrency = max(concurrency, value)
+	}
+	if cfg.warmup == 0 {
+		return 0, concurrency
+	}
+	return max(cfg.warmup, concurrency), concurrency
+}
+
 func parseFloats(raw string) ([]float64, error) {
 	var out []float64
 	for _, s := range strings.Split(raw, ",") {
@@ -1690,8 +1733,11 @@ type m8BenchmarkWorkPlan struct {
 	QueryRequests                     int64
 	RetainedCoordinatorCells          int64
 	RetainedCoordinatorResults        int64
+	PreflightResponseBytes            int64
+	PreflightQueryConversionBytes     int64
 	CurrentCellOutcomes               int64
 	CurrentCellOutcomeBytes           int64
+	CurrentQueryConversionBytes       int64
 	FixtureResidentBytes              int64
 	SourceSnapshotBytes               int64
 	ExactTruthBytes                   int64
@@ -1701,6 +1747,10 @@ type m8BenchmarkWorkPlan struct {
 	RetainedAttributionBytes          int64
 	AttributionMergeScratchResults    int64
 	AttributionMergeScratchBytes      int64
+	AttributionLiveResultSets         int64
+	AttributionLiveResultBytes        int64
+	AttributionApproximateRouteBytes  int64
+	AttributionQueryConversionBytes   int64
 	AttributionPrimaryHomeMapBytes    int64
 	AttributionFinalMembershipBytes   int64
 	AttributionHomeBuildScratchBytes  int64
@@ -1821,20 +1871,23 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	// Every attribution cell builds selected-partition sets twice. The remaining
+	// Every attribution cell builds selected-partition sets twice. Approximate
+	// routing is preflighted across the complete query set before approximate
+	// searches, so query conversion also runs once for that preflight and once
+	// for the exact/diagnostic pass. The remaining
 	// linear work charges query conversion, result parity/recall, primary-home
 	// truth/count scans, final-membership truth/rank scans, cell setup, and the
-	// coordinator parity pass. The 21 truth-result passes are 1 parity pass,
-	// four 4-pass recall calculations, and two passes in each diagnostic.
+	// coordinator parity pass. The 25 truth-result passes are 1 parity pass,
+	// five 4-pass recall calculations, and two passes in each diagnostic.
 	plan.SelectedPartitionSetupWorkUnits, err = memoryMul(int64(m.Queries), supportedOverlaps, variantRuns, int64(len(cfg.efSearch)), 2, probeSum)
 	if err != nil {
 		return plan, err
 	}
-	queryProjectionWork, err := memoryMul(int64(m.Queries), int64(m.Dimensions), attributionCells)
+	queryProjectionWork, err := memoryMul(2, int64(m.Queries), int64(m.Dimensions), attributionCells)
 	if err != nil {
 		return plan, err
 	}
-	truthResultWork, err := memoryMul(int64(m.Queries), int64(cfg.topK), attributionCells, 21)
+	truthResultWork, err := memoryMul(int64(m.Queries), int64(cfg.topK), attributionCells, 25)
 	if err != nil {
 		return plan, err
 	}
@@ -1908,9 +1961,11 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return m8BenchmarkWorkPlan{}, err
 	}
-	// Production M8 also performs one exhaustive endpoint preflight and the
-	// configured untimed warmup requests outside the measured cell sweep.
-	warmupAndPreflightPerRun, err := memoryAdd(int64(cfg.warmup), 1)
+	// Production M8 also performs one exhaustive endpoint preflight and, when
+	// enabled, enough approximate warmup requests to prime the largest measured
+	// client pool.
+	warmupCount, warmupConcurrency := m8WarmupCountAndConcurrencyV1(cfg)
+	warmupAndPreflightPerRun, err := memoryAdd(int64(warmupCount), 1)
 	if err != nil {
 		return m8BenchmarkWorkPlan{}, err
 	}
@@ -1919,11 +1974,12 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		return m8BenchmarkWorkPlan{}, err
 	}
 	// Attribution runs once after measured overlap/concurrency rows. For every
-	// query/probe/ef cell it executes exact, approximate, and local-HNSW passes;
+	// query/probe/ef cell it executes exact-route exact, approximate-route exact,
+	// exact-route local-HNSW, and approximate-route local-HNSW passes;
 	// the exhaustive partition-union pass is cached once per query.
 	var attributionPerRun int64
 	if supportedOverlaps > 0 {
-		attributionStages, stageErr := memoryMul(3, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(m.Queries))
+		attributionStages, stageErr := memoryMul(4, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(m.Queries))
 		if stageErr != nil {
 			return m8BenchmarkWorkPlan{}, stageErr
 		}
@@ -2020,58 +2076,75 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
+	maxMeasuredProbes, maxEFSearch, maxConcurrency := 0, 0, 0
+	for _, probes := range cfg.probes {
+		maxMeasuredProbes = max(maxMeasuredProbes, probes)
+	}
+	for _, efSearch := range cfg.efSearch {
+		maxEFSearch = max(maxEFSearch, efSearch)
+	}
+	for _, concurrency := range cfg.concurrency {
+		maxConcurrency = max(maxConcurrency, concurrency)
+	}
+	// The exhaustive endpoint preflight is a distinct, single-response phase.
+	// Timed and warmup requests use at most the configured probe count.
+	neighborBytes, err := memoryMul(int64(cfg.topK), int64(unsafe.Sizeof(nativewire.VectorPartitionCoordinatorNeighborV1{}))+documentIDStorageBytes)
+	if err != nil {
+		return plan, err
+	}
+	responseBytes := func(base int64, probes, requestIDBytes int) (int64, error) {
+		partitionBytes, err := memoryMul(int64(probes), int64(unsafe.Sizeof(uint32(0))))
+		if err != nil {
+			return 0, err
+		}
+		groups := min(probes, cfg.raftGroups)
+		if groups < 1 {
+			groups = probes // conservative for direct planner callers without parsed defaults
+		}
+		groupBytes, err := memoryMul(int64(groups), int64(unsafe.Sizeof("")))
+		if err != nil {
+			return 0, err
+		}
+		return memoryAdd(base, neighborBytes, partitionBytes, groupBytes, int64(requestIDBytes))
+	}
+	plan.PreflightResponseBytes, err = responseBytes(int64(unsafe.Sizeof(nativewire.VectorPartitionCoordinatorResponseV1{})), cfg.partitions, len("m8-endpoint-preflight"))
+	if err != nil {
+		return plan, err
+	}
+	perOutcomeBytes, err := responseBytes(int64(unsafe.Sizeof(m8ProductionCellOutcomeV1{})), maxMeasuredProbes, len(fmt.Sprintf("m8-q-%06d-p-%04d-ef-%06d-c-%03d", max(0, m.Queries-1), maxMeasuredProbes, maxEFSearch, maxConcurrency)))
+	if err != nil {
+		return plan, err
+	}
+	// Timed cells retain one response per query. Enabled warmup workers can
+	// concurrently hold full responses before each worker summarizes one, so
+	// charge that larger transient response set too.
+	measuredOutcomes, activeMeasuredWorkers := 0, 0
 	if supportedOverlaps > 0 {
-		maxProbes, maxEFSearch, maxConcurrency := 0, 0, 0
+		measuredOutcomes, activeMeasuredWorkers = m.Queries, min(m.Queries, maxConcurrency)
+	}
+	plan.CurrentCellOutcomes = int64(max(measuredOutcomes, min(warmupCount, warmupConcurrency)))
+	plan.CurrentCellOutcomeBytes, err = memoryMul(plan.CurrentCellOutcomes, perOutcomeBytes)
+	if err != nil {
+		return plan, err
+	}
+	activeWarmupWorkers := min(warmupCount, warmupConcurrency)
+	plan.CurrentQueryConversionBytes, err = memoryMul(int64(max(activeMeasuredWorkers, activeWarmupWorkers)), int64(m.Dimensions), 4)
+	if err != nil {
+		return plan, err
+	}
+	plan.PreflightQueryConversionBytes, err = memoryMul(int64(m.Dimensions), 4)
+	if err != nil {
+		return plan, err
+	}
+	if supportedOverlaps > 0 {
+		plan.AttributionQueryConversionBytes, err = memoryMul(int64(m.Dimensions), 4)
+		if err != nil {
+			return plan, err
+		}
+		maxProbes := 0
 		for _, probes := range cfg.probes {
 			maxProbes = max(maxProbes, probes)
 		}
-		for _, efSearch := range cfg.efSearch {
-			maxEFSearch = max(maxEFSearch, efSearch)
-		}
-		for _, concurrency := range cfg.concurrency {
-			maxConcurrency = max(maxConcurrency, concurrency)
-		}
-		// m8RunProductionCellV1 retains every raw response until the full cell has
-		// completed. Bound the largest response shape, including the backing arrays
-		// and harness-owned identity strings that are not included in the response
-		// struct or the retained canonical top-k matrices.
-		neighborBytes, err := memoryMul(int64(cfg.topK), int64(unsafe.Sizeof(nativewire.VectorPartitionCoordinatorNeighborV1{}))+documentIDStorageBytes)
-		if err != nil {
-			return plan, err
-		}
-		partitionBytes, err := memoryMul(int64(maxProbes), int64(unsafe.Sizeof(uint32(0))))
-		if err != nil {
-			return plan, err
-		}
-		// Group IDs and the response digests reference generation-pinned topology
-		// storage; each response owns the group string headers, not duplicate backing
-		// strings. RequestID is formatted per query and remains owned by the outcome.
-		maxGroups := min(maxProbes, cfg.raftGroups)
-		if maxGroups < 1 {
-			maxGroups = maxProbes // conservative for direct planner callers without parsed defaults
-		}
-		groupBytes, err := memoryMul(int64(maxGroups), int64(unsafe.Sizeof("")))
-		if err != nil {
-			return plan, err
-		}
-		requestIDStorageBytes := int64(len(fmt.Sprintf("m8-q-%06d-p-%04d-ef-%06d-c-%03d", max(0, m.Queries-1), maxProbes, maxEFSearch, maxConcurrency)))
-		perOutcomeBytes, err := memoryAdd(
-			int64(unsafe.Sizeof(m8ProductionCellOutcomeV1{})),
-			neighborBytes,
-			partitionBytes,
-			groupBytes,
-			requestIDStorageBytes,
-		)
-		if err != nil {
-			return plan, err
-		}
-		plan.CurrentCellOutcomes = int64(m.Queries)
-		plan.CurrentCellOutcomeBytes, err = memoryMul(plan.CurrentCellOutcomes, perOutcomeBytes)
-		if err != nil {
-			return plan, err
-		}
-	}
-	if supportedOverlaps > 0 {
 		truthIDs, truthIDErr := memoryMul(int64(m.Queries), int64(cfg.topK))
 		if truthIDErr != nil {
 			return plan, truthIDErr
@@ -2128,6 +2201,30 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		if err != nil {
 			return plan, err
 		}
+		// Exact-route exact, approximate-route exact, and exact-route local
+		// results remain live while approximate-route local search runs. Each
+		// result owns its canonical IDs; the approximate local result is retained
+		// directly in its matrix and is already included above.
+		plan.AttributionLiveResultSets = 3
+		plan.AttributionLiveResultBytes, err = memoryMul(plan.AttributionLiveResultSets, perQueryResults)
+		if err != nil {
+			return plan, err
+		}
+		// The all-query approximate-route preflight retains one selected partition
+		// slice per query until coverage is known, avoiding a second route before
+		// the approximate search stages.
+		routeValues, routeErr := memoryMul(int64(m.Queries), int64(maxProbes), int64(unsafe.Sizeof(uint32(0))))
+		if routeErr != nil {
+			return plan, routeErr
+		}
+		routeHeaders, routeErr := memoryMul(int64(m.Queries), int64(unsafe.Sizeof([]uint32{})))
+		if routeErr != nil {
+			return plan, routeErr
+		}
+		plan.AttributionApproximateRouteBytes, err = memoryAdd(routeValues, routeHeaders)
+		if err != nil {
+			return plan, err
+		}
 		// The exhaustive attribution search is the largest merge. It reserves one
 		// partition-count by top-k input buffer, canonicalization copies that full
 		// buffer, and the input retains one owned document-ID allocation per
@@ -2164,7 +2261,11 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	measurementPeak, err := memoryAdd(measurementBase, plan.CurrentCellOutcomeBytes)
+	measurementPeak, err := memoryAdd(measurementBase, plan.CurrentCellOutcomeBytes, plan.CurrentQueryConversionBytes)
+	if err != nil {
+		return plan, err
+	}
+	preflightPeak, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.PreflightResponseBytes, plan.PreflightQueryConversionBytes)
 	if err != nil {
 		return plan, err
 	}
@@ -2172,17 +2273,17 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	attributionPeak, err := memoryAdd(measurementBase, plan.AttributionPrimaryHomeMapBytes, plan.AttributionFinalMembershipBytes, plan.RetainedAttributionBytes, plan.AttributionMergeScratchBytes)
+	attributionPeak, err := memoryAdd(measurementBase, plan.AttributionPrimaryHomeMapBytes, plan.AttributionFinalMembershipBytes, plan.RetainedAttributionBytes, plan.AttributionMergeScratchBytes, plan.AttributionLiveResultBytes, plan.AttributionApproximateRouteBytes, plan.AttributionQueryConversionBytes)
 	if err != nil {
 		return plan, err
 	}
-	peak := max(sourceOraclePeak, measurementPeak, attributionHomeBuildPeak, attributionPeak)
+	peak := max(sourceOraclePeak, preflightPeak, measurementPeak, attributionHomeBuildPeak, attributionPeak)
 	plan.ModeledPeakBytes, err = memoryScaleCeil(peak, memorySlackNumerator, memorySlackDenominator)
 	if err != nil {
 		return plan, err
 	}
 	if plan.ModeledPeakBytes > capBytes {
-		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d source_snapshot_bytes=%d exact_truth_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d current_cell_outcomes=%d current_cell_outcome_bytes=%d retained_attribution_matrices=%d retained_attribution_results=%d retained_attribution_bytes=%d attribution_merge_scratch_results=%d attribution_merge_scratch_bytes=%d attribution_primary_home_map_bytes=%d attribution_final_membership_bytes=%d attribution_home_build_scratch_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes, plan.CurrentCellOutcomes, plan.CurrentCellOutcomeBytes, plan.RetainedAttributionMatrices, plan.RetainedAttributionResults, plan.RetainedAttributionBytes, plan.AttributionMergeScratchResults, plan.AttributionMergeScratchBytes, plan.AttributionPrimaryHomeMapBytes, plan.AttributionFinalMembershipBytes, plan.AttributionHomeBuildScratchBytes)
+		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d source_snapshot_bytes=%d exact_truth_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d preflight_response_bytes=%d preflight_query_conversion_bytes=%d current_cell_outcomes=%d current_cell_outcome_bytes=%d current_query_conversion_bytes=%d retained_attribution_matrices=%d retained_attribution_results=%d retained_attribution_bytes=%d attribution_merge_scratch_results=%d attribution_merge_scratch_bytes=%d attribution_live_result_sets=%d attribution_live_result_bytes=%d attribution_approximate_route_bytes=%d attribution_query_conversion_bytes=%d attribution_primary_home_map_bytes=%d attribution_final_membership_bytes=%d attribution_home_build_scratch_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes, plan.PreflightResponseBytes, plan.PreflightQueryConversionBytes, plan.CurrentCellOutcomes, plan.CurrentCellOutcomeBytes, plan.CurrentQueryConversionBytes, plan.RetainedAttributionMatrices, plan.RetainedAttributionResults, plan.RetainedAttributionBytes, plan.AttributionMergeScratchResults, plan.AttributionMergeScratchBytes, plan.AttributionLiveResultSets, plan.AttributionLiveResultBytes, plan.AttributionApproximateRouteBytes, plan.AttributionQueryConversionBytes, plan.AttributionPrimaryHomeMapBytes, plan.AttributionFinalMembershipBytes, plan.AttributionHomeBuildScratchBytes)
 	}
 	return plan, nil
 }

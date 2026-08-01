@@ -300,10 +300,10 @@ func TestM8AttributionOwnersKeepRouterAndLocalLossSeparateV1(t *testing.T) {
 	}{
 		{"primary ceiling", .6, .6, .6, .6, "primary_placement", "global_to_primary_home", .4},
 		{"representative router", 1, 1, .75, .75, "exact_representative_routing", "final_membership_to_exact_routing", .25},
-		{"local HNSW only", 1, 1, 1, .75, "partition_local_hnsw", "exact_routing_to_local_hnsw", .25},
+		{"local HNSW only", 1, 1, 1, .75, "partition_local_hnsw", "approximate_routing_to_local_hnsw", .25},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			attribution := m8ProductionAttributionV1{GlobalExactRecallAtK: 1, OracleStagesComplete: true, PrimaryHomeOracleRecallAtK: test.primary, FinalMembershipOracleRecallAtK: test.final, ExactRepresentativeRecallAtK: test.exact, ApproximateRepresentativeRecallAtK: test.exact, LocalHNSWRecallAtK: test.local, EndToEndRecallAtK: test.local, ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true, CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true, ApproximateRouterPartitionCoverageComplete: true}
+			attribution := m8ProductionAttributionV1{GlobalExactRecallAtK: 1, OracleStagesComplete: true, PrimaryHomeOracleRecallAtK: test.primary, FinalMembershipOracleRecallAtK: test.final, ExactRepresentativeRecallAtK: test.exact, ApproximateRepresentativeRecallAtK: test.exact, LocalHNSWRecallAtK: test.local, ApproximateLocalHNSWRecallAtK: test.local, EndToEndRecallAtK: test.local, ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true, CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true, ApproximateRouterPartitionCoverageComplete: true}
 			if !slices.Contains(m8AttributionLossOwnersV1(attribution), test.owner) {
 				t.Fatalf("owners=%v want %q", m8AttributionLossOwnersV1(attribution), test.owner)
 			}
@@ -1791,15 +1791,19 @@ func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 	}
 	if cfg.stage != m8ProductionMultiGroupModeV1 || cfg.raftGroups != 4 || cfg.raftNodes != 3 ||
 		fmt.Sprint(cfg.probes) != "[1 4 16]" || fmt.Sprint(cfg.overlaps) != "[0 0.2]" ||
-		fmt.Sprint(cfg.concurrency) != "[1 16 64]" || cfg.warmup != 3 || fmt.Sprint(cfg.efSearch) != "[64 4096]" || cfg.m8ExistingDB != "/retained/m8-assets" {
+		fmt.Sprint(cfg.concurrency) != "[1 16 64]" || cfg.warmup != 3 || fmt.Sprint(cfg.efSearch) != "[64 4096]" || cfg.routerCandidates != 64 || cfg.m8ExistingDB != "/retained/m8-assets" {
 		t.Fatalf("M8 config=%+v", cfg)
 	}
 	limit := nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxSelectedPartitions
-	if _, err := parseConfig([]string{
+	boundary, err := parseConfig([]string{
 		"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(),
 		"-partitions", strconv.Itoa(limit), "-raft-groups", "2",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("rejected M8 coordinator partition boundary %d: %v", limit, err)
+	}
+	if boundary.routerCandidates != limit {
+		t.Fatalf("M8 coordinator partition boundary candidates=%d want %d", boundary.routerCandidates, limit)
 	}
 	for _, args := range [][]string{
 		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "1"},
@@ -1819,14 +1823,14 @@ func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 func TestM8BenchmarkWorkCapAndOverflowV1(t *testing.T) {
 	cfg := config{partitions: 4, overlaps: []float64{0, .2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3, topK: 2}
 	manifest := fixtureManifest{Vectors: 10, Queries: 5, Dimensions: 8}
-	plan, err := validateM8BenchmarkWork(cfg, manifest, 1324, math.MaxInt64)
-	if err != nil || plan.QueryRequests != 109 || plan.MeasuredQueryRequests != 40 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 65 {
+	plan, err := validateM8BenchmarkWork(cfg, manifest, 1644, math.MaxInt64)
+	if err != nil || plan.QueryRequests != 129 || plan.MeasuredQueryRequests != 40 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 85 {
 		t.Fatalf("M8 work plan=%+v err=%v", plan, err)
 	}
-	if plan.SelectedPartitionSetupWorkUnits != 100 || plan.AttributionLinearWorkUnits != 1104 || plan.FinalMembershipLinearScans != 80 || plan.FinalMembershipPairComparisons != 40 || plan.AttributionDiagnosticWorkUnits != 1324 || plan.RetainedCoordinatorCells != 8 || plan.RetainedCoordinatorResults != 80 || plan.CurrentCellOutcomes != 5 || plan.CurrentCellOutcomeBytes == 0 || plan.FixtureResidentBytes == 0 || plan.SourceSnapshotBytes == 0 || plan.ExactTruthBytes == 0 || plan.RetainedCoordinatorBytes == 0 || plan.RetainedAttributionMatrices != 5 || plan.RetainedAttributionResults != 50 || plan.RetainedAttributionBytes == 0 || plan.AttributionMergeScratchResults != 16 || plan.AttributionMergeScratchBytes == 0 || plan.ModeledPeakBytes == 0 {
+	if plan.SelectedPartitionSetupWorkUnits != 100 || plan.AttributionLinearWorkUnits != 1424 || plan.FinalMembershipLinearScans != 80 || plan.FinalMembershipPairComparisons != 40 || plan.AttributionDiagnosticWorkUnits != 1644 || plan.RetainedCoordinatorCells != 8 || plan.RetainedCoordinatorResults != 80 || plan.CurrentCellOutcomes != 5 || plan.CurrentCellOutcomeBytes == 0 || plan.FixtureResidentBytes == 0 || plan.SourceSnapshotBytes == 0 || plan.ExactTruthBytes == 0 || plan.RetainedCoordinatorBytes == 0 || plan.RetainedAttributionMatrices != 5 || plan.RetainedAttributionResults != 50 || plan.RetainedAttributionBytes == 0 || plan.AttributionMergeScratchResults != 16 || plan.AttributionMergeScratchBytes == 0 || plan.AttributionLiveResultSets != 3 || plan.AttributionLiveResultBytes == 0 || plan.AttributionApproximateRouteBytes == 0 || plan.ModeledPeakBytes == 0 {
 		t.Fatalf("incomplete M8 memory plan=%+v", plan)
 	}
-	if _, err := validateM8BenchmarkWork(cfg, manifest, 1323, math.MaxInt64); err == nil {
+	if _, err := validateM8BenchmarkWork(cfg, manifest, 1643, math.MaxInt64); err == nil {
 		t.Fatal("accepted oversized M8 sweep")
 	}
 	if _, err := validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 1, Queries: math.MaxInt, Dimensions: 1}, maxBenchmarkWorkUnits, math.MaxInt64); err == nil {
@@ -1861,7 +1865,7 @@ func TestM8UnsupportedOverlapSkipsMeasuredAndAttributionWorkV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.QueryRequests != 4 || plan.MeasuredQueryRequests != 0 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 0 || plan.RetainedCoordinatorCells != 0 || plan.RetainedCoordinatorResults != 0 || plan.CurrentCellOutcomes != 0 || plan.CurrentCellOutcomeBytes != 0 || plan.RetainedAttributionMatrices != 0 || plan.RetainedAttributionResults != 0 || plan.RetainedAttributionBytes != 0 || plan.AttributionMergeScratchResults != 0 || plan.AttributionMergeScratchBytes != 0 {
+	if plan.QueryRequests != 4 || plan.MeasuredQueryRequests != 0 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 0 || plan.RetainedCoordinatorCells != 0 || plan.RetainedCoordinatorResults != 0 || plan.CurrentCellOutcomes != 2 || plan.CurrentCellOutcomeBytes != 1348 || plan.CurrentQueryConversionBytes != 64 || plan.RetainedAttributionMatrices != 0 || plan.RetainedAttributionResults != 0 || plan.RetainedAttributionBytes != 0 || plan.AttributionMergeScratchResults != 0 || plan.AttributionMergeScratchBytes != 0 {
 		t.Fatalf("unsupported-only M8 work plan=%+v", plan)
 	}
 }
@@ -1869,14 +1873,14 @@ func TestM8UnsupportedOverlapSkipsMeasuredAndAttributionWorkV1(t *testing.T) {
 func TestM8RetainedOverlapCountsMeasuredAndAttributionWorkV1(t *testing.T) {
 	cfg := config{partitions: 4, overlaps: []float64{.2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3, topK: 2, m8ExistingDB: "/retained/overlap"}
 	manifest := fixtureManifest{Vectors: 10, Queries: 5, Dimensions: 8}
-	plan, err := validateM8BenchmarkWork(cfg, manifest, 3244, math.MaxInt64)
+	plan, err := validateM8BenchmarkWork(cfg, manifest, 3564, math.MaxInt64)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.QueryRequests != 109 || plan.MeasuredQueryRequests != 40 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 65 || plan.SelectedPartitionSetupWorkUnits != 100 || plan.AttributionLinearWorkUnits != 1104 || plan.FinalMembershipLinearScans != 1360 || plan.FinalMembershipPairComparisons != 680 || plan.AttributionDiagnosticWorkUnits != 3244 {
+	if plan.QueryRequests != 129 || plan.MeasuredQueryRequests != 40 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 85 || plan.SelectedPartitionSetupWorkUnits != 100 || plan.AttributionLinearWorkUnits != 1424 || plan.FinalMembershipLinearScans != 1360 || plan.FinalMembershipPairComparisons != 680 || plan.AttributionDiagnosticWorkUnits != 3564 {
 		t.Fatalf("retained-overlap M8 work plan=%+v", plan)
 	}
-	if _, err := validateM8BenchmarkWork(cfg, manifest, 3243, math.MaxInt64); err == nil {
+	if _, err := validateM8BenchmarkWork(cfg, manifest, 3563, math.MaxInt64); err == nil {
 		t.Fatal("accepted retained overlap above complete work cap")
 	}
 }
@@ -1899,7 +1903,7 @@ func TestM8VariantMatrixCountsCompleteChildWorkAndOneChildPeakV1(t *testing.T) {
 	if matrix.ExactWorkVectorVisits != single.ExactWorkVectorVisits*3 {
 		t.Fatalf("matrix exact scans=%d single=%d", matrix.ExactWorkVectorVisits, single.ExactWorkVectorVisits)
 	}
-	if single.SelectedPartitionSetupWorkUnits != 100 || single.AttributionLinearWorkUnits != 1104 || single.FinalMembershipLinearScans != 80 || single.FinalMembershipPairComparisons != 40 || single.AttributionDiagnosticWorkUnits != 1324 || matrix.SelectedPartitionSetupWorkUnits != 300 || matrix.AttributionLinearWorkUnits != 3312 || matrix.FinalMembershipLinearScans != 4080 || matrix.FinalMembershipPairComparisons != 2040 || matrix.AttributionDiagnosticWorkUnits != 9732 {
+	if single.SelectedPartitionSetupWorkUnits != 100 || single.AttributionLinearWorkUnits != 1424 || single.FinalMembershipLinearScans != 80 || single.FinalMembershipPairComparisons != 40 || single.AttributionDiagnosticWorkUnits != 1644 || matrix.SelectedPartitionSetupWorkUnits != 300 || matrix.AttributionLinearWorkUnits != 4272 || matrix.FinalMembershipLinearScans != 4080 || matrix.FinalMembershipPairComparisons != 2040 || matrix.AttributionDiagnosticWorkUnits != 10692 {
 		t.Fatalf("matrix final-membership diagnostics=%+v single=%+v", matrix, single)
 	}
 	if matrix.RetainedCoordinatorCells != single.RetainedCoordinatorCells || matrix.RetainedCoordinatorResults != single.RetainedCoordinatorResults || matrix.RetainedAttributionResults != single.RetainedAttributionResults || matrix.ModeledPeakBytes != single.ModeledPeakBytes {
@@ -2007,6 +2011,124 @@ func TestM8CurrentCellOutcomesRespectMemoryCapV1(t *testing.T) {
 	}
 }
 
+func TestM8WarmupResponsesRespectMemoryCapV1(t *testing.T) {
+	manifest := fixtureManifest{Vectors: 1, Queries: 1, Dimensions: 128}
+	base := config{partitions: 1, overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{256}, topK: 1}
+	withoutWarmup, err := validateM8BenchmarkWork(base, manifest, math.MaxInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.warmup = 1
+	withWarmup, err := validateM8BenchmarkWork(base, manifest, math.MaxInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withoutWarmup.CurrentCellOutcomes != 1 || withWarmup.CurrentCellOutcomes != 256 || withWarmup.CurrentCellOutcomeBytes <= withoutWarmup.CurrentCellOutcomeBytes || withoutWarmup.CurrentQueryConversionBytes != 512 || withWarmup.CurrentQueryConversionBytes != 131072 {
+		t.Fatalf("warmup response plan without=%+v with=%+v", withoutWarmup, withWarmup)
+	}
+	if _, err := validateM8BenchmarkWork(base, manifest, math.MaxInt64, withWarmup.ModeledPeakBytes-1); err == nil || !strings.Contains(err.Error(), "current_query_conversion_bytes=131072") {
+		t.Fatalf("accepted unmodeled warmup query conversions: %v", err)
+	}
+	base.overlaps = []float64{0.2}
+	unsupported, err := validateM8BenchmarkWork(base, manifest, math.MaxInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unsupported.CurrentCellOutcomes != 256 || unsupported.CurrentQueryConversionBytes != 131072 {
+		t.Fatalf("unsupported-overlap warmup plan=%+v", unsupported)
+	}
+	if _, err := validateM8BenchmarkWork(base, manifest, math.MaxInt64, unsupported.ModeledPeakBytes-1); err == nil || !strings.Contains(err.Error(), "current_query_conversion_bytes=131072") {
+		t.Fatalf("accepted unmodeled unsupported-overlap warmup: %v", err)
+	}
+	base.warmup = 0
+	preflightOnly, err := validateM8BenchmarkWork(base, manifest, math.MaxInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preflightOnly.CurrentCellOutcomes != 0 || preflightOnly.CurrentQueryConversionBytes != 0 || preflightOnly.PreflightResponseBytes == 0 || preflightOnly.PreflightQueryConversionBytes != 512 {
+		t.Fatalf("unsupported-overlap preflight plan=%+v", preflightOnly)
+	}
+	if _, err := validateM8BenchmarkWork(base, manifest, math.MaxInt64, preflightOnly.ModeledPeakBytes-1); err == nil || !strings.Contains(err.Error(), "preflight_query_conversion_bytes=512") {
+		t.Fatalf("accepted unmodeled unsupported-overlap preflight: %v", err)
+	}
+}
+
+func TestM8AttributionQueryConversionRespectsMemoryCapV1(t *testing.T) {
+	cfg := config{partitions: 1, overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}
+	manifest := fixtureManifest{Vectors: 1, Queries: 1, Dimensions: 1 << 20}
+	plan, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.AttributionQueryConversionBytes != 4<<20 {
+		t.Fatalf("attribution query conversion bytes=%d, want %d", plan.AttributionQueryConversionBytes, 4<<20)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, plan.ModeledPeakBytes-1); err == nil || !strings.Contains(err.Error(), "attribution_query_conversion_bytes=4194304") {
+		t.Fatalf("accepted unmodeled attribution query conversion: %v", err)
+	}
+}
+
+func TestM8PreflightResponseRespectsMemoryCapV1(t *testing.T) {
+	manifest := fixtureManifest{Vectors: 16, Queries: 1, Dimensions: 1}
+	cfg := config{partitions: 16, raftGroups: 4, overlaps: []float64{0.2}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}
+	plan, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowProbe := cfg
+	lowProbe.partitions = 1
+	lowProbePlan, err := validateM8BenchmarkWork(lowProbe, manifest, math.MaxInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.CurrentCellOutcomes != 0 || plan.PreflightResponseBytes <= lowProbePlan.PreflightResponseBytes {
+		t.Fatalf("preflight response plan=%+v low_probe=%+v", plan, lowProbePlan)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, plan.ModeledPeakBytes-1); err == nil || !strings.Contains(err.Error(), "preflight_response_bytes=") {
+		t.Fatalf("accepted unmodeled preflight response: %v", err)
+	}
+}
+
+func TestM8MeasuredResponsesDoNotUseExhaustivePreflightShapeV1(t *testing.T) {
+	manifest := fixtureManifest{Vectors: 256, Queries: 100_000, Dimensions: 1}
+	cfg := config{partitions: 256, raftGroups: 4, overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 1, m8MaxExactTruthVisits: math.MaxInt64}
+	plan, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowProbe := cfg
+	lowProbe.partitions = 1
+	lowProbePlan, err := validateM8BenchmarkWork(lowProbe, manifest, math.MaxInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.CurrentCellOutcomes != int64(manifest.Queries) || plan.CurrentCellOutcomeBytes != lowProbePlan.CurrentCellOutcomeBytes || plan.PreflightResponseBytes <= lowProbePlan.PreflightResponseBytes {
+		t.Fatalf("separate measured/preflight response plan=%+v low_probe=%+v", plan, lowProbePlan)
+	}
+	measurementBase, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyOutcomeBytes, err := memoryMul(plan.CurrentCellOutcomes, plan.PreflightResponseBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyPeak, err := memoryAdd(measurementBase, legacyOutcomeBytes, plan.CurrentQueryConversionBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyPeak, err = memoryScaleCeil(legacyPeak, memorySlackNumerator, memorySlackDenominator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.ModeledPeakBytes >= legacyPeak {
+		t.Fatalf("measured responses still charged at exhaustive shape: plan=%+v legacy_peak=%d", plan, legacyPeak)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, plan.ModeledPeakBytes); err != nil {
+		t.Fatalf("rejected bounded measured-response plan: %v", err)
+	}
+}
+
 func TestM8SourceOracleSnapshotRespectsMemoryCapV1(t *testing.T) {
 	cfg := config{partitions: 1, overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}
 	manifest := fixtureManifest{Vectors: 1_000_000, Queries: 1, Dimensions: 512}
@@ -2088,7 +2210,7 @@ func TestM8ProductionEvidenceJSONKeepsEveryTopologyDimensionV1(t *testing.T) {
 			Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1, ExhaustivePartitionRecallAtK: 1,
 			ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
 			ExactRepresentativeRecallAtK: .9, ApproximateRepresentativeRecallAtK: .8,
-			LocalHNSWRecallAtK: .7, EndToEndRecallAtK: 0,
+			LocalHNSWRecallAtK: .7, ApproximateLocalHNSWRecallAtK: .7, EndToEndRecallAtK: 0,
 			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
 			ApproximateRouterCandidateBudget: 256, ApproximateRouterPartitionCoverageComplete: true, ResidualLossOwners: []string{"partition_local_hnsw"},
 		}}},
@@ -2280,6 +2402,7 @@ func TestValidM8AttributionPersistsExhaustiveUnionFailureV1(t *testing.T) {
 		ExactRepresentativeRecallAtK:               .5,
 		ApproximateRepresentativeRecallAtK:         .5,
 		LocalHNSWRecallAtK:                         .5,
+		ApproximateLocalHNSWRecallAtK:              .5,
 		EndToEndRecallAtK:                          .5,
 		CoordinatorMergeIDParity:                   true,
 		CoordinatorMergeScoreParity:                true,
@@ -2300,7 +2423,7 @@ func TestValidM8AttributionPersistsExhaustiveUnionFailureV1(t *testing.T) {
 	legacy := m8ProductionAttributionV1{
 		Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1,
 		ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
-		ExactRepresentativeRecallAtK: .5, ApproximateRepresentativeRecallAtK: .5, LocalHNSWRecallAtK: .5, EndToEndRecallAtK: .5,
+		ExactRepresentativeRecallAtK: .5, ApproximateRepresentativeRecallAtK: .5, LocalHNSWRecallAtK: .5, ApproximateLocalHNSWRecallAtK: .5, EndToEndRecallAtK: .5,
 		CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
 		ApproximateRouterCandidateBudget: 1, ApproximateRouterPartitionCoverageComplete: true,
 	}
@@ -2315,7 +2438,7 @@ func TestValidM8AttributionRequiresEveryTruthRankV1(t *testing.T) {
 		Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1, OracleStagesComplete: true,
 		PrimaryHomeOracleRecallAtK: 1, FinalMembershipOracleRecallAtK: 1,
 		ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
-		ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1,
+		ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: 1, ApproximateLocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1,
 		CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
 		ApproximateRouterCandidateBudget: 1, ApproximateRouterPartitionCoverageComplete: true,
 		TruthNeighborRankRetentionAtK: []float64{1, 1},
@@ -2328,6 +2451,24 @@ func TestValidM8AttributionRequiresEveryTruthRankV1(t *testing.T) {
 	if validM8AttributionV1(attribution, 1) || validM8AttributionV1(attribution, 3) {
 		t.Fatal("accepted truth-rank retention with the wrong top-k cardinality")
 	}
+	favorable := attribution
+	favorable.ExactRepresentativeRecallAtK = .9
+	favorable.ApproximateRepresentativeRecallAtK = 1
+	favorable.LocalHNSWRecallAtK = .9
+	favorable.ApproximateLocalHNSWRecallAtK = .9
+	favorable.EndToEndRecallAtK = .9
+	favorable.FinalMembershipToExactLossAtK = .1
+	favorable.ExactToApproximateLossAtK = -.1
+	favorable.ApproximateToLocalHNSWLossAtK = .1
+	favorable.ResidualLossOwners = m8AttributionLossOwnersV1(favorable)
+	favorable.StageOwners = m8AttributionStageOwnersV1(favorable)
+	if !validM8AttributionV1(favorable, 2) {
+		t.Fatalf("rejected favorable approximate routing=%+v", favorable)
+	}
+	favorable.ExactToLocalHNSWLossAtK = -.1
+	if validM8AttributionV1(favorable, 2) {
+		t.Fatalf("accepted negative non-routing loss=%+v", favorable)
+	}
 }
 
 func TestM8AttachAttributionAfterMeasurementV1(t *testing.T) {
@@ -2336,9 +2477,10 @@ func TestM8AttachAttributionAfterMeasurementV1(t *testing.T) {
 		Evidence: m8ProductionAttributionV1{
 			Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1,
 			ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
-			ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: .5,
+			ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: .5, ApproximateLocalHNSWRecallAtK: .5,
 			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
 			ApproximateRouterCandidateBudget: 2, ApproximateRouterPartitionCoverageComplete: true,
+			LocalHNSWSearches: 4, LocalHNSWCandidates: 2,
 		},
 		Local: [][]m8CanonicalResultV1{{{ID: "a", Score: 1}}, {{ID: "b", Score: 1}}},
 	}
@@ -2353,13 +2495,24 @@ func TestM8AttachAttributionAfterMeasurementV1(t *testing.T) {
 	if err := m8AttachAttributionV1(&m8ProductionRowV1{Samples: 1}, cell, coordinator); err == nil {
 		t.Fatal("accepted post-measurement attribution cardinality mismatch")
 	}
+	shortfall := m8ProductionRowV1{Status: "candidate_coverage_shortfall", Samples: 2}
+	if err := m8AttachAttributionV1(&shortfall, cell, coordinator); err != nil {
+		t.Fatal(err)
+	}
+	if shortfall.Attribution.ApproximateRouterPartitionCoverageComplete || shortfall.Attribution.ApproximateRepresentativeRecallAtK != 0 ||
+		shortfall.Attribution.ApproximateLocalHNSWRecallAtK != 0 || shortfall.Attribution.ApproximateLocalHNSWSearches != 0 || shortfall.Attribution.ApproximateLocalHNSWCandidates != 0 || shortfall.Attribution.ApproximateLocalHNSWEdges != 0 ||
+		shortfall.Attribution.EndToEndRecallAtK != 0 || shortfall.Attribution.CoordinatorMergeIDParity || shortfall.Attribution.CoordinatorMergeScoreParity ||
+		shortfall.Attribution.ExactToApproximateLossAtK != shortfall.Attribution.ExactRepresentativeRecallAtK || shortfall.Attribution.ApproximateToLocalHNSWLossAtK != 0 ||
+		shortfall.Attribution.ApproximateLocalToEndToEndLossAtK != 0 || shortfall.Attribution.LocalHNSWRecallAtK != .5 || shortfall.Attribution.LocalHNSWSearches != 4 || !validM8AttributionV1(shortfall.Attribution, 1) {
+		t.Fatalf("shortfall attribution=%+v", shortfall.Attribution)
+	}
 }
 
 func TestM8AttributionApproximateCoverageShortfallIsOwnedV1(t *testing.T) {
 	attribution := m8ProductionAttributionV1{
 		Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1,
 		ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
-		ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 0, LocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1,
+		ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 0, LocalHNSWRecallAtK: 1, ApproximateLocalHNSWRecallAtK: 0, EndToEndRecallAtK: 1,
 		CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
 		ApproximateRouterCandidateBudget: 2, ApproximateRouterPartitionCoverageComplete: false,
 	}
@@ -2375,6 +2528,11 @@ func TestM8AttributionApproximateCoverageShortfallIsOwnedV1(t *testing.T) {
 	invalid.ResidualLossOwners = m8AttributionLossOwnersV1(invalid)
 	if validM8AttributionV1(invalid, 10) {
 		t.Fatalf("accepted nonzero approximate recall with incomplete coverage: %+v", invalid)
+	}
+	invalid = attribution
+	invalid.ApproximateLocalHNSWRecallAtK = .5
+	if validM8AttributionV1(invalid, 10) {
+		t.Fatalf("accepted approximate local recall with incomplete coverage: %+v", invalid)
 	}
 	if _, err := m8ApproximateRouterCoverageV1(errors.New("router corruption")); err == nil {
 		t.Fatal("accepted non-coverage router error")
@@ -2509,6 +2667,15 @@ func TestM8ConfiguredConcurrentShardRequestsCoversClientConcurrencyV1(t *testing
 	}
 	if _, err := m8ConfiguredConcurrentShardRequestsV1(8, []int{0, 16}); err == nil {
 		t.Fatal("expected invalid client concurrency rejection")
+	}
+}
+
+func TestM8WarmupCountAndConcurrencyPreservesZeroV1(t *testing.T) {
+	if count, concurrency := m8WarmupCountAndConcurrencyV1(config{warmup: 0, concurrency: []int{1, 16}}); count != 0 || concurrency != 16 {
+		t.Fatalf("zero warmup count/concurrency=%d/%d want 0/16", count, concurrency)
+	}
+	if count, concurrency := m8WarmupCountAndConcurrencyV1(config{warmup: 3, concurrency: []int{1, 16}}); count != 16 || concurrency != 16 {
+		t.Fatalf("enabled warmup count/concurrency=%d/%d want 16/16", count, concurrency)
 	}
 }
 

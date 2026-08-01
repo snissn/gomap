@@ -86,6 +86,55 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 	if matrix.Status != "local_gate_pass" || matrix.Gates.PartitionPackReachability != "pass" || matrix.Gates.OverlapStorage != "pass" || matrix.OverlapStorageRatio != 1.2 || len(matrix.Comparison) != 6 {
 		t.Fatalf("matrix=%+v", matrix)
 	}
+	shortfallReports := append([]m8ProductionReportV1(nil), reports...)
+	shortfallReports[0].Rows = append([]m8ProductionRowV1(nil), reports[0].Rows...)
+	shortfallReports[0].Rows[1].Status = "candidate_coverage_shortfall"
+	shortfallMatrix, err := m8BuildProductionMatrixV1(cfg, fixture, shortfallReports)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shortfallAt = -1
+	for i, comparison := range shortfallMatrix.Comparison {
+		if comparison.VariantID == shortfallReports[0].Variant.VariantID && comparison.Probes == shortfallReports[0].Rows[1].Probes && comparison.EfSearch == shortfallReports[0].Rows[1].EfSearch && comparison.Concurrency == shortfallReports[0].Rows[1].Concurrency {
+			shortfallAt = i
+			if comparison.Status != "candidate_coverage_shortfall" {
+				t.Fatalf("shortfall comparison status=%q", comparison.Status)
+			}
+		}
+	}
+	if shortfallAt < 0 {
+		t.Fatal("missing shortfall comparison")
+	}
+	raw, err := json.Marshal(shortfallMatrix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded m8ProductionMatrixV1
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateM8ProductionMatrixV1(decoded); err != nil {
+		t.Fatalf("round-tripped shortfall matrix rejected: %v", err)
+	}
+	for _, mutation := range []struct {
+		name  string
+		apply func(*m8ProductionComparisonV1)
+	}{
+		{"status_pass", func(comparison *m8ProductionComparisonV1) { comparison.Status = "pass" }},
+		{"status_fail", func(comparison *m8ProductionComparisonV1) { comparison.Status = "fail" }},
+		{"status_blank", func(comparison *m8ProductionComparisonV1) { comparison.Status = "" }},
+		{"recall", func(comparison *m8ProductionComparisonV1) { comparison.RecallAtK = .5 }},
+		{"qps", func(comparison *m8ProductionComparisonV1) { comparison.QPS++ }},
+		{"resource", func(comparison *m8ProductionComparisonV1) { comparison.PersistentAssetBytes++ }},
+		{"artifact_digest", func(comparison *m8ProductionComparisonV1) { comparison.ArtifactSHA256 = strings.Repeat("d", 64) }},
+	} {
+		invalid := decoded
+		invalid.Comparison = append([]m8ProductionComparisonV1(nil), decoded.Comparison...)
+		mutation.apply(&invalid.Comparison[shortfallAt])
+		if err := validateM8ProductionMatrixV1(invalid); err == nil {
+			t.Fatalf("accepted tampered shortfall comparison %s", mutation.name)
+		}
+	}
 	for _, reachability := range []string{"", "fail"} {
 		reports[0].GateLedger.PartitionPackReachability = reachability
 		matrix, err = m8BuildProductionMatrixV1(cfg, fixture, reports)
@@ -159,7 +208,7 @@ func TestM8CoupledGraphGateRequiresOneMatchedOperatingPointV1(t *testing.T) {
 
 func TestM8DecisionReportUsesLowestQuarterProbeOperatingPointV1(t *testing.T) {
 	descriptor := testM3VariantDescriptorV1(t.TempDir())
-	attribution := m8ProductionAttributionV1{GlobalExactRecallAtK: 1, OracleStagesComplete: true, PrimaryHomeOracleRecallAtK: .8, FinalMembershipOracleRecallAtK: .9, ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true, ExactRepresentativeRecallAtK: .7, ApproximateRepresentativeRecallAtK: .7, LocalHNSWRecallAtK: .7, EndToEndRecallAtK: .7}
+	attribution := m8ProductionAttributionV1{GlobalExactRecallAtK: 1, OracleStagesComplete: true, PrimaryHomeOracleRecallAtK: .8, FinalMembershipOracleRecallAtK: .9, ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true, ExactRepresentativeRecallAtK: .7, ApproximateRepresentativeRecallAtK: .7, LocalHNSWRecallAtK: .7, ApproximateLocalHNSWRecallAtK: .7, EndToEndRecallAtK: .7}
 	attribution.StageOwners = m8AttributionStageOwnersV1(attribution)
 	report := m8ProductionReportV1{Variant: &descriptor, Config: m8ProductionConfigEvidenceV1{Partitions: 32}, Rows: []m8ProductionRowV1{
 		{Status: "pass", Probes: 8, EfSearch: 128, Concurrency: 1, Attribution: attribution},
@@ -613,6 +662,23 @@ func TestM8VariantDBsParseStrictThreePathsV1(t *testing.T) {
 	}
 	if _, err := parseConfig(append(append([]string(nil), base...), "positional")); err == nil {
 		t.Fatal("accepted positional argument")
+	}
+}
+
+func TestM8ProductionSweepsRejectDuplicateCoordinatesV1(t *testing.T) {
+	base := []string{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4"}
+	for _, sweep := range [][]string{
+		{"-probes", "4,4"},
+		{"-ef-search", "128,128"},
+		{"-concurrency", "1,1"},
+		{"-overlap", "0,0"},
+	} {
+		if _, err := parseConfig(append(append([]string(nil), base...), sweep...)); err == nil {
+			t.Fatalf("accepted duplicate production sweep %v", sweep)
+		}
+	}
+	if _, err := parseConfig([]string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-probes", "1,1"}); err != nil {
+		t.Fatalf("unrelated simulation duplicate probes: %v", err)
 	}
 }
 

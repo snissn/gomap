@@ -81,6 +81,7 @@ func TestM8ProductionResourcesReportRequestRouterBudgetV1(t *testing.T) {
 		partitions:          1,
 		topK:                1,
 		routerCandidates:    7,
+		probes:              []int{1, 4},
 		concurrency:         []int{1},
 	}
 	assets := &m8ProductionMultiGroupAssetsV1{
@@ -91,17 +92,25 @@ func TestM8ProductionResourcesReportRequestRouterBudgetV1(t *testing.T) {
 		},
 		status: collections.VectorPartitionRouterRuntimeStatusV1{Representatives: 19},
 	}
-	request := m8ProductionRequestV1(assets, []float32{1}, "router-budget", 1, 1, 1, 1)
-	if request.RouterCandidateBudget != 19 {
-		t.Fatalf("request router budget=%d want retained representative count 19", request.RouterCandidateBudget)
+	request := m8ProductionApproximateRequestV1(assets, []float32{1}, "router-budget", 1, 1, 1, cfg.routerCandidates, 1)
+	if request.RouterMode != collections.VectorPartitionRouterModeApproxV1 || request.RouterCandidateBudget != 7 {
+		t.Fatalf("request=%+v want approximate router budget 7", request)
+	}
+	warmup := m8ProductionWarmupRequestV1(assets, []float32{1}, "warmup-budget", 1, cfg)
+	if warmup.RouterMode != collections.VectorPartitionRouterModeApproxV1 || warmup.RouterCandidateBudget != 7 || warmup.PartitionProbes != 4 {
+		t.Fatalf("warmup=%+v want approximate router budget 7", warmup)
+	}
+	preflight := m8ProductionRequestV1(assets, []float32{1}, "preflight-budget", 1, 1, 1, 1)
+	if preflight.RouterMode != collections.VectorPartitionRouterModeExactV1 || preflight.RouterCandidateBudget != 19 {
+		t.Fatalf("preflight=%+v want exact router budget 19", preflight)
 	}
 	got := m8ProductionResourcesV1(cfg, fixtureManifest{Vectors: 1, Dimensions: 1}, assets, nil, m8ProductionFaultResourceBoundaryV1{}, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{})
 	for _, comparison := range got.LimitComparisons {
 		if comparison.Name != "coordinator_router_candidates" {
 			continue
 		}
-		if comparison.Observed != uint64(request.RouterCandidateBudget) {
-			t.Fatalf("router comparison=%+v want actual request budget %d", comparison, request.RouterCandidateBudget)
+		if comparison.Observed != uint64(assets.status.Representatives) {
+			t.Fatalf("router comparison=%+v want exact-control budget %d", comparison, assets.status.Representatives)
 		}
 		return
 	}

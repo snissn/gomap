@@ -253,12 +253,13 @@ ordering. Empty IDs, non-finite scores, duplicate response IDs, noncanonical
 wire order, incomplete partition/group coverage, source-generation mismatch,
 or partial top-k fail closed.
 
-Production evidence schema 2 reports recall independently for the full-source
-oracle, exhaustive exact partition union, exact representative routing,
-approximate representative routing, partition-local HNSW, and end-to-end
-output. It also records exact coordinator ID/score parity and names every
-remaining loss owner. These attribution fields diagnose a red enablement gate;
-they do not turn approximate all-partition HNSW into an exact oracle.
+Production evidence schema 3 reports recall independently for the full-source/
+global exact oracle, primary-home, final-membership, exhaustive exact partition
+union, exact representative routing, approximate representative routing,
+exact-route local HNSW, approximate-route local HNSW, and end-to-end output.
+It also records exact coordinator ID/score parity and names every remaining
+loss owner. These attribution fields diagnose a red enablement gate; they do
+not turn approximate all-partition HNSW into an exact oracle.
 
 By default, `cmd/treedb_vector_partition_bench` is a sequential **simulation**. It emits
 `result_kind=simulation_only` and `production_evidence=false`; its Markdown

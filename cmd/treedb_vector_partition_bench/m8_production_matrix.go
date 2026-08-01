@@ -67,6 +67,7 @@ type m8DecisionRowV1 struct {
 
 type m8ProductionComparisonV1 struct {
 	VariantID            string  `json:"variant_id"`
+	Status               string  `json:"status"`
 	AssignmentBasis      string  `json:"assignment_basis"`
 	Overlap              float64 `json:"overlap"`
 	ArtifactSHA256       string  `json:"artifact_sha256"`
@@ -374,14 +375,7 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 			if row.Status == "unsupported" {
 				return m8ProductionMatrixV1{}, errors.New("M8 matrix contains an unsupported comparison row")
 			}
-			matrix.Comparison = append(matrix.Comparison, m8ProductionComparisonV1{
-				VariantID: report.Variant.VariantID, AssignmentBasis: report.Variant.AssignmentBasis, Overlap: report.Variant.OverlapRatio,
-				ArtifactSHA256: report.Variant.ArtifactSHA256, ReadySetDigest: report.Variant.ReadySetDigest, RouterModelDigest: report.Variant.RouterModelDigest,
-				Probes: row.Probes, EfSearch: row.EfSearch, Concurrency: row.Concurrency, Samples: row.Samples, RecallAtK: row.RecallAtK,
-				QPS: row.QPS, P50Nanos: row.P50Nanos, P95Nanos: row.P95Nanos, P99Nanos: row.P99Nanos, MaxTotalNanos: row.MaxTotalNanos, RPCs: row.RPCs,
-				RequestBytes: row.RequestBytes, CandidateBytes: row.CandidateBytes, ResponseBytes: row.ResponseBytes,
-				PersistentAssetBytes: report.Resources.PersistentAssetBytes, PeakRSSBytes: report.Resources.PeakRSSBytes,
-			})
+			matrix.Comparison = append(matrix.Comparison, m8ProductionComparisonForRowV1(*report, row))
 		}
 	}
 	for _, required := range m8RequiredVariantIDsV1 {
@@ -458,7 +452,66 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 		}
 		return a.Concurrency < b.Concurrency
 	})
+	if err := validateM8ProductionMatrixV1(matrix); err != nil {
+		return m8ProductionMatrixV1{}, err
+	}
 	return matrix, nil
+}
+
+func m8ProductionComparisonForRowV1(report m8ProductionReportV1, row m8ProductionRowV1) m8ProductionComparisonV1 {
+	return m8ProductionComparisonV1{
+		VariantID: report.Variant.VariantID, Status: row.Status, AssignmentBasis: report.Variant.AssignmentBasis, Overlap: report.Variant.OverlapRatio,
+		ArtifactSHA256: report.Variant.ArtifactSHA256, ReadySetDigest: report.Variant.ReadySetDigest, RouterModelDigest: report.Variant.RouterModelDigest,
+		Probes: row.Probes, EfSearch: row.EfSearch, Concurrency: row.Concurrency, Samples: row.Samples, RecallAtK: row.RecallAtK,
+		QPS: row.QPS, P50Nanos: row.P50Nanos, P95Nanos: row.P95Nanos, P99Nanos: row.P99Nanos, MaxTotalNanos: row.MaxTotalNanos, RPCs: row.RPCs,
+		RequestBytes: row.RequestBytes, CandidateBytes: row.CandidateBytes, ResponseBytes: row.ResponseBytes,
+		PersistentAssetBytes: report.Resources.PersistentAssetBytes, PeakRSSBytes: report.Resources.PeakRSSBytes,
+	}
+}
+
+// validateM8ProductionMatrixV1 binds every flattened comparison row to its
+// source child measurement, including its measured outcome.
+func validateM8ProductionMatrixV1(matrix m8ProductionMatrixV1) error {
+	type key struct {
+		variantID               string
+		probes, ef, concurrency int
+	}
+	sources := make(map[key]m8ProductionComparisonV1)
+	for _, report := range matrix.Variants {
+		if report.Variant == nil {
+			return errors.New("M8 matrix report is missing variant identity")
+		}
+		for _, row := range report.Rows {
+			if row.Status == "unsupported" {
+				continue
+			}
+			if row.Status != "pass" && row.Status != "fail" && row.Status != "candidate_coverage_shortfall" {
+				return errors.New("M8 matrix contains an invalid measured row status")
+			}
+			k := key{report.Variant.VariantID, row.Probes, row.EfSearch, row.Concurrency}
+			if _, exists := sources[k]; exists {
+				return errors.New("M8 matrix contains duplicate child comparison rows")
+			}
+			sources[k] = m8ProductionComparisonForRowV1(report, row)
+		}
+	}
+	if len(matrix.Comparison) != len(sources) {
+		return errors.New("M8 matrix comparison rows do not match child measurements")
+	}
+	for _, comparison := range matrix.Comparison {
+		if comparison.Status != "pass" && comparison.Status != "fail" && comparison.Status != "candidate_coverage_shortfall" {
+			return errors.New("M8 matrix comparison has an invalid measured status")
+		}
+		k := key{comparison.VariantID, comparison.Probes, comparison.EfSearch, comparison.Concurrency}
+		if expected, ok := sources[k]; !ok || comparison != expected {
+			return errors.New("M8 matrix comparison does not match child measurement")
+		}
+		delete(sources, k)
+	}
+	if len(sources) != 0 {
+		return errors.New("M8 matrix omits child comparison rows")
+	}
+	return nil
 }
 
 // m8DecisionReportV1 emits one deterministic quarter-budget attribution view

@@ -336,7 +336,7 @@ pin semantics.
 
 Measured production-code head: `3b52711665297c7396f1f86238840dee1ea2897b`
 (the documentation commit is subsequent). Status remains **experimental/off**.
-The continuation emits schema `2`, result kind
+The historical continuation below emitted schema `2`, result kind
 `m8_production_multi_group_evidence_v2`, and persists zero recall explicitly.
 
 The executable score contract is
