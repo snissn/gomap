@@ -749,7 +749,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.raftGroups, "raft-groups", 0, "M8 data Raft group count")
 	fs.IntVar(&cfg.raftNodes, "raft-nodes-per-group", 3, "M8 Raft members per data group (currently exactly 3)")
 	fs.StringVar(&concurrency, "concurrency", "1", "comma-separated M8 query concurrency")
-	fs.IntVar(&cfg.warmup, "warmup", cfg.warmup, "M8 untimed topology warmup requests before the measured sweep")
+	fs.IntVar(&cfg.warmup, "warmup", cfg.warmup, "M8 minimum untimed topology warmup requests before the measured sweep (0 disables approximate warmup)")
 	fs.StringVar(&efSearch, "ef-search", "128", "comma-separated M8 local HNSW ef_search values")
 	fs.StringVar(&cfg.profiles, "profiles", "", "M8 profile artifact directory")
 	fs.StringVar(&cfg.m8MatrixOut, "m8-matrix-out", "", "internal matrix-wide output root for child cleanliness checks")
@@ -1385,6 +1385,20 @@ func allUnique[T comparable](values []T) bool {
 	return true
 }
 
+// m8WarmupCountAndConcurrencyV1 preserves an explicit zero-warmup request;
+// otherwise it primes the approximate router at the greatest measured client
+// concurrency before timed cells begin.
+func m8WarmupCountAndConcurrencyV1(cfg config) (count, concurrency int) {
+	concurrency = 1
+	for _, value := range cfg.concurrency {
+		concurrency = max(concurrency, value)
+	}
+	if cfg.warmup == 0 {
+		return 0, concurrency
+	}
+	return max(cfg.warmup, concurrency), concurrency
+}
+
 func parseFloats(raw string) ([]float64, error) {
 	var out []float64
 	for _, s := range strings.Split(raw, ",") {
@@ -1943,9 +1957,11 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return m8BenchmarkWorkPlan{}, err
 	}
-	// Production M8 also performs one exhaustive endpoint preflight and the
-	// configured untimed warmup requests outside the measured cell sweep.
-	warmupAndPreflightPerRun, err := memoryAdd(int64(cfg.warmup), 1)
+	// Production M8 also performs one exhaustive endpoint preflight and, when
+	// enabled, enough approximate warmup requests to prime the largest measured
+	// client pool.
+	warmupCount, _ := m8WarmupCountAndConcurrencyV1(cfg)
+	warmupAndPreflightPerRun, err := memoryAdd(int64(warmupCount), 1)
 	if err != nil {
 		return m8BenchmarkWorkPlan{}, err
 	}

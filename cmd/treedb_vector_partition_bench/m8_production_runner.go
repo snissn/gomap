@@ -2057,16 +2057,24 @@ func m8WarmProductionTopologyV1(ctx context.Context, coordinator *nativewire.Vec
 		return boundary, fmt.Errorf("M8 exhaustive endpoint preflight: %w", err)
 	}
 	m8AccumulateProductionResourceBoundaryV1(&boundary, response, efSearch)
-	for i := 0; i < cfg.warmup; i++ {
+	warmupCount, warmupConcurrency := m8WarmupCountAndConcurrencyV1(cfg)
+	type warmupOutcome struct {
+		response nativewire.VectorPartitionCoordinatorResponseV1
+		err      error
+	}
+	outcomes := make([]warmupOutcome, warmupCount)
+	m8RunBoundedWorkV1(warmupCount, warmupConcurrency, func(i int) {
 		requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		response, err := coordinator.Search(requestCtx, m8ProductionWarmupRequestV1(assets, m8Query32V1(queries[i%len(queries)]), fmt.Sprintf("m8-warmup-%06d", i), efSearch, cfg))
+		outcomes[i].response, outcomes[i].err = coordinator.Search(requestCtx, m8ProductionWarmupRequestV1(assets, m8Query32V1(queries[i%len(queries)]), fmt.Sprintf("m8-warmup-%06d", i), efSearch, cfg))
 		cancel()
-		if err != nil {
-			if errors.Is(err, collections.ErrVectorPartitionRouterCandidateCoverageV1) {
+	})
+	for i, outcome := range outcomes {
+		if outcome.err != nil {
+			if errors.Is(outcome.err, collections.ErrVectorPartitionRouterCandidateCoverageV1) {
 				// Search returns a zero response on errors, but its typed
 				// coordinator error retains the observed untimed work.
 				var coordinatorErr *nativewire.VectorPartitionCoordinatorErrorV1
-				if errors.As(err, &coordinatorErr) {
+				if errors.As(outcome.err, &coordinatorErr) {
 					m8AccumulateProductionResourceBoundaryV1(&boundary, nativewire.VectorPartitionCoordinatorResponseV1{
 						Counters: coordinatorErr.Counters,
 						Timing:   coordinatorErr.Timing,
@@ -2074,9 +2082,9 @@ func m8WarmProductionTopologyV1(ctx context.Context, coordinator *nativewire.Vec
 				}
 				continue
 			}
-			return boundary, fmt.Errorf("M8 topology warmup %d: %w", i, err)
+			return boundary, fmt.Errorf("M8 topology warmup %d: %w", i, outcome.err)
 		}
-		m8AccumulateProductionResourceBoundaryV1(&boundary, response, efSearch)
+		m8AccumulateProductionResourceBoundaryV1(&boundary, outcome.response, efSearch)
 	}
 	return boundary, nil
 }

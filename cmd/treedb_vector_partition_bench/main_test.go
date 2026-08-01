@@ -2540,6 +2540,15 @@ func TestM8ConfiguredConcurrentShardRequestsCoversClientConcurrencyV1(t *testing
 	}
 }
 
+func TestM8WarmupCountAndConcurrencyPreservesZeroV1(t *testing.T) {
+	if count, concurrency := m8WarmupCountAndConcurrencyV1(config{warmup: 0, concurrency: []int{1, 16}}); count != 0 || concurrency != 16 {
+		t.Fatalf("zero warmup count/concurrency=%d/%d want 0/16", count, concurrency)
+	}
+	if count, concurrency := m8WarmupCountAndConcurrencyV1(config{warmup: 3, concurrency: []int{1, 16}}); count != 16 || concurrency != 16 {
+		t.Fatalf("enabled warmup count/concurrency=%d/%d want 16/16", count, concurrency)
+	}
+}
+
 func TestM8PartitionLoadsIncludeOverlapMembershipsV1(t *testing.T) {
 	manifest := collections.VectorPartitionManifestV1{
 		PartitionCount: 2,
