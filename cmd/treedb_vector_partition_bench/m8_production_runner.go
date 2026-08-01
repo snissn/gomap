@@ -2058,33 +2058,37 @@ func m8WarmProductionTopologyV1(ctx context.Context, coordinator *nativewire.Vec
 	}
 	m8AccumulateProductionResourceBoundaryV1(&boundary, response, efSearch)
 	warmupCount, warmupConcurrency := m8WarmupCountAndConcurrencyV1(cfg)
-	type warmupOutcome struct {
-		response nativewire.VectorPartitionCoordinatorResponseV1
-		err      error
-	}
-	outcomes := make([]warmupOutcome, warmupCount)
+	var warmupMu sync.Mutex
+	firstOrdinaryIndex := warmupCount
+	var firstOrdinaryErr error
 	m8RunBoundedWorkV1(warmupCount, warmupConcurrency, func(i int) {
 		requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		outcomes[i].response, outcomes[i].err = coordinator.Search(requestCtx, m8ProductionWarmupRequestV1(assets, m8Query32V1(queries[i%len(queries)]), fmt.Sprintf("m8-warmup-%06d", i), efSearch, cfg))
+		response, err := coordinator.Search(requestCtx, m8ProductionWarmupRequestV1(assets, m8Query32V1(queries[i%len(queries)]), fmt.Sprintf("m8-warmup-%06d", i), efSearch, cfg))
 		cancel()
-	})
-	for i, outcome := range outcomes {
-		if outcome.err != nil {
-			if errors.Is(outcome.err, collections.ErrVectorPartitionRouterCandidateCoverageV1) {
+		warmupMu.Lock()
+		defer warmupMu.Unlock()
+		if err != nil {
+			if errors.Is(err, collections.ErrVectorPartitionRouterCandidateCoverageV1) {
 				// Search returns a zero response on errors, but its typed
 				// coordinator error retains the observed untimed work.
 				var coordinatorErr *nativewire.VectorPartitionCoordinatorErrorV1
-				if errors.As(outcome.err, &coordinatorErr) {
+				if errors.As(err, &coordinatorErr) {
 					m8AccumulateProductionResourceBoundaryV1(&boundary, nativewire.VectorPartitionCoordinatorResponseV1{
 						Counters: coordinatorErr.Counters,
 						Timing:   coordinatorErr.Timing,
 					}, efSearch)
 				}
-				continue
+				return
 			}
-			return boundary, fmt.Errorf("M8 topology warmup %d: %w", i, outcome.err)
+			if i < firstOrdinaryIndex {
+				firstOrdinaryIndex, firstOrdinaryErr = i, err
+			}
+			return
 		}
-		m8AccumulateProductionResourceBoundaryV1(&boundary, outcome.response, efSearch)
+		m8AccumulateProductionResourceBoundaryV1(&boundary, response, efSearch)
+	})
+	if firstOrdinaryErr != nil {
+		return boundary, fmt.Errorf("M8 topology warmup %d: %w", firstOrdinaryIndex, firstOrdinaryErr)
 	}
 	return boundary, nil
 }
