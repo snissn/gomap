@@ -2333,6 +2333,24 @@ func TestValidM8AttributionRequiresEveryTruthRankV1(t *testing.T) {
 	if validM8AttributionV1(attribution, 1) || validM8AttributionV1(attribution, 3) {
 		t.Fatal("accepted truth-rank retention with the wrong top-k cardinality")
 	}
+	favorable := attribution
+	favorable.ExactRepresentativeRecallAtK = .9
+	favorable.ApproximateRepresentativeRecallAtK = 1
+	favorable.LocalHNSWRecallAtK = .9
+	favorable.ApproximateLocalHNSWRecallAtK = .9
+	favorable.EndToEndRecallAtK = .9
+	favorable.FinalMembershipToExactLossAtK = .1
+	favorable.ExactToApproximateLossAtK = -.1
+	favorable.ApproximateToLocalHNSWLossAtK = .1
+	favorable.ResidualLossOwners = m8AttributionLossOwnersV1(favorable)
+	favorable.StageOwners = m8AttributionStageOwnersV1(favorable)
+	if !validM8AttributionV1(favorable, 2) {
+		t.Fatalf("rejected favorable approximate routing=%+v", favorable)
+	}
+	favorable.ExactToLocalHNSWLossAtK = -.1
+	if validM8AttributionV1(favorable, 2) {
+		t.Fatalf("accepted negative non-routing loss=%+v", favorable)
+	}
 }
 
 func TestM8AttachAttributionAfterMeasurementV1(t *testing.T) {
