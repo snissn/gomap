@@ -2031,6 +2031,21 @@ func TestM8WarmupResponsesRespectMemoryCapV1(t *testing.T) {
 	}
 }
 
+func TestM8AttributionQueryConversionRespectsMemoryCapV1(t *testing.T) {
+	cfg := config{partitions: 1, overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}
+	manifest := fixtureManifest{Vectors: 1, Queries: 1, Dimensions: 1 << 20}
+	plan, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.AttributionQueryConversionBytes != 4<<20 {
+		t.Fatalf("attribution query conversion bytes=%d, want %d", plan.AttributionQueryConversionBytes, 4<<20)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, plan.ModeledPeakBytes-1); err == nil || !strings.Contains(err.Error(), "attribution_query_conversion_bytes=4194304") {
+		t.Fatalf("accepted unmodeled attribution query conversion: %v", err)
+	}
+}
+
 func TestM8SourceOracleSnapshotRespectsMemoryCapV1(t *testing.T) {
 	cfg := config{partitions: 1, overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}
 	manifest := fixtureManifest{Vectors: 1_000_000, Queries: 1, Dimensions: 512}
