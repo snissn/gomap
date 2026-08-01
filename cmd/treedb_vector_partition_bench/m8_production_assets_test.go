@@ -380,7 +380,7 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	}
 	vectors := deterministicVectors(fixture)
 	for i := range vectors {
-		vectors[i] = append([]float64(nil), vectors[0]...)
+		vectors[i] = append([]float64(nil), vectors[i]...)
 	}
 	assets, err := newM8ProductionMultiGroupAssetsV1(vectors, []string{"m8-data-group-a", "m8-data-group-b"}, 4)
 	if err != nil {
@@ -501,11 +501,26 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	if row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates != candidates {
 		t.Fatalf("row router=%s/%d want approximate/%d", row.RouterMode, row.RouterCandidates, candidates)
 	}
-	shortfall, shortfallResults, err := m8RunProductionCellV1(ctx, topology.Coordinator(), assets, attributionQueries, truth, 4, 4096, 4, 10, 4, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes)
+	tiedVectors := make([][]float64, 64)
+	for i := range tiedVectors {
+		tiedVectors[i] = append([]float64(nil), vectors[0]...)
+	}
+	shortfallAssets, err := newM8ProductionMultiGroupAssetsV1(tiedVectors, []string{"m8-data-group-a", "m8-data-group-b"}, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if shortfall.Status != "candidate_coverage_shortfall" || len(shortfallResults) != len(attributionQueries) {
+	defer shortfallAssets.Close()
+	shortfallTopology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(ctx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{Collection: shortfallAssets.collection, Manifest: shortfallAssets.manifest, RouterSource: shortfallAssets.RouterSource(), GroupAssetSetDigests: shortfallAssets.assetSetDigests, Database: "default", Catalog: "default"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shortfallTopology.Close()
+	shortfallQueries := [][]float64{tiedVectors[0], tiedVectors[0], tiedVectors[0], tiedVectors[0]}
+	shortfall, shortfallResults, err := m8RunProductionCellV1(ctx, shortfallTopology.Coordinator(), shortfallAssets, shortfallQueries, make([][]m8CanonicalResultV1, len(shortfallQueries)), 4, 4096, 4, 10, 4, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shortfall.Status != "candidate_coverage_shortfall" || len(shortfallResults) != len(shortfallQueries) {
 		t.Fatalf("candidate-coverage shortfall=%+v results=%d", shortfall, len(shortfallResults))
 	}
 	for _, results := range shortfallResults {

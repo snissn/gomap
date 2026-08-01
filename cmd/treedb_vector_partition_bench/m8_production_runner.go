@@ -1928,19 +1928,19 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 				return cell, err
 			}
 		}
-		exactLocal, _, err := harness.searchWithMetrics(ctx, query, exactPartitions, topK, efSearch, false)
+		exactLocal, exactLocalMetrics, err := harness.searchWithMetrics(ctx, query, exactPartitions, topK, efSearch, false)
 		if err != nil {
 			return cell, err
 		}
-		var localMetrics collections.VectorPartitionSearchMetricsV1
+		// These counters belong to LocalHNSWRecallAtK's exact route.
+		cell.Evidence.LocalHNSWSearches += uint64(len(exactPartitions))
+		cell.Evidence.LocalHNSWCandidates += exactLocalMetrics.Candidates
+		cell.Evidence.LocalHNSWEdges += exactLocalMetrics.Edges
 		if approximateCoverageComplete {
-			cell.Local[i], localMetrics, err = harness.searchWithMetrics(ctx, query, approximatePartitions, topK, efSearch, false)
+			cell.Local[i], _, err = harness.searchWithMetrics(ctx, query, approximatePartitions, topK, efSearch, false)
 			if err != nil {
 				return cell, err
 			}
-			cell.Evidence.LocalHNSWSearches += uint64(len(approximatePartitions))
-			cell.Evidence.LocalHNSWCandidates += localMetrics.Candidates
-			cell.Evidence.LocalHNSWEdges += localMetrics.Edges
 		}
 		exactRecall += m8CanonicalRecallV1(truth[i], exactResults)
 		approximateRecall += m8CanonicalRecallV1(truth[i], approximateResults)
