@@ -30,12 +30,15 @@ type RouterRouteResultV1 = internal.RouterRouteResultV1
 type OverlapConfig = internal.OverlapConfig
 type Membership = internal.Membership
 type Replica = internal.Replica
+type ReplicaUtilityClassV1 = internal.ReplicaUtilityClassV1
 type OverlapResult = internal.OverlapResult
 type OverlapShortfallError = internal.OverlapShortfallError
 
 const (
 	SchemaVersion                  = internal.SchemaVersion
 	MaxOverlapMembershipsPerVector = internal.MaxOverlapMembershipsPerVector
+	ReplicaUtilityPositiveGainV1   = internal.ReplicaUtilityPositiveGainV1
+	ReplicaUtilityZeroUtilityV1    = internal.ReplicaUtilityZeroUtilityV1
 )
 
 func DefaultConfig() Config         { return internal.DefaultConfig() }

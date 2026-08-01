@@ -666,7 +666,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	}
 	row.OverlapReplicas = make([]m3OverlapReplica, len(overlap.Replicas))
 	for i, replica := range overlap.Replicas {
-		row.OverlapReplicas[i] = m3OverlapReplica{SourceOrdinal: replicaSourceOrdinals[i], Destination: replica.Partition, Policy: replica.Policy, Gain: replica.Gain, Class: replica.Class}
+		row.OverlapReplicas[i] = m3OverlapReplica{SourceOrdinal: replicaSourceOrdinals[i], Destination: replica.Partition, Policy: replica.Policy, Gain: replica.Gain, Class: string(replica.Class)}
 	}
 	if !cleanup {
 		descriptor := m3VariantDescriptorV1{
@@ -1020,7 +1020,7 @@ func validateM3PartitionIndexReport(report m3PartitionIndexReport) error {
 		seenReplica := make(map[[2]uint64]struct{}, len(row.OverlapReplicas))
 		for _, replica := range row.OverlapReplicas {
 			key := [2]uint64{replica.SourceOrdinal, uint64(replica.Destination)}
-			if replica.Destination < 0 || replica.Destination >= len(row.PartitionLoads) || replica.Policy == "" || replica.Gain < 0 || (replica.Class != "positive_gain" && replica.Class != "zero_utility") {
+			if replica.Destination < 0 || replica.Destination >= len(row.PartitionLoads) || replica.Policy == "" || replica.Gain < 0 || (replica.Class != string(vectorpartition.ReplicaUtilityPositiveGainV1) && replica.Class != string(vectorpartition.ReplicaUtilityZeroUtilityV1)) {
 				return fmt.Errorf("invalid M3 overlap replica: %+v", replica)
 			}
 			if _, duplicate := seenReplica[key]; duplicate {
@@ -1028,7 +1028,7 @@ func validateM3PartitionIndexReport(report m3PartitionIndexReport) error {
 			}
 			seenReplica[key] = struct{}{}
 			utility += replica.Gain
-			if replica.Class == "positive_gain" {
+			if replica.Class == string(vectorpartition.ReplicaUtilityPositiveGainV1) {
 				if replica.Gain == 0 {
 					return fmt.Errorf("zero-gain positive M3 overlap replica: %+v", replica)
 				}

@@ -27,6 +27,15 @@ type Membership struct {
 
 const overlapReplicaPolicyV1 = "boundary_utility_v1"
 
+// ReplicaUtilityClassV1 is the authoritative utility classification for a
+// non-home membership.
+type ReplicaUtilityClassV1 string
+
+const (
+	ReplicaUtilityPositiveGainV1 ReplicaUtilityClassV1 = "positive_gain"
+	ReplicaUtilityZeroUtilityV1  ReplicaUtilityClassV1 = "zero_utility"
+)
+
 // Replica records the construction reason for one non-home membership. It is
 // diagnostic construction metadata only: no held-out query data contributes to
 // Gain or Class.
@@ -35,7 +44,7 @@ type Replica struct {
 	Partition     int
 	Policy        string
 	Gain          int
-	Class         string // positive_gain or zero_utility
+	Class         ReplicaUtilityClassV1
 }
 
 // OverlapResult is canonical (ordinal, partition order) and records budget
@@ -189,7 +198,7 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 			loads[p.part]++
 			used++
 			useful++
-			replicas = append(replicas, Replica{VectorOrdinal: p.node, Partition: p.part, Policy: overlapReplicaPolicyV1, Gain: gain, Class: "positive_gain"})
+			replicas = append(replicas, Replica{VectorOrdinal: p.node, Partition: p.part, Policy: overlapReplicaPolicyV1, Gain: gain, Class: ReplicaUtilityPositiveGainV1})
 			applied++
 		}
 		if applied == 0 {
@@ -273,10 +282,10 @@ func fillExactOverlapSlotsWithReplicas(a Artifact, members []map[int]struct{}, i
 				continue
 			}
 			gain := overlapCutReduction(members, i, partition, a.Graph.Neighbors[i], incoming[i])
-			class := "zero_utility"
+			class := ReplicaUtilityZeroUtilityV1
 			if gain > 0 {
 				useful++
-				class = "positive_gain"
+				class = ReplicaUtilityPositiveGainV1
 			} else {
 				filler++
 			}
@@ -354,13 +363,13 @@ func ValidateOverlap(a Artifact, cfg OverlapConfig, r OverlapResult) error {
 	}
 	seen := make(map[[2]int]struct{}, len(r.Memberships))
 	replicas := make(map[[2]int]Replica, len(r.Replicas))
-	utility := 0
+	utility, useful, filler := 0, 0, 0
 	destinations := make([]map[int]struct{}, a.Config.Partitions)
 	for partition := range destinations {
 		destinations[partition] = make(map[int]struct{})
 	}
 	for i, replica := range r.Replicas {
-		if replica.VectorOrdinal < 0 || replica.VectorOrdinal >= len(a.IDs) || replica.Partition < 0 || replica.Partition >= a.Config.Partitions || replica.Policy != overlapReplicaPolicyV1 || replica.Gain < 0 || (replica.Gain == 0 && replica.Class != "zero_utility") || (replica.Gain > 0 && replica.Class != "positive_gain") || (i > 0 && (replica.VectorOrdinal < r.Replicas[i-1].VectorOrdinal || replica.VectorOrdinal == r.Replicas[i-1].VectorOrdinal && replica.Partition <= r.Replicas[i-1].Partition)) {
+		if replica.VectorOrdinal < 0 || replica.VectorOrdinal >= len(a.IDs) || replica.Partition < 0 || replica.Partition >= a.Config.Partitions || replica.Policy != overlapReplicaPolicyV1 || replica.Gain < 0 || (replica.Gain == 0 && replica.Class != ReplicaUtilityZeroUtilityV1) || (replica.Gain > 0 && replica.Class != ReplicaUtilityPositiveGainV1) || (i > 0 && (replica.VectorOrdinal < r.Replicas[i-1].VectorOrdinal || replica.VectorOrdinal == r.Replicas[i-1].VectorOrdinal && replica.Partition <= r.Replicas[i-1].Partition)) {
 			return errors.New("invalid overlap replica")
 		}
 		key := [2]int{replica.VectorOrdinal, replica.Partition}
@@ -369,9 +378,14 @@ func ValidateOverlap(a Artifact, cfg OverlapConfig, r OverlapResult) error {
 		}
 		replicas[key] = replica
 		utility += replica.Gain
+		if replica.Class == ReplicaUtilityPositiveGainV1 {
+			useful++
+		} else {
+			filler++
+		}
 		destinations[replica.Partition][a.Assignment[replica.VectorOrdinal]] = struct{}{}
 	}
-	if utility != r.CumulativeUtility {
+	if utility != r.CumulativeUtility || useful != r.Useful || filler != r.Filler {
 		return errors.New("overlap utility accounting mismatch")
 	}
 	for partition := range destinations {

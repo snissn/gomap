@@ -59,7 +59,7 @@ func TestOverlapDeterministicBoundaryAndZeroEquivalent(t *testing.T) {
 		EdgeCutBefore:        4,
 		EdgeCutAfter:         0,
 		Useful:               1,
-		Replicas:             []Replica{{VectorOrdinal: 2, Partition: 0, Policy: overlapReplicaPolicyV1, Gain: 4, Class: "positive_gain"}},
+		Replicas:             []Replica{{VectorOrdinal: 2, Partition: 0, Policy: overlapReplicaPolicyV1, Gain: 4, Class: ReplicaUtilityPositiveGainV1}},
 		CumulativeUtility:    4,
 		DestinationDiversity: []int{1, 0},
 	}
@@ -111,9 +111,14 @@ func TestOverlapExactTreatmentFillsLegalNonAffinitySlotsV1(t *testing.T) {
 		t.Fatalf("exact fallback=%+v", got)
 	}
 	for _, replica := range got.Replicas {
-		if replica.Policy != overlapReplicaPolicyV1 || replica.Gain != 0 || replica.Class != "zero_utility" {
+		if replica.Policy != overlapReplicaPolicyV1 || replica.Gain != 0 || replica.Class != ReplicaUtilityZeroUtilityV1 {
 			t.Fatalf("zero-cut replica was not honestly classified: %+v", replica)
 		}
+	}
+	tampered := got
+	tampered.Useful, tampered.Filler = got.Filler, got.Useful
+	if err := ValidateOverlap(a, OverlapConfig{Ratio: .5, Capacity: 3, RequireExact: true}, tampered); err == nil {
+		t.Fatal("aggregate replica-class swap accepted")
 	}
 }
 
@@ -131,8 +136,8 @@ func TestOverlapExactTreatmentRanksUtilityBeforeOrdinalFillV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Replica{
-		{VectorOrdinal: 0, Partition: 1, Policy: overlapReplicaPolicyV1, Gain: 0, Class: "zero_utility"},
-		{VectorOrdinal: 3, Partition: 0, Policy: overlapReplicaPolicyV1, Gain: 2, Class: "positive_gain"},
+		{VectorOrdinal: 0, Partition: 1, Policy: overlapReplicaPolicyV1, Gain: 0, Class: ReplicaUtilityZeroUtilityV1},
+		{VectorOrdinal: 3, Partition: 0, Policy: overlapReplicaPolicyV1, Gain: 2, Class: ReplicaUtilityPositiveGainV1},
 	}
 	if got.Used != 2 || got.Useful != 1 || got.Filler != 1 || got.CumulativeUtility != 2 || !reflect.DeepEqual(got.Replicas, want) {
 		t.Fatalf("utility order/fill=%+v want replicas=%+v", got, want)
