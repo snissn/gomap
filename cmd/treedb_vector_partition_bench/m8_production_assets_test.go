@@ -523,6 +523,9 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	if shortfall.Status != "candidate_coverage_shortfall" || len(shortfallResults) != len(shortfallQueries) {
 		t.Fatalf("candidate-coverage shortfall=%+v results=%d", shortfall, len(shortfallResults))
 	}
+	if shortfall.MaxTotalNanos == 0 || shortfall.RequestBytes == 0 || shortfall.RPCs == 0 || shortfall.MaxRequests == 0 || shortfall.MaxRPCs == 0 {
+		t.Fatalf("candidate-coverage shortfall discarded coordinator work=%+v", shortfall)
+	}
 	for _, results := range shortfallResults {
 		if results != nil {
 			t.Fatalf("candidate-coverage shortfall retained a partial result: %+v", results)

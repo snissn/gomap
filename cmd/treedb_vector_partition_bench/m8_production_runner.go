@@ -2325,6 +2325,11 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 	for index, outcome := range outcomes {
 		if outcome.err != nil {
 			if errors.Is(outcome.err, collections.ErrVectorPartitionRouterCandidateCoverageV1) {
+				var coordinatorErr *nativewire.VectorPartitionCoordinatorErrorV1
+				if errors.As(outcome.err, &coordinatorErr) {
+					m8AccumulateProductionRowCountersV1(&row, coordinatorErr.Counters)
+					row.MaxTotalNanos = max(row.MaxTotalNanos, coordinatorErr.Timing.TotalNanos)
+				}
 				coverageShortfall = true
 				continue
 			}
