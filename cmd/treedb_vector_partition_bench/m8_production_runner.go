@@ -523,7 +523,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	} else if m8ProductionAnyGateFailsV1(report.GateLedger) {
 		report.Status = "experimental_gate_failures"
 	}
-	if err := validateM8ProductionReportV1(report); err != nil {
+	if err := validateM8ProductionReportV1(report, m8ProductionResourceCapsV1{PersistentAssetBytes: cfg.m8MaxAssetBytes, PeakRSSBytes: cfg.m8MaxRSSBytes}); err != nil {
 		return fmt.Errorf("validate M8 production report: %w", err)
 	}
 	if err := os.MkdirAll(cfg.out, 0o755); err != nil {
@@ -2754,7 +2754,7 @@ func m8ProductionGateLedgerForReportV1(report m8ProductionReportV1) m8Production
 	if report.Resources.PersistentAssetBytes > 0 && report.Resources.PeakRSSMeasured && len(report.Resources.LimitComparisons) > 0 {
 		ledger.ResourceBounds = "pass"
 		for _, comparison := range report.Resources.LimitComparisons {
-			if comparison.Configured == 0 || !comparison.Enforced || comparison.Observed > comparison.Configured {
+			if comparison.Configured == 0 || comparison.Observed > comparison.Configured {
 				ledger.ResourceBounds = "fail"
 				break
 			}
@@ -2770,7 +2770,12 @@ type m8ProductionResourceLimitConfigV1 struct {
 	Enforced   bool
 }
 
-func m8ExpectedResourceLimitConfigsV1(report m8ProductionReportV1) ([]m8ProductionResourceLimitConfigV1, bool) {
+type m8ProductionResourceCapsV1 struct {
+	PersistentAssetBytes uint64
+	PeakRSSBytes         uint64
+}
+
+func m8ExpectedResourceLimitConfigsV1(report m8ProductionReportV1, caps m8ProductionResourceCapsV1) ([]m8ProductionResourceLimitConfigV1, bool) {
 	if len(report.Config.Concurrency) == 0 {
 		return nil, false
 	}
@@ -2789,8 +2794,8 @@ func m8ExpectedResourceLimitConfigsV1(report m8ProductionReportV1) ([]m8Producti
 		return nil, false
 	}
 	return []m8ProductionResourceLimitConfigV1{
-		{"persistent_asset_bytes", report.Resources.PersistentAssetCap, "bytes", true},
-		{"process_peak_rss", report.Resources.PeakRSSCapBytes, "bytes", true},
+		{"persistent_asset_bytes", caps.PersistentAssetBytes, "bytes", true},
+		{"process_peak_rss", caps.PeakRSSBytes, "bytes", true},
 		{"coordinator_selected_partitions", uint64(coordinator.MaxSelectedPartitions), "count", true},
 		{"coordinator_groups", uint64(coordinator.MaxGroups), "count", true},
 		{"coordinator_requests", uint64(coordinator.MaxRequests), "count", true},
@@ -2823,8 +2828,11 @@ func m8ExpectedResourceLimitConfigsV1(report m8ProductionReportV1) ([]m8Producti
 	}, true
 }
 
-func validM8ResourceLimitComparisonsV1(report m8ProductionReportV1) bool {
-	expected, ok := m8ExpectedResourceLimitConfigsV1(report)
+func validM8ResourceLimitComparisonsV1(report m8ProductionReportV1, caps m8ProductionResourceCapsV1) bool {
+	if report.Resources.PersistentAssetCap != caps.PersistentAssetBytes || report.Resources.PeakRSSCapBytes != caps.PeakRSSBytes {
+		return false
+	}
+	expected, ok := m8ExpectedResourceLimitConfigsV1(report, caps)
 	if !ok || len(report.Resources.LimitComparisons) != len(expected) {
 		return false
 	}
@@ -3049,7 +3057,7 @@ func m8CanonicalPathV1(path string) (string, error) {
 	}
 }
 
-func validateM8ProductionReportV1(report m8ProductionReportV1) error {
+func validateM8ProductionReportV1(report m8ProductionReportV1, caps m8ProductionResourceCapsV1) error {
 	if report.SchemaVersion != 3 || report.ResultKind != "m8_production_multi_group_evidence_v3" ||
 		report.Mode != m8ProductionMultiGroupModeV1 || !report.ProductionEvidence ||
 		report.GeneratedAt.IsZero() || len(report.Command) == 0 || !validSHA(report.BaseSHA) || !validSHA(report.HeadSHA) ||
@@ -3147,7 +3155,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 	if !validM8RouterSessionEvidenceV1(report.RouterSessions, measuredSamples) {
 		return errors.New("incomplete M8 router-session evidence")
 	}
-	if !validM8ResourceLimitComparisonsV1(report) {
+	if !validM8ResourceLimitComparisonsV1(report, caps) {
 		return errors.New("incomplete or forged M8 resource-limit evidence")
 	}
 	if !report.Failure.Passed || report.Failure.Error == "" || report.Failure.ReturnedNeighbors != 0 || report.Failure.ReturnedGroups != 0 ||

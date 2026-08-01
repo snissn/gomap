@@ -215,6 +215,19 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	}
 }
 
+func TestM8QualificationImmutableTopologyCopiesGroupsV1(t *testing.T) {
+	head := strings.Repeat("a", 40)
+	matrix := testM8QualificationMatrixV1(t, head, m8QualificationFixturesV1[0], 120, true)
+	before := matrix.Variants[0].Topology.Groups[0]
+	_ = m8QualificationImmutableTopologyV1(matrix.Variants[0].Topology)
+	if got := matrix.Variants[0].Topology.Groups[0]; got.Endpoint != before.Endpoint || got.CommitIndex != before.CommitIndex || got.ReadIndex != before.ReadIndex || got.AppliedIndex != before.AppliedIndex || got.EndpointHits != before.EndpointHits {
+		t.Fatalf("immutable topology mutated report group: got=%+v want=%+v", got, before)
+	}
+	if err := m8ValidateQualificationMatrixDerivationV1(matrix); err != nil {
+		t.Fatalf("matrix derivation lost original topology evidence: %v", err)
+	}
+}
+
 func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 	root := filepath.Join("..", "..")
 	raw, err := os.ReadFile(filepath.Join(root, "TreeDB", "docs", "spec", "artifacts", "vector-partition-qualification-4027-plan.json"))
@@ -346,7 +359,7 @@ func testM8QualificationReportV1(t *testing.T, head string, fixture fixtureManif
 	if err := validateM3VariantDescriptorV1(descriptor); err != nil {
 		t.Fatalf("qualification descriptor: %v: %+v", err, descriptor)
 	}
-	if err := validateM8ProductionReportV1(report); err != nil {
+	if err := validateM8ProductionReportV1(report, m8ProductionResourceCapsV1{PersistentAssetBytes: 2 << 30, PeakRSSBytes: 4 << 30}); err != nil {
 		t.Fatalf("valid qualification report rejected: %v", err)
 	}
 	return report

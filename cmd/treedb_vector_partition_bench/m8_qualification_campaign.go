@@ -163,7 +163,7 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 		seenVariants := make(map[string]bool, len(m8RequiredVariantIDsV1))
 		for i := range matrix.Variants {
 			report := &matrix.Variants[i]
-			if err := validateM8ProductionReportV1(*report); err != nil {
+			if err := validateM8ProductionReportV1(*report, m8ProductionResourceCapsV1{PersistentAssetBytes: 2 << 30, PeakRSSBytes: 4 << 30}); err != nil {
 				return summary, fmt.Errorf("validate qualification child %s: %w", cleanPath, err)
 			}
 			derivedLedger := m8ProductionGateLedgerForReportV1(*report)
@@ -292,6 +292,7 @@ type m8QualificationEnvironmentV1 struct {
 // while omitting per-run listener addresses and request-progress counters.
 // Evidence() already emits groups in canonical group-ID order.
 func m8QualificationImmutableTopologyV1(topology nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1) nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1 {
+	topology.Groups = append([]nativewire.VectorPartitionM8ProductionGroupEvidenceV1(nil), topology.Groups...)
 	for i := range topology.Groups {
 		topology.Groups[i].Endpoint = ""
 		topology.Groups[i].CommitIndex = 0
