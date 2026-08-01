@@ -300,10 +300,10 @@ func TestM8AttributionOwnersKeepRouterAndLocalLossSeparateV1(t *testing.T) {
 	}{
 		{"primary ceiling", .6, .6, .6, .6, "primary_placement", "global_to_primary_home", .4},
 		{"representative router", 1, 1, .75, .75, "exact_representative_routing", "final_membership_to_exact_routing", .25},
-		{"local HNSW only", 1, 1, 1, .75, "partition_local_hnsw", "exact_routing_to_local_hnsw", .25},
+		{"local HNSW only", 1, 1, 1, .75, "partition_local_hnsw", "approximate_routing_to_local_hnsw", .25},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			attribution := m8ProductionAttributionV1{GlobalExactRecallAtK: 1, OracleStagesComplete: true, PrimaryHomeOracleRecallAtK: test.primary, FinalMembershipOracleRecallAtK: test.final, ExactRepresentativeRecallAtK: test.exact, ApproximateRepresentativeRecallAtK: test.exact, LocalHNSWRecallAtK: test.local, EndToEndRecallAtK: test.local, ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true, CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true, ApproximateRouterPartitionCoverageComplete: true}
+			attribution := m8ProductionAttributionV1{GlobalExactRecallAtK: 1, OracleStagesComplete: true, PrimaryHomeOracleRecallAtK: test.primary, FinalMembershipOracleRecallAtK: test.final, ExactRepresentativeRecallAtK: test.exact, ApproximateRepresentativeRecallAtK: test.exact, LocalHNSWRecallAtK: test.local, ApproximateLocalHNSWRecallAtK: test.local, EndToEndRecallAtK: test.local, ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true, CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true, ApproximateRouterPartitionCoverageComplete: true}
 			if !slices.Contains(m8AttributionLossOwnersV1(attribution), test.owner) {
 				t.Fatalf("owners=%v want %q", m8AttributionLossOwnersV1(attribution), test.owner)
 			}
@@ -2092,7 +2092,7 @@ func TestM8ProductionEvidenceJSONKeepsEveryTopologyDimensionV1(t *testing.T) {
 			Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1, ExhaustivePartitionRecallAtK: 1,
 			ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
 			ExactRepresentativeRecallAtK: .9, ApproximateRepresentativeRecallAtK: .8,
-			LocalHNSWRecallAtK: .7, EndToEndRecallAtK: 0,
+			LocalHNSWRecallAtK: .7, ApproximateLocalHNSWRecallAtK: .7, EndToEndRecallAtK: 0,
 			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
 			ApproximateRouterCandidateBudget: 256, ApproximateRouterPartitionCoverageComplete: true, ResidualLossOwners: []string{"partition_local_hnsw"},
 		}}},
@@ -2284,6 +2284,7 @@ func TestValidM8AttributionPersistsExhaustiveUnionFailureV1(t *testing.T) {
 		ExactRepresentativeRecallAtK:               .5,
 		ApproximateRepresentativeRecallAtK:         .5,
 		LocalHNSWRecallAtK:                         .5,
+		ApproximateLocalHNSWRecallAtK:              .5,
 		EndToEndRecallAtK:                          .5,
 		CoordinatorMergeIDParity:                   true,
 		CoordinatorMergeScoreParity:                true,
@@ -2304,7 +2305,7 @@ func TestValidM8AttributionPersistsExhaustiveUnionFailureV1(t *testing.T) {
 	legacy := m8ProductionAttributionV1{
 		Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1,
 		ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
-		ExactRepresentativeRecallAtK: .5, ApproximateRepresentativeRecallAtK: .5, LocalHNSWRecallAtK: .5, EndToEndRecallAtK: .5,
+		ExactRepresentativeRecallAtK: .5, ApproximateRepresentativeRecallAtK: .5, LocalHNSWRecallAtK: .5, ApproximateLocalHNSWRecallAtK: .5, EndToEndRecallAtK: .5,
 		CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
 		ApproximateRouterCandidateBudget: 1, ApproximateRouterPartitionCoverageComplete: true,
 	}
@@ -2319,7 +2320,7 @@ func TestValidM8AttributionRequiresEveryTruthRankV1(t *testing.T) {
 		Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1, OracleStagesComplete: true,
 		PrimaryHomeOracleRecallAtK: 1, FinalMembershipOracleRecallAtK: 1,
 		ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
-		ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1,
+		ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: 1, ApproximateLocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1,
 		CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
 		ApproximateRouterCandidateBudget: 1, ApproximateRouterPartitionCoverageComplete: true,
 		TruthNeighborRankRetentionAtK: []float64{1, 1},
@@ -2340,7 +2341,7 @@ func TestM8AttachAttributionAfterMeasurementV1(t *testing.T) {
 		Evidence: m8ProductionAttributionV1{
 			Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1,
 			ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
-			ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: .5,
+			ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: .5, ApproximateLocalHNSWRecallAtK: .5,
 			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
 			ApproximateRouterCandidateBudget: 2, ApproximateRouterPartitionCoverageComplete: true,
 		},
@@ -2363,7 +2364,7 @@ func TestM8AttributionApproximateCoverageShortfallIsOwnedV1(t *testing.T) {
 	attribution := m8ProductionAttributionV1{
 		Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1,
 		ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
-		ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 0, LocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1,
+		ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 0, LocalHNSWRecallAtK: 1, ApproximateLocalHNSWRecallAtK: 0, EndToEndRecallAtK: 1,
 		CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
 		ApproximateRouterCandidateBudget: 2, ApproximateRouterPartitionCoverageComplete: false,
 	}

@@ -159,7 +159,7 @@ func TestM8CoupledGraphGateRequiresOneMatchedOperatingPointV1(t *testing.T) {
 
 func TestM8DecisionReportUsesLowestQuarterProbeOperatingPointV1(t *testing.T) {
 	descriptor := testM3VariantDescriptorV1(t.TempDir())
-	attribution := m8ProductionAttributionV1{GlobalExactRecallAtK: 1, OracleStagesComplete: true, PrimaryHomeOracleRecallAtK: .8, FinalMembershipOracleRecallAtK: .9, ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true, ExactRepresentativeRecallAtK: .7, ApproximateRepresentativeRecallAtK: .7, LocalHNSWRecallAtK: .7, EndToEndRecallAtK: .7}
+	attribution := m8ProductionAttributionV1{GlobalExactRecallAtK: 1, OracleStagesComplete: true, PrimaryHomeOracleRecallAtK: .8, FinalMembershipOracleRecallAtK: .9, ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true, ExactRepresentativeRecallAtK: .7, ApproximateRepresentativeRecallAtK: .7, LocalHNSWRecallAtK: .7, ApproximateLocalHNSWRecallAtK: .7, EndToEndRecallAtK: .7}
 	attribution.StageOwners = m8AttributionStageOwnersV1(attribution)
 	report := m8ProductionReportV1{Variant: &descriptor, Config: m8ProductionConfigEvidenceV1{Partitions: 32}, Rows: []m8ProductionRowV1{
 		{Status: "pass", Probes: 8, EfSearch: 128, Concurrency: 1, Attribution: attribution},

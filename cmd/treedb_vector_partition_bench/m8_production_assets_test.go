@@ -79,7 +79,7 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		Rows: []m8ProductionRowV1{{Status: "pass", Probes: 4, EfSearch: 10, Concurrency: 1, Samples: fixture.Queries, RecallAtK: 1, QPS: 1, RouterMode: "exact", RouterCandidates: 1, ExactParityChecked: true, ExactParityPassed: true, NoPartialResults: true, Attribution: m8ProductionAttributionV1{
 			Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1, ExhaustivePartitionRecallAtK: 1,
 			ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
-			ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1,
+			ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: 1, ApproximateLocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1,
 			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
 			ApproximateRouterCandidateBudget: 1, ApproximateRouterPartitionCoverageComplete: true, ResidualLossOwners: []string{"none_observed"},
 		}}},
@@ -457,9 +457,12 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	if err := m8AttachAttributionV1(&row, attribution, coordinatorResults); err != nil {
 		t.Fatal(err)
 	}
+	if row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates != candidates {
+		t.Fatalf("row router=%s/%d want approximate/%d", row.RouterMode, row.RouterCandidates, candidates)
+	}
 	if row.Attribution.Contract != m8CanonicalResultContractV1 || row.Attribution.ExhaustivePartitionRecallAtK != 1 ||
 		row.Attribution.ExactRepresentativeRecallAtK != 1 || row.Attribution.ApproximateRepresentativeRecallAtK != 1 ||
-		row.Attribution.LocalHNSWRecallAtK != 1 || row.Attribution.EndToEndRecallAtK != 1 ||
+		row.Attribution.LocalHNSWRecallAtK != 1 || row.Attribution.ApproximateLocalHNSWRecallAtK != 1 || row.Attribution.EndToEndRecallAtK != 1 ||
 		!row.Attribution.ExhaustivePartitionIDParity || !row.Attribution.ExhaustivePartitionScoreParity ||
 		!row.Attribution.CoordinatorMergeIDParity || !row.Attribution.CoordinatorMergeScoreParity || !row.NoPartialResults {
 		t.Fatalf("attribution=%+v", row.Attribution)

@@ -100,8 +100,8 @@ func TestM8ProductionResourcesReportRequestRouterBudgetV1(t *testing.T) {
 		if comparison.Name != "coordinator_router_candidates" {
 			continue
 		}
-		if comparison.Observed != uint64(request.RouterCandidateBudget) {
-			t.Fatalf("router comparison=%+v want actual request budget %d", comparison, request.RouterCandidateBudget)
+		if comparison.Observed != uint64(assets.status.Representatives) {
+			t.Fatalf("router comparison=%+v want exact-control budget %d", comparison, assets.status.Representatives)
 		}
 		return
 	}
