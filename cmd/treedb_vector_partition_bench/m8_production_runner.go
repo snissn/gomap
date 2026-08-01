@@ -2950,7 +2950,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 		if row.Status == "candidate_coverage_shortfall" {
 			if row.Probes < 1 || row.Probes > report.Config.Partitions ||
 				row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries ||
-				row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates < row.Probes || row.RouterCandidates > report.Config.RouterCandidates || row.RouterCandidates != row.Attribution.ApproximateRouterCandidateBudget || row.NoPartialResults || row.ExactParityChecked || row.ExactParityPassed ||
+				row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates < 1 || row.RouterCandidates > report.Config.RouterCandidates || row.RouterCandidates != row.Attribution.ApproximateRouterCandidateBudget || row.NoPartialResults || row.ExactParityChecked || row.ExactParityPassed ||
 				row.RecallAtK != 0 || row.QPS != 0 || row.P50Nanos != 0 || row.P95Nanos != 0 || row.P99Nanos != 0 ||
 				row.Attribution.LocalHNSWSearches == 0 || row.Attribution.LocalHNSWCandidates == 0 ||
 				row.Attribution.ApproximateRouterPartitionCoverageComplete || row.Attribution.ApproximateRepresentativeRecallAtK != 0 || row.Attribution.ApproximateLocalHNSWRecallAtK != 0 || row.Attribution.ApproximateLocalHNSWSearches != 0 || row.Attribution.ApproximateLocalHNSWCandidates != 0 || row.Attribution.ApproximateLocalHNSWEdges != 0 || row.Attribution.EndToEndRecallAtK != 0 ||
