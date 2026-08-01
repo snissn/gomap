@@ -46,6 +46,31 @@ func requireM8PersistentAssetSupportV1(t testing.TB) {
 	}
 }
 
+type m8CoverageShortfallRouterSourceV1 struct {
+	nativewire.VectorPartitionCoordinatorRouterSourceV1
+	failed int32
+}
+
+func (s *m8CoverageShortfallRouterSourceV1) OpenVectorPartitionCoordinatorRouterV1(ctx context.Context, index string, generation uint64) (nativewire.VectorPartitionCoordinatorRouterV1, error) {
+	router, err := s.VectorPartitionCoordinatorRouterSourceV1.OpenVectorPartitionCoordinatorRouterV1(ctx, index, generation)
+	if err != nil {
+		return nil, err
+	}
+	return m8CoverageShortfallRouterV1{VectorPartitionCoordinatorRouterV1: router, failed: &s.failed}, nil
+}
+
+type m8CoverageShortfallRouterV1 struct {
+	nativewire.VectorPartitionCoordinatorRouterV1
+	failed *int32
+}
+
+func (r m8CoverageShortfallRouterV1) SearchWithContextV1(ctx context.Context, query []float32, opts collections.VectorPartitionRouterSearchOptionsV1) (collections.VectorPartitionRouterSearchResultV1, error) {
+	if atomic.CompareAndSwapInt32(r.failed, 0, 1) {
+		return collections.VectorPartitionRouterSearchResultV1{}, collections.ErrVectorPartitionRouterCandidateCoverageV1
+	}
+	return r.VectorPartitionCoordinatorRouterV1.SearchWithContextV1(ctx, query, opts)
+}
+
 const m8ProductionTopologyTestTimeoutV1 = 80 * time.Second
 
 func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
@@ -82,8 +107,8 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 			ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: 1, ApproximateLocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1,
 			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
 			ApproximateRouterCandidateBudget: 4, ApproximateRouterPartitionCoverageComplete: true,
-			LocalHNSWSearches: 4, LocalHNSWCandidates: 4, LocalHNSWEdges: 4,
-			ApproximateLocalHNSWSearches: 4, ApproximateLocalHNSWCandidates: 4, ApproximateLocalHNSWEdges: 4,
+			LocalHNSWSearches: uint64(fixture.Queries) * 4, LocalHNSWCandidates: 4, LocalHNSWEdges: 4,
+			ApproximateLocalHNSWSearches: uint64(fixture.Queries) * 4, ApproximateLocalHNSWCandidates: 4, ApproximateLocalHNSWEdges: 4,
 			ResidualLossOwners: []string{"none_observed"},
 		}}},
 		PackDiagnostics: diagnostics(loads),
@@ -136,6 +161,18 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		"missing_approximate_local_candidates": func(row *m8ProductionRowV1) {
 			row.Attribution.ApproximateLocalHNSWCandidates = 0
 		},
+		"too_few_exact_local_searches": func(row *m8ProductionRowV1) {
+			row.Attribution.LocalHNSWSearches--
+		},
+		"too_many_exact_local_searches": func(row *m8ProductionRowV1) {
+			row.Attribution.LocalHNSWSearches++
+		},
+		"too_few_approximate_local_searches": func(row *m8ProductionRowV1) {
+			row.Attribution.ApproximateLocalHNSWSearches--
+		},
+		"too_many_approximate_local_searches": func(row *m8ProductionRowV1) {
+			row.Attribution.ApproximateLocalHNSWSearches++
+		},
 	} {
 		t.Run("rejects_"+name, func(t *testing.T) {
 			invalid := report
@@ -156,8 +193,8 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	shortfall := report
 	shortfall.Rows = append([]m8ProductionRowV1(nil), report.Rows...)
 	shortfall.Rows[0].Status = "candidate_coverage_shortfall"
-	shortfall.Rows[0].RouterCandidates = 1
-	shortfall.Rows[0].Attribution.ApproximateRouterCandidateBudget = 1
+	shortfall.Rows[0].RouterCandidates = 4
+	shortfall.Rows[0].Attribution.ApproximateRouterCandidateBudget = 4
 	shortfall.Rows[0].RecallAtK, shortfall.Rows[0].QPS = 0, 0
 	shortfall.Rows[0].ExactParityChecked, shortfall.Rows[0].ExactParityPassed, shortfall.Rows[0].NoPartialResults = false, false, false
 	shortfall.Rows[0].Attribution.ApproximateRepresentativeRecallAtK = 0
@@ -555,26 +592,14 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	if row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates != candidates {
 		t.Fatalf("row router=%s/%d want approximate/%d", row.RouterMode, row.RouterCandidates, candidates)
 	}
-	tiedVectors := make([][]float64, 64)
-	for i := range tiedVectors {
-		tiedVectors[i] = append([]float64(nil), vectors[0]...)
-	}
-	shortfallAssets, err := newM8ProductionMultiGroupAssetsV1(tiedVectors, []string{"m8-data-group-a", "m8-data-group-b"}, 4)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer shortfallAssets.Close()
-	shortfallTopology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(ctx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{Collection: shortfallAssets.collection, Manifest: shortfallAssets.manifest, RouterSource: shortfallAssets.RouterSource(), GroupAssetSetDigests: shortfallAssets.assetSetDigests, Database: "default", Catalog: "default"})
+	shortfallSource := &m8CoverageShortfallRouterSourceV1{VectorPartitionCoordinatorRouterSourceV1: assets.RouterSource()}
+	shortfallTopology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(ctx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{Collection: assets.collection, Manifest: assets.manifest, RouterSource: shortfallSource, GroupAssetSetDigests: assets.assetSetDigests, Database: "default", Catalog: "default"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer shortfallTopology.Close()
-	shortfallQueries := [][]float64{tiedVectors[0], tiedVectors[0], tiedVectors[0], tiedVectors[0]}
-	// The router contract accepts a positive approximate candidate budget below
-	// probes and returns the typed coverage error when it cannot cover them.
-	// One candidate can select at most one partition, so it deterministically
-	// shortfalls four requested probes on every platform.
-	shortfall, shortfallResults, err := m8RunProductionCellV1(ctx, shortfallTopology.Coordinator(), shortfallAssets, shortfallQueries, make([][]m8CanonicalResultV1, len(shortfallQueries)), 4, 4096, 4, 10, 1, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes)
+	shortfallQueries := [][]float64{vectors[0], vectors[1], vectors[2], vectors[3]}
+	shortfall, shortfallResults, err := m8RunProductionCellV1(ctx, shortfallTopology.Coordinator(), assets, shortfallQueries, make([][]m8CanonicalResultV1, len(shortfallQueries)), 4, 4096, 4, 10, 4, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
