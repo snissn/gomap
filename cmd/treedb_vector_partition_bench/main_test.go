@@ -2012,7 +2012,7 @@ func TestM8CurrentCellOutcomesRespectMemoryCapV1(t *testing.T) {
 }
 
 func TestM8WarmupResponsesRespectMemoryCapV1(t *testing.T) {
-	manifest := fixtureManifest{Vectors: 1, Queries: 1, Dimensions: 1}
+	manifest := fixtureManifest{Vectors: 1, Queries: 1, Dimensions: 128}
 	base := config{partitions: 1, overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{256}, topK: 1}
 	withoutWarmup, err := validateM8BenchmarkWork(base, manifest, math.MaxInt64, math.MaxInt64)
 	if err != nil {
@@ -2023,8 +2023,11 @@ func TestM8WarmupResponsesRespectMemoryCapV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if withoutWarmup.CurrentCellOutcomes != 1 || withWarmup.CurrentCellOutcomes != 256 || withWarmup.CurrentCellOutcomeBytes <= withoutWarmup.CurrentCellOutcomeBytes {
+	if withoutWarmup.CurrentCellOutcomes != 1 || withWarmup.CurrentCellOutcomes != 256 || withWarmup.CurrentCellOutcomeBytes <= withoutWarmup.CurrentCellOutcomeBytes || withoutWarmup.CurrentQueryConversionBytes != 512 || withWarmup.CurrentQueryConversionBytes != 131072 {
 		t.Fatalf("warmup response plan without=%+v with=%+v", withoutWarmup, withWarmup)
+	}
+	if _, err := validateM8BenchmarkWork(base, manifest, math.MaxInt64, withWarmup.ModeledPeakBytes-1); err == nil || !strings.Contains(err.Error(), "current_query_conversion_bytes=131072") {
+		t.Fatalf("accepted unmodeled warmup query conversions: %v", err)
 	}
 }
 
