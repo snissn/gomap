@@ -2423,6 +2423,23 @@ func m8AttachAttributionV1(row *m8ProductionRowV1, attribution m8AttributionCell
 		return errors.New("M8 attribution result cardinality mismatch")
 	}
 	row.Attribution = attribution.Evidence
+	if row.Status == "candidate_coverage_shortfall" {
+		row.Attribution.ApproximateRouterPartitionCoverageComplete = false
+		row.Attribution.ApproximateRepresentativeRecallAtK = 0
+		row.Attribution.ApproximateLocalHNSWRecallAtK = 0
+		row.Attribution.ApproximateLocalHNSWSearches = 0
+		row.Attribution.ApproximateLocalHNSWCandidates = 0
+		row.Attribution.ApproximateLocalHNSWEdges = 0
+		row.Attribution.EndToEndRecallAtK = 0
+		row.Attribution.CoordinatorMergeIDParity = false
+		row.Attribution.CoordinatorMergeScoreParity = false
+		row.Attribution.ExactToApproximateLossAtK = row.Attribution.ExactRepresentativeRecallAtK
+		row.Attribution.ApproximateToLocalHNSWLossAtK = 0
+		row.Attribution.ApproximateLocalToEndToEndLossAtK = 0
+		row.Attribution.ResidualLossOwners = m8AttributionLossOwnersV1(row.Attribution)
+		row.Attribution.StageOwners = m8AttributionStageOwnersV1(row.Attribution)
+		return nil
+	}
 	if !row.Attribution.ApproximateRouterPartitionCoverageComplete {
 		row.Attribution.CoordinatorMergeIDParity = false
 		row.Attribution.CoordinatorMergeScoreParity = false

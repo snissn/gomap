@@ -2379,6 +2379,7 @@ func TestM8AttachAttributionAfterMeasurementV1(t *testing.T) {
 			ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: .5, ApproximateLocalHNSWRecallAtK: .5,
 			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
 			ApproximateRouterCandidateBudget: 2, ApproximateRouterPartitionCoverageComplete: true,
+			LocalHNSWSearches: 4, LocalHNSWCandidates: 2,
 		},
 		Local: [][]m8CanonicalResultV1{{{ID: "a", Score: 1}}, {{ID: "b", Score: 1}}},
 	}
@@ -2392,6 +2393,17 @@ func TestM8AttachAttributionAfterMeasurementV1(t *testing.T) {
 	}
 	if err := m8AttachAttributionV1(&m8ProductionRowV1{Samples: 1}, cell, coordinator); err == nil {
 		t.Fatal("accepted post-measurement attribution cardinality mismatch")
+	}
+	shortfall := m8ProductionRowV1{Status: "candidate_coverage_shortfall", Samples: 2}
+	if err := m8AttachAttributionV1(&shortfall, cell, coordinator); err != nil {
+		t.Fatal(err)
+	}
+	if shortfall.Attribution.ApproximateRouterPartitionCoverageComplete || shortfall.Attribution.ApproximateRepresentativeRecallAtK != 0 ||
+		shortfall.Attribution.ApproximateLocalHNSWRecallAtK != 0 || shortfall.Attribution.ApproximateLocalHNSWSearches != 0 || shortfall.Attribution.ApproximateLocalHNSWCandidates != 0 || shortfall.Attribution.ApproximateLocalHNSWEdges != 0 ||
+		shortfall.Attribution.EndToEndRecallAtK != 0 || shortfall.Attribution.CoordinatorMergeIDParity || shortfall.Attribution.CoordinatorMergeScoreParity ||
+		shortfall.Attribution.ExactToApproximateLossAtK != shortfall.Attribution.ExactRepresentativeRecallAtK || shortfall.Attribution.ApproximateToLocalHNSWLossAtK != 0 ||
+		shortfall.Attribution.ApproximateLocalToEndToEndLossAtK != 0 || shortfall.Attribution.LocalHNSWRecallAtK != .5 || shortfall.Attribution.LocalHNSWSearches != 4 || !validM8AttributionV1(shortfall.Attribution, 1) {
+		t.Fatalf("shortfall attribution=%+v", shortfall.Attribution)
 	}
 }
 
