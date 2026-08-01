@@ -2011,6 +2011,23 @@ func TestM8CurrentCellOutcomesRespectMemoryCapV1(t *testing.T) {
 	}
 }
 
+func TestM8WarmupResponsesRespectMemoryCapV1(t *testing.T) {
+	manifest := fixtureManifest{Vectors: 1, Queries: 1, Dimensions: 1}
+	base := config{partitions: 1, overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{256}, topK: 1}
+	withoutWarmup, err := validateM8BenchmarkWork(base, manifest, math.MaxInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.warmup = 1
+	withWarmup, err := validateM8BenchmarkWork(base, manifest, math.MaxInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withoutWarmup.CurrentCellOutcomes != 1 || withWarmup.CurrentCellOutcomes != 256 || withWarmup.CurrentCellOutcomeBytes <= withoutWarmup.CurrentCellOutcomeBytes {
+		t.Fatalf("warmup response plan without=%+v with=%+v", withoutWarmup, withWarmup)
+	}
+}
+
 func TestM8SourceOracleSnapshotRespectsMemoryCapV1(t *testing.T) {
 	cfg := config{partitions: 1, overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 1}
 	manifest := fixtureManifest{Vectors: 1_000_000, Queries: 1, Dimensions: 512}

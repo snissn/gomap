@@ -1960,7 +1960,7 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	// Production M8 also performs one exhaustive endpoint preflight and, when
 	// enabled, enough approximate warmup requests to prime the largest measured
 	// client pool.
-	warmupCount, _ := m8WarmupCountAndConcurrencyV1(cfg)
+	warmupCount, warmupConcurrency := m8WarmupCountAndConcurrencyV1(cfg)
 	warmupAndPreflightPerRun, err := memoryAdd(int64(warmupCount), 1)
 	if err != nil {
 		return m8BenchmarkWorkPlan{}, err
@@ -2117,7 +2117,10 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		if err != nil {
 			return plan, err
 		}
-		plan.CurrentCellOutcomes = int64(m.Queries)
+		// Timed cells retain one response per query. Enabled warmup workers can
+		// concurrently hold full responses before each worker summarizes one, so
+		// charge that larger transient response set too.
+		plan.CurrentCellOutcomes = int64(max(m.Queries, min(warmupCount, warmupConcurrency)))
 		plan.CurrentCellOutcomeBytes, err = memoryMul(plan.CurrentCellOutcomes, perOutcomeBytes)
 		if err != nil {
 			return plan, err
