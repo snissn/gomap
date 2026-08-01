@@ -2063,10 +2063,17 @@ func m8WarmProductionTopologyV1(ctx context.Context, coordinator *nativewire.Vec
 	}
 	m8AccumulateProductionResourceBoundaryV1(&boundary, response, efSearch)
 	warmupCount, warmupConcurrency := m8WarmupCountAndConcurrencyV1(cfg)
+	warmupWorkers := min(warmupCount, warmupConcurrency)
+	var warmupStart sync.WaitGroup
+	warmupStart.Add(warmupWorkers)
 	var warmupMu sync.Mutex
 	firstOrdinaryIndex := warmupCount
 	var firstOrdinaryErr error
 	m8RunBoundedWorkV1(warmupCount, warmupConcurrency, func(i int) {
+		if i < warmupWorkers {
+			warmupStart.Done()
+			warmupStart.Wait()
+		}
 		requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		response, err := coordinator.Search(requestCtx, m8ProductionWarmupRequestV1(assets, m8Query32V1(queries[i%len(queries)]), fmt.Sprintf("m8-warmup-%06d", i), efSearch, cfg))
 		cancel()
