@@ -379,6 +379,9 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	vectors := deterministicVectors(fixture)
+	for i := range vectors {
+		vectors[i] = append([]float64(nil), vectors[0]...)
+	}
 	assets, err := newM8ProductionMultiGroupAssetsV1(vectors, []string{"m8-data-group-a", "m8-data-group-b"}, 4)
 	if err != nil {
 		t.Fatal(err)
@@ -497,6 +500,18 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	}
 	if row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates != candidates {
 		t.Fatalf("row router=%s/%d want approximate/%d", row.RouterMode, row.RouterCandidates, candidates)
+	}
+	shortfall, shortfallResults, err := m8RunProductionCellV1(ctx, topology.Coordinator(), assets, attributionQueries, truth, 4, 4096, 4, 10, 4, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shortfall.Status != "candidate_coverage_shortfall" || len(shortfallResults) != len(attributionQueries) {
+		t.Fatalf("candidate-coverage shortfall=%+v results=%d", shortfall, len(shortfallResults))
+	}
+	for _, results := range shortfallResults {
+		if results != nil {
+			t.Fatalf("candidate-coverage shortfall retained a partial result: %+v", results)
+		}
 	}
 	if row.Attribution.Contract != m8CanonicalResultContractV1 || row.Attribution.ExhaustivePartitionRecallAtK != 1 ||
 		row.Attribution.ExactRepresentativeRecallAtK != 1 || row.Attribution.ApproximateRepresentativeRecallAtK != 1 ||
