@@ -109,7 +109,6 @@ type config struct {
 	coordinator           *m6CoordinatorHarnessV1
 	routerConfig          vectorpartition.RouterConfigV1
 	routerCandidates      int
-	routerCandidatesSet   bool
 	sourceHNSWDegree      int
 	mode                  string
 	raftGroups            int
@@ -791,9 +790,10 @@ func parseConfig(args []string) (config, error) {
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
+	routerCandidatesSet := false
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "router-candidates" {
-			cfg.routerCandidatesSet = true
+			routerCandidatesSet = true
 		}
 	})
 	if fs.NArg() != 0 {
@@ -829,7 +829,7 @@ func parseConfig(args []string) (config, error) {
 	if cfg.probes, err = parseInts(probes); err != nil {
 		return config{}, fmt.Errorf("probes: %w", err)
 	}
-	if cfg.stage == m8ProductionMultiGroupModeV1 && !cfg.routerCandidatesSet {
+	if cfg.stage == m8ProductionMultiGroupModeV1 && !routerCandidatesSet {
 		cfg.routerCandidates = 64
 		for _, probes := range cfg.probes {
 			if probes > cfg.routerCandidates {
