@@ -146,6 +146,9 @@ type m8ProductionAttributionV1 struct {
 	LocalHNSWSearches                                 uint64                      `json:"partition_local_hnsw_searches"`
 	LocalHNSWCandidates                               uint64                      `json:"partition_local_hnsw_candidates"`
 	LocalHNSWEdges                                    uint64                      `json:"partition_local_hnsw_edges"`
+	ApproximateLocalHNSWSearches                      uint64                      `json:"approximate_partition_local_hnsw_searches"`
+	ApproximateLocalHNSWCandidates                    uint64                      `json:"approximate_partition_local_hnsw_candidates"`
+	ApproximateLocalHNSWEdges                         uint64                      `json:"approximate_partition_local_hnsw_edges"`
 	EndToEndRecallAtK                                 float64                     `json:"end_to_end_recall_at_k"`
 	CoordinatorMergeIDParity                          bool                        `json:"coordinator_merge_id_parity"`
 	CoordinatorMergeScoreParity                       bool                        `json:"coordinator_merge_score_parity"`
@@ -1937,10 +1940,14 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 		cell.Evidence.LocalHNSWCandidates += exactLocalMetrics.Candidates
 		cell.Evidence.LocalHNSWEdges += exactLocalMetrics.Edges
 		if approximateCoverageComplete {
-			cell.Local[i], _, err = harness.searchWithMetrics(ctx, query, approximatePartitions, topK, efSearch, false)
+			var approximateLocalMetrics collections.VectorPartitionSearchMetricsV1
+			cell.Local[i], approximateLocalMetrics, err = harness.searchWithMetrics(ctx, query, approximatePartitions, topK, efSearch, false)
 			if err != nil {
 				return cell, err
 			}
+			cell.Evidence.ApproximateLocalHNSWSearches += uint64(len(approximatePartitions))
+			cell.Evidence.ApproximateLocalHNSWCandidates += approximateLocalMetrics.Candidates
+			cell.Evidence.ApproximateLocalHNSWEdges += approximateLocalMetrics.Edges
 		}
 		exactRecall += m8CanonicalRecallV1(truth[i], exactResults)
 		approximateRecall += m8CanonicalRecallV1(truth[i], approximateResults)
@@ -2930,7 +2937,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 				row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries ||
 				row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates < row.Probes || row.RouterCandidates > report.Config.RouterCandidates || row.RouterCandidates != row.Attribution.ApproximateRouterCandidateBudget || row.NoPartialResults || row.ExactParityChecked || row.ExactParityPassed ||
 				row.RecallAtK != 0 || row.QPS != 0 || row.P50Nanos != 0 || row.P95Nanos != 0 || row.P99Nanos != 0 ||
-				row.Attribution.ApproximateRouterPartitionCoverageComplete || row.Attribution.ApproximateRepresentativeRecallAtK != 0 || row.Attribution.ApproximateLocalHNSWRecallAtK != 0 || row.Attribution.EndToEndRecallAtK != 0 ||
+				row.Attribution.ApproximateRouterPartitionCoverageComplete || row.Attribution.ApproximateRepresentativeRecallAtK != 0 || row.Attribution.ApproximateLocalHNSWRecallAtK != 0 || row.Attribution.ApproximateLocalHNSWSearches != 0 || row.Attribution.ApproximateLocalHNSWCandidates != 0 || row.Attribution.ApproximateLocalHNSWEdges != 0 || row.Attribution.EndToEndRecallAtK != 0 ||
 				row.Attribution.CoordinatorMergeIDParity || row.Attribution.CoordinatorMergeScoreParity || !validM8AttributionV1(row.Attribution, report.Config.TopK) {
 				return errors.New("malformed M8 candidate-coverage shortfall row")
 			}
@@ -2944,7 +2951,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 		if row.Status != "pass" && row.Status != "fail" || row.Probes < 1 || row.Probes > report.Config.Partitions ||
 			row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries || row.QPS <= 0 ||
 			row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates < row.Probes || row.RouterCandidates > report.Config.RouterCandidates || row.RouterCandidates != row.Attribution.ApproximateRouterCandidateBudget || !row.Attribution.ApproximateRouterPartitionCoverageComplete || row.ExactParityPassed && !row.ExactParityChecked || row.ExactParityChecked && row.Probes != report.Config.Partitions || !row.NoPartialResults ||
-			math.Float64bits(row.RecallAtK) != math.Float64bits(row.Attribution.EndToEndRecallAtK) ||
+			math.Float64bits(row.RecallAtK) != math.Float64bits(row.Attribution.EndToEndRecallAtK) || row.Attribution.ApproximateLocalHNSWSearches == 0 || row.Attribution.ApproximateLocalHNSWCandidates == 0 || row.Attribution.ApproximateLocalHNSWEdges == 0 ||
 			!validM8AttributionV1(row.Attribution, report.Config.TopK) {
 			return errors.New("malformed measured M8 row")
 		}
@@ -2990,7 +2997,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 func validM8AttributionV1(attribution m8ProductionAttributionV1, topK int) bool {
 	if attribution.Contract != m8CanonicalResultContractV1 || attribution.GlobalExactRecallAtK != 1 ||
 		attribution.ApproximateRouterCandidateBudget < 1 ||
-		(!attribution.ApproximateRouterPartitionCoverageComplete && attribution.ApproximateRepresentativeRecallAtK != 0) ||
+		(!attribution.ApproximateRouterPartitionCoverageComplete && (attribution.ApproximateRepresentativeRecallAtK != 0 || attribution.ApproximateLocalHNSWSearches != 0 || attribution.ApproximateLocalHNSWCandidates != 0 || attribution.ApproximateLocalHNSWEdges != 0)) ||
 		!slices.Equal(attribution.ResidualLossOwners, m8AttributionLossOwnersV1(attribution)) || !slices.Equal(attribution.StageOwners, m8AttributionStageOwnersV1(attribution)) {
 		return false
 	}

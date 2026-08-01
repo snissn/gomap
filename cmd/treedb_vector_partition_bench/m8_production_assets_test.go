@@ -81,7 +81,9 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 			ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
 			ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: 1, ApproximateLocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1,
 			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
-			ApproximateRouterCandidateBudget: 4, ApproximateRouterPartitionCoverageComplete: true, ResidualLossOwners: []string{"none_observed"},
+			ApproximateRouterCandidateBudget: 4, ApproximateRouterPartitionCoverageComplete: true,
+			ApproximateLocalHNSWSearches: 4, ApproximateLocalHNSWCandidates: 4, ApproximateLocalHNSWEdges: 4,
+			ResidualLossOwners: []string{"none_observed"},
 		}}},
 		PackDiagnostics: diagnostics(loads),
 		UntimedBoundary: m8ProductionResourceBoundaryV1{SelectedPartitions: 4, EfSearch: 10, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 2, RPCs: 1, RequestBytes: 1, ShardPartitions: 2, ShardRequestBytes: 1}},
@@ -116,6 +118,9 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	shortfall.Rows[0].ExactParityChecked, shortfall.Rows[0].ExactParityPassed, shortfall.Rows[0].NoPartialResults = false, false, false
 	shortfall.Rows[0].Attribution.ApproximateRepresentativeRecallAtK = 0
 	shortfall.Rows[0].Attribution.ApproximateLocalHNSWRecallAtK = 0
+	shortfall.Rows[0].Attribution.ApproximateLocalHNSWSearches = 0
+	shortfall.Rows[0].Attribution.ApproximateLocalHNSWCandidates = 0
+	shortfall.Rows[0].Attribution.ApproximateLocalHNSWEdges = 0
 	shortfall.Rows[0].Attribution.EndToEndRecallAtK = 0
 	shortfall.Rows[0].Attribution.CoordinatorMergeIDParity, shortfall.Rows[0].Attribution.CoordinatorMergeScoreParity = false, false
 	shortfall.Rows[0].Attribution.ApproximateRouterPartitionCoverageComplete = false
@@ -534,6 +539,8 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	if row.Attribution.Contract != m8CanonicalResultContractV1 || row.Attribution.ExhaustivePartitionRecallAtK != 1 ||
 		row.Attribution.ExactRepresentativeRecallAtK != 1 || row.Attribution.ApproximateRepresentativeRecallAtK != 1 ||
 		row.Attribution.LocalHNSWRecallAtK != 1 || row.Attribution.ApproximateLocalHNSWRecallAtK != 1 || row.Attribution.EndToEndRecallAtK != 1 ||
+		row.Attribution.LocalHNSWSearches == 0 || row.Attribution.LocalHNSWCandidates == 0 || row.Attribution.LocalHNSWEdges == 0 ||
+		row.Attribution.ApproximateLocalHNSWSearches == 0 || row.Attribution.ApproximateLocalHNSWCandidates == 0 || row.Attribution.ApproximateLocalHNSWEdges == 0 ||
 		!row.Attribution.ExhaustivePartitionIDParity || !row.Attribution.ExhaustivePartitionScoreParity ||
 		!row.Attribution.CoordinatorMergeIDParity || !row.Attribution.CoordinatorMergeScoreParity || !row.NoPartialResults {
 		t.Fatalf("attribution=%+v", row.Attribution)
