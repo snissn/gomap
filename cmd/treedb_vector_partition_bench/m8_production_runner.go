@@ -2937,6 +2937,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 				row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries ||
 				row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates < row.Probes || row.RouterCandidates > report.Config.RouterCandidates || row.RouterCandidates != row.Attribution.ApproximateRouterCandidateBudget || row.NoPartialResults || row.ExactParityChecked || row.ExactParityPassed ||
 				row.RecallAtK != 0 || row.QPS != 0 || row.P50Nanos != 0 || row.P95Nanos != 0 || row.P99Nanos != 0 ||
+				row.Attribution.LocalHNSWSearches == 0 || row.Attribution.LocalHNSWCandidates == 0 || row.Attribution.LocalHNSWEdges == 0 ||
 				row.Attribution.ApproximateRouterPartitionCoverageComplete || row.Attribution.ApproximateRepresentativeRecallAtK != 0 || row.Attribution.ApproximateLocalHNSWRecallAtK != 0 || row.Attribution.ApproximateLocalHNSWSearches != 0 || row.Attribution.ApproximateLocalHNSWCandidates != 0 || row.Attribution.ApproximateLocalHNSWEdges != 0 || row.Attribution.EndToEndRecallAtK != 0 ||
 				row.Attribution.CoordinatorMergeIDParity || row.Attribution.CoordinatorMergeScoreParity || !validM8AttributionV1(row.Attribution, report.Config.TopK) {
 				return errors.New("malformed M8 candidate-coverage shortfall row")
@@ -2951,7 +2952,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 		if row.Status != "pass" && row.Status != "fail" || row.Probes < 1 || row.Probes > report.Config.Partitions ||
 			row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries || row.QPS <= 0 ||
 			row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates < row.Probes || row.RouterCandidates > report.Config.RouterCandidates || row.RouterCandidates != row.Attribution.ApproximateRouterCandidateBudget || !row.Attribution.ApproximateRouterPartitionCoverageComplete || row.ExactParityPassed && !row.ExactParityChecked || row.ExactParityChecked && row.Probes != report.Config.Partitions || !row.NoPartialResults ||
-			math.Float64bits(row.RecallAtK) != math.Float64bits(row.Attribution.EndToEndRecallAtK) || row.Attribution.ApproximateLocalHNSWSearches == 0 || row.Attribution.ApproximateLocalHNSWCandidates == 0 || row.Attribution.ApproximateLocalHNSWEdges == 0 ||
+			math.Float64bits(row.RecallAtK) != math.Float64bits(row.Attribution.EndToEndRecallAtK) || row.Attribution.LocalHNSWSearches == 0 || row.Attribution.LocalHNSWCandidates == 0 || row.Attribution.LocalHNSWEdges == 0 || row.Attribution.ApproximateLocalHNSWSearches == 0 || row.Attribution.ApproximateLocalHNSWCandidates == 0 || row.Attribution.ApproximateLocalHNSWEdges == 0 ||
 			!validM8AttributionV1(row.Attribution, report.Config.TopK) {
 			return errors.New("malformed measured M8 row")
 		}

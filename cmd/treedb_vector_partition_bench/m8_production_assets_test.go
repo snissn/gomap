@@ -82,6 +82,7 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 			ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: 1, ApproximateLocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1,
 			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
 			ApproximateRouterCandidateBudget: 4, ApproximateRouterPartitionCoverageComplete: true,
+			LocalHNSWSearches: 4, LocalHNSWCandidates: 4, LocalHNSWEdges: 4,
 			ApproximateLocalHNSWSearches: 4, ApproximateLocalHNSWCandidates: 4, ApproximateLocalHNSWEdges: 4,
 			ResidualLossOwners: []string{"none_observed"},
 		}}},
@@ -100,6 +101,9 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		"candidate_budget_above_config": func(row *m8ProductionRowV1) {
 			row.RouterCandidates = 5
 			row.Attribution.ApproximateRouterCandidateBudget = 5
+		},
+		"missing_exact_local_work": func(row *m8ProductionRowV1) {
+			row.Attribution.LocalHNSWSearches = 0
 		},
 	} {
 		t.Run("rejects_"+name, func(t *testing.T) {
