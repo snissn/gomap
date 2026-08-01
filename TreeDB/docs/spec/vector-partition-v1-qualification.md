@@ -39,6 +39,12 @@ index hashes every matrix, requires one exact head and corpus/truth/variant
 identity across the repeats, and derives median/min/max QPS plus p95 spread;
 it must not imply that unlisted sweep rows were repeated.
 
+The graph builder has a separate scalar-distance envelope from M3's exact
+oracle visit cap: the retained 100k corpus uses 20B and the 250k corpus uses
+50B, a linear 2.5x scaling of the same per-source-row allowance. Every graph
+M3 command binds its corpus-specific `-partition-max-distance-work` alongside
+its independent M3 visit cap.
+
 ## Gates and disposition
 
 The executable M8 matrix gates exact exhaustive parity, failure honesty,

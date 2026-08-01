@@ -145,9 +145,11 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 		Corpora []struct {
 			ID, Dataset, Checksum string
 			Vectors               int   `json:"vectors"`
+			GraphCap              int64 `json:"partition_max_distance_work"`
 			M3Cap                 int64 `json:"m3_max_benchmark_visits"`
 			M8Cap                 int64 `json:"m8_max_exact_truth_visits"`
 		} `json:"corpora"`
+		Commands map[string]string `json:"commands"`
 	}
 	if err := json.Unmarshal(raw, &plan); err != nil {
 		t.Fatal(err)
@@ -155,8 +157,11 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 	if plan.SchemaVersion != 1 || plan.ResultKind != "vector_partition_structured_qualification_campaign_plan_v1" || plan.Status != "planned_no_measurement" || plan.Candidate.Variant != "graph-overlap-020-v1" || plan.Candidate.RouterCandidates != 64 || !slices.Equal(plan.Candidate.Probes, []int{1, 2, 4, 8, 16}) || !slices.Equal(plan.Candidate.RepeatedProbes, []int{4, 16}) || plan.Candidate.Repetitions != 3 || len(plan.Corpora) != 2 {
 		t.Fatalf("plan=%+v", plan)
 	}
-	if plan.Corpora[1].Dataset != "testdata/vector_partition_qualification_embedding_mixture_250k" || plan.Corpora[1].Vectors != 250000 || plan.Corpora[1].Checksum != "d0c7c82ba868853aae9a4280161003d72714ad1701d41ed3169c2fa94d470d69" || plan.Corpora[1].M3Cap != 900000000 || plan.Corpora[1].M8Cap != 1500000000 {
+	if plan.Corpora[0].GraphCap != 20000000000 || plan.Corpora[1].Dataset != "testdata/vector_partition_qualification_embedding_mixture_250k" || plan.Corpora[1].Vectors != 250000 || plan.Corpora[1].Checksum != "d0c7c82ba868853aae9a4280161003d72714ad1701d41ed3169c2fa94d470d69" || plan.Corpora[1].GraphCap != 50000000000 || plan.Corpora[1].M3Cap != 900000000 || plan.Corpora[1].M8Cap != 1500000000 {
 		t.Fatalf("250k plan=%+v", plan.Corpora[1])
+	}
+	if !strings.Contains(plan.Commands["m3_graph_disjoint"], "-partition-max-distance-work <graph-cap>") || !strings.Contains(plan.Commands["m3_graph_overlap"], "-partition-max-distance-work <graph-cap>") {
+		t.Fatalf("graph commands do not bind corpus-specific scalar cap: %+v", plan.Commands)
 	}
 }
 
