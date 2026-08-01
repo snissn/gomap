@@ -29,6 +29,7 @@ type VectorPartitionProductionTopologyOptionsV1 struct {
 	RouterSource        VectorPartitionCoordinatorRouterSourceV1
 	ReplicatedLifecycle VectorPartitionReplicatedLifecycleAuthorityV1
 	Endpoints           map[raftcluster.GroupID]string
+	NodeEndpoints       map[raftcluster.GroupID]map[raftcluster.NodeID]string
 	Shards              []VectorPartitionProductionShardV1
 	CoordinatorLimits   VectorPartitionCoordinatorLimitsV1
 	ShardLimits         VectorPartitionShardSearchLimitsV1
@@ -45,6 +46,7 @@ type VectorPartitionProductionTopologyStatusV1 struct {
 // Callers retain ownership of Raft, catalog, lifecycle, and local asset sources.
 type VectorPartitionProductionTopologyV1 struct {
 	coordinator *VectorPartitionCoordinatorV1
+	dispatcher  *VectorPartitionShardSearchTCPDispatcherV1
 	listeners   map[raftcluster.GroupID]net.Listener
 	endpoints   map[raftcluster.GroupID]string
 	services    map[raftcluster.GroupID]*VectorPartitionShardSearchServiceV1
@@ -63,8 +65,8 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 	if err := opts.Catalog.ValidateVectorPartitionPlacementV1(opts.Placement); err != nil {
 		return nil, fmt.Errorf("nativewire: production vector topology placement: %w", err)
 	}
-	if len(opts.Endpoints) == 0 || len(opts.Shards) == 0 {
-		return nil, errors.New("nativewire: production vector topology requires endpoints and local shards")
+	if len(opts.Endpoints) == 0 {
+		return nil, errors.New("nativewire: production vector topology requires owner endpoints")
 	}
 	h := &VectorPartitionProductionTopologyV1{listeners: make(map[raftcluster.GroupID]net.Listener), endpoints: make(map[raftcluster.GroupID]string, len(opts.Endpoints)), services: make(map[raftcluster.GroupID]*VectorPartitionShardSearchServiceV1), conns: make(map[net.Conn]struct{})}
 	defer func() {
@@ -82,6 +84,9 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 		}
 		h.endpoints[group] = endpoint
 	}
+	if len(h.endpoints) != len(owners) {
+		return nil, errors.New("nativewire: production vector topology has incomplete owner endpoint coverage")
+	}
 	for _, shard := range opts.Shards {
 		if shard.GroupID == "" || shard.Listener == nil || shard.Service == nil || !owners[shard.GroupID] || h.listeners[shard.GroupID] != nil {
 			return nil, fmt.Errorf("nativewire: production vector topology shard %q is invalid", shard.GroupID)
@@ -91,10 +96,11 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 		}
 		h.listeners[shard.GroupID], h.services[shard.GroupID] = shard.Listener, shard.Service
 	}
-	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherV1(h.endpoints)
+	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherWithNodeEndpointsV1(h.endpoints, opts.NodeEndpoints)
 	if err != nil {
 		return nil, err
 	}
+	h.dispatcher = dispatcher
 	h.coordinator, err = NewVectorPartitionCoordinatorV1(VectorPartitionCoordinatorOptionsV1{Catalog: opts.Catalog, Placement: opts.Placement, RouterSource: opts.RouterSource, Dispatcher: dispatcher, ReplicatedLifecycle: opts.ReplicatedLifecycle, RequireReplicatedLifecycle: true, Limits: opts.CoordinatorLimits, ShardLimits: opts.ShardLimits})
 	if err != nil {
 		return nil, err
@@ -145,7 +151,7 @@ func (h *VectorPartitionProductionTopologyV1) Status() VectorPartitionProduction
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	status := VectorPartitionProductionTopologyStatusV1{Ready: !h.closed && h.coordinator != nil && len(h.listeners) != 0, Closed: h.closed, Endpoints: make(map[raftcluster.GroupID]string, len(h.endpoints))}
+	status := VectorPartitionProductionTopologyStatusV1{Ready: !h.closed && h.coordinator != nil, Closed: h.closed, Endpoints: make(map[raftcluster.GroupID]string, len(h.endpoints))}
 	for group, endpoint := range h.endpoints {
 		status.Endpoints[group] = endpoint
 	}
@@ -176,6 +182,9 @@ func (h *VectorPartitionProductionTopologyV1) Close() error {
 		}
 		h.mu.Unlock()
 		h.wg.Wait()
+		if h.dispatcher != nil {
+			errs = append(errs, h.dispatcher.Close())
+		}
 		if h.coordinator != nil {
 			errs = append(errs, h.coordinator.Close())
 		}
