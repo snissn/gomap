@@ -131,6 +131,11 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 				matrix.Variants[i].Resources.PeakRSSCapBytes--
 			}
 		},
+		"host_drift": func(matrix *m8ProductionMatrixV1) {
+			for i := range matrix.Variants {
+				matrix.Variants[i].Host.CPUModel = "different-host"
+			}
+		},
 		"wrong_repeat_schedule": func(matrix *m8ProductionMatrixV1) {
 			for i := range matrix.Variants {
 				matrix.Variants[i].Config.Probes = []int{4, 8, 16}

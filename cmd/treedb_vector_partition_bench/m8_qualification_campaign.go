@@ -300,14 +300,14 @@ func m8ValidateQualificationMatrixDerivationV1(matrix m8ProductionMatrixV1) erro
 func m8QualificationHasFullLadderV1(report m8ProductionReportV1) bool {
 	seen := make(map[int]bool, 5)
 	for _, row := range report.Rows {
-		if m8QualificationQualifiedRowV1(report, row) {
+		if m8QualificationQualifiedRowV1(row) {
 			seen[row.Probes] = true
 		}
 	}
 	return seen[1] && seen[2] && seen[4] && seen[8] && seen[16]
 }
 
-func m8QualificationQualifiedRowV1(report m8ProductionReportV1, row m8ProductionRowV1) bool {
+func m8QualificationQualifiedRowV1(row m8ProductionRowV1) bool {
 	return row.Status == "pass" && row.EfSearch == 64 && row.Concurrency == 1 && row.RouterMode == collections.VectorPartitionRouterModeApproxV1 && row.RouterCandidates == 64 && row.Attribution.OracleStagesComplete
 }
 
@@ -323,7 +323,7 @@ func m8QualificationRowsV1(report m8ProductionReportV1) (*m8ProductionRowV1, *m8
 	var p4, p16 *m8ProductionRowV1
 	for i := range report.Rows {
 		row := &report.Rows[i]
-		if !m8QualificationQualifiedRowV1(report, *row) {
+		if !m8QualificationQualifiedRowV1(*row) {
 			continue
 		}
 		switch row.Probes {
