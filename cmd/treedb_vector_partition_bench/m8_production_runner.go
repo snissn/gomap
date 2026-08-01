@@ -2062,6 +2062,18 @@ func m8WarmProductionTopologyV1(ctx context.Context, coordinator *nativewire.Vec
 		response, err := coordinator.Search(requestCtx, m8ProductionWarmupRequestV1(assets, m8Query32V1(queries[i%len(queries)]), fmt.Sprintf("m8-warmup-%06d", i), efSearch, cfg))
 		cancel()
 		if err != nil {
+			if errors.Is(err, collections.ErrVectorPartitionRouterCandidateCoverageV1) {
+				// Search returns a zero response on errors, but its typed
+				// coordinator error retains the observed untimed work.
+				var coordinatorErr *nativewire.VectorPartitionCoordinatorErrorV1
+				if errors.As(err, &coordinatorErr) {
+					m8AccumulateProductionResourceBoundaryV1(&boundary, nativewire.VectorPartitionCoordinatorResponseV1{
+						Counters: coordinatorErr.Counters,
+						Timing:   coordinatorErr.Timing,
+					}, efSearch)
+				}
+				continue
+			}
 			return boundary, fmt.Errorf("M8 topology warmup %d: %w", i, err)
 		}
 		m8AccumulateProductionResourceBoundaryV1(&boundary, response, efSearch)

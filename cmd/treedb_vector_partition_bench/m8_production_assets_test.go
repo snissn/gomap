@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -49,6 +50,8 @@ func requireM8PersistentAssetSupportV1(t testing.TB) {
 type m8CoverageShortfallRouterSourceV1 struct {
 	nativewire.VectorPartitionCoordinatorRouterSourceV1
 	failed int32
+	calls  int32
+	err    error
 }
 
 func (s *m8CoverageShortfallRouterSourceV1) OpenVectorPartitionCoordinatorRouterV1(ctx context.Context, index string, generation uint64) (nativewire.VectorPartitionCoordinatorRouterV1, error) {
@@ -56,17 +59,25 @@ func (s *m8CoverageShortfallRouterSourceV1) OpenVectorPartitionCoordinatorRouter
 	if err != nil {
 		return nil, err
 	}
-	return m8CoverageShortfallRouterV1{VectorPartitionCoordinatorRouterV1: router, failed: &s.failed}, nil
+	return m8CoverageShortfallRouterV1{VectorPartitionCoordinatorRouterV1: router, failed: &s.failed, calls: &s.calls, err: s.err}, nil
 }
 
 type m8CoverageShortfallRouterV1 struct {
 	nativewire.VectorPartitionCoordinatorRouterV1
 	failed *int32
+	calls  *int32
+	err    error
 }
 
 func (r m8CoverageShortfallRouterV1) SearchWithContextV1(ctx context.Context, query []float32, opts collections.VectorPartitionRouterSearchOptionsV1) (collections.VectorPartitionRouterSearchResultV1, error) {
-	if atomic.CompareAndSwapInt32(r.failed, 0, 1) {
-		return collections.VectorPartitionRouterSearchResultV1{}, collections.ErrVectorPartitionRouterCandidateCoverageV1
+	if opts.Mode == collections.VectorPartitionRouterModeApproxV1 {
+		call := atomic.AddInt32(r.calls, 1)
+		if atomic.CompareAndSwapInt32(r.failed, 0, 1) {
+			return collections.VectorPartitionRouterSearchResultV1{}, collections.ErrVectorPartitionRouterCandidateCoverageV1
+		}
+		if call == 2 && r.err != nil {
+			return collections.VectorPartitionRouterSearchResultV1{}, r.err
+		}
 	}
 	return r.VectorPartitionCoordinatorRouterV1.SearchWithContextV1(ctx, query, opts)
 }
@@ -598,6 +609,17 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	}
 	if row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates != candidates {
 		t.Fatalf("row router=%s/%d want approximate/%d", row.RouterMode, row.RouterCandidates, candidates)
+	}
+	warmupErr := errors.New("warmup ordinary error")
+	warmupSource := &m8CoverageShortfallRouterSourceV1{VectorPartitionCoordinatorRouterSourceV1: assets.RouterSource(), err: warmupErr}
+	warmupTopology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(ctx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{Collection: assets.collection, Manifest: assets.manifest, RouterSource: warmupSource, GroupAssetSetDigests: assets.assetSetDigests, Database: "default", Catalog: "default"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer warmupTopology.Close()
+	_, err = m8WarmProductionTopologyV1(ctx, warmupTopology.Coordinator(), assets, [][]float64{vectors[0]}, config{topK: 10, efSearch: []int{4096}, probes: []int{4}, routerCandidates: 4, warmup: 2})
+	if !errors.Is(err, warmupErr) || atomic.LoadInt32(&warmupSource.failed) != 1 || atomic.LoadInt32(&warmupSource.calls) != 2 {
+		t.Fatalf("warmup error=%v typed=%d approximate calls=%d", err, warmupSource.failed, warmupSource.calls)
 	}
 	shortfallSource := &m8CoverageShortfallRouterSourceV1{VectorPartitionCoordinatorRouterSourceV1: assets.RouterSource()}
 	shortfallTopology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(ctx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{Collection: assets.collection, Manifest: assets.manifest, RouterSource: shortfallSource, GroupAssetSetDigests: assets.assetSetDigests, Database: "default", Catalog: "default"})
