@@ -1791,15 +1791,19 @@ func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 	}
 	if cfg.stage != m8ProductionMultiGroupModeV1 || cfg.raftGroups != 4 || cfg.raftNodes != 3 ||
 		fmt.Sprint(cfg.probes) != "[1 4 16]" || fmt.Sprint(cfg.overlaps) != "[0 0.2]" ||
-		fmt.Sprint(cfg.concurrency) != "[1 16 64]" || cfg.warmup != 3 || fmt.Sprint(cfg.efSearch) != "[64 4096]" || cfg.m8ExistingDB != "/retained/m8-assets" {
+		fmt.Sprint(cfg.concurrency) != "[1 16 64]" || cfg.warmup != 3 || fmt.Sprint(cfg.efSearch) != "[64 4096]" || cfg.routerCandidates != 64 || cfg.m8ExistingDB != "/retained/m8-assets" {
 		t.Fatalf("M8 config=%+v", cfg)
 	}
 	limit := nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxSelectedPartitions
-	if _, err := parseConfig([]string{
+	boundary, err := parseConfig([]string{
 		"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(),
 		"-partitions", strconv.Itoa(limit), "-raft-groups", "2",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("rejected M8 coordinator partition boundary %d: %v", limit, err)
+	}
+	if boundary.routerCandidates != limit {
+		t.Fatalf("M8 coordinator partition boundary candidates=%d want %d", boundary.routerCandidates, limit)
 	}
 	for _, args := range [][]string{
 		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "1"},

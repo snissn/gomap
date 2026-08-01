@@ -109,6 +109,7 @@ type config struct {
 	coordinator           *m6CoordinatorHarnessV1
 	routerConfig          vectorpartition.RouterConfigV1
 	routerCandidates      int
+	routerCandidatesSet   bool
 	sourceHNSWDegree      int
 	mode                  string
 	raftGroups            int
@@ -725,7 +726,7 @@ func parseConfig(args []string) (config, error) {
 		partitionAssignment: partitionAssignmentGraphV1,
 		kahipTimeout:        kahipDefaultTimeout,
 		partition:           vectorpartition.DefaultConfig(), routerConfig: vectorpartition.DefaultRouterConfigV1(),
-		routerCandidates: 64, sourceHNSWDegree: partitionHNSWDegree,
+		routerCandidates: 1024, sourceHNSWDegree: partitionHNSWDegree,
 		m8MaxRSSBytes: uint64(maxFixtureBytes), m8MaxAssetBytes: uint64(maxFixtureBytes), m8MaxExactTruthVisits: maxBenchmarkWorkUnits,
 		m8CoordinatorLimits: nativewire.DefaultVectorPartitionCoordinatorLimitsV1(),
 		m8ShardLimits:       nativewire.DefaultVectorPartitionShardSearchLimitsV1(),
@@ -790,6 +791,11 @@ func parseConfig(args []string) (config, error) {
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "router-candidates" {
+			cfg.routerCandidatesSet = true
+		}
+	})
 	if fs.NArg() != 0 {
 		return config{}, fmt.Errorf("unexpected positional arguments: %q", fs.Args())
 	}
@@ -822,6 +828,14 @@ func parseConfig(args []string) (config, error) {
 	var err error
 	if cfg.probes, err = parseInts(probes); err != nil {
 		return config{}, fmt.Errorf("probes: %w", err)
+	}
+	if cfg.stage == m8ProductionMultiGroupModeV1 && !cfg.routerCandidatesSet {
+		cfg.routerCandidates = 64
+		for _, probes := range cfg.probes {
+			if probes > cfg.routerCandidates {
+				cfg.routerCandidates = probes
+			}
+		}
 	}
 	if cfg.overlaps, err = parseFloats(overlap); err != nil {
 		return config{}, fmt.Errorf("overlap: %w", err)
