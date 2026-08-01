@@ -426,7 +426,13 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	measuredCells := make([]m8MeasuredCellV1, 0, len(cfg.overlaps)*len(cfg.probes)*len(cfg.efSearch)*len(cfg.concurrency))
 	for _, overlap := range cfg.overlaps {
 		if assets.descriptor == nil && overlap != 0 {
-			report.Rows = append(report.Rows, m8ProductionRowV1{Status: "unsupported", UnsupportedReason: "nonzero overlap requires an immutable retained M3 variant descriptor", Overlap: overlap})
+			for _, probes := range cfg.probes {
+				for _, ef := range cfg.efSearch {
+					for _, concurrency := range cfg.concurrency {
+						report.Rows = append(report.Rows, m8ProductionRowV1{Status: "unsupported", UnsupportedReason: "nonzero overlap requires an immutable retained M3 variant descriptor", Overlap: overlap, Probes: probes, EfSearch: ef, Concurrency: concurrency})
+					}
+				}
+			}
 			continue
 		}
 		for _, probes := range cfg.probes {
@@ -3184,6 +3190,9 @@ func validateM8ProductionReportV1(report m8ProductionReportV1, caps m8Production
 	if len(report.Rows) == 0 {
 		return errors.New("M8 report has no measurement rows")
 	}
+	if err := validateM8ProductionMeasurementCellsV1(report.Config, report.Rows); err != nil {
+		return err
+	}
 	if !validM8PartitionLoadsV1(report) || !validM8PartitionPackDiagnosticsV1(report.PackDiagnostics, report.Config.Partitions, report.Resources.PartitionLoads) || report.GateLedger.PartitionPackReachability != "pass" {
 		return errors.New("M8 report has incomplete or unreachable partition-pack diagnostics")
 	}
@@ -3262,6 +3271,71 @@ func validateM8ProductionReportV1(report m8ProductionReportV1, caps m8Production
 				return fmt.Errorf("M8 profile %q is missing or empty", path)
 			}
 		}
+	}
+	return nil
+}
+
+type m8ProductionMeasurementCellKeyV1 struct {
+	overlap     uint64
+	probes      int
+	efSearch    int
+	concurrency int
+}
+
+func validateM8ProductionMeasurementCellsV1(cfg m8ProductionConfigEvidenceV1, rows []m8ProductionRowV1) error {
+	if len(cfg.Probes) == 0 || len(cfg.EfSearch) == 0 || len(cfg.Concurrency) == 0 || len(cfg.Overlap) == 0 ||
+		!allUnique(cfg.Probes) || !allUnique(cfg.EfSearch) || !allUnique(cfg.Concurrency) || !allUnique(cfg.Overlap) {
+		return errors.New("M8 measurement axes must be non-empty and unique")
+	}
+	for _, probes := range cfg.Probes {
+		if probes < 1 || probes > cfg.Partitions || probes > cfg.RouterCandidates {
+			return errors.New("M8 configured probe axis is invalid")
+		}
+	}
+	for _, efSearch := range cfg.EfSearch {
+		if efSearch < cfg.TopK || efSearch > nativewire.DefaultVectorPartitionShardSearchLimitsV1().MaxEfSearch {
+			return errors.New("M8 configured ef-search axis is invalid")
+		}
+	}
+	for _, concurrency := range cfg.Concurrency {
+		if concurrency < 1 || concurrency > 256 {
+			return errors.New("M8 configured concurrency axis is invalid")
+		}
+	}
+	for _, overlap := range cfg.Overlap {
+		if math.IsNaN(overlap) || math.IsInf(overlap, 0) || overlap < 0 || overlap > 1 {
+			return errors.New("M8 configured overlap axis is invalid")
+		}
+	}
+	expected := 1
+	for _, axis := range []int{len(cfg.Overlap), len(cfg.Probes), len(cfg.EfSearch), len(cfg.Concurrency)} {
+		if expected > math.MaxInt/axis {
+			return errors.New("M8 measurement cell count overflow")
+		}
+		expected *= axis
+	}
+	if len(rows) != expected {
+		return errors.New("M8 rows do not exactly cover configured measurement cells")
+	}
+	configured := make(map[m8ProductionMeasurementCellKeyV1]struct{}, expected)
+	for _, overlap := range cfg.Overlap {
+		for _, probes := range cfg.Probes {
+			for _, efSearch := range cfg.EfSearch {
+				for _, concurrency := range cfg.Concurrency {
+					configured[m8ProductionMeasurementCellKeyV1{math.Float64bits(overlap), probes, efSearch, concurrency}] = struct{}{}
+				}
+			}
+		}
+	}
+	for _, row := range rows {
+		key := m8ProductionMeasurementCellKeyV1{math.Float64bits(row.Overlap), row.Probes, row.EfSearch, row.Concurrency}
+		if _, ok := configured[key]; !ok {
+			return errors.New("M8 row uses an unconfigured measurement cell")
+		}
+		delete(configured, key)
+	}
+	if len(configured) != 0 {
+		return errors.New("M8 rows omit configured measurement cells")
 	}
 	return nil
 }

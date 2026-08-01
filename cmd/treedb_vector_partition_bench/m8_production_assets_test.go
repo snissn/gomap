@@ -143,7 +143,7 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		SchemaVersion: 3, ResultKind: "m8_production_multi_group_evidence_v3", Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true,
 		GeneratedAt: time.Now(), Command: []string{"m8-test"}, BaseSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		GoVersion: "go1.test", GOOS: "linux", GOARCH: "amd64", LogicalCPUs: 1, GOMAXPROCS: 1, GoMemoryLimitBytes: 1,
-		Dataset: fixture, Config: m8ProductionConfigEvidenceV1{RaftGroups: 2, RaftNodesPerGroup: 3, Partitions: 4, TopK: 10, Concurrency: []int{1}, RouterCandidates: 4}, BuildNanos: 1,
+		Dataset: fixture, Config: m8ProductionConfigEvidenceV1{RaftGroups: 2, RaftNodesPerGroup: 3, Partitions: 4, Probes: []int{4}, Overlap: []float64{0}, TopK: 10, Concurrency: []int{1}, EfSearch: []int{10}, RouterCandidates: 4}, BuildNanos: 1,
 		Topology:       nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{Network: "tcp_loopback_serialized_m5_v1", LifecycleState: "active", ReadySetDigest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", MetaGroup: "meta", MetaLeader: "meta-leader", MetaNodes: []string{"meta-a", "meta-b", "meta-c"}, MaxConcurrentShardRequests: 1, Groups: []nativewire.VectorPartitionM8ProductionGroupEvidenceV1{group("group-a", 1), group("group-b", 1)}},
 		RouterSessions: m8ProductionRouterSessionEvidenceV1{AfterWarmup: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, LeasePins: 1, LeaseReleases: 1}}, AfterMeasured: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, Hits: uint64(fixture.Queries), LeasePins: uint64(fixture.Queries) + 1, LeaseReleases: uint64(fixture.Queries) + 1}}},
 		Rows: []m8ProductionRowV1{{Status: "pass", Probes: 4, EfSearch: 10, Concurrency: 1, Samples: fixture.Queries, RecallAtK: 1, QPS: 1, P50Nanos: 1, P95Nanos: 2, P99Nanos: 3, MaxTotalNanos: 4, RouterMode: collections.VectorPartitionRouterModeApproxV1, RouterCandidates: 4, ExactParityChecked: true, ExactParityPassed: true, NoPartialResults: true, Attribution: m8ProductionAttributionV1{
@@ -194,6 +194,26 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	testM8CompleteResourceLimitsV1(t, &report)
 	if err := testM8ValidateProductionReportV1(report); err != nil {
 		t.Fatalf("valid endpoint coverage rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*m8ProductionReportV1){
+		"duplicate_cell": func(invalid *m8ProductionReportV1) {
+			invalid.Rows = append(append([]m8ProductionRowV1(nil), invalid.Rows...), invalid.Rows[0])
+		},
+		"missing_cell": func(invalid *m8ProductionReportV1) {
+			invalid.Config.Probes = []int{2, 4}
+		},
+		"unconfigured_cell": func(invalid *m8ProductionReportV1) {
+			invalid.Rows = append([]m8ProductionRowV1(nil), invalid.Rows...)
+			invalid.Rows[0].Probes = 3
+		},
+	} {
+		t.Run("rejects_"+name, func(t *testing.T) {
+			invalid := report
+			mutate(&invalid)
+			if err := testM8ValidateProductionReportV1(invalid); err == nil {
+				t.Fatalf("accepted %s measurement cell", name)
+			}
+		})
 	}
 	for name, mutate := range map[string]func(*m8ProductionReportV1){
 		"forged_limit_pass": func(invalid *m8ProductionReportV1) {
@@ -399,7 +419,11 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	measuredRows := report.Rows
 	measuredAfter := report.RouterSessions.AfterMeasured
 	measuredResources := report.Resources
-	report.Rows = []m8ProductionRowV1{{Status: "unsupported", UnsupportedReason: "overlap assets unavailable", Overlap: .2}}
+	variantEvidence := report.Variant
+	configOverlap := report.Config.Overlap
+	report.Variant = nil
+	report.Config.Overlap = []float64{.2}
+	report.Rows = []m8ProductionRowV1{{Status: "unsupported", UnsupportedReason: "overlap assets unavailable", Overlap: .2, Probes: 4, EfSearch: 10, Concurrency: 1}}
 	report.RouterSessions.AfterMeasured = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), report.RouterSessions.AfterWarmup...)
 	testM8CompleteResourceLimitsV1(t, &report)
 	if err := testM8ValidateProductionReportV1(report); err != nil {
@@ -408,6 +432,8 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	report.Rows = measuredRows
 	report.RouterSessions.AfterMeasured = measuredAfter
 	report.Resources = measuredResources
+	report.Variant = variantEvidence
+	report.Config.Overlap = configOverlap
 	report.Resources.PeakRSSMeasured = true
 	if err := testM8ValidateProductionReportV1(report); err == nil {
 		t.Fatal("accepted measured peak RSS without an explicit scope")
