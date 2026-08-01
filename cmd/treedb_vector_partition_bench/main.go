@@ -2074,65 +2074,66 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
+	maxProbes, maxEFSearch, maxConcurrency := 0, 0, 0
+	for _, probes := range cfg.probes {
+		maxProbes = max(maxProbes, probes)
+	}
+	for _, efSearch := range cfg.efSearch {
+		maxEFSearch = max(maxEFSearch, efSearch)
+	}
+	for _, concurrency := range cfg.concurrency {
+		maxConcurrency = max(maxConcurrency, concurrency)
+	}
+	// m8RunProductionCellV1 retains every raw response until the full cell has
+	// completed. Bound the largest response shape, including the backing arrays
+	// and harness-owned identity strings that are not included in the response
+	// struct or the retained canonical top-k matrices.
+	neighborBytes, err := memoryMul(int64(cfg.topK), int64(unsafe.Sizeof(nativewire.VectorPartitionCoordinatorNeighborV1{}))+documentIDStorageBytes)
+	if err != nil {
+		return plan, err
+	}
+	partitionBytes, err := memoryMul(int64(maxProbes), int64(unsafe.Sizeof(uint32(0))))
+	if err != nil {
+		return plan, err
+	}
+	// Group IDs and the response digests reference generation-pinned topology
+	// storage; each response owns the group string headers, not duplicate backing
+	// strings. RequestID is formatted per query and remains owned by the outcome.
+	maxGroups := min(maxProbes, cfg.raftGroups)
+	if maxGroups < 1 {
+		maxGroups = maxProbes // conservative for direct planner callers without parsed defaults
+	}
+	groupBytes, err := memoryMul(int64(maxGroups), int64(unsafe.Sizeof("")))
+	if err != nil {
+		return plan, err
+	}
+	requestIDStorageBytes := int64(len(fmt.Sprintf("m8-q-%06d-p-%04d-ef-%06d-c-%03d", max(0, m.Queries-1), maxProbes, maxEFSearch, maxConcurrency)))
+	perOutcomeBytes, err := memoryAdd(
+		int64(unsafe.Sizeof(m8ProductionCellOutcomeV1{})),
+		neighborBytes,
+		partitionBytes,
+		groupBytes,
+		requestIDStorageBytes,
+	)
+	if err != nil {
+		return plan, err
+	}
+	// Timed cells retain one response per query. Enabled warmup workers can
+	// concurrently hold full responses before each worker summarizes one, so
+	// charge that larger transient response set too.
+	measuredOutcomes, activeMeasuredWorkers := 0, 0
 	if supportedOverlaps > 0 {
-		maxProbes, maxEFSearch, maxConcurrency := 0, 0, 0
-		for _, probes := range cfg.probes {
-			maxProbes = max(maxProbes, probes)
-		}
-		for _, efSearch := range cfg.efSearch {
-			maxEFSearch = max(maxEFSearch, efSearch)
-		}
-		for _, concurrency := range cfg.concurrency {
-			maxConcurrency = max(maxConcurrency, concurrency)
-		}
-		// m8RunProductionCellV1 retains every raw response until the full cell has
-		// completed. Bound the largest response shape, including the backing arrays
-		// and harness-owned identity strings that are not included in the response
-		// struct or the retained canonical top-k matrices.
-		neighborBytes, err := memoryMul(int64(cfg.topK), int64(unsafe.Sizeof(nativewire.VectorPartitionCoordinatorNeighborV1{}))+documentIDStorageBytes)
-		if err != nil {
-			return plan, err
-		}
-		partitionBytes, err := memoryMul(int64(maxProbes), int64(unsafe.Sizeof(uint32(0))))
-		if err != nil {
-			return plan, err
-		}
-		// Group IDs and the response digests reference generation-pinned topology
-		// storage; each response owns the group string headers, not duplicate backing
-		// strings. RequestID is formatted per query and remains owned by the outcome.
-		maxGroups := min(maxProbes, cfg.raftGroups)
-		if maxGroups < 1 {
-			maxGroups = maxProbes // conservative for direct planner callers without parsed defaults
-		}
-		groupBytes, err := memoryMul(int64(maxGroups), int64(unsafe.Sizeof("")))
-		if err != nil {
-			return plan, err
-		}
-		requestIDStorageBytes := int64(len(fmt.Sprintf("m8-q-%06d-p-%04d-ef-%06d-c-%03d", max(0, m.Queries-1), maxProbes, maxEFSearch, maxConcurrency)))
-		perOutcomeBytes, err := memoryAdd(
-			int64(unsafe.Sizeof(m8ProductionCellOutcomeV1{})),
-			neighborBytes,
-			partitionBytes,
-			groupBytes,
-			requestIDStorageBytes,
-		)
-		if err != nil {
-			return plan, err
-		}
-		// Timed cells retain one response per query. Enabled warmup workers can
-		// concurrently hold full responses before each worker summarizes one, so
-		// charge that larger transient response set too.
-		plan.CurrentCellOutcomes = int64(max(m.Queries, min(warmupCount, warmupConcurrency)))
-		plan.CurrentCellOutcomeBytes, err = memoryMul(plan.CurrentCellOutcomes, perOutcomeBytes)
-		if err != nil {
-			return plan, err
-		}
-		activeMeasuredWorkers := min(m.Queries, maxConcurrency)
-		activeWarmupWorkers := min(warmupCount, warmupConcurrency)
-		plan.CurrentQueryConversionBytes, err = memoryMul(int64(max(activeMeasuredWorkers, activeWarmupWorkers)), int64(m.Dimensions), 4)
-		if err != nil {
-			return plan, err
-		}
+		measuredOutcomes, activeMeasuredWorkers = m.Queries, min(m.Queries, maxConcurrency)
+	}
+	plan.CurrentCellOutcomes = int64(max(measuredOutcomes, min(warmupCount, warmupConcurrency)))
+	plan.CurrentCellOutcomeBytes, err = memoryMul(plan.CurrentCellOutcomes, perOutcomeBytes)
+	if err != nil {
+		return plan, err
+	}
+	activeWarmupWorkers := min(warmupCount, warmupConcurrency)
+	plan.CurrentQueryConversionBytes, err = memoryMul(int64(max(activeMeasuredWorkers, activeWarmupWorkers)), int64(m.Dimensions), 4)
+	if err != nil {
+		return plan, err
 	}
 	if supportedOverlaps > 0 {
 		plan.AttributionQueryConversionBytes, err = memoryMul(int64(m.Dimensions), 4)
