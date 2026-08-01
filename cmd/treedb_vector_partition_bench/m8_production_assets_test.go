@@ -190,14 +190,7 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	report.Topology.ReadySetDigest = variant.ReadySetDigest
 	report.Config.Overlap = []float64{0}
 	report.Rows[0].VariantID = variant.VariantID
-	for i := range report.RouterSessions.AfterWarmup {
-		report.RouterSessions.AfterWarmup[i].Identity.ReadySetDigest = variant.ReadySetDigest
-		report.RouterSessions.AfterWarmup[i].Identity.RouterModelDigest = variant.RouterModelDigest
-	}
-	for i := range report.RouterSessions.AfterMeasured {
-		report.RouterSessions.AfterMeasured[i].Identity.ReadySetDigest = variant.ReadySetDigest
-		report.RouterSessions.AfterMeasured[i].Identity.RouterModelDigest = variant.RouterModelDigest
-	}
+	testM8BindRouterSessionsVariantV1(&report.RouterSessions, variant)
 	testM8CompleteResourceLimitsV1(t, &report)
 	if err := testM8ValidateProductionReportV1(report); err != nil {
 		t.Fatalf("valid endpoint coverage rejected: %v", err)
@@ -235,6 +228,16 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 				invalid.RouterSessions.AfterMeasured[i].Identity.RouterModelDigest = strings.Repeat("e", 64)
 			}
 		},
+		"variant_source_identity": func(invalid *m8ProductionReportV1) {
+			invalid.RouterSessions.AfterWarmup = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), invalid.RouterSessions.AfterWarmup...)
+			invalid.RouterSessions.AfterMeasured = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), invalid.RouterSessions.AfterMeasured...)
+			for i := range invalid.RouterSessions.AfterWarmup {
+				invalid.RouterSessions.AfterWarmup[i].Identity.SourceGeneration++
+			}
+			for i := range invalid.RouterSessions.AfterMeasured {
+				invalid.RouterSessions.AfterMeasured[i].Identity.SourceGeneration++
+			}
+		},
 	} {
 		t.Run("rejects_"+name, func(t *testing.T) {
 			invalid := report
@@ -258,6 +261,17 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	}
 	if err := validateM8ProductionReportV1(selfCertifiedCaps, testM8ProductionResourceCapsV1(report)); err == nil {
 		t.Fatal("accepted self-certified resource caps")
+	}
+	coordinatedFailureForgery := report
+	coordinatedFailureForgery.Failure.ResourceBoundary.Maxima.Requests++
+	coordinatedFailureForgery.Resources.LimitComparisons = append([]m8ProductionResourceLimitComparisonV1(nil), report.Resources.LimitComparisons...)
+	for i := range coordinatedFailureForgery.Resources.LimitComparisons {
+		if coordinatedFailureForgery.Resources.LimitComparisons[i].Name == "coordinator_requests" {
+			coordinatedFailureForgery.Resources.LimitComparisons[i].Observed = coordinatedFailureForgery.Failure.ResourceBoundary.Maxima.Requests
+		}
+	}
+	if err := testM8ValidateProductionReportV1(coordinatedFailureForgery); err == nil {
+		t.Fatal("accepted coordinated forged failure-boundary resource evidence")
 	}
 	for name, mutate := range map[string]func(*m8ProductionReportV1){
 		"gomaxprocs": func(invalid *m8ProductionReportV1) { invalid.GOMAXPROCS = 0 },
@@ -347,6 +361,7 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	shortfall.Rows[0].Attribution.ApproximateRouterPartitionCoverageComplete = false
 	shortfall.Rows[0].Attribution.ResidualLossOwners = []string{"approximate_representative_routing"}
 	shortfall.Rows[0].Attribution.StageOwners = nil
+	testM8CompleteResourceLimitsV1(t, &shortfall)
 	shortfall.GateLedger = m8ProductionGateLedgerForReportV1(shortfall)
 	if err := testM8ValidateProductionReportV1(shortfall); err != nil {
 		t.Fatalf("valid candidate-coverage shortfall rejected: %v", err)
@@ -383,13 +398,16 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	}
 	measuredRows := report.Rows
 	measuredAfter := report.RouterSessions.AfterMeasured
+	measuredResources := report.Resources
 	report.Rows = []m8ProductionRowV1{{Status: "unsupported", UnsupportedReason: "overlap assets unavailable", Overlap: .2}}
 	report.RouterSessions.AfterMeasured = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), report.RouterSessions.AfterWarmup...)
+	testM8CompleteResourceLimitsV1(t, &report)
 	if err := testM8ValidateProductionReportV1(report); err != nil {
 		t.Fatalf("unsupported-only report rejected: %v", err)
 	}
 	report.Rows = measuredRows
 	report.RouterSessions.AfterMeasured = measuredAfter
+	report.Resources = measuredResources
 	report.Resources.PeakRSSMeasured = true
 	if err := testM8ValidateProductionReportV1(report); err == nil {
 		t.Fatal("accepted measured peak RSS without an explicit scope")
@@ -417,13 +435,17 @@ func testM8CompleteResourceLimitsV1(t *testing.T, report *m8ProductionReportV1) 
 	if !ok {
 		t.Fatal("derive test M8 resource limits")
 	}
+	observed, ok := m8ExpectedResourceLimitObservationsV1(*report)
+	if !ok {
+		t.Fatal("derive test M8 resource observations")
+	}
 	report.Resources.LimitComparisons = make([]m8ProductionResourceLimitComparisonV1, len(expected))
 	for i, comparison := range expected {
 		passed := true
 		if comparison.Name == "process_peak_rss" {
 			passed = report.Resources.PeakRSSMeasured
 		}
-		report.Resources.LimitComparisons[i] = m8ProductionResourceLimitComparisonV1{Name: comparison.Name, Configured: comparison.Configured, Unit: comparison.Unit, Enforced: comparison.Enforced, Passed: passed}
+		report.Resources.LimitComparisons[i] = m8ProductionResourceLimitComparisonV1{Name: comparison.Name, Configured: comparison.Configured, Observed: observed[comparison.Name], Unit: comparison.Unit, Enforced: comparison.Enforced, Passed: passed}
 	}
 }
 
@@ -433,6 +455,21 @@ func testM8ProductionResourceCapsV1(report m8ProductionReportV1) m8ProductionRes
 
 func testM8ValidateProductionReportV1(report m8ProductionReportV1) error {
 	return validateM8ProductionReportV1(report, testM8ProductionResourceCapsV1(report))
+}
+
+func testM8BindRouterSessionsVariantV1(evidence *m8ProductionRouterSessionEvidenceV1, variant m3VariantDescriptorV1) {
+	for _, sessions := range [][]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{evidence.AfterWarmup, evidence.AfterMeasured} {
+		for i := range sessions {
+			sessions[i].Identity.IndexDefinitionDigest = variant.IndexDefinitionDigest
+			sessions[i].Identity.SourceGeneration = variant.SourceGeneration
+			sessions[i].Identity.SourceChecksum = variant.SourceChecksum
+			sessions[i].Identity.SourceSchemaHash = variant.SourceSchemaHash
+			sessions[i].Identity.SourceRowCount = variant.SourceRows
+			sessions[i].Identity.PartitionGeneration = variant.PartitionGeneration
+			sessions[i].Identity.ReadySetDigest = variant.ReadySetDigest
+			sessions[i].Identity.RouterModelDigest = variant.RouterModelDigest
+		}
+	}
 }
 
 func TestM8PartitionPackDiagnosticsFailClosedV1(t *testing.T) {

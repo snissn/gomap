@@ -516,7 +516,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	if closeErr != nil {
 		return fmt.Errorf("close M8 attribution harness: %w", closeErr)
 	}
-	report.Resources = m8ProductionResourcesV1(cfg, fixture, assets, report.Rows, allUntimed, report.Topology)
+	report.Resources = m8ProductionResourcesV1(cfg, fixture, assets, report.Rows, allUntimed, report.Topology, report.Failure.ResourceBoundary)
 	report.GateLedger = m8ProductionGateLedgerForReportV1(report)
 	if m8ProductionAllGatesPassV1(report.GateLedger) {
 		report.Status = "pass"
@@ -2111,7 +2111,11 @@ func m8WarmProductionTopologyV1(ctx context.Context, coordinator *nativewire.Vec
 	return boundary, nil
 }
 
-func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8ProductionMultiGroupAssetsV1, rows []m8ProductionRowV1, untimed m8ProductionResourceBoundaryV1, topology nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1) m8ProductionResourceEvidenceV1 {
+func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8ProductionMultiGroupAssetsV1, rows []m8ProductionRowV1, untimed m8ProductionResourceBoundaryV1, topology nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1, failures ...m8ProductionResourceBoundaryV1) m8ProductionResourceEvidenceV1 {
+	var failure m8ProductionResourceBoundaryV1
+	if len(failures) > 0 {
+		failure = failures[0]
+	}
 	out := m8ProductionResourceEvidenceV1{PersistentAssetCap: cfg.m8MaxAssetBytes, PeakRSSCapBytes: cfg.m8MaxRSSBytes}
 	if assets == nil {
 		return out
@@ -2163,10 +2167,13 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 		maxTotalNanos = max(maxTotalNanos, row.MaxTotalNanos)
 	}
 	maxProbes = max(maxProbes, uint64(untimed.SelectedPartitions))
+	maxProbes = max(maxProbes, uint64(failure.SelectedPartitions))
 	maxEf = max(maxEf, uint64(untimed.EfSearch))
+	maxEf = max(maxEf, uint64(failure.EfSearch))
 	maxTotalNanos = max(maxTotalNanos, untimed.WallClockNanos)
+	maxTotalNanos = max(maxTotalNanos, failure.WallClockNanos)
 	resourceRows := append([]m8ProductionRowV1(nil), rows...)
-	resourceRows = append(resourceRows, untimed.resourceRowV1())
+	resourceRows = append(resourceRows, untimed.resourceRowV1(), failure.resourceRowV1())
 	observed := m8ObservedResourceMaximaV1(resourceRows)
 	add := func(name string, configured, observed uint64, unit string, enforced bool) {
 		out.LimitComparisons = append(out.LimitComparisons, m8ProductionResourceLimitComparisonV1{Name: name, Configured: configured, Observed: observed, Unit: unit, Enforced: enforced, Passed: configured > 0 && observed <= configured})
@@ -2784,7 +2791,7 @@ func m8ExpectedResourceLimitConfigsV1(report m8ProductionReportV1, caps m8Produc
 	shard := nativewire.DefaultVectorPartitionShardSearchLimitsV1()
 	shard.MaxCandidateBytes = m8ProductionCandidateBudgetBytesV1
 	rows := append([]m8ProductionRowV1(nil), report.Rows...)
-	rows = append(rows, report.UntimedBoundary.resourceRowV1())
+	rows = append(rows, report.UntimedBoundary.resourceRowV1(), report.Failure.ResourceBoundary.resourceRowV1())
 	observed := m8ObservedResourceMaximaV1(rows)
 	concurrent, concurrentErr := m8ConfiguredConcurrentShardRequestsV1(coordinator.MaxConcurrentRequests, report.Config.Concurrency)
 	retries, retriesOK := m8ConfiguredAggregateTaskLimitV1(coordinator.MaxRetries, observed.Requests)
@@ -2840,12 +2847,19 @@ func validM8ResourceLimitComparisonsV1(report m8ProductionReportV1, caps m8Produ
 	for _, comparison := range expected {
 		want[comparison.Name] = comparison
 	}
+	observed, observedOK := m8ExpectedResourceLimitObservationsV1(report)
+	if !observedOK {
+		return false
+	}
 	for _, comparison := range report.Resources.LimitComparisons {
 		expectation, ok := want[comparison.Name]
 		if !ok || comparison.Configured != expectation.Configured || comparison.Unit != expectation.Unit || comparison.Enforced != expectation.Enforced {
 			return false
 		}
 		delete(want, comparison.Name)
+		if expectedObserved, ok := observed[comparison.Name]; ok && comparison.Observed != expectedObserved {
+			return false
+		}
 		passed := comparison.Configured > 0 && comparison.Observed <= comparison.Configured
 		if comparison.Name == "process_peak_rss" {
 			passed = report.Resources.PeakRSSMeasured && passed
@@ -2855,6 +2869,73 @@ func validM8ResourceLimitComparisonsV1(report m8ProductionReportV1, caps m8Produ
 		}
 	}
 	return len(want) == 0
+}
+
+// m8ExpectedResourceLimitObservationsV1 recomputes every report-observable
+// limit measurement. Router-model candidate capacity is intentionally absent:
+// its exact exhaustive-preflight value belongs to the immutable persisted
+// model and is not serialized in the report boundary.
+func m8ExpectedResourceLimitObservationsV1(report m8ProductionReportV1) (map[string]uint64, bool) {
+	if len(report.RouterSessions.AfterWarmup) == 0 {
+		return nil, false
+	}
+	rows := append([]m8ProductionRowV1(nil), report.Rows...)
+	rows = append(rows, report.UntimedBoundary.resourceRowV1(), report.Failure.ResourceBoundary.resourceRowV1())
+	maxima := m8ObservedResourceMaximaV1(rows)
+	var probes, efSearch uint64
+	for _, row := range rows {
+		if row.Status == "unsupported" {
+			continue
+		}
+		probes = max(probes, uint64(row.Probes))
+		efSearch = max(efSearch, uint64(row.EfSearch))
+	}
+	identity := report.RouterSessions.AfterWarmup[0].Identity
+	peakRSS := uint64(0)
+	if report.Resources.PeakRSSMeasured && report.Resources.PeakRSSBytes > 0 {
+		peakRSS = uint64(report.Resources.PeakRSSBytes)
+	}
+	identityBytes := uint64(len(identity.Database) + len(identity.Catalog) + len(identity.Collection) + len(identity.IndexName) + len(identity.IndexDefinitionDigest) + len(identity.ReadySetDigest))
+	stableIDBytes := uint64(len(fmt.Sprintf("doc-%06d", max(0, report.Dataset.Vectors-1))))
+	maxTotalNanos := report.UntimedBoundary.WallClockNanos
+	maxTotalNanos = max(maxTotalNanos, report.Failure.ResourceBoundary.WallClockNanos)
+	for _, row := range report.Rows {
+		if row.Status != "unsupported" {
+			maxTotalNanos = max(maxTotalNanos, row.MaxTotalNanos)
+		}
+	}
+	return map[string]uint64{
+		"persistent_asset_bytes":                         report.Resources.PersistentAssetBytes,
+		"process_peak_rss":                               peakRSS,
+		"coordinator_selected_partitions":                probes,
+		"coordinator_groups":                             uint64(report.Config.RaftGroups),
+		"coordinator_requests":                           maxima.Requests,
+		"coordinator_concurrent_requests_across_clients": uint64(report.Topology.MaxConcurrentShardRequests),
+		"coordinator_rpcs_across_shard_requests":         maxima.RPCs,
+		"coordinator_retries_across_shard_requests":      maxima.Retries,
+		"coordinator_redirects_across_shard_requests":    maxima.Redirects,
+		"coordinator_query_bytes":                        uint64(report.Dataset.Dimensions * 4),
+		"coordinator_top_k":                              uint64(report.Config.TopK),
+		"coordinator_ef_search":                          efSearch,
+		"coordinator_partitions_per_request":             maxima.ShardPartitions,
+		"coordinator_identity_bytes":                     identityBytes,
+		"coordinator_stable_id_bytes":                    stableIDBytes,
+		"coordinator_merge_entries":                      maxima.MergeEntries,
+		"coordinator_request_bytes":                      maxima.RequestBytes,
+		"coordinator_candidate_bytes":                    maxima.CandidateBytes,
+		"coordinator_response_bytes":                     maxima.ResponseBytes,
+		"coordinator_wall_clock":                         maxTotalNanos,
+		"shard_dimensions":                               uint64(report.Dataset.Dimensions),
+		"shard_query_bytes":                              uint64(report.Dataset.Dimensions * 4),
+		"shard_partitions":                               maxima.ShardPartitions,
+		"shard_top_k":                                    uint64(report.Config.TopK),
+		"shard_ef_search":                                efSearch,
+		"shard_identity_bytes":                           identityBytes,
+		"shard_stable_id_bytes":                          stableIDBytes,
+		"shard_request_bytes":                            maxima.ShardRequestBytes,
+		"shard_candidate_bytes":                          maxima.ShardCandidateBytes,
+		"shard_response_bytes":                           maxima.ShardResponseBytes,
+	}, true
 }
 
 func m8ProductionGateValuesV1(ledger m8ProductionGateLedgerV1) []string {
@@ -3307,12 +3388,20 @@ func validM8RouterSessionEvidenceV1(evidence m8ProductionRouterSessionEvidenceV1
 func m8RouterSessionsMatchVariantV1(evidence m8ProductionRouterSessionEvidenceV1, variant m3VariantDescriptorV1) bool {
 	for _, sessions := range [][]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{evidence.AfterWarmup, evidence.AfterMeasured} {
 		for _, session := range sessions {
-			if session.Identity.ReadySetDigest != variant.ReadySetDigest || session.Identity.RouterModelDigest != variant.RouterModelDigest {
+			if !m8RouterSessionIdentityMatchesVariantV1(session.Identity, variant) {
 				return false
 			}
 		}
 	}
 	return true
+}
+
+func m8RouterSessionIdentityMatchesVariantV1(identity nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1, variant m3VariantDescriptorV1) bool {
+	return identity.IndexDefinitionDigest == variant.IndexDefinitionDigest &&
+		identity.SourceGeneration == variant.SourceGeneration && identity.SourceChecksum == variant.SourceChecksum &&
+		identity.SourceSchemaHash == variant.SourceSchemaHash && identity.SourceRowCount == variant.SourceRows &&
+		identity.PartitionGeneration == variant.PartitionGeneration &&
+		identity.ReadySetDigest == variant.ReadySetDigest && identity.RouterModelDigest == variant.RouterModelDigest
 }
 
 func m8SHA256V1(value string) bool {
