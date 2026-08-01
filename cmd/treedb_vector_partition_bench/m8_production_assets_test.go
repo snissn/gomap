@@ -71,17 +71,17 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		return out
 	}
 	report := m8ProductionReportV1{
-		SchemaVersion: 3, ResultKind: "m8_production_multi_group_evidence_v3", Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true,
+		SchemaVersion: 4, ResultKind: "m8_production_multi_group_evidence_v4", Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true,
 		GeneratedAt: time.Now(), Command: []string{"m8-test"}, BaseSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		Dataset: fixture, Config: m8ProductionConfigEvidenceV1{RaftGroups: 2, RaftNodesPerGroup: 3, Partitions: 4, TopK: 10, RouterCandidates: 1}, BuildNanos: 1,
+		Dataset: fixture, Config: m8ProductionConfigEvidenceV1{RaftGroups: 2, RaftNodesPerGroup: 3, Partitions: 4, TopK: 10, RouterCandidates: 4}, BuildNanos: 1,
 		Topology:       nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{Network: "tcp_loopback_serialized_m5_v1", LifecycleState: "active", ReadySetDigest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", MetaNodes: []string{"meta-a", "meta-b", "meta-c"}, Groups: []nativewire.VectorPartitionM8ProductionGroupEvidenceV1{group("group-a", 1), group("group-b", 1)}},
 		RouterSessions: m8ProductionRouterSessionEvidenceV1{AfterWarmup: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, LeasePins: 1, LeaseReleases: 1}}, AfterMeasured: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, Hits: uint64(fixture.Queries), LeasePins: uint64(fixture.Queries) + 1, LeaseReleases: uint64(fixture.Queries) + 1}}},
-		Rows: []m8ProductionRowV1{{Status: "pass", Probes: 4, EfSearch: 10, Concurrency: 1, Samples: fixture.Queries, RecallAtK: 1, QPS: 1, RouterMode: "exact", RouterCandidates: 1, ExactParityChecked: true, ExactParityPassed: true, NoPartialResults: true, Attribution: m8ProductionAttributionV1{
+		Rows: []m8ProductionRowV1{{Status: "pass", Probes: 4, EfSearch: 10, Concurrency: 1, Samples: fixture.Queries, RecallAtK: 1, QPS: 1, RouterMode: collections.VectorPartitionRouterModeApproxV1, RouterCandidates: 4, ExactParityChecked: true, ExactParityPassed: true, NoPartialResults: true, Attribution: m8ProductionAttributionV1{
 			Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1, ExhaustivePartitionRecallAtK: 1,
 			ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
 			ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: 1, ApproximateLocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1,
 			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
-			ApproximateRouterCandidateBudget: 1, ApproximateRouterPartitionCoverageComplete: true, ResidualLossOwners: []string{"none_observed"},
+			ApproximateRouterCandidateBudget: 4, ApproximateRouterPartitionCoverageComplete: true, ResidualLossOwners: []string{"none_observed"},
 		}}},
 		PackDiagnostics: diagnostics(loads),
 		UntimedBoundary: m8ProductionResourceBoundaryV1{SelectedPartitions: 4, EfSearch: 10, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 2, RPCs: 1, RequestBytes: 1, ShardPartitions: 2, ShardRequestBytes: 1}},
@@ -90,6 +90,44 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	}
 	if err := validateM8ProductionReportV1(report); err != nil {
 		t.Fatalf("valid endpoint coverage rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*m8ProductionRowV1){
+		"exact_router_mode": func(row *m8ProductionRowV1) {
+			row.RouterMode = collections.VectorPartitionRouterModeExactV1
+		},
+		"candidate_budget_above_config": func(row *m8ProductionRowV1) {
+			row.RouterCandidates = 5
+			row.Attribution.ApproximateRouterCandidateBudget = 5
+		},
+	} {
+		t.Run("rejects_"+name, func(t *testing.T) {
+			invalid := report
+			invalid.Rows = append([]m8ProductionRowV1(nil), report.Rows...)
+			mutate(&invalid.Rows[0])
+			if err := validateM8ProductionReportV1(invalid); err == nil {
+				t.Fatalf("accepted measured row with %s", name)
+			}
+		})
+	}
+	shortfall := report
+	shortfall.Rows = append([]m8ProductionRowV1(nil), report.Rows...)
+	shortfall.Rows[0].Status = "candidate_coverage_shortfall"
+	shortfall.Rows[0].RecallAtK, shortfall.Rows[0].QPS = 0, 0
+	shortfall.Rows[0].ExactParityChecked, shortfall.Rows[0].ExactParityPassed, shortfall.Rows[0].NoPartialResults = false, false, false
+	shortfall.Rows[0].Attribution.ApproximateRepresentativeRecallAtK = 0
+	shortfall.Rows[0].Attribution.ApproximateLocalHNSWRecallAtK = 0
+	shortfall.Rows[0].Attribution.EndToEndRecallAtK = 0
+	shortfall.Rows[0].Attribution.CoordinatorMergeIDParity, shortfall.Rows[0].Attribution.CoordinatorMergeScoreParity = false, false
+	shortfall.Rows[0].Attribution.ApproximateRouterPartitionCoverageComplete = false
+	shortfall.Rows[0].Attribution.ResidualLossOwners = []string{"approximate_representative_routing"}
+	shortfall.Rows[0].Attribution.StageOwners = nil
+	shortfall.GateLedger = m8ProductionGateLedgerForReportV1(shortfall)
+	if err := validateM8ProductionReportV1(shortfall); err != nil {
+		t.Fatalf("valid candidate-coverage shortfall rejected: %v", err)
+	}
+	shortfall.Rows[0].NoPartialResults = true
+	if err := validateM8ProductionReportV1(shortfall); err == nil {
+		t.Fatal("accepted candidate-coverage shortfall with a partial-result claim")
 	}
 	for name, diagnostics := range map[string][]m8PartitionPackDiagnosticsV1{
 		"missing":      report.PackDiagnostics[:3],

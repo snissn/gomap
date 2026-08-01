@@ -378,7 +378,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		return err
 	}
 	report := m8ProductionReportV1{
-		SchemaVersion: 3, ResultKind: "m8_production_multi_group_evidence_v3", Status: "incomplete",
+		SchemaVersion: 4, ResultKind: "m8_production_multi_group_evidence_v4", Status: "incomplete",
 		Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true, GeneratedAt: time.Now().UTC(),
 		Command: cfg.command, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dirty: m8GitDirtyV1(cfg.out, cfg.profiles, cfg.m8MatrixOut, cfg.m8MatrixProfiles),
 		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), Host: m8ProductionHostV1(cfg, assets.dir), Dataset: fixture, Variant: assets.descriptor,
@@ -1951,8 +1951,9 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 	if !cell.Evidence.ApproximateRouterPartitionCoverageComplete {
 		// A shortfall means this approximate attribution cell did not evaluate
 		// its requested partition coverage. Do not average successful partial
-		// queries into a deceptively nonzero approximate-routing recall.
+		// queries into deceptively nonzero approximate-routing or local recall.
 		approximateRecall = 0
+		approximateLocalRecall = 0
 	}
 	cell.Evidence.ExhaustivePartitionRecallAtK = exhaustiveRecall / n
 	cell.Evidence.PrimaryHomeOracleRecallAtK = primaryOracle / n
@@ -2320,8 +2321,13 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 	canonicalResults := make([][]m8CanonicalResultV1, len(outcomes))
 	durations := make([]uint64, 0, len(outcomes))
 	var recallSum float64
+	coverageShortfall := false
 	for index, outcome := range outcomes {
 		if outcome.err != nil {
+			if errors.Is(outcome.err, collections.ErrVectorPartitionRouterCandidateCoverageV1) {
+				coverageShortfall = true
+				continue
+			}
 			return row, nil, fmt.Errorf("query %d: %w", index, outcome.err)
 		}
 		got, shapeErr := m8ValidateCoordinatorResponseV1(outcome.response, assets.manifest, probes, topK)
@@ -2332,6 +2338,13 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 		recallSum += m8CanonicalRecallV1(truth[index], got)
 		durations = append(durations, outcome.response.Timing.TotalNanos)
 		m8AccumulateProductionRowCountersV1(&row, outcome.response.Counters)
+	}
+	if coverageShortfall {
+		row.Status = "candidate_coverage_shortfall"
+		for _, outcome := range outcomes {
+			row.MaxTotalNanos = max(row.MaxTotalNanos, outcome.response.Timing.TotalNanos)
+		}
+		return row, make([][]m8CanonicalResultV1, len(outcomes)), nil
 	}
 	row.NoPartialResults = true
 	row.RecallAtK = recallSum / float64(len(outcomes))
@@ -2348,6 +2361,15 @@ func m8AttachAttributionV1(row *m8ProductionRowV1, attribution m8AttributionCell
 		return errors.New("M8 attribution result cardinality mismatch")
 	}
 	row.Attribution = attribution.Evidence
+	if !row.Attribution.ApproximateRouterPartitionCoverageComplete {
+		row.Attribution.CoordinatorMergeIDParity = false
+		row.Attribution.CoordinatorMergeScoreParity = false
+		row.Attribution.EndToEndRecallAtK = 0
+		row.Attribution.ApproximateLocalToEndToEndLossAtK = 0
+		row.Attribution.ResidualLossOwners = m8AttributionLossOwnersV1(row.Attribution)
+		row.Attribution.StageOwners = m8AttributionStageOwnersV1(row.Attribution)
+		return nil
+	}
 	for i := range coordinatorResults {
 		idParity, scoreParity := m8CanonicalParityV1(attribution.Local[i], coordinatorResults[i])
 		row.Attribution.CoordinatorMergeIDParity = row.Attribution.CoordinatorMergeIDParity && idParity
@@ -2455,6 +2477,9 @@ func m8AttributionLossOwnersV1(attribution m8ProductionAttributionV1) []string {
 	}
 	if !attribution.ApproximateRouterPartitionCoverageComplete || attribution.ApproximateRepresentativeRecallAtK+epsilon < attribution.ExactRepresentativeRecallAtK {
 		owners = append(owners, "approximate_representative_routing")
+	}
+	if !attribution.ApproximateRouterPartitionCoverageComplete {
+		return owners
 	}
 	if attribution.ApproximateLocalHNSWRecallAtK+epsilon < attribution.ApproximateRepresentativeRecallAtK {
 		owners = append(owners, "partition_local_hnsw")
@@ -2848,7 +2873,7 @@ func m8CanonicalPathV1(path string) (string, error) {
 }
 
 func validateM8ProductionReportV1(report m8ProductionReportV1) error {
-	if report.SchemaVersion != 3 || report.ResultKind != "m8_production_multi_group_evidence_v3" ||
+	if report.SchemaVersion != 4 || report.ResultKind != "m8_production_multi_group_evidence_v4" ||
 		report.Mode != m8ProductionMultiGroupModeV1 || !report.ProductionEvidence ||
 		report.GeneratedAt.IsZero() || len(report.Command) == 0 || !validSHA(report.BaseSHA) || !validSHA(report.HeadSHA) ||
 		report.Config.RaftGroups < 2 || report.Config.RaftNodesPerGroup != 3 || report.Config.Partitions < 4 || report.Config.Partitions > maxPartitions ||
@@ -2895,9 +2920,25 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 			}
 			continue
 		}
+		if row.Status == "candidate_coverage_shortfall" {
+			if row.Probes < 1 || row.Probes > report.Config.Partitions ||
+				row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries ||
+				row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates < row.Probes || row.RouterCandidates > report.Config.RouterCandidates || row.RouterCandidates != row.Attribution.ApproximateRouterCandidateBudget || row.NoPartialResults || row.ExactParityChecked || row.ExactParityPassed ||
+				row.RecallAtK != 0 || row.QPS != 0 || row.P50Nanos != 0 || row.P95Nanos != 0 || row.P99Nanos != 0 ||
+				row.Attribution.ApproximateRouterPartitionCoverageComplete || row.Attribution.ApproximateRepresentativeRecallAtK != 0 || row.Attribution.ApproximateLocalHNSWRecallAtK != 0 || row.Attribution.EndToEndRecallAtK != 0 ||
+				row.Attribution.CoordinatorMergeIDParity || row.Attribution.CoordinatorMergeScoreParity || !validM8AttributionV1(row.Attribution, report.Config.TopK) {
+				return errors.New("malformed M8 candidate-coverage shortfall row")
+			}
+			rowSamples := uint64(row.Samples)
+			if rowSamples > ^uint64(0)-measuredSamples {
+				return errors.New("M8 measured sample count overflow")
+			}
+			measuredSamples += rowSamples
+			continue
+		}
 		if row.Status != "pass" && row.Status != "fail" || row.Probes < 1 || row.Probes > report.Config.Partitions ||
 			row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries || row.QPS <= 0 ||
-			row.RouterMode == "" || row.RouterCandidates < 1 || row.ExactParityPassed && !row.ExactParityChecked || row.ExactParityChecked && row.Probes != report.Config.Partitions || !row.NoPartialResults ||
+			row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates < row.Probes || row.RouterCandidates > report.Config.RouterCandidates || row.RouterCandidates != row.Attribution.ApproximateRouterCandidateBudget || !row.Attribution.ApproximateRouterPartitionCoverageComplete || row.ExactParityPassed && !row.ExactParityChecked || row.ExactParityChecked && row.Probes != report.Config.Partitions || !row.NoPartialResults ||
 			math.Float64bits(row.RecallAtK) != math.Float64bits(row.Attribution.EndToEndRecallAtK) ||
 			!validM8AttributionV1(row.Attribution, report.Config.TopK) {
 			return errors.New("malformed measured M8 row")
