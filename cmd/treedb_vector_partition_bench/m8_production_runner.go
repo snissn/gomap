@@ -71,6 +71,8 @@ type m8ProductionReportV1 struct {
 	GOOS               string                                                     `json:"goos"`
 	GOARCH             string                                                     `json:"goarch"`
 	LogicalCPUs        int                                                        `json:"logical_cpus"`
+	GOMAXPROCS         int                                                        `json:"gomaxprocs"`
+	GoMemoryLimitBytes int64                                                      `json:"go_memory_limit_bytes"`
 	Host               m8ProductionHostEvidenceV1                                 `json:"host"`
 	Dataset            fixtureManifest                                            `json:"dataset"`
 	Variant            *m3VariantDescriptorV1                                     `json:"variant,omitempty"`
@@ -382,11 +384,12 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	if err != nil {
 		return err
 	}
+	goMaxProcs, goMemoryLimitBytes := benchmarkRuntimeLimits()
 	report := m8ProductionReportV1{
 		SchemaVersion: 3, ResultKind: "m8_production_multi_group_evidence_v3", Status: "incomplete",
 		Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true, GeneratedAt: time.Now().UTC(),
 		Command: cfg.command, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dirty: m8GitDirtyV1(cfg.out, cfg.profiles, cfg.m8MatrixOut, cfg.m8MatrixProfiles),
-		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), Host: m8ProductionHostV1(cfg, assets.dir), Dataset: fixture, Variant: assets.descriptor,
+		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), GOMAXPROCS: goMaxProcs, GoMemoryLimitBytes: goMemoryLimitBytes, Host: m8ProductionHostV1(cfg, assets.dir), Dataset: fixture, Variant: assets.descriptor,
 		Config:        m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), RouterCandidates: cfg.routerCandidates, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed},
 		BuildNanos:    buildNanos,
 		TruthCache:    truthCache,
@@ -2964,6 +2967,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 	if report.SchemaVersion != 3 || report.ResultKind != "m8_production_multi_group_evidence_v3" ||
 		report.Mode != m8ProductionMultiGroupModeV1 || !report.ProductionEvidence ||
 		report.GeneratedAt.IsZero() || len(report.Command) == 0 || !validSHA(report.BaseSHA) || !validSHA(report.HeadSHA) ||
+		report.GoVersion == "" || report.GOOS == "" || report.GOARCH == "" || report.LogicalCPUs < 1 || report.GOMAXPROCS < 1 || report.GoMemoryLimitBytes < 1 ||
 		report.Config.RaftGroups < 2 || report.Config.RaftNodesPerGroup != 3 || report.Config.Partitions < 4 || report.Config.Partitions > maxPartitions ||
 		report.Config.Warmup < 0 || report.Config.RouterCandidates < 1 || report.BuildNanos <= 0 || report.TimedBoundary == "" || len(report.Limitations) == 0 {
 		return errors.New("missing or invalid M8 identity, topology, or timing metadata")
@@ -2986,7 +2990,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 		}
 	}
 	if len(report.Topology.Groups) != report.Config.RaftGroups || report.Topology.Network != "tcp_loopback_serialized_m5_v1" ||
-		report.Topology.LifecycleState != "active" || !m8SHA256V1(report.Topology.ReadySetDigest) || len(report.Topology.MetaNodes) != 3 {
+		report.Topology.LifecycleState != "active" || !m8SHA256V1(report.Topology.ReadySetDigest) || report.Topology.MetaGroup == "" || report.Topology.MetaLeader == "" || len(report.Topology.MetaNodes) != 3 || report.Topology.MaxConcurrentShardRequests == 0 {
 		return errors.New("incomplete M8 production topology evidence")
 	}
 	owners, leaders := map[string]bool{}, map[string]bool{}

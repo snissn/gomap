@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/nativewire"
 )
 
 // m8QualificationCampaignV1 is deliberately an evidence-only reader.  M8
@@ -106,7 +107,7 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 	var p4P95, p16P95 []uint64
 	var summary m8QualificationCampaignSummaryV1
 	variantDescriptors := make(map[string]m3VariantDescriptorV1, len(m8RequiredVariantIDsV1))
-	topologyReadySets := make(map[string]string, len(m8RequiredVariantIDsV1))
+	topologies := make(map[string]nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1, len(m8RequiredVariantIDsV1))
 	truthArtifact := ""
 	var dataset fixtureManifest
 	var environment *m8QualificationEnvironmentV1
@@ -179,7 +180,7 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 			if !m8QualificationResourcesV1(*report, report.Dataset) {
 				return summary, fmt.Errorf("qualification matrix %s has unbound environment or resources", run.Path)
 			}
-			currentEnvironment := m8QualificationEnvironmentV1{GoVersion: report.GoVersion, GOOS: report.GOOS, GOARCH: report.GOARCH, LogicalCPUs: report.LogicalCPUs, Host: report.Host, PeakRSSCapBytes: report.Resources.PeakRSSCapBytes, PersistentAssetCap: report.Resources.PersistentAssetCap}
+			currentEnvironment := m8QualificationEnvironmentV1{GoVersion: report.GoVersion, GOOS: report.GOOS, GOARCH: report.GOARCH, LogicalCPUs: report.LogicalCPUs, GOMAXPROCS: report.GOMAXPROCS, GoMemoryLimitBytes: report.GoMemoryLimitBytes, Host: report.Host, PeakRSSCapBytes: report.Resources.PeakRSSCapBytes, PersistentAssetCap: report.Resources.PersistentAssetCap}
 			if environment != nil && *environment != currentEnvironment {
 				return summary, fmt.Errorf("qualification matrix %s changes environment or resources", cleanPath)
 			}
@@ -195,10 +196,11 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 				return summary, fmt.Errorf("qualification matrix %s changes retained M3 descriptor", run.Path)
 			}
 			variantDescriptors[report.Variant.VariantID] = *report.Variant
-			if prior, ok := topologyReadySets[report.Variant.VariantID]; ok && prior != report.Topology.ReadySetDigest {
+			topology := m8QualificationImmutableTopologyV1(report.Topology)
+			if prior, ok := topologies[report.Variant.VariantID]; ok && !reflect.DeepEqual(prior, topology) {
 				return summary, fmt.Errorf("qualification matrix %s changes retained topology", cleanPath)
 			}
-			topologyReadySets[report.Variant.VariantID] = report.Topology.ReadySetDigest
+			topologies[report.Variant.VariantID] = topology
 			if truthArtifact != "" && truthArtifact != report.TruthCache.ArtifactSHA256 {
 				return summary, fmt.Errorf("qualification matrix %s changes truth identity", run.Path)
 			}
@@ -279,14 +281,30 @@ func m8QualificationExactTruthCapV1(fixture fixtureManifest) int64 {
 type m8QualificationEnvironmentV1 struct {
 	GoVersion, GOOS, GOARCH string
 	LogicalCPUs             int
+	GOMAXPROCS              int
+	GoMemoryLimitBytes      int64
 	Host                    m8ProductionHostEvidenceV1
 	PeakRSSCapBytes         uint64
 	PersistentAssetCap      uint64
 }
 
+// m8QualificationImmutableTopologyV1 retains the complete topology identity
+// while omitting per-run listener addresses and request-progress counters.
+// Evidence() already emits groups in canonical group-ID order.
+func m8QualificationImmutableTopologyV1(topology nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1) nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1 {
+	for i := range topology.Groups {
+		topology.Groups[i].Endpoint = ""
+		topology.Groups[i].CommitIndex = 0
+		topology.Groups[i].ReadIndex = 0
+		topology.Groups[i].AppliedIndex = 0
+		topology.Groups[i].EndpointHits = 0
+	}
+	return topology
+}
+
 func m8QualificationResourcesV1(report m8ProductionReportV1, fixture fixtureManifest) bool {
 	resources := report.Resources
-	return report.GoVersion != "" && report.GOOS != "" && report.GOARCH != "" && report.LogicalCPUs > 0 && report.Host.CPUModel != "" &&
+	return report.GoVersion != "" && report.GOOS != "" && report.GOARCH != "" && report.LogicalCPUs > 0 && report.GOMAXPROCS > 0 && report.GoMemoryLimitBytes > 0 && report.Host.CPUModel != "" &&
 		resources.PeakRSSMeasured && resources.PeakRSSBytes > 0 && resources.PeakRSSCapBytes == 4<<30 && uint64(resources.PeakRSSBytes) <= resources.PeakRSSCapBytes &&
 		resources.PersistentAssetBytes > 0 && resources.PersistentAssetCap == 2<<30 && resources.PersistentAssetBytes <= resources.PersistentAssetCap &&
 		m8QualificationExactTruthCapV1(fixture) == report.Config.MaxExactTruthVisits
