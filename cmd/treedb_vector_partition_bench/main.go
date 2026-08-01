@@ -1733,6 +1733,8 @@ type m8BenchmarkWorkPlan struct {
 	QueryRequests                     int64
 	RetainedCoordinatorCells          int64
 	RetainedCoordinatorResults        int64
+	PreflightResponseBytes            int64
+	PreflightQueryConversionBytes     int64
 	CurrentCellOutcomes               int64
 	CurrentCellOutcomeBytes           int64
 	CurrentQueryConversionBytes       int64
@@ -2074,9 +2076,9 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	maxProbes, maxEFSearch, maxConcurrency := 0, 0, 0
+	maxMeasuredProbes, maxEFSearch, maxConcurrency := 0, 0, 0
 	for _, probes := range cfg.probes {
-		maxProbes = max(maxProbes, probes)
+		maxMeasuredProbes = max(maxMeasuredProbes, probes)
 	}
 	for _, efSearch := range cfg.efSearch {
 		maxEFSearch = max(maxEFSearch, efSearch)
@@ -2084,38 +2086,32 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	for _, concurrency := range cfg.concurrency {
 		maxConcurrency = max(maxConcurrency, concurrency)
 	}
-	maxProbes = max(maxProbes, cfg.partitions)
-	// m8RunProductionCellV1 retains every raw response until the full cell has
-	// completed. Bound the largest response shape, including the backing arrays
-	// and harness-owned identity strings that are not included in the response
-	// struct or the retained canonical top-k matrices.
+	// The exhaustive endpoint preflight is a distinct, single-response phase.
+	// Timed and warmup requests use at most the configured probe count.
 	neighborBytes, err := memoryMul(int64(cfg.topK), int64(unsafe.Sizeof(nativewire.VectorPartitionCoordinatorNeighborV1{}))+documentIDStorageBytes)
 	if err != nil {
 		return plan, err
 	}
-	partitionBytes, err := memoryMul(int64(maxProbes), int64(unsafe.Sizeof(uint32(0))))
+	responseBytes := func(base int64, probes, requestIDBytes int) (int64, error) {
+		partitionBytes, err := memoryMul(int64(probes), int64(unsafe.Sizeof(uint32(0))))
+		if err != nil {
+			return 0, err
+		}
+		groups := min(probes, cfg.raftGroups)
+		if groups < 1 {
+			groups = probes // conservative for direct planner callers without parsed defaults
+		}
+		groupBytes, err := memoryMul(int64(groups), int64(unsafe.Sizeof("")))
+		if err != nil {
+			return 0, err
+		}
+		return memoryAdd(base, neighborBytes, partitionBytes, groupBytes, int64(requestIDBytes))
+	}
+	plan.PreflightResponseBytes, err = responseBytes(int64(unsafe.Sizeof(nativewire.VectorPartitionCoordinatorResponseV1{})), cfg.partitions, len("m8-endpoint-preflight"))
 	if err != nil {
 		return plan, err
 	}
-	// Group IDs and the response digests reference generation-pinned topology
-	// storage; each response owns the group string headers, not duplicate backing
-	// strings. RequestID is formatted per query and remains owned by the outcome.
-	maxGroups := min(maxProbes, cfg.raftGroups)
-	if maxGroups < 1 {
-		maxGroups = maxProbes // conservative for direct planner callers without parsed defaults
-	}
-	groupBytes, err := memoryMul(int64(maxGroups), int64(unsafe.Sizeof("")))
-	if err != nil {
-		return plan, err
-	}
-	requestIDStorageBytes := int64(len(fmt.Sprintf("m8-q-%06d-p-%04d-ef-%06d-c-%03d", max(0, m.Queries-1), maxProbes, maxEFSearch, maxConcurrency)))
-	perOutcomeBytes, err := memoryAdd(
-		int64(unsafe.Sizeof(m8ProductionCellOutcomeV1{})),
-		neighborBytes,
-		partitionBytes,
-		groupBytes,
-		requestIDStorageBytes,
-	)
+	perOutcomeBytes, err := responseBytes(int64(unsafe.Sizeof(m8ProductionCellOutcomeV1{})), maxMeasuredProbes, len(fmt.Sprintf("m8-q-%06d-p-%04d-ef-%06d-c-%03d", max(0, m.Queries-1), maxMeasuredProbes, maxEFSearch, maxConcurrency)))
 	if err != nil {
 		return plan, err
 	}
@@ -2126,13 +2122,17 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if supportedOverlaps > 0 {
 		measuredOutcomes, activeMeasuredWorkers = m.Queries, min(m.Queries, maxConcurrency)
 	}
-	plan.CurrentCellOutcomes = int64(max(1, measuredOutcomes, min(warmupCount, warmupConcurrency)))
+	plan.CurrentCellOutcomes = int64(max(measuredOutcomes, min(warmupCount, warmupConcurrency)))
 	plan.CurrentCellOutcomeBytes, err = memoryMul(plan.CurrentCellOutcomes, perOutcomeBytes)
 	if err != nil {
 		return plan, err
 	}
 	activeWarmupWorkers := min(warmupCount, warmupConcurrency)
-	plan.CurrentQueryConversionBytes, err = memoryMul(int64(max(1, activeMeasuredWorkers, activeWarmupWorkers)), int64(m.Dimensions), 4)
+	plan.CurrentQueryConversionBytes, err = memoryMul(int64(max(activeMeasuredWorkers, activeWarmupWorkers)), int64(m.Dimensions), 4)
+	if err != nil {
+		return plan, err
+	}
+	plan.PreflightQueryConversionBytes, err = memoryMul(int64(m.Dimensions), 4)
 	if err != nil {
 		return plan, err
 	}
@@ -2265,6 +2265,10 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
+	preflightPeak, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.PreflightResponseBytes, plan.PreflightQueryConversionBytes)
+	if err != nil {
+		return plan, err
+	}
 	attributionHomeBuildPeak, err := memoryAdd(measurementBase, plan.SourceSnapshotBytes, plan.AttributionPrimaryHomeMapBytes, plan.AttributionFinalMembershipBytes, plan.AttributionHomeBuildScratchBytes)
 	if err != nil {
 		return plan, err
@@ -2273,13 +2277,13 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	peak := max(sourceOraclePeak, measurementPeak, attributionHomeBuildPeak, attributionPeak)
+	peak := max(sourceOraclePeak, preflightPeak, measurementPeak, attributionHomeBuildPeak, attributionPeak)
 	plan.ModeledPeakBytes, err = memoryScaleCeil(peak, memorySlackNumerator, memorySlackDenominator)
 	if err != nil {
 		return plan, err
 	}
 	if plan.ModeledPeakBytes > capBytes {
-		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d source_snapshot_bytes=%d exact_truth_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d current_cell_outcomes=%d current_cell_outcome_bytes=%d current_query_conversion_bytes=%d retained_attribution_matrices=%d retained_attribution_results=%d retained_attribution_bytes=%d attribution_merge_scratch_results=%d attribution_merge_scratch_bytes=%d attribution_live_result_sets=%d attribution_live_result_bytes=%d attribution_approximate_route_bytes=%d attribution_query_conversion_bytes=%d attribution_primary_home_map_bytes=%d attribution_final_membership_bytes=%d attribution_home_build_scratch_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes, plan.CurrentCellOutcomes, plan.CurrentCellOutcomeBytes, plan.CurrentQueryConversionBytes, plan.RetainedAttributionMatrices, plan.RetainedAttributionResults, plan.RetainedAttributionBytes, plan.AttributionMergeScratchResults, plan.AttributionMergeScratchBytes, plan.AttributionLiveResultSets, plan.AttributionLiveResultBytes, plan.AttributionApproximateRouteBytes, plan.AttributionQueryConversionBytes, plan.AttributionPrimaryHomeMapBytes, plan.AttributionFinalMembershipBytes, plan.AttributionHomeBuildScratchBytes)
+		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d source_snapshot_bytes=%d exact_truth_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d preflight_response_bytes=%d preflight_query_conversion_bytes=%d current_cell_outcomes=%d current_cell_outcome_bytes=%d current_query_conversion_bytes=%d retained_attribution_matrices=%d retained_attribution_results=%d retained_attribution_bytes=%d attribution_merge_scratch_results=%d attribution_merge_scratch_bytes=%d attribution_live_result_sets=%d attribution_live_result_bytes=%d attribution_approximate_route_bytes=%d attribution_query_conversion_bytes=%d attribution_primary_home_map_bytes=%d attribution_final_membership_bytes=%d attribution_home_build_scratch_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes, plan.PreflightResponseBytes, plan.PreflightQueryConversionBytes, plan.CurrentCellOutcomes, plan.CurrentCellOutcomeBytes, plan.CurrentQueryConversionBytes, plan.RetainedAttributionMatrices, plan.RetainedAttributionResults, plan.RetainedAttributionBytes, plan.AttributionMergeScratchResults, plan.AttributionMergeScratchBytes, plan.AttributionLiveResultSets, plan.AttributionLiveResultBytes, plan.AttributionApproximateRouteBytes, plan.AttributionQueryConversionBytes, plan.AttributionPrimaryHomeMapBytes, plan.AttributionFinalMembershipBytes, plan.AttributionHomeBuildScratchBytes)
 	}
 	return plan, nil
 }

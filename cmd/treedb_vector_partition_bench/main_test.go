@@ -2045,10 +2045,10 @@ func TestM8WarmupResponsesRespectMemoryCapV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if preflightOnly.CurrentCellOutcomes != 1 || preflightOnly.CurrentQueryConversionBytes != 512 {
+	if preflightOnly.CurrentCellOutcomes != 0 || preflightOnly.CurrentQueryConversionBytes != 0 || preflightOnly.PreflightResponseBytes == 0 || preflightOnly.PreflightQueryConversionBytes != 512 {
 		t.Fatalf("unsupported-overlap preflight plan=%+v", preflightOnly)
 	}
-	if _, err := validateM8BenchmarkWork(base, manifest, math.MaxInt64, preflightOnly.ModeledPeakBytes-1); err == nil || !strings.Contains(err.Error(), "current_query_conversion_bytes=512") {
+	if _, err := validateM8BenchmarkWork(base, manifest, math.MaxInt64, preflightOnly.ModeledPeakBytes-1); err == nil || !strings.Contains(err.Error(), "preflight_query_conversion_bytes=512") {
 		t.Fatalf("accepted unmodeled unsupported-overlap preflight: %v", err)
 	}
 }
@@ -2081,11 +2081,51 @@ func TestM8PreflightResponseRespectsMemoryCapV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.CurrentCellOutcomes != 1 || plan.CurrentCellOutcomeBytes <= lowProbePlan.CurrentCellOutcomeBytes {
+	if plan.CurrentCellOutcomes != 0 || plan.PreflightResponseBytes <= lowProbePlan.PreflightResponseBytes {
 		t.Fatalf("preflight response plan=%+v low_probe=%+v", plan, lowProbePlan)
 	}
-	if _, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, plan.ModeledPeakBytes-1); err == nil || !strings.Contains(err.Error(), "current_cell_outcome_bytes=") {
+	if _, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, plan.ModeledPeakBytes-1); err == nil || !strings.Contains(err.Error(), "preflight_response_bytes=") {
 		t.Fatalf("accepted unmodeled preflight response: %v", err)
+	}
+}
+
+func TestM8MeasuredResponsesDoNotUseExhaustivePreflightShapeV1(t *testing.T) {
+	manifest := fixtureManifest{Vectors: 256, Queries: 100_000, Dimensions: 1}
+	cfg := config{partitions: 256, raftGroups: 4, overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 1, m8MaxExactTruthVisits: math.MaxInt64}
+	plan, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowProbe := cfg
+	lowProbe.partitions = 1
+	lowProbePlan, err := validateM8BenchmarkWork(lowProbe, manifest, math.MaxInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.CurrentCellOutcomes != int64(manifest.Queries) || plan.CurrentCellOutcomeBytes != lowProbePlan.CurrentCellOutcomeBytes || plan.PreflightResponseBytes <= lowProbePlan.PreflightResponseBytes {
+		t.Fatalf("separate measured/preflight response plan=%+v low_probe=%+v", plan, lowProbePlan)
+	}
+	measurementBase, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyOutcomeBytes, err := memoryMul(plan.CurrentCellOutcomes, plan.PreflightResponseBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyPeak, err := memoryAdd(measurementBase, legacyOutcomeBytes, plan.CurrentQueryConversionBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyPeak, err = memoryScaleCeil(legacyPeak, memorySlackNumerator, memorySlackDenominator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.ModeledPeakBytes >= legacyPeak {
+		t.Fatalf("measured responses still charged at exhaustive shape: plan=%+v legacy_peak=%d", plan, legacyPeak)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, plan.ModeledPeakBytes); err != nil {
+		t.Fatalf("rejected bounded measured-response plan: %v", err)
 	}
 }
 
