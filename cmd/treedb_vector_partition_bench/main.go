@@ -1838,8 +1838,8 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	// Every attribution cell builds selected-partition sets twice. The remaining
 	// linear work charges query conversion, result parity/recall, primary-home
 	// truth/count scans, final-membership truth/rank scans, cell setup, and the
-	// coordinator parity pass. The 21 truth-result passes are 1 parity pass,
-	// four 4-pass recall calculations, and two passes in each diagnostic.
+	// coordinator parity pass. The 25 truth-result passes are 1 parity pass,
+	// five 4-pass recall calculations, and two passes in each diagnostic.
 	plan.SelectedPartitionSetupWorkUnits, err = memoryMul(int64(m.Queries), supportedOverlaps, variantRuns, int64(len(cfg.efSearch)), 2, probeSum)
 	if err != nil {
 		return plan, err
@@ -1848,7 +1848,7 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	truthResultWork, err := memoryMul(int64(m.Queries), int64(cfg.topK), attributionCells, 21)
+	truthResultWork, err := memoryMul(int64(m.Queries), int64(cfg.topK), attributionCells, 25)
 	if err != nil {
 		return plan, err
 	}
@@ -1937,7 +1937,7 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	// the exhaustive partition-union pass is cached once per query.
 	var attributionPerRun int64
 	if supportedOverlaps > 0 {
-		attributionStages, stageErr := memoryMul(3, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(m.Queries))
+		attributionStages, stageErr := memoryMul(4, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(m.Queries))
 		if stageErr != nil {
 			return m8BenchmarkWorkPlan{}, stageErr
 		}
