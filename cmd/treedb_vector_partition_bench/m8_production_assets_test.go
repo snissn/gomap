@@ -104,11 +104,10 @@ func (r m8CoverageShortfallRouterV1) SearchWithContextV1(ctx context.Context, qu
 		if r.barrier != nil {
 			defer r.barrier.enter(ctx)()
 		}
-		call := atomic.AddInt32(r.calls, 1)
 		if atomic.CompareAndSwapInt32(r.failed, 0, 1) {
 			return collections.VectorPartitionRouterSearchResultV1{}, collections.ErrVectorPartitionRouterCandidateCoverageV1
 		}
-		if call == 2 && r.err != nil {
+		if atomic.AddInt32(r.calls, 1) == 1 && r.err != nil {
 			return collections.VectorPartitionRouterSearchResultV1{}, r.err
 		}
 	}
@@ -652,7 +651,7 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	}
 	defer warmupTopology.Close()
 	_, err = m8WarmProductionTopologyV1(ctx, warmupTopology.Coordinator(), assets, [][]float64{vectors[0]}, config{topK: 10, efSearch: []int{4096}, probes: []int{4}, routerCandidates: 4, concurrency: []int{4}, warmup: 1})
-	if !errors.Is(err, warmupErr) || atomic.LoadInt32(&warmupSource.failed) != 1 || atomic.LoadInt32(&warmupSource.calls) != 4 || atomic.LoadInt32(&warmupBarrier.peak) != 4 {
+	if !errors.Is(err, warmupErr) || atomic.LoadInt32(&warmupSource.failed) != 1 || atomic.LoadInt32(&warmupSource.calls) != 3 || atomic.LoadInt32(&warmupBarrier.peak) != 4 {
 		t.Fatalf("warmup error=%v typed=%d approximate calls=%d peak=%d", err, warmupSource.failed, warmupSource.calls, warmupBarrier.peak)
 	}
 	shortfallSource := &m8CoverageShortfallRouterSourceV1{VectorPartitionCoordinatorRouterSourceV1: assets.RouterSource()}
