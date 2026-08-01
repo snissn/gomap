@@ -2754,13 +2754,99 @@ func m8ProductionGateLedgerForReportV1(report m8ProductionReportV1) m8Production
 	if report.Resources.PersistentAssetBytes > 0 && report.Resources.PeakRSSMeasured && len(report.Resources.LimitComparisons) > 0 {
 		ledger.ResourceBounds = "pass"
 		for _, comparison := range report.Resources.LimitComparisons {
-			if comparison.Configured == 0 || !comparison.Passed {
+			if comparison.Configured == 0 || !comparison.Enforced || comparison.Observed > comparison.Configured {
 				ledger.ResourceBounds = "fail"
 				break
 			}
 		}
 	}
 	return ledger
+}
+
+type m8ProductionResourceLimitConfigV1 struct {
+	Name       string
+	Configured uint64
+	Unit       string
+	Enforced   bool
+}
+
+func m8ExpectedResourceLimitConfigsV1(report m8ProductionReportV1) ([]m8ProductionResourceLimitConfigV1, bool) {
+	if len(report.Config.Concurrency) == 0 {
+		return nil, false
+	}
+	coordinator := nativewire.DefaultVectorPartitionCoordinatorLimitsV1()
+	coordinator.MaxCandidateBytes = m8ProductionCandidateBudgetBytesV1
+	shard := nativewire.DefaultVectorPartitionShardSearchLimitsV1()
+	shard.MaxCandidateBytes = m8ProductionCandidateBudgetBytesV1
+	rows := append([]m8ProductionRowV1(nil), report.Rows...)
+	rows = append(rows, report.UntimedBoundary.resourceRowV1())
+	observed := m8ObservedResourceMaximaV1(rows)
+	concurrent, concurrentErr := m8ConfiguredConcurrentShardRequestsV1(coordinator.MaxConcurrentRequests, report.Config.Concurrency)
+	retries, retriesOK := m8ConfiguredAggregateTaskLimitV1(coordinator.MaxRetries, observed.Requests)
+	redirects, redirectsOK := m8ConfiguredAggregateTaskLimitV1(coordinator.MaxRedirects, observed.Requests)
+	rpcs, rpcsOK := m8ConfiguredRPCsV1(observed.Requests, retries, retriesOK)
+	if concurrentErr != nil || !retriesOK || !redirectsOK || !rpcsOK {
+		return nil, false
+	}
+	return []m8ProductionResourceLimitConfigV1{
+		{"persistent_asset_bytes", report.Resources.PersistentAssetCap, "bytes", true},
+		{"process_peak_rss", report.Resources.PeakRSSCapBytes, "bytes", true},
+		{"coordinator_selected_partitions", uint64(coordinator.MaxSelectedPartitions), "count", true},
+		{"coordinator_groups", uint64(coordinator.MaxGroups), "count", true},
+		{"coordinator_requests", uint64(coordinator.MaxRequests), "count", true},
+		{"coordinator_concurrent_requests_across_clients", concurrent, "count", true},
+		{"coordinator_rpcs_across_shard_requests", rpcs, "count", true},
+		{"coordinator_retries_across_shard_requests", retries, "count", true},
+		{"coordinator_redirects_across_shard_requests", redirects, "count", true},
+		{"coordinator_router_candidates", uint64(coordinator.MaxRouterCandidates), "count", true},
+		{"coordinator_query_bytes", uint64(coordinator.MaxQueryBytes), "bytes", true},
+		{"coordinator_top_k", uint64(coordinator.MaxTopK), "count", true},
+		{"coordinator_ef_search", uint64(coordinator.MaxEfSearch), "count", true},
+		{"coordinator_partitions_per_request", uint64(coordinator.MaxPartitionsPerRequest), "count", true},
+		{"coordinator_identity_bytes", uint64(coordinator.MaxIdentityBytes), "bytes", true},
+		{"coordinator_stable_id_bytes", uint64(coordinator.MaxStableIDBytes), "bytes", true},
+		{"coordinator_merge_entries", uint64(coordinator.MaxMergeEntries), "count", true},
+		{"coordinator_request_bytes", coordinator.MaxRequestBytes, "bytes", true},
+		{"coordinator_candidate_bytes", coordinator.MaxCandidateBytes, "bytes", true},
+		{"coordinator_response_bytes", coordinator.MaxResponseBytes, "bytes", true},
+		{"coordinator_wall_clock", uint64(coordinator.MaxWallClock), "nanoseconds", true},
+		{"shard_dimensions", uint64(shard.MaxDimensions), "count", true},
+		{"shard_query_bytes", uint64(shard.MaxQueryBytes), "bytes", true},
+		{"shard_partitions", uint64(shard.MaxPartitions), "count", true},
+		{"shard_top_k", uint64(shard.MaxTopK), "count", true},
+		{"shard_ef_search", uint64(shard.MaxEfSearch), "count", true},
+		{"shard_identity_bytes", uint64(shard.MaxIdentityBytes), "bytes", true},
+		{"shard_stable_id_bytes", uint64(shard.MaxStableIDBytes), "bytes", true},
+		{"shard_request_bytes", shard.MaxRequestBytes, "bytes", true},
+		{"shard_candidate_bytes", shard.MaxCandidateBytes, "bytes", true},
+		{"shard_response_bytes", shard.MaxResponseBytes, "bytes", true},
+	}, true
+}
+
+func validM8ResourceLimitComparisonsV1(report m8ProductionReportV1) bool {
+	expected, ok := m8ExpectedResourceLimitConfigsV1(report)
+	if !ok || len(report.Resources.LimitComparisons) != len(expected) {
+		return false
+	}
+	want := make(map[string]m8ProductionResourceLimitConfigV1, len(expected))
+	for _, comparison := range expected {
+		want[comparison.Name] = comparison
+	}
+	for _, comparison := range report.Resources.LimitComparisons {
+		expectation, ok := want[comparison.Name]
+		if !ok || comparison.Configured != expectation.Configured || comparison.Unit != expectation.Unit || comparison.Enforced != expectation.Enforced {
+			return false
+		}
+		delete(want, comparison.Name)
+		passed := comparison.Configured > 0 && comparison.Observed <= comparison.Configured
+		if comparison.Name == "process_peak_rss" {
+			passed = report.Resources.PeakRSSMeasured && passed
+		}
+		if comparison.Passed != passed {
+			return false
+		}
+	}
+	return len(want) == 0
 }
 
 func m8ProductionGateValuesV1(ledger m8ProductionGateLedgerV1) []string {
@@ -2985,7 +3071,8 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 	if report.Variant != nil {
 		if err := validateM3VariantDescriptorV1(*report.Variant); err != nil || len(report.Config.Overlap) != 1 ||
 			report.Config.Overlap[0] != report.Variant.OverlapRatio || report.Variant.FixtureChecksum != report.Dataset.Checksum ||
-			uint64(report.Variant.Partitions) != uint64(report.Config.Partitions) || report.Variant.PersistentAssetBytes != report.Resources.PersistentAssetBytes {
+			uint64(report.Variant.Partitions) != uint64(report.Config.Partitions) || report.Variant.PersistentAssetBytes != report.Resources.PersistentAssetBytes ||
+			report.Topology.ReadySetDigest != report.Variant.ReadySetDigest || !m8RouterSessionsMatchVariantV1(report.RouterSessions, *report.Variant) {
 			return errors.New("M8 report variant identity is not bound to its configuration and resources")
 		}
 	}
@@ -3059,6 +3146,9 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 	}
 	if !validM8RouterSessionEvidenceV1(report.RouterSessions, measuredSamples) {
 		return errors.New("incomplete M8 router-session evidence")
+	}
+	if !validM8ResourceLimitComparisonsV1(report) {
+		return errors.New("incomplete or forged M8 resource-limit evidence")
 	}
 	if !report.Failure.Passed || report.Failure.Error == "" || report.Failure.ReturnedNeighbors != 0 || report.Failure.ReturnedGroups != 0 ||
 		report.UntimedBoundary.SelectedPartitions != report.Config.Partitions || report.UntimedBoundary.EfSearch < report.Config.TopK ||
@@ -3204,6 +3294,17 @@ func validM8RouterSessionEvidenceV1(evidence m8ProductionRouterSessionEvidenceV1
 	}
 	return measuredHits == expectedMeasuredSamples && measuredLeasePins == expectedMeasuredSamples &&
 		measuredLeaseReleases == expectedMeasuredSamples
+}
+
+func m8RouterSessionsMatchVariantV1(evidence m8ProductionRouterSessionEvidenceV1, variant m3VariantDescriptorV1) bool {
+	for _, sessions := range [][]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{evidence.AfterWarmup, evidence.AfterMeasured} {
+		for _, session := range sessions {
+			if session.Identity.ReadySetDigest != variant.ReadySetDigest || session.Identity.RouterModelDigest != variant.RouterModelDigest {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func m8SHA256V1(value string) bool {

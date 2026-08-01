@@ -143,7 +143,7 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		SchemaVersion: 3, ResultKind: "m8_production_multi_group_evidence_v3", Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true,
 		GeneratedAt: time.Now(), Command: []string{"m8-test"}, BaseSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		GoVersion: "go1.test", GOOS: "linux", GOARCH: "amd64", LogicalCPUs: 1, GOMAXPROCS: 1, GoMemoryLimitBytes: 1,
-		Dataset: fixture, Config: m8ProductionConfigEvidenceV1{RaftGroups: 2, RaftNodesPerGroup: 3, Partitions: 4, TopK: 10, RouterCandidates: 4}, BuildNanos: 1,
+		Dataset: fixture, Config: m8ProductionConfigEvidenceV1{RaftGroups: 2, RaftNodesPerGroup: 3, Partitions: 4, TopK: 10, Concurrency: []int{1}, RouterCandidates: 4}, BuildNanos: 1,
 		Topology:       nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{Network: "tcp_loopback_serialized_m5_v1", LifecycleState: "active", ReadySetDigest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", MetaGroup: "meta", MetaLeader: "meta-leader", MetaNodes: []string{"meta-a", "meta-b", "meta-c"}, MaxConcurrentShardRequests: 1, Groups: []nativewire.VectorPartitionM8ProductionGroupEvidenceV1{group("group-a", 1), group("group-b", 1)}},
 		RouterSessions: m8ProductionRouterSessionEvidenceV1{AfterWarmup: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, LeasePins: 1, LeaseReleases: 1}}, AfterMeasured: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, Hits: uint64(fixture.Queries), LeasePins: uint64(fixture.Queries) + 1, LeaseReleases: uint64(fixture.Queries) + 1}}},
 		Rows: []m8ProductionRowV1{{Status: "pass", Probes: 4, EfSearch: 10, Concurrency: 1, Samples: fixture.Queries, RecallAtK: 1, QPS: 1, P50Nanos: 1, P95Nanos: 2, P99Nanos: 3, MaxTotalNanos: 4, RouterMode: collections.VectorPartitionRouterModeApproxV1, RouterCandidates: 4, ExactParityChecked: true, ExactParityPassed: true, NoPartialResults: true, Attribution: m8ProductionAttributionV1{
@@ -187,10 +187,62 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	report.Variant = &variant
+	report.Topology.ReadySetDigest = variant.ReadySetDigest
 	report.Config.Overlap = []float64{0}
 	report.Rows[0].VariantID = variant.VariantID
+	for i := range report.RouterSessions.AfterWarmup {
+		report.RouterSessions.AfterWarmup[i].Identity.ReadySetDigest = variant.ReadySetDigest
+		report.RouterSessions.AfterWarmup[i].Identity.RouterModelDigest = variant.RouterModelDigest
+	}
+	for i := range report.RouterSessions.AfterMeasured {
+		report.RouterSessions.AfterMeasured[i].Identity.ReadySetDigest = variant.ReadySetDigest
+		report.RouterSessions.AfterMeasured[i].Identity.RouterModelDigest = variant.RouterModelDigest
+	}
+	testM8CompleteResourceLimitsV1(t, &report)
 	if err := validateM8ProductionReportV1(report); err != nil {
 		t.Fatalf("valid endpoint coverage rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*m8ProductionReportV1){
+		"forged_limit_pass": func(invalid *m8ProductionReportV1) {
+			invalid.Resources.LimitComparisons = append([]m8ProductionResourceLimitComparisonV1(nil), invalid.Resources.LimitComparisons...)
+			invalid.Resources.LimitComparisons[0].Configured, invalid.Resources.LimitComparisons[0].Observed, invalid.Resources.LimitComparisons[0].Passed = 1, 2, true
+		},
+		"omitted_limit": func(invalid *m8ProductionReportV1) {
+			invalid.Resources.LimitComparisons = append([]m8ProductionResourceLimitComparisonV1(nil), invalid.Resources.LimitComparisons[:len(invalid.Resources.LimitComparisons)-1]...)
+		},
+		"duplicate_limit": func(invalid *m8ProductionReportV1) {
+			invalid.Resources.LimitComparisons = append([]m8ProductionResourceLimitComparisonV1(nil), invalid.Resources.LimitComparisons...)
+			invalid.Resources.LimitComparisons[len(invalid.Resources.LimitComparisons)-1] = invalid.Resources.LimitComparisons[0]
+		},
+		"variant_runtime_identity": func(invalid *m8ProductionReportV1) {
+			invalid.Topology.ReadySetDigest = strings.Repeat("e", 64)
+			invalid.RouterSessions.AfterWarmup = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), invalid.RouterSessions.AfterWarmup...)
+			invalid.RouterSessions.AfterMeasured = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), invalid.RouterSessions.AfterMeasured...)
+			for i := range invalid.RouterSessions.AfterWarmup {
+				invalid.RouterSessions.AfterWarmup[i].Identity.ReadySetDigest = invalid.Topology.ReadySetDigest
+			}
+			for i := range invalid.RouterSessions.AfterMeasured {
+				invalid.RouterSessions.AfterMeasured[i].Identity.ReadySetDigest = invalid.Topology.ReadySetDigest
+			}
+		},
+		"variant_router_model": func(invalid *m8ProductionReportV1) {
+			invalid.RouterSessions.AfterWarmup = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), invalid.RouterSessions.AfterWarmup...)
+			invalid.RouterSessions.AfterMeasured = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), invalid.RouterSessions.AfterMeasured...)
+			for i := range invalid.RouterSessions.AfterWarmup {
+				invalid.RouterSessions.AfterWarmup[i].Identity.RouterModelDigest = strings.Repeat("e", 64)
+			}
+			for i := range invalid.RouterSessions.AfterMeasured {
+				invalid.RouterSessions.AfterMeasured[i].Identity.RouterModelDigest = strings.Repeat("e", 64)
+			}
+		},
+	} {
+		t.Run("rejects_"+name, func(t *testing.T) {
+			invalid := report
+			mutate(&invalid)
+			if err := validateM8ProductionReportV1(invalid); err == nil {
+				t.Fatalf("accepted %s", name)
+			}
+		})
 	}
 	for name, mutate := range map[string]func(*m8ProductionReportV1){
 		"gomaxprocs": func(invalid *m8ProductionReportV1) { invalid.GOMAXPROCS = 0 },
@@ -335,6 +387,28 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	report.Topology.Groups[1].EndpointHits = 0
 	if err := validateM8ProductionReportV1(report); err == nil {
 		t.Fatal("accepted report with an unexercised data-group endpoint")
+	}
+}
+
+func testM8CompleteResourceLimitsV1(t *testing.T, report *m8ProductionReportV1) {
+	t.Helper()
+	if report.Resources.PersistentAssetCap == 0 {
+		report.Resources.PersistentAssetCap = 1
+	}
+	if report.Resources.PeakRSSCapBytes == 0 {
+		report.Resources.PeakRSSCapBytes = 1
+	}
+	expected, ok := m8ExpectedResourceLimitConfigsV1(*report)
+	if !ok {
+		t.Fatal("derive test M8 resource limits")
+	}
+	report.Resources.LimitComparisons = make([]m8ProductionResourceLimitComparisonV1, len(expected))
+	for i, comparison := range expected {
+		passed := true
+		if comparison.Name == "process_peak_rss" {
+			passed = report.Resources.PeakRSSMeasured
+		}
+		report.Resources.LimitComparisons[i] = m8ProductionResourceLimitComparisonV1{Name: comparison.Name, Configured: comparison.Configured, Unit: comparison.Unit, Enforced: comparison.Enforced, Passed: passed}
 	}
 }
 
