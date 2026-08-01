@@ -1933,7 +1933,8 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		return m8BenchmarkWorkPlan{}, err
 	}
 	// Attribution runs once after measured overlap/concurrency rows. For every
-	// query/probe/ef cell it executes exact, approximate, and local-HNSW passes;
+	// query/probe/ef cell it executes exact-route exact, approximate-route exact,
+	// exact-route local-HNSW, and approximate-route local-HNSW passes;
 	// the exhaustive partition-union pass is cached once per query.
 	var attributionPerRun int64
 	if supportedOverlaps > 0 {
