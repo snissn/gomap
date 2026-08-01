@@ -41,7 +41,11 @@ type m8QualificationCampaignSummaryV1 struct {
 	P16QPSMin    float64 `json:"p16_qps_min"`
 	P16QPSMedian float64 `json:"p16_qps_median"`
 	P16QPSMax    float64 `json:"p16_qps_max"`
+	P4P95Min     uint64  `json:"p4_p95_min"`
+	P4P95Median  uint64  `json:"p4_p95_median"`
 	P4P95Max     uint64  `json:"p4_p95_max"`
+	P16P95Min    uint64  `json:"p16_p95_min"`
+	P16P95Median uint64  `json:"p16_p95_median"`
 	P16P95Max    uint64  `json:"p16_p95_max"`
 }
 
@@ -87,6 +91,9 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 	if !m8QualificationSHA256V1(campaign.FixtureChecksum) || !m8QualificationGitSHAV1(campaign.BaseSHA) || !m8QualificationGitSHAV1(campaign.HeadSHA) || len(campaign.Runs) != 3 {
 		return m8QualificationCampaignSummaryV1{}, errors.New("qualification campaign requires one fixture/head and exactly three runs")
 	}
+	if !m8QualificationFixtureChecksumV1(campaign.FixtureChecksum) {
+		return m8QualificationCampaignSummaryV1{}, errors.New("qualification campaign fixture is not an authoritative corpus")
+	}
 	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return m8QualificationCampaignSummaryV1{}, fmt.Errorf("resolve qualification root: %w", err)
@@ -96,6 +103,7 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 		return m8QualificationCampaignSummaryV1{}, errors.New("qualification root is not a directory")
 	}
 	var p4QPS, p16QPS []float64
+	var p4P95, p16P95 []uint64
 	var summary m8QualificationCampaignSummaryV1
 	variantArtifacts := make(map[string]string, len(m8RequiredVariantIDsV1))
 	truthArtifact := ""
@@ -141,7 +149,7 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 		if err := validateM8ProductionMatrixV1(matrix); err != nil {
 			return summary, fmt.Errorf("validate qualification matrix %s: %w", run.Path, err)
 		}
-		if matrix.Dataset.Checksum != campaign.FixtureChecksum || len(matrix.Variants) != len(m8RequiredVariantIDsV1) || !slices.Equal(matrix.RequiredVariants, m8RequiredVariantIDsV1) || matrix.Gates.RequiredVariants != "pass" || matrix.Gates.ExhaustiveParity != "pass" || matrix.Gates.FailureHonesty != "pass" || matrix.Gates.PartitionPackReachability != "pass" || matrix.Gates.Balance != "pass" || matrix.Gates.ResourceBounds != "pass" || matrix.Gates.OverlapStorage != "pass" || matrix.OverlapStorageRatio >= 1.35 {
+		if matrix.Dataset.Checksum != campaign.FixtureChecksum || !m8QualificationFixtureV1(matrix.Dataset) || len(matrix.Variants) != len(m8RequiredVariantIDsV1) || !slices.Equal(matrix.RequiredVariants, m8RequiredVariantIDsV1) || matrix.Gates.RequiredVariants != "pass" || matrix.Gates.ExhaustiveParity != "pass" || matrix.Gates.FailureHonesty != "pass" || matrix.Gates.PartitionPackReachability != "pass" || matrix.Gates.Balance != "pass" || matrix.Gates.ResourceBounds != "pass" || matrix.Gates.OverlapStorage != "pass" || matrix.OverlapStorageRatio >= 1.35 {
 			return summary, fmt.Errorf("qualification matrix %s does not bind the required identity/gates", run.Path)
 		}
 		if dataset.Checksum != "" && dataset != matrix.Dataset {
@@ -158,7 +166,7 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 			if runIndex == 0 && !m8QualificationHasFullLadderV1(*report) {
 				return summary, fmt.Errorf("qualification matrix %s omits the required p1/2/4/8/16 ladder", cleanPath)
 			}
-			if report.BaseSHA != campaign.BaseSHA || report.HeadSHA != campaign.HeadSHA || report.Dataset.Checksum != campaign.FixtureChecksum || report.Dirty || !m8QualificationSHA256V1(report.TruthCache.ArtifactSHA256) || report.Variant == nil || seenVariants[report.Variant.VariantID] || !slices.Contains(m8RequiredVariantIDsV1, report.Variant.VariantID) || !m8QualificationSHA256V1(report.Variant.ArtifactSHA256) {
+			if report.BaseSHA != campaign.BaseSHA || report.HeadSHA != campaign.HeadSHA || report.Dataset != matrix.Dataset || report.Dirty || !m8QualificationSHA256V1(report.TruthCache.ArtifactSHA256) || report.Variant == nil || seenVariants[report.Variant.VariantID] || !slices.Contains(m8RequiredVariantIDsV1, report.Variant.VariantID) || !m8QualificationSHA256V1(report.Variant.ArtifactSHA256) || !m8QualificationConfigV1(report.Config, report.Dataset, report.Variant.OverlapRatio, runIndex) {
 				return summary, fmt.Errorf("qualification matrix %s has unbound child identity", run.Path)
 			}
 			seenVariants[report.Variant.VariantID] = true
@@ -191,7 +199,7 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 			return summary, fmt.Errorf("qualification matrix %s misses the selected p4/p16 gate", run.Path)
 		}
 		p4QPS, p16QPS = append(p4QPS, p4.QPS), append(p16QPS, p16.QPS)
-		summary.P4P95Max, summary.P16P95Max = max(summary.P4P95Max, p4.P95Nanos), max(summary.P16P95Max, p16.P95Nanos)
+		p4P95, p16P95 = append(p4P95, p4.P95Nanos), append(p16P95, p16.P95Nanos)
 	}
 	minMedianMax := func(values []float64) (float64, float64, float64) {
 		sort.Float64s(values)
@@ -199,7 +207,44 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 	}
 	summary.P4QPSMin, summary.P4QPSMedian, summary.P4QPSMax = minMedianMax(p4QPS)
 	summary.P16QPSMin, summary.P16QPSMedian, summary.P16QPSMax = minMedianMax(p16QPS)
+	minMedianMaxU64 := func(values []uint64) (uint64, uint64, uint64) {
+		slices.Sort(values)
+		return values[0], values[len(values)/2], values[len(values)-1]
+	}
+	summary.P4P95Min, summary.P4P95Median, summary.P4P95Max = minMedianMaxU64(p4P95)
+	summary.P16P95Min, summary.P16P95Median, summary.P16P95Max = minMedianMaxU64(p16P95)
 	return summary, nil
+}
+
+var m8QualificationFixturesV1 = [...]fixtureManifest{
+	{SchemaVersion: 1, Fixture: "deterministic_100000", Generator: "treedb_vector_partition_embedding_mixture_v1", Arithmetic: "ieee754_binary64_explicit_fma_v1", Vectors: 100000, Queries: 1000, Dimensions: 128, Metric: "cosine", Seed: 4017, Checksum: "ecc2224f386932e580e4956f2cfa852140d3134625971c3511bc0d5feddf9b95"},
+	{SchemaVersion: 1, Fixture: "qualification_embedding_mixture_250000", Generator: "treedb_vector_partition_embedding_mixture_v1", Arithmetic: "ieee754_binary64_explicit_fma_v1", Vectors: 250000, Queries: 1000, Dimensions: 128, Metric: "cosine", Seed: 4016, Checksum: "d0c7c82ba868853aae9a4280161003d72714ad1701d41ed3169c2fa94d470d69"},
+}
+
+func m8QualificationFixtureChecksumV1(checksum string) bool {
+	for _, fixture := range m8QualificationFixturesV1 {
+		if checksum == fixture.Checksum {
+			return true
+		}
+	}
+	return false
+}
+
+func m8QualificationFixtureV1(candidate fixtureManifest) bool {
+	for _, fixture := range m8QualificationFixturesV1 {
+		if candidate == fixture {
+			return true
+		}
+	}
+	return false
+}
+
+func m8QualificationConfigV1(cfg m8ProductionConfigEvidenceV1, fixture fixtureManifest, overlap float64, repeat int) bool {
+	probes := []int{4, 16}
+	if repeat == 0 {
+		probes = []int{1, 2, 4, 8, 16}
+	}
+	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterCandidates == 64 && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, probes) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{64}) && slices.Equal(cfg.Overlap, []float64{overlap})
 }
 
 func m8ValidateQualificationMatrixDerivationV1(matrix m8ProductionMatrixV1) error {
