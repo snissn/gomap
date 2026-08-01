@@ -440,6 +440,9 @@ func run(args []string, stdout io.Writer) error {
 	if len(args) > 0 && args[0] == "generate-fixture" {
 		return runGenerateFixture(args[1:], stdout)
 	}
+	if len(args) > 0 && args[0] == "validate-qualification" {
+		return runValidateQualification(args[1:], stdout)
+	}
 	return runWithRuntimeCapabilities(args, stdout, currentBenchmarkRuntimeCapabilities())
 }
 

@@ -29,9 +29,10 @@ hardware and topology, variant descriptor and asset digest, probes, ef-search,
 concurrency, samples, timing boundary, profiles, and exact command.  A
 comparable matrix includes graph-disjoint, graph-overlap-020, stable-ID-hash
 disjoint, and exhaustive all-partition rows under the same topology and local
-search settings. For #4027 each repeated structured comparison includes p4 and
-p16 at `ef_search=64`, concurrency `1`, and approximate router candidate
-budget `64`; the retained matrix continues to bind the exhaustive control.
+search settings. For #4027 repeat one records the p1/p2/p4/p8/p16 ladder;
+repeats two and three retain p4/p16 at `ef_search=64`, concurrency `1`, and
+approximate router candidate budget `64`; the retained matrix continues to
+bind the exhaustive control.
 
 Repeat the p4/p16 comparison three times per structured corpus. The campaign
 index hashes every matrix, requires one exact head and corpus/truth/variant
