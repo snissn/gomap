@@ -100,6 +100,7 @@ type m8ProductionConfigEvidenceV1 struct {
 	RecallTarget      float64   `json:"recall_target"`
 	Concurrency       []int     `json:"concurrency"`
 	Warmup            int       `json:"warmup_requests"`
+	EffectiveWarmup   int       `json:"effective_warmup_requests"`
 	EfSearch          []int     `json:"ef_search"`
 	RouterCandidates  int       `json:"approximate_router_candidate_budget"`
 	Seed              int64     `json:"seed"`
@@ -396,6 +397,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 			"multi-host qualification and external-system comparisons are explicitly outside this local gate",
 		},
 	}
+	report.Config.EffectiveWarmup, _ = m8WarmupCountAndConcurrencyV1(cfg)
 	report.RouterSessions.BeforeWarmup = topology.Coordinator().Stats().RouterSessions
 	if cfg.profiles != "" {
 		if err := os.MkdirAll(cfg.profiles, 0o755); err != nil {
@@ -558,7 +560,10 @@ func m8ArtifactNameV1(cfg config, fixture fixtureManifest, manifest collections.
 		Assets  m8ArtifactAssetIdentityV1
 	}{
 		Fixture: fixture,
-		Config:  m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: cfg.concurrency, Warmup: cfg.warmup, EfSearch: cfg.efSearch, RouterCandidates: cfg.routerCandidates, Seed: cfg.seed},
+		Config: func() m8ProductionConfigEvidenceV1 {
+			count, _ := m8WarmupCountAndConcurrencyV1(cfg)
+			return m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: count, EfSearch: cfg.efSearch, RouterCandidates: cfg.routerCandidates, Seed: cfg.seed}
+		}(),
 		Assets: m8ArtifactAssetIdentityV1{
 			IntegrityDigest:  manifest.IntegrityDigest,
 			ReadySetDigest:   manifest.ReadySetDigest,
@@ -2935,6 +2940,10 @@ func validateM8ProductionReportV1(report m8ProductionReportV1) error {
 		report.Config.RaftGroups < 2 || report.Config.RaftNodesPerGroup != 3 || report.Config.Partitions < 4 || report.Config.Partitions > maxPartitions ||
 		report.Config.Warmup < 0 || report.Config.RouterCandidates < 1 || report.BuildNanos <= 0 || report.TimedBoundary == "" || len(report.Limitations) == 0 {
 		return errors.New("missing or invalid M8 identity, topology, or timing metadata")
+	}
+	expectedWarmup, _ := m8WarmupCountAndConcurrencyV1(config{warmup: report.Config.Warmup, concurrency: report.Config.Concurrency})
+	if report.Config.EffectiveWarmup != expectedWarmup {
+		return errors.New("invalid M8 effective warmup count")
 	}
 	if err := validateM3FixtureWithCaps(report.Dataset, maxVectors, maxFixtureBytes); err != nil {
 		return fmt.Errorf("dataset: %w", err)
