@@ -185,7 +185,7 @@ func TestMongoMutationCommandWALValueLogPointersReopen(t *testing.T) {
 	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
 	assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "generation", Value: int32(1)}}}}, {Key: "$db", Value: "app"}}))
 	assertOK(t, serveCommand(t, server, 2, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{
-		bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "generation", Value: int32(5)}}}}}},
+		bson.D{{Key: "q", Value: bson.D{{Key: "generation", Value: int32(1)}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "generation", Value: int32(5)}}}}}},
 		bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "upserted"}}}}}, {Key: "upsert", Value: true}},
 	}}, {Key: "$db", Value: "app"}}))
 	if err := server.Collections.FlushAll(); err != nil {
