@@ -59,7 +59,7 @@ func (s *Service) VectorPartitionServiceV1() (*vectorpartition.ServiceV1, error)
 	}
 	s.benchmarkSearchCacheMu.RLock()
 	defer s.benchmarkSearchCacheMu.RUnlock()
-	if s.closed || s.vectorPartitionService == nil {
+	if s.closed || s.vectorPartitionService == nil || s.vectorPartitionOperations == nil || !s.vectorPartitionOperations.Enabled() {
 		return nil, errors.New("document service: vector partition service is unavailable")
 	}
 	return s.vectorPartitionService, nil
@@ -68,7 +68,7 @@ func (s *Service) VectorPartitionServiceV1() (*vectorpartition.ServiceV1, error)
 // RegisterVectorPartitionOperationsV1 installs the optional default-off
 // operator boundary. Its service and live-health function remain node-owned.
 func (s *Service) RegisterVectorPartitionOperationsV1(operations *vectorpartition.OperationsV1) error {
-	if s == nil || operations == nil {
+	if s == nil || operations == nil || !operations.Enabled() {
 		return errors.New("document service: vector partition operations are required")
 	}
 	s.benchmarkSearchCacheMu.Lock()
@@ -78,6 +78,9 @@ func (s *Service) RegisterVectorPartitionOperationsV1(operations *vectorpartitio
 	}
 	if s.vectorPartitionOperations != nil {
 		return errors.New("document service: vector partition operations already registered")
+	}
+	if s.vectorPartitionService == nil {
+		return errors.New("document service: vector partition service must be registered before enabled operations")
 	}
 	s.vectorPartitionOperations = operations
 	return nil

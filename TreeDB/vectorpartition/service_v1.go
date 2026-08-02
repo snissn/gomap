@@ -67,7 +67,7 @@ type NeighborV1 struct {
 }
 
 type SearchCountersV1 struct {
-	Requests, RPCs, Retries, Redirects, Candidates, Edges uint64
+	Requests, RPCs, Retries, Redirects, Candidates, Edges, SelectedPartitions, SelectedGroups uint64
 }
 
 type SearchTimingV1 struct{ Total time.Duration }

@@ -32,6 +32,8 @@ type OperationsCountersV1 struct {
 	Disabled, ReadyChecks, Searches, CapQueryBytes, CapRequestBytes uint64
 	CapCandidateBytes, CapResponseBytes, CapTopK, CapProbes         uint64
 	CapEfSearch, CapMergeEntries                                    uint64
+	Failures, RPCs, Retries, Redirects, Candidates, Edges           uint64
+	SelectedPartitions, SelectedGroups                              uint64
 }
 
 // OperationsV1 is the explicit operator boundary over an already assembled
@@ -52,6 +54,10 @@ func NewOperationsV1(service *ServiceV1, config OperationsConfigV1, health func(
 		return nil, errors.New("vectorpartition: enabled operations require service, live health, and bounded limits")
 	}
 	return &OperationsV1{service: service, config: config, health: health}, nil
+}
+
+func (o *OperationsV1) Enabled() bool {
+	return o != nil && o.config.Enabled && o.service != nil && o.health != nil
 }
 
 func validOperationsConfigV1(c OperationsConfigV1) bool {
@@ -79,10 +85,22 @@ func (o *OperationsV1) Search(ctx context.Context, request SearchRequestV1) (Sea
 	if err := o.admit(request); err != nil {
 		return SearchResponseV1{}, err
 	}
+	response, err := o.service.Search(ctx, request)
 	o.mu.Lock()
 	o.counts.Searches++
+	if err != nil {
+		o.counts.Failures++
+	} else {
+		o.counts.RPCs += response.Counters.RPCs
+		o.counts.Retries += response.Counters.Retries
+		o.counts.Redirects += response.Counters.Redirects
+		o.counts.Candidates += response.Counters.Candidates
+		o.counts.Edges += response.Counters.Edges
+		o.counts.SelectedPartitions += response.Counters.SelectedPartitions
+		o.counts.SelectedGroups += response.Counters.SelectedGroups
+	}
 	o.mu.Unlock()
-	return o.service.Search(ctx, request)
+	return response, err
 }
 
 func (o *OperationsV1) Inventory(ctx context.Context, id GenerationIDV1) ([]GenerationStatusV1, error) {
@@ -94,6 +112,30 @@ func (o *OperationsV1) Inventory(ctx context.Context, id GenerationIDV1) ([]Gene
 		return nil, err
 	}
 	return []GenerationStatusV1{status}, nil
+}
+func (o *OperationsV1) Register(ctx context.Context, registration GenerationRegistrationV1) (GenerationStatusV1, error) {
+	if err := o.enabled(); err != nil {
+		return GenerationStatusV1{}, err
+	}
+	return o.service.Register(ctx, registration)
+}
+func (o *OperationsV1) Prepare(ctx context.Context, id GenerationIDV1) (GenerationStatusV1, error) {
+	if err := o.enabled(); err != nil {
+		return GenerationStatusV1{}, err
+	}
+	return o.service.Prepare(ctx, id)
+}
+func (o *OperationsV1) Activate(ctx context.Context, id GenerationIDV1) (GenerationStatusV1, error) {
+	if err := o.enabled(); err != nil {
+		return GenerationStatusV1{}, err
+	}
+	return o.service.Activate(ctx, id)
+}
+func (o *OperationsV1) Invalidate(ctx context.Context, id GenerationIDV1, reason string) (GenerationStatusV1, error) {
+	if err := o.enabled(); err != nil {
+		return GenerationStatusV1{}, err
+	}
+	return o.service.Invalidate(ctx, id, reason)
 }
 func (o *OperationsV1) RequestRebuild(ctx context.Context, id GenerationIDV1) (GenerationStatusV1, error) {
 	if err := o.enabled(); err != nil {

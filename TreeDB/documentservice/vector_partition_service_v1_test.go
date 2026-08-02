@@ -48,8 +48,8 @@ func TestVectorPartitionServiceRegistrationDoesNotTransferBackendOwnershipV1(t *
 	if err := doc.RegisterVectorPartitionServiceV1(service); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := doc.VectorPartitionServiceV1(); err != nil {
-		t.Fatal(err)
+	if _, err := doc.VectorPartitionServiceV1(); err == nil {
+		t.Fatal("production service escaped before enabled operations registration")
 	}
 	config := vectorpartition.ConservativeOperationsConfigV1()
 	config.Enabled = true
@@ -60,6 +60,9 @@ func TestVectorPartitionServiceRegistrationDoesNotTransferBackendOwnershipV1(t *
 		t.Fatal(err)
 	}
 	if err := doc.RegisterVectorPartitionOperationsV1(operations); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := doc.VectorPartitionServiceV1(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := doc.VectorPartitionOperationsV1(); err != nil {

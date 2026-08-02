@@ -92,24 +92,34 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	operationsConfig := public.ConservativeOperationsConfigV1()
+	operationsConfig.Enabled = true
+	// This lifecycle fixture intentionally exercises the coordinator's larger
+	// production bounds; the operator cap remains explicit in deployment.
+	operationsConfig.MaxCandidateBytes, operationsConfig.MaxResponseBytes = 1<<40, 1<<40
+	operationsConfig.MaxTopK, operationsConfig.MaxProbes, operationsConfig.MaxEfSearch, operationsConfig.MaxMergeEntries = 1<<20, 1<<20, 1<<20, 1<<30
+	operations, err := public.NewOperationsV1(service, operationsConfig, backend.OperationsHealthV1)
+	if err != nil {
+		t.Fatal(err)
+	}
 	id := public.GenerationIDV1{Index: base.IndexName, Generation: 7}
-	if _, err := service.Register(ctx, public.GenerationRegistrationV1{GenerationIDV1: id, SourceGeneration: 11, SourceChecksum: 22, SourceSchemaHash: 33, SourceRowCount: 2}); err != nil {
+	if _, err := operations.Register(ctx, public.GenerationRegistrationV1{GenerationIDV1: id, SourceGeneration: 11, SourceChecksum: 22, SourceSchemaHash: 33, SourceRowCount: 2}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Prepare(ctx, id); err != nil {
+	if _, err := operations.Prepare(ctx, id); err != nil {
 		t.Fatal(err)
 	}
-	if status, err := service.Activate(ctx, id); err != nil || !status.Active {
+	if status, err := operations.Activate(ctx, id); err != nil || !status.Active {
 		t.Fatalf("activate = %#v, %v", status, err)
 	}
-	if status, err := service.Status(ctx, id); err != nil || !status.Active {
-		t.Fatalf("status = %#v, %v", status, err)
+	if inventory, err := operations.Inventory(ctx, id); err != nil || len(inventory) != 1 || !inventory[0].Active {
+		t.Fatalf("inventory = %#v, %v", inventory, err)
 	}
 	if health, err := backend.OperationsHealthV1(ctx); err != nil || !health.Ready || health.Reason != "ready" {
 		t.Fatalf("operations health = %#v, %v", health, err)
 	}
 	request := public.SearchRequestV1{Version: 1, Generation: id, Query: []float32{1, 0}, Metric: public.MetricCosineV1, TopK: base.TopK, Probes: base.PartitionProbes, EfSearch: base.EfSearch, Consistency: public.ConsistencyGenerationSnapshotV1, Limits: public.SearchLimitsV1{RequestBytes: base.RequestBytesLimit, CandidateBytes: base.CandidateBytesLimit, ResponseBytes: base.ResponseBytesLimit, MergeEntries: base.MergeEntriesLimit}}
-	response, err := service.Search(ctx, request)
+	response, err := operations.Search(ctx, request)
 	if err != nil || len(response.Neighbors) == 0 {
 		t.Fatalf("search = %#v, %v", response, err)
 	}
@@ -121,7 +131,7 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 	if _, err := harness.LeaderFence().LinearizableCatalogMetaAppliedIndexV1(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Invalidate(ctx, id, "mutation"); err != nil {
+	if _, err := operations.Invalidate(ctx, id, "mutation"); err != nil {
 		t.Fatal(err)
 	}
 	if health, err := backend.OperationsHealthV1(ctx); err != nil || health.Ready || health.Reason != "lifecycle_not_active" {
@@ -134,8 +144,14 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 	if err := harness.LifecycleCoordinator().ConfirmRelevantMutationV1(ctx, proof); err != nil {
 		t.Fatal(err)
 	}
-	if status, err := service.Retire(ctx, id); err != nil || status.State != public.GenerationRetiredV1 {
+	if status, err := operations.Retire(ctx, id); err != nil || status.State != public.GenerationRetiredV1 {
 		t.Fatalf("retire = %#v, %v", status, err)
+	}
+	if err := topology.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if health, err := backend.OperationsHealthV1(ctx); err != nil || health.Ready || health.Reason != "topology_unavailable" {
+		t.Fatalf("closed operations health = %#v, %v", health, err)
 	}
 }
 

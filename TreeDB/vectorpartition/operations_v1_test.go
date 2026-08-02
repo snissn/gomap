@@ -116,3 +116,63 @@ func TestOperationsV1EveryConfiguredCapStopsBeforeDispatchV1(t *testing.T) {
 		t.Fatalf("cap checks dispatched %d searches", calls)
 	}
 }
+
+func TestOperationsV1LifecycleMatrixDelegatesServiceV1(t *testing.T) {
+	id := GenerationIDV1{Index: "embedding", Generation: 1}
+	backend := &serviceBackendV1{states: map[GenerationIDV1]GenerationStatusV1{}, search: func(context.Context, SearchRequestV1) (SearchResponseV1, error) { return SearchResponseV1{}, nil }}
+	service, err := NewServiceV1(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := ConservativeOperationsConfigV1()
+	config.Enabled = true
+	ops, err := NewOperationsV1(service, config, func(context.Context) (OperationsHealthV1, error) { return OperationsHealthV1{Generation: id}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, err := ops.Register(t.Context(), GenerationRegistrationV1{GenerationIDV1: id, SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4}); err != nil || status.State != GenerationBuildingV1 {
+		t.Fatalf("register=%+v err=%v", status, err)
+	}
+	if status, err := ops.Prepare(t.Context(), id); err != nil || status.State != GenerationPreparedV1 {
+		t.Fatalf("prepare=%+v err=%v", status, err)
+	}
+	if status, err := ops.Activate(t.Context(), id); err != nil || status.State != GenerationActiveV1 {
+		t.Fatalf("activate=%+v err=%v", status, err)
+	}
+	if status, err := ops.Invalidate(t.Context(), id, "mutation"); err != nil || status.State != GenerationInvalidV1 {
+		t.Fatalf("invalidate=%+v err=%v", status, err)
+	}
+	if status, err := ops.RequestRebuild(t.Context(), id); err != nil || status.Generation != id {
+		t.Fatalf("rebuild=%+v err=%v", status, err)
+	}
+	if status, err := ops.Retire(t.Context(), id); err != nil || status.State != GenerationRetiredV1 {
+		t.Fatalf("retire=%+v err=%v", status, err)
+	}
+	if cleanup, err := ops.CleanupEligibility(t.Context(), id); err != nil || cleanup.Status.Generation != id {
+		t.Fatalf("cleanup=%+v err=%v", cleanup, err)
+	}
+}
+
+func TestOperationsV1SnapshotsSearchObservabilityV1(t *testing.T) {
+	id := GenerationIDV1{Index: "embedding", Generation: 1}
+	backend := &serviceBackendV1{states: map[GenerationIDV1]GenerationStatusV1{}, search: func(_ context.Context, r SearchRequestV1) (SearchResponseV1, error) {
+		return SearchResponseV1{Generation: r.Generation, Counters: SearchCountersV1{RPCs: 2, Retries: 1, Redirects: 1, Candidates: 3, Edges: 4, SelectedPartitions: 5, SelectedGroups: 2}}, nil
+	}}
+	service, err := NewServiceV1(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := ConservativeOperationsConfigV1()
+	config.Enabled = true
+	ops, err := NewOperationsV1(service, config, func(context.Context) (OperationsHealthV1, error) { return OperationsHealthV1{Generation: id}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ops.Search(t.Context(), operationsRequestV1()); err != nil {
+		t.Fatal(err)
+	}
+	got := ops.Counters()
+	if got.Searches != 1 || got.RPCs != 2 || got.Retries != 1 || got.Redirects != 1 || got.Candidates != 3 || got.Edges != 4 || got.SelectedPartitions != 5 || got.SelectedGroups != 2 {
+		t.Fatalf("counters=%+v", got)
+	}
+}
