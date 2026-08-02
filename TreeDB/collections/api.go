@@ -12021,7 +12021,7 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, predicate func(curren
 
 	primaryRootName := collectionPrimaryRootName(c.meta.Name)
 	commandWALActive := c.commandWALActive(commandWALIntent)
-	// A conditional miss must not append a replayable delete frame. Ordinary
+	// A conditional miss must not append a durable delete command frame. Ordinary
 	// deletes retain their historical missing-key command-WAL no-op behavior.
 	if predicate == nil && commandWALIntent == nil && commandWALActive {
 		commandWALIntent, err = c.newCollectionDeleteCommandWALIntent([][]byte{documentID}, nil)
