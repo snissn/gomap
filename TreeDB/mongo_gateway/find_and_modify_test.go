@@ -1,6 +1,7 @@
 package mongogateway
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -279,6 +280,24 @@ func TestFindAndModifyRejectsUnsupportedModes(t *testing.T) {
 	for i, query := range []bson.D{{{Key: "name", Value: "x"}}, {{Key: "_id", Value: bson.D{{Key: "$in", Value: bson.A{"u1"}}}}}} {
 		command := bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: query}, {Key: "update", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "x"}}}}}, {Key: "$db", Value: "app"}}
 		assertCommandError(t, serveCommand(t, server, int32(30+i), command), "BadValue")
+	}
+}
+
+func TestFindAndModifyRejectsRegexIDQueryBeforeUpsert(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	regex := bson.Regex{Pattern: "^u", Options: ""}
+	for i, upsert := range []bool{false, true} {
+		response := serveCommand(t, server, int32(40+i), bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: regex}}}, {Key: "update", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "x"}}}}}, {Key: "upsert", Value: upsert}, {Key: "$db", Value: "app"}})
+		assertCommandError(t, response, "BadValue")
+	}
+	if _, err := server.Collections.OpenCollection("app.users"); !errors.Is(err, collections.ErrCollectionNotFound) {
+		t.Fatalf("regex query created collection: %v", err)
 	}
 }
 

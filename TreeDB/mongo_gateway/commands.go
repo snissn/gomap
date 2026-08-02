@@ -3523,7 +3523,11 @@ func idEqualityFilterValue(filter wire.Document, commandName string) (bson.RawVa
 	if key != "_id" {
 		return bson.RawValue{}, fmt.Errorf("Mongo gateway %s currently requires an _id equality filter", commandName)
 	}
-	return elements[0].Value(), nil
+	id := elements[0].Value()
+	if id.Type == bson.TypeRegex {
+		return bson.RawValue{}, fmt.Errorf("Mongo gateway %s currently requires an _id equality filter", commandName)
+	}
+	return id, nil
 }
 
 func gatewayCollectionName(db, collection string) (string, error) {
