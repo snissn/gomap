@@ -6153,11 +6153,52 @@ func TestMongoMutationApplyOperatorsAndReplacement(t *testing.T) {
 	}
 }
 
+func TestMongoMutationNestedOperators(t *testing.T) {
+	doc := mustDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "profile", Value: bson.D{{Key: "name", Value: "ada"}, {Key: "count", Value: int32(1)}, {Key: "old", Value: true}}},
+		{Key: "tags", Value: bson.A{"go"}},
+		{Key: "labels", Value: bson.A{"go"}},
+	})
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "profile.name", Value: "grace"}, {Key: "profile.city", Value: "london"}}},
+		{Key: "$inc", Value: bson.D{{Key: "profile.count", Value: int32(2)}}},
+		{Key: "$push", Value: bson.D{{Key: "tags", Value: bson.D{{Key: "$each", Value: bson.A{"db", "go"}}}}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "labels", Value: bson.D{{Key: "$each", Value: bson.A{"go", "db", "go"}}}}}},
+		{Key: "$unset", Value: bson.D{{Key: "profile.old", Value: true}}},
+	}))
+	if err != nil {
+		t.Fatalf("parse nested mutation: %v", err)
+	}
+	updated, changed, err := applyMongoMutation(doc, mutation)
+	if err != nil || !changed {
+		t.Fatalf("apply nested mutation changed=%v err=%v", changed, err)
+	}
+	profile := bson.Raw(updated).Lookup("profile").Document()
+	if got, _ := profile.Lookup("name").StringValueOK(); got != "grace" {
+		t.Fatalf("profile.name=%q", got)
+	}
+	if got, _ := profile.Lookup("count").Int32OK(); got != 3 {
+		t.Fatalf("profile.count=%d", got)
+	}
+	if !profile.Lookup("old").IsZero() {
+		t.Fatal("profile.old remains")
+	}
+	values, err := bson.Raw(updated).Lookup("tags").Array().Values()
+	if err != nil || len(values) != 3 {
+		t.Fatalf("tags=%v err=%v", values, err)
+	}
+	values, err = bson.Raw(updated).Lookup("labels").Array().Values()
+	if err != nil || len(values) != 2 {
+		t.Fatalf("labels=%v err=%v", values, err)
+	}
+}
+
 func TestMongoMutationRejectsInvalidShapesAndOverflow(t *testing.T) {
 	for _, update := range []bson.D{
-		{{Key: "$inc", Value: bson.D{{Key: "a.b", Value: 1}}}},
+		{{Key: "$set", Value: bson.D{{Key: "a", Value: 1}, {Key: "a.b", Value: 2}}}},
 		{{Key: "$set", Value: bson.D{{Key: "x", Value: 1}}}, {Key: "$inc", Value: bson.D{{Key: "x", Value: 1}}}},
-		{{Key: "$push", Value: bson.D{{Key: "x", Value: 1}}}},
+		{{Key: "$push", Value: bson.D{{Key: "x", Value: bson.D{{Key: "$each", Value: bson.A{}}}}}}},
 	} {
 		if _, err := parseMongoMutation(mustDocument(t, update)); err == nil {
 			t.Fatalf("accepted %v", update)
