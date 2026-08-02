@@ -1541,6 +1541,44 @@ func TestParseMongoUpdateItemRejectsRegexIDFilter(t *testing.T) {
 	}
 }
 
+func TestParseMongoUpdateItemIDOperatorFiltersUseFindPlan(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		query   bson.D
+		upsert  bool
+		exactID bool
+	}{
+		{name: "eq rejected", query: bson.D{{Key: "_id", Value: bson.D{{Key: "$eq", Value: "u1"}}}}, exactID: false},
+		{name: "in generic", query: bson.D{{Key: "_id", Value: bson.D{{Key: "$in", Value: bson.A{"u1", "u2"}}}}}, exactID: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			item, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+				{Key: "q", Value: tt.query},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "ok", Value: true}}}}},
+				{Key: "upsert", Value: tt.upsert},
+			}))
+			if tt.name == "eq rejected" {
+				if err == nil || !strings.Contains(err.Error(), "unsupported find operator") {
+					t.Fatalf("err=%v want unsupported $eq", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if item.exactID != tt.exactID {
+				t.Fatalf("exactID=%v want %v", item.exactID, tt.exactID)
+			}
+			if tt.exactID && len(item.key) == 0 {
+				t.Fatal("$eq did not encode the scalar _id key")
+			}
+			if !tt.exactID && len(item.key) != 0 {
+				t.Fatal("$in incorrectly used the direct _id key path")
+			}
+		})
+	}
+}
+
 func TestParseMongoUpdateItemPureSetSkipsGenericMutation(t *testing.T) {
 	item, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
 		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},

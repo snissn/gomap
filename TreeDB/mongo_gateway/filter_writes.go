@@ -71,6 +71,9 @@ func (s *Server) runMongoFilterUpdateOne(col *collections.Collection, update mon
 		if err != nil || !found {
 			return false, false, err
 		}
+		if s.filterWriteSelectedHook != nil {
+			s.filterWriteSelectedHook()
+		}
 		materializer, err := storedDocumentMaterializerForCollection(col)
 		if err != nil {
 			return false, false, err
@@ -99,6 +102,9 @@ func (s *Server) deleteMongoFilterOne(col *collections.Collection, plan findPlan
 		if err != nil || !found {
 			return false, err
 		}
+		if s.filterWriteSelectedHook != nil {
+			s.filterWriteSelectedHook()
+		}
 		materializer, err := storedDocumentMaterializerForCollection(col)
 		if err != nil {
 			return false, err
@@ -122,6 +128,9 @@ func (s *Server) findAndModifyFilterExisting(col *collections.Collection, item m
 		key, found, err := s.selectMongoFilterWriteKey(col, item.plan)
 		if err != nil || !found {
 			return nil, nil, false, err
+		}
+		if s.filterWriteSelectedHook != nil {
+			s.filterWriteSelectedHook()
 		}
 		item.key = key
 		materializer, err := storedDocumentMaterializerForCollection(col)

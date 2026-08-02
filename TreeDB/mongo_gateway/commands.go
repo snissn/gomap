@@ -1014,12 +1014,21 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 	if err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 	}
-	plan, err := parseFindPlan(nil, filter)
-	if err != nil {
-		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
-	}
-	if err := validateMongoWritePlan(plan); err != nil {
-		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+	// Keep the long-standing scalar _id path allocation-light. Operator documents
+	// deliberately fall through to the find parser: {_id: {$eq: ...}} is an
+	// operator predicate, not an embedded-document _id.
+	id, directErr := idEqualityFilterValue(filter, "update")
+	directID := directErr == nil && !mongoIDOperatorDocument(id)
+	var plan findPlan
+	if !directID {
+		plan, err = parseFindPlan(nil, filter)
+		if err != nil {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+		}
+		if err := validateMongoWritePlan(plan); err != nil {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+		}
+		id, directID = simplePrimaryEqualityFindValue(plan)
 	}
 	if multi, err := optionalBoolField(update, "multi"); err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
@@ -1030,12 +1039,11 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 	if err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 	}
-	id, exactID := simplePrimaryEqualityFindValue(plan)
-	if upsert && !exactID {
+	if upsert && !directID {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update upsert requires an exact _id equality filter", index)}
 	}
 	var key []byte
-	if exactID {
+	if directID {
 		key, err = encodePrimaryKey(id)
 		if err != nil {
 			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
@@ -1071,8 +1079,25 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 		upsert:          upsert,
 		id:              id,
 		plan:            plan,
-		exactID:         exactID,
+		exactID:         directID,
 	}, nil
+}
+
+func mongoIDOperatorDocument(id bson.RawValue) bool {
+	if id.Type != bson.TypeEmbeddedDocument {
+		return false
+	}
+	elements, err := id.Document().Elements()
+	if err != nil {
+		return true
+	}
+	for _, element := range elements {
+		key, err := element.KeyErr()
+		if err != nil || strings.HasPrefix(key, "$") {
+			return true
+		}
+	}
+	return false
 }
 
 func mongoUpdateParseCommandError(err error) (wire.Document, error) {

@@ -140,6 +140,47 @@ func TestStandaloneServerOfficialGoDriverFindOneAndModify(t *testing.T) {
 	}
 }
 
+func TestStandaloneServerOfficialGoDriverFilterWrites(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}})
+	if err != nil {
+		t.Fatalf("open standalone: %v", err)
+	}
+	client, cancel, ln, serveErr := startStandaloneMongoClientForTest(t, standalone)
+	defer stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelCtx()
+	coll := client.Database("app").Collection("users")
+	if _, err := coll.InsertMany(ctx, []any{bson.D{{Key: "_id", Value: "u1"}, {Key: "age", Value: int32(20)}, {Key: "active", Value: true}}, bson.D{{Key: "_id", Value: "u2"}, {Key: "age", Value: int32(30)}, {Key: "active", Value: true}}}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	updated, err := coll.UpdateOne(ctx, bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int32(20)}}}}, bson.D{{Key: "$set", Value: bson.D{{Key: "picked", Value: true}}}})
+	if err != nil || updated.MatchedCount != 1 || updated.ModifiedCount != 1 {
+		t.Fatalf("filter UpdateOne result=%+v err=%v", updated, err)
+	}
+	var before bson.M
+	if err := coll.FindOneAndUpdate(ctx, bson.D{{Key: "active", Value: true}}, bson.D{{Key: "$set", Value: bson.D{{Key: "modified", Value: true}}}}).Decode(&before); err != nil {
+		t.Fatalf("filter FindOneAndUpdate: %v", err)
+	}
+	if before["_id"] != "u1" {
+		t.Fatalf("filter FindOneAndUpdate selected %v want u1", before)
+	}
+	replaced, err := coll.ReplaceOne(ctx, bson.D{{Key: "modified", Value: true}}, bson.D{{Key: "name", Value: "replacement"}, {Key: "age", Value: int32(20)}})
+	if err != nil || replaced.MatchedCount != 1 || replaced.ModifiedCount != 1 {
+		t.Fatalf("filter ReplaceOne result=%+v err=%v", replaced, err)
+	}
+	var replaceBefore bson.M
+	if err := coll.FindOneAndReplace(ctx, bson.D{{Key: "active", Value: true}}, bson.D{{Key: "name", Value: "find-replacement"}}).Decode(&replaceBefore); err != nil {
+		t.Fatalf("filter FindOneAndReplace: %v", err)
+	}
+	if replaceBefore["_id"] != "u2" {
+		t.Fatalf("filter FindOneAndReplace selected %v want u2", replaceBefore)
+	}
+	deleted, err := coll.DeleteOne(ctx, bson.D{{Key: "age", Value: int32(20)}})
+	if err != nil || deleted.DeletedCount != 1 {
+		t.Fatalf("filter DeleteOne result=%+v err=%v", deleted, err)
+	}
+}
+
 func TestStandaloneServerOfficialDriverConcurrentFirstWriteFindAndModifyUpserts(t *testing.T) {
 	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), Profile: treedb.ProfileCommandWALDurable, DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}})
 	if err != nil {
