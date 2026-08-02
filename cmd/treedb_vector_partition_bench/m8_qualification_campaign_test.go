@@ -650,7 +650,11 @@ func TestM8QualificationRejectsDirtyM3VariantV1(t *testing.T) {
 }
 
 func TestM8QualificationRejectsEscapingTranscriptSymlinkV1(t *testing.T) {
-	root, head := t.TempDir(), strings.Repeat("a", 40)
+	root, err := m8CanonicalPathV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := strings.Repeat("a", 40)
 	fixture := m8QualificationFixturesV1[0]
 	campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head}
 	var transcriptPath string
