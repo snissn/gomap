@@ -2692,6 +2692,21 @@ func TestM8ProfileCaptureWritesRequiredRuntimeArtifactsV1(t *testing.T) {
 	}
 }
 
+func TestM8ProfileCaptureDoesNotReplaceExistingArtifactV1(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "allocs_baseline.pprof")
+	const sentinel = "retain"
+	if err := os.WriteFile(path, []byte(sentinel), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := startM8ProfileCaptureV1(dir); err == nil {
+		t.Fatal("profile capture replaced existing artifact")
+	}
+	if raw, err := os.ReadFile(path); err != nil || string(raw) != sentinel {
+		t.Fatalf("profile sentinel=%q err=%v", raw, err)
+	}
+}
+
 func TestM8ProfileArtifactDecodeTimeoutIsBoundedBySizeV1(t *testing.T) {
 	for _, test := range []struct {
 		name  string

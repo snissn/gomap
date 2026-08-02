@@ -41,6 +41,71 @@ func refreshTestM3VariantIdentityV1(t testing.TB, descriptor *m3VariantDescripto
 	})
 }
 
+func TestM8ProductionMatrixOutputPreflightV1(t *testing.T) {
+	root := t.TempDir()
+	cfg := config{
+		baseSHA:  strings.Repeat("a", 40),
+		headSHA:  strings.Repeat("b", 40),
+		out:      filepath.Join(root, "matrix"),
+		profiles: filepath.Join(root, "profiles"),
+	}
+	descriptors := make([]m3VariantDescriptorV1, len(m8RequiredVariantIDsV1))
+	for i, variantID := range m8RequiredVariantIDsV1 {
+		descriptors[i].VariantID = variantID
+	}
+	evidence := m8ProductionConfigEvidenceV1{Partitions: 16}
+	if err := os.MkdirAll(cfg.out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cfg.profiles, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path, err := m8PreflightProductionMatrixOutputV1(cfg, descriptors, evidence)
+	if err != nil {
+		t.Fatalf("fresh output rejected: %v", err)
+	}
+	const sentinel = "retain"
+	if err := os.WriteFile(path, []byte(sentinel), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m8PreflightProductionMatrixOutputV1(cfg, descriptors, evidence); err == nil || !strings.Contains(err.Error(), "matrix output already exists") {
+		t.Fatalf("matrix collision err=%v", err)
+	}
+	if raw, err := os.ReadFile(path); err != nil || string(raw) != sentinel {
+		t.Fatalf("matrix sentinel=%q err=%v", raw, err)
+	}
+	if err := m8WriteProductionMatrixV1(path, []byte("replacement")); err == nil {
+		t.Fatal("matrix writer replaced existing evidence")
+	}
+	if raw, err := os.ReadFile(path); err != nil || string(raw) != sentinel {
+		t.Fatalf("matrix writer sentinel=%q err=%v", raw, err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	for _, variantID := range m8RequiredVariantIDsV1 {
+		t.Run(variantID, func(t *testing.T) {
+			leaf := filepath.Join(cfg.profiles, variantID)
+			if err := os.MkdirAll(leaf, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			artifact := filepath.Join(leaf, "trace.out")
+			if err := os.WriteFile(artifact, []byte(sentinel), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := m8PreflightProductionMatrixOutputV1(cfg, descriptors, evidence); err == nil || !strings.Contains(err.Error(), "profile output already exists") {
+				t.Fatalf("profile collision err=%v", err)
+			}
+			if raw, err := os.ReadFile(artifact); err != nil || string(raw) != sentinel {
+				t.Fatalf("profile sentinel=%q err=%v", raw, err)
+			}
+			if err := os.RemoveAll(leaf); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *testing.T) {
 	hash := strings.Repeat("a", 40)
 	fixture := fixtureManifest{Checksum: strings.Repeat("b", 64)}

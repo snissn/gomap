@@ -843,11 +843,11 @@ func startM8ProfileCaptureV1(dir string) (*m8ProfileCaptureV1, error) {
 	}
 	capture := &m8ProfileCaptureV1{dir: canonicalDir}
 	baseline := filepath.Join(canonicalDir, "allocs_baseline.pprof")
-	if err := writeM8RuntimeProfileV1("allocs", baseline); err != nil {
+	if err := writeM8RuntimeProfileExclusiveV1("allocs", baseline); err != nil {
 		return nil, fmt.Errorf("write M8 allocation baseline: %w", err)
 	}
 	capture.paths = append(capture.paths, baseline)
-	capture.traceFile, err = os.Create(filepath.Join(canonicalDir, "trace.out"))
+	capture.traceFile, err = os.OpenFile(filepath.Join(canonicalDir, "trace.out"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("create M8 trace: %w", err)
 	}
@@ -855,7 +855,7 @@ func startM8ProfileCaptureV1(dir string) (*m8ProfileCaptureV1, error) {
 		_ = capture.traceFile.Close()
 		return nil, fmt.Errorf("start M8 trace: %w", err)
 	}
-	capture.cpu, err = os.Create(filepath.Join(canonicalDir, "cpu.pprof"))
+	capture.cpu, err = os.OpenFile(filepath.Join(canonicalDir, "cpu.pprof"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		trace.Stop()
 		_ = capture.traceFile.Close()
@@ -887,7 +887,7 @@ func (c *m8ProfileCaptureV1) Stop() ([]string, error) {
 			name, file string
 		}{{"heap", "heap.pprof"}, {"allocs", "allocs.pprof"}, {"block", "block.pprof"}, {"mutex", "mutex.pprof"}} {
 			path := filepath.Join(c.dir, item.file)
-			file, err := os.Create(path)
+			file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 			if err == nil {
 				profile := pprof.Lookup(item.name)
 				if profile == nil {
@@ -911,6 +911,20 @@ func (c *m8ProfileCaptureV1) Stop() ([]string, error) {
 
 func writeM8RuntimeProfileV1(name, path string) error {
 	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	profile := pprof.Lookup(name)
+	if profile == nil {
+		err = fmt.Errorf("M8 runtime profile %s unavailable", name)
+	} else {
+		err = profile.WriteTo(file, 0)
+	}
+	return errors.Join(err, file.Close())
+}
+
+func writeM8RuntimeProfileExclusiveV1(name, path string) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return err
 	}
