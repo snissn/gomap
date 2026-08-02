@@ -132,8 +132,9 @@ at `<campaign-root>/source` from the explicit repository source and exact head.
 The clone must retain a `.git` directory (a linked-worktree `.git` file is not
 enough for Go's VCS stamp discovery) and no `objects/info/alternates` link to
 an external object store. It builds one clean-head
-`<campaign-root>/bin/treedb_vector_partition_bench` binary from that source
-with `GOWORK=off go -C <campaign-root>/source build -buildvcs=true`, records
+`<campaign-root>/bin/treedb_vector_partition_bench` binary from that source,
+creating the retained `bin` directory first, with
+`GOWORK=off go -C <campaign-root>/source build -buildvcs=true`, records
 its SHA-256, and verifies `go version -m` contains the exact head revision and
 `vcs.modified=false`. Every retained M3, M8, and final validation command
 invokes that same canonical path. The graph M3 commands likewise use the
