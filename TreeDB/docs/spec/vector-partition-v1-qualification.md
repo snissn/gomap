@@ -94,7 +94,10 @@ validator rejects external or linked dataset, truth-cache, M3, report, profile,
 and transcript inputs so the final campaign index remains a self-contained
 replay bundle.
 
-Qualification accepts only a canonical retained `treedb_vector_partition_bench`
-binary as `exact_command[0]`. Its Go build metadata must name the benchmark
-main package, bind the recorded head revision, and report an unmodified build;
-ephemeral `go run` executables are therefore not final replay evidence.
+Before any M3 or M8 work, the campaign builds one clean-head
+`<campaign-root>/bin/treedb_vector_partition_bench` binary and records its
+SHA-256. Every retained M3, M8, and final validation command invokes that same
+canonical path. Child and matrix evidence bind its byte digest as well as Go
+build metadata (benchmark main package, recorded head revision, and an
+unmodified build); the aggregate requires that one digest for both corpora and
+all repeats. Ephemeral `go run` executables are not final replay evidence.

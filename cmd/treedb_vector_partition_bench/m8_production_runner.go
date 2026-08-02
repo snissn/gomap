@@ -70,6 +70,7 @@ type m8ProductionReportV1 struct {
 	MeasurementTranscript   m8ProductionMeasurementTranscriptEvidenceV1                `json:"measurement_transcript"`
 	RouterRepresentatives   uint64                                                     `json:"router_representatives"`
 	Command                 []string                                                   `json:"exact_command"`
+	ExecutableSHA256        string                                                     `json:"executable_sha256"`
 	BaseSHA                 string                                                     `json:"base_sha"`
 	HeadSHA                 string                                                     `json:"head_sha"`
 	Dirty                   bool                                                       `json:"dirty"`
@@ -442,11 +443,15 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		return err
 	}
 	goMaxProcs, goMemoryLimitBytes := benchmarkRuntimeLimits()
+	executableSHA256, err := m8BenchmarkExecutableSHA256V1(cfg.command[0])
+	if err != nil {
+		return fmt.Errorf("hash M8 benchmark executable: %w", err)
+	}
 	report := m8ProductionReportV1{
-		SchemaVersion: 3, ResultKind: "m8_production_multi_group_evidence_v3", Status: "incomplete",
+		SchemaVersion: 4, ResultKind: "m8_production_multi_group_evidence_v4", Status: "incomplete",
 		Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true, GeneratedAt: time.Now().UTC(),
 		ExecutionID: executionID, RouterRepresentatives: assets.status.Representatives,
-		Command: replayCommand, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dirty: m8GitDirtyV1(cfg.out, cfg.profiles, cfg.m8MatrixOut, cfg.m8MatrixProfiles),
+		Command: replayCommand, ExecutableSHA256: executableSHA256, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dirty: m8GitDirtyV1(cfg.out, cfg.profiles, cfg.m8MatrixOut, cfg.m8MatrixProfiles),
 		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), GOMAXPROCS: goMaxProcs, GoMemoryLimitBytes: goMemoryLimitBytes, Host: m8ProductionHostV1(cfg, assets.dir), Dataset: fixture, DatasetDirectory: datasetDirectory, TruthCacheDirectory: truthCacheDirectory, Variant: assets.descriptor,
 		Config:        m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), RouterCandidates: cfg.routerCandidates, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed},
 		BuildNanos:    buildNanos,
@@ -908,6 +913,29 @@ func writeM8RuntimeProfileV1(name, path string) error {
 }
 
 var m8ProfileArtifactNamesV1 = [...]string{"allocs_baseline.pprof", "cpu.pprof", "trace.out", "heap.pprof", "allocs.pprof", "block.pprof", "mutex.pprof"}
+
+const m8BenchmarkExecutableMaxBytesV1 = 512 << 20
+
+func m8BenchmarkExecutableSHA256V1(path string) (string, error) {
+	canonical, err := m8CanonicalPathV1(path)
+	if err != nil {
+		return "", err
+	}
+	file, err := os.Open(canonical)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 || info.Size() > m8BenchmarkExecutableMaxBytesV1 {
+		return "", errors.New("invalid or oversized M8 benchmark executable")
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, io.LimitReader(file, m8BenchmarkExecutableMaxBytesV1+1)); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
 
 func m8ProfileArtifactsV1(paths []string) ([]m8ProductionProfileArtifactV1, error) {
 	if len(paths) != len(m8ProfileArtifactNamesV1) {
@@ -3455,9 +3483,9 @@ func m8CanonicalPathV1(path string) (string, error) {
 }
 
 func validateM8ProductionReportV1(report m8ProductionReportV1, caps m8ProductionResourceCapsV1) error {
-	if report.SchemaVersion != 3 || report.ResultKind != "m8_production_multi_group_evidence_v3" ||
+	if report.SchemaVersion != 4 || report.ResultKind != "m8_production_multi_group_evidence_v4" ||
 		report.Mode != m8ProductionMultiGroupModeV1 || !report.ProductionEvidence ||
-		report.GeneratedAt.IsZero() || !validM8ProductionExecutionIDV1(report.ExecutionID) || len(report.Command) == 0 || !validSHA(report.BaseSHA) || !validSHA(report.HeadSHA) ||
+		report.GeneratedAt.IsZero() || !validM8ProductionExecutionIDV1(report.ExecutionID) || len(report.Command) == 0 || !m8QualificationSHA256V1(report.ExecutableSHA256) || !validSHA(report.BaseSHA) || !validSHA(report.HeadSHA) ||
 		report.GoVersion == "" || report.GOOS == "" || report.GOARCH == "" || report.LogicalCPUs < 1 || report.GOMAXPROCS < 1 || report.GoMemoryLimitBytes < 1 ||
 		report.Config.RaftGroups < 2 || report.Config.RaftNodesPerGroup != 3 || report.Config.Partitions < 4 || report.Config.Partitions > maxPartitions ||
 		report.Config.Warmup < 0 || report.Config.RouterCandidates < 1 || report.RouterRepresentatives == 0 || report.BuildNanos <= 0 || report.TimedBoundary == "" || len(report.Limitations) == 0 {

@@ -71,7 +71,8 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 			variantGates.Recall, variantGates.ProbeReduction, variantGates.EndToEndQPS, variantGates.TailLatency = "fail", "fail", "fail", "fail"
 		}
 		reports = append(reports, m8ProductionReportV1{
-			BaseSHA: hash, HeadSHA: hash, Dataset: fixture, Config: config, Variant: &descriptor, GateLedger: variantGates,
+			ExecutableSHA256: strings.Repeat("a", 64),
+			BaseSHA:          hash, HeadSHA: hash, Dataset: fixture, Config: config, Variant: &descriptor, GateLedger: variantGates,
 			Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: variant.bytes},
 			Rows: []m8ProductionRowV1{
 				{Status: "pass", VariantID: variant.id, Probes: 16, EfSearch: 128, Concurrency: 1, Samples: 32, RecallAtK: 1, QPS: 100, P95Nanos: 100, Attribution: m8ProductionAttributionV1{ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true}},
@@ -771,7 +772,8 @@ func TestM8ProductionMatrixRejectsUnderMaterializedOverlapDescriptorV1(t *testin
 		config := common
 		config.Overlap = []float64{variant.overlap}
 		reports = append(reports, m8ProductionReportV1{
-			BaseSHA: hash, HeadSHA: hash, Dataset: fixture, Config: config, Variant: &descriptor, GateLedger: pass,
+			ExecutableSHA256: strings.Repeat("a", 64),
+			BaseSHA:          hash, HeadSHA: hash, Dataset: fixture, Config: config, Variant: &descriptor, GateLedger: pass,
 			Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 100},
 			Rows:      []m8ProductionRowV1{{Status: "pass", VariantID: variant.id, Probes: 4, EfSearch: 128, Concurrency: 1, Samples: 1}},
 		})

@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,6 +18,35 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/nativewire"
 )
+
+func TestM8BenchmarkExecutableSHA256BindsBytesV1(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "treedb_vector_partition_bench")
+	first := []byte("first clean-head benchmark bytes")
+	if err := os.WriteFile(path, first, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := m8BenchmarkExecutableSHA256V1(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := sha256.Sum256(first)
+	if got != hex.EncodeToString(want[:]) {
+		t.Fatalf("digest=%s want=%x", got, want)
+	}
+	if err := os.WriteFile(path, []byte("changed bytes with the same path"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := m8BenchmarkExecutableSHA256V1(path)
+	if err != nil || changed == got {
+		t.Fatalf("changed=%s err=%v original=%s", changed, err, got)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m8BenchmarkExecutableSHA256V1(path); err == nil {
+		t.Fatal("accepted deleted benchmark executable")
+	}
+}
 
 func TestM8BoundedWorkUsesFixedWorkerPoolV1(t *testing.T) {
 	var active, peak int32
@@ -140,9 +172,10 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		return out
 	}
 	report := m8ProductionReportV1{
-		SchemaVersion: 3, ResultKind: "m8_production_multi_group_evidence_v3", Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true,
+		SchemaVersion: 4, ResultKind: "m8_production_multi_group_evidence_v4", Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true,
 		GeneratedAt: time.Now(), ExecutionID: strings.Repeat("e", 32), Command: []string{"m8-test"}, BaseSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		GoVersion: "go1.test", GOOS: "linux", GOARCH: "amd64", LogicalCPUs: 1, GOMAXPROCS: 1, GoMemoryLimitBytes: 1,
+		ExecutableSHA256: strings.Repeat("f", 64),
+		GoVersion:        "go1.test", GOOS: "linux", GOARCH: "amd64", LogicalCPUs: 1, GOMAXPROCS: 1, GoMemoryLimitBytes: 1,
 		Dataset: fixture, Config: m8ProductionConfigEvidenceV1{RaftGroups: 2, RaftNodesPerGroup: 3, Partitions: 4, Probes: []int{4}, Overlap: []float64{0}, TopK: 10, Concurrency: []int{1}, EfSearch: []int{10}, RouterCandidates: 4}, BuildNanos: 1,
 		Topology:       nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{Network: "tcp_loopback_serialized_m5_v1", LifecycleState: "active", ReadySetDigest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", MetaGroup: "meta", MetaLeader: "meta-leader", MetaNodes: []string{"meta-a", "meta-b", "meta-c"}, MaxConcurrentShardRequests: 1, Groups: []nativewire.VectorPartitionM8ProductionGroupEvidenceV1{group("group-a", 1), group("group-b", 1)}},
 		RouterSessions: m8ProductionRouterSessionEvidenceV1{AfterWarmup: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, LeasePins: 1, LeaseReleases: 1}}, AfterMeasured: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, Hits: uint64(fixture.Queries), LeasePins: uint64(fixture.Queries) + 1, LeaseReleases: uint64(fixture.Queries) + 1}}},

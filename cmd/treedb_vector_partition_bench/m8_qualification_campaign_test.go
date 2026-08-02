@@ -255,7 +255,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			},
 			"changed_truth_cache_digest": func(report *m8ProductionReportV1) {
 				report.TruthCache.Status, report.TruthCache.ComputeNanos, report.TruthCache.LoadNanos = "reused", 0, 1
-				if !m8QualificationCommandWithExecutableV1(*report, func(string, string) bool { return true }) {
+				if !m8QualificationCommandWithExecutableV1(report.DatasetDirectory, *report, func(string, string, string, string) bool { return true }) {
 					t.Fatal("rejected bound reused truth-cache command")
 				}
 				for i, arg := range report.Command {
@@ -431,6 +431,38 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		bad.Campaigns[1].Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
 		if _, err := testM8ValidateQualificationIndexV1(root, bad); err == nil {
 			t.Fatal("accepted manifest-mismatched corpus")
+		}
+	})
+	t.Run("different_executable_across_corpora", func(t *testing.T) {
+		bad := qualificationIndex
+		bad.Campaigns = slices.Clone(qualificationIndex.Campaigns)
+		bad.Campaigns[1].Runs = slices.Clone(campaign250.Runs)
+		for i, run := range bad.Campaigns[1].Runs {
+			var matrix m8ProductionMatrixV1
+			raw, err := os.ReadFile(filepath.Join(root, run.Path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(raw, &matrix); err != nil {
+				t.Fatal(err)
+			}
+			matrix.ExecutableSHA256 = strings.Repeat("b", 64)
+			for j := range matrix.Variants {
+				matrix.Variants[j].ExecutableSHA256 = matrix.ExecutableSHA256
+			}
+			raw, err = json.Marshal(matrix)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := fmt.Sprintf("250k-other-executable-%d.json", i)
+			if err := os.WriteFile(filepath.Join(root, path), raw, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(raw)
+			bad.Campaigns[1].Runs[i] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
+		}
+		if _, err := testM8ValidateQualificationIndexV1(root, bad); err == nil || !strings.Contains(err.Error(), "different benchmark executables") {
+			t.Fatalf("cross-corpus executable drift err=%v", err)
 		}
 	})
 
@@ -781,23 +813,32 @@ func TestM8QualificationCommandBindsBenchmarkExecutableV1(t *testing.T) {
 	testM8QualificationProfilesV1(t, t.TempDir(), "command", &matrix)
 	report := matrix.Variants[0]
 	wanted := report.Command[0]
-	verify := func(command, revision string) bool {
-		return command == wanted && revision == head
+	verify := func(_root, command, revision, digest string) bool {
+		return command == wanted && revision == head && digest == matrix.ExecutableSHA256
 	}
-	if !m8QualificationCommandWithExecutableV1(report, verify) || !m8QualificationMatrixCommandWithExecutableV1(matrix, verify) {
+	if !m8QualificationCommandWithExecutableV1(filepath.Dir(wanted), report, verify) || !m8QualificationMatrixCommandWithExecutableV1(filepath.Dir(wanted), matrix, verify) {
 		t.Fatal("rejected canonical benchmark command")
 	}
 	report.Command[0] = filepath.Join(t.TempDir(), "unrelated")
-	if m8QualificationCommandWithExecutableV1(report, verify) {
+	if m8QualificationCommandWithExecutableV1(filepath.Dir(wanted), report, verify) {
 		t.Fatal("accepted unrelated child executable")
 	}
 	matrix.Command[0] = filepath.Join(t.TempDir(), "unrelated")
-	if m8QualificationMatrixCommandWithExecutableV1(matrix, verify) {
+	if m8QualificationMatrixCommandWithExecutableV1(filepath.Dir(wanted), matrix, verify) {
 		t.Fatal("accepted unrelated matrix executable")
 	}
 	report.Command[0] = ""
-	if m8QualificationCommandWithExecutableV1(report, verify) {
+	if m8QualificationCommandWithExecutableV1(filepath.Dir(wanted), report, verify) {
 		t.Fatal("accepted blank child executable")
+	}
+	report = matrix.Variants[0]
+	report.ExecutableSHA256 = strings.Repeat("b", 64)
+	if m8QualificationCommandWithExecutableV1(filepath.Dir(wanted), report, verify) {
+		t.Fatal("accepted child executable digest drift")
+	}
+	matrix.ExecutableSHA256 = strings.Repeat("b", 64)
+	if m8QualificationMatrixCommandWithExecutableV1(filepath.Dir(wanted), matrix, verify) {
+		t.Fatal("accepted matrix executable digest drift")
 	}
 }
 
@@ -902,10 +943,18 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 	if !strings.Contains(plan.Commands["stage_dataset"], "<dataset-source>/fixture_manifest.json") || !strings.Contains(plan.Commands["stage_existing_truth_cache"], "<truth-cache-source>/m8_canonical_truth_<truth-cache-identity>.json") {
 		t.Fatalf("plan does not stage retained inputs: %+v", plan.Commands)
 	}
+	if !strings.Contains(plan.Commands["build_benchmark"], "go build -o <campaign-root>/bin/treedb_vector_partition_bench") {
+		t.Fatalf("plan does not build the retained benchmark executable: %+v", plan.Commands)
+	}
+	for _, command := range []string{plan.Commands["m3_graph_disjoint"], plan.Commands["m3_graph_overlap"], plan.Commands["m3_stable_hash_disjoint"], plan.Commands["m8_matrix_repeats_full_ladder"], plan.Validation} {
+		if strings.Contains(command, "go run") || !strings.Contains(command, "<campaign-root>/bin/treedb_vector_partition_bench") {
+			t.Fatalf("plan does not invoke the retained benchmark executable: %q", command)
+		}
+	}
 	if !strings.Contains(plan.Commands["m3_graph_disjoint"], "-partition-max-distance-work <graph-cap>") || !strings.Contains(plan.Commands["m3_graph_disjoint"], "-router-max-scalar-work <router-cap>") || !strings.Contains(plan.Commands["m3_graph_overlap"], "-partition-max-distance-work <graph-cap>") || !strings.Contains(plan.Commands["m3_graph_overlap"], "-router-max-scalar-work <router-cap>") || !strings.Contains(plan.Commands["m3_stable_hash_disjoint"], "-partition-max-distance-work <graph-cap>") || !strings.Contains(plan.Commands["m3_stable_hash_disjoint"], "-router-max-scalar-work <router-cap>") {
 		t.Fatalf("graph commands do not bind corpus-specific scalar cap: %+v", plan.Commands)
 	}
-	if !strings.Contains(plan.Validation, "regular retained inputs below that root") || !strings.Contains(plan.Validation, "every campaign, M8 child, and M3 descriptor must match it") {
+	if !strings.Contains(plan.Validation, "regular retained inputs below that root") || !strings.Contains(plan.Validation, "one benchmark executable SHA-256") || !strings.Contains(plan.Validation, "every campaign, M8 child, M8 matrix, and M3 descriptor must match it") {
 		t.Fatalf("plan does not bind the aggregate revision: %q", plan.Validation)
 	}
 }
@@ -966,11 +1015,11 @@ func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManif
 }
 
 func testM8ValidateQualificationCampaignV1(root string, campaign m8QualificationCampaignV1) (m8QualificationCampaignSummaryV1, error) {
-	return m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string) bool { return true })
+	return m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true })
 }
 
 func testM8ValidateQualificationIndexV1(root string, index m8QualificationIndexV1) (m8QualificationIndexSummaryV1, error) {
-	return m8ValidateQualificationIndexWithVerifiersV1(root, index, func(string, m8ProductionReportV1) error { return nil }, func(string, string) bool { return true })
+	return m8ValidateQualificationIndexWithVerifiersV1(root, index, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true })
 }
 
 // testM8QualificationRetainedDescriptorV1 builds only the persisted M3 asset
@@ -1683,7 +1732,7 @@ func testM8QualificationReportV1(t *testing.T, head string, fixture fixtureManif
 		}
 		rows = append(rows, row(probes, qps))
 	}
-	report := m8ProductionReportV1{SchemaVersion: 3, ResultKind: "m8_production_multi_group_evidence_v3", Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true, GeneratedAt: time.Now(), ExecutionID: strings.Repeat("f", 32), Command: []string{"m8-test"}, BaseSHA: head, HeadSHA: head, GoVersion: "go1.test", GOOS: "linux", GOARCH: "amd64", LogicalCPUs: 1, GOMAXPROCS: 1, GoMemoryLimitBytes: 1, Host: m8ProductionHostEvidenceV1{CPUModel: "test"}, Dataset: fixture, DatasetDirectory: datasetDirectory, TruthCacheDirectory: truthCacheDirectory, Variant: &descriptor, Config: m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16, Probes: rowProbes, Overlap: []float64{descriptor.OverlapRatio}, TopK: 10, RecallTarget: .90, Concurrency: []int{1}, Warmup: 0, EffectiveWarmup: 0, EfSearch: []int{64}, RouterCandidates: 64, MaxExactTruthVisits: m8QualificationExactTruthCapV1(fixture), Seed: fixture.Seed}, BuildNanos: 1, Topology: nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{Network: "tcp_loopback_serialized_m5_v1", LifecycleState: "active", ReadySetDigest: strings.Repeat("c", 64), MetaGroup: "meta", MetaLeader: "meta-leader", MetaNodes: []string{"meta-a", "meta-b", "meta-c"}, MaxConcurrentShardRequests: 1, Groups: []nativewire.VectorPartitionM8ProductionGroupEvidenceV1{group("group-a"), group("group-b"), group("group-c"), group("group-d")}}, RouterSessions: m8ProductionRouterSessionEvidenceV1{AfterWarmup: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{warm}, AfterMeasured: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{measured}}, Rows: rows, PackDiagnostics: diagnostics, UntimedBoundary: m8ProductionResourceBoundaryV1{SelectedPartitions: 16, EfSearch: 10, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 1, RPCs: 1, RequestBytes: 1, ShardPartitions: 1, ShardRequestBytes: 1}}, Failure: m8ProductionFailureEvidenceV1{Passed: true, Error: "unavailable", ResourceBoundary: m8ProductionFaultResourceBoundaryV1{SelectedPartitions: 16, EfSearch: 4096, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 1, RPCs: 1, RequestBytes: 1, ShardPartitions: 1, ShardRequestBytes: 1}}}, GateLedger: m8ProductionGateLedgerV1{ExhaustiveParity: "pass", FailureHonesty: "pass", PartitionPackReachability: "pass", Recall: "pass", ProbeReduction: "pass", EndToEndQPS: "pass", TailLatency: "pass", Balance: "pass", ResourceBounds: "pass"}, Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: descriptor.PersistentAssetBytes, PersistentAssetCap: m8QualificationPersistentAssetCapBytesV1, PartitionLoads: loads, PeakRSSBytes: 1, PeakRSSCapBytes: m8QualificationPeakRSSCapBytesV1, PeakRSSMeasured: true, PeakRSSScope: m8PeakRSSScopeV1, OverlapMemberships: wantOverlap, MaxPartitionLoad: uint64((fixture.Vectors + wantOverlap + 15) / 16), BalanceHardCap: uint64((fixture.Vectors + wantOverlap + 15) / 16), LimitComparisons: []m8ProductionResourceLimitComparisonV1{{Name: "test", Configured: 1, Passed: true}}}, TruthCache: m8TruthCacheEvidenceV1{Status: "computed", Identity: m8TruthCacheIdentityV1(fixture, 10), ArtifactSHA256: strings.Repeat("d", 64), ComputeNanos: 1}, TimedBoundary: "measured", Limitations: []string{"test"}}
+	report := m8ProductionReportV1{SchemaVersion: 4, ResultKind: "m8_production_multi_group_evidence_v4", Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true, GeneratedAt: time.Now(), ExecutionID: strings.Repeat("f", 32), Command: []string{"m8-test"}, ExecutableSHA256: strings.Repeat("e", 64), BaseSHA: head, HeadSHA: head, GoVersion: "go1.test", GOOS: "linux", GOARCH: "amd64", LogicalCPUs: 1, GOMAXPROCS: 1, GoMemoryLimitBytes: 1, Host: m8ProductionHostEvidenceV1{CPUModel: "test"}, Dataset: fixture, DatasetDirectory: datasetDirectory, TruthCacheDirectory: truthCacheDirectory, Variant: &descriptor, Config: m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16, Probes: rowProbes, Overlap: []float64{descriptor.OverlapRatio}, TopK: 10, RecallTarget: .90, Concurrency: []int{1}, Warmup: 0, EffectiveWarmup: 0, EfSearch: []int{64}, RouterCandidates: 64, MaxExactTruthVisits: m8QualificationExactTruthCapV1(fixture), Seed: fixture.Seed}, BuildNanos: 1, Topology: nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{Network: "tcp_loopback_serialized_m5_v1", LifecycleState: "active", ReadySetDigest: strings.Repeat("c", 64), MetaGroup: "meta", MetaLeader: "meta-leader", MetaNodes: []string{"meta-a", "meta-b", "meta-c"}, MaxConcurrentShardRequests: 1, Groups: []nativewire.VectorPartitionM8ProductionGroupEvidenceV1{group("group-a"), group("group-b"), group("group-c"), group("group-d")}}, RouterSessions: m8ProductionRouterSessionEvidenceV1{AfterWarmup: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{warm}, AfterMeasured: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{measured}}, Rows: rows, PackDiagnostics: diagnostics, UntimedBoundary: m8ProductionResourceBoundaryV1{SelectedPartitions: 16, EfSearch: 10, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 1, RPCs: 1, RequestBytes: 1, ShardPartitions: 1, ShardRequestBytes: 1}}, Failure: m8ProductionFailureEvidenceV1{Passed: true, Error: "unavailable", ResourceBoundary: m8ProductionFaultResourceBoundaryV1{SelectedPartitions: 16, EfSearch: 4096, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 1, RPCs: 1, RequestBytes: 1, ShardPartitions: 1, ShardRequestBytes: 1}}}, GateLedger: m8ProductionGateLedgerV1{ExhaustiveParity: "pass", FailureHonesty: "pass", PartitionPackReachability: "pass", Recall: "pass", ProbeReduction: "pass", EndToEndQPS: "pass", TailLatency: "pass", Balance: "pass", ResourceBounds: "pass"}, Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: descriptor.PersistentAssetBytes, PersistentAssetCap: m8QualificationPersistentAssetCapBytesV1, PartitionLoads: loads, PeakRSSBytes: 1, PeakRSSCapBytes: m8QualificationPeakRSSCapBytesV1, PeakRSSMeasured: true, PeakRSSScope: m8PeakRSSScopeV1, OverlapMemberships: wantOverlap, MaxPartitionLoad: uint64((fixture.Vectors + wantOverlap + 15) / 16), BalanceHardCap: uint64((fixture.Vectors + wantOverlap + 15) / 16), LimitComparisons: []m8ProductionResourceLimitComparisonV1{{Name: "test", Configured: 1, Passed: true}}}, TruthCache: m8TruthCacheEvidenceV1{Status: "computed", Identity: m8TruthCacheIdentityV1(fixture, 10), ArtifactSHA256: strings.Repeat("d", 64), ComputeNanos: 1}, TimedBoundary: "measured", Limitations: []string{"test"}}
 	report.RouterRepresentatives = descriptor.RouterRepresentatives
 	report.Topology.ReadySetDigest = descriptor.ReadySetDigest
 	testM8BindRouterSessionsVariantV1(&report.RouterSessions, descriptor, report.Topology.ReadySetDigest)

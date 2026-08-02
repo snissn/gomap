@@ -56,18 +56,19 @@ type m8QualificationIndexSummaryV1 struct {
 }
 
 type m8QualificationCampaignSummaryV1 struct {
-	P4QPSMin     float64 `json:"p4_qps_min"`
-	P4QPSMedian  float64 `json:"p4_qps_median"`
-	P4QPSMax     float64 `json:"p4_qps_max"`
-	P16QPSMin    float64 `json:"p16_qps_min"`
-	P16QPSMedian float64 `json:"p16_qps_median"`
-	P16QPSMax    float64 `json:"p16_qps_max"`
-	P4P95Min     uint64  `json:"p4_p95_min"`
-	P4P95Median  uint64  `json:"p4_p95_median"`
-	P4P95Max     uint64  `json:"p4_p95_max"`
-	P16P95Min    uint64  `json:"p16_p95_min"`
-	P16P95Median uint64  `json:"p16_p95_median"`
-	P16P95Max    uint64  `json:"p16_p95_max"`
+	ExecutableSHA256 string  `json:"executable_sha256"`
+	P4QPSMin         float64 `json:"p4_qps_min"`
+	P4QPSMedian      float64 `json:"p4_qps_median"`
+	P4QPSMax         float64 `json:"p4_qps_max"`
+	P16QPSMin        float64 `json:"p16_qps_min"`
+	P16QPSMedian     float64 `json:"p16_qps_median"`
+	P16QPSMax        float64 `json:"p16_qps_max"`
+	P4P95Min         uint64  `json:"p4_p95_min"`
+	P4P95Median      uint64  `json:"p4_p95_median"`
+	P4P95Max         uint64  `json:"p4_p95_max"`
+	P16P95Min        uint64  `json:"p16_p95_min"`
+	P16P95Median     uint64  `json:"p16_p95_median"`
+	P16P95Max        uint64  `json:"p16_p95_max"`
 }
 
 func runValidateQualification(args []string, stdout io.Writer) error {
@@ -132,6 +133,13 @@ func m8ValidateQualificationIndexWithVerifiersV1(root string, index m8Qualificat
 		if err != nil {
 			return m8QualificationIndexSummaryV1{}, err
 		}
+		if summary.Campaigns != nil {
+			for _, prior := range summary.Campaigns {
+				if prior.ExecutableSHA256 != campaignSummary.ExecutableSHA256 {
+					return m8QualificationIndexSummaryV1{}, errors.New("qualification index campaigns use different benchmark executables")
+				}
+			}
+		}
 		summary.Campaigns[campaign.FixtureChecksum] = campaignSummary
 	}
 	for _, fixture := range m8QualificationFixturesV1 {
@@ -143,7 +151,7 @@ func m8ValidateQualificationIndexWithVerifiersV1(root string, index m8Qualificat
 }
 
 type m8QualificationRetainedVariantVerifierV1 func(string, m8ProductionReportV1) error
-type m8QualificationCommandExecutableVerifierV1 func(string, string) bool
+type m8QualificationCommandExecutableVerifierV1 func(string, string, string, string) bool
 
 func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCampaignV1) (m8QualificationCampaignSummaryV1, error) {
 	return m8ValidateQualificationCampaignWithRetainedVariantV1(root, campaign, m8QualificationRetainedVariantV1)
@@ -184,6 +192,7 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 	var topology *nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1
 	truthArtifact := ""
 	var dataset fixtureManifest
+	executableSHA256 := ""
 	var environment *m8QualificationEnvironmentV1
 	configs := make(map[string]m8ProductionConfigEvidenceV1, len(m8RequiredVariantIDsV1))
 	routerSessionIdentities := make(map[string]nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1, len(m8RequiredVariantIDsV1))
@@ -226,7 +235,7 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 		if err := json.Unmarshal(raw, &matrix); err != nil {
 			return summary, fmt.Errorf("decode qualification matrix %s: %w", run.Path, err)
 		}
-		if matrix.SchemaVersion != 4 || matrix.ResultKind != "m8_production_multi_variant_matrix_v4" || matrix.BaseSHA != campaign.BaseSHA || matrix.HeadSHA != campaign.HeadSHA || !m8QualificationGitSHAV1(matrix.BaseSHA) || !m8QualificationGitSHAV1(matrix.HeadSHA) {
+		if matrix.SchemaVersion != 5 || matrix.ResultKind != "m8_production_multi_variant_matrix_v5" || matrix.BaseSHA != campaign.BaseSHA || matrix.HeadSHA != campaign.HeadSHA || !m8QualificationSHA256V1(matrix.ExecutableSHA256) || !m8QualificationGitSHAV1(matrix.BaseSHA) || !m8QualificationGitSHAV1(matrix.HeadSHA) {
 			return summary, fmt.Errorf("qualification matrix %s has invalid schema/provenance/status", cleanPath)
 		}
 		if err := validateM8ProductionMatrixV1(matrix); err != nil {
@@ -246,9 +255,13 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 			if err := validateM8ProductionReportV1(*report, m8QualificationResourceCapsV1()); err != nil {
 				return summary, fmt.Errorf("validate qualification child %s: %w", cleanPath, err)
 			}
-			if !m8QualificationCommandWithExecutableV1(*report, commandExecutable) {
+			if !m8QualificationCommandWithExecutableV1(resolvedRoot, *report, commandExecutable) || report.ExecutableSHA256 != matrix.ExecutableSHA256 {
 				return summary, fmt.Errorf("qualification matrix %s has command/config mismatch", cleanPath)
 			}
+			if executableSHA256 != "" && executableSHA256 != report.ExecutableSHA256 {
+				return summary, fmt.Errorf("qualification matrix %s changes benchmark executable", cleanPath)
+			}
+			executableSHA256 = report.ExecutableSHA256
 			derivedLedger := m8ProductionGateLedgerForReportV1(*report)
 			derivedLedger.OverlapStorage = report.GateLedger.OverlapStorage
 			if report.GateLedger != derivedLedger {
@@ -331,7 +344,7 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 				selected = report
 			}
 		}
-		if !m8QualificationMatrixCommandWithExecutableV1(matrix, commandExecutable) {
+		if !m8QualificationMatrixCommandWithExecutableV1(resolvedRoot, matrix, commandExecutable) {
 			return summary, fmt.Errorf("qualification matrix %s has command/config mismatch", cleanPath)
 		}
 		if err := m8ValidateQualificationMatrixDerivationV1(matrix); err != nil {
@@ -350,6 +363,7 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 		p4QPS, p16QPS = append(p4QPS, p4.QPS), append(p16QPS, p16.QPS)
 		p4P95, p16P95 = append(p4P95, p4.P95Nanos), append(p16P95, p16.P95Nanos)
 	}
+	summary.ExecutableSHA256 = executableSHA256
 	if len(executionIDs) != len(campaign.Runs)*len(m8RequiredVariantIDsV1) {
 		return summary, errors.New("qualification campaign requires distinct execution identities")
 	}
@@ -498,14 +512,17 @@ func m8QualificationContainedPathV1(root, path, label string) (string, error) {
 // m8QualificationCommandV1 re-parses runner argv so the retained replay
 // command cannot disagree with the already-validated measured configuration.
 func m8QualificationCommandV1(report m8ProductionReportV1) bool {
-	return m8QualificationCommandWithExecutableV1(report, m8QualificationBenchmarkExecutableV1)
+	if len(report.Command) == 0 {
+		return false
+	}
+	return m8QualificationCommandWithExecutableV1(filepath.Dir(report.Command[0]), report, m8QualificationBenchmarkExecutableV1)
 }
 
-func m8QualificationCommandWithExecutableV1(report m8ProductionReportV1, commandExecutable m8QualificationCommandExecutableVerifierV1) bool {
+func m8QualificationCommandWithExecutableV1(root string, report m8ProductionReportV1, commandExecutable m8QualificationCommandExecutableVerifierV1) bool {
 	if len(report.Command) < 2 {
 		return false
 	}
-	if !m8QualificationCommandExecutableV1(report.Command[0], report.HeadSHA, commandExecutable) {
+	if !m8QualificationCommandExecutableV1(root, report.Command[0], report.HeadSHA, report.ExecutableSHA256, commandExecutable) {
 		return false
 	}
 	cfg, err := parseConfig(report.Command[1:])
@@ -566,14 +583,17 @@ func m8QualificationCommandConfigV1(cfg config) m8ProductionConfigEvidenceV1 {
 }
 
 func m8QualificationMatrixCommandV1(matrix m8ProductionMatrixV1) bool {
-	return m8QualificationMatrixCommandWithExecutableV1(matrix, m8QualificationBenchmarkExecutableV1)
+	if len(matrix.Command) == 0 {
+		return false
+	}
+	return m8QualificationMatrixCommandWithExecutableV1(filepath.Dir(matrix.Command[0]), matrix, m8QualificationBenchmarkExecutableV1)
 }
 
-func m8QualificationMatrixCommandWithExecutableV1(matrix m8ProductionMatrixV1, commandExecutable m8QualificationCommandExecutableVerifierV1) bool {
+func m8QualificationMatrixCommandWithExecutableV1(root string, matrix m8ProductionMatrixV1, commandExecutable m8QualificationCommandExecutableVerifierV1) bool {
 	if len(matrix.Command) < 2 || len(matrix.Variants) != len(m8RequiredVariantIDsV1) {
 		return false
 	}
-	if !m8QualificationCommandExecutableV1(matrix.Command[0], matrix.HeadSHA, commandExecutable) {
+	if !m8QualificationCommandExecutableV1(root, matrix.Command[0], matrix.HeadSHA, matrix.ExecutableSHA256, commandExecutable) {
 		return false
 	}
 	cfg, err := parseConfig(matrix.Command[1:])
@@ -638,17 +658,23 @@ func m8QualificationMatrixCommandWithExecutableV1(matrix m8ProductionMatrixV1, c
 	return err == nil && profiles == profileRoot
 }
 
-func m8QualificationCommandExecutableV1(command, headSHA string, verify m8QualificationCommandExecutableVerifierV1) bool {
-	if verify == nil || command == "" || !filepath.IsAbs(command) {
+func m8QualificationCommandExecutableV1(root, command, headSHA, executableSHA256 string, verify m8QualificationCommandExecutableVerifierV1) bool {
+	if verify == nil || command == "" || !filepath.IsAbs(command) || !m8QualificationSHA256V1(executableSHA256) {
 		return false
 	}
 	canonical, err := m8CanonicalPathV1(command)
-	return err == nil && canonical == command && verify(canonical, headSHA)
+	if err != nil || canonical != command {
+		return false
+	}
+	return verify(root, canonical, headSHA, executableSHA256)
 }
 
-func m8QualificationBenchmarkExecutableV1(command, headSHA string) bool {
-	info, err := os.Stat(command)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
+func m8QualificationBenchmarkExecutableV1(root, command, headSHA, executableSHA256 string) bool {
+	if _, err := m8QualificationContainedPathV1(root, command, "benchmark executable"); err != nil {
+		return false
+	}
+	digest, err := m8BenchmarkExecutableSHA256V1(command)
+	if err != nil || digest != executableSHA256 {
 		return false
 	}
 	build, err := buildinfo.ReadFile(command)

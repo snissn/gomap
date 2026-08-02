@@ -28,6 +28,7 @@ type m8ProductionMatrixV1 struct {
 	Disposition                 string                     `json:"disposition"`
 	GeneratedAt                 time.Time                  `json:"generated_at"`
 	Command                     []string                   `json:"exact_command"`
+	ExecutableSHA256            string                     `json:"executable_sha256"`
 	BaseSHA                     string                     `json:"base_sha"`
 	HeadSHA                     string                     `json:"head_sha"`
 	Dataset                     fixtureManifest            `json:"dataset"`
@@ -361,13 +362,17 @@ func m8ValidateVariantBuildCompatibilityV1(variants []m3VariantDescriptorV1) err
 
 func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8ProductionReportV1) (m8ProductionMatrixV1, error) {
 	matrix := m8ProductionMatrixV1{
-		SchemaVersion: 4, ResultKind: "m8_production_multi_variant_matrix_v4", Status: "incomplete", GeneratedAt: time.Now().UTC(),
+		SchemaVersion: 5, ResultKind: "m8_production_multi_variant_matrix_v5", Status: "incomplete", GeneratedAt: time.Now().UTC(),
 		Command: append([]string(nil), cfg.command...), BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dataset: fixture,
 		RequiredVariants: append([]string(nil), m8RequiredVariantIDsV1...), Variants: reports,
 		Limitations: []string{"single-host loopback production-shaped topology; multi-host qualification remains owned by #3983", "no external-system or paper-scale comparison is claimed"},
 	}
 	if len(reports) != len(m8RequiredVariantIDsV1) {
 		return m8ProductionMatrixV1{}, errors.New("M8 matrix requires exactly three reports")
+	}
+	matrix.ExecutableSHA256 = reports[0].ExecutableSHA256
+	if !m8QualificationSHA256V1(matrix.ExecutableSHA256) {
+		return m8ProductionMatrixV1{}, errors.New("M8 matrix report has invalid benchmark executable digest")
 	}
 	if reports[0].TruthCache.ArtifactSHA256 != "" {
 		var err error
@@ -378,6 +383,9 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 	}
 	descriptors := make([]m3VariantDescriptorV1, 0, len(reports))
 	for i := range reports {
+		if reports[i].ExecutableSHA256 != matrix.ExecutableSHA256 {
+			return m8ProductionMatrixV1{}, errors.New("M8 matrix reports use different benchmark executables")
+		}
 		if reports[i].Dirty {
 			return m8ProductionMatrixV1{}, errors.New("M8 matrix rejects dirty child reports")
 		}
@@ -506,6 +514,9 @@ func m8ProductionComparisonForRowV1(report m8ProductionReportV1, row m8Productio
 // validateM8ProductionMatrixV1 binds every flattened comparison row to its
 // source child measurement, including its measured outcome.
 func validateM8ProductionMatrixV1(matrix m8ProductionMatrixV1) error {
+	if !m8QualificationSHA256V1(matrix.ExecutableSHA256) {
+		return errors.New("M8 matrix has an invalid benchmark executable digest")
+	}
 	type key struct {
 		variantID               string
 		probes, ef, concurrency int
@@ -514,6 +525,9 @@ func validateM8ProductionMatrixV1(matrix m8ProductionMatrixV1) error {
 	for _, report := range matrix.Variants {
 		if report.Variant == nil {
 			return errors.New("M8 matrix report is missing variant identity")
+		}
+		if report.ExecutableSHA256 != matrix.ExecutableSHA256 {
+			return errors.New("M8 matrix report uses a different benchmark executable")
 		}
 		for _, row := range report.Rows {
 			if row.Status == "unsupported" {
