@@ -82,6 +82,7 @@ type m8ProductionReportV1 struct {
 	Host                    m8ProductionHostEvidenceV1                                 `json:"host"`
 	Dataset                 fixtureManifest                                            `json:"dataset"`
 	DatasetDirectory        string                                                     `json:"dataset_directory,omitempty"`
+	TruthCacheDirectory     string                                                     `json:"canonical_truth_cache_directory,omitempty"`
 	Variant                 *m3VariantDescriptorV1                                     `json:"variant,omitempty"`
 	Config                  m8ProductionConfigEvidenceV1                               `json:"config"`
 	BuildNanos              int64                                                      `json:"build_nanos"`
@@ -422,6 +423,13 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	if err != nil {
 		return err
 	}
+	truthCacheDirectory := ""
+	if cfg.m8TruthCache != "" {
+		truthCacheDirectory, err = m8CanonicalPathV1(cfg.m8TruthCache)
+		if err != nil {
+			return fmt.Errorf("resolve M8 truth-cache directory: %w", err)
+		}
+	}
 	executionID, err := m8ProductionExecutionIDV1()
 	if err != nil {
 		return err
@@ -432,7 +440,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true, GeneratedAt: time.Now().UTC(),
 		ExecutionID: executionID, RouterRepresentatives: assets.status.Representatives,
 		Command: cfg.command, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dirty: m8GitDirtyV1(cfg.out, cfg.profiles, cfg.m8MatrixOut, cfg.m8MatrixProfiles),
-		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), GOMAXPROCS: goMaxProcs, GoMemoryLimitBytes: goMemoryLimitBytes, Host: m8ProductionHostV1(cfg, assets.dir), Dataset: fixture, DatasetDirectory: datasetDirectory, Variant: assets.descriptor,
+		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), GOMAXPROCS: goMaxProcs, GoMemoryLimitBytes: goMemoryLimitBytes, Host: m8ProductionHostV1(cfg, assets.dir), Dataset: fixture, DatasetDirectory: datasetDirectory, TruthCacheDirectory: truthCacheDirectory, Variant: assets.descriptor,
 		Config:        m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), RouterCandidates: cfg.routerCandidates, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed},
 		BuildNanos:    buildNanos,
 		TruthCache:    truthCache,
@@ -1138,12 +1146,16 @@ func m8TruthCacheIdentityV1(fixture fixtureManifest, topK int) string {
 	return hex.EncodeToString(s[:])
 }
 
+func m8TruthCacheArtifactPathV1(cacheDir, identity string) string {
+	return filepath.Join(cacheDir, "m8_canonical_truth_"+identity+".json")
+}
+
 func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection, manifest collections.VectorPartitionManifestV1, fixture fixtureManifest, queries [][]float64, topK int, expectedDigest string) ([][]m8CanonicalResultV1, m8TruthCacheEvidenceV1, error) {
 	identity := m8TruthCacheIdentityV1(fixture, topK)
 	evidence := m8TruthCacheEvidenceV1{Identity: identity}
 	path := ""
 	if cacheDir != "" {
-		path = filepath.Join(cacheDir, "m8_canonical_truth_"+identity+".json")
+		path = m8TruthCacheArtifactPathV1(cacheDir, identity)
 	}
 	if path != "" {
 		started := time.Now()

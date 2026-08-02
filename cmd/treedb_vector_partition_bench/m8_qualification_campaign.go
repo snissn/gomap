@@ -393,9 +393,16 @@ func m8QualificationRetainedVariantV1(root string, report m8ProductionReportV1) 
 	if err != nil || !rootInfo.IsDir() {
 		return errors.New("qualification root is not a directory")
 	}
-	datasetDirectory, err := m8CanonicalPathV1(report.DatasetDirectory)
-	if err != nil || datasetDirectory != report.DatasetDirectory {
+	datasetDirectory, err := m8QualificationContainedPathV1(root, report.DatasetDirectory, "qualification dataset")
+	if err != nil {
+		return err
+	}
+	if datasetDirectory != report.DatasetDirectory {
 		return errors.New("qualification dataset directory is not canonical")
+	}
+	manifestInfo, err := os.Lstat(filepath.Join(datasetDirectory, "fixture_manifest.json"))
+	if err != nil || !manifestInfo.Mode().IsRegular() {
+		return errors.New("qualification dataset manifest is not a regular file")
 	}
 	dataset, err := loadFixture(datasetDirectory)
 	if err != nil {
@@ -404,13 +411,35 @@ func m8QualificationRetainedVariantV1(root string, report m8ProductionReportV1) 
 	if dataset != report.Dataset {
 		return errors.New("qualification dataset manifest does not match report")
 	}
-	dir, err := m8CanonicalPathV1(report.Variant.DatabaseDirectory)
+	truthCacheDirectory, err := m8QualificationContainedPathV1(root, report.TruthCacheDirectory, "canonical truth cache")
 	if err != nil {
 		return err
 	}
-	rel, err := filepath.Rel(root, dir)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return errors.New("retained M3 database is outside qualification root")
+	if truthCacheDirectory != report.TruthCacheDirectory {
+		return errors.New("canonical truth-cache directory is not canonical")
+	}
+	truthPath := m8TruthCacheArtifactPathV1(truthCacheDirectory, report.TruthCache.Identity)
+	truthInfo, err := os.Lstat(truthPath)
+	if err != nil || !truthInfo.Mode().IsRegular() {
+		return errors.New("canonical truth-cache artifact is not a regular file")
+	}
+	maxTruthBytes, err := m8TruthCacheMaxBytesV1(report.Dataset.Queries, report.Config.TopK, report.Dataset.Vectors)
+	if err != nil || truthInfo.Size() > maxTruthBytes {
+		return errors.New("canonical truth-cache artifact exceeds its qualification bound")
+	}
+	truthFile, err := os.Open(truthPath)
+	if err != nil {
+		return err
+	}
+	hash := sha256.New()
+	written, copyErr := io.Copy(hash, io.LimitReader(truthFile, maxTruthBytes+1))
+	closeErr := truthFile.Close()
+	if copyErr != nil || closeErr != nil || written > maxTruthBytes || hex.EncodeToString(hash.Sum(nil)) != report.TruthCache.ArtifactSHA256 {
+		return errors.New("canonical truth-cache artifact does not match report")
+	}
+	dir, err := m8QualificationContainedPathV1(root, report.Variant.DatabaseDirectory, "retained M3 database")
+	if err != nil {
+		return err
 	}
 	info, err := os.Stat(dir)
 	if err != nil || !info.IsDir() {
@@ -451,6 +480,18 @@ func m8QualificationRetainedVariantV1(root string, report m8ProductionReportV1) 
 	return nil
 }
 
+func m8QualificationContainedPathV1(root, path, label string) (string, error) {
+	resolved, err := m8CanonicalPathV1(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", label, err)
+	}
+	rel, err := filepath.Rel(root, resolved)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%s is outside qualification root", label)
+	}
+	return resolved, nil
+}
+
 // m8QualificationCommandV1 re-parses runner argv so the retained replay
 // command cannot disagree with the already-validated measured configuration.
 func m8QualificationCommandV1(report m8ProductionReportV1) bool {
@@ -463,6 +504,10 @@ func m8QualificationCommandV1(report m8ProductionReportV1) bool {
 	}
 	datasetDirectory, err := m8CanonicalPathV1(cfg.dataset)
 	if err != nil || report.DatasetDirectory == "" || datasetDirectory != report.DatasetDirectory {
+		return false
+	}
+	truthCacheDirectory, err := m8CanonicalPathV1(cfg.m8TruthCache)
+	if err != nil || report.TruthCacheDirectory == "" || truthCacheDirectory != report.TruthCacheDirectory {
 		return false
 	}
 	if report.Variant == nil || cfg.m8ExistingDB == "" {
@@ -538,6 +583,10 @@ func m8QualificationMatrixCommandV1(matrix m8ProductionMatrixV1) bool {
 	if err != nil || dataset != base.DatasetDirectory {
 		return false
 	}
+	truthCacheDirectory, err := m8CanonicalPathV1(cfg.m8TruthCache)
+	if err != nil || truthCacheDirectory == "" || truthCacheDirectory != base.TruthCacheDirectory {
+		return false
+	}
 	commandConfig := m8QualificationCommandConfigV1(cfg)
 	commandConfig.Overlap = nil
 	profileRoot := ""
@@ -551,7 +600,7 @@ func m8QualificationMatrixCommandV1(matrix m8ProductionMatrixV1) bool {
 	}
 	for _, variantID := range m8RequiredVariantIDsV1 {
 		report := byID[variantID]
-		if report == nil || report.Profiles.Status == "not_captured" || report.DatasetDirectory != dataset {
+		if report == nil || report.Profiles.Status == "not_captured" || report.DatasetDirectory != dataset || report.TruthCacheDirectory != truthCacheDirectory {
 			return false
 		}
 		expectedConfig := report.Config

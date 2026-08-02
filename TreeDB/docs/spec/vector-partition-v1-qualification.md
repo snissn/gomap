@@ -86,3 +86,9 @@ authoritative source and the parent forces its reported artifact digest into
 every later child. A pre-existing cache without that supplied digest fails
 closed, as does a newly computed artifact that disagrees with a supplied
 digest.
+
+Before a qualification run, copy each authoritative fixture manifest and any
+reused truth-cache artifact into that corpus's campaign directory. The retained
+validator rejects external or linked dataset, truth-cache, M3, report, profile,
+and transcript inputs so the final campaign index remains a self-contained
+replay bundle.
