@@ -1010,6 +1010,49 @@ func TestServerUpdateBSONSetAllowsNativeBinaryValues(t *testing.T) {
 	}
 }
 
+func TestServerBSONSetUpsertAllowsNativeBinaryValues(t *testing.T) {
+	for _, format := range []collections.DocumentFormat{collections.DocumentFormatBSON, collections.DocumentFormatJSON, collections.DocumentFormatTemplateV1} {
+		t.Run(string(format), func(t *testing.T) {
+			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			server := NewServer()
+			server.Collections = collections.NewCollectionManager(db)
+			server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: format}
+			response := serveCommand(t, server, 22543, bson.D{
+				{Key: "update", Value: "users"},
+				{Key: "updates", Value: bson.A{bson.D{
+					{Key: "q", Value: bson.D{{Key: "_id", Value: "binary-upsert"}}},
+					{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "payload", Value: bson.Binary{Subtype: 0x00, Data: []byte{2, 3, 4}}}}}}},
+					{Key: "upsert", Value: true},
+				}}},
+				{Key: "$db", Value: "app"},
+			})
+			if format != collections.DocumentFormatBSON {
+				assertCommandError(t, response, "BadValue")
+				if _, err := server.Collections.OpenCollection("app.users"); !errors.Is(err, collections.ErrCollectionNotFound) {
+					t.Fatalf("unsupported BSON upsert created collection: %v", err)
+				}
+				return
+			}
+			assertOK(t, response)
+			assertInt32(t, response, "n", 1)
+			assertInt32(t, response, "nModified", 0)
+			found := serveCommand(t, server, 22544, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "binary-upsert"}}}, {Key: "$db", Value: "app"}})
+			batch := cursorFirstBatch(t, found)
+			if len(batch) != 1 {
+				t.Fatalf("batch len=%d want 1", len(batch))
+			}
+			subtype, payload := batch[0].Lookup("payload").Binary()
+			if subtype != 0x00 || !bytes.Equal(payload, []byte{2, 3, 4}) {
+				t.Fatalf("payload subtype/data=%#x/%v want 0/[2 3 4]", subtype, payload)
+			}
+		})
+	}
+}
+
 func TestServerUpdateTemplateV1RefreshesMaterializerBetweenStatements(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

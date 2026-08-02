@@ -1182,7 +1182,11 @@ func mongoUpsertDocument(update mongoUpdateItem) (wire.Document, error) {
 	}
 	var doc wire.Document
 	if update.pureSet {
-		doc, _, err = applySetUpdate(base, update.updateDoc)
+		if update.bsonSetFieldsOK && !update.setFieldsOK {
+			doc, _, err = applyBSONSetUpdate(base, update.bsonSetFields)
+		} else {
+			doc, _, err = applySetUpdate(base, update.updateDoc)
+		}
 	} else {
 		doc, _, err = applyMongoMutation(base, update.mutation)
 	}
@@ -3680,6 +3684,20 @@ func applySetUpdate(doc wire.Document, update wire.Document) (wire.Document, boo
 	if err != nil {
 		return nil, false, err
 	}
+	return applySetFields(doc, sets, setOrder)
+}
+
+func applyBSONSetUpdate(doc wire.Document, fields []collections.BSONSetField) (wire.Document, bool, error) {
+	sets := make(map[string]bson.RawValue, len(fields))
+	setOrder := make([]string, 0, len(fields))
+	for _, field := range fields {
+		sets[field.Key] = field.Value
+		setOrder = append(setOrder, field.Key)
+	}
+	return applySetFields(doc, sets, setOrder)
+}
+
+func applySetFields(doc wire.Document, sets map[string]bson.RawValue, setOrder []string) (wire.Document, bool, error) {
 	if len(sets) == 0 {
 		return doc, false, nil
 	}

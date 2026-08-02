@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -14,6 +15,34 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 )
+
+func TestStandaloneServerOfficialGoDriverBSONSetBinaryUpsert(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{
+		Dir:     t.TempDir(),
+		Profile: treedb.ProfileCommandWALDurable,
+		DefaultCollectionOptions: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatBSON,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open standalone: %v", err)
+	}
+	client, cancel, ln, serveErr := startStandaloneMongoClientForTest(t, standalone)
+	defer stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
+	opCtx, opCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer opCancel()
+	result, err := client.Database("app").Collection("users").UpdateOne(opCtx,
+		bson.D{{Key: "_id", Value: "binary-upsert"}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "payload", Value: bson.Binary{Subtype: 0x00, Data: []byte{1, 2, 3}}}}}},
+		options.UpdateOne().SetUpsert(true),
+	)
+	if err != nil {
+		t.Fatalf("driver BSON binary upsert: %v", err)
+	}
+	if result.MatchedCount != 0 || result.ModifiedCount != 0 || result.UpsertedCount != 1 || result.UpsertedID != "binary-upsert" {
+		t.Fatalf("binary upsert result=%+v", result)
+	}
+}
 
 func TestServerOfficialGoDriverBasicCRUD(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
