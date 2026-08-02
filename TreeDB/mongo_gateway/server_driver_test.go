@@ -172,6 +172,23 @@ func TestServerOfficialGoDriverBasicCRUD(t *testing.T) {
 		t.Fatalf("replacement retained city: %v", got)
 	}
 
+	upsertID := bson.NewObjectID()
+	upsertResult, err := coll.UpdateOne(opCtx, bson.D{{Key: "_id", Value: upsertID}}, bson.D{{Key: "$inc", Value: bson.D{{Key: "age", Value: int32(1)}}}}, options.UpdateOne().SetUpsert(true))
+	if err != nil {
+		t.Fatalf("driver modifier upsert: %v", err)
+	}
+	if upsertResult.MatchedCount != 0 || upsertResult.ModifiedCount != 0 || upsertResult.UpsertedCount != 1 || upsertResult.UpsertedID != upsertID {
+		t.Fatalf("modifier upsert result=%+v want inserted %v", upsertResult, upsertID)
+	}
+	replacementID := bson.NewObjectID()
+	replacementUpsert, err := coll.ReplaceOne(opCtx, bson.D{{Key: "_id", Value: replacementID}}, bson.D{{Key: "name", Value: "upserted"}}, options.Replace().SetUpsert(true))
+	if err != nil {
+		t.Fatalf("driver replacement upsert: %v", err)
+	}
+	if replacementUpsert.MatchedCount != 0 || replacementUpsert.ModifiedCount != 0 || replacementUpsert.UpsertedCount != 1 || replacementUpsert.UpsertedID != replacementID {
+		t.Fatalf("replacement upsert result=%+v want inserted %v", replacementUpsert, replacementID)
+	}
+
 	deleteResult, err := coll.DeleteOne(opCtx, bson.D{{Key: "_id", Value: id}})
 	if err != nil {
 		t.Fatalf("driver delete one: %v", err)

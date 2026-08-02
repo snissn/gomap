@@ -139,6 +139,15 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
+	for i, update := range updates {
+		upsert, err := optionalBoolField(update, "upsert")
+		if err != nil {
+			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("updates[%d]: %v", i, err))
+		}
+		if upsert {
+			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: cluster Mongo gateway currently does not support upsert", i))
+		}
+	}
 	if err := s.admitClusterMutation(ctx); err != nil {
 		return mongoClusterMutationCommandError(err)
 	}

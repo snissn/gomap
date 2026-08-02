@@ -1452,7 +1452,6 @@ func TestParseMongoUpdateItemUnsupportedFlagsIncludeIndex(t *testing.T) {
 		want string
 	}{
 		{name: "multi", flag: bson.E{Key: "multi", Value: true}, want: "updateOne only"},
-		{name: "upsert", flag: bson.E{Key: "upsert", Value: true}, want: "does not support upsert"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -6057,6 +6056,77 @@ func TestServerUpdateGenericMutationsAcrossDocumentFormats(t *testing.T) {
 			assertCommandError(t, update(9, bson.D{{Key: "_id", Value: "u2"}}), "BadValue")
 			assertOK(t, update(10, bson.D{})) // an empty replacement retains _id
 		})
+	}
+}
+
+func TestServerUpdateUpsertAcrossDocumentFormats(t *testing.T) {
+	for _, format := range []collections.DocumentFormat{collections.DocumentFormatBSON, collections.DocumentFormatJSON, collections.DocumentFormatTemplateV1} {
+		t.Run(string(format), func(t *testing.T) {
+			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			s := NewServer()
+			s.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: format}
+			s.Collections = collections.NewCollectionManager(db)
+			response := serveCommand(t, s, 7001, bson.D{
+				{Key: "update", Value: "users"},
+				{Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "age", Value: int32(-2)}}}}}, {Key: "upsert", Value: true}}}},
+				{Key: "$db", Value: "app"},
+			})
+			assertOK(t, response)
+			assertInt32(t, response, "n", 1)
+			assertInt32(t, response, "nModified", 0)
+			upserted, ok := bson.Raw(response).Lookup("upserted").ArrayOK()
+			if !ok {
+				t.Fatalf("missing upserted: %v", response)
+			}
+			values, err := upserted.Values()
+			if err != nil || len(values) != 1 {
+				t.Fatalf("upserted=%v err=%v", values, err)
+			}
+			if id, _ := values[0].Document().Lookup("_id").StringValueOK(); id != "u1" {
+				t.Fatalf("upserted id=%q", id)
+			}
+			response = serveCommand(t, s, 7002, bson.D{
+				{Key: "update", Value: "users"},
+				{Key: "updates", Value: bson.A{
+					bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "age", Value: int32(1)}}}}}, {Key: "upsert", Value: true}},
+					bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: int64(2)}}}, {Key: "u", Value: bson.D{{Key: "name", Value: "grace"}}}, {Key: "upsert", Value: true}},
+				}},
+				{Key: "$db", Value: "app"},
+			})
+			assertOK(t, response)
+			assertInt32(t, response, "n", 2)
+			assertInt32(t, response, "nModified", 1)
+			upserted, ok = bson.Raw(response).Lookup("upserted").ArrayOK()
+			if !ok {
+				t.Fatalf("missing mixed upserted: %v", response)
+			}
+			values, err = upserted.Values()
+			if err != nil || len(values) != 1 || values[0].Document().Lookup("index").Int32() != 1 {
+				t.Fatalf("mixed upserted=%v err=%v", values, err)
+			}
+			if id, ok := values[0].Document().Lookup("_id").Int64OK(); !ok || id != 2 {
+				t.Fatalf("upserted typed id=%d ok=%v", id, ok)
+			}
+			assertCommandError(t, serveCommand(t, s, 7003, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "bad"}}}, {Key: "u", Value: bson.D{{Key: "_id", Value: "other"}}}, {Key: "upsert", Value: true}}}}, {Key: "$db", Value: "app"}}), "BadValue")
+		})
+	}
+}
+
+func TestServerUpdateInvalidUpsertDoesNotCreateCollection(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	assertCommandError(t, serveCommand(t, s, 7010, bson.D{{Key: "update", Value: "missing"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "age", Value: "bad"}}}}}, {Key: "upsert", Value: true}}}}, {Key: "$db", Value: "app"}}), "BadValue")
+	if _, err := s.Collections.OpenCollection("app.missing"); !errors.Is(err, collections.ErrCollectionNotFound) {
+		t.Fatalf("invalid upsert created collection: %v", err)
 	}
 }
 

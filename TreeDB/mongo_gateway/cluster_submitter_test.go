@@ -2369,6 +2369,11 @@ func TestClusterSubmitterGenericUpdatesFailClosedWithoutLocalMutation(t *testing
 		})
 		assertCommandError(t, response, "BadValue")
 	}
+	assertCommandError(t, serveCommand(t, server, 325833, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Grace"}}}}}, {Key: "upsert", Value: true}}}},
+		{Key: "$db", Value: "app"},
+	}), "BadValue")
 	if calls := submitter.snapshotCalls(); len(calls) != 0 {
 		t.Fatalf("generic updates submitted %d cluster calls", len(calls))
 	}

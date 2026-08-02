@@ -66,7 +66,7 @@ block drifts from the executable matrix rows.
 | metadata | createIndexes, listIndexes, and dropIndexes | supported subset |
 | document | native BSON storage mode | supported subset |
 | query gap | dotted projection | rejected |
-| update gap | upsert | rejected |
+| update | exact _id upsert | supported subset |
 | update gap | multi update | rejected |
 | update | $inc | supported subset |
 | index gap | compound index | rejected |
