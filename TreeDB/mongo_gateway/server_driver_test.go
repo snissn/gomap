@@ -168,7 +168,7 @@ func TestStandaloneServerOfficialGoDriverFilterWrites(t *testing.T) {
 	ctx, cancelCtx := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelCtx()
 	coll := client.Database("app").Collection("users")
-	if _, err := coll.InsertMany(ctx, []any{bson.D{{Key: "_id", Value: "u1"}, {Key: "age", Value: int32(20)}, {Key: "active", Value: true}, {Key: "numbers", Value: bson.A{int32(1)}}, {Key: "nestedNumbers", Value: bson.A{bson.D{{Key: "n", Value: int32(1)}}}}, {Key: "nonFinite", Value: bson.A{decimalPositiveInfinity}}}, bson.D{{Key: "_id", Value: "u2"}, {Key: "age", Value: int32(30)}, {Key: "active", Value: true}}}); err != nil {
+	if _, err := coll.InsertMany(ctx, []any{bson.D{{Key: "_id", Value: "u1"}, {Key: "age", Value: int32(20)}, {Key: "active", Value: true}, {Key: "numbers", Value: bson.A{int32(1)}}, {Key: "nestedNumbers", Value: bson.A{bson.D{{Key: "n", Value: int32(1)}}}}, {Key: "nonFinite", Value: bson.A{decimalPositiveInfinity, decimalNaN}}}, bson.D{{Key: "_id", Value: "u2"}, {Key: "age", Value: int32(30)}, {Key: "active", Value: true}}}); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 	updated, err := coll.UpdateOne(ctx, bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int32(20)}}}}, bson.D{{Key: "$set", Value: bson.D{{Key: "picked", Value: true}}}})
@@ -182,7 +182,7 @@ func TestStandaloneServerOfficialGoDriverFilterWrites(t *testing.T) {
 		{Key: "$addToSet", Value: bson.D{{Key: "labels", Value: bson.D{{Key: "$each", Value: bson.A{"staff", "staff"}}}}}},
 		{Key: "$addToSet", Value: bson.D{{Key: "numbers", Value: bson.D{{Key: "$each", Value: bson.A{int64(1), float64(1), decimalOne, int32(2)}}}}}},
 		{Key: "$addToSet", Value: bson.D{{Key: "nestedNumbers", Value: bson.D{{Key: "$each", Value: bson.A{bson.D{{Key: "n", Value: int64(1)}}, bson.D{{Key: "n", Value: decimalOne}}}}}}}},
-		{Key: "$addToSet", Value: bson.D{{Key: "nonFinite", Value: bson.D{{Key: "$each", Value: bson.A{decimalNegativeInfinity, decimalPositiveInfinity, decimalNaN}}}}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "nonFinite", Value: bson.D{{Key: "$each", Value: bson.A{decimalNegativeInfinity, decimalPositiveInfinity, decimalNaN, decimalNaN}}}}}},
 	})
 	if err != nil || updated.MatchedCount != 1 || updated.ModifiedCount != 1 {
 		t.Fatalf("nested filter UpdateOne result=%+v err=%v", updated, err)
@@ -197,7 +197,7 @@ func TestStandaloneServerOfficialGoDriverFilterWrites(t *testing.T) {
 	numbers, numbersErr := nested.Lookup("numbers").Array().Values()
 	nestedNumbers, nestedNumbersErr := nested.Lookup("nestedNumbers").Array().Values()
 	nonFinite, nonFiniteErr := nested.Lookup("nonFinite").Array().Values()
-	if subtype, value := profile.Lookup("blob").Binary(); profile.Lookup("name").StringValue() != "ada" || profile.Lookup("logins").Int32() != 1 || subtype != 0x80 || string(value) != string([]byte{1, 2}) || eventsErr != nil || len(events) != 1 || labelsErr != nil || len(labels) != 1 || numbersErr != nil || len(numbers) != 2 || numbers[0].Type != bson.TypeInt32 || numbers[1].Int32() != 2 || nestedNumbersErr != nil || len(nestedNumbers) != 1 || nonFiniteErr != nil || len(nonFinite) != 3 || nonFinite[0].Decimal128().String() != "Infinity" || nonFinite[1].Decimal128().String() != "-Infinity" || nonFinite[2].Decimal128().String() != "NaN" {
+	if subtype, value := profile.Lookup("blob").Binary(); profile.Lookup("name").StringValue() != "ada" || profile.Lookup("logins").Int32() != 1 || subtype != 0x80 || string(value) != string([]byte{1, 2}) || eventsErr != nil || len(events) != 1 || labelsErr != nil || len(labels) != 1 || numbersErr != nil || len(numbers) != 2 || numbers[0].Type != bson.TypeInt32 || numbers[1].Int32() != 2 || nestedNumbersErr != nil || len(nestedNumbers) != 1 || nonFiniteErr != nil || len(nonFinite) != 3 || nonFinite[0].Decimal128().String() != "Infinity" || nonFinite[1].Decimal128().String() != "NaN" || nonFinite[2].Decimal128().String() != "-Infinity" {
 		t.Fatalf("nested update document=%v", nested)
 	}
 	var before bson.M

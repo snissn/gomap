@@ -5903,8 +5903,30 @@ func TestMongoMutationAddToSetDistinguishesNonFiniteDecimal128(t *testing.T) {
 	}
 	updated, changed, err := applyMongoMutation(mustDocument(t, bson.D{{Key: "items", Value: bson.A{positive}}}), mutation)
 	values, valuesErr := bson.Raw(updated).Lookup("items").Array().Values()
-	if err != nil || !changed || valuesErr != nil || len(values) != 4 || values[0].Decimal128().String() != "Infinity" || values[1].Decimal128().String() != "-Infinity" || values[2].Decimal128().String() != "NaN" || values[3].Decimal128().String() != "NaN" {
+	if err != nil || !changed || valuesErr != nil || len(values) != 3 || values[0].Decimal128().String() != "Infinity" || values[1].Decimal128().String() != "-Infinity" || values[2].Decimal128().String() != "NaN" {
 		t.Fatalf("non-finite Decimal128 $addToSet changed=%v err=%v values=%v valuesErr=%v", changed, err, values, valuesErr)
+	}
+}
+
+func TestMongoMutationAddToSetDeduplicatesNestedNaN(t *testing.T) {
+	decimalNaN, err := bson.ParseDecimal128("NaN")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := mustDocument(t, bson.D{
+		{Key: "documents", Value: bson.A{bson.D{{Key: "n", Value: math.NaN()}}}},
+		{Key: "arrays", Value: bson.A{bson.A{decimalNaN}}},
+	})
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$addToSet", Value: bson.D{
+		{Key: "documents", Value: bson.D{{Key: "$each", Value: bson.A{bson.D{{Key: "n", Value: decimalNaN}}}}}},
+		{Key: "arrays", Value: bson.D{{Key: "$each", Value: bson.A{bson.A{math.NaN()}}}}},
+	}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, changed, err := applyMongoMutation(doc, mutation)
+	if err != nil || changed || !bytes.Equal(updated, doc) {
+		t.Fatalf("nested NaN $addToSet changed=%v err=%v", changed, err)
 	}
 }
 

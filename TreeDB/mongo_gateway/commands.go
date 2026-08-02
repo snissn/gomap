@@ -4654,7 +4654,7 @@ func mongoMutationArrayPath(doc bson.D, path []string, values []bson.RawValue, u
 		if unique {
 			duplicate := false
 			for _, existing := range existingValues {
-				if rawValuesEqual(existing, raw) {
+				if mongoMutationValuesEqual(existing, raw) {
 					duplicate = true
 					break
 				}

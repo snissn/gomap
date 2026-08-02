@@ -1784,8 +1784,16 @@ func rawValuesBothScalar(left, right bson.RawValue) bool {
 }
 
 func rawValuesEqual(left, right bson.RawValue) bool {
+	return rawValuesEqualMode(left, right, false)
+}
+
+func mongoMutationValuesEqual(left, right bson.RawValue) bool {
+	return rawValuesEqualMode(left, right, true)
+}
+
+func rawValuesEqualMode(left, right bson.RawValue, equalNaN bool) bool {
 	if rawValuesBothScalar(left, right) {
-		return rawScalarValuesEqual(left, right)
+		return rawScalarValuesEqualMode(left, right, equalNaN)
 	}
 	type pair struct{ left, right bson.RawValue }
 	stack := []pair{{left: left, right: right}}
@@ -1794,7 +1802,7 @@ func rawValuesEqual(left, right bson.RawValue) bool {
 		current := stack[last]
 		stack = stack[:last]
 		if rawValuesBothScalar(current.left, current.right) {
-			if !rawScalarValuesEqual(current.left, current.right) {
+			if !rawScalarValuesEqualMode(current.left, current.right, equalNaN) {
 				return false
 			}
 			continue
@@ -1833,10 +1841,10 @@ func rawValuesEqual(left, right bson.RawValue) bool {
 	return true
 }
 
-func rawScalarValuesEqual(left, right bson.RawValue) bool {
+func rawScalarValuesEqualMode(left, right bson.RawValue, equalNaN bool) bool {
 	if left.IsNumber() && right.IsNumber() {
 		if rawValueIsNaN(left) || rawValueIsNaN(right) {
-			return false
+			return equalNaN && rawValueIsNaN(left) && rawValueIsNaN(right)
 		}
 		return compareRawValues(left, right) == 0
 	}
