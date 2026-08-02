@@ -344,7 +344,7 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, material
 			matched++
 			return true, nil
 		}
-		if ok {
+		if ok && len(plan.orBranches) == 0 {
 			doc, err = storedDocumentToBSON(col, materializer, record.Document)
 			if err != nil {
 				return false, err
