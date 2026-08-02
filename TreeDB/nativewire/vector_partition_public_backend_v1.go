@@ -74,7 +74,7 @@ func (b *VectorPartitionPublicBackendV1) RegisterVectorPartitionV1(ctx context.C
 	}
 	i := b.opts.Identity
 	if registration.SourceGeneration == 0 || registration.SourceChecksum == 0 || registration.SourceSchemaHash == 0 || registration.SourceRowCount == 0 || registration.SourceGeneration != i.Source.Generation || registration.SourceChecksum != i.Source.Checksum || registration.SourceSchemaHash != i.Source.SchemaHash || registration.SourceRowCount != i.Source.RowCount {
-		return public.GenerationStatusV1{}, errors.New("generation source does not match bound topology")
+		return public.GenerationStatusV1{}, &public.ErrorV1{Code: public.ErrorGenerationMismatchV1, Err: errors.New("generation source does not match bound topology")}
 	}
 	record, err := b.opts.Lifecycle.BeginBuildV1(ctx, i, b.opts.RequiredGroups, 0, b.opts.MutationEpoch)
 	if err != nil {
@@ -151,7 +151,7 @@ func (b *VectorPartitionPublicBackendV1) VectorPartitionCleanupEligibilityV1(ctx
 
 func (b *VectorPartitionPublicBackendV1) checkID(id public.GenerationIDV1) error {
 	if b == nil || id.Index != b.opts.Identity.Index.IndexName || id.Generation != b.opts.Identity.Generation {
-		return fmt.Errorf("generation does not match bound topology")
+		return &public.ErrorV1{Code: public.ErrorGenerationMismatchV1, Err: fmt.Errorf("generation does not match bound topology")}
 	}
 	return nil
 }

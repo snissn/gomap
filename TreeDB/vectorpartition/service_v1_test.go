@@ -151,11 +151,32 @@ func TestServiceV1RejectsUnsupportedRequestContractBeforeBackend(t *testing.T) {
 			t.Fatalf("error = %v", err)
 		}
 	}
+	r := validSearchRequestV1(id)
+	r.Query = []float32{1, 2}
+	r.Limits.RequestBytes = 4
+	if _, err := svc.Search(context.Background(), r); !hasCodeV1(err, ErrorInvalidRequestV1) {
+		t.Fatalf("query byte limit = %v", err)
+	}
 	if _, err := svc.Register(context.Background(), GenerationRegistrationV1{GenerationIDV1: id}); !hasCodeV1(err, ErrorInvalidRequestV1) {
 		t.Fatalf("registration = %v", err)
 	}
 	if called {
 		t.Fatal("backend called after rejected request")
+	}
+}
+
+func TestServiceV1RejectsBackendStatusForAnotherGeneration(t *testing.T) {
+	id := GenerationIDV1{Index: "embedding", Generation: 7}
+	backend := &serviceBackendV1{states: map[GenerationIDV1]GenerationStatusV1{id: {Generation: GenerationIDV1{Index: "embedding", Generation: 8}}}}
+	svc, err := NewServiceV1(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, err := svc.Status(context.Background(), id); status != (GenerationStatusV1{}) || !hasCodeV1(err, ErrorFailedV1) {
+		t.Fatalf("status = %#v, %v", status, err)
+	}
+	if eligibility, err := svc.CleanupEligibility(context.Background(), id); eligibility != (CleanupEligibilityV1{}) || !hasCodeV1(err, ErrorFailedV1) {
+		t.Fatalf("cleanup = %#v, %v", eligibility, err)
 	}
 }
 
@@ -165,5 +186,5 @@ func hasCodeV1(err error, code ErrorCodeV1) bool {
 }
 
 func validSearchRequestV1(id GenerationIDV1) SearchRequestV1 {
-	return SearchRequestV1{Version: 1, Generation: id, Query: []float32{1}, Metric: MetricCosineV1, TopK: 1, Probes: 1, EfSearch: 1, Consistency: ConsistencyGenerationSnapshotV1, Limits: SearchLimitsV1{RequestBytes: 1, CandidateBytes: 1, ResponseBytes: 1, MergeEntries: 1}}
+	return SearchRequestV1{Version: 1, Generation: id, Query: []float32{1}, Metric: MetricCosineV1, TopK: 1, Probes: 1, EfSearch: 1, Consistency: ConsistencyGenerationSnapshotV1, Limits: SearchLimitsV1{RequestBytes: 4, CandidateBytes: 1, ResponseBytes: 1, MergeEntries: 1}}
 }
