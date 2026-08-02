@@ -236,6 +236,9 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 			if report.BaseSHA != campaign.BaseSHA || report.HeadSHA != campaign.HeadSHA || report.Dataset != matrix.Dataset || report.Dirty || !m8QualificationSHA256V1(report.TruthCache.ArtifactSHA256) || report.Variant == nil || report.Variant.BuildDirty || seenVariants[report.Variant.VariantID] || !slices.Contains(m8RequiredVariantIDsV1, report.Variant.VariantID) || !m8QualificationSHA256V1(report.Variant.ArtifactSHA256) || !m8QualificationConfigV1(report.Config, report.Dataset, report.Variant.OverlapRatio, runIndex) || !m8QualificationVariantBackendV1(*report.Variant, report.Dataset) {
 				return summary, fmt.Errorf("qualification matrix %s has unbound child identity", run.Path)
 			}
+			if err := m8QualificationRetainedVariantV1(*report); err != nil {
+				return summary, fmt.Errorf("qualification matrix %s has unavailable or mismatched retained M3 assets: %w", cleanPath, err)
+			}
 			if executionIDs[report.ExecutionID] {
 				return summary, fmt.Errorf("qualification matrix %s reuses execution identity", cleanPath)
 			}
@@ -360,6 +363,35 @@ func m8QualificationFixtureV1(candidate fixtureManifest) bool {
 
 func m8QualificationConfigV1(cfg m8ProductionConfigEvidenceV1, fixture fixtureManifest, overlap float64, _ int) bool {
 	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterCandidates == 64 && cfg.MaxExactTruthVisits == m8QualificationExactTruthCapV1(fixture) && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, []int{1, 2, 4, 8, 16}) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{64}) && slices.Equal(cfg.Overlap, []float64{overlap})
+}
+
+func m8QualificationRetainedVariantV1(report m8ProductionReportV1) error {
+	if report.Variant == nil {
+		return errors.New("missing retained M3 descriptor")
+	}
+	dir, err := m8CanonicalPathV1(report.Variant.DatabaseDirectory)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return errors.New("retained M3 database is not a directory")
+	}
+	actual, err := m3ReadVariantDescriptorV1(dir)
+	if err != nil {
+		return err
+	}
+	actualDir, err := m8CanonicalPathV1(actual.DatabaseDirectory)
+	if err != nil || actualDir != dir {
+		return errors.New("retained M3 descriptor has a different database directory")
+	}
+	want := *report.Variant
+	want.DatabaseDirectory = dir
+	actual.DatabaseDirectory = actualDir
+	if !reflect.DeepEqual(actual, want) {
+		return errors.New("retained M3 descriptor does not match report variant")
+	}
+	return nil
 }
 
 // m8QualificationCommandV1 re-parses runner argv so the retained replay

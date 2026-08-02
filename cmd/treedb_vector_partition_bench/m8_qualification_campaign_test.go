@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -846,7 +847,7 @@ func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManif
 	for _, v := range variants {
 		descriptor := testM3VariantDescriptorV1(t.TempDir())
 		descriptor.VariantID, descriptor.AssignmentBasis, descriptor.OverlapRatio = v.id, v.assignment, v.overlap
-		descriptor.DatabaseDirectory = filepath.Join(os.TempDir(), "gomap-m8-qualification-retained-"+fixture.Checksum[:8], v.id)
+		descriptor.DatabaseDirectory = filepath.Join(os.TempDir(), "gomap-m8-qualification-retained-"+strings.ReplaceAll(t.Name(), "/", "-")+"-"+fixture.Checksum[:8], v.id)
 		if err := os.MkdirAll(descriptor.DatabaseDirectory, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -858,6 +859,16 @@ func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManif
 		}
 		refreshTestM3VariantIdentityV1(t, &descriptor)
 		report := testM8QualificationReportV1(t, head, fixture, descriptor, p4QPS)
+		if _, err := m3ReadVariantDescriptorV1(report.Variant.DatabaseDirectory); err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				if err := os.Remove(filepath.Join(report.Variant.DatabaseDirectory, m3VariantDescriptorFileV1)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := m3WriteVariantDescriptorV1(report.Variant.DatabaseDirectory, *report.Variant); err != nil {
+				t.Fatal(err)
+			}
+		}
 		if datasetDirectory == "" {
 			datasetDirectory = report.DatasetDirectory
 		} else {
@@ -871,6 +882,47 @@ func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManif
 		t.Fatal(err)
 	}
 	return built
+}
+
+func TestM8QualificationRetainedVariantV1(t *testing.T) {
+	head, fixture := strings.Repeat("a", 40), m8QualificationFixturesV1[0]
+	for name, mutate := range map[string]func(*testing.T, *m8ProductionReportV1){
+		"missing_database": func(t *testing.T, report *m8ProductionReportV1) {
+			if err := os.RemoveAll(report.Variant.DatabaseDirectory); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"empty_database": func(t *testing.T, report *m8ProductionReportV1) {
+			if err := os.Remove(filepath.Join(report.Variant.DatabaseDirectory, m3VariantDescriptorFileV1)); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"swapped_manifest_identity": func(t *testing.T, report *m8ProductionReportV1) {
+			replacement := *report.Variant
+			replacement.ManifestIntegrity = strings.Repeat("e", 64)
+			refreshTestM3VariantIdentityV1(t, &replacement)
+			if err := os.Remove(filepath.Join(replacement.DatabaseDirectory, m3VariantDescriptorFileV1)); err != nil {
+				t.Fatal(err)
+			}
+			if err := m3WriteVariantDescriptorV1(replacement.DatabaseDirectory, replacement); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"tampered_descriptor": func(t *testing.T, report *m8ProductionReportV1) {
+			if err := os.WriteFile(filepath.Join(report.Variant.DatabaseDirectory, m3VariantDescriptorFileV1), []byte(`{}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
+			report := matrix.Variants[0]
+			mutate(t, &report)
+			if err := m8QualificationRetainedVariantV1(report); err == nil {
+				t.Fatal("accepted missing, empty, swapped, or tampered retained M3 assets")
+			}
+		})
+	}
 }
 
 func TestM8QualificationRejectsDirtyM3VariantV1(t *testing.T) {
