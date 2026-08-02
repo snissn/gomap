@@ -245,7 +245,7 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 			transcripts[report.MeasurementTranscript.SHA256] = true
 			transcriptPaths[report.MeasurementTranscript.Path] = true
 			profileMode, ok := m8QualificationProfilesV1(resolvedRoot, report.Profiles)
-			if !ok {
+			if !ok || report.Profiles.Status != "captured_production_query_and_fault_boundary" {
 				return summary, fmt.Errorf("qualification matrix %s has unbound profile capture", cleanPath)
 			}
 			profileSet, err := m8ProductionProfileSetDigestV1(report.Profiles.Artifacts)

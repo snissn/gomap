@@ -3560,10 +3560,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1, caps m8Production
 }
 
 func validM8ProductionProfilesV1(profiles m8ProductionProfileEvidenceV1) bool {
-	if profiles.Status == "" {
-		return len(profiles.Captured) == 0 && len(profiles.Artifacts) == 0
-	}
-	if profiles.Status == "not_captured" {
+	if profiles.Status == "" || profiles.Status == "not_captured" {
 		return len(profiles.Captured) == 0 && len(profiles.Artifacts) == 0
 	}
 	if profiles.Status != "captured_production_query_and_fault_boundary" || profiles.Directory == "" || profiles.Scope == "" || len(profiles.Captured) != len(m8ProfileArtifactNamesV1) || len(profiles.Artifacts) != len(m8ProfileArtifactNamesV1) || !filepath.IsAbs(profiles.Directory) {

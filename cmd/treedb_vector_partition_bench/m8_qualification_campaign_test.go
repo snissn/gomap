@@ -35,7 +35,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:])})
 	}
 	for i := 0; i < 3; i++ {
-		write("repeat-"+string(rune('1'+i))+".json", testM8QualificationMatrixV1(t, head, fixture, 125+float64(i)*75, true))
+		write("repeat-"+string(rune('1'+i))+".json", testM8QualificationMatrixV1(t, head, fixture, 125+float64(i)*75))
 	}
 	summary, err := m8ValidateQualificationCampaignV1(root, campaign)
 	if err != nil {
@@ -45,7 +45,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		t.Fatalf("summary=%+v", summary)
 	}
 	t.Run("edited_command", func(t *testing.T) {
-		matrix := testM8QualificationMatrixV1(t, head, fixture, 125, true)
+		matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
 		testM8QualificationExecutionIDsV1(&matrix, 3)
 		testM8QualificationProfilesV1(t, root, "edited-command", &matrix)
 		for i, arg := range matrix.Variants[0].Command {
@@ -76,7 +76,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		"zero_elapsed":   func(row *m8ProductionRowV1) { row.ElapsedNanos = 0 },
 	} {
 		t.Run(name, func(t *testing.T) {
-			report := testM8QualificationReportV1(t, head, fixture, testM3VariantDescriptorV1(t.TempDir()), 125, true)
+			report := testM8QualificationReportV1(t, head, fixture, testM3VariantDescriptorV1(t.TempDir()), 125)
 			mutate(&report.Rows[0])
 			if err := testM8ValidateProductionReportV1(report); err == nil {
 				t.Fatalf("accepted %s", name)
@@ -99,7 +99,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	campaign250 := m8QualificationCampaignV1{FixtureChecksum: fixture250.Checksum, BaseSHA: head, HeadSHA: head}
 	for i := 0; i < 3; i++ {
 		name := "250k-repeat-" + string(rune('1'+i)) + ".json"
-		matrix := testM8QualificationMatrixV1(t, head, fixture250, 125+float64(i)*75, true)
+		matrix := testM8QualificationMatrixV1(t, head, fixture250, 125+float64(i)*75)
 		testM8QualificationExecutionIDsV1(&matrix, i)
 		testM8QualificationProfilesV1(t, root, strings.TrimSuffix(name, ".json"), &matrix)
 		raw, err := json.Marshal(matrix)
@@ -188,7 +188,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		})
 	}
 	t.Run("execution_identity_whitespace", func(t *testing.T) {
-		matrix := testM8QualificationMatrixV1(t, head, fixture, 125, true)
+		matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
 		testM8QualificationExecutionIDsV1(&matrix, 0)
 		testM8QualificationProfilesV1(t, root, "execution-id-whitespace", &matrix)
 		matrix.Variants[0].ExecutionID += " "
@@ -240,7 +240,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		}
 	})
 	t.Run("tampered_execution_evidence_digest", func(t *testing.T) {
-		matrix := testM8QualificationMatrixV1(t, head, fixture, 125, true)
+		matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
 		testM8QualificationExecutionIDsV1(&matrix, 0)
 		testM8QualificationProfilesV1(t, root, "execution-evidence-tamper", &matrix)
 		matrix.Variants[0].ExecutionEvidenceDigest = strings.Repeat("0", 64)
@@ -260,7 +260,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		}
 	})
 	t.Run("profile_reuse_across_variants", func(t *testing.T) {
-		matrix := testM8QualificationMatrixV1(t, head, fixture, 125, true)
+		matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
 		testM8QualificationExecutionIDsV1(&matrix, 0)
 		testM8QualificationProfilesV1(t, root, "profile-reuse-variants", &matrix)
 		matrix.Variants[1].Profiles = matrix.Variants[0].Profiles
@@ -285,7 +285,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		}
 	})
 	t.Run("forged_router_representative_count", func(t *testing.T) {
-		matrix := testM8QualificationMatrixV1(t, head, fixture, 125, true)
+		matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
 		testM8QualificationExecutionIDsV1(&matrix, 0)
 		testM8QualificationProfilesV1(t, root, "router-count-forgery", &matrix)
 		matrix.Variants[0].RouterRepresentatives++
@@ -304,7 +304,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			t.Fatal("accepted forged router representative count")
 		}
 	})
-	invalid := testM8QualificationMatrixV1(t, head, fixture, 125, true)
+	invalid := testM8QualificationMatrixV1(t, head, fixture, 125)
 	invalid.Variants[0].Rows[0].RouterCandidates = 0
 	raw, err := json.Marshal(invalid)
 	if err != nil {
@@ -320,7 +320,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
 		t.Fatal("accepted an invalid child report")
 	}
-	derivedTamper := testM8QualificationMatrixV1(t, head, fixture, 125, true)
+	derivedTamper := testM8QualificationMatrixV1(t, head, fixture, 125)
 	testM8QualificationProfilesV1(t, root, "derived-tamper", &derivedTamper)
 	derivedTamper.Variants[0].GateLedger.Balance = "fail"
 	derivedTamper, err = m8BuildProductionMatrixV1(config{baseSHA: head, headSHA: head, partitions: 16, command: []string{"m8-test"}}, fixture, derivedTamper.Variants)
@@ -425,6 +425,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		"unprofiled": func(matrix *m8ProductionMatrixV1) {
 			for i := range matrix.Variants {
 				matrix.Variants[i].Profiles = m8ProductionProfileEvidenceV1{Status: "not_captured"}
+				matrix.Variants[i].ExecutionEvidenceDigest = ""
 			}
 		},
 		"missing_profile": func(matrix *m8ProductionMatrixV1) {
@@ -439,7 +440,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			matrix := testM8QualificationMatrixV1(t, head, fixture, 125, true)
+			matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
 			testM8QualificationProfilesV1(t, root, name, &matrix)
 			mutate(&matrix)
 			raw, err := json.Marshal(matrix)
@@ -454,13 +455,14 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			bad := campaign
 			bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
 			bad.Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
-			if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
+			_, err = m8ValidateQualificationCampaignV1(root, bad)
+			if err == nil || (name == "unprofiled" && !strings.Contains(err.Error(), "unbound profile capture")) {
 				t.Fatalf("accepted %s qualification matrix", name)
 			}
 		})
 	}
 	t.Run("tampered_profile", func(t *testing.T) {
-		matrix := testM8QualificationMatrixV1(t, head, fixture, 125, true)
+		matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
 		testM8QualificationProfilesV1(t, root, "tampered-profile", &matrix)
 		if err := os.WriteFile(matrix.Variants[0].Profiles.Artifacts[0].Path, []byte("tampered"), 0o644); err != nil {
 			t.Fatal(err)
@@ -496,7 +498,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		}
 	}
 
-	broken := testM8QualificationMatrixV1(t, head, fixture, 110, false)
+	broken := testM8QualificationMatrixV1(t, head, fixture, 110)
 	testM8QualificationProfilesV1(t, root, "broken", &broken)
 	p4, p16 := m8QualificationRowsV1(broken.Variants[1])
 	if p4 == nil || p16 == nil || p4.QPS >= p16.QPS*1.15 {
@@ -533,7 +535,7 @@ func TestM8QualificationM3BuildCapsV1(t *testing.T) {
 
 func TestM8QualificationImmutableTopologyCopiesGroupsV1(t *testing.T) {
 	head := strings.Repeat("a", 40)
-	matrix := testM8QualificationMatrixV1(t, head, m8QualificationFixturesV1[0], 125, true)
+	matrix := testM8QualificationMatrixV1(t, head, m8QualificationFixturesV1[0], 125)
 	before := matrix.Variants[0].Topology.Groups[0]
 	_ = m8QualificationImmutableTopologyV1(matrix.Variants[0].Topology)
 	if got := matrix.Variants[0].Topology.Groups[0]; got.Endpoint != before.Endpoint || got.CommitIndex != before.CommitIndex || got.ReadIndex != before.ReadIndex || got.AppliedIndex != before.AppliedIndex || got.EndpointHits != before.EndpointHits {
@@ -590,7 +592,7 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 	}
 }
 
-func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManifest, p4QPS float64, _ bool) m8ProductionMatrixV1 {
+func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManifest, p4QPS float64) m8ProductionMatrixV1 {
 	t.Helper()
 	variants := []struct {
 		id, assignment string
@@ -612,7 +614,7 @@ func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManif
 			descriptor.ArtifactBackend = fmt.Sprintf("kahip_python_3.25_eco_symmetrized_v1_seed_%d", fixture.Seed)
 		}
 		refreshTestM3VariantIdentityV1(t, &descriptor)
-		report := testM8QualificationReportV1(t, head, fixture, descriptor, p4QPS, true)
+		report := testM8QualificationReportV1(t, head, fixture, descriptor, p4QPS)
 		report.GateLedger = m8ProductionGateLedgerForReportV1(report)
 		matrix.Variants = append(matrix.Variants, report)
 	}
@@ -640,11 +642,11 @@ func TestM8QualificationRejectsDirtyM3VariantV1(t *testing.T) {
 	}
 	campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head}
 	for i := 0; i < 3; i++ {
-		matrix := testM8QualificationMatrixV1(t, head, fixture, 125, true)
+		matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
 		testM8QualificationExecutionIDsV1(&matrix, i)
 		campaign.Runs = append(campaign.Runs, write(fmt.Sprintf("clean-%d.json", i), matrix))
 	}
-	dirty := testM8QualificationMatrixV1(t, head, fixture, 125, true)
+	dirty := testM8QualificationMatrixV1(t, head, fixture, 125)
 	testM8QualificationExecutionIDsV1(&dirty, 4)
 	dirty.Variants[0].Variant.BuildDirty = true
 	refreshTestM3VariantIdentityV1(t, dirty.Variants[0].Variant)
@@ -658,7 +660,7 @@ func TestM8QualificationRejectsDirtyM3VariantV1(t *testing.T) {
 	if _, err := m8ValidateQualificationCampaignV1(root, campaign); err == nil {
 		t.Fatal("accepted self-consistent dirty M3 descriptor")
 	}
-	mismatched := testM8QualificationMatrixV1(t, head, fixture, 125, true)
+	mismatched := testM8QualificationMatrixV1(t, head, fixture, 125)
 	testM8QualificationExecutionIDsV1(&mismatched, 3)
 	for i := range mismatched.Variants {
 		descriptor := mismatched.Variants[i].Variant
@@ -686,7 +688,7 @@ func TestM8QualificationRejectsEscapingTranscriptSymlinkV1(t *testing.T) {
 	campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head}
 	var transcriptPath string
 	for i := 0; i < 3; i++ {
-		matrix := testM8QualificationMatrixV1(t, head, fixture, 125, true)
+		matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
 		testM8QualificationExecutionIDsV1(&matrix, i)
 		testM8QualificationProfilesV1(t, root, fmt.Sprintf("transcript-%d", i), &matrix)
 		if i == 0 {
@@ -758,7 +760,7 @@ func testM8QualificationExecutionIDsV1(matrix *m8ProductionMatrixV1, repeat int)
 	}
 }
 
-func testM8QualificationReportV1(t *testing.T, head string, fixture fixtureManifest, descriptor m3VariantDescriptorV1, p4QPS float64, fullLadder bool) m8ProductionReportV1 {
+func testM8QualificationReportV1(t *testing.T, head string, fixture fixtureManifest, descriptor m3VariantDescriptorV1, p4QPS float64) m8ProductionReportV1 {
 	t.Helper()
 	wantOverlap := int(float64(fixture.Vectors) * descriptor.OverlapRatio)
 	loads := make([]uint64, 16)

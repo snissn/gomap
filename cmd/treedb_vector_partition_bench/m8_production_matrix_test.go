@@ -849,7 +849,7 @@ func TestM8VariantBuildCompatibilityRejectsMixedRetainedBuildsV1(t *testing.T) {
 		"graph digest":  func(variants []m3VariantDescriptorV1) { variants[1].GraphArtifactSHA256 = strings.Repeat("d", 64) },
 		"graph assignment artifact": func(variants []m3VariantDescriptorV1) {
 			variants[1].ArtifactSHA256 = strings.Repeat("d", 64)
-			variants[1].GraphArtifactSHA256 = variants[1].ArtifactSHA256
+			variants[1].GraphArtifactSHA256 = variants[0].GraphArtifactSHA256
 		},
 		"graph build":            func(variants []m3VariantDescriptorV1) { variants[2].GraphBuildSHA256 = strings.Repeat("d", 64) },
 		"source":                 func(variants []m3VariantDescriptorV1) { variants[2].Source.SourceID = "different" },
