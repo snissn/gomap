@@ -162,28 +162,28 @@ func (s *ServiceV1) Register(ctx context.Context, registration GenerationRegistr
 		return GenerationStatusV1{}, invalidV1("complete source identity is required")
 	}
 	status, err := s.backend.RegisterVectorPartitionV1(ctx, registration)
-	return status, classifyErrorV1(ctx, err)
+	return statusResultV1(ctx, registration.GenerationIDV1, status, err)
 }
 func (s *ServiceV1) Status(ctx context.Context, id GenerationIDV1) (GenerationStatusV1, error) {
 	if err := validateGenerationV1(ctx, id); err != nil {
 		return GenerationStatusV1{}, err
 	}
 	status, err := s.backend.GenerationStatusV1(ctx, id)
-	return status, classifyErrorV1(ctx, err)
+	return statusResultV1(ctx, id, status, err)
 }
 func (s *ServiceV1) Prepare(ctx context.Context, id GenerationIDV1) (GenerationStatusV1, error) {
 	if err := validateGenerationV1(ctx, id); err != nil {
 		return GenerationStatusV1{}, err
 	}
 	status, err := s.backend.PrepareVectorPartitionV1(ctx, id)
-	return status, classifyErrorV1(ctx, err)
+	return statusResultV1(ctx, id, status, err)
 }
 func (s *ServiceV1) Activate(ctx context.Context, id GenerationIDV1) (GenerationStatusV1, error) {
 	if err := validateGenerationV1(ctx, id); err != nil {
 		return GenerationStatusV1{}, err
 	}
 	status, err := s.backend.ActivateVectorPartitionV1(ctx, id)
-	return status, classifyErrorV1(ctx, err)
+	return statusResultV1(ctx, id, status, err)
 }
 func (s *ServiceV1) Invalidate(ctx context.Context, id GenerationIDV1, reason string) (GenerationStatusV1, error) {
 	if err := validateGenerationV1(ctx, id); err != nil {
@@ -193,28 +193,50 @@ func (s *ServiceV1) Invalidate(ctx context.Context, id GenerationIDV1, reason st
 		return GenerationStatusV1{}, invalidV1("invalidation reason is required")
 	}
 	status, err := s.backend.InvalidateVectorPartitionV1(ctx, id, reason)
-	return status, classifyErrorV1(ctx, err)
+	return statusResultV1(ctx, id, status, err)
 }
 func (s *ServiceV1) Retire(ctx context.Context, id GenerationIDV1) (GenerationStatusV1, error) {
 	if err := validateGenerationV1(ctx, id); err != nil {
 		return GenerationStatusV1{}, err
 	}
 	status, err := s.backend.RetireVectorPartitionV1(ctx, id)
-	return status, classifyErrorV1(ctx, err)
+	return statusResultV1(ctx, id, status, err)
 }
 func (s *ServiceV1) RequestRebuild(ctx context.Context, id GenerationIDV1) (GenerationStatusV1, error) {
 	if err := validateGenerationV1(ctx, id); err != nil {
 		return GenerationStatusV1{}, err
 	}
 	status, err := s.backend.RequestVectorPartitionRebuildV1(ctx, id)
-	return status, classifyErrorV1(ctx, err)
+	return statusResultV1(ctx, id, status, err)
 }
 func (s *ServiceV1) CleanupEligibility(ctx context.Context, id GenerationIDV1) (CleanupEligibilityV1, error) {
 	if err := validateGenerationV1(ctx, id); err != nil {
 		return CleanupEligibilityV1{}, err
 	}
 	eligibility, err := s.backend.VectorPartitionCleanupEligibilityV1(ctx, id)
-	return eligibility, classifyErrorV1(ctx, err)
+	if err != nil {
+		return CleanupEligibilityV1{}, classifyErrorV1(ctx, err)
+	}
+	if err := validateStatusIdentityV1(id, eligibility.Status); err != nil {
+		return CleanupEligibilityV1{}, err
+	}
+	return eligibility, nil
+}
+
+func statusResultV1(ctx context.Context, id GenerationIDV1, status GenerationStatusV1, err error) (GenerationStatusV1, error) {
+	if err != nil {
+		return GenerationStatusV1{}, classifyErrorV1(ctx, err)
+	}
+	if err := validateStatusIdentityV1(id, status); err != nil {
+		return GenerationStatusV1{}, err
+	}
+	return status, nil
+}
+func validateStatusIdentityV1(id GenerationIDV1, status GenerationStatusV1) error {
+	if status.Generation != id {
+		return &ErrorV1{Code: ErrorFailedV1, Err: errors.New("backend returned status for another generation")}
+	}
+	return nil
 }
 
 func validateGenerationV1(ctx context.Context, id GenerationIDV1) error {
@@ -232,6 +254,9 @@ func validateSearchRequestV1(ctx context.Context, r SearchRequestV1) error {
 	}
 	if r.Version != 1 || len(r.Query) == 0 || r.TopK <= 0 || r.Probes <= 0 || r.EfSearch <= 0 || r.Metric != MetricCosineV1 || r.Consistency != ConsistencyGenerationSnapshotV1 || r.Limits.RequestBytes == 0 || r.Limits.CandidateBytes == 0 || r.Limits.ResponseBytes == 0 || r.Limits.MergeEntries == 0 {
 		return invalidV1("version, query, metric, consistency, limits, top_k, probes, and ef_search are required")
+	}
+	if uint64(len(r.Query)) > r.Limits.RequestBytes/4 {
+		return invalidV1("query exceeds request byte limit")
 	}
 	if !r.Deadline.IsZero() && !time.Now().Before(r.Deadline) {
 		return &ErrorV1{Code: ErrorDeadlineExceededV1, Err: context.DeadlineExceeded}

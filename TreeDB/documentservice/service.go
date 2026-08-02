@@ -35,6 +35,7 @@ type Service struct {
 // RegisterVectorPartitionServiceV1 installs the node-assembled partition
 // service at the normal document-service root. Applications obtain it with
 // VectorPartitionServiceV1 and never construct transport or lifecycle pieces.
+// The node retains backend ownership: Close only drops this service reference.
 func (s *Service) RegisterVectorPartitionServiceV1(service *vectorpartition.ServiceV1) error {
 	if s == nil || service == nil {
 		return errors.New("document service: vector partition service is required")
