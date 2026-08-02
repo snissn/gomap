@@ -2676,6 +2676,26 @@ func TestM8ProfileCaptureWritesRequiredRuntimeArtifactsV1(t *testing.T) {
 	}
 }
 
+func TestM8ProfileArtifactDecodeTimeoutIsBoundedBySizeV1(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		bytes int64
+		want  time.Duration
+	}{
+		{name: "tiny", bytes: 1, want: time.Minute + 500*time.Millisecond},
+		{name: "one MiB", bytes: 1 << 20, want: time.Minute + 500*time.Millisecond},
+		{name: "twenty eight MiB", bytes: 28 << 20, want: time.Minute + 14*time.Second},
+		{name: "maximum", bytes: m8ProfileArtifactMaxBytesV1, want: 5*time.Minute + 16*time.Second},
+		{name: "clamped", bytes: m8ProfileArtifactMaxBytesV1 + 1, want: 5*time.Minute + 16*time.Second},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := m8ProfileArtifactDecodeTimeoutV1(test.bytes); got != test.want {
+				t.Fatalf("timeout=%s want=%s", got, test.want)
+			}
+		})
+	}
+}
+
 func TestM8ProfileArtifactsRejectMalformedRuntimeArtifactsV1(t *testing.T) {
 	for _, test := range []struct {
 		name, artifact string

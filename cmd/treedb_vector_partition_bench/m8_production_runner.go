@@ -916,7 +916,8 @@ var m8ProfileArtifactNamesV1 = [...]string{"allocs_baseline.pprof", "cpu.pprof",
 
 const m8BenchmarkExecutableMaxBytesV1 = 512 << 20
 const m8ProfileArtifactMaxBytesV1 = 512 << 20
-const m8ProfileArtifactDecodeTimeoutV1 = 10 * time.Second
+const m8ProfileArtifactDecodeBaseTimeoutV1 = time.Minute
+const m8ProfileArtifactDecodePerMiBTimeoutV1 = 500 * time.Millisecond
 
 func m8BenchmarkExecutableSHA256V1(path string) (string, error) {
 	canonical, err := m8CanonicalPathV1(path)
@@ -975,7 +976,7 @@ func m8ProfileArtifactsV1(paths []string) ([]m8ProductionProfileArtifactV1, erro
 		if bytesRead > m8ProfileArtifactMaxBytesV1 {
 			return nil, fmt.Errorf("oversized M8 profile %q", path)
 		}
-		if err := m8ValidateProfileArtifactV1(resolved, name); err != nil {
+		if err := m8ValidateProfileArtifactV1(resolved, name, info.Size()); err != nil {
 			return nil, err
 		}
 		artifacts = append(artifacts, m8ProductionProfileArtifactV1{Path: resolved, Bytes: info.Size(), SHA256: hex.EncodeToString(hash.Sum(nil))})
@@ -988,8 +989,13 @@ func m8ProfileArtifactsV1(paths []string) ([]m8ProductionProfileArtifactV1, erro
 	return artifacts, nil
 }
 
-func m8ValidateProfileArtifactV1(path, name string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), m8ProfileArtifactDecodeTimeoutV1)
+func m8ProfileArtifactDecodeTimeoutV1(bytes int64) time.Duration {
+	bytes = min(max(bytes, int64(0)), int64(m8ProfileArtifactMaxBytesV1))
+	return m8ProfileArtifactDecodeBaseTimeoutV1 + time.Duration((bytes+(1<<20)-1)/(1<<20))*m8ProfileArtifactDecodePerMiBTimeoutV1
+}
+
+func m8ValidateProfileArtifactV1(path, name string, bytes int64) error {
+	ctx, cancel := context.WithTimeout(context.Background(), m8ProfileArtifactDecodeTimeoutV1(bytes))
 	defer cancel()
 	args := []string{"tool"}
 	if name == "trace.out" {
