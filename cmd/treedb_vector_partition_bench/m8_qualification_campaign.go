@@ -215,6 +215,9 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 			if err := validateM8ProductionReportV1(*report, m8QualificationResourceCapsV1()); err != nil {
 				return summary, fmt.Errorf("validate qualification child %s: %w", cleanPath, err)
 			}
+			if !m8QualificationCommandV1(*report) {
+				return summary, fmt.Errorf("qualification matrix %s has command/config mismatch", cleanPath)
+			}
 			derivedLedger := m8ProductionGateLedgerForReportV1(*report)
 			derivedLedger.OverlapStorage = report.GateLedger.OverlapStorage
 			if report.GateLedger != derivedLedger {
@@ -350,6 +353,29 @@ func m8QualificationFixtureV1(candidate fixtureManifest) bool {
 
 func m8QualificationConfigV1(cfg m8ProductionConfigEvidenceV1, fixture fixtureManifest, overlap float64, _ int) bool {
 	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterCandidates == 64 && cfg.MaxExactTruthVisits == m8QualificationExactTruthCapV1(fixture) && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, []int{1, 2, 4, 8, 16}) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{64}) && slices.Equal(cfg.Overlap, []float64{overlap})
+}
+
+// m8QualificationCommandV1 re-parses runner argv so the retained replay
+// command cannot disagree with the already-validated measured configuration.
+func m8QualificationCommandV1(report m8ProductionReportV1) bool {
+	if len(report.Command) < 2 {
+		return false
+	}
+	cfg, err := parseConfig(report.Command[1:])
+	if err != nil || cfg.stage != m8ProductionMultiGroupModeV1 {
+		return false
+	}
+	warmup, _ := m8WarmupCountAndConcurrencyV1(cfg)
+	commandConfig := m8ProductionConfigEvidenceV1{
+		RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions,
+		Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget,
+		Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: warmup,
+		EfSearch: cfg.efSearch, RouterCandidates: cfg.routerCandidates,
+		MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed,
+	}
+	return reflect.DeepEqual(commandConfig, report.Config) &&
+		cfg.m8MaxRSSBytes == report.Resources.PeakRSSCapBytes &&
+		cfg.m8MaxAssetBytes == report.Resources.PersistentAssetCap
 }
 
 func m8QualificationExactTruthCapV1(fixture fixtureManifest) int64 {

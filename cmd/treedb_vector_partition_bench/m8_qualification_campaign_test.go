@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -43,6 +44,32 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	if summary.P4QPSMedian != 200 || summary.P16QPSMedian != 100 || summary.P4P95Min != 89 || summary.P4P95Median != 164 || summary.P4P95Max != 239 || summary.P16P95Min != 101 || summary.P16P95Median != 176 || summary.P16P95Max != 251 {
 		t.Fatalf("summary=%+v", summary)
 	}
+	t.Run("edited_command", func(t *testing.T) {
+		matrix := testM8QualificationMatrixV1(t, head, fixture, 125, true)
+		testM8QualificationExecutionIDsV1(&matrix, 3)
+		testM8QualificationProfilesV1(t, root, "edited-command", &matrix)
+		for i, arg := range matrix.Variants[0].Command {
+			if arg == "-probes" {
+				matrix.Variants[0].Command[i+1] = "16"
+				break
+			}
+		}
+		raw, err := json.Marshal(matrix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := "edited-command.json"
+		if err := os.WriteFile(filepath.Join(root, path), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(raw)
+		bad := campaign
+		bad.Runs = slices.Clone(campaign.Runs)
+		bad.Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
+		if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
+			t.Fatal("accepted edited retained command")
+		}
+	})
 	for name, mutate := range map[string]func(*m8ProductionRowV1){
 		"edited_qps":     func(row *m8ProductionRowV1) { row.QPS++ },
 		"edited_elapsed": func(row *m8ProductionRowV1) { row.ElapsedNanos++ },
@@ -791,6 +818,7 @@ func testM8QualificationReportV1(t *testing.T, head string, fixture fixtureManif
 	report.Topology.ReadySetDigest = descriptor.ReadySetDigest
 	testM8BindRouterSessionsVariantV1(&report.RouterSessions, descriptor, report.Topology.ReadySetDigest)
 	testM8CompleteResourceLimitsV1(t, &report)
+	report.Command = testM8QualificationCommandV1(report)
 	if err := validateM3VariantDescriptorV1(descriptor); err != nil {
 		t.Fatalf("qualification descriptor: %v: %+v", err, descriptor)
 	}
@@ -799,6 +827,21 @@ func testM8QualificationReportV1(t *testing.T, head string, fixture fixtureManif
 		t.Fatalf("valid qualification report rejected: %v", err)
 	}
 	return report
+}
+
+func testM8QualificationCommandV1(report m8ProductionReportV1) []string {
+	cfg := report.Config
+	return []string{
+		"treedb_vector_partition_bench", "-mode", m8ProductionMultiGroupModeV1,
+		"-dataset", "fixture", "-out", "out", "-partitions", "16", "-probes", "1,2,4,8,16",
+		"-overlap", strconv.FormatFloat(report.Variant.OverlapRatio, 'g', -1, 64), "-top-k", "10",
+		"-recall-target", ".9", "-seed", strconv.FormatInt(cfg.Seed, 10), "-raft-groups", "4",
+		"-raft-nodes-per-group", "3", "-concurrency", "1", "-warmup", "0", "-ef-search", "64",
+		"-router-candidates", "64",
+		"-m8-max-rss-bytes", strconv.FormatUint(report.Resources.PeakRSSCapBytes, 10),
+		"-m8-max-persistent-asset-bytes", strconv.FormatUint(report.Resources.PersistentAssetCap, 10),
+		"-m8-max-exact-truth-visits", strconv.FormatInt(cfg.MaxExactTruthVisits, 10),
+	}
 }
 
 func testM8QualificationProfilesV1(t *testing.T, root, run string, matrix *m8ProductionMatrixV1) {
