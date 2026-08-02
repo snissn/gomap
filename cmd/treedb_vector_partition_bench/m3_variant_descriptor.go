@@ -55,6 +55,7 @@ type m3VariantDescriptorV1 struct {
 	PartitionHNSWM           int                    `json:"partition_hnsw_m"`
 	PartitionMaxDistanceWork int64                  `json:"partition_max_distance_work"`
 	RouterMaxScalarWork      int64                  `json:"router_max_scalar_work"`
+	M3MaxBenchmarkVisits     int64                  `json:"m3_max_benchmark_visits"`
 	RouterRepresentatives    uint64                 `json:"router_representatives"`
 	Capacity                 int                    `json:"capacity"`
 	OverlapRequested         int                    `json:"overlap_requested"`
@@ -84,6 +85,7 @@ func m3VariantBuildIdentityDigestV1(d m3VariantDescriptorV1) (string, error) {
 		PartitionHNSWM           int
 		PartitionMaxDistanceWork int64
 		RouterMaxScalarWork      int64
+		M3MaxBenchmarkVisits     int64
 		RouterRepresentatives    uint64
 		Capacity                 int
 		OverlapRequested         int
@@ -96,6 +98,7 @@ func m3VariantBuildIdentityDigestV1(d m3VariantDescriptorV1) (string, error) {
 		ArtifactSHA256: d.ArtifactSHA256, GraphArtifactSHA256: d.GraphArtifactSHA256, ArtifactBackend: d.ArtifactBackend,
 		Source: d.Source, IndexDefinitionDigest: d.IndexDefinitionDigest, PartitionHNSWM: d.PartitionHNSWM,
 		PartitionMaxDistanceWork: d.PartitionMaxDistanceWork, RouterMaxScalarWork: d.RouterMaxScalarWork,
+		M3MaxBenchmarkVisits:  d.M3MaxBenchmarkVisits,
 		RouterRepresentatives: d.RouterRepresentatives,
 		Capacity:              d.Capacity, OverlapRequested: d.OverlapRequested,
 		OverlapUseful: d.OverlapUseful, OverlapFiller: d.OverlapFiller,
@@ -209,7 +212,7 @@ func validateM3VariantDescriptorV1(d m3VariantDescriptorV1) error {
 		!m8SHA256V1(d.BuildIdentityDigest) || d.BuildIdentityDigest != wantBuildIdentity ||
 		!m8SHA256V1(d.Source.Checksum) || d.DatabaseDirectory == "" || !m8SHA256V1(d.ManifestIntegrity) || !m8SHA256V1(d.ReadySetDigest) ||
 		!m8SHA256V1(d.RouterAssetChecksum) || !m8SHA256V1(d.RouterModelDigest) || d.SourceGeneration == 0 || d.SourceRows == 0 ||
-		d.PartitionGeneration == 0 || d.RouterGeneration != d.PartitionGeneration || !m8SHA256V1(d.IndexDefinitionDigest) || d.PartitionHNSWM < 2 || d.PartitionHNSWM > partitionHNSWDegree || d.PartitionMaxDistanceWork < 1 || d.RouterMaxScalarWork < 1 || d.RouterRepresentatives == 0 || d.RouterRepresentatives > d.SourceRows || d.OverlapRequested != wantBudget || d.OverlapRealized != wantBudget || d.OverlapRequested < 0 || d.OverlapRealized < 0 || d.OverlapRejected < 0 || d.OverlapRequested != d.OverlapRealized+d.OverlapRejected || d.OverlapUseful < 0 || d.OverlapFiller < 0 || d.OverlapUseful+d.OverlapFiller != d.OverlapRealized || d.OverlapMemberships != d.OverlapRealized || d.EdgeCutBefore < d.EdgeCutAfter || d.EdgeCutAfter < 0 || d.OverlapUnusedCapacity != int(totalCapacity-usedCapacity) ||
+		d.PartitionGeneration == 0 || d.RouterGeneration != d.PartitionGeneration || !m8SHA256V1(d.IndexDefinitionDigest) || d.PartitionHNSWM < 2 || d.PartitionHNSWM > partitionHNSWDegree || d.PartitionMaxDistanceWork < 1 || d.RouterMaxScalarWork < 1 || d.M3MaxBenchmarkVisits < 1 || d.RouterRepresentatives == 0 || d.RouterRepresentatives > d.SourceRows || d.OverlapRequested != wantBudget || d.OverlapRealized != wantBudget || d.OverlapRequested < 0 || d.OverlapRealized < 0 || d.OverlapRejected < 0 || d.OverlapRequested != d.OverlapRealized+d.OverlapRejected || d.OverlapUseful < 0 || d.OverlapFiller < 0 || d.OverlapUseful+d.OverlapFiller != d.OverlapRealized || d.OverlapMemberships != d.OverlapRealized || d.EdgeCutBefore < d.EdgeCutAfter || d.EdgeCutAfter < 0 || d.OverlapUnusedCapacity != int(totalCapacity-usedCapacity) ||
 		len(d.PartitionLoads) != int(d.Partitions) || d.PersistentAssetBytes == 0 {
 		return errors.New("malformed M3 variant descriptor")
 	}

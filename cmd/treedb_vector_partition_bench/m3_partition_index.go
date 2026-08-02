@@ -305,7 +305,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		FixtureChecksum: fixture.Checksum, VariantID: variantID, AssignmentBasis: cfg.partitionAssignment, OverlapRatio: ratio,
 		ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphArtifactDigest, ArtifactBackend: artifact.Backend,
 		Source: artifact.Source, IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(meta.VectorIndexes[0]), PartitionHNSWM: partitionHNSWM,
-		PartitionMaxDistanceWork: cfg.partition.MaxDistanceWork, RouterMaxScalarWork: cfg.routerConfig.MaxScalarWork,
+		PartitionMaxDistanceWork: cfg.partition.MaxDistanceWork, RouterMaxScalarWork: cfg.routerConfig.MaxScalarWork, M3MaxBenchmarkVisits: cfg.m3MaxBenchmarkVisits,
 		Capacity: overlap.Capacity, OverlapRequested: overlap.Budget,
 		OverlapUseful: overlap.Useful, OverlapFiller: overlap.Filler,
 		EdgeCutBefore: overlap.EdgeCutBefore, EdgeCutAfter: overlap.EdgeCutAfter,
@@ -689,6 +689,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 			PartitionHNSWM:           partitionHNSWM,
 			PartitionMaxDistanceWork: cfg.partition.MaxDistanceWork,
 			RouterMaxScalarWork:      cfg.routerConfig.MaxScalarWork,
+			M3MaxBenchmarkVisits:     cfg.m3MaxBenchmarkVisits,
 			RouterRepresentatives:    routerRuntime.Representatives,
 			PersistentAssetBytes:     packPayloadBytes + manifest.RouterAsset.Bytes,
 		}

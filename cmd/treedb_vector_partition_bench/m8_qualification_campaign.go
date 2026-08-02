@@ -307,11 +307,11 @@ func m8QualificationExactTruthCapV1(fixture fixtureManifest) int64 {
 }
 
 func m8QualificationM3BuildCapsV1(variant m3VariantDescriptorV1, fixture fixtureManifest) bool {
-	cap := int64(20_000_000_000)
+	cap, visits := int64(20_000_000_000), int64(400_000_000)
 	if fixture.Vectors == 250000 {
-		cap = 50_000_000_000
+		cap, visits = 50_000_000_000, 900_000_000
 	}
-	return variant.PartitionMaxDistanceWork == cap && variant.RouterMaxScalarWork == cap
+	return variant.PartitionMaxDistanceWork == cap && variant.RouterMaxScalarWork == cap && variant.M3MaxBenchmarkVisits == visits
 }
 
 type m8QualificationEnvironmentV1 struct {

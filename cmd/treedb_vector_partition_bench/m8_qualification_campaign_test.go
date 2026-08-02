@@ -261,6 +261,12 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 				refreshTestM3VariantIdentityV1(t, matrix.Variants[i].Variant)
 			}
 		},
+		"wrong_m3_visit_cap": func(matrix *m8ProductionMatrixV1) {
+			for i := range matrix.Variants {
+				matrix.Variants[i].Variant.M3MaxBenchmarkVisits++
+				refreshTestM3VariantIdentityV1(t, matrix.Variants[i].Variant)
+			}
+		},
 		"incomplete_oracle": func(matrix *m8ProductionMatrixV1) {
 			for i := range matrix.Variants {
 				matrix.Variants[i].Rows[0].Attribution.OracleStagesComplete = false
@@ -403,17 +409,22 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 
 func TestM8QualificationM3BuildCapsV1(t *testing.T) {
 	for _, fixture := range m8QualificationFixturesV1 {
-		cap := int64(20_000_000_000)
+		cap, visits := int64(20_000_000_000), int64(400_000_000)
 		if fixture.Vectors == 250000 {
-			cap = 50_000_000_000
+			cap, visits = 50_000_000_000, 900_000_000
 		}
-		variant := m3VariantDescriptorV1{PartitionMaxDistanceWork: cap, RouterMaxScalarWork: cap}
+		variant := m3VariantDescriptorV1{PartitionMaxDistanceWork: cap, RouterMaxScalarWork: cap, M3MaxBenchmarkVisits: visits}
 		if !m8QualificationM3BuildCapsV1(variant, fixture) {
 			t.Fatalf("fixture=%d rejected expected cap=%d", fixture.Vectors, cap)
 		}
 		variant.RouterMaxScalarWork++
 		if m8QualificationM3BuildCapsV1(variant, fixture) {
 			t.Fatalf("fixture=%d accepted wrong cap", fixture.Vectors)
+		}
+		variant.RouterMaxScalarWork--
+		variant.M3MaxBenchmarkVisits++
+		if m8QualificationM3BuildCapsV1(variant, fixture) {
+			t.Fatalf("fixture=%d accepted wrong M3 visit cap", fixture.Vectors)
 		}
 	}
 }

@@ -41,6 +41,8 @@ median/min/max QPS plus p95 spread.
 The graph and offline router builders have separate scalar-work envelopes from
 M3's exact-oracle visit cap: the retained 100k corpus uses 20B and the 250k
 corpus uses 50B, a linear 2.5x scaling of the same per-source-row allowance.
+Their persisted M3 descriptors also bind the corresponding visit caps: 400M
+for 100k and 900M for 250k.
 Every M3 build command binds its corpus-specific
 `-partition-max-distance-work` and `-router-max-scalar-work` alongside its
 independent M3 visit cap. The router's default remains 20B and the explicit
