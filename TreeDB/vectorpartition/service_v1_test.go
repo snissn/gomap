@@ -67,7 +67,7 @@ func TestServiceV1PublicContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Register(context.Background(), GenerationRegistrationV1{GenerationIDV1: id}); err != nil {
+	if _, err := svc.Register(context.Background(), GenerationRegistrationV1{GenerationIDV1: id, SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.Prepare(context.Background(), id); err != nil {
@@ -76,7 +76,7 @@ func TestServiceV1PublicContract(t *testing.T) {
 	if status, err := svc.Activate(context.Background(), id); err != nil || !status.Active {
 		t.Fatalf("activate = %#v, %v", status, err)
 	}
-	response, err := svc.Search(context.Background(), SearchRequestV1{Generation: id, Query: []float32{1}, TopK: 1, Probes: 1, EfSearch: 1})
+	response, err := svc.Search(context.Background(), validSearchRequestV1(id))
 	if err != nil || len(response.Neighbors) != 1 || response.Neighbors[0].ID != "a" {
 		t.Fatalf("search = %#v, %v", response, err)
 	}
@@ -105,7 +105,7 @@ func TestServiceV1FailsClosedWithoutPartialResults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := svc.Search(context.Background(), SearchRequestV1{Generation: id, Query: []float32{1}, TopK: 1, Probes: 1, EfSearch: 1})
+	response, err := svc.Search(context.Background(), validSearchRequestV1(id))
 	if response.Generation != (GenerationIDV1{}) || len(response.Neighbors) != 0 {
 		t.Fatalf("partial response escaped: %#v", response)
 	}
@@ -124,11 +124,35 @@ func TestServiceV1ValidatesCancellationAndDeadlineBeforeBackend(t *testing.T) {
 	}})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := svc.Search(ctx, SearchRequestV1{Generation: id, Query: []float32{1}, TopK: 1, Probes: 1, EfSearch: 1}); !hasCodeV1(err, ErrorCanceledV1) {
+	if _, err := svc.Search(ctx, validSearchRequestV1(id)); !hasCodeV1(err, ErrorCanceledV1) {
 		t.Fatalf("cancel = %v", err)
 	}
-	if _, err := svc.Search(context.Background(), SearchRequestV1{Generation: id, Query: []float32{1}, TopK: 1, Probes: 1, EfSearch: 1, Deadline: time.Now().Add(-time.Second)}); !hasCodeV1(err, ErrorDeadlineExceededV1) {
+	request := validSearchRequestV1(id)
+	request.Deadline = time.Now().Add(-time.Second)
+	if _, err := svc.Search(context.Background(), request); !hasCodeV1(err, ErrorDeadlineExceededV1) {
 		t.Fatalf("deadline = %v", err)
+	}
+	if called {
+		t.Fatal("backend called after rejected request")
+	}
+}
+
+func TestServiceV1RejectsUnsupportedRequestContractBeforeBackend(t *testing.T) {
+	id := GenerationIDV1{Index: "embedding", Generation: 7}
+	called := false
+	svc, _ := NewServiceV1(&serviceBackendV1{states: map[GenerationIDV1]GenerationStatusV1{}, search: func(context.Context, SearchRequestV1) (SearchResponseV1, error) {
+		called = true
+		return SearchResponseV1{}, nil
+	}})
+	for _, mutate := range []func(*SearchRequestV1){func(r *SearchRequestV1) { r.Version = 2 }, func(r *SearchRequestV1) { r.Metric = "dot" }, func(r *SearchRequestV1) { r.Consistency = "eventual" }, func(r *SearchRequestV1) { r.Limits.ResponseBytes = 0 }} {
+		r := validSearchRequestV1(id)
+		mutate(&r)
+		if _, err := svc.Search(context.Background(), r); !hasCodeV1(err, ErrorInvalidRequestV1) {
+			t.Fatalf("error = %v", err)
+		}
+	}
+	if _, err := svc.Register(context.Background(), GenerationRegistrationV1{GenerationIDV1: id}); !hasCodeV1(err, ErrorInvalidRequestV1) {
+		t.Fatalf("registration = %v", err)
 	}
 	if called {
 		t.Fatal("backend called after rejected request")
@@ -138,4 +162,8 @@ func TestServiceV1ValidatesCancellationAndDeadlineBeforeBackend(t *testing.T) {
 func hasCodeV1(err error, code ErrorCodeV1) bool {
 	var apiErr *ErrorV1
 	return errors.As(err, &apiErr) && apiErr.Code == code
+}
+
+func validSearchRequestV1(id GenerationIDV1) SearchRequestV1 {
+	return SearchRequestV1{Version: 1, Generation: id, Query: []float32{1}, Metric: MetricCosineV1, TopK: 1, Probes: 1, EfSearch: 1, Consistency: ConsistencyGenerationSnapshotV1, Limits: SearchLimitsV1{RequestBytes: 1, CandidateBytes: 1, ResponseBytes: 1, MergeEntries: 1}}
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 const maxServiceScanDocuments = int(^uint(0) >> 1)
@@ -27,7 +28,39 @@ type Service struct {
 
 	benchmarkSearchCacheMu sync.RWMutex
 	benchmarkSearchCache   map[string]*serviceBenchmarkSearchCacheEntry
+	vectorPartitionService *vectorpartition.ServiceV1
 	closed                 bool
+}
+
+// RegisterVectorPartitionServiceV1 installs the node-assembled partition
+// service at the normal document-service root. Applications obtain it with
+// VectorPartitionServiceV1 and never construct transport or lifecycle pieces.
+func (s *Service) RegisterVectorPartitionServiceV1(service *vectorpartition.ServiceV1) error {
+	if s == nil || service == nil {
+		return errors.New("document service: vector partition service is required")
+	}
+	s.benchmarkSearchCacheMu.Lock()
+	defer s.benchmarkSearchCacheMu.Unlock()
+	if s.closed {
+		return serviceClosedError()
+	}
+	if s.vectorPartitionService != nil {
+		return errors.New("document service: vector partition service already registered")
+	}
+	s.vectorPartitionService = service
+	return nil
+}
+
+func (s *Service) VectorPartitionServiceV1() (*vectorpartition.ServiceV1, error) {
+	if s == nil {
+		return nil, errors.New("document service: vector partition service is unavailable")
+	}
+	s.benchmarkSearchCacheMu.RLock()
+	defer s.benchmarkSearchCacheMu.RUnlock()
+	if s.closed || s.vectorPartitionService == nil {
+		return nil, errors.New("document service: vector partition service is unavailable")
+	}
+	return s.vectorPartitionService, nil
 }
 
 type serviceBenchmarkSearchCacheEntry struct {
@@ -54,6 +87,7 @@ func (s *Service) Close() error {
 		return nil
 	}
 	s.closed = true
+	s.vectorPartitionService = nil
 	for _, entry := range s.benchmarkSearchCache {
 		if entry != nil {
 			entries = append(entries, entry)

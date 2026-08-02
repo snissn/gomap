@@ -36,13 +36,29 @@ type GenerationIDV1 struct {
 }
 
 type SearchRequestV1 struct {
+	Version     uint32
 	Generation  GenerationIDV1
 	Query       []float32
+	Metric      MetricV1
 	TopK        int
 	Probes      int
 	EfSearch    int
-	Consistency string
+	Consistency ConsistencyV1
+	Limits      SearchLimitsV1
 	Deadline    time.Time
+}
+
+type MetricV1 string
+
+const MetricCosineV1 MetricV1 = "cosine"
+
+type ConsistencyV1 string
+
+const ConsistencyGenerationSnapshotV1 ConsistencyV1 = "linearizable_generation_snapshot"
+
+type SearchLimitsV1 struct {
+	RequestBytes, CandidateBytes, ResponseBytes uint64
+	MergeEntries                                int
 }
 
 type NeighborV1 struct {
@@ -142,6 +158,9 @@ func (s *ServiceV1) Register(ctx context.Context, registration GenerationRegistr
 	if err := validateGenerationV1(ctx, registration.GenerationIDV1); err != nil {
 		return GenerationStatusV1{}, err
 	}
+	if registration.SourceGeneration == 0 || registration.SourceChecksum == 0 || registration.SourceSchemaHash == 0 || registration.SourceRowCount == 0 {
+		return GenerationStatusV1{}, invalidV1("complete source identity is required")
+	}
 	status, err := s.backend.RegisterVectorPartitionV1(ctx, registration)
 	return status, classifyErrorV1(ctx, err)
 }
@@ -211,8 +230,8 @@ func validateSearchRequestV1(ctx context.Context, r SearchRequestV1) error {
 	if err := validateGenerationV1(ctx, r.Generation); err != nil {
 		return err
 	}
-	if len(r.Query) == 0 || r.TopK <= 0 || r.Probes <= 0 || r.EfSearch <= 0 {
-		return invalidV1("query, top_k, probes, and ef_search are required")
+	if r.Version != 1 || len(r.Query) == 0 || r.TopK <= 0 || r.Probes <= 0 || r.EfSearch <= 0 || r.Metric != MetricCosineV1 || r.Consistency != ConsistencyGenerationSnapshotV1 || r.Limits.RequestBytes == 0 || r.Limits.CandidateBytes == 0 || r.Limits.ResponseBytes == 0 || r.Limits.MergeEntries == 0 {
+		return invalidV1("version, query, metric, consistency, limits, top_k, probes, and ef_search are required")
 	}
 	if !r.Deadline.IsZero() && !time.Now().Before(r.Deadline) {
 		return &ErrorV1{Code: ErrorDeadlineExceededV1, Err: context.DeadlineExceeded}
