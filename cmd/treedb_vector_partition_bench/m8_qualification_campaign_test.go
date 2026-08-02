@@ -57,6 +57,13 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	profileCalls := 0
+	if _, err := m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, func(string, m8ProductionReportV1) error { return nil }, func(m8ProductionProfileEvidenceV1) bool { profileCalls++; return true }); err != nil {
+		t.Fatal(err)
+	}
+	if profileCalls != len(campaign.Runs)*len(m8RequiredVariantIDsV1) {
+		t.Fatalf("profile verifier calls=%d want=%d", profileCalls, len(campaign.Runs)*len(m8RequiredVariantIDsV1))
+	}
 	if summary.P4QPSMedian != 200 || summary.P16QPSMedian != 100 || summary.P4P95Min != 89 || summary.P4P95Median != 164 || summary.P4P95Max != 239 || summary.P16P95Min != 101 || summary.P16P95Median != 176 || summary.P16P95Max != 251 {
 		t.Fatalf("summary=%+v", summary)
 	}
@@ -1213,11 +1220,11 @@ func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManif
 }
 
 func testM8ValidateQualificationCampaignV1(root string, campaign m8QualificationCampaignV1) (m8QualificationCampaignSummaryV1, error) {
-	return m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, func(string, m8ProductionReportV1) error { return nil })
+	return m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, func(string, m8ProductionReportV1) error { return nil }, func(m8ProductionProfileEvidenceV1) bool { return true })
 }
 
 func testM8ValidateQualificationIndexV1(root string, index m8QualificationIndexV1) (m8QualificationIndexSummaryV1, error) {
-	return m8ValidateQualificationIndexWithVerifiersV1(root, index, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, func(string, m8ProductionReportV1) error { return nil })
+	return m8ValidateQualificationIndexWithVerifiersV1(root, index, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, func(string, m8ProductionReportV1) error { return nil }, func(m8ProductionProfileEvidenceV1) bool { return true })
 }
 
 func TestM8QualificationBoundedJSONEvidenceV1(t *testing.T) {
@@ -1392,7 +1399,7 @@ func TestM8QualificationTruthCacheAnchorV1(t *testing.T) {
 	verify := func(root string, report m8ProductionReportV1) error {
 		return m8QualificationTruthCacheWithAnchorV1(root, report, localAnchor)
 	}
-	if _, err := m8ValidateQualificationCampaignWithVerifiersV1(campaignRoot, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, verify); err != nil {
+	if _, err := m8ValidateQualificationCampaignWithVerifiersV1(campaignRoot, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, verify, func(m8ProductionProfileEvidenceV1) bool { return true }); err != nil {
 		t.Fatalf("rejected anchored campaign: %v", err)
 	}
 	cachePath := m8TruthCacheArtifactPathV1(cacheDir, cacheEvidence.Identity)
@@ -1441,7 +1448,7 @@ func TestM8QualificationTruthCacheAnchorV1(t *testing.T) {
 		digest := sha256.Sum256(raw)
 		campaign.Runs[i].SHA256 = hex.EncodeToString(digest[:])
 	}
-	if _, err := m8ValidateQualificationCampaignWithVerifiersV1(campaignRoot, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, verify); err == nil || !strings.Contains(err.Error(), "frozen corpus anchor") {
+	if _, err := m8ValidateQualificationCampaignWithVerifiersV1(campaignRoot, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, verify, func(m8ProductionProfileEvidenceV1) bool { return true }); err == nil || !strings.Contains(err.Error(), "frozen corpus anchor") {
 		t.Fatalf("accepted self-consistent forged cache/report/matrix/campaign: %v", err)
 	}
 }

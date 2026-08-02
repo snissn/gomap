@@ -48,6 +48,28 @@ func TestM8BenchmarkExecutableSHA256BindsBytesV1(t *testing.T) {
 	}
 }
 
+func TestM8RetainedM3ProvenanceRejectsMixedBuildV1(t *testing.T) {
+	descriptor := testM3VariantDescriptorV1(t.TempDir())
+	cfg := config{baseSHA: descriptor.BaseSHA, headSHA: descriptor.HeadSHA}
+	if err := m8ValidateRetainedM3ProvenanceV1(cfg, descriptor, descriptor.ExecutableSHA256); err != nil {
+		t.Fatalf("clean retained descriptor rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*m3VariantDescriptorV1){
+		"dirty":      func(d *m3VariantDescriptorV1) { d.BuildDirty = true },
+		"base":       func(d *m3VariantDescriptorV1) { d.BaseSHA = strings.Repeat("e", 40) },
+		"head":       func(d *m3VariantDescriptorV1) { d.HeadSHA = strings.Repeat("f", 40) },
+		"executable": func(d *m3VariantDescriptorV1) { d.ExecutableSHA256 = strings.Repeat("d", 64) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := descriptor
+			mutate(&candidate)
+			if err := m8ValidateRetainedM3ProvenanceV1(cfg, candidate, descriptor.ExecutableSHA256); err == nil {
+				t.Fatal("accepted retained M3 descriptor with mismatched provenance")
+			}
+		})
+	}
+}
+
 func TestM8BoundedWorkUsesFixedWorkerPoolV1(t *testing.T) {
 	var active, peak int32
 	m8RunBoundedWorkV1(32, 3, func(int) {

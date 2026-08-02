@@ -113,6 +113,10 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		return runM8ProductionSingleVariantV1(cfg, fixture, vectors, queries, stdout)
 	}
 	initialDirty := m8GitDirtyV1(cfg.out, cfg.profiles)
+	executableSHA256, err := m8BenchmarkExecutableSHA256V1(cfg.command[0])
+	if err != nil {
+		return fmt.Errorf("hash M8 benchmark executable: %w", err)
+	}
 	type variantSource struct {
 		dir        string
 		descriptor m3VariantDescriptorV1
@@ -125,6 +129,9 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		}
 		if cfg.partitions < 0 || descriptor.FixtureChecksum != fixture.Checksum || uint64(descriptor.Partitions) != uint64(cfg.partitions) {
 			return fmt.Errorf("M8 matrix variant %q does not match configured fixture/partitions", descriptor.VariantID)
+		}
+		if err := m8ValidateRetainedM3ProvenanceV1(cfg, descriptor, executableSHA256); err != nil {
+			return fmt.Errorf("M8 matrix variant %q: %w", descriptor.VariantID, err)
 		}
 		if _, duplicate := sourcesByVariant[descriptor.VariantID]; duplicate {
 			return fmt.Errorf("M8 matrix duplicate variant %q", descriptor.VariantID)

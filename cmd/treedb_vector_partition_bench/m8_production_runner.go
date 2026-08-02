@@ -377,6 +377,19 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		groups[i] = fmt.Sprintf("m8-data-group-%02d", i)
 	}
 	started := time.Now()
+	executableSHA256, err := m8BenchmarkExecutableSHA256V1(cfg.command[0])
+	if err != nil {
+		return fmt.Errorf("hash M8 benchmark executable: %w", err)
+	}
+	if cfg.m8ExistingDB != "" {
+		descriptor, err := m3ReadVariantDescriptorV1(cfg.m8ExistingDB)
+		if err != nil {
+			return fmt.Errorf("read retained M3 descriptor: %w", err)
+		}
+		if err := m8ValidateRetainedM3ProvenanceV1(cfg, descriptor, executableSHA256); err != nil {
+			return err
+		}
+	}
 	var assets *m8ProductionMultiGroupAssetsV1
 	if cfg.m8ExistingDB != "" {
 		assets, err = openM8ProductionMultiGroupExistingAssetsV1(cfg.m8ExistingDB, groups, cfg.partitions, fixture, vectors)
@@ -390,8 +403,10 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	if assets.descriptor != nil && (len(cfg.overlaps) != 1 || cfg.overlaps[0] != assets.descriptor.OverlapRatio) {
 		return fmt.Errorf("M8 configured overlap does not match retained variant %s", assets.descriptor.VariantID)
 	}
-	if assets.descriptor != nil && (assets.descriptor.BaseSHA != cfg.baseSHA || assets.descriptor.HeadSHA != cfg.headSHA) {
-		return fmt.Errorf("M8 retained variant %s revision does not match configured revision", assets.descriptor.VariantID)
+	if assets.descriptor != nil {
+		if err := m8ValidateRetainedM3ProvenanceV1(cfg, *assets.descriptor, executableSHA256); err != nil {
+			return err
+		}
 	}
 	var persistentAssetBytes uint64
 	for _, asset := range assets.manifest.Assets {
@@ -443,10 +458,6 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		return err
 	}
 	goMaxProcs, goMemoryLimitBytes := benchmarkRuntimeLimits()
-	executableSHA256, err := m8BenchmarkExecutableSHA256V1(cfg.command[0])
-	if err != nil {
-		return fmt.Errorf("hash M8 benchmark executable: %w", err)
-	}
 	report := m8ProductionReportV1{
 		SchemaVersion: 4, ResultKind: "m8_production_multi_group_evidence_v4", Status: "incomplete",
 		Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true, GeneratedAt: time.Now().UTC(),
@@ -3563,7 +3574,19 @@ func m8CanonicalPathV1(path string) (string, error) {
 	}
 }
 
+type m8ProductionProfileVerifierV1 func(m8ProductionProfileEvidenceV1) bool
+
 func validateM8ProductionReportV1(report m8ProductionReportV1, caps m8ProductionResourceCapsV1) error {
+	return validateM8ProductionReportWithProfilesV1(report, caps, validM8ProductionProfilesV1)
+}
+
+// validateM8ProductionReportWithProfilesV1 keeps the production report
+// validator bound to semantic profile validation while allowing qualification
+// evidence tests to use their existing unexported verifier seam.
+func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps m8ProductionResourceCapsV1, profileVerifier m8ProductionProfileVerifierV1) error {
+	if profileVerifier == nil {
+		return errors.New("M8 profile verifier is required")
+	}
 	if report.SchemaVersion != 4 || report.ResultKind != "m8_production_multi_group_evidence_v4" ||
 		report.Mode != m8ProductionMultiGroupModeV1 || !report.ProductionEvidence ||
 		report.GeneratedAt.IsZero() || !validM8ProductionExecutionIDV1(report.ExecutionID) || len(report.Command) == 0 || !m8QualificationSHA256V1(report.ExecutableSHA256) || !validSHA(report.BaseSHA) || !validSHA(report.HeadSHA) ||
@@ -3683,7 +3706,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1, caps m8Production
 		report.Resources.PeakRSSMeasured && report.Resources.PeakRSSScope != m8PeakRSSScopeV1 {
 		return errors.New("incomplete M8 failure or resource evidence")
 	}
-	if !validM8ProductionProfilesV1(report.Profiles) {
+	if !profileVerifier(report.Profiles) {
 		return errors.New("incomplete M8 profile evidence")
 	}
 	if !validM8ProductionMeasurementTranscriptV1(report) {

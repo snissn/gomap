@@ -205,6 +205,21 @@ func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, par
 	return h, nil
 }
 
+// m8ValidateRetainedM3ProvenanceV1 rejects retained M3 output that cannot
+// truthfully participate in this M8 execution before topology construction.
+func m8ValidateRetainedM3ProvenanceV1(cfg config, descriptor m3VariantDescriptorV1, executableSHA256 string) error {
+	if descriptor.BuildDirty {
+		return fmt.Errorf("M8 retained variant %s was built from a dirty worktree", descriptor.VariantID)
+	}
+	if descriptor.BaseSHA != cfg.baseSHA || descriptor.HeadSHA != cfg.headSHA {
+		return fmt.Errorf("M8 retained variant %s revision does not match configured revision", descriptor.VariantID)
+	}
+	if descriptor.ExecutableSHA256 != executableSHA256 {
+		return fmt.Errorf("M8 retained variant %s executable does not match the current benchmark executable", descriptor.VariantID)
+	}
+	return nil
+}
+
 func openM8ProductionExistingAssetSetV1(dir string) (_ *m8ProductionMultiGroupAssetsV1, err error) {
 	info, statErr := os.Stat(dir)
 	if statErr != nil {

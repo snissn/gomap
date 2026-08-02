@@ -112,10 +112,10 @@ func m8ValidateQualificationIndexV1(root string, index m8QualificationIndexV1) (
 }
 
 func m8ValidateQualificationIndexWithRetainedVariantV1(root string, index m8QualificationIndexV1, retainedVariant m8QualificationRetainedVariantVerifierV1) (m8QualificationIndexSummaryV1, error) {
-	return m8ValidateQualificationIndexWithVerifiersV1(root, index, retainedVariant, m8QualificationBenchmarkExecutableV1, m8QualificationTrustedTruthCacheV1)
+	return m8ValidateQualificationIndexWithVerifiersV1(root, index, retainedVariant, m8QualificationBenchmarkExecutableV1, m8QualificationTrustedTruthCacheV1, validM8ProductionProfilesV1)
 }
 
-func m8ValidateQualificationIndexWithVerifiersV1(root string, index m8QualificationIndexV1, retainedVariant m8QualificationRetainedVariantVerifierV1, commandExecutable m8QualificationCommandExecutableVerifierV1, truthCache m8QualificationTruthCacheVerifierV1) (m8QualificationIndexSummaryV1, error) {
+func m8ValidateQualificationIndexWithVerifiersV1(root string, index m8QualificationIndexV1, retainedVariant m8QualificationRetainedVariantVerifierV1, commandExecutable m8QualificationCommandExecutableVerifierV1, truthCache m8QualificationTruthCacheVerifierV1, profileVerifier m8ProductionProfileVerifierV1) (m8QualificationIndexSummaryV1, error) {
 	summary := m8QualificationIndexSummaryV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_summary_v1", Status: "qualified", BaseSHA: index.BaseSHA, HeadSHA: index.HeadSHA, Campaigns: make(map[string]m8QualificationCampaignSummaryV1, len(m8QualificationFixturesV1))}
 	if index.BaseSHA != m8QualificationFrozenBaseSHAV1 {
 		return m8QualificationIndexSummaryV1{}, errors.New("qualification index does not use the frozen base revision")
@@ -130,7 +130,7 @@ func m8ValidateQualificationIndexWithVerifiersV1(root string, index m8Qualificat
 		if campaign.BaseSHA != index.BaseSHA || campaign.HeadSHA != index.HeadSHA {
 			return m8QualificationIndexSummaryV1{}, errors.New("qualification index campaigns do not share the index revision")
 		}
-		campaignSummary, err := m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, retainedVariant, commandExecutable, truthCache)
+		campaignSummary, err := m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, retainedVariant, commandExecutable, truthCache, profileVerifier)
 		if err != nil {
 			return m8QualificationIndexSummaryV1{}, err
 		}
@@ -163,10 +163,10 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 // asset boundary explicit for focused evidence tests. Production callers use
 // m8ValidateQualificationCampaignV1 above and cannot select a verifier.
 func m8ValidateQualificationCampaignWithRetainedVariantV1(root string, campaign m8QualificationCampaignV1, retainedVariant m8QualificationRetainedVariantVerifierV1) (m8QualificationCampaignSummaryV1, error) {
-	return m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, retainedVariant, m8QualificationBenchmarkExecutableV1, m8QualificationTrustedTruthCacheV1)
+	return m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, retainedVariant, m8QualificationBenchmarkExecutableV1, m8QualificationTrustedTruthCacheV1, validM8ProductionProfilesV1)
 }
 
-func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8QualificationCampaignV1, retainedVariant m8QualificationRetainedVariantVerifierV1, commandExecutable m8QualificationCommandExecutableVerifierV1, truthCache m8QualificationTruthCacheVerifierV1) (m8QualificationCampaignSummaryV1, error) {
+func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8QualificationCampaignV1, retainedVariant m8QualificationRetainedVariantVerifierV1, commandExecutable m8QualificationCommandExecutableVerifierV1, truthCache m8QualificationTruthCacheVerifierV1, profileVerifier m8ProductionProfileVerifierV1) (m8QualificationCampaignSummaryV1, error) {
 	if retainedVariant == nil {
 		return m8QualificationCampaignSummaryV1{}, errors.New("qualification retained-asset verifier is required")
 	}
@@ -175,6 +175,9 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 	}
 	if truthCache == nil {
 		return m8QualificationCampaignSummaryV1{}, errors.New("qualification trusted truth-cache verifier is required")
+	}
+	if profileVerifier == nil {
+		return m8QualificationCampaignSummaryV1{}, errors.New("qualification profile verifier is required")
 	}
 	if !m8QualificationSHA256V1(campaign.FixtureChecksum) || !m8QualificationGitSHAV1(campaign.BaseSHA) || !m8QualificationGitSHAV1(campaign.HeadSHA) || len(campaign.Runs) != 3 {
 		return m8QualificationCampaignSummaryV1{}, errors.New("qualification campaign requires one fixture/head and exactly three runs")
@@ -253,7 +256,7 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 		seenVariants := make(map[string]bool, len(m8RequiredVariantIDsV1))
 		for i := range matrix.Variants {
 			report := &matrix.Variants[i]
-			if err := validateM8ProductionReportV1(*report, m8QualificationResourceCapsV1()); err != nil {
+			if err := validateM8ProductionReportWithProfilesV1(*report, m8QualificationResourceCapsV1(), profileVerifier); err != nil {
 				return summary, fmt.Errorf("validate qualification child %s: %w", cleanPath, err)
 			}
 			if err := truthCache(resolvedRoot, *report); err != nil {
@@ -958,9 +961,6 @@ func m8QualificationProfilesV1(root string, profiles m8ProductionProfileEvidence
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return m8QualificationProfileModeV1{}, false
 		}
-	}
-	if !validM8ProductionProfilesV1(profiles) {
-		return m8QualificationProfileModeV1{}, false
 	}
 	return m8QualificationProfileModeV1{Status: profiles.Status, Scope: profiles.Scope}, true
 }
