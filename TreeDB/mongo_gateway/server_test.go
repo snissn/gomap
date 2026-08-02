@@ -6258,6 +6258,26 @@ func TestMongoMutationRejectsInvalidShapesAndOverflow(t *testing.T) {
 			t.Fatalf("accepted %v", update)
 		}
 	}
+	for _, path := range []string{"", ".a", "a.", "a..b", "$", "$[]", "$[x]"} {
+		if _, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: path, Value: int32(1)}}}})); err == nil {
+			t.Fatalf("accepted invalid update path %q", path)
+		}
+	}
+	for _, test := range []struct {
+		doc  wire.Document
+		path string
+	}{
+		{mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "scalar", Value: true}}), "scalar.child"},
+		{mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "array", Value: bson.A{int32(1)}}}), "array.child"},
+	} {
+		mutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: test.path, Value: int32(1)}}}}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, changed, applyErr := applyMongoMutation(test.doc, mutation); applyErr == nil || changed {
+			t.Fatalf("%s traversal changed=%v err=%v", test.path, changed, applyErr)
+		}
+	}
 	_, err := mongoMutationIncrement(mustRawValue(t, int64(math.MaxInt64)), mustRawValue(t, int64(1)))
 	if err == nil {
 		t.Fatal("overflow accepted")
@@ -6315,6 +6335,16 @@ func TestServerUpdateGenericMutationsAcrossDocumentFormats(t *testing.T) {
 			if !got.Lookup("old").IsZero() {
 				t.Fatal("old remains")
 			}
+			binaryUpdate := update(bson.D{{Key: "$set", Value: bson.D{{Key: "profile.binary", Value: bson.Binary{Subtype: 0x80, Data: []byte{1, 2}}}}}})
+			if format == collections.DocumentFormatBSON {
+				assertOK(t, binaryUpdate)
+			} else {
+				assertCommandError(t, binaryUpdate, "BadValue")
+				find = serveCommand(t, s, nextRequestID(), bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+				if !cursorFirstBatch(t, find)[0].Lookup("profile").IsZero() {
+					t.Fatalf("failed BSON nested update changed %s document", format)
+				}
+			}
 			noop := update(bson.D{{Key: "$unset", Value: bson.D{{Key: "stillAbsent", Value: true}}}})
 			assertOK(t, noop)
 			assertInt32(t, noop, "nModified", 0)
@@ -6334,6 +6364,12 @@ func TestServerUpdateGenericMutationsAcrossDocumentFormats(t *testing.T) {
 				{{Key: "$push", Value: bson.D{{Key: "n", Value: 1}}}},
 			} {
 				assertCommandError(t, update(badUpdate), "BadValue")
+			}
+			arrayFilters := serveCommand(t, s, nextRequestID(), bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "blocked", Value: true}}}}}, {Key: "arrayFilters", Value: bson.A{bson.D{{Key: "x", Value: int32(1)}}}}}}}, {Key: "$db", Value: "app"}})
+			assertCommandError(t, arrayFilters, "BadValue")
+			find = serveCommand(t, s, nextRequestID(), bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+			if !cursorFirstBatch(t, find)[0].Lookup("blocked").IsZero() {
+				t.Fatalf("arrayFilters update changed %s document", format)
 			}
 			find = serveCommand(t, s, nextRequestID(), bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
 			if n, _ := cursorFirstBatch(t, find)[0].Lookup("n").DoubleOK(); n != 2147483648.5 {

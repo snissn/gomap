@@ -1010,6 +1010,9 @@ func (e mongoUpdateParseError) Error() string {
 }
 
 func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, error) {
+	if !bson.Raw(update).Lookup("arrayFilters").IsZero() {
+		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update does not support arrayFilters", index)}
+	}
 	filter, err := requiredDocumentField(update, "q")
 	if err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
@@ -4048,8 +4051,11 @@ func applyMongoMutation(doc wire.Document, mutation mongoMutation) (wire.Documen
 }
 
 func applyMongoMutationWithOptions(doc wire.Document, mutation mongoMutation, upsertInsert bool) (wire.Document, bool, error) {
-	if mutation.replace != nil {
+	if len(mutation.replace) != 0 {
 		return applyMongoReplacement(doc, mutation.replace)
+	}
+	if !upsertInsert && mongoMutationUsesTopLevelFields(mutation) {
+		return applyMongoMutationTopLevel(doc, mutation)
 	}
 	var out bson.D
 	if err := bson.Unmarshal(doc, &out); err != nil {
@@ -4062,8 +4068,10 @@ func applyMongoMutationWithOptions(doc wire.Document, mutation mongoMutation, up
 			var err error
 			switch operation {
 			case "$set":
-				value, err := mongoMutationDecodeValue(field.value)
-				if err == nil {
+				value, decodeErr := mongoMutationDecodeValue(field.value)
+				if decodeErr != nil {
+					err = decodeErr
+				} else {
 					out, fieldChanged, err = mongoMutationSetPath(out, strings.Split(field.name, "."), value)
 				}
 			case "$inc":
@@ -4113,6 +4121,93 @@ func applyMongoMutationWithOptions(doc wire.Document, mutation mongoMutation, up
 			return nil, false, err
 		}
 		changed = changed || fieldChanged
+	}
+	if !changed {
+		return doc, false, nil
+	}
+	raw, err := bson.Marshal(out)
+	return wire.Document(raw), true, err
+}
+
+func mongoMutationUsesTopLevelFields(mutation mongoMutation) bool {
+	if len(mutation.setOnInsert) != 0 || len(mutation.push) != 0 || len(mutation.addToSet) != 0 {
+		return false
+	}
+	for _, field := range mutation.set {
+		if strings.Contains(field.name, ".") {
+			return false
+		}
+	}
+	for _, field := range mutation.inc {
+		if strings.Contains(field.name, ".") {
+			return false
+		}
+	}
+	for _, name := range mutation.unset {
+		if strings.Contains(name, ".") {
+			return false
+		}
+	}
+	return true
+}
+
+func applyMongoMutationTopLevel(doc wire.Document, mutation mongoMutation) (wire.Document, bool, error) {
+	set := make(map[string]bson.RawValue, len(mutation.set))
+	inc := make(map[string]bson.RawValue, len(mutation.inc))
+	unset := make(map[string]struct{}, len(mutation.unset))
+	for _, field := range mutation.set {
+		set[field.name] = field.value
+	}
+	for _, field := range mutation.inc {
+		inc[field.name] = field.value
+	}
+	for _, name := range mutation.unset {
+		unset[name] = struct{}{}
+	}
+	elements, err := bson.Raw(doc).Elements()
+	if err != nil {
+		return nil, false, err
+	}
+	out := make(bson.D, 0, len(elements)+len(set)+len(inc))
+	seen := make(map[string]struct{}, len(elements))
+	changed := false
+	for _, elem := range elements {
+		name, _ := elem.KeyErr()
+		value := elem.Value()
+		seen[name] = struct{}{}
+		if _, ok := unset[name]; ok {
+			changed = true
+			continue
+		}
+		if next, ok := set[name]; ok {
+			if !next.Equal(value) {
+				changed = true
+			}
+			value = next
+		}
+		if delta, ok := inc[name]; ok {
+			next, err := mongoMutationIncrement(value, delta)
+			if err != nil {
+				return nil, false, err
+			}
+			if !next.Equal(value) {
+				changed = true
+			}
+			value = next
+		}
+		out = append(out, bson.E{Key: name, Value: value})
+	}
+	for _, field := range mutation.set {
+		if _, ok := seen[field.name]; !ok {
+			out = append(out, bson.E{Key: field.name, Value: field.value})
+			changed = true
+		}
+	}
+	for _, field := range mutation.inc {
+		if _, ok := seen[field.name]; !ok {
+			out = append(out, bson.E{Key: field.name, Value: field.value})
+			changed = true
+		}
 	}
 	if !changed {
 		return doc, false, nil
