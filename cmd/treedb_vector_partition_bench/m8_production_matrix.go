@@ -111,7 +111,7 @@ type m8ProductionMatrixGatesV1 struct {
 	ExistingBehavior          string `json:"existing_behavior"`
 }
 
-func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, queries [][]float64, stdout io.Writer) error {
+func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, queries [][]float64, stdout io.Writer) (runErr error) {
 	if len(cfg.m8VariantDBs) == 0 {
 		return runM8ProductionSingleVariantV1(cfg, fixture, vectors, queries, stdout)
 	}
@@ -163,6 +163,17 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 	if err := os.MkdirAll(cfg.out, 0o755); err != nil {
 		return err
 	}
+	ownedProfiles, err := m8CreateProductionMatrixProfileLeavesV1(cfg.profiles)
+	if err != nil {
+		return err
+	}
+	matrixPublished := false
+	defer func() {
+		if matrixPublished {
+			return
+		}
+		runErr = errors.Join(runErr, m8RemoveProductionMatrixProfileLeavesV1(ownedProfiles))
+	}()
 
 	reports := make([]m8ProductionReportV1, 0, len(m8RequiredVariantIDsV1))
 	expectedTruthCacheDigest := cfg.m8TruthCacheSHA256
@@ -204,6 +215,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 	if err := m8WriteProductionMatrixV1(matrixPath, raw); err != nil {
 		return err
 	}
+	matrixPublished = true
 	if cfg.format == "json" {
 		_, err = stdout.Write(raw)
 	} else {
@@ -215,6 +227,35 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 				}
 			}
 		}
+	}
+	return err
+}
+
+// m8CreateProductionMatrixProfileLeavesV1 reserves only this matrix's final
+// profile leaves. A failed reservation removes just leaves it created.
+func m8CreateProductionMatrixProfileLeavesV1(root string) (leaves []string, err error) {
+	if root == "" {
+		return nil, nil
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return nil, fmt.Errorf("create M8 profile root: %w", err)
+	}
+	for _, variantID := range m8RequiredVariantIDsV1 {
+		path := filepath.Join(root, variantID)
+		if err := os.Mkdir(path, 0o755); err != nil {
+			for _, leaf := range leaves {
+				err = errors.Join(err, os.RemoveAll(leaf))
+			}
+			return nil, fmt.Errorf("reserve M8 profile output %s: %w", path, err)
+		}
+		leaves = append(leaves, path)
+	}
+	return leaves, nil
+}
+
+func m8RemoveProductionMatrixProfileLeavesV1(leaves []string) (err error) {
+	for _, path := range leaves {
+		err = errors.Join(err, os.RemoveAll(path))
 	}
 	return err
 }

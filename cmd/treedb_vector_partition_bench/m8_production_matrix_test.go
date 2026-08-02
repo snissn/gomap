@@ -106,6 +106,54 @@ func TestM8ProductionMatrixOutputPreflightV1(t *testing.T) {
 	}
 }
 
+func TestM8ProductionMatrixProfileLeafReservationV1(t *testing.T) {
+	root := t.TempDir()
+	profiles := filepath.Join(root, "profiles")
+	collision := filepath.Join(profiles, m8RequiredVariantIDsV1[1])
+	if err := os.MkdirAll(collision, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(collision, "trace.out")
+	if err := os.WriteFile(sentinel, []byte("retain"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m8CreateProductionMatrixProfileLeavesV1(profiles); err == nil || !strings.Contains(err.Error(), "reserve M8 profile output") {
+		t.Fatalf("collision err=%v", err)
+	}
+	if raw, err := os.ReadFile(sentinel); err != nil || string(raw) != "retain" {
+		t.Fatalf("collision sentinel=%q err=%v", raw, err)
+	}
+	if _, err := os.Stat(filepath.Join(profiles, m8RequiredVariantIDsV1[0])); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("owned partial leaf err=%v", err)
+	}
+	if err := os.RemoveAll(collision); err != nil {
+		t.Fatal(err)
+	}
+	leaves, err := m8CreateProductionMatrixProfileLeavesV1(profiles)
+	if err != nil {
+		t.Fatalf("fresh retry reservation: %v", err)
+	}
+	if len(leaves) != len(m8RequiredVariantIDsV1) {
+		t.Fatalf("leaves=%v", leaves)
+	}
+	for _, leaf := range leaves {
+		if info, err := os.Stat(leaf); err != nil || !info.IsDir() {
+			t.Fatalf("reserved leaf %s info=%v err=%v", leaf, info, err)
+		}
+	}
+	if err := m8RemoveProductionMatrixProfileLeavesV1(leaves); err != nil {
+		t.Fatal(err)
+	}
+	for _, leaf := range leaves {
+		if _, err := os.Stat(leaf); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("incomplete leaf %s err=%v", leaf, err)
+		}
+	}
+	if leaves, err = m8CreateProductionMatrixProfileLeavesV1(profiles); err != nil || len(leaves) != len(m8RequiredVariantIDsV1) {
+		t.Fatalf("retry leaves=%v err=%v", leaves, err)
+	}
+}
+
 func TestM8ProductionMatrixPublisherLeavesOnlyCompleteNoReplaceArtifactsV1(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "matrix.json")
