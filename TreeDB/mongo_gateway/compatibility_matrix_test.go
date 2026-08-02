@@ -552,6 +552,24 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 		},
 		{
 			category: "command gap",
+			feature:  "serverStatus",
+			status:   "not implemented",
+			probe:    expectCommandNotFound(bson.D{{Key: "serverStatus", Value: int32(1)}, {Key: "$db", Value: "admin"}}),
+		},
+		{
+			category: "command gap",
+			feature:  "top",
+			status:   "not implemented",
+			probe:    expectCommandNotFound(bson.D{{Key: "top", Value: int32(1)}, {Key: "$db", Value: "admin"}}),
+		},
+		{
+			category: "command gap",
+			feature:  "dbStats",
+			status:   "not implemented",
+			probe:    expectCommandNotFound(bson.D{{Key: "dbStats", Value: int32(1)}, {Key: "$db", Value: "app"}}),
+		},
+		{
+			category: "command gap",
 			feature:  "count",
 			status:   "not implemented",
 			probe:    expectCommandNotFound(bson.D{{Key: "count", Value: "users"}, {Key: "$db", Value: "app"}}),

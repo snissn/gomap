@@ -72,6 +72,9 @@ block drifts from the executable matrix rows.
 | index gap | compound index | rejected |
 | index gap | index without treedbValueType | rejected |
 | command gap | aggregate | not implemented |
+| command gap | serverStatus | not implemented |
+| command gap | top | not implemented |
+| command gap | dbStats | not implemented |
 | command gap | count | not implemented |
 | command gap | findAndModify | not implemented |
 | transaction gap | transactions and retryable writes | not implemented |
@@ -173,7 +176,10 @@ enabled-path latency claim is made.
 | Command | `createIndexes` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | Single-field ascending indexes only, with `treedbValueType`. |
 | Command | `listIndexes` | `supported subset` standalone; `rejected` in routed cluster mode | `TestMongoCompatibilityMatrix`, metadata tests, `TestMongoRoutedMetadataReadsFailClosedBeforeLocalCatalogObservation` | Emits TreeDB-specific `treedbValueType` only when local metadata is authoritative. |
 | Command | `dropIndexes` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | No broad collection/database DDL surface. |
-| Command | `aggregate` | `not implemented` | `TestMongoCompatibilityMatrix` | No aggregation pipeline. |
+| Command | `aggregate` | `not implemented` | `TestMongoCompatibilityMatrix` | No aggregation pipeline; Compass Performance `currentOp` uses this command. |
+| Command | `serverStatus` | `not implemented` | `TestMongoCompatibilityMatrix` | Optional Compass Performance metadata is unsupported; this does not block basic connection or browsing. |
+| Command | `top` | `not implemented` | `TestMongoCompatibilityMatrix` | Optional Compass Performance metrics are unsupported; this does not block basic connection or browsing. |
+| Command | `dbStats` | `not implemented` | `TestMongoCompatibilityMatrix` | Database statistics are unsupported; this does not block basic connection or browsing. |
 | Command | `count`, `countDocuments`, `estimatedDocumentCount` | `not implemented` | `TestMongoCompatibilityMatrix` covers `count` command absence | Future fast count work should be explicit. |
 | Command | `distinct` | `not implemented` | Command falls through to `CommandNotFound` | No distinct scan/index planner. |
 | Command | `findAndModify` | `not implemented` | `TestMongoCompatibilityMatrix` | No atomic find/update command surface. |
@@ -185,38 +191,19 @@ enabled-path latency claim is made.
 
 ## Desktop Client Check
 
-Issue #1473 identified a MongoDB desktop-client connection failure on:
-`unsupported MongoDB gateway command: connectionStatus`. The gateway now handles
-that command with a minimal unauthenticated `authInfo` response and the
-compatibility matrix keeps it covered.
+On 2026-08-01, MongoDB Compass 1.49.12 on macOS 26.2 was tested against the
+gateway at commit `03e7a26e56100964f14f603f0248a1a6ccc50a68`, using
+`mongodb://127.0.0.1:27130/?directConnection=true`. Compass refreshed the
+database tree, listed the database, opened `compass_e2e.docs`, and rendered
+three BSON documents.
 
-The same desktop-client path later exposed
-`unsupported MongoDB gateway command: hostInfo`. The gateway now handles that
-command with minimal local runtime and OS metadata and keeps it covered in the
-matrix.
-
-The client path then exposed `unsupported MongoDB gateway command: buildInfo`.
-The gateway now handles that command with minimal MongoDB-compatible version
-and build metadata and keeps it covered in the matrix.
-
-The client path then exposed `unsupported MongoDB gateway command: create`.
-The gateway now handles plain collection creation as a TreeDB collection catalog
-entry, treats existing collections as idempotent no-op success, and rejects
-unsupported MongoDB collection options such as capped collections. That duplicate
-`create` behavior is an intentional GUI-compatibility deviation from MongoDB's
-`NamespaceExists` error.
-
-The client path then exposed a driver-side
-`Current topology does not support sessions` error. The gateway now advertises
-logical session timeout metadata in `hello` and accepts `endSessions`; this
-unblocks ordinary session-bearing driver commands without adding transaction
-semantics.
-
-This does not yet certify a full desktop GUI connection flow. If a client gets
-past `connectionStatus` / `hostInfo` / `buildInfo` / `create` / logical
-sessions and then asks for other metadata or DDL commands such as
-`listDatabases` or `serverStatus`, add those commands as explicit matrix rows
-before deciding whether to implement or reject them.
+This certifies only the tested connection-and-browse flow, not full Compass or
+MongoDB compatibility. The optional Compass Performance view remains
+non-blocking for basic connection and browsing: `top` and `serverStatus` return
+`CommandNotFound`, and its `currentOp` request uses unsupported `aggregate`.
+The small driver seeding run likewise reached document insertion but its final
+`dbStats` request returned `CommandNotFound`; database statistics are not
+implemented.
 
 ## Query Matrix
 
@@ -293,8 +280,9 @@ before deciding whether to implement or reject them.
 
 ## Next Gap-Closing Candidates
 
-1. Run a real desktop GUI client after `connectionStatus` and add any next
-   unsupported command as a matrix row before implementing it.
+1. Decide whether optional Compass Performance metadata (`serverStatus`, `top`,
+   and aggregate-backed `currentOp`) is worth implementing; basic connection
+   and browsing do not depend on it.
 2. Decide whether unsupported filters should always fail closed or allow bounded
    scans behind a feature flag.
 3. Extend explicit `writeConcern` handling beyond the current cluster submitter
