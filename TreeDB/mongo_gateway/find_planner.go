@@ -1778,8 +1778,13 @@ func dottedArrayIndex(part string) (int, bool) {
 	return index, true
 }
 
+func rawValuesBothScalar(left, right bson.RawValue) bool {
+	return left.Type != bson.TypeEmbeddedDocument && left.Type != bson.TypeArray &&
+		right.Type != bson.TypeEmbeddedDocument && right.Type != bson.TypeArray
+}
+
 func rawValuesEqual(left, right bson.RawValue) bool {
-	if left.Type != bson.TypeEmbeddedDocument && left.Type != bson.TypeArray && right.Type != bson.TypeEmbeddedDocument && right.Type != bson.TypeArray {
+	if rawValuesBothScalar(left, right) {
 		return rawScalarValuesEqual(left, right)
 	}
 	type pair struct{ left, right bson.RawValue }
@@ -1788,7 +1793,7 @@ func rawValuesEqual(left, right bson.RawValue) bool {
 		last := len(stack) - 1
 		current := stack[last]
 		stack = stack[:last]
-		if current.left.Type != bson.TypeEmbeddedDocument && current.left.Type != bson.TypeArray && current.right.Type != bson.TypeEmbeddedDocument && current.right.Type != bson.TypeArray {
+		if rawValuesBothScalar(current.left, current.right) {
 			if !rawScalarValuesEqual(current.left, current.right) {
 				return false
 			}
