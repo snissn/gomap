@@ -87,6 +87,17 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 	if len(h.endpoints) != len(owners) {
 		return nil, errors.New("nativewire: production vector topology has incomplete owner endpoint coverage")
 	}
+	for group, nodes := range opts.NodeEndpoints {
+		resolved, ok := opts.Catalog.Group(group)
+		if !ok || !owners[group] {
+			return nil, fmt.Errorf("nativewire: production vector topology node endpoint owner %q is invalid", group)
+		}
+		for node := range nodes {
+			if !slices.Contains(resolved.Members, node) {
+				return nil, fmt.Errorf("nativewire: production vector topology node %q is not a member of %q", node, group)
+			}
+		}
+	}
 	for _, shard := range opts.Shards {
 		if shard.GroupID == "" || shard.Listener == nil || shard.Service == nil || !owners[shard.GroupID] || h.listeners[shard.GroupID] != nil {
 			return nil, fmt.Errorf("nativewire: production vector topology shard %q is invalid", shard.GroupID)

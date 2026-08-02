@@ -46,6 +46,53 @@ func TestVectorPartitionShardSearchTCPDispatcherReusesConnectionV1(t *testing.T)
 	}
 }
 
+func TestVectorPartitionShardSearchTCPDispatcherReconnectsAfterIdleCloseAndFailsAfterCloseV1(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	idleClosed := make(chan struct{}, 1)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				(VectorPartitionShardSearchTCPServerV1{InitialTimeout: 10 * time.Millisecond, Service: vectorPartitionShardSearchHandlerFuncV1(func(_ context.Context, r VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+					return VectorPartitionShardSearchResponseV1{Version: 1, RequestID: r.RequestID}, nil
+				})}).ServeConn(context.Background(), conn)
+				select {
+				case idleClosed <- struct{}{}:
+				default:
+				}
+			}()
+		}
+	}()
+	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": listener.Addr().String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dispatcher.DispatchVectorPartitionShardSearchV1(context.Background(), VectorPartitionShardSearchRequestV1{TargetGroupID: "group-a", RequestID: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-idleClosed:
+	case <-time.After(time.Second):
+		t.Fatal("server did not close idle connection")
+	}
+	if response, err := dispatcher.DispatchVectorPartitionShardSearchV1(context.Background(), VectorPartitionShardSearchRequestV1{TargetGroupID: "group-a", RequestID: "reconnected"}); err != nil || response.RequestID != "reconnected" {
+		t.Fatalf("reconnect response=%+v err=%v", response, err)
+	}
+	if err := dispatcher.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dispatcher.DispatchVectorPartitionShardSearchV1(context.Background(), VectorPartitionShardSearchRequestV1{TargetGroupID: "group-a"}); err == nil {
+		t.Fatal("closed dispatcher accepted request")
+	}
+}
+
 func TestVectorPartitionShardSearchTCPDispatcherUsesLeaderNodeEndpointV1(t *testing.T) {
 	leader := newVectorPartitionShardSearchTCPListenerV1(t, vectorPartitionShardSearchHandlerFuncV1(func(_ context.Context, r VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
 		return VectorPartitionShardSearchResponseV1{Version: 1, RequestID: r.RequestID}, nil
