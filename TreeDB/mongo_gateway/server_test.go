@@ -1415,12 +1415,11 @@ func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterParseError(t *testin
 		{Key: "updates", Value: bson.A{
 			bson.D{
 				{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
-				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "score", Value: int32(1)}}}}},
+				{Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "score", Value: int32(1)}}}}},
 			},
 			bson.D{
 				{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}},
-				{Key: "multi", Value: true},
-				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "score", Value: int32(2)}}}}},
+				{Key: "u", Value: bson.D{{Key: "$push", Value: bson.D{{Key: "score", Value: int32(2)}}}}},
 			},
 		}},
 		{Key: "$db", Value: "app"},
@@ -5997,6 +5996,67 @@ func TestMongoMutationRejectsInvalidShapesAndOverflow(t *testing.T) {
 	changedID := mustDocument(t, bson.D{{Key: "_id", Value: "u2"}})
 	if _, _, err := applyMongoReplacement(mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}), changedID); err == nil {
 		t.Fatal("changed _id accepted")
+	}
+}
+
+func TestServerUpdateGenericMutationsAcrossDocumentFormats(t *testing.T) {
+	for _, format := range []collections.DocumentFormat{collections.DocumentFormatBSON, collections.DocumentFormatJSON, collections.DocumentFormatTemplateV1} {
+		t.Run(string(format), func(t *testing.T) {
+			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			s := NewServer()
+			s.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: format}
+			s.Collections = collections.NewCollectionManager(db)
+			assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "n", Value: int32(2147483647)}, {Key: "old", Value: true}}}}, {Key: "$db", Value: "app"}}))
+
+			update := func(requestID int32, value bson.D) bson.Raw {
+				return serveCommand(t, s, requestID, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: value}}}}, {Key: "$db", Value: "app"}})
+			}
+			resp := update(2, bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "ada"}}}, {Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}, {Key: "missing", Value: int64(-2)}}}, {Key: "$unset", Value: bson.D{{Key: "old", Value: true}, {Key: "absent", Value: true}}}})
+			assertOK(t, resp)
+			assertInt32(t, resp, "n", 1)
+			assertInt32(t, resp, "nModified", 1)
+			find := serveCommand(t, s, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+			got := cursorFirstBatch(t, find)[0]
+			if n, ok := got.Lookup("n").Int64OK(); !ok || n != 2147483648 {
+				t.Fatalf("n=%d ok=%v", n, ok)
+			}
+			if n, _ := got.Lookup("missing").Int64OK(); n != -2 {
+				t.Fatalf("missing=%d", n)
+			}
+			if !got.Lookup("old").IsZero() {
+				t.Fatal("old remains")
+			}
+			// int64 plus double is a double, while unsetting a missing field is a no-op.
+			assertOK(t, update(4, bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: 0.5}}}, {Key: "$unset", Value: bson.D{{Key: "stillAbsent", Value: true}}}}))
+			find = serveCommand(t, s, 5, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+			if n, ok := cursorFirstBatch(t, find)[0].Lookup("n").DoubleOK(); !ok || n != 2147483648.5 {
+				t.Fatalf("double n=%v ok=%v", n, ok)
+			}
+			for _, badUpdate := range []bson.D{
+				{{Key: "$inc", Value: bson.D{{Key: "n", Value: "bad"}}}},
+				{{Key: "$inc", Value: bson.D{{Key: "n", Value: nil}}}},
+				{{Key: "$set", Value: bson.D{{Key: "n", Value: 1}}}, {Key: "$unset", Value: bson.D{{Key: "n", Value: true}}}},
+				{{Key: "$set", Value: bson.D{{Key: "x.y", Value: 1}}}},
+				{{Key: "$set", Value: bson.D{{Key: "_id", Value: "u2"}}}},
+				{{Key: "$push", Value: bson.D{{Key: "n", Value: 1}}}},
+			} {
+				assertCommandError(t, update(6, badUpdate), "BadValue")
+			}
+			find = serveCommand(t, s, 6, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+			if n, _ := cursorFirstBatch(t, find)[0].Lookup("n").DoubleOK(); n != 2147483648.5 {
+				t.Fatalf("failed item changed n=%v", n)
+			}
+			assertOK(t, update(6, bson.D{{Key: "$inc", Value: bson.D{{Key: "largest", Value: int64(math.MaxInt64)}}}}))
+			assertCommandError(t, update(6, bson.D{{Key: "$inc", Value: bson.D{{Key: "largest", Value: int64(1)}}}}), "BadValue")
+			assertOK(t, update(7, bson.D{{Key: "name", Value: "grace"}})) // omitted _id is preserved
+			assertOK(t, update(8, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "grace"}}))
+			assertCommandError(t, update(9, bson.D{{Key: "_id", Value: "u2"}}), "BadValue")
+			assertOK(t, update(10, bson.D{})) // an empty replacement retains _id
+		})
 	}
 }
 

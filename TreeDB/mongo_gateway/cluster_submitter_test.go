@@ -2341,6 +2341,47 @@ func TestClusterSubmitterUpdateBSONSetRoutesCountsAndNoLocalMutation(t *testing.
 	}
 }
 
+func TestClusterSubmitterGenericUpdatesFailClosedWithoutLocalMutation(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 325830, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "age", Value: int32(10)}, {Key: "name", Value: "Ada"}}}},
+		{Key: "$db", Value: "app"},
+	}))
+	submitter := &mongoClusterFakeSubmitter{}
+	setMongoClusterTestSubmitter(server, submitter, 8)
+	for _, update := range []bson.D{
+		{{Key: "$inc", Value: bson.D{{Key: "age", Value: int32(1)}}}},
+		{{Key: "name", Value: "Grace"}},
+	} {
+		response := serveCommand(t, server, 325831, bson.D{
+			{Key: "update", Value: "users"},
+			{Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: update}}}},
+			{Key: "$db", Value: "app"},
+		})
+		assertCommandError(t, response, "BadValue")
+	}
+	if calls := submitter.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("generic updates submitted %d cluster calls", len(calls))
+	}
+	found := serveCommand(t, server, 325832, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	doc := cursorFirstBatch(t, found)[0]
+	if age, _ := doc.Lookup("age").Int32OK(); age != 10 {
+		t.Fatalf("local age=%d want 10", age)
+	}
+	if name, _ := doc.Lookup("name").StringValueOK(); name != "Ada" {
+		t.Fatalf("local name=%q want Ada", name)
+	}
+}
+
 func TestClusterSubmitterUpdateSubmitsPriorOrderedItemsBeforeUnsupported(t *testing.T) {
 	submitter := &mongoClusterFakeSubmitter{}
 	server := NewServer()

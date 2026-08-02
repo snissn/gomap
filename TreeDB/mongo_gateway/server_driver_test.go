@@ -144,6 +144,34 @@ func TestServerOfficialGoDriverBasicCRUD(t *testing.T) {
 		t.Fatalf("decoded city=%v want London", got["city"])
 	}
 
+	mutationResult, err := coll.UpdateOne(opCtx,
+		bson.D{{Key: "_id", Value: id}},
+		bson.D{{Key: "$inc", Value: bson.D{{Key: "age", Value: int32(2)}}}, {Key: "$unset", Value: bson.D{{Key: "city", Value: true}}}},
+	)
+	if err != nil {
+		t.Fatalf("driver generic update one: %v", err)
+	}
+	if mutationResult.MatchedCount != 1 || mutationResult.ModifiedCount != 1 {
+		t.Fatalf("generic update matched=%d modified=%d want 1/1", mutationResult.MatchedCount, mutationResult.ModifiedCount)
+	}
+	replaceResult, err := coll.ReplaceOne(opCtx, bson.D{{Key: "_id", Value: id}}, bson.D{{Key: "name", Value: "grace"}, {Key: "age", Value: int64(40)}})
+	if err != nil {
+		t.Fatalf("driver replace one: %v", err)
+	}
+	if replaceResult.MatchedCount != 1 || replaceResult.ModifiedCount != 1 {
+		t.Fatalf("replace result matched=%d modified=%d want 1/1", replaceResult.MatchedCount, replaceResult.ModifiedCount)
+	}
+	got = nil
+	if err := coll.FindOne(opCtx, bson.D{{Key: "_id", Value: id}}).Decode(&got); err != nil {
+		t.Fatalf("driver find one after replacement: %v", err)
+	}
+	if got["name"] != "grace" || got["age"] != int64(40) {
+		t.Fatalf("replacement document=%v", got)
+	}
+	if _, ok := got["city"]; ok {
+		t.Fatalf("replacement retained city: %v", got)
+	}
+
 	deleteResult, err := coll.DeleteOne(opCtx, bson.D{{Key: "_id", Value: id}})
 	if err != nil {
 		t.Fatalf("driver delete one: %v", err)
