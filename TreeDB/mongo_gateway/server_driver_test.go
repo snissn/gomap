@@ -42,6 +42,25 @@ func TestStandaloneServerOfficialGoDriverBSONSetBinaryUpsert(t *testing.T) {
 	if result.MatchedCount != 0 || result.ModifiedCount != 0 || result.UpsertedCount != 1 || result.UpsertedID != "binary-upsert" {
 		t.Fatalf("binary upsert result=%+v", result)
 	}
+	result, err = client.Database("app").Collection("users").UpdateOne(opCtx,
+		bson.D{{Key: "_id", Value: "binary-upsert"}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "payload", Value: bson.Binary{Subtype: 0x00, Data: []byte{4, 5}}}}}},
+		options.UpdateOne().SetUpsert(true),
+	)
+	if err != nil {
+		t.Fatalf("driver BSON binary matched upsert: %v", err)
+	}
+	if result.MatchedCount != 1 || result.ModifiedCount != 1 || result.UpsertedCount != 0 {
+		t.Fatalf("matched binary upsert result=%+v", result)
+	}
+	var stored bson.Raw
+	if err := client.Database("app").Collection("users").FindOne(opCtx, bson.D{{Key: "_id", Value: "binary-upsert"}}).Decode(&stored); err != nil {
+		t.Fatalf("driver find binary upsert: %v", err)
+	}
+	subtype, payload := stored.Lookup("payload").Binary()
+	if subtype != 0x00 || string(payload) != string([]byte{4, 5}) {
+		t.Fatalf("driver binary payload subtype/data=%#x/%v", subtype, payload)
+	}
 }
 
 func TestServerOfficialGoDriverBasicCRUD(t *testing.T) {

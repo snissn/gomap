@@ -1049,6 +1049,23 @@ func TestServerBSONSetUpsertAllowsNativeBinaryValues(t *testing.T) {
 			if subtype != 0x00 || !bytes.Equal(payload, []byte{2, 3, 4}) {
 				t.Fatalf("payload subtype/data=%#x/%v want 0/[2 3 4]", subtype, payload)
 			}
+			response = serveCommand(t, server, 22545, bson.D{
+				{Key: "update", Value: "users"},
+				{Key: "updates", Value: bson.A{bson.D{
+					{Key: "q", Value: bson.D{{Key: "_id", Value: "binary-upsert"}}},
+					{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "payload", Value: bson.Binary{Subtype: 0x00, Data: []byte{5, 6}}}}}}},
+					{Key: "upsert", Value: true},
+				}}},
+				{Key: "$db", Value: "app"},
+			})
+			assertOK(t, response)
+			assertInt32(t, response, "n", 1)
+			assertInt32(t, response, "nModified", 1)
+			found = serveCommand(t, server, 22546, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "binary-upsert"}}}, {Key: "$db", Value: "app"}})
+			subtype, payload = cursorFirstBatch(t, found)[0].Lookup("payload").Binary()
+			if subtype != 0x00 || !bytes.Equal(payload, []byte{5, 6}) {
+				t.Fatalf("matched payload subtype/data=%#x/%v want 0/[5 6]", subtype, payload)
+			}
 		})
 	}
 }

@@ -1266,7 +1266,11 @@ func applyMongoUpdateToStoredDocument(col *collections.Collection, materializer 
 	var updated wire.Document
 	var changed bool
 	if update.pureSet {
-		updated, changed, err = applySetUpdate(raw, update.updateDoc)
+		if normalizedMongoUpdateDocumentFormat(col) == collections.DocumentFormatBSON && update.bsonSetFieldsOK {
+			updated, changed, err = applyBSONSetUpdate(raw, update.bsonSetFields)
+		} else {
+			updated, changed, err = applySetUpdate(raw, update.updateDoc)
+		}
 	} else {
 		updated, changed, err = applyMongoMutation(raw, update.mutation)
 	}
