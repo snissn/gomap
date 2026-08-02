@@ -481,7 +481,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		for i := range artifacts {
 			captured[i] = artifacts[i].Path
 		}
-		directory, directoryErr := filepath.EvalSymlinks(cfg.profiles)
+		directory, directoryErr := m8CanonicalPathV1(profileCapture.dir)
 		if directoryErr != nil {
 			return fmt.Errorf("resolve M8 profiles directory: %w", directoryErr)
 		}
@@ -651,14 +651,17 @@ func startM8ProfileCaptureV1(dir string) (*m8ProfileCaptureV1, error) {
 	if dir == "" {
 		return nil, nil
 	}
-	capture := &m8ProfileCaptureV1{dir: dir}
-	baseline := filepath.Join(dir, "allocs_baseline.pprof")
+	canonicalDir, err := m8CanonicalPathV1(dir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve M8 profiles directory: %w", err)
+	}
+	capture := &m8ProfileCaptureV1{dir: canonicalDir}
+	baseline := filepath.Join(canonicalDir, "allocs_baseline.pprof")
 	if err := writeM8RuntimeProfileV1("allocs", baseline); err != nil {
 		return nil, fmt.Errorf("write M8 allocation baseline: %w", err)
 	}
 	capture.paths = append(capture.paths, baseline)
-	var err error
-	capture.traceFile, err = os.Create(filepath.Join(dir, "trace.out"))
+	capture.traceFile, err = os.Create(filepath.Join(canonicalDir, "trace.out"))
 	if err != nil {
 		return nil, fmt.Errorf("create M8 trace: %w", err)
 	}
@@ -666,7 +669,7 @@ func startM8ProfileCaptureV1(dir string) (*m8ProfileCaptureV1, error) {
 		_ = capture.traceFile.Close()
 		return nil, fmt.Errorf("start M8 trace: %w", err)
 	}
-	capture.cpu, err = os.Create(filepath.Join(dir, "cpu.pprof"))
+	capture.cpu, err = os.Create(filepath.Join(canonicalDir, "cpu.pprof"))
 	if err != nil {
 		trace.Stop()
 		_ = capture.traceFile.Close()
@@ -3387,7 +3390,7 @@ func validM8ProductionProfilesV1(profiles m8ProductionProfileEvidenceV1) bool {
 	if profiles.Status != "captured_production_query_and_fault_boundary" || profiles.Directory == "" || profiles.Scope == "" || len(profiles.Captured) != len(m8ProfileArtifactNamesV1) || len(profiles.Artifacts) != len(m8ProfileArtifactNamesV1) || !filepath.IsAbs(profiles.Directory) {
 		return false
 	}
-	directory, err := filepath.EvalSymlinks(profiles.Directory)
+	directory, err := m8CanonicalPathV1(profiles.Directory)
 	if err != nil || directory != profiles.Directory {
 		return false
 	}

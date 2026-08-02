@@ -2634,11 +2634,45 @@ func TestM8ProfileCaptureWritesRequiredRuntimeArtifactsV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !validM8ProductionProfilesV1(m8ProductionProfileEvidenceV1{Directory: dir, Captured: paths, Artifacts: artifacts, Status: "captured_production_query_and_fault_boundary", Scope: "test"}) {
+	canonicalDir, err := m8CanonicalPathV1(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !validM8ProductionProfilesV1(m8ProductionProfileEvidenceV1{Directory: canonicalDir, Captured: paths, Artifacts: artifacts, Status: "captured_production_query_and_fault_boundary", Scope: "test"}) {
 		t.Fatal("captured profile evidence rejected")
 	}
 	if again, err := capture.Stop(); err != nil || fmt.Sprint(again) != fmt.Sprint(paths) {
 		t.Fatalf("idempotent stop paths=%v err=%v", again, err)
+	}
+}
+
+func TestM8ProfileCaptureCanonicalizesAliasedDirectoryV1(t *testing.T) {
+	directory, parent := t.TempDir(), t.TempDir()
+	alias := filepath.Join(parent, "profiles")
+	if err := os.Symlink(directory, alias); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	capture, err := startM8ProfileCaptureV1(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths, err := capture.Stop()
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalDir, err := m8CanonicalPathV1(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capture.dir != canonicalDir {
+		t.Fatalf("capture dir=%q want=%q", capture.dir, canonicalDir)
+	}
+	artifacts, err := m8ProfileArtifactsV1(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !validM8ProductionProfilesV1(m8ProductionProfileEvidenceV1{Directory: canonicalDir, Captured: paths, Artifacts: artifacts, Status: "captured_production_query_and_fault_boundary", Scope: "test"}) {
+		t.Fatal("canonicalized profile evidence rejected")
 	}
 }
 

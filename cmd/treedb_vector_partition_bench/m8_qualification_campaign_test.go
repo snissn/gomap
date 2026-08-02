@@ -489,6 +489,10 @@ func testM8QualificationProfilesV1(t *testing.T, root, run string, matrix *m8Pro
 		if err := os.MkdirAll(directory, 0o755); err != nil {
 			t.Fatal(err)
 		}
+		directory, err := m8CanonicalPathV1(directory)
+		if err != nil {
+			t.Fatal(err)
+		}
 		paths := make([]string, 0, len(m8ProfileArtifactNamesV1))
 		for _, name := range m8ProfileArtifactNamesV1 {
 			path := filepath.Join(directory, name)
