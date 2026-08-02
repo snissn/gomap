@@ -148,8 +148,9 @@ variant at one `(probes, ef_search, concurrency)` operating point passes recall,
 probe reduction, matched-recall QPS, and matched-recall tail together; those
 gates cannot be assembled from different variants or different cells.
 
-The schema-5 retained descriptor records both the full assignment artifact and
-the pre-assignment source-graph artifact. Its canonical build-identity digest
+The schema-5 retained descriptor records the full assignment artifact, its
+pre-assignment artifact provenance, and a graph-build digest over the source,
+graph configuration, canonical IDs, and graph only. Its canonical build-identity digest
 covers fixture, variant, assignment, overlap, backend/source configuration,
 and the complete persisted vector-index definition digest (name, field, metric,
 encoding, strategy, dimensions, HNSW `M`, construction/search budgets, schema
@@ -157,7 +158,7 @@ generation, and quantized definitions); that digest is persisted in the
 manifest-covered balance policy. Matrix validation derives capacity,
 overlap budget/usage, partition loads, and persistent bytes from the opened
 manifest instead of trusting duplicated descriptor fields. All required
-variants must share source, fixture, source-graph digest, partition count, and
+variants must share source, fixture, graph-build digest, partition count, and
 the complete vector-index definition; graph variants must additionally share
 the full graph-assignment artifact and router-model digest. It also records the
 parsed graph and router scalar-work caps used to construct the retained asset.

@@ -319,7 +319,7 @@ func m8ValidateVariantBuildCompatibilityV1(variants []m3VariantDescriptorV1) err
 		}
 		if variant.BaseSHA != base.BaseSHA || variant.HeadSHA != base.HeadSHA || variant.FixtureChecksum != base.FixtureChecksum || variant.Source != base.Source || variant.Partitions != base.Partitions ||
 			variant.IndexDefinitionDigest != base.IndexDefinitionDigest || variant.PartitionHNSWM != base.PartitionHNSWM ||
-			variant.RouterRepresentatives != base.RouterRepresentatives || variant.RouterMaxScalarWork != base.RouterMaxScalarWork || variant.RouterConfig != base.RouterConfig {
+			variant.RouterRepresentatives != base.RouterRepresentatives || variant.RouterMaxScalarWork != base.RouterMaxScalarWork || variant.RouterConfig != base.RouterConfig || variant.GraphBuildSHA256 != base.GraphBuildSHA256 {
 			return fmt.Errorf("M8 matrix variant %q was not built from the common source, partition count, and local HNSW configuration", required)
 		}
 	}

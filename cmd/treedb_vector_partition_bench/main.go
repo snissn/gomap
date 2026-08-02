@@ -1081,6 +1081,10 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][
 	if err != nil {
 		return err
 	}
+	graphBuildDigest, err := m3GraphBuildSHA256V1(artifact)
+	if err != nil {
+		return err
+	}
 	if cfg.partitionAssignment == partitionAssignmentStableIDHashV1 {
 		artifact, err = vectorpartition.BuildStableIDHashBaseline(artifact)
 		if err != nil {
@@ -1137,7 +1141,7 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][
 		return err
 	}
 	if cfg.stage == "overlap,partition_index" {
-		return runM3PartitionIndexStage(cfg, fixture, artifact, digest, graphArtifactDigest, suffix, vectors, queries, stdout)
+		return runM3PartitionIndexStage(cfg, fixture, artifact, digest, graphArtifactDigest, graphBuildDigest, suffix, vectors, queries, stdout)
 	}
 	if cfg.format == "json" {
 		_, err = fmt.Fprintln(stdout, string(raw))

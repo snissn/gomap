@@ -119,7 +119,7 @@ type m3OverlapReplica struct {
 	Class         string `json:"class"`
 }
 
-func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vectorpartition.Artifact, artifactDigest, graphArtifactDigest, suffix string, vectors, queries [][]float64, stdout io.Writer) error {
+func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vectorpartition.Artifact, artifactDigest, graphArtifactDigest, graphBuildDigest, suffix string, vectors, queries [][]float64, stdout io.Writer) error {
 	if len(queries) == 0 {
 		return errors.New("M3 partition-index stage requires exact-oracle queries")
 	}
@@ -154,7 +154,7 @@ func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vect
 		if err != nil {
 			return fmt.Errorf("build bounded overlap ratio %.4f: %w", ratio, err)
 		}
-		row, err := benchmarkM3PartitionIndexRow(cfg, fixture, artifactDigest, graphArtifactDigest, vectors, queries, artifact, overlap, ratio, uint64(i+1))
+		row, err := benchmarkM3PartitionIndexRow(cfg, fixture, artifactDigest, graphArtifactDigest, graphBuildDigest, vectors, queries, artifact, overlap, ratio, uint64(i+1))
 		if err != nil {
 			return fmt.Errorf("benchmark native partition packs ratio %.4f: %w", ratio, err)
 		}
@@ -254,7 +254,7 @@ func openM3PartitionSearchers(count int, open func(uint32) (*collections.VectorP
 	return searchers, nil
 }
 
-func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactDigest, graphArtifactDigest string, vectors, queries [][]float64, artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, ratio float64, generation uint64) (_ m3PartitionIndexRow, resultErr error) {
+func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactDigest, graphArtifactDigest, graphBuildDigest string, vectors, queries [][]float64, artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, ratio float64, generation uint64) (_ m3PartitionIndexRow, resultErr error) {
 	dir, cleanup, err := m3PartitionIndexDirectory(cfg.m3PersistDir)
 	if err != nil {
 		return m3PartitionIndexRow{}, err
@@ -303,7 +303,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	}
 	identityDescriptor := m3VariantDescriptorV1{
 		FixtureChecksum: fixture.Checksum, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, BuildDirty: cfg.m3BuildDirty, VariantID: variantID, AssignmentBasis: cfg.partitionAssignment, OverlapRatio: ratio,
-		ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphArtifactDigest, ArtifactBackend: artifact.Backend,
+		ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphArtifactDigest, GraphBuildSHA256: graphBuildDigest, ArtifactBackend: artifact.Backend,
 		Source: artifact.Source, IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(meta.VectorIndexes[0]), PartitionHNSWM: partitionHNSWM,
 		PartitionMaxDistanceWork: cfg.partition.MaxDistanceWork, RouterMaxScalarWork: cfg.routerConfig.MaxScalarWork, RouterConfig: cfg.routerConfig, M3MaxBenchmarkVisits: cfg.m3MaxBenchmarkVisits,
 		Capacity: overlap.Capacity, OverlapRequested: overlap.Budget,
@@ -676,7 +676,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		descriptor := m3VariantDescriptorV1{
 			SchemaVersion: 5, ResultKind: "m3_persistent_variant_descriptor_v5", VariantID: variantID,
 			AssignmentBasis: cfg.partitionAssignment, OverlapRatio: ratio, OverlapPolicy: manifest.BalancePolicy,
-			FixtureChecksum: fixture.Checksum, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, BuildDirty: cfg.m3BuildDirty, ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphArtifactDigest, ArtifactBackend: artifact.Backend, Source: artifact.Source,
+			FixtureChecksum: fixture.Checksum, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, BuildDirty: cfg.m3BuildDirty, ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphArtifactDigest, GraphBuildSHA256: graphBuildDigest, ArtifactBackend: artifact.Backend, Source: artifact.Source,
 			BuildIdentityDigest: buildIdentityDigest,
 			DatabaseDirectory:   dir, ManifestIntegrity: manifest.IntegrityDigest, ReadySetDigest: manifest.ReadySetDigest,
 			RouterAssetChecksum: manifest.RouterAsset.Checksum, RouterModelDigest: routerRuntime.ModelDigest,

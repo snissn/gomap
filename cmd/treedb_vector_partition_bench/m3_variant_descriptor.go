@@ -39,6 +39,7 @@ type m3VariantDescriptorV1 struct {
 	BuildDirty               bool                           `json:"build_dirty"`
 	ArtifactSHA256           string                         `json:"artifact_sha256"`
 	GraphArtifactSHA256      string                         `json:"graph_artifact_sha256"`
+	GraphBuildSHA256         string                         `json:"graph_build_sha256"`
 	ArtifactBackend          string                         `json:"artifact_backend"`
 	Source                   vectorpartition.Source         `json:"source"`
 	BuildIdentityDigest      string                         `json:"build_identity_digest"`
@@ -75,6 +76,20 @@ type m3VariantDescriptorV1 struct {
 	PersistentAssetBytes     uint64                         `json:"persistent_asset_bytes"`
 }
 
+func m3GraphBuildSHA256V1(artifact vectorpartition.Artifact) (string, error) {
+	raw, err := json.Marshal(struct {
+		Source vectorpartition.Source
+		Config vectorpartition.Config
+		IDs    []string
+		Graph  vectorpartition.Graph
+	}{Source: artifact.Source, Config: artifact.Config, IDs: artifact.IDs, Graph: artifact.Graph})
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(raw)
+	return fmt.Sprintf("%x", digest[:]), nil
+}
+
 func m3VariantBuildIdentityDigestV1(d m3VariantDescriptorV1) (string, error) {
 	identity := struct {
 		FixtureChecksum          string
@@ -86,6 +101,7 @@ func m3VariantBuildIdentityDigestV1(d m3VariantDescriptorV1) (string, error) {
 		OverlapRatio             float64
 		ArtifactSHA256           string
 		GraphArtifactSHA256      string
+		GraphBuildSHA256         string
 		ArtifactBackend          string
 		Source                   vectorpartition.Source
 		IndexDefinitionDigest    string
@@ -102,7 +118,7 @@ func m3VariantBuildIdentityDigestV1(d m3VariantDescriptorV1) (string, error) {
 		EdgeCutAfter             int
 	}{
 		FixtureChecksum: d.FixtureChecksum, BaseSHA: d.BaseSHA, HeadSHA: d.HeadSHA, BuildDirty: d.BuildDirty, VariantID: d.VariantID, AssignmentBasis: d.AssignmentBasis, OverlapRatio: d.OverlapRatio,
-		ArtifactSHA256: d.ArtifactSHA256, GraphArtifactSHA256: d.GraphArtifactSHA256, ArtifactBackend: d.ArtifactBackend,
+		ArtifactSHA256: d.ArtifactSHA256, GraphArtifactSHA256: d.GraphArtifactSHA256, GraphBuildSHA256: d.GraphBuildSHA256, ArtifactBackend: d.ArtifactBackend,
 		Source: d.Source, IndexDefinitionDigest: d.IndexDefinitionDigest, PartitionHNSWM: d.PartitionHNSWM,
 		PartitionMaxDistanceWork: d.PartitionMaxDistanceWork, RouterMaxScalarWork: d.RouterMaxScalarWork, RouterConfig: d.RouterConfig,
 		M3MaxBenchmarkVisits: d.M3MaxBenchmarkVisits,
@@ -218,7 +234,7 @@ func validateM3VariantDescriptorV1(d m3VariantDescriptorV1) error {
 	}
 	if d.SchemaVersion != 5 || d.ResultKind != "m3_persistent_variant_descriptor_v5" || d.VariantID != wantVariant ||
 		!m8SHA256V1(d.FixtureChecksum) || !validSHA(d.BaseSHA) || !validSHA(d.HeadSHA) || !m8SHA256V1(d.ArtifactSHA256) || !m8SHA256V1(d.GraphArtifactSHA256) || d.ArtifactBackend == "" ||
-		!m8SHA256V1(d.BuildIdentityDigest) || d.BuildIdentityDigest != wantBuildIdentity ||
+		!m8SHA256V1(d.GraphBuildSHA256) || !m8SHA256V1(d.BuildIdentityDigest) || d.BuildIdentityDigest != wantBuildIdentity ||
 		!m8SHA256V1(d.Source.Checksum) || d.DatabaseDirectory == "" || !m8SHA256V1(d.ManifestIntegrity) || !m8SHA256V1(d.ReadySetDigest) ||
 		!m8SHA256V1(d.RouterAssetChecksum) || !m8SHA256V1(d.RouterModelDigest) || d.SourceGeneration == 0 || d.SourceRows == 0 ||
 		d.PartitionGeneration == 0 || d.RouterGeneration != d.PartitionGeneration || !m8SHA256V1(d.IndexDefinitionDigest) || d.PartitionHNSWM < 2 || d.PartitionHNSWM > partitionHNSWDegree || d.PartitionMaxDistanceWork < 1 || d.RouterMaxScalarWork < 1 || d.M3MaxBenchmarkVisits < 1 || d.RouterRepresentatives == 0 || d.RouterRepresentatives > d.SourceRows || d.RouterConfig.MaxScalarWork != d.RouterMaxScalarWork || d.RouterRepresentatives > uint64(d.RouterConfig.MaxRepresentatives) || d.OverlapRequested != wantBudget || d.OverlapRealized != wantBudget || d.OverlapRequested < 0 || d.OverlapRealized < 0 || d.OverlapRejected < 0 || d.OverlapRequested != d.OverlapRealized+d.OverlapRejected || d.OverlapUseful < 0 || d.OverlapFiller < 0 || d.OverlapUseful+d.OverlapFiller != d.OverlapRealized || d.OverlapMemberships != d.OverlapRealized || d.EdgeCutBefore < d.EdgeCutAfter || d.EdgeCutAfter < 0 || d.OverlapUnusedCapacity != int(totalCapacity-usedCapacity) ||

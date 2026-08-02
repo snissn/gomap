@@ -18,7 +18,7 @@ func testM3VariantDescriptorV1(dir string) m3VariantDescriptorV1 {
 		SchemaVersion: 5, ResultKind: "m3_persistent_variant_descriptor_v5", VariantID: "graph-overlap-020-v1",
 		AssignmentBasis: partitionAssignmentGraphV1, OverlapRatio: .2,
 		BaseSHA: strings.Repeat("b", 40), HeadSHA: strings.Repeat("c", 40),
-		FixtureChecksum: hash, ArtifactSHA256: hash, GraphArtifactSHA256: hash, ArtifactBackend: "reference", Source: vectorpartition.Source{SourceID: "fixture", Checksum: hash, Vectors: 8, Dimensions: 2, Metric: "cosine"},
+		FixtureChecksum: hash, ArtifactSHA256: hash, GraphArtifactSHA256: hash, GraphBuildSHA256: hash, ArtifactBackend: "reference", Source: vectorpartition.Source{SourceID: "fixture", Checksum: hash, Vectors: 8, Dimensions: 2, Metric: "cosine"},
 		DatabaseDirectory: dir, ManifestIntegrity: hash, ReadySetDigest: hash, RouterAssetChecksum: hash, RouterModelDigest: hash,
 		SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRows: 8, PartitionGeneration: 4, RouterGeneration: 4,
 		Partitions: 4, IndexDefinitionDigest: hash, PartitionHNSWM: 16, PartitionMaxDistanceWork: 20_000_000_000, RouterMaxScalarWork: 20_000_000_000, RouterConfig: routerConfig, M3MaxBenchmarkVisits: 400_000_000, RouterRepresentatives: 4, Capacity: 3, OverlapRequested: 1, OverlapRealized: 1, OverlapRejected: 0, OverlapUseful: 1, OverlapUnusedCapacity: 3, EdgeCutBefore: 2, EdgeCutAfter: 1, PartitionLoads: []int{3, 2, 2, 2}, OverlapMemberships: 1, PersistentAssetBytes: 1024,
@@ -38,7 +38,7 @@ func TestM3VariantDescriptorRoundTripAndImmutableCreateV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.VariantID != want.VariantID || got.BaseSHA != want.BaseSHA || got.HeadSHA != want.HeadSHA || got.BuildDirty != want.BuildDirty || got.ReadySetDigest != want.ReadySetDigest || got.PartitionMaxDistanceWork != want.PartitionMaxDistanceWork || got.RouterMaxScalarWork != want.RouterMaxScalarWork || got.RouterConfig != want.RouterConfig || got.M3MaxBenchmarkVisits != want.M3MaxBenchmarkVisits || got.RouterRepresentatives != want.RouterRepresentatives || len(got.PartitionLoads) != 4 {
+	if got.VariantID != want.VariantID || got.BaseSHA != want.BaseSHA || got.HeadSHA != want.HeadSHA || got.BuildDirty != want.BuildDirty || got.ReadySetDigest != want.ReadySetDigest || got.GraphBuildSHA256 != want.GraphBuildSHA256 || got.PartitionMaxDistanceWork != want.PartitionMaxDistanceWork || got.RouterMaxScalarWork != want.RouterMaxScalarWork || got.RouterConfig != want.RouterConfig || got.M3MaxBenchmarkVisits != want.M3MaxBenchmarkVisits || got.RouterRepresentatives != want.RouterRepresentatives || len(got.PartitionLoads) != 4 {
 		t.Fatalf("descriptor=%+v", got)
 	}
 	if err := m3WriteVariantDescriptorV1(dir, want); err == nil {
@@ -49,6 +49,29 @@ func TestM3VariantDescriptorRoundTripAndImmutableCreateV1(t *testing.T) {
 	}
 	if _, err := m3ReadVariantDescriptorV1(dir); err == nil {
 		t.Fatal("accepted trailing or malformed descriptor JSON")
+	}
+}
+
+func TestM3GraphBuildDigestExcludesAssignmentV1(t *testing.T) {
+	hash := strings.Repeat("a", 64)
+	artifact := vectorpartition.Artifact{
+		Source: vectorpartition.Source{SourceID: "fixture", Checksum: hash, Vectors: 2, Dimensions: 1, Metric: "cosine"},
+		Config: vectorpartition.Config{Metric: "cosine", Seed: 1, Partitions: 2},
+		IDs:    []string{"a", "b"}, Graph: vectorpartition.Graph{Neighbors: [][]int{{1}, {0}}},
+		Backend: "graph", Assignment: []int{0, 1}, Metrics: vectorpartition.Metrics{EdgeCut: 1},
+	}
+	want, err := m3GraphBuildSHA256V1(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stable := artifact
+	stable.Backend, stable.Assignment, stable.Metrics = "stable_id_hash_baseline_v1", []int{1, 0}, vectorpartition.Metrics{}
+	if got, err := m3GraphBuildSHA256V1(stable); err != nil || got != want {
+		t.Fatalf("stable graph build digest=%q err=%v want %q", got, err, want)
+	}
+	stable.Graph = vectorpartition.Graph{Neighbors: [][]int{{}, {}}}
+	if got, err := m3GraphBuildSHA256V1(stable); err != nil || got == want {
+		t.Fatalf("changed graph digest=%q err=%v want distinct from %q", got, err, want)
 	}
 }
 
@@ -130,6 +153,7 @@ func TestM3VariantBuildIdentityBindsOverlapInputsAndOutcomesV1(t *testing.T) {
 		"base revision":      func(candidate *m3VariantDescriptorV1) { candidate.BaseSHA = strings.Repeat("d", 40) },
 		"head revision":      func(candidate *m3VariantDescriptorV1) { candidate.HeadSHA = strings.Repeat("e", 40) },
 		"dirty build":        func(candidate *m3VariantDescriptorV1) { candidate.BuildDirty = true },
+		"graph build":        func(candidate *m3VariantDescriptorV1) { candidate.GraphBuildSHA256 = strings.Repeat("d", 64) },
 		"partition work cap": func(candidate *m3VariantDescriptorV1) { candidate.PartitionMaxDistanceWork++ },
 		"router work cap":    func(candidate *m3VariantDescriptorV1) { candidate.RouterMaxScalarWork++ },
 		"M3 visit cap":       func(candidate *m3VariantDescriptorV1) { candidate.M3MaxBenchmarkVisits++ },
