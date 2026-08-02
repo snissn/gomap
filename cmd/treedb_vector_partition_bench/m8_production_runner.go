@@ -762,7 +762,7 @@ func validM8ProductionMeasurementTranscriptV1(report m8ProductionReportV1) bool 
 	if err != nil || path != evidence.Path {
 		return false
 	}
-	raw, err := os.ReadFile(evidence.Path)
+	raw, err := m8ReadBoundedRegularFileV1(evidence.Path, m8QualificationTranscriptMaxBytesV1)
 	if err != nil || int64(len(raw)) != evidence.Bytes {
 		return false
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -1146,6 +1147,98 @@ func testM8ValidateQualificationCampaignV1(root string, campaign m8Qualification
 
 func testM8ValidateQualificationIndexV1(root string, index m8QualificationIndexV1) (m8QualificationIndexSummaryV1, error) {
 	return m8ValidateQualificationIndexWithVerifiersV1(root, index, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, func(string, m8ProductionReportV1) error { return nil })
+}
+
+func TestM8QualificationBoundedJSONEvidenceV1(t *testing.T) {
+	t.Run("index_cap_and_decode", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "index.json")
+		if err := os.WriteFile(path, []byte("{"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := runValidateQualification([]string{"-index", path}, io.Discard); err == nil || !strings.Contains(err.Error(), "decode qualification index") {
+			t.Fatalf("malformed index err=%v", err)
+		}
+		if err := os.WriteFile(path, []byte("{}{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := runValidateQualification([]string{"-index", path}, io.Discard); err == nil || !strings.Contains(err.Error(), "decode qualification index") {
+			t.Fatalf("trailing index err=%v", err)
+		}
+		if err := os.Truncate(path, m8QualificationIndexMaxBytesV1+1); err != nil {
+			t.Fatal(err)
+		}
+		if err := runValidateQualification([]string{"-index", path}, io.Discard); err == nil || !strings.Contains(err.Error(), "byte length") {
+			t.Fatalf("oversized index err=%v", err)
+		}
+	})
+
+	t.Run("matrix_cap_and_decode", func(t *testing.T) {
+		root, head := t.TempDir(), m8QualificationFrozenBaseSHAV1
+		path := filepath.Join(root, "repeat.json")
+		campaign := m8QualificationCampaignV1{FixtureChecksum: m8QualificationFixturesV1[0].Checksum, BaseSHA: head, HeadSHA: head, Runs: []m8QualificationCampaignRunV1{
+			{Path: "repeat.json", SHA256: strings.Repeat("a", 64)},
+			{Path: "repeat-2.json", SHA256: strings.Repeat("b", 64)},
+			{Path: "repeat-3.json", SHA256: strings.Repeat("c", 64)},
+		}}
+		if err := os.WriteFile(path, []byte("{"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(raw)
+		campaign.Runs[0].SHA256 = hex.EncodeToString(digest[:])
+		if _, err := testM8ValidateQualificationCampaignV1(root, campaign); err == nil || !strings.Contains(err.Error(), "decode qualification matrix") {
+			t.Fatalf("malformed matrix err=%v", err)
+		}
+		if err := os.WriteFile(path, []byte("{}{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		raw, err = os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest = sha256.Sum256(raw)
+		campaign.Runs[0].SHA256 = hex.EncodeToString(digest[:])
+		if _, err := testM8ValidateQualificationCampaignV1(root, campaign); err == nil || !strings.Contains(err.Error(), "decode qualification matrix") {
+			t.Fatalf("trailing matrix err=%v", err)
+		}
+		if err := os.Truncate(path, m8QualificationMatrixMaxBytesV1+1); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := testM8ValidateQualificationCampaignV1(root, campaign); err == nil || !strings.Contains(err.Error(), "byte length") {
+			t.Fatalf("oversized matrix err=%v", err)
+		}
+	})
+
+	t.Run("transcript_cap_and_decode", func(t *testing.T) {
+		report := testM8QualificationReportV1(t, m8QualificationFrozenBaseSHAV1, m8QualificationFixturesV1[0], testM3VariantDescriptorV1(t.TempDir()), 125)
+		path := report.MeasurementTranscript.Path
+		write := func(raw []byte) {
+			t.Helper()
+			if err := os.WriteFile(path, raw, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(raw)
+			report.MeasurementTranscript.Bytes = int64(len(raw))
+			report.MeasurementTranscript.SHA256 = hex.EncodeToString(digest[:])
+		}
+		write([]byte("{"))
+		if validM8ProductionMeasurementTranscriptV1(report) {
+			t.Fatal("accepted malformed transcript")
+		}
+		write([]byte("{}{}"))
+		if validM8ProductionMeasurementTranscriptV1(report) {
+			t.Fatal("accepted trailing transcript")
+		}
+		if err := os.Truncate(path, m8QualificationTranscriptMaxBytesV1+1); err != nil {
+			t.Fatal(err)
+		}
+		if validM8ProductionMeasurementTranscriptV1(report) {
+			t.Fatal("accepted oversized transcript")
+		}
+	})
 }
 
 func TestM8QualificationTruthCacheAnchorV1(t *testing.T) {

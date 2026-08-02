@@ -92,11 +92,7 @@ func runValidateQualification(args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("resolve qualification index: %w", err)
 	}
-	info, err := os.Stat(index)
-	if err != nil || !info.Mode().IsRegular() {
-		return errors.New("qualification index is not a regular file")
-	}
-	raw, err := os.ReadFile(index)
+	raw, err := m8ReadBoundedRegularFileV1(index, m8QualificationIndexMaxBytesV1)
 	if err != nil {
 		return fmt.Errorf("read qualification index: %w", err)
 	}
@@ -228,11 +224,7 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return summary, errors.New("qualification campaign artifact escapes root")
 		}
-		info, err := os.Stat(resolvedPath)
-		if err != nil || !info.Mode().IsRegular() {
-			return summary, errors.New("qualification campaign artifact is not a regular file")
-		}
-		raw, err := os.ReadFile(resolvedPath)
+		raw, err := m8ReadBoundedRegularFileV1(resolvedPath, m8QualificationMatrixMaxBytesV1)
 		if err != nil {
 			return summary, err
 		}
@@ -875,7 +867,45 @@ func m8QualificationImmutableTopologyV1(topology nativewire.VectorPartitionM8Pro
 const (
 	m8QualificationPersistentAssetCapBytesV1 uint64 = 2 << 30
 	m8QualificationPeakRSSCapBytesV1         uint64 = 4 << 30
+	m8QualificationIndexMaxBytesV1                  = 1 << 20
+	m8QualificationMatrixMaxBytesV1                 = 16 << 20
+	m8QualificationTranscriptMaxBytesV1             = 1 << 20
 )
+
+// m8ReadBoundedRegularFileV1 retains bounded JSON evidence without trusting
+// a pre-allocation read of a caller-controlled regular file.
+func m8ReadBoundedRegularFileV1(path string, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, errors.New("invalid bounded file byte cap")
+	}
+	before, err := os.Stat(path)
+	if err != nil || !before.Mode().IsRegular() {
+		return nil, errors.New("bounded input is not a regular file")
+	}
+	if before.Size() <= 0 || before.Size() > maxBytes {
+		return nil, fmt.Errorf("bounded input has invalid byte length (cap %d)", maxBytes)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	raw, readErr := io.ReadAll(io.LimitReader(file, maxBytes+1))
+	closeErr := file.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	if len(raw) == 0 || int64(len(raw)) > maxBytes || int64(len(raw)) != before.Size() {
+		return nil, fmt.Errorf("bounded input changed or exceeds %d-byte cap", maxBytes)
+	}
+	after, err := os.Stat(path)
+	if err != nil || !after.Mode().IsRegular() || !os.SameFile(before, after) || after.Size() != before.Size() || !after.ModTime().Equal(before.ModTime()) {
+		return nil, errors.New("bounded input changed while reading")
+	}
+	return raw, nil
+}
 
 func m8QualificationResourceCapsV1() m8ProductionResourceCapsV1 {
 	return m8ProductionResourceCapsV1{PersistentAssetBytes: m8QualificationPersistentAssetCapBytesV1, PeakRSSBytes: m8QualificationPeakRSSCapBytesV1}
