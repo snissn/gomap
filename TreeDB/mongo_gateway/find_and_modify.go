@@ -101,7 +101,20 @@ func (s *Server) findAndModifyResponse(ctx context.Context, command wire.Documen
 			return mongoUpdateWriteCommandError(errors.New("Mongo gateway update cannot modify _id"))
 		}
 		if _, err := col.Insert(key, stored); err != nil {
-			return mongoUpdateWriteCommandError(err)
+			if !errors.Is(err, collections.ErrDocumentExists) {
+				return mongoUpdateWriteCommandError(err)
+			}
+			before, after, matched, err = findAndModifyExisting(col, item)
+			if err != nil {
+				return mongoUpdateWriteCommandError(err)
+			}
+			if !matched {
+				return marshalFindAndModifyResponse(nil, false, false, bson.RawValue{}, projection)
+			}
+			if newImage {
+				before = after
+			}
+			return marshalFindAndModifyResponse(before, true, false, bson.RawValue{}, projection)
 		}
 		if !newImage {
 			doc = nil

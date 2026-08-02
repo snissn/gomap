@@ -121,6 +121,53 @@ func TestFindAndModifyFinalMissClearsStaleCallbackImages(t *testing.T) {
 	}
 }
 
+func TestFindAndModifyConcurrentSameIDUpsertsApplyEveryMutation(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	const workers = 16
+	errs := make(chan error, workers)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			response := serveCommand(t, server, int32(200+i), bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "upsert-race"}}}, {Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "upsert", Value: true}, {Key: "new", Value: true}, {Key: "$db", Value: "app"}})
+			if ok, _ := bson.Raw(response).Lookup("ok").DoubleOK(); ok != 1 {
+				errs <- fmt.Errorf("response=%v", response)
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	collection, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _, err := prepareInsertDocument(mustDocument(t, bson.D{{Key: "_id", Value: "upsert-race"}}), collections.DocumentFormatBSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := collection.Get(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, ok := bson.Raw(stored).Lookup("n").Int32OK(); !ok || n != workers {
+		t.Fatalf("final n=%d ok=%v want %d", n, ok, workers)
+	}
+}
+
 func TestFindAndModifyNoMatchAndUpsert(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
