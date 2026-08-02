@@ -1166,55 +1166,10 @@ func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection,
 	}
 	if path != "" {
 		started := time.Now()
-		maxBytes, boundErr := m8TruthCacheMaxBytesV1(len(queries), topK, fixture.Vectors)
-		if boundErr != nil {
-			return nil, evidence, boundErr
-		}
-		fileHandle, openErr := os.Open(path)
-		var err error
-		if openErr == nil {
-			counter := &m8CountingReaderV1{Reader: io.LimitReader(fileHandle, maxBytes+1)}
-			hasher := sha256.New()
-			stream := io.TeeReader(counter, hasher)
-			decoder := json.NewDecoder(stream)
-			decoder.UseNumber()
-			var file m8TruthCacheFileV1
-			err = m8DecodeTruthCacheStreamV1(decoder, &file, len(queries), topK)
-			if err == nil {
-				if _, trailingErr := decoder.Token(); trailingErr != io.EOF {
-					if trailingErr == nil {
-						err = errors.New("canonical truth cache contains trailing JSON")
-					} else {
-						err = trailingErr
-					}
-				}
-			}
-			if _, copyErr := io.Copy(io.Discard, stream); err == nil && copyErr != nil {
-				err = copyErr
-			}
-			closeErr := fileHandle.Close()
-			if err == nil && closeErr != nil {
-				err = closeErr
-			}
-			if counter.N > maxBytes {
-				return nil, evidence, fmt.Errorf("canonical truth cache exceeds %d-byte bound before decode", maxBytes)
-			}
-			if err == nil {
-				if file.SchemaVersion != 1 || file.Identity != identity || file.Contract != collections.VectorPartitionCanonicalScoreContractV1 || file.DatasetChecksum != fixture.Checksum || file.Dimensions != fixture.Dimensions || file.Metric != fixture.Metric || file.TopK != topK || len(file.Truth) != len(queries) {
-					return nil, evidence, errors.New("canonical truth cache identity/schema mismatch")
-				}
-				if err := m8ValidateCachedTruthV1(file.Truth, file.TruthSHA256, topK, manifest.SourceRowCount, fixture.Vectors); err != nil {
-					return nil, evidence, fmt.Errorf("canonical truth cache semantic mismatch: %w", err)
-				}
-				artifactSHA := hex.EncodeToString(hasher.Sum(nil))
-				if expectedDigest == "" || artifactSHA != expectedDigest {
-					return nil, evidence, errors.New("canonical truth cache artifact digest is absent or does not match independently trusted digest")
-				}
-				evidence.Status, evidence.LoadNanos, evidence.ArtifactSHA256 = "reused", time.Since(started).Nanoseconds(), artifactSHA
-				return file.Truth, evidence, nil
-			}
-		} else {
-			err = openErr
+		truth, artifactSHA, err := m8ReadTruthCacheV1(path, fixture, len(queries), topK, manifest.SourceRowCount, expectedDigest)
+		if err == nil {
+			evidence.Status, evidence.LoadNanos, evidence.ArtifactSHA256 = "reused", time.Since(started).Nanoseconds(), artifactSHA
+			return truth, evidence, nil
 		}
 		if !os.IsNotExist(err) {
 			return nil, evidence, fmt.Errorf("read canonical truth cache: %w", err)
@@ -1265,6 +1220,60 @@ func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection,
 		}
 	}
 	return truth, evidence, nil
+}
+
+// m8ReadTruthCacheV1 performs the bounded, streaming cache validation shared
+// by live replay and retained qualification evidence.
+func m8ReadTruthCacheV1(path string, fixture fixtureManifest, queryCount, topK int, sourceRows uint64, expectedDigest string) ([][]m8CanonicalResultV1, string, error) {
+	maxBytes, err := m8TruthCacheMaxBytesV1(queryCount, topK, fixture.Vectors)
+	if err != nil {
+		return nil, "", err
+	}
+	fileHandle, err := os.Open(path)
+	if err != nil {
+		return nil, "", err
+	}
+	counter := &m8CountingReaderV1{Reader: io.LimitReader(fileHandle, maxBytes+1)}
+	hasher := sha256.New()
+	stream := io.TeeReader(counter, hasher)
+	decoder := json.NewDecoder(stream)
+	decoder.UseNumber()
+	var file m8TruthCacheFileV1
+	err = m8DecodeTruthCacheStreamV1(decoder, &file, queryCount, topK)
+	if err == nil {
+		if _, trailingErr := decoder.Token(); trailingErr != io.EOF {
+			if trailingErr == nil {
+				err = errors.New("canonical truth cache contains trailing JSON")
+			} else {
+				err = trailingErr
+			}
+		}
+	}
+	if _, copyErr := io.Copy(io.Discard, stream); err == nil && copyErr != nil {
+		err = copyErr
+	}
+	closeErr := fileHandle.Close()
+	if err == nil && closeErr != nil {
+		err = closeErr
+	}
+	if counter.N > maxBytes {
+		return nil, "", fmt.Errorf("canonical truth cache exceeds %d-byte bound before decode", maxBytes)
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	identity := m8TruthCacheIdentityV1(fixture, topK)
+	if file.SchemaVersion != 1 || file.Identity != identity || file.Contract != collections.VectorPartitionCanonicalScoreContractV1 || file.DatasetChecksum != fixture.Checksum || file.Dimensions != fixture.Dimensions || file.Metric != fixture.Metric || file.TopK != topK || len(file.Truth) != queryCount {
+		return nil, "", errors.New("canonical truth cache identity/schema mismatch")
+	}
+	if err := m8ValidateCachedTruthV1(file.Truth, file.TruthSHA256, topK, sourceRows, fixture.Vectors); err != nil {
+		return nil, "", fmt.Errorf("canonical truth cache semantic mismatch: %w", err)
+	}
+	artifactSHA := hex.EncodeToString(hasher.Sum(nil))
+	if expectedDigest == "" || artifactSHA != expectedDigest {
+		return nil, "", errors.New("canonical truth cache artifact digest is absent or does not match independently trusted digest")
+	}
+	return file.Truth, artifactSHA, nil
 }
 
 // m8DecodeTruthCacheStreamV1 parses every container token explicitly. In

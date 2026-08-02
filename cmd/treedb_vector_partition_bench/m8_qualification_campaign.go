@@ -424,19 +424,8 @@ func m8QualificationRetainedVariantV1(root string, report m8ProductionReportV1) 
 	if err != nil || !truthInfo.Mode().IsRegular() {
 		return errors.New("canonical truth-cache artifact is not a regular file")
 	}
-	maxTruthBytes, err := m8TruthCacheMaxBytesV1(report.Dataset.Queries, report.Config.TopK, report.Dataset.Vectors)
-	if err != nil || truthInfo.Size() > maxTruthBytes {
-		return errors.New("canonical truth-cache artifact exceeds its qualification bound")
-	}
-	truthFile, err := os.Open(truthPath)
-	if err != nil {
-		return err
-	}
-	hash := sha256.New()
-	written, copyErr := io.Copy(hash, io.LimitReader(truthFile, maxTruthBytes+1))
-	closeErr := truthFile.Close()
-	if copyErr != nil || closeErr != nil || written > maxTruthBytes || hex.EncodeToString(hash.Sum(nil)) != report.TruthCache.ArtifactSHA256 {
-		return errors.New("canonical truth-cache artifact does not match report")
+	if _, _, err := m8ReadTruthCacheV1(truthPath, report.Dataset, report.Dataset.Queries, report.Config.TopK, report.Variant.SourceRows, report.TruthCache.ArtifactSHA256); err != nil {
+		return fmt.Errorf("validate canonical truth-cache artifact: %w", err)
 	}
 	dir, err := m8QualificationContainedPathV1(root, report.Variant.DatabaseDirectory, "retained M3 database")
 	if err != nil {

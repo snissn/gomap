@@ -1151,7 +1151,21 @@ func testM8QualificationTruthCacheV1(t *testing.T, root string, fixture fixtureM
 		t.Fatal(err)
 	}
 	identity := m8TruthCacheIdentityV1(fixture, 10)
-	raw := []byte("qualification-test-truth-cache")
+	truth := make([][]m8CanonicalResultV1, fixture.Queries)
+	for query := range truth {
+		truth[query] = make([]m8CanonicalResultV1, 10)
+		for rank := range truth[query] {
+			truth[query][rank] = m8CanonicalResultV1{ID: fmt.Sprintf("doc-%06d", 9-rank), Score: float32(10 - rank)}
+		}
+	}
+	truthSHA256, err := m8TruthContentSHA256V1(truth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: m8CanonicalTruthContractV1, DatasetChecksum: fixture.Checksum, Dimensions: fixture.Dimensions, Metric: fixture.Metric, TopK: 10, TruthSHA256: truthSHA256, Truth: truth})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(m8TruthCacheArtifactPathV1(dir, identity), raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1239,6 +1253,28 @@ func TestM8QualificationRetainedInputBoundaryV1(t *testing.T) {
 		truthDir, truth := testM8QualificationTruthCacheV1(t, root, fixture)
 		return root, m8ProductionReportV1{Dataset: fixture, DatasetDirectory: testM8QualificationDatasetDirectoryV1(t, root, fixture), TruthCacheDirectory: truthDir, TruthCache: truth, Config: m8ProductionConfigEvidenceV1{TopK: 10}, Variant: &m3VariantDescriptorV1{DatabaseDirectory: filepath.Join(root, "m3")}}
 	}
+	rewriteTruthCache := func(t *testing.T, report *m8ProductionReportV1, mutate func(*m8TruthCacheFileV1)) {
+		t.Helper()
+		path := m8TruthCacheArtifactPathV1(report.TruthCacheDirectory, report.TruthCache.Identity)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cache m8TruthCacheFileV1
+		if err := json.Unmarshal(raw, &cache); err != nil {
+			t.Fatal(err)
+		}
+		mutate(&cache)
+		raw, err = json.Marshal(cache)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(raw)
+		report.TruthCache.ArtifactSHA256 = hex.EncodeToString(digest[:])
+	}
 	t.Run("valid_dataset_reaches_database_check", func(t *testing.T) {
 		root, report := newReport(t)
 		if err := m8QualificationRetainedVariantV1(root, report); err == nil || !strings.Contains(err.Error(), "database is not a directory") {
@@ -1323,6 +1359,40 @@ func TestM8QualificationRetainedInputBoundaryV1(t *testing.T) {
 		}
 		if err := m8QualificationRetainedVariantV1(root, report); err == nil || !strings.Contains(err.Error(), "truth-cache artifact is not a regular file") {
 			t.Fatalf("linked truth cache err=%v", err)
+		}
+	})
+	t.Run("truth_cache_malformed_json", func(t *testing.T) {
+		root, report := newReport(t)
+		path := m8TruthCacheArtifactPathV1(report.TruthCacheDirectory, report.TruthCache.Identity)
+		if err := os.WriteFile(path, []byte("{"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := m8QualificationRetainedVariantV1(root, report); err == nil || !strings.Contains(err.Error(), "validate canonical truth-cache artifact") {
+			t.Fatalf("malformed truth cache err=%v", err)
+		}
+	})
+	t.Run("truth_cache_semantic_invalid", func(t *testing.T) {
+		root, report := newReport(t)
+		rewriteTruthCache(t, &report, func(cache *m8TruthCacheFileV1) {
+			cache.Truth[0][1].ID = cache.Truth[0][0].ID
+			cache.TruthSHA256, _ = m8TruthContentSHA256V1(cache.Truth)
+		})
+		if err := m8QualificationRetainedVariantV1(root, report); err == nil || !strings.Contains(err.Error(), "semantic mismatch") {
+			t.Fatalf("semantic truth cache err=%v", err)
+		}
+	})
+	t.Run("truth_cache_identity_mismatch", func(t *testing.T) {
+		root, report := newReport(t)
+		rewriteTruthCache(t, &report, func(cache *m8TruthCacheFileV1) { cache.Identity = strings.Repeat("a", 64) })
+		if err := m8QualificationRetainedVariantV1(root, report); err == nil || !strings.Contains(err.Error(), "identity/schema mismatch") {
+			t.Fatalf("identity truth cache err=%v", err)
+		}
+	})
+	t.Run("truth_cache_content_digest_mismatch", func(t *testing.T) {
+		root, report := newReport(t)
+		rewriteTruthCache(t, &report, func(cache *m8TruthCacheFileV1) { cache.TruthSHA256 = strings.Repeat("a", 64) })
+		if err := m8QualificationRetainedVariantV1(root, report); err == nil || !strings.Contains(err.Error(), "truth_sha256 mismatch") {
+			t.Fatalf("truth digest cache err=%v", err)
 		}
 	})
 	t.Run("database_outside_campaign_root", func(t *testing.T) {
