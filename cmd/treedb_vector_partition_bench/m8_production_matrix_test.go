@@ -827,9 +827,13 @@ func TestM8VariantBuildCompatibilityRejectsMixedRetainedBuildsV1(t *testing.T) {
 			descriptor := testM3VariantDescriptorV1(t.TempDir())
 			descriptor.VariantID, descriptor.AssignmentBasis, descriptor.OverlapRatio = item.id, item.assignment, item.overlap
 			descriptor.OverlapMemberships = int(math.Floor(item.overlap * float64(descriptor.SourceRows)))
+			if item.id == "graph-overlap-020-v1" {
+				descriptor.RouterModelDigest = strings.Repeat("e", 64)
+			}
 			if item.assignment == partitionAssignmentStableIDHashV1 {
 				descriptor.ArtifactSHA256 = strings.Repeat("c", 64)
 				descriptor.GraphArtifactSHA256 = strings.Repeat("d", 64)
+				descriptor.RouterModelDigest = strings.Repeat("f", 64)
 			}
 			refreshTestM3VariantIdentityV1(t, &descriptor)
 			variants = append(variants, descriptor)
@@ -845,10 +849,11 @@ func TestM8VariantBuildCompatibilityRejectsMixedRetainedBuildsV1(t *testing.T) {
 			variants[1].ArtifactSHA256 = strings.Repeat("d", 64)
 			variants[1].GraphArtifactSHA256 = variants[1].ArtifactSHA256
 		},
-		"source":             func(variants []m3VariantDescriptorV1) { variants[2].Source.SourceID = "different" },
-		"index definition":   func(variants []m3VariantDescriptorV1) { variants[2].IndexDefinitionDigest = strings.Repeat("d", 64) },
-		"local HNSW M":       func(variants []m3VariantDescriptorV1) { variants[2].PartitionHNSWM-- },
-		"graph router model": func(variants []m3VariantDescriptorV1) { variants[1].RouterModelDigest = strings.Repeat("d", 64) },
+		"source":                 func(variants []m3VariantDescriptorV1) { variants[2].Source.SourceID = "different" },
+		"index definition":       func(variants []m3VariantDescriptorV1) { variants[2].IndexDefinitionDigest = strings.Repeat("d", 64) },
+		"local HNSW M":           func(variants []m3VariantDescriptorV1) { variants[2].PartitionHNSWM-- },
+		"router representatives": func(variants []m3VariantDescriptorV1) { variants[2].RouterRepresentatives++ },
+		"router scalar work":     func(variants []m3VariantDescriptorV1) { variants[2].RouterMaxScalarWork++ },
 	} {
 		t.Run(name, func(t *testing.T) {
 			variants := makeVariants()
