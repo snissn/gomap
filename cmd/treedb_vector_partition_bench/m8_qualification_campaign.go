@@ -532,11 +532,7 @@ func m8QualificationCommandV1(report m8ProductionReportV1) bool {
 		}
 	}
 	switch report.TruthCache.Status {
-	case "computed":
-		if cfg.m8TruthCacheSHA256 != "" && cfg.m8TruthCacheSHA256 != report.TruthCache.ArtifactSHA256 {
-			return false
-		}
-	case "reused":
+	case "computed", "reused":
 		if cfg.m8TruthCacheSHA256 != report.TruthCache.ArtifactSHA256 {
 			return false
 		}
@@ -617,7 +613,7 @@ func m8QualificationMatrixCommandV1(matrix m8ProductionMatrixV1) bool {
 			return false
 		}
 		profileRoot = root
-		if cfg.m8TruthCacheSHA256 != "" && cfg.m8TruthCacheSHA256 != report.TruthCache.ArtifactSHA256 {
+		if cfg.m8TruthCacheSHA256 != report.TruthCache.ArtifactSHA256 {
 			return false
 		}
 	}

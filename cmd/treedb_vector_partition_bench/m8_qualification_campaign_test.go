@@ -156,7 +156,22 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 				t.Fatal("missing profiles flag")
 			},
 			"changed_truth_digest": func(matrix *m8ProductionMatrixV1) {
-				matrix.Command = append(matrix.Command, "-m8-truth-cache-sha256", strings.Repeat("e", 64))
+				for i, arg := range matrix.Command {
+					if arg == "-m8-truth-cache-sha256" {
+						matrix.Command[i+1] = strings.Repeat("e", 64)
+						return
+					}
+				}
+				t.Fatal("missing truth-cache digest flag")
+			},
+			"omitted_truth_digest": func(matrix *m8ProductionMatrixV1) {
+				for i, arg := range matrix.Command {
+					if arg == "-m8-truth-cache-sha256" {
+						matrix.Command = append(matrix.Command[:i:i], matrix.Command[i+2:]...)
+						return
+					}
+				}
+				t.Fatal("missing truth-cache digest flag")
 			},
 			"changed_config": func(matrix *m8ProductionMatrixV1) {
 				for i, arg := range matrix.Command {
@@ -240,11 +255,25 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			},
 			"changed_truth_cache_digest": func(report *m8ProductionReportV1) {
 				report.TruthCache.Status, report.TruthCache.ComputeNanos, report.TruthCache.LoadNanos = "reused", 0, 1
-				report.Command = append(report.Command, "-m8-truth-cache-sha256", report.TruthCache.ArtifactSHA256)
 				if !m8QualificationCommandV1(*report) {
 					t.Fatal("rejected bound reused truth-cache command")
 				}
-				report.Command[len(report.Command)-1] = strings.Repeat("e", 64)
+				for i, arg := range report.Command {
+					if arg == "-m8-truth-cache-sha256" {
+						report.Command[i+1] = strings.Repeat("e", 64)
+						return
+					}
+				}
+				t.Fatal("missing truth-cache digest flag")
+			},
+			"omitted_truth_cache_digest": func(report *m8ProductionReportV1) {
+				for i, arg := range report.Command {
+					if arg == "-m8-truth-cache-sha256" {
+						report.Command = append(report.Command[:i:i], report.Command[i+2:]...)
+						return
+					}
+				}
+				t.Fatal("missing truth-cache digest flag")
 			},
 		} {
 			t.Run(name, func(t *testing.T) {
@@ -1575,6 +1604,7 @@ func testM8QualificationCommandV1(report m8ProductionReportV1) []string {
 	if report.Profiles.Directory != "" {
 		args = append(args, "-profiles", report.Profiles.Directory)
 	}
+	args = append(args, "-m8-truth-cache-sha256", report.TruthCache.ArtifactSHA256)
 	return args
 }
 
@@ -1642,6 +1672,7 @@ func testM8QualificationMatrixCommandV1(matrix m8ProductionMatrixV1) []string {
 	if report.Profiles.Directory != "" {
 		args = append(args, "-profiles", filepath.Dir(report.Profiles.Directory))
 	}
+	args = append(args, "-m8-truth-cache-sha256", report.TruthCache.ArtifactSHA256)
 	return args
 }
 

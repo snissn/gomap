@@ -730,6 +730,19 @@ func TestM8VariantProcessArgsForceFreshSingleVariantV1(t *testing.T) {
 	if trustedAt < 0 || positionalAt < 0 || trustedAt > positionalAt {
 		t.Fatalf("trusted digest must precede positional token: %v", got)
 	}
+	replay, err := m8ReplayCommandWithTruthCacheDigestV1(command, trustedDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digestFlags := 0
+	for _, arg := range replay {
+		if arg == "-m8-truth-cache-sha256" {
+			digestFlags++
+		}
+	}
+	if digestFlags != 1 || slices.Contains(replay, oldDigest) || slices.Index(replay, trustedDigest) > slices.Index(replay, "positional") {
+		t.Fatalf("replay command did not replace and front-load truth digest: %v", replay)
+	}
 }
 
 func TestM8ProductionMatrixRejectsUnderMaterializedOverlapDescriptorV1(t *testing.T) {

@@ -275,6 +275,35 @@ func m8VariantProcessArgsV1(command []string, dir string, overlap float64, profi
 	return args, nil
 }
 
+func m8ReplayCommandWithTruthCacheDigestV1(command []string, digest string) ([]string, error) {
+	if len(command) == 0 || len(digest) != sha256.Size*2 || digest != strings.ToLower(digest) || !m8SHA256V1(digest) {
+		return nil, errors.New("M8 replay command requires a command and truth-cache digest")
+	}
+	args := []string{command[0], "-m8-truth-cache-sha256", digest}
+	args = slices.Grow(args, len(command)-1)
+	for i := 1; i < len(command); i++ {
+		arg := command[i]
+		if !strings.HasPrefix(arg, "-") {
+			args = append(args, arg)
+			continue
+		}
+		name := strings.TrimLeft(arg, "-")
+		if at := strings.IndexByte(name, '='); at >= 0 {
+			if name[:at] == "m8-truth-cache-sha256" {
+				continue
+			}
+		} else if name == "m8-truth-cache-sha256" {
+			if i+1 >= len(command) {
+				return nil, fmt.Errorf("M8 replay command flag %q is missing its value", arg)
+			}
+			i++
+			continue
+		}
+		args = append(args, arg)
+	}
+	return args, nil
+}
+
 func m8MatrixIdentityV1(cfg config, variants []m3VariantDescriptorV1, evidence m8ProductionConfigEvidenceV1) ([sha256.Size]byte, error) {
 	portableVariants := append([]m3VariantDescriptorV1(nil), variants...)
 	for i := range portableVariants {
@@ -339,6 +368,13 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 	}
 	if len(reports) != len(m8RequiredVariantIDsV1) {
 		return m8ProductionMatrixV1{}, errors.New("M8 matrix requires exactly three reports")
+	}
+	if reports[0].TruthCache.ArtifactSHA256 != "" {
+		var err error
+		matrix.Command, err = m8ReplayCommandWithTruthCacheDigestV1(matrix.Command, reports[0].TruthCache.ArtifactSHA256)
+		if err != nil {
+			return m8ProductionMatrixV1{}, err
+		}
 	}
 	descriptors := make([]m3VariantDescriptorV1, 0, len(reports))
 	for i := range reports {
