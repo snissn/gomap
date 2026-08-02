@@ -231,7 +231,7 @@ func assertFirstWriteDocument(t *testing.T, server *Server, id string, want int3
 	}
 }
 
-func BenchmarkMongoOpenOrCreateExistingCollection(b *testing.B) {
+func BenchmarkMongoOpenCollectionForMutation(b *testing.B) {
 	db, err := backenddb.Open(backenddb.Options{Dir: b.TempDir()})
 	if err != nil {
 		b.Fatal(err)
@@ -246,7 +246,7 @@ func BenchmarkMongoOpenOrCreateExistingCollection(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := server.openOrCreateCollection("app.users"); err != nil {
+		if _, err := server.openCollectionForMutation("app.users"); err != nil {
 			b.Fatal(err)
 		}
 	}
