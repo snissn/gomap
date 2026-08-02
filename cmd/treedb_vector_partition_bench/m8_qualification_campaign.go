@@ -259,7 +259,7 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 			if err := truthCache(resolvedRoot, *report); err != nil {
 				return summary, fmt.Errorf("qualification matrix %s does not bind the frozen truth cache: %w", cleanPath, err)
 			}
-			if !m8QualificationCommandWithExecutableV1(resolvedRoot, *report, commandExecutable) || report.ExecutableSHA256 != matrix.ExecutableSHA256 {
+			if !m8QualificationCommandWithExecutableV1(resolvedRoot, filepath.Dir(resolvedPath), *report, commandExecutable) || report.ExecutableSHA256 != matrix.ExecutableSHA256 {
 				return summary, fmt.Errorf("qualification matrix %s has command/config mismatch", cleanPath)
 			}
 			if executableSHA256 != "" && executableSHA256 != report.ExecutableSHA256 {
@@ -351,7 +351,7 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 				selected = report
 			}
 		}
-		if !m8QualificationMatrixCommandWithExecutableV1(resolvedRoot, matrix, commandExecutable) {
+		if !m8QualificationMatrixCommandWithExecutableV1(resolvedRoot, filepath.Dir(resolvedPath), matrix, commandExecutable) {
 			return summary, fmt.Errorf("qualification matrix %s has command/config mismatch", cleanPath)
 		}
 		if err := m8ValidateQualificationMatrixDerivationV1(matrix); err != nil {
@@ -569,16 +569,7 @@ func m8QualificationContainedPathV1(root, path, label string) (string, error) {
 	return resolved, nil
 }
 
-// m8QualificationCommandV1 re-parses runner argv so the retained replay
-// command cannot disagree with the already-validated measured configuration.
-func m8QualificationCommandV1(report m8ProductionReportV1) bool {
-	if len(report.Command) == 0 {
-		return false
-	}
-	return m8QualificationCommandWithExecutableV1(filepath.Dir(report.Command[0]), report, m8QualificationBenchmarkExecutableV1)
-}
-
-func m8QualificationCommandWithExecutableV1(root string, report m8ProductionReportV1, commandExecutable m8QualificationCommandExecutableVerifierV1) bool {
+func m8QualificationCommandWithExecutableV1(root, matrixDirectory string, report m8ProductionReportV1, commandExecutable m8QualificationCommandExecutableVerifierV1) bool {
 	if len(report.Command) < 2 {
 		return false
 	}
@@ -587,6 +578,14 @@ func m8QualificationCommandWithExecutableV1(root string, report m8ProductionRepo
 	}
 	cfg, err := parseConfig(report.Command[1:])
 	if err != nil || cfg.stage != m8ProductionMultiGroupModeV1 {
+		return false
+	}
+	out, err := m8CanonicalPathV1(cfg.out)
+	if err != nil || out != matrixDirectory {
+		return false
+	}
+	matrixOut, err := m8CanonicalPathV1(cfg.m8MatrixOut)
+	if err != nil || matrixOut != matrixDirectory {
 		return false
 	}
 	datasetDirectory, err := m8CanonicalPathV1(cfg.dataset)
@@ -608,15 +607,13 @@ func m8QualificationCommandWithExecutableV1(root string, report m8ProductionRepo
 	if err != nil || existingDB != variantDB {
 		return false
 	}
-	if report.Profiles.Status == "not_captured" {
-		if cfg.profiles != "" {
-			return false
-		}
-	} else {
-		profiles, err := m8CanonicalPathV1(cfg.profiles)
-		if err != nil || profiles != report.Profiles.Directory {
-			return false
-		}
+	profiles, err := m8CanonicalPathV1(cfg.profiles)
+	if err != nil || profiles != report.Profiles.Directory {
+		return false
+	}
+	matrixProfiles, err := m8CanonicalPathV1(cfg.m8MatrixProfiles)
+	if err != nil || matrixProfiles != filepath.Dir(report.Profiles.Directory) {
+		return false
 	}
 	switch report.TruthCache.Status {
 	case "computed", "reused":
@@ -643,14 +640,7 @@ func m8QualificationCommandConfigV1(cfg config) m8ProductionConfigEvidenceV1 {
 	}
 }
 
-func m8QualificationMatrixCommandV1(matrix m8ProductionMatrixV1) bool {
-	if len(matrix.Command) == 0 {
-		return false
-	}
-	return m8QualificationMatrixCommandWithExecutableV1(filepath.Dir(matrix.Command[0]), matrix, m8QualificationBenchmarkExecutableV1)
-}
-
-func m8QualificationMatrixCommandWithExecutableV1(root string, matrix m8ProductionMatrixV1, commandExecutable m8QualificationCommandExecutableVerifierV1) bool {
+func m8QualificationMatrixCommandWithExecutableV1(root, matrixDirectory string, matrix m8ProductionMatrixV1, commandExecutable m8QualificationCommandExecutableVerifierV1) bool {
 	if len(matrix.Command) < 2 || len(matrix.Variants) != len(m8RequiredVariantIDsV1) {
 		return false
 	}
@@ -659,6 +649,10 @@ func m8QualificationMatrixCommandWithExecutableV1(root string, matrix m8Producti
 	}
 	cfg, err := parseConfig(matrix.Command[1:])
 	if err != nil || cfg.stage != m8ProductionMultiGroupModeV1 || len(cfg.m8VariantDBs) != len(m8RequiredVariantIDsV1) {
+		return false
+	}
+	out, err := m8CanonicalPathV1(cfg.out)
+	if err != nil || out != matrixDirectory {
 		return false
 	}
 	byID := make(map[string]*m8ProductionReportV1, len(matrix.Variants))
