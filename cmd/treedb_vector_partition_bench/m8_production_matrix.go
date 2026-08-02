@@ -212,10 +212,10 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		return err
 	}
 	raw = append(raw, '\n')
-	if err := m8WriteProductionMatrixV1(matrixPath, raw); err != nil {
+	matrixPublished, err = m8WriteProductionMatrixV1(matrixPath, raw)
+	if err != nil {
 		return err
 	}
-	matrixPublished = true
 	if cfg.format == "json" {
 		_, err = stdout.Write(raw)
 	} else {
@@ -286,7 +286,7 @@ func m8PreflightProductionMatrixOutputV1(cfg config, descriptors []m3VariantDesc
 	return path, nil
 }
 
-func m8WriteProductionMatrixV1(path string, raw []byte) error {
+func m8WriteProductionMatrixV1(path string, raw []byte) (bool, error) {
 	return m8PublishProductionMatrixV1(path, func(w io.Writer) error {
 		n, err := w.Write(raw)
 		if err != nil {
@@ -301,33 +301,37 @@ func m8WriteProductionMatrixV1(path string, raw []byte) error {
 
 // m8PublishProductionMatrixV1 exposes a complete matrix only after it is
 // closed and atomically linked into its final no-replace name.
-func m8PublishProductionMatrixV1(path string, write func(io.Writer) error) error {
+func m8PublishProductionMatrixV1(path string, write func(io.Writer) error) (bool, error) {
+	return m8PublishProductionMatrixWithDirectorySyncV1(path, write, m8SyncDirectoryV1)
+}
+
+func m8PublishProductionMatrixWithDirectorySyncV1(path string, write func(io.Writer) error, syncDirectory func(string) error) (bool, error) {
 	file, err := os.CreateTemp(filepath.Dir(path), ".m8_matrix_*.tmp")
 	if err != nil {
-		return fmt.Errorf("create temporary immutable M8 matrix: %w", err)
+		return false, fmt.Errorf("create temporary immutable M8 matrix: %w", err)
 	}
 	tempPath := file.Name()
 	defer os.Remove(tempPath)
 	defer file.Close()
 	if err := write(file); err != nil {
-		return err
+		return false, err
 	}
 	if err := file.Chmod(0o644); err != nil {
-		return err
+		return false, err
 	}
 	if err := file.Sync(); err != nil {
-		return err
+		return false, err
 	}
 	if err := file.Close(); err != nil {
-		return err
+		return false, err
 	}
 	if err := os.Link(tempPath, path); err != nil {
-		return fmt.Errorf("publish immutable M8 matrix: %w", err)
+		return false, fmt.Errorf("publish immutable M8 matrix: %w", err)
 	}
-	if err := m8SyncDirectoryV1(filepath.Dir(path)); err != nil {
-		return fmt.Errorf("sync immutable M8 matrix directory: %w", err)
+	if err := syncDirectory(filepath.Dir(path)); err != nil {
+		return true, fmt.Errorf("sync immutable M8 matrix directory: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 func m8SyncDirectoryV1(path string) error {

@@ -74,7 +74,7 @@ func TestM8ProductionMatrixOutputPreflightV1(t *testing.T) {
 	if raw, err := os.ReadFile(path); err != nil || string(raw) != sentinel {
 		t.Fatalf("matrix sentinel=%q err=%v", raw, err)
 	}
-	if err := m8WriteProductionMatrixV1(path, []byte("replacement")); err == nil {
+	if _, err := m8WriteProductionMatrixV1(path, []byte("replacement")); err == nil {
 		t.Fatal("matrix writer replaced existing evidence")
 	}
 	if raw, err := os.ReadFile(path); err != nil || string(raw) != sentinel {
@@ -165,7 +165,7 @@ func TestM8ProductionMatrixPublisherLeavesOnlyCompleteNoReplaceArtifactsV1(t *te
 		}
 	}
 	t.Run("write failure cleans temporary and final paths", func(t *testing.T) {
-		err := m8PublishProductionMatrixV1(path, func(w io.Writer) error {
+		linked, err := m8PublishProductionMatrixV1(path, func(w io.Writer) error {
 			if _, err := io.WriteString(w, "{"); err != nil {
 				return err
 			}
@@ -173,6 +173,9 @@ func TestM8ProductionMatrixPublisherLeavesOnlyCompleteNoReplaceArtifactsV1(t *te
 		})
 		if err == nil {
 			t.Fatal("accepted failing matrix write")
+		}
+		if linked {
+			t.Fatal("failing write reported a linked matrix")
 		}
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("partial final artifact err=%v", err)
@@ -183,7 +186,7 @@ func TestM8ProductionMatrixPublisherLeavesOnlyCompleteNoReplaceArtifactsV1(t *te
 		if err := os.WriteFile(path, []byte("sentinel"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if err := m8WriteProductionMatrixV1(path, []byte("replacement")); err == nil || !errors.Is(err, os.ErrExist) {
+		if linked, err := m8WriteProductionMatrixV1(path, []byte("replacement")); err == nil || linked || !errors.Is(err, os.ErrExist) {
 			t.Fatalf("existing artifact error=%v", err)
 		}
 		if got, err := os.ReadFile(path); err != nil || string(got) != "sentinel" {
@@ -196,11 +199,28 @@ func TestM8ProductionMatrixPublisherLeavesOnlyCompleteNoReplaceArtifactsV1(t *te
 	})
 	t.Run("complete matrix publishes exact bytes", func(t *testing.T) {
 		want := []byte("{\"matrix\":true}\n")
-		if err := m8WriteProductionMatrixV1(path, want); err != nil {
-			t.Fatal(err)
+		if linked, err := m8WriteProductionMatrixV1(path, want); err != nil || !linked {
+			t.Fatalf("linked=%t err=%v", linked, err)
 		}
 		if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, want) {
 			t.Fatalf("matrix=%q want=%q err=%v", got, want, err)
+		}
+		tempPaths(t)
+	})
+	t.Run("post-link sync failure retains published matrix", func(t *testing.T) {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		want := []byte("{\"matrix\":true}\n")
+		linked, err := m8PublishProductionMatrixWithDirectorySyncV1(path, func(w io.Writer) error {
+			_, err := w.Write(want)
+			return err
+		}, func(string) error { return errors.New("directory sync failure") })
+		if err == nil || !linked {
+			t.Fatalf("linked=%t err=%v", linked, err)
+		}
+		if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("published matrix=%q want=%q err=%v", got, want, err)
 		}
 		tempPaths(t)
 	})
