@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"debug/buildinfo"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -112,6 +113,10 @@ func m8ValidateQualificationIndexV1(root string, index m8QualificationIndexV1) (
 }
 
 func m8ValidateQualificationIndexWithRetainedVariantV1(root string, index m8QualificationIndexV1, retainedVariant m8QualificationRetainedVariantVerifierV1) (m8QualificationIndexSummaryV1, error) {
+	return m8ValidateQualificationIndexWithVerifiersV1(root, index, retainedVariant, m8QualificationBenchmarkExecutableV1)
+}
+
+func m8ValidateQualificationIndexWithVerifiersV1(root string, index m8QualificationIndexV1, retainedVariant m8QualificationRetainedVariantVerifierV1, commandExecutable m8QualificationCommandExecutableVerifierV1) (m8QualificationIndexSummaryV1, error) {
 	summary := m8QualificationIndexSummaryV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_summary_v1", Status: "qualified", BaseSHA: index.BaseSHA, HeadSHA: index.HeadSHA, Campaigns: make(map[string]m8QualificationCampaignSummaryV1, len(m8QualificationFixturesV1))}
 	if index.SchemaVersion != 1 || index.ResultKind != "vector_partition_structured_qualification_index_v1" || !m8QualificationGitSHAV1(index.BaseSHA) || !m8QualificationGitSHAV1(index.HeadSHA) || len(index.Campaigns) != len(m8QualificationFixturesV1) {
 		return m8QualificationIndexSummaryV1{}, errors.New("qualification index requires exactly the two authoritative corpus campaigns")
@@ -123,7 +128,7 @@ func m8ValidateQualificationIndexWithRetainedVariantV1(root string, index m8Qual
 		if campaign.BaseSHA != index.BaseSHA || campaign.HeadSHA != index.HeadSHA {
 			return m8QualificationIndexSummaryV1{}, errors.New("qualification index campaigns do not share the index revision")
 		}
-		campaignSummary, err := m8ValidateQualificationCampaignWithRetainedVariantV1(root, campaign, retainedVariant)
+		campaignSummary, err := m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, retainedVariant, commandExecutable)
 		if err != nil {
 			return m8QualificationIndexSummaryV1{}, err
 		}
@@ -138,6 +143,7 @@ func m8ValidateQualificationIndexWithRetainedVariantV1(root string, index m8Qual
 }
 
 type m8QualificationRetainedVariantVerifierV1 func(string, m8ProductionReportV1) error
+type m8QualificationCommandExecutableVerifierV1 func(string, string) bool
 
 func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCampaignV1) (m8QualificationCampaignSummaryV1, error) {
 	return m8ValidateQualificationCampaignWithRetainedVariantV1(root, campaign, m8QualificationRetainedVariantV1)
@@ -147,8 +153,15 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 // asset boundary explicit for focused evidence tests. Production callers use
 // m8ValidateQualificationCampaignV1 above and cannot select a verifier.
 func m8ValidateQualificationCampaignWithRetainedVariantV1(root string, campaign m8QualificationCampaignV1, retainedVariant m8QualificationRetainedVariantVerifierV1) (m8QualificationCampaignSummaryV1, error) {
+	return m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, retainedVariant, m8QualificationBenchmarkExecutableV1)
+}
+
+func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8QualificationCampaignV1, retainedVariant m8QualificationRetainedVariantVerifierV1, commandExecutable m8QualificationCommandExecutableVerifierV1) (m8QualificationCampaignSummaryV1, error) {
 	if retainedVariant == nil {
 		return m8QualificationCampaignSummaryV1{}, errors.New("qualification retained-asset verifier is required")
+	}
+	if commandExecutable == nil {
+		return m8QualificationCampaignSummaryV1{}, errors.New("qualification command executable verifier is required")
 	}
 	if !m8QualificationSHA256V1(campaign.FixtureChecksum) || !m8QualificationGitSHAV1(campaign.BaseSHA) || !m8QualificationGitSHAV1(campaign.HeadSHA) || len(campaign.Runs) != 3 {
 		return m8QualificationCampaignSummaryV1{}, errors.New("qualification campaign requires one fixture/head and exactly three runs")
@@ -233,7 +246,7 @@ func m8ValidateQualificationCampaignWithRetainedVariantV1(root string, campaign 
 			if err := validateM8ProductionReportV1(*report, m8QualificationResourceCapsV1()); err != nil {
 				return summary, fmt.Errorf("validate qualification child %s: %w", cleanPath, err)
 			}
-			if !m8QualificationCommandV1(*report) {
+			if !m8QualificationCommandWithExecutableV1(*report, commandExecutable) {
 				return summary, fmt.Errorf("qualification matrix %s has command/config mismatch", cleanPath)
 			}
 			derivedLedger := m8ProductionGateLedgerForReportV1(*report)
@@ -318,7 +331,7 @@ func m8ValidateQualificationCampaignWithRetainedVariantV1(root string, campaign 
 				selected = report
 			}
 		}
-		if !m8QualificationMatrixCommandV1(matrix) {
+		if !m8QualificationMatrixCommandWithExecutableV1(matrix, commandExecutable) {
 			return summary, fmt.Errorf("qualification matrix %s has command/config mismatch", cleanPath)
 		}
 		if err := m8ValidateQualificationMatrixDerivationV1(matrix); err != nil {
@@ -485,7 +498,14 @@ func m8QualificationContainedPathV1(root, path, label string) (string, error) {
 // m8QualificationCommandV1 re-parses runner argv so the retained replay
 // command cannot disagree with the already-validated measured configuration.
 func m8QualificationCommandV1(report m8ProductionReportV1) bool {
+	return m8QualificationCommandWithExecutableV1(report, m8QualificationBenchmarkExecutableV1)
+}
+
+func m8QualificationCommandWithExecutableV1(report m8ProductionReportV1, commandExecutable m8QualificationCommandExecutableVerifierV1) bool {
 	if len(report.Command) < 2 {
+		return false
+	}
+	if !m8QualificationCommandExecutableV1(report.Command[0], report.HeadSHA, commandExecutable) {
 		return false
 	}
 	cfg, err := parseConfig(report.Command[1:])
@@ -546,7 +566,14 @@ func m8QualificationCommandConfigV1(cfg config) m8ProductionConfigEvidenceV1 {
 }
 
 func m8QualificationMatrixCommandV1(matrix m8ProductionMatrixV1) bool {
+	return m8QualificationMatrixCommandWithExecutableV1(matrix, m8QualificationBenchmarkExecutableV1)
+}
+
+func m8QualificationMatrixCommandWithExecutableV1(matrix m8ProductionMatrixV1, commandExecutable m8QualificationCommandExecutableVerifierV1) bool {
 	if len(matrix.Command) < 2 || len(matrix.Variants) != len(m8RequiredVariantIDsV1) {
+		return false
+	}
+	if !m8QualificationCommandExecutableV1(matrix.Command[0], matrix.HeadSHA, commandExecutable) {
 		return false
 	}
 	cfg, err := parseConfig(matrix.Command[1:])
@@ -609,6 +636,30 @@ func m8QualificationMatrixCommandV1(matrix m8ProductionMatrixV1) bool {
 	}
 	profiles, err := m8CanonicalPathV1(cfg.profiles)
 	return err == nil && profiles == profileRoot
+}
+
+func m8QualificationCommandExecutableV1(command, headSHA string, verify m8QualificationCommandExecutableVerifierV1) bool {
+	if verify == nil || command == "" || !filepath.IsAbs(command) {
+		return false
+	}
+	canonical, err := m8CanonicalPathV1(command)
+	return err == nil && canonical == command && verify(canonical, headSHA)
+}
+
+func m8QualificationBenchmarkExecutableV1(command, headSHA string) bool {
+	info, err := os.Stat(command)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
+		return false
+	}
+	build, err := buildinfo.ReadFile(command)
+	if err != nil || build.Path != "github.com/snissn/gomap/cmd/treedb_vector_partition_bench" {
+		return false
+	}
+	settings := make(map[string]string, len(build.Settings))
+	for _, setting := range build.Settings {
+		settings[setting.Key] = setting.Value
+	}
+	return settings["vcs.revision"] == headSHA && settings["vcs.modified"] == "false"
 }
 
 func m8QualificationExactTruthCapV1(fixture fixtureManifest) int64 {

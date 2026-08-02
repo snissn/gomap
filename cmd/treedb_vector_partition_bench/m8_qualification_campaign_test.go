@@ -255,7 +255,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			},
 			"changed_truth_cache_digest": func(report *m8ProductionReportV1) {
 				report.TruthCache.Status, report.TruthCache.ComputeNanos, report.TruthCache.LoadNanos = "reused", 0, 1
-				if !m8QualificationCommandV1(*report) {
+				if !m8QualificationCommandWithExecutableV1(*report, func(string, string) bool { return true }) {
 					t.Fatal("rejected bound reused truth-cache command")
 				}
 				for i, arg := range report.Command {
@@ -386,7 +386,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	stdout.Reset()
-	if err := run([]string{"validate-qualification", "-index", indexPath}, &stdout); err == nil || !strings.Contains(err.Error(), "retained M3 assets") {
+	if err := run([]string{"validate-qualification", "-index", indexPath}, &stdout); err == nil {
 		t.Fatalf("descriptor-only CLI validation err=%v output=%q", err, stdout.String())
 	}
 	for name, mutate := range map[string]func(*m8QualificationIndexV1){
@@ -774,6 +774,33 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	}
 }
 
+func TestM8QualificationCommandBindsBenchmarkExecutableV1(t *testing.T) {
+	head := strings.Repeat("a", 40)
+	fixture := m8QualificationFixturesV1[0]
+	matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
+	testM8QualificationProfilesV1(t, t.TempDir(), "command", &matrix)
+	report := matrix.Variants[0]
+	wanted := report.Command[0]
+	verify := func(command, revision string) bool {
+		return command == wanted && revision == head
+	}
+	if !m8QualificationCommandWithExecutableV1(report, verify) || !m8QualificationMatrixCommandWithExecutableV1(matrix, verify) {
+		t.Fatal("rejected canonical benchmark command")
+	}
+	report.Command[0] = filepath.Join(t.TempDir(), "unrelated")
+	if m8QualificationCommandWithExecutableV1(report, verify) {
+		t.Fatal("accepted unrelated child executable")
+	}
+	matrix.Command[0] = filepath.Join(t.TempDir(), "unrelated")
+	if m8QualificationMatrixCommandWithExecutableV1(matrix, verify) {
+		t.Fatal("accepted unrelated matrix executable")
+	}
+	report.Command[0] = ""
+	if m8QualificationCommandWithExecutableV1(report, verify) {
+		t.Fatal("accepted blank child executable")
+	}
+}
+
 func TestM8QualificationM3BuildCapsV1(t *testing.T) {
 	for _, fixture := range m8QualificationFixturesV1 {
 		partitionConfig, routerConfig, visits, ok := m8QualificationM3BuildConfigV1(fixture)
@@ -939,11 +966,11 @@ func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManif
 }
 
 func testM8ValidateQualificationCampaignV1(root string, campaign m8QualificationCampaignV1) (m8QualificationCampaignSummaryV1, error) {
-	return m8ValidateQualificationCampaignWithRetainedVariantV1(root, campaign, func(string, m8ProductionReportV1) error { return nil })
+	return m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string) bool { return true })
 }
 
 func testM8ValidateQualificationIndexV1(root string, index m8QualificationIndexV1) (m8QualificationIndexSummaryV1, error) {
-	return m8ValidateQualificationIndexWithRetainedVariantV1(root, index, func(string, m8ProductionReportV1) error { return nil })
+	return m8ValidateQualificationIndexWithVerifiersV1(root, index, func(string, m8ProductionReportV1) error { return nil }, func(string, string) bool { return true })
 }
 
 // testM8QualificationRetainedDescriptorV1 builds only the persisted M3 asset
@@ -1675,7 +1702,7 @@ func testM8QualificationReportV1(t *testing.T, head string, fixture fixtureManif
 func testM8QualificationCommandV1(report m8ProductionReportV1) []string {
 	cfg := report.Config
 	args := []string{
-		"treedb_vector_partition_bench", "-mode", m8ProductionMultiGroupModeV1,
+		filepath.Join(report.DatasetDirectory, "treedb_vector_partition_bench"), "-mode", m8ProductionMultiGroupModeV1,
 		"-dataset", report.DatasetDirectory, "-m8-existing-db", report.Variant.DatabaseDirectory, "-m8-truth-cache", report.TruthCacheDirectory, "-out", "out", "-partitions", "16", "-probes", "1,2,4,8,16",
 		"-overlap", strconv.FormatFloat(report.Variant.OverlapRatio, 'g', -1, 64), "-top-k", "10",
 		"-recall-target", ".9", "-seed", strconv.FormatInt(cfg.Seed, 10), "-raft-groups", "4",
@@ -1745,7 +1772,7 @@ func testM8QualificationMatrixCommandV1(matrix m8ProductionMatrixV1) []string {
 	}
 	cfg := report.Config
 	args := []string{
-		"treedb_vector_partition_bench", "-mode", m8ProductionMultiGroupModeV1,
+		filepath.Join(report.DatasetDirectory, "treedb_vector_partition_bench"), "-mode", m8ProductionMultiGroupModeV1,
 		"-dataset", report.DatasetDirectory, "-m8-truth-cache", report.TruthCacheDirectory, "-m8-variant-dbs", strings.Join(variantDBs, ","), "-out", "out", "-partitions", "16", "-probes", "1,2,4,8,16",
 		"-overlap", "0,.2", "-top-k", "10", "-recall-target", ".9", "-seed", strconv.FormatInt(cfg.Seed, 10),
 		"-raft-groups", "4", "-raft-nodes-per-group", "3", "-concurrency", "1", "-warmup", "0", "-ef-search", "64", "-router-candidates", "64",

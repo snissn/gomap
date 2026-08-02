@@ -535,7 +535,18 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 	if cfg.stage == "overlap,partition_index" && !capabilities.vectorPartitionNamespacePersistence {
 		return fmt.Errorf("%w: M3 partition-index evidence requires durable vector-partition lifecycle publication", collections.ErrVectorPartitionNamespacePersistenceUnsupportedV1)
 	}
-	cfg.command = append([]string{"treedb_vector_partition_bench"}, args...)
+	command := "treedb_vector_partition_bench"
+	if cfg.stage == m8ProductionMultiGroupModeV1 {
+		command, err = os.Executable()
+		if err != nil {
+			return fmt.Errorf("resolve M8 benchmark executable: %w", err)
+		}
+		command, err = m8CanonicalPathV1(command)
+		if err != nil {
+			return fmt.Errorf("canonicalize M8 benchmark executable: %w", err)
+		}
+	}
+	cfg.command = append([]string{command}, args...)
 	if cfg.baseSHA, cfg.headSHA, err = provenance(); err != nil {
 		return err
 	}

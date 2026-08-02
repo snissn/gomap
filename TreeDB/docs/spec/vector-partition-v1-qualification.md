@@ -93,3 +93,8 @@ reused truth-cache artifact into that corpus's campaign directory. The retained
 validator rejects external or linked dataset, truth-cache, M3, report, profile,
 and transcript inputs so the final campaign index remains a self-contained
 replay bundle.
+
+Qualification accepts only a canonical retained `treedb_vector_partition_bench`
+binary as `exact_command[0]`. Its Go build metadata must name the benchmark
+main package, bind the recorded head revision, and report an unmodified build;
+ephemeral `go run` executables are therefore not final replay evidence.
