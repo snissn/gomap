@@ -51,13 +51,14 @@ func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionV1(ctx context.Con
 		return public.SearchResponseV1{}, err
 	}
 	r := b.opts.RequestBase
-	r.Query, r.IndexName, r.TopK, r.PartitionProbes, r.EfSearch, r.Consistency = request.Query, request.Generation.Index, request.TopK, request.Probes, request.EfSearch, VectorPartitionShardSearchConsistencyV1(request.Consistency)
+	r.Version, r.Query, r.IndexName, r.Metric, r.TopK, r.PartitionProbes, r.EfSearch, r.Consistency = request.Version, request.Query, request.Generation.Index, VectorPartitionShardSearchMetricV1(request.Metric), request.TopK, request.Probes, request.EfSearch, VectorPartitionShardSearchConsistencyV1(request.Consistency)
+	r.RequestBytesLimit, r.CandidateBytesLimit, r.ResponseBytesLimit, r.MergeEntriesLimit = request.Limits.RequestBytes, request.Limits.CandidateBytes, request.Limits.ResponseBytes, request.Limits.MergeEntries
 	if !request.Deadline.IsZero() {
 		r.DeadlineUnixNano = request.Deadline.UnixNano()
 	}
 	response, err := b.opts.Topology.Coordinator().Search(ctx, r)
 	if err != nil {
-		return public.SearchResponseV1{}, err
+		return public.SearchResponseV1{}, publicBackendErrorV1(err)
 	}
 	result := public.SearchResponseV1{Generation: request.Generation, Counters: public.SearchCountersV1{Requests: response.Counters.Requests, RPCs: response.Counters.RPCs, Retries: response.Counters.Retries, Redirects: response.Counters.Redirects, Candidates: response.Counters.Candidates, Edges: response.Counters.Edges}, Timing: public.SearchTimingV1{Total: time.Duration(response.Timing.TotalNanos)}}
 	result.Neighbors = make([]public.NeighborV1, len(response.Neighbors))
@@ -72,7 +73,7 @@ func (b *VectorPartitionPublicBackendV1) RegisterVectorPartitionV1(ctx context.C
 		return public.GenerationStatusV1{}, err
 	}
 	i := b.opts.Identity
-	if registration.SourceGeneration != 0 && (registration.SourceGeneration != i.Source.Generation || registration.SourceChecksum != i.Source.Checksum || registration.SourceSchemaHash != i.Source.SchemaHash || registration.SourceRowCount != i.Source.RowCount) {
+	if registration.SourceGeneration == 0 || registration.SourceChecksum == 0 || registration.SourceSchemaHash == 0 || registration.SourceRowCount == 0 || registration.SourceGeneration != i.Source.Generation || registration.SourceChecksum != i.Source.Checksum || registration.SourceSchemaHash != i.Source.SchemaHash || registration.SourceRowCount != i.Source.RowCount {
 		return public.GenerationStatusV1{}, errors.New("generation source does not match bound topology")
 	}
 	record, err := b.opts.Lifecycle.BeginBuildV1(ctx, i, b.opts.RequiredGroups, 0, b.opts.MutationEpoch)
@@ -154,6 +155,29 @@ func (b *VectorPartitionPublicBackendV1) checkID(id public.GenerationIDV1) error
 	}
 	return nil
 }
-func publicStatusV1(r raftplacement.VectorPartitionLifecycleRecordV1, active bool) public.GenerationStatusV1 {
-	return public.GenerationStatusV1{Generation: public.GenerationIDV1{Index: r.Identity.Index.IndexName, Generation: r.Identity.Generation}, State: public.GenerationStateV1(r.State), Active: active, Ready: len(r.RequiredGroups) != 0 && len(r.ReadyGroups) == len(r.RequiredGroups), Revision: r.Revision}
+func publicStatusV1(r raftplacement.VectorPartitionLifecycleRecordV1, _ bool) public.GenerationStatusV1 {
+	return public.GenerationStatusV1{Generation: public.GenerationIDV1{Index: r.Identity.Index.IndexName, Generation: r.Identity.Generation}, State: public.GenerationStateV1(r.State), Active: r.State == raftplacement.VectorPartitionLifecycleActiveV1, Ready: len(r.RequiredGroups) != 0 && len(r.ReadyGroups) == len(r.RequiredGroups), Revision: r.Revision}
+}
+
+func publicBackendErrorV1(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return &public.ErrorV1{Code: public.ErrorCanceledV1, Err: err}
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return &public.ErrorV1{Code: public.ErrorDeadlineExceededV1, Err: err}
+	}
+	var coordinatorErr *VectorPartitionCoordinatorErrorV1
+	if errors.As(err, &coordinatorErr) {
+		switch coordinatorErr.Code {
+		case VectorPartitionCoordinatorErrorInvalidRequestV1, VectorPartitionCoordinatorErrorRouteMismatchV1, VectorPartitionCoordinatorErrorBudgetExceededV1, VectorPartitionCoordinatorErrorMalformedResponseV1:
+			return &public.ErrorV1{Code: public.ErrorInvalidRequestV1, Err: err}
+		case VectorPartitionCoordinatorErrorGenerationMismatchV1:
+			return &public.ErrorV1{Code: public.ErrorGenerationMismatchV1, Err: err}
+		case VectorPartitionCoordinatorErrorCanceledV1:
+			return &public.ErrorV1{Code: public.ErrorCanceledV1, Err: err}
+		case VectorPartitionCoordinatorErrorDeadlineV1:
+			return &public.ErrorV1{Code: public.ErrorDeadlineExceededV1, Err: err}
+		}
+	}
+	return &public.ErrorV1{Code: public.ErrorUnavailableV1, Err: err}
 }
