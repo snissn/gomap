@@ -349,7 +349,10 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	t.Run("matrix_fixture_admission_caps", func(t *testing.T) {
 		for _, corpus := range m8QualificationFixturesV1 {
 			matrix := testM8QualificationMatrixV1(t, head, corpus, 125)
-			matrixDirectory := t.TempDir()
+			matrixDirectory, err := m8CanonicalPathV1(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
 			testM8QualificationProfilesV1(t, matrixDirectory, "matrix-admission", &matrix)
 			verify := func(string, string, string, string) bool { return true }
 			if !m8QualificationMatrixCommandWithExecutableV1(matrix.Variants[0].DatasetDirectory, matrixDirectory, matrix, verify) {
@@ -924,7 +927,10 @@ func TestM8QualificationCommandBindsBenchmarkExecutableV1(t *testing.T) {
 	head := strings.Repeat("a", 40)
 	fixture := m8QualificationFixturesV1[0]
 	matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
-	matrixDirectory := t.TempDir()
+	matrixDirectory, err := m8CanonicalPathV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	testM8QualificationProfilesV1(t, matrixDirectory, "command", &matrix)
 	report := matrix.Variants[0]
 	wanted := report.Command[0]
@@ -2197,6 +2203,11 @@ func testM8QualificationRemoveCommandFlagV1(t *testing.T, args *[]string, flag s
 
 func testM8QualificationProfilesV1(t *testing.T, root, run string, matrix *m8ProductionMatrixV1) {
 	t.Helper()
+	var err error
+	root, err = m8CanonicalPathV1(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	templateDir := filepath.Join(root, "profile-template")
 	templatePaths := make([]string, 0, len(m8ProfileArtifactNamesV1))
 	for _, name := range m8ProfileArtifactNamesV1 {
