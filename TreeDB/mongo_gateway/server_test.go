@@ -6245,6 +6245,24 @@ func TestMongoMutationNestedOperators(t *testing.T) {
 	}
 }
 
+func TestMongoMutationEmptyNestedArrayEachDoesNotCreateParents(t *testing.T) {
+	for _, operator := range []string{"$push", "$addToSet"} {
+		t.Run(operator, func(t *testing.T) {
+			mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+				{Key: "$set", Value: bson.D{{Key: "changed", Value: true}}},
+				{Key: operator, Value: bson.D{{Key: "parent.items", Value: bson.D{{Key: "$each", Value: bson.A{}}}}}},
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			updated, changed, err := applyMongoMutation(mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}), mutation)
+			if err != nil || !changed || !bson.Raw(updated).Lookup("changed").Boolean() || !bson.Raw(updated).Lookup("parent").IsZero() {
+				t.Fatalf("updated=%v changed=%v err=%v", updated, changed, err)
+			}
+		})
+	}
+}
+
 func TestMongoMutationSetOnInsertOnlyAppliesToInsertion(t *testing.T) {
 	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "state", Value: "matched"}})
 	mutation, err := parseMongoMutation(mustDocument(t, bson.D{

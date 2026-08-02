@@ -4439,6 +4439,9 @@ func mongoMutationArrayPath(doc bson.D, path []string, values []bson.RawValue, u
 			if err != nil {
 				return nil, false, err
 			}
+			if !changed {
+				return doc, false, nil
+			}
 			return append(doc, bson.E{Key: path[0], Value: nested}), changed, nil
 		}
 		nested, err := mongoMutationNestedDocument(doc[idx].Value, path[0])
