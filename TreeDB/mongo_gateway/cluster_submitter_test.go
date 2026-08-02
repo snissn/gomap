@@ -2419,6 +2419,44 @@ func TestClusterSubmitterUpdateSubmitsPriorOrderedItemsBeforeUnsupported(t *test
 	assertMongoClusterCallAckPolicy(t, calls[0], iwire.AckVisible)
 }
 
+func TestClusterSubmitterUpdateSubmitsPriorOrderedItemsBeforeUnsupportedUpsert(t *testing.T) {
+	submitter := &mongoClusterFakeSubmitter{}
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	setMongoClusterTestSubmitter(server, submitter, 18)
+
+	response := serveCommand(t, server, 325819, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{
+			bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Grace"}}}}},
+			},
+			bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Ada"}}}}},
+				{Key: "upsert", Value: true},
+			},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "BadValue")
+	assertErrmsgContains(t, response, "updates[1]")
+
+	calls := submitter.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("submit calls=%d want 1", len(calls))
+	}
+	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandUpdateBSONSet {
+		t.Fatalf("command id=%d want update_bson_set", got)
+	}
+	ids := mongoClusterTestIDs(calls[0].entry.Decoded.Sections)
+	if len(ids) != 1 {
+		t.Fatalf("submitted document ids=%d want 1", len(ids))
+	}
+	assertMongoClusterCallAckPolicy(t, calls[0], iwire.AckVisible)
+}
+
 func TestClusterSubmitterUpdateMissingCollectionReturnsZeroCounts(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
