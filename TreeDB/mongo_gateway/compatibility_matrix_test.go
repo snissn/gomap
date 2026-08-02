@@ -629,10 +629,16 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			probe:    expectCommandNotFound(bson.D{{Key: "count", Value: "users"}, {Key: "$db", Value: "app"}}),
 		},
 		{
-			category: "command gap",
-			feature:  "findAndModify",
-			status:   "not implemented",
-			probe:    expectCommandNotFound(bson.D{{Key: "findAndModify", Value: "users"}, {Key: "$db", Value: "app"}}),
+			category: "update subset",
+			feature:  "findAndModify exact _id no-match",
+			status:   "supported subset",
+			probe: func(t *testing.T, server *Server) {
+				resp := serveCommand(t, server, 26, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "none"}}}, {Key: "update", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "none"}}}}}, {Key: "$db", Value: "app"}})
+				assertOK(t, resp)
+				if bson.Raw(resp).Lookup("value").Type != bson.TypeNull {
+					t.Fatalf("value type=%v want null", bson.Raw(resp).Lookup("value").Type)
+				}
+			},
 		},
 		{
 			category: "transaction gap",

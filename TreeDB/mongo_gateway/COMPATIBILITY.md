@@ -78,7 +78,7 @@ block drifts from the executable matrix rows.
 | command gap | top | not implemented |
 | command gap | dbStats | not implemented |
 | command gap | count | not implemented |
-| command gap | findAndModify | not implemented |
+| update subset | findAndModify exact _id no-match | supported subset |
 | transaction gap | transactions and retryable writes | not implemented |
 <!-- mongo-compatibility-matrix:end -->
 
@@ -184,7 +184,7 @@ enabled-path latency claim is made.
 | Command | `dbStats` | `not implemented` | `TestMongoCompatibilityMatrix` | Database statistics are unsupported; this does not block basic connection or browsing. |
 | Command | `count`, `countDocuments`, `estimatedDocumentCount` | `not implemented` | `TestMongoCompatibilityMatrix` covers `count` command absence | Future fast count work should be explicit. |
 | Command | `distinct` | `not implemented` | Command falls through to `CommandNotFound` | No distinct scan/index planner. |
-| Command | `findAndModify` | `not implemented` | `TestMongoCompatibilityMatrix` | No atomic find/update command surface. |
+| Command | `findAndModify` | `supported subset` | `TestFindAndModifyReturnsAtomicBeforeAndAfterImages`, `TestMongoCompatibilityMatrix` | Exact `_id` query with top-level `$set`/`$inc`/`$unset` or replacement; pre-image by default, `new:true` post-image, optional top-level `fields`, and upsert. Cluster/routed, remove, sort, dotted projection, and transaction/retry markers are rejected. |
 | Command | collection/database drop | `not implemented` | Command falls through to `CommandNotFound` | Collection lifecycle beyond create and index metadata is not exposed. |
 | Command | logical sessions / `endSessions` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerOfficialGoDriverLogicalSession` | Advertises `logicalSessionTimeoutMinutes` and accepts `endSessions`; session IDs are accepted for driver compatibility only. |
 | Command | transactions / retryable writes | `not implemented` | `TestMongoCompatibilityMatrix` rejects transaction and retryable-write markers on supported commands and covers `commitTransaction` absence | Depends on local transaction/WAL/idempotency roadmap. |
