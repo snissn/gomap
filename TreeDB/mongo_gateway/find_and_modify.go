@@ -171,7 +171,7 @@ func findAndModifyExisting(col *collections.Collection, item mongoUpdateItem) (b
 	if materializer != nil {
 		defer materializer.Close()
 	}
-	_, _, err = col.Update(item.key, func(stored []byte) ([]byte, bool, error) {
+	matched, _, err = col.Update(item.key, func(stored []byte) ([]byte, bool, error) {
 		raw, err := storedDocumentToBSON(col, materializer, stored)
 		if err != nil {
 			return nil, false, err
@@ -202,7 +202,14 @@ func findAndModifyExisting(col *collections.Collection, item mongoUpdateItem) (b
 		}
 		return encoded, true, nil
 	})
-	return before, after, matched, err
+	return finalizeFindAndModifyImages(before, after, matched, err)
+}
+
+func finalizeFindAndModifyImages(before, after wire.Document, matched bool, err error) (wire.Document, wire.Document, bool, error) {
+	if err != nil || !matched {
+		return nil, nil, matched, err
+	}
+	return before, after, matched, nil
 }
 
 func marshalFindAndModifyResponse(value wire.Document, updatedExisting, upserted bool, id bson.RawValue, projection compiledProjection) (wire.Document, error) {

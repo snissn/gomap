@@ -112,6 +112,15 @@ func TestFindAndModifyConcurrentNewImagesAreCommitted(t *testing.T) {
 	}
 }
 
+func TestFindAndModifyFinalMissClearsStaleCallbackImages(t *testing.T) {
+	before := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "n", Value: int32(1)}})
+	after := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "n", Value: int32(2)}})
+	gotBefore, gotAfter, matched, err := finalizeFindAndModifyImages(before, after, false, nil)
+	if err != nil || matched || gotBefore != nil || gotAfter != nil {
+		t.Fatalf("finalized images before=%v after=%v matched=%v err=%v want nil/nil/false/nil", gotBefore, gotAfter, matched, err)
+	}
+}
+
 func TestFindAndModifyNoMatchAndUpsert(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
