@@ -3568,6 +3568,215 @@ func applySetUpdate(doc wire.Document, update wire.Document) (wire.Document, boo
 	return wire.Document(raw), changed, nil
 }
 
+type mongoMutationField struct {
+	name  string
+	value bson.RawValue
+}
+
+type mongoMutation struct {
+	set, inc []mongoMutationField
+	unset    []string
+	replace  wire.Document
+}
+
+// parseMongoMutation is deliberately separate from the established $set path.
+func parseMongoMutation(update wire.Document) (mongoMutation, error) {
+	elements, err := bson.Raw(update).Elements()
+	if err != nil || len(elements) == 0 {
+		return mongoMutation{}, errors.New("Mongo gateway update must be a non-empty document")
+	}
+	first, err := elements[0].KeyErr()
+	if err != nil {
+		return mongoMutation{}, err
+	}
+	if !strings.HasPrefix(first, "$") {
+		for _, elem := range elements {
+			key, _ := elem.KeyErr()
+			if strings.HasPrefix(key, "$") {
+				return mongoMutation{}, errors.New("Mongo gateway update cannot mix replacement fields and operators")
+			}
+		}
+		return mongoMutation{replace: update}, nil
+	}
+	mutation := mongoMutation{}
+	seen := make(map[string]struct{})
+	for _, elem := range elements {
+		op, err := elem.KeyErr()
+		if err != nil {
+			return mongoMutation{}, err
+		}
+		if op != "$set" && op != "$inc" && op != "$unset" {
+			return mongoMutation{}, fmt.Errorf("Mongo gateway unsupported update operator %q", op)
+		}
+		fields, ok := elem.Value().DocumentOK()
+		if !ok {
+			return mongoMutation{}, fmt.Errorf("Mongo gateway %s value must be a document", op)
+		}
+		items, err := fields.Elements()
+		if err != nil {
+			return mongoMutation{}, err
+		}
+		for _, item := range items {
+			name, err := item.KeyErr()
+			if err != nil {
+				return mongoMutation{}, err
+			}
+			if err := validateSetFieldName(name); err != nil {
+				return mongoMutation{}, err
+			}
+			if _, ok := seen[name]; ok {
+				return mongoMutation{}, fmt.Errorf("Mongo gateway update operators cannot target field %q more than once", name)
+			}
+			seen[name] = struct{}{}
+			value := item.Value()
+			if err := value.Validate(); err != nil {
+				return mongoMutation{}, err
+			}
+			switch op {
+			case "$set":
+				mutation.set = append(mutation.set, mongoMutationField{name, value})
+			case "$inc":
+				if !mongoMutationNumeric(value) {
+					return mongoMutation{}, fmt.Errorf("Mongo gateway $inc field %q must be numeric", name)
+				}
+				mutation.inc = append(mutation.inc, mongoMutationField{name, value})
+			case "$unset":
+				mutation.unset = append(mutation.unset, name)
+			}
+		}
+	}
+	return mutation, nil
+}
+
+func applyMongoMutation(doc wire.Document, mutation mongoMutation) (wire.Document, bool, error) {
+	if mutation.replace != nil {
+		return applyMongoReplacement(doc, mutation.replace)
+	}
+	set := make(map[string]bson.RawValue, len(mutation.set))
+	inc := make(map[string]bson.RawValue, len(mutation.inc))
+	unset := make(map[string]struct{}, len(mutation.unset))
+	for _, field := range mutation.set {
+		set[field.name] = field.value
+	}
+	for _, field := range mutation.inc {
+		inc[field.name] = field.value
+	}
+	for _, name := range mutation.unset {
+		unset[name] = struct{}{}
+	}
+	elements, err := bson.Raw(doc).Elements()
+	if err != nil {
+		return nil, false, err
+	}
+	out := make(bson.D, 0, len(elements)+len(set)+len(inc))
+	seen := make(map[string]struct{}, len(elements))
+	changed := false
+	for _, elem := range elements {
+		name, _ := elem.KeyErr()
+		value := elem.Value()
+		seen[name] = struct{}{}
+		if _, ok := unset[name]; ok {
+			changed = true
+			continue
+		}
+		if next, ok := set[name]; ok {
+			if !next.Equal(value) {
+				changed = true
+			}
+			value = next
+		}
+		if delta, ok := inc[name]; ok {
+			next, err := mongoMutationIncrement(value, delta)
+			if err != nil {
+				return nil, false, err
+			}
+			if !next.Equal(value) {
+				changed = true
+			}
+			value = next
+		}
+		out = append(out, bson.E{Key: name, Value: value})
+	}
+	for _, field := range mutation.set {
+		if _, ok := seen[field.name]; !ok {
+			out = append(out, bson.E{Key: field.name, Value: field.value})
+			changed = true
+		}
+	}
+	for _, field := range mutation.inc {
+		if _, ok := seen[field.name]; !ok {
+			out = append(out, bson.E{Key: field.name, Value: field.value})
+			changed = true
+		}
+	}
+	if !changed {
+		return doc, false, nil
+	}
+	raw, err := bson.Marshal(out)
+	return wire.Document(raw), true, err
+}
+
+func applyMongoReplacement(doc, replacement wire.Document) (wire.Document, bool, error) {
+	oldID, newID := bson.Raw(doc).Lookup("_id"), bson.Raw(replacement).Lookup("_id")
+	if !newID.IsZero() && !newID.Equal(oldID) {
+		return nil, false, errors.New("Mongo gateway update cannot modify _id")
+	}
+	if !newID.IsZero() {
+		return replacement, !bytes.Equal(doc, replacement), nil
+	}
+	elements, err := bson.Raw(replacement).Elements()
+	if err != nil {
+		return nil, false, err
+	}
+	out := bson.D{{Key: "_id", Value: oldID}}
+	for _, elem := range elements {
+		key, _ := elem.KeyErr()
+		out = append(out, bson.E{Key: key, Value: elem.Value()})
+	}
+	raw, err := bson.Marshal(out)
+	return wire.Document(raw), !bytes.Equal(doc, raw), err
+}
+
+func mongoMutationNumeric(v bson.RawValue) bool {
+	return v.Type == bson.TypeInt32 || v.Type == bson.TypeInt64 || v.Type == bson.TypeDouble
+}
+func mongoMutationInt64(v bson.RawValue) int64 {
+	if n, ok := v.Int64OK(); ok {
+		return n
+	}
+	n, _ := v.Int32OK()
+	return int64(n)
+}
+func mongoMutationRaw(v any) (bson.RawValue, error) {
+	typ, raw, err := bson.MarshalValue(v)
+	return bson.RawValue{Type: typ, Value: raw}, err
+}
+func mongoMutationIncrement(value, delta bson.RawValue) (bson.RawValue, error) {
+	if !mongoMutationNumeric(value) {
+		return bson.RawValue{}, errors.New("Mongo gateway $inc target must be numeric and not null")
+	}
+	if value.Type == bson.TypeDouble || delta.Type == bson.TypeDouble {
+		a, _ := value.DoubleOK()
+		if value.Type != bson.TypeDouble {
+			a = float64(mongoMutationInt64(value))
+		}
+		b, _ := delta.DoubleOK()
+		if delta.Type != bson.TypeDouble {
+			b = float64(mongoMutationInt64(delta))
+		}
+		return mongoMutationRaw(a + b)
+	}
+	a, b := mongoMutationInt64(value), mongoMutationInt64(delta)
+	if (b > 0 && a > math.MaxInt64-b) || (b < 0 && a < math.MinInt64-b) {
+		return bson.RawValue{}, errors.New("Mongo gateway $inc overflow")
+	}
+	sum := a + b
+	if value.Type == bson.TypeInt32 && delta.Type == bson.TypeInt32 && sum >= math.MinInt32 && sum <= math.MaxInt32 {
+		return mongoMutationRaw(int32(sum))
+	}
+	return mongoMutationRaw(sum)
+}
+
 type createIndexDefinition struct {
 	scalarDef collections.IndexDefinition
 	vectorDef collections.VectorIndexDefinition

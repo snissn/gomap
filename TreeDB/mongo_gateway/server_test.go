@@ -5947,6 +5947,63 @@ func TestApplySetUpdateAppendsNewFieldsInSetOrder(t *testing.T) {
 	}
 }
 
+func TestMongoMutationApplyOperatorsAndReplacement(t *testing.T) {
+	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "count", Value: int32(1)}, {Key: "old", Value: true}})
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "ada"}}}, {Key: "$inc", Value: bson.D{{Key: "count", Value: int32(2)}, {Key: "new", Value: int64(-1)}}}, {Key: "$unset", Value: bson.D{{Key: "old", Value: true}}}}))
+	if err != nil {
+		t.Fatalf("parse mutation: %v", err)
+	}
+	updated, changed, err := applyMongoMutation(doc, mutation)
+	if err != nil || !changed {
+		t.Fatalf("apply changed=%v err=%v", changed, err)
+	}
+	if got, _ := bson.Raw(updated).Lookup("count").Int32OK(); got != 3 {
+		t.Fatalf("count=%d want 3", got)
+	}
+	if got, _ := bson.Raw(updated).Lookup("new").Int64OK(); got != -1 {
+		t.Fatalf("new=%d want -1", got)
+	}
+	if !bson.Raw(updated).Lookup("old").IsZero() {
+		t.Fatal("unset field remains")
+	}
+	replacement, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "name", Value: "grace"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, _, err = applyMongoMutation(doc, replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := bson.Raw(updated).Lookup("_id").StringValueOK(); got != "u1" {
+		t.Fatalf("_id=%q", got)
+	}
+}
+
+func TestMongoMutationRejectsInvalidShapesAndOverflow(t *testing.T) {
+	for _, update := range []bson.D{
+		{{Key: "$inc", Value: bson.D{{Key: "a.b", Value: 1}}}},
+		{{Key: "$set", Value: bson.D{{Key: "x", Value: 1}}}, {Key: "$inc", Value: bson.D{{Key: "x", Value: 1}}}},
+		{{Key: "$push", Value: bson.D{{Key: "x", Value: 1}}}},
+		{},
+	} {
+		if _, err := parseMongoMutation(mustDocument(t, update)); err == nil {
+			t.Fatalf("accepted %v", update)
+		}
+	}
+	_, err := mongoMutationIncrement(mustRawValue(t, int64(math.MaxInt64)), mustRawValue(t, int64(1)))
+	if err == nil {
+		t.Fatal("overflow accepted")
+	}
+	_, err = mongoMutationIncrement(bson.RawValue{Type: bson.TypeNull}, mustRawValue(t, int32(1)))
+	if err == nil {
+		t.Fatal("null accepted")
+	}
+	changedID := mustDocument(t, bson.D{{Key: "_id", Value: "u2"}})
+	if _, _, err := applyMongoReplacement(mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}), changedID); err == nil {
+		t.Fatal("changed _id accepted")
+	}
+}
+
 func TestCompareDocumentFieldTreatsMissingAsNull(t *testing.T) {
 	missing := mustDocument(t, bson.D{{Key: "_id", Value: "missing"}})
 	nullValue := mustDocument(t, bson.D{{Key: "_id", Value: "null"}, {Key: "rank", Value: nil}})
