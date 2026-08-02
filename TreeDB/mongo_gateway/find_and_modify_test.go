@@ -75,15 +75,30 @@ func TestFindAndModifyConcurrentNewImagesAreCommitted(t *testing.T) {
 	}
 	seen := make(map[int32]bool, workers)
 	for n := range values {
+		if seen[n] {
+			t.Fatalf("duplicate returned committed image %d", n)
+		}
 		seen[n] = true
-	}
-	if len(seen) != workers {
-		t.Fatalf("returned values=%v", seen)
 	}
 	for n := int32(1); n <= workers; n++ {
 		if !seen[n] {
 			t.Fatalf("missing committed image %d", n)
 		}
+	}
+	collection, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	key, _, err := prepareInsertDocument(mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}), collections.DocumentFormatBSON)
+	if err != nil {
+		t.Fatalf("prepare key: %v", err)
+	}
+	stored, err := collection.Get(key)
+	if err != nil {
+		t.Fatalf("get final document: %v", err)
+	}
+	if n, ok := bson.Raw(stored).Lookup("n").Int32OK(); !ok || n != workers {
+		t.Fatalf("final n=%d ok=%v want %d", n, ok, workers)
 	}
 }
 
