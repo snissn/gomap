@@ -127,13 +127,21 @@ validator rejects external or linked dataset, truth-cache, M3, report, profile,
 and transcript inputs so the final campaign index remains a self-contained
 replay bundle.
 
-Before any M3 or M8 work, the campaign builds one clean-head
-`<campaign-root>/bin/treedb_vector_partition_bench` binary and records its
-SHA-256. Every retained M3, M8, and final validation command invokes that same
-canonical path. Child and matrix evidence bind its byte digest as well as Go
-build metadata (benchmark main package, recorded head revision, and an
-unmodified build); the aggregate requires that one digest for both corpora and
-all repeats. Ephemeral `go run` executables are not final replay evidence.
+Before any M3 or M8 work, the campaign makes an ordinary detached local clone
+at `<campaign-root>/source` from the explicit repository source and exact head.
+The clone must retain a `.git` directory (a linked-worktree `.git` file is not
+enough for Go's VCS stamp discovery) and no `objects/info/alternates` link to
+an external object store. It builds one clean-head
+`<campaign-root>/bin/treedb_vector_partition_bench` binary from that source
+with `GOWORK=off go -C <campaign-root>/source build -buildvcs=true`, records
+its SHA-256, and verifies `go version -m` contains the exact head revision and
+`vcs.modified=false`. Every retained M3, M8, and final validation command
+invokes that same canonical path. The graph M3 commands likewise use the
+cloned adapter at `<campaign-root>/source/scripts/treedb_kahip_partition.py`.
+Child and matrix evidence bind the byte digest as well as Go build metadata
+(benchmark main package, recorded head revision, and an unmodified build); the
+aggregate requires that one digest for both corpora and all repeats. Ephemeral
+`go run` executables are not final replay evidence.
 Every retained M3 and M8 command also carries exactly one explicit canonical
 `-base-sha`/`-head-sha` pair matching its evidence, rather than inheriting
 provenance from the replay checkout or CI environment.
