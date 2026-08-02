@@ -798,9 +798,13 @@ func m8QualificationM3BuildConfigV1(fixture fixtureManifest) (vectorpartition.Co
 	if fixture.Vectors == 250000 {
 		cap, visits = 50_000_000_000, 900_000_000
 	}
+	routerMaxVectors, ok := m8QualificationRouterMaxVectorsV1(fixture.Vectors)
+	if !ok {
+		return vectorpartition.Config{}, vectorpartition.RouterConfigV1{}, 0, false
+	}
 	cfg, err := parseConfig([]string{
 		"-stage", "overlap,partition_index", "-dataset", ".", "-out", ".", "-probes", "1", "-partitions", "16", "-seed", strconv.FormatInt(fixture.Seed, 10),
-		"-partition-max-distance-work", strconv.FormatInt(cap, 10), "-router-max-scalar-work", strconv.FormatInt(cap, 10),
+		"-partition-max-distance-work", strconv.FormatInt(cap, 10), "-router-max-vectors", strconv.Itoa(routerMaxVectors), "-router-max-scalar-work", strconv.FormatInt(cap, 10),
 		"-m3-max-benchmark-visits", strconv.FormatInt(visits, 10),
 		"-max-vectors", strconv.Itoa(fixture.Vectors), "-max-fixture-bytes", strconv.FormatInt(maxFixtureBytes, 10),
 	})
@@ -808,6 +812,20 @@ func m8QualificationM3BuildConfigV1(fixture fixtureManifest) (vectorpartition.Co
 		return vectorpartition.Config{}, vectorpartition.RouterConfigV1{}, 0, false
 	}
 	return cfg.partition, cfg.routerConfig, cfg.m3MaxBenchmarkVisits, true
+}
+
+func m8QualificationRouterMaxVectorsV1(source int) (int, bool) {
+	if source < 1 {
+		return 0, false
+	}
+	overlap := source / 5
+	if source%5 != 0 {
+		overlap++
+	}
+	if source > int(^uint(0)>>1)-overlap {
+		return 0, false
+	}
+	return source + overlap, true
 }
 
 func m8QualificationM3BuildCapsV1(variant m3VariantDescriptorV1, fixture fixtureManifest) bool {

@@ -977,6 +977,10 @@ func TestM8QualificationM3BuildCapsV1(t *testing.T) {
 		if !m8QualificationM3BuildCapsV1(variant, fixture) {
 			t.Fatalf("fixture=%d rejected expected config", fixture.Vectors)
 		}
+		wantRouterMaxVectors, ok := m8QualificationRouterMaxVectorsV1(fixture.Vectors)
+		if !ok || routerConfig.MaxVectors != wantRouterMaxVectors {
+			t.Fatalf("fixture=%d router max vectors=%d want=%d", fixture.Vectors, routerConfig.MaxVectors, wantRouterMaxVectors)
+		}
 		oldDefault, err := parseConfig([]string{
 			"-stage", "overlap,partition_index", "-dataset", ".", "-out", ".", "-probes", "1", "-partitions", "16", "-seed", strconv.FormatInt(fixture.Seed, 10),
 			"-partition-max-distance-work", strconv.FormatInt(partitionConfig.MaxDistanceWork, 10), "-router-max-scalar-work", strconv.FormatInt(routerConfig.MaxScalarWork, 10),
@@ -989,6 +993,19 @@ func TestM8QualificationM3BuildCapsV1(t *testing.T) {
 		oldVariant.PartitionConfig, oldVariant.RouterConfig = oldDefault.partition, oldDefault.routerConfig
 		if m8QualificationM3BuildCapsV1(oldVariant, fixture) {
 			t.Fatalf("fixture=%d accepted old default-1M descriptor config", fixture.Vectors)
+		}
+		missingRouter, err := parseConfig([]string{
+			"-stage", "overlap,partition_index", "-dataset", ".", "-out", ".", "-probes", "1", "-partitions", "16", "-seed", strconv.FormatInt(fixture.Seed, 10),
+			"-max-vectors", strconv.Itoa(fixture.Vectors), "-partition-max-distance-work", strconv.FormatInt(partitionConfig.MaxDistanceWork, 10), "-router-max-scalar-work", strconv.FormatInt(routerConfig.MaxScalarWork, 10),
+			"-m3-max-benchmark-visits", strconv.FormatInt(visits, 10),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		missingRouterVariant := variant
+		missingRouterVariant.PartitionConfig, missingRouterVariant.RouterConfig = missingRouter.partition, missingRouter.routerConfig
+		if m8QualificationM3BuildCapsV1(missingRouterVariant, fixture) {
+			t.Fatalf("fixture=%d accepted descriptor without expanded router cap", fixture.Vectors)
 		}
 		variant.RouterMaxScalarWork++
 		if m8QualificationM3BuildCapsV1(variant, fixture) {
@@ -1005,6 +1022,11 @@ func TestM8QualificationM3BuildCapsV1(t *testing.T) {
 			t.Fatalf("fixture=%d accepted off-plan router config", fixture.Vectors)
 		}
 		variant.RouterConfig.BranchFactor--
+		variant.RouterConfig.MaxVectors--
+		if m8QualificationM3BuildCapsV1(variant, fixture) {
+			t.Fatalf("fixture=%d accepted off-plan router membership cap", fixture.Vectors)
+		}
+		variant.RouterConfig.MaxVectors++
 		for name, mutate := range map[string]func(*m3VariantDescriptorV1){
 			"graph degree":      func(v *m3VariantDescriptorV1) { v.PartitionConfig.Degree++ },
 			"graph pivots":      func(v *m3VariantDescriptorV1) { v.PartitionConfig.Pivots++ },
@@ -1068,6 +1090,7 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 			MaxFixtureBytes  int64  `json:"max_fixture_bytes"`
 			GraphCap         int64  `json:"partition_max_distance_work"`
 			RouterCap        int64  `json:"router_max_scalar_work"`
+			RouterMaxVectors int    `json:"router_max_vectors"`
 			M3Cap            int64  `json:"m3_max_benchmark_visits"`
 			M8Cap            int64  `json:"m8_max_exact_truth_visits"`
 		} `json:"corpora"`
@@ -1082,7 +1105,7 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 	}
 	anchor100, ok100 := m8QualificationTruthCacheAnchorV1(m8QualificationFixturesV1[0])
 	anchor250, ok250 := m8QualificationTruthCacheAnchorV1(m8QualificationFixturesV1[1])
-	if !ok100 || !ok250 || plan.Corpora[0].DatasetSource != "/mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k" || plan.Corpora[0].Dataset != "<campaign-root>/100k/dataset" || plan.Corpora[0].TruthCacheSource != "/mnt/fast4tb/gomap-4027-truth-oracles-a5364e5b/100k/truth-cache" || plan.Corpora[0].TruthCache != "<campaign-root>/100k/truth-cache" || plan.Corpora[0].TruthIdentity != anchor100.Identity || plan.Corpora[0].TruthArtifact != anchor100.ArtifactSHA256 || plan.Corpora[0].TruthSHA != anchor100.TruthSHA256 || plan.Corpora[0].MaxVectors != 100000 || plan.Corpora[0].MaxFixtureBytes != maxFixtureBytes || plan.Corpora[0].GraphCap != 20000000000 || plan.Corpora[0].RouterCap != 20000000000 || plan.Corpora[1].DatasetSource != "testdata/vector_partition_qualification_embedding_mixture_250k" || plan.Corpora[1].Dataset != "<campaign-root>/250k/dataset" || plan.Corpora[1].TruthCacheSource != "/mnt/fast4tb/gomap-4027-truth-oracles-a5364e5b/250k/truth-cache" || plan.Corpora[1].TruthCache != "<campaign-root>/250k/truth-cache" || plan.Corpora[1].TruthIdentity != anchor250.Identity || plan.Corpora[1].TruthArtifact != anchor250.ArtifactSHA256 || plan.Corpora[1].TruthSHA != anchor250.TruthSHA256 || plan.Corpora[1].Vectors != 250000 || plan.Corpora[1].MaxVectors != 250000 || plan.Corpora[1].MaxFixtureBytes != maxFixtureBytes || plan.Corpora[1].Checksum != "d0c7c82ba868853aae9a4280161003d72714ad1701d41ed3169c2fa94d470d69" || plan.Corpora[1].GraphCap != 50000000000 || plan.Corpora[1].RouterCap != 50000000000 || plan.Corpora[1].M3Cap != 900000000 || plan.Corpora[1].M8Cap != 1500000000 {
+	if !ok100 || !ok250 || plan.Corpora[0].DatasetSource != "/mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k" || plan.Corpora[0].Dataset != "<campaign-root>/100k/dataset" || plan.Corpora[0].TruthCacheSource != "/mnt/fast4tb/gomap-4027-truth-oracles-a5364e5b/100k/truth-cache" || plan.Corpora[0].TruthCache != "<campaign-root>/100k/truth-cache" || plan.Corpora[0].TruthIdentity != anchor100.Identity || plan.Corpora[0].TruthArtifact != anchor100.ArtifactSHA256 || plan.Corpora[0].TruthSHA != anchor100.TruthSHA256 || plan.Corpora[0].MaxVectors != 100000 || plan.Corpora[0].RouterMaxVectors != 120000 || plan.Corpora[0].MaxFixtureBytes != maxFixtureBytes || plan.Corpora[0].GraphCap != 20000000000 || plan.Corpora[0].RouterCap != 20000000000 || plan.Corpora[1].DatasetSource != "testdata/vector_partition_qualification_embedding_mixture_250k" || plan.Corpora[1].Dataset != "<campaign-root>/250k/dataset" || plan.Corpora[1].TruthCacheSource != "/mnt/fast4tb/gomap-4027-truth-oracles-a5364e5b/250k/truth-cache" || plan.Corpora[1].TruthCache != "<campaign-root>/250k/truth-cache" || plan.Corpora[1].TruthIdentity != anchor250.Identity || plan.Corpora[1].TruthArtifact != anchor250.ArtifactSHA256 || plan.Corpora[1].TruthSHA != anchor250.TruthSHA256 || plan.Corpora[1].Vectors != 250000 || plan.Corpora[1].MaxVectors != 250000 || plan.Corpora[1].RouterMaxVectors != 300000 || plan.Corpora[1].MaxFixtureBytes != maxFixtureBytes || plan.Corpora[1].Checksum != "d0c7c82ba868853aae9a4280161003d72714ad1701d41ed3169c2fa94d470d69" || plan.Corpora[1].GraphCap != 50000000000 || plan.Corpora[1].RouterCap != 50000000000 || plan.Corpora[1].M3Cap != 900000000 || plan.Corpora[1].M8Cap != 1500000000 {
 		t.Fatalf("250k plan=%+v", plan.Corpora[1])
 	}
 	if !strings.Contains(plan.Commands["stage_dataset"], "<dataset-source>/fixture_manifest.json") || !strings.Contains(plan.Commands["stage_existing_truth_cache"], "<truth-cache-source>/m8_canonical_truth_<truth-cache-identity>.json") {
@@ -1102,8 +1125,8 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 	if !strings.Contains(plan.Commands["m3_graph_disjoint"], "-partition-max-distance-work <graph-cap>") || !strings.Contains(plan.Commands["m3_graph_disjoint"], "-router-max-scalar-work <router-cap>") || !strings.Contains(plan.Commands["m3_graph_overlap"], "-partition-max-distance-work <graph-cap>") || !strings.Contains(plan.Commands["m3_graph_overlap"], "-router-max-scalar-work <router-cap>") || !strings.Contains(plan.Commands["m3_stable_hash_disjoint"], "-partition-max-distance-work <graph-cap>") || !strings.Contains(plan.Commands["m3_stable_hash_disjoint"], "-router-max-scalar-work <router-cap>") {
 		t.Fatalf("graph commands do not bind corpus-specific scalar cap: %+v", plan.Commands)
 	}
-	for _, command := range []string{plan.Commands["m3_graph_disjoint"], plan.Commands["m3_graph_overlap"], plan.Commands["m3_stable_hash_disjoint"], plan.Commands["m8_matrix_repeats_full_ladder"]} {
-		if !strings.Contains(command, "-max-vectors <max-vectors>") || !strings.Contains(command, "-max-fixture-bytes <max-fixture-bytes>") {
+	for _, command := range []string{plan.Commands["m3_graph_disjoint"], plan.Commands["m3_graph_overlap"], plan.Commands["m3_stable_hash_disjoint"]} {
+		if !strings.Contains(command, "-max-vectors <max-vectors>") || !strings.Contains(command, "-router-max-vectors <router-max-vectors>") || !strings.Contains(command, "-max-fixture-bytes <max-fixture-bytes>") {
 			t.Fatalf("plan command does not bind fixture admission caps: %q", command)
 		}
 	}
@@ -1116,7 +1139,7 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 		if !ok {
 			t.Fatalf("missing expected M3 config for %dk", corpus.Vectors)
 		}
-		replace := strings.NewReplacer("<campaign-root>", t.TempDir(), "<corpus>", corpus.ID, "<dataset>", t.TempDir(), "<graph-cap>", strconv.FormatInt(corpus.GraphCap, 10), "<router-cap>", strconv.FormatInt(corpus.RouterCap, 10), "<m3-cap>", strconv.FormatInt(corpus.M3Cap, 10), "<max-vectors>", strconv.Itoa(corpus.MaxVectors), "<max-fixture-bytes>", strconv.FormatInt(corpus.MaxFixtureBytes, 10), "<seed>", strconv.FormatInt(map[int]int64{100000: 4017, 250000: 4016}[corpus.Vectors], 10), "/mnt/fast4tb/gomap-4024-kahip-3.25/bin/python", os.Args[0], "scripts/treedb_kahip_partition.py", script)
+		replace := strings.NewReplacer("<campaign-root>", t.TempDir(), "<corpus>", corpus.ID, "<dataset>", t.TempDir(), "<graph-cap>", strconv.FormatInt(corpus.GraphCap, 10), "<router-cap>", strconv.FormatInt(corpus.RouterCap, 10), "<router-max-vectors>", strconv.Itoa(corpus.RouterMaxVectors), "<m3-cap>", strconv.FormatInt(corpus.M3Cap, 10), "<max-vectors>", strconv.Itoa(corpus.MaxVectors), "<max-fixture-bytes>", strconv.FormatInt(corpus.MaxFixtureBytes, 10), "<seed>", strconv.FormatInt(map[int]int64{100000: 4017, 250000: 4016}[corpus.Vectors], 10), "/mnt/fast4tb/gomap-4024-kahip-3.25/bin/python", os.Args[0], "scripts/treedb_kahip_partition.py", script)
 		for _, name := range []string{"m3_graph_disjoint", "m3_graph_overlap", "m3_stable_hash_disjoint"} {
 			args := strings.Fields(replace.Replace(plan.Commands[name]))
 			cfg, err := parseConfig(args[1:])

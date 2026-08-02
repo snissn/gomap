@@ -3107,6 +3107,18 @@ func TestExplicitPartitionCapacityOverridesV1(t *testing.T) {
 	if got, want := cfg.routerConfig.MaxScalarWork, int64(50_000_000_000); got != want {
 		t.Fatalf("Router MaxScalarWork=%d want %d", got, want)
 	}
+	if got, want := cfg.routerConfig.MaxVectors, cfg.maxVectors; got != want {
+		t.Fatalf("Router MaxVectors=%d want inherited %d", got, want)
+	}
+	routerCfg, err := parseConfig(args("-router-max-vectors", "120000"))
+	if err != nil || routerCfg.routerConfig.MaxVectors != 120000 {
+		t.Fatalf("explicit router membership cap cfg=%+v err=%v", routerCfg.routerConfig, err)
+	}
+	for _, value := range []string{"0", "-1", "1200001"} {
+		if _, err := parseConfig(args("-router-max-vectors", value)); err == nil || !strings.Contains(err.Error(), "router max vectors") {
+			t.Fatalf("router membership cap %s error=%v", value, err)
+		}
+	}
 	if _, err := parseConfig(args("-router-max-scalar-work", "50000000001")); err == nil || !strings.Contains(err.Error(), "router max scalar work") {
 		t.Fatalf("router scalar hard-cap error=%v", err)
 	}

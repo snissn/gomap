@@ -815,6 +815,7 @@ func parseConfig(args []string) (config, error) {
 	cfg.m8ShardLimits.MaxCandidateBytes = m8ProductionCandidateBudgetBytesV1
 	var probes, overlap, concurrency, efSearch, m8VariantDBs string
 	var stages string
+	var routerMaxVectors int
 	fs := flag.NewFlagSet("treedb_vector_partition_bench", flag.ContinueOnError)
 	fs.StringVar(&cfg.dataset, "dataset", "", "fixture directory")
 	fs.IntVar(&cfg.partitions, "partitions", 0, "logical partition count")
@@ -862,6 +863,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.routerConfig.RepresentativesPerPartition, "router-representatives", cfg.routerConfig.RepresentativesPerPartition, "router representative budget per partition")
 	fs.IntVar(&cfg.routerConfig.MaxDepth, "router-max-depth", cfg.routerConfig.MaxDepth, "router hierarchy depth bound")
 	fs.IntVar(&cfg.routerConfig.MaxIterations, "router-max-iterations", cfg.routerConfig.MaxIterations, "router Lloyd iteration bound")
+	fs.IntVar(&routerMaxVectors, "router-max-vectors", 0, "router final-membership cap; zero inherits -max-vectors")
 	fs.Int64Var(&cfg.routerConfig.MaxScalarWork, "router-max-scalar-work", cfg.routerConfig.MaxScalarWork, "offline router scalar-work cap (1..50000000000)")
 	fs.Uint64Var(&cfg.routerConfig.MaxRouterBytes, "router-max-bytes", cfg.routerConfig.MaxRouterBytes, "hard conservative persisted router-pack byte cap")
 	fs.IntVar(&cfg.routerCandidates, "router-candidates", cfg.routerCandidates, "explicit approximate representative candidate budget")
@@ -872,10 +874,13 @@ func parseConfig(args []string) (config, error) {
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
-	routerCandidatesSet := false
+	routerCandidatesSet, routerMaxVectorsSet := false, false
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "router-candidates" {
+		switch f.Name {
+		case "router-candidates":
 			routerCandidatesSet = true
+		case "router-max-vectors":
+			routerMaxVectorsSet = true
 		}
 	})
 	if fs.NArg() != 0 {
@@ -1107,7 +1112,11 @@ func parseConfig(args []string) (config, error) {
 	cfg.partition.Partitions = cfg.partitions
 	cfg.partition.MaxVectors = cfg.maxVectors
 	cfg.routerConfig.Seed = cfg.seed
-	cfg.routerConfig.MaxVectors = cfg.maxVectors
+	if routerMaxVectorsSet {
+		cfg.routerConfig.MaxVectors = routerMaxVectors
+	} else {
+		cfg.routerConfig.MaxVectors = cfg.maxVectors
+	}
 	cfg.routerConfig.MaxDimensions = maxDimensions
 	cfg.routerConfig.MaxRepresentatives = maxVectors
 	if err := vectorpartition.ValidateRouterConfigV1(cfg.routerConfig); err != nil {

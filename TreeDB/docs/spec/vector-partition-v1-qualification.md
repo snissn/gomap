@@ -127,3 +127,7 @@ canonical path. Child and matrix evidence bind its byte digest as well as Go
 build metadata (benchmark main package, recorded head revision, and an
 unmodified build); the aggregate requires that one digest for both corpora and
 all repeats. Ephemeral `go run` executables are not final replay evidence.
+
+`-max-vectors` remains the source-fixture admission cap. Each frozen M3 command
+also carries `-router-max-vectors`: 120000 for 100k and 300000 for 250k, which
+reserves the full 0.20-overlap final-membership shape for all three variants.

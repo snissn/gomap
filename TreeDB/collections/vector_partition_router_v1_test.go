@@ -312,7 +312,10 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 	cfg.RepresentativesPerPartition = 2
 	cfg.MaxDepth = 4
 	cfg.MaxIterations = 8
-	cfg.MaxVectors = 100
+	// The overlap membership is a second final placement for one source row.
+	// Building succeeds at that exact expanded bound, while the cap-1 build
+	// below must fail before publication.
+	cfg.MaxVectors = len(building.Memberships) + len(building.OverlapMemberships)
 	cfg.MaxDimensions = 8
 	cfg.MaxRepresentatives = 100
 	cfg.MaxScalarWork = 50_000_000_000
@@ -381,6 +384,11 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 	duplicate[0].Vectors[1] = duplicate[0].Vectors[0]
 	if _, err := collection.BuildAndPublishVectorPartitionRouterV1(context.Background(), building, duplicate, buildOptions); err == nil {
 		t.Fatal("duplicate primary router vector was accepted")
+	}
+	membershipCappedOptions := buildOptions
+	membershipCappedOptions.Config.MaxVectors = len(building.Memberships) + len(building.OverlapMemberships) - 1
+	if _, err := collection.BuildAndPublishVectorPartitionRouterV1(context.Background(), building, partitions, membershipCappedOptions); err == nil {
+		t.Fatal("final-membership cap below the overlap-expanded shape was accepted")
 	}
 	cappedOptions := buildOptions
 	cappedOptions.Config.MaxRouterBytes = 1
