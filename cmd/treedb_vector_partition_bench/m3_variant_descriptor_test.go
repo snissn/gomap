@@ -19,7 +19,7 @@ func testM3VariantDescriptorV1(dir string) m3VariantDescriptorV1 {
 		FixtureChecksum: hash, ArtifactSHA256: hash, GraphArtifactSHA256: hash, ArtifactBackend: "reference", Source: vectorpartition.Source{SourceID: "fixture", Checksum: hash, Vectors: 8, Dimensions: 2, Metric: "cosine"},
 		DatabaseDirectory: dir, ManifestIntegrity: hash, ReadySetDigest: hash, RouterAssetChecksum: hash, RouterModelDigest: hash,
 		SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRows: 8, PartitionGeneration: 4, RouterGeneration: 4,
-		Partitions: 4, IndexDefinitionDigest: hash, PartitionHNSWM: 16, PartitionMaxDistanceWork: 20_000_000_000, RouterMaxScalarWork: 20_000_000_000, Capacity: 3, OverlapRequested: 1, OverlapRealized: 1, OverlapRejected: 0, OverlapUseful: 1, OverlapUnusedCapacity: 3, EdgeCutBefore: 2, EdgeCutAfter: 1, PartitionLoads: []int{3, 2, 2, 2}, OverlapMemberships: 1, PersistentAssetBytes: 1024,
+		Partitions: 4, IndexDefinitionDigest: hash, PartitionHNSWM: 16, PartitionMaxDistanceWork: 20_000_000_000, RouterMaxScalarWork: 20_000_000_000, RouterRepresentatives: 4, Capacity: 3, OverlapRequested: 1, OverlapRealized: 1, OverlapRejected: 0, OverlapUseful: 1, OverlapUnusedCapacity: 3, EdgeCutBefore: 2, EdgeCutAfter: 1, PartitionLoads: []int{3, 2, 2, 2}, OverlapMemberships: 1, PersistentAssetBytes: 1024,
 	}
 	d.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(d)
 	d.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: 3, Budget: 1, Realized: 1, BuildIdentityDigest: d.BuildIdentityDigest})
@@ -36,7 +36,7 @@ func TestM3VariantDescriptorRoundTripAndImmutableCreateV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.VariantID != want.VariantID || got.ReadySetDigest != want.ReadySetDigest || got.PartitionMaxDistanceWork != want.PartitionMaxDistanceWork || got.RouterMaxScalarWork != want.RouterMaxScalarWork || len(got.PartitionLoads) != 4 {
+	if got.VariantID != want.VariantID || got.ReadySetDigest != want.ReadySetDigest || got.PartitionMaxDistanceWork != want.PartitionMaxDistanceWork || got.RouterMaxScalarWork != want.RouterMaxScalarWork || got.RouterRepresentatives != want.RouterRepresentatives || len(got.PartitionLoads) != 4 {
 		t.Fatalf("descriptor=%+v", got)
 	}
 	if err := m3WriteVariantDescriptorV1(dir, want); err == nil {
@@ -190,6 +190,7 @@ func TestM3VariantDescriptorBindsReadyManifestV1(t *testing.T) {
 		SourceGeneration:      d.SourceGeneration, SourceChecksum: d.SourceChecksum, SourceSchemaHash: d.SourceSchemaHash, SourceRowCount: d.SourceRows,
 		Generation: d.PartitionGeneration, RouterGeneration: d.RouterGeneration, PartitionCount: d.Partitions, BalancePolicy: d.OverlapPolicy,
 		Memberships:        []collections.VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 1, PartitionID: 0}, {VectorOrdinal: 2, PartitionID: 1}, {VectorOrdinal: 3, PartitionID: 1}, {VectorOrdinal: 4, PartitionID: 2}, {VectorOrdinal: 5, PartitionID: 2}, {VectorOrdinal: 6, PartitionID: 3}, {VectorOrdinal: 7, PartitionID: 3}},
+		Representatives:    []collections.VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 2, PartitionID: 1}, {VectorOrdinal: 4, PartitionID: 2}, {VectorOrdinal: 6, PartitionID: 3}},
 		OverlapMemberships: []collections.VectorPartitionMembershipV1{{VectorOrdinal: 7, PartitionID: 0}},
 		Assets:             []collections.VectorPartitionAssetV1{{Bytes: 200}, {Bytes: 200}, {Bytes: 200}, {Bytes: 200}},
 	}

@@ -689,6 +689,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 			PartitionHNSWM:           partitionHNSWM,
 			PartitionMaxDistanceWork: cfg.partition.MaxDistanceWork,
 			RouterMaxScalarWork:      cfg.routerConfig.MaxScalarWork,
+			RouterRepresentatives:    routerRuntime.Representatives,
 			PersistentAssetBytes:     packPayloadBytes + manifest.RouterAsset.Bytes,
 		}
 		if err := m3DescriptorMatchesManifestV1(descriptor, fixture, manifest, routerRuntime.ModelDigest); err != nil {

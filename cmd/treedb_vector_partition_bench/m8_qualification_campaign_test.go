@@ -75,8 +75,8 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	t.Run("execution_identity_whitespace", func(t *testing.T) {
 		matrix := testM8QualificationMatrixV1(t, head, fixture, 120, true)
 		testM8QualificationExecutionIDsV1(&matrix, 0)
-		matrix.Variants[0].ExecutionID += " "
 		testM8QualificationProfilesV1(t, root, "execution-id-whitespace", &matrix)
+		matrix.Variants[0].ExecutionID += " "
 		raw, err := json.Marshal(matrix)
 		if err != nil {
 			t.Fatal(err)
@@ -92,7 +92,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			t.Fatal("accepted whitespace execution identity")
 		}
 	})
-	t.Run("reserialized_execution_identity_copy", func(t *testing.T) {
+	t.Run("reserialized_reidentified_profile_copy", func(t *testing.T) {
 		var copied m8ProductionMatrixV1
 		original, err := os.ReadFile(filepath.Join(root, campaign.Runs[1].Path))
 		if err != nil {
@@ -100,6 +100,14 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		}
 		if err := json.Unmarshal(original, &copied); err != nil {
 			t.Fatal(err)
+		}
+		for i := range copied.Variants {
+			copied.Variants[i].ExecutionID = strings.Repeat(string("abc"[i]), 32)
+			digest, err := m8ProductionExecutionEvidenceDigestV1(copied.Variants[i].ExecutionID, copied.Variants[i].Profiles.Artifacts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			copied.Variants[i].ExecutionEvidenceDigest = digest
 		}
 		raw, err := json.MarshalIndent(copied, "", "  ")
 		if err != nil {
@@ -112,8 +120,73 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		bad := campaign
 		bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
 		bad.Runs[2] = m8QualificationCampaignRunV1{Path: "execution-id-copy.json", SHA256: hex.EncodeToString(digest[:])}
-		if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil || !strings.Contains(err.Error(), "reuses execution identity") {
+		if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil || !strings.Contains(err.Error(), "reuses profile artifact set") {
 			t.Fatalf("reserialized copy err=%v", err)
+		}
+	})
+	t.Run("tampered_execution_evidence_digest", func(t *testing.T) {
+		matrix := testM8QualificationMatrixV1(t, head, fixture, 120, true)
+		testM8QualificationExecutionIDsV1(&matrix, 0)
+		testM8QualificationProfilesV1(t, root, "execution-evidence-tamper", &matrix)
+		matrix.Variants[0].ExecutionEvidenceDigest = strings.Repeat("0", 64)
+		raw, err := json.Marshal(matrix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "execution-evidence-tamper.json"), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(raw)
+		bad := campaign
+		bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
+		bad.Runs[0] = m8QualificationCampaignRunV1{Path: "execution-evidence-tamper.json", SHA256: hex.EncodeToString(digest[:])}
+		if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
+			t.Fatal("accepted tampered execution evidence digest")
+		}
+	})
+	t.Run("profile_reuse_across_variants", func(t *testing.T) {
+		matrix := testM8QualificationMatrixV1(t, head, fixture, 120, true)
+		testM8QualificationExecutionIDsV1(&matrix, 0)
+		testM8QualificationProfilesV1(t, root, "profile-reuse-variants", &matrix)
+		matrix.Variants[1].Profiles = matrix.Variants[0].Profiles
+		digest, err := m8ProductionExecutionEvidenceDigestV1(matrix.Variants[1].ExecutionID, matrix.Variants[1].Profiles.Artifacts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		matrix.Variants[1].ExecutionEvidenceDigest = digest
+		raw, err := json.Marshal(matrix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "profile-reuse-variants.json"), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		digest256 := sha256.Sum256(raw)
+		bad := campaign
+		bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
+		bad.Runs[0] = m8QualificationCampaignRunV1{Path: "profile-reuse-variants.json", SHA256: hex.EncodeToString(digest256[:])}
+		if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil || !strings.Contains(err.Error(), "reuses profile artifact set") {
+			t.Fatalf("profile reuse err=%v", err)
+		}
+	})
+	t.Run("forged_router_representative_count", func(t *testing.T) {
+		matrix := testM8QualificationMatrixV1(t, head, fixture, 120, true)
+		testM8QualificationExecutionIDsV1(&matrix, 0)
+		testM8QualificationProfilesV1(t, root, "router-count-forgery", &matrix)
+		matrix.Variants[0].RouterRepresentatives++
+		raw, err := json.Marshal(matrix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "router-count-forgery.json"), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(raw)
+		bad := campaign
+		bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
+		bad.Runs[0] = m8QualificationCampaignRunV1{Path: "router-count-forgery.json", SHA256: hex.EncodeToString(digest[:])}
+		if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
+			t.Fatal("accepted forged router representative count")
 		}
 	})
 	invalid := testM8QualificationMatrixV1(t, head, fixture, 120, true)
@@ -469,6 +542,7 @@ func testM8QualificationReportV1(t *testing.T, head string, fixture fixtureManif
 		rows = append(rows, row(probes, qps))
 	}
 	report := m8ProductionReportV1{SchemaVersion: 3, ResultKind: "m8_production_multi_group_evidence_v3", Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true, GeneratedAt: time.Now(), ExecutionID: strings.Repeat("f", 32), Command: []string{"m8-test"}, BaseSHA: head, HeadSHA: head, GoVersion: "go1.test", GOOS: "linux", GOARCH: "amd64", LogicalCPUs: 1, GOMAXPROCS: 1, GoMemoryLimitBytes: 1, Host: m8ProductionHostEvidenceV1{CPUModel: "test"}, Dataset: fixture, Variant: &descriptor, Config: m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16, Probes: rowProbes, Overlap: []float64{descriptor.OverlapRatio}, TopK: 10, RecallTarget: .90, Concurrency: []int{1}, Warmup: 0, EffectiveWarmup: 0, EfSearch: []int{64}, RouterCandidates: 64, MaxExactTruthVisits: m8QualificationExactTruthCapV1(fixture), Seed: fixture.Seed}, BuildNanos: 1, Topology: nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{Network: "tcp_loopback_serialized_m5_v1", LifecycleState: "active", ReadySetDigest: strings.Repeat("c", 64), MetaGroup: "meta", MetaLeader: "meta-leader", MetaNodes: []string{"meta-a", "meta-b", "meta-c"}, MaxConcurrentShardRequests: 1, Groups: []nativewire.VectorPartitionM8ProductionGroupEvidenceV1{group("group-a"), group("group-b"), group("group-c"), group("group-d")}}, RouterSessions: m8ProductionRouterSessionEvidenceV1{AfterWarmup: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{warm}, AfterMeasured: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{measured}}, Rows: rows, PackDiagnostics: diagnostics, UntimedBoundary: m8ProductionResourceBoundaryV1{SelectedPartitions: 16, EfSearch: 10, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 1, RPCs: 1, RequestBytes: 1, ShardPartitions: 1, ShardRequestBytes: 1}}, Failure: m8ProductionFailureEvidenceV1{Passed: true, Error: "unavailable", ResourceBoundary: m8ProductionFaultResourceBoundaryV1{SelectedPartitions: 16, EfSearch: 4096, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 1, RPCs: 1, RequestBytes: 1, ShardPartitions: 1, ShardRequestBytes: 1}}}, GateLedger: m8ProductionGateLedgerV1{ExhaustiveParity: "pass", FailureHonesty: "pass", PartitionPackReachability: "pass", Recall: "pass", ProbeReduction: "pass", EndToEndQPS: "pass", TailLatency: "pass", Balance: "pass", ResourceBounds: "pass"}, Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1, PersistentAssetCap: m8QualificationPersistentAssetCapBytesV1, PartitionLoads: loads, PeakRSSBytes: 1, PeakRSSCapBytes: m8QualificationPeakRSSCapBytesV1, PeakRSSMeasured: true, PeakRSSScope: m8PeakRSSScopeV1, OverlapMemberships: wantOverlap, MaxPartitionLoad: uint64((fixture.Vectors + wantOverlap + 15) / 16), BalanceHardCap: uint64((fixture.Vectors + wantOverlap + 15) / 16), LimitComparisons: []m8ProductionResourceLimitComparisonV1{{Name: "test", Configured: 1, Passed: true}}}, TruthCache: m8TruthCacheEvidenceV1{Status: "computed", Identity: m8TruthCacheIdentityV1(fixture, 10), ArtifactSHA256: strings.Repeat("d", 64), ComputeNanos: 1}, TimedBoundary: "measured", Limitations: []string{"test"}}
+	report.RouterRepresentatives = descriptor.RouterRepresentatives
 	report.Topology.ReadySetDigest = descriptor.ReadySetDigest
 	testM8BindRouterSessionsVariantV1(&report.RouterSessions, descriptor)
 	testM8CompleteResourceLimitsV1(t, &report)
@@ -510,5 +584,10 @@ func testM8QualificationProfilesV1(t *testing.T, root, run string, matrix *m8Pro
 			captured[i] = artifacts[i].Path
 		}
 		report.Profiles = m8ProductionProfileEvidenceV1{Directory: directory, Captured: captured, Artifacts: artifacts, Status: "captured_production_query_and_fault_boundary", Scope: "test profile capture"}
+		digest, err := m8ProductionExecutionEvidenceDigestV1(report.ExecutionID, artifacts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		report.ExecutionEvidenceDigest = digest
 	}
 }

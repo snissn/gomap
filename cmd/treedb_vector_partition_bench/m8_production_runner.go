@@ -58,40 +58,42 @@ type m8TruthCacheFileV1 struct {
 }
 
 type m8ProductionReportV1 struct {
-	SchemaVersion      int                                                        `json:"schema_version"`
-	ResultKind         string                                                     `json:"result_kind"`
-	Status             string                                                     `json:"status"`
-	Mode               string                                                     `json:"mode"`
-	ProductionEvidence bool                                                       `json:"production_evidence"`
-	GeneratedAt        time.Time                                                  `json:"generated_at"`
-	ExecutionID        string                                                     `json:"execution_id"`
-	Command            []string                                                   `json:"exact_command"`
-	BaseSHA            string                                                     `json:"base_sha"`
-	HeadSHA            string                                                     `json:"head_sha"`
-	Dirty              bool                                                       `json:"dirty"`
-	GoVersion          string                                                     `json:"go_version"`
-	GOOS               string                                                     `json:"goos"`
-	GOARCH             string                                                     `json:"goarch"`
-	LogicalCPUs        int                                                        `json:"logical_cpus"`
-	GOMAXPROCS         int                                                        `json:"gomaxprocs"`
-	GoMemoryLimitBytes int64                                                      `json:"go_memory_limit_bytes"`
-	Host               m8ProductionHostEvidenceV1                                 `json:"host"`
-	Dataset            fixtureManifest                                            `json:"dataset"`
-	Variant            *m3VariantDescriptorV1                                     `json:"variant,omitempty"`
-	Config             m8ProductionConfigEvidenceV1                               `json:"config"`
-	BuildNanos         int64                                                      `json:"build_nanos"`
-	Topology           nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1 `json:"topology"`
-	Rows               []m8ProductionRowV1                                        `json:"rows"`
-	PackDiagnostics    []m8PartitionPackDiagnosticsV1                             `json:"partition_pack_diagnostics,omitempty"`
-	Failure            m8ProductionFailureEvidenceV1                              `json:"failure"`
-	GateLedger         m8ProductionGateLedgerV1                                   `json:"gate_ledger"`
-	Profiles           m8ProductionProfileEvidenceV1                              `json:"profiles"`
-	RouterSessions     m8ProductionRouterSessionEvidenceV1                        `json:"router_sessions"`
-	UntimedBoundary    m8ProductionResourceBoundaryV1                             `json:"untimed_resource_boundary"`
-	Resources          m8ProductionResourceEvidenceV1                             `json:"resources"`
-	TruthCache         m8TruthCacheEvidenceV1                                     `json:"canonical_truth_cache"`
-	TimedBoundary      string                                                     `json:"timed_boundary"`
-	Limitations        []string                                                   `json:"limitations"`
+	SchemaVersion           int                                                        `json:"schema_version"`
+	ResultKind              string                                                     `json:"result_kind"`
+	Status                  string                                                     `json:"status"`
+	Mode                    string                                                     `json:"mode"`
+	ProductionEvidence      bool                                                       `json:"production_evidence"`
+	GeneratedAt             time.Time                                                  `json:"generated_at"`
+	ExecutionID             string                                                     `json:"execution_id"`
+	ExecutionEvidenceDigest string                                                     `json:"execution_evidence_digest,omitempty"`
+	RouterRepresentatives   uint64                                                     `json:"router_representatives"`
+	Command                 []string                                                   `json:"exact_command"`
+	BaseSHA                 string                                                     `json:"base_sha"`
+	HeadSHA                 string                                                     `json:"head_sha"`
+	Dirty                   bool                                                       `json:"dirty"`
+	GoVersion               string                                                     `json:"go_version"`
+	GOOS                    string                                                     `json:"goos"`
+	GOARCH                  string                                                     `json:"goarch"`
+	LogicalCPUs             int                                                        `json:"logical_cpus"`
+	GOMAXPROCS              int                                                        `json:"gomaxprocs"`
+	GoMemoryLimitBytes      int64                                                      `json:"go_memory_limit_bytes"`
+	Host                    m8ProductionHostEvidenceV1                                 `json:"host"`
+	Dataset                 fixtureManifest                                            `json:"dataset"`
+	Variant                 *m3VariantDescriptorV1                                     `json:"variant,omitempty"`
+	Config                  m8ProductionConfigEvidenceV1                               `json:"config"`
+	BuildNanos              int64                                                      `json:"build_nanos"`
+	Topology                nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1 `json:"topology"`
+	Rows                    []m8ProductionRowV1                                        `json:"rows"`
+	PackDiagnostics         []m8PartitionPackDiagnosticsV1                             `json:"partition_pack_diagnostics,omitempty"`
+	Failure                 m8ProductionFailureEvidenceV1                              `json:"failure"`
+	GateLedger              m8ProductionGateLedgerV1                                   `json:"gate_ledger"`
+	Profiles                m8ProductionProfileEvidenceV1                              `json:"profiles"`
+	RouterSessions          m8ProductionRouterSessionEvidenceV1                        `json:"router_sessions"`
+	UntimedBoundary         m8ProductionResourceBoundaryV1                             `json:"untimed_resource_boundary"`
+	Resources               m8ProductionResourceEvidenceV1                             `json:"resources"`
+	TruthCache              m8TruthCacheEvidenceV1                                     `json:"canonical_truth_cache"`
+	TimedBoundary           string                                                     `json:"timed_boundary"`
+	Limitations             []string                                                   `json:"limitations"`
 }
 
 type m8ProductionConfigEvidenceV1 struct {
@@ -401,8 +403,8 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	report := m8ProductionReportV1{
 		SchemaVersion: 3, ResultKind: "m8_production_multi_group_evidence_v3", Status: "incomplete",
 		Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true, GeneratedAt: time.Now().UTC(),
-		ExecutionID: executionID,
-		Command:     cfg.command, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dirty: m8GitDirtyV1(cfg.out, cfg.profiles, cfg.m8MatrixOut, cfg.m8MatrixProfiles),
+		ExecutionID: executionID, RouterRepresentatives: assets.status.Representatives,
+		Command: cfg.command, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dirty: m8GitDirtyV1(cfg.out, cfg.profiles, cfg.m8MatrixOut, cfg.m8MatrixProfiles),
 		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), GOMAXPROCS: goMaxProcs, GoMemoryLimitBytes: goMemoryLimitBytes, Host: m8ProductionHostV1(cfg, assets.dir), Dataset: fixture, Variant: assets.descriptor,
 		Config:        m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), RouterCandidates: cfg.routerCandidates, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed},
 		BuildNanos:    buildNanos,
@@ -486,6 +488,11 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 			return fmt.Errorf("resolve M8 profiles directory: %w", directoryErr)
 		}
 		report.Profiles = m8ProductionProfileEvidenceV1{Directory: directory, Captured: captured, Artifacts: artifacts, Status: "captured_production_query_and_fault_boundary", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs.pprof is cumulative and must be compared with allocs_baseline.pprof"}
+		evidenceDigest, digestErr := m8ProductionExecutionEvidenceDigestV1(report.ExecutionID, artifacts)
+		if digestErr != nil {
+			return digestErr
+		}
+		report.ExecutionEvidenceDigest = evidenceDigest
 	}
 	allUntimed := m8MergeProductionResourceBoundariesV1(report.UntimedBoundary, report.Failure.ResourceBoundary)
 
@@ -606,6 +613,55 @@ func validM8ProductionExecutionIDV1(id string) bool {
 	}
 	bytes, err := hex.DecodeString(id)
 	return err == nil && len(bytes) == m8ProductionExecutionIDBytesV1 && hex.EncodeToString(bytes) == id
+}
+
+func m8ProductionProfileSetDigestV1(artifacts []m8ProductionProfileArtifactV1) (string, error) {
+	byName := make(map[string]m8ProductionProfileArtifactV1, len(artifacts))
+	for _, artifact := range artifacts {
+		name := filepath.Base(artifact.Path)
+		if artifact.Path == "" || artifact.Bytes <= 0 || !m8QualificationSHA256V1(artifact.SHA256) || byName[name].Path != "" {
+			return "", errors.New("invalid M8 profile artifact identity")
+		}
+		byName[name] = artifact
+	}
+	type profileIdentity struct {
+		Name   string
+		Bytes  int64
+		SHA256 string
+	}
+	ordered := make([]profileIdentity, 0, len(m8ProfileArtifactNamesV1))
+	for _, name := range m8ProfileArtifactNamesV1 {
+		artifact, ok := byName[name]
+		if !ok {
+			return "", errors.New("incomplete M8 profile artifact identity")
+		}
+		ordered = append(ordered, profileIdentity{Name: name, Bytes: artifact.Bytes, SHA256: artifact.SHA256})
+	}
+	if len(byName) != len(ordered) {
+		return "", errors.New("unexpected M8 profile artifact identity")
+	}
+	raw, err := json.Marshal(ordered)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(raw)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func m8ProductionExecutionEvidenceDigestV1(executionID string, artifacts []m8ProductionProfileArtifactV1) (string, error) {
+	if !validM8ProductionExecutionIDV1(executionID) {
+		return "", errors.New("invalid M8 execution identity")
+	}
+	profileDigest, err := m8ProductionProfileSetDigestV1(artifacts)
+	if err != nil {
+		return "", err
+	}
+	raw, err := json.Marshal(struct{ ExecutionID, ProfileSetDigest string }{executionID, profileDigest})
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(raw)
+	return hex.EncodeToString(digest[:]), nil
 }
 
 func m8ArtifactNameV1(cfg config, fixture fixtureManifest, manifest collections.VectorPartitionManifestV1, executionID string) (string, error) {
@@ -2285,7 +2341,7 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	add("coordinator_rpcs_across_shard_requests", configuredRPCs, observed.RPCs, "count", rpcsOK)
 	add("coordinator_retries_across_shard_requests", configuredRetries, observed.Retries, "count", retriesOK)
 	add("coordinator_redirects_across_shard_requests", configuredRedirects, observed.Redirects, "count", redirectsOK)
-	observedRouterCandidates := max(m8ProductionApproximateRouterCandidateBudgetV1(assets, cfg.routerCandidates), m8ProductionRouterCandidateBudgetV1(assets))
+	observedRouterCandidates := assets.status.Representatives
 	add("coordinator_router_candidates", uint64(cfg.m8CoordinatorLimits.MaxRouterCandidates), uint64(observedRouterCandidates), "count", true)
 	add("coordinator_query_bytes", uint64(cfg.m8CoordinatorLimits.MaxQueryBytes), uint64(fixture.Dimensions*4), "bytes", true)
 	add("coordinator_top_k", uint64(cfg.m8CoordinatorLimits.MaxTopK), uint64(cfg.topK), "count", true)
@@ -3003,6 +3059,7 @@ func m8ExpectedResourceLimitObservationsV1(report m8ProductionReportV1) (map[str
 		"coordinator_rpcs_across_shard_requests":         maxima.RPCs,
 		"coordinator_retries_across_shard_requests":      maxima.Retries,
 		"coordinator_redirects_across_shard_requests":    maxima.Redirects,
+		"coordinator_router_candidates":                  report.RouterRepresentatives,
 		"coordinator_query_bytes":                        uint64(report.Dataset.Dimensions * 4),
 		"coordinator_top_k":                              uint64(report.Config.TopK),
 		"coordinator_ef_search":                          efSearch,
@@ -3263,7 +3320,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1, caps m8Production
 		report.GeneratedAt.IsZero() || !validM8ProductionExecutionIDV1(report.ExecutionID) || len(report.Command) == 0 || !validSHA(report.BaseSHA) || !validSHA(report.HeadSHA) ||
 		report.GoVersion == "" || report.GOOS == "" || report.GOARCH == "" || report.LogicalCPUs < 1 || report.GOMAXPROCS < 1 || report.GoMemoryLimitBytes < 1 ||
 		report.Config.RaftGroups < 2 || report.Config.RaftNodesPerGroup != 3 || report.Config.Partitions < 4 || report.Config.Partitions > maxPartitions ||
-		report.Config.Warmup < 0 || report.Config.RouterCandidates < 1 || report.BuildNanos <= 0 || report.TimedBoundary == "" || len(report.Limitations) == 0 {
+		report.Config.Warmup < 0 || report.Config.RouterCandidates < 1 || report.RouterRepresentatives == 0 || report.BuildNanos <= 0 || report.TimedBoundary == "" || len(report.Limitations) == 0 {
 		return errors.New("missing or invalid M8 identity, topology, or timing metadata")
 	}
 	expectedWarmup, _ := m8WarmupCountAndConcurrencyV1(config{warmup: report.Config.Warmup, concurrency: report.Config.Concurrency})
@@ -3279,6 +3336,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1, caps m8Production
 	if report.Variant != nil {
 		if err := validateM3VariantDescriptorV1(*report.Variant); err != nil || len(report.Config.Overlap) != 1 ||
 			report.Config.Overlap[0] != report.Variant.OverlapRatio || report.Variant.FixtureChecksum != report.Dataset.Checksum ||
+			report.Variant.RouterRepresentatives != report.RouterRepresentatives ||
 			uint64(report.Variant.Partitions) != uint64(report.Config.Partitions) || report.Variant.PersistentAssetBytes != report.Resources.PersistentAssetBytes ||
 			report.Topology.ReadySetDigest != report.Variant.ReadySetDigest || !m8RouterSessionsMatchVariantV1(report.RouterSessions, *report.Variant) {
 			return errors.New("M8 report variant identity is not bound to its configuration and resources")
@@ -3376,6 +3434,14 @@ func validateM8ProductionReportV1(report m8ProductionReportV1, caps m8Production
 	}
 	if !validM8ProductionProfilesV1(report.Profiles) {
 		return errors.New("incomplete M8 profile evidence")
+	}
+	if report.Profiles.Status == "captured_production_query_and_fault_boundary" {
+		want, err := m8ProductionExecutionEvidenceDigestV1(report.ExecutionID, report.Profiles.Artifacts)
+		if err != nil || report.ExecutionEvidenceDigest != want {
+			return errors.New("M8 execution identity is not bound to profile artifacts")
+		}
+	} else if report.ExecutionEvidenceDigest != "" {
+		return errors.New("M8 uncaptured profiles have execution evidence digest")
 	}
 	return nil
 }

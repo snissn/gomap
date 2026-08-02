@@ -114,7 +114,8 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 	configs := make(map[string]m8ProductionConfigEvidenceV1, len(m8RequiredVariantIDsV1))
 	routerSessionIdentities := make(map[string]nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1, len(m8RequiredVariantIDsV1))
 	profileModes := make(map[string]m8QualificationProfileModeV1, len(m8RequiredVariantIDsV1))
-	executionIDs := make(map[string]map[string]bool, len(m8RequiredVariantIDsV1))
+	executionIDs := make(map[string]bool, len(campaign.Runs)*len(m8RequiredVariantIDsV1))
+	profileSets := make(map[string]bool, len(campaign.Runs)*len(m8RequiredVariantIDsV1))
 	paths, digests := make(map[string]bool, len(campaign.Runs)), make(map[string]bool, len(campaign.Runs))
 	for runIndex, run := range campaign.Runs {
 		if run.Path == "" || filepath.IsAbs(run.Path) || !m8QualificationSHA256V1(run.SHA256) {
@@ -180,13 +181,10 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 			if report.BaseSHA != campaign.BaseSHA || report.HeadSHA != campaign.HeadSHA || report.Dataset != matrix.Dataset || report.Dirty || !m8QualificationSHA256V1(report.TruthCache.ArtifactSHA256) || report.Variant == nil || seenVariants[report.Variant.VariantID] || !slices.Contains(m8RequiredVariantIDsV1, report.Variant.VariantID) || !m8QualificationSHA256V1(report.Variant.ArtifactSHA256) || !m8QualificationConfigV1(report.Config, report.Dataset, report.Variant.OverlapRatio, runIndex) || !m8QualificationM3BuildCapsV1(*report.Variant, report.Dataset) {
 				return summary, fmt.Errorf("qualification matrix %s has unbound child identity", run.Path)
 			}
-			if executionIDs[report.Variant.VariantID] == nil {
-				executionIDs[report.Variant.VariantID] = make(map[string]bool, len(campaign.Runs))
-			}
-			if executionIDs[report.Variant.VariantID][report.ExecutionID] {
+			if executionIDs[report.ExecutionID] {
 				return summary, fmt.Errorf("qualification matrix %s reuses execution identity", cleanPath)
 			}
-			executionIDs[report.Variant.VariantID][report.ExecutionID] = true
+			executionIDs[report.ExecutionID] = true
 			if !m8QualificationResourcesV1(*report, report.Dataset) {
 				return summary, fmt.Errorf("qualification matrix %s has unbound environment or resources", run.Path)
 			}
@@ -194,6 +192,11 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 			if !ok {
 				return summary, fmt.Errorf("qualification matrix %s has unbound profile capture", cleanPath)
 			}
+			profileSet, err := m8ProductionProfileSetDigestV1(report.Profiles.Artifacts)
+			if err != nil || profileSets[profileSet] {
+				return summary, fmt.Errorf("qualification matrix %s reuses profile artifact set", cleanPath)
+			}
+			profileSets[profileSet] = true
 			if prior, ok := profileModes[report.Variant.VariantID]; ok && prior != profileMode {
 				return summary, fmt.Errorf("qualification matrix %s changes profile capture mode", cleanPath)
 			}
@@ -251,10 +254,8 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 		p4QPS, p16QPS = append(p4QPS, p4.QPS), append(p16QPS, p16.QPS)
 		p4P95, p16P95 = append(p4P95, p4.P95Nanos), append(p16P95, p16.P95Nanos)
 	}
-	for _, variantID := range m8RequiredVariantIDsV1 {
-		if len(executionIDs[variantID]) != len(campaign.Runs) {
-			return summary, errors.New("qualification campaign requires distinct execution identities per variant")
-		}
+	if len(executionIDs) != len(campaign.Runs)*len(m8RequiredVariantIDsV1) {
+		return summary, errors.New("qualification campaign requires distinct execution identities")
 	}
 	minMedianMax := func(values []float64) (float64, float64, float64) {
 		sort.Float64s(values)
