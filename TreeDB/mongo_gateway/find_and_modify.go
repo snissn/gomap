@@ -104,17 +104,11 @@ func (s *Server) findAndModifyResponse(ctx context.Context, command wire.Documen
 			if !errors.Is(err, collections.ErrDocumentExists) {
 				return mongoUpdateWriteCommandError(err)
 			}
-			before, after, matched, err = findAndModifyExisting(col, item)
+			response, err := findAndModifyAfterInsertConflict(col, item, newImage, projection)
 			if err != nil {
 				return mongoUpdateWriteCommandError(err)
 			}
-			if !matched {
-				return marshalFindAndModifyResponse(nil, false, false, bson.RawValue{}, projection)
-			}
-			if newImage {
-				before = after
-			}
-			return marshalFindAndModifyResponse(before, true, false, bson.RawValue{}, projection)
+			return response, nil
 		}
 		if !newImage {
 			doc = nil
@@ -123,6 +117,20 @@ func (s *Server) findAndModifyResponse(ctx context.Context, command wire.Documen
 	}
 	if !matched {
 		return marshalFindAndModifyResponse(nil, false, false, bson.RawValue{}, projection)
+	}
+	if newImage {
+		before = after
+	}
+	return marshalFindAndModifyResponse(before, true, false, bson.RawValue{}, projection)
+}
+
+func findAndModifyAfterInsertConflict(col *collections.Collection, item mongoUpdateItem, newImage bool, projection compiledProjection) (wire.Document, error) {
+	before, after, matched, err := findAndModifyExisting(col, item)
+	if err != nil {
+		return nil, err
+	}
+	if !matched {
+		return nil, errors.New("Mongo gateway findAndModify upsert lost concurrent insert")
 	}
 	if newImage {
 		before = after

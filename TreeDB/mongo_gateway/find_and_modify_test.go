@@ -168,6 +168,55 @@ func TestFindAndModifyConcurrentSameIDUpsertsApplyEveryMutation(t *testing.T) {
 	}
 }
 
+func TestFindAndModifyInsertConflictAppliesToExistingDocument(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 250, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "upsert-race"}, {Key: "n", Value: int32(1)}}}}, {Key: "$db", Value: "app"}}))
+	collection, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "upsert-race"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "upsert", Value: true}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := findAndModifyAfterInsertConflict(collection, item, false, compiledProjection{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOK(t, response)
+	if n, ok := bson.Raw(response).Lookup("value").Document().Lookup("n").Int32OK(); !ok || n != 1 {
+		t.Fatalf("pre-image n=%d ok=%v want 1", n, ok)
+	}
+	last := bson.Raw(response).Lookup("lastErrorObject").Document()
+	if n, ok := last.Lookup("n").Int32OK(); !ok || n != 1 {
+		t.Fatalf("matched n=%d ok=%v want 1", n, ok)
+	}
+	if updated, ok := last.Lookup("updatedExisting").BooleanOK(); !ok || !updated {
+		t.Fatalf("updatedExisting=%v ok=%v want true", updated, ok)
+	}
+	if !last.Lookup("upserted").IsZero() {
+		t.Fatalf("conflict retry unexpectedly reported upserted")
+	}
+	key, _, err := prepareInsertDocument(mustDocument(t, bson.D{{Key: "_id", Value: "upsert-race"}}), collections.DocumentFormatBSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := collection.Get(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, ok := bson.Raw(stored).Lookup("n").Int32OK(); !ok || n != 2 {
+		t.Fatalf("stored n=%d ok=%v want 2", n, ok)
+	}
+}
+
 func TestFindAndModifyNoMatchAndUpsert(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
