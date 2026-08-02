@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -5787,6 +5788,33 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 	if scalar, ok = indexScalarForBSONValue(decimalTenthValue, collections.IndexValueDouble); ok {
 		t.Fatalf("non-exact decimal double scalar=%v ok=%v want not indexable", scalar, ok)
 	}
+}
+
+func TestRawValuesEqualHandlesDeepNestedBSON(t *testing.T) {
+	const depth = 10000
+	left := deeplyNestedRawDocumentValue(depth, int32(1))
+	right := deeplyNestedRawDocumentValue(depth, int32(1))
+	different := deeplyNestedRawDocumentValue(depth, int32(2))
+	if !rawValuesEqual(left, right) || rawValuesEqual(left, different) {
+		t.Fatal("deep BSON equality result was incorrect")
+	}
+}
+
+func deeplyNestedRawDocumentValue(depth int, leaf int32) bson.RawValue {
+	value := make([]byte, 12)
+	binary.LittleEndian.PutUint32(value, uint32(len(value)))
+	value[4] = byte(bson.TypeInt32)
+	value[5] = 'v'
+	binary.LittleEndian.PutUint32(value[7:], uint32(leaf))
+	for range depth {
+		nested := make([]byte, 8+len(value))
+		binary.LittleEndian.PutUint32(nested, uint32(len(nested)))
+		nested[4] = byte(bson.TypeEmbeddedDocument)
+		nested[5] = 'v'
+		copy(nested[7:], value)
+		value = nested
+	}
+	return bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: value}
 }
 
 func TestMongoMutationAddToSetDistinguishesNonFiniteDecimal128(t *testing.T) {

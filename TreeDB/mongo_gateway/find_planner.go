@@ -1779,44 +1779,63 @@ func dottedArrayIndex(part string) (int, bool) {
 }
 
 func rawValuesEqual(left, right bson.RawValue) bool {
+	if left.Type != bson.TypeEmbeddedDocument && left.Type != bson.TypeArray && right.Type != bson.TypeEmbeddedDocument && right.Type != bson.TypeArray {
+		return rawScalarValuesEqual(left, right)
+	}
+	type pair struct{ left, right bson.RawValue }
+	stack := []pair{{left: left, right: right}}
+	for len(stack) != 0 {
+		last := len(stack) - 1
+		current := stack[last]
+		stack = stack[:last]
+		if current.left.Type != bson.TypeEmbeddedDocument && current.left.Type != bson.TypeArray && current.right.Type != bson.TypeEmbeddedDocument && current.right.Type != bson.TypeArray {
+			if !rawScalarValuesEqual(current.left, current.right) {
+				return false
+			}
+			continue
+		}
+		if current.left.Type != current.right.Type {
+			return false
+		}
+		switch current.left.Type {
+		case bson.TypeEmbeddedDocument:
+			leftElements, leftErr := current.left.Document().Elements()
+			rightElements, rightErr := current.right.Document().Elements()
+			if leftErr != nil || rightErr != nil || len(leftElements) != len(rightElements) {
+				return false
+			}
+			for i := range leftElements {
+				leftKey, leftErr := leftElements[i].KeyErr()
+				rightKey, rightErr := rightElements[i].KeyErr()
+				if leftErr != nil || rightErr != nil || leftKey != rightKey {
+					return false
+				}
+				stack = append(stack, pair{left: leftElements[i].Value(), right: rightElements[i].Value()})
+			}
+		case bson.TypeArray:
+			leftValues, leftErr := current.left.Array().Values()
+			rightValues, rightErr := current.right.Array().Values()
+			if leftErr != nil || rightErr != nil || len(leftValues) != len(rightValues) {
+				return false
+			}
+			for i := range leftValues {
+				stack = append(stack, pair{left: leftValues[i], right: rightValues[i]})
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func rawScalarValuesEqual(left, right bson.RawValue) bool {
 	if left.IsNumber() && right.IsNumber() {
 		if rawValueIsNaN(left) || rawValueIsNaN(right) {
 			return false
 		}
 		return compareRawValues(left, right) == 0
 	}
-	if left.Type != right.Type {
-		return false
-	}
-	switch left.Type {
-	case bson.TypeEmbeddedDocument:
-		leftElements, leftErr := left.Document().Elements()
-		rightElements, rightErr := right.Document().Elements()
-		if leftErr != nil || rightErr != nil || len(leftElements) != len(rightElements) {
-			return false
-		}
-		for i := range leftElements {
-			leftKey, leftErr := leftElements[i].KeyErr()
-			rightKey, rightErr := rightElements[i].KeyErr()
-			if leftErr != nil || rightErr != nil || leftKey != rightKey || !rawValuesEqual(leftElements[i].Value(), rightElements[i].Value()) {
-				return false
-			}
-		}
-		return true
-	case bson.TypeArray:
-		leftValues, leftErr := left.Array().Values()
-		rightValues, rightErr := right.Array().Values()
-		if leftErr != nil || rightErr != nil || len(leftValues) != len(rightValues) {
-			return false
-		}
-		for i := range leftValues {
-			if !rawValuesEqual(leftValues[i], rightValues[i]) {
-				return false
-			}
-		}
-		return true
-	}
-	return left.Equal(right)
+	return left.Type == right.Type && left.Equal(right)
 }
 
 func compareRawValues(left, right bson.RawValue) int {
