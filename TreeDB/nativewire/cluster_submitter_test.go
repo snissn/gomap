@@ -955,6 +955,23 @@ func TestNewRaftClusterSubmitterWithVectorPartitionAdmissionRequiresConfirmation
 	}
 }
 
+func TestNewRoutedRaftClusterSubmitterWithVectorPartitionAdmissionInstallsSharedLifecycleV1(t *testing.T) {
+	admission := &confirmingVectorPartitionClusterSubmitterV1{fakeClusterSubmitter: &fakeClusterSubmitter{}}
+	submitter, err := NewRoutedRaftClusterSubmitterWithVectorPartitionAdmissionV1(nil, &staticClusterRouteProvider{}, admission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if submitter.VectorPartitionAdmission != admission {
+		t.Fatal("routed submitter did not retain lifecycle provider")
+	}
+	if required, err := submitter.RequiresVectorPartitionMutationAdmissionV1(context.Background()); err != nil || !required {
+		t.Fatalf("required=%v err=%v", required, err)
+	}
+	if _, err := NewRoutedRaftClusterSubmitterWithVectorPartitionAdmissionV1(nil, &staticClusterRouteProvider{}, &fakeClusterSubmitter{}); err == nil || !strings.Contains(err.Error(), "confirmation provider is required") {
+		t.Fatalf("constructor err=%v", err)
+	}
+}
+
 func TestClusterAdmissionFollowerRejectsNativeMutationsBeforeLocalMutation(t *testing.T) {
 	submitter := &admissionClusterSubmitter{
 		fakeClusterSubmitter: &fakeClusterSubmitter{},
