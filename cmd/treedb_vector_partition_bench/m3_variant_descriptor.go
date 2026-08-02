@@ -37,6 +37,7 @@ type m3VariantDescriptorV1 struct {
 	BaseSHA                  string                         `json:"base_sha"`
 	HeadSHA                  string                         `json:"head_sha"`
 	BuildDirty               bool                           `json:"build_dirty"`
+	ExecutableSHA256         string                         `json:"executable_sha256"`
 	ArtifactSHA256           string                         `json:"artifact_sha256"`
 	GraphArtifactSHA256      string                         `json:"graph_artifact_sha256"`
 	GraphBuildSHA256         string                         `json:"graph_build_sha256"`
@@ -97,6 +98,7 @@ func m3VariantBuildIdentityDigestV1(d m3VariantDescriptorV1) (string, error) {
 		BaseSHA                  string
 		HeadSHA                  string
 		BuildDirty               bool
+		ExecutableSHA256         string
 		VariantID                string
 		AssignmentBasis          string
 		OverlapRatio             float64
@@ -119,7 +121,7 @@ func m3VariantBuildIdentityDigestV1(d m3VariantDescriptorV1) (string, error) {
 		EdgeCutBefore            int
 		EdgeCutAfter             int
 	}{
-		FixtureChecksum: d.FixtureChecksum, BaseSHA: d.BaseSHA, HeadSHA: d.HeadSHA, BuildDirty: d.BuildDirty, VariantID: d.VariantID, AssignmentBasis: d.AssignmentBasis, OverlapRatio: d.OverlapRatio,
+		FixtureChecksum: d.FixtureChecksum, BaseSHA: d.BaseSHA, HeadSHA: d.HeadSHA, BuildDirty: d.BuildDirty, ExecutableSHA256: d.ExecutableSHA256, VariantID: d.VariantID, AssignmentBasis: d.AssignmentBasis, OverlapRatio: d.OverlapRatio,
 		ArtifactSHA256: d.ArtifactSHA256, GraphArtifactSHA256: d.GraphArtifactSHA256, GraphBuildSHA256: d.GraphBuildSHA256, ArtifactBackend: d.ArtifactBackend,
 		Source: d.Source, IndexDefinitionDigest: d.IndexDefinitionDigest, PartitionHNSWM: d.PartitionHNSWM, PartitionConfig: d.PartitionConfig,
 		PartitionMaxDistanceWork: d.PartitionMaxDistanceWork, RouterMaxScalarWork: d.RouterMaxScalarWork, RouterConfig: d.RouterConfig,
@@ -238,7 +240,7 @@ func validateM3VariantDescriptorV1(d m3VariantDescriptorV1) error {
 		return errors.New("malformed M3 variant descriptor")
 	}
 	if d.SchemaVersion != 5 || d.ResultKind != "m3_persistent_variant_descriptor_v5" || d.VariantID != wantVariant ||
-		!m8SHA256V1(d.FixtureChecksum) || !validSHA(d.BaseSHA) || !validSHA(d.HeadSHA) || !m8SHA256V1(d.ArtifactSHA256) || !m8SHA256V1(d.GraphArtifactSHA256) || d.ArtifactBackend == "" ||
+		!m8SHA256V1(d.FixtureChecksum) || !validSHA(d.BaseSHA) || !validSHA(d.HeadSHA) || !m8SHA256V1(d.ExecutableSHA256) || !m8SHA256V1(d.ArtifactSHA256) || !m8SHA256V1(d.GraphArtifactSHA256) || d.ArtifactBackend == "" ||
 		!m8SHA256V1(d.GraphBuildSHA256) || !m8SHA256V1(d.BuildIdentityDigest) || d.BuildIdentityDigest != wantBuildIdentity ||
 		!m8SHA256V1(d.Source.Checksum) || d.DatabaseDirectory == "" || !m8SHA256V1(d.ManifestIntegrity) || !m8SHA256V1(d.ReadySetDigest) ||
 		!m8SHA256V1(d.RouterAssetChecksum) || !m8SHA256V1(d.RouterModelDigest) || d.SourceGeneration == 0 || d.SourceRows == 0 ||

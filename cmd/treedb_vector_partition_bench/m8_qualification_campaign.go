@@ -273,6 +273,9 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 			if report.Variant != nil && (report.Variant.BaseSHA != campaign.BaseSHA || report.Variant.HeadSHA != campaign.HeadSHA) {
 				return summary, fmt.Errorf("qualification matrix %s retained M3 revision does not match campaign", cleanPath)
 			}
+			if report.Variant != nil && report.Variant.ExecutableSHA256 != report.ExecutableSHA256 {
+				return summary, fmt.Errorf("qualification matrix %s retained M3 executable does not match M8 evidence", cleanPath)
+			}
 			if report.Variant != nil && !m8QualificationM3BuildCapsV1(*report.Variant, report.Dataset) {
 				return summary, fmt.Errorf("qualification matrix %s has off-plan M3 construction caps/router configuration", run.Path)
 			}
