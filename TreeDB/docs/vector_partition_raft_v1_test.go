@@ -195,7 +195,7 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				"There is no standalone M8 administration command",
 				"-m8-existing-db DIR",
 				"-m8-variant-dbs",
-				"schema-3 retained descriptor",
+				"schema-5 retained descriptor",
 				"canonical build-identity digest",
 				"one `(probes, ef_search, concurrency)` operating point",
 				"multiplies the complete measured",
