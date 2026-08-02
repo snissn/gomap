@@ -130,6 +130,9 @@ func TestFindAndModifyConcurrentSameIDUpsertsApplyEveryMutation(t *testing.T) {
 	server := NewServer()
 	server.Collections = collections.NewCollectionManager(db)
 	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	if _, err := server.Collections.CreateCollection(&collections.CollectionMeta{Name: "app.users", Options: server.DefaultCollectionOptions}); err != nil {
+		t.Fatal(err)
+	}
 	const workers = 16
 	errs := make(chan error, workers)
 	start := make(chan struct{})
