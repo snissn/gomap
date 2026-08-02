@@ -576,7 +576,8 @@ func m8QualificationCommandWithExecutableV1(root string, report m8ProductionRepo
 	}
 	return reflect.DeepEqual(m8QualificationCommandConfigV1(cfg), report.Config) &&
 		cfg.m8MaxRSSBytes == report.Resources.PeakRSSCapBytes &&
-		cfg.m8MaxAssetBytes == report.Resources.PersistentAssetCap
+		cfg.m8MaxAssetBytes == report.Resources.PersistentAssetCap &&
+		m8QualificationCommandAdmissionV1(report.Command[1:], cfg, report.Dataset)
 }
 
 func m8QualificationCommandConfigV1(cfg config) m8ProductionConfigEvidenceV1 {
@@ -663,7 +664,50 @@ func m8QualificationMatrixCommandWithExecutableV1(root string, matrix m8Producti
 		}
 	}
 	profiles, err := m8CanonicalPathV1(cfg.profiles)
-	return err == nil && profiles == profileRoot
+	return err == nil && profiles == profileRoot &&
+		m8QualificationCommandAdmissionV1(matrix.Command[1:], cfg, base.Dataset)
+}
+
+// m8QualificationCommandAdmissionV1 binds retained argv to the same fixture
+// and bounded-work gates that production applies before measurement.  The
+// qualification plan deliberately chooses the exact fixture vector count and
+// the runner's fixture-byte ceiling for each corpus, so defaults and looser
+// replay limits cannot silently qualify.
+func m8QualificationCommandAdmissionV1(args []string, cfg config, fixture fixtureManifest) bool {
+	expected, ok := m8QualificationAdmissionConfigV1(fixture)
+	if !ok || cfg.maxVectors != expected.maxVectors || cfg.maxBytes != expected.maxBytes ||
+		m8QualificationExactFlagV1(args, "-max-vectors", strconv.Itoa(expected.maxVectors)) == false ||
+		m8QualificationExactFlagV1(args, "-max-fixture-bytes", strconv.FormatInt(expected.maxBytes, 10)) == false {
+		return false
+	}
+	if err := validateM3FixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes); err != nil {
+		return false
+	}
+	_, err := validateM8BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits, cfg.maxBytes)
+	return err == nil
+}
+
+func m8QualificationAdmissionConfigV1(fixture fixtureManifest) (config, bool) {
+	cfg, err := parseConfig([]string{
+		"-stage", "overlap,partition_index", "-dataset", ".", "-out", ".", "-partitions", "16", "-probes", "1",
+		"-max-vectors", strconv.Itoa(fixture.Vectors), "-max-fixture-bytes", strconv.FormatInt(maxFixtureBytes, 10),
+	})
+	return cfg, err == nil
+}
+
+func m8QualificationExactFlagV1(args []string, name, want string) bool {
+	found := false
+	for i := 0; i < len(args); i++ {
+		if args[i] != name {
+			continue
+		}
+		if found || i+1 == len(args) || args[i+1] != want {
+			return false
+		}
+		found = true
+		i++
+	}
+	return found
 }
 
 func m8QualificationCommandExecutableV1(root, command, headSHA, executableSHA256 string, verify m8QualificationCommandExecutableVerifierV1) bool {

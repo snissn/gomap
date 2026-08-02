@@ -275,6 +275,18 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 				}
 				t.Fatal("missing truth-cache digest flag")
 			},
+			"insufficient_max_vectors": func(report *m8ProductionReportV1) {
+				testM8QualificationReplaceCommandFlagV1(t, report.Command, "-max-vectors", "1")
+			},
+			"off_plan_max_vectors": func(report *m8ProductionReportV1) {
+				testM8QualificationReplaceCommandFlagV1(t, report.Command, "-max-vectors", strconv.Itoa(report.Dataset.Vectors+1))
+			},
+			"off_plan_max_fixture_bytes": func(report *m8ProductionReportV1) {
+				testM8QualificationReplaceCommandFlagV1(t, report.Command, "-max-fixture-bytes", strconv.FormatInt(maxFixtureBytes-1, 10))
+			},
+			"omitted_max_fixture_bytes": func(report *m8ProductionReportV1) {
+				testM8QualificationRemoveCommandFlagV1(t, &report.Command, "-max-fixture-bytes")
+			},
 		} {
 			t.Run(name, func(t *testing.T) {
 				matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
@@ -297,6 +309,42 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 					t.Fatalf("accepted %s", name)
 				}
 			})
+		}
+	})
+	t.Run("matrix_fixture_admission_caps", func(t *testing.T) {
+		for _, corpus := range m8QualificationFixturesV1 {
+			matrix := testM8QualificationMatrixV1(t, head, corpus, 125)
+			testM8QualificationProfilesV1(t, t.TempDir(), "matrix-admission", &matrix)
+			verify := func(string, string, string, string) bool { return true }
+			if !m8QualificationMatrixCommandWithExecutableV1(matrix.Variants[0].DatasetDirectory, matrix, verify) {
+				t.Fatalf("rejected exact %dk caps", corpus.Vectors)
+			}
+			for _, flag := range []string{"-max-vectors", "-max-fixture-bytes"} {
+				bad := matrix
+				bad.Command = slices.Clone(matrix.Command)
+				testM8QualificationRemoveCommandFlagV1(t, &bad.Command, flag)
+				if m8QualificationMatrixCommandWithExecutableV1(matrix.Variants[0].DatasetDirectory, bad, verify) {
+					t.Fatalf("accepted omitted %s for %dk", flag, corpus.Vectors)
+				}
+			}
+			for name, mutate := range map[string]func([]string){
+				"insufficient_max_vectors": func(args []string) {
+					testM8QualificationReplaceCommandFlagV1(t, args, "-max-vectors", strconv.Itoa(corpus.Vectors-1))
+				},
+				"excessive_max_vectors": func(args []string) {
+					testM8QualificationReplaceCommandFlagV1(t, args, "-max-vectors", strconv.Itoa(corpus.Vectors+1))
+				},
+				"off_plan_max_fixture_bytes": func(args []string) {
+					testM8QualificationReplaceCommandFlagV1(t, args, "-max-fixture-bytes", strconv.FormatInt(maxFixtureBytes-1, 10))
+				},
+			} {
+				bad := matrix
+				bad.Command = slices.Clone(matrix.Command)
+				mutate(bad.Command)
+				if m8QualificationMatrixCommandWithExecutableV1(matrix.Variants[0].DatasetDirectory, bad, verify) {
+					t.Fatalf("accepted %s for %dk", name, corpus.Vectors)
+				}
+			}
 		}
 	})
 	t.Run("off_plan_router_configuration", func(t *testing.T) {
@@ -954,6 +1002,8 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 			TruthCache       string `json:"truth_cache"`
 			TruthIdentity    string `json:"truth_cache_identity"`
 			Vectors          int    `json:"vectors"`
+			MaxVectors       int    `json:"max_vectors"`
+			MaxFixtureBytes  int64  `json:"max_fixture_bytes"`
 			GraphCap         int64  `json:"partition_max_distance_work"`
 			RouterCap        int64  `json:"router_max_scalar_work"`
 			M3Cap            int64  `json:"m3_max_benchmark_visits"`
@@ -968,7 +1018,7 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 	if plan.SchemaVersion != 1 || plan.ResultKind != "vector_partition_structured_qualification_campaign_plan_v1" || plan.Status != "planned_no_measurement" || plan.BaseSHA != m8QualificationFrozenBaseSHAV1 || plan.Candidate.Variant != "graph-overlap-020-v1" || plan.Candidate.AssignmentBackend != "kahip_python_3.25_eco_symmetrized_v1_seed_<seed>" || plan.Candidate.RouterCandidates != 64 || !slices.Equal(plan.Candidate.Probes, []int{1, 2, 4, 8, 16}) || !slices.Equal(plan.Candidate.RepeatedProbes, []int{1, 2, 4, 8, 16}) || plan.Candidate.Repetitions != 3 || len(plan.Corpora) != 2 {
 		t.Fatalf("plan=%+v", plan)
 	}
-	if plan.Corpora[0].DatasetSource != "/mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k" || plan.Corpora[0].Dataset != "<campaign-root>/100k/dataset" || plan.Corpora[0].TruthCacheSource != "/mnt/fast4tb/gomap-4023-100k-9225c35e5/truth-cache" || plan.Corpora[0].TruthCache != "<campaign-root>/100k/truth-cache" || plan.Corpora[0].TruthIdentity != m8TruthCacheIdentityV1(m8QualificationFixturesV1[0], 10) || plan.Corpora[0].GraphCap != 20000000000 || plan.Corpora[0].RouterCap != 20000000000 || plan.Corpora[1].DatasetSource != "testdata/vector_partition_qualification_embedding_mixture_250k" || plan.Corpora[1].Dataset != "<campaign-root>/250k/dataset" || plan.Corpora[1].TruthCache != "<campaign-root>/250k/truth-cache" || plan.Corpora[1].TruthIdentity != m8TruthCacheIdentityV1(m8QualificationFixturesV1[1], 10) || plan.Corpora[1].Vectors != 250000 || plan.Corpora[1].Checksum != "d0c7c82ba868853aae9a4280161003d72714ad1701d41ed3169c2fa94d470d69" || plan.Corpora[1].GraphCap != 50000000000 || plan.Corpora[1].RouterCap != 50000000000 || plan.Corpora[1].M3Cap != 900000000 || plan.Corpora[1].M8Cap != 1500000000 {
+	if plan.Corpora[0].DatasetSource != "/mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k" || plan.Corpora[0].Dataset != "<campaign-root>/100k/dataset" || plan.Corpora[0].TruthCacheSource != "/mnt/fast4tb/gomap-4023-100k-9225c35e5/truth-cache" || plan.Corpora[0].TruthCache != "<campaign-root>/100k/truth-cache" || plan.Corpora[0].TruthIdentity != m8TruthCacheIdentityV1(m8QualificationFixturesV1[0], 10) || plan.Corpora[0].MaxVectors != 100000 || plan.Corpora[0].MaxFixtureBytes != maxFixtureBytes || plan.Corpora[0].GraphCap != 20000000000 || plan.Corpora[0].RouterCap != 20000000000 || plan.Corpora[1].DatasetSource != "testdata/vector_partition_qualification_embedding_mixture_250k" || plan.Corpora[1].Dataset != "<campaign-root>/250k/dataset" || plan.Corpora[1].TruthCache != "<campaign-root>/250k/truth-cache" || plan.Corpora[1].TruthIdentity != m8TruthCacheIdentityV1(m8QualificationFixturesV1[1], 10) || plan.Corpora[1].Vectors != 250000 || plan.Corpora[1].MaxVectors != 250000 || plan.Corpora[1].MaxFixtureBytes != maxFixtureBytes || plan.Corpora[1].Checksum != "d0c7c82ba868853aae9a4280161003d72714ad1701d41ed3169c2fa94d470d69" || plan.Corpora[1].GraphCap != 50000000000 || plan.Corpora[1].RouterCap != 50000000000 || plan.Corpora[1].M3Cap != 900000000 || plan.Corpora[1].M8Cap != 1500000000 {
 		t.Fatalf("250k plan=%+v", plan.Corpora[1])
 	}
 	if !strings.Contains(plan.Commands["stage_dataset"], "<dataset-source>/fixture_manifest.json") || !strings.Contains(plan.Commands["stage_existing_truth_cache"], "<truth-cache-source>/m8_canonical_truth_<truth-cache-identity>.json") {
@@ -984,6 +1034,11 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 	}
 	if !strings.Contains(plan.Commands["m3_graph_disjoint"], "-partition-max-distance-work <graph-cap>") || !strings.Contains(plan.Commands["m3_graph_disjoint"], "-router-max-scalar-work <router-cap>") || !strings.Contains(plan.Commands["m3_graph_overlap"], "-partition-max-distance-work <graph-cap>") || !strings.Contains(plan.Commands["m3_graph_overlap"], "-router-max-scalar-work <router-cap>") || !strings.Contains(plan.Commands["m3_stable_hash_disjoint"], "-partition-max-distance-work <graph-cap>") || !strings.Contains(plan.Commands["m3_stable_hash_disjoint"], "-router-max-scalar-work <router-cap>") {
 		t.Fatalf("graph commands do not bind corpus-specific scalar cap: %+v", plan.Commands)
+	}
+	for _, command := range []string{plan.Commands["m3_graph_disjoint"], plan.Commands["m3_graph_overlap"], plan.Commands["m3_stable_hash_disjoint"], plan.Commands["m8_matrix_repeats_full_ladder"]} {
+		if !strings.Contains(command, "-max-vectors <max-vectors>") || !strings.Contains(command, "-max-fixture-bytes <max-fixture-bytes>") {
+			t.Fatalf("plan command does not bind fixture admission caps: %q", command)
+		}
 	}
 	if !strings.Contains(plan.Validation, "regular retained inputs below that root") || !strings.Contains(plan.Validation, "one benchmark executable SHA-256") || !strings.Contains(plan.Validation, "every campaign, M8 child, M8 matrix, and M3 descriptor must match it") {
 		t.Fatalf("plan does not bind the aggregate revision: %q", plan.Validation)
@@ -1807,12 +1862,36 @@ func testM8QualificationCommandV1(report m8ProductionReportV1) []string {
 		"-m8-max-rss-bytes", strconv.FormatUint(report.Resources.PeakRSSCapBytes, 10),
 		"-m8-max-persistent-asset-bytes", strconv.FormatUint(report.Resources.PersistentAssetCap, 10),
 		"-m8-max-exact-truth-visits", strconv.FormatInt(cfg.MaxExactTruthVisits, 10),
+		"-max-vectors", strconv.Itoa(report.Dataset.Vectors),
+		"-max-fixture-bytes", strconv.FormatInt(maxFixtureBytes, 10),
 	}
 	if report.Profiles.Directory != "" {
 		args = append(args, "-profiles", report.Profiles.Directory)
 	}
 	args = append(args, "-m8-truth-cache-sha256", report.TruthCache.ArtifactSHA256)
 	return args
+}
+
+func testM8QualificationReplaceCommandFlagV1(t *testing.T, args []string, flag, value string) {
+	t.Helper()
+	for i := range args {
+		if args[i] == flag && i+1 < len(args) {
+			args[i+1] = value
+			return
+		}
+	}
+	t.Fatalf("missing %s", flag)
+}
+
+func testM8QualificationRemoveCommandFlagV1(t *testing.T, args *[]string, flag string) {
+	t.Helper()
+	for i := range *args {
+		if (*args)[i] == flag && i+1 < len(*args) {
+			*args = append((*args)[:i:i], (*args)[i+2:]...)
+			return
+		}
+	}
+	t.Fatalf("missing %s", flag)
 }
 
 func testM8QualificationProfilesV1(t *testing.T, root, run string, matrix *m8ProductionMatrixV1) {
@@ -1875,6 +1954,8 @@ func testM8QualificationMatrixCommandV1(matrix m8ProductionMatrixV1) []string {
 		"-m8-max-rss-bytes", strconv.FormatUint(report.Resources.PeakRSSCapBytes, 10),
 		"-m8-max-persistent-asset-bytes", strconv.FormatUint(report.Resources.PersistentAssetCap, 10),
 		"-m8-max-exact-truth-visits", strconv.FormatInt(cfg.MaxExactTruthVisits, 10),
+		"-max-vectors", strconv.Itoa(report.Dataset.Vectors),
+		"-max-fixture-bytes", strconv.FormatInt(maxFixtureBytes, 10),
 	}
 	if report.Profiles.Directory != "" {
 		args = append(args, "-profiles", filepath.Dir(report.Profiles.Directory))

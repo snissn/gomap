@@ -61,6 +61,12 @@ caps and the complete parsed partition-builder configuration, so campaign
 validation rejects a retained candidate built above its corpus-specific envelope
 even when its artifact bytes otherwise match.
 
+Each retained M3 and M8 command also explicitly sets `-max-vectors` to the
+authoritative corpus size (100k or 250k) and `-max-fixture-bytes` to 4 GiB.
+Qualification re-applies the runner's fixture and pre-measurement work
+admission checks to those recorded values, rejecting omitted defaults as well
+as tighter or looser substitutions.
+
 ## Gates and disposition
 
 The executable M8 matrix gates exact exhaustive parity, failure honesty,
