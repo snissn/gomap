@@ -891,12 +891,27 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 	for i, update := range updates {
 		item, err := parseMongoUpdateItem(i, update)
 		if err != nil {
-			if len(parsed) > 0 && !missingCollection {
+			parseErr := err
+			if len(parsed) > 0 && missingCollection {
+				hasUpsert := false
+				for _, prior := range parsed {
+					hasUpsert = hasUpsert || prior.upsert
+				}
+				if hasUpsert {
+					col, err = s.openOrCreateCollection(name)
+					if err != nil {
+						return commandError(commandCodeBadValue, "BadValue", err.Error())
+					}
+					if _, _, _, runErr := runMongoUpdatesSequentialWithUpserts(col, parsed); runErr != nil {
+						return mongoUpdateWriteCommandError(runErr)
+					}
+				}
+			} else if len(parsed) > 0 {
 				if _, _, runErr := runMongoUpdatesSequential(col, parsed); runErr != nil {
 					return mongoUpdateWriteCommandError(runErr)
 				}
 			}
-			return mongoUpdateParseCommandError(err)
+			return mongoUpdateParseCommandError(parseErr)
 		}
 		keyString := string(item.key)
 		if _, ok := seenKeys[keyString]; ok {
@@ -956,6 +971,7 @@ type mongoUpdateItem struct {
 	bsonSetFields   []collections.BSONSetField
 	setFieldsOK     bool
 	bsonSetFieldsOK bool
+	pureSet         bool
 	mutation        mongoMutation
 	upsert          bool
 	id              bson.RawValue
@@ -997,14 +1013,17 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 	if err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 	}
-	mutation, err := parseMongoMutation(updateDoc)
-	if err != nil {
-		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
-	}
 	setFields, bsonSetFields, setFieldsOK := mongoSetUpdateFields(updateDoc)
 	bsonSetFields, bsonSetFieldNames, bsonSetFieldsOK := mongoBSONSetUpdateFields(updateDoc)
 	if !setFieldsOK && bsonSetFieldsOK {
 		setFields = bsonSetFieldNames
+	}
+	var mutation mongoMutation
+	if !setFieldsOK {
+		mutation, err = parseMongoMutation(updateDoc)
+		if err != nil {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+		}
 	}
 	return mongoUpdateItem{
 		index:           index,
@@ -1014,6 +1033,7 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 		bsonSetFields:   bsonSetFields,
 		setFieldsOK:     setFieldsOK,
 		bsonSetFieldsOK: bsonSetFieldsOK,
+		pureSet:         setFieldsOK,
 		mutation:        mutation,
 		upsert:          upsert,
 		id:              id,
@@ -1114,7 +1134,12 @@ func mongoInsertUpsert(col *collections.Collection, update mongoUpdateItem) (boo
 	if err != nil {
 		return false, false, false, err
 	}
-	doc, _, err := applyMongoMutation(base, update.mutation)
+	var doc wire.Document
+	if update.pureSet {
+		doc, _, err = applySetUpdate(base, update.updateDoc)
+	} else {
+		doc, _, err = applyMongoMutation(base, update.mutation)
+	}
 	if err != nil {
 		return false, false, false, err
 	}
@@ -1198,7 +1223,13 @@ func applyMongoUpdateToStoredDocument(col *collections.Collection, materializer 
 	if err != nil {
 		return nil, false, fmt.Errorf("updates[%d]: %w", update.index, err)
 	}
-	updated, changed, err := applyMongoMutation(raw, update.mutation)
+	var updated wire.Document
+	var changed bool
+	if update.pureSet {
+		updated, changed, err = applySetUpdate(raw, update.updateDoc)
+	} else {
+		updated, changed, err = applyMongoMutation(raw, update.mutation)
+	}
 	if err != nil {
 		return nil, false, fmt.Errorf("updates[%d]: %w", update.index, err)
 	}

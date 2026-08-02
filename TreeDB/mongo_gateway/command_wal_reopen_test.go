@@ -67,6 +67,29 @@ func TestStandaloneServerCommandWALCRUDReopens(t *testing.T) {
 				stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
 				t.Fatalf("UpdateOne matched=%d modified=%d, want 1/1", updateResult.MatchedCount, updateResult.ModifiedCount)
 			}
+			mutationResult, err := coll.UpdateOne(opCtx,
+				bson.D{{Key: "_id", Value: "u1"}},
+				bson.D{{Key: "$inc", Value: bson.D{{Key: "generation", Value: int32(3)}}}, {Key: "$unset", Value: bson.D{{Key: "name", Value: true}}}},
+			)
+			if err != nil || mutationResult.MatchedCount != 1 || mutationResult.ModifiedCount != 1 {
+				stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
+				t.Fatalf("generic UpdateOne result=%+v err=%v want 1/1", mutationResult, err)
+			}
+			replaceResult, err := coll.ReplaceOne(opCtx, bson.D{{Key: "_id", Value: "u1"}}, bson.D{{Key: "generation", Value: int32(6)}, {Key: "name", Value: "replaced"}})
+			if err != nil || replaceResult.MatchedCount != 1 || replaceResult.ModifiedCount != 1 {
+				stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
+				t.Fatalf("ReplaceOne result=%+v err=%v want 1/1", replaceResult, err)
+			}
+			modifierUpsert, err := coll.UpdateOne(opCtx, bson.D{{Key: "_id", Value: "u3"}}, bson.D{{Key: "$inc", Value: bson.D{{Key: "generation", Value: int32(1)}}}}, options.UpdateOne().SetUpsert(true))
+			if err != nil || modifierUpsert.UpsertedCount != 1 || modifierUpsert.UpsertedID != "u3" {
+				stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
+				t.Fatalf("modifier upsert result=%+v err=%v", modifierUpsert, err)
+			}
+			replacementUpsert, err := coll.ReplaceOne(opCtx, bson.D{{Key: "_id", Value: "u4"}}, bson.D{{Key: "name", Value: "upserted"}}, options.Replace().SetUpsert(true))
+			if err != nil || replacementUpsert.UpsertedCount != 1 || replacementUpsert.UpsertedID != "u4" {
+				stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
+				t.Fatalf("replacement upsert result=%+v err=%v", replacementUpsert, err)
+			}
 			deleteResult, err := coll.DeleteOne(opCtx, bson.D{{Key: "_id", Value: "u2"}})
 			if err != nil {
 				stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
@@ -114,12 +137,22 @@ func TestStandaloneServerCommandWALCRUDReopens(t *testing.T) {
 				t.Fatalf("stored BSON validation: %v", err)
 			}
 			name, ok := raw.Lookup("name").StringValueOK()
-			if !ok || name != "ada2" {
-				t.Fatalf("stored name=%q ok=%v, want ada2", name, ok)
+			if !ok || name != "replaced" {
+				t.Fatalf("stored name=%q ok=%v, want replaced", name, ok)
 			}
 			generation, ok := raw.Lookup("generation").Int32OK()
-			if !ok || generation != 2 {
-				t.Fatalf("stored generation=%d ok=%v, want 2", generation, ok)
+			if !ok || generation != 6 {
+				t.Fatalf("stored generation=%d ok=%v, want 6", generation, ok)
+			}
+			for _, id := range []string{"u3", "u4"} {
+				key, _, err := prepareInsertDocument(mustDocument(t, bson.D{{Key: "_id", Value: id}}), collections.DocumentFormatBSON)
+				if err != nil {
+					t.Fatalf("prepare %s key: %v", id, err)
+				}
+				stored, err := reopenedCollection.Get(key)
+				if err != nil || stored == nil {
+					t.Fatalf("get %s after reopen: stored=%v err=%v", id, stored, err)
+				}
 			}
 			keyU2, _, err := prepareInsertDocument(mustDocument(t, bson.D{{Key: "_id", Value: "u2"}}), collections.DocumentFormatBSON)
 			if err != nil {

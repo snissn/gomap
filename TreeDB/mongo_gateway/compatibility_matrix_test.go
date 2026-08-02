@@ -518,6 +518,38 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
+			category: "update",
+			feature:  "$unset",
+			status:   "supported subset",
+			probe: func(t *testing.T, server *Server) {
+				resp := serveCommand(t, server, 211, bson.D{
+					{Key: "update", Value: "users"},
+					{Key: "updates", Value: bson.A{bson.D{
+						{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+						{Key: "u", Value: bson.D{{Key: "$unset", Value: bson.D{{Key: "city", Value: true}}}}},
+					}}},
+					{Key: "$db", Value: "app"},
+				})
+				assertOK(t, resp)
+			},
+		},
+		{
+			category: "update",
+			feature:  "ReplaceOne by exact _id",
+			status:   "supported subset",
+			probe: func(t *testing.T, server *Server) {
+				resp := serveCommand(t, server, 212, bson.D{
+					{Key: "update", Value: "users"},
+					{Key: "updates", Value: bson.A{bson.D{
+						{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+						{Key: "u", Value: bson.D{{Key: "name", Value: "replacement"}}},
+					}}},
+					{Key: "$db", Value: "app"},
+				})
+				assertOK(t, resp)
+			},
+		},
+		{
 			category: "index gap",
 			feature:  "compound index",
 			status:   "rejected",

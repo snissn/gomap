@@ -1471,6 +1471,46 @@ func TestParseMongoUpdateItemUnsupportedFlagsIncludeIndex(t *testing.T) {
 	}
 }
 
+func TestParseMongoUpdateItemPureSetSkipsGenericMutation(t *testing.T) {
+	item, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "grace"}}}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !item.pureSet || !item.bsonSetFieldsOK || len(item.mutation.set) != 0 || len(item.mutation.inc) != 0 || len(item.mutation.unset) != 0 || item.mutation.replace != nil {
+		t.Fatalf("pure set item=%+v", item)
+	}
+}
+
+func TestServerUpdateMissingCollectionExecutesEarlierUpsertBeforeParseError(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	response := serveCommand(t, s, 22597, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{
+			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "score", Value: int32(1)}}}}}, {Key: "upsert", Value: true}},
+			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: bson.D{{Key: "$push", Value: bson.D{{Key: "score", Value: int32(2)}}}}}},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "BadValue")
+	found := serveCommand(t, s, 22598, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	batch := cursorFirstBatch(t, found)
+	if len(batch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(batch))
+	}
+	if score, _ := batch[0].Lookup("score").Int32OK(); score != 1 {
+		t.Fatalf("score=%d want 1", score)
+	}
+}
+
 func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterWriteError(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -6009,7 +6049,7 @@ func TestServerUpdateGenericMutationsAcrossDocumentFormats(t *testing.T) {
 			s := NewServer()
 			s.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: format}
 			s.Collections = collections.NewCollectionManager(db)
-			assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "n", Value: int32(2147483647)}, {Key: "old", Value: true}}}}, {Key: "$db", Value: "app"}}))
+			assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "n", Value: int32(2147483647)}, {Key: "old", Value: true}, {Key: "nullValue", Value: nil}, {Key: "textValue", Value: "bad"}}}}, {Key: "$db", Value: "app"}}))
 
 			update := func(requestID int32, value bson.D) bson.Raw {
 				return serveCommand(t, s, requestID, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: value}}}}, {Key: "$db", Value: "app"}})
@@ -6029,8 +6069,11 @@ func TestServerUpdateGenericMutationsAcrossDocumentFormats(t *testing.T) {
 			if !got.Lookup("old").IsZero() {
 				t.Fatal("old remains")
 			}
-			// int64 plus double is a double, while unsetting a missing field is a no-op.
-			assertOK(t, update(4, bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: 0.5}}}, {Key: "$unset", Value: bson.D{{Key: "stillAbsent", Value: true}}}}))
+			noop := update(4, bson.D{{Key: "$unset", Value: bson.D{{Key: "stillAbsent", Value: true}}}})
+			assertOK(t, noop)
+			assertInt32(t, noop, "nModified", 0)
+			// int64 plus double is a double.
+			assertOK(t, update(4, bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: 0.5}}}}))
 			find = serveCommand(t, s, 5, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
 			if n, ok := cursorFirstBatch(t, find)[0].Lookup("n").DoubleOK(); !ok || n != 2147483648.5 {
 				t.Fatalf("double n=%v ok=%v", n, ok)
@@ -6038,6 +6081,8 @@ func TestServerUpdateGenericMutationsAcrossDocumentFormats(t *testing.T) {
 			for _, badUpdate := range []bson.D{
 				{{Key: "$inc", Value: bson.D{{Key: "n", Value: "bad"}}}},
 				{{Key: "$inc", Value: bson.D{{Key: "n", Value: nil}}}},
+				{{Key: "$inc", Value: bson.D{{Key: "nullValue", Value: int32(1)}}}},
+				{{Key: "$inc", Value: bson.D{{Key: "textValue", Value: int32(1)}}}},
 				{{Key: "$set", Value: bson.D{{Key: "n", Value: 1}}}, {Key: "$unset", Value: bson.D{{Key: "n", Value: true}}}},
 				{{Key: "$set", Value: bson.D{{Key: "x.y", Value: 1}}}},
 				{{Key: "$set", Value: bson.D{{Key: "_id", Value: "u2"}}}},
@@ -6052,7 +6097,9 @@ func TestServerUpdateGenericMutationsAcrossDocumentFormats(t *testing.T) {
 			assertOK(t, update(6, bson.D{{Key: "$inc", Value: bson.D{{Key: "largest", Value: int64(math.MaxInt64)}}}}))
 			assertCommandError(t, update(6, bson.D{{Key: "$inc", Value: bson.D{{Key: "largest", Value: int64(1)}}}}), "BadValue")
 			assertOK(t, update(7, bson.D{{Key: "name", Value: "grace"}})) // omitted _id is preserved
-			assertOK(t, update(8, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "grace"}}))
+			noop = update(8, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "grace"}})
+			assertOK(t, noop)
+			assertInt32(t, noop, "nModified", 0)
 			assertCommandError(t, update(9, bson.D{{Key: "_id", Value: "u2"}}), "BadValue")
 			assertOK(t, update(10, bson.D{})) // an empty replacement retains _id
 		})
