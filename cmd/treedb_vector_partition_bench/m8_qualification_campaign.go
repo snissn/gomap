@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/nativewire"
@@ -71,6 +72,13 @@ type m8QualificationCampaignSummaryV1 struct {
 	P16P95Min        uint64  `json:"p16_p95_min"`
 	P16P95Median     uint64  `json:"p16_p95_median"`
 	P16P95Max        uint64  `json:"p16_p95_max"`
+	intervals        []m8QualificationRunIntervalV1
+}
+
+type m8QualificationRunIntervalV1 struct {
+	Path      string
+	StartedAt time.Time
+	EndedAt   time.Time
 }
 
 func runValidateQualification(args []string, stdout io.Writer) error {
@@ -142,6 +150,13 @@ func m8ValidateQualificationIndexWithVerifiersV1(root string, index m8Qualificat
 			}
 		}
 		summary.Campaigns[campaign.FixtureChecksum] = campaignSummary
+	}
+	intervals := make([]m8QualificationRunIntervalV1, 0, len(index.Campaigns)*3)
+	for _, campaign := range summary.Campaigns {
+		intervals = append(intervals, campaign.intervals...)
+	}
+	if err := m8ValidateQualificationSerialIntervalsV1(intervals); err != nil {
+		return m8QualificationIndexSummaryV1{}, err
 	}
 	for _, fixture := range m8QualificationFixturesV1 {
 		if _, ok := summary.Campaigns[fixture.Checksum]; !ok {
@@ -245,6 +260,7 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 		if err := validateM8ProductionMatrixV1(matrix); err != nil {
 			return summary, fmt.Errorf("validate qualification matrix %s: %w", run.Path, err)
 		}
+		summary.intervals = append(summary.intervals, m8QualificationRunIntervalV1{Path: cleanPath, StartedAt: matrix.ExecutionStartedAt, EndedAt: matrix.ExecutionCompletedAt})
 		if matrix.Dataset.Checksum != campaign.FixtureChecksum || !m8QualificationFixtureV1(matrix.Dataset) || len(matrix.Variants) != len(m8RequiredVariantIDsV1) || !slices.Equal(matrix.RequiredVariants, m8RequiredVariantIDsV1) || matrix.OverlapStorageRatio >= 1.35 {
 			return summary, fmt.Errorf("qualification matrix %s does not bind the required identity/storage", run.Path)
 		}
@@ -978,12 +994,33 @@ func m8ValidateQualificationMatrixDerivationV1(matrix m8ProductionMatrixV1) erro
 		return errors.New("qualification matrix has no child reports")
 	}
 	cfg := config{baseSHA: matrix.BaseSHA, headSHA: matrix.HeadSHA, partitions: matrix.Variants[0].Config.Partitions, command: append([]string(nil), matrix.Command...)}
-	expected, err := m8BuildProductionMatrixV1(cfg, matrix.Dataset, append([]m8ProductionReportV1(nil), matrix.Variants...))
+	expected, err := m8BuildProductionMatrixWithExecutionIntervalV1(cfg, matrix.Dataset, append([]m8ProductionReportV1(nil), matrix.Variants...), matrix.ExecutionStartedAt, matrix.ExecutionCompletedAt)
 	if err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(matrix.RequiredVariants, expected.RequiredVariants) || !reflect.DeepEqual(matrix.Gates, expected.Gates) || matrix.Status != expected.Status || matrix.Disposition != expected.Disposition || matrix.OverlapMaterializationRatio != expected.OverlapMaterializationRatio || matrix.OverlapStorageRatio != expected.OverlapStorageRatio || !reflect.DeepEqual(matrix.OverlapDiagnostics, expected.OverlapDiagnostics) || !reflect.DeepEqual(matrix.Decision, expected.Decision) || !reflect.DeepEqual(matrix.Comparison, expected.Comparison) {
+	if !reflect.DeepEqual(matrix.RequiredVariants, expected.RequiredVariants) || !reflect.DeepEqual(matrix.Gates, expected.Gates) || matrix.Status != expected.Status || matrix.Disposition != expected.Disposition || matrix.ExecutionStartedAt != expected.ExecutionStartedAt || matrix.ExecutionCompletedAt != expected.ExecutionCompletedAt || matrix.OverlapMaterializationRatio != expected.OverlapMaterializationRatio || matrix.OverlapStorageRatio != expected.OverlapStorageRatio || !reflect.DeepEqual(matrix.OverlapDiagnostics, expected.OverlapDiagnostics) || !reflect.DeepEqual(matrix.Decision, expected.Decision) || !reflect.DeepEqual(matrix.Comparison, expected.Comparison) {
 		return errors.New("qualification matrix derived evidence does not match child reports")
+	}
+	return nil
+}
+
+func m8ValidateQualificationSerialIntervalsV1(intervals []m8QualificationRunIntervalV1) error {
+	if len(intervals) != len(m8QualificationFixturesV1)*3 {
+		return errors.New("qualification index does not retain every matrix execution interval")
+	}
+	sort.Slice(intervals, func(i, j int) bool {
+		if intervals[i].StartedAt.Equal(intervals[j].StartedAt) {
+			return intervals[i].Path < intervals[j].Path
+		}
+		return intervals[i].StartedAt.Before(intervals[j].StartedAt)
+	})
+	for i, interval := range intervals {
+		if interval.StartedAt.IsZero() || interval.EndedAt.IsZero() || !interval.EndedAt.After(interval.StartedAt) {
+			return errors.New("qualification index has an invalid matrix execution interval")
+		}
+		if i > 0 && interval.StartedAt.Before(intervals[i-1].EndedAt) {
+			return errors.New("qualification index retains overlapping matrix executions")
+		}
 	}
 	return nil
 }

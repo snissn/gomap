@@ -476,6 +476,43 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	if err != nil || indexSummary.Status != "qualified" || indexSummary.BaseSHA != head || indexSummary.HeadSHA != head || len(indexSummary.Campaigns) != 2 || indexSummary.Campaigns[fixture.Checksum].P4QPSMedian != 200 || indexSummary.Campaigns[fixture250.Checksum].P4QPSMedian != 200 {
 		t.Fatalf("index summary err=%v summary=%+v", err, indexSummary)
 	}
+	t.Run("rehashed_overlapping_matrix_execution", func(t *testing.T) {
+		var prior, overlap m8ProductionMatrixV1
+		priorRaw, err := os.ReadFile(filepath.Join(root, campaign.Runs[0].Path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(priorRaw, &prior); err != nil {
+			t.Fatal(err)
+		}
+		overlapRaw, err := os.ReadFile(filepath.Join(root, campaign250.Runs[0].Path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(overlapRaw, &overlap); err != nil {
+			t.Fatal(err)
+		}
+		overlap.ExecutionStartedAt, overlap.ExecutionCompletedAt = prior.ExecutionStartedAt, prior.ExecutionCompletedAt
+		if err := m8ValidateQualificationMatrixDerivationV1(overlap); err != nil {
+			t.Fatalf("self-consistent overlap matrix rejected before aggregate serial guard: %v", err)
+		}
+		overlapRaw, err = json.Marshal(overlap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		const path = "250k-overlapping-execution.json"
+		if err := os.WriteFile(filepath.Join(root, path), overlapRaw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(overlapRaw)
+		bad := qualificationIndex
+		bad.Campaigns = slices.Clone(qualificationIndex.Campaigns)
+		bad.Campaigns[1].Runs = slices.Clone(campaign250.Runs)
+		bad.Campaigns[1].Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
+		if _, err := testM8ValidateQualificationIndexV1(root, bad); err == nil || !strings.Contains(err.Error(), "overlapping matrix executions") {
+			t.Fatalf("overlap err=%v", err)
+		}
+	})
 	t.Run("alternate_frozen_base", func(t *testing.T) {
 		root, alternateBase := t.TempDir(), strings.Repeat("b", 40)
 		campaigns := make([]m8QualificationCampaignV1, 0, len(m8QualificationFixturesV1))
@@ -1157,7 +1194,7 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(plan.Validation, "regular retained inputs below that root") || !strings.Contains(plan.Validation, "one benchmark executable SHA-256") || !strings.Contains(plan.Validation, "every campaign, M8 child, M8 matrix, and M3 descriptor must match it") {
+	if !strings.Contains(plan.Validation, "regular retained inputs below that root") || !strings.Contains(plan.Validation, "one benchmark executable SHA-256") || !strings.Contains(plan.Validation, "every campaign, M8 child, M8 matrix, and M3 descriptor must match it") || !strings.Contains(plan.Validation, "M8 matrix execution intervals non-overlapping") {
 		t.Fatalf("plan does not bind the aggregate revision: %q", plan.Validation)
 	}
 }

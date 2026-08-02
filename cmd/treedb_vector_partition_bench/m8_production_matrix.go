@@ -27,6 +27,8 @@ type m8ProductionMatrixV1 struct {
 	Status                      string                     `json:"status"`
 	Disposition                 string                     `json:"disposition"`
 	GeneratedAt                 time.Time                  `json:"generated_at"`
+	ExecutionStartedAt          time.Time                  `json:"execution_started_at"`
+	ExecutionCompletedAt        time.Time                  `json:"execution_completed_at"`
 	Command                     []string                   `json:"exact_command"`
 	ExecutableSHA256            string                     `json:"executable_sha256"`
 	BaseSHA                     string                     `json:"base_sha"`
@@ -112,6 +114,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 	if len(cfg.m8VariantDBs) == 0 {
 		return runM8ProductionSingleVariantV1(cfg, fixture, vectors, queries, stdout)
 	}
+	executionStartedAt := time.Now().UTC()
 	initialDirty := m8GitDirtyV1(cfg.out, cfg.profiles)
 	executableSHA256, err := m8BenchmarkExecutableSHA256V1(cfg.command[0])
 	if err != nil {
@@ -179,7 +182,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		}
 		reports = append(reports, report)
 	}
-	matrix, err := m8BuildProductionMatrixV1(cfg, fixture, reports)
+	matrix, err := m8BuildProductionMatrixWithExecutionIntervalV1(cfg, fixture, reports, executionStartedAt, time.Now().UTC())
 	if err != nil {
 		return err
 	}
@@ -368,8 +371,13 @@ func m8ValidateVariantBuildCompatibilityV1(variants []m3VariantDescriptorV1) err
 }
 
 func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8ProductionReportV1) (m8ProductionMatrixV1, error) {
+	now := time.Now().UTC()
+	return m8BuildProductionMatrixWithExecutionIntervalV1(cfg, fixture, reports, now, now.Add(time.Nanosecond))
+}
+
+func m8BuildProductionMatrixWithExecutionIntervalV1(cfg config, fixture fixtureManifest, reports []m8ProductionReportV1, executionStartedAt, executionCompletedAt time.Time) (m8ProductionMatrixV1, error) {
 	matrix := m8ProductionMatrixV1{
-		SchemaVersion: 5, ResultKind: "m8_production_multi_variant_matrix_v5", Status: "incomplete", GeneratedAt: time.Now().UTC(),
+		SchemaVersion: 5, ResultKind: "m8_production_multi_variant_matrix_v5", Status: "incomplete", GeneratedAt: time.Now().UTC(), ExecutionStartedAt: executionStartedAt, ExecutionCompletedAt: executionCompletedAt,
 		Command: append([]string(nil), cfg.command...), BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dataset: fixture,
 		RequiredVariants: append([]string(nil), m8RequiredVariantIDsV1...), Variants: reports,
 		Limitations: []string{"single-host loopback production-shaped topology; multi-host qualification remains owned by #3983", "no external-system or paper-scale comparison is claimed"},
@@ -523,6 +531,9 @@ func m8ProductionComparisonForRowV1(report m8ProductionReportV1, row m8Productio
 func validateM8ProductionMatrixV1(matrix m8ProductionMatrixV1) error {
 	if !m8QualificationSHA256V1(matrix.ExecutableSHA256) {
 		return errors.New("M8 matrix has an invalid benchmark executable digest")
+	}
+	if matrix.ExecutionStartedAt.IsZero() || matrix.ExecutionCompletedAt.IsZero() || !matrix.ExecutionCompletedAt.After(matrix.ExecutionStartedAt) {
+		return errors.New("M8 matrix has an invalid execution interval")
 	}
 	type key struct {
 		variantID               string

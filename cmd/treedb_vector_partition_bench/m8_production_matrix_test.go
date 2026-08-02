@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 )
@@ -86,6 +87,9 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
+	if matrix.ExecutionStartedAt.IsZero() || !matrix.ExecutionCompletedAt.After(matrix.ExecutionStartedAt) {
+		t.Fatalf("matrix did not retain a valid execution interval: %+v", matrix)
+	}
 	if matrix.Status != "local_gate_pass" || matrix.Gates.PartitionPackReachability != "pass" || matrix.Gates.OverlapStorage != "pass" || matrix.OverlapStorageRatio != 1.2 || len(matrix.Comparison) != 6 {
 		t.Fatalf("matrix=%+v", matrix)
 	}
@@ -118,6 +122,18 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 	}
 	if err := validateM8ProductionMatrixV1(decoded); err != nil {
 		t.Fatalf("round-tripped shortfall matrix rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*m8ProductionMatrixV1){
+		"zero_execution_start":        func(m *m8ProductionMatrixV1) { m.ExecutionStartedAt = time.Time{} },
+		"reversed_execution_interval": func(m *m8ProductionMatrixV1) { m.ExecutionCompletedAt = m.ExecutionStartedAt },
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := decoded
+			mutate(&invalid)
+			if err := validateM8ProductionMatrixV1(invalid); err == nil || !strings.Contains(err.Error(), "execution interval") {
+				t.Fatalf("interval err=%v", err)
+			}
+		})
 	}
 	for _, mutation := range []struct {
 		name  string
