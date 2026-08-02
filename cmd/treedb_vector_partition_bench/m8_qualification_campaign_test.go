@@ -452,12 +452,20 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		"edited_qps":     func(row *m8ProductionRowV1) { row.QPS++ },
 		"edited_elapsed": func(row *m8ProductionRowV1) { row.ElapsedNanos++ },
 		"zero_elapsed":   func(row *m8ProductionRowV1) { row.ElapsedNanos = 0 },
+		"elapsed_shorter_than_slowest_request": func(row *m8ProductionRowV1) {
+			row.ElapsedNanos = row.MaxTotalNanos - 1
+			row.QPS, _ = m8ProductionQPSV1(row.Samples, row.ElapsedNanos)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			report := testM8QualificationReportV1(t, head, fixture, testM3VariantDescriptorV1(t.TempDir()), 125)
 			mutate(&report.Rows[0])
-			if err := testM8ValidateProductionReportV1(report); err == nil {
+			err := testM8ValidateProductionReportV1(report)
+			if err == nil {
 				t.Fatalf("accepted %s", name)
+			}
+			if name == "elapsed_shorter_than_slowest_request" && !strings.Contains(err.Error(), "elapsed is shorter than its slowest request") {
+				t.Fatalf("elapsed boundary err=%v", err)
 			}
 		})
 	}

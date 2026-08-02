@@ -3654,6 +3654,9 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 		if !ok {
 			return errors.New("M8 local search count overflow")
 		}
+		if row.ElapsedNanos < row.MaxTotalNanos {
+			return errors.New("M8 cell elapsed is shorter than its slowest request")
+		}
 		if row.Status == "candidate_coverage_shortfall" {
 			if row.Probes < 1 || row.Probes > report.Config.Partitions ||
 				row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries ||
