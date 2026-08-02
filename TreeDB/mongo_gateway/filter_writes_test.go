@@ -14,6 +14,17 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+const mongoFilterWriteTestTimeout = 5 * time.Second
+
+func awaitMongoFilterWriteSignal(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(mongoFilterWriteTestTimeout):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
 func TestMongoFilterWriteAttemptReset(t *testing.T) {
 	for _, name := range []string{"update", "delete"} {
 		predicateMatched := true                        // first callback matched
@@ -70,6 +81,7 @@ func TestMongoFilterDeleteOneColumnStoreReconstruction(t *testing.T) {
 	assertOK(t, deleted)
 	assertInt32(t, deleted, "n", 1)
 	remaining := serveCommand(t, server, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, remaining)
 	if values, err := bson.Raw(remaining).Lookup("cursor").Document().Lookup("firstBatch").Array().Values(); err != nil || len(values) != 0 {
 		t.Fatalf("column delete remained: values=%v err=%v", values, err)
 	}
@@ -158,11 +170,16 @@ func TestMongoFilterUpdateRechecksPredicateAfterDeterministicDrift(t *testing.T)
 		doc, err := serveCommandResult(server, 2, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "active", Value: true}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "picked", Value: true}}}}}}}}, {Key: "$db", Value: "app"}})
 		result <- commandResult{doc: doc, err: err}
 	}()
-	<-selected
+	awaitMongoFilterWriteSignal(t, selected, "filter write selection")
 	assertOK(t, serveCommand(t, server, 3, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "active", Value: false}}}}}}}}, {Key: "$db", Value: "app"}}))
 	close(release)
 	released = true
-	resultValue := <-result
+	var resultValue commandResult
+	select {
+	case resultValue = <-result:
+	case <-time.After(mongoFilterWriteTestTimeout):
+		t.Fatal("timed out waiting for predicate-drift update result")
+	}
 	if resultValue.err != nil {
 		t.Fatal(resultValue.err)
 	}
@@ -205,24 +222,29 @@ func TestMongoFilterWritesScanCapFailsWithoutMutation(t *testing.T) {
 }
 
 func TestMongoFilterUpdateSupportedLogicalFilters(t *testing.T) {
-	for _, filter := range []bson.D{
-		{{Key: "age", Value: bson.D{{Key: "$in", Value: bson.A{int32(20)}}}}},
-		{{Key: "$and", Value: bson.A{bson.D{{Key: "age", Value: int32(20)}}, bson.D{{Key: "active", Value: true}}}}},
-		{{Key: "$or", Value: bson.A{bson.D{{Key: "age", Value: int32(20)}}, bson.D{{Key: "age", Value: int32(99)}}}}},
+	for _, tc := range []struct {
+		name   string
+		filter bson.D
+	}{
+		{name: "in", filter: bson.D{{Key: "age", Value: bson.D{{Key: "$in", Value: bson.A{int32(20)}}}}}},
+		{name: "and", filter: bson.D{{Key: "$and", Value: bson.A{bson.D{{Key: "age", Value: int32(20)}}, bson.D{{Key: "active", Value: true}}}}}},
+		{name: "or", filter: bson.D{{Key: "$or", Value: bson.A{bson.D{{Key: "age", Value: int32(20)}}, bson.D{{Key: "age", Value: int32(99)}}}}}},
 	} {
-		db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
-		if err != nil {
-			t.Fatal(err)
-		}
-		server := NewServer()
-		server.Collections = collections.NewCollectionManager(db)
-		server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
-		assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "age", Value: int32(20)}, {Key: "active", Value: true}}}}, {Key: "$db", Value: "app"}}))
-		response := serveCommand(t, server, 2, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: filter}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "picked", Value: true}}}}}}}}, {Key: "$db", Value: "app"}})
-		assertOK(t, response)
-		assertInt32(t, response, "n", 1)
-		assertInt32(t, response, "nModified", 1)
-		_ = db.Close()
+		t.Run(tc.name, func(t *testing.T) {
+			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = db.Close() })
+			server := NewServer()
+			server.Collections = collections.NewCollectionManager(db)
+			server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+			assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "age", Value: int32(20)}, {Key: "active", Value: true}}}}, {Key: "$db", Value: "app"}}))
+			response := serveCommand(t, server, 2, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: tc.filter}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "picked", Value: true}}}}}}}}, {Key: "$db", Value: "app"}})
+			assertOK(t, response)
+			assertInt32(t, response, "n", 1)
+			assertInt32(t, response, "nModified", 1)
+		})
 	}
 }
 

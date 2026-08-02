@@ -231,13 +231,13 @@ implemented.
 
 | Surface | Status | Harness / evidence | Current gap |
 |---|---|---|---|
-| Single-document `updateOne` / `ReplaceOne` | `supported subset` | direct-wire and driver update tests | Standalone only. Exact `_id` retains its direct fast path; equality, range, `$in`, `$and`, and top-level `$or` select the first natural-order match within the scan cap and recheck before mutation. |
+| Single-document `updateOne` / `ReplaceOne` | `supported subset` | `TestMongoFilterWritesSelectOneAcrossUpdateDeleteAndFindAndModify`, `TestMongoFilterWritesScanCapFailsWithoutMutation`, `TestMongoFilterUpdateSupportedLogicalFilters`, and driver update tests | Standalone only. Exact `_id` retains its direct fast path; equality, range, `$in`, `$and`, and top-level `$or` select the first natural-order match within the scan cap and recheck before mutation. |
 | Batched distinct-ID `$set` updates | `supported subset` | update batch tests | Unique-index conflicts may fall back to ordered singles; generic/replacement updates stay ordered. |
 | `multi: true` | `rejected` | `TestMongoCompatibilityMatrix` | No multi-update planner. |
 | Exact-`_id` `upsert: true` | `supported subset` | `TestMongoCompatibilityMatrix`, direct-wire and driver upsert tests | Modifier and replacement upserts return `n: 1`, `nModified: 0`, and typed `upserted` entries; cluster/routed upserts are rejected. |
 | Top-level `$set`, `$inc`, `$unset` | `supported subset` | `TestMongoCompatibilityMatrix`, mutation tests | `$inc` supports int32/int64/double only; null/non-numeric targets reject. Dotted fields, `$push`, pipelines, and other operators are rejected. |
 | Cluster/routed generic, replacement, and upsert updates | `rejected` | cluster submitter tests | Only existing standalone semantics are supported; cluster accepts its native BSON `$set` route only. |
-| Single-document `delete` | `supported subset` | direct-wire delete tests | Exact `_id` accepts legacy limit `0` or `1`; supported non-`_id` filters require `limit: 1`, use natural-order selection, and recheck before deletion. |
+| Single-document `delete` | `supported subset` | `TestMongoFilterWritesSelectOneAcrossUpdateDeleteAndFindAndModify`, `TestMongoFilterWritesScanCapFailsWithoutMutation`, and direct-wire delete tests | Exact `_id` accepts legacy limit `0` or `1`; supported non-`_id` filters require `limit: 1`, use natural-order selection, and recheck before deletion. |
 
 ## BSON And Storage Matrix
 

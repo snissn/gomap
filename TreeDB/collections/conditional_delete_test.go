@@ -41,6 +41,9 @@ func TestDeleteDocumentIfContract(t *testing.T) {
 	if deleted, err := col.DeleteDocumentIf([]byte("u1"), func(current []byte) (bool, error) { return string(current) == `{"active":true}`, nil }); err != nil || !deleted {
 		t.Fatalf("delete=%v,%v", deleted, err)
 	}
+	if got, _ := col.Get([]byte("u1")); got != nil {
+		t.Fatal("true predicate did not delete document")
+	}
 }
 
 func TestDeleteDocumentIfReceivesReconstructedColumnDocument(t *testing.T) {
@@ -66,5 +69,8 @@ func TestDeleteDocumentIfReceivesReconstructedColumnDocument(t *testing.T) {
 		return bytes.Equal(current, want), nil
 	}); err != nil || !deleted {
 		t.Fatalf("delete reconstructed document=%v,%v", deleted, err)
+	}
+	if got, _ := col.Get([]byte("e1")); got != nil {
+		t.Fatal("true predicate did not delete reconstructed document")
 	}
 }

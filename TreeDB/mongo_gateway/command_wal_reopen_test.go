@@ -244,8 +244,14 @@ func TestMongoMutationCommandWALValueLogPointersReopen(t *testing.T) {
 	reopenedServer.Collections = collections.NewCollectionManager(reopened)
 	reopenedServer.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
 	deleted := serveCommand(t, reopenedServer, 4, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u3"}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, deleted)
 	if values, err := bson.Raw(deleted).Lookup("cursor").Document().Lookup("firstBatch").Array().Values(); err != nil || len(values) != 0 {
 		t.Fatalf("deleted pointer document after reopen: values=%v err=%v", values, err)
+	}
+	surviving := serveCommand(t, reopenedServer, 5, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, surviving)
+	if values, err := bson.Raw(surviving).Lookup("cursor").Document().Lookup("firstBatch").Array().Values(); err != nil || len(values) != 1 {
+		t.Fatalf("surviving pointer document after reopen: values=%v err=%v", values, err)
 	}
 }
 
