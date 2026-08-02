@@ -1,6 +1,7 @@
 package mongogateway
 
 import (
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -46,16 +47,24 @@ func TestMongoFilterDeleteOneColumnStoreReconstruction(t *testing.T) {
 	}
 	server := NewServer()
 	server.Collections = mgr
+	server.MaxFindScanDocuments = 1
 	col, err := mgr.OpenCollection("app.users")
 	if err != nil {
 		t.Fatal(err)
 	}
-	key, err := encodePrimaryKey(bson.Raw(mustDocument(t, bson.D{{Key: "_id", Value: "u1"}})).Lookup("_id"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := col.Insert(key, []byte(`{"_id":"u1","time_us":1,"kind":"like","payload":"row"}`)); err != nil {
-		t.Fatal(err)
+	for i := 1; i <= 4; i++ {
+		id := fmt.Sprintf("u%d", i)
+		key, err := encodePrimaryKey(bson.Raw(mustDocument(t, bson.D{{Key: "_id", Value: id}})).Lookup("_id"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		kind := "skip"
+		if i == 1 {
+			kind = "like"
+		}
+		if _, err := col.Insert(key, []byte(fmt.Sprintf(`{"_id":%q,"time_us":%d,"kind":%q,"payload":"row"}`, id, i, kind))); err != nil {
+			t.Fatal(err)
+		}
 	}
 	deleted := serveCommand(t, server, 2, bson.D{{Key: "delete", Value: "users"}, {Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "kind", Value: "like"}}}, {Key: "limit", Value: int32(1)}}}}, {Key: "$db", Value: "app"}})
 	assertOK(t, deleted)

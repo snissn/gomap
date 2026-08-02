@@ -21069,7 +21069,7 @@ func (c *Collection) ScanDocumentsFunc(maxDocuments int, fn func(DocumentRecord)
 	defer func() { _ = it.Close() }()
 	reconstructDocuments := columnStoreCanReconstructDocument(catalog.meta)
 	if reconstructDocuments {
-		certified, preflightDiag, preflightRan, err := c.preflightMonotonicColumnReconstruction(snap, catalog)
+		certified, preflightDiag, preflightRan, err := c.preflightMonotonicColumnReconstruction(snap, catalog, maxDocuments)
 		if err != nil {
 			return false, err
 		}
