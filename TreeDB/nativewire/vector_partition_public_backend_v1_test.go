@@ -80,7 +80,7 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 	identity := raftplacement.VectorPartitionLifecycleIdentityV1{Index: raftplacement.VectorPartitionLifecycleIndexIdentityV1{Collection: raftplacement.CollectionRefV1{Database: "db", Catalog: "default", Collection: "docs"}, CollectionIncarnation: 1, IndexName: "embedding", IndexDefinitionDigest: vectorPartitionShardSearchDigestTestV1, IndexEpoch: 1, CatalogEpoch: meta.Epoch, CatalogDigest: meta.Digest}, Source: raftplacement.VectorPartitionLifecycleSourceIdentityV1{Generation: 11, Checksum: 22, SchemaHash: 33, RowCount: 2}, Generation: 7}
 	requiredGroups := []raftcluster.GroupID{"group-a", "group-b"}
 	readyGroups := []raftplacement.VectorPartitionLifecycleGroupReadyV1{{GroupID: "group-a", AppliedIndex: 9, AssetSetDigest: fmt.Sprintf("%064x", len("group-a"))}, {GroupID: "group-b", AppliedIndex: 9, AssetSetDigest: fmt.Sprintf("%064x", len("group-b"))}}
-	openService := func(boundIdentity raftplacement.VectorPartitionLifecycleIdentityV1) (*public.ServiceV1, *VectorPartitionProductionTopologyV1, VectorPartitionCoordinatorRequestV1, map[raftcluster.GroupID]*fakeVectorPartitionReadCoordinatorV1, *publicBackendLifecycleBuilderV1) {
+	openService := func(boundIdentity raftplacement.VectorPartitionLifecycleIdentityV1) (*public.ServiceV1, *VectorPartitionPublicBackendV1, *VectorPartitionProductionTopologyV1, VectorPartitionCoordinatorRequestV1, map[raftcluster.GroupID]*fakeVectorPartitionReadCoordinatorV1, *publicBackendLifecycleBuilderV1) {
 		t.Helper()
 		readySetDigest, err := raftplacement.VectorPartitionLifecycleReadySetDigestV1(boundIdentity, requiredGroups, readyGroups)
 		if err != nil {
@@ -100,9 +100,9 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 		if err != nil {
 			t.Fatal(err)
 		}
-		return service, topology, base, reads, builder
+		return service, backend, topology, base, reads, builder
 	}
-	service, topology, base, reads, _ := openService(identity)
+	service, backend, topology, base, reads, _ := openService(identity)
 	id := public.GenerationIDV1{Index: base.IndexName, Generation: 7}
 	if _, err := service.Register(ctx, public.GenerationRegistrationV1{GenerationIDV1: id, SourceGeneration: 11, SourceChecksum: 22, SourceSchemaHash: 33, SourceRowCount: 2}); err != nil {
 		t.Fatal(err)
@@ -115,6 +115,9 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 	}
 	if status, err := service.Status(ctx, id); err != nil || !status.Active {
 		t.Fatalf("status = %#v, %v", status, err)
+	}
+	if health, err := backend.OperationsHealthV1(ctx); err != nil || !health.Ready || health.Reason != "ready" {
+		t.Fatalf("operations health = %#v, %v", health, err)
 	}
 	request := public.SearchRequestV1{Version: 1, Generation: id, Query: []float32{1, 0}, Metric: public.MetricCosineV1, TopK: base.TopK, Probes: base.PartitionProbes, EfSearch: base.EfSearch, Consistency: public.ConsistencyGenerationSnapshotV1, Limits: public.SearchLimitsV1{RequestBytes: base.RequestBytesLimit, CandidateBytes: base.CandidateBytesLimit, ResponseBytes: base.ResponseBytesLimit, MergeEntries: base.MergeEntriesLimit}}
 	response, err := service.Search(ctx, request)
@@ -135,7 +138,7 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 	if err := harness.RestartV1(ctx); err != nil {
 		t.Fatal(err)
 	}
-	service, topology, base, reads, _ = openService(identity)
+	service, backend, topology, base, reads, _ = openService(identity)
 	if status, err := service.Status(ctx, id); err != nil || !status.Active {
 		t.Fatalf("status after restart = %#v, %v", status, err)
 	}
@@ -154,7 +157,7 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 	}
 	successor := identity
 	successor.Generation++
-	service, topology, _, _, builder := openService(successor)
+	service, backend, topology, _, _, builder := openService(successor)
 	defer topology.Close()
 	id = public.GenerationIDV1{Index: base.IndexName, Generation: successor.Generation}
 	if _, err := service.Register(ctx, public.GenerationRegistrationV1{GenerationIDV1: id, SourceGeneration: 11, SourceChecksum: 22, SourceSchemaHash: 33, SourceRowCount: 2}); err != nil {
@@ -181,6 +184,9 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 	}
 	if _, err := service.Invalidate(ctx, id, "mutation"); err != nil {
 		t.Fatal(err)
+	}
+	if health, err := backend.OperationsHealthV1(ctx); err != nil || health.Ready || health.Reason != "lifecycle_not_active" {
+		t.Fatalf("invalidated operations health = %#v, %v", health, err)
 	}
 	proof, active, err := harness.LeaderAuthority().MutationProofV1(successor.Index)
 	if err != nil || active {
