@@ -2358,6 +2358,11 @@ func TestClusterSubmitterGenericUpdatesFailClosedWithoutLocalMutation(t *testing
 	}))
 	submitter := &mongoClusterFakeSubmitter{}
 	setMongoClusterTestSubmitter(server, submitter, 8)
+	assertCommandError(t, serveCommand(t, server, 325829, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "age", Value: int32(10)}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Grace"}}}}}}}},
+		{Key: "$db", Value: "app"},
+	}), "BadValue")
 	for _, update := range []bson.D{
 		{{Key: "$inc", Value: bson.D{{Key: "age", Value: int32(1)}}}},
 		{{Key: "name", Value: "Grace"}},
@@ -2369,6 +2374,11 @@ func TestClusterSubmitterGenericUpdatesFailClosedWithoutLocalMutation(t *testing
 		})
 		assertCommandError(t, response, "BadValue")
 	}
+	assertCommandError(t, serveCommand(t, server, 325834, bson.D{
+		{Key: "update", Value: "missing"},
+		{Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "age", Value: int32(10)}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Grace"}}}}}}}},
+		{Key: "$db", Value: "app"},
+	}), "BadValue")
 	assertCommandError(t, serveCommand(t, server, 325833, bson.D{
 		{Key: "update", Value: "users"},
 		{Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Grace"}}}}}, {Key: "upsert", Value: true}}}},
@@ -2376,6 +2386,9 @@ func TestClusterSubmitterGenericUpdatesFailClosedWithoutLocalMutation(t *testing
 	}), "BadValue")
 	if calls := submitter.snapshotCalls(); len(calls) != 0 {
 		t.Fatalf("generic updates submitted %d cluster calls", len(calls))
+	}
+	if _, err := server.Collections.OpenCollection("app.missing"); err == nil {
+		t.Fatal("generic routed update created missing collection")
 	}
 	found := serveCommand(t, server, 325832, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
 	doc := cursorFirstBatch(t, found)[0]
