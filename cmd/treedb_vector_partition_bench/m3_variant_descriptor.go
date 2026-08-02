@@ -42,6 +42,8 @@ type m3VariantDescriptorV1 struct {
 	GraphArtifactSHA256      string                         `json:"graph_artifact_sha256"`
 	GraphBuildSHA256         string                         `json:"graph_build_sha256"`
 	ArtifactBackend          string                         `json:"artifact_backend"`
+	KaHIPPythonSHA256        string                         `json:"kahip_python_sha256"`
+	KaHIPAdapterSHA256       string                         `json:"kahip_adapter_sha256"`
 	Source                   vectorpartition.Source         `json:"source"`
 	BuildIdentityDigest      string                         `json:"build_identity_digest"`
 	DatabaseDirectory        string                         `json:"database_directory"`
@@ -106,6 +108,8 @@ func m3VariantBuildIdentityDigestV1(d m3VariantDescriptorV1) (string, error) {
 		GraphArtifactSHA256      string
 		GraphBuildSHA256         string
 		ArtifactBackend          string
+		KaHIPPythonSHA256        string
+		KaHIPAdapterSHA256       string
 		Source                   vectorpartition.Source
 		IndexDefinitionDigest    string
 		PartitionHNSWM           int
@@ -122,7 +126,7 @@ func m3VariantBuildIdentityDigestV1(d m3VariantDescriptorV1) (string, error) {
 		EdgeCutAfter             int
 	}{
 		FixtureChecksum: d.FixtureChecksum, BaseSHA: d.BaseSHA, HeadSHA: d.HeadSHA, BuildDirty: d.BuildDirty, ExecutableSHA256: d.ExecutableSHA256, VariantID: d.VariantID, AssignmentBasis: d.AssignmentBasis, OverlapRatio: d.OverlapRatio,
-		ArtifactSHA256: d.ArtifactSHA256, GraphArtifactSHA256: d.GraphArtifactSHA256, GraphBuildSHA256: d.GraphBuildSHA256, ArtifactBackend: d.ArtifactBackend,
+		ArtifactSHA256: d.ArtifactSHA256, GraphArtifactSHA256: d.GraphArtifactSHA256, GraphBuildSHA256: d.GraphBuildSHA256, ArtifactBackend: d.ArtifactBackend, KaHIPPythonSHA256: d.KaHIPPythonSHA256, KaHIPAdapterSHA256: d.KaHIPAdapterSHA256,
 		Source: d.Source, IndexDefinitionDigest: d.IndexDefinitionDigest, PartitionHNSWM: d.PartitionHNSWM, PartitionConfig: d.PartitionConfig,
 		PartitionMaxDistanceWork: d.PartitionMaxDistanceWork, RouterMaxScalarWork: d.RouterMaxScalarWork, RouterConfig: d.RouterConfig,
 		M3MaxBenchmarkVisits: d.M3MaxBenchmarkVisits,
@@ -254,6 +258,14 @@ func validateM3VariantDescriptorV1(d m3VariantDescriptorV1) error {
 	}
 	if d.AssignmentBasis == partitionAssignmentGraphV1 && d.ArtifactSHA256 != d.GraphArtifactSHA256 {
 		return errors.New("graph M3 variant artifact does not match its graph-build identity")
+	}
+	kahipBackend := fmt.Sprintf("kahip_python_3.25_eco_symmetrized_v1_seed_%d", d.PartitionConfig.Seed)
+	if d.ArtifactBackend == kahipBackend {
+		if !m8SHA256V1(d.KaHIPPythonSHA256) || !m8SHA256V1(d.KaHIPAdapterSHA256) {
+			return errors.New("KaHIP M3 variant descriptor lacks complete execution identity")
+		}
+	} else if d.KaHIPPythonSHA256 != "" || d.KaHIPAdapterSHA256 != "" {
+		return errors.New("non-KaHIP M3 variant descriptor has KaHIP execution identity")
 	}
 	var loadTotal uint64
 	for _, load := range d.PartitionLoads {

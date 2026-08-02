@@ -354,7 +354,7 @@ func m8ValidateVariantBuildCompatibilityV1(variants []m3VariantDescriptorV1) err
 		}
 	}
 	graphOverlap := byID["graph-overlap-020-v1"]
-	if graphOverlap.ArtifactSHA256 != base.ArtifactSHA256 || graphOverlap.GraphArtifactSHA256 != base.GraphArtifactSHA256 {
+	if graphOverlap.ArtifactSHA256 != base.ArtifactSHA256 || graphOverlap.GraphArtifactSHA256 != base.GraphArtifactSHA256 || graphOverlap.KaHIPPythonSHA256 != base.KaHIPPythonSHA256 || graphOverlap.KaHIPAdapterSHA256 != base.KaHIPAdapterSHA256 {
 		return errors.New("M8 matrix graph variants do not share the same assignment artifact")
 	}
 	return nil

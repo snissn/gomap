@@ -101,7 +101,9 @@ type config struct {
 	partitionAssignment   string
 	partitionTruthOracle  bool
 	kahipPython           string
+	kahipPythonSHA256     string
 	kahipScript           string
+	kahipAdapterSHA256    string
 	kahipSource           string
 	kahipTimeout          time.Duration
 	partition             vectorpartition.Config
@@ -1034,6 +1036,11 @@ func parseConfig(args []string) (config, error) {
 		if cfg.kahipPython, err = filepath.Abs(python); err != nil {
 			return config{}, fmt.Errorf("-partition-kahip-python: %w", err)
 		}
+		// Hash the executable selected for this run without replacing the configured
+		// invocation path: a venv entry point may intentionally be a symlink.
+		if cfg.kahipPythonSHA256, err = m8BenchmarkExecutableSHA256V1(cfg.kahipPython); err != nil {
+			return config{}, fmt.Errorf("-partition-kahip-python: %w", err)
+		}
 		script, err := filepath.Abs(cfg.kahipScript)
 		if err != nil {
 			return config{}, fmt.Errorf("-partition-kahip-script: %w", err)
@@ -1058,7 +1065,8 @@ func parseConfig(args []string) (config, error) {
 			return config{}, fmt.Errorf("-partition-kahip-script exceeds %d-byte cap", kahipAdapterMaxBytes)
 		}
 		sum := sha256.Sum256(scriptBytes)
-		if hex.EncodeToString(sum[:]) != kahipAdapterSHA256 {
+		cfg.kahipAdapterSHA256 = hex.EncodeToString(sum[:])
+		if cfg.kahipAdapterSHA256 != kahipAdapterSHA256 {
 			return config{}, errors.New("-partition-kahip-script does not match the pinned adapter")
 		}
 		cfg.kahipScript = script

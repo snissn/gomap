@@ -171,6 +171,8 @@ func TestM3VariantBuildIdentityBindsOverlapInputsAndOutcomesV1(t *testing.T) {
 		"head revision":        func(candidate *m3VariantDescriptorV1) { candidate.HeadSHA = strings.Repeat("e", 40) },
 		"dirty build":          func(candidate *m3VariantDescriptorV1) { candidate.BuildDirty = true },
 		"benchmark executable": func(candidate *m3VariantDescriptorV1) { candidate.ExecutableSHA256 = strings.Repeat("d", 64) },
+		"KaHIP python":         func(candidate *m3VariantDescriptorV1) { candidate.KaHIPPythonSHA256 = strings.Repeat("d", 64) },
+		"KaHIP adapter":        func(candidate *m3VariantDescriptorV1) { candidate.KaHIPAdapterSHA256 = strings.Repeat("e", 64) },
 		"graph build":          func(candidate *m3VariantDescriptorV1) { candidate.GraphBuildSHA256 = strings.Repeat("d", 64) },
 		"partition config":     func(candidate *m3VariantDescriptorV1) { candidate.PartitionConfig.Pivots++ },
 		"partition work cap":   func(candidate *m3VariantDescriptorV1) { candidate.PartitionMaxDistanceWork++ },
@@ -187,6 +189,39 @@ func TestM3VariantBuildIdentityBindsOverlapInputsAndOutcomesV1(t *testing.T) {
 			changed, err := m3VariantBuildIdentityDigestV1(candidate)
 			if err != nil || changed == baseline {
 				t.Fatalf("outcome identity baseline=%s changed=%s err=%v", baseline, changed, err)
+			}
+		})
+	}
+}
+
+func TestM3VariantDescriptorBindsKaHIPExecutionIdentityV1(t *testing.T) {
+	d := testM3VariantDescriptorV1(t.TempDir())
+	d.ArtifactBackend = "kahip_python_3.25_eco_symmetrized_v1_seed_1"
+	d.PartitionConfig.Seed = 1
+	d.KaHIPPythonSHA256 = strings.Repeat("a", 64)
+	d.KaHIPAdapterSHA256 = strings.Repeat("b", 64)
+	d.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(d)
+	d.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: uint64(d.Capacity), Budget: uint64(d.OverlapRequested), Realized: uint64(d.OverlapRealized), BuildIdentityDigest: d.BuildIdentityDigest})
+	if err := validateM3VariantDescriptorV1(d); err != nil {
+		t.Fatalf("valid KaHIP identity: %v", err)
+	}
+	for name, mutate := range map[string]func(*m3VariantDescriptorV1){
+		"missing python":    func(d *m3VariantDescriptorV1) { d.KaHIPPythonSHA256 = "" },
+		"malformed adapter": func(d *m3VariantDescriptorV1) { d.KaHIPAdapterSHA256 = "bad" },
+		"stable identity": func(d *m3VariantDescriptorV1) {
+			d.ArtifactBackend = "stable_id_hash_baseline_v1"
+			d.AssignmentBasis = partitionAssignmentStableIDHashV1
+			d.VariantID = "stable-id-hash-disjoint-v1"
+			d.OverlapRatio = 0
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := d
+			mutate(&candidate)
+			candidate.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(candidate)
+			candidate.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: uint64(candidate.Capacity), Budget: 0, Realized: 0, BuildIdentityDigest: candidate.BuildIdentityDigest})
+			if err := validateM3VariantDescriptorV1(candidate); err == nil {
+				t.Fatal("accepted invalid KaHIP execution identity")
 			}
 		})
 	}

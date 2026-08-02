@@ -836,13 +836,15 @@ func m8QualificationM3BuildCapsV1(variant m3VariantDescriptorV1, fixture fixture
 func m8QualificationVariantBackendV1(variant m3VariantDescriptorV1, fixture fixtureManifest) bool {
 	switch variant.VariantID {
 	case "graph-disjoint-v1", "graph-overlap-020-v1":
-		return variant.AssignmentBasis == partitionAssignmentGraphV1 && variant.ArtifactSHA256 == variant.GraphArtifactSHA256 && variant.ArtifactBackend == fmt.Sprintf("kahip_python_3.25_eco_symmetrized_v1_seed_%d", fixture.Seed)
+		return variant.AssignmentBasis == partitionAssignmentGraphV1 && variant.ArtifactSHA256 == variant.GraphArtifactSHA256 && variant.ArtifactBackend == fmt.Sprintf("kahip_python_3.25_eco_symmetrized_v1_seed_%d", fixture.Seed) && variant.KaHIPPythonSHA256 == m8QualificationKaHIPPythonSHA256V1 && variant.KaHIPAdapterSHA256 == kahipAdapterSHA256
 	case "stable-id-hash-disjoint-v1":
-		return variant.AssignmentBasis == partitionAssignmentStableIDHashV1 && variant.ArtifactBackend == "stable_id_hash_baseline_v1"
+		return variant.AssignmentBasis == partitionAssignmentStableIDHashV1 && variant.ArtifactBackend == "stable_id_hash_baseline_v1" && variant.KaHIPPythonSHA256 == "" && variant.KaHIPAdapterSHA256 == ""
 	default:
 		return false
 	}
 }
+
+const m8QualificationKaHIPPythonSHA256V1 = "7d51cd6b48b521277f5caa4610a82126e315fa2be4df069823a8b1eeb5bd4a86"
 
 type m8QualificationEnvironmentV1 struct {
 	GoVersion, GOOS, GOARCH string

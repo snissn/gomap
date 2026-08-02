@@ -61,6 +61,13 @@ caps and the complete parsed partition-builder configuration, so campaign
 validation rejects a retained candidate built above its corpus-specific envelope
 even when its artifact bytes otherwise match.
 
+For graph-disjoint and graph-overlap builds, the same schema-v5 descriptor also
+binds the selected KaHIP Python executable SHA-256 and the pinned adapter
+SHA-256. Qualification requires Python
+`7d51cd6b48b521277f5caa4610a82126e315fa2be4df069823a8b1eeb5bd4a86` and
+adapter `ae4ca8f5f26bd510a507a0f4ba50adaf1e5514ee9e20340cb9d494aba8f54825`;
+the stable-ID-hash baseline carries neither external-execution identity.
+
 Each retained M3 and M8 command also explicitly sets `-max-vectors` to the
 authoritative corpus size (100k or 250k) and `-max-fixture-bytes` to 4 GiB.
 Qualification re-applies the runner's fixture and pre-measurement work

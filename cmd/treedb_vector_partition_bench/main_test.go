@@ -1593,7 +1593,8 @@ func TestKaHIPOfflineSelectorIsLimitedToGraphMaterializationV1(t *testing.T) {
 	}
 	for _, stage := range []string{"partition", "overlap,partition_index"} {
 		cfg, err := parseConfig(append(append([]string(nil), base...), "-stage", stage))
-		if err != nil || cfg.kahipPython != python || cfg.kahipScript != script || cfg.kahipSource != string(adapter) || cfg.kahipTimeout != kahipDefaultTimeout {
+		wantPythonSHA, hashErr := m8BenchmarkExecutableSHA256V1(python)
+		if err != nil || hashErr != nil || cfg.kahipPython != python || cfg.kahipPythonSHA256 != wantPythonSHA || cfg.kahipScript != script || cfg.kahipSource != string(adapter) || cfg.kahipAdapterSHA256 != kahipAdapterSHA256 || cfg.kahipTimeout != kahipDefaultTimeout {
 			t.Fatalf("stage=%s cfg=%+v err=%v", stage, cfg, err)
 		}
 		if command := kahipAdapterCommand(cfg); len(command) != 3 || command[0] != python || command[1] != "-c" || command[2] != string(adapter) {

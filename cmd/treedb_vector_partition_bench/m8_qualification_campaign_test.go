@@ -1068,12 +1068,14 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 		Status        string `json:"status"`
 		BaseSHA       string `json:"base_sha"`
 		Candidate     struct {
-			Variant           string `json:"variant"`
-			AssignmentBackend string `json:"assignment_backend"`
-			RouterCandidates  int    `json:"router_candidates"`
-			Probes            []int  `json:"probes"`
-			RepeatedProbes    []int  `json:"repeated_probes"`
-			Repetitions       int    `json:"repetitions"`
+			Variant            string `json:"variant"`
+			AssignmentBackend  string `json:"assignment_backend"`
+			KaHIPPythonSHA256  string `json:"kahip_python_sha256"`
+			KaHIPAdapterSHA256 string `json:"kahip_adapter_sha256"`
+			RouterCandidates   int    `json:"router_candidates"`
+			Probes             []int  `json:"probes"`
+			RepeatedProbes     []int  `json:"repeated_probes"`
+			Repetitions        int    `json:"repetitions"`
 		} `json:"candidate"`
 		Corpora []struct {
 			ID               string `json:"id"`
@@ -1100,7 +1102,7 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 	if err := json.Unmarshal(raw, &plan); err != nil {
 		t.Fatal(err)
 	}
-	if plan.SchemaVersion != 1 || plan.ResultKind != "vector_partition_structured_qualification_campaign_plan_v1" || plan.Status != "planned_no_measurement" || plan.BaseSHA != m8QualificationFrozenBaseSHAV1 || plan.Candidate.Variant != "graph-overlap-020-v1" || plan.Candidate.AssignmentBackend != "kahip_python_3.25_eco_symmetrized_v1_seed_<seed>" || plan.Candidate.RouterCandidates != 64 || !slices.Equal(plan.Candidate.Probes, []int{1, 2, 4, 8, 16}) || !slices.Equal(plan.Candidate.RepeatedProbes, []int{1, 2, 4, 8, 16}) || plan.Candidate.Repetitions != 3 || len(plan.Corpora) != 2 {
+	if plan.SchemaVersion != 1 || plan.ResultKind != "vector_partition_structured_qualification_campaign_plan_v1" || plan.Status != "planned_no_measurement" || plan.BaseSHA != m8QualificationFrozenBaseSHAV1 || plan.Candidate.Variant != "graph-overlap-020-v1" || plan.Candidate.AssignmentBackend != "kahip_python_3.25_eco_symmetrized_v1_seed_<seed>" || plan.Candidate.KaHIPPythonSHA256 != m8QualificationKaHIPPythonSHA256V1 || plan.Candidate.KaHIPAdapterSHA256 != kahipAdapterSHA256 || plan.Candidate.RouterCandidates != 64 || !slices.Equal(plan.Candidate.Probes, []int{1, 2, 4, 8, 16}) || !slices.Equal(plan.Candidate.RepeatedProbes, []int{1, 2, 4, 8, 16}) || plan.Candidate.Repetitions != 3 || len(plan.Corpora) != 2 {
 		t.Fatalf("plan=%+v", plan)
 	}
 	anchor100, ok100 := m8QualificationTruthCacheAnchorV1(m8QualificationFixturesV1[0])
@@ -1177,6 +1179,8 @@ func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManif
 			descriptor.ArtifactBackend = "stable_id_hash_baseline_v1"
 		} else {
 			descriptor.ArtifactBackend = fmt.Sprintf("kahip_python_3.25_eco_symmetrized_v1_seed_%d", fixture.Seed)
+			descriptor.KaHIPPythonSHA256 = m8QualificationKaHIPPythonSHA256V1
+			descriptor.KaHIPAdapterSHA256 = kahipAdapterSHA256
 		}
 		refreshTestM3VariantIdentityV1(t, &descriptor)
 		report := testM8QualificationReportV1(t, head, fixture, descriptor, p4QPS)
@@ -1539,6 +1543,10 @@ func testM8QualificationRetainedDescriptorV1(t *testing.T, dir, head string, fix
 	routerConfig.Seed = fixture.Seed
 	partitionConfig := partition
 	descriptor := m3VariantDescriptorV1{SchemaVersion: 5, ResultKind: "m3_persistent_variant_descriptor_v5", FixtureChecksum: fixture.Checksum, ExecutableSHA256: strings.Repeat("e", 64), BaseSHA: head, HeadSHA: head, VariantID: variantID, AssignmentBasis: assignment, OverlapRatio: ratio, ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphDigest, GraphBuildSHA256: graphBuildDigest, ArtifactBackend: artifact.Backend, Source: artifact.Source, DatabaseDirectory: dir, IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(meta.VectorIndexes[0]), PartitionHNSWM: partitionHNSWDegree, PartitionConfig: partitionConfig, PartitionMaxDistanceWork: partitionConfig.MaxDistanceWork, RouterMaxScalarWork: 20_000_000_000, RouterConfig: routerConfig, M3MaxBenchmarkVisits: 400_000_000, Capacity: overlap.Capacity, OverlapRequested: overlap.Budget, OverlapUseful: overlap.Useful, OverlapFiller: overlap.Filler, EdgeCutBefore: overlap.EdgeCutBefore, EdgeCutAfter: overlap.EdgeCutAfter}
+	if assignment == partitionAssignmentGraphV1 && strings.HasPrefix(artifact.Backend, "kahip_python_") {
+		descriptor.KaHIPPythonSHA256 = m8QualificationKaHIPPythonSHA256V1
+		descriptor.KaHIPAdapterSHA256 = kahipAdapterSHA256
+	}
 	descriptor.BuildIdentityDigest, err = m3VariantBuildIdentityDigestV1(descriptor)
 	if err != nil {
 		t.Fatal(err)
@@ -2079,8 +2087,8 @@ func TestM8QualificationVariantBackendV1(t *testing.T) {
 	for _, fixture := range m8QualificationFixturesV1 {
 		kahip := fmt.Sprintf("kahip_python_3.25_eco_symmetrized_v1_seed_%d", fixture.Seed)
 		for _, variant := range []m3VariantDescriptorV1{
-			{VariantID: "graph-disjoint-v1", AssignmentBasis: partitionAssignmentGraphV1, ArtifactSHA256: "same", GraphArtifactSHA256: "same", ArtifactBackend: kahip},
-			{VariantID: "graph-overlap-020-v1", AssignmentBasis: partitionAssignmentGraphV1, ArtifactSHA256: "same", GraphArtifactSHA256: "same", ArtifactBackend: kahip},
+			{VariantID: "graph-disjoint-v1", AssignmentBasis: partitionAssignmentGraphV1, ArtifactSHA256: "same", GraphArtifactSHA256: "same", ArtifactBackend: kahip, KaHIPPythonSHA256: m8QualificationKaHIPPythonSHA256V1, KaHIPAdapterSHA256: kahipAdapterSHA256},
+			{VariantID: "graph-overlap-020-v1", AssignmentBasis: partitionAssignmentGraphV1, ArtifactSHA256: "same", GraphArtifactSHA256: "same", ArtifactBackend: kahip, KaHIPPythonSHA256: m8QualificationKaHIPPythonSHA256V1, KaHIPAdapterSHA256: kahipAdapterSHA256},
 			{VariantID: "stable-id-hash-disjoint-v1", AssignmentBasis: partitionAssignmentStableIDHashV1, ArtifactBackend: "stable_id_hash_baseline_v1"},
 		} {
 			if !m8QualificationVariantBackendV1(variant, fixture) {
@@ -2088,9 +2096,12 @@ func TestM8QualificationVariantBackendV1(t *testing.T) {
 			}
 		}
 		for name, variant := range map[string]m3VariantDescriptorV1{
-			"reference graph": {VariantID: "graph-disjoint-v1", AssignmentBasis: partitionAssignmentGraphV1, ArtifactSHA256: "same", GraphArtifactSHA256: "same", ArtifactBackend: "reference_deterministic_v1"},
-			"wrong seed":      {VariantID: "graph-overlap-020-v1", AssignmentBasis: partitionAssignmentGraphV1, ArtifactSHA256: "same", GraphArtifactSHA256: "same", ArtifactBackend: kahip + "0"},
-			"stable relabel":  {VariantID: "stable-id-hash-disjoint-v1", AssignmentBasis: partitionAssignmentStableIDHashV1, ArtifactBackend: kahip},
+			"reference graph":  {VariantID: "graph-disjoint-v1", AssignmentBasis: partitionAssignmentGraphV1, ArtifactSHA256: "same", GraphArtifactSHA256: "same", ArtifactBackend: "reference_deterministic_v1"},
+			"wrong seed":       {VariantID: "graph-overlap-020-v1", AssignmentBasis: partitionAssignmentGraphV1, ArtifactSHA256: "same", GraphArtifactSHA256: "same", ArtifactBackend: kahip + "0"},
+			"missing python":   {VariantID: "graph-disjoint-v1", AssignmentBasis: partitionAssignmentGraphV1, ArtifactSHA256: "same", GraphArtifactSHA256: "same", ArtifactBackend: kahip, KaHIPAdapterSHA256: kahipAdapterSHA256},
+			"wrong adapter":    {VariantID: "graph-disjoint-v1", AssignmentBasis: partitionAssignmentGraphV1, ArtifactSHA256: "same", GraphArtifactSHA256: "same", ArtifactBackend: kahip, KaHIPPythonSHA256: m8QualificationKaHIPPythonSHA256V1, KaHIPAdapterSHA256: strings.Repeat("a", 64)},
+			"stable relabel":   {VariantID: "stable-id-hash-disjoint-v1", AssignmentBasis: partitionAssignmentStableIDHashV1, ArtifactBackend: kahip},
+			"stable execution": {VariantID: "stable-id-hash-disjoint-v1", AssignmentBasis: partitionAssignmentStableIDHashV1, ArtifactBackend: "stable_id_hash_baseline_v1", KaHIPPythonSHA256: m8QualificationKaHIPPythonSHA256V1},
 		} {
 			if m8QualificationVariantBackendV1(variant, fixture) {
 				t.Fatalf("fixture=%d accepted %s backend", fixture.Vectors, name)

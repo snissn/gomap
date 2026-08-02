@@ -7,6 +7,8 @@
   "candidate": {
     "variant": "graph-overlap-020-v1",
     "assignment_backend": "kahip_python_3.25_eco_symmetrized_v1_seed_<seed>",
+    "kahip_python_sha256": "7d51cd6b48b521277f5caa4610a82126e315fa2be4df069823a8b1eeb5bd4a86",
+    "kahip_adapter_sha256": "ae4ca8f5f26bd510a507a0f4ba50adaf1e5514ee9e20340cb9d494aba8f54825",
     "overlap": 0.2,
     "partitions": 16,
     "router_candidates": 64,
