@@ -339,6 +339,40 @@ func TestFindAndModifyAcceptsMetadataAndRejectsWriteConcernBeforeMutation(t *tes
 	}
 }
 
+func TestFindAndModifyRejectsUnsupportedReadConcernBeforeMutation(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 70, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "n", Value: int32(1)}}}}, {Key: "$db", Value: "app"}}))
+	for i, test := range []struct {
+		concern any
+		code    string
+	}{{bson.D{{Key: "level", Value: "majority"}}, "BadValue"}, {"local", "FailedToParse"}} {
+		response := serveCommand(t, server, int32(71+i), bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "readConcern", Value: test.concern}, {Key: "$db", Value: "app"}})
+		assertCommandError(t, response, test.code)
+	}
+	collection, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _, err := prepareInsertDocument(mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}), collections.DocumentFormatBSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := collection.Get(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, ok := bson.Raw(stored).Lookup("n").Int32OK(); !ok || n != 1 {
+		t.Fatalf("readConcern failure mutated n=%d ok=%v want 1", n, ok)
+	}
+}
+
 func TestFindAndModifyClusterFailsClosed(t *testing.T) {
 	server := NewServer()
 	server.ClusterSubmitter = &mongoClusterFakeSubmitter{}

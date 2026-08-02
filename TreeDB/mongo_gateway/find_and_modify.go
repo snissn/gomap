@@ -13,6 +13,9 @@ import (
 )
 
 func (s *Server) findAndModifyResponse(ctx context.Context, command wire.Document) (wire.Document, error) {
+	if doc, rejected, err := rejectUnsupportedReadConcern(command); rejected {
+		return doc, err
+	}
 	if s.clusterSubmitterConfigured() {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway cluster findAndModify is not supported")
 	}
