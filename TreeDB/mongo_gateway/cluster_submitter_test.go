@@ -2454,6 +2454,9 @@ func TestClusterSubmitterUpdateSubmitsPriorOrderedItemsBeforeUnsupportedUpsert(t
 	if len(ids) != 1 {
 		t.Fatalf("submitted document ids=%d want 1", len(ids))
 	}
+	if want, err := encodePrimaryKey(mustRawValue(t, "u1")); err != nil || !bytes.Equal(ids[0], want) {
+		t.Fatalf("submitted document id=%v want u1 (err=%v)", ids[0], err)
+	}
 	assertMongoClusterCallAckPolicy(t, calls[0], iwire.AckVisible)
 }
 
