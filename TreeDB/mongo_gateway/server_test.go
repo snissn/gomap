@@ -6159,6 +6159,8 @@ func TestMongoMutationNestedOperators(t *testing.T) {
 		{Key: "profile", Value: bson.D{{Key: "name", Value: "ada"}, {Key: "count", Value: int32(1)}, {Key: "old", Value: true}}},
 		{Key: "tags", Value: bson.A{"go"}},
 		{Key: "labels", Value: bson.A{"go"}},
+		{Key: "scalarLabels", Value: bson.A{"go"}},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "a", Value: int32(1)}, {Key: "b", Value: int32(2)}}}},
 	})
 	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
 		{Key: "$set", Value: bson.D{{Key: "profile.name", Value: "grace"}, {Key: "profile.city", Value: "london"}}},
@@ -6168,6 +6170,15 @@ func TestMongoMutationNestedOperators(t *testing.T) {
 		{Key: "$push", Value: bson.D{{Key: "events", Value: bson.D{{Key: "kind", Value: "login"}}}}},
 		{Key: "$addToSet", Value: bson.D{{Key: "empty", Value: bson.D{{Key: "$each", Value: bson.A{}}}}}},
 		{Key: "$addToSet", Value: bson.D{{Key: "labels", Value: bson.D{{Key: "$each", Value: bson.A{"go", "db", "go"}}}}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "scalarLabels", Value: "db"}}},
+		{Key: "$addToSet", Value: bson.D{
+			{Key: "documents", Value: bson.D{
+				{Key: "$each", Value: bson.A{
+					bson.D{{Key: "a", Value: int32(1)}, {Key: "b", Value: int32(2)}},
+					bson.D{{Key: "b", Value: int32(2)}, {Key: "a", Value: int32(1)}},
+				}},
+			}},
+		}},
 		{Key: "$unset", Value: bson.D{{Key: "profile.old", Value: true}}},
 	}))
 	if err != nil {
@@ -6197,6 +6208,19 @@ func TestMongoMutationNestedOperators(t *testing.T) {
 	values, err = bson.Raw(updated).Lookup("labels").Array().Values()
 	if err != nil || len(values) != 2 {
 		t.Fatalf("labels=%v err=%v", values, err)
+	}
+	values, err = bson.Raw(updated).Lookup("scalarLabels").Array().Values()
+	if err != nil || len(values) != 2 || values[0].StringValue() != "go" || values[1].StringValue() != "db" {
+		t.Fatalf("scalarLabels=%v err=%v", values, err)
+	}
+	values, err = bson.Raw(updated).Lookup("documents").Array().Values()
+	if err != nil || len(values) != 2 {
+		t.Fatalf("documents=%v err=%v", values, err)
+	}
+	first, firstErr := values[0].Document().Elements()
+	second, secondErr := values[1].Document().Elements()
+	if firstErr != nil || secondErr != nil || len(first) != 2 || len(second) != 2 || first[0].Key() != "a" || first[1].Key() != "b" || second[0].Key() != "b" || second[1].Key() != "a" {
+		t.Fatalf("documents preserve BSON field order: %v", values)
 	}
 	events, err := bson.Raw(updated).Lookup("events").Array().Values()
 	if err != nil || len(events) != 1 || events[0].Document().Lookup("kind").StringValue() != "login" {
@@ -6370,6 +6394,15 @@ func TestServerUpdateGenericMutationsAcrossDocumentFormats(t *testing.T) {
 			find = serveCommand(t, s, nextRequestID(), bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
 			if !cursorFirstBatch(t, find)[0].Lookup("blocked").IsZero() {
 				t.Fatalf("arrayFilters update changed %s document", format)
+			}
+			overLimit := bson.A{}
+			for range mongoMutationMaxEachValues + 1 {
+				overLimit = append(overLimit, int32(1))
+			}
+			assertCommandError(t, update(bson.D{{Key: "$push", Value: bson.D{{Key: "tooMany", Value: bson.D{{Key: "$each", Value: overLimit}}}}}}), "BadValue")
+			find = serveCommand(t, s, nextRequestID(), bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+			if !cursorFirstBatch(t, find)[0].Lookup("tooMany").IsZero() {
+				t.Fatalf("over-limit $each changed %s document", format)
 			}
 			find = serveCommand(t, s, nextRequestID(), bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
 			if n, _ := cursorFirstBatch(t, find)[0].Lookup("n").DoubleOK(); n != 2147483648.5 {

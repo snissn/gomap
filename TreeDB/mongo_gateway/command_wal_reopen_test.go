@@ -251,6 +251,12 @@ func TestMongoMutationCommandWALValueLogPointersReopen(t *testing.T) {
 		if want.id == "u1" && raw.Lookup("profile").Document().Lookup("name").StringValue() != "durable" {
 			t.Fatalf("u1 profile after reopen=%v", raw.Lookup("profile"))
 		}
+		if want.id == "u1" {
+			labels, labelsErr := raw.Lookup("labels").Array().Values()
+			if labelsErr != nil || len(labels) != 1 || labels[0].StringValue() != "wal" {
+				t.Fatalf("u1 labels after reopen=%v err=%v", labels, labelsErr)
+			}
+		}
 		if want.id == "u2" && raw.Lookup("created").Document().Lookup("by").StringValue() != "wal" {
 			t.Fatalf("u2 created after reopen=%v", raw.Lookup("created"))
 		}
