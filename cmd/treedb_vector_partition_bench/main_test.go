@@ -2676,6 +2676,41 @@ func TestM8ProfileCaptureWritesRequiredRuntimeArtifactsV1(t *testing.T) {
 	}
 }
 
+func TestM8ProfileArtifactsRejectMalformedRuntimeArtifactsV1(t *testing.T) {
+	for _, test := range []struct {
+		name, artifact string
+		contents       []byte
+	}{
+		{name: "garbage pprof", artifact: "cpu.pprof", contents: []byte("not a pprof")},
+		{name: "truncated pprof", artifact: "cpu.pprof", contents: []byte{0}},
+		{name: "garbage trace", artifact: "trace.out", contents: []byte("not a trace")},
+		{name: "truncated trace", artifact: "trace.out", contents: []byte{0}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			capture, err := startM8ProfileCaptureV1(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtime.Gosched()
+			paths, err := capture.Stop()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range paths {
+				if filepath.Base(path) == test.artifact {
+					if err := os.WriteFile(path, test.contents, 0o644); err != nil {
+						t.Fatal(err)
+					}
+					break
+				}
+			}
+			if _, err := m8ProfileArtifactsV1(paths); err == nil {
+				t.Fatalf("accepted %s", test.name)
+			}
+		})
+	}
+}
+
 func TestM8ProfileCaptureCanonicalizesAliasedDirectoryV1(t *testing.T) {
 	directory, parent := t.TempDir(), t.TempDir()
 	alias := filepath.Join(parent, "profiles")

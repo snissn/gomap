@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -2068,6 +2070,55 @@ func testM8QualificationRemoveCommandFlagV1(t *testing.T, args *[]string, flag s
 
 func testM8QualificationProfilesV1(t *testing.T, root, run string, matrix *m8ProductionMatrixV1) {
 	t.Helper()
+	templateDir := filepath.Join(root, "profile-template")
+	templatePaths := make([]string, 0, len(m8ProfileArtifactNamesV1))
+	for _, name := range m8ProfileArtifactNamesV1 {
+		templatePaths = append(templatePaths, filepath.Join(templateDir, name))
+	}
+	created := false
+	if _, err := os.Stat(templatePaths[0]); errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(templateDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		capture, err := startM8ProfileCaptureV1(templateDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runtime.Gosched()
+		if _, err := capture.Stop(); err != nil {
+			t.Fatal(err)
+		}
+		templateDir = capture.dir
+		for i, name := range m8ProfileArtifactNamesV1 {
+			templatePaths[i] = filepath.Join(templateDir, name)
+		}
+		created = true
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	var templateArtifacts []m8ProductionProfileArtifactV1
+	if created {
+		var err error
+		templateArtifacts, err = m8ProfileArtifactsV1(templatePaths)
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		templateArtifacts = make([]m8ProductionProfileArtifactV1, 0, len(templatePaths))
+		for _, path := range templatePaths {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(raw)
+			templateArtifacts = append(templateArtifacts, m8ProductionProfileArtifactV1{Path: path, Bytes: info.Size(), SHA256: hex.EncodeToString(digest[:])})
+		}
+	}
+	profileSets := make(map[string]bool, len(matrix.Variants))
 	for i := range matrix.Variants {
 		report := &matrix.Variants[i]
 		directory := filepath.Join(root, "profiles", run, report.Variant.VariantID)
@@ -2078,22 +2129,45 @@ func testM8QualificationProfilesV1(t *testing.T, root, run string, matrix *m8Pro
 		if err != nil {
 			t.Fatal(err)
 		}
-		paths := make([]string, 0, len(m8ProfileArtifactNamesV1))
-		for _, name := range m8ProfileArtifactNamesV1 {
-			path := filepath.Join(directory, name)
-			if err := os.WriteFile(path, []byte(run+":"+report.Variant.VariantID+":"+name), 0o644); err != nil {
+		artifacts := make([]m8ProductionProfileArtifactV1, 0, len(templateArtifacts))
+		captured := make([]string, 0, len(templateArtifacts))
+		for _, artifact := range templateArtifacts {
+			raw, err := os.ReadFile(artifact.Path)
+			if err != nil {
 				t.Fatal(err)
 			}
-			paths = append(paths, path)
+			path := filepath.Join(directory, filepath.Base(artifact.Path))
+			if err := os.WriteFile(path, raw, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			artifact.Path = path
+			artifacts = append(artifacts, artifact)
+			captured = append(captured, path)
 		}
-		artifacts, err := m8ProfileArtifactsV1(paths)
-		if err != nil {
-			t.Fatal(err)
+		for j := range artifacts {
+			if filepath.Base(artifacts[j].Path) != "allocs.pprof" {
+				continue
+			}
+			if err := writeM8RuntimeProfileV1("allocs", artifacts[j].Path); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(artifacts[j].Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Stat(artifacts[j].Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(raw)
+			artifacts[j].Bytes, artifacts[j].SHA256 = info.Size(), hex.EncodeToString(digest[:])
+			break
 		}
-		captured := make([]string, len(artifacts))
-		for i := range artifacts {
-			captured[i] = artifacts[i].Path
+		profileSet, err := m8ProductionProfileSetDigestV1(artifacts)
+		if err != nil || profileSets[profileSet] {
+			t.Fatalf("profile set=%q err=%v", profileSet, err)
 		}
+		profileSets[profileSet] = true
 		report.Profiles = m8ProductionProfileEvidenceV1{Directory: directory, Captured: captured, Artifacts: artifacts, Status: "captured_production_query_and_fault_boundary", Scope: "test profile capture"}
 		report.Command = testM8QualificationCommandV1(*report)
 		testM8QualificationTranscriptV1(t, directory, report)

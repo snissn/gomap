@@ -915,6 +915,8 @@ func writeM8RuntimeProfileV1(name, path string) error {
 var m8ProfileArtifactNamesV1 = [...]string{"allocs_baseline.pprof", "cpu.pprof", "trace.out", "heap.pprof", "allocs.pprof", "block.pprof", "mutex.pprof"}
 
 const m8BenchmarkExecutableMaxBytesV1 = 512 << 20
+const m8ProfileArtifactMaxBytesV1 = 512 << 20
+const m8ProfileArtifactDecodeTimeoutV1 = 10 * time.Second
 
 func m8BenchmarkExecutableSHA256V1(path string) (string, error) {
 	canonical, err := m8CanonicalPathV1(path)
@@ -942,7 +944,10 @@ func m8ProfileArtifactsV1(paths []string) ([]m8ProductionProfileArtifactV1, erro
 		return nil, errors.New("incomplete M8 profile artifact set")
 	}
 	artifacts := make([]m8ProductionProfileArtifactV1, 0, len(paths))
-	seen := make(map[string]bool, len(paths))
+	expected, seen := make(map[string]bool, len(paths)), make(map[string]bool, len(paths))
+	for _, name := range m8ProfileArtifactNamesV1 {
+		expected[name] = true
+	}
 	for _, path := range paths {
 		absolute, err := filepath.Abs(path)
 		if err != nil {
@@ -953,18 +958,54 @@ func m8ProfileArtifactsV1(paths []string) ([]m8ProductionProfileArtifactV1, erro
 			return nil, fmt.Errorf("resolve M8 profile %q: %w", path, err)
 		}
 		info, err := os.Stat(resolved)
-		if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || seen[resolved] {
+		name := filepath.Base(resolved)
+		if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > m8ProfileArtifactMaxBytesV1 || seen[resolved] || !expected[name] {
 			return nil, fmt.Errorf("invalid M8 profile %q", path)
 		}
-		raw, err := os.ReadFile(resolved)
+		file, err := os.Open(resolved)
 		if err != nil {
 			return nil, fmt.Errorf("read M8 profile %q: %w", path, err)
 		}
-		digest := sha256.Sum256(raw)
-		artifacts = append(artifacts, m8ProductionProfileArtifactV1{Path: resolved, Bytes: info.Size(), SHA256: hex.EncodeToString(digest[:])})
+		hash := sha256.New()
+		bytesRead, copyErr := io.Copy(hash, io.LimitReader(file, m8ProfileArtifactMaxBytesV1+1))
+		closeErr := file.Close()
+		if copyErr != nil || closeErr != nil {
+			return nil, fmt.Errorf("hash M8 profile %q: %w", path, errors.Join(copyErr, closeErr))
+		}
+		if bytesRead > m8ProfileArtifactMaxBytesV1 {
+			return nil, fmt.Errorf("oversized M8 profile %q", path)
+		}
+		if err := m8ValidateProfileArtifactV1(resolved, name); err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, m8ProductionProfileArtifactV1{Path: resolved, Bytes: info.Size(), SHA256: hex.EncodeToString(hash.Sum(nil))})
 		seen[resolved] = true
+		delete(expected, name)
+	}
+	if len(expected) != 0 {
+		return nil, errors.New("incomplete M8 profile artifact set")
 	}
 	return artifacts, nil
+}
+
+func m8ValidateProfileArtifactV1(path, name string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), m8ProfileArtifactDecodeTimeoutV1)
+	defer cancel()
+	args := []string{"tool"}
+	if name == "trace.out" {
+		args = append(args, "trace", "-d=wire", path)
+	} else {
+		args = append(args, "pprof", "-raw", path)
+	}
+	cmd := exec.CommandContext(ctx, "go", args...)
+	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("decode M8 profile %q: %w", path, ctx.Err())
+		}
+		return fmt.Errorf("decode M8 profile %q: %w", path, err)
+	}
+	return nil
 }
 
 type m8CanonicalResultV1 struct {
