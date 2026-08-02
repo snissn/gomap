@@ -978,6 +978,37 @@ func TestM8QualificationRejectsEscapingTranscriptSymlinkV1(t *testing.T) {
 	}
 }
 
+func TestM8QualificationProfilesResolveArtifactTargetsV1(t *testing.T) {
+	root, err := m8CanonicalPathV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	matrix := testM8QualificationMatrixV1(t, strings.Repeat("a", 40), m8QualificationFixturesV1[0], 125)
+	testM8QualificationProfilesV1(t, root, "profile-targets", &matrix)
+	profiles := matrix.Variants[0].Profiles
+	if _, ok := m8QualificationProfilesV1(root, profiles); !ok {
+		t.Fatal("rejected ordinary in-root profiles")
+	}
+	path := profiles.Artifacts[0].Path
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), filepath.Base(path))
+	if err := os.WriteFile(outside, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, path); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, ok := m8QualificationProfilesV1(root, profiles); ok {
+		t.Fatal("accepted profile artifact symlink escaping campaign root")
+	}
+}
+
 func TestM8QualificationVariantBackendV1(t *testing.T) {
 	for _, fixture := range m8QualificationFixturesV1 {
 		kahip := fmt.Sprintf("kahip_python_3.25_eco_symmetrized_v1_seed_%d", fixture.Seed)

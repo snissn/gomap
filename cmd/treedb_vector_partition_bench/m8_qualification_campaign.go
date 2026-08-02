@@ -565,14 +565,30 @@ func m8QualificationResourcesV1(report m8ProductionReportV1, fixture fixtureMani
 }
 
 func m8QualificationProfilesV1(root string, profiles m8ProductionProfileEvidenceV1) (m8QualificationProfileModeV1, bool) {
-	if !validM8ProductionProfilesV1(profiles) {
+	root, err := m8CanonicalPathV1(root)
+	if err != nil {
 		return m8QualificationProfileModeV1{}, false
 	}
-	for _, path := range append(append([]string(nil), profiles.Captured...), profiles.Directory) {
+	directory, err := m8CanonicalPathV1(profiles.Directory)
+	if err != nil || directory != profiles.Directory {
+		return m8QualificationProfileModeV1{}, false
+	}
+	rel, err := filepath.Rel(root, directory)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return m8QualificationProfileModeV1{}, false
+	}
+	for _, artifact := range profiles.Artifacts {
+		path, err := m8CanonicalPathV1(artifact.Path)
+		if err != nil || path != artifact.Path {
+			return m8QualificationProfileModeV1{}, false
+		}
 		rel, err := filepath.Rel(root, path)
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return m8QualificationProfileModeV1{}, false
 		}
+	}
+	if !validM8ProductionProfilesV1(profiles) {
+		return m8QualificationProfileModeV1{}, false
 	}
 	return m8QualificationProfileModeV1{Status: profiles.Status, Scope: profiles.Scope}, true
 }
