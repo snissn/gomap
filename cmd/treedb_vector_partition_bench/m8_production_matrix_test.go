@@ -868,6 +868,7 @@ func TestM8VariantBuildCompatibilityRejectsMixedRetainedBuildsV1(t *testing.T) {
 		"source":                 func(variants []m3VariantDescriptorV1) { variants[2].Source.SourceID = "different" },
 		"index definition":       func(variants []m3VariantDescriptorV1) { variants[2].IndexDefinitionDigest = strings.Repeat("d", 64) },
 		"local HNSW M":           func(variants []m3VariantDescriptorV1) { variants[2].PartitionHNSWM-- },
+		"partition graph degree": func(variants []m3VariantDescriptorV1) { variants[2].PartitionConfig.Degree++ },
 		"router representatives": func(variants []m3VariantDescriptorV1) { variants[2].RouterRepresentatives++ },
 		"router scalar work":     func(variants []m3VariantDescriptorV1) { variants[2].RouterMaxScalarWork++ },
 		"router config seed":     func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.Seed++ },

@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -628,14 +629,25 @@ func m8QualificationExactTruthCapV1(fixture fixtureManifest) int64 {
 	return 600_000_000
 }
 
-func m8QualificationM3BuildCapsV1(variant m3VariantDescriptorV1, fixture fixtureManifest) bool {
+func m8QualificationM3BuildConfigV1(fixture fixtureManifest) (vectorpartition.Config, vectorpartition.RouterConfigV1, int64, bool) {
 	cap, visits := int64(20_000_000_000), int64(400_000_000)
 	if fixture.Vectors == 250000 {
 		cap, visits = 50_000_000_000, 900_000_000
 	}
-	routerConfig := vectorpartition.DefaultRouterConfigV1()
-	routerConfig.MaxScalarWork = cap
-	return variant.PartitionMaxDistanceWork == cap && variant.RouterMaxScalarWork == cap && variant.M3MaxBenchmarkVisits == visits && variant.RouterConfig == routerConfig
+	cfg, err := parseConfig([]string{
+		"-stage", "overlap,partition_index", "-dataset", ".", "-out", ".", "-probes", "1", "-partitions", "16", "-seed", strconv.FormatInt(fixture.Seed, 10),
+		"-partition-max-distance-work", strconv.FormatInt(cap, 10), "-router-max-scalar-work", strconv.FormatInt(cap, 10),
+		"-m3-max-benchmark-visits", strconv.FormatInt(visits, 10),
+	})
+	if err != nil {
+		return vectorpartition.Config{}, vectorpartition.RouterConfigV1{}, 0, false
+	}
+	return cfg.partition, cfg.routerConfig, cfg.m3MaxBenchmarkVisits, true
+}
+
+func m8QualificationM3BuildCapsV1(variant m3VariantDescriptorV1, fixture fixtureManifest) bool {
+	partitionConfig, routerConfig, visits, ok := m8QualificationM3BuildConfigV1(fixture)
+	return ok && variant.PartitionHNSWM == partitionConfig.Degree && variant.PartitionMaxDistanceWork == partitionConfig.MaxDistanceWork && variant.RouterMaxScalarWork == routerConfig.MaxScalarWork && variant.M3MaxBenchmarkVisits == visits && variant.PartitionConfig == partitionConfig && variant.RouterConfig == routerConfig
 }
 
 func m8QualificationVariantBackendV1(variant m3VariantDescriptorV1, fixture fixtureManifest) bool {

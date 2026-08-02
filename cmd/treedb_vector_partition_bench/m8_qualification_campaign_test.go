@@ -776,15 +776,13 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 
 func TestM8QualificationM3BuildCapsV1(t *testing.T) {
 	for _, fixture := range m8QualificationFixturesV1 {
-		cap, visits := int64(20_000_000_000), int64(400_000_000)
-		if fixture.Vectors == 250000 {
-			cap, visits = 50_000_000_000, 900_000_000
+		partitionConfig, routerConfig, visits, ok := m8QualificationM3BuildConfigV1(fixture)
+		if !ok {
+			t.Fatalf("fixture=%d expected config", fixture.Vectors)
 		}
-		routerConfig := vectorpartition.DefaultRouterConfigV1()
-		routerConfig.MaxScalarWork = cap
-		variant := m3VariantDescriptorV1{PartitionMaxDistanceWork: cap, RouterMaxScalarWork: cap, RouterConfig: routerConfig, M3MaxBenchmarkVisits: visits}
+		variant := m3VariantDescriptorV1{PartitionHNSWM: partitionConfig.Degree, PartitionConfig: partitionConfig, PartitionMaxDistanceWork: partitionConfig.MaxDistanceWork, RouterMaxScalarWork: routerConfig.MaxScalarWork, RouterConfig: routerConfig, M3MaxBenchmarkVisits: visits}
 		if !m8QualificationM3BuildCapsV1(variant, fixture) {
-			t.Fatalf("fixture=%d rejected expected cap=%d", fixture.Vectors, cap)
+			t.Fatalf("fixture=%d rejected expected config", fixture.Vectors)
 		}
 		variant.RouterMaxScalarWork++
 		if m8QualificationM3BuildCapsV1(variant, fixture) {
@@ -799,6 +797,20 @@ func TestM8QualificationM3BuildCapsV1(t *testing.T) {
 		variant.RouterConfig.BranchFactor++
 		if m8QualificationM3BuildCapsV1(variant, fixture) {
 			t.Fatalf("fixture=%d accepted off-plan router config", fixture.Vectors)
+		}
+		variant.RouterConfig.BranchFactor--
+		for name, mutate := range map[string]func(*m3VariantDescriptorV1){
+			"graph degree":      func(v *m3VariantDescriptorV1) { v.PartitionConfig.Degree++ },
+			"graph pivots":      func(v *m3VariantDescriptorV1) { v.PartitionConfig.Pivots++ },
+			"graph repetitions": func(v *m3VariantDescriptorV1) { v.PartitionConfig.Repetitions++ },
+			"graph imbalance":   func(v *m3VariantDescriptorV1) { v.PartitionConfig.Imbalance += .01 },
+			"local HNSW M":      func(v *m3VariantDescriptorV1) { v.PartitionHNSWM-- },
+		} {
+			candidate := variant
+			mutate(&candidate)
+			if m8QualificationM3BuildCapsV1(candidate, fixture) {
+				t.Fatalf("fixture=%d accepted off-plan %s", fixture.Vectors, name)
+			}
 		}
 	}
 }
@@ -1028,7 +1040,9 @@ func testM8QualificationRetainedDescriptorV1(t *testing.T, dir, head string, fix
 		t.Fatal(err)
 	}
 	routerConfig := vectorpartition.DefaultRouterConfigV1()
-	descriptor := m3VariantDescriptorV1{SchemaVersion: 5, ResultKind: "m3_persistent_variant_descriptor_v5", FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head, VariantID: variantID, AssignmentBasis: assignment, OverlapRatio: ratio, ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphDigest, GraphBuildSHA256: graphBuildDigest, ArtifactBackend: artifact.Backend, Source: artifact.Source, DatabaseDirectory: dir, IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(meta.VectorIndexes[0]), PartitionHNSWM: partitionHNSWDegree, PartitionMaxDistanceWork: 20_000_000_000, RouterMaxScalarWork: 20_000_000_000, RouterConfig: routerConfig, M3MaxBenchmarkVisits: 400_000_000, Capacity: overlap.Capacity, OverlapRequested: overlap.Budget, OverlapUseful: overlap.Useful, OverlapFiller: overlap.Filler, EdgeCutBefore: overlap.EdgeCutBefore, EdgeCutAfter: overlap.EdgeCutAfter}
+	routerConfig.Seed = fixture.Seed
+	partitionConfig := partition
+	descriptor := m3VariantDescriptorV1{SchemaVersion: 5, ResultKind: "m3_persistent_variant_descriptor_v5", FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head, VariantID: variantID, AssignmentBasis: assignment, OverlapRatio: ratio, ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphDigest, GraphBuildSHA256: graphBuildDigest, ArtifactBackend: artifact.Backend, Source: artifact.Source, DatabaseDirectory: dir, IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(meta.VectorIndexes[0]), PartitionHNSWM: partitionHNSWDegree, PartitionConfig: partitionConfig, PartitionMaxDistanceWork: partitionConfig.MaxDistanceWork, RouterMaxScalarWork: 20_000_000_000, RouterConfig: routerConfig, M3MaxBenchmarkVisits: 400_000_000, Capacity: overlap.Capacity, OverlapRequested: overlap.Budget, OverlapUseful: overlap.Useful, OverlapFiller: overlap.Filler, EdgeCutBefore: overlap.EdgeCutBefore, EdgeCutAfter: overlap.EdgeCutAfter}
 	descriptor.BuildIdentityDigest, err = m3VariantBuildIdentityDigestV1(descriptor)
 	if err != nil {
 		t.Fatal(err)
@@ -1520,6 +1534,10 @@ func testM8QualificationReportV1(t *testing.T, head string, fixture fixtureManif
 		t.Fatal(err)
 	}
 	wantOverlap := int(float64(fixture.Vectors) * descriptor.OverlapRatio)
+	partitionConfig, routerConfig, visits, ok := m8QualificationM3BuildConfigV1(fixture)
+	if !ok {
+		t.Fatal("qualification build config")
+	}
 	loads := make([]uint64, 16)
 	for row := 0; row < fixture.Vectors+wantOverlap; row++ {
 		loads[row%len(loads)]++
@@ -1528,12 +1546,8 @@ func testM8QualificationReportV1(t *testing.T, head string, fixture fixtureManif
 	descriptor.OverlapMemberships = wantOverlap
 	descriptor.EdgeCutBefore = wantOverlap + 1
 	descriptor.BaseSHA, descriptor.HeadSHA = head, head
-	if fixture.Vectors == 250000 {
-		descriptor.PartitionMaxDistanceWork = 50_000_000_000
-		descriptor.RouterMaxScalarWork = 50_000_000_000
-		descriptor.RouterConfig.MaxScalarWork = 50_000_000_000
-		descriptor.M3MaxBenchmarkVisits = 900_000_000
-	}
+	descriptor.PartitionConfig, descriptor.PartitionMaxDistanceWork = partitionConfig, partitionConfig.MaxDistanceWork
+	descriptor.RouterConfig, descriptor.RouterMaxScalarWork, descriptor.M3MaxBenchmarkVisits = routerConfig, routerConfig.MaxScalarWork, visits
 	descriptor.PartitionLoads = make([]int, len(loads))
 	for i, load := range loads {
 		descriptor.PartitionLoads[i] = int(load)

@@ -13,6 +13,9 @@ import (
 
 func testM3VariantDescriptorV1(dir string) m3VariantDescriptorV1 {
 	hash := strings.Repeat("a", 64)
+	partitionConfig := vectorpartition.DefaultConfig()
+	partitionConfig.Partitions = 4
+	partitionConfig.MaxDistanceWork = 20_000_000_000
 	routerConfig := vectorpartition.DefaultRouterConfigV1()
 	d := m3VariantDescriptorV1{
 		SchemaVersion: 5, ResultKind: "m3_persistent_variant_descriptor_v5", VariantID: "graph-overlap-020-v1",
@@ -21,7 +24,7 @@ func testM3VariantDescriptorV1(dir string) m3VariantDescriptorV1 {
 		FixtureChecksum: hash, ArtifactSHA256: hash, GraphArtifactSHA256: hash, GraphBuildSHA256: hash, ArtifactBackend: "reference", Source: vectorpartition.Source{SourceID: "fixture", Checksum: hash, Vectors: 8, Dimensions: 2, Metric: "cosine"},
 		DatabaseDirectory: dir, ManifestIntegrity: hash, ReadySetDigest: hash, RouterAssetChecksum: hash, RouterModelDigest: hash,
 		SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRows: 8, PartitionGeneration: 4, RouterGeneration: 4,
-		Partitions: 4, IndexDefinitionDigest: hash, PartitionHNSWM: 16, PartitionMaxDistanceWork: 20_000_000_000, RouterMaxScalarWork: 20_000_000_000, RouterConfig: routerConfig, M3MaxBenchmarkVisits: 400_000_000, RouterRepresentatives: 4, Capacity: 3, OverlapRequested: 1, OverlapRealized: 1, OverlapRejected: 0, OverlapUseful: 1, OverlapUnusedCapacity: 3, EdgeCutBefore: 2, EdgeCutAfter: 1, PartitionLoads: []int{3, 2, 2, 2}, OverlapMemberships: 1, PersistentAssetBytes: 1024,
+		Partitions: 4, IndexDefinitionDigest: hash, PartitionHNSWM: 16, PartitionConfig: partitionConfig, PartitionMaxDistanceWork: 20_000_000_000, RouterMaxScalarWork: 20_000_000_000, RouterConfig: routerConfig, M3MaxBenchmarkVisits: 400_000_000, RouterRepresentatives: 4, Capacity: 3, OverlapRequested: 1, OverlapRealized: 1, OverlapRejected: 0, OverlapUseful: 1, OverlapUnusedCapacity: 3, EdgeCutBefore: 2, EdgeCutAfter: 1, PartitionLoads: []int{3, 2, 2, 2}, OverlapMemberships: 1, PersistentAssetBytes: 1024,
 	}
 	d.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(d)
 	d.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: 3, Budget: 1, Realized: 1, BuildIdentityDigest: d.BuildIdentityDigest})
@@ -38,7 +41,7 @@ func TestM3VariantDescriptorRoundTripAndImmutableCreateV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.VariantID != want.VariantID || got.BaseSHA != want.BaseSHA || got.HeadSHA != want.HeadSHA || got.BuildDirty != want.BuildDirty || got.ReadySetDigest != want.ReadySetDigest || got.GraphBuildSHA256 != want.GraphBuildSHA256 || got.PartitionMaxDistanceWork != want.PartitionMaxDistanceWork || got.RouterMaxScalarWork != want.RouterMaxScalarWork || got.RouterConfig != want.RouterConfig || got.M3MaxBenchmarkVisits != want.M3MaxBenchmarkVisits || got.RouterRepresentatives != want.RouterRepresentatives || len(got.PartitionLoads) != 4 {
+	if got.VariantID != want.VariantID || got.BaseSHA != want.BaseSHA || got.HeadSHA != want.HeadSHA || got.BuildDirty != want.BuildDirty || got.ReadySetDigest != want.ReadySetDigest || got.GraphBuildSHA256 != want.GraphBuildSHA256 || got.PartitionConfig != want.PartitionConfig || got.PartitionMaxDistanceWork != want.PartitionMaxDistanceWork || got.RouterMaxScalarWork != want.RouterMaxScalarWork || got.RouterConfig != want.RouterConfig || got.M3MaxBenchmarkVisits != want.M3MaxBenchmarkVisits || got.RouterRepresentatives != want.RouterRepresentatives || len(got.PartitionLoads) != 4 {
 		t.Fatalf("descriptor=%+v", got)
 	}
 	if err := m3WriteVariantDescriptorV1(dir, want); err == nil {
@@ -154,6 +157,7 @@ func TestM3VariantBuildIdentityBindsOverlapInputsAndOutcomesV1(t *testing.T) {
 		"head revision":      func(candidate *m3VariantDescriptorV1) { candidate.HeadSHA = strings.Repeat("e", 40) },
 		"dirty build":        func(candidate *m3VariantDescriptorV1) { candidate.BuildDirty = true },
 		"graph build":        func(candidate *m3VariantDescriptorV1) { candidate.GraphBuildSHA256 = strings.Repeat("d", 64) },
+		"partition config":   func(candidate *m3VariantDescriptorV1) { candidate.PartitionConfig.Pivots++ },
 		"partition work cap": func(candidate *m3VariantDescriptorV1) { candidate.PartitionMaxDistanceWork++ },
 		"router work cap":    func(candidate *m3VariantDescriptorV1) { candidate.RouterMaxScalarWork++ },
 		"M3 visit cap":       func(candidate *m3VariantDescriptorV1) { candidate.M3MaxBenchmarkVisits++ },
@@ -203,9 +207,10 @@ func TestM3VariantDescriptorRejectsMissingBuildWorkCapsV1(t *testing.T) {
 
 func TestM3VariantDescriptorRequiresRevisionsAndRouterConfigV1(t *testing.T) {
 	for name, mutate := range map[string]func(*m3VariantDescriptorV1){
-		"missing base":           func(d *m3VariantDescriptorV1) { d.BaseSHA = "" },
-		"malformed head":         func(d *m3VariantDescriptorV1) { d.HeadSHA = "not-a-sha" },
-		"router scalar mismatch": func(d *m3VariantDescriptorV1) { d.RouterConfig.MaxScalarWork++ },
+		"missing base":            func(d *m3VariantDescriptorV1) { d.BaseSHA = "" },
+		"malformed head":          func(d *m3VariantDescriptorV1) { d.HeadSHA = "not-a-sha" },
+		"partition work mismatch": func(d *m3VariantDescriptorV1) { d.PartitionConfig.MaxDistanceWork++ },
+		"router scalar mismatch":  func(d *m3VariantDescriptorV1) { d.RouterConfig.MaxScalarWork++ },
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := testM3VariantDescriptorV1(t.TempDir())

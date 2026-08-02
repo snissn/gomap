@@ -154,13 +154,14 @@ graph configuration, canonical IDs, and graph only. Its canonical build-identity
 covers fixture, variant, assignment, overlap, backend/source configuration,
 and the complete persisted vector-index definition digest (name, field, metric,
 encoding, strategy, dimensions, HNSW `M`, construction/search budgets, schema
-generation, and quantized definitions); that digest is persisted in the
+generation, and quantized definitions), plus the complete parsed partition
+builder configuration; that digest is persisted in the
 manifest-covered balance policy. Matrix validation derives capacity,
 overlap budget/usage, partition loads, and persistent bytes from the opened
 manifest instead of trusting duplicated descriptor fields. All required
 variants must share source, fixture, graph-build digest, partition count, the
-complete vector-index definition, router construction configuration, and the
-normalized serving topology. Graph variants must additionally share the full
+complete vector-index definition, partition-builder configuration, router
+construction configuration, and the normalized serving topology. Graph variants must additionally share the full
 graph-assignment artifact. Final-membership changes may legitimately produce
 distinct router-model digests, which remain strictly bound and validated per
 descriptor rather than compared across variants. It also records the parsed

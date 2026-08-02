@@ -57,6 +57,7 @@ type m3VariantDescriptorV1 struct {
 	Partitions               uint32                         `json:"partitions"`
 	IndexDefinitionDigest    string                         `json:"index_definition_digest"`
 	PartitionHNSWM           int                            `json:"partition_hnsw_m"`
+	PartitionConfig          vectorpartition.Config         `json:"partition_config"`
 	PartitionMaxDistanceWork int64                          `json:"partition_max_distance_work"`
 	RouterMaxScalarWork      int64                          `json:"router_max_scalar_work"`
 	RouterConfig             vectorpartition.RouterConfigV1 `json:"router_config"`
@@ -106,6 +107,7 @@ func m3VariantBuildIdentityDigestV1(d m3VariantDescriptorV1) (string, error) {
 		Source                   vectorpartition.Source
 		IndexDefinitionDigest    string
 		PartitionHNSWM           int
+		PartitionConfig          vectorpartition.Config
 		PartitionMaxDistanceWork int64
 		RouterMaxScalarWork      int64
 		RouterConfig             vectorpartition.RouterConfigV1
@@ -119,7 +121,7 @@ func m3VariantBuildIdentityDigestV1(d m3VariantDescriptorV1) (string, error) {
 	}{
 		FixtureChecksum: d.FixtureChecksum, BaseSHA: d.BaseSHA, HeadSHA: d.HeadSHA, BuildDirty: d.BuildDirty, VariantID: d.VariantID, AssignmentBasis: d.AssignmentBasis, OverlapRatio: d.OverlapRatio,
 		ArtifactSHA256: d.ArtifactSHA256, GraphArtifactSHA256: d.GraphArtifactSHA256, GraphBuildSHA256: d.GraphBuildSHA256, ArtifactBackend: d.ArtifactBackend,
-		Source: d.Source, IndexDefinitionDigest: d.IndexDefinitionDigest, PartitionHNSWM: d.PartitionHNSWM,
+		Source: d.Source, IndexDefinitionDigest: d.IndexDefinitionDigest, PartitionHNSWM: d.PartitionHNSWM, PartitionConfig: d.PartitionConfig,
 		PartitionMaxDistanceWork: d.PartitionMaxDistanceWork, RouterMaxScalarWork: d.RouterMaxScalarWork, RouterConfig: d.RouterConfig,
 		M3MaxBenchmarkVisits: d.M3MaxBenchmarkVisits,
 		Capacity:             d.Capacity, OverlapRequested: d.OverlapRequested,
@@ -208,6 +210,9 @@ func m3ReadVariantDescriptorV1(dir string) (m3VariantDescriptorV1, error) {
 }
 
 func validateM3VariantDescriptorV1(d m3VariantDescriptorV1) error {
+	if err := vectorpartition.ValidateConfig(d.PartitionConfig); err != nil {
+		return fmt.Errorf("malformed M3 partition config: %w", err)
+	}
 	if err := vectorpartition.ValidateRouterConfigV1(d.RouterConfig); err != nil {
 		return fmt.Errorf("malformed M3 router config: %w", err)
 	}
@@ -237,7 +242,7 @@ func validateM3VariantDescriptorV1(d m3VariantDescriptorV1) error {
 		!m8SHA256V1(d.GraphBuildSHA256) || !m8SHA256V1(d.BuildIdentityDigest) || d.BuildIdentityDigest != wantBuildIdentity ||
 		!m8SHA256V1(d.Source.Checksum) || d.DatabaseDirectory == "" || !m8SHA256V1(d.ManifestIntegrity) || !m8SHA256V1(d.ReadySetDigest) ||
 		!m8SHA256V1(d.RouterAssetChecksum) || !m8SHA256V1(d.RouterModelDigest) || d.SourceGeneration == 0 || d.SourceRows == 0 ||
-		d.PartitionGeneration == 0 || d.RouterGeneration != d.PartitionGeneration || !m8SHA256V1(d.IndexDefinitionDigest) || d.PartitionHNSWM < 2 || d.PartitionHNSWM > partitionHNSWDegree || d.PartitionMaxDistanceWork < 1 || d.RouterMaxScalarWork < 1 || d.M3MaxBenchmarkVisits < 1 || d.RouterRepresentatives == 0 || d.RouterRepresentatives > d.SourceRows || d.RouterConfig.MaxScalarWork != d.RouterMaxScalarWork || d.RouterRepresentatives > uint64(d.RouterConfig.MaxRepresentatives) || d.OverlapRequested != wantBudget || d.OverlapRealized != wantBudget || d.OverlapRequested < 0 || d.OverlapRealized < 0 || d.OverlapRejected < 0 || d.OverlapRequested != d.OverlapRealized+d.OverlapRejected || d.OverlapUseful < 0 || d.OverlapFiller < 0 || d.OverlapUseful+d.OverlapFiller != d.OverlapRealized || d.OverlapMemberships != d.OverlapRealized || d.EdgeCutBefore < d.EdgeCutAfter || d.EdgeCutAfter < 0 || d.OverlapUnusedCapacity != int(totalCapacity-usedCapacity) ||
+		d.PartitionGeneration == 0 || d.RouterGeneration != d.PartitionGeneration || !m8SHA256V1(d.IndexDefinitionDigest) || d.PartitionHNSWM < 2 || d.PartitionHNSWM > partitionHNSWDegree || d.PartitionConfig.Partitions != int(d.Partitions) || d.PartitionConfig.MaxDistanceWork != d.PartitionMaxDistanceWork || d.PartitionMaxDistanceWork < 1 || d.RouterMaxScalarWork < 1 || d.M3MaxBenchmarkVisits < 1 || d.RouterRepresentatives == 0 || d.RouterRepresentatives > d.SourceRows || d.RouterConfig.MaxScalarWork != d.RouterMaxScalarWork || d.RouterRepresentatives > uint64(d.RouterConfig.MaxRepresentatives) || d.OverlapRequested != wantBudget || d.OverlapRealized != wantBudget || d.OverlapRequested < 0 || d.OverlapRealized < 0 || d.OverlapRejected < 0 || d.OverlapRequested != d.OverlapRealized+d.OverlapRejected || d.OverlapUseful < 0 || d.OverlapFiller < 0 || d.OverlapUseful+d.OverlapFiller != d.OverlapRealized || d.OverlapMemberships != d.OverlapRealized || d.EdgeCutBefore < d.EdgeCutAfter || d.EdgeCutAfter < 0 || d.OverlapUnusedCapacity != int(totalCapacity-usedCapacity) ||
 		len(d.PartitionLoads) != int(d.Partitions) || d.PersistentAssetBytes == 0 {
 		return errors.New("malformed M3 variant descriptor")
 	}

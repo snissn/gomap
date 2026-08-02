@@ -347,9 +347,9 @@ func m8ValidateVariantBuildCompatibilityV1(variants []m3VariantDescriptorV1) err
 			return fmt.Errorf("M8 matrix missing variant build identity %q", required)
 		}
 		if variant.BaseSHA != base.BaseSHA || variant.HeadSHA != base.HeadSHA || variant.FixtureChecksum != base.FixtureChecksum || variant.Source != base.Source || variant.Partitions != base.Partitions ||
-			variant.IndexDefinitionDigest != base.IndexDefinitionDigest || variant.PartitionHNSWM != base.PartitionHNSWM ||
+			variant.IndexDefinitionDigest != base.IndexDefinitionDigest || variant.PartitionHNSWM != base.PartitionHNSWM || variant.PartitionConfig != base.PartitionConfig ||
 			variant.RouterRepresentatives != base.RouterRepresentatives || variant.RouterMaxScalarWork != base.RouterMaxScalarWork || variant.RouterConfig != base.RouterConfig || variant.GraphBuildSHA256 != base.GraphBuildSHA256 {
-			return fmt.Errorf("M8 matrix variant %q does not match the common source, partition count, index definition, local HNSW, router representative count, and router scalar-work configuration", required)
+			return fmt.Errorf("M8 matrix variant %q does not match the common source, partition count, partition configuration, index definition, local HNSW, router representative count, and router scalar-work configuration", required)
 		}
 	}
 	graphOverlap := byID["graph-overlap-020-v1"]

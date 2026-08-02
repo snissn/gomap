@@ -54,8 +54,9 @@ Every M3 build command binds its corpus-specific
 `-partition-max-distance-work` and `-router-max-scalar-work` alongside its
 independent M3 visit cap. The router's default remains 20B and the explicit
 offline ceiling is 50B. The immutable M3 descriptor records both parsed build
-caps, so campaign validation rejects a retained candidate built above its
-corpus-specific envelope even when its artifact bytes otherwise match.
+caps and the complete parsed partition-builder configuration, so campaign
+validation rejects a retained candidate built above its corpus-specific envelope
+even when its artifact bytes otherwise match.
 
 ## Gates and disposition
 

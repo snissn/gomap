@@ -197,6 +197,7 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				"-m8-variant-dbs",
 				"schema-5 retained descriptor",
 				"canonical build-identity digest",
+				"partition-builder configuration",
 				"one `(probes, ef_search, concurrency)` operating point",
 				"multiplies the complete measured",
 				"bounded 128 MiB aggregate",
