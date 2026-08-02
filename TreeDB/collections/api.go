@@ -11499,6 +11499,22 @@ func (c *Collection) Delete(documentID []byte) error {
 // DeleteDocument removes a document and reports whether this call deleted an
 // existing primary document.
 func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
+	return c.deleteDocumentIf(documentID, nil)
+}
+
+// DeleteDocumentIf removes a document only when predicate accepts its current
+// stored value. The predicate runs inside the collection mutation boundary;
+// false leaves the document unchanged and an error is returned before commit.
+// It may be retried after a retriable publish failure, so it must be side-effect
+// free and safe to invoke more than once.
+func (c *Collection) DeleteDocumentIf(documentID []byte, predicate func(current []byte) (bool, error)) (bool, error) {
+	if predicate == nil {
+		return false, errors.New("collections: delete predicate is nil")
+	}
+	return c.deleteDocumentIf(documentID, predicate)
+}
+
+func (c *Collection) deleteDocumentIf(documentID []byte, predicate func(current []byte) (bool, error)) (bool, error) {
 	if c == nil {
 		return false, errCollectionNil
 	}
@@ -11528,7 +11544,7 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
-		deleted, err := c.deleteDocumentOnce(documentID, nil)
+		deleted, err := c.deleteDocumentOnce(documentID, predicate, nil)
 		if isRetriableCollectionMutationError(err) {
 			lastErr = err
 			if flushErr := c.flushBufferedWrites(); flushErr != nil {
@@ -11966,7 +11982,7 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 	return len(existing), nil
 }
 
-func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *backenddb.CommandWALIntent) (bool, error) {
+func (c *Collection) deleteDocumentOnce(documentID []byte, predicate func(current []byte) (bool, error), commandWALIntent *backenddb.CommandWALIntent) (bool, error) {
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return false, backenddb.ErrClosed
@@ -12005,7 +12021,9 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 
 	primaryRootName := collectionPrimaryRootName(c.meta.Name)
 	commandWALActive := c.commandWALActive(commandWALIntent)
-	if commandWALIntent == nil && commandWALActive {
+	// A conditional miss must not append a replayable delete frame. Ordinary
+	// deletes retain their historical missing-key command-WAL no-op behavior.
+	if predicate == nil && commandWALIntent == nil && commandWALActive {
 		commandWALIntent, err = c.newCollectionDeleteCommandWALIntent([][]byte{documentID}, nil)
 		if err != nil {
 			_ = snap.Close()
@@ -12048,6 +12066,33 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 			}
 		}
 		return false, nil
+	}
+	if predicate != nil {
+		current, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, primaryRootName, documentID, nil)
+		if err != nil {
+			_ = snap.Close()
+			return false, err
+		}
+		if !found {
+			_ = snap.Close()
+			return false, nil
+		}
+		deleteOK, err := predicate(current)
+		if err != nil {
+			_ = snap.Close()
+			return false, err
+		}
+		if !deleteOK {
+			_ = snap.Close()
+			return false, nil
+		}
+		if commandWALIntent == nil && commandWALActive {
+			commandWALIntent, err = c.newCollectionDeleteCommandWALIntent([][]byte{documentID}, nil)
+			if err != nil {
+				_ = snap.Close()
+				return false, err
+			}
+		}
 	}
 	var semanticReclaimValue []byte
 	if columnStoreRetainedPayloadUsesSemanticStreamV1(c.meta.Options.ColumnStore) {

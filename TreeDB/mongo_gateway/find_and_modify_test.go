@@ -285,7 +285,7 @@ func TestFindAndModifyRejectsUnsupportedModes(t *testing.T) {
 		command := append(append(bson.D(nil), base...), extra)
 		assertCommandError(t, serveCommand(t, server, int32(10+i), command), "BadValue")
 	}
-	for i, query := range []bson.D{{{Key: "name", Value: "x"}}, {{Key: "_id", Value: bson.D{{Key: "$in", Value: bson.A{"u1"}}}}}} {
+	for i, query := range []bson.D{{{Key: "$expr", Value: bson.D{}}}, {{Key: "_id", Value: bson.Regex{Pattern: "^u"}}}} {
 		command := bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: query}, {Key: "update", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "x"}}}}}, {Key: "$db", Value: "app"}}
 		assertCommandError(t, serveCommand(t, server, int32(30+i), command), "BadValue")
 	}

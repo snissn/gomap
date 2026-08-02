@@ -44,9 +44,6 @@ func (s *Server) findAndModifyResponse(ctx context.Context, command wire.Documen
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
-	if err := validateFindAndModifyIDQuery(query); err != nil {
-		return commandError(commandCodeBadValue, "BadValue", err.Error())
-	}
 	update, err := requiredDocumentField(command, "update")
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
@@ -75,6 +72,7 @@ func (s *Server) findAndModifyResponse(ctx context.Context, command wire.Documen
 	if err != nil {
 		return mongoUpdateParseCommandError(err)
 	}
+	item.selector = s
 	col, err := s.openCollectionForMutation(name)
 	var releaseColdCollection func()
 	defer func() {
@@ -203,6 +201,12 @@ func validateFindAndModifyCommand(command wire.Document) error {
 }
 
 func findAndModifyExisting(col *collections.Collection, item mongoUpdateItem) (before, after wire.Document, matched bool, err error) {
+	if !item.exactID {
+		if item.selector == nil {
+			return nil, nil, false, errors.New("Mongo gateway filter findAndModify has no selector")
+		}
+		return item.selector.findAndModifyFilterExisting(col, item)
+	}
 	materializer, err := storedDocumentMaterializerForCollection(col)
 	if err != nil {
 		return nil, nil, false, err
