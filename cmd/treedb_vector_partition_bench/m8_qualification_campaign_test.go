@@ -106,6 +106,58 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			t.Fatal("accepted edited retained command")
 		}
 	})
+	t.Run("edited_artifact_command_flags", func(t *testing.T) {
+		for name, mutate := range map[string]func(*m8ProductionReportV1){
+			"changed_profiles": func(report *m8ProductionReportV1) {
+				for i, arg := range report.Command {
+					if arg == "-profiles" {
+						report.Command[i+1] = t.TempDir()
+						return
+					}
+				}
+				t.Fatal("missing profiles flag")
+			},
+			"omitted_profiles": func(report *m8ProductionReportV1) {
+				for i, arg := range report.Command {
+					if arg == "-profiles" {
+						report.Command = append(report.Command[:i:i], report.Command[i+2:]...)
+						return
+					}
+				}
+				t.Fatal("missing profiles flag")
+			},
+			"changed_truth_cache_digest": func(report *m8ProductionReportV1) {
+				report.TruthCache.Status, report.TruthCache.ComputeNanos, report.TruthCache.LoadNanos = "reused", 0, 1
+				report.Command = append(report.Command, "-m8-truth-cache", t.TempDir(), "-m8-truth-cache-sha256", report.TruthCache.ArtifactSHA256)
+				if !m8QualificationCommandV1(*report) {
+					t.Fatal("rejected bound reused truth-cache command")
+				}
+				report.Command[len(report.Command)-1] = strings.Repeat("e", 64)
+			},
+		} {
+			t.Run(name, func(t *testing.T) {
+				matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
+				testM8QualificationExecutionIDsV1(&matrix, 3)
+				testM8QualificationProfilesV1(t, root, "edited-"+name, &matrix)
+				mutate(&matrix.Variants[0])
+				raw, err := json.Marshal(matrix)
+				if err != nil {
+					t.Fatal(err)
+				}
+				path := "edited-" + name + ".json"
+				if err := os.WriteFile(filepath.Join(root, path), raw, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				digest := sha256.Sum256(raw)
+				bad := campaign
+				bad.Runs = slices.Clone(campaign.Runs)
+				bad.Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
+				if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
+					t.Fatalf("accepted %s", name)
+				}
+			})
+		}
+	})
 	t.Run("off_plan_router_configuration", func(t *testing.T) {
 		root := t.TempDir()
 		campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head}
@@ -332,6 +384,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		testM8QualificationExecutionIDsV1(&matrix, 0)
 		testM8QualificationProfilesV1(t, root, "profile-reuse-variants", &matrix)
 		matrix.Variants[1].Profiles = matrix.Variants[0].Profiles
+		matrix.Variants[1].Command = testM8QualificationCommandV1(matrix.Variants[1])
 		digest, err := m8ProductionExecutionEvidenceDigestV1(matrix.Variants[1].ExecutionID, matrix.Variants[1].Profiles.Artifacts, matrix.Variants[1].MeasurementTranscript.SHA256)
 		if err != nil {
 			t.Fatal(err)
@@ -494,6 +547,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			for i := range matrix.Variants {
 				matrix.Variants[i].Profiles = m8ProductionProfileEvidenceV1{Status: "not_captured"}
 				matrix.Variants[i].ExecutionEvidenceDigest = ""
+				matrix.Variants[i].Command = testM8QualificationCommandV1(matrix.Variants[i])
 			}
 		},
 		"missing_profile": func(matrix *m8ProductionMatrixV1) {
@@ -525,7 +579,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			bad.Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
 			_, err = m8ValidateQualificationCampaignV1(root, bad)
 			if err == nil || (name == "unprofiled" && !strings.Contains(err.Error(), "unbound profile capture")) {
-				t.Fatalf("accepted %s qualification matrix", name)
+				t.Fatalf("accepted %s qualification matrix: %v", name, err)
 			}
 		})
 	}
@@ -908,7 +962,7 @@ func testM8QualificationReportV1(t *testing.T, head string, fixture fixtureManif
 
 func testM8QualificationCommandV1(report m8ProductionReportV1) []string {
 	cfg := report.Config
-	return []string{
+	args := []string{
 		"treedb_vector_partition_bench", "-mode", m8ProductionMultiGroupModeV1,
 		"-dataset", "fixture", "-out", "out", "-partitions", "16", "-probes", "1,2,4,8,16",
 		"-overlap", strconv.FormatFloat(report.Variant.OverlapRatio, 'g', -1, 64), "-top-k", "10",
@@ -919,6 +973,10 @@ func testM8QualificationCommandV1(report m8ProductionReportV1) []string {
 		"-m8-max-persistent-asset-bytes", strconv.FormatUint(report.Resources.PersistentAssetCap, 10),
 		"-m8-max-exact-truth-visits", strconv.FormatInt(cfg.MaxExactTruthVisits, 10),
 	}
+	if report.Profiles.Directory != "" {
+		args = append(args, "-profiles", report.Profiles.Directory)
+	}
+	return args
 }
 
 func testM8QualificationProfilesV1(t *testing.T, root, run string, matrix *m8ProductionMatrixV1) {
@@ -950,6 +1008,7 @@ func testM8QualificationProfilesV1(t *testing.T, root, run string, matrix *m8Pro
 			captured[i] = artifacts[i].Path
 		}
 		report.Profiles = m8ProductionProfileEvidenceV1{Directory: directory, Captured: captured, Artifacts: artifacts, Status: "captured_production_query_and_fault_boundary", Scope: "test profile capture"}
+		report.Command = testM8QualificationCommandV1(*report)
 		testM8QualificationTranscriptV1(t, directory, report)
 		digest, err := m8ProductionExecutionEvidenceDigestV1(report.ExecutionID, artifacts, report.MeasurementTranscript.SHA256)
 		if err != nil {

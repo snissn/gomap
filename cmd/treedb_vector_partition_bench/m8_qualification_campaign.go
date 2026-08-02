@@ -369,6 +369,28 @@ func m8QualificationCommandV1(report m8ProductionReportV1) bool {
 	if err != nil || cfg.stage != m8ProductionMultiGroupModeV1 {
 		return false
 	}
+	if report.Profiles.Status == "not_captured" {
+		if cfg.profiles != "" {
+			return false
+		}
+	} else {
+		profiles, err := m8CanonicalPathV1(cfg.profiles)
+		if err != nil || profiles != report.Profiles.Directory {
+			return false
+		}
+	}
+	switch report.TruthCache.Status {
+	case "computed":
+		if cfg.m8TruthCacheSHA256 != "" && cfg.m8TruthCacheSHA256 != report.TruthCache.ArtifactSHA256 {
+			return false
+		}
+	case "reused":
+		if cfg.m8TruthCacheSHA256 != report.TruthCache.ArtifactSHA256 {
+			return false
+		}
+	default:
+		return false
+	}
 	warmup, _ := m8WarmupCountAndConcurrencyV1(cfg)
 	commandConfig := m8ProductionConfigEvidenceV1{
 		RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions,
