@@ -118,6 +118,51 @@ func TestMongoFirstWriteLateExistingMutationsWait(t *testing.T) {
 	}
 }
 
+func TestMongoFirstWriteUnrelatedExistingMutationsDoNotWait(t *testing.T) {
+	server := newFirstWriteTestServer(t)
+	assertOK(t, serveCommand(t, server, 400, bson.D{{Key: "insert", Value: "ready"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "update"}, {Key: "n", Value: int32(0)}},
+		bson.D{{Key: "_id", Value: "modify"}, {Key: "n", Value: int32(0)}},
+		bson.D{{Key: "_id", Value: "delete"}},
+	}}, {Key: "$db", Value: "app"}}))
+
+	created := make(chan struct{})
+	continueFirstWrite := make(chan struct{})
+	server.firstWriteAfterCreateHook = func() {
+		close(created)
+		<-continueFirstWrite
+	}
+	creator := make(chan wire.Document, 1)
+	go func() {
+		response, _ := serveCommandResult(server, 401, bson.D{{Key: "insert", Value: "cold"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "creator"}}}}, {Key: "$db", Value: "app"}})
+		creator <- response
+	}()
+	<-created
+
+	responses := make(chan wire.Document, 4)
+	for requestID, command := range map[int32]bson.D{
+		402: {{Key: "insert", Value: "ready"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "insert"}}}}, {Key: "$db", Value: "app"}},
+		403: {{Key: "update", Value: "ready"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "update"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}}}}, {Key: "$db", Value: "app"}},
+		404: {{Key: "findAndModify", Value: "ready"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "modify"}}}, {Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "new", Value: true}, {Key: "$db", Value: "app"}},
+		405: {{Key: "delete", Value: "ready"}, {Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "delete"}}}, {Key: "limit", Value: int32(1)}}}}, {Key: "$db", Value: "app"}},
+	} {
+		go func(requestID int32, command bson.D) {
+			response, _ := serveCommandResult(server, requestID, command)
+			responses <- response
+		}(requestID, command)
+	}
+	for range 4 {
+		select {
+		case response := <-responses:
+			assertOK(t, response)
+		case <-time.After(time.Second):
+			t.Fatal("mutation on an unrelated existing collection waited for cold first write")
+		}
+	}
+	close(continueFirstWrite)
+	assertOK(t, <-creator)
+}
+
 func runConcurrentFirstWriteFindAndModifyUpserts(t *testing.T, server *Server) {
 	t.Helper()
 	const workers = 16

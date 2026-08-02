@@ -110,7 +110,7 @@ type Server struct {
 	collectionCacheMu         sync.RWMutex
 	collectionCache           map[string]*collections.Collection
 	collectionCreateMu        sync.Mutex
-	firstWritePending         atomic.Bool
+	firstWritePendingName     atomic.Pointer[string]
 	firstWriteAfterCreateHook func()
 	updateMu                  sync.Mutex
 	updateCoalescers          map[string]*mongoUpdateCoalescer

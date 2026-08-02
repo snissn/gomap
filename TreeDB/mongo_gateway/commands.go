@@ -3280,22 +3280,27 @@ func (s *Server) openOrCreateCollection(name string) (*collections.Collection, e
 }
 
 func (s *Server) openOrCreateCollectionForFirstWrite(name string) (*collections.Collection, func(), error) {
-	// ponytail: global cold-path lock; use per-namespace coordination only if
-	// concurrent collection creation becomes a measured bottleneck.
+	// ponytail: one global lock serializes only callers that initially missed a
+	// collection. The published name keeps existing unrelated namespaces free.
 	s.collectionCreateMu.Lock()
 	release := func() {
-		s.firstWritePending.Store(false)
+		s.firstWritePendingName.Store(nil)
 		s.collectionCreateMu.Unlock()
 	}
 	col, err := s.Collections.OpenCollection(name)
 	if err == nil {
-		release()
-		return col, nil, nil
+		// This caller observed the collection as missing before it entered the
+		// cold path. Keep it serialized through its mutation too: otherwise a
+		// group of waiters can all miss the same document and race their upserts.
+		pendingName := name
+		s.firstWritePendingName.Store(&pendingName)
+		return col, release, nil
 	} else if !errors.Is(err, collections.ErrCollectionNotFound) {
 		s.collectionCreateMu.Unlock()
 		return nil, nil, err
 	}
-	s.firstWritePending.Store(true)
+	pendingName := name
+	s.firstWritePendingName.Store(&pendingName)
 	if _, createErr := s.Collections.CreateCollection(s.defaultCollectionMeta(name)); createErr != nil {
 		release()
 		return nil, nil, createErr
@@ -3314,7 +3319,8 @@ func (s *Server) openOrCreateCollectionForFirstWrite(name string) (*collections.
 
 func (s *Server) openCollectionForMutation(name string) (*collections.Collection, error) {
 	col, err := s.Collections.OpenCollection(name)
-	if err != nil || !s.firstWritePending.Load() {
+	pendingName := s.firstWritePendingName.Load()
+	if err != nil || pendingName == nil || *pendingName != name {
 		return col, err
 	}
 	s.collectionCreateMu.Lock()
