@@ -829,6 +829,7 @@ func TestM8VariantBuildCompatibilityRejectsMixedRetainedBuildsV1(t *testing.T) {
 			descriptor.OverlapMemberships = int(math.Floor(item.overlap * float64(descriptor.SourceRows)))
 			if item.assignment == partitionAssignmentStableIDHashV1 {
 				descriptor.ArtifactSHA256 = strings.Repeat("c", 64)
+				descriptor.GraphArtifactSHA256 = strings.Repeat("d", 64)
 			}
 			refreshTestM3VariantIdentityV1(t, &descriptor)
 			variants = append(variants, descriptor)
@@ -839,7 +840,7 @@ func TestM8VariantBuildCompatibilityRejectsMixedRetainedBuildsV1(t *testing.T) {
 		t.Fatalf("compatible graph/stable build rejected: %v", err)
 	}
 	for name, mutate := range map[string]func([]m3VariantDescriptorV1){
-		"graph digest": func(variants []m3VariantDescriptorV1) { variants[2].GraphArtifactSHA256 = strings.Repeat("d", 64) },
+		"graph digest": func(variants []m3VariantDescriptorV1) { variants[1].GraphArtifactSHA256 = strings.Repeat("d", 64) },
 		"graph assignment artifact": func(variants []m3VariantDescriptorV1) {
 			variants[1].ArtifactSHA256 = strings.Repeat("d", 64)
 			variants[1].GraphArtifactSHA256 = variants[1].ArtifactSHA256
