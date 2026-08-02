@@ -438,6 +438,9 @@ func benchmarkRuntimeLimits() (int, int64) {
 }
 
 func run(args []string, stdout io.Writer) error {
+	if len(args) > 0 && args[0] == "generate-truth-cache" {
+		return runGenerateTruthCache(args[1:], stdout)
+	}
 	if len(args) > 0 && args[0] == "generate-fixture" {
 		return runGenerateFixture(args[1:], stdout)
 	}
@@ -445,6 +448,70 @@ func run(args []string, stdout io.Writer) error {
 		return runValidateQualification(args[1:], stdout)
 	}
 	return runWithRuntimeCapabilities(args, stdout, currentBenchmarkRuntimeCapabilities())
+}
+
+func runGenerateTruthCache(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("treedb_vector_partition_bench generate-truth-cache", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var dataset, out string
+	var topK, capVectors int
+	var seed, capVisits int64
+	var capBytes int64
+	fs.StringVar(&dataset, "dataset", "", "fixture directory")
+	fs.StringVar(&out, "out", "", "canonical truth-cache directory")
+	fs.IntVar(&topK, "top-k", 10, "canonical truth top-k")
+	fs.Int64Var(&seed, "seed", 0, "fixture seed")
+	fs.IntVar(&capVectors, "max-vectors", maxVectors, "fixture vector cap")
+	fs.Int64Var(&capBytes, "max-fixture-bytes", maxFixtureBytes, "fixture byte cap")
+	fs.Int64Var(&capVisits, "max-exact-truth-visits", 0, "exact source-query visit cap")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || dataset == "" || out == "" || topK < 1 || seed == 0 || capVisits < 1 || capVectors < 1 || capVectors > maxVectors || capBytes < 8 || capBytes > maxFixtureBytes {
+		return errors.New("generate-truth-cache requires dataset, out, positive top-k/seed/caps, and no positional arguments")
+	}
+	fixture, err := loadFixture(dataset)
+	if err != nil {
+		return err
+	}
+	if err := validateM3FixtureWithCaps(fixture, capVectors, capBytes); err != nil {
+		return err
+	}
+	if seed != fixture.Seed || topK > fixture.Vectors {
+		return errors.New("truth-cache seed/top-k does not match the bounded fixture")
+	}
+	visits, err := memoryMul(int64(fixture.Vectors), int64(fixture.Queries))
+	if err != nil || visits > capVisits {
+		return fmt.Errorf("canonical exact truth visits exceed cap: visits=%d cap=%d", visits, capVisits)
+	}
+	corpus, queries := fixtureData(fixture)
+	truth, err := m8ExactTruthFixtureV1(corpus, queries, topK)
+	if err != nil {
+		return err
+	}
+	truthSHA, err := m8TruthContentSHA256V1(truth)
+	if err != nil {
+		return err
+	}
+	identity := m8TruthCacheIdentityV1(fixture, topK)
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		return err
+	}
+	path := m8TruthCacheArtifactPathV1(out, identity)
+	if _, err := os.Lstat(path); err == nil {
+		return errors.New("canonical truth-cache artifact already exists")
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	h := sha256.New()
+	writeErr := m8WriteTruthCacheJSONV1(io.MultiWriter(file, h), m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: collections.VectorPartitionCanonicalScoreContractV1, DatasetChecksum: fixture.Checksum, Dimensions: fixture.Dimensions, Metric: fixture.Metric, TopK: topK, TruthSHA256: truthSHA, Truth: truth})
+	closeErr := file.Close()
+	if writeErr != nil || closeErr != nil {
+		return errors.Join(writeErr, closeErr)
+	}
+	_, err = fmt.Fprintf(stdout, "truth_cache=%s artifact_sha256=%s truth_sha256=%s identity=%s visits=%d\n", path, hex.EncodeToString(h.Sum(nil)), truthSHA, identity, visits)
+	return err
 }
 
 func runGenerateFixture(args []string, stdout io.Writer) error {

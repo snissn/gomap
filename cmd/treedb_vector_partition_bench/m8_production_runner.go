@@ -1649,6 +1649,25 @@ func m8ExactTruthV1(collection *collections.Collection, manifest collections.Vec
 	if source.Generation != manifest.SourceGeneration || source.Checksum != manifest.SourceChecksum || source.SchemaHash != manifest.SourceSchemaHash || source.RowCount != manifest.SourceRowCount || len(rows) != int(source.RowCount) {
 		return nil, errors.New("M8 canonical source oracle identity does not match the pinned partition generation")
 	}
+	return m8ExactTruthRowsV1(rows, queries, topK)
+}
+
+func m8ExactTruthFixtureV1(vectors, queries [][]float64, topK int) ([][]m8CanonicalResultV1, error) {
+	rows := make([]collections.VectorPartitionRouterSourceRowV1, len(vectors))
+	for i, vector := range vectors {
+		values := make([]float32, len(vector))
+		for j := range vector {
+			values[j] = float32(vector[j])
+		}
+		rows[i] = collections.VectorPartitionRouterSourceRowV1{VectorOrdinal: uint64(i), DocumentID: []byte(fmt.Sprintf("doc-%06d", i)), Values: values}
+	}
+	return m8ExactTruthRowsV1(rows, queries, topK)
+}
+
+func m8ExactTruthRowsV1(rows []collections.VectorPartitionRouterSourceRowV1, queries [][]float64, topK int) ([][]m8CanonicalResultV1, error) {
+	if topK < 1 || len(rows) == 0 {
+		return nil, errors.New("M8 canonical source oracle requires positive rows and top_k")
+	}
 	truth := make([][]m8CanonicalResultV1, len(queries))
 	for i, query64 := range queries {
 		query := m8Query32V1(query64)

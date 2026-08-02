@@ -99,6 +99,13 @@ every later child. A pre-existing cache without that supplied digest fails
 closed, as does a newly computed artifact that disagrees with a supplied
 digest.
 
+`generate-truth-cache` is the bounded source-only producer for a frozen cache:
+it regenerates the deterministic fixture from its manifest, writes the
+canonical cache format, and emits its artifact and semantic truth SHA-256s.
+It requires explicit `-max-vectors`, `-max-fixture-bytes`, and
+`-max-exact-truth-visits` values before it allocates source rows or scores a
+query.
+
 Before a qualification run, copy each authoritative fixture manifest and any
 reused truth-cache artifact into that corpus's campaign directory. The retained
 validator rejects external or linked dataset, truth-cache, M3, report, profile,

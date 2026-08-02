@@ -31,6 +31,36 @@ func fixturePath(t *testing.T) string {
 	return filepath.Join("..", "..", "testdata", "vector_partition_10k")
 }
 
+func TestGenerateTruthCacheBoundedRoundTripV1(t *testing.T) {
+	dataset, cache := t.TempDir(), t.TempDir()
+	if err := run([]string{"generate-fixture", "-out", dataset, "-vectors", "3", "-queries", "2", "-dimensions", "2", "-seed", "7"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"generate-truth-cache", "-dataset", dataset, "-out", cache, "-top-k", "2", "-seed", "7", "-max-vectors", "3", "-max-fixture-bytes", strconv.FormatInt(maxFixtureBytes, 10), "-max-exact-truth-visits", "6"}
+	if err := run(append([]string(nil), args[:len(args)-1]...), io.Discard); err == nil {
+		t.Fatal("accepted insufficient exact-truth visit cap")
+	}
+	var out strings.Builder
+	if err := run(args, &out); err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := loadFixture(dataset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := m8TruthCacheIdentityV1(fixture, 2)
+	path := m8TruthCacheArtifactPathV1(cache, identity)
+	fields := strings.Fields(out.String())
+	if len(fields) < 5 || !strings.Contains(out.String(), "visits=6") {
+		t.Fatalf("generator output=%q", out.String())
+	}
+	digest := strings.TrimPrefix(fields[1], "artifact_sha256=")
+	truth, got, err := m8ReadTruthCacheV1(path, fixture, fixture.Queries, 2, uint64(fixture.Vectors), digest)
+	if err != nil || got != digest || len(truth) != fixture.Queries {
+		t.Fatalf("truth round trip got=%q err=%v rows=%d", got, err, len(truth))
+	}
+}
+
 func artifactBasenameForFixture(t *testing.T, dataset string, result runResult) string {
 	t.Helper()
 	fixture, err := loadFixture(dataset)
