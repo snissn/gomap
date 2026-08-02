@@ -2615,6 +2615,13 @@ func TestM8ProfileCaptureWritesRequiredRuntimeArtifactsV1(t *testing.T) {
 			t.Fatalf("profile %s info=%v err=%v", path, info, statErr)
 		}
 	}
+	artifacts, err := m8ProfileArtifactsV1(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !validM8ProductionProfilesV1(m8ProductionProfileEvidenceV1{Directory: dir, Captured: paths, Artifacts: artifacts, Status: "captured_production_query_and_fault_boundary", Scope: "test"}) {
+		t.Fatal("captured profile evidence rejected")
+	}
 	if again, err := capture.Stop(); err != nil || fmt.Sprint(again) != fmt.Sprint(paths) {
 		t.Fatalf("idempotent stop paths=%v err=%v", again, err)
 	}

@@ -264,10 +264,17 @@ type m8ProductionGateLedgerV1 struct {
 }
 
 type m8ProductionProfileEvidenceV1 struct {
-	Directory string   `json:"directory,omitempty"`
-	Captured  []string `json:"captured"`
-	Status    string   `json:"status"`
-	Scope     string   `json:"scope"`
+	Directory string                          `json:"directory,omitempty"`
+	Captured  []string                        `json:"captured"`
+	Artifacts []m8ProductionProfileArtifactV1 `json:"artifacts,omitempty"`
+	Status    string                          `json:"status"`
+	Scope     string                          `json:"scope"`
+}
+
+type m8ProductionProfileArtifactV1 struct {
+	Path   string `json:"path"`
+	Bytes  int64  `json:"bytes"`
+	SHA256 string `json:"sha256"`
 }
 
 // m8ProductionRouterSessionEvidenceV1 makes the router-manifest cold/warm
@@ -459,7 +466,19 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		if stopErr != nil {
 			return stopErr
 		}
-		report.Profiles = m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Captured: captured, Status: "captured_production_query_and_fault_boundary", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs.pprof is cumulative and must be compared with allocs_baseline.pprof"}
+		artifacts, artifactErr := m8ProfileArtifactsV1(captured)
+		if artifactErr != nil {
+			return artifactErr
+		}
+		captured = make([]string, len(artifacts))
+		for i := range artifacts {
+			captured[i] = artifacts[i].Path
+		}
+		directory, directoryErr := filepath.EvalSymlinks(cfg.profiles)
+		if directoryErr != nil {
+			return fmt.Errorf("resolve M8 profiles directory: %w", directoryErr)
+		}
+		report.Profiles = m8ProductionProfileEvidenceV1{Directory: directory, Captured: captured, Artifacts: artifacts, Status: "captured_production_query_and_fault_boundary", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs.pprof is cumulative and must be compared with allocs_baseline.pprof"}
 	}
 	allUntimed := m8MergeProductionResourceBoundariesV1(report.UntimedBoundary, report.Failure.ResourceBoundary)
 
@@ -683,6 +702,38 @@ func writeM8RuntimeProfileV1(name, path string) error {
 		err = profile.WriteTo(file, 0)
 	}
 	return errors.Join(err, file.Close())
+}
+
+var m8ProfileArtifactNamesV1 = [...]string{"allocs_baseline.pprof", "cpu.pprof", "trace.out", "heap.pprof", "allocs.pprof", "block.pprof", "mutex.pprof"}
+
+func m8ProfileArtifactsV1(paths []string) ([]m8ProductionProfileArtifactV1, error) {
+	if len(paths) != len(m8ProfileArtifactNamesV1) {
+		return nil, errors.New("incomplete M8 profile artifact set")
+	}
+	artifacts := make([]m8ProductionProfileArtifactV1, 0, len(paths))
+	seen := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return nil, fmt.Errorf("resolve M8 profile path: %w", err)
+		}
+		resolved, err := filepath.EvalSymlinks(absolute)
+		if err != nil {
+			return nil, fmt.Errorf("resolve M8 profile %q: %w", path, err)
+		}
+		info, err := os.Stat(resolved)
+		if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || seen[resolved] {
+			return nil, fmt.Errorf("invalid M8 profile %q", path)
+		}
+		raw, err := os.ReadFile(resolved)
+		if err != nil {
+			return nil, fmt.Errorf("read M8 profile %q: %w", path, err)
+		}
+		digest := sha256.Sum256(raw)
+		artifacts = append(artifacts, m8ProductionProfileArtifactV1{Path: resolved, Bytes: info.Size(), SHA256: hex.EncodeToString(digest[:])})
+		seen[resolved] = true
+	}
+	return artifacts, nil
 }
 
 type m8CanonicalResultV1 struct {
@@ -3290,18 +3341,53 @@ func validateM8ProductionReportV1(report m8ProductionReportV1, caps m8Production
 		report.Resources.PeakRSSMeasured && report.Resources.PeakRSSScope != m8PeakRSSScopeV1 {
 		return errors.New("incomplete M8 failure or resource evidence")
 	}
-	if report.Profiles.Status == "captured_production_query_and_fault_boundary" {
-		if len(report.Profiles.Captured) != 7 || report.Profiles.Scope == "" {
-			return errors.New("incomplete M8 profile evidence")
-		}
-		for _, path := range report.Profiles.Captured {
-			info, err := os.Stat(path)
-			if err != nil || info.Size() == 0 {
-				return fmt.Errorf("M8 profile %q is missing or empty", path)
-			}
-		}
+	if !validM8ProductionProfilesV1(report.Profiles) {
+		return errors.New("incomplete M8 profile evidence")
 	}
 	return nil
+}
+
+func validM8ProductionProfilesV1(profiles m8ProductionProfileEvidenceV1) bool {
+	if profiles.Status == "" {
+		return len(profiles.Captured) == 0 && len(profiles.Artifacts) == 0
+	}
+	if profiles.Status == "not_captured" {
+		return len(profiles.Captured) == 0 && len(profiles.Artifacts) == 0
+	}
+	if profiles.Status != "captured_production_query_and_fault_boundary" || profiles.Directory == "" || profiles.Scope == "" || len(profiles.Captured) != len(m8ProfileArtifactNamesV1) || len(profiles.Artifacts) != len(m8ProfileArtifactNamesV1) || !filepath.IsAbs(profiles.Directory) {
+		return false
+	}
+	directory, err := filepath.EvalSymlinks(profiles.Directory)
+	if err != nil || directory != profiles.Directory {
+		return false
+	}
+	actual, err := m8ProfileArtifactsV1(profiles.Captured)
+	if err != nil {
+		return false
+	}
+	expectedNames, captured, retained := make(map[string]bool, len(m8ProfileArtifactNamesV1)), make(map[string]bool, len(profiles.Captured)), make(map[string]m8ProductionProfileArtifactV1, len(profiles.Artifacts))
+	for _, name := range m8ProfileArtifactNamesV1 {
+		expectedNames[name] = true
+	}
+	for _, path := range profiles.Captured {
+		if !filepath.IsAbs(path) || filepath.Dir(path) != directory || captured[path] {
+			return false
+		}
+		captured[path] = true
+	}
+	for _, artifact := range profiles.Artifacts {
+		if artifact.Path == "" || retained[artifact.Path].Path != "" || artifact.Bytes <= 0 || !m8QualificationSHA256V1(artifact.SHA256) {
+			return false
+		}
+		retained[artifact.Path] = artifact
+	}
+	for _, artifact := range actual {
+		if !expectedNames[filepath.Base(artifact.Path)] || !captured[artifact.Path] || retained[artifact.Path] != artifact {
+			return false
+		}
+		delete(expectedNames, filepath.Base(artifact.Path))
+	}
+	return len(expectedNames) == 0
 }
 
 type m8ProductionMeasurementCellKeyV1 struct {

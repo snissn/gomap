@@ -113,6 +113,7 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 	var environment *m8QualificationEnvironmentV1
 	configs := make(map[string]m8ProductionConfigEvidenceV1, len(m8RequiredVariantIDsV1))
 	routerSessionIdentities := make(map[string]nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1, len(m8RequiredVariantIDsV1))
+	profileModes := make(map[string]m8QualificationProfileModeV1, len(m8RequiredVariantIDsV1))
 	paths, digests := make(map[string]bool, len(campaign.Runs)), make(map[string]bool, len(campaign.Runs))
 	for runIndex, run := range campaign.Runs {
 		if run.Path == "" || filepath.IsAbs(run.Path) || !m8QualificationSHA256V1(run.SHA256) {
@@ -181,6 +182,14 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 			if !m8QualificationResourcesV1(*report, report.Dataset) {
 				return summary, fmt.Errorf("qualification matrix %s has unbound environment or resources", run.Path)
 			}
+			profileMode, ok := m8QualificationProfilesV1(resolvedRoot, report.Profiles)
+			if !ok {
+				return summary, fmt.Errorf("qualification matrix %s has unbound profile capture", cleanPath)
+			}
+			if prior, ok := profileModes[report.Variant.VariantID]; ok && prior != profileMode {
+				return summary, fmt.Errorf("qualification matrix %s changes profile capture mode", cleanPath)
+			}
+			profileModes[report.Variant.VariantID] = profileMode
 			currentEnvironment := m8QualificationEnvironmentV1{GoVersion: report.GoVersion, GOOS: report.GOOS, GOARCH: report.GOARCH, LogicalCPUs: report.LogicalCPUs, GOMAXPROCS: report.GOMAXPROCS, GoMemoryLimitBytes: report.GoMemoryLimitBytes, Host: report.Host, PeakRSSCapBytes: report.Resources.PeakRSSCapBytes, PersistentAssetCap: report.Resources.PersistentAssetCap}
 			if environment != nil && *environment != currentEnvironment {
 				return summary, fmt.Errorf("qualification matrix %s changes environment or resources", cleanPath)
@@ -305,6 +314,11 @@ type m8QualificationEnvironmentV1 struct {
 	PersistentAssetCap      uint64
 }
 
+type m8QualificationProfileModeV1 struct {
+	Status string
+	Scope  string
+}
+
 // m8QualificationImmutableTopologyV1 retains the complete topology identity
 // while omitting per-run listener addresses and request-progress counters.
 // Evidence() already emits groups in canonical group-ID order.
@@ -335,6 +349,19 @@ func m8QualificationResourcesV1(report m8ProductionReportV1, fixture fixtureMani
 		resources.PeakRSSMeasured && resources.PeakRSSBytes > 0 && resources.PeakRSSCapBytes == m8QualificationPeakRSSCapBytesV1 && uint64(resources.PeakRSSBytes) <= resources.PeakRSSCapBytes &&
 		resources.PersistentAssetBytes > 0 && resources.PersistentAssetCap == m8QualificationPersistentAssetCapBytesV1 && resources.PersistentAssetBytes <= resources.PersistentAssetCap &&
 		m8QualificationExactTruthCapV1(fixture) == report.Config.MaxExactTruthVisits
+}
+
+func m8QualificationProfilesV1(root string, profiles m8ProductionProfileEvidenceV1) (m8QualificationProfileModeV1, bool) {
+	if !validM8ProductionProfilesV1(profiles) {
+		return m8QualificationProfileModeV1{}, false
+	}
+	for _, path := range append(append([]string(nil), profiles.Captured...), profiles.Directory) {
+		rel, err := filepath.Rel(root, path)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return m8QualificationProfileModeV1{}, false
+		}
+	}
+	return m8QualificationProfileModeV1{Status: profiles.Status, Scope: profiles.Scope}, true
 }
 
 func m8ValidateQualificationMatrixDerivationV1(matrix m8ProductionMatrixV1) error {

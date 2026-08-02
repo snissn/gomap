@@ -20,6 +20,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	fixture := m8QualificationFixturesV1[0]
 	campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head}
 	write := func(name string, matrix m8ProductionMatrixV1) {
+		testM8QualificationProfilesV1(t, root, strings.TrimSuffix(name, ".json"), &matrix)
 		raw, err := json.Marshal(matrix)
 		if err != nil {
 			t.Fatal(err)
@@ -87,6 +88,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		t.Fatal("accepted an invalid child report")
 	}
 	derivedTamper := testM8QualificationMatrixV1(t, head, fixture, 120, true)
+	testM8QualificationProfilesV1(t, root, "derived-tamper", &derivedTamper)
 	derivedTamper.Variants[0].GateLedger.Balance = "fail"
 	derivedTamper, err = m8BuildProductionMatrixV1(config{baseSHA: head, headSHA: head, partitions: 16, command: []string{"m8-test"}}, fixture, derivedTamper.Variants)
 	if err != nil {
@@ -181,9 +183,25 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 				}
 			}
 		},
+		"unprofiled": func(matrix *m8ProductionMatrixV1) {
+			for i := range matrix.Variants {
+				matrix.Variants[i].Profiles = m8ProductionProfileEvidenceV1{Status: "not_captured"}
+			}
+		},
+		"missing_profile": func(matrix *m8ProductionMatrixV1) {
+			for i := range matrix.Variants {
+				matrix.Variants[i].Profiles.Artifacts = matrix.Variants[i].Profiles.Artifacts[:len(matrix.Variants[i].Profiles.Artifacts)-1]
+			}
+		},
+		"profile_mode_drift": func(matrix *m8ProductionMatrixV1) {
+			for i := range matrix.Variants {
+				matrix.Variants[i].Profiles.Scope = "different capture mode"
+			}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			matrix := testM8QualificationMatrixV1(t, head, fixture, 120, true)
+			testM8QualificationProfilesV1(t, root, name, &matrix)
 			mutate(&matrix)
 			raw, err := json.Marshal(matrix)
 			if err != nil {
@@ -202,6 +220,28 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			}
 		})
 	}
+	t.Run("tampered_profile", func(t *testing.T) {
+		matrix := testM8QualificationMatrixV1(t, head, fixture, 120, true)
+		testM8QualificationProfilesV1(t, root, "tampered-profile", &matrix)
+		if err := os.WriteFile(matrix.Variants[0].Profiles.Artifacts[0].Path, []byte("tampered"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(matrix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := "tampered-profile.json"
+		if err := os.WriteFile(filepath.Join(root, path), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(raw)
+		bad := campaign
+		bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
+		bad.Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
+		if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
+			t.Fatal("accepted tampered profile")
+		}
+	})
 
 	outside := filepath.Join(t.TempDir(), "outside.json")
 	if err := os.WriteFile(outside, raw, 0o644); err != nil {
@@ -218,6 +258,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	}
 
 	broken := testM8QualificationMatrixV1(t, head, fixture, 110, false)
+	testM8QualificationProfilesV1(t, root, "broken", &broken)
 	p4, p16 := m8QualificationRowsV1(broken.Variants[1])
 	if p4 == nil || p16 == nil || p4.QPS >= p16.QPS*1.15 {
 		t.Fatalf("broken selected rows p4=%+v p16=%+v", p4, p16)
@@ -387,4 +428,32 @@ func testM8QualificationReportV1(t *testing.T, head string, fixture fixtureManif
 		t.Fatalf("valid qualification report rejected: %v", err)
 	}
 	return report
+}
+
+func testM8QualificationProfilesV1(t *testing.T, root, run string, matrix *m8ProductionMatrixV1) {
+	t.Helper()
+	for i := range matrix.Variants {
+		report := &matrix.Variants[i]
+		directory := filepath.Join(root, "profiles", run, report.Variant.VariantID)
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		paths := make([]string, 0, len(m8ProfileArtifactNamesV1))
+		for _, name := range m8ProfileArtifactNamesV1 {
+			path := filepath.Join(directory, name)
+			if err := os.WriteFile(path, []byte(run+":"+report.Variant.VariantID+":"+name), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			paths = append(paths, path)
+		}
+		artifacts, err := m8ProfileArtifactsV1(paths)
+		if err != nil {
+			t.Fatal(err)
+		}
+		captured := make([]string, len(artifacts))
+		for i := range artifacts {
+			captured[i] = artifacts[i].Path
+		}
+		report.Profiles = m8ProductionProfileEvidenceV1{Directory: directory, Captured: captured, Artifacts: artifacts, Status: "captured_production_query_and_fault_boundary", Scope: "test profile capture"}
+	}
 }
