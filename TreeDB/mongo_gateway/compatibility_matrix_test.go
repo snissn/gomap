@@ -574,7 +574,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 		},
 		{
 			category: "update",
-			feature:  "nested $set/$unset/$inc and bounded array modifiers",
+			feature:  "nested $set/$unset/$inc and bounded array modifiers (no numeric array-index paths)",
 			status:   "supported subset",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 213, bson.D{

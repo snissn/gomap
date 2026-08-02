@@ -6331,10 +6331,13 @@ func TestMongoMutationRejectsInvalidShapesAndOverflow(t *testing.T) {
 			t.Fatalf("accepted %v", update)
 		}
 	}
-	for _, path := range []string{"", ".a", "a.", "a..b", "$", "$[]", "$[x]"} {
+	for _, path := range []string{"", ".a", "a.", "a..b", "$", "$[]", "$[x]", "tags.0"} {
 		if _, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: path, Value: int32(1)}}}})); err == nil {
 			t.Fatalf("accepted invalid update path %q", path)
 		}
+	}
+	if _, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "2026", Value: int32(1)}}}})); err != nil {
+		t.Fatalf("rejected top-level numeric field: %v", err)
 	}
 	pathAtLimit := strings.Repeat("a.", mongoMutationMaxPathDepth-1) + "a"
 	if _, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: pathAtLimit, Value: int32(1)}}}})); err != nil {
@@ -6378,6 +6381,28 @@ func TestMongoMutationRejectsInvalidShapesAndOverflow(t *testing.T) {
 	if _, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: targets}})); err == nil {
 		t.Fatalf("accepted %d targets", mongoMutationMaxTargets+1)
 	}
+	normalArray := make(bson.A, mongoMutationMaxAddToSetComparisons)
+	for i := range normalArray {
+		normalArray[i] = int32(i)
+	}
+	normalMutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$addToSet", Value: bson.D{{Key: "items", Value: "new"}}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := applyMongoMutation(mustDocument(t, bson.D{{Key: "items", Value: normalArray}}), normalMutation); err != nil || !changed {
+		t.Fatalf("normal comparison budget changed=%v err=%v", changed, err)
+	}
+	comparisonValues := bson.A{}
+	for i := range mongoMutationMaxEachValues {
+		comparisonValues = append(comparisonValues, fmt.Sprintf("new-%d", i))
+	}
+	comparisonMutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: comparisonValues}}}}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := applyMongoMutation(mustDocument(t, bson.D{{Key: "items", Value: normalArray}}), comparisonMutation); err == nil || changed {
+		t.Fatalf("over-budget comparison changed=%v err=%v", changed, err)
+	}
 	for _, test := range []struct {
 		doc  wire.Document
 		path string
@@ -6393,7 +6418,7 @@ func TestMongoMutationRejectsInvalidShapesAndOverflow(t *testing.T) {
 			t.Fatalf("%s traversal changed=%v err=%v", test.path, changed, applyErr)
 		}
 	}
-	_, err := mongoMutationIncrement(mustRawValue(t, int64(math.MaxInt64)), mustRawValue(t, int64(1)))
+	_, err = mongoMutationIncrement(mustRawValue(t, int64(math.MaxInt64)), mustRawValue(t, int64(1)))
 	if err == nil {
 		t.Fatal("overflow accepted")
 	}
@@ -6410,6 +6435,38 @@ func TestMongoMutationRejectsInvalidShapesAndOverflow(t *testing.T) {
 	updated, changed, err := applyMongoReplacement(doc, invalidReplacement)
 	if err == nil || updated != nil || changed || !bytes.Equal(doc, mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}})) {
 		t.Fatalf("invalid replacement updated=%v changed=%v err=%v", updated, changed, err)
+	}
+}
+
+func TestServerUpdateRejectsNumericArrayPathsAndAddToSetComparisonOverflow(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	items := bson.A{}
+	for i := 0; i < mongoMutationMaxAddToSetComparisons/256; i++ {
+		items = append(items, int32(i))
+	}
+	assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "tags", Value: bson.A{"old"}}, {Key: "items", Value: items}}}}, {Key: "$db", Value: "app"}}))
+	update := func(requestID int32, value bson.D) bson.Raw {
+		return serveCommand(t, s, requestID, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: value}}}}, {Key: "$db", Value: "app"}})
+	}
+	assertCommandError(t, update(2, bson.D{{Key: "$set", Value: bson.D{{Key: "tags.0", Value: "new"}}}}), "BadValue")
+	values := bson.A{}
+	for i := range mongoMutationMaxEachValues {
+		values = append(values, fmt.Sprintf("new-%d", i))
+	}
+	assertCommandError(t, update(3, bson.D{{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}}, {Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: values}}}}}}), "BadValue")
+	find := serveCommand(t, s, 4, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	got := cursorFirstBatch(t, find)[0]
+	if tags, tagsErr := got.Lookup("tags").Array().Values(); tagsErr != nil || len(tags) != 1 || tags[0].StringValue() != "old" || !got.Lookup("marker").IsZero() {
+		t.Fatalf("numeric path changed document: tags=%v err=%v marker=%v", tags, tagsErr, got.Lookup("marker"))
+	}
+	if gotItems, itemsErr := got.Lookup("items").Array().Values(); itemsErr != nil || len(gotItems) != len(items) {
+		t.Fatalf("over-budget $addToSet changed items=%d err=%v", len(gotItems), itemsErr)
 	}
 }
 

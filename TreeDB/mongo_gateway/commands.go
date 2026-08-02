@@ -3956,6 +3956,10 @@ type mongoMutation struct {
 const mongoMutationMaxEachValues = 256
 const mongoMutationMaxTargets = 256
 
+// Bound $addToSet duplicate checks so one update cannot monopolize a mutation
+// callback by comparing every candidate with an arbitrarily large stored array.
+const mongoMutationMaxAddToSetComparisons = 16384
+
 // MongoDB limits update paths to 100 components; enforce it before recursive mutation.
 const mongoMutationMaxPathDepth = 100
 
@@ -4066,6 +4070,9 @@ func applyMongoMutationWithOptions(doc wire.Document, mutation mongoMutation, up
 	}
 	var out bson.D
 	if err := bson.Unmarshal(doc, &out); err != nil {
+		return nil, false, err
+	}
+	if err := validateMongoMutationAddToSetBudget(out, mutation.addToSet); err != nil {
 		return nil, false, err
 	}
 	changed := false
@@ -4282,11 +4289,59 @@ func validateMongoMutationPath(path string) error {
 		if index == 0 && segment == "_id" {
 			return errors.New("Mongo gateway update cannot modify _id")
 		}
+		if index > 0 && mongoMutationDecimalPathSegment(segment) {
+			return errors.New("Mongo gateway update does not support numeric array-index paths")
+		}
 		if strings.HasPrefix(segment, "$") {
 			return errors.New("Mongo gateway update does not support positional paths or array filters")
 		}
 	}
 	return nil
+}
+
+func mongoMutationDecimalPathSegment(segment string) bool {
+	for _, r := range segment {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func validateMongoMutationAddToSetBudget(doc bson.D, fields []mongoMutationArrayField) error {
+	remaining := mongoMutationMaxAddToSetComparisons
+	for _, field := range fields {
+		existing := mongoMutationArrayPathLength(doc, strings.Split(field.name, "."))
+		values := len(field.values)
+		candidateComparisons := values * (values - 1) / 2
+		if candidateComparisons > remaining || (existing != 0 && values > (remaining-candidateComparisons)/existing) {
+			return fmt.Errorf("Mongo gateway $addToSet exceeds %d duplicate comparisons", mongoMutationMaxAddToSetComparisons)
+		}
+		remaining -= candidateComparisons + existing*values
+	}
+	return nil
+}
+
+func mongoMutationArrayPathLength(doc bson.D, path []string) int {
+	for index, segment := range path {
+		idx := mongoMutationPathIndex(doc, segment)
+		if idx < 0 {
+			return 0
+		}
+		if index == len(path)-1 {
+			array, ok := doc[idx].Value.(bson.A)
+			if !ok {
+				return 0
+			}
+			return len(array)
+		}
+		nested, ok := doc[idx].Value.(bson.D)
+		if !ok {
+			return 0
+		}
+		doc = nested
+	}
+	return 0
 }
 
 func validateMongoMutationPathConflicts(paths map[string]struct{}) error {
