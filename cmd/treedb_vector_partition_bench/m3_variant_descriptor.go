@@ -36,6 +36,7 @@ type m3VariantDescriptorV1 struct {
 	FixtureChecksum          string                         `json:"fixture_checksum"`
 	BaseSHA                  string                         `json:"base_sha"`
 	HeadSHA                  string                         `json:"head_sha"`
+	BuildDirty               bool                           `json:"build_dirty"`
 	ArtifactSHA256           string                         `json:"artifact_sha256"`
 	GraphArtifactSHA256      string                         `json:"graph_artifact_sha256"`
 	ArtifactBackend          string                         `json:"artifact_backend"`
@@ -79,6 +80,7 @@ func m3VariantBuildIdentityDigestV1(d m3VariantDescriptorV1) (string, error) {
 		FixtureChecksum          string
 		BaseSHA                  string
 		HeadSHA                  string
+		BuildDirty               bool
 		VariantID                string
 		AssignmentBasis          string
 		OverlapRatio             float64
@@ -99,7 +101,7 @@ func m3VariantBuildIdentityDigestV1(d m3VariantDescriptorV1) (string, error) {
 		EdgeCutBefore            int
 		EdgeCutAfter             int
 	}{
-		FixtureChecksum: d.FixtureChecksum, BaseSHA: d.BaseSHA, HeadSHA: d.HeadSHA, VariantID: d.VariantID, AssignmentBasis: d.AssignmentBasis, OverlapRatio: d.OverlapRatio,
+		FixtureChecksum: d.FixtureChecksum, BaseSHA: d.BaseSHA, HeadSHA: d.HeadSHA, BuildDirty: d.BuildDirty, VariantID: d.VariantID, AssignmentBasis: d.AssignmentBasis, OverlapRatio: d.OverlapRatio,
 		ArtifactSHA256: d.ArtifactSHA256, GraphArtifactSHA256: d.GraphArtifactSHA256, ArtifactBackend: d.ArtifactBackend,
 		Source: d.Source, IndexDefinitionDigest: d.IndexDefinitionDigest, PartitionHNSWM: d.PartitionHNSWM,
 		PartitionMaxDistanceWork: d.PartitionMaxDistanceWork, RouterMaxScalarWork: d.RouterMaxScalarWork, RouterConfig: d.RouterConfig,

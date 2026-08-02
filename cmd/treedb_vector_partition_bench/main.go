@@ -91,6 +91,7 @@ type config struct {
 	maxBytes              int64
 	baseSHA               string
 	headSHA               string
+	m3BuildDirty          bool
 	hnsw                  *treeDBPartitionHNSW
 	memory                benchmarkMemoryPlan
 	stage                 string
@@ -537,6 +538,9 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 	cfg.command = append([]string{"treedb_vector_partition_bench"}, args...)
 	if cfg.baseSHA, cfg.headSHA, err = provenance(); err != nil {
 		return err
+	}
+	if cfg.stage == "overlap,partition_index" {
+		cfg.m3BuildDirty = m8GitDirtyV1(cfg.out, cfg.m3PersistDir)
 	}
 	fixture, err := loadFixture(cfg.dataset)
 	if err != nil {

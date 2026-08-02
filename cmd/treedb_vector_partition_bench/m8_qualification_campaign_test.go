@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -527,11 +528,12 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 		ResultKind    string `json:"result_kind"`
 		Status        string `json:"status"`
 		Candidate     struct {
-			Variant          string `json:"variant"`
-			RouterCandidates int    `json:"router_candidates"`
-			Probes           []int  `json:"probes"`
-			RepeatedProbes   []int  `json:"repeated_probes"`
-			Repetitions      int    `json:"repetitions"`
+			Variant           string `json:"variant"`
+			AssignmentBackend string `json:"assignment_backend"`
+			RouterCandidates  int    `json:"router_candidates"`
+			Probes            []int  `json:"probes"`
+			RepeatedProbes    []int  `json:"repeated_probes"`
+			Repetitions       int    `json:"repetitions"`
 		} `json:"candidate"`
 		Corpora []struct {
 			ID, Dataset, Checksum string
@@ -547,7 +549,7 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 	if err := json.Unmarshal(raw, &plan); err != nil {
 		t.Fatal(err)
 	}
-	if plan.SchemaVersion != 1 || plan.ResultKind != "vector_partition_structured_qualification_campaign_plan_v1" || plan.Status != "planned_no_measurement" || plan.Candidate.Variant != "graph-overlap-020-v1" || plan.Candidate.RouterCandidates != 64 || !slices.Equal(plan.Candidate.Probes, []int{1, 2, 4, 8, 16}) || !slices.Equal(plan.Candidate.RepeatedProbes, []int{1, 2, 4, 8, 16}) || plan.Candidate.Repetitions != 3 || len(plan.Corpora) != 2 {
+	if plan.SchemaVersion != 1 || plan.ResultKind != "vector_partition_structured_qualification_campaign_plan_v1" || plan.Status != "planned_no_measurement" || plan.Candidate.Variant != "graph-overlap-020-v1" || plan.Candidate.AssignmentBackend != "kahip_python_3.25_eco_symmetrized_v1_seed_<seed>" || plan.Candidate.RouterCandidates != 64 || !slices.Equal(plan.Candidate.Probes, []int{1, 2, 4, 8, 16}) || !slices.Equal(plan.Candidate.RepeatedProbes, []int{1, 2, 4, 8, 16}) || plan.Candidate.Repetitions != 3 || len(plan.Corpora) != 2 {
 		t.Fatalf("plan=%+v", plan)
 	}
 	if plan.Corpora[0].GraphCap != 20000000000 || plan.Corpora[0].RouterCap != 20000000000 || plan.Corpora[1].Dataset != "testdata/vector_partition_qualification_embedding_mixture_250k" || plan.Corpora[1].Vectors != 250000 || plan.Corpora[1].Checksum != "d0c7c82ba868853aae9a4280161003d72714ad1701d41ed3169c2fa94d470d69" || plan.Corpora[1].GraphCap != 50000000000 || plan.Corpora[1].RouterCap != 50000000000 || plan.Corpora[1].M3Cap != 900000000 || plan.Corpora[1].M8Cap != 1500000000 {
@@ -578,6 +580,9 @@ func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManif
 		descriptor.DatabaseDirectory = "/retained/" + v.id
 		if v.assignment == partitionAssignmentStableIDHashV1 {
 			descriptor.ArtifactSHA256 = strings.Repeat("c", 64)
+			descriptor.ArtifactBackend = "stable_id_hash_baseline_v1"
+		} else {
+			descriptor.ArtifactBackend = fmt.Sprintf("kahip_python_3.25_eco_symmetrized_v1_seed_%d", fixture.Seed)
 		}
 		refreshTestM3VariantIdentityV1(t, &descriptor)
 		report := testM8QualificationReportV1(t, head, fixture, descriptor, p4QPS, true)
@@ -589,6 +594,67 @@ func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManif
 		t.Fatal(err)
 	}
 	return built
+}
+
+func TestM8QualificationRejectsDirtyM3VariantV1(t *testing.T) {
+	root, head := t.TempDir(), strings.Repeat("a", 40)
+	fixture := m8QualificationFixturesV1[0]
+	write := func(name string, matrix m8ProductionMatrixV1) m8QualificationCampaignRunV1 {
+		testM8QualificationProfilesV1(t, root, strings.TrimSuffix(name, ".json"), &matrix)
+		raw, err := json.Marshal(matrix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, name), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(raw)
+		return m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:])}
+	}
+	campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head}
+	for i := 0; i < 3; i++ {
+		matrix := testM8QualificationMatrixV1(t, head, fixture, 125, true)
+		testM8QualificationExecutionIDsV1(&matrix, i)
+		campaign.Runs = append(campaign.Runs, write(fmt.Sprintf("clean-%d.json", i), matrix))
+	}
+	dirty := testM8QualificationMatrixV1(t, head, fixture, 125, true)
+	testM8QualificationExecutionIDsV1(&dirty, 4)
+	dirty.Variants[0].Variant.BuildDirty = true
+	refreshTestM3VariantIdentityV1(t, dirty.Variants[0].Variant)
+	dirty.Variants[0].GateLedger = m8ProductionGateLedgerForReportV1(dirty.Variants[0])
+	var err error
+	dirty, err = m8BuildProductionMatrixV1(config{baseSHA: head, headSHA: head, partitions: 16, command: []string{"m8-test"}}, fixture, dirty.Variants)
+	if err != nil {
+		t.Fatal(err)
+	}
+	campaign.Runs[0] = write("dirty.json", dirty)
+	if _, err := m8ValidateQualificationCampaignV1(root, campaign); err == nil {
+		t.Fatal("accepted self-consistent dirty M3 descriptor")
+	}
+}
+
+func TestM8QualificationVariantBackendV1(t *testing.T) {
+	for _, fixture := range m8QualificationFixturesV1 {
+		kahip := fmt.Sprintf("kahip_python_3.25_eco_symmetrized_v1_seed_%d", fixture.Seed)
+		for _, variant := range []m3VariantDescriptorV1{
+			{VariantID: "graph-disjoint-v1", AssignmentBasis: partitionAssignmentGraphV1, ArtifactSHA256: "same", GraphArtifactSHA256: "same", ArtifactBackend: kahip},
+			{VariantID: "graph-overlap-020-v1", AssignmentBasis: partitionAssignmentGraphV1, ArtifactSHA256: "same", GraphArtifactSHA256: "same", ArtifactBackend: kahip},
+			{VariantID: "stable-id-hash-disjoint-v1", AssignmentBasis: partitionAssignmentStableIDHashV1, ArtifactBackend: "stable_id_hash_baseline_v1"},
+		} {
+			if !m8QualificationVariantBackendV1(variant, fixture) {
+				t.Fatalf("fixture=%d rejected expected backend %+v", fixture.Vectors, variant)
+			}
+		}
+		for name, variant := range map[string]m3VariantDescriptorV1{
+			"reference graph": {VariantID: "graph-disjoint-v1", AssignmentBasis: partitionAssignmentGraphV1, ArtifactSHA256: "same", GraphArtifactSHA256: "same", ArtifactBackend: "reference_deterministic_v1"},
+			"wrong seed":      {VariantID: "graph-overlap-020-v1", AssignmentBasis: partitionAssignmentGraphV1, ArtifactSHA256: "same", GraphArtifactSHA256: "same", ArtifactBackend: kahip + "0"},
+			"stable relabel":  {VariantID: "stable-id-hash-disjoint-v1", AssignmentBasis: partitionAssignmentStableIDHashV1, ArtifactBackend: kahip},
+		} {
+			if m8QualificationVariantBackendV1(variant, fixture) {
+				t.Fatalf("fixture=%d accepted %s backend", fixture.Vectors, name)
+			}
+		}
+	}
 }
 
 func testM8QualificationExecutionIDsV1(matrix *m8ProductionMatrixV1, repeat int) {

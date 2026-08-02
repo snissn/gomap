@@ -223,7 +223,7 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 			if runIndex == 0 && !m8QualificationHasFullLadderV1(*report) {
 				return summary, fmt.Errorf("qualification matrix %s omits the required p1/2/4/8/16 ladder", cleanPath)
 			}
-			if report.BaseSHA != campaign.BaseSHA || report.HeadSHA != campaign.HeadSHA || report.Dataset != matrix.Dataset || report.Dirty || !m8QualificationSHA256V1(report.TruthCache.ArtifactSHA256) || report.Variant == nil || seenVariants[report.Variant.VariantID] || !slices.Contains(m8RequiredVariantIDsV1, report.Variant.VariantID) || !m8QualificationSHA256V1(report.Variant.ArtifactSHA256) || !m8QualificationConfigV1(report.Config, report.Dataset, report.Variant.OverlapRatio, runIndex) || !m8QualificationM3BuildCapsV1(*report.Variant, report.Dataset) {
+			if report.BaseSHA != campaign.BaseSHA || report.HeadSHA != campaign.HeadSHA || report.Dataset != matrix.Dataset || report.Dirty || !m8QualificationSHA256V1(report.TruthCache.ArtifactSHA256) || report.Variant == nil || report.Variant.BuildDirty || seenVariants[report.Variant.VariantID] || !slices.Contains(m8RequiredVariantIDsV1, report.Variant.VariantID) || !m8QualificationSHA256V1(report.Variant.ArtifactSHA256) || !m8QualificationConfigV1(report.Config, report.Dataset, report.Variant.OverlapRatio, runIndex) || !m8QualificationM3BuildCapsV1(*report.Variant, report.Dataset) || !m8QualificationVariantBackendV1(*report.Variant, report.Dataset) {
 				return summary, fmt.Errorf("qualification matrix %s has unbound child identity", run.Path)
 			}
 			if executionIDs[report.ExecutionID] {
@@ -362,6 +362,17 @@ func m8QualificationM3BuildCapsV1(variant m3VariantDescriptorV1, fixture fixture
 		cap, visits = 50_000_000_000, 900_000_000
 	}
 	return variant.PartitionMaxDistanceWork == cap && variant.RouterMaxScalarWork == cap && variant.M3MaxBenchmarkVisits == visits
+}
+
+func m8QualificationVariantBackendV1(variant m3VariantDescriptorV1, fixture fixtureManifest) bool {
+	switch variant.VariantID {
+	case "graph-disjoint-v1", "graph-overlap-020-v1":
+		return variant.AssignmentBasis == partitionAssignmentGraphV1 && variant.ArtifactSHA256 == variant.GraphArtifactSHA256 && variant.ArtifactBackend == fmt.Sprintf("kahip_python_3.25_eco_symmetrized_v1_seed_%d", fixture.Seed)
+	case "stable-id-hash-disjoint-v1":
+		return variant.AssignmentBasis == partitionAssignmentStableIDHashV1 && variant.ArtifactBackend == "stable_id_hash_baseline_v1"
+	default:
+		return false
+	}
 }
 
 type m8QualificationEnvironmentV1 struct {

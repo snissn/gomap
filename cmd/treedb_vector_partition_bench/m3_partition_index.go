@@ -302,7 +302,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		return m3PartitionIndexRow{}, err
 	}
 	identityDescriptor := m3VariantDescriptorV1{
-		FixtureChecksum: fixture.Checksum, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, VariantID: variantID, AssignmentBasis: cfg.partitionAssignment, OverlapRatio: ratio,
+		FixtureChecksum: fixture.Checksum, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, BuildDirty: cfg.m3BuildDirty, VariantID: variantID, AssignmentBasis: cfg.partitionAssignment, OverlapRatio: ratio,
 		ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphArtifactDigest, ArtifactBackend: artifact.Backend,
 		Source: artifact.Source, IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(meta.VectorIndexes[0]), PartitionHNSWM: partitionHNSWM,
 		PartitionMaxDistanceWork: cfg.partition.MaxDistanceWork, RouterMaxScalarWork: cfg.routerConfig.MaxScalarWork, RouterConfig: cfg.routerConfig, M3MaxBenchmarkVisits: cfg.m3MaxBenchmarkVisits,
@@ -676,7 +676,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		descriptor := m3VariantDescriptorV1{
 			SchemaVersion: 5, ResultKind: "m3_persistent_variant_descriptor_v5", VariantID: variantID,
 			AssignmentBasis: cfg.partitionAssignment, OverlapRatio: ratio, OverlapPolicy: manifest.BalancePolicy,
-			FixtureChecksum: fixture.Checksum, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphArtifactDigest, ArtifactBackend: artifact.Backend, Source: artifact.Source,
+			FixtureChecksum: fixture.Checksum, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, BuildDirty: cfg.m3BuildDirty, ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphArtifactDigest, ArtifactBackend: artifact.Backend, Source: artifact.Source,
 			BuildIdentityDigest: buildIdentityDigest,
 			DatabaseDirectory:   dir, ManifestIntegrity: manifest.IntegrityDigest, ReadySetDigest: manifest.ReadySetDigest,
 			RouterAssetChecksum: manifest.RouterAsset.Checksum, RouterModelDigest: routerRuntime.ModelDigest,

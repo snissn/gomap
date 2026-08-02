@@ -38,7 +38,7 @@ func TestM3VariantDescriptorRoundTripAndImmutableCreateV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.VariantID != want.VariantID || got.BaseSHA != want.BaseSHA || got.HeadSHA != want.HeadSHA || got.ReadySetDigest != want.ReadySetDigest || got.PartitionMaxDistanceWork != want.PartitionMaxDistanceWork || got.RouterMaxScalarWork != want.RouterMaxScalarWork || got.RouterConfig != want.RouterConfig || got.M3MaxBenchmarkVisits != want.M3MaxBenchmarkVisits || got.RouterRepresentatives != want.RouterRepresentatives || len(got.PartitionLoads) != 4 {
+	if got.VariantID != want.VariantID || got.BaseSHA != want.BaseSHA || got.HeadSHA != want.HeadSHA || got.BuildDirty != want.BuildDirty || got.ReadySetDigest != want.ReadySetDigest || got.PartitionMaxDistanceWork != want.PartitionMaxDistanceWork || got.RouterMaxScalarWork != want.RouterMaxScalarWork || got.RouterConfig != want.RouterConfig || got.M3MaxBenchmarkVisits != want.M3MaxBenchmarkVisits || got.RouterRepresentatives != want.RouterRepresentatives || len(got.PartitionLoads) != 4 {
 		t.Fatalf("descriptor=%+v", got)
 	}
 	if err := m3WriteVariantDescriptorV1(dir, want); err == nil {
@@ -129,6 +129,7 @@ func TestM3VariantBuildIdentityBindsOverlapInputsAndOutcomesV1(t *testing.T) {
 	for name, mutate := range map[string]func(*m3VariantDescriptorV1){
 		"base revision":      func(candidate *m3VariantDescriptorV1) { candidate.BaseSHA = strings.Repeat("d", 40) },
 		"head revision":      func(candidate *m3VariantDescriptorV1) { candidate.HeadSHA = strings.Repeat("e", 40) },
+		"dirty build":        func(candidate *m3VariantDescriptorV1) { candidate.BuildDirty = true },
 		"partition work cap": func(candidate *m3VariantDescriptorV1) { candidate.PartitionMaxDistanceWork++ },
 		"router work cap":    func(candidate *m3VariantDescriptorV1) { candidate.RouterMaxScalarWork++ },
 		"M3 visit cap":       func(candidate *m3VariantDescriptorV1) { candidate.M3MaxBenchmarkVisits++ },
