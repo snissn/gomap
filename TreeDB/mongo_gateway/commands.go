@@ -3958,7 +3958,7 @@ const mongoMutationMaxTargets = 256
 
 // Bound $addToSet duplicate checks so one update cannot monopolize a mutation
 // callback by comparing every candidate with an arbitrarily large stored array.
-const mongoMutationMaxAddToSetComparisons = 16384
+const mongoMutationMaxAddToSetComparisons = 65536
 
 // MongoDB limits update paths to 100 components; enforce it before recursive mutation.
 const mongoMutationMaxPathDepth = 100

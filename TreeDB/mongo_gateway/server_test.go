@@ -6381,26 +6381,28 @@ func TestMongoMutationRejectsInvalidShapesAndOverflow(t *testing.T) {
 	if _, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: targets}})); err == nil {
 		t.Fatalf("accepted %d targets", mongoMutationMaxTargets+1)
 	}
-	normalArray := make(bson.A, mongoMutationMaxAddToSetComparisons)
-	for i := range normalArray {
-		normalArray[i] = int32(i)
-	}
-	normalMutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$addToSet", Value: bson.D{{Key: "items", Value: "new"}}}}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, changed, err := applyMongoMutation(mustDocument(t, bson.D{{Key: "items", Value: normalArray}}), normalMutation); err != nil || !changed {
-		t.Fatalf("normal comparison budget changed=%v err=%v", changed, err)
-	}
 	comparisonValues := bson.A{}
 	for i := range mongoMutationMaxEachValues {
 		comparisonValues = append(comparisonValues, fmt.Sprintf("new-%d", i))
 	}
-	comparisonMutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: comparisonValues}}}}}}))
+	normalMutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: comparisonValues}}}}}}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, changed, err := applyMongoMutation(mustDocument(t, bson.D{{Key: "items", Value: normalArray}}), comparisonMutation); err == nil || changed {
+	updated, changed, err := applyMongoMutation(mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}), normalMutation)
+	if values, valuesErr := bson.Raw(updated).Lookup("items").Array().Values(); err != nil || !changed || valuesErr != nil || len(values) != mongoMutationMaxEachValues {
+		t.Fatalf("empty-array $each changed=%v err=%v values=%d valuesErr=%v", changed, err, len(values), valuesErr)
+	}
+	overBudgetArray := make(bson.A, 129)
+	for i := range overBudgetArray {
+		overBudgetArray[i] = int32(i)
+	}
+	comparisonMutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}}, {Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: comparisonValues}}}}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	overBudgetDocument := mustDocument(t, bson.D{{Key: "items", Value: overBudgetArray}})
+	if _, changed, err := applyMongoMutation(overBudgetDocument, comparisonMutation); err == nil || changed || !bson.Raw(overBudgetDocument).Lookup("marker").IsZero() {
 		t.Fatalf("over-budget comparison changed=%v err=%v", changed, err)
 	}
 	for _, test := range []struct {
@@ -6432,7 +6434,7 @@ func TestMongoMutationRejectsInvalidShapesAndOverflow(t *testing.T) {
 	}
 	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}})
 	invalidReplacement := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}, {Key: "profile.name", Value: "bad"}})
-	updated, changed, err := applyMongoReplacement(doc, invalidReplacement)
+	updated, changed, err = applyMongoReplacement(doc, invalidReplacement)
 	if err == nil || updated != nil || changed || !bytes.Equal(doc, mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}})) {
 		t.Fatalf("invalid replacement updated=%v changed=%v err=%v", updated, changed, err)
 	}
@@ -6447,7 +6449,7 @@ func TestServerUpdateRejectsNumericArrayPathsAndAddToSetComparisonOverflow(t *te
 	s := NewServer()
 	s.Collections = collections.NewCollectionManager(db)
 	items := bson.A{}
-	for i := 0; i < mongoMutationMaxAddToSetComparisons/256; i++ {
+	for i := 0; i < 129; i++ {
 		items = append(items, int32(i))
 	}
 	assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "tags", Value: bson.A{"old"}}, {Key: "items", Value: items}}}}, {Key: "$db", Value: "app"}}))
