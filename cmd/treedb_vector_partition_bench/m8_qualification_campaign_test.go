@@ -1062,6 +1062,9 @@ func testM8QualificationRetainedDescriptorV1(t *testing.T, head string, fixture 
 }
 
 func TestM8QualificationRetainedVariantV1(t *testing.T) {
+	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
+		t.Skip("vector partition namespace persistence unsupported")
+	}
 	head, fixture := strings.Repeat("a", 40), m8QualificationFixturesV1[0]
 	newReport := func(t *testing.T) m8ProductionReportV1 {
 		t.Helper()
