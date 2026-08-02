@@ -158,6 +158,27 @@ func TestM8ProductionMatrixPublisherLeavesOnlyCompleteNoReplaceArtifactsV1(t *te
 	})
 }
 
+func TestM8PercentileAggregateElapsedLowerBoundV1(t *testing.T) {
+	for _, test := range []struct {
+		name                         string
+		samples, concurrency         int
+		p50, p95, p99, maximum, want uint64
+		valid                        bool
+	}{
+		{name: "sequential_1000", samples: 1000, concurrency: 1, p50: 10, p95: 20, p99: 30, maximum: 40, want: 5640, valid: true},
+		{name: "eight_workers", samples: 1000, concurrency: 8, p50: 10, p95: 20, p99: 30, maximum: 40, want: 705, valid: true},
+		{name: "workers_limited_by_samples", samples: 1, concurrency: 8, p50: 10, p95: 20, p99: 30, maximum: 40, want: 40, valid: true},
+		{name: "overflow", samples: int(^uint(0) >> 1), concurrency: 1, p50: ^uint64(0), p95: ^uint64(0), p99: ^uint64(0), maximum: ^uint64(0)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := m8PercentileAggregateElapsedLowerBoundV1(test.samples, test.concurrency, test.p50, test.p95, test.p99, test.maximum)
+			if ok != test.valid || ok && got != test.want {
+				t.Fatalf("bound=%d ok=%t want=%d/%t", got, ok, test.want, test.valid)
+			}
+		})
+	}
+}
+
 func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *testing.T) {
 	hash := strings.Repeat("a", 40)
 	fixture := fixtureManifest{Checksum: strings.Repeat("b", 64)}

@@ -456,6 +456,10 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			row.ElapsedNanos = row.MaxTotalNanos - 1
 			row.QPS, _ = m8ProductionQPSV1(row.Samples, row.ElapsedNanos)
 		},
+		"elapsed_shorter_than_percentile_distribution": func(row *m8ProductionRowV1) {
+			row.ElapsedNanos = row.MaxTotalNanos
+			row.QPS, _ = m8ProductionQPSV1(row.Samples, row.ElapsedNanos)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			report := testM8QualificationReportV1(t, head, fixture, testM3VariantDescriptorV1(t.TempDir()), 125)
@@ -466,6 +470,9 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			}
 			if name == "elapsed_shorter_than_slowest_request" && !strings.Contains(err.Error(), "elapsed is shorter than its slowest request") {
 				t.Fatalf("elapsed boundary err=%v", err)
+			}
+			if name == "elapsed_shorter_than_percentile_distribution" && !strings.Contains(err.Error(), "percentile-derived aggregate") {
+				t.Fatalf("percentile aggregate boundary err=%v", err)
 			}
 		})
 	}

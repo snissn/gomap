@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -282,7 +283,22 @@ func m8PublishProductionMatrixV1(path string, write func(io.Writer) error) error
 	if err := os.Link(tempPath, path); err != nil {
 		return fmt.Errorf("publish immutable M8 matrix: %w", err)
 	}
+	if err := m8SyncDirectoryV1(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("sync immutable M8 matrix directory: %w", err)
+	}
 	return nil
+}
+
+func m8SyncDirectoryV1(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+	return dir.Sync()
 }
 
 func runM8ProductionVariantProcessV1(cfg config, dir string, overlap float64, profiles, expectedTruthCacheDigest string, stdout io.Writer) error {

@@ -3514,8 +3514,69 @@ func m8PercentileV1(values []uint64, percentile int) uint64 {
 	}
 	ordered := append([]uint64(nil), values...)
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
-	index := (percentile*len(ordered)+99)/100 - 1
+	index, ok := m8NearestRankPercentileIndexV1(uint64(len(ordered)), uint64(percentile))
+	if !ok {
+		return 0
+	}
 	return ordered[index]
+}
+
+func m8NearestRankPercentileIndexV1(samples, percentile uint64) (uint64, bool) {
+	if samples == 0 || percentile == 0 || percentile > 100 {
+		return 0, false
+	}
+	high, low := bits.Mul64(samples, percentile)
+	quotient, remainder := bits.Div64(high, low, 100)
+	if remainder != 0 {
+		quotient++
+	}
+	if quotient == 0 {
+		return 0, false
+	}
+	return quotient - 1, true
+}
+
+// m8PercentileAggregateElapsedLowerBoundV1 derives the least possible total
+// request duration consistent with the retained nearest-rank percentiles.
+func m8PercentileAggregateElapsedLowerBoundV1(samples, concurrency int, p50, p95, p99, maximum uint64) (uint64, bool) {
+	if samples < 1 || concurrency < 1 {
+		return 0, false
+	}
+	n := uint64(samples)
+	i50, ok50 := m8NearestRankPercentileIndexV1(n, 50)
+	i95, ok95 := m8NearestRankPercentileIndexV1(n, 95)
+	i99, ok99 := m8NearestRankPercentileIndexV1(n, 99)
+	if !ok50 || !ok95 || !ok99 || i50 > i95 || i95 > i99 || i99 >= n {
+		return 0, false
+	}
+	var total uint64
+	addProduct := func(value, count uint64) bool {
+		high, low := bits.Mul64(value, count)
+		if high != 0 {
+			return false
+		}
+		next, carry := bits.Add64(total, low, 0)
+		if carry != 0 {
+			return false
+		}
+		total = next
+		return true
+	}
+	if !addProduct(p50, i95-i50) || !addProduct(p95, i99-i95) || !addProduct(p99, n-1-i99) || !addProduct(maximum, 1) {
+		return 0, false
+	}
+	workers := uint64(concurrency)
+	if workers > n {
+		workers = n
+	}
+	minimum := total / workers
+	if total%workers != 0 {
+		if minimum == ^uint64(0) {
+			return 0, false
+		}
+		minimum++
+	}
+	return minimum, true
 }
 
 func m8GitDirtyV1(ignoredPaths ...string) bool {
@@ -3697,6 +3758,13 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 			math.Float64bits(row.RecallAtK) != math.Float64bits(row.Attribution.EndToEndRecallAtK) || row.Attribution.LocalHNSWSearches != expectedLocalSearches || row.Attribution.LocalHNSWCandidates == 0 || row.Attribution.ApproximateLocalHNSWSearches != expectedLocalSearches || row.Attribution.ApproximateLocalHNSWCandidates == 0 ||
 			!validM8AttributionV1(row.Attribution, report.Config.TopK) {
 			return errors.New("malformed measured M8 row")
+		}
+		minimumElapsed, ok := m8PercentileAggregateElapsedLowerBoundV1(row.Samples, row.Concurrency, row.P50Nanos, row.P95Nanos, row.P99Nanos, row.MaxTotalNanos)
+		if !ok {
+			return errors.New("M8 cell percentile aggregate lower bound overflows")
+		}
+		if row.ElapsedNanos < minimumElapsed {
+			return errors.New("M8 cell elapsed is shorter than its percentile-derived aggregate lower bound")
 		}
 		rowSamples := uint64(row.Samples)
 		if rowSamples > ^uint64(0)-measuredSamples {
