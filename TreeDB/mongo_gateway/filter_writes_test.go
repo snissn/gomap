@@ -197,3 +197,25 @@ func TestMongoFilterWritesNoMatchLeaveDocumentUnchanged(t *testing.T) {
 		t.Fatalf("no-match writes mutated document: %s", stored)
 	}
 }
+
+func TestMongoFilterUpsertRejectsBeforeMissingCollectionCreation(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	for _, command := range []bson.D{
+		{{Key: "update", Value: "missing_update"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "active", Value: true}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "picked", Value: true}}}}}, {Key: "upsert", Value: true}}}}, {Key: "$db", Value: "app"}},
+		{{Key: "findAndModify", Value: "missing_fam"}, {Key: "query", Value: bson.D{{Key: "active", Value: true}}}, {Key: "update", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "picked", Value: true}}}}}, {Key: "upsert", Value: true}, {Key: "$db", Value: "app"}},
+	} {
+		response := serveCommand(t, server, 1, command)
+		assertCommandError(t, response, "BadValue")
+	}
+	for _, name := range []string{"app.missing_update", "app.missing_fam"} {
+		if _, err := server.Collections.OpenCollection(name); err == nil {
+			t.Fatalf("non-exact upsert created %s", name)
+		}
+	}
+}
