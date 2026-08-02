@@ -3284,14 +3284,22 @@ func (s *Server) openOrCreateCollectionForFirstWrite(name string) (*collections.
 	// serialize only those callers through their first mutation. CollectionManager
 	// still owns any global schema coordination needed by CreateCollection.
 	s.collectionCreateMu.Lock()
-	value, loaded := s.collectionFirstWrites.Load(name)
+	registry := s.collectionFirstWrites.Load()
 	var pending *collectionFirstWritePending
-	if loaded {
-		pending = value.(*collectionFirstWritePending)
-	} else {
+	if registry != nil {
+		pending = registry.byName[name]
+	}
+	if pending == nil {
 		pending = &collectionFirstWritePending{name: name, done: make(chan struct{})}
-		s.collectionFirstWrites.Store(name, pending)
-		s.collectionFirstWriteCount.Add(1)
+		byName := make(map[string]*collectionFirstWritePending, 1)
+		if registry != nil {
+			byName = make(map[string]*collectionFirstWritePending, len(registry.byName)+1)
+			for registeredName, registered := range registry.byName {
+				byName[registeredName] = registered
+			}
+		}
+		byName[name] = pending
+		s.collectionFirstWrites.Store(&collectionFirstWriteRegistry{byName: byName})
 	}
 	pending.coldRefs++
 	s.collectionCreateMu.Unlock()
@@ -3303,8 +3311,20 @@ func (s *Server) openOrCreateCollectionForFirstWrite(name string) (*collections.
 			s.collectionCreateMu.Lock()
 			pending.coldRefs--
 			if pending.coldRefs == 0 {
-				s.collectionFirstWrites.CompareAndDelete(name, pending)
-				s.collectionFirstWriteCount.Add(-1)
+				registry := s.collectionFirstWrites.Load()
+				if registry != nil && registry.byName[name] == pending {
+					if len(registry.byName) == 1 {
+						s.collectionFirstWrites.Store(nil)
+					} else {
+						byName := make(map[string]*collectionFirstWritePending, len(registry.byName)-1)
+						for registeredName, registered := range registry.byName {
+							if registeredName != name {
+								byName[registeredName] = registered
+							}
+						}
+						s.collectionFirstWrites.Store(&collectionFirstWriteRegistry{byName: byName})
+					}
+				}
 				close(pending.done)
 			}
 			s.collectionCreateMu.Unlock()
@@ -3341,24 +3361,28 @@ func (s *Server) openCollectionForMutation(name string) (*collections.Collection
 	if err != nil {
 		return col, err
 	}
-	if s.collectionFirstWriteCount.Load() == 0 {
+	registry := s.collectionFirstWrites.Load()
+	if registry == nil {
 		return col, nil
 	}
 	waited := false
 	for {
-		value, ok := s.collectionFirstWrites.Load(name)
-		if !ok {
+		pending := registry.byName[name]
+		if pending == nil {
 			if waited {
 				return s.Collections.OpenCollection(name)
 			}
 			return col, nil
 		}
-		pending := value.(*collectionFirstWritePending)
 		if s.firstWriteBeforeWaitHook != nil {
 			s.firstWriteBeforeWaitHook(pending)
 		}
 		<-pending.done
 		waited = true
+		registry = s.collectionFirstWrites.Load()
+		if registry == nil {
+			return s.Collections.OpenCollection(name)
+		}
 	}
 }
 

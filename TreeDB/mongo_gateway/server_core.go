@@ -110,8 +110,7 @@ type Server struct {
 	collectionCacheMu         sync.RWMutex
 	collectionCache           map[string]*collections.Collection
 	collectionCreateMu        sync.Mutex
-	collectionFirstWrites     sync.Map
-	collectionFirstWriteCount atomic.Int64
+	collectionFirstWrites     atomic.Pointer[collectionFirstWriteRegistry]
 	firstWriteAfterCreateHook func(string)
 	firstWriteBeforeWaitHook  func(*collectionFirstWritePending)
 	updateMu                  sync.Mutex
@@ -126,6 +125,10 @@ type collectionFirstWritePending struct {
 	done       chan struct{}
 	mutationMu sync.Mutex
 	coldRefs   int
+}
+
+type collectionFirstWriteRegistry struct {
+	byName map[string]*collectionFirstWritePending
 }
 
 type serverCursor struct {
