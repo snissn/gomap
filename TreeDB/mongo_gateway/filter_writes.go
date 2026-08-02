@@ -12,6 +12,16 @@ import (
 
 const mongoFilterWriteMaxAttempts = 4
 
+func resetMongoFilterWriteAttempt(predicateMatched *bool) {
+	*predicateMatched = false
+}
+
+func resetMongoFindAndModifyAttempt(predicateMatched *bool, before, after *wire.Document) {
+	*predicateMatched = false
+	*before = nil
+	*after = nil
+}
+
 func validateMongoWritePlan(plan findPlan) error {
 	for _, predicates := range append([][]findPredicate{plan.predicates}, plan.orBranches...) {
 		for _, predicate := range predicates {
@@ -80,7 +90,7 @@ func (s *Server) runMongoFilterUpdateOne(col *collections.Collection, update mon
 		}
 		predicateMatched := false
 		matched, modified, err := col.Update(key, func(stored []byte) ([]byte, bool, error) {
-			predicateMatched = false
+			resetMongoFilterWriteAttempt(&predicateMatched)
 			match, err := mongoStoredDocumentMatchesPlan(col, materializer, stored, update.plan)
 			if err != nil || !match {
 				return nil, false, err
@@ -112,7 +122,7 @@ func (s *Server) deleteMongoFilterOne(col *collections.Collection, plan findPlan
 		}
 		predicateMatched := false
 		deleted, err := col.DeleteDocumentIf(key, func(stored []byte) (bool, error) {
-			predicateMatched = false
+			resetMongoFilterWriteAttempt(&predicateMatched)
 			match, err := mongoStoredDocumentMatchesPlan(col, materializer, stored, plan)
 			predicateMatched = match
 			return match, err
@@ -141,9 +151,7 @@ func (s *Server) findAndModifyFilterExisting(col *collections.Collection, item m
 		}
 		predicateMatched := false
 		matched, _, err = col.Update(key, func(stored []byte) ([]byte, bool, error) {
-			predicateMatched = false
-			before = nil
-			after = nil
+			resetMongoFindAndModifyAttempt(&predicateMatched, &before, &after)
 			raw, err := storedDocumentToBSON(col, materializer, stored)
 			if err != nil {
 				return nil, false, err

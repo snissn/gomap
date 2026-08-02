@@ -6,10 +6,65 @@ import (
 	"testing"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+func TestMongoFilterWriteAttemptReset(t *testing.T) {
+	for _, name := range []string{"update", "delete"} {
+		predicateMatched := true                        // first callback matched
+		resetMongoFilterWriteAttempt(&predicateMatched) // second callback starts nonmatching
+		if predicateMatched {
+			t.Fatalf("%s retry retained first callback match", name)
+		}
+	}
+	predicateMatched := true
+	var before, after wire.Document = wire.Document{1}, wire.Document{2}
+	resetMongoFindAndModifyAttempt(&predicateMatched, &before, &after) // second callback is nonmatching
+	if predicateMatched || before != nil || after != nil {
+		t.Fatalf("findAndModify retry state=%v before=%v after=%v", predicateMatched, before, after)
+	}
+}
+
+func TestMongoFilterDeleteOneColumnStoreReconstruction(t *testing.T) {
+	dir := t.TempDir()
+	backend, closeBackend, err := treedb.OpenBackend(treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeBackend()
+	mgr := collections.NewCollectionManager(backend)
+	cfg := &collections.ColumnStoreConfig{Enabled: true, Columns: []collections.ColumnStoreColumn{
+		{Name: "time_us", Path: "time_us", ValueType: collections.ColumnStoreValueInt64},
+		{Name: "kind", Path: "kind", ValueType: collections.ColumnStoreValueString},
+	}, SortKey: []collections.ColumnSortKey{{Column: "time_us"}}}
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "app.users", Options: collections.CollectionOptions{ColumnStore: cfg}}); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer()
+	server.Collections = mgr
+	col, err := mgr.OpenCollection("app.users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := encodePrimaryKey(bson.Raw(mustDocument(t, bson.D{{Key: "_id", Value: "u1"}})).Lookup("_id"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.Insert(key, []byte(`{"_id":"u1","time_us":1,"kind":"like","payload":"row"}`)); err != nil {
+		t.Fatal(err)
+	}
+	deleted := serveCommand(t, server, 2, bson.D{{Key: "delete", Value: "users"}, {Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "kind", Value: "like"}}}, {Key: "limit", Value: int32(1)}}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, deleted)
+	assertInt32(t, deleted, "n", 1)
+	remaining := serveCommand(t, server, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	if values, err := bson.Raw(remaining).Lookup("cursor").Document().Lookup("firstBatch").Array().Values(); err != nil || len(values) != 0 {
+		t.Fatalf("column delete remained: values=%v err=%v", values, err)
+	}
+}
 
 func TestMongoFilterWritesSelectOneAcrossUpdateDeleteAndFindAndModify(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
