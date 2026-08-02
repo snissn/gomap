@@ -1,6 +1,8 @@
 package mongogateway
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -31,6 +33,57 @@ func TestFindAndModifyReturnsAtomicBeforeAndAfterImages(t *testing.T) {
 	}
 	if !value.Lookup("n").IsZero() {
 		t.Fatalf("projection retained n")
+	}
+}
+
+func TestFindAndModifyConcurrentNewImagesAreCommitted(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 100, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "n", Value: int32(0)}}}}, {Key: "$db", Value: "app"}}))
+	const workers = 16
+	values := make(chan int32, workers)
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			response := serveCommand(t, server, int32(101+i), bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "new", Value: true}, {Key: "$db", Value: "app"}})
+			if ok, _ := bson.Raw(response).Lookup("ok").DoubleOK(); ok != 1 {
+				errs <- fmt.Errorf("response=%v", response)
+				return
+			}
+			n, ok := bson.Raw(response).Lookup("value").Document().Lookup("n").Int32OK()
+			if !ok {
+				errs <- fmt.Errorf("response=%v", response)
+				return
+			}
+			values <- n
+		}(i)
+	}
+	wg.Wait()
+	close(values)
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	seen := make(map[int32]bool, workers)
+	for n := range values {
+		seen[n] = true
+	}
+	if len(seen) != workers {
+		t.Fatalf("returned values=%v", seen)
+	}
+	for n := int32(1); n <= workers; n++ {
+		if !seen[n] {
+			t.Fatalf("missing committed image %d", n)
+		}
 	}
 }
 

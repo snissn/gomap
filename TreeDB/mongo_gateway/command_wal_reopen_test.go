@@ -236,6 +236,66 @@ func TestMongoMutationCommandWALValueLogPointersReopen(t *testing.T) {
 	}
 }
 
+func TestFindAndModifyCommandWALValueLogPointersReopen(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+	opts.ValueLog.PointerThreshold = 1
+	backend, closeBackend, err := treedb.OpenBackend(opts)
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(backend)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 401, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "payload", Value: string(make([]byte, 256))}, {Key: "n", Value: int32(1)}}}}, {Key: "$db", Value: "app"}}))
+	response := serveCommand(t, server, 402, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "new", Value: true}, {Key: "$db", Value: "app"}})
+	assertOK(t, response)
+	if n, ok := bson.Raw(response).Lookup("value").Document().Lookup("n").Int32OK(); !ok || n != 2 {
+		t.Fatalf("returned n=%d ok=%v", n, ok)
+	}
+	assertOK(t, serveCommand(t, server, 403, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "update", Value: bson.D{{Key: "payload", Value: string(make([]byte, 256))}}}, {Key: "upsert", Value: true}, {Key: "new", Value: true}, {Key: "$db", Value: "app"}}))
+	if err := server.Collections.FlushAll(); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := closeBackend(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, closeReopened, err := treedb.OpenBackend(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeReopened()
+	collection, err := collections.NewCollectionManager(reopened).OpenCollection("app.users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []struct {
+		id string
+		n  int32
+	}{{"u1", 2}, {"u2", 0}} {
+		key, _, err := prepareInsertDocument(mustDocument(t, bson.D{{Key: "_id", Value: want.id}}), collections.DocumentFormatBSON)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored, err := collection.Get(key)
+		if err != nil || stored == nil {
+			t.Fatalf("get %s stored=%v err=%v", want.id, stored, err)
+		}
+		raw := bson.Raw(stored)
+		if _, ok := raw.Lookup("payload").StringValueOK(); !ok {
+			t.Fatalf("%s payload pointer did not resolve", want.id)
+		}
+		if want.n != 0 {
+			if n, ok := raw.Lookup("n").Int32OK(); !ok || n != want.n {
+				t.Fatalf("%s n=%d ok=%v", want.id, n, ok)
+			}
+		}
+	}
+}
+
 func startStandaloneMongoClientForTest(t *testing.T, standalone *StandaloneServer) (*mongo.Client, context.CancelFunc, net.Listener, chan error) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
