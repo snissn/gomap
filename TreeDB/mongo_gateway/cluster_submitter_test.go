@@ -2365,6 +2365,8 @@ func TestClusterSubmitterGenericUpdatesFailClosedWithoutLocalMutation(t *testing
 	}), "BadValue")
 	for _, update := range []bson.D{
 		{{Key: "$inc", Value: bson.D{{Key: "age", Value: int32(1)}}}},
+		{{Key: "$set", Value: bson.D{{Key: "profile.name", Value: "Grace"}}}},
+		{{Key: "$push", Value: bson.D{{Key: "events", Value: "login"}}}},
 		{{Key: "name", Value: "Grace"}},
 	} {
 		response := serveCommand(t, server, 325831, bson.D{

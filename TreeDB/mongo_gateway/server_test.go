@@ -6228,9 +6228,24 @@ func TestMongoMutationSetOnInsertOnlyAppliesToInsertion(t *testing.T) {
 	}
 }
 
+func TestMongoMutationEmptyOperatorSpecificationsAreNoops(t *testing.T) {
+	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}})
+	for _, operator := range []string{"$set", "$unset", "$inc", "$push", "$addToSet", "$setOnInsert"} {
+		t.Run(operator, func(t *testing.T) {
+			mutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: operator, Value: bson.D{}}}))
+			if err != nil {
+				t.Fatalf("parse %s: %v", operator, err)
+			}
+			updated, changed, err := applyMongoMutation(doc, mutation)
+			if err != nil || changed || !bytes.Equal(updated, doc) {
+				t.Fatalf("apply %s updated=%v changed=%v err=%v", operator, updated, changed, err)
+			}
+		})
+	}
+}
+
 func TestMongoMutationRejectsInvalidShapesAndOverflow(t *testing.T) {
 	for _, update := range []bson.D{
-		{{Key: "$set", Value: bson.D{}}},
 		{{Key: "$set", Value: bson.D{{Key: "a", Value: 1}, {Key: "a.b", Value: 2}}}},
 		{{Key: "$set", Value: bson.D{{Key: "x", Value: 1}}}, {Key: "$inc", Value: bson.D{{Key: "x", Value: 1}}}},
 		{{Key: "$push", Value: bson.D{{Key: "x", Value: bson.D{{Key: "$each", Value: "bad"}}}}}},

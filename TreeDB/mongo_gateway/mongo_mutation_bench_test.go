@@ -32,3 +32,35 @@ func BenchmarkApplyMongoMutationInc(b *testing.B) {
 		benchmarkMongoMutationDocumentSink = updated
 	}
 }
+
+func BenchmarkApplyMongoMutationNestedArray(b *testing.B) {
+	doc, err := bson.Marshal(bson.D{
+		{Key: "_id", Value: "benchmark-user"},
+		{Key: "profile", Value: bson.D{{Key: "count", Value: int64(41)}}},
+		{Key: "tags", Value: bson.A{"go", "db"}},
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	update, err := bson.Marshal(bson.D{
+		{Key: "$set", Value: bson.D{{Key: "profile.name", Value: "ada"}}},
+		{Key: "$inc", Value: bson.D{{Key: "profile.count", Value: int32(1)}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "tags", Value: bson.D{{Key: "$each", Value: bson.A{"go", "gateway"}}}}}},
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	mutation, err := parseMongoMutation(update)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		updated, _, err := applyMongoMutation(doc, mutation)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkMongoMutationDocumentSink = updated
+	}
+}

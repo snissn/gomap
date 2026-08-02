@@ -187,9 +187,18 @@ func TestMongoMutationCommandWALValueLogPointersReopen(t *testing.T) {
 		bson.D{{Key: "_id", Value: "u1"}, {Key: "generation", Value: int32(1)}},
 		bson.D{{Key: "_id", Value: "u3"}, {Key: "generation", Value: int32(3)}, {Key: "payload", Value: string(make([]byte, 256))}},
 	}}, {Key: "$db", Value: "app"}}))
+	nestedMutation := bson.D{
+		{Key: "$inc", Value: bson.D{{Key: "generation", Value: int32(5)}}},
+		{Key: "$set", Value: bson.D{{Key: "profile.name", Value: "durable"}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "labels", Value: bson.D{{Key: "$each", Value: bson.A{"wal", "wal"}}}}}},
+	}
+	upsertMutation := bson.D{
+		{Key: "$set", Value: bson.D{{Key: "name", Value: "upserted"}}},
+		{Key: "$setOnInsert", Value: bson.D{{Key: "created.by", Value: "wal"}}},
+	}
 	assertOK(t, serveCommand(t, server, 2, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{
-		bson.D{{Key: "q", Value: bson.D{{Key: "generation", Value: int32(1)}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "generation", Value: int32(5)}}}}}},
-		bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "upserted"}}}}}, {Key: "upsert", Value: true}},
+		bson.D{{Key: "q", Value: bson.D{{Key: "generation", Value: int32(1)}}}, {Key: "u", Value: nestedMutation}},
+		bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: upsertMutation}, {Key: "upsert", Value: true}},
 	}}, {Key: "$db", Value: "app"}}))
 	assertOK(t, serveCommand(t, server, 3, bson.D{{Key: "delete", Value: "users"}, {Key: "deletes", Value: bson.A{
 		bson.D{{Key: "q", Value: bson.D{{Key: "generation", Value: int32(3)}}}, {Key: "limit", Value: int32(1)}},
@@ -238,6 +247,12 @@ func TestMongoMutationCommandWALValueLogPointersReopen(t *testing.T) {
 			if got, ok := raw.Lookup("name").StringValueOK(); !ok || got != want.name {
 				t.Fatalf("%s name=%q ok=%v, want %q", want.id, got, ok, want.name)
 			}
+		}
+		if want.id == "u1" && raw.Lookup("profile").Document().Lookup("name").StringValue() != "durable" {
+			t.Fatalf("u1 profile after reopen=%v", raw.Lookup("profile"))
+		}
+		if want.id == "u2" && raw.Lookup("created").Document().Lookup("by").StringValue() != "wal" {
+			t.Fatalf("u2 created after reopen=%v", raw.Lookup("created"))
 		}
 	}
 	reopenedServer := NewServer()

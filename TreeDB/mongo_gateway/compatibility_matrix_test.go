@@ -574,6 +574,29 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 		},
 		{
 			category: "update",
+			feature:  "nested $set/$unset/$inc and bounded array modifiers",
+			status:   "supported subset",
+			probe: func(t *testing.T, server *Server) {
+				resp := serveCommand(t, server, 213, bson.D{
+					{Key: "update", Value: "users"},
+					{Key: "updates", Value: bson.A{bson.D{
+						{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+						{Key: "u", Value: bson.D{
+							{Key: "$set", Value: bson.D{{Key: "profile.name", Value: "ada"}}},
+							{Key: "$inc", Value: bson.D{{Key: "profile.logins", Value: int32(1)}}},
+							{Key: "$push", Value: bson.D{{Key: "events", Value: "login"}}},
+							{Key: "$addToSet", Value: bson.D{{Key: "labels", Value: bson.D{{Key: "$each", Value: bson.A{"staff", "staff"}}}}}},
+						}},
+					}}},
+					{Key: "$db", Value: "app"},
+				})
+				assertOK(t, resp)
+				assertInt32(t, resp, "n", 1)
+				assertInt32(t, resp, "nModified", 1)
+			},
+		},
+		{
+			category: "update",
 			feature:  "ReplaceOne by exact _id",
 			status:   "supported subset",
 			probe: func(t *testing.T, server *Server) {
