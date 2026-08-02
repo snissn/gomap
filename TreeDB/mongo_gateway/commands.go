@@ -2083,7 +2083,7 @@ func validateCreateCollectionCommand(command wire.Document) error {
 		if err != nil {
 			return err
 		}
-		if isCreateCommandEnvelopeField(key) {
+		if key == "create" || isMongoCommandMetadataField(key) {
 			continue
 		}
 		switch key {
@@ -2095,12 +2095,12 @@ func validateCreateCollectionCommand(command wire.Document) error {
 	return nil
 }
 
-func isCreateCommandEnvelopeField(key string) bool {
+func isMongoCommandMetadataField(key string) bool {
 	switch key {
-	case "create", "$db", "lsid", "comment", "writeConcern", "readConcern", "readPreference", "maxTimeMS", "apiVersion", "apiStrict", "apiDeprecationErrors":
+	case "$db", "$clusterTime", "$readPreference", "lsid", "comment", "writeConcern", "readConcern", "readPreference", "maxTimeMS", "apiVersion", "apiStrict", "apiDeprecationErrors":
 		return true
 	default:
-		return strings.HasPrefix(key, "$")
+		return false
 	}
 }
 
@@ -3523,7 +3523,11 @@ func idEqualityFilterValue(filter wire.Document, commandName string) (bson.RawVa
 	if key != "_id" {
 		return bson.RawValue{}, fmt.Errorf("Mongo gateway %s currently requires an _id equality filter", commandName)
 	}
-	return elements[0].Value(), nil
+	id := elements[0].Value()
+	if id.Type == bson.TypeRegex {
+		return bson.RawValue{}, fmt.Errorf("Mongo gateway %s currently requires an _id equality filter", commandName)
+	}
+	return id, nil
 }
 
 func gatewayCollectionName(db, collection string) (string, error) {

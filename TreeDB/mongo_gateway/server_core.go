@@ -751,6 +751,8 @@ func (s *Server) commandResponse(ctx context.Context, name string, command wire.
 		return s.insertResponse(ctx, command, sequences)
 	case "find":
 		return s.findResponse(ctx, command, cursorOwner)
+	case "findAndModify":
+		return s.findAndModifyResponse(ctx, command)
 	case "getMore":
 		return s.getMoreResponse(command, cursorOwner)
 	case "killCursors":
@@ -776,7 +778,7 @@ func (s *Server) commandResponse(ctx context.Context, name string, command wire.
 
 func commandRejectsTransactionMarkers(name string) bool {
 	switch name {
-	case "create", "createIndexes", "delete", "dropIndexes", "find", "getMore", "insert", "killCursors", "listCollections", "listDatabases", "listIndexes", "update":
+	case "create", "createIndexes", "delete", "dropIndexes", "find", "findAndModify", "getMore", "insert", "killCursors", "listCollections", "listDatabases", "listIndexes", "update":
 		return true
 	default:
 		return false

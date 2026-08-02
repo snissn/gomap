@@ -1531,6 +1531,16 @@ func TestParseMongoUpdateItemUnsupportedFlagsIncludeIndex(t *testing.T) {
 	}
 }
 
+func TestParseMongoUpdateItemRejectsRegexIDFilter(t *testing.T) {
+	_, err := parseMongoUpdateItem(3, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: bson.Regex{Pattern: "^u", Options: ""}}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "score", Value: int32(1)}}}}},
+	}))
+	if err == nil || !strings.Contains(err.Error(), "updates[3]") || !strings.Contains(err.Error(), "_id equality") {
+		t.Fatalf("err=%v want indexed _id equality rejection", err)
+	}
+}
+
 func TestParseMongoUpdateItemPureSetSkipsGenericMutation(t *testing.T) {
 	item, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
 		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
