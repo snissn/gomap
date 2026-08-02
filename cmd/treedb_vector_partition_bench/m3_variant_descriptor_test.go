@@ -14,12 +14,12 @@ import (
 func testM3VariantDescriptorV1(dir string) m3VariantDescriptorV1 {
 	hash := strings.Repeat("a", 64)
 	d := m3VariantDescriptorV1{
-		SchemaVersion: 4, ResultKind: "m3_persistent_variant_descriptor_v4", VariantID: "graph-overlap-020-v1",
+		SchemaVersion: 5, ResultKind: "m3_persistent_variant_descriptor_v5", VariantID: "graph-overlap-020-v1",
 		AssignmentBasis: partitionAssignmentGraphV1, OverlapRatio: .2,
 		FixtureChecksum: hash, ArtifactSHA256: hash, GraphArtifactSHA256: hash, ArtifactBackend: "reference", Source: vectorpartition.Source{SourceID: "fixture", Checksum: hash, Vectors: 8, Dimensions: 2, Metric: "cosine"},
 		DatabaseDirectory: dir, ManifestIntegrity: hash, ReadySetDigest: hash, RouterAssetChecksum: hash, RouterModelDigest: hash,
 		SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRows: 8, PartitionGeneration: 4, RouterGeneration: 4,
-		Partitions: 4, IndexDefinitionDigest: hash, PartitionHNSWM: 16, Capacity: 3, OverlapRequested: 1, OverlapRealized: 1, OverlapRejected: 0, OverlapUseful: 1, OverlapUnusedCapacity: 3, EdgeCutBefore: 2, EdgeCutAfter: 1, PartitionLoads: []int{3, 2, 2, 2}, OverlapMemberships: 1, PersistentAssetBytes: 1024,
+		Partitions: 4, IndexDefinitionDigest: hash, PartitionHNSWM: 16, PartitionMaxDistanceWork: 20_000_000_000, RouterMaxScalarWork: 20_000_000_000, Capacity: 3, OverlapRequested: 1, OverlapRealized: 1, OverlapRejected: 0, OverlapUseful: 1, OverlapUnusedCapacity: 3, EdgeCutBefore: 2, EdgeCutAfter: 1, PartitionLoads: []int{3, 2, 2, 2}, OverlapMemberships: 1, PersistentAssetBytes: 1024,
 	}
 	d.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(d)
 	d.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: 3, Budget: 1, Realized: 1, BuildIdentityDigest: d.BuildIdentityDigest})
@@ -36,7 +36,7 @@ func TestM3VariantDescriptorRoundTripAndImmutableCreateV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.VariantID != want.VariantID || got.ReadySetDigest != want.ReadySetDigest || len(got.PartitionLoads) != 4 {
+	if got.VariantID != want.VariantID || got.ReadySetDigest != want.ReadySetDigest || got.PartitionMaxDistanceWork != want.PartitionMaxDistanceWork || got.RouterMaxScalarWork != want.RouterMaxScalarWork || len(got.PartitionLoads) != 4 {
 		t.Fatalf("descriptor=%+v", got)
 	}
 	if err := m3WriteVariantDescriptorV1(dir, want); err == nil {
@@ -115,10 +115,12 @@ func TestM3VariantBuildIdentityBindsOverlapInputsAndOutcomesV1(t *testing.T) {
 		t.Fatalf("capacity identity baseline=%s changed=%s err=%v", baseline, capacityDigest, err)
 	}
 	for name, mutate := range map[string]func(*m3VariantDescriptorV1){
-		"useful":     func(candidate *m3VariantDescriptorV1) { candidate.OverlapUseful-- },
-		"filler":     func(candidate *m3VariantDescriptorV1) { candidate.OverlapFiller++ },
-		"cut before": func(candidate *m3VariantDescriptorV1) { candidate.EdgeCutBefore++ },
-		"cut after":  func(candidate *m3VariantDescriptorV1) { candidate.EdgeCutAfter++ },
+		"partition work cap": func(candidate *m3VariantDescriptorV1) { candidate.PartitionMaxDistanceWork++ },
+		"router work cap":    func(candidate *m3VariantDescriptorV1) { candidate.RouterMaxScalarWork++ },
+		"useful":             func(candidate *m3VariantDescriptorV1) { candidate.OverlapUseful-- },
+		"filler":             func(candidate *m3VariantDescriptorV1) { candidate.OverlapFiller++ },
+		"cut before":         func(candidate *m3VariantDescriptorV1) { candidate.EdgeCutBefore++ },
+		"cut after":          func(candidate *m3VariantDescriptorV1) { candidate.EdgeCutAfter++ },
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := d
@@ -126,6 +128,21 @@ func TestM3VariantBuildIdentityBindsOverlapInputsAndOutcomesV1(t *testing.T) {
 			changed, err := m3VariantBuildIdentityDigestV1(candidate)
 			if err != nil || changed == baseline {
 				t.Fatalf("outcome identity baseline=%s changed=%s err=%v", baseline, changed, err)
+			}
+		})
+	}
+}
+
+func TestM3VariantDescriptorRejectsMissingBuildWorkCapsV1(t *testing.T) {
+	for name, mutate := range map[string]func(*m3VariantDescriptorV1){
+		"partition": func(d *m3VariantDescriptorV1) { d.PartitionMaxDistanceWork = 0 },
+		"router":    func(d *m3VariantDescriptorV1) { d.RouterMaxScalarWork = 0 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := testM3VariantDescriptorV1(t.TempDir())
+			mutate(&d)
+			if err := validateM3VariantDescriptorV1(d); err == nil {
+				t.Fatal("accepted missing build work cap")
 			}
 		})
 	}

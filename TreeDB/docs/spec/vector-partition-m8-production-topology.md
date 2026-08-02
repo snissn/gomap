@@ -148,7 +148,7 @@ variant at one `(probes, ef_search, concurrency)` operating point passes recall,
 probe reduction, matched-recall QPS, and matched-recall tail together; those
 gates cannot be assembled from different variants or different cells.
 
-The schema-3 retained descriptor records both the full assignment artifact and
+The schema-5 retained descriptor records both the full assignment artifact and
 the pre-assignment source-graph artifact. Its canonical build-identity digest
 covers fixture, variant, assignment, overlap, backend/source configuration,
 and the complete persisted vector-index definition digest (name, field, metric,
@@ -159,7 +159,9 @@ overlap budget/usage, partition loads, and persistent bytes from the opened
 manifest instead of trusting duplicated descriptor fields. All required
 variants must share source, fixture, source-graph digest, partition count, and
 the complete vector-index definition; graph variants must additionally share
-the full graph-assignment artifact and router-model digest. A retained database directory is provenance, not content identity,
+the full graph-assignment artifact and router-model digest. It also records the
+parsed graph and router scalar-work caps used to construct the retained asset.
+A retained database directory is provenance, not content identity,
 and the matrix content digest excludes that relocatable path.
 
 ## Capacity and enablement

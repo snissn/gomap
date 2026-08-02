@@ -175,7 +175,7 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 			if runIndex == 0 && !m8QualificationHasFullLadderV1(*report) {
 				return summary, fmt.Errorf("qualification matrix %s omits the required p1/2/4/8/16 ladder", cleanPath)
 			}
-			if report.BaseSHA != campaign.BaseSHA || report.HeadSHA != campaign.HeadSHA || report.Dataset != matrix.Dataset || report.Dirty || !m8QualificationSHA256V1(report.TruthCache.ArtifactSHA256) || report.Variant == nil || seenVariants[report.Variant.VariantID] || !slices.Contains(m8RequiredVariantIDsV1, report.Variant.VariantID) || !m8QualificationSHA256V1(report.Variant.ArtifactSHA256) || !m8QualificationConfigV1(report.Config, report.Dataset, report.Variant.OverlapRatio, runIndex) {
+			if report.BaseSHA != campaign.BaseSHA || report.HeadSHA != campaign.HeadSHA || report.Dataset != matrix.Dataset || report.Dirty || !m8QualificationSHA256V1(report.TruthCache.ArtifactSHA256) || report.Variant == nil || seenVariants[report.Variant.VariantID] || !slices.Contains(m8RequiredVariantIDsV1, report.Variant.VariantID) || !m8QualificationSHA256V1(report.Variant.ArtifactSHA256) || !m8QualificationConfigV1(report.Config, report.Dataset, report.Variant.OverlapRatio, runIndex) || !m8QualificationM3BuildCapsV1(*report.Variant, report.Dataset) {
 				return summary, fmt.Errorf("qualification matrix %s has unbound child identity", run.Path)
 			}
 			if !m8QualificationResourcesV1(*report, report.Dataset) {
@@ -285,6 +285,14 @@ func m8QualificationExactTruthCapV1(fixture fixtureManifest) int64 {
 		return 1_500_000_000
 	}
 	return 600_000_000
+}
+
+func m8QualificationM3BuildCapsV1(variant m3VariantDescriptorV1, fixture fixtureManifest) bool {
+	cap := int64(20_000_000_000)
+	if fixture.Vectors == 250000 {
+		cap = 50_000_000_000
+	}
+	return variant.PartitionMaxDistanceWork == cap && variant.RouterMaxScalarWork == cap
 }
 
 type m8QualificationEnvironmentV1 struct {

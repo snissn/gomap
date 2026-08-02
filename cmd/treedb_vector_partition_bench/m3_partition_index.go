@@ -305,6 +305,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		FixtureChecksum: fixture.Checksum, VariantID: variantID, AssignmentBasis: cfg.partitionAssignment, OverlapRatio: ratio,
 		ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphArtifactDigest, ArtifactBackend: artifact.Backend,
 		Source: artifact.Source, IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(meta.VectorIndexes[0]), PartitionHNSWM: partitionHNSWM,
+		PartitionMaxDistanceWork: cfg.partition.MaxDistanceWork, RouterMaxScalarWork: cfg.routerConfig.MaxScalarWork,
 		Capacity: overlap.Capacity, OverlapRequested: overlap.Budget,
 		OverlapUseful: overlap.Useful, OverlapFiller: overlap.Filler,
 		EdgeCutBefore: overlap.EdgeCutBefore, EdgeCutAfter: overlap.EdgeCutAfter,
@@ -673,7 +674,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	}
 	if !cleanup {
 		descriptor := m3VariantDescriptorV1{
-			SchemaVersion: 4, ResultKind: "m3_persistent_variant_descriptor_v4", VariantID: variantID,
+			SchemaVersion: 5, ResultKind: "m3_persistent_variant_descriptor_v5", VariantID: variantID,
 			AssignmentBasis: cfg.partitionAssignment, OverlapRatio: ratio, OverlapPolicy: manifest.BalancePolicy,
 			FixtureChecksum: fixture.Checksum, ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphArtifactDigest, ArtifactBackend: artifact.Backend, Source: artifact.Source,
 			BuildIdentityDigest: buildIdentityDigest,
@@ -685,8 +686,10 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 			OverlapUseful: overlap.Useful, OverlapFiller: overlap.Filler, OverlapUnusedCapacity: unusedCapacity,
 			EdgeCutBefore: overlap.EdgeCutBefore, EdgeCutAfter: overlap.EdgeCutAfter,
 			PartitionLoads: append([]int(nil), overlap.Loads...), OverlapMemberships: len(manifest.OverlapMemberships),
-			PartitionHNSWM:       partitionHNSWM,
-			PersistentAssetBytes: packPayloadBytes + manifest.RouterAsset.Bytes,
+			PartitionHNSWM:           partitionHNSWM,
+			PartitionMaxDistanceWork: cfg.partition.MaxDistanceWork,
+			RouterMaxScalarWork:      cfg.routerConfig.MaxScalarWork,
+			PersistentAssetBytes:     packPayloadBytes + manifest.RouterAsset.Bytes,
 		}
 		if err := m3DescriptorMatchesManifestV1(descriptor, fixture, manifest, routerRuntime.ModelDigest); err != nil {
 			return m3PartitionIndexRow{}, err
