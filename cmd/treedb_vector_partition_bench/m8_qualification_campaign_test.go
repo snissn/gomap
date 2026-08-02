@@ -15,6 +15,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/nativewire"
+	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
@@ -103,6 +104,38 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		bad.Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
 		if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
 			t.Fatal("accepted edited retained command")
+		}
+	})
+	t.Run("off_plan_router_configuration", func(t *testing.T) {
+		root := t.TempDir()
+		campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head}
+		for repeat := 0; repeat < 3; repeat++ {
+			matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
+			testM8QualificationExecutionIDsV1(&matrix, repeat)
+			for i := range matrix.Variants {
+				matrix.Variants[i].Variant.RouterConfig.BranchFactor++
+				refreshTestM3VariantIdentityV1(t, matrix.Variants[i].Variant)
+				matrix.Variants[i].GateLedger = m8ProductionGateLedgerForReportV1(matrix.Variants[i])
+			}
+			var err error
+			matrix, err = m8BuildProductionMatrixV1(config{baseSHA: head, headSHA: head, partitions: 16, command: []string{"m8-test"}}, fixture, matrix.Variants)
+			if err != nil {
+				t.Fatal(err)
+			}
+			name := fmt.Sprintf("off-plan-router-%d.json", repeat)
+			testM8QualificationProfilesV1(t, root, strings.TrimSuffix(name, ".json"), &matrix)
+			raw, err := json.Marshal(matrix)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, name), raw, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(raw)
+			campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:])})
+		}
+		if _, err := m8ValidateQualificationCampaignV1(root, campaign); err == nil || !strings.Contains(err.Error(), "off-plan M3 construction") {
+			t.Fatalf("off-plan router configuration err=%v", err)
 		}
 	})
 	for name, mutate := range map[string]func(*m8ProductionRowV1){
@@ -552,7 +585,9 @@ func TestM8QualificationM3BuildCapsV1(t *testing.T) {
 		if fixture.Vectors == 250000 {
 			cap, visits = 50_000_000_000, 900_000_000
 		}
-		variant := m3VariantDescriptorV1{PartitionMaxDistanceWork: cap, RouterMaxScalarWork: cap, M3MaxBenchmarkVisits: visits}
+		routerConfig := vectorpartition.DefaultRouterConfigV1()
+		routerConfig.MaxScalarWork = cap
+		variant := m3VariantDescriptorV1{PartitionMaxDistanceWork: cap, RouterMaxScalarWork: cap, RouterConfig: routerConfig, M3MaxBenchmarkVisits: visits}
 		if !m8QualificationM3BuildCapsV1(variant, fixture) {
 			t.Fatalf("fixture=%d rejected expected cap=%d", fixture.Vectors, cap)
 		}
@@ -564,6 +599,11 @@ func TestM8QualificationM3BuildCapsV1(t *testing.T) {
 		variant.M3MaxBenchmarkVisits++
 		if m8QualificationM3BuildCapsV1(variant, fixture) {
 			t.Fatalf("fixture=%d accepted wrong M3 visit cap", fixture.Vectors)
+		}
+		variant.M3MaxBenchmarkVisits--
+		variant.RouterConfig.BranchFactor++
+		if m8QualificationM3BuildCapsV1(variant, fixture) {
+			t.Fatalf("fixture=%d accepted off-plan router config", fixture.Vectors)
 		}
 	}
 }
