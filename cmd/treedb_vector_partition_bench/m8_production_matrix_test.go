@@ -106,6 +106,58 @@ func TestM8ProductionMatrixOutputPreflightV1(t *testing.T) {
 	}
 }
 
+func TestM8ProductionMatrixPublisherLeavesOnlyCompleteNoReplaceArtifactsV1(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "matrix.json")
+	tempPaths := func(t *testing.T) {
+		t.Helper()
+		paths, err := filepath.Glob(filepath.Join(dir, ".m8_matrix_*.tmp"))
+		if err != nil || len(paths) != 0 {
+			t.Fatalf("temporary artifacts=%v err=%v", paths, err)
+		}
+	}
+	t.Run("write failure cleans temporary and final paths", func(t *testing.T) {
+		err := m8PublishProductionMatrixV1(path, func(w io.Writer) error {
+			if _, err := io.WriteString(w, "{"); err != nil {
+				return err
+			}
+			return errors.New("write failure")
+		})
+		if err == nil {
+			t.Fatal("accepted failing matrix write")
+		}
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("partial final artifact err=%v", err)
+		}
+		tempPaths(t)
+	})
+	t.Run("existing final remains untouched", func(t *testing.T) {
+		if err := os.WriteFile(path, []byte("sentinel"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := m8WriteProductionMatrixV1(path, []byte("replacement")); err == nil || !errors.Is(err, os.ErrExist) {
+			t.Fatalf("existing artifact error=%v", err)
+		}
+		if got, err := os.ReadFile(path); err != nil || string(got) != "sentinel" {
+			t.Fatalf("existing artifact=%q err=%v", got, err)
+		}
+		tempPaths(t)
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("complete matrix publishes exact bytes", func(t *testing.T) {
+		want := []byte("{\"matrix\":true}\n")
+		if err := m8WriteProductionMatrixV1(path, want); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("matrix=%q want=%q err=%v", got, want, err)
+		}
+		tempPaths(t)
+	})
+}
+
 func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *testing.T) {
 	hash := strings.Repeat("a", 40)
 	fixture := fixtureManifest{Checksum: strings.Repeat("b", 64)}

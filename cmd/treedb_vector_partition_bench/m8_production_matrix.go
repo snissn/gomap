@@ -245,15 +245,44 @@ func m8PreflightProductionMatrixOutputV1(cfg config, descriptors []m3VariantDesc
 }
 
 func m8WriteProductionMatrixV1(path string, raw []byte) error {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	return m8PublishProductionMatrixV1(path, func(w io.Writer) error {
+		n, err := w.Write(raw)
+		if err != nil {
+			return err
+		}
+		if n != len(raw) {
+			return io.ErrShortWrite
+		}
+		return nil
+	})
+}
+
+// m8PublishProductionMatrixV1 exposes a complete matrix only after it is
+// closed and atomically linked into its final no-replace name.
+func m8PublishProductionMatrixV1(path string, write func(io.Writer) error) error {
+	file, err := os.CreateTemp(filepath.Dir(path), ".m8_matrix_*.tmp")
 	if err != nil {
-		return fmt.Errorf("create immutable M8 matrix: %w", err)
+		return fmt.Errorf("create temporary immutable M8 matrix: %w", err)
 	}
-	if _, err := file.Write(raw); err != nil {
-		_ = file.Close()
+	tempPath := file.Name()
+	defer os.Remove(tempPath)
+	defer file.Close()
+	if err := write(file); err != nil {
 		return err
 	}
-	return file.Close()
+	if err := file.Chmod(0o644); err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Link(tempPath, path); err != nil {
+		return fmt.Errorf("publish immutable M8 matrix: %w", err)
+	}
+	return nil
 }
 
 func runM8ProductionVariantProcessV1(cfg config, dir string, overlap float64, profiles, expectedTruthCacheDigest string, stdout io.Writer) error {
