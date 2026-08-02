@@ -106,6 +106,89 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			t.Fatal("accepted edited retained command")
 		}
 	})
+	t.Run("edited_matrix_command", func(t *testing.T) {
+		for name, mutate := range map[string]func(*m8ProductionMatrixV1){
+			"empty_dataset": func(matrix *m8ProductionMatrixV1) {
+				for i, arg := range matrix.Command {
+					if arg == "-dataset" {
+						matrix.Command[i+1] = ""
+						return
+					}
+				}
+				t.Fatal("missing dataset flag")
+			},
+			"changed_dataset": func(matrix *m8ProductionMatrixV1) {
+				for i, arg := range matrix.Command {
+					if arg == "-dataset" {
+						matrix.Command[i+1] = t.TempDir()
+						return
+					}
+				}
+				t.Fatal("missing dataset flag")
+			},
+			"missing_variant_db": func(matrix *m8ProductionMatrixV1) {
+				for i, arg := range matrix.Command {
+					if arg == "-m8-variant-dbs" {
+						matrix.Command = append(matrix.Command[:i:i], matrix.Command[i+2:]...)
+						return
+					}
+				}
+				t.Fatal("missing variant DB flag")
+			},
+			"changed_variant_db": func(matrix *m8ProductionMatrixV1) {
+				for i, arg := range matrix.Command {
+					if arg == "-m8-variant-dbs" {
+						matrix.Command[i+1] = t.TempDir() + "," + strings.Join(strings.Split(matrix.Command[i+1], ",")[1:], ",")
+						return
+					}
+				}
+				t.Fatal("missing variant DB flag")
+			},
+			"changed_profiles": func(matrix *m8ProductionMatrixV1) {
+				for i, arg := range matrix.Command {
+					if arg == "-profiles" {
+						matrix.Command[i+1] = t.TempDir()
+						return
+					}
+				}
+				t.Fatal("missing profiles flag")
+			},
+			"changed_truth_digest": func(matrix *m8ProductionMatrixV1) {
+				matrix.Command = append(matrix.Command, "-m8-truth-cache-sha256", strings.Repeat("e", 64))
+			},
+			"changed_config": func(matrix *m8ProductionMatrixV1) {
+				for i, arg := range matrix.Command {
+					if arg == "-probes" {
+						matrix.Command[i+1] = "16"
+						return
+					}
+				}
+				t.Fatal("missing probes flag")
+			},
+		} {
+			t.Run(name, func(t *testing.T) {
+				matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
+				testM8QualificationExecutionIDsV1(&matrix, 3)
+				testM8QualificationProfilesV1(t, root, "matrix-command-"+name, &matrix)
+				mutate(&matrix)
+				raw, err := json.Marshal(matrix)
+				if err != nil {
+					t.Fatal(err)
+				}
+				path := "matrix-command-" + name + ".json"
+				if err := os.WriteFile(filepath.Join(root, path), raw, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				digest := sha256.Sum256(raw)
+				bad := campaign
+				bad.Runs = slices.Clone(campaign.Runs)
+				bad.Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
+				if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
+					t.Fatalf("accepted %s", name)
+				}
+			})
+		}
+	})
 	t.Run("edited_artifact_command_flags", func(t *testing.T) {
 		for name, mutate := range map[string]func(*m8ProductionReportV1){
 			"changed_dataset": func(report *m8ProductionReportV1) {
@@ -759,6 +842,7 @@ func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManif
 		{"stable-id-hash-disjoint-v1", partitionAssignmentStableIDHashV1, 0},
 	}
 	matrix := m8ProductionMatrixV1{Variants: make([]m8ProductionReportV1, 0, len(variants))}
+	datasetDirectory := ""
 	for _, v := range variants {
 		descriptor := testM3VariantDescriptorV1(t.TempDir())
 		descriptor.VariantID, descriptor.AssignmentBasis, descriptor.OverlapRatio = v.id, v.assignment, v.overlap
@@ -774,6 +858,11 @@ func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManif
 		}
 		refreshTestM3VariantIdentityV1(t, &descriptor)
 		report := testM8QualificationReportV1(t, head, fixture, descriptor, p4QPS)
+		if datasetDirectory == "" {
+			datasetDirectory = report.DatasetDirectory
+		} else {
+			report.DatasetDirectory = datasetDirectory
+		}
 		report.GateLedger = m8ProductionGateLedgerForReportV1(report)
 		matrix.Variants = append(matrix.Variants, report)
 	}
@@ -1047,6 +1136,34 @@ func testM8QualificationProfilesV1(t *testing.T, root, run string, matrix *m8Pro
 		}
 		report.ExecutionEvidenceDigest = digest
 	}
+	matrix.Command = testM8QualificationMatrixCommandV1(*matrix)
+}
+
+func testM8QualificationMatrixCommandV1(matrix m8ProductionMatrixV1) []string {
+	report := matrix.Variants[0]
+	variantDBs := make([]string, 0, len(m8RequiredVariantIDsV1))
+	for _, variantID := range m8RequiredVariantIDsV1 {
+		for i := range matrix.Variants {
+			if matrix.Variants[i].Variant.VariantID == variantID {
+				variantDBs = append(variantDBs, matrix.Variants[i].Variant.DatabaseDirectory)
+				break
+			}
+		}
+	}
+	cfg := report.Config
+	args := []string{
+		"treedb_vector_partition_bench", "-mode", m8ProductionMultiGroupModeV1,
+		"-dataset", report.DatasetDirectory, "-m8-variant-dbs", strings.Join(variantDBs, ","), "-out", "out", "-partitions", "16", "-probes", "1,2,4,8,16",
+		"-overlap", "0,.2", "-top-k", "10", "-recall-target", ".9", "-seed", strconv.FormatInt(cfg.Seed, 10),
+		"-raft-groups", "4", "-raft-nodes-per-group", "3", "-concurrency", "1", "-warmup", "0", "-ef-search", "64", "-router-candidates", "64",
+		"-m8-max-rss-bytes", strconv.FormatUint(report.Resources.PeakRSSCapBytes, 10),
+		"-m8-max-persistent-asset-bytes", strconv.FormatUint(report.Resources.PersistentAssetCap, 10),
+		"-m8-max-exact-truth-visits", strconv.FormatInt(cfg.MaxExactTruthVisits, 10),
+	}
+	if report.Profiles.Directory != "" {
+		args = append(args, "-profiles", filepath.Dir(report.Profiles.Directory))
+	}
+	return args
 }
 
 func testM8QualificationTranscriptV1(t *testing.T, dir string, report *m8ProductionReportV1) {

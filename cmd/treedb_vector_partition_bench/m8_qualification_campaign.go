@@ -298,6 +298,9 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 				selected = report
 			}
 		}
+		if !m8QualificationMatrixCommandV1(matrix) {
+			return summary, fmt.Errorf("qualification matrix %s has command/config mismatch", cleanPath)
+		}
 		if err := m8ValidateQualificationMatrixDerivationV1(matrix); err != nil {
 			return summary, fmt.Errorf("derive qualification matrix %s: %w", cleanPath, err)
 		}
@@ -406,17 +409,82 @@ func m8QualificationCommandV1(report m8ProductionReportV1) bool {
 	default:
 		return false
 	}
+	return reflect.DeepEqual(m8QualificationCommandConfigV1(cfg), report.Config) &&
+		cfg.m8MaxRSSBytes == report.Resources.PeakRSSCapBytes &&
+		cfg.m8MaxAssetBytes == report.Resources.PersistentAssetCap
+}
+
+func m8QualificationCommandConfigV1(cfg config) m8ProductionConfigEvidenceV1 {
 	warmup, _ := m8WarmupCountAndConcurrencyV1(cfg)
-	commandConfig := m8ProductionConfigEvidenceV1{
+	return m8ProductionConfigEvidenceV1{
 		RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions,
 		Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget,
 		Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: warmup,
 		EfSearch: cfg.efSearch, RouterCandidates: cfg.routerCandidates,
 		MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed,
 	}
-	return reflect.DeepEqual(commandConfig, report.Config) &&
-		cfg.m8MaxRSSBytes == report.Resources.PeakRSSCapBytes &&
-		cfg.m8MaxAssetBytes == report.Resources.PersistentAssetCap
+}
+
+func m8QualificationMatrixCommandV1(matrix m8ProductionMatrixV1) bool {
+	if len(matrix.Command) < 2 || len(matrix.Variants) != len(m8RequiredVariantIDsV1) {
+		return false
+	}
+	cfg, err := parseConfig(matrix.Command[1:])
+	if err != nil || cfg.stage != m8ProductionMultiGroupModeV1 || len(cfg.m8VariantDBs) != len(m8RequiredVariantIDsV1) {
+		return false
+	}
+	byID := make(map[string]*m8ProductionReportV1, len(matrix.Variants))
+	for i := range matrix.Variants {
+		report := &matrix.Variants[i]
+		if report.Variant == nil || byID[report.Variant.VariantID] != nil {
+			return false
+		}
+		byID[report.Variant.VariantID] = report
+	}
+	base := byID[m8RequiredVariantIDsV1[0]]
+	if base == nil || base.DatasetDirectory == "" {
+		return false
+	}
+	dataset, err := m8CanonicalPathV1(cfg.dataset)
+	if err != nil || dataset != base.DatasetDirectory {
+		return false
+	}
+	commandConfig := m8QualificationCommandConfigV1(cfg)
+	commandConfig.Overlap = nil
+	profileRoot := ""
+	variantDBs := make(map[string]bool, len(cfg.m8VariantDBs))
+	for _, dir := range cfg.m8VariantDBs {
+		canonical, err := m8CanonicalPathV1(dir)
+		if err != nil || variantDBs[canonical] {
+			return false
+		}
+		variantDBs[canonical] = true
+	}
+	for _, variantID := range m8RequiredVariantIDsV1 {
+		report := byID[variantID]
+		if report == nil || report.Profiles.Status == "not_captured" || report.DatasetDirectory != dataset {
+			return false
+		}
+		expectedConfig := report.Config
+		expectedConfig.Overlap = nil
+		if !reflect.DeepEqual(commandConfig, expectedConfig) || cfg.m8MaxRSSBytes != report.Resources.PeakRSSCapBytes || cfg.m8MaxAssetBytes != report.Resources.PersistentAssetCap {
+			return false
+		}
+		dir, err := m8CanonicalPathV1(report.Variant.DatabaseDirectory)
+		if err != nil || !variantDBs[dir] {
+			return false
+		}
+		root, err := m8CanonicalPathV1(filepath.Dir(report.Profiles.Directory))
+		if err != nil || (profileRoot != "" && root != profileRoot) {
+			return false
+		}
+		profileRoot = root
+		if cfg.m8TruthCacheSHA256 != "" && cfg.m8TruthCacheSHA256 != report.TruthCache.ArtifactSHA256 {
+			return false
+		}
+	}
+	profiles, err := m8CanonicalPathV1(cfg.profiles)
+	return err == nil && profiles == profileRoot
 }
 
 func m8QualificationExactTruthCapV1(fixture fixtureManifest) int64 {
