@@ -4013,14 +4013,8 @@ func parseMongoMutation(update wire.Document) (mongoMutation, error) {
 			}
 			switch op {
 			case "$set":
-				if err := validateSupportedValue(name, value); err != nil {
-					return mongoMutation{}, err
-				}
 				mutation.set = append(mutation.set, mongoMutationField{name, value})
 			case "$setOnInsert":
-				if err := validateSupportedValue(name, value); err != nil {
-					return mongoMutation{}, err
-				}
 				mutation.setOnInsert = append(mutation.setOnInsert, mongoMutationField{name, value})
 			case "$inc":
 				if !mongoMutationNumeric(value) {
@@ -4033,11 +4027,6 @@ func parseMongoMutation(update wire.Document) (mongoMutation, error) {
 				values, err := mongoMutationArrayValues(op, name, value)
 				if err != nil {
 					return mongoMutation{}, err
-				}
-				for _, item := range values {
-					if err := validateSupportedValue(name, item); err != nil {
-						return mongoMutation{}, err
-					}
 				}
 				field := mongoMutationArrayField{name: name, values: values}
 				if op == "$push" {

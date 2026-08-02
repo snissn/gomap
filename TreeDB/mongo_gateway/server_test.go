@@ -6162,6 +6162,7 @@ func TestMongoMutationNestedOperators(t *testing.T) {
 	})
 	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
 		{Key: "$set", Value: bson.D{{Key: "profile.name", Value: "grace"}, {Key: "profile.city", Value: "london"}}},
+		{Key: "$set", Value: bson.D{{Key: "profile.binary", Value: bson.Binary{Subtype: 0x80, Data: []byte{1, 2}}}}},
 		{Key: "$inc", Value: bson.D{{Key: "profile.count", Value: int32(2)}}},
 		{Key: "$push", Value: bson.D{{Key: "tags", Value: bson.D{{Key: "$each", Value: bson.A{"db", "go"}}}}}},
 		{Key: "$push", Value: bson.D{{Key: "events", Value: bson.D{{Key: "kind", Value: "login"}}}}},
@@ -6182,6 +6183,9 @@ func TestMongoMutationNestedOperators(t *testing.T) {
 	}
 	if got, _ := profile.Lookup("count").Int32OK(); got != 3 {
 		t.Fatalf("profile.count=%d", got)
+	}
+	if subtype, value := profile.Lookup("binary").Binary(); subtype != 0x80 || !bytes.Equal(value, []byte{1, 2}) {
+		t.Fatalf("profile.binary=%#x/%v", subtype, value)
 	}
 	if !profile.Lookup("old").IsZero() {
 		t.Fatal("profile.old remains")

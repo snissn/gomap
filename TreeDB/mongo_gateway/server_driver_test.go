@@ -158,7 +158,7 @@ func TestStandaloneServerOfficialGoDriverFilterWrites(t *testing.T) {
 		t.Fatalf("filter UpdateOne result=%+v err=%v", updated, err)
 	}
 	updated, err = coll.UpdateOne(ctx, bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int32(20)}}}}, bson.D{
-		{Key: "$set", Value: bson.D{{Key: "profile.name", Value: "ada"}}},
+		{Key: "$set", Value: bson.D{{Key: "profile.name", Value: "ada"}, {Key: "profile.blob", Value: bson.Binary{Subtype: 0x80, Data: []byte{1, 2}}}}},
 		{Key: "$inc", Value: bson.D{{Key: "profile.logins", Value: int32(1)}}},
 		{Key: "$push", Value: bson.D{{Key: "events", Value: bson.D{{Key: "kind", Value: "login"}}}}},
 		{Key: "$addToSet", Value: bson.D{{Key: "labels", Value: bson.D{{Key: "$each", Value: bson.A{"staff", "staff"}}}}}},
@@ -173,7 +173,7 @@ func TestStandaloneServerOfficialGoDriverFilterWrites(t *testing.T) {
 	profile := nested.Lookup("profile").Document()
 	events, eventsErr := nested.Lookup("events").Array().Values()
 	labels, labelsErr := nested.Lookup("labels").Array().Values()
-	if profile.Lookup("name").StringValue() != "ada" || profile.Lookup("logins").Int32() != 1 || eventsErr != nil || len(events) != 1 || labelsErr != nil || len(labels) != 1 {
+	if subtype, value := profile.Lookup("blob").Binary(); profile.Lookup("name").StringValue() != "ada" || profile.Lookup("logins").Int32() != 1 || subtype != 0x80 || string(value) != string([]byte{1, 2}) || eventsErr != nil || len(events) != 1 || labelsErr != nil || len(labels) != 1 {
 		t.Fatalf("nested update document=%v", nested)
 	}
 	var before bson.M
