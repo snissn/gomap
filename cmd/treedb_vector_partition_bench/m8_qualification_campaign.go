@@ -208,7 +208,7 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 			environment = &currentEnvironment
 			seenVariants[report.Variant.VariantID] = true
 			config := report.Config
-			config.Probes = nil // repeat one records the full p1/2/4/8/16 ladder; repeats two and three retain p4/p16.
+			config.Probes = nil // all repeats record the same p1/2/4/8/16 ladder.
 			if prior, ok := configs[report.Variant.VariantID]; ok && !reflect.DeepEqual(prior, config) {
 				return summary, fmt.Errorf("qualification matrix %s changes %s topology/configuration", cleanPath, report.Variant.VariantID)
 			}
@@ -295,12 +295,8 @@ func m8QualificationFixtureV1(candidate fixtureManifest) bool {
 	return false
 }
 
-func m8QualificationConfigV1(cfg m8ProductionConfigEvidenceV1, fixture fixtureManifest, overlap float64, repeat int) bool {
-	probes := []int{4, 16}
-	if repeat == 0 {
-		probes = []int{1, 2, 4, 8, 16}
-	}
-	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterCandidates == 64 && cfg.MaxExactTruthVisits == m8QualificationExactTruthCapV1(fixture) && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, probes) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{64}) && slices.Equal(cfg.Overlap, []float64{overlap})
+func m8QualificationConfigV1(cfg m8ProductionConfigEvidenceV1, fixture fixtureManifest, overlap float64, _ int) bool {
+	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterCandidates == 64 && cfg.MaxExactTruthVisits == m8QualificationExactTruthCapV1(fixture) && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, []int{1, 2, 4, 8, 16}) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{64}) && slices.Equal(cfg.Overlap, []float64{overlap})
 }
 
 func m8QualificationExactTruthCapV1(fixture fixtureManifest) int64 {

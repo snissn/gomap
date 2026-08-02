@@ -187,6 +187,8 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	report.Variant = &variant
+	report.RouterRepresentatives = variant.RouterRepresentatives
+	report.Rows[0].ElapsedNanos = uint64(report.Rows[0].Samples) * uint64(time.Second)
 	report.Topology.ReadySetDigest = variant.ReadySetDigest
 	report.Config.Overlap = []float64{0}
 	report.Rows[0].VariantID = variant.VariantID

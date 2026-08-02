@@ -29,15 +29,14 @@ hardware and topology, variant descriptor and asset digest, probes, ef-search,
 concurrency, samples, timing boundary, profiles, and exact command.  A
 comparable matrix includes graph-disjoint, graph-overlap-020, stable-ID-hash
 disjoint, and exhaustive all-partition rows under the same topology and local
-search settings. For #4027 repeat one records the p1/p2/p4/p8/p16 ladder;
-repeats two and three retain p4/p16 at `ef_search=64`, concurrency `1`, and
-approximate router candidate budget `64`; the retained matrix continues to
-bind the exhaustive control.
+search settings. For #4027 every repeat records the same p1/p2/p4/p8/p16
+ladder at `ef_search=64`, concurrency `1`, and approximate router candidate
+budget `64`; the retained matrix continues to bind the exhaustive control.
 
-Repeat the p4/p16 comparison three times per structured corpus. The campaign
-index hashes every matrix, requires one exact head and corpus/truth/variant
-identity across the repeats, and derives median/min/max QPS plus p95 spread;
-it must not imply that unlisted sweep rows were repeated.
+Repeat the full probe ladder, including the p4/p16 comparison, three times per
+structured corpus. The campaign index hashes every matrix, requires one exact
+head and corpus/truth/variant identity across the repeats, and derives
+median/min/max QPS plus p95 spread.
 
 The graph and offline router builders have separate scalar-work envelopes from
 M3's exact-oracle visit cap: the retained 100k corpus uses 20B and the 250k

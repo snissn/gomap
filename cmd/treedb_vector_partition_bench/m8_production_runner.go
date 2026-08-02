@@ -204,6 +204,7 @@ type m8ProductionRowV1 struct {
 	Samples                int                       `json:"samples,omitempty"`
 	RecallAtK              float64                   `json:"recall_at_k"`
 	QPS                    float64                   `json:"qps,omitempty"`
+	ElapsedNanos           uint64                    `json:"elapsed_nanos,omitempty"`
 	P50Nanos               uint64                    `json:"p50_nanos,omitempty"`
 	P95Nanos               uint64                    `json:"p95_nanos,omitempty"`
 	P99Nanos               uint64                    `json:"p99_nanos,omitempty"`
@@ -2524,7 +2525,10 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 		defer cancel()
 		outcomes[index].response, outcomes[index].err = coordinator.Search(requestCtx, m8ProductionApproximateRequestV1(assets, query, fmt.Sprintf("m8-q-%06d-p-%04d-ef-%06d-c-%03d", index, probes, efSearch, concurrency), probes, efSearch, topK, routerCandidates, candidateBytesLimit))
 	})
-	elapsed := time.Since(started)
+	elapsedNanos := uint64(time.Since(started))
+	if elapsedNanos == 0 {
+		return m8ProductionRowV1{}, nil, errors.New("M8 production cell elapsed time is zero")
+	}
 	// Coordinator.Search is an ANN/HNSW path even when every partition is
 	// selected. Exact V1 parity is owned by m8ExactPartitionUnionV1 during
 	// attribution, never by this measured all-partition ANN row.
@@ -2557,6 +2561,7 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 	}
 	if coverageShortfall {
 		row.Status = "candidate_coverage_shortfall"
+		row.ElapsedNanos = elapsedNanos
 		for _, outcome := range outcomes {
 			row.MaxTotalNanos = max(row.MaxTotalNanos, outcome.response.Timing.TotalNanos)
 		}
@@ -2564,12 +2569,21 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 	}
 	row.NoPartialResults = true
 	row.RecallAtK = recallSum / float64(len(outcomes))
-	row.QPS = float64(len(outcomes)) / elapsed.Seconds()
+	row.ElapsedNanos = elapsedNanos
+	row.QPS, _ = m8ProductionQPSV1(row.Samples, row.ElapsedNanos)
 	row.P50Nanos, row.P95Nanos, row.P99Nanos = m8PercentileV1(durations, 50), m8PercentileV1(durations, 95), m8PercentileV1(durations, 99)
 	for _, duration := range durations {
 		row.MaxTotalNanos = max(row.MaxTotalNanos, duration)
 	}
 	return row, canonicalResults, nil
+}
+
+func m8ProductionQPSV1(samples int, elapsedNanos uint64) (float64, bool) {
+	if samples < 1 || elapsedNanos == 0 {
+		return 0, false
+	}
+	qps := float64(samples) * float64(time.Second) / float64(elapsedNanos)
+	return qps, !math.IsNaN(qps) && !math.IsInf(qps, 0) && qps > 0
 }
 
 func m8AttachAttributionV1(row *m8ProductionRowV1, attribution m8AttributionCellV1, coordinatorResults [][]m8CanonicalResultV1) error {
@@ -3386,7 +3400,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1, caps m8Production
 			if row.Probes < 1 || row.Probes > report.Config.Partitions ||
 				row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries ||
 				row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates < row.Probes || row.RouterCandidates > report.Config.RouterCandidates || row.RouterCandidates != row.Attribution.ApproximateRouterCandidateBudget || row.NoPartialResults || row.ExactParityChecked || row.ExactParityPassed ||
-				row.RecallAtK != 0 || row.QPS != 0 || row.P50Nanos != 0 || row.P95Nanos != 0 || row.P99Nanos != 0 || row.MaxTotalNanos == 0 ||
+				row.RecallAtK != 0 || row.QPS != 0 || row.ElapsedNanos == 0 || row.P50Nanos != 0 || row.P95Nanos != 0 || row.P99Nanos != 0 || row.MaxTotalNanos == 0 ||
 				row.Attribution.LocalHNSWSearches != expectedLocalSearches || row.Attribution.LocalHNSWCandidates == 0 ||
 				row.Attribution.ApproximateRouterPartitionCoverageComplete || row.Attribution.ApproximateRepresentativeRecallAtK != 0 || row.Attribution.ApproximateLocalHNSWRecallAtK != 0 || row.Attribution.ApproximateLocalHNSWSearches != 0 || row.Attribution.ApproximateLocalHNSWCandidates != 0 || row.Attribution.ApproximateLocalHNSWEdges != 0 || row.Attribution.EndToEndRecallAtK != 0 ||
 				row.Attribution.CoordinatorMergeIDParity || row.Attribution.CoordinatorMergeScoreParity || !validM8AttributionV1(row.Attribution, report.Config.TopK) {
@@ -3399,8 +3413,10 @@ func validateM8ProductionReportV1(report m8ProductionReportV1, caps m8Production
 			measuredSamples += rowSamples
 			continue
 		}
+		expectedQPS, qpsOK := m8ProductionQPSV1(row.Samples, row.ElapsedNanos)
 		if row.Status != "pass" && row.Status != "fail" || row.Probes < 1 || row.Probes > report.Config.Partitions ||
 			row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries || math.IsNaN(row.QPS) || math.IsInf(row.QPS, 0) || row.QPS <= 0 ||
+			!qpsOK || math.Float64bits(row.QPS) != math.Float64bits(expectedQPS) ||
 			row.P50Nanos == 0 || row.P50Nanos > row.P95Nanos || row.P95Nanos > row.P99Nanos || row.P99Nanos > row.MaxTotalNanos ||
 			row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates < row.Probes || row.RouterCandidates > report.Config.RouterCandidates || row.RouterCandidates != row.Attribution.ApproximateRouterCandidateBudget || !row.Attribution.ApproximateRouterPartitionCoverageComplete || row.ExactParityPassed && !row.ExactParityChecked || row.ExactParityChecked && row.Probes != report.Config.Partitions || !row.NoPartialResults ||
 			math.Float64bits(row.RecallAtK) != math.Float64bits(row.Attribution.EndToEndRecallAtK) || row.Attribution.LocalHNSWSearches != expectedLocalSearches || row.Attribution.LocalHNSWCandidates == 0 || row.Attribution.ApproximateLocalHNSWSearches != expectedLocalSearches || row.Attribution.ApproximateLocalHNSWCandidates == 0 ||

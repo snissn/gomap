@@ -33,14 +33,27 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:])})
 	}
 	for i := 0; i < 3; i++ {
-		write("repeat-"+string(rune('1'+i))+".json", testM8QualificationMatrixV1(t, head, fixture, 120+float64(i), i == 0))
+		write("repeat-"+string(rune('1'+i))+".json", testM8QualificationMatrixV1(t, head, fixture, 125+float64(i)*75, true))
 	}
 	summary, err := m8ValidateQualificationCampaignV1(root, campaign)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.P4QPSMedian != 121 || summary.P16QPSMedian != 100 || summary.P4P95Min != 84 || summary.P4P95Median != 85 || summary.P4P95Max != 86 || summary.P16P95Min != 96 || summary.P16P95Median != 97 || summary.P16P95Max != 98 {
+	if summary.P4QPSMedian != 200 || summary.P16QPSMedian != 100 || summary.P4P95Min != 89 || summary.P4P95Median != 164 || summary.P4P95Max != 239 || summary.P16P95Min != 101 || summary.P16P95Median != 176 || summary.P16P95Max != 251 {
 		t.Fatalf("summary=%+v", summary)
+	}
+	for name, mutate := range map[string]func(*m8ProductionRowV1){
+		"edited_qps":     func(row *m8ProductionRowV1) { row.QPS++ },
+		"edited_elapsed": func(row *m8ProductionRowV1) { row.ElapsedNanos++ },
+		"zero_elapsed":   func(row *m8ProductionRowV1) { row.ElapsedNanos = 0 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			report := testM8QualificationReportV1(t, head, fixture, testM3VariantDescriptorV1(t.TempDir()), 125, true)
+			mutate(&report.Rows[0])
+			if err := testM8ValidateProductionReportV1(report); err == nil {
+				t.Fatalf("accepted %s", name)
+			}
+		})
 	}
 	index, err := json.Marshal(campaign)
 	if err != nil {
@@ -51,10 +64,10 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout strings.Builder
-	if err := run([]string{"validate-qualification", "-index", indexPath}, &stdout); err != nil || !strings.Contains(stdout.String(), `"p4_qps_median":121`) {
+	if err := run([]string{"validate-qualification", "-index", indexPath}, &stdout); err != nil || !strings.Contains(stdout.String(), `"p4_qps_median":200`) {
 		t.Fatalf("CLI validation err=%v output=%q", err, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `"p4_p95_min":84`) || !strings.Contains(stdout.String(), `"p16_p95_max":98`) {
+	if !strings.Contains(stdout.String(), `"p4_p95_min":89`) || !strings.Contains(stdout.String(), `"p16_p95_max":251`) {
 		t.Fatalf("CLI p95 spread output=%q", stdout.String())
 	}
 
@@ -73,7 +86,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		})
 	}
 	t.Run("execution_identity_whitespace", func(t *testing.T) {
-		matrix := testM8QualificationMatrixV1(t, head, fixture, 120, true)
+		matrix := testM8QualificationMatrixV1(t, head, fixture, 125, true)
 		testM8QualificationExecutionIDsV1(&matrix, 0)
 		testM8QualificationProfilesV1(t, root, "execution-id-whitespace", &matrix)
 		matrix.Variants[0].ExecutionID += " "
@@ -125,7 +138,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		}
 	})
 	t.Run("tampered_execution_evidence_digest", func(t *testing.T) {
-		matrix := testM8QualificationMatrixV1(t, head, fixture, 120, true)
+		matrix := testM8QualificationMatrixV1(t, head, fixture, 125, true)
 		testM8QualificationExecutionIDsV1(&matrix, 0)
 		testM8QualificationProfilesV1(t, root, "execution-evidence-tamper", &matrix)
 		matrix.Variants[0].ExecutionEvidenceDigest = strings.Repeat("0", 64)
@@ -145,7 +158,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		}
 	})
 	t.Run("profile_reuse_across_variants", func(t *testing.T) {
-		matrix := testM8QualificationMatrixV1(t, head, fixture, 120, true)
+		matrix := testM8QualificationMatrixV1(t, head, fixture, 125, true)
 		testM8QualificationExecutionIDsV1(&matrix, 0)
 		testM8QualificationProfilesV1(t, root, "profile-reuse-variants", &matrix)
 		matrix.Variants[1].Profiles = matrix.Variants[0].Profiles
@@ -170,7 +183,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		}
 	})
 	t.Run("forged_router_representative_count", func(t *testing.T) {
-		matrix := testM8QualificationMatrixV1(t, head, fixture, 120, true)
+		matrix := testM8QualificationMatrixV1(t, head, fixture, 125, true)
 		testM8QualificationExecutionIDsV1(&matrix, 0)
 		testM8QualificationProfilesV1(t, root, "router-count-forgery", &matrix)
 		matrix.Variants[0].RouterRepresentatives++
@@ -189,7 +202,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			t.Fatal("accepted forged router representative count")
 		}
 	})
-	invalid := testM8QualificationMatrixV1(t, head, fixture, 120, true)
+	invalid := testM8QualificationMatrixV1(t, head, fixture, 125, true)
 	invalid.Variants[0].Rows[0].RouterCandidates = 0
 	raw, err := json.Marshal(invalid)
 	if err != nil {
@@ -205,7 +218,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
 		t.Fatal("accepted an invalid child report")
 	}
-	derivedTamper := testM8QualificationMatrixV1(t, head, fixture, 120, true)
+	derivedTamper := testM8QualificationMatrixV1(t, head, fixture, 125, true)
 	testM8QualificationProfilesV1(t, root, "derived-tamper", &derivedTamper)
 	derivedTamper.Variants[0].GateLedger.Balance = "fail"
 	derivedTamper, err = m8BuildProductionMatrixV1(config{baseSHA: head, headSHA: head, partitions: 16, command: []string{"m8-test"}}, fixture, derivedTamper.Variants)
@@ -318,7 +331,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			matrix := testM8QualificationMatrixV1(t, head, fixture, 120, true)
+			matrix := testM8QualificationMatrixV1(t, head, fixture, 125, true)
 			testM8QualificationProfilesV1(t, root, name, &matrix)
 			mutate(&matrix)
 			raw, err := json.Marshal(matrix)
@@ -339,7 +352,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		})
 	}
 	t.Run("tampered_profile", func(t *testing.T) {
-		matrix := testM8QualificationMatrixV1(t, head, fixture, 120, true)
+		matrix := testM8QualificationMatrixV1(t, head, fixture, 125, true)
 		testM8QualificationProfilesV1(t, root, "tampered-profile", &matrix)
 		if err := os.WriteFile(matrix.Variants[0].Profiles.Artifacts[0].Path, []byte("tampered"), 0o644); err != nil {
 			t.Fatal(err)
@@ -407,7 +420,7 @@ func TestM8QualificationM3BuildCapsV1(t *testing.T) {
 
 func TestM8QualificationImmutableTopologyCopiesGroupsV1(t *testing.T) {
 	head := strings.Repeat("a", 40)
-	matrix := testM8QualificationMatrixV1(t, head, m8QualificationFixturesV1[0], 120, true)
+	matrix := testM8QualificationMatrixV1(t, head, m8QualificationFixturesV1[0], 125, true)
 	before := matrix.Variants[0].Topology.Groups[0]
 	_ = m8QualificationImmutableTopologyV1(matrix.Variants[0].Topology)
 	if got := matrix.Variants[0].Topology.Groups[0]; got.Endpoint != before.Endpoint || got.CommitIndex != before.CommitIndex || got.ReadIndex != before.ReadIndex || got.AppliedIndex != before.AppliedIndex || got.EndpointHits != before.EndpointHits {
@@ -448,7 +461,7 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 	if err := json.Unmarshal(raw, &plan); err != nil {
 		t.Fatal(err)
 	}
-	if plan.SchemaVersion != 1 || plan.ResultKind != "vector_partition_structured_qualification_campaign_plan_v1" || plan.Status != "planned_no_measurement" || plan.Candidate.Variant != "graph-overlap-020-v1" || plan.Candidate.RouterCandidates != 64 || !slices.Equal(plan.Candidate.Probes, []int{1, 2, 4, 8, 16}) || !slices.Equal(plan.Candidate.RepeatedProbes, []int{4, 16}) || plan.Candidate.Repetitions != 3 || len(plan.Corpora) != 2 {
+	if plan.SchemaVersion != 1 || plan.ResultKind != "vector_partition_structured_qualification_campaign_plan_v1" || plan.Status != "planned_no_measurement" || plan.Candidate.Variant != "graph-overlap-020-v1" || plan.Candidate.RouterCandidates != 64 || !slices.Equal(plan.Candidate.Probes, []int{1, 2, 4, 8, 16}) || !slices.Equal(plan.Candidate.RepeatedProbes, []int{1, 2, 4, 8, 16}) || plan.Candidate.Repetitions != 3 || len(plan.Corpora) != 2 {
 		t.Fatalf("plan=%+v", plan)
 	}
 	if plan.Corpora[0].GraphCap != 20000000000 || plan.Corpora[0].RouterCap != 20000000000 || plan.Corpora[1].Dataset != "testdata/vector_partition_qualification_embedding_mixture_250k" || plan.Corpora[1].Vectors != 250000 || plan.Corpora[1].Checksum != "d0c7c82ba868853aae9a4280161003d72714ad1701d41ed3169c2fa94d470d69" || plan.Corpora[1].GraphCap != 50000000000 || plan.Corpora[1].RouterCap != 50000000000 || plan.Corpora[1].M3Cap != 900000000 || plan.Corpora[1].M8Cap != 1500000000 {
@@ -459,7 +472,7 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 	}
 }
 
-func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManifest, p4QPS float64, fullLadder bool) m8ProductionMatrixV1 {
+func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManifest, p4QPS float64, _ bool) m8ProductionMatrixV1 {
 	t.Helper()
 	variants := []struct {
 		id, assignment string
@@ -478,7 +491,7 @@ func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManif
 			descriptor.ArtifactSHA256 = strings.Repeat("c", 64)
 		}
 		refreshTestM3VariantIdentityV1(t, &descriptor)
-		report := testM8QualificationReportV1(t, head, fixture, descriptor, p4QPS, fullLadder)
+		report := testM8QualificationReportV1(t, head, fixture, descriptor, p4QPS, true)
 		report.GateLedger = m8ProductionGateLedgerForReportV1(report)
 		matrix.Variants = append(matrix.Variants, report)
 	}
@@ -518,16 +531,18 @@ func testM8QualificationReportV1(t *testing.T, head string, fixture fixtureManif
 	identity := nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: uint64(fixture.Vectors), PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}
 	warm := nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{Identity: identity, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, LeasePins: 1, LeaseReleases: 1}
 	measured := warm
-	rowProbes := []int{4, 16}
-	if fullLadder {
-		rowProbes = []int{1, 2, 4, 8, 16}
-	}
+	rowProbes := []int{1, 2, 4, 8, 16}
 	measured.Hits, measured.LeasePins, measured.LeaseReleases = uint64(fixture.Queries*len(rowProbes)), uint64(fixture.Queries*len(rowProbes)+1), uint64(fixture.Queries*len(rowProbes)+1)
 	row := func(probes int, qps float64) m8ProductionRowV1 {
 		attribution := m8ProductionAttributionV1{Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1, OracleStagesComplete: true, PrimaryHomeOracleRecallAtK: 1, FinalMembershipOracleRecallAtK: 1, ExactRepresentativeTruthHomeCoverageAtK: 1, TruthNeighborHomePairColocationAtK: 1, ExactRepresentativeFinalMembershipCoverageAtK: 1, TruthNeighborFinalMembershipPairColocationAtK: 1, ExactRepresentativeOverlapTruthContributionAtK: 1, ExactRepresentativeDuplicateMembershipCoverageAtK: 1, TruthNeighborRankRetentionAtK: slices.Repeat([]float64{1}, 10), ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true, ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: 1, ApproximateLocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1, CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true, ApproximateRouterCandidateBudget: 64, ApproximateRouterPartitionCoverageComplete: true, LocalHNSWSearches: uint64(fixture.Queries * probes), LocalHNSWCandidates: 1, ApproximateLocalHNSWSearches: uint64(fixture.Queries * probes), ApproximateLocalHNSWCandidates: 1, ResidualLossOwners: []string{"none_observed"}}
 		attribution.StageOwners = m8AttributionStageOwnersV1(attribution)
 		p95 := uint64(80 + probes + int(p4QPS-120))
-		return m8ProductionRowV1{Status: "pass", VariantID: descriptor.VariantID, Overlap: descriptor.OverlapRatio, Probes: probes, EfSearch: 64, Concurrency: 1, Samples: fixture.Queries, RecallAtK: 1, QPS: qps, P50Nanos: p95 - 1, P95Nanos: p95, P99Nanos: p95 + 1, MaxTotalNanos: p95 + 2, RouterMode: collections.VectorPartitionRouterModeApproxV1, RouterCandidates: 64, ExactParityChecked: probes == 16, ExactParityPassed: probes == 16, NoPartialResults: true, Attribution: attribution}
+		elapsedNanos := uint64(float64(fixture.Queries) * float64(time.Second) / qps)
+		derivedQPS, ok := m8ProductionQPSV1(fixture.Queries, elapsedNanos)
+		if !ok {
+			t.Fatal("derive qualification QPS")
+		}
+		return m8ProductionRowV1{Status: "pass", VariantID: descriptor.VariantID, Overlap: descriptor.OverlapRatio, Probes: probes, EfSearch: 64, Concurrency: 1, Samples: fixture.Queries, RecallAtK: 1, QPS: derivedQPS, ElapsedNanos: elapsedNanos, P50Nanos: p95 - 1, P95Nanos: p95, P99Nanos: p95 + 1, MaxTotalNanos: p95 + 2, RouterMode: collections.VectorPartitionRouterModeApproxV1, RouterCandidates: 64, ExactParityChecked: probes == 16, ExactParityPassed: probes == 16, NoPartialResults: true, Attribution: attribution}
 	}
 	diagnostics := make([]m8PartitionPackDiagnosticsV1, len(loads))
 	for i, load := range loads {
