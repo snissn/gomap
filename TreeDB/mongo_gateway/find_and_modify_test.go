@@ -25,6 +25,16 @@ func TestFindAndModifyReturnsAtomicBeforeAndAfterImages(t *testing.T) {
 	if n, ok := bson.Raw(before).Lookup("value").Document().Lookup("n").Int32OK(); !ok || n != 1 {
 		t.Fatalf("before n=%d ok=%v want 1", n, ok)
 	}
+	last := bson.Raw(before).Lookup("lastErrorObject").Document()
+	if n, ok := last.Lookup("n").Int32OK(); !ok || n != 1 {
+		t.Fatalf("matched n=%d ok=%v", n, ok)
+	}
+	if updated, ok := last.Lookup("updatedExisting").BooleanOK(); !ok || !updated {
+		t.Fatalf("matched updatedExisting=%v ok=%v", updated, ok)
+	}
+	if !last.Lookup("upserted").IsZero() {
+		t.Fatalf("matched response unexpectedly has upserted")
+	}
 	after := serveCommand(t, server, 3, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "grace"}}}}}, {Key: "new", Value: true}, {Key: "fields", Value: bson.D{{Key: "name", Value: int32(1)}}}, {Key: "$db", Value: "app"}})
 	assertOK(t, after)
 	value := bson.Raw(after).Lookup("value").Document()
@@ -116,9 +126,26 @@ func TestFindAndModifyNoMatchAndUpsert(t *testing.T) {
 	if bson.Raw(miss).Lookup("value").Type != bson.TypeNull {
 		t.Fatalf("no-match value=%v want null", bson.Raw(miss).Lookup("value").Type)
 	}
+	last := bson.Raw(miss).Lookup("lastErrorObject").Document()
+	if n, ok := last.Lookup("n").Int32OK(); !ok || n != 0 {
+		t.Fatalf("no-match n=%d ok=%v", n, ok)
+	}
+	if updated, ok := last.Lookup("updatedExisting").BooleanOK(); !ok || updated {
+		t.Fatalf("no-match updatedExisting=%v ok=%v", updated, ok)
+	}
+	if !last.Lookup("upserted").IsZero() {
+		t.Fatalf("no-match response unexpectedly has upserted")
+	}
 	upsert := serveCommand(t, server, 5, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "update", Value: bson.D{{Key: "name", Value: "new"}}}, {Key: "upsert", Value: true}, {Key: "new", Value: true}, {Key: "$db", Value: "app"}})
 	assertOK(t, upsert)
-	if id, ok := bson.Raw(upsert).Lookup("lastErrorObject").Document().Lookup("upserted").StringValueOK(); !ok || id != "u2" {
+	last = bson.Raw(upsert).Lookup("lastErrorObject").Document()
+	if n, ok := last.Lookup("n").Int32OK(); !ok || n != 1 {
+		t.Fatalf("upsert n=%d ok=%v", n, ok)
+	}
+	if updated, ok := last.Lookup("updatedExisting").BooleanOK(); !ok || updated {
+		t.Fatalf("upsert updatedExisting=%v ok=%v", updated, ok)
+	}
+	if id, ok := last.Lookup("upserted").StringValueOK(); !ok || id != "u2" {
 		t.Fatalf("upserted=%q ok=%v", id, ok)
 	}
 	if name, ok := bson.Raw(upsert).Lookup("value").Document().Lookup("name").StringValueOK(); !ok || name != "new" {

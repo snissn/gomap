@@ -90,6 +90,13 @@ func TestStandaloneServerOfficialGoDriverFindOneAndModify(t *testing.T) {
 	if after["name"] != "grace" {
 		t.Fatalf("after=%v", after)
 	}
+	var replacementBefore bson.M
+	if err := coll.FindOneAndReplace(ctx, bson.D{{Key: "_id", Value: "u1"}}, bson.D{{Key: "name", Value: "replace-before"}}).Decode(&replacementBefore); err != nil {
+		t.Fatalf("FindOneAndReplace before: %v", err)
+	}
+	if replacementBefore["name"] != "grace" {
+		t.Fatalf("replacement before=%v", replacementBefore)
+	}
 	var replaced bson.M
 	if err := coll.FindOneAndReplace(ctx, bson.D{{Key: "_id", Value: "u1"}}, bson.D{{Key: "name", Value: "replace"}}, options.FindOneAndReplace().SetReturnDocument(options.After)).Decode(&replaced); err != nil {
 		t.Fatalf("FindOneAndReplace: %v", err)
@@ -110,6 +117,24 @@ func TestStandaloneServerOfficialGoDriverFindOneAndModify(t *testing.T) {
 	}
 	if replacementUpsert["_id"] != "u3" || replacementUpsert["name"] != "replacement upsert" {
 		t.Fatalf("replacement upsert=%v", replacementUpsert)
+	}
+	for _, test := range []struct {
+		id, name string
+		replace  bool
+	}{{"u4", "default update upsert", false}, {"u5", "default replacement upsert", true}} {
+		var value bson.M
+		var err error
+		if test.replace {
+			err = coll.FindOneAndReplace(ctx, bson.D{{Key: "_id", Value: test.id}}, bson.D{{Key: "name", Value: test.name}}, options.FindOneAndReplace().SetUpsert(true)).Decode(&value)
+		} else {
+			err = coll.FindOneAndUpdate(ctx, bson.D{{Key: "_id", Value: test.id}}, bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: test.name}}}}, options.FindOneAndUpdate().SetUpsert(true)).Decode(&value)
+		}
+		if !errors.Is(err, mongo.ErrNoDocuments) {
+			t.Fatalf("default upsert %s err=%v want ErrNoDocuments", test.id, err)
+		}
+		if err := coll.FindOne(ctx, bson.D{{Key: "_id", Value: test.id}}).Decode(&value); err != nil || value["name"] != test.name {
+			t.Fatalf("default upsert %s persisted value=%v err=%v", test.id, value, err)
+		}
 	}
 }
 
