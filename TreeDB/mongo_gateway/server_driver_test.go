@@ -143,6 +143,10 @@ func TestStandaloneServerOfficialGoDriverFindOneAndModify(t *testing.T) {
 }
 
 func TestStandaloneServerOfficialGoDriverFilterWrites(t *testing.T) {
+	decimalOne, err := bson.ParseDecimal128("1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}})
 	if err != nil {
 		t.Fatalf("open standalone: %v", err)
@@ -164,7 +168,7 @@ func TestStandaloneServerOfficialGoDriverFilterWrites(t *testing.T) {
 		{Key: "$inc", Value: bson.D{{Key: "profile.logins", Value: int32(1)}}},
 		{Key: "$push", Value: bson.D{{Key: "events", Value: bson.D{{Key: "kind", Value: "login"}}}}},
 		{Key: "$addToSet", Value: bson.D{{Key: "labels", Value: bson.D{{Key: "$each", Value: bson.A{"staff", "staff"}}}}}},
-		{Key: "$addToSet", Value: bson.D{{Key: "numbers", Value: bson.D{{Key: "$each", Value: bson.A{int64(1), float64(1), int32(2)}}}}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "numbers", Value: bson.D{{Key: "$each", Value: bson.A{int64(1), float64(1), decimalOne, int32(2)}}}}}},
 	})
 	if err != nil || updated.MatchedCount != 1 || updated.ModifiedCount != 1 {
 		t.Fatalf("nested filter UpdateOne result=%+v err=%v", updated, err)

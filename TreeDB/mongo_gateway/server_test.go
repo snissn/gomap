@@ -6154,6 +6154,10 @@ func TestMongoMutationApplyOperatorsAndReplacement(t *testing.T) {
 }
 
 func TestMongoMutationNestedOperators(t *testing.T) {
+	decimalOne, err := bson.ParseDecimal128("1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	doc := mustDocument(t, bson.D{
 		{Key: "_id", Value: "u1"},
 		{Key: "profile", Value: bson.D{{Key: "name", Value: "ada"}, {Key: "count", Value: int32(1)}, {Key: "old", Value: true}}},
@@ -6173,7 +6177,7 @@ func TestMongoMutationNestedOperators(t *testing.T) {
 		{Key: "$addToSet", Value: bson.D{{Key: "empty", Value: bson.D{{Key: "$each", Value: bson.A{}}}}}},
 		{Key: "$addToSet", Value: bson.D{{Key: "labels", Value: bson.D{{Key: "$each", Value: bson.A{"go", "db", "go"}}}}}},
 		{Key: "$addToSet", Value: bson.D{{Key: "scalarLabels", Value: "db"}}},
-		{Key: "$addToSet", Value: bson.D{{Key: "numbers", Value: bson.D{{Key: "$each", Value: bson.A{int64(1), float64(1), int32(2)}}}}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "numbers", Value: bson.D{{Key: "$each", Value: bson.A{int64(1), float64(1), decimalOne, int32(2)}}}}}},
 		{Key: "$addToSet", Value: bson.D{
 			{Key: "documents", Value: bson.D{
 				{Key: "$each", Value: bson.A{

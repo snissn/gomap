@@ -4467,7 +4467,7 @@ func mongoMutationArrayPath(doc bson.D, path []string, values []bson.RawValue, u
 		if unique {
 			duplicate := false
 			for _, existing := range existingValues {
-				if mongoMutationValuesEqual(existing, raw) {
+				if rawValuesEqual(existing, raw) {
 					duplicate = true
 					break
 				}
@@ -4554,28 +4554,6 @@ func mongoMutationRaw(v any) (bson.RawValue, error) {
 	return bson.RawValue{Type: typ, Value: raw}, err
 }
 
-func mongoMutationValuesEqual(a, b bson.RawValue) bool {
-	if !mongoMutationNumeric(a) || !mongoMutationNumeric(b) {
-		return a.Equal(b)
-	}
-	if a.Type != bson.TypeDouble && b.Type != bson.TypeDouble {
-		return mongoMutationInt64(a) == mongoMutationInt64(b)
-	}
-	var floating bson.RawValue
-	var integer bson.RawValue
-	if a.Type == bson.TypeDouble {
-		floating, integer = a, b
-	} else {
-		floating, integer = b, a
-	}
-	if integer.Type == bson.TypeDouble {
-		aValue, _ := a.DoubleOK()
-		bValue, _ := b.DoubleOK()
-		return aValue == bValue
-	}
-	value, _ := floating.DoubleOK()
-	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= math.MinInt64 && value < -math.MinInt64 && math.Trunc(value) == value && int64(value) == mongoMutationInt64(integer)
-}
 func mongoMutationIncrement(value, delta bson.RawValue) (bson.RawValue, error) {
 	if !mongoMutationNumeric(value) {
 		return bson.RawValue{}, errors.New("Mongo gateway $inc target must be numeric and not null")
