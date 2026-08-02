@@ -6320,6 +6320,9 @@ func TestMongoMutationRejectsInvalidShapesAndOverflow(t *testing.T) {
 	if err := validateMongoMutationPathConflicts(disjoint); err == nil {
 		t.Fatal("ancestor conflict accepted")
 	}
+	if err := validateMongoMutationPathConflicts(map[string]struct{}{"a": {}, "a-foo": {}, "a.b": {}}); err == nil {
+		t.Fatal("intervening sibling hid ancestor conflict")
+	}
 	overLimit := bson.A{}
 	for range mongoMutationMaxEachValues + 1 {
 		overLimit = append(overLimit, int32(1))

@@ -4288,14 +4288,13 @@ func validateMongoMutationPath(path string) error {
 }
 
 func validateMongoMutationPathConflicts(paths map[string]struct{}) error {
-	ordered := make([]string, 0, len(paths))
 	for path := range paths {
-		ordered = append(ordered, path)
-	}
-	sort.Strings(ordered)
-	for i := 1; i < len(ordered); i++ {
-		if strings.HasPrefix(ordered[i], ordered[i-1]+".") {
-			return fmt.Errorf("Mongo gateway update paths %q and %q conflict", ordered[i-1], ordered[i])
+		segments := strings.Split(path, ".")
+		for i := len(segments) - 1; i > 0; i-- {
+			ancestor := strings.Join(segments[:i], ".")
+			if _, ok := paths[ancestor]; ok {
+				return fmt.Errorf("Mongo gateway update paths %q and %q conflict", ancestor, path)
+			}
 		}
 	}
 	return nil
