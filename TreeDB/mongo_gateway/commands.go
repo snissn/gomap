@@ -4269,8 +4269,8 @@ func validateMongoMutationPath(path string) error {
 	if path == "" || strings.HasPrefix(path, ".") || strings.HasSuffix(path, ".") || strings.Contains(path, "..") {
 		return errors.New("Mongo gateway update path must contain non-empty segments")
 	}
-	for _, segment := range strings.Split(path, ".") {
-		if segment == "_id" {
+	for index, segment := range strings.Split(path, ".") {
+		if index == 0 && segment == "_id" {
 			return errors.New("Mongo gateway update cannot modify _id")
 		}
 		if strings.HasPrefix(segment, "$") {
@@ -4467,7 +4467,7 @@ func mongoMutationArrayPath(doc bson.D, path []string, values []bson.RawValue, u
 		if unique {
 			duplicate := false
 			for _, existing := range existingValues {
-				if existing.Equal(raw) {
+				if mongoMutationValuesEqual(existing, raw) {
 					duplicate = true
 					break
 				}
@@ -4552,6 +4552,29 @@ func mongoMutationInt64(v bson.RawValue) int64 {
 func mongoMutationRaw(v any) (bson.RawValue, error) {
 	typ, raw, err := bson.MarshalValue(v)
 	return bson.RawValue{Type: typ, Value: raw}, err
+}
+
+func mongoMutationValuesEqual(a, b bson.RawValue) bool {
+	if !mongoMutationNumeric(a) || !mongoMutationNumeric(b) {
+		return a.Equal(b)
+	}
+	if a.Type != bson.TypeDouble && b.Type != bson.TypeDouble {
+		return mongoMutationInt64(a) == mongoMutationInt64(b)
+	}
+	var floating bson.RawValue
+	var integer bson.RawValue
+	if a.Type == bson.TypeDouble {
+		floating, integer = a, b
+	} else {
+		floating, integer = b, a
+	}
+	if integer.Type == bson.TypeDouble {
+		aValue, _ := a.DoubleOK()
+		bValue, _ := b.DoubleOK()
+		return aValue == bValue
+	}
+	value, _ := floating.DoubleOK()
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= math.MinInt64 && value < -math.MinInt64 && math.Trunc(value) == value && int64(value) == mongoMutationInt64(integer)
 }
 func mongoMutationIncrement(value, delta bson.RawValue) (bson.RawValue, error) {
 	if !mongoMutationNumeric(value) {

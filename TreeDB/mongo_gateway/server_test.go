@@ -6160,10 +6160,12 @@ func TestMongoMutationNestedOperators(t *testing.T) {
 		{Key: "tags", Value: bson.A{"go"}},
 		{Key: "labels", Value: bson.A{"go"}},
 		{Key: "scalarLabels", Value: bson.A{"go"}},
+		{Key: "numbers", Value: bson.A{int32(1)}},
 		{Key: "documents", Value: bson.A{bson.D{{Key: "a", Value: int32(1)}, {Key: "b", Value: int32(2)}}}},
 	})
 	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
 		{Key: "$set", Value: bson.D{{Key: "profile.name", Value: "grace"}, {Key: "profile.city", Value: "london"}}},
+		{Key: "$set", Value: bson.D{{Key: "profile._id", Value: "nested"}}},
 		{Key: "$set", Value: bson.D{{Key: "profile.binary", Value: bson.Binary{Subtype: 0x80, Data: []byte{1, 2}}}}},
 		{Key: "$inc", Value: bson.D{{Key: "profile.count", Value: int32(2)}}},
 		{Key: "$push", Value: bson.D{{Key: "tags", Value: bson.D{{Key: "$each", Value: bson.A{"db", "go"}}}}}},
@@ -6171,6 +6173,7 @@ func TestMongoMutationNestedOperators(t *testing.T) {
 		{Key: "$addToSet", Value: bson.D{{Key: "empty", Value: bson.D{{Key: "$each", Value: bson.A{}}}}}},
 		{Key: "$addToSet", Value: bson.D{{Key: "labels", Value: bson.D{{Key: "$each", Value: bson.A{"go", "db", "go"}}}}}},
 		{Key: "$addToSet", Value: bson.D{{Key: "scalarLabels", Value: "db"}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "numbers", Value: bson.D{{Key: "$each", Value: bson.A{int64(1), float64(1), int32(2)}}}}}},
 		{Key: "$addToSet", Value: bson.D{
 			{Key: "documents", Value: bson.D{
 				{Key: "$each", Value: bson.A{
@@ -6192,6 +6195,9 @@ func TestMongoMutationNestedOperators(t *testing.T) {
 	if got, _ := profile.Lookup("name").StringValueOK(); got != "grace" {
 		t.Fatalf("profile.name=%q", got)
 	}
+	if got, _ := profile.Lookup("_id").StringValueOK(); got != "nested" {
+		t.Fatalf("profile._id=%q", got)
+	}
 	if got, _ := profile.Lookup("count").Int32OK(); got != 3 {
 		t.Fatalf("profile.count=%d", got)
 	}
@@ -6212,6 +6218,10 @@ func TestMongoMutationNestedOperators(t *testing.T) {
 	values, err = bson.Raw(updated).Lookup("scalarLabels").Array().Values()
 	if err != nil || len(values) != 2 || values[0].StringValue() != "go" || values[1].StringValue() != "db" {
 		t.Fatalf("scalarLabels=%v err=%v", values, err)
+	}
+	values, err = bson.Raw(updated).Lookup("numbers").Array().Values()
+	if err != nil || len(values) != 2 || values[0].Type != bson.TypeInt32 || values[1].Type != bson.TypeInt32 || values[1].Int32() != 2 {
+		t.Fatalf("numbers=%v err=%v", values, err)
 	}
 	values, err = bson.Raw(updated).Lookup("documents").Array().Values()
 	if err != nil || len(values) != 2 {
