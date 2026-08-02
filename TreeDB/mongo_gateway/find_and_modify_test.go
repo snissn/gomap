@@ -65,7 +65,11 @@ func TestFindAndModifyConcurrentNewImagesAreCommitted(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			response := serveCommand(t, server, int32(101+i), bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "new", Value: true}, {Key: "$db", Value: "app"}})
+			response, err := serveCommandResult(server, int32(101+i), bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "new", Value: true}, {Key: "$db", Value: "app"}})
+			if err != nil {
+				errs <- err
+				return
+			}
 			if ok, _ := bson.Raw(response).Lookup("ok").DoubleOK(); ok != 1 {
 				errs <- fmt.Errorf("response=%v", response)
 				return
@@ -143,7 +147,11 @@ func TestFindAndModifyConcurrentSameIDUpsertsApplyEveryMutation(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			response := serveCommand(t, server, int32(200+i), bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "upsert-race"}}}, {Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "upsert", Value: true}, {Key: "new", Value: true}, {Key: "$db", Value: "app"}})
+			response, err := serveCommandResult(server, int32(200+i), bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "upsert-race"}}}, {Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "upsert", Value: true}, {Key: "new", Value: true}, {Key: "$db", Value: "app"}})
+			if err != nil {
+				errs <- err
+				return
+			}
 			if ok, _ := bson.Raw(response).Lookup("ok").DoubleOK(); ok != 1 {
 				errs <- fmt.Errorf("response=%v", response)
 			}
@@ -298,6 +306,36 @@ func TestFindAndModifyRejectsRegexIDQueryBeforeUpsert(t *testing.T) {
 	}
 	if _, err := server.Collections.OpenCollection("app.users"); !errors.Is(err, collections.ErrCollectionNotFound) {
 		t.Fatalf("regex query created collection: %v", err)
+	}
+}
+
+func TestFindAndModifyAcceptsMetadataAndRejectsWriteConcernBeforeMutation(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 60, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "n", Value: int32(1)}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 61, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "ada"}}}}}, {Key: "$clusterTime", Value: bson.D{}}, {Key: "readConcern", Value: bson.D{{Key: "level", Value: "local"}}}, {Key: "$db", Value: "app"}}))
+	response := serveCommand(t, server, 62, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "writeConcern", Value: bson.D{{Key: "j", Value: true}}}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, response, "WriteConcernFailed")
+	collection, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _, err := prepareInsertDocument(mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}), collections.DocumentFormatBSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := collection.Get(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, ok := bson.Raw(stored).Lookup("n").Int32OK(); !ok || n != 1 {
+		t.Fatalf("writeConcern failure mutated n=%d ok=%v want 1", n, ok)
 	}
 }
 

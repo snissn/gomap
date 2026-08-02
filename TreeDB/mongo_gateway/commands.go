@@ -2083,7 +2083,7 @@ func validateCreateCollectionCommand(command wire.Document) error {
 		if err != nil {
 			return err
 		}
-		if isCreateCommandEnvelopeField(key) {
+		if key == "create" || isMongoCommandMetadataField(key) {
 			continue
 		}
 		switch key {
@@ -2095,12 +2095,12 @@ func validateCreateCollectionCommand(command wire.Document) error {
 	return nil
 }
 
-func isCreateCommandEnvelopeField(key string) bool {
+func isMongoCommandMetadataField(key string) bool {
 	switch key {
-	case "create", "$db", "lsid", "comment", "writeConcern", "readConcern", "readPreference", "maxTimeMS", "apiVersion", "apiStrict", "apiDeprecationErrors":
+	case "$db", "$clusterTime", "$readPreference", "lsid", "comment", "writeConcern", "readConcern", "readPreference", "maxTimeMS", "apiVersion", "apiStrict", "apiDeprecationErrors":
 		return true
 	default:
-		return strings.HasPrefix(key, "$")
+		return false
 	}
 }
 

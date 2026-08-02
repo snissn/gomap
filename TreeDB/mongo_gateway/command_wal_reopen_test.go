@@ -244,6 +244,19 @@ func TestFindAndModifyCommandWALValueLogPointersReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
+	closed := false
+	closeOriginal := func() error {
+		if closed {
+			return nil
+		}
+		closed = true
+		return closeBackend()
+	}
+	defer func() {
+		if err := closeOriginal(); err != nil {
+			t.Error(err)
+		}
+	}()
 	server := NewServer()
 	server.Collections = collections.NewCollectionManager(backend)
 	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
@@ -255,19 +268,29 @@ func TestFindAndModifyCommandWALValueLogPointersReopen(t *testing.T) {
 	}
 	assertOK(t, serveCommand(t, server, 403, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "update", Value: bson.D{{Key: "payload", Value: string(make([]byte, 256))}}}, {Key: "upsert", Value: true}, {Key: "new", Value: true}, {Key: "$db", Value: "app"}}))
 	if err := server.Collections.FlushAll(); err != nil {
+		if closeErr := closeOriginal(); closeErr != nil {
+			t.Error(closeErr)
+		}
 		t.Fatal(err)
 	}
 	if err := backend.Checkpoint(); err != nil {
+		if closeErr := closeOriginal(); closeErr != nil {
+			t.Error(closeErr)
+		}
 		t.Fatal(err)
 	}
-	if err := closeBackend(); err != nil {
+	if err := closeOriginal(); err != nil {
 		t.Fatal(err)
 	}
 	reopened, closeReopened, err := treedb.OpenBackend(opts)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer closeReopened()
+	defer func() {
+		if err := closeReopened(); err != nil {
+			t.Error(err)
+		}
+	}()
 	collection, err := collections.NewCollectionManager(reopened).OpenCollection("app.users")
 	if err != nil {
 		t.Fatal(err)
