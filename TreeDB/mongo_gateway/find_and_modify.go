@@ -40,6 +40,9 @@ func (s *Server) findAndModifyResponse(ctx context.Context, command wire.Documen
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
+	if err := validateFindAndModifyIDQuery(query); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
 	update, err := requiredDocumentField(command, "update")
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
@@ -112,6 +115,29 @@ func (s *Server) findAndModifyResponse(ctx context.Context, command wire.Documen
 		before = after
 	}
 	return marshalFindAndModifyResponse(before, true, false, bson.RawValue{}, projection)
+}
+
+func validateFindAndModifyIDQuery(query wire.Document) error {
+	id, err := idEqualityFilterValue(query, "findAndModify")
+	if err != nil {
+		return err
+	}
+	if doc, ok := id.DocumentOK(); ok {
+		elements, err := doc.Elements()
+		if err != nil {
+			return err
+		}
+		for _, elem := range elements {
+			key, err := elem.KeyErr()
+			if err != nil {
+				return err
+			}
+			if len(key) > 0 && key[0] == '$' {
+				return errors.New("Mongo gateway findAndModify currently requires an _id equality filter")
+			}
+		}
+	}
+	return nil
 }
 
 func validateFindAndModifyCommand(command wire.Document) error {

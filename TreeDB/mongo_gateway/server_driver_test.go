@@ -63,6 +63,56 @@ func TestStandaloneServerOfficialGoDriverBSONSetBinaryUpsert(t *testing.T) {
 	}
 }
 
+func TestStandaloneServerOfficialGoDriverFindOneAndModify(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), Profile: treedb.ProfileCommandWALDurable, DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}})
+	if err != nil {
+		t.Fatalf("open standalone: %v", err)
+	}
+	client, cancel, ln, serveErr := startStandaloneMongoClientForTest(t, standalone)
+	defer stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelCtx()
+	coll := client.Database("app").Collection("users")
+	if _, err := coll.InsertOne(ctx, bson.D{{Key: "_id", Value: "u1"}, {Key: "n", Value: int32(1)}, {Key: "name", Value: "ada"}}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	var before bson.M
+	if err := coll.FindOneAndUpdate(ctx, bson.D{{Key: "_id", Value: "u1"}}, bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}).Decode(&before); err != nil {
+		t.Fatalf("FindOneAndUpdate before: %v", err)
+	}
+	if before["n"] != int32(1) {
+		t.Fatalf("before=%v", before)
+	}
+	var after bson.M
+	if err := coll.FindOneAndUpdate(ctx, bson.D{{Key: "_id", Value: "u1"}}, bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "grace"}}}}, options.FindOneAndUpdate().SetReturnDocument(options.After)).Decode(&after); err != nil {
+		t.Fatalf("FindOneAndUpdate after: %v", err)
+	}
+	if after["name"] != "grace" {
+		t.Fatalf("after=%v", after)
+	}
+	var replaced bson.M
+	if err := coll.FindOneAndReplace(ctx, bson.D{{Key: "_id", Value: "u1"}}, bson.D{{Key: "name", Value: "replace"}}, options.FindOneAndReplace().SetReturnDocument(options.After)).Decode(&replaced); err != nil {
+		t.Fatalf("FindOneAndReplace: %v", err)
+	}
+	if replaced["name"] != "replace" || replaced["_id"] != "u1" {
+		t.Fatalf("replaced=%v", replaced)
+	}
+	var upserted bson.M
+	if err := coll.FindOneAndUpdate(ctx, bson.D{{Key: "_id", Value: "u2"}}, bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "upsert"}}}}, options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After)).Decode(&upserted); err != nil {
+		t.Fatalf("FindOneAndUpdate upsert: %v", err)
+	}
+	if upserted["_id"] != "u2" || upserted["name"] != "upsert" {
+		t.Fatalf("upserted=%v", upserted)
+	}
+	var replacementUpsert bson.M
+	if err := coll.FindOneAndReplace(ctx, bson.D{{Key: "_id", Value: "u3"}}, bson.D{{Key: "name", Value: "replacement upsert"}}, options.FindOneAndReplace().SetUpsert(true).SetReturnDocument(options.After)).Decode(&replacementUpsert); err != nil {
+		t.Fatalf("FindOneAndReplace upsert: %v", err)
+	}
+	if replacementUpsert["_id"] != "u3" || replacementUpsert["name"] != "replacement upsert" {
+		t.Fatalf("replacement upsert=%v", replacementUpsert)
+	}
+}
+
 func TestServerOfficialGoDriverBasicCRUD(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

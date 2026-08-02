@@ -57,3 +57,31 @@ func TestFindAndModifyNoMatchAndUpsert(t *testing.T) {
 		t.Fatalf("upsert value name=%q ok=%v", name, ok)
 	}
 }
+
+func TestFindAndModifyRejectsUnsupportedModes(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	base := bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "x"}}}}}, {Key: "$db", Value: "app"}}
+	for i, extra := range []bson.E{
+		{Key: "remove", Value: true}, {Key: "sort", Value: bson.D{{Key: "name", Value: int32(1)}}}, {Key: "arrayFilters", Value: bson.A{}}, {Key: "hint", Value: "name_1"}, {Key: "collation", Value: bson.D{{Key: "locale", Value: "en"}}}, {Key: "fields", Value: bson.D{{Key: "name.first", Value: int32(1)}}}, {Key: "txnNumber", Value: int64(1)},
+	} {
+		command := append(append(bson.D(nil), base...), extra)
+		assertCommandError(t, serveCommand(t, server, int32(10+i), command), "BadValue")
+	}
+	for i, query := range []bson.D{{{Key: "name", Value: "x"}}, {{Key: "_id", Value: bson.D{{Key: "$in", Value: bson.A{"u1"}}}}}} {
+		command := bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: query}, {Key: "update", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "x"}}}}}, {Key: "$db", Value: "app"}}
+		assertCommandError(t, serveCommand(t, server, int32(30+i), command), "BadValue")
+	}
+}
+
+func TestFindAndModifyClusterFailsClosed(t *testing.T) {
+	server := NewServer()
+	server.ClusterSubmitter = &mongoClusterFakeSubmitter{}
+	response := serveCommand(t, server, 50, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "x"}}}}}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, response, "BadValue")
+}
