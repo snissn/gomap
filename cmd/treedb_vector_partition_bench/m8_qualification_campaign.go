@@ -599,7 +599,8 @@ func m8QualificationCommandWithExecutableV1(root, matrixDirectory string, report
 		return false
 	}
 	cfg, err := parseConfig(report.Command[1:])
-	if err != nil || cfg.stage != m8ProductionMultiGroupModeV1 {
+	if err != nil || cfg.stage != m8ProductionMultiGroupModeV1 || cfg.baseSHA != report.BaseSHA || cfg.headSHA != report.HeadSHA ||
+		!m8QualificationExactFlagV1(report.Command[1:], "-base-sha", report.BaseSHA) || !m8QualificationExactFlagV1(report.Command[1:], "-head-sha", report.HeadSHA) {
 		return false
 	}
 	out, err := m8CanonicalPathV1(cfg.out)
@@ -670,7 +671,8 @@ func m8QualificationMatrixCommandWithExecutableV1(root, matrixDirectory string, 
 		return false
 	}
 	cfg, err := parseConfig(matrix.Command[1:])
-	if err != nil || cfg.stage != m8ProductionMultiGroupModeV1 || len(cfg.m8VariantDBs) != len(m8RequiredVariantIDsV1) {
+	if err != nil || cfg.stage != m8ProductionMultiGroupModeV1 || len(cfg.m8VariantDBs) != len(m8RequiredVariantIDsV1) || cfg.baseSHA != matrix.BaseSHA || cfg.headSHA != matrix.HeadSHA ||
+		!m8QualificationExactFlagV1(matrix.Command[1:], "-base-sha", matrix.BaseSHA) || !m8QualificationExactFlagV1(matrix.Command[1:], "-head-sha", matrix.HeadSHA) {
 		return false
 	}
 	out, err := m8CanonicalPathV1(cfg.out)
@@ -766,7 +768,21 @@ func m8QualificationAdmissionConfigV1(fixture fixtureManifest) (config, bool) {
 func m8QualificationExactFlagV1(args []string, name, want string) bool {
 	found := false
 	for i := 0; i < len(args); i++ {
-		if args[i] != name {
+		arg := args[i]
+		if arg != name && arg != "-"+name {
+			value := ""
+			switch {
+			case strings.HasPrefix(arg, name+"="):
+				value = strings.TrimPrefix(arg, name+"=")
+			case strings.HasPrefix(arg, "-"+name+"="):
+				value = strings.TrimPrefix(arg, "-"+name+"=")
+			default:
+				continue
+			}
+			if found || value != want {
+				return false
+			}
+			found = true
 			continue
 		}
 		if found || i+1 == len(args) || args[i+1] != want {

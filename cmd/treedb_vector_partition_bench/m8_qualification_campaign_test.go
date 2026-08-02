@@ -333,6 +333,15 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			"omitted_max_fixture_bytes": func(report *m8ProductionReportV1) {
 				testM8QualificationRemoveCommandFlagV1(t, &report.Command, "-max-fixture-bytes")
 			},
+			"omitted_base_sha": func(report *m8ProductionReportV1) {
+				testM8QualificationRemoveCommandFlagV1(t, &report.Command, "-base-sha")
+			},
+			"changed_head_sha": func(report *m8ProductionReportV1) {
+				testM8QualificationReplaceCommandFlagV1(t, report.Command, "-head-sha", strings.Repeat("e", 40))
+			},
+			"duplicate_base_sha": func(report *m8ProductionReportV1) {
+				report.Command = append(report.Command, "-base-sha", report.BaseSHA)
+			},
 		} {
 			t.Run(name, func(t *testing.T) {
 				matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
@@ -369,7 +378,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			if !m8QualificationMatrixCommandWithExecutableV1(matrix.Variants[0].DatasetDirectory, matrixDirectory, matrix, verify) {
 				t.Fatalf("rejected exact %dk caps", corpus.Vectors)
 			}
-			for _, flag := range []string{"-max-vectors", "-max-fixture-bytes"} {
+			for _, flag := range []string{"-max-vectors", "-max-fixture-bytes", "-base-sha", "-head-sha"} {
 				bad := matrix
 				bad.Command = slices.Clone(matrix.Command)
 				testM8QualificationRemoveCommandFlagV1(t, &bad.Command, flag)
@@ -387,10 +396,20 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 				"off_plan_max_fixture_bytes": func(args []string) {
 					testM8QualificationReplaceCommandFlagV1(t, args, "-max-fixture-bytes", strconv.FormatInt(maxFixtureBytes-1, 10))
 				},
+				"changed_base_sha": func(args []string) {
+					testM8QualificationReplaceCommandFlagV1(t, args, "-base-sha", strings.Repeat("e", 40))
+				},
+				"duplicate_head_sha": func(args []string) {
+					args = append(args, "-head-sha", strings.Repeat("a", 40))
+				},
 			} {
 				bad := matrix
 				bad.Command = slices.Clone(matrix.Command)
-				mutate(bad.Command)
+				if name == "duplicate_head_sha" {
+					bad.Command = append(bad.Command, "-head-sha", matrix.HeadSHA)
+				} else {
+					mutate(bad.Command)
+				}
 				if m8QualificationMatrixCommandWithExecutableV1(matrix.Variants[0].DatasetDirectory, matrixDirectory, bad, verify) {
 					t.Fatalf("accepted %s for %dk", name, corpus.Vectors)
 				}
@@ -1172,9 +1191,12 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 		t.Fatalf("graph commands do not bind corpus-specific scalar cap: %+v", plan.Commands)
 	}
 	for _, command := range []string{plan.Commands["m3_graph_disjoint"], plan.Commands["m3_graph_overlap"], plan.Commands["m3_stable_hash_disjoint"]} {
-		if !strings.Contains(command, "-max-vectors <max-vectors>") || !strings.Contains(command, "-router-max-vectors <router-max-vectors>") || !strings.Contains(command, "-max-fixture-bytes <max-fixture-bytes>") {
+		if !strings.Contains(command, "-max-vectors <max-vectors>") || !strings.Contains(command, "-router-max-vectors <router-max-vectors>") || !strings.Contains(command, "-max-fixture-bytes <max-fixture-bytes>") || !strings.Contains(command, "-base-sha <base-sha>") || !strings.Contains(command, "-head-sha <head-sha>") {
 			t.Fatalf("plan command does not bind fixture admission caps: %q", command)
 		}
+	}
+	if !strings.Contains(plan.Commands["m8_matrix_repeats_full_ladder"], "-base-sha <base-sha>") || !strings.Contains(plan.Commands["m8_matrix_repeats_full_ladder"], "-head-sha <head-sha>") {
+		t.Fatalf("plan M8 command does not bind explicit provenance: %q", plan.Commands["m8_matrix_repeats_full_ladder"])
 	}
 	script, err := filepath.Abs(filepath.Join(root, "scripts", "treedb_kahip_partition.py"))
 	if err != nil {
@@ -1185,16 +1207,16 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 		if !ok {
 			t.Fatalf("missing expected M3 config for %dk", corpus.Vectors)
 		}
-		replace := strings.NewReplacer("<campaign-root>", t.TempDir(), "<corpus>", corpus.ID, "<dataset>", t.TempDir(), "<graph-cap>", strconv.FormatInt(corpus.GraphCap, 10), "<router-cap>", strconv.FormatInt(corpus.RouterCap, 10), "<router-max-vectors>", strconv.Itoa(corpus.RouterMaxVectors), "<m3-cap>", strconv.FormatInt(corpus.M3Cap, 10), "<max-vectors>", strconv.Itoa(corpus.MaxVectors), "<max-fixture-bytes>", strconv.FormatInt(corpus.MaxFixtureBytes, 10), "<seed>", strconv.FormatInt(map[int]int64{100000: 4017, 250000: 4016}[corpus.Vectors], 10), "/mnt/fast4tb/gomap-4024-kahip-3.25/bin/python", os.Args[0], "scripts/treedb_kahip_partition.py", script)
+		replace := strings.NewReplacer("<campaign-root>", t.TempDir(), "<corpus>", corpus.ID, "<dataset>", t.TempDir(), "<graph-cap>", strconv.FormatInt(corpus.GraphCap, 10), "<router-cap>", strconv.FormatInt(corpus.RouterCap, 10), "<router-max-vectors>", strconv.Itoa(corpus.RouterMaxVectors), "<m3-cap>", strconv.FormatInt(corpus.M3Cap, 10), "<max-vectors>", strconv.Itoa(corpus.MaxVectors), "<max-fixture-bytes>", strconv.FormatInt(corpus.MaxFixtureBytes, 10), "<seed>", strconv.FormatInt(map[int]int64{100000: 4017, 250000: 4016}[corpus.Vectors], 10), "<base-sha>", m8QualificationFrozenBaseSHAV1, "<head-sha>", strings.Repeat("a", 40), "/mnt/fast4tb/gomap-4024-kahip-3.25/bin/python", os.Args[0], "scripts/treedb_kahip_partition.py", script)
 		for _, name := range []string{"m3_graph_disjoint", "m3_graph_overlap", "m3_stable_hash_disjoint"} {
 			args := strings.Fields(replace.Replace(plan.Commands[name]))
 			cfg, err := parseConfig(args[1:])
-			if err != nil || cfg.maxVectors != corpus.MaxVectors || cfg.maxBytes != corpus.MaxFixtureBytes || cfg.partition != partition || cfg.routerConfig != router || cfg.m3MaxBenchmarkVisits != visits {
+			if err != nil || cfg.baseSHA != m8QualificationFrozenBaseSHAV1 || cfg.headSHA != strings.Repeat("a", 40) || cfg.maxVectors != corpus.MaxVectors || cfg.maxBytes != corpus.MaxFixtureBytes || cfg.partition != partition || cfg.routerConfig != router || cfg.m3MaxBenchmarkVisits != visits {
 				t.Fatalf("%dk %s config err=%v cfg=%+v", corpus.Vectors, name, err, cfg)
 			}
 		}
 	}
-	if !strings.Contains(plan.Validation, "regular retained inputs below that root") || !strings.Contains(plan.Validation, "one benchmark executable SHA-256") || !strings.Contains(plan.Validation, "every campaign, M8 child, M8 matrix, and M3 descriptor must match it") || !strings.Contains(plan.Validation, "M8 matrix execution intervals non-overlapping") {
+	if !strings.Contains(plan.Validation, "regular retained inputs below that root") || !strings.Contains(plan.Validation, "one benchmark executable SHA-256") || !strings.Contains(plan.Validation, "every campaign, M8 child, M8 matrix, and M3 descriptor must match it") || !strings.Contains(plan.Validation, "exactly one explicit canonical -base-sha/-head-sha pair") || !strings.Contains(plan.Validation, "M8 matrix execution intervals non-overlapping") {
 		t.Fatalf("plan does not bind the aggregate revision: %q", plan.Validation)
 	}
 }
@@ -1249,7 +1271,7 @@ func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManif
 		report.GateLedger = m8ProductionGateLedgerForReportV1(report)
 		matrix.Variants = append(matrix.Variants, report)
 	}
-	built, err := m8BuildProductionMatrixV1(config{baseSHA: head, headSHA: head, partitions: 16, command: []string{"m8-test"}}, fixture, matrix.Variants)
+	built, err := m8BuildProductionMatrixV1(config{baseSHA: head, headSHA: head, partitions: 16, command: commandWithProvenanceV1("m8-test", nil, head, head)}, fixture, matrix.Variants)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2293,6 +2315,7 @@ func testM8QualificationCommandV1(report m8ProductionReportV1, out string) []str
 		args = append(args, "-profiles", report.Profiles.Directory)
 	}
 	args = append(args, "-m8-truth-cache-sha256", report.TruthCache.ArtifactSHA256)
+	args = append(args, "-base-sha", report.BaseSHA, "-head-sha", report.HeadSHA)
 	return args
 }
 
@@ -2462,6 +2485,7 @@ func testM8QualificationMatrixCommandV1(matrix m8ProductionMatrixV1, out string)
 		args = append(args, "-profiles", filepath.Dir(report.Profiles.Directory))
 	}
 	args = append(args, "-m8-truth-cache-sha256", report.TruthCache.ArtifactSHA256)
+	args = append(args, "-base-sha", matrix.BaseSHA, "-head-sha", matrix.HeadSHA)
 	return args
 }
 

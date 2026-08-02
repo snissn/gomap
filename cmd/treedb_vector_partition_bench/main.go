@@ -618,10 +618,10 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 			return fmt.Errorf("canonicalize benchmark executable: %w", err)
 		}
 	}
-	cfg.command = append([]string{command}, args...)
-	if cfg.baseSHA, cfg.headSHA, err = provenance(); err != nil {
+	if cfg.baseSHA, cfg.headSHA, err = provenanceWithExplicitV1(cfg.baseSHA, cfg.headSHA); err != nil {
 		return err
 	}
+	cfg.command = commandWithProvenanceV1(command, args, cfg.baseSHA, cfg.headSHA)
 	if cfg.stage == "overlap,partition_index" {
 		cfg.m3BuildDirty = m8GitDirtyV1(cfg.out, cfg.m3PersistDir)
 	}
@@ -833,6 +833,8 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.topK, "top-k", cfg.topK, "top-k")
 	fs.Float64Var(&cfg.recallTarget, "recall-target", cfg.recallTarget, "recall target")
 	fs.Int64Var(&cfg.seed, "seed", cfg.seed, "fixture generation seed (must match manifest)")
+	fs.StringVar(&cfg.baseSHA, "base-sha", "", "explicit immutable base revision for retained replay provenance")
+	fs.StringVar(&cfg.headSHA, "head-sha", "", "explicit immutable head revision for retained replay provenance")
 	fs.StringVar(&cfg.format, "format", cfg.format, "json or text")
 	fs.StringVar(&cfg.out, "out", "", "artifact directory")
 	fs.StringVar(&cfg.stage, "stage", cfg.stage, "simulation, partition, overlap,partition_index, router, or distributed_simulation_or_cluster")
@@ -894,6 +896,9 @@ func parseConfig(args []string) (config, error) {
 	})
 	if fs.NArg() != 0 {
 		return config{}, fmt.Errorf("unexpected positional arguments: %q", fs.Args())
+	}
+	if (cfg.baseSHA == "") != (cfg.headSHA == "") || (cfg.baseSHA != "" && (!validLowerSHA(cfg.baseSHA) || !validLowerSHA(cfg.headSHA))) {
+		return config{}, errors.New("-base-sha and -head-sha must be supplied together as lowercase 40-hex revisions")
 	}
 	if cfg.partition.MaxDistanceWork < 1 || cfg.partition.MaxPartitionWork < 1 || cfg.m3MaxBenchmarkVisits < 1 {
 		return config{}, errors.New("partition work and M3 benchmark-visit limits must be positive")
@@ -1521,7 +1526,17 @@ func parseFloats(raw string) ([]float64, error) {
 	return out, nil
 }
 func provenance() (string, string, error) {
-	base, head := os.Getenv("BASE_SHA"), os.Getenv("GITHUB_SHA")
+	return provenanceWithExplicitV1("", "")
+}
+
+func provenanceWithExplicitV1(base, head string) (string, string, error) {
+	if (base == "") != (head == "") || (base != "" && (!validLowerSHA(base) || !validLowerSHA(head))) {
+		return "", "", errors.New("explicit provenance requires lowercase base/head SHAs")
+	}
+	if base != "" {
+		return base, head, nil
+	}
+	base, head = os.Getenv("BASE_SHA"), os.Getenv("GITHUB_SHA")
 	if eventPath := os.Getenv("GITHUB_EVENT_PATH"); eventPath != "" {
 		eventBase, eventHead, isPullRequest, err := pullRequestSHAsFromEvent(eventPath)
 		if err != nil {
@@ -1560,6 +1575,32 @@ func validSHA(value string) bool {
 	}
 	_, err := hex.DecodeString(value)
 	return err == nil
+}
+
+func validLowerSHA(value string) bool {
+	return value == strings.ToLower(value) && validSHA(value)
+}
+
+// commandWithProvenanceV1 records the resolved provenance instead of relying
+// on the replay caller's checkout or environment.
+func commandWithProvenanceV1(command string, args []string, base, head string) []string {
+	out := make([]string, 0, len(args)+5)
+	out = append(out, command)
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if commandProvenanceFlagV1(arg, "base-sha") || commandProvenanceFlagV1(arg, "head-sha") {
+			if !strings.Contains(arg, "=") && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		out = append(out, arg)
+	}
+	return append(out, "-base-sha", base, "-head-sha", head)
+}
+
+func commandProvenanceFlagV1(arg, name string) bool {
+	return arg == "-"+name || arg == "--"+name || strings.HasPrefix(arg, "-"+name+"=") || strings.HasPrefix(arg, "--"+name+"=")
 }
 
 func pullRequestSHAsFromEvent(path string) (string, string, bool, error) {

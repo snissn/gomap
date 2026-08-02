@@ -3320,6 +3320,24 @@ func TestProvenanceAutomaticEnvironmentAndInvalidSHA(t *testing.T) {
 			t.Fatalf("environment provenance base=%q head=%q", gotBase, gotHead)
 		}
 	})
+	t.Run("explicit_overrides_ambient", func(t *testing.T) {
+		base, head := strings.Repeat("c", 40), strings.Repeat("d", 40)
+		t.Setenv("BASE_SHA", strings.Repeat("a", 40))
+		t.Setenv("GITHUB_SHA", strings.Repeat("b", 40))
+		t.Setenv("GITHUB_EVENT_PATH", "")
+		gotBase, gotHead, err := provenanceWithExplicitV1(base, head)
+		if err != nil || gotBase != base || gotHead != head {
+			t.Fatalf("explicit provenance=%q/%q err=%v", gotBase, gotHead, err)
+		}
+	})
+	for _, args := range [][]string{
+		{"-base-sha", strings.Repeat("a", 40)},
+		{"-base-sha", strings.Repeat("a", 40), "-head-sha", "BAD"},
+	} {
+		if _, err := parseConfig(args); err == nil || !strings.Contains(err.Error(), "base-sha") {
+			t.Fatalf("accepted malformed explicit provenance args=%q err=%v", args, err)
+		}
+	}
 	t.Run("pull_request_event", func(t *testing.T) {
 		base := strings.Repeat("c", 40)
 		head := strings.Repeat("e", 40)
@@ -3396,6 +3414,14 @@ func TestProvenanceAutomaticEnvironmentAndInvalidSHA(t *testing.T) {
 			t.Fatalf("non-PR event changed explicit provenance base=%q head=%q", gotBase, gotHead)
 		}
 	})
+}
+
+func TestCommandWithProvenanceV1(t *testing.T) {
+	base, head := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	command := commandWithProvenanceV1("bench", []string{"-base-sha", strings.Repeat("c", 40), "--head-sha=" + strings.Repeat("d", 40), "-dataset", "fixture"}, base, head)
+	if !m8QualificationExactFlagV1(command[1:], "-base-sha", base) || !m8QualificationExactFlagV1(command[1:], "-head-sha", head) {
+		t.Fatalf("command did not retain exactly one canonical provenance pair: %q", command)
+	}
 }
 
 func TestGitHubEventPayloadIsBoundedAndSingleValue(t *testing.T) {
