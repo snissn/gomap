@@ -884,20 +884,22 @@ func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManif
 }
 
 func testM8ValidateQualificationCampaignV1(root string, campaign m8QualificationCampaignV1) (m8QualificationCampaignSummaryV1, error) {
-	return m8ValidateQualificationCampaignWithRetainedVariantV1(root, campaign, func(m8ProductionReportV1) error { return nil })
+	return m8ValidateQualificationCampaignWithRetainedVariantV1(root, campaign, func(string, m8ProductionReportV1) error { return nil })
 }
 
 func testM8ValidateQualificationIndexV1(root string, index m8QualificationIndexV1) (m8QualificationIndexSummaryV1, error) {
-	return m8ValidateQualificationIndexWithRetainedVariantV1(root, index, func(m8ProductionReportV1) error { return nil })
+	return m8ValidateQualificationIndexWithRetainedVariantV1(root, index, func(string, m8ProductionReportV1) error { return nil })
 }
 
 // testM8QualificationRetainedDescriptorV1 builds only the persisted M3 asset
 // phase.  Qualification must open a real router/manifest, not accept a
 // descriptor-shaped directory.
-func testM8QualificationRetainedDescriptorV1(t *testing.T, head string, fixture fixtureManifest, variantID, assignment string, ratio float64) m3VariantDescriptorV1 {
+func testM8QualificationRetainedDescriptorV1(t *testing.T, dir, head string, fixture fixtureManifest, variantID, assignment string, ratio float64) m3VariantDescriptorV1 {
 	t.Helper()
 	const rows, dimensions, partitions = 256, 8, 16
-	dir := t.TempDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	vectors := make([][]float64, rows)
 	input := make([]vectorpartition.Vector, rows)
 	for i := range vectors {
@@ -1061,54 +1063,79 @@ func testM8QualificationRetainedDescriptorV1(t *testing.T, head string, fixture 
 	return descriptor
 }
 
+func testM8QualificationDatasetDirectoryV1(t *testing.T, root string, fixture fixtureManifest) string {
+	t.Helper()
+	dir := filepath.Join(root, "dataset")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "fixture_manifest.json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir, err = m8CanonicalPathV1(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func TestM8QualificationRetainedVariantV1(t *testing.T) {
 	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
 		t.Skip("vector partition namespace persistence unsupported")
 	}
 	head, fixture := strings.Repeat("a", 40), m8QualificationFixturesV1[0]
-	newReport := func(t *testing.T) m8ProductionReportV1 {
+	newReport := func(t *testing.T) (string, m8ProductionReportV1) {
 		t.Helper()
-		descriptor := testM8QualificationRetainedDescriptorV1(t, head, fixture, "graph-disjoint-v1", partitionAssignmentGraphV1, 0)
-		return m8ProductionReportV1{Dataset: fixture, Variant: &descriptor}
+		root := t.TempDir()
+		descriptor := testM8QualificationRetainedDescriptorV1(t, filepath.Join(root, "m3"), head, fixture, "graph-disjoint-v1", partitionAssignmentGraphV1, 0)
+		return root, m8ProductionReportV1{Dataset: fixture, DatasetDirectory: testM8QualificationDatasetDirectoryV1(t, root, fixture), Variant: &descriptor}
 	}
-	reject := func(t *testing.T, report m8ProductionReportV1) {
+	reject := func(t *testing.T, root string, report m8ProductionReportV1) {
 		t.Helper()
-		if err := m8QualificationRetainedVariantV1(report); err == nil {
+		if err := m8QualificationRetainedVariantV1(root, report); err == nil {
 			t.Fatal("accepted unavailable or tampered retained M3 assets")
 		}
 	}
 	t.Run("valid", func(t *testing.T) {
-		if err := m8QualificationRetainedVariantV1(newReport(t)); err != nil {
+		root, report := newReport(t)
+		if err := m8QualificationRetainedVariantV1(root, report); err != nil {
 			t.Fatalf("rejected real retained M3 assets: %v", err)
 		}
 	})
 	t.Run("copied_descriptor_only", func(t *testing.T) {
-		report := newReport(t)
+		root, report := newReport(t)
 		copy := *report.Variant
-		copy.DatabaseDirectory = t.TempDir()
+		copy.DatabaseDirectory = filepath.Join(root, "copied-descriptor")
+		if err := os.MkdirAll(copy.DatabaseDirectory, 0o755); err != nil {
+			t.Fatal(err)
+		}
 		refreshTestM3VariantIdentityV1(t, &copy)
 		if err := m3WriteVariantDescriptorV1(copy.DatabaseDirectory, copy); err != nil {
 			t.Fatal(err)
 		}
 		report.Variant = &copy
-		reject(t, report)
+		reject(t, root, report)
 	})
 	t.Run("missing_descriptor", func(t *testing.T) {
-		report := newReport(t)
+		root, report := newReport(t)
 		if err := os.Remove(filepath.Join(report.Variant.DatabaseDirectory, m3VariantDescriptorFileV1)); err != nil {
 			t.Fatal(err)
 		}
-		reject(t, report)
+		reject(t, root, report)
 	})
 	t.Run("missing_partition_router_packs", func(t *testing.T) {
-		report := newReport(t)
+		root, report := newReport(t)
 		if err := os.RemoveAll(backenddb.ColumnAssetRootDirPath(report.Variant.DatabaseDirectory)); err != nil {
 			t.Fatal(err)
 		}
-		reject(t, report)
+		reject(t, root, report)
 	})
 	t.Run("tampered_partition_router_pack", func(t *testing.T) {
-		report := newReport(t)
+		root, report := newReport(t)
 		var pack string
 		err := filepath.Walk(backenddb.ColumnAssetRootDirPath(report.Variant.DatabaseDirectory), func(path string, info os.FileInfo, walkErr error) error {
 			if walkErr != nil || pack != "" || info.IsDir() {
@@ -1123,7 +1150,64 @@ func TestM8QualificationRetainedVariantV1(t *testing.T) {
 		if err := os.WriteFile(pack, []byte("tampered"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		reject(t, report)
+		reject(t, root, report)
+	})
+}
+
+func TestM8QualificationRetainedInputBoundaryV1(t *testing.T) {
+	fixture := m8QualificationFixturesV1[0]
+	newReport := func(t *testing.T) (string, m8ProductionReportV1) {
+		t.Helper()
+		root := t.TempDir()
+		return root, m8ProductionReportV1{Dataset: fixture, DatasetDirectory: testM8QualificationDatasetDirectoryV1(t, root, fixture), Variant: &m3VariantDescriptorV1{DatabaseDirectory: filepath.Join(root, "m3")}}
+	}
+	t.Run("valid_dataset_reaches_database_check", func(t *testing.T) {
+		root, report := newReport(t)
+		if err := m8QualificationRetainedVariantV1(root, report); err == nil || !strings.Contains(err.Error(), "database is not a directory") {
+			t.Fatalf("valid dataset boundary err=%v", err)
+		}
+	})
+	t.Run("missing_dataset_manifest", func(t *testing.T) {
+		root, report := newReport(t)
+		if err := os.Remove(filepath.Join(report.DatasetDirectory, "fixture_manifest.json")); err != nil {
+			t.Fatal(err)
+		}
+		if err := m8QualificationRetainedVariantV1(root, report); err == nil || !strings.Contains(err.Error(), "dataset manifest") {
+			t.Fatalf("missing dataset manifest err=%v", err)
+		}
+	})
+	t.Run("changed_dataset_manifest", func(t *testing.T) {
+		root, report := newReport(t)
+		changed := fixture
+		changed.Seed++
+		raw, err := json.Marshal(changed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(report.DatasetDirectory, "fixture_manifest.json"), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := m8QualificationRetainedVariantV1(root, report); err == nil || !strings.Contains(err.Error(), "does not match report") {
+			t.Fatalf("changed dataset manifest err=%v", err)
+		}
+	})
+	t.Run("database_outside_campaign_root", func(t *testing.T) {
+		root, report := newReport(t)
+		report.Variant.DatabaseDirectory = t.TempDir()
+		if err := m8QualificationRetainedVariantV1(root, report); err == nil || !strings.Contains(err.Error(), "outside qualification root") {
+			t.Fatalf("outside retained database err=%v", err)
+		}
+	})
+	t.Run("database_symlink_outside_campaign_root", func(t *testing.T) {
+		root, report := newReport(t)
+		link := filepath.Join(root, "escaped-m3")
+		if err := os.Symlink(t.TempDir(), link); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		report.Variant.DatabaseDirectory = link
+		if err := m8QualificationRetainedVariantV1(root, report); err == nil || !strings.Contains(err.Error(), "outside qualification root") {
+			t.Fatalf("escaping retained database symlink err=%v", err)
+		}
 	})
 }
 

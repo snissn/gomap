@@ -136,7 +136,7 @@ func m8ValidateQualificationIndexWithRetainedVariantV1(root string, index m8Qual
 	return summary, nil
 }
 
-type m8QualificationRetainedVariantVerifierV1 func(m8ProductionReportV1) error
+type m8QualificationRetainedVariantVerifierV1 func(string, m8ProductionReportV1) error
 
 func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCampaignV1) (m8QualificationCampaignSummaryV1, error) {
 	return m8ValidateQualificationCampaignWithRetainedVariantV1(root, campaign, m8QualificationRetainedVariantV1)
@@ -252,7 +252,7 @@ func m8ValidateQualificationCampaignWithRetainedVariantV1(root string, campaign 
 			if report.BaseSHA != campaign.BaseSHA || report.HeadSHA != campaign.HeadSHA || report.Dataset != matrix.Dataset || report.Dirty || !m8QualificationSHA256V1(report.TruthCache.ArtifactSHA256) || report.Variant == nil || report.Variant.BuildDirty || seenVariants[report.Variant.VariantID] || !slices.Contains(m8RequiredVariantIDsV1, report.Variant.VariantID) || !m8QualificationSHA256V1(report.Variant.ArtifactSHA256) || !m8QualificationConfigV1(report.Config, report.Dataset, report.Variant.OverlapRatio, runIndex) || !m8QualificationVariantBackendV1(*report.Variant, report.Dataset) {
 				return summary, fmt.Errorf("qualification matrix %s has unbound child identity", run.Path)
 			}
-			if err := retainedVariant(*report); err != nil {
+			if err := retainedVariant(resolvedRoot, *report); err != nil {
 				return summary, fmt.Errorf("qualification matrix %s has unavailable or mismatched retained M3 assets: %w", cleanPath, err)
 			}
 			if executionIDs[report.ExecutionID] {
@@ -381,13 +381,36 @@ func m8QualificationConfigV1(cfg m8ProductionConfigEvidenceV1, fixture fixtureMa
 	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterCandidates == 64 && cfg.MaxExactTruthVisits == m8QualificationExactTruthCapV1(fixture) && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, []int{1, 2, 4, 8, 16}) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{64}) && slices.Equal(cfg.Overlap, []float64{overlap})
 }
 
-func m8QualificationRetainedVariantV1(report m8ProductionReportV1) (err error) {
+func m8QualificationRetainedVariantV1(root string, report m8ProductionReportV1) (err error) {
 	if report.Variant == nil {
 		return errors.New("missing retained M3 descriptor")
+	}
+	root, err = m8CanonicalPathV1(root)
+	if err != nil {
+		return err
+	}
+	rootInfo, err := os.Stat(root)
+	if err != nil || !rootInfo.IsDir() {
+		return errors.New("qualification root is not a directory")
+	}
+	datasetDirectory, err := m8CanonicalPathV1(report.DatasetDirectory)
+	if err != nil || datasetDirectory != report.DatasetDirectory {
+		return errors.New("qualification dataset directory is not canonical")
+	}
+	dataset, err := loadFixture(datasetDirectory)
+	if err != nil {
+		return fmt.Errorf("load qualification dataset manifest: %w", err)
+	}
+	if dataset != report.Dataset {
+		return errors.New("qualification dataset manifest does not match report")
 	}
 	dir, err := m8CanonicalPathV1(report.Variant.DatabaseDirectory)
 	if err != nil {
 		return err
+	}
+	rel, err := filepath.Rel(root, dir)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return errors.New("retained M3 database is outside qualification root")
 	}
 	info, err := os.Stat(dir)
 	if err != nil || !info.IsDir() {
