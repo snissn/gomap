@@ -129,6 +129,9 @@ replay bundle.
 
 Before any M3 or M8 work, the campaign makes an ordinary detached local clone
 at `<campaign-root>/source` from the explicit repository source and exact head.
+It stages the committed 250k fixture and generates its pinned truth cache from
+`<campaign-root>/source/testdata/vector_partition_qualification_embedding_mixture_250k`
+only after that source stage, so those data paths do not inherit the caller cwd.
 The clone must retain a `.git` directory (a linked-worktree `.git` file is not
 enough for Go's VCS stamp discovery) and no `objects/info/alternates` link to
 an external object store. It builds one clean-head
