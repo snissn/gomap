@@ -197,7 +197,7 @@ gateway at commit `03e7a26e56100964f14f603f0248a1a6ccc50a68`, using
 database tree, listed the database, opened `compass_e2e.docs`, and rendered
 three BSON documents.
 
-This certifies that tested connection-and-browse flow only, not full Compass or
+This certifies only the tested connection-and-browse flow, not full Compass or
 MongoDB compatibility. The optional Compass Performance view remains
 non-blocking for basic connection and browsing: `top` and `serverStatus` return
 `CommandNotFound`, and its `currentOp` request uses unsupported `aggregate`.
@@ -280,8 +280,9 @@ implemented.
 
 ## Next Gap-Closing Candidates
 
-1. Run a real desktop GUI client after `connectionStatus` and add any next
-   unsupported command as a matrix row before implementing it.
+1. Decide whether optional Compass Performance metadata (`serverStatus`, `top`,
+   and aggregate-backed `currentOp`) is worth implementing; basic connection
+   and browsing do not depend on it.
 2. Decide whether unsupported filters should always fail closed or allow bounded
    scans behind a feature flag.
 3. Extend explicit `writeConcern` handling beyond the current cluster submitter
