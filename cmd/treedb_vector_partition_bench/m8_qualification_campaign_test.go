@@ -116,7 +116,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		}
 		for i := range copied.Variants {
 			copied.Variants[i].ExecutionID = strings.Repeat(string("abc"[i]), 32)
-			digest, err := m8ProductionExecutionEvidenceDigestV1(copied.Variants[i].ExecutionID, copied.Variants[i].Profiles.Artifacts)
+			digest, err := m8ProductionExecutionEvidenceDigestV1(copied.Variants[i].ExecutionID, copied.Variants[i].Profiles.Artifacts, copied.Variants[i].MeasurementTranscript.SHA256)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -133,7 +133,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		bad := campaign
 		bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
 		bad.Runs[2] = m8QualificationCampaignRunV1{Path: "execution-id-copy.json", SHA256: hex.EncodeToString(digest[:])}
-		if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil || !strings.Contains(err.Error(), "reuses profile artifact set") {
+		if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
 			t.Fatalf("reserialized copy err=%v", err)
 		}
 	})
@@ -162,7 +162,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		testM8QualificationExecutionIDsV1(&matrix, 0)
 		testM8QualificationProfilesV1(t, root, "profile-reuse-variants", &matrix)
 		matrix.Variants[1].Profiles = matrix.Variants[0].Profiles
-		digest, err := m8ProductionExecutionEvidenceDigestV1(matrix.Variants[1].ExecutionID, matrix.Variants[1].Profiles.Artifacts)
+		digest, err := m8ProductionExecutionEvidenceDigestV1(matrix.Variants[1].ExecutionID, matrix.Variants[1].Profiles.Artifacts, matrix.Variants[1].MeasurementTranscript.SHA256)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -575,6 +575,7 @@ func testM8QualificationReportV1(t *testing.T, head string, fixture fixtureManif
 	if err := validateM3VariantDescriptorV1(descriptor); err != nil {
 		t.Fatalf("qualification descriptor: %v: %+v", err, descriptor)
 	}
+	testM8QualificationTranscriptV1(t, t.TempDir(), &report)
 	if err := validateM8ProductionReportV1(report, m8QualificationResourceCapsV1()); err != nil {
 		t.Fatalf("valid qualification report rejected: %v", err)
 	}
@@ -610,10 +611,20 @@ func testM8QualificationProfilesV1(t *testing.T, root, run string, matrix *m8Pro
 			captured[i] = artifacts[i].Path
 		}
 		report.Profiles = m8ProductionProfileEvidenceV1{Directory: directory, Captured: captured, Artifacts: artifacts, Status: "captured_production_query_and_fault_boundary", Scope: "test profile capture"}
-		digest, err := m8ProductionExecutionEvidenceDigestV1(report.ExecutionID, artifacts)
+		testM8QualificationTranscriptV1(t, directory, report)
+		digest, err := m8ProductionExecutionEvidenceDigestV1(report.ExecutionID, artifacts, report.MeasurementTranscript.SHA256)
 		if err != nil {
 			t.Fatal(err)
 		}
 		report.ExecutionEvidenceDigest = digest
 	}
+}
+
+func testM8QualificationTranscriptV1(t *testing.T, dir string, report *m8ProductionReportV1) {
+	t.Helper()
+	evidence, err := m8WriteProductionMeasurementTranscriptV1(dir, *report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report.MeasurementTranscript = evidence
 }

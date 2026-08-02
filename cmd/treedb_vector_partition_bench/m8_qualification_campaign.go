@@ -116,6 +116,8 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 	profileModes := make(map[string]m8QualificationProfileModeV1, len(m8RequiredVariantIDsV1))
 	executionIDs := make(map[string]bool, len(campaign.Runs)*len(m8RequiredVariantIDsV1))
 	profileSets := make(map[string]bool, len(campaign.Runs)*len(m8RequiredVariantIDsV1))
+	transcripts := make(map[string]bool, len(campaign.Runs)*len(m8RequiredVariantIDsV1))
+	transcriptPaths := make(map[string]bool, len(campaign.Runs)*len(m8RequiredVariantIDsV1))
 	paths, digests := make(map[string]bool, len(campaign.Runs)), make(map[string]bool, len(campaign.Runs))
 	for runIndex, run := range campaign.Runs {
 		if run.Path == "" || filepath.IsAbs(run.Path) || !m8QualificationSHA256V1(run.SHA256) {
@@ -188,6 +190,11 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 			if !m8QualificationResourcesV1(*report, report.Dataset) {
 				return summary, fmt.Errorf("qualification matrix %s has unbound environment or resources", run.Path)
 			}
+			if !m8QualificationMeasurementTranscriptV1(resolvedRoot, *report) || transcripts[report.MeasurementTranscript.SHA256] || transcriptPaths[report.MeasurementTranscript.Path] {
+				return summary, fmt.Errorf("qualification matrix %s has unbound or reused measurement transcript", cleanPath)
+			}
+			transcripts[report.MeasurementTranscript.SHA256] = true
+			transcriptPaths[report.MeasurementTranscript.Path] = true
 			profileMode, ok := m8QualificationProfilesV1(resolvedRoot, report.Profiles)
 			if !ok {
 				return summary, fmt.Errorf("qualification matrix %s has unbound profile capture", cleanPath)
@@ -372,6 +379,14 @@ func m8QualificationProfilesV1(root string, profiles m8ProductionProfileEvidence
 		}
 	}
 	return m8QualificationProfileModeV1{Status: profiles.Status, Scope: profiles.Scope}, true
+}
+
+func m8QualificationMeasurementTranscriptV1(root string, report m8ProductionReportV1) bool {
+	if !validM8ProductionMeasurementTranscriptV1(report) {
+		return false
+	}
+	rel, err := filepath.Rel(root, report.MeasurementTranscript.Path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func m8ValidateQualificationMatrixDerivationV1(matrix m8ProductionMatrixV1) error {

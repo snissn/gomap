@@ -50,6 +50,16 @@ func TestM3VariantDescriptorRoundTripAndImmutableCreateV1(t *testing.T) {
 	}
 }
 
+func TestM3VariantDescriptorWriteAllowsPostBuildRepresentativeCountV1(t *testing.T) {
+	dir := t.TempDir()
+	d := testM3VariantDescriptorV1(dir)
+	// Representatives are produced after the prebuild graph identity is fixed.
+	d.RouterRepresentatives = 7
+	if err := m3WriteVariantDescriptorV1(dir, d); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestM3VariantDescriptorRejectsMalformedOverlapPolicyAccountingV1(t *testing.T) {
 	d := testM3VariantDescriptorV1(t.TempDir())
 	for name, policy := range map[string]string{

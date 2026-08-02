@@ -86,7 +86,6 @@ func m3VariantBuildIdentityDigestV1(d m3VariantDescriptorV1) (string, error) {
 		PartitionMaxDistanceWork int64
 		RouterMaxScalarWork      int64
 		M3MaxBenchmarkVisits     int64
-		RouterRepresentatives    uint64
 		Capacity                 int
 		OverlapRequested         int
 		OverlapUseful            int
@@ -98,9 +97,8 @@ func m3VariantBuildIdentityDigestV1(d m3VariantDescriptorV1) (string, error) {
 		ArtifactSHA256: d.ArtifactSHA256, GraphArtifactSHA256: d.GraphArtifactSHA256, ArtifactBackend: d.ArtifactBackend,
 		Source: d.Source, IndexDefinitionDigest: d.IndexDefinitionDigest, PartitionHNSWM: d.PartitionHNSWM,
 		PartitionMaxDistanceWork: d.PartitionMaxDistanceWork, RouterMaxScalarWork: d.RouterMaxScalarWork,
-		M3MaxBenchmarkVisits:  d.M3MaxBenchmarkVisits,
-		RouterRepresentatives: d.RouterRepresentatives,
-		Capacity:              d.Capacity, OverlapRequested: d.OverlapRequested,
+		M3MaxBenchmarkVisits: d.M3MaxBenchmarkVisits,
+		Capacity:             d.Capacity, OverlapRequested: d.OverlapRequested,
 		OverlapUseful: d.OverlapUseful, OverlapFiller: d.OverlapFiller,
 		EdgeCutBefore: d.EdgeCutBefore, EdgeCutAfter: d.EdgeCutAfter,
 	}

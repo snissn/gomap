@@ -483,6 +483,16 @@ func testM8ProductionResourceCapsV1(report m8ProductionReportV1) m8ProductionRes
 }
 
 func testM8ValidateProductionReportV1(report m8ProductionReportV1) error {
+	dir, err := os.MkdirTemp("", "m8-production-transcript-test-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	transcript, err := m8WriteProductionMeasurementTranscriptV1(dir, report)
+	if err != nil {
+		return err
+	}
+	report.MeasurementTranscript = transcript
 	return validateM8ProductionReportV1(report, testM8ProductionResourceCapsV1(report))
 }
 

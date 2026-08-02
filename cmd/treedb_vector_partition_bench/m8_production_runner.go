@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"runtime/pprof"
 	"runtime/trace"
@@ -66,6 +67,7 @@ type m8ProductionReportV1 struct {
 	GeneratedAt             time.Time                                                  `json:"generated_at"`
 	ExecutionID             string                                                     `json:"execution_id"`
 	ExecutionEvidenceDigest string                                                     `json:"execution_evidence_digest,omitempty"`
+	MeasurementTranscript   m8ProductionMeasurementTranscriptEvidenceV1                `json:"measurement_transcript"`
 	RouterRepresentatives   uint64                                                     `json:"router_representatives"`
 	Command                 []string                                                   `json:"exact_command"`
 	BaseSHA                 string                                                     `json:"base_sha"`
@@ -111,6 +113,23 @@ type m8ProductionConfigEvidenceV1 struct {
 	RouterCandidates    int       `json:"approximate_router_candidate_budget"`
 	MaxExactTruthVisits int64     `json:"max_exact_truth_visits,omitempty"`
 	Seed                int64     `json:"seed"`
+}
+
+// m8ProductionMeasurementTranscriptEvidenceV1 binds the rows measured before
+// the report is written to a separately hashed runner output.
+type m8ProductionMeasurementTranscriptEvidenceV1 struct {
+	Path   string `json:"path"`
+	Bytes  int64  `json:"bytes"`
+	SHA256 string `json:"sha256"`
+}
+
+type m8ProductionMeasurementTranscriptV1 struct {
+	SchemaVersion int                          `json:"schema_version"`
+	ExecutionID   string                       `json:"execution_id"`
+	Dataset       fixtureManifest              `json:"dataset"`
+	Variant       *m3VariantDescriptorV1       `json:"variant"`
+	Config        m8ProductionConfigEvidenceV1 `json:"config"`
+	Rows          []m8ProductionRowV1          `json:"rows"`
 }
 
 // m8ProductionAttributionV1 keeps each lossy boundary visible. Recall is
@@ -489,11 +508,6 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 			return fmt.Errorf("resolve M8 profiles directory: %w", directoryErr)
 		}
 		report.Profiles = m8ProductionProfileEvidenceV1{Directory: directory, Captured: captured, Artifacts: artifacts, Status: "captured_production_query_and_fault_boundary", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs.pprof is cumulative and must be compared with allocs_baseline.pprof"}
-		evidenceDigest, digestErr := m8ProductionExecutionEvidenceDigestV1(report.ExecutionID, artifacts)
-		if digestErr != nil {
-			return digestErr
-		}
-		report.ExecutionEvidenceDigest = evidenceDigest
 	}
 	allUntimed := m8MergeProductionResourceBoundariesV1(report.UntimedBoundary, report.Failure.ResourceBoundary)
 
@@ -564,11 +578,23 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	} else if m8ProductionAnyGateFailsV1(report.GateLedger) {
 		report.Status = "experimental_gate_failures"
 	}
-	if err := validateM8ProductionReportV1(report, m8ProductionResourceCapsV1{PersistentAssetBytes: cfg.m8MaxAssetBytes, PeakRSSBytes: cfg.m8MaxRSSBytes}); err != nil {
-		return fmt.Errorf("validate M8 production report: %w", err)
-	}
 	if err := os.MkdirAll(cfg.out, 0o755); err != nil {
 		return err
+	}
+	transcript, err := m8WriteProductionMeasurementTranscriptV1(cfg.out, report)
+	if err != nil {
+		return err
+	}
+	report.MeasurementTranscript = transcript
+	if report.Profiles.Status == "captured_production_query_and_fault_boundary" {
+		evidenceDigest, digestErr := m8ProductionExecutionEvidenceDigestV1(report.ExecutionID, report.Profiles.Artifacts, transcript.SHA256)
+		if digestErr != nil {
+			return digestErr
+		}
+		report.ExecutionEvidenceDigest = evidenceDigest
+	}
+	if err := validateM8ProductionReportV1(report, m8ProductionResourceCapsV1{PersistentAssetBytes: cfg.m8MaxAssetBytes, PeakRSSBytes: cfg.m8MaxRSSBytes}); err != nil {
+		return fmt.Errorf("validate M8 production report: %w", err)
 	}
 	raw, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
@@ -649,20 +675,85 @@ func m8ProductionProfileSetDigestV1(artifacts []m8ProductionProfileArtifactV1) (
 	return hex.EncodeToString(digest[:]), nil
 }
 
-func m8ProductionExecutionEvidenceDigestV1(executionID string, artifacts []m8ProductionProfileArtifactV1) (string, error) {
+func m8ProductionExecutionEvidenceDigestV1(executionID string, artifacts []m8ProductionProfileArtifactV1, transcriptSHA256 string) (string, error) {
 	if !validM8ProductionExecutionIDV1(executionID) {
 		return "", errors.New("invalid M8 execution identity")
+	}
+	if !m8QualificationSHA256V1(transcriptSHA256) {
+		return "", errors.New("invalid M8 measurement transcript identity")
 	}
 	profileDigest, err := m8ProductionProfileSetDigestV1(artifacts)
 	if err != nil {
 		return "", err
 	}
-	raw, err := json.Marshal(struct{ ExecutionID, ProfileSetDigest string }{executionID, profileDigest})
+	raw, err := json.Marshal(struct{ ExecutionID, ProfileSetDigest, TranscriptSHA256 string }{executionID, profileDigest, transcriptSHA256})
 	if err != nil {
 		return "", err
 	}
 	digest := sha256.Sum256(raw)
 	return hex.EncodeToString(digest[:]), nil
+}
+
+func m8WriteProductionMeasurementTranscriptV1(dir string, report m8ProductionReportV1) (m8ProductionMeasurementTranscriptEvidenceV1, error) {
+	if !validM8ProductionExecutionIDV1(report.ExecutionID) {
+		return m8ProductionMeasurementTranscriptEvidenceV1{}, errors.New("invalid M8 execution identity")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return m8ProductionMeasurementTranscriptEvidenceV1{}, err
+	}
+	path := filepath.Join(dir, "vector_partition_m8_measurements_"+report.ExecutionID+".json")
+	transcript := m8ProductionMeasurementTranscriptV1{SchemaVersion: 1, ExecutionID: report.ExecutionID, Dataset: report.Dataset, Variant: report.Variant, Config: report.Config, Rows: report.Rows}
+	raw, err := json.Marshal(transcript)
+	if err != nil {
+		return m8ProductionMeasurementTranscriptEvidenceV1{}, err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return m8ProductionMeasurementTranscriptEvidenceV1{}, err
+	}
+	if _, err := file.Write(raw); err != nil {
+		_ = file.Close()
+		return m8ProductionMeasurementTranscriptEvidenceV1{}, err
+	}
+	if err := file.Close(); err != nil {
+		return m8ProductionMeasurementTranscriptEvidenceV1{}, err
+	}
+	path, err = m8CanonicalPathV1(path)
+	if err != nil {
+		return m8ProductionMeasurementTranscriptEvidenceV1{}, err
+	}
+	digest := sha256.Sum256(raw)
+	return m8ProductionMeasurementTranscriptEvidenceV1{Path: path, Bytes: int64(len(raw)), SHA256: hex.EncodeToString(digest[:])}, nil
+}
+
+func validM8ProductionMeasurementTranscriptV1(report m8ProductionReportV1) bool {
+	evidence := report.MeasurementTranscript
+	if !filepath.IsAbs(evidence.Path) || evidence.Bytes <= 0 || !m8QualificationSHA256V1(evidence.SHA256) {
+		return false
+	}
+	path, err := m8CanonicalPathV1(evidence.Path)
+	if err != nil || path != evidence.Path {
+		return false
+	}
+	raw, err := os.ReadFile(evidence.Path)
+	if err != nil || int64(len(raw)) != evidence.Bytes {
+		return false
+	}
+	digest := sha256.Sum256(raw)
+	if hex.EncodeToString(digest[:]) != evidence.SHA256 {
+		return false
+	}
+	var transcript m8ProductionMeasurementTranscriptV1
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&transcript) != nil || transcript.SchemaVersion != 1 {
+		return false
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return false
+	}
+	return transcript.ExecutionID == report.ExecutionID && transcript.Dataset == report.Dataset && reflect.DeepEqual(transcript.Variant, report.Variant) && reflect.DeepEqual(transcript.Config, report.Config) && reflect.DeepEqual(transcript.Rows, report.Rows)
 }
 
 func m8ArtifactNameV1(cfg config, fixture fixtureManifest, manifest collections.VectorPartitionManifestV1, executionID string) (string, error) {
@@ -3451,8 +3542,11 @@ func validateM8ProductionReportV1(report m8ProductionReportV1, caps m8Production
 	if !validM8ProductionProfilesV1(report.Profiles) {
 		return errors.New("incomplete M8 profile evidence")
 	}
+	if !validM8ProductionMeasurementTranscriptV1(report) {
+		return errors.New("incomplete M8 measurement transcript evidence")
+	}
 	if report.Profiles.Status == "captured_production_query_and_fault_boundary" {
-		want, err := m8ProductionExecutionEvidenceDigestV1(report.ExecutionID, report.Profiles.Artifacts)
+		want, err := m8ProductionExecutionEvidenceDigestV1(report.ExecutionID, report.Profiles.Artifacts, report.MeasurementTranscript.SHA256)
 		if err != nil || report.ExecutionEvidenceDigest != want {
 			return errors.New("M8 execution identity is not bound to profile artifacts")
 		}

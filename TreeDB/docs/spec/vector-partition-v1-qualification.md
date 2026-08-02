@@ -38,6 +38,11 @@ structured corpus. The campaign index hashes every matrix, requires one exact
 head and corpus/truth/variant identity across the repeats, and derives
 median/min/max QPS plus p95 spread.
 
+Each child also retains a runner-written, hashed measurement transcript bound to
+its execution ID, immutable candidate/config identity, and measured rows. This
+detects retained-bundle mismatch or reuse; it does not claim to authenticate an
+attacker that can regenerate an entire evidence bundle.
+
 The graph and offline router builders have separate scalar-work envelopes from
 M3's exact-oracle visit cap: the retained 100k corpus uses 20B and the 250k
 corpus uses 50B, a linear 2.5x scaling of the same per-source-row allowance.
