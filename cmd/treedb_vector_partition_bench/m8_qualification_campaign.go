@@ -55,6 +55,8 @@ type m8QualificationIndexSummaryV1 struct {
 	Campaigns     map[string]m8QualificationCampaignSummaryV1 `json:"campaigns"`
 }
 
+const m8QualificationFrozenBaseSHAV1 = "03e7a26e56100964f14f603f0248a1a6ccc50a68"
+
 type m8QualificationCampaignSummaryV1 struct {
 	ExecutableSHA256 string  `json:"executable_sha256"`
 	P4QPSMin         float64 `json:"p4_qps_min"`
@@ -119,6 +121,9 @@ func m8ValidateQualificationIndexWithRetainedVariantV1(root string, index m8Qual
 
 func m8ValidateQualificationIndexWithVerifiersV1(root string, index m8QualificationIndexV1, retainedVariant m8QualificationRetainedVariantVerifierV1, commandExecutable m8QualificationCommandExecutableVerifierV1) (m8QualificationIndexSummaryV1, error) {
 	summary := m8QualificationIndexSummaryV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_summary_v1", Status: "qualified", BaseSHA: index.BaseSHA, HeadSHA: index.HeadSHA, Campaigns: make(map[string]m8QualificationCampaignSummaryV1, len(m8QualificationFixturesV1))}
+	if index.BaseSHA != m8QualificationFrozenBaseSHAV1 {
+		return m8QualificationIndexSummaryV1{}, errors.New("qualification index does not use the frozen base revision")
+	}
 	if index.SchemaVersion != 1 || index.ResultKind != "vector_partition_structured_qualification_index_v1" || !m8QualificationGitSHAV1(index.BaseSHA) || !m8QualificationGitSHAV1(index.HeadSHA) || len(index.Campaigns) != len(m8QualificationFixturesV1) {
 		return m8QualificationIndexSummaryV1{}, errors.New("qualification index requires exactly the two authoritative corpus campaigns")
 	}

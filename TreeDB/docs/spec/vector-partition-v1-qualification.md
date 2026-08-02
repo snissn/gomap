@@ -36,7 +36,8 @@ budget `64`; the retained matrix continues to bind the exhaustive control.
 Repeat the full probe ladder, including the p4/p16 comparison, three times per
 structured corpus. The versioned campaign index contains exactly one retained
 100k campaign and one retained 250k campaign; each hashes every matrix,
-requires one exact head and corpus/truth/variant identity across its repeats,
+requires frozen base `03e7a26e56100964f14f603f0248a1a6ccc50a68`, one exact head,
+and corpus/truth/variant identity across its repeats,
 and derives median/min/max QPS plus p95 spread. Qualification is reported only
 after both corpus campaigns validate.
 

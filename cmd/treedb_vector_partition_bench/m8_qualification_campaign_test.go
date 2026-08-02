@@ -21,7 +21,7 @@ import (
 )
 
 func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
-	root, head := t.TempDir(), strings.Repeat("a", 40)
+	root, head := t.TempDir(), m8QualificationFrozenBaseSHAV1
 	fixture := m8QualificationFixturesV1[0]
 	campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head}
 	write := func(name string, matrix m8ProductionMatrixV1) {
@@ -378,6 +378,33 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	if err != nil || indexSummary.Status != "qualified" || indexSummary.BaseSHA != head || indexSummary.HeadSHA != head || len(indexSummary.Campaigns) != 2 || indexSummary.Campaigns[fixture.Checksum].P4QPSMedian != 200 || indexSummary.Campaigns[fixture250.Checksum].P4QPSMedian != 200 {
 		t.Fatalf("index summary err=%v summary=%+v", err, indexSummary)
 	}
+	t.Run("alternate_frozen_base", func(t *testing.T) {
+		root, alternateBase := t.TempDir(), strings.Repeat("b", 40)
+		campaigns := make([]m8QualificationCampaignV1, 0, len(m8QualificationFixturesV1))
+		for _, corpus := range m8QualificationFixturesV1 {
+			campaign := m8QualificationCampaignV1{FixtureChecksum: corpus.Checksum, BaseSHA: alternateBase, HeadSHA: alternateBase}
+			for repeat := 0; repeat < 3; repeat++ {
+				matrix := testM8QualificationMatrixV1(t, alternateBase, corpus, 125+float64(repeat)*75)
+				testM8QualificationExecutionIDsV1(&matrix, repeat)
+				name := fmt.Sprintf("alternate-base-%d-%d.json", corpus.Vectors, repeat)
+				testM8QualificationProfilesV1(t, root, strings.TrimSuffix(name, ".json"), &matrix)
+				raw, err := json.Marshal(matrix)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(root, name), raw, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				digest := sha256.Sum256(raw)
+				campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:])})
+			}
+			campaigns = append(campaigns, campaign)
+		}
+		alternate := m8QualificationIndexV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_index_v1", BaseSHA: alternateBase, HeadSHA: alternateBase, Campaigns: campaigns}
+		if _, err := testM8ValidateQualificationIndexV1(root, alternate); err == nil || !strings.Contains(err.Error(), "frozen base revision") {
+			t.Fatalf("alternate frozen base err=%v", err)
+		}
+	})
 	index, err := json.Marshal(qualificationIndex)
 	if err != nil {
 		t.Fatal(err)
@@ -909,6 +936,7 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 		SchemaVersion int    `json:"schema_version"`
 		ResultKind    string `json:"result_kind"`
 		Status        string `json:"status"`
+		BaseSHA       string `json:"base_sha"`
 		Candidate     struct {
 			Variant           string `json:"variant"`
 			AssignmentBackend string `json:"assignment_backend"`
@@ -937,7 +965,7 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 	if err := json.Unmarshal(raw, &plan); err != nil {
 		t.Fatal(err)
 	}
-	if plan.SchemaVersion != 1 || plan.ResultKind != "vector_partition_structured_qualification_campaign_plan_v1" || plan.Status != "planned_no_measurement" || plan.Candidate.Variant != "graph-overlap-020-v1" || plan.Candidate.AssignmentBackend != "kahip_python_3.25_eco_symmetrized_v1_seed_<seed>" || plan.Candidate.RouterCandidates != 64 || !slices.Equal(plan.Candidate.Probes, []int{1, 2, 4, 8, 16}) || !slices.Equal(plan.Candidate.RepeatedProbes, []int{1, 2, 4, 8, 16}) || plan.Candidate.Repetitions != 3 || len(plan.Corpora) != 2 {
+	if plan.SchemaVersion != 1 || plan.ResultKind != "vector_partition_structured_qualification_campaign_plan_v1" || plan.Status != "planned_no_measurement" || plan.BaseSHA != m8QualificationFrozenBaseSHAV1 || plan.Candidate.Variant != "graph-overlap-020-v1" || plan.Candidate.AssignmentBackend != "kahip_python_3.25_eco_symmetrized_v1_seed_<seed>" || plan.Candidate.RouterCandidates != 64 || !slices.Equal(plan.Candidate.Probes, []int{1, 2, 4, 8, 16}) || !slices.Equal(plan.Candidate.RepeatedProbes, []int{1, 2, 4, 8, 16}) || plan.Candidate.Repetitions != 3 || len(plan.Corpora) != 2 {
 		t.Fatalf("plan=%+v", plan)
 	}
 	if plan.Corpora[0].DatasetSource != "/mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k" || plan.Corpora[0].Dataset != "<campaign-root>/100k/dataset" || plan.Corpora[0].TruthCacheSource != "/mnt/fast4tb/gomap-4023-100k-9225c35e5/truth-cache" || plan.Corpora[0].TruthCache != "<campaign-root>/100k/truth-cache" || plan.Corpora[0].TruthIdentity != m8TruthCacheIdentityV1(m8QualificationFixturesV1[0], 10) || plan.Corpora[0].GraphCap != 20000000000 || plan.Corpora[0].RouterCap != 20000000000 || plan.Corpora[1].DatasetSource != "testdata/vector_partition_qualification_embedding_mixture_250k" || plan.Corpora[1].Dataset != "<campaign-root>/250k/dataset" || plan.Corpora[1].TruthCache != "<campaign-root>/250k/truth-cache" || plan.Corpora[1].TruthIdentity != m8TruthCacheIdentityV1(m8QualificationFixturesV1[1], 10) || plan.Corpora[1].Vectors != 250000 || plan.Corpora[1].Checksum != "d0c7c82ba868853aae9a4280161003d72714ad1701d41ed3169c2fa94d470d69" || plan.Corpora[1].GraphCap != 50000000000 || plan.Corpora[1].RouterCap != 50000000000 || plan.Corpora[1].M3Cap != 900000000 || plan.Corpora[1].M8Cap != 1500000000 {
