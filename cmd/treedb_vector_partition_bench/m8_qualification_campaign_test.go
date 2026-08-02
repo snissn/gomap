@@ -631,6 +631,70 @@ func TestM8QualificationRejectsDirtyM3VariantV1(t *testing.T) {
 	if _, err := m8ValidateQualificationCampaignV1(root, campaign); err == nil {
 		t.Fatal("accepted self-consistent dirty M3 descriptor")
 	}
+	mismatched := testM8QualificationMatrixV1(t, head, fixture, 125, true)
+	testM8QualificationExecutionIDsV1(&mismatched, 3)
+	for i := range mismatched.Variants {
+		descriptor := mismatched.Variants[i].Variant
+		descriptor.BaseSHA, descriptor.HeadSHA = strings.Repeat("b", 40), strings.Repeat("c", 40)
+		refreshTestM3VariantIdentityV1(t, descriptor)
+		mismatched.Variants[i].GateLedger = m8ProductionGateLedgerForReportV1(mismatched.Variants[i])
+	}
+	mismatched, err = m8BuildProductionMatrixV1(config{baseSHA: head, headSHA: head, partitions: 16, command: []string{"m8-test"}}, fixture, mismatched.Variants)
+	if err != nil {
+		t.Fatal(err)
+	}
+	campaign.Runs[0] = write("mismatched-m3-revision.json", mismatched)
+	if _, err := m8ValidateQualificationCampaignV1(root, campaign); err == nil || !strings.Contains(err.Error(), "retained M3 revision") {
+		t.Fatalf("mismatched M3 revision err=%v", err)
+	}
+}
+
+func TestM8QualificationRejectsEscapingTranscriptSymlinkV1(t *testing.T) {
+	root, head := t.TempDir(), strings.Repeat("a", 40)
+	fixture := m8QualificationFixturesV1[0]
+	campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head}
+	var transcriptPath string
+	for i := 0; i < 3; i++ {
+		matrix := testM8QualificationMatrixV1(t, head, fixture, 125, true)
+		testM8QualificationExecutionIDsV1(&matrix, i)
+		testM8QualificationProfilesV1(t, root, fmt.Sprintf("transcript-%d", i), &matrix)
+		if i == 0 {
+			transcriptPath = matrix.Variants[0].MeasurementTranscript.Path
+			if !m8QualificationMeasurementTranscriptV1(root, matrix.Variants[0]) {
+				t.Fatal("rejected ordinary resolved in-root transcript")
+			}
+		}
+		raw, err := json.Marshal(matrix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := fmt.Sprintf("transcript-%d.json", i)
+		if err := os.WriteFile(filepath.Join(root, path), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(raw)
+		campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])})
+	}
+	if _, err := m8ValidateQualificationCampaignV1(root, campaign); err != nil {
+		t.Fatalf("ordinary campaign err=%v", err)
+	}
+	raw, err := os.ReadFile(transcriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "transcript.json")
+	if err := os.WriteFile(outside, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(transcriptPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, transcriptPath); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := m8ValidateQualificationCampaignV1(root, campaign); err == nil {
+		t.Fatal("accepted transcript symlink escaping campaign root")
+	}
 }
 
 func TestM8QualificationVariantBackendV1(t *testing.T) {
