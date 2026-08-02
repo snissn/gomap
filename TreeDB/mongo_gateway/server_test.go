@@ -6200,6 +6200,23 @@ func TestServerUpdateInvalidUpsertDoesNotCreateCollection(t *testing.T) {
 	if _, err := s.Collections.OpenCollection("app.missing"); !errors.Is(err, collections.ErrCollectionNotFound) {
 		t.Fatalf("invalid upsert created collection: %v", err)
 	}
+	for _, format := range []collections.DocumentFormat{collections.DocumentFormatBSON, collections.DocumentFormatJSON, collections.DocumentFormatTemplateV1} {
+		t.Run(string(format), func(t *testing.T) {
+			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			server := NewServer()
+			server.Collections = collections.NewCollectionManager(db)
+			server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: format}
+			response := serveCommand(t, server, 7011, bson.D{{Key: "update", Value: "replacement-mismatch"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "_id", Value: "u2"}, {Key: "name", Value: "wrong"}}}, {Key: "upsert", Value: true}}}}, {Key: "$db", Value: "app"}})
+			assertCommandError(t, response, "BadValue")
+			if _, err := server.Collections.OpenCollection("app.replacement-mismatch"); !errors.Is(err, collections.ErrCollectionNotFound) {
+				t.Fatalf("replacement mismatch created collection: %v", err)
+			}
+		})
+	}
 }
 
 func TestCompareDocumentFieldTreatsMissingAsNull(t *testing.T) {

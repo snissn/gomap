@@ -898,6 +898,9 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 					hasUpsert = hasUpsert || prior.upsert
 				}
 				if hasUpsert {
+					if err := s.validateMongoMissingCollectionUpserts(parsed); err != nil {
+						return mongoUpdateWriteCommandError(err)
+					}
 					col, err = s.openOrCreateCollection(name)
 					if err != nil {
 						return commandError(commandCodeBadValue, "BadValue", err.Error())
@@ -927,6 +930,9 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 		}
 		if !hasUpsert {
 			return marshalUpdateResponse(0, 0, nil)
+		}
+		if err := s.validateMongoMissingCollectionUpserts(parsed); err != nil {
+			return mongoUpdateWriteCommandError(err)
 		}
 		col, err = s.openOrCreateCollection(name)
 		if err != nil {
@@ -1131,16 +1137,7 @@ func runMongoUpdateOneWithUpsert(col *collections.Collection, update mongoUpdate
 }
 
 func mongoInsertUpsert(col *collections.Collection, update mongoUpdateItem) (bool, bool, bool, error) {
-	base, err := marshalDocument(bson.D{{Key: "_id", Value: update.id}})
-	if err != nil {
-		return false, false, false, err
-	}
-	var doc wire.Document
-	if update.pureSet {
-		doc, _, err = applySetUpdate(base, update.updateDoc)
-	} else {
-		doc, _, err = applyMongoMutation(base, update.mutation)
-	}
+	doc, err := mongoUpsertDocument(update)
 	if err != nil {
 		return false, false, false, err
 	}
@@ -1155,6 +1152,43 @@ func mongoInsertUpsert(col *collections.Collection, update mongoUpdateItem) (boo
 		return false, false, false, err
 	}
 	return false, false, true, nil
+}
+
+func (s *Server) validateMongoMissingCollectionUpserts(updates []mongoUpdateItem) error {
+	for _, update := range updates {
+		if !update.upsert {
+			continue
+		}
+		doc, err := mongoUpsertDocument(update)
+		if err != nil {
+			return mongoUpdateErrorWithIndex(update.index, err)
+		}
+		key, _, err := prepareInsertDocument(doc, s.DefaultCollectionOptions.DocumentFormat)
+		if err != nil {
+			return mongoUpdateErrorWithIndex(update.index, err)
+		}
+		if !bytes.Equal(key, update.key) {
+			return mongoUpdateErrorWithIndex(update.index, errors.New("Mongo gateway update cannot modify _id"))
+		}
+	}
+	return nil
+}
+
+func mongoUpsertDocument(update mongoUpdateItem) (wire.Document, error) {
+	base, err := marshalDocument(bson.D{{Key: "_id", Value: update.id}})
+	if err != nil {
+		return nil, err
+	}
+	var doc wire.Document
+	if update.pureSet {
+		doc, _, err = applySetUpdate(base, update.updateDoc)
+	} else {
+		doc, _, err = applyMongoMutation(base, update.mutation)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return doc, nil
 }
 
 func runMongoUpdateBatch(col *collections.Collection, updates []mongoUpdateItem) (int32, int32, bool, error) {
