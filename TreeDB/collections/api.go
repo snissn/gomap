@@ -12077,6 +12077,13 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, predicate func(curren
 			_ = snap.Close()
 			return false, nil
 		}
+		if columnStoreCanReconstructDocument(c.meta) {
+			current, err = c.reconstructColumnDocumentAtSnapshot(snap, catalog, documentID, current)
+			if err != nil {
+				_ = snap.Close()
+				return false, err
+			}
+		}
 		deleteOK, err := predicate(current)
 		if err != nil {
 			_ = snap.Close()

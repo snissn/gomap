@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"errors"
 	"testing"
 
@@ -39,5 +40,31 @@ func TestDeleteDocumentIfContract(t *testing.T) {
 	}
 	if deleted, err := col.DeleteDocumentIf([]byte("u1"), func(current []byte) (bool, error) { return string(current) == `{"active":true}`, nil }); err != nil || !deleted {
 		t.Fatalf("delete=%v,%v", deleted, err)
+	}
+}
+
+func TestDeleteDocumentIfReceivesReconstructedColumnDocument(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatal(err)
+	}
+	db := openCollectionCommandWALDB(t, dir)
+	defer db.Close()
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)}}); err != nil {
+		t.Fatal(err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte(`{"time_us":1,"kind":"like","did":"d1","payload":"row"}`)
+	if _, err := col.Insert([]byte("e1"), want); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := col.DeleteDocumentIf([]byte("e1"), func(current []byte) (bool, error) {
+		return bytes.Equal(current, want), nil
+	}); err != nil || !deleted {
+		t.Fatalf("delete reconstructed document=%v,%v", deleted, err)
 	}
 }

@@ -80,6 +80,7 @@ func (s *Server) runMongoFilterUpdateOne(col *collections.Collection, update mon
 		}
 		predicateMatched := false
 		matched, modified, err := col.Update(key, func(stored []byte) ([]byte, bool, error) {
+			predicateMatched = false
 			match, err := mongoStoredDocumentMatchesPlan(col, materializer, stored, update.plan)
 			if err != nil || !match {
 				return nil, false, err
@@ -111,6 +112,7 @@ func (s *Server) deleteMongoFilterOne(col *collections.Collection, plan findPlan
 		}
 		predicateMatched := false
 		deleted, err := col.DeleteDocumentIf(key, func(stored []byte) (bool, error) {
+			predicateMatched = false
 			match, err := mongoStoredDocumentMatchesPlan(col, materializer, stored, plan)
 			predicateMatched = match
 			return match, err
@@ -139,6 +141,9 @@ func (s *Server) findAndModifyFilterExisting(col *collections.Collection, item m
 		}
 		predicateMatched := false
 		matched, _, err = col.Update(key, func(stored []byte) ([]byte, bool, error) {
+			predicateMatched = false
+			before = nil
+			after = nil
 			raw, err := storedDocumentToBSON(col, materializer, stored)
 			if err != nil {
 				return nil, false, err
