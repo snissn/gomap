@@ -16,10 +16,22 @@ func resetMongoFilterWriteAttempt(predicateMatched *bool) {
 	*predicateMatched = false
 }
 
+func reconcileMongoFilterWriteOutcome(predicateMatched *bool, matched bool) {
+	if !matched {
+		resetMongoFilterWriteAttempt(predicateMatched)
+	}
+}
+
 func resetMongoFindAndModifyAttempt(predicateMatched *bool, before, after *wire.Document) {
 	*predicateMatched = false
 	*before = nil
 	*after = nil
+}
+
+func reconcileMongoFindAndModifyOutcome(predicateMatched *bool, before, after *wire.Document, matched bool) {
+	if !matched {
+		resetMongoFindAndModifyAttempt(predicateMatched, before, after)
+	}
 }
 
 func validateMongoWritePlan(plan findPlan) error {
@@ -100,6 +112,7 @@ func (s *Server) runMongoFilterUpdateOne(col *collections.Collection, update mon
 			return applyMongoUpdateToStoredDocument(col, materializer, update, stored)
 		})
 		_ = materializer.Close()
+		reconcileMongoFilterWriteOutcome(&predicateMatched, matched)
 		if err != nil || predicateMatched {
 			return matched, modified, err
 		}
@@ -128,6 +141,7 @@ func (s *Server) deleteMongoFilterOne(col *collections.Collection, plan findPlan
 			return match, err
 		})
 		_ = materializer.Close()
+		reconcileMongoFilterWriteOutcome(&predicateMatched, deleted)
 		if err != nil || predicateMatched {
 			return deleted, err
 		}
@@ -187,6 +201,7 @@ func (s *Server) findAndModifyFilterExisting(col *collections.Collection, item m
 			return encoded, true, nil
 		})
 		_ = materializer.Close()
+		reconcileMongoFindAndModifyOutcome(&predicateMatched, &before, &after, matched)
 		if err != nil || predicateMatched {
 			return finalizeFindAndModifyImages(before, after, matched && predicateMatched, err)
 		}

@@ -41,6 +41,22 @@ func TestMongoFilterWriteAttemptReset(t *testing.T) {
 	}
 }
 
+func TestMongoFilterWriteOutcomeReconcilesSkippedCallback(t *testing.T) {
+	for _, name := range []string{"update", "delete"} {
+		predicateMatched := true                                   // first internal attempt invoked and matched the callback
+		reconcileMongoFilterWriteOutcome(&predicateMatched, false) // final attempt found no document
+		if predicateMatched {
+			t.Fatalf("%s retained callback match after missing final attempt", name)
+		}
+	}
+	predicateMatched := true
+	before, after := wire.Document{1}, wire.Document{2} // first internal callback populated images
+	reconcileMongoFindAndModifyOutcome(&predicateMatched, &before, &after, false)
+	if predicateMatched || before != nil || after != nil {
+		t.Fatalf("findAndModify retained stale callback state=%v before=%v after=%v", predicateMatched, before, after)
+	}
+}
+
 func TestMongoFilterDeleteOneColumnStoreReconstruction(t *testing.T) {
 	dir := t.TempDir()
 	backend, closeBackend, err := treedb.OpenBackend(treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir))
