@@ -3446,7 +3446,7 @@ func validateM8ProductionReportV1(report m8ProductionReportV1, caps m8Production
 			report.Config.Overlap[0] != report.Variant.OverlapRatio || report.Variant.FixtureChecksum != report.Dataset.Checksum ||
 			report.Variant.RouterRepresentatives != report.RouterRepresentatives ||
 			uint64(report.Variant.Partitions) != uint64(report.Config.Partitions) || report.Variant.PersistentAssetBytes != report.Resources.PersistentAssetBytes ||
-			report.Topology.ReadySetDigest != report.Variant.ReadySetDigest || !m8RouterSessionsMatchVariantV1(report.RouterSessions, *report.Variant) {
+			!m8RouterSessionsMatchVariantV1(report.RouterSessions, *report.Variant, report.Topology.ReadySetDigest) {
 			return errors.New("M8 report variant identity is not bound to its configuration and resources")
 		}
 	}
@@ -3804,10 +3804,10 @@ func m8CanonicalRouterSessionIdentityV1(evidence m8ProductionRouterSessionEviden
 	return identity, true
 }
 
-func m8RouterSessionsMatchVariantV1(evidence m8ProductionRouterSessionEvidenceV1, variant m3VariantDescriptorV1) bool {
+func m8RouterSessionsMatchVariantV1(evidence m8ProductionRouterSessionEvidenceV1, variant m3VariantDescriptorV1, readySetDigest string) bool {
 	for _, sessions := range [][]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{evidence.AfterWarmup, evidence.AfterMeasured} {
 		for _, session := range sessions {
-			if !m8RouterSessionIdentityMatchesVariantV1(session.Identity, variant) {
+			if !m8RouterSessionIdentityMatchesVariantV1(session.Identity, variant) || session.Identity.ReadySetDigest != readySetDigest {
 				return false
 			}
 		}
@@ -3820,7 +3820,7 @@ func m8RouterSessionIdentityMatchesVariantV1(identity nativewire.VectorPartition
 		identity.SourceGeneration == variant.SourceGeneration && identity.SourceChecksum == variant.SourceChecksum &&
 		identity.SourceSchemaHash == variant.SourceSchemaHash && identity.SourceRowCount == variant.SourceRows &&
 		identity.PartitionGeneration == variant.PartitionGeneration &&
-		identity.ReadySetDigest == variant.ReadySetDigest && identity.RouterModelDigest == variant.RouterModelDigest
+		identity.RouterModelDigest == variant.RouterModelDigest
 }
 
 func m8SHA256V1(value string) bool {

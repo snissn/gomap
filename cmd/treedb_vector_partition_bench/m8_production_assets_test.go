@@ -189,10 +189,12 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	report.Variant = &variant
 	report.RouterRepresentatives = variant.RouterRepresentatives
 	report.Rows[0].ElapsedNanos = uint64(report.Rows[0].Samples) * uint64(time.Second)
-	report.Topology.ReadySetDigest = variant.ReadySetDigest
 	report.Config.Overlap = []float64{0}
 	report.Rows[0].VariantID = variant.VariantID
-	testM8BindRouterSessionsVariantV1(&report.RouterSessions, variant)
+	if report.Topology.ReadySetDigest == variant.ReadySetDigest {
+		t.Fatal("test requires distinct M3 and serving ready sets")
+	}
+	testM8BindRouterSessionsVariantV1(&report.RouterSessions, variant, report.Topology.ReadySetDigest)
 	testM8CompleteResourceLimitsV1(t, &report)
 	if err := testM8ValidateProductionReportV1(report); err != nil {
 		t.Fatalf("valid endpoint coverage rejected: %v", err)
@@ -229,15 +231,27 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 			invalid.Resources.LimitComparisons = append([]m8ProductionResourceLimitComparisonV1(nil), invalid.Resources.LimitComparisons...)
 			invalid.Resources.LimitComparisons[len(invalid.Resources.LimitComparisons)-1] = invalid.Resources.LimitComparisons[0]
 		},
-		"variant_runtime_identity": func(invalid *m8ProductionReportV1) {
+		"serving_ready_set": func(invalid *m8ProductionReportV1) {
 			invalid.Topology.ReadySetDigest = strings.Repeat("e", 64)
+		},
+		"session_ready_set": func(invalid *m8ProductionReportV1) {
 			invalid.RouterSessions.AfterWarmup = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), invalid.RouterSessions.AfterWarmup...)
 			invalid.RouterSessions.AfterMeasured = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), invalid.RouterSessions.AfterMeasured...)
 			for i := range invalid.RouterSessions.AfterWarmup {
-				invalid.RouterSessions.AfterWarmup[i].Identity.ReadySetDigest = invalid.Topology.ReadySetDigest
+				invalid.RouterSessions.AfterWarmup[i].Identity.ReadySetDigest = strings.Repeat("e", 64)
 			}
 			for i := range invalid.RouterSessions.AfterMeasured {
-				invalid.RouterSessions.AfterMeasured[i].Identity.ReadySetDigest = invalid.Topology.ReadySetDigest
+				invalid.RouterSessions.AfterMeasured[i].Identity.ReadySetDigest = strings.Repeat("e", 64)
+			}
+		},
+		"variant_index_identity": func(invalid *m8ProductionReportV1) {
+			invalid.RouterSessions.AfterWarmup = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), invalid.RouterSessions.AfterWarmup...)
+			invalid.RouterSessions.AfterMeasured = append([]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1(nil), invalid.RouterSessions.AfterMeasured...)
+			for i := range invalid.RouterSessions.AfterWarmup {
+				invalid.RouterSessions.AfterWarmup[i].Identity.IndexDefinitionDigest = strings.Repeat("e", 64)
+			}
+			for i := range invalid.RouterSessions.AfterMeasured {
+				invalid.RouterSessions.AfterMeasured[i].Identity.IndexDefinitionDigest = strings.Repeat("e", 64)
 			}
 		},
 		"variant_router_model": func(invalid *m8ProductionReportV1) {
@@ -496,7 +510,7 @@ func testM8ValidateProductionReportV1(report m8ProductionReportV1) error {
 	return validateM8ProductionReportV1(report, testM8ProductionResourceCapsV1(report))
 }
 
-func testM8BindRouterSessionsVariantV1(evidence *m8ProductionRouterSessionEvidenceV1, variant m3VariantDescriptorV1) {
+func testM8BindRouterSessionsVariantV1(evidence *m8ProductionRouterSessionEvidenceV1, variant m3VariantDescriptorV1, readySetDigest string) {
 	for _, sessions := range [][]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{evidence.AfterWarmup, evidence.AfterMeasured} {
 		for i := range sessions {
 			sessions[i].Identity.IndexDefinitionDigest = variant.IndexDefinitionDigest
@@ -505,7 +519,7 @@ func testM8BindRouterSessionsVariantV1(evidence *m8ProductionRouterSessionEviden
 			sessions[i].Identity.SourceSchemaHash = variant.SourceSchemaHash
 			sessions[i].Identity.SourceRowCount = variant.SourceRows
 			sessions[i].Identity.PartitionGeneration = variant.PartitionGeneration
-			sessions[i].Identity.ReadySetDigest = variant.ReadySetDigest
+			sessions[i].Identity.ReadySetDigest = readySetDigest
 			sessions[i].Identity.RouterModelDigest = variant.RouterModelDigest
 		}
 	}
