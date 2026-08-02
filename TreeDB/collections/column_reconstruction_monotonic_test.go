@@ -162,6 +162,26 @@ func TestScanDocumentsFuncMonotonicReconstructionCallbackAndTruncationP3887(t *t
 	}
 }
 
+func TestScanDocumentsFuncMonotonicReconstructionBoundsPreflightP3887(t *testing.T) {
+	events := make([]columnPhysicalJSONBenchParityEventP0, 5)
+	for i := range events {
+		events[i] = columnPhysicalJSONBenchParityEventP0{ID: fmt.Sprintf("e%04d", i), TimeUS: int64(i), Kind: "commit", Operation: "create", Collection: "app.bsky.feed.post", Did: fmt.Sprintf("did:%04d", i)}
+	}
+	col, closeFn := openColumnPhysicalJSONBenchParityFixtureP0(t, events)
+	defer closeFn()
+	var ids []string
+	truncated, err := col.ScanDocumentsFunc(1, func(record DocumentRecord) (bool, error) {
+		ids = append(ids, string(record.ID))
+		return true, nil
+	})
+	if err != nil || !truncated || fmt.Sprint(ids) != "[e0000]" {
+		t.Fatalf("scan err=%v truncated=%t ids=%v", err, truncated, ids)
+	}
+	if stats := col.LastDocumentScanStats(); stats.CertifiedMonotonicPath || !stats.GenericFallback || stats.PhysicalRows != 2 || stats.PhysicalRows >= uint64(len(events)) {
+		t.Fatalf("scan stats=%+v want bounded preflight and honest generic result", stats)
+	}
+}
+
 func TestMonotonicColumnReconstructionPreflightClassifierP3887(t *testing.T) {
 	row := func(id string) columnPhysicalScanRowView {
 		return columnPhysicalScanRowView{ID: []byte(id), Generation: 1, PartID: 1, Operation: ColumnPublishOperationInsert}
@@ -216,8 +236,8 @@ func TestScanDocumentsFuncMonotonicReconstructionWindowBoundariesP3887(t *testin
 		if err != nil || !truncated || calls != limit {
 			t.Fatalf("limit=%d err=%v truncated=%t calls=%d", limit, err, truncated, calls)
 		}
-		if stats := col.LastDocumentScanStats(); stats.PhysicalRows != uint64(rows+limit+1) {
-			t.Fatalf("limit=%d physical rows=%d want %d", limit, stats.PhysicalRows, rows+limit+1)
+		if stats := col.LastDocumentScanStats(); stats.PhysicalRows != uint64(limit+1) || stats.CertifiedMonotonicPath || !stats.GenericFallback {
+			t.Fatalf("limit=%d scan stats=%+v want bounded generic fallback", limit, stats)
 		}
 	}
 	partialCalls := 0

@@ -183,10 +183,16 @@ func TestMongoMutationCommandWALValueLogPointersReopen(t *testing.T) {
 	server := NewServer()
 	server.Collections = collections.NewCollectionManager(backend)
 	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
-	assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "generation", Value: int32(1)}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "u1"}, {Key: "generation", Value: int32(1)}},
+		bson.D{{Key: "_id", Value: "u3"}, {Key: "generation", Value: int32(3)}, {Key: "payload", Value: string(make([]byte, 256))}},
+	}}, {Key: "$db", Value: "app"}}))
 	assertOK(t, serveCommand(t, server, 2, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{
-		bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "generation", Value: int32(5)}}}}}},
+		bson.D{{Key: "q", Value: bson.D{{Key: "generation", Value: int32(1)}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "generation", Value: int32(5)}}}}}},
 		bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "upserted"}}}}}, {Key: "upsert", Value: true}},
+	}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 3, bson.D{{Key: "delete", Value: "users"}, {Key: "deletes", Value: bson.A{
+		bson.D{{Key: "q", Value: bson.D{{Key: "generation", Value: int32(3)}}}, {Key: "limit", Value: int32(1)}},
 	}}, {Key: "$db", Value: "app"}}))
 	if err := server.Collections.FlushAll(); err != nil {
 		_ = closeBackend()
@@ -233,6 +239,19 @@ func TestMongoMutationCommandWALValueLogPointersReopen(t *testing.T) {
 				t.Fatalf("%s name=%q ok=%v, want %q", want.id, got, ok, want.name)
 			}
 		}
+	}
+	reopenedServer := NewServer()
+	reopenedServer.Collections = collections.NewCollectionManager(reopened)
+	reopenedServer.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	deleted := serveCommand(t, reopenedServer, 4, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u3"}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, deleted)
+	if values, err := bson.Raw(deleted).Lookup("cursor").Document().Lookup("firstBatch").Array().Values(); err != nil || len(values) != 0 {
+		t.Fatalf("deleted pointer document after reopen: values=%v err=%v", values, err)
+	}
+	surviving := serveCommand(t, reopenedServer, 5, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, surviving)
+	if values, err := bson.Raw(surviving).Lookup("cursor").Document().Lookup("firstBatch").Array().Values(); err != nil || len(values) != 1 {
+		t.Fatalf("surviving pointer document after reopen: values=%v err=%v", values, err)
 	}
 }
 

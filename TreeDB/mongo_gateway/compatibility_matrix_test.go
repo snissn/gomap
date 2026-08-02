@@ -468,6 +468,28 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
+			category: "update subset",
+			feature:  "natural-order arbitrary-filter update, delete, and findAndModify",
+			status:   "supported subset",
+			probe: func(t *testing.T, server *Server) {
+				assertOK(t, serveCommand(t, server, 209, bson.D{{Key: "insert", Value: "filter_writes"}, {Key: "documents", Value: bson.A{
+					bson.D{{Key: "_id", Value: "u1"}, {Key: "age", Value: int32(20)}, {Key: "active", Value: true}},
+					bson.D{{Key: "_id", Value: "u2"}, {Key: "age", Value: int32(30)}, {Key: "active", Value: true}},
+				}}, {Key: "$db", Value: "app"}}))
+				update := serveCommand(t, server, 210, bson.D{{Key: "update", Value: "filter_writes"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int32(20)}}}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "picked", Value: true}}}}}}}}, {Key: "$db", Value: "app"}})
+				assertOK(t, update)
+				assertInt32(t, update, "n", 1)
+				fam := serveCommand(t, server, 211, bson.D{{Key: "findAndModify", Value: "filter_writes"}, {Key: "query", Value: bson.D{{Key: "active", Value: true}}}, {Key: "update", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "modified", Value: true}}}}}, {Key: "$db", Value: "app"}})
+				assertOK(t, fam)
+				if id, _ := bson.Raw(fam).Lookup("value").Document().Lookup("_id").StringValueOK(); id != "u1" {
+					t.Fatalf("findAndModify id=%q want u1", id)
+				}
+				deleted := serveCommand(t, server, 212, bson.D{{Key: "delete", Value: "filter_writes"}, {Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "age", Value: int32(20)}}}, {Key: "limit", Value: int32(1)}}}}, {Key: "$db", Value: "app"}})
+				assertOK(t, deleted)
+				assertInt32(t, deleted, "n", 1)
+			},
+		},
+		{
 			category: "update",
 			feature:  "exact _id upsert",
 			status:   "supported subset",

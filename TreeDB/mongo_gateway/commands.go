@@ -932,6 +932,7 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 		if _, ok := seenKeys[keyString]; ok {
 			hasDuplicateKey = true
 		}
+		item.selector = s
 		seenKeys[keyString] = struct{}{}
 		parsed = append(parsed, item)
 	}
@@ -993,6 +994,9 @@ type mongoUpdateItem struct {
 	mutation        mongoMutation
 	upsert          bool
 	id              bson.RawValue
+	plan            findPlan
+	exactID         bool
+	selector        *Server
 }
 
 type mongoUpdateParseError struct {
@@ -1010,13 +1014,21 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 	if err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 	}
-	id, err := idEqualityFilterValue(filter, "update")
-	if err != nil {
-		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
-	}
-	key, err := encodePrimaryKey(id)
-	if err != nil {
-		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+	// Keep the long-standing scalar _id path allocation-light. Operator documents
+	// deliberately fall through to the find parser: {_id: {$eq: ...}} is an
+	// operator predicate, not an embedded-document _id.
+	id, directErr := idEqualityFilterValue(filter, "update")
+	directID := directErr == nil && !mongoIDOperatorDocument(id)
+	var plan findPlan
+	if !directID {
+		plan, err = parseFindPlan(nil, filter)
+		if err != nil {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+		}
+		if err := validateMongoWritePlan(plan); err != nil {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+		}
+		id, directID = simplePrimaryEqualityFindValue(plan)
 	}
 	if multi, err := optionalBoolField(update, "multi"); err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
@@ -1026,6 +1038,16 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 	upsert, err := optionalBoolField(update, "upsert")
 	if err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+	}
+	if upsert && !directID {
+		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update upsert requires an exact _id equality filter", index)}
+	}
+	var key []byte
+	if directID {
+		key, err = encodePrimaryKey(id)
+		if err != nil {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+		}
 	}
 	updateDoc, err := requiredDocumentField(update, "u")
 	if err != nil {
@@ -1056,7 +1078,26 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 		mutation:        mutation,
 		upsert:          upsert,
 		id:              id,
+		plan:            plan,
+		exactID:         directID,
 	}, nil
+}
+
+func mongoIDOperatorDocument(id bson.RawValue) bool {
+	if id.Type != bson.TypeEmbeddedDocument {
+		return false
+	}
+	elements, err := id.Document().Elements()
+	if err != nil {
+		return true
+	}
+	for _, element := range elements {
+		key, err := element.KeyErr()
+		if err != nil || strings.HasPrefix(key, "$") {
+			return true
+		}
+	}
+	return false
 }
 
 func mongoUpdateParseCommandError(err error) (wire.Document, error) {
@@ -1125,6 +1166,13 @@ func runMongoUpdateOne(col *collections.Collection, update mongoUpdateItem) (boo
 }
 
 func runMongoUpdateOneWithUpsert(col *collections.Collection, update mongoUpdateItem) (bool, bool, bool, error) {
+	if !update.exactID {
+		if update.selector == nil {
+			return false, false, false, errors.New("Mongo gateway filter update has no selector")
+		}
+		matched, modified, err := update.selector.runMongoFilterUpdateOne(col, update)
+		return matched, modified, false, err
+	}
 	if mongoUpdateCanUseBSONSet(col, update) {
 		matched, modified, err := col.UpdateBSONSet(update.key, update.bsonSetFields)
 		if err != nil || matched || !update.upsert {
@@ -1755,7 +1803,7 @@ func mongoUpdateItemsCanUseBSONSet(col *collections.Collection, updates []mongoU
 		return false
 	}
 	for _, update := range updates {
-		if !update.bsonSetFieldsOK {
+		if !update.exactID || !update.bsonSetFieldsOK {
 			return false
 		}
 	}
@@ -1763,7 +1811,7 @@ func mongoUpdateItemsCanUseBSONSet(col *collections.Collection, updates []mongoU
 }
 
 func mongoUpdateCanUseBSONSet(col *collections.Collection, update mongoUpdateItem) bool {
-	return col != nil && !update.upsert && normalizedMongoUpdateDocumentFormat(col) == collections.DocumentFormatBSON && update.bsonSetFieldsOK
+	return col != nil && update.exactID && !update.upsert && normalizedMongoUpdateDocumentFormat(col) == collections.DocumentFormatBSON && update.bsonSetFieldsOK
 }
 
 func normalizedMongoUpdateDocumentFormat(col *collections.Collection) collections.DocumentFormat {
@@ -1778,7 +1826,7 @@ func normalizedMongoUpdateDocumentFormat(col *collections.Collection) collection
 }
 
 func mongoUpdateCanUseBatchMeta(meta collections.CollectionMeta, update mongoUpdateItem) bool {
-	if update.upsert {
+	if !update.exactID || update.upsert {
 		return false
 	}
 	format := meta.Options.DocumentFormat
@@ -1909,20 +1957,33 @@ func (s *Server) deleteResponse(ctx context.Context, command wire.Document, sequ
 		if err != nil {
 			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("deletes[%d]: %v", i, err))
 		}
-		id, err := idEqualityFilterValue(filter, "delete")
+		plan, err := parseFindPlan(nil, filter)
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("deletes[%d]: %v", i, err))
 		}
-		if limit, err := optionalInt32Field(deleteItem, "limit"); err != nil {
+		if err := validateMongoWritePlan(plan); err != nil {
+			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("deletes[%d]: %v", i, err))
+		}
+		limit, err := optionalInt32Field(deleteItem, "limit")
+		if err != nil {
 			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("deletes[%d]: %v", i, err))
-		} else if limit != 0 && limit != 1 {
+		}
+		if limit != 0 && limit != 1 {
 			return commandError(commandCodeBadValue, "BadValue", "Mongo gateway delete limit must be 0 or 1")
 		}
-		key, err := encodePrimaryKey(id)
-		if err != nil {
-			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("deletes[%d]: %v", i, err))
+		var deletedOne bool
+		if id, exactID := simplePrimaryEqualityFindValue(plan); exactID {
+			key, err := encodePrimaryKey(id)
+			if err != nil {
+				return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("deletes[%d]: %v", i, err))
+			}
+			deletedOne, err = col.DeleteDocument(key)
+		} else {
+			if limit != 1 {
+				return commandError(commandCodeBadValue, "BadValue", "Mongo gateway filter delete supports deleteOne only (limit: 1)")
+			}
+			deletedOne, err = s.deleteMongoFilterOne(col, plan)
 		}
-		deletedOne, err := col.DeleteDocument(key)
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}

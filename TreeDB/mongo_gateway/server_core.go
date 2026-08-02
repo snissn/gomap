@@ -113,11 +113,14 @@ type Server struct {
 	collectionFirstWrites     atomic.Pointer[collectionFirstWriteRegistry]
 	firstWriteAfterCreateHook func(string)
 	firstWriteBeforeWaitHook  func(*collectionFirstWritePending)
-	updateMu                  sync.Mutex
-	updateCoalescers          map[string]*mongoUpdateCoalescer
-	insertMu                  sync.Mutex
-	insertCoalescers          map[string]*mongoInsertCoalescer
-	closed                    atomic.Bool
+	// filterWriteSelectedHook is test-only coordination between natural-order
+	// selection and the mutation-boundary predicate recheck.
+	filterWriteSelectedHook func()
+	updateMu                sync.Mutex
+	updateCoalescers        map[string]*mongoUpdateCoalescer
+	insertMu                sync.Mutex
+	insertCoalescers        map[string]*mongoInsertCoalescer
+	closed                  atomic.Bool
 }
 
 type collectionFirstWritePending struct {

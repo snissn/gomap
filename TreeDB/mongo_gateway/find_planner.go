@@ -743,6 +743,9 @@ func simplePrimaryEqualityFindValue(plan findPlan) (bson.RawValue, bool) {
 	if pred.field != "_id" || pred.op != findPredicateEq || len(pred.values) != 1 {
 		return bson.RawValue{}, false
 	}
+	if pred.values[0].Type == bson.TypeRegex {
+		return bson.RawValue{}, false
+	}
 	return pred.values[0], true
 }
 
@@ -1146,6 +1149,9 @@ func parseFindFilter(filter wire.Document) ([]findPredicate, [][]findPredicate, 
 			}
 			predicates = append(predicates, parsed...)
 			continue
+		}
+		if strings.HasPrefix(key, "$") {
+			return nil, nil, fmt.Errorf("Mongo gateway find does not support query operator %q", key)
 		}
 		parsed, err := parseFieldPredicate(key, elem.Value())
 		if err != nil {

@@ -13,6 +13,7 @@ import (
 const columnReconstructionMonotonicBatchSize = 256
 
 var errColumnReconstructionMonotonicStop = errors.New("collections: stop monotonic reconstruction scan")
+var errColumnReconstructionMonotonicPreflightLimit = errors.New("collections: stop monotonic reconstruction preflight")
 
 // columnStoreSupportsMonotonicSelectedTypedReconstruction is a metadata-only
 // gate for the certified path. That path asks each typed-column part to decode
@@ -54,7 +55,7 @@ func columnStoreSupportsMonotonicSelectedTypedReconstruction(cfg ColumnStoreConf
 // and primary root describe the same ordered, insert-only snapshot. Any normal
 // mutation or ordering mismatch declines the fast path; structural mismatch
 // fails closed.
-func (c *Collection) preflightMonotonicColumnReconstruction(snap *backenddb.Snapshot, catalog *collectionCatalog) (bool, columnPhysicalScanDiagnostics, bool, error) {
+func (c *Collection) preflightMonotonicColumnReconstruction(snap *backenddb.Snapshot, catalog *collectionCatalog, maxDocuments int) (bool, columnPhysicalScanDiagnostics, bool, error) {
 	cfg := catalog.meta.Options.ColumnStore.copy()
 	if !columnStoreSupportsMonotonicSelectedTypedReconstruction(cfg) {
 		return false, columnPhysicalScanDiagnostics{}, false, nil
@@ -77,7 +78,16 @@ func (c *Collection) preflightMonotonicColumnReconstruction(snap *backenddb.Snap
 	defer func() { _ = primary.Close() }()
 
 	classifier := monotonicColumnReconstructionPreflight{eligible: true}
+	physicalRows := 0
 	diag, err := c.scanColumnPhysicalRowsInSnapshotView(view, columnPhysicalScanRequest{ProjectedColumns: []string{}, Visitor: func(row columnPhysicalScanRowView) error {
+		physicalRows++
+		// A preflight must inspect one additional row to distinguish a complete
+		// maxDocuments-row stream from a longer stream. Do not certify a prefix:
+		// the bounded generic path reconstructs that prefix without a whole
+		// physical-stream pass.
+		if physicalRows > maxDocuments {
+			return errColumnReconstructionMonotonicPreflightLimit
+		}
 		if primary.Valid() {
 			classifier.observe(row, primary.UnsafeKey(), true)
 			primary.Next()
@@ -89,6 +99,12 @@ func (c *Collection) preflightMonotonicColumnReconstruction(snap *backenddb.Snap
 		classifier.observe(row, nil, false)
 		return nil
 	}})
+	if errors.Is(err, errColumnReconstructionMonotonicPreflightLimit) {
+		// The physical scanner reports completed assets only. Preserve the exact
+		// partial row count for callers enforcing a bounded scan budget.
+		diag.RowsScanned = physicalRows
+		return false, diag, true, nil
+	}
 	if err != nil {
 		return false, diag, true, err
 	}
