@@ -6287,6 +6287,15 @@ func TestMongoMutationRejectsInvalidShapesAndOverflow(t *testing.T) {
 			t.Fatalf("accepted invalid update path %q", path)
 		}
 	}
+	overLimit := bson.A{}
+	for range mongoMutationMaxEachValues + 1 {
+		overLimit = append(overLimit, int32(1))
+	}
+	if _, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$push", Value: bson.D{
+		{Key: "tooMany", Value: bson.D{{Key: "$each", Value: overLimit}}},
+	}}})); err == nil {
+		t.Fatal("accepted over-limit $each")
+	}
 	for _, test := range []struct {
 		doc  wire.Document
 		path string

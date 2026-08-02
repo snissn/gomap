@@ -179,7 +179,7 @@ func TestStandaloneServerOfficialGoDriverFilterWrites(t *testing.T) {
 		t.Fatalf("nested update document=%v", nested)
 	}
 	var before bson.M
-	if err := coll.FindOneAndUpdate(ctx, bson.D{{Key: "active", Value: true}}, bson.D{{Key: "$set", Value: bson.D{{Key: "modified", Value: true}}}, {Key: "$unset", Value: bson.D{{Key: "profile.name", Value: true}}}, {Key: "$setOnInsert", Value: bson.D{{Key: "created", Value: true}}}}).Decode(&before); err != nil {
+	if err := coll.FindOneAndUpdate(ctx, bson.D{{Key: "active", Value: true}}, bson.D{{Key: "$set", Value: bson.D{{Key: "modified", Value: true}}}, {Key: "$unset", Value: bson.D{{Key: "profile.name", Value: true}}}, {Key: "$setOnInsert", Value: bson.D{{Key: "created", Value: true}}}}, options.FindOneAndUpdate().SetReturnDocument(options.After)).Decode(&before); err != nil {
 		t.Fatalf("filter FindOneAndUpdate: %v", err)
 	}
 	if before["_id"] != "u1" {

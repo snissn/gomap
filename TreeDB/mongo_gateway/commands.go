@@ -4224,6 +4224,15 @@ func mongoMutationArrayValues(op, name string, value bson.RawValue) ([]bson.RawV
 	if err != nil {
 		return nil, err
 	}
+	if len(elements) != 0 {
+		key, err := elements[0].KeyErr()
+		if err != nil {
+			return nil, err
+		}
+		if strings.HasPrefix(key, "$") && key != "$each" {
+			return nil, fmt.Errorf("Mongo gateway %s field %q only supports a scalar or $each", op, name)
+		}
+	}
 	hasEach := false
 	for _, element := range elements {
 		key, err := element.KeyErr()
@@ -4443,15 +4452,22 @@ func mongoMutationArrayPath(doc bson.D, path []string, values []bson.RawValue, u
 		}
 	}
 	changed := false
+	var existingValues []bson.RawValue
+	if unique {
+		existingValues = make([]bson.RawValue, 0, len(array)+len(values))
+		for _, existing := range array {
+			existingRaw, err := mongoMutationRaw(existing)
+			if err != nil {
+				return nil, false, err
+			}
+			existingValues = append(existingValues, existingRaw)
+		}
+	}
 	for _, raw := range values {
 		if unique {
 			duplicate := false
-			for _, existing := range array {
-				existingRaw, err := mongoMutationRaw(existing)
-				if err != nil {
-					return nil, false, err
-				}
-				if existingRaw.Equal(raw) {
+			for _, existing := range existingValues {
+				if existing.Equal(raw) {
 					duplicate = true
 					break
 				}
@@ -4465,6 +4481,9 @@ func mongoMutationArrayPath(doc bson.D, path []string, values []bson.RawValue, u
 			return nil, false, err
 		}
 		array = append(array, value)
+		if unique {
+			existingValues = append(existingValues, raw)
+		}
 		changed = true
 	}
 	if !changed {

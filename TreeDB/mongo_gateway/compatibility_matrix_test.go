@@ -583,6 +583,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 						{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
 						{Key: "u", Value: bson.D{
 							{Key: "$set", Value: bson.D{{Key: "profile.name", Value: "ada"}}},
+							{Key: "$unset", Value: bson.D{{Key: "profile.old", Value: true}}},
 							{Key: "$inc", Value: bson.D{{Key: "profile.logins", Value: int32(1)}}},
 							{Key: "$push", Value: bson.D{{Key: "events", Value: "login"}}},
 							{Key: "$addToSet", Value: bson.D{{Key: "labels", Value: bson.D{{Key: "$each", Value: bson.A{"staff", "staff"}}}}}},
