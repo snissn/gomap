@@ -161,3 +161,39 @@ func TestMongoFilterUpdateSupportedLogicalFilters(t *testing.T) {
 		_ = db.Close()
 	}
 }
+
+func TestMongoFilterWritesNoMatchLeaveDocumentUnchanged(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "active", Value: false}}}}, {Key: "$db", Value: "app"}}))
+	update := serveCommand(t, server, 2, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "active", Value: true}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "picked", Value: true}}}}}}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, update)
+	assertInt32(t, update, "n", 0)
+	assertInt32(t, update, "nModified", 0)
+	deleted := serveCommand(t, server, 3, bson.D{{Key: "delete", Value: "users"}, {Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "active", Value: true}}}, {Key: "limit", Value: int32(1)}}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, deleted)
+	assertInt32(t, deleted, "n", 0)
+	fam := serveCommand(t, server, 4, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "active", Value: true}}}, {Key: "update", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "picked", Value: true}}}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, fam)
+	if bson.Raw(fam).Lookup("value").Type != bson.TypeNull {
+		t.Fatalf("findAndModify value=%s want null", fam)
+	}
+	lastError, ok := bson.Raw(fam).Lookup("lastErrorObject").DocumentOK()
+	if !ok {
+		t.Fatalf("findAndModify missing lastErrorObject: %s", fam)
+	}
+	if updated, ok := lastError.Lookup("updatedExisting").BooleanOK(); !ok || updated {
+		t.Fatalf("findAndModify updatedExisting=%v ok=%v want false", updated, ok)
+	}
+	stored := serveCommand(t, server, 5, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	doc := bson.Raw(stored).Lookup("cursor").Document().Lookup("firstBatch").Array().Index(0).Document()
+	if _, ok := doc.Lookup("picked").BooleanOK(); ok {
+		t.Fatalf("no-match writes mutated document: %s", stored)
+	}
+}
