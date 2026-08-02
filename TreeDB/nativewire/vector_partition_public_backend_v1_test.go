@@ -61,21 +61,30 @@ func (publicBackendLifecycleBuilderV1) BuildAndStageVectorPartitionGroupV1(_ con
 
 func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T) {
 	ctx := t.Context()
-	topology, base, _ := newVectorPartitionProductionTopologyTwoGroupTestV1(t)
-	defer topology.Close()
-	catalog := raftplacement.CatalogV1{Features: raftplacement.DefaultFeatureSet(), Groups: []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}}, {ID: "group-b", Members: []raftcluster.NodeID{"node-b"}}}, Placements: []raftplacement.CollectionPlacementV1{{Collection: raftplacement.CollectionRefV1{Database: base.Database, Catalog: base.Catalog, Collection: base.Collection}, GroupID: "group-a", Mode: raftplacement.PlacementModeCollectionV1}}}
+	catalog := raftplacement.CatalogV1{Features: raftplacement.DefaultFeatureSet(), Groups: []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}}, {ID: "group-b", Members: []raftcluster.NodeID{"node-b"}}}, Placements: []raftplacement.CollectionPlacementV1{{Collection: raftplacement.CollectionRefV1{Database: "db", Catalog: "default", Collection: "docs"}, GroupID: "group-a", Mode: raftplacement.PlacementModeCollectionV1}}}
 	catalog.Features.Required = append(catalog.Features.Required, raftcluster.RequiredFeature{Name: raftcluster.FeatureVectorPartitionLifecycle, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureVectorPartitionLifecycle]})
 	harness, err := raftplacement.OpenCatalogMetaLifecycleHarnessV1(ctx, raftplacement.CatalogMetaLifecycleHarnessOptionsV1{Catalog: catalog, Prefix: "public-vector"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer harness.Close()
+	servingAuthority, err := NewLinearizableCatalogVectorPartitionLifecycleAuthorityV1(harness.LeaderAuthority(), harness.LeaderFence())
+	if err != nil {
+		t.Fatal(err)
+	}
 	meta, ok := harness.LeaderAuthority().Status()
 	if !ok {
 		t.Fatal("leader authority unavailable")
 	}
-	identity := raftplacement.VectorPartitionLifecycleIdentityV1{Index: raftplacement.VectorPartitionLifecycleIndexIdentityV1{Collection: raftplacement.CollectionRefV1{Database: base.Database, Catalog: base.Catalog, Collection: base.Collection}, CollectionIncarnation: 1, IndexName: base.IndexName, IndexDefinitionDigest: base.IndexDefinitionDigest, IndexEpoch: 1, CatalogEpoch: meta.Epoch, CatalogDigest: meta.Digest}, Source: raftplacement.VectorPartitionLifecycleSourceIdentityV1{Generation: 11, Checksum: 22, SchemaHash: 33, RowCount: 2}, Generation: 7}
-	backend, err := NewVectorPartitionPublicBackendV1(VectorPartitionPublicBackendOptionsV1{Topology: topology, RequestBase: base, Lifecycle: harness.LifecycleCoordinator(), Identity: identity, RequiredGroups: []raftcluster.GroupID{"group-a", "group-b"}, Builder: publicBackendLifecycleBuilderV1{}, MutationEpoch: 1, RebuildRequest: func(context.Context) error { return nil }})
+	identity := raftplacement.VectorPartitionLifecycleIdentityV1{Index: raftplacement.VectorPartitionLifecycleIndexIdentityV1{Collection: raftplacement.CollectionRefV1{Database: "db", Catalog: "default", Collection: "docs"}, CollectionIncarnation: 1, IndexName: "embedding", IndexDefinitionDigest: vectorPartitionShardSearchDigestTestV1, IndexEpoch: 1, CatalogEpoch: meta.Epoch, CatalogDigest: meta.Digest}, Source: raftplacement.VectorPartitionLifecycleSourceIdentityV1{Generation: 11, Checksum: 22, SchemaHash: 33, RowCount: 2}, Generation: 7}
+	requiredGroups := []raftcluster.GroupID{"group-a", "group-b"}
+	readySetDigest, err := raftplacement.VectorPartitionLifecycleReadySetDigestV1(identity, requiredGroups, []raftplacement.VectorPartitionLifecycleGroupReadyV1{{GroupID: "group-a", AppliedIndex: 9, AssetSetDigest: fmt.Sprintf("%064x", len("group-a"))}, {GroupID: "group-b", AppliedIndex: 9, AssetSetDigest: fmt.Sprintf("%064x", len("group-b"))}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	topology, base, reads := newVectorPartitionProductionTopologyTwoGroupWithLifecycleReadySetTestV1(t, servingAuthority, readySetDigest)
+	defer topology.Close()
+	backend, err := NewVectorPartitionPublicBackendV1(VectorPartitionPublicBackendOptionsV1{Topology: topology, RequestBase: base, Lifecycle: harness.LifecycleCoordinator(), Identity: identity, RequiredGroups: requiredGroups, Builder: publicBackendLifecycleBuilderV1{}, MutationEpoch: 1, RebuildRequest: func(context.Context) error { return nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +104,16 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 	}
 	if status, err := service.Status(ctx, id); err != nil || !status.Active {
 		t.Fatalf("status = %#v, %v", status, err)
+	}
+	request := public.SearchRequestV1{Version: 1, Generation: id, Query: []float32{1, 0}, Metric: public.MetricCosineV1, TopK: base.TopK, Probes: base.PartitionProbes, EfSearch: base.EfSearch, Consistency: public.ConsistencyGenerationSnapshotV1, Limits: public.SearchLimitsV1{RequestBytes: base.RequestBytesLimit, CandidateBytes: base.CandidateBytesLimit, ResponseBytes: base.ResponseBytesLimit, MergeEntries: base.MergeEntriesLimit}}
+	response, err := service.Search(ctx, request)
+	if err != nil || len(response.Neighbors) == 0 {
+		t.Fatalf("search = %#v, %v", response, err)
+	}
+	for group, read := range reads {
+		if read.callCount() == 0 {
+			t.Fatalf("group %q did not produce read evidence", group)
+		}
 	}
 	if _, err := harness.LeaderFence().LinearizableCatalogMetaAppliedIndexV1(ctx); err != nil {
 		t.Fatal(err)
