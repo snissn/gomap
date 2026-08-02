@@ -86,10 +86,11 @@ func TestStandaloneServerOfficialGoDriverFindOneAndModify(t *testing.T) {
 		t.Fatalf("before=%v", before)
 	}
 	var after bson.M
-	if err := coll.FindOneAndUpdate(ctx, bson.D{{Key: "_id", Value: "u1"}}, bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "grace"}}}}, options.FindOneAndUpdate().SetReturnDocument(options.After)).Decode(&after); err != nil {
+	if err := coll.FindOneAndUpdate(ctx, bson.D{{Key: "_id", Value: "u1"}}, bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "grace"}, {Key: "profile.name", Value: "grace"}}}}, options.FindOneAndUpdate().SetReturnDocument(options.After)).Decode(&after); err != nil {
 		t.Fatalf("FindOneAndUpdate after: %v", err)
 	}
-	if after["name"] != "grace" {
+	afterRaw, err := bson.Marshal(after)
+	if err != nil || after["name"] != "grace" || bson.Raw(afterRaw).Lookup("profile", "name").StringValue() != "grace" {
 		t.Fatalf("after=%v", after)
 	}
 	var replacementBefore bson.M
@@ -107,10 +108,11 @@ func TestStandaloneServerOfficialGoDriverFindOneAndModify(t *testing.T) {
 		t.Fatalf("replaced=%v", replaced)
 	}
 	var upserted bson.M
-	if err := coll.FindOneAndUpdate(ctx, bson.D{{Key: "_id", Value: "u2"}}, bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "upsert"}}}}, options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After)).Decode(&upserted); err != nil {
+	if err := coll.FindOneAndUpdate(ctx, bson.D{{Key: "_id", Value: "u2"}}, bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "upsert"}}}, {Key: "$setOnInsert", Value: bson.D{{Key: "profile.created", Value: true}}}}, options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After)).Decode(&upserted); err != nil {
 		t.Fatalf("FindOneAndUpdate upsert: %v", err)
 	}
-	if upserted["_id"] != "u2" || upserted["name"] != "upsert" {
+	upsertedRaw, err := bson.Marshal(upserted)
+	if err != nil || upserted["_id"] != "u2" || upserted["name"] != "upsert" || !bson.Raw(upsertedRaw).Lookup("profile", "created").Boolean() {
 		t.Fatalf("upserted=%v", upserted)
 	}
 	var replacementUpsert bson.M
