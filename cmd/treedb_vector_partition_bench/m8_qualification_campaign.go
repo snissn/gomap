@@ -164,7 +164,7 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 		seenVariants := make(map[string]bool, len(m8RequiredVariantIDsV1))
 		for i := range matrix.Variants {
 			report := &matrix.Variants[i]
-			if err := validateM8ProductionReportV1(*report, m8ProductionResourceCapsV1{PersistentAssetBytes: 2 << 30, PeakRSSBytes: 4 << 30}); err != nil {
+			if err := validateM8ProductionReportV1(*report, m8QualificationResourceCapsV1()); err != nil {
 				return summary, fmt.Errorf("validate qualification child %s: %w", cleanPath, err)
 			}
 			derivedLedger := m8ProductionGateLedgerForReportV1(*report)
@@ -320,11 +320,20 @@ func m8QualificationImmutableTopologyV1(topology nativewire.VectorPartitionM8Pro
 	return topology
 }
 
+const (
+	m8QualificationPersistentAssetCapBytesV1 uint64 = 2 << 30
+	m8QualificationPeakRSSCapBytesV1         uint64 = 4 << 30
+)
+
+func m8QualificationResourceCapsV1() m8ProductionResourceCapsV1 {
+	return m8ProductionResourceCapsV1{PersistentAssetBytes: m8QualificationPersistentAssetCapBytesV1, PeakRSSBytes: m8QualificationPeakRSSCapBytesV1}
+}
+
 func m8QualificationResourcesV1(report m8ProductionReportV1, fixture fixtureManifest) bool {
 	resources := report.Resources
 	return report.GoVersion != "" && report.GOOS != "" && report.GOARCH != "" && report.LogicalCPUs > 0 && report.GOMAXPROCS > 0 && report.GoMemoryLimitBytes > 0 && report.Host.CPUModel != "" &&
-		resources.PeakRSSMeasured && resources.PeakRSSBytes > 0 && resources.PeakRSSCapBytes == 4<<30 && uint64(resources.PeakRSSBytes) <= resources.PeakRSSCapBytes &&
-		resources.PersistentAssetBytes > 0 && resources.PersistentAssetCap == 2<<30 && resources.PersistentAssetBytes <= resources.PersistentAssetCap &&
+		resources.PeakRSSMeasured && resources.PeakRSSBytes > 0 && resources.PeakRSSCapBytes == m8QualificationPeakRSSCapBytesV1 && uint64(resources.PeakRSSBytes) <= resources.PeakRSSCapBytes &&
+		resources.PersistentAssetBytes > 0 && resources.PersistentAssetCap == m8QualificationPersistentAssetCapBytesV1 && resources.PersistentAssetBytes <= resources.PersistentAssetCap &&
 		m8QualificationExactTruthCapV1(fixture) == report.Config.MaxExactTruthVisits
 }
 

@@ -141,6 +141,18 @@ func TestM3VariantDescriptorRejectsMissingBuildWorkCapsV1(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			d := testM3VariantDescriptorV1(t.TempDir())
 			mutate(&d)
+			var err error
+			d.BuildIdentityDigest, err = m3VariantBuildIdentityDigestV1(d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.OverlapPolicy, err = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{
+				Capacity: uint64(d.Capacity), Budget: uint64(d.OverlapRequested), Realized: uint64(d.OverlapRealized),
+				Unspent: uint64(d.OverlapRejected), BuildIdentityDigest: d.BuildIdentityDigest,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
 			if err := validateM3VariantDescriptorV1(d); err == nil {
 				t.Fatal("accepted missing build work cap")
 			}

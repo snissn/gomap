@@ -435,6 +435,7 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	report.Variant = variantEvidence
 	report.Config.Overlap = configOverlap
 	report.Resources.PeakRSSMeasured = true
+	testM8CompleteResourceLimitsV1(t, &report)
 	if err := testM8ValidateProductionReportV1(report); err == nil {
 		t.Fatal("accepted measured peak RSS without an explicit scope")
 	}
