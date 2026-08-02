@@ -44,6 +44,29 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	if summary.P4QPSMedian != 200 || summary.P16QPSMedian != 100 || summary.P4P95Min != 89 || summary.P4P95Median != 164 || summary.P4P95Max != 239 || summary.P16P95Min != 101 || summary.P16P95Median != 176 || summary.P16P95Max != 251 {
 		t.Fatalf("summary=%+v", summary)
 	}
+	t.Run("topology_variant_drift", func(t *testing.T) {
+		driftRoot := t.TempDir()
+		driftCampaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head}
+		for i := 0; i < 3; i++ {
+			matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
+			testM8QualificationExecutionIDsV1(&matrix, i)
+			matrix.Variants[1].Topology.Groups[0].LeaderID = "different-leader"
+			name := fmt.Sprintf("topology-drift-%d.json", i)
+			testM8QualificationProfilesV1(t, driftRoot, strings.TrimSuffix(name, ".json"), &matrix)
+			raw, err := json.Marshal(matrix)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(driftRoot, name), raw, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(raw)
+			driftCampaign.Runs = append(driftCampaign.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:])})
+		}
+		if _, err := m8ValidateQualificationCampaignV1(driftRoot, driftCampaign); err == nil || !strings.Contains(err.Error(), "changes retained topology") {
+			t.Fatalf("topology drift err=%v", err)
+		}
+	})
 	t.Run("edited_command", func(t *testing.T) {
 		matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
 		testM8QualificationExecutionIDsV1(&matrix, 3)

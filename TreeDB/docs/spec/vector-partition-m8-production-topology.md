@@ -158,10 +158,13 @@ generation, and quantized definitions); that digest is persisted in the
 manifest-covered balance policy. Matrix validation derives capacity,
 overlap budget/usage, partition loads, and persistent bytes from the opened
 manifest instead of trusting duplicated descriptor fields. All required
-variants must share source, fixture, graph-build digest, partition count, and
-the complete vector-index definition; graph variants must additionally share
-the full graph-assignment artifact and router-model digest. It also records the
-parsed graph and router scalar-work caps used to construct the retained asset.
+variants must share source, fixture, graph-build digest, partition count, the
+complete vector-index definition, router construction configuration, and the
+normalized serving topology. Graph variants must additionally share the full
+graph-assignment artifact. Final-membership changes may legitimately produce
+distinct router-model digests, which remain strictly bound and validated per
+descriptor rather than compared across variants. It also records the parsed
+graph and router scalar-work caps used to construct the retained asset.
 A retained database directory is provenance, not content identity,
 and the matrix content digest excludes that relocatable path.
 

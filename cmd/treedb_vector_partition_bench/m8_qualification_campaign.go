@@ -150,7 +150,7 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 	var p4P95, p16P95 []uint64
 	var summary m8QualificationCampaignSummaryV1
 	variantDescriptors := make(map[string]m3VariantDescriptorV1, len(m8RequiredVariantIDsV1))
-	topologies := make(map[string]nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1, len(m8RequiredVariantIDsV1))
+	var topology *nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1
 	truthArtifact := ""
 	var dataset fixtureManifest
 	var environment *m8QualificationEnvironmentV1
@@ -281,11 +281,11 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 				return summary, fmt.Errorf("qualification matrix %s changes retained M3 descriptor", run.Path)
 			}
 			variantDescriptors[report.Variant.VariantID] = *report.Variant
-			topology := m8QualificationImmutableTopologyV1(report.Topology)
-			if prior, ok := topologies[report.Variant.VariantID]; ok && !reflect.DeepEqual(prior, topology) {
+			currentTopology := m8QualificationImmutableTopologyV1(report.Topology)
+			if topology != nil && !reflect.DeepEqual(*topology, currentTopology) {
 				return summary, fmt.Errorf("qualification matrix %s changes retained topology", cleanPath)
 			}
-			topologies[report.Variant.VariantID] = topology
+			topology = &currentTopology
 			if truthArtifact != "" && truthArtifact != report.TruthCache.ArtifactSHA256 {
 				return summary, fmt.Errorf("qualification matrix %s changes truth identity", run.Path)
 			}
