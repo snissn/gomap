@@ -156,6 +156,15 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	if !exists {
+		for i, update := range updates {
+			item, err := parseMongoUpdateItem(i, update)
+			if err != nil {
+				return mongoUpdateParseCommandError(err)
+			}
+			if !item.bsonSetFieldsOK {
+				return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: cluster Mongo gateway currently supports only top-level BSON $set updateOne by _id", i))
+			}
+		}
 		if s.clusterRouteProviderConfigured() {
 			return mongoClusterMutationCommandError(mongoClusterMissingCollectionMetadataError())
 		}

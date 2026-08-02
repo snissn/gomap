@@ -2449,6 +2449,42 @@ func TestClusterSubmitterUpdateMissingCollectionReturnsZeroCounts(t *testing.T) 
 	}
 }
 
+func TestClusterSubmitterMissingCollectionRejectsUnsupportedUpdates(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	submitter := &mongoClusterFakeSubmitter{}
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	setMongoClusterTestSubmitter(server, submitter, 24)
+	for i, update := range []bson.D{
+		{{Key: "$inc", Value: bson.D{{Key: "age", Value: int32(1)}}}},
+		{{Key: "name", Value: "Grace"}},
+		{{Key: "$set", Value: bson.D{{Key: "name", Value: "Grace"}}}},
+	} {
+		item := bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: update}}
+		if i == 2 {
+			item = append(item, bson.E{Key: "upsert", Value: true})
+		}
+		response := serveCommand(t, server, int32(325824+i), bson.D{
+			{Key: "update", Value: "missing"},
+			{Key: "updates", Value: bson.A{item}},
+			{Key: "$db", Value: "app"},
+		})
+		assertCommandError(t, response, "BadValue")
+	}
+	if calls := submitter.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("submit calls=%d want 0", len(calls))
+	}
+	if _, err := server.Collections.OpenCollection("app.missing"); !errors.Is(err, collections.ErrCollectionNotFound) {
+		t.Fatalf("missing collection was created: %v", err)
+	}
+}
+
 func TestClusterSubmitterDeleteRoutesCommandEntry(t *testing.T) {
 	submitter := &mongoClusterFakeSubmitter{}
 	server := NewServer()
