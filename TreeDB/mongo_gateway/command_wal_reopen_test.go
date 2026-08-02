@@ -260,7 +260,7 @@ func TestFindAndModifyCommandWALValueLogPointersReopen(t *testing.T) {
 	server := NewServer()
 	server.Collections = collections.NewCollectionManager(backend)
 	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
-	assertOK(t, serveCommand(t, server, 401, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "payload", Value: string(make([]byte, 256))}, {Key: "n", Value: int32(1)}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 401, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "payload", Value: string(make([]byte, 256))}, {Key: "n", Value: int32(1)}}}}}, {Key: "upsert", Value: true}, {Key: "new", Value: true}, {Key: "$db", Value: "app"}}))
 	response := serveCommand(t, server, 402, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "new", Value: true}, {Key: "$db", Value: "app"}})
 	assertOK(t, response)
 	if n, ok := bson.Raw(response).Lookup("value").Document().Lookup("n").Int32OK(); !ok || n != 2 {

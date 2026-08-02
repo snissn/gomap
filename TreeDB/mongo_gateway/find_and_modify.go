@@ -76,6 +76,12 @@ func (s *Server) findAndModifyResponse(ctx context.Context, command wire.Documen
 		return mongoUpdateParseCommandError(err)
 	}
 	col, err := s.Collections.OpenCollection(name)
+	var releaseColdCollection func()
+	defer func() {
+		if releaseColdCollection != nil {
+			releaseColdCollection()
+		}
+	}()
 	if errors.Is(err, collections.ErrCollectionNotFound) {
 		if !upsert {
 			return marshalFindAndModifyResponse(nil, false, false, bson.RawValue{}, projection)
@@ -83,7 +89,7 @@ func (s *Server) findAndModifyResponse(ctx context.Context, command wire.Documen
 		if err := s.validateMongoMissingCollectionFirstUpsert([]mongoUpdateItem{item}); err != nil {
 			return mongoUpdateWriteCommandError(err)
 		}
-		col, err = s.openOrCreateCollection(name)
+		col, releaseColdCollection, err = s.openOrCreateCollectionForFirstWrite(name)
 	}
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())

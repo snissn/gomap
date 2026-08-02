@@ -3,7 +3,9 @@ package mongogateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -135,6 +137,53 @@ func TestStandaloneServerOfficialGoDriverFindOneAndModify(t *testing.T) {
 		if err := coll.FindOne(ctx, bson.D{{Key: "_id", Value: test.id}}).Decode(&value); err != nil || value["name"] != test.name {
 			t.Fatalf("default upsert %s persisted value=%v err=%v", test.id, value, err)
 		}
+	}
+}
+
+func TestStandaloneServerOfficialDriverConcurrentFirstWriteFindAndModifyUpserts(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), Profile: treedb.ProfileCommandWALDurable, DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}})
+	if err != nil {
+		t.Fatalf("open standalone: %v", err)
+	}
+	client, cancel, ln, serveErr := startStandaloneMongoClientForTest(t, standalone)
+	defer stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
+	const workers = 16
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	coll := client.Database("app").Collection("users")
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			var value bson.M
+			err := coll.FindOneAndUpdate(ctx, bson.D{{Key: "_id", Value: "u1"}}, bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}, options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After)).Decode(&value)
+			if err != nil {
+				errs <- err
+				return
+			}
+			if n, ok := value["n"].(int32); !ok || n < 1 || n > workers {
+				errs <- fmt.Errorf("returned value=%v", value)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelCtx()
+	var stored bson.M
+	if err := coll.FindOne(ctx, bson.D{{Key: "_id", Value: "u1"}}).Decode(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if n, ok := stored["n"].(int32); !ok || n != workers {
+		t.Fatalf("stored n=%v want %d", stored["n"], workers)
 	}
 }
 

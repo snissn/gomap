@@ -885,6 +885,12 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 	if err != nil && !missingCollection {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
+	var releaseColdCollection func()
+	defer func() {
+		if releaseColdCollection != nil {
+			releaseColdCollection()
+		}
+	}()
 	parsed := make([]mongoUpdateItem, 0, len(updates))
 	seenKeys := make(map[string]struct{}, len(updates))
 	hasDuplicateKey := false
@@ -901,7 +907,7 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 					if err := s.validateMongoMissingCollectionFirstUpsert(parsed); err != nil {
 						return mongoUpdateWriteCommandError(err)
 					}
-					col, err = s.openOrCreateCollection(name)
+					col, releaseColdCollection, err = s.openOrCreateCollectionForFirstWrite(name)
 					if err != nil {
 						return commandError(commandCodeBadValue, "BadValue", err.Error())
 					}
@@ -934,7 +940,7 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 		if err := s.validateMongoMissingCollectionFirstUpsert(parsed); err != nil {
 			return mongoUpdateWriteCommandError(err)
 		}
-		col, err = s.openOrCreateCollection(name)
+		col, releaseColdCollection, err = s.openOrCreateCollectionForFirstWrite(name)
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
@@ -3257,11 +3263,40 @@ func (s *Server) openOrCreateCollection(name string) (*collections.Collection, e
 	if err == nil {
 		return col, nil
 	}
+	if !errors.Is(err, collections.ErrCollectionNotFound) {
+		return nil, err
+	}
+	col, release, err := s.openOrCreateCollectionForFirstWrite(name)
+	if release != nil {
+		release()
+	}
+	return col, err
+}
+
+func (s *Server) openOrCreateCollectionForFirstWrite(name string) (*collections.Collection, func(), error) {
+	// ponytail: global cold-path lock; use per-namespace coordination only if
+	// concurrent collection creation becomes a measured bottleneck.
+	s.collectionCreateMu.Lock()
+	release := s.collectionCreateMu.Unlock
+	col, err := s.Collections.OpenCollection(name)
+	if err == nil {
+		release()
+		return col, nil, nil
+	} else if !errors.Is(err, collections.ErrCollectionNotFound) {
+		release()
+		return nil, nil, err
+	}
 	if _, createErr := s.Collections.CreateCollection(s.defaultCollectionMeta(name)); createErr != nil {
-		return nil, createErr
+		release()
+		return nil, nil, createErr
 	}
 	s.invalidateCollectionCache(name)
-	return s.Collections.OpenCollection(name)
+	col, err = s.Collections.OpenCollection(name)
+	if err != nil {
+		release()
+		return nil, nil, err
+	}
+	return col, release, nil
 }
 
 func (s *Server) defaultCollectionMeta(name string) *collections.CollectionMeta {
