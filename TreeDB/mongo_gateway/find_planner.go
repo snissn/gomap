@@ -1785,6 +1785,37 @@ func rawValuesEqual(left, right bson.RawValue) bool {
 		}
 		return compareRawValues(left, right) == 0
 	}
+	if left.Type != right.Type {
+		return false
+	}
+	switch left.Type {
+	case bson.TypeEmbeddedDocument:
+		leftElements, leftErr := left.Document().Elements()
+		rightElements, rightErr := right.Document().Elements()
+		if leftErr != nil || rightErr != nil || len(leftElements) != len(rightElements) {
+			return false
+		}
+		for i := range leftElements {
+			leftKey, leftErr := leftElements[i].KeyErr()
+			rightKey, rightErr := rightElements[i].KeyErr()
+			if leftErr != nil || rightErr != nil || leftKey != rightKey || !rawValuesEqual(leftElements[i].Value(), rightElements[i].Value()) {
+				return false
+			}
+		}
+		return true
+	case bson.TypeArray:
+		leftValues, leftErr := left.Array().Values()
+		rightValues, rightErr := right.Array().Values()
+		if leftErr != nil || rightErr != nil || len(leftValues) != len(rightValues) {
+			return false
+		}
+		for i := range leftValues {
+			if !rawValuesEqual(leftValues[i], rightValues[i]) {
+				return false
+			}
+		}
+		return true
+	}
 	return left.Equal(right)
 }
 

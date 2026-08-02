@@ -1605,6 +1605,20 @@ func TestParseMongoUpdateItemBSONOnlyPureSetSkipsGenericMutation(t *testing.T) {
 	}
 }
 
+func TestParseMongoUpdateItemRejectsPureSetOverTargetLimit(t *testing.T) {
+	fields := bson.D{}
+	for i := range mongoMutationMaxTargets + 1 {
+		fields = append(fields, bson.E{Key: fmt.Sprintf("f%d", i), Value: int32(i)})
+	}
+	_, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: fields}}},
+	}))
+	if err == nil {
+		t.Fatalf("accepted %d pure $set targets", mongoMutationMaxTargets+1)
+	}
+}
+
 func TestServerUpdateMissingCollectionExecutesEarlierUpsertBeforeParseError(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -6242,6 +6256,65 @@ func TestMongoMutationNestedOperators(t *testing.T) {
 	}
 	if !bson.Raw(updated).Lookup("empty").IsZero() {
 		t.Fatal("empty $each created an array")
+	}
+}
+
+func TestMongoMutationAddToSetUsesNestedNumericEquality(t *testing.T) {
+	decimalOne, err := bson.ParseDecimal128("1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := mustDocument(t, bson.D{
+		{Key: "items", Value: bson.A{bson.D{{Key: "n", Value: int32(1)}}}},
+		{Key: "arrays", Value: bson.A{bson.A{int32(1), bson.D{{Key: "n", Value: int32(1)}}}}},
+	})
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$addToSet", Value: bson.D{
+			{Key: "items", Value: bson.D{
+				{Key: "$each", Value: bson.A{
+					bson.D{{Key: "n", Value: int64(1)}},
+					bson.D{{Key: "n", Value: float64(1)}},
+					bson.D{{Key: "n", Value: decimalOne}},
+					bson.D{{Key: "n", Value: int32(2)}},
+				}},
+			}},
+			{Key: "arrays", Value: bson.D{
+				{Key: "$each", Value: bson.A{
+					bson.A{int64(1), bson.D{{Key: "n", Value: decimalOne}}},
+				}},
+			}},
+		}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, changed, err := applyMongoMutation(doc, mutation)
+	values, valuesErr := bson.Raw(updated).Lookup("items").Array().Values()
+	if err != nil || !changed || valuesErr != nil || len(values) != 2 {
+		t.Fatalf("nested numeric $addToSet changed=%v err=%v values=%v valuesErr=%v", changed, err, values, valuesErr)
+	}
+	arrays, arraysErr := bson.Raw(updated).Lookup("arrays").Array().Values()
+	if arraysErr != nil || len(arrays) != 1 {
+		t.Fatalf("nested numeric array $addToSet values=%v err=%v", arrays, arraysErr)
+	}
+}
+
+func TestMongoMutationAddToSetRejectsLargeComparisonBytesBeforeMutation(t *testing.T) {
+	payload := strings.Repeat("x", 512<<10)
+	values := bson.A{}
+	for i := range 9 {
+		values = append(values, bson.D{{Key: "payload", Value: payload + fmt.Sprintf("-%d", i)}})
+	}
+	doc := mustDocument(t, bson.D{{Key: "items", Value: bson.A{bson.D{{Key: "payload", Value: payload + "-existing"}}}}})
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: values}}}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || changed || !bson.Raw(doc).Lookup("marker").IsZero() {
+		t.Fatalf("large comparison changed=%v err=%v", changed, err)
 	}
 }
 

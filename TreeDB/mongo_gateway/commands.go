@@ -1063,6 +1063,9 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 	}
 	var mutation mongoMutation
 	pureSet := (setFieldsOK && len(setFields) != 0) || (bsonSetFieldsOK && len(bsonSetFields) != 0)
+	if pureSet && len(setFields) > mongoMutationMaxTargets {
+		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update exceeds %d target fields", index, mongoMutationMaxTargets)}
+	}
 	if !pureSet {
 		mutation, err = parseMongoMutation(updateDoc)
 		if err != nil {
@@ -3960,6 +3963,10 @@ const mongoMutationMaxTargets = 256
 // callback by comparing every candidate with an arbitrarily large stored array.
 const mongoMutationMaxAddToSetComparisons = 65536
 
+// Also bound the raw BSON value bytes examined by duplicate comparisons. This
+// applies before mutation, including when this modifier is combined with others.
+const mongoMutationMaxAddToSetComparisonBytes uint64 = 8 << 20
+
 // MongoDB limits update paths to 100 components; enforce it before recursive mutation.
 const mongoMutationMaxPathDepth = 100
 
@@ -4298,38 +4305,82 @@ func mongoMutationDecimalPathSegment(segment string) bool {
 
 func validateMongoMutationAddToSetBudget(doc bson.D, fields []mongoMutationArrayField) error {
 	remaining := mongoMutationMaxAddToSetComparisons
+	remainingBytes := mongoMutationMaxAddToSetComparisonBytes
 	for _, field := range fields {
-		existing := mongoMutationArrayPathLength(doc, strings.Split(field.name, "."))
+		existingValues, err := mongoMutationArrayPathValues(doc, strings.Split(field.name, "."))
+		if err != nil {
+			return err
+		}
+		existing := len(existingValues)
 		values := len(field.values)
 		candidateComparisons := values * (values - 1) / 2
 		if candidateComparisons > remaining || (existing != 0 && values > (remaining-candidateComparisons)/existing) {
 			return fmt.Errorf("Mongo gateway $addToSet exceeds %d duplicate comparisons", mongoMutationMaxAddToSetComparisons)
 		}
+		comparisonBytes, ok := mongoMutationAddToSetComparisonBytes(existingValues, field.values, remainingBytes)
+		if !ok {
+			return fmt.Errorf("Mongo gateway $addToSet exceeds %d comparison bytes", mongoMutationMaxAddToSetComparisonBytes)
+		}
 		remaining -= candidateComparisons + existing*values
+		remainingBytes -= comparisonBytes
 	}
 	return nil
 }
 
-func mongoMutationArrayPathLength(doc bson.D, path []string) int {
+func mongoMutationArrayPathValues(doc bson.D, path []string) ([]bson.RawValue, error) {
 	for index, segment := range path {
 		idx := mongoMutationPathIndex(doc, segment)
 		if idx < 0 {
-			return 0
+			return nil, nil
 		}
 		if index == len(path)-1 {
 			array, ok := doc[idx].Value.(bson.A)
 			if !ok {
-				return 0
+				return nil, nil
 			}
-			return len(array)
+			values := make([]bson.RawValue, len(array))
+			for i, value := range array {
+				raw, err := mongoMutationRaw(value)
+				if err != nil {
+					return nil, err
+				}
+				values[i] = raw
+			}
+			return values, nil
 		}
 		nested, ok := doc[idx].Value.(bson.D)
 		if !ok {
-			return 0
+			return nil, nil
 		}
 		doc = nested
 	}
-	return 0
+	return nil, nil
+}
+
+func mongoMutationAddToSetComparisonBytes(existing, candidates []bson.RawValue, limit uint64) (uint64, bool) {
+	if len(candidates) == 0 {
+		return 0, true
+	}
+	var existingBytes, candidateBytes uint64
+	for _, value := range existing {
+		existingBytes += uint64(len(value.Value) + 1)
+	}
+	for _, value := range candidates {
+		candidateBytes += uint64(len(value.Value) + 1)
+	}
+	candidateCount := uint64(len(candidates))
+	if existingBytes > limit/candidateCount {
+		return 0, false
+	}
+	used := candidateCount * existingBytes
+	multiplier := uint64(len(existing) + len(candidates) - 1)
+	if multiplier == 0 {
+		return used, true
+	}
+	if candidateBytes > (limit-used)/multiplier {
+		return 0, false
+	}
+	return used + multiplier*candidateBytes, true
 }
 
 func validateMongoMutationPathConflicts(paths map[string]struct{}) error {
