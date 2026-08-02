@@ -1147,7 +1147,11 @@ func testM8ValidateQualificationIndexV1(root string, index m8QualificationIndexV
 }
 
 func TestM8QualificationTruthCacheAnchorV1(t *testing.T) {
-	root, fixture := t.TempDir(), m8QualificationFixturesV1[0]
+	root, err := m8CanonicalPathV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := m8QualificationFixturesV1[0]
 	dir, evidence := testM8QualificationTruthCacheV1(t, root, fixture)
 	report := m8ProductionReportV1{Dataset: fixture, TruthCacheDirectory: dir, TruthCache: evidence, Config: m8ProductionConfigEvidenceV1{TopK: 10}, Variant: &m3VariantDescriptorV1{SourceRows: uint64(fixture.Vectors)}}
 	anchor := m8QualificationTruthCacheAnchorV1
