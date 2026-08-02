@@ -3286,10 +3286,13 @@ func (s *Server) openOrCreateCollectionForFirstWrite(name string) (*collections.
 	s.collectionCreateMu.Lock()
 	pending := &collectionFirstWritePending{name: name, done: make(chan struct{})}
 	s.collectionFirstWrite.Store(pending)
+	var releaseOnce sync.Once
 	release := func() {
-		s.collectionFirstWrite.Store(nil)
-		close(pending.done)
-		s.collectionCreateMu.Unlock()
+		releaseOnce.Do(func() {
+			s.collectionFirstWrite.CompareAndSwap(pending, nil)
+			close(pending.done)
+			s.collectionCreateMu.Unlock()
+		})
 	}
 	col, err := s.Collections.OpenCollection(name)
 	if err == nil {
