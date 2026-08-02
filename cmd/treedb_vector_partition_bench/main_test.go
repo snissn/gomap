@@ -59,6 +59,21 @@ func TestGenerateTruthCacheBoundedRoundTripV1(t *testing.T) {
 	if err != nil || got != digest || len(truth) != fixture.Queries {
 		t.Fatalf("truth round trip got=%q err=%v rows=%d", got, err, len(truth))
 	}
+	t.Run("explicit_zero_seed", func(t *testing.T) {
+		zeroDataset, zeroCache := t.TempDir(), t.TempDir()
+		if err := run([]string{"generate-fixture", "-out", zeroDataset, "-vectors", "3", "-queries", "2", "-dimensions", "2", "-seed", "0"}, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		zeroArgs := []string{"generate-truth-cache", "-dataset", zeroDataset, "-out", zeroCache, "-top-k", "2", "-seed", "0", "-max-vectors", "3", "-max-fixture-bytes", strconv.FormatInt(maxFixtureBytes, 10), "-max-exact-truth-visits", "6"}
+		if err := run(zeroArgs, io.Discard); err != nil {
+			t.Fatalf("generate seed-zero truth cache: %v", err)
+		}
+		withoutSeed := append([]string(nil), zeroArgs[:7]...)
+		withoutSeed = append(withoutSeed, zeroArgs[9:]...)
+		if err := run(withoutSeed, io.Discard); err == nil {
+			t.Fatal("accepted truth-cache generation without explicit seed")
+		}
+	})
 }
 
 func artifactBasenameForFixture(t *testing.T, dataset string, result runResult) string {

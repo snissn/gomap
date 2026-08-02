@@ -466,8 +466,15 @@ func runGenerateTruthCache(args []string, stdout io.Writer) error {
 	fs.IntVar(&capVectors, "max-vectors", maxVectors, "fixture vector cap")
 	fs.Int64Var(&capBytes, "max-fixture-bytes", maxFixtureBytes, "fixture byte cap")
 	fs.Int64Var(&capVisits, "max-exact-truth-visits", 0, "exact source-query visit cap")
-	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || dataset == "" || out == "" || topK < 1 || seed == 0 || capVisits < 1 || capVectors < 1 || capVectors > maxVectors || capBytes < 8 || capBytes > maxFixtureBytes {
-		return errors.New("generate-truth-cache requires dataset, out, positive top-k/seed/caps, and no positional arguments")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	seedSet := false
+	fs.Visit(func(f *flag.Flag) {
+		seedSet = seedSet || f.Name == "seed"
+	})
+	if fs.NArg() != 0 || dataset == "" || out == "" || topK < 1 || !seedSet || capVisits < 1 || capVectors < 1 || capVectors > maxVectors || capBytes < 8 || capBytes > maxFixtureBytes {
+		return errors.New("generate-truth-cache requires dataset, out, explicit seed, positive top-k/caps, and no positional arguments")
 	}
 	fixture, err := loadFixture(dataset)
 	if err != nil {
