@@ -930,6 +930,19 @@ func TestM8QualificationM3BuildCapsV1(t *testing.T) {
 		if !m8QualificationM3BuildCapsV1(variant, fixture) {
 			t.Fatalf("fixture=%d rejected expected config", fixture.Vectors)
 		}
+		oldDefault, err := parseConfig([]string{
+			"-stage", "overlap,partition_index", "-dataset", ".", "-out", ".", "-probes", "1", "-partitions", "16", "-seed", strconv.FormatInt(fixture.Seed, 10),
+			"-partition-max-distance-work", strconv.FormatInt(partitionConfig.MaxDistanceWork, 10), "-router-max-scalar-work", strconv.FormatInt(routerConfig.MaxScalarWork, 10),
+			"-m3-max-benchmark-visits", strconv.FormatInt(visits, 10),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		oldVariant := variant
+		oldVariant.PartitionConfig, oldVariant.RouterConfig = oldDefault.partition, oldDefault.routerConfig
+		if m8QualificationM3BuildCapsV1(oldVariant, fixture) {
+			t.Fatalf("fixture=%d accepted old default-1M descriptor config", fixture.Vectors)
+		}
 		variant.RouterMaxScalarWork++
 		if m8QualificationM3BuildCapsV1(variant, fixture) {
 			t.Fatalf("fixture=%d accepted wrong cap", fixture.Vectors)
@@ -1038,6 +1051,24 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 	for _, command := range []string{plan.Commands["m3_graph_disjoint"], plan.Commands["m3_graph_overlap"], plan.Commands["m3_stable_hash_disjoint"], plan.Commands["m8_matrix_repeats_full_ladder"]} {
 		if !strings.Contains(command, "-max-vectors <max-vectors>") || !strings.Contains(command, "-max-fixture-bytes <max-fixture-bytes>") {
 			t.Fatalf("plan command does not bind fixture admission caps: %q", command)
+		}
+	}
+	script, err := filepath.Abs(filepath.Join(root, "scripts", "treedb_kahip_partition.py"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, corpus := range plan.Corpora {
+		partition, router, visits, ok := m8QualificationM3BuildConfigV1(fixtureManifest{Vectors: corpus.Vectors, Seed: map[int]int64{100000: 4017, 250000: 4016}[corpus.Vectors]})
+		if !ok {
+			t.Fatalf("missing expected M3 config for %dk", corpus.Vectors)
+		}
+		replace := strings.NewReplacer("<campaign-root>", t.TempDir(), "<corpus>", corpus.ID, "<dataset>", t.TempDir(), "<graph-cap>", strconv.FormatInt(corpus.GraphCap, 10), "<router-cap>", strconv.FormatInt(corpus.RouterCap, 10), "<m3-cap>", strconv.FormatInt(corpus.M3Cap, 10), "<max-vectors>", strconv.Itoa(corpus.MaxVectors), "<max-fixture-bytes>", strconv.FormatInt(corpus.MaxFixtureBytes, 10), "<seed>", strconv.FormatInt(map[int]int64{100000: 4017, 250000: 4016}[corpus.Vectors], 10), "/mnt/fast4tb/gomap-4024-kahip-3.25/bin/python", os.Args[0], "scripts/treedb_kahip_partition.py", script)
+		for _, name := range []string{"m3_graph_disjoint", "m3_graph_overlap", "m3_stable_hash_disjoint"} {
+			args := strings.Fields(replace.Replace(plan.Commands[name]))
+			cfg, err := parseConfig(args[1:])
+			if err != nil || cfg.maxVectors != corpus.MaxVectors || cfg.maxBytes != corpus.MaxFixtureBytes || cfg.partition != partition || cfg.routerConfig != router || cfg.m3MaxBenchmarkVisits != visits {
+				t.Fatalf("%dk %s config err=%v cfg=%+v", corpus.Vectors, name, err, cfg)
+			}
 		}
 	}
 	if !strings.Contains(plan.Validation, "regular retained inputs below that root") || !strings.Contains(plan.Validation, "one benchmark executable SHA-256") || !strings.Contains(plan.Validation, "every campaign, M8 child, M8 matrix, and M3 descriptor must match it") {

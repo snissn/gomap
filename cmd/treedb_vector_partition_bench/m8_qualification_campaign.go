@@ -756,6 +756,7 @@ func m8QualificationM3BuildConfigV1(fixture fixtureManifest) (vectorpartition.Co
 		"-stage", "overlap,partition_index", "-dataset", ".", "-out", ".", "-probes", "1", "-partitions", "16", "-seed", strconv.FormatInt(fixture.Seed, 10),
 		"-partition-max-distance-work", strconv.FormatInt(cap, 10), "-router-max-scalar-work", strconv.FormatInt(cap, 10),
 		"-m3-max-benchmark-visits", strconv.FormatInt(visits, 10),
+		"-max-vectors", strconv.Itoa(fixture.Vectors), "-max-fixture-bytes", strconv.FormatInt(maxFixtureBytes, 10),
 	})
 	if err != nil {
 		return vectorpartition.Config{}, vectorpartition.RouterConfigV1{}, 0, false

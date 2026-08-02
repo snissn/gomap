@@ -65,7 +65,9 @@ Each retained M3 and M8 command also explicitly sets `-max-vectors` to the
 authoritative corpus size (100k or 250k) and `-max-fixture-bytes` to 4 GiB.
 Qualification re-applies the runner's fixture and pre-measurement work
 admission checks to those recorded values, rejecting omitted defaults as well
-as tighter or looser substitutions.
+as tighter or looser substitutions. The same per-corpus vector cap is parsed
+into the expected M3 partition and router configurations, including dependent
+edge limits, before retained descriptor comparison.
 
 ## Gates and disposition
 
