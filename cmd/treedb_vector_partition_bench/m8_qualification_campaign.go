@@ -419,10 +419,12 @@ type m8QualificationProfileModeV1 struct {
 	Scope  string
 }
 
-// m8QualificationImmutableTopologyV1 retains the complete topology identity
-// while omitting per-run listener addresses and request-progress counters.
+// m8QualificationImmutableTopologyV1 retains serving-layout identity while
+// omitting per-run listener addresses, request-progress counters, and the
+// asset-specific ready-set digest.
 // Evidence() already emits groups in canonical group-ID order.
 func m8QualificationImmutableTopologyV1(topology nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1) nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1 {
+	topology.ReadySetDigest = ""
 	topology.Groups = append([]nativewire.VectorPartitionM8ProductionGroupEvidenceV1(nil), topology.Groups...)
 	for i := range topology.Groups {
 		topology.Groups[i].Endpoint = ""

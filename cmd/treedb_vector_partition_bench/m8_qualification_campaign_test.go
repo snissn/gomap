@@ -45,24 +45,36 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		t.Fatalf("summary=%+v", summary)
 	}
 	t.Run("topology_variant_drift", func(t *testing.T) {
-		driftRoot := t.TempDir()
-		driftCampaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head}
-		for i := 0; i < 3; i++ {
-			matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
-			testM8QualificationExecutionIDsV1(&matrix, i)
-			matrix.Variants[1].Topology.Groups[0].LeaderID = "different-leader"
-			name := fmt.Sprintf("topology-drift-%d.json", i)
-			testM8QualificationProfilesV1(t, driftRoot, strings.TrimSuffix(name, ".json"), &matrix)
-			raw, err := json.Marshal(matrix)
-			if err != nil {
-				t.Fatal(err)
+		write := func(root string, leaderDrift bool) m8QualificationCampaignV1 {
+			campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head}
+			for i := 0; i < 3; i++ {
+				matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
+				testM8QualificationExecutionIDsV1(&matrix, i)
+				matrix.Variants[1].Topology.ReadySetDigest = strings.Repeat("e", 64)
+				testM8BindRouterSessionsVariantV1(&matrix.Variants[1].RouterSessions, *matrix.Variants[1].Variant, matrix.Variants[1].Topology.ReadySetDigest)
+				if leaderDrift {
+					matrix.Variants[1].Topology.Groups[0].LeaderID = "different-leader"
+				}
+				name := fmt.Sprintf("topology-drift-%d.json", i)
+				testM8QualificationProfilesV1(t, root, strings.TrimSuffix(name, ".json"), &matrix)
+				raw, err := json.Marshal(matrix)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(root, name), raw, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				digest := sha256.Sum256(raw)
+				campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:])})
 			}
-			if err := os.WriteFile(filepath.Join(driftRoot, name), raw, 0o644); err != nil {
-				t.Fatal(err)
-			}
-			digest := sha256.Sum256(raw)
-			driftCampaign.Runs = append(driftCampaign.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:])})
+			return campaign
 		}
+		matchingRoot := t.TempDir()
+		if _, err := m8ValidateQualificationCampaignV1(matchingRoot, write(matchingRoot, false)); err != nil {
+			t.Fatalf("rejected matching serving layouts with distinct variant ready sets: %v", err)
+		}
+		driftRoot := t.TempDir()
+		driftCampaign := write(driftRoot, true)
 		if _, err := m8ValidateQualificationCampaignV1(driftRoot, driftCampaign); err == nil || !strings.Contains(err.Error(), "changes retained topology") {
 			t.Fatalf("topology drift err=%v", err)
 		}
