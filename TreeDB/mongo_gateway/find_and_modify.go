@@ -146,29 +146,6 @@ func findAndModifyAfterInsertConflict(col *collections.Collection, item mongoUpd
 	return marshalFindAndModifyResponse(before, true, false, bson.RawValue{}, projection)
 }
 
-func validateFindAndModifyIDQuery(query wire.Document) error {
-	id, err := idEqualityFilterValue(query, "findAndModify")
-	if err != nil {
-		return err
-	}
-	if doc, ok := id.DocumentOK(); ok {
-		elements, err := doc.Elements()
-		if err != nil {
-			return err
-		}
-		for _, elem := range elements {
-			key, err := elem.KeyErr()
-			if err != nil {
-				return err
-			}
-			if len(key) > 0 && key[0] == '$' {
-				return errors.New("Mongo gateway findAndModify currently requires an _id equality filter")
-			}
-		}
-	}
-	return nil
-}
-
 func validateFindAndModifyCommand(command wire.Document) error {
 	elements, err := bson.Raw(command).Elements()
 	if err != nil {

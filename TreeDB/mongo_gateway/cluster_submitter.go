@@ -155,7 +155,7 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 			if item.upsert {
 				return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: cluster Mongo gateway currently does not support upsert", i))
 			}
-			if !item.bsonSetFieldsOK {
+			if !item.exactID || !item.bsonSetFieldsOK {
 				return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: cluster Mongo gateway currently supports only top-level BSON $set updateOne by _id", i))
 			}
 		}
@@ -185,7 +185,7 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 		if item.upsert {
 			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: cluster Mongo gateway currently does not support upsert", i))
 		}
-		if !item.bsonSetFieldsOK {
+		if !item.exactID || !item.bsonSetFieldsOK {
 			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: cluster Mongo gateway currently supports only top-level BSON $set updateOne by _id", i))
 		}
 		route := mongoClusterRouteRequest(db, collection, iwire.CommandUpdateBSONSet, "update_bson_set")
@@ -672,7 +672,7 @@ func mongoClusterUpdateBatchRouteRequest(db, collection string, updates []wire.D
 			return mongoClusterRouteRequest(db, collection, iwire.CommandUpdateBSONSet, "update_bson_set")
 		}
 		item, err := parseMongoUpdateItem(i, update)
-		if err != nil || !item.bsonSetFieldsOK {
+		if err != nil || !item.exactID || !item.bsonSetFieldsOK {
 			return mongoClusterRouteRequest(db, collection, iwire.CommandUpdateBSONSet, "update_bson_set")
 		}
 		ids = append(ids, key)
