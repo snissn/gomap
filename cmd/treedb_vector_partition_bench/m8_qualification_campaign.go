@@ -416,6 +416,20 @@ func m8QualificationRetainedVariantV1(root string, report m8ProductionReportV1) 
 	if err != nil || !info.IsDir() {
 		return errors.New("retained M3 database is not a directory")
 	}
+	if err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("retained M3 database contains symlink: %s", path)
+		}
+		if !entry.IsDir() && !entry.Type().IsRegular() {
+			return fmt.Errorf("retained M3 database contains non-regular entry: %s", path)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
 	assets, err := openM8ProductionExistingAssetSetV1(dir)
 	if err != nil {
 		return err

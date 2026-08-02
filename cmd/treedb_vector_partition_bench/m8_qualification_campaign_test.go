@@ -1209,6 +1209,18 @@ func TestM8QualificationRetainedInputBoundaryV1(t *testing.T) {
 			t.Fatalf("escaping retained database symlink err=%v", err)
 		}
 	})
+	t.Run("database_subtree_symlink", func(t *testing.T) {
+		root, report := newReport(t)
+		if err := os.MkdirAll(report.Variant.DatabaseDirectory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(t.TempDir(), filepath.Join(report.Variant.DatabaseDirectory, "column_assets")); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		if err := m8QualificationRetainedVariantV1(root, report); err == nil || !strings.Contains(err.Error(), "contains symlink") {
+			t.Fatalf("retained database subtree symlink err=%v", err)
+		}
+	})
 }
 
 func TestM8QualificationRejectsDirtyM3VariantV1(t *testing.T) {
