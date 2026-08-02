@@ -1019,7 +1019,8 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 		setFields = bsonSetFieldNames
 	}
 	var mutation mongoMutation
-	if !setFieldsOK {
+	pureSet := setFieldsOK || bsonSetFieldsOK
+	if !pureSet {
 		mutation, err = parseMongoMutation(updateDoc)
 		if err != nil {
 			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
@@ -1033,7 +1034,7 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 		bsonSetFields:   bsonSetFields,
 		setFieldsOK:     setFieldsOK,
 		bsonSetFieldsOK: bsonSetFieldsOK,
-		pureSet:         setFieldsOK,
+		pureSet:         pureSet,
 		mutation:        mutation,
 		upsert:          upsert,
 		id:              id,

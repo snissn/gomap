@@ -1484,6 +1484,19 @@ func TestParseMongoUpdateItemPureSetSkipsGenericMutation(t *testing.T) {
 	}
 }
 
+func TestParseMongoUpdateItemBSONOnlyPureSetSkipsGenericMutation(t *testing.T) {
+	item, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte{1}}}}}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !item.pureSet || item.setFieldsOK || !item.bsonSetFieldsOK || len(item.mutation.set) != 0 || len(item.mutation.inc) != 0 || len(item.mutation.unset) != 0 || item.mutation.replace != nil {
+		t.Fatalf("BSON-only pure set item=%+v", item)
+	}
+}
+
 func TestServerUpdateMissingCollectionExecutesEarlierUpsertBeforeParseError(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
