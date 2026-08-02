@@ -188,7 +188,7 @@ func m3WriteVariantDescriptorV1(dir string, descriptor m3VariantDescriptorV1) er
 
 func m3ReadVariantDescriptorV1(dir string) (m3VariantDescriptorV1, error) {
 	path := filepath.Join(dir, m3VariantDescriptorFileV1)
-	raw, err := os.ReadFile(path)
+	raw, err := readBoundedRegularFileV1(path, m3VariantDescriptorMaxBytesV1)
 	if err != nil {
 		return m3VariantDescriptorV1{}, fmt.Errorf("read M3 variant descriptor: %w", err)
 	}

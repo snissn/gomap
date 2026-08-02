@@ -92,7 +92,7 @@ func runValidateQualification(args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("resolve qualification index: %w", err)
 	}
-	raw, err := m8ReadBoundedRegularFileV1(index, m8QualificationIndexMaxBytesV1)
+	raw, err := readBoundedRegularFileV1(index, m8QualificationIndexMaxBytesV1)
 	if err != nil {
 		return fmt.Errorf("read qualification index: %w", err)
 	}
@@ -224,7 +224,7 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return summary, errors.New("qualification campaign artifact escapes root")
 		}
-		raw, err := m8ReadBoundedRegularFileV1(resolvedPath, m8QualificationMatrixMaxBytesV1)
+		raw, err := readBoundedRegularFileV1(resolvedPath, m8QualificationMatrixMaxBytesV1)
 		if err != nil {
 			return summary, err
 		}
@@ -866,9 +866,9 @@ const (
 	m8QualificationTranscriptMaxBytesV1             = 1 << 20
 )
 
-// m8ReadBoundedRegularFileV1 retains bounded JSON evidence without trusting
-// a pre-allocation read of a caller-controlled regular file.
-func m8ReadBoundedRegularFileV1(path string, maxBytes int64) ([]byte, error) {
+// readBoundedRegularFileV1 reads a regular file without trusting a
+// pre-allocation read of a caller-controlled path.
+func readBoundedRegularFileV1(path string, maxBytes int64) ([]byte, error) {
 	if maxBytes <= 0 {
 		return nil, errors.New("invalid bounded file byte cap")
 	}

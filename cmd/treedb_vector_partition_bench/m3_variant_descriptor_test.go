@@ -55,6 +55,20 @@ func TestM3VariantDescriptorRoundTripAndImmutableCreateV1(t *testing.T) {
 	}
 }
 
+func TestM3VariantDescriptorReadRejectsOversizedFileBeforeDecodeV1(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, m3VariantDescriptorFileV1)
+	if err := os.WriteFile(path, []byte{'{'}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(path, m3VariantDescriptorMaxBytesV1+1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m3ReadVariantDescriptorV1(dir); err == nil || !strings.Contains(err.Error(), "invalid byte length") {
+		t.Fatalf("oversized descriptor error=%v", err)
+	}
+}
+
 func TestM3GraphBuildDigestExcludesAssignmentV1(t *testing.T) {
 	hash := strings.Repeat("a", 64)
 	artifact := vectorpartition.Artifact{
