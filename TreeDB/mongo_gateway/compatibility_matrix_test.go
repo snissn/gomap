@@ -191,6 +191,22 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 		},
 		{
 			category: "query",
+			feature:  "top-level $or expressions",
+			status:   "supported subset",
+			probe: func(t *testing.T, server *Server) {
+				resp := serveCommand(t, server, 61, bson.D{
+					{Key: "find", Value: "users"},
+					{Key: "filter", Value: bson.D{{Key: "$or", Value: bson.A{
+						bson.D{{Key: "city", Value: "hnl"}},
+						bson.D{{Key: "age", Value: bson.D{{Key: "$gt", Value: int64(40)}}}},
+					}}}},
+					{Key: "$db", Value: "app"},
+				})
+				assertBatchIDs(t, cursorFirstBatch(t, resp), []string{"u1", "u2"})
+			},
+		},
+		{
+			category: "query",
 			feature:  "projection, sort, skip, and limit",
 			status:   "supported subset",
 			probe: func(t *testing.T, server *Server) {
@@ -436,19 +452,6 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 				if subtype != 0 || !bytes.Equal(payload, []byte{1, 2, 3}) {
 					t.Fatalf("payload subtype/data=%#x/%v want 0/[1 2 3]", subtype, payload)
 				}
-			},
-		},
-		{
-			category: "query gap",
-			feature:  "$or",
-			status:   "rejected",
-			probe: func(t *testing.T, server *Server) {
-				resp := serveCommand(t, server, 17, bson.D{
-					{Key: "find", Value: "users"},
-					{Key: "filter", Value: bson.D{{Key: "$or", Value: bson.A{bson.D{{Key: "city", Value: "hnl"}}}}}},
-					{Key: "$db", Value: "app"},
-				})
-				assertCommandError(t, resp, "BadValue")
 			},
 		},
 		{

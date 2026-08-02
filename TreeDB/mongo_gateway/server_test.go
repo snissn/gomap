@@ -4964,6 +4964,89 @@ func TestServerFindCapsIndexedCandidates(t *testing.T) {
 	assertCommandError(t, tooMany, "BadValue")
 }
 
+func TestServerFindTopLevelOrAcrossDocumentFormats(t *testing.T) {
+	for _, format := range []collections.DocumentFormat{collections.DocumentFormatBSON, collections.DocumentFormatJSON, collections.DocumentFormatTemplateV1} {
+		t.Run(string(format), func(t *testing.T) {
+			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatalf("open db: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+			server := NewServer()
+			server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: format}
+			server.Collections = collections.NewCollectionManager(db)
+			assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{
+				bson.D{{Key: "_id", Value: "both"}, {Key: "active", Value: true}, {Key: "city", Value: "hnl"}, {Key: "age", Value: int64(45)}},
+				bson.D{{Key: "_id", Value: "city"}, {Key: "active", Value: true}, {Key: "city", Value: "hnl"}, {Key: "age", Value: int64(30)}},
+				bson.D{{Key: "_id", Value: "age"}, {Key: "active", Value: true}, {Key: "city", Value: "lax"}, {Key: "age", Value: int64(45)}},
+				bson.D{{Key: "_id", Value: "inactive"}, {Key: "active", Value: false}, {Key: "city", Value: "hnl"}, {Key: "age", Value: int64(45)}},
+			}}, {Key: "$db", Value: "app"}}))
+			assertOK(t, serveCommand(t, server, 11, bson.D{{Key: "createIndexes", Value: "users"}, {Key: "indexes", Value: bson.A{bson.D{
+				{Key: "key", Value: bson.D{{Key: "age", Value: int32(1)}}}, {Key: "name", Value: "age_1"}, {Key: "treedbValueType", Value: "int64"},
+			}}}, {Key: "$db", Value: "app"}}))
+			response := serveCommand(t, server, 2, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{
+				{Key: "active", Value: true},
+				{Key: "$or", Value: bson.A{
+					bson.D{{Key: "city", Value: "hnl"}},
+					bson.D{{Key: "$and", Value: bson.A{bson.D{{Key: "age", Value: bson.D{{Key: "$gt", Value: int64(40)}}}}}}},
+				}},
+			}}, {Key: "sort", Value: bson.D{{Key: "_id", Value: int32(1)}}}, {Key: "$db", Value: "app"}})
+			assertBatchIDs(t, cursorFirstBatch(t, response), []string{"age", "both", "city"})
+			byID := serveCommand(t, server, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{
+				{Key: "_id", Value: "both"}, {Key: "$or", Value: bson.A{bson.D{{Key: "city", Value: "missing"}}}},
+			}}, {Key: "projection", Value: bson.D{{Key: "_id", Value: int32(1)}}}, {Key: "$db", Value: "app"}})
+			assertBatchIDs(t, cursorFirstBatch(t, byID), nil)
+			rangeLimit := serveCommand(t, server, 4, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{
+				{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(0)}}},
+				{Key: "$or", Value: bson.A{bson.D{{Key: "city", Value: "missing"}}}},
+			}}, {Key: "limit", Value: int32(1)}, {Key: "$db", Value: "app"}})
+			assertBatchIDs(t, cursorFirstBatch(t, rangeLimit), nil)
+		})
+	}
+}
+
+func TestServerFindTopLevelOrRejectsMalformedAndRespectsScanCap(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	server := NewServer()
+	server.MaxFindScanDocuments = 1
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "one"}, {Key: "city", Value: "lax"}},
+		bson.D{{Key: "_id", Value: "two"}, {Key: "city", Value: "hnl"}},
+	}}, {Key: "$db", Value: "app"}}))
+	for _, filter := range []bson.D{
+		{{Key: "$or", Value: bson.A{}}},
+		{{Key: "$or", Value: bson.A{"not-a-document"}}},
+		{{Key: "$or", Value: bson.A{bson.D{{Key: "city", Value: bson.D{{Key: "$regex", Value: "hnl"}}}}}}},
+	} {
+		assertCommandError(t, serveCommand(t, server, 2, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: filter}, {Key: "$db", Value: "app"}}), "BadValue")
+	}
+	assertCommandError(t, serveCommand(t, server, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "$or", Value: bson.A{bson.D{{Key: "city", Value: "hnl"}}}}}}, {Key: "$db", Value: "app"}}), "BadValue")
+}
+
+func BenchmarkDocumentMatchesPlanTopLevelOr(b *testing.B) {
+	plan, err := parseFindPlan(nil, mustDocument(b, bson.D{{Key: "active", Value: true}, {Key: "$or", Value: bson.A{
+		bson.D{{Key: "city", Value: "hnl"}},
+		bson.D{{Key: "age", Value: bson.D{{Key: "$gt", Value: int64(40)}}}},
+	}}}))
+	if err != nil {
+		b.Fatalf("parse plan: %v", err)
+	}
+	doc := mustDocument(b, bson.D{{Key: "_id", Value: "u1"}, {Key: "active", Value: true}, {Key: "city", Value: "hnl"}, {Key: "age", Value: int64(45)}})
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		match, err := documentMatchesPlan(doc, plan)
+		if err != nil || !match {
+			b.Fatalf("match=%v err=%v", match, err)
+		}
+	}
+}
+
 func TestServerFindUnindexedLimitStopsBeforeScanCap(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

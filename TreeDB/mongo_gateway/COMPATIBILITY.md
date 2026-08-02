@@ -52,6 +52,7 @@ block drifts from the executable matrix rows.
 | crud | find by _id equality | supported |
 | query | indexed equality and range predicates | supported subset |
 | query | $in on indexed scalar fields | supported subset |
+| query | top-level $or expressions | supported subset |
 | query | projection, sort, skip, and limit | supported subset |
 | cursor | getMore and killCursors | supported |
 | read concern | local/available readConcern maps to local_stale | supported subset |
@@ -64,7 +65,6 @@ block drifts from the executable matrix rows.
 | session | logical session handshake and endSessions | supported subset |
 | metadata | createIndexes, listIndexes, and dropIndexes | supported subset |
 | document | native BSON storage mode | supported subset |
-| query gap | $or | rejected |
 | query gap | dotted projection | rejected |
 | update gap | upsert | rejected |
 | update gap | multi update | rejected |
@@ -215,7 +215,8 @@ implemented.
 | Indexed scalar `$in` | `supported subset` | `TestMongoCompatibilityMatrix` | Null/missing has special scan behavior. |
 | Indexed scalar ranges `$gt`, `$gte`, `$lt`, `$lte` | `supported subset` | `TestMongoCompatibilityMatrix` | Range behavior is typed by `treedbValueType`. |
 | Top-level `$and` | `supported subset` | `TestMongoCompatibilityMatrix` | Planner flattens supported subexpressions only. |
-| Top-level `$or`, `$nor`, `$not` | `rejected` / `not implemented` | `TestMongoCompatibilityMatrix` covers `$or` rejection | Needs explicit planner semantics. |
+| Top-level `$or` | `supported subset` | `TestMongoCompatibilityMatrix`, direct-wire and official-driver `$or` tests | One or more document branches using equality, range, `$in`, and `$and`; sibling predicates are ANDed. `$or` uses the bounded scan fallback; no index union. |
+| `$nor`, `$not` | `not implemented` | Unsupported operators reject | Needs explicit planner semantics. |
 | Regex/text/geospatial predicates | `not implemented` | Unsupported operators reject or command is absent | Out of MVP scope. |
 | Dotted predicates into nested objects/arrays | `supported subset` | dotted predicate tests | Projection and sort do not support dotted fields. |
 | Projection include/exclude top-level fields | `supported subset` | `TestMongoCompatibilityMatrix` | Cannot mix include/exclude except `_id`; dotted projection rejected. |

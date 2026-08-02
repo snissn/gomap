@@ -96,6 +96,28 @@ func TestServerOfficialGoDriverBasicCRUD(t *testing.T) {
 	if got["age"] != int64(37) {
 		t.Fatalf("decoded age=%v want 37", got["age"])
 	}
+	if _, err := coll.InsertMany(opCtx, []any{
+		bson.D{{Key: "_id", Value: "or-city"}, {Key: "active", Value: true}, {Key: "city", Value: "hnl"}, {Key: "age", Value: int64(30)}},
+		bson.D{{Key: "_id", Value: "or-age"}, {Key: "active", Value: true}, {Key: "city", Value: "lax"}, {Key: "age", Value: int64(45)}},
+		bson.D{{Key: "_id", Value: "or-inactive"}, {Key: "active", Value: false}, {Key: "city", Value: "hnl"}, {Key: "age", Value: int64(45)}},
+	}); err != nil {
+		t.Fatalf("driver insert many for $or: %v", err)
+	}
+	cursor, err := coll.Find(opCtx, bson.D{{Key: "active", Value: true}, {Key: "$or", Value: bson.A{
+		bson.D{{Key: "city", Value: "hnl"}},
+		bson.D{{Key: "age", Value: bson.D{{Key: "$gt", Value: int64(40)}}}},
+	}}})
+	if err != nil {
+		t.Fatalf("driver find $or: %v", err)
+	}
+	defer func() { _ = cursor.Close(opCtx) }()
+	var orDocs []bson.M
+	if err := cursor.All(opCtx, &orDocs); err != nil {
+		t.Fatalf("driver decode $or: %v", err)
+	}
+	if len(orDocs) != 2 {
+		t.Fatalf("driver $or documents=%d want 2", len(orDocs))
+	}
 
 	updateResult, err := coll.UpdateOne(opCtx,
 		bson.D{{Key: "_id", Value: id}},

@@ -41,6 +41,7 @@ type findSort struct {
 
 type findPlan struct {
 	predicates []findPredicate
+	orBranches [][]findPredicate
 	sort       findSort
 	skip       int32
 	limit      int32
@@ -53,7 +54,7 @@ type findResultSet struct {
 }
 
 func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error) {
-	predicates, err := parseFindPredicates(filter)
+	predicates, orBranches, err := parseFindFilter(filter)
 	if err != nil {
 		return findPlan{}, err
 	}
@@ -75,6 +76,7 @@ func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error
 	}
 	return findPlan{
 		predicates: predicates,
+		orBranches: orBranches,
 		sort:       sortSpec,
 		skip:       skip,
 		limit:      limit,
@@ -111,7 +113,7 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 	}
 	filtered := make([]wire.Document, 0, len(docs))
 	for _, doc := range docs {
-		match, err := documentMatchesPredicates(doc, plan.predicates)
+		match, err := documentMatchesPlan(doc, plan)
 		if err != nil {
 			return findResultSet{}, err
 		}
@@ -215,7 +217,7 @@ func (s *Server) findPureIndexedRangeLimitDocuments(col *collections.Collection,
 }
 
 func pureIndexedRangeLimitPlan(meta collections.CollectionMeta, plan findPlan, maxDocuments int) (collections.IndexDefinition, collections.IndexRangeOptions, int, bool, bool, error) {
-	if plan.limit <= 0 || plan.skip != 0 || plan.sort.field != "" || len(plan.predicates) != 1 {
+	if len(plan.orBranches) != 0 || plan.limit <= 0 || plan.skip != 0 || plan.sort.field != "" || len(plan.predicates) != 1 {
 		return collections.IndexDefinition{}, collections.IndexRangeOptions{}, 0, false, false, nil
 	}
 	if int64(plan.limit) > int64(maxInt) {
@@ -248,6 +250,24 @@ func pureIndexedRangeLimitPlan(meta collections.CollectionMeta, plan findPlan, m
 func (s *Server) findCandidateDocuments(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan) ([]wire.Document, error) {
 	meta := col.MetaView()
 	maxDocuments := s.maxFindScanDocuments()
+	if len(plan.orBranches) != 0 {
+		records, truncated, err := col.ScanDocuments(maxDocuments)
+		if err != nil {
+			return nil, err
+		}
+		if truncated {
+			return nil, fmt.Errorf("Mongo gateway find requires a bounded scan and exceeded %d documents", maxDocuments)
+		}
+		out := make([]wire.Document, 0, len(records))
+		for _, record := range records {
+			doc, err := storedDocumentToBSON(col, materializer, record.Document)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, doc)
+		}
+		return out, nil
+	}
 	var primaryDocs []wire.Document
 	primarySet := false
 	predicates := plan.predicates
@@ -292,7 +312,7 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, materialize
 }
 
 func (s *Server) findUnsortedScanDocuments(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan) ([]wire.Document, bool, error) {
-	if plan.sort.field != "" || findPlanHasDirectCandidate(col.MetaView(), plan.predicates) {
+	if plan.sort.field != "" || (len(plan.orBranches) == 0 && findPlanHasDirectCandidate(col.MetaView(), plan.predicates)) {
 		return nil, false, nil
 	}
 	maxDocuments := s.maxFindScanDocuments()
@@ -307,12 +327,12 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, material
 			return true, nil
 		}
 		var doc wire.Document
-		if !ok {
+		if !ok || len(plan.orBranches) > 0 {
 			doc, err = storedDocumentToBSON(col, materializer, record.Document)
 			if err != nil {
 				return false, err
 			}
-			match, err = documentMatchesPredicates(doc, plan.predicates)
+			match, err = documentMatchesPlan(doc, plan)
 			if err != nil {
 				return false, err
 			}
@@ -324,7 +344,7 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, material
 			matched++
 			return true, nil
 		}
-		if ok {
+		if ok && len(plan.orBranches) == 0 {
 			doc, err = storedDocumentToBSON(col, materializer, record.Document)
 			if err != nil {
 				return false, err
@@ -713,7 +733,7 @@ func primaryCandidatePredicate(predicates []findPredicate) (findPredicate, bool)
 }
 
 func simplePrimaryEqualityFindValue(plan findPlan) (bson.RawValue, bool) {
-	if plan.sort.field != "" || plan.skip != 0 || plan.limit > 1 {
+	if len(plan.orBranches) != 0 || plan.sort.field != "" || plan.skip != 0 || plan.limit > 1 {
 		return bson.RawValue{}, false
 	}
 	if len(plan.predicates) != 1 {
@@ -1090,10 +1110,50 @@ func documentsForIndexedRange(col *collections.Collection, materializer *collect
 }
 
 func parseFindPredicates(filter wire.Document) ([]findPredicate, error) {
+	predicates, _, err := parseFindFilter(filter)
+	return predicates, err
+}
+
+func parseFindFilter(filter wire.Document) ([]findPredicate, [][]findPredicate, error) {
 	if filter == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
-	return parseFindPredicateDocument(filter)
+	elements, err := bson.Raw(filter).Elements()
+	if err != nil {
+		return nil, nil, err
+	}
+	var predicates []findPredicate
+	var orBranches [][]findPredicate
+	for _, elem := range elements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			return nil, nil, err
+		}
+		if key == "$or" {
+			if orBranches != nil {
+				return nil, nil, errors.New("Mongo gateway find supports only one top-level $or")
+			}
+			orBranches, err = parseOrPredicates(elem.Value())
+			if err != nil {
+				return nil, nil, err
+			}
+			continue
+		}
+		if key == "$and" {
+			parsed, err := parseAndPredicates(elem.Value())
+			if err != nil {
+				return nil, nil, err
+			}
+			predicates = append(predicates, parsed...)
+			continue
+		}
+		parsed, err := parseFieldPredicate(key, elem.Value())
+		if err != nil {
+			return nil, nil, err
+		}
+		predicates = append(predicates, parsed...)
+	}
+	return predicates, orBranches, nil
 }
 
 func parseFindPredicateDocument(doc wire.Document) ([]findPredicate, error) {
@@ -1150,6 +1210,33 @@ func parseAndPredicates(value bson.RawValue) ([]findPredicate, error) {
 		out = append(out, preds...)
 	}
 	return out, nil
+}
+
+func parseOrPredicates(value bson.RawValue) ([][]findPredicate, error) {
+	array, ok := value.ArrayOK()
+	if !ok {
+		return nil, errors.New("Mongo gateway $or must be an array")
+	}
+	values, err := array.Values()
+	if err != nil {
+		return nil, err
+	}
+	if len(values) == 0 {
+		return nil, errors.New("Mongo gateway $or must contain at least one expression")
+	}
+	branches := make([][]findPredicate, 0, len(values))
+	for i, value := range values {
+		doc, ok := value.DocumentOK()
+		if !ok {
+			return nil, fmt.Errorf("Mongo gateway $or[%d] must be a document", i)
+		}
+		predicates, err := parseFindPredicateDocument(wire.Document(doc))
+		if err != nil {
+			return nil, err
+		}
+		branches = append(branches, predicates)
+	}
+	return branches, nil
 }
 
 func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, error) {
@@ -1265,6 +1352,23 @@ func documentMatchesPredicates(doc wire.Document, predicates []findPredicate) (b
 		}
 	}
 	return true, nil
+}
+
+func documentMatchesPlan(doc wire.Document, plan findPlan) (bool, error) {
+	match, err := documentMatchesPredicates(doc, plan.predicates)
+	if err != nil || !match || len(plan.orBranches) == 0 {
+		return match, err
+	}
+	for _, branch := range plan.orBranches {
+		match, err := documentMatchesPredicates(doc, branch)
+		if err != nil {
+			return false, err
+		}
+		if match {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func missingValueMatchesPredicate(pred findPredicate) bool {
