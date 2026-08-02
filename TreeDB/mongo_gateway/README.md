@@ -41,8 +41,11 @@ mongodb://127.0.0.1:27017/?directConnection=true
 
 The gateway implements an intentionally narrow command subset around hello/ping,
 insert, find/getMore/killCursors, update, delete, and collection/index metadata.
-It does not provide authentication, replica set behavior, sharding, sessions,
-transactions, change streams, aggregation, or full MongoDB compatibility.
+It provides minimal logical-session compatibility (`logicalSessionTimeoutMinutes`,
+`lsid`, and `endSessions`) for driver interoperability, but not transactions,
+causal consistency, or other session semantics. It also does not provide
+authentication, replica set behavior, sharding, change streams, aggregation, or
+full MongoDB compatibility.
 
 Cluster submitter mode does not turn this gateway into a sharded Mongo server.
 For token/ring placement, exact `_id` equality finds are mapped to one catalog
