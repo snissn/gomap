@@ -3280,17 +3280,33 @@ func (s *Server) openOrCreateCollection(name string) (*collections.Collection, e
 }
 
 func (s *Server) openOrCreateCollectionForFirstWrite(name string) (*collections.Collection, func(), error) {
-	// CollectionManager schema creation remains globally serialized. Publishing
-	// a namespace-specific completion signal lets existing callers wait for the
-	// observed first write without inheriting a later namespace's cold latency.
+	// Register every caller that observed this namespace as missing, then
+	// serialize only those callers through their first mutation. CollectionManager
+	// still owns any global schema coordination needed by CreateCollection.
 	s.collectionCreateMu.Lock()
-	pending := &collectionFirstWritePending{name: name, done: make(chan struct{})}
-	s.collectionFirstWrite.Store(pending)
+	value, loaded := s.collectionFirstWrites.Load(name)
+	var pending *collectionFirstWritePending
+	if loaded {
+		pending = value.(*collectionFirstWritePending)
+	} else {
+		pending = &collectionFirstWritePending{name: name, done: make(chan struct{})}
+		s.collectionFirstWrites.Store(name, pending)
+		s.collectionFirstWriteCount.Add(1)
+	}
+	pending.coldRefs++
+	s.collectionCreateMu.Unlock()
+	pending.mutationMu.Lock()
 	var releaseOnce sync.Once
 	release := func() {
 		releaseOnce.Do(func() {
-			s.collectionFirstWrite.CompareAndSwap(pending, nil)
-			close(pending.done)
+			pending.mutationMu.Unlock()
+			s.collectionCreateMu.Lock()
+			pending.coldRefs--
+			if pending.coldRefs == 0 {
+				s.collectionFirstWrites.CompareAndDelete(name, pending)
+				s.collectionFirstWriteCount.Add(-1)
+				close(pending.done)
+			}
 			s.collectionCreateMu.Unlock()
 		})
 	}
@@ -3315,7 +3331,7 @@ func (s *Server) openOrCreateCollectionForFirstWrite(name string) (*collections.
 		return nil, nil, err
 	}
 	if s.firstWriteAfterCreateHook != nil {
-		s.firstWriteAfterCreateHook()
+		s.firstWriteAfterCreateHook(name)
 	}
 	return col, release, nil
 }
@@ -3325,15 +3341,19 @@ func (s *Server) openCollectionForMutation(name string) (*collections.Collection
 	if err != nil {
 		return col, err
 	}
+	if s.collectionFirstWriteCount.Load() == 0 {
+		return col, nil
+	}
 	waited := false
 	for {
-		pending := s.collectionFirstWrite.Load()
-		if pending == nil || pending.name != name {
+		value, ok := s.collectionFirstWrites.Load(name)
+		if !ok {
 			if waited {
 				return s.Collections.OpenCollection(name)
 			}
 			return col, nil
 		}
+		pending := value.(*collectionFirstWritePending)
 		if s.firstWriteBeforeWaitHook != nil {
 			s.firstWriteBeforeWaitHook(pending)
 		}

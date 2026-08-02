@@ -81,7 +81,7 @@ func TestMongoFirstWriteLateExistingMutationsWait(t *testing.T) {
 	server := newFirstWriteTestServer(t)
 	created := make(chan struct{})
 	continueFirstWrite := make(chan struct{})
-	server.firstWriteAfterCreateHook = func() {
+	server.firstWriteAfterCreateHook = func(string) {
 		close(created)
 		<-continueFirstWrite
 	}
@@ -128,7 +128,7 @@ func TestMongoFirstWriteUnrelatedExistingMutationsDoNotWait(t *testing.T) {
 
 	created := make(chan struct{})
 	continueFirstWrite := make(chan struct{})
-	server.firstWriteAfterCreateHook = func() {
+	server.firstWriteAfterCreateHook = func(string) {
 		close(created)
 		<-continueFirstWrite
 	}
@@ -163,11 +163,44 @@ func TestMongoFirstWriteUnrelatedExistingMutationsDoNotWait(t *testing.T) {
 	assertOK(t, <-creator)
 }
 
+func TestMongoFirstWriteUnrelatedColdMutationsDoNotWait(t *testing.T) {
+	server := newFirstWriteTestServer(t)
+	createdA := make(chan struct{})
+	continueA := make(chan struct{})
+	server.firstWriteAfterCreateHook = func(name string) {
+		if name == "app.a" {
+			close(createdA)
+			<-continueA
+		}
+	}
+	creatorA := make(chan wire.Document, 1)
+	go func() {
+		response, _ := serveCommandResult(server, 450, bson.D{{Key: "insert", Value: "a"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "creator"}}}}, {Key: "$db", Value: "app"}})
+		creatorA <- response
+	}()
+	<-createdA
+
+	creatorB := make(chan wire.Document, 1)
+	go func() {
+		response, _ := serveCommandResult(server, 451, bson.D{{Key: "insert", Value: "b"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "creator"}}}}, {Key: "$db", Value: "app"}})
+		creatorB <- response
+	}()
+	select {
+	case response := <-creatorB:
+		assertOK(t, response)
+	case <-time.After(time.Second):
+		close(continueA)
+		t.Fatal("first write to an unrelated cold collection waited for another namespace's mutation")
+	}
+	close(continueA)
+	assertOK(t, <-creatorA)
+}
+
 func TestMongoFirstWriteStalePendingNamespaceDoesNotWait(t *testing.T) {
 	server := newFirstWriteTestServer(t)
 	createdA := make(chan struct{})
 	continueA := make(chan struct{})
-	server.firstWriteAfterCreateHook = func() {
+	server.firstWriteAfterCreateHook = func(string) {
 		close(createdA)
 		<-continueA
 	}
@@ -197,7 +230,7 @@ func TestMongoFirstWriteStalePendingNamespaceDoesNotWait(t *testing.T) {
 
 	createdB := make(chan struct{})
 	continueB := make(chan struct{})
-	server.firstWriteAfterCreateHook = func() {
+	server.firstWriteAfterCreateHook = func(string) {
 		close(createdB)
 		<-continueB
 	}

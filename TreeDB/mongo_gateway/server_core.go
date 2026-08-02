@@ -110,8 +110,9 @@ type Server struct {
 	collectionCacheMu         sync.RWMutex
 	collectionCache           map[string]*collections.Collection
 	collectionCreateMu        sync.Mutex
-	collectionFirstWrite      atomic.Pointer[collectionFirstWritePending]
-	firstWriteAfterCreateHook func()
+	collectionFirstWrites     sync.Map
+	collectionFirstWriteCount atomic.Int64
+	firstWriteAfterCreateHook func(string)
 	firstWriteBeforeWaitHook  func(*collectionFirstWritePending)
 	updateMu                  sync.Mutex
 	updateCoalescers          map[string]*mongoUpdateCoalescer
@@ -121,8 +122,10 @@ type Server struct {
 }
 
 type collectionFirstWritePending struct {
-	name string
-	done chan struct{}
+	name       string
+	done       chan struct{}
+	mutationMu sync.Mutex
+	coldRefs   int
 }
 
 type serverCursor struct {
