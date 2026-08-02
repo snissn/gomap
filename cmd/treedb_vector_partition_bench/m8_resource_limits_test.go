@@ -44,6 +44,30 @@ func TestM8ObservedResourceMaximaUseRecordedMaximaNotAveragesV1(t *testing.T) {
 	}
 }
 
+func TestM8RouterSessionIdentityResourceMaxUsesEverySessionV1(t *testing.T) {
+	short := nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "d", Catalog: "c", Collection: "x", IndexName: "i", IndexDefinitionDigest: "h", ReadySetDigest: "r"}
+	long := short
+	long.Database = "a-much-longer-database"
+	evidence := m8ProductionRouterSessionEvidenceV1{
+		AfterWarmup:   []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: short}},
+		AfterMeasured: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: short}, {Identity: long}},
+	}
+	want := m8RouterSessionIdentityBytesV1(long)
+	if got, ok := m8RouterSessionIdentityMaxBytesV1(evidence); !ok || got != want {
+		t.Fatalf("identity maximum=%d ok=%v want %d", got, ok, want)
+	}
+	resources := m8ProductionResourceEvidenceV1{LimitComparisons: []m8ProductionResourceLimitComparisonV1{
+		{Name: "coordinator_identity_bytes", Configured: want, Enforced: true},
+		{Name: "shard_identity_bytes", Configured: want, Enforced: true},
+	}}
+	m8ApplyRouterSessionIdentityResourceMaxV1(&resources, evidence)
+	for _, comparison := range resources.LimitComparisons {
+		if comparison.Observed != want || !comparison.Passed {
+			t.Fatalf("identity comparison=%+v want observed/passed %d/true", comparison, want)
+		}
+	}
+}
+
 func TestM8WallClockEvidenceUsesActualMaximumNotP99V1(t *testing.T) {
 	cfg := config{
 		m8CoordinatorLimits: nativewire.DefaultVectorPartitionCoordinatorLimitsV1(),

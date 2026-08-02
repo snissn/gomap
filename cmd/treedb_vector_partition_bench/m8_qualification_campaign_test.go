@@ -130,6 +130,14 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		"router_digest_drift": func(matrix *m8ProductionMatrixV1) {
 			matrix.Variants[0].Variant.RouterModelDigest = strings.Repeat("e", 64)
 		},
+		"router_session_namespace_drift": func(matrix *m8ProductionMatrixV1) {
+			for i := range matrix.Variants[0].RouterSessions.AfterWarmup {
+				matrix.Variants[0].RouterSessions.AfterWarmup[i].Identity.Database = "different-database"
+			}
+			for i := range matrix.Variants[0].RouterSessions.AfterMeasured {
+				matrix.Variants[0].RouterSessions.AfterMeasured[i].Identity.Database = "different-database"
+			}
+		},
 		"topology_leader_drift": func(matrix *m8ProductionMatrixV1) {
 			matrix.Variants[0].Topology.Groups[0].LeaderID = "different-leader"
 		},

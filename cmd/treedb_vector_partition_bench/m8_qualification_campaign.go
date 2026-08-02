@@ -112,6 +112,7 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 	var dataset fixtureManifest
 	var environment *m8QualificationEnvironmentV1
 	configs := make(map[string]m8ProductionConfigEvidenceV1, len(m8RequiredVariantIDsV1))
+	routerSessionIdentities := make(map[string]nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1, len(m8RequiredVariantIDsV1))
 	paths, digests := make(map[string]bool, len(campaign.Runs)), make(map[string]bool, len(campaign.Runs))
 	for runIndex, run := range campaign.Runs {
 		if run.Path == "" || filepath.IsAbs(run.Path) || !m8QualificationSHA256V1(run.SHA256) {
@@ -192,6 +193,14 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 				return summary, fmt.Errorf("qualification matrix %s changes %s topology/configuration", cleanPath, report.Variant.VariantID)
 			}
 			configs[report.Variant.VariantID] = config
+			routerSessionIdentity, ok := m8CanonicalRouterSessionIdentityV1(report.RouterSessions)
+			if !ok {
+				return summary, fmt.Errorf("qualification matrix %s has inconsistent router-session identity", cleanPath)
+			}
+			if prior, ok := routerSessionIdentities[report.Variant.VariantID]; ok && !reflect.DeepEqual(prior, routerSessionIdentity) {
+				return summary, fmt.Errorf("qualification matrix %s changes router-session identity", cleanPath)
+			}
+			routerSessionIdentities[report.Variant.VariantID] = routerSessionIdentity
 			if prior, ok := variantDescriptors[report.Variant.VariantID]; ok && !reflect.DeepEqual(prior, *report.Variant) {
 				return summary, fmt.Errorf("qualification matrix %s changes retained M3 descriptor", run.Path)
 			}

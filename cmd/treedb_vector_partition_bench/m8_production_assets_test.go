@@ -564,6 +564,9 @@ func TestM8RouterSessionEvidenceRejectsColdWorkOrLeaseImbalanceV1(t *testing.T) 
 		"identity replacement": func(e *m8ProductionRouterSessionEvidenceV1) {
 			e.AfterMeasured[0].Identity.RouterModelDigest = "other-model"
 		},
+		"namespace replacement": func(e *m8ProductionRouterSessionEvidenceV1) {
+			e.AfterMeasured[0].Identity.Database = "other-database"
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := valid

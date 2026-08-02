@@ -523,6 +523,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		return fmt.Errorf("close M8 attribution harness: %w", closeErr)
 	}
 	report.Resources = m8ProductionResourcesV1(cfg, fixture, assets, report.Rows, allUntimed, report.Topology, report.Failure.ResourceBoundary)
+	m8ApplyRouterSessionIdentityResourceMaxV1(&report.Resources, report.RouterSessions)
 	report.GateLedger = m8ProductionGateLedgerForReportV1(report)
 	if m8ProductionAllGatesPassV1(report.GateLedger) {
 		report.Status = "pass"
@@ -2896,12 +2897,14 @@ func m8ExpectedResourceLimitObservationsV1(report m8ProductionReportV1) (map[str
 		probes = max(probes, uint64(row.Probes))
 		efSearch = max(efSearch, uint64(row.EfSearch))
 	}
-	identity := report.RouterSessions.AfterWarmup[0].Identity
+	identityBytes, ok := m8RouterSessionIdentityMaxBytesV1(report.RouterSessions)
+	if !ok {
+		return nil, false
+	}
 	peakRSS := uint64(0)
 	if report.Resources.PeakRSSMeasured && report.Resources.PeakRSSBytes > 0 {
 		peakRSS = uint64(report.Resources.PeakRSSBytes)
 	}
-	identityBytes := uint64(len(identity.Database) + len(identity.Catalog) + len(identity.Collection) + len(identity.IndexName) + len(identity.IndexDefinitionDigest) + len(identity.ReadySetDigest))
 	stableIDBytes := uint64(len(fmt.Sprintf("doc-%06d", max(0, report.Dataset.Vectors-1))))
 	maxTotalNanos := report.UntimedBoundary.WallClockNanos
 	maxTotalNanos = max(maxTotalNanos, report.Failure.ResourceBoundary.WallClockNanos)
@@ -2942,6 +2945,36 @@ func m8ExpectedResourceLimitObservationsV1(report m8ProductionReportV1) (map[str
 		"shard_candidate_bytes":                          maxima.ShardCandidateBytes,
 		"shard_response_bytes":                           maxima.ShardResponseBytes,
 	}, true
+}
+
+func m8RouterSessionIdentityBytesV1(identity nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1) uint64 {
+	return uint64(len(identity.Database) + len(identity.Catalog) + len(identity.Collection) + len(identity.IndexName) + len(identity.IndexDefinitionDigest) + len(identity.ReadySetDigest))
+}
+
+func m8RouterSessionIdentityMaxBytesV1(evidence m8ProductionRouterSessionEvidenceV1) (uint64, bool) {
+	var maximum uint64
+	seen := false
+	for _, sessions := range [][]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{evidence.AfterWarmup, evidence.AfterMeasured} {
+		for _, session := range sessions {
+			maximum = max(maximum, m8RouterSessionIdentityBytesV1(session.Identity))
+			seen = true
+		}
+	}
+	return maximum, seen
+}
+
+func m8ApplyRouterSessionIdentityResourceMaxV1(resources *m8ProductionResourceEvidenceV1, evidence m8ProductionRouterSessionEvidenceV1) {
+	identityBytes, ok := m8RouterSessionIdentityMaxBytesV1(evidence)
+	if !ok {
+		return
+	}
+	for i := range resources.LimitComparisons {
+		comparison := &resources.LimitComparisons[i]
+		if comparison.Name == "coordinator_identity_bytes" || comparison.Name == "shard_identity_bytes" {
+			comparison.Observed = identityBytes
+			comparison.Passed = comparison.Configured > 0 && identityBytes <= comparison.Configured
+		}
+	}
 }
 
 func m8ProductionGateValuesV1(ledger m8ProductionGateLedgerV1) []string {
@@ -3410,6 +3443,9 @@ func validM8RouterSessionEvidenceV1(evidence m8ProductionRouterSessionEvidenceV1
 	if len(evidence.BeforeWarmup) != 0 || len(evidence.AfterWarmup) == 0 || len(evidence.AfterMeasured) == 0 {
 		return false
 	}
+	if _, ok := m8CanonicalRouterSessionIdentityV1(evidence); !ok {
+		return false
+	}
 	warmed := make(map[nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1, len(evidence.AfterWarmup))
 	for _, session := range evidence.AfterWarmup {
 		identity := session.Identity
@@ -3457,6 +3493,21 @@ func validM8RouterSessionEvidenceV1(evidence m8ProductionRouterSessionEvidenceV1
 	}
 	return measuredHits == expectedMeasuredSamples && measuredLeasePins == expectedMeasuredSamples &&
 		measuredLeaseReleases == expectedMeasuredSamples
+}
+
+func m8CanonicalRouterSessionIdentityV1(evidence m8ProductionRouterSessionEvidenceV1) (nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1, bool) {
+	if len(evidence.AfterWarmup) == 0 || len(evidence.AfterMeasured) == 0 {
+		return nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{}, false
+	}
+	identity := evidence.AfterWarmup[0].Identity
+	for _, sessions := range [][]nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{evidence.AfterWarmup, evidence.AfterMeasured} {
+		for _, session := range sessions {
+			if session.Identity != identity {
+				return nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{}, false
+			}
+		}
+	}
+	return identity, true
 }
 
 func m8RouterSessionsMatchVariantV1(evidence m8ProductionRouterSessionEvidenceV1, variant m3VariantDescriptorV1) bool {
