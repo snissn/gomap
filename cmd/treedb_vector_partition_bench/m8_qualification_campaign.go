@@ -369,6 +369,21 @@ func m8QualificationCommandV1(report m8ProductionReportV1) bool {
 	if err != nil || cfg.stage != m8ProductionMultiGroupModeV1 {
 		return false
 	}
+	datasetDirectory, err := m8CanonicalPathV1(cfg.dataset)
+	if err != nil || report.DatasetDirectory == "" || datasetDirectory != report.DatasetDirectory {
+		return false
+	}
+	if report.Variant == nil || cfg.m8ExistingDB == "" {
+		return false
+	}
+	existingDB, err := m8CanonicalPathV1(cfg.m8ExistingDB)
+	if err != nil {
+		return false
+	}
+	variantDB, err := m8CanonicalPathV1(report.Variant.DatabaseDirectory)
+	if err != nil || existingDB != variantDB {
+		return false
+	}
 	if report.Profiles.Status == "not_captured" {
 		if cfg.profiles != "" {
 			return false

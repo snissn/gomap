@@ -81,6 +81,7 @@ type m8ProductionReportV1 struct {
 	GoMemoryLimitBytes      int64                                                      `json:"go_memory_limit_bytes"`
 	Host                    m8ProductionHostEvidenceV1                                 `json:"host"`
 	Dataset                 fixtureManifest                                            `json:"dataset"`
+	DatasetDirectory        string                                                     `json:"dataset_directory,omitempty"`
 	Variant                 *m3VariantDescriptorV1                                     `json:"variant,omitempty"`
 	Config                  m8ProductionConfigEvidenceV1                               `json:"config"`
 	BuildNanos              int64                                                      `json:"build_nanos"`
@@ -365,13 +366,16 @@ type m8ProductionResourceObservedMaximaV1 struct {
 }
 
 func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors, queries [][]float64, stdout io.Writer) (runErr error) {
+	datasetDirectory, err := m8CanonicalPathV1(cfg.dataset)
+	if err != nil {
+		return fmt.Errorf("resolve M8 dataset directory: %w", err)
+	}
 	groups := make([]string, cfg.raftGroups)
 	for i := range groups {
 		groups[i] = fmt.Sprintf("m8-data-group-%02d", i)
 	}
 	started := time.Now()
 	var assets *m8ProductionMultiGroupAssetsV1
-	var err error
 	if cfg.m8ExistingDB != "" {
 		assets, err = openM8ProductionMultiGroupExistingAssetsV1(cfg.m8ExistingDB, groups, cfg.partitions, fixture, vectors)
 	} else {
@@ -428,7 +432,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true, GeneratedAt: time.Now().UTC(),
 		ExecutionID: executionID, RouterRepresentatives: assets.status.Representatives,
 		Command: cfg.command, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dirty: m8GitDirtyV1(cfg.out, cfg.profiles, cfg.m8MatrixOut, cfg.m8MatrixProfiles),
-		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), GOMAXPROCS: goMaxProcs, GoMemoryLimitBytes: goMemoryLimitBytes, Host: m8ProductionHostV1(cfg, assets.dir), Dataset: fixture, Variant: assets.descriptor,
+		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), GOMAXPROCS: goMaxProcs, GoMemoryLimitBytes: goMemoryLimitBytes, Host: m8ProductionHostV1(cfg, assets.dir), Dataset: fixture, DatasetDirectory: datasetDirectory, Variant: assets.descriptor,
 		Config:        m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), RouterCandidates: cfg.routerCandidates, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed},
 		BuildNanos:    buildNanos,
 		TruthCache:    truthCache,
