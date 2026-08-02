@@ -163,6 +163,61 @@ func TestMongoFirstWriteUnrelatedExistingMutationsDoNotWait(t *testing.T) {
 	assertOK(t, <-creator)
 }
 
+func TestMongoFirstWriteStalePendingNamespaceDoesNotWait(t *testing.T) {
+	server := newFirstWriteTestServer(t)
+	createdA := make(chan struct{})
+	continueA := make(chan struct{})
+	server.firstWriteAfterCreateHook = func() {
+		close(createdA)
+		<-continueA
+	}
+	creatorA := make(chan wire.Document, 1)
+	go func() {
+		response, _ := serveCommandResult(server, 500, bson.D{{Key: "insert", Value: "a"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "creator"}}}}, {Key: "$db", Value: "app"}})
+		creatorA <- response
+	}()
+	<-createdA
+
+	observedA := make(chan struct{})
+	continueHot := make(chan struct{})
+	server.firstWriteBeforeWaitHook = func(pending *collectionFirstWritePending) {
+		if pending.name == "app.a" {
+			close(observedA)
+			<-continueHot
+		}
+	}
+	hot := make(chan wire.Document, 1)
+	go func() {
+		response, _ := serveCommandResult(server, 501, bson.D{{Key: "update", Value: "a"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "hot"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "ready", Value: true}}}}}, {Key: "upsert", Value: true}}}}, {Key: "$db", Value: "app"}})
+		hot <- response
+	}()
+	<-observedA
+	close(continueA)
+	assertOK(t, <-creatorA)
+
+	createdB := make(chan struct{})
+	continueB := make(chan struct{})
+	server.firstWriteAfterCreateHook = func() {
+		close(createdB)
+		<-continueB
+	}
+	creatorB := make(chan wire.Document, 1)
+	go func() {
+		response, _ := serveCommandResult(server, 502, bson.D{{Key: "insert", Value: "b"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "creator"}}}}, {Key: "$db", Value: "app"}})
+		creatorB <- response
+	}()
+	<-createdB
+	close(continueHot)
+	select {
+	case response := <-hot:
+		assertOK(t, response)
+	case <-time.After(time.Second):
+		t.Fatal("mutation waited on a different namespace after its observed first write completed")
+	}
+	close(continueB)
+	assertOK(t, <-creatorB)
+}
+
 func runConcurrentFirstWriteFindAndModifyUpserts(t *testing.T, server *Server) {
 	t.Helper()
 	const workers = 16

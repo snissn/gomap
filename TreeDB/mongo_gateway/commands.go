@@ -3280,11 +3280,15 @@ func (s *Server) openOrCreateCollection(name string) (*collections.Collection, e
 }
 
 func (s *Server) openOrCreateCollectionForFirstWrite(name string) (*collections.Collection, func(), error) {
-	// ponytail: one global lock serializes only callers that initially missed a
-	// collection. The published name keeps existing unrelated namespaces free.
+	// CollectionManager schema creation remains globally serialized. Publishing
+	// a namespace-specific completion signal lets existing callers wait for the
+	// observed first write without inheriting a later namespace's cold latency.
 	s.collectionCreateMu.Lock()
+	pending := &collectionFirstWritePending{name: name, done: make(chan struct{})}
+	s.collectionFirstWrite.Store(pending)
 	release := func() {
-		s.firstWritePendingName.Store(nil)
+		s.collectionFirstWrite.Store(nil)
+		close(pending.done)
 		s.collectionCreateMu.Unlock()
 	}
 	col, err := s.Collections.OpenCollection(name)
@@ -3292,15 +3296,11 @@ func (s *Server) openOrCreateCollectionForFirstWrite(name string) (*collections.
 		// This caller observed the collection as missing before it entered the
 		// cold path. Keep it serialized through its mutation too: otherwise a
 		// group of waiters can all miss the same document and race their upserts.
-		pendingName := name
-		s.firstWritePendingName.Store(&pendingName)
 		return col, release, nil
 	} else if !errors.Is(err, collections.ErrCollectionNotFound) {
-		s.collectionCreateMu.Unlock()
+		release()
 		return nil, nil, err
 	}
-	pendingName := name
-	s.firstWritePendingName.Store(&pendingName)
 	if _, createErr := s.Collections.CreateCollection(s.defaultCollectionMeta(name)); createErr != nil {
 		release()
 		return nil, nil, createErr
@@ -3319,13 +3319,24 @@ func (s *Server) openOrCreateCollectionForFirstWrite(name string) (*collections.
 
 func (s *Server) openCollectionForMutation(name string) (*collections.Collection, error) {
 	col, err := s.Collections.OpenCollection(name)
-	pendingName := s.firstWritePendingName.Load()
-	if err != nil || pendingName == nil || *pendingName != name {
+	if err != nil {
 		return col, err
 	}
-	s.collectionCreateMu.Lock()
-	s.collectionCreateMu.Unlock()
-	return s.Collections.OpenCollection(name)
+	waited := false
+	for {
+		pending := s.collectionFirstWrite.Load()
+		if pending == nil || pending.name != name {
+			if waited {
+				return s.Collections.OpenCollection(name)
+			}
+			return col, nil
+		}
+		if s.firstWriteBeforeWaitHook != nil {
+			s.firstWriteBeforeWaitHook(pending)
+		}
+		<-pending.done
+		waited = true
+	}
 }
 
 func (s *Server) defaultCollectionMeta(name string) *collections.CollectionMeta {
