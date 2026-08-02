@@ -5697,6 +5697,18 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse decimal tenth: %v", err)
 	}
+	decimalNaN, err := bson.ParseDecimal128("NaN")
+	if err != nil {
+		t.Fatalf("parse decimal NaN: %v", err)
+	}
+	decimalPosInf, err := bson.ParseDecimal128("Infinity")
+	if err != nil {
+		t.Fatalf("parse decimal +Infinity: %v", err)
+	}
+	decimalNegInf, err := bson.ParseDecimal128("-Infinity")
+	if err != nil {
+		t.Fatalf("parse decimal -Infinity: %v", err)
+	}
 	raw := bson.Raw(mustDocument(t, bson.D{
 		{Key: "nan", Value: math.NaN()},
 		{Key: "pos_inf", Value: math.Inf(1)},
@@ -5705,6 +5717,9 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 		{Key: "decimal", Value: decimal},
 		{Key: "decimal_int", Value: decimalInt},
 		{Key: "decimal_tenth", Value: decimalTenth},
+		{Key: "decimal_nan", Value: decimalNaN},
+		{Key: "decimal_pos_inf", Value: decimalPosInf},
+		{Key: "decimal_neg_inf", Value: decimalNegInf},
 		{Key: "large_int", Value: int64(9007199254740993)},
 		{Key: "double_int", Value: 37.0},
 		{Key: "double_fraction", Value: 37.5},
@@ -5716,12 +5731,21 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 	decimalValue := raw.Lookup("decimal")
 	decimalIntValue := raw.Lookup("decimal_int")
 	decimalTenthValue := raw.Lookup("decimal_tenth")
+	decimalNaNValue := raw.Lookup("decimal_nan")
+	decimalPosInfValue := raw.Lookup("decimal_pos_inf")
+	decimalNegInfValue := raw.Lookup("decimal_neg_inf")
 	largeInt := raw.Lookup("large_int")
 	doubleInt := raw.Lookup("double_int")
 	doubleFraction := raw.Lookup("double_fraction")
 
 	if rawValuesEqual(nanValue, finite) {
 		t.Fatal("NaN compared equal to finite number")
+	}
+	if rawValuesEqual(decimalNaNValue, decimalNaNValue) {
+		t.Fatal("Decimal128 NaN compared equal to itself")
+	}
+	if !rawValuesEqual(decimalPosInfValue, posInf) || !rawValuesEqual(decimalNegInfValue, negInf) || rawValuesEqual(decimalPosInfValue, decimalNegInfValue) {
+		t.Fatalf("Decimal128 infinity equality +/double=%v -/double=%v +/-=%v", rawValuesEqual(decimalPosInfValue, posInf), rawValuesEqual(decimalNegInfValue, negInf), rawValuesEqual(decimalPosInfValue, decimalNegInfValue))
 	}
 	if match, err := valueMatchesPredicate(nanValue, findPredicate{op: findPredicateGT, values: []bson.RawValue{finite}}); err != nil || match {
 		t.Fatalf("NaN range match/err=%v/%v want false/nil", match, err)
@@ -5762,6 +5786,34 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 	}
 	if scalar, ok = indexScalarForBSONValue(decimalTenthValue, collections.IndexValueDouble); ok {
 		t.Fatalf("non-exact decimal double scalar=%v ok=%v want not indexable", scalar, ok)
+	}
+}
+
+func TestMongoMutationAddToSetDistinguishesNonFiniteDecimal128(t *testing.T) {
+	positive, err := bson.ParseDecimal128("Infinity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	negative, err := bson.ParseDecimal128("-Infinity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nan, err := bson.ParseDecimal128("NaN")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$addToSet", Value: bson.D{
+			{Key: "items", Value: bson.D{{Key: "$each", Value: bson.A{negative, positive, nan, nan}}}},
+		}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, changed, err := applyMongoMutation(mustDocument(t, bson.D{{Key: "items", Value: bson.A{positive}}}), mutation)
+	values, valuesErr := bson.Raw(updated).Lookup("items").Array().Values()
+	if err != nil || !changed || valuesErr != nil || len(values) != 4 || values[0].Decimal128().String() != "Infinity" || values[1].Decimal128().String() != "-Infinity" || values[2].Decimal128().String() != "NaN" || values[3].Decimal128().String() != "NaN" {
+		t.Fatalf("non-finite Decimal128 $addToSet changed=%v err=%v values=%v valuesErr=%v", changed, err, values, valuesErr)
 	}
 }
 
