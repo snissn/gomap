@@ -3954,6 +3954,7 @@ type mongoMutation struct {
 }
 
 const mongoMutationMaxEachValues = 256
+const mongoMutationMaxTargets = 256
 
 // MongoDB limits update paths to 100 components; enforce it before recursive mutation.
 const mongoMutationMaxPathDepth = 100
@@ -4011,6 +4012,9 @@ func parseMongoMutation(update wire.Document) (mongoMutation, error) {
 			}
 			if _, ok := seen[name]; ok {
 				return mongoMutation{}, fmt.Errorf("Mongo gateway update operators cannot target field %q more than once", name)
+			}
+			if len(seen) == mongoMutationMaxTargets {
+				return mongoMutation{}, fmt.Errorf("Mongo gateway update exceeds %d target fields", mongoMutationMaxTargets)
 			}
 			seen[name] = struct{}{}
 			value := item.Value()
@@ -4236,22 +4240,20 @@ func mongoMutationArrayValues(op, name string, value bson.RawValue) ([]bson.RawV
 			return nil, fmt.Errorf("Mongo gateway %s field %q only supports a scalar or $each", op, name)
 		}
 	}
-	hasEach := false
-	for _, element := range elements {
-		key, err := element.KeyErr()
-		if err != nil {
-			return nil, err
-		}
-		hasEach = hasEach || key == "$each"
+	if len(elements) == 0 {
+		return []bson.RawValue{value}, nil
 	}
-	if !hasEach {
+	key, err := elements[0].KeyErr()
+	if err != nil {
+		return nil, err
+	}
+	if !strings.HasPrefix(key, "$") {
 		return []bson.RawValue{value}, nil
 	}
 	if len(elements) != 1 {
 		return nil, fmt.Errorf("Mongo gateway %s field %q only supports a scalar or $each", op, name)
 	}
-	key, err := elements[0].KeyErr()
-	if err != nil || key != "$each" {
+	if key != "$each" {
 		return nil, fmt.Errorf("Mongo gateway %s field %q only supports a scalar or $each", op, name)
 	}
 	array, ok := elements[0].Value().ArrayOK()
