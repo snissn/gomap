@@ -541,6 +541,9 @@ func m8QualificationRetainedVariantV1(root string, report m8ProductionReportV1) 
 		return err
 	}
 	defer func() { err = errors.Join(err, assets.Close()) }()
+	if err := m8ValidateExistingAssetsFixtureV1(assets.collection, assets.status.Manifest, report.Dataset, fixtureVectors(report.Dataset)); err != nil {
+		return fmt.Errorf("verify retained M3 source rows: %w", err)
+	}
 	if err := m8BindRetainedM3DescriptorV1(assets, report.Dataset); err != nil {
 		return err
 	}

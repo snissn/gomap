@@ -1451,17 +1451,13 @@ func TestM8QualificationTruthCacheAnchorV1(t *testing.T) {
 // descriptor-shaped directory.
 func testM8QualificationRetainedDescriptorV1(t *testing.T, dir, head string, fixture fixtureManifest, variantID, assignment string, ratio float64) m3VariantDescriptorV1 {
 	t.Helper()
-	const rows, dimensions, partitions = 256, 8, 16
+	const partitions = 16
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	vectors := make([][]float64, rows)
-	input := make([]vectorpartition.Vector, rows)
+	vectors := fixtureVectors(fixture)
+	input := make([]vectorpartition.Vector, len(vectors))
 	for i := range vectors {
-		vectors[i] = make([]float64, dimensions)
-		for dimension := range vectors[i] {
-			vectors[i][dimension] = float64((i+1)*(dimension+3)%97 + 1)
-		}
 		input[i] = vectorpartition.Vector{ID: fmt.Sprintf("doc-%06d", i), Values: vectors[i]}
 	}
 	partition := vectorpartition.DefaultConfig()
@@ -1513,7 +1509,7 @@ func testM8QualificationRetainedDescriptorV1(t *testing.T, dir, head string, fix
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
-	meta := partitionCollectionMeta(m3BenchmarkCollection, dimensions)
+	meta := partitionCollectionMeta(m3BenchmarkCollection, fixture.Dimensions)
 	manager := collections.NewCollectionManager(db)
 	if _, err := manager.CreateCollection(meta); err != nil {
 		t.Fatal(err)
@@ -1566,7 +1562,7 @@ func testM8QualificationRetainedDescriptorV1(t *testing.T, dir, head string, fix
 	}
 	inputs := make([]collections.VectorPartitionSearchAssetV1, partitions)
 	for partition := range inputs {
-		inputs[partition] = collections.VectorPartitionSearchAssetV1{Source: source, Generation: generation, PartitionID: uint32(partition), Dimensions: dimensions}
+		inputs[partition] = collections.VectorPartitionSearchAssetV1{Source: source, Generation: generation, PartitionID: uint32(partition), Dimensions: fixture.Dimensions}
 	}
 	assets, resources, err := col.MaterializeVectorPartitionLocalSearchAssetsV1(partitionHNSWIndex, manifest, fileID, inputs)
 	if err != nil {
@@ -1682,6 +1678,9 @@ func TestM8QualificationRetainedVariantV1(t *testing.T) {
 		t.Skip("vector partition namespace persistence unsupported")
 	}
 	head, fixture := strings.Repeat("a", 40), m8QualificationFixturesV1[0]
+	fixture.Vectors, fixture.Dimensions, fixture.Queries = 256, 8, 8
+	_, queries := fixtureData(fixture)
+	fixture.Checksum = fixtureChecksumFromData(fixtureVectors(fixture), queries)
 	newReport := func(t *testing.T) (string, m8ProductionReportV1) {
 		t.Helper()
 		root := t.TempDir()
@@ -1699,6 +1698,42 @@ func TestM8QualificationRetainedVariantV1(t *testing.T) {
 		root, report := newReport(t)
 		if err := m8QualificationRetainedVariantV1(root, report); err != nil {
 			t.Fatalf("rejected real retained M3 assets: %v", err)
+		}
+	})
+	t.Run("mutated_source_row", func(t *testing.T) {
+		root, report := newReport(t)
+		db, err := backenddb.Open(backenddb.Options{Dir: report.Variant.DatabaseDirectory, DisableBackgroundPrune: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		manager := collections.NewCollectionManager(db)
+		collection, err := manager.OpenCollection(m3BenchmarkCollection)
+		if err == nil {
+			err = collection.Delete([]byte("doc-000000"))
+		}
+		closeErr := db.Close()
+		if err != nil || closeErr != nil {
+			t.Fatalf("mutate retained source row: %v %v", err, closeErr)
+		}
+		if err := m8QualificationRetainedVariantV1(root, report); err == nil {
+			t.Fatal("accepted mutated retained source row")
+		}
+	})
+	t.Run("mismatched_source_rows", func(t *testing.T) {
+		root, report := newReport(t)
+		report.Dataset.Seed++
+		vectors, queries := fixtureData(report.Dataset)
+		report.Dataset.Checksum = fixtureChecksumFromData(vectors, queries)
+		raw, err := json.Marshal(report.Dataset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(report.DatasetDirectory, "fixture_manifest.json"), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		report.TruthCacheDirectory, report.TruthCache = testM8QualificationTruthCacheV1(t, root, report.Dataset)
+		if err := m8QualificationRetainedVariantV1(root, report); err == nil || !strings.Contains(err.Error(), "verify retained M3 source rows") {
+			t.Fatalf("mismatched retained source rows err=%v", err)
 		}
 	})
 	t.Run("copied_descriptor_only", func(t *testing.T) {
