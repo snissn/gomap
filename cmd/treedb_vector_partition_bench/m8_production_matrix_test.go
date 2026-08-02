@@ -366,7 +366,7 @@ func TestM8TruthCachePublisherLeavesOnlyCompleteNoReplaceArtifactsV1(t *testing.
 	file := m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: m8CanonicalTruthContractV1, DatasetChecksum: fixture.Checksum, Dimensions: fixture.Dimensions, Metric: fixture.Metric, TopK: 1, TruthSHA256: truthSHA, Truth: truth}
 	write := func(w io.Writer) error { return m8WriteTruthCacheJSONV1(w, file) }
 	t.Run("write failure cleans temporary and final paths", func(t *testing.T) {
-		_, err := m8PublishTruthCacheV1(path, func(w io.Writer) error {
+		_, err := m8PublishTruthCacheV1(path, "", func(w io.Writer) error {
 			if _, err := io.WriteString(w, "{"); err != nil {
 				return err
 			}
@@ -386,7 +386,7 @@ func TestM8TruthCachePublisherLeavesOnlyCompleteNoReplaceArtifactsV1(t *testing.
 		if err := os.WriteFile(path, []byte("sentinel"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := m8PublishTruthCacheV1(path, write); err == nil || !os.IsExist(err) {
+		if _, err := m8PublishTruthCacheV1(path, "", write); err == nil || !os.IsExist(err) {
 			t.Fatalf("existing artifact error=%v", err)
 		}
 		got, err := os.ReadFile(path)
@@ -397,8 +397,19 @@ func TestM8TruthCachePublisherLeavesOnlyCompleteNoReplaceArtifactsV1(t *testing.
 			t.Fatal(err)
 		}
 	})
+	t.Run("trusted digest mismatch does not publish", func(t *testing.T) {
+		if _, err := m8PublishTruthCacheV1(path, strings.Repeat("0", 64), write); err == nil {
+			t.Fatal("accepted mismatched trusted digest")
+		}
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("mismatched digest published final artifact err=%v", err)
+		}
+		if paths, err := filepath.Glob(filepath.Join(dir, ".m8_canonical_truth_*.tmp")); err != nil || len(paths) != 0 {
+			t.Fatalf("temporary artifacts=%v err=%v", paths, err)
+		}
+	})
 	t.Run("complete artifact publishes and decodes", func(t *testing.T) {
-		digest, err := m8PublishTruthCacheV1(path, write)
+		digest, err := m8PublishTruthCacheV1(path, "", write)
 		if err != nil {
 			t.Fatal(err)
 		}

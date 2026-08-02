@@ -1262,23 +1262,20 @@ func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection,
 		if err != nil {
 			return nil, evidence, err
 		}
-		artifactSHA256, err := m8PublishTruthCacheV1(path, func(w io.Writer) error {
+		artifactSHA256, err := m8PublishTruthCacheV1(path, expectedDigest, func(w io.Writer) error {
 			return m8WriteTruthCacheJSONV1(w, m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: collections.VectorPartitionCanonicalScoreContractV1, DatasetChecksum: fixture.Checksum, Dimensions: fixture.Dimensions, Metric: fixture.Metric, TopK: topK, TruthSHA256: truthSHA256, Truth: truth})
 		})
 		if err != nil {
 			return nil, evidence, err
 		}
 		evidence.ArtifactSHA256 = artifactSHA256
-		if expectedDigest != "" && evidence.ArtifactSHA256 != expectedDigest {
-			return nil, evidence, errors.New("computed canonical truth cache artifact does not match independently trusted digest")
-		}
 	}
 	return truth, evidence, nil
 }
 
 // m8PublishTruthCacheV1 exposes a complete cache only after it is closed and
 // atomically linked into its final no-replace name.
-func m8PublishTruthCacheV1(path string, write func(io.Writer) error) (string, error) {
+func m8PublishTruthCacheV1(path, expectedDigest string, write func(io.Writer) error) (string, error) {
 	file, err := os.CreateTemp(filepath.Dir(path), ".m8_canonical_truth_*.tmp")
 	if err != nil {
 		return "", err
@@ -1299,10 +1296,14 @@ func m8PublishTruthCacheV1(path string, write func(io.Writer) error) (string, er
 	if err := file.Close(); err != nil {
 		return "", err
 	}
+	artifactSHA256 := hex.EncodeToString(hash.Sum(nil))
+	if expectedDigest != "" && artifactSHA256 != expectedDigest {
+		return "", errors.New("computed canonical truth cache artifact does not match independently trusted digest")
+	}
 	if err := os.Link(tempPath, path); err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
+	return artifactSHA256, nil
 }
 
 // m8ReadTruthCacheV1 performs the bounded, streaming cache validation shared

@@ -500,7 +500,7 @@ func runGenerateTruthCache(args []string, stdout io.Writer) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	artifactSHA, err := m8PublishTruthCacheV1(path, func(w io.Writer) error {
+	artifactSHA, err := m8PublishTruthCacheV1(path, "", func(w io.Writer) error {
 		return m8WriteTruthCacheJSONV1(w, m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: collections.VectorPartitionCanonicalScoreContractV1, DatasetChecksum: fixture.Checksum, Dimensions: fixture.Dimensions, Metric: fixture.Metric, TopK: topK, TruthSHA256: truthSHA, Truth: truth})
 	})
 	if err != nil {
