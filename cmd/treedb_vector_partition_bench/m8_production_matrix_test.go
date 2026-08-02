@@ -798,6 +798,11 @@ func TestCommitted4023AttributionLedgerArtifactsV1(t *testing.T) {
 
 func TestM8GitDirtyRequiresExternalOutputsAndPreservesSourceChangesV1(t *testing.T) {
 	repo := t.TempDir()
+	var err error
+	repo, err = m8CanonicalPathV1(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
 	runGit := func(args ...string) {
 		t.Helper()
 		command := exec.Command("git", args...)
