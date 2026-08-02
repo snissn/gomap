@@ -172,6 +172,40 @@ func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, par
 	if dir == "" || len(groups) < 2 {
 		return nil, errors.New("M8 existing assets require a directory and two groups")
 	}
+	h, err := openM8ProductionExistingAssetSetV1(dir)
+	if err != nil {
+		return nil, err
+	}
+	h.groups = append([]string(nil), groups...)
+	defer func() {
+		if err != nil {
+			_ = h.Close()
+		}
+	}()
+	if err = m8ValidateExistingAssetsFixtureV1(h.collection, h.status.Manifest, fixture, vectors); err != nil {
+		return nil, err
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, m3VariantDescriptorFileV1)); statErr == nil {
+		if err = m8BindRetainedM3DescriptorV1(h, fixture); err != nil {
+			return nil, err
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return nil, statErr
+	}
+	if h.status.Manifest.PartitionCount != uint32(partitions) {
+		return nil, fmt.Errorf("retained M8 manifest partitions=%d want configured %d", h.status.Manifest.PartitionCount, partitions)
+	}
+	h.manifest, err = m8RelabelTopologyManifestV1(h.status.Manifest, groups)
+	if err != nil {
+		return nil, err
+	}
+	for _, group := range groups {
+		h.assetSetDigests[group] = m8GroupAssetSetDigestV1(group, h.manifest)
+	}
+	return h, nil
+}
+
+func openM8ProductionExistingAssetSetV1(dir string) (_ *m8ProductionMultiGroupAssetsV1, err error) {
 	info, statErr := os.Stat(dir)
 	if statErr != nil {
 		return nil, fmt.Errorf("M8 existing assets directory: %w", statErr)
@@ -179,7 +213,7 @@ func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, par
 	if !info.IsDir() {
 		return nil, errors.New("M8 existing assets path is not a directory")
 	}
-	h := &m8ProductionMultiGroupAssetsV1{dir: dir, groups: append([]string(nil), groups...), assetSetDigests: map[string]string{}}
+	h := &m8ProductionMultiGroupAssetsV1{dir: dir, assetSetDigests: map[string]string{}}
 	defer func() {
 		if err != nil {
 			_ = h.Close()
@@ -203,45 +237,50 @@ func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, par
 		return nil, fmt.Errorf("open retained M8 router: %w", err)
 	}
 	h.status = h.router.Status()
-	if err = m8ValidateExistingAssetsFixtureV1(h.collection, h.status.Manifest, fixture, vectors); err != nil {
-		return nil, err
-	}
-	descriptorPath := filepath.Join(dir, m3VariantDescriptorFileV1)
-	if _, statErr := os.Stat(descriptorPath); statErr == nil {
-		descriptor, readErr := m3ReadVariantDescriptorV1(dir)
-		if readErr != nil {
-			return nil, readErr
-		}
-		if matchErr := m3DescriptorMatchesManifestV1(descriptor, fixture, h.status.Manifest, h.status.ModelDigest, h.status.Config); matchErr != nil {
-			return nil, matchErr
-		}
-		var partitionHNSWM int
-		var indexDefinitionDigest string
-		for _, index := range h.collection.MetaView().VectorIndexes {
-			if index.Name == partitionHNSWIndex {
-				partitionHNSWM = index.M
-				indexDefinitionDigest = collections.VectorIndexDefinitionDigestV1(index)
-				break
-			}
-		}
-		if partitionHNSWM != descriptor.PartitionHNSWM || indexDefinitionDigest != descriptor.IndexDefinitionDigest {
-			return nil, errors.New("retained M8 descriptor local HNSW definition does not match collection metadata")
-		}
-		h.descriptor = &descriptor
-	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return nil, fmt.Errorf("stat retained M8 descriptor: %w", statErr)
-	}
-	if h.status.Manifest.PartitionCount != uint32(partitions) {
-		return nil, fmt.Errorf("retained M8 manifest partitions=%d want configured %d", h.status.Manifest.PartitionCount, partitions)
-	}
-	h.manifest, err = m8RelabelTopologyManifestV1(h.status.Manifest, groups)
-	if err != nil {
-		return nil, err
-	}
-	for _, group := range groups {
-		h.assetSetDigests[group] = m8GroupAssetSetDigestV1(group, h.manifest)
-	}
 	return h, nil
+}
+
+func m8BindRetainedM3DescriptorV1(h *m8ProductionMultiGroupAssetsV1, fixture fixtureManifest) error {
+	if h == nil || h.collection == nil || h.router == nil {
+		return errors.New("retained M8 assets are not open")
+	}
+	dir := h.dir
+	descriptorPath := filepath.Join(dir, m3VariantDescriptorFileV1)
+	if _, statErr := os.Stat(descriptorPath); statErr != nil {
+		if errors.Is(statErr, os.ErrNotExist) {
+			return errors.New("retained M8 assets are missing M3 descriptor")
+		}
+		return fmt.Errorf("stat retained M8 descriptor: %w", statErr)
+	}
+	descriptor, err := m3ReadVariantDescriptorV1(dir)
+	if err != nil {
+		return err
+	}
+	if err := m3DescriptorMatchesManifestV1(descriptor, fixture, h.status.Manifest, h.status.ModelDigest, h.status.Config); err != nil {
+		return err
+	}
+	var partitionHNSWM int
+	var indexDefinitionDigest string
+	for _, index := range h.collection.MetaView().VectorIndexes {
+		if index.Name == partitionHNSWIndex {
+			partitionHNSWM = index.M
+			indexDefinitionDigest = collections.VectorIndexDefinitionDigestV1(index)
+			break
+		}
+	}
+	if partitionHNSWM != descriptor.PartitionHNSWM || indexDefinitionDigest != descriptor.IndexDefinitionDigest {
+		return errors.New("retained M8 descriptor local HNSW definition does not match collection metadata")
+	}
+	assetStatus, err := h.collection.VectorPartitionStatusV1(partitionHNSWIndex, h.status.Manifest.Generation)
+	if err != nil {
+		return fmt.Errorf("verify retained M8 partition assets: %w", err)
+	}
+	if !assetStatus.Ready || !assetStatus.Active || assetStatus.Manifest.IntegrityDigest != h.status.Manifest.IntegrityDigest ||
+		assetStatus.MissingAssets != 0 || assetStatus.CorruptAssets != 0 || assetStatus.StaleAssets != 0 {
+		return fmt.Errorf("retained M8 partition assets are unavailable: ready=%t active=%t missing=%d corrupt=%d stale=%d", assetStatus.Ready, assetStatus.Active, assetStatus.MissingAssets, assetStatus.CorruptAssets, assetStatus.StaleAssets)
+	}
+	h.descriptor = &descriptor
+	return nil
 }
 
 // m8ValidateExistingAssetsFixtureV1 prevents a retained M3 corpus from being

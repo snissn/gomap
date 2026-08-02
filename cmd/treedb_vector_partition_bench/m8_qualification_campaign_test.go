@@ -1,10 +1,10 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/nativewire"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
@@ -39,7 +40,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		write("repeat-"+string(rune('1'+i))+".json", testM8QualificationMatrixV1(t, head, fixture, 125+float64(i)*75))
 	}
-	summary, err := m8ValidateQualificationCampaignV1(root, campaign)
+	summary, err := testM8ValidateQualificationCampaignV1(root, campaign)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,12 +73,12 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			return campaign
 		}
 		matchingRoot := t.TempDir()
-		if _, err := m8ValidateQualificationCampaignV1(matchingRoot, write(matchingRoot, false)); err != nil {
+		if _, err := testM8ValidateQualificationCampaignV1(matchingRoot, write(matchingRoot, false)); err != nil {
 			t.Fatalf("rejected matching serving layouts with distinct variant ready sets: %v", err)
 		}
 		driftRoot := t.TempDir()
 		driftCampaign := write(driftRoot, true)
-		if _, err := m8ValidateQualificationCampaignV1(driftRoot, driftCampaign); err == nil || !strings.Contains(err.Error(), "changes retained topology") {
+		if _, err := testM8ValidateQualificationCampaignV1(driftRoot, driftCampaign); err == nil || !strings.Contains(err.Error(), "changes retained topology") {
 			t.Fatalf("topology drift err=%v", err)
 		}
 	})
@@ -103,7 +104,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		bad := campaign
 		bad.Runs = slices.Clone(campaign.Runs)
 		bad.Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
-		if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
+		if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil {
 			t.Fatal("accepted edited retained command")
 		}
 	})
@@ -184,7 +185,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 				bad := campaign
 				bad.Runs = slices.Clone(campaign.Runs)
 				bad.Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
-				if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
+				if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil {
 					t.Fatalf("accepted %s", name)
 				}
 			})
@@ -263,7 +264,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 				bad := campaign
 				bad.Runs = slices.Clone(campaign.Runs)
 				bad.Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
-				if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
+				if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil {
 					t.Fatalf("accepted %s", name)
 				}
 			})
@@ -297,7 +298,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			digest := sha256.Sum256(raw)
 			campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:])})
 		}
-		if _, err := m8ValidateQualificationCampaignV1(root, campaign); err == nil || !strings.Contains(err.Error(), "off-plan M3 construction") {
+		if _, err := testM8ValidateQualificationCampaignV1(root, campaign); err == nil || !strings.Contains(err.Error(), "off-plan M3 construction") {
 			t.Fatalf("off-plan router configuration err=%v", err)
 		}
 	})
@@ -344,6 +345,10 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		campaign250.Runs = append(campaign250.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:])})
 	}
 	qualificationIndex := m8QualificationIndexV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_index_v1", BaseSHA: head, HeadSHA: head, Campaigns: []m8QualificationCampaignV1{campaign, campaign250}}
+	indexSummary, err := testM8ValidateQualificationIndexV1(root, qualificationIndex)
+	if err != nil || indexSummary.Status != "qualified" || indexSummary.BaseSHA != head || indexSummary.HeadSHA != head || len(indexSummary.Campaigns) != 2 || indexSummary.Campaigns[fixture.Checksum].P4QPSMedian != 200 || indexSummary.Campaigns[fixture250.Checksum].P4QPSMedian != 200 {
+		t.Fatalf("index summary err=%v summary=%+v", err, indexSummary)
+	}
 	index, err := json.Marshal(qualificationIndex)
 	if err != nil {
 		t.Fatal(err)
@@ -352,12 +357,8 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	stdout.Reset()
-	if err := run([]string{"validate-qualification", "-index", indexPath}, &stdout); err != nil {
-		t.Fatalf("CLI validation err=%v output=%q", err, stdout.String())
-	}
-	var indexSummary m8QualificationIndexSummaryV1
-	if err := json.Unmarshal([]byte(stdout.String()), &indexSummary); err != nil || indexSummary.Status != "qualified" || indexSummary.BaseSHA != head || indexSummary.HeadSHA != head || len(indexSummary.Campaigns) != 2 || indexSummary.Campaigns[fixture.Checksum].P4QPSMedian != 200 || indexSummary.Campaigns[fixture250.Checksum].P4QPSMedian != 200 {
-		t.Fatalf("CLI summary err=%v summary=%+v", err, indexSummary)
+	if err := run([]string{"validate-qualification", "-index", indexPath}, &stdout); err == nil || !strings.Contains(err.Error(), "retained M3 assets") {
+		t.Fatalf("descriptor-only CLI validation err=%v output=%q", err, stdout.String())
 	}
 	for name, mutate := range map[string]func(*m8QualificationIndexV1){
 		"duplicate_100k": func(index *m8QualificationIndexV1) { index.Campaigns[1] = index.Campaigns[0] },
@@ -371,7 +372,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			bad := qualificationIndex
 			bad.Campaigns = slices.Clone(qualificationIndex.Campaigns)
 			mutate(&bad)
-			if _, err := m8ValidateQualificationIndexV1(root, bad); err == nil {
+			if _, err := testM8ValidateQualificationIndexV1(root, bad); err == nil {
 				t.Fatalf("accepted %s qualification index", name)
 			}
 		})
@@ -399,7 +400,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		bad.Campaigns = slices.Clone(qualificationIndex.Campaigns)
 		bad.Campaigns[1].Runs = slices.Clone(campaign250.Runs)
 		bad.Campaigns[1].Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
-		if _, err := m8ValidateQualificationIndexV1(root, bad); err == nil {
+		if _, err := testM8ValidateQualificationIndexV1(root, bad); err == nil {
 			t.Fatal("accepted manifest-mismatched corpus")
 		}
 	})
@@ -413,7 +414,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			bad := campaign
 			bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
 			mutate(&bad)
-			if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
+			if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil {
 				t.Fatalf("accepted %s campaign identity", name)
 			}
 		})
@@ -434,7 +435,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		bad := campaign
 		bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
 		bad.Runs[0] = m8QualificationCampaignRunV1{Path: "execution-id-whitespace.json", SHA256: hex.EncodeToString(digest[:])}
-		if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
+		if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil {
 			t.Fatal("accepted whitespace execution identity")
 		}
 	})
@@ -466,7 +467,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		bad := campaign
 		bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
 		bad.Runs[2] = m8QualificationCampaignRunV1{Path: "execution-id-copy.json", SHA256: hex.EncodeToString(digest[:])}
-		if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
+		if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil {
 			t.Fatalf("reserialized copy err=%v", err)
 		}
 	})
@@ -486,7 +487,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		bad := campaign
 		bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
 		bad.Runs[0] = m8QualificationCampaignRunV1{Path: "execution-evidence-tamper.json", SHA256: hex.EncodeToString(digest[:])}
-		if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
+		if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil {
 			t.Fatal("accepted tampered execution evidence digest")
 		}
 	})
@@ -512,7 +513,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		bad := campaign
 		bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
 		bad.Runs[0] = m8QualificationCampaignRunV1{Path: "profile-reuse-variants.json", SHA256: hex.EncodeToString(digest256[:])}
-		if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil || !strings.Contains(err.Error(), "reuses profile artifact set") {
+		if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil || !strings.Contains(err.Error(), "reuses profile artifact set") {
 			t.Fatalf("profile reuse err=%v", err)
 		}
 	})
@@ -532,7 +533,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		bad := campaign
 		bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
 		bad.Runs[0] = m8QualificationCampaignRunV1{Path: "router-count-forgery.json", SHA256: hex.EncodeToString(digest[:])}
-		if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
+		if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil {
 			t.Fatal("accepted forged router representative count")
 		}
 	})
@@ -549,7 +550,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	bad := campaign
 	bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
 	bad.Runs[0] = m8QualificationCampaignRunV1{Path: "invalid-child.json", SHA256: hex.EncodeToString(digest[:])}
-	if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
+	if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil {
 		t.Fatal("accepted an invalid child report")
 	}
 	derivedTamper := testM8QualificationMatrixV1(t, head, fixture, 125)
@@ -569,7 +570,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	digest = sha256.Sum256(raw)
 	bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
 	bad.Runs[0] = m8QualificationCampaignRunV1{Path: "derived-tamper.json", SHA256: hex.EncodeToString(digest[:])}
-	if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
+	if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil {
 		t.Fatal("accepted coordinated stale child and matrix ledgers")
 	}
 	for name, mutate := range map[string]func(*m8ProductionMatrixV1){
@@ -688,7 +689,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			bad := campaign
 			bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
 			bad.Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
-			_, err = m8ValidateQualificationCampaignV1(root, bad)
+			_, err = testM8ValidateQualificationCampaignV1(root, bad)
 			if err == nil || (name == "unprofiled" && !strings.Contains(err.Error(), "unbound profile capture")) {
 				t.Fatalf("accepted %s qualification matrix: %v", name, err)
 			}
@@ -712,7 +713,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		bad := campaign
 		bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
 		bad.Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
-		if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
+		if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil {
 			t.Fatal("accepted tampered profile")
 		}
 	})
@@ -726,7 +727,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
 		bad.Runs[0].Path = "escape.json"
 		bad.Runs[0].SHA256 = hex.EncodeToString(digest[:])
-		if _, err := m8ValidateQualificationCampaignV1(root, bad); err == nil {
+		if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil {
 			t.Fatal("accepted a symlink escaping campaign root")
 		}
 	}
@@ -739,7 +740,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	}
 	campaign.Runs = campaign.Runs[:2]
 	write("broken.json", broken)
-	if _, err := m8ValidateQualificationCampaignV1(root, campaign); err == nil || !strings.Contains(err.Error(), "misses the selected p4/p16 gate") {
+	if _, err := testM8ValidateQualificationCampaignV1(root, campaign); err == nil || !strings.Contains(err.Error(), "misses the selected p4/p16 gate") {
 		t.Fatalf("under-target p4 QPS error=%v", err)
 	}
 }
@@ -860,10 +861,8 @@ func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManif
 		refreshTestM3VariantIdentityV1(t, &descriptor)
 		report := testM8QualificationReportV1(t, head, fixture, descriptor, p4QPS)
 		if _, err := m3ReadVariantDescriptorV1(report.Variant.DatabaseDirectory); err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				if err := os.Remove(filepath.Join(report.Variant.DatabaseDirectory, m3VariantDescriptorFileV1)); err != nil {
-					t.Fatal(err)
-				}
+			if err := os.Remove(filepath.Join(report.Variant.DatabaseDirectory, m3VariantDescriptorFileV1)); err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
 			}
 			if err := m3WriteVariantDescriptorV1(report.Variant.DatabaseDirectory, *report.Variant); err != nil {
 				t.Fatal(err)
@@ -884,45 +883,245 @@ func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManif
 	return built
 }
 
+func testM8ValidateQualificationCampaignV1(root string, campaign m8QualificationCampaignV1) (m8QualificationCampaignSummaryV1, error) {
+	return m8ValidateQualificationCampaignWithRetainedVariantV1(root, campaign, func(m8ProductionReportV1) error { return nil })
+}
+
+func testM8ValidateQualificationIndexV1(root string, index m8QualificationIndexV1) (m8QualificationIndexSummaryV1, error) {
+	return m8ValidateQualificationIndexWithRetainedVariantV1(root, index, func(m8ProductionReportV1) error { return nil })
+}
+
+// testM8QualificationRetainedDescriptorV1 builds only the persisted M3 asset
+// phase.  Qualification must open a real router/manifest, not accept a
+// descriptor-shaped directory.
+func testM8QualificationRetainedDescriptorV1(t *testing.T, head string, fixture fixtureManifest, variantID, assignment string, ratio float64) m3VariantDescriptorV1 {
+	t.Helper()
+	const rows, dimensions, partitions = 256, 8, 16
+	dir := t.TempDir()
+	vectors := make([][]float64, rows)
+	input := make([]vectorpartition.Vector, rows)
+	for i := range vectors {
+		vectors[i] = make([]float64, dimensions)
+		for dimension := range vectors[i] {
+			vectors[i][dimension] = float64((i+1)*(dimension+3)%97 + 1)
+		}
+		input[i] = vectorpartition.Vector{ID: fmt.Sprintf("doc-%06d", i), Values: vectors[i]}
+	}
+	partition := vectorpartition.DefaultConfig()
+	partition.Partitions, partition.Seed, partition.MaxDistanceWork = partitions, fixture.Seed, 20_000_000_000
+	artifact, err := vectorpartition.BuildWithPartitioner(input, partition, vectorpartition.Source{SourceID: "qualification-test:" + fixture.Checksum}, vectorpartition.ReferencePartitioner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	graphArtifact := artifact
+	if assignment == partitionAssignmentStableIDHashV1 {
+		artifact, err = vectorpartition.BuildStableIDHashBaseline(artifact)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	capacity, err := m3OverlapCapacityV1(artifact, ratio)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlap, err := vectorpartition.BuildOverlap(artifact, vectorpartition.OverlapConfig{Ratio: ratio, Capacity: capacity, RequireExact: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assignment == partitionAssignmentStableIDHashV1 {
+		artifact.Backend = "stable_id_hash_baseline_v1"
+	} else {
+		artifact.Backend = fmt.Sprintf("kahip_python_3.25_eco_symmetrized_v1_seed_%d", fixture.Seed)
+	}
+	artifactDigest, err := vectorpartition.Digest(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	graphDigest, err := vectorpartition.Digest(graphArtifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assignment == partitionAssignmentGraphV1 {
+		graphDigest = artifactDigest
+	}
+	graphBuildDigest, err := m3GraphBuildSHA256V1(graphArtifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	meta := partitionCollectionMeta(m3BenchmarkCollection, dimensions)
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(meta); err != nil {
+		t.Fatal(err)
+	}
+	col, err := manager.OpenCollection(m3BenchmarkCollection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := insertM3SourceRows(col, vectors); err != nil {
+		t.Fatal(err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if status, err := col.RebuildVectorIndex(partitionHNSWIndex); err != nil || !status.Loaded {
+		t.Fatalf("rebuild source index: status=%+v err=%v", status, err)
+	}
+	source, sourceRows, err := col.VectorPartitionSourceOrdinalsV1(partitionHNSWIndex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceOrdinals, err := m3SourceOrdinalsByArtifactID(artifact, sourceRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routerConfig := vectorpartition.DefaultRouterConfigV1()
+	descriptor := m3VariantDescriptorV1{SchemaVersion: 5, ResultKind: "m3_persistent_variant_descriptor_v5", FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head, VariantID: variantID, AssignmentBasis: assignment, OverlapRatio: ratio, ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphDigest, GraphBuildSHA256: graphBuildDigest, ArtifactBackend: artifact.Backend, Source: artifact.Source, DatabaseDirectory: dir, IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(meta.VectorIndexes[0]), PartitionHNSWM: partitionHNSWDegree, PartitionMaxDistanceWork: 20_000_000_000, RouterMaxScalarWork: 20_000_000_000, RouterConfig: routerConfig, M3MaxBenchmarkVisits: 400_000_000, Capacity: overlap.Capacity, OverlapRequested: overlap.Budget, OverlapUseful: overlap.Useful, OverlapFiller: overlap.Filler, EdgeCutBefore: overlap.EdgeCutBefore, EdgeCutAfter: overlap.EdgeCutAfter}
+	descriptor.BuildIdentityDigest, err = m3VariantBuildIdentityDigestV1(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation := source.Generation + 1
+	manifest, _, err := m3BuildingManifest(*meta, source, artifact, overlap, sourceOrdinals, generation, descriptor.BuildIdentityDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routerPartitions, err := m3RouterPartitions(artifact, overlap, sourceOrdinals, vectors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileID, err := m3PartitionAssetFileID(generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs := make([]collections.VectorPartitionSearchAssetV1, partitions)
+	for partition := range inputs {
+		inputs[partition] = collections.VectorPartitionSearchAssetV1{Source: source, Generation: generation, PartitionID: uint32(partition), Dimensions: dimensions}
+	}
+	assets, resources, err := col.MaterializeVectorPartitionLocalSearchAssetsV1(partitionHNSWIndex, manifest, fileID, inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resources != nil {
+		resources.Release()
+	}
+	manifest.Assets = assets
+	manifest.Canonicalize()
+	if err := col.PublishVectorPartitionManifestV1(manifest, nil); err != nil {
+		t.Fatal(err)
+	}
+	routerFileID, err := m3RouterAssetFileID(generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routerBuild, err := col.BuildAndPublishVectorPartitionRouterV1(context.Background(), manifest, routerPartitions, collections.VectorPartitionRouterBuildOptionsV1{Config: routerConfig, AssetFileID: routerFileID, AssetPartID: uint64(partitions) + 1, M: partitionHNSWDegree, EfConstruction: 128, EfSearch: 128})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if routerBuild.Generation != generation {
+		t.Fatalf("router generation=%d want %d", routerBuild.Generation, generation)
+	}
+	router, _, err := col.OpenVectorPartitionRouterV1(partitionHNSWIndex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routerStatus := router.Status()
+	if err := router.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var persistent uint64
+	for _, asset := range routerStatus.Manifest.Assets {
+		persistent += asset.Bytes
+	}
+	persistent += routerStatus.Manifest.RouterAsset.Bytes
+	descriptor.ManifestIntegrity, descriptor.ReadySetDigest = routerStatus.Manifest.IntegrityDigest, routerStatus.Manifest.ReadySetDigest
+	descriptor.RouterAssetChecksum, descriptor.RouterModelDigest = routerStatus.Manifest.RouterAsset.Checksum, routerStatus.ModelDigest
+	descriptor.SourceGeneration, descriptor.SourceChecksum, descriptor.SourceSchemaHash, descriptor.SourceRows = routerStatus.Manifest.SourceGeneration, routerStatus.Manifest.SourceChecksum, routerStatus.Manifest.SourceSchemaHash, routerStatus.Manifest.SourceRowCount
+	descriptor.PartitionGeneration, descriptor.RouterGeneration, descriptor.Partitions = routerStatus.Manifest.Generation, routerStatus.Manifest.RouterGeneration, routerStatus.Manifest.PartitionCount
+	descriptor.OverlapPolicy, descriptor.OverlapRealized, descriptor.OverlapRejected = routerStatus.Manifest.BalancePolicy, overlap.Used, overlap.Unspent
+	descriptor.OverlapUnusedCapacity = descriptor.Capacity*int(descriptor.Partitions) - int(descriptor.SourceRows) - descriptor.OverlapRealized
+	descriptor.PartitionLoads = append([]int(nil), overlap.Loads...)
+	descriptor.OverlapMemberships, descriptor.RouterRepresentatives, descriptor.PersistentAssetBytes = len(routerStatus.Manifest.OverlapMemberships), uint64(len(routerStatus.Manifest.Representatives)), persistent
+	if err := validateM3VariantDescriptorV1(descriptor); err != nil {
+		t.Fatalf("descriptor: %v: %+v", err, descriptor)
+	}
+	if err := m3DescriptorMatchesManifestV1(descriptor, fixture, routerStatus.Manifest, routerStatus.ModelDigest, routerStatus.Config); err != nil {
+		t.Fatal(err)
+	}
+	if err := m3WriteVariantDescriptorV1(dir, descriptor); err != nil {
+		t.Fatal(err)
+	}
+	return descriptor
+}
+
 func TestM8QualificationRetainedVariantV1(t *testing.T) {
 	head, fixture := strings.Repeat("a", 40), m8QualificationFixturesV1[0]
-	for name, mutate := range map[string]func(*testing.T, *m8ProductionReportV1){
-		"missing_database": func(t *testing.T, report *m8ProductionReportV1) {
-			if err := os.RemoveAll(report.Variant.DatabaseDirectory); err != nil {
-				t.Fatal(err)
-			}
-		},
-		"empty_database": func(t *testing.T, report *m8ProductionReportV1) {
-			if err := os.Remove(filepath.Join(report.Variant.DatabaseDirectory, m3VariantDescriptorFileV1)); err != nil {
-				t.Fatal(err)
-			}
-		},
-		"swapped_manifest_identity": func(t *testing.T, report *m8ProductionReportV1) {
-			replacement := *report.Variant
-			replacement.ManifestIntegrity = strings.Repeat("e", 64)
-			refreshTestM3VariantIdentityV1(t, &replacement)
-			if err := os.Remove(filepath.Join(replacement.DatabaseDirectory, m3VariantDescriptorFileV1)); err != nil {
-				t.Fatal(err)
-			}
-			if err := m3WriteVariantDescriptorV1(replacement.DatabaseDirectory, replacement); err != nil {
-				t.Fatal(err)
-			}
-		},
-		"tampered_descriptor": func(t *testing.T, report *m8ProductionReportV1) {
-			if err := os.WriteFile(filepath.Join(report.Variant.DatabaseDirectory, m3VariantDescriptorFileV1), []byte(`{}`), 0o644); err != nil {
-				t.Fatal(err)
-			}
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
-			report := matrix.Variants[0]
-			mutate(t, &report)
-			if err := m8QualificationRetainedVariantV1(report); err == nil {
-				t.Fatal("accepted missing, empty, swapped, or tampered retained M3 assets")
-			}
-		})
+	newReport := func(t *testing.T) m8ProductionReportV1 {
+		t.Helper()
+		descriptor := testM8QualificationRetainedDescriptorV1(t, head, fixture, "graph-disjoint-v1", partitionAssignmentGraphV1, 0)
+		return m8ProductionReportV1{Dataset: fixture, Variant: &descriptor}
 	}
+	reject := func(t *testing.T, report m8ProductionReportV1) {
+		t.Helper()
+		if err := m8QualificationRetainedVariantV1(report); err == nil {
+			t.Fatal("accepted unavailable or tampered retained M3 assets")
+		}
+	}
+	t.Run("valid", func(t *testing.T) {
+		if err := m8QualificationRetainedVariantV1(newReport(t)); err != nil {
+			t.Fatalf("rejected real retained M3 assets: %v", err)
+		}
+	})
+	t.Run("copied_descriptor_only", func(t *testing.T) {
+		report := newReport(t)
+		copy := *report.Variant
+		copy.DatabaseDirectory = t.TempDir()
+		refreshTestM3VariantIdentityV1(t, &copy)
+		if err := m3WriteVariantDescriptorV1(copy.DatabaseDirectory, copy); err != nil {
+			t.Fatal(err)
+		}
+		report.Variant = &copy
+		reject(t, report)
+	})
+	t.Run("missing_descriptor", func(t *testing.T) {
+		report := newReport(t)
+		if err := os.Remove(filepath.Join(report.Variant.DatabaseDirectory, m3VariantDescriptorFileV1)); err != nil {
+			t.Fatal(err)
+		}
+		reject(t, report)
+	})
+	t.Run("missing_partition_router_packs", func(t *testing.T) {
+		report := newReport(t)
+		if err := os.RemoveAll(backenddb.ColumnAssetRootDirPath(report.Variant.DatabaseDirectory)); err != nil {
+			t.Fatal(err)
+		}
+		reject(t, report)
+	})
+	t.Run("tampered_partition_router_pack", func(t *testing.T) {
+		report := newReport(t)
+		var pack string
+		err := filepath.Walk(backenddb.ColumnAssetRootDirPath(report.Variant.DatabaseDirectory), func(path string, info os.FileInfo, walkErr error) error {
+			if walkErr != nil || pack != "" || info.IsDir() {
+				return walkErr
+			}
+			pack = path
+			return nil
+		})
+		if err != nil || pack == "" {
+			t.Fatalf("find retained partition/router pack: %v path=%q", err, pack)
+		}
+		if err := os.WriteFile(pack, []byte("tampered"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		reject(t, report)
+	})
 }
 
 func TestM8QualificationRejectsDirtyM3VariantV1(t *testing.T) {
@@ -957,7 +1156,7 @@ func TestM8QualificationRejectsDirtyM3VariantV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	campaign.Runs[0] = write("dirty.json", dirty)
-	if _, err := m8ValidateQualificationCampaignV1(root, campaign); err == nil {
+	if _, err := testM8ValidateQualificationCampaignV1(root, campaign); err == nil {
 		t.Fatal("accepted self-consistent dirty M3 descriptor")
 	}
 	mismatched := testM8QualificationMatrixV1(t, head, fixture, 125)
@@ -973,7 +1172,7 @@ func TestM8QualificationRejectsDirtyM3VariantV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	campaign.Runs[0] = write("mismatched-m3-revision.json", mismatched)
-	if _, err := m8ValidateQualificationCampaignV1(root, campaign); err == nil || !strings.Contains(err.Error(), "retained M3 revision") {
+	if _, err := testM8ValidateQualificationCampaignV1(root, campaign); err == nil || !strings.Contains(err.Error(), "retained M3 revision") {
 		t.Fatalf("mismatched M3 revision err=%v", err)
 	}
 }
@@ -1008,7 +1207,7 @@ func TestM8QualificationRejectsEscapingTranscriptSymlinkV1(t *testing.T) {
 		digest := sha256.Sum256(raw)
 		campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])})
 	}
-	if _, err := m8ValidateQualificationCampaignV1(root, campaign); err != nil {
+	if _, err := testM8ValidateQualificationCampaignV1(root, campaign); err != nil {
 		t.Fatalf("ordinary campaign err=%v", err)
 	}
 	raw, err := os.ReadFile(transcriptPath)
@@ -1025,7 +1224,7 @@ func TestM8QualificationRejectsEscapingTranscriptSymlinkV1(t *testing.T) {
 	if err := os.Symlink(outside, transcriptPath); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
-	if _, err := m8ValidateQualificationCampaignV1(root, campaign); err == nil {
+	if _, err := testM8ValidateQualificationCampaignV1(root, campaign); err == nil {
 		t.Fatal("accepted transcript symlink escaping campaign root")
 	}
 }
@@ -1150,7 +1349,7 @@ func testM8QualificationReportV1(t *testing.T, head string, fixture fixtureManif
 		}
 		rows = append(rows, row(probes, qps))
 	}
-	report := m8ProductionReportV1{SchemaVersion: 3, ResultKind: "m8_production_multi_group_evidence_v3", Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true, GeneratedAt: time.Now(), ExecutionID: strings.Repeat("f", 32), Command: []string{"m8-test"}, BaseSHA: head, HeadSHA: head, GoVersion: "go1.test", GOOS: "linux", GOARCH: "amd64", LogicalCPUs: 1, GOMAXPROCS: 1, GoMemoryLimitBytes: 1, Host: m8ProductionHostEvidenceV1{CPUModel: "test"}, Dataset: fixture, DatasetDirectory: datasetDirectory, Variant: &descriptor, Config: m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16, Probes: rowProbes, Overlap: []float64{descriptor.OverlapRatio}, TopK: 10, RecallTarget: .90, Concurrency: []int{1}, Warmup: 0, EffectiveWarmup: 0, EfSearch: []int{64}, RouterCandidates: 64, MaxExactTruthVisits: m8QualificationExactTruthCapV1(fixture), Seed: fixture.Seed}, BuildNanos: 1, Topology: nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{Network: "tcp_loopback_serialized_m5_v1", LifecycleState: "active", ReadySetDigest: strings.Repeat("c", 64), MetaGroup: "meta", MetaLeader: "meta-leader", MetaNodes: []string{"meta-a", "meta-b", "meta-c"}, MaxConcurrentShardRequests: 1, Groups: []nativewire.VectorPartitionM8ProductionGroupEvidenceV1{group("group-a"), group("group-b"), group("group-c"), group("group-d")}}, RouterSessions: m8ProductionRouterSessionEvidenceV1{AfterWarmup: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{warm}, AfterMeasured: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{measured}}, Rows: rows, PackDiagnostics: diagnostics, UntimedBoundary: m8ProductionResourceBoundaryV1{SelectedPartitions: 16, EfSearch: 10, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 1, RPCs: 1, RequestBytes: 1, ShardPartitions: 1, ShardRequestBytes: 1}}, Failure: m8ProductionFailureEvidenceV1{Passed: true, Error: "unavailable", ResourceBoundary: m8ProductionFaultResourceBoundaryV1{SelectedPartitions: 16, EfSearch: 4096, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 1, RPCs: 1, RequestBytes: 1, ShardPartitions: 1, ShardRequestBytes: 1}}}, GateLedger: m8ProductionGateLedgerV1{ExhaustiveParity: "pass", FailureHonesty: "pass", PartitionPackReachability: "pass", Recall: "pass", ProbeReduction: "pass", EndToEndQPS: "pass", TailLatency: "pass", Balance: "pass", ResourceBounds: "pass"}, Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1, PersistentAssetCap: m8QualificationPersistentAssetCapBytesV1, PartitionLoads: loads, PeakRSSBytes: 1, PeakRSSCapBytes: m8QualificationPeakRSSCapBytesV1, PeakRSSMeasured: true, PeakRSSScope: m8PeakRSSScopeV1, OverlapMemberships: wantOverlap, MaxPartitionLoad: uint64((fixture.Vectors + wantOverlap + 15) / 16), BalanceHardCap: uint64((fixture.Vectors + wantOverlap + 15) / 16), LimitComparisons: []m8ProductionResourceLimitComparisonV1{{Name: "test", Configured: 1, Passed: true}}}, TruthCache: m8TruthCacheEvidenceV1{Status: "computed", Identity: m8TruthCacheIdentityV1(fixture, 10), ArtifactSHA256: strings.Repeat("d", 64), ComputeNanos: 1}, TimedBoundary: "measured", Limitations: []string{"test"}}
+	report := m8ProductionReportV1{SchemaVersion: 3, ResultKind: "m8_production_multi_group_evidence_v3", Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true, GeneratedAt: time.Now(), ExecutionID: strings.Repeat("f", 32), Command: []string{"m8-test"}, BaseSHA: head, HeadSHA: head, GoVersion: "go1.test", GOOS: "linux", GOARCH: "amd64", LogicalCPUs: 1, GOMAXPROCS: 1, GoMemoryLimitBytes: 1, Host: m8ProductionHostEvidenceV1{CPUModel: "test"}, Dataset: fixture, DatasetDirectory: datasetDirectory, Variant: &descriptor, Config: m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16, Probes: rowProbes, Overlap: []float64{descriptor.OverlapRatio}, TopK: 10, RecallTarget: .90, Concurrency: []int{1}, Warmup: 0, EffectiveWarmup: 0, EfSearch: []int{64}, RouterCandidates: 64, MaxExactTruthVisits: m8QualificationExactTruthCapV1(fixture), Seed: fixture.Seed}, BuildNanos: 1, Topology: nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{Network: "tcp_loopback_serialized_m5_v1", LifecycleState: "active", ReadySetDigest: strings.Repeat("c", 64), MetaGroup: "meta", MetaLeader: "meta-leader", MetaNodes: []string{"meta-a", "meta-b", "meta-c"}, MaxConcurrentShardRequests: 1, Groups: []nativewire.VectorPartitionM8ProductionGroupEvidenceV1{group("group-a"), group("group-b"), group("group-c"), group("group-d")}}, RouterSessions: m8ProductionRouterSessionEvidenceV1{AfterWarmup: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{warm}, AfterMeasured: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{measured}}, Rows: rows, PackDiagnostics: diagnostics, UntimedBoundary: m8ProductionResourceBoundaryV1{SelectedPartitions: 16, EfSearch: 10, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 1, RPCs: 1, RequestBytes: 1, ShardPartitions: 1, ShardRequestBytes: 1}}, Failure: m8ProductionFailureEvidenceV1{Passed: true, Error: "unavailable", ResourceBoundary: m8ProductionFaultResourceBoundaryV1{SelectedPartitions: 16, EfSearch: 4096, WallClockNanos: 1, Maxima: m8ProductionResourceObservedMaximaV1{Requests: 1, RPCs: 1, RequestBytes: 1, ShardPartitions: 1, ShardRequestBytes: 1}}}, GateLedger: m8ProductionGateLedgerV1{ExhaustiveParity: "pass", FailureHonesty: "pass", PartitionPackReachability: "pass", Recall: "pass", ProbeReduction: "pass", EndToEndQPS: "pass", TailLatency: "pass", Balance: "pass", ResourceBounds: "pass"}, Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: descriptor.PersistentAssetBytes, PersistentAssetCap: m8QualificationPersistentAssetCapBytesV1, PartitionLoads: loads, PeakRSSBytes: 1, PeakRSSCapBytes: m8QualificationPeakRSSCapBytesV1, PeakRSSMeasured: true, PeakRSSScope: m8PeakRSSScopeV1, OverlapMemberships: wantOverlap, MaxPartitionLoad: uint64((fixture.Vectors + wantOverlap + 15) / 16), BalanceHardCap: uint64((fixture.Vectors + wantOverlap + 15) / 16), LimitComparisons: []m8ProductionResourceLimitComparisonV1{{Name: "test", Configured: 1, Passed: true}}}, TruthCache: m8TruthCacheEvidenceV1{Status: "computed", Identity: m8TruthCacheIdentityV1(fixture, 10), ArtifactSHA256: strings.Repeat("d", 64), ComputeNanos: 1}, TimedBoundary: "measured", Limitations: []string{"test"}}
 	report.RouterRepresentatives = descriptor.RouterRepresentatives
 	report.Topology.ReadySetDigest = descriptor.ReadySetDigest
 	testM8BindRouterSessionsVariantV1(&report.RouterSessions, descriptor, report.Topology.ReadySetDigest)

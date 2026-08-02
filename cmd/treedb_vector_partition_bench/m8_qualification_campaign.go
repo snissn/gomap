@@ -107,6 +107,10 @@ func runValidateQualification(args []string, stdout io.Writer) error {
 }
 
 func m8ValidateQualificationIndexV1(root string, index m8QualificationIndexV1) (m8QualificationIndexSummaryV1, error) {
+	return m8ValidateQualificationIndexWithRetainedVariantV1(root, index, m8QualificationRetainedVariantV1)
+}
+
+func m8ValidateQualificationIndexWithRetainedVariantV1(root string, index m8QualificationIndexV1, retainedVariant m8QualificationRetainedVariantVerifierV1) (m8QualificationIndexSummaryV1, error) {
 	summary := m8QualificationIndexSummaryV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_summary_v1", Status: "qualified", BaseSHA: index.BaseSHA, HeadSHA: index.HeadSHA, Campaigns: make(map[string]m8QualificationCampaignSummaryV1, len(m8QualificationFixturesV1))}
 	if index.SchemaVersion != 1 || index.ResultKind != "vector_partition_structured_qualification_index_v1" || !m8QualificationGitSHAV1(index.BaseSHA) || !m8QualificationGitSHAV1(index.HeadSHA) || len(index.Campaigns) != len(m8QualificationFixturesV1) {
 		return m8QualificationIndexSummaryV1{}, errors.New("qualification index requires exactly the two authoritative corpus campaigns")
@@ -118,7 +122,7 @@ func m8ValidateQualificationIndexV1(root string, index m8QualificationIndexV1) (
 		if campaign.BaseSHA != index.BaseSHA || campaign.HeadSHA != index.HeadSHA {
 			return m8QualificationIndexSummaryV1{}, errors.New("qualification index campaigns do not share the index revision")
 		}
-		campaignSummary, err := m8ValidateQualificationCampaignV1(root, campaign)
+		campaignSummary, err := m8ValidateQualificationCampaignWithRetainedVariantV1(root, campaign, retainedVariant)
 		if err != nil {
 			return m8QualificationIndexSummaryV1{}, err
 		}
@@ -132,7 +136,19 @@ func m8ValidateQualificationIndexV1(root string, index m8QualificationIndexV1) (
 	return summary, nil
 }
 
+type m8QualificationRetainedVariantVerifierV1 func(m8ProductionReportV1) error
+
 func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCampaignV1) (m8QualificationCampaignSummaryV1, error) {
+	return m8ValidateQualificationCampaignWithRetainedVariantV1(root, campaign, m8QualificationRetainedVariantV1)
+}
+
+// m8ValidateQualificationCampaignWithRetainedVariantV1 keeps the retained
+// asset boundary explicit for focused evidence tests. Production callers use
+// m8ValidateQualificationCampaignV1 above and cannot select a verifier.
+func m8ValidateQualificationCampaignWithRetainedVariantV1(root string, campaign m8QualificationCampaignV1, retainedVariant m8QualificationRetainedVariantVerifierV1) (m8QualificationCampaignSummaryV1, error) {
+	if retainedVariant == nil {
+		return m8QualificationCampaignSummaryV1{}, errors.New("qualification retained-asset verifier is required")
+	}
 	if !m8QualificationSHA256V1(campaign.FixtureChecksum) || !m8QualificationGitSHAV1(campaign.BaseSHA) || !m8QualificationGitSHAV1(campaign.HeadSHA) || len(campaign.Runs) != 3 {
 		return m8QualificationCampaignSummaryV1{}, errors.New("qualification campaign requires one fixture/head and exactly three runs")
 	}
@@ -236,7 +252,7 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 			if report.BaseSHA != campaign.BaseSHA || report.HeadSHA != campaign.HeadSHA || report.Dataset != matrix.Dataset || report.Dirty || !m8QualificationSHA256V1(report.TruthCache.ArtifactSHA256) || report.Variant == nil || report.Variant.BuildDirty || seenVariants[report.Variant.VariantID] || !slices.Contains(m8RequiredVariantIDsV1, report.Variant.VariantID) || !m8QualificationSHA256V1(report.Variant.ArtifactSHA256) || !m8QualificationConfigV1(report.Config, report.Dataset, report.Variant.OverlapRatio, runIndex) || !m8QualificationVariantBackendV1(*report.Variant, report.Dataset) {
 				return summary, fmt.Errorf("qualification matrix %s has unbound child identity", run.Path)
 			}
-			if err := m8QualificationRetainedVariantV1(*report); err != nil {
+			if err := retainedVariant(*report); err != nil {
 				return summary, fmt.Errorf("qualification matrix %s has unavailable or mismatched retained M3 assets: %w", cleanPath, err)
 			}
 			if executionIDs[report.ExecutionID] {
@@ -365,7 +381,7 @@ func m8QualificationConfigV1(cfg m8ProductionConfigEvidenceV1, fixture fixtureMa
 	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterCandidates == 64 && cfg.MaxExactTruthVisits == m8QualificationExactTruthCapV1(fixture) && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, []int{1, 2, 4, 8, 16}) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{64}) && slices.Equal(cfg.Overlap, []float64{overlap})
 }
 
-func m8QualificationRetainedVariantV1(report m8ProductionReportV1) error {
+func m8QualificationRetainedVariantV1(report m8ProductionReportV1) (err error) {
 	if report.Variant == nil {
 		return errors.New("missing retained M3 descriptor")
 	}
@@ -377,17 +393,21 @@ func m8QualificationRetainedVariantV1(report m8ProductionReportV1) error {
 	if err != nil || !info.IsDir() {
 		return errors.New("retained M3 database is not a directory")
 	}
-	actual, err := m3ReadVariantDescriptorV1(dir)
+	assets, err := openM8ProductionExistingAssetSetV1(dir)
 	if err != nil {
 		return err
 	}
+	defer func() { err = errors.Join(err, assets.Close()) }()
+	if err := m8BindRetainedM3DescriptorV1(assets, report.Dataset); err != nil {
+		return err
+	}
+	actual := *assets.descriptor
 	actualDir, err := m8CanonicalPathV1(actual.DatabaseDirectory)
 	if err != nil || actualDir != dir {
 		return errors.New("retained M3 descriptor has a different database directory")
 	}
 	want := *report.Variant
-	want.DatabaseDirectory = dir
-	actual.DatabaseDirectory = actualDir
+	want.DatabaseDirectory, actual.DatabaseDirectory = dir, actualDir
 	if !reflect.DeepEqual(actual, want) {
 		return errors.New("retained M3 descriptor does not match report variant")
 	}
