@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -350,6 +352,64 @@ func TestM8TruthCacheStreamEncodingMatchesJSONV1(t *testing.T) {
 	if err != nil || digest != hex.EncodeToString(sum[:]) {
 		t.Fatalf("digest=%q err=%v", digest, err)
 	}
+}
+
+func TestM8TruthCachePublisherLeavesOnlyCompleteNoReplaceArtifactsV1(t *testing.T) {
+	fixture := fixtureManifest{Checksum: strings.Repeat("a", 64), Vectors: 1, Dimensions: 2, Metric: "cosine"}
+	identity, dir := m8TruthCacheIdentityV1(fixture, 1), t.TempDir()
+	path := m8TruthCacheArtifactPathV1(dir, identity)
+	truth := [][]m8CanonicalResultV1{{{ID: "doc-000000", Score: .5}}}
+	truthSHA, err := m8TruthContentSHA256V1(truth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: m8CanonicalTruthContractV1, DatasetChecksum: fixture.Checksum, Dimensions: fixture.Dimensions, Metric: fixture.Metric, TopK: 1, TruthSHA256: truthSHA, Truth: truth}
+	write := func(w io.Writer) error { return m8WriteTruthCacheJSONV1(w, file) }
+	t.Run("write failure cleans temporary and final paths", func(t *testing.T) {
+		_, err := m8PublishTruthCacheV1(path, func(w io.Writer) error {
+			if _, err := io.WriteString(w, "{"); err != nil {
+				return err
+			}
+			return errors.New("write failure")
+		})
+		if err == nil {
+			t.Fatal("accepted failing truth-cache write")
+		}
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("partial final artifact err=%v", err)
+		}
+		if paths, err := filepath.Glob(filepath.Join(dir, ".m8_canonical_truth_*.tmp")); err != nil || len(paths) != 0 {
+			t.Fatalf("temporary artifacts=%v err=%v", paths, err)
+		}
+	})
+	t.Run("existing final remains untouched", func(t *testing.T) {
+		if err := os.WriteFile(path, []byte("sentinel"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := m8PublishTruthCacheV1(path, write); err == nil || !os.IsExist(err) {
+			t.Fatalf("existing artifact error=%v", err)
+		}
+		got, err := os.ReadFile(path)
+		if err != nil || string(got) != "sentinel" {
+			t.Fatalf("existing artifact=%q err=%v", got, err)
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("complete artifact publishes and decodes", func(t *testing.T) {
+		digest, err := m8PublishTruthCacheV1(path, write)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, artifact, err := m8ReadTruthCacheV1(path, fixture, 1, 1, 1, digest)
+		if err != nil || artifact != digest || !reflect.DeepEqual(got, truth) {
+			t.Fatalf("artifact=%q digest=%q truth=%v err=%v", artifact, digest, got, err)
+		}
+		if paths, err := filepath.Glob(filepath.Join(dir, ".m8_canonical_truth_*.tmp")); err != nil || len(paths) != 0 {
+			t.Fatalf("temporary artifacts=%v err=%v", paths, err)
+		}
+	})
 }
 
 func TestM8TruthCacheWhitespaceBoundAndExactByteDigestV1(t *testing.T) {

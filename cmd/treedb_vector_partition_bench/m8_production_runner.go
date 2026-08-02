@@ -1262,33 +1262,47 @@ func m8LoadOrComputeTruthV1(cacheDir string, collection *collections.Collection,
 		if err != nil {
 			return nil, evidence, err
 		}
-		temp, err := os.CreateTemp(cacheDir, ".m8_canonical_truth_*.tmp")
+		artifactSHA256, err := m8PublishTruthCacheV1(path, func(w io.Writer) error {
+			return m8WriteTruthCacheJSONV1(w, m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: collections.VectorPartitionCanonicalScoreContractV1, DatasetChecksum: fixture.Checksum, Dimensions: fixture.Dimensions, Metric: fixture.Metric, TopK: topK, TruthSHA256: truthSHA256, Truth: truth})
+		})
 		if err != nil {
 			return nil, evidence, err
 		}
-		tempPath := temp.Name()
-		defer os.Remove(tempPath)
-		artifactHash := sha256.New()
-		if err := m8WriteTruthCacheJSONV1(io.MultiWriter(temp, artifactHash), m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: collections.VectorPartitionCanonicalScoreContractV1, DatasetChecksum: fixture.Checksum, Dimensions: fixture.Dimensions, Metric: fixture.Metric, TopK: topK, TruthSHA256: truthSHA256, Truth: truth}); err != nil {
-			temp.Close()
-			return nil, evidence, err
-		}
-		evidence.ArtifactSHA256 = hex.EncodeToString(artifactHash.Sum(nil))
-		if err := temp.Chmod(0o644); err != nil {
-			temp.Close()
-			return nil, evidence, err
-		}
-		if err := temp.Close(); err != nil {
-			return nil, evidence, err
-		}
+		evidence.ArtifactSHA256 = artifactSHA256
 		if expectedDigest != "" && evidence.ArtifactSHA256 != expectedDigest {
 			return nil, evidence, errors.New("computed canonical truth cache artifact does not match independently trusted digest")
 		}
-		if err := os.Rename(tempPath, path); err != nil {
-			return nil, evidence, err
-		}
 	}
 	return truth, evidence, nil
+}
+
+// m8PublishTruthCacheV1 exposes a complete cache only after it is closed and
+// atomically linked into its final no-replace name.
+func m8PublishTruthCacheV1(path string, write func(io.Writer) error) (string, error) {
+	file, err := os.CreateTemp(filepath.Dir(path), ".m8_canonical_truth_*.tmp")
+	if err != nil {
+		return "", err
+	}
+	tempPath := file.Name()
+	defer os.Remove(tempPath)
+	defer file.Close()
+	hash := sha256.New()
+	if err := write(io.MultiWriter(file, hash)); err != nil {
+		return "", err
+	}
+	if err := file.Chmod(0o644); err != nil {
+		return "", err
+	}
+	if err := file.Sync(); err != nil {
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Link(tempPath, path); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 // m8ReadTruthCacheV1 performs the bounded, streaming cache validation shared

@@ -500,17 +500,13 @@ func runGenerateTruthCache(args []string, stdout io.Writer) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	artifactSHA, err := m8PublishTruthCacheV1(path, func(w io.Writer) error {
+		return m8WriteTruthCacheJSONV1(w, m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: collections.VectorPartitionCanonicalScoreContractV1, DatasetChecksum: fixture.Checksum, Dimensions: fixture.Dimensions, Metric: fixture.Metric, TopK: topK, TruthSHA256: truthSHA, Truth: truth})
+	})
 	if err != nil {
 		return err
 	}
-	h := sha256.New()
-	writeErr := m8WriteTruthCacheJSONV1(io.MultiWriter(file, h), m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: collections.VectorPartitionCanonicalScoreContractV1, DatasetChecksum: fixture.Checksum, Dimensions: fixture.Dimensions, Metric: fixture.Metric, TopK: topK, TruthSHA256: truthSHA, Truth: truth})
-	closeErr := file.Close()
-	if writeErr != nil || closeErr != nil {
-		return errors.Join(writeErr, closeErr)
-	}
-	_, err = fmt.Fprintf(stdout, "truth_cache=%s artifact_sha256=%s truth_sha256=%s identity=%s visits=%d\n", path, hex.EncodeToString(h.Sum(nil)), truthSHA, identity, visits)
+	_, err = fmt.Fprintf(stdout, "truth_cache=%s artifact_sha256=%s truth_sha256=%s identity=%s visits=%d\n", path, artifactSHA, truthSHA, identity, visits)
 	return err
 }
 
