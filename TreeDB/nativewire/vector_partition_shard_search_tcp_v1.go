@@ -33,6 +33,7 @@ type VectorPartitionShardSearchTCPDispatcherV1 struct {
 	maxFrame      uint32
 	mu            sync.Mutex
 	conns         map[string]*vectorPartitionShardSearchTCPPooledConnV1
+	closed        bool
 }
 
 type vectorPartitionShardSearchTCPPooledConnV1 struct {
@@ -89,6 +90,21 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShard
 	if d == nil || d.dial == nil || d.maxFrame == 0 {
 		return VectorPartitionShardSearchResponseV1{}, errors.New("nativewire: M5 TCP dispatcher is not configured")
 	}
+	for attempt := 0; ; attempt++ {
+		response, err := d.dispatchVectorPartitionShardSearchOnceV1(ctx, request)
+		if err == nil || attempt != 0 || ctx.Err() != nil || !vectorPartitionShardSearchTCPReconnectableV1(err) {
+			return response, err
+		}
+	}
+}
+
+func (d *VectorPartitionShardSearchTCPDispatcherV1) dispatchVectorPartitionShardSearchOnceV1(ctx context.Context, request VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+	d.mu.Lock()
+	closed := d.closed
+	d.mu.Unlock()
+	if closed {
+		return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: request.TargetGroupID, Err: errors.New("nativewire: M5 TCP dispatcher is closed")}
+	}
 	endpoint, ok := d.endpoint(request.TargetGroupID, request.TargetNodeID)
 	if !ok {
 		return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorUnknownOwnerV1, GroupID: request.TargetGroupID, Err: ErrVectorPartitionShardSearchRouteMismatch}
@@ -124,6 +140,7 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShard
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, errors.New("ambiguous M5 response frame"))
 	}
 	if frame.Error != nil {
+		_ = conn.SetDeadline(time.Time{})
 		return VectorPartitionShardSearchResponseV1{}, frame.Error.toError()
 	}
 	_ = conn.SetDeadline(time.Time{})
@@ -141,6 +158,10 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) endpoint(group raftcluster.G
 }
 func (d *VectorPartitionShardSearchTCPDispatcherV1) acquire(ctx context.Context, endpoint string) (*vectorPartitionShardSearchTCPPooledConnV1, error) {
 	d.mu.Lock()
+	if d.closed {
+		d.mu.Unlock()
+		return nil, net.ErrClosed
+	}
 	if pooled := d.conns[endpoint]; pooled != nil {
 		d.mu.Unlock()
 		return pooled, nil
@@ -152,6 +173,11 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) acquire(ctx context.Context,
 	}
 	pooled := &vectorPartitionShardSearchTCPPooledConnV1{conn: conn}
 	d.mu.Lock()
+	if d.closed {
+		d.mu.Unlock()
+		_ = conn.Close()
+		return nil, net.ErrClosed
+	}
 	if existing := d.conns[endpoint]; existing != nil {
 		d.mu.Unlock()
 		_ = conn.Close()
@@ -177,6 +203,11 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) Close() error {
 		return nil
 	}
 	d.mu.Lock()
+	if d.closed {
+		d.mu.Unlock()
+		return nil
+	}
+	d.closed = true
 	conns := d.conns
 	d.conns = make(map[string]*vectorPartitionShardSearchTCPPooledConnV1)
 	d.mu.Unlock()
@@ -185,6 +216,11 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) Close() error {
 		errs = append(errs, pooled.conn.Close())
 	}
 	return errors.Join(errs...)
+}
+
+func vectorPartitionShardSearchTCPReconnectableV1(err error) bool {
+	var shardErr *VectorPartitionShardSearchErrorV1
+	return errors.As(err, &shardErr) && shardErr.Code == VectorPartitionShardSearchErrorGroupUnavailableV1
 }
 
 // VectorPartitionShardSearchTCPServerV1 serves one M5 service over the same
