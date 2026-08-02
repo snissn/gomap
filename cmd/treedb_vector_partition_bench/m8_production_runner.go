@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"container/heap"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -63,6 +64,7 @@ type m8ProductionReportV1 struct {
 	Mode               string                                                     `json:"mode"`
 	ProductionEvidence bool                                                       `json:"production_evidence"`
 	GeneratedAt        time.Time                                                  `json:"generated_at"`
+	ExecutionID        string                                                     `json:"execution_id"`
 	Command            []string                                                   `json:"exact_command"`
 	BaseSHA            string                                                     `json:"base_sha"`
 	HeadSHA            string                                                     `json:"head_sha"`
@@ -391,11 +393,16 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	if err != nil {
 		return err
 	}
+	executionID, err := m8ProductionExecutionIDV1()
+	if err != nil {
+		return err
+	}
 	goMaxProcs, goMemoryLimitBytes := benchmarkRuntimeLimits()
 	report := m8ProductionReportV1{
 		SchemaVersion: 3, ResultKind: "m8_production_multi_group_evidence_v3", Status: "incomplete",
 		Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true, GeneratedAt: time.Now().UTC(),
-		Command: cfg.command, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dirty: m8GitDirtyV1(cfg.out, cfg.profiles, cfg.m8MatrixOut, cfg.m8MatrixProfiles),
+		ExecutionID: executionID,
+		Command:     cfg.command, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dirty: m8GitDirtyV1(cfg.out, cfg.profiles, cfg.m8MatrixOut, cfg.m8MatrixProfiles),
 		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), GOMAXPROCS: goMaxProcs, GoMemoryLimitBytes: goMemoryLimitBytes, Host: m8ProductionHostV1(cfg, assets.dir), Dataset: fixture, Variant: assets.descriptor,
 		Config:        m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), RouterCandidates: cfg.routerCandidates, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed},
 		BuildNanos:    buildNanos,
@@ -560,7 +567,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		return err
 	}
 	raw = append(raw, '\n')
-	name, err := m8ArtifactNameV1(cfg, fixture, assets.manifest)
+	name, err := m8ArtifactNameV1(cfg, fixture, assets.manifest, report.ExecutionID)
 	if err != nil {
 		return err
 	}
@@ -583,11 +590,33 @@ type m8ArtifactAssetIdentityV1 struct {
 	RouterGeneration uint64
 }
 
-func m8ArtifactNameV1(cfg config, fixture fixtureManifest, manifest collections.VectorPartitionManifestV1) (string, error) {
+const m8ProductionExecutionIDBytesV1 = 16
+
+func m8ProductionExecutionIDV1() (string, error) {
+	var bytes [m8ProductionExecutionIDBytesV1]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return "", fmt.Errorf("read M8 execution identity: %w", err)
+	}
+	return hex.EncodeToString(bytes[:]), nil
+}
+
+func validM8ProductionExecutionIDV1(id string) bool {
+	if len(id) != 2*m8ProductionExecutionIDBytesV1 {
+		return false
+	}
+	bytes, err := hex.DecodeString(id)
+	return err == nil && len(bytes) == m8ProductionExecutionIDBytesV1 && hex.EncodeToString(bytes) == id
+}
+
+func m8ArtifactNameV1(cfg config, fixture fixtureManifest, manifest collections.VectorPartitionManifestV1, executionID string) (string, error) {
+	if !validM8ProductionExecutionIDV1(executionID) {
+		return "", errors.New("invalid M8 execution identity")
+	}
 	identity, err := json.Marshal(struct {
-		Fixture fixtureManifest
-		Config  m8ProductionConfigEvidenceV1
-		Assets  m8ArtifactAssetIdentityV1
+		Fixture     fixtureManifest
+		Config      m8ProductionConfigEvidenceV1
+		Assets      m8ArtifactAssetIdentityV1
+		ExecutionID string
 	}{
 		Fixture: fixture,
 		Config: func() m8ProductionConfigEvidenceV1 {
@@ -600,6 +629,7 @@ func m8ArtifactNameV1(cfg config, fixture fixtureManifest, manifest collections.
 			Generation:       manifest.Generation,
 			RouterGeneration: manifest.RouterGeneration,
 		},
+		ExecutionID: executionID,
 	})
 	if err != nil {
 		return "", err
@@ -3227,7 +3257,7 @@ func m8CanonicalPathV1(path string) (string, error) {
 func validateM8ProductionReportV1(report m8ProductionReportV1, caps m8ProductionResourceCapsV1) error {
 	if report.SchemaVersion != 3 || report.ResultKind != "m8_production_multi_group_evidence_v3" ||
 		report.Mode != m8ProductionMultiGroupModeV1 || !report.ProductionEvidence ||
-		report.GeneratedAt.IsZero() || len(report.Command) == 0 || !validSHA(report.BaseSHA) || !validSHA(report.HeadSHA) ||
+		report.GeneratedAt.IsZero() || !validM8ProductionExecutionIDV1(report.ExecutionID) || len(report.Command) == 0 || !validSHA(report.BaseSHA) || !validSHA(report.HeadSHA) ||
 		report.GoVersion == "" || report.GOOS == "" || report.GOARCH == "" || report.LogicalCPUs < 1 || report.GOMAXPROCS < 1 || report.GoMemoryLimitBytes < 1 ||
 		report.Config.RaftGroups < 2 || report.Config.RaftNodesPerGroup != 3 || report.Config.Partitions < 4 || report.Config.Partitions > maxPartitions ||
 		report.Config.Warmup < 0 || report.Config.RouterCandidates < 1 || report.BuildNanos <= 0 || report.TimedBoundary == "" || len(report.Limitations) == 0 {

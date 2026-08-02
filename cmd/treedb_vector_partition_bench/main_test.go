@@ -2235,24 +2235,39 @@ func TestM8ProductionEvidenceJSONKeepsEveryTopologyDimensionV1(t *testing.T) {
 func TestM8ArtifactNameIncludesConfigurationV1(t *testing.T) {
 	fixture := fixtureManifest{Fixture: "x", Checksum: "y"}
 	base := config{headSHA: strings.Repeat("a", 40), raftGroups: 2, raftNodes: 3, partitions: 4, probes: []int{4}, overlaps: []float64{0}, topK: 10, concurrency: []int{1}, efSearch: []int{64}, routerCandidates: 64}
-	first, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "a"})
+	executionID := strings.Repeat("a", 32)
+	first, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "a"}, executionID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	base.partitions = 8
-	second, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "a"})
+	second, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "a"}, executionID)
 	if err != nil || first == second {
 		t.Fatalf("names %q %q err=%v", first, second, err)
 	}
 	base.partitions = 4
-	third, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "different"})
+	third, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "different"}, executionID)
 	if err != nil || first == third {
 		t.Fatalf("asset identities collided %q %q err=%v", first, third, err)
 	}
 	base.routerCandidates = 32
-	fourth, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "a"})
+	fourth, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "a"}, executionID)
 	if err != nil || first == fourth {
 		t.Fatalf("router candidate budgets collided %q %q err=%v", first, fourth, err)
+	}
+	fifth, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "a"}, strings.Repeat("b", 32))
+	if err != nil || fourth == fifth {
+		t.Fatalf("execution identities collided %q %q err=%v", fourth, fifth, err)
+	}
+}
+
+func TestM8ProductionExecutionIDV1(t *testing.T) {
+	id, err := m8ProductionExecutionIDV1()
+	if err != nil || !validM8ProductionExecutionIDV1(id) {
+		t.Fatalf("execution ID=%q err=%v", id, err)
+	}
+	if validM8ProductionExecutionIDV1(id+" ") || validM8ProductionExecutionIDV1(strings.ToUpper(id)) {
+		t.Fatalf("accepted malformed execution ID %q", id)
 	}
 }
 
