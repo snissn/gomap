@@ -116,10 +116,10 @@ func m8ValidateQualificationIndexV1(root string, index m8QualificationIndexV1) (
 }
 
 func m8ValidateQualificationIndexWithRetainedVariantV1(root string, index m8QualificationIndexV1, retainedVariant m8QualificationRetainedVariantVerifierV1) (m8QualificationIndexSummaryV1, error) {
-	return m8ValidateQualificationIndexWithVerifiersV1(root, index, retainedVariant, m8QualificationBenchmarkExecutableV1)
+	return m8ValidateQualificationIndexWithVerifiersV1(root, index, retainedVariant, m8QualificationBenchmarkExecutableV1, m8QualificationTrustedTruthCacheV1)
 }
 
-func m8ValidateQualificationIndexWithVerifiersV1(root string, index m8QualificationIndexV1, retainedVariant m8QualificationRetainedVariantVerifierV1, commandExecutable m8QualificationCommandExecutableVerifierV1) (m8QualificationIndexSummaryV1, error) {
+func m8ValidateQualificationIndexWithVerifiersV1(root string, index m8QualificationIndexV1, retainedVariant m8QualificationRetainedVariantVerifierV1, commandExecutable m8QualificationCommandExecutableVerifierV1, truthCache m8QualificationTruthCacheVerifierV1) (m8QualificationIndexSummaryV1, error) {
 	summary := m8QualificationIndexSummaryV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_summary_v1", Status: "qualified", BaseSHA: index.BaseSHA, HeadSHA: index.HeadSHA, Campaigns: make(map[string]m8QualificationCampaignSummaryV1, len(m8QualificationFixturesV1))}
 	if index.BaseSHA != m8QualificationFrozenBaseSHAV1 {
 		return m8QualificationIndexSummaryV1{}, errors.New("qualification index does not use the frozen base revision")
@@ -134,7 +134,7 @@ func m8ValidateQualificationIndexWithVerifiersV1(root string, index m8Qualificat
 		if campaign.BaseSHA != index.BaseSHA || campaign.HeadSHA != index.HeadSHA {
 			return m8QualificationIndexSummaryV1{}, errors.New("qualification index campaigns do not share the index revision")
 		}
-		campaignSummary, err := m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, retainedVariant, commandExecutable)
+		campaignSummary, err := m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, retainedVariant, commandExecutable, truthCache)
 		if err != nil {
 			return m8QualificationIndexSummaryV1{}, err
 		}
@@ -157,6 +157,7 @@ func m8ValidateQualificationIndexWithVerifiersV1(root string, index m8Qualificat
 
 type m8QualificationRetainedVariantVerifierV1 func(string, m8ProductionReportV1) error
 type m8QualificationCommandExecutableVerifierV1 func(string, string, string, string) bool
+type m8QualificationTruthCacheVerifierV1 func(string, m8ProductionReportV1) error
 
 func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCampaignV1) (m8QualificationCampaignSummaryV1, error) {
 	return m8ValidateQualificationCampaignWithRetainedVariantV1(root, campaign, m8QualificationRetainedVariantV1)
@@ -166,15 +167,18 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 // asset boundary explicit for focused evidence tests. Production callers use
 // m8ValidateQualificationCampaignV1 above and cannot select a verifier.
 func m8ValidateQualificationCampaignWithRetainedVariantV1(root string, campaign m8QualificationCampaignV1, retainedVariant m8QualificationRetainedVariantVerifierV1) (m8QualificationCampaignSummaryV1, error) {
-	return m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, retainedVariant, m8QualificationBenchmarkExecutableV1)
+	return m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, retainedVariant, m8QualificationBenchmarkExecutableV1, m8QualificationTrustedTruthCacheV1)
 }
 
-func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8QualificationCampaignV1, retainedVariant m8QualificationRetainedVariantVerifierV1, commandExecutable m8QualificationCommandExecutableVerifierV1) (m8QualificationCampaignSummaryV1, error) {
+func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8QualificationCampaignV1, retainedVariant m8QualificationRetainedVariantVerifierV1, commandExecutable m8QualificationCommandExecutableVerifierV1, truthCache m8QualificationTruthCacheVerifierV1) (m8QualificationCampaignSummaryV1, error) {
 	if retainedVariant == nil {
 		return m8QualificationCampaignSummaryV1{}, errors.New("qualification retained-asset verifier is required")
 	}
 	if commandExecutable == nil {
 		return m8QualificationCampaignSummaryV1{}, errors.New("qualification command executable verifier is required")
+	}
+	if truthCache == nil {
+		return m8QualificationCampaignSummaryV1{}, errors.New("qualification trusted truth-cache verifier is required")
 	}
 	if !m8QualificationSHA256V1(campaign.FixtureChecksum) || !m8QualificationGitSHAV1(campaign.BaseSHA) || !m8QualificationGitSHAV1(campaign.HeadSHA) || len(campaign.Runs) != 3 {
 		return m8QualificationCampaignSummaryV1{}, errors.New("qualification campaign requires one fixture/head and exactly three runs")
@@ -259,6 +263,9 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 			report := &matrix.Variants[i]
 			if err := validateM8ProductionReportV1(*report, m8QualificationResourceCapsV1()); err != nil {
 				return summary, fmt.Errorf("validate qualification child %s: %w", cleanPath, err)
+			}
+			if err := truthCache(resolvedRoot, *report); err != nil {
+				return summary, fmt.Errorf("qualification matrix %s does not bind the frozen truth cache: %w", cleanPath, err)
 			}
 			if !m8QualificationCommandWithExecutableV1(resolvedRoot, *report, commandExecutable) || report.ExecutableSHA256 != matrix.ExecutableSHA256 {
 				return summary, fmt.Errorf("qualification matrix %s has command/config mismatch", cleanPath)
@@ -395,6 +402,24 @@ var m8QualificationFixturesV1 = [...]fixtureManifest{
 	{SchemaVersion: 1, Fixture: "qualification_embedding_mixture_250000", Generator: "treedb_vector_partition_embedding_mixture_v1", Arithmetic: "ieee754_binary64_explicit_fma_v1", Vectors: 250000, Queries: 1000, Dimensions: 128, Metric: "cosine", Seed: 4016, Checksum: "d0c7c82ba868853aae9a4280161003d72714ad1701d41ed3169c2fa94d470d69"},
 }
 
+type m8QualificationTruthAnchorV1 struct {
+	Identity, ArtifactSHA256, TruthSHA256 string
+}
+
+func m8QualificationTruthCacheAnchorV1(fixture fixtureManifest) (m8QualificationTruthAnchorV1, bool) {
+	if !m8QualificationFixtureV1(fixture) {
+		return m8QualificationTruthAnchorV1{}, false
+	}
+	switch fixture.Checksum {
+	case "ecc2224f386932e580e4956f2cfa852140d3134625971c3511bc0d5feddf9b95":
+		return m8QualificationTruthAnchorV1{Identity: "accdb76c693e2da99333b9327efc0e3d83ba630b25a8ba2b6820f5a6f6e38937", ArtifactSHA256: "0e9bce9465c9e1fa70c7833364e88c332bc831cfc52c628c90085e1c3068763c", TruthSHA256: "6e17b00a04ad86ad4b13507e6afc1ae38d323280b3a0aa8405bce88b222fa1bc"}, true
+	case "d0c7c82ba868853aae9a4280161003d72714ad1701d41ed3169c2fa94d470d69":
+		return m8QualificationTruthAnchorV1{Identity: "f1fab20b88cd3dcdd6e95a284400983230b1432b36bd4d73e321e251159795ab", ArtifactSHA256: "5a518c1cb8182edc685ab692dc17a6974655572f426a4b97c10482fd1643f04e", TruthSHA256: "89b84125e518f33cc30bc1e4e9defcc0639378d7108fb180f56ec2dc91d6f254"}, true
+	default:
+		return m8QualificationTruthAnchorV1{}, false
+	}
+}
+
 func m8QualificationFixtureChecksumV1(checksum string) bool {
 	for _, fixture := range m8QualificationFixturesV1 {
 		if checksum == fixture.Checksum {
@@ -415,6 +440,41 @@ func m8QualificationFixtureV1(candidate fixtureManifest) bool {
 
 func m8QualificationConfigV1(cfg m8ProductionConfigEvidenceV1, fixture fixtureManifest, overlap float64, _ int) bool {
 	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterCandidates == 64 && cfg.MaxExactTruthVisits == m8QualificationExactTruthCapV1(fixture) && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, []int{1, 2, 4, 8, 16}) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{64}) && slices.Equal(cfg.Overlap, []float64{overlap})
+}
+
+func m8QualificationTrustedTruthCacheV1(root string, report m8ProductionReportV1) error {
+	anchor, ok := m8QualificationTruthCacheAnchorV1(report.Dataset)
+	if !ok {
+		return errors.New("truth cache has no frozen corpus anchor")
+	}
+	return m8QualificationTruthCacheWithAnchorV1(root, report, anchor)
+}
+
+func m8QualificationTruthCacheWithAnchorV1(root string, report m8ProductionReportV1, anchor m8QualificationTruthAnchorV1) error {
+	if report.Variant == nil {
+		return errors.New("truth cache has no retained variant")
+	}
+	dir, err := m8QualificationContainedPathV1(root, report.TruthCacheDirectory, "canonical truth cache")
+	if err != nil {
+		return err
+	}
+	if dir != report.TruthCacheDirectory || report.TruthCache.Identity != anchor.Identity || report.TruthCache.ArtifactSHA256 != anchor.ArtifactSHA256 {
+		return errors.New("truth cache evidence differs from the frozen corpus anchor")
+	}
+	path := m8TruthCacheArtifactPathV1(dir, anchor.Identity)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return errors.New("truth cache anchor artifact is not a regular file")
+	}
+	truth, artifactSHA256, err := m8ReadTruthCacheV1(path, report.Dataset, report.Dataset.Queries, report.Config.TopK, report.Variant.SourceRows, anchor.ArtifactSHA256)
+	if err != nil {
+		return fmt.Errorf("decode frozen truth cache: %w", err)
+	}
+	truthSHA256, err := m8TruthContentSHA256V1(truth)
+	if err != nil || artifactSHA256 != anchor.ArtifactSHA256 || truthSHA256 != anchor.TruthSHA256 {
+		return errors.New("truth cache artifact or semantic digest differs from the frozen corpus anchor")
+	}
+	return nil
 }
 
 func m8QualificationRetainedVariantV1(root string, report m8ProductionReportV1) (err error) {

@@ -1014,6 +1014,8 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 			TruthCacheSource string `json:"truth_cache_source"`
 			TruthCache       string `json:"truth_cache"`
 			TruthIdentity    string `json:"truth_cache_identity"`
+			TruthArtifact    string `json:"truth_cache_sha256"`
+			TruthSHA         string `json:"truth_sha256"`
 			Vectors          int    `json:"vectors"`
 			MaxVectors       int    `json:"max_vectors"`
 			MaxFixtureBytes  int64  `json:"max_fixture_bytes"`
@@ -1031,11 +1033,16 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 	if plan.SchemaVersion != 1 || plan.ResultKind != "vector_partition_structured_qualification_campaign_plan_v1" || plan.Status != "planned_no_measurement" || plan.BaseSHA != m8QualificationFrozenBaseSHAV1 || plan.Candidate.Variant != "graph-overlap-020-v1" || plan.Candidate.AssignmentBackend != "kahip_python_3.25_eco_symmetrized_v1_seed_<seed>" || plan.Candidate.RouterCandidates != 64 || !slices.Equal(plan.Candidate.Probes, []int{1, 2, 4, 8, 16}) || !slices.Equal(plan.Candidate.RepeatedProbes, []int{1, 2, 4, 8, 16}) || plan.Candidate.Repetitions != 3 || len(plan.Corpora) != 2 {
 		t.Fatalf("plan=%+v", plan)
 	}
-	if plan.Corpora[0].DatasetSource != "/mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k" || plan.Corpora[0].Dataset != "<campaign-root>/100k/dataset" || plan.Corpora[0].TruthCacheSource != "/mnt/fast4tb/gomap-4023-100k-9225c35e5/truth-cache" || plan.Corpora[0].TruthCache != "<campaign-root>/100k/truth-cache" || plan.Corpora[0].TruthIdentity != m8TruthCacheIdentityV1(m8QualificationFixturesV1[0], 10) || plan.Corpora[0].MaxVectors != 100000 || plan.Corpora[0].MaxFixtureBytes != maxFixtureBytes || plan.Corpora[0].GraphCap != 20000000000 || plan.Corpora[0].RouterCap != 20000000000 || plan.Corpora[1].DatasetSource != "testdata/vector_partition_qualification_embedding_mixture_250k" || plan.Corpora[1].Dataset != "<campaign-root>/250k/dataset" || plan.Corpora[1].TruthCache != "<campaign-root>/250k/truth-cache" || plan.Corpora[1].TruthIdentity != m8TruthCacheIdentityV1(m8QualificationFixturesV1[1], 10) || plan.Corpora[1].Vectors != 250000 || plan.Corpora[1].MaxVectors != 250000 || plan.Corpora[1].MaxFixtureBytes != maxFixtureBytes || plan.Corpora[1].Checksum != "d0c7c82ba868853aae9a4280161003d72714ad1701d41ed3169c2fa94d470d69" || plan.Corpora[1].GraphCap != 50000000000 || plan.Corpora[1].RouterCap != 50000000000 || plan.Corpora[1].M3Cap != 900000000 || plan.Corpora[1].M8Cap != 1500000000 {
+	anchor100, ok100 := m8QualificationTruthCacheAnchorV1(m8QualificationFixturesV1[0])
+	anchor250, ok250 := m8QualificationTruthCacheAnchorV1(m8QualificationFixturesV1[1])
+	if !ok100 || !ok250 || plan.Corpora[0].DatasetSource != "/mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k" || plan.Corpora[0].Dataset != "<campaign-root>/100k/dataset" || plan.Corpora[0].TruthCacheSource != "/mnt/fast4tb/gomap-4027-truth-oracles-a5364e5b/100k/truth-cache" || plan.Corpora[0].TruthCache != "<campaign-root>/100k/truth-cache" || plan.Corpora[0].TruthIdentity != anchor100.Identity || plan.Corpora[0].TruthArtifact != anchor100.ArtifactSHA256 || plan.Corpora[0].TruthSHA != anchor100.TruthSHA256 || plan.Corpora[0].MaxVectors != 100000 || plan.Corpora[0].MaxFixtureBytes != maxFixtureBytes || plan.Corpora[0].GraphCap != 20000000000 || plan.Corpora[0].RouterCap != 20000000000 || plan.Corpora[1].DatasetSource != "testdata/vector_partition_qualification_embedding_mixture_250k" || plan.Corpora[1].Dataset != "<campaign-root>/250k/dataset" || plan.Corpora[1].TruthCacheSource != "/mnt/fast4tb/gomap-4027-truth-oracles-a5364e5b/250k/truth-cache" || plan.Corpora[1].TruthCache != "<campaign-root>/250k/truth-cache" || plan.Corpora[1].TruthIdentity != anchor250.Identity || plan.Corpora[1].TruthArtifact != anchor250.ArtifactSHA256 || plan.Corpora[1].TruthSHA != anchor250.TruthSHA256 || plan.Corpora[1].Vectors != 250000 || plan.Corpora[1].MaxVectors != 250000 || plan.Corpora[1].MaxFixtureBytes != maxFixtureBytes || plan.Corpora[1].Checksum != "d0c7c82ba868853aae9a4280161003d72714ad1701d41ed3169c2fa94d470d69" || plan.Corpora[1].GraphCap != 50000000000 || plan.Corpora[1].RouterCap != 50000000000 || plan.Corpora[1].M3Cap != 900000000 || plan.Corpora[1].M8Cap != 1500000000 {
 		t.Fatalf("250k plan=%+v", plan.Corpora[1])
 	}
 	if !strings.Contains(plan.Commands["stage_dataset"], "<dataset-source>/fixture_manifest.json") || !strings.Contains(plan.Commands["stage_existing_truth_cache"], "<truth-cache-source>/m8_canonical_truth_<truth-cache-identity>.json") {
 		t.Fatalf("plan does not stage retained inputs: %+v", plan.Commands)
+	}
+	if !strings.Contains(plan.Commands["generate_truth_cache_100k"], "-max-exact-truth-visits 100000000") || !strings.Contains(plan.Commands["generate_truth_cache_250k"], "-max-exact-truth-visits 250000000") {
+		t.Fatalf("plan does not freeze independent truth generation caps: %+v", plan.Commands)
 	}
 	if !strings.Contains(plan.Commands["build_benchmark"], "go build -o <campaign-root>/bin/treedb_vector_partition_bench") {
 		t.Fatalf("plan does not build the retained benchmark executable: %+v", plan.Commands)
@@ -1132,11 +1139,141 @@ func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManif
 }
 
 func testM8ValidateQualificationCampaignV1(root string, campaign m8QualificationCampaignV1) (m8QualificationCampaignSummaryV1, error) {
-	return m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true })
+	return m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, func(string, m8ProductionReportV1) error { return nil })
 }
 
 func testM8ValidateQualificationIndexV1(root string, index m8QualificationIndexV1) (m8QualificationIndexSummaryV1, error) {
-	return m8ValidateQualificationIndexWithVerifiersV1(root, index, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true })
+	return m8ValidateQualificationIndexWithVerifiersV1(root, index, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, func(string, m8ProductionReportV1) error { return nil })
+}
+
+func TestM8QualificationTruthCacheAnchorV1(t *testing.T) {
+	root, fixture := t.TempDir(), m8QualificationFixturesV1[0]
+	dir, evidence := testM8QualificationTruthCacheV1(t, root, fixture)
+	report := m8ProductionReportV1{Dataset: fixture, TruthCacheDirectory: dir, TruthCache: evidence, Config: m8ProductionConfigEvidenceV1{TopK: 10}, Variant: &m3VariantDescriptorV1{SourceRows: uint64(fixture.Vectors)}}
+	anchor := m8QualificationTruthCacheAnchorV1
+	path := m8TruthCacheArtifactPathV1(dir, evidence.Identity)
+	truth, artifact, err := m8ReadTruthCacheV1(path, fixture, fixture.Queries, 10, uint64(fixture.Vectors), evidence.ArtifactSHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	truthSHA, err := m8TruthContentSHA256V1(truth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localAnchor := m8QualificationTruthAnchorV1{Identity: evidence.Identity, ArtifactSHA256: artifact, TruthSHA256: truthSHA}
+	if err := m8QualificationTruthCacheWithAnchorV1(root, report, localAnchor); err != nil {
+		t.Fatalf("rejected matching bounded-decoded cache: %v", err)
+	}
+	if _, ok := anchor(fixture); !ok {
+		t.Fatal("missing frozen 100k cache anchor")
+	}
+	var cache m8TruthCacheFileV1
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &cache); err != nil {
+		t.Fatal(err)
+	}
+	cache.Truth[0][0].Score += .125
+	cache.TruthSHA256, err = m8TruthContentSHA256V1(cache.Truth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err = json.Marshal(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(raw)
+	report.TruthCache.ArtifactSHA256 = hex.EncodeToString(digest[:])
+	if err := m8QualificationTruthCacheWithAnchorV1(root, report, localAnchor); err == nil || !strings.Contains(err.Error(), "frozen corpus anchor") {
+		t.Fatalf("accepted self-consistent forged truth cache/report: %v", err)
+	}
+
+	// Exercise the retained matrix/campaign path as well: all report-side
+	// hashes, commands, transcripts, and matrix digests are refreshed after the
+	// cache changes, but the independently frozen anchor must still win.
+	campaignRoot := t.TempDir()
+	cacheDir, cacheEvidence := testM8QualificationTruthCacheV1(t, campaignRoot, fixture)
+	campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: m8QualificationFrozenBaseSHAV1, HeadSHA: m8QualificationFrozenBaseSHAV1}
+	write := func(name string, matrix m8ProductionMatrixV1) {
+		for i := range matrix.Variants {
+			matrix.Variants[i].TruthCacheDirectory, matrix.Variants[i].TruthCache = cacheDir, cacheEvidence
+			matrix.Variants[i].Command = testM8QualificationCommandV1(matrix.Variants[i])
+		}
+		testM8QualificationExecutionIDsV1(&matrix, len(campaign.Runs))
+		testM8QualificationProfilesV1(t, campaignRoot, strings.TrimSuffix(name, ".json"), &matrix)
+		raw, err := json.Marshal(matrix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(campaignRoot, name), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(raw)
+		campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:])})
+	}
+	for i := 0; i < 3; i++ {
+		write(fmt.Sprintf("repeat-%d.json", i), testM8QualificationMatrixV1(t, campaign.HeadSHA, fixture, 125))
+	}
+	verify := func(root string, report m8ProductionReportV1) error {
+		return m8QualificationTruthCacheWithAnchorV1(root, report, localAnchor)
+	}
+	if _, err := m8ValidateQualificationCampaignWithVerifiersV1(campaignRoot, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, verify); err != nil {
+		t.Fatalf("rejected anchored campaign: %v", err)
+	}
+	cachePath := m8TruthCacheArtifactPathV1(cacheDir, cacheEvidence.Identity)
+	raw, err = os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &cache); err != nil {
+		t.Fatal(err)
+	}
+	cache.Truth[0][0].Score += .125
+	cache.TruthSHA256, err = m8TruthContentSHA256V1(cache.Truth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err = json.Marshal(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	digest = sha256.Sum256(raw)
+	cacheEvidence.ArtifactSHA256 = hex.EncodeToString(digest[:])
+	for i, run := range campaign.Runs {
+		raw, err := os.ReadFile(filepath.Join(campaignRoot, run.Path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var matrix m8ProductionMatrixV1
+		if err := json.Unmarshal(raw, &matrix); err != nil {
+			t.Fatal(err)
+		}
+		for j := range matrix.Variants {
+			matrix.Variants[j].TruthCache.ArtifactSHA256 = cacheEvidence.ArtifactSHA256
+			matrix.Variants[j].Command = testM8QualificationCommandV1(matrix.Variants[j])
+		}
+		testM8QualificationProfilesV1(t, campaignRoot, fmt.Sprintf("forged-%d", i), &matrix)
+		raw, err = json.Marshal(matrix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(campaignRoot, run.Path), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(raw)
+		campaign.Runs[i].SHA256 = hex.EncodeToString(digest[:])
+	}
+	if _, err := m8ValidateQualificationCampaignWithVerifiersV1(campaignRoot, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, verify); err == nil || !strings.Contains(err.Error(), "frozen corpus anchor") {
+		t.Fatalf("accepted self-consistent forged cache/report/matrix/campaign: %v", err)
+	}
 }
 
 // testM8QualificationRetainedDescriptorV1 builds only the persisted M3 asset

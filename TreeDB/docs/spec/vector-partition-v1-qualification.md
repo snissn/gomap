@@ -92,7 +92,15 @@ runtime/resource envelope before the full repeated campaign.
 
 An external exact-truth cache is never self-authenticating. A cache hit requires
 `-m8-truth-cache-sha256` to match the exact streamed cache artifact; the digest
-must come from an independently trusted, source-computed run. In a strict
+must come from an independently trusted, source-computed run. The frozen 100k
+anchor is artifact `0e9bce9465c9e1fa70c7833364e88c332bc831cfc52c628c90085e1c3068763c`,
+truth `6e17b00a04ad86ad4b13507e6afc1ae38d323280b3a0aa8405bce88b222fa1bc`, and
+identity `accdb76c693e2da99333b9327efc0e3d83ba630b25a8ba2b6820f5a6f6e38937`;
+the 250k anchor is artifact `5a518c1cb8182edc685ab692dc17a6974655572f426a4b97c10482fd1643f04e`,
+truth `89b84125e518f33cc30bc1e4e9defcc0639378d7108fb180f56ec2dc91d6f254`, and
+identity `f1fab20b88cd3dcdd6e95a284400983230b1432b36bd4d73e321e251159795ab`.
+Qualification bounded-decodes these corpus-pinned caches before accepting
+report-supplied corroboration. In a strict
 three-variant matrix with a new cache, the first child computes truth from the
 authoritative source and the parent forces its reported artifact digest into
 every later child. A pre-existing cache without that supplied digest fails
