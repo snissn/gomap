@@ -70,7 +70,7 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 
 	var col *collections.Collection
 	format := s.DefaultCollectionOptions.DocumentFormat
-	if existing, err := s.Collections.OpenCollection(name); err == nil {
+	if existing, err := s.openCollectionForMutation(name); err == nil {
 		col = existing
 		format = existing.MetaView().Options.DocumentFormat
 	} else if !errors.Is(err, collections.ErrCollectionNotFound) {
@@ -80,8 +80,14 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
+	var releaseColdCollection func()
+	defer func() {
+		if releaseColdCollection != nil {
+			releaseColdCollection()
+		}
+	}()
 	if col == nil {
-		col, err = s.openOrCreateCollection(name)
+		col, releaseColdCollection, err = s.openOrCreateCollectionForFirstWrite(name)
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
@@ -880,11 +886,17 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
 
-	col, err := s.Collections.OpenCollection(name)
+	col, err := s.openCollectionForMutation(name)
 	missingCollection := errors.Is(err, collections.ErrCollectionNotFound)
 	if err != nil && !missingCollection {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
+	var releaseColdCollection func()
+	defer func() {
+		if releaseColdCollection != nil {
+			releaseColdCollection()
+		}
+	}()
 	parsed := make([]mongoUpdateItem, 0, len(updates))
 	seenKeys := make(map[string]struct{}, len(updates))
 	hasDuplicateKey := false
@@ -901,7 +913,7 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 					if err := s.validateMongoMissingCollectionFirstUpsert(parsed); err != nil {
 						return mongoUpdateWriteCommandError(err)
 					}
-					col, err = s.openOrCreateCollection(name)
+					col, releaseColdCollection, err = s.openOrCreateCollectionForFirstWrite(name)
 					if err != nil {
 						return commandError(commandCodeBadValue, "BadValue", err.Error())
 					}
@@ -934,7 +946,7 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 		if err := s.validateMongoMissingCollectionFirstUpsert(parsed); err != nil {
 			return mongoUpdateWriteCommandError(err)
 		}
-		col, err = s.openOrCreateCollection(name)
+		col, releaseColdCollection, err = s.openOrCreateCollectionForFirstWrite(name)
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
@@ -1883,7 +1895,7 @@ func (s *Server) deleteResponse(ctx context.Context, command wire.Document, sequ
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
 
-	col, err := s.Collections.OpenCollection(name)
+	col, err := s.openCollectionForMutation(name)
 	if err != nil {
 		if errors.Is(err, collections.ErrCollectionNotFound) {
 			return marshalDeleteResponse(0)
@@ -3257,11 +3269,121 @@ func (s *Server) openOrCreateCollection(name string) (*collections.Collection, e
 	if err == nil {
 		return col, nil
 	}
+	if !errors.Is(err, collections.ErrCollectionNotFound) {
+		return nil, err
+	}
+	col, release, err := s.openOrCreateCollectionForFirstWrite(name)
+	if release != nil {
+		release()
+	}
+	return col, err
+}
+
+func (s *Server) openOrCreateCollectionForFirstWrite(name string) (*collections.Collection, func(), error) {
+	// Register every caller that observed this namespace as missing, then
+	// serialize only those callers through their first mutation. CollectionManager
+	// still owns any global schema coordination needed by CreateCollection.
+	s.collectionCreateMu.Lock()
+	registry := s.collectionFirstWrites.Load()
+	var pending *collectionFirstWritePending
+	if registry != nil {
+		pending = registry.byName[name]
+	}
+	if pending == nil {
+		pending = &collectionFirstWritePending{name: name, done: make(chan struct{})}
+		byName := make(map[string]*collectionFirstWritePending, 1)
+		if registry != nil {
+			byName = make(map[string]*collectionFirstWritePending, len(registry.byName)+1)
+			for registeredName, registered := range registry.byName {
+				byName[registeredName] = registered
+			}
+		}
+		byName[name] = pending
+		s.collectionFirstWrites.Store(&collectionFirstWriteRegistry{byName: byName})
+	}
+	pending.coldRefs++
+	s.collectionCreateMu.Unlock()
+	pending.mutationMu.Lock()
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			pending.mutationMu.Unlock()
+			s.collectionCreateMu.Lock()
+			pending.coldRefs--
+			if pending.coldRefs == 0 {
+				registry := s.collectionFirstWrites.Load()
+				if registry != nil && registry.byName[name] == pending {
+					if len(registry.byName) == 1 {
+						s.collectionFirstWrites.Store(nil)
+					} else {
+						byName := make(map[string]*collectionFirstWritePending, len(registry.byName)-1)
+						for registeredName, registered := range registry.byName {
+							if registeredName != name {
+								byName[registeredName] = registered
+							}
+						}
+						s.collectionFirstWrites.Store(&collectionFirstWriteRegistry{byName: byName})
+					}
+				}
+				close(pending.done)
+			}
+			s.collectionCreateMu.Unlock()
+		})
+	}
+	col, err := s.Collections.OpenCollection(name)
+	if err == nil {
+		// This caller observed the collection as missing before it entered the
+		// cold path. Keep it serialized through its mutation too: otherwise a
+		// group of waiters can all miss the same document and race their upserts.
+		return col, release, nil
+	} else if !errors.Is(err, collections.ErrCollectionNotFound) {
+		release()
+		return nil, nil, err
+	}
 	if _, createErr := s.Collections.CreateCollection(s.defaultCollectionMeta(name)); createErr != nil {
-		return nil, createErr
+		release()
+		return nil, nil, createErr
 	}
 	s.invalidateCollectionCache(name)
-	return s.Collections.OpenCollection(name)
+	col, err = s.Collections.OpenCollection(name)
+	if err != nil {
+		release()
+		return nil, nil, err
+	}
+	if s.firstWriteAfterCreateHook != nil {
+		s.firstWriteAfterCreateHook(name)
+	}
+	return col, release, nil
+}
+
+func (s *Server) openCollectionForMutation(name string) (*collections.Collection, error) {
+	col, err := s.Collections.OpenCollection(name)
+	if err != nil {
+		return col, err
+	}
+	registry := s.collectionFirstWrites.Load()
+	if registry == nil {
+		return col, nil
+	}
+	waited := false
+	for {
+		pending := registry.byName[name]
+		if pending == nil {
+			if waited {
+				return s.Collections.OpenCollection(name)
+			}
+			return col, nil
+		}
+		if s.firstWriteBeforeWaitHook != nil {
+			s.firstWriteBeforeWaitHook(pending)
+		}
+		<-pending.done
+		waited = true
+		registry = s.collectionFirstWrites.Load()
+		if registry == nil {
+			return s.Collections.OpenCollection(name)
+		}
+	}
 }
 
 func (s *Server) defaultCollectionMeta(name string) *collections.CollectionMeta {

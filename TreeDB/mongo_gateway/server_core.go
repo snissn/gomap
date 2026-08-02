@@ -95,25 +95,40 @@ type Server struct {
 	// so sequence-based keys are not reused after restart.
 	ClusterIdempotencyNonce string
 
-	nextResponseID    atomic.Int32
-	nextConnectionID  atomic.Int64
-	nextClusterSubmit atomic.Uint64
-	nextCursorID      atomic.Int64
-	cursorCount       atomic.Int64
-	connMu            sync.Mutex
-	conns             map[net.Conn]struct{}
-	listenerMu        sync.Mutex
-	listeners         map[net.Listener]struct{}
-	cursorMu          sync.Mutex
-	cursors           map[int64]*serverCursor
-	lastCursorReap    time.Time
-	collectionCacheMu sync.RWMutex
-	collectionCache   map[string]*collections.Collection
-	updateMu          sync.Mutex
-	updateCoalescers  map[string]*mongoUpdateCoalescer
-	insertMu          sync.Mutex
-	insertCoalescers  map[string]*mongoInsertCoalescer
-	closed            atomic.Bool
+	nextResponseID            atomic.Int32
+	nextConnectionID          atomic.Int64
+	nextClusterSubmit         atomic.Uint64
+	nextCursorID              atomic.Int64
+	cursorCount               atomic.Int64
+	connMu                    sync.Mutex
+	conns                     map[net.Conn]struct{}
+	listenerMu                sync.Mutex
+	listeners                 map[net.Listener]struct{}
+	cursorMu                  sync.Mutex
+	cursors                   map[int64]*serverCursor
+	lastCursorReap            time.Time
+	collectionCacheMu         sync.RWMutex
+	collectionCache           map[string]*collections.Collection
+	collectionCreateMu        sync.Mutex
+	collectionFirstWrites     atomic.Pointer[collectionFirstWriteRegistry]
+	firstWriteAfterCreateHook func(string)
+	firstWriteBeforeWaitHook  func(*collectionFirstWritePending)
+	updateMu                  sync.Mutex
+	updateCoalescers          map[string]*mongoUpdateCoalescer
+	insertMu                  sync.Mutex
+	insertCoalescers          map[string]*mongoInsertCoalescer
+	closed                    atomic.Bool
+}
+
+type collectionFirstWritePending struct {
+	name       string
+	done       chan struct{}
+	mutationMu sync.Mutex
+	coldRefs   int
+}
+
+type collectionFirstWriteRegistry struct {
+	byName map[string]*collectionFirstWritePending
 }
 
 type serverCursor struct {
