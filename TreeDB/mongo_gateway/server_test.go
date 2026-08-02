@@ -1617,7 +1617,7 @@ func TestServerUpdateMissingCollectionExecutesEarlierUpsertBeforeParseError(t *t
 		{Key: "update", Value: "users"},
 		{Key: "updates", Value: bson.A{
 			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "score", Value: int32(1)}}}}}, {Key: "upsert", Value: true}},
-			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: bson.D{{Key: "$push", Value: bson.D{{Key: "score", Value: int32(2)}}}}}},
+			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: bson.D{{Key: "$pull", Value: bson.D{{Key: "score", Value: int32(2)}}}}}},
 		}},
 		{Key: "$db", Value: "app"},
 	})
@@ -6164,6 +6164,8 @@ func TestMongoMutationNestedOperators(t *testing.T) {
 		{Key: "$set", Value: bson.D{{Key: "profile.name", Value: "grace"}, {Key: "profile.city", Value: "london"}}},
 		{Key: "$inc", Value: bson.D{{Key: "profile.count", Value: int32(2)}}},
 		{Key: "$push", Value: bson.D{{Key: "tags", Value: bson.D{{Key: "$each", Value: bson.A{"db", "go"}}}}}},
+		{Key: "$push", Value: bson.D{{Key: "events", Value: bson.D{{Key: "kind", Value: "login"}}}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "empty", Value: bson.D{{Key: "$each", Value: bson.A{}}}}}},
 		{Key: "$addToSet", Value: bson.D{{Key: "labels", Value: bson.D{{Key: "$each", Value: bson.A{"go", "db", "go"}}}}}},
 		{Key: "$unset", Value: bson.D{{Key: "profile.old", Value: true}}},
 	}))
@@ -6192,13 +6194,46 @@ func TestMongoMutationNestedOperators(t *testing.T) {
 	if err != nil || len(values) != 2 {
 		t.Fatalf("labels=%v err=%v", values, err)
 	}
+	events, err := bson.Raw(updated).Lookup("events").Array().Values()
+	if err != nil || len(events) != 1 || events[0].Document().Lookup("kind").StringValue() != "login" {
+		t.Fatalf("events=%v err=%v", events, err)
+	}
+	if !bson.Raw(updated).Lookup("empty").IsZero() {
+		t.Fatal("empty $each created an array")
+	}
+}
+
+func TestMongoMutationSetOnInsertOnlyAppliesToInsertion(t *testing.T) {
+	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "state", Value: "matched"}})
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "state", Value: "updated"}}},
+		{Key: "$setOnInsert", Value: bson.D{{Key: "created.by", Value: "gateway"}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	matched, _, err := applyMongoMutation(doc, mutation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bson.Raw(matched).Lookup("created").IsZero() {
+		t.Fatal("matched update applied $setOnInsert")
+	}
+	inserted, _, err := applyMongoMutationWithOptions(mustDocument(t, bson.D{{Key: "_id", Value: "u2"}}), mutation, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bson.Raw(inserted).Lookup("created").Document().Lookup("by").StringValue(); got != "gateway" {
+		t.Fatalf("created.by=%q", got)
+	}
 }
 
 func TestMongoMutationRejectsInvalidShapesAndOverflow(t *testing.T) {
 	for _, update := range []bson.D{
+		{{Key: "$set", Value: bson.D{}}},
 		{{Key: "$set", Value: bson.D{{Key: "a", Value: 1}, {Key: "a.b", Value: 2}}}},
 		{{Key: "$set", Value: bson.D{{Key: "x", Value: 1}}}, {Key: "$inc", Value: bson.D{{Key: "x", Value: 1}}}},
-		{{Key: "$push", Value: bson.D{{Key: "x", Value: bson.D{{Key: "$each", Value: bson.A{}}}}}}},
+		{{Key: "$push", Value: bson.D{{Key: "x", Value: bson.D{{Key: "$each", Value: "bad"}}}}}},
 	} {
 		if _, err := parseMongoMutation(mustDocument(t, update)); err == nil {
 			t.Fatalf("accepted %v", update)
@@ -6276,7 +6311,6 @@ func TestServerUpdateGenericMutationsAcrossDocumentFormats(t *testing.T) {
 				{{Key: "$inc", Value: bson.D{{Key: "nullValue", Value: int32(1)}}}},
 				{{Key: "$inc", Value: bson.D{{Key: "textValue", Value: int32(1)}}}},
 				{{Key: "$set", Value: bson.D{{Key: "n", Value: 1}}}, {Key: "$unset", Value: bson.D{{Key: "n", Value: true}}}},
-				{{Key: "$set", Value: bson.D{{Key: "x.y", Value: 1}}}},
 				{{Key: "$set", Value: bson.D{{Key: "_id", Value: "u2"}}}},
 				{{Key: "$push", Value: bson.D{{Key: "n", Value: 1}}}},
 			} {

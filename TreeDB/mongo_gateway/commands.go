@@ -1059,7 +1059,7 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 		setFields = bsonSetFieldNames
 	}
 	var mutation mongoMutation
-	pureSet := setFieldsOK || bsonSetFieldsOK
+	pureSet := (setFieldsOK && len(setFields) != 0) || (bsonSetFieldsOK && len(bsonSetFields) != 0)
 	if !pureSet {
 		mutation, err = parseMongoMutation(updateDoc)
 		if err != nil {
@@ -3959,7 +3959,7 @@ func parseMongoMutation(update wire.Document) (mongoMutation, error) {
 		return mongoMutation{}, errors.New("Mongo gateway update must be a non-empty document")
 	}
 	if len(elements) == 0 {
-		return mongoMutation{}, errors.New("Mongo gateway update must not be empty")
+		return mongoMutation{replace: update}, nil
 	}
 	first, err := elements[0].KeyErr()
 	if err != nil {
@@ -4132,6 +4132,17 @@ func mongoMutationArrayValues(op, name string, value bson.RawValue) ([]bson.RawV
 	if err != nil {
 		return nil, err
 	}
+	hasEach := false
+	for _, element := range elements {
+		key, err := element.KeyErr()
+		if err != nil {
+			return nil, err
+		}
+		hasEach = hasEach || key == "$each"
+	}
+	if !hasEach {
+		return []bson.RawValue{value}, nil
+	}
 	if len(elements) != 1 {
 		return nil, fmt.Errorf("Mongo gateway %s field %q only supports a scalar or $each", op, name)
 	}
@@ -4147,8 +4158,8 @@ func mongoMutationArrayValues(op, name string, value bson.RawValue) ([]bson.RawV
 	if err != nil {
 		return nil, err
 	}
-	if len(values) == 0 || len(values) > mongoMutationMaxEachValues {
-		return nil, fmt.Errorf("Mongo gateway %s field %q $each must contain 1 to %d values", op, name, mongoMutationMaxEachValues)
+	if len(values) > mongoMutationMaxEachValues {
+		return nil, fmt.Errorf("Mongo gateway %s field %q $each exceeds %d values", op, name, mongoMutationMaxEachValues)
 	}
 	return values, nil
 }
