@@ -3,6 +3,7 @@ package mongogateway
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -74,6 +75,47 @@ func TestMongoFirstWriteConcurrentFindAndModifyUpsertsReopen(t *testing.T) {
 	defer reopened.Close()
 	reopenedServer := newFirstWriteServer(reopened)
 	assertFirstWriteDocument(t, reopenedServer, "u1", 16)
+}
+
+func TestMongoFirstWriteLateExistingMutationsWait(t *testing.T) {
+	server := newFirstWriteTestServer(t)
+	created := make(chan struct{})
+	continueFirstWrite := make(chan struct{})
+	server.firstWriteAfterCreateHook = func() {
+		close(created)
+		<-continueFirstWrite
+	}
+	creator := make(chan wire.Document, 1)
+	go func() {
+		response, _ := serveCommandResult(server, 300, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "creator"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "upsert", Value: true}}}}, {Key: "$db", Value: "app"}})
+		creator <- response
+	}()
+	<-created // The schema is visible, but the creator still owns the first-write gate.
+
+	responses := make(chan wire.Document, 3)
+	for requestID, command := range map[int32]bson.D{
+		301: {{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "insert"}, {Key: "n", Value: int32(1)}}}}, {Key: "$db", Value: "app"}},
+		302: {{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "update"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "upsert", Value: true}}}}, {Key: "$db", Value: "app"}},
+		303: {{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "modify"}}}, {Key: "update", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "upsert", Value: true}, {Key: "new", Value: true}, {Key: "$db", Value: "app"}},
+	} {
+		go func(requestID int32, command bson.D) {
+			response, _ := serveCommandResult(server, requestID, command)
+			responses <- response
+		}(requestID, command)
+	}
+	select {
+	case response := <-responses:
+		t.Fatalf("late mutation bypassed first-write gate: %v", response)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(continueFirstWrite)
+	assertOK(t, <-creator)
+	for range 3 {
+		assertOK(t, <-responses)
+	}
+	for _, id := range []string{"creator", "insert", "update", "modify"} {
+		assertFirstWriteDocument(t, server, id, 1)
+	}
 }
 
 func runConcurrentFirstWriteFindAndModifyUpserts(t *testing.T, server *Server) {

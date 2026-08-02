@@ -70,7 +70,7 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 
 	var col *collections.Collection
 	format := s.DefaultCollectionOptions.DocumentFormat
-	if existing, err := s.Collections.OpenCollection(name); err == nil {
+	if existing, err := s.openCollectionForMutation(name); err == nil {
 		col = existing
 		format = existing.MetaView().Options.DocumentFormat
 	} else if !errors.Is(err, collections.ErrCollectionNotFound) {
@@ -80,8 +80,14 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
+	var releaseColdCollection func()
+	defer func() {
+		if releaseColdCollection != nil {
+			releaseColdCollection()
+		}
+	}()
 	if col == nil {
-		col, err = s.openOrCreateCollection(name)
+		col, releaseColdCollection, err = s.openOrCreateCollectionForFirstWrite(name)
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
@@ -880,7 +886,7 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
 
-	col, err := s.Collections.OpenCollection(name)
+	col, err := s.openCollectionForMutation(name)
 	missingCollection := errors.Is(err, collections.ErrCollectionNotFound)
 	if err != nil && !missingCollection {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
@@ -1889,7 +1895,7 @@ func (s *Server) deleteResponse(ctx context.Context, command wire.Document, sequ
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
 
-	col, err := s.Collections.OpenCollection(name)
+	col, err := s.openCollectionForMutation(name)
 	if err != nil {
 		if errors.Is(err, collections.ErrCollectionNotFound) {
 			return marshalDeleteResponse(0)
@@ -3277,15 +3283,19 @@ func (s *Server) openOrCreateCollectionForFirstWrite(name string) (*collections.
 	// ponytail: global cold-path lock; use per-namespace coordination only if
 	// concurrent collection creation becomes a measured bottleneck.
 	s.collectionCreateMu.Lock()
-	release := s.collectionCreateMu.Unlock
+	release := func() {
+		s.firstWritePending.Store(false)
+		s.collectionCreateMu.Unlock()
+	}
 	col, err := s.Collections.OpenCollection(name)
 	if err == nil {
 		release()
 		return col, nil, nil
 	} else if !errors.Is(err, collections.ErrCollectionNotFound) {
-		release()
+		s.collectionCreateMu.Unlock()
 		return nil, nil, err
 	}
+	s.firstWritePending.Store(true)
 	if _, createErr := s.Collections.CreateCollection(s.defaultCollectionMeta(name)); createErr != nil {
 		release()
 		return nil, nil, createErr
@@ -3296,7 +3306,20 @@ func (s *Server) openOrCreateCollectionForFirstWrite(name string) (*collections.
 		release()
 		return nil, nil, err
 	}
+	if s.firstWriteAfterCreateHook != nil {
+		s.firstWriteAfterCreateHook()
+	}
 	return col, release, nil
+}
+
+func (s *Server) openCollectionForMutation(name string) (*collections.Collection, error) {
+	col, err := s.Collections.OpenCollection(name)
+	if err != nil || !s.firstWritePending.Load() {
+		return col, err
+	}
+	s.collectionCreateMu.Lock()
+	s.collectionCreateMu.Unlock()
+	return s.Collections.OpenCollection(name)
 }
 
 func (s *Server) defaultCollectionMeta(name string) *collections.CollectionMeta {

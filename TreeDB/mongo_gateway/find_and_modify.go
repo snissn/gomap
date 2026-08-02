@@ -75,7 +75,7 @@ func (s *Server) findAndModifyResponse(ctx context.Context, command wire.Documen
 	if err != nil {
 		return mongoUpdateParseCommandError(err)
 	}
-	col, err := s.Collections.OpenCollection(name)
+	col, err := s.openCollectionForMutation(name)
 	var releaseColdCollection func()
 	defer func() {
 		if releaseColdCollection != nil {
