@@ -24,7 +24,11 @@ import (
 )
 
 func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
-	root, head := t.TempDir(), m8QualificationFrozenBaseSHAV1
+	root, err := m8CanonicalPathV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := m8QualificationFrozenBaseSHAV1
 	fixture := m8QualificationFixturesV1[0]
 	campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head}
 	write := func(name string, matrix m8ProductionMatrixV1) {
