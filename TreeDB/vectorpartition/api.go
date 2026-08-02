@@ -1,6 +1,8 @@
-// Package vectorpartition exposes the offline M2 builder and deterministic M4
-// representative coarsening core to TreeDB commands. The persisted router
-// lifecycle and search handle remain collection APIs.
+// Package vectorpartition exposes the offline M2 builder, deterministic M4
+// representative coarsening core, and the supported V1 partition search and
+// generation lifecycle contract. Node construction supplies one opaque
+// production backend; ordinary callers never construct transport, Raft, or
+// lifecycle internals.
 package vectorpartition
 
 import (
