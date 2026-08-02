@@ -1010,7 +1010,10 @@ func testM8QualificationExecutionIDsV1(matrix *m8ProductionMatrixV1, repeat int)
 
 func testM8QualificationReportV1(t *testing.T, head string, fixture fixtureManifest, descriptor m3VariantDescriptorV1, p4QPS float64) m8ProductionReportV1 {
 	t.Helper()
-	datasetDirectory := t.TempDir()
+	datasetDirectory, err := m8CanonicalPathV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	wantOverlap := int(float64(fixture.Vectors) * descriptor.OverlapRatio)
 	loads := make([]uint64, 16)
 	for row := 0; row < fixture.Vectors+wantOverlap; row++ {
