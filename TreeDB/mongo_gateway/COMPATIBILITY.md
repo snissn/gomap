@@ -230,11 +230,11 @@ implemented.
 
 | Surface | Status | Harness / evidence | Current gap |
 |---|---|---|---|
-| `updateOne` / `ReplaceOne` by exact `_id` | `supported subset` | `TestMongoCompatibilityMatrix`, direct-wire and driver update tests | Standalone BSON/JSON/template-v1 only; top-level fields, `_id` mutation rejected. |
+| `updateOne` / `ReplaceOne` by exact `_id` | `supported subset` | `TestMongoCompatibilityMatrix`, direct-wire and driver update tests | Standalone BSON/JSON/template-v1 only. Modifiers are top-level `$set`/`$inc`/`$unset`; replacement documents preserve an omitted `_id`, allow the same `_id`, and reject a changed `_id`. |
 | Batched distinct-ID `$set` updates | `supported subset` | update batch tests | Unique-index conflicts may fall back to ordered singles; generic/replacement updates stay ordered. |
 | `multi: true` | `rejected` | `TestMongoCompatibilityMatrix` | No multi-update planner. |
-| Exact-`_id` `upsert: true` | `supported subset` | `TestMongoCompatibilityMatrix`, direct-wire and driver upsert tests | Top-level `$set`/`$inc`/`$unset` and replacement only; cluster/routed upserts rejected. |
-| Top-level `$set`, `$inc`, `$unset` | `supported subset` | `TestMongoCompatibilityMatrix`, mutation tests | `$inc` supports int32/int64/double only; null/non-numeric targets reject. `$push`, pipeline, dotted paths, and other operators are rejected. |
+| Exact-`_id` `upsert: true` | `supported subset` | `TestMongoCompatibilityMatrix`, direct-wire and driver upsert tests | Modifier and replacement upserts return `n: 1`, `nModified: 0`, and typed `upserted` entries; cluster/routed upserts are rejected. |
+| Top-level `$set`, `$inc`, `$unset` | `supported subset` | `TestMongoCompatibilityMatrix`, mutation tests | `$inc` supports int32/int64/double only; null/non-numeric targets reject. Dotted fields, `$push`, pipelines, and other operators are rejected. |
 | Cluster/routed generic, replacement, and upsert updates | `rejected` | cluster submitter tests | Only existing standalone semantics are supported; cluster accepts its native BSON `$set` route only. |
 | `delete` by `_id`, limit `0` or `1` | `supported subset` | `TestMongoCompatibilityMatrix` | Non-`_id` filters rejected. |
 

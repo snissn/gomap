@@ -172,6 +172,70 @@ func TestStandaloneServerCommandWALCRUDReopens(t *testing.T) {
 	}
 }
 
+func TestMongoMutationCommandWALValueLogPointersReopen(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+	opts.ValueLog.PointerThreshold = 1
+	backend, closeBackend, err := treedb.OpenBackend(opts)
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(backend)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "generation", Value: int32(1)}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 2, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{
+		bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "generation", Value: int32(5)}}}}}},
+		bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "upserted"}}}}}, {Key: "upsert", Value: true}},
+	}}, {Key: "$db", Value: "app"}}))
+	if err := server.Collections.FlushAll(); err != nil {
+		_ = closeBackend()
+		t.Fatalf("flush collections: %v", err)
+	}
+	if err := backend.Checkpoint(); err != nil {
+		_ = closeBackend()
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := closeBackend(); err != nil {
+		t.Fatalf("close backend: %v", err)
+	}
+
+	reopened, closeReopened, err := treedb.OpenBackend(opts)
+	if err != nil {
+		t.Fatalf("reopen backend: %v", err)
+	}
+	defer func() { _ = closeReopened() }()
+	collection, err := collections.NewCollectionManager(reopened).OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection after reopen: %v", err)
+	}
+	for _, want := range []struct {
+		id         string
+		generation int32
+		name       string
+	}{{id: "u1", generation: 6}, {id: "u2", name: "upserted"}} {
+		key, _, err := prepareInsertDocument(mustDocument(t, bson.D{{Key: "_id", Value: want.id}}), collections.DocumentFormatBSON)
+		if err != nil {
+			t.Fatalf("prepare %s key: %v", want.id, err)
+		}
+		stored, err := collection.Get(key)
+		if err != nil {
+			t.Fatalf("get %s after reopen: %v", want.id, err)
+		}
+		raw := bson.Raw(stored)
+		if want.generation != 0 {
+			if got, ok := raw.Lookup("generation").Int32OK(); !ok || got != want.generation {
+				t.Fatalf("%s generation=%d ok=%v, want %d", want.id, got, ok, want.generation)
+			}
+		}
+		if want.name != "" {
+			if got, ok := raw.Lookup("name").StringValueOK(); !ok || got != want.name {
+				t.Fatalf("%s name=%q ok=%v, want %q", want.id, got, ok, want.name)
+			}
+		}
+	}
+}
+
 func startStandaloneMongoClientForTest(t *testing.T, standalone *StandaloneServer) (*mongo.Client, context.CancelFunc, net.Listener, chan error) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())

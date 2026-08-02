@@ -6049,6 +6049,12 @@ func TestMongoMutationRejectsInvalidShapesAndOverflow(t *testing.T) {
 	if _, _, err := applyMongoReplacement(mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}), changedID); err == nil {
 		t.Fatal("changed _id accepted")
 	}
+	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}})
+	invalidReplacement := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}, {Key: "profile.name", Value: "bad"}})
+	updated, changed, err := applyMongoReplacement(doc, invalidReplacement)
+	if err == nil || updated != nil || changed || !bytes.Equal(doc, mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}})) {
+		t.Fatalf("invalid replacement updated=%v changed=%v err=%v", updated, changed, err)
+	}
 }
 
 func TestServerUpdateGenericMutationsAcrossDocumentFormats(t *testing.T) {
@@ -6064,14 +6070,20 @@ func TestServerUpdateGenericMutationsAcrossDocumentFormats(t *testing.T) {
 			s.Collections = collections.NewCollectionManager(db)
 			assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "n", Value: int32(2147483647)}, {Key: "old", Value: true}, {Key: "nullValue", Value: nil}, {Key: "textValue", Value: "bad"}}}}, {Key: "$db", Value: "app"}}))
 
-			update := func(requestID int32, value bson.D) bson.Raw {
-				return serveCommand(t, s, requestID, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: value}}}}, {Key: "$db", Value: "app"}})
+			requestID := int32(2)
+			nextRequestID := func() int32 {
+				id := requestID
+				requestID++
+				return id
 			}
-			resp := update(2, bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "ada"}}}, {Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}, {Key: "missing", Value: int64(-2)}}}, {Key: "$unset", Value: bson.D{{Key: "old", Value: true}, {Key: "absent", Value: true}}}})
+			update := func(value bson.D) bson.Raw {
+				return serveCommand(t, s, nextRequestID(), bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: value}}}}, {Key: "$db", Value: "app"}})
+			}
+			resp := update(bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "ada"}}}, {Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}, {Key: "missing", Value: int64(-2)}}}, {Key: "$unset", Value: bson.D{{Key: "old", Value: true}, {Key: "absent", Value: true}}}})
 			assertOK(t, resp)
 			assertInt32(t, resp, "n", 1)
 			assertInt32(t, resp, "nModified", 1)
-			find := serveCommand(t, s, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+			find := serveCommand(t, s, nextRequestID(), bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
 			got := cursorFirstBatch(t, find)[0]
 			if n, ok := got.Lookup("n").Int64OK(); !ok || n != 2147483648 {
 				t.Fatalf("n=%d ok=%v", n, ok)
@@ -6082,12 +6094,12 @@ func TestServerUpdateGenericMutationsAcrossDocumentFormats(t *testing.T) {
 			if !got.Lookup("old").IsZero() {
 				t.Fatal("old remains")
 			}
-			noop := update(4, bson.D{{Key: "$unset", Value: bson.D{{Key: "stillAbsent", Value: true}}}})
+			noop := update(bson.D{{Key: "$unset", Value: bson.D{{Key: "stillAbsent", Value: true}}}})
 			assertOK(t, noop)
 			assertInt32(t, noop, "nModified", 0)
 			// int64 plus double is a double.
-			assertOK(t, update(4, bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: 0.5}}}}))
-			find = serveCommand(t, s, 5, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+			assertOK(t, update(bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: 0.5}}}}))
+			find = serveCommand(t, s, nextRequestID(), bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
 			if n, ok := cursorFirstBatch(t, find)[0].Lookup("n").DoubleOK(); !ok || n != 2147483648.5 {
 				t.Fatalf("double n=%v ok=%v", n, ok)
 			}
@@ -6101,20 +6113,20 @@ func TestServerUpdateGenericMutationsAcrossDocumentFormats(t *testing.T) {
 				{{Key: "$set", Value: bson.D{{Key: "_id", Value: "u2"}}}},
 				{{Key: "$push", Value: bson.D{{Key: "n", Value: 1}}}},
 			} {
-				assertCommandError(t, update(6, badUpdate), "BadValue")
+				assertCommandError(t, update(badUpdate), "BadValue")
 			}
-			find = serveCommand(t, s, 6, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+			find = serveCommand(t, s, nextRequestID(), bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
 			if n, _ := cursorFirstBatch(t, find)[0].Lookup("n").DoubleOK(); n != 2147483648.5 {
 				t.Fatalf("failed item changed n=%v", n)
 			}
-			assertOK(t, update(6, bson.D{{Key: "$inc", Value: bson.D{{Key: "largest", Value: int64(math.MaxInt64)}}}}))
-			assertCommandError(t, update(6, bson.D{{Key: "$inc", Value: bson.D{{Key: "largest", Value: int64(1)}}}}), "BadValue")
-			assertOK(t, update(7, bson.D{{Key: "name", Value: "grace"}})) // omitted _id is preserved
-			noop = update(8, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "grace"}})
+			assertOK(t, update(bson.D{{Key: "$inc", Value: bson.D{{Key: "largest", Value: int64(math.MaxInt64)}}}}))
+			assertCommandError(t, update(bson.D{{Key: "$inc", Value: bson.D{{Key: "largest", Value: int64(1)}}}}), "BadValue")
+			assertOK(t, update(bson.D{{Key: "name", Value: "grace"}})) // omitted _id is preserved
+			noop = update(bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "grace"}})
 			assertOK(t, noop)
 			assertInt32(t, noop, "nModified", 0)
-			assertCommandError(t, update(9, bson.D{{Key: "_id", Value: "u2"}}), "BadValue")
-			assertOK(t, update(10, bson.D{})) // an empty replacement retains _id
+			assertCommandError(t, update(bson.D{{Key: "_id", Value: "u2"}}), "BadValue")
+			assertOK(t, update(bson.D{})) // an empty replacement retains _id
 		})
 	}
 }

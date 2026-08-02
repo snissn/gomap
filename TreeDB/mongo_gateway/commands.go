@@ -3703,6 +3703,9 @@ func parseMongoMutation(update wire.Document) (mongoMutation, error) {
 		return mongoMutation{}, errors.New("Mongo gateway update must be a non-empty document")
 	}
 	if len(elements) == 0 {
+		if _, err := validateMongoReplacement(update); err != nil {
+			return mongoMutation{}, err
+		}
 		return mongoMutation{replace: update}, nil
 	}
 	first, err := elements[0].KeyErr()
@@ -3715,6 +3718,9 @@ func parseMongoMutation(update wire.Document) (mongoMutation, error) {
 			if strings.HasPrefix(key, "$") {
 				return mongoMutation{}, errors.New("Mongo gateway update cannot mix replacement fields and operators")
 			}
+		}
+		if _, err := validateMongoReplacement(update); err != nil {
+			return mongoMutation{}, err
 		}
 		return mongoMutation{replace: update}, nil
 	}
@@ -3837,16 +3843,16 @@ func applyMongoMutation(doc wire.Document, mutation mongoMutation) (wire.Documen
 }
 
 func applyMongoReplacement(doc, replacement wire.Document) (wire.Document, bool, error) {
+	elements, err := validateMongoReplacement(replacement)
+	if err != nil {
+		return nil, false, err
+	}
 	oldID, newID := bson.Raw(doc).Lookup("_id"), bson.Raw(replacement).Lookup("_id")
 	if !newID.IsZero() && !newID.Equal(oldID) {
 		return nil, false, errors.New("Mongo gateway update cannot modify _id")
 	}
 	if !newID.IsZero() {
 		return replacement, !bytes.Equal(doc, replacement), nil
-	}
-	elements, err := bson.Raw(replacement).Elements()
-	if err != nil {
-		return nil, false, err
 	}
 	out := bson.D{{Key: "_id", Value: oldID}}
 	for _, elem := range elements {
@@ -3855,6 +3861,28 @@ func applyMongoReplacement(doc, replacement wire.Document) (wire.Document, bool,
 	}
 	raw, err := bson.Marshal(out)
 	return wire.Document(raw), !bytes.Equal(doc, raw), err
+}
+
+func validateMongoReplacement(replacement wire.Document) ([]bson.RawElement, error) {
+	elements, err := bson.Raw(replacement).Elements()
+	if err != nil {
+		return nil, err
+	}
+	for _, elem := range elements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			return nil, err
+		}
+		if key != "_id" {
+			if err := validateSetFieldName(key); err != nil {
+				return nil, err
+			}
+		}
+		if err := elem.Value().Validate(); err != nil {
+			return nil, err
+		}
+	}
+	return elements, nil
 }
 
 func mongoMutationNumeric(v bson.RawValue) bool {
