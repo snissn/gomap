@@ -6301,6 +6301,25 @@ func TestMongoMutationRejectsInvalidShapesAndOverflow(t *testing.T) {
 			t.Fatalf("accepted invalid update path %q", path)
 		}
 	}
+	pathAtLimit := strings.Repeat("a.", mongoMutationMaxPathDepth-1) + "a"
+	if _, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: pathAtLimit, Value: int32(1)}}}})); err != nil {
+		t.Fatalf("rejected %d-component path: %v", mongoMutationMaxPathDepth, err)
+	}
+	pathOverLimit := pathAtLimit + ".a"
+	if _, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: pathOverLimit, Value: int32(1)}}}})); err == nil {
+		t.Fatalf("accepted %d-component path", mongoMutationMaxPathDepth+1)
+	}
+	disjoint := make(map[string]struct{}, 2048)
+	for i := range 2048 {
+		disjoint[fmt.Sprintf("field%d", i)] = struct{}{}
+	}
+	if err := validateMongoMutationPathConflicts(disjoint); err != nil {
+		t.Fatalf("disjoint paths conflict: %v", err)
+	}
+	disjoint["field1.child"] = struct{}{}
+	if err := validateMongoMutationPathConflicts(disjoint); err == nil {
+		t.Fatal("ancestor conflict accepted")
+	}
 	overLimit := bson.A{}
 	for range mongoMutationMaxEachValues + 1 {
 		overLimit = append(overLimit, int32(1))

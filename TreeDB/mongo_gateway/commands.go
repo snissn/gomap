@@ -3955,6 +3955,9 @@ type mongoMutation struct {
 
 const mongoMutationMaxEachValues = 256
 
+// MongoDB limits update paths to 100 components; enforce it before recursive mutation.
+const mongoMutationMaxPathDepth = 100
+
 // parseMongoMutation validates the shared modifier subset before any document is changed.
 func parseMongoMutation(update wire.Document) (mongoMutation, error) {
 	elements, err := bson.Raw(update).Elements()
@@ -4269,7 +4272,11 @@ func validateMongoMutationPath(path string) error {
 	if path == "" || strings.HasPrefix(path, ".") || strings.HasSuffix(path, ".") || strings.Contains(path, "..") {
 		return errors.New("Mongo gateway update path must contain non-empty segments")
 	}
-	for index, segment := range strings.Split(path, ".") {
+	segments := strings.Split(path, ".")
+	if len(segments) > mongoMutationMaxPathDepth {
+		return fmt.Errorf("Mongo gateway update path exceeds %d components", mongoMutationMaxPathDepth)
+	}
+	for index, segment := range segments {
 		if index == 0 && segment == "_id" {
 			return errors.New("Mongo gateway update cannot modify _id")
 		}
@@ -4281,11 +4288,14 @@ func validateMongoMutationPath(path string) error {
 }
 
 func validateMongoMutationPathConflicts(paths map[string]struct{}) error {
-	for left := range paths {
-		for right := range paths {
-			if left != right && (strings.HasPrefix(left, right+".") || strings.HasPrefix(right, left+".")) {
-				return fmt.Errorf("Mongo gateway update paths %q and %q conflict", left, right)
-			}
+	ordered := make([]string, 0, len(paths))
+	for path := range paths {
+		ordered = append(ordered, path)
+	}
+	sort.Strings(ordered)
+	for i := 1; i < len(ordered); i++ {
+		if strings.HasPrefix(ordered[i], ordered[i-1]+".") {
+			return fmt.Errorf("Mongo gateway update paths %q and %q conflict", ordered[i-1], ordered[i])
 		}
 	}
 	return nil
