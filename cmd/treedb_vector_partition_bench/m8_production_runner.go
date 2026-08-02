@@ -384,6 +384,9 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	if assets.descriptor != nil && (len(cfg.overlaps) != 1 || cfg.overlaps[0] != assets.descriptor.OverlapRatio) {
 		return fmt.Errorf("M8 configured overlap does not match retained variant %s", assets.descriptor.VariantID)
 	}
+	if assets.descriptor != nil && (assets.descriptor.BaseSHA != cfg.baseSHA || assets.descriptor.HeadSHA != cfg.headSHA) {
+		return fmt.Errorf("M8 retained variant %s revision does not match configured revision", assets.descriptor.VariantID)
+	}
 	var persistentAssetBytes uint64
 	for _, asset := range assets.manifest.Assets {
 		if asset.Bytes > ^uint64(0)-persistentAssetBytes {

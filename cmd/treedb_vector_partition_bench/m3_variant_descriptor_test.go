@@ -13,13 +13,15 @@ import (
 
 func testM3VariantDescriptorV1(dir string) m3VariantDescriptorV1 {
 	hash := strings.Repeat("a", 64)
+	routerConfig := vectorpartition.DefaultRouterConfigV1()
 	d := m3VariantDescriptorV1{
 		SchemaVersion: 5, ResultKind: "m3_persistent_variant_descriptor_v5", VariantID: "graph-overlap-020-v1",
 		AssignmentBasis: partitionAssignmentGraphV1, OverlapRatio: .2,
+		BaseSHA: strings.Repeat("b", 40), HeadSHA: strings.Repeat("c", 40),
 		FixtureChecksum: hash, ArtifactSHA256: hash, GraphArtifactSHA256: hash, ArtifactBackend: "reference", Source: vectorpartition.Source{SourceID: "fixture", Checksum: hash, Vectors: 8, Dimensions: 2, Metric: "cosine"},
 		DatabaseDirectory: dir, ManifestIntegrity: hash, ReadySetDigest: hash, RouterAssetChecksum: hash, RouterModelDigest: hash,
 		SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRows: 8, PartitionGeneration: 4, RouterGeneration: 4,
-		Partitions: 4, IndexDefinitionDigest: hash, PartitionHNSWM: 16, PartitionMaxDistanceWork: 20_000_000_000, RouterMaxScalarWork: 20_000_000_000, M3MaxBenchmarkVisits: 400_000_000, RouterRepresentatives: 4, Capacity: 3, OverlapRequested: 1, OverlapRealized: 1, OverlapRejected: 0, OverlapUseful: 1, OverlapUnusedCapacity: 3, EdgeCutBefore: 2, EdgeCutAfter: 1, PartitionLoads: []int{3, 2, 2, 2}, OverlapMemberships: 1, PersistentAssetBytes: 1024,
+		Partitions: 4, IndexDefinitionDigest: hash, PartitionHNSWM: 16, PartitionMaxDistanceWork: 20_000_000_000, RouterMaxScalarWork: 20_000_000_000, RouterConfig: routerConfig, M3MaxBenchmarkVisits: 400_000_000, RouterRepresentatives: 4, Capacity: 3, OverlapRequested: 1, OverlapRealized: 1, OverlapRejected: 0, OverlapUseful: 1, OverlapUnusedCapacity: 3, EdgeCutBefore: 2, EdgeCutAfter: 1, PartitionLoads: []int{3, 2, 2, 2}, OverlapMemberships: 1, PersistentAssetBytes: 1024,
 	}
 	d.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(d)
 	d.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: 3, Budget: 1, Realized: 1, BuildIdentityDigest: d.BuildIdentityDigest})
@@ -36,7 +38,7 @@ func TestM3VariantDescriptorRoundTripAndImmutableCreateV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.VariantID != want.VariantID || got.ReadySetDigest != want.ReadySetDigest || got.PartitionMaxDistanceWork != want.PartitionMaxDistanceWork || got.RouterMaxScalarWork != want.RouterMaxScalarWork || got.M3MaxBenchmarkVisits != want.M3MaxBenchmarkVisits || got.RouterRepresentatives != want.RouterRepresentatives || len(got.PartitionLoads) != 4 {
+	if got.VariantID != want.VariantID || got.BaseSHA != want.BaseSHA || got.HeadSHA != want.HeadSHA || got.ReadySetDigest != want.ReadySetDigest || got.PartitionMaxDistanceWork != want.PartitionMaxDistanceWork || got.RouterMaxScalarWork != want.RouterMaxScalarWork || got.RouterConfig != want.RouterConfig || got.M3MaxBenchmarkVisits != want.M3MaxBenchmarkVisits || got.RouterRepresentatives != want.RouterRepresentatives || len(got.PartitionLoads) != 4 {
 		t.Fatalf("descriptor=%+v", got)
 	}
 	if err := m3WriteVariantDescriptorV1(dir, want); err == nil {
@@ -125,6 +127,8 @@ func TestM3VariantBuildIdentityBindsOverlapInputsAndOutcomesV1(t *testing.T) {
 		t.Fatalf("capacity identity baseline=%s changed=%s err=%v", baseline, capacityDigest, err)
 	}
 	for name, mutate := range map[string]func(*m3VariantDescriptorV1){
+		"base revision":      func(candidate *m3VariantDescriptorV1) { candidate.BaseSHA = strings.Repeat("d", 40) },
+		"head revision":      func(candidate *m3VariantDescriptorV1) { candidate.HeadSHA = strings.Repeat("e", 40) },
 		"partition work cap": func(candidate *m3VariantDescriptorV1) { candidate.PartitionMaxDistanceWork++ },
 		"router work cap":    func(candidate *m3VariantDescriptorV1) { candidate.RouterMaxScalarWork++ },
 		"M3 visit cap":       func(candidate *m3VariantDescriptorV1) { candidate.M3MaxBenchmarkVisits++ },
@@ -172,6 +176,24 @@ func TestM3VariantDescriptorRejectsMissingBuildWorkCapsV1(t *testing.T) {
 	}
 }
 
+func TestM3VariantDescriptorRequiresRevisionsAndRouterConfigV1(t *testing.T) {
+	for name, mutate := range map[string]func(*m3VariantDescriptorV1){
+		"missing base":           func(d *m3VariantDescriptorV1) { d.BaseSHA = "" },
+		"malformed head":         func(d *m3VariantDescriptorV1) { d.HeadSHA = "not-a-sha" },
+		"router scalar mismatch": func(d *m3VariantDescriptorV1) { d.RouterConfig.MaxScalarWork++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := testM3VariantDescriptorV1(t.TempDir())
+			mutate(&d)
+			d.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(d)
+			d.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: uint64(d.Capacity), Budget: uint64(d.OverlapRequested), Realized: uint64(d.OverlapRealized), BuildIdentityDigest: d.BuildIdentityDigest})
+			if err := validateM3VariantDescriptorV1(d); err == nil {
+				t.Fatal("accepted malformed revision or router config")
+			}
+		})
+	}
+}
+
 func TestM3OverlapCapacityUsesExactGlobalTargetV1(t *testing.T) {
 	artifact := vectorpartition.Artifact{IDs: make([]string, 1_000_000), Config: vectorpartition.Config{Partitions: 16}, Metrics: vectorpartition.Metrics{Cap: 65_625}}
 	capacity, err := m3OverlapCapacityV1(artifact, .2)
@@ -208,14 +230,19 @@ func TestM3VariantDescriptorBindsReadyManifestV1(t *testing.T) {
 	}
 	manifest.RouterAsset.Bytes = 224
 	fixture := fixtureManifest{Checksum: d.FixtureChecksum}
-	if err := m3DescriptorMatchesManifestV1(d, fixture, manifest, d.RouterModelDigest); err != nil {
+	if err := m3DescriptorMatchesManifestV1(d, fixture, manifest, d.RouterModelDigest, d.RouterConfig); err != nil {
 		t.Fatal(err)
 	}
 	manifest.ReadySetDigest = strings.Repeat("b", 64)
-	if err := m3DescriptorMatchesManifestV1(d, fixture, manifest, d.RouterModelDigest); err == nil {
+	if err := m3DescriptorMatchesManifestV1(d, fixture, manifest, d.RouterModelDigest, d.RouterConfig); err == nil {
 		t.Fatal("accepted descriptor for a different ready manifest")
 	}
 	manifest.ReadySetDigest = d.ReadySetDigest
+	runtimeConfig := d.RouterConfig
+	runtimeConfig.LeafSize++
+	if err := m3DescriptorMatchesManifestV1(d, fixture, manifest, d.RouterModelDigest, runtimeConfig); err == nil {
+		t.Fatal("accepted descriptor for a router reopened with a different build config")
+	}
 	for name, mutate := range map[string]func(*m3VariantDescriptorV1){
 		"assignment relabel": func(candidate *m3VariantDescriptorV1) {
 			candidate.AssignmentBasis = partitionAssignmentStableIDHashV1
@@ -232,14 +259,14 @@ func TestM3VariantDescriptorBindsReadyManifestV1(t *testing.T) {
 			candidate := d
 			candidate.PartitionLoads = append([]int(nil), d.PartitionLoads...)
 			mutate(&candidate)
-			if err := m3DescriptorMatchesManifestV1(candidate, fixture, manifest, candidate.RouterModelDigest); err == nil {
+			if err := m3DescriptorMatchesManifestV1(candidate, fixture, manifest, candidate.RouterModelDigest, candidate.RouterConfig); err == nil {
 				t.Fatal("accepted descriptor mutation not covered by retained state")
 			}
 		})
 	}
 	relocated := d
 	relocated.DatabaseDirectory = filepath.Join(t.TempDir(), "relocated")
-	if err := m3DescriptorMatchesManifestV1(relocated, fixture, manifest, relocated.RouterModelDigest); err != nil {
+	if err := m3DescriptorMatchesManifestV1(relocated, fixture, manifest, relocated.RouterModelDigest, relocated.RouterConfig); err != nil {
 		t.Fatalf("portable descriptor rejected after directory relocation: %v", err)
 	}
 }

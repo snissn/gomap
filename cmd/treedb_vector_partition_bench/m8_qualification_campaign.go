@@ -38,6 +38,8 @@ type m8QualificationCampaignRunV1 struct {
 type m8QualificationIndexV1 struct {
 	SchemaVersion int                         `json:"schema_version"`
 	ResultKind    string                      `json:"result_kind"`
+	BaseSHA       string                      `json:"base_sha"`
+	HeadSHA       string                      `json:"head_sha"`
 	Campaigns     []m8QualificationCampaignV1 `json:"campaigns"`
 }
 
@@ -45,6 +47,8 @@ type m8QualificationIndexSummaryV1 struct {
 	SchemaVersion int                                         `json:"schema_version"`
 	ResultKind    string                                      `json:"result_kind"`
 	Status        string                                      `json:"status"`
+	BaseSHA       string                                      `json:"base_sha"`
+	HeadSHA       string                                      `json:"head_sha"`
 	Campaigns     map[string]m8QualificationCampaignSummaryV1 `json:"campaigns"`
 }
 
@@ -102,13 +106,16 @@ func runValidateQualification(args []string, stdout io.Writer) error {
 }
 
 func m8ValidateQualificationIndexV1(root string, index m8QualificationIndexV1) (m8QualificationIndexSummaryV1, error) {
-	summary := m8QualificationIndexSummaryV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_summary_v1", Status: "qualified", Campaigns: make(map[string]m8QualificationCampaignSummaryV1, len(m8QualificationFixturesV1))}
-	if index.SchemaVersion != 1 || index.ResultKind != "vector_partition_structured_qualification_index_v1" || len(index.Campaigns) != len(m8QualificationFixturesV1) {
+	summary := m8QualificationIndexSummaryV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_summary_v1", Status: "qualified", BaseSHA: index.BaseSHA, HeadSHA: index.HeadSHA, Campaigns: make(map[string]m8QualificationCampaignSummaryV1, len(m8QualificationFixturesV1))}
+	if index.SchemaVersion != 1 || index.ResultKind != "vector_partition_structured_qualification_index_v1" || !m8QualificationGitSHAV1(index.BaseSHA) || !m8QualificationGitSHAV1(index.HeadSHA) || len(index.Campaigns) != len(m8QualificationFixturesV1) {
 		return m8QualificationIndexSummaryV1{}, errors.New("qualification index requires exactly the two authoritative corpus campaigns")
 	}
 	for _, campaign := range index.Campaigns {
 		if _, duplicate := summary.Campaigns[campaign.FixtureChecksum]; !m8QualificationFixtureChecksumV1(campaign.FixtureChecksum) || duplicate {
 			return m8QualificationIndexSummaryV1{}, errors.New("qualification index has duplicate or unknown corpus")
+		}
+		if campaign.BaseSHA != index.BaseSHA || campaign.HeadSHA != index.HeadSHA {
+			return m8QualificationIndexSummaryV1{}, errors.New("qualification index campaigns do not share the index revision")
 		}
 		campaignSummary, err := m8ValidateQualificationCampaignV1(root, campaign)
 		if err != nil {

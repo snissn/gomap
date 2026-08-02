@@ -212,7 +212,7 @@ func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, par
 		if readErr != nil {
 			return nil, readErr
 		}
-		if matchErr := m3DescriptorMatchesManifestV1(descriptor, fixture, h.status.Manifest, h.status.ModelDigest); matchErr != nil {
+		if matchErr := m3DescriptorMatchesManifestV1(descriptor, fixture, h.status.Manifest, h.status.ModelDigest, h.status.Config); matchErr != nil {
 			return nil, matchErr
 		}
 		var partitionHNSWM int

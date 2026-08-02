@@ -844,7 +844,9 @@ func TestM8VariantBuildCompatibilityRejectsMixedRetainedBuildsV1(t *testing.T) {
 		t.Fatalf("compatible graph/stable build rejected: %v", err)
 	}
 	for name, mutate := range map[string]func([]m3VariantDescriptorV1){
-		"graph digest": func(variants []m3VariantDescriptorV1) { variants[1].GraphArtifactSHA256 = strings.Repeat("d", 64) },
+		"base revision": func(variants []m3VariantDescriptorV1) { variants[2].BaseSHA = strings.Repeat("d", 40) },
+		"head revision": func(variants []m3VariantDescriptorV1) { variants[2].HeadSHA = strings.Repeat("e", 40) },
+		"graph digest":  func(variants []m3VariantDescriptorV1) { variants[1].GraphArtifactSHA256 = strings.Repeat("d", 64) },
 		"graph assignment artifact": func(variants []m3VariantDescriptorV1) {
 			variants[1].ArtifactSHA256 = strings.Repeat("d", 64)
 			variants[1].GraphArtifactSHA256 = variants[1].ArtifactSHA256
@@ -854,6 +856,24 @@ func TestM8VariantBuildCompatibilityRejectsMixedRetainedBuildsV1(t *testing.T) {
 		"local HNSW M":           func(variants []m3VariantDescriptorV1) { variants[2].PartitionHNSWM-- },
 		"router representatives": func(variants []m3VariantDescriptorV1) { variants[2].RouterRepresentatives++ },
 		"router scalar work":     func(variants []m3VariantDescriptorV1) { variants[2].RouterMaxScalarWork++ },
+		"router config seed":     func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.Seed++ },
+		"router config branch":   func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.BranchFactor++ },
+		"router config leaf":     func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.LeafSize++ },
+		"router config reps":     func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.RepresentativesPerPartition++ },
+		"router config depth":    func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.MaxDepth-- },
+		"router config iterations": func(variants []m3VariantDescriptorV1) {
+			variants[2].RouterConfig.MaxIterations--
+		},
+		"router config vectors":    func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.MaxVectors-- },
+		"router config dimensions": func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.MaxDimensions-- },
+		"router config max representatives": func(variants []m3VariantDescriptorV1) {
+			variants[2].RouterConfig.MaxRepresentatives--
+		},
+		"router config scalar cap": func(variants []m3VariantDescriptorV1) {
+			variants[2].RouterConfig.MaxScalarWork++
+			variants[2].RouterMaxScalarWork++
+		},
+		"router config bytes": func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.MaxRouterBytes-- },
 	} {
 		t.Run(name, func(t *testing.T) {
 			variants := makeVariants()

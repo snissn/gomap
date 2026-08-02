@@ -55,7 +55,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			}
 		})
 	}
-	singleCorpusIndex, err := json.Marshal(m8QualificationIndexV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_index_v1", Campaigns: []m8QualificationCampaignV1{campaign}})
+	singleCorpusIndex, err := json.Marshal(m8QualificationIndexV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_index_v1", BaseSHA: head, HeadSHA: head, Campaigns: []m8QualificationCampaignV1{campaign}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		digest := sha256.Sum256(raw)
 		campaign250.Runs = append(campaign250.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:])})
 	}
-	qualificationIndex := m8QualificationIndexV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_index_v1", Campaigns: []m8QualificationCampaignV1{campaign, campaign250}}
+	qualificationIndex := m8QualificationIndexV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_index_v1", BaseSHA: head, HeadSHA: head, Campaigns: []m8QualificationCampaignV1{campaign, campaign250}}
 	index, err := json.Marshal(qualificationIndex)
 	if err != nil {
 		t.Fatal(err)
@@ -97,12 +97,16 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		t.Fatalf("CLI validation err=%v output=%q", err, stdout.String())
 	}
 	var indexSummary m8QualificationIndexSummaryV1
-	if err := json.Unmarshal([]byte(stdout.String()), &indexSummary); err != nil || indexSummary.Status != "qualified" || len(indexSummary.Campaigns) != 2 || indexSummary.Campaigns[fixture.Checksum].P4QPSMedian != 200 || indexSummary.Campaigns[fixture250.Checksum].P4QPSMedian != 200 {
+	if err := json.Unmarshal([]byte(stdout.String()), &indexSummary); err != nil || indexSummary.Status != "qualified" || indexSummary.BaseSHA != head || indexSummary.HeadSHA != head || len(indexSummary.Campaigns) != 2 || indexSummary.Campaigns[fixture.Checksum].P4QPSMedian != 200 || indexSummary.Campaigns[fixture250.Checksum].P4QPSMedian != 200 {
 		t.Fatalf("CLI summary err=%v summary=%+v", err, indexSummary)
 	}
 	for name, mutate := range map[string]func(*m8QualificationIndexV1){
 		"duplicate_100k": func(index *m8QualificationIndexV1) { index.Campaigns[1] = index.Campaigns[0] },
 		"unknown_corpus": func(index *m8QualificationIndexV1) { index.Campaigns[1].FixtureChecksum = strings.Repeat("b", 64) },
+		"missing_base":   func(index *m8QualificationIndexV1) { index.BaseSHA = "" },
+		"malformed_head": func(index *m8QualificationIndexV1) { index.HeadSHA = "not-a-sha" },
+		"mixed_base":     func(index *m8QualificationIndexV1) { index.Campaigns[1].BaseSHA = strings.Repeat("b", 40) },
+		"mixed_head":     func(index *m8QualificationIndexV1) { index.Campaigns[1].HeadSHA = strings.Repeat("c", 40) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			bad := qualificationIndex
@@ -537,7 +541,8 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 			M3Cap                 int64 `json:"m3_max_benchmark_visits"`
 			M8Cap                 int64 `json:"m8_max_exact_truth_visits"`
 		} `json:"corpora"`
-		Commands map[string]string `json:"commands"`
+		Commands   map[string]string `json:"commands"`
+		Validation string            `json:"validation"`
 	}
 	if err := json.Unmarshal(raw, &plan); err != nil {
 		t.Fatal(err)
@@ -550,6 +555,9 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 	}
 	if !strings.Contains(plan.Commands["m3_graph_disjoint"], "-partition-max-distance-work <graph-cap>") || !strings.Contains(plan.Commands["m3_graph_disjoint"], "-router-max-scalar-work <router-cap>") || !strings.Contains(plan.Commands["m3_graph_overlap"], "-partition-max-distance-work <graph-cap>") || !strings.Contains(plan.Commands["m3_graph_overlap"], "-router-max-scalar-work <router-cap>") || !strings.Contains(plan.Commands["m3_stable_hash_disjoint"], "-partition-max-distance-work <graph-cap>") || !strings.Contains(plan.Commands["m3_stable_hash_disjoint"], "-router-max-scalar-work <router-cap>") {
 		t.Fatalf("graph commands do not bind corpus-specific scalar cap: %+v", plan.Commands)
+	}
+	if !strings.Contains(plan.Validation, "every campaign, M8 child, and M3 descriptor must match it") {
+		t.Fatalf("plan does not bind the aggregate revision: %q", plan.Validation)
 	}
 }
 
@@ -599,9 +607,11 @@ func testM8QualificationReportV1(t *testing.T, head string, fixture fixtureManif
 	descriptor.Partitions, descriptor.SourceRows, descriptor.Source.Vectors = 16, uint64(fixture.Vectors), fixture.Vectors
 	descriptor.OverlapMemberships = wantOverlap
 	descriptor.EdgeCutBefore = wantOverlap + 1
+	descriptor.BaseSHA, descriptor.HeadSHA = head, head
 	if fixture.Vectors == 250000 {
 		descriptor.PartitionMaxDistanceWork = 50_000_000_000
 		descriptor.RouterMaxScalarWork = 50_000_000_000
+		descriptor.RouterConfig.MaxScalarWork = 50_000_000_000
 		descriptor.M3MaxBenchmarkVisits = 900_000_000
 	}
 	descriptor.PartitionLoads = make([]int, len(loads))
