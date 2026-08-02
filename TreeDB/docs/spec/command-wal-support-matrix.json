@@ -35,6 +35,7 @@
     {"surface":"mongo_gateway","entry_point":"create","command":"CatalogCreateCollection","status":"WAL-supported","first_pr":"PR6","tests":["TestMongoCompatibilityMatrix"]},
     {"surface":"mongo_gateway","entry_point":"insert","command":"CollectionInsertBatchByID","status":"WAL-supported","first_pr":"PR4","tests":["TestMongoCompatibilityMatrix"]},
     {"surface":"mongo_gateway","entry_point":"update","command":"CollectionUpdateBatchByID","status":"WAL-supported","first_pr":"PR5","tests":["TestMongoCompatibilityMatrix"]},
+    {"surface":"mongo_gateway","entry_point":"findAndModify","command":"CollectionUpdateBatchByID / CollectionInsertBatchByID","status":"WAL-supported","first_pr":"#4038","tests":["TestFindAndModifyCommandWALValueLogPointersReopen","TestFindAndModifyClusterFailsClosed"]},
     {"surface":"mongo_gateway","entry_point":"delete","command":"CollectionDeleteBatchByID","status":"WAL-supported","first_pr":"PR4","tests":["TestMongoCompatibilityMatrix"]},
     {"surface":"mongo_gateway","entry_point":"listDatabases","command":"metadata read","status":"WAL-supported","first_pr":"PR2111","tests":["TestMongoCompatibilityMatrix"]},
     {"surface":"mongo_gateway","entry_point":"createIndexes (auto-create collection)","command":"CatalogCreateCollection","status":"WAL-supported","first_pr":"PR6","tests":["TestCollectionCommandWALCreateCollectionPublishesAppliedLSN"]},
