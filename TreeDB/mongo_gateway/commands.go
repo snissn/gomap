@@ -4079,7 +4079,7 @@ func applyMongoMutationWithOptions(doc wire.Document, mutation mongoMutation, up
 	if err := bson.Unmarshal(doc, &out); err != nil {
 		return nil, false, err
 	}
-	if err := validateMongoMutationAddToSetBudget(out, mutation.addToSet); err != nil {
+	if err := validateMongoMutationAddToSetBudget(bson.Raw(doc), mutation.addToSet); err != nil {
 		return nil, false, err
 	}
 	changed := false
@@ -4303,11 +4303,11 @@ func mongoMutationDecimalPathSegment(segment string) bool {
 	return true
 }
 
-func validateMongoMutationAddToSetBudget(doc bson.D, fields []mongoMutationArrayField) error {
+func validateMongoMutationAddToSetBudget(doc bson.Raw, fields []mongoMutationArrayField) error {
 	remaining := mongoMutationMaxAddToSetComparisons
 	remainingBytes := mongoMutationMaxAddToSetComparisonBytes
 	for _, field := range fields {
-		existingValues, err := mongoMutationArrayPathValues(doc, strings.Split(field.name, "."))
+		existingValues, err := mongoMutationRawArrayPathValues(doc, strings.Split(field.name, "."))
 		if err != nil {
 			return err
 		}
@@ -4327,32 +4327,22 @@ func validateMongoMutationAddToSetBudget(doc bson.D, fields []mongoMutationArray
 	return nil
 }
 
-func mongoMutationArrayPathValues(doc bson.D, path []string) ([]bson.RawValue, error) {
+func mongoMutationRawArrayPathValues(doc bson.Raw, path []string) ([]bson.RawValue, error) {
 	for index, segment := range path {
-		idx := mongoMutationPathIndex(doc, segment)
-		if idx < 0 {
+		value := doc.Lookup(segment)
+		if value.IsZero() {
 			return nil, nil
 		}
 		if index == len(path)-1 {
-			array, ok := doc[idx].Value.(bson.A)
-			if !ok {
+			if value.Type != bson.TypeArray {
 				return nil, nil
 			}
-			values := make([]bson.RawValue, len(array))
-			for i, value := range array {
-				raw, err := mongoMutationRaw(value)
-				if err != nil {
-					return nil, err
-				}
-				values[i] = raw
-			}
-			return values, nil
+			return value.Array().Values()
 		}
-		nested, ok := doc[idx].Value.(bson.D)
-		if !ok {
+		if value.Type != bson.TypeEmbeddedDocument {
 			return nil, nil
 		}
-		doc = nested
+		doc = value.Document()
 	}
 	return nil, nil
 }
