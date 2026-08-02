@@ -51,6 +51,20 @@ func TestVectorPartitionServiceRegistrationDoesNotTransferBackendOwnershipV1(t *
 	if _, err := doc.VectorPartitionServiceV1(); err != nil {
 		t.Fatal(err)
 	}
+	config := vectorpartition.ConservativeOperationsConfigV1()
+	config.Enabled = true
+	operations, err := vectorpartition.NewOperationsV1(service, config, func(context.Context) (vectorpartition.OperationsHealthV1, error) {
+		return vectorpartition.OperationsHealthV1{Ready: true}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := doc.RegisterVectorPartitionOperationsV1(operations); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := doc.VectorPartitionOperationsV1(); err != nil {
+		t.Fatal(err)
+	}
 	if err := doc.Close(); err != nil {
 		t.Fatal(err)
 	}

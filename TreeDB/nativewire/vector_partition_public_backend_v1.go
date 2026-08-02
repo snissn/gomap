@@ -149,6 +149,42 @@ func (b *VectorPartitionPublicBackendV1) VectorPartitionCleanupEligibilityV1(ctx
 	return public.CleanupEligibilityV1{Eligible: status.State == public.GenerationCleanableV1, Status: status}, nil
 }
 
+// OperationsHealthV1 derives operator readiness from the live catalog and
+// lifecycle authority; it intentionally does not trust a cached frontend
+// label. It is passed directly to vectorpartition.OperationsV1 at node setup.
+func (b *VectorPartitionPublicBackendV1) OperationsHealthV1(ctx context.Context) (public.OperationsHealthV1, error) {
+	if b == nil || b.opts.Topology == nil || b.opts.Lifecycle.Authority == nil {
+		return public.OperationsHealthV1{Reason: "authority_unavailable"}, errors.New("production vector topology or lifecycle authority is unavailable")
+	}
+	id := public.GenerationIDV1{Index: b.opts.Identity.Index.IndexName, Generation: b.opts.Identity.Generation}
+	topology := b.opts.Topology.Status()
+	if topology.Closed || !topology.Ready {
+		return public.OperationsHealthV1{Generation: id, Reason: "topology_unavailable"}, nil
+	}
+	proof, err := b.opts.Lifecycle.Authority.CurrentCatalogProof(ctx)
+	if err != nil {
+		return public.OperationsHealthV1{Generation: id, Reason: "catalog_unavailable"}, err
+	}
+	if proof.Epoch != b.opts.Identity.Index.CatalogEpoch || proof.Digest != b.opts.Identity.Index.CatalogDigest {
+		return public.OperationsHealthV1{Generation: id, Reason: "catalog_mismatch"}, nil
+	}
+	record, ok := b.opts.Lifecycle.Authority.VectorPartitionLifecycleRecordV1(b.opts.Identity)
+	if !ok {
+		return public.OperationsHealthV1{Generation: id, State: public.GenerationAbsentV1, Reason: "generation_absent"}, nil
+	}
+	status := publicStatusV1(record, false)
+	if record.Identity.Source != b.opts.Identity.Source {
+		return public.OperationsHealthV1{Generation: id, State: status.State, Reason: "source_mismatch"}, nil
+	}
+	if !status.Active || !status.Ready {
+		return public.OperationsHealthV1{Generation: id, State: status.State, Reason: "lifecycle_not_active"}, nil
+	}
+	if len(record.RequiredGroups) != len(b.opts.RequiredGroups) || len(record.ReadyGroups) != len(record.RequiredGroups) {
+		return public.OperationsHealthV1{Generation: id, State: status.State, Reason: "group_assets_unavailable"}, nil
+	}
+	return public.OperationsHealthV1{Ready: true, Generation: id, State: status.State, Reason: "ready"}, nil
+}
+
 func (b *VectorPartitionPublicBackendV1) checkID(id public.GenerationIDV1) error {
 	if b == nil || id.Index != b.opts.Identity.Index.IndexName || id.Generation != b.opts.Identity.Generation {
 		return &public.ErrorV1{Code: public.ErrorGenerationMismatchV1, Err: fmt.Errorf("generation does not match bound topology")}

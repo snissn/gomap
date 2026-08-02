@@ -26,10 +26,11 @@ type Service struct {
 	manager *collections.CollectionManager
 	writeMu sync.Mutex
 
-	benchmarkSearchCacheMu sync.RWMutex
-	benchmarkSearchCache   map[string]*serviceBenchmarkSearchCacheEntry
-	vectorPartitionService *vectorpartition.ServiceV1
-	closed                 bool
+	benchmarkSearchCacheMu    sync.RWMutex
+	benchmarkSearchCache      map[string]*serviceBenchmarkSearchCacheEntry
+	vectorPartitionService    *vectorpartition.ServiceV1
+	vectorPartitionOperations *vectorpartition.OperationsV1
+	closed                    bool
 }
 
 // RegisterVectorPartitionServiceV1 installs the node-assembled partition
@@ -64,6 +65,36 @@ func (s *Service) VectorPartitionServiceV1() (*vectorpartition.ServiceV1, error)
 	return s.vectorPartitionService, nil
 }
 
+// RegisterVectorPartitionOperationsV1 installs the optional default-off
+// operator boundary. Its service and live-health function remain node-owned.
+func (s *Service) RegisterVectorPartitionOperationsV1(operations *vectorpartition.OperationsV1) error {
+	if s == nil || operations == nil {
+		return errors.New("document service: vector partition operations are required")
+	}
+	s.benchmarkSearchCacheMu.Lock()
+	defer s.benchmarkSearchCacheMu.Unlock()
+	if s.closed {
+		return serviceClosedError()
+	}
+	if s.vectorPartitionOperations != nil {
+		return errors.New("document service: vector partition operations already registered")
+	}
+	s.vectorPartitionOperations = operations
+	return nil
+}
+
+func (s *Service) VectorPartitionOperationsV1() (*vectorpartition.OperationsV1, error) {
+	if s == nil {
+		return nil, errors.New("document service: vector partition operations are unavailable")
+	}
+	s.benchmarkSearchCacheMu.RLock()
+	defer s.benchmarkSearchCacheMu.RUnlock()
+	if s.closed || s.vectorPartitionOperations == nil {
+		return nil, errors.New("document service: vector partition operations are unavailable")
+	}
+	return s.vectorPartitionOperations, nil
+}
+
 type serviceBenchmarkSearchCacheEntry struct {
 	collection *collections.Collection
 	info       IndexInfo
@@ -89,6 +120,7 @@ func (s *Service) Close() error {
 	}
 	s.closed = true
 	s.vectorPartitionService = nil
+	s.vectorPartitionOperations = nil
 	for _, entry := range s.benchmarkSearchCache {
 		if entry != nil {
 			entries = append(entries, entry)

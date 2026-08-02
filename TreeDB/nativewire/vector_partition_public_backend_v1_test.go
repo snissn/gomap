@@ -105,6 +105,9 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 	if status, err := service.Status(ctx, id); err != nil || !status.Active {
 		t.Fatalf("status = %#v, %v", status, err)
 	}
+	if health, err := backend.OperationsHealthV1(ctx); err != nil || !health.Ready || health.Reason != "ready" {
+		t.Fatalf("operations health = %#v, %v", health, err)
+	}
 	request := public.SearchRequestV1{Version: 1, Generation: id, Query: []float32{1, 0}, Metric: public.MetricCosineV1, TopK: base.TopK, Probes: base.PartitionProbes, EfSearch: base.EfSearch, Consistency: public.ConsistencyGenerationSnapshotV1, Limits: public.SearchLimitsV1{RequestBytes: base.RequestBytesLimit, CandidateBytes: base.CandidateBytesLimit, ResponseBytes: base.ResponseBytesLimit, MergeEntries: base.MergeEntriesLimit}}
 	response, err := service.Search(ctx, request)
 	if err != nil || len(response.Neighbors) == 0 {
@@ -120,6 +123,9 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 	}
 	if _, err := service.Invalidate(ctx, id, "mutation"); err != nil {
 		t.Fatal(err)
+	}
+	if health, err := backend.OperationsHealthV1(ctx); err != nil || health.Ready || health.Reason != "lifecycle_not_active" {
+		t.Fatalf("invalidated operations health = %#v, %v", health, err)
 	}
 	proof, active, err := harness.LeaderAuthority().MutationProofV1(identity.Index)
 	if err != nil || active {
