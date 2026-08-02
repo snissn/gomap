@@ -741,12 +741,16 @@ func m8QualificationMatrixCommandWithExecutableV1(root, matrixDirectory string, 
 }
 
 func m8QualificationSourceCheckoutV1(root string, args []string, cfg config) bool {
-	want, err := m8CanonicalPathV1(filepath.Join(root, "source"))
+	want, err := m8QualificationContainedPathV1(root, filepath.Join(root, "source"), "source checkout")
 	if err != nil {
 		return false
 	}
 	got, err := m8CanonicalPathV1(cfg.sourceCheckout)
-	return err == nil && got == want && m8QualificationExactFlagV1(args, "-source-checkout", want)
+	if err != nil || got != want || !m8QualificationExactFlagV1(args, "-source-checkout", want) {
+		return false
+	}
+	checkout, err := m8SourceCheckoutV1(want, cfg.headSHA)
+	return err == nil && checkout == want && !m8GitDirtyInV1(want)
 }
 
 // m8QualificationCommandAdmissionV1 binds retained argv to the same fixture

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -28,15 +29,17 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	head := m8QualificationFrozenBaseSHAV1
+	_, head := testM8QualificationGitCheckoutV1(t, root)
+	base := m8QualificationFrozenBaseSHAV1
 	fixture := m8QualificationFixturesV1[0]
-	campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head}
+	campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: base, HeadSHA: head}
 	write := func(name string, matrix m8ProductionMatrixV1) {
 		run := strings.TrimSuffix(name, ".json")
 		matrixDirectory := filepath.Join(root, "matrices", run)
 		if err := os.MkdirAll(matrixDirectory, 0o755); err != nil {
 			t.Fatal(err)
 		}
+		testM8QualificationSetBaseV1(t, &matrix, base)
 		testM8QualificationExecutionIDsV1(&matrix, len(campaign.Runs))
 		testM8QualificationProfilesV1(t, matrixDirectory, run, &matrix)
 		testM8QualificationSetSourceCheckoutV1(t, root, &matrix)
@@ -70,9 +73,10 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	}
 	t.Run("topology_variant_drift", func(t *testing.T) {
 		write := func(root string, leaderDrift bool) m8QualificationCampaignV1 {
-			campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head}
+			_, campaignHead := testM8QualificationGitCheckoutV1(t, root)
+			campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: campaignHead, HeadSHA: campaignHead}
 			for i := 0; i < 3; i++ {
-				matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
+				matrix := testM8QualificationMatrixV1(t, campaignHead, fixture, 125)
 				testM8QualificationExecutionIDsV1(&matrix, i)
 				matrix.Variants[1].Topology.ReadySetDigest = strings.Repeat("e", 64)
 				testM8BindRouterSessionsVariantV1(&matrix.Variants[1].RouterSessions, *matrix.Variants[1].Variant, matrix.Variants[1].Topology.ReadySetDigest)
@@ -369,22 +373,23 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	})
 	t.Run("matrix_fixture_admission_caps", func(t *testing.T) {
 		for _, corpus := range m8QualificationFixturesV1 {
-			matrix := testM8QualificationMatrixV1(t, head, corpus, 125)
 			matrixDirectory, err := m8CanonicalPathV1(t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}
+			_, commandHead := testM8QualificationGitCheckoutV1(t, matrixDirectory)
+			matrix := testM8QualificationMatrixV1(t, commandHead, corpus, 125)
 			testM8QualificationProfilesV1(t, matrixDirectory, "matrix-admission", &matrix)
-			testM8QualificationSetSourceCheckoutV1(t, matrix.Variants[0].DatasetDirectory, &matrix)
+			testM8QualificationSetSourceCheckoutV1(t, matrixDirectory, &matrix)
 			verify := func(string, string, string, string) bool { return true }
-			if !m8QualificationMatrixCommandWithExecutableV1(matrix.Variants[0].DatasetDirectory, matrixDirectory, matrix, verify) {
+			if !m8QualificationMatrixCommandWithExecutableV1(matrixDirectory, matrixDirectory, matrix, verify) {
 				t.Fatalf("rejected exact %dk caps", corpus.Vectors)
 			}
 			for _, flag := range []string{"-max-vectors", "-max-fixture-bytes", "-base-sha", "-head-sha"} {
 				bad := matrix
 				bad.Command = slices.Clone(matrix.Command)
 				testM8QualificationRemoveCommandFlagV1(t, &bad.Command, flag)
-				if m8QualificationMatrixCommandWithExecutableV1(matrix.Variants[0].DatasetDirectory, matrixDirectory, bad, verify) {
+				if m8QualificationMatrixCommandWithExecutableV1(matrixDirectory, matrixDirectory, bad, verify) {
 					t.Fatalf("accepted omitted %s for %dk", flag, corpus.Vectors)
 				}
 			}
@@ -412,7 +417,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 				} else {
 					mutate(bad.Command)
 				}
-				if m8QualificationMatrixCommandWithExecutableV1(matrix.Variants[0].DatasetDirectory, matrixDirectory, bad, verify) {
+				if m8QualificationMatrixCommandWithExecutableV1(matrixDirectory, matrixDirectory, bad, verify) {
 					t.Fatalf("accepted %s for %dk", name, corpus.Vectors)
 				}
 			}
@@ -420,9 +425,10 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	})
 	t.Run("off_plan_router_configuration", func(t *testing.T) {
 		root := t.TempDir()
-		campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head}
+		_, campaignHead := testM8QualificationGitCheckoutV1(t, root)
+		campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: campaignHead, HeadSHA: campaignHead}
 		for repeat := 0; repeat < 3; repeat++ {
-			matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
+			matrix := testM8QualificationMatrixV1(t, campaignHead, fixture, 125)
 			testM8QualificationExecutionIDsV1(&matrix, repeat)
 			for i := range matrix.Variants {
 				matrix.Variants[i].Variant.RouterConfig.BranchFactor++
@@ -430,7 +436,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 				matrix.Variants[i].GateLedger = m8ProductionGateLedgerForReportV1(matrix.Variants[i])
 			}
 			var err error
-			matrix, err = m8BuildProductionMatrixV1(config{baseSHA: head, headSHA: head, partitions: 16, command: []string{"m8-test"}}, fixture, matrix.Variants)
+			matrix, err = m8BuildProductionMatrixV1(config{baseSHA: campaignHead, headSHA: campaignHead, partitions: 16, command: []string{"m8-test"}}, fixture, matrix.Variants)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -478,7 +484,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			}
 		})
 	}
-	singleCorpusIndex, err := json.Marshal(m8QualificationIndexV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_index_v1", BaseSHA: head, HeadSHA: head, Campaigns: []m8QualificationCampaignV1{campaign}})
+	singleCorpusIndex, err := json.Marshal(m8QualificationIndexV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_index_v1", BaseSHA: base, HeadSHA: head, Campaigns: []m8QualificationCampaignV1{campaign}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -491,10 +497,11 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		t.Fatal("accepted 100k-only qualification index")
 	}
 	fixture250 := m8QualificationFixturesV1[1]
-	campaign250 := m8QualificationCampaignV1{FixtureChecksum: fixture250.Checksum, BaseSHA: head, HeadSHA: head}
+	campaign250 := m8QualificationCampaignV1{FixtureChecksum: fixture250.Checksum, BaseSHA: base, HeadSHA: head}
 	for i := 0; i < 3; i++ {
 		name := "250k-repeat-" + string(rune('1'+i)) + ".json"
 		matrix := testM8QualificationMatrixV1(t, head, fixture250, 125+float64(i)*75)
+		testM8QualificationSetBaseV1(t, &matrix, base)
 		testM8QualificationExecutionIDsV1(&matrix, i)
 		testM8QualificationProfilesV1(t, root, strings.TrimSuffix(name, ".json"), &matrix)
 		raw, err := json.Marshal(matrix)
@@ -507,9 +514,9 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		digest := sha256.Sum256(raw)
 		campaign250.Runs = append(campaign250.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:])})
 	}
-	qualificationIndex := m8QualificationIndexV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_index_v1", BaseSHA: head, HeadSHA: head, Campaigns: []m8QualificationCampaignV1{campaign, campaign250}}
+	qualificationIndex := m8QualificationIndexV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_index_v1", BaseSHA: base, HeadSHA: head, Campaigns: []m8QualificationCampaignV1{campaign, campaign250}}
 	indexSummary, err := testM8ValidateQualificationIndexV1(root, qualificationIndex)
-	if err != nil || indexSummary.Status != "qualified" || indexSummary.BaseSHA != head || indexSummary.HeadSHA != head || len(indexSummary.Campaigns) != 2 || indexSummary.Campaigns[fixture.Checksum].P4QPSMedian != 200 || indexSummary.Campaigns[fixture250.Checksum].P4QPSMedian != 200 {
+	if err != nil || indexSummary.Status != "qualified" || indexSummary.BaseSHA != base || indexSummary.HeadSHA != head || len(indexSummary.Campaigns) != 2 || indexSummary.Campaigns[fixture.Checksum].P4QPSMedian != 200 || indexSummary.Campaigns[fixture250.Checksum].P4QPSMedian != 200 {
 		t.Fatalf("index summary err=%v summary=%+v", err, indexSummary)
 	}
 	t.Run("rehashed_overlapping_matrix_execution", func(t *testing.T) {
@@ -755,6 +762,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	})
 	t.Run("profile_reuse_across_variants", func(t *testing.T) {
 		matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
+		testM8QualificationSetBaseV1(t, &matrix, base)
 		testM8QualificationExecutionIDsV1(&matrix, 0)
 		testM8QualificationProfilesV1(t, root, "profile-reuse-variants", &matrix)
 		matrix.Variants[1].Profiles = matrix.Variants[0].Profiles
@@ -1008,15 +1016,15 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 }
 
 func TestM8QualificationCommandBindsBenchmarkExecutableV1(t *testing.T) {
-	head := strings.Repeat("a", 40)
-	fixture := m8QualificationFixturesV1[0]
-	matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
-	matrixDirectory, err := m8CanonicalPathV1(t.TempDir())
+	root, err := m8CanonicalPathV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, head := testM8QualificationGitCheckoutV1(t, root)
+	fixture := m8QualificationFixturesV1[0]
+	matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
+	matrixDirectory := root
 	testM8QualificationProfilesV1(t, matrixDirectory, "command", &matrix)
-	root := matrixDirectory
 	report := matrix.Variants[0]
 	wanted := report.Command[0]
 	verify := func(_root, command, revision, digest string) bool {
@@ -1060,6 +1068,107 @@ func TestM8QualificationCommandBindsBenchmarkExecutableV1(t *testing.T) {
 	matrix.ExecutableSHA256 = strings.Repeat("b", 64)
 	if m8QualificationMatrixCommandWithExecutableV1(root, matrixDirectory, matrix, verify) {
 		t.Fatal("accepted matrix executable digest drift")
+	}
+}
+
+func testM8QualificationGitCheckoutV1(t *testing.T, root string) (string, string) {
+	t.Helper()
+	root, err := m8CanonicalPathV1(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit := func(args ...string) {
+		t.Helper()
+		command := exec.Command("git", args...)
+		command.Dir = source
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	runGit("init", "-q")
+	runGit("config", "user.name", "M8 Test")
+	runGit("config", "user.email", "m8@example.invalid")
+	if err := os.WriteFile(filepath.Join(source, "tracked.txt"), []byte("clean\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "tracked.txt")
+	runGit("commit", "-qm", "initial")
+	headRaw, err := exec.Command("git", "-C", source, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return source, strings.TrimSpace(string(headRaw))
+}
+
+func testM8QualificationSetBaseV1(t *testing.T, matrix *m8ProductionMatrixV1, base string) {
+	t.Helper()
+	for i := range matrix.Variants {
+		report := &matrix.Variants[i]
+		report.BaseSHA = base
+		report.Variant.BaseSHA = base
+		refreshTestM3VariantIdentityV1(t, report.Variant)
+		report.GateLedger = m8ProductionGateLedgerForReportV1(*report)
+	}
+	built, err := m8BuildProductionMatrixV1(config{baseSHA: base, headSHA: matrix.HeadSHA, partitions: 16, command: []string{"m8-test"}}, matrix.Dataset, matrix.Variants)
+	if err != nil {
+		t.Fatal(err)
+	}
+	*matrix = built
+}
+
+func TestM8QualificationSourceCheckoutV1(t *testing.T) {
+	newCheckout := func(t *testing.T) (string, string, string) {
+		t.Helper()
+		root, err := m8CanonicalPathV1(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		source, head := testM8QualificationGitCheckoutV1(t, root)
+		return root, source, head
+	}
+	valid := func(root, source, head string) bool {
+		return m8QualificationSourceCheckoutV1(root, []string{"-source-checkout", source}, config{sourceCheckout: source, headSHA: head})
+	}
+	t.Run("clean", func(t *testing.T) {
+		root, source, head := newCheckout(t)
+		if !valid(root, source, head) {
+			t.Fatal("rejected clean retained source checkout")
+		}
+	})
+	for name, mutate := range map[string]func(*testing.T, string, string){
+		"deleted": func(t *testing.T, _ string, source string) {
+			if err := os.RemoveAll(source); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"non_git": func(t *testing.T, _ string, source string) {
+			if err := os.RemoveAll(filepath.Join(source, ".git")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"wrong_head": func(t *testing.T, _ string, source string) {
+			command := exec.Command("git", "-C", source, "commit", "--allow-empty", "-qm", "next")
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("advance source head: %v: %s", err, output)
+			}
+		},
+		"dirty": func(t *testing.T, _ string, source string) {
+			if err := os.WriteFile(filepath.Join(source, "untracked.txt"), []byte("dirty\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root, source, head := newCheckout(t)
+			mutate(t, root, source)
+			if valid(root, source, head) {
+				t.Fatalf("accepted %s retained source checkout", name)
+			}
+		})
 	}
 }
 
@@ -1471,8 +1580,9 @@ func TestM8QualificationTruthCacheAnchorV1(t *testing.T) {
 	// hashes, commands, transcripts, and matrix digests are refreshed after the
 	// cache changes, but the independently frozen anchor must still win.
 	campaignRoot := t.TempDir()
+	_, campaignHead := testM8QualificationGitCheckoutV1(t, campaignRoot)
 	cacheDir, cacheEvidence := testM8QualificationTruthCacheV1(t, campaignRoot, fixture)
-	campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: m8QualificationFrozenBaseSHAV1, HeadSHA: m8QualificationFrozenBaseSHAV1}
+	campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: campaignHead, HeadSHA: campaignHead}
 	write := func(name string, matrix m8ProductionMatrixV1) {
 		for i := range matrix.Variants {
 			matrix.Variants[i].TruthCacheDirectory, matrix.Variants[i].TruthCache = cacheDir, cacheEvidence
@@ -2071,7 +2181,8 @@ func TestM8QualificationRetainedInputBoundaryV1(t *testing.T) {
 }
 
 func TestM8QualificationRejectsDirtyM3VariantV1(t *testing.T) {
-	root, head := t.TempDir(), strings.Repeat("a", 40)
+	root := t.TempDir()
+	_, head := testM8QualificationGitCheckoutV1(t, root)
 	fixture := m8QualificationFixturesV1[0]
 	write := func(name string, matrix m8ProductionMatrixV1) m8QualificationCampaignRunV1 {
 		testM8QualificationProfilesV1(t, root, strings.TrimSuffix(name, ".json"), &matrix)
@@ -2144,7 +2255,7 @@ func TestM8QualificationRejectsEscapingTranscriptSymlinkV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	head := strings.Repeat("a", 40)
+	_, head := testM8QualificationGitCheckoutV1(t, root)
 	fixture := m8QualificationFixturesV1[0]
 	campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head}
 	var transcriptPath string
