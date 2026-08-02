@@ -38,19 +38,13 @@ func (*documentVectorPartitionBackendV1) VectorPartitionCleanupEligibilityV1(con
 	return vectorpartition.CleanupEligibilityV1{}, nil
 }
 
-func TestVectorPartitionServiceRegistrationDoesNotTransferBackendOwnershipV1(t *testing.T) {
+func TestVectorPartitionOperationsRegistrationDoesNotTransferBackendOwnershipV1(t *testing.T) {
 	backend := &documentVectorPartitionBackendV1{}
 	service, err := vectorpartition.NewServiceV1(backend)
 	if err != nil {
 		t.Fatal(err)
 	}
 	doc := New(nil)
-	if err := doc.RegisterVectorPartitionServiceV1(service); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := doc.VectorPartitionServiceV1(); err != nil {
-		t.Fatal(err)
-	}
 	config := vectorpartition.ConservativeOperationsConfigV1()
 	config.Enabled = true
 	operations, err := vectorpartition.NewOperationsV1(service, config, func(context.Context) (vectorpartition.OperationsHealthV1, error) {

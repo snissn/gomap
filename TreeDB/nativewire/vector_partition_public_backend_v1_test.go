@@ -80,7 +80,7 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 	identity := raftplacement.VectorPartitionLifecycleIdentityV1{Index: raftplacement.VectorPartitionLifecycleIndexIdentityV1{Collection: raftplacement.CollectionRefV1{Database: "db", Catalog: "default", Collection: "docs"}, CollectionIncarnation: 1, IndexName: "embedding", IndexDefinitionDigest: vectorPartitionShardSearchDigestTestV1, IndexEpoch: 1, CatalogEpoch: meta.Epoch, CatalogDigest: meta.Digest}, Source: raftplacement.VectorPartitionLifecycleSourceIdentityV1{Generation: 11, Checksum: 22, SchemaHash: 33, RowCount: 2}, Generation: 7}
 	requiredGroups := []raftcluster.GroupID{"group-a", "group-b"}
 	readyGroups := []raftplacement.VectorPartitionLifecycleGroupReadyV1{{GroupID: "group-a", AppliedIndex: 9, AssetSetDigest: fmt.Sprintf("%064x", len("group-a"))}, {GroupID: "group-b", AppliedIndex: 9, AssetSetDigest: fmt.Sprintf("%064x", len("group-b"))}}
-	openService := func(boundIdentity raftplacement.VectorPartitionLifecycleIdentityV1) (*public.ServiceV1, *VectorPartitionPublicBackendV1, *VectorPartitionProductionTopologyV1, VectorPartitionCoordinatorRequestV1, map[raftcluster.GroupID]*fakeVectorPartitionReadCoordinatorV1, *publicBackendLifecycleBuilderV1) {
+	openService := func(boundIdentity raftplacement.VectorPartitionLifecycleIdentityV1) (*public.OperationsV1, *VectorPartitionPublicBackendV1, *VectorPartitionProductionTopologyV1, VectorPartitionCoordinatorRequestV1, map[raftcluster.GroupID]*fakeVectorPartitionReadCoordinatorV1, *publicBackendLifecycleBuilderV1) {
 		t.Helper()
 		readySetDigest, err := raftplacement.VectorPartitionLifecycleReadySetDigestV1(boundIdentity, requiredGroups, readyGroups)
 		if err != nil {
@@ -100,27 +100,42 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 		if err != nil {
 			t.Fatal(err)
 		}
-		return service, backend, topology, base, reads, builder
+		operationsConfig := public.ConservativeOperationsConfigV1()
+		operationsConfig.Enabled = true
+		// This lifecycle fixture intentionally exercises the coordinator's larger
+		// production bounds; the operator cap remains explicit in deployment.
+		operationsConfig.MaxCandidateBytes, operationsConfig.MaxResponseBytes = 1<<40, 1<<40
+		operationsConfig.MaxTopK, operationsConfig.MaxProbes, operationsConfig.MaxEfSearch, operationsConfig.MaxMergeEntries = 1<<20, 1<<20, 1<<20, 1<<30
+		operations, err := public.NewOperationsV1(service, operationsConfig, backend.OperationsHealthV1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return operations, backend, topology, base, reads, builder
 	}
-	service, backend, topology, base, reads, _ := openService(identity)
+	operations, backend, topology, base, reads, _ := openService(identity)
 	id := public.GenerationIDV1{Index: base.IndexName, Generation: 7}
-	if _, err := service.Register(ctx, public.GenerationRegistrationV1{GenerationIDV1: id, SourceGeneration: 11, SourceChecksum: 22, SourceSchemaHash: 33, SourceRowCount: 2}); err != nil {
+	if _, err := operations.Register(ctx, public.GenerationRegistrationV1{GenerationIDV1: id, SourceGeneration: 11, SourceChecksum: 22, SourceSchemaHash: 33, SourceRowCount: 2}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Prepare(ctx, id); err != nil {
+	if _, err := operations.Prepare(ctx, id); err != nil {
 		t.Fatal(err)
 	}
-	if status, err := service.Activate(ctx, id); err != nil || !status.Active {
+	if status, err := operations.Activate(ctx, id); err != nil || !status.Active {
 		t.Fatalf("activate = %#v, %v", status, err)
 	}
-	if status, err := service.Status(ctx, id); err != nil || !status.Active {
-		t.Fatalf("status = %#v, %v", status, err)
+	if inventory, err := operations.Inventory(ctx, id); err != nil || len(inventory) != 1 || !inventory[0].Active {
+		t.Fatalf("inventory = %#v, %v", inventory, err)
 	}
 	if health, err := backend.OperationsHealthV1(ctx); err != nil || !health.Ready || health.Reason != "ready" {
 		t.Fatalf("operations health = %#v, %v", health, err)
 	}
+	backend.opts.RequiredGroups = []raftcluster.GroupID{"group-a", "group-c"}
+	if health, err := backend.OperationsHealthV1(ctx); err != nil || health.Ready || health.Reason != "group_assets_unavailable" {
+		t.Fatalf("mismatched group health = %#v, %v", health, err)
+	}
+	backend.opts.RequiredGroups = requiredGroups
 	request := public.SearchRequestV1{Version: 1, Generation: id, Query: []float32{1, 0}, Metric: public.MetricCosineV1, TopK: base.TopK, Probes: base.PartitionProbes, EfSearch: base.EfSearch, Consistency: public.ConsistencyGenerationSnapshotV1, Limits: public.SearchLimitsV1{RequestBytes: base.RequestBytesLimit, CandidateBytes: base.CandidateBytesLimit, ResponseBytes: base.ResponseBytesLimit, MergeEntries: base.MergeEntriesLimit}}
-	response, err := service.Search(ctx, request)
+	response, err := operations.Search(ctx, request)
 	if err != nil || len(response.Neighbors) == 0 {
 		t.Fatalf("search = %#v, %v", response, err)
 	}
@@ -138,12 +153,12 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 	if err := harness.RestartV1(ctx); err != nil {
 		t.Fatal(err)
 	}
-	service, backend, topology, base, reads, _ = openService(identity)
-	if status, err := service.Status(ctx, id); err != nil || !status.Active {
-		t.Fatalf("status after restart = %#v, %v", status, err)
+	operations, backend, topology, base, reads, _ = openService(identity)
+	if inventory, err := operations.Inventory(ctx, id); err != nil || len(inventory) != 1 || !inventory[0].Active {
+		t.Fatalf("inventory after restart = %#v, %v", inventory, err)
 	}
 	request = public.SearchRequestV1{Version: 1, Generation: id, Query: []float32{1, 0}, Metric: public.MetricCosineV1, TopK: base.TopK, Probes: base.PartitionProbes, EfSearch: base.EfSearch, Consistency: public.ConsistencyGenerationSnapshotV1, Limits: public.SearchLimitsV1{RequestBytes: base.RequestBytesLimit, CandidateBytes: base.CandidateBytesLimit, ResponseBytes: base.ResponseBytesLimit, MergeEntries: base.MergeEntriesLimit}}
-	if response, err := service.Search(ctx, request); err != nil || len(response.Neighbors) == 0 {
+	if response, err := operations.Search(ctx, request); err != nil || len(response.Neighbors) == 0 {
 		t.Fatalf("search after restart = %#v, %v", response, err)
 	}
 	for group, read := range reads {
@@ -151,38 +166,38 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 			t.Fatalf("group %q did not produce post-restart read evidence", group)
 		}
 	}
-	predecessorService, predecessorID := service, id
+	predecessorOperations, predecessorID := operations, id
 	if err := topology.Close(); err != nil {
 		t.Fatal(err)
 	}
 	successor := identity
 	successor.Generation++
-	service, backend, topology, _, _, builder := openService(successor)
+	operations, backend, topology, _, _, builder := openService(successor)
 	defer topology.Close()
 	id = public.GenerationIDV1{Index: base.IndexName, Generation: successor.Generation}
-	if _, err := service.Register(ctx, public.GenerationRegistrationV1{GenerationIDV1: id, SourceGeneration: 11, SourceChecksum: 22, SourceSchemaHash: 33, SourceRowCount: 2}); err != nil {
+	if _, err := operations.Register(ctx, public.GenerationRegistrationV1{GenerationIDV1: id, SourceGeneration: 11, SourceChecksum: 22, SourceSchemaHash: 33, SourceRowCount: 2}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Prepare(ctx, id); err != nil {
+	if _, err := operations.Prepare(ctx, id); err != nil {
 		t.Fatal(err)
 	}
-	if status, err := service.Activate(ctx, id); err != nil || !status.Active {
+	if status, err := operations.Activate(ctx, id); err != nil || !status.Active {
 		t.Fatalf("activate successor = %#v, %v", status, err)
 	}
 	buildCalls := builder.calls
-	if _, err := service.Register(ctx, public.GenerationRegistrationV1{GenerationIDV1: id, SourceGeneration: 11, SourceChecksum: 22, SourceSchemaHash: 33, SourceRowCount: 2}); err != nil || builder.calls != buildCalls {
+	if _, err := operations.Register(ctx, public.GenerationRegistrationV1{GenerationIDV1: id, SourceGeneration: 11, SourceChecksum: 22, SourceSchemaHash: 33, SourceRowCount: 2}); err != nil || builder.calls != buildCalls {
 		t.Fatalf("register retry rebuilt ready groups: calls=%d want=%d err=%v", builder.calls, buildCalls, err)
 	}
-	if _, err := predecessorService.Invalidate(ctx, predecessorID, "stale mutation"); !hasPublicErrorCodeV1(err, public.ErrorGenerationMismatchV1) {
+	if _, err := predecessorOperations.Invalidate(ctx, predecessorID, "stale mutation"); !hasPublicErrorCodeV1(err, public.ErrorGenerationMismatchV1) {
 		t.Fatalf("stale predecessor invalidation = %v", err)
 	}
-	if status, err := service.Status(ctx, id); err != nil || !status.Active {
-		t.Fatalf("successor after stale invalidation = %#v, %v", status, err)
+	if inventory, err := operations.Inventory(ctx, id); err != nil || len(inventory) != 1 || !inventory[0].Active {
+		t.Fatalf("successor after stale invalidation = %#v, %v", inventory, err)
 	}
 	if previous, ok := harness.LeaderAuthority().VectorPartitionLifecycleRecordV1(identity); !ok || previous.State != raftplacement.VectorPartitionLifecycleRetiredV1 || previous.SupersededByGeneration != successor.Generation {
 		t.Fatalf("predecessor after cutover = %#v, ok=%v", previous, ok)
 	}
-	if _, err := service.Invalidate(ctx, id, "mutation"); err != nil {
+	if _, err := operations.Invalidate(ctx, id, "mutation"); err != nil {
 		t.Fatal(err)
 	}
 	if health, err := backend.OperationsHealthV1(ctx); err != nil || health.Ready || health.Reason != "lifecycle_not_active" {
@@ -195,8 +210,14 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 	if err := harness.LifecycleCoordinator().ConfirmRelevantMutationV1(ctx, proof); err != nil {
 		t.Fatal(err)
 	}
-	if status, err := service.Retire(ctx, id); err != nil || status.State != public.GenerationRetiredV1 {
+	if status, err := operations.Retire(ctx, id); err != nil || status.State != public.GenerationRetiredV1 {
 		t.Fatalf("retire = %#v, %v", status, err)
+	}
+	if err := topology.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if health, err := backend.OperationsHealthV1(ctx); err != nil || health.Ready || health.Reason != "topology_unavailable" {
+		t.Fatalf("closed operations health = %#v, %v", health, err)
 	}
 }
 
@@ -301,6 +322,42 @@ func BenchmarkVectorPartitionPublicServiceOverheadV1(b *testing.B) {
 		}
 		runVectorPartitionPublicBenchmarkV1(b, func() (public.SearchCountersV1, error) {
 			response, err := service.Search(context.Background(), request)
+			return response.Counters, err
+		})
+	})
+	b.Run("operations", func(b *testing.B) {
+		topology, base, _ := newVectorPartitionProductionTopologyTwoGroupTestV1(b)
+		defer topology.Close()
+		backend := &VectorPartitionPublicBackendV1{opts: VectorPartitionPublicBackendOptionsV1{
+			Topology: topology, RequestBase: base,
+			Identity: raftplacement.VectorPartitionLifecycleIdentityV1{Index: raftplacement.VectorPartitionLifecycleIndexIdentityV1{IndexName: base.IndexName}, Generation: 7},
+		}}
+		service, err := public.NewServiceV1(backend)
+		if err != nil {
+			b.Fatal(err)
+		}
+		config := public.ConservativeOperationsConfigV1()
+		config.Enabled = true
+		config.MaxRequestBytes, config.MaxCandidateBytes, config.MaxResponseBytes = base.RequestBytesLimit, base.CandidateBytesLimit, base.ResponseBytesLimit
+		config.MaxTopK, config.MaxProbes, config.MaxEfSearch, config.MaxMergeEntries = base.TopK, base.PartitionProbes, base.EfSearch, base.MergeEntriesLimit
+		operations, err := public.NewOperationsV1(service, config, func(context.Context) (public.OperationsHealthV1, error) {
+			return public.OperationsHealthV1{Ready: true}, nil
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+		request := publicSearchRequestTestV1(base)
+		response, err := operations.Search(context.Background(), request)
+		if err != nil || !slices.Equal(response.Neighbors, publicNeighborsFromCoordinatorTestV1(direct.Neighbors)) || response.Counters != publicCountersFromCoordinatorTestV1(direct.Counters) {
+			b.Fatalf("operations/direct parity failed: operations=%+v direct=%+v err=%v", response, direct, err)
+		}
+		for i := 0; i < 16; i++ {
+			if _, err := operations.Search(context.Background(), request); err != nil {
+				b.Fatal(err)
+			}
+		}
+		runVectorPartitionPublicBenchmarkV1(b, func() (public.SearchCountersV1, error) {
+			response, err := operations.Search(context.Background(), request)
 			return response.Counters, err
 		})
 	})

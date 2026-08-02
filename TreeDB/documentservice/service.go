@@ -28,47 +28,15 @@ type Service struct {
 
 	benchmarkSearchCacheMu    sync.RWMutex
 	benchmarkSearchCache      map[string]*serviceBenchmarkSearchCacheEntry
-	vectorPartitionService    *vectorpartition.ServiceV1
 	vectorPartitionOperations *vectorpartition.OperationsV1
 	closed                    bool
 }
 
-// RegisterVectorPartitionServiceV1 installs the node-assembled partition
-// service at the normal document-service root. Applications obtain it with
-// VectorPartitionServiceV1 and never construct transport or lifecycle pieces.
-// The node retains backend ownership: Close only drops this service reference.
-func (s *Service) RegisterVectorPartitionServiceV1(service *vectorpartition.ServiceV1) error {
-	if s == nil || service == nil {
-		return errors.New("document service: vector partition service is required")
-	}
-	s.benchmarkSearchCacheMu.Lock()
-	defer s.benchmarkSearchCacheMu.Unlock()
-	if s.closed {
-		return serviceClosedError()
-	}
-	if s.vectorPartitionService != nil {
-		return errors.New("document service: vector partition service already registered")
-	}
-	s.vectorPartitionService = service
-	return nil
-}
-
-func (s *Service) VectorPartitionServiceV1() (*vectorpartition.ServiceV1, error) {
-	if s == nil {
-		return nil, errors.New("document service: vector partition service is unavailable")
-	}
-	s.benchmarkSearchCacheMu.RLock()
-	defer s.benchmarkSearchCacheMu.RUnlock()
-	if s.closed || s.vectorPartitionService == nil {
-		return nil, errors.New("document service: vector partition service is unavailable")
-	}
-	return s.vectorPartitionService, nil
-}
-
 // RegisterVectorPartitionOperationsV1 installs the optional default-off
-// operator boundary. Its service and live-health function remain node-owned.
+// operator boundary. The wrapped service, backend, and live-health function
+// remain node-owned and cannot bypass this boundary through documentservice.
 func (s *Service) RegisterVectorPartitionOperationsV1(operations *vectorpartition.OperationsV1) error {
-	if s == nil || operations == nil {
+	if s == nil || operations == nil || !operations.Enabled() {
 		return errors.New("document service: vector partition operations are required")
 	}
 	s.benchmarkSearchCacheMu.Lock()
@@ -119,7 +87,6 @@ func (s *Service) Close() error {
 		return nil
 	}
 	s.closed = true
-	s.vectorPartitionService = nil
 	s.vectorPartitionOperations = nil
 	for _, entry := range s.benchmarkSearchCache {
 		if entry != nil {

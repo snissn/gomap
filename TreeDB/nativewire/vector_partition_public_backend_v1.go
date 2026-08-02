@@ -205,14 +205,15 @@ func (b *VectorPartitionPublicBackendV1) OperationsHealthV1(ctx context.Context)
 	if !ok {
 		return public.OperationsHealthV1{Generation: id, State: public.GenerationAbsentV1, Reason: "generation_absent"}, nil
 	}
-	status := publicStatusV1(record, false)
+	status := publicStatusV1(record)
 	if record.Identity.Source != b.opts.Identity.Source {
 		return public.OperationsHealthV1{Generation: id, State: status.State, Reason: "source_mismatch"}, nil
 	}
 	if !status.Active || !status.Ready {
 		return public.OperationsHealthV1{Generation: id, State: status.State, Reason: "lifecycle_not_active"}, nil
 	}
-	if len(record.RequiredGroups) != len(b.opts.RequiredGroups) || len(record.ReadyGroups) != len(record.RequiredGroups) {
+	readySetDigest, err := raftplacement.VectorPartitionLifecycleReadySetDigestV1(b.opts.Identity, b.opts.RequiredGroups, record.ReadyGroups)
+	if err != nil || readySetDigest != record.ReadySetDigest {
 		return public.OperationsHealthV1{Generation: id, State: status.State, Reason: "group_assets_unavailable"}, nil
 	}
 	return public.OperationsHealthV1{Ready: true, Generation: id, State: status.State, Reason: "ready"}, nil
