@@ -898,7 +898,7 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 					hasUpsert = hasUpsert || prior.upsert
 				}
 				if hasUpsert {
-					if err := s.validateMongoMissingCollectionUpserts(parsed); err != nil {
+					if err := s.validateMongoMissingCollectionFirstUpsert(parsed); err != nil {
 						return mongoUpdateWriteCommandError(err)
 					}
 					col, err = s.openOrCreateCollection(name)
@@ -931,7 +931,7 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 		if !hasUpsert {
 			return marshalUpdateResponse(0, 0, nil)
 		}
-		if err := s.validateMongoMissingCollectionUpserts(parsed); err != nil {
+		if err := s.validateMongoMissingCollectionFirstUpsert(parsed); err != nil {
 			return mongoUpdateWriteCommandError(err)
 		}
 		col, err = s.openOrCreateCollection(name)
@@ -1154,7 +1154,7 @@ func mongoInsertUpsert(col *collections.Collection, update mongoUpdateItem) (boo
 	return false, false, true, nil
 }
 
-func (s *Server) validateMongoMissingCollectionUpserts(updates []mongoUpdateItem) error {
+func (s *Server) validateMongoMissingCollectionFirstUpsert(updates []mongoUpdateItem) error {
 	for _, update := range updates {
 		if !update.upsert {
 			continue
@@ -1170,6 +1170,7 @@ func (s *Server) validateMongoMissingCollectionUpserts(updates []mongoUpdateItem
 		if !bytes.Equal(key, update.key) {
 			return mongoUpdateErrorWithIndex(update.index, errors.New("Mongo gateway update cannot modify _id"))
 		}
+		return nil
 	}
 	return nil
 }

@@ -1522,6 +1522,24 @@ func TestServerUpdateMissingCollectionExecutesEarlierUpsertBeforeParseError(t *t
 	if score, _ := batch[0].Lookup("score").Int32OK(); score != 1 {
 		t.Fatalf("score=%d want 1", score)
 	}
+	response = serveCommand(t, s, 22599, bson.D{
+		{Key: "update", Value: "replacement-users"},
+		{Key: "updates", Value: bson.A{
+			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "score", Value: int32(1)}}}}}, {Key: "upsert", Value: true}},
+			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: bson.D{{Key: "_id", Value: "different"}}}, {Key: "upsert", Value: true}},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "BadValue")
+	assertErrmsgContains(t, response, "updates[1]")
+	found = serveCommand(t, s, 22600, bson.D{{Key: "find", Value: "replacement-users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	batch = cursorFirstBatch(t, found)
+	if len(batch) != 1 {
+		t.Fatalf("replacement prefix batch len=%d want 1", len(batch))
+	}
+	if score, _ := batch[0].Lookup("score").Int32OK(); score != 1 {
+		t.Fatalf("replacement prefix score=%d want 1", score)
+	}
 }
 
 func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterWriteError(t *testing.T) {
