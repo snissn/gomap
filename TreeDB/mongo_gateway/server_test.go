@@ -5817,6 +5817,69 @@ func deeplyNestedRawDocumentValue(depth int, leaf int32) bson.RawValue {
 	return bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: value}
 }
 
+func rawDocumentWithValue(key string, value bson.RawValue) wire.Document {
+	doc := make([]byte, 4+1+len(key)+1+len(value.Value)+1)
+	binary.LittleEndian.PutUint32(doc, uint32(len(doc)))
+	doc[4] = byte(value.Type)
+	copy(doc[5:], key)
+	copy(doc[5+len(key)+1:], value.Value)
+	return wire.Document(doc)
+}
+
+func TestMongoMutationRejectsDeepStoredBSONBeforeDecode(t *testing.T) {
+	doc := rawDocumentWithValue("deep", deeplyNestedRawDocumentValue(10000, int32(1)))
+	before := append(wire.Document(nil), doc...)
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$push", Value: bson.D{{Key: "tags", Value: "x"}}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || changed || !bytes.Equal(doc, before) {
+		t.Fatalf("deep stored mutation changed=%v err=%v", changed, err)
+	}
+}
+
+func TestMongoMutationRejectsDeepOperandBeforeApplication(t *testing.T) {
+	doc := mustDocument(t, bson.D{{Key: "existing", Value: int32(1)}})
+	before := append(wire.Document(nil), doc...)
+	_, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{
+		{Key: "marker", Value: true},
+		{Key: "deep", Value: deeplyNestedRawDocumentValue(10000, int32(1))},
+	}}}))
+	if err == nil || !bytes.Equal(doc, before) {
+		t.Fatalf("deep operand err=%v document changed=%v", err, !bytes.Equal(doc, before))
+	}
+}
+
+func TestMongoMutationBSONNestingLimit(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		depth int
+		want  bool
+	}{
+		{name: "boundary", depth: mongoMutationMaxBSONNesting - 1, want: true},
+		{name: "excess", depth: mongoMutationMaxBSONNesting},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "deep", Value: deeplyNestedRawDocumentValue(test.depth, int32(1))}}}}))
+			if (err == nil) != test.want {
+				t.Fatalf("depth=%d err=%v", test.depth, err)
+			}
+		})
+	}
+}
+
+func TestMongoUpdateItemRejectsDeepPureSetBeforeApplication(t *testing.T) {
+	doc := mustDocument(t, bson.D{{Key: "existing", Value: int32(1)}})
+	before := append(wire.Document(nil), doc...)
+	_, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "deep", Value: deeplyNestedRawDocumentValue(mongoMutationMaxBSONNesting, int32(1))}}}}},
+	}))
+	if err == nil || !bytes.Equal(doc, before) {
+		t.Fatalf("deep pure set err=%v document changed=%v", err, !bytes.Equal(doc, before))
+	}
+}
+
 func TestMongoMutationAddToSetDistinguishesNonFiniteDecimal128(t *testing.T) {
 	positive, err := bson.ParseDecimal128("Infinity")
 	if err != nil {

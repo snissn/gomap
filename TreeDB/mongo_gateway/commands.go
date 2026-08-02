@@ -1056,6 +1056,9 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 	if err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 	}
+	if err := validateMongoMutationOperandsNesting(updateDoc); err != nil {
+		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+	}
 	setFields, bsonSetFields, setFieldsOK := mongoSetUpdateFields(updateDoc)
 	bsonSetFields, bsonSetFieldNames, bsonSetFieldsOK := mongoBSONSetUpdateFields(updateDoc)
 	if !setFieldsOK && bsonSetFieldsOK {
@@ -3970,6 +3973,10 @@ const mongoMutationMaxAddToSetComparisonBytes uint64 = 8 << 20
 // MongoDB limits update paths to 100 components; enforce it before recursive mutation.
 const mongoMutationMaxPathDepth = 100
 
+// MongoDB limits BSON nesting to 100 levels. Validate raw containers before a
+// modifier reaches BSON decoding, which recursively materializes the document.
+const mongoMutationMaxBSONNesting = 100
+
 // parseMongoMutation validates the shared modifier subset before any document is changed.
 func parseMongoMutation(update wire.Document) (mongoMutation, error) {
 	elements, err := bson.Raw(update).Elements()
@@ -4029,6 +4036,9 @@ func parseMongoMutation(update wire.Document) (mongoMutation, error) {
 			}
 			seen[name] = struct{}{}
 			value := item.Value()
+			if err := validateMongoMutationRawNesting(value); err != nil {
+				return mongoMutation{}, err
+			}
 			if err := value.Validate(); err != nil {
 				return mongoMutation{}, err
 			}
@@ -4074,6 +4084,9 @@ func applyMongoMutationWithOptions(doc wire.Document, mutation mongoMutation, up
 	}
 	if !upsertInsert && mongoMutationUsesTopLevelFields(mutation) {
 		return applyMongoMutationTopLevel(doc, mutation)
+	}
+	if err := validateMongoMutationRawNesting(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: doc}); err != nil {
+		return nil, false, err
 	}
 	var out bson.D
 	if err := bson.Unmarshal(doc, &out); err != nil {
@@ -4289,6 +4302,82 @@ func validateMongoMutationPath(path string) error {
 		}
 		if strings.HasPrefix(segment, "$") {
 			return errors.New("Mongo gateway update does not support positional paths or array filters")
+		}
+	}
+	return nil
+}
+
+func validateMongoMutationRawNesting(value bson.RawValue) error {
+	type frame struct {
+		value bson.RawValue
+		depth int
+	}
+	// BSON documents include their root container in the nesting limit.
+	stack := []frame{{value: value, depth: 1}}
+	for len(stack) != 0 {
+		last := len(stack) - 1
+		current := stack[last]
+		stack = stack[:last]
+		appendChild := func(child bson.RawValue) error {
+			if child.Type != bson.TypeEmbeddedDocument && child.Type != bson.TypeArray {
+				return nil
+			}
+			if current.depth == mongoMutationMaxBSONNesting {
+				return fmt.Errorf("Mongo gateway BSON nesting exceeds %d levels", mongoMutationMaxBSONNesting)
+			}
+			stack = append(stack, frame{value: child, depth: current.depth + 1})
+			return nil
+		}
+		switch current.value.Type {
+		case bson.TypeEmbeddedDocument:
+			elements, err := current.value.Document().Elements()
+			if err != nil {
+				return err
+			}
+			for i := range elements {
+				if err := appendChild(elements[i].Value()); err != nil {
+					return err
+				}
+			}
+		case bson.TypeArray:
+			values, err := current.value.Array().Values()
+			if err != nil {
+				return err
+			}
+			for _, child := range values {
+				if err := appendChild(child); err != nil {
+					return err
+				}
+			}
+		default:
+			continue
+		}
+	}
+	return nil
+}
+
+func validateMongoMutationOperandsNesting(update wire.Document) error {
+	elements, err := bson.Raw(update).Elements()
+	if err != nil {
+		return err
+	}
+	for _, element := range elements {
+		operator, err := element.KeyErr()
+		if err != nil || !strings.HasPrefix(operator, "$") {
+			return err
+		}
+		fields, ok := element.Value().DocumentOK()
+		if !ok {
+			continue
+		}
+		items, err := fields.Elements()
+		if err != nil {
+			return err
+		}
+		for _, item := range items {
+			if err := validateMongoMutationRawNesting(item.Value()); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
