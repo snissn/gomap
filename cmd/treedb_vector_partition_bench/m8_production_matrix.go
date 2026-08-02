@@ -116,7 +116,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		return runM8ProductionSingleVariantV1(cfg, fixture, vectors, queries, stdout)
 	}
 	executionStartedAt := time.Now().UTC()
-	initialDirty := m8GitDirtyV1(cfg.out, cfg.profiles)
+	initialDirty := m8GitDirtyInV1(cfg.sourceCheckout, cfg.out, cfg.profiles)
 	executableSHA256, err := m8BenchmarkExecutableSHA256V1(cfg.command[0])
 	if err != nil {
 		return fmt.Errorf("hash M8 benchmark executable: %w", err)

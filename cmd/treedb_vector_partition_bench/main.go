@@ -91,6 +91,7 @@ type config struct {
 	maxBytes              int64
 	baseSHA               string
 	headSHA               string
+	sourceCheckout        string
 	m3BuildDirty          bool
 	hnsw                  *treeDBPartitionHNSW
 	memory                benchmarkMemoryPlan
@@ -621,9 +622,17 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 	if cfg.baseSHA, cfg.headSHA, err = provenanceWithExplicitV1(cfg.baseSHA, cfg.headSHA); err != nil {
 		return err
 	}
-	cfg.command = commandWithProvenanceV1(command, args, cfg.baseSHA, cfg.headSHA)
+	if cfg.sourceCheckout != "" {
+		cfg.sourceCheckout, err = m8SourceCheckoutV1(cfg.sourceCheckout, cfg.headSHA)
+		if err != nil {
+			return fmt.Errorf("-source-checkout: %w", err)
+		}
+		cfg.command = commandWithProvenanceAndSourceCheckoutV1(command, args, cfg.baseSHA, cfg.headSHA, cfg.sourceCheckout)
+	} else {
+		cfg.command = commandWithProvenanceV1(command, args, cfg.baseSHA, cfg.headSHA)
+	}
 	if cfg.stage == "overlap,partition_index" {
-		cfg.m3BuildDirty = m8GitDirtyV1(cfg.out, cfg.m3PersistDir)
+		cfg.m3BuildDirty = m8GitDirtyInV1(cfg.sourceCheckout, cfg.out, cfg.m3PersistDir)
 	}
 	fixture, err := loadFixture(cfg.dataset)
 	if err != nil {
@@ -835,6 +844,7 @@ func parseConfig(args []string) (config, error) {
 	fs.Int64Var(&cfg.seed, "seed", cfg.seed, "fixture generation seed (must match manifest)")
 	fs.StringVar(&cfg.baseSHA, "base-sha", "", "explicit immutable base revision for retained replay provenance")
 	fs.StringVar(&cfg.headSHA, "head-sha", "", "explicit immutable head revision for retained replay provenance")
+	fs.StringVar(&cfg.sourceCheckout, "source-checkout", "", "canonical Git toplevel used for retained M3/M8 replay provenance")
 	fs.StringVar(&cfg.format, "format", cfg.format, "json or text")
 	fs.StringVar(&cfg.out, "out", "", "artifact directory")
 	fs.StringVar(&cfg.stage, "stage", cfg.stage, "simulation, partition, overlap,partition_index, router, or distributed_simulation_or_cluster")
@@ -1597,6 +1607,42 @@ func commandWithProvenanceV1(command string, args []string, base, head string) [
 		out = append(out, arg)
 	}
 	return append(out, "-base-sha", base, "-head-sha", head)
+}
+
+func commandWithProvenanceAndSourceCheckoutV1(command string, args []string, base, head, sourceCheckout string) []string {
+	out := commandWithProvenanceV1(command, args, base, head)
+	filtered := out[:1]
+	for i := 1; i < len(out); i++ {
+		arg := out[i]
+		if commandProvenanceFlagV1(arg, "source-checkout") {
+			if !strings.Contains(arg, "=") && i+1 < len(out) {
+				i++
+			}
+			continue
+		}
+		filtered = append(filtered, arg)
+	}
+	return append(filtered, "-source-checkout", sourceCheckout)
+}
+
+func m8SourceCheckoutV1(path, head string) (string, error) {
+	checkout, err := m8CanonicalPathV1(path)
+	if err != nil {
+		return "", err
+	}
+	rootRaw, err := exec.Command("git", "-C", checkout, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return "", errors.New("must be a Git checkout")
+	}
+	root, err := m8CanonicalPathV1(strings.TrimSpace(string(rootRaw)))
+	if err != nil || root != checkout {
+		return "", errors.New("must be the Git toplevel")
+	}
+	headRaw, err := exec.Command("git", "-C", checkout, "rev-parse", "HEAD").Output()
+	if err != nil || strings.TrimSpace(string(headRaw)) != head {
+		return "", errors.New("HEAD does not match -head-sha")
+	}
+	return checkout, nil
 }
 
 func commandProvenanceFlagV1(arg, name string) bool {

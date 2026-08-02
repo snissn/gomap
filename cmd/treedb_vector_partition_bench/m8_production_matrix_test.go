@@ -815,6 +815,20 @@ func TestM8GitDirtyRequiresExternalOutputsAndPreservesSourceChangesV1(t *testing
 	}
 	runGit("add", "tracked.txt")
 	runGit("commit", "-qm", "initial")
+	headCommand := exec.Command("git", "rev-parse", "HEAD")
+	headCommand.Dir = repo
+	headRaw, err := headCommand.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := strings.TrimSpace(string(headRaw))
+	checkout, err := m8SourceCheckoutV1(repo, head)
+	if err != nil || checkout != repo {
+		t.Fatalf("clean unrelated checkout=%q err=%v", checkout, err)
+	}
+	if _, err := m8SourceCheckoutV1(repo, strings.Repeat("0", 40)); err == nil {
+		t.Fatal("accepted wrong checkout head")
+	}
 	artifactRoot := t.TempDir()
 	out, profiles := filepath.Join(artifactRoot, "out"), filepath.Join(artifactRoot, "profiles")
 	if err := os.MkdirAll(out, 0o755); err != nil {

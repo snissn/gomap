@@ -39,6 +39,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		}
 		testM8QualificationExecutionIDsV1(&matrix, len(campaign.Runs))
 		testM8QualificationProfilesV1(t, matrixDirectory, run, &matrix)
+		testM8QualificationSetSourceCheckoutV1(t, root, &matrix)
 		raw, err := json.Marshal(matrix)
 		if err != nil {
 			t.Fatal(err)
@@ -301,7 +302,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			},
 			"changed_truth_cache_digest": func(report *m8ProductionReportV1) {
 				report.TruthCache.Status, report.TruthCache.ComputeNanos, report.TruthCache.LoadNanos = "reused", 0, 1
-				if !m8QualificationCommandWithExecutableV1(report.DatasetDirectory, root, *report, func(string, string, string, string) bool { return true }) {
+				if !m8QualificationCommandWithExecutableV1(root, root, *report, func(string, string, string, string) bool { return true }) {
 					t.Fatal("rejected bound reused truth-cache command")
 				}
 				for i, arg := range report.Command {
@@ -374,6 +375,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 				t.Fatal(err)
 			}
 			testM8QualificationProfilesV1(t, matrixDirectory, "matrix-admission", &matrix)
+			testM8QualificationSetSourceCheckoutV1(t, matrix.Variants[0].DatasetDirectory, &matrix)
 			verify := func(string, string, string, string) bool { return true }
 			if !m8QualificationMatrixCommandWithExecutableV1(matrix.Variants[0].DatasetDirectory, matrixDirectory, matrix, verify) {
 				t.Fatalf("rejected exact %dk caps", corpus.Vectors)
@@ -1014,33 +1016,49 @@ func TestM8QualificationCommandBindsBenchmarkExecutableV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	testM8QualificationProfilesV1(t, matrixDirectory, "command", &matrix)
+	root := matrixDirectory
 	report := matrix.Variants[0]
 	wanted := report.Command[0]
 	verify := func(_root, command, revision, digest string) bool {
 		return command == wanted && revision == head && digest == matrix.ExecutableSHA256
 	}
-	if !m8QualificationCommandWithExecutableV1(filepath.Dir(wanted), matrixDirectory, report, verify) || !m8QualificationMatrixCommandWithExecutableV1(filepath.Dir(wanted), matrixDirectory, matrix, verify) {
+	if !m8QualificationCommandWithExecutableV1(root, matrixDirectory, report, verify) || !m8QualificationMatrixCommandWithExecutableV1(root, matrixDirectory, matrix, verify) {
 		t.Fatal("rejected canonical benchmark command")
 	}
+	missingSource := report
+	testM8QualificationRemoveCommandFlagV1(t, &missingSource.Command, "-source-checkout")
+	if m8QualificationCommandWithExecutableV1(root, matrixDirectory, missingSource, verify) {
+		t.Fatal("accepted child command without source checkout")
+	}
+	changedSource := matrix
+	testM8QualificationReplaceCommandFlagV1(t, changedSource.Command, "-source-checkout", t.TempDir())
+	if m8QualificationMatrixCommandWithExecutableV1(root, matrixDirectory, changedSource, verify) {
+		t.Fatal("accepted matrix command with changed source checkout")
+	}
+	duplicateSource := report
+	duplicateSource.Command = append(append([]string(nil), duplicateSource.Command...), "-source-checkout", filepath.Join(root, "source"))
+	if m8QualificationCommandWithExecutableV1(root, matrixDirectory, duplicateSource, verify) {
+		t.Fatal("accepted child command with duplicate source checkout")
+	}
 	report.Command[0] = filepath.Join(t.TempDir(), "unrelated")
-	if m8QualificationCommandWithExecutableV1(filepath.Dir(wanted), matrixDirectory, report, verify) {
+	if m8QualificationCommandWithExecutableV1(root, matrixDirectory, report, verify) {
 		t.Fatal("accepted unrelated child executable")
 	}
 	matrix.Command[0] = filepath.Join(t.TempDir(), "unrelated")
-	if m8QualificationMatrixCommandWithExecutableV1(filepath.Dir(wanted), matrixDirectory, matrix, verify) {
+	if m8QualificationMatrixCommandWithExecutableV1(root, matrixDirectory, matrix, verify) {
 		t.Fatal("accepted unrelated matrix executable")
 	}
 	report.Command[0] = ""
-	if m8QualificationCommandWithExecutableV1(filepath.Dir(wanted), matrixDirectory, report, verify) {
+	if m8QualificationCommandWithExecutableV1(root, matrixDirectory, report, verify) {
 		t.Fatal("accepted blank child executable")
 	}
 	report = matrix.Variants[0]
 	report.ExecutableSHA256 = strings.Repeat("b", 64)
-	if m8QualificationCommandWithExecutableV1(filepath.Dir(wanted), matrixDirectory, report, verify) {
+	if m8QualificationCommandWithExecutableV1(root, matrixDirectory, report, verify) {
 		t.Fatal("accepted child executable digest drift")
 	}
 	matrix.ExecutableSHA256 = strings.Repeat("b", 64)
-	if m8QualificationMatrixCommandWithExecutableV1(filepath.Dir(wanted), matrixDirectory, matrix, verify) {
+	if m8QualificationMatrixCommandWithExecutableV1(root, matrixDirectory, matrix, verify) {
 		t.Fatal("accepted matrix executable digest drift")
 	}
 }
@@ -1174,8 +1192,9 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 			M3Cap            int64  `json:"m3_max_benchmark_visits"`
 			M8Cap            int64  `json:"m8_max_exact_truth_visits"`
 		} `json:"corpora"`
-		Commands   map[string]string `json:"commands"`
-		Validation string            `json:"validation"`
+		Commands       map[string]string `json:"commands"`
+		Validation     string            `json:"validation"`
+		SourceCheckout string            `json:"source_checkout"`
 	}
 	if err := json.Unmarshal(raw, &plan); err != nil {
 		t.Fatal(err)
@@ -1206,11 +1225,11 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 		t.Fatalf("graph commands do not bind corpus-specific scalar cap: %+v", plan.Commands)
 	}
 	for _, command := range []string{plan.Commands["m3_graph_disjoint"], plan.Commands["m3_graph_overlap"], plan.Commands["m3_stable_hash_disjoint"]} {
-		if !strings.Contains(command, "-max-vectors <max-vectors>") || !strings.Contains(command, "-router-max-vectors <router-max-vectors>") || !strings.Contains(command, "-max-fixture-bytes <max-fixture-bytes>") || !strings.Contains(command, "-base-sha <base-sha>") || !strings.Contains(command, "-head-sha <head-sha>") {
+		if !strings.Contains(command, "-max-vectors <max-vectors>") || !strings.Contains(command, "-router-max-vectors <router-max-vectors>") || !strings.Contains(command, "-max-fixture-bytes <max-fixture-bytes>") || !strings.Contains(command, "-base-sha <base-sha>") || !strings.Contains(command, "-head-sha <head-sha>") || !strings.Contains(command, "-source-checkout <campaign-root>/source") {
 			t.Fatalf("plan command does not bind fixture admission caps: %q", command)
 		}
 	}
-	if !strings.Contains(plan.Commands["m8_matrix_repeats_full_ladder"], "-base-sha <base-sha>") || !strings.Contains(plan.Commands["m8_matrix_repeats_full_ladder"], "-head-sha <head-sha>") {
+	if !strings.Contains(plan.Commands["m8_matrix_repeats_full_ladder"], "-base-sha <base-sha>") || !strings.Contains(plan.Commands["m8_matrix_repeats_full_ladder"], "-head-sha <head-sha>") || !strings.Contains(plan.Commands["m8_matrix_repeats_full_ladder"], "-source-checkout <campaign-root>/source") || !strings.Contains(plan.SourceCheckout, "-source-checkout <campaign-root>/source") {
 		t.Fatalf("plan M8 command does not bind explicit provenance: %q", plan.Commands["m8_matrix_repeats_full_ladder"])
 	}
 	script, err := filepath.Abs(filepath.Join(root, "scripts", "treedb_kahip_partition.py"))
@@ -1286,7 +1305,11 @@ func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManif
 		report.GateLedger = m8ProductionGateLedgerForReportV1(report)
 		matrix.Variants = append(matrix.Variants, report)
 	}
-	built, err := m8BuildProductionMatrixV1(config{baseSHA: head, headSHA: head, partitions: 16, command: commandWithProvenanceV1("m8-test", nil, head, head)}, fixture, matrix.Variants)
+	sourceCheckout := filepath.Join(filepath.Dir(datasetDirectory), "source")
+	if err := os.MkdirAll(sourceCheckout, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	built, err := m8BuildProductionMatrixV1(config{baseSHA: head, headSHA: head, partitions: 16, command: commandWithProvenanceAndSourceCheckoutV1("m8-test", nil, head, head, sourceCheckout)}, fixture, matrix.Variants)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2315,6 +2338,7 @@ func testM8QualificationCommandV1(report m8ProductionReportV1, out string) []str
 	cfg := report.Config
 	args := []string{
 		filepath.Join(report.DatasetDirectory, "treedb_vector_partition_bench"), "-mode", m8ProductionMultiGroupModeV1,
+		"-source-checkout", filepath.Join(out, "source"),
 		"-dataset", report.DatasetDirectory, "-m8-existing-db", report.Variant.DatabaseDirectory, "-m8-truth-cache", report.TruthCacheDirectory, "-out", out, "-partitions", "16", "-probes", "1,2,4,8,16",
 		"-overlap", strconv.FormatFloat(report.Variant.OverlapRatio, 'g', -1, 64), "-top-k", "10",
 		"-recall-target", ".9", "-seed", strconv.FormatInt(cfg.Seed, 10), "-raft-groups", "4",
@@ -2361,6 +2385,9 @@ func testM8QualificationProfilesV1(t *testing.T, root, run string, matrix *m8Pro
 	var err error
 	root, err = m8CanonicalPathV1(root)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "source"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	templateDir := filepath.Join(root, "profile-template")
@@ -2463,6 +2490,7 @@ func testM8QualificationProfilesV1(t *testing.T, root, run string, matrix *m8Pro
 		profileSets[profileSet] = true
 		report.Profiles = m8ProductionProfileEvidenceV1{Directory: directory, Captured: captured, Artifacts: artifacts, Status: "captured_production_query_and_fault_boundary", Scope: "test profile capture"}
 		report.Command = append(testM8QualificationCommandV1(*report, root), "-m8-matrix-out", root, "-m8-matrix-profiles", filepath.Dir(directory))
+		testM8QualificationReplaceCommandFlagV1(t, report.Command, "-source-checkout", filepath.Join(root, "source"))
 		testM8QualificationTranscriptV1(t, directory, report)
 		digest, err := m8ProductionExecutionEvidenceDigestV1(report.ExecutionID, artifacts, report.MeasurementTranscript.SHA256)
 		if err != nil {
@@ -2471,6 +2499,21 @@ func testM8QualificationProfilesV1(t *testing.T, root, run string, matrix *m8Pro
 		report.ExecutionEvidenceDigest = digest
 	}
 	matrix.Command = testM8QualificationMatrixCommandV1(*matrix, root)
+}
+
+func testM8QualificationSetSourceCheckoutV1(t *testing.T, root string, matrix *m8ProductionMatrixV1) {
+	t.Helper()
+	root, err := m8CanonicalPathV1(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "source"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i := range matrix.Variants {
+		testM8QualificationReplaceCommandFlagV1(t, matrix.Variants[i].Command, "-source-checkout", filepath.Join(root, "source"))
+	}
+	testM8QualificationReplaceCommandFlagV1(t, matrix.Command, "-source-checkout", filepath.Join(root, "source"))
 }
 
 func testM8QualificationMatrixCommandV1(matrix m8ProductionMatrixV1, out string) []string {
@@ -2487,6 +2530,7 @@ func testM8QualificationMatrixCommandV1(matrix m8ProductionMatrixV1, out string)
 	cfg := report.Config
 	args := []string{
 		filepath.Join(report.DatasetDirectory, "treedb_vector_partition_bench"), "-mode", m8ProductionMultiGroupModeV1,
+		"-source-checkout", filepath.Join(out, "source"),
 		"-dataset", report.DatasetDirectory, "-m8-truth-cache", report.TruthCacheDirectory, "-m8-variant-dbs", strings.Join(variantDBs, ","), "-out", out, "-partitions", "16", "-probes", "1,2,4,8,16",
 		"-overlap", "0,.2", "-top-k", "10", "-recall-target", ".9", "-seed", strconv.FormatInt(cfg.Seed, 10),
 		"-raft-groups", "4", "-raft-nodes-per-group", "3", "-concurrency", "1", "-warmup", "0", "-ef-search", "64", "-router-candidates", "64",

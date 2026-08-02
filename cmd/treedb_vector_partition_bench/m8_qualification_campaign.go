@@ -600,7 +600,8 @@ func m8QualificationCommandWithExecutableV1(root, matrixDirectory string, report
 	}
 	cfg, err := parseConfig(report.Command[1:])
 	if err != nil || cfg.stage != m8ProductionMultiGroupModeV1 || cfg.baseSHA != report.BaseSHA || cfg.headSHA != report.HeadSHA ||
-		!m8QualificationExactFlagV1(report.Command[1:], "-base-sha", report.BaseSHA) || !m8QualificationExactFlagV1(report.Command[1:], "-head-sha", report.HeadSHA) {
+		!m8QualificationExactFlagV1(report.Command[1:], "-base-sha", report.BaseSHA) || !m8QualificationExactFlagV1(report.Command[1:], "-head-sha", report.HeadSHA) ||
+		!m8QualificationSourceCheckoutV1(root, report.Command[1:], cfg) {
 		return false
 	}
 	out, err := m8CanonicalPathV1(cfg.out)
@@ -672,7 +673,8 @@ func m8QualificationMatrixCommandWithExecutableV1(root, matrixDirectory string, 
 	}
 	cfg, err := parseConfig(matrix.Command[1:])
 	if err != nil || cfg.stage != m8ProductionMultiGroupModeV1 || len(cfg.m8VariantDBs) != len(m8RequiredVariantIDsV1) || cfg.baseSHA != matrix.BaseSHA || cfg.headSHA != matrix.HeadSHA ||
-		!m8QualificationExactFlagV1(matrix.Command[1:], "-base-sha", matrix.BaseSHA) || !m8QualificationExactFlagV1(matrix.Command[1:], "-head-sha", matrix.HeadSHA) {
+		!m8QualificationExactFlagV1(matrix.Command[1:], "-base-sha", matrix.BaseSHA) || !m8QualificationExactFlagV1(matrix.Command[1:], "-head-sha", matrix.HeadSHA) ||
+		!m8QualificationSourceCheckoutV1(root, matrix.Command[1:], cfg) {
 		return false
 	}
 	out, err := m8CanonicalPathV1(cfg.out)
@@ -736,6 +738,15 @@ func m8QualificationMatrixCommandWithExecutableV1(root, matrixDirectory string, 
 	profiles, err := m8CanonicalPathV1(cfg.profiles)
 	return err == nil && profiles == profileRoot &&
 		m8QualificationCommandAdmissionV1(matrix.Command[1:], cfg, base.Dataset)
+}
+
+func m8QualificationSourceCheckoutV1(root string, args []string, cfg config) bool {
+	want, err := m8CanonicalPathV1(filepath.Join(root, "source"))
+	if err != nil {
+		return false
+	}
+	got, err := m8CanonicalPathV1(cfg.sourceCheckout)
+	return err == nil && got == want && m8QualificationExactFlagV1(args, "-source-checkout", want)
 }
 
 // m8QualificationCommandAdmissionV1 binds retained argv to the same fixture

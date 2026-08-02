@@ -3433,8 +3433,12 @@ func TestProvenanceAutomaticEnvironmentAndInvalidSHA(t *testing.T) {
 
 func TestCommandWithProvenanceV1(t *testing.T) {
 	base, head := strings.Repeat("a", 40), strings.Repeat("b", 40)
-	command := commandWithProvenanceV1("bench", []string{"-base-sha", strings.Repeat("c", 40), "--head-sha=" + strings.Repeat("d", 40), "-dataset", "fixture"}, base, head)
-	if !m8QualificationExactFlagV1(command[1:], "-base-sha", base) || !m8QualificationExactFlagV1(command[1:], "-head-sha", head) {
+	source, err := m8CanonicalPathV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := commandWithProvenanceAndSourceCheckoutV1("bench", []string{"-base-sha", strings.Repeat("c", 40), "--head-sha=" + strings.Repeat("d", 40), "-source-checkout", "old", "--source-checkout=older", "-dataset", "fixture"}, base, head, source)
+	if !m8QualificationExactFlagV1(command[1:], "-base-sha", base) || !m8QualificationExactFlagV1(command[1:], "-head-sha", head) || !m8QualificationExactFlagV1(command[1:], "-source-checkout", source) {
 		t.Fatalf("command did not retain exactly one canonical provenance pair: %q", command)
 	}
 }
