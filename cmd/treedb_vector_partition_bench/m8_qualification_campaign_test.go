@@ -55,21 +55,91 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			}
 		})
 	}
-	index, err := json.Marshal(campaign)
+	singleCorpusIndex, err := json.Marshal(m8QualificationIndexV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_index_v1", Campaigns: []m8QualificationCampaignV1{campaign}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	indexPath := filepath.Join(root, "campaign.json")
-	if err := os.WriteFile(indexPath, index, 0o644); err != nil {
+	if err := os.WriteFile(indexPath, singleCorpusIndex, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var stdout strings.Builder
-	if err := run([]string{"validate-qualification", "-index", indexPath}, &stdout); err != nil || !strings.Contains(stdout.String(), `"p4_qps_median":200`) {
+	if err := run([]string{"validate-qualification", "-index", indexPath}, &stdout); err == nil {
+		t.Fatal("accepted 100k-only qualification index")
+	}
+	fixture250 := m8QualificationFixturesV1[1]
+	campaign250 := m8QualificationCampaignV1{FixtureChecksum: fixture250.Checksum, BaseSHA: head, HeadSHA: head}
+	for i := 0; i < 3; i++ {
+		name := "250k-repeat-" + string(rune('1'+i)) + ".json"
+		matrix := testM8QualificationMatrixV1(t, head, fixture250, 125+float64(i)*75, true)
+		testM8QualificationExecutionIDsV1(&matrix, i)
+		testM8QualificationProfilesV1(t, root, strings.TrimSuffix(name, ".json"), &matrix)
+		raw, err := json.Marshal(matrix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, name), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(raw)
+		campaign250.Runs = append(campaign250.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:])})
+	}
+	qualificationIndex := m8QualificationIndexV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_index_v1", Campaigns: []m8QualificationCampaignV1{campaign, campaign250}}
+	index, err := json.Marshal(qualificationIndex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(indexPath, index, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	if err := run([]string{"validate-qualification", "-index", indexPath}, &stdout); err != nil {
 		t.Fatalf("CLI validation err=%v output=%q", err, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `"p4_p95_min":89`) || !strings.Contains(stdout.String(), `"p16_p95_max":251`) {
-		t.Fatalf("CLI p95 spread output=%q", stdout.String())
+	var indexSummary m8QualificationIndexSummaryV1
+	if err := json.Unmarshal([]byte(stdout.String()), &indexSummary); err != nil || indexSummary.Status != "qualified" || len(indexSummary.Campaigns) != 2 || indexSummary.Campaigns[fixture.Checksum].P4QPSMedian != 200 || indexSummary.Campaigns[fixture250.Checksum].P4QPSMedian != 200 {
+		t.Fatalf("CLI summary err=%v summary=%+v", err, indexSummary)
 	}
+	for name, mutate := range map[string]func(*m8QualificationIndexV1){
+		"duplicate_100k": func(index *m8QualificationIndexV1) { index.Campaigns[1] = index.Campaigns[0] },
+		"unknown_corpus": func(index *m8QualificationIndexV1) { index.Campaigns[1].FixtureChecksum = strings.Repeat("b", 64) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := qualificationIndex
+			bad.Campaigns = slices.Clone(qualificationIndex.Campaigns)
+			mutate(&bad)
+			if _, err := m8ValidateQualificationIndexV1(root, bad); err == nil {
+				t.Fatalf("accepted %s qualification index", name)
+			}
+		})
+	}
+	t.Run("manifest_mismatch", func(t *testing.T) {
+		var matrix m8ProductionMatrixV1
+		raw, err := os.ReadFile(filepath.Join(root, campaign250.Runs[0].Path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(raw, &matrix); err != nil {
+			t.Fatal(err)
+		}
+		matrix.Dataset.Fixture = "wrong-fixture"
+		raw, err = json.Marshal(matrix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		const path = "250k-manifest-mismatch.json"
+		if err := os.WriteFile(filepath.Join(root, path), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(raw)
+		bad := qualificationIndex
+		bad.Campaigns = slices.Clone(qualificationIndex.Campaigns)
+		bad.Campaigns[1].Runs = slices.Clone(campaign250.Runs)
+		bad.Campaigns[1].Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
+		if _, err := m8ValidateQualificationIndexV1(root, bad); err == nil {
+			t.Fatal("accepted manifest-mismatched corpus")
+		}
+	})
 
 	for name, mutate := range map[string]func(*m8QualificationCampaignV1){
 		"traversal":        func(c *m8QualificationCampaignV1) { c.Runs[0].Path = "../repeat-1.json" },
@@ -529,6 +599,11 @@ func testM8QualificationReportV1(t *testing.T, head string, fixture fixtureManif
 	descriptor.Partitions, descriptor.SourceRows, descriptor.Source.Vectors = 16, uint64(fixture.Vectors), fixture.Vectors
 	descriptor.OverlapMemberships = wantOverlap
 	descriptor.EdgeCutBefore = wantOverlap + 1
+	if fixture.Vectors == 250000 {
+		descriptor.PartitionMaxDistanceWork = 50_000_000_000
+		descriptor.RouterMaxScalarWork = 50_000_000_000
+		descriptor.M3MaxBenchmarkVisits = 900_000_000
+	}
 	descriptor.PartitionLoads = make([]int, len(loads))
 	for i, load := range loads {
 		descriptor.PartitionLoads[i] = int(load)

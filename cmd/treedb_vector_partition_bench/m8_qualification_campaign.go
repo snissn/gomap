@@ -35,6 +35,19 @@ type m8QualificationCampaignRunV1 struct {
 	SHA256 string `json:"sha256"`
 }
 
+type m8QualificationIndexV1 struct {
+	SchemaVersion int                         `json:"schema_version"`
+	ResultKind    string                      `json:"result_kind"`
+	Campaigns     []m8QualificationCampaignV1 `json:"campaigns"`
+}
+
+type m8QualificationIndexSummaryV1 struct {
+	SchemaVersion int                                         `json:"schema_version"`
+	ResultKind    string                                      `json:"result_kind"`
+	Status        string                                      `json:"status"`
+	Campaigns     map[string]m8QualificationCampaignSummaryV1 `json:"campaigns"`
+}
+
 type m8QualificationCampaignSummaryV1 struct {
 	P4QPSMin     float64 `json:"p4_qps_min"`
 	P4QPSMedian  float64 `json:"p4_qps_median"`
@@ -77,15 +90,38 @@ func runValidateQualification(args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("read qualification index: %w", err)
 	}
-	var campaign m8QualificationCampaignV1
-	if err := json.Unmarshal(raw, &campaign); err != nil {
+	var qualificationIndex m8QualificationIndexV1
+	if err := json.Unmarshal(raw, &qualificationIndex); err != nil {
 		return fmt.Errorf("decode qualification index: %w", err)
 	}
-	summary, err := m8ValidateQualificationCampaignV1(filepath.Dir(index), campaign)
+	summary, err := m8ValidateQualificationIndexV1(filepath.Dir(index), qualificationIndex)
 	if err != nil {
 		return err
 	}
 	return json.NewEncoder(stdout).Encode(summary)
+}
+
+func m8ValidateQualificationIndexV1(root string, index m8QualificationIndexV1) (m8QualificationIndexSummaryV1, error) {
+	summary := m8QualificationIndexSummaryV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_summary_v1", Status: "qualified", Campaigns: make(map[string]m8QualificationCampaignSummaryV1, len(m8QualificationFixturesV1))}
+	if index.SchemaVersion != 1 || index.ResultKind != "vector_partition_structured_qualification_index_v1" || len(index.Campaigns) != len(m8QualificationFixturesV1) {
+		return m8QualificationIndexSummaryV1{}, errors.New("qualification index requires exactly the two authoritative corpus campaigns")
+	}
+	for _, campaign := range index.Campaigns {
+		if _, duplicate := summary.Campaigns[campaign.FixtureChecksum]; !m8QualificationFixtureChecksumV1(campaign.FixtureChecksum) || duplicate {
+			return m8QualificationIndexSummaryV1{}, errors.New("qualification index has duplicate or unknown corpus")
+		}
+		campaignSummary, err := m8ValidateQualificationCampaignV1(root, campaign)
+		if err != nil {
+			return m8QualificationIndexSummaryV1{}, err
+		}
+		summary.Campaigns[campaign.FixtureChecksum] = campaignSummary
+	}
+	for _, fixture := range m8QualificationFixturesV1 {
+		if _, ok := summary.Campaigns[fixture.Checksum]; !ok {
+			return m8QualificationIndexSummaryV1{}, errors.New("qualification index is missing an authoritative corpus")
+		}
+	}
+	return summary, nil
 }
 
 func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCampaignV1) (m8QualificationCampaignSummaryV1, error) {
