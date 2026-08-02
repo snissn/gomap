@@ -502,9 +502,9 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "update gap",
+			category: "update",
 			feature:  "$inc",
-			status:   "rejected",
+			status:   "supported subset",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 21, bson.D{
 					{Key: "update", Value: "users"},
@@ -514,7 +514,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 					}}},
 					{Key: "$db", Value: "app"},
 				})
-				assertCommandError(t, resp, "BadValue")
+				assertOK(t, resp)
 			},
 		},
 		{

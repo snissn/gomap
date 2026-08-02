@@ -68,7 +68,7 @@ block drifts from the executable matrix rows.
 | query gap | dotted projection | rejected |
 | update gap | upsert | rejected |
 | update gap | multi update | rejected |
-| update gap | $inc | rejected |
+| update | $inc | supported subset |
 | index gap | compound index | rejected |
 | index gap | index without treedbValueType | rejected |
 | command gap | aggregate | not implemented |

@@ -2112,11 +2112,8 @@ func TestServerUpdateCoalescedSkipsCoalescerForUnrecognizedUpdateShape(t *testin
 		t.Fatal("test update unexpectedly parsed as $set")
 	}
 	matched, modified, err := server.runMongoUpdateCoalesced("app.users", col, update)
-	if err == nil {
-		t.Fatal("runMongoUpdateCoalesced succeeded for unsupported $inc update")
-	}
-	if matched || modified {
-		t.Fatalf("matched=%v modified=%v want false,false", matched, modified)
+	if err != nil || !matched || !modified {
+		t.Fatalf("matched=%v modified=%v err=%v want true,true,nil", matched, modified, err)
 	}
 	server.updateMu.Lock()
 	_, cached := server.updateCoalescers["app.users"]
@@ -5984,7 +5981,6 @@ func TestMongoMutationRejectsInvalidShapesAndOverflow(t *testing.T) {
 		{{Key: "$inc", Value: bson.D{{Key: "a.b", Value: 1}}}},
 		{{Key: "$set", Value: bson.D{{Key: "x", Value: 1}}}, {Key: "$inc", Value: bson.D{{Key: "x", Value: 1}}}},
 		{{Key: "$push", Value: bson.D{{Key: "x", Value: 1}}}},
-		{},
 	} {
 		if _, err := parseMongoMutation(mustDocument(t, update)); err == nil {
 			t.Fatalf("accepted %v", update)

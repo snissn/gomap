@@ -940,6 +940,7 @@ type mongoUpdateItem struct {
 	bsonSetFields   []collections.BSONSetField
 	setFieldsOK     bool
 	bsonSetFieldsOK bool
+	mutation        mongoMutation
 }
 
 type mongoUpdateParseError struct {
@@ -979,6 +980,10 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 	if err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 	}
+	mutation, err := parseMongoMutation(updateDoc)
+	if err != nil {
+		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+	}
 	setFields, bsonSetFields, setFieldsOK := mongoSetUpdateFields(updateDoc)
 	bsonSetFields, bsonSetFieldNames, bsonSetFieldsOK := mongoBSONSetUpdateFields(updateDoc)
 	if !setFieldsOK && bsonSetFieldsOK {
@@ -992,6 +997,7 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 		bsonSetFields:   bsonSetFields,
 		setFieldsOK:     setFieldsOK,
 		bsonSetFieldsOK: bsonSetFieldsOK,
+		mutation:        mutation,
 	}, nil
 }
 
@@ -1124,7 +1130,7 @@ func applyMongoUpdateToStoredDocument(col *collections.Collection, materializer 
 	if err != nil {
 		return nil, false, fmt.Errorf("updates[%d]: %w", update.index, err)
 	}
-	updated, changed, err := applySetUpdate(raw, update.updateDoc)
+	updated, changed, err := applyMongoMutation(raw, update.mutation)
 	if err != nil {
 		return nil, false, fmt.Errorf("updates[%d]: %w", update.index, err)
 	}
@@ -3582,8 +3588,11 @@ type mongoMutation struct {
 // parseMongoMutation is deliberately separate from the established $set path.
 func parseMongoMutation(update wire.Document) (mongoMutation, error) {
 	elements, err := bson.Raw(update).Elements()
-	if err != nil || len(elements) == 0 {
+	if err != nil {
 		return mongoMutation{}, errors.New("Mongo gateway update must be a non-empty document")
+	}
+	if len(elements) == 0 {
+		return mongoMutation{replace: update}, nil
 	}
 	first, err := elements[0].KeyErr()
 	if err != nil {
