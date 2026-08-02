@@ -4238,15 +4238,6 @@ func mongoMutationArrayValues(op, name string, value bson.RawValue) ([]bson.RawV
 	if err != nil {
 		return nil, err
 	}
-	if len(elements) != 0 {
-		key, err := elements[0].KeyErr()
-		if err != nil {
-			return nil, err
-		}
-		if strings.HasPrefix(key, "$") && key != "$each" {
-			return nil, fmt.Errorf("Mongo gateway %s field %q only supports a scalar or $each", op, name)
-		}
-	}
 	if len(elements) == 0 {
 		return []bson.RawValue{value}, nil
 	}
@@ -4257,10 +4248,7 @@ func mongoMutationArrayValues(op, name string, value bson.RawValue) ([]bson.RawV
 	if !strings.HasPrefix(key, "$") {
 		return []bson.RawValue{value}, nil
 	}
-	if len(elements) != 1 {
-		return nil, fmt.Errorf("Mongo gateway %s field %q only supports a scalar or $each", op, name)
-	}
-	if key != "$each" {
+	if key != "$each" || len(elements) != 1 {
 		return nil, fmt.Errorf("Mongo gateway %s field %q only supports a scalar or $each", op, name)
 	}
 	array, ok := elements[0].Value().ArrayOK()
