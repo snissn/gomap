@@ -1010,6 +1010,66 @@ func TestServerUpdateBSONSetAllowsNativeBinaryValues(t *testing.T) {
 	}
 }
 
+func TestServerBSONSetUpsertAllowsNativeBinaryValues(t *testing.T) {
+	for _, format := range []collections.DocumentFormat{collections.DocumentFormatBSON, collections.DocumentFormatJSON, collections.DocumentFormatTemplateV1} {
+		t.Run(string(format), func(t *testing.T) {
+			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			server := NewServer()
+			server.Collections = collections.NewCollectionManager(db)
+			server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: format}
+			response := serveCommand(t, server, 22543, bson.D{
+				{Key: "update", Value: "users"},
+				{Key: "updates", Value: bson.A{bson.D{
+					{Key: "q", Value: bson.D{{Key: "_id", Value: "binary-upsert"}}},
+					{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "payload", Value: bson.Binary{Subtype: 0x00, Data: []byte{2, 3, 4}}}}}}},
+					{Key: "upsert", Value: true},
+				}}},
+				{Key: "$db", Value: "app"},
+			})
+			if format != collections.DocumentFormatBSON {
+				assertCommandError(t, response, "BadValue")
+				if _, err := server.Collections.OpenCollection("app.users"); !errors.Is(err, collections.ErrCollectionNotFound) {
+					t.Fatalf("unsupported BSON upsert created collection: %v", err)
+				}
+				return
+			}
+			assertOK(t, response)
+			assertInt32(t, response, "n", 1)
+			assertInt32(t, response, "nModified", 0)
+			found := serveCommand(t, server, 22544, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "binary-upsert"}}}, {Key: "$db", Value: "app"}})
+			batch := cursorFirstBatch(t, found)
+			if len(batch) != 1 {
+				t.Fatalf("batch len=%d want 1", len(batch))
+			}
+			subtype, payload := batch[0].Lookup("payload").Binary()
+			if subtype != 0x00 || !bytes.Equal(payload, []byte{2, 3, 4}) {
+				t.Fatalf("payload subtype/data=%#x/%v want 0/[2 3 4]", subtype, payload)
+			}
+			response = serveCommand(t, server, 22545, bson.D{
+				{Key: "update", Value: "users"},
+				{Key: "updates", Value: bson.A{bson.D{
+					{Key: "q", Value: bson.D{{Key: "_id", Value: "binary-upsert"}}},
+					{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "payload", Value: bson.Binary{Subtype: 0x00, Data: []byte{5, 6}}}}}}},
+					{Key: "upsert", Value: true},
+				}}},
+				{Key: "$db", Value: "app"},
+			})
+			assertOK(t, response)
+			assertInt32(t, response, "n", 1)
+			assertInt32(t, response, "nModified", 1)
+			found = serveCommand(t, server, 22546, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "binary-upsert"}}}, {Key: "$db", Value: "app"}})
+			subtype, payload = cursorFirstBatch(t, found)[0].Lookup("payload").Binary()
+			if subtype != 0x00 || !bytes.Equal(payload, []byte{5, 6}) {
+				t.Fatalf("matched payload subtype/data=%#x/%v want 0/[5 6]", subtype, payload)
+			}
+		})
+	}
+}
+
 func TestServerUpdateTemplateV1RefreshesMaterializerBetweenStatements(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -1415,12 +1475,11 @@ func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterParseError(t *testin
 		{Key: "updates", Value: bson.A{
 			bson.D{
 				{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
-				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "score", Value: int32(1)}}}}},
+				{Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "score", Value: int32(1)}}}}},
 			},
 			bson.D{
 				{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}},
-				{Key: "multi", Value: true},
-				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "score", Value: int32(2)}}}}},
+				{Key: "u", Value: bson.D{{Key: "$push", Value: bson.D{{Key: "score", Value: int32(2)}}}}},
 			},
 		}},
 		{Key: "$db", Value: "app"},
@@ -1453,7 +1512,6 @@ func TestParseMongoUpdateItemUnsupportedFlagsIncludeIndex(t *testing.T) {
 		want string
 	}{
 		{name: "multi", flag: bson.E{Key: "multi", Value: true}, want: "updateOne only"},
-		{name: "upsert", flag: bson.E{Key: "upsert", Value: true}, want: "does not support upsert"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1470,6 +1528,77 @@ func TestParseMongoUpdateItemUnsupportedFlagsIncludeIndex(t *testing.T) {
 				t.Fatalf("err=%v want index and %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseMongoUpdateItemPureSetSkipsGenericMutation(t *testing.T) {
+	item, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "grace"}}}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !item.pureSet || !item.bsonSetFieldsOK || len(item.mutation.set) != 0 || len(item.mutation.inc) != 0 || len(item.mutation.unset) != 0 || item.mutation.replace != nil {
+		t.Fatalf("pure set item=%+v", item)
+	}
+}
+
+func TestParseMongoUpdateItemBSONOnlyPureSetSkipsGenericMutation(t *testing.T) {
+	item, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte{1}}}}}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !item.pureSet || item.setFieldsOK || !item.bsonSetFieldsOK || len(item.mutation.set) != 0 || len(item.mutation.inc) != 0 || len(item.mutation.unset) != 0 || item.mutation.replace != nil {
+		t.Fatalf("BSON-only pure set item=%+v", item)
+	}
+}
+
+func TestServerUpdateMissingCollectionExecutesEarlierUpsertBeforeParseError(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	response := serveCommand(t, s, 22597, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{
+			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "score", Value: int32(1)}}}}}, {Key: "upsert", Value: true}},
+			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: bson.D{{Key: "$push", Value: bson.D{{Key: "score", Value: int32(2)}}}}}},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "BadValue")
+	found := serveCommand(t, s, 22598, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	batch := cursorFirstBatch(t, found)
+	if len(batch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(batch))
+	}
+	if score, _ := batch[0].Lookup("score").Int32OK(); score != 1 {
+		t.Fatalf("score=%d want 1", score)
+	}
+	response = serveCommand(t, s, 22599, bson.D{
+		{Key: "update", Value: "replacement-users"},
+		{Key: "updates", Value: bson.A{
+			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "score", Value: int32(1)}}}}}, {Key: "upsert", Value: true}},
+			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: bson.D{{Key: "_id", Value: "different"}}}, {Key: "upsert", Value: true}},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "BadValue")
+	assertErrmsgContains(t, response, "updates[1]")
+	found = serveCommand(t, s, 22600, bson.D{{Key: "find", Value: "replacement-users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	batch = cursorFirstBatch(t, found)
+	if len(batch) != 1 {
+		t.Fatalf("replacement prefix batch len=%d want 1", len(batch))
+	}
+	if score, _ := batch[0].Lookup("score").Int32OK(); score != 1 {
+		t.Fatalf("replacement prefix score=%d want 1", score)
 	}
 }
 
@@ -2112,11 +2241,8 @@ func TestServerUpdateCoalescedSkipsCoalescerForUnrecognizedUpdateShape(t *testin
 		t.Fatal("test update unexpectedly parsed as $set")
 	}
 	matched, modified, err := server.runMongoUpdateCoalesced("app.users", col, update)
-	if err == nil {
-		t.Fatal("runMongoUpdateCoalesced succeeded for unsupported $inc update")
-	}
-	if matched || modified {
-		t.Fatalf("matched=%v modified=%v want false,false", matched, modified)
+	if err != nil || !matched || !modified {
+		t.Fatalf("matched=%v modified=%v err=%v want true,true,nil", matched, modified, err)
 	}
 	server.updateMu.Lock()
 	_, cached := server.updateCoalescers["app.users"]
@@ -5944,6 +6070,230 @@ func TestApplySetUpdateAppendsNewFieldsInSetOrder(t *testing.T) {
 		if keys[i] != want[i] {
 			t.Fatalf("keys=%v want %v", keys, want)
 		}
+	}
+}
+
+func TestMongoMutationApplyOperatorsAndReplacement(t *testing.T) {
+	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "count", Value: int32(1)}, {Key: "old", Value: true}})
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "ada"}}}, {Key: "$inc", Value: bson.D{{Key: "count", Value: int32(2)}, {Key: "new", Value: int64(-1)}}}, {Key: "$unset", Value: bson.D{{Key: "old", Value: true}}}}))
+	if err != nil {
+		t.Fatalf("parse mutation: %v", err)
+	}
+	updated, changed, err := applyMongoMutation(doc, mutation)
+	if err != nil || !changed {
+		t.Fatalf("apply changed=%v err=%v", changed, err)
+	}
+	if got, _ := bson.Raw(updated).Lookup("count").Int32OK(); got != 3 {
+		t.Fatalf("count=%d want 3", got)
+	}
+	if got, _ := bson.Raw(updated).Lookup("new").Int64OK(); got != -1 {
+		t.Fatalf("new=%d want -1", got)
+	}
+	if !bson.Raw(updated).Lookup("old").IsZero() {
+		t.Fatal("unset field remains")
+	}
+	replacement, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "name", Value: "grace"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, _, err = applyMongoMutation(doc, replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := bson.Raw(updated).Lookup("_id").StringValueOK(); got != "u1" {
+		t.Fatalf("_id=%q", got)
+	}
+}
+
+func TestMongoMutationRejectsInvalidShapesAndOverflow(t *testing.T) {
+	for _, update := range []bson.D{
+		{{Key: "$inc", Value: bson.D{{Key: "a.b", Value: 1}}}},
+		{{Key: "$set", Value: bson.D{{Key: "x", Value: 1}}}, {Key: "$inc", Value: bson.D{{Key: "x", Value: 1}}}},
+		{{Key: "$push", Value: bson.D{{Key: "x", Value: 1}}}},
+	} {
+		if _, err := parseMongoMutation(mustDocument(t, update)); err == nil {
+			t.Fatalf("accepted %v", update)
+		}
+	}
+	_, err := mongoMutationIncrement(mustRawValue(t, int64(math.MaxInt64)), mustRawValue(t, int64(1)))
+	if err == nil {
+		t.Fatal("overflow accepted")
+	}
+	_, err = mongoMutationIncrement(bson.RawValue{Type: bson.TypeNull}, mustRawValue(t, int32(1)))
+	if err == nil {
+		t.Fatal("null accepted")
+	}
+	changedID := mustDocument(t, bson.D{{Key: "_id", Value: "u2"}})
+	if _, _, err := applyMongoReplacement(mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}), changedID); err == nil {
+		t.Fatal("changed _id accepted")
+	}
+	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}})
+	invalidReplacement := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}, {Key: "profile.name", Value: "bad"}})
+	updated, changed, err := applyMongoReplacement(doc, invalidReplacement)
+	if err == nil || updated != nil || changed || !bytes.Equal(doc, mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}})) {
+		t.Fatalf("invalid replacement updated=%v changed=%v err=%v", updated, changed, err)
+	}
+}
+
+func TestServerUpdateGenericMutationsAcrossDocumentFormats(t *testing.T) {
+	for _, format := range []collections.DocumentFormat{collections.DocumentFormatBSON, collections.DocumentFormatJSON, collections.DocumentFormatTemplateV1} {
+		t.Run(string(format), func(t *testing.T) {
+			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			s := NewServer()
+			s.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: format}
+			s.Collections = collections.NewCollectionManager(db)
+			assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "n", Value: int32(2147483647)}, {Key: "old", Value: true}, {Key: "nullValue", Value: nil}, {Key: "textValue", Value: "bad"}}}}, {Key: "$db", Value: "app"}}))
+
+			requestID := int32(2)
+			nextRequestID := func() int32 {
+				id := requestID
+				requestID++
+				return id
+			}
+			update := func(value bson.D) bson.Raw {
+				return serveCommand(t, s, nextRequestID(), bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: value}}}}, {Key: "$db", Value: "app"}})
+			}
+			resp := update(bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "ada"}}}, {Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}, {Key: "missing", Value: int64(-2)}}}, {Key: "$unset", Value: bson.D{{Key: "old", Value: true}, {Key: "absent", Value: true}}}})
+			assertOK(t, resp)
+			assertInt32(t, resp, "n", 1)
+			assertInt32(t, resp, "nModified", 1)
+			find := serveCommand(t, s, nextRequestID(), bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+			got := cursorFirstBatch(t, find)[0]
+			if n, ok := got.Lookup("n").Int64OK(); !ok || n != 2147483648 {
+				t.Fatalf("n=%d ok=%v", n, ok)
+			}
+			if n, _ := got.Lookup("missing").Int64OK(); n != -2 {
+				t.Fatalf("missing=%d", n)
+			}
+			if !got.Lookup("old").IsZero() {
+				t.Fatal("old remains")
+			}
+			noop := update(bson.D{{Key: "$unset", Value: bson.D{{Key: "stillAbsent", Value: true}}}})
+			assertOK(t, noop)
+			assertInt32(t, noop, "nModified", 0)
+			// int64 plus double is a double.
+			assertOK(t, update(bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: 0.5}}}}))
+			find = serveCommand(t, s, nextRequestID(), bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+			if n, ok := cursorFirstBatch(t, find)[0].Lookup("n").DoubleOK(); !ok || n != 2147483648.5 {
+				t.Fatalf("double n=%v ok=%v", n, ok)
+			}
+			for _, badUpdate := range []bson.D{
+				{{Key: "$inc", Value: bson.D{{Key: "n", Value: "bad"}}}},
+				{{Key: "$inc", Value: bson.D{{Key: "n", Value: nil}}}},
+				{{Key: "$inc", Value: bson.D{{Key: "nullValue", Value: int32(1)}}}},
+				{{Key: "$inc", Value: bson.D{{Key: "textValue", Value: int32(1)}}}},
+				{{Key: "$set", Value: bson.D{{Key: "n", Value: 1}}}, {Key: "$unset", Value: bson.D{{Key: "n", Value: true}}}},
+				{{Key: "$set", Value: bson.D{{Key: "x.y", Value: 1}}}},
+				{{Key: "$set", Value: bson.D{{Key: "_id", Value: "u2"}}}},
+				{{Key: "$push", Value: bson.D{{Key: "n", Value: 1}}}},
+			} {
+				assertCommandError(t, update(badUpdate), "BadValue")
+			}
+			find = serveCommand(t, s, nextRequestID(), bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+			if n, _ := cursorFirstBatch(t, find)[0].Lookup("n").DoubleOK(); n != 2147483648.5 {
+				t.Fatalf("failed item changed n=%v", n)
+			}
+			assertOK(t, update(bson.D{{Key: "$inc", Value: bson.D{{Key: "largest", Value: int64(math.MaxInt64)}}}}))
+			assertCommandError(t, update(bson.D{{Key: "$inc", Value: bson.D{{Key: "largest", Value: int64(1)}}}}), "BadValue")
+			assertOK(t, update(bson.D{{Key: "name", Value: "grace"}})) // omitted _id is preserved
+			noop = update(bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "grace"}})
+			assertOK(t, noop)
+			assertInt32(t, noop, "nModified", 0)
+			assertCommandError(t, update(bson.D{{Key: "_id", Value: "u2"}}), "BadValue")
+			assertOK(t, update(bson.D{})) // an empty replacement retains _id
+		})
+	}
+}
+
+func TestServerUpdateUpsertAcrossDocumentFormats(t *testing.T) {
+	for _, format := range []collections.DocumentFormat{collections.DocumentFormatBSON, collections.DocumentFormatJSON, collections.DocumentFormatTemplateV1} {
+		t.Run(string(format), func(t *testing.T) {
+			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			s := NewServer()
+			s.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: format}
+			s.Collections = collections.NewCollectionManager(db)
+			response := serveCommand(t, s, 7001, bson.D{
+				{Key: "update", Value: "users"},
+				{Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "age", Value: int32(-2)}}}}}, {Key: "upsert", Value: true}}}},
+				{Key: "$db", Value: "app"},
+			})
+			assertOK(t, response)
+			assertInt32(t, response, "n", 1)
+			assertInt32(t, response, "nModified", 0)
+			upserted, ok := bson.Raw(response).Lookup("upserted").ArrayOK()
+			if !ok {
+				t.Fatalf("missing upserted: %v", response)
+			}
+			values, err := upserted.Values()
+			if err != nil || len(values) != 1 {
+				t.Fatalf("upserted=%v err=%v", values, err)
+			}
+			if id, _ := values[0].Document().Lookup("_id").StringValueOK(); id != "u1" {
+				t.Fatalf("upserted id=%q", id)
+			}
+			response = serveCommand(t, s, 7002, bson.D{
+				{Key: "update", Value: "users"},
+				{Key: "updates", Value: bson.A{
+					bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "age", Value: int32(1)}}}}}, {Key: "upsert", Value: true}},
+					bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: int64(2)}}}, {Key: "u", Value: bson.D{{Key: "name", Value: "grace"}}}, {Key: "upsert", Value: true}},
+				}},
+				{Key: "$db", Value: "app"},
+			})
+			assertOK(t, response)
+			assertInt32(t, response, "n", 2)
+			assertInt32(t, response, "nModified", 1)
+			upserted, ok = bson.Raw(response).Lookup("upserted").ArrayOK()
+			if !ok {
+				t.Fatalf("missing mixed upserted: %v", response)
+			}
+			values, err = upserted.Values()
+			if err != nil || len(values) != 1 || values[0].Document().Lookup("index").Int32() != 1 {
+				t.Fatalf("mixed upserted=%v err=%v", values, err)
+			}
+			if id, ok := values[0].Document().Lookup("_id").Int64OK(); !ok || id != 2 {
+				t.Fatalf("upserted typed id=%d ok=%v", id, ok)
+			}
+			assertCommandError(t, serveCommand(t, s, 7003, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "bad"}}}, {Key: "u", Value: bson.D{{Key: "_id", Value: "other"}}}, {Key: "upsert", Value: true}}}}, {Key: "$db", Value: "app"}}), "BadValue")
+		})
+	}
+}
+
+func TestServerUpdateInvalidUpsertDoesNotCreateCollection(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	assertCommandError(t, serveCommand(t, s, 7010, bson.D{{Key: "update", Value: "missing"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "age", Value: "bad"}}}}}, {Key: "upsert", Value: true}}}}, {Key: "$db", Value: "app"}}), "BadValue")
+	if _, err := s.Collections.OpenCollection("app.missing"); !errors.Is(err, collections.ErrCollectionNotFound) {
+		t.Fatalf("invalid upsert created collection: %v", err)
+	}
+	for _, format := range []collections.DocumentFormat{collections.DocumentFormatBSON, collections.DocumentFormatJSON, collections.DocumentFormatTemplateV1} {
+		t.Run(string(format), func(t *testing.T) {
+			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			server := NewServer()
+			server.Collections = collections.NewCollectionManager(db)
+			server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: format}
+			response := serveCommand(t, server, 7011, bson.D{{Key: "update", Value: "replacement-mismatch"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "_id", Value: "u2"}, {Key: "name", Value: "wrong"}}}, {Key: "upsert", Value: true}}}}, {Key: "$db", Value: "app"}})
+			assertCommandError(t, response, "BadValue")
+			if _, err := server.Collections.OpenCollection("app.replacement-mismatch"); !errors.Is(err, collections.ErrCollectionNotFound) {
+				t.Fatalf("replacement mismatch created collection: %v", err)
+			}
+		})
 	}
 }
 

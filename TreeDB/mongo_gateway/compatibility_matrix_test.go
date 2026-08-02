@@ -468,20 +468,33 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "update gap",
-			feature:  "upsert",
-			status:   "rejected",
+			category: "update",
+			feature:  "exact _id upsert",
+			status:   "supported subset",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 19, bson.D{
 					{Key: "update", Value: "users"},
 					{Key: "updates", Value: bson.A{bson.D{
-						{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+						{Key: "q", Value: bson.D{{Key: "_id", Value: "upsert-matrix"}}},
 						{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "sea"}}}}},
 						{Key: "upsert", Value: true},
 					}}},
 					{Key: "$db", Value: "app"},
 				})
-				assertCommandError(t, resp, "BadValue")
+				assertOK(t, resp)
+				assertInt32(t, resp, "n", 1)
+				assertInt32(t, resp, "nModified", 0)
+				upserted, ok := bson.Raw(resp).Lookup("upserted").ArrayOK()
+				if !ok {
+					t.Fatalf("missing upserted: %v", resp)
+				}
+				values, err := upserted.Values()
+				if err != nil || len(values) != 1 {
+					t.Fatalf("upserted=%v err=%v", values, err)
+				}
+				if id, ok := values[0].Document().Lookup("_id").StringValueOK(); !ok || id != "upsert-matrix" {
+					t.Fatalf("upserted _id=%q ok=%v", id, ok)
+				}
 			},
 		},
 		{
@@ -502,9 +515,9 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "update gap",
+			category: "update",
 			feature:  "$inc",
-			status:   "rejected",
+			status:   "supported subset",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 21, bson.D{
 					{Key: "update", Value: "users"},
@@ -514,7 +527,45 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 					}}},
 					{Key: "$db", Value: "app"},
 				})
-				assertCommandError(t, resp, "BadValue")
+				assertOK(t, resp)
+				assertInt32(t, resp, "n", 1)
+				assertInt32(t, resp, "nModified", 1)
+			},
+		},
+		{
+			category: "update",
+			feature:  "$unset",
+			status:   "supported subset",
+			probe: func(t *testing.T, server *Server) {
+				resp := serveCommand(t, server, 211, bson.D{
+					{Key: "update", Value: "users"},
+					{Key: "updates", Value: bson.A{bson.D{
+						{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+						{Key: "u", Value: bson.D{{Key: "$unset", Value: bson.D{{Key: "city", Value: true}}}}},
+					}}},
+					{Key: "$db", Value: "app"},
+				})
+				assertOK(t, resp)
+				assertInt32(t, resp, "n", 1)
+				assertInt32(t, resp, "nModified", 1)
+			},
+		},
+		{
+			category: "update",
+			feature:  "ReplaceOne by exact _id",
+			status:   "supported subset",
+			probe: func(t *testing.T, server *Server) {
+				resp := serveCommand(t, server, 212, bson.D{
+					{Key: "update", Value: "users"},
+					{Key: "updates", Value: bson.A{bson.D{
+						{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+						{Key: "u", Value: bson.D{{Key: "name", Value: "replacement"}}},
+					}}},
+					{Key: "$db", Value: "app"},
+				})
+				assertOK(t, resp)
+				assertInt32(t, resp, "n", 1)
+				assertInt32(t, resp, "nModified", 1)
 			},
 		},
 		{

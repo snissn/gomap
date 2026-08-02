@@ -881,10 +881,8 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 	}
 
 	col, err := s.Collections.OpenCollection(name)
-	if err != nil {
-		if errors.Is(err, collections.ErrCollectionNotFound) {
-			return marshalUpdateResponse(0, 0)
-		}
+	missingCollection := errors.Is(err, collections.ErrCollectionNotFound)
+	if err != nil && !missingCollection {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	parsed := make([]mongoUpdateItem, 0, len(updates))
@@ -893,12 +891,30 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 	for i, update := range updates {
 		item, err := parseMongoUpdateItem(i, update)
 		if err != nil {
-			if len(parsed) > 0 {
+			parseErr := err
+			if len(parsed) > 0 && missingCollection {
+				hasUpsert := false
+				for _, prior := range parsed {
+					hasUpsert = hasUpsert || prior.upsert
+				}
+				if hasUpsert {
+					if err := s.validateMongoMissingCollectionFirstUpsert(parsed); err != nil {
+						return mongoUpdateWriteCommandError(err)
+					}
+					col, err = s.openOrCreateCollection(name)
+					if err != nil {
+						return commandError(commandCodeBadValue, "BadValue", err.Error())
+					}
+					if _, _, _, runErr := runMongoUpdatesSequentialWithUpserts(col, parsed); runErr != nil {
+						return mongoUpdateWriteCommandError(runErr)
+					}
+				}
+			} else if len(parsed) > 0 {
 				if _, _, runErr := runMongoUpdatesSequential(col, parsed); runErr != nil {
 					return mongoUpdateWriteCommandError(runErr)
 				}
 			}
-			return mongoUpdateParseCommandError(err)
+			return mongoUpdateParseCommandError(parseErr)
 		}
 		keyString := string(item.key)
 		if _, ok := seenKeys[keyString]; ok {
@@ -907,8 +923,29 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 		seenKeys[keyString] = struct{}{}
 		parsed = append(parsed, item)
 	}
+	if missingCollection {
+		hasUpsert := false
+		for _, item := range parsed {
+			hasUpsert = hasUpsert || item.upsert
+		}
+		if !hasUpsert {
+			return marshalUpdateResponse(0, 0, nil)
+		}
+		if err := s.validateMongoMissingCollectionFirstUpsert(parsed); err != nil {
+			return mongoUpdateWriteCommandError(err)
+		}
+		col, err = s.openOrCreateCollection(name)
+		if err != nil {
+			return commandError(commandCodeBadValue, "BadValue", err.Error())
+		}
+	}
 	var matched, modified int32
-	if len(parsed) == 1 {
+	var upserted []mongoUpdateUpserted
+	hasUpsert := false
+	for _, item := range parsed {
+		hasUpsert = hasUpsert || item.upsert
+	}
+	if len(parsed) == 1 && !hasUpsert {
 		var matchedOne, modifiedOne bool
 		matchedOne, modifiedOne, err = s.runMongoUpdateCoalesced(name, col, parsed[0])
 		if matchedOne {
@@ -917,19 +954,19 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 		if modifiedOne {
 			modified = 1
 		}
-	} else if len(parsed) > 1 && !hasDuplicateKey {
+	} else if len(parsed) > 1 && !hasDuplicateKey && !hasUpsert {
 		var batched bool
 		matched, modified, batched, err = runMongoUpdateBatch(col, parsed)
 		if err != nil || !batched {
 			matched, modified, err = runMongoUpdatesSequential(col, parsed)
 		}
 	} else {
-		matched, modified, err = runMongoUpdatesSequential(col, parsed)
+		matched, modified, upserted, err = runMongoUpdatesSequentialWithUpserts(col, parsed)
 	}
 	if err != nil {
 		return mongoUpdateWriteCommandError(err)
 	}
-	return marshalUpdateResponse(matched, modified)
+	return marshalUpdateResponse(matched, modified, upserted)
 }
 
 type mongoUpdateItem struct {
@@ -940,6 +977,10 @@ type mongoUpdateItem struct {
 	bsonSetFields   []collections.BSONSetField
 	setFieldsOK     bool
 	bsonSetFieldsOK bool
+	pureSet         bool
+	mutation        mongoMutation
+	upsert          bool
+	id              bson.RawValue
 }
 
 type mongoUpdateParseError struct {
@@ -970,10 +1011,9 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 	} else if multi {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update currently supports updateOne only", index)}
 	}
-	if upsert, err := optionalBoolField(update, "upsert"); err != nil {
+	upsert, err := optionalBoolField(update, "upsert")
+	if err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
-	} else if upsert {
-		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update currently does not support upsert", index)}
 	}
 	updateDoc, err := requiredDocumentField(update, "u")
 	if err != nil {
@@ -984,6 +1024,14 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 	if !setFieldsOK && bsonSetFieldsOK {
 		setFields = bsonSetFieldNames
 	}
+	var mutation mongoMutation
+	pureSet := setFieldsOK || bsonSetFieldsOK
+	if !pureSet {
+		mutation, err = parseMongoMutation(updateDoc)
+		if err != nil {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+		}
+	}
 	return mongoUpdateItem{
 		index:           index,
 		key:             key,
@@ -992,6 +1040,10 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 		bsonSetFields:   bsonSetFields,
 		setFieldsOK:     setFieldsOK,
 		bsonSetFieldsOK: bsonSetFieldsOK,
+		pureSet:         pureSet,
+		mutation:        mutation,
+		upsert:          upsert,
+		id:              id,
 	}, nil
 }
 
@@ -1012,12 +1064,23 @@ func mongoUpdateWriteCommandError(err error) (wire.Document, error) {
 }
 
 func runMongoUpdatesSequential(col *collections.Collection, updates []mongoUpdateItem) (int32, int32, error) {
+	matched, modified, _, err := runMongoUpdatesSequentialWithUpserts(col, updates)
+	return matched, modified, err
+}
+
+type mongoUpdateUpserted struct {
+	index int
+	id    bson.RawValue
+}
+
+func runMongoUpdatesSequentialWithUpserts(col *collections.Collection, updates []mongoUpdateItem) (int32, int32, []mongoUpdateUpserted, error) {
 	var matched int32
 	var modified int32
+	var upserted []mongoUpdateUpserted
 	for _, update := range updates {
-		matchedOne, modifiedOne, err := runMongoUpdateOne(col, update)
+		matchedOne, modifiedOne, inserted, err := runMongoUpdateOneWithUpsert(col, update)
 		if err != nil {
-			return 0, 0, mongoUpdateErrorWithIndex(update.index, err)
+			return 0, 0, nil, mongoUpdateErrorWithIndex(update.index, err)
 		}
 		if matchedOne {
 			matched++
@@ -1025,8 +1088,12 @@ func runMongoUpdatesSequential(col *collections.Collection, updates []mongoUpdat
 		if modifiedOne {
 			modified++
 		}
+		if inserted {
+			matched++
+			upserted = append(upserted, mongoUpdateUpserted{index: update.index, id: update.id})
+		}
 	}
-	return matched, modified, nil
+	return matched, modified, upserted, nil
 }
 
 func mongoUpdateErrorWithIndex(index int, err error) error {
@@ -1041,20 +1108,92 @@ func mongoUpdateErrorWithIndex(index int, err error) error {
 }
 
 func runMongoUpdateOne(col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
+	matched, modified, _, err := runMongoUpdateOneWithUpsert(col, update)
+	return matched, modified, err
+}
+
+func runMongoUpdateOneWithUpsert(col *collections.Collection, update mongoUpdateItem) (bool, bool, bool, error) {
 	if mongoUpdateCanUseBSONSet(col, update) {
 		matched, modified, err := col.UpdateBSONSet(update.key, update.bsonSetFields)
-		return matched, modified, mongoUpdateErrorWithIndex(update.index, err)
+		if err != nil || matched || !update.upsert {
+			return matched, modified, false, mongoUpdateErrorWithIndex(update.index, err)
+		}
+		return mongoInsertUpsert(col, update)
 	}
 	materializer, err := storedDocumentMaterializerForCollection(col)
 	if err != nil {
-		return false, false, fmt.Errorf("updates[%d]: %w", update.index, err)
+		return false, false, false, fmt.Errorf("updates[%d]: %w", update.index, err)
 	}
 	if materializer != nil {
 		defer func() { _ = materializer.Close() }()
 	}
-	return col.Update(update.key, func(stored []byte) ([]byte, bool, error) {
+	matched, modified, err := col.Update(update.key, func(stored []byte) ([]byte, bool, error) {
 		return applyMongoUpdateToStoredDocument(col, materializer, update, stored)
 	})
+	if err != nil || matched || !update.upsert {
+		return matched, modified, false, err
+	}
+	return mongoInsertUpsert(col, update)
+}
+
+func mongoInsertUpsert(col *collections.Collection, update mongoUpdateItem) (bool, bool, bool, error) {
+	doc, err := mongoUpsertDocument(update)
+	if err != nil {
+		return false, false, false, err
+	}
+	key, stored, err := prepareInsertDocument(doc, col.MetaView().Options.DocumentFormat)
+	if err != nil {
+		return false, false, false, err
+	}
+	if !bytes.Equal(key, update.key) {
+		return false, false, false, errors.New("Mongo gateway update cannot modify _id")
+	}
+	if _, err := col.Insert(key, stored); err != nil {
+		return false, false, false, err
+	}
+	return false, false, true, nil
+}
+
+func (s *Server) validateMongoMissingCollectionFirstUpsert(updates []mongoUpdateItem) error {
+	for _, update := range updates {
+		if !update.upsert {
+			continue
+		}
+		doc, err := mongoUpsertDocument(update)
+		if err != nil {
+			return mongoUpdateErrorWithIndex(update.index, err)
+		}
+		key, _, err := prepareInsertDocument(doc, s.DefaultCollectionOptions.DocumentFormat)
+		if err != nil {
+			return mongoUpdateErrorWithIndex(update.index, err)
+		}
+		if !bytes.Equal(key, update.key) {
+			return mongoUpdateErrorWithIndex(update.index, errors.New("Mongo gateway update cannot modify _id"))
+		}
+		return nil
+	}
+	return nil
+}
+
+func mongoUpsertDocument(update mongoUpdateItem) (wire.Document, error) {
+	base, err := marshalDocument(bson.D{{Key: "_id", Value: update.id}})
+	if err != nil {
+		return nil, err
+	}
+	var doc wire.Document
+	if update.pureSet {
+		if update.bsonSetFieldsOK && !update.setFieldsOK {
+			doc, _, err = applyBSONSetUpdate(base, update.bsonSetFields)
+		} else {
+			doc, _, err = applySetUpdate(base, update.updateDoc)
+		}
+	} else {
+		doc, _, err = applyMongoMutation(base, update.mutation)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return doc, nil
 }
 
 func runMongoUpdateBatch(col *collections.Collection, updates []mongoUpdateItem) (int32, int32, bool, error) {
@@ -1124,7 +1263,17 @@ func applyMongoUpdateToStoredDocument(col *collections.Collection, materializer 
 	if err != nil {
 		return nil, false, fmt.Errorf("updates[%d]: %w", update.index, err)
 	}
-	updated, changed, err := applySetUpdate(raw, update.updateDoc)
+	var updated wire.Document
+	var changed bool
+	if update.pureSet {
+		if normalizedMongoUpdateDocumentFormat(col) == collections.DocumentFormatBSON && update.bsonSetFieldsOK {
+			updated, changed, err = applyBSONSetUpdate(raw, update.bsonSetFields)
+		} else {
+			updated, changed, err = applySetUpdate(raw, update.updateDoc)
+		}
+	} else {
+		updated, changed, err = applyMongoMutation(raw, update.mutation)
+	}
 	if err != nil {
 		return nil, false, fmt.Errorf("updates[%d]: %w", update.index, err)
 	}
@@ -1602,7 +1751,7 @@ func mongoUpdateItemsCanUseBSONSet(col *collections.Collection, updates []mongoU
 }
 
 func mongoUpdateCanUseBSONSet(col *collections.Collection, update mongoUpdateItem) bool {
-	return col != nil && normalizedMongoUpdateDocumentFormat(col) == collections.DocumentFormatBSON && update.bsonSetFieldsOK
+	return col != nil && !update.upsert && normalizedMongoUpdateDocumentFormat(col) == collections.DocumentFormatBSON && update.bsonSetFieldsOK
 }
 
 func normalizedMongoUpdateDocumentFormat(col *collections.Collection) collections.DocumentFormat {
@@ -1617,6 +1766,9 @@ func normalizedMongoUpdateDocumentFormat(col *collections.Collection) collection
 }
 
 func mongoUpdateCanUseBatchMeta(meta collections.CollectionMeta, update mongoUpdateItem) bool {
+	if update.upsert {
+		return false
+	}
 	format := meta.Options.DocumentFormat
 	if format == collections.DocumentFormatDefault {
 		format = collections.DocumentFormatJSON
@@ -2397,12 +2549,20 @@ func (s *Server) killCursorsResponse(command wire.Document, cursorOwner int64) (
 	})
 }
 
-func marshalUpdateResponse(matched, modified int32) (wire.Document, error) {
-	return marshalDocument(bson.D{
+func marshalUpdateResponse(matched, modified int32, upserted ...[]mongoUpdateUpserted) (wire.Document, error) {
+	response := bson.D{
 		{Key: "ok", Value: 1.0},
 		{Key: "n", Value: matched},
 		{Key: "nModified", Value: modified},
-	})
+	}
+	if len(upserted) > 0 && len(upserted[0]) > 0 {
+		items := make(bson.A, len(upserted[0]))
+		for i, item := range upserted[0] {
+			items[i] = bson.D{{Key: "index", Value: int32(item.index)}, {Key: "_id", Value: item.id}}
+		}
+		response = append(response, bson.E{Key: "upserted", Value: items})
+	}
+	return marshalDocument(response)
 }
 
 func marshalDeleteResponse(deleted int32) (wire.Document, error) {
@@ -3528,6 +3688,20 @@ func applySetUpdate(doc wire.Document, update wire.Document) (wire.Document, boo
 	if err != nil {
 		return nil, false, err
 	}
+	return applySetFields(doc, sets, setOrder)
+}
+
+func applyBSONSetUpdate(doc wire.Document, fields []collections.BSONSetField) (wire.Document, bool, error) {
+	sets := make(map[string]bson.RawValue, len(fields))
+	setOrder := make([]string, 0, len(fields))
+	for _, field := range fields {
+		sets[field.Key] = field.Value
+		setOrder = append(setOrder, field.Key)
+	}
+	return applySetFields(doc, sets, setOrder)
+}
+
+func applySetFields(doc wire.Document, sets map[string]bson.RawValue, setOrder []string) (wire.Document, bool, error) {
 	if len(sets) == 0 {
 		return doc, false, nil
 	}
@@ -3566,6 +3740,246 @@ func applySetUpdate(doc wire.Document, update wire.Document) (wire.Document, boo
 		return nil, false, err
 	}
 	return wire.Document(raw), changed, nil
+}
+
+type mongoMutationField struct {
+	name  string
+	value bson.RawValue
+}
+
+type mongoMutation struct {
+	set, inc []mongoMutationField
+	unset    []string
+	replace  wire.Document
+}
+
+// parseMongoMutation is deliberately separate from the established $set path.
+func parseMongoMutation(update wire.Document) (mongoMutation, error) {
+	elements, err := bson.Raw(update).Elements()
+	if err != nil {
+		return mongoMutation{}, errors.New("Mongo gateway update must be a non-empty document")
+	}
+	if len(elements) == 0 {
+		if _, err := validateMongoReplacement(update); err != nil {
+			return mongoMutation{}, err
+		}
+		return mongoMutation{replace: update}, nil
+	}
+	first, err := elements[0].KeyErr()
+	if err != nil {
+		return mongoMutation{}, err
+	}
+	if !strings.HasPrefix(first, "$") {
+		for _, elem := range elements {
+			key, _ := elem.KeyErr()
+			if strings.HasPrefix(key, "$") {
+				return mongoMutation{}, errors.New("Mongo gateway update cannot mix replacement fields and operators")
+			}
+		}
+		if _, err := validateMongoReplacement(update); err != nil {
+			return mongoMutation{}, err
+		}
+		return mongoMutation{replace: update}, nil
+	}
+	mutation := mongoMutation{}
+	seen := make(map[string]struct{})
+	for _, elem := range elements {
+		op, err := elem.KeyErr()
+		if err != nil {
+			return mongoMutation{}, err
+		}
+		if op != "$set" && op != "$inc" && op != "$unset" {
+			return mongoMutation{}, fmt.Errorf("Mongo gateway unsupported update operator %q", op)
+		}
+		fields, ok := elem.Value().DocumentOK()
+		if !ok {
+			return mongoMutation{}, fmt.Errorf("Mongo gateway %s value must be a document", op)
+		}
+		items, err := fields.Elements()
+		if err != nil {
+			return mongoMutation{}, err
+		}
+		for _, item := range items {
+			name, err := item.KeyErr()
+			if err != nil {
+				return mongoMutation{}, err
+			}
+			if err := validateSetFieldName(name); err != nil {
+				return mongoMutation{}, err
+			}
+			if _, ok := seen[name]; ok {
+				return mongoMutation{}, fmt.Errorf("Mongo gateway update operators cannot target field %q more than once", name)
+			}
+			seen[name] = struct{}{}
+			value := item.Value()
+			if err := value.Validate(); err != nil {
+				return mongoMutation{}, err
+			}
+			switch op {
+			case "$set":
+				mutation.set = append(mutation.set, mongoMutationField{name, value})
+			case "$inc":
+				if !mongoMutationNumeric(value) {
+					return mongoMutation{}, fmt.Errorf("Mongo gateway $inc field %q must be numeric", name)
+				}
+				mutation.inc = append(mutation.inc, mongoMutationField{name, value})
+			case "$unset":
+				mutation.unset = append(mutation.unset, name)
+			}
+		}
+	}
+	return mutation, nil
+}
+
+func applyMongoMutation(doc wire.Document, mutation mongoMutation) (wire.Document, bool, error) {
+	if mutation.replace != nil {
+		return applyMongoReplacement(doc, mutation.replace)
+	}
+	set := make(map[string]bson.RawValue, len(mutation.set))
+	inc := make(map[string]bson.RawValue, len(mutation.inc))
+	unset := make(map[string]struct{}, len(mutation.unset))
+	for _, field := range mutation.set {
+		set[field.name] = field.value
+	}
+	for _, field := range mutation.inc {
+		inc[field.name] = field.value
+	}
+	for _, name := range mutation.unset {
+		unset[name] = struct{}{}
+	}
+	elements, err := bson.Raw(doc).Elements()
+	if err != nil {
+		return nil, false, err
+	}
+	out := make(bson.D, 0, len(elements)+len(set)+len(inc))
+	seen := make(map[string]struct{}, len(elements))
+	changed := false
+	for _, elem := range elements {
+		name, _ := elem.KeyErr()
+		value := elem.Value()
+		seen[name] = struct{}{}
+		if _, ok := unset[name]; ok {
+			changed = true
+			continue
+		}
+		if next, ok := set[name]; ok {
+			if !next.Equal(value) {
+				changed = true
+			}
+			value = next
+		}
+		if delta, ok := inc[name]; ok {
+			next, err := mongoMutationIncrement(value, delta)
+			if err != nil {
+				return nil, false, err
+			}
+			if !next.Equal(value) {
+				changed = true
+			}
+			value = next
+		}
+		out = append(out, bson.E{Key: name, Value: value})
+	}
+	for _, field := range mutation.set {
+		if _, ok := seen[field.name]; !ok {
+			out = append(out, bson.E{Key: field.name, Value: field.value})
+			changed = true
+		}
+	}
+	for _, field := range mutation.inc {
+		if _, ok := seen[field.name]; !ok {
+			out = append(out, bson.E{Key: field.name, Value: field.value})
+			changed = true
+		}
+	}
+	if !changed {
+		return doc, false, nil
+	}
+	raw, err := bson.Marshal(out)
+	return wire.Document(raw), true, err
+}
+
+func applyMongoReplacement(doc, replacement wire.Document) (wire.Document, bool, error) {
+	elements, err := validateMongoReplacement(replacement)
+	if err != nil {
+		return nil, false, err
+	}
+	oldID, newID := bson.Raw(doc).Lookup("_id"), bson.Raw(replacement).Lookup("_id")
+	if !newID.IsZero() && !newID.Equal(oldID) {
+		return nil, false, errors.New("Mongo gateway update cannot modify _id")
+	}
+	if !newID.IsZero() {
+		return replacement, !bytes.Equal(doc, replacement), nil
+	}
+	out := bson.D{{Key: "_id", Value: oldID}}
+	for _, elem := range elements {
+		key, _ := elem.KeyErr()
+		out = append(out, bson.E{Key: key, Value: elem.Value()})
+	}
+	raw, err := bson.Marshal(out)
+	return wire.Document(raw), !bytes.Equal(doc, raw), err
+}
+
+func validateMongoReplacement(replacement wire.Document) ([]bson.RawElement, error) {
+	elements, err := bson.Raw(replacement).Elements()
+	if err != nil {
+		return nil, err
+	}
+	for _, elem := range elements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			return nil, err
+		}
+		if key != "_id" {
+			if err := validateSetFieldName(key); err != nil {
+				return nil, err
+			}
+		}
+		if err := elem.Value().Validate(); err != nil {
+			return nil, err
+		}
+	}
+	return elements, nil
+}
+
+func mongoMutationNumeric(v bson.RawValue) bool {
+	return v.Type == bson.TypeInt32 || v.Type == bson.TypeInt64 || v.Type == bson.TypeDouble
+}
+func mongoMutationInt64(v bson.RawValue) int64 {
+	if n, ok := v.Int64OK(); ok {
+		return n
+	}
+	n, _ := v.Int32OK()
+	return int64(n)
+}
+func mongoMutationRaw(v any) (bson.RawValue, error) {
+	typ, raw, err := bson.MarshalValue(v)
+	return bson.RawValue{Type: typ, Value: raw}, err
+}
+func mongoMutationIncrement(value, delta bson.RawValue) (bson.RawValue, error) {
+	if !mongoMutationNumeric(value) {
+		return bson.RawValue{}, errors.New("Mongo gateway $inc target must be numeric and not null")
+	}
+	if value.Type == bson.TypeDouble || delta.Type == bson.TypeDouble {
+		a, _ := value.DoubleOK()
+		if value.Type != bson.TypeDouble {
+			a = float64(mongoMutationInt64(value))
+		}
+		b, _ := delta.DoubleOK()
+		if delta.Type != bson.TypeDouble {
+			b = float64(mongoMutationInt64(delta))
+		}
+		return mongoMutationRaw(a + b)
+	}
+	a, b := mongoMutationInt64(value), mongoMutationInt64(delta)
+	if (b > 0 && a > math.MaxInt64-b) || (b < 0 && a < math.MinInt64-b) {
+		return bson.RawValue{}, errors.New("Mongo gateway $inc overflow")
+	}
+	sum := a + b
+	if value.Type == bson.TypeInt32 && delta.Type == bson.TypeInt32 && sum >= math.MinInt32 && sum <= math.MaxInt32 {
+		return mongoMutationRaw(int32(sum))
+	}
+	return mongoMutationRaw(sum)
 }
 
 type createIndexDefinition struct {

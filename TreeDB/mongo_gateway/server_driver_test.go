@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -14,6 +15,53 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 )
+
+func TestStandaloneServerOfficialGoDriverBSONSetBinaryUpsert(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{
+		Dir:     t.TempDir(),
+		Profile: treedb.ProfileCommandWALDurable,
+		DefaultCollectionOptions: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatBSON,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open standalone: %v", err)
+	}
+	client, cancel, ln, serveErr := startStandaloneMongoClientForTest(t, standalone)
+	defer stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
+	opCtx, opCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer opCancel()
+	result, err := client.Database("app").Collection("users").UpdateOne(opCtx,
+		bson.D{{Key: "_id", Value: "binary-upsert"}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "payload", Value: bson.Binary{Subtype: 0x00, Data: []byte{1, 2, 3}}}}}},
+		options.UpdateOne().SetUpsert(true),
+	)
+	if err != nil {
+		t.Fatalf("driver BSON binary upsert: %v", err)
+	}
+	if result.MatchedCount != 0 || result.ModifiedCount != 0 || result.UpsertedCount != 1 || result.UpsertedID != "binary-upsert" {
+		t.Fatalf("binary upsert result=%+v", result)
+	}
+	result, err = client.Database("app").Collection("users").UpdateOne(opCtx,
+		bson.D{{Key: "_id", Value: "binary-upsert"}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "payload", Value: bson.Binary{Subtype: 0x00, Data: []byte{4, 5}}}}}},
+		options.UpdateOne().SetUpsert(true),
+	)
+	if err != nil {
+		t.Fatalf("driver BSON binary matched upsert: %v", err)
+	}
+	if result.MatchedCount != 1 || result.ModifiedCount != 1 || result.UpsertedCount != 0 {
+		t.Fatalf("matched binary upsert result=%+v", result)
+	}
+	var stored bson.Raw
+	if err := client.Database("app").Collection("users").FindOne(opCtx, bson.D{{Key: "_id", Value: "binary-upsert"}}).Decode(&stored); err != nil {
+		t.Fatalf("driver find binary upsert: %v", err)
+	}
+	subtype, payload := stored.Lookup("payload").Binary()
+	if subtype != 0x00 || string(payload) != string([]byte{4, 5}) {
+		t.Fatalf("driver binary payload subtype/data=%#x/%v", subtype, payload)
+	}
+}
 
 func TestServerOfficialGoDriverBasicCRUD(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
@@ -142,6 +190,51 @@ func TestServerOfficialGoDriverBasicCRUD(t *testing.T) {
 	}
 	if got["city"] != "London" {
 		t.Fatalf("decoded city=%v want London", got["city"])
+	}
+
+	mutationResult, err := coll.UpdateOne(opCtx,
+		bson.D{{Key: "_id", Value: id}},
+		bson.D{{Key: "$inc", Value: bson.D{{Key: "age", Value: int32(2)}}}, {Key: "$unset", Value: bson.D{{Key: "city", Value: true}}}},
+	)
+	if err != nil {
+		t.Fatalf("driver generic update one: %v", err)
+	}
+	if mutationResult.MatchedCount != 1 || mutationResult.ModifiedCount != 1 {
+		t.Fatalf("generic update matched=%d modified=%d want 1/1", mutationResult.MatchedCount, mutationResult.ModifiedCount)
+	}
+	replaceResult, err := coll.ReplaceOne(opCtx, bson.D{{Key: "_id", Value: id}}, bson.D{{Key: "name", Value: "grace"}, {Key: "age", Value: int64(40)}})
+	if err != nil {
+		t.Fatalf("driver replace one: %v", err)
+	}
+	if replaceResult.MatchedCount != 1 || replaceResult.ModifiedCount != 1 {
+		t.Fatalf("replace result matched=%d modified=%d want 1/1", replaceResult.MatchedCount, replaceResult.ModifiedCount)
+	}
+	got = nil
+	if err := coll.FindOne(opCtx, bson.D{{Key: "_id", Value: id}}).Decode(&got); err != nil {
+		t.Fatalf("driver find one after replacement: %v", err)
+	}
+	if got["name"] != "grace" || got["age"] != int64(40) {
+		t.Fatalf("replacement document=%v", got)
+	}
+	if _, ok := got["city"]; ok {
+		t.Fatalf("replacement retained city: %v", got)
+	}
+
+	upsertID := bson.NewObjectID()
+	upsertResult, err := coll.UpdateOne(opCtx, bson.D{{Key: "_id", Value: upsertID}}, bson.D{{Key: "$inc", Value: bson.D{{Key: "age", Value: int32(1)}}}}, options.UpdateOne().SetUpsert(true))
+	if err != nil {
+		t.Fatalf("driver modifier upsert: %v", err)
+	}
+	if upsertResult.MatchedCount != 0 || upsertResult.ModifiedCount != 0 || upsertResult.UpsertedCount != 1 || upsertResult.UpsertedID != upsertID {
+		t.Fatalf("modifier upsert result=%+v want inserted %v", upsertResult, upsertID)
+	}
+	replacementID := bson.NewObjectID()
+	replacementUpsert, err := coll.ReplaceOne(opCtx, bson.D{{Key: "_id", Value: replacementID}}, bson.D{{Key: "name", Value: "upserted"}}, options.Replace().SetUpsert(true))
+	if err != nil {
+		t.Fatalf("driver replacement upsert: %v", err)
+	}
+	if replacementUpsert.MatchedCount != 0 || replacementUpsert.ModifiedCount != 0 || replacementUpsert.UpsertedCount != 1 || replacementUpsert.UpsertedID != replacementID {
+		t.Fatalf("replacement upsert result=%+v want inserted %v", replacementUpsert, replacementID)
 	}
 
 	deleteResult, err := coll.DeleteOne(opCtx, bson.D{{Key: "_id", Value: id}})

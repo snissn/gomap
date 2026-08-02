@@ -66,9 +66,11 @@ block drifts from the executable matrix rows.
 | metadata | createIndexes, listIndexes, and dropIndexes | supported subset |
 | document | native BSON storage mode | supported subset |
 | query gap | dotted projection | rejected |
-| update gap | upsert | rejected |
+| update | exact _id upsert | supported subset |
 | update gap | multi update | rejected |
-| update gap | $inc | rejected |
+| update | $inc | supported subset |
+| update | $unset | supported subset |
+| update | ReplaceOne by exact _id | supported subset |
 | index gap | compound index | rejected |
 | index gap | index without treedbValueType | rejected |
 | command gap | aggregate | not implemented |
@@ -228,11 +230,12 @@ implemented.
 
 | Surface | Status | Harness / evidence | Current gap |
 |---|---|---|---|
-| `updateOne` by `_id` with `$set` | `supported subset` | `TestMongoCompatibilityMatrix` | Top-level fields only; `_id` mutation rejected. |
-| Batched distinct-ID `$set` updates | `supported subset` | update batch tests | Unique-index conflicts may fall back to ordered singles. |
+| `updateOne` / `ReplaceOne` by exact `_id` | `supported subset` | `TestMongoCompatibilityMatrix`, direct-wire and driver update tests | Standalone BSON/JSON/template-v1 only. Modifiers are top-level `$set`/`$inc`/`$unset`; replacement documents preserve an omitted `_id`, allow the same `_id`, and reject a changed `_id`. |
+| Batched distinct-ID `$set` updates | `supported subset` | update batch tests | Unique-index conflicts may fall back to ordered singles; generic/replacement updates stay ordered. |
 | `multi: true` | `rejected` | `TestMongoCompatibilityMatrix` | No multi-update planner. |
-| `upsert: true` | `rejected` | `TestMongoCompatibilityMatrix` | No upsert semantics. |
-| `$inc`, `$unset`, `$push`, pipeline updates | `rejected` / `not implemented` | `TestMongoCompatibilityMatrix` covers `$inc` rejection | Only `$set` is implemented. |
+| Exact-`_id` `upsert: true` | `supported subset` | `TestMongoCompatibilityMatrix`, direct-wire and driver upsert tests | Modifier and replacement upserts return `n: 1`, `nModified: 0`, and typed `upserted` entries; cluster/routed upserts are rejected. |
+| Top-level `$set`, `$inc`, `$unset` | `supported subset` | `TestMongoCompatibilityMatrix`, mutation tests | `$inc` supports int32/int64/double only; null/non-numeric targets reject. Dotted fields, `$push`, pipelines, and other operators are rejected. |
+| Cluster/routed generic, replacement, and upsert updates | `rejected` | cluster submitter tests | Only existing standalone semantics are supported; cluster accepts its native BSON `$set` route only. |
 | `delete` by `_id`, limit `0` or `1` | `supported subset` | `TestMongoCompatibilityMatrix` | Non-`_id` filters rejected. |
 
 ## BSON And Storage Matrix
