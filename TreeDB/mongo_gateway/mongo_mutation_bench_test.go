@@ -20,6 +20,24 @@ func BenchmarkRawValuesEqualWideDocument(b *testing.B) {
 	}
 }
 
+func BenchmarkParseMongoMutationWideEachReject(b *testing.B) {
+	values := make(bson.A, 4096)
+	for i := range values {
+		values[i] = true
+	}
+	update, err := bson.Marshal(bson.D{{Key: "$push", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: values}}}}}})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := parseMongoMutation(update); err == nil {
+			b.Fatal("accepted over-limit $each")
+		}
+	}
+}
+
 func BenchmarkApplyMongoMutationInc(b *testing.B) {
 	doc, err := bson.Marshal(bson.D{{Key: "_id", Value: "benchmark-user"}, {Key: "count", Value: int64(41)}})
 	if err != nil {

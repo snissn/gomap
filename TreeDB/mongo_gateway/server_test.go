@@ -5925,6 +5925,133 @@ func TestMongoMutationBSONNestingLimit(t *testing.T) {
 	}
 }
 
+func TestMongoMutationRejectsResultBeyondBSONNestingLimit(t *testing.T) {
+	doc := mustDocument(t, bson.D{{Key: "existing", Value: int32(1)}})
+	before := append(wire.Document(nil), doc...)
+	boundary, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "deep", Value: deeplyNestedRawDocumentValue(mongoMutationMaxBSONNesting-2, int32(1))}}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := applyMongoMutation(doc, boundary); err != nil || !changed {
+		t.Fatalf("boundary result changed=%v err=%v", changed, err)
+	}
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{
+		{Key: "marker", Value: true},
+		{Key: "deep", Value: deeplyNestedRawDocumentValue(mongoMutationMaxBSONNesting-1, int32(1))},
+	}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || changed || !bytes.Equal(doc, before) {
+		t.Fatalf("over-limit result changed=%v err=%v", changed, err)
+	}
+}
+
+func TestMongoMutationRejectsWideEachBeforeMaterialization(t *testing.T) {
+	small := mongoMutationEachUpdate(t, mongoMutationMaxEachValues+1)
+	wide := mongoMutationEachUpdate(t, 4096)
+	if _, err := parseMongoMutation(wide); err == nil {
+		t.Fatal("accepted wide $each")
+	}
+	smallAllocs := testing.AllocsPerRun(100, func() {
+		if _, err := parseMongoMutation(small); err == nil {
+			t.Fatal("accepted over-limit $each")
+		}
+	})
+	wideAllocs := testing.AllocsPerRun(100, func() {
+		if _, err := parseMongoMutation(wide); err == nil {
+			t.Fatal("accepted wide $each")
+		}
+	})
+	if wideAllocs > smallAllocs+8 {
+		t.Fatalf("wide $each allocations=%f small=%f want bounded", wideAllocs, smallAllocs)
+	}
+}
+
+func TestMongoUpdateItemRejectsWideTargetsBeforeMaterialization(t *testing.T) {
+	fields := bson.D{}
+	for i := 0; i < 4096; i++ {
+		fields = append(fields, bson.E{Key: fmt.Sprintf("field%d", i), Value: true})
+	}
+	item := mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: fields}}},
+	})
+	if _, err := parseMongoUpdateItem(0, item); err == nil {
+		t.Fatal("accepted wide target set")
+	}
+	nearLimit := bson.D{}
+	for i := 0; i < mongoMutationMaxTargets+1; i++ {
+		nearLimit = append(nearLimit, bson.E{Key: fmt.Sprintf("field%d", i), Value: true})
+	}
+	nearItem := mustDocument(t, bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: nearLimit}}}})
+	nearAllocs := testing.AllocsPerRun(100, func() {
+		if _, err := parseMongoUpdateItem(0, nearItem); err == nil {
+			t.Fatal("accepted over-limit target set")
+		}
+	})
+	wideAllocs := testing.AllocsPerRun(100, func() {
+		if _, err := parseMongoUpdateItem(0, item); err == nil {
+			t.Fatal("accepted wide target set")
+		}
+	})
+	if wideAllocs > nearAllocs+8 {
+		t.Fatalf("wide target allocations=%f near=%f want bounded", wideAllocs, nearAllocs)
+	}
+}
+
+func TestServerUpdateRejectsWideMutationOperandsBeforeAnyChange(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 1, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "items", Value: bson.A{"old"}}}}},
+		{Key: "$db", Value: "app"},
+	}))
+	wideEach := make(bson.A, 4096)
+	for i := range wideEach {
+		wideEach[i] = true
+	}
+	deep := deeplyNestedRawDocumentValue(mongoMutationMaxBSONNesting-1, int32(1))
+	for requestID, update := range []bson.D{
+		{{Key: "$set", Value: bson.D{{Key: "marker", Value: "wide"}}}, {Key: "$push", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: wideEach}}}}}},
+		{{Key: "$set", Value: bson.D{{Key: "marker", Value: "deep"}, {Key: "deep", Value: deep}}}},
+	} {
+		response := serveCommand(t, server, int32(requestID+2), bson.D{
+			{Key: "update", Value: "users"},
+			{Key: "updates", Value: bson.A{bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+				{Key: "u", Value: update},
+			}}},
+			{Key: "$db", Value: "app"},
+		})
+		assertCommandError(t, response, "BadValue")
+	}
+	find := serveCommand(t, server, 4, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	doc := cursorFirstBatch(t, find)[0]
+	if !doc.Lookup("marker").IsZero() || !doc.Lookup("deep").IsZero() {
+		t.Fatalf("rejected update changed document: %v", doc)
+	}
+	items, err := doc.Lookup("items").Array().Values()
+	if err != nil || len(items) != 1 || items[0].StringValue() != "old" {
+		t.Fatalf("rejected update changed array: values=%v err=%v", items, err)
+	}
+}
+
+func mongoMutationEachUpdate(t *testing.T, count int) wire.Document {
+	t.Helper()
+	values := make(bson.A, count)
+	for i := range values {
+		values[i] = true
+	}
+	return mustDocument(t, bson.D{{Key: "$push", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: values}}}}}})
+}
+
 func TestMongoUpdateItemRejectsDeepPureSetBeforeApplication(t *testing.T) {
 	doc := mustDocument(t, bson.D{{Key: "existing", Value: int32(1)}})
 	before := append(wire.Document(nil), doc...)
