@@ -6724,6 +6724,37 @@ func TestIndexRangeOptionsForPredicatesHandlesDoubleBounds(t *testing.T) {
 	}
 }
 
+func TestIndexedEqualityCandidateLimitOnlyForPureSingleEquality(t *testing.T) {
+	idx := collections.IndexDefinition{Name: "city_1", Field: "city", ValueType: collections.IndexValueString}
+	limit, ok := indexedEqualityCandidateLimit(findPlan{
+		predicates: []findPredicate{{field: "city", op: findPredicateEq, values: []bson.RawValue{mustRawValue(t, "hnl")}}},
+		limit:      1,
+	}, idx, 1)
+	if !ok || limit != 1 {
+		t.Fatalf("pure equality candidate limit=%d ok=%v want 1,true", limit, ok)
+	}
+
+	limit, ok = indexedEqualityCandidateLimit(findPlan{
+		predicates: []findPredicate{{field: "city", op: findPredicateEq, values: []bson.RawValue{mustRawValue(t, "hnl")}}},
+		skip:       1,
+		limit:      1,
+	}, idx, 1)
+	if !ok || limit != 2 {
+		t.Fatalf("over-cap equality candidate limit=%d ok=%v want overflow slot 2,true", limit, ok)
+	}
+
+	_, ok = indexedEqualityCandidateLimit(findPlan{
+		predicates: []findPredicate{
+			{field: "city", op: findPredicateEq, values: []bson.RawValue{mustRawValue(t, "hnl")}},
+			{field: "active", op: findPredicateEq, values: []bson.RawValue{mustRawValue(t, true)}},
+		},
+		limit: 1,
+	}, idx, 1)
+	if ok {
+		t.Fatal("mixed equality predicates should not use page candidate limit")
+	}
+}
+
 func TestIndexedRangeCandidateLimitOnlyForPureSameFieldRange(t *testing.T) {
 	idx := collections.IndexDefinition{Name: "age_1", Field: "age", ValueType: collections.IndexValueInt64}
 	limit, ok := indexedRangeCandidateLimit(findPlan{

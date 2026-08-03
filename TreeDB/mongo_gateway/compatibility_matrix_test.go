@@ -728,6 +728,21 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
+			category: "read command gap",
+			feature:  "maxTimeMS on aggregate/count/distinct",
+			status:   "rejected",
+			probe: func(t *testing.T, server *Server) {
+				commands := []bson.D{
+					{{Key: "aggregate", Value: "users"}, {Key: "pipeline", Value: bson.A{}}, {Key: "cursor", Value: bson.D{}}, {Key: "maxTimeMS", Value: int64(1)}, {Key: "$db", Value: "app"}},
+					{{Key: "count", Value: "users"}, {Key: "maxTimeMS", Value: int64(1)}, {Key: "$db", Value: "app"}},
+					{{Key: "distinct", Value: "users"}, {Key: "key", Value: "city"}, {Key: "maxTimeMS", Value: int64(1)}, {Key: "$db", Value: "app"}},
+				}
+				for i, command := range commands {
+					assertCommandError(t, serveCommand(t, server, int32(262+i), command), "BadValue")
+				}
+			},
+		},
+		{
 			category: "update subset",
 			feature:  "findAndModify exact _id no-match",
 			status:   "supported subset",

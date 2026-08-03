@@ -539,7 +539,7 @@ func validateAggregateCursor(cursor wire.Document) error {
 
 func validateMongoReadCommandFields(command wire.Document, commandName string, commandFields map[string]struct{}) error {
 	common := map[string]struct{}{
-		"$db": {}, "lsid": {}, "$readPreference": {}, "maxTimeMS": {},
+		"$db": {}, "lsid": {}, "$readPreference": {},
 	}
 	elements, err := bson.Raw(command).Elements()
 	if err != nil {
@@ -551,12 +551,6 @@ func validateMongoReadCommandFields(command wire.Document, commandName string, c
 			continue
 		}
 		if _, ok := common[key]; ok {
-			if key == "maxTimeMS" {
-				value, ok := strictBSONInt64(element.Value())
-				if !ok || value < 0 {
-					return fmt.Errorf("Mongo gateway %s maxTimeMS must be a non-negative integer", commandName)
-				}
-			}
 			continue
 		}
 		return fmt.Errorf("Mongo gateway %s does not support option %q", commandName, key)

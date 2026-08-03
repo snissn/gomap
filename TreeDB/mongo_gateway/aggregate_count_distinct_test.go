@@ -111,16 +111,19 @@ func TestStandaloneServerOfficialGoDriverAggregateCountDistinct(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
-	if got, err := coll.CountDocuments(ctx, bson.D{{Key: "active", Value: true}}); err != nil || got != 2 {
+	// A deadline makes the v2 driver send maxTimeMS, which this bounded subset
+	// rejects until server-side deadline enforcement is implemented.
+	readCtx := context.Background()
+	if got, err := coll.CountDocuments(readCtx, bson.D{{Key: "active", Value: true}}); err != nil || got != 2 {
 		t.Fatalf("CountDocuments=%d err=%v want 2", got, err)
 	}
-	if got, err := coll.CountDocuments(ctx, bson.D{}, options.Count().SetSkip(1).SetLimit(1)); err != nil || got != 1 {
+	if got, err := coll.CountDocuments(readCtx, bson.D{}, options.Count().SetSkip(1).SetLimit(1)); err != nil || got != 1 {
 		t.Fatalf("CountDocuments skip/limit=%d err=%v want 1", got, err)
 	}
-	if got, err := coll.EstimatedDocumentCount(ctx); err != nil || got != 3 {
+	if got, err := coll.EstimatedDocumentCount(readCtx); err != nil || got != 3 {
 		t.Fatalf("EstimatedDocumentCount=%d err=%v want 3", got, err)
 	}
-	values, err := coll.Distinct(ctx, "city", bson.D{}).Raw()
+	values, err := coll.Distinct(readCtx, "city", bson.D{}).Raw()
 	if err != nil {
 		t.Fatalf("Distinct: %v", err)
 	}
@@ -128,16 +131,16 @@ func TestStandaloneServerOfficialGoDriverAggregateCountDistinct(t *testing.T) {
 	if err != nil || len(distinctValues) != 2 || distinctValues[0].StringValue() != "hnl" || distinctValues[1].StringValue() != "sfo" {
 		t.Fatalf("Distinct values=%v err=%v want [hnl sfo]", distinctValues, err)
 	}
-	cursor, err := coll.Aggregate(ctx, bson.A{
+	cursor, err := coll.Aggregate(readCtx, bson.A{
 		bson.D{{Key: "$match", Value: bson.D{{Key: "active", Value: true}}}},
 		bson.D{{Key: "$count", Value: "n"}},
 	})
 	if err != nil {
 		t.Fatalf("Aggregate: %v", err)
 	}
-	defer func() { _ = cursor.Close(ctx) }()
+	defer func() { _ = cursor.Close(readCtx) }()
 	var result []bson.M
-	if err := cursor.All(ctx, &result); err != nil || len(result) != 1 || result[0]["n"] != int64(2) {
+	if err := cursor.All(readCtx, &result); err != nil || len(result) != 1 || result[0]["n"] != int64(2) {
 		t.Fatalf("Aggregate result=%v err=%v want n=2", result, err)
 	}
 }
@@ -291,9 +294,18 @@ func TestMongoAggregateCountDistinctRejectUnsupportedSurface(t *testing.T) {
 			{Key: "$db", Value: "app"},
 		}},
 		{name: "count option", command: bson.D{{Key: "count", Value: "users"}, {Key: "hint", Value: "_id_"}, {Key: "$db", Value: "app"}}},
+		{name: "count max time", command: bson.D{{Key: "count", Value: "users"}, {Key: "maxTimeMS", Value: int64(1)}, {Key: "$db", Value: "app"}}},
 		{name: "distinct empty", command: bson.D{{Key: "distinct", Value: "users"}, {Key: "key", Value: ""}, {Key: "$db", Value: "app"}}, want: "FailedToParse"},
 		{name: "distinct dotted", command: bson.D{{Key: "distinct", Value: "users"}, {Key: "key", Value: "profile.city"}, {Key: "$db", Value: "app"}}},
 		{name: "distinct option", command: bson.D{{Key: "distinct", Value: "users"}, {Key: "key", Value: "city"}, {Key: "collation", Value: bson.D{}}, {Key: "$db", Value: "app"}}},
+		{name: "distinct max time", command: bson.D{{Key: "distinct", Value: "users"}, {Key: "key", Value: "city"}, {Key: "maxTimeMS", Value: int64(1)}, {Key: "$db", Value: "app"}}},
+		{name: "aggregate max time", command: bson.D{
+			{Key: "aggregate", Value: "users"},
+			{Key: "pipeline", Value: bson.A{}},
+			{Key: "cursor", Value: bson.D{}},
+			{Key: "maxTimeMS", Value: int64(1)},
+			{Key: "$db", Value: "app"},
+		}},
 	}
 	for i, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -354,6 +366,18 @@ func TestMongoAggregateCountDistinctEnforceScanBounds(t *testing.T) {
 		{Key: "$db", Value: "app"},
 	})
 	assertBatchIDs(t, cursorFirstBatch(t, matchedLimited), []string{"u1"})
+	indexed := newMongoCompatibilityMatrixServer(t)
+	indexed.MaxFindScanDocuments = 1
+	indexedMatchedLimited := serveCommand(t, indexed, 2111, bson.D{
+		{Key: "aggregate", Value: "users"},
+		{Key: "pipeline", Value: bson.A{
+			bson.D{{Key: "$match", Value: bson.D{{Key: "city", Value: "hnl"}}}},
+			bson.D{{Key: "$limit", Value: int32(1)}},
+		}},
+		{Key: "cursor", Value: bson.D{}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, indexedMatchedLimited), []string{"u1"})
 	skippedLimited := serveCommand(t, server, 212, bson.D{
 		{Key: "aggregate", Value: "users"},
 		{Key: "pipeline", Value: bson.A{
