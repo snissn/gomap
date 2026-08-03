@@ -57,6 +57,7 @@ type m8QualificationIndexSummaryV1 struct {
 }
 
 const m8QualificationFrozenBaseSHAV1 = "03e7a26e56100964f14f603f0248a1a6ccc50a68"
+const m8QualificationRouterCandidatesV1 = 256
 
 type m8QualificationCampaignSummaryV1 struct {
 	ExecutableSHA256 string  `json:"executable_sha256"`
@@ -450,7 +451,7 @@ func m8QualificationFixtureV1(candidate fixtureManifest) bool {
 }
 
 func m8QualificationConfigV1(cfg m8ProductionConfigEvidenceV1, fixture fixtureManifest, overlap float64, _ int) bool {
-	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterCandidates == 64 && cfg.MaxExactTruthVisits == m8QualificationExactTruthCapV1(fixture) && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, []int{1, 2, 4, 8, 16}) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{64}) && slices.Equal(cfg.Overlap, []float64{overlap})
+	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterCandidates == m8QualificationRouterCandidatesV1 && cfg.MaxExactTruthVisits == m8QualificationExactTruthCapV1(fixture) && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, []int{1, 2, 4, 8, 16}) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{64}) && slices.Equal(cfg.Overlap, []float64{overlap})
 }
 
 func m8QualificationTrustedTruthCacheV1(root string, report m8ProductionReportV1) error {
@@ -1059,15 +1060,13 @@ func m8ValidateQualificationSerialIntervalsV1(intervals []m8QualificationRunInte
 func m8QualificationHasFullLadderV1(report m8ProductionReportV1) bool {
 	seen := make(map[int]bool, 5)
 	for _, row := range report.Rows {
-		if m8QualificationQualifiedRowV1(row) {
-			seen[row.Probes] = true
-		}
+		seen[row.Probes] = true
 	}
 	return seen[1] && seen[2] && seen[4] && seen[8] && seen[16]
 }
 
 func m8QualificationQualifiedRowV1(row m8ProductionRowV1) bool {
-	return row.Status == "pass" && row.EfSearch == 64 && row.Concurrency == 1 && row.RouterMode == collections.VectorPartitionRouterModeApproxV1 && row.RouterCandidates == 64 && row.Attribution.OracleStagesComplete
+	return row.Status == "pass" && row.EfSearch == 64 && row.Concurrency == 1 && row.RouterMode == collections.VectorPartitionRouterModeApproxV1 && row.RouterCandidates == m8QualificationRouterCandidatesV1 && row.Attribution.OracleStagesComplete
 }
 
 func m8QualificationSHA256V1(value string) bool {
