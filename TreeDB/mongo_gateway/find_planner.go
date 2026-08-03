@@ -1792,7 +1792,7 @@ func mongoMutationValuesEqual(left, right bson.RawValue) bool {
 }
 
 func rawValuesEqualMode(left, right bson.RawValue, equalNaN bool) bool {
-	if rawValuesBothScalar(left, right) {
+	if left.Type != bson.TypeCodeWithScope && right.Type != bson.TypeCodeWithScope && rawValuesBothScalar(left, right) {
 		return rawScalarValuesEqualMode(left, right, equalNaN)
 	}
 	type frame struct {
@@ -1803,6 +1803,19 @@ func rawValuesEqualMode(left, right bson.RawValue, equalNaN bool) bool {
 	frames := make([]frame, 0, 8)
 	for {
 		if !currentLeft.IsZero() || !currentRight.IsZero() {
+			if currentLeft.Type == bson.TypeCodeWithScope || currentRight.Type == bson.TypeCodeWithScope {
+				if currentLeft.Type != bson.TypeCodeWithScope || currentRight.Type != bson.TypeCodeWithScope {
+					return false
+				}
+				leftCode, leftScope, leftRemaining, leftOK := bsoncore.ReadCodeWithScope(currentLeft.Value)
+				rightCode, rightScope, rightRemaining, rightOK := bsoncore.ReadCodeWithScope(currentRight.Value)
+				if !leftOK || !rightOK || len(leftRemaining) != 0 || len(rightRemaining) != 0 || leftCode != rightCode {
+					return false
+				}
+				currentLeft = bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: leftScope}
+				currentRight = bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: rightScope}
+				continue
+			}
 			if rawValuesBothScalar(currentLeft, currentRight) {
 				if !rawScalarValuesEqualMode(currentLeft, currentRight, equalNaN) {
 					return false

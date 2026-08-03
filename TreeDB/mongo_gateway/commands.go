@@ -1828,11 +1828,23 @@ func mongoUpdateCanUseBSONSet(col *collections.Collection, update mongoUpdateIte
 
 func mongoBSONSetFieldsNeedNestingValidation(fields []collections.BSONSetField) bool {
 	for _, field := range fields {
-		if field.Value.Type == bson.TypeEmbeddedDocument || field.Value.Type == bson.TypeArray || field.Value.Type == bson.TypeCodeWithScope {
+		if !mongoBSONSetFieldFitsResultNesting(field.Value) {
 			return true
 		}
 	}
 	return false
+}
+
+// mongoBSONSetFieldFitsResultNesting accounts for the document root added by
+// the structured BSON-set path without routing ordinary shallow containers.
+func mongoBSONSetFieldFitsResultNesting(value bson.RawValue) bool {
+	if _, container := mongoMutationDecodeContainer(value); !container {
+		return true
+	}
+	index, doc := bsoncore.AppendDocumentStart(nil)
+	doc = bsoncore.AppendValueElement(doc, "v", bsoncore.Value{Type: bsoncore.Type(value.Type), Data: value.Value})
+	doc, _ = bsoncore.AppendDocumentEnd(doc, index)
+	return validateMongoMutationRawNesting(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: doc}) == nil
 }
 
 func normalizedMongoUpdateDocumentFormat(col *collections.Collection) collections.DocumentFormat {

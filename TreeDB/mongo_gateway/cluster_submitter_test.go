@@ -1941,7 +1941,7 @@ func TestMongoGroupRoutedDispatcherRemoteOwnerErrorsForMutations(t *testing.T) {
 		{Key: "update", Value: "users"},
 		{Key: "updates", Value: bson.A{bson.D{
 			{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
-			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Grace"}}}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Grace"}, {Key: "profile", Value: bson.D{{Key: "city", Value: "HNL"}}}, {Key: "tags", Value: bson.A{"a"}}}}}},
 		}}},
 		{Key: "$db", Value: "app"},
 	})

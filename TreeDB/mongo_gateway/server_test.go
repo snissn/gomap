@@ -1060,6 +1060,19 @@ func TestMongoBSONSetFieldsNeedNestingValidationCodeWithScope(t *testing.T) {
 	}
 }
 
+func TestMongoMutationValuesEqualCodeWithScopeScopes(t *testing.T) {
+	value := func(number any) bson.RawValue {
+		scope := mustDocument(t, bson.D{{Key: "n", Value: number}})
+		return bson.RawValue{Type: bson.TypeCodeWithScope, Value: bsoncore.AppendCodeWithScope(nil, "return n", scope)}
+	}
+	if !mongoMutationValuesEqual(value(int32(1)), value(int64(1))) {
+		t.Fatal("CodeWithScope numeric-equivalent scopes differ")
+	}
+	if mongoMutationValuesEqual(value(int32(1)), bson.RawValue{Type: bson.TypeCodeWithScope, Value: bsoncore.AppendCodeWithScope(nil, "return other", mustDocument(t, bson.D{{Key: "n", Value: int32(1)}}))}) {
+		t.Fatal("different code strings compare equal")
+	}
+}
+
 func TestServerBSONSetUpsertAllowsNativeBinaryValues(t *testing.T) {
 	for _, format := range []collections.DocumentFormat{collections.DocumentFormatBSON, collections.DocumentFormatJSON, collections.DocumentFormatTemplateV1} {
 		t.Run(string(format), func(t *testing.T) {
