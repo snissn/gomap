@@ -4187,8 +4187,35 @@ func TestWriteResultKeepsTextHeaderStableForIndexedUpdateKnob(t *testing.T) {
 	}
 }
 
+func TestRecordMongoGatewayCapabilityMetadataOmitsNonGatewayTargets(t *testing.T) {
+	tests := []benchmarkResult{
+		{Target: "mongo", ClientMode: clientModeDriver},
+		{Target: "treedb", ClientMode: clientModeDirect},
+	}
+	for _, result := range tests {
+		result := result
+		recordMongoGatewayCapabilityMetadata(&result)
+		if result.MongoGatewayCapabilitySchema != "" || result.MongoGatewayCapabilityVersion != 0 || result.MongoGatewayCapabilityIdentity != "" {
+			t.Fatalf("target=%q client_mode=%q unexpectedly labeled with gateway capability metadata: %+v", result.Target, result.ClientMode, result)
+		}
+		var out bytes.Buffer
+		if err := writeResult(&out, "json", &result); err != nil {
+			t.Fatalf("write JSON result: %v", err)
+		}
+		for _, key := range []string{
+			"mongo_gateway_capability_schema",
+			"mongo_gateway_capability_version",
+			"mongo_gateway_capability_identity",
+		} {
+			if strings.Contains(out.String(), `"`+key+`"`) {
+				t.Fatalf("target=%q client_mode=%q JSON unexpectedly contains %q: %s", result.Target, result.ClientMode, key, out.String())
+			}
+		}
+	}
+}
+
 func TestRecordMongoGatewayCapabilityMetadata(t *testing.T) {
-	result := &benchmarkResult{}
+	result := &benchmarkResult{Target: "treedb", ClientMode: clientModeDriver}
 	recordMongoGatewayCapabilityMetadata(result)
 	if result.MongoGatewayCapabilitySchema != mongogateway.MongoGatewayCapabilitySchema {
 		t.Fatalf("schema=%q want %q", result.MongoGatewayCapabilitySchema, mongogateway.MongoGatewayCapabilitySchema)

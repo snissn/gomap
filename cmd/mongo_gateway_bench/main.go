@@ -122,9 +122,9 @@ type config struct {
 }
 
 type benchmarkResult struct {
-	MongoGatewayCapabilitySchema   string                   `json:"mongo_gateway_capability_schema"`
-	MongoGatewayCapabilityVersion  int                      `json:"mongo_gateway_capability_version"`
-	MongoGatewayCapabilityIdentity string                   `json:"mongo_gateway_capability_identity"`
+	MongoGatewayCapabilitySchema   string                   `json:"mongo_gateway_capability_schema,omitempty"`
+	MongoGatewayCapabilityVersion  int                      `json:"mongo_gateway_capability_version,omitempty"`
+	MongoGatewayCapabilityIdentity string                   `json:"mongo_gateway_capability_identity,omitempty"`
 	Target                         string                   `json:"target"`
 	MongoURI                       string                   `json:"mongo_uri,omitempty"`
 	MongoCompact                   bool                     `json:"mongo_compact,omitempty"`
@@ -198,6 +198,12 @@ type benchmarkResult struct {
 
 func recordMongoGatewayCapabilityMetadata(result *benchmarkResult) {
 	if result == nil {
+		return
+	}
+	result.MongoGatewayCapabilitySchema = ""
+	result.MongoGatewayCapabilityVersion = 0
+	result.MongoGatewayCapabilityIdentity = ""
+	if result.Target != "treedb" || result.ClientMode == clientModeDirect {
 		return
 	}
 	result.MongoGatewayCapabilitySchema = mongogateway.MongoGatewayCapabilitySchema
@@ -7529,8 +7535,10 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 			result.ConcurrentWriters, result.ConcurrentWriterSweep, result.ConcurrentWrites, result.TreeDBReadState)
 		fmt.Fprintf(out, "update_indexed_field=%t\n", result.UpdateIndexedField)
 		fmt.Fprintf(out, "range_index=%t\n", result.RangeIndex)
-		fmt.Fprintf(out, "mongo_gateway_capability_schema=%s mongo_gateway_capability_version=%d mongo_gateway_capability_identity=%s\n",
-			result.MongoGatewayCapabilitySchema, result.MongoGatewayCapabilityVersion, result.MongoGatewayCapabilityIdentity)
+		if result.MongoGatewayCapabilityIdentity != "" {
+			fmt.Fprintf(out, "mongo_gateway_capability_schema=%s mongo_gateway_capability_version=%d mongo_gateway_capability_identity=%s\n",
+				result.MongoGatewayCapabilitySchema, result.MongoGatewayCapabilityVersion, result.MongoGatewayCapabilityIdentity)
+		}
 		fmt.Fprintf(out, "route_mode=%s", result.RouteMode)
 		if result.RouteMode == routeModeRing || result.RouteMode == routeModeProduction {
 			fmt.Fprintf(out, " route_groups=%d route_partitions=%d", result.RouteGroupCount, result.RoutePartitionCount)

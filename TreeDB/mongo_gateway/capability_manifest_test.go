@@ -45,6 +45,15 @@ func TestMongoGatewayCapabilityManifestRejectsMissingProbe(t *testing.T) {
 	}
 }
 
+func TestMongoGatewayCapabilityManifestRejectsProbeStatusDrift(t *testing.T) {
+	manifest := MongoGatewayCapabilities()
+	probes := mongoCompatibilityMatrixProbes()
+	manifest.Capabilities[0].Status = MongoCapabilityRejected
+	if err := validateMongoCompatibilityProbes(manifest, probes); err == nil || !strings.Contains(err.Error(), "does not match executable probe status") {
+		t.Fatalf("status drift validation err=%v want executable probe status mismatch", err)
+	}
+}
+
 func TestMongoGatewayAdvertisedMetadataMatchesManifest(t *testing.T) {
 	manifest := MongoGatewayCapabilities()
 	advertised := manifest.Advertised
