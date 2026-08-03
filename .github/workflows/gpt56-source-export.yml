@@ -1,9 +1,6 @@
-name: GPT-5.6 source export bootstrap
+name: GPT-5.6 source and toolchain export bootstrap
 
 on:
-  push:
-    branches:
-      - gpt56/issue-4052-capability-manifest
   pull_request:
     branches:
       - main
@@ -12,18 +9,30 @@ permissions:
   contents: read
 
 jobs:
-  export-source:
+  export-source-and-toolchain:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - name: Package exact source
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
+          cache: false
+      - name: Verify and package exact source and toolchain
         run: |
+          test "$(go env GOVERSION)" = go1.26.0
           tar --exclude=.git -czf /tmp/gomap-source.tgz .
+          tar -C "$(go env GOROOT)" -czf /tmp/go1.26.0-linux-amd64.tgz .
       - uses: actions/upload-artifact@v4
         with:
           name: gomap-source-${{ github.sha }}
           path: /tmp/gomap-source.tgz
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go1.26.0-linux-amd64
+          path: /tmp/go1.26.0-linux-amd64.tgz
           if-no-files-found: error
           retention-days: 1
