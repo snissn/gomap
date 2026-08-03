@@ -1,15 +1,16 @@
 name: GPT-5.6 issue 4061 self-apply
 
 on:
-  push:
+  pull_request:
     branches:
-      - gpt56/issue-4061-bson-index-codec
+      - main
 
 permissions:
   contents: write
 
 jobs:
   apply-test-publish:
+    if: github.head_ref == 'gpt56/issue-4061-bson-index-codec'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
