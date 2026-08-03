@@ -1,19 +1,21 @@
 name: GPT-5.6 issue 4052 exact source export
 
 on:
-  push:
+  pull_request:
     branches:
-      - gpt56/issue-4052-capability-manifest
+      - main
 
 permissions:
   contents: read
 
 jobs:
   export-source:
+    if: github.head_ref == 'gpt56/issue-4052-capability-manifest'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.head_ref }}
           fetch-depth: 1
       - name: Package exact branch source
         run: |
