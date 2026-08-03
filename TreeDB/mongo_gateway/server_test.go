@@ -1073,6 +1073,17 @@ func TestMongoMutationValuesEqualCodeWithScopeScopes(t *testing.T) {
 	}
 }
 
+func TestMongoMutationValuesEqualCountsCodeWithScopeWrapperDepth(t *testing.T) {
+	withinLimit := deeplyNestedCodeWithScopeValue(mongoMutationMaxBSONNesting/2 - 1)
+	if !mongoMutationValuesEqual(withinLimit, withinLimit) {
+		t.Fatal("equal CodeWithScope values at the nesting limit differ")
+	}
+	overLimit := deeplyNestedCodeWithScopeValue(mongoMutationMaxBSONNesting / 2)
+	if mongoMutationValuesEqual(overLimit, overLimit) {
+		t.Fatal("CodeWithScope wrapper depth bypasses the nesting limit")
+	}
+}
+
 func TestServerBSONSetUpsertAllowsNativeBinaryValues(t *testing.T) {
 	for _, format := range []collections.DocumentFormat{collections.DocumentFormatBSON, collections.DocumentFormatJSON, collections.DocumentFormatTemplateV1} {
 		t.Run(string(format), func(t *testing.T) {
@@ -7003,6 +7014,21 @@ func TestMongoMutationAddToSetChargesDecimal128LeavesOnBothSides(t *testing.T) {
 	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}})
 	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || !strings.Contains(err.Error(), "Decimal128 comparisons") || changed || !bson.Raw(doc).Lookup("marker").IsZero() {
 		t.Fatalf("opposite Decimal128 leaves changed=%v err=%v", changed, err)
+	}
+}
+
+func TestMongoMutationAddToSetRejectsMalformedDecimalLeafCountWithoutOverflow(t *testing.T) {
+	decimal, err := bson.ParseDecimal128("1E+6000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	work, ok := mongoMutationAddToSetDecimalComparisonWork(
+		[]bson.RawValue{{Type: bson.TypeEmbeddedDocument, Value: []byte{0xff}}},
+		[]bson.RawValue{mustRawValue(t, decimal)},
+		mongoMutationMaxAddToSetDecimalComparisons,
+	)
+	if ok || work < 0 || work > mongoMutationMaxAddToSetDecimalComparisons {
+		t.Fatalf("malformed Decimal128 work=%d ok=%v", work, ok)
 	}
 }
 
