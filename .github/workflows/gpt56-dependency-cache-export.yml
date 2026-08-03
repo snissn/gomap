@@ -76,3 +76,5 @@ FILES
           diff -u /tmp/expected-files /tmp/actual-files
           git commit -m 'mongo: generate capability metadata from executable manifest'
           git push origin HEAD:gpt56/issue-4052-capability-manifest
+
+# payload-ready: 955886df28aa13036fd6d9f460a97888969ae9395c5e0e9a58dea77371ea14ee
