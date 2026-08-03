@@ -1583,7 +1583,12 @@ func TestM8QualificationBoundedJSONEvidenceV1(t *testing.T) {
 			report.MeasurementTranscript.Bytes, report.MeasurementTranscript.SHA256 = int64(len(raw)), hex.EncodeToString(digest[:])
 		}
 		for name, mutate := range map[string]func(*m8ProductionMeasurementTranscriptV1){
-			"missing": func(value *m8ProductionMeasurementTranscriptV1) { value.Outcomes = nil },
+			"missing":     func(value *m8ProductionMeasurementTranscriptV1) { value.Outcomes = nil },
+			"rss_missing": func(value *m8ProductionMeasurementTranscriptV1) { value.PeakRSSObservations = nil },
+			"rss_zero":    func(value *m8ProductionMeasurementTranscriptV1) { value.PeakRSSObservations[0] = 0 },
+			"rss_extra": func(value *m8ProductionMeasurementTranscriptV1) {
+				value.PeakRSSObservations = append(value.PeakRSSObservations, 1)
+			},
 			"duplicate": func(value *m8ProductionMeasurementTranscriptV1) {
 				value.Outcomes[0].TopKIDs[0][1] = value.Outcomes[0].TopKIDs[0][0]
 			},
@@ -1608,6 +1613,7 @@ func TestM8QualificationBoundedJSONEvidenceV1(t *testing.T) {
 				value.Outcomes[0].TopKScoreBits = append([][]uint32(nil), transcript.Outcomes[0].TopKScoreBits...)
 				value.Outcomes[0].TopKScoreBits[0] = append([]uint32(nil), transcript.Outcomes[0].TopKScoreBits[0]...)
 				value.Outcomes[0].TotalNanos = append([]uint64(nil), transcript.Outcomes[0].TotalNanos...)
+				value.PeakRSSObservations = append([]uint64(nil), transcript.PeakRSSObservations...)
 				mutate(&value)
 				write(value)
 				if validM8ProductionMeasurementTranscriptV1(report) {
@@ -1684,7 +1690,7 @@ func TestM8QualificationBoundedJSONEvidenceV1(t *testing.T) {
 	})
 }
 
-func TestM8ProductionMeasurementTranscriptFrozenShapeV4(t *testing.T) {
+func TestM8ProductionMeasurementTranscriptFrozenShapeV5(t *testing.T) {
 	report := testM8QualificationReportV1(t, m8QualificationFrozenBaseSHAV1, m8QualificationFixturesV1[0], testM3VariantDescriptorV1(t.TempDir()), 125)
 	if len(report.Rows) != 5 || report.Rows[0].Samples != 1000 || report.Config.TopK != 10 {
 		t.Fatalf("unexpected frozen transcript shape: rows=%d samples=%d top_k=%d", len(report.Rows), report.Rows[0].Samples, report.Config.TopK)
@@ -1693,7 +1699,97 @@ func TestM8ProductionMeasurementTranscriptFrozenShapeV4(t *testing.T) {
 		t.Fatalf("frozen transcript bytes=%d, cap=%d", report.MeasurementTranscript.Bytes, m8QualificationTranscriptMaxBytesV1)
 	}
 	if !validM8ProductionMeasurementTranscriptV1(report) {
-		t.Fatal("rejected frozen v4 transcript")
+		t.Fatal("rejected frozen v5 transcript")
+	}
+}
+
+func TestM8QualificationTranscriptPeakRSSBindingV1(t *testing.T) {
+	root, err := m8CanonicalPathV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, head := testM8QualificationGitCheckoutV1(t, root)
+	fixture := m8QualificationFixturesV1[0]
+	campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head}
+	for repeat := 0; repeat < 3; repeat++ {
+		matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
+		testM8QualificationExecutionIDsV1(&matrix, repeat)
+		dir := filepath.Join(root, fmt.Sprintf("repeat-%d", repeat))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		testM8QualificationProfilesV1(t, dir, "profiles", &matrix)
+		testM8QualificationSetSourceCheckoutV1(t, root, &matrix)
+		path := filepath.Join(dir, "matrix.json")
+		raw, err := json.Marshal(matrix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(raw)
+		campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: filepath.Join(filepath.Base(dir), "matrix.json"), SHA256: hex.EncodeToString(digest[:])})
+	}
+	if _, err := testM8ValidateQualificationCampaignV1(root, campaign); err != nil {
+		t.Fatalf("rejected ordinary campaign: %v", err)
+	}
+	for i, run := range campaign.Runs {
+		path := filepath.Join(root, run.Path)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var matrix m8ProductionMatrixV1
+		if err := json.Unmarshal(raw, &matrix); err != nil {
+			t.Fatal(err)
+		}
+		for j := range matrix.Variants {
+			report := &matrix.Variants[j]
+			raw, err := os.ReadFile(report.MeasurementTranscript.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var transcript m8ProductionMeasurementTranscriptV1
+			if err := json.Unmarshal(raw, &transcript); err != nil {
+				t.Fatal(err)
+			}
+			transcript.PeakRSSObservations[0] = m8QualificationPeakRSSCapBytesV1 + 1
+			raw, err = json.Marshal(transcript)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(report.MeasurementTranscript.Path, raw, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(raw)
+			report.MeasurementTranscript.Bytes, report.MeasurementTranscript.SHA256 = int64(len(raw)), hex.EncodeToString(digest[:])
+			// Forge the report back under the cap and refresh every report-derived
+			// value; qualification must still use the retained raw observation.
+			report.Resources.PeakRSSBytes = 1
+			testM8CompleteResourceLimitsV1(t, report)
+			report.GateLedger = m8ProductionGateLedgerForReportV1(*report)
+			report.ExecutionEvidenceDigest, err = m8ProductionExecutionEvidenceDigestV1(report.ExecutionID, report.Profiles.Artifacts, report.MeasurementTranscript.SHA256)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		matrix, err = m8BuildProductionMatrixWithExecutionIntervalV1(config{baseSHA: matrix.BaseSHA, headSHA: matrix.HeadSHA, partitions: matrix.Variants[0].Config.Partitions, command: matrix.Command}, matrix.Dataset, matrix.Variants, matrix.ExecutionStartedAt, matrix.ExecutionCompletedAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err = json.Marshal(matrix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(raw)
+		campaign.Runs[i].SHA256 = hex.EncodeToString(digest[:])
+	}
+	if _, err := testM8ValidateQualificationCampaignV1(root, campaign); err == nil || !strings.Contains(err.Error(), "unbound environment or resources") {
+		t.Fatalf("accepted fully rehashed lowered-RSS campaign: %v", err)
 	}
 }
 

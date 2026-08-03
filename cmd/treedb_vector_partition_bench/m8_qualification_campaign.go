@@ -297,6 +297,14 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 				if err != nil {
 					return summary, fmt.Errorf("qualification matrix %s has unbound query outcomes: %w", cleanPath, err)
 				}
+			} else {
+				if !m8QualificationMeasurementTranscriptV1(resolvedRoot, *report) {
+					return summary, fmt.Errorf("qualification matrix %s has unbound measurement transcript", cleanPath)
+				}
+				transcript, err = m8ReadProductionMeasurementTranscriptV1(*report)
+				if err != nil {
+					return summary, fmt.Errorf("qualification matrix %s has unreadable measurement transcript: %w", cleanPath, err)
+				}
 			}
 			if !m8QualificationCommandWithExecutableV1(resolvedRoot, filepath.Dir(resolvedPath), *report, commandExecutable) || report.ExecutableSHA256 != matrix.ExecutableSHA256 {
 				return summary, fmt.Errorf("qualification matrix %s has command/config mismatch", cleanPath)
@@ -335,7 +343,7 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 				return summary, fmt.Errorf("qualification matrix %s reuses execution identity", cleanPath)
 			}
 			executionIDs[report.ExecutionID] = true
-			if !m8QualificationResourcesV1(*report, report.Dataset) {
+			if !m8QualificationResourcesV1(*report, report.Dataset, transcript) {
 				return summary, fmt.Errorf("qualification matrix %s has unbound environment or resources", run.Path)
 			}
 			if !m8QualificationMeasurementTranscriptV1(resolvedRoot, *report) || transcripts[report.MeasurementTranscript.SHA256] || transcriptPaths[report.MeasurementTranscript.Path] {
@@ -1085,10 +1093,11 @@ func m8QualificationResourceCapsV1() m8ProductionResourceCapsV1 {
 	return m8ProductionResourceCapsV1{PersistentAssetBytes: m8QualificationPersistentAssetCapBytesV1, PeakRSSBytes: m8QualificationPeakRSSCapBytesV1}
 }
 
-func m8QualificationResourcesV1(report m8ProductionReportV1, fixture fixtureManifest) bool {
+func m8QualificationResourcesV1(report m8ProductionReportV1, fixture fixtureManifest, transcript m8ProductionMeasurementTranscriptV1) bool {
 	resources := report.Resources
+	peakRSS, peakOK := m8ProductionMeasurementTranscriptPeakRSSV1(transcript)
 	return report.GoVersion != "" && report.GOOS != "" && report.GOARCH != "" && report.LogicalCPUs > 0 && report.GOMAXPROCS > 0 && report.GoMemoryLimitBytes > 0 && report.Host.CPUModel != "" &&
-		resources.PeakRSSMeasured && resources.PeakRSSBytes > 0 && resources.PeakRSSCapBytes == m8QualificationPeakRSSCapBytesV1 && uint64(resources.PeakRSSBytes) <= resources.PeakRSSCapBytes &&
+		peakOK && resources.PeakRSSMeasured && resources.PeakRSSBytes > 0 && uint64(resources.PeakRSSBytes) == peakRSS && resources.PeakRSSCapBytes == m8QualificationPeakRSSCapBytesV1 && peakRSS <= resources.PeakRSSCapBytes &&
 		resources.PersistentAssetBytes > 0 && resources.PersistentAssetCap == m8QualificationPersistentAssetCapBytesV1 && resources.PersistentAssetBytes <= resources.PersistentAssetCap &&
 		m8QualificationExactTruthCapV1(fixture) == report.Config.MaxExactTruthVisits
 }

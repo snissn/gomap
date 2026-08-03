@@ -42,7 +42,7 @@ and derives median/min/max QPS plus p95 spread. Qualification is reported only
 after both corpus campaigns validate.
 
 Each child also retains a runner-written, hashed measurement transcript (schema
-v4) bound to its execution ID, immutable candidate/config identity, measured
+v5) bound to its execution ID, immutable candidate/config identity, measured
 rows, and each normal row's ordered per-query returned top-k document IDs,
 parallel float32 score-bit arrays, and request-total nanoseconds. Qualification
 bounded-decodes the frozen exact-truth cache, recomputes retained row recall,
@@ -54,7 +54,9 @@ retained M3 assets and frozen truth before attribution gates. That replay
 compares its local IDs and float32 score bits directly with the transcript,
 deriving coordinator parity rather than trusting report flags. The bounded
 transcript reader admits at most 2 MiB, with a frozen 5x1000x10 serialization
-test guarding the retained shape. This detects retained-bundle mismatch, reuse,
+test guarding the retained shape. It also retains the positive raw process
+peak-RSS observation and recomputes the report peak before resource gates. This
+detects retained-bundle mismatch, reuse,
 or a relabeled aggregate; it does not claim to authenticate an attacker that
 can regenerate an entire evidence bundle.
 

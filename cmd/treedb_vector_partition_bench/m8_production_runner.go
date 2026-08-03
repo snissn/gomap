@@ -127,13 +127,14 @@ type m8ProductionMeasurementTranscriptEvidenceV1 struct {
 }
 
 type m8ProductionMeasurementTranscriptV1 struct {
-	SchemaVersion int                          `json:"schema_version"`
-	ExecutionID   string                       `json:"execution_id"`
-	Dataset       fixtureManifest              `json:"dataset"`
-	Variant       *m3VariantDescriptorV1       `json:"variant"`
-	Config        m8ProductionConfigEvidenceV1 `json:"config"`
-	Rows          []m8ProductionRowV1          `json:"rows"`
-	Outcomes      []m8ProductionRowOutcomesV1  `json:"outcomes"`
+	SchemaVersion       int                          `json:"schema_version"`
+	ExecutionID         string                       `json:"execution_id"`
+	Dataset             fixtureManifest              `json:"dataset"`
+	Variant             *m3VariantDescriptorV1       `json:"variant"`
+	Config              m8ProductionConfigEvidenceV1 `json:"config"`
+	Rows                []m8ProductionRowV1          `json:"rows"`
+	Outcomes            []m8ProductionRowOutcomesV1  `json:"outcomes"`
+	PeakRSSObservations []uint64                     `json:"peak_rss_observations"`
 }
 
 // m8ProductionRowOutcomesV1 retains the measured coordinator document IDs,
@@ -771,7 +772,10 @@ func m8WriteProductionMeasurementTranscriptV1(dir string, report m8ProductionRep
 		return m8ProductionMeasurementTranscriptEvidenceV1{}, err
 	}
 	path := filepath.Join(dir, "vector_partition_m8_measurements_"+report.ExecutionID+".json")
-	transcript := m8ProductionMeasurementTranscriptV1{SchemaVersion: 4, ExecutionID: report.ExecutionID, Dataset: report.Dataset, Variant: report.Variant, Config: report.Config, Rows: report.Rows, Outcomes: outcomes}
+	if !report.Resources.PeakRSSMeasured || report.Resources.PeakRSSBytes <= 0 {
+		return m8ProductionMeasurementTranscriptEvidenceV1{}, errors.New("M8 measurement transcript requires a positive peak RSS observation")
+	}
+	transcript := m8ProductionMeasurementTranscriptV1{SchemaVersion: 5, ExecutionID: report.ExecutionID, Dataset: report.Dataset, Variant: report.Variant, Config: report.Config, Rows: report.Rows, Outcomes: outcomes, PeakRSSObservations: []uint64{uint64(report.Resources.PeakRSSBytes)}}
 	raw, err := json.Marshal(transcript)
 	if err != nil {
 		return m8ProductionMeasurementTranscriptEvidenceV1{}, err
@@ -819,7 +823,7 @@ func m8ReadProductionMeasurementTranscriptV1(report m8ProductionReportV1) (m8Pro
 	var transcript m8ProductionMeasurementTranscriptV1
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&transcript) != nil || transcript.SchemaVersion != 4 {
+	if decoder.Decode(&transcript) != nil || transcript.SchemaVersion != 5 {
 		return m8ProductionMeasurementTranscriptV1{}, errors.New("invalid M8 measurement transcript schema")
 	}
 	var trailing any
@@ -832,7 +836,17 @@ func m8ReadProductionMeasurementTranscriptV1(report m8ProductionReportV1) (m8Pro
 	if err := m8ValidateProductionMeasurementTranscriptOutcomesV1(transcript, report); err != nil {
 		return m8ProductionMeasurementTranscriptV1{}, err
 	}
+	if _, ok := m8ProductionMeasurementTranscriptPeakRSSV1(transcript); !ok {
+		return m8ProductionMeasurementTranscriptV1{}, errors.New("invalid M8 measurement transcript peak RSS observations")
+	}
 	return transcript, nil
+}
+
+func m8ProductionMeasurementTranscriptPeakRSSV1(transcript m8ProductionMeasurementTranscriptV1) (uint64, bool) {
+	if len(transcript.PeakRSSObservations) != 1 || transcript.PeakRSSObservations[0] == 0 || transcript.PeakRSSObservations[0] > uint64(^uint64(0)>>1) {
+		return 0, false
+	}
+	return transcript.PeakRSSObservations[0], true
 }
 
 func validM8ProductionMeasurementTranscriptV1(report m8ProductionReportV1) bool {
