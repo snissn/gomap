@@ -6891,6 +6891,36 @@ func TestMongoMutationAddToSetRejectsLargeComparisonBytesBeforeMutation(t *testi
 	}
 }
 
+func TestMongoMutationAddToSetRejectsExpensiveDecimal128ComparisonsBeforeMutation(t *testing.T) {
+	existing := bson.A{}
+	candidates := bson.A{}
+	for i := range 128 {
+		value, err := bson.ParseDecimal128(fmt.Sprintf("%dE+6000", i+1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		existing = append(existing, value)
+	}
+	for i := range mongoMutationMaxEachValues {
+		value, err := bson.ParseDecimal128(fmt.Sprintf("%dE+6000", i+129))
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidates = append(candidates, value)
+	}
+	doc := mustDocument(t, bson.D{{Key: "items", Value: existing}})
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: candidates}}}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || changed || !bson.Raw(doc).Lookup("marker").IsZero() {
+		t.Fatalf("expensive Decimal128 comparison changed=%v err=%v", changed, err)
+	}
+}
+
 func TestMongoMutationEmptyNestedArrayEachDoesNotCreateParents(t *testing.T) {
 	for _, operator := range []string{"$push", "$addToSet"} {
 		t.Run(operator, func(t *testing.T) {
@@ -7115,6 +7145,51 @@ func TestServerUpdateRejectsNumericArrayPathsAndAddToSetComparisonOverflow(t *te
 	}
 	if gotItems, itemsErr := got.Lookup("items").Array().Values(); itemsErr != nil || len(gotItems) != len(items) {
 		t.Fatalf("over-budget $addToSet changed items=%d err=%v", len(gotItems), itemsErr)
+	}
+}
+
+func TestServerUpdateRejectsExpensiveDecimal128AddToSetBeforeMutation(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	s.Collections = collections.NewCollectionManager(db)
+	existing := bson.A{}
+	candidates := bson.A{}
+	for i := range 128 {
+		value, parseErr := bson.ParseDecimal128(fmt.Sprintf("%dE+6000", i+1))
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		existing = append(existing, value)
+	}
+	for i := range mongoMutationMaxEachValues {
+		value, parseErr := bson.ParseDecimal128(fmt.Sprintf("%dE+6000", i+129))
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		candidates = append(candidates, value)
+	}
+	assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "items", Value: existing}}}}, {Key: "$db", Value: "app"}}))
+	update := bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+			{Key: "u", Value: bson.D{
+				{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+				{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: candidates}}}}},
+			}},
+		}}},
+		{Key: "$db", Value: "app"},
+	}
+	assertCommandError(t, serveCommand(t, s, 2, update), "BadValue")
+	got := cursorFirstBatch(t, serveCommand(t, s, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}}))[0]
+	items, itemsErr := got.Lookup("items").Array().Values()
+	if itemsErr != nil || len(items) != len(existing) || !got.Lookup("marker").IsZero() {
+		t.Fatalf("expensive Decimal128 mutation changed document: items=%d err=%v marker=%v", len(items), itemsErr, got.Lookup("marker"))
 	}
 }
 
