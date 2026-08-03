@@ -5884,6 +5884,18 @@ func deeplyNestedRawDocumentValue(depth int, leaf int32) bson.RawValue {
 	return bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: value}
 }
 
+func deeplyNestedCodeWithScopeValue(depth int) bson.RawValue {
+	scope := []byte{5, 0, 0, 0, 0}
+	value := bson.RawValue{Type: bson.TypeCodeWithScope, Value: bsoncore.AppendCodeWithScope(nil, "", scope)}
+	for range depth {
+		index, scopeDocument := bsoncore.AppendDocumentStart(nil)
+		scopeDocument = bsoncore.AppendValueElement(scopeDocument, "scope", bsoncore.Value{Type: bsoncore.Type(value.Type), Data: value.Value})
+		scopeDocument, _ = bsoncore.AppendDocumentEnd(scopeDocument, index)
+		value = bson.RawValue{Type: bson.TypeCodeWithScope, Value: bsoncore.AppendCodeWithScope(nil, "", scopeDocument)}
+	}
+	return value
+}
+
 func rawDocumentWithValue(key string, value bson.RawValue) wire.Document {
 	doc := make([]byte, 4+1+len(key)+1+len(value.Value)+1)
 	binary.LittleEndian.PutUint32(doc, uint32(len(doc)))
@@ -5910,6 +5922,53 @@ func TestMongoMutationRejectsDeepStoredBSONBeforeDecode(t *testing.T) {
 	}
 	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || changed || !bytes.Equal(doc, before) {
 		t.Fatalf("deep stored mutation changed=%v err=%v", changed, err)
+	}
+}
+
+func TestMongoMutationRejectsDeepCodeWithScopeBeforeDecode(t *testing.T) {
+	doc := rawDocumentWithValue("code", deeplyNestedCodeWithScopeValue(mongoMutationMaxBSONNesting))
+	before := append(wire.Document(nil), doc...)
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "nested.marker", Value: true}}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || changed || !bytes.Equal(doc, before) {
+		t.Fatalf("deep CodeWithScope changed=%v err=%v", changed, err)
+	}
+}
+
+func TestMongoMutationRejectsDeepCodeWithScopeOperand(t *testing.T) {
+	_, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "nested.code", Value: deeplyNestedCodeWithScopeValue(mongoMutationMaxBSONNesting)}}}}))
+	if err == nil {
+		t.Fatal("accepted deeply nested CodeWithScope operand")
+	}
+}
+
+func TestServerUpdateRejectsDeepCodeWithScopeBeforeDecode(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
+	opts.ValueLog.PointerThreshold = 1
+	backend, closeBackend, err := treedb.OpenBackend(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = closeBackend() }()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(backend)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	doc := rawDocumentWithIDAndValue("u1", "code", deeplyNestedCodeWithScopeValue(mongoMutationMaxBSONNesting))
+	assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.Raw(doc)}}, {Key: "$db", Value: "app"}}))
+	response := serveCommand(t, server, 2, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "nested.marker", Value: true}}}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "BadValue")
+	find := serveCommand(t, server, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	if got := cursorFirstBatch(t, find)[0]; !got.Lookup("nested").IsZero() {
+		t.Fatalf("rejected deep CodeWithScope update changed document: %v", got)
 	}
 }
 

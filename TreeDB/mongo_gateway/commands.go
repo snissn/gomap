@@ -4352,10 +4352,11 @@ func validateMongoMutationRawNesting(value bson.RawValue) error {
 		remaining []byte
 		depth     int
 	}
-	if value.Type != bson.TypeEmbeddedDocument && value.Type != bson.TypeArray {
+	container, ok := mongoMutationDecodeContainer(value)
+	if !ok {
 		return nil
 	}
-	remaining, ok := rawBSONContainerContents(value)
+	remaining, ok := rawBSONContainerContents(container)
 	if !ok {
 		return errors.New("Mongo gateway invalid BSON container")
 	}
@@ -4380,8 +4381,8 @@ func validateMongoMutationRawNesting(value bson.RawValue) error {
 		if err != nil {
 			return err
 		}
-		child := bson.RawValue{Type: bson.Type(childValue.Type), Value: childValue.Data}
-		if child.Type == bson.TypeEmbeddedDocument || child.Type == bson.TypeArray {
+		child, isContainer := mongoMutationDecodeContainer(bson.RawValue{Type: bson.Type(childValue.Type), Value: childValue.Data})
+		if isContainer {
 			if current.depth == mongoMutationMaxBSONNesting {
 				return fmt.Errorf("Mongo gateway BSON nesting exceeds %d levels", mongoMutationMaxBSONNesting)
 			}
@@ -4393,6 +4394,23 @@ func validateMongoMutationRawNesting(value bson.RawValue) error {
 		}
 	}
 	return nil
+}
+
+// mongoMutationDecodeContainer returns a raw BSON document/array that a slow
+// mutation decode will recursively materialize. CodeWithScope carries a scope
+// document and must therefore follow the same bounds as explicit containers.
+func mongoMutationDecodeContainer(value bson.RawValue) (bson.RawValue, bool) {
+	if value.Type == bson.TypeEmbeddedDocument || value.Type == bson.TypeArray {
+		return value, true
+	}
+	if value.Type != bson.TypeCodeWithScope {
+		return bson.RawValue{}, false
+	}
+	_, scope, remaining, ok := bsoncore.ReadCodeWithScope(value.Value)
+	if !ok || len(remaining) != 0 {
+		return bson.RawValue{}, false
+	}
+	return bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: scope}, true
 }
 
 func validateMongoMutationOperandsNesting(update wire.Document) error {
@@ -4669,14 +4687,15 @@ func (budget *mongoMutationDecodeBudget) validate(value bson.RawValue) error {
 		return fmt.Errorf("Mongo gateway mutation BSON exceeds %d decoded bytes", mongoMutationMaxDecodedBSONBytes)
 	}
 	budget.bytes += valueBytes
-	if value.Type != bson.TypeEmbeddedDocument && value.Type != bson.TypeArray {
+	container, ok := mongoMutationDecodeContainer(value)
+	if !ok {
 		return value.Validate()
 	}
 	type frame struct {
 		remaining []byte
 		depth     int
 	}
-	contents, ok := rawBSONContainerContents(value)
+	contents, ok := rawBSONContainerContents(container)
 	if !ok {
 		return errors.New("Mongo gateway invalid BSON container")
 	}
@@ -4704,8 +4723,8 @@ func (budget *mongoMutationDecodeBudget) validate(value bson.RawValue) error {
 		if err != nil {
 			return err
 		}
-		child := bson.RawValue{Type: bson.Type(childValue.Type), Value: childValue.Data}
-		if child.Type != bson.TypeEmbeddedDocument && child.Type != bson.TypeArray {
+		child, isContainer := mongoMutationDecodeContainer(bson.RawValue{Type: bson.Type(childValue.Type), Value: childValue.Data})
+		if !isContainer {
 			continue
 		}
 		if current.depth == mongoMutationMaxBSONNesting {
