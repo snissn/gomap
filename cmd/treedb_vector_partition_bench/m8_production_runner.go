@@ -958,11 +958,46 @@ func m8ValidateProductionMeasurementTranscriptOutcomesV1(transcript m8Production
 			if row.P50Nanos != p50 || row.P95Nanos != p95 || row.P99Nanos != p99 || row.MaxTotalNanos != maximum {
 				return errors.New("M8 measurement transcript timings do not reproduce retained percentiles")
 			}
+			minimumElapsed, ok := m8TotalNanosElapsedLowerBoundV1(outcome.TotalNanos, row.Concurrency)
+			if !ok {
+				return errors.New("M8 measurement transcript timing aggregate overflows")
+			}
+			if row.ElapsedNanos < minimumElapsed {
+				return errors.New("M8 measurement transcript timings exceed retained elapsed time")
+			}
 		} else if outcome.TopKIDs == nil || len(outcome.TopKIDs) != 0 || outcome.TotalNanos == nil || len(outcome.TotalNanos) != 0 {
 			return errors.New("M8 measurement transcript has outcomes for shortfall or unsupported row")
 		}
 	}
 	return nil
+}
+
+// m8TotalNanosElapsedLowerBoundV1 is the least wall time compatible with
+// retained request totals when at most concurrency requests run at once.
+func m8TotalNanosElapsedLowerBoundV1(durations []uint64, concurrency int) (uint64, bool) {
+	if len(durations) == 0 || concurrency < 1 {
+		return 0, false
+	}
+	var total uint64
+	for _, duration := range durations {
+		if duration == 0 {
+			return 0, false
+		}
+		next, carry := bits.Add64(total, duration, 0)
+		if carry != 0 {
+			return 0, false
+		}
+		total = next
+	}
+	workers := uint64(min(concurrency, len(durations)))
+	minimum := total / workers
+	if total%workers != 0 {
+		if minimum == ^uint64(0) {
+			return 0, false
+		}
+		minimum++
+	}
+	return minimum, true
 }
 
 func m8ArtifactNameV1(cfg config, fixture fixtureManifest, manifest collections.VectorPartitionManifestV1, executionID string) (string, error) {

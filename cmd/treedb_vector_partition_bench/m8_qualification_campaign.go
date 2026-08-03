@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"debug/buildinfo"
 	"encoding/hex"
@@ -117,14 +118,14 @@ func runValidateQualification(args []string, stdout io.Writer) error {
 }
 
 func m8ValidateQualificationIndexV1(root string, index m8QualificationIndexV1) (m8QualificationIndexSummaryV1, error) {
-	return m8ValidateQualificationIndexWithRetainedVariantV1(root, index, m8QualificationRetainedVariantV1)
+	return m8ValidateQualificationIndexWithVerifiersV1(root, index, m8QualificationRetainedVariantV1, m8QualificationBenchmarkExecutableV1, m8QualificationTrustedTruthCacheV1, validM8ProductionProfilesV1, m8QualificationRetainedAttributionV1)
 }
 
 func m8ValidateQualificationIndexWithRetainedVariantV1(root string, index m8QualificationIndexV1, retainedVariant m8QualificationRetainedVariantVerifierV1) (m8QualificationIndexSummaryV1, error) {
-	return m8ValidateQualificationIndexWithVerifiersV1(root, index, retainedVariant, m8QualificationBenchmarkExecutableV1, m8QualificationTrustedTruthCacheV1, validM8ProductionProfilesV1)
+	return m8ValidateQualificationIndexWithVerifiersV1(root, index, retainedVariant, m8QualificationBenchmarkExecutableV1, m8QualificationTrustedTruthCacheV1, validM8ProductionProfilesV1, func(string, m8ProductionReportV1, [][]m8CanonicalResultV1) error { return nil })
 }
 
-func m8ValidateQualificationIndexWithVerifiersV1(root string, index m8QualificationIndexV1, retainedVariant m8QualificationRetainedVariantVerifierV1, commandExecutable m8QualificationCommandExecutableVerifierV1, truthCache m8QualificationTruthCacheVerifierV1, profileVerifier m8ProductionProfileVerifierV1) (m8QualificationIndexSummaryV1, error) {
+func m8ValidateQualificationIndexWithVerifiersV1(root string, index m8QualificationIndexV1, retainedVariant m8QualificationRetainedVariantVerifierV1, commandExecutable m8QualificationCommandExecutableVerifierV1, truthCache m8QualificationTruthCacheVerifierV1, profileVerifier m8ProductionProfileVerifierV1, retainedAttribution m8QualificationRetainedAttributionVerifierV1) (m8QualificationIndexSummaryV1, error) {
 	summary := m8QualificationIndexSummaryV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_summary_v1", Status: "qualified", BaseSHA: index.BaseSHA, HeadSHA: index.HeadSHA, Campaigns: make(map[string]m8QualificationCampaignSummaryV1, len(m8QualificationFixturesV1))}
 	if index.BaseSHA != m8QualificationFrozenBaseSHAV1 {
 		return m8QualificationIndexSummaryV1{}, errors.New("qualification index does not use the frozen base revision")
@@ -139,7 +140,7 @@ func m8ValidateQualificationIndexWithVerifiersV1(root string, index m8Qualificat
 		if campaign.BaseSHA != index.BaseSHA || campaign.HeadSHA != index.HeadSHA {
 			return m8QualificationIndexSummaryV1{}, errors.New("qualification index campaigns do not share the index revision")
 		}
-		campaignSummary, err := m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, retainedVariant, commandExecutable, truthCache, profileVerifier)
+		campaignSummary, err := m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, retainedVariant, commandExecutable, truthCache, profileVerifier, retainedAttribution)
 		if err != nil {
 			return m8QualificationIndexSummaryV1{}, err
 		}
@@ -170,19 +171,20 @@ func m8ValidateQualificationIndexWithVerifiersV1(root string, index m8Qualificat
 type m8QualificationRetainedVariantVerifierV1 func(string, m8ProductionReportV1) error
 type m8QualificationCommandExecutableVerifierV1 func(string, string, string, string) bool
 type m8QualificationTruthCacheVerifierV1 func(string, m8ProductionReportV1) ([][]m8CanonicalResultV1, error)
+type m8QualificationRetainedAttributionVerifierV1 func(string, m8ProductionReportV1, [][]m8CanonicalResultV1) error
 
 func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCampaignV1) (m8QualificationCampaignSummaryV1, error) {
-	return m8ValidateQualificationCampaignWithRetainedVariantV1(root, campaign, m8QualificationRetainedVariantV1)
+	return m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, m8QualificationRetainedVariantV1, m8QualificationBenchmarkExecutableV1, m8QualificationTrustedTruthCacheV1, validM8ProductionProfilesV1, m8QualificationRetainedAttributionV1)
 }
 
 // m8ValidateQualificationCampaignWithRetainedVariantV1 keeps the retained
 // asset boundary explicit for focused evidence tests. Production callers use
 // m8ValidateQualificationCampaignV1 above and cannot select a verifier.
 func m8ValidateQualificationCampaignWithRetainedVariantV1(root string, campaign m8QualificationCampaignV1, retainedVariant m8QualificationRetainedVariantVerifierV1) (m8QualificationCampaignSummaryV1, error) {
-	return m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, retainedVariant, m8QualificationBenchmarkExecutableV1, m8QualificationTrustedTruthCacheV1, validM8ProductionProfilesV1)
+	return m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, retainedVariant, m8QualificationBenchmarkExecutableV1, m8QualificationTrustedTruthCacheV1, validM8ProductionProfilesV1, func(string, m8ProductionReportV1, [][]m8CanonicalResultV1) error { return nil })
 }
 
-func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8QualificationCampaignV1, retainedVariant m8QualificationRetainedVariantVerifierV1, commandExecutable m8QualificationCommandExecutableVerifierV1, truthCache m8QualificationTruthCacheVerifierV1, profileVerifier m8ProductionProfileVerifierV1) (m8QualificationCampaignSummaryV1, error) {
+func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8QualificationCampaignV1, retainedVariant m8QualificationRetainedVariantVerifierV1, commandExecutable m8QualificationCommandExecutableVerifierV1, truthCache m8QualificationTruthCacheVerifierV1, profileVerifier m8ProductionProfileVerifierV1, retainedAttribution m8QualificationRetainedAttributionVerifierV1) (m8QualificationCampaignSummaryV1, error) {
 	if retainedVariant == nil {
 		return m8QualificationCampaignSummaryV1{}, errors.New("qualification retained-asset verifier is required")
 	}
@@ -194,6 +196,9 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 	}
 	if profileVerifier == nil {
 		return m8QualificationCampaignSummaryV1{}, errors.New("qualification profile verifier is required")
+	}
+	if retainedAttribution == nil {
+		return m8QualificationCampaignSummaryV1{}, errors.New("qualification retained-attribution verifier is required")
 	}
 	if !m8QualificationSHA256V1(campaign.FixtureChecksum) || !m8QualificationGitSHAV1(campaign.BaseSHA) || !m8QualificationGitSHAV1(campaign.HeadSHA) || len(campaign.Runs) != 3 {
 		return m8QualificationCampaignSummaryV1{}, errors.New("qualification campaign requires one fixture/head and exactly three runs")
@@ -316,6 +321,9 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 			}
 			if err := retainedVariant(resolvedRoot, *report); err != nil {
 				return summary, fmt.Errorf("qualification matrix %s has unavailable or mismatched retained M3 assets: %w", cleanPath, err)
+			}
+			if err := retainedAttribution(resolvedRoot, *report, truth); err != nil {
+				return summary, fmt.Errorf("qualification matrix %s has unbound retained attribution: %w", cleanPath, err)
 			}
 			if executionIDs[report.ExecutionID] {
 				return summary, fmt.Errorf("qualification matrix %s reuses execution identity", cleanPath)
@@ -589,6 +597,66 @@ func m8QualificationRetainedVariantV1(root string, report m8ProductionReportV1) 
 	want.DatabaseDirectory, actual.DatabaseDirectory = dir, actualDir
 	if !reflect.DeepEqual(actual, want) {
 		return errors.New("retained M3 descriptor does not match report variant")
+	}
+	return nil
+}
+
+// m8QualificationRetainedAttributionV1 independently replays the deterministic
+// offline attribution stages from the retained M3 assets and anchored truth.
+// Coordinator-only fields remain bound by the retained query outcomes.
+func m8QualificationRetainedAttributionV1(root string, report m8ProductionReportV1, truth [][]m8CanonicalResultV1) (err error) {
+	if report.Variant == nil || len(truth) != report.Dataset.Queries {
+		return errors.New("missing retained attribution identity")
+	}
+	dir, err := m8QualificationContainedPathV1(root, report.Variant.DatabaseDirectory, "retained M3 database")
+	if err != nil {
+		return err
+	}
+	assets, err := openM8ProductionExistingAssetSetV1(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, assets.Close()) }()
+	primaryHomes, finalMemberships, err := m8TruthPartitionMembershipsByDocumentIDV1(assets, truth)
+	if err != nil {
+		return err
+	}
+	harness, err := newM8AttributionHarnessV1(assets)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, harness.Close()) }()
+	_, queries := fixtureData(report.Dataset)
+	if len(queries) != len(truth) {
+		return errors.New("retained attribution query shape mismatch")
+	}
+	approximateCandidates := min(report.Config.RouterCandidates, int(assets.status.Representatives))
+	if approximateCandidates < 1 {
+		return errors.New("retained attribution has no router candidates")
+	}
+	exhaustive := make([][]m8CanonicalResultV1, len(queries))
+	for _, row := range report.Rows {
+		if row.Status != "pass" && row.Status != "fail" {
+			continue
+		}
+		membershipOracles, err := m8MembershipOracleRecallCacheV1(truth, primaryHomes, finalMemberships, len(harness.searchers), row.Probes)
+		if err != nil {
+			return err
+		}
+		cell, err := m8BuildAttributionV1(context.Background(), assets, primaryHomes, finalMemberships, queries, truth, membershipOracles, row.Probes, row.EfSearch, report.Config.TopK, approximateCandidates, exhaustive, harness)
+		if err != nil {
+			return err
+		}
+		want := cell.Evidence
+		want.EndToEndRecallAtK = row.Attribution.EndToEndRecallAtK
+		want.CoordinatorMergeIDParity = row.Attribution.CoordinatorMergeIDParity
+		want.CoordinatorMergeScoreParity = row.Attribution.CoordinatorMergeScoreParity
+		want.ApproximateLocalToEndToEndLossAtK = want.ApproximateLocalHNSWRecallAtK - want.EndToEndRecallAtK
+		want.ResidualLossOwners = m8AttributionLossOwnersV1(want)
+		want.StageOwners = m8AttributionStageOwnersV1(want)
+		if !reflect.DeepEqual(want, row.Attribution) {
+			return errors.New("retained attribution does not reproduce report")
+		}
 	}
 	return nil
 }

@@ -247,6 +247,28 @@ func TestM8PercentileAggregateElapsedLowerBoundV1(t *testing.T) {
 	}
 }
 
+func TestM8TotalNanosElapsedLowerBoundV1(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		durations   []uint64
+		concurrency int
+		want        uint64
+		valid       bool
+	}{
+		{name: "sequential", durations: []uint64{10, 20, 30}, concurrency: 1, want: 60, valid: true},
+		{name: "parallel_ceil", durations: []uint64{10, 20, 30}, concurrency: 2, want: 30, valid: true},
+		{name: "workers_limited_by_samples", durations: []uint64{10}, concurrency: 8, want: 10, valid: true},
+		{name: "overflow", durations: []uint64{^uint64(0), 1}, concurrency: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := m8TotalNanosElapsedLowerBoundV1(test.durations, test.concurrency)
+			if ok != test.valid || ok && got != test.want {
+				t.Fatalf("bound=%d ok=%t want=%d/%t", got, ok, test.want, test.valid)
+			}
+		})
+	}
+}
+
 func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *testing.T) {
 	hash := strings.Repeat("a", 40)
 	fixture := fixtureManifest{Checksum: strings.Repeat("b", 64)}

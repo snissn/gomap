@@ -252,6 +252,7 @@ func openM8ProductionExistingAssetSetV1(dir string) (_ *m8ProductionMultiGroupAs
 		return nil, fmt.Errorf("open retained M8 router: %w", err)
 	}
 	h.status = h.router.Status()
+	h.manifest = h.status.Manifest
 	return h, nil
 }
 

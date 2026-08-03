@@ -62,7 +62,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	profileCalls := 0
-	if _, err := m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, func(string, m8ProductionReportV1) ([][]m8CanonicalResultV1, error) { return nil, nil }, func(m8ProductionProfileEvidenceV1) bool { profileCalls++; return true }); err != nil {
+	if _, err := m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, func(string, m8ProductionReportV1) ([][]m8CanonicalResultV1, error) { return nil, nil }, func(m8ProductionProfileEvidenceV1) bool { profileCalls++; return true }, func(string, m8ProductionReportV1, [][]m8CanonicalResultV1) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if profileCalls != len(campaign.Runs)*len(m8RequiredVariantIDsV1) {
@@ -1455,11 +1455,11 @@ func testM8QualificationMatrixV1(t *testing.T, head string, fixture fixtureManif
 }
 
 func testM8ValidateQualificationCampaignV1(root string, campaign m8QualificationCampaignV1) (m8QualificationCampaignSummaryV1, error) {
-	return m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, func(string, m8ProductionReportV1) ([][]m8CanonicalResultV1, error) { return nil, nil }, func(m8ProductionProfileEvidenceV1) bool { return true })
+	return m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, func(string, m8ProductionReportV1) ([][]m8CanonicalResultV1, error) { return nil, nil }, func(m8ProductionProfileEvidenceV1) bool { return true }, func(string, m8ProductionReportV1, [][]m8CanonicalResultV1) error { return nil })
 }
 
 func testM8ValidateQualificationIndexV1(root string, index m8QualificationIndexV1) (m8QualificationIndexSummaryV1, error) {
-	return m8ValidateQualificationIndexWithVerifiersV1(root, index, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, func(string, m8ProductionReportV1) ([][]m8CanonicalResultV1, error) { return nil, nil }, func(m8ProductionProfileEvidenceV1) bool { return true })
+	return m8ValidateQualificationIndexWithVerifiersV1(root, index, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, func(string, m8ProductionReportV1) ([][]m8CanonicalResultV1, error) { return nil, nil }, func(m8ProductionProfileEvidenceV1) bool { return true }, func(string, m8ProductionReportV1, [][]m8CanonicalResultV1) error { return nil })
 }
 
 func TestM8QualificationBoundedJSONEvidenceV1(t *testing.T) {
@@ -1635,6 +1635,37 @@ func TestM8QualificationBoundedJSONEvidenceV1(t *testing.T) {
 			})
 		}
 	})
+	t.Run("transcript_timings_bind_elapsed", func(t *testing.T) {
+		report := testM8QualificationReportV1(t, m8QualificationFrozenBaseSHAV1, m8QualificationFixturesV1[0], testM3VariantDescriptorV1(t.TempDir()), 125)
+		raw, err := os.ReadFile(report.MeasurementTranscript.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var transcript m8ProductionMeasurementTranscriptV1
+		if err := json.Unmarshal(raw, &transcript); err != nil {
+			t.Fatal(err)
+		}
+		var total uint64
+		for _, duration := range transcript.Outcomes[0].TotalNanos {
+			total += duration
+		}
+		report.Rows = append([]m8ProductionRowV1(nil), report.Rows...)
+		report.Rows[0].ElapsedNanos = total - 1
+		report.Rows[0].QPS, _ = m8ProductionQPSV1(report.Rows[0].Samples, report.Rows[0].ElapsedNanos)
+		transcript.Rows = append([]m8ProductionRowV1(nil), report.Rows...)
+		raw, err = json.Marshal(transcript)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(report.MeasurementTranscript.Path, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(raw)
+		report.MeasurementTranscript.Bytes, report.MeasurementTranscript.SHA256 = int64(len(raw)), hex.EncodeToString(digest[:])
+		if validM8ProductionMeasurementTranscriptV1(report) {
+			t.Fatal("accepted transcript with elapsed shorter than retained sequential totals")
+		}
+	})
 }
 
 func TestM8QualificationTruthCacheAnchorV1(t *testing.T) {
@@ -1718,7 +1749,7 @@ func TestM8QualificationTruthCacheAnchorV1(t *testing.T) {
 	verify := func(root string, report m8ProductionReportV1) ([][]m8CanonicalResultV1, error) {
 		return m8QualificationReadTruthCacheWithAnchorV1(root, report, localAnchor)
 	}
-	if _, err := m8ValidateQualificationCampaignWithVerifiersV1(campaignRoot, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, verify, func(m8ProductionProfileEvidenceV1) bool { return true }); err != nil {
+	if _, err := m8ValidateQualificationCampaignWithVerifiersV1(campaignRoot, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, verify, func(m8ProductionProfileEvidenceV1) bool { return true }, func(string, m8ProductionReportV1, [][]m8CanonicalResultV1) error { return nil }); err != nil {
 		t.Fatalf("rejected anchored campaign: %v", err)
 	}
 	// Refresh every mutable report, transcript, execution, matrix, and campaign
@@ -1779,7 +1810,7 @@ func TestM8QualificationTruthCacheAnchorV1(t *testing.T) {
 		digest := sha256.Sum256(raw)
 		campaign.Runs[i].SHA256 = hex.EncodeToString(digest[:])
 	}
-	if _, err := m8ValidateQualificationCampaignWithVerifiersV1(campaignRoot, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, verify, func(m8ProductionProfileEvidenceV1) bool { return true }); err == nil {
+	if _, err := m8ValidateQualificationCampaignWithVerifiersV1(campaignRoot, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, verify, func(m8ProductionProfileEvidenceV1) bool { return true }, func(string, m8ProductionReportV1, [][]m8CanonicalResultV1) error { return nil }); err == nil {
 		t.Fatal("accepted self-consistent lowered-p95 report/transcript/matrix/campaign")
 	}
 	// Refresh every mutable digest around a favorable p4 aggregate while leaving
@@ -1831,7 +1862,7 @@ func TestM8QualificationTruthCacheAnchorV1(t *testing.T) {
 		digest := sha256.Sum256(raw)
 		campaign.Runs[i].SHA256 = hex.EncodeToString(digest[:])
 	}
-	if _, err := m8ValidateQualificationCampaignWithVerifiersV1(campaignRoot, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, verify, func(m8ProductionProfileEvidenceV1) bool { return true }); err == nil || !strings.Contains(err.Error(), "query outcomes") {
+	if _, err := m8ValidateQualificationCampaignWithVerifiersV1(campaignRoot, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, verify, func(m8ProductionProfileEvidenceV1) bool { return true }, func(string, m8ProductionReportV1, [][]m8CanonicalResultV1) error { return nil }); err == nil || !strings.Contains(err.Error(), "query outcomes") {
 		t.Fatalf("accepted self-consistent forged recall/report/transcript/matrix/campaign: %v", err)
 	}
 	cachePath := m8TruthCacheArtifactPathV1(cacheDir, cacheEvidence.Identity)
@@ -1880,7 +1911,7 @@ func TestM8QualificationTruthCacheAnchorV1(t *testing.T) {
 		digest := sha256.Sum256(raw)
 		campaign.Runs[i].SHA256 = hex.EncodeToString(digest[:])
 	}
-	if _, err := m8ValidateQualificationCampaignWithVerifiersV1(campaignRoot, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, verify, func(m8ProductionProfileEvidenceV1) bool { return true }); err == nil || !strings.Contains(err.Error(), "frozen corpus anchor") {
+	if _, err := m8ValidateQualificationCampaignWithVerifiersV1(campaignRoot, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, verify, func(m8ProductionProfileEvidenceV1) bool { return true }, func(string, m8ProductionReportV1, [][]m8CanonicalResultV1) error { return nil }); err == nil || !strings.Contains(err.Error(), "frozen corpus anchor") {
 		t.Fatalf("accepted self-consistent forged cache/report/matrix/campaign: %v", err)
 	}
 }
@@ -2220,6 +2251,79 @@ func TestM8QualificationRetainedVariantV1(t *testing.T) {
 			t.Fatal(err)
 		}
 		reject(t, root, report)
+	})
+	t.Run("replays_retained_attribution", func(t *testing.T) {
+		root := t.TempDir()
+		vectors := fixtureVectors(fixture)
+		built, err := newM8ProductionMultiGroupAssetsV1(vectors, []string{"a", "b"}, 16)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assetDirectory := filepath.Join(root, "m3")
+		built.owned = false
+		builtDirectory := built.dir
+		if err := built.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(builtDirectory, assetDirectory); err != nil {
+			t.Fatal(err)
+		}
+		report := m8ProductionReportV1{Dataset: fixture, Config: m8ProductionConfigEvidenceV1{TopK: 10}, Variant: &m3VariantDescriptorV1{DatabaseDirectory: assetDirectory}}
+		assets, err := openM8ProductionExistingAssetSetV1(assetDirectory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		report.Config.RouterCandidates = int(assets.status.Representatives)
+		_, queries := fixtureData(report.Dataset)
+		truth, err := m8ExactTruthFixtureV1(vectors, queries, report.Config.TopK)
+		if err != nil {
+			_ = assets.Close()
+			t.Fatal(err)
+		}
+		primaryHomes, finalMemberships, err := m8TruthPartitionMembershipsByDocumentIDV1(assets, truth)
+		if err != nil {
+			_ = assets.Close()
+			t.Fatal(err)
+		}
+		harness, err := newM8AttributionHarnessV1(assets)
+		if err != nil {
+			_ = assets.Close()
+			t.Fatal(err)
+		}
+		oracles, err := m8MembershipOracleRecallCacheV1(truth, primaryHomes, finalMemberships, len(harness.searchers), 1)
+		if err != nil {
+			_ = harness.Close()
+			_ = assets.Close()
+			t.Fatal(err)
+		}
+		cell, err := m8BuildAttributionV1(context.Background(), assets, primaryHomes, finalMemberships, queries, truth, oracles, 1, 64, report.Config.TopK, int(assets.status.Representatives), make([][]m8CanonicalResultV1, len(queries)), harness)
+		if closeErr := errors.Join(harness.Close(), assets.Close()); err == nil && closeErr != nil {
+			err = closeErr
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		var recall float64
+		for i := range truth {
+			recall += m8CanonicalRecallV1(truth[i], cell.Local[i])
+		}
+		row := m8ProductionRowV1{Status: "pass", Probes: 1, EfSearch: 64, Samples: len(queries), RecallAtK: recall / float64(len(truth))}
+		if err := m8AttachAttributionV1(&row, cell, cell.Local); err != nil {
+			t.Fatal(err)
+		}
+		report.Rows = []m8ProductionRowV1{row}
+		if err := m8QualificationRetainedAttributionV1(root, report, truth); err != nil {
+			t.Fatalf("rejected retained attribution replay: %v", err)
+		}
+		report.Rows[0].Attribution.FinalMembershipOracleRecallAtK = 0
+		report.Rows[0].Attribution.FinalMembershipOracleRegretAtK = 1
+		report.Rows[0].Attribution.PrimaryToFinalMembershipGainAtK = -report.Rows[0].Attribution.PrimaryHomeOracleRecallAtK
+		report.Rows[0].Attribution.FinalMembershipToExactLossAtK = -report.Rows[0].Attribution.ExactRepresentativeRecallAtK
+		report.Rows[0].Attribution.ResidualLossOwners = m8AttributionLossOwnersV1(report.Rows[0].Attribution)
+		report.Rows[0].Attribution.StageOwners = m8AttributionStageOwnersV1(report.Rows[0].Attribution)
+		if err := m8QualificationRetainedAttributionV1(root, report, truth); err == nil || !strings.Contains(err.Error(), "retained attribution") {
+			t.Fatalf("accepted forged retained attribution: %v", err)
+		}
 	})
 }
 

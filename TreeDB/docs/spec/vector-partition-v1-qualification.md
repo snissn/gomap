@@ -46,9 +46,11 @@ v3) bound to its execution ID, immutable candidate/config identity, measured
 rows, and each normal row's ordered per-query returned top-k document IDs and
 request-total nanoseconds. Qualification bounded-decodes the frozen exact-truth
 cache, recomputes retained row recall, p50/p95/p99, and maximum request time
-from those samples before trusting recall or tail-latency gates. Wall elapsed
-remains the concurrent cell measurement and is not reconstructed from
-overlapping request totals. This detects retained-bundle mismatch, reuse, or a
+from those samples before trusting recall or tail-latency gates. It requires
+elapsed wall time to be at least the overflow-checked sum of retained request
+totals divided by configured concurrency, and replays offline
+membership-oracle/routing attribution from retained M3 assets and frozen truth
+before attribution gates. This detects retained-bundle mismatch, reuse, or a
 relabeled aggregate; it does not claim to authenticate an attacker that can
 regenerate an entire evidence bundle.
 
