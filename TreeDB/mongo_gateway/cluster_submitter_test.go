@@ -1941,7 +1941,7 @@ func TestMongoGroupRoutedDispatcherRemoteOwnerErrorsForMutations(t *testing.T) {
 		{Key: "update", Value: "users"},
 		{Key: "updates", Value: bson.A{bson.D{
 			{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
-			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Grace"}}}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Grace"}, {Key: "profile", Value: bson.D{{Key: "city", Value: "HNL"}}}, {Key: "tags", Value: bson.A{"a"}}}}}},
 		}}},
 		{Key: "$db", Value: "app"},
 	})
@@ -2365,6 +2365,9 @@ func TestClusterSubmitterGenericUpdatesFailClosedWithoutLocalMutation(t *testing
 	}), "BadValue")
 	for _, update := range []bson.D{
 		{{Key: "$inc", Value: bson.D{{Key: "age", Value: int32(1)}}}},
+		{{Key: "$set", Value: bson.D{{Key: "profile.name", Value: "Grace"}}}},
+		{{Key: "$set", Value: bson.D{{Key: "code", Value: deeplyNestedCodeWithScopeValue(mongoMutationMaxBSONNesting - 1)}}}},
+		{{Key: "$push", Value: bson.D{{Key: "events", Value: "login"}}}},
 		{{Key: "name", Value: "Grace"}},
 	} {
 		response := serveCommand(t, server, 325831, bson.D{

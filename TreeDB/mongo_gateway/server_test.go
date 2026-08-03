@@ -4,21 +4,25 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
 type readWriter struct {
@@ -1010,6 +1014,91 @@ func TestServerUpdateBSONSetAllowsNativeBinaryValues(t *testing.T) {
 	}
 }
 
+func TestServerUpdateBSONSetRejectsCodeWithScopeAtResultNestingLimit(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 22550, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "scope-limit"}, {Key: "stable", Value: true}}}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	response := serveCommand(t, server, 22551, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: "scope-limit"}}},
+			{Key: "u", Value: bson.D{
+				{Key: "$set", Value: bson.D{
+					{Key: "code", Value: deeplyNestedCodeWithScopeValue(mongoMutationMaxBSONNesting - 1)},
+				}},
+			}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "BadValue")
+
+	find := serveCommand(t, server, 22552, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "scope-limit"}}}, {Key: "$db", Value: "app"}})
+	batch := cursorFirstBatch(t, find)
+	if len(batch) != 1 || !batch[0].Lookup("code").IsZero() || !batch[0].Lookup("stable").Boolean() {
+		t.Fatalf("rejected scoped-code update changed document: %v", batch)
+	}
+}
+
+func TestMongoBSONSetFieldsNeedNestingValidationCodeWithScope(t *testing.T) {
+	if !mongoBSONSetFieldsNeedNestingValidation([]collections.BSONSetField{{
+		Key:   "code",
+		Value: deeplyNestedCodeWithScopeValue(mongoMutationMaxBSONNesting - 1),
+	}}) {
+		t.Fatal("CodeWithScope field bypasses nesting validation")
+	}
+}
+
+func TestMongoMutationValuesEqualCodeWithScopeScopes(t *testing.T) {
+	value := func(number any) bson.RawValue {
+		scope := mustDocument(t, bson.D{{Key: "n", Value: number}})
+		return bson.RawValue{Type: bson.TypeCodeWithScope, Value: bsoncore.AppendCodeWithScope(nil, "return n", scope)}
+	}
+	if !mongoMutationValuesEqual(value(int32(1)), value(int64(1))) {
+		t.Fatal("CodeWithScope numeric-equivalent scopes differ")
+	}
+	if mongoMutationValuesEqual(value(int32(1)), bson.RawValue{Type: bson.TypeCodeWithScope, Value: bsoncore.AppendCodeWithScope(nil, "return other", mustDocument(t, bson.D{{Key: "n", Value: int32(1)}}))}) {
+		t.Fatal("different code strings compare equal")
+	}
+}
+
+func TestMongoMutationValuesEqualCountsCodeWithScopeWrapperDepth(t *testing.T) {
+	withinLimit := deeplyNestedCodeWithScopeValue(mongoMutationMaxBSONNesting - 1)
+	if !mongoMutationValuesEqual(withinLimit, withinLimit) {
+		t.Fatal("equal CodeWithScope values at the nesting limit differ")
+	}
+	overLimit := deeplyNestedCodeWithScopeValue(mongoMutationMaxBSONNesting)
+	if mongoMutationValuesEqual(overLimit, overLimit) {
+		t.Fatal("CodeWithScope scope depth bypasses the nesting limit")
+	}
+}
+
+func TestMongoMutationAddToSetDeduplicatesCodeWithScopeBeyondFiftyLevels(t *testing.T) {
+	value := deeplyNestedCodeWithScopeValue(50)
+	doc := mustDocument(t, bson.D{{Key: "items", Value: bson.A{value}}})
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$addToSet", Value: bson.D{{Key: "items", Value: value}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, changed, err := applyMongoMutation(doc, mutation)
+	if err != nil || changed || !bytes.Equal(updated, doc) {
+		t.Fatalf("CodeWithScope duplicate changed=%v err=%v", changed, err)
+	}
+}
+
 func TestServerBSONSetUpsertAllowsNativeBinaryValues(t *testing.T) {
 	for _, format := range []collections.DocumentFormat{collections.DocumentFormatBSON, collections.DocumentFormatJSON, collections.DocumentFormatTemplateV1} {
 		t.Run(string(format), func(t *testing.T) {
@@ -1605,6 +1694,20 @@ func TestParseMongoUpdateItemBSONOnlyPureSetSkipsGenericMutation(t *testing.T) {
 	}
 }
 
+func TestParseMongoUpdateItemRejectsPureSetOverTargetLimit(t *testing.T) {
+	fields := bson.D{}
+	for i := range mongoMutationMaxTargets + 1 {
+		fields = append(fields, bson.E{Key: fmt.Sprintf("f%d", i), Value: int32(i)})
+	}
+	_, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: fields}}},
+	}))
+	if err == nil {
+		t.Fatalf("accepted %d pure $set targets", mongoMutationMaxTargets+1)
+	}
+}
+
 func TestServerUpdateMissingCollectionExecutesEarlierUpsertBeforeParseError(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -1617,7 +1720,7 @@ func TestServerUpdateMissingCollectionExecutesEarlierUpsertBeforeParseError(t *t
 		{Key: "update", Value: "users"},
 		{Key: "updates", Value: bson.A{
 			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "score", Value: int32(1)}}}}}, {Key: "upsert", Value: true}},
-			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: bson.D{{Key: "$push", Value: bson.D{{Key: "score", Value: int32(2)}}}}}},
+			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: bson.D{{Key: "$pull", Value: bson.D{{Key: "score", Value: int32(2)}}}}}},
 		}},
 		{Key: "$db", Value: "app"},
 	})
@@ -5683,6 +5786,18 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse decimal tenth: %v", err)
 	}
+	decimalNaN, err := bson.ParseDecimal128("NaN")
+	if err != nil {
+		t.Fatalf("parse decimal NaN: %v", err)
+	}
+	decimalPosInf, err := bson.ParseDecimal128("Infinity")
+	if err != nil {
+		t.Fatalf("parse decimal +Infinity: %v", err)
+	}
+	decimalNegInf, err := bson.ParseDecimal128("-Infinity")
+	if err != nil {
+		t.Fatalf("parse decimal -Infinity: %v", err)
+	}
 	raw := bson.Raw(mustDocument(t, bson.D{
 		{Key: "nan", Value: math.NaN()},
 		{Key: "pos_inf", Value: math.Inf(1)},
@@ -5691,6 +5806,9 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 		{Key: "decimal", Value: decimal},
 		{Key: "decimal_int", Value: decimalInt},
 		{Key: "decimal_tenth", Value: decimalTenth},
+		{Key: "decimal_nan", Value: decimalNaN},
+		{Key: "decimal_pos_inf", Value: decimalPosInf},
+		{Key: "decimal_neg_inf", Value: decimalNegInf},
 		{Key: "large_int", Value: int64(9007199254740993)},
 		{Key: "double_int", Value: 37.0},
 		{Key: "double_fraction", Value: 37.5},
@@ -5702,12 +5820,21 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 	decimalValue := raw.Lookup("decimal")
 	decimalIntValue := raw.Lookup("decimal_int")
 	decimalTenthValue := raw.Lookup("decimal_tenth")
+	decimalNaNValue := raw.Lookup("decimal_nan")
+	decimalPosInfValue := raw.Lookup("decimal_pos_inf")
+	decimalNegInfValue := raw.Lookup("decimal_neg_inf")
 	largeInt := raw.Lookup("large_int")
 	doubleInt := raw.Lookup("double_int")
 	doubleFraction := raw.Lookup("double_fraction")
 
 	if rawValuesEqual(nanValue, finite) {
 		t.Fatal("NaN compared equal to finite number")
+	}
+	if rawValuesEqual(decimalNaNValue, decimalNaNValue) {
+		t.Fatal("Decimal128 NaN compared equal to itself")
+	}
+	if !rawValuesEqual(decimalPosInfValue, posInf) || !rawValuesEqual(decimalNegInfValue, negInf) || rawValuesEqual(decimalPosInfValue, decimalNegInfValue) {
+		t.Fatalf("Decimal128 infinity equality +/double=%v -/double=%v +/-=%v", rawValuesEqual(decimalPosInfValue, posInf), rawValuesEqual(decimalNegInfValue, negInf), rawValuesEqual(decimalPosInfValue, decimalNegInfValue))
 	}
 	if match, err := valueMatchesPredicate(nanValue, findPredicate{op: findPredicateGT, values: []bson.RawValue{finite}}); err != nil || match {
 		t.Fatalf("NaN range match/err=%v/%v want false/nil", match, err)
@@ -5748,6 +5875,630 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 	}
 	if scalar, ok = indexScalarForBSONValue(decimalTenthValue, collections.IndexValueDouble); ok {
 		t.Fatalf("non-exact decimal double scalar=%v ok=%v want not indexable", scalar, ok)
+	}
+}
+
+func TestDocumentMatchesPlanBoundsDecimal128EqualityWork(t *testing.T) {
+	leftDecimal, err := bson.ParseDecimal128("1E+6000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightDecimal, err := bson.ParseDecimal128("10E+5999")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		count   int
+		wantErr bool
+	}{
+		{name: "boundary", count: mongoQueryMaxDecimal128Normalizations / 2},
+		{name: "over_budget", count: mongoQueryMaxDecimal128Normalizations/2 + 1, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			left, right := make(bson.A, test.count), make(bson.A, test.count)
+			for i := range test.count {
+				left[i], right[i] = leftDecimal, rightDecimal
+			}
+			doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "items", Value: left}})
+			plan := findPlan{predicates: []findPredicate{{field: "items", op: findPredicateEq, values: []bson.RawValue{mustRawValue(t, right)}}}}
+			match, err := documentMatchesPlan(doc, plan)
+			if test.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "1024 Decimal128 normalizations") || match {
+					t.Fatalf("match=%v err=%v want Decimal128 budget error", match, err)
+				}
+				return
+			}
+			if err != nil || !match {
+				t.Fatalf("match=%v err=%v want true/nil", match, err)
+			}
+		})
+	}
+
+	makeArray := func(value any, count int) bson.A {
+		values := make(bson.A, count)
+		for i := range count {
+			values[i] = value
+		}
+		return values
+	}
+	t.Run("shared_across_or_branches", func(t *testing.T) {
+		left, right := makeArray(leftDecimal, 300), makeArray(rightDecimal, 300)
+		doc := mustDocument(t, bson.D{{Key: "items", Value: left}})
+		pred := findPredicate{field: "items", op: findPredicateEq, values: []bson.RawValue{mustRawValue(t, right)}}
+		match, err := documentMatchesPlan(doc, findPlan{predicates: []findPredicate{pred}, orBranches: [][]findPredicate{{pred}}})
+		if err == nil || !strings.Contains(err.Error(), "1024 Decimal128 normalizations") || match {
+			t.Fatalf("match=%v err=%v want shared Decimal128 budget error", match, err)
+		}
+	})
+	t.Run("shared_across_in_candidates", func(t *testing.T) {
+		left, right := makeArray(leftDecimal, 300), makeArray(rightDecimal, 300)
+		miss := append(bson.A(nil), right...)
+		miss[len(miss)-1] = int32(0)
+		doc := mustDocument(t, bson.D{{Key: "items", Value: left}})
+		pred := findPredicate{field: "items", op: findPredicateIn, values: []bson.RawValue{mustRawValue(t, miss), mustRawValue(t, right)}}
+		match, err := documentMatchesPlan(doc, findPlan{predicates: []findPredicate{pred}})
+		if err == nil || !strings.Contains(err.Error(), "1024 Decimal128 normalizations") || match {
+			t.Fatalf("match=%v err=%v want shared Decimal128 budget error", match, err)
+		}
+	})
+	t.Run("identical_encoding_fast_path", func(t *testing.T) {
+		values := makeArray(leftDecimal, mongoQueryMaxDecimal128Normalizations+1)
+		doc := mustDocument(t, bson.D{{Key: "items", Value: values}})
+		pred := findPredicate{field: "items", op: findPredicateEq, values: []bson.RawValue{mustRawValue(t, values)}}
+		match, err := documentMatchesPlan(doc, findPlan{predicates: []findPredicate{pred}})
+		if err != nil || !match {
+			t.Fatalf("match=%v err=%v want identical Decimal128 fast-path match", match, err)
+		}
+	})
+}
+
+func TestServerQueryAndFilterWriteRejectOverBudgetDecimal128Equality(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
+	opts.ValueLog.PointerThreshold = 1
+	backend, closeBackend, err := treedb.OpenBackend(opts)
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = closeBackend() }()
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	server.Collections = collections.NewCollectionManager(backend)
+
+	leftDecimal, err := bson.ParseDecimal128("1E+6000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightDecimal, err := bson.ParseDecimal128("10E+5999")
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := mongoQueryMaxDecimal128Normalizations/2 + 1
+	left, right := make(bson.A, count), make(bson.A, count)
+	for i := range count {
+		left[i], right[i] = leftDecimal, rightDecimal
+	}
+	assertOK(t, serveCommand(t, server, 330500, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "items", Value: left}}}},
+		{Key: "$db", Value: "app"},
+	}))
+	response := serveCommand(t, server, 330501, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "items", Value: right}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "BadValue")
+	message, ok := bson.Raw(response).Lookup("errmsg").StringValueOK()
+	if !ok || !strings.Contains(message, "1024 Decimal128 normalizations") {
+		t.Fatalf("errmsg=%q ok=%v want Decimal128 budget error", message, ok)
+	}
+	updateResponse := serveCommand(t, server, 330502, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "items", Value: right}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, updateResponse, "BadValue")
+	message, ok = bson.Raw(updateResponse).Lookup("errmsg").StringValueOK()
+	if !ok || !strings.Contains(message, "1024 Decimal128 normalizations") {
+		t.Fatalf("update errmsg=%q ok=%v want Decimal128 budget error", message, ok)
+	}
+	stored := cursorFirstBatch(t, serveCommand(t, server, 330503, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "$db", Value: "app"},
+	}))
+	if len(stored) != 1 || !stored[0].Lookup("marker").IsZero() {
+		t.Fatalf("over-budget filter write mutated document: %v", stored)
+	}
+}
+
+func TestRawValuesEqualHandlesDeepNestedBSON(t *testing.T) {
+	within := deeplyNestedRawDocumentValue(mongoMutationMaxBSONNesting-1, int32(1))
+	if !rawValuesEqual(within, within) {
+		t.Fatal("bounded deep BSON equality result was incorrect")
+	}
+	excess := deeplyNestedRawDocumentValue(mongoMutationMaxBSONNesting, int32(1))
+	if rawValuesEqual(excess, excess) {
+		t.Fatal("accepted BSON equality beyond the nesting limit")
+	}
+}
+
+func TestRawValuesEqualHandlesWideBSON(t *testing.T) {
+	left := wideRawDocumentValue(4096, true)
+	right := wideRawDocumentValue(4096, true)
+	different := wideRawDocumentValue(4096, false)
+	if !rawValuesEqual(left, right) || rawValuesEqual(left, different) {
+		t.Fatal("wide BSON equality result was incorrect")
+	}
+	smallLeft := wideRawDocumentValue(64, true)
+	smallRight := wideRawDocumentValue(64, true)
+	smallAllocs := testing.AllocsPerRun(100, func() {
+		if !rawValuesEqual(smallLeft, smallRight) {
+			t.Fatal("small BSON equality result was incorrect")
+		}
+	})
+	wideAllocs := testing.AllocsPerRun(100, func() {
+		if !rawValuesEqual(left, right) {
+			t.Fatal("wide BSON equality result was incorrect")
+		}
+	})
+	if wideAllocs > smallAllocs+1 {
+		t.Fatalf("wide BSON equality allocations=%f small=%f want bounded", wideAllocs, smallAllocs)
+	}
+}
+
+func TestMongoMutationAddToSetDeduplicatesWideDocument(t *testing.T) {
+	value := wideRawDocumentValue(4096, true)
+	doc := rawDocumentWithValue("items", rawArrayWithValue(value))
+	mutation := mongoMutation{addToSet: []mongoMutationArrayField{{name: "items", values: []bson.RawValue{value}}}}
+	updated, changed, err := applyMongoMutation(doc, mutation)
+	if err != nil || changed || !bytes.Equal(updated, doc) {
+		t.Fatalf("wide $addToSet updated=%v changed=%v err=%v", updated, changed, err)
+	}
+}
+
+func wideRawDocumentValue(width int, final bool) bson.RawValue {
+	index, doc := bsoncore.AppendDocumentStart(nil)
+	for i := range width {
+		value := true
+		if i == width-1 {
+			value = final
+		}
+		doc = bsoncore.AppendBooleanElement(doc, strconv.Itoa(i), value)
+	}
+	doc, _ = bsoncore.AppendDocumentEnd(doc, index)
+	return bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: doc}
+}
+
+func rawArrayWithValue(value bson.RawValue) bson.RawValue {
+	index, array := bsoncore.AppendArrayStart(nil)
+	array = bsoncore.AppendValueElement(array, "0", bsoncore.Value{Type: bsoncore.Type(value.Type), Data: value.Value})
+	array, _ = bsoncore.AppendArrayEnd(array, index)
+	return bson.RawValue{Type: bson.TypeArray, Value: array}
+}
+
+func wideRawArrayValue(width int) bson.RawValue {
+	index, array := bsoncore.AppendArrayStart(nil)
+	for i := range width {
+		array = bsoncore.AppendBooleanElement(array, strconv.Itoa(i), true)
+	}
+	array, _ = bsoncore.AppendArrayEnd(array, index)
+	return bson.RawValue{Type: bson.TypeArray, Value: array}
+}
+
+func deeplyNestedRawDocumentValue(depth int, leaf int32) bson.RawValue {
+	value := make([]byte, 12)
+	binary.LittleEndian.PutUint32(value, uint32(len(value)))
+	value[4] = byte(bson.TypeInt32)
+	value[5] = 'v'
+	binary.LittleEndian.PutUint32(value[7:], uint32(leaf))
+	for range depth {
+		nested := make([]byte, 8+len(value))
+		binary.LittleEndian.PutUint32(nested, uint32(len(nested)))
+		nested[4] = byte(bson.TypeEmbeddedDocument)
+		nested[5] = 'v'
+		copy(nested[7:], value)
+		value = nested
+	}
+	return bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: value}
+}
+
+func deeplyNestedCodeWithScopeValue(depth int) bson.RawValue {
+	scope := []byte{5, 0, 0, 0, 0}
+	value := bson.RawValue{Type: bson.TypeCodeWithScope, Value: bsoncore.AppendCodeWithScope(nil, "", scope)}
+	for range depth {
+		index, scopeDocument := bsoncore.AppendDocumentStart(nil)
+		scopeDocument = bsoncore.AppendValueElement(scopeDocument, "scope", bsoncore.Value{Type: bsoncore.Type(value.Type), Data: value.Value})
+		scopeDocument, _ = bsoncore.AppendDocumentEnd(scopeDocument, index)
+		value = bson.RawValue{Type: bson.TypeCodeWithScope, Value: bsoncore.AppendCodeWithScope(nil, "", scopeDocument)}
+	}
+	return value
+}
+
+func rawDocumentWithValue(key string, value bson.RawValue) wire.Document {
+	doc := make([]byte, 4+1+len(key)+1+len(value.Value)+1)
+	binary.LittleEndian.PutUint32(doc, uint32(len(doc)))
+	doc[4] = byte(value.Type)
+	copy(doc[5:], key)
+	copy(doc[5+len(key)+1:], value.Value)
+	return wire.Document(doc)
+}
+
+func rawDocumentWithIDAndValue(id, key string, value bson.RawValue) wire.Document {
+	index, doc := bsoncore.AppendDocumentStart(nil)
+	doc = bsoncore.AppendStringElement(doc, "_id", id)
+	doc = bsoncore.AppendValueElement(doc, key, bsoncore.Value{Type: bsoncore.Type(value.Type), Data: value.Value})
+	doc, _ = bsoncore.AppendDocumentEnd(doc, index)
+	return wire.Document(doc)
+}
+
+func TestMongoMutationRejectsDeepStoredBSONBeforeDecode(t *testing.T) {
+	doc := rawDocumentWithValue("deep", deeplyNestedRawDocumentValue(10000, int32(1)))
+	before := append(wire.Document(nil), doc...)
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$push", Value: bson.D{{Key: "tags", Value: "x"}}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || changed || !bytes.Equal(doc, before) {
+		t.Fatalf("deep stored mutation changed=%v err=%v", changed, err)
+	}
+}
+
+func TestMongoMutationRejectsDeepCodeWithScopeBeforeDecode(t *testing.T) {
+	doc := rawDocumentWithValue("code", deeplyNestedCodeWithScopeValue(mongoMutationMaxBSONNesting))
+	before := append(wire.Document(nil), doc...)
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "nested.marker", Value: true}}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || changed || !bytes.Equal(doc, before) {
+		t.Fatalf("deep CodeWithScope changed=%v err=%v", changed, err)
+	}
+}
+
+func TestMongoMutationRejectsDeepCodeWithScopeOperand(t *testing.T) {
+	_, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "nested.code", Value: deeplyNestedCodeWithScopeValue(mongoMutationMaxBSONNesting)}}}}))
+	if err == nil {
+		t.Fatal("accepted deeply nested CodeWithScope operand")
+	}
+}
+
+func TestServerUpdateRejectsDeepCodeWithScopeBeforeDecode(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
+	opts.ValueLog.PointerThreshold = 1
+	backend, closeBackend, err := treedb.OpenBackend(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = closeBackend() }()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(backend)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	doc := rawDocumentWithIDAndValue("u1", "code", deeplyNestedCodeWithScopeValue(mongoMutationMaxBSONNesting))
+	assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.Raw(doc)}}, {Key: "$db", Value: "app"}}))
+	response := serveCommand(t, server, 2, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "nested.marker", Value: true}}}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "BadValue")
+	find := serveCommand(t, server, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	if got := cursorFirstBatch(t, find)[0]; !got.Lookup("nested").IsZero() {
+		t.Fatalf("rejected deep CodeWithScope update changed document: %v", got)
+	}
+}
+
+func TestMongoMutationRejectsDeepOperandBeforeApplication(t *testing.T) {
+	doc := mustDocument(t, bson.D{{Key: "existing", Value: int32(1)}})
+	before := append(wire.Document(nil), doc...)
+	_, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{
+		{Key: "marker", Value: true},
+		{Key: "deep", Value: deeplyNestedRawDocumentValue(10000, int32(1))},
+	}}}))
+	if err == nil || !bytes.Equal(doc, before) {
+		t.Fatalf("deep operand err=%v document changed=%v", err, !bytes.Equal(doc, before))
+	}
+}
+
+func TestMongoMutationBSONNestingLimit(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		depth int
+		want  bool
+	}{
+		{name: "boundary", depth: mongoMutationMaxBSONNesting - 1, want: true},
+		{name: "excess", depth: mongoMutationMaxBSONNesting},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "deep", Value: deeplyNestedRawDocumentValue(test.depth, int32(1))}}}}))
+			if (err == nil) != test.want {
+				t.Fatalf("depth=%d err=%v", test.depth, err)
+			}
+		})
+	}
+}
+
+func TestMongoMutationRejectsResultBeyondBSONNestingLimit(t *testing.T) {
+	doc := mustDocument(t, bson.D{{Key: "existing", Value: int32(1)}})
+	before := append(wire.Document(nil), doc...)
+	boundary, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "deep", Value: deeplyNestedRawDocumentValue(mongoMutationMaxBSONNesting-2, int32(1))}}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := applyMongoMutation(doc, boundary); err != nil || !changed {
+		t.Fatalf("boundary result changed=%v err=%v", changed, err)
+	}
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{
+		{Key: "marker", Value: true},
+		{Key: "deep", Value: deeplyNestedRawDocumentValue(mongoMutationMaxBSONNesting-1, int32(1))},
+	}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || changed || !bytes.Equal(doc, before) {
+		t.Fatalf("over-limit result changed=%v err=%v", changed, err)
+	}
+}
+
+func TestMongoMutationRejectsWideEachBeforeMaterialization(t *testing.T) {
+	small := mongoMutationEachUpdate(t, mongoMutationMaxEachValues+1)
+	wide := mongoMutationEachUpdate(t, 4096)
+	if _, err := parseMongoMutation(wide); err == nil {
+		t.Fatal("accepted wide $each")
+	}
+	smallAllocs := testing.AllocsPerRun(100, func() {
+		if _, err := parseMongoMutation(small); err == nil {
+			t.Fatal("accepted over-limit $each")
+		}
+	})
+	wideAllocs := testing.AllocsPerRun(100, func() {
+		if _, err := parseMongoMutation(wide); err == nil {
+			t.Fatal("accepted wide $each")
+		}
+	})
+	if wideAllocs > smallAllocs+8 {
+		t.Fatalf("wide $each allocations=%f small=%f want bounded", wideAllocs, smallAllocs)
+	}
+}
+
+func TestMongoMutationRejectsWideStoredBSONBeforeDecode(t *testing.T) {
+	doc := rawDocumentWithIDAndValue("u1", "items", wideRawArrayValue(mongoMutationMaxDecodedElements+1))
+	before := append(wire.Document(nil), doc...)
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+		{Key: "$push", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: bson.A{}}}}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || changed || !bytes.Equal(doc, before) {
+		t.Fatalf("wide stored BSON changed=%v err=%v", changed, err)
+	}
+}
+
+func TestMongoMutationSharesDecodeBudgetAcrossOperands(t *testing.T) {
+	doc := rawDocumentWithIDAndValue("u1", "stable", bson.RawValue{Type: bson.TypeBoolean, Value: []byte{1}})
+	before := append(wire.Document(nil), doc...)
+	items := mongoMutationMaxDecodedElements/2 + 1
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{
+		{Key: "nested.items", Value: wideRawArrayValue(items)},
+		{Key: "other", Value: wideRawArrayValue(items)},
+	}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || changed || !bytes.Equal(doc, before) {
+		t.Fatalf("split operands bypassed shared decode budget: changed=%v err=%v", changed, err)
+	}
+}
+
+func TestServerUpdateRejectsWideStoredBSONBeforeDecode(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
+	opts.ValueLog.PointerThreshold = 1
+	backend, closeBackend, err := treedb.OpenBackend(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = closeBackend() }()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(backend)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	doc := rawDocumentWithIDAndValue("u1", "items", wideRawArrayValue(mongoMutationMaxDecodedElements+1))
+	assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.Raw(doc)}}, {Key: "$db", Value: "app"}}))
+	response := serveCommand(t, server, 2, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}}, {Key: "$push", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: bson.A{}}}}}}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "BadValue")
+	find := serveCommand(t, server, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	if got := cursorFirstBatch(t, find)[0]; !got.Lookup("marker").IsZero() {
+		t.Fatalf("rejected wide stored update changed document: %v", got)
+	}
+}
+
+func TestServerUpdateSharesDecodeBudgetAcrossOperands(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
+	opts.ValueLog.PointerThreshold = 1
+	backend, closeBackend, err := treedb.OpenBackend(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = closeBackend() }()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(backend)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.Raw(rawDocumentWithIDAndValue("u1", "stable", bson.RawValue{Type: bson.TypeBoolean, Value: []byte{1}}))}}, {Key: "$db", Value: "app"}}))
+	items := mongoMutationMaxDecodedElements/2 + 1
+	response := serveCommand(t, server, 2, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "nested.items", Value: wideRawArrayValue(items)}, {Key: "other", Value: wideRawArrayValue(items)}}}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "BadValue")
+	find := serveCommand(t, server, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	got := cursorFirstBatch(t, find)[0]
+	if !got.Lookup("nested").IsZero() || !got.Lookup("other").IsZero() {
+		t.Fatalf("rejected split operand update changed document: %v", got)
+	}
+}
+
+func TestMongoUpdateItemRejectsWideTargetsBeforeMaterialization(t *testing.T) {
+	fields := bson.D{}
+	for i := 0; i < 4096; i++ {
+		fields = append(fields, bson.E{Key: fmt.Sprintf("field%d", i), Value: true})
+	}
+	item := mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: fields}}},
+	})
+	if _, err := parseMongoUpdateItem(0, item); err == nil {
+		t.Fatal("accepted wide target set")
+	}
+	nearLimit := bson.D{}
+	for i := 0; i < mongoMutationMaxTargets+1; i++ {
+		nearLimit = append(nearLimit, bson.E{Key: fmt.Sprintf("field%d", i), Value: true})
+	}
+	nearItem := mustDocument(t, bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: nearLimit}}}})
+	nearAllocs := testing.AllocsPerRun(100, func() {
+		if _, err := parseMongoUpdateItem(0, nearItem); err == nil {
+			t.Fatal("accepted over-limit target set")
+		}
+	})
+	wideAllocs := testing.AllocsPerRun(100, func() {
+		if _, err := parseMongoUpdateItem(0, item); err == nil {
+			t.Fatal("accepted wide target set")
+		}
+	})
+	if wideAllocs > nearAllocs+8 {
+		t.Fatalf("wide target allocations=%f near=%f want bounded", wideAllocs, nearAllocs)
+	}
+}
+
+func TestServerUpdateRejectsWideMutationOperandsBeforeAnyChange(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 1, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "items", Value: bson.A{"old"}}}}},
+		{Key: "$db", Value: "app"},
+	}))
+	wideEach := make(bson.A, 4096)
+	for i := range wideEach {
+		wideEach[i] = true
+	}
+	deep := deeplyNestedRawDocumentValue(mongoMutationMaxBSONNesting-1, int32(1))
+	for requestID, update := range []bson.D{
+		{{Key: "$set", Value: bson.D{{Key: "marker", Value: "wide"}}}, {Key: "$push", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: wideEach}}}}}},
+		{{Key: "$set", Value: bson.D{{Key: "marker", Value: "deep"}, {Key: "deep", Value: deep}}}},
+	} {
+		response := serveCommand(t, server, int32(requestID+2), bson.D{
+			{Key: "update", Value: "users"},
+			{Key: "updates", Value: bson.A{bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+				{Key: "u", Value: update},
+			}}},
+			{Key: "$db", Value: "app"},
+		})
+		assertCommandError(t, response, "BadValue")
+	}
+	find := serveCommand(t, server, 4, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	doc := cursorFirstBatch(t, find)[0]
+	if !doc.Lookup("marker").IsZero() || !doc.Lookup("deep").IsZero() {
+		t.Fatalf("rejected update changed document: %v", doc)
+	}
+	items, err := doc.Lookup("items").Array().Values()
+	if err != nil || len(items) != 1 || items[0].StringValue() != "old" {
+		t.Fatalf("rejected update changed array: values=%v err=%v", items, err)
+	}
+}
+
+func mongoMutationEachUpdate(t *testing.T, count int) wire.Document {
+	t.Helper()
+	values := make(bson.A, count)
+	for i := range values {
+		values[i] = true
+	}
+	return mustDocument(t, bson.D{{Key: "$push", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: values}}}}}})
+}
+
+func TestMongoUpdateItemRejectsDeepPureSetBeforeApplication(t *testing.T) {
+	doc := mustDocument(t, bson.D{{Key: "existing", Value: int32(1)}})
+	before := append(wire.Document(nil), doc...)
+	_, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "deep", Value: deeplyNestedRawDocumentValue(mongoMutationMaxBSONNesting, int32(1))}}}}},
+	}))
+	if err == nil || !bytes.Equal(doc, before) {
+		t.Fatalf("deep pure set err=%v document changed=%v", err, !bytes.Equal(doc, before))
+	}
+}
+
+func TestMongoMutationAddToSetDistinguishesNonFiniteDecimal128(t *testing.T) {
+	positive, err := bson.ParseDecimal128("Infinity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	negative, err := bson.ParseDecimal128("-Infinity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nan, err := bson.ParseDecimal128("NaN")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$addToSet", Value: bson.D{
+			{Key: "items", Value: bson.D{{Key: "$each", Value: bson.A{negative, positive, nan, nan}}}},
+		}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, changed, err := applyMongoMutation(mustDocument(t, bson.D{{Key: "items", Value: bson.A{positive}}}), mutation)
+	values, valuesErr := bson.Raw(updated).Lookup("items").Array().Values()
+	if err != nil || !changed || valuesErr != nil || len(values) != 3 || values[0].Decimal128().String() != "Infinity" || values[1].Decimal128().String() != "-Infinity" || values[2].Decimal128().String() != "NaN" {
+		t.Fatalf("non-finite Decimal128 $addToSet changed=%v err=%v values=%v valuesErr=%v", changed, err, values, valuesErr)
+	}
+}
+
+func TestMongoMutationAddToSetDeduplicatesNestedNaN(t *testing.T) {
+	decimalNaN, err := bson.ParseDecimal128("NaN")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := mustDocument(t, bson.D{
+		{Key: "documents", Value: bson.A{bson.D{{Key: "n", Value: math.NaN()}}}},
+		{Key: "arrays", Value: bson.A{bson.A{decimalNaN}}},
+	})
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$addToSet", Value: bson.D{
+		{Key: "documents", Value: bson.D{{Key: "$each", Value: bson.A{bson.D{{Key: "n", Value: decimalNaN}}}}}},
+		{Key: "arrays", Value: bson.D{{Key: "$each", Value: bson.A{bson.A{math.NaN()}}}}},
+	}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, changed, err := applyMongoMutation(doc, mutation)
+	if err != nil || changed || !bytes.Equal(updated, doc) {
+		t.Fatalf("nested NaN $addToSet changed=%v err=%v", changed, err)
 	}
 }
 
@@ -6153,17 +6904,658 @@ func TestMongoMutationApplyOperatorsAndReplacement(t *testing.T) {
 	}
 }
 
+func TestMongoMutationNestedOperators(t *testing.T) {
+	decimalOne, err := bson.ParseDecimal128("1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := mustDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "profile", Value: bson.D{{Key: "name", Value: "ada"}, {Key: "count", Value: int32(1)}, {Key: "old", Value: true}}},
+		{Key: "tags", Value: bson.A{"go"}},
+		{Key: "labels", Value: bson.A{"go"}},
+		{Key: "scalarLabels", Value: bson.A{"go"}},
+		{Key: "numbers", Value: bson.A{int32(1)}},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "a", Value: int32(1)}, {Key: "b", Value: int32(2)}}}},
+	})
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "profile.name", Value: "grace"}, {Key: "profile.city", Value: "london"}}},
+		{Key: "$set", Value: bson.D{{Key: "profile._id", Value: "nested"}}},
+		{Key: "$set", Value: bson.D{{Key: "profile.binary", Value: bson.Binary{Subtype: 0x80, Data: []byte{1, 2}}}}},
+		{Key: "$inc", Value: bson.D{{Key: "profile.count", Value: int32(2)}}},
+		{Key: "$push", Value: bson.D{{Key: "tags", Value: bson.D{{Key: "$each", Value: bson.A{"db", "go"}}}}}},
+		{Key: "$push", Value: bson.D{{Key: "events", Value: bson.D{{Key: "kind", Value: "login"}}}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "empty", Value: bson.D{{Key: "$each", Value: bson.A{}}}}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "labels", Value: bson.D{{Key: "$each", Value: bson.A{"go", "db", "go"}}}}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "scalarLabels", Value: "db"}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "numbers", Value: bson.D{{Key: "$each", Value: bson.A{int64(1), float64(1), decimalOne, int32(2)}}}}}},
+		{Key: "$addToSet", Value: bson.D{
+			{Key: "documents", Value: bson.D{
+				{Key: "$each", Value: bson.A{
+					bson.D{{Key: "a", Value: int32(1)}, {Key: "b", Value: int32(2)}},
+					bson.D{{Key: "b", Value: int32(2)}, {Key: "a", Value: int32(1)}},
+				}},
+			}},
+		}},
+		{Key: "$unset", Value: bson.D{{Key: "profile.old", Value: true}}},
+	}))
+	if err != nil {
+		t.Fatalf("parse nested mutation: %v", err)
+	}
+	updated, changed, err := applyMongoMutation(doc, mutation)
+	if err != nil || !changed {
+		t.Fatalf("apply nested mutation changed=%v err=%v", changed, err)
+	}
+	profile := bson.Raw(updated).Lookup("profile").Document()
+	if got, _ := profile.Lookup("name").StringValueOK(); got != "grace" {
+		t.Fatalf("profile.name=%q", got)
+	}
+	if got, _ := profile.Lookup("_id").StringValueOK(); got != "nested" {
+		t.Fatalf("profile._id=%q", got)
+	}
+	if got, _ := profile.Lookup("count").Int32OK(); got != 3 {
+		t.Fatalf("profile.count=%d", got)
+	}
+	if subtype, value := profile.Lookup("binary").Binary(); subtype != 0x80 || !bytes.Equal(value, []byte{1, 2}) {
+		t.Fatalf("profile.binary=%#x/%v", subtype, value)
+	}
+	if !profile.Lookup("old").IsZero() {
+		t.Fatal("profile.old remains")
+	}
+	values, err := bson.Raw(updated).Lookup("tags").Array().Values()
+	if err != nil || len(values) != 3 {
+		t.Fatalf("tags=%v err=%v", values, err)
+	}
+	values, err = bson.Raw(updated).Lookup("labels").Array().Values()
+	if err != nil || len(values) != 2 {
+		t.Fatalf("labels=%v err=%v", values, err)
+	}
+	values, err = bson.Raw(updated).Lookup("scalarLabels").Array().Values()
+	if err != nil || len(values) != 2 || values[0].StringValue() != "go" || values[1].StringValue() != "db" {
+		t.Fatalf("scalarLabels=%v err=%v", values, err)
+	}
+	values, err = bson.Raw(updated).Lookup("numbers").Array().Values()
+	if err != nil || len(values) != 2 || values[0].Type != bson.TypeInt32 || values[1].Type != bson.TypeInt32 || values[1].Int32() != 2 {
+		t.Fatalf("numbers=%v err=%v", values, err)
+	}
+	values, err = bson.Raw(updated).Lookup("documents").Array().Values()
+	if err != nil || len(values) != 2 {
+		t.Fatalf("documents=%v err=%v", values, err)
+	}
+	first, firstErr := values[0].Document().Elements()
+	second, secondErr := values[1].Document().Elements()
+	if firstErr != nil || secondErr != nil || len(first) != 2 || len(second) != 2 || first[0].Key() != "a" || first[1].Key() != "b" || second[0].Key() != "b" || second[1].Key() != "a" {
+		t.Fatalf("documents preserve BSON field order: %v", values)
+	}
+	events, err := bson.Raw(updated).Lookup("events").Array().Values()
+	if err != nil || len(events) != 1 || events[0].Document().Lookup("kind").StringValue() != "login" {
+		t.Fatalf("events=%v err=%v", events, err)
+	}
+	if !bson.Raw(updated).Lookup("empty").IsZero() {
+		t.Fatal("empty $each created an array")
+	}
+}
+
+func TestMongoMutationAddToSetUsesNestedNumericEquality(t *testing.T) {
+	decimalOne, err := bson.ParseDecimal128("1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := mustDocument(t, bson.D{
+		{Key: "items", Value: bson.A{bson.D{{Key: "n", Value: int32(1)}}}},
+		{Key: "arrays", Value: bson.A{bson.A{int32(1), bson.D{{Key: "n", Value: int32(1)}}}}},
+	})
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$addToSet", Value: bson.D{
+			{Key: "items", Value: bson.D{
+				{Key: "$each", Value: bson.A{
+					bson.D{{Key: "n", Value: int64(1)}},
+					bson.D{{Key: "n", Value: float64(1)}},
+					bson.D{{Key: "n", Value: decimalOne}},
+					bson.D{{Key: "n", Value: int32(2)}},
+				}},
+			}},
+			{Key: "arrays", Value: bson.D{
+				{Key: "$each", Value: bson.A{
+					bson.A{int64(1), bson.D{{Key: "n", Value: decimalOne}}},
+				}},
+			}},
+		}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, changed, err := applyMongoMutation(doc, mutation)
+	values, valuesErr := bson.Raw(updated).Lookup("items").Array().Values()
+	if err != nil || !changed || valuesErr != nil || len(values) != 2 {
+		t.Fatalf("nested numeric $addToSet changed=%v err=%v values=%v valuesErr=%v", changed, err, values, valuesErr)
+	}
+	arrays, arraysErr := bson.Raw(updated).Lookup("arrays").Array().Values()
+	if arraysErr != nil || len(arrays) != 1 {
+		t.Fatalf("nested numeric array $addToSet values=%v err=%v", arrays, arraysErr)
+	}
+}
+
+func TestMongoMutationAddToSetRejectsLargeComparisonBytesBeforeMutation(t *testing.T) {
+	payload := strings.Repeat("x", 512<<10)
+	values := bson.A{}
+	for i := range 9 {
+		values = append(values, bson.D{{Key: "payload", Value: payload + fmt.Sprintf("-%d", i)}})
+	}
+	doc := mustDocument(t, bson.D{{Key: "items", Value: bson.A{bson.D{{Key: "payload", Value: payload + "-existing"}}}}})
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: values}}}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || changed || !bson.Raw(doc).Lookup("marker").IsZero() {
+		t.Fatalf("large comparison changed=%v err=%v", changed, err)
+	}
+}
+
+func TestMongoMutationAddToSetAcceptsRepeatedIdenticalDecimal128Values(t *testing.T) {
+	decimal, err := bson.ParseDecimal128("1E+6000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make(bson.A, mongoMutationMaxEachValues)
+	for i := range values {
+		values[i] = decimal
+	}
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: values}}}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}})
+	updated, changed, err := applyMongoMutation(doc, mutation)
+	if err != nil || !changed {
+		t.Fatalf("identical Decimal128 $addToSet changed=%v err=%v", changed, err)
+	}
+	items, itemsErr := bson.Raw(updated).Lookup("items").Array().Values()
+	if itemsErr != nil || len(items) != 1 || !mongoMutationValuesEqual(items[0], mustRawValue(t, decimal)) || !bson.Raw(updated).Lookup("marker").Boolean() {
+		t.Fatalf("identical Decimal128 $addToSet changed=%v err=%v items=%v itemsErr=%v marker=%v", changed, err, items, itemsErr, bson.Raw(updated).Lookup("marker"))
+	}
+}
+
+func TestMongoMutationAddToSetAcceptsAlternatingEquivalentDecimal128Values(t *testing.T) {
+	left, err := bson.ParseDecimal128("1E+6000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := bson.ParseDecimal128("10E+5999")
+	if err != nil {
+		t.Fatal(err)
+	}
+	leftRaw := mustRawValue(t, left)
+	rightRaw := mustRawValue(t, right)
+	if bytes.Equal(leftRaw.Value, rightRaw.Value) || !mongoMutationValuesEqual(leftRaw, rightRaw) {
+		t.Fatal("alternating Decimal128 operands must be numerically equal with distinct encodings")
+	}
+	values := make(bson.A, 46)
+	for i := range values {
+		if i%2 == 0 {
+			values[i] = left
+		} else {
+			values[i] = right
+		}
+	}
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: values}}}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	work, ok := mongoMutationAddToSetDecimalComparisonWork(nil, mutation.addToSet[0].values, mongoMutationMaxAddToSetDecimalComparisons)
+	if !ok || work != len(values) {
+		t.Fatalf("alternating equivalent Decimal128 work=%d ok=%v want=%d", work, ok, len(values))
+	}
+	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}})
+	updated, changed, err := applyMongoMutation(doc, mutation)
+	if err != nil || !changed {
+		t.Fatalf("alternating equivalent Decimal128 $addToSet changed=%v err=%v", changed, err)
+	}
+	items, itemsErr := bson.Raw(updated).Lookup("items").Array().Values()
+	if itemsErr != nil || len(items) != 1 || !mongoMutationValuesEqual(items[0], leftRaw) || !bson.Raw(updated).Lookup("marker").Boolean() {
+		t.Fatalf("alternating equivalent Decimal128 $addToSet changed=%v err=%v items=%v itemsErr=%v marker=%v", changed, err, items, itemsErr, bson.Raw(updated).Lookup("marker"))
+	}
+}
+
+func TestMongoMutationAddToSetAcceptsDocumentsWithIdenticalDecimal128Leaves(t *testing.T) {
+	decimal, err := bson.ParseDecimal128("1E+6000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make(bson.A, 33)
+	for i := range values {
+		values[i] = bson.D{{Key: "n", Value: decimal}, {Key: "i", Value: int32(i)}}
+	}
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: values}}}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := mutation.addToSet[0].values[0]
+	last := mutation.addToSet[0].values[len(mutation.addToSet[0].values)-1]
+	if bytes.Equal(first.Value, last.Value) || !bytes.Equal(first.Document().Lookup("n").Value, last.Document().Lookup("n").Value) {
+		t.Fatal("nested Decimal128 documents must differ while their Decimal128 leaves remain byte-identical")
+	}
+	doc := mustDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "items", Value: bson.A{values[0]}},
+	})
+	updated, changed, err := applyMongoMutation(doc, mutation)
+	if err != nil || !changed {
+		t.Fatalf("identical nested Decimal128 $addToSet changed=%v err=%v", changed, err)
+	}
+	items, itemsErr := bson.Raw(updated).Lookup("items").Array().Values()
+	if itemsErr != nil || len(items) != len(values) || !bson.Raw(updated).Lookup("marker").Boolean() {
+		t.Fatalf("identical nested Decimal128 $addToSet changed=%v err=%v items=%d itemsErr=%v marker=%v", changed, err, len(items), itemsErr, bson.Raw(updated).Lookup("marker"))
+	}
+}
+
+func TestMongoMutationAddToSetAcceptsDistinctDecimal128NaNPayloads(t *testing.T) {
+	values := make(bson.A, mongoMutationMaxEachValues)
+	for i := range values {
+		value := bson.NewDecimal128(0x1f<<58, uint64(i+1))
+		if !value.IsNaN() {
+			t.Fatalf("value %d is not NaN", i)
+		}
+		values[i] = value
+	}
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: values}}}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mutation.addToSet) != 1 || len(mutation.addToSet[0].values) != mongoMutationMaxEachValues || bytes.Equal(mutation.addToSet[0].values[0].Value, mutation.addToSet[0].values[len(mutation.addToSet[0].values)-1].Value) {
+		t.Fatal("Decimal128 NaN payloads did not remain byte-distinct")
+	}
+	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}})
+	updated, changed, err := applyMongoMutation(doc, mutation)
+	if err != nil || !changed {
+		t.Fatalf("distinct Decimal128 NaN $addToSet changed=%v err=%v", changed, err)
+	}
+	items, itemsErr := bson.Raw(updated).Lookup("items").Array().Values()
+	if itemsErr != nil || len(items) != 1 || !rawValueIsNaN(items[0]) || !bson.Raw(updated).Lookup("marker").Boolean() {
+		t.Fatalf("distinct Decimal128 NaN $addToSet changed=%v err=%v items=%v itemsErr=%v marker=%v", changed, err, items, itemsErr, bson.Raw(updated).Lookup("marker"))
+	}
+}
+
+func TestMongoMutationAddToSetAcceptsNestedDistinctDecimal128NaNPayloads(t *testing.T) {
+	values := make(bson.A, mongoMutationMaxEachValues)
+	for i := range values {
+		value := bson.NewDecimal128(0x1f<<58, uint64(i+1))
+		if !value.IsNaN() {
+			t.Fatalf("value %d is not NaN", i)
+		}
+		values[i] = bson.D{{Key: "n", Value: value}}
+	}
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: values}}}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mutation.addToSet) != 1 || len(mutation.addToSet[0].values) != mongoMutationMaxEachValues || bytes.Equal(mutation.addToSet[0].values[0].Value, mutation.addToSet[0].values[len(mutation.addToSet[0].values)-1].Value) {
+		t.Fatal("nested Decimal128 NaN payloads did not remain byte-distinct")
+	}
+	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}})
+	updated, changed, err := applyMongoMutation(doc, mutation)
+	if err != nil || !changed {
+		t.Fatalf("nested distinct Decimal128 NaN $addToSet changed=%v err=%v", changed, err)
+	}
+	items, itemsErr := bson.Raw(updated).Lookup("items").Array().Values()
+	if itemsErr != nil || len(items) != 1 || !rawValueIsNaN(items[0].Document().Lookup("n")) || !bson.Raw(updated).Lookup("marker").Boolean() {
+		t.Fatalf("nested distinct Decimal128 NaN $addToSet changed=%v err=%v items=%v itemsErr=%v marker=%v", changed, err, items, itemsErr, bson.Raw(updated).Lookup("marker"))
+	}
+}
+
+func TestMongoMutationAddToSetRejectsExpensiveDecimal128ComparisonsBeforeMutation(t *testing.T) {
+	existing := bson.A{}
+	candidates := bson.A{}
+	for i := range 128 {
+		value, err := bson.ParseDecimal128(fmt.Sprintf("%dE+6000", i+1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		existing = append(existing, value)
+	}
+	for i := range mongoMutationMaxEachValues {
+		value, err := bson.ParseDecimal128(fmt.Sprintf("%dE+6000", i+129))
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidates = append(candidates, value)
+	}
+	doc := mustDocument(t, bson.D{{Key: "items", Value: existing}})
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: candidates}}}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || !strings.Contains(err.Error(), "1024 Decimal128 comparisons") || changed || !bson.Raw(doc).Lookup("marker").IsZero() {
+		t.Fatalf("expensive Decimal128 comparison changed=%v err=%v", changed, err)
+	}
+}
+
+func TestMongoMutationAddToSetChargesNestedDecimal128LeavesBeforeMutation(t *testing.T) {
+	existing := bson.A{}
+	candidate := bson.A{}
+	left, err := bson.ParseDecimal128("1E+6000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := bson.ParseDecimal128("10E+5999")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(mustRawValue(t, left).Value, mustRawValue(t, right).Value) || !mongoMutationValuesEqual(mustRawValue(t, left), mustRawValue(t, right)) {
+		t.Fatal("nested Decimal128 operands must be numerically equal with distinct encodings")
+	}
+	if decimal128NormalizationCount(mustRawValue(t, left)) != 1 || decimal128NormalizationCount(mustRawValue(t, right)) != 1 {
+		t.Fatal("nested Decimal128 operands must both require finite normalization")
+	}
+	// The 513th equal-but-differently-encoded leaf would require the 1,025th
+	// and 1,026th finite Decimal128 normalizations.
+	for range mongoMutationMaxAddToSetDecimalComparisons/2 + 1 {
+		existing = append(existing, left)
+		candidate = append(candidate, right)
+	}
+	work, ok := mongoMutationAddToSetDecimalComparisonWork(
+		[]bson.RawValue{mustRawValue(t, existing)},
+		[]bson.RawValue{mustRawValue(t, candidate)},
+		mongoMutationMaxAddToSetDecimalComparisons,
+	)
+	if ok || work != mongoMutationMaxAddToSetDecimalComparisons {
+		t.Fatalf("nested Decimal128 work=%d ok=%v", work, ok)
+	}
+	doc := mustDocument(t, bson.D{{Key: "items", Value: bson.A{existing}}})
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "items", Value: candidate}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedValues, err := mongoMutationRawArrayPathValues(bson.Raw(doc), []string{"items"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	work, ok = mongoMutationAddToSetDecimalComparisonWork(storedValues, mutation.addToSet[0].values, mongoMutationMaxAddToSetDecimalComparisons)
+	if ok || work != mongoMutationMaxAddToSetDecimalComparisons {
+		t.Fatalf("parsed nested Decimal128 work=%d ok=%v stored=%d candidates=%d", work, ok, len(storedValues), len(mutation.addToSet[0].values))
+	}
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || !strings.Contains(err.Error(), "Decimal128 comparisons") || changed || !bson.Raw(doc).Lookup("marker").IsZero() {
+		t.Fatalf("nested Decimal128 comparison changed=%v err=%v", changed, err)
+	}
+}
+
+func TestMongoMutationAddToSetSharesDecimal128BudgetAcrossTargets(t *testing.T) {
+	values := bson.A{}
+	for i := range 33 {
+		value, err := bson.ParseDecimal128(fmt.Sprintf("%dE+6000", i+1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		values = append(values, value)
+	}
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+		{Key: "$addToSet", Value: bson.D{
+			{Key: "first", Value: bson.D{{Key: "$each", Value: values}}},
+			{Key: "second", Value: bson.D{{Key: "$each", Value: values}}},
+		}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}})
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || !strings.Contains(err.Error(), "Decimal128 comparisons") || changed || !bson.Raw(doc).Lookup("marker").IsZero() {
+		t.Fatalf("multi-target Decimal128 comparison changed=%v err=%v", changed, err)
+	}
+}
+
+func TestMongoMutationAddToSetChargesDecimal128LeavesOnBothSides(t *testing.T) {
+	left := bson.A{}
+	right := bson.A{}
+	for i := range 2048 {
+		decimal, err := bson.ParseDecimal128("0E+6000")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i%2 == 0 {
+			left = append(left, decimal)
+			right = append(right, int32(0))
+		} else {
+			left = append(left, int32(0))
+			right = append(right, decimal)
+		}
+	}
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: bson.A{left, right}}}}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}})
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || !strings.Contains(err.Error(), "Decimal128 comparisons") || changed || !bson.Raw(doc).Lookup("marker").IsZero() {
+		t.Fatalf("opposite Decimal128 leaves changed=%v err=%v", changed, err)
+	}
+}
+
+func TestMongoMutationAddToSetRejectsMalformedDecimalLeafCountWithoutOverflow(t *testing.T) {
+	decimal, err := bson.ParseDecimal128("1E+6000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	work, ok := mongoMutationAddToSetDecimalComparisonWork(
+		[]bson.RawValue{{Type: bson.TypeEmbeddedDocument, Value: []byte{0xff}}},
+		[]bson.RawValue{mustRawValue(t, decimal)},
+		mongoMutationMaxAddToSetDecimalComparisons,
+	)
+	if ok || work < 0 || work > mongoMutationMaxAddToSetDecimalComparisons {
+		t.Fatalf("malformed Decimal128 work=%d ok=%v", work, ok)
+	}
+	work, ok = mongoMutationAddToSetDecimalComparisonWork(
+		[]bson.RawValue{mustRawValue(t, decimal)},
+		[]bson.RawValue{{Type: bson.TypeEmbeddedDocument, Value: []byte{0xff}}},
+		mongoMutationMaxAddToSetDecimalComparisons,
+	)
+	if ok || work < 0 || work > mongoMutationMaxAddToSetDecimalComparisons {
+		t.Fatalf("malformed right Decimal128 work=%d ok=%v", work, ok)
+	}
+}
+
+func TestMongoMutationEmptyNestedArrayEachDoesNotCreateParents(t *testing.T) {
+	for _, operator := range []string{"$push", "$addToSet"} {
+		t.Run(operator, func(t *testing.T) {
+			mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+				{Key: "$set", Value: bson.D{{Key: "changed", Value: true}}},
+				{Key: operator, Value: bson.D{{Key: "parent.items", Value: bson.D{{Key: "$each", Value: bson.A{}}}}}},
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			updated, changed, err := applyMongoMutation(mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}), mutation)
+			if err != nil || !changed || !bson.Raw(updated).Lookup("changed").Boolean() || !bson.Raw(updated).Lookup("parent").IsZero() {
+				t.Fatalf("updated=%v changed=%v err=%v", updated, changed, err)
+			}
+		})
+	}
+}
+
+func TestMongoMutationArrayDocumentWithLaterEachIsScalar(t *testing.T) {
+	for _, operator := range []string{"$push", "$addToSet"} {
+		t.Run(operator, func(t *testing.T) {
+			literal := bson.D{{Key: "kind", Value: "login"}, {Key: "$each", Value: "metadata"}}
+			mutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: operator, Value: bson.D{{Key: "events", Value: literal}}}}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			updated, changed, err := applyMongoMutation(mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}), mutation)
+			values, valuesErr := bson.Raw(updated).Lookup("events").Array().Values()
+			if err != nil || !changed || valuesErr != nil || len(values) != 1 || values[0].Document().Lookup("kind").StringValue() != "login" || values[0].Document().Lookup("$each").StringValue() != "metadata" {
+				t.Fatalf("updated=%v changed=%v err=%v values=%v valuesErr=%v", updated, changed, err, values, valuesErr)
+			}
+		})
+	}
+}
+
+func TestMongoMutationSetOnInsertOnlyAppliesToInsertion(t *testing.T) {
+	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "state", Value: "matched"}})
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "state", Value: "updated"}}},
+		{Key: "$setOnInsert", Value: bson.D{{Key: "created.by", Value: "gateway"}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	matched, _, err := applyMongoMutation(doc, mutation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bson.Raw(matched).Lookup("created").IsZero() {
+		t.Fatal("matched update applied $setOnInsert")
+	}
+	inserted, _, err := applyMongoMutationWithOptions(mustDocument(t, bson.D{{Key: "_id", Value: "u2"}}), mutation, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bson.Raw(inserted).Lookup("created").Document().Lookup("by").StringValue(); got != "gateway" {
+		t.Fatalf("created.by=%q", got)
+	}
+}
+
+func TestMongoMutationEmptyOperatorSpecificationsAreNoops(t *testing.T) {
+	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}})
+	for _, operator := range []string{"$set", "$unset", "$inc", "$push", "$addToSet", "$setOnInsert"} {
+		t.Run(operator, func(t *testing.T) {
+			mutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: operator, Value: bson.D{}}}))
+			if err != nil {
+				t.Fatalf("parse %s: %v", operator, err)
+			}
+			updated, changed, err := applyMongoMutation(doc, mutation)
+			if err != nil || changed || !bytes.Equal(updated, doc) {
+				t.Fatalf("apply %s updated=%v changed=%v err=%v", operator, updated, changed, err)
+			}
+		})
+	}
+}
+
 func TestMongoMutationRejectsInvalidShapesAndOverflow(t *testing.T) {
 	for _, update := range []bson.D{
-		{{Key: "$inc", Value: bson.D{{Key: "a.b", Value: 1}}}},
+		{{Key: "$set", Value: bson.D{{Key: "a", Value: 1}, {Key: "a.b", Value: 2}}}},
 		{{Key: "$set", Value: bson.D{{Key: "x", Value: 1}}}, {Key: "$inc", Value: bson.D{{Key: "x", Value: 1}}}},
-		{{Key: "$push", Value: bson.D{{Key: "x", Value: 1}}}},
+		{{Key: "$push", Value: bson.D{{Key: "x", Value: bson.D{{Key: "$each", Value: "bad"}}}}}},
 	} {
 		if _, err := parseMongoMutation(mustDocument(t, update)); err == nil {
 			t.Fatalf("accepted %v", update)
 		}
 	}
-	_, err := mongoMutationIncrement(mustRawValue(t, int64(math.MaxInt64)), mustRawValue(t, int64(1)))
+	for _, path := range []string{"", ".a", "a.", "a..b", "$", "$[]", "$[x]", "tags.0"} {
+		if _, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: path, Value: int32(1)}}}})); err == nil {
+			t.Fatalf("accepted invalid update path %q", path)
+		}
+	}
+	if _, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "2026", Value: int32(1)}}}})); err != nil {
+		t.Fatalf("rejected top-level numeric field: %v", err)
+	}
+	pathAtLimit := strings.Repeat("a.", mongoMutationMaxPathDepth-1) + "a"
+	if _, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: pathAtLimit, Value: int32(1)}}}})); err != nil {
+		t.Fatalf("rejected %d-component path: %v", mongoMutationMaxPathDepth, err)
+	}
+	pathOverLimit := pathAtLimit + ".a"
+	if _, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: pathOverLimit, Value: int32(1)}}}})); err == nil {
+		t.Fatalf("accepted %d-component path", mongoMutationMaxPathDepth+1)
+	}
+	disjoint := make(map[string]struct{}, 2048)
+	for i := range 2048 {
+		disjoint[fmt.Sprintf("field%d", i)] = struct{}{}
+	}
+	if err := validateMongoMutationPathConflicts(disjoint); err != nil {
+		t.Fatalf("disjoint paths conflict: %v", err)
+	}
+	disjoint["field1.child"] = struct{}{}
+	if err := validateMongoMutationPathConflicts(disjoint); err == nil {
+		t.Fatal("ancestor conflict accepted")
+	}
+	if err := validateMongoMutationPathConflicts(map[string]struct{}{"a": {}, "a-foo": {}, "a.b": {}}); err == nil {
+		t.Fatal("intervening sibling hid ancestor conflict")
+	}
+	overLimit := bson.A{}
+	for range mongoMutationMaxEachValues + 1 {
+		overLimit = append(overLimit, int32(1))
+	}
+	if _, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$push", Value: bson.D{
+		{Key: "tooMany", Value: bson.D{{Key: "$each", Value: overLimit}}},
+	}}})); err == nil {
+		t.Fatal("accepted over-limit $each")
+	}
+	targets := bson.D{}
+	for i := range mongoMutationMaxTargets {
+		targets = append(targets, bson.E{Key: fmt.Sprintf("f%d", i), Value: int32(i)})
+	}
+	if _, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: targets}})); err != nil {
+		t.Fatalf("rejected %d targets: %v", mongoMutationMaxTargets, err)
+	}
+	targets = append(targets, bson.E{Key: "overflow", Value: int32(1)})
+	if _, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: targets}})); err == nil {
+		t.Fatalf("accepted %d targets", mongoMutationMaxTargets+1)
+	}
+	comparisonValues := bson.A{}
+	for i := range mongoMutationMaxEachValues {
+		comparisonValues = append(comparisonValues, fmt.Sprintf("new-%d", i))
+	}
+	normalMutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: comparisonValues}}}}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, changed, err := applyMongoMutation(mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}), normalMutation)
+	if values, valuesErr := bson.Raw(updated).Lookup("items").Array().Values(); err != nil || !changed || valuesErr != nil || len(values) != mongoMutationMaxEachValues {
+		t.Fatalf("empty-array $each changed=%v err=%v values=%d valuesErr=%v", changed, err, len(values), valuesErr)
+	}
+	overBudgetArray := make(bson.A, 129)
+	for i := range overBudgetArray {
+		overBudgetArray[i] = int32(i)
+	}
+	comparisonMutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}}, {Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: comparisonValues}}}}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	overBudgetDocument := mustDocument(t, bson.D{{Key: "items", Value: overBudgetArray}})
+	if _, changed, err := applyMongoMutation(overBudgetDocument, comparisonMutation); err == nil || changed || !bson.Raw(overBudgetDocument).Lookup("marker").IsZero() {
+		t.Fatalf("over-budget comparison changed=%v err=%v", changed, err)
+	}
+	for _, test := range []struct {
+		doc  wire.Document
+		path string
+	}{
+		{mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "scalar", Value: true}}), "scalar.child"},
+		{mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "array", Value: bson.A{int32(1)}}}), "array.child"},
+	} {
+		mutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: test.path, Value: int32(1)}}}}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, changed, applyErr := applyMongoMutation(test.doc, mutation); applyErr == nil || changed {
+			t.Fatalf("%s traversal changed=%v err=%v", test.path, changed, applyErr)
+		}
+	}
+	_, err = mongoMutationIncrement(mustRawValue(t, int64(math.MaxInt64)), mustRawValue(t, int64(1)))
 	if err == nil {
 		t.Fatal("overflow accepted")
 	}
@@ -6177,9 +7569,86 @@ func TestMongoMutationRejectsInvalidShapesAndOverflow(t *testing.T) {
 	}
 	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}})
 	invalidReplacement := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}, {Key: "profile.name", Value: "bad"}})
-	updated, changed, err := applyMongoReplacement(doc, invalidReplacement)
+	updated, changed, err = applyMongoReplacement(doc, invalidReplacement)
 	if err == nil || updated != nil || changed || !bytes.Equal(doc, mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}})) {
 		t.Fatalf("invalid replacement updated=%v changed=%v err=%v", updated, changed, err)
+	}
+}
+
+func TestServerUpdateRejectsNumericArrayPathsAndAddToSetComparisonOverflow(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	items := bson.A{}
+	for i := 0; i < 129; i++ {
+		items = append(items, int32(i))
+	}
+	assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "tags", Value: bson.A{"old"}}, {Key: "items", Value: items}}}}, {Key: "$db", Value: "app"}}))
+	update := func(requestID int32, value bson.D) bson.Raw {
+		return serveCommand(t, s, requestID, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: value}}}}, {Key: "$db", Value: "app"}})
+	}
+	assertCommandError(t, update(2, bson.D{{Key: "$set", Value: bson.D{{Key: "tags.0", Value: "new"}}}}), "BadValue")
+	values := bson.A{}
+	for i := range mongoMutationMaxEachValues {
+		values = append(values, fmt.Sprintf("new-%d", i))
+	}
+	assertCommandError(t, update(3, bson.D{{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}}, {Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: values}}}}}}), "BadValue")
+	find := serveCommand(t, s, 4, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	got := cursorFirstBatch(t, find)[0]
+	if tags, tagsErr := got.Lookup("tags").Array().Values(); tagsErr != nil || len(tags) != 1 || tags[0].StringValue() != "old" || !got.Lookup("marker").IsZero() {
+		t.Fatalf("numeric path changed document: tags=%v err=%v marker=%v", tags, tagsErr, got.Lookup("marker"))
+	}
+	if gotItems, itemsErr := got.Lookup("items").Array().Values(); itemsErr != nil || len(gotItems) != len(items) {
+		t.Fatalf("over-budget $addToSet changed items=%d err=%v", len(gotItems), itemsErr)
+	}
+}
+
+func TestServerUpdateRejectsExpensiveDecimal128AddToSetBeforeMutation(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	s.Collections = collections.NewCollectionManager(db)
+	existing := bson.A{}
+	candidates := bson.A{}
+	for i := range 128 {
+		value, parseErr := bson.ParseDecimal128(fmt.Sprintf("%dE+6000", i+1))
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		existing = append(existing, value)
+	}
+	for i := range mongoMutationMaxEachValues {
+		value, parseErr := bson.ParseDecimal128(fmt.Sprintf("%dE+6000", i+129))
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		candidates = append(candidates, value)
+	}
+	assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "items", Value: existing}}}}, {Key: "$db", Value: "app"}}))
+	update := bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+			{Key: "u", Value: bson.D{
+				{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+				{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: candidates}}}}},
+			}},
+		}}},
+		{Key: "$db", Value: "app"},
+	}
+	assertCommandError(t, serveCommand(t, s, 2, update), "BadValue")
+	got := cursorFirstBatch(t, serveCommand(t, s, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}}))[0]
+	items, itemsErr := got.Lookup("items").Array().Values()
+	if itemsErr != nil || len(items) != len(existing) || !got.Lookup("marker").IsZero() {
+		t.Fatalf("expensive Decimal128 mutation changed document: items=%d err=%v marker=%v", len(items), itemsErr, got.Lookup("marker"))
 	}
 }
 
@@ -6220,6 +7689,16 @@ func TestServerUpdateGenericMutationsAcrossDocumentFormats(t *testing.T) {
 			if !got.Lookup("old").IsZero() {
 				t.Fatal("old remains")
 			}
+			binaryUpdate := update(bson.D{{Key: "$set", Value: bson.D{{Key: "profile.binary", Value: bson.Binary{Subtype: 0x80, Data: []byte{1, 2}}}}}})
+			if format == collections.DocumentFormatBSON {
+				assertOK(t, binaryUpdate)
+			} else {
+				assertCommandError(t, binaryUpdate, "BadValue")
+				find = serveCommand(t, s, nextRequestID(), bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+				if !cursorFirstBatch(t, find)[0].Lookup("profile").IsZero() {
+					t.Fatalf("failed BSON nested update changed %s document", format)
+				}
+			}
 			noop := update(bson.D{{Key: "$unset", Value: bson.D{{Key: "stillAbsent", Value: true}}}})
 			assertOK(t, noop)
 			assertInt32(t, noop, "nModified", 0)
@@ -6235,11 +7714,25 @@ func TestServerUpdateGenericMutationsAcrossDocumentFormats(t *testing.T) {
 				{{Key: "$inc", Value: bson.D{{Key: "nullValue", Value: int32(1)}}}},
 				{{Key: "$inc", Value: bson.D{{Key: "textValue", Value: int32(1)}}}},
 				{{Key: "$set", Value: bson.D{{Key: "n", Value: 1}}}, {Key: "$unset", Value: bson.D{{Key: "n", Value: true}}}},
-				{{Key: "$set", Value: bson.D{{Key: "x.y", Value: 1}}}},
 				{{Key: "$set", Value: bson.D{{Key: "_id", Value: "u2"}}}},
 				{{Key: "$push", Value: bson.D{{Key: "n", Value: 1}}}},
 			} {
 				assertCommandError(t, update(badUpdate), "BadValue")
+			}
+			arrayFilters := serveCommand(t, s, nextRequestID(), bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "blocked", Value: true}}}}}, {Key: "arrayFilters", Value: bson.A{bson.D{{Key: "x", Value: int32(1)}}}}}}}, {Key: "$db", Value: "app"}})
+			assertCommandError(t, arrayFilters, "BadValue")
+			find = serveCommand(t, s, nextRequestID(), bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+			if !cursorFirstBatch(t, find)[0].Lookup("blocked").IsZero() {
+				t.Fatalf("arrayFilters update changed %s document", format)
+			}
+			overLimit := bson.A{}
+			for range mongoMutationMaxEachValues + 1 {
+				overLimit = append(overLimit, int32(1))
+			}
+			assertCommandError(t, update(bson.D{{Key: "$push", Value: bson.D{{Key: "tooMany", Value: bson.D{{Key: "$each", Value: overLimit}}}}}}), "BadValue")
+			find = serveCommand(t, s, nextRequestID(), bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+			if !cursorFirstBatch(t, find)[0].Lookup("tooMany").IsZero() {
+				t.Fatalf("over-limit $each changed %s document", format)
 			}
 			find = serveCommand(t, s, nextRequestID(), bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
 			if n, _ := cursorFirstBatch(t, find)[0].Lookup("n").DoubleOK(); n != 2147483648.5 {

@@ -1010,6 +1010,9 @@ func (e mongoUpdateParseError) Error() string {
 }
 
 func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, error) {
+	if !bson.Raw(update).Lookup("arrayFilters").IsZero() {
+		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update does not support arrayFilters", index)}
+	}
 	filter, err := requiredDocumentField(update, "q")
 	if err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
@@ -1053,13 +1056,22 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 	if err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 	}
+	if err := validateMongoMutationTargetCount(updateDoc); err != nil {
+		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+	}
+	if err := validateMongoMutationOperandsNesting(updateDoc); err != nil {
+		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+	}
 	setFields, bsonSetFields, setFieldsOK := mongoSetUpdateFields(updateDoc)
 	bsonSetFields, bsonSetFieldNames, bsonSetFieldsOK := mongoBSONSetUpdateFields(updateDoc)
 	if !setFieldsOK && bsonSetFieldsOK {
 		setFields = bsonSetFieldNames
 	}
 	var mutation mongoMutation
-	pureSet := setFieldsOK || bsonSetFieldsOK
+	pureSet := (setFieldsOK && len(setFields) != 0) || (bsonSetFieldsOK && len(bsonSetFields) != 0)
+	if pureSet && len(setFields) > mongoMutationMaxTargets {
+		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update exceeds %d target fields", index, mongoMutationMaxTargets)}
+	}
 	if !pureSet {
 		mutation, err = parseMongoMutation(updateDoc)
 		if err != nil {
@@ -1248,7 +1260,7 @@ func mongoUpsertDocument(update mongoUpdateItem) (wire.Document, error) {
 			doc, _, err = applySetUpdate(base, update.updateDoc)
 		}
 	} else {
-		doc, _, err = applyMongoMutation(base, update.mutation)
+		doc, _, err = applyMongoMutationWithOptions(base, update.mutation, true)
 	}
 	if err != nil {
 		return nil, err
@@ -1803,7 +1815,7 @@ func mongoUpdateItemsCanUseBSONSet(col *collections.Collection, updates []mongoU
 		return false
 	}
 	for _, update := range updates {
-		if !update.exactID || !update.bsonSetFieldsOK {
+		if !update.exactID || !update.bsonSetFieldsOK || mongoBSONSetFieldsNeedNestingValidation(update.bsonSetFields) {
 			return false
 		}
 	}
@@ -1811,7 +1823,28 @@ func mongoUpdateItemsCanUseBSONSet(col *collections.Collection, updates []mongoU
 }
 
 func mongoUpdateCanUseBSONSet(col *collections.Collection, update mongoUpdateItem) bool {
-	return col != nil && update.exactID && !update.upsert && normalizedMongoUpdateDocumentFormat(col) == collections.DocumentFormatBSON && update.bsonSetFieldsOK
+	return col != nil && update.exactID && !update.upsert && normalizedMongoUpdateDocumentFormat(col) == collections.DocumentFormatBSON && update.bsonSetFieldsOK && !mongoBSONSetFieldsNeedNestingValidation(update.bsonSetFields)
+}
+
+func mongoBSONSetFieldsNeedNestingValidation(fields []collections.BSONSetField) bool {
+	for _, field := range fields {
+		if !mongoBSONSetFieldFitsResultNesting(field.Value) {
+			return true
+		}
+	}
+	return false
+}
+
+// mongoBSONSetFieldFitsResultNesting accounts for the document root added by
+// the structured BSON-set path without routing ordinary shallow containers.
+func mongoBSONSetFieldFitsResultNesting(value bson.RawValue) bool {
+	if _, container := mongoMutationDecodeContainer(value); !container {
+		return true
+	}
+	index, doc := bsoncore.AppendDocumentStart(nil)
+	doc = bsoncore.AppendValueElement(doc, "v", bsoncore.Value{Type: bsoncore.Type(value.Type), Data: value.Value})
+	doc, _ = bsoncore.AppendDocumentEnd(doc, index)
+	return validateMongoMutationRawNesting(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: doc}) == nil
 }
 
 func normalizedMongoUpdateDocumentFormat(col *collections.Collection) collections.DocumentFormat {
@@ -3872,10 +3905,14 @@ func applySetUpdate(doc wire.Document, update wire.Document) (wire.Document, boo
 		return nil, false, errors.New("Mongo gateway $set value must be a document")
 	}
 	sets, setOrder, err := parseSetDocument(setDoc)
-	if err != nil {
-		return nil, false, err
+	if err == nil {
+		return applySetFields(doc, sets, setOrder)
 	}
-	return applySetFields(doc, sets, setOrder)
+	mutation, mutationErr := parseMongoMutation(update)
+	if mutationErr != nil {
+		return nil, false, mutationErr
+	}
+	return applyMongoMutation(doc, mutation)
 }
 
 func applyBSONSetUpdate(doc wire.Document, fields []collections.BSONSetField) (wire.Document, bool, error) {
@@ -3926,7 +3963,7 @@ func applySetFields(doc wire.Document, sets map[string]bson.RawValue, setOrder [
 	if err != nil {
 		return nil, false, err
 	}
-	return wire.Document(raw), changed, nil
+	return finalizeMongoMutationResult(wire.Document(raw), changed, nil)
 }
 
 type mongoMutationField struct {
@@ -3934,34 +3971,66 @@ type mongoMutationField struct {
 	value bson.RawValue
 }
 
-type mongoMutation struct {
-	set, inc []mongoMutationField
-	unset    []string
-	replace  wire.Document
+type mongoMutationArrayField struct {
+	name   string
+	values []bson.RawValue
 }
 
-// parseMongoMutation is deliberately separate from the established $set path.
+type mongoMutation struct {
+	set, setOnInsert, inc []mongoMutationField
+	unset                 []string
+	push, addToSet        []mongoMutationArrayField
+	replace               wire.Document
+}
+
+const mongoMutationMaxEachValues = 256
+const mongoMutationMaxTargets = 256
+
+// Bound $addToSet duplicate checks so one update cannot monopolize a mutation
+// callback by comparing every candidate with an arbitrarily large stored array.
+const mongoMutationMaxAddToSetComparisons = 65536
+
+// Decimal128 comparison currently normalizes finite values through big.Rat.
+// Keep the expensive subset small even when the raw BSON byte budget admits
+// many compact Decimal128 operands with very large exponents.
+const mongoMutationMaxAddToSetDecimalComparisons = 1024
+
+// Also bound the raw BSON value bytes examined by duplicate comparisons. This
+// applies before mutation, including when this modifier is combined with others.
+const mongoMutationMaxAddToSetComparisonBytes uint64 = 8 << 20
+
+// MongoDB limits update paths to 100 components; enforce it before recursive mutation.
+const mongoMutationMaxPathDepth = 100
+
+// MongoDB limits BSON nesting to 100 levels. Validate raw containers before a
+// modifier reaches BSON decoding, which recursively materializes the document.
+const mongoMutationMaxBSONNesting = 100
+
+// Slow nested mutation decoding is bounded independently from BSON nesting.
+const mongoMutationMaxDecodedElements = 65536
+
+// MongoDB BSON objects are capped at 16 MiB. Pair that byte ceiling with the
+// element cap above before slow-path decoding can build an unbounded Go graph.
+const mongoMutationMaxDecodedBSONBytes = 16 << 20
+
+// parseMongoMutation validates the shared modifier subset before any document is changed.
 func parseMongoMutation(update wire.Document) (mongoMutation, error) {
-	elements, err := bson.Raw(update).Elements()
+	updateValue := bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: update}
+	first, _, err := mongoMutationFirstRawElement(updateValue)
 	if err != nil {
 		return mongoMutation{}, errors.New("Mongo gateway update must be a non-empty document")
 	}
-	if len(elements) == 0 {
-		if _, err := validateMongoReplacement(update); err != nil {
-			return mongoMutation{}, err
-		}
+	if first == nil {
 		return mongoMutation{replace: update}, nil
 	}
-	first, err := elements[0].KeyErr()
-	if err != nil {
-		return mongoMutation{}, err
-	}
-	if !strings.HasPrefix(first, "$") {
-		for _, elem := range elements {
-			key, _ := elem.KeyErr()
-			if strings.HasPrefix(key, "$") {
-				return mongoMutation{}, errors.New("Mongo gateway update cannot mix replacement fields and operators")
+	if !mongoMutationElementHasDollarKey(first) {
+		if err := mongoMutationForEachRawElement(update, func(element bsoncore.Element) error {
+			if mongoMutationElementHasDollarKey(element) {
+				return errors.New("Mongo gateway update cannot mix replacement fields and operators")
 			}
+			return nil
+		}); err != nil {
+			return mongoMutation{}, err
 		}
 		if _, err := validateMongoReplacement(update); err != nil {
 			return mongoMutation{}, err
@@ -3970,58 +4039,203 @@ func parseMongoMutation(update wire.Document) (mongoMutation, error) {
 	}
 	mutation := mongoMutation{}
 	seen := make(map[string]struct{})
-	for _, elem := range elements {
-		op, err := elem.KeyErr()
+	err = mongoMutationForEachRawElement(updateValue.Value, func(elem bsoncore.Element) error {
+		op := string(elem.KeyBytes())
+		if op != "$set" && op != "$setOnInsert" && op != "$inc" && op != "$unset" && op != "$push" && op != "$addToSet" {
+			return fmt.Errorf("Mongo gateway unsupported update operator %q", op)
+		}
+		opValue, err := elem.ValueErr()
 		if err != nil {
-			return mongoMutation{}, err
+			return err
 		}
-		if op != "$set" && op != "$inc" && op != "$unset" {
-			return mongoMutation{}, fmt.Errorf("Mongo gateway unsupported update operator %q", op)
+		if bson.Type(opValue.Type) != bson.TypeEmbeddedDocument {
+			return fmt.Errorf("Mongo gateway %s value must be a document", op)
 		}
-		fields, ok := elem.Value().DocumentOK()
-		if !ok {
-			return mongoMutation{}, fmt.Errorf("Mongo gateway %s value must be a document", op)
-		}
-		items, err := fields.Elements()
-		if err != nil {
-			return mongoMutation{}, err
-		}
-		for _, item := range items {
-			name, err := item.KeyErr()
-			if err != nil {
-				return mongoMutation{}, err
-			}
-			if err := validateSetFieldName(name); err != nil {
-				return mongoMutation{}, err
+		return mongoMutationForEachRawElement(opValue.Data, func(item bsoncore.Element) error {
+			name := string(item.KeyBytes())
+			if err := validateMongoMutationPath(name); err != nil {
+				return err
 			}
 			if _, ok := seen[name]; ok {
-				return mongoMutation{}, fmt.Errorf("Mongo gateway update operators cannot target field %q more than once", name)
+				return fmt.Errorf("Mongo gateway update operators cannot target field %q more than once", name)
+			}
+			if len(seen) == mongoMutationMaxTargets {
+				return fmt.Errorf("Mongo gateway update exceeds %d target fields", mongoMutationMaxTargets)
 			}
 			seen[name] = struct{}{}
-			value := item.Value()
+			itemValue, err := item.ValueErr()
+			if err != nil {
+				return err
+			}
+			value := bson.RawValue{Type: bson.Type(itemValue.Type), Value: itemValue.Data}
+			if err := validateMongoMutationOperandNesting(op, name, value); err != nil {
+				return err
+			}
 			if err := value.Validate(); err != nil {
-				return mongoMutation{}, err
+				return err
 			}
 			switch op {
 			case "$set":
 				mutation.set = append(mutation.set, mongoMutationField{name, value})
+			case "$setOnInsert":
+				mutation.setOnInsert = append(mutation.setOnInsert, mongoMutationField{name, value})
 			case "$inc":
 				if !mongoMutationNumeric(value) {
-					return mongoMutation{}, fmt.Errorf("Mongo gateway $inc field %q must be numeric", name)
+					return fmt.Errorf("Mongo gateway $inc field %q must be numeric", name)
 				}
 				mutation.inc = append(mutation.inc, mongoMutationField{name, value})
 			case "$unset":
 				mutation.unset = append(mutation.unset, name)
+			case "$push", "$addToSet":
+				values, err := mongoMutationArrayValues(op, name, value)
+				if err != nil {
+					return err
+				}
+				field := mongoMutationArrayField{name: name, values: values}
+				if op == "$push" {
+					mutation.push = append(mutation.push, field)
+				} else {
+					mutation.addToSet = append(mutation.addToSet, field)
+				}
 			}
-		}
+			return nil
+		})
+	})
+	if err != nil {
+		return mongoMutation{}, err
+	}
+	if err := validateMongoMutationPathConflicts(seen); err != nil {
+		return mongoMutation{}, err
 	}
 	return mutation, nil
 }
 
 func applyMongoMutation(doc wire.Document, mutation mongoMutation) (wire.Document, bool, error) {
-	if mutation.replace != nil {
-		return applyMongoReplacement(doc, mutation.replace)
+	return applyMongoMutationWithOptions(doc, mutation, false)
+}
+
+func applyMongoMutationWithOptions(doc wire.Document, mutation mongoMutation, upsertInsert bool) (wire.Document, bool, error) {
+	if len(mutation.replace) != 0 {
+		updated, changed, err := applyMongoReplacement(doc, mutation.replace)
+		return finalizeMongoMutationResult(updated, changed, err)
 	}
+	if !upsertInsert && mongoMutationUsesTopLevelFields(mutation) {
+		updated, changed, err := applyMongoMutationTopLevel(doc, mutation)
+		return finalizeMongoMutationResult(updated, changed, err)
+	}
+	if err := validateMongoMutationDecodeInputs(doc, mutation, upsertInsert); err != nil {
+		return nil, false, err
+	}
+	var out bson.D
+	if err := bson.Unmarshal(doc, &out); err != nil {
+		return nil, false, err
+	}
+	if err := validateMongoMutationAddToSetBudget(bson.Raw(doc), mutation.addToSet); err != nil {
+		return nil, false, err
+	}
+	changed := false
+	applyFields := func(fields []mongoMutationField, operation string) error {
+		for _, field := range fields {
+			var fieldChanged bool
+			var err error
+			switch operation {
+			case "$set":
+				value, decodeErr := mongoMutationDecodeValue(field.value)
+				if decodeErr != nil {
+					err = decodeErr
+				} else {
+					out, fieldChanged, err = mongoMutationSetPath(out, strings.Split(field.name, "."), value)
+				}
+			case "$inc":
+				out, fieldChanged, err = mongoMutationIncrementPath(out, strings.Split(field.name, "."), field.value)
+			}
+			if err != nil {
+				return err
+			}
+			changed = changed || fieldChanged
+		}
+		return nil
+	}
+	if err := applyFields(mutation.set, "$set"); err != nil {
+		return nil, false, err
+	}
+	if upsertInsert {
+		if err := applyFields(mutation.setOnInsert, "$set"); err != nil {
+			return nil, false, err
+		}
+	}
+	if err := applyFields(mutation.inc, "$inc"); err != nil {
+		return nil, false, err
+	}
+	for _, name := range mutation.unset {
+		var fieldChanged bool
+		var err error
+		out, fieldChanged, err = mongoMutationUnsetPath(out, strings.Split(name, "."))
+		if err != nil {
+			return nil, false, err
+		}
+		changed = changed || fieldChanged
+	}
+	for _, field := range mutation.push {
+		var fieldChanged bool
+		var err error
+		out, fieldChanged, err = mongoMutationArrayPath(out, strings.Split(field.name, "."), field.values, false)
+		if err != nil {
+			return nil, false, err
+		}
+		changed = changed || fieldChanged
+	}
+	for _, field := range mutation.addToSet {
+		var fieldChanged bool
+		var err error
+		out, fieldChanged, err = mongoMutationArrayPath(out, strings.Split(field.name, "."), field.values, true)
+		if err != nil {
+			return nil, false, err
+		}
+		changed = changed || fieldChanged
+	}
+	if !changed {
+		return doc, false, nil
+	}
+	raw, err := bson.Marshal(out)
+	return finalizeMongoMutationResult(wire.Document(raw), true, err)
+}
+
+// finalizeMongoMutationResult rejects a result that would exceed MongoDB's
+// container-nesting limit before the caller can commit it.
+func finalizeMongoMutationResult(doc wire.Document, changed bool, err error) (wire.Document, bool, error) {
+	if err != nil || !changed {
+		return doc, changed, err
+	}
+	if err := validateMongoMutationRawNesting(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: doc}); err != nil {
+		return nil, false, err
+	}
+	return doc, true, nil
+}
+
+func mongoMutationUsesTopLevelFields(mutation mongoMutation) bool {
+	if len(mutation.setOnInsert) != 0 || len(mutation.push) != 0 || len(mutation.addToSet) != 0 {
+		return false
+	}
+	for _, field := range mutation.set {
+		if strings.Contains(field.name, ".") {
+			return false
+		}
+	}
+	for _, field := range mutation.inc {
+		if strings.Contains(field.name, ".") {
+			return false
+		}
+	}
+	for _, name := range mutation.unset {
+		if strings.Contains(name, ".") {
+			return false
+		}
+	}
+	return true
+}
+
+func applyMongoMutationTopLevel(doc wire.Document, mutation mongoMutation) (wire.Document, bool, error) {
 	set := make(map[string]bson.RawValue, len(mutation.set))
 	inc := make(map[string]bson.RawValue, len(mutation.inc))
 	unset := make(map[string]struct{}, len(mutation.unset))
@@ -4086,6 +4300,766 @@ func applyMongoMutation(doc wire.Document, mutation mongoMutation) (wire.Documen
 	return wire.Document(raw), true, err
 }
 
+func mongoMutationArrayValues(op, name string, value bson.RawValue) ([]bson.RawValue, error) {
+	if value.Type != bson.TypeEmbeddedDocument {
+		return []bson.RawValue{value}, nil
+	}
+	first, remaining, err := mongoMutationFirstRawElement(value)
+	if err != nil {
+		return nil, err
+	}
+	if first == nil {
+		return []bson.RawValue{value}, nil
+	}
+	if !mongoMutationElementHasDollarKey(first) {
+		return []bson.RawValue{value}, nil
+	}
+	if string(first.KeyBytes()) != "$each" || len(remaining) != 0 {
+		return nil, fmt.Errorf("Mongo gateway %s field %q only supports a scalar or $each", op, name)
+	}
+	array, err := first.ValueErr()
+	if err != nil {
+		return nil, err
+	}
+	if bson.Type(array.Type) != bson.TypeArray {
+		return nil, fmt.Errorf("Mongo gateway %s field %q $each must be an array", op, name)
+	}
+	values := make([]bson.RawValue, 0, mongoMutationMaxEachValues)
+	err = mongoMutationForEachRawElement(array.Data, func(element bsoncore.Element) error {
+		if len(values) == mongoMutationMaxEachValues {
+			return fmt.Errorf("Mongo gateway %s field %q $each exceeds %d values", op, name, mongoMutationMaxEachValues)
+		}
+		item, err := element.ValueErr()
+		if err != nil {
+			return err
+		}
+		values = append(values, bson.RawValue{Type: bson.Type(item.Type), Value: item.Data})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+func validateMongoMutationPath(path string) error {
+	if path == "" || strings.HasPrefix(path, ".") || strings.HasSuffix(path, ".") || strings.Contains(path, "..") {
+		return errors.New("Mongo gateway update path must contain non-empty segments")
+	}
+	segments := strings.Split(path, ".")
+	if len(segments) > mongoMutationMaxPathDepth {
+		return fmt.Errorf("Mongo gateway update path exceeds %d components", mongoMutationMaxPathDepth)
+	}
+	for index, segment := range segments {
+		if index == 0 && segment == "_id" {
+			return errors.New("Mongo gateway update cannot modify _id")
+		}
+		if index > 0 && mongoMutationDecimalPathSegment(segment) {
+			return errors.New("Mongo gateway update does not support numeric array-index paths")
+		}
+		if strings.HasPrefix(segment, "$") {
+			return errors.New("Mongo gateway update does not support positional paths or array filters")
+		}
+	}
+	return nil
+}
+
+func validateMongoMutationRawNesting(value bson.RawValue) error {
+	type frame struct {
+		remaining []byte
+		depth     int
+	}
+	container, ok := mongoMutationDecodeContainer(value)
+	if !ok {
+		return nil
+	}
+	remaining, ok := rawBSONContainerContents(container)
+	if !ok {
+		return errors.New("Mongo gateway invalid BSON container")
+	}
+	// BSON documents include their root container in the nesting limit.
+	stack := []frame{{remaining: remaining, depth: 1}}
+	for len(stack) != 0 {
+		last := len(stack) - 1
+		current := &stack[last]
+		if len(current.remaining) == 0 {
+			stack = stack[:last]
+			continue
+		}
+		element, next, ok := bsoncore.ReadElement(current.remaining)
+		if !ok {
+			return errors.New("Mongo gateway invalid BSON container")
+		}
+		if err := element.Validate(); err != nil {
+			return err
+		}
+		current.remaining = next
+		childValue, err := element.ValueErr()
+		if err != nil {
+			return err
+		}
+		child, isContainer := mongoMutationDecodeContainer(bson.RawValue{Type: bson.Type(childValue.Type), Value: childValue.Data})
+		if isContainer {
+			if current.depth == mongoMutationMaxBSONNesting {
+				return fmt.Errorf("Mongo gateway BSON nesting exceeds %d levels", mongoMutationMaxBSONNesting)
+			}
+			childRemaining, ok := rawBSONContainerContents(child)
+			if !ok {
+				return errors.New("Mongo gateway invalid BSON container")
+			}
+			stack = append(stack, frame{remaining: childRemaining, depth: current.depth + 1})
+		}
+	}
+	return nil
+}
+
+// mongoMutationDecodeContainer returns a raw BSON document/array that a slow
+// mutation decode will recursively materialize. CodeWithScope carries a scope
+// document and must therefore follow the same bounds as explicit containers.
+func mongoMutationDecodeContainer(value bson.RawValue) (bson.RawValue, bool) {
+	if value.Type == bson.TypeEmbeddedDocument || value.Type == bson.TypeArray {
+		return value, true
+	}
+	if value.Type != bson.TypeCodeWithScope {
+		return bson.RawValue{}, false
+	}
+	_, scope, remaining, ok := bsoncore.ReadCodeWithScope(value.Value)
+	if !ok || len(remaining) != 0 {
+		return bson.RawValue{}, false
+	}
+	return bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: scope}, true
+}
+
+func validateMongoMutationOperandsNesting(update wire.Document) error {
+	return mongoMutationForEachRawElement(update, func(element bsoncore.Element) error {
+		if !mongoMutationElementHasDollarKey(element) {
+			return nil
+		}
+		value, err := element.ValueErr()
+		if err != nil || bson.Type(value.Type) != bson.TypeEmbeddedDocument {
+			return err
+		}
+		operator := string(element.KeyBytes())
+		return mongoMutationForEachRawElement(value.Data, func(item bsoncore.Element) error {
+			operand, err := item.ValueErr()
+			if err != nil {
+				return err
+			}
+			return validateMongoMutationOperandNesting(operator, string(item.KeyBytes()), bson.RawValue{Type: bson.Type(operand.Type), Value: operand.Data})
+		})
+	})
+}
+
+// validateMongoMutationOperandNesting keeps $each admission bounded before
+// walking nested values. Other operands use the shared raw nesting walk.
+func validateMongoMutationOperandNesting(operator, name string, value bson.RawValue) error {
+	if operator != "$push" && operator != "$addToSet" || value.Type != bson.TypeEmbeddedDocument {
+		return validateMongoMutationRawNesting(value)
+	}
+	first, remaining, err := mongoMutationFirstRawElement(value)
+	if err != nil || first == nil || !mongoMutationElementHasDollarKey(first) {
+		return validateMongoMutationRawNesting(value)
+	}
+	if string(first.KeyBytes()) != "$each" || len(remaining) != 0 {
+		// parseMongoMutation reports unsupported modifier syntax without walking it.
+		return nil
+	}
+	array, err := first.ValueErr()
+	if err != nil || bson.Type(array.Type) != bson.TypeArray {
+		return err
+	}
+	count := 0
+	return mongoMutationForEachRawElement(array.Data, func(element bsoncore.Element) error {
+		if count == mongoMutationMaxEachValues {
+			return fmt.Errorf("Mongo gateway %s field %q $each exceeds %d values", operator, name, mongoMutationMaxEachValues)
+		}
+		count++
+		item, err := element.ValueErr()
+		if err != nil {
+			return err
+		}
+		return validateMongoMutationRawNesting(bson.RawValue{Type: bson.Type(item.Type), Value: item.Data})
+	})
+}
+
+func validateMongoMutationTargetCount(update wire.Document) error {
+	first, _, err := mongoMutationFirstRawElement(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: update})
+	if err != nil || first == nil || !mongoMutationElementHasDollarKey(first) {
+		return err
+	}
+	count := 0
+	return mongoMutationForEachRawElement(update, func(element bsoncore.Element) error {
+		value, err := element.ValueErr()
+		if err != nil || bson.Type(value.Type) != bson.TypeEmbeddedDocument {
+			return err
+		}
+		return mongoMutationForEachRawElement(value.Data, func(bsoncore.Element) error {
+			count++
+			if count > mongoMutationMaxTargets {
+				return fmt.Errorf("Mongo gateway update exceeds %d target fields", mongoMutationMaxTargets)
+			}
+			return nil
+		})
+	})
+}
+
+func mongoMutationForEachRawElement(raw []byte, visit func(bsoncore.Element) error) error {
+	contents, ok := rawBSONContainerContents(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: raw})
+	if !ok {
+		return errors.New("Mongo gateway invalid BSON document")
+	}
+	for len(contents) != 0 {
+		element, next, ok := bsoncore.ReadElement(contents)
+		if !ok {
+			return errors.New("Mongo gateway invalid BSON document")
+		}
+		if err := element.Validate(); err != nil {
+			return err
+		}
+		if err := visit(element); err != nil {
+			return err
+		}
+		contents = next
+	}
+	return nil
+}
+
+func mongoMutationFirstRawElement(value bson.RawValue) (bsoncore.Element, []byte, error) {
+	contents, ok := rawBSONContainerContents(value)
+	if !ok {
+		return nil, nil, errors.New("Mongo gateway invalid BSON container")
+	}
+	if len(contents) == 0 {
+		return nil, nil, nil
+	}
+	element, remaining, ok := bsoncore.ReadElement(contents)
+	if !ok {
+		return nil, nil, errors.New("Mongo gateway invalid BSON container")
+	}
+	if err := element.Validate(); err != nil {
+		return nil, nil, err
+	}
+	return element, remaining, nil
+}
+
+func mongoMutationElementHasDollarKey(element bsoncore.Element) bool {
+	key := element.KeyBytes()
+	return len(key) != 0 && key[0] == '$'
+}
+
+func mongoMutationDecimalPathSegment(segment string) bool {
+	for _, r := range segment {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func validateMongoMutationAddToSetBudget(doc bson.Raw, fields []mongoMutationArrayField) error {
+	remaining := mongoMutationMaxAddToSetComparisons
+	remainingBytes := mongoMutationMaxAddToSetComparisonBytes
+	remainingDecimalComparisons := mongoMutationMaxAddToSetDecimalComparisons
+	for _, field := range fields {
+		existingValues, err := mongoMutationRawArrayPathValues(doc, strings.Split(field.name, "."))
+		if err != nil {
+			return err
+		}
+		existing := len(existingValues)
+		values := len(field.values)
+		candidateComparisons := values * (values - 1) / 2
+		if candidateComparisons > remaining || (existing != 0 && values > (remaining-candidateComparisons)/existing) {
+			return fmt.Errorf("Mongo gateway $addToSet exceeds %d duplicate comparisons", mongoMutationMaxAddToSetComparisons)
+		}
+		comparisonBytes, ok := mongoMutationAddToSetComparisonBytes(existingValues, field.values, remainingBytes)
+		if !ok {
+			return fmt.Errorf("Mongo gateway $addToSet exceeds %d comparison bytes", mongoMutationMaxAddToSetComparisonBytes)
+		}
+		decimalComparisons, ok := mongoMutationAddToSetDecimalComparisonWork(existingValues, field.values, remainingDecimalComparisons)
+		if !ok {
+			return fmt.Errorf("Mongo gateway $addToSet exceeds %d Decimal128 comparisons", mongoMutationMaxAddToSetDecimalComparisons)
+		}
+		remaining -= candidateComparisons + existing*values
+		remainingBytes -= comparisonBytes
+		remainingDecimalComparisons -= decimalComparisons
+	}
+	return nil
+}
+
+// mongoMutationAddToSetDecimalComparisonWork mirrors the equality traversal so
+// byte-identical nested numeric leaves do not consume the Decimal128 budget.
+// It also mirrors membership short-circuiting and compares later candidates
+// only with values that would actually be admitted. Validation remains separate
+// because equality treats malformed containers as unequal while mutation
+// admission must fail closed.
+func mongoMutationAddToSetDecimalComparisonWork(existing, candidates []bson.RawValue, limit int) (int, bool) {
+	for _, values := range [][]bson.RawValue{existing, candidates} {
+		for _, value := range values {
+			if mongoMutationRawValueDecimal128NormalizationLeaves(value) == maxInt {
+				return 0, false
+			}
+		}
+	}
+	remaining := limit
+	compare := func(left, right bson.RawValue) (bool, bool) {
+		if left.Type == right.Type && bytes.Equal(left.Value, right.Value) {
+			return true, true
+		}
+		equal, err := rawValuesEqualModeBudget(left, right, true, &remaining)
+		return equal, err == nil
+	}
+	if len(candidates) > mongoMutationMaxEachValues {
+		return limit - remaining, false
+	}
+	var admitted [mongoMutationMaxEachValues]int
+	admittedCount := 0
+	for candidateIndex, candidate := range candidates {
+		duplicate := false
+		for _, stored := range existing {
+			equal, ok := compare(candidate, stored)
+			if !ok {
+				return limit - remaining, false
+			}
+			if equal {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		for _, earlierIndex := range admitted[:admittedCount] {
+			equal, ok := compare(candidate, candidates[earlierIndex])
+			if !ok {
+				return limit - remaining, false
+			}
+			if equal {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			admitted[admittedCount] = candidateIndex
+			admittedCount++
+		}
+	}
+	return limit - remaining, true
+}
+
+func mongoMutationRawValueDecimal128NormalizationLeaves(value bson.RawValue) int {
+	values := []bson.RawValue{value}
+	count := 0
+	for len(values) != 0 {
+		last := len(values) - 1
+		current := values[last]
+		values = values[:last]
+		switch current.Type {
+		case bson.TypeDecimal128:
+			count += decimal128NormalizationCount(current)
+		case bson.TypeEmbeddedDocument, bson.TypeArray:
+			contents, ok := rawBSONContainerContents(current)
+			if !ok {
+				return maxInt
+			}
+			for len(contents) != 0 {
+				element, remaining, ok := bsoncore.ReadElement(contents)
+				if !ok || element.Validate() != nil {
+					return maxInt
+				}
+				raw, err := element.ValueErr()
+				if err != nil {
+					return maxInt
+				}
+				values = append(values, bson.RawValue{Type: bson.Type(raw.Type), Value: raw.Data})
+				contents = remaining
+			}
+		case bson.TypeCodeWithScope:
+			_, scope, remaining, ok := bsoncore.ReadCodeWithScope(current.Value)
+			if !ok || len(remaining) != 0 {
+				return maxInt
+			}
+			values = append(values, bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: scope})
+		}
+	}
+	return count
+}
+
+func mongoMutationRawArrayPathValues(doc bson.Raw, path []string) ([]bson.RawValue, error) {
+	for index, segment := range path {
+		value := doc.Lookup(segment)
+		if value.IsZero() {
+			return nil, nil
+		}
+		if index == len(path)-1 {
+			if value.Type != bson.TypeArray {
+				return nil, nil
+			}
+			return value.Array().Values()
+		}
+		if value.Type != bson.TypeEmbeddedDocument {
+			return nil, nil
+		}
+		doc = value.Document()
+	}
+	return nil, nil
+}
+
+func mongoMutationAddToSetComparisonBytes(existing, candidates []bson.RawValue, limit uint64) (uint64, bool) {
+	if len(candidates) == 0 {
+		return 0, true
+	}
+	var existingBytes, candidateBytes uint64
+	for _, value := range existing {
+		existingBytes += uint64(len(value.Value) + 1)
+	}
+	for _, value := range candidates {
+		candidateBytes += uint64(len(value.Value) + 1)
+	}
+	candidateCount := uint64(len(candidates))
+	if existingBytes > limit/candidateCount {
+		return 0, false
+	}
+	used := candidateCount * existingBytes
+	multiplier := uint64(len(existing) + len(candidates) - 1)
+	if multiplier == 0 {
+		return used, true
+	}
+	if candidateBytes > (limit-used)/multiplier {
+		return 0, false
+	}
+	return used + multiplier*candidateBytes, true
+}
+
+func validateMongoMutationPathConflicts(paths map[string]struct{}) error {
+	for path := range paths {
+		segments := strings.Split(path, ".")
+		for i := len(segments) - 1; i > 0; i-- {
+			ancestor := strings.Join(segments[:i], ".")
+			if _, ok := paths[ancestor]; ok {
+				return fmt.Errorf("Mongo gateway update paths %q and %q conflict", ancestor, path)
+			}
+		}
+	}
+	return nil
+}
+
+func mongoMutationDecodeValue(value bson.RawValue) (any, error) {
+	var decoded any
+	if err := value.Unmarshal(&decoded); err != nil {
+		return nil, err
+	}
+	return decoded, nil
+}
+
+type mongoMutationDecodeBudget struct {
+	bytes    uint64
+	elements int
+}
+
+// validateMongoMutationDecodeInputs admits every raw value that slow mutation
+// decoding can unmarshal against one shared budget before it decodes any of
+// them. This prevents a many-field mutation from multiplying per-value limits.
+func validateMongoMutationDecodeInputs(doc wire.Document, mutation mongoMutation, upsertInsert bool) error {
+	budget := mongoMutationDecodeBudget{}
+	if err := budget.validate(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: doc}); err != nil {
+		return err
+	}
+	validateFields := func(fields []mongoMutationField) error {
+		for _, field := range fields {
+			if err := budget.validate(field.value); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := validateFields(mutation.set); err != nil {
+		return err
+	}
+	if upsertInsert {
+		if err := validateFields(mutation.setOnInsert); err != nil {
+			return err
+		}
+	}
+	if err := validateFields(mutation.inc); err != nil {
+		return err
+	}
+	validateArrays := func(fields []mongoMutationArrayField) error {
+		for _, field := range fields {
+			for _, value := range field.values {
+				if err := budget.validate(value); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := validateArrays(mutation.push); err != nil {
+		return err
+	}
+	return validateArrays(mutation.addToSet)
+}
+
+// validate streams raw BSON before a slow mutation calls bson.Unmarshal. The
+// caller shares this budget across the stored document and every decoded
+// mutation operand, bounding both retained bytes and decoded Go values.
+func (budget *mongoMutationDecodeBudget) validate(value bson.RawValue) error {
+	valueBytes := uint64(len(value.Value))
+	if valueBytes > mongoMutationMaxDecodedBSONBytes-budget.bytes {
+		return fmt.Errorf("Mongo gateway mutation BSON exceeds %d decoded bytes", mongoMutationMaxDecodedBSONBytes)
+	}
+	budget.bytes += valueBytes
+	container, ok := mongoMutationDecodeContainer(value)
+	if !ok {
+		return value.Validate()
+	}
+	type frame struct {
+		remaining []byte
+		depth     int
+	}
+	contents, ok := rawBSONContainerContents(container)
+	if !ok {
+		return errors.New("Mongo gateway invalid BSON container")
+	}
+	stack := []frame{{remaining: contents, depth: 1}}
+	for len(stack) != 0 {
+		last := len(stack) - 1
+		current := &stack[last]
+		if len(current.remaining) == 0 {
+			stack = stack[:last]
+			continue
+		}
+		element, next, ok := bsoncore.ReadElement(current.remaining)
+		if !ok {
+			return errors.New("Mongo gateway invalid BSON container")
+		}
+		if err := element.Validate(); err != nil {
+			return err
+		}
+		current.remaining = next
+		budget.elements++
+		if budget.elements > mongoMutationMaxDecodedElements {
+			return fmt.Errorf("Mongo gateway mutation BSON exceeds %d decoded elements", mongoMutationMaxDecodedElements)
+		}
+		childValue, err := element.ValueErr()
+		if err != nil {
+			return err
+		}
+		child, isContainer := mongoMutationDecodeContainer(bson.RawValue{Type: bson.Type(childValue.Type), Value: childValue.Data})
+		if !isContainer {
+			continue
+		}
+		if current.depth == mongoMutationMaxBSONNesting {
+			return fmt.Errorf("Mongo gateway BSON nesting exceeds %d levels", mongoMutationMaxBSONNesting)
+		}
+		childContents, ok := rawBSONContainerContents(child)
+		if !ok {
+			return errors.New("Mongo gateway invalid BSON container")
+		}
+		stack = append(stack, frame{remaining: childContents, depth: current.depth + 1})
+	}
+	return nil
+}
+
+func mongoMutationPathIndex(doc bson.D, key string) int {
+	for i := range doc {
+		if doc[i].Key == key {
+			return i
+		}
+	}
+	return -1
+}
+
+func mongoMutationNestedDocument(value any, path string) (bson.D, error) {
+	doc, ok := value.(bson.D)
+	if !ok {
+		return nil, fmt.Errorf("Mongo gateway cannot traverse non-document field %q", path)
+	}
+	return doc, nil
+}
+
+func mongoMutationSetPath(doc bson.D, path []string, value any) (bson.D, bool, error) {
+	idx := mongoMutationPathIndex(doc, path[0])
+	if len(path) == 1 {
+		if idx < 0 {
+			return append(doc, bson.E{Key: path[0], Value: value}), true, nil
+		}
+		current, err := mongoMutationRaw(doc[idx].Value)
+		if err != nil {
+			return nil, false, err
+		}
+		next, err := mongoMutationRaw(value)
+		if err != nil {
+			return nil, false, err
+		}
+		if current.Equal(next) {
+			return doc, false, nil
+		}
+		doc[idx].Value = value
+		return doc, true, nil
+	}
+	if idx < 0 {
+		nested, changed, err := mongoMutationSetPath(bson.D{}, path[1:], value)
+		if err != nil {
+			return nil, false, err
+		}
+		return append(doc, bson.E{Key: path[0], Value: nested}), changed, nil
+	}
+	nested, err := mongoMutationNestedDocument(doc[idx].Value, path[0])
+	if err != nil {
+		return nil, false, err
+	}
+	nested, changed, err := mongoMutationSetPath(nested, path[1:], value)
+	if err != nil || !changed {
+		return doc, changed, err
+	}
+	doc[idx].Value = nested
+	return doc, true, nil
+}
+
+func mongoMutationUnsetPath(doc bson.D, path []string) (bson.D, bool, error) {
+	idx := mongoMutationPathIndex(doc, path[0])
+	if idx < 0 {
+		return doc, false, nil
+	}
+	if len(path) == 1 {
+		return append(doc[:idx:idx], doc[idx+1:]...), true, nil
+	}
+	nested, err := mongoMutationNestedDocument(doc[idx].Value, path[0])
+	if err != nil {
+		return nil, false, err
+	}
+	nested, changed, err := mongoMutationUnsetPath(nested, path[1:])
+	if err != nil || !changed {
+		return doc, changed, err
+	}
+	doc[idx].Value = nested
+	return doc, true, nil
+}
+
+func mongoMutationIncrementPath(doc bson.D, path []string, delta bson.RawValue) (bson.D, bool, error) {
+	idx := mongoMutationPathIndex(doc, path[0])
+	if len(path) > 1 {
+		if idx < 0 {
+			nested, changed, err := mongoMutationIncrementPath(bson.D{}, path[1:], delta)
+			if err != nil {
+				return nil, false, err
+			}
+			return append(doc, bson.E{Key: path[0], Value: nested}), changed, nil
+		}
+		nested, err := mongoMutationNestedDocument(doc[idx].Value, path[0])
+		if err != nil {
+			return nil, false, err
+		}
+		nested, changed, err := mongoMutationIncrementPath(nested, path[1:], delta)
+		if err != nil || !changed {
+			return doc, changed, err
+		}
+		doc[idx].Value = nested
+		return doc, true, nil
+	}
+	if idx < 0 {
+		value, err := mongoMutationDecodeValue(delta)
+		if err != nil {
+			return nil, false, err
+		}
+		return append(doc, bson.E{Key: path[0], Value: value}), true, nil
+	}
+	current, err := mongoMutationRaw(doc[idx].Value)
+	if err != nil {
+		return nil, false, err
+	}
+	next, err := mongoMutationIncrement(current, delta)
+	if err != nil {
+		return nil, false, err
+	}
+	if current.Equal(next) {
+		return doc, false, nil
+	}
+	value, err := mongoMutationDecodeValue(next)
+	if err != nil {
+		return nil, false, err
+	}
+	doc[idx].Value = value
+	return doc, true, nil
+}
+
+func mongoMutationArrayPath(doc bson.D, path []string, values []bson.RawValue, unique bool) (bson.D, bool, error) {
+	idx := mongoMutationPathIndex(doc, path[0])
+	if len(path) > 1 {
+		if idx < 0 {
+			nested, changed, err := mongoMutationArrayPath(bson.D{}, path[1:], values, unique)
+			if err != nil {
+				return nil, false, err
+			}
+			if !changed {
+				return doc, false, nil
+			}
+			return append(doc, bson.E{Key: path[0], Value: nested}), changed, nil
+		}
+		nested, err := mongoMutationNestedDocument(doc[idx].Value, path[0])
+		if err != nil {
+			return nil, false, err
+		}
+		nested, changed, err := mongoMutationArrayPath(nested, path[1:], values, unique)
+		if err != nil || !changed {
+			return doc, changed, err
+		}
+		doc[idx].Value = nested
+		return doc, true, nil
+	}
+	var array bson.A
+	if idx >= 0 {
+		var ok bool
+		array, ok = doc[idx].Value.(bson.A)
+		if !ok {
+			return nil, false, fmt.Errorf("Mongo gateway %s target must be an array", map[bool]string{true: "$addToSet", false: "$push"}[unique])
+		}
+	}
+	changed := false
+	var existingValues []bson.RawValue
+	if unique {
+		existingValues = make([]bson.RawValue, 0, len(array)+len(values))
+		for _, existing := range array {
+			existingRaw, err := mongoMutationRaw(existing)
+			if err != nil {
+				return nil, false, err
+			}
+			existingValues = append(existingValues, existingRaw)
+		}
+	}
+	for _, raw := range values {
+		if unique {
+			duplicate := false
+			for _, existing := range existingValues {
+				if mongoMutationValuesEqual(existing, raw) {
+					duplicate = true
+					break
+				}
+			}
+			if duplicate {
+				continue
+			}
+		}
+		value, err := mongoMutationDecodeValue(raw)
+		if err != nil {
+			return nil, false, err
+		}
+		array = append(array, value)
+		if unique {
+			existingValues = append(existingValues, raw)
+		}
+		changed = true
+	}
+	if !changed {
+		return doc, false, nil
+	}
+	if idx < 0 {
+		return append(doc, bson.E{Key: path[0], Value: array}), true, nil
+	}
+	doc[idx].Value = array
+	return doc, true, nil
+}
+
 func applyMongoReplacement(doc, replacement wire.Document) (wire.Document, bool, error) {
 	elements, err := validateMongoReplacement(replacement)
 	if err != nil {
@@ -4143,6 +5117,7 @@ func mongoMutationRaw(v any) (bson.RawValue, error) {
 	typ, raw, err := bson.MarshalValue(v)
 	return bson.RawValue{Type: typ, Value: raw}, err
 }
+
 func mongoMutationIncrement(value, delta bson.RawValue) (bson.RawValue, error) {
 	if !mongoMutationNumeric(value) {
 		return bson.RawValue{}, errors.New("Mongo gateway $inc target must be numeric and not null")
