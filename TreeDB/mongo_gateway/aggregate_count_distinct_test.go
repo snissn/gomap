@@ -257,6 +257,12 @@ func TestMongoAggregateCountDistinctRejectUnsupportedSurface(t *testing.T) {
 			{Key: "cursor", Value: bson.D{{Key: "unknown", Value: true}}},
 			{Key: "$db", Value: "app"},
 		}},
+		{name: "aggregate missing collection negative batch size", command: bson.D{
+			{Key: "aggregate", Value: "missing"},
+			{Key: "pipeline", Value: bson.A{}},
+			{Key: "cursor", Value: bson.D{{Key: "batchSize", Value: int32(-1)}}},
+			{Key: "$db", Value: "app"},
+		}},
 		{name: "aggregate group", command: bson.D{
 			{Key: "aggregate", Value: "users"},
 			{Key: "pipeline", Value: bson.A{

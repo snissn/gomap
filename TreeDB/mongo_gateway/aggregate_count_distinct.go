@@ -238,6 +238,9 @@ func (s *Server) aggregateResponse(ctx context.Context, command wire.Document, c
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
+	if _, err := normalizeBatchSize(int(batchSize), batchSizeSet, defaultCursorBatchSize); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
 	stages, err := parseAggregateStages(pipeline)
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
