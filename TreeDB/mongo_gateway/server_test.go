@@ -6977,6 +6977,35 @@ func TestMongoMutationAddToSetSharesDecimal128BudgetAcrossTargets(t *testing.T) 
 	}
 }
 
+func TestMongoMutationAddToSetChargesDecimal128LeavesOnBothSides(t *testing.T) {
+	left := bson.A{}
+	right := bson.A{}
+	for i := range 2048 {
+		decimal, err := bson.ParseDecimal128("0E+6000")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i%2 == 0 {
+			left = append(left, decimal)
+			right = append(right, int32(0))
+		} else {
+			left = append(left, int32(0))
+			right = append(right, decimal)
+		}
+	}
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: bson.A{left, right}}}}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}})
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || changed || !bson.Raw(doc).Lookup("marker").IsZero() {
+		t.Fatalf("opposite Decimal128 leaves changed=%v err=%v", changed, err)
+	}
+}
+
 func TestMongoMutationEmptyNestedArrayEachDoesNotCreateParents(t *testing.T) {
 	for _, operator := range []string{"$push", "$addToSet"} {
 		t.Run(operator, func(t *testing.T) {
