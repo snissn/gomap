@@ -7055,6 +7055,33 @@ func TestMongoMutationAddToSetRejectsLargeComparisonBytesBeforeMutation(t *testi
 	}
 }
 
+func TestMongoMutationAddToSetAcceptsRepeatedIdenticalDecimal128Values(t *testing.T) {
+	decimal, err := bson.ParseDecimal128("1E+6000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make(bson.A, mongoMutationMaxEachValues)
+	for i := range values {
+		values[i] = decimal
+	}
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: values}}}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}})
+	updated, changed, err := applyMongoMutation(doc, mutation)
+	if err != nil || !changed {
+		t.Fatalf("identical Decimal128 $addToSet changed=%v err=%v", changed, err)
+	}
+	items, itemsErr := bson.Raw(updated).Lookup("items").Array().Values()
+	if itemsErr != nil || len(items) != 1 || !mongoMutationValuesEqual(items[0], mustRawValue(t, decimal)) || !bson.Raw(updated).Lookup("marker").Boolean() {
+		t.Fatalf("identical Decimal128 $addToSet changed=%v err=%v items=%v itemsErr=%v marker=%v", changed, err, items, itemsErr, bson.Raw(updated).Lookup("marker"))
+	}
+}
+
 func TestMongoMutationAddToSetRejectsExpensiveDecimal128ComparisonsBeforeMutation(t *testing.T) {
 	existing := bson.A{}
 	candidates := bson.A{}
@@ -7080,7 +7107,7 @@ func TestMongoMutationAddToSetRejectsExpensiveDecimal128ComparisonsBeforeMutatio
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || changed || !bson.Raw(doc).Lookup("marker").IsZero() {
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || !strings.Contains(err.Error(), "1024 Decimal128 comparisons") || changed || !bson.Raw(doc).Lookup("marker").IsZero() {
 		t.Fatalf("expensive Decimal128 comparison changed=%v err=%v", changed, err)
 	}
 }

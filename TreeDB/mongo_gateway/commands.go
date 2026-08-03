@@ -4587,8 +4587,9 @@ func validateMongoMutationAddToSetBudget(doc bson.Raw, fields []mongoMutationArr
 }
 
 // mongoMutationAddToSetDecimalComparisonWork counts every potentially-normalized
-// Decimal128 leaf comparison. A nested value pair may compare many numeric
-// leaves, so charging only once per outer pair would not bound big.Rat work.
+// Decimal128 leaf comparison. Byte-identical pairs take the equality fast path
+// without normalization. A nested value pair may compare many numeric leaves,
+// so charging only once per outer pair would not bound big.Rat work.
 func mongoMutationAddToSetDecimalComparisonWork(existing, candidates []bson.RawValue, limit int) (int, bool) {
 	existingDecimal := make([]int, len(existing))
 	for i, value := range existing {
@@ -4607,12 +4608,19 @@ func mongoMutationAddToSetDecimalComparisonWork(existing, candidates []bson.RawV
 		return true
 	}
 	for i, candidateDecimalLeaves := range candidateDecimal {
-		for _, existingDecimalLeaves := range existingDecimal {
+		candidate := candidates[i]
+		for j, existingDecimalLeaves := range existingDecimal {
+			if candidate.Type == existing[j].Type && bytes.Equal(candidate.Value, existing[j].Value) {
+				continue
+			}
 			if !charge(candidateDecimalLeaves) || !charge(existingDecimalLeaves) {
 				return count, false
 			}
 		}
 		for j := 0; j < i; j++ {
+			if candidate.Type == candidates[j].Type && bytes.Equal(candidate.Value, candidates[j].Value) {
+				continue
+			}
 			if !charge(candidateDecimalLeaves) || !charge(candidateDecimal[j]) {
 				return count, false
 			}
