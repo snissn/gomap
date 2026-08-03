@@ -2707,6 +2707,60 @@ func TestM8ProfileCaptureDoesNotReplaceExistingArtifactV1(t *testing.T) {
 	}
 }
 
+func TestM8ProfileCaptureCleansPartialSetupV1(t *testing.T) {
+	dir := t.TempDir()
+	sentinel := filepath.Join(dir, "cpu.pprof")
+	if err := os.WriteFile(sentinel, []byte("retain"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := startM8ProfileCaptureV1(dir); err == nil {
+		t.Fatal("profile capture accepted a CPU profile collision")
+	}
+	for _, name := range []string{"allocs_baseline.pprof", "trace.out"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("partial profile %s remains: %v", name, err)
+		}
+	}
+	if raw, err := os.ReadFile(sentinel); err != nil || string(raw) != "retain" {
+		t.Fatalf("CPU sentinel=%q err=%v", raw, err)
+	}
+}
+
+func TestM8ProfileCaptureCleanupPolicyV1(t *testing.T) {
+	dir := t.TempDir()
+	capture, err := startM8ProfileCaptureV1(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m8FinishDirectProfileCaptureV1(capture, false); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := startM8ProfileCaptureV1(dir)
+	if err != nil {
+		t.Fatalf("retry after unsuccessful direct capture: %v", err)
+	}
+	if err := m8FinishDirectProfileCaptureV1(retry, false); err != nil {
+		t.Fatal(err)
+	}
+
+	retained, err := startM8ProfileCaptureV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m8FinishDirectProfileCaptureV1(retained, true); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := retained.Stop()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("successful capture did not retain %s: %v", path, err)
+		}
+	}
+}
+
 func TestM8ProfileArtifactDecodeTimeoutIsBoundedBySizeV1(t *testing.T) {
 	for _, test := range []struct {
 		name  string

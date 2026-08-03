@@ -385,6 +385,7 @@ type m8ProductionResourceObservedMaximaV1 struct {
 }
 
 func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors, queries [][]float64, stdout io.Writer) (runErr error) {
+	profileReportPublished := false
 	datasetDirectory, err := m8CanonicalPathV1(cfg.dataset)
 	if err != nil {
 		return fmt.Errorf("resolve M8 dataset directory: %w", err)
@@ -510,8 +511,12 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	}
 	defer func() {
 		if profileCapture != nil {
-			_, closeErr := profileCapture.Stop()
-			runErr = errors.Join(runErr, closeErr)
+			if cfg.m8MatrixOut == "" {
+				runErr = errors.Join(runErr, m8FinishDirectProfileCaptureV1(profileCapture, profileReportPublished))
+			} else {
+				_, closeErr := profileCapture.Stop()
+				runErr = errors.Join(runErr, closeErr)
+			}
 		}
 	}()
 	measuredCells := make([]m8MeasuredCellV1, 0, len(cfg.overlaps)*len(cfg.probes)*len(cfg.efSearch)*len(cfg.concurrency))
@@ -664,6 +669,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	if err := os.WriteFile(path, raw, 0o644); err != nil {
 		return err
 	}
+	profileReportPublished = true
 	if cfg.format == "json" {
 		_, err = fmt.Fprintln(stdout, string(raw))
 	} else {
@@ -1084,23 +1090,25 @@ func startM8ProfileCaptureV1(dir string) (*m8ProfileCaptureV1, error) {
 	capture.paths = append(capture.paths, baseline)
 	capture.traceFile, err = os.OpenFile(filepath.Join(canonicalDir, "trace.out"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
-		return nil, fmt.Errorf("create M8 trace: %w", err)
+		return nil, errors.Join(fmt.Errorf("create M8 trace: %w", err), capture.Cleanup())
 	}
+	capture.paths = append(capture.paths, capture.traceFile.Name())
 	if err = trace.Start(capture.traceFile); err != nil {
 		_ = capture.traceFile.Close()
-		return nil, fmt.Errorf("start M8 trace: %w", err)
+		return nil, errors.Join(fmt.Errorf("start M8 trace: %w", err), capture.Cleanup())
 	}
 	capture.cpu, err = os.OpenFile(filepath.Join(canonicalDir, "cpu.pprof"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		trace.Stop()
 		_ = capture.traceFile.Close()
-		return nil, fmt.Errorf("create M8 CPU profile: %w", err)
+		return nil, errors.Join(fmt.Errorf("create M8 CPU profile: %w", err), capture.Cleanup())
 	}
+	capture.paths = append(capture.paths, capture.cpu.Name())
 	if err = pprof.StartCPUProfile(capture.cpu); err != nil {
 		trace.Stop()
 		_ = capture.traceFile.Close()
 		_ = capture.cpu.Close()
-		return nil, fmt.Errorf("start M8 CPU profile: %w", err)
+		return nil, errors.Join(fmt.Errorf("start M8 CPU profile: %w", err), capture.Cleanup())
 	}
 	capture.oldMutex = runtime.SetMutexProfileFraction(1)
 	runtime.SetBlockProfileRate(1)
@@ -1117,13 +1125,13 @@ func (c *m8ProfileCaptureV1) Stop() ([]string, error) {
 		runtime.SetBlockProfileRate(0)
 		runtime.SetMutexProfileFraction(c.oldMutex)
 		c.err = errors.Join(c.cpu.Close(), c.traceFile.Close())
-		c.paths = append(c.paths, filepath.Join(c.dir, "cpu.pprof"), filepath.Join(c.dir, "trace.out"))
 		for _, item := range []struct {
 			name, file string
 		}{{"heap", "heap.pprof"}, {"allocs", "allocs.pprof"}, {"block", "block.pprof"}, {"mutex", "mutex.pprof"}} {
 			path := filepath.Join(c.dir, item.file)
 			file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 			if err == nil {
+				c.paths = append(c.paths, path)
 				profile := pprof.Lookup(item.name)
 				if profile == nil {
 					err = fmt.Errorf("M8 runtime profile %s unavailable", item.name)
@@ -1136,12 +1144,32 @@ func (c *m8ProfileCaptureV1) Stop() ([]string, error) {
 			}
 			if err != nil {
 				c.err = errors.Join(c.err, fmt.Errorf("write M8 %s profile: %w", item.name, err))
-			} else {
-				c.paths = append(c.paths, path)
 			}
 		}
 	})
 	return append([]string(nil), c.paths...), c.err
+}
+
+// Cleanup removes only the O_EXCL artifacts this capture created. It never
+// removes the caller-provided profile directory.
+func (c *m8ProfileCaptureV1) Cleanup() (err error) {
+	if c == nil {
+		return nil
+	}
+	for _, path := range c.paths {
+		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			err = errors.Join(err, removeErr)
+		}
+	}
+	return err
+}
+
+func m8FinishDirectProfileCaptureV1(capture *m8ProfileCaptureV1, published bool) error {
+	_, err := capture.Stop()
+	if !published {
+		err = errors.Join(err, capture.Cleanup())
+	}
+	return err
 }
 
 func writeM8RuntimeProfileV1(name, path string) error {
@@ -1169,7 +1197,11 @@ func writeM8RuntimeProfileExclusiveV1(name, path string) error {
 	} else {
 		err = profile.WriteTo(file, 0)
 	}
-	return errors.Join(err, file.Close())
+	err = errors.Join(err, file.Close())
+	if err != nil {
+		_ = os.Remove(path)
+	}
+	return err
 }
 
 var m8ProfileArtifactNamesV1 = [...]string{"allocs_baseline.pprof", "cpu.pprof", "trace.out", "heap.pprof", "allocs.pprof", "block.pprof", "mutex.pprof"}
