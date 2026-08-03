@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -253,10 +254,20 @@ func (s *Server) aggregateResponse(ctx context.Context, command wire.Document, c
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	plan := findPlan{}
+	consumed := 0
 	if len(stages) > 0 && stages[0].name == "$match" {
 		plan = stages[0].plan
-		stages = stages[1:]
+		consumed++
 	}
+	if len(stages) > consumed && stages[consumed].name == "$skip" && stages[consumed].amount <= math.MaxInt32 {
+		plan.skip = int32(stages[consumed].amount)
+		consumed++
+	}
+	if len(stages) > consumed && stages[consumed].name == "$limit" && stages[consumed].amount <= math.MaxInt32 {
+		plan.limit = int32(stages[consumed].amount)
+		consumed++
+	}
+	stages = stages[consumed:]
 	result, err := s.executeFind(col, plan)
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())

@@ -59,6 +59,16 @@ func TestMongoReadCommandsAggregateCountDistinct(t *testing.T) {
 		{Key: "$db", Value: "app"},
 	})
 	assertBatchIDs(t, cursorFirstBatch(t, aggregate), []string{"u3"})
+	limitThenSkip := serveCommand(t, server, 31, bson.D{
+		{Key: "aggregate", Value: "users"},
+		{Key: "pipeline", Value: bson.A{
+			bson.D{{Key: "$limit", Value: int32(2)}},
+			bson.D{{Key: "$skip", Value: int32(1)}},
+		}},
+		{Key: "cursor", Value: bson.D{}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, limitThenSkip), []string{"u2"})
 
 	countAggregate := serveCommand(t, server, 4, bson.D{
 		{Key: "aggregate", Value: "users"},
@@ -327,6 +337,57 @@ func TestMongoAggregateCountDistinctEnforceScanBounds(t *testing.T) {
 		{Key: "$db", Value: "app"},
 	})
 	assertBatchIDs(t, cursorFirstBatch(t, selective), []string{"u1"})
+	limited := serveCommand(t, server, 210, bson.D{
+		{Key: "aggregate", Value: "users"},
+		{Key: "pipeline", Value: bson.A{bson.D{{Key: "$limit", Value: int32(1)}}}},
+		{Key: "cursor", Value: bson.D{}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, limited), []string{"u1"})
+	matchedLimited := serveCommand(t, server, 211, bson.D{
+		{Key: "aggregate", Value: "users"},
+		{Key: "pipeline", Value: bson.A{
+			bson.D{{Key: "$match", Value: bson.D{{Key: "active", Value: true}}}},
+			bson.D{{Key: "$limit", Value: int32(1)}},
+		}},
+		{Key: "cursor", Value: bson.D{}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, matchedLimited), []string{"u1"})
+	skippedLimited := serveCommand(t, server, 212, bson.D{
+		{Key: "aggregate", Value: "users"},
+		{Key: "pipeline", Value: bson.A{
+			bson.D{{Key: "$skip", Value: int32(1)}},
+			bson.D{{Key: "$limit", Value: int32(1)}},
+		}},
+		{Key: "cursor", Value: bson.D{}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, skippedLimited), []string{"u2"})
+	assertOK(t, serveCommand(t, server, 213, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u4"}, {Key: "active", Value: false}}}},
+		{Key: "$db", Value: "app"},
+	}))
+	server.MaxFindScanDocuments = 3
+	matchedSkippedLimited := serveCommand(t, server, 214, bson.D{
+		{Key: "aggregate", Value: "users"},
+		{Key: "pipeline", Value: bson.A{
+			bson.D{{Key: "$match", Value: bson.D{{Key: "active", Value: true}}}},
+			bson.D{{Key: "$skip", Value: int32(1)}},
+			bson.D{{Key: "$limit", Value: int32(1)}},
+		}},
+		{Key: "cursor", Value: bson.D{}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, matchedSkippedLimited), []string{"u3"})
+	skipOnly := serveCommand(t, server, 215, bson.D{
+		{Key: "aggregate", Value: "users"},
+		{Key: "pipeline", Value: bson.A{bson.D{{Key: "$skip", Value: int32(1)}}}},
+		{Key: "cursor", Value: bson.D{}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, skipOnly, "BadValue")
 
 	oneDoc := newMongoCompatibilityMatrixServer(t)
 	oneDoc.MaxFindScanDocuments = 2
