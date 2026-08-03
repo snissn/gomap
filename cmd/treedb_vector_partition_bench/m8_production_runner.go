@@ -147,6 +147,7 @@ type m8ProductionRowOutcomesV1 struct {
 	Status      string     `json:"status"`
 	Samples     int        `json:"samples"`
 	TopKIDs     [][]string `json:"top_k_document_ids"`
+	TotalNanos  []uint64   `json:"total_nanos"`
 }
 
 // m8ProductionAttributionV1 keeps each lossy boundary visible. Recall is
@@ -364,6 +365,7 @@ type m8MeasuredCellV1 struct {
 	rowIndex         int
 	probes, efSearch int
 	results          [][]m8CanonicalResultV1
+	durations        []uint64
 }
 
 type m8ProductionResourceObservedMaximaV1 struct {
@@ -526,7 +528,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		for _, probes := range cfg.probes {
 			for _, ef := range cfg.efSearch {
 				for _, concurrency := range cfg.concurrency {
-					row, results, rowErr := m8RunProductionCellV1(context.Background(), topology.Coordinator(), assets, queries, truth, probes, ef, concurrency, cfg.topK, cfg.routerCandidates, cfg.m8CoordinatorLimits.MaxCandidateBytes)
+					row, results, durations, rowErr := m8RunProductionCellV1(context.Background(), topology.Coordinator(), assets, queries, truth, probes, ef, concurrency, cfg.topK, cfg.routerCandidates, cfg.m8CoordinatorLimits.MaxCandidateBytes)
 					if rowErr != nil {
 						return fmt.Errorf("M8 production cell probes=%d ef=%d concurrency=%d: %w", probes, ef, concurrency, rowErr)
 					}
@@ -535,7 +537,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 						row.VariantID = assets.descriptor.VariantID
 					}
 					report.Rows = append(report.Rows, row)
-					measuredCells = append(measuredCells, m8MeasuredCellV1{rowIndex: len(report.Rows) - 1, probes: probes, efSearch: ef, results: results})
+					measuredCells = append(measuredCells, m8MeasuredCellV1{rowIndex: len(report.Rows) - 1, probes: probes, efSearch: ef, results: results, durations: durations})
 				}
 			}
 		}
@@ -762,7 +764,7 @@ func m8WriteProductionMeasurementTranscriptV1(dir string, report m8ProductionRep
 		return m8ProductionMeasurementTranscriptEvidenceV1{}, err
 	}
 	path := filepath.Join(dir, "vector_partition_m8_measurements_"+report.ExecutionID+".json")
-	transcript := m8ProductionMeasurementTranscriptV1{SchemaVersion: 2, ExecutionID: report.ExecutionID, Dataset: report.Dataset, Variant: report.Variant, Config: report.Config, Rows: report.Rows, Outcomes: outcomes}
+	transcript := m8ProductionMeasurementTranscriptV1{SchemaVersion: 3, ExecutionID: report.ExecutionID, Dataset: report.Dataset, Variant: report.Variant, Config: report.Config, Rows: report.Rows, Outcomes: outcomes}
 	raw, err := json.Marshal(transcript)
 	if err != nil {
 		return m8ProductionMeasurementTranscriptEvidenceV1{}, err
@@ -810,7 +812,7 @@ func m8ReadProductionMeasurementTranscriptV1(report m8ProductionReportV1) (m8Pro
 	var transcript m8ProductionMeasurementTranscriptV1
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&transcript) != nil || transcript.SchemaVersion != 2 {
+	if decoder.Decode(&transcript) != nil || transcript.SchemaVersion != 3 {
 		return m8ProductionMeasurementTranscriptV1{}, errors.New("invalid M8 measurement transcript schema")
 	}
 	var trailing any
@@ -836,7 +838,7 @@ func m8ProductionRowOutcomeIdentityV1(row m8ProductionRowV1) m8ProductionRowOutc
 }
 
 func m8ProductionMeasurementTranscriptOutcomesV1(report m8ProductionReportV1, measuredCells []m8MeasuredCellV1) ([]m8ProductionRowOutcomesV1, error) {
-	byRow := make(map[int][][]m8CanonicalResultV1, len(measuredCells))
+	byRow := make(map[int]m8MeasuredCellV1, len(measuredCells))
 	for _, measured := range measuredCells {
 		if measured.rowIndex < 0 || measured.rowIndex >= len(report.Rows) {
 			return nil, errors.New("M8 measurement transcript has invalid measured row")
@@ -844,24 +846,26 @@ func m8ProductionMeasurementTranscriptOutcomesV1(report m8ProductionReportV1, me
 		if _, duplicate := byRow[measured.rowIndex]; duplicate {
 			return nil, errors.New("M8 measurement transcript has duplicate measured row")
 		}
-		byRow[measured.rowIndex] = measured.results
+		byRow[measured.rowIndex] = measured
 	}
 	outcomes := make([]m8ProductionRowOutcomesV1, len(report.Rows))
 	for i, row := range report.Rows {
 		outcome := m8ProductionRowOutcomeIdentityV1(row)
 		if row.Status == "pass" || row.Status == "fail" {
-			results, ok := byRow[i]
-			if !ok || len(results) != row.Samples {
+			measured, ok := byRow[i]
+			if !ok || len(measured.results) != row.Samples || len(measured.durations) != row.Samples {
 				return nil, errors.New("M8 measurement transcript has incomplete query outcomes")
 			}
-			outcome.TopKIDs = make([][]string, len(results))
-			for query := range results {
-				outcome.TopKIDs[query] = m8CanonicalIDsV1(results[query])
+			outcome.TopKIDs = make([][]string, len(measured.results))
+			for query := range measured.results {
+				outcome.TopKIDs[query] = m8CanonicalIDsV1(measured.results[query])
 			}
+			outcome.TotalNanos = append([]uint64(nil), measured.durations...)
 		} else if _, ok := byRow[i]; ok && row.Status != "candidate_coverage_shortfall" {
 			return nil, errors.New("M8 measurement transcript has outcomes for unmeasured row")
 		} else {
 			outcome.TopKIDs = make([][]string, 0)
+			outcome.TotalNanos = make([]uint64, 0)
 		}
 		outcomes[i] = outcome
 	}
@@ -873,7 +877,7 @@ func m8ProductionMeasurementTranscriptMaxBytesV1(report m8ProductionReportV1) (i
 		return 0, errors.New("invalid M8 measurement transcript shape")
 	}
 	idBytes := int64(len(fmt.Sprintf("doc-%06d", report.Dataset.Vectors-1)))
-	var resultCount int64
+	var resultCount, durationCount int64
 	for _, row := range report.Rows {
 		if row.Status != "pass" && row.Status != "fail" {
 			continue
@@ -889,13 +893,27 @@ func m8ProductionMeasurementTranscriptMaxBytesV1(report m8ProductionReportV1) (i
 		if err != nil {
 			return 0, err
 		}
+		durationCount, err = memoryAdd(durationCount, int64(row.Samples))
+		if err != nil {
+			return 0, err
+		}
 	}
 	// ID quotes, comma/bracket punctuation, row keys, and the copied rows.
 	resultBytes, err := memoryMul(resultCount, idBytes+3)
 	if err != nil {
 		return 0, err
 	}
-	return memoryAdd(64<<10, resultBytes)
+	// A uint64 JSON value is at most 20 digits plus a comma. The fixed
+	// overhead also covers the field names, brackets, and copied rows.
+	durationBytes, err := memoryMul(durationCount, 21)
+	if err != nil {
+		return 0, err
+	}
+	withResults, err := memoryAdd(64<<10, resultBytes)
+	if err != nil {
+		return 0, err
+	}
+	return memoryAdd(withResults, durationBytes)
 }
 
 func m8ValidateProductionMeasurementTranscriptOutcomesV1(transcript m8ProductionMeasurementTranscriptV1, report m8ProductionReportV1) error {
@@ -912,6 +930,9 @@ func m8ValidateProductionMeasurementTranscriptOutcomesV1(transcript m8Production
 			if len(outcome.TopKIDs) != row.Samples {
 				return errors.New("M8 measurement transcript outcome sample count mismatch")
 			}
+			if len(outcome.TotalNanos) != row.Samples {
+				return errors.New("M8 measurement transcript timing sample count mismatch")
+			}
 			for _, ids := range outcome.TopKIDs {
 				if len(ids) != min(report.Config.TopK, report.Dataset.Vectors) {
 					return errors.New("M8 measurement transcript outcome top-k count mismatch")
@@ -924,7 +945,20 @@ func m8ValidateProductionMeasurementTranscriptOutcomesV1(transcript m8Production
 					seen[id] = true
 				}
 			}
-		} else if outcome.TopKIDs == nil || len(outcome.TopKIDs) != 0 {
+			for _, duration := range outcome.TotalNanos {
+				if duration == 0 {
+					return errors.New("M8 measurement transcript has zero timing sample")
+				}
+			}
+			p50, p95, p99 := m8PercentileV1(outcome.TotalNanos, 50), m8PercentileV1(outcome.TotalNanos, 95), m8PercentileV1(outcome.TotalNanos, 99)
+			var maximum uint64
+			for _, duration := range outcome.TotalNanos {
+				maximum = max(maximum, duration)
+			}
+			if row.P50Nanos != p50 || row.P95Nanos != p95 || row.P99Nanos != p99 || row.MaxTotalNanos != maximum {
+				return errors.New("M8 measurement transcript timings do not reproduce retained percentiles")
+			}
+		} else if outcome.TopKIDs == nil || len(outcome.TopKIDs) != 0 || outcome.TotalNanos == nil || len(outcome.TotalNanos) != 0 {
 			return errors.New("M8 measurement transcript has outcomes for shortfall or unsupported row")
 		}
 	}
@@ -2917,7 +2951,7 @@ func m8AccumulateProductionRowCountersV1(row *m8ProductionRowV1, counters native
 	row.MaxShardCandidateBytes = max(row.MaxShardCandidateBytes, counters.MaxShardCandidateBytes)
 }
 
-func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPartitionCoordinatorV1, assets *m8ProductionMultiGroupAssetsV1, queries [][]float64, truth [][]m8CanonicalResultV1, probes, efSearch, concurrency, topK, routerCandidates int, candidateBytesLimit uint64) (m8ProductionRowV1, [][]m8CanonicalResultV1, error) {
+func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPartitionCoordinatorV1, assets *m8ProductionMultiGroupAssetsV1, queries [][]float64, truth [][]m8CanonicalResultV1, probes, efSearch, concurrency, topK, routerCandidates int, candidateBytesLimit uint64) (m8ProductionRowV1, [][]m8CanonicalResultV1, []uint64, error) {
 	outcomes := make([]m8ProductionCellOutcomeV1, len(queries))
 	started := time.Now()
 	m8RunBoundedWorkV1(len(queries), concurrency, func(index int) {
@@ -2934,7 +2968,7 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 	})
 	elapsedNanos := uint64(time.Since(started))
 	if elapsedNanos == 0 {
-		return m8ProductionRowV1{}, nil, errors.New("M8 production cell elapsed time is zero")
+		return m8ProductionRowV1{}, nil, nil, errors.New("M8 production cell elapsed time is zero")
 	}
 	// Coordinator.Search is an ANN/HNSW path even when every partition is
 	// selected. Exact V1 parity is owned by m8ExactPartitionUnionV1 during
@@ -2955,11 +2989,11 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 				coverageShortfall = true
 				continue
 			}
-			return row, nil, fmt.Errorf("query %d: %w", index, outcome.err)
+			return row, nil, nil, fmt.Errorf("query %d: %w", index, outcome.err)
 		}
 		got, shapeErr := m8ValidateCoordinatorResponseV1(outcome.response, assets.manifest, probes, topK)
 		if shapeErr != nil {
-			return row, nil, fmt.Errorf("query %d response shape: %w", index, shapeErr)
+			return row, nil, nil, fmt.Errorf("query %d response shape: %w", index, shapeErr)
 		}
 		canonicalResults[index] = got
 		recallSum += m8CanonicalRecallV1(truth[index], got)
@@ -2972,7 +3006,7 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 		for _, outcome := range outcomes {
 			row.MaxTotalNanos = max(row.MaxTotalNanos, outcome.response.Timing.TotalNanos)
 		}
-		return row, make([][]m8CanonicalResultV1, len(outcomes)), nil
+		return row, make([][]m8CanonicalResultV1, len(outcomes)), nil, nil
 	}
 	row.NoPartialResults = true
 	row.RecallAtK = recallSum / float64(len(outcomes))
@@ -2982,7 +3016,7 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 	for _, duration := range durations {
 		row.MaxTotalNanos = max(row.MaxTotalNanos, duration)
 	}
-	return row, canonicalResults, nil
+	return row, canonicalResults, durations, nil
 }
 
 func m8ProductionQPSV1(samples int, elapsedNanos uint64) (float64, bool) {

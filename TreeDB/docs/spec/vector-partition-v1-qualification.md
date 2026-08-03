@@ -42,12 +42,15 @@ and derives median/min/max QPS plus p95 spread. Qualification is reported only
 after both corpus campaigns validate.
 
 Each child also retains a runner-written, hashed measurement transcript (schema
-v2) bound to its execution ID, immutable candidate/config identity, measured
-rows, and each row's ordered per-query returned top-k document IDs. Qualification
-bounded-decodes the frozen exact-truth cache and recomputes retained row recall
-from those IDs before trusting the recall gates. This detects retained-bundle
-mismatch, reuse, or a relabeled recall aggregate; it does not claim to
-authenticate an attacker that can regenerate an entire evidence bundle.
+v3) bound to its execution ID, immutable candidate/config identity, measured
+rows, and each normal row's ordered per-query returned top-k document IDs and
+request-total nanoseconds. Qualification bounded-decodes the frozen exact-truth
+cache, recomputes retained row recall, p50/p95/p99, and maximum request time
+from those samples before trusting recall or tail-latency gates. Wall elapsed
+remains the concurrent cell measurement and is not reconstructed from
+overlapping request totals. This detects retained-bundle mismatch, reuse, or a
+relabeled aggregate; it does not claim to authenticate an attacker that can
+regenerate an entire evidence bundle.
 
 The graph and offline router builders have separate scalar-work envelopes from
 M3's exact-oracle visit cap: the retained 100k corpus uses 20B and the 250k

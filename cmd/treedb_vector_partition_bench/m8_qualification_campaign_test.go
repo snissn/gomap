@@ -1581,16 +1581,56 @@ func TestM8QualificationBoundedJSONEvidenceV1(t *testing.T) {
 			},
 			"out_of_domain": func(value *m8ProductionMeasurementTranscriptV1) { value.Outcomes[0].TopKIDs[0][0] = "doc-999999" },
 			"cell_mismatch": func(value *m8ProductionMeasurementTranscriptV1) { value.Outcomes[0].Probes++ },
+			"timing_count": func(value *m8ProductionMeasurementTranscriptV1) {
+				value.Outcomes[0].TotalNanos = value.Outcomes[0].TotalNanos[:len(value.Outcomes[0].TotalNanos)-1]
+			},
+			"timing_zero": func(value *m8ProductionMeasurementTranscriptV1) { value.Outcomes[0].TotalNanos[0] = 0 },
 		} {
 			t.Run(name, func(t *testing.T) {
 				value := transcript
 				value.Outcomes = append([]m8ProductionRowOutcomesV1(nil), transcript.Outcomes...)
 				value.Outcomes[0].TopKIDs = append([][]string(nil), transcript.Outcomes[0].TopKIDs...)
 				value.Outcomes[0].TopKIDs[0] = append([]string(nil), transcript.Outcomes[0].TopKIDs[0]...)
+				value.Outcomes[0].TotalNanos = append([]uint64(nil), transcript.Outcomes[0].TotalNanos...)
 				mutate(&value)
 				write(value)
 				if validM8ProductionMeasurementTranscriptV1(report) {
 					t.Fatal("accepted malformed transcript outcomes")
+				}
+			})
+		}
+	})
+	t.Run("transcript_timings_recompute_percentiles", func(t *testing.T) {
+		report := testM8QualificationReportV1(t, m8QualificationFrozenBaseSHAV1, m8QualificationFixturesV1[0], testM3VariantDescriptorV1(t.TempDir()), 125)
+		raw, err := os.ReadFile(report.MeasurementTranscript.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var transcript m8ProductionMeasurementTranscriptV1
+		if err := json.Unmarshal(raw, &transcript); err != nil {
+			t.Fatal(err)
+		}
+		for name, mutate := range map[string]func(*m8ProductionRowV1){
+			"percentile": func(row *m8ProductionRowV1) { row.P95Nanos-- },
+			"maximum":    func(row *m8ProductionRowV1) { row.MaxTotalNanos-- },
+		} {
+			t.Run(name, func(t *testing.T) {
+				value := report
+				value.Rows = append([]m8ProductionRowV1(nil), report.Rows...)
+				mutate(&value.Rows[0])
+				copy := transcript
+				copy.Rows = append([]m8ProductionRowV1(nil), value.Rows...)
+				raw, err := json.Marshal(copy)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(value.MeasurementTranscript.Path, raw, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				digest := sha256.Sum256(raw)
+				value.MeasurementTranscript.Bytes, value.MeasurementTranscript.SHA256 = int64(len(raw)), hex.EncodeToString(digest[:])
+				if validM8ProductionMeasurementTranscriptV1(value) {
+					t.Fatal("accepted self-consistent retained percentile")
 				}
 			})
 		}
@@ -1680,6 +1720,67 @@ func TestM8QualificationTruthCacheAnchorV1(t *testing.T) {
 	}
 	if _, err := m8ValidateQualificationCampaignWithVerifiersV1(campaignRoot, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, verify, func(m8ProductionProfileEvidenceV1) bool { return true }); err != nil {
 		t.Fatalf("rejected anchored campaign: %v", err)
+	}
+	// Refresh every mutable report, transcript, execution, matrix, and campaign
+	// digest after lowering a p4 percentile. The retained raw timings remain
+	// untouched, so qualification must reject the self-consistent bundle.
+	for i, run := range campaign.Runs {
+		raw, err := os.ReadFile(filepath.Join(campaignRoot, run.Path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var matrix m8ProductionMatrixV1
+		if err := json.Unmarshal(raw, &matrix); err != nil {
+			t.Fatal(err)
+		}
+		for j := range matrix.Variants {
+			report := &matrix.Variants[j]
+			for row := range report.Rows {
+				if report.Rows[row].Probes == 4 {
+					report.Rows[row].P95Nanos--
+				}
+			}
+			raw, err := os.ReadFile(report.MeasurementTranscript.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var transcript m8ProductionMeasurementTranscriptV1
+			if err := json.Unmarshal(raw, &transcript); err != nil {
+				t.Fatal(err)
+			}
+			transcript.Rows = report.Rows
+			raw, err = json.Marshal(transcript)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(report.MeasurementTranscript.Path, raw, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(raw)
+			report.MeasurementTranscript.Bytes, report.MeasurementTranscript.SHA256 = int64(len(raw)), hex.EncodeToString(digest[:])
+			report.GateLedger = m8ProductionGateLedgerForReportV1(*report)
+			digestText, err := m8ProductionExecutionEvidenceDigestV1(report.ExecutionID, report.Profiles.Artifacts, report.MeasurementTranscript.SHA256)
+			if err != nil {
+				t.Fatal(err)
+			}
+			report.ExecutionEvidenceDigest = digestText
+		}
+		matrix, err = m8BuildProductionMatrixWithExecutionIntervalV1(config{baseSHA: matrix.BaseSHA, headSHA: matrix.HeadSHA, partitions: matrix.Variants[0].Config.Partitions, command: matrix.Command}, matrix.Dataset, matrix.Variants, matrix.ExecutionStartedAt, matrix.ExecutionCompletedAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err = json.Marshal(matrix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(campaignRoot, run.Path), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(raw)
+		campaign.Runs[i].SHA256 = hex.EncodeToString(digest[:])
+	}
+	if _, err := m8ValidateQualificationCampaignWithVerifiersV1(campaignRoot, campaign, func(string, m8ProductionReportV1) error { return nil }, func(string, string, string, string) bool { return true }, verify, func(m8ProductionProfileEvidenceV1) bool { return true }); err == nil {
+		t.Fatal("accepted self-consistent lowered-p95 report/transcript/matrix/campaign")
 	}
 	// Refresh every mutable digest around a favorable p4 aggregate while leaving
 	// the retained query outcomes and anchored truth untouched. Qualification
@@ -2807,7 +2908,29 @@ func testM8MeasurementCellsV1(report m8ProductionReportV1) []m8MeasuredCellV1 {
 				}
 			}
 		}
-		cells = append(cells, m8MeasuredCellV1{rowIndex: rowIndex, probes: row.Probes, efSearch: row.EfSearch, results: results})
+		var durations []uint64
+		if row.Status == "pass" || row.Status == "fail" {
+			durations = make([]uint64, row.Samples)
+			i50, ok50 := m8NearestRankPercentileIndexV1(uint64(row.Samples), 50)
+			i95, ok95 := m8NearestRankPercentileIndexV1(uint64(row.Samples), 95)
+			i99, ok99 := m8NearestRankPercentileIndexV1(uint64(row.Samples), 99)
+			if !ok50 || !ok95 || !ok99 {
+				panic("invalid test timing shape")
+			}
+			for i := range durations {
+				switch {
+				case uint64(i) <= i50:
+					durations[i] = row.P50Nanos
+				case uint64(i) <= i95:
+					durations[i] = row.P95Nanos
+				case uint64(i) <= i99:
+					durations[i] = row.P99Nanos
+				default:
+					durations[i] = row.MaxTotalNanos
+				}
+			}
+		}
+		cells = append(cells, m8MeasuredCellV1{rowIndex: rowIndex, probes: row.Probes, efSearch: row.EfSearch, results: results, durations: durations})
 	}
 	return cells
 }
