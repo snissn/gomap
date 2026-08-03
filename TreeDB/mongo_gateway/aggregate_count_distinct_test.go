@@ -224,6 +224,7 @@ func TestMongoAggregateCountDistinctRejectUnsupportedSurface(t *testing.T) {
 	tests := []struct {
 		name    string
 		command bson.D
+		want    string
 	}{
 		{name: "aggregate output", command: bson.D{
 			{Key: "aggregate", Value: "users"},
@@ -274,13 +275,18 @@ func TestMongoAggregateCountDistinctRejectUnsupportedSurface(t *testing.T) {
 			{Key: "$db", Value: "app"},
 		}},
 		{name: "count option", command: bson.D{{Key: "count", Value: "users"}, {Key: "hint", Value: "_id_"}, {Key: "$db", Value: "app"}}},
+		{name: "distinct empty", command: bson.D{{Key: "distinct", Value: "users"}, {Key: "key", Value: ""}, {Key: "$db", Value: "app"}}, want: "FailedToParse"},
 		{name: "distinct dotted", command: bson.D{{Key: "distinct", Value: "users"}, {Key: "key", Value: "profile.city"}, {Key: "$db", Value: "app"}}},
 		{name: "distinct option", command: bson.D{{Key: "distinct", Value: "users"}, {Key: "key", Value: "city"}, {Key: "collation", Value: bson.D{}}, {Key: "$db", Value: "app"}}},
 	}
 	for i, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			response := serveCommand(t, server, int32(100+i), test.command)
-			assertCommandError(t, response, "BadValue")
+			want := test.want
+			if want == "" {
+				want = "BadValue"
+			}
+			assertCommandError(t, response, want)
 		})
 	}
 	for i, name := range []string{"aggregate", "count", "distinct"} {
@@ -308,6 +314,13 @@ func TestMongoAggregateCountDistinctEnforceScanBounds(t *testing.T) {
 		response := serveCommand(t, server, int32(200+i), command)
 		assertCommandError(t, response, "BadValue")
 	}
+	selective := serveCommand(t, server, 209, bson.D{
+		{Key: "aggregate", Value: "users"},
+		{Key: "pipeline", Value: bson.A{bson.D{{Key: "$match", Value: bson.D{{Key: "_id", Value: "u1"}}}}}},
+		{Key: "cursor", Value: bson.D{}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, selective), []string{"u1"})
 
 	oneDoc := newMongoCompatibilityMatrixServer(t)
 	oneDoc.MaxFindScanDocuments = 2
@@ -439,6 +452,15 @@ func TestMongoAggregateCountDistinctCommandWALValueLogPointersReopen(t *testing.
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
+	backendOpen := true
+	closeInitial := func() error {
+		if !backendOpen {
+			return nil
+		}
+		backendOpen = false
+		return closeBackend()
+	}
+	t.Cleanup(func() { _ = closeInitial() })
 	manager := collections.NewCollectionManager(backend)
 	server := NewServer()
 	server.Collections = manager
@@ -452,14 +474,14 @@ func TestMongoAggregateCountDistinctCommandWALValueLogPointersReopen(t *testing.
 		{Key: "$db", Value: "app"},
 	}))
 	if err := manager.FlushAll(); err != nil {
-		_ = closeBackend()
+		_ = closeInitial()
 		t.Fatalf("flush: %v", err)
 	}
 	if err := backend.Checkpoint(); err != nil {
-		_ = closeBackend()
+		_ = closeInitial()
 		t.Fatalf("checkpoint: %v", err)
 	}
-	if err := closeBackend(); err != nil {
+	if err := closeInitial(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 

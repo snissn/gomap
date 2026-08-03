@@ -249,7 +249,12 @@ func (s *Server) aggregateResponse(ctx context.Context, command wire.Document, c
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	result, err := s.executeFind(col, findPlan{})
+	plan := findPlan{}
+	if len(stages) > 0 && stages[0].name == "$match" {
+		plan = stages[0].plan
+		stages = stages[1:]
+	}
+	result, err := s.executeFind(col, plan)
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}

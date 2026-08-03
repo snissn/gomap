@@ -649,7 +649,21 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			feature:  "aggregate match/project/sort/skip/limit/count",
 			status:   "supported subset",
 			probe: func(t *testing.T, server *Server) {
-				resp := serveCommand(t, server, 25, bson.D{
+				staged := serveCommand(t, server, 25, bson.D{
+					{Key: "aggregate", Value: "users"},
+					{Key: "pipeline", Value: bson.A{
+						bson.D{{Key: "$match", Value: bson.D{{Key: "active", Value: true}}}},
+						bson.D{{Key: "$sort", Value: bson.D{{Key: "age", Value: int32(-1)}}}},
+						bson.D{{Key: "$project", Value: bson.D{{Key: "_id", Value: int32(1)}}}},
+						bson.D{{Key: "$skip", Value: int32(1)}},
+						bson.D{{Key: "$limit", Value: int32(1)}},
+					}},
+					{Key: "cursor", Value: bson.D{}},
+					{Key: "$db", Value: "app"},
+				})
+				assertBatchIDs(t, cursorFirstBatch(t, staged), []string{"u3"})
+
+				counted := serveCommand(t, server, 251, bson.D{
 					{Key: "aggregate", Value: "users"},
 					{Key: "pipeline", Value: bson.A{
 						bson.D{{Key: "$match", Value: bson.D{{Key: "active", Value: true}}}},
@@ -658,7 +672,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 					{Key: "cursor", Value: bson.D{}},
 					{Key: "$db", Value: "app"},
 				})
-				batch := cursorFirstBatch(t, resp)
+				batch := cursorFirstBatch(t, counted)
 				if len(batch) != 1 {
 					t.Fatalf("aggregate batch len=%d want 1", len(batch))
 				}
@@ -690,10 +704,13 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			feature:  "count filter/skip/limit",
 			status:   "supported subset",
 			probe: func(t *testing.T, server *Server) {
-				resp := serveCommand(t, server, 26, bson.D{{Key: "count", Value: "users"}, {Key: "query", Value: bson.D{{Key: "active", Value: true}}}, {Key: "limit", Value: int32(1)}, {Key: "$db", Value: "app"}})
-				assertOK(t, resp)
-				if n, ok := bson.Raw(resp).Lookup("n").Int64OK(); !ok || n != 1 {
-					t.Fatalf("count n=%d ok=%v want 1", n, ok)
+				for requestID, pagination := range []bson.E{{Key: "skip", Value: int32(1)}, {Key: "limit", Value: int32(1)}} {
+					command := bson.D{{Key: "count", Value: "users"}, {Key: "query", Value: bson.D{{Key: "active", Value: true}}}, pagination, {Key: "$db", Value: "app"}}
+					resp := serveCommand(t, server, int32(26+requestID), command)
+					assertOK(t, resp)
+					if n, ok := bson.Raw(resp).Lookup("n").Int64OK(); !ok || n != 1 {
+						t.Fatalf("count %s n=%d ok=%v want 1", pagination.Key, n, ok)
+					}
 				}
 			},
 		},
@@ -702,10 +719,10 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			feature:  "distinct top-level field with filter",
 			status:   "supported subset",
 			probe: func(t *testing.T, server *Server) {
-				resp := serveCommand(t, server, 261, bson.D{{Key: "distinct", Value: "users"}, {Key: "key", Value: "city"}, {Key: "query", Value: bson.D{}}, {Key: "$db", Value: "app"}})
+				resp := serveCommand(t, server, 261, bson.D{{Key: "distinct", Value: "users"}, {Key: "key", Value: "city"}, {Key: "query", Value: bson.D{{Key: "active", Value: false}}}, {Key: "$db", Value: "app"}})
 				assertOK(t, resp)
 				values, err := bson.Raw(resp).Lookup("values").Array().Values()
-				if err != nil || len(values) != 2 || values[0].StringValue() != "hnl" || values[1].StringValue() != "sfo" {
+				if err != nil || len(values) != 1 || values[0].StringValue() != "hnl" {
 					t.Fatalf("distinct values=%v err=%v", values, err)
 				}
 			},
