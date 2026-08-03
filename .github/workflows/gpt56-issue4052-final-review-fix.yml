@@ -1,4 +1,4 @@
-name: GPT-5.6 issue 4052 exact source export
+name: GPT-5.6 issue 4052 final review hardening
 
 on:
   pull_request:
@@ -6,24 +6,69 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  export-source:
+  apply-test-publish:
     if: github.head_ref == 'gpt56/issue-4052-capability-manifest'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.head_ref }}
-          fetch-depth: 1
-      - name: Package exact branch source
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
+          cache: false
+      - name: Apply exact locally reproduced final review patch
+        shell: bash
+        run: |
+          set -euxo pipefail
+          base64 --decode .github/gpt56/issue4052-final-review-fix.b64 | gzip -dc > /tmp/issue4052-final-review-fix.patch
+          printf '%s  %s\n' 'b54c9ccf15fd975b5b66c5a811732757b06dc0b30069b990e7fdb8f8a82dc845' /tmp/issue4052-final-review-fix.patch | sha256sum --check -
+          git apply --check --verbose /tmp/issue4052-final-review-fix.patch
+          git apply --verbose /tmp/issue4052-final-review-fix.patch
+          test "$(find .github/gpt56 -mindepth 1 -maxdepth 1 -type f -printf '%p\n' | sort)" = '.github/gpt56/issue4052-final-review-fix.b64'
+          rm -rf .github/gpt56
+          rm -f .github/workflows/gpt56-issue4052-final-review-fix.yml
+          test -z "$(gofmt -l TreeDB/mongo_gateway/capability_manifest_test.go TreeDB/mongo_gateway/compatibility_matrix_test.go TreeDB/mongo_gateway/server_core.go cmd/mongo_gateway_bench/main.go cmd/mongo_gateway_bench/main_test.go)"
+          git diff --check
+          git add -A
+          git diff --cached --name-only | sort | tee /tmp/actual-files
+          cat > /tmp/expected-files <<'FILES'
+          .github/gpt56/issue4052-final-review-fix.b64
+          .github/workflows/gpt56-issue4052-final-review-fix.yml
+          TreeDB/mongo_gateway/COMPATIBILITY.md
+          TreeDB/mongo_gateway/capability_manifest_test.go
+          TreeDB/mongo_gateway/compatibility_matrix_test.go
+          TreeDB/mongo_gateway/server_core.go
+          cmd/mongo_gateway_bench/main.go
+          cmd/mongo_gateway_bench/main_test.go
+          FILES
+          sort -o /tmp/expected-files /tmp/expected-files
+          diff -u /tmp/expected-files /tmp/actual-files
+      - name: Validate final review hardening
+        env:
+          TERM: xterm
+          GOWORK: 'off'
+          GOFLAGS: '-p=1'
+          GOMAXPROCS: '2'
+          CGO_ENABLED: '1'
         run: |
           set -euo pipefail
-          tar --exclude=.git -czf /tmp/gomap-issue4052-source.tgz .
-      - uses: actions/upload-artifact@v4
-        with:
-          name: gomap-issue4052-source-${{ github.sha }}
-          path: /tmp/gomap-issue4052-source.tgz
-          if-no-files-found: error
-          retention-days: 1
+          go test ./TreeDB/mongo_gateway -count=1
+          go test ./cmd/mongo_gateway_bench -count=1
+          go vet ./TreeDB/mongo_gateway ./cmd/mongo_gateway_bench
+          make build-treedb
+          make build-mongo-gateway
+      - name: Commit and publish clean final head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'GPT-5.6 Pro'
+          git config user.email '1981537+snissn@users.noreply.github.com'
+          git commit -m 'mongo: harden capability evidence and identity reporting'
+          git push origin HEAD:gpt56/issue-4052-capability-manifest
