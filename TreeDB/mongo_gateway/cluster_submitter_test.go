@@ -2366,6 +2366,7 @@ func TestClusterSubmitterGenericUpdatesFailClosedWithoutLocalMutation(t *testing
 	for _, update := range []bson.D{
 		{{Key: "$inc", Value: bson.D{{Key: "age", Value: int32(1)}}}},
 		{{Key: "$set", Value: bson.D{{Key: "profile.name", Value: "Grace"}}}},
+		{{Key: "$set", Value: bson.D{{Key: "code", Value: deeplyNestedCodeWithScopeValue(mongoMutationMaxBSONNesting - 1)}}}},
 		{{Key: "$push", Value: bson.D{{Key: "events", Value: "login"}}}},
 		{{Key: "name", Value: "Grace"}},
 	} {
