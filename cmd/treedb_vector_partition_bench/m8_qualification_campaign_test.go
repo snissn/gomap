@@ -82,6 +82,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 				matrix := testM8QualificationMatrixV1(t, campaignHead, fixture, 125)
 				testM8QualificationExecutionIDsV1(&matrix, i)
 				matrix.Variants[1].Topology.ReadySetDigest = strings.Repeat("e", 64)
+				matrix.Variants[1].Topology.MetaLeader = fmt.Sprintf("elected-meta-leader-%d", i)
 				testM8BindRouterSessionsVariantV1(&matrix.Variants[1].RouterSessions, *matrix.Variants[1].Variant, matrix.Variants[1].Topology.ReadySetDigest)
 				if leaderDrift {
 					matrix.Variants[1].Topology.Groups[0].LeaderID = "different-leader"
