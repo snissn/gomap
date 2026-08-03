@@ -5794,12 +5794,13 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 }
 
 func TestRawValuesEqualHandlesDeepNestedBSON(t *testing.T) {
-	const depth = 10000
-	left := deeplyNestedRawDocumentValue(depth, int32(1))
-	right := deeplyNestedRawDocumentValue(depth, int32(1))
-	different := deeplyNestedRawDocumentValue(depth, int32(2))
-	if !rawValuesEqual(left, right) || rawValuesEqual(left, different) {
-		t.Fatal("deep BSON equality result was incorrect")
+	within := deeplyNestedRawDocumentValue(mongoMutationMaxBSONNesting-1, int32(1))
+	if !rawValuesEqual(within, within) {
+		t.Fatal("bounded deep BSON equality result was incorrect")
+	}
+	excess := deeplyNestedRawDocumentValue(mongoMutationMaxBSONNesting, int32(1))
+	if rawValuesEqual(excess, excess) {
+		t.Fatal("accepted BSON equality beyond the nesting limit")
 	}
 }
 
@@ -6000,6 +6001,22 @@ func TestMongoMutationRejectsWideStoredBSONBeforeDecode(t *testing.T) {
 	}
 }
 
+func TestMongoMutationSharesDecodeBudgetAcrossOperands(t *testing.T) {
+	doc := rawDocumentWithIDAndValue("u1", "stable", bson.RawValue{Type: bson.TypeBoolean, Value: []byte{1}})
+	before := append(wire.Document(nil), doc...)
+	items := mongoMutationMaxDecodedElements/2 + 1
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{{Key: "$set", Value: bson.D{
+		{Key: "nested.items", Value: wideRawArrayValue(items)},
+		{Key: "other", Value: wideRawArrayValue(items)},
+	}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || changed || !bytes.Equal(doc, before) {
+		t.Fatalf("split operands bypassed shared decode budget: changed=%v err=%v", changed, err)
+	}
+}
+
 func TestServerUpdateRejectsWideStoredBSONBeforeDecode(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
 	opts.ValueLog.PointerThreshold = 1
@@ -6025,6 +6042,35 @@ func TestServerUpdateRejectsWideStoredBSONBeforeDecode(t *testing.T) {
 	find := serveCommand(t, server, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
 	if got := cursorFirstBatch(t, find)[0]; !got.Lookup("marker").IsZero() {
 		t.Fatalf("rejected wide stored update changed document: %v", got)
+	}
+}
+
+func TestServerUpdateSharesDecodeBudgetAcrossOperands(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
+	opts.ValueLog.PointerThreshold = 1
+	backend, closeBackend, err := treedb.OpenBackend(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = closeBackend() }()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(backend)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.Raw(rawDocumentWithIDAndValue("u1", "stable", bson.RawValue{Type: bson.TypeBoolean, Value: []byte{1}}))}}, {Key: "$db", Value: "app"}}))
+	items := mongoMutationMaxDecodedElements/2 + 1
+	response := serveCommand(t, server, 2, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "nested.items", Value: wideRawArrayValue(items)}, {Key: "other", Value: wideRawArrayValue(items)}}}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "BadValue")
+	find := serveCommand(t, server, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	got := cursorFirstBatch(t, find)[0]
+	if !got.Lookup("nested").IsZero() || !got.Lookup("other").IsZero() {
+		t.Fatalf("rejected split operand update changed document: %v", got)
 	}
 }
 

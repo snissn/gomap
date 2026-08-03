@@ -1816,6 +1816,9 @@ func rawValuesEqualMode(left, right bson.RawValue, equalNaN bool) bool {
 				if !leftOK || !rightOK {
 					return false
 				}
+				if len(frames) == mongoMutationMaxBSONNesting {
+					return false
+				}
 				frames = append(frames, frame{
 					left:     leftRemaining,
 					right:    rightRemaining,

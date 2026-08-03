@@ -4106,7 +4106,7 @@ func applyMongoMutationWithOptions(doc wire.Document, mutation mongoMutation, up
 		updated, changed, err := applyMongoMutationTopLevel(doc, mutation)
 		return finalizeMongoMutationResult(updated, changed, err)
 	}
-	if err := validateMongoMutationDecodeBudget(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: doc}); err != nil {
+	if err := validateMongoMutationDecodeInputs(doc, mutation, upsertInsert); err != nil {
 		return nil, false, err
 	}
 	var out bson.D
@@ -4605,9 +4605,6 @@ func validateMongoMutationPathConflicts(paths map[string]struct{}) error {
 }
 
 func mongoMutationDecodeValue(value bson.RawValue) (any, error) {
-	if err := validateMongoMutationDecodeBudget(value); err != nil {
-		return nil, err
-	}
 	var decoded any
 	if err := value.Unmarshal(&decoded); err != nil {
 		return nil, err
@@ -4615,13 +4612,63 @@ func mongoMutationDecodeValue(value bson.RawValue) (any, error) {
 	return decoded, nil
 }
 
-// validateMongoMutationDecodeBudget streams raw BSON before a slow mutation
-// calls bson.Unmarshal. It bounds both the raw bytes retained by decoding and
-// the number of document/array elements that would become Go values.
-func validateMongoMutationDecodeBudget(value bson.RawValue) error {
-	if len(value.Value) > mongoMutationMaxDecodedBSONBytes {
+type mongoMutationDecodeBudget struct {
+	bytes    uint64
+	elements int
+}
+
+// validateMongoMutationDecodeInputs admits every raw value that slow mutation
+// decoding can unmarshal against one shared budget before it decodes any of
+// them. This prevents a many-field mutation from multiplying per-value limits.
+func validateMongoMutationDecodeInputs(doc wire.Document, mutation mongoMutation, upsertInsert bool) error {
+	budget := mongoMutationDecodeBudget{}
+	if err := budget.validate(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: doc}); err != nil {
+		return err
+	}
+	validateFields := func(fields []mongoMutationField) error {
+		for _, field := range fields {
+			if err := budget.validate(field.value); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := validateFields(mutation.set); err != nil {
+		return err
+	}
+	if upsertInsert {
+		if err := validateFields(mutation.setOnInsert); err != nil {
+			return err
+		}
+	}
+	if err := validateFields(mutation.inc); err != nil {
+		return err
+	}
+	validateArrays := func(fields []mongoMutationArrayField) error {
+		for _, field := range fields {
+			for _, value := range field.values {
+				if err := budget.validate(value); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := validateArrays(mutation.push); err != nil {
+		return err
+	}
+	return validateArrays(mutation.addToSet)
+}
+
+// validate streams raw BSON before a slow mutation calls bson.Unmarshal. The
+// caller shares this budget across the stored document and every decoded
+// mutation operand, bounding both retained bytes and decoded Go values.
+func (budget *mongoMutationDecodeBudget) validate(value bson.RawValue) error {
+	valueBytes := uint64(len(value.Value))
+	if valueBytes > mongoMutationMaxDecodedBSONBytes-budget.bytes {
 		return fmt.Errorf("Mongo gateway mutation BSON exceeds %d decoded bytes", mongoMutationMaxDecodedBSONBytes)
 	}
+	budget.bytes += valueBytes
 	if value.Type != bson.TypeEmbeddedDocument && value.Type != bson.TypeArray {
 		return value.Validate()
 	}
@@ -4634,7 +4681,6 @@ func validateMongoMutationDecodeBudget(value bson.RawValue) error {
 		return errors.New("Mongo gateway invalid BSON container")
 	}
 	stack := []frame{{remaining: contents, depth: 1}}
-	elements := 0
 	for len(stack) != 0 {
 		last := len(stack) - 1
 		current := &stack[last]
@@ -4650,8 +4696,8 @@ func validateMongoMutationDecodeBudget(value bson.RawValue) error {
 			return err
 		}
 		current.remaining = next
-		elements++
-		if elements > mongoMutationMaxDecodedElements {
+		budget.elements++
+		if budget.elements > mongoMutationMaxDecodedElements {
 			return fmt.Errorf("Mongo gateway mutation BSON exceeds %d decoded elements", mongoMutationMaxDecodedElements)
 		}
 		childValue, err := element.ValueErr()
