@@ -1074,13 +1074,28 @@ func TestMongoMutationValuesEqualCodeWithScopeScopes(t *testing.T) {
 }
 
 func TestMongoMutationValuesEqualCountsCodeWithScopeWrapperDepth(t *testing.T) {
-	withinLimit := deeplyNestedCodeWithScopeValue(mongoMutationMaxBSONNesting/2 - 1)
+	withinLimit := deeplyNestedCodeWithScopeValue(mongoMutationMaxBSONNesting - 1)
 	if !mongoMutationValuesEqual(withinLimit, withinLimit) {
 		t.Fatal("equal CodeWithScope values at the nesting limit differ")
 	}
-	overLimit := deeplyNestedCodeWithScopeValue(mongoMutationMaxBSONNesting / 2)
+	overLimit := deeplyNestedCodeWithScopeValue(mongoMutationMaxBSONNesting)
 	if mongoMutationValuesEqual(overLimit, overLimit) {
-		t.Fatal("CodeWithScope wrapper depth bypasses the nesting limit")
+		t.Fatal("CodeWithScope scope depth bypasses the nesting limit")
+	}
+}
+
+func TestMongoMutationAddToSetDeduplicatesCodeWithScopeBeyondFiftyLevels(t *testing.T) {
+	value := deeplyNestedCodeWithScopeValue(50)
+	doc := mustDocument(t, bson.D{{Key: "items", Value: bson.A{value}}})
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$addToSet", Value: bson.D{{Key: "items", Value: value}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, changed, err := applyMongoMutation(doc, mutation)
+	if err != nil || changed || !bytes.Equal(updated, doc) {
+		t.Fatalf("CodeWithScope duplicate changed=%v err=%v", changed, err)
 	}
 }
 

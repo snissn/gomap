@@ -1815,10 +1815,15 @@ func rawValuesEqualMode(left, right bson.RawValue, equalNaN bool) bool {
 				if len(frames) == mongoMutationMaxBSONNesting {
 					return false
 				}
-				// CodeWithScope contributes one container level before its scope.
-				frames = append(frames, frame{})
-				currentLeft = bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: leftScope}
-				currentRight = bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: rightScope}
+				leftContents, leftOK := rawBSONContainerContents(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: leftScope})
+				rightContents, rightOK := rawBSONContainerContents(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: rightScope})
+				if !leftOK || !rightOK {
+					return false
+				}
+				// The scope document contributes one container level, matching the
+				// shared mutation nesting validator.
+				frames = append(frames, frame{left: leftContents, right: rightContents, document: true})
+				currentLeft, currentRight = bson.RawValue{}, bson.RawValue{}
 				continue
 			}
 			if rawValuesBothScalar(currentLeft, currentRight) {
