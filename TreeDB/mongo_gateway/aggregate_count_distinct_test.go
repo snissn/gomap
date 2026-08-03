@@ -1,6 +1,7 @@
 package mongogateway
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -338,6 +339,43 @@ func TestForEachRawArrayValueStopsWithoutMaterializingRemainder(t *testing.T) {
 	})
 	if err == nil || err.Error() != "stop" || visits != 3 {
 		t.Fatalf("streamed array err=%v visits=%d want stop/3", err, visits)
+	}
+}
+
+func TestServerRejectsAggregateCountDistinctOPMsgFeatures(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		command bson.D
+	}{
+		{name: "aggregate", command: bson.D{{Key: "aggregate", Value: "users"}, {Key: "pipeline", Value: bson.A{}}, {Key: "cursor", Value: bson.D{}}, {Key: "$db", Value: "app"}}},
+		{name: "count", command: bson.D{{Key: "count", Value: "users"}, {Key: "$db", Value: "app"}}},
+		{name: "distinct", command: bson.D{{Key: "distinct", Value: "users"}, {Key: "key", Value: "city"}, {Key: "$db", Value: "app"}}},
+	} {
+		t.Run(tc.name+"_moreToCome", func(t *testing.T) {
+			request, err := wire.AppendMsgMessage(nil, 501, 0, wire.MsgFlagMoreToCome, mustDocument(t, tc.command))
+			if err != nil {
+				t.Fatal(err)
+			}
+			rw := &readWriter{r: bytes.NewReader(request)}
+			err = NewServer().ServeOne(rw)
+			if !errors.Is(err, wire.ErrUnsupported) || rw.w.Len() != 0 {
+				t.Fatalf("ServeOne err=%v responseBytes=%d want ErrUnsupported/0", err, rw.w.Len())
+			}
+		})
+		t.Run(tc.name+"_documentSequences", func(t *testing.T) {
+			request, err := wire.AppendMsgMessageWithSequences(nil, 502, 0, 0, mustDocument(t, tc.command), []wire.DocumentSequence{{
+				Identifier: "ignored",
+				Documents:  []wire.Document{mustDocument(t, bson.D{{Key: "x", Value: int32(1)}})},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rw := &readWriter{r: bytes.NewReader(request)}
+			err = NewServer().ServeOne(rw)
+			if !errors.Is(err, wire.ErrUnsupported) || rw.w.Len() != 0 {
+				t.Fatalf("ServeOne err=%v responseBytes=%d want ErrUnsupported/0", err, rw.w.Len())
+			}
+		})
 	}
 }
 

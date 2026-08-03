@@ -715,16 +715,20 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 	}
 	retainRequestBody := name != "insert"
 
-	if name == "find" {
-		// The find path builds a raw OP_MSG response directly, so reject OP_MSG
-		// features it does not preserve. Other commands go through
-		// commandResponse with parsed document sequences.
+	if commandRejectsReadOPMsgFeatures(name) {
+		// These read paths neither consume document sequences nor support
+		// unacknowledged execution. Reject both before a command can retain a
+		// cursor or otherwise perform work whose response would be suppressed.
 		if msg.Flags&wire.MsgFlagMoreToCome != 0 {
-			return nil, retainRequestBody, fmt.Errorf("%w: find with moreToCome flag", wire.ErrUnsupported)
+			return nil, retainRequestBody, fmt.Errorf("%w: %s with moreToCome flag", wire.ErrUnsupported, name)
 		}
 		if len(msg.Sequences) > 0 {
-			return nil, retainRequestBody, fmt.Errorf("%w: find with document sequences", wire.ErrUnsupported)
+			return nil, retainRequestBody, fmt.Errorf("%w: %s with document sequences", wire.ErrUnsupported, name)
 		}
+	}
+
+	if name == "find" {
+		// The find path builds a raw OP_MSG response directly.
 		responseID := s.nextID()
 		response, err := s.findMsgResponseInto(ctx, dst, msg.Body, responseID, h.RequestID, cursorOwner)
 		if err != nil {
@@ -742,6 +746,15 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 	}
 	msgResponse, err := wire.AppendMsgMessage(dst, s.nextID(), h.RequestID, 0, response)
 	return msgResponse, retainRequestBody, err
+}
+
+func commandRejectsReadOPMsgFeatures(name string) bool {
+	switch name {
+	case "aggregate", "count", "distinct", "find":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) commandResponse(ctx context.Context, name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (wire.Document, error) {
