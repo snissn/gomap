@@ -268,8 +268,11 @@ func mongoGatewayMutationMatrixEntryPoints(t *testing.T) []string {
 		t.Fatalf("parse mongo gateway dispatch: %v", err)
 	}
 	nonMutating := map[string]struct{}{
+		"aggregate":        {},
 		"buildInfo":        {},
 		"connectionStatus": {},
+		"count":            {},
+		"distinct":         {},
 		"endSessions":      {},
 		"find":             {},
 		"getMore":          {},
