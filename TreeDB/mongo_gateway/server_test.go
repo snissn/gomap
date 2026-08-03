@@ -7082,6 +7082,41 @@ func TestMongoMutationAddToSetAcceptsRepeatedIdenticalDecimal128Values(t *testin
 	}
 }
 
+func TestMongoMutationAddToSetAcceptsDocumentsWithIdenticalDecimal128Leaves(t *testing.T) {
+	decimal, err := bson.ParseDecimal128("1E+6000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make(bson.A, 33)
+	for i := range values {
+		values[i] = bson.D{{Key: "n", Value: decimal}, {Key: "i", Value: int32(i)}}
+	}
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: values}}}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := mutation.addToSet[0].values[0]
+	last := mutation.addToSet[0].values[len(mutation.addToSet[0].values)-1]
+	if bytes.Equal(first.Value, last.Value) || !bytes.Equal(first.Document().Lookup("n").Value, last.Document().Lookup("n").Value) {
+		t.Fatal("nested Decimal128 documents must differ while their Decimal128 leaves remain byte-identical")
+	}
+	doc := mustDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "items", Value: bson.A{values[0]}},
+	})
+	updated, changed, err := applyMongoMutation(doc, mutation)
+	if err != nil || !changed {
+		t.Fatalf("identical nested Decimal128 $addToSet changed=%v err=%v", changed, err)
+	}
+	items, itemsErr := bson.Raw(updated).Lookup("items").Array().Values()
+	if itemsErr != nil || len(items) != len(values) || !bson.Raw(updated).Lookup("marker").Boolean() {
+		t.Fatalf("identical nested Decimal128 $addToSet changed=%v err=%v items=%d itemsErr=%v marker=%v", changed, err, len(items), itemsErr, bson.Raw(updated).Lookup("marker"))
+	}
+}
+
 func TestMongoMutationAddToSetAcceptsDistinctDecimal128NaNPayloads(t *testing.T) {
 	values := make(bson.A, mongoMutationMaxEachValues)
 	for i := range values {
@@ -7175,28 +7210,49 @@ func TestMongoMutationAddToSetRejectsExpensiveDecimal128ComparisonsBeforeMutatio
 func TestMongoMutationAddToSetChargesNestedDecimal128LeavesBeforeMutation(t *testing.T) {
 	existing := bson.A{}
 	candidate := bson.A{}
-	// Stay below the 65,536 decoded-element admission cap while making one
-	// nested equality comparison expensive enough to expose leaf undercounting.
-	for i := range 32000 {
-		value, err := bson.ParseDecimal128(fmt.Sprintf("%dE+6000", i+1))
-		if err != nil {
-			t.Fatal(err)
-		}
-		existing = append(existing, value)
-		candidate = append(candidate, value)
-	}
-	last, err := bson.ParseDecimal128("9999E+6000")
+	left, err := bson.ParseDecimal128("1E+6000")
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate[len(candidate)-1] = last
+	right, err := bson.ParseDecimal128("10E+5999")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(mustRawValue(t, left).Value, mustRawValue(t, right).Value) || !mongoMutationValuesEqual(mustRawValue(t, left), mustRawValue(t, right)) {
+		t.Fatal("nested Decimal128 operands must be numerically equal with distinct encodings")
+	}
+	if decimal128NormalizationCount(mustRawValue(t, left)) != 1 || decimal128NormalizationCount(mustRawValue(t, right)) != 1 {
+		t.Fatal("nested Decimal128 operands must both require finite normalization")
+	}
+	// The 513th equal-but-differently-encoded leaf would require the 1,025th
+	// and 1,026th finite Decimal128 normalizations.
+	for range mongoMutationMaxAddToSetDecimalComparisons/2 + 1 {
+		existing = append(existing, left)
+		candidate = append(candidate, right)
+	}
+	work, ok := mongoMutationAddToSetDecimalComparisonWork(
+		[]bson.RawValue{mustRawValue(t, existing)},
+		[]bson.RawValue{mustRawValue(t, candidate)},
+		mongoMutationMaxAddToSetDecimalComparisons,
+	)
+	if ok || work != mongoMutationMaxAddToSetDecimalComparisons {
+		t.Fatalf("nested Decimal128 work=%d ok=%v", work, ok)
+	}
 	doc := mustDocument(t, bson.D{{Key: "items", Value: bson.A{existing}}})
 	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
 		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
-		{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.A{candidate}}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "items", Value: candidate}}},
 	}))
 	if err != nil {
 		t.Fatal(err)
+	}
+	storedValues, err := mongoMutationRawArrayPathValues(bson.Raw(doc), []string{"items"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	work, ok = mongoMutationAddToSetDecimalComparisonWork(storedValues, mutation.addToSet[0].values, mongoMutationMaxAddToSetDecimalComparisons)
+	if ok || work != mongoMutationMaxAddToSetDecimalComparisons {
+		t.Fatalf("parsed nested Decimal128 work=%d ok=%v stored=%d candidates=%d", work, ok, len(storedValues), len(mutation.addToSet[0].values))
 	}
 	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || !strings.Contains(err.Error(), "Decimal128 comparisons") || changed || !bson.Raw(doc).Lookup("marker").IsZero() {
 		t.Fatalf("nested Decimal128 comparison changed=%v err=%v", changed, err)
