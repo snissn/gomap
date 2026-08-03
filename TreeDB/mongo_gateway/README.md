@@ -65,6 +65,10 @@ GOWORK=off go test ./TreeDB/mongo_gateway \
   -update-mongo-capability-docs
 ```
 
+The manifest identity is also exposed by `buildInfo` and emitted by benchmark
+reports so stored compatibility evidence can be tied to the exact declared
+surface.
+
 Cluster submitter mode does not turn this gateway into a sharded Mongo server.
 For token/ring placement, exact `_id` equality finds are mapped to one catalog
 token but fail closed before local observation because the gateway does not yet
