@@ -4594,11 +4594,11 @@ func validateMongoMutationAddToSetBudget(doc bson.Raw, fields []mongoMutationArr
 func mongoMutationAddToSetDecimalComparisonWork(existing, candidates []bson.RawValue, limit int) (int, bool) {
 	existingDecimal := make([]int, len(existing))
 	for i, value := range existing {
-		existingDecimal[i] = mongoMutationRawValueDecimal128Leaves(value)
+		existingDecimal[i] = mongoMutationRawValueDecimal128NormalizationLeaves(value)
 	}
 	candidateDecimal := make([]int, len(candidates))
 	for i, value := range candidates {
-		candidateDecimal[i] = mongoMutationRawValueDecimal128Leaves(value)
+		candidateDecimal[i] = mongoMutationRawValueDecimal128NormalizationLeaves(value)
 	}
 	count := 0
 	charge := func(work int) bool {
@@ -4639,7 +4639,7 @@ func mongoMutationAddToSetDecimalPairWork(left, right bson.RawValue, leftLeaves,
 	return leftLeaves, rightLeaves
 }
 
-func mongoMutationRawValueDecimal128Leaves(value bson.RawValue) int {
+func mongoMutationRawValueDecimal128NormalizationLeaves(value bson.RawValue) int {
 	values := []bson.RawValue{value}
 	count := 0
 	for len(values) != 0 {
@@ -4648,7 +4648,7 @@ func mongoMutationRawValueDecimal128Leaves(value bson.RawValue) int {
 		values = values[:last]
 		switch current.Type {
 		case bson.TypeDecimal128:
-			count++
+			count += decimal128NormalizationCount(current)
 		case bson.TypeEmbeddedDocument, bson.TypeArray:
 			contents, ok := rawBSONContainerContents(current)
 			if !ok {
