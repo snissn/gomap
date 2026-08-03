@@ -1812,6 +1812,11 @@ func rawValuesEqualMode(left, right bson.RawValue, equalNaN bool) bool {
 				if !leftOK || !rightOK || len(leftRemaining) != 0 || len(rightRemaining) != 0 || leftCode != rightCode {
 					return false
 				}
+				if len(frames) == mongoMutationMaxBSONNesting {
+					return false
+				}
+				// CodeWithScope contributes one container level before its scope.
+				frames = append(frames, frame{})
 				currentLeft = bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: leftScope}
 				currentRight = bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: rightScope}
 				continue

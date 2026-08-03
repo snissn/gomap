@@ -4600,7 +4600,7 @@ func mongoMutationAddToSetDecimalComparisonWork(existing, candidates []bson.RawV
 	}
 	count := 0
 	charge := func(work int) bool {
-		if work > limit-count {
+		if work < 0 || work > limit-count {
 			return false
 		}
 		count += work
@@ -4608,12 +4608,12 @@ func mongoMutationAddToSetDecimalComparisonWork(existing, candidates []bson.RawV
 	}
 	for i, candidateDecimalLeaves := range candidateDecimal {
 		for _, existingDecimalLeaves := range existingDecimal {
-			if !charge(candidateDecimalLeaves + existingDecimalLeaves) {
+			if !charge(candidateDecimalLeaves) || !charge(existingDecimalLeaves) {
 				return count, false
 			}
 		}
 		for j := 0; j < i; j++ {
-			if !charge(candidateDecimalLeaves + candidateDecimal[j]) {
+			if !charge(candidateDecimalLeaves) || !charge(candidateDecimal[j]) {
 				return count, false
 			}
 		}
