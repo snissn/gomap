@@ -13,24 +13,26 @@ import (
 
 type mongoCompatibilityProbe func(*testing.T, *Server)
 
-type mongoCompatibilityMatrixRow struct {
-	category string
-	feature  string
-	status   string
-	probe    mongoCompatibilityProbe
+type mongoCompatibilityMatrixProbe struct {
+	capabilityID string
+	probe        mongoCompatibilityProbe
 }
 
 func TestMongoCompatibilityMatrix(t *testing.T) {
-	seenRows := make(map[string]struct{})
-	seenNames := make(map[string]int)
-	for _, row := range mongoCompatibilityMatrixRows() {
-		row := row
-		rowKey := row.category + "\x00" + row.feature
-		if _, ok := seenRows[rowKey]; ok {
-			t.Fatalf("duplicate compatibility row %q/%q", row.category, row.feature)
-		}
-		seenRows[rowKey] = struct{}{}
-		baseName := compatibilityTestSlug(row.category) + "_" + compatibilityTestSlug(row.feature)
+	manifest := MongoGatewayCapabilities()
+	probes := mongoCompatibilityMatrixProbes()
+	if err := validateMongoCompatibilityProbes(manifest, probes); err != nil {
+		t.Fatalf("validate compatibility probes: %v", err)
+	}
+
+	probeByID := make(map[string]mongoCompatibilityProbe, len(probes))
+	for _, row := range probes {
+		probeByID[row.capabilityID] = row.probe
+	}
+	seenNames := make(map[string]int, len(manifest.Capabilities))
+	for _, capability := range manifest.Capabilities {
+		capability := capability
+		baseName := compatibilityTestSlug(capability.Category) + "_" + compatibilityTestSlug(capability.Feature)
 		seenNames[baseName]++
 		name := baseName
 		if seenNames[baseName] > 1 {
@@ -38,42 +40,59 @@ func TestMongoCompatibilityMatrix(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if row.category == "" || row.feature == "" || row.status == "" {
-				t.Fatalf("incomplete compatibility row: %+v", row)
-			}
-			if row.probe == nil {
-				t.Fatalf("%s/%s has no probe", row.category, row.feature)
-			}
-			row.probe(t, newMongoCompatibilityMatrixServer(t))
+			probeByID[capability.ID](t, newMongoCompatibilityMatrixServer(t))
 		})
 	}
 }
 
-func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
-	return []mongoCompatibilityMatrixRow{
+func validateMongoCompatibilityProbes(manifest MongoGatewayCapabilityManifest, probes []mongoCompatibilityMatrixProbe) error {
+	if err := ValidateMongoGatewayCapabilityManifest(manifest); err != nil {
+		return err
+	}
+	capabilities := mongoGatewayCapabilityIndex(manifest)
+	seen := make(map[string]struct{}, len(probes))
+	for _, row := range probes {
+		if row.capabilityID == "" {
+			return fmt.Errorf("compatibility probe has empty capability id")
+		}
+		if row.probe == nil {
+			return fmt.Errorf("capability %q has nil executable probe", row.capabilityID)
+		}
+		if _, ok := capabilities[row.capabilityID]; !ok {
+			return fmt.Errorf("executable probe references unknown capability %q", row.capabilityID)
+		}
+		if _, ok := seen[row.capabilityID]; ok {
+			return fmt.Errorf("duplicate executable probe for capability %q", row.capabilityID)
+		}
+		seen[row.capabilityID] = struct{}{}
+	}
+	for capabilityID := range capabilities {
+		if _, ok := seen[capabilityID]; !ok {
+			return fmt.Errorf("capability %q is missing executable probe", capabilityID)
+		}
+	}
+	return nil
+}
+
+func mongoCompatibilityMatrixProbes() []mongoCompatibilityMatrixProbe {
+	return []mongoCompatibilityMatrixProbe{
 		{
-			category: "wire",
-			feature:  "hello command",
-			status:   "supported",
+			capabilityID: "wire.hello-command",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 1, bson.D{{Key: "hello", Value: int32(1)}, {Key: "$db", Value: "admin"}})
 				assertOK(t, resp)
 				assertBool(t, resp, "helloOk", true)
-				assertInt32(t, resp, "logicalSessionTimeoutMinutes", defaultLogicalSessionTimeout)
+				assertInt32(t, resp, "logicalSessionTimeoutMinutes", mongoGatewayCapabilityManifest.Advertised.LogicalSessionTimeoutMinutes)
 			},
 		},
 		{
-			category: "wire",
-			feature:  "ping command",
-			status:   "supported",
+			capabilityID: "wire.ping-command",
 			probe: func(t *testing.T, server *Server) {
 				assertOK(t, serveCommand(t, server, 2, bson.D{{Key: "ping", Value: int32(1)}, {Key: "$db", Value: "admin"}}))
 			},
 		},
 		{
-			category: "wire",
-			feature:  "connectionStatus command (#1473)",
-			status:   "supported subset",
+			capabilityID: "wire.connectionstatus-command",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 24, bson.D{{Key: "connectionStatus", Value: int32(1)}, {Key: "$db", Value: "admin"}})
 				assertOK(t, resp)
@@ -93,9 +112,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "wire",
-			feature:  "hostInfo command (#1473)",
-			status:   "supported subset",
+			capabilityID: "wire.hostinfo-command",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 25, bson.D{{Key: "hostInfo", Value: int32(1)}, {Key: "$db", Value: "admin"}})
 				assertOK(t, resp)
@@ -116,14 +133,12 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "wire",
-			feature:  "buildInfo command (#1473)",
-			status:   "supported subset",
+			capabilityID: "wire.buildinfo-command",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 26, bson.D{{Key: "buildInfo", Value: int32(1)}, {Key: "$db", Value: "admin"}})
 				assertOK(t, resp)
-				if version, ok := resp.Lookup("version").StringValueOK(); !ok || version != "7.0.0" {
-					t.Fatalf("version=%q ok=%v want 7.0.0", version, ok)
+				if version, ok := resp.Lookup("version").StringValueOK(); !ok || version != mongoGatewayCapabilityManifest.Advertised.MongoVersion {
+					t.Fatalf("version=%q ok=%v want %q", version, ok, mongoGatewayCapabilityManifest.Advertised.MongoVersion)
 				}
 				if _, ok := resp.Lookup("versionArray").ArrayOK(); !ok {
 					t.Fatalf("versionArray missing or non-array in %s", resp)
@@ -134,9 +149,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "crud",
-			feature:  "insert explicit _id",
-			status:   "supported",
+			capabilityID: "crud.insert-explicit-id",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 3, bson.D{
 					{Key: "insert", Value: "users"},
@@ -148,9 +161,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "crud",
-			feature:  "find by _id equality",
-			status:   "supported",
+			capabilityID: "crud.find-by-id-equality",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 4, bson.D{
 					{Key: "find", Value: "users"},
@@ -161,9 +172,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "query",
-			feature:  "indexed equality and range predicates",
-			status:   "supported subset",
+			capabilityID: "query.indexed-equality-and-range-predicates",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 5, bson.D{
 					{Key: "find", Value: "users"},
@@ -177,9 +186,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "query",
-			feature:  "$in on indexed scalar fields",
-			status:   "supported subset",
+			capabilityID: "query.in-on-indexed-scalar-fields",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 6, bson.D{
 					{Key: "find", Value: "users"},
@@ -190,9 +197,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "query",
-			feature:  "top-level $or expressions",
-			status:   "supported subset",
+			capabilityID: "query.top-level-or-expressions",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 61, bson.D{
 					{Key: "find", Value: "users"},
@@ -206,9 +211,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "query",
-			feature:  "projection, sort, skip, and limit",
-			status:   "supported subset",
+			capabilityID: "query.projection-sort-skip-and-limit",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 7, bson.D{
 					{Key: "find", Value: "users"},
@@ -223,9 +226,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "cursor",
-			feature:  "getMore and killCursors",
-			status:   "supported",
+			capabilityID: "cursor.getmore-and-killcursors",
 			probe: func(t *testing.T, server *Server) {
 				find := serveCommand(t, server, 8, bson.D{
 					{Key: "find", Value: "users"},
@@ -259,9 +260,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "read concern",
-			feature:  "local/available readConcern maps to local_stale",
-			status:   "supported subset",
+			capabilityID: "read-concern.local-available-readconcern-maps-to-local-stale",
 			probe: func(t *testing.T, server *Server) {
 				find := serveCommand(t, server, 901, bson.D{
 					{Key: "find", Value: "users"},
@@ -282,9 +281,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "read concern gap",
-			feature:  "majority, linearizable, and snapshot readConcern",
-			status:   "rejected",
+			capabilityID: "read-concern-gap.majority-linearizable-and-snapshot-readconcern",
 			probe: func(t *testing.T, server *Server) {
 				for i, level := range []string{"majority", "linearizable", "snapshot"} {
 					resp := serveCommand(t, server, int32(910+i), bson.D{
@@ -298,9 +295,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "crud",
-			feature:  "updateOne $set by _id",
-			status:   "supported subset",
+			capabilityID: "crud.updateone-set-by-id",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 11, bson.D{
 					{Key: "update", Value: "users"},
@@ -316,9 +311,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "crud",
-			feature:  "delete by _id",
-			status:   "supported subset",
+			capabilityID: "crud.delete-by-id",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 12, bson.D{
 					{Key: "delete", Value: "users"},
@@ -330,9 +323,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "metadata",
-			feature:  "listCollections",
-			status:   "supported subset",
+			capabilityID: "metadata.listcollections",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 13, bson.D{
 					{Key: "listCollections", Value: int32(1)},
@@ -346,9 +337,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "metadata",
-			feature:  "listDatabases",
-			status:   "supported subset",
+			capabilityID: "metadata.listdatabases",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 130, bson.D{
 					{Key: "listDatabases", Value: int32(1)},
@@ -378,9 +367,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "metadata",
-			feature:  "create collection",
-			status:   "supported subset",
+			capabilityID: "metadata.create-collection",
 			probe: func(t *testing.T, server *Server) {
 				create := serveCommand(t, server, 131, bson.D{
 					{Key: "create", Value: "matrix_created"},
@@ -403,13 +390,11 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "session",
-			feature:  "logical session handshake and endSessions",
-			status:   "supported subset",
+			capabilityID: "session.logical-session-handshake-and-endsessions",
 			probe: func(t *testing.T, server *Server) {
 				hello := serveCommand(t, server, 133, bson.D{{Key: "hello", Value: int32(1)}, {Key: "$db", Value: "admin"}})
 				assertOK(t, hello)
-				assertInt32(t, hello, "logicalSessionTimeoutMinutes", defaultLogicalSessionTimeout)
+				assertInt32(t, hello, "logicalSessionTimeoutMinutes", mongoGatewayCapabilityManifest.Advertised.LogicalSessionTimeoutMinutes)
 				end := serveCommand(t, server, 134, bson.D{
 					{Key: "endSessions", Value: bson.A{bson.D{{Key: "id", Value: bson.Binary{Subtype: 4, Data: make([]byte, 16)}}}}},
 					{Key: "$db", Value: "admin"},
@@ -418,9 +403,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "metadata",
-			feature:  "createIndexes, listIndexes, and dropIndexes",
-			status:   "supported subset",
+			capabilityID: "metadata.createindexes-listindexes-and-dropindexes",
 			probe: func(t *testing.T, server *Server) {
 				list := serveCommand(t, server, 14, bson.D{{Key: "listIndexes", Value: "users"}, {Key: "$db", Value: "app"}})
 				assertIndexNameSet(t, cursorFirstBatch(t, list), []string{"_id_", "city_1", "age_1", "score_1"})
@@ -429,9 +412,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "document",
-			feature:  "native BSON storage mode",
-			status:   "supported subset",
+			capabilityID: "document.native-bson-storage-mode",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 16, bson.D{
 					{Key: "insert", Value: "users"},
@@ -455,9 +436,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "query gap",
-			feature:  "dotted projection",
-			status:   "rejected",
+			capabilityID: "query-gap.dotted-projection",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 18, bson.D{
 					{Key: "find", Value: "users"},
@@ -468,9 +447,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "update subset",
-			feature:  "natural-order arbitrary-filter update, delete, and findAndModify",
-			status:   "supported subset",
+			capabilityID: "update-subset.natural-order-arbitrary-filter-update-delete-and-findandmodify",
 			probe: func(t *testing.T, server *Server) {
 				assertOK(t, serveCommand(t, server, 209, bson.D{{Key: "insert", Value: "filter_writes"}, {Key: "documents", Value: bson.A{
 					bson.D{{Key: "_id", Value: "u1"}, {Key: "age", Value: int32(20)}, {Key: "active", Value: true}},
@@ -490,9 +467,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "update",
-			feature:  "exact _id upsert",
-			status:   "supported subset",
+			capabilityID: "update.exact-id-upsert",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 19, bson.D{
 					{Key: "update", Value: "users"},
@@ -520,9 +495,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "update gap",
-			feature:  "multi update",
-			status:   "rejected",
+			capabilityID: "update-gap.multi-update",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 20, bson.D{
 					{Key: "update", Value: "users"},
@@ -537,9 +510,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "update",
-			feature:  "$inc",
-			status:   "supported subset",
+			capabilityID: "update.inc",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 21, bson.D{
 					{Key: "update", Value: "users"},
@@ -555,9 +526,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "update",
-			feature:  "$unset",
-			status:   "supported subset",
+			capabilityID: "update.unset",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 211, bson.D{
 					{Key: "update", Value: "users"},
@@ -573,9 +542,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "update",
-			feature:  "nested $set/$unset/$inc and bounded array modifiers (no numeric array-index paths)",
-			status:   "supported subset",
+			capabilityID: "update.nested-set-unset-inc-and-bounded-array-modifiers-no-numeric-array-index-paths",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 213, bson.D{
 					{Key: "update", Value: "users"},
@@ -597,9 +564,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "update",
-			feature:  "ReplaceOne by exact _id",
-			status:   "supported subset",
+			capabilityID: "update.replaceone-by-exact-id",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 212, bson.D{
 					{Key: "update", Value: "users"},
@@ -615,9 +580,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "index gap",
-			feature:  "compound index",
-			status:   "rejected",
+			capabilityID: "index-gap.compound-index",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 22, bson.D{
 					{Key: "createIndexes", Value: "users"},
@@ -632,9 +595,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "index gap",
-			feature:  "index without treedbValueType",
-			status:   "rejected",
+			capabilityID: "index-gap.index-without-treedbvaluetype",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 23, bson.D{
 					{Key: "createIndexes", Value: "users"},
@@ -645,9 +606,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "read command",
-			feature:  "aggregate match/project/sort/skip/limit/count",
-			status:   "supported subset",
+			capabilityID: "read-command.aggregate-match-project-sort-skip-limit-count",
 			probe: func(t *testing.T, server *Server) {
 				staged := serveCommand(t, server, 25, bson.D{
 					{Key: "aggregate", Value: "users"},
@@ -682,27 +641,19 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "command gap",
-			feature:  "serverStatus",
-			status:   "not implemented",
-			probe:    expectCommandNotFound(bson.D{{Key: "serverStatus", Value: int32(1)}, {Key: "$db", Value: "admin"}}),
+			capabilityID: "command-gap.serverstatus",
+			probe:        expectCommandNotFound(bson.D{{Key: "serverStatus", Value: int32(1)}, {Key: "$db", Value: "admin"}}),
 		},
 		{
-			category: "command gap",
-			feature:  "top",
-			status:   "not implemented",
-			probe:    expectCommandNotFound(bson.D{{Key: "top", Value: int32(1)}, {Key: "$db", Value: "admin"}}),
+			capabilityID: "command-gap.top",
+			probe:        expectCommandNotFound(bson.D{{Key: "top", Value: int32(1)}, {Key: "$db", Value: "admin"}}),
 		},
 		{
-			category: "command gap",
-			feature:  "dbStats",
-			status:   "not implemented",
-			probe:    expectCommandNotFound(bson.D{{Key: "dbStats", Value: int32(1)}, {Key: "$db", Value: "app"}}),
+			capabilityID: "command-gap.dbstats",
+			probe:        expectCommandNotFound(bson.D{{Key: "dbStats", Value: int32(1)}, {Key: "$db", Value: "app"}}),
 		},
 		{
-			category: "read command",
-			feature:  "count filter/skip/limit",
-			status:   "supported subset",
+			capabilityID: "read-command.count-filter-skip-limit",
 			probe: func(t *testing.T, server *Server) {
 				for requestID, pagination := range []bson.E{{Key: "skip", Value: int32(1)}, {Key: "limit", Value: int32(1)}} {
 					command := bson.D{{Key: "count", Value: "users"}, {Key: "query", Value: bson.D{{Key: "active", Value: true}}}, pagination, {Key: "$db", Value: "app"}}
@@ -715,9 +666,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "read command",
-			feature:  "distinct top-level field with filter",
-			status:   "supported subset",
+			capabilityID: "read-command.distinct-top-level-field-with-filter",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 261, bson.D{{Key: "distinct", Value: "users"}, {Key: "key", Value: "city"}, {Key: "query", Value: bson.D{{Key: "active", Value: false}}}, {Key: "$db", Value: "app"}})
 				assertOK(t, resp)
@@ -728,9 +677,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "read command gap",
-			feature:  "maxTimeMS on aggregate/count/distinct",
-			status:   "rejected",
+			capabilityID: "read-command-gap.maxtimems-on-aggregate-count-distinct",
 			probe: func(t *testing.T, server *Server) {
 				commands := []bson.D{
 					{{Key: "aggregate", Value: "users"}, {Key: "pipeline", Value: bson.A{}}, {Key: "cursor", Value: bson.D{}}, {Key: "maxTimeMS", Value: int64(1)}, {Key: "$db", Value: "app"}},
@@ -743,9 +690,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "update subset",
-			feature:  "findAndModify exact _id no-match",
-			status:   "supported subset",
+			capabilityID: "update-subset.findandmodify-exact-id-no-match",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 26, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "none"}}}, {Key: "update", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "none"}}}}}, {Key: "$db", Value: "app"}})
 				assertOK(t, resp)
@@ -755,9 +700,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "transaction gap",
-			feature:  "transactions and retryable writes",
-			status:   "not implemented",
+			capabilityID: "transaction-gap.transactions-and-retryable-writes",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 27, bson.D{
 					{Key: "insert", Value: "tx_users"},
@@ -789,6 +732,35 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 				assertCommandError(t, resp, "BadValue")
 				resp = serveCommand(t, server, 28, bson.D{{Key: "commitTransaction", Value: int32(1)}, {Key: "$db", Value: "admin"}})
 				assertCommandError(t, resp, "CommandNotFound")
+			},
+		},
+		{
+			capabilityID: "security-gap.authentication-and-authorization",
+			probe: func(t *testing.T, server *Server) {
+				assertCommandError(t, serveCommand(t, server, 31, bson.D{
+					{Key: "saslStart", Value: int32(1)},
+					{Key: "mechanism", Value: "SCRAM-SHA-256"},
+					{Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte("n,,")}},
+					{Key: "$db", Value: "admin"},
+				}), "CommandNotFound")
+				find := serveCommand(t, server, 32, bson.D{
+					{Key: "find", Value: "users"},
+					{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+					{Key: "$db", Value: "app"},
+				})
+				assertBatchIDs(t, cursorFirstBatch(t, find), []string{"u1"})
+			},
+		},
+		{
+			capabilityID: "cluster-gap.replica-set-and-sharding-advertisement",
+			probe: func(t *testing.T, server *Server) {
+				hello := serveCommand(t, server, 33, bson.D{{Key: "hello", Value: int32(1)}, {Key: "$db", Value: "admin"}})
+				assertOK(t, hello)
+				for _, field := range []string{"setName", "hosts", "passives", "arbiters", "serviceId", "msg"} {
+					if value := hello.Lookup(field); value.Type != 0 {
+						t.Fatalf("standalone hello unexpectedly advertises %s=%v", field, value)
+					}
+				}
 			},
 		},
 	}

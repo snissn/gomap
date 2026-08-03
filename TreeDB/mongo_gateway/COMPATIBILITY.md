@@ -30,60 +30,68 @@ that command or operator are intentionally out of scope.
 
 ## Test-Backed Matrix
 
-This table is generated from `TestMongoCompatibilityMatrix`. Do not edit the
-generated block by hand; update the test rows and regenerate with:
+This table is generated from the versioned capability manifest in
+`capability_manifest.go`. Do not edit the generated block by hand; update the
+manifest and its executable probe, then regenerate all factual capability docs
+with:
 
 ```sh
-GOWORK=off go test ./TreeDB/mongo_gateway -run TestMongoCompatibilityMatrixDocumentationUpToDate -update-mongo-compatibility-docs
+GOWORK=off go test ./TreeDB/mongo_gateway \
+  -run TestMongoCompatibilityMatrixDocumentationUpToDate \
+  -update-mongo-capability-docs
 ```
 
-`TestMongoCompatibilityMatrixDocumentationUpToDate` fails if this generated
-block drifts from the executable matrix rows.
+`TestMongoCompatibilityMatrixDocumentationUpToDate` fails if this table or the
+gateway README summary drifts from the manifest. `TestMongoCompatibilityMatrix`
+fails if any manifest identity is duplicated, lacks an executable probe, or has
+an extra probe outside the manifest.
 
 <!-- mongo-compatibility-matrix:begin -->
-| Category | Feature | Status |
-|---|---|---|
-| wire | hello command | supported |
-| wire | ping command | supported |
-| wire | connectionStatus command (#1473) | supported subset |
-| wire | hostInfo command (#1473) | supported subset |
-| wire | buildInfo command (#1473) | supported subset |
-| crud | insert explicit _id | supported |
-| crud | find by _id equality | supported |
-| query | indexed equality and range predicates | supported subset |
-| query | $in on indexed scalar fields | supported subset |
-| query | top-level $or expressions | supported subset |
-| query | projection, sort, skip, and limit | supported subset |
-| cursor | getMore and killCursors | supported |
-| read concern | local/available readConcern maps to local_stale | supported subset |
-| read concern gap | majority, linearizable, and snapshot readConcern | rejected |
-| crud | updateOne $set by _id | supported subset |
-| crud | delete by _id | supported subset |
-| metadata | listCollections | supported subset |
-| metadata | listDatabases | supported subset |
-| metadata | create collection | supported subset |
-| session | logical session handshake and endSessions | supported subset |
-| metadata | createIndexes, listIndexes, and dropIndexes | supported subset |
-| document | native BSON storage mode | supported subset |
-| query gap | dotted projection | rejected |
-| update subset | natural-order arbitrary-filter update, delete, and findAndModify | supported subset |
-| update | exact _id upsert | supported subset |
-| update gap | multi update | rejected |
-| update | $inc | supported subset |
-| update | $unset | supported subset |
-| update | nested $set/$unset/$inc and bounded array modifiers (no numeric array-index paths) | supported subset |
-| update | ReplaceOne by exact _id | supported subset |
-| index gap | compound index | rejected |
-| index gap | index without treedbValueType | rejected |
-| read command | aggregate match/project/sort/skip/limit/count | supported subset |
-| command gap | serverStatus | not implemented |
-| command gap | top | not implemented |
-| command gap | dbStats | not implemented |
-| read command | count filter/skip/limit | supported subset |
-| read command | distinct top-level field with filter | supported subset |
-| read command gap | maxTimeMS on aggregate/count/distinct | rejected |
-| update subset | findAndModify exact _id no-match | supported subset |
-| transaction gap | transactions and retryable writes | not implemented |
+| Category | Feature | Status | Capability ID |
+|---|---|---|---|
+| wire | hello command | supported | `wire.hello-command` |
+| wire | ping command | supported | `wire.ping-command` |
+| wire | connectionStatus command (#1473) | supported subset | `wire.connectionstatus-command` |
+| wire | hostInfo command (#1473) | supported subset | `wire.hostinfo-command` |
+| wire | buildInfo command (#1473) | supported subset | `wire.buildinfo-command` |
+| crud | insert explicit _id | supported | `crud.insert-explicit-id` |
+| crud | find by _id equality | supported | `crud.find-by-id-equality` |
+| query | indexed equality and range predicates | supported subset | `query.indexed-equality-and-range-predicates` |
+| query | $in on indexed scalar fields | supported subset | `query.in-on-indexed-scalar-fields` |
+| query | top-level $or expressions | supported subset | `query.top-level-or-expressions` |
+| query | projection, sort, skip, and limit | supported subset | `query.projection-sort-skip-and-limit` |
+| cursor | getMore and killCursors | supported | `cursor.getmore-and-killcursors` |
+| read concern | local/available readConcern maps to local_stale | supported subset | `read-concern.local-available-readconcern-maps-to-local-stale` |
+| read concern gap | majority, linearizable, and snapshot readConcern | rejected | `read-concern-gap.majority-linearizable-and-snapshot-readconcern` |
+| crud | updateOne $set by _id | supported subset | `crud.updateone-set-by-id` |
+| crud | delete by _id | supported subset | `crud.delete-by-id` |
+| metadata | listCollections | supported subset | `metadata.listcollections` |
+| metadata | listDatabases | supported subset | `metadata.listdatabases` |
+| metadata | create collection | supported subset | `metadata.create-collection` |
+| session | logical session handshake and endSessions | supported subset | `session.logical-session-handshake-and-endsessions` |
+| metadata | createIndexes, listIndexes, and dropIndexes | supported subset | `metadata.createindexes-listindexes-and-dropindexes` |
+| document | native BSON storage mode | supported subset | `document.native-bson-storage-mode` |
+| query gap | dotted projection | rejected | `query-gap.dotted-projection` |
+| update subset | natural-order arbitrary-filter update, delete, and findAndModify | supported subset | `update-subset.natural-order-arbitrary-filter-update-delete-and-findandmodify` |
+| update | exact _id upsert | supported subset | `update.exact-id-upsert` |
+| update gap | multi update | rejected | `update-gap.multi-update` |
+| update | $inc | supported subset | `update.inc` |
+| update | $unset | supported subset | `update.unset` |
+| update | nested $set/$unset/$inc and bounded array modifiers (no numeric array-index paths) | supported subset | `update.nested-set-unset-inc-and-bounded-array-modifiers-no-numeric-array-index-paths` |
+| update | ReplaceOne by exact _id | supported subset | `update.replaceone-by-exact-id` |
+| index gap | compound index | rejected | `index-gap.compound-index` |
+| index gap | index without treedbValueType | rejected | `index-gap.index-without-treedbvaluetype` |
+| read command | aggregate match/project/sort/skip/limit/count | supported subset | `read-command.aggregate-match-project-sort-skip-limit-count` |
+| command gap | serverStatus | not implemented | `command-gap.serverstatus` |
+| command gap | top | not implemented | `command-gap.top` |
+| command gap | dbStats | not implemented | `command-gap.dbstats` |
+| read command | count filter/skip/limit | supported subset | `read-command.count-filter-skip-limit` |
+| read command | distinct top-level field with filter | supported subset | `read-command.distinct-top-level-field-with-filter` |
+| read command gap | maxTimeMS on aggregate/count/distinct | rejected | `read-command-gap.maxtimems-on-aggregate-count-distinct` |
+| update subset | findAndModify exact _id no-match | supported subset | `update-subset.findandmodify-exact-id-no-match` |
+| transaction gap | transactions and retryable writes | not implemented | `transaction-gap.transactions-and-retryable-writes` |
+| security gap | authentication and authorization | not implemented | `security-gap.authentication-and-authorization` |
+| cluster gap | replica-set and sharding advertisement | not implemented | `cluster-gap.replica-set-and-sharding-advertisement` |
 <!-- mongo-compatibility-matrix:end -->
 
 For a naive TreeDB-vs-MongoDB throughput smoke that connects to both targets and

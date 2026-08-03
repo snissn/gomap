@@ -4186,3 +4186,31 @@ func TestWriteResultKeepsTextHeaderStableForIndexedUpdateKnob(t *testing.T) {
 		t.Fatalf("text output missing separate range_index line: %q", out.String())
 	}
 }
+
+func TestRecordMongoGatewayCapabilityMetadata(t *testing.T) {
+	result := &benchmarkResult{}
+	recordMongoGatewayCapabilityMetadata(result)
+	if result.MongoGatewayCapabilitySchema != mongogateway.MongoGatewayCapabilitySchema {
+		t.Fatalf("schema=%q want %q", result.MongoGatewayCapabilitySchema, mongogateway.MongoGatewayCapabilitySchema)
+	}
+	if result.MongoGatewayCapabilityVersion != mongogateway.MongoGatewayCapabilityVersion {
+		t.Fatalf("version=%d want %d", result.MongoGatewayCapabilityVersion, mongogateway.MongoGatewayCapabilityVersion)
+	}
+	if result.MongoGatewayCapabilityIdentity != mongogateway.MongoGatewayCapabilityIdentity() {
+		t.Fatalf("identity=%q want %q", result.MongoGatewayCapabilityIdentity, mongogateway.MongoGatewayCapabilityIdentity())
+	}
+
+	var out bytes.Buffer
+	if err := writeResult(&out, "json", result); err != nil {
+		t.Fatalf("write JSON result: %v", err)
+	}
+	for _, key := range []string{
+		"mongo_gateway_capability_schema",
+		"mongo_gateway_capability_version",
+		"mongo_gateway_capability_identity",
+	} {
+		if !strings.Contains(out.String(), `"`+key+`"`) {
+			t.Fatalf("JSON result missing %q: %s", key, out.String())
+		}
+	}
+}
