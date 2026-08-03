@@ -133,6 +133,20 @@ type m8ProductionMeasurementTranscriptV1 struct {
 	Variant       *m3VariantDescriptorV1       `json:"variant"`
 	Config        m8ProductionConfigEvidenceV1 `json:"config"`
 	Rows          []m8ProductionRowV1          `json:"rows"`
+	Outcomes      []m8ProductionRowOutcomesV1  `json:"outcomes"`
+}
+
+// m8ProductionRowOutcomesV1 retains the measured coordinator document IDs,
+// rather than another self-reported recall aggregate. Scores are deliberately
+// omitted: canonical recall is an ID-set metric.
+type m8ProductionRowOutcomesV1 struct {
+	Overlap     float64    `json:"overlap"`
+	Probes      int        `json:"probes"`
+	EfSearch    int        `json:"ef_search"`
+	Concurrency int        `json:"concurrency"`
+	Status      string     `json:"status"`
+	Samples     int        `json:"samples"`
+	TopKIDs     [][]string `json:"top_k_document_ids"`
 }
 
 // m8ProductionAttributionV1 keeps each lossy boundary visible. Recall is
@@ -619,7 +633,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	if err := os.MkdirAll(cfg.out, 0o755); err != nil {
 		return err
 	}
-	transcript, err := m8WriteProductionMeasurementTranscriptV1(cfg.out, report)
+	transcript, err := m8WriteProductionMeasurementTranscriptV1(cfg.out, report, measuredCells)
 	if err != nil {
 		return err
 	}
@@ -732,15 +746,23 @@ func m8ProductionExecutionEvidenceDigestV1(executionID string, artifacts []m8Pro
 	return hex.EncodeToString(digest[:]), nil
 }
 
-func m8WriteProductionMeasurementTranscriptV1(dir string, report m8ProductionReportV1) (m8ProductionMeasurementTranscriptEvidenceV1, error) {
+func m8WriteProductionMeasurementTranscriptV1(dir string, report m8ProductionReportV1, measuredCells []m8MeasuredCellV1) (m8ProductionMeasurementTranscriptEvidenceV1, error) {
 	if !validM8ProductionExecutionIDV1(report.ExecutionID) {
 		return m8ProductionMeasurementTranscriptEvidenceV1{}, errors.New("invalid M8 execution identity")
+	}
+	outcomes, err := m8ProductionMeasurementTranscriptOutcomesV1(report, measuredCells)
+	if err != nil {
+		return m8ProductionMeasurementTranscriptEvidenceV1{}, err
+	}
+	maxBytes, err := m8ProductionMeasurementTranscriptMaxBytesV1(report)
+	if err != nil || maxBytes > m8QualificationTranscriptMaxBytesV1 {
+		return m8ProductionMeasurementTranscriptEvidenceV1{}, errors.New("M8 measurement transcript outcomes exceed the retained byte cap")
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return m8ProductionMeasurementTranscriptEvidenceV1{}, err
 	}
 	path := filepath.Join(dir, "vector_partition_m8_measurements_"+report.ExecutionID+".json")
-	transcript := m8ProductionMeasurementTranscriptV1{SchemaVersion: 1, ExecutionID: report.ExecutionID, Dataset: report.Dataset, Variant: report.Variant, Config: report.Config, Rows: report.Rows}
+	transcript := m8ProductionMeasurementTranscriptV1{SchemaVersion: 2, ExecutionID: report.ExecutionID, Dataset: report.Dataset, Variant: report.Variant, Config: report.Config, Rows: report.Rows, Outcomes: outcomes}
 	raw, err := json.Marshal(transcript)
 	if err != nil {
 		return m8ProductionMeasurementTranscriptEvidenceV1{}, err
@@ -748,6 +770,10 @@ func m8WriteProductionMeasurementTranscriptV1(dir string, report m8ProductionRep
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return m8ProductionMeasurementTranscriptEvidenceV1{}, err
+	}
+	if int64(len(raw)) > maxBytes || int64(len(raw)) > m8QualificationTranscriptMaxBytesV1 {
+		_ = file.Close()
+		return m8ProductionMeasurementTranscriptEvidenceV1{}, errors.New("M8 measurement transcript exceeds retained byte cap")
 	}
 	if _, err := file.Write(raw); err != nil {
 		_ = file.Close()
@@ -764,34 +790,145 @@ func m8WriteProductionMeasurementTranscriptV1(dir string, report m8ProductionRep
 	return m8ProductionMeasurementTranscriptEvidenceV1{Path: path, Bytes: int64(len(raw)), SHA256: hex.EncodeToString(digest[:])}, nil
 }
 
-func validM8ProductionMeasurementTranscriptV1(report m8ProductionReportV1) bool {
+func m8ReadProductionMeasurementTranscriptV1(report m8ProductionReportV1) (m8ProductionMeasurementTranscriptV1, error) {
 	evidence := report.MeasurementTranscript
 	if !filepath.IsAbs(evidence.Path) || evidence.Bytes <= 0 || !m8QualificationSHA256V1(evidence.SHA256) {
-		return false
+		return m8ProductionMeasurementTranscriptV1{}, errors.New("invalid M8 measurement transcript evidence")
 	}
 	path, err := m8CanonicalPathV1(evidence.Path)
 	if err != nil || path != evidence.Path {
-		return false
+		return m8ProductionMeasurementTranscriptV1{}, errors.New("M8 measurement transcript path is not canonical")
 	}
 	raw, err := readBoundedRegularFileV1(evidence.Path, m8QualificationTranscriptMaxBytesV1)
 	if err != nil || int64(len(raw)) != evidence.Bytes {
-		return false
+		return m8ProductionMeasurementTranscriptV1{}, errors.New("read M8 measurement transcript")
 	}
 	digest := sha256.Sum256(raw)
 	if hex.EncodeToString(digest[:]) != evidence.SHA256 {
-		return false
+		return m8ProductionMeasurementTranscriptV1{}, errors.New("M8 measurement transcript digest mismatch")
 	}
 	var transcript m8ProductionMeasurementTranscriptV1
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&transcript) != nil || transcript.SchemaVersion != 1 {
-		return false
+	if decoder.Decode(&transcript) != nil || transcript.SchemaVersion != 2 {
+		return m8ProductionMeasurementTranscriptV1{}, errors.New("invalid M8 measurement transcript schema")
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return false
+		return m8ProductionMeasurementTranscriptV1{}, errors.New("M8 measurement transcript has trailing JSON")
 	}
-	return transcript.ExecutionID == report.ExecutionID && transcript.Dataset == report.Dataset && reflect.DeepEqual(transcript.Variant, report.Variant) && reflect.DeepEqual(transcript.Config, report.Config) && reflect.DeepEqual(transcript.Rows, report.Rows)
+	if transcript.ExecutionID != report.ExecutionID || transcript.Dataset != report.Dataset || !reflect.DeepEqual(transcript.Variant, report.Variant) || !reflect.DeepEqual(transcript.Config, report.Config) || !reflect.DeepEqual(transcript.Rows, report.Rows) {
+		return m8ProductionMeasurementTranscriptV1{}, errors.New("M8 measurement transcript identity mismatch")
+	}
+	if err := m8ValidateProductionMeasurementTranscriptOutcomesV1(transcript, report); err != nil {
+		return m8ProductionMeasurementTranscriptV1{}, err
+	}
+	return transcript, nil
+}
+
+func validM8ProductionMeasurementTranscriptV1(report m8ProductionReportV1) bool {
+	_, err := m8ReadProductionMeasurementTranscriptV1(report)
+	return err == nil
+}
+
+func m8ProductionRowOutcomeIdentityV1(row m8ProductionRowV1) m8ProductionRowOutcomesV1 {
+	return m8ProductionRowOutcomesV1{Overlap: row.Overlap, Probes: row.Probes, EfSearch: row.EfSearch, Concurrency: row.Concurrency, Status: row.Status, Samples: row.Samples}
+}
+
+func m8ProductionMeasurementTranscriptOutcomesV1(report m8ProductionReportV1, measuredCells []m8MeasuredCellV1) ([]m8ProductionRowOutcomesV1, error) {
+	byRow := make(map[int][][]m8CanonicalResultV1, len(measuredCells))
+	for _, measured := range measuredCells {
+		if measured.rowIndex < 0 || measured.rowIndex >= len(report.Rows) {
+			return nil, errors.New("M8 measurement transcript has invalid measured row")
+		}
+		if _, duplicate := byRow[measured.rowIndex]; duplicate {
+			return nil, errors.New("M8 measurement transcript has duplicate measured row")
+		}
+		byRow[measured.rowIndex] = measured.results
+	}
+	outcomes := make([]m8ProductionRowOutcomesV1, len(report.Rows))
+	for i, row := range report.Rows {
+		outcome := m8ProductionRowOutcomeIdentityV1(row)
+		if row.Status == "pass" || row.Status == "fail" {
+			results, ok := byRow[i]
+			if !ok || len(results) != row.Samples {
+				return nil, errors.New("M8 measurement transcript has incomplete query outcomes")
+			}
+			outcome.TopKIDs = make([][]string, len(results))
+			for query := range results {
+				outcome.TopKIDs[query] = m8CanonicalIDsV1(results[query])
+			}
+		} else if _, ok := byRow[i]; ok && row.Status != "candidate_coverage_shortfall" {
+			return nil, errors.New("M8 measurement transcript has outcomes for unmeasured row")
+		} else {
+			outcome.TopKIDs = make([][]string, 0)
+		}
+		outcomes[i] = outcome
+	}
+	return outcomes, nil
+}
+
+func m8ProductionMeasurementTranscriptMaxBytesV1(report m8ProductionReportV1) (int64, error) {
+	if report.Dataset.Vectors < 1 || report.Config.TopK < 1 {
+		return 0, errors.New("invalid M8 measurement transcript shape")
+	}
+	idBytes := int64(len(fmt.Sprintf("doc-%06d", report.Dataset.Vectors-1)))
+	var resultCount int64
+	for _, row := range report.Rows {
+		if row.Status != "pass" && row.Status != "fail" {
+			continue
+		}
+		if row.Samples < 0 {
+			return 0, errors.New("invalid M8 measurement transcript samples")
+		}
+		count, err := memoryMul(int64(row.Samples), int64(min(report.Config.TopK, report.Dataset.Vectors)))
+		if err != nil {
+			return 0, err
+		}
+		resultCount, err = memoryAdd(resultCount, count)
+		if err != nil {
+			return 0, err
+		}
+	}
+	// ID quotes, comma/bracket punctuation, row keys, and the copied rows.
+	resultBytes, err := memoryMul(resultCount, idBytes+3)
+	if err != nil {
+		return 0, err
+	}
+	return memoryAdd(64<<10, resultBytes)
+}
+
+func m8ValidateProductionMeasurementTranscriptOutcomesV1(transcript m8ProductionMeasurementTranscriptV1, report m8ProductionReportV1) error {
+	if len(transcript.Outcomes) != len(report.Rows) {
+		return errors.New("M8 measurement transcript outcome rows do not match report rows")
+	}
+	for i, row := range report.Rows {
+		outcome := transcript.Outcomes[i]
+		identity := m8ProductionRowOutcomeIdentityV1(row)
+		if identity.Overlap != outcome.Overlap || identity.Probes != outcome.Probes || identity.EfSearch != outcome.EfSearch || identity.Concurrency != outcome.Concurrency || identity.Status != outcome.Status || identity.Samples != outcome.Samples {
+			return errors.New("M8 measurement transcript outcome cell does not match report row")
+		}
+		if row.Status == "pass" || row.Status == "fail" {
+			if len(outcome.TopKIDs) != row.Samples {
+				return errors.New("M8 measurement transcript outcome sample count mismatch")
+			}
+			for _, ids := range outcome.TopKIDs {
+				if len(ids) != min(report.Config.TopK, report.Dataset.Vectors) {
+					return errors.New("M8 measurement transcript outcome top-k count mismatch")
+				}
+				seen := make(map[string]bool, len(ids))
+				for _, id := range ids {
+					if !m8FixtureDocumentIDValidV1(id, report.Dataset.Vectors) || seen[id] {
+						return errors.New("M8 measurement transcript has invalid query outcome ID")
+					}
+					seen[id] = true
+				}
+			}
+		} else if outcome.TopKIDs == nil || len(outcome.TopKIDs) != 0 {
+			return errors.New("M8 measurement transcript has outcomes for shortfall or unsupported row")
+		}
+	}
+	return nil
 }
 
 func m8ArtifactNameV1(cfg config, fixture fixtureManifest, manifest collections.VectorPartitionManifestV1, executionID string) (string, error) {

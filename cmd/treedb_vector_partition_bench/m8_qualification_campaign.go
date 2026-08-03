@@ -169,7 +169,7 @@ func m8ValidateQualificationIndexWithVerifiersV1(root string, index m8Qualificat
 
 type m8QualificationRetainedVariantVerifierV1 func(string, m8ProductionReportV1) error
 type m8QualificationCommandExecutableVerifierV1 func(string, string, string, string) bool
-type m8QualificationTruthCacheVerifierV1 func(string, m8ProductionReportV1) error
+type m8QualificationTruthCacheVerifierV1 func(string, m8ProductionReportV1) ([][]m8CanonicalResultV1, error)
 
 func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCampaignV1) (m8QualificationCampaignSummaryV1, error) {
 	return m8ValidateQualificationCampaignWithRetainedVariantV1(root, campaign, m8QualificationRetainedVariantV1)
@@ -276,8 +276,16 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 			if err := validateM8ProductionReportWithProfilesV1(*report, m8QualificationResourceCapsV1(), profileVerifier); err != nil {
 				return summary, fmt.Errorf("validate qualification child %s: %w", cleanPath, err)
 			}
-			if err := truthCache(resolvedRoot, *report); err != nil {
+			truth, err := truthCache(resolvedRoot, *report)
+			if err != nil {
 				return summary, fmt.Errorf("qualification matrix %s does not bind the frozen truth cache: %w", cleanPath, err)
+			}
+			// The production verifier returns independently anchored truth. Test-only
+			// verifier seams may return nil to keep synthetic campaign mutations cheap.
+			if truth != nil {
+				if err := m8QualificationMeasurementTranscriptOutcomesV1(resolvedRoot, *report, truth); err != nil {
+					return summary, fmt.Errorf("qualification matrix %s has unbound query outcomes: %w", cleanPath, err)
+				}
 			}
 			if !m8QualificationCommandWithExecutableV1(resolvedRoot, filepath.Dir(resolvedPath), *report, commandExecutable) || report.ExecutableSHA256 != matrix.ExecutableSHA256 {
 				return summary, fmt.Errorf("qualification matrix %s has command/config mismatch", cleanPath)
@@ -454,39 +462,44 @@ func m8QualificationConfigV1(cfg m8ProductionConfigEvidenceV1, fixture fixtureMa
 	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterCandidates == m8QualificationRouterCandidatesV1 && cfg.MaxExactTruthVisits == m8QualificationExactTruthCapV1(fixture) && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, []int{1, 2, 4, 8, 16}) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{64}) && slices.Equal(cfg.Overlap, []float64{overlap})
 }
 
-func m8QualificationTrustedTruthCacheV1(root string, report m8ProductionReportV1) error {
+func m8QualificationTrustedTruthCacheV1(root string, report m8ProductionReportV1) ([][]m8CanonicalResultV1, error) {
 	anchor, ok := m8QualificationTruthCacheAnchorV1(report.Dataset)
 	if !ok {
-		return errors.New("truth cache has no frozen corpus anchor")
+		return nil, errors.New("truth cache has no frozen corpus anchor")
 	}
-	return m8QualificationTruthCacheWithAnchorV1(root, report, anchor)
+	return m8QualificationReadTruthCacheWithAnchorV1(root, report, anchor)
 }
 
 func m8QualificationTruthCacheWithAnchorV1(root string, report m8ProductionReportV1, anchor m8QualificationTruthAnchorV1) error {
+	_, err := m8QualificationReadTruthCacheWithAnchorV1(root, report, anchor)
+	return err
+}
+
+func m8QualificationReadTruthCacheWithAnchorV1(root string, report m8ProductionReportV1, anchor m8QualificationTruthAnchorV1) ([][]m8CanonicalResultV1, error) {
 	if report.Variant == nil {
-		return errors.New("truth cache has no retained variant")
+		return nil, errors.New("truth cache has no retained variant")
 	}
 	dir, err := m8QualificationContainedPathV1(root, report.TruthCacheDirectory, "canonical truth cache")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if dir != report.TruthCacheDirectory || report.TruthCache.Identity != anchor.Identity || report.TruthCache.ArtifactSHA256 != anchor.ArtifactSHA256 {
-		return errors.New("truth cache evidence differs from the frozen corpus anchor")
+		return nil, errors.New("truth cache evidence differs from the frozen corpus anchor")
 	}
 	path := m8TruthCacheArtifactPathV1(dir, anchor.Identity)
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() {
-		return errors.New("truth cache anchor artifact is not a regular file")
+		return nil, errors.New("truth cache anchor artifact is not a regular file")
 	}
 	truth, artifactSHA256, err := m8ReadTruthCacheV1(path, report.Dataset, report.Dataset.Queries, report.Config.TopK, report.Variant.SourceRows, anchor.ArtifactSHA256)
 	if err != nil {
-		return fmt.Errorf("decode frozen truth cache: %w", err)
+		return nil, fmt.Errorf("decode frozen truth cache: %w", err)
 	}
 	truthSHA256, err := m8TruthContentSHA256V1(truth)
 	if err != nil || artifactSHA256 != anchor.ArtifactSHA256 || truthSHA256 != anchor.TruthSHA256 {
-		return errors.New("truth cache artifact or semantic digest differs from the frozen corpus anchor")
+		return nil, errors.New("truth cache artifact or semantic digest differs from the frozen corpus anchor")
 	}
-	return nil
+	return truth, nil
 }
 
 func m8QualificationRetainedVariantV1(root string, report m8ProductionReportV1) (err error) {
@@ -1019,6 +1032,33 @@ func m8QualificationMeasurementTranscriptV1(root string, report m8ProductionRepo
 	}
 	rel, err := filepath.Rel(root, report.MeasurementTranscript.Path)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func m8QualificationMeasurementTranscriptOutcomesV1(root string, report m8ProductionReportV1, truth [][]m8CanonicalResultV1) error {
+	if !m8QualificationMeasurementTranscriptV1(root, report) {
+		return errors.New("measurement transcript is not a canonical in-root artifact")
+	}
+	transcript, err := m8ReadProductionMeasurementTranscriptV1(report)
+	if err != nil {
+		return err
+	}
+	if len(truth) != report.Dataset.Queries || len(transcript.Outcomes) != len(report.Rows) {
+		return errors.New("measurement transcript outcome/truth shape mismatch")
+	}
+	for rowIndex, row := range report.Rows {
+		if row.Status != "pass" && row.Status != "fail" {
+			continue
+		}
+		var recallSum float64
+		for query, ids := range transcript.Outcomes[rowIndex].TopKIDs {
+			recallSum += m8IDRecallV1(m8CanonicalIDsV1(truth[query]), ids)
+		}
+		recall := recallSum / float64(row.Samples)
+		if math.Float64bits(recall) != math.Float64bits(row.RecallAtK) || math.Float64bits(recall) != math.Float64bits(row.Attribution.EndToEndRecallAtK) {
+			return errors.New("measurement transcript query outcomes do not reproduce retained recall")
+		}
+	}
+	return nil
 }
 
 func m8ValidateQualificationMatrixDerivationV1(matrix m8ProductionMatrixV1) error {

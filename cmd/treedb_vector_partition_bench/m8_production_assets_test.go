@@ -557,7 +557,7 @@ func testM8ValidateProductionReportV1(report m8ProductionReportV1) error {
 		return err
 	}
 	defer os.RemoveAll(dir)
-	transcript, err := m8WriteProductionMeasurementTranscriptV1(dir, report)
+	transcript, err := m8WriteProductionMeasurementTranscriptV1(dir, report, testM8MeasurementCellsV1(report))
 	if err != nil {
 		return err
 	}

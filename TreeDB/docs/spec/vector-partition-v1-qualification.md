@@ -41,10 +41,13 @@ and corpus/truth/variant identity across its repeats,
 and derives median/min/max QPS plus p95 spread. Qualification is reported only
 after both corpus campaigns validate.
 
-Each child also retains a runner-written, hashed measurement transcript bound to
-its execution ID, immutable candidate/config identity, and measured rows. This
-detects retained-bundle mismatch or reuse; it does not claim to authenticate an
-attacker that can regenerate an entire evidence bundle.
+Each child also retains a runner-written, hashed measurement transcript (schema
+v2) bound to its execution ID, immutable candidate/config identity, measured
+rows, and each row's ordered per-query returned top-k document IDs. Qualification
+bounded-decodes the frozen exact-truth cache and recomputes retained row recall
+from those IDs before trusting the recall gates. This detects retained-bundle
+mismatch, reuse, or a relabeled recall aggregate; it does not claim to
+authenticate an attacker that can regenerate an entire evidence bundle.
 
 The graph and offline router builders have separate scalar-work envelopes from
 M3's exact-oracle visit cap: the retained 100k corpus uses 20B and the 250k
