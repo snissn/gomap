@@ -1956,7 +1956,7 @@ func TestM8QualificationTruthCacheAnchorV1(t *testing.T) {
 // testM8QualificationRetainedDescriptorV1 builds only the persisted M3 asset
 // phase.  Qualification must open a real router/manifest, not accept a
 // descriptor-shaped directory.
-func testM8QualificationRetainedDescriptorV1(t *testing.T, dir, head string, fixture fixtureManifest, variantID, assignment string, ratio float64) m3VariantDescriptorV1 {
+func testM8QualificationRetainedDescriptorV1(t *testing.T, dir, head string, fixture fixtureManifest, variantID, assignment string, ratio float64, sourceID ...func(int) string) m3VariantDescriptorV1 {
 	t.Helper()
 	const partitions = 16
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -1964,8 +1964,14 @@ func testM8QualificationRetainedDescriptorV1(t *testing.T, dir, head string, fix
 	}
 	vectors := fixtureVectors(fixture)
 	input := make([]vectorpartition.Vector, len(vectors))
+	valuesByID := make(map[string][]float64, len(vectors))
 	for i := range vectors {
-		input[i] = vectorpartition.Vector{ID: fmt.Sprintf("doc-%06d", i), Values: vectors[i]}
+		id := fmt.Sprintf("doc-%06d", i)
+		if len(sourceID) != 0 {
+			id = sourceID[0](i)
+		}
+		input[i] = vectorpartition.Vector{ID: id, Values: vectors[i]}
+		valuesByID[id] = vectors[i]
 	}
 	partition := vectorpartition.DefaultConfig()
 	partition.Partitions, partition.Seed, partition.MaxDistanceWork = partitions, fixture.Seed, 20_000_000_000
@@ -2025,8 +2031,26 @@ func testM8QualificationRetainedDescriptorV1(t *testing.T, dir, head string, fix
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := insertM3SourceRows(col, vectors); err != nil {
-		t.Fatal(err)
+	if len(sourceID) == 0 {
+		if err := insertM3SourceRows(col, vectors); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		ids := make([][]byte, len(vectors))
+		documents := make([][]byte, len(vectors))
+		for i := range vectors {
+			raw, err := json.Marshal(struct {
+				TimeUS    int64     `json:"time_us"`
+				Embedding []float32 `json:"embedding"`
+			}{TimeUS: int64(i + 1), Embedding: m3Float32Vector(vectors[i])})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids[i], documents[i] = []byte(sourceID[0](i)), raw
+		}
+		if _, err := col.InsertBatch(ids, documents); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := col.Flush(); err != nil {
 		t.Fatal(err)
@@ -2059,7 +2083,11 @@ func testM8QualificationRetainedDescriptorV1(t *testing.T, dir, head string, fix
 	if err != nil {
 		t.Fatal(err)
 	}
-	routerPartitions, err := m3RouterPartitions(artifact, overlap, sourceOrdinals, vectors)
+	routerVectors := make([][]float64, len(artifact.IDs))
+	for ordinal, id := range artifact.IDs {
+		routerVectors[ordinal] = valuesByID[id]
+	}
+	routerPartitions, err := m3RouterPartitions(artifact, overlap, sourceOrdinals, routerVectors)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2205,6 +2233,21 @@ func TestM8QualificationRetainedVariantV1(t *testing.T) {
 		root, report := newReport(t)
 		if err := m8QualificationRetainedVariantV1(root, report); err != nil {
 			t.Fatalf("rejected real retained M3 assets: %v", err)
+		}
+	})
+	t.Run("noncanonical_source_document_id", func(t *testing.T) {
+		root := t.TempDir()
+		descriptor := testM8QualificationRetainedDescriptorV1(t, filepath.Join(root, "m3"), head, fixture, "graph-disjoint-v1", partitionAssignmentGraphV1, 0, func(ordinal int) string {
+			if ordinal == 128 { // Outside this fixture's retained truth IDs.
+				return "doc-128"
+			}
+			return fmt.Sprintf("doc-%06d", ordinal)
+		})
+		truthDir, truth := testM8QualificationTruthCacheV1(t, root, fixture)
+		report := m8ProductionReportV1{Dataset: fixture, DatasetDirectory: testM8QualificationDatasetDirectoryV1(t, root, fixture), TruthCacheDirectory: truthDir, TruthCache: truth, Config: m8ProductionConfigEvidenceV1{TopK: 10}, Variant: &descriptor}
+		err := m8QualificationRetainedVariantV1(root, report)
+		if err == nil || !strings.Contains(err.Error(), "invalid fixture document ID") {
+			t.Fatalf("noncanonical retained source ID err=%v", err)
 		}
 	})
 	t.Run("mutated_source_row", func(t *testing.T) {

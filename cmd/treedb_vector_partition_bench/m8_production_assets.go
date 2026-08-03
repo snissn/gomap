@@ -320,8 +320,11 @@ func m8ValidateExistingAssetsFixtureV1(collection *collections.Collection, manif
 	seen := make([]bool, fixture.Vectors)
 	for ordinal, row := range rows {
 		id := string(row.DocumentID)
-		if !strings.HasPrefix(id, "doc-") || len(row.Values) != fixture.Dimensions {
+		if len(row.Values) != fixture.Dimensions {
 			return fmt.Errorf("retained M8 source row %d does not match fixture shape", ordinal)
+		}
+		if !m8FixtureDocumentIDValidV1(id, fixture.Vectors) {
+			return fmt.Errorf("retained M8 source row %d has invalid fixture document ID %q", ordinal, id)
 		}
 		fixtureOrdinal, parseErr := strconv.Atoi(strings.TrimPrefix(id, "doc-"))
 		if parseErr != nil || fixtureOrdinal < 0 || fixtureOrdinal >= fixture.Vectors || seen[fixtureOrdinal] {
