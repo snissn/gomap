@@ -5878,6 +5878,144 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 	}
 }
 
+func TestDocumentMatchesPlanBoundsDecimal128EqualityWork(t *testing.T) {
+	leftDecimal, err := bson.ParseDecimal128("1E+6000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightDecimal, err := bson.ParseDecimal128("10E+5999")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		count   int
+		wantErr bool
+	}{
+		{name: "boundary", count: mongoQueryMaxDecimal128Normalizations / 2},
+		{name: "over_budget", count: mongoQueryMaxDecimal128Normalizations/2 + 1, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			left, right := make(bson.A, test.count), make(bson.A, test.count)
+			for i := range test.count {
+				left[i], right[i] = leftDecimal, rightDecimal
+			}
+			doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "items", Value: left}})
+			plan := findPlan{predicates: []findPredicate{{field: "items", op: findPredicateEq, values: []bson.RawValue{mustRawValue(t, right)}}}}
+			match, err := documentMatchesPlan(doc, plan)
+			if test.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "1024 Decimal128 normalizations") || match {
+					t.Fatalf("match=%v err=%v want Decimal128 budget error", match, err)
+				}
+				return
+			}
+			if err != nil || !match {
+				t.Fatalf("match=%v err=%v want true/nil", match, err)
+			}
+		})
+	}
+
+	makeArray := func(value any, count int) bson.A {
+		values := make(bson.A, count)
+		for i := range count {
+			values[i] = value
+		}
+		return values
+	}
+	t.Run("shared_across_or_branches", func(t *testing.T) {
+		left, right := makeArray(leftDecimal, 300), makeArray(rightDecimal, 300)
+		doc := mustDocument(t, bson.D{{Key: "items", Value: left}})
+		pred := findPredicate{field: "items", op: findPredicateEq, values: []bson.RawValue{mustRawValue(t, right)}}
+		match, err := documentMatchesPlan(doc, findPlan{predicates: []findPredicate{pred}, orBranches: [][]findPredicate{{pred}}})
+		if err == nil || !strings.Contains(err.Error(), "1024 Decimal128 normalizations") || match {
+			t.Fatalf("match=%v err=%v want shared Decimal128 budget error", match, err)
+		}
+	})
+	t.Run("shared_across_in_candidates", func(t *testing.T) {
+		left, right := makeArray(leftDecimal, 300), makeArray(rightDecimal, 300)
+		miss := append(bson.A(nil), right...)
+		miss[len(miss)-1] = int32(0)
+		doc := mustDocument(t, bson.D{{Key: "items", Value: left}})
+		pred := findPredicate{field: "items", op: findPredicateIn, values: []bson.RawValue{mustRawValue(t, miss), mustRawValue(t, right)}}
+		match, err := documentMatchesPlan(doc, findPlan{predicates: []findPredicate{pred}})
+		if err == nil || !strings.Contains(err.Error(), "1024 Decimal128 normalizations") || match {
+			t.Fatalf("match=%v err=%v want shared Decimal128 budget error", match, err)
+		}
+	})
+	t.Run("identical_encoding_fast_path", func(t *testing.T) {
+		values := makeArray(leftDecimal, mongoQueryMaxDecimal128Normalizations+1)
+		doc := mustDocument(t, bson.D{{Key: "items", Value: values}})
+		pred := findPredicate{field: "items", op: findPredicateEq, values: []bson.RawValue{mustRawValue(t, values)}}
+		match, err := documentMatchesPlan(doc, findPlan{predicates: []findPredicate{pred}})
+		if err != nil || !match {
+			t.Fatalf("match=%v err=%v want identical Decimal128 fast-path match", match, err)
+		}
+	})
+}
+
+func TestServerQueryAndFilterWriteRejectOverBudgetDecimal128Equality(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
+	opts.ValueLog.PointerThreshold = 1
+	backend, closeBackend, err := treedb.OpenBackend(opts)
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = closeBackend() }()
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	server.Collections = collections.NewCollectionManager(backend)
+
+	leftDecimal, err := bson.ParseDecimal128("1E+6000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightDecimal, err := bson.ParseDecimal128("10E+5999")
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := mongoQueryMaxDecimal128Normalizations/2 + 1
+	left, right := make(bson.A, count), make(bson.A, count)
+	for i := range count {
+		left[i], right[i] = leftDecimal, rightDecimal
+	}
+	assertOK(t, serveCommand(t, server, 330500, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "items", Value: left}}}},
+		{Key: "$db", Value: "app"},
+	}))
+	response := serveCommand(t, server, 330501, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "items", Value: right}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "BadValue")
+	message, ok := bson.Raw(response).Lookup("errmsg").StringValueOK()
+	if !ok || !strings.Contains(message, "1024 Decimal128 normalizations") {
+		t.Fatalf("errmsg=%q ok=%v want Decimal128 budget error", message, ok)
+	}
+	updateResponse := serveCommand(t, server, 330502, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "items", Value: right}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, updateResponse, "BadValue")
+	message, ok = bson.Raw(updateResponse).Lookup("errmsg").StringValueOK()
+	if !ok || !strings.Contains(message, "1024 Decimal128 normalizations") {
+		t.Fatalf("update errmsg=%q ok=%v want Decimal128 budget error", message, ok)
+	}
+	stored := cursorFirstBatch(t, serveCommand(t, server, 330503, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "$db", Value: "app"},
+	}))
+	if len(stored) != 1 || !stored[0].Lookup("marker").IsZero() {
+		t.Fatalf("over-budget filter write mutated document: %v", stored)
+	}
+}
+
 func TestRawValuesEqualHandlesDeepNestedBSON(t *testing.T) {
 	within := deeplyNestedRawDocumentValue(mongoMutationMaxBSONNesting-1, int32(1))
 	if !rawValuesEqual(within, within) {

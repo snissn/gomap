@@ -223,6 +223,7 @@ implemented.
 | `$nor`, `$not` | `not implemented` | Unsupported operators reject | Needs explicit planner semantics. |
 | Regex/text/geospatial predicates | `not implemented` | Unsupported operators reject or command is absent | Out of MVP scope. |
 | Dotted predicates into nested objects/arrays | `supported subset` | dotted predicate tests | Projection and sort do not support dotted fields. |
+| BSON document/array equality | `supported subset` | `TestRawValuesEqualHandlesDeepNestedBSON`, `TestRawValuesEqualHandlesWideBSON`, `TestDocumentMatchesPlanBoundsDecimal128EqualityWork`, `TestServerQueryAndFilterWriteRejectOverBudgetDecimal128Equality` | Query `$eq`/`$in` equality shares a per-candidate budget of 1,024 potential finite Decimal128 normalizations across predicates and `$or` branches; an over-budget candidate returns `BadValue`. Byte-identical numeric encodings use the exact-value fast path. |
 | Projection include/exclude top-level fields | `supported subset` | `TestMongoCompatibilityMatrix` | Cannot mix include/exclude except `_id`; dotted projection rejected. |
 | Sort by one top-level field | `supported subset` | `TestMongoCompatibilityMatrix` | Compound sort and dotted sort rejected. |
 | `skip`, `limit`, `batchSize`, `singleBatch` | `supported subset` | cursor and find planner tests | Behavior is bounded by gateway scan/message limits. |

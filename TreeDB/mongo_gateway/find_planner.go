@@ -150,8 +150,9 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 }
 
 const (
-	findBatchOverheadBytes        = 5 // BSON document length plus trailing NUL.
-	findBatchResponseReserveBytes = 4096
+	findBatchOverheadBytes                = 5 // BSON document length plus trailing NUL.
+	findBatchResponseReserveBytes         = 4096
+	mongoQueryMaxDecimal128Normalizations = 1024
 )
 
 func findBatchDocumentBytes(doc wire.Document, index int) int {
@@ -319,12 +320,16 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, material
 	docs := make([]wire.Document, 0)
 	matched := 0
 	truncated, err := col.ScanDocumentsFunc(maxDocuments, func(record collections.DocumentRecord) (bool, error) {
-		match, ok, err := storedDocumentMatchesPredicatesForCollection(col, record.Document, plan.predicates)
-		if err != nil {
-			return false, err
-		}
-		if ok && !match {
-			return true, nil
+		var match, ok bool
+		var err error
+		if len(plan.orBranches) == 0 {
+			match, ok, err = storedDocumentMatchesPredicatesForCollection(col, record.Document, plan.predicates)
+			if err != nil {
+				return false, err
+			}
+			if ok && !match {
+				return true, nil
+			}
 		}
 		var doc wire.Document
 		if !ok || len(plan.orBranches) > 0 {
@@ -367,6 +372,7 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, material
 }
 
 func storedDocumentMatchesPredicates(stored []byte, predicates []findPredicate) (bool, bool, error) {
+	remainingDecimal128Normalizations := mongoQueryMaxDecimal128Normalizations
 	for _, pred := range predicates {
 		if isRangePredicate(pred.op) {
 			match, ok, err := storedDocumentMatchesInt64RangePredicate(stored, pred)
@@ -393,7 +399,7 @@ func storedDocumentMatchesPredicates(stored []byte, predicates []findPredicate) 
 			}
 			return false, true, nil
 		}
-		match, err := valueMatchesPredicate(value, pred)
+		match, err := valueMatchesPredicateWithBudget(value, pred, &remainingDecimal128Normalizations)
 		if err != nil {
 			return false, false, err
 		}
@@ -1331,6 +1337,11 @@ func rangeOperator(op string) findPredicateOp {
 }
 
 func documentMatchesPredicates(doc wire.Document, predicates []findPredicate) (bool, error) {
+	remainingDecimal128Normalizations := mongoQueryMaxDecimal128Normalizations
+	return documentMatchesPredicatesWithBudget(doc, predicates, &remainingDecimal128Normalizations)
+}
+
+func documentMatchesPredicatesWithBudget(doc wire.Document, predicates []findPredicate, remainingDecimal128Normalizations *int) (bool, error) {
 	for _, pred := range predicates {
 		values, ok, err := lookupDocumentPredicateValues(doc, pred.field)
 		if err != nil {
@@ -1344,7 +1355,7 @@ func documentMatchesPredicates(doc wire.Document, predicates []findPredicate) (b
 		}
 		matched := false
 		for _, value := range values {
-			match, err := valueMatchesPredicate(value, pred)
+			match, err := valueMatchesPredicateWithBudget(value, pred, remainingDecimal128Normalizations)
 			if err != nil {
 				return false, err
 			}
@@ -1361,12 +1372,13 @@ func documentMatchesPredicates(doc wire.Document, predicates []findPredicate) (b
 }
 
 func documentMatchesPlan(doc wire.Document, plan findPlan) (bool, error) {
-	match, err := documentMatchesPredicates(doc, plan.predicates)
+	remainingDecimal128Normalizations := mongoQueryMaxDecimal128Normalizations
+	match, err := documentMatchesPredicatesWithBudget(doc, plan.predicates, &remainingDecimal128Normalizations)
 	if err != nil || !match || len(plan.orBranches) == 0 {
 		return match, err
 	}
 	for _, branch := range plan.orBranches {
-		match, err := documentMatchesPredicates(doc, branch)
+		match, err := documentMatchesPredicatesWithBudget(doc, branch, &remainingDecimal128Normalizations)
 		if err != nil {
 			return false, err
 		}
@@ -1400,12 +1412,21 @@ func rawValueIsNull(value bson.RawValue) bool {
 }
 
 func valueMatchesPredicate(value bson.RawValue, pred findPredicate) (bool, error) {
+	remainingDecimal128Normalizations := mongoQueryMaxDecimal128Normalizations
+	return valueMatchesPredicateWithBudget(value, pred, &remainingDecimal128Normalizations)
+}
+
+func valueMatchesPredicateWithBudget(value bson.RawValue, pred findPredicate, remainingDecimal128Normalizations *int) (bool, error) {
 	switch pred.op {
 	case findPredicateEq:
-		return rawValuesEqual(value, pred.values[0]), nil
+		return rawValuesEqualModeBudget(value, pred.values[0], false, remainingDecimal128Normalizations)
 	case findPredicateIn:
 		for _, candidate := range pred.values {
-			if rawValuesEqual(value, candidate) {
+			equal, err := rawValuesEqualModeBudget(value, candidate, false, remainingDecimal128Normalizations)
+			if err != nil {
+				return false, err
+			}
+			if equal {
 				return true, nil
 			}
 		}
@@ -1792,8 +1813,13 @@ func mongoMutationValuesEqual(left, right bson.RawValue) bool {
 }
 
 func rawValuesEqualMode(left, right bson.RawValue, equalNaN bool) bool {
+	equal, _ := rawValuesEqualModeBudget(left, right, equalNaN, nil)
+	return equal
+}
+
+func rawValuesEqualModeBudget(left, right bson.RawValue, equalNaN bool, remainingDecimal128Normalizations *int) (bool, error) {
 	if left.Type != bson.TypeCodeWithScope && right.Type != bson.TypeCodeWithScope && rawValuesBothScalar(left, right) {
-		return rawScalarValuesEqualMode(left, right, equalNaN)
+		return rawScalarValuesEqualModeBudget(left, right, equalNaN, remainingDecimal128Normalizations)
 	}
 	type frame struct {
 		left, right []byte
@@ -1805,20 +1831,20 @@ func rawValuesEqualMode(left, right bson.RawValue, equalNaN bool) bool {
 		if !currentLeft.IsZero() || !currentRight.IsZero() {
 			if currentLeft.Type == bson.TypeCodeWithScope || currentRight.Type == bson.TypeCodeWithScope {
 				if currentLeft.Type != bson.TypeCodeWithScope || currentRight.Type != bson.TypeCodeWithScope {
-					return false
+					return false, nil
 				}
 				leftCode, leftScope, leftRemaining, leftOK := bsoncore.ReadCodeWithScope(currentLeft.Value)
 				rightCode, rightScope, rightRemaining, rightOK := bsoncore.ReadCodeWithScope(currentRight.Value)
 				if !leftOK || !rightOK || len(leftRemaining) != 0 || len(rightRemaining) != 0 || leftCode != rightCode {
-					return false
+					return false, nil
 				}
 				if len(frames) == mongoMutationMaxBSONNesting {
-					return false
+					return false, nil
 				}
 				leftContents, leftOK := rawBSONContainerContents(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: leftScope})
 				rightContents, rightOK := rawBSONContainerContents(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: rightScope})
 				if !leftOK || !rightOK {
-					return false
+					return false, nil
 				}
 				// The scope document contributes one container level, matching the
 				// shared mutation nesting validator.
@@ -1827,20 +1853,21 @@ func rawValuesEqualMode(left, right bson.RawValue, equalNaN bool) bool {
 				continue
 			}
 			if rawValuesBothScalar(currentLeft, currentRight) {
-				if !rawScalarValuesEqualMode(currentLeft, currentRight, equalNaN) {
-					return false
+				equal, err := rawScalarValuesEqualModeBudget(currentLeft, currentRight, equalNaN, remainingDecimal128Normalizations)
+				if err != nil || !equal {
+					return false, err
 				}
 			} else {
 				if currentLeft.Type != currentRight.Type {
-					return false
+					return false, nil
 				}
 				leftRemaining, leftOK := rawBSONContainerContents(currentLeft)
 				rightRemaining, rightOK := rawBSONContainerContents(currentRight)
 				if !leftOK || !rightOK {
-					return false
+					return false, nil
 				}
 				if len(frames) == mongoMutationMaxBSONNesting {
-					return false
+					return false, nil
 				}
 				frames = append(frames, frame{
 					left:     leftRemaining,
@@ -1852,13 +1879,13 @@ func rawValuesEqualMode(left, right bson.RawValue, equalNaN bool) bool {
 			continue
 		}
 		if len(frames) == 0 {
-			return true
+			return true, nil
 		}
 		last := len(frames) - 1
 		current := &frames[last]
 		if len(current.left) == 0 || len(current.right) == 0 {
 			if len(current.left) != len(current.right) {
-				return false
+				return false, nil
 			}
 			frames = frames[:last]
 			continue
@@ -1866,15 +1893,15 @@ func rawValuesEqualMode(left, right bson.RawValue, equalNaN bool) bool {
 		leftElement, leftRemaining, leftOK := bsoncore.ReadElement(current.left)
 		rightElement, rightRemaining, rightOK := bsoncore.ReadElement(current.right)
 		if !leftOK || !rightOK || leftElement.Validate() != nil || rightElement.Validate() != nil {
-			return false
+			return false, nil
 		}
 		if current.document && !bytes.Equal(leftElement.KeyBytes(), rightElement.KeyBytes()) {
-			return false
+			return false, nil
 		}
 		leftValue, leftErr := leftElement.ValueErr()
 		rightValue, rightErr := rightElement.ValueErr()
 		if leftErr != nil || rightErr != nil {
-			return false
+			return false, nil
 		}
 		current.left, current.right = leftRemaining, rightRemaining
 		currentLeft = bson.RawValue{Type: bson.Type(leftValue.Type), Value: leftValue.Data}
@@ -1893,14 +1920,34 @@ func rawBSONContainerContents(value bson.RawValue) ([]byte, bool) {
 	return remaining[:len(remaining)-1], true
 }
 
-func rawScalarValuesEqualMode(left, right bson.RawValue, equalNaN bool) bool {
+func rawScalarValuesEqualModeBudget(left, right bson.RawValue, equalNaN bool, remainingDecimal128Normalizations *int) (bool, error) {
 	if left.IsNumber() && right.IsNumber() {
 		if rawValueIsNaN(left) || rawValueIsNaN(right) {
-			return equalNaN && rawValueIsNaN(left) && rawValueIsNaN(right)
+			return equalNaN && rawValueIsNaN(left) && rawValueIsNaN(right), nil
 		}
-		return compareRawValues(left, right) == 0
+		if left.Type == right.Type && bytes.Equal(left.Value, right.Value) {
+			return true, nil
+		}
+		if remainingDecimal128Normalizations != nil {
+			normalizations := decimal128NormalizationCount(left) + decimal128NormalizationCount(right)
+			if normalizations > *remainingDecimal128Normalizations {
+				return false, fmt.Errorf("Mongo gateway query equality exceeds %d Decimal128 normalizations", mongoQueryMaxDecimal128Normalizations)
+			}
+			*remainingDecimal128Normalizations -= normalizations
+		}
+		return compareRawValues(left, right) == 0, nil
 	}
-	return left.Type == right.Type && left.Equal(right)
+	return left.Type == right.Type && left.Equal(right), nil
+}
+
+func decimal128NormalizationCount(value bson.RawValue) int {
+	if value.Type != bson.TypeDecimal128 {
+		return 0
+	}
+	if _, nonFinite := rawNumberNonFiniteRank(value); nonFinite {
+		return 0
+	}
+	return 1
 }
 
 func compareRawValues(left, right bson.RawValue) int {
