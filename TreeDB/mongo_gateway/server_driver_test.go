@@ -181,7 +181,7 @@ func TestStandaloneServerOfficialGoDriverFilterWrites(t *testing.T) {
 		{Key: "$push", Value: bson.D{{Key: "events", Value: bson.D{{Key: "kind", Value: "login"}}}}},
 		{Key: "$addToSet", Value: bson.D{{Key: "labels", Value: bson.D{{Key: "$each", Value: bson.A{"staff", "staff"}}}}}},
 		{Key: "$addToSet", Value: bson.D{{Key: "numbers", Value: bson.D{{Key: "$each", Value: bson.A{int64(1), float64(1), decimalOne, int32(2)}}}}}},
-		{Key: "$addToSet", Value: bson.D{{Key: "nestedNumbers", Value: bson.D{{Key: "$each", Value: bson.A{bson.D{{Key: "n", Value: int64(1)}}, bson.D{{Key: "n", Value: decimalOne}}}}}}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "nestedNumbers", Value: bson.D{{Key: "$each", Value: bson.A{bson.D{{Key: "n", Value: int64(1)}}, bson.D{{Key: "n", Value: decimalOne}}, bson.D{{Key: "n", Value: int32(2)}}}}}}}},
 		{Key: "$addToSet", Value: bson.D{{Key: "nonFinite", Value: bson.D{{Key: "$each", Value: bson.A{decimalNegativeInfinity, decimalPositiveInfinity, decimalNaN, decimalNaN}}}}}},
 	})
 	if err != nil || updated.MatchedCount != 1 || updated.ModifiedCount != 1 {
@@ -197,7 +197,7 @@ func TestStandaloneServerOfficialGoDriverFilterWrites(t *testing.T) {
 	numbers, numbersErr := nested.Lookup("numbers").Array().Values()
 	nestedNumbers, nestedNumbersErr := nested.Lookup("nestedNumbers").Array().Values()
 	nonFinite, nonFiniteErr := nested.Lookup("nonFinite").Array().Values()
-	if subtype, value := profile.Lookup("blob").Binary(); profile.Lookup("name").StringValue() != "ada" || profile.Lookup("logins").Int32() != 1 || subtype != 0x80 || string(value) != string([]byte{1, 2}) || eventsErr != nil || len(events) != 1 || labelsErr != nil || len(labels) != 1 || numbersErr != nil || len(numbers) != 2 || numbers[0].Type != bson.TypeInt32 || numbers[1].Int32() != 2 || nestedNumbersErr != nil || len(nestedNumbers) != 1 || nonFiniteErr != nil || len(nonFinite) != 3 || nonFinite[0].Decimal128().String() != "Infinity" || nonFinite[1].Decimal128().String() != "NaN" || nonFinite[2].Decimal128().String() != "-Infinity" {
+	if subtype, value := profile.Lookup("blob").Binary(); profile.Lookup("name").StringValue() != "ada" || profile.Lookup("logins").Int32() != 1 || subtype != 0x80 || string(value) != string([]byte{1, 2}) || eventsErr != nil || len(events) != 1 || events[0].Document().Lookup("kind").StringValue() != "login" || labelsErr != nil || len(labels) != 1 || labels[0].StringValue() != "staff" || numbersErr != nil || len(numbers) != 2 || numbers[0].Type != bson.TypeInt32 || numbers[1].Int32() != 2 || nestedNumbersErr != nil || len(nestedNumbers) != 2 || nestedNumbers[0].Document().Lookup("n").Int32() != 1 || nestedNumbers[1].Document().Lookup("n").Int32() != 2 || nonFiniteErr != nil || len(nonFinite) != 3 || nonFinite[0].Decimal128().String() != "Infinity" || nonFinite[1].Decimal128().String() != "NaN" || nonFinite[2].Decimal128().String() != "-Infinity" {
 		t.Fatalf("nested update document=%v", nested)
 	}
 	var before bson.M

@@ -5837,7 +5837,7 @@ func TestMongoMutationAddToSetDeduplicatesWideDocument(t *testing.T) {
 }
 
 func wideRawDocumentValue(width int, final bool) bson.RawValue {
-	doc := make([]byte, 4)
+	index, doc := bsoncore.AppendDocumentStart(nil)
 	for i := range width {
 		value := true
 		if i == width-1 {
@@ -5845,15 +5845,14 @@ func wideRawDocumentValue(width int, final bool) bson.RawValue {
 		}
 		doc = bsoncore.AppendBooleanElement(doc, strconv.Itoa(i), value)
 	}
-	doc = append(doc, 0)
-	bsoncore.UpdateLength(doc, 0, int32(len(doc)))
+	doc, _ = bsoncore.AppendDocumentEnd(doc, index)
 	return bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: doc}
 }
 
 func rawArrayWithValue(value bson.RawValue) bson.RawValue {
-	array := bsoncore.AppendValueElement(make([]byte, 4), "0", bsoncore.Value{Type: bsoncore.Type(value.Type), Data: value.Value})
-	array = append(array, 0)
-	bsoncore.UpdateLength(array, 0, int32(len(array)))
+	index, array := bsoncore.AppendArrayStart(nil)
+	array = bsoncore.AppendValueElement(array, "0", bsoncore.Value{Type: bsoncore.Type(value.Type), Data: value.Value})
+	array, _ = bsoncore.AppendArrayEnd(array, index)
 	return bson.RawValue{Type: bson.TypeArray, Value: array}
 }
 
