@@ -45,6 +45,8 @@ func TestMongoGatewayCapabilityManifestRejectsMissingProbe(t *testing.T) {
 	}
 }
 
+// Probe classifications are deliberately independent of manifest rows so a
+// documentation-only status edit cannot silently rewrite executable evidence.
 func TestMongoGatewayCapabilityManifestRejectsProbeStatusDrift(t *testing.T) {
 	manifest := MongoGatewayCapabilities()
 	probes := mongoCompatibilityMatrixProbes()
