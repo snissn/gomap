@@ -1,0 +1,26 @@
+name: GPT-5.6 source export bootstrap
+
+on:
+  push:
+    branches:
+      - gpt56/issue-4052-capability-manifest
+
+permissions:
+  contents: read
+
+jobs:
+  export-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Package exact source
+        run: |
+          tar --exclude=.git -czf /tmp/gomap-source.tgz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gomap-source-${{ github.sha }}
+          path: /tmp/gomap-source.tgz
+          if-no-files-found: error
+          retention-days: 1
