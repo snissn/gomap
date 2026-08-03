@@ -510,10 +510,14 @@ func runGenerateTruthCache(args []string, stdout io.Writer) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	artifactSHA, err := m8PublishTruthCacheV1(path, "", func(w io.Writer) error {
+	artifactSHA, linked, err := m8PublishTruthCacheV1(path, "", func(w io.Writer) error {
 		return m8WriteTruthCacheJSONV1(w, m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: collections.VectorPartitionCanonicalScoreContractV1, DatasetChecksum: fixture.Checksum, Dimensions: fixture.Dimensions, Metric: fixture.Metric, TopK: topK, TruthSHA256: truthSHA, Truth: truth})
 	})
 	if err != nil {
+		if linked {
+			_, _ = fmt.Fprintf(stdout, "truth_cache=%s artifact_sha256=%s truth_sha256=%s identity=%s visits=%d publication=linked_directory_sync_failed\n", path, artifactSHA, truthSHA, identity, visits)
+			return fmt.Errorf("canonical truth cache linked at %s with artifact_sha256=%s but publication did not complete: %w", path, artifactSHA, err)
+		}
 		return err
 	}
 	_, err = fmt.Fprintf(stdout, "truth_cache=%s artifact_sha256=%s truth_sha256=%s identity=%s visits=%d\n", path, artifactSHA, truthSHA, identity, visits)

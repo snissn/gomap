@@ -212,7 +212,7 @@ untimed all-partition preflight and unavailable-group fault check remain exact
 controls. On the retained 100k structured final-membership model (assignment
 `022359b1aedfa738cde7f2e82e01263c855eb72075b1f2a927d3a5753d6fde9c`,
 router model `22504dd63257133fb554141778a4562df2ef6cecab86dccd6d712ccf44289100`),
-the selected retained p4 measurement uses a 64-representative candidate budget. The c32 control lost `.8987`
+the superseded retained p4 calibration used a 64-representative candidate budget. The c32 control lost `.8987`
 against exact representative recall `.9960`; c64 matched `.9960` (zero regret). The frozen #4027
 full p1/2/4/8/16 qualification ladder instead uses all 256 retained representatives so every
 requested partition count has complete candidate coverage.

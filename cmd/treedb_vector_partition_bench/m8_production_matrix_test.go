@@ -588,14 +588,14 @@ func TestM8TruthCachePublisherLeavesOnlyCompleteNoReplaceArtifactsV1(t *testing.
 	file := m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: m8CanonicalTruthContractV1, DatasetChecksum: fixture.Checksum, Dimensions: fixture.Dimensions, Metric: fixture.Metric, TopK: 1, TruthSHA256: truthSHA, Truth: truth}
 	write := func(w io.Writer) error { return m8WriteTruthCacheJSONV1(w, file) }
 	t.Run("write failure cleans temporary and final paths", func(t *testing.T) {
-		_, err := m8PublishTruthCacheV1(path, "", func(w io.Writer) error {
+		_, linked, err := m8PublishTruthCacheV1(path, "", func(w io.Writer) error {
 			if _, err := io.WriteString(w, "{"); err != nil {
 				return err
 			}
 			return errors.New("write failure")
 		})
-		if err == nil {
-			t.Fatal("accepted failing truth-cache write")
+		if err == nil || linked {
+			t.Fatalf("failing truth-cache write linked=%t err=%v", linked, err)
 		}
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("partial final artifact err=%v", err)
@@ -608,8 +608,8 @@ func TestM8TruthCachePublisherLeavesOnlyCompleteNoReplaceArtifactsV1(t *testing.
 		if err := os.WriteFile(path, []byte("sentinel"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := m8PublishTruthCacheV1(path, "", write); err == nil || !os.IsExist(err) {
-			t.Fatalf("existing artifact error=%v", err)
+		if _, linked, err := m8PublishTruthCacheV1(path, "", write); err == nil || linked || !os.IsExist(err) {
+			t.Fatalf("existing artifact linked=%t err=%v", linked, err)
 		}
 		got, err := os.ReadFile(path)
 		if err != nil || string(got) != "sentinel" {
@@ -620,8 +620,8 @@ func TestM8TruthCachePublisherLeavesOnlyCompleteNoReplaceArtifactsV1(t *testing.
 		}
 	})
 	t.Run("trusted digest mismatch does not publish", func(t *testing.T) {
-		if _, err := m8PublishTruthCacheV1(path, strings.Repeat("0", 64), write); err == nil {
-			t.Fatal("accepted mismatched trusted digest")
+		if _, linked, err := m8PublishTruthCacheV1(path, strings.Repeat("0", 64), write); err == nil || linked {
+			t.Fatalf("mismatched trusted digest linked=%t err=%v", linked, err)
 		}
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("mismatched digest published final artifact err=%v", err)
@@ -631,9 +631,27 @@ func TestM8TruthCachePublisherLeavesOnlyCompleteNoReplaceArtifactsV1(t *testing.
 		}
 	})
 	t.Run("complete artifact publishes and decodes", func(t *testing.T) {
-		digest, err := m8PublishTruthCacheV1(path, "", write)
-		if err != nil {
+		digest, linked, err := m8PublishTruthCacheV1(path, "", write)
+		if err != nil || !linked {
+			t.Fatalf("complete truth-cache publish linked=%t err=%v", linked, err)
+		}
+		got, artifact, err := m8ReadTruthCacheV1(path, fixture, 1, 1, 1, digest)
+		if err != nil || artifact != digest || !reflect.DeepEqual(got, truth) {
+			t.Fatalf("artifact=%q digest=%q truth=%v err=%v", artifact, digest, got, err)
+		}
+		if paths, err := filepath.Glob(filepath.Join(dir, ".m8_canonical_truth_*.tmp")); err != nil || len(paths) != 0 {
+			t.Fatalf("temporary artifacts=%v err=%v", paths, err)
+		}
+	})
+	t.Run("post-link sync failure retains decodable cache and digest", func(t *testing.T) {
+		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
+		}
+		digest, linked, err := m8PublishTruthCacheWithDirectorySyncV1(path, "", write, func(string) error {
+			return errors.New("directory sync failure")
+		})
+		if err == nil || !linked || digest == "" {
+			t.Fatalf("post-link sync linked=%t digest=%q err=%v", linked, digest, err)
 		}
 		got, artifact, err := m8ReadTruthCacheV1(path, fixture, 1, 1, 1, digest)
 		if err != nil || artifact != digest || !reflect.DeepEqual(got, truth) {

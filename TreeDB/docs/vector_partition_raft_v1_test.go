@@ -203,10 +203,19 @@ func TestDocsVectorPartitionM8ProductionContract(t *testing.T) {
 				"bounded 128 MiB aggregate",
 				"actual slowest completed request",
 				"Custom shard limits are normalized once",
+				"superseded retained p4 calibration",
+				"all 256 retained representatives",
 				"MUST return no partial neighbors",
 				"stable-ID hash assignment",
 				"shard-request ceiling",
 				"explicitly accepts the narrower result",
+			},
+		},
+		{
+			path: filepath.Join(root, "docs", "spec", "vector-partition-v1-qualification.md"),
+			needles: []string{
+				"p1/p2/p4/p8/p16",
+				"budget `256`",
 			},
 		},
 		{
