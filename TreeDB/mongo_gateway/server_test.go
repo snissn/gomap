@@ -6921,6 +6921,62 @@ func TestMongoMutationAddToSetRejectsExpensiveDecimal128ComparisonsBeforeMutatio
 	}
 }
 
+func TestMongoMutationAddToSetChargesNestedDecimal128LeavesBeforeMutation(t *testing.T) {
+	existing := bson.A{}
+	candidate := bson.A{}
+	// Stay below the 65,536 decoded-element admission cap while making one
+	// nested equality comparison expensive enough to expose leaf undercounting.
+	for i := range 32000 {
+		value, err := bson.ParseDecimal128(fmt.Sprintf("%dE+6000", i+1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		existing = append(existing, value)
+		candidate = append(candidate, value)
+	}
+	last, err := bson.ParseDecimal128("9999E+6000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate[len(candidate)-1] = last
+	doc := mustDocument(t, bson.D{{Key: "items", Value: bson.A{existing}}})
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.A{candidate}}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || changed || !bson.Raw(doc).Lookup("marker").IsZero() {
+		t.Fatalf("nested Decimal128 comparison changed=%v err=%v", changed, err)
+	}
+}
+
+func TestMongoMutationAddToSetSharesDecimal128BudgetAcrossTargets(t *testing.T) {
+	values := bson.A{}
+	for i := range 33 {
+		value, err := bson.ParseDecimal128(fmt.Sprintf("%dE+6000", i+1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		values = append(values, value)
+	}
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+		{Key: "$addToSet", Value: bson.D{
+			{Key: "first", Value: bson.D{{Key: "$each", Value: values}}},
+			{Key: "second", Value: bson.D{{Key: "$each", Value: values}}},
+		}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}})
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || changed || !bson.Raw(doc).Lookup("marker").IsZero() {
+		t.Fatalf("multi-target Decimal128 comparison changed=%v err=%v", changed, err)
+	}
+}
+
 func TestMongoMutationEmptyNestedArrayEachDoesNotCreateParents(t *testing.T) {
 	for _, operator := range []string{"$push", "$addToSet"} {
 		t.Run(operator, func(t *testing.T) {

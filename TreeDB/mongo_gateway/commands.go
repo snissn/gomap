@@ -4559,6 +4559,7 @@ func mongoMutationDecimalPathSegment(segment string) bool {
 func validateMongoMutationAddToSetBudget(doc bson.Raw, fields []mongoMutationArrayField) error {
 	remaining := mongoMutationMaxAddToSetComparisons
 	remainingBytes := mongoMutationMaxAddToSetComparisonBytes
+	remainingDecimalComparisons := mongoMutationMaxAddToSetDecimalComparisons
 	for _, field := range fields {
 		existingValues, err := mongoMutationRawArrayPathValues(doc, strings.Split(field.name, "."))
 		if err != nil {
@@ -4574,72 +4575,75 @@ func validateMongoMutationAddToSetBudget(doc bson.Raw, fields []mongoMutationArr
 		if !ok {
 			return fmt.Errorf("Mongo gateway $addToSet exceeds %d comparison bytes", mongoMutationMaxAddToSetComparisonBytes)
 		}
-		if !mongoMutationAddToSetDecimalComparisonBudgetOK(existingValues, field.values, mongoMutationMaxAddToSetDecimalComparisons) {
+		decimalComparisons, ok := mongoMutationAddToSetDecimalComparisonWork(existingValues, field.values, remainingDecimalComparisons)
+		if !ok {
 			return fmt.Errorf("Mongo gateway $addToSet exceeds %d Decimal128 comparisons", mongoMutationMaxAddToSetDecimalComparisons)
 		}
 		remaining -= candidateComparisons + existing*values
 		remainingBytes -= comparisonBytes
+		remainingDecimalComparisons -= decimalComparisons
 	}
 	return nil
 }
 
-// mongoMutationAddToSetDecimalComparisonBudgetOK counts comparisons that could enter
-// Decimal128 normalization. The count is intentionally conservative for a
-// nested value: a Decimal128 anywhere in either raw value charges the pair.
-func mongoMutationAddToSetDecimalComparisonBudgetOK(existing, candidates []bson.RawValue, limit int) bool {
-	existingDecimal := make([]bool, len(existing))
+// mongoMutationAddToSetDecimalComparisonWork counts every potentially-normalized
+// Decimal128 leaf comparison. A nested value pair may compare many numeric
+// leaves, so charging only once per outer pair would not bound big.Rat work.
+func mongoMutationAddToSetDecimalComparisonWork(existing, candidates []bson.RawValue, limit int) (int, bool) {
+	existingDecimal := make([]int, len(existing))
 	for i, value := range existing {
-		existingDecimal[i] = mongoMutationRawValueContainsDecimal128(value)
+		existingDecimal[i] = mongoMutationRawValueDecimal128Leaves(value)
 	}
-	candidateDecimal := make([]bool, len(candidates))
+	candidateDecimal := make([]int, len(candidates))
 	for i, value := range candidates {
-		candidateDecimal[i] = mongoMutationRawValueContainsDecimal128(value)
+		candidateDecimal[i] = mongoMutationRawValueDecimal128Leaves(value)
 	}
 	count := 0
-	charge := func() bool {
-		if count == limit {
+	charge := func(work int) bool {
+		if work > limit-count {
 			return false
 		}
-		count++
+		count += work
 		return true
 	}
-	for i, candidateHasDecimal := range candidateDecimal {
-		for _, existingHasDecimal := range existingDecimal {
-			if (candidateHasDecimal || existingHasDecimal) && !charge() {
-				return false
+	for i, candidateDecimalLeaves := range candidateDecimal {
+		for _, existingDecimalLeaves := range existingDecimal {
+			if !charge(max(candidateDecimalLeaves, existingDecimalLeaves)) {
+				return count, false
 			}
 		}
 		for j := 0; j < i; j++ {
-			if (candidateHasDecimal || candidateDecimal[j]) && !charge() {
-				return false
+			if !charge(max(candidateDecimalLeaves, candidateDecimal[j])) {
+				return count, false
 			}
 		}
 	}
-	return true
+	return count, true
 }
 
-func mongoMutationRawValueContainsDecimal128(value bson.RawValue) bool {
+func mongoMutationRawValueDecimal128Leaves(value bson.RawValue) int {
 	values := []bson.RawValue{value}
+	count := 0
 	for len(values) != 0 {
 		last := len(values) - 1
 		current := values[last]
 		values = values[:last]
 		switch current.Type {
 		case bson.TypeDecimal128:
-			return true
+			count++
 		case bson.TypeEmbeddedDocument, bson.TypeArray:
 			contents, ok := rawBSONContainerContents(current)
 			if !ok {
-				return true
+				return maxInt
 			}
 			for len(contents) != 0 {
 				element, remaining, ok := bsoncore.ReadElement(contents)
 				if !ok || element.Validate() != nil {
-					return true
+					return maxInt
 				}
 				raw, err := element.ValueErr()
 				if err != nil {
-					return true
+					return maxInt
 				}
 				values = append(values, bson.RawValue{Type: bson.Type(raw.Type), Value: raw.Data})
 				contents = remaining
@@ -4647,12 +4651,12 @@ func mongoMutationRawValueContainsDecimal128(value bson.RawValue) bool {
 		case bson.TypeCodeWithScope:
 			_, scope, remaining, ok := bsoncore.ReadCodeWithScope(current.Value)
 			if !ok || len(remaining) != 0 {
-				return true
+				return maxInt
 			}
 			values = append(values, bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: scope})
 		}
 	}
-	return false
+	return count
 }
 
 func mongoMutationRawArrayPathValues(doc bson.Raw, path []string) ([]bson.RawValue, error) {
