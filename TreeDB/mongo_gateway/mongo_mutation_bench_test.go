@@ -8,6 +8,17 @@ import (
 )
 
 var benchmarkMongoMutationDocumentSink wire.Document
+var benchmarkRawValuesEqualSink bool
+
+func BenchmarkRawValuesEqualWideDocument(b *testing.B) {
+	left := wideRawDocumentValue(4096, true)
+	right := wideRawDocumentValue(4096, true)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		benchmarkRawValuesEqualSink = rawValuesEqual(left, right)
+	}
+}
 
 func BenchmarkApplyMongoMutationInc(b *testing.B) {
 	doc, err := bson.Marshal(bson.D{{Key: "_id", Value: "benchmark-user"}, {Key: "count", Value: int64(41)}})

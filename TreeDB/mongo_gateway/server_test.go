@@ -11,6 +11,7 @@ import (
 	"io"
 	"math"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +21,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
 type readWriter struct {
@@ -5798,6 +5800,61 @@ func TestRawValuesEqualHandlesDeepNestedBSON(t *testing.T) {
 	if !rawValuesEqual(left, right) || rawValuesEqual(left, different) {
 		t.Fatal("deep BSON equality result was incorrect")
 	}
+}
+
+func TestRawValuesEqualHandlesWideBSON(t *testing.T) {
+	left := wideRawDocumentValue(4096, true)
+	right := wideRawDocumentValue(4096, true)
+	different := wideRawDocumentValue(4096, false)
+	if !rawValuesEqual(left, right) || rawValuesEqual(left, different) {
+		t.Fatal("wide BSON equality result was incorrect")
+	}
+	smallLeft := wideRawDocumentValue(64, true)
+	smallRight := wideRawDocumentValue(64, true)
+	smallAllocs := testing.AllocsPerRun(100, func() {
+		if !rawValuesEqual(smallLeft, smallRight) {
+			t.Fatal("small BSON equality result was incorrect")
+		}
+	})
+	wideAllocs := testing.AllocsPerRun(100, func() {
+		if !rawValuesEqual(left, right) {
+			t.Fatal("wide BSON equality result was incorrect")
+		}
+	})
+	if wideAllocs > smallAllocs+1 {
+		t.Fatalf("wide BSON equality allocations=%f small=%f want bounded", wideAllocs, smallAllocs)
+	}
+}
+
+func TestMongoMutationAddToSetDeduplicatesWideDocument(t *testing.T) {
+	value := wideRawDocumentValue(4096, true)
+	doc := rawDocumentWithValue("items", rawArrayWithValue(value))
+	mutation := mongoMutation{addToSet: []mongoMutationArrayField{{name: "items", values: []bson.RawValue{value}}}}
+	updated, changed, err := applyMongoMutation(doc, mutation)
+	if err != nil || changed || !bytes.Equal(updated, doc) {
+		t.Fatalf("wide $addToSet updated=%v changed=%v err=%v", updated, changed, err)
+	}
+}
+
+func wideRawDocumentValue(width int, final bool) bson.RawValue {
+	doc := make([]byte, 4)
+	for i := range width {
+		value := true
+		if i == width-1 {
+			value = final
+		}
+		doc = bsoncore.AppendBooleanElement(doc, strconv.Itoa(i), value)
+	}
+	doc = append(doc, 0)
+	bsoncore.UpdateLength(doc, 0, int32(len(doc)))
+	return bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: doc}
+}
+
+func rawArrayWithValue(value bson.RawValue) bson.RawValue {
+	array := bsoncore.AppendValueElement(make([]byte, 4), "0", bsoncore.Value{Type: bsoncore.Type(value.Type), Data: value.Value})
+	array = append(array, 0)
+	bsoncore.UpdateLength(array, 0, int32(len(array)))
+	return bson.RawValue{Type: bson.TypeArray, Value: array}
 }
 
 func deeplyNestedRawDocumentValue(depth int, leaf int32) bson.RawValue {

@@ -1795,50 +1795,76 @@ func rawValuesEqualMode(left, right bson.RawValue, equalNaN bool) bool {
 	if rawValuesBothScalar(left, right) {
 		return rawScalarValuesEqualMode(left, right, equalNaN)
 	}
-	type pair struct{ left, right bson.RawValue }
-	stack := []pair{{left: left, right: right}}
-	for len(stack) != 0 {
-		last := len(stack) - 1
-		current := stack[last]
-		stack = stack[:last]
-		if rawValuesBothScalar(current.left, current.right) {
-			if !rawScalarValuesEqualMode(current.left, current.right, equalNaN) {
-				return false
-			}
-			continue
-		}
-		if current.left.Type != current.right.Type {
-			return false
-		}
-		switch current.left.Type {
-		case bson.TypeEmbeddedDocument:
-			leftElements, leftErr := current.left.Document().Elements()
-			rightElements, rightErr := current.right.Document().Elements()
-			if leftErr != nil || rightErr != nil || len(leftElements) != len(rightElements) {
-				return false
-			}
-			for i := range leftElements {
-				leftKey, leftErr := leftElements[i].KeyErr()
-				rightKey, rightErr := rightElements[i].KeyErr()
-				if leftErr != nil || rightErr != nil || leftKey != rightKey {
+	type frame struct {
+		left, right []byte
+		document    bool
+	}
+	currentLeft, currentRight := left, right
+	frames := make([]frame, 0, 8)
+	for {
+		if !currentLeft.IsZero() || !currentRight.IsZero() {
+			if rawValuesBothScalar(currentLeft, currentRight) {
+				if !rawScalarValuesEqualMode(currentLeft, currentRight, equalNaN) {
 					return false
 				}
-				stack = append(stack, pair{left: leftElements[i].Value(), right: rightElements[i].Value()})
+			} else {
+				if currentLeft.Type != currentRight.Type {
+					return false
+				}
+				leftRemaining, leftOK := rawBSONContainerContents(currentLeft)
+				rightRemaining, rightOK := rawBSONContainerContents(currentRight)
+				if !leftOK || !rightOK {
+					return false
+				}
+				frames = append(frames, frame{
+					left:     leftRemaining,
+					right:    rightRemaining,
+					document: currentLeft.Type == bson.TypeEmbeddedDocument,
+				})
 			}
-		case bson.TypeArray:
-			leftValues, leftErr := current.left.Array().Values()
-			rightValues, rightErr := current.right.Array().Values()
-			if leftErr != nil || rightErr != nil || len(leftValues) != len(rightValues) {
+			currentLeft, currentRight = bson.RawValue{}, bson.RawValue{}
+			continue
+		}
+		if len(frames) == 0 {
+			return true
+		}
+		last := len(frames) - 1
+		current := &frames[last]
+		if len(current.left) == 0 || len(current.right) == 0 {
+			if len(current.left) != len(current.right) {
 				return false
 			}
-			for i := range leftValues {
-				stack = append(stack, pair{left: leftValues[i], right: rightValues[i]})
-			}
-		default:
+			frames = frames[:last]
+			continue
+		}
+		leftElement, leftRemaining, leftOK := bsoncore.ReadElement(current.left)
+		rightElement, rightRemaining, rightOK := bsoncore.ReadElement(current.right)
+		if !leftOK || !rightOK || leftElement.Validate() != nil || rightElement.Validate() != nil {
 			return false
 		}
+		if current.document && !bytes.Equal(leftElement.KeyBytes(), rightElement.KeyBytes()) {
+			return false
+		}
+		leftValue, leftErr := leftElement.ValueErr()
+		rightValue, rightErr := rightElement.ValueErr()
+		if leftErr != nil || rightErr != nil {
+			return false
+		}
+		current.left, current.right = leftRemaining, rightRemaining
+		currentLeft = bson.RawValue{Type: bson.Type(leftValue.Type), Value: leftValue.Data}
+		currentRight = bson.RawValue{Type: bson.Type(rightValue.Type), Value: rightValue.Data}
 	}
-	return true
+}
+
+func rawBSONContainerContents(value bson.RawValue) ([]byte, bool) {
+	if value.Type != bson.TypeEmbeddedDocument && value.Type != bson.TypeArray {
+		return nil, false
+	}
+	length, remaining, ok := bsoncore.ReadLength(value.Value)
+	if !ok || length < 5 || int(length) != len(value.Value) || len(remaining) == 0 || remaining[len(remaining)-1] != 0 {
+		return nil, false
+	}
+	return remaining[:len(remaining)-1], true
 }
 
 func rawScalarValuesEqualMode(left, right bson.RawValue, equalNaN bool) bool {
