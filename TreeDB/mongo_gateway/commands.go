@@ -4587,9 +4587,10 @@ func validateMongoMutationAddToSetBudget(doc bson.Raw, fields []mongoMutationArr
 }
 
 // mongoMutationAddToSetDecimalComparisonWork counts every potentially-normalized
-// Decimal128 leaf comparison. Byte-identical pairs take the equality fast path
-// without normalization. A nested value pair may compare many numeric leaves,
-// so charging only once per outer pair would not bound big.Rat work.
+// Decimal128 leaf comparison. Exact scalar accounting mirrors the equality fast
+// paths for identical encodings and non-finite numbers. A nested value pair may
+// compare many numeric leaves, so charging only once per outer pair would not
+// bound big.Rat work.
 func mongoMutationAddToSetDecimalComparisonWork(existing, candidates []bson.RawValue, limit int) (int, bool) {
 	existingDecimal := make([]int, len(existing))
 	for i, value := range existing {
@@ -4610,23 +4611,32 @@ func mongoMutationAddToSetDecimalComparisonWork(existing, candidates []bson.RawV
 	for i, candidateDecimalLeaves := range candidateDecimal {
 		candidate := candidates[i]
 		for j, existingDecimalLeaves := range existingDecimal {
-			if candidate.Type == existing[j].Type && bytes.Equal(candidate.Value, existing[j].Value) {
-				continue
-			}
-			if !charge(candidateDecimalLeaves) || !charge(existingDecimalLeaves) {
+			candidateWork, existingWork := mongoMutationAddToSetDecimalPairWork(candidate, existing[j], candidateDecimalLeaves, existingDecimalLeaves)
+			if !charge(candidateWork) || !charge(existingWork) {
 				return count, false
 			}
 		}
 		for j := 0; j < i; j++ {
-			if candidate.Type == candidates[j].Type && bytes.Equal(candidate.Value, candidates[j].Value) {
-				continue
-			}
-			if !charge(candidateDecimalLeaves) || !charge(candidateDecimal[j]) {
+			candidateWork, earlierWork := mongoMutationAddToSetDecimalPairWork(candidate, candidates[j], candidateDecimalLeaves, candidateDecimal[j])
+			if !charge(candidateWork) || !charge(earlierWork) {
 				return count, false
 			}
 		}
 	}
 	return count, true
+}
+
+func mongoMutationAddToSetDecimalPairWork(left, right bson.RawValue, leftLeaves, rightLeaves int) (int, int) {
+	if left.Type == right.Type && bytes.Equal(left.Value, right.Value) {
+		return 0, 0
+	}
+	if rawValuesBothScalar(left, right) && left.IsNumber() && right.IsNumber() {
+		if rawValueIsNaN(left) || rawValueIsNaN(right) {
+			return 0, 0
+		}
+		return decimal128NormalizationCount(left), decimal128NormalizationCount(right)
+	}
+	return leftLeaves, rightLeaves
 }
 
 func mongoMutationRawValueDecimal128Leaves(value bson.RawValue) int {

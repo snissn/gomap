@@ -7082,6 +7082,36 @@ func TestMongoMutationAddToSetAcceptsRepeatedIdenticalDecimal128Values(t *testin
 	}
 }
 
+func TestMongoMutationAddToSetAcceptsDistinctDecimal128NaNPayloads(t *testing.T) {
+	values := make(bson.A, mongoMutationMaxEachValues)
+	for i := range values {
+		value := bson.NewDecimal128(0x1f<<58, uint64(i+1))
+		if !value.IsNaN() {
+			t.Fatalf("value %d is not NaN", i)
+		}
+		values[i] = value
+	}
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: values}}}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mutation.addToSet) != 1 || len(mutation.addToSet[0].values) != mongoMutationMaxEachValues || bytes.Equal(mutation.addToSet[0].values[0].Value, mutation.addToSet[0].values[len(mutation.addToSet[0].values)-1].Value) {
+		t.Fatal("Decimal128 NaN payloads did not remain byte-distinct")
+	}
+	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}})
+	updated, changed, err := applyMongoMutation(doc, mutation)
+	if err != nil || !changed {
+		t.Fatalf("distinct Decimal128 NaN $addToSet changed=%v err=%v", changed, err)
+	}
+	items, itemsErr := bson.Raw(updated).Lookup("items").Array().Values()
+	if itemsErr != nil || len(items) != 1 || !rawValueIsNaN(items[0]) || !bson.Raw(updated).Lookup("marker").Boolean() {
+		t.Fatalf("distinct Decimal128 NaN $addToSet changed=%v err=%v items=%v itemsErr=%v marker=%v", changed, err, items, itemsErr, bson.Raw(updated).Lookup("marker"))
+	}
+}
+
 func TestMongoMutationAddToSetRejectsExpensiveDecimal128ComparisonsBeforeMutation(t *testing.T) {
 	existing := bson.A{}
 	candidates := bson.A{}
