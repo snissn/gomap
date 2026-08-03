@@ -1,0 +1,38 @@
+name: GPT-5.6 dependency cache export bootstrap
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  export-dependency-cache:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
+          cache: false
+      - name: Compile focused gateway package and package caches
+        env:
+          GOWORK: 'off'
+          GOFLAGS: '-p=1'
+          GOMAXPROCS: '2'
+        run: |
+          go test ./TreeDB/mongo_gateway -run '^$' -count=1
+          tar -C "$(go env GOMODCACHE)" -czf /tmp/gomodcache.tgz .
+          tar -C "$(go env GOCACHE)" -czf /tmp/gocache.tgz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gomap-go1.26-gateway-caches
+          path: |
+            /tmp/gomodcache.tgz
+            /tmp/gocache.tgz
+          if-no-files-found: error
+          retention-days: 1
