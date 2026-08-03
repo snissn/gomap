@@ -1014,6 +1014,52 @@ func TestServerUpdateBSONSetAllowsNativeBinaryValues(t *testing.T) {
 	}
 }
 
+func TestServerUpdateBSONSetRejectsCodeWithScopeAtResultNestingLimit(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 22550, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "scope-limit"}, {Key: "stable", Value: true}}}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	response := serveCommand(t, server, 22551, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: "scope-limit"}}},
+			{Key: "u", Value: bson.D{
+				{Key: "$set", Value: bson.D{
+					{Key: "code", Value: deeplyNestedCodeWithScopeValue(mongoMutationMaxBSONNesting - 1)},
+				}},
+			}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "BadValue")
+
+	find := serveCommand(t, server, 22552, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "scope-limit"}}}, {Key: "$db", Value: "app"}})
+	batch := cursorFirstBatch(t, find)
+	if len(batch) != 1 || !batch[0].Lookup("code").IsZero() || !batch[0].Lookup("stable").Boolean() {
+		t.Fatalf("rejected scoped-code update changed document: %v", batch)
+	}
+}
+
+func TestMongoBSONSetFieldsNeedNestingValidationCodeWithScope(t *testing.T) {
+	if !mongoBSONSetFieldsNeedNestingValidation([]collections.BSONSetField{{
+		Key:   "code",
+		Value: deeplyNestedCodeWithScopeValue(mongoMutationMaxBSONNesting - 1),
+	}}) {
+		t.Fatal("CodeWithScope field bypasses nesting validation")
+	}
+}
+
 func TestServerBSONSetUpsertAllowsNativeBinaryValues(t *testing.T) {
 	for _, format := range []collections.DocumentFormat{collections.DocumentFormatBSON, collections.DocumentFormatJSON, collections.DocumentFormatTemplateV1} {
 		t.Run(string(format), func(t *testing.T) {

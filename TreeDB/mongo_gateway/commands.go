@@ -1828,7 +1828,7 @@ func mongoUpdateCanUseBSONSet(col *collections.Collection, update mongoUpdateIte
 
 func mongoBSONSetFieldsNeedNestingValidation(fields []collections.BSONSetField) bool {
 	for _, field := range fields {
-		if field.Value.Type == bson.TypeEmbeddedDocument || field.Value.Type == bson.TypeArray {
+		if field.Value.Type == bson.TypeEmbeddedDocument || field.Value.Type == bson.TypeArray || field.Value.Type == bson.TypeCodeWithScope {
 			return true
 		}
 	}
