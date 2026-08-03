@@ -6947,7 +6947,7 @@ func TestMongoMutationAddToSetChargesNestedDecimal128LeavesBeforeMutation(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || changed || !bson.Raw(doc).Lookup("marker").IsZero() {
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || !strings.Contains(err.Error(), "Decimal128 comparisons") || changed || !bson.Raw(doc).Lookup("marker").IsZero() {
 		t.Fatalf("nested Decimal128 comparison changed=%v err=%v", changed, err)
 	}
 }
@@ -6972,7 +6972,7 @@ func TestMongoMutationAddToSetSharesDecimal128BudgetAcrossTargets(t *testing.T) 
 		t.Fatal(err)
 	}
 	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}})
-	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || changed || !bson.Raw(doc).Lookup("marker").IsZero() {
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || !strings.Contains(err.Error(), "Decimal128 comparisons") || changed || !bson.Raw(doc).Lookup("marker").IsZero() {
 		t.Fatalf("multi-target Decimal128 comparison changed=%v err=%v", changed, err)
 	}
 }
@@ -7001,7 +7001,7 @@ func TestMongoMutationAddToSetChargesDecimal128LeavesOnBothSides(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}})
-	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || changed || !bson.Raw(doc).Lookup("marker").IsZero() {
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || !strings.Contains(err.Error(), "Decimal128 comparisons") || changed || !bson.Raw(doc).Lookup("marker").IsZero() {
 		t.Fatalf("opposite Decimal128 leaves changed=%v err=%v", changed, err)
 	}
 }

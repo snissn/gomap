@@ -155,8 +155,8 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 			if item.upsert {
 				return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: cluster Mongo gateway currently does not support upsert", i))
 			}
-			if !item.exactID || !item.bsonSetFieldsOK || mongoBSONSetFieldsNeedNestingValidation(item.bsonSetFields) {
-				return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: cluster Mongo gateway currently supports only top-level BSON $set updateOne by _id", i))
+			if response, err := clusterUpdateItemAdmission(i, item); response != nil || err != nil {
+				return response, err
 			}
 		}
 		if s.clusterRouteProviderConfigured() {
@@ -185,8 +185,8 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 		if item.upsert {
 			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: cluster Mongo gateway currently does not support upsert", i))
 		}
-		if !item.exactID || !item.bsonSetFieldsOK || mongoBSONSetFieldsNeedNestingValidation(item.bsonSetFields) {
-			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: cluster Mongo gateway currently supports only top-level BSON $set updateOne by _id", i))
+		if response, err := clusterUpdateItemAdmission(i, item); response != nil || err != nil {
+			return response, err
 		}
 		route := mongoClusterRouteRequest(db, collection, iwire.CommandUpdateBSONSet, "update_bson_set")
 		if len(updates) == 1 {
@@ -200,6 +200,13 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 		modified += modifiedOne
 	}
 	return marshalUpdateResponse(matched, modified)
+}
+
+func clusterUpdateItemAdmission(index int, item mongoUpdateItem) (wire.Document, error) {
+	if item.exactID && item.bsonSetFieldsOK && !mongoBSONSetFieldsNeedNestingValidation(item.bsonSetFields) {
+		return nil, nil
+	}
+	return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: cluster Mongo gateway currently supports only top-level BSON $set updateOne by _id", index))
 }
 
 func (s *Server) clusterDeleteResponse(ctx context.Context, command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
