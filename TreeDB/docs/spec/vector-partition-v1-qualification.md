@@ -34,8 +34,10 @@ ladder at `ef_search=64`, concurrency `1`, and approximate router candidate
 budget `256`; the retained matrix continues to bind the exhaustive control.
 
 Repeat the full probe ladder, including the p4/p16 comparison, three times per
-structured corpus. The versioned campaign index contains exactly one retained
-100k campaign and one retained 250k campaign; each hashes every matrix,
+structured corpus. The v2 campaign index contains exactly one retained 100k
+campaign and one retained 250k campaign; each hashes every matrix and records
+`publication_completed_at` only after its foreground matrix child exits, with
+that timestamp strictly after the matrix's retained execution completion. It
 requires frozen base `03e7a26e56100964f14f603f0248a1a6ccc50a68`, one exact head,
 and corpus/truth/variant identity across its repeats,
 and derives median/min/max QPS plus p95 spread. Qualification is reported only

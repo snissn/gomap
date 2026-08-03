@@ -36,8 +36,9 @@ type m8QualificationCampaignV1 struct {
 }
 
 type m8QualificationCampaignRunV1 struct {
-	Path   string `json:"path"`
-	SHA256 string `json:"sha256"`
+	Path                   string    `json:"path"`
+	SHA256                 string    `json:"sha256"`
+	PublicationCompletedAt time.Time `json:"publication_completed_at"`
 }
 
 type m8QualificationIndexV1 struct {
@@ -132,7 +133,7 @@ func m8ValidateQualificationIndexWithVerifiersV1(root string, index m8Qualificat
 	if index.BaseSHA != m8QualificationFrozenBaseSHAV1 {
 		return m8QualificationIndexSummaryV1{}, errors.New("qualification index does not use the frozen base revision")
 	}
-	if index.SchemaVersion != 1 || index.ResultKind != "vector_partition_structured_qualification_index_v1" || !m8QualificationGitSHAV1(index.BaseSHA) || !m8QualificationGitSHAV1(index.HeadSHA) || len(index.Campaigns) != len(m8QualificationFixturesV1) {
+	if index.SchemaVersion != 2 || index.ResultKind != "vector_partition_structured_qualification_index_v2" || !m8QualificationGitSHAV1(index.BaseSHA) || !m8QualificationGitSHAV1(index.HeadSHA) || len(index.Campaigns) != len(m8QualificationFixturesV1) {
 		return m8QualificationIndexSummaryV1{}, errors.New("qualification index requires exactly the two authoritative corpus campaigns")
 	}
 	for _, campaign := range index.Campaigns {
@@ -270,7 +271,10 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 		if err := validateM8ProductionMatrixV1(matrix); err != nil {
 			return summary, fmt.Errorf("validate qualification matrix %s: %w", run.Path, err)
 		}
-		summary.intervals = append(summary.intervals, m8QualificationRunIntervalV1{Path: cleanPath, StartedAt: matrix.ExecutionStartedAt, EndedAt: matrix.ExecutionCompletedAt})
+		if run.PublicationCompletedAt.IsZero() || !run.PublicationCompletedAt.After(matrix.ExecutionCompletedAt) {
+			return summary, fmt.Errorf("qualification matrix %s lacks a post-publication completion timestamp", cleanPath)
+		}
+		summary.intervals = append(summary.intervals, m8QualificationRunIntervalV1{Path: cleanPath, StartedAt: matrix.ExecutionStartedAt, EndedAt: run.PublicationCompletedAt})
 		if matrix.Dataset.Checksum != campaign.FixtureChecksum || !m8QualificationFixtureV1(matrix.Dataset) || len(matrix.Variants) != len(m8RequiredVariantIDsV1) || !slices.Equal(matrix.RequiredVariants, m8RequiredVariantIDsV1) || matrix.OverlapStorageRatio >= 1.35 {
 			return summary, fmt.Errorf("qualification matrix %s does not bind the required identity/storage", run.Path)
 		}

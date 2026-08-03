@@ -53,7 +53,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			t.Fatal(err)
 		}
 		digest := sha256.Sum256(raw)
-		campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])})
+		campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: matrix.ExecutionCompletedAt.Add(time.Nanosecond)})
 	}
 	for i := 0; i < 3; i++ {
 		write("repeat-"+string(rune('1'+i))+".json", testM8QualificationMatrixV1(t, head, fixture, 125+float64(i)*75))
@@ -74,6 +74,30 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	if summary.P4QPSMedian != 200 || summary.P16QPSMedian != 100 || summary.P4P95Min != 89 || summary.P4P95Median != 164 || summary.P4P95Max != 239 || summary.P16P95Min != 101 || summary.P16P95Median != 176 || summary.P16P95Max != 251 {
 		t.Fatalf("summary=%+v", summary)
 	}
+	t.Run("publication_completion", func(t *testing.T) {
+		var matrix m8ProductionMatrixV1
+		raw, err := os.ReadFile(filepath.Join(root, campaign.Runs[0].Path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(raw, &matrix); err != nil {
+			t.Fatal(err)
+		}
+		for name, completed := range map[string]time.Time{
+			"missing": {},
+			"equal":   matrix.ExecutionCompletedAt,
+			"before":  matrix.ExecutionCompletedAt.Add(-time.Nanosecond),
+		} {
+			t.Run(name, func(t *testing.T) {
+				bad := campaign
+				bad.Runs = slices.Clone(campaign.Runs)
+				bad.Runs[0].PublicationCompletedAt = completed
+				if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil || !strings.Contains(err.Error(), "post-publication completion") {
+					t.Fatalf("completion err=%v", err)
+				}
+			})
+		}
+	})
 	t.Run("topology_variant_drift", func(t *testing.T) {
 		write := func(root string, leaderDrift bool) m8QualificationCampaignV1 {
 			_, campaignHead := testM8QualificationGitCheckoutV1(t, root)
@@ -97,7 +121,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 					t.Fatal(err)
 				}
 				digest := sha256.Sum256(raw)
-				campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:])})
+				campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: matrix.ExecutionCompletedAt.Add(time.Nanosecond)})
 			}
 			return campaign
 		}
@@ -132,7 +156,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		digest := sha256.Sum256(raw)
 		bad := campaign
 		bad.Runs = slices.Clone(campaign.Runs)
-		bad.Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
+		bad.Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: campaign.Runs[0].PublicationCompletedAt}
 		if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil {
 			t.Fatal("accepted edited retained command")
 		}
@@ -245,7 +269,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 				digest := sha256.Sum256(raw)
 				bad := campaign
 				bad.Runs = slices.Clone(campaign.Runs)
-				bad.Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
+				bad.Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: campaign.Runs[0].PublicationCompletedAt}
 				if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil {
 					t.Fatalf("accepted %s", name)
 				}
@@ -368,7 +392,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 				digest := sha256.Sum256(raw)
 				bad := campaign
 				bad.Runs = slices.Clone(campaign.Runs)
-				bad.Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
+				bad.Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: campaign.Runs[0].PublicationCompletedAt}
 				if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil {
 					t.Fatalf("accepted %s", name)
 				}
@@ -454,7 +478,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 				t.Fatal(err)
 			}
 			digest := sha256.Sum256(raw)
-			campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:])})
+			campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: matrix.ExecutionCompletedAt.Add(time.Nanosecond)})
 		}
 		if _, err := testM8ValidateQualificationCampaignV1(root, campaign); err == nil || !strings.Contains(err.Error(), "off-plan M3 construction") {
 			t.Fatalf("off-plan router configuration err=%v", err)
@@ -488,7 +512,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			}
 		})
 	}
-	singleCorpusIndex, err := json.Marshal(m8QualificationIndexV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_index_v1", BaseSHA: base, HeadSHA: head, Campaigns: []m8QualificationCampaignV1{campaign}})
+	singleCorpusIndex, err := json.Marshal(m8QualificationIndexV1{SchemaVersion: 2, ResultKind: "vector_partition_structured_qualification_index_v2", BaseSHA: base, HeadSHA: head, Campaigns: []m8QualificationCampaignV1{campaign}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -516,9 +540,9 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			t.Fatal(err)
 		}
 		digest := sha256.Sum256(raw)
-		campaign250.Runs = append(campaign250.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:])})
+		campaign250.Runs = append(campaign250.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: matrix.ExecutionCompletedAt.Add(time.Nanosecond)})
 	}
-	qualificationIndex := m8QualificationIndexV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_index_v1", BaseSHA: base, HeadSHA: head, Campaigns: []m8QualificationCampaignV1{campaign, campaign250}}
+	qualificationIndex := m8QualificationIndexV1{SchemaVersion: 2, ResultKind: "vector_partition_structured_qualification_index_v2", BaseSHA: base, HeadSHA: head, Campaigns: []m8QualificationCampaignV1{campaign, campaign250}}
 	indexSummary, err := testM8ValidateQualificationIndexV1(root, qualificationIndex)
 	if err != nil || indexSummary.Status != "qualified" || indexSummary.BaseSHA != base || indexSummary.HeadSHA != head || len(indexSummary.Campaigns) != 2 || indexSummary.Campaigns[fixture.Checksum].P4QPSMedian != 200 || indexSummary.Campaigns[fixture250.Checksum].P4QPSMedian != 200 {
 		t.Fatalf("index summary err=%v summary=%+v", err, indexSummary)
@@ -555,7 +579,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		bad := qualificationIndex
 		bad.Campaigns = slices.Clone(qualificationIndex.Campaigns)
 		bad.Campaigns[1].Runs = slices.Clone(campaign250.Runs)
-		bad.Campaigns[1].Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
+		bad.Campaigns[1].Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: overlap.ExecutionCompletedAt.Add(time.Nanosecond)}
 		if _, err := testM8ValidateQualificationIndexV1(root, bad); err == nil || !strings.Contains(err.Error(), "overlapping matrix executions") {
 			t.Fatalf("overlap err=%v", err)
 		}
@@ -578,11 +602,11 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 					t.Fatal(err)
 				}
 				digest := sha256.Sum256(raw)
-				campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:])})
+				campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: matrix.ExecutionCompletedAt.Add(time.Nanosecond)})
 			}
 			campaigns = append(campaigns, campaign)
 		}
-		alternate := m8QualificationIndexV1{SchemaVersion: 1, ResultKind: "vector_partition_structured_qualification_index_v1", BaseSHA: alternateBase, HeadSHA: alternateBase, Campaigns: campaigns}
+		alternate := m8QualificationIndexV1{SchemaVersion: 2, ResultKind: "vector_partition_structured_qualification_index_v2", BaseSHA: alternateBase, HeadSHA: alternateBase, Campaigns: campaigns}
 		if _, err := testM8ValidateQualificationIndexV1(root, alternate); err == nil || !strings.Contains(err.Error(), "frozen base revision") {
 			t.Fatalf("alternate frozen base err=%v", err)
 		}
@@ -637,7 +661,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		bad := qualificationIndex
 		bad.Campaigns = slices.Clone(qualificationIndex.Campaigns)
 		bad.Campaigns[1].Runs = slices.Clone(campaign250.Runs)
-		bad.Campaigns[1].Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
+		bad.Campaigns[1].Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: campaign250.Runs[0].PublicationCompletedAt}
 		if _, err := testM8ValidateQualificationIndexV1(root, bad); err == nil {
 			t.Fatal("accepted manifest-mismatched corpus")
 		}
@@ -671,7 +695,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 				t.Fatal(err)
 			}
 			digest := sha256.Sum256(raw)
-			bad.Campaigns[1].Runs[i] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
+			bad.Campaigns[1].Runs[i] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: campaign250.Runs[i].PublicationCompletedAt}
 		}
 		if _, err := testM8ValidateQualificationIndexV1(root, bad); err == nil || !strings.Contains(err.Error(), "different benchmark executables") {
 			t.Fatalf("cross-corpus executable drift err=%v", err)
@@ -707,7 +731,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		digest := sha256.Sum256(raw)
 		bad := campaign
 		bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
-		bad.Runs[0] = m8QualificationCampaignRunV1{Path: "execution-id-whitespace.json", SHA256: hex.EncodeToString(digest[:])}
+		bad.Runs[0] = m8QualificationCampaignRunV1{Path: "execution-id-whitespace.json", SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: campaign.Runs[0].PublicationCompletedAt}
 		if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil {
 			t.Fatal("accepted whitespace execution identity")
 		}
@@ -739,7 +763,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		digest := sha256.Sum256(raw)
 		bad := campaign
 		bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
-		bad.Runs[2] = m8QualificationCampaignRunV1{Path: "execution-id-copy.json", SHA256: hex.EncodeToString(digest[:])}
+		bad.Runs[2] = m8QualificationCampaignRunV1{Path: "execution-id-copy.json", SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: campaign.Runs[2].PublicationCompletedAt}
 		if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil {
 			t.Fatalf("reserialized copy err=%v", err)
 		}
@@ -759,7 +783,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		digest := sha256.Sum256(raw)
 		bad := campaign
 		bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
-		bad.Runs[0] = m8QualificationCampaignRunV1{Path: "execution-evidence-tamper.json", SHA256: hex.EncodeToString(digest[:])}
+		bad.Runs[0] = m8QualificationCampaignRunV1{Path: "execution-evidence-tamper.json", SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: campaign.Runs[0].PublicationCompletedAt}
 		if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil {
 			t.Fatal("accepted tampered execution evidence digest")
 		}
@@ -786,7 +810,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		digest256 := sha256.Sum256(raw)
 		bad := campaign
 		bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
-		bad.Runs[0] = m8QualificationCampaignRunV1{Path: "profile-reuse-variants.json", SHA256: hex.EncodeToString(digest256[:])}
+		bad.Runs[0] = m8QualificationCampaignRunV1{Path: "profile-reuse-variants.json", SHA256: hex.EncodeToString(digest256[:]), PublicationCompletedAt: matrix.ExecutionCompletedAt.Add(time.Nanosecond)}
 		if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil || !strings.Contains(err.Error(), "reuses profile artifact set") {
 			t.Fatalf("profile reuse err=%v", err)
 		}
@@ -806,7 +830,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		digest := sha256.Sum256(raw)
 		bad := campaign
 		bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
-		bad.Runs[0] = m8QualificationCampaignRunV1{Path: "router-count-forgery.json", SHA256: hex.EncodeToString(digest[:])}
+		bad.Runs[0] = m8QualificationCampaignRunV1{Path: "router-count-forgery.json", SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: campaign.Runs[0].PublicationCompletedAt}
 		if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil {
 			t.Fatal("accepted forged router representative count")
 		}
@@ -823,7 +847,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	digest := sha256.Sum256(raw)
 	bad := campaign
 	bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
-	bad.Runs[0] = m8QualificationCampaignRunV1{Path: "invalid-child.json", SHA256: hex.EncodeToString(digest[:])}
+	bad.Runs[0] = m8QualificationCampaignRunV1{Path: "invalid-child.json", SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: campaign.Runs[0].PublicationCompletedAt}
 	if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil {
 		t.Fatal("accepted an invalid child report")
 	}
@@ -843,7 +867,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	}
 	digest = sha256.Sum256(raw)
 	bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
-	bad.Runs[0] = m8QualificationCampaignRunV1{Path: "derived-tamper.json", SHA256: hex.EncodeToString(digest[:])}
+	bad.Runs[0] = m8QualificationCampaignRunV1{Path: "derived-tamper.json", SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: campaign.Runs[0].PublicationCompletedAt}
 	if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil {
 		t.Fatal("accepted coordinated stale child and matrix ledgers")
 	}
@@ -967,7 +991,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 			digest := sha256.Sum256(raw)
 			bad := campaign
 			bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
-			bad.Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
+			bad.Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: campaign.Runs[0].PublicationCompletedAt}
 			_, err = testM8ValidateQualificationCampaignV1(root, bad)
 			if err == nil {
 				t.Fatalf("accepted %s qualification matrix: %v", name, err)
@@ -991,7 +1015,7 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 		digest := sha256.Sum256(raw)
 		bad := campaign
 		bad.Runs = append([]m8QualificationCampaignRunV1(nil), campaign.Runs...)
-		bad.Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])}
+		bad.Runs[0] = m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: campaign.Runs[0].PublicationCompletedAt}
 		if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil {
 			t.Fatal("accepted tampered profile")
 		}
@@ -1368,6 +1392,9 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 	if !strings.Contains(plan.Commands["m8_matrix_repeats_full_ladder"], "-router-candidates 256") {
 		t.Fatalf("plan M8 command does not bind all retained router representatives: %q", plan.Commands["m8_matrix_repeats_full_ladder"])
 	}
+	if !strings.Contains(plan.Commands["record_matrix_publication"], "after the foreground m8_matrix_repeats_full_ladder child exits successfully") || !strings.Contains(plan.Commands["record_matrix_publication"], "publication_completed_at") || !strings.Contains(plan.Commands["record_matrix_publication"], "strictly after the matrix execution_completed_at") {
+		t.Fatalf("plan does not bind post-publication matrix completion: %q", plan.Commands["record_matrix_publication"])
+	}
 	script, err := filepath.Abs(filepath.Join(root, "scripts", "treedb_kahip_partition.py"))
 	if err != nil {
 		t.Fatal(err)
@@ -1392,7 +1419,7 @@ func TestCommitted4027StructuredQualificationPlanV1(t *testing.T) {
 			t.Fatalf("%dk M8 config err=%v cfg=%+v", corpus.Vectors, err, cfg)
 		}
 	}
-	if !strings.Contains(plan.Validation, "regular retained inputs below that root") || !strings.Contains(plan.Validation, "one benchmark executable SHA-256") || !strings.Contains(plan.Validation, "every campaign, M8 child, M8 matrix, and M3 descriptor must match it") || !strings.Contains(plan.Validation, "exactly one explicit canonical -base-sha/-head-sha pair") || !strings.Contains(plan.Validation, "M8 matrix execution intervals non-overlapping") {
+	if !strings.Contains(plan.Validation, "regular retained inputs below that root") || !strings.Contains(plan.Validation, "one benchmark executable SHA-256") || !strings.Contains(plan.Validation, "every campaign, M8 child, M8 matrix, and M3 descriptor must match it") || !strings.Contains(plan.Validation, "exactly one explicit canonical -base-sha/-head-sha pair") || !strings.Contains(plan.Validation, "after each foreground matrix child exits") || !strings.Contains(plan.Validation, "publication_completed_at strictly after") || !strings.Contains(plan.Validation, "post-publication intervals") {
 		t.Fatalf("plan does not bind the aggregate revision: %q", plan.Validation)
 	}
 }
@@ -1729,7 +1756,7 @@ func TestM8QualificationTranscriptPeakRSSBindingV1(t *testing.T) {
 			t.Fatal(err)
 		}
 		digest := sha256.Sum256(raw)
-		campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: filepath.Join(filepath.Base(dir), "matrix.json"), SHA256: hex.EncodeToString(digest[:])})
+		campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: filepath.Join(filepath.Base(dir), "matrix.json"), SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: matrix.ExecutionCompletedAt.Add(time.Nanosecond)})
 	}
 	if _, err := testM8ValidateQualificationCampaignV1(root, campaign); err != nil {
 		t.Fatalf("rejected ordinary campaign: %v", err)
@@ -1866,7 +1893,7 @@ func TestM8QualificationTruthCacheAnchorV1(t *testing.T) {
 			t.Fatal(err)
 		}
 		digest := sha256.Sum256(raw)
-		campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:])})
+		campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: matrix.ExecutionCompletedAt.Add(time.Nanosecond)})
 	}
 	for i := 0; i < 3; i++ {
 		write(fmt.Sprintf("repeat-%d.json", i), testM8QualificationMatrixV1(t, campaign.HeadSHA, fixture, 125))
@@ -2729,7 +2756,7 @@ func TestM8QualificationRejectsDirtyM3VariantV1(t *testing.T) {
 			t.Fatal(err)
 		}
 		digest := sha256.Sum256(raw)
-		return m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:])}
+		return m8QualificationCampaignRunV1{Path: name, SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: matrix.ExecutionCompletedAt.Add(time.Nanosecond)}
 	}
 	campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head}
 	for i := 0; i < 3; i++ {
@@ -2813,7 +2840,7 @@ func TestM8QualificationRejectsEscapingTranscriptSymlinkV1(t *testing.T) {
 			t.Fatal(err)
 		}
 		digest := sha256.Sum256(raw)
-		campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:])})
+		campaign.Runs = append(campaign.Runs, m8QualificationCampaignRunV1{Path: path, SHA256: hex.EncodeToString(digest[:]), PublicationCompletedAt: matrix.ExecutionCompletedAt.Add(time.Nanosecond)})
 	}
 	if _, err := testM8ValidateQualificationCampaignV1(root, campaign); err != nil {
 		t.Fatalf("ordinary campaign err=%v", err)
