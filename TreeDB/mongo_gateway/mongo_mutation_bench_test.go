@@ -38,6 +38,28 @@ func BenchmarkParseMongoMutationWideEachReject(b *testing.B) {
 	}
 }
 
+func BenchmarkApplyMongoMutationWideStoredReject(b *testing.B) {
+	doc := rawDocumentWithIDAndValue("benchmark-user", "items", wideRawArrayValue(mongoMutationMaxDecodedElements+1))
+	update, err := bson.Marshal(bson.D{
+		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+		{Key: "$push", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: bson.A{}}}}}},
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	mutation, err := parseMongoMutation(update)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, _, err := applyMongoMutation(doc, mutation); err == nil {
+			b.Fatal("accepted wide stored BSON")
+		}
+	}
+}
+
 func BenchmarkApplyMongoMutationInc(b *testing.B) {
 	doc, err := bson.Marshal(bson.D{{Key: "_id", Value: "benchmark-user"}, {Key: "count", Value: int64(41)}})
 	if err != nil {

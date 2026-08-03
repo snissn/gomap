@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
@@ -5856,6 +5857,15 @@ func rawArrayWithValue(value bson.RawValue) bson.RawValue {
 	return bson.RawValue{Type: bson.TypeArray, Value: array}
 }
 
+func wideRawArrayValue(width int) bson.RawValue {
+	index, array := bsoncore.AppendArrayStart(nil)
+	for i := range width {
+		array = bsoncore.AppendBooleanElement(array, strconv.Itoa(i), true)
+	}
+	array, _ = bsoncore.AppendArrayEnd(array, index)
+	return bson.RawValue{Type: bson.TypeArray, Value: array}
+}
+
 func deeplyNestedRawDocumentValue(depth int, leaf int32) bson.RawValue {
 	value := make([]byte, 12)
 	binary.LittleEndian.PutUint32(value, uint32(len(value)))
@@ -5879,6 +5889,14 @@ func rawDocumentWithValue(key string, value bson.RawValue) wire.Document {
 	doc[4] = byte(value.Type)
 	copy(doc[5:], key)
 	copy(doc[5+len(key)+1:], value.Value)
+	return wire.Document(doc)
+}
+
+func rawDocumentWithIDAndValue(id, key string, value bson.RawValue) wire.Document {
+	index, doc := bsoncore.AppendDocumentStart(nil)
+	doc = bsoncore.AppendStringElement(doc, "_id", id)
+	doc = bsoncore.AppendValueElement(doc, key, bsoncore.Value{Type: bsoncore.Type(value.Type), Data: value.Value})
+	doc, _ = bsoncore.AppendDocumentEnd(doc, index)
 	return wire.Document(doc)
 }
 
@@ -5964,6 +5982,49 @@ func TestMongoMutationRejectsWideEachBeforeMaterialization(t *testing.T) {
 	})
 	if wideAllocs > smallAllocs+8 {
 		t.Fatalf("wide $each allocations=%f small=%f want bounded", wideAllocs, smallAllocs)
+	}
+}
+
+func TestMongoMutationRejectsWideStoredBSONBeforeDecode(t *testing.T) {
+	doc := rawDocumentWithIDAndValue("u1", "items", wideRawArrayValue(mongoMutationMaxDecodedElements+1))
+	before := append(wire.Document(nil), doc...)
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+		{Key: "$push", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: bson.A{}}}}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := applyMongoMutation(doc, mutation); err == nil || changed || !bytes.Equal(doc, before) {
+		t.Fatalf("wide stored BSON changed=%v err=%v", changed, err)
+	}
+}
+
+func TestServerUpdateRejectsWideStoredBSONBeforeDecode(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
+	opts.ValueLog.PointerThreshold = 1
+	backend, closeBackend, err := treedb.OpenBackend(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = closeBackend() }()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(backend)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	doc := rawDocumentWithIDAndValue("u1", "items", wideRawArrayValue(mongoMutationMaxDecodedElements+1))
+	assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.Raw(doc)}}, {Key: "$db", Value: "app"}}))
+	response := serveCommand(t, server, 2, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}}, {Key: "$push", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: bson.A{}}}}}}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "BadValue")
+	find := serveCommand(t, server, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	if got := cursorFirstBatch(t, find)[0]; !got.Lookup("marker").IsZero() {
+		t.Fatalf("rejected wide stored update changed document: %v", got)
 	}
 }
 

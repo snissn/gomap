@@ -3989,6 +3989,13 @@ const mongoMutationMaxPathDepth = 100
 // modifier reaches BSON decoding, which recursively materializes the document.
 const mongoMutationMaxBSONNesting = 100
 
+// Slow nested mutation decoding is bounded independently from BSON nesting.
+const mongoMutationMaxDecodedElements = 65536
+
+// MongoDB BSON objects are capped at 16 MiB. Pair that byte ceiling with the
+// element cap above before slow-path decoding can build an unbounded Go graph.
+const mongoMutationMaxDecodedBSONBytes = 16 << 20
+
 // parseMongoMutation validates the shared modifier subset before any document is changed.
 func parseMongoMutation(update wire.Document) (mongoMutation, error) {
 	updateValue := bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: update}
@@ -4099,7 +4106,7 @@ func applyMongoMutationWithOptions(doc wire.Document, mutation mongoMutation, up
 		updated, changed, err := applyMongoMutationTopLevel(doc, mutation)
 		return finalizeMongoMutationResult(updated, changed, err)
 	}
-	if err := validateMongoMutationRawNesting(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: doc}); err != nil {
+	if err := validateMongoMutationDecodeBudget(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: doc}); err != nil {
 		return nil, false, err
 	}
 	var out bson.D
@@ -4598,11 +4605,73 @@ func validateMongoMutationPathConflicts(paths map[string]struct{}) error {
 }
 
 func mongoMutationDecodeValue(value bson.RawValue) (any, error) {
+	if err := validateMongoMutationDecodeBudget(value); err != nil {
+		return nil, err
+	}
 	var decoded any
 	if err := value.Unmarshal(&decoded); err != nil {
 		return nil, err
 	}
 	return decoded, nil
+}
+
+// validateMongoMutationDecodeBudget streams raw BSON before a slow mutation
+// calls bson.Unmarshal. It bounds both the raw bytes retained by decoding and
+// the number of document/array elements that would become Go values.
+func validateMongoMutationDecodeBudget(value bson.RawValue) error {
+	if len(value.Value) > mongoMutationMaxDecodedBSONBytes {
+		return fmt.Errorf("Mongo gateway mutation BSON exceeds %d decoded bytes", mongoMutationMaxDecodedBSONBytes)
+	}
+	if value.Type != bson.TypeEmbeddedDocument && value.Type != bson.TypeArray {
+		return value.Validate()
+	}
+	type frame struct {
+		remaining []byte
+		depth     int
+	}
+	contents, ok := rawBSONContainerContents(value)
+	if !ok {
+		return errors.New("Mongo gateway invalid BSON container")
+	}
+	stack := []frame{{remaining: contents, depth: 1}}
+	elements := 0
+	for len(stack) != 0 {
+		last := len(stack) - 1
+		current := &stack[last]
+		if len(current.remaining) == 0 {
+			stack = stack[:last]
+			continue
+		}
+		element, next, ok := bsoncore.ReadElement(current.remaining)
+		if !ok {
+			return errors.New("Mongo gateway invalid BSON container")
+		}
+		if err := element.Validate(); err != nil {
+			return err
+		}
+		current.remaining = next
+		elements++
+		if elements > mongoMutationMaxDecodedElements {
+			return fmt.Errorf("Mongo gateway mutation BSON exceeds %d decoded elements", mongoMutationMaxDecodedElements)
+		}
+		childValue, err := element.ValueErr()
+		if err != nil {
+			return err
+		}
+		child := bson.RawValue{Type: bson.Type(childValue.Type), Value: childValue.Data}
+		if child.Type != bson.TypeEmbeddedDocument && child.Type != bson.TypeArray {
+			continue
+		}
+		if current.depth == mongoMutationMaxBSONNesting {
+			return fmt.Errorf("Mongo gateway BSON nesting exceeds %d levels", mongoMutationMaxBSONNesting)
+		}
+		childContents, ok := rawBSONContainerContents(child)
+		if !ok {
+			return errors.New("Mongo gateway invalid BSON container")
+		}
+		stack = append(stack, frame{remaining: childContents, depth: current.depth + 1})
+	}
+	return nil
 }
 
 func mongoMutationPathIndex(doc bson.D, key string) int {
