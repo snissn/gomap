@@ -4588,8 +4588,10 @@ func validateMongoMutationAddToSetBudget(doc bson.Raw, fields []mongoMutationArr
 
 // mongoMutationAddToSetDecimalComparisonWork mirrors the equality traversal so
 // byte-identical nested numeric leaves do not consume the Decimal128 budget.
-// Validation remains separate because equality treats malformed containers as
-// unequal while mutation admission must fail closed.
+// It also mirrors membership short-circuiting and compares later candidates
+// only with values that would actually be admitted. Validation remains separate
+// because equality treats malformed containers as unequal while mutation
+// admission must fail closed.
 func mongoMutationAddToSetDecimalComparisonWork(existing, candidates []bson.RawValue, limit int) (int, bool) {
 	for _, values := range [][]bson.RawValue{existing, candidates} {
 		for _, value := range values {
@@ -4599,23 +4601,46 @@ func mongoMutationAddToSetDecimalComparisonWork(existing, candidates []bson.RawV
 		}
 	}
 	remaining := limit
-	compare := func(left, right bson.RawValue) bool {
+	compare := func(left, right bson.RawValue) (bool, bool) {
 		if left.Type == right.Type && bytes.Equal(left.Value, right.Value) {
-			return true
+			return true, true
 		}
-		_, err := rawValuesEqualModeBudget(left, right, true, &remaining)
-		return err == nil
+		equal, err := rawValuesEqualModeBudget(left, right, true, &remaining)
+		return equal, err == nil
 	}
-	for i, candidate := range candidates {
+	if len(candidates) > mongoMutationMaxEachValues {
+		return limit - remaining, false
+	}
+	var admitted [mongoMutationMaxEachValues]int
+	admittedCount := 0
+	for candidateIndex, candidate := range candidates {
+		duplicate := false
 		for _, stored := range existing {
-			if !compare(candidate, stored) {
+			equal, ok := compare(candidate, stored)
+			if !ok {
 				return limit - remaining, false
+			}
+			if equal {
+				duplicate = true
+				break
 			}
 		}
-		for j := 0; j < i; j++ {
-			if !compare(candidate, candidates[j]) {
+		if duplicate {
+			continue
+		}
+		for _, earlierIndex := range admitted[:admittedCount] {
+			equal, ok := compare(candidate, candidates[earlierIndex])
+			if !ok {
 				return limit - remaining, false
 			}
+			if equal {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			admitted[admittedCount] = candidateIndex
+			admittedCount++
 		}
 	}
 	return limit - remaining, true

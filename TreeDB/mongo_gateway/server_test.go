@@ -7082,6 +7082,50 @@ func TestMongoMutationAddToSetAcceptsRepeatedIdenticalDecimal128Values(t *testin
 	}
 }
 
+func TestMongoMutationAddToSetAcceptsAlternatingEquivalentDecimal128Values(t *testing.T) {
+	left, err := bson.ParseDecimal128("1E+6000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := bson.ParseDecimal128("10E+5999")
+	if err != nil {
+		t.Fatal(err)
+	}
+	leftRaw := mustRawValue(t, left)
+	rightRaw := mustRawValue(t, right)
+	if bytes.Equal(leftRaw.Value, rightRaw.Value) || !mongoMutationValuesEqual(leftRaw, rightRaw) {
+		t.Fatal("alternating Decimal128 operands must be numerically equal with distinct encodings")
+	}
+	values := make(bson.A, 46)
+	for i := range values {
+		if i%2 == 0 {
+			values[i] = left
+		} else {
+			values[i] = right
+		}
+	}
+	mutation, err := parseMongoMutation(mustDocument(t, bson.D{
+		{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}},
+		{Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: values}}}}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	work, ok := mongoMutationAddToSetDecimalComparisonWork(nil, mutation.addToSet[0].values, mongoMutationMaxAddToSetDecimalComparisons)
+	if !ok || work != len(values) {
+		t.Fatalf("alternating equivalent Decimal128 work=%d ok=%v want=%d", work, ok, len(values))
+	}
+	doc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}})
+	updated, changed, err := applyMongoMutation(doc, mutation)
+	if err != nil || !changed {
+		t.Fatalf("alternating equivalent Decimal128 $addToSet changed=%v err=%v", changed, err)
+	}
+	items, itemsErr := bson.Raw(updated).Lookup("items").Array().Values()
+	if itemsErr != nil || len(items) != 1 || !mongoMutationValuesEqual(items[0], leftRaw) || !bson.Raw(updated).Lookup("marker").Boolean() {
+		t.Fatalf("alternating equivalent Decimal128 $addToSet changed=%v err=%v items=%v itemsErr=%v marker=%v", changed, err, items, itemsErr, bson.Raw(updated).Lookup("marker"))
+	}
+}
+
 func TestMongoMutationAddToSetAcceptsDocumentsWithIdenticalDecimal128Leaves(t *testing.T) {
 	decimal, err := bson.ParseDecimal128("1E+6000")
 	if err != nil {
