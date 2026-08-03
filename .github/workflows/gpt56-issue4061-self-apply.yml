@@ -1,0 +1,81 @@
+name: GPT-5.6 issue 4061 self-apply
+
+on:
+  push:
+    branches:
+      - gpt56/issue-4061-bson-index-codec
+
+permissions:
+  contents: write
+
+jobs:
+  apply-test-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: gpt56/issue-4061-bson-index-codec
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
+          cache: false
+      - name: Apply exact locally validated codec patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d .github/gpt56/issue4061-patch.b64 | gzip -dc > /tmp/issue4061.patch
+          printf '%s  %s\n' '6fe725fd641e439875f2536e3471112db56346e19745e3748faa2d889162f435' /tmp/issue4061.patch | sha256sum --check -
+          git apply --check /tmp/issue4061.patch
+          git apply /tmp/issue4061.patch
+          rm -f .github/gpt56/issue4061-patch.b64
+          rmdir .github/gpt56
+          rm -f .github/workflows/gpt56-issue4061-self-apply.yml
+          test -z "$(gofmt -l TreeDB/collections/bson_index_key_codec_v2.go TreeDB/collections/bson_index_key_codec_v2_test.go TreeDB/collections/bson_index_key_codec_v2_bench_test.go)"
+          git diff --check
+          git add -A
+          python3 -c 'import subprocess; actual=set(subprocess.check_output(["git","diff","--cached","--name-only"], text=True).splitlines()); expected=set(".github/gpt56/issue4061-patch.b64 .github/workflows/gpt56-issue4061-self-apply.yml TreeDB/collections/bson_index_key_codec_v2.go TreeDB/collections/bson_index_key_codec_v2_test.go TreeDB/collections/bson_index_key_codec_v2_bench_test.go TreeDB/docs/spec/bson-index-key-codec-v2.md".split()); assert actual == expected, f"unexpected files: missing={sorted(expected-actual)} extra={sorted(actual-expected)}"'
+      - name: Validate full collections package and TreeDB build
+        env:
+          TERM: xterm
+          GOWORK: 'off'
+          GOFLAGS: '-p=1'
+          GOMAXPROCS: '2'
+          CGO_ENABLED: '1'
+        run: |
+          set -euo pipefail
+          go test ./TreeDB/collections -run 'Test.*(IndexKeyCodecV2|BSON.*Order|Sortable).*' -count=1
+          go test ./TreeDB/collections -count=1
+          go vet ./TreeDB/collections
+          make build-treedb
+      - name: Capture codec benchmark evidence and dependency caches
+        env:
+          TERM: xterm
+          GOWORK: 'off'
+          GOFLAGS: '-p=1'
+          GOMAXPROCS: '2'
+          CGO_ENABLED: '1'
+        run: |
+          set -euo pipefail
+          go test ./TreeDB/collections -run '^$' -bench '^BenchmarkBSONIndexKeyCodecV2Encode$' -benchmem -count=5 | tee /tmp/issue4061-benchmark.txt
+          tar -C "$(go env GOMODCACHE)" -czf /tmp/issue4061-gomodcache.tgz .
+          tar -C "$(go env GOCACHE)" -czf /tmp/issue4061-gocache.tgz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue4061-validation-${{ github.sha }}
+          path: |
+            /tmp/issue4061-benchmark.txt
+            /tmp/issue4061-gomodcache.tgz
+            /tmp/issue4061-gocache.tgz
+          if-no-files-found: error
+          retention-days: 1
+      - name: Commit and publish implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'GPT-5.6 Pro'
+          git config user.email '1981537+snissn@users.noreply.github.com'
+          git commit -m 'collections: add BSON-ordered scalar index key codec v2'
+          git push origin HEAD:gpt56/issue-4061-bson-index-codec
