@@ -63,15 +63,15 @@ const m8QualificationRouterCandidatesV1 = 256
 
 type m8QualificationCampaignSummaryV1 struct {
 	ExecutableSHA256 string  `json:"executable_sha256"`
-	P4QPSMin         float64 `json:"p4_qps_min"`
-	P4QPSMedian      float64 `json:"p4_qps_median"`
-	P4QPSMax         float64 `json:"p4_qps_max"`
+	P2QPSMin         float64 `json:"p2_qps_min"`
+	P2QPSMedian      float64 `json:"p2_qps_median"`
+	P2QPSMax         float64 `json:"p2_qps_max"`
 	P16QPSMin        float64 `json:"p16_qps_min"`
 	P16QPSMedian     float64 `json:"p16_qps_median"`
 	P16QPSMax        float64 `json:"p16_qps_max"`
-	P4P95Min         uint64  `json:"p4_p95_min"`
-	P4P95Median      uint64  `json:"p4_p95_median"`
-	P4P95Max         uint64  `json:"p4_p95_max"`
+	P2P95Min         uint64  `json:"p2_p95_min"`
+	P2P95Median      uint64  `json:"p2_p95_median"`
+	P2P95Max         uint64  `json:"p2_p95_max"`
 	P16P95Min        uint64  `json:"p16_p95_min"`
 	P16P95Median     uint64  `json:"p16_p95_median"`
 	P16P95Max        uint64  `json:"p16_p95_max"`
@@ -219,8 +219,8 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 	if err != nil || !rootInfo.IsDir() {
 		return m8QualificationCampaignSummaryV1{}, errors.New("qualification root is not a directory")
 	}
-	var p4QPS, p16QPS []float64
-	var p4P95, p16P95 []uint64
+	var p2QPS, p16QPS []float64
+	var p2P95, p16P95 []uint64
 	var summary m8QualificationCampaignSummaryV1
 	variantDescriptors := make(map[string]m3VariantDescriptorV1, len(m8RequiredVariantIDsV1))
 	var topology *nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1
@@ -414,15 +414,15 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 		if len(seenVariants) != len(m8RequiredVariantIDsV1) || selected == nil {
 			return summary, fmt.Errorf("qualification matrix %s has no graph-overlap candidate", run.Path)
 		}
-		p4, p16 := m8QualificationRowsV1(*selected)
-		if p4 == nil || p16 == nil || p4.RecallAtK < .90 || p16.RecallAtK < .90 || p4.Attribution.FinalMembershipOracleRecallAtK < .90 || math.Abs(p4.Attribution.ExactToApproximateLossAtK) > .01 || p4.QPS < p16.QPS*1.15 || p4.P95Nanos > p16.P95Nanos {
-			return summary, fmt.Errorf("qualification matrix %s misses the selected p4/p16 gate", run.Path)
+		p2, p16 := m8QualificationRowsV1(*selected)
+		if p2 == nil || p16 == nil || p2.RecallAtK < .90 || p16.RecallAtK < .90 || p2.Attribution.FinalMembershipOracleRecallAtK < .90 || math.Abs(p2.Attribution.ExactToApproximateLossAtK) > .01 || p2.QPS < p16.QPS*1.15 || p2.P95Nanos > p16.P95Nanos {
+			return summary, fmt.Errorf("qualification matrix %s misses the selected p2/p16 gate", run.Path)
 		}
 		if matrix.Status != "local_gate_pass" || matrix.Gates.RequiredVariants != "pass" || matrix.Gates.ExhaustiveParity != "pass" || matrix.Gates.FailureHonesty != "pass" || matrix.Gates.PartitionPackReachability != "pass" || matrix.Gates.Balance != "pass" || matrix.Gates.ResourceBounds != "pass" || matrix.Gates.OverlapStorage != "pass" {
 			return summary, fmt.Errorf("qualification matrix %s does not bind the required gates", run.Path)
 		}
-		p4QPS, p16QPS = append(p4QPS, p4.QPS), append(p16QPS, p16.QPS)
-		p4P95, p16P95 = append(p4P95, p4.P95Nanos), append(p16P95, p16.P95Nanos)
+		p2QPS, p16QPS = append(p2QPS, p2.QPS), append(p16QPS, p16.QPS)
+		p2P95, p16P95 = append(p2P95, p2.P95Nanos), append(p16P95, p16.P95Nanos)
 	}
 	summary.ExecutableSHA256 = executableSHA256
 	if len(executionIDs) != len(campaign.Runs)*len(m8RequiredVariantIDsV1) {
@@ -432,13 +432,13 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 		sort.Float64s(values)
 		return values[0], values[len(values)/2], values[len(values)-1]
 	}
-	summary.P4QPSMin, summary.P4QPSMedian, summary.P4QPSMax = minMedianMax(p4QPS)
+	summary.P2QPSMin, summary.P2QPSMedian, summary.P2QPSMax = minMedianMax(p2QPS)
 	summary.P16QPSMin, summary.P16QPSMedian, summary.P16QPSMax = minMedianMax(p16QPS)
 	minMedianMaxU64 := func(values []uint64) (uint64, uint64, uint64) {
 		slices.Sort(values)
 		return values[0], values[len(values)/2], values[len(values)-1]
 	}
-	summary.P4P95Min, summary.P4P95Median, summary.P4P95Max = minMedianMaxU64(p4P95)
+	summary.P2P95Min, summary.P2P95Median, summary.P2P95Max = minMedianMaxU64(p2P95)
 	summary.P16P95Min, summary.P16P95Median, summary.P16P95Max = minMedianMaxU64(p16P95)
 	return summary, nil
 }
@@ -485,7 +485,7 @@ func m8QualificationFixtureV1(candidate fixtureManifest) bool {
 }
 
 func m8QualificationConfigV1(cfg m8ProductionConfigEvidenceV1, fixture fixtureManifest, overlap float64, _ int) bool {
-	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterCandidates == m8QualificationRouterCandidatesV1 && cfg.MaxExactTruthVisits == m8QualificationExactTruthCapV1(fixture) && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, []int{1, 2, 4, 8, 16}) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{64}) && slices.Equal(cfg.Overlap, []float64{overlap})
+	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterCandidates == m8QualificationRouterCandidatesV1 && cfg.MaxExactTruthVisits == m8QualificationExactTruthCapV1(fixture) && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, []int{1, 2, 4, 8, 16}) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{128}) && slices.Equal(cfg.Overlap, []float64{overlap})
 }
 
 func m8QualificationTrustedTruthCacheV1(root string, report m8ProductionReportV1) ([][]m8CanonicalResultV1, error) {
@@ -1212,7 +1212,7 @@ func m8QualificationHasFullLadderV1(report m8ProductionReportV1) bool {
 }
 
 func m8QualificationQualifiedRowV1(row m8ProductionRowV1) bool {
-	return row.Status == "pass" && row.EfSearch == 64 && row.Concurrency == 1 && row.RouterMode == collections.VectorPartitionRouterModeApproxV1 && row.RouterCandidates == m8QualificationRouterCandidatesV1 && row.Attribution.OracleStagesComplete
+	return row.Status == "pass" && row.EfSearch == 128 && row.Concurrency == 1 && row.RouterMode == collections.VectorPartitionRouterModeApproxV1 && row.RouterCandidates == m8QualificationRouterCandidatesV1 && row.Attribution.OracleStagesComplete
 }
 
 func m8QualificationSHA256V1(value string) bool {
@@ -1224,18 +1224,18 @@ func m8QualificationGitSHAV1(value string) bool {
 }
 
 func m8QualificationRowsV1(report m8ProductionReportV1) (*m8ProductionRowV1, *m8ProductionRowV1) {
-	var p4, p16 *m8ProductionRowV1
+	var p2, p16 *m8ProductionRowV1
 	for i := range report.Rows {
 		row := &report.Rows[i]
 		if !m8QualificationQualifiedRowV1(*row) {
 			continue
 		}
 		switch row.Probes {
-		case 4:
-			p4 = row
+		case 2:
+			p2 = row
 		case 16:
 			p16 = row
 		}
 	}
-	return p4, p16
+	return p2, p16
 }
