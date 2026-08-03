@@ -7240,6 +7240,14 @@ func TestMongoMutationAddToSetRejectsMalformedDecimalLeafCountWithoutOverflow(t 
 	if ok || work < 0 || work > mongoMutationMaxAddToSetDecimalComparisons {
 		t.Fatalf("malformed Decimal128 work=%d ok=%v", work, ok)
 	}
+	work, ok = mongoMutationAddToSetDecimalComparisonWork(
+		[]bson.RawValue{mustRawValue(t, decimal)},
+		[]bson.RawValue{{Type: bson.TypeEmbeddedDocument, Value: []byte{0xff}}},
+		mongoMutationMaxAddToSetDecimalComparisons,
+	)
+	if ok || work < 0 || work > mongoMutationMaxAddToSetDecimalComparisons {
+		t.Fatalf("malformed right Decimal128 work=%d ok=%v", work, ok)
+	}
 }
 
 func TestMongoMutationEmptyNestedArrayEachDoesNotCreateParents(t *testing.T) {
