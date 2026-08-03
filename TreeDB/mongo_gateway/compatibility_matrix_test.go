@@ -645,10 +645,41 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
-			category: "command gap",
-			feature:  "aggregate",
-			status:   "not implemented",
-			probe:    expectCommandNotFound(bson.D{{Key: "aggregate", Value: "users"}, {Key: "pipeline", Value: bson.A{}}, {Key: "$db", Value: "app"}}),
+			category: "read command",
+			feature:  "aggregate match/project/sort/skip/limit/count",
+			status:   "supported subset",
+			probe: func(t *testing.T, server *Server) {
+				staged := serveCommand(t, server, 25, bson.D{
+					{Key: "aggregate", Value: "users"},
+					{Key: "pipeline", Value: bson.A{
+						bson.D{{Key: "$match", Value: bson.D{{Key: "active", Value: true}}}},
+						bson.D{{Key: "$sort", Value: bson.D{{Key: "age", Value: int32(-1)}}}},
+						bson.D{{Key: "$project", Value: bson.D{{Key: "_id", Value: int32(1)}}}},
+						bson.D{{Key: "$skip", Value: int32(1)}},
+						bson.D{{Key: "$limit", Value: int32(1)}},
+					}},
+					{Key: "cursor", Value: bson.D{}},
+					{Key: "$db", Value: "app"},
+				})
+				assertBatchIDs(t, cursorFirstBatch(t, staged), []string{"u3"})
+
+				counted := serveCommand(t, server, 251, bson.D{
+					{Key: "aggregate", Value: "users"},
+					{Key: "pipeline", Value: bson.A{
+						bson.D{{Key: "$match", Value: bson.D{{Key: "active", Value: true}}}},
+						bson.D{{Key: "$count", Value: "n"}},
+					}},
+					{Key: "cursor", Value: bson.D{}},
+					{Key: "$db", Value: "app"},
+				})
+				batch := cursorFirstBatch(t, counted)
+				if len(batch) != 1 {
+					t.Fatalf("aggregate batch len=%d want 1", len(batch))
+				}
+				if n, ok := batch[0].Lookup("n").Int64OK(); !ok || n != 2 {
+					t.Fatalf("aggregate count n=%d ok=%v want 2", n, ok)
+				}
+			},
 		},
 		{
 			category: "command gap",
@@ -669,10 +700,47 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			probe:    expectCommandNotFound(bson.D{{Key: "dbStats", Value: int32(1)}, {Key: "$db", Value: "app"}}),
 		},
 		{
-			category: "command gap",
-			feature:  "count",
-			status:   "not implemented",
-			probe:    expectCommandNotFound(bson.D{{Key: "count", Value: "users"}, {Key: "$db", Value: "app"}}),
+			category: "read command",
+			feature:  "count filter/skip/limit",
+			status:   "supported subset",
+			probe: func(t *testing.T, server *Server) {
+				for requestID, pagination := range []bson.E{{Key: "skip", Value: int32(1)}, {Key: "limit", Value: int32(1)}} {
+					command := bson.D{{Key: "count", Value: "users"}, {Key: "query", Value: bson.D{{Key: "active", Value: true}}}, pagination, {Key: "$db", Value: "app"}}
+					resp := serveCommand(t, server, int32(26+requestID), command)
+					assertOK(t, resp)
+					if n, ok := bson.Raw(resp).Lookup("n").Int64OK(); !ok || n != 1 {
+						t.Fatalf("count %s n=%d ok=%v want 1", pagination.Key, n, ok)
+					}
+				}
+			},
+		},
+		{
+			category: "read command",
+			feature:  "distinct top-level field with filter",
+			status:   "supported subset",
+			probe: func(t *testing.T, server *Server) {
+				resp := serveCommand(t, server, 261, bson.D{{Key: "distinct", Value: "users"}, {Key: "key", Value: "city"}, {Key: "query", Value: bson.D{{Key: "active", Value: false}}}, {Key: "$db", Value: "app"}})
+				assertOK(t, resp)
+				values, err := bson.Raw(resp).Lookup("values").Array().Values()
+				if err != nil || len(values) != 1 || values[0].StringValue() != "hnl" {
+					t.Fatalf("distinct values=%v err=%v", values, err)
+				}
+			},
+		},
+		{
+			category: "read command gap",
+			feature:  "maxTimeMS on aggregate/count/distinct",
+			status:   "rejected",
+			probe: func(t *testing.T, server *Server) {
+				commands := []bson.D{
+					{{Key: "aggregate", Value: "users"}, {Key: "pipeline", Value: bson.A{}}, {Key: "cursor", Value: bson.D{}}, {Key: "maxTimeMS", Value: int64(1)}, {Key: "$db", Value: "app"}},
+					{{Key: "count", Value: "users"}, {Key: "maxTimeMS", Value: int64(1)}, {Key: "$db", Value: "app"}},
+					{{Key: "distinct", Value: "users"}, {Key: "key", Value: "city"}, {Key: "maxTimeMS", Value: int64(1)}, {Key: "$db", Value: "app"}},
+				}
+				for i, command := range commands {
+					assertCommandError(t, serveCommand(t, server, int32(262+i), command), "BadValue")
+				}
+			},
 		},
 		{
 			category: "update subset",

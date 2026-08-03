@@ -75,11 +75,13 @@ block drifts from the executable matrix rows.
 | update | ReplaceOne by exact _id | supported subset |
 | index gap | compound index | rejected |
 | index gap | index without treedbValueType | rejected |
-| command gap | aggregate | not implemented |
+| read command | aggregate match/project/sort/skip/limit/count | supported subset |
 | command gap | serverStatus | not implemented |
 | command gap | top | not implemented |
 | command gap | dbStats | not implemented |
-| command gap | count | not implemented |
+| read command | count filter/skip/limit | supported subset |
+| read command | distinct top-level field with filter | supported subset |
+| read command gap | maxTimeMS on aggregate/count/distinct | rejected |
 | update subset | findAndModify exact _id no-match | supported subset |
 | transaction gap | transactions and retryable writes | not implemented |
 <!-- mongo-compatibility-matrix:end -->
@@ -172,7 +174,7 @@ enabled-path latency claim is made.
 | Command | `insert` / `insertMany` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerOfficialGoDriverBasicCRUD` | Standalone writeConcern durability remains minimal. In cluster submitter mode, absent/default and `{w: 1}` request visible ack, `{w: "majority"}` requests Raft-committed proof, and unsupported writeConcern options are rejected before submit. |
 | Command | `find` | `supported subset` | `TestMongoCompatibilityMatrix`, find planner tests | Query language is intentionally limited. |
 | Command | `getMore` / `killCursors` | `supported subset` | `TestMongoCompatibilityMatrix`, cursor tests | Server cursor state is in-memory only. |
-| Command option | `readConcern` on `find`, `getMore`, `listCollections`, `listDatabases`, and `listIndexes` | `supported subset` / `rejected` | `TestMongoReadConcernAcceptsLocalStaleReadSurfaces`, `TestMongoReadConcernRejectsStrongLevelsBeforeServingData`, `TestMongoCompatibilityMatrix` | Absent/empty, `{level: "local"}`, and `{level: "available"}` are accepted and map to local_stale reads. `majority`, `linearizable`, `snapshot`, cluster-time fields, unknown options, malformed documents, bad `level` types, and duplicate `level` are rejected before serving data. |
+| Command option | `readConcern` on `find`, `aggregate`, `count`, `distinct`, `getMore`, `listCollections`, `listDatabases`, and `listIndexes` | `supported subset` / `rejected` | `TestMongoReadConcernAcceptsLocalStaleReadSurfaces`, `TestMongoReadConcernRejectsStrongLevelsBeforeServingData`, `TestMongoAggregateCountDistinctRejectUnsupportedSurface`, `TestMongoCompatibilityMatrix` | Absent/empty, `{level: "local"}`, and `{level: "available"}` are accepted and map to local_stale reads. `majority`, `linearizable`, `snapshot`, cluster-time fields, unknown options, malformed documents, bad `level` types, and duplicate `level` are rejected before serving data. |
 | Command | `update` / `updateOne` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, update tests, `TestMongoFirstWriteConcurrentUpdateUpserts`, `TestMongoFirstWriteLateExistingMutationsWait`, `TestMongoFirstWriteUnrelatedColdMutationsDoNotWait`, `TestMongoFirstWriteStalePendingNamespaceDoesNotWait` | Exact `_id` retains its direct path. Supported non-`_id` filters select the first natural-order match within the scan cap and recheck at mutation; non-`_id` upsert fails closed. Competing in-process first-write upserts serialize collection creation and its first mutation after an initial miss; unrelated namespaces do not share the mutation gate, and existing-collection duplicate handling is unchanged. |
 | Command | `delete` / `deleteOne` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, CRUD tests | Exact `_id` accepts legacy limit `0` or `1`; supported non-`_id` filters require `limit: 1`, select natural order, and recheck before deletion. |
 | Command | `listCollections` | `supported subset` standalone; `rejected` in routed cluster mode | `TestMongoCompatibilityMatrix`, metadata tests, `TestMongoRoutedMetadataReadsFailClosedBeforeLocalCatalogObservation` | Minimal filtering and response fields; routed mode has no authoritative catalog binding. |
@@ -180,12 +182,12 @@ enabled-path latency claim is made.
 | Command | `createIndexes` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | Single-field ascending indexes only, with `treedbValueType`. |
 | Command | `listIndexes` | `supported subset` standalone; `rejected` in routed cluster mode | `TestMongoCompatibilityMatrix`, metadata tests, `TestMongoRoutedMetadataReadsFailClosedBeforeLocalCatalogObservation` | Emits TreeDB-specific `treedbValueType` only when local metadata is authoritative. |
 | Command | `dropIndexes` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | No broad collection/database DDL surface. |
-| Command | `aggregate` | `not implemented` | `TestMongoCompatibilityMatrix` | No aggregation pipeline; Compass Performance `currentOp` uses this command. |
+| Command | `aggregate` | `supported subset` standalone; `rejected` in cluster mode | `TestMongoCompatibilityMatrix`, `TestMongoReadCommandsAggregateCountDistinct`, `TestStandaloneServerOfficialGoDriverAggregateCountDistinct` | Ordered `$match`, top-level inclusion/exclusion `$project`, one-field top-level `$sort`, `$skip`, `$limit`, and `$count` stages are supported with bounded materialization and normal cursors. The exact `$group`/`$sum: 1` shape emitted by the pinned Go driver's `CountDocuments` is also supported. Expressions, other `$group` shapes, write/output stages, `maxTimeMS`, and other options fail closed. |
 | Command | `serverStatus` | `not implemented` | `TestMongoCompatibilityMatrix` | Optional Compass Performance metadata is unsupported; this does not block basic connection or browsing. |
 | Command | `top` | `not implemented` | `TestMongoCompatibilityMatrix` | Optional Compass Performance metrics are unsupported; this does not block basic connection or browsing. |
 | Command | `dbStats` | `not implemented` | `TestMongoCompatibilityMatrix` | Database statistics are unsupported; this does not block basic connection or browsing. |
-| Command | `count`, `countDocuments`, `estimatedDocumentCount` | `not implemented` | `TestMongoCompatibilityMatrix` covers `count` command absence | Future fast count work should be explicit. |
-| Command | `distinct` | `not implemented` | Command falls through to `CommandNotFound` | No distinct scan/index planner. |
+| Command | `count`, `countDocuments`, `estimatedDocumentCount` | `supported subset` standalone; `rejected` in cluster mode | `TestMongoCompatibilityMatrix`, `TestStandaloneServerOfficialGoDriverAggregateCountDistinct` | `count` supports the shared filter subset plus non-negative skip/limit; `CountDocuments` uses the bounded aggregate count shape; `EstimatedDocumentCount` uses the proper count command but currently scans rather than reading metadata. `maxTimeMS` and other unsupported options fail closed. |
+| Command | `distinct` | `supported subset` standalone; `rejected` in cluster mode | `TestMongoCompatibilityMatrix`, `TestMongoDistinctTopLevelArrayNumericEqualityAndOrder` | Top-level fields, optional shared filters, scalar/array flattening, missing/null handling, stable BSON numeric equality, and first-seen ordering are supported within document/value and Decimal128 work bounds. Dotted fields, `maxTimeMS`, and other unsupported options fail closed. |
 | Command | `findAndModify` | `supported subset` | `TestFindAndModifyReturnsAtomicBeforeAndAfterImages`, `TestFindAndModifyInsertConflictAppliesToExistingDocument`, `TestMongoFirstWriteConcurrentFindAndModifyUpserts`, `TestStandaloneServerOfficialDriverConcurrentFirstWriteFindAndModifyUpserts`, `TestStandaloneServerOfficialGoDriverFilterWrites`, `TestMongoCompatibilityMatrix` | Exact `_id` retains its direct path; supported non-`_id` filters select natural order and recheck at mutation. Replacement and the shared dotted `$set`/`$unset`/`$inc`, `$setOnInsert`, bounded `$push`, and bounded `$addToSet` modifier subset are available; pre-image by default, `new:true` post-image, optional top-level `fields`, and exact-`_id` upsert. `$setOnInsert` applies only to insertion. Competing in-process first-write upserts serialize collection creation and its first mutation after an initial miss. A same-`_id` upsert losing the initial insert retries as an update only for `ErrDocumentExists`, returning `updatedExisting: true` without `upserted`; other duplicate conflicts fail. Cluster/routed, remove, sort, dotted projection, positional/array-filter paths, and transaction/retry markers are rejected. |
 | Command | collection/database drop | `not implemented` | Command falls through to `CommandNotFound` | Collection lifecycle beyond create and index metadata is not exposed. |
 | Command | logical sessions / `endSessions` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerOfficialGoDriverLogicalSession` | Advertises `logicalSessionTimeoutMinutes` and accepts `endSessions`; session IDs are accepted for driver compatibility only. |
@@ -204,7 +206,8 @@ three BSON documents.
 This certifies only the tested connection-and-browse flow, not full Compass or
 MongoDB compatibility. The optional Compass Performance view remains
 non-blocking for basic connection and browsing: `top` and `serverStatus` return
-`CommandNotFound`, and its `currentOp` request uses unsupported `aggregate`.
+`CommandNotFound`, and its `currentOp` aggregate pipeline uses an unsupported
+stage.
 The small driver seeding run likewise reached document insertion but its final
 `dbStats` request returned `CommandNotFound`; database statistics are not
 implemented.
@@ -227,6 +230,8 @@ implemented.
 | Projection include/exclude top-level fields | `supported subset` | `TestMongoCompatibilityMatrix` | Cannot mix include/exclude except `_id`; dotted projection rejected. |
 | Sort by one top-level field | `supported subset` | `TestMongoCompatibilityMatrix` | Compound sort and dotted sort rejected. |
 | `skip`, `limit`, `batchSize`, `singleBatch` | `supported subset` | cursor and find planner tests | Behavior is bounded by gateway scan/message limits. |
+| Aggregate pipeline | `supported subset` | `TestMongoReadCommandsAggregateCountDistinct`, official-driver tests | Bounded ordered stages only: `$match`, `$project`, `$sort`, `$skip`, `$limit`, `$count`, plus the exact driver count `$group`; no general expressions or output stages. |
+| Count / distinct | `supported subset` | `TestMongoAggregateCountDistinctEnforceScanBounds`, official-driver tests | Both use bounded reads; estimated count is exact rather than metadata-fast, and distinct is top-level only. |
 | Collation | `not implemented` | Not parsed | String comparison is binary/default TreeDB behavior. |
 
 ## Update And Delete Matrix
@@ -295,7 +300,8 @@ implemented.
 3. Extend explicit `writeConcern` handling beyond the current cluster submitter
    subset, and add stronger readConcern modes only after a documented TreeDB
    snapshot/causal-read boundary exists.
-4. Add count/distinct only after the desired TreeDB collection count/index
-   semantics are clear.
+4. Add metadata-fast estimated counts and index-assisted distinct only when the
+   collection metadata/index contracts can preserve the documented bounded
+   semantics.
 5. Keep multi-document transactions blocked until the local collection
    transaction and collection WAL tracks are implemented.

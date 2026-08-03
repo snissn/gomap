@@ -787,10 +787,9 @@ func documentsForPrimaryPredicate(col *collections.Collection, materializer *col
 	return out, nil
 }
 
-func documentsForIndexedPredicate(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, pred findPredicate, idx collections.IndexDefinition, maxDocuments int) ([]wire.Document, error) {
+func documentsForIndexedPredicate(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, pred findPredicate, idx collections.IndexDefinition, maxDocuments, candidateLimit int) ([]wire.Document, error) {
 	out := make([]wire.Document, 0)
 	seen := make(map[string]struct{})
-	candidateLimit := candidateLimitWithOverflowSlot(maxDocuments)
 	for _, value := range pred.values {
 		scalar, ok := indexScalarForBSONValue(value, idx.ValueType)
 		if !ok {
@@ -841,7 +840,11 @@ func documentsForIndexedFieldPredicates(col *collections.Collection, materialize
 		if predicateContainsNull(pred) {
 			continue
 		}
-		docs, err := documentsForIndexedPredicate(col, materializer, pred, idx, maxDocuments)
+		candidateLimit := candidateLimitWithOverflowSlot(maxDocuments)
+		if limit, ok := indexedEqualityCandidateLimit(plan, idx, maxDocuments); ok {
+			candidateLimit = limit
+		}
+		docs, err := documentsForIndexedPredicate(col, materializer, pred, idx, maxDocuments, candidateLimit)
 		if err != nil {
 			return nil, false, err
 		}
@@ -868,6 +871,28 @@ func documentsForIndexedFieldPredicates(col *collections.Collection, materialize
 	}
 	consider(docs)
 	return best, bestSet, nil
+}
+
+func indexedEqualityCandidateLimit(plan findPlan, idx collections.IndexDefinition, maxDocuments int) (int, bool) {
+	if plan.limit <= 0 || len(plan.orBranches) != 0 || plan.sort.field != "" || len(plan.predicates) != 1 {
+		return 0, false
+	}
+	pred := plan.predicates[0]
+	if pred.field != idx.Field || pred.op != findPredicateEq || len(pred.values) != 1 || predicateContainsNull(pred) {
+		return 0, false
+	}
+	if _, ok := indexScalarForBSONValue(pred.values[0], idx.ValueType); !ok {
+		return 0, false
+	}
+	limit := int64(plan.skip) + int64(plan.limit)
+	if limit <= 0 {
+		return 0, false
+	}
+	maxCandidateLimit := candidateLimitWithOverflowSlot(maxDocuments)
+	if limit > int64(maxCandidateLimit) {
+		return maxCandidateLimit, true
+	}
+	return int(limit), true
 }
 
 func indexedRangeCandidateLimit(plan findPlan, idx collections.IndexDefinition, maxDocuments int) (int, bool) {
