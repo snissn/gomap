@@ -122,7 +122,9 @@ func m8ValidateQualificationIndexV1(root string, index m8QualificationIndexV1) (
 }
 
 func m8ValidateQualificationIndexWithRetainedVariantV1(root string, index m8QualificationIndexV1, retainedVariant m8QualificationRetainedVariantVerifierV1) (m8QualificationIndexSummaryV1, error) {
-	return m8ValidateQualificationIndexWithVerifiersV1(root, index, retainedVariant, m8QualificationBenchmarkExecutableV1, m8QualificationTrustedTruthCacheV1, validM8ProductionProfilesV1, func(string, m8ProductionReportV1, [][]m8CanonicalResultV1) error { return nil })
+	return m8ValidateQualificationIndexWithVerifiersV1(root, index, retainedVariant, m8QualificationBenchmarkExecutableV1, m8QualificationTrustedTruthCacheV1, validM8ProductionProfilesV1, func(string, m8ProductionReportV1, [][]m8CanonicalResultV1, m8ProductionMeasurementTranscriptV1) error {
+		return nil
+	})
 }
 
 func m8ValidateQualificationIndexWithVerifiersV1(root string, index m8QualificationIndexV1, retainedVariant m8QualificationRetainedVariantVerifierV1, commandExecutable m8QualificationCommandExecutableVerifierV1, truthCache m8QualificationTruthCacheVerifierV1, profileVerifier m8ProductionProfileVerifierV1, retainedAttribution m8QualificationRetainedAttributionVerifierV1) (m8QualificationIndexSummaryV1, error) {
@@ -171,7 +173,7 @@ func m8ValidateQualificationIndexWithVerifiersV1(root string, index m8Qualificat
 type m8QualificationRetainedVariantVerifierV1 func(string, m8ProductionReportV1) error
 type m8QualificationCommandExecutableVerifierV1 func(string, string, string, string) bool
 type m8QualificationTruthCacheVerifierV1 func(string, m8ProductionReportV1) ([][]m8CanonicalResultV1, error)
-type m8QualificationRetainedAttributionVerifierV1 func(string, m8ProductionReportV1, [][]m8CanonicalResultV1) error
+type m8QualificationRetainedAttributionVerifierV1 func(string, m8ProductionReportV1, [][]m8CanonicalResultV1, m8ProductionMeasurementTranscriptV1) error
 
 func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCampaignV1) (m8QualificationCampaignSummaryV1, error) {
 	return m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, m8QualificationRetainedVariantV1, m8QualificationBenchmarkExecutableV1, m8QualificationTrustedTruthCacheV1, validM8ProductionProfilesV1, m8QualificationRetainedAttributionV1)
@@ -181,7 +183,9 @@ func m8ValidateQualificationCampaignV1(root string, campaign m8QualificationCamp
 // asset boundary explicit for focused evidence tests. Production callers use
 // m8ValidateQualificationCampaignV1 above and cannot select a verifier.
 func m8ValidateQualificationCampaignWithRetainedVariantV1(root string, campaign m8QualificationCampaignV1, retainedVariant m8QualificationRetainedVariantVerifierV1) (m8QualificationCampaignSummaryV1, error) {
-	return m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, retainedVariant, m8QualificationBenchmarkExecutableV1, m8QualificationTrustedTruthCacheV1, validM8ProductionProfilesV1, func(string, m8ProductionReportV1, [][]m8CanonicalResultV1) error { return nil })
+	return m8ValidateQualificationCampaignWithVerifiersV1(root, campaign, retainedVariant, m8QualificationBenchmarkExecutableV1, m8QualificationTrustedTruthCacheV1, validM8ProductionProfilesV1, func(string, m8ProductionReportV1, [][]m8CanonicalResultV1, m8ProductionMeasurementTranscriptV1) error {
+		return nil
+	})
 }
 
 func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8QualificationCampaignV1, retainedVariant m8QualificationRetainedVariantVerifierV1, commandExecutable m8QualificationCommandExecutableVerifierV1, truthCache m8QualificationTruthCacheVerifierV1, profileVerifier m8ProductionProfileVerifierV1, retainedAttribution m8QualificationRetainedAttributionVerifierV1) (m8QualificationCampaignSummaryV1, error) {
@@ -287,8 +291,10 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 			}
 			// The production verifier returns independently anchored truth. Test-only
 			// verifier seams may return nil to keep synthetic campaign mutations cheap.
+			var transcript m8ProductionMeasurementTranscriptV1
 			if truth != nil {
-				if err := m8QualificationMeasurementTranscriptOutcomesV1(resolvedRoot, *report, truth); err != nil {
+				transcript, err = m8QualificationMeasurementTranscriptOutcomesV1(resolvedRoot, *report, truth)
+				if err != nil {
 					return summary, fmt.Errorf("qualification matrix %s has unbound query outcomes: %w", cleanPath, err)
 				}
 			}
@@ -322,7 +328,7 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 			if err := retainedVariant(resolvedRoot, *report); err != nil {
 				return summary, fmt.Errorf("qualification matrix %s has unavailable or mismatched retained M3 assets: %w", cleanPath, err)
 			}
-			if err := retainedAttribution(resolvedRoot, *report, truth); err != nil {
+			if err := retainedAttribution(resolvedRoot, *report, truth, transcript); err != nil {
 				return summary, fmt.Errorf("qualification matrix %s has unbound retained attribution: %w", cleanPath, err)
 			}
 			if executionIDs[report.ExecutionID] {
@@ -604,9 +610,12 @@ func m8QualificationRetainedVariantV1(root string, report m8ProductionReportV1) 
 // m8QualificationRetainedAttributionV1 independently replays the deterministic
 // offline attribution stages from the retained M3 assets and anchored truth.
 // Coordinator-only fields remain bound by the retained query outcomes.
-func m8QualificationRetainedAttributionV1(root string, report m8ProductionReportV1, truth [][]m8CanonicalResultV1) (err error) {
+func m8QualificationRetainedAttributionV1(root string, report m8ProductionReportV1, truth [][]m8CanonicalResultV1, transcript m8ProductionMeasurementTranscriptV1) (err error) {
 	if report.Variant == nil || len(truth) != report.Dataset.Queries {
 		return errors.New("missing retained attribution identity")
+	}
+	if len(transcript.Outcomes) != len(report.Rows) {
+		return errors.New("missing retained coordinator outcomes")
 	}
 	dir, err := m8QualificationContainedPathV1(root, report.Variant.DatabaseDirectory, "retained M3 database")
 	if err != nil {
@@ -635,7 +644,7 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 		return errors.New("retained attribution has no router candidates")
 	}
 	exhaustive := make([][]m8CanonicalResultV1, len(queries))
-	for _, row := range report.Rows {
+	for rowIndex, row := range report.Rows {
 		if row.Status != "pass" && row.Status != "fail" {
 			continue
 		}
@@ -647,10 +656,25 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 		if err != nil {
 			return err
 		}
+		idParity, scoreParity := true, true
+		for query, local := range cell.Local {
+			outcome := transcript.Outcomes[rowIndex]
+			if query >= len(outcome.TopKIDs) || query >= len(outcome.TopKScoreBits) || len(local) != len(outcome.TopKIDs[query]) || len(local) != len(outcome.TopKScoreBits[query]) {
+				return errors.New("retained coordinator outcomes have invalid shape")
+			}
+			for result := range local {
+				if local[result].ID != outcome.TopKIDs[query][result] {
+					idParity = false
+				}
+				if math.Float32bits(local[result].Score) != outcome.TopKScoreBits[query][result] {
+					scoreParity = false
+				}
+			}
+		}
 		want := cell.Evidence
 		want.EndToEndRecallAtK = row.Attribution.EndToEndRecallAtK
-		want.CoordinatorMergeIDParity = row.Attribution.CoordinatorMergeIDParity
-		want.CoordinatorMergeScoreParity = row.Attribution.CoordinatorMergeScoreParity
+		want.CoordinatorMergeIDParity = idParity
+		want.CoordinatorMergeScoreParity = scoreParity
 		want.ApproximateLocalToEndToEndLossAtK = want.ApproximateLocalHNSWRecallAtK - want.EndToEndRecallAtK
 		want.ResidualLossOwners = m8AttributionLossOwnersV1(want)
 		want.StageOwners = m8AttributionStageOwnersV1(want)
@@ -1018,7 +1042,7 @@ const (
 	m8QualificationPeakRSSCapBytesV1         uint64 = 4 << 30
 	m8QualificationIndexMaxBytesV1                  = 1 << 20
 	m8QualificationMatrixMaxBytesV1                 = 16 << 20
-	m8QualificationTranscriptMaxBytesV1             = 1 << 20
+	m8QualificationTranscriptMaxBytesV1             = 2 << 20
 )
 
 // readBoundedRegularFileV1 reads a regular file without trusting a
@@ -1102,16 +1126,16 @@ func m8QualificationMeasurementTranscriptV1(root string, report m8ProductionRepo
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func m8QualificationMeasurementTranscriptOutcomesV1(root string, report m8ProductionReportV1, truth [][]m8CanonicalResultV1) error {
+func m8QualificationMeasurementTranscriptOutcomesV1(root string, report m8ProductionReportV1, truth [][]m8CanonicalResultV1) (m8ProductionMeasurementTranscriptV1, error) {
 	if !m8QualificationMeasurementTranscriptV1(root, report) {
-		return errors.New("measurement transcript is not a canonical in-root artifact")
+		return m8ProductionMeasurementTranscriptV1{}, errors.New("measurement transcript is not a canonical in-root artifact")
 	}
 	transcript, err := m8ReadProductionMeasurementTranscriptV1(report)
 	if err != nil {
-		return err
+		return m8ProductionMeasurementTranscriptV1{}, err
 	}
 	if len(truth) != report.Dataset.Queries || len(transcript.Outcomes) != len(report.Rows) {
-		return errors.New("measurement transcript outcome/truth shape mismatch")
+		return m8ProductionMeasurementTranscriptV1{}, errors.New("measurement transcript outcome/truth shape mismatch")
 	}
 	for rowIndex, row := range report.Rows {
 		if row.Status != "pass" && row.Status != "fail" {
@@ -1123,10 +1147,10 @@ func m8QualificationMeasurementTranscriptOutcomesV1(root string, report m8Produc
 		}
 		recall := recallSum / float64(row.Samples)
 		if math.Float64bits(recall) != math.Float64bits(row.RecallAtK) || math.Float64bits(recall) != math.Float64bits(row.Attribution.EndToEndRecallAtK) {
-			return errors.New("measurement transcript query outcomes do not reproduce retained recall")
+			return m8ProductionMeasurementTranscriptV1{}, errors.New("measurement transcript query outcomes do not reproduce retained recall")
 		}
 	}
-	return nil
+	return transcript, nil
 }
 
 func m8ValidateQualificationMatrixDerivationV1(matrix m8ProductionMatrixV1) error {

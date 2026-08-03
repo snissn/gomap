@@ -140,14 +140,15 @@ type m8ProductionMeasurementTranscriptV1 struct {
 // rather than another self-reported recall aggregate. Scores are deliberately
 // omitted: canonical recall is an ID-set metric.
 type m8ProductionRowOutcomesV1 struct {
-	Overlap     float64    `json:"overlap"`
-	Probes      int        `json:"probes"`
-	EfSearch    int        `json:"ef_search"`
-	Concurrency int        `json:"concurrency"`
-	Status      string     `json:"status"`
-	Samples     int        `json:"samples"`
-	TopKIDs     [][]string `json:"top_k_document_ids"`
-	TotalNanos  []uint64   `json:"total_nanos"`
+	Overlap       float64    `json:"overlap"`
+	Probes        int        `json:"probes"`
+	EfSearch      int        `json:"ef_search"`
+	Concurrency   int        `json:"concurrency"`
+	Status        string     `json:"status"`
+	Samples       int        `json:"samples"`
+	TopKIDs       [][]string `json:"top_k_document_ids"`
+	TopKScoreBits [][]uint32 `json:"top_k_score_bits"`
+	TotalNanos    []uint64   `json:"total_nanos"`
 }
 
 // m8ProductionAttributionV1 keeps each lossy boundary visible. Recall is
@@ -764,7 +765,7 @@ func m8WriteProductionMeasurementTranscriptV1(dir string, report m8ProductionRep
 		return m8ProductionMeasurementTranscriptEvidenceV1{}, err
 	}
 	path := filepath.Join(dir, "vector_partition_m8_measurements_"+report.ExecutionID+".json")
-	transcript := m8ProductionMeasurementTranscriptV1{SchemaVersion: 3, ExecutionID: report.ExecutionID, Dataset: report.Dataset, Variant: report.Variant, Config: report.Config, Rows: report.Rows, Outcomes: outcomes}
+	transcript := m8ProductionMeasurementTranscriptV1{SchemaVersion: 4, ExecutionID: report.ExecutionID, Dataset: report.Dataset, Variant: report.Variant, Config: report.Config, Rows: report.Rows, Outcomes: outcomes}
 	raw, err := json.Marshal(transcript)
 	if err != nil {
 		return m8ProductionMeasurementTranscriptEvidenceV1{}, err
@@ -812,7 +813,7 @@ func m8ReadProductionMeasurementTranscriptV1(report m8ProductionReportV1) (m8Pro
 	var transcript m8ProductionMeasurementTranscriptV1
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&transcript) != nil || transcript.SchemaVersion != 3 {
+	if decoder.Decode(&transcript) != nil || transcript.SchemaVersion != 4 {
 		return m8ProductionMeasurementTranscriptV1{}, errors.New("invalid M8 measurement transcript schema")
 	}
 	var trailing any
@@ -857,14 +858,20 @@ func m8ProductionMeasurementTranscriptOutcomesV1(report m8ProductionReportV1, me
 				return nil, errors.New("M8 measurement transcript has incomplete query outcomes")
 			}
 			outcome.TopKIDs = make([][]string, len(measured.results))
+			outcome.TopKScoreBits = make([][]uint32, len(measured.results))
 			for query := range measured.results {
 				outcome.TopKIDs[query] = m8CanonicalIDsV1(measured.results[query])
+				outcome.TopKScoreBits[query] = make([]uint32, len(measured.results[query]))
+				for result := range measured.results[query] {
+					outcome.TopKScoreBits[query][result] = math.Float32bits(measured.results[query][result].Score)
+				}
 			}
 			outcome.TotalNanos = append([]uint64(nil), measured.durations...)
 		} else if _, ok := byRow[i]; ok && row.Status != "candidate_coverage_shortfall" {
 			return nil, errors.New("M8 measurement transcript has outcomes for unmeasured row")
 		} else {
 			outcome.TopKIDs = make([][]string, 0)
+			outcome.TopKScoreBits = make([][]uint32, 0)
 			outcome.TotalNanos = make([]uint64, 0)
 		}
 		outcomes[i] = outcome
@@ -909,11 +916,21 @@ func m8ProductionMeasurementTranscriptMaxBytesV1(report m8ProductionReportV1) (i
 	if err != nil {
 		return 0, err
 	}
+	// Score bits retain exact coordinator float32 evidence without JSON float
+	// conversion. A uint32 JSON token is at most ten digits plus a comma.
+	scoreBytes, err := memoryMul(resultCount, 11)
+	if err != nil {
+		return 0, err
+	}
 	withResults, err := memoryAdd(64<<10, resultBytes)
 	if err != nil {
 		return 0, err
 	}
-	return memoryAdd(withResults, durationBytes)
+	withScores, err := memoryAdd(withResults, scoreBytes)
+	if err != nil {
+		return 0, err
+	}
+	return memoryAdd(withScores, durationBytes)
 }
 
 func m8ValidateProductionMeasurementTranscriptOutcomesV1(transcript m8ProductionMeasurementTranscriptV1, report m8ProductionReportV1) error {
@@ -930,12 +947,18 @@ func m8ValidateProductionMeasurementTranscriptOutcomesV1(transcript m8Production
 			if len(outcome.TopKIDs) != row.Samples {
 				return errors.New("M8 measurement transcript outcome sample count mismatch")
 			}
+			if len(outcome.TopKScoreBits) != row.Samples {
+				return errors.New("M8 measurement transcript outcome score sample count mismatch")
+			}
 			if len(outcome.TotalNanos) != row.Samples {
 				return errors.New("M8 measurement transcript timing sample count mismatch")
 			}
-			for _, ids := range outcome.TopKIDs {
+			for sample, ids := range outcome.TopKIDs {
 				if len(ids) != min(report.Config.TopK, report.Dataset.Vectors) {
 					return errors.New("M8 measurement transcript outcome top-k count mismatch")
+				}
+				if len(outcome.TopKScoreBits[sample]) != len(ids) {
+					return errors.New("M8 measurement transcript outcome ID/score count mismatch")
 				}
 				seen := make(map[string]bool, len(ids))
 				for _, id := range ids {
@@ -943,6 +966,12 @@ func m8ValidateProductionMeasurementTranscriptOutcomesV1(transcript m8Production
 						return errors.New("M8 measurement transcript has invalid query outcome ID")
 					}
 					seen[id] = true
+				}
+				for _, bits := range outcome.TopKScoreBits[sample] {
+					score := math.Float32frombits(bits)
+					if math.IsNaN(float64(score)) || math.IsInf(float64(score), 0) {
+						return errors.New("M8 measurement transcript has nonfinite score bits")
+					}
 				}
 			}
 			for _, duration := range outcome.TotalNanos {
@@ -965,7 +994,7 @@ func m8ValidateProductionMeasurementTranscriptOutcomesV1(transcript m8Production
 			if row.ElapsedNanos < minimumElapsed {
 				return errors.New("M8 measurement transcript timings exceed retained elapsed time")
 			}
-		} else if outcome.TopKIDs == nil || len(outcome.TopKIDs) != 0 || outcome.TotalNanos == nil || len(outcome.TotalNanos) != 0 {
+		} else if outcome.TopKIDs == nil || len(outcome.TopKIDs) != 0 || outcome.TopKScoreBits == nil || len(outcome.TopKScoreBits) != 0 || outcome.TotalNanos == nil || len(outcome.TotalNanos) != 0 {
 			return errors.New("M8 measurement transcript has outcomes for shortfall or unsupported row")
 		}
 	}

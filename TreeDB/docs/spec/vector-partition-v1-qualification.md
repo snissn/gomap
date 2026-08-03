@@ -42,17 +42,21 @@ and derives median/min/max QPS plus p95 spread. Qualification is reported only
 after both corpus campaigns validate.
 
 Each child also retains a runner-written, hashed measurement transcript (schema
-v3) bound to its execution ID, immutable candidate/config identity, measured
-rows, and each normal row's ordered per-query returned top-k document IDs and
-request-total nanoseconds. Qualification bounded-decodes the frozen exact-truth
-cache, recomputes retained row recall, p50/p95/p99, and maximum request time
-from those samples before trusting recall or tail-latency gates. It requires
-elapsed wall time to be at least the overflow-checked sum of retained request
-totals divided by configured concurrency, and replays offline
-membership-oracle/routing attribution from retained M3 assets and frozen truth
-before attribution gates. This detects retained-bundle mismatch, reuse, or a
-relabeled aggregate; it does not claim to authenticate an attacker that can
-regenerate an entire evidence bundle.
+v4) bound to its execution ID, immutable candidate/config identity, measured
+rows, and each normal row's ordered per-query returned top-k document IDs,
+parallel float32 score-bit arrays, and request-total nanoseconds. Qualification
+bounded-decodes the frozen exact-truth cache, recomputes retained row recall,
+p50/p95/p99, and maximum request time from those samples before trusting recall
+or tail-latency gates. It requires elapsed wall time to be at least the
+overflow-checked sum of retained request totals divided by configured
+concurrency, and replays offline membership-oracle/routing attribution from
+retained M3 assets and frozen truth before attribution gates. That replay
+compares its local IDs and float32 score bits directly with the transcript,
+deriving coordinator parity rather than trusting report flags. The bounded
+transcript reader admits at most 2 MiB, with a frozen 5x1000x10 serialization
+test guarding the retained shape. This detects retained-bundle mismatch, reuse,
+or a relabeled aggregate; it does not claim to authenticate an attacker that
+can regenerate an entire evidence bundle.
 
 The graph and offline router builders have separate scalar-work envelopes from
 M3's exact-oracle visit cap: the retained 100k corpus uses 20B and the 250k
