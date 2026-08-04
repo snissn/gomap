@@ -41,6 +41,7 @@ type findSort struct {
 
 type findPlan struct {
 	predicates []findPredicate
+	orBranches [][]findPredicate
 	sort       findSort
 	skip       int32
 	limit      int32
@@ -53,7 +54,7 @@ type findResultSet struct {
 }
 
 func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error) {
-	predicates, err := parseFindPredicates(filter)
+	predicates, orBranches, err := parseFindFilter(filter)
 	if err != nil {
 		return findPlan{}, err
 	}
@@ -75,6 +76,7 @@ func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error
 	}
 	return findPlan{
 		predicates: predicates,
+		orBranches: orBranches,
 		sort:       sortSpec,
 		skip:       skip,
 		limit:      limit,
@@ -111,7 +113,7 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 	}
 	filtered := make([]wire.Document, 0, len(docs))
 	for _, doc := range docs {
-		match, err := documentMatchesPredicates(doc, plan.predicates)
+		match, err := documentMatchesPlan(doc, plan)
 		if err != nil {
 			return findResultSet{}, err
 		}
@@ -148,8 +150,9 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 }
 
 const (
-	findBatchOverheadBytes        = 5 // BSON document length plus trailing NUL.
-	findBatchResponseReserveBytes = 4096
+	findBatchOverheadBytes                = 5 // BSON document length plus trailing NUL.
+	findBatchResponseReserveBytes         = 4096
+	mongoQueryMaxDecimal128Normalizations = 1024
 )
 
 func findBatchDocumentBytes(doc wire.Document, index int) int {
@@ -215,7 +218,7 @@ func (s *Server) findPureIndexedRangeLimitDocuments(col *collections.Collection,
 }
 
 func pureIndexedRangeLimitPlan(meta collections.CollectionMeta, plan findPlan, maxDocuments int) (collections.IndexDefinition, collections.IndexRangeOptions, int, bool, bool, error) {
-	if plan.limit <= 0 || plan.skip != 0 || plan.sort.field != "" || len(plan.predicates) != 1 {
+	if len(plan.orBranches) != 0 || plan.limit <= 0 || plan.skip != 0 || plan.sort.field != "" || len(plan.predicates) != 1 {
 		return collections.IndexDefinition{}, collections.IndexRangeOptions{}, 0, false, false, nil
 	}
 	if int64(plan.limit) > int64(maxInt) {
@@ -248,6 +251,24 @@ func pureIndexedRangeLimitPlan(meta collections.CollectionMeta, plan findPlan, m
 func (s *Server) findCandidateDocuments(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan) ([]wire.Document, error) {
 	meta := col.MetaView()
 	maxDocuments := s.maxFindScanDocuments()
+	if len(plan.orBranches) != 0 {
+		records, truncated, err := col.ScanDocuments(maxDocuments)
+		if err != nil {
+			return nil, err
+		}
+		if truncated {
+			return nil, fmt.Errorf("Mongo gateway find requires a bounded scan and exceeded %d documents", maxDocuments)
+		}
+		out := make([]wire.Document, 0, len(records))
+		for _, record := range records {
+			doc, err := storedDocumentToBSON(col, materializer, record.Document)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, doc)
+		}
+		return out, nil
+	}
 	var primaryDocs []wire.Document
 	primarySet := false
 	predicates := plan.predicates
@@ -292,27 +313,31 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, materialize
 }
 
 func (s *Server) findUnsortedScanDocuments(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan) ([]wire.Document, bool, error) {
-	if plan.sort.field != "" || findPlanHasDirectCandidate(col.MetaView(), plan.predicates) {
+	if plan.sort.field != "" || (len(plan.orBranches) == 0 && findPlanHasDirectCandidate(col.MetaView(), plan.predicates)) {
 		return nil, false, nil
 	}
 	maxDocuments := s.maxFindScanDocuments()
 	docs := make([]wire.Document, 0)
 	matched := 0
 	truncated, err := col.ScanDocumentsFunc(maxDocuments, func(record collections.DocumentRecord) (bool, error) {
-		match, ok, err := storedDocumentMatchesPredicatesForCollection(col, record.Document, plan.predicates)
-		if err != nil {
-			return false, err
-		}
-		if ok && !match {
-			return true, nil
+		var match, ok bool
+		var err error
+		if len(plan.orBranches) == 0 {
+			match, ok, err = storedDocumentMatchesPredicatesForCollection(col, record.Document, plan.predicates)
+			if err != nil {
+				return false, err
+			}
+			if ok && !match {
+				return true, nil
+			}
 		}
 		var doc wire.Document
-		if !ok {
+		if !ok || len(plan.orBranches) > 0 {
 			doc, err = storedDocumentToBSON(col, materializer, record.Document)
 			if err != nil {
 				return false, err
 			}
-			match, err = documentMatchesPredicates(doc, plan.predicates)
+			match, err = documentMatchesPlan(doc, plan)
 			if err != nil {
 				return false, err
 			}
@@ -324,7 +349,7 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, material
 			matched++
 			return true, nil
 		}
-		if ok {
+		if ok && len(plan.orBranches) == 0 {
 			doc, err = storedDocumentToBSON(col, materializer, record.Document)
 			if err != nil {
 				return false, err
@@ -347,6 +372,7 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, material
 }
 
 func storedDocumentMatchesPredicates(stored []byte, predicates []findPredicate) (bool, bool, error) {
+	remainingDecimal128Normalizations := mongoQueryMaxDecimal128Normalizations
 	for _, pred := range predicates {
 		if isRangePredicate(pred.op) {
 			match, ok, err := storedDocumentMatchesInt64RangePredicate(stored, pred)
@@ -373,7 +399,7 @@ func storedDocumentMatchesPredicates(stored []byte, predicates []findPredicate) 
 			}
 			return false, true, nil
 		}
-		match, err := valueMatchesPredicate(value, pred)
+		match, err := valueMatchesPredicateWithBudget(value, pred, &remainingDecimal128Normalizations)
 		if err != nil {
 			return false, false, err
 		}
@@ -713,7 +739,7 @@ func primaryCandidatePredicate(predicates []findPredicate) (findPredicate, bool)
 }
 
 func simplePrimaryEqualityFindValue(plan findPlan) (bson.RawValue, bool) {
-	if plan.sort.field != "" || plan.skip != 0 || plan.limit > 1 {
+	if len(plan.orBranches) != 0 || plan.sort.field != "" || plan.skip != 0 || plan.limit > 1 {
 		return bson.RawValue{}, false
 	}
 	if len(plan.predicates) != 1 {
@@ -721,6 +747,9 @@ func simplePrimaryEqualityFindValue(plan findPlan) (bson.RawValue, bool) {
 	}
 	pred := plan.predicates[0]
 	if pred.field != "_id" || pred.op != findPredicateEq || len(pred.values) != 1 {
+		return bson.RawValue{}, false
+	}
+	if pred.values[0].Type == bson.TypeRegex {
 		return bson.RawValue{}, false
 	}
 	return pred.values[0], true
@@ -758,10 +787,9 @@ func documentsForPrimaryPredicate(col *collections.Collection, materializer *col
 	return out, nil
 }
 
-func documentsForIndexedPredicate(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, pred findPredicate, idx collections.IndexDefinition, maxDocuments int) ([]wire.Document, error) {
+func documentsForIndexedPredicate(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, pred findPredicate, idx collections.IndexDefinition, maxDocuments, candidateLimit int) ([]wire.Document, error) {
 	out := make([]wire.Document, 0)
 	seen := make(map[string]struct{})
-	candidateLimit := candidateLimitWithOverflowSlot(maxDocuments)
 	for _, value := range pred.values {
 		scalar, ok := indexScalarForBSONValue(value, idx.ValueType)
 		if !ok {
@@ -812,7 +840,11 @@ func documentsForIndexedFieldPredicates(col *collections.Collection, materialize
 		if predicateContainsNull(pred) {
 			continue
 		}
-		docs, err := documentsForIndexedPredicate(col, materializer, pred, idx, maxDocuments)
+		candidateLimit := candidateLimitWithOverflowSlot(maxDocuments)
+		if limit, ok := indexedEqualityCandidateLimit(plan, idx, maxDocuments); ok {
+			candidateLimit = limit
+		}
+		docs, err := documentsForIndexedPredicate(col, materializer, pred, idx, maxDocuments, candidateLimit)
 		if err != nil {
 			return nil, false, err
 		}
@@ -839,6 +871,28 @@ func documentsForIndexedFieldPredicates(col *collections.Collection, materialize
 	}
 	consider(docs)
 	return best, bestSet, nil
+}
+
+func indexedEqualityCandidateLimit(plan findPlan, idx collections.IndexDefinition, maxDocuments int) (int, bool) {
+	if plan.limit <= 0 || len(plan.orBranches) != 0 || plan.sort.field != "" || len(plan.predicates) != 1 {
+		return 0, false
+	}
+	pred := plan.predicates[0]
+	if pred.field != idx.Field || pred.op != findPredicateEq || len(pred.values) != 1 || predicateContainsNull(pred) {
+		return 0, false
+	}
+	if _, ok := indexScalarForBSONValue(pred.values[0], idx.ValueType); !ok {
+		return 0, false
+	}
+	limit := int64(plan.skip) + int64(plan.limit)
+	if limit <= 0 {
+		return 0, false
+	}
+	maxCandidateLimit := candidateLimitWithOverflowSlot(maxDocuments)
+	if limit > int64(maxCandidateLimit) {
+		return maxCandidateLimit, true
+	}
+	return int(limit), true
 }
 
 func indexedRangeCandidateLimit(plan findPlan, idx collections.IndexDefinition, maxDocuments int) (int, bool) {
@@ -1090,10 +1144,53 @@ func documentsForIndexedRange(col *collections.Collection, materializer *collect
 }
 
 func parseFindPredicates(filter wire.Document) ([]findPredicate, error) {
+	predicates, _, err := parseFindFilter(filter)
+	return predicates, err
+}
+
+func parseFindFilter(filter wire.Document) ([]findPredicate, [][]findPredicate, error) {
 	if filter == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
-	return parseFindPredicateDocument(filter)
+	elements, err := bson.Raw(filter).Elements()
+	if err != nil {
+		return nil, nil, err
+	}
+	var predicates []findPredicate
+	var orBranches [][]findPredicate
+	for _, elem := range elements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			return nil, nil, err
+		}
+		if key == "$or" {
+			if orBranches != nil {
+				return nil, nil, errors.New("Mongo gateway find supports only one top-level $or")
+			}
+			orBranches, err = parseOrPredicates(elem.Value())
+			if err != nil {
+				return nil, nil, err
+			}
+			continue
+		}
+		if key == "$and" {
+			parsed, err := parseAndPredicates(elem.Value())
+			if err != nil {
+				return nil, nil, err
+			}
+			predicates = append(predicates, parsed...)
+			continue
+		}
+		if strings.HasPrefix(key, "$") {
+			return nil, nil, fmt.Errorf("Mongo gateway find does not support query operator %q", key)
+		}
+		parsed, err := parseFieldPredicate(key, elem.Value())
+		if err != nil {
+			return nil, nil, err
+		}
+		predicates = append(predicates, parsed...)
+	}
+	return predicates, orBranches, nil
 }
 
 func parseFindPredicateDocument(doc wire.Document) ([]findPredicate, error) {
@@ -1150,6 +1247,33 @@ func parseAndPredicates(value bson.RawValue) ([]findPredicate, error) {
 		out = append(out, preds...)
 	}
 	return out, nil
+}
+
+func parseOrPredicates(value bson.RawValue) ([][]findPredicate, error) {
+	array, ok := value.ArrayOK()
+	if !ok {
+		return nil, errors.New("Mongo gateway $or must be an array")
+	}
+	values, err := array.Values()
+	if err != nil {
+		return nil, err
+	}
+	if len(values) == 0 {
+		return nil, errors.New("Mongo gateway $or must contain at least one expression")
+	}
+	branches := make([][]findPredicate, 0, len(values))
+	for i, value := range values {
+		doc, ok := value.DocumentOK()
+		if !ok {
+			return nil, fmt.Errorf("Mongo gateway $or[%d] must be a document", i)
+		}
+		predicates, err := parseFindPredicateDocument(wire.Document(doc))
+		if err != nil {
+			return nil, err
+		}
+		branches = append(branches, predicates)
+	}
+	return branches, nil
 }
 
 func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, error) {
@@ -1238,6 +1362,11 @@ func rangeOperator(op string) findPredicateOp {
 }
 
 func documentMatchesPredicates(doc wire.Document, predicates []findPredicate) (bool, error) {
+	remainingDecimal128Normalizations := mongoQueryMaxDecimal128Normalizations
+	return documentMatchesPredicatesWithBudget(doc, predicates, &remainingDecimal128Normalizations)
+}
+
+func documentMatchesPredicatesWithBudget(doc wire.Document, predicates []findPredicate, remainingDecimal128Normalizations *int) (bool, error) {
 	for _, pred := range predicates {
 		values, ok, err := lookupDocumentPredicateValues(doc, pred.field)
 		if err != nil {
@@ -1251,7 +1380,7 @@ func documentMatchesPredicates(doc wire.Document, predicates []findPredicate) (b
 		}
 		matched := false
 		for _, value := range values {
-			match, err := valueMatchesPredicate(value, pred)
+			match, err := valueMatchesPredicateWithBudget(value, pred, remainingDecimal128Normalizations)
 			if err != nil {
 				return false, err
 			}
@@ -1265,6 +1394,24 @@ func documentMatchesPredicates(doc wire.Document, predicates []findPredicate) (b
 		}
 	}
 	return true, nil
+}
+
+func documentMatchesPlan(doc wire.Document, plan findPlan) (bool, error) {
+	remainingDecimal128Normalizations := mongoQueryMaxDecimal128Normalizations
+	match, err := documentMatchesPredicatesWithBudget(doc, plan.predicates, &remainingDecimal128Normalizations)
+	if err != nil || !match || len(plan.orBranches) == 0 {
+		return match, err
+	}
+	for _, branch := range plan.orBranches {
+		match, err := documentMatchesPredicatesWithBudget(doc, branch, &remainingDecimal128Normalizations)
+		if err != nil {
+			return false, err
+		}
+		if match {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func missingValueMatchesPredicate(pred findPredicate) bool {
@@ -1290,12 +1437,21 @@ func rawValueIsNull(value bson.RawValue) bool {
 }
 
 func valueMatchesPredicate(value bson.RawValue, pred findPredicate) (bool, error) {
+	remainingDecimal128Normalizations := mongoQueryMaxDecimal128Normalizations
+	return valueMatchesPredicateWithBudget(value, pred, &remainingDecimal128Normalizations)
+}
+
+func valueMatchesPredicateWithBudget(value bson.RawValue, pred findPredicate, remainingDecimal128Normalizations *int) (bool, error) {
 	switch pred.op {
 	case findPredicateEq:
-		return rawValuesEqual(value, pred.values[0]), nil
+		return rawValuesEqualModeBudget(value, pred.values[0], false, remainingDecimal128Normalizations)
 	case findPredicateIn:
 		for _, candidate := range pred.values {
-			if rawValuesEqual(value, candidate) {
+			equal, err := rawValuesEqualModeBudget(value, candidate, false, remainingDecimal128Normalizations)
+			if err != nil {
+				return false, err
+			}
+			if equal {
 				return true, nil
 			}
 		}
@@ -1668,14 +1824,155 @@ func dottedArrayIndex(part string) (int, bool) {
 	return index, true
 }
 
+func rawValuesBothScalar(left, right bson.RawValue) bool {
+	return left.Type != bson.TypeEmbeddedDocument && left.Type != bson.TypeArray &&
+		right.Type != bson.TypeEmbeddedDocument && right.Type != bson.TypeArray
+}
+
 func rawValuesEqual(left, right bson.RawValue) bool {
+	return rawValuesEqualMode(left, right, false)
+}
+
+func mongoMutationValuesEqual(left, right bson.RawValue) bool {
+	return rawValuesEqualMode(left, right, true)
+}
+
+func rawValuesEqualMode(left, right bson.RawValue, equalNaN bool) bool {
+	equal, _ := rawValuesEqualModeBudget(left, right, equalNaN, nil)
+	return equal
+}
+
+func rawValuesEqualModeBudget(left, right bson.RawValue, equalNaN bool, remainingDecimal128Normalizations *int) (bool, error) {
+	if left.Type != bson.TypeCodeWithScope && right.Type != bson.TypeCodeWithScope && rawValuesBothScalar(left, right) {
+		return rawScalarValuesEqualModeBudget(left, right, equalNaN, remainingDecimal128Normalizations)
+	}
+	type frame struct {
+		left, right []byte
+		document    bool
+	}
+	currentLeft, currentRight := left, right
+	frames := make([]frame, 0, 8)
+	for {
+		if !currentLeft.IsZero() || !currentRight.IsZero() {
+			if currentLeft.Type == bson.TypeCodeWithScope || currentRight.Type == bson.TypeCodeWithScope {
+				if currentLeft.Type != bson.TypeCodeWithScope || currentRight.Type != bson.TypeCodeWithScope {
+					return false, nil
+				}
+				leftCode, leftScope, leftRemaining, leftOK := bsoncore.ReadCodeWithScope(currentLeft.Value)
+				rightCode, rightScope, rightRemaining, rightOK := bsoncore.ReadCodeWithScope(currentRight.Value)
+				if !leftOK || !rightOK || len(leftRemaining) != 0 || len(rightRemaining) != 0 || leftCode != rightCode {
+					return false, nil
+				}
+				if len(frames) == mongoMutationMaxBSONNesting {
+					return false, nil
+				}
+				leftContents, leftOK := rawBSONContainerContents(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: leftScope})
+				rightContents, rightOK := rawBSONContainerContents(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: rightScope})
+				if !leftOK || !rightOK {
+					return false, nil
+				}
+				// The scope document contributes one container level, matching the
+				// shared mutation nesting validator.
+				frames = append(frames, frame{left: leftContents, right: rightContents, document: true})
+				currentLeft, currentRight = bson.RawValue{}, bson.RawValue{}
+				continue
+			}
+			if rawValuesBothScalar(currentLeft, currentRight) {
+				equal, err := rawScalarValuesEqualModeBudget(currentLeft, currentRight, equalNaN, remainingDecimal128Normalizations)
+				if err != nil || !equal {
+					return false, err
+				}
+			} else {
+				if currentLeft.Type != currentRight.Type {
+					return false, nil
+				}
+				leftRemaining, leftOK := rawBSONContainerContents(currentLeft)
+				rightRemaining, rightOK := rawBSONContainerContents(currentRight)
+				if !leftOK || !rightOK {
+					return false, nil
+				}
+				if len(frames) == mongoMutationMaxBSONNesting {
+					return false, nil
+				}
+				frames = append(frames, frame{
+					left:     leftRemaining,
+					right:    rightRemaining,
+					document: currentLeft.Type == bson.TypeEmbeddedDocument,
+				})
+			}
+			currentLeft, currentRight = bson.RawValue{}, bson.RawValue{}
+			continue
+		}
+		if len(frames) == 0 {
+			return true, nil
+		}
+		last := len(frames) - 1
+		current := &frames[last]
+		if len(current.left) == 0 || len(current.right) == 0 {
+			if len(current.left) != len(current.right) {
+				return false, nil
+			}
+			frames = frames[:last]
+			continue
+		}
+		leftElement, leftRemaining, leftOK := bsoncore.ReadElement(current.left)
+		rightElement, rightRemaining, rightOK := bsoncore.ReadElement(current.right)
+		if !leftOK || !rightOK || leftElement.Validate() != nil || rightElement.Validate() != nil {
+			return false, nil
+		}
+		if current.document && !bytes.Equal(leftElement.KeyBytes(), rightElement.KeyBytes()) {
+			return false, nil
+		}
+		leftValue, leftErr := leftElement.ValueErr()
+		rightValue, rightErr := rightElement.ValueErr()
+		if leftErr != nil || rightErr != nil {
+			return false, nil
+		}
+		current.left, current.right = leftRemaining, rightRemaining
+		currentLeft = bson.RawValue{Type: bson.Type(leftValue.Type), Value: leftValue.Data}
+		currentRight = bson.RawValue{Type: bson.Type(rightValue.Type), Value: rightValue.Data}
+	}
+}
+
+func rawBSONContainerContents(value bson.RawValue) ([]byte, bool) {
+	if value.Type != bson.TypeEmbeddedDocument && value.Type != bson.TypeArray {
+		return nil, false
+	}
+	length, remaining, ok := bsoncore.ReadLength(value.Value)
+	if !ok || length < 5 || int(length) != len(value.Value) || len(remaining) == 0 || remaining[len(remaining)-1] != 0 {
+		return nil, false
+	}
+	return remaining[:len(remaining)-1], true
+}
+
+func rawScalarValuesEqualModeBudget(left, right bson.RawValue, equalNaN bool, remainingDecimal128Normalizations *int) (bool, error) {
 	if left.IsNumber() && right.IsNumber() {
 		if rawValueIsNaN(left) || rawValueIsNaN(right) {
-			return false
+			return equalNaN && rawValueIsNaN(left) && rawValueIsNaN(right), nil
 		}
-		return compareRawValues(left, right) == 0
+		if left.Type == right.Type && bytes.Equal(left.Value, right.Value) {
+			return true, nil
+		}
+		if remainingDecimal128Normalizations != nil {
+			normalizations := decimal128NormalizationCount(left) + decimal128NormalizationCount(right)
+			if normalizations > *remainingDecimal128Normalizations {
+				return false, fmt.Errorf("Mongo gateway query equality exceeds %d Decimal128 normalizations", mongoQueryMaxDecimal128Normalizations)
+			}
+			*remainingDecimal128Normalizations -= normalizations
+		}
+		return compareRawValues(left, right) == 0, nil
 	}
-	return left.Equal(right)
+	return left.Type == right.Type && left.Equal(right), nil
+}
+
+func decimal128NormalizationCount(value bson.RawValue) int {
+	if value.Type != bson.TypeDecimal128 {
+		return 0
+	}
+	if _, nonFinite := rawNumberNonFiniteRank(value); nonFinite {
+		return 0
+	}
+	return 1
 }
 
 func compareRawValues(left, right bson.RawValue) int {
@@ -1719,6 +2016,9 @@ func compareRawNumbers(left, right bson.RawValue) int {
 	if leftRank != rightRank {
 		return compareInt(leftRank, rightRank)
 	}
+	if leftRank != 4 {
+		return 0
+	}
 	if left.Type != right.Type {
 		return compareInt(bsonTypeSortRank(left.Type), bsonTypeSortRank(right.Type))
 	}
@@ -1729,28 +2029,46 @@ func numberSortRank(value bson.RawValue, finite bool) int {
 	if finite {
 		return 1
 	}
-	if value.Type == bson.TypeDouble {
-		v, ok := value.DoubleOK()
-		if ok {
-			switch {
-			case math.IsInf(v, -1):
-				return 0
-			case math.IsInf(v, 1):
-				return 2
-			case math.IsNaN(v):
-				return 3
-			}
-		}
+	if rank, ok := rawNumberNonFiniteRank(value); ok {
+		return rank
 	}
 	return 4
 }
 
-func rawValueIsNaN(value bson.RawValue) bool {
-	if value.Type != bson.TypeDouble {
-		return false
+func rawNumberNonFiniteRank(value bson.RawValue) (int, bool) {
+	switch value.Type {
+	case bson.TypeDouble:
+		v, ok := value.DoubleOK()
+		if ok {
+			switch {
+			case math.IsInf(v, -1):
+				return 0, true
+			case math.IsInf(v, 1):
+				return 2, true
+			case math.IsNaN(v):
+				return 3, true
+			}
+		}
+	case bson.TypeDecimal128:
+		v, ok := value.Decimal128OK()
+		if ok {
+			if v.IsNaN() {
+				return 3, true
+			}
+			switch v.IsInf() {
+			case -1:
+				return 0, true
+			case 1:
+				return 2, true
+			}
+		}
 	}
-	v, ok := value.DoubleOK()
-	return ok && math.IsNaN(v)
+	return 0, false
+}
+
+func rawValueIsNaN(value bson.RawValue) bool {
+	rank, ok := rawNumberNonFiniteRank(value)
+	return ok && rank == 3
 }
 
 func rawNumberRat(value bson.RawValue) (*big.Rat, bool) {
@@ -1792,15 +2110,8 @@ func rawNumberComparable(value bson.RawValue) bool {
 	if _, ok := rawNumberRat(value); ok {
 		return true
 	}
-	return rawNumberIsNonFiniteDouble(value) && !rawValueIsNaN(value)
-}
-
-func rawNumberIsNonFiniteDouble(value bson.RawValue) bool {
-	if value.Type != bson.TypeDouble {
-		return false
-	}
-	v, ok := value.DoubleOK()
-	return ok && (math.IsInf(v, -1) || math.IsInf(v, 1) || math.IsNaN(v))
+	rank, ok := rawNumberNonFiniteRank(value)
+	return ok && rank != 3
 }
 
 func decimal128Rat(value bson.Decimal128) (*big.Rat, bool) {

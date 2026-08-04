@@ -95,25 +95,43 @@ type Server struct {
 	// so sequence-based keys are not reused after restart.
 	ClusterIdempotencyNonce string
 
-	nextResponseID    atomic.Int32
-	nextConnectionID  atomic.Int64
-	nextClusterSubmit atomic.Uint64
-	nextCursorID      atomic.Int64
-	cursorCount       atomic.Int64
-	connMu            sync.Mutex
-	conns             map[net.Conn]struct{}
-	listenerMu        sync.Mutex
-	listeners         map[net.Listener]struct{}
-	cursorMu          sync.Mutex
-	cursors           map[int64]*serverCursor
-	lastCursorReap    time.Time
-	collectionCacheMu sync.RWMutex
-	collectionCache   map[string]*collections.Collection
-	updateMu          sync.Mutex
-	updateCoalescers  map[string]*mongoUpdateCoalescer
-	insertMu          sync.Mutex
-	insertCoalescers  map[string]*mongoInsertCoalescer
-	closed            atomic.Bool
+	nextResponseID            atomic.Int32
+	nextConnectionID          atomic.Int64
+	nextClusterSubmit         atomic.Uint64
+	nextCursorID              atomic.Int64
+	cursorCount               atomic.Int64
+	connMu                    sync.Mutex
+	conns                     map[net.Conn]struct{}
+	listenerMu                sync.Mutex
+	listeners                 map[net.Listener]struct{}
+	cursorMu                  sync.Mutex
+	cursors                   map[int64]*serverCursor
+	lastCursorReap            time.Time
+	collectionCacheMu         sync.RWMutex
+	collectionCache           map[string]*collections.Collection
+	collectionCreateMu        sync.Mutex
+	collectionFirstWrites     atomic.Pointer[collectionFirstWriteRegistry]
+	firstWriteAfterCreateHook func(string)
+	firstWriteBeforeWaitHook  func(*collectionFirstWritePending)
+	// filterWriteSelectedHook is test-only coordination between natural-order
+	// selection and the mutation-boundary predicate recheck.
+	filterWriteSelectedHook func()
+	updateMu                sync.Mutex
+	updateCoalescers        map[string]*mongoUpdateCoalescer
+	insertMu                sync.Mutex
+	insertCoalescers        map[string]*mongoInsertCoalescer
+	closed                  atomic.Bool
+}
+
+type collectionFirstWritePending struct {
+	name       string
+	done       chan struct{}
+	mutationMu sync.Mutex
+	coldRefs   int
+}
+
+type collectionFirstWriteRegistry struct {
+	byName map[string]*collectionFirstWritePending
 }
 
 type serverCursor struct {
@@ -697,16 +715,20 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 	}
 	retainRequestBody := name != "insert"
 
-	if name == "find" {
-		// The find path builds a raw OP_MSG response directly, so reject OP_MSG
-		// features it does not preserve. Other commands go through
-		// commandResponse with parsed document sequences.
+	if commandRejectsReadOPMsgFeatures(name) {
+		// These read paths neither consume document sequences nor support
+		// unacknowledged execution. Reject both before a command can retain a
+		// cursor or otherwise perform work whose response would be suppressed.
 		if msg.Flags&wire.MsgFlagMoreToCome != 0 {
-			return nil, retainRequestBody, fmt.Errorf("%w: find with moreToCome flag", wire.ErrUnsupported)
+			return nil, retainRequestBody, fmt.Errorf("%w: %s with moreToCome flag", wire.ErrUnsupported, name)
 		}
 		if len(msg.Sequences) > 0 {
-			return nil, retainRequestBody, fmt.Errorf("%w: find with document sequences", wire.ErrUnsupported)
+			return nil, retainRequestBody, fmt.Errorf("%w: %s with document sequences", wire.ErrUnsupported, name)
 		}
+	}
+
+	if name == "find" {
+		// The find path builds a raw OP_MSG response directly.
 		responseID := s.nextID()
 		response, err := s.findMsgResponseInto(ctx, dst, msg.Body, responseID, h.RequestID, cursorOwner)
 		if err != nil {
@@ -724,6 +746,15 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 	}
 	msgResponse, err := wire.AppendMsgMessage(dst, s.nextID(), h.RequestID, 0, response)
 	return msgResponse, retainRequestBody, err
+}
+
+func commandRejectsReadOPMsgFeatures(name string) bool {
+	switch name {
+	case "aggregate", "count", "distinct", "find":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) commandResponse(ctx context.Context, name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (wire.Document, error) {
@@ -751,6 +782,14 @@ func (s *Server) commandResponse(ctx context.Context, name string, command wire.
 		return s.insertResponse(ctx, command, sequences)
 	case "find":
 		return s.findResponse(ctx, command, cursorOwner)
+	case "aggregate":
+		return s.aggregateResponse(ctx, command, cursorOwner)
+	case "count":
+		return s.countResponse(ctx, command)
+	case "distinct":
+		return s.distinctResponse(ctx, command)
+	case "findAndModify":
+		return s.findAndModifyResponse(ctx, command)
 	case "getMore":
 		return s.getMoreResponse(command, cursorOwner)
 	case "killCursors":
@@ -776,7 +815,7 @@ func (s *Server) commandResponse(ctx context.Context, name string, command wire.
 
 func commandRejectsTransactionMarkers(name string) bool {
 	switch name {
-	case "create", "createIndexes", "delete", "dropIndexes", "find", "getMore", "insert", "killCursors", "listCollections", "listDatabases", "listIndexes", "update":
+	case "aggregate", "count", "create", "createIndexes", "delete", "distinct", "dropIndexes", "find", "findAndModify", "getMore", "insert", "killCursors", "listCollections", "listDatabases", "listIndexes", "update":
 		return true
 	default:
 		return false

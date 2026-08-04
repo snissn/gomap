@@ -147,6 +147,18 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	if !exists {
+		for i, update := range updates {
+			item, err := parseMongoUpdateItem(i, update)
+			if err != nil {
+				return mongoUpdateParseCommandError(err)
+			}
+			if item.upsert {
+				return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: cluster Mongo gateway currently does not support upsert", i))
+			}
+			if response, err := clusterUpdateItemAdmission(i, item); response != nil || err != nil {
+				return response, err
+			}
+		}
 		if s.clusterRouteProviderConfigured() {
 			return mongoClusterMutationCommandError(mongoClusterMissingCollectionMetadataError())
 		}
@@ -170,8 +182,11 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 		if err != nil {
 			return mongoUpdateParseCommandError(err)
 		}
-		if !item.bsonSetFieldsOK {
-			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: cluster Mongo gateway currently supports only top-level BSON $set updateOne by _id", i))
+		if item.upsert {
+			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: cluster Mongo gateway currently does not support upsert", i))
+		}
+		if response, err := clusterUpdateItemAdmission(i, item); response != nil || err != nil {
+			return response, err
 		}
 		route := mongoClusterRouteRequest(db, collection, iwire.CommandUpdateBSONSet, "update_bson_set")
 		if len(updates) == 1 {
@@ -185,6 +200,13 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 		modified += modifiedOne
 	}
 	return marshalUpdateResponse(matched, modified)
+}
+
+func clusterUpdateItemAdmission(index int, item mongoUpdateItem) (wire.Document, error) {
+	if item.exactID && item.bsonSetFieldsOK && !mongoBSONSetFieldsNeedNestingValidation(item.bsonSetFields) {
+		return nil, nil
+	}
+	return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: cluster Mongo gateway currently supports only top-level BSON $set updateOne by _id", index))
 }
 
 func (s *Server) clusterDeleteResponse(ctx context.Context, command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
@@ -657,7 +679,7 @@ func mongoClusterUpdateBatchRouteRequest(db, collection string, updates []wire.D
 			return mongoClusterRouteRequest(db, collection, iwire.CommandUpdateBSONSet, "update_bson_set")
 		}
 		item, err := parseMongoUpdateItem(i, update)
-		if err != nil || !item.bsonSetFieldsOK {
+		if err != nil || !item.exactID || !item.bsonSetFieldsOK {
 			return mongoClusterRouteRequest(db, collection, iwire.CommandUpdateBSONSet, "update_bson_set")
 		}
 		ids = append(ids, key)

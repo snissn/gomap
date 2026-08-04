@@ -52,6 +52,7 @@ block drifts from the executable matrix rows.
 | crud | find by _id equality | supported |
 | query | indexed equality and range predicates | supported subset |
 | query | $in on indexed scalar fields | supported subset |
+| query | top-level $or expressions | supported subset |
 | query | projection, sort, skip, and limit | supported subset |
 | cursor | getMore and killCursors | supported |
 | read concern | local/available readConcern maps to local_stale | supported subset |
@@ -64,16 +65,24 @@ block drifts from the executable matrix rows.
 | session | logical session handshake and endSessions | supported subset |
 | metadata | createIndexes, listIndexes, and dropIndexes | supported subset |
 | document | native BSON storage mode | supported subset |
-| query gap | $or | rejected |
 | query gap | dotted projection | rejected |
-| update gap | upsert | rejected |
+| update subset | natural-order arbitrary-filter update, delete, and findAndModify | supported subset |
+| update | exact _id upsert | supported subset |
 | update gap | multi update | rejected |
-| update gap | $inc | rejected |
+| update | $inc | supported subset |
+| update | $unset | supported subset |
+| update | nested $set/$unset/$inc and bounded array modifiers (no numeric array-index paths) | supported subset |
+| update | ReplaceOne by exact _id | supported subset |
 | index gap | compound index | rejected |
 | index gap | index without treedbValueType | rejected |
-| command gap | aggregate | not implemented |
-| command gap | count | not implemented |
-| command gap | findAndModify | not implemented |
+| read command | aggregate match/project/sort/skip/limit/count | supported subset |
+| command gap | serverStatus | not implemented |
+| command gap | top | not implemented |
+| command gap | dbStats | not implemented |
+| read command | count filter/skip/limit | supported subset |
+| read command | distinct top-level field with filter | supported subset |
+| read command gap | maxTimeMS on aggregate/count/distinct | rejected |
+| update subset | findAndModify exact _id no-match | supported subset |
 | transaction gap | transactions and retryable writes | not implemented |
 <!-- mongo-compatibility-matrix:end -->
 
@@ -165,18 +174,21 @@ enabled-path latency claim is made.
 | Command | `insert` / `insertMany` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerOfficialGoDriverBasicCRUD` | Standalone writeConcern durability remains minimal. In cluster submitter mode, absent/default and `{w: 1}` request visible ack, `{w: "majority"}` requests Raft-committed proof, and unsupported writeConcern options are rejected before submit. |
 | Command | `find` | `supported subset` | `TestMongoCompatibilityMatrix`, find planner tests | Query language is intentionally limited. |
 | Command | `getMore` / `killCursors` | `supported subset` | `TestMongoCompatibilityMatrix`, cursor tests | Server cursor state is in-memory only. |
-| Command option | `readConcern` on `find`, `getMore`, `listCollections`, `listDatabases`, and `listIndexes` | `supported subset` / `rejected` | `TestMongoReadConcernAcceptsLocalStaleReadSurfaces`, `TestMongoReadConcernRejectsStrongLevelsBeforeServingData`, `TestMongoCompatibilityMatrix` | Absent/empty, `{level: "local"}`, and `{level: "available"}` are accepted and map to local_stale reads. `majority`, `linearizable`, `snapshot`, cluster-time fields, unknown options, malformed documents, bad `level` types, and duplicate `level` are rejected before serving data. |
-| Command | `update` / `updateOne` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, update tests | Only `_id`-targeted updateOne with accepted update shapes. |
-| Command | `delete` / `deleteOne` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, CRUD tests | Only `_id`-targeted deletes. |
+| Command option | `readConcern` on `find`, `aggregate`, `count`, `distinct`, `getMore`, `listCollections`, `listDatabases`, and `listIndexes` | `supported subset` / `rejected` | `TestMongoReadConcernAcceptsLocalStaleReadSurfaces`, `TestMongoReadConcernRejectsStrongLevelsBeforeServingData`, `TestMongoAggregateCountDistinctRejectUnsupportedSurface`, `TestMongoCompatibilityMatrix` | Absent/empty, `{level: "local"}`, and `{level: "available"}` are accepted and map to local_stale reads. `majority`, `linearizable`, `snapshot`, cluster-time fields, unknown options, malformed documents, bad `level` types, and duplicate `level` are rejected before serving data. |
+| Command | `update` / `updateOne` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, update tests, `TestMongoFirstWriteConcurrentUpdateUpserts`, `TestMongoFirstWriteLateExistingMutationsWait`, `TestMongoFirstWriteUnrelatedColdMutationsDoNotWait`, `TestMongoFirstWriteStalePendingNamespaceDoesNotWait` | Exact `_id` retains its direct path. Supported non-`_id` filters select the first natural-order match within the scan cap and recheck at mutation; non-`_id` upsert fails closed. Competing in-process first-write upserts serialize collection creation and its first mutation after an initial miss; unrelated namespaces do not share the mutation gate, and existing-collection duplicate handling is unchanged. |
+| Command | `delete` / `deleteOne` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, CRUD tests | Exact `_id` accepts legacy limit `0` or `1`; supported non-`_id` filters require `limit: 1`, select natural order, and recheck before deletion. |
 | Command | `listCollections` | `supported subset` standalone; `rejected` in routed cluster mode | `TestMongoCompatibilityMatrix`, metadata tests, `TestMongoRoutedMetadataReadsFailClosedBeforeLocalCatalogObservation` | Minimal filtering and response fields; routed mode has no authoritative catalog binding. |
 | Command | `create` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerCreateCollectionCommand` | Creates a plain TreeDB collection catalog entry; existing collections are treated as idempotent no-op success with a response note instead of MongoDB `NamespaceExists`; capped collections and other MongoDB collection options are rejected. |
 | Command | `createIndexes` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | Single-field ascending indexes only, with `treedbValueType`. |
 | Command | `listIndexes` | `supported subset` standalone; `rejected` in routed cluster mode | `TestMongoCompatibilityMatrix`, metadata tests, `TestMongoRoutedMetadataReadsFailClosedBeforeLocalCatalogObservation` | Emits TreeDB-specific `treedbValueType` only when local metadata is authoritative. |
 | Command | `dropIndexes` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | No broad collection/database DDL surface. |
-| Command | `aggregate` | `not implemented` | `TestMongoCompatibilityMatrix` | No aggregation pipeline. |
-| Command | `count`, `countDocuments`, `estimatedDocumentCount` | `not implemented` | `TestMongoCompatibilityMatrix` covers `count` command absence | Future fast count work should be explicit. |
-| Command | `distinct` | `not implemented` | Command falls through to `CommandNotFound` | No distinct scan/index planner. |
-| Command | `findAndModify` | `not implemented` | `TestMongoCompatibilityMatrix` | No atomic find/update command surface. |
+| Command | `aggregate` | `supported subset` standalone; `rejected` in cluster mode | `TestMongoCompatibilityMatrix`, `TestMongoReadCommandsAggregateCountDistinct`, `TestStandaloneServerOfficialGoDriverAggregateCountDistinct` | Ordered `$match`, top-level inclusion/exclusion `$project`, one-field top-level `$sort`, `$skip`, `$limit`, and `$count` stages are supported with bounded materialization and normal cursors. The exact `$group`/`$sum: 1` shape emitted by the pinned Go driver's `CountDocuments` is also supported. Expressions, other `$group` shapes, write/output stages, `maxTimeMS`, and other options fail closed. |
+| Command | `serverStatus` | `not implemented` | `TestMongoCompatibilityMatrix` | Optional Compass Performance metadata is unsupported; this does not block basic connection or browsing. |
+| Command | `top` | `not implemented` | `TestMongoCompatibilityMatrix` | Optional Compass Performance metrics are unsupported; this does not block basic connection or browsing. |
+| Command | `dbStats` | `not implemented` | `TestMongoCompatibilityMatrix` | Database statistics are unsupported; this does not block basic connection or browsing. |
+| Command | `count`, `countDocuments`, `estimatedDocumentCount` | `supported subset` standalone; `rejected` in cluster mode | `TestMongoCompatibilityMatrix`, `TestStandaloneServerOfficialGoDriverAggregateCountDistinct` | `count` supports the shared filter subset plus non-negative skip/limit; `CountDocuments` uses the bounded aggregate count shape; `EstimatedDocumentCount` uses the proper count command but currently scans rather than reading metadata. `maxTimeMS` and other unsupported options fail closed. |
+| Command | `distinct` | `supported subset` standalone; `rejected` in cluster mode | `TestMongoCompatibilityMatrix`, `TestMongoDistinctTopLevelArrayNumericEqualityAndOrder` | Top-level fields, optional shared filters, scalar/array flattening, missing/null handling, stable BSON numeric equality, and first-seen ordering are supported within document/value and Decimal128 work bounds. Dotted fields, `maxTimeMS`, and other unsupported options fail closed. |
+| Command | `findAndModify` | `supported subset` | `TestFindAndModifyReturnsAtomicBeforeAndAfterImages`, `TestFindAndModifyInsertConflictAppliesToExistingDocument`, `TestMongoFirstWriteConcurrentFindAndModifyUpserts`, `TestStandaloneServerOfficialDriverConcurrentFirstWriteFindAndModifyUpserts`, `TestStandaloneServerOfficialGoDriverFilterWrites`, `TestMongoCompatibilityMatrix` | Exact `_id` retains its direct path; supported non-`_id` filters select natural order and recheck at mutation. Replacement and the shared dotted `$set`/`$unset`/`$inc`, `$setOnInsert`, bounded `$push`, and bounded `$addToSet` modifier subset are available; pre-image by default, `new:true` post-image, optional top-level `fields`, and exact-`_id` upsert. `$setOnInsert` applies only to insertion. Competing in-process first-write upserts serialize collection creation and its first mutation after an initial miss. A same-`_id` upsert losing the initial insert retries as an update only for `ErrDocumentExists`, returning `updatedExisting: true` without `upserted`; other duplicate conflicts fail. Cluster/routed, remove, sort, dotted projection, positional/array-filter paths, and transaction/retry markers are rejected. |
 | Command | collection/database drop | `not implemented` | Command falls through to `CommandNotFound` | Collection lifecycle beyond create and index metadata is not exposed. |
 | Command | logical sessions / `endSessions` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerOfficialGoDriverLogicalSession` | Advertises `logicalSessionTimeoutMinutes` and accepts `endSessions`; session IDs are accepted for driver compatibility only. |
 | Command | transactions / retryable writes | `not implemented` | `TestMongoCompatibilityMatrix` rejects transaction and retryable-write markers on supported commands and covers `commitTransaction` absence | Depends on local transaction/WAL/idempotency roadmap. |
@@ -185,38 +197,20 @@ enabled-path latency claim is made.
 
 ## Desktop Client Check
 
-Issue #1473 identified a MongoDB desktop-client connection failure on:
-`unsupported MongoDB gateway command: connectionStatus`. The gateway now handles
-that command with a minimal unauthenticated `authInfo` response and the
-compatibility matrix keeps it covered.
+On 2026-08-01, MongoDB Compass 1.49.12 on macOS 26.2 was tested against the
+gateway at commit `03e7a26e56100964f14f603f0248a1a6ccc50a68`, using
+`mongodb://127.0.0.1:27130/?directConnection=true`. Compass refreshed the
+database tree, listed the database, opened `compass_e2e.docs`, and rendered
+three BSON documents.
 
-The same desktop-client path later exposed
-`unsupported MongoDB gateway command: hostInfo`. The gateway now handles that
-command with minimal local runtime and OS metadata and keeps it covered in the
-matrix.
-
-The client path then exposed `unsupported MongoDB gateway command: buildInfo`.
-The gateway now handles that command with minimal MongoDB-compatible version
-and build metadata and keeps it covered in the matrix.
-
-The client path then exposed `unsupported MongoDB gateway command: create`.
-The gateway now handles plain collection creation as a TreeDB collection catalog
-entry, treats existing collections as idempotent no-op success, and rejects
-unsupported MongoDB collection options such as capped collections. That duplicate
-`create` behavior is an intentional GUI-compatibility deviation from MongoDB's
-`NamespaceExists` error.
-
-The client path then exposed a driver-side
-`Current topology does not support sessions` error. The gateway now advertises
-logical session timeout metadata in `hello` and accepts `endSessions`; this
-unblocks ordinary session-bearing driver commands without adding transaction
-semantics.
-
-This does not yet certify a full desktop GUI connection flow. If a client gets
-past `connectionStatus` / `hostInfo` / `buildInfo` / `create` / logical
-sessions and then asks for other metadata or DDL commands such as
-`listDatabases` or `serverStatus`, add those commands as explicit matrix rows
-before deciding whether to implement or reject them.
+This certifies only the tested connection-and-browse flow, not full Compass or
+MongoDB compatibility. The optional Compass Performance view remains
+non-blocking for basic connection and browsing: `top` and `serverStatus` return
+`CommandNotFound`, and its `currentOp` aggregate pipeline uses an unsupported
+stage.
+The small driver seeding run likewise reached document insertion but its final
+`dbStats` request returned `CommandNotFound`; database statistics are not
+implemented.
 
 ## Query Matrix
 
@@ -228,24 +222,29 @@ before deciding whether to implement or reject them.
 | Indexed scalar `$in` | `supported subset` | `TestMongoCompatibilityMatrix` | Null/missing has special scan behavior. |
 | Indexed scalar ranges `$gt`, `$gte`, `$lt`, `$lte` | `supported subset` | `TestMongoCompatibilityMatrix` | Range behavior is typed by `treedbValueType`. |
 | Top-level `$and` | `supported subset` | `TestMongoCompatibilityMatrix` | Planner flattens supported subexpressions only. |
-| Top-level `$or`, `$nor`, `$not` | `rejected` / `not implemented` | `TestMongoCompatibilityMatrix` covers `$or` rejection | Needs explicit planner semantics. |
+| Top-level `$or` | `supported subset` | `TestMongoCompatibilityMatrix`, direct-wire and official-driver `$or` tests | One or more document branches using equality, range, `$in`, and `$and`; sibling predicates are ANDed. `$or` uses the bounded scan fallback; no index union. |
+| `$nor`, `$not` | `not implemented` | Unsupported operators reject | Needs explicit planner semantics. |
 | Regex/text/geospatial predicates | `not implemented` | Unsupported operators reject or command is absent | Out of MVP scope. |
 | Dotted predicates into nested objects/arrays | `supported subset` | dotted predicate tests | Projection and sort do not support dotted fields. |
+| BSON document/array equality | `supported subset` | `TestRawValuesEqualHandlesDeepNestedBSON`, `TestRawValuesEqualHandlesWideBSON`, `TestDocumentMatchesPlanBoundsDecimal128EqualityWork`, `TestServerQueryAndFilterWriteRejectOverBudgetDecimal128Equality` | Query `$eq`/`$in` equality shares a per-candidate budget of 1,024 potential finite Decimal128 normalizations across predicates and `$or` branches; an over-budget candidate returns `BadValue`. Byte-identical numeric encodings use the exact-value fast path. |
 | Projection include/exclude top-level fields | `supported subset` | `TestMongoCompatibilityMatrix` | Cannot mix include/exclude except `_id`; dotted projection rejected. |
 | Sort by one top-level field | `supported subset` | `TestMongoCompatibilityMatrix` | Compound sort and dotted sort rejected. |
 | `skip`, `limit`, `batchSize`, `singleBatch` | `supported subset` | cursor and find planner tests | Behavior is bounded by gateway scan/message limits. |
+| Aggregate pipeline | `supported subset` | `TestMongoReadCommandsAggregateCountDistinct`, official-driver tests | Bounded ordered stages only: `$match`, `$project`, `$sort`, `$skip`, `$limit`, `$count`, plus the exact driver count `$group`; no general expressions or output stages. |
+| Count / distinct | `supported subset` | `TestMongoAggregateCountDistinctEnforceScanBounds`, official-driver tests | Both use bounded reads; estimated count is exact rather than metadata-fast, and distinct is top-level only. |
 | Collation | `not implemented` | Not parsed | String comparison is binary/default TreeDB behavior. |
 
 ## Update And Delete Matrix
 
 | Surface | Status | Harness / evidence | Current gap |
 |---|---|---|---|
-| `updateOne` by `_id` with `$set` | `supported subset` | `TestMongoCompatibilityMatrix` | Top-level fields only; `_id` mutation rejected. |
-| Batched distinct-ID `$set` updates | `supported subset` | update batch tests | Unique-index conflicts may fall back to ordered singles. |
+| Single-document `updateOne` / `ReplaceOne` | `supported subset` | `TestMongoFilterWritesSelectOneAcrossUpdateDeleteAndFindAndModify`, `TestMongoFilterWritesScanCapFailsWithoutMutation`, `TestMongoFilterUpdateSupportedLogicalFilters`, and driver update tests | Standalone only. Exact `_id` retains its direct fast path; equality, range, `$in`, `$and`, and top-level `$or` select the first natural-order match within the scan cap and recheck before mutation. |
+| Batched distinct-ID `$set` updates | `supported subset` | update batch tests | Unique-index conflicts may fall back to ordered singles; generic/replacement updates stay ordered. |
 | `multi: true` | `rejected` | `TestMongoCompatibilityMatrix` | No multi-update planner. |
-| `upsert: true` | `rejected` | `TestMongoCompatibilityMatrix` | No upsert semantics. |
-| `$inc`, `$unset`, `$push`, pipeline updates | `rejected` / `not implemented` | `TestMongoCompatibilityMatrix` covers `$inc` rejection | Only `$set` is implemented. |
-| `delete` by `_id`, limit `0` or `1` | `supported subset` | `TestMongoCompatibilityMatrix` | Non-`_id` filters rejected. |
+| Exact-`_id` `upsert: true` | `supported subset` | `TestMongoCompatibilityMatrix`, direct-wire and driver upsert tests | Modifier and replacement upserts return `n: 1`, `nModified: 0`, and typed `upserted` entries; cluster/routed upserts are rejected. |
+| Nested update modifiers | `supported subset` | `TestMongoMutationNestedOperators`, `TestMongoMutationSetOnInsertOnlyAppliesToInsertion`, `TestMongoMutationRejectsWideStoredBSONBeforeDecode`, `TestMongoMutationRejectsDeepCodeWithScopeBeforeDecode`, `TestMongoMutationSharesDecodeBudgetAcrossOperands`, `TestMongoMutationAddToSetRejectsExpensiveDecimal128ComparisonsBeforeMutation`, `TestMongoMutationAddToSetChargesNestedDecimal128LeavesBeforeMutation`, `TestMongoMutationAddToSetSharesDecimal128BudgetAcrossTargets`, `TestMongoMutationAddToSetChargesDecimal128LeavesOnBothSides`, `TestStandaloneServerOfficialGoDriverFilterWrites`, `TestMongoMutationCommandWALValueLogPointersReopen`, `TestMongoCompatibilityMatrix` | Dotted `$set`, `$unset`, `$inc`, `$setOnInsert`, and scalar or at-most-256-item `$each` forms of both `$push` and BSON-equality `$addToSet` are shared by exact-ID and supported filter writes. `$addToSet` membership deduplicates numeric NaNs, unlike query equality. An update targets at most 256 fields; each dotted path and raw BSON container nesting, including CodeWithScope scope documents and the constructed result, have at most 100 levels; one slow mutation's stored document and all decoded operands together admit at most 65,536 raw elements and 16 MiB of raw BSON; `$addToSet` duplicate work is capped per mutation at 65,536 comparisons, 8 MiB of worst-case BSON value bytes, and 1,024 potential Decimal128-normalizing leaf comparisons. `$setOnInsert` applies only when an exact-ID upsert inserts; empty operator specifications and empty `$each` are no-ops. `_id`, numeric array-index components, positional/array-filter paths, empty path segments, ancestor/descendant conflicts, pipelines, unsupported modifiers, excessive BSON nesting, and over-budget slow decoded documents reject before mutation. `$inc` supports int32/int64/double only; null/non-numeric targets reject. |
+| Cluster/routed generic, replacement, and upsert updates | `rejected` | cluster submitter tests | Only existing standalone semantics are supported; cluster accepts its native BSON `$set` route only. |
+| Single-document `delete` | `supported subset` | `TestMongoFilterWritesSelectOneAcrossUpdateDeleteAndFindAndModify`, `TestMongoFilterWritesScanCapFailsWithoutMutation`, and direct-wire delete tests | Exact `_id` accepts legacy limit `0` or `1`; supported non-`_id` filters require `limit: 1`, use natural-order selection, and recheck before deletion. |
 
 ## BSON And Storage Matrix
 
@@ -293,14 +292,16 @@ before deciding whether to implement or reject them.
 
 ## Next Gap-Closing Candidates
 
-1. Run a real desktop GUI client after `connectionStatus` and add any next
-   unsupported command as a matrix row before implementing it.
+1. Decide whether optional Compass Performance metadata (`serverStatus`, `top`,
+   and aggregate-backed `currentOp`) is worth implementing; basic connection
+   and browsing do not depend on it.
 2. Decide whether unsupported filters should always fail closed or allow bounded
    scans behind a feature flag.
 3. Extend explicit `writeConcern` handling beyond the current cluster submitter
    subset, and add stronger readConcern modes only after a documented TreeDB
    snapshot/causal-read boundary exists.
-4. Add count/distinct only after the desired TreeDB collection count/index
-   semantics are clear.
+4. Add metadata-fast estimated counts and index-assisted distinct only when the
+   collection metadata/index contracts can preserve the documented bounded
+   semantics.
 5. Keep multi-document transactions blocked until the local collection
    transaction and collection WAL tracks are implemented.
