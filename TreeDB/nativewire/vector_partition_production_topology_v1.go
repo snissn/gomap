@@ -65,6 +65,15 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 	if opts.RouterSource == nil || opts.ReplicatedLifecycle == nil {
 		return nil, errors.New("nativewire: production vector topology requires router and replicated lifecycle")
 	}
+	coordinatorLimits, err := normalizeVectorPartitionCoordinatorLimitsV1(opts.CoordinatorLimits)
+	if err != nil {
+		return nil, err
+	}
+	shardLimits, err := normalizeVectorPartitionShardSearchLimitsV1(opts.ShardLimits)
+	if err != nil {
+		return nil, err
+	}
+	opts.CoordinatorLimits, opts.ShardLimits = coordinatorLimits, shardLimits
 	if err := opts.Catalog.ValidateVectorPartitionPlacementV1(opts.Placement); err != nil {
 		return nil, fmt.Errorf("nativewire: production vector topology placement: %w", err)
 	}
@@ -147,7 +156,7 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 		}
 		group, _ := opts.Catalog.Group(shard.GroupID)
 		if shard.Service.localGroup != shard.GroupID || !slices.Contains(group.Members, shard.Service.localNodeID) ||
-			!reflect.DeepEqual(shard.Service.route.placement, opts.Placement) {
+			!reflect.DeepEqual(shard.Service.route.placement, opts.Placement) || shard.Service.limits != shardLimits {
 			return nil, fmt.Errorf("nativewire: production vector topology shard %q service does not match topology", shard.GroupID)
 		}
 		if endpoint := h.endpoints[shard.GroupID]; endpoint == "" || !vectorPartitionProductionEndpointMatchesListenerV1(endpoint, shard.Listener) {
@@ -175,10 +184,7 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 		localListeners[listenerKey] = shard.GroupID
 		h.listeners[shard.GroupID], h.services[shard.GroupID] = shard.Listener, shard.Service
 	}
-	maxConnectionsPerEndpoint := opts.CoordinatorLimits.MaxConcurrentRequests
-	if maxConnectionsPerEndpoint == 0 {
-		maxConnectionsPerEndpoint = DefaultVectorPartitionCoordinatorLimitsV1().MaxConcurrentRequests
-	}
+	maxConnectionsPerEndpoint := coordinatorLimits.MaxConcurrentRequests
 	dispatcher, err := newVectorPartitionShardSearchTCPDispatcherV1(h.endpoints, opts.NodeEndpoints, maxConnectionsPerEndpoint)
 	if err != nil {
 		return nil, err
@@ -189,12 +195,13 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 		return nil, err
 	}
 	for group, listener := range h.listeners {
-		h.serve(group, listener, h.services[group], opts.ShardIdleTimeout)
+		h.serve(group, listener, h.services[group], opts.ShardIdleTimeout, maxConnectionsPerEndpoint)
 	}
 	return h, nil
 }
 
-func (h *VectorPartitionProductionTopologyV1) serve(group raftcluster.GroupID, listener net.Listener, service *VectorPartitionShardSearchServiceV1, idleTimeout time.Duration) {
+func (h *VectorPartitionProductionTopologyV1) serve(group raftcluster.GroupID, listener net.Listener, service *VectorPartitionShardSearchServiceV1, idleTimeout time.Duration, maxConnections int) {
+	connectionSlots := make(chan struct{}, maxConnections)
 	h.mu.Lock()
 	h.serving[group] = true
 	h.mu.Unlock()
@@ -215,9 +222,16 @@ func (h *VectorPartitionProductionTopologyV1) serve(group raftcluster.GroupID, l
 				}
 				return
 			}
+			select {
+			case connectionSlots <- struct{}{}:
+			default:
+				_ = conn.Close()
+				continue
+			}
 			h.mu.Lock()
 			if h.closed {
 				h.mu.Unlock()
+				<-connectionSlots
 				_ = conn.Close()
 				return
 			}
@@ -226,6 +240,7 @@ func (h *VectorPartitionProductionTopologyV1) serve(group raftcluster.GroupID, l
 			h.mu.Unlock()
 			go func() {
 				defer h.wg.Done()
+				defer func() { <-connectionSlots }()
 				defer func() { h.mu.Lock(); delete(h.conns, conn); h.mu.Unlock() }()
 				(VectorPartitionShardSearchTCPServerV1{Service: service, InitialTimeout: idleTimeout}).ServeConn(context.Background(), conn)
 			}()
@@ -267,7 +282,13 @@ func vectorPartitionProductionEndpointMatchesListenerV1(endpoint string, listene
 		return endpoint == listener.Addr().String()
 	}
 	advertised, err := net.ResolveTCPAddr("tcp", endpoint)
-	return err == nil && advertised.Port == bound.Port && (bound.IP.IsUnspecified() || bound.IP.Equal(advertised.IP))
+	if err != nil || advertised.Port != bound.Port {
+		return false
+	}
+	if !bound.IP.IsUnspecified() {
+		return bound.IP.Equal(advertised.IP)
+	}
+	return (bound.IP.To4() != nil) == (advertised.IP.To4() != nil)
 }
 
 func vectorPartitionProductionEndpointKeyV1(endpoint string) (string, error) {
