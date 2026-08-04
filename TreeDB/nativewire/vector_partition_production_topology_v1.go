@@ -359,7 +359,15 @@ func vectorPartitionProductionEndpointAddressMatchesListenerV1(advertised *net.T
 		return false
 	}
 	if !bound.IP.IsUnspecified() {
-		return bound.IP.Equal(advertised.IP) && (bound.IP.To4() != nil || bound.Zone == advertised.Zone)
+		if !bound.IP.Equal(advertised.IP) || bound.IP.To4() != nil {
+			return bound.IP.Equal(advertised.IP)
+		}
+		if bound.Zone == advertised.Zone {
+			return true
+		}
+		boundInterface, boundErr := vectorPartitionProductionInterfaceForZoneV1(bound.Zone)
+		advertisedInterface, advertisedErr := vectorPartitionProductionInterfaceForZoneV1(advertised.Zone)
+		return boundErr == nil && advertisedErr == nil && boundInterface.Index == advertisedInterface.Index
 	}
 	if bound.IP.To4() != nil || advertised.IP.To4() == nil {
 		return (bound.IP.To4() != nil) == (advertised.IP.To4() != nil)
@@ -410,14 +418,7 @@ func vectorPartitionProductionEndpointAddressIsLocalV1(address *net.TCPAddr, loc
 		if address.Zone == "" {
 			return false
 		}
-		iface, err := net.InterfaceByName(address.Zone)
-		if err != nil {
-			index, indexErr := strconv.Atoi(address.Zone)
-			if indexErr != nil {
-				return false
-			}
-			iface, err = net.InterfaceByIndex(index)
-		}
+		iface, err := vectorPartitionProductionInterfaceForZoneV1(address.Zone)
 		if err != nil {
 			return false
 		}
@@ -467,6 +468,13 @@ func vectorPartitionProductionEndpointAddressesV1(endpoint string) ([]*net.TCPAd
 			continue
 		}
 		address := &net.TCPAddr{IP: addr.IP, Port: port, Zone: addr.Zone}
+		if address.Zone != "" {
+			iface, err := vectorPartitionProductionInterfaceForZoneV1(address.Zone)
+			if err != nil {
+				return nil, fmt.Errorf("TCP endpoint zone %q is invalid: %w", address.Zone, err)
+			}
+			address.Zone = strconv.Itoa(iface.Index)
+		}
 		key := address.String()
 		if _, ok := seen[key]; ok {
 			continue
@@ -478,6 +486,13 @@ func vectorPartitionProductionEndpointAddressesV1(endpoint string) ([]*net.TCPAd
 		return nil, errors.New("TCP endpoint host is unspecified")
 	}
 	return addresses, nil
+}
+
+func vectorPartitionProductionInterfaceForZoneV1(zone string) (*net.Interface, error) {
+	if index, err := strconv.Atoi(zone); err == nil {
+		return net.InterfaceByIndex(index)
+	}
+	return net.InterfaceByName(zone)
 }
 
 func vectorPartitionProductionEndpointKeysV1(endpoint string) ([]string, error) {

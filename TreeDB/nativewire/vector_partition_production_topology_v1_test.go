@@ -345,6 +345,26 @@ func TestVectorPartitionProductionEndpointMatchesListenerAddressFamilyV1(t *test
 	if vectorPartitionProductionEndpointAddressMatchesListenerV1(&net.TCPAddr{IP: net.ParseIP("fe80::1"), Port: 1, Zone: "lo"}, scoped) {
 		t.Fatal("mismatched scoped IPv6 zone was accepted")
 	}
+	interfaces, err := net.Interfaces()
+	if err != nil || len(interfaces) == 0 {
+		t.Fatalf("network interfaces=%v error=%v", interfaces, err)
+	}
+	iface := interfaces[0]
+	scoped.addr = &net.TCPAddr{IP: net.ParseIP("fe80::1"), Port: 1, Zone: iface.Name}
+	if !vectorPartitionProductionEndpointAddressMatchesListenerV1(&net.TCPAddr{IP: net.ParseIP("fe80::1"), Port: 1, Zone: fmt.Sprint(iface.Index)}, scoped) {
+		t.Fatal("equivalent scoped IPv6 zone forms did not match")
+	}
+	nameKeys, err := vectorPartitionProductionEndpointKeysV1(fmt.Sprintf("[fe80::1%%%s]:1", iface.Name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexKeys, err := vectorPartitionProductionEndpointKeysV1(fmt.Sprintf("[fe80::1%%%d]:1", iface.Index))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nameKeys) != 1 || len(indexKeys) != 1 || nameKeys[0] != indexKeys[0] {
+		t.Fatalf("scoped endpoint keys name=%v index=%v", nameKeys, indexKeys)
+	}
 	linkLocal := net.ParseIP("fe80::1")
 	local := []net.Addr{&net.IPNet{IP: linkLocal, Mask: net.CIDRMask(64, 128)}}
 	if vectorPartitionProductionEndpointAddressIsLocalV1(&net.TCPAddr{IP: linkLocal}, local) {
