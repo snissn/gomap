@@ -710,10 +710,16 @@ func bsonIndexEntryKeyV2(component, documentID []byte) ([]byte, error) {
 		}
 		return nil, err
 	}
-	if len(documentID) >= bsonIndexKeyComponentV2MaxBytes {
+	escapedDocumentIDLength := len(documentID)
+	for _, value := range documentID {
+		if value == 0 {
+			escapedDocumentIDLength++
+		}
+	}
+	if escapedDocumentIDLength > bsonIndexKeyComponentV2MaxBytes-3 {
 		return nil, errBSONIndexKeyV2TooLarge
 	}
-	out := make([]byte, 0, len(component)+len(documentID)+3)
+	out := make([]byte, 0, len(component)+escapedDocumentIDLength+3)
 	out = append(out, component...)
 	out = append(out, bsonIndexKeyDocumentIDSuffixMarkerV2)
 	for _, value := range documentID {

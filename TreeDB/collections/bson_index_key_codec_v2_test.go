@@ -203,6 +203,9 @@ func TestBSONIndexKeyCodecV2StringsDescendingAndBoundaries(t *testing.T) {
 	if err != nil || string(id) != "document\x00seven" {
 		t.Fatalf("escaped document ID=%q err=%v", id, err)
 	}
+	if _, err := bsonIndexEntryKeyV2(first, bytes.Repeat([]byte{0}, bsonIndexKeyComponentV2MaxBytes/2+1)); err != errBSONIndexKeyV2TooLarge {
+		t.Fatalf("over-budget escaped document ID error=%v", err)
+	}
 }
 
 func TestBSONIndexKeyCodecV2RejectsUnsupportedMalformedAndOverBudget(t *testing.T) {

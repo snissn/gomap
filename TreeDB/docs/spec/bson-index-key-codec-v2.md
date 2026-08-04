@@ -69,8 +69,8 @@ stores seconds then ordinal as two unsigned big-endian 32-bit words.
 
 Malformed raw BSON, invalid UTF-8, non-canonical numeric coefficients,
 unterminated components, invalid fixed-width payloads, and components exceeding
-1 MiB are rejected. String escape growth is counted before the component is
-appended, so embedded NUL bytes cannot cross that bound through expansion.
+1 MiB are rejected. String and document-ID escape growth is counted before
+append, so embedded NUL bytes cannot cross that bound through expansion.
 Finite numeric coefficients are limited to 2,048 decimal digits and normalized
 decimal exponents to the inclusive range `[-10000, 10000]`; decoding applies
 the same limits to corrupted or hand-built components.
