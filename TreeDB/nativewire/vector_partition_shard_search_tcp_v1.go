@@ -20,7 +20,11 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 )
 
-const vectorPartitionShardSearchTCPMaxFrameBytesV1 uint32 = 64 << 20
+const (
+	vectorPartitionShardSearchTCPMaxFrameBytesV1      uint32 = 64 << 20
+	vectorPartitionShardSearchTCPMinFrameBytesV1      uint64 = 4 << 10
+	vectorPartitionShardSearchTCPJSONExpansionBoundV1 uint64 = 6
+)
 
 // VectorPartitionShardSearchTCPDispatcherV1 is a bounded, length-framed TCP
 // dispatcher for distinct M5 service endpoints.  It is intentionally not an
@@ -30,7 +34,8 @@ type VectorPartitionShardSearchTCPDispatcherV1 struct {
 	endpoints                 map[raftcluster.GroupID]string
 	nodeEndpoints             map[raftcluster.GroupID]map[raftcluster.NodeID]string
 	dial                      func(context.Context, string, string) (net.Conn, error)
-	maxFrame                  uint32
+	maxRequestFrame           uint32
+	maxResponseFrame          uint32
 	maxConnectionsPerEndpoint int
 	mu                        sync.Mutex
 	pools                     map[string]*vectorPartitionShardSearchTCPEndpointPoolV1
@@ -61,15 +66,27 @@ func NewVectorPartitionShardSearchTCPDispatcherV1(endpoints map[raftcluster.Grou
 // routes a coordinator retry to the leader-hinted node when that endpoint is
 // known. Group endpoints remain the safe fallback for one service per group.
 func NewVectorPartitionShardSearchTCPDispatcherWithNodeEndpointsV1(endpoints map[raftcluster.GroupID]string, nodeEndpoints map[raftcluster.GroupID]map[raftcluster.NodeID]string) (*VectorPartitionShardSearchTCPDispatcherV1, error) {
-	return newVectorPartitionShardSearchTCPDispatcherV1(endpoints, nodeEndpoints, DefaultVectorPartitionCoordinatorLimitsV1().MaxConcurrentRequests)
+	return newVectorPartitionShardSearchTCPDispatcherV1(endpoints, nodeEndpoints, DefaultVectorPartitionCoordinatorLimitsV1().MaxConcurrentRequests, DefaultVectorPartitionShardSearchLimitsV1())
 }
 
-func newVectorPartitionShardSearchTCPDispatcherV1(endpoints map[raftcluster.GroupID]string, nodeEndpoints map[raftcluster.GroupID]map[raftcluster.NodeID]string, maxConnectionsPerEndpoint int) (*VectorPartitionShardSearchTCPDispatcherV1, error) {
+func newVectorPartitionShardSearchTCPDispatcherV1(endpoints map[raftcluster.GroupID]string, nodeEndpoints map[raftcluster.GroupID]map[raftcluster.NodeID]string, maxConnectionsPerEndpoint int, limits VectorPartitionShardSearchLimitsV1) (*VectorPartitionShardSearchTCPDispatcherV1, error) {
 	if len(endpoints) == 0 {
 		return nil, errors.New("nativewire: M5 TCP dispatcher requires endpoints")
 	}
 	if maxConnectionsPerEndpoint < 1 {
 		return nil, errors.New("nativewire: M5 TCP dispatcher requires a positive per-endpoint connection limit")
+	}
+	limits, err := normalizeVectorPartitionShardSearchLimitsV1(limits)
+	if err != nil {
+		return nil, err
+	}
+	maxRequestFrame, err := vectorPartitionShardSearchTCPFrameBoundV1(limits.MaxRequestBytes)
+	if err != nil {
+		return nil, err
+	}
+	maxResponseFrame, err := vectorPartitionShardSearchTCPFrameBoundV1(limits.MaxResponseBytes)
+	if err != nil {
+		return nil, err
 	}
 	copyEndpoints := make(map[raftcluster.GroupID]string, len(endpoints))
 	for group, endpoint := range endpoints {
@@ -97,14 +114,15 @@ func newVectorPartitionShardSearchTCPDispatcherV1(endpoints map[raftcluster.Grou
 		endpoints:                 copyEndpoints,
 		nodeEndpoints:             copyNodeEndpoints,
 		dial:                      dialer.DialContext,
-		maxFrame:                  vectorPartitionShardSearchTCPMaxFrameBytesV1,
+		maxRequestFrame:           maxRequestFrame,
+		maxResponseFrame:          maxResponseFrame,
 		maxConnectionsPerEndpoint: maxConnectionsPerEndpoint,
 		pools:                     make(map[string]*vectorPartitionShardSearchTCPEndpointPoolV1),
 	}, nil
 }
 
 func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShardSearchV1(ctx context.Context, request VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
-	if d == nil || d.dial == nil || d.maxFrame == 0 {
+	if d == nil || d.dial == nil || d.maxRequestFrame == 0 || d.maxResponseFrame == 0 {
 		return VectorPartitionShardSearchResponseV1{}, errors.New("nativewire: M5 TCP dispatcher is not configured")
 	}
 	for attempt := 0; ; attempt++ {
@@ -141,10 +159,10 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) dispatchVectorPartitionShard
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPRetryableTransportErrorV1(requestCtx, request.TargetGroupID, err)
 	}
 	frame := vectorPartitionShardSearchTCPFrameV1{Request: &request}
-	if err := writeVectorPartitionShardSearchTCPFrameV1(conn, frame, d.maxFrame); err != nil {
+	if err := writeVectorPartitionShardSearchTCPFrameV1(conn, frame, d.maxRequestFrame); err != nil {
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPRetryableTransportErrorV1(requestCtx, request.TargetGroupID, err)
 	}
-	frame, err = readVectorPartitionShardSearchTCPFrameV1(conn, d.maxFrame)
+	frame, err = readVectorPartitionShardSearchTCPFrameV1(conn, d.maxResponseFrame)
 	if err != nil {
 		if request.DeadlineUnixNano != 0 && !time.Now().Before(time.Unix(0, request.DeadlineUnixNano)) {
 			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorDeadlineV1, GroupID: request.TargetGroupID, Err: context.DeadlineExceeded}
@@ -310,9 +328,10 @@ func vectorPartitionShardSearchTCPReconnectableV1(err error) bool {
 // VectorPartitionShardSearchTCPServerV1 serves one M5 service over the same
 // bounded framing contract used by the dispatcher.
 type VectorPartitionShardSearchTCPServerV1 struct {
-	Service        VectorPartitionShardSearchHandlerV1
-	MaxFrame       uint32
-	InitialTimeout time.Duration
+	Service          VectorPartitionShardSearchHandlerV1
+	MaxFrame         uint32
+	MaxResponseFrame uint32
+	InitialTimeout   time.Duration
 }
 
 // VectorPartitionShardSearchHandlerV1 is the narrow server dependency needed
@@ -326,6 +345,10 @@ func (s VectorPartitionShardSearchTCPServerV1) ServeConn(ctx context.Context, co
 	maxFrame := s.MaxFrame
 	if maxFrame == 0 {
 		maxFrame = vectorPartitionShardSearchTCPMaxFrameBytesV1
+	}
+	maxResponseFrame := s.MaxResponseFrame
+	if maxResponseFrame == 0 {
+		maxResponseFrame = maxFrame
 	}
 	initialTimeout := s.InitialTimeout
 	if initialTimeout < 0 {
@@ -345,11 +368,11 @@ func (s VectorPartitionShardSearchTCPServerV1) ServeConn(ctx context.Context, co
 			// A peer that sends no frame (or never reads) must not strand this server
 			// goroutine while we try to report the bounded framing failure.
 			_ = conn.SetWriteDeadline(time.Now().Add(initialTimeout))
-			_ = writeVectorPartitionShardSearchTCPFrameV1(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, Message: "invalid M5 TCP request"}}, maxFrame)
+			_ = writeVectorPartitionShardSearchTCPFrameV1(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, Message: "invalid M5 TCP request"}}, maxResponseFrame)
 			return
 		}
 		if s.Service == nil {
-			s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: frame.Request.TargetGroupID, Message: "M5 service is unavailable"}}, maxFrame, time.Now().Add(initialTimeout))
+			_ = s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: frame.Request.TargetGroupID, Message: "M5 service is unavailable"}}, maxResponseFrame, time.Now().Add(initialTimeout))
 			return
 		}
 		requestCtx, cancel := vectorPartitionShardSearchTCPRequestContextV1(ctx, frame.Request.DeadlineUnixNano)
@@ -365,16 +388,20 @@ func (s VectorPartitionShardSearchTCPServerV1) ServeConn(ctx context.Context, co
 			writeDeadline = deadline
 		}
 		if err != nil {
-			s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: vectorPartitionShardSearchTCPErrorFromErrorV1(err)}, maxFrame, writeDeadline)
+			if s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: vectorPartitionShardSearchTCPErrorFromErrorV1(err)}, maxResponseFrame, writeDeadline) != nil {
+				return
+			}
 			continue
 		}
-		s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Response: &response}, maxFrame, writeDeadline)
+		if s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Response: &response}, maxResponseFrame, writeDeadline) != nil {
+			return
+		}
 	}
 }
 
-func (s VectorPartitionShardSearchTCPServerV1) writeFrame(conn net.Conn, frame vectorPartitionShardSearchTCPFrameV1, maxFrame uint32, deadline time.Time) {
+func (s VectorPartitionShardSearchTCPServerV1) writeFrame(conn net.Conn, frame vectorPartitionShardSearchTCPFrameV1, maxFrame uint32, deadline time.Time) error {
 	_ = conn.SetWriteDeadline(deadline)
-	_ = writeVectorPartitionShardSearchTCPFrameV1(conn, frame, maxFrame)
+	return writeVectorPartitionShardSearchTCPFrameV1(conn, frame, maxFrame)
 }
 
 type vectorPartitionShardSearchTCPFrameV1 struct {
@@ -458,6 +485,17 @@ func readVectorPartitionShardSearchTCPFrameV1(r io.Reader, max uint32) (vectorPa
 		return vectorPartitionShardSearchTCPFrameV1{}, errors.New("M5 TCP frame has trailing JSON values")
 	}
 	return frame, nil
+}
+
+func vectorPartitionShardSearchTCPFrameBoundV1(logicalBytes uint64) (uint32, error) {
+	// encoding/json can expand one input byte to a six-byte Unicode escape;
+	// logical request/response accounting already reserves fixed envelopes.
+	if logicalBytes == 0 || logicalBytes > uint64(^uint32(0))/vectorPartitionShardSearchTCPJSONExpansionBoundV1 {
+		return 0, errors.New("nativewire: M5 TCP logical byte limit exceeds the frame bound")
+	}
+	frameBytes := logicalBytes * vectorPartitionShardSearchTCPJSONExpansionBoundV1
+	frameBytes = max(frameBytes, vectorPartitionShardSearchTCPMinFrameBytesV1)
+	return uint32(frameBytes), nil
 }
 
 func vectorPartitionShardSearchTCPDeadlineV1(ctx context.Context, deadlineUnixNano int64, conn net.Conn) error {

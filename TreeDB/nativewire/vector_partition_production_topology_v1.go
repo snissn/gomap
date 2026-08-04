@@ -190,7 +190,7 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 		h.listeners[shard.GroupID], h.services[shard.GroupID] = shard.Listener, shard.Service
 	}
 	maxPoolConnections := coordinatorLimits.MaxConcurrentRequests
-	dispatcher, err := newVectorPartitionShardSearchTCPDispatcherV1(h.endpoints, opts.NodeEndpoints, maxPoolConnections)
+	dispatcher, err := newVectorPartitionShardSearchTCPDispatcherV1(h.endpoints, opts.NodeEndpoints, maxPoolConnections, shardLimits)
 	if err != nil {
 		return nil, err
 	}
@@ -202,12 +202,12 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 	for group, listener := range h.listeners {
 		// Keep accepted sockets bounded without letting one dispatcher pool consume
 		// the whole listener while its keep-alives are idle.
-		h.serve(group, listener, h.services[group], opts.ShardIdleTimeout, coordinatorLimits.MaxRequests)
+		h.serve(group, listener, h.services[group], opts.ShardIdleTimeout, coordinatorLimits.MaxRequests, dispatcher.maxRequestFrame, dispatcher.maxResponseFrame)
 	}
 	return h, nil
 }
 
-func (h *VectorPartitionProductionTopologyV1) serve(group raftcluster.GroupID, listener net.Listener, service *VectorPartitionShardSearchServiceV1, idleTimeout time.Duration, maxConnections int) {
+func (h *VectorPartitionProductionTopologyV1) serve(group raftcluster.GroupID, listener net.Listener, service *VectorPartitionShardSearchServiceV1, idleTimeout time.Duration, maxConnections int, maxRequestFrame, maxResponseFrame uint32) {
 	connectionSlots := make(chan struct{}, maxConnections)
 	h.mu.Lock()
 	h.serving[group] = true
@@ -256,7 +256,7 @@ func (h *VectorPartitionProductionTopologyV1) serve(group raftcluster.GroupID, l
 				defer h.wg.Done()
 				defer func() { <-connectionSlots }()
 				defer func() { h.mu.Lock(); delete(h.conns, conn); h.mu.Unlock() }()
-				(VectorPartitionShardSearchTCPServerV1{Service: service, InitialTimeout: idleTimeout}).ServeConn(context.Background(), conn)
+				(VectorPartitionShardSearchTCPServerV1{Service: service, MaxFrame: maxRequestFrame, MaxResponseFrame: maxResponseFrame, InitialTimeout: idleTimeout}).ServeConn(context.Background(), conn)
 			}()
 		}
 	}()
@@ -296,7 +296,7 @@ func vectorPartitionProductionEndpointMatchesListenerV1(endpoint string, listene
 		return endpoint == listener.Addr().String()
 	}
 	advertised, err := net.ResolveTCPAddr("tcp", endpoint)
-	if err != nil || advertised.Port != bound.Port {
+	if err != nil || advertised.Port != bound.Port || len(advertised.IP) == 0 || advertised.IP.IsUnspecified() {
 		return false
 	}
 	if !bound.IP.IsUnspecified() {

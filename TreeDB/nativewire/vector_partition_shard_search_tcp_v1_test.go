@@ -2,10 +2,12 @@ package nativewire
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -46,6 +48,70 @@ func TestVectorPartitionShardSearchTCPDispatcherReusesConnectionV1(t *testing.T)
 	if got := accepts.Load(); got != 1 {
 		t.Fatalf("connections=%d want one reused connection", got)
 	}
+}
+
+func TestVectorPartitionShardSearchTCPDerivesSeparateFrameBoundsV1(t *testing.T) {
+	limits := DefaultVectorPartitionShardSearchLimitsV1()
+	dispatcher, err := newVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": "127.0.0.1:1"}, nil, 1, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dispatcher.Close()
+	if got, want := dispatcher.maxRequestFrame, uint32(limits.MaxRequestBytes*vectorPartitionShardSearchTCPJSONExpansionBoundV1); got != want {
+		t.Fatalf("request frame=%d want=%d", got, want)
+	}
+	if got, want := dispatcher.maxResponseFrame, uint32(limits.MaxResponseBytes*vectorPartitionShardSearchTCPJSONExpansionBoundV1); got != want {
+		t.Fatalf("response frame=%d want=%d", got, want)
+	}
+	limits.MaxResponseBytes = 128 << 20
+	dispatcher, err = newVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": "127.0.0.1:1"}, nil, 1, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dispatcher.Close()
+	if got, want := dispatcher.maxResponseFrame, uint32(limits.MaxResponseBytes*vectorPartitionShardSearchTCPJSONExpansionBoundV1); got != want {
+		t.Fatalf("custom response frame=%d want=%d", got, want)
+	}
+	limits.MaxResponseBytes = uint64(^uint32(0))/vectorPartitionShardSearchTCPJSONExpansionBoundV1 + 1
+	if _, err := newVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": "127.0.0.1:1"}, nil, 1, limits); err == nil {
+		t.Fatal("unencodable response limit succeeded")
+	}
+}
+
+func TestVectorPartitionShardSearchTCPServerBoundsRequestAndFailedResponseFramesV1(t *testing.T) {
+	t.Run("request", func(t *testing.T) {
+		client, server := net.Pipe()
+		defer client.Close()
+		called := atomic.Bool{}
+		go (VectorPartitionShardSearchTCPServerV1{MaxFrame: 64, MaxResponseFrame: 4096, Service: vectorPartitionShardSearchHandlerFuncV1(func(context.Context, VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+			called.Store(true)
+			return VectorPartitionShardSearchResponseV1{}, nil
+		})}).ServeConn(context.Background(), server)
+		var prefix [4]byte
+		binary.BigEndian.PutUint32(prefix[:], 65)
+		if _, err := client.Write(prefix[:]); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+			t.Fatalf("oversized request left connection open: %v", err)
+		}
+		if called.Load() {
+			t.Fatal("oversized request reached shard service")
+		}
+	})
+	t.Run("response", func(t *testing.T) {
+		client, server := net.Pipe()
+		defer client.Close()
+		go (VectorPartitionShardSearchTCPServerV1{MaxFrame: 4096, MaxResponseFrame: 64, Service: vectorPartitionShardSearchHandlerFuncV1(func(context.Context, VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+			return VectorPartitionShardSearchResponseV1{RequestID: strings.Repeat("x", 4096)}, nil
+		})}).ServeConn(context.Background(), server)
+		if err := writeVectorPartitionShardSearchTCPFrameV1(client, vectorPartitionShardSearchTCPFrameV1{Request: &VectorPartitionShardSearchRequestV1{}}, 4096); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readVectorPartitionShardSearchTCPFrameV1(client, 4096); !errors.Is(err, io.EOF) {
+			t.Fatalf("failed response write left connection open: %v", err)
+		}
+	})
 }
 
 func TestVectorPartitionShardSearchTCPCancelWatcherStopsBeforeReuseV1(t *testing.T) {
@@ -129,7 +195,7 @@ func TestVectorPartitionShardSearchTCPDispatcherReconnectsAfterIdleCloseAndFails
 			}()
 		}
 	}()
-	dispatcher, err := newVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": listener.Addr().String()}, nil, poolSize)
+	dispatcher, err := newVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": listener.Addr().String()}, nil, poolSize, VectorPartitionShardSearchLimitsV1{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +274,7 @@ func TestVectorPartitionShardSearchTCPDispatcherCancellationWhilePoolIsFullV1(t 
 		<-release
 		return VectorPartitionShardSearchResponseV1{Version: 1}, nil
 	}))
-	dispatcher, err := newVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": listener.Addr().String()}, nil, poolSize)
+	dispatcher, err := newVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": listener.Addr().String()}, nil, poolSize, VectorPartitionShardSearchLimitsV1{})
 	if err != nil {
 		t.Fatal(err)
 	}

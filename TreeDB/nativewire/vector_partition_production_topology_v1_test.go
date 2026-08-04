@@ -147,8 +147,9 @@ func TestVectorPartitionProductionTopologyRequiresLiveAuthorityAndOwnsLifecycleV
 		t.Fatal(err)
 	}
 	defer listener.Close()
+	localAlias := fmt.Sprintf("127.0.0.1:%d", listener.Addr().(*net.TCPAddr).Port)
 	router := &testVectorPartitionCoordinatorRouterV1{status: collections.VectorPartitionRouterRuntimeStatusV1{Manifest: collections.VectorPartitionManifestV1{Format: collections.VectorPartitionManifestFormatV1, State: "ready", Collection: ref.Collection, IndexName: placement.IndexName, IndexDefinitionDigest: placement.IndexDefinitionDigest, SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, Generation: 5, RouterGeneration: 5, PartitionCount: 1, ReadySetDigest: fmt.Sprintf("%064x", 2), Placements: []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-a"}}}, Representatives: 1, Partitions: 1}, partitions: []collections.VectorPartitionRouterPartitionScoreV1{{PartitionID: 0}}}
-	opts := VectorPartitionProductionTopologyOptionsV1{Catalog: catalog, Placement: placement, RouterSource: &testVectorPartitionCoordinatorRouterSourceV1{router: router}, Endpoints: map[raftcluster.GroupID]string{"group-a": listener.Addr().String()}, Shards: []VectorPartitionProductionShardV1{{GroupID: "group-a", Listener: listener, Service: &VectorPartitionShardSearchServiceV1{}}}}
+	opts := VectorPartitionProductionTopologyOptionsV1{Catalog: catalog, Placement: placement, RouterSource: &testVectorPartitionCoordinatorRouterSourceV1{router: router}, Endpoints: map[raftcluster.GroupID]string{"group-a": localAlias}, Shards: []VectorPartitionProductionShardV1{{GroupID: "group-a", Listener: listener, Service: &VectorPartitionShardSearchServiceV1{}}}}
 	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
 		t.Fatal("missing lifecycle authority succeeded")
 	}
@@ -194,7 +195,6 @@ func TestVectorPartitionProductionTopologyRequiresLiveAuthorityAndOwnsLifecycleV
 	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
 		t.Fatal("local shard succeeded without remote member endpoints")
 	}
-	localAlias := fmt.Sprintf("127.0.0.1:%d", listener.Addr().(*net.TCPAddr).Port)
 	opts.NodeEndpoints = map[raftcluster.GroupID]map[raftcluster.NodeID]string{"group-a": {"node-b": localAlias, "node-c": "127.0.0.1:2"}}
 	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
 		t.Fatal("remote shard member used local fallback")
@@ -208,7 +208,7 @@ func TestVectorPartitionProductionTopologyRequiresLiveAuthorityAndOwnsLifecycleV
 	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
 		t.Fatal("mismatched local node endpoint succeeded")
 	}
-	opts.NodeEndpoints["group-a"]["node-a"] = listener.Addr().String()
+	opts.NodeEndpoints["group-a"]["node-a"] = localAlias
 	opts.CoordinatorLimits.MaxConcurrentRequests = 1
 	opts.CoordinatorLimits.MaxRequests = 2
 	topology, err := NewVectorPartitionProductionTopologyV1(opts)
@@ -312,6 +312,9 @@ func TestVectorPartitionProductionEndpointMatchesListenerAddressFamilyV1(t *test
 	port := listener.Addr().(*net.TCPAddr).Port
 	if vectorPartitionProductionEndpointMatchesListenerV1(fmt.Sprintf("127.0.0.1:%d", port), listener) {
 		t.Fatal("IPv6 listener matched IPv4 endpoint")
+	}
+	if vectorPartitionProductionEndpointMatchesListenerV1(fmt.Sprintf(":%d", port), listener) {
+		t.Fatal("IPv6 listener matched hostless endpoint")
 	}
 	if !vectorPartitionProductionEndpointMatchesListenerV1(fmt.Sprintf("[::1]:%d", port), listener) {
 		t.Fatal("IPv6 listener rejected IPv6 endpoint")
