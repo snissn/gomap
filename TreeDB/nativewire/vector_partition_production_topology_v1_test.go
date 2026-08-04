@@ -120,6 +120,11 @@ type temporaryWildcardTCPListenerV1 struct {
 	injected atomic.Bool
 }
 
+type nonTCPAddrV1 string
+
+func (a nonTCPAddrV1) Network() string { return "unix" }
+func (a nonTCPAddrV1) String() string  { return string(a) }
+
 func (l *temporaryWildcardTCPListenerV1) Accept() (net.Conn, error) {
 	if !l.injected.Swap(true) {
 		return nil, temporaryAcceptErrorV1{}
@@ -304,6 +309,16 @@ func TestVectorPartitionProductionTopologyRejectsSharedShardListenerV1(t *testin
 }
 
 func TestVectorPartitionProductionEndpointMatchesListenerAddressFamilyV1(t *testing.T) {
+	tcpListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tcpListener.Close()
+	endpoint := tcpListener.Addr().String()
+	if vectorPartitionProductionEndpointMatchesListenerV1(endpoint, &temporaryWildcardTCPListenerV1{Listener: tcpListener, addr: nonTCPAddrV1(endpoint)}) {
+		t.Fatal("non-TCP listener matched TCP endpoint")
+	}
+
 	listener, err := net.Listen("tcp6", "[::]:0")
 	if err != nil {
 		t.Skipf("IPv6 unavailable: %v", err)

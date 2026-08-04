@@ -293,7 +293,7 @@ func (h *VectorPartitionProductionTopologyV1) Status() VectorPartitionProduction
 func vectorPartitionProductionEndpointMatchesListenerV1(endpoint string, listener net.Listener) bool {
 	bound, ok := listener.Addr().(*net.TCPAddr)
 	if !ok {
-		return endpoint == listener.Addr().String()
+		return false
 	}
 	advertised, err := net.ResolveTCPAddr("tcp", endpoint)
 	if err != nil || advertised.Port != bound.Port || len(advertised.IP) == 0 || advertised.IP.IsUnspecified() {
