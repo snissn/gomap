@@ -28,12 +28,12 @@ const (
 	bsonIndexKeyTagDateTimeV2  byte = 0x90
 	bsonIndexKeyTagTimestampV2 byte = 0xa0
 
+	bsonIndexNumberNaNV2              byte = 0x08
 	bsonIndexNumberNegativeInfinityV2 byte = 0x10
 	bsonIndexNumberNegativeFiniteV2   byte = 0x20
 	bsonIndexNumberZeroV2             byte = 0x30
 	bsonIndexNumberPositiveFiniteV2   byte = 0x40
 	bsonIndexNumberPositiveInfinityV2 byte = 0x50
-	bsonIndexNumberNaNV2              byte = 0x60
 
 	bsonIndexKeyComponentV2MaxBytes      = 1 << 20
 	bsonIndexKeyNumericV2MaxDigits       = 2048
@@ -229,7 +229,7 @@ func appendCanonicalBSONIndexNumberV2(dst []byte, value bson.RawValue) ([]byte, 
 	if number.coefficient == nil {
 		return dst, fmt.Errorf("%w: finite number without coefficient", errBSONIndexKeyV2Malformed)
 	}
-	return appendCanonicalBSONIndexFiniteV2(dst, number.class, number.coefficient.Text(10), number.exponent)
+	return appendCanonicalBSONIndexFiniteV2(dst, number.class, number.coefficient.Append(nil, 10), number.exponent)
 }
 
 func appendBSONIndexIntegerV2(dst []byte, integer int64) ([]byte, error) {
@@ -302,10 +302,10 @@ func appendBSONIndexUintV2(dst []byte, magnitude uint64, negative bool, exponent
 	if negative {
 		class = bsonIndexNumberNegativeFiniteV2
 	}
-	return appendCanonicalBSONIndexFiniteV2(dst, class, string(digits), exponent)
+	return appendCanonicalBSONIndexFiniteV2(dst, class, digits, exponent)
 }
 
-func appendCanonicalBSONIndexFiniteV2(dst []byte, class byte, digits string, exponent int) ([]byte, error) {
+func appendCanonicalBSONIndexFiniteV2(dst []byte, class byte, digits []byte, exponent int) ([]byte, error) {
 	dst = append(dst, class)
 	if class != bsonIndexNumberNegativeFiniteV2 && class != bsonIndexNumberPositiveFiniteV2 {
 		return dst, nil
@@ -456,7 +456,7 @@ func normalizeBSONIndexDecimalV2(coefficient *big.Int, exponent int) (bsonIndexK
 	return bsonIndexKeyCanonicalNumberV2{class: class, coefficient: magnitude, exponent: exponent}, nil
 }
 
-func appendPackedBSONIndexDigitsV2(dst []byte, digits string) ([]byte, error) {
+func appendPackedBSONIndexDigitsV2(dst []byte, digits []byte) ([]byte, error) {
 	if len(digits) == 0 || len(digits) > bsonIndexKeyNumericV2MaxDigits || digits[0] == '0' || digits[len(digits)-1] == '0' {
 		return dst, fmt.Errorf("%w: non-canonical decimal coefficient", errBSONIndexKeyV2Malformed)
 	}
@@ -670,8 +670,213 @@ func decodeBSONIndexNumberV2(encoded []byte, logical func(int) byte, classIndex 
 }
 
 func bsonIndexKeyComponentV2Length(encoded []byte) (int, error) {
-	_, n, err := decodeBSONIndexKeyComponentV2(encoded)
-	return n, err
+	if len(encoded) < 2 {
+		return 0, fmt.Errorf("%w: truncated header", errBSONIndexKeyV2Malformed)
+	}
+	descending := encoded[0] == bsonIndexKeyComponentV2DescendingMarker
+	logical := func(index int) byte {
+		if descending {
+			return ^encoded[index]
+		}
+		return encoded[index]
+	}
+	if logical(0) != bsonIndexKeyComponentV2AscendingMarker {
+		return 0, errBSONIndexKeyV2Malformed
+	}
+
+	switch tag := logical(1); tag {
+	case bsonIndexKeyTagMissingV2, bsonIndexKeyTagNullV2:
+		return 2, nil
+	case bsonIndexKeyTagNumberV2:
+		return bsonIndexNumberV2Length(encoded, logical, 2)
+	case bsonIndexKeyTagStringV2:
+		return bsonIndexStringV2Length(encoded, logical, descending)
+	case bsonIndexKeyTagObjectIDV2:
+		if len(encoded) < 14 {
+			return 0, fmt.Errorf("%w: truncated ObjectID", errBSONIndexKeyV2Malformed)
+		}
+		return 14, nil
+	case bsonIndexKeyTagBoolV2:
+		if len(encoded) < 3 {
+			return 0, fmt.Errorf("%w: truncated bool", errBSONIndexKeyV2Malformed)
+		}
+		if logical(2) > 1 {
+			return 0, fmt.Errorf("%w: invalid bool", errBSONIndexKeyV2Malformed)
+		}
+		return 3, nil
+	case bsonIndexKeyTagDateTimeV2:
+		if len(encoded) < 10 {
+			return 0, fmt.Errorf("%w: truncated datetime", errBSONIndexKeyV2Malformed)
+		}
+		return 10, nil
+	case bsonIndexKeyTagTimestampV2:
+		if len(encoded) < 10 {
+			return 0, fmt.Errorf("%w: truncated timestamp", errBSONIndexKeyV2Malformed)
+		}
+		return 10, nil
+	default:
+		return 0, fmt.Errorf("%w: unknown tag 0x%02x", errBSONIndexKeyV2Malformed, tag)
+	}
+}
+
+func bsonIndexStringV2Length(encoded []byte, logical func(int) byte, descending bool) (int, error) {
+	if !descending {
+		segmentStart := 2
+		for index := 2; index < len(encoded) && index < bsonIndexKeyComponentV2MaxBytes; {
+			if encoded[index] != 0 {
+				index++
+				continue
+			}
+			if !utf8.Valid(encoded[segmentStart:index]) {
+				return 0, fmt.Errorf("%w: invalid UTF-8 string", errBSONIndexKeyV2Malformed)
+			}
+			index++
+			if index >= len(encoded) {
+				return 0, fmt.Errorf("%w: truncated string escape", errBSONIndexKeyV2Malformed)
+			}
+			if index >= bsonIndexKeyComponentV2MaxBytes {
+				return 0, errBSONIndexKeyV2TooLarge
+			}
+			switch encoded[index] {
+			case 0:
+				return index + 1, nil
+			case 0xff:
+				index++
+				segmentStart = index
+			default:
+				return 0, fmt.Errorf("%w: invalid string escape", errBSONIndexKeyV2Malformed)
+			}
+		}
+		return 0, fmt.Errorf("%w: unterminated string", errBSONIndexKeyV2Malformed)
+	}
+
+	continuations := 0
+	continuationMin := byte(0x80)
+	continuationMax := byte(0xbf)
+	appendPayloadByte := func(value byte) error {
+		if continuations > 0 {
+			if value < continuationMin || value > continuationMax {
+				return fmt.Errorf("%w: invalid UTF-8 string", errBSONIndexKeyV2Malformed)
+			}
+			continuations--
+			continuationMin, continuationMax = 0x80, 0xbf
+			return nil
+		}
+		switch {
+		case value <= 0x7f:
+		case value >= 0xc2 && value <= 0xdf:
+			continuations = 1
+		case value == 0xe0:
+			continuations, continuationMin = 2, 0xa0
+		case value >= 0xe1 && value <= 0xec || value >= 0xee && value <= 0xef:
+			continuations = 2
+		case value == 0xed:
+			continuations, continuationMax = 2, 0x9f
+		case value == 0xf0:
+			continuations, continuationMin = 3, 0x90
+		case value >= 0xf1 && value <= 0xf3:
+			continuations = 3
+		case value == 0xf4:
+			continuations, continuationMax = 3, 0x8f
+		default:
+			return fmt.Errorf("%w: invalid UTF-8 string", errBSONIndexKeyV2Malformed)
+		}
+		return nil
+	}
+
+	for index := 2; index < len(encoded) && index < bsonIndexKeyComponentV2MaxBytes; {
+		value := logical(index)
+		index++
+		if value != 0 {
+			if err := appendPayloadByte(value); err != nil {
+				return 0, err
+			}
+			continue
+		}
+		if index >= len(encoded) {
+			return 0, fmt.Errorf("%w: truncated string escape", errBSONIndexKeyV2Malformed)
+		}
+		if index >= bsonIndexKeyComponentV2MaxBytes {
+			return 0, errBSONIndexKeyV2TooLarge
+		}
+		next := logical(index)
+		index++
+		switch next {
+		case 0:
+			if continuations != 0 {
+				return 0, fmt.Errorf("%w: invalid UTF-8 string", errBSONIndexKeyV2Malformed)
+			}
+			return index, nil
+		case 0xff:
+			if err := appendPayloadByte(0); err != nil {
+				return 0, err
+			}
+		default:
+			return 0, fmt.Errorf("%w: invalid string escape", errBSONIndexKeyV2Malformed)
+		}
+	}
+	return 0, fmt.Errorf("%w: unterminated string", errBSONIndexKeyV2Malformed)
+}
+
+func bsonIndexNumberV2Length(encoded []byte, logical func(int) byte, classIndex int) (int, error) {
+	if len(encoded) <= classIndex {
+		return 0, fmt.Errorf("%w: truncated number", errBSONIndexKeyV2Malformed)
+	}
+	class := logical(classIndex)
+	switch class {
+	case bsonIndexNumberNaNV2, bsonIndexNumberNegativeInfinityV2, bsonIndexNumberZeroV2, bsonIndexNumberPositiveInfinityV2:
+		return classIndex + 1, nil
+	case bsonIndexNumberNegativeFiniteV2, bsonIndexNumberPositiveFiniteV2:
+		// Continue below.
+	default:
+		return 0, fmt.Errorf("%w: numeric class 0x%02x", errBSONIndexKeyV2Malformed, class)
+	}
+	if len(encoded) < classIndex+4 {
+		return 0, fmt.Errorf("%w: truncated finite number", errBSONIndexKeyV2Malformed)
+	}
+	negative := class == bsonIndexNumberNegativeFiniteV2
+	magnitudeByte := func(index int) byte {
+		value := logical(index)
+		if negative {
+			return ^value
+		}
+		return value
+	}
+	adjustedExponentBits := uint16(magnitudeByte(classIndex+1))<<8 | uint16(magnitudeByte(classIndex+2))
+	adjustedExponent := int16(adjustedExponentBits ^ 0x8000)
+	digitCount := 0
+	firstDigitZero := false
+	lastDigitZero := false
+	for index := classIndex + 3; index < len(encoded) && index < bsonIndexKeyComponentV2MaxBytes; index++ {
+		packed := magnitudeByte(index)
+		for nibbleIndex, nibble := range []byte{packed >> 4, packed & 0x0f} {
+			if nibble == 0 {
+				if nibbleIndex == 0 && packed&0x0f != 0 {
+					return 0, fmt.Errorf("%w: nonzero padding after numeric terminator", errBSONIndexKeyV2Malformed)
+				}
+				if digitCount == 0 || firstDigitZero || lastDigitZero {
+					return 0, fmt.Errorf("%w: non-canonical numeric coefficient", errBSONIndexKeyV2Malformed)
+				}
+				exponent := int(adjustedExponent) - digitCount + 1
+				if exponent < -bsonIndexKeyDecimalExponentWorkBound || exponent > bsonIndexKeyDecimalExponentWorkBound {
+					return 0, fmt.Errorf("%w: decimal exponent %d", errBSONIndexKeyV2TooLarge, exponent)
+				}
+				return index + 1, nil
+			}
+			if nibble > 10 {
+				return 0, fmt.Errorf("%w: invalid packed decimal digit", errBSONIndexKeyV2Malformed)
+			}
+			lastDigitZero = nibble == 1
+			if digitCount == 0 {
+				firstDigitZero = lastDigitZero
+			}
+			digitCount++
+			if digitCount > bsonIndexKeyNumericV2MaxDigits {
+				return 0, errBSONIndexKeyV2TooLarge
+			}
+		}
+	}
+	return 0, fmt.Errorf("%w: unterminated finite number", errBSONIndexKeyV2Malformed)
 }
 
 func descendingBSONIndexKeyComponentV2(ascending []byte) ([]byte, error) {

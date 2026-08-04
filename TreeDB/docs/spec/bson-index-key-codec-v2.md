@@ -43,8 +43,11 @@ Cross-type equal numbers therefore produce identical bytes.
 Numeric classes are ordered as:
 
 ```text
--Infinity < negative finite < zero < positive finite < +Infinity < NaN
+NaN < -Infinity < negative finite < zero < positive finite < +Infinity
 ```
+
+Their class bytes are `0x08`, `0x10`, `0x20`, `0x30`, `0x40`, and `0x50`
+respectively.
 
 A finite magnitude stores:
 
@@ -86,6 +89,10 @@ concatenated without field separators.
 document-ID suffix after an exact scalar component. The suffix provides stable
 per-document uniqueness without becoming part of scalar ordering. Its encoded
 form has its own 1 MiB bound, enforced before escape expansion is appended.
+The suffix marker, escaped bytes, and terminator always remain uncomplemented,
+including after a descending scalar component. The complement rule ends at the
+scalar component boundary, and document-ID decoding is identical in both sort
+directions.
 
 ## Durability and compatibility boundary
 

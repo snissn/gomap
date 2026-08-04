@@ -37,7 +37,7 @@ func TestBSONIndexKeyCodecV2Golden(t *testing.T) {
 		{name: "one point five", value: mustBSONIndexRawValueV2(t, 1.5), hex: "b2204080002600", kind: bsonIndexKeyKindNumberV2, canon: "15e-1"},
 		{name: "negative infinity", value: mustBSONIndexRawValueV2(t, math.Inf(-1)), hex: "b22010", kind: bsonIndexKeyKindNumberV2, canon: "-Infinity"},
 		{name: "positive infinity", value: mustBSONIndexRawValueV2(t, math.Inf(1)), hex: "b22050", kind: bsonIndexKeyKindNumberV2, canon: "Infinity"},
-		{name: "nan", value: mustBSONIndexRawValueV2(t, math.NaN()), hex: "b22060", kind: bsonIndexKeyKindNumberV2, canon: "NaN"},
+		{name: "nan", value: mustBSONIndexRawValueV2(t, math.NaN()), hex: "b22008", kind: bsonIndexKeyKindNumberV2, canon: "NaN"},
 		{name: "empty string", value: mustBSONIndexRawValueV2(t, ""), hex: "b2300000", kind: bsonIndexKeyKindStringV2, canon: ""},
 		{name: "nul string", value: mustBSONIndexRawValueV2(t, "a\x00b"), hex: "b2306100ff620000", kind: bsonIndexKeyKindStringV2, canon: "a\x00b"},
 		{name: "object id", value: mustBSONIndexRawValueV2(t, objectID), hex: "b27000112233445566778899aabb", kind: bsonIndexKeyKindObjectIDV2, canon: objectID.Hex()},
@@ -62,6 +62,10 @@ func TestBSONIndexKeyCodecV2Golden(t *testing.T) {
 			}
 			if n != len(got) || decoded.Descending || decoded.Kind != tc.kind || decoded.Canonical != tc.canon {
 				t.Fatalf("decoded=%+v n=%d want kind=%v canon=%q n=%d", decoded, n, tc.kind, tc.canon, len(got))
+			}
+			length, err := bsonIndexKeyComponentV2Length(got)
+			if err != nil || length != len(got) {
+				t.Fatalf("component length=%d err=%v want %d", length, err, len(got))
 			}
 		})
 	}
@@ -92,6 +96,7 @@ func TestBSONIndexKeyCodecV2NumericEqualityAndOrder(t *testing.T) {
 	}
 
 	ordered := []bson.RawValue{
+		mustBSONIndexRawValueV2(t, math.NaN()),
 		mustBSONIndexRawValueV2(t, math.Inf(-1)),
 		mustBSONIndexRawValueV2(t, int64(math.MinInt64)),
 		mustBSONIndexRawValueV2(t, int64(-10)),
@@ -102,7 +107,6 @@ func TestBSONIndexKeyCodecV2NumericEqualityAndOrder(t *testing.T) {
 		mustBSONIndexRawValueV2(t, int64(9_007_199_254_740_992)),
 		mustBSONIndexRawValueV2(t, int64(9_007_199_254_740_993)),
 		mustBSONIndexRawValueV2(t, math.Inf(1)),
-		mustBSONIndexRawValueV2(t, math.NaN()),
 	}
 	assertBSONIndexV2StrictOrder(t, ordered)
 }
@@ -113,12 +117,12 @@ func TestBSONIndexKeyCodecV2MatchesReferenceBSONOrder(t *testing.T) {
 	values := []bson.RawValue{
 		{},
 		{Type: bson.TypeNull},
+		mustBSONIndexRawValueV2(t, math.NaN()),
 		mustBSONIndexRawValueV2(t, math.Inf(-1)),
 		mustBSONIndexRawValueV2(t, int64(-2)),
 		mustBSONIndexRawValueV2(t, int32(0)),
 		mustBSONIndexRawValueV2(t, 1.25),
 		mustBSONIndexRawValueV2(t, math.Inf(1)),
-		mustBSONIndexRawValueV2(t, math.NaN()),
 		mustBSONIndexRawValueV2(t, ""),
 		mustBSONIndexRawValueV2(t, "a"),
 		mustBSONIndexRawValueV2(t, objectLow),
@@ -165,6 +169,10 @@ func TestBSONIndexKeyCodecV2StringsDescendingAndBoundaries(t *testing.T) {
 		}
 		if bytes.Compare(leftDesc, rightDesc) <= 0 {
 			t.Fatalf("descending order not reversed: %x <= %x", leftDesc, rightDesc)
+		}
+		leftDescLen, err := bsonIndexKeyComponentV2Length(leftDesc)
+		if err != nil || leftDescLen != len(leftDesc) {
+			t.Fatalf("descending component length=%d err=%v want %d", leftDescLen, err, len(leftDesc))
 		}
 		roundTrip, err := ascendingBSONIndexKeyComponentV2(leftDesc)
 		if err != nil {
@@ -281,6 +289,9 @@ func TestBSONIndexKeyCodecV2RejectsUnsupportedMalformedAndOverBudget(t *testing.
 		if _, _, err := decodeBSONIndexKeyComponentV2(encoded); err == nil {
 			t.Fatalf("corrupt case %d accepted: %x", i, encoded)
 		}
+		if _, err := bsonIndexKeyComponentV2Length(encoded); err == nil {
+			t.Fatalf("length scan accepted corrupt case %d: %x", i, encoded)
+		}
 	}
 	if _, err := bsonIndexKeyDocumentIDV2(mustEncodeBSONIndexV2(t, mustBSONIndexRawValueV2(t, "only-component"))); err == nil {
 		t.Fatal("missing document ID accepted")
@@ -293,15 +304,19 @@ func TestBSONIndexKeyCodecV2RandomReferenceOrder(t *testing.T) {
 	for i := 0; i < 128; i++ {
 		values = append(values,
 			mustBSONIndexRawValueV2(t, rng.Int63()),
-			mustBSONIndexRawValueV2(t, math.Float64frombits(rng.Uint64()&^uint64(0x7ff0000000000000))),
+			mustBSONIndexRawValueV2(t, math.Float64frombits(rng.Uint64()&^(uint64(1)<<62))),
 			mustBSONIndexRawValueV2(t, randomBSONIndexStringV2(rng, 24)),
 			bson.RawValue{Type: bson.TypeDateTime, Value: bsoncore.AppendDateTime(nil, rng.Int63())},
 		)
 	}
+	encodings := make([][]byte, len(values))
+	for i := range values {
+		encodings[i] = mustEncodeBSONIndexV2(t, values[i])
+	}
 	for i := 0; i < len(values); i++ {
 		for j := i + 1; j < len(values); j++ {
 			want := signBSONIndexV2(referenceCompareBSONIndexV2(t, values[i], values[j]))
-			got := signBSONIndexV2(bytes.Compare(mustEncodeBSONIndexV2(t, values[i]), mustEncodeBSONIndexV2(t, values[j])))
+			got := signBSONIndexV2(bytes.Compare(encodings[i], encodings[j]))
 			if got != want {
 				t.Fatalf("random pair (%d,%d) got=%d want=%d left=%v right=%v", i, j, got, want, values[i], values[j])
 			}
@@ -351,8 +366,15 @@ func FuzzBSONIndexKeyCodecV2Decode(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, encoded []byte) {
 		decoded, n, err := decodeBSONIndexKeyComponentV2(encoded)
+		scannedLength, scanErr := bsonIndexKeyComponentV2Length(encoded)
 		if err != nil {
+			if scanErr == nil {
+				t.Fatalf("length scan accepted decoder-rejected input %x at length %d", encoded, scannedLength)
+			}
 			return
+		}
+		if scanErr != nil || scannedLength != n {
+			t.Fatalf("length scan=%d err=%v decode=%d for %x", scannedLength, scanErr, n, encoded)
 		}
 		if n <= 0 || n > len(encoded) {
 			t.Fatalf("valid decode returned invalid length %d for %x", n, encoded)
@@ -498,7 +520,7 @@ func referenceCompareBSONNumbersV2(t testing.TB, left, right bson.RawValue) int 
 	if leftClass != rightClass {
 		return leftClass - rightClass
 	}
-	if leftClass != 1 {
+	if leftClass != 2 {
 		return 0
 	}
 	return leftRat.Cmp(rightRat)
@@ -512,13 +534,13 @@ func referenceBSONNumberV2(t testing.TB, value bson.RawValue) (*big.Rat, int) {
 		if !ok {
 			t.Fatal("invalid int32")
 		}
-		return big.NewRat(int64(v), 1), 1
+		return big.NewRat(int64(v), 1), 2
 	case bson.TypeInt64:
 		v, ok := value.Int64OK()
 		if !ok {
 			t.Fatal("invalid int64")
 		}
-		return big.NewRat(v, 1), 1
+		return big.NewRat(v, 1), 2
 	case bson.TypeDouble:
 		v, ok := value.DoubleOK()
 		if !ok {
@@ -526,17 +548,17 @@ func referenceBSONNumberV2(t testing.TB, value bson.RawValue) (*big.Rat, int) {
 		}
 		switch {
 		case math.IsInf(v, -1):
-			return nil, 0
+			return nil, 1
 		case math.IsInf(v, 1):
-			return nil, 2
-		case math.IsNaN(v):
 			return nil, 3
+		case math.IsNaN(v):
+			return nil, 0
 		default:
 			rat := new(big.Rat)
 			if rat.SetFloat64(v) == nil {
 				t.Fatal("finite float has no rational")
 			}
-			return rat, 1
+			return rat, 2
 		}
 	case bson.TypeDecimal128:
 		v, ok := value.Decimal128OK()
@@ -544,13 +566,13 @@ func referenceBSONNumberV2(t testing.TB, value bson.RawValue) (*big.Rat, int) {
 			t.Fatal("invalid decimal")
 		}
 		if v.IsNaN() {
-			return nil, 3
+			return nil, 0
 		}
 		switch v.IsInf() {
 		case -1:
-			return nil, 0
+			return nil, 1
 		case 1:
-			return nil, 2
+			return nil, 3
 		}
 		coefficient, exponent, err := v.BigInt()
 		if err != nil {
@@ -565,7 +587,7 @@ func referenceBSONNumberV2(t testing.TB, value bson.RawValue) (*big.Rat, int) {
 				rat.Quo(rat, new(big.Rat).SetInt(scale))
 			}
 		}
-		return rat, 1
+		return rat, 2
 	default:
 		t.Fatalf("not numeric: %s", value.Type)
 		return nil, 0

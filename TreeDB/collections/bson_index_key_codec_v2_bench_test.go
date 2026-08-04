@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -49,6 +50,20 @@ func BenchmarkBSONIndexKeyCodecV2Encode(b *testing.B) {
 				}
 				b.ReportMetric(float64(len(encoded)), "bytes/key")
 			})
+		}
+	}
+}
+
+func BenchmarkBSONIndexKeyCodecV2EntryKey(b *testing.B) {
+	component, err := encodeBSONIndexKeyComponentV2(mustBSONIndexRawValueV2(b, strings.Repeat("prefix-界-", 256)))
+	if err != nil {
+		b.Fatal(err)
+	}
+	documentID := []byte("document-7")
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := bsonIndexEntryKeyV2(component, documentID); err != nil {
+			b.Fatal(err)
 		}
 	}
 }
