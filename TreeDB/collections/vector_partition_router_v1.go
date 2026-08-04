@@ -107,6 +107,7 @@ type VectorPartitionRouterSearchResultV1 struct {
 
 type VectorPartitionRouterRuntimeStatusV1 struct {
 	Manifest        VectorPartitionManifestV1
+	Config          internalrouter.RouterConfigV1
 	ModelDigest     string
 	Representatives uint64
 	Partitions      uint64
@@ -1494,7 +1495,7 @@ func (r *VectorPartitionRouterV1) Status() VectorPartitionRouterRuntimeStatusV1 
 		return VectorPartitionRouterRuntimeStatusV1{}
 	}
 	status := VectorPartitionRouterRuntimeStatusV1{
-		Manifest: r.manifest, ModelDigest: r.modelDigest,
+		Manifest: r.manifest, Config: r.model.Config, ModelDigest: r.modelDigest,
 		Representatives: uint64(len(r.model.Representatives)),
 		Partitions:      uint64(r.model.Metrics.Partitions),
 		RouterBytes:     r.manifest.RouterAsset.Bytes, OpenNanos: r.openNanos,
