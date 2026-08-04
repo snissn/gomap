@@ -167,6 +167,11 @@ func TestVectorPartitionProductionTopologyRequiresLiveAuthorityAndOwnsLifecycleV
 		t.Fatal("mismatched shard service succeeded")
 	}
 	opts.Shards[0].Service = validService
+	opts.NodeEndpoints = map[raftcluster.GroupID]map[raftcluster.NodeID]string{"group-a": {"node-a": "127.0.0.1:1"}}
+	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
+		t.Fatal("mismatched local node endpoint succeeded")
+	}
+	opts.NodeEndpoints["group-a"]["node-a"] = listener.Addr().String()
 	topology, err := NewVectorPartitionProductionTopologyV1(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -183,6 +188,27 @@ func TestVectorPartitionProductionTopologyRequiresLiveAuthorityAndOwnsLifecycleV
 	}
 	if _, err := topology.Coordinator().Search(context.Background(), VectorPartitionCoordinatorRequestV1{}); err == nil {
 		t.Fatal("closed coordinator accepted request")
+	}
+}
+
+func TestVectorPartitionProductionTopologyRejectsSharedShardListenerV1(t *testing.T) {
+	ref := raftplacement.CollectionRefV1{Database: "db", Catalog: "catalog", Collection: "docs"}
+	catalog, err := raftplacement.Validate(raftplacement.CatalogV1{Groups: []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}}, {ID: "group-b", Members: []raftcluster.NodeID{"node-b"}}}, Placements: []raftplacement.CollectionPlacementV1{{Collection: ref, GroupID: "group-a", Mode: raftplacement.PlacementModeCollectionV1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	placement := raftplacement.VectorPartitionPlacementRecordV1{Collection: ref, IndexName: "embedding", IndexDefinitionDigest: fmt.Sprintf("%064x", 1), SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, PartitionCount: 2, Partitions: []raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-b"}}}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := listener.Addr().String()
+	service := func(group raftcluster.GroupID, node raftcluster.NodeID) *VectorPartitionShardSearchServiceV1 {
+		return &VectorPartitionShardSearchServiceV1{localGroup: group, localNodeID: node, route: vectorPartitionShardSearchRouteV1{placement: placement}}
+	}
+	_, err = NewVectorPartitionProductionTopologyV1(VectorPartitionProductionTopologyOptionsV1{Catalog: catalog, Placement: placement, RouterSource: &testVectorPartitionCoordinatorRouterSourceV1{}, ReplicatedLifecycle: &recordingVectorPartitionReplicatedLifecycleAuthorityV1{}, Endpoints: map[raftcluster.GroupID]string{"group-a": endpoint, "group-b": endpoint}, Shards: []VectorPartitionProductionShardV1{{GroupID: "group-a", Listener: listener, Service: service("group-a", "node-a")}, {GroupID: "group-b", Listener: listener, Service: service("group-b", "node-b")}}})
+	if err == nil {
+		t.Fatal("shared shard listener succeeded")
 	}
 }
 
