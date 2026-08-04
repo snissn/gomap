@@ -238,6 +238,25 @@ func TestBSONIndexKeyCodecV2RejectsUnsupportedMalformedAndOverBudget(t *testing.
 	if _, err := encodeBSONIndexKeyComponentV2(mustBSONIndexRawValueV2(t, escapedTooLong)); err == nil || !strings.Contains(err.Error(), "too large") {
 		t.Fatalf("over-budget escaped string error=%v", err)
 	}
+	overBudgetEncodedString := append(
+		[]byte{bsonIndexKeyComponentV2AscendingMarker, bsonIndexKeyTagStringV2},
+		bytes.Repeat([]byte{'x'}, bsonIndexKeyComponentV2MaxBytes-3)...,
+	)
+	overBudgetEncodedString = append(overBudgetEncodedString, 0, 0)
+	if _, _, err := decodeBSONIndexKeyComponentV2(overBudgetEncodedString); err != errBSONIndexKeyV2TooLarge {
+		t.Fatalf("decoded over-budget string error=%v", err)
+	}
+
+	validComponent := mustEncodeBSONIndexV2(t, mustBSONIndexRawValueV2(t, "suffix-bound"))
+	for _, suffix := range [][]byte{
+		{bsonIndexKeyDocumentIDSuffixMarkerV2},
+		{bsonIndexKeyDocumentIDSuffixMarkerV2, 'x'},
+	} {
+		entry := append(append([]byte(nil), validComponent...), suffix...)
+		if _, err := bsonIndexKeyDocumentIDV2(entry); err == nil || !strings.Contains(err.Error(), "malformed") {
+			t.Fatalf("truncated document ID suffix %x error=%v", suffix, err)
+		}
+	}
 
 	corrupt := [][]byte{
 		nil,

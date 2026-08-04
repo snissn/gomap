@@ -533,6 +533,9 @@ func decodeBSONIndexKeyComponentV2(encoded []byte) (bsonIndexKeyDecodedV2, int, 
 			if index >= len(encoded) {
 				return bsonIndexKeyDecodedV2{}, 0, fmt.Errorf("%w: truncated string escape", errBSONIndexKeyV2Malformed)
 			}
+			if index >= bsonIndexKeyComponentV2MaxBytes {
+				return bsonIndexKeyDecodedV2{}, 0, errBSONIndexKeyV2TooLarge
+			}
 			next := logical(index)
 			index++
 			switch next {
@@ -746,6 +749,9 @@ func bsonIndexKeyDocumentIDV2(entry []byte) ([]byte, error) {
 	}
 	if componentLength >= len(entry) || entry[componentLength] != bsonIndexKeyDocumentIDSuffixMarkerV2 {
 		return nil, fmt.Errorf("%w: missing document ID suffix", errBSONIndexKeyV2Malformed)
+	}
+	if len(entry)-componentLength < 3 {
+		return nil, fmt.Errorf("%w: truncated document ID suffix", errBSONIndexKeyV2Malformed)
 	}
 	if len(entry)-componentLength > bsonIndexKeyComponentV2MaxBytes {
 		return nil, errBSONIndexKeyV2TooLarge
