@@ -229,7 +229,7 @@ func appendCanonicalBSONIndexNumberV2(dst []byte, value bson.RawValue) ([]byte, 
 	if number.coefficient == nil {
 		return dst, fmt.Errorf("%w: finite number without coefficient", errBSONIndexKeyV2Malformed)
 	}
-	return appendCanonicalBSONIndexFiniteV2(dst, number.class, number.coefficient.Append(nil, 10), number.exponent)
+	return appendCanonicalBSONIndexFiniteV2(dst, number.class, number.coefficient.Text(10), number.exponent)
 }
 
 func appendBSONIndexIntegerV2(dst []byte, integer int64) ([]byte, error) {
@@ -305,7 +305,11 @@ func appendBSONIndexUintV2(dst []byte, magnitude uint64, negative bool, exponent
 	return appendCanonicalBSONIndexFiniteV2(dst, class, digits, exponent)
 }
 
-func appendCanonicalBSONIndexFiniteV2(dst []byte, class byte, digits []byte, exponent int) ([]byte, error) {
+type bsonIndexDigitsV2 interface {
+	~string | ~[]byte
+}
+
+func appendCanonicalBSONIndexFiniteV2[T bsonIndexDigitsV2](dst []byte, class byte, digits T, exponent int) ([]byte, error) {
 	dst = append(dst, class)
 	if class != bsonIndexNumberNegativeFiniteV2 && class != bsonIndexNumberPositiveFiniteV2 {
 		return dst, nil
@@ -456,7 +460,7 @@ func normalizeBSONIndexDecimalV2(coefficient *big.Int, exponent int) (bsonIndexK
 	return bsonIndexKeyCanonicalNumberV2{class: class, coefficient: magnitude, exponent: exponent}, nil
 }
 
-func appendPackedBSONIndexDigitsV2(dst []byte, digits []byte) ([]byte, error) {
+func appendPackedBSONIndexDigitsV2[T bsonIndexDigitsV2](dst []byte, digits T) ([]byte, error) {
 	if len(digits) == 0 || len(digits) > bsonIndexKeyNumericV2MaxDigits || digits[0] == '0' || digits[len(digits)-1] == '0' {
 		return dst, fmt.Errorf("%w: non-canonical decimal coefficient", errBSONIndexKeyV2Malformed)
 	}
