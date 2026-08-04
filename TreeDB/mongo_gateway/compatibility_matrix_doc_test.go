@@ -99,6 +99,9 @@ func replaceGeneratedCapabilityBlock(doc, begin, end string, generate func(strin
 	}
 	start := strings.Index(doc, begin)
 	endRel := strings.Index(doc[start:], end)
+	if endRel < 0 {
+		return "", fmt.Errorf("end marker %q precedes begin marker %q", end, begin)
+	}
 	blockEnd := start + endRel + len(end)
 	generated, err := generate(markerLineNewline(doc, start))
 	if err != nil {
@@ -136,6 +139,14 @@ func TestReplaceGeneratedCapabilityBlockRejectsDuplicateMarkers(t *testing.T) {
 				t.Fatalf("replace err=%v want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestReplaceGeneratedCapabilityBlockRejectsEndBeforeBegin(t *testing.T) {
+	generate := func(string) (string, error) { return "generated", nil }
+	doc := compatibilityMatrixEnd + "\n" + compatibilityMatrixBegin
+	if _, err := replaceGeneratedCapabilityBlock(doc, compatibilityMatrixBegin, compatibilityMatrixEnd, generate); err == nil || !strings.Contains(err.Error(), "precedes begin marker") {
+		t.Fatalf("replace err=%v want end-before-begin error", err)
 	}
 }
 
