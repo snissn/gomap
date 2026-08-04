@@ -295,12 +295,24 @@ func (h *VectorPartitionProductionTopologyV1) Status() VectorPartitionProduction
 }
 
 func vectorPartitionProductionEndpointMatchesListenerV1(endpoint string, listener net.Listener) bool {
+	advertised, err := vectorPartitionProductionEndpointAddressesV1(endpoint)
+	if err != nil {
+		return false
+	}
+	for _, address := range advertised {
+		if vectorPartitionProductionEndpointAddressMatchesListenerV1(address, listener) {
+			return true
+		}
+	}
+	return false
+}
+
+func vectorPartitionProductionEndpointAddressMatchesListenerV1(advertised *net.TCPAddr, listener net.Listener) bool {
 	bound, ok := listener.Addr().(*net.TCPAddr)
 	if !ok {
 		return false
 	}
-	advertised, err := net.ResolveTCPAddr("tcp", endpoint)
-	if err != nil || advertised.Port != bound.Port || len(advertised.IP) == 0 || advertised.IP.IsUnspecified() {
+	if advertised == nil || advertised.Port != bound.Port || len(advertised.IP) == 0 || advertised.IP.IsUnspecified() {
 		return false
 	}
 	if !bound.IP.IsUnspecified() {
@@ -318,37 +330,86 @@ func vectorPartitionProductionEndpointMatchesListenerV1(endpoint string, listene
 }
 
 func vectorPartitionProductionEndpointUsesListenerV1(endpoint string, listener net.Listener) (bool, error) {
-	if !vectorPartitionProductionEndpointMatchesListenerV1(endpoint, listener) {
+	advertised, err := vectorPartitionProductionEndpointAddressesV1(endpoint)
+	if err != nil {
+		return false, err
+	}
+	compatible := advertised[:0]
+	for _, address := range advertised {
+		if vectorPartitionProductionEndpointAddressMatchesListenerV1(address, listener) {
+			compatible = append(compatible, address)
+		}
+	}
+	if len(compatible) == 0 {
 		return false, nil
 	}
 	bound := listener.Addr().(*net.TCPAddr)
 	if !bound.IP.IsUnspecified() {
 		return true, nil
 	}
-	advertised, err := net.ResolveTCPAddr("tcp", endpoint)
-	if err != nil {
-		return false, err
-	}
-	if advertised.IP.IsLoopback() {
-		return true, nil
+	for _, address := range compatible {
+		if address.IP.IsLoopback() {
+			return true, nil
+		}
 	}
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
 		return false, err
 	}
-	for _, addr := range addrs {
-		var ip net.IP
-		switch addr := addr.(type) {
-		case *net.IPNet:
-			ip = addr.IP
-		case *net.IPAddr:
-			ip = addr.IP
-		}
-		if ip.Equal(advertised.IP) {
-			return true, nil
+	for _, address := range compatible {
+		for _, addr := range addrs {
+			var ip net.IP
+			switch addr := addr.(type) {
+			case *net.IPNet:
+				ip = addr.IP
+			case *net.IPAddr:
+				ip = addr.IP
+			}
+			if ip.Equal(address.IP) {
+				return true, nil
+			}
 		}
 	}
 	return false, nil
+}
+
+func vectorPartitionProductionEndpointAddressesV1(endpoint string) ([]*net.TCPAddr, error) {
+	host, service, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	if host == "" {
+		return nil, errors.New("TCP endpoint host is unspecified")
+	}
+	port, err := net.LookupPort("tcp", service)
+	if err != nil {
+		return nil, err
+	}
+	if port == 0 {
+		return nil, errors.New("TCP endpoint port is zero")
+	}
+	resolved, err := net.DefaultResolver.LookupIPAddr(context.Background(), host)
+	if err != nil {
+		return nil, err
+	}
+	addresses := make([]*net.TCPAddr, 0, len(resolved))
+	seen := make(map[string]struct{}, len(resolved))
+	for _, addr := range resolved {
+		if len(addr.IP) == 0 || addr.IP.IsUnspecified() {
+			continue
+		}
+		address := &net.TCPAddr{IP: addr.IP, Port: port, Zone: addr.Zone}
+		key := address.String()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		addresses = append(addresses, address)
+	}
+	if len(addresses) == 0 {
+		return nil, errors.New("TCP endpoint host is unspecified")
+	}
+	return addresses, nil
 }
 
 func vectorPartitionProductionEndpointKeyV1(endpoint string) (string, error) {

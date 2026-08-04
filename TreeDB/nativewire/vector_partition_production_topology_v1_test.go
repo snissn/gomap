@@ -328,6 +328,32 @@ func TestVectorPartitionProductionEndpointMatchesListenerAddressFamilyV1(t *test
 	if vectorPartitionProductionEndpointMatchesListenerV1(endpoint, &temporaryWildcardTCPListenerV1{Listener: tcpListener, addr: nonTCPAddrV1(endpoint)}) {
 		t.Fatal("non-TCP listener matched TCP endpoint")
 	}
+	wildcard, err := net.Listen("tcp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wildcard.Close()
+	wildcardEndpoint := fmt.Sprintf("localhost:%d", wildcard.Addr().(*net.TCPAddr).Port)
+	addresses, err := vectorPartitionProductionEndpointAddressesV1(wildcardEndpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := net.DefaultResolver.LookupIPAddr(context.Background(), "localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[string]bool, len(addresses))
+	for _, address := range addresses {
+		got[address.IP.String()] = true
+	}
+	for _, address := range want {
+		if !address.IP.IsUnspecified() && !got[address.IP.String()] {
+			t.Fatalf("resolved endpoint omitted localhost address %s: %+v", address.IP, addresses)
+		}
+	}
+	if uses, err := vectorPartitionProductionEndpointUsesListenerV1(wildcardEndpoint, wildcard); err != nil || !uses {
+		t.Fatalf("wildcard listener hostname match=%t error=%v addresses=%+v", uses, err, addresses)
+	}
 
 	listener, err := net.Listen("tcp6", "[::]:0")
 	if err != nil {
