@@ -136,7 +136,7 @@ func (temporaryAcceptErrorV1) Temporary() bool { return true }
 
 func TestVectorPartitionProductionTopologyRequiresLiveAuthorityAndOwnsLifecycleV1(t *testing.T) {
 	ref := raftplacement.CollectionRefV1{Database: "db", Catalog: "catalog", Collection: "docs"}
-	catalog, err := raftplacement.Validate(raftplacement.CatalogV1{Groups: []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a", "node-b"}, LeaderHint: "node-b"}}, Placements: []raftplacement.CollectionPlacementV1{{Collection: ref, GroupID: "group-a", Mode: raftplacement.PlacementModeCollectionV1}}})
+	catalog, err := raftplacement.Validate(raftplacement.CatalogV1{Groups: []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a", "node-b", "node-c"}, LeaderHint: "node-b"}}, Placements: []raftplacement.CollectionPlacementV1{{Collection: ref, GroupID: "group-a", Mode: raftplacement.PlacementModeCollectionV1}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,11 +170,16 @@ func TestVectorPartitionProductionTopologyRequiresLiveAuthorityAndOwnsLifecycleV
 	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
 		t.Fatal("local shard succeeded without remote member endpoints")
 	}
-	opts.NodeEndpoints = map[raftcluster.GroupID]map[raftcluster.NodeID]string{"group-a": {"node-a": "127.0.0.1:1", "node-b": "127.0.0.1:1"}}
+	opts.NodeEndpoints = map[raftcluster.GroupID]map[raftcluster.NodeID]string{"group-a": {"node-b": listener.Addr().String(), "node-c": "127.0.0.1:2"}}
+	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
+		t.Fatal("remote shard member used local fallback")
+	}
+	opts.NodeEndpoints["group-a"]["node-b"] = "127.0.0.1:2"
 	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
 		t.Fatal("distinct shard members shared an endpoint")
 	}
-	opts.NodeEndpoints["group-a"]["node-b"] = "127.0.0.1:2"
+	opts.NodeEndpoints["group-a"]["node-c"] = "127.0.0.1:3"
+	opts.NodeEndpoints["group-a"]["node-a"] = "127.0.0.1:1"
 	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
 		t.Fatal("mismatched local node endpoint succeeded")
 	}
@@ -230,6 +235,10 @@ func TestVectorPartitionProductionTopologyAllowsCoordinatorOnlyAndRejectsIncompl
 	opts := VectorPartitionProductionTopologyOptionsV1{Catalog: catalog, Placement: placement, RouterSource: &testVectorPartitionCoordinatorRouterSourceV1{router: router}, ReplicatedLifecycle: &recordingVectorPartitionReplicatedLifecycleAuthorityV1{}, Endpoints: map[raftcluster.GroupID]string{"group-a": "127.0.0.1:1"}}
 	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
 		t.Fatal("incomplete owner endpoint coverage succeeded")
+	}
+	opts.Endpoints["group-b"] = "missing-port"
+	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
+		t.Fatal("malformed owner endpoint succeeded")
 	}
 	opts.Endpoints["group-b"] = "127.0.0.1:2"
 	opts.NodeEndpoints = map[raftcluster.GroupID]map[raftcluster.NodeID]string{"group-a": {"node-z": "127.0.0.1:3"}}

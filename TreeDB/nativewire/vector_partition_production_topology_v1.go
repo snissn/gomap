@@ -106,7 +106,10 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 			if !slices.Contains(resolved.Members, node) {
 				return nil, fmt.Errorf("nativewire: production vector topology node %q is not a member of %q", node, group)
 			}
-			key := vectorPartitionProductionEndpointKeyV1(endpoint)
+			key, err := vectorPartitionProductionEndpointKeyV1(endpoint)
+			if err != nil {
+				return nil, fmt.Errorf("nativewire: production vector topology node %q endpoint: %w", node, err)
+			}
 			if owner := groupEndpointNodes[key]; owner != "" && owner != node {
 				return nil, fmt.Errorf("nativewire: production vector topology nodes %q and %q in %q share an endpoint", owner, node, group)
 			}
@@ -115,7 +118,10 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 	}
 	endpointOwners := make(map[string]raftcluster.GroupID, len(opts.Endpoints)+len(opts.NodeEndpoints))
 	recordEndpoint := func(group raftcluster.GroupID, endpoint string) error {
-		key := vectorPartitionProductionEndpointKeyV1(endpoint)
+		key, err := vectorPartitionProductionEndpointKeyV1(endpoint)
+		if err != nil {
+			return fmt.Errorf("nativewire: production vector topology group %q endpoint: %w", group, err)
+		}
 		if owner := endpointOwners[key]; owner != "" && owner != group {
 			return fmt.Errorf("nativewire: production vector topology groups %q and %q share an endpoint", owner, group)
 		}
@@ -150,9 +156,24 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 		if endpoint := opts.NodeEndpoints[shard.GroupID][shard.Service.localNodeID]; endpoint != "" && !vectorPartitionProductionEndpointMatchesListenerV1(endpoint, shard.Listener) {
 			return nil, fmt.Errorf("nativewire: production vector topology shard %q local node endpoint does not match listener", shard.GroupID)
 		}
+		fallbackKey, err := vectorPartitionProductionEndpointKeyV1(h.endpoints[shard.GroupID])
+		if err != nil {
+			return nil, err
+		}
 		for _, member := range group.Members {
-			if member != shard.Service.localNodeID && opts.NodeEndpoints[shard.GroupID][member] == "" {
+			if member == shard.Service.localNodeID {
+				continue
+			}
+			endpoint := opts.NodeEndpoints[shard.GroupID][member]
+			if endpoint == "" {
 				return nil, fmt.Errorf("nativewire: production vector topology shard %q cannot route to member %q", shard.GroupID, member)
+			}
+			key, err := vectorPartitionProductionEndpointKeyV1(endpoint)
+			if err != nil {
+				return nil, err
+			}
+			if key == fallbackKey {
+				return nil, fmt.Errorf("nativewire: production vector topology shard %q remote member %q uses the local fallback", shard.GroupID, member)
 			}
 		}
 		listenerKey := shard.Listener.Addr().Network() + "\x00" + shard.Listener.Addr().String()
@@ -257,12 +278,15 @@ func vectorPartitionProductionEndpointMatchesListenerV1(endpoint string, listene
 	return err == nil && advertised.Port == bound.Port && (bound.IP.IsUnspecified() || bound.IP.Equal(advertised.IP))
 }
 
-func vectorPartitionProductionEndpointKeyV1(endpoint string) string {
+func vectorPartitionProductionEndpointKeyV1(endpoint string) (string, error) {
 	resolved, err := net.ResolveTCPAddr("tcp", endpoint)
 	if err != nil {
-		return endpoint
+		return "", err
 	}
-	return resolved.String()
+	if resolved.Port == 0 {
+		return "", errors.New("TCP endpoint port is zero")
+	}
+	return resolved.String(), nil
 }
 
 func (h *VectorPartitionProductionTopologyV1) Close() error {
