@@ -321,6 +321,9 @@ func vectorPartitionProductionEndpointKeyV1(endpoint string) (string, error) {
 	if resolved.Port == 0 {
 		return "", errors.New("TCP endpoint port is zero")
 	}
+	if len(resolved.IP) == 0 || resolved.IP.IsUnspecified() {
+		return "", errors.New("TCP endpoint host is unspecified")
+	}
 	return resolved.String(), nil
 }
 

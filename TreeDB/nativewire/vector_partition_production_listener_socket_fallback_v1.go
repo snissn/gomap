@@ -1,4 +1,4 @@
-//go:build js || plan9 || wasip1
+//go:build !windows && !aix && !android && !darwin && !dragonfly && !freebsd && !illumos && !ios && !linux && !netbsd && !openbsd && !solaris
 
 package nativewire
 

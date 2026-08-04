@@ -78,6 +78,23 @@ func TestVectorPartitionShardSearchTCPDerivesSeparateFrameBoundsV1(t *testing.T)
 	}
 }
 
+func TestVectorPartitionM8ProductionTopologyOwnsDispatcherV1(t *testing.T) {
+	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": "127.0.0.1:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	topology := &VectorPartitionM8ProductionMultiGroupV1{dispatcher: dispatcher}
+	if err := topology.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher.mu.Lock()
+	closed := dispatcher.closed
+	dispatcher.mu.Unlock()
+	if !closed {
+		t.Fatal("M8 topology left dispatcher open")
+	}
+}
+
 func TestVectorPartitionShardSearchTCPServerBoundsRequestAndFailedResponseFramesV1(t *testing.T) {
 	t.Run("request", func(t *testing.T) {
 		client, server := net.Pipe()

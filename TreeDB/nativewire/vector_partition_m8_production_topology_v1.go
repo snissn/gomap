@@ -59,6 +59,7 @@ type VectorPartitionM8ProductionGroupEvidenceV1 struct {
 
 type VectorPartitionM8ProductionMultiGroupV1 struct {
 	coordinator *VectorPartitionCoordinatorV1
+	dispatcher  *VectorPartitionShardSearchTCPDispatcherV1
 	data        map[raftcluster.GroupID]*raftcluster.ThreeNodeHarness
 	meta        *raftplacement.CatalogMetaLifecycleHarnessV1
 	listeners   map[raftcluster.GroupID]net.Listener
@@ -200,6 +201,7 @@ func NewVectorPartitionM8ProductionMultiGroupV1(ctx context.Context, opts Vector
 	if err != nil {
 		return nil, err
 	}
+	h.dispatcher = dispatcher
 	counting := VectorPartitionShardSearchDispatcherFuncV1(func(callCtx context.Context, request VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
 		current := h.inflight.Add(1)
 		defer h.inflight.Add(^uint64(0))
@@ -449,6 +451,9 @@ func (h *VectorPartitionM8ProductionMultiGroupV1) Close() error {
 		// close them before sources release their mapped persistent assets.
 		if h.coordinator != nil {
 			errs = append(errs, h.coordinator.Close())
+		}
+		if h.dispatcher != nil {
+			errs = append(errs, h.dispatcher.Close())
 		}
 		// Sources own mapped persistent search assets and must retire before their DB.
 		for _, source := range h.sources {

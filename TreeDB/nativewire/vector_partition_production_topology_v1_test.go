@@ -295,11 +295,11 @@ func TestVectorPartitionProductionTopologyRejectsSharedShardListenerV1(t *testin
 	endpointA := fmt.Sprintf("127.0.0.1:%d", port)
 	endpointB := fmt.Sprintf("127.0.0.2:%d", port)
 	service := func(group raftcluster.GroupID, node raftcluster.NodeID) *VectorPartitionShardSearchServiceV1 {
-		return &VectorPartitionShardSearchServiceV1{localGroup: group, localNodeID: node, limits: DefaultVectorPartitionShardSearchLimitsV1(), route: vectorPartitionShardSearchRouteV1{placement: placement}}
+		return &VectorPartitionShardSearchServiceV1{localGroup: group, localNodeID: node, limits: DefaultVectorPartitionShardSearchLimitsV1(), route: vectorPartitionShardSearchRouteV1{placement: placement, hints: map[raftcluster.GroupID]raftcluster.NodeID{"group-a": "", "group-b": ""}}}
 	}
 	_, err = NewVectorPartitionProductionTopologyV1(VectorPartitionProductionTopologyOptionsV1{Catalog: catalog, Placement: placement, RouterSource: &testVectorPartitionCoordinatorRouterSourceV1{}, ReplicatedLifecycle: &recordingVectorPartitionReplicatedLifecycleAuthorityV1{}, Endpoints: map[raftcluster.GroupID]string{"group-a": endpointA, "group-b": endpointB}, Shards: []VectorPartitionProductionShardV1{{GroupID: "group-a", Listener: listener, Service: service("group-a", "node-a")}, {GroupID: "group-b", Listener: listener, Service: service("group-b", "node-b")}}})
-	if err == nil {
-		t.Fatal("shared shard listener succeeded")
+	if err == nil || !strings.Contains(err.Error(), "share a listener") {
+		t.Fatalf("shared shard listener error=%v", err)
 	}
 }
 
@@ -367,6 +367,12 @@ func TestVectorPartitionProductionTopologyAllowsCoordinatorOnlyAndRejectsIncompl
 	opts.Endpoints["group-b"] = "missing-port"
 	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
 		t.Fatal("malformed owner endpoint succeeded")
+	}
+	for _, endpoint := range []string{":2", "0.0.0.0:2", "[::]:2"} {
+		opts.Endpoints["group-b"] = endpoint
+		if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
+			t.Fatalf("unspecified owner endpoint %q succeeded", endpoint)
+		}
 	}
 	opts.Endpoints["group-b"] = "127.0.0.1:2"
 	opts.NodeEndpoints = map[raftcluster.GroupID]map[raftcluster.NodeID]string{"group-a": {"node-z": "127.0.0.1:3"}}
