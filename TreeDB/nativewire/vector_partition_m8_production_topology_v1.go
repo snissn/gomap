@@ -59,6 +59,7 @@ type VectorPartitionM8ProductionGroupEvidenceV1 struct {
 
 type VectorPartitionM8ProductionMultiGroupV1 struct {
 	coordinator *VectorPartitionCoordinatorV1
+	dispatcher  *VectorPartitionShardSearchTCPDispatcherV1
 	data        map[raftcluster.GroupID]*raftcluster.ThreeNodeHarness
 	meta        *raftplacement.CatalogMetaLifecycleHarnessV1
 	listeners   map[raftcluster.GroupID]net.Listener
@@ -91,6 +92,15 @@ func NewVectorPartitionM8ProductionMultiGroupV1(ctx context.Context, opts Vector
 	if opts.Collection == nil || opts.RouterSource == nil || opts.Manifest.State != "ready" || len(opts.Manifest.Placements) < 4 {
 		return nil, errors.New("nativewire: M8 production topology requires ready persistent assets")
 	}
+	coordinatorLimits, err := normalizeVectorPartitionCoordinatorLimitsV1(opts.CoordinatorLimits)
+	if err != nil {
+		return nil, err
+	}
+	shardLimits, err := normalizeVectorPartitionShardSearchLimitsV1(opts.ShardLimits)
+	if err != nil {
+		return nil, err
+	}
+	opts.CoordinatorLimits, opts.ShardLimits = coordinatorLimits, shardLimits
 	groups, err := vectorPartitionM8ValidateAssetsV1(opts.Manifest, opts.GroupAssetSetDigests)
 	if err != nil {
 		return nil, err
@@ -194,11 +204,14 @@ func NewVectorPartitionM8ProductionMultiGroupV1(ctx context.Context, opts Vector
 		}
 		h.listeners[group] = listener
 		h.endpoints[group] = listener.Addr().String()
-		h.serve(group, listener, service)
 	}
-	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherV1(h.endpoints)
+	dispatcher, err := newVectorPartitionShardSearchTCPDispatcherV1(h.endpoints, nil, coordinatorLimits.MaxConcurrentRequests, shardLimits)
 	if err != nil {
 		return nil, err
+	}
+	h.dispatcher = dispatcher
+	for group, listener := range h.listeners {
+		h.serve(group, listener, h.services[group], dispatcher.maxRequestFrame, dispatcher.maxResponseFrame)
 	}
 	counting := VectorPartitionShardSearchDispatcherFuncV1(func(callCtx context.Context, request VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
 		current := h.inflight.Add(1)
@@ -332,7 +345,7 @@ func vectorPartitionM8ProofEntryV1() ([]byte, error) {
 	}
 	return entry, nil
 }
-func (h *VectorPartitionM8ProductionMultiGroupV1) serve(group raftcluster.GroupID, listener net.Listener, service *VectorPartitionShardSearchServiceV1) {
+func (h *VectorPartitionM8ProductionMultiGroupV1) serve(group raftcluster.GroupID, listener net.Listener, service *VectorPartitionShardSearchServiceV1, maxRequestFrame, maxResponseFrame uint32) {
 	h.wg.Add(1)
 	go func() {
 		defer h.wg.Done()
@@ -353,7 +366,7 @@ func (h *VectorPartitionM8ProductionMultiGroupV1) serve(group raftcluster.GroupI
 			go func() {
 				defer h.wg.Done()
 				defer func() { h.mu.Lock(); delete(h.conns, conn); h.mu.Unlock() }()
-				(VectorPartitionShardSearchTCPServerV1{Service: service, InitialTimeout: 2 * time.Second}).ServeConn(context.Background(), conn)
+				(VectorPartitionShardSearchTCPServerV1{Service: service, InitialTimeout: 2 * time.Second, MaxFrame: maxRequestFrame, MaxResponseFrame: maxResponseFrame}).ServeConn(context.Background(), conn)
 			}()
 		}
 	}()
@@ -449,6 +462,9 @@ func (h *VectorPartitionM8ProductionMultiGroupV1) Close() error {
 		// close them before sources release their mapped persistent assets.
 		if h.coordinator != nil {
 			errs = append(errs, h.coordinator.Close())
+		}
+		if h.dispatcher != nil {
+			errs = append(errs, h.dispatcher.Close())
 		}
 		// Sources own mapped persistent search assets and must retire before their DB.
 		for _, source := range h.sources {
