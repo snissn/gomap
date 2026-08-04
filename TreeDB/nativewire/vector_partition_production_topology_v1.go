@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"reflect"
 	"slices"
 	"sync"
 	"time"
@@ -33,6 +34,7 @@ type VectorPartitionProductionTopologyOptionsV1 struct {
 	Shards              []VectorPartitionProductionShardV1
 	CoordinatorLimits   VectorPartitionCoordinatorLimitsV1
 	ShardLimits         VectorPartitionShardSearchLimitsV1
+	ShardIdleTimeout    time.Duration
 }
 
 type VectorPartitionProductionTopologyStatusV1 struct {
@@ -50,6 +52,7 @@ type VectorPartitionProductionTopologyV1 struct {
 	listeners   map[raftcluster.GroupID]net.Listener
 	endpoints   map[raftcluster.GroupID]string
 	services    map[raftcluster.GroupID]*VectorPartitionShardSearchServiceV1
+	serving     map[raftcluster.GroupID]bool
 	mu          sync.Mutex
 	conns       map[net.Conn]struct{}
 	wg          sync.WaitGroup
@@ -68,7 +71,13 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 	if len(opts.Endpoints) == 0 {
 		return nil, errors.New("nativewire: production vector topology requires owner endpoints")
 	}
-	h := &VectorPartitionProductionTopologyV1{listeners: make(map[raftcluster.GroupID]net.Listener), endpoints: make(map[raftcluster.GroupID]string, len(opts.Endpoints)), services: make(map[raftcluster.GroupID]*VectorPartitionShardSearchServiceV1), conns: make(map[net.Conn]struct{})}
+	if opts.ShardIdleTimeout < 0 {
+		return nil, errors.New("nativewire: production vector topology shard idle timeout is negative")
+	}
+	if opts.ShardIdleTimeout == 0 {
+		opts.ShardIdleTimeout = 30 * time.Second
+	}
+	h := &VectorPartitionProductionTopologyV1{listeners: make(map[raftcluster.GroupID]net.Listener), endpoints: make(map[raftcluster.GroupID]string, len(opts.Endpoints)), services: make(map[raftcluster.GroupID]*VectorPartitionShardSearchServiceV1), serving: make(map[raftcluster.GroupID]bool), conns: make(map[net.Conn]struct{})}
 	defer func() {
 		if err != nil {
 			_ = h.Close()
@@ -102,7 +111,12 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 		if shard.GroupID == "" || shard.Listener == nil || shard.Service == nil || !owners[shard.GroupID] || h.listeners[shard.GroupID] != nil {
 			return nil, fmt.Errorf("nativewire: production vector topology shard %q is invalid", shard.GroupID)
 		}
-		if endpoint := h.endpoints[shard.GroupID]; endpoint == "" || endpoint != shard.Listener.Addr().String() {
+		group, _ := opts.Catalog.Group(shard.GroupID)
+		if shard.Service.localGroup != shard.GroupID || !slices.Contains(group.Members, shard.Service.localNodeID) ||
+			!reflect.DeepEqual(shard.Service.route.placement, opts.Placement) {
+			return nil, fmt.Errorf("nativewire: production vector topology shard %q service does not match topology", shard.GroupID)
+		}
+		if endpoint := h.endpoints[shard.GroupID]; endpoint == "" || !vectorPartitionProductionEndpointMatchesListenerV1(endpoint, shard.Listener) {
 			return nil, fmt.Errorf("nativewire: production vector topology shard %q endpoint does not match listener", shard.GroupID)
 		}
 		h.listeners[shard.GroupID], h.services[shard.GroupID] = shard.Listener, shard.Service
@@ -121,18 +135,30 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 		return nil, err
 	}
 	for group, listener := range h.listeners {
-		h.serve(group, listener, h.services[group])
+		h.serve(group, listener, h.services[group], opts.ShardIdleTimeout)
 	}
 	return h, nil
 }
 
-func (h *VectorPartitionProductionTopologyV1) serve(_ raftcluster.GroupID, listener net.Listener, service *VectorPartitionShardSearchServiceV1) {
+func (h *VectorPartitionProductionTopologyV1) serve(group raftcluster.GroupID, listener net.Listener, service *VectorPartitionShardSearchServiceV1, idleTimeout time.Duration) {
+	h.mu.Lock()
+	h.serving[group] = true
+	h.mu.Unlock()
 	h.wg.Add(1)
 	go func() {
 		defer h.wg.Done()
+		defer func() { h.mu.Lock(); h.serving[group] = false; h.mu.Unlock() }()
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
+				h.mu.Lock()
+				closed := h.closed
+				h.mu.Unlock()
+				var netErr net.Error
+				if !closed && !errors.Is(err, net.ErrClosed) && errors.As(err, &netErr) && netErr.Temporary() {
+					time.Sleep(5 * time.Millisecond)
+					continue
+				}
 				return
 			}
 			h.mu.Lock()
@@ -147,7 +173,7 @@ func (h *VectorPartitionProductionTopologyV1) serve(_ raftcluster.GroupID, liste
 			go func() {
 				defer h.wg.Done()
 				defer func() { h.mu.Lock(); delete(h.conns, conn); h.mu.Unlock() }()
-				(VectorPartitionShardSearchTCPServerV1{Service: service, InitialTimeout: 2 * time.Second}).ServeConn(context.Background(), conn)
+				(VectorPartitionShardSearchTCPServerV1{Service: service, InitialTimeout: idleTimeout}).ServeConn(context.Background(), conn)
 			}()
 		}
 	}()
@@ -166,7 +192,11 @@ func (h *VectorPartitionProductionTopologyV1) Status() VectorPartitionProduction
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	status := VectorPartitionProductionTopologyStatusV1{Ready: !h.closed && h.coordinator != nil, Closed: h.closed, Endpoints: make(map[raftcluster.GroupID]string, len(h.endpoints))}
+	ready := !h.closed && h.coordinator != nil
+	for group := range h.listeners {
+		ready = ready && h.serving[group]
+	}
+	status := VectorPartitionProductionTopologyStatusV1{Ready: ready, Closed: h.closed, Endpoints: make(map[raftcluster.GroupID]string, len(h.endpoints))}
 	for group, endpoint := range h.endpoints {
 		status.Endpoints[group] = endpoint
 	}
@@ -175,6 +205,15 @@ func (h *VectorPartitionProductionTopologyV1) Status() VectorPartitionProduction
 	}
 	slices.Sort(status.ShardGroups)
 	return status
+}
+
+func vectorPartitionProductionEndpointMatchesListenerV1(endpoint string, listener net.Listener) bool {
+	bound, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		return endpoint == listener.Addr().String()
+	}
+	advertised, err := net.ResolveTCPAddr("tcp", endpoint)
+	return err == nil && advertised.Port == bound.Port && (bound.IP.IsUnspecified() || bound.IP.Equal(advertised.IP))
 }
 
 func (h *VectorPartitionProductionTopologyV1) Close() error {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -44,7 +45,8 @@ func TestVectorPartitionProductionTopologyRollsBackPartialStartAndRestartsV1(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := VectorPartitionProductionTopologyOptionsV1{Catalog: catalog, Placement: placement, RouterSource: &testVectorPartitionCoordinatorRouterSourceV1{}, ReplicatedLifecycle: &recordingVectorPartitionReplicatedLifecycleAuthorityV1{}, Endpoints: map[raftcluster.GroupID]string{"group-a": listener.Addr().String()}, Shards: []VectorPartitionProductionShardV1{{GroupID: "group-a", Listener: listener, Service: &VectorPartitionShardSearchServiceV1{}}, {GroupID: "group-a", Listener: listener, Service: &VectorPartitionShardSearchServiceV1{}}}}
+	service := &VectorPartitionShardSearchServiceV1{localGroup: "group-a", localNodeID: "node-a", route: vectorPartitionShardSearchRouteV1{placement: placement}}
+	opts := VectorPartitionProductionTopologyOptionsV1{Catalog: catalog, Placement: placement, RouterSource: &testVectorPartitionCoordinatorRouterSourceV1{}, ReplicatedLifecycle: &recordingVectorPartitionReplicatedLifecycleAuthorityV1{}, Endpoints: map[raftcluster.GroupID]string{"group-a": listener.Addr().String()}, Shards: []VectorPartitionProductionShardV1{{GroupID: "group-a", Listener: listener, Service: service}, {GroupID: "group-a", Listener: listener, Service: service}}}
 	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
 		t.Fatal("partial start unexpectedly succeeded")
 	}
@@ -95,17 +97,42 @@ func newVectorPartitionProductionTopologyTwoGroupTestV1(t *testing.T) (*VectorPa
 		_ = listenerA.Close()
 		t.Fatal(err)
 	}
+	endpointA := listenerA.Addr().String()
+	boundA := listenerA.Addr().(*net.TCPAddr)
+	listenerA = &temporaryWildcardTCPListenerV1{Listener: listenerA, addr: &net.TCPAddr{IP: net.IPv4zero, Port: boundA.Port}}
 	router := &testVectorPartitionCoordinatorRouterV1{status: collections.VectorPartitionRouterRuntimeStatusV1{Manifest: manifest, ModelDigest: strings.Repeat("c", 64), Representatives: 2, Partitions: 2}, partitions: []collections.VectorPartitionRouterPartitionScoreV1{{PartitionID: 0}, {PartitionID: 1, Distance: 0.1}}}
-	topology, err := NewVectorPartitionProductionTopologyV1(VectorPartitionProductionTopologyOptionsV1{Catalog: catalog, Placement: placement, RouterSource: &testVectorPartitionCoordinatorRouterSourceV1{router: router}, ReplicatedLifecycle: &recordingVectorPartitionReplicatedLifecycleAuthorityV1{}, Endpoints: map[raftcluster.GroupID]string{"group-a": listenerA.Addr().String(), "group-b": listenerB.Addr().String()}, Shards: []VectorPartitionProductionShardV1{{GroupID: "group-a", Listener: listenerA, Service: service("group-a", "node-a", 0)}, {GroupID: "group-b", Listener: listenerB, Service: service("group-b", "node-b", 1)}}})
+	topology, err := NewVectorPartitionProductionTopologyV1(VectorPartitionProductionTopologyOptionsV1{Catalog: catalog, Placement: placement, RouterSource: &testVectorPartitionCoordinatorRouterSourceV1{router: router}, ReplicatedLifecycle: &recordingVectorPartitionReplicatedLifecycleAuthorityV1{}, Endpoints: map[raftcluster.GroupID]string{"group-a": endpointA, "group-b": listenerB.Addr().String()}, Shards: []VectorPartitionProductionShardV1{{GroupID: "group-a", Listener: listenerA, Service: service("group-a", "node-a", 0)}, {GroupID: "group-b", Listener: listenerB, Service: service("group-b", "node-b", 1)}}})
 	if err != nil {
 		_ = listenerA.Close()
 		_ = listenerB.Close()
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = topology.Close() })
 	request := testVectorPartitionCoordinatorRequestV1(2)
 	request.IndexDefinitionDigest = vectorPartitionShardSearchDigestTestV1
 	return topology, request, reads
 }
+
+type temporaryWildcardTCPListenerV1 struct {
+	net.Listener
+	addr     net.Addr
+	injected atomic.Bool
+}
+
+func (l *temporaryWildcardTCPListenerV1) Accept() (net.Conn, error) {
+	if !l.injected.Swap(true) {
+		return nil, temporaryAcceptErrorV1{}
+	}
+	return l.Listener.Accept()
+}
+
+func (l *temporaryWildcardTCPListenerV1) Addr() net.Addr { return l.addr }
+
+type temporaryAcceptErrorV1 struct{}
+
+func (temporaryAcceptErrorV1) Error() string   { return "temporary accept error" }
+func (temporaryAcceptErrorV1) Timeout() bool   { return false }
+func (temporaryAcceptErrorV1) Temporary() bool { return true }
 
 func TestVectorPartitionProductionTopologyRequiresLiveAuthorityAndOwnsLifecycleV1(t *testing.T) {
 	ref := raftplacement.CollectionRefV1{Database: "db", Catalog: "catalog", Collection: "docs"}
@@ -125,6 +152,21 @@ func TestVectorPartitionProductionTopologyRequiresLiveAuthorityAndOwnsLifecycleV
 		t.Fatal("missing lifecycle authority succeeded")
 	}
 	opts.ReplicatedLifecycle = &recordingVectorPartitionReplicatedLifecycleAuthorityV1{}
+	validService, err := NewVectorPartitionShardSearchServiceV1(VectorPartitionShardSearchServiceOptionsV1{Catalog: catalog, Placement: placement, LocalNodeID: "node-a", LocalGroupID: "group-a", ReadCoordinator: &fakeVectorPartitionReadCoordinatorV1{}, GenerationSource: &fakeVectorPartitionGenerationSourceV1{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	badPlacement := placement
+	badPlacement.PartitionGeneration++
+	badService, err := NewVectorPartitionShardSearchServiceV1(VectorPartitionShardSearchServiceOptionsV1{Catalog: catalog, Placement: badPlacement, LocalNodeID: "node-a", LocalGroupID: "group-a", ReadCoordinator: &fakeVectorPartitionReadCoordinatorV1{}, GenerationSource: &fakeVectorPartitionGenerationSourceV1{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts.Shards[0].Service = badService
+	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
+		t.Fatal("mismatched shard service succeeded")
+	}
+	opts.Shards[0].Service = validService
 	topology, err := NewVectorPartitionProductionTopologyV1(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -161,7 +203,7 @@ func TestVectorPartitionProductionTopologyAllowsCoordinatorOnlyAndRejectsIncompl
 	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
 		t.Fatal("foreign node endpoint succeeded")
 	}
-	opts.NodeEndpoints = nil
+	opts.NodeEndpoints = map[raftcluster.GroupID]map[raftcluster.NodeID]string{"group-a": {"node-a": "127.0.0.1:1"}}
 	topology, err := NewVectorPartitionProductionTopologyV1(opts)
 	if err != nil {
 		t.Fatal(err)

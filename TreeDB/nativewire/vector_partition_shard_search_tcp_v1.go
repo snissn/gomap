@@ -112,6 +112,7 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShard
 		if err == nil || attempt != 0 || ctx.Err() != nil || !vectorPartitionShardSearchTCPReconnectableV1(err) {
 			return response, err
 		}
+		d.discardIdle(request.TargetGroupID, request.TargetNodeID)
 	}
 }
 
@@ -179,15 +180,8 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) acquire(ctx context.Context,
 	}
 	pool := d.pools[endpoint]
 	if pool == nil {
-		if d.pools == nil {
-			d.pools = make(map[string]*vectorPartitionShardSearchTCPEndpointPoolV1)
-		}
-		maxConnections := d.maxConnectionsPerEndpoint
-		if maxConnections == 0 {
-			maxConnections = DefaultVectorPartitionCoordinatorLimitsV1().MaxConcurrentRequests
-		}
 		pool = &vectorPartitionShardSearchTCPEndpointPoolV1{
-			slots: make(chan struct{}, maxConnections),
+			slots: make(chan struct{}, d.maxConnectionsPerEndpoint),
 			all:   make(map[net.Conn]struct{}),
 		}
 		d.pools[endpoint] = pool
@@ -195,6 +189,19 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) acquire(ctx context.Context,
 	d.mu.Unlock()
 	conn, err := pool.acquire(ctx, d.dial, endpoint)
 	return pool, conn, err
+}
+
+func (d *VectorPartitionShardSearchTCPDispatcherV1) discardIdle(group raftcluster.GroupID, node raftcluster.NodeID) {
+	endpoint, ok := d.endpoint(group, node)
+	if !ok {
+		return
+	}
+	d.mu.Lock()
+	pool := d.pools[endpoint]
+	d.mu.Unlock()
+	if pool != nil {
+		pool.discardIdle()
+	}
 }
 
 func (p *vectorPartitionShardSearchTCPEndpointPoolV1) acquire(ctx context.Context, dial func(context.Context, string, string) (net.Conn, error), endpoint string) (net.Conn, error) {
@@ -245,6 +252,19 @@ func (p *vectorPartitionShardSearchTCPEndpointPoolV1) release(conn net.Conn, reu
 		_ = conn.Close()
 	}
 	<-p.slots
+}
+
+func (p *vectorPartitionShardSearchTCPEndpointPoolV1) discardIdle() {
+	p.mu.Lock()
+	idle := p.idle
+	p.idle = nil
+	for _, conn := range idle {
+		delete(p.all, conn)
+	}
+	p.mu.Unlock()
+	for _, conn := range idle {
+		_ = conn.Close()
+	}
 }
 func (p *vectorPartitionShardSearchTCPEndpointPoolV1) close() error {
 	p.mu.Lock()
@@ -336,8 +356,11 @@ func (s VectorPartitionShardSearchTCPServerV1) ServeConn(ctx context.Context, co
 		requestCtx, cancel := vectorPartitionShardSearchTCPRequestContextV1(ctx, frame.Request.DeadlineUnixNano)
 		stopPeerMonitor := vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn, requestCtx, cancel)
 		response, err := s.Service.Search(requestCtx, *frame.Request)
-		stopPeerMonitor()
+		peerInput := stopPeerMonitor()
 		cancel()
+		if peerInput {
+			return
+		}
 		writeDeadline := time.Now().Add(initialTimeout)
 		if deadline, ok := requestCtx.Deadline(); ok {
 			writeDeadline = deadline
@@ -499,14 +522,15 @@ func vectorPartitionShardSearchTCPRequestContextV1(ctx context.Context, deadline
 // successful response is not delayed by the polling deadline. Read deadlines
 // are cleared when the normal request completes and do not affect the response
 // write deadline.
-func vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn net.Conn, ctx context.Context, cancel context.CancelFunc) func() {
+func vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn net.Conn, ctx context.Context, cancel context.CancelFunc) func() bool {
 	if conn == nil || cancel == nil {
-		return func() {}
+		return func() bool { return false }
 	}
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	var deadlineMu sync.Mutex
 	var stopOnce sync.Once
+	peerInput := false
 	go func() {
 		defer close(done)
 		var discard [1]byte
@@ -524,6 +548,7 @@ func vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn net.Conn, ctx con
 			if err == nil {
 				// Extra input is invalid under the one-request contract. Treat it
 				// as a disconnected/abandoned caller rather than extending work.
+				peerInput = true
 				cancel()
 				return
 			}
@@ -547,7 +572,7 @@ func vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn net.Conn, ctx con
 			return
 		}
 	}()
-	return func() {
+	return func() bool {
 		stopOnce.Do(func() {
 			close(stop)
 			deadlineMu.Lock()
@@ -558,6 +583,7 @@ func vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn net.Conn, ctx con
 			<-done
 			_ = conn.SetReadDeadline(time.Time{})
 		})
+		return peerInput
 	}
 }
 

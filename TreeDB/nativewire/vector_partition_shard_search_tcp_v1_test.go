@@ -3,6 +3,8 @@ package nativewire
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -47,20 +49,33 @@ func TestVectorPartitionShardSearchTCPDispatcherReusesConnectionV1(t *testing.T)
 }
 
 func TestVectorPartitionShardSearchTCPDispatcherReconnectsAfterIdleCloseAndFailsAfterCloseV1(t *testing.T) {
+	const poolSize = 2
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-	idleClosed := make(chan struct{}, 1)
+	idleClosed := make(chan struct{}, poolSize)
+	started := make(chan struct{}, poolSize)
+	release := make(chan struct{})
+	var accepts atomic.Uint64
 	go func() {
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
 				return
 			}
+			accepted := accepts.Add(1)
 			go func() {
-				(VectorPartitionShardSearchTCPServerV1{InitialTimeout: 10 * time.Millisecond, Service: vectorPartitionShardSearchHandlerFuncV1(func(_ context.Context, r VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+				timeout := time.Second
+				if accepted <= poolSize {
+					timeout = 10 * time.Millisecond
+				}
+				(VectorPartitionShardSearchTCPServerV1{InitialTimeout: timeout, Service: vectorPartitionShardSearchHandlerFuncV1(func(_ context.Context, r VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+					if r.RequestID != "reconnected" {
+						started <- struct{}{}
+						<-release
+					}
 					return VectorPartitionShardSearchResponseV1{Version: 1, RequestID: r.RequestID}, nil
 				})}).ServeConn(context.Background(), conn)
 				select {
@@ -70,20 +85,42 @@ func TestVectorPartitionShardSearchTCPDispatcherReconnectsAfterIdleCloseAndFails
 			}()
 		}
 	}()
-	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": listener.Addr().String()})
+	dispatcher, err := newVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": listener.Addr().String()}, nil, poolSize)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := dispatcher.DispatchVectorPartitionShardSearchV1(context.Background(), VectorPartitionShardSearchRequestV1{TargetGroupID: "group-a", RequestID: "first"}); err != nil {
-		t.Fatal(err)
+	done := make(chan error, poolSize)
+	for i := range poolSize {
+		go func() {
+			_, err := dispatcher.DispatchVectorPartitionShardSearchV1(context.Background(), VectorPartitionShardSearchRequestV1{TargetGroupID: "group-a", RequestID: fmt.Sprintf("warm-%d", i)})
+			done <- err
+		}()
 	}
-	select {
-	case <-idleClosed:
-	case <-time.After(time.Second):
-		t.Fatal("server did not close idle connection")
+	for range poolSize {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("pooled connection did not start")
+		}
+	}
+	close(release)
+	for range poolSize {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range poolSize {
+		select {
+		case <-idleClosed:
+		case <-time.After(time.Second):
+			t.Fatal("server did not close pooled idle connection")
+		}
 	}
 	if response, err := dispatcher.DispatchVectorPartitionShardSearchV1(context.Background(), VectorPartitionShardSearchRequestV1{TargetGroupID: "group-a", RequestID: "reconnected"}); err != nil || response.RequestID != "reconnected" {
 		t.Fatalf("reconnect response=%+v err=%v", response, err)
+	}
+	if got := accepts.Load(); got != poolSize+1 {
+		t.Fatalf("connections=%d want %d", got, poolSize+1)
 	}
 	if err := dispatcher.Close(); err != nil {
 		t.Fatal(err)
@@ -91,6 +128,31 @@ func TestVectorPartitionShardSearchTCPDispatcherReconnectsAfterIdleCloseAndFails
 	if _, err := dispatcher.DispatchVectorPartitionShardSearchV1(context.Background(), VectorPartitionShardSearchRequestV1{TargetGroupID: "group-a"}); err == nil {
 		t.Fatal("closed dispatcher accepted request")
 	}
+}
+
+func TestVectorPartitionShardSearchTCPServerClosesAfterPeerInputDuringRequestV1(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		(VectorPartitionShardSearchTCPServerV1{Service: vectorPartitionShardSearchHandlerFuncV1(func(ctx context.Context, _ VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+			close(started)
+			<-ctx.Done()
+			return VectorPartitionShardSearchResponseV1{}, ctx.Err()
+		})}).ServeConn(context.Background(), serverConn)
+		close(done)
+	}()
+	if err := writeVectorPartitionShardSearchTCPFrameV1(clientConn, vectorPartitionShardSearchTCPFrameV1{Request: &VectorPartitionShardSearchRequestV1{}}, vectorPartitionShardSearchTCPMaxFrameBytesV1); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if _, err := clientConn.Write([]byte{0}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readVectorPartitionShardSearchTCPFrameV1(clientConn, vectorPartitionShardSearchTCPMaxFrameBytesV1); !errors.Is(err, io.EOF) {
+		t.Fatalf("peer input left connection reusable: %v", err)
+	}
+	<-done
 }
 
 func TestVectorPartitionShardSearchTCPDispatcherCancellationWhilePoolIsFullV1(t *testing.T) {
@@ -332,10 +394,11 @@ func TestVectorPartitionShardSearchTCPDispatcherRejectsAmbiguousResponseFramesV1
 				_, _ = readVectorPartitionShardSearchTCPFrameV1(server, vectorPartitionShardSearchTCPMaxFrameBytesV1)
 				_ = writeVectorPartitionShardSearchTCPFrameV1(server, frame, vectorPartitionShardSearchTCPMaxFrameBytesV1)
 			}()
-			dispatcher := &VectorPartitionShardSearchTCPDispatcherV1{
-				endpoints: map[raftcluster.GroupID]string{"group-a": "pipe"}, maxFrame: vectorPartitionShardSearchTCPMaxFrameBytesV1,
-				dial: func(context.Context, string, string) (net.Conn, error) { return client, nil },
+			dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": "pipe"})
+			if err != nil {
+				t.Fatal(err)
 			}
+			dispatcher.dial = func(context.Context, string, string) (net.Conn, error) { return client, nil }
 			if _, err := dispatcher.DispatchVectorPartitionShardSearchV1(context.Background(), VectorPartitionShardSearchRequestV1{TargetGroupID: "group-a"}); err == nil {
 				t.Fatal("accepted ambiguous M5 response frame")
 			}
