@@ -156,10 +156,6 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 		if endpoint := opts.NodeEndpoints[shard.GroupID][shard.Service.localNodeID]; endpoint != "" && !vectorPartitionProductionEndpointMatchesListenerV1(endpoint, shard.Listener) {
 			return nil, fmt.Errorf("nativewire: production vector topology shard %q local node endpoint does not match listener", shard.GroupID)
 		}
-		fallbackKey, err := vectorPartitionProductionEndpointKeyV1(h.endpoints[shard.GroupID])
-		if err != nil {
-			return nil, err
-		}
 		for _, member := range group.Members {
 			if member == shard.Service.localNodeID {
 				continue
@@ -168,11 +164,7 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 			if endpoint == "" {
 				return nil, fmt.Errorf("nativewire: production vector topology shard %q cannot route to member %q", shard.GroupID, member)
 			}
-			key, err := vectorPartitionProductionEndpointKeyV1(endpoint)
-			if err != nil {
-				return nil, err
-			}
-			if key == fallbackKey {
+			if vectorPartitionProductionEndpointMatchesListenerV1(endpoint, shard.Listener) {
 				return nil, fmt.Errorf("nativewire: production vector topology shard %q remote member %q uses the local fallback", shard.GroupID, member)
 			}
 		}
