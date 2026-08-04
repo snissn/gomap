@@ -9,6 +9,7 @@ import (
 )
 
 var bsonIndexKeyCompareResultV2 int
+var bsonIndexEntryKeyResultV2 []byte
 
 func BenchmarkBSONIndexKeyCodecV2Encode(b *testing.B) {
 	decimal, err := bson.ParseDecimal128("123456789.0123")
@@ -62,9 +63,11 @@ func BenchmarkBSONIndexKeyCodecV2EntryKey(b *testing.B) {
 	documentID := []byte("document-7")
 	b.ReportAllocs()
 	for b.Loop() {
-		if _, err := bsonIndexEntryKeyV2(component, documentID); err != nil {
+		entryKey, err := bsonIndexEntryKeyV2(component, documentID)
+		if err != nil {
 			b.Fatal(err)
 		}
+		bsonIndexEntryKeyResultV2 = entryKey
 	}
 }
 
