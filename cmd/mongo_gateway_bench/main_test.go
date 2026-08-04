@@ -4191,6 +4191,8 @@ func TestRecordMongoGatewayCapabilityMetadataOmitsNonGatewayTargets(t *testing.T
 	tests := []benchmarkResult{
 		{Target: "mongo", ClientMode: clientModeDriver},
 		{Target: "treedb", ClientMode: clientModeDirect},
+		{Target: "treedb", ClientMode: clientModeNativeWireInproc},
+		{Target: "treedb", ClientMode: clientModeNativeWireTCP},
 	}
 	for _, result := range tests {
 		result := result
@@ -4228,16 +4230,17 @@ func TestRecordMongoGatewayCapabilityMetadata(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := writeResult(&out, "json", result); err != nil {
+	serialized := &benchmarkResult{Target: "treedb", ClientMode: clientModeDriver}
+	if err := writeResult(&out, "json", serialized); err != nil {
 		t.Fatalf("write JSON result: %v", err)
 	}
-	for _, key := range []string{
-		"mongo_gateway_capability_schema",
-		"mongo_gateway_capability_version",
-		"mongo_gateway_capability_identity",
-	} {
-		if !strings.Contains(out.String(), `"`+key+`"`) {
-			t.Fatalf("JSON result missing %q: %s", key, out.String())
-		}
+	var decoded benchmarkResult
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode JSON result: %v", err)
+	}
+	if decoded.MongoGatewayCapabilitySchema != mongogateway.MongoGatewayCapabilitySchema ||
+		decoded.MongoGatewayCapabilityVersion != mongogateway.MongoGatewayCapabilityVersion ||
+		decoded.MongoGatewayCapabilityIdentity != mongogateway.MongoGatewayCapabilityIdentity() {
+		t.Fatalf("serialized capability metadata=%+v", decoded)
 	}
 }

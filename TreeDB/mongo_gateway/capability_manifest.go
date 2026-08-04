@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 )
 
 // MongoGatewayCapabilitySchema and MongoGatewayCapabilityVersion identify the
@@ -190,6 +191,10 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 	},
 }
 
+var mongoGatewayCapabilityIdentity = sync.OnceValue(func() string {
+	return mongoGatewayCapabilityIdentityForManifest(mongoGatewayCapabilityManifest)
+})
+
 // MongoGatewayCapabilities returns a deep copy of the canonical capability manifest.
 func MongoGatewayCapabilities() MongoGatewayCapabilityManifest {
 	manifest := mongoGatewayCapabilityManifest
@@ -265,10 +270,10 @@ func ValidateMongoGatewayCapabilityManifest(manifest MongoGatewayCapabilityManif
 // MongoGatewayCapabilityIdentity returns the deterministic identity of the
 // canonical manifest.
 func MongoGatewayCapabilityIdentity() string {
-	return mongoGatewayCapabilityIdentity(MongoGatewayCapabilities())
+	return mongoGatewayCapabilityIdentity()
 }
 
-func mongoGatewayCapabilityIdentity(manifest MongoGatewayCapabilityManifest) string {
+func mongoGatewayCapabilityIdentityForManifest(manifest MongoGatewayCapabilityManifest) string {
 	payload, err := json.Marshal(manifest)
 	if err != nil {
 		panic(fmt.Sprintf("marshal Mongo gateway capability manifest: %v", err))

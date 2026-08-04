@@ -59,8 +59,9 @@ func TestMongoGatewayCapabilityManifestRejectsProbeStatusDrift(t *testing.T) {
 func TestMongoGatewayAdvertisedMetadataMatchesManifest(t *testing.T) {
 	manifest := MongoGatewayCapabilities()
 	advertised := manifest.Advertised
+	server := &Server{MaxMessageLength: 1 << 20}
 
-	helloBytes, err := bson.Marshal(helloResponse(defaultMaxBSONObjectSize, true))
+	helloBytes, err := bson.Marshal(helloResponse(server.maxMessageLength(), true))
 	if err != nil {
 		t.Fatalf("marshal hello: %v", err)
 	}
@@ -70,6 +71,9 @@ func TestMongoGatewayAdvertisedMetadataMatchesManifest(t *testing.T) {
 	}
 	if got, ok := hello.Lookup("logicalSessionTimeoutMinutes").Int32OK(); !ok || got != advertised.LogicalSessionTimeoutMinutes {
 		t.Fatalf("hello logicalSessionTimeoutMinutes=%d ok=%v want %d", got, ok, advertised.LogicalSessionTimeoutMinutes)
+	}
+	if got, ok := hello.Lookup("maxMessageSizeBytes").Int32OK(); !ok || got != server.maxMessageLength() {
+		t.Fatalf("hello maxMessageSizeBytes=%d ok=%v want %d", got, ok, server.maxMessageLength())
 	}
 
 	buildInfoBytes, err := bson.Marshal(buildInfoResponse())

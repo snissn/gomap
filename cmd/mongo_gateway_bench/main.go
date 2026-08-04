@@ -203,7 +203,7 @@ func recordMongoGatewayCapabilityMetadata(result *benchmarkResult) {
 	result.MongoGatewayCapabilitySchema = ""
 	result.MongoGatewayCapabilityVersion = 0
 	result.MongoGatewayCapabilityIdentity = ""
-	if result.Target != "treedb" || result.ClientMode == clientModeDirect {
+	if result.Target != "treedb" || result.ClientMode == clientModeDirect || isNativeWireClientMode(result.ClientMode) {
 		return
 	}
 	result.MongoGatewayCapabilitySchema = mongogateway.MongoGatewayCapabilitySchema

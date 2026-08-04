@@ -43,7 +43,7 @@ GOWORK=off go test ./TreeDB/mongo_gateway \
 
 `TestMongoCompatibilityMatrixDocumentationUpToDate` fails if this table or the
 gateway README summary drifts from the manifest. `TestMongoCompatibilityMatrix`
-fails if any manifest identity is duplicated, lacks an executable probe, or has
+fails if any capability ID is duplicated, lacks an executable probe, or has
 an extra probe outside the manifest.
 
 <!-- mongo-compatibility-matrix:begin -->

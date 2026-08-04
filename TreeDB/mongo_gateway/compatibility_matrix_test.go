@@ -74,9 +74,9 @@ func validateMongoCompatibilityProbes(manifest MongoGatewayCapabilityManifest, p
 		}
 		seen[row.capabilityID] = struct{}{}
 	}
-	for capabilityID := range capabilities {
-		if _, ok := seen[capabilityID]; !ok {
-			return fmt.Errorf("capability %q is missing executable probe", capabilityID)
+	for _, capability := range manifest.Capabilities {
+		if _, ok := seen[capability.ID]; !ok {
+			return fmt.Errorf("capability %q is missing executable probe", capability.ID)
 		}
 	}
 	return nil

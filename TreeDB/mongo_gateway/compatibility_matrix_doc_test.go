@@ -126,7 +126,7 @@ func generatedCapabilitySummary(manifest MongoGatewayCapabilityManifest, newline
 	b.WriteString("## Executable capability summary")
 	b.WriteString(newline)
 	b.WriteString(newline)
-	fmt.Fprintf(&b, "Manifest: `%s`%s%s", mongoGatewayCapabilityIdentity(manifest), newline, newline)
+	fmt.Fprintf(&b, "Manifest: `%s`%s%s", mongoGatewayCapabilityIdentityForManifest(manifest), newline, newline)
 	b.WriteString("| Surface | Status | Boundary |")
 	b.WriteString(newline)
 	b.WriteString("|---|---|---|")
