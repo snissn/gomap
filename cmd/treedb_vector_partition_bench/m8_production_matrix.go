@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -27,7 +28,10 @@ type m8ProductionMatrixV1 struct {
 	Status                      string                     `json:"status"`
 	Disposition                 string                     `json:"disposition"`
 	GeneratedAt                 time.Time                  `json:"generated_at"`
+	ExecutionStartedAt          time.Time                  `json:"execution_started_at"`
+	ExecutionCompletedAt        time.Time                  `json:"execution_completed_at"`
 	Command                     []string                   `json:"exact_command"`
+	ExecutableSHA256            string                     `json:"executable_sha256"`
 	BaseSHA                     string                     `json:"base_sha"`
 	HeadSHA                     string                     `json:"head_sha"`
 	Dataset                     fixtureManifest            `json:"dataset"`
@@ -107,11 +111,16 @@ type m8ProductionMatrixGatesV1 struct {
 	ExistingBehavior          string `json:"existing_behavior"`
 }
 
-func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, queries [][]float64, stdout io.Writer) error {
+func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, queries [][]float64, stdout io.Writer) (runErr error) {
 	if len(cfg.m8VariantDBs) == 0 {
 		return runM8ProductionSingleVariantV1(cfg, fixture, vectors, queries, stdout)
 	}
-	initialDirty := m8GitDirtyV1(cfg.out, cfg.profiles)
+	executionStartedAt := time.Now().UTC()
+	initialDirty := m8GitDirtyInV1(cfg.sourceCheckout, cfg.out, cfg.profiles)
+	executableSHA256, err := m8BenchmarkExecutableSHA256V1(cfg.command[0])
+	if err != nil {
+		return fmt.Errorf("hash M8 benchmark executable: %w", err)
+	}
 	type variantSource struct {
 		dir        string
 		descriptor m3VariantDescriptorV1
@@ -124,6 +133,9 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		}
 		if cfg.partitions < 0 || descriptor.FixtureChecksum != fixture.Checksum || uint64(descriptor.Partitions) != uint64(cfg.partitions) {
 			return fmt.Errorf("M8 matrix variant %q does not match configured fixture/partitions", descriptor.VariantID)
+		}
+		if err := m8ValidateRetainedM3ProvenanceV1(cfg, descriptor, executableSHA256); err != nil {
+			return fmt.Errorf("M8 matrix variant %q: %w", descriptor.VariantID, err)
 		}
 		if _, duplicate := sourcesByVariant[descriptor.VariantID]; duplicate {
 			return fmt.Errorf("M8 matrix duplicate variant %q", descriptor.VariantID)
@@ -142,6 +154,26 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 	if err := m8ValidateVariantBuildCompatibilityV1(preflightDescriptors); err != nil {
 		return err
 	}
+	matrixConfig := m8QualificationCommandConfigV1(cfg)
+	matrixConfig.Overlap = []float64{sourcesByVariant[m8RequiredVariantIDsV1[0]].descriptor.OverlapRatio}
+	matrixPath, err := m8PreflightProductionMatrixOutputV1(cfg, preflightDescriptors, matrixConfig)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(cfg.out, 0o755); err != nil {
+		return err
+	}
+	ownedProfiles, err := m8CreateProductionMatrixProfileLeavesV1(cfg.profiles)
+	if err != nil {
+		return err
+	}
+	matrixPublished := false
+	defer func() {
+		if matrixPublished {
+			return
+		}
+		runErr = errors.Join(runErr, m8RemoveProductionMatrixProfileLeavesV1(ownedProfiles))
+	}()
 
 	reports := make([]m8ProductionReportV1, 0, len(m8RequiredVariantIDsV1))
 	expectedTruthCacheDigest := cfg.m8TruthCacheSHA256
@@ -171,7 +203,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		}
 		reports = append(reports, report)
 	}
-	matrix, err := m8BuildProductionMatrixV1(cfg, fixture, reports)
+	matrix, err := m8BuildProductionMatrixWithExecutionIntervalV1(cfg, fixture, reports, executionStartedAt, time.Now().UTC())
 	if err != nil {
 		return err
 	}
@@ -180,25 +212,14 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		return err
 	}
 	raw = append(raw, '\n')
-	if err := os.MkdirAll(cfg.out, 0o755); err != nil {
-		return err
-	}
-	orderedDescriptors := make([]m3VariantDescriptorV1, len(reports))
-	for i := range reports {
-		orderedDescriptors[i] = *reports[i].Variant
-	}
-	digest, err := m8MatrixIdentityV1(cfg, orderedDescriptors, reports[0].Config)
+	matrixPublished, err = m8WriteProductionMatrixV1(matrixPath, raw)
 	if err != nil {
-		return err
-	}
-	path := filepath.Join(cfg.out, fmt.Sprintf("vector_partition_m8_matrix_%s_%x.json", cfg.headSHA[:provenanceSuffixBytes], digest[:6]))
-	if err := os.WriteFile(path, raw, 0o644); err != nil {
 		return err
 	}
 	if cfg.format == "json" {
 		_, err = stdout.Write(raw)
 	} else {
-		if _, err = fmt.Fprintf(stdout, "M8 matrix status=%s disposition=%s artifact=%s rows=%d\n", matrix.Status, matrix.Disposition, path, len(matrix.Comparison)); err == nil {
+		if _, err = fmt.Fprintf(stdout, "M8 matrix status=%s disposition=%s artifact=%s rows=%d\n", matrix.Status, matrix.Disposition, matrixPath, len(matrix.Comparison)); err == nil {
 			for _, decision := range matrix.Decision {
 				_, err = fmt.Fprintf(stdout, "decision variant=%s probes=%d ef=%d concurrency=%d stage=%s owner=%s delta=%+.6f\n", decision.VariantID, decision.Probes, decision.EfSearch, decision.Concurrency, decision.Stage, decision.Owner, decision.Delta)
 				if err != nil {
@@ -208,6 +229,121 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		}
 	}
 	return err
+}
+
+// m8CreateProductionMatrixProfileLeavesV1 reserves only this matrix's final
+// profile leaves. A failed reservation removes just leaves it created.
+func m8CreateProductionMatrixProfileLeavesV1(root string) (leaves []string, err error) {
+	if root == "" {
+		return nil, nil
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return nil, fmt.Errorf("create M8 profile root: %w", err)
+	}
+	for _, variantID := range m8RequiredVariantIDsV1 {
+		path := filepath.Join(root, variantID)
+		if err := os.Mkdir(path, 0o755); err != nil {
+			for _, leaf := range leaves {
+				err = errors.Join(err, os.RemoveAll(leaf))
+			}
+			return nil, fmt.Errorf("reserve M8 profile output %s: %w", path, err)
+		}
+		leaves = append(leaves, path)
+	}
+	return leaves, nil
+}
+
+func m8RemoveProductionMatrixProfileLeavesV1(leaves []string) (err error) {
+	for _, path := range leaves {
+		err = errors.Join(err, os.RemoveAll(path))
+	}
+	return err
+}
+
+// m8PreflightProductionMatrixOutputV1 prevents an exact retained command from
+// modifying its evidence bundle before child profile capture begins.
+func m8PreflightProductionMatrixOutputV1(cfg config, descriptors []m3VariantDescriptorV1, evidence m8ProductionConfigEvidenceV1) (string, error) {
+	digest, err := m8MatrixIdentityV1(cfg, descriptors, evidence)
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(cfg.out, fmt.Sprintf("vector_partition_m8_matrix_%s_%x.json", cfg.headSHA[:provenanceSuffixBytes], digest[:6]))
+	if _, err := os.Lstat(path); err == nil {
+		return "", fmt.Errorf("M8 retained matrix output already exists: %s", path)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("inspect M8 matrix output %s: %w", path, err)
+	}
+	if cfg.profiles != "" {
+		for _, variantID := range m8RequiredVariantIDsV1 {
+			path := filepath.Join(cfg.profiles, variantID)
+			if _, err := os.Lstat(path); err == nil {
+				return "", fmt.Errorf("M8 retained profile output already exists: %s", path)
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return "", fmt.Errorf("inspect M8 profile output %s: %w", path, err)
+			}
+		}
+	}
+	return path, nil
+}
+
+func m8WriteProductionMatrixV1(path string, raw []byte) (bool, error) {
+	return m8PublishProductionMatrixV1(path, func(w io.Writer) error {
+		n, err := w.Write(raw)
+		if err != nil {
+			return err
+		}
+		if n != len(raw) {
+			return io.ErrShortWrite
+		}
+		return nil
+	})
+}
+
+// m8PublishProductionMatrixV1 exposes a complete matrix only after it is
+// closed and atomically linked into its final no-replace name.
+func m8PublishProductionMatrixV1(path string, write func(io.Writer) error) (bool, error) {
+	return m8PublishProductionMatrixWithDirectorySyncV1(path, write, m8SyncDirectoryV1)
+}
+
+func m8PublishProductionMatrixWithDirectorySyncV1(path string, write func(io.Writer) error, syncDirectory func(string) error) (bool, error) {
+	file, err := os.CreateTemp(filepath.Dir(path), ".m8_matrix_*.tmp")
+	if err != nil {
+		return false, fmt.Errorf("create temporary immutable M8 matrix: %w", err)
+	}
+	tempPath := file.Name()
+	defer os.Remove(tempPath)
+	defer file.Close()
+	if err := write(file); err != nil {
+		return false, err
+	}
+	if err := file.Chmod(0o644); err != nil {
+		return false, err
+	}
+	if err := file.Sync(); err != nil {
+		return false, err
+	}
+	if err := file.Close(); err != nil {
+		return false, err
+	}
+	if err := os.Link(tempPath, path); err != nil {
+		return false, fmt.Errorf("publish immutable M8 matrix: %w", err)
+	}
+	if err := syncDirectory(filepath.Dir(path)); err != nil {
+		return true, fmt.Errorf("sync immutable M8 matrix directory: %w", err)
+	}
+	return true, nil
+}
+
+func m8SyncDirectoryV1(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+	return dir.Sync()
 }
 
 func runM8ProductionVariantProcessV1(cfg config, dir string, overlap float64, profiles, expectedTruthCacheDigest string, stdout io.Writer) error {
@@ -275,6 +411,35 @@ func m8VariantProcessArgsV1(command []string, dir string, overlap float64, profi
 	return args, nil
 }
 
+func m8ReplayCommandWithTruthCacheDigestV1(command []string, digest string) ([]string, error) {
+	if len(command) == 0 || len(digest) != sha256.Size*2 || digest != strings.ToLower(digest) || !m8SHA256V1(digest) {
+		return nil, errors.New("M8 replay command requires a command and truth-cache digest")
+	}
+	args := []string{command[0], "-m8-truth-cache-sha256", digest}
+	args = slices.Grow(args, len(command)-1)
+	for i := 1; i < len(command); i++ {
+		arg := command[i]
+		if !strings.HasPrefix(arg, "-") {
+			args = append(args, arg)
+			continue
+		}
+		name := strings.TrimLeft(arg, "-")
+		if at := strings.IndexByte(name, '='); at >= 0 {
+			if name[:at] == "m8-truth-cache-sha256" {
+				continue
+			}
+		} else if name == "m8-truth-cache-sha256" {
+			if i+1 >= len(command) {
+				return nil, fmt.Errorf("M8 replay command flag %q is missing its value", arg)
+			}
+			i++
+			continue
+		}
+		args = append(args, arg)
+	}
+	return args, nil
+}
+
 func m8MatrixIdentityV1(cfg config, variants []m3VariantDescriptorV1, evidence m8ProductionConfigEvidenceV1) ([sha256.Size]byte, error) {
 	portableVariants := append([]m3VariantDescriptorV1(nil), variants...)
 	for i := range portableVariants {
@@ -317,24 +482,27 @@ func m8ValidateVariantBuildCompatibilityV1(variants []m3VariantDescriptorV1) err
 		if !ok {
 			return fmt.Errorf("M8 matrix missing variant build identity %q", required)
 		}
-		if variant.FixtureChecksum != base.FixtureChecksum || variant.Source != base.Source || variant.Partitions != base.Partitions ||
-			variant.GraphArtifactSHA256 != base.GraphArtifactSHA256 || variant.IndexDefinitionDigest != base.IndexDefinitionDigest || variant.PartitionHNSWM != base.PartitionHNSWM {
-			return fmt.Errorf("M8 matrix variant %q was not built from the common source, graph, partition count, and local HNSW configuration", required)
+		if variant.BaseSHA != base.BaseSHA || variant.HeadSHA != base.HeadSHA || variant.FixtureChecksum != base.FixtureChecksum || variant.Source != base.Source || variant.Partitions != base.Partitions ||
+			variant.IndexDefinitionDigest != base.IndexDefinitionDigest || variant.PartitionHNSWM != base.PartitionHNSWM || variant.PartitionConfig != base.PartitionConfig ||
+			variant.RouterRepresentatives != base.RouterRepresentatives || variant.RouterMaxScalarWork != base.RouterMaxScalarWork || variant.RouterConfig != base.RouterConfig || variant.GraphBuildSHA256 != base.GraphBuildSHA256 {
+			return fmt.Errorf("M8 matrix variant %q does not match the common source, partition count, partition configuration, index definition, local HNSW, router representative count, and router scalar-work configuration", required)
 		}
 	}
 	graphOverlap := byID["graph-overlap-020-v1"]
-	if graphOverlap.ArtifactSHA256 != base.ArtifactSHA256 {
+	if graphOverlap.ArtifactSHA256 != base.ArtifactSHA256 || graphOverlap.GraphArtifactSHA256 != base.GraphArtifactSHA256 || graphOverlap.KaHIPPythonSHA256 != base.KaHIPPythonSHA256 || graphOverlap.KaHIPAdapterSHA256 != base.KaHIPAdapterSHA256 {
 		return errors.New("M8 matrix graph variants do not share the same assignment artifact")
-	}
-	if graphOverlap.RouterModelDigest != base.RouterModelDigest {
-		return errors.New("M8 matrix graph variants do not share the same router model")
 	}
 	return nil
 }
 
 func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8ProductionReportV1) (m8ProductionMatrixV1, error) {
+	now := time.Now().UTC()
+	return m8BuildProductionMatrixWithExecutionIntervalV1(cfg, fixture, reports, now, now.Add(time.Nanosecond))
+}
+
+func m8BuildProductionMatrixWithExecutionIntervalV1(cfg config, fixture fixtureManifest, reports []m8ProductionReportV1, executionStartedAt, executionCompletedAt time.Time) (m8ProductionMatrixV1, error) {
 	matrix := m8ProductionMatrixV1{
-		SchemaVersion: 4, ResultKind: "m8_production_multi_variant_matrix_v4", Status: "incomplete", GeneratedAt: time.Now().UTC(),
+		SchemaVersion: 5, ResultKind: "m8_production_multi_variant_matrix_v5", Status: "incomplete", GeneratedAt: time.Now().UTC(), ExecutionStartedAt: executionStartedAt, ExecutionCompletedAt: executionCompletedAt,
 		Command: append([]string(nil), cfg.command...), BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dataset: fixture,
 		RequiredVariants: append([]string(nil), m8RequiredVariantIDsV1...), Variants: reports,
 		Limitations: []string{"single-host loopback production-shaped topology; multi-host qualification remains owned by #3983", "no external-system or paper-scale comparison is claimed"},
@@ -342,8 +510,22 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 	if len(reports) != len(m8RequiredVariantIDsV1) {
 		return m8ProductionMatrixV1{}, errors.New("M8 matrix requires exactly three reports")
 	}
+	matrix.ExecutableSHA256 = reports[0].ExecutableSHA256
+	if !m8QualificationSHA256V1(matrix.ExecutableSHA256) {
+		return m8ProductionMatrixV1{}, errors.New("M8 matrix report has invalid benchmark executable digest")
+	}
+	if reports[0].TruthCache.ArtifactSHA256 != "" {
+		var err error
+		matrix.Command, err = m8ReplayCommandWithTruthCacheDigestV1(matrix.Command, reports[0].TruthCache.ArtifactSHA256)
+		if err != nil {
+			return m8ProductionMatrixV1{}, err
+		}
+	}
 	descriptors := make([]m3VariantDescriptorV1, 0, len(reports))
 	for i := range reports {
+		if reports[i].ExecutableSHA256 != matrix.ExecutableSHA256 {
+			return m8ProductionMatrixV1{}, errors.New("M8 matrix reports use different benchmark executables")
+		}
 		if reports[i].Dirty {
 			return m8ProductionMatrixV1{}, errors.New("M8 matrix rejects dirty child reports")
 		}
@@ -472,6 +654,12 @@ func m8ProductionComparisonForRowV1(report m8ProductionReportV1, row m8Productio
 // validateM8ProductionMatrixV1 binds every flattened comparison row to its
 // source child measurement, including its measured outcome.
 func validateM8ProductionMatrixV1(matrix m8ProductionMatrixV1) error {
+	if !m8QualificationSHA256V1(matrix.ExecutableSHA256) {
+		return errors.New("M8 matrix has an invalid benchmark executable digest")
+	}
+	if matrix.ExecutionStartedAt.IsZero() || matrix.ExecutionCompletedAt.IsZero() || !matrix.ExecutionCompletedAt.After(matrix.ExecutionStartedAt) {
+		return errors.New("M8 matrix has an invalid execution interval")
+	}
 	type key struct {
 		variantID               string
 		probes, ef, concurrency int
@@ -480,6 +668,9 @@ func validateM8ProductionMatrixV1(matrix m8ProductionMatrixV1) error {
 	for _, report := range matrix.Variants {
 		if report.Variant == nil {
 			return errors.New("M8 matrix report is missing variant identity")
+		}
+		if report.ExecutableSHA256 != matrix.ExecutableSHA256 {
+			return errors.New("M8 matrix report uses a different benchmark executable")
 		}
 		for _, row := range report.Rows {
 			if row.Status == "unsupported" {
