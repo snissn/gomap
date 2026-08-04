@@ -91,13 +91,19 @@ func appendBSONIndexKeyComponentV2(dst []byte, value bson.RawValue) ([]byte, []b
 	}
 	dst = append(dst, bsonIndexKeyComponentV2AscendingMarker)
 
-	if value.IsZero() {
+	if value.Type == 0 {
+		if len(value.Value) != 0 {
+			return dst[:start], nil, fmt.Errorf("%w: missing payload length %d, want 0", errBSONIndexKeyV2Malformed, len(value.Value))
+		}
 		dst = append(dst, bsonIndexKeyTagMissingV2)
 		return dst, dst[start:len(dst):len(dst)], nil
 	}
 
 	switch value.Type {
 	case bson.TypeNull:
+		if len(value.Value) != 0 {
+			return dst[:start], nil, fmt.Errorf("%w: null payload length %d, want 0", errBSONIndexKeyV2Malformed, len(value.Value))
+		}
 		dst = append(dst, bsonIndexKeyTagNullV2)
 	case bson.TypeInt32, bson.TypeInt64, bson.TypeDouble, bson.TypeDecimal128:
 		dst = append(dst, bsonIndexKeyTagNumberV2)
@@ -133,6 +139,9 @@ func appendBSONIndexKeyComponentV2(dst []byte, value bson.RawValue) ([]byte, []b
 		}
 		dst = append(dst, 0, 0)
 	case bson.TypeObjectID:
+		if len(value.Value) != 12 {
+			return dst[:start], nil, fmt.Errorf("%w: ObjectID payload length %d, want 12", errBSONIndexKeyV2Malformed, len(value.Value))
+		}
 		objectID, ok := value.ObjectIDOK()
 		if !ok {
 			return dst[:start], nil, fmt.Errorf("%w: invalid ObjectID", errBSONIndexKeyV2Malformed)
@@ -140,6 +149,9 @@ func appendBSONIndexKeyComponentV2(dst []byte, value bson.RawValue) ([]byte, []b
 		dst = append(dst, bsonIndexKeyTagObjectIDV2)
 		dst = append(dst, objectID[:]...)
 	case bson.TypeBoolean:
+		if len(value.Value) != 1 || value.Value[0] > 1 {
+			return dst[:start], nil, fmt.Errorf("%w: invalid bool payload %x", errBSONIndexKeyV2Malformed, value.Value)
+		}
 		boolean, ok := value.BooleanOK()
 		if !ok {
 			return dst[:start], nil, fmt.Errorf("%w: invalid bool", errBSONIndexKeyV2Malformed)
@@ -151,6 +163,9 @@ func appendBSONIndexKeyComponentV2(dst []byte, value bson.RawValue) ([]byte, []b
 			dst = append(dst, 0)
 		}
 	case bson.TypeDateTime:
+		if len(value.Value) != 8 {
+			return dst[:start], nil, fmt.Errorf("%w: datetime payload length %d, want 8", errBSONIndexKeyV2Malformed, len(value.Value))
+		}
 		milliseconds, ok := value.DateTimeOK()
 		if !ok {
 			return dst[:start], nil, fmt.Errorf("%w: invalid datetime", errBSONIndexKeyV2Malformed)
@@ -158,6 +173,9 @@ func appendBSONIndexKeyComponentV2(dst []byte, value bson.RawValue) ([]byte, []b
 		dst = append(dst, bsonIndexKeyTagDateTimeV2)
 		dst = binary.BigEndian.AppendUint64(dst, uint64(milliseconds)^uint64(1<<63))
 	case bson.TypeTimestamp:
+		if len(value.Value) != 8 {
+			return dst[:start], nil, fmt.Errorf("%w: timestamp payload length %d, want 8", errBSONIndexKeyV2Malformed, len(value.Value))
+		}
 		timestamp, ordinal, ok := value.TimestampOK()
 		if !ok {
 			return dst[:start], nil, fmt.Errorf("%w: invalid timestamp", errBSONIndexKeyV2Malformed)
@@ -190,18 +208,27 @@ func bsonIndexStringBytesV2(value bson.RawValue) ([]byte, bool) {
 func appendCanonicalBSONIndexNumberV2(dst []byte, value bson.RawValue) ([]byte, error) {
 	switch value.Type {
 	case bson.TypeInt32:
+		if len(value.Value) != 4 {
+			return dst, fmt.Errorf("%w: int32 payload length %d, want 4", errBSONIndexKeyV2Malformed, len(value.Value))
+		}
 		integer, ok := value.Int32OK()
 		if !ok {
 			return dst, fmt.Errorf("%w: invalid int32", errBSONIndexKeyV2Malformed)
 		}
 		return appendBSONIndexIntegerV2(dst, int64(integer))
 	case bson.TypeInt64:
+		if len(value.Value) != 8 {
+			return dst, fmt.Errorf("%w: int64 payload length %d, want 8", errBSONIndexKeyV2Malformed, len(value.Value))
+		}
 		integer, ok := value.Int64OK()
 		if !ok {
 			return dst, fmt.Errorf("%w: invalid int64", errBSONIndexKeyV2Malformed)
 		}
 		return appendBSONIndexIntegerV2(dst, integer)
 	case bson.TypeDouble:
+		if len(value.Value) != 8 {
+			return dst, fmt.Errorf("%w: double payload length %d, want 8", errBSONIndexKeyV2Malformed, len(value.Value))
+		}
 		number, ok := value.DoubleOK()
 		if !ok {
 			return dst, fmt.Errorf("%w: invalid double", errBSONIndexKeyV2Malformed)
@@ -216,6 +243,10 @@ func appendCanonicalBSONIndexNumberV2(dst []byte, value bson.RawValue) ([]byte, 
 		}
 		if out, ok, err := appendFastFiniteBSONIndexFloat64V2(dst, number); ok || err != nil {
 			return out, err
+		}
+	case bson.TypeDecimal128:
+		if len(value.Value) != 16 {
+			return dst, fmt.Errorf("%w: Decimal128 payload length %d, want 16", errBSONIndexKeyV2Malformed, len(value.Value))
 		}
 	}
 

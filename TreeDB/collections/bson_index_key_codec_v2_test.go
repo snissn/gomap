@@ -238,6 +238,37 @@ func TestBSONIndexKeyCodecV2RejectsUnsupportedMalformedAndOverBudget(t *testing.
 	if _, err := encodeBSONIndexKeyComponentV2(bson.RawValue{Type: bson.TypeString, Value: []byte{0xff}}); err == nil {
 		t.Fatal("malformed raw string accepted")
 	}
+	fixedWidth := []bson.RawValue{
+		mustBSONIndexRawValueV2(t, int32(1)),
+		mustBSONIndexRawValueV2(t, int64(1)),
+		mustBSONIndexRawValueV2(t, float64(1)),
+		mustBSONIndexRawValueV2(t, mustBSONIndexDecimal128V2(t, "1")),
+		mustBSONIndexRawValueV2(t, bson.NewObjectID()),
+		mustBSONIndexRawValueV2(t, true),
+		{Type: bson.TypeDateTime, Value: bsoncore.AppendDateTime(nil, 1)},
+		{Type: bson.TypeTimestamp, Value: bsoncore.AppendTimestamp(nil, 1, 2)},
+	}
+	for _, value := range fixedWidth {
+		trailing := value
+		trailing.Value = append(append([]byte(nil), value.Value...), 0)
+		if _, err := encodeBSONIndexKeyComponentV2(trailing); err == nil || !strings.Contains(err.Error(), "malformed") {
+			t.Fatalf("trailing %s raw bytes accepted: %x err=%v", value.Type, trailing.Value, err)
+		}
+		truncated := value
+		truncated.Value = append([]byte(nil), value.Value[:len(value.Value)-1]...)
+		if _, err := encodeBSONIndexKeyComponentV2(truncated); err == nil || !strings.Contains(err.Error(), "malformed") {
+			t.Fatalf("truncated %s raw bytes accepted: %x err=%v", value.Type, truncated.Value, err)
+		}
+	}
+	for _, value := range []bson.RawValue{
+		{Type: bson.TypeBoolean, Value: []byte{2}},
+		{Type: bson.TypeNull, Value: []byte{0}},
+		{Value: []byte{0}},
+	} {
+		if _, err := encodeBSONIndexKeyComponentV2(value); err == nil || !strings.Contains(err.Error(), "malformed") {
+			t.Fatalf("invalid %s raw bytes accepted: %x err=%v", value.Type, value.Value, err)
+		}
+	}
 	tooLong := strings.Repeat("x", bsonIndexKeyComponentV2MaxBytes)
 	if _, err := encodeBSONIndexKeyComponentV2(mustBSONIndexRawValueV2(t, tooLong)); err == nil || !strings.Contains(err.Error(), "too large") {
 		t.Fatalf("over-budget string error=%v", err)
