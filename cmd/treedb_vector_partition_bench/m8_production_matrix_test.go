@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -13,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 )
@@ -36,6 +39,234 @@ func refreshTestM3VariantIdentityV1(t testing.TB, descriptor *m3VariantDescripto
 		Realized: uint64(descriptor.OverlapMemberships), Unspent: uint64(descriptor.OverlapRejected),
 		BuildIdentityDigest: descriptor.BuildIdentityDigest,
 	})
+}
+
+func TestM8ProductionMatrixOutputPreflightV1(t *testing.T) {
+	root := t.TempDir()
+	cfg := config{
+		baseSHA:  strings.Repeat("a", 40),
+		headSHA:  strings.Repeat("b", 40),
+		out:      filepath.Join(root, "matrix"),
+		profiles: filepath.Join(root, "profiles"),
+	}
+	descriptors := make([]m3VariantDescriptorV1, len(m8RequiredVariantIDsV1))
+	for i, variantID := range m8RequiredVariantIDsV1 {
+		descriptors[i].VariantID = variantID
+	}
+	evidence := m8ProductionConfigEvidenceV1{Partitions: 16}
+	if err := os.MkdirAll(cfg.out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cfg.profiles, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path, err := m8PreflightProductionMatrixOutputV1(cfg, descriptors, evidence)
+	if err != nil {
+		t.Fatalf("fresh output rejected: %v", err)
+	}
+	const sentinel = "retain"
+	if err := os.WriteFile(path, []byte(sentinel), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m8PreflightProductionMatrixOutputV1(cfg, descriptors, evidence); err == nil || !strings.Contains(err.Error(), "matrix output already exists") {
+		t.Fatalf("matrix collision err=%v", err)
+	}
+	if raw, err := os.ReadFile(path); err != nil || string(raw) != sentinel {
+		t.Fatalf("matrix sentinel=%q err=%v", raw, err)
+	}
+	if _, err := m8WriteProductionMatrixV1(path, []byte("replacement")); err == nil {
+		t.Fatal("matrix writer replaced existing evidence")
+	}
+	if raw, err := os.ReadFile(path); err != nil || string(raw) != sentinel {
+		t.Fatalf("matrix writer sentinel=%q err=%v", raw, err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	for _, variantID := range m8RequiredVariantIDsV1 {
+		t.Run(variantID, func(t *testing.T) {
+			leaf := filepath.Join(cfg.profiles, variantID)
+			if err := os.MkdirAll(leaf, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			artifact := filepath.Join(leaf, "trace.out")
+			if err := os.WriteFile(artifact, []byte(sentinel), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := m8PreflightProductionMatrixOutputV1(cfg, descriptors, evidence); err == nil || !strings.Contains(err.Error(), "profile output already exists") {
+				t.Fatalf("profile collision err=%v", err)
+			}
+			if raw, err := os.ReadFile(artifact); err != nil || string(raw) != sentinel {
+				t.Fatalf("profile sentinel=%q err=%v", raw, err)
+			}
+			if err := os.RemoveAll(leaf); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestM8ProductionMatrixProfileLeafReservationV1(t *testing.T) {
+	root := t.TempDir()
+	profiles := filepath.Join(root, "profiles")
+	collision := filepath.Join(profiles, m8RequiredVariantIDsV1[1])
+	if err := os.MkdirAll(collision, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(collision, "trace.out")
+	if err := os.WriteFile(sentinel, []byte("retain"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m8CreateProductionMatrixProfileLeavesV1(profiles); err == nil || !strings.Contains(err.Error(), "reserve M8 profile output") {
+		t.Fatalf("collision err=%v", err)
+	}
+	if raw, err := os.ReadFile(sentinel); err != nil || string(raw) != "retain" {
+		t.Fatalf("collision sentinel=%q err=%v", raw, err)
+	}
+	if _, err := os.Stat(filepath.Join(profiles, m8RequiredVariantIDsV1[0])); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("owned partial leaf err=%v", err)
+	}
+	if err := os.RemoveAll(collision); err != nil {
+		t.Fatal(err)
+	}
+	leaves, err := m8CreateProductionMatrixProfileLeavesV1(profiles)
+	if err != nil {
+		t.Fatalf("fresh retry reservation: %v", err)
+	}
+	if len(leaves) != len(m8RequiredVariantIDsV1) {
+		t.Fatalf("leaves=%v", leaves)
+	}
+	for _, leaf := range leaves {
+		if info, err := os.Stat(leaf); err != nil || !info.IsDir() {
+			t.Fatalf("reserved leaf %s info=%v err=%v", leaf, info, err)
+		}
+	}
+	if err := m8RemoveProductionMatrixProfileLeavesV1(leaves); err != nil {
+		t.Fatal(err)
+	}
+	for _, leaf := range leaves {
+		if _, err := os.Stat(leaf); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("incomplete leaf %s err=%v", leaf, err)
+		}
+	}
+	if leaves, err = m8CreateProductionMatrixProfileLeavesV1(profiles); err != nil || len(leaves) != len(m8RequiredVariantIDsV1) {
+		t.Fatalf("retry leaves=%v err=%v", leaves, err)
+	}
+}
+
+func TestM8ProductionMatrixPublisherLeavesOnlyCompleteNoReplaceArtifactsV1(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "matrix.json")
+	tempPaths := func(t *testing.T) {
+		t.Helper()
+		paths, err := filepath.Glob(filepath.Join(dir, ".m8_matrix_*.tmp"))
+		if err != nil || len(paths) != 0 {
+			t.Fatalf("temporary artifacts=%v err=%v", paths, err)
+		}
+	}
+	t.Run("write failure cleans temporary and final paths", func(t *testing.T) {
+		linked, err := m8PublishProductionMatrixV1(path, func(w io.Writer) error {
+			if _, err := io.WriteString(w, "{"); err != nil {
+				return err
+			}
+			return errors.New("write failure")
+		})
+		if err == nil {
+			t.Fatal("accepted failing matrix write")
+		}
+		if linked {
+			t.Fatal("failing write reported a linked matrix")
+		}
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("partial final artifact err=%v", err)
+		}
+		tempPaths(t)
+	})
+	t.Run("existing final remains untouched", func(t *testing.T) {
+		if err := os.WriteFile(path, []byte("sentinel"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if linked, err := m8WriteProductionMatrixV1(path, []byte("replacement")); err == nil || linked || !errors.Is(err, os.ErrExist) {
+			t.Fatalf("existing artifact error=%v", err)
+		}
+		if got, err := os.ReadFile(path); err != nil || string(got) != "sentinel" {
+			t.Fatalf("existing artifact=%q err=%v", got, err)
+		}
+		tempPaths(t)
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("complete matrix publishes exact bytes", func(t *testing.T) {
+		want := []byte("{\"matrix\":true}\n")
+		if linked, err := m8WriteProductionMatrixV1(path, want); err != nil || !linked {
+			t.Fatalf("linked=%t err=%v", linked, err)
+		}
+		if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("matrix=%q want=%q err=%v", got, want, err)
+		}
+		tempPaths(t)
+	})
+	t.Run("post-link sync failure retains published matrix", func(t *testing.T) {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		want := []byte("{\"matrix\":true}\n")
+		linked, err := m8PublishProductionMatrixWithDirectorySyncV1(path, func(w io.Writer) error {
+			_, err := w.Write(want)
+			return err
+		}, func(string) error { return errors.New("directory sync failure") })
+		if err == nil || !linked {
+			t.Fatalf("linked=%t err=%v", linked, err)
+		}
+		if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("published matrix=%q want=%q err=%v", got, want, err)
+		}
+		tempPaths(t)
+	})
+}
+
+func TestM8PercentileAggregateElapsedLowerBoundV1(t *testing.T) {
+	for _, test := range []struct {
+		name                         string
+		samples, concurrency         int
+		p50, p95, p99, maximum, want uint64
+		valid                        bool
+	}{
+		{name: "sequential_1000", samples: 1000, concurrency: 1, p50: 10, p95: 20, p99: 30, maximum: 40, want: 5640, valid: true},
+		{name: "eight_workers", samples: 1000, concurrency: 8, p50: 10, p95: 20, p99: 30, maximum: 40, want: 705, valid: true},
+		{name: "workers_limited_by_samples", samples: 1, concurrency: 8, p50: 10, p95: 20, p99: 30, maximum: 40, want: 40, valid: true},
+		{name: "overflow", samples: int(^uint(0) >> 1), concurrency: 1, p50: ^uint64(0), p95: ^uint64(0), p99: ^uint64(0), maximum: ^uint64(0)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := m8PercentileAggregateElapsedLowerBoundV1(test.samples, test.concurrency, test.p50, test.p95, test.p99, test.maximum)
+			if ok != test.valid || ok && got != test.want {
+				t.Fatalf("bound=%d ok=%t want=%d/%t", got, ok, test.want, test.valid)
+			}
+		})
+	}
+}
+
+func TestM8TotalNanosElapsedLowerBoundV1(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		durations   []uint64
+		concurrency int
+		want        uint64
+		valid       bool
+	}{
+		{name: "sequential", durations: []uint64{10, 20, 30}, concurrency: 1, want: 60, valid: true},
+		{name: "parallel_ceil", durations: []uint64{10, 20, 30}, concurrency: 2, want: 30, valid: true},
+		{name: "workers_limited_by_samples", durations: []uint64{10}, concurrency: 8, want: 10, valid: true},
+		{name: "overflow", durations: []uint64{^uint64(0), 1}, concurrency: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := m8TotalNanosElapsedLowerBoundV1(test.durations, test.concurrency)
+			if ok != test.valid || ok && got != test.want {
+				t.Fatalf("bound=%d ok=%t want=%d/%t", got, ok, test.want, test.valid)
+			}
+		})
+	}
 }
 
 func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *testing.T) {
@@ -71,7 +302,8 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 			variantGates.Recall, variantGates.ProbeReduction, variantGates.EndToEndQPS, variantGates.TailLatency = "fail", "fail", "fail", "fail"
 		}
 		reports = append(reports, m8ProductionReportV1{
-			BaseSHA: hash, HeadSHA: hash, Dataset: fixture, Config: config, Variant: &descriptor, GateLedger: variantGates,
+			ExecutableSHA256: strings.Repeat("a", 64),
+			BaseSHA:          hash, HeadSHA: hash, Dataset: fixture, Config: config, Variant: &descriptor, GateLedger: variantGates,
 			Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: variant.bytes},
 			Rows: []m8ProductionRowV1{
 				{Status: "pass", VariantID: variant.id, Probes: 16, EfSearch: 128, Concurrency: 1, Samples: 32, RecallAtK: 1, QPS: 100, P95Nanos: 100, Attribution: m8ProductionAttributionV1{ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true}},
@@ -82,6 +314,9 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 	matrix, err := m8BuildProductionMatrixV1(cfg, fixture, reports)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if matrix.ExecutionStartedAt.IsZero() || !matrix.ExecutionCompletedAt.After(matrix.ExecutionStartedAt) {
+		t.Fatalf("matrix did not retain a valid execution interval: %+v", matrix)
 	}
 	if matrix.Status != "local_gate_pass" || matrix.Gates.PartitionPackReachability != "pass" || matrix.Gates.OverlapStorage != "pass" || matrix.OverlapStorageRatio != 1.2 || len(matrix.Comparison) != 6 {
 		t.Fatalf("matrix=%+v", matrix)
@@ -115,6 +350,18 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 	}
 	if err := validateM8ProductionMatrixV1(decoded); err != nil {
 		t.Fatalf("round-tripped shortfall matrix rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*m8ProductionMatrixV1){
+		"zero_execution_start":        func(m *m8ProductionMatrixV1) { m.ExecutionStartedAt = time.Time{} },
+		"reversed_execution_interval": func(m *m8ProductionMatrixV1) { m.ExecutionCompletedAt = m.ExecutionStartedAt },
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := decoded
+			mutate(&invalid)
+			if err := validateM8ProductionMatrixV1(invalid); err == nil || !strings.Contains(err.Error(), "execution interval") {
+				t.Fatalf("interval err=%v", err)
+			}
+		})
 	}
 	for _, mutation := range []struct {
 		name  string
@@ -351,6 +598,93 @@ func TestM8TruthCacheStreamEncodingMatchesJSONV1(t *testing.T) {
 	}
 }
 
+func TestM8TruthCachePublisherLeavesOnlyCompleteNoReplaceArtifactsV1(t *testing.T) {
+	fixture := fixtureManifest{Checksum: strings.Repeat("a", 64), Vectors: 1, Dimensions: 2, Metric: "cosine"}
+	identity, dir := m8TruthCacheIdentityV1(fixture, 1), t.TempDir()
+	path := m8TruthCacheArtifactPathV1(dir, identity)
+	truth := [][]m8CanonicalResultV1{{{ID: "doc-000000", Score: .5}}}
+	truthSHA, err := m8TruthContentSHA256V1(truth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: m8CanonicalTruthContractV1, DatasetChecksum: fixture.Checksum, Dimensions: fixture.Dimensions, Metric: fixture.Metric, TopK: 1, TruthSHA256: truthSHA, Truth: truth}
+	write := func(w io.Writer) error { return m8WriteTruthCacheJSONV1(w, file) }
+	t.Run("write failure cleans temporary and final paths", func(t *testing.T) {
+		_, linked, err := m8PublishTruthCacheV1(path, "", func(w io.Writer) error {
+			if _, err := io.WriteString(w, "{"); err != nil {
+				return err
+			}
+			return errors.New("write failure")
+		})
+		if err == nil || linked {
+			t.Fatalf("failing truth-cache write linked=%t err=%v", linked, err)
+		}
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("partial final artifact err=%v", err)
+		}
+		if paths, err := filepath.Glob(filepath.Join(dir, ".m8_canonical_truth_*.tmp")); err != nil || len(paths) != 0 {
+			t.Fatalf("temporary artifacts=%v err=%v", paths, err)
+		}
+	})
+	t.Run("existing final remains untouched", func(t *testing.T) {
+		if err := os.WriteFile(path, []byte("sentinel"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, linked, err := m8PublishTruthCacheV1(path, "", write); err == nil || linked || !os.IsExist(err) {
+			t.Fatalf("existing artifact linked=%t err=%v", linked, err)
+		}
+		got, err := os.ReadFile(path)
+		if err != nil || string(got) != "sentinel" {
+			t.Fatalf("existing artifact=%q err=%v", got, err)
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("trusted digest mismatch does not publish", func(t *testing.T) {
+		if _, linked, err := m8PublishTruthCacheV1(path, strings.Repeat("0", 64), write); err == nil || linked {
+			t.Fatalf("mismatched trusted digest linked=%t err=%v", linked, err)
+		}
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("mismatched digest published final artifact err=%v", err)
+		}
+		if paths, err := filepath.Glob(filepath.Join(dir, ".m8_canonical_truth_*.tmp")); err != nil || len(paths) != 0 {
+			t.Fatalf("temporary artifacts=%v err=%v", paths, err)
+		}
+	})
+	t.Run("complete artifact publishes and decodes", func(t *testing.T) {
+		digest, linked, err := m8PublishTruthCacheV1(path, "", write)
+		if err != nil || !linked {
+			t.Fatalf("complete truth-cache publish linked=%t err=%v", linked, err)
+		}
+		got, artifact, err := m8ReadTruthCacheV1(path, fixture, 1, 1, 1, digest)
+		if err != nil || artifact != digest || !reflect.DeepEqual(got, truth) {
+			t.Fatalf("artifact=%q digest=%q truth=%v err=%v", artifact, digest, got, err)
+		}
+		if paths, err := filepath.Glob(filepath.Join(dir, ".m8_canonical_truth_*.tmp")); err != nil || len(paths) != 0 {
+			t.Fatalf("temporary artifacts=%v err=%v", paths, err)
+		}
+	})
+	t.Run("post-link sync failure retains decodable cache and digest", func(t *testing.T) {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		digest, linked, err := m8PublishTruthCacheWithDirectorySyncV1(path, "", write, func(string) error {
+			return errors.New("directory sync failure")
+		})
+		if err == nil || !linked || digest == "" {
+			t.Fatalf("post-link sync linked=%t digest=%q err=%v", linked, digest, err)
+		}
+		got, artifact, err := m8ReadTruthCacheV1(path, fixture, 1, 1, 1, digest)
+		if err != nil || artifact != digest || !reflect.DeepEqual(got, truth) {
+			t.Fatalf("artifact=%q digest=%q truth=%v err=%v", artifact, digest, got, err)
+		}
+		if paths, err := filepath.Glob(filepath.Join(dir, ".m8_canonical_truth_*.tmp")); err != nil || len(paths) != 0 {
+			t.Fatalf("temporary artifacts=%v err=%v", paths, err)
+		}
+	})
+}
+
 func TestM8TruthCacheWhitespaceBoundAndExactByteDigestV1(t *testing.T) {
 	fixture := fixtureManifest{Checksum: strings.Repeat("h", 64), Vectors: 1, Dimensions: 2, Metric: "cosine"}
 	identity, dir := m8TruthCacheIdentityV1(fixture, 1), t.TempDir()
@@ -572,6 +906,11 @@ func TestCommitted4023AttributionLedgerArtifactsV1(t *testing.T) {
 
 func TestM8GitDirtyRequiresExternalOutputsAndPreservesSourceChangesV1(t *testing.T) {
 	repo := t.TempDir()
+	var err error
+	repo, err = m8CanonicalPathV1(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
 	runGit := func(args ...string) {
 		t.Helper()
 		command := exec.Command("git", args...)
@@ -589,6 +928,20 @@ func TestM8GitDirtyRequiresExternalOutputsAndPreservesSourceChangesV1(t *testing
 	}
 	runGit("add", "tracked.txt")
 	runGit("commit", "-qm", "initial")
+	headCommand := exec.Command("git", "rev-parse", "HEAD")
+	headCommand.Dir = repo
+	headRaw, err := headCommand.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := strings.TrimSpace(string(headRaw))
+	checkout, err := m8SourceCheckoutV1(repo, head)
+	if err != nil || checkout != repo {
+		t.Fatalf("clean unrelated checkout=%q err=%v", checkout, err)
+	}
+	if _, err := m8SourceCheckoutV1(repo, strings.Repeat("0", 40)); err == nil {
+		t.Fatal("accepted wrong checkout head")
+	}
 	artifactRoot := t.TempDir()
 	out, profiles := filepath.Join(artifactRoot, "out"), filepath.Join(artifactRoot, "profiles")
 	if err := os.MkdirAll(out, 0o755); err != nil {
@@ -730,6 +1083,19 @@ func TestM8VariantProcessArgsForceFreshSingleVariantV1(t *testing.T) {
 	if trustedAt < 0 || positionalAt < 0 || trustedAt > positionalAt {
 		t.Fatalf("trusted digest must precede positional token: %v", got)
 	}
+	replay, err := m8ReplayCommandWithTruthCacheDigestV1(command, trustedDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digestFlags := 0
+	for _, arg := range replay {
+		if arg == "-m8-truth-cache-sha256" {
+			digestFlags++
+		}
+	}
+	if digestFlags != 1 || slices.Contains(replay, oldDigest) || slices.Index(replay, trustedDigest) > slices.Index(replay, "positional") {
+		t.Fatalf("replay command did not replace and front-load truth digest: %v", replay)
+	}
 }
 
 func TestM8ProductionMatrixRejectsUnderMaterializedOverlapDescriptorV1(t *testing.T) {
@@ -758,7 +1124,8 @@ func TestM8ProductionMatrixRejectsUnderMaterializedOverlapDescriptorV1(t *testin
 		config := common
 		config.Overlap = []float64{variant.overlap}
 		reports = append(reports, m8ProductionReportV1{
-			BaseSHA: hash, HeadSHA: hash, Dataset: fixture, Config: config, Variant: &descriptor, GateLedger: pass,
+			ExecutableSHA256: strings.Repeat("a", 64),
+			BaseSHA:          hash, HeadSHA: hash, Dataset: fixture, Config: config, Variant: &descriptor, GateLedger: pass,
 			Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 100},
 			Rows:      []m8ProductionRowV1{{Status: "pass", VariantID: variant.id, Probes: 4, EfSearch: 128, Concurrency: 1, Samples: 1}},
 		})
@@ -827,8 +1194,13 @@ func TestM8VariantBuildCompatibilityRejectsMixedRetainedBuildsV1(t *testing.T) {
 			descriptor := testM3VariantDescriptorV1(t.TempDir())
 			descriptor.VariantID, descriptor.AssignmentBasis, descriptor.OverlapRatio = item.id, item.assignment, item.overlap
 			descriptor.OverlapMemberships = int(math.Floor(item.overlap * float64(descriptor.SourceRows)))
+			if item.id == "graph-overlap-020-v1" {
+				descriptor.RouterModelDigest = strings.Repeat("e", 64)
+			}
 			if item.assignment == partitionAssignmentStableIDHashV1 {
 				descriptor.ArtifactSHA256 = strings.Repeat("c", 64)
+				descriptor.GraphArtifactSHA256 = strings.Repeat("d", 64)
+				descriptor.RouterModelDigest = strings.Repeat("f", 64)
 			}
 			refreshTestM3VariantIdentityV1(t, &descriptor)
 			variants = append(variants, descriptor)
@@ -839,15 +1211,38 @@ func TestM8VariantBuildCompatibilityRejectsMixedRetainedBuildsV1(t *testing.T) {
 		t.Fatalf("compatible graph/stable build rejected: %v", err)
 	}
 	for name, mutate := range map[string]func([]m3VariantDescriptorV1){
-		"graph digest": func(variants []m3VariantDescriptorV1) { variants[2].GraphArtifactSHA256 = strings.Repeat("d", 64) },
+		"base revision": func(variants []m3VariantDescriptorV1) { variants[2].BaseSHA = strings.Repeat("d", 40) },
+		"head revision": func(variants []m3VariantDescriptorV1) { variants[2].HeadSHA = strings.Repeat("e", 40) },
+		"graph digest":  func(variants []m3VariantDescriptorV1) { variants[1].GraphArtifactSHA256 = strings.Repeat("d", 64) },
 		"graph assignment artifact": func(variants []m3VariantDescriptorV1) {
 			variants[1].ArtifactSHA256 = strings.Repeat("d", 64)
-			variants[1].GraphArtifactSHA256 = variants[1].ArtifactSHA256
+			variants[1].GraphArtifactSHA256 = variants[0].GraphArtifactSHA256
 		},
-		"source":             func(variants []m3VariantDescriptorV1) { variants[2].Source.SourceID = "different" },
-		"index definition":   func(variants []m3VariantDescriptorV1) { variants[2].IndexDefinitionDigest = strings.Repeat("d", 64) },
-		"local HNSW M":       func(variants []m3VariantDescriptorV1) { variants[2].PartitionHNSWM-- },
-		"graph router model": func(variants []m3VariantDescriptorV1) { variants[1].RouterModelDigest = strings.Repeat("d", 64) },
+		"graph build":            func(variants []m3VariantDescriptorV1) { variants[2].GraphBuildSHA256 = strings.Repeat("d", 64) },
+		"source":                 func(variants []m3VariantDescriptorV1) { variants[2].Source.SourceID = "different" },
+		"index definition":       func(variants []m3VariantDescriptorV1) { variants[2].IndexDefinitionDigest = strings.Repeat("d", 64) },
+		"local HNSW M":           func(variants []m3VariantDescriptorV1) { variants[2].PartitionHNSWM-- },
+		"partition graph degree": func(variants []m3VariantDescriptorV1) { variants[2].PartitionConfig.Degree++ },
+		"router representatives": func(variants []m3VariantDescriptorV1) { variants[2].RouterRepresentatives++ },
+		"router scalar work":     func(variants []m3VariantDescriptorV1) { variants[2].RouterMaxScalarWork++ },
+		"router config seed":     func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.Seed++ },
+		"router config branch":   func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.BranchFactor++ },
+		"router config leaf":     func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.LeafSize++ },
+		"router config reps":     func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.RepresentativesPerPartition++ },
+		"router config depth":    func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.MaxDepth-- },
+		"router config iterations": func(variants []m3VariantDescriptorV1) {
+			variants[2].RouterConfig.MaxIterations--
+		},
+		"router config vectors":    func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.MaxVectors-- },
+		"router config dimensions": func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.MaxDimensions-- },
+		"router config max representatives": func(variants []m3VariantDescriptorV1) {
+			variants[2].RouterConfig.MaxRepresentatives--
+		},
+		"router config scalar cap": func(variants []m3VariantDescriptorV1) {
+			variants[2].RouterConfig.MaxScalarWork++
+			variants[2].RouterMaxScalarWork++
+		},
+		"router config bytes": func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.MaxRouterBytes-- },
 	} {
 		t.Run(name, func(t *testing.T) {
 			variants := makeVariants()

@@ -329,6 +329,20 @@ func TestDefaultRouterConfigV1(t *testing.T) {
 	if cfg.MaxIterations != 16 {
 		t.Fatalf("max iterations=%d want 16", cfg.MaxIterations)
 	}
+	if cfg.MaxScalarWork != routerDefaultScalarWork {
+		t.Fatalf("max scalar work=%d want default %d", cfg.MaxScalarWork, routerDefaultScalarWork)
+	}
+	for _, work := range []int64{50_000_000_000, 0, 50_000_000_001} {
+		cfg := cfg
+		cfg.MaxScalarWork = work
+		err := ValidateRouterConfigV1(cfg)
+		if work == 50_000_000_000 && err != nil {
+			t.Fatalf("explicit 50B scalar-work cap rejected: %v", err)
+		}
+		if work != 50_000_000_000 && err == nil {
+			t.Fatalf("invalid scalar-work cap %d accepted", work)
+		}
+	}
 }
 
 type routerCancelAfterErrContextV1 struct {

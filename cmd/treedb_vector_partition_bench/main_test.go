@@ -31,6 +31,51 @@ func fixturePath(t *testing.T) string {
 	return filepath.Join("..", "..", "testdata", "vector_partition_10k")
 }
 
+func TestGenerateTruthCacheBoundedRoundTripV1(t *testing.T) {
+	dataset, cache := t.TempDir(), t.TempDir()
+	if err := run([]string{"generate-fixture", "-out", dataset, "-vectors", "3", "-queries", "2", "-dimensions", "2", "-seed", "7"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"generate-truth-cache", "-dataset", dataset, "-out", cache, "-top-k", "2", "-seed", "7", "-max-vectors", "3", "-max-fixture-bytes", strconv.FormatInt(maxFixtureBytes, 10), "-max-exact-truth-visits", "6"}
+	if err := run(append([]string(nil), args[:len(args)-1]...), io.Discard); err == nil {
+		t.Fatal("accepted insufficient exact-truth visit cap")
+	}
+	var out strings.Builder
+	if err := run(args, &out); err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := loadFixture(dataset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := m8TruthCacheIdentityV1(fixture, 2)
+	path := m8TruthCacheArtifactPathV1(cache, identity)
+	fields := strings.Fields(out.String())
+	if len(fields) < 5 || !strings.Contains(out.String(), "visits=6") {
+		t.Fatalf("generator output=%q", out.String())
+	}
+	digest := strings.TrimPrefix(fields[1], "artifact_sha256=")
+	truth, got, err := m8ReadTruthCacheV1(path, fixture, fixture.Queries, 2, uint64(fixture.Vectors), digest)
+	if err != nil || got != digest || len(truth) != fixture.Queries {
+		t.Fatalf("truth round trip got=%q err=%v rows=%d", got, err, len(truth))
+	}
+	t.Run("explicit_zero_seed", func(t *testing.T) {
+		zeroDataset, zeroCache := t.TempDir(), t.TempDir()
+		if err := run([]string{"generate-fixture", "-out", zeroDataset, "-vectors", "3", "-queries", "2", "-dimensions", "2", "-seed", "0"}, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		zeroArgs := []string{"generate-truth-cache", "-dataset", zeroDataset, "-out", zeroCache, "-top-k", "2", "-seed", "0", "-max-vectors", "3", "-max-fixture-bytes", strconv.FormatInt(maxFixtureBytes, 10), "-max-exact-truth-visits", "6"}
+		if err := run(zeroArgs, io.Discard); err != nil {
+			t.Fatalf("generate seed-zero truth cache: %v", err)
+		}
+		withoutSeed := append([]string(nil), zeroArgs[:7]...)
+		withoutSeed = append(withoutSeed, zeroArgs[9:]...)
+		if err := run(withoutSeed, io.Discard); err == nil {
+			t.Fatal("accepted truth-cache generation without explicit seed")
+		}
+	})
+}
+
 func artifactBasenameForFixture(t *testing.T, dataset string, result runResult) string {
 	t.Helper()
 	fixture, err := loadFixture(dataset)
@@ -908,6 +953,7 @@ func TestM3OverlapPartitionIndexBuildsReopensAndSearchesNativePacks(t *testing.T
 		"-partition-pivots", "2",
 		"-partition-max-leaf-bucket", "8",
 		"-partition-degree", "4",
+		"-router-max-scalar-work", "50000000000",
 	}
 	var stdout bytes.Buffer
 	if err := runWithHermeticProvenance(t, args, &stdout); err != nil {
@@ -1562,7 +1608,8 @@ func TestKaHIPOfflineSelectorIsLimitedToGraphMaterializationV1(t *testing.T) {
 	}
 	for _, stage := range []string{"partition", "overlap,partition_index"} {
 		cfg, err := parseConfig(append(append([]string(nil), base...), "-stage", stage))
-		if err != nil || cfg.kahipPython != python || cfg.kahipScript != script || cfg.kahipSource != string(adapter) || cfg.kahipTimeout != kahipDefaultTimeout {
+		wantPythonSHA, hashErr := m8BenchmarkExecutableSHA256V1(python)
+		if err != nil || hashErr != nil || cfg.kahipPython != python || cfg.kahipPythonSHA256 != wantPythonSHA || cfg.kahipScript != script || cfg.kahipSource != string(adapter) || cfg.kahipAdapterSHA256 != kahipAdapterSHA256 || cfg.kahipTimeout != kahipDefaultTimeout {
 			t.Fatalf("stage=%s cfg=%+v err=%v", stage, cfg, err)
 		}
 		if command := kahipAdapterCommand(cfg); len(command) != 3 || command[0] != python || command[1] != "-c" || command[2] != string(adapter) {
@@ -2234,24 +2281,39 @@ func TestM8ProductionEvidenceJSONKeepsEveryTopologyDimensionV1(t *testing.T) {
 func TestM8ArtifactNameIncludesConfigurationV1(t *testing.T) {
 	fixture := fixtureManifest{Fixture: "x", Checksum: "y"}
 	base := config{headSHA: strings.Repeat("a", 40), raftGroups: 2, raftNodes: 3, partitions: 4, probes: []int{4}, overlaps: []float64{0}, topK: 10, concurrency: []int{1}, efSearch: []int{64}, routerCandidates: 64}
-	first, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "a"})
+	executionID := strings.Repeat("a", 32)
+	first, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "a"}, executionID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	base.partitions = 8
-	second, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "a"})
+	second, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "a"}, executionID)
 	if err != nil || first == second {
 		t.Fatalf("names %q %q err=%v", first, second, err)
 	}
 	base.partitions = 4
-	third, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "different"})
+	third, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "different"}, executionID)
 	if err != nil || first == third {
 		t.Fatalf("asset identities collided %q %q err=%v", first, third, err)
 	}
 	base.routerCandidates = 32
-	fourth, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "a"})
+	fourth, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "a"}, executionID)
 	if err != nil || first == fourth {
 		t.Fatalf("router candidate budgets collided %q %q err=%v", first, fourth, err)
+	}
+	fifth, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "a"}, strings.Repeat("b", 32))
+	if err != nil || fourth == fifth {
+		t.Fatalf("execution identities collided %q %q err=%v", fourth, fifth, err)
+	}
+}
+
+func TestM8ProductionExecutionIDV1(t *testing.T) {
+	id, err := m8ProductionExecutionIDV1()
+	if err != nil || !validM8ProductionExecutionIDV1(id) {
+		t.Fatalf("execution ID=%q err=%v", id, err)
+	}
+	if validM8ProductionExecutionIDV1(id+" ") || validM8ProductionExecutionIDV1(strings.ToUpper(id)) {
+		t.Fatalf("accepted malformed execution ID %q", id)
 	}
 }
 
@@ -2614,8 +2676,173 @@ func TestM8ProfileCaptureWritesRequiredRuntimeArtifactsV1(t *testing.T) {
 			t.Fatalf("profile %s info=%v err=%v", path, info, statErr)
 		}
 	}
+	artifacts, err := m8ProfileArtifactsV1(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalDir, err := m8CanonicalPathV1(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !validM8ProductionProfilesV1(m8ProductionProfileEvidenceV1{Directory: canonicalDir, Captured: paths, Artifacts: artifacts, Status: "captured_production_query_and_fault_boundary", Scope: "test"}) {
+		t.Fatal("captured profile evidence rejected")
+	}
 	if again, err := capture.Stop(); err != nil || fmt.Sprint(again) != fmt.Sprint(paths) {
 		t.Fatalf("idempotent stop paths=%v err=%v", again, err)
+	}
+}
+
+func TestM8ProfileCaptureDoesNotReplaceExistingArtifactV1(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "allocs_baseline.pprof")
+	const sentinel = "retain"
+	if err := os.WriteFile(path, []byte(sentinel), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := startM8ProfileCaptureV1(dir); err == nil {
+		t.Fatal("profile capture replaced existing artifact")
+	}
+	if raw, err := os.ReadFile(path); err != nil || string(raw) != sentinel {
+		t.Fatalf("profile sentinel=%q err=%v", raw, err)
+	}
+}
+
+func TestM8ProfileCaptureCleansPartialSetupV1(t *testing.T) {
+	dir := t.TempDir()
+	sentinel := filepath.Join(dir, "cpu.pprof")
+	if err := os.WriteFile(sentinel, []byte("retain"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := startM8ProfileCaptureV1(dir); err == nil {
+		t.Fatal("profile capture accepted a CPU profile collision")
+	}
+	for _, name := range []string{"allocs_baseline.pprof", "trace.out"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("partial profile %s remains: %v", name, err)
+		}
+	}
+	if raw, err := os.ReadFile(sentinel); err != nil || string(raw) != "retain" {
+		t.Fatalf("CPU sentinel=%q err=%v", raw, err)
+	}
+}
+
+func TestM8ProfileCaptureCleanupPolicyV1(t *testing.T) {
+	dir := t.TempDir()
+	capture, err := startM8ProfileCaptureV1(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m8FinishDirectProfileCaptureV1(capture, false); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := startM8ProfileCaptureV1(dir)
+	if err != nil {
+		t.Fatalf("retry after unsuccessful direct capture: %v", err)
+	}
+	if err := m8FinishDirectProfileCaptureV1(retry, false); err != nil {
+		t.Fatal(err)
+	}
+
+	retained, err := startM8ProfileCaptureV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m8FinishDirectProfileCaptureV1(retained, true); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := retained.Stop()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("successful capture did not retain %s: %v", path, err)
+		}
+	}
+}
+
+func TestM8ProfileArtifactDecodeTimeoutIsBoundedBySizeV1(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		bytes int64
+		want  time.Duration
+	}{
+		{name: "tiny", bytes: 1, want: time.Minute + 500*time.Millisecond},
+		{name: "one MiB", bytes: 1 << 20, want: time.Minute + 500*time.Millisecond},
+		{name: "twenty eight MiB", bytes: 28 << 20, want: time.Minute + 14*time.Second},
+		{name: "maximum", bytes: m8ProfileArtifactMaxBytesV1, want: 5*time.Minute + 16*time.Second},
+		{name: "clamped", bytes: m8ProfileArtifactMaxBytesV1 + 1, want: 5*time.Minute + 16*time.Second},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := m8ProfileArtifactDecodeTimeoutV1(test.bytes); got != test.want {
+				t.Fatalf("timeout=%s want=%s", got, test.want)
+			}
+		})
+	}
+}
+
+func TestM8ProfileArtifactsRejectMalformedRuntimeArtifactsV1(t *testing.T) {
+	for _, test := range []struct {
+		name, artifact string
+		contents       []byte
+	}{
+		{name: "garbage pprof", artifact: "cpu.pprof", contents: []byte("not a pprof")},
+		{name: "truncated pprof", artifact: "cpu.pprof", contents: []byte{0}},
+		{name: "garbage trace", artifact: "trace.out", contents: []byte("not a trace")},
+		{name: "truncated trace", artifact: "trace.out", contents: []byte{0}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			capture, err := startM8ProfileCaptureV1(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtime.Gosched()
+			paths, err := capture.Stop()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range paths {
+				if filepath.Base(path) == test.artifact {
+					if err := os.WriteFile(path, test.contents, 0o644); err != nil {
+						t.Fatal(err)
+					}
+					break
+				}
+			}
+			if _, err := m8ProfileArtifactsV1(paths); err == nil {
+				t.Fatalf("accepted %s", test.name)
+			}
+		})
+	}
+}
+
+func TestM8ProfileCaptureCanonicalizesAliasedDirectoryV1(t *testing.T) {
+	directory, parent := t.TempDir(), t.TempDir()
+	alias := filepath.Join(parent, "profiles")
+	if err := os.Symlink(directory, alias); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	capture, err := startM8ProfileCaptureV1(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths, err := capture.Stop()
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalDir, err := m8CanonicalPathV1(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capture.dir != canonicalDir {
+		t.Fatalf("capture dir=%q want=%q", capture.dir, canonicalDir)
+	}
+	artifacts, err := m8ProfileArtifactsV1(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !validM8ProductionProfilesV1(m8ProductionProfileEvidenceV1{Directory: canonicalDir, Captured: paths, Artifacts: artifacts, Status: "captured_production_query_and_fault_boundary", Scope: "test"}) {
+		t.Fatal("canonicalized profile evidence rejected")
 	}
 }
 
@@ -2936,15 +3163,21 @@ func TestExplicitPartitionCapacityOverridesV1(t *testing.T) {
 		"-probes", "1",
 		"-stage", "partition",
 	}
+	args := func(extra ...string) []string {
+		return append(append([]string(nil), base...), extra...)
+	}
 	for _, flag := range []string{"-partition-max-distance-work", "-partition-max-partition-work", "-m3-max-benchmark-visits"} {
-		args := append(append([]string(nil), base...), flag, "0")
-		if _, err := parseConfig(args); err == nil || !strings.Contains(err.Error(), "must be positive") {
+		if _, err := parseConfig(args(flag, "0")); err == nil || !strings.Contains(err.Error(), "must be positive") {
 			t.Fatalf("%s=0 error=%v; want positive-limit rejection", flag, err)
 		}
 	}
-	cfg, err := parseConfig(append(base,
+	if _, err := parseConfig(args("-router-max-scalar-work", "0")); err == nil || !strings.Contains(err.Error(), "router max scalar work") {
+		t.Fatalf("router scalar zero-cap error=%v", err)
+	}
+	cfg, err := parseConfig(args(
 		"-partition-max-distance-work", "134000000000",
 		"-partition-max-partition-work", "400000000",
+		"-router-max-scalar-work", "50000000000",
 		"-m3-max-benchmark-visits", "3000000000",
 	))
 	if err != nil {
@@ -2955,6 +3188,24 @@ func TestExplicitPartitionCapacityOverridesV1(t *testing.T) {
 	}
 	if got, want := cfg.partition.MaxPartitionWork, int64(400_000_000); got != want {
 		t.Fatalf("MaxPartitionWork=%d want %d", got, want)
+	}
+	if got, want := cfg.routerConfig.MaxScalarWork, int64(50_000_000_000); got != want {
+		t.Fatalf("Router MaxScalarWork=%d want %d", got, want)
+	}
+	if got, want := cfg.routerConfig.MaxVectors, cfg.maxVectors; got != want {
+		t.Fatalf("Router MaxVectors=%d want inherited %d", got, want)
+	}
+	routerCfg, err := parseConfig(args("-router-max-vectors", "120000"))
+	if err != nil || routerCfg.routerConfig.MaxVectors != 120000 {
+		t.Fatalf("explicit router membership cap cfg=%+v err=%v", routerCfg.routerConfig, err)
+	}
+	for _, value := range []string{"0", "-1", "1200001"} {
+		if _, err := parseConfig(args("-router-max-vectors", value)); err == nil || !strings.Contains(err.Error(), "router max vectors") {
+			t.Fatalf("router membership cap %s error=%v", value, err)
+		}
+	}
+	if _, err := parseConfig(args("-router-max-scalar-work", "50000000001")); err == nil || !strings.Contains(err.Error(), "router max scalar work") {
+		t.Fatalf("router scalar hard-cap error=%v", err)
 	}
 	if got, want := cfg.m3MaxBenchmarkVisits, int64(3_000_000_000); got != want {
 		t.Fatalf("m3MaxBenchmarkVisits=%d want %d", got, want)
@@ -3138,6 +3389,24 @@ func TestProvenanceAutomaticEnvironmentAndInvalidSHA(t *testing.T) {
 			t.Fatalf("environment provenance base=%q head=%q", gotBase, gotHead)
 		}
 	})
+	t.Run("explicit_overrides_ambient", func(t *testing.T) {
+		base, head := strings.Repeat("c", 40), strings.Repeat("d", 40)
+		t.Setenv("BASE_SHA", strings.Repeat("a", 40))
+		t.Setenv("GITHUB_SHA", strings.Repeat("b", 40))
+		t.Setenv("GITHUB_EVENT_PATH", "")
+		gotBase, gotHead, err := provenanceWithExplicitV1(base, head)
+		if err != nil || gotBase != base || gotHead != head {
+			t.Fatalf("explicit provenance=%q/%q err=%v", gotBase, gotHead, err)
+		}
+	})
+	for _, args := range [][]string{
+		{"-base-sha", strings.Repeat("a", 40)},
+		{"-base-sha", strings.Repeat("a", 40), "-head-sha", "BAD"},
+	} {
+		if _, err := parseConfig(args); err == nil || !strings.Contains(err.Error(), "base-sha") {
+			t.Fatalf("accepted malformed explicit provenance args=%q err=%v", args, err)
+		}
+	}
 	t.Run("pull_request_event", func(t *testing.T) {
 		base := strings.Repeat("c", 40)
 		head := strings.Repeat("e", 40)
@@ -3214,6 +3483,18 @@ func TestProvenanceAutomaticEnvironmentAndInvalidSHA(t *testing.T) {
 			t.Fatalf("non-PR event changed explicit provenance base=%q head=%q", gotBase, gotHead)
 		}
 	})
+}
+
+func TestCommandWithProvenanceV1(t *testing.T) {
+	base, head := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	source, err := m8CanonicalPathV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := commandWithProvenanceAndSourceCheckoutV1("bench", []string{"-base-sha", strings.Repeat("c", 40), "--head-sha=" + strings.Repeat("d", 40), "-source-checkout", "old", "--source-checkout=older", "-dataset", "fixture"}, base, head, source)
+	if !m8QualificationExactFlagV1(command[1:], "-base-sha", base) || !m8QualificationExactFlagV1(command[1:], "-head-sha", head) || !m8QualificationExactFlagV1(command[1:], "-source-checkout", source) {
+		t.Fatalf("command did not retain exactly one canonical provenance pair: %q", command)
+	}
 }
 
 func TestGitHubEventPayloadIsBoundedAndSingleValue(t *testing.T) {

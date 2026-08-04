@@ -148,18 +148,25 @@ variant at one `(probes, ef_search, concurrency)` operating point passes recall,
 probe reduction, matched-recall QPS, and matched-recall tail together; those
 gates cannot be assembled from different variants or different cells.
 
-The schema-3 retained descriptor records both the full assignment artifact and
-the pre-assignment source-graph artifact. Its canonical build-identity digest
+The schema-5 retained descriptor records the full assignment artifact, its
+pre-assignment artifact provenance, and a graph-build digest over the source,
+graph configuration, canonical IDs, and graph only. Its canonical build-identity digest
 covers fixture, variant, assignment, overlap, backend/source configuration,
 and the complete persisted vector-index definition digest (name, field, metric,
 encoding, strategy, dimensions, HNSW `M`, construction/search budgets, schema
-generation, and quantized definitions); that digest is persisted in the
+generation, and quantized definitions), plus the complete parsed partition
+builder configuration; that digest is persisted in the
 manifest-covered balance policy. Matrix validation derives capacity,
 overlap budget/usage, partition loads, and persistent bytes from the opened
 manifest instead of trusting duplicated descriptor fields. All required
-variants must share source, fixture, source-graph digest, partition count, and
-the complete vector-index definition; graph variants must additionally share
-the full graph-assignment artifact and router-model digest. A retained database directory is provenance, not content identity,
+variants must share source, fixture, graph-build digest, partition count, the
+complete vector-index definition, partition-builder configuration, router
+construction configuration, and the normalized serving topology. Graph variants must additionally share the full
+graph-assignment artifact. Final-membership changes may legitimately produce
+distinct router-model digests, which remain strictly bound and validated per
+descriptor rather than compared across variants. It also records the parsed
+graph and router scalar-work caps used to construct the retained asset.
+A retained database directory is provenance, not content identity,
 and the matrix content digest excludes that relocatable path.
 
 ## Capacity and enablement
@@ -205,8 +212,10 @@ untimed all-partition preflight and unavailable-group fault check remain exact
 controls. On the retained 100k structured final-membership model (assignment
 `022359b1aedfa738cde7f2e82e01263c855eb72075b1f2a927d3a5753d6fde9c`,
 router model `22504dd63257133fb554141778a4562df2ef6cecab86dccd6d712ccf44289100`),
-the selected retained p4 measurement uses a 64-representative candidate budget. The c32 control lost `.8987`
-against exact representative recall `.9960`; c64 matched `.9960` (zero regret).
+the superseded retained p4 calibration used a 64-representative candidate budget. The c32 control lost `.8987`
+against exact representative recall `.9960`; c64 matched `.9960` (zero regret). The frozen #4027
+full p1/2/4/8/16 qualification ladder instead uses all 256 retained representatives so every
+requested partition count has complete candidate coverage.
 This is bounded structured-corpus evidence only, not a hierarchy or
 high-entropy claim.
 

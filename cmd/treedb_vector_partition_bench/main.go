@@ -91,6 +91,8 @@ type config struct {
 	maxBytes              int64
 	baseSHA               string
 	headSHA               string
+	sourceCheckout        string
+	m3BuildDirty          bool
 	hnsw                  *treeDBPartitionHNSW
 	memory                benchmarkMemoryPlan
 	stage                 string
@@ -100,7 +102,9 @@ type config struct {
 	partitionAssignment   string
 	partitionTruthOracle  bool
 	kahipPython           string
+	kahipPythonSHA256     string
 	kahipScript           string
+	kahipAdapterSHA256    string
 	kahipSource           string
 	kahipTimeout          time.Duration
 	partition             vectorpartition.Config
@@ -437,10 +441,87 @@ func benchmarkRuntimeLimits() (int, int64) {
 }
 
 func run(args []string, stdout io.Writer) error {
+	if len(args) > 0 && args[0] == "generate-truth-cache" {
+		return runGenerateTruthCache(args[1:], stdout)
+	}
 	if len(args) > 0 && args[0] == "generate-fixture" {
 		return runGenerateFixture(args[1:], stdout)
 	}
+	if len(args) > 0 && args[0] == "validate-qualification" {
+		return runValidateQualification(args[1:], stdout)
+	}
 	return runWithRuntimeCapabilities(args, stdout, currentBenchmarkRuntimeCapabilities())
+}
+
+func runGenerateTruthCache(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("treedb_vector_partition_bench generate-truth-cache", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var dataset, out string
+	var topK, capVectors int
+	var seed, capVisits int64
+	var capBytes int64
+	fs.StringVar(&dataset, "dataset", "", "fixture directory")
+	fs.StringVar(&out, "out", "", "canonical truth-cache directory")
+	fs.IntVar(&topK, "top-k", 10, "canonical truth top-k")
+	fs.Int64Var(&seed, "seed", 0, "fixture seed")
+	fs.IntVar(&capVectors, "max-vectors", maxVectors, "fixture vector cap")
+	fs.Int64Var(&capBytes, "max-fixture-bytes", maxFixtureBytes, "fixture byte cap")
+	fs.Int64Var(&capVisits, "max-exact-truth-visits", 0, "exact source-query visit cap")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	seedSet := false
+	fs.Visit(func(f *flag.Flag) {
+		seedSet = seedSet || f.Name == "seed"
+	})
+	if fs.NArg() != 0 || dataset == "" || out == "" || topK < 1 || !seedSet || capVisits < 1 || capVectors < 1 || capVectors > maxVectors || capBytes < 8 || capBytes > maxFixtureBytes {
+		return errors.New("generate-truth-cache requires dataset, out, explicit seed, positive top-k/caps, and no positional arguments")
+	}
+	fixture, err := loadFixture(dataset)
+	if err != nil {
+		return err
+	}
+	if err := validateM3FixtureWithCaps(fixture, capVectors, capBytes); err != nil {
+		return err
+	}
+	if seed != fixture.Seed || topK > fixture.Vectors {
+		return errors.New("truth-cache seed/top-k does not match the bounded fixture")
+	}
+	visits, err := memoryMul(int64(fixture.Vectors), int64(fixture.Queries))
+	if err != nil || visits > capVisits {
+		return fmt.Errorf("canonical exact truth visits exceed cap: visits=%d cap=%d", visits, capVisits)
+	}
+	corpus, queries := fixtureData(fixture)
+	truth, err := m8ExactTruthFixtureV1(corpus, queries, topK)
+	if err != nil {
+		return err
+	}
+	truthSHA, err := m8TruthContentSHA256V1(truth)
+	if err != nil {
+		return err
+	}
+	identity := m8TruthCacheIdentityV1(fixture, topK)
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		return err
+	}
+	path := m8TruthCacheArtifactPathV1(out, identity)
+	if _, err := os.Lstat(path); err == nil {
+		return errors.New("canonical truth-cache artifact already exists")
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	artifactSHA, linked, err := m8PublishTruthCacheV1(path, "", func(w io.Writer) error {
+		return m8WriteTruthCacheJSONV1(w, m8TruthCacheFileV1{SchemaVersion: 1, Identity: identity, Contract: collections.VectorPartitionCanonicalScoreContractV1, DatasetChecksum: fixture.Checksum, Dimensions: fixture.Dimensions, Metric: fixture.Metric, TopK: topK, TruthSHA256: truthSHA, Truth: truth})
+	})
+	if err != nil {
+		if linked {
+			_, _ = fmt.Fprintf(stdout, "truth_cache=%s artifact_sha256=%s truth_sha256=%s identity=%s visits=%d publication=linked_directory_sync_failed\n", path, artifactSHA, truthSHA, identity, visits)
+			return fmt.Errorf("canonical truth cache linked at %s with artifact_sha256=%s but publication did not complete: %w", path, artifactSHA, err)
+		}
+		return err
+	}
+	_, err = fmt.Fprintf(stdout, "truth_cache=%s artifact_sha256=%s truth_sha256=%s identity=%s visits=%d\n", path, artifactSHA, truthSHA, identity, visits)
+	return err
 }
 
 func runGenerateFixture(args []string, stdout io.Writer) error {
@@ -531,9 +612,31 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 	if cfg.stage == "overlap,partition_index" && !capabilities.vectorPartitionNamespacePersistence {
 		return fmt.Errorf("%w: M3 partition-index evidence requires durable vector-partition lifecycle publication", collections.ErrVectorPartitionNamespacePersistenceUnsupportedV1)
 	}
-	cfg.command = append([]string{"treedb_vector_partition_bench"}, args...)
-	if cfg.baseSHA, cfg.headSHA, err = provenance(); err != nil {
+	command := "treedb_vector_partition_bench"
+	if cfg.stage == "overlap,partition_index" || cfg.stage == m8ProductionMultiGroupModeV1 {
+		command, err = os.Executable()
+		if err != nil {
+			return fmt.Errorf("resolve benchmark executable: %w", err)
+		}
+		command, err = m8CanonicalPathV1(command)
+		if err != nil {
+			return fmt.Errorf("canonicalize benchmark executable: %w", err)
+		}
+	}
+	if cfg.baseSHA, cfg.headSHA, err = provenanceWithExplicitV1(cfg.baseSHA, cfg.headSHA); err != nil {
 		return err
+	}
+	if cfg.sourceCheckout != "" {
+		cfg.sourceCheckout, err = m8SourceCheckoutV1(cfg.sourceCheckout, cfg.headSHA)
+		if err != nil {
+			return fmt.Errorf("-source-checkout: %w", err)
+		}
+		cfg.command = commandWithProvenanceAndSourceCheckoutV1(command, args, cfg.baseSHA, cfg.headSHA, cfg.sourceCheckout)
+	} else {
+		cfg.command = commandWithProvenanceV1(command, args, cfg.baseSHA, cfg.headSHA)
+	}
+	if cfg.stage == "overlap,partition_index" {
+		cfg.m3BuildDirty = m8GitDirtyInV1(cfg.sourceCheckout, cfg.out, cfg.m3PersistDir)
 	}
 	fixture, err := loadFixture(cfg.dataset)
 	if err != nil {
@@ -734,6 +837,7 @@ func parseConfig(args []string) (config, error) {
 	cfg.m8ShardLimits.MaxCandidateBytes = m8ProductionCandidateBudgetBytesV1
 	var probes, overlap, concurrency, efSearch, m8VariantDBs string
 	var stages string
+	var routerMaxVectors int
 	fs := flag.NewFlagSet("treedb_vector_partition_bench", flag.ContinueOnError)
 	fs.StringVar(&cfg.dataset, "dataset", "", "fixture directory")
 	fs.IntVar(&cfg.partitions, "partitions", 0, "logical partition count")
@@ -742,6 +846,9 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.topK, "top-k", cfg.topK, "top-k")
 	fs.Float64Var(&cfg.recallTarget, "recall-target", cfg.recallTarget, "recall target")
 	fs.Int64Var(&cfg.seed, "seed", cfg.seed, "fixture generation seed (must match manifest)")
+	fs.StringVar(&cfg.baseSHA, "base-sha", "", "explicit immutable base revision for retained replay provenance")
+	fs.StringVar(&cfg.headSHA, "head-sha", "", "explicit immutable head revision for retained replay provenance")
+	fs.StringVar(&cfg.sourceCheckout, "source-checkout", "", "canonical Git toplevel used for retained M3/M8 replay provenance")
 	fs.StringVar(&cfg.format, "format", cfg.format, "json or text")
 	fs.StringVar(&cfg.out, "out", "", "artifact directory")
 	fs.StringVar(&cfg.stage, "stage", cfg.stage, "simulation, partition, overlap,partition_index, router, or distributed_simulation_or_cluster")
@@ -781,6 +888,8 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.routerConfig.RepresentativesPerPartition, "router-representatives", cfg.routerConfig.RepresentativesPerPartition, "router representative budget per partition")
 	fs.IntVar(&cfg.routerConfig.MaxDepth, "router-max-depth", cfg.routerConfig.MaxDepth, "router hierarchy depth bound")
 	fs.IntVar(&cfg.routerConfig.MaxIterations, "router-max-iterations", cfg.routerConfig.MaxIterations, "router Lloyd iteration bound")
+	fs.IntVar(&routerMaxVectors, "router-max-vectors", 0, "router final-membership cap; zero inherits -max-vectors")
+	fs.Int64Var(&cfg.routerConfig.MaxScalarWork, "router-max-scalar-work", cfg.routerConfig.MaxScalarWork, "offline router scalar-work cap (1..50000000000)")
 	fs.Uint64Var(&cfg.routerConfig.MaxRouterBytes, "router-max-bytes", cfg.routerConfig.MaxRouterBytes, "hard conservative persisted router-pack byte cap")
 	fs.IntVar(&cfg.routerCandidates, "router-candidates", cfg.routerCandidates, "explicit approximate representative candidate budget")
 	fs.IntVar(&cfg.sourceHNSWDegree, "source-hnsw-degree", cfg.sourceHNSWDegree, "source column_graph HNSW degree (1..16; default 16)")
@@ -790,14 +899,20 @@ func parseConfig(args []string) (config, error) {
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
-	routerCandidatesSet := false
+	routerCandidatesSet, routerMaxVectorsSet := false, false
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "router-candidates" {
+		switch f.Name {
+		case "router-candidates":
 			routerCandidatesSet = true
+		case "router-max-vectors":
+			routerMaxVectorsSet = true
 		}
 	})
 	if fs.NArg() != 0 {
 		return config{}, fmt.Errorf("unexpected positional arguments: %q", fs.Args())
+	}
+	if (cfg.baseSHA == "") != (cfg.headSHA == "") || (cfg.baseSHA != "" && (!validLowerSHA(cfg.baseSHA) || !validLowerSHA(cfg.headSHA))) {
+		return config{}, errors.New("-base-sha and -head-sha must be supplied together as lowercase 40-hex revisions")
 	}
 	if cfg.partition.MaxDistanceWork < 1 || cfg.partition.MaxPartitionWork < 1 || cfg.m3MaxBenchmarkVisits < 1 {
 		return config{}, errors.New("partition work and M3 benchmark-visit limits must be positive")
@@ -947,6 +1062,11 @@ func parseConfig(args []string) (config, error) {
 		if cfg.kahipPython, err = filepath.Abs(python); err != nil {
 			return config{}, fmt.Errorf("-partition-kahip-python: %w", err)
 		}
+		// Hash the executable selected for this run without replacing the configured
+		// invocation path: a venv entry point may intentionally be a symlink.
+		if cfg.kahipPythonSHA256, err = m8BenchmarkExecutableSHA256V1(cfg.kahipPython); err != nil {
+			return config{}, fmt.Errorf("-partition-kahip-python: %w", err)
+		}
 		script, err := filepath.Abs(cfg.kahipScript)
 		if err != nil {
 			return config{}, fmt.Errorf("-partition-kahip-script: %w", err)
@@ -971,7 +1091,8 @@ func parseConfig(args []string) (config, error) {
 			return config{}, fmt.Errorf("-partition-kahip-script exceeds %d-byte cap", kahipAdapterMaxBytes)
 		}
 		sum := sha256.Sum256(scriptBytes)
-		if hex.EncodeToString(sum[:]) != kahipAdapterSHA256 {
+		cfg.kahipAdapterSHA256 = hex.EncodeToString(sum[:])
+		if cfg.kahipAdapterSHA256 != kahipAdapterSHA256 {
 			return config{}, errors.New("-partition-kahip-script does not match the pinned adapter")
 		}
 		cfg.kahipScript = script
@@ -1025,7 +1146,11 @@ func parseConfig(args []string) (config, error) {
 	cfg.partition.Partitions = cfg.partitions
 	cfg.partition.MaxVectors = cfg.maxVectors
 	cfg.routerConfig.Seed = cfg.seed
-	cfg.routerConfig.MaxVectors = cfg.maxVectors
+	if routerMaxVectorsSet {
+		cfg.routerConfig.MaxVectors = routerMaxVectors
+	} else {
+		cfg.routerConfig.MaxVectors = cfg.maxVectors
+	}
 	cfg.routerConfig.MaxDimensions = maxDimensions
 	cfg.routerConfig.MaxRepresentatives = maxVectors
 	if err := vectorpartition.ValidateRouterConfigV1(cfg.routerConfig); err != nil {
@@ -1070,6 +1195,10 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][
 		}
 	}
 	graphArtifactDigest, err := vectorpartition.Digest(artifact)
+	if err != nil {
+		return err
+	}
+	graphBuildDigest, err := m3GraphBuildSHA256V1(artifact)
 	if err != nil {
 		return err
 	}
@@ -1129,7 +1258,7 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][
 		return err
 	}
 	if cfg.stage == "overlap,partition_index" {
-		return runM3PartitionIndexStage(cfg, fixture, artifact, digest, graphArtifactDigest, suffix, vectors, queries, stdout)
+		return runM3PartitionIndexStage(cfg, fixture, artifact, digest, graphArtifactDigest, graphBuildDigest, suffix, vectors, queries, stdout)
 	}
 	if cfg.format == "json" {
 		_, err = fmt.Fprintln(stdout, string(raw))
@@ -1411,7 +1540,17 @@ func parseFloats(raw string) ([]float64, error) {
 	return out, nil
 }
 func provenance() (string, string, error) {
-	base, head := os.Getenv("BASE_SHA"), os.Getenv("GITHUB_SHA")
+	return provenanceWithExplicitV1("", "")
+}
+
+func provenanceWithExplicitV1(base, head string) (string, string, error) {
+	if (base == "") != (head == "") || (base != "" && (!validLowerSHA(base) || !validLowerSHA(head))) {
+		return "", "", errors.New("explicit provenance requires lowercase base/head SHAs")
+	}
+	if base != "" {
+		return base, head, nil
+	}
+	base, head = os.Getenv("BASE_SHA"), os.Getenv("GITHUB_SHA")
 	if eventPath := os.Getenv("GITHUB_EVENT_PATH"); eventPath != "" {
 		eventBase, eventHead, isPullRequest, err := pullRequestSHAsFromEvent(eventPath)
 		if err != nil {
@@ -1450,6 +1589,68 @@ func validSHA(value string) bool {
 	}
 	_, err := hex.DecodeString(value)
 	return err == nil
+}
+
+func validLowerSHA(value string) bool {
+	return value == strings.ToLower(value) && validSHA(value)
+}
+
+// commandWithProvenanceV1 records the resolved provenance instead of relying
+// on the replay caller's checkout or environment.
+func commandWithProvenanceV1(command string, args []string, base, head string) []string {
+	out := make([]string, 0, len(args)+5)
+	out = append(out, command)
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if commandProvenanceFlagV1(arg, "base-sha") || commandProvenanceFlagV1(arg, "head-sha") {
+			if !strings.Contains(arg, "=") && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		out = append(out, arg)
+	}
+	return append(out, "-base-sha", base, "-head-sha", head)
+}
+
+func commandWithProvenanceAndSourceCheckoutV1(command string, args []string, base, head, sourceCheckout string) []string {
+	out := commandWithProvenanceV1(command, args, base, head)
+	filtered := out[:1]
+	for i := 1; i < len(out); i++ {
+		arg := out[i]
+		if commandProvenanceFlagV1(arg, "source-checkout") {
+			if !strings.Contains(arg, "=") && i+1 < len(out) {
+				i++
+			}
+			continue
+		}
+		filtered = append(filtered, arg)
+	}
+	return append(filtered, "-source-checkout", sourceCheckout)
+}
+
+func m8SourceCheckoutV1(path, head string) (string, error) {
+	checkout, err := m8CanonicalPathV1(path)
+	if err != nil {
+		return "", err
+	}
+	rootRaw, err := exec.Command("git", "-C", checkout, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return "", errors.New("must be a Git checkout")
+	}
+	root, err := m8CanonicalPathV1(strings.TrimSpace(string(rootRaw)))
+	if err != nil || root != checkout {
+		return "", errors.New("must be the Git toplevel")
+	}
+	headRaw, err := exec.Command("git", "-C", checkout, "rev-parse", "HEAD").Output()
+	if err != nil || strings.TrimSpace(string(headRaw)) != head {
+		return "", errors.New("HEAD does not match -head-sha")
+	}
+	return checkout, nil
+}
+
+func commandProvenanceFlagV1(arg, name string) bool {
+	return arg == "-"+name || arg == "--"+name || strings.HasPrefix(arg, "-"+name+"=") || strings.HasPrefix(arg, "--"+name+"=")
 }
 
 func pullRequestSHAsFromEvent(path string) (string, string, bool, error) {

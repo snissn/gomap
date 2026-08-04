@@ -23,7 +23,8 @@ const (
 	routerMaxRepresentatives = 1_000_000
 	routerMaxDepth           = 64
 	routerMaxIterations      = 1024
-	routerMaxScalarWork      = int64(20_000_000_000)
+	routerDefaultScalarWork  = int64(20_000_000_000)
+	routerMaxScalarWork      = int64(50_000_000_000)
 	routerMaxBytes           = uint64(1 << 30)
 )
 
@@ -54,7 +55,7 @@ func DefaultRouterConfigV1() RouterConfigV1 {
 		MaxVectors:                  routerMaxVectors,
 		MaxDimensions:               routerMaxDimensions,
 		MaxRepresentatives:          routerMaxRepresentatives,
-		MaxScalarWork:               routerMaxScalarWork,
+		MaxScalarWork:               routerDefaultScalarWork,
 		MaxRouterBytes:              routerMaxBytes,
 	}
 }
