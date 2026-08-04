@@ -1,10 +1,13 @@
 package collections
 
 import (
+	"bytes"
 	"testing"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+var bsonIndexKeyCompareResultV2 int
 
 func BenchmarkBSONIndexKeyCodecV2Encode(b *testing.B) {
 	decimal, err := bson.ParseDecimal128("123456789.0123")
@@ -47,5 +50,42 @@ func BenchmarkBSONIndexKeyCodecV2Encode(b *testing.B) {
 				b.ReportMetric(float64(len(encoded)), "bytes/key")
 			})
 		}
+	}
+}
+
+func BenchmarkBSONIndexKeyCodecV2Compare(b *testing.B) {
+	type benchmarkCase struct {
+		name  string
+		left  []byte
+		right []byte
+	}
+	encodeV2 := func(value any) []byte {
+		out, err := encodeBSONIndexKeyComponentV2(mustBSONIndexRawValueV2(b, value))
+		if err != nil {
+			b.Fatal(err)
+		}
+		return out
+	}
+	encodeV1 := func(valueType IndexValueType, value any) []byte {
+		out, _, err := appendIndexScalar(nil, valueType, value)
+		if err != nil {
+			b.Fatal(err)
+		}
+		return out
+	}
+	cases := []benchmarkCase{
+		{name: "string/v2", left: encodeV2("prefix\x00unicode-界"), right: encodeV2("prefix\x00unicode-集")},
+		{name: "string/typed-v1", left: encodeV1(IndexValueString, "prefix\x00unicode-界"), right: encodeV1(IndexValueString, "prefix\x00unicode-集")},
+		{name: "int64/v2", left: encodeV2(int64(-123456789)), right: encodeV2(int64(-123456788))},
+		{name: "int64/typed-v1", left: encodeV1(IndexValueInt64, int64(-123456789)), right: encodeV1(IndexValueInt64, int64(-123456788))},
+	}
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ReportMetric(float64(len(tc.left)+len(tc.right))/2, "bytes/key")
+			for b.Loop() {
+				bsonIndexKeyCompareResultV2 = bytes.Compare(tc.left, tc.right)
+			}
+		})
 	}
 }
