@@ -11,6 +11,7 @@ import (
 	"net"
 	"reflect"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -404,6 +405,26 @@ func vectorPartitionProductionEndpointUsesListenerV1(endpoint string, listener n
 func vectorPartitionProductionEndpointAddressIsLocalV1(address *net.TCPAddr, local []net.Addr) bool {
 	if address.IP.IsLoopback() {
 		return true
+	}
+	if address.IP.IsLinkLocalUnicast() {
+		if address.Zone == "" {
+			return false
+		}
+		iface, err := net.InterfaceByName(address.Zone)
+		if err != nil {
+			index, indexErr := strconv.Atoi(address.Zone)
+			if indexErr != nil {
+				return false
+			}
+			iface, err = net.InterfaceByIndex(index)
+		}
+		if err != nil {
+			return false
+		}
+		local, err = iface.Addrs()
+		if err != nil {
+			return false
+		}
 	}
 	for _, addr := range local {
 		var ip net.IP

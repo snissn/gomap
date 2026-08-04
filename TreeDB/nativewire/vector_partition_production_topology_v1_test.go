@@ -345,6 +345,14 @@ func TestVectorPartitionProductionEndpointMatchesListenerAddressFamilyV1(t *test
 	if vectorPartitionProductionEndpointAddressMatchesListenerV1(&net.TCPAddr{IP: net.ParseIP("fe80::1"), Port: 1, Zone: "lo"}, scoped) {
 		t.Fatal("mismatched scoped IPv6 zone was accepted")
 	}
+	linkLocal := net.ParseIP("fe80::1")
+	local := []net.Addr{&net.IPNet{IP: linkLocal, Mask: net.CIDRMask(64, 128)}}
+	if vectorPartitionProductionEndpointAddressIsLocalV1(&net.TCPAddr{IP: linkLocal}, local) {
+		t.Fatal("link-local endpoint without a zone was accepted")
+	}
+	if vectorPartitionProductionEndpointAddressIsLocalV1(&net.TCPAddr{IP: linkLocal, Zone: "no-such-vector-interface"}, local) {
+		t.Fatal("link-local endpoint with a foreign zone was accepted")
+	}
 	wildcard, err := net.Listen("tcp4", "0.0.0.0:0")
 	if err != nil {
 		t.Fatal(err)
