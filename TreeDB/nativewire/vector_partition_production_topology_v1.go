@@ -209,6 +209,7 @@ func (h *VectorPartitionProductionTopologyV1) serve(group raftcluster.GroupID, l
 	go func() {
 		defer h.wg.Done()
 		defer func() { h.mu.Lock(); h.serving[group] = false; h.mu.Unlock() }()
+		var retryDelay time.Duration
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
@@ -217,11 +218,17 @@ func (h *VectorPartitionProductionTopologyV1) serve(group raftcluster.GroupID, l
 				h.mu.Unlock()
 				var netErr net.Error
 				if !closed && !errors.Is(err, net.ErrClosed) && errors.As(err, &netErr) && netErr.Temporary() {
-					time.Sleep(5 * time.Millisecond)
+					if retryDelay == 0 {
+						retryDelay = 5 * time.Millisecond
+					} else {
+						retryDelay = min(2*retryDelay, time.Second)
+					}
+					time.Sleep(retryDelay)
 					continue
 				}
 				return
 			}
+			retryDelay = 0
 			select {
 			case connectionSlots <- struct{}{}:
 			default:
