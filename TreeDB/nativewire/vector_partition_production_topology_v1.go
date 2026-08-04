@@ -126,7 +126,6 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 		}
 	}
 	endpointOwners := make(map[string]raftcluster.GroupID, len(opts.Endpoints)+len(opts.NodeEndpoints))
-	endpointKeys := make(map[string]string, len(opts.Endpoints)+len(opts.NodeEndpoints))
 	recordEndpoint := func(group raftcluster.GroupID, endpoint string) error {
 		key, err := vectorPartitionProductionEndpointKeyV1(endpoint)
 		if err != nil {
@@ -136,7 +135,6 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 			return fmt.Errorf("nativewire: production vector topology groups %q and %q share an endpoint", owner, group)
 		}
 		endpointOwners[key] = group
-		endpointKeys[endpoint] = key
 		return nil
 	}
 	for group, endpoint := range h.endpoints {
@@ -180,9 +178,11 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 			if endpoint == "" {
 				return nil, fmt.Errorf("nativewire: production vector topology shard %q cannot route to member %q", shard.GroupID, member)
 			}
-			localNodeEndpoint := opts.NodeEndpoints[shard.GroupID][shard.Service.localNodeID]
-			if endpointKeys[endpoint] == endpointKeys[h.endpoints[shard.GroupID]] ||
-				(localNodeEndpoint != "" && endpointKeys[endpoint] == endpointKeys[localNodeEndpoint]) {
+			usesLocalListener, err := vectorPartitionProductionEndpointUsesListenerV1(endpoint, shard.Listener)
+			if err != nil {
+				return nil, fmt.Errorf("nativewire: production vector topology shard %q remote member %q endpoint: %w", shard.GroupID, member, err)
+			}
+			if usesLocalListener {
 				return nil, fmt.Errorf("nativewire: production vector topology shard %q remote member %q uses the local fallback", shard.GroupID, member)
 			}
 		}
@@ -315,6 +315,40 @@ func vectorPartitionProductionEndpointMatchesListenerV1(endpoint string, listene
 	}
 	ipv6Only, ok := vectorPartitionProductionListenerIPv6OnlyV1(tcpListener)
 	return ok && !ipv6Only
+}
+
+func vectorPartitionProductionEndpointUsesListenerV1(endpoint string, listener net.Listener) (bool, error) {
+	if !vectorPartitionProductionEndpointMatchesListenerV1(endpoint, listener) {
+		return false, nil
+	}
+	bound := listener.Addr().(*net.TCPAddr)
+	if !bound.IP.IsUnspecified() {
+		return true, nil
+	}
+	advertised, err := net.ResolveTCPAddr("tcp", endpoint)
+	if err != nil {
+		return false, err
+	}
+	if advertised.IP.IsLoopback() {
+		return true, nil
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false, err
+	}
+	for _, addr := range addrs {
+		var ip net.IP
+		switch addr := addr.(type) {
+		case *net.IPNet:
+			ip = addr.IP
+		case *net.IPAddr:
+			ip = addr.IP
+		}
+		if ip.Equal(advertised.IP) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func vectorPartitionProductionEndpointKeyV1(endpoint string) (string, error) {

@@ -214,8 +214,13 @@ func TestVectorPartitionProductionTopologyRequiresLiveAuthorityAndOwnsLifecycleV
 		t.Fatal("mismatched local node endpoint succeeded")
 	}
 	opts.NodeEndpoints["group-a"]["node-a"] = localAlias
-	opts.NodeEndpoints["group-a"]["node-b"] = fmt.Sprintf("127.0.0.2:%d", listener.Addr().(*net.TCPAddr).Port)
-	opts.NodeEndpoints["group-a"]["node-c"] = fmt.Sprintf("127.0.0.3:%d", listener.Addr().(*net.TCPAddr).Port)
+	port := listener.Addr().(*net.TCPAddr).Port
+	opts.NodeEndpoints["group-a"]["node-b"] = fmt.Sprintf("127.0.0.2:%d", port)
+	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
+		t.Fatal("remote shard member used a wildcard listener alias")
+	}
+	opts.NodeEndpoints["group-a"]["node-b"] = fmt.Sprintf("192.0.2.2:%d", port)
+	opts.NodeEndpoints["group-a"]["node-c"] = fmt.Sprintf("192.0.2.3:%d", port)
 	opts.CoordinatorLimits.MaxConcurrentRequests = 1
 	opts.CoordinatorLimits.MaxRequests = 2
 	topology, err := NewVectorPartitionProductionTopologyV1(opts)
