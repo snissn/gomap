@@ -204,13 +204,15 @@ func NewVectorPartitionM8ProductionMultiGroupV1(ctx context.Context, opts Vector
 		}
 		h.listeners[group] = listener
 		h.endpoints[group] = listener.Addr().String()
-		h.serve(group, listener, service)
 	}
 	dispatcher, err := newVectorPartitionShardSearchTCPDispatcherV1(h.endpoints, nil, coordinatorLimits.MaxConcurrentRequests, shardLimits)
 	if err != nil {
 		return nil, err
 	}
 	h.dispatcher = dispatcher
+	for group, listener := range h.listeners {
+		h.serve(group, listener, h.services[group], dispatcher.maxRequestFrame, dispatcher.maxResponseFrame)
+	}
 	counting := VectorPartitionShardSearchDispatcherFuncV1(func(callCtx context.Context, request VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
 		current := h.inflight.Add(1)
 		defer h.inflight.Add(^uint64(0))
@@ -343,7 +345,7 @@ func vectorPartitionM8ProofEntryV1() ([]byte, error) {
 	}
 	return entry, nil
 }
-func (h *VectorPartitionM8ProductionMultiGroupV1) serve(group raftcluster.GroupID, listener net.Listener, service *VectorPartitionShardSearchServiceV1) {
+func (h *VectorPartitionM8ProductionMultiGroupV1) serve(group raftcluster.GroupID, listener net.Listener, service *VectorPartitionShardSearchServiceV1, maxRequestFrame, maxResponseFrame uint32) {
 	h.wg.Add(1)
 	go func() {
 		defer h.wg.Done()
@@ -364,7 +366,7 @@ func (h *VectorPartitionM8ProductionMultiGroupV1) serve(group raftcluster.GroupI
 			go func() {
 				defer h.wg.Done()
 				defer func() { h.mu.Lock(); delete(h.conns, conn); h.mu.Unlock() }()
-				(VectorPartitionShardSearchTCPServerV1{Service: service, InitialTimeout: 2 * time.Second}).ServeConn(context.Background(), conn)
+				(VectorPartitionShardSearchTCPServerV1{Service: service, InitialTimeout: 2 * time.Second, MaxFrame: maxRequestFrame, MaxResponseFrame: maxResponseFrame}).ServeConn(context.Background(), conn)
 			}()
 		}
 	}()
