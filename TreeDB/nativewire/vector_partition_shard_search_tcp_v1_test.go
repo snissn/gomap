@@ -93,6 +93,70 @@ func TestVectorPartitionShardSearchTCPDispatcherReconnectsAfterIdleCloseAndFails
 	}
 }
 
+func TestVectorPartitionShardSearchTCPDispatcherCancellationWhileWaitingForConnectionV1(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	listener := newVectorPartitionShardSearchTCPListenerV1(t, vectorPartitionShardSearchHandlerFuncV1(func(context.Context, VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+		close(started)
+		<-release
+		return VectorPartitionShardSearchResponseV1{Version: 1}, nil
+	}))
+	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": listener.Addr().String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dispatcher.Close()
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := dispatcher.DispatchVectorPartitionShardSearchV1(context.Background(), VectorPartitionShardSearchRequestV1{TargetGroupID: "group-a"})
+		firstDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first request did not acquire the pooled connection")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := dispatcher.DispatchVectorPartitionShardSearchV1(ctx, VectorPartitionShardSearchRequestV1{TargetGroupID: "group-a"})
+		secondDone <- err
+	}()
+	cancel()
+	select {
+	case err := <-secondDone:
+		var shardErr *VectorPartitionShardSearchErrorV1
+		if !errors.As(err, &shardErr) || shardErr.Code != VectorPartitionShardSearchErrorCanceledV1 || !errors.Is(err, context.Canceled) {
+			t.Fatalf("waiting cancellation error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled request remained blocked behind the pooled connection")
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVectorPartitionShardSearchTCPDispatcherDoesNotRetryServiceUnavailableV1(t *testing.T) {
+	var calls atomic.Uint64
+	listener := newVectorPartitionShardSearchTCPListenerV1(t, vectorPartitionShardSearchHandlerFuncV1(func(context.Context, VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+		calls.Add(1)
+		return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: "group-a", Err: errors.New("lifecycle unavailable")}
+	}))
+	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": listener.Addr().String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dispatcher.Close()
+	if _, err := dispatcher.DispatchVectorPartitionShardSearchV1(context.Background(), VectorPartitionShardSearchRequestV1{TargetGroupID: "group-a"}); err == nil {
+		t.Fatal("service failure succeeded")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("service calls=%d want one", got)
+	}
+}
+
 func TestVectorPartitionShardSearchTCPDispatcherUsesLeaderNodeEndpointV1(t *testing.T) {
 	leader := newVectorPartitionShardSearchTCPListenerV1(t, vectorPartitionShardSearchHandlerFuncV1(func(_ context.Context, r VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
 		return VectorPartitionShardSearchResponseV1{Version: 1, RequestID: r.RequestID}, nil

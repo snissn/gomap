@@ -37,9 +37,14 @@ type VectorPartitionShardSearchTCPDispatcherV1 struct {
 }
 
 type vectorPartitionShardSearchTCPPooledConnV1 struct {
-	conn net.Conn
-	mu   sync.Mutex
+	conn  net.Conn
+	lease chan struct{}
 }
+
+type vectorPartitionShardSearchTCPTransportFailureV1 struct{ err error }
+
+func (e *vectorPartitionShardSearchTCPTransportFailureV1) Error() string { return e.err.Error() }
+func (e *vectorPartitionShardSearchTCPTransportFailureV1) Unwrap() error { return e.err }
 
 // NewVectorPartitionShardSearchTCPDispatcherV1 validates and copies one TCP
 // endpoint per group.  Endpoints are normally loopback addresses for the M8 CI
@@ -99,6 +104,8 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShard
 }
 
 func (d *VectorPartitionShardSearchTCPDispatcherV1) dispatchVectorPartitionShardSearchOnceV1(ctx context.Context, request VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+	requestCtx, cancel := vectorPartitionShardSearchTCPRequestContextV1(ctx, request.DeadlineUnixNano)
+	defer cancel()
 	d.mu.Lock()
 	closed := d.closed
 	d.mu.Unlock()
@@ -109,23 +116,25 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) dispatchVectorPartitionShard
 	if !ok {
 		return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorUnknownOwnerV1, GroupID: request.TargetGroupID, Err: ErrVectorPartitionShardSearchRouteMismatch}
 	}
-	pooled, err := d.acquire(ctx, endpoint)
+	pooled, err := d.acquire(requestCtx, endpoint)
 	if err != nil {
-		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, err)
+		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPRetryableTransportErrorV1(requestCtx, request.TargetGroupID, err)
 	}
-	pooled.mu.Lock()
-	defer pooled.mu.Unlock()
+	if err := pooled.acquire(requestCtx); err != nil {
+		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(requestCtx, request.TargetGroupID, err)
+	}
+	defer pooled.release()
 	conn := pooled.conn
-	stopCancelIO := vectorPartitionShardSearchTCPInterruptOnCancelV1(ctx, conn)
+	stopCancelIO := vectorPartitionShardSearchTCPInterruptOnCancelV1(requestCtx, conn)
 	defer stopCancelIO()
-	if err := vectorPartitionShardSearchTCPDeadlineV1(ctx, request.DeadlineUnixNano, conn); err != nil {
+	if err := vectorPartitionShardSearchTCPDeadlineV1(requestCtx, request.DeadlineUnixNano, conn); err != nil {
 		d.discard(endpoint, pooled)
-		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, err)
+		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPRetryableTransportErrorV1(requestCtx, request.TargetGroupID, err)
 	}
 	frame := vectorPartitionShardSearchTCPFrameV1{Request: &request}
 	if err := writeVectorPartitionShardSearchTCPFrameV1(conn, frame, d.maxFrame); err != nil {
 		d.discard(endpoint, pooled)
-		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, err)
+		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPRetryableTransportErrorV1(requestCtx, request.TargetGroupID, err)
 	}
 	frame, err = readVectorPartitionShardSearchTCPFrameV1(conn, d.maxFrame)
 	if err != nil {
@@ -133,7 +142,7 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) dispatchVectorPartitionShard
 		if request.DeadlineUnixNano != 0 && !time.Now().Before(time.Unix(0, request.DeadlineUnixNano)) {
 			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorDeadlineV1, GroupID: request.TargetGroupID, Err: context.DeadlineExceeded}
 		}
-		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, err)
+		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPRetryableTransportErrorV1(requestCtx, request.TargetGroupID, err)
 	}
 	if frame.Request != nil || (frame.Response == nil) == (frame.Error == nil) {
 		d.discard(endpoint, pooled)
@@ -171,7 +180,7 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) acquire(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	pooled := &vectorPartitionShardSearchTCPPooledConnV1{conn: conn}
+	pooled := &vectorPartitionShardSearchTCPPooledConnV1{conn: conn, lease: make(chan struct{}, 1)}
 	d.mu.Lock()
 	if d.closed {
 		d.mu.Unlock()
@@ -190,6 +199,15 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) acquire(ctx context.Context,
 	d.mu.Unlock()
 	return pooled, nil
 }
+func (p *vectorPartitionShardSearchTCPPooledConnV1) acquire(ctx context.Context) error {
+	select {
+	case p.lease <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func (p *vectorPartitionShardSearchTCPPooledConnV1) release() { <-p.lease }
 func (d *VectorPartitionShardSearchTCPDispatcherV1) discard(endpoint string, pooled *vectorPartitionShardSearchTCPPooledConnV1) {
 	d.mu.Lock()
 	if d.conns[endpoint] == pooled {
@@ -219,6 +237,10 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) Close() error {
 }
 
 func vectorPartitionShardSearchTCPReconnectableV1(err error) bool {
+	var transportErr *vectorPartitionShardSearchTCPTransportFailureV1
+	if !errors.As(err, &transportErr) {
+		return false
+	}
 	var shardErr *VectorPartitionShardSearchErrorV1
 	return errors.As(err, &shardErr) && shardErr.Code == VectorPartitionShardSearchErrorGroupUnavailableV1
 }
@@ -511,4 +533,8 @@ func vectorPartitionShardSearchTCPTransportErrorV1(ctx context.Context, groupID 
 		return &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorDeadlineV1, GroupID: groupID, Err: err}
 	}
 	return &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: groupID, Err: err}
+}
+
+func vectorPartitionShardSearchTCPRetryableTransportErrorV1(ctx context.Context, groupID raftcluster.GroupID, err error) error {
+	return &vectorPartitionShardSearchTCPTransportFailureV1{err: vectorPartitionShardSearchTCPTransportErrorV1(ctx, groupID, err)}
 }
