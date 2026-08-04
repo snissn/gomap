@@ -82,10 +82,10 @@ func BenchmarkBSONIndexKeyCodecV2Compare(b *testing.B) {
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
-			b.ReportMetric(float64(len(tc.left)+len(tc.right))/2, "bytes/key")
 			for b.Loop() {
 				bsonIndexKeyCompareResultV2 = bytes.Compare(tc.left, tc.right)
 			}
+			b.ReportMetric(float64(len(tc.left)+len(tc.right))/2, "bytes/key")
 		})
 	}
 }
