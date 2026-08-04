@@ -32,13 +32,6 @@ const (
 	defaultCursorBatchSize         = 101
 	defaultCursorIdleTimeout       = 10 * time.Minute
 	defaultCursorReapInterval      = time.Second
-	defaultLogicalSessionTimeout   = 30
-	advertisedMongoVersion         = "7.0.0"
-	advertisedMongoVersionMajor    = 7
-	advertisedMongoVersionMinor    = 0
-	advertisedMongoVersionPatch    = 0
-	advertisedMongoVersionExtra    = 0
-	advertisedMongoMaxWireVersion  = 21
 	defaultUpdateCoalescingDelay   = 0
 	defaultUpdateCoalescingBatch   = 256
 	maxUpdateCoalescingBatch       = 4096
@@ -841,34 +834,40 @@ func helloResponse(maxMessageLength int32, writablePrimary bool) bson.D {
 		{Key: "ismaster", Value: writablePrimary},
 		{Key: "secondary", Value: false},
 		{Key: "helloOk", Value: true},
-		{Key: "minWireVersion", Value: int32(0)},
-		{Key: "maxWireVersion", Value: int32(advertisedMongoMaxWireVersion)},
+		{Key: "minWireVersion", Value: mongoGatewayCapabilityManifest.Advertised.MinWireVersion},
+		{Key: "maxWireVersion", Value: mongoGatewayCapabilityManifest.Advertised.MaxWireVersion},
 		{Key: "maxBsonObjectSize", Value: int32(defaultMaxBSONObjectSize)},
 		{Key: "maxMessageSizeBytes", Value: maxMessageLength},
 		{Key: "maxWriteBatchSize", Value: int32(defaultMaxWriteBatchSize)},
-		{Key: "logicalSessionTimeoutMinutes", Value: int32(defaultLogicalSessionTimeout)},
+		{Key: "logicalSessionTimeoutMinutes", Value: mongoGatewayCapabilityManifest.Advertised.LogicalSessionTimeoutMinutes},
 		{Key: "localTime", Value: time.Now().UTC()},
 	}
 }
 
 func buildInfoResponse() bson.D {
 	return bson.D{
-		{Key: "version", Value: advertisedMongoVersion},
-		{Key: "gitVersion", Value: "treedb-mongo-gateway"},
+		{Key: "version", Value: mongoGatewayCapabilityManifest.Advertised.MongoVersion},
+		{Key: "gitVersion", Value: mongoGatewayCapabilityManifest.Advertised.GitVersion},
 		{Key: "modules", Value: bson.A{}},
 		{Key: "allocator", Value: "go"},
 		{Key: "javascriptEngine", Value: ""},
 		{Key: "sysInfo", Value: runtime.GOOS + "/" + runtime.GOARCH},
 		{Key: "versionArray", Value: bson.A{
-			int32(advertisedMongoVersionMajor),
-			int32(advertisedMongoVersionMinor),
-			int32(advertisedMongoVersionPatch),
-			int32(advertisedMongoVersionExtra),
+			mongoGatewayCapabilityManifest.Advertised.MongoVersionArray[0],
+			mongoGatewayCapabilityManifest.Advertised.MongoVersionArray[1],
+			mongoGatewayCapabilityManifest.Advertised.MongoVersionArray[2],
+			mongoGatewayCapabilityManifest.Advertised.MongoVersionArray[3],
 		}},
 		{Key: "bits", Value: runtimePointerSizeBits()},
 		{Key: "debug", Value: false},
 		{Key: "maxBsonObjectSize", Value: int32(defaultMaxBSONObjectSize)},
 		{Key: "storageEngines", Value: bson.A{"treedb"}},
+		{Key: "treedbCapabilityManifest", Value: bson.D{
+			{Key: "schema", Value: MongoGatewayCapabilitySchema},
+			{Key: "version", Value: int32(MongoGatewayCapabilityVersion)},
+			{Key: "identity", Value: MongoGatewayCapabilityIdentity()},
+			{Key: "deploymentMode", Value: mongoGatewayCapabilityManifest.Advertised.DeploymentMode},
+		}},
 		{Key: "ok", Value: 1.0},
 	}
 }

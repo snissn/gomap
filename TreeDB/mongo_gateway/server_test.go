@@ -95,7 +95,7 @@ func TestServerHandlesQueryHello(t *testing.T) {
 	assertBool(t, reply.Documents[0], "helloOk", true)
 	assertBool(t, reply.Documents[0], "ismaster", true)
 	assertBool(t, reply.Documents[0], "secondary", false)
-	assertInt32(t, reply.Documents[0], "logicalSessionTimeoutMinutes", defaultLogicalSessionTimeout)
+	assertInt32(t, reply.Documents[0], "logicalSessionTimeoutMinutes", mongoGatewayCapabilityManifest.Advertised.LogicalSessionTimeoutMinutes)
 }
 
 func TestServerHandlesMsgPing(t *testing.T) {

@@ -122,40 +122,43 @@ type config struct {
 }
 
 type benchmarkResult struct {
-	Target                        string                   `json:"target"`
-	MongoURI                      string                   `json:"mongo_uri,omitempty"`
-	MongoCompact                  bool                     `json:"mongo_compact,omitempty"`
-	RouteMode                     string                   `json:"route_mode"`
-	RouteGroupCount               int                      `json:"route_group_count,omitempty"`
-	RoutePartitionCount           int                      `json:"route_partition_count,omitempty"`
-	RouteEvidence                 *routeEvidence           `json:"route_evidence,omitempty"`
-	ProductionRouteEvidenceStatus string                   `json:"production_route_evidence_status,omitempty"`
-	ProductionRouteEvidence       *productionRouteEvidence `json:"production_route_evidence,omitempty"`
-	TreeDBDir                     string                   `json:"treedb_dir,omitempty"`
-	Database                      string                   `json:"database"`
-	Collection                    string                   `json:"collection"`
-	Documents                     int                      `json:"documents"`
-	BatchSize                     int                      `json:"batch_size"`
-	InsertProducers               int                      `json:"insert_producers"`
-	MongoMaxPoolSize              int                      `json:"mongo_max_pool_size,omitempty"`
-	MongoMinPoolSize              int                      `json:"mongo_min_pool_size,omitempty"`
-	MongoMaxConnecting            int                      `json:"mongo_max_connecting,omitempty"`
-	SecondaryIndexes              int                      `json:"secondary_indexes"`
-	ClientMode                    string                   `json:"client_mode"`
-	ConcurrentReadKinds           []string                 `json:"concurrent_read_kinds,omitempty"`
-	SkippedConcurrentReadKinds    []string                 `json:"skipped_concurrent_read_kinds,omitempty"`
-	ConcurrentReaders             int                      `json:"concurrent_readers,omitempty"`
-	ConcurrentReaderSweep         []int                    `json:"concurrent_reader_sweep,omitempty"`
-	ConcurrentReads               int                      `json:"concurrent_reads,omitempty"`
-	ConcurrentRangeReaders        int                      `json:"concurrent_range_readers,omitempty"`
-	ConcurrentRangeReaderSweep    []int                    `json:"concurrent_range_reader_sweep,omitempty"`
-	ConcurrentRangeReads          int                      `json:"concurrent_range_reads,omitempty"`
-	RawWireTCPPipelineDepth       int                      `json:"raw_wire_tcp_pipeline_depth,omitempty"`
-	ConcurrentWriters             int                      `json:"concurrent_writers,omitempty"`
-	ConcurrentWriterSweep         []int                    `json:"concurrent_writer_sweep,omitempty"`
-	ConcurrentWrites              int                      `json:"concurrent_writes,omitempty"`
-	DocumentShape                 string                   `json:"document_shape,omitempty"`
-	PointReadProjection           string                   `json:"point_read_projection,omitempty"`
+	MongoGatewayCapabilitySchema   string                   `json:"mongo_gateway_capability_schema,omitempty"`
+	MongoGatewayCapabilityVersion  int                      `json:"mongo_gateway_capability_version,omitempty"`
+	MongoGatewayCapabilityIdentity string                   `json:"mongo_gateway_capability_identity,omitempty"`
+	Target                         string                   `json:"target"`
+	MongoURI                       string                   `json:"mongo_uri,omitempty"`
+	MongoCompact                   bool                     `json:"mongo_compact,omitempty"`
+	RouteMode                      string                   `json:"route_mode"`
+	RouteGroupCount                int                      `json:"route_group_count,omitempty"`
+	RoutePartitionCount            int                      `json:"route_partition_count,omitempty"`
+	RouteEvidence                  *routeEvidence           `json:"route_evidence,omitempty"`
+	ProductionRouteEvidenceStatus  string                   `json:"production_route_evidence_status,omitempty"`
+	ProductionRouteEvidence        *productionRouteEvidence `json:"production_route_evidence,omitempty"`
+	TreeDBDir                      string                   `json:"treedb_dir,omitempty"`
+	Database                       string                   `json:"database"`
+	Collection                     string                   `json:"collection"`
+	Documents                      int                      `json:"documents"`
+	BatchSize                      int                      `json:"batch_size"`
+	InsertProducers                int                      `json:"insert_producers"`
+	MongoMaxPoolSize               int                      `json:"mongo_max_pool_size,omitempty"`
+	MongoMinPoolSize               int                      `json:"mongo_min_pool_size,omitempty"`
+	MongoMaxConnecting             int                      `json:"mongo_max_connecting,omitempty"`
+	SecondaryIndexes               int                      `json:"secondary_indexes"`
+	ClientMode                     string                   `json:"client_mode"`
+	ConcurrentReadKinds            []string                 `json:"concurrent_read_kinds,omitempty"`
+	SkippedConcurrentReadKinds     []string                 `json:"skipped_concurrent_read_kinds,omitempty"`
+	ConcurrentReaders              int                      `json:"concurrent_readers,omitempty"`
+	ConcurrentReaderSweep          []int                    `json:"concurrent_reader_sweep,omitempty"`
+	ConcurrentReads                int                      `json:"concurrent_reads,omitempty"`
+	ConcurrentRangeReaders         int                      `json:"concurrent_range_readers,omitempty"`
+	ConcurrentRangeReaderSweep     []int                    `json:"concurrent_range_reader_sweep,omitempty"`
+	ConcurrentRangeReads           int                      `json:"concurrent_range_reads,omitempty"`
+	RawWireTCPPipelineDepth        int                      `json:"raw_wire_tcp_pipeline_depth,omitempty"`
+	ConcurrentWriters              int                      `json:"concurrent_writers,omitempty"`
+	ConcurrentWriterSweep          []int                    `json:"concurrent_writer_sweep,omitempty"`
+	ConcurrentWrites               int                      `json:"concurrent_writes,omitempty"`
+	DocumentShape                  string                   `json:"document_shape,omitempty"`
+	PointReadProjection            string                   `json:"point_read_projection,omitempty"`
 
 	// Always emit this knob in JSON so benchmark artifacts distinguish default
 	// false runs from older runs that predate indexed-field update coverage.
@@ -191,6 +194,21 @@ type benchmarkResult struct {
 	ProfileDir                                    string              `json:"profile_dir,omitempty"`
 	ProfileManifest                               string              `json:"profile_manifest,omitempty"`
 	ProfileResult                                 string              `json:"profile_result,omitempty"`
+}
+
+func recordMongoGatewayCapabilityMetadata(result *benchmarkResult) {
+	if result == nil {
+		return
+	}
+	result.MongoGatewayCapabilitySchema = ""
+	result.MongoGatewayCapabilityVersion = 0
+	result.MongoGatewayCapabilityIdentity = ""
+	if result.Target != "treedb" || result.ClientMode == clientModeDirect || isNativeWireClientMode(result.ClientMode) {
+		return
+	}
+	result.MongoGatewayCapabilitySchema = mongogateway.MongoGatewayCapabilitySchema
+	result.MongoGatewayCapabilityVersion = mongogateway.MongoGatewayCapabilityVersion
+	result.MongoGatewayCapabilityIdentity = mongogateway.MongoGatewayCapabilityIdentity()
 }
 
 type phaseResult struct {
@@ -1780,6 +1798,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		RangeIndex:                 cfg.RangeIndex,
 		PrebuildDocuments:          cfg.PrebuildDocuments,
 	}
+	recordMongoGatewayCapabilityMetadata(result)
 	if cfg.RouteMode == routeModeRing || cfg.RouteMode == routeModeProduction {
 		result.RouteGroupCount = cfg.RouteGroupCount
 		result.RoutePartitionCount = cfg.RoutePartitionCount
@@ -2110,6 +2129,7 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 		TreeDBMaintenanceMode:                         cfg.TreeDBMaintenance,
 		TreeDBReadState:                               cfg.TreeDBReadState,
 	}
+	recordMongoGatewayCapabilityMetadata(result)
 	if cfg.RouteMode == routeModeRing {
 		result.RouteGroupCount = cfg.RouteGroupCount
 		result.RoutePartitionCount = cfg.RoutePartitionCount
@@ -7500,6 +7520,7 @@ func addDiskSnapshotPath(paths map[string]int64, rel string, size int64) {
 }
 
 func writeResult(out io.Writer, format string, result *benchmarkResult) error {
+	recordMongoGatewayCapabilityMetadata(result)
 	switch format {
 	case "json":
 		encoder := json.NewEncoder(out)
@@ -7514,6 +7535,10 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 			result.ConcurrentWriters, result.ConcurrentWriterSweep, result.ConcurrentWrites, result.TreeDBReadState)
 		fmt.Fprintf(out, "update_indexed_field=%t\n", result.UpdateIndexedField)
 		fmt.Fprintf(out, "range_index=%t\n", result.RangeIndex)
+		if result.MongoGatewayCapabilityIdentity != "" {
+			fmt.Fprintf(out, "mongo_gateway_capability_schema=%s mongo_gateway_capability_version=%d mongo_gateway_capability_identity=%s\n",
+				result.MongoGatewayCapabilitySchema, result.MongoGatewayCapabilityVersion, result.MongoGatewayCapabilityIdentity)
+		}
 		fmt.Fprintf(out, "route_mode=%s", result.RouteMode)
 		if result.RouteMode == routeModeRing || result.RouteMode == routeModeProduction {
 			fmt.Fprintf(out, " route_groups=%d route_partitions=%d", result.RouteGroupCount, result.RoutePartitionCount)
