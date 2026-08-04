@@ -93,28 +93,33 @@ func TestVectorPartitionShardSearchTCPDispatcherReconnectsAfterIdleCloseAndFails
 	}
 }
 
-func TestVectorPartitionShardSearchTCPDispatcherCancellationWhileWaitingForConnectionV1(t *testing.T) {
-	started := make(chan struct{})
+func TestVectorPartitionShardSearchTCPDispatcherCancellationWhilePoolIsFullV1(t *testing.T) {
+	const poolSize = 2
+	started := make(chan struct{}, poolSize)
 	release := make(chan struct{})
 	listener := newVectorPartitionShardSearchTCPListenerV1(t, vectorPartitionShardSearchHandlerFuncV1(func(context.Context, VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
-		close(started)
+		started <- struct{}{}
 		<-release
 		return VectorPartitionShardSearchResponseV1{Version: 1}, nil
 	}))
-	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": listener.Addr().String()})
+	dispatcher, err := newVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": listener.Addr().String()}, nil, poolSize)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer dispatcher.Close()
-	firstDone := make(chan error, 1)
-	go func() {
-		_, err := dispatcher.DispatchVectorPartitionShardSearchV1(context.Background(), VectorPartitionShardSearchRequestV1{TargetGroupID: "group-a"})
-		firstDone <- err
-	}()
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("first request did not acquire the pooled connection")
+	done := make(chan error, poolSize)
+	for range poolSize {
+		go func() {
+			_, err := dispatcher.DispatchVectorPartitionShardSearchV1(context.Background(), VectorPartitionShardSearchRequestV1{TargetGroupID: "group-a"})
+			done <- err
+		}()
+	}
+	for range poolSize {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("concurrent request did not acquire a distinct pooled connection")
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	secondDone := make(chan error, 1)
@@ -133,8 +138,10 @@ func TestVectorPartitionShardSearchTCPDispatcherCancellationWhileWaitingForConne
 		t.Fatal("canceled request remained blocked behind the pooled connection")
 	}
 	close(release)
-	if err := <-firstDone; err != nil {
-		t.Fatal(err)
+	for range poolSize {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

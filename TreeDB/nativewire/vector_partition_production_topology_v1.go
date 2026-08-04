@@ -107,7 +107,11 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 		}
 		h.listeners[shard.GroupID], h.services[shard.GroupID] = shard.Listener, shard.Service
 	}
-	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherWithNodeEndpointsV1(h.endpoints, opts.NodeEndpoints)
+	maxConnectionsPerEndpoint := opts.CoordinatorLimits.MaxConcurrentRequests
+	if maxConnectionsPerEndpoint == 0 {
+		maxConnectionsPerEndpoint = DefaultVectorPartitionCoordinatorLimitsV1().MaxConcurrentRequests
+	}
+	dispatcher, err := newVectorPartitionShardSearchTCPDispatcherV1(h.endpoints, opts.NodeEndpoints, maxConnectionsPerEndpoint)
 	if err != nil {
 		return nil, err
 	}

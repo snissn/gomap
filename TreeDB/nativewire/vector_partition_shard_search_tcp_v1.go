@@ -27,18 +27,22 @@ const vectorPartitionShardSearchTCPMaxFrameBytesV1 uint32 = 64 << 20
 // in-process registry: every request and response crosses a serialized socket
 // boundary before the coordinator can consume it.
 type VectorPartitionShardSearchTCPDispatcherV1 struct {
-	endpoints     map[raftcluster.GroupID]string
-	nodeEndpoints map[raftcluster.GroupID]map[raftcluster.NodeID]string
-	dial          func(context.Context, string, string) (net.Conn, error)
-	maxFrame      uint32
-	mu            sync.Mutex
-	conns         map[string]*vectorPartitionShardSearchTCPPooledConnV1
-	closed        bool
+	endpoints                 map[raftcluster.GroupID]string
+	nodeEndpoints             map[raftcluster.GroupID]map[raftcluster.NodeID]string
+	dial                      func(context.Context, string, string) (net.Conn, error)
+	maxFrame                  uint32
+	maxConnectionsPerEndpoint int
+	mu                        sync.Mutex
+	pools                     map[string]*vectorPartitionShardSearchTCPEndpointPoolV1
+	closed                    bool
 }
 
-type vectorPartitionShardSearchTCPPooledConnV1 struct {
-	conn  net.Conn
-	lease chan struct{}
+type vectorPartitionShardSearchTCPEndpointPoolV1 struct {
+	slots  chan struct{}
+	mu     sync.Mutex
+	idle   []net.Conn
+	all    map[net.Conn]struct{}
+	closed bool
 }
 
 type vectorPartitionShardSearchTCPTransportFailureV1 struct{ err error }
@@ -57,8 +61,15 @@ func NewVectorPartitionShardSearchTCPDispatcherV1(endpoints map[raftcluster.Grou
 // routes a coordinator retry to the leader-hinted node when that endpoint is
 // known. Group endpoints remain the safe fallback for one service per group.
 func NewVectorPartitionShardSearchTCPDispatcherWithNodeEndpointsV1(endpoints map[raftcluster.GroupID]string, nodeEndpoints map[raftcluster.GroupID]map[raftcluster.NodeID]string) (*VectorPartitionShardSearchTCPDispatcherV1, error) {
+	return newVectorPartitionShardSearchTCPDispatcherV1(endpoints, nodeEndpoints, DefaultVectorPartitionCoordinatorLimitsV1().MaxConcurrentRequests)
+}
+
+func newVectorPartitionShardSearchTCPDispatcherV1(endpoints map[raftcluster.GroupID]string, nodeEndpoints map[raftcluster.GroupID]map[raftcluster.NodeID]string, maxConnectionsPerEndpoint int) (*VectorPartitionShardSearchTCPDispatcherV1, error) {
 	if len(endpoints) == 0 {
 		return nil, errors.New("nativewire: M5 TCP dispatcher requires endpoints")
+	}
+	if maxConnectionsPerEndpoint < 1 {
+		return nil, errors.New("nativewire: M5 TCP dispatcher requires a positive per-endpoint connection limit")
 	}
 	copyEndpoints := make(map[raftcluster.GroupID]string, len(endpoints))
 	for group, endpoint := range endpoints {
@@ -83,11 +94,12 @@ func NewVectorPartitionShardSearchTCPDispatcherWithNodeEndpointsV1(endpoints map
 		copyNodeEndpoints[group] = copyNodes
 	}
 	return &VectorPartitionShardSearchTCPDispatcherV1{
-		endpoints:     copyEndpoints,
-		nodeEndpoints: copyNodeEndpoints,
-		dial:          dialer.DialContext,
-		maxFrame:      vectorPartitionShardSearchTCPMaxFrameBytesV1,
-		conns:         make(map[string]*vectorPartitionShardSearchTCPPooledConnV1),
+		endpoints:                 copyEndpoints,
+		nodeEndpoints:             copyNodeEndpoints,
+		dial:                      dialer.DialContext,
+		maxFrame:                  vectorPartitionShardSearchTCPMaxFrameBytesV1,
+		maxConnectionsPerEndpoint: maxConnectionsPerEndpoint,
+		pools:                     make(map[string]*vectorPartitionShardSearchTCPEndpointPoolV1),
 	}, nil
 }
 
@@ -116,38 +128,32 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) dispatchVectorPartitionShard
 	if !ok {
 		return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorUnknownOwnerV1, GroupID: request.TargetGroupID, Err: ErrVectorPartitionShardSearchRouteMismatch}
 	}
-	pooled, err := d.acquire(requestCtx, endpoint)
+	pool, conn, err := d.acquire(requestCtx, endpoint)
 	if err != nil {
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPRetryableTransportErrorV1(requestCtx, request.TargetGroupID, err)
 	}
-	if err := pooled.acquire(requestCtx); err != nil {
-		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(requestCtx, request.TargetGroupID, err)
-	}
-	defer pooled.release()
-	conn := pooled.conn
+	reusable := false
+	defer func() { pool.release(conn, reusable) }()
 	stopCancelIO := vectorPartitionShardSearchTCPInterruptOnCancelV1(requestCtx, conn)
 	defer stopCancelIO()
 	if err := vectorPartitionShardSearchTCPDeadlineV1(requestCtx, request.DeadlineUnixNano, conn); err != nil {
-		d.discard(endpoint, pooled)
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPRetryableTransportErrorV1(requestCtx, request.TargetGroupID, err)
 	}
 	frame := vectorPartitionShardSearchTCPFrameV1{Request: &request}
 	if err := writeVectorPartitionShardSearchTCPFrameV1(conn, frame, d.maxFrame); err != nil {
-		d.discard(endpoint, pooled)
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPRetryableTransportErrorV1(requestCtx, request.TargetGroupID, err)
 	}
 	frame, err = readVectorPartitionShardSearchTCPFrameV1(conn, d.maxFrame)
 	if err != nil {
-		d.discard(endpoint, pooled)
 		if request.DeadlineUnixNano != 0 && !time.Now().Before(time.Unix(0, request.DeadlineUnixNano)) {
 			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorDeadlineV1, GroupID: request.TargetGroupID, Err: context.DeadlineExceeded}
 		}
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPRetryableTransportErrorV1(requestCtx, request.TargetGroupID, err)
 	}
 	if frame.Request != nil || (frame.Response == nil) == (frame.Error == nil) {
-		d.discard(endpoint, pooled)
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, errors.New("ambiguous M5 response frame"))
 	}
+	reusable = true
 	if frame.Error != nil {
 		_ = conn.SetDeadline(time.Time{})
 		return VectorPartitionShardSearchResponseV1{}, frame.Error.toError()
@@ -165,56 +171,93 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) endpoint(group raftcluster.G
 	endpoint, ok := d.endpoints[group]
 	return endpoint, ok
 }
-func (d *VectorPartitionShardSearchTCPDispatcherV1) acquire(ctx context.Context, endpoint string) (*vectorPartitionShardSearchTCPPooledConnV1, error) {
+func (d *VectorPartitionShardSearchTCPDispatcherV1) acquire(ctx context.Context, endpoint string) (*vectorPartitionShardSearchTCPEndpointPoolV1, net.Conn, error) {
 	d.mu.Lock()
 	if d.closed {
 		d.mu.Unlock()
-		return nil, net.ErrClosed
+		return nil, nil, net.ErrClosed
 	}
-	if pooled := d.conns[endpoint]; pooled != nil {
-		d.mu.Unlock()
-		return pooled, nil
+	pool := d.pools[endpoint]
+	if pool == nil {
+		if d.pools == nil {
+			d.pools = make(map[string]*vectorPartitionShardSearchTCPEndpointPoolV1)
+		}
+		maxConnections := d.maxConnectionsPerEndpoint
+		if maxConnections == 0 {
+			maxConnections = DefaultVectorPartitionCoordinatorLimitsV1().MaxConcurrentRequests
+		}
+		pool = &vectorPartitionShardSearchTCPEndpointPoolV1{
+			slots: make(chan struct{}, maxConnections),
+			all:   make(map[net.Conn]struct{}),
+		}
+		d.pools[endpoint] = pool
 	}
 	d.mu.Unlock()
-	conn, err := d.dial(ctx, "tcp", endpoint)
+	conn, err := pool.acquire(ctx, d.dial, endpoint)
+	return pool, conn, err
+}
+
+func (p *vectorPartitionShardSearchTCPEndpointPoolV1) acquire(ctx context.Context, dial func(context.Context, string, string) (net.Conn, error), endpoint string) (net.Conn, error) {
+	select {
+	case p.slots <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		<-p.slots
+		return nil, net.ErrClosed
+	}
+	if n := len(p.idle); n != 0 {
+		conn := p.idle[n-1]
+		p.idle = p.idle[:n-1]
+		p.mu.Unlock()
+		return conn, nil
+	}
+	p.mu.Unlock()
+	conn, err := dial(ctx, "tcp", endpoint)
 	if err != nil {
+		<-p.slots
 		return nil, err
 	}
-	pooled := &vectorPartitionShardSearchTCPPooledConnV1{conn: conn, lease: make(chan struct{}, 1)}
-	d.mu.Lock()
-	if d.closed {
-		d.mu.Unlock()
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
 		_ = conn.Close()
+		<-p.slots
 		return nil, net.ErrClosed
 	}
-	if existing := d.conns[endpoint]; existing != nil {
-		d.mu.Unlock()
+	p.all[conn] = struct{}{}
+	p.mu.Unlock()
+	return conn, nil
+}
+func (p *vectorPartitionShardSearchTCPEndpointPoolV1) release(conn net.Conn, reusable bool) {
+	p.mu.Lock()
+	closed := p.closed
+	if reusable && !closed {
+		p.idle = append(p.idle, conn)
+	} else {
+		delete(p.all, conn)
+	}
+	p.mu.Unlock()
+	if !reusable || closed {
 		_ = conn.Close()
-		return existing, nil
 	}
-	if d.conns == nil {
-		d.conns = make(map[string]*vectorPartitionShardSearchTCPPooledConnV1)
-	}
-	d.conns[endpoint] = pooled
-	d.mu.Unlock()
-	return pooled, nil
+	<-p.slots
 }
-func (p *vectorPartitionShardSearchTCPPooledConnV1) acquire(ctx context.Context) error {
-	select {
-	case p.lease <- struct{}{}:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+func (p *vectorPartitionShardSearchTCPEndpointPoolV1) close() error {
+	p.mu.Lock()
+	p.closed = true
+	conns := p.all
+	p.all = make(map[net.Conn]struct{})
+	p.idle = nil
+	p.mu.Unlock()
+	var errs []error
+	for conn := range conns {
+		errs = append(errs, conn.Close())
 	}
-}
-func (p *vectorPartitionShardSearchTCPPooledConnV1) release() { <-p.lease }
-func (d *VectorPartitionShardSearchTCPDispatcherV1) discard(endpoint string, pooled *vectorPartitionShardSearchTCPPooledConnV1) {
-	d.mu.Lock()
-	if d.conns[endpoint] == pooled {
-		delete(d.conns, endpoint)
-	}
-	d.mu.Unlock()
-	_ = pooled.conn.Close()
+	return errors.Join(errs...)
 }
 func (d *VectorPartitionShardSearchTCPDispatcherV1) Close() error {
 	if d == nil {
@@ -226,12 +269,12 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) Close() error {
 		return nil
 	}
 	d.closed = true
-	conns := d.conns
-	d.conns = make(map[string]*vectorPartitionShardSearchTCPPooledConnV1)
+	pools := d.pools
+	d.pools = make(map[string]*vectorPartitionShardSearchTCPEndpointPoolV1)
 	d.mu.Unlock()
 	var errs []error
-	for _, pooled := range conns {
-		errs = append(errs, pooled.conn.Close())
+	for _, pool := range pools {
+		errs = append(errs, pool.close())
 	}
 	return errors.Join(errs...)
 }
