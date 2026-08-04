@@ -483,7 +483,7 @@ func TestVectorPartitionProductionTopologyAllowsCoordinatorOnlyAndRejectsIncompl
 	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
 		t.Fatal("malformed owner endpoint succeeded")
 	}
-	for _, endpoint := range []string{":2", "0.0.0.0:2", "[::]:2", "[fe80::1]:2"} {
+	for _, endpoint := range []string{":2", "0.0.0.0:2", "[::]:2", "[fe80::1]:2", "[::1%lo]:2"} {
 		opts.Endpoints["group-b"] = endpoint
 		if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
 			t.Fatalf("unspecified owner endpoint %q succeeded", endpoint)
