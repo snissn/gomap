@@ -323,7 +323,7 @@ func TestVectorPartitionProductionTopologyRejectsSharedShardListenerV1(t *testin
 		return &VectorPartitionShardSearchServiceV1{localGroup: group, localNodeID: node, limits: DefaultVectorPartitionShardSearchLimitsV1(), route: vectorPartitionShardSearchRouteV1{placement: placement, hints: map[raftcluster.GroupID]raftcluster.NodeID{"group-a": "", "group-b": ""}}}
 	}
 	_, err = NewVectorPartitionProductionTopologyV1(VectorPartitionProductionTopologyOptionsV1{Catalog: catalog, Placement: placement, RouterSource: &testVectorPartitionCoordinatorRouterSourceV1{}, ReplicatedLifecycle: &recordingVectorPartitionReplicatedLifecycleAuthorityV1{}, Endpoints: map[raftcluster.GroupID]string{"group-a": endpointA, "group-b": endpointB}, Shards: []VectorPartitionProductionShardV1{{GroupID: "group-a", Listener: listener, Service: service("group-a", "node-a")}, {GroupID: "group-b", Listener: listener, Service: service("group-b", "node-b")}}})
-	if err == nil || !strings.Contains(err.Error(), "share a listener") {
+	if err == nil || !strings.Contains(err.Error(), "uses shard") {
 		t.Fatalf("shared shard listener error=%v", err)
 	}
 }
@@ -473,6 +473,27 @@ func TestVectorPartitionProductionTopologyAllowsCoordinatorOnlyAndRejectsIncompl
 	}
 	if err := topology.Close(); err != nil {
 		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	service, err := NewVectorPartitionShardSearchServiceV1(VectorPartitionShardSearchServiceOptionsV1{Catalog: catalog, Placement: placement, LocalNodeID: "node-a", LocalGroupID: "group-a", ReadCoordinator: &fakeVectorPartitionReadCoordinatorV1{}, GenerationSource: &fakeVectorPartitionGenerationSourceV1{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	opts.Shards = []VectorPartitionProductionShardV1{{GroupID: "group-a", Listener: listener, Service: service}}
+	opts.Endpoints = map[raftcluster.GroupID]string{"group-a": fmt.Sprintf("127.0.0.1:%d", port), "group-b": fmt.Sprintf("127.0.0.2:%d", port)}
+	opts.NodeEndpoints = nil
+	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
+		t.Fatal("foreign owner endpoint used wildcard shard listener")
+	}
+	opts.Endpoints["group-b"] = "127.0.0.1:2"
+	opts.NodeEndpoints = map[raftcluster.GroupID]map[raftcluster.NodeID]string{"group-b": {"node-b": fmt.Sprintf("127.0.0.2:%d", port)}}
+	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
+		t.Fatal("foreign node endpoint used wildcard shard listener")
 	}
 }
 

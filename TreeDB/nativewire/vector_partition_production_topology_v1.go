@@ -174,6 +174,32 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 		if endpoint := opts.NodeEndpoints[shard.GroupID][shard.Service.localNodeID]; endpoint != "" && !vectorPartitionProductionEndpointMatchesListenerV1(endpoint, shard.Listener) {
 			return nil, fmt.Errorf("nativewire: production vector topology shard %q local node endpoint does not match listener", shard.GroupID)
 		}
+		for group, endpoint := range h.endpoints {
+			if group == shard.GroupID {
+				continue
+			}
+			usesLocalListener, err := vectorPartitionProductionEndpointUsesListenerV1(endpoint, shard.Listener)
+			if err != nil {
+				return nil, fmt.Errorf("nativewire: production vector topology group %q endpoint: %w", group, err)
+			}
+			if usesLocalListener {
+				return nil, fmt.Errorf("nativewire: production vector topology group %q uses shard %q listener", group, shard.GroupID)
+			}
+		}
+		for group, nodes := range opts.NodeEndpoints {
+			if group == shard.GroupID {
+				continue
+			}
+			for node, endpoint := range nodes {
+				usesLocalListener, err := vectorPartitionProductionEndpointUsesListenerV1(endpoint, shard.Listener)
+				if err != nil {
+					return nil, fmt.Errorf("nativewire: production vector topology node %q endpoint: %w", node, err)
+				}
+				if usesLocalListener {
+					return nil, fmt.Errorf("nativewire: production vector topology node %q in %q uses shard %q listener", node, group, shard.GroupID)
+				}
+			}
+		}
 		for _, member := range group.Members {
 			if member == shard.Service.localNodeID {
 				continue
