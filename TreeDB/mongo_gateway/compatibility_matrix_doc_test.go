@@ -83,20 +83,60 @@ func replaceGeneratedCapabilitySummary(doc string, manifest MongoGatewayCapabili
 }
 
 func replaceGeneratedCapabilityBlock(doc, begin, end string, generate func(string) (string, error)) (string, error) {
-	start := strings.Index(doc, begin)
-	if start < 0 {
+	beginCount := strings.Count(doc, begin)
+	if beginCount == 0 {
 		return "", fmt.Errorf("missing begin marker %q", begin)
 	}
-	endRel := strings.Index(doc[start:], end)
-	if endRel < 0 {
+	if beginCount != 1 {
+		return "", fmt.Errorf("expected exactly one begin marker %q, found %d", begin, beginCount)
+	}
+	endCount := strings.Count(doc, end)
+	if endCount == 0 {
 		return "", fmt.Errorf("missing end marker %q", end)
 	}
+	if endCount != 1 {
+		return "", fmt.Errorf("expected exactly one end marker %q, found %d", end, endCount)
+	}
+	start := strings.Index(doc, begin)
+	endRel := strings.Index(doc[start:], end)
 	blockEnd := start + endRel + len(end)
 	generated, err := generate(markerLineNewline(doc, start))
 	if err != nil {
 		return "", err
 	}
 	return doc[:start] + generated + doc[blockEnd:], nil
+}
+
+func TestReplaceGeneratedCapabilityBlockRejectsDuplicateMarkers(t *testing.T) {
+	generate := func(string) (string, error) { return "generated", nil }
+	tests := []struct {
+		name string
+		doc  string
+		want string
+	}{
+		{
+			name: "duplicate begin",
+			doc:  compatibilityMatrixBegin + "\n" + compatibilityMatrixBegin + "\n" + compatibilityMatrixEnd,
+			want: "expected exactly one begin marker",
+		},
+		{
+			name: "duplicate end",
+			doc:  compatibilityMatrixBegin + "\n" + compatibilityMatrixEnd + "\n" + compatibilityMatrixEnd,
+			want: "expected exactly one end marker",
+		},
+		{
+			name: "additional complete block",
+			doc:  compatibilityMatrixBegin + "\n" + compatibilityMatrixEnd + "\n" + compatibilityMatrixBegin + "\n" + compatibilityMatrixEnd,
+			want: "expected exactly one begin marker",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := replaceGeneratedCapabilityBlock(tc.doc, compatibilityMatrixBegin, compatibilityMatrixEnd, generate); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("replace err=%v want %q", err, tc.want)
+			}
+		})
+	}
 }
 
 func generatedCompatibilityMatrix(manifest MongoGatewayCapabilityManifest, newline string) string {
