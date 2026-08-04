@@ -468,6 +468,9 @@ func vectorPartitionProductionEndpointAddressesV1(endpoint string) ([]*net.TCPAd
 			continue
 		}
 		address := &net.TCPAddr{IP: addr.IP, Port: port, Zone: addr.Zone}
+		if address.IP.IsLinkLocalUnicast() && address.Zone == "" {
+			return nil, errors.New("TCP endpoint link-local address requires a zone")
+		}
 		if address.Zone != "" {
 			iface, err := vectorPartitionProductionInterfaceForZoneV1(address.Zone)
 			if err != nil {
