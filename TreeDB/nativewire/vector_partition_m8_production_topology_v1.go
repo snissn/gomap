@@ -92,6 +92,15 @@ func NewVectorPartitionM8ProductionMultiGroupV1(ctx context.Context, opts Vector
 	if opts.Collection == nil || opts.RouterSource == nil || opts.Manifest.State != "ready" || len(opts.Manifest.Placements) < 4 {
 		return nil, errors.New("nativewire: M8 production topology requires ready persistent assets")
 	}
+	coordinatorLimits, err := normalizeVectorPartitionCoordinatorLimitsV1(opts.CoordinatorLimits)
+	if err != nil {
+		return nil, err
+	}
+	shardLimits, err := normalizeVectorPartitionShardSearchLimitsV1(opts.ShardLimits)
+	if err != nil {
+		return nil, err
+	}
+	opts.CoordinatorLimits, opts.ShardLimits = coordinatorLimits, shardLimits
 	groups, err := vectorPartitionM8ValidateAssetsV1(opts.Manifest, opts.GroupAssetSetDigests)
 	if err != nil {
 		return nil, err
@@ -197,7 +206,7 @@ func NewVectorPartitionM8ProductionMultiGroupV1(ctx context.Context, opts Vector
 		h.endpoints[group] = listener.Addr().String()
 		h.serve(group, listener, service)
 	}
-	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherV1(h.endpoints)
+	dispatcher, err := newVectorPartitionShardSearchTCPDispatcherV1(h.endpoints, nil, coordinatorLimits.MaxConcurrentRequests, shardLimits)
 	if err != nil {
 		return nil, err
 	}
