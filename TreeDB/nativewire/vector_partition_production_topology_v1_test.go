@@ -316,6 +316,37 @@ func TestVectorPartitionProductionEndpointMatchesListenerAddressFamilyV1(t *test
 	if !vectorPartitionProductionEndpointMatchesListenerV1(fmt.Sprintf("[::1]:%d", port), listener) {
 		t.Fatal("IPv6 listener rejected IPv6 endpoint")
 	}
+	dualStack, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Skipf("dual-stack listener unavailable: %v", err)
+	}
+	defer dualStack.Close()
+	bound := dualStack.Addr().(*net.TCPAddr)
+	if bound.IP.To4() != nil {
+		t.Skip("platform selected an IPv4 listener")
+	}
+	accepted := make(chan error, 1)
+	go func() {
+		conn, acceptErr := dualStack.Accept()
+		if acceptErr == nil {
+			acceptErr = conn.Close()
+		}
+		accepted <- acceptErr
+	}()
+	ipv4Endpoint := fmt.Sprintf("127.0.0.1:%d", bound.Port)
+	conn, err := net.DialTimeout("tcp4", ipv4Endpoint, time.Second)
+	if err != nil {
+		_ = dualStack.Close()
+		<-accepted
+		t.Skipf("dual-stack IPv4 unavailable: %v", err)
+	}
+	_ = conn.Close()
+	if err := <-accepted; err != nil {
+		t.Fatal(err)
+	}
+	if !vectorPartitionProductionEndpointMatchesListenerV1(ipv4Endpoint, dualStack) {
+		t.Fatal("dual-stack listener rejected reachable IPv4 endpoint")
+	}
 }
 
 func TestVectorPartitionProductionTopologyAllowsCoordinatorOnlyAndRejectsIncompleteOwnersV1(t *testing.T) {

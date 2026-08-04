@@ -302,7 +302,15 @@ func vectorPartitionProductionEndpointMatchesListenerV1(endpoint string, listene
 	if !bound.IP.IsUnspecified() {
 		return bound.IP.Equal(advertised.IP)
 	}
-	return (bound.IP.To4() != nil) == (advertised.IP.To4() != nil)
+	if bound.IP.To4() != nil || advertised.IP.To4() == nil {
+		return (bound.IP.To4() != nil) == (advertised.IP.To4() != nil)
+	}
+	tcpListener, ok := listener.(*net.TCPListener)
+	if !ok {
+		return false
+	}
+	ipv6Only, ok := vectorPartitionProductionListenerIPv6OnlyV1(tcpListener)
+	return ok && !ipv6Only
 }
 
 func vectorPartitionProductionEndpointKeyV1(endpoint string) (string, error) {
