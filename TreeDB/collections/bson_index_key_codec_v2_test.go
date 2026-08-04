@@ -195,6 +195,14 @@ func TestBSONIndexKeyCodecV2StringsDescendingAndBoundaries(t *testing.T) {
 	if err != nil || string(id) != "document-7" {
 		t.Fatalf("document ID=%q err=%v", id, err)
 	}
+	key, err = bsonIndexEntryKeyV2(first, []byte("document\x00seven"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err = bsonIndexKeyDocumentIDV2(key)
+	if err != nil || string(id) != "document\x00seven" {
+		t.Fatalf("escaped document ID=%q err=%v", id, err)
+	}
 }
 
 func TestBSONIndexKeyCodecV2RejectsUnsupportedMalformedAndOverBudget(t *testing.T) {
@@ -217,6 +225,10 @@ func TestBSONIndexKeyCodecV2RejectsUnsupportedMalformedAndOverBudget(t *testing.
 	if _, err := encodeBSONIndexKeyComponentV2(mustBSONIndexRawValueV2(t, tooLong)); err == nil || !strings.Contains(err.Error(), "too large") {
 		t.Fatalf("over-budget string error=%v", err)
 	}
+	escapedTooLong := strings.Repeat("\x00", bsonIndexKeyComponentV2MaxBytes/2+1)
+	if _, err := encodeBSONIndexKeyComponentV2(mustBSONIndexRawValueV2(t, escapedTooLong)); err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("over-budget escaped string error=%v", err)
+	}
 
 	corrupt := [][]byte{
 		nil,
@@ -235,6 +247,7 @@ func TestBSONIndexKeyCodecV2RejectsUnsupportedMalformedAndOverBudget(t *testing.
 		{bsonIndexKeyComponentV2AscendingMarker, bsonIndexKeyTagNumberV2, bsonIndexNumberPositiveFiniteV2, 0x80, 0x00, 0xb0},
 		{bsonIndexKeyComponentV2AscendingMarker, bsonIndexKeyTagNumberV2, bsonIndexNumberPositiveFiniteV2, 0x80, 0x00, 0x10, 0x00}, // leading zero digit
 		{bsonIndexKeyComponentV2AscendingMarker, bsonIndexKeyTagNumberV2, bsonIndexNumberPositiveFiniteV2, 0x80, 0x00, 0x21, 0x00}, // trailing zero digit
+		{bsonIndexKeyComponentV2AscendingMarker, bsonIndexKeyTagNumberV2, bsonIndexNumberPositiveFiniteV2, 0x00, 0x00, 0x20},       // decoded exponent below the work bound
 	}
 	for i, encoded := range corrupt {
 		if _, _, err := decodeBSONIndexKeyComponentV2(encoded); err == nil {

@@ -101,44 +101,31 @@ func appendBSONIndexKeyComponentV2(dst []byte, value bson.RawValue) ([]byte, []b
 		dst = append(dst, bsonIndexKeyTagNullV2)
 	case bson.TypeInt32, bson.TypeInt64, bson.TypeDouble, bson.TypeDecimal128:
 		dst = append(dst, bsonIndexKeyTagNumberV2)
-		number, err := canonicalBSONIndexNumberV2(value)
+		var err error
+		dst, err = appendCanonicalBSONIndexNumberV2(dst, value)
 		if err != nil {
 			return dst[:start], nil, err
 		}
-		dst = append(dst, number.class)
-		if number.class == bsonIndexNumberNegativeFiniteV2 || number.class == bsonIndexNumberPositiveFiniteV2 {
-			digits := number.coefficient.Text(10)
-			if len(digits) == 0 || len(digits) > bsonIndexKeyNumericV2MaxDigits {
-				return dst[:start], nil, errBSONIndexKeyV2TooLarge
-			}
-			adjustedExponent := int64(number.exponent) + int64(len(digits)) - 1
-			if adjustedExponent < math.MinInt16 || adjustedExponent > math.MaxInt16 {
-				return dst[:start], nil, fmt.Errorf("%w: adjusted decimal exponent %d", errBSONIndexKeyV2TooLarge, adjustedExponent)
-			}
-			payloadStart := len(dst)
-			dst = binary.BigEndian.AppendUint16(dst, uint16(int16(adjustedExponent))^0x8000)
-			dst, err = appendPackedBSONIndexDigitsV2(dst, digits)
-			if err != nil {
-				return dst[:start], nil, err
-			}
-			if number.class == bsonIndexNumberNegativeFiniteV2 {
-				complementBSONIndexBytesV2(dst[payloadStart:])
-			}
-		}
 	case bson.TypeString:
-		text, ok := value.StringValueOK()
-		if !ok || !utf8.ValidString(text) {
+		text, ok := bsonIndexStringBytesV2(value)
+		if !ok || !utf8.Valid(text) {
 			return dst[:start], nil, fmt.Errorf("%w: invalid UTF-8 BSON string", errBSONIndexKeyV2Malformed)
 		}
-		if len(text) >= bsonIndexKeyComponentV2MaxBytes {
-			return dst[:start], nil, fmt.Errorf("%w: string length %d", errBSONIndexKeyV2TooLarge, len(text))
+		escapedLength := len(text)
+		for _, value := range text {
+			if value == 0 {
+				escapedLength++
+			}
+		}
+		if escapedLength > bsonIndexKeyComponentV2MaxBytes-4 {
+			return dst[:start], nil, fmt.Errorf("%w: escaped string length %d", errBSONIndexKeyV2TooLarge, escapedLength)
 		}
 		dst = append(dst, bsonIndexKeyTagStringV2)
-		for i := 0; i < len(text); i++ {
-			if text[i] == 0 {
+		for _, value := range text {
+			if value == 0 {
 				dst = append(dst, 0, 0xff)
 			} else {
-				dst = append(dst, text[i])
+				dst = append(dst, value)
 			}
 		}
 		dst = append(dst, 0, 0)
@@ -184,6 +171,160 @@ func appendBSONIndexKeyComponentV2(dst []byte, value bson.RawValue) ([]byte, []b
 		return dst[:start], nil, fmt.Errorf("%w: encoded length %d", errBSONIndexKeyV2TooLarge, len(component))
 	}
 	return dst, component, nil
+}
+
+func bsonIndexStringBytesV2(value bson.RawValue) ([]byte, bool) {
+	if value.Type != bson.TypeString || len(value.Value) < 5 {
+		return nil, false
+	}
+	length := int64(int32(binary.LittleEndian.Uint32(value.Value[:4])))
+	if length < 1 || length != int64(len(value.Value)-4) || value.Value[len(value.Value)-1] != 0 {
+		return nil, false
+	}
+	return value.Value[4 : len(value.Value)-1], true
+}
+
+func appendCanonicalBSONIndexNumberV2(dst []byte, value bson.RawValue) ([]byte, error) {
+	switch value.Type {
+	case bson.TypeInt32:
+		integer, ok := value.Int32OK()
+		if !ok {
+			return dst, fmt.Errorf("%w: invalid int32", errBSONIndexKeyV2Malformed)
+		}
+		return appendBSONIndexIntegerV2(dst, int64(integer))
+	case bson.TypeInt64:
+		integer, ok := value.Int64OK()
+		if !ok {
+			return dst, fmt.Errorf("%w: invalid int64", errBSONIndexKeyV2Malformed)
+		}
+		return appendBSONIndexIntegerV2(dst, integer)
+	case bson.TypeDouble:
+		number, ok := value.DoubleOK()
+		if !ok {
+			return dst, fmt.Errorf("%w: invalid double", errBSONIndexKeyV2Malformed)
+		}
+		switch {
+		case math.IsInf(number, -1):
+			return append(dst, bsonIndexNumberNegativeInfinityV2), nil
+		case math.IsInf(number, 1):
+			return append(dst, bsonIndexNumberPositiveInfinityV2), nil
+		case math.IsNaN(number):
+			return append(dst, bsonIndexNumberNaNV2), nil
+		}
+		if out, ok, err := appendFastFiniteBSONIndexFloat64V2(dst, number); ok || err != nil {
+			return out, err
+		}
+	}
+
+	number, err := canonicalBSONIndexNumberV2(value)
+	if err != nil {
+		return dst, err
+	}
+	if number.class != bsonIndexNumberNegativeFiniteV2 && number.class != bsonIndexNumberPositiveFiniteV2 {
+		return append(dst, number.class), nil
+	}
+	if number.coefficient == nil {
+		return dst, fmt.Errorf("%w: finite number without coefficient", errBSONIndexKeyV2Malformed)
+	}
+	return appendCanonicalBSONIndexFiniteV2(dst, number.class, number.coefficient.Text(10), number.exponent)
+}
+
+func appendBSONIndexIntegerV2(dst []byte, integer int64) ([]byte, error) {
+	negative := integer < 0
+	magnitude := uint64(integer)
+	if negative {
+		magnitude = uint64(-(integer + 1)) + 1
+	}
+	return appendBSONIndexUintV2(dst, magnitude, negative, 0)
+}
+
+func appendFastFiniteBSONIndexFloat64V2(dst []byte, number float64) ([]byte, bool, error) {
+	bits := math.Float64bits(number)
+	negative := bits>>63 != 0
+	exponentBits := int((bits >> 52) & 0x7ff)
+	mantissa := bits & ((uint64(1) << 52) - 1)
+	if exponentBits == 0 && mantissa == 0 {
+		return append(dst, bsonIndexNumberZeroV2), true, nil
+	}
+
+	var binaryExponent int
+	if exponentBits == 0 {
+		binaryExponent = -1022 - 52
+	} else {
+		mantissa |= uint64(1) << 52
+		binaryExponent = exponentBits - 1023 - 52
+	}
+	for binaryExponent < 0 && mantissa&1 == 0 {
+		mantissa >>= 1
+		binaryExponent++
+	}
+
+	var coefficient uint64
+	decimalExponent := 0
+	if binaryExponent >= 0 {
+		if binaryExponent >= 64 || mantissa > math.MaxUint64>>uint(binaryExponent) {
+			return dst, false, nil
+		}
+		coefficient = mantissa << uint(binaryExponent)
+	} else {
+		power := -binaryExponent
+		scale := uint64(1)
+		for i := 0; i < power; i++ {
+			if scale > math.MaxUint64/5 {
+				return dst, false, nil
+			}
+			scale *= 5
+		}
+		if mantissa > math.MaxUint64/scale {
+			return dst, false, nil
+		}
+		coefficient = mantissa * scale
+		decimalExponent = -power
+	}
+	out, err := appendBSONIndexUintV2(dst, coefficient, negative, decimalExponent)
+	return out, true, err
+}
+
+func appendBSONIndexUintV2(dst []byte, magnitude uint64, negative bool, exponent int) ([]byte, error) {
+	if magnitude == 0 {
+		return append(dst, bsonIndexNumberZeroV2), nil
+	}
+	var scratch [20]byte
+	digits := strconv.AppendUint(scratch[:0], magnitude, 10)
+	for len(digits) > 1 && digits[len(digits)-1] == '0' {
+		digits = digits[:len(digits)-1]
+		exponent++
+	}
+	class := bsonIndexNumberPositiveFiniteV2
+	if negative {
+		class = bsonIndexNumberNegativeFiniteV2
+	}
+	return appendCanonicalBSONIndexFiniteV2(dst, class, string(digits), exponent)
+}
+
+func appendCanonicalBSONIndexFiniteV2(dst []byte, class byte, digits string, exponent int) ([]byte, error) {
+	dst = append(dst, class)
+	if class != bsonIndexNumberNegativeFiniteV2 && class != bsonIndexNumberPositiveFiniteV2 {
+		return dst, nil
+	}
+	if len(digits) == 0 || len(digits) > bsonIndexKeyNumericV2MaxDigits {
+		return dst, errBSONIndexKeyV2TooLarge
+	}
+	adjustedExponent := int64(exponent) + int64(len(digits)) - 1
+	if exponent < -bsonIndexKeyDecimalExponentWorkBound || exponent > bsonIndexKeyDecimalExponentWorkBound || adjustedExponent < math.MinInt16 || adjustedExponent > math.MaxInt16 {
+		return dst, fmt.Errorf("%w: decimal exponent %d adjusted %d", errBSONIndexKeyV2TooLarge, exponent, adjustedExponent)
+	}
+	payloadStart := len(dst)
+	dst = binary.BigEndian.AppendUint16(dst, uint16(int16(adjustedExponent))^0x8000)
+	var err error
+	dst, err = appendPackedBSONIndexDigitsV2(dst, digits)
+	if err != nil {
+		return dst, err
+	}
+	if class == bsonIndexNumberNegativeFiniteV2 {
+		complementBSONIndexBytesV2(dst[payloadStart:])
+	}
+	return dst, nil
 }
 
 func canonicalBSONIndexNumberV2(value bson.RawValue) (bsonIndexKeyCanonicalNumberV2, error) {
@@ -316,19 +457,22 @@ func appendPackedBSONIndexDigitsV2(dst []byte, digits string) ([]byte, error) {
 	if len(digits) == 0 || len(digits) > bsonIndexKeyNumericV2MaxDigits || digits[0] == '0' || digits[len(digits)-1] == '0' {
 		return dst, fmt.Errorf("%w: non-canonical decimal coefficient", errBSONIndexKeyV2Malformed)
 	}
-	nibbles := make([]byte, 0, len(digits)+2)
-	for i := range digits {
-		if digits[i] < '0' || digits[i] > '9' {
+	for index := 0; index < len(digits); index += 2 {
+		if digits[index] < '0' || digits[index] > '9' {
 			return dst, fmt.Errorf("%w: invalid decimal digit", errBSONIndexKeyV2Malformed)
 		}
-		nibbles = append(nibbles, digits[i]-'0'+1)
+		high := digits[index] - '0' + 1
+		low := byte(0)
+		if index+1 < len(digits) {
+			if digits[index+1] < '0' || digits[index+1] > '9' {
+				return dst, fmt.Errorf("%w: invalid decimal digit", errBSONIndexKeyV2Malformed)
+			}
+			low = digits[index+1] - '0' + 1
+		}
+		dst = append(dst, high<<4|low)
 	}
-	nibbles = append(nibbles, 0)
-	if len(nibbles)%2 != 0 {
-		nibbles = append(nibbles, 0)
-	}
-	for i := 0; i < len(nibbles); i += 2 {
-		dst = append(dst, nibbles[i]<<4|nibbles[i+1])
+	if len(digits)%2 == 0 {
+		dst = append(dst, 0)
 	}
 	return dst, nil
 }
@@ -498,6 +642,9 @@ func decodeBSONIndexNumberV2(encoded []byte, logical func(int) byte, classIndex 
 					return "", 0, fmt.Errorf("%w: non-canonical numeric coefficient", errBSONIndexKeyV2Malformed)
 				}
 				exponent := int(adjustedExponent) - len(digits) + 1
+				if exponent < -bsonIndexKeyDecimalExponentWorkBound || exponent > bsonIndexKeyDecimalExponentWorkBound {
+					return "", 0, fmt.Errorf("%w: decimal exponent %d", errBSONIndexKeyV2TooLarge, exponent)
+				}
 				prefix := ""
 				if negative {
 					prefix = "-"

@@ -7,8 +7,8 @@ belong to #4062 and later issues. Existing typed-v1 indexes are unchanged.
 
 The v2 scalar component is a versioned, bytewise-sortable encoding for the BSON
 scalar types currently selected for the next index generation. Byte comparison
-of ascending components matches the gateway's exact BSON comparator, including
-numeric equality across Int32, Int64, Double, and Decimal128. Components are
+of ascending components matches the targeted MongoDB/BSON scalar ordering,
+including numeric equality across Int32, Int64, Double, and Decimal128. Components are
 self-delimiting so they can be concatenated for compound keys. The document-ID
 suffix is encoded separately and never changes scalar comparison.
 
@@ -69,7 +69,11 @@ stores seconds then ordinal as two unsigned big-endian 32-bit words.
 
 Malformed raw BSON, invalid UTF-8, non-canonical numeric coefficients,
 unterminated components, invalid fixed-width payloads, and components exceeding
-1 MiB are rejected.
+1 MiB are rejected. String escape growth is counted before the component is
+appended, so embedded NUL bytes cannot cross that bound through expansion.
+Finite numeric coefficients are limited to 2,048 decimal digits and normalized
+decimal exponents to the inclusive range `[-10000, 10000]`; decoding applies
+the same limits to corrupted or hand-built components.
 
 ## Descending and compound keys
 
