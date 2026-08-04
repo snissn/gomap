@@ -115,26 +115,30 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 			if !slices.Contains(resolved.Members, node) {
 				return nil, fmt.Errorf("nativewire: production vector topology node %q is not a member of %q", node, group)
 			}
-			key, err := vectorPartitionProductionEndpointKeyV1(endpoint)
+			keys, err := vectorPartitionProductionEndpointKeysV1(endpoint)
 			if err != nil {
 				return nil, fmt.Errorf("nativewire: production vector topology node %q endpoint: %w", node, err)
 			}
-			if owner := groupEndpointNodes[key]; owner != "" && owner != node {
-				return nil, fmt.Errorf("nativewire: production vector topology nodes %q and %q in %q share an endpoint", owner, node, group)
+			for _, key := range keys {
+				if owner := groupEndpointNodes[key]; owner != "" && owner != node {
+					return nil, fmt.Errorf("nativewire: production vector topology nodes %q and %q in %q share an endpoint", owner, node, group)
+				}
+				groupEndpointNodes[key] = node
 			}
-			groupEndpointNodes[key] = node
 		}
 	}
 	endpointOwners := make(map[string]raftcluster.GroupID, len(opts.Endpoints)+len(opts.NodeEndpoints))
 	recordEndpoint := func(group raftcluster.GroupID, endpoint string) error {
-		key, err := vectorPartitionProductionEndpointKeyV1(endpoint)
+		keys, err := vectorPartitionProductionEndpointKeysV1(endpoint)
 		if err != nil {
 			return fmt.Errorf("nativewire: production vector topology group %q endpoint: %w", group, err)
 		}
-		if owner := endpointOwners[key]; owner != "" && owner != group {
-			return fmt.Errorf("nativewire: production vector topology groups %q and %q share an endpoint", owner, group)
+		for _, key := range keys {
+			if owner := endpointOwners[key]; owner != "" && owner != group {
+				return fmt.Errorf("nativewire: production vector topology groups %q and %q share an endpoint", owner, group)
+			}
+			endpointOwners[key] = group
 		}
-		endpointOwners[key] = group
 		return nil
 	}
 	for group, endpoint := range h.endpoints {
@@ -300,11 +304,11 @@ func vectorPartitionProductionEndpointMatchesListenerV1(endpoint string, listene
 		return false
 	}
 	for _, address := range advertised {
-		if vectorPartitionProductionEndpointAddressMatchesListenerV1(address, listener) {
-			return true
+		if !vectorPartitionProductionEndpointAddressMatchesListenerV1(address, listener) {
+			return false
 		}
 	}
-	return false
+	return len(advertised) != 0
 }
 
 func vectorPartitionProductionEndpointAddressMatchesListenerV1(advertised *net.TCPAddr, listener net.Listener) bool {
@@ -412,18 +416,16 @@ func vectorPartitionProductionEndpointAddressesV1(endpoint string) ([]*net.TCPAd
 	return addresses, nil
 }
 
-func vectorPartitionProductionEndpointKeyV1(endpoint string) (string, error) {
-	resolved, err := net.ResolveTCPAddr("tcp", endpoint)
+func vectorPartitionProductionEndpointKeysV1(endpoint string) ([]string, error) {
+	resolved, err := vectorPartitionProductionEndpointAddressesV1(endpoint)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	if resolved.Port == 0 {
-		return "", errors.New("TCP endpoint port is zero")
+	keys := make([]string, len(resolved))
+	for i, address := range resolved {
+		keys[i] = address.String()
 	}
-	if len(resolved.IP) == 0 || resolved.IP.IsUnspecified() {
-		return "", errors.New("TCP endpoint host is unspecified")
-	}
-	return resolved.String(), nil
+	return keys, nil
 }
 
 func (h *VectorPartitionProductionTopologyV1) Close() error {

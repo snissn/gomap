@@ -351,6 +351,25 @@ func TestVectorPartitionProductionEndpointMatchesListenerAddressFamilyV1(t *test
 			t.Fatalf("resolved endpoint omitted localhost address %s: %+v", address.IP, addresses)
 		}
 	}
+	allCompatible := true
+	for _, address := range addresses {
+		allCompatible = allCompatible && vectorPartitionProductionEndpointAddressMatchesListenerV1(address, wildcard)
+	}
+	if matches := vectorPartitionProductionEndpointMatchesListenerV1(wildcardEndpoint, wildcard); matches != allCompatible {
+		t.Fatalf("wildcard listener hostname match=%t want=%t addresses=%+v", matches, allCompatible, addresses)
+	}
+	keys, err := vectorPartitionProductionEndpointKeysV1(wildcardEndpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != len(addresses) {
+		t.Fatalf("endpoint keys=%v addresses=%+v", keys, addresses)
+	}
+	for i, address := range addresses {
+		if keys[i] != address.String() {
+			t.Fatalf("endpoint key[%d]=%q want %q", i, keys[i], address)
+		}
+	}
 	if uses, err := vectorPartitionProductionEndpointUsesListenerV1(wildcardEndpoint, wildcard); err != nil || !uses {
 		t.Fatalf("wildcard listener hostname match=%t error=%v addresses=%+v", uses, err, addresses)
 	}
