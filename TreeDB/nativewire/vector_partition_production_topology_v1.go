@@ -358,7 +358,7 @@ func vectorPartitionProductionEndpointAddressMatchesListenerV1(advertised *net.T
 		return false
 	}
 	if !bound.IP.IsUnspecified() {
-		return bound.IP.Equal(advertised.IP)
+		return bound.IP.Equal(advertised.IP) && (bound.IP.To4() != nil || bound.Zone == advertised.Zone)
 	}
 	if bound.IP.To4() != nil || advertised.IP.To4() == nil {
 		return (bound.IP.To4() != nil) == (advertised.IP.To4() != nil)

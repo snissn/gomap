@@ -338,6 +338,13 @@ func TestVectorPartitionProductionEndpointMatchesListenerAddressFamilyV1(t *test
 	if vectorPartitionProductionEndpointMatchesListenerV1(endpoint, &temporaryWildcardTCPListenerV1{Listener: tcpListener, addr: nonTCPAddrV1(endpoint)}) {
 		t.Fatal("non-TCP listener matched TCP endpoint")
 	}
+	scoped := &temporaryWildcardTCPListenerV1{Listener: tcpListener, addr: &net.TCPAddr{IP: net.ParseIP("fe80::1"), Port: 1, Zone: "eth0"}}
+	if !vectorPartitionProductionEndpointAddressMatchesListenerV1(&net.TCPAddr{IP: net.ParseIP("fe80::1"), Port: 1, Zone: "eth0"}, scoped) {
+		t.Fatal("matching scoped IPv6 endpoint was rejected")
+	}
+	if vectorPartitionProductionEndpointAddressMatchesListenerV1(&net.TCPAddr{IP: net.ParseIP("fe80::1"), Port: 1, Zone: "lo"}, scoped) {
+		t.Fatal("mismatched scoped IPv6 zone was accepted")
+	}
 	wildcard, err := net.Listen("tcp4", "0.0.0.0:0")
 	if err != nil {
 		t.Fatal(err)
