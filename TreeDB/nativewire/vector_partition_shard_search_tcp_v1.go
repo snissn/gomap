@@ -154,12 +154,11 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) dispatchVectorPartitionShard
 	if frame.Request != nil || (frame.Response == nil) == (frame.Error == nil) {
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, errors.New("ambiguous M5 response frame"))
 	}
-	reusable = true
+	stopCancelIO()
+	reusable = conn.SetDeadline(time.Time{}) == nil
 	if frame.Error != nil {
-		_ = conn.SetDeadline(time.Time{})
 		return VectorPartitionShardSearchResponseV1{}, frame.Error.toError()
 	}
-	_ = conn.SetDeadline(time.Time{})
 	return *frame.Response, nil
 }
 
@@ -487,16 +486,24 @@ func vectorPartitionShardSearchTCPInterruptOnCancelV1(ctx context.Context, conn 
 	if ctx == nil || ctx.Done() == nil {
 		return func() {}
 	}
+	stop := make(chan struct{})
 	done := make(chan struct{})
+	var stopOnce sync.Once
 	go func() {
+		defer close(done)
 		select {
 		case <-ctx.Done():
 			// A deadline wakes both Read and Write without racing the deferred Close.
 			_ = conn.SetDeadline(time.Now())
-		case <-done:
+		case <-stop:
 		}
 	}()
-	return func() { close(done) }
+	return func() {
+		stopOnce.Do(func() {
+			close(stop)
+			<-done
+		})
+	}
 }
 
 func vectorPartitionShardSearchTCPRequestContextV1(ctx context.Context, deadlineUnixNano int64) (context.Context, context.CancelFunc) {

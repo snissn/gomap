@@ -150,13 +150,18 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 		}
 	}
 	localListeners := make(map[string]raftcluster.GroupID, len(opts.Shards))
+	catalogHints := make(map[raftcluster.GroupID]raftcluster.NodeID, len(opts.Catalog.Groups))
+	for _, group := range opts.Catalog.Groups {
+		catalogHints[group.ID] = group.LeaderHint
+	}
 	for _, shard := range opts.Shards {
 		if shard.GroupID == "" || shard.Listener == nil || shard.Service == nil || !owners[shard.GroupID] || h.listeners[shard.GroupID] != nil {
 			return nil, fmt.Errorf("nativewire: production vector topology shard %q is invalid", shard.GroupID)
 		}
 		group, _ := opts.Catalog.Group(shard.GroupID)
 		if shard.Service.localGroup != shard.GroupID || !slices.Contains(group.Members, shard.Service.localNodeID) ||
-			!reflect.DeepEqual(shard.Service.route.placement, opts.Placement) || shard.Service.limits != shardLimits {
+			!reflect.DeepEqual(shard.Service.route.placement, opts.Placement) || !reflect.DeepEqual(shard.Service.route.hints, catalogHints) ||
+			shard.Service.limits != shardLimits {
 			return nil, fmt.Errorf("nativewire: production vector topology shard %q service does not match topology", shard.GroupID)
 		}
 		if endpoint := h.endpoints[shard.GroupID]; endpoint == "" || !vectorPartitionProductionEndpointMatchesListenerV1(endpoint, shard.Listener) {
@@ -184,8 +189,8 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 		localListeners[listenerKey] = shard.GroupID
 		h.listeners[shard.GroupID], h.services[shard.GroupID] = shard.Listener, shard.Service
 	}
-	maxConnectionsPerEndpoint := coordinatorLimits.MaxConcurrentRequests
-	dispatcher, err := newVectorPartitionShardSearchTCPDispatcherV1(h.endpoints, opts.NodeEndpoints, maxConnectionsPerEndpoint)
+	maxPoolConnections := coordinatorLimits.MaxConcurrentRequests
+	dispatcher, err := newVectorPartitionShardSearchTCPDispatcherV1(h.endpoints, opts.NodeEndpoints, maxPoolConnections)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +200,9 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 		return nil, err
 	}
 	for group, listener := range h.listeners {
-		h.serve(group, listener, h.services[group], opts.ShardIdleTimeout, maxConnectionsPerEndpoint)
+		// Keep accepted sockets bounded without letting one dispatcher pool consume
+		// the whole listener while its keep-alives are idle.
+		h.serve(group, listener, h.services[group], opts.ShardIdleTimeout, coordinatorLimits.MaxRequests)
 	}
 	return h, nil
 }

@@ -48,6 +48,50 @@ func TestVectorPartitionShardSearchTCPDispatcherReusesConnectionV1(t *testing.T)
 	}
 }
 
+func TestVectorPartitionShardSearchTCPCancelWatcherStopsBeforeReuseV1(t *testing.T) {
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+	deadlineStarted := make(chan struct{})
+	releaseDeadline := make(chan struct{})
+	conn := &vectorPartitionShardSearchTCPBlockingDeadlineConnV1{Conn: left, started: deadlineStarted, release: releaseDeadline}
+	ctx, cancel := context.WithCancel(context.Background())
+	stop := vectorPartitionShardSearchTCPInterruptOnCancelV1(ctx, conn)
+	cancel()
+	<-deadlineStarted
+	stopped := make(chan struct{})
+	go func() {
+		stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+		t.Fatal("cancel watcher stopped before its deadline write completed")
+	case <-time.After(10 * time.Millisecond):
+	}
+	close(releaseDeadline)
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("cancel watcher did not stop")
+	}
+	stop()
+}
+
+type vectorPartitionShardSearchTCPBlockingDeadlineConnV1 struct {
+	net.Conn
+	started chan struct{}
+	release chan struct{}
+}
+
+func (c *vectorPartitionShardSearchTCPBlockingDeadlineConnV1) SetDeadline(deadline time.Time) error {
+	if !deadline.IsZero() && !deadline.After(time.Now()) {
+		close(c.started)
+		<-c.release
+	}
+	return c.Conn.SetDeadline(deadline)
+}
+
 func TestVectorPartitionShardSearchTCPDispatcherReconnectsAfterIdleCloseAndFailsAfterCloseV1(t *testing.T) {
 	const poolSize = 2
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

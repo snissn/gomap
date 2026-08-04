@@ -46,7 +46,7 @@ func TestVectorPartitionProductionTopologyRollsBackPartialStartAndRestartsV1(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := &VectorPartitionShardSearchServiceV1{localGroup: "group-a", localNodeID: "node-a", limits: DefaultVectorPartitionShardSearchLimitsV1(), route: vectorPartitionShardSearchRouteV1{placement: placement}}
+	service := &VectorPartitionShardSearchServiceV1{localGroup: "group-a", localNodeID: "node-a", limits: DefaultVectorPartitionShardSearchLimitsV1(), route: vectorPartitionShardSearchRouteV1{placement: placement, hints: map[raftcluster.GroupID]raftcluster.NodeID{"group-a": "node-a"}}}
 	opts := VectorPartitionProductionTopologyOptionsV1{Catalog: catalog, Placement: placement, RouterSource: &testVectorPartitionCoordinatorRouterSourceV1{}, ReplicatedLifecycle: &recordingVectorPartitionReplicatedLifecycleAuthorityV1{}, Endpoints: map[raftcluster.GroupID]string{"group-a": listener.Addr().String()}, Shards: []VectorPartitionProductionShardV1{{GroupID: "group-a", Listener: listener, Service: service}, {GroupID: "group-a", Listener: listener, Service: service}}}
 	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
 		t.Fatal("partial start unexpectedly succeeded")
@@ -178,6 +178,18 @@ func TestVectorPartitionProductionTopologyRequiresLiveAuthorityAndOwnsLifecycleV
 	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
 		t.Fatal("mismatched shard limits succeeded")
 	}
+	staleHintCatalog, err := raftplacement.Validate(raftplacement.CatalogV1{Groups: []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a", "node-b", "node-c"}, LeaderHint: "node-c"}}, Placements: []raftplacement.CollectionPlacementV1{{Collection: ref, GroupID: "group-a", Mode: raftplacement.PlacementModeCollectionV1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleHintService, err := NewVectorPartitionShardSearchServiceV1(VectorPartitionShardSearchServiceOptionsV1{Catalog: staleHintCatalog, Placement: placement, LocalNodeID: "node-a", LocalGroupID: "group-a", ReadCoordinator: &fakeVectorPartitionReadCoordinatorV1{}, GenerationSource: &fakeVectorPartitionGenerationSourceV1{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts.Shards[0].Service = staleHintService
+	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
+		t.Fatal("mismatched shard leader hints succeeded")
+	}
 	opts.Shards[0].Service = validService
 	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
 		t.Fatal("local shard succeeded without remote member endpoints")
@@ -198,6 +210,7 @@ func TestVectorPartitionProductionTopologyRequiresLiveAuthorityAndOwnsLifecycleV
 	}
 	opts.NodeEndpoints["group-a"]["node-a"] = listener.Addr().String()
 	opts.CoordinatorLimits.MaxConcurrentRequests = 1
+	opts.CoordinatorLimits.MaxRequests = 2
 	topology, err := NewVectorPartitionProductionTopologyV1(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -229,10 +242,28 @@ func TestVectorPartitionProductionTopologyRequiresLiveAuthorityAndOwnsLifecycleV
 		t.Fatal(err)
 	}
 	defer second.Close()
-	if err := second.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+	deadline = time.Now().Add(time.Second)
+	for {
+		topology.mu.Lock()
+		connections := len(topology.conns)
+		topology.mu.Unlock()
+		if connections == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("second shard connection was not admitted")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	third, err := net.Dial("tcp4", localAlias)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := second.Read(make([]byte, 1)); err == nil {
+	defer third.Close()
+	if err := third.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := third.Read(make([]byte, 1)); err == nil {
 		t.Fatal("excess shard connection remained open")
 	} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 		t.Fatal("excess shard connection was not rejected")
