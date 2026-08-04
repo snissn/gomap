@@ -136,7 +136,7 @@ func (temporaryAcceptErrorV1) Temporary() bool { return true }
 
 func TestVectorPartitionProductionTopologyRequiresLiveAuthorityAndOwnsLifecycleV1(t *testing.T) {
 	ref := raftplacement.CollectionRefV1{Database: "db", Catalog: "catalog", Collection: "docs"}
-	catalog, err := raftplacement.Validate(raftplacement.CatalogV1{Groups: []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}}, Placements: []raftplacement.CollectionPlacementV1{{Collection: ref, GroupID: "group-a", Mode: raftplacement.PlacementModeCollectionV1}}})
+	catalog, err := raftplacement.Validate(raftplacement.CatalogV1{Groups: []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a", "node-b"}, LeaderHint: "node-b"}}, Placements: []raftplacement.CollectionPlacementV1{{Collection: ref, GroupID: "group-a", Mode: raftplacement.PlacementModeCollectionV1}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,14 @@ func TestVectorPartitionProductionTopologyRequiresLiveAuthorityAndOwnsLifecycleV
 		t.Fatal("mismatched shard service succeeded")
 	}
 	opts.Shards[0].Service = validService
-	opts.NodeEndpoints = map[raftcluster.GroupID]map[raftcluster.NodeID]string{"group-a": {"node-a": "127.0.0.1:1"}}
+	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
+		t.Fatal("local shard succeeded without remote member endpoints")
+	}
+	opts.NodeEndpoints = map[raftcluster.GroupID]map[raftcluster.NodeID]string{"group-a": {"node-a": "127.0.0.1:1", "node-b": "127.0.0.1:1"}}
+	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
+		t.Fatal("distinct shard members shared an endpoint")
+	}
+	opts.NodeEndpoints["group-a"]["node-b"] = "127.0.0.1:2"
 	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
 		t.Fatal("mismatched local node endpoint succeeded")
 	}
@@ -229,7 +236,11 @@ func TestVectorPartitionProductionTopologyAllowsCoordinatorOnlyAndRejectsIncompl
 	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
 		t.Fatal("foreign node endpoint succeeded")
 	}
-	opts.NodeEndpoints = map[raftcluster.GroupID]map[raftcluster.NodeID]string{"group-a": {"node-a": "127.0.0.1:1"}}
+	opts.NodeEndpoints = map[raftcluster.GroupID]map[raftcluster.NodeID]string{"group-a": {"node-a": "127.0.0.1:1"}, "group-b": {"node-b": "127.0.0.1:1"}}
+	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
+		t.Fatal("cross-group node endpoint collision succeeded")
+	}
+	opts.NodeEndpoints["group-b"]["node-b"] = "127.0.0.1:2"
 	topology, err := NewVectorPartitionProductionTopologyV1(opts)
 	if err != nil {
 		t.Fatal(err)
