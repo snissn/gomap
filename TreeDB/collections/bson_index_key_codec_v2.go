@@ -747,12 +747,18 @@ func bsonIndexKeyDocumentIDV2(entry []byte) ([]byte, error) {
 	if componentLength >= len(entry) || entry[componentLength] != bsonIndexKeyDocumentIDSuffixMarkerV2 {
 		return nil, fmt.Errorf("%w: missing document ID suffix", errBSONIndexKeyV2Malformed)
 	}
+	if len(entry)-componentLength > bsonIndexKeyComponentV2MaxBytes {
+		return nil, errBSONIndexKeyV2TooLarge
+	}
 	out := make([]byte, 0, len(entry)-componentLength-3)
 	for index := componentLength + 1; index < len(entry); {
 		value := entry[index]
 		index++
 		if value != 0 {
 			out = append(out, value)
+			if len(out) > bsonIndexKeyComponentV2MaxBytes-3 {
+				return nil, errBSONIndexKeyV2TooLarge
+			}
 			continue
 		}
 		if index >= len(entry) {
@@ -768,6 +774,9 @@ func bsonIndexKeyDocumentIDV2(entry []byte) ([]byte, error) {
 			return out, nil
 		case 0xff:
 			out = append(out, 0)
+			if len(out) > bsonIndexKeyComponentV2MaxBytes-3 {
+				return nil, errBSONIndexKeyV2TooLarge
+			}
 		default:
 			return nil, fmt.Errorf("%w: invalid document ID escape", errBSONIndexKeyV2Malformed)
 		}

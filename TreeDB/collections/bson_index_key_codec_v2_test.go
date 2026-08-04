@@ -206,6 +206,12 @@ func TestBSONIndexKeyCodecV2StringsDescendingAndBoundaries(t *testing.T) {
 	if _, err := bsonIndexEntryKeyV2(first, bytes.Repeat([]byte{0}, bsonIndexKeyComponentV2MaxBytes/2+1)); err != errBSONIndexKeyV2TooLarge {
 		t.Fatalf("over-budget escaped document ID error=%v", err)
 	}
+	oversizedEntry := append(append([]byte(nil), first...), bsonIndexKeyDocumentIDSuffixMarkerV2)
+	oversizedEntry = append(oversizedEntry, bytes.Repeat([]byte{'x'}, bsonIndexKeyComponentV2MaxBytes)...)
+	oversizedEntry = append(oversizedEntry, 0, 0)
+	if _, err := bsonIndexKeyDocumentIDV2(oversizedEntry); err != errBSONIndexKeyV2TooLarge {
+		t.Fatalf("decoded over-budget document ID error=%v", err)
+	}
 }
 
 func TestBSONIndexKeyCodecV2RejectsUnsupportedMalformedAndOverBudget(t *testing.T) {
