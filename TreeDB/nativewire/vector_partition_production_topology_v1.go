@@ -303,8 +303,20 @@ func vectorPartitionProductionEndpointMatchesListenerV1(endpoint string, listene
 	if err != nil {
 		return false
 	}
+	bound, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		return false
+	}
+	var local []net.Addr
+	if bound.IP.IsUnspecified() {
+		local, err = net.InterfaceAddrs()
+		if err != nil {
+			return false
+		}
+	}
 	for _, address := range advertised {
-		if !vectorPartitionProductionEndpointAddressMatchesListenerV1(address, listener) {
+		if !vectorPartitionProductionEndpointAddressMatchesListenerV1(address, listener) ||
+			(bound.IP.IsUnspecified() && !vectorPartitionProductionEndpointAddressIsLocalV1(address, local)) {
 			return false
 		}
 	}
@@ -351,30 +363,35 @@ func vectorPartitionProductionEndpointUsesListenerV1(endpoint string, listener n
 	if !bound.IP.IsUnspecified() {
 		return true, nil
 	}
-	for _, address := range compatible {
-		if address.IP.IsLoopback() {
-			return true, nil
-		}
-	}
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
 		return false, err
 	}
 	for _, address := range compatible {
-		for _, addr := range addrs {
-			var ip net.IP
-			switch addr := addr.(type) {
-			case *net.IPNet:
-				ip = addr.IP
-			case *net.IPAddr:
-				ip = addr.IP
-			}
-			if ip.Equal(address.IP) {
-				return true, nil
-			}
+		if vectorPartitionProductionEndpointAddressIsLocalV1(address, addrs) {
+			return true, nil
 		}
 	}
 	return false, nil
+}
+
+func vectorPartitionProductionEndpointAddressIsLocalV1(address *net.TCPAddr, local []net.Addr) bool {
+	if address.IP.IsLoopback() {
+		return true
+	}
+	for _, addr := range local {
+		var ip net.IP
+		switch addr := addr.(type) {
+		case *net.IPNet:
+			ip = addr.IP
+		case *net.IPAddr:
+			ip = addr.IP
+		}
+		if ip.Equal(address.IP) {
+			return true
+		}
+	}
+	return false
 }
 
 func vectorPartitionProductionEndpointAddressesV1(endpoint string) ([]*net.TCPAddr, error) {

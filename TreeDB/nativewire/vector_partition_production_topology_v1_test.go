@@ -221,6 +221,16 @@ func TestVectorPartitionProductionTopologyRequiresLiveAuthorityAndOwnsLifecycleV
 	}
 	opts.NodeEndpoints["group-a"]["node-b"] = fmt.Sprintf("192.0.2.2:%d", port)
 	opts.NodeEndpoints["group-a"]["node-c"] = fmt.Sprintf("192.0.2.3:%d", port)
+	opts.Endpoints["group-a"] = fmt.Sprintf("192.0.2.4:%d", port)
+	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
+		t.Fatal("wildcard listener accepted a non-local owner endpoint")
+	}
+	opts.Endpoints["group-a"] = localAlias
+	opts.NodeEndpoints["group-a"]["node-a"] = fmt.Sprintf("192.0.2.4:%d", port)
+	if _, err := NewVectorPartitionProductionTopologyV1(opts); err == nil {
+		t.Fatal("wildcard listener accepted a non-local local-node endpoint")
+	}
+	opts.NodeEndpoints["group-a"]["node-a"] = localAlias
 	opts.CoordinatorLimits.MaxConcurrentRequests = 1
 	opts.CoordinatorLimits.MaxRequests = 2
 	topology, err := NewVectorPartitionProductionTopologyV1(opts)
