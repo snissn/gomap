@@ -84,7 +84,8 @@ concatenated without field separators.
 
 `bsonIndexEntryKeyV2` appends a separately marked, zero-escaped, terminated
 document-ID suffix after an exact scalar component. The suffix provides stable
-per-document uniqueness without becoming part of scalar ordering.
+per-document uniqueness without becoming part of scalar ordering. Its encoded
+form has its own 1 MiB bound, enforced before escape expansion is appended.
 
 ## Durability and compatibility boundary
 
