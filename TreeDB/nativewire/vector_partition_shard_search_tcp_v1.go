@@ -125,6 +125,9 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShard
 	if d == nil || d.dial == nil || d.maxRequestFrame == 0 || d.maxResponseFrame == 0 {
 		return VectorPartitionShardSearchResponseV1{}, errors.New("nativewire: M5 TCP dispatcher is not configured")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	for attempt := 0; ; attempt++ {
 		response, err := d.dispatchVectorPartitionShardSearchOnceV1(ctx, request)
 		if err == nil || attempt != 0 || ctx.Err() != nil || !vectorPartitionShardSearchTCPReconnectableV1(err) {

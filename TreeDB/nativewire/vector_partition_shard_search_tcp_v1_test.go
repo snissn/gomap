@@ -78,6 +78,19 @@ func TestVectorPartitionShardSearchTCPDerivesSeparateFrameBoundsV1(t *testing.T)
 	}
 }
 
+func TestVectorPartitionShardSearchTCPDispatcherAcceptsNilContextV1(t *testing.T) {
+	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": "127.0.0.1:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dispatcher.Close()
+	_, err = dispatcher.DispatchVectorPartitionShardSearchV1(nil, VectorPartitionShardSearchRequestV1{TargetGroupID: "missing"})
+	var searchErr *VectorPartitionShardSearchErrorV1
+	if !errors.As(err, &searchErr) || searchErr.Code != VectorPartitionShardSearchErrorUnknownOwnerV1 {
+		t.Fatalf("error=%v want unknown owner", err)
+	}
+}
+
 func TestVectorPartitionM8ProductionTopologyOwnsDispatcherV1(t *testing.T) {
 	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": "127.0.0.1:1"})
 	if err != nil {
