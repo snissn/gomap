@@ -397,6 +397,10 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 	s.stats.begin()
 	defer func() {
 		total := elapsedNanosV1(started)
+		total = max(total,
+			response.Timing.RouteOwnerNanos+response.Timing.ReadIndexApplyNanos+
+				response.Timing.GenerationOpenNanos+response.Timing.SearchNanos+
+				response.Timing.ResponseCopyNanos)
 		response.Timing.TotalNanos = total
 		if resultErr != nil {
 			s.stats.fail(classifyVectorPartitionShardSearchErrorV1(resultErr), total)
