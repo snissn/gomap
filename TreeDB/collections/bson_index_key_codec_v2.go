@@ -111,6 +111,9 @@ func appendBSONIndexKeyComponentV2(dst []byte, value bson.RawValue) ([]byte, []b
 		if !ok || !utf8.Valid(text) {
 			return dst[:start], nil, fmt.Errorf("%w: invalid UTF-8 BSON string", errBSONIndexKeyV2Malformed)
 		}
+		if len(text) > bsonIndexKeyComponentV2MaxBytes-4 {
+			return dst[:start], nil, fmt.Errorf("%w: string length %d", errBSONIndexKeyV2TooLarge, len(text))
+		}
 		escapedLength := len(text)
 		for _, value := range text {
 			if value == 0 {
@@ -709,6 +712,9 @@ func bsonIndexEntryKeyV2(component, documentID []byte) ([]byte, error) {
 			err = fmt.Errorf("%w: scalar component has trailing bytes", errBSONIndexKeyV2Malformed)
 		}
 		return nil, err
+	}
+	if len(documentID) > bsonIndexKeyComponentV2MaxBytes-3 {
+		return nil, errBSONIndexKeyV2TooLarge
 	}
 	escapedDocumentIDLength := len(documentID)
 	for _, value := range documentID {
