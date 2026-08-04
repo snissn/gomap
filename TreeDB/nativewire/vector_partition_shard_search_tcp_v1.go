@@ -348,7 +348,11 @@ func (s VectorPartitionShardSearchTCPServerV1) ServeConn(ctx context.Context, co
 	}
 	maxResponseFrame := s.MaxResponseFrame
 	if maxResponseFrame == 0 {
-		maxResponseFrame = maxFrame
+		var err error
+		maxResponseFrame, err = vectorPartitionShardSearchTCPFrameBoundV1(DefaultVectorPartitionShardSearchLimitsV1().MaxResponseBytes)
+		if err != nil {
+			return
+		}
 	}
 	initialTimeout := s.InitialTimeout
 	if initialTimeout < 0 {

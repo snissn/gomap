@@ -126,6 +126,7 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 		}
 	}
 	endpointOwners := make(map[string]raftcluster.GroupID, len(opts.Endpoints)+len(opts.NodeEndpoints))
+	endpointKeys := make(map[string]string, len(opts.Endpoints)+len(opts.NodeEndpoints))
 	recordEndpoint := func(group raftcluster.GroupID, endpoint string) error {
 		key, err := vectorPartitionProductionEndpointKeyV1(endpoint)
 		if err != nil {
@@ -135,6 +136,7 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 			return fmt.Errorf("nativewire: production vector topology groups %q and %q share an endpoint", owner, group)
 		}
 		endpointOwners[key] = group
+		endpointKeys[endpoint] = key
 		return nil
 	}
 	for group, endpoint := range h.endpoints {
@@ -178,7 +180,9 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 			if endpoint == "" {
 				return nil, fmt.Errorf("nativewire: production vector topology shard %q cannot route to member %q", shard.GroupID, member)
 			}
-			if vectorPartitionProductionEndpointMatchesListenerV1(endpoint, shard.Listener) {
+			localNodeEndpoint := opts.NodeEndpoints[shard.GroupID][shard.Service.localNodeID]
+			if endpointKeys[endpoint] == endpointKeys[h.endpoints[shard.GroupID]] ||
+				(localNodeEndpoint != "" && endpointKeys[endpoint] == endpointKeys[localNodeEndpoint]) {
 				return nil, fmt.Errorf("nativewire: production vector topology shard %q remote member %q uses the local fallback", shard.GroupID, member)
 			}
 		}

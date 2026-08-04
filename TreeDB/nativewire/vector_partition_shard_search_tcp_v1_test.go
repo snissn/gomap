@@ -129,6 +129,20 @@ func TestVectorPartitionShardSearchTCPServerBoundsRequestAndFailedResponseFrames
 			t.Fatalf("failed response write left connection open: %v", err)
 		}
 	})
+	t.Run("default response", func(t *testing.T) {
+		client, server := net.Pipe()
+		defer client.Close()
+		go (VectorPartitionShardSearchTCPServerV1{MaxFrame: 4096, Service: vectorPartitionShardSearchHandlerFuncV1(func(context.Context, VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+			return VectorPartitionShardSearchResponseV1{RequestID: strings.Repeat("x", 8192)}, nil
+		})}).ServeConn(context.Background(), server)
+		if err := writeVectorPartitionShardSearchTCPFrameV1(client, vectorPartitionShardSearchTCPFrameV1{Request: &VectorPartitionShardSearchRequestV1{}}, 4096); err != nil {
+			t.Fatal(err)
+		}
+		frame, err := readVectorPartitionShardSearchTCPFrameV1(client, 16384)
+		if err != nil || frame.Response == nil || len(frame.Response.RequestID) != 8192 {
+			t.Fatalf("default response frame=%+v err=%v", frame, err)
+		}
+	})
 }
 
 func TestVectorPartitionShardSearchTCPCancelWatcherStopsBeforeReuseV1(t *testing.T) {
@@ -424,6 +438,9 @@ func TestVectorPartitionShardSearchTCPServerInterruptsPeerReadBeforeSuccessfulRe
 	case <-serverDone:
 	case <-time.After(time.Second):
 		t.Fatal("server did not return after peer close")
+	}
+	if !server.interruptedReadBeforeWrite() {
+		t.Fatal("successful response was written without interrupting the peer-monitor read")
 	}
 }
 

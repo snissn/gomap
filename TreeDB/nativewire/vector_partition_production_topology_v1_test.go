@@ -214,6 +214,8 @@ func TestVectorPartitionProductionTopologyRequiresLiveAuthorityAndOwnsLifecycleV
 		t.Fatal("mismatched local node endpoint succeeded")
 	}
 	opts.NodeEndpoints["group-a"]["node-a"] = localAlias
+	opts.NodeEndpoints["group-a"]["node-b"] = fmt.Sprintf("127.0.0.2:%d", listener.Addr().(*net.TCPAddr).Port)
+	opts.NodeEndpoints["group-a"]["node-c"] = fmt.Sprintf("127.0.0.3:%d", listener.Addr().(*net.TCPAddr).Port)
 	opts.CoordinatorLimits.MaxConcurrentRequests = 1
 	opts.CoordinatorLimits.MaxRequests = 2
 	topology, err := NewVectorPartitionProductionTopologyV1(opts)
@@ -223,6 +225,9 @@ func TestVectorPartitionProductionTopologyRequiresLiveAuthorityAndOwnsLifecycleV
 	status := topology.Status()
 	if !status.Ready || status.Closed || len(status.ShardGroups) != 1 {
 		t.Fatalf("unexpected status: %+v", status)
+	}
+	if endpoint, ok := topology.dispatcher.endpoint("group-a", "node-b"); !ok || endpoint != opts.NodeEndpoints["group-a"]["node-b"] {
+		t.Fatalf("remote member endpoint=%q ok=%t", endpoint, ok)
 	}
 	first, err := net.Dial("tcp4", localAlias)
 	if err != nil {
