@@ -306,6 +306,49 @@ func TestCollectionBSONOrderedV2MetadataRejectsNonBSONCollections(t *testing.T) 
 	}
 }
 
+func TestCollectionBSONOrderedV2CheckpointReopenWithValueLogPointers(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir, ValueLog: backenddb.ValueLogOptions{PointerThreshold: 1, ForcePointers: true}})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}, Indexes: []IndexDefinition{{Name: "value", Field: "value", ValueType: IndexValueBSONOrderedV2}}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	document := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "value", Value: int32(7)}, {Key: "payload", Value: strings.Repeat("v", 4096)}})
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{document}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir, ValueLog: backenddb.ValueLogOptions{PointerThreshold: 1, ForcePointers: true}})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	query := bson.Raw(mustBSONCollectionDocument(t, bson.D{{Key: "value", Value: int64(7)}})).Lookup("value")
+	ids, err := reopenedCol.FindByIndexValue("value", query)
+	if err != nil || len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("reopened v2 index ids=%q err=%v", ids, err)
+	}
+	if got, err := reopenedCol.Get([]byte("u1")); err != nil || !bytes.Equal(got, document) {
+		t.Fatalf("reopened pointer document len=%d err=%v", len(got), err)
+	}
+}
+
 func TestCollectionBSONFormatRejectsInvalidBSON(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
