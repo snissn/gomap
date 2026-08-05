@@ -122,7 +122,8 @@ not a claim that every declared shape is already identical to MongoDB.
 For an externally managed reference, provide its URI explicitly:
 
 ```sh
-GOWORK=off go run ./cmd/mongo_gateway_compat_diff \
+GOWORK=off go build -o /tmp/mongo_gateway_compat_diff ./cmd/mongo_gateway_compat_diff
+/tmp/mongo_gateway_compat_diff \
   -reference-uri 'mongodb://127.0.0.1:27017/?directConnection=true' \
   -out /tmp/mongo-gateway-compat-diff
 ```

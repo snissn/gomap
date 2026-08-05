@@ -222,7 +222,7 @@ func (t target) Execute(ctx context.Context, fixture compatdiff.Fixture) (compat
 			docs[i] = fixture.Seed[i]
 		}
 		if _, err := coll.InsertMany(ctx, docs); err != nil {
-			return compatdiff.Observation{}, err
+			return compatdiff.Observation{}, t.seedError(err)
 		}
 	}
 	baseline, err := snapshotDatabase(ctx, db)
@@ -343,6 +343,10 @@ func (t target) executionError(err error) error {
 	}
 	return err
 }
+
+// seedError preserves the reference target's infrastructure classification
+// before the fixture command itself has started.
+func (t target) seedError(err error) error { return t.executionError(err) }
 
 func commandError(err error) (*compatdiff.Error, bool) {
 	var command mongo.CommandError

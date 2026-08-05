@@ -472,6 +472,10 @@ func normalizeDocumentWithTokens(doc bson.Raw, prefix string, ignored, normalize
 			continue
 		}
 		if contains(normalized, path) {
+			if path == "cursor.id" && cursorIDIsClosed(element.Value()) {
+				out = append(out, []any{element.Key(), []any{"normalized-cursor-id", byte(element.Value().Type), "closed"}})
+				continue
+			}
 			out = append(out, []any{element.Key(), []any{"normalized", byte(element.Value().Type), tokens.token(element.Value())}})
 			continue
 		}
@@ -486,6 +490,16 @@ func normalizeDocumentWithTokens(doc bson.Raw, prefix string, ignored, normalize
 		out = append(out, []any{element.Key(), normalizeValueWithTokens(element.Value(), path, ignored, normalized, tokens)})
 	}
 	return out
+}
+
+func cursorIDIsClosed(value bson.RawValue) bool {
+	if id, ok := value.AsInt64OK(); ok {
+		return id == 0
+	}
+	if id, ok := value.Int32OK(); ok {
+		return id == 0
+	}
+	return false
 }
 
 func normalizeValue(value bson.RawValue, path string, ignored, normalized []string) any {

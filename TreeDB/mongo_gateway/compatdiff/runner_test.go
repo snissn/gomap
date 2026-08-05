@@ -294,6 +294,23 @@ func TestCursorReplyNormalizationRetainsInitialAndGetMoreStructure(t *testing.T)
 	}
 }
 
+func TestNormalizedCursorIDsRetainClosedSemantics(t *testing.T) {
+	f := fixture()
+	f.NormalizeFields = []string{"cursor.id"}
+	initial := raw(t, bson.D{{Key: "ok", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "id", Value: int64(10)}, {Key: "ns", Value: "db.c"}}}})
+	closed := raw(t, bson.D{{Key: "ok", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "id", Value: int64(0)}, {Key: "ns", Value: "db.c"}}}})
+	reallocatedOpen := raw(t, bson.D{{Key: "ok", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "id", Value: int64(777)}, {Key: "ns", Value: "db.c"}}}})
+	tree := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Response: initial, CursorReplies: []bson.Raw{closed}}, nil
+	})
+	reference := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Response: raw(t, bson.D{{Key: "ok", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "id", Value: int64(99)}, {Key: "ns", Value: "db.c"}}}}), CursorReplies: []bson.Raw{reallocatedOpen}}, nil
+	})
+	if row := Run(context.Background(), "identity", []Fixture{f}, tree, reference).Fixtures[0]; row.Status != "mismatch" || !strings.Contains(row.Reason, "cursor reply") {
+		t.Fatalf("cursor closure was hidden by ID normalization: %+v", row)
+	}
+}
+
 func TestUnavailableReferenceIsNotCompatibilityFailure(t *testing.T) {
 	f := fixture()
 	ok := executorFunc(func(context.Context, Fixture) (Observation, error) { return Observation{}, nil })

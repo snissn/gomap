@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -72,6 +73,14 @@ func TestFixtureCommandTargetMustMatchDeclaredCollection(t *testing.T) {
 func TestClientOptionsDoNotInjectCommandMaxTimeMS(t *testing.T) {
 	if options := clientOptions("mongodb://127.0.0.1:27017"); options.Timeout != nil {
 		t.Fatalf("client timeout must be unset so fixtures own maxTimeMS: %v", *options.Timeout)
+	}
+}
+
+func TestReferenceSeedFailureIsReferenceUnavailable(t *testing.T) {
+	err := target{reference: true}.seedError(errors.New("reference disconnected during seed"))
+	var unavailable compatdiff.ReferenceUnavailable
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("reference seed failure was not classified as unavailable: %T %v", err, err)
 	}
 }
 
