@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func operationsRequestV1() SearchRequestV1 {
@@ -41,6 +42,16 @@ func TestOperationsV1DefaultsOffAndCapsBeforeServiceV1(t *testing.T) {
 	}
 	request := operationsRequestV1()
 	request.TopK = 2
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := ops.Search(canceled, request); !hasOperationErrorCodeV1(err, ErrorCanceledV1) {
+		t.Fatalf("canceled cap search err=%v", err)
+	}
+	request.Deadline = time.Now().Add(-time.Second)
+	if _, err := ops.Search(t.Context(), request); !hasOperationErrorCodeV1(err, ErrorDeadlineExceededV1) {
+		t.Fatalf("expired cap search err=%v", err)
+	}
+	request.Deadline = time.Time{}
 	if _, err := ops.Search(t.Context(), request); !hasOperationErrorCodeV1(err, ErrorInvalidRequestV1) {
 		t.Fatalf("cap search err=%v", err)
 	}

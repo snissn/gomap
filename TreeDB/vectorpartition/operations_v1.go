@@ -86,7 +86,7 @@ func (o *OperationsV1) Status(ctx context.Context) (OperationsHealthV1, error) {
 }
 
 func (o *OperationsV1) Search(ctx context.Context, request SearchRequestV1) (SearchResponseV1, error) {
-	if err := o.admit(request); err != nil {
+	if err := o.admit(ctx, request); err != nil {
 		return SearchResponseV1{}, err
 	}
 	response, err := o.service.Search(ctx, request)
@@ -184,8 +184,11 @@ func (o *OperationsV1) enabled() error {
 	}
 	return nil
 }
-func (o *OperationsV1) admit(r SearchRequestV1) error {
+func (o *OperationsV1) admit(ctx context.Context, r SearchRequestV1) error {
 	if err := o.enabled(); err != nil {
+		return err
+	}
+	if err := validateSearchRequestV1(ctx, r); err != nil {
 		return err
 	}
 	var reason *uint64
