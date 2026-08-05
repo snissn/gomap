@@ -36,6 +36,18 @@ func TestNormalizePreservesBSONTypeAndOrder(t *testing.T) {
 	}
 }
 
+func TestResponseEnvelopeOrderNormalizationDoesNotHideNestedOrder(t *testing.T) {
+	left := raw(t, bson.D{{Key: "ok", Value: int32(1)}, {Key: "n", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "firstBatch", Value: bson.A{bson.D{{Key: "a", Value: int32(1)}, {Key: "b", Value: int32(2)}}}}}}})
+	topLevelReordered := raw(t, bson.D{{Key: "n", Value: int32(1)}, {Key: "ok", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "firstBatch", Value: bson.A{bson.D{{Key: "a", Value: int32(1)}, {Key: "b", Value: int32(2)}}}}}}})
+	if !sameResponseWithNormalization(left, topLevelReordered, nil, nil, true) {
+		t.Fatal("explicit reply-envelope normalization did not accept top-level transport order")
+	}
+	nestedReordered := raw(t, bson.D{{Key: "n", Value: int32(1)}, {Key: "ok", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "firstBatch", Value: bson.A{bson.D{{Key: "b", Value: int32(2)}, {Key: "a", Value: int32(1)}}}}}}})
+	if sameResponseWithNormalization(left, nestedReordered, nil, nil, true) {
+		t.Fatal("reply-envelope normalization hid nested cursor document order")
+	}
+}
+
 func TestIgnoredFieldsAreFixtureScoped(t *testing.T) {
 	left := raw(t, bson.D{{Key: "ok", Value: 1}, {Key: "operationTime", Value: int64(1)}})
 	right := raw(t, bson.D{{Key: "ok", Value: 1}, {Key: "operationTime", Value: int64(2)}})
@@ -56,23 +68,80 @@ func TestIgnoredFieldsAreFixtureScoped(t *testing.T) {
 	}
 }
 
+func TestNormalizationAppliesToResponseAndStateWithoutHidingType(t *testing.T) {
+	f := fixture()
+	f.NormalizeFields = []string{"generatedAt", "clusterTime", "_id"}
+	f.IgnoreStateFields = []string{"trace"}
+	left := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Response: raw(t, bson.D{{Key: "generatedAt", Value: bson.NewObjectID()}, {Key: "clusterTime", Value: bson.Timestamp{T: 1, I: 2}}, {Key: "ok", Value: int32(1)}}), Baseline: []bson.Raw{raw(t, bson.D{{Key: "_id", Value: bson.NewObjectID()}, {Key: "clusterTime", Value: bson.Timestamp{T: 3, I: 4}}})}, State: []bson.Raw{raw(t, bson.D{{Key: "_id", Value: bson.NewObjectID()}, {Key: "clusterTime", Value: bson.Timestamp{T: 5, I: 6}}, {Key: "trace", Value: "left"}})}}, nil
+	})
+	right := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Response: raw(t, bson.D{{Key: "generatedAt", Value: bson.NewObjectID()}, {Key: "clusterTime", Value: bson.Timestamp{T: 7, I: 8}}, {Key: "ok", Value: int32(1)}}), Baseline: []bson.Raw{raw(t, bson.D{{Key: "_id", Value: bson.NewObjectID()}, {Key: "clusterTime", Value: bson.Timestamp{T: 9, I: 10}}})}, State: []bson.Raw{raw(t, bson.D{{Key: "_id", Value: bson.NewObjectID()}, {Key: "clusterTime", Value: bson.Timestamp{T: 11, I: 12}}, {Key: "trace", Value: "right"}})}}, nil
+	})
+	row := Run(context.Background(), "identity", []Fixture{f}, left, right).Fixtures[0]
+	if row.Status != "pass" || row.TreeDB.Response == nil || len(row.TreeDB.Baseline) != 1 || len(row.TreeDB.State) != 1 {
+		t.Fatalf("normalization did not apply consistently: %+v", row)
+	}
+	wrongType := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Response: raw(t, bson.D{{Key: "generatedAt", Value: "not-an-object-id"}, {Key: "clusterTime", Value: bson.Timestamp{T: 7, I: 8}}, {Key: "ok", Value: int32(1)}})}, nil
+	})
+	if got := Run(context.Background(), "identity", []Fixture{f}, left, wrongType).Fixtures[0].Status; got != "mismatch" {
+		t.Fatalf("normalized field hid type difference: %s", got)
+	}
+}
+
 func TestExpectedRejectionMutationFails(t *testing.T) {
 	f := fixture()
 	f.Expectation = ExpectedRejected
+	f.ExpectedErrorCode = 1
 	seed := raw(t, bson.D{{Key: "_id", Value: "a"}})
 	f.Seed = []bson.Raw{seed}
 	good := executorFunc(func(context.Context, Fixture) (Observation, error) {
-		return Observation{Error: &Error{Code: 1, CommandRejection: true}, State: []bson.Raw{seed}}, nil
+		return Observation{Error: &Error{Code: 1, CommandRejection: true}, Baseline: []bson.Raw{seed}, State: []bson.Raw{seed}}, nil
 	})
 	mutated := executorFunc(func(context.Context, Fixture) (Observation, error) {
-		return Observation{Error: &Error{Code: 1, CommandRejection: true}, State: []bson.Raw{raw(t, bson.D{{Key: "_id", Value: "a"}, {Key: "bad", Value: true}})}}, nil
+		return Observation{Error: &Error{Code: 1, CommandRejection: true}, Baseline: []bson.Raw{seed}, State: []bson.Raw{raw(t, bson.D{{Key: "_id", Value: "a"}, {Key: "bad", Value: true}})}}, nil
 	})
-	result := Run(context.Background(), "identity", []Fixture{f}, mutated, good)
+	reference := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Response: raw(t, bson.D{{Key: "ok", Value: int32(1)}}), Baseline: []bson.Raw{seed}, State: []bson.Raw{seed}}, nil
+	})
+	result := Run(context.Background(), "identity", []Fixture{f}, mutated, reference)
 	if result.Fixtures[0].Status != "mismatch" || !strings.Contains(result.Fixtures[0].Reason, "mutated") {
 		t.Fatalf("got %+v", result.Fixtures[0])
 	}
-	if clean := Run(context.Background(), "identity", []Fixture{f}, good, good); clean.Fixtures[0].Status != "pass" {
+	if clean := Run(context.Background(), "identity", []Fixture{f}, good, reference); clean.Fixtures[0].Status != "pass" {
 		t.Fatalf("unmutated rejection fixture did not pass: %+v", clean.Fixtures[0])
+	}
+}
+
+func TestExpectedRejectionRequiresSuccessfulReferenceAndExactErrorCode(t *testing.T) {
+	f := fixture()
+	f.Expectation = ExpectedRejected
+	f.ExpectedErrorCode = 2
+	state := []bson.Raw{
+		raw(t, bson.D{{Key: "_compatdiff_metadata", Value: bson.D{{Key: "collection", Value: "c"}}}}),
+		raw(t, bson.D{{Key: "_id", Value: "a"}}),
+	}
+	tree := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Error: &Error{Code: 2, CommandRejection: true}, Baseline: state, State: state}, nil
+	})
+	referenceOK := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Response: raw(t, bson.D{{Key: "ok", Value: int32(1)}})}, nil
+	})
+	if row := Run(context.Background(), "identity", []Fixture{f}, tree, referenceOK).Fixtures[0]; row.Status != "pass" {
+		t.Fatalf("expected known rejection with reference success to pass: %+v", row)
+	}
+	wrongCode := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Error: &Error{Code: 9, CommandRejection: true}, Baseline: state, State: state}, nil
+	})
+	if row := Run(context.Background(), "identity", []Fixture{f}, wrongCode, referenceOK).Fixtures[0]; row.Status != "mismatch" || !strings.Contains(row.Reason, "code=9") {
+		t.Fatalf("duplicate maxTimeMS code was accepted: %+v", row)
+	}
+	badReference := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Response: raw(t, bson.D{{Key: "ok", Value: int32(0)}})}, nil
+	})
+	if row := Run(context.Background(), "identity", []Fixture{f}, tree, badReference).Fixtures[0]; row.Status != "harness-error" {
+		t.Fatalf("reference non-success was accepted: %+v", row)
 	}
 }
 
@@ -140,10 +209,27 @@ func TestReferenceUnavailableWithoutCauseDoesNotPanic(t *testing.T) {
 func TestExpectedRejectionDoesNotAcceptExecutionFailure(t *testing.T) {
 	f := fixture()
 	f.Expectation = ExpectedRejected
+	f.ExpectedErrorCode = 1
 	exec := executorFunc(func(context.Context, Fixture) (Observation, error) {
 		return Observation{Error: &Error{Message: "connection reset"}}, nil
 	})
 	result := Run(context.Background(), "identity", []Fixture{f}, exec, exec)
+	if result.Fixtures[0].Status != "harness-error" {
+		t.Fatalf("status=%s reason=%q", result.Fixtures[0].Status, result.Fixtures[0].Reason)
+	}
+}
+
+func TestExpectedRejectionRequiresReferenceExecution(t *testing.T) {
+	f := fixture()
+	f.Expectation = ExpectedRejected
+	f.ExpectedErrorCode = 9
+	rejected := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Error: &Error{Code: 9, CommandRejection: true}}, nil
+	})
+	badReference := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Error: &Error{Code: 9, CommandRejection: true}}, nil
+	})
+	result := Run(context.Background(), "identity", []Fixture{f}, rejected, badReference)
 	if result.Fixtures[0].Status != "harness-error" {
 		t.Fatalf("status=%s reason=%q", result.Fixtures[0].Status, result.Fixtures[0].Reason)
 	}

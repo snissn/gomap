@@ -28,17 +28,21 @@ import (
 )
 
 type diskFixture struct {
-	Schema       string                 `json:"schema"`
-	Version      int                    `json:"version"`
-	ID           string                 `json:"id"`
-	CapabilityID string                 `json:"capability_id"`
-	Expectation  compatdiff.Expectation `json:"expectation"`
-	Database     string                 `json:"database"`
-	Collection   string                 `json:"collection"`
-	Smoke        bool                   `json:"smoke"`
-	Seed         []json.RawMessage      `json:"seed"`
-	Command      json.RawMessage        `json:"command"`
-	IgnoreFields []string               `json:"ignore_fields"`
+	Schema                         string                 `json:"schema"`
+	Version                        int                    `json:"version"`
+	ID                             string                 `json:"id"`
+	CapabilityID                   string                 `json:"capability_id"`
+	Expectation                    compatdiff.Expectation `json:"expectation"`
+	ExpectedErrorCode              int32                  `json:"expected_error_code,omitempty"`
+	Database                       string                 `json:"database"`
+	Collection                     string                 `json:"collection"`
+	Smoke                          bool                   `json:"smoke"`
+	Seed                           []json.RawMessage      `json:"seed"`
+	Command                        json.RawMessage        `json:"command"`
+	IgnoreFields                   []string               `json:"ignore_fields"`
+	IgnoreStateFields              []string               `json:"ignore_state_fields"`
+	NormalizeFields                []string               `json:"normalize_fields"`
+	NormalizeResponseEnvelopeOrder bool                   `json:"normalize_response_envelope_order"`
 }
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -49,7 +53,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fixturesDir := fs.String("fixtures", "cmd/mongo_gateway_compat_diff/fixtures", "fixture directory")
 	outDir := fs.String("out", "", "artifact output directory (required)")
 	referenceURI := fs.String("reference-uri", "", "pinned reference MongoDB URI (required)")
-	smoke := fs.Bool("smoke", false, "run only fixtures marked smoke (all bundled fixtures are smoke)")
+	referenceImage := fs.String("reference-image", "external/unpinned", "reference image identity, if pinned")
+	smoke := fs.Bool("smoke", false, "run only fixtures explicitly marked smoke")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -68,6 +73,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	referenceIdentity := ""
 	reference := target{uri: *referenceURI, reference: true, identity: &referenceIdentity}
 	result := compatdiff.Run(ctx, mongogateway.MongoGatewayCapabilityIdentity(), fixtures, tree, reference)
+	result.ReferenceImage = *referenceImage
 	result.ReferenceServerIdentity = referenceIdentity
 	if err := writeArtifacts(*outDir, result); err != nil {
 		fmt.Fprintln(stderr, "write artifacts:", err)
@@ -105,7 +111,7 @@ func loadFixtures(dir string, smokeOnly bool) ([]compatdiff.Fixture, error) {
 		if smokeOnly && !disk.Smoke {
 			continue
 		}
-		fixture := compatdiff.Fixture{Schema: disk.Schema, Version: disk.Version, ID: disk.ID, CapabilityID: disk.CapabilityID, Expectation: disk.Expectation, Database: disk.Database, Collection: disk.Collection, Smoke: disk.Smoke, IgnoreFields: disk.IgnoreFields}
+		fixture := compatdiff.Fixture{Schema: disk.Schema, Version: disk.Version, ID: disk.ID, CapabilityID: disk.CapabilityID, Expectation: disk.Expectation, ExpectedErrorCode: disk.ExpectedErrorCode, Database: disk.Database, Collection: disk.Collection, Smoke: disk.Smoke, IgnoreFields: disk.IgnoreFields, IgnoreStateFields: disk.IgnoreStateFields, NormalizeFields: disk.NormalizeFields, NormalizeResponseEnvelopeOrder: disk.NormalizeResponseEnvelopeOrder}
 		if fixture.Command, err = extJSON(disk.Command); err != nil {
 			return nil, fmt.Errorf("%s command: %w", path, err)
 		}
@@ -118,6 +124,9 @@ func loadFixtures(dir string, smokeOnly bool) ([]compatdiff.Fixture, error) {
 		}
 		if err := fixture.Validate(); err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+		if target, bound := commandCollection(fixture.Command); bound && target != fixture.Collection {
+			return nil, fmt.Errorf("%s: command targets collection %q, fixture declares %q", path, target, fixture.Collection)
 		}
 		if !capabilityExpectationValid(fixture) {
 			return nil, fmt.Errorf("%s: capability %q is absent from the manifest or expectation %q disagrees with its declared status", path, fixture.CapabilityID, fixture.Expectation)
@@ -157,6 +166,9 @@ type target struct {
 var databaseSequence atomic.Uint64
 
 func (t target) Execute(ctx context.Context, fixture compatdiff.Fixture) (compatdiff.Observation, error) {
+	if collection, bound := commandCollection(fixture.Command); bound && collection != fixture.Collection {
+		return compatdiff.Observation{}, fmt.Errorf("command targets collection %q, fixture declares %q", collection, fixture.Collection)
+	}
 	uri, closeTarget, err := t.open(ctx)
 	if err != nil {
 		if t.reference {
@@ -165,7 +177,7 @@ func (t target) Execute(ctx context.Context, fixture compatdiff.Fixture) (compat
 		return compatdiff.Observation{}, err
 	}
 	defer closeTarget()
-	client, err := mongo.Connect(options.Client().ApplyURI(uri).SetTimeout(20 * time.Second).SetServerSelectionTimeout(3 * time.Second))
+	client, err := mongo.Connect(clientOptions(uri))
 	if err != nil {
 		if t.reference {
 			return compatdiff.Observation{}, compatdiff.ReferenceUnavailable{Err: err}
@@ -180,10 +192,15 @@ func (t target) Execute(ctx context.Context, fixture compatdiff.Fixture) (compat
 		return compatdiff.Observation{}, err
 	}
 	if t.reference && t.identity != nil && *t.identity == "" {
-		if buildInfo, err := client.Database("admin").RunCommand(ctx, bson.D{{Key: "buildInfo", Value: 1}}).Raw(); err == nil {
-			version, _ := buildInfo.Lookup("version").StringValueOK()
-			gitVersion, _ := buildInfo.Lookup("gitVersion").StringValueOK()
-			*t.identity = strings.TrimSpace(version + " " + gitVersion)
+		buildInfo, err := client.Database("admin").RunCommand(ctx, bson.D{{Key: "buildInfo", Value: 1}}).Raw()
+		if err != nil {
+			return compatdiff.Observation{}, compatdiff.ReferenceUnavailable{Err: fmt.Errorf("reference buildInfo: %w", err)}
+		}
+		version, _ := buildInfo.Lookup("version").StringValueOK()
+		gitVersion, _ := buildInfo.Lookup("gitVersion").StringValueOK()
+		*t.identity = strings.TrimSpace(version + " " + gitVersion)
+		if *t.identity == "" {
+			return compatdiff.Observation{}, compatdiff.ReferenceUnavailable{Err: errors.New("reference buildInfo did not contain version identity")}
 		}
 	}
 	db := client.Database(uniqueDatabaseName(fixture))
@@ -198,9 +215,14 @@ func (t target) Execute(ctx context.Context, fixture compatdiff.Fixture) (compat
 			return compatdiff.Observation{}, err
 		}
 	}
-	observation := compatdiff.Observation{}
+	baseline, err := snapshotDatabase(ctx, db)
+	if err != nil {
+		return compatdiff.Observation{}, t.executionError(err)
+	}
+	observation := compatdiff.Observation{Baseline: baseline}
+	commandCtx := commandContext(ctx, fixture.Command)
 	if isCursorCommand(fixture.Command) {
-		cursor, err := db.RunCommandCursor(ctx, fixture.Command)
+		cursor, err := db.RunCommandCursor(commandCtx, fixture.Command)
 		if err != nil {
 			if command, ok := commandError(err); ok {
 				observation.Error = command
@@ -221,7 +243,7 @@ func (t target) Execute(ctx context.Context, fixture compatdiff.Fixture) (compat
 			_ = cursor.Close(ctx)
 		}
 	} else {
-		response, err := db.RunCommand(ctx, fixture.Command).Raw()
+		response, err := db.RunCommand(commandCtx, fixture.Command).Raw()
 		if err != nil {
 			if command, ok := commandError(err); ok {
 				observation.Error = command
@@ -232,12 +254,26 @@ func (t target) Execute(ctx context.Context, fixture compatdiff.Fixture) (compat
 			observation.Response = response
 		}
 	}
-	state, err := snapshot(ctx, coll)
+	state, err := snapshotDatabase(ctx, db)
 	if err != nil {
 		return compatdiff.Observation{}, t.executionError(err)
 	}
 	observation.State = state
 	return observation, nil
+}
+
+func clientOptions(uri string) *options.ClientOptions {
+	// A client-wide Timeout is encoded as maxTimeMS by the Mongo driver. Fixtures
+	// own command-level maxTimeMS, so use the run context for the harness bound.
+	return options.Client().ApplyURI(uri).SetServerSelectionTimeout(3 * time.Second)
+}
+
+func commandContext(ctx context.Context, command bson.Raw) context.Context {
+	// The driver encodes command-context deadlines as maxTimeMS. Differential
+	// fixtures must reach both servers unchanged, whether or not they explicitly
+	// declare maxTimeMS. Connection and server-selection limits remain on the
+	// client; the caller's run context remains the harness watchdog.
+	return context.WithoutCancel(ctx)
 }
 
 func (t target) open(ctx context.Context) (string, func(), error) {
@@ -276,6 +312,11 @@ func commandError(err error) (*compatdiff.Error, bool) {
 	if errors.As(err, &command) {
 		return &compatdiff.Error{Code: command.Code, Labels: command.Labels, Message: command.Message, CommandRejection: true}, true
 	}
+	var write mongo.WriteException
+	if errors.As(err, &write) && len(write.WriteErrors) > 0 {
+		first := write.WriteErrors[0]
+		return &compatdiff.Error{Code: int32(first.Code), Labels: write.Labels, Message: first.Message, CommandRejection: true}, true
+	}
 	return nil, false
 }
 
@@ -293,6 +334,20 @@ func isCursorCommand(command bson.Raw) bool {
 	}
 	return false
 }
+
+func commandCollection(command bson.Raw) (string, bool) {
+	elements, err := command.Elements()
+	if err != nil || len(elements) == 0 {
+		return "", false
+	}
+	switch elements[0].Key() {
+	case "find", "aggregate", "count", "distinct", "insert", "update", "delete", "createIndexes", "dropIndexes", "listIndexes":
+		name, ok := elements[0].Value().StringValueOK()
+		return name, ok
+	default:
+		return "", false
+	}
+}
 func safeName(value string) string {
 	return strings.Map(func(r rune) rune {
 		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
@@ -302,13 +357,51 @@ func safeName(value string) string {
 	}, value)
 }
 
-func snapshot(ctx context.Context, coll *mongo.Collection) ([]bson.Raw, error) {
+func snapshotDatabase(ctx context.Context, db *mongo.Database) ([]bson.Raw, error) {
+	names, err := db.ListCollectionNames(ctx, bson.D{})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(names)
+	var state []bson.Raw
+	for _, name := range names {
+		part, err := snapshotCollection(ctx, db.Collection(name))
+		if err != nil {
+			return nil, err
+		}
+		state = append(state, part...)
+	}
+	return state, nil
+}
+
+func snapshotCollection(ctx context.Context, coll *mongo.Collection) ([]bson.Raw, error) {
+	indexes, err := coll.Indexes().List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer indexes.Close(ctx)
+	var indexDocs bson.A
+	for indexes.Next(ctx) {
+		indexDocs = append(indexDocs, append(bson.Raw(nil), indexes.Current...))
+	}
+	if err := indexes.Err(); err != nil {
+		return nil, err
+	}
+	sort.SliceStable(indexDocs, func(i, j int) bool {
+		left, _ := indexDocs[i].(bson.Raw).Lookup("name").StringValueOK()
+		right, _ := indexDocs[j].(bson.Raw).Lookup("name").StringValueOK()
+		return left < right
+	})
+	metadata, err := bson.Marshal(bson.D{{Key: "_compatdiff_metadata", Value: bson.D{{Key: "collection", Value: coll.Name()}, {Key: "indexes", Value: indexDocs}}}})
+	if err != nil {
+		return nil, err
+	}
 	cursor, err := coll.Find(ctx, bson.D{})
 	if err != nil {
 		return nil, err
 	}
 	defer cursor.Close(ctx)
-	var docs []bson.Raw
+	docs := []bson.Raw{metadata}
 	for cursor.Next(ctx) {
 		docs = append(docs, append(bson.Raw(nil), cursor.Current...))
 	}
@@ -327,7 +420,7 @@ func writeArtifacts(out string, result compatdiff.Result) error {
 		return err
 	}
 	var report strings.Builder
-	fmt.Fprintf(&report, "# TreeDB Mongo gateway differential result\n\nStatus: **%s**  \\nCapability identity: `%s`  \\nReference image: `%s`  \\nReference server identity: `%s`  \\nRuntime: %s\n\nError messages are recorded for diagnosis but equality deliberately compares error code and labels; BSON response/state evidence preserves type and field order.\n\n| Fixture | Capability | Expectation | Status | Reason |\n|---|---|---|---|---|\n", result.Status, result.CapabilityIdentity, result.ReferenceImage, result.ReferenceServerIdentity, result.Duration)
+	fmt.Fprintf(&report, "# TreeDB Mongo gateway differential result\n\nStatus: **%s**  \nCapability identity: `%s`  \nReference image: `%s`  \nReference server identity: `%s`  \nRuntime: %s\n\nError messages are recorded for diagnosis but equality deliberately compares error code and labels; BSON response/state evidence preserves type and field order.\n\n| Fixture | Capability | Expectation | Status | Reason |\n|---|---|---|---|---|\n", result.Status, result.CapabilityIdentity, result.ReferenceImage, result.ReferenceServerIdentity, result.Duration)
 	for _, row := range result.Fixtures {
 		fmt.Fprintf(&report, "| %s | %s | %s | %s | %s |\n", row.ID, row.CapabilityID, row.Expectation, row.Status, strings.ReplaceAll(row.Reason, "|", "\\|"))
 	}

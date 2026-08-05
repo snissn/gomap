@@ -81,10 +81,21 @@ preserves BSON type and field order in emitted observations.
 Every fixture capability ID is checked against the consumed executable manifest
 before it runs: `supported` fixtures must map to a supported/support-subset
 row, and `rejected` fixtures must map to a rejected/not-implemented row.
-`--smoke` selects only fixture files explicitly marked `"smoke": true` (the
-initial bundled set is all smoke-marked). Post-command state is compared in
-the server's returned natural order; the runner never sorts it to make a
-disagreement disappear.
+`--smoke` selects only fixture files explicitly marked `"smoke": true`; the
+bundled full set also covers supported read, write, aggregate, distinct, and
+metadata shapes. Post-command state enumerates every collection in the fixture
+database in collection-name order, retaining each collection's natural document
+order and deterministically ordered index metadata. The runner never sorts
+documents to make a disagreement disappear.
+
+`ignore_fields`, `ignore_state_fields`, and `normalize_fields` are each
+fixture-scoped. `normalize_fields` replaces only a declared nondeterministic
+value (such as an ObjectID or BSON timestamp) while retaining its BSON type and
+path. `normalize_response_envelope_order` is a separate, explicit opt-in for
+top-level command-reply envelope keys such as `ok` and `n`; nested BSON and
+cursor-document order remains significant. Rejected fixtures require an exact
+TreeDB error code, a successful reference command, and an unchanged complete
+TreeDB database snapshot.
 
 Ordinary package tests do not require Docker or a reference server. To run the
 local smoke suite, use the wrapper, which starts the pinned `mongo:7.0.14`
@@ -93,6 +104,11 @@ image and writes `result.json`, `result.md`, and `result.tsv`:
 ```sh
 scripts/mongo_gateway_compat_diff.sh --smoke --out /tmp/mongo-gateway-compat-diff
 ```
+
+Omit `--smoke` to run the full diagnostic fixture set. Full mode exits 1 for a
+compatibility mismatch and intentionally retains the differing BSON path, type,
+and value in the artifacts; it may expose known gateway gaps. This is evidence,
+not a claim that every declared shape is already identical to MongoDB.
 
 For an externally managed reference, provide its URI explicitly:
 

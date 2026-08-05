@@ -33,17 +33,21 @@ const (
 // representation is canonical Extended JSON; the runner decodes it to BSON Raw
 // before execution so type and field-order evidence is retained.
 type Fixture struct {
-	Schema       string      `json:"schema"`
-	Version      int         `json:"version"`
-	ID           string      `json:"id"`
-	CapabilityID string      `json:"capability_id"`
-	Expectation  Expectation `json:"expectation"`
-	Database     string      `json:"database"`
-	Collection   string      `json:"collection"`
-	Smoke        bool        `json:"smoke"`
-	Seed         []bson.Raw  `json:"seed,omitempty"`
-	Command      bson.Raw    `json:"command"`
-	IgnoreFields []string    `json:"ignore_fields,omitempty"`
+	Schema                         string      `json:"schema"`
+	Version                        int         `json:"version"`
+	ID                             string      `json:"id"`
+	CapabilityID                   string      `json:"capability_id"`
+	Expectation                    Expectation `json:"expectation"`
+	ExpectedErrorCode              int32       `json:"expected_error_code,omitempty"`
+	Database                       string      `json:"database"`
+	Collection                     string      `json:"collection"`
+	Smoke                          bool        `json:"smoke"`
+	Seed                           []bson.Raw  `json:"seed,omitempty"`
+	Command                        bson.Raw    `json:"command"`
+	IgnoreFields                   []string    `json:"ignore_fields,omitempty"`
+	IgnoreStateFields              []string    `json:"ignore_state_fields,omitempty"`
+	NormalizeFields                []string    `json:"normalize_fields,omitempty"`
+	NormalizeResponseEnvelopeOrder bool        `json:"normalize_response_envelope_order,omitempty"`
 }
 
 func (f Fixture) Validate() error {
@@ -56,15 +60,20 @@ func (f Fixture) Validate() error {
 	if f.Expectation != ExpectedSupported && f.Expectation != ExpectedRejected {
 		return fmt.Errorf("fixture %q has invalid expectation %q", f.ID, f.Expectation)
 	}
+	if f.Expectation == ExpectedRejected && f.ExpectedErrorCode == 0 {
+		return fmt.Errorf("fixture %q requires expected_error_code for rejected expectation", f.ID)
+	}
 	seen := map[string]struct{}{}
-	for _, field := range f.IgnoreFields {
-		if field == "" || strings.HasPrefix(field, ".") || strings.HasSuffix(field, ".") || strings.Contains(field, "..") {
-			return fmt.Errorf("fixture %q has invalid ignored field %q", f.ID, field)
+	for _, fields := range [][]string{f.IgnoreFields, f.IgnoreStateFields, f.NormalizeFields} {
+		for _, field := range fields {
+			if field == "" || strings.HasPrefix(field, ".") || strings.HasSuffix(field, ".") || strings.Contains(field, "..") {
+				return fmt.Errorf("fixture %q has invalid ignored field %q", f.ID, field)
+			}
+			if _, ok := seen[field]; ok {
+				return fmt.Errorf("fixture %q repeats ignored field %q", f.ID, field)
+			}
+			seen[field] = struct{}{}
 		}
-		if _, ok := seen[field]; ok {
-			return fmt.Errorf("fixture %q repeats ignored field %q", f.ID, field)
-		}
-		seen[field] = struct{}{}
 	}
 	return nil
 }
@@ -79,6 +88,7 @@ type Error struct {
 type Observation struct {
 	Response bson.Raw   `json:"-"`
 	Error    *Error     `json:"error,omitempty"`
+	Baseline []bson.Raw `json:"-"`
 	State    []bson.Raw `json:"-"`
 }
 
@@ -115,6 +125,7 @@ type FixtureResult struct {
 type NormalizedObservation struct {
 	Response any    `json:"response,omitempty"`
 	Error    *Error `json:"error,omitempty"`
+	Baseline []any  `json:"baseline,omitempty"`
 	State    []any  `json:"state,omitempty"`
 }
 
@@ -149,7 +160,7 @@ func Run(ctx context.Context, capabilityIdentity string, fixtures []Fixture, tre
 			result.Fixtures = append(result.Fixtures, row)
 			continue
 		}
-		row.TreeDB = normalizedObservation(treeObs, fixture.IgnoreFields)
+		row.TreeDB = normalizedObservation(treeObs, fixture.IgnoreFields, fixture.IgnoreStateFields, fixture.NormalizeFields, fixture.NormalizeResponseEnvelopeOrder)
 		refObs, err := reference.Execute(ctx, fixture)
 		if err != nil {
 			var unavailable ReferenceUnavailable
@@ -162,7 +173,7 @@ func Run(ctx context.Context, capabilityIdentity string, fixtures []Fixture, tre
 			result.Fixtures = append(result.Fixtures, row)
 			continue
 		}
-		row.Reference = normalizedObservation(refObs, fixture.IgnoreFields)
+		row.Reference = normalizedObservation(refObs, fixture.IgnoreFields, fixture.IgnoreStateFields, fixture.NormalizeFields, fixture.NormalizeResponseEnvelopeOrder)
 		row.Status, row.Reason = compare(fixture, treeObs, refObs)
 		row.Duration = time.Since(oneStarted)
 		result.Fixtures = append(result.Fixtures, row)
@@ -190,15 +201,21 @@ func statusPriority(status string) int {
 	}
 }
 
-func normalizedObservation(observation Observation, ignored []string) NormalizedObservation {
+func normalizedObservation(observation Observation, ignoredResponse, ignoredState, normalized []string, normalizeResponseEnvelopeOrder bool) NormalizedObservation {
 	result := NormalizedObservation{Error: observation.Error}
 	if len(observation.Response) > 0 {
-		result.Response = normalizeDocument(observation.Response, "", ignored)
+		result.Response = normalizeResponse(observation.Response, ignoredResponse, normalized, normalizeResponseEnvelopeOrder)
+	}
+	if len(observation.Baseline) > 0 {
+		result.Baseline = make([]any, len(observation.Baseline))
+		for i, doc := range observation.Baseline {
+			result.Baseline[i] = normalizeDocument(doc, "", ignoredState, normalized)
+		}
 	}
 	if len(observation.State) > 0 {
 		result.State = make([]any, len(observation.State))
 		for i, doc := range observation.State {
-			result.State[i] = normalizeDocument(doc, "", nil)
+			result.State[i] = normalizeDocument(doc, "", ignoredState, normalized)
 		}
 	}
 	return result
@@ -212,7 +229,13 @@ func compare(f Fixture, tree, reference Observation) (string, string) {
 		if !tree.Error.CommandRejection {
 			return "harness-error", "expected TreeDB command rejection, got execution failure"
 		}
-		if !sameDocuments(f.Seed, tree.State, nil) {
+		if tree.Error.Code != f.ExpectedErrorCode {
+			return "mismatch", fmt.Sprintf("expected TreeDB rejection code=%d, got %s", f.ExpectedErrorCode, describeError(tree.Error))
+		}
+		if reference.Error != nil || !responseOK(reference.Response) {
+			return "harness-error", fmt.Sprintf("expected reference execution, got error: %s", describeError(reference.Error))
+		}
+		if !sameDocumentsWithNormalization(tree.Baseline, tree.State, f.IgnoreStateFields, f.NormalizeFields) {
 			return "mismatch", "expected-rejection fixture mutated TreeDB state"
 		}
 		return "pass", ""
@@ -223,13 +246,18 @@ func compare(f Fixture, tree, reference Observation) (string, string) {
 	if tree.Error != nil {
 		return "pass", ""
 	}
-	if !sameRaw(tree.Response, reference.Response, f.IgnoreFields) {
+	if !sameResponseWithNormalization(tree.Response, reference.Response, f.IgnoreFields, f.NormalizeFields, f.NormalizeResponseEnvelopeOrder) {
 		return "mismatch", "normalized command response differs"
 	}
-	if !sameDocuments(tree.State, reference.State, nil) {
+	if !sameDocumentsWithNormalization(tree.State, reference.State, f.IgnoreStateFields, f.NormalizeFields) {
 		return "mismatch", "post-command state differs"
 	}
 	return "pass", ""
+}
+
+func responseOK(raw bson.Raw) bool {
+	ok, found := raw.Lookup("ok").AsInt64OK()
+	return found && ok == 1
 }
 
 func sameError(a, b *Error) bool {
@@ -265,12 +293,46 @@ func sameDocuments(a, b []bson.Raw, ignored []string) bool {
 }
 
 func sameRaw(a, b bson.Raw, ignored []string) bool {
-	return fmt.Sprintf("%#v", normalizeDocument(a, "", ignored)) == fmt.Sprintf("%#v", normalizeDocument(b, "", ignored))
+	return sameRawWithNormalization(a, b, ignored, nil)
+}
+
+func sameRawWithNormalization(a, b bson.Raw, ignored, normalized []string) bool {
+	return fmt.Sprintf("%#v", normalizeDocument(a, "", ignored, normalized)) == fmt.Sprintf("%#v", normalizeDocument(b, "", ignored, normalized))
+}
+
+func sameResponseWithNormalization(a, b bson.Raw, ignored, normalized []string, normalizeEnvelopeOrder bool) bool {
+	return fmt.Sprintf("%#v", normalizeResponse(a, ignored, normalized, normalizeEnvelopeOrder)) == fmt.Sprintf("%#v", normalizeResponse(b, ignored, normalized, normalizeEnvelopeOrder))
+}
+
+// normalizeResponse can canonicalize only the command reply envelope. BSON
+// order remains significant in every nested document, cursor payload, and state
+// snapshot; fixtures must opt in because the top-level reply layout is transport
+// metadata rather than a query/result ordering contract.
+func normalizeResponse(raw bson.Raw, ignored, normalized []string, normalizeEnvelopeOrder bool) any {
+	value := normalizeDocument(raw, "", ignored, normalized)
+	if !normalizeEnvelopeOrder {
+		return value
+	}
+	pairs := value
+	sort.SliceStable(pairs, func(i, j int) bool { return pairs[i].([]any)[0].(string) < pairs[j].([]any)[0].(string) })
+	return pairs
+}
+
+func sameDocumentsWithNormalization(a, b []bson.Raw, ignored, normalized []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !sameRawWithNormalization(a[i], b[i], ignored, normalized) {
+			return false
+		}
+	}
+	return true
 }
 
 // normalizeDocument intentionally records BSON type bytes and original element
 // order. It only omits exact, fixture-declared dotted paths.
-func normalizeDocument(doc bson.Raw, prefix string, ignored []string) []any {
+func normalizeDocument(doc bson.Raw, prefix string, ignored, normalized []string) []any {
 	elements, err := doc.Elements()
 	if err != nil {
 		return []any{[]any{"invalid", base64.StdEncoding.EncodeToString(doc)}}
@@ -284,17 +346,21 @@ func normalizeDocument(doc bson.Raw, prefix string, ignored []string) []any {
 		if contains(ignored, path) {
 			continue
 		}
-		out = append(out, []any{element.Key(), normalizeValue(element.Value(), path, ignored)})
+		if contains(normalized, path) {
+			out = append(out, []any{element.Key(), []any{"normalized", byte(element.Value().Type)}})
+			continue
+		}
+		out = append(out, []any{element.Key(), normalizeValue(element.Value(), path, ignored, normalized)})
 	}
 	return out
 }
 
-func normalizeValue(value bson.RawValue, path string, ignored []string) any {
+func normalizeValue(value bson.RawValue, path string, ignored, normalized []string) any {
 	if doc, ok := value.DocumentOK(); ok {
-		return []any{"document", normalizeDocument(doc, path, ignored)}
+		return []any{"document", normalizeDocument(doc, path, ignored, normalized)}
 	}
 	if arr, ok := value.ArrayOK(); ok {
-		return []any{"array", normalizeDocument(bson.Raw(arr), path, ignored)}
+		return []any{"array", normalizeDocument(bson.Raw(arr), path, ignored, normalized)}
 	}
 	return []any{byte(value.Type), base64.StdEncoding.EncodeToString(value.Value)}
 }

@@ -31,4 +31,4 @@ done
 BIN="$(mktemp "${TMPDIR:-/tmp}/mongo_gateway_compat_diff.XXXXXX")"
 trap 'rm -f "$BIN"; cleanup' EXIT
 GOWORK=off go build -o "$BIN" ./cmd/mongo_gateway_compat_diff
-"$BIN" -reference-uri "mongodb://127.0.0.1:${PORT}/?directConnection=true" -out "$OUT" $SMOKE
+"$BIN" -reference-uri "mongodb://127.0.0.1:${PORT}/?directConnection=true" -reference-image "$IMAGE" -out "$OUT" $SMOKE
