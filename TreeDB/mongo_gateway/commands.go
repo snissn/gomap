@@ -5205,7 +5205,7 @@ func parseCreateIndexDefinition(doc wire.Document) (createIndexDefinition, error
 		return createIndexDefinition{}, err
 	}
 	if !valueTypePresent {
-		return createIndexDefinition{}, fmt.Errorf("Mongo gateway createIndexes index %q on field %q requires treedbValueType", name, field)
+		return createIndexDefinition{scalarDef: collections.IndexDefinition{Name: name, Field: field, ValueType: collections.IndexValueBSONOrderedV2, Unique: unique}}, nil
 	}
 	valueType := collections.IndexValueType(valueTypeRaw)
 	switch valueType {
@@ -5452,7 +5452,11 @@ func mongoIndexDocuments(meta collections.CollectionMeta) bson.A {
 			{Key: "v", Value: int32(2)},
 			{Key: "key", Value: bson.D{{Key: idx.Field, Value: int32(1)}}},
 			{Key: "name", Value: idx.Name},
-			{Key: "treedbValueType", Value: string(idx.ValueType)},
+		}
+		if idx.ValueType == collections.IndexValueBSONOrderedV2 {
+			doc = append(doc, bson.E{Key: "treedbIndexKeyFormat", Value: "bson-ordered-v2"}, bson.E{Key: "treedbIndexKeyVersion", Value: int32(2)})
+		} else {
+			doc = append(doc, bson.E{Key: "treedbValueType", Value: string(idx.ValueType)})
 		}
 		if idx.Unique {
 			doc = append(doc, bson.E{Key: "unique", Value: true})

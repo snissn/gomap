@@ -80,7 +80,7 @@ an extra probe outside the manifest.
 | update | nested $set/$unset/$inc and bounded array modifiers (no numeric array-index paths) | supported subset | `update.nested-set-unset-inc-and-bounded-array-modifiers-no-numeric-array-index-paths` |
 | update | ReplaceOne by exact _id | supported subset | `update.replaceone-by-exact-id` |
 | index gap | compound index | rejected | `index-gap.compound-index` |
-| index gap | index without treedbValueType | rejected | `index-gap.index-without-treedbvaluetype` |
+| index | BSON v2 index without treedbValueType | supported subset | `index.bson-ordered-v2-without-treedbvaluetype` |
 | read command | aggregate match/project/sort/skip/limit/count | supported subset | `read-command.aggregate-match-project-sort-skip-limit-count` |
 | command gap | serverStatus | not implemented | `command-gap.serverstatus` |
 | command gap | top | not implemented | `command-gap.top` |
