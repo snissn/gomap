@@ -259,7 +259,7 @@ func validateSearchRequestV1(ctx context.Context, r SearchRequestV1) error {
 	if err := validateGenerationV1(ctx, r.Generation); err != nil {
 		return err
 	}
-	if r.Version != 1 || len(r.Query) == 0 || r.TopK <= 0 || r.Probes <= 0 || r.EfSearch <= 0 || r.Metric != MetricCosineV1 || r.Consistency != ConsistencyGenerationSnapshotV1 || r.Limits.RequestBytes == 0 || r.Limits.CandidateBytes == 0 || r.Limits.ResponseBytes == 0 || r.Limits.MergeEntries == 0 {
+	if r.Version != 1 || len(r.Query) == 0 || r.TopK <= 0 || r.Probes <= 0 || r.EfSearch < r.TopK || r.Metric != MetricCosineV1 || r.Consistency != ConsistencyGenerationSnapshotV1 || r.Limits.RequestBytes == 0 || r.Limits.CandidateBytes == 0 || r.Limits.ResponseBytes == 0 || r.Limits.MergeEntries <= 0 {
 		return invalidV1("version, query, metric, consistency, limits, top_k, probes, and ef_search are required")
 	}
 	if uint64(len(r.Query)) > r.Limits.RequestBytes/4 {

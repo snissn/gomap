@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
@@ -20,6 +21,7 @@ type VectorPartitionPublicBackendOptionsV1 struct {
 	Topology       *VectorPartitionProductionTopologyV1
 	RequestBase    VectorPartitionCoordinatorRequestV1
 	Lifecycle      raftplacement.VectorPartitionLifecycleCoordinatorV1
+	ReadFence      CatalogMetaLinearizableAppliedIndexProviderV1
 	Identity       raftplacement.VectorPartitionLifecycleIdentityV1
 	RequiredGroups []raftcluster.GroupID
 	Builder        raftplacement.VectorPartitionLifecycleGroupBuilderV1
@@ -37,8 +39,8 @@ func NewVectorPartitionPublicBackendV1(opts VectorPartitionPublicBackendOptionsV
 	if opts.Topology == nil || opts.Topology.Coordinator() == nil || opts.Identity.Generation == 0 || opts.Identity.Index.IndexName == "" || len(opts.RequiredGroups) == 0 {
 		return nil, errors.New("nativewire: public vector partition backend is incomplete")
 	}
-	if opts.Builder == nil || opts.Lifecycle.Authority == nil || opts.Lifecycle.Committer == nil {
-		return nil, errors.New("nativewire: public vector partition backend requires lifecycle authority and group builder")
+	if opts.Builder == nil || opts.Lifecycle.Authority == nil || opts.Lifecycle.Committer == nil || opts.ReadFence == nil {
+		return nil, errors.New("nativewire: public vector partition backend requires lifecycle authority, linearizable read fence, and group builder")
 	}
 	return &VectorPartitionPublicBackendV1{opts: opts}, nil
 }
@@ -180,6 +182,60 @@ func (b *VectorPartitionPublicBackendV1) VectorPartitionCleanupEligibilityV1(ctx
 		return public.CleanupEligibilityV1{}, err
 	}
 	return public.CleanupEligibilityV1{Eligible: status.State == public.GenerationCleanableV1, Status: status}, nil
+}
+
+// OperationsHealthV1 derives operator readiness from the live catalog and
+// lifecycle authority; it intentionally does not trust a cached frontend
+// label. It is passed directly to vectorpartition.OperationsV1 at node setup.
+func (b *VectorPartitionPublicBackendV1) OperationsHealthV1(ctx context.Context) (public.OperationsHealthV1, error) {
+	if b == nil || b.opts.Topology == nil || b.opts.Lifecycle.Authority == nil || b.opts.ReadFence == nil {
+		return public.OperationsHealthV1{Reason: "authority_unavailable"}, errors.New("production vector topology or lifecycle authority is unavailable")
+	}
+	id := public.GenerationIDV1{Index: b.opts.Identity.Index.IndexName, Generation: b.opts.Identity.Generation}
+	topology := b.opts.Topology.Status()
+	if topology.Closed || !topology.Ready {
+		return public.OperationsHealthV1{Generation: id, Reason: "topology_unavailable"}, nil
+	}
+	requiredGroups := slices.Clone(b.opts.RequiredGroups)
+	slices.Sort(requiredGroups)
+	ownerGroups := make([]raftcluster.GroupID, 0, len(topology.Endpoints))
+	for group := range topology.Endpoints {
+		ownerGroups = append(ownerGroups, group)
+	}
+	slices.Sort(ownerGroups)
+	if !slices.Equal(ownerGroups, requiredGroups) {
+		return public.OperationsHealthV1{Generation: id, Reason: "topology_unavailable"}, nil
+	}
+	requiredAppliedIndex, err := b.opts.ReadFence.LinearizableCatalogMetaAppliedIndexV1(ctx)
+	if err != nil {
+		return public.OperationsHealthV1{Generation: id, Reason: "catalog_unavailable"}, err
+	}
+	catalogStatus, ok := b.opts.Lifecycle.Authority.Status()
+	if !ok || requiredAppliedIndex == 0 || catalogStatus.AppliedIndex < requiredAppliedIndex {
+		return public.OperationsHealthV1{Generation: id, Reason: "catalog_unavailable"}, raftplacement.ErrCatalogMetaUnavailable
+	}
+	proof := raftplacement.CatalogProofV1{Epoch: catalogStatus.Epoch, Digest: catalogStatus.Digest}
+	if proof.Epoch != b.opts.Identity.Index.CatalogEpoch || proof.Digest != b.opts.Identity.Index.CatalogDigest {
+		return public.OperationsHealthV1{Generation: id, Reason: "catalog_mismatch"}, nil
+	}
+	record, ok := b.opts.Lifecycle.Authority.VectorPartitionLifecycleRecordV1(b.opts.Identity)
+	if !ok {
+		for _, status := range b.opts.Lifecycle.Authority.VectorPartitionLifecycleStatusesV1() {
+			if status.Identity.Index == b.opts.Identity.Index && status.Identity.Generation == b.opts.Identity.Generation {
+				return public.OperationsHealthV1{Generation: id, State: public.GenerationStateV1(status.State), Reason: "source_mismatch"}, nil
+			}
+		}
+		return public.OperationsHealthV1{Generation: id, State: public.GenerationAbsentV1, Reason: "generation_absent"}, nil
+	}
+	status := publicStatusV1(record)
+	if !status.Active || !status.Ready {
+		return public.OperationsHealthV1{Generation: id, State: status.State, Reason: "lifecycle_not_active"}, nil
+	}
+	readySetDigest, err := raftplacement.VectorPartitionLifecycleReadySetDigestV1(b.opts.Identity, b.opts.RequiredGroups, record.ReadyGroups)
+	if err != nil || readySetDigest != record.ReadySetDigest {
+		return public.OperationsHealthV1{Generation: id, State: status.State, Reason: "group_assets_unavailable"}, nil
+	}
+	return public.OperationsHealthV1{Ready: true, Generation: id, State: status.State, Reason: "ready"}, nil
 }
 
 func (b *VectorPartitionPublicBackendV1) checkID(id public.GenerationIDV1) error {

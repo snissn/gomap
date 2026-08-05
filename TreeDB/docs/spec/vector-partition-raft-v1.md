@@ -205,6 +205,46 @@ root. Replicated create/drop index and drop collection are not supported R3a
 commands; cluster mode rejects them before submit, so they cannot bypass this
 inventory through a local metadata mutation.
 
+### V1 operator boundary (#4018)
+
+Vector-partition operations are **off by default**. A node that has assembled
+the #4014 topology and #4016 service may register `OperationsV1` with an
+explicit `OperationsConfigV1{Enabled:true}`. All eight request limits are
+required and are rejected before query cloning or coordinator dispatch:
+query/request/candidate/response bytes, top-k, probes, ef-search, and merge
+entries. Build concurrency, build memory, and retained-generation policy are
+not exposed here because the current group builder has no enforceable shared
+cap seam. Fanout, request concurrency, retries, and redirects remain bounded by
+the node-owned `VectorPartitionCoordinatorLimitsV1`; the operator boundary does
+not duplicate those construction-time limits.
+
+`OperationsV1.Status` evaluates production topology and the required serving
+groups first, then performs the same fresh meta-Raft linearizable read fence as
+serving and reads the live catalog proof, lifecycle record/source identity, and
+ready groups. `ready` is returned only for an active, complete generation;
+`authority_unavailable`, `topology_unavailable`, `catalog_unavailable`,
+`catalog_mismatch`, `source_mismatch`, `generation_absent`,
+`lifecycle_not_active`, and `group_assets_unavailable` fail closed. Stable
+counters record disabled calls, health checks, searches, the exact rejected
+request-cap class, selected partitions/groups, requests, RPCs, retries,
+redirects, failures, candidates, edges, and query/request/candidate/response
+bytes. Those values reuse
+coordinator response accounting. Cache hit/miss and
+structured-log sink volume have no public owning snapshot yet and are not
+fabricated by this boundary.
+
+Register, prepare, activate, invalidate, inventory, rebuild request, retire,
+and cleanup eligibility delegate to the existing `ServiceV1` lifecycle APIs;
+operations do not create a second control plane. `documentservice` publishes
+only this enabled boundary, never the wrapped service that could bypass its
+caps. For rollback, stop registering the enabled operations boundary and close
+the topology; requests become unavailable while catalog lifecycle state and
+recovery debt remain durable. After restart, reassemble the same backend, then
+check `OperationsV1.Status` before serving. For stale generations, group outage,
+or failed activation, retain the fail-closed status, request rebuild, and use
+the existing retire/cleanup eligibility workflow only after pins and the
+lifecycle authority permit it.
+
 Fence state is included in the canonical catalog snapshot and is exposed to
 operators with its collection, index name, epoch, and pending bit. Retire and
 cleanup of an invalidated generation are blocked while its fence is pending;
