@@ -42,6 +42,7 @@ func TestOperationsV1DefaultsOffAndCapsBeforeServiceV1(t *testing.T) {
 	}
 	request := operationsRequestV1()
 	request.TopK = 2
+	request.EfSearch = 2
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, err := ops.Search(canceled, request); !hasOperationErrorCodeV1(err, ErrorCanceledV1) {

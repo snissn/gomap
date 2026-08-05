@@ -128,6 +128,7 @@ func TestServiceV1OwnsRequestAndOrderedResponseV1(t *testing.T) {
 	}
 	request := validSearchRequestV1(id)
 	request.TopK = len(backendNeighbors)
+	request.EfSearch = request.TopK
 	response, err := svc.Search(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +180,7 @@ func TestServiceV1RejectsUnsupportedRequestContractBeforeBackend(t *testing.T) {
 		called = true
 		return SearchResponseV1{}, nil
 	}})
-	for _, mutate := range []func(*SearchRequestV1){func(r *SearchRequestV1) { r.Version = 2 }, func(r *SearchRequestV1) { r.Metric = "dot" }, func(r *SearchRequestV1) { r.Consistency = "eventual" }, func(r *SearchRequestV1) { r.Limits.ResponseBytes = 0 }, func(r *SearchRequestV1) { r.Limits.MergeEntries = -1 }} {
+	for _, mutate := range []func(*SearchRequestV1){func(r *SearchRequestV1) { r.Version = 2 }, func(r *SearchRequestV1) { r.Metric = "dot" }, func(r *SearchRequestV1) { r.Consistency = "eventual" }, func(r *SearchRequestV1) { r.EfSearch = r.TopK - 1 }, func(r *SearchRequestV1) { r.Limits.ResponseBytes = 0 }, func(r *SearchRequestV1) { r.Limits.MergeEntries = -1 }} {
 		r := validSearchRequestV1(id)
 		mutate(&r)
 		if _, err := svc.Search(context.Background(), r); !hasCodeV1(err, ErrorInvalidRequestV1) {
