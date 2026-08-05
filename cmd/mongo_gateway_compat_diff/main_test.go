@@ -84,6 +84,14 @@ func TestReferenceSeedFailureIsReferenceUnavailable(t *testing.T) {
 	}
 }
 
+func TestReferenceSemanticSeedFailureIsNotUnavailable(t *testing.T) {
+	err := target{reference: true}.seedError(mongo.WriteException{WriteErrors: []mongo.WriteError{{Code: 11000, Message: "duplicate key"}}})
+	var unavailable compatdiff.ReferenceUnavailable
+	if errors.As(err, &unavailable) {
+		t.Fatalf("deterministic reference seed error was classified unavailable: %T %v", err, err)
+	}
+}
+
 func TestCommandContextNeverCarriesHarnessDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1)
 	defer cancel()

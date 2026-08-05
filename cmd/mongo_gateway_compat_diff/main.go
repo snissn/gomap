@@ -344,9 +344,32 @@ func (t target) executionError(err error) error {
 	return err
 }
 
-// seedError preserves the reference target's infrastructure classification
-// before the fixture command itself has started.
-func (t target) seedError(err error) error { return t.executionError(err) }
+// seedError preserves only reference infrastructure failures. A deterministic
+// MongoDB seed rejection makes the fixture setup invalid; it is not comparison
+// evidence and must not be presented as a retryable missing-reference error.
+func (t target) seedError(err error) error {
+	if !t.reference || mongoSemanticError(err) {
+		return err
+	}
+	return t.executionError(err)
+}
+
+func mongoSemanticError(err error) bool {
+	var command mongo.CommandError
+	if errors.As(err, &command) {
+		return true
+	}
+	var write mongo.WriteException
+	if errors.As(err, &write) {
+		return true
+	}
+	var bulk mongo.BulkWriteException
+	if errors.As(err, &bulk) {
+		return true
+	}
+	var concern mongo.WriteConcernError
+	return errors.As(err, &concern)
+}
 
 func commandError(err error) (*compatdiff.Error, bool) {
 	var command mongo.CommandError
