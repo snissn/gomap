@@ -309,7 +309,7 @@ func TestFindAndModifyRejectsRegexIDQueryBeforeUpsert(t *testing.T) {
 	}
 }
 
-func TestFindAndModifyAcceptsMetadataAndRejectsWriteConcernBeforeMutation(t *testing.T) {
+func TestFindAndModifyAcceptsMetadataAndJournalWriteConcern(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -321,7 +321,7 @@ func TestFindAndModifyAcceptsMetadataAndRejectsWriteConcernBeforeMutation(t *tes
 	assertOK(t, serveCommand(t, server, 60, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "n", Value: int32(1)}}}}, {Key: "$db", Value: "app"}}))
 	assertOK(t, serveCommand(t, server, 61, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "ada"}}}}}, {Key: "$clusterTime", Value: bson.D{}}, {Key: "readConcern", Value: bson.D{{Key: "level", Value: "local"}}}, {Key: "$db", Value: "app"}}))
 	response := serveCommand(t, server, 62, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "writeConcern", Value: bson.D{{Key: "j", Value: true}}}, {Key: "$db", Value: "app"}})
-	assertCommandError(t, response, "WriteConcernFailed")
+	assertOK(t, response)
 	collection, err := server.Collections.OpenCollection("app.users")
 	if err != nil {
 		t.Fatal(err)
@@ -334,8 +334,12 @@ func TestFindAndModifyAcceptsMetadataAndRejectsWriteConcernBeforeMutation(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n, ok := bson.Raw(stored).Lookup("n").Int32OK(); !ok || n != 1 {
-		t.Fatalf("writeConcern failure mutated n=%d ok=%v want 1", n, ok)
+	if n, ok := bson.Raw(stored).Lookup("n").Int32OK(); !ok || n != 2 {
+		t.Fatalf("journal writeConcern mutated n=%d ok=%v want 2", n, ok)
+	}
+	stats := server.StandaloneWriteConcernStats()
+	if stats.JournalAcknowledgements != 1 || stats.PhysicalSyncBoundaries != 1 {
+		t.Fatalf("journal writeConcern stats=%+v", stats)
 	}
 }
 

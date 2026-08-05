@@ -524,7 +524,7 @@ run_mongo_load_modes() {
   local root="$RUN_ROOT/mongo_client_mode_load_matrix_1m"
   run_logged mongo_load_modes env \
     TREEDB_DOCUMENT_FORMATS=bson \
-    TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack raw-wire-tcp raw-wire" \
+    TREEDB_CLIENT_MODES="driver driver-command driver-command-raw raw-wire-tcp raw-wire" \
     MONGO_CLIENT_MODES="driver driver-command driver-command-raw driver-unack" \
     BATCH_SIZE="$MONGO_BATCH_SIZE" \
     INSERT_PRODUCERS="$INSERT_PRODUCERS" \

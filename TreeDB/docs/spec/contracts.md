@@ -475,9 +475,28 @@ Retry guidance:
 
 Mongo gateway:
 
-- Until explicit Mongo `writeConcern` support exists, gateway write success is
-  the underlying TreeDB collection API success for the configured durability
-  mode. It must not imply Mongo-compatible writeConcern or fsync semantics.
+- Standalone absent/default, `{w: 1}`, `j: false`, and `wtimeout: 0`
+  acknowledgements use the ordinary boundary of the configured durability
+  profile. In particular, `command_wal_relaxed` and `no_wal_fast` do not gain a
+  stronger promise from an ordinary acknowledgement.
+- A successful standalone `j: true` acknowledgement first drains collection
+  publishing, then completes `SyncCommandWALAppliedPrefix` when command WAL is
+  enabled or `DB.Checkpoint` when it is disabled. The command-WAL boundary
+  orders persistent value-log dependencies, syncs a relaxed suffix, and
+  publishes its durable-prefix barrier as a root-neutral contiguous applied
+  command; an already-durable prefix is reused without another barrier or
+  file sync. Because existing multi-item and DDL handlers can return a command
+  error after a partial mutation, an accepted `j: true` request closes this
+  boundary even when the handler response is `ok: 0`; the original command
+  error is preserved. This is a local crash/reopen boundary only; it does not
+  imply replica commit, retryability, transactions, or a stronger read concern.
+- Unsupported or malformed standalone concerns reject before mutation. A
+  post-mutation failure to close the requested sync boundary reports an
+  explicit uncertain `writeConcernError`; clients must apply the ambiguous
+  retry guidance above.
+- Standalone OP_MSG writes with `moreToCome` reject before dispatch with no
+  response and no mutation, including crafted absent/default or `{w: 1}`
+  commands as well as the normal `{w: 0}` shape. The connection remains usable.
 - Ordered update/delete commands must document whether earlier items can remain
   applied after a later item error. If partial ordered semantics are intentional,
   responses must report the applied prefix; otherwise validation must complete

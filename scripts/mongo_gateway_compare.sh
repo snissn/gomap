@@ -138,9 +138,9 @@ Options:
   --treedb-document-formats LIST
                         Space-separated TreeDB formats. Example: "json template-v1 bson".
   --treedb-client-mode MODE
-                        Single TreeDB client mode: driver, driver-find-raw, driver-command, driver-command-raw, driver-unack, direct, raw-wire-tcp, raw-wire-tcp-pipeline, raw-wire, native-wire-tcp, or native-wire-inproc.
+                        Single TreeDB client mode: driver, driver-find-raw, driver-command, driver-command-raw, direct, raw-wire-tcp, raw-wire-tcp-pipeline, raw-wire, native-wire-tcp, or native-wire-inproc. driver-unack is rejected because TreeDB rejects w:0 before mutation.
   --treedb-client-modes LIST
-                        Space-separated TreeDB client modes. Example: "driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire native-wire-tcp native-wire-inproc".
+                        Space-separated TreeDB client modes. Example: "driver driver-find-raw driver-command driver-command-raw direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire native-wire-tcp native-wire-inproc".
   --treedb-maintenance MODE
                         TreeDB final maintenance: full, checkpoint, or none.
   --treedb-read-state STATE
@@ -545,6 +545,24 @@ validate_mongo_client_modes() {
   done
 }
 
+validate_treedb_client_modes() {
+  local mode
+  for mode in $1; do
+    case "$mode" in
+      driver|driver-find-raw|driver-command|driver-command-raw|direct|raw-wire|raw-wire-tcp|raw-wire-tcp-pipeline|native-wire-inproc|native-wire-tcp)
+        ;;
+      driver-unack)
+        echo "invalid TREEDB_CLIENT_MODES value: driver-unack (TreeDB rejects w:0 before mutation)" >&2
+        exit 2
+        ;;
+      *)
+        echo "invalid TREEDB_CLIENT_MODES value: $mode" >&2
+        exit 2
+        ;;
+    esac
+  done
+}
+
 list_word_count() {
   local count=0
   local item
@@ -781,6 +799,7 @@ esac
 MONGO_CLIENT_MODES=$(normalize_unique_word_list MONGO_CLIENT_MODES "$MONGO_CLIENT_MODES")
 validate_mongo_client_modes "$MONGO_CLIENT_MODES"
 TREEDB_CLIENT_MODES=$(normalize_unique_word_list TREEDB_CLIENT_MODES "$TREEDB_CLIENT_MODES")
+validate_treedb_client_modes "$TREEDB_CLIENT_MODES"
 TREEDB_DOCUMENT_FORMATS=$(normalize_unique_word_list TREEDB_DOCUMENT_FORMATS "$TREEDB_DOCUMENT_FORMATS")
 raw_concurrent_reader_sweep=$CONCURRENT_READER_SWEEP
 CONCURRENT_READER_SWEEP=$(trim_spaces "$CONCURRENT_READER_SWEEP")

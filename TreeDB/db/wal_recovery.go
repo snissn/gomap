@@ -642,15 +642,19 @@ func commandWALLaneActiveHasTerminalTail(segments []logSegment, lane int, maxSeg
 }
 
 func commandWALReplayFramesNeedLogSupport(db *DB, frames []commandWALReplayFrame, applied uint64) (bool, error) {
-	hasUnappliedRawKVBatch := false
+	hasUnappliedRootPublishingFrame := false
 	for _, frame := range frames {
 		if frame.env.LSN <= applied {
+			continue
+		}
+		if frame.env.Kind == commitlog.CommandKindDurablePrefixBarrier {
+			hasUnappliedRootPublishingFrame = true
 			continue
 		}
 		if frame.env.Kind != commitlog.CommandKindRawKVBatch {
 			continue
 		}
-		hasUnappliedRawKVBatch = true
+		hasUnappliedRootPublishingFrame = true
 		needsLogSupport := false
 		if err := commitlog.ScanRawKVBatchPayload(frame.env.Payload, func(op commitlog.RawKVOp, key, value []byte) error {
 			if op == commitlog.RawKVOpSetMaterializedRID ||
@@ -666,9 +670,12 @@ func commandWALReplayFramesNeedLogSupport(db *DB, frames []commandWALReplayFrame
 		}
 	}
 	if db != nil && db.indexOuterLeavesInValueLog {
-		// Outer-leaf mode needs a replay leaf-page log for any replayed write,
-		// even when the raw KV payload values themselves remain inline.
-		return hasUnappliedRawKVBatch, nil
+		// Outer-leaf mode needs a replay leaf-page log for every frame that can
+		// publish roots, even when the payload itself carries no values. A durable
+		// prefix barrier republishes the current roots at a new applied LSN and can
+		// therefore allocate an outer leaf while replaying an otherwise root-neutral
+		// command.
+		return hasUnappliedRootPublishingFrame, nil
 	}
 	return false, nil
 }

@@ -1,0 +1,12 @@
+{
+  "schema": "treedb.mongo-gateway.compat-diff.fixture",
+  "version": 1,
+  "id": "write-concern-journal",
+  "capability_id": "write-concern.standalone-w1-and-journal",
+  "expectation": "supported",
+  "database": "compat",
+  "collection": "records",
+  "smoke": false,
+  "normalize_response_envelope_order": true,
+  "command": {"insert": "records", "documents": [{"_id": "journal-1", "score": {"$numberInt": "9"}}], "writeConcern": {"w": {"$numberInt": "1"}, "j": true}}
+}

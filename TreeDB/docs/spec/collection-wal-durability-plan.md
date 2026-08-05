@@ -479,9 +479,12 @@ blind retry.
   unique-conflict behavior, and success/reopen guarantee.
 - Unique-index backfill conflicts and schema validation failures are pre-commit
   errors and must not expose partial schema/index state.
-- Mongo gateway collection auto-create and `createIndexes` inherit the
-  underlying TreeDB mode-relative durability only until explicit Mongo
-  writeConcern handling is implemented.
+- Mongo gateway collection auto-create and `createIndexes` use the standalone
+  writeConcern contract: ordinary acknowledgements inherit the selected
+  profile boundary, while `j: true` drains collection publishing and closes a
+  synchronous contiguous applied-prefix command-WAL boundary or no-WAL
+  checkpoint before acknowledgement. Persistent value-log dependencies are
+  part of that boundary; they are not treated as temporary journal bytes.
 
 `Collection.Flush`:
 
