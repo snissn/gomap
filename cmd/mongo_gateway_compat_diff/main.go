@@ -14,7 +14,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -100,6 +102,9 @@ func loadFixtures(dir string, smokeOnly bool) ([]compatdiff.Fixture, error) {
 		if err := json.Unmarshal(data, &disk); err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
+		if smokeOnly && !disk.Smoke {
+			continue
+		}
 		fixture := compatdiff.Fixture{Schema: disk.Schema, Version: disk.Version, ID: disk.ID, CapabilityID: disk.CapabilityID, Expectation: disk.Expectation, Database: disk.Database, Collection: disk.Collection, Smoke: disk.Smoke, IgnoreFields: disk.IgnoreFields}
 		if fixture.Command, err = extJSON(disk.Command); err != nil {
 			return nil, fmt.Errorf("%s command: %w", path, err)
@@ -116,9 +121,6 @@ func loadFixtures(dir string, smokeOnly bool) ([]compatdiff.Fixture, error) {
 		}
 		if !capabilityExpectationValid(fixture) {
 			return nil, fmt.Errorf("%s: capability %q is absent from the manifest or expectation %q disagrees with its declared status", path, fixture.CapabilityID, fixture.Expectation)
-		}
-		if smokeOnly && !fixture.Smoke {
-			continue
 		}
 		out = append(out, fixture)
 	}
@@ -152,6 +154,8 @@ type target struct {
 	identity        *string
 }
 
+var databaseSequence atomic.Uint64
+
 func (t target) Execute(ctx context.Context, fixture compatdiff.Fixture) (compatdiff.Observation, error) {
 	uri, closeTarget, err := t.open(ctx)
 	if err != nil {
@@ -182,8 +186,8 @@ func (t target) Execute(ctx context.Context, fixture compatdiff.Fixture) (compat
 			*t.identity = strings.TrimSpace(version + " " + gitVersion)
 		}
 	}
-	db := client.Database(safeName(fixture.Database) + "_compatdiff_" + safeName(fixture.ID))
-	_ = db.Drop(ctx)
+	db := client.Database(uniqueDatabaseName(fixture))
+	defer func() { _ = db.Drop(context.Background()) }()
 	coll := db.Collection(fixture.Collection)
 	if len(fixture.Seed) > 0 {
 		docs := make([]any, len(fixture.Seed))
@@ -198,14 +202,18 @@ func (t target) Execute(ctx context.Context, fixture compatdiff.Fixture) (compat
 	if isCursorCommand(fixture.Command) {
 		cursor, err := db.RunCommandCursor(ctx, fixture.Command)
 		if err != nil {
-			observation.Error = commandError(err)
+			if command, ok := commandError(err); ok {
+				observation.Error = command
+			} else {
+				return compatdiff.Observation{}, t.executionError(err)
+			}
 		} else {
 			var docs bson.A
 			for cursor.Next(ctx) {
 				docs = append(docs, cursor.Current)
 			}
 			if err := cursor.Err(); err != nil {
-				observation.Error = commandError(err)
+				return compatdiff.Observation{}, t.executionError(err)
 			} else {
 				bytes, _ := bson.Marshal(bson.D{{Key: "ok", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "documents", Value: docs}}}})
 				observation.Response = bytes
@@ -215,14 +223,18 @@ func (t target) Execute(ctx context.Context, fixture compatdiff.Fixture) (compat
 	} else {
 		response, err := db.RunCommand(ctx, fixture.Command).Raw()
 		if err != nil {
-			observation.Error = commandError(err)
+			if command, ok := commandError(err); ok {
+				observation.Error = command
+			} else {
+				return compatdiff.Observation{}, t.executionError(err)
+			}
 		} else {
 			observation.Response = response
 		}
 	}
 	state, err := snapshot(ctx, coll)
 	if err != nil {
-		return compatdiff.Observation{}, err
+		return compatdiff.Observation{}, t.executionError(err)
 	}
 	observation.State = state
 	return observation, nil
@@ -252,12 +264,23 @@ func (t target) open(ctx context.Context) (string, func(), error) {
 	return "mongodb://" + ln.Addr().String() + "/?directConnection=true", func() { cancel(); _ = standalone.Close(); _ = os.RemoveAll(dir) }, nil
 }
 
-func commandError(err error) *compatdiff.Error {
+func (t target) executionError(err error) error {
+	if t.reference {
+		return compatdiff.ReferenceUnavailable{Err: err}
+	}
+	return err
+}
+
+func commandError(err error) (*compatdiff.Error, bool) {
 	var command mongo.CommandError
 	if errors.As(err, &command) {
-		return &compatdiff.Error{Code: command.Code, Labels: command.Labels, Message: command.Message}
+		return &compatdiff.Error{Code: command.Code, Labels: command.Labels, Message: command.Message}, true
 	}
-	return &compatdiff.Error{Message: err.Error()}
+	return nil, false
+}
+
+func uniqueDatabaseName(fixture compatdiff.Fixture) string {
+	return safeName(fixture.Database) + "_compatdiff_" + safeName(fixture.ID) + "_" + strconv.FormatInt(time.Now().UnixNano(), 36) + "_" + strconv.FormatUint(databaseSequence.Add(1), 36)
 }
 func isCursorCommand(command bson.Raw) bool {
 	elements, err := command.Elements()
@@ -318,7 +341,7 @@ func writeArtifacts(out string, result compatdiff.Result) error {
 		return err
 	}
 	for _, row := range result.Fixtures {
-		if err := writer.Write([]string{row.ID, row.CapabilityID, string(row.Expectation), row.Status, fmt.Sprint(row.Duration), row.Reason}); err != nil {
+		if err := writer.Write([]string{row.ID, row.CapabilityID, string(row.Expectation), row.Status, strconv.FormatInt(row.Duration.Nanoseconds(), 10), row.Reason}); err != nil {
 			return err
 		}
 	}

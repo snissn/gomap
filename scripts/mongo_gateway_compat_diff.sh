@@ -20,4 +20,7 @@ trap cleanup EXIT
 docker run -d --rm --name "$NAME" -p 127.0.0.1::27017 "$IMAGE" --bind_ip_all >/dev/null
 PORT="$(docker port "$NAME" 27017/tcp | sed -n '1s/.*://p')"
 for _ in $(seq 1 30); do docker exec "$NAME" mongosh --quiet --eval 'db.runCommand({ping:1}).ok' >/dev/null 2>&1 && break; sleep 1; done
-GOWORK=off go run ./cmd/mongo_gateway_compat_diff -reference-uri "mongodb://127.0.0.1:${PORT}/?directConnection=true" -out "$OUT" $SMOKE
+BIN="$(mktemp "${TMPDIR:-/tmp}/mongo_gateway_compat_diff.XXXXXX")"
+trap 'rm -f "$BIN"; cleanup' EXIT
+GOWORK=off go build -o "$BIN" ./cmd/mongo_gateway_compat_diff
+"$BIN" -reference-uri "mongodb://127.0.0.1:${PORT}/?directConnection=true" -out "$OUT" $SMOKE

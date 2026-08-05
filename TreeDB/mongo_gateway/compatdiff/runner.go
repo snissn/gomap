@@ -90,6 +90,9 @@ type Executor interface {
 type ReferenceUnavailable struct{ Err error }
 
 func (e ReferenceUnavailable) Error() string {
+	if e.Err == nil {
+		return "reference MongoDB unavailable"
+	}
 	return "reference MongoDB unavailable: " + e.Err.Error()
 }
 func (e ReferenceUnavailable) Unwrap() error { return e.Err }
@@ -166,12 +169,24 @@ func Run(ctx context.Context, capabilityIdentity string, fixtures []Fixture, tre
 	result.Duration = time.Since(started)
 	result.Status = "pass"
 	for _, row := range result.Fixtures {
-		if row.Status != "pass" {
+		if statusPriority(row.Status) > statusPriority(result.Status) {
 			result.Status = row.Status
-			break
 		}
 	}
 	return result
+}
+
+func statusPriority(status string) int {
+	switch status {
+	case "harness-error":
+		return 3
+	case "mismatch":
+		return 2
+	case "reference-unavailable":
+		return 1
+	default:
+		return 0
+	}
 }
 
 func normalizedObservation(observation Observation, ignored []string) NormalizedObservation {

@@ -45,6 +45,15 @@ func TestIgnoredFieldsAreFixtureScoped(t *testing.T) {
 	if !sameRaw(left, right, []string{"operationTime"}) {
 		t.Fatal("declared field was not ignored")
 	}
+	nestedLeft := raw(t, bson.D{{Key: "cursor", Value: bson.D{{Key: "id", Value: int64(1)}, {Key: "ns", Value: "db.c"}, {Key: "firstBatch", Value: bson.A{bson.D{{Key: "ts", Value: int64(1)}, {Key: "keep", Value: "same"}}}}}}})
+	nestedRight := raw(t, bson.D{{Key: "cursor", Value: bson.D{{Key: "id", Value: int64(2)}, {Key: "ns", Value: "db.c"}, {Key: "firstBatch", Value: bson.A{bson.D{{Key: "ts", Value: int64(2)}, {Key: "keep", Value: "same"}}}}}}})
+	if !sameRaw(nestedLeft, nestedRight, []string{"cursor.id", "cursor.firstBatch.0.ts"}) {
+		t.Fatal("nested and array ignored paths were not applied")
+	}
+	nestedSibling := raw(t, bson.D{{Key: "cursor", Value: bson.D{{Key: "id", Value: int64(2)}, {Key: "ns", Value: "db.other"}, {Key: "firstBatch", Value: bson.A{bson.D{{Key: "ts", Value: int64(2)}, {Key: "keep", Value: "same"}}}}}}})
+	if sameRaw(nestedLeft, nestedSibling, []string{"cursor.id", "cursor.firstBatch.0.ts"}) {
+		t.Fatal("nested ignore hid sibling difference")
+	}
 }
 
 func TestExpectedRejectionMutationFails(t *testing.T) {
@@ -61,6 +70,9 @@ func TestExpectedRejectionMutationFails(t *testing.T) {
 	result := Run(context.Background(), "identity", []Fixture{f}, mutated, good)
 	if result.Fixtures[0].Status != "mismatch" || !strings.Contains(result.Fixtures[0].Reason, "mutated") {
 		t.Fatalf("got %+v", result.Fixtures[0])
+	}
+	if clean := Run(context.Background(), "identity", []Fixture{f}, good, good); clean.Fixtures[0].Status != "pass" {
+		t.Fatalf("unmutated rejection fixture did not pass: %+v", clean.Fixtures[0])
 	}
 }
 
@@ -79,10 +91,13 @@ func TestDifferencesInCountsErrorsAndCursorContentFail(t *testing.T) {
 	if got := Run(context.Background(), "identity", []Fixture{f}, base, errExec).Fixtures[0].Status; got != "mismatch" {
 		t.Fatalf("error status=%s", got)
 	}
+	cursorBase := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Response: raw(t, bson.D{{Key: "cursor", Value: bson.D{{Key: "firstBatch", Value: bson.A{bson.D{{Key: "_id", Value: "same"}}}}}}})}, nil
+	})
 	cursor := executorFunc(func(context.Context, Fixture) (Observation, error) {
 		return Observation{Response: raw(t, bson.D{{Key: "cursor", Value: bson.D{{Key: "firstBatch", Value: bson.A{bson.D{{Key: "_id", Value: "different"}}}}}}})}, nil
 	})
-	if got := Run(context.Background(), "identity", []Fixture{f}, base, cursor).Fixtures[0].Status; got != "mismatch" {
+	if got := Run(context.Background(), "identity", []Fixture{f}, cursorBase, cursor).Fixtures[0].Status; got != "mismatch" {
 		t.Fatalf("cursor status=%s", got)
 	}
 }
@@ -99,6 +114,26 @@ func TestUnavailableReferenceIsNotCompatibilityFailure(t *testing.T) {
 	}
 	if result.Fixtures[0].Duration <= 0 {
 		t.Fatalf("unavailable result has no duration: %+v", result.Fixtures[0])
+	}
+	if result.Status != "reference-unavailable" {
+		t.Fatalf("result status=%s", result.Status)
+	}
+	other := fixture()
+	other.ID = "mismatch"
+	result = Run(context.Background(), "identity", []Fixture{f, other}, ok, executorFunc(func(_ context.Context, got Fixture) (Observation, error) {
+		if got.ID == f.ID {
+			return Observation{}, ReferenceUnavailable{Err: errors.New("dial refused")}
+		}
+		return Observation{Response: raw(t, bson.D{{Key: "n", Value: int32(2)}})}, nil
+	}))
+	if result.Status != "mismatch" {
+		t.Fatalf("status precedence=%s", result.Status)
+	}
+}
+
+func TestReferenceUnavailableWithoutCauseDoesNotPanic(t *testing.T) {
+	if got := (ReferenceUnavailable{}).Error(); got != "reference MongoDB unavailable" {
+		t.Fatalf("error=%q", got)
 	}
 }
 
