@@ -124,6 +124,7 @@
     "required_provenance_fields": ["artifact_root", "commands_path", "commands_sha256", "environment_path", "environment_sha256", "started_at", "completed_at"],
     "required_noise_fields": ["valid", "load_1", "load_5", "load_15"],
     "tree_db_counters": ["selected_partitions", "selected_groups", "requests", "rpcs", "retries", "redirects", "candidates", "edges", "query_bytes", "request_bytes", "candidate_bytes", "response_bytes"],
+    "tree_db_positive_counters": ["selected_partitions", "selected_groups", "requests", "rpcs", "candidates", "edges", "query_bytes", "request_bytes", "candidate_bytes", "response_bytes"],
     "complete_status": "complete",
     "nonclaim": "external relative ranking is observational and same-host results are not multi-host evidence"
   },

@@ -12,6 +12,9 @@ from statistics import median
 from typing import Any
 
 
+FROZEN_PLAN_SEMANTIC_SHA256 = "9afa03cf82f4cfadc00a6e96178b8a634cdb8a5abbdc1a4b745f1a17a7662689"
+
+
 class ContractError(ValueError):
     pass
 
@@ -25,10 +28,14 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _reject_json_constant(value: str) -> None:
+    raise ContractError(f"non-finite JSON number {value}")
+
+
 def _load(path: Path, limit: int = 16 << 20) -> dict[str, Any]:
     raw = path.read_bytes()
     _require(len(raw) <= limit, f"{path} exceeds {limit} bytes")
-    value = json.loads(raw)
+    value = json.loads(raw, parse_constant=_reject_json_constant)
     _require(isinstance(value, dict), f"{path} must contain an object")
     return value
 
@@ -51,6 +58,10 @@ def _is_sha256(value: Any) -> bool:
 
 def _budget_key(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _semantic_sha256(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def validate_plan(plan: dict[str, Any]) -> None:
@@ -127,9 +138,11 @@ def validate_plan(plan: dict[str, Any]) -> None:
     _require(envelope.get("swap_limit_bytes") == 0, "swap must be disabled for measured rows")
     artifact = plan.get("artifact_contract")
     _require(isinstance(artifact, dict) and artifact.get("schema_version") == 1 and artifact.get("result_kind") == "vector_partition_local_system_qualification_v1", "artifact contract is invalid")
-    for key in ("allowed_status", "required_phases", "required_resources", "required_search_metrics", "required_host_fields", "required_provenance_fields", "required_noise_fields", "tree_db_counters"):
+    for key in ("allowed_status", "required_phases", "required_resources", "required_search_metrics", "required_host_fields", "required_provenance_fields", "required_noise_fields", "tree_db_counters", "tree_db_positive_counters"):
         _require(isinstance(artifact.get(key), list) and artifact[key] and len(artifact[key]) == len(set(artifact[key])), f"artifact contract lacks {key}")
     _require(artifact["allowed_status"] == ["valid", "failed", "unsupported", "incomplete"] and artifact.get("complete_status") == "complete", "artifact status contract changed")
+    _require(set(artifact["tree_db_positive_counters"]) < set(artifact["tree_db_counters"]), "positive TreeDB counters must be a proper subset")
+    _require(_semantic_sha256(plan) == FROZEN_PLAN_SEMANTIC_SHA256, "frozen plan content changed")
 
 
 def _resolve(value: Any, source_head_sha: str) -> Any:
@@ -292,10 +305,11 @@ def validate_result(plan: dict[str, Any], plan_sha256: str, result: dict[str, An
                     if contract["system"] == "treedb":
                         counters = cell.get("counters")
                         _require(isinstance(counters, dict) and all(isinstance(counters.get(key), int) and not isinstance(counters[key], bool) and counters[key] >= 0 for key in plan["artifact_contract"]["tree_db_counters"]), f"row {row['id']} lacks TreeDB path counters")
+                        _require(all(counters[key] > 0 for key in plan["artifact_contract"]["tree_db_positive_counters"]), f"row {row['id']} lacks nonzero TreeDB path proof")
 
     tree_identities = [row["identity"] for row in rows if plan_rows[row["id"]]["system"] == "treedb"]
     _require(len({identity["binary_sha256"] for identity in tree_identities}) == 1, "TreeDB rows do not use one benchmark binary")
-    _require(len({identity["topology_identity_sha256"] for identity in tree_identities}) == len(tree_identities), "TreeDB topology identities are not distinct")
+    _require(len({row["identity"]["topology_identity_sha256"] for row in rows}) == len(rows), "system topology identities are not distinct")
 
     expected_status = plan["artifact_contract"]["complete_status"] if all_valid else "incomplete"
     _require(result.get("status") == expected_status, "top-level status does not match row status")

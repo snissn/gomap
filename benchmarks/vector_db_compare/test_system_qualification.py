@@ -5,10 +5,11 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
-from system_qualification import ContractError, matched_recall_buckets, validate_plan, validate_result
+from system_qualification import ContractError, _load, matched_recall_buckets, validate_plan, validate_result
 
 
 ROOT = Path(__file__).parents[2]
@@ -64,6 +65,8 @@ class SystemQualificationContractTest(unittest.TestCase):
                             }
                             if contract["system"] == "treedb":
                                 cell["counters"] = {key: 0 for key in self.plan["artifact_contract"]["tree_db_counters"]}
+                                for key in self.plan["artifact_contract"]["tree_db_positive_counters"]:
+                                    cell["counters"][key] = 1
                             searches.append(cell)
                     repetitions.append(
                         {
@@ -123,6 +126,11 @@ class SystemQualificationContractTest(unittest.TestCase):
         self.assertTrue(validate_result(self.plan, self.plan_sha256, self.result(), require_complete=True))
         self.assertEqual(len(matched_recall_buckets(self.plan, self.result())), 5 * 2 * 3)
 
+        changed_plan = copy.deepcopy(self.plan)
+        changed_plan["resource_envelope"]["memory_limit_bytes"] -= 1
+        with self.assertRaisesRegex(ContractError, "frozen plan content"):
+            validate_plan(changed_plan)
+
     def test_missing_identity_or_changed_boundary_fails_closed(self) -> None:
         missing = self.result()
         del missing["rows"][0]["identity"]["binary_sha256"]
@@ -153,6 +161,11 @@ class SystemQualificationContractTest(unittest.TestCase):
         placeholder["host"]["storage_root"] = placeholder["provenance"]["artifact_root"] = self.plan["resource_envelope"]["storage_root"]
         with self.assertRaisesRegex(ContractError, "host storage"):
             validate_result(self.plan, self.plan_sha256, placeholder)
+
+        reused_topology = self.result()
+        reused_topology["rows"][4]["identity"]["topology_identity_sha256"] = reused_topology["rows"][0]["identity"]["topology_identity_sha256"]
+        with self.assertRaisesRegex(ContractError, "topology identities"):
+            validate_result(self.plan, self.plan_sha256, reused_topology)
 
     def test_incomplete_row_is_preserved_but_cannot_qualify(self) -> None:
         result = self.result()
@@ -194,12 +207,25 @@ class SystemQualificationContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "total-system resources"):
             validate_result(self.plan, self.plan_sha256, infinite_resource)
 
+        missing_path_proof = self.result()
+        missing_path_proof["rows"][0]["corpora"][0]["repetitions"][0]["searches"][0]["counters"] = {
+            key: 0 for key in self.plan["artifact_contract"]["tree_db_counters"]
+        }
+        with self.assertRaisesRegex(ContractError, "nonzero TreeDB path proof"):
+            validate_result(self.plan, self.plan_sha256, missing_path_proof)
+
         shortened = self.result()
         metrics = shortened["rows"][0]["corpora"][0]["repetitions"][0]["searches"][0]["metrics"]
         metrics["queries"] = metrics["completed_queries"] = 999
         metrics["result_count"] = 9990
         with self.assertRaisesRegex(ContractError, "search metrics"):
             validate_result(self.plan, self.plan_sha256, shortened)
+
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = Path(directory) / "nonfinite.json"
+            artifact.write_text('{"qps": NaN}', encoding="utf-8")
+            with self.assertRaisesRegex(ContractError, "non-finite JSON number"):
+                _load(artifact)
 
     def test_matched_recall_bucketing_rejects_missing_floor(self) -> None:
         result = self.result()
