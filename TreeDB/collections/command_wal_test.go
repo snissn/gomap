@@ -2370,6 +2370,41 @@ func TestCollectionCommandWALBSONOrderedV2IndexReopenRecovery(t *testing.T) {
 	}
 }
 
+func TestCollectionCommandWALBSONOrderedV2BufferedInsertBatchReopen(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name:    "users",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+		Indexes: []IndexDefinition{{Name: "value", Field: "value", ValueType: IndexValueBSONOrderedV2, Unique: true}},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1"), []byte("u2")}, [][]byte{
+		mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "value", Value: int32(7)}}),
+		mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u2"}, {Key: "value", Value: int64(8)}}),
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	col, err = NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection reopen: %v", err)
+	}
+	value := bson.Raw(mustBSONCollectionDocument(t, bson.D{{Key: "value", Value: int64(8)}})).Lookup("value")
+	ids, err := col.FindByIndexValue("value", value)
+	if err != nil || len(ids) != 1 || !bytes.Equal(ids[0], []byte("u2")) {
+		t.Fatalf("recovered v2 buffered index ids=%q err=%v", ids, err)
+	}
+}
+
 func TestCollectionCommandWALUpdateByIDPreflightReplansStaleIndexedPlan(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",

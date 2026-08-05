@@ -1150,6 +1150,116 @@ func BenchmarkCollectionInsertWithBSONLegacyTypedSecondaryIndexes(b *testing.B) 
 	benchmarkReportTreeDBDiskUsage(b, backend, b.N)
 }
 
+// BenchmarkCollectionBSONIndexV1V2Operations keeps the BSON document fixture,
+// two single-field index shape, and backend policy fixed while comparing the
+// legacy typed codec with BSON v2 across the remaining #4062 hot paths.
+func BenchmarkCollectionBSONIndexV1V2Operations(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		v2   bool
+	}{{"legacy_typed_v1", false}, {"bson_ordered_v2", true}} {
+		tc := tc
+		b.Run(tc.name, func(b *testing.B) {
+			b.Setenv("TREEDB_COLLECTION_DOCUMENT_FORMAT", "bson")
+			indexes := secondaryIndexes()
+			if tc.v2 {
+				indexes = []collections.IndexDefinition{{Name: "email_idx", Field: "email", ValueType: collections.IndexValueBSONOrderedV2, Unique: true}, {Name: "city_idx", Field: "city", ValueType: collections.IndexValueBSONOrderedV2}}
+			}
+			b.Run("update", func(b *testing.B) {
+				_, col := openBenchmarkCollection(b, "bench_bson_update", indexes...)
+				ids := seedBenchmarkCollection(b, col, 0, collectionBenchSeedDocs, true)
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					id := ids[i%len(ids)]
+					if _, err := col.Replace(id, benchmarkBSONDocument(b, collectionBenchSeedDocs+i, true)); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+			b.Run("delete", func(b *testing.B) {
+				_, col := openBenchmarkCollection(b, "bench_bson_delete", indexes...)
+				ids := seedBenchmarkCollection(b, col, 0, b.N, true)
+				b.ResetTimer()
+				for i := range ids {
+					if err := col.Delete(ids[i]); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+			b.Run("equality_range", func(b *testing.B) {
+				_, col := openBenchmarkCollection(b, "bench_bson_lookup", indexes...)
+				seedBenchmarkCollection(b, col, 0, collectionBenchSeedDocs, true)
+				cities := make([]string, collectionBenchCities)
+				bsonCities := make([]bson.RawValue, collectionBenchCities)
+				for i := range cities {
+					cities[i] = fmt.Sprintf("city-%02d", i)
+					bsonCities[i] = bson.Raw(benchmarkBSONDocument(b, i, true)).Lookup("city")
+				}
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					value := any(cities[i%len(cities)])
+					if tc.v2 {
+						value = bsonCities[i%len(bsonCities)]
+					}
+					if _, err := col.FindByIndexValue("city_idx", value); err != nil {
+						b.Fatal(err)
+					}
+					if _, truncated, err := col.FindByIndexRange("city_idx", collections.IndexRangeOptions{Lower: collections.IndexRangeBound{Value: value, Inclusive: true}, Upper: collections.IndexRangeBound{Value: value, Inclusive: true}}); err != nil || truncated {
+						b.Fatalf("range err=%v truncated=%v", err, truncated)
+					}
+				}
+			})
+			b.Run("backfill", func(b *testing.B) {
+				// Catalog index DDL is intentionally rejected under command-WAL v2;
+				// compare the shared non-WAL backfill path instead.
+				b.Setenv("TREEDB_COLLECTION_BENCH_ENGINE", "bench_unsafe")
+				for i := 0; i < b.N; i++ {
+					b.StopTimer()
+					_, col := openBenchmarkCollection(b, "bench_bson_backfill")
+					seedBenchmarkCollection(b, col, 0, collectionBenchBackfill, true)
+					b.StartTimer()
+					if _, err := col.CreateIndex(indexes[1]); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+			b.Run("insert_checkpoint", func(b *testing.B) {
+				backend, col := openBenchmarkCollection(b, "bench_bson_checkpoint", indexes...)
+				ids, docs := benchmarkDocumentBatch(b, 0, b.N, true)
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if _, err := col.Insert(ids[i], docs[i]); err != nil {
+						b.Fatal(err)
+					}
+					if err := backend.Checkpoint(); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+			b.Run("maintenance", func(b *testing.B) {
+				for i := 0; i < b.N; i++ {
+					b.StopTimer()
+					backend, col := openBenchmarkCollection(b, "bench_bson_maintenance", indexes...)
+					seedBenchmarkCollection(b, col, 0, collectionBenchBackfill, true)
+					benchmarkSyncBoundary(b, backend)
+					b.StartTimer()
+					if _, err := backend.ValueLogRewriteOnline(context.Background(), backenddb.ValueLogRewriteOnlineOptions{}); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+			b.Run("storage", func(b *testing.B) {
+				backend, col := openBenchmarkCollection(b, "bench_bson_storage", indexes...)
+				seedBenchmarkCollection(b, col, 0, collectionBenchBackfill, true)
+				stats := col.LastInsertStats()
+				b.ReportMetric(float64(stats.SecondaryKeyBytes)/float64(collectionBenchBackfill), "index_entry_bytes/doc")
+				b.ReportMetric(float64(stats.SecondaryKeyBytes)/float64(collectionBenchBackfill*len(indexes)), "index_entry_bytes/entry")
+				benchmarkReportTreeDBDiskUsage(b, backend, collectionBenchBackfill)
+			})
+		})
+	}
+}
+
 func BenchmarkCollectionInsertBatchWithSecondaryIndexes(b *testing.B) {
 	backend, collection := openBenchmarkCollection(b, "bench_insert_batch_secondary", secondaryIndexes()...)
 	targetBatchSize := benchmarkBatchSize(b)

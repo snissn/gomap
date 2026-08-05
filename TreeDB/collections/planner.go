@@ -2791,6 +2791,8 @@ func indexKeyDocumentID(valueType IndexValueType, key []byte) ([]byte, error) {
 
 func indexComponentLength(valueType IndexValueType, key []byte) (int, error) {
 	switch valueType {
+	case IndexValueBSONOrderedV2:
+		return bsonIndexKeyComponentV2Length(key)
 	case IndexValueString:
 		for i := 0; i < len(key); i++ {
 			if key[i] != 0x00 {
