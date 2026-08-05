@@ -224,8 +224,9 @@ active, complete generation; `catalog_unavailable`, `catalog_mismatch`,
 `source_mismatch`, `group_assets_unavailable`, `lifecycle_not_active`, and
 `topology_unavailable` fail closed. Stable counters record disabled calls,
 health checks, searches, the exact rejected request-cap class, selected
-partitions/groups, RPCs, retries, redirects, failures, candidates, and edges.
-Those values reuse coordinator response accounting. Cache hit/miss and
+partitions/groups, requests, RPCs, retries, redirects, failures, candidates,
+edges, and query/request/candidate/response bytes. Those values reuse
+coordinator response accounting. Cache hit/miss and
 structured-log sink volume have no public owning snapshot yet and are not
 fabricated by this boundary.
 
