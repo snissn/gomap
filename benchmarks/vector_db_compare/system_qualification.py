@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 from statistics import median
 from typing import Any
@@ -41,7 +42,7 @@ def _ids(values: list[dict[str, Any]], name: str) -> list[str]:
 
 
 def _number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return (isinstance(value, int) and not isinstance(value, bool)) or (isinstance(value, float) and math.isfinite(value))
 
 
 def _is_sha256(value: Any) -> bool:
@@ -220,13 +221,19 @@ def validate_result(plan: dict[str, Any], plan_sha256: str, result: dict[str, An
 
     host = result.get("host")
     _require(isinstance(host, dict), "host identity is required")
-    _require(all(isinstance(host.get(key), str) and host[key] for key in plan["artifact_contract"]["required_host_fields"] if key not in ("logical_cpus", "memory_bytes")), "host identity is incomplete")
-    _require(isinstance(host.get("logical_cpus"), int) and host["logical_cpus"] > 0, "host logical_cpus is invalid")
-    _require(isinstance(host.get("memory_bytes"), int) and host["memory_bytes"] > 0, "host memory_bytes is invalid")
-    _require(host["logical_cpus"] == plan["resource_envelope"]["logical_cpus"] and host["storage_filesystem"] == plan["resource_envelope"]["storage_filesystem"], "host does not match the resource envelope")
+    numeric_host_fields = ("logical_cpus", "memory_bytes", "storage_free_bytes")
+    _require(all(isinstance(host.get(key), str) and host[key] for key in plan["artifact_contract"]["required_host_fields"] if key not in numeric_host_fields), "host identity is incomplete")
+    _require(all(isinstance(host.get(key), int) and not isinstance(host[key], bool) and host[key] > 0 for key in numeric_host_fields), "host numeric identity is invalid")
+    envelope = plan["resource_envelope"]
+    storage_root = Path(host["storage_root"])
+    storage_parent = Path(envelope["storage_root"].removesuffix("/<campaign-root>"))
+    _require(host["cpu_model"] == envelope["host_cpu_model"] and host["logical_cpus"] == envelope["logical_cpus"], "host CPU does not match the resource envelope")
+    _require(host["memory_bytes"] >= envelope["memory_limit_bytes"] and host["storage_free_bytes"] >= envelope["minimum_free_bytes"], "host capacity is below the resource envelope")
+    _require(host["storage_filesystem"] == envelope["storage_filesystem"] and storage_root.is_absolute() and storage_root.name != "<campaign-root>" and ".." not in storage_root.parts and storage_root.parent == storage_parent, "host storage does not match the resource envelope")
     provenance = result.get("provenance")
     _require(isinstance(provenance, dict) and all(isinstance(provenance.get(key), str) and provenance[key] for key in plan["artifact_contract"]["required_provenance_fields"]), "result provenance is incomplete")
     _require(_is_sha256(provenance["commands_sha256"]) and _is_sha256(provenance["environment_sha256"]), "result provenance digests are invalid")
+    _require(provenance["artifact_root"] == host["storage_root"], "artifact root differs from the pinned storage root")
 
     expected_corpora = [{key: corpus[key] for key in ("id", "fixture_checksum", "manifest_sha256", "truth_identity", "truth_artifact_sha256", "truth_sha256")} for corpus in plan["accepted_inputs"]["corpora"]]
     corpus_contracts = {corpus["id"]: corpus for corpus in plan["accepted_inputs"]["corpora"]}

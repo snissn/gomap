@@ -87,12 +87,13 @@ class SystemQualificationContractTest(unittest.TestCase):
             "resource_envelope": copy.deepcopy(self.plan["resource_envelope"]),
             "source_head_sha": source_head,
             "host": {
-                "cpu_model": "test cpu",
+                "cpu_model": "11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz",
                 "logical_cpus": 12,
                 "memory_bytes": 33512759296,
                 "kernel": "test kernel",
                 "storage_filesystem": "ext4",
                 "storage_root": "/mnt/fast4tb/test",
+                "storage_free_bytes": 107374182400,
                 "docker_version": "test docker",
                 "go_version": "go1.26.0",
                 "python_version": "3.10.12",
@@ -138,6 +139,21 @@ class SystemQualificationContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "one benchmark binary"):
             validate_result(self.plan, self.plan_sha256, mixed_binary)
 
+        wrong_host = self.result()
+        wrong_host["host"]["cpu_model"] = "different cpu"
+        with self.assertRaisesRegex(ContractError, "host CPU"):
+            validate_result(self.plan, self.plan_sha256, wrong_host)
+
+        wrong_storage = self.result()
+        wrong_storage["host"]["storage_root"] = wrong_storage["provenance"]["artifact_root"] = "/tmp/test"
+        with self.assertRaisesRegex(ContractError, "host storage"):
+            validate_result(self.plan, self.plan_sha256, wrong_storage)
+
+        placeholder = self.result()
+        placeholder["host"]["storage_root"] = placeholder["provenance"]["artifact_root"] = self.plan["resource_envelope"]["storage_root"]
+        with self.assertRaisesRegex(ContractError, "host storage"):
+            validate_result(self.plan, self.plan_sha256, placeholder)
+
     def test_incomplete_row_is_preserved_but_cannot_qualify(self) -> None:
         result = self.result()
         result["status"] = "incomplete"
@@ -167,6 +183,16 @@ class SystemQualificationContractTest(unittest.TestCase):
         malformed["rows"][0]["corpora"][0]["repetitions"][0]["searches"][0]["metrics"]["qps"] = "fast"
         with self.assertRaisesRegex(ContractError, "search metrics"):
             validate_result(self.plan, self.plan_sha256, malformed)
+
+        nonfinite = self.result()
+        nonfinite["rows"][0]["corpora"][0]["repetitions"][0]["searches"][0]["metrics"]["qps"] = float("nan")
+        with self.assertRaisesRegex(ContractError, "search metrics"):
+            validate_result(self.plan, self.plan_sha256, nonfinite)
+
+        infinite_resource = self.result()
+        infinite_resource["rows"][0]["corpora"][0]["repetitions"][0]["resources"]["cpu_seconds"] = float("inf")
+        with self.assertRaisesRegex(ContractError, "total-system resources"):
+            validate_result(self.plan, self.plan_sha256, infinite_resource)
 
         shortened = self.result()
         metrics = shortened["rows"][0]["corpora"][0]["repetitions"][0]["searches"][0]["metrics"]
