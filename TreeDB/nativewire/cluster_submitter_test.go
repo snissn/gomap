@@ -147,6 +147,14 @@ func (s *recordingRaftCommandSubmitter) ClusterAdmissionStatus(context.Context) 
 }
 
 func (s *recordingRaftCommandSubmitter) SubmitCommandEntryV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1) (raftcluster.SubmitResultV1, error) {
+	return s.submitCommandEntryV1(ctx, entry, metadata, nil)
+}
+
+func (s *recordingRaftCommandSubmitter) SubmitCommandEntryWithPreCommitV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1, preCommit func(context.Context) error) (raftcluster.SubmitResultV1, error) {
+	return s.submitCommandEntryV1(ctx, entry, metadata, preCommit)
+}
+
+func (s *recordingRaftCommandSubmitter) submitCommandEntryV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1, preCommit func(context.Context) error) (raftcluster.SubmitResultV1, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -158,6 +166,14 @@ func (s *recordingRaftCommandSubmitter) SubmitCommandEntryV1(ctx context.Context
 	decoded, err := raftentry.DecodeCommandEntryV1(entry, raftentry.DecodeOptions{RequestMetadata: metadata})
 	if err != nil {
 		return raftcluster.SubmitResultV1{}, err
+	}
+	if preCommit != nil {
+		if err := preCommit(ctx); err != nil {
+			return raftcluster.SubmitResultV1{}, err
+		}
+		if s.preCommitHook != nil {
+			s.preCommitHook()
+		}
 	}
 	s.mu.Lock()
 	index := uint64(len(s.calls) + 1)
@@ -204,17 +220,6 @@ func (s *recordingRaftCommandSubmitter) SubmitCommandEntryV1(ctx context.Context
 		HasCatalogVersion: true,
 	}, nil
 }
-
-func (s *recordingRaftCommandSubmitter) SubmitCommandEntryWithPreCommitV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1, preCommit func(context.Context) error) (raftcluster.SubmitResultV1, error) {
-	if err := preCommit(ctx); err != nil {
-		return raftcluster.SubmitResultV1{}, err
-	}
-	if s.preCommitHook != nil {
-		s.preCommitHook()
-	}
-	return s.SubmitCommandEntryV1(ctx, entry, metadata)
-}
-
 func (s *recordingRaftCommandSubmitter) applyForTest(entry raftentry.CommandEntryV1) (raftentry.ApplyResultV1, error) {
 	switch entry.Decoded.CommandID {
 	case iwire.CommandCreateCollection:
@@ -1023,6 +1028,16 @@ func TestCatalogRoutedVectorPartitionAdmissionInvalidatesBeforeDataCommitV1(t *t
 	defer db.Close()
 	mgr := collections.NewCollectionManager(db)
 	group := &recordingRaftCommandSubmitter{groupID: "group-a", manager: mgr}
+	preCommitCalls := 0
+	if _, err := group.SubmitCommandEntryWithPreCommitV1(ctx, []byte("malformed"), raftentry.RequestMetadataV1{}, func(context.Context) error {
+		preCommitCalls++
+		return nil
+	}); err == nil {
+		t.Fatal("malformed data entry reached pre-commit callback")
+	}
+	if preCommitCalls != 0 {
+		t.Fatalf("malformed data entry invoked pre-commit %d times", preCommitCalls)
+	}
 	registry, err := raftcluster.NewGroupSubmitterRegistryV1([]raftcluster.GroupSubmitterV1{{GroupID: "group-a", Submitter: group}})
 	if err != nil {
 		t.Fatal(err)
