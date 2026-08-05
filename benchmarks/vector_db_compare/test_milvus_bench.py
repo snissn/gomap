@@ -8,10 +8,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import numpy as np
+try:
+    import numpy as np
+except ModuleNotFoundError:
+    np = None
 
 sys.path.insert(0, str(Path(__file__).parent))
-import milvus_bench
+if np is not None:
+    import milvus_bench
 
 
 class FakeSchema:
@@ -72,6 +76,7 @@ class FakeDataType:
     FLOAT_VECTOR = "FLOAT_VECTOR"
 
 
+@unittest.skipIf(np is None, "numpy is not installed")
 class MilvusBenchTest(unittest.TestCase):
     def test_builds_hnsw_and_returns_canonical_ids(self) -> None:
         client = FakeClient()
