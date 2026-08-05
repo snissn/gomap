@@ -1,0 +1,12 @@
+{
+  "schema": "treedb.mongo-gateway.compat-diff.fixture",
+  "version": 1,
+  "id": "distinct-filter",
+  "capability_id": "read-command.distinct-top-level-field-with-filter",
+  "expectation": "supported",
+  "database": "compat",
+  "collection": "records",
+  "smoke": false,
+  "seed": [{"_id": "user-1", "city": "honolulu", "score": {"$numberInt": "7"}}, {"_id": "user-2", "city": "maui", "score": {"$numberInt": "9"}}],
+  "command": {"distinct": "records", "key": "city", "query": {"score": {"$gte": {"$numberInt": "7"}}}}
+}

@@ -1,0 +1,11 @@
+{
+  "schema": "treedb.mongo-gateway.compat-diff.fixture",
+  "version": 1,
+  "id": "ping",
+  "capability_id": "wire.ping-command",
+  "expectation": "supported",
+  "database": "compat",
+  "collection": "records",
+  "smoke": true,
+  "command": {"ping": {"$numberInt": "1"}}
+}
