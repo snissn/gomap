@@ -92,29 +92,14 @@ func OpenCatalogMetaLifecycleHarnessV1(ctx context.Context, opts CatalogMetaLife
 	if err != nil {
 		return nil, err
 	}
-	h := &CatalogMetaLifecycleHarnessV1{root: root, groupID: "catalog-meta", transports: map[raftcluster.NodeID]*hraft.InmemTransport{}, providers: map[raftcluster.NodeID]*raftcluster.CatalogMetaRaftProviderV1{}, authorities: map[raftcluster.NodeID]*CatalogMetaAuthorityV1{}}
+	h := &CatalogMetaLifecycleHarnessV1{root: root, groupID: "catalog-meta"}
 	fail := func(err error) (*CatalogMetaLifecycleHarnessV1, error) { _ = h.Close(); return nil, err }
 	for _, suffix := range []string{"a", "b", "c"} {
 		id := raftcluster.NodeID(prefix + "-" + suffix)
 		h.peers = append(h.peers, raftcluster.Peer{ID: id, Address: string(id), Capabilities: features})
-		_, tr := hraft.NewInmemTransportWithTimeout(hraft.ServerAddress(id), catalogMetaLifecycleHarnessCoordinationTimeoutV1)
-		h.transports[id] = tr
 	}
-	for _, from := range h.peers {
-		for _, to := range h.peers {
-			if from.ID != to.ID {
-				h.transports[from.ID].Connect(hraft.ServerAddress(to.Address), h.transports[to.ID])
-			}
-		}
-	}
-	for _, peer := range h.peers {
-		authority := NewCatalogMetaAuthorityV1()
-		provider, openErr := raftcluster.OpenCatalogMetaRaftProviderV1(raftcluster.CatalogMetaRaftProviderOptionsV1{Cluster: raftcluster.Config{Dir: filepath.Join(root, string(peer.ID), "db"), NodeID: peer.ID, GroupID: h.groupID, Peers: slices.Clone(h.peers), Features: features}, State: authority, Transport: h.transports[peer.ID], RaftConfig: catalogMetaLifecycleHarnessRaftConfigV1(), Bootstrap: true, ApplyTimeout: 3 * time.Second})
-		if openErr != nil {
-			return fail(fmt.Errorf("open catalog-meta node %s: %w", peer.ID, openErr))
-		}
-		h.authorities[peer.ID] = authority
-		h.providers[peer.ID] = provider
+	if err := h.openRuntimeV1(); err != nil {
+		return fail(err)
 	}
 	if err := h.waitLeader(ctx); err != nil {
 		return fail(err)
@@ -134,6 +119,35 @@ func OpenCatalogMetaLifecycleHarnessV1(ctx context.Context, opts CatalogMetaLife
 		return fail(err)
 	}
 	return h, nil
+}
+
+func (h *CatalogMetaLifecycleHarnessV1) openRuntimeV1() error {
+	h.transports = make(map[raftcluster.NodeID]*hraft.InmemTransport, len(h.peers))
+	h.providers = make(map[raftcluster.NodeID]*raftcluster.CatalogMetaRaftProviderV1, len(h.peers))
+	h.authorities = make(map[raftcluster.NodeID]*CatalogMetaAuthorityV1, len(h.peers))
+	features := catalogMetaLifecycleHarnessFeaturesV1()
+	for _, peer := range h.peers {
+		_, transport := hraft.NewInmemTransportWithTimeout(hraft.ServerAddress(peer.ID), catalogMetaLifecycleHarnessCoordinationTimeoutV1)
+		h.transports[peer.ID] = transport
+	}
+	for _, from := range h.peers {
+		for _, to := range h.peers {
+			if from.ID != to.ID {
+				h.transports[from.ID].Connect(hraft.ServerAddress(to.Address), h.transports[to.ID])
+			}
+		}
+	}
+	for _, peer := range h.peers {
+		authority := NewCatalogMetaAuthorityV1()
+		provider, err := raftcluster.OpenCatalogMetaRaftProviderV1(raftcluster.CatalogMetaRaftProviderOptionsV1{Cluster: raftcluster.Config{Dir: filepath.Join(h.root, string(peer.ID), "db"), NodeID: peer.ID, GroupID: h.groupID, Peers: slices.Clone(h.peers), Features: features}, State: authority, Transport: h.transports[peer.ID], RaftConfig: catalogMetaLifecycleHarnessRaftConfigV1(), Bootstrap: true, ApplyTimeout: 3 * time.Second})
+		if err != nil {
+			_ = h.closeRuntimeV1()
+			return fmt.Errorf("open catalog-meta node %s: %w", peer.ID, err)
+		}
+		h.authorities[peer.ID] = authority
+		h.providers[peer.ID] = provider
+	}
+	return nil
 }
 
 func catalogMetaLifecycleHarnessFeaturesV1() raftcluster.FeatureSet {
@@ -267,26 +281,72 @@ func (h *CatalogMetaLifecycleHarnessV1) WaitForAuthorities(ctx context.Context, 
 	}
 	return h.waitAuthorities(ctx, ready)
 }
+
+// RestartV1 closes and reopens every harness node over the same durable Raft
+// directories, then waits for a leader and replay through the last committed
+// catalog index.
+func (h *CatalogMetaLifecycleHarnessV1) RestartV1(ctx context.Context) error {
+	if h == nil || h.root == "" || h.LeaderFence() == nil {
+		return errors.New("catalog lifecycle harness unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	applied, err := h.LeaderFence().LinearizableCatalogMetaAppliedIndexV1(ctx)
+	if err != nil {
+		return fmt.Errorf("fence catalog-meta before restart: %w", err)
+	}
+	if err := h.closeRuntimeV1(); err != nil {
+		return fmt.Errorf("close catalog-meta runtime for restart: %w", err)
+	}
+	if err := h.openRuntimeV1(); err != nil {
+		return err
+	}
+	fail := func(err error) error {
+		return errors.Join(err, h.closeRuntimeV1())
+	}
+	if err := h.waitLeader(ctx); err != nil {
+		return fail(err)
+	}
+	if err := h.waitAuthorities(ctx, func(authority *CatalogMetaAuthorityV1) bool {
+		replayed, ok := authority.CatalogMetaAppliedIndexV1()
+		return ok && replayed >= applied
+	}); err != nil {
+		return fail(fmt.Errorf("wait catalog-meta replay through index %d: %w", applied, err))
+	}
+	return nil
+}
+
+func (h *CatalogMetaLifecycleHarnessV1) closeRuntimeV1() error {
+	var errs []error
+	for _, provider := range h.providers {
+		if provider != nil {
+			errs = append(errs, provider.Close())
+		}
+	}
+	for _, transport := range h.transports {
+		if transport != nil {
+			errs = append(errs, transport.Close())
+		}
+	}
+	h.providers = nil
+	h.transports = nil
+	h.authorities = nil
+	h.leader = ""
+	return errors.Join(errs...)
+}
+
 func (h *CatalogMetaLifecycleHarnessV1) Close() error {
 	if h == nil {
 		return nil
 	}
-	var errs []error
-	for id, p := range h.providers {
-		if p != nil {
-			errs = append(errs, p.Close())
-			delete(h.providers, id)
-		}
-	}
-	for id, tr := range h.transports {
-		if tr != nil {
-			errs = append(errs, tr.Close())
-			delete(h.transports, id)
-		}
-	}
+	err := h.closeRuntimeV1()
 	if h.root != "" {
-		errs = append(errs, os.RemoveAll(h.root))
+		err = errors.Join(err, os.RemoveAll(h.root))
 		h.root = ""
 	}
-	return errors.Join(errs...)
+	return err
 }

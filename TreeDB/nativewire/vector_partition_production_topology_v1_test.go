@@ -68,7 +68,15 @@ func TestVectorPartitionProductionTopologyRollsBackPartialStartAndRestartsV1(t *
 	}
 }
 
-func newVectorPartitionProductionTopologyTwoGroupTestV1(t *testing.T) (*VectorPartitionProductionTopologyV1, VectorPartitionCoordinatorRequestV1, map[raftcluster.GroupID]*fakeVectorPartitionReadCoordinatorV1) {
+func newVectorPartitionProductionTopologyTwoGroupTestV1(t testing.TB) (*VectorPartitionProductionTopologyV1, VectorPartitionCoordinatorRequestV1, map[raftcluster.GroupID]*fakeVectorPartitionReadCoordinatorV1) {
+	return newVectorPartitionProductionTopologyTwoGroupWithLifecycleTestV1(t, &recordingVectorPartitionReplicatedLifecycleAuthorityV1{})
+}
+
+func newVectorPartitionProductionTopologyTwoGroupWithLifecycleTestV1(t testing.TB, lifecycle VectorPartitionReplicatedLifecycleAuthorityV1) (*VectorPartitionProductionTopologyV1, VectorPartitionCoordinatorRequestV1, map[raftcluster.GroupID]*fakeVectorPartitionReadCoordinatorV1) {
+	return newVectorPartitionProductionTopologyTwoGroupWithLifecycleReadySetTestV1(t, lifecycle, strings.Repeat("b", 64))
+}
+
+func newVectorPartitionProductionTopologyTwoGroupWithLifecycleReadySetTestV1(t testing.TB, lifecycle VectorPartitionReplicatedLifecycleAuthorityV1, readySetDigest string) (*VectorPartitionProductionTopologyV1, VectorPartitionCoordinatorRequestV1, map[raftcluster.GroupID]*fakeVectorPartitionReadCoordinatorV1) {
 	t.Helper()
 	ref := raftplacement.CollectionRefV1{Database: "db", Catalog: "default", Collection: "docs"}
 	groups := []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}, {ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"}}
@@ -77,7 +85,7 @@ func newVectorPartitionProductionTopologyTwoGroupTestV1(t *testing.T) (*VectorPa
 		t.Fatal(err)
 	}
 	placement := raftplacement.VectorPartitionPlacementRecordV1{Collection: ref, IndexName: "embedding", IndexDefinitionDigest: vectorPartitionShardSearchDigestTestV1, SourceGeneration: 11, SourceChecksum: 22, SourceSchemaHash: 33, SourceRowCount: 2, PartitionGeneration: 7, PartitionCount: 2, Partitions: []raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-b"}}}
-	manifest := collections.VectorPartitionManifestV1{Format: collections.VectorPartitionManifestFormatV1, State: "ready", Collection: ref.Collection, IndexName: placement.IndexName, IndexDefinitionDigest: placement.IndexDefinitionDigest, SourceGeneration: placement.SourceGeneration, SourceChecksum: placement.SourceChecksum, SourceSchemaHash: placement.SourceSchemaHash, SourceRowCount: placement.SourceRowCount, Generation: placement.PartitionGeneration, RouterGeneration: placement.PartitionGeneration, ReadySetDigest: strings.Repeat("b", 64), PartitionCount: 2, Placements: []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-b"}}, Memberships: []collections.VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 1, PartitionID: 1}}}
+	manifest := collections.VectorPartitionManifestV1{Format: collections.VectorPartitionManifestFormatV1, State: "ready", Collection: ref.Collection, IndexName: placement.IndexName, IndexDefinitionDigest: placement.IndexDefinitionDigest, SourceGeneration: placement.SourceGeneration, SourceChecksum: placement.SourceChecksum, SourceSchemaHash: placement.SourceSchemaHash, SourceRowCount: placement.SourceRowCount, Generation: placement.PartitionGeneration, RouterGeneration: placement.PartitionGeneration, ReadySetDigest: readySetDigest, PartitionCount: 2, Placements: []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-b"}}, Memberships: []collections.VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 1, PartitionID: 1}}}
 	reads := make(map[raftcluster.GroupID]*fakeVectorPartitionReadCoordinatorV1, 2)
 	service := func(group raftcluster.GroupID, node raftcluster.NodeID, partition uint32) *VectorPartitionShardSearchServiceV1 {
 		read := &fakeVectorPartitionReadCoordinatorV1{proof: raftcluster.ReadIndexProof{NodeID: node, GroupID: group, Term: 1, Index: 9, HasQuorum: true, EvidenceKind: raftcluster.ReadIndexEvidenceProduction}, progress: raftcluster.AppliedProgress{NodeID: node, GroupID: group, Term: 1, Index: 9, HasApplied: true}}
@@ -102,7 +110,7 @@ func newVectorPartitionProductionTopologyTwoGroupTestV1(t *testing.T) (*VectorPa
 	boundA := listenerA.Addr().(*net.TCPAddr)
 	listenerA = &temporaryWildcardTCPListenerV1{Listener: listenerA, addr: &net.TCPAddr{IP: net.IPv4zero, Port: boundA.Port}}
 	router := &testVectorPartitionCoordinatorRouterV1{status: collections.VectorPartitionRouterRuntimeStatusV1{Manifest: manifest, ModelDigest: strings.Repeat("c", 64), Representatives: 2, Partitions: 2}, partitions: []collections.VectorPartitionRouterPartitionScoreV1{{PartitionID: 0}, {PartitionID: 1, Distance: 0.1}}}
-	topology, err := NewVectorPartitionProductionTopologyV1(VectorPartitionProductionTopologyOptionsV1{Catalog: catalog, Placement: placement, RouterSource: &testVectorPartitionCoordinatorRouterSourceV1{router: router}, ReplicatedLifecycle: &recordingVectorPartitionReplicatedLifecycleAuthorityV1{}, Endpoints: map[raftcluster.GroupID]string{"group-a": endpointA, "group-b": listenerB.Addr().String()}, Shards: []VectorPartitionProductionShardV1{{GroupID: "group-a", Listener: listenerA, Service: service("group-a", "node-a", 0)}, {GroupID: "group-b", Listener: listenerB, Service: service("group-b", "node-b", 1)}}})
+	topology, err := NewVectorPartitionProductionTopologyV1(VectorPartitionProductionTopologyOptionsV1{Catalog: catalog, Placement: placement, RouterSource: &testVectorPartitionCoordinatorRouterSourceV1{router: router}, ReplicatedLifecycle: lifecycle, Endpoints: map[raftcluster.GroupID]string{"group-a": endpointA, "group-b": listenerB.Addr().String()}, Shards: []VectorPartitionProductionShardV1{{GroupID: "group-a", Listener: listenerA, Service: service("group-a", "node-a", 0)}, {GroupID: "group-b", Listener: listenerB, Service: service("group-b", "node-b", 1)}}})
 	if err != nil {
 		_ = listenerA.Close()
 		_ = listenerB.Close()

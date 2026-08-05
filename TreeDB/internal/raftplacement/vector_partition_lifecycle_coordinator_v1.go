@@ -165,7 +165,15 @@ func (a *CatalogMetaAuthorityV1) lifecycleRecordForIndexGenerationV1(index Vecto
 // command refusal. This makes retry idempotent without weakening the ordering
 // invariant.
 func (c VectorPartitionLifecycleCoordinatorV1) InvalidateBeforeRelevantMutationV1(ctx context.Context, identity VectorPartitionLifecycleIndexIdentityV1, reason string) (VectorPartitionLifecycleMutationProofV1, error) {
-	return c.invalidateBeforeRelevantMutationV1(ctx, identity, reason, 0)
+	return c.invalidateBeforeRelevantMutationV1(ctx, identity, reason, 0, 0)
+}
+
+// InvalidateGenerationBeforeRelevantMutationV1 refuses to invalidate a successor that replaced the generation named by identity.
+func (c VectorPartitionLifecycleCoordinatorV1) InvalidateGenerationBeforeRelevantMutationV1(ctx context.Context, identity VectorPartitionLifecycleIdentityV1, reason string) (VectorPartitionLifecycleMutationProofV1, error) {
+	if err := validateVectorPartitionLifecycleIdentityV1(identity); err != nil {
+		return VectorPartitionLifecycleMutationProofV1{}, err
+	}
+	return c.invalidateBeforeRelevantMutationV1(ctx, identity.Index, reason, 0, identity.Generation)
 }
 
 // InvalidateBeforeRelevantMutationAtEpochV1 binds per-index invalidation to
@@ -175,10 +183,10 @@ func (c VectorPartitionLifecycleCoordinatorV1) InvalidateBeforeRelevantMutationA
 	if mutationEpoch == 0 {
 		return VectorPartitionLifecycleMutationProofV1{}, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("collection mutation epoch is required"))
 	}
-	return c.invalidateBeforeRelevantMutationV1(ctx, identity, reason, mutationEpoch)
+	return c.invalidateBeforeRelevantMutationV1(ctx, identity, reason, mutationEpoch, 0)
 }
 
-func (c VectorPartitionLifecycleCoordinatorV1) invalidateBeforeRelevantMutationV1(ctx context.Context, identity VectorPartitionLifecycleIndexIdentityV1, reason string, mutationEpoch uint64) (VectorPartitionLifecycleMutationProofV1, error) {
+func (c VectorPartitionLifecycleCoordinatorV1) invalidateBeforeRelevantMutationV1(ctx context.Context, identity VectorPartitionLifecycleIndexIdentityV1, reason string, mutationEpoch, expectedGeneration uint64) (VectorPartitionLifecycleMutationProofV1, error) {
 	if c.Authority == nil || c.Committer == nil {
 		return VectorPartitionLifecycleMutationProofV1{}, ErrCatalogMetaUnavailable
 	}
@@ -188,6 +196,9 @@ func (c VectorPartitionLifecycleCoordinatorV1) invalidateBeforeRelevantMutationV
 	proof, active, err := c.Authority.MutationProofV1(identity)
 	if err != nil {
 		return proof, err
+	}
+	if active && expectedGeneration != 0 && proof.ActiveGeneration != expectedGeneration {
+		return VectorPartitionLifecycleMutationProofV1{}, ErrVectorPartitionLifecycleIdentity
 	}
 	if !active {
 		if err := c.validateConfirmedMutationProofV1(identity, proof, "prior"); err != nil {
