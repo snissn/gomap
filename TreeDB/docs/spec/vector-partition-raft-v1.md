@@ -195,13 +195,15 @@ the first-generation race where no active index record yet exists to invalidate.
 
 | supported ingress | single/batch/admin mutation forms | mandatory shared boundary |
 | --- | --- | --- |
-| nativewire server | create/drop collection or index; insert, replace, delete, BSON-set update (single forms normalize to batch commands) | `SubmitCommandEntryWithVectorPartitionAdmissionV1` before data consensus, then `ConfirmCommittedVectorPartitionMutationV1` after commit/apply |
-| Mongo gateway | Mongo insert/update/delete and collection/index administration after translation to the same nativewire commands | `SubmitCommandEntryWithVectorPartitionAdmissionV1` before data consensus, then `ConfirmCommittedVectorPartitionMutationV1` after commit/apply |
+| nativewire server | create collection; insert batch, replace batch, delete batch, and single-document BSON-set update | `SubmitCommandEntryWithVectorPartitionAdmissionV1` before data consensus, then `ConfirmCommittedVectorPartitionMutationV1` after commit/apply |
+| Mongo gateway | create collection and Mongo insert/update/delete after normalization to create collection, insert batch, BSON-set update, or delete batch | `SubmitCommandEntryWithVectorPartitionAdmissionV1` before data consensus, then `ConfirmCommittedVectorPartitionMutationV1` after commit/apply |
 
 There is no ingress-specific lifecycle hook: both rows use the same routed
 submitter composition and the same catalog mutation barrier. Benchmark-support
 route scaffolds are intentionally fail-closed and are not a supported mutation
-root.
+root. Replicated create/drop index and drop collection are not supported R3a
+commands; cluster mode rejects them before submit, so they cannot bypass this
+inventory through a local metadata mutation.
 
 Fence state is included in the canonical catalog snapshot and is exposed to
 operators with its collection, index name, epoch, and pending bit. Retire and

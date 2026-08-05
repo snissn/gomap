@@ -118,15 +118,10 @@ func NewRoutedRaftClusterSubmitter(bridge raftcluster.CommandSubmitterV1, provid
 // Legacy routed construction remains valid only where the replicated catalog
 // does not require the vector-partition lifecycle feature.
 func NewRoutedRaftClusterSubmitterWithVectorPartitionAdmissionV1(bridge raftcluster.CommandSubmitterV1, provider ClusterRouteProvider, admission VectorPartitionMutationAdmissionProviderV1, managers ...*collections.CollectionManager) (*RoutedRaftClusterSubmitter, error) {
-	if admission == nil {
-		return nil, errors.New("nativewire: vector partition admission provider is required")
+	base, err := NewRaftClusterSubmitterWithVectorPartitionAdmissionV1(bridge, admission, managers...)
+	if err != nil {
+		return nil, err
 	}
-	lifecycle, ok := admission.(VectorPartitionMutationLifecycleProviderV1)
-	if !ok {
-		return nil, errors.New("nativewire: vector partition mutation confirmation provider is required")
-	}
-	base := NewRaftClusterSubmitter(bridge, managers...)
-	base.VectorPartitionAdmission = lifecycle
 	return &RoutedRaftClusterSubmitter{RaftClusterSubmitter: base, RouteProvider: provider}, nil
 }
 

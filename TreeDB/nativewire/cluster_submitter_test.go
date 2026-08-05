@@ -1036,6 +1036,19 @@ func TestCatalogRoutedVectorPartitionAdmissionInvalidatesBeforeDataCommitV1(t *t
 		t.Fatal(err)
 	}
 	admission := &CatalogVectorPartitionMutationAdmissionV1{Authority: authority, Coordinator: coordinator}
+	otherCollection := []iwire.Section{
+		{ID: iwire.SectionIdempotencyKey, Bytes: []byte("audit-1")},
+		collectionNameRef("audit"),
+	}
+	if err := admission.AdmitVectorPartitionMutationV1(ctx, iwire.CommandInsertBatch, otherCollection); err != nil {
+		t.Fatalf("admit unrelated collection: %v", err)
+	}
+	if err := admission.ConfirmVectorPartitionMutationV1(ctx, iwire.CommandInsertBatch, otherCollection); err != nil {
+		t.Fatalf("confirm unrelated collection: %v", err)
+	}
+	if record, ok := authority.VectorPartitionLifecycleRecordV1(identity); !ok || record.State != raftplacement.VectorPartitionLifecycleActiveV1 {
+		t.Fatalf("unrelated collection changed active lifecycle record=%+v present=%v", record, ok)
+	}
 	submitter, err := NewRoutedRaftClusterSubmitterWithVectorPartitionAdmissionV1(dispatcher, routes, admission, mgr)
 	if err != nil {
 		t.Fatal(err)
