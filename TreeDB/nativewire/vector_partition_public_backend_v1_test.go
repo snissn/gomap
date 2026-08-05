@@ -20,6 +20,7 @@ func TestVectorPartitionPublicBackendMapsCoordinatorErrorsV1(t *testing.T) {
 		want public.ErrorCodeV1
 	}{
 		{VectorPartitionCoordinatorErrorInvalidRequestV1, public.ErrorInvalidRequestV1},
+		{VectorPartitionCoordinatorErrorMalformedResponseV1, public.ErrorFailedV1},
 		{VectorPartitionCoordinatorErrorGenerationMismatchV1, public.ErrorGenerationMismatchV1},
 		{VectorPartitionCoordinatorErrorCanceledV1, public.ErrorCanceledV1},
 		{VectorPartitionCoordinatorErrorDeadlineV1, public.ErrorDeadlineExceededV1},

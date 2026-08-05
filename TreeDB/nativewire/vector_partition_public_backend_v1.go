@@ -201,8 +201,10 @@ func publicBackendErrorV1(err error) error {
 	var coordinatorErr *VectorPartitionCoordinatorErrorV1
 	if errors.As(err, &coordinatorErr) {
 		switch coordinatorErr.Code {
-		case VectorPartitionCoordinatorErrorInvalidRequestV1, VectorPartitionCoordinatorErrorRouteMismatchV1, VectorPartitionCoordinatorErrorBudgetExceededV1, VectorPartitionCoordinatorErrorMalformedResponseV1:
+		case VectorPartitionCoordinatorErrorInvalidRequestV1, VectorPartitionCoordinatorErrorRouteMismatchV1, VectorPartitionCoordinatorErrorBudgetExceededV1:
 			return &public.ErrorV1{Code: public.ErrorInvalidRequestV1, Err: err}
+		case VectorPartitionCoordinatorErrorMalformedResponseV1:
+			return &public.ErrorV1{Code: public.ErrorFailedV1, Err: err}
 		case VectorPartitionCoordinatorErrorGenerationMismatchV1:
 			return &public.ErrorV1{Code: public.ErrorGenerationMismatchV1, Err: err}
 		case VectorPartitionCoordinatorErrorCanceledV1:
