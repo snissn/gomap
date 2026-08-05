@@ -108,12 +108,48 @@ func TestNormalizationTokensPreserveEqualityRelationshipsAcrossObservation(t *te
 	f.NormalizeFields = []string{"generated", "_id"}
 	shared := bson.NewObjectID()
 	observation := Observation{Response: raw(t, bson.D{{Key: "generated", Value: shared}}), Baseline: []bson.Raw{raw(t, bson.D{{Key: "_id", Value: shared}})}, State: []bson.Raw{raw(t, bson.D{{Key: "_id", Value: bson.NewObjectID()}})}}
-	normalized := normalizedObservation(observation, nil, nil, f.NormalizeFields, false, false)
+	normalized := normalizedObservation(observation, nil, nil, f.NormalizeFields, false, false, false)
 	if fmt.Sprint(normalized.Response) == fmt.Sprint(normalized.State) {
 		t.Fatal("distinct generated values collapsed to one token")
 	}
 	if !strings.Contains(fmt.Sprint(normalized.Response), "1") || !strings.Contains(fmt.Sprint(normalized.Baseline), "1") {
 		t.Fatalf("shared response/state value did not retain one token: %+v", normalized)
+	}
+}
+
+func TestComparisonNormalizationPreservesCrossResponseStateIdentity(t *testing.T) {
+	f := fixture()
+	f.NormalizeFields = []string{"generated", "_id"}
+	shared := bson.NewObjectID()
+	left := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Response: raw(t, bson.D{{Key: "generated", Value: shared}}), State: []bson.Raw{raw(t, bson.D{{Key: "_id", Value: shared}})}}, nil
+	})
+	right := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Response: raw(t, bson.D{{Key: "generated", Value: bson.NewObjectID()}}), State: []bson.Raw{raw(t, bson.D{{Key: "_id", Value: bson.NewObjectID()}})}}, nil
+	})
+	if row := Run(context.Background(), "identity", []Fixture{f}, left, right).Fixtures[0]; row.Status != "mismatch" || !strings.Contains(row.Reason, "post-command") {
+		t.Fatalf("cross-observation identity was hidden: %+v", row)
+	}
+}
+
+func TestCursorNamespaceNormalizationPreservesSuffixAndCursorError(t *testing.T) {
+	f := fixture()
+	f.NormalizeFields = []string{"cursor.id"}
+	f.NormalizeCursorNamespace = true
+	left := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Response: raw(t, bson.D{{Key: "cursor", Value: bson.D{{Key: "id", Value: int64(3)}, {Key: "ns", Value: "tree.$cmd.listIndexes"}}}}), CursorError: &Error{Code: 43, Labels: []string{"CursorNotFound"}}}, nil
+	})
+	right := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Response: raw(t, bson.D{{Key: "cursor", Value: bson.D{{Key: "id", Value: int64(4)}, {Key: "ns", Value: "reference.$cmd.listIndexes"}}}}), CursorError: &Error{Code: 43, Labels: []string{"CursorNotFound"}}}, nil
+	})
+	if row := Run(context.Background(), "identity", []Fixture{f}, left, right).Fixtures[0]; row.Status != "pass" {
+		t.Fatalf("db prefix normalization should preserve matching suffix: %+v", row)
+	}
+	wrongSuffix := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Response: raw(t, bson.D{{Key: "cursor", Value: bson.D{{Key: "id", Value: int64(4)}, {Key: "ns", Value: "reference.$cmd.listCollections"}}}}), CursorError: &Error{Code: 44}}, nil
+	})
+	if row := Run(context.Background(), "identity", []Fixture{f}, left, wrongSuffix).Fixtures[0]; row.Status != "mismatch" {
+		t.Fatalf("cursor suffix/error semantic mismatch was hidden: %+v", row)
 	}
 }
 
@@ -198,9 +234,23 @@ func TestDifferencesInCountsErrorsAndCursorContentFail(t *testing.T) {
 	}
 }
 
+func TestMatchingErrorsStillRequireMatchingPostState(t *testing.T) {
+	f := fixture()
+	errState := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Error: &Error{Code: 2, CommandRejection: true}, State: []bson.Raw{raw(t, bson.D{{Key: "_id", Value: "a"}})}}, nil
+	})
+	mutated := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Error: &Error{Code: 2, CommandRejection: true}, State: []bson.Raw{raw(t, bson.D{{Key: "_id", Value: "a"}, {Key: "mutated", Value: true}})}}, nil
+	})
+	if row := Run(context.Background(), "identity", []Fixture{f}, errState, mutated).Fixtures[0]; row.Status != "mismatch" || !strings.Contains(row.Reason, "post-command") {
+		t.Fatalf("matching errors hid state mutation: %+v", row)
+	}
+}
+
 func TestCursorReplyNormalizationRetainsInitialAndGetMoreStructure(t *testing.T) {
 	f := fixture()
-	f.NormalizeFields = []string{"cursor.id", "cursor.ns"}
+	f.NormalizeFields = []string{"cursor.id"}
+	f.NormalizeCursorNamespace = true
 	initial := raw(t, bson.D{{Key: "ok", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "id", Value: int64(71)}, {Key: "ns", Value: "db.c"}, {Key: "firstBatch", Value: bson.A{bson.D{{Key: "_id", Value: "first"}}}}}}})
 	next := raw(t, bson.D{{Key: "ok", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "id", Value: int64(0)}, {Key: "ns", Value: "db.c"}, {Key: "nextBatch", Value: bson.A{bson.D{{Key: "_id", Value: "next"}}}}}}})
 	otherInitial := raw(t, bson.D{{Key: "ok", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "id", Value: int64(999)}, {Key: "ns", Value: "other.c"}, {Key: "firstBatch", Value: bson.A{bson.D{{Key: "_id", Value: "first"}}}}}}})

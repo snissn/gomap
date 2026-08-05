@@ -85,19 +85,24 @@ row, and `rejected` fixtures must map to a rejected/not-implemented row.
 bundled full set also covers supported read, write, aggregate, distinct, and
 metadata shapes. Post-command state enumerates every collection in the fixture
 database in collection-name order, retaining each collection's natural document
-order and deterministic collection/index metadata supported by both targets.
+order and deterministic collection/index metadata. It is a bounded mutation
+witness, not a claim to snapshot every MongoDB catalog option or view attribute.
 The runner never sorts
 documents to make a disagreement disappear.
 
-`ignore_fields`, `ignore_state_fields`, and `normalize_fields` are each
-fixture-scoped. `normalize_fields` replaces only a declared nondeterministic
+`ignore_fields` applies only to command/cursor replies, while
+`ignore_state_fields` applies only to supported-case state comparison; neither
+is applied to the exact pre/post state proof required for a rejected fixture.
+`normalize_fields` replaces only a declared nondeterministic
 value (such as an ObjectID or BSON timestamp) while retaining its BSON type and
 path. `normalize_response_envelope_order` is a separate, explicit opt-in for
 top-level command-reply envelope keys such as `ok` and `n`.
 `normalize_cursor_envelope_order` is a separate opt-in for cursor transport
 keys (`id`, `ns`, `firstBatch`/`nextBatch`), while the initial raw reply and
 every raw `getMore` reply remain attributable. Nested BSON and cursor-document
-order remains significant. Rejected fixtures require an exact
+order remains significant. `normalize_cursor_namespace` normalizes only the
+database prefix of `cursor.ns`, retaining its collection or `$cmd` suffix.
+Rejected fixtures require an exact
 TreeDB error code, a successful reference command, and an unchanged complete
 TreeDB database snapshot.
 

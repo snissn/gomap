@@ -44,6 +44,7 @@ type diskFixture struct {
 	NormalizeFields                []string               `json:"normalize_fields"`
 	NormalizeResponseEnvelopeOrder bool                   `json:"normalize_response_envelope_order"`
 	NormalizeCursorEnvelopeOrder   bool                   `json:"normalize_cursor_envelope_order"`
+	NormalizeCursorNamespace       bool                   `json:"normalize_cursor_namespace"`
 }
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -112,7 +113,7 @@ func loadFixtures(dir string, smokeOnly bool) ([]compatdiff.Fixture, error) {
 		if smokeOnly && !disk.Smoke {
 			continue
 		}
-		fixture := compatdiff.Fixture{Schema: disk.Schema, Version: disk.Version, ID: disk.ID, CapabilityID: disk.CapabilityID, Expectation: disk.Expectation, ExpectedErrorCode: disk.ExpectedErrorCode, Database: disk.Database, Collection: disk.Collection, Smoke: disk.Smoke, IgnoreFields: disk.IgnoreFields, IgnoreStateFields: disk.IgnoreStateFields, NormalizeFields: disk.NormalizeFields, NormalizeResponseEnvelopeOrder: disk.NormalizeResponseEnvelopeOrder, NormalizeCursorEnvelopeOrder: disk.NormalizeCursorEnvelopeOrder}
+		fixture := compatdiff.Fixture{Schema: disk.Schema, Version: disk.Version, ID: disk.ID, CapabilityID: disk.CapabilityID, Expectation: disk.Expectation, ExpectedErrorCode: disk.ExpectedErrorCode, Database: disk.Database, Collection: disk.Collection, Smoke: disk.Smoke, IgnoreFields: disk.IgnoreFields, IgnoreStateFields: disk.IgnoreStateFields, NormalizeFields: disk.NormalizeFields, NormalizeResponseEnvelopeOrder: disk.NormalizeResponseEnvelopeOrder, NormalizeCursorEnvelopeOrder: disk.NormalizeCursorEnvelopeOrder, NormalizeCursorNamespace: disk.NormalizeCursorNamespace}
 		if fixture.Command, err = extJSON(disk.Command); err != nil {
 			return nil, fmt.Errorf("%s command: %w", path, err)
 		}
@@ -185,7 +186,11 @@ func (t target) Execute(ctx context.Context, fixture compatdiff.Fixture) (compat
 		}
 		return compatdiff.Observation{}, err
 	}
-	defer func() { _ = client.Disconnect(context.Background()) }()
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = client.Disconnect(cleanupCtx)
+	}()
 	if err := client.Ping(ctx, nil); err != nil {
 		if t.reference {
 			return compatdiff.Observation{}, compatdiff.ReferenceUnavailable{Err: err}
@@ -205,7 +210,11 @@ func (t target) Execute(ctx context.Context, fixture compatdiff.Fixture) (compat
 		}
 	}
 	db := client.Database(uniqueDatabaseName(fixture))
-	defer func() { _ = db.Drop(context.Background()) }()
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = db.Drop(cleanupCtx)
+	}()
 	coll := db.Collection(fixture.Collection)
 	if len(fixture.Seed) > 0 {
 		docs := make([]any, len(fixture.Seed))
@@ -233,11 +242,12 @@ func (t target) Execute(ctx context.Context, fixture compatdiff.Fixture) (compat
 	} else {
 		observation.Response = response
 		if isCursorCommand(fixture.Command) {
-			replies, err := drainCursorReplies(commandCtx, db, fixture.Collection, response)
+			replies, cursorError, err := drainCursorReplies(commandCtx, db, response)
 			if err != nil {
 				return compatdiff.Observation{}, t.executionError(err)
 			}
 			observation.CursorReplies = replies
+			observation.CursorError = cursorError
 		}
 	}
 	state, err := snapshotDatabase(ctx, db)
@@ -248,36 +258,44 @@ func (t target) Execute(ctx context.Context, fixture compatdiff.Fixture) (compat
 	return observation, nil
 }
 
-func drainCursorReplies(ctx context.Context, db *mongo.Database, collection string, initial bson.Raw) ([]bson.Raw, error) {
+func drainCursorReplies(ctx context.Context, db *mongo.Database, initial bson.Raw) ([]bson.Raw, *compatdiff.Error, error) {
 	cursor, ok := initial.Lookup("cursor").DocumentOK()
 	if !ok {
-		return nil, nil
+		return nil, nil, nil
 	}
 	id, ok := cursor.Lookup("id").AsInt64OK()
+	namespace, _ := cursor.Lookup("ns").StringValueOK()
+	_, collection, found := strings.Cut(namespace, ".")
+	if !found || collection == "" {
+		return nil, nil, fmt.Errorf("cursor response has invalid namespace %q", namespace)
+	}
 	if !ok || id == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	const maxGetMoreReplies = 128
 	var replies []bson.Raw
 	for range maxGetMoreReplies {
 		reply, err := db.RunCommand(ctx, bson.D{{Key: "getMore", Value: id}, {Key: "collection", Value: collection}}).Raw()
 		if err != nil {
-			return nil, err
+			if command, ok := commandError(err); ok {
+				return replies, command, nil
+			}
+			return replies, nil, err
 		}
 		replies = append(replies, reply)
 		cursor, ok = reply.Lookup("cursor").DocumentOK()
 		if !ok {
-			return nil, errors.New("getMore response omitted cursor")
+			return replies, nil, errors.New("getMore response omitted cursor")
 		}
 		id, ok = cursor.Lookup("id").AsInt64OK()
 		if !ok {
-			return nil, errors.New("getMore response omitted cursor id")
+			return replies, nil, errors.New("getMore response omitted cursor id")
 		}
 		if id == 0 {
-			return replies, nil
+			return replies, nil, nil
 		}
 	}
-	return nil, fmt.Errorf("cursor exceeded %d getMore replies", maxGetMoreReplies)
+	return replies, nil, fmt.Errorf("cursor exceeded %d getMore replies", maxGetMoreReplies)
 }
 
 func clientOptions(uri string) *options.ClientOptions {

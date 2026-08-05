@@ -49,6 +49,7 @@ type Fixture struct {
 	NormalizeFields                []string    `json:"normalize_fields,omitempty"`
 	NormalizeResponseEnvelopeOrder bool        `json:"normalize_response_envelope_order,omitempty"`
 	NormalizeCursorEnvelopeOrder   bool        `json:"normalize_cursor_envelope_order,omitempty"`
+	NormalizeCursorNamespace       bool        `json:"normalize_cursor_namespace,omitempty"`
 }
 
 func (f Fixture) Validate() error {
@@ -90,6 +91,7 @@ type Error struct {
 type Observation struct {
 	Response      bson.Raw   `json:"-"`
 	CursorReplies []bson.Raw `json:"-"`
+	CursorError   *Error     `json:"cursor_error,omitempty"`
 	Error         *Error     `json:"error,omitempty"`
 	Baseline      []bson.Raw `json:"-"`
 	State         []bson.Raw `json:"-"`
@@ -128,6 +130,7 @@ type FixtureResult struct {
 type NormalizedObservation struct {
 	Response      any    `json:"response,omitempty"`
 	CursorReplies []any  `json:"cursor_replies,omitempty"`
+	CursorError   *Error `json:"cursor_error,omitempty"`
 	Error         *Error `json:"error,omitempty"`
 	Baseline      []any  `json:"baseline,omitempty"`
 	State         []any  `json:"state,omitempty"`
@@ -164,7 +167,7 @@ func Run(ctx context.Context, capabilityIdentity string, fixtures []Fixture, tre
 			result.Fixtures = append(result.Fixtures, row)
 			continue
 		}
-		row.TreeDB = normalizedObservation(treeObs, fixture.IgnoreFields, fixture.IgnoreStateFields, fixture.NormalizeFields, fixture.NormalizeResponseEnvelopeOrder, fixture.NormalizeCursorEnvelopeOrder)
+		row.TreeDB = normalizedObservation(treeObs, fixture.IgnoreFields, fixture.IgnoreStateFields, fixture.NormalizeFields, fixture.NormalizeResponseEnvelopeOrder, fixture.NormalizeCursorEnvelopeOrder, fixture.NormalizeCursorNamespace)
 		refObs, err := reference.Execute(ctx, fixture)
 		if err != nil {
 			var unavailable ReferenceUnavailable
@@ -177,7 +180,7 @@ func Run(ctx context.Context, capabilityIdentity string, fixtures []Fixture, tre
 			result.Fixtures = append(result.Fixtures, row)
 			continue
 		}
-		row.Reference = normalizedObservation(refObs, fixture.IgnoreFields, fixture.IgnoreStateFields, fixture.NormalizeFields, fixture.NormalizeResponseEnvelopeOrder, fixture.NormalizeCursorEnvelopeOrder)
+		row.Reference = normalizedObservation(refObs, fixture.IgnoreFields, fixture.IgnoreStateFields, fixture.NormalizeFields, fixture.NormalizeResponseEnvelopeOrder, fixture.NormalizeCursorEnvelopeOrder, fixture.NormalizeCursorNamespace)
 		row.Status, row.Reason = compare(fixture, treeObs, refObs)
 		row.Duration = time.Since(oneStarted)
 		result.Fixtures = append(result.Fixtures, row)
@@ -205,9 +208,10 @@ func statusPriority(status string) int {
 	}
 }
 
-func normalizedObservation(observation Observation, ignoredResponse, ignoredState, normalized []string, normalizeResponseEnvelopeOrder, normalizeCursorEnvelopeOrder bool) NormalizedObservation {
-	result := NormalizedObservation{Error: observation.Error}
+func normalizedObservation(observation Observation, ignoredResponse, ignoredState, normalized []string, normalizeResponseEnvelopeOrder, normalizeCursorEnvelopeOrder, normalizeCursorNamespace bool) NormalizedObservation {
+	result := NormalizedObservation{Error: observation.Error, CursorError: observation.CursorError}
 	tokens := newNormalizationTokens()
+	tokens.normalizeCursorNamespace = normalizeCursorNamespace
 	if len(observation.Response) > 0 {
 		result.Response = normalizeResponseWithTokens(observation.Response, ignoredResponse, normalized, normalizeResponseEnvelopeOrder, normalizeCursorEnvelopeOrder, tokens)
 	}
@@ -254,20 +258,24 @@ func compare(f Fixture, tree, reference Observation) (string, string) {
 	if !sameError(tree.Error, reference.Error) {
 		return "mismatch", fmt.Sprintf("error differs: TreeDB=%s reference=%s", describeError(tree.Error), describeError(reference.Error))
 	}
+	treeComparable, referenceComparable := normalizedComparableObservation(tree, f), normalizedComparableObservation(reference, f)
 	if tree.Error != nil {
+		if !sameNormalizedValues(treeComparable.State, referenceComparable.State) {
+			return "mismatch", "post-command state differs after matching error"
+		}
 		return "pass", ""
 	}
 	if hasCursorTranscript(tree, reference) {
-		if !sameCursorTranscript(tree, reference, f) {
+		if !sameNormalizedValues(treeComparable.Response, referenceComparable.Response) || !sameNormalizedValues(treeComparable.CursorReplies, referenceComparable.CursorReplies) || !sameError(tree.CursorError, reference.CursorError) {
 			return "mismatch", "cursor reply sequence differs"
 		}
-	} else if !sameResponseWithNormalization(tree.Response, reference.Response, f.IgnoreFields, f.NormalizeFields, f.NormalizeResponseEnvelopeOrder, f.NormalizeCursorEnvelopeOrder) {
+	} else if !sameNormalizedValues(treeComparable.Response, referenceComparable.Response) {
 		return "mismatch", "normalized command response differs"
 	}
-	if !hasCursorTranscript(tree, reference) && !sameCursorRepliesWithNormalization(tree.CursorReplies, reference.CursorReplies, f.IgnoreFields, f.NormalizeFields, f.NormalizeResponseEnvelopeOrder, f.NormalizeCursorEnvelopeOrder) {
+	if !hasCursorTranscript(tree, reference) && (!sameNormalizedValues(treeComparable.CursorReplies, referenceComparable.CursorReplies) || !sameError(tree.CursorError, reference.CursorError)) {
 		return "mismatch", "cursor reply sequence differs"
 	}
-	if !sameDocumentsWithNormalization(tree.State, reference.State, f.IgnoreStateFields, f.NormalizeFields) {
+	if !sameNormalizedValues(treeComparable.State, referenceComparable.State) {
 		return "mismatch", "post-command state differs"
 	}
 	return "pass", ""
@@ -283,11 +291,33 @@ func sameCursorTranscript(tree, reference Observation, f Fixture) bool {
 
 func normalizeCursorTranscript(observation Observation, f Fixture) []any {
 	tokens := newNormalizationTokens()
+	tokens.normalizeCursorNamespace = f.NormalizeCursorNamespace
 	result := []any{normalizeResponseWithTokens(observation.Response, f.IgnoreFields, f.NormalizeFields, f.NormalizeResponseEnvelopeOrder, f.NormalizeCursorEnvelopeOrder, tokens)}
 	for _, reply := range observation.CursorReplies {
 		result = append(result, normalizeResponseWithTokens(reply, f.IgnoreFields, f.NormalizeFields, f.NormalizeResponseEnvelopeOrder, f.NormalizeCursorEnvelopeOrder, tokens))
 	}
+	result = append(result, comparableError(observation.CursorError))
 	return result
+}
+
+// normalizedComparableObservation intentionally uses one token table for the
+// complete target observation. This preserves relationships such as an
+// generated _id returned by a command also appearing in the post-state.
+func normalizedComparableObservation(observation Observation, f Fixture) NormalizedObservation {
+	return normalizedObservation(observation, f.IgnoreFields, f.IgnoreStateFields, f.NormalizeFields, f.NormalizeResponseEnvelopeOrder, f.NormalizeCursorEnvelopeOrder, f.NormalizeCursorNamespace)
+}
+
+func sameNormalizedValues(left, right any) bool {
+	return fmt.Sprintf("%#v", left) == fmt.Sprintf("%#v", right)
+}
+
+func comparableError(err *Error) any {
+	if err == nil {
+		return nil
+	}
+	labels := append([]string(nil), err.Labels...)
+	sort.Strings(labels)
+	return []any{err.Code, err.Codes, labels}
 }
 
 func responseOK(raw bson.Raw) bool {
@@ -405,8 +435,9 @@ func normalizeDocument(doc bson.Raw, prefix string, ignored, normalized []string
 }
 
 type normalizationTokens struct {
-	values map[string]int
-	next   int
+	values                   map[string]int
+	next                     int
+	normalizeCursorNamespace bool
 }
 
 func newNormalizationTokens() *normalizationTokens {
@@ -440,6 +471,14 @@ func normalizeDocumentWithTokens(doc bson.Raw, prefix string, ignored, normalize
 		if contains(normalized, path) {
 			out = append(out, []any{element.Key(), []any{"normalized", byte(element.Value().Type), tokens.token(element.Value())}})
 			continue
+		}
+		if tokens.normalizeCursorNamespace && path == "cursor.ns" && element.Value().Type == bson.TypeString {
+			ns, _ := element.Value().StringValueOK()
+			_, suffix, found := strings.Cut(ns, ".")
+			if found && suffix != "" {
+				out = append(out, []any{element.Key(), []any{"normalized-cursor-namespace", byte(element.Value().Type), suffix}})
+				continue
+			}
 		}
 		out = append(out, []any{element.Key(), normalizeValueWithTokens(element.Value(), path, ignored, normalized, tokens)})
 	}

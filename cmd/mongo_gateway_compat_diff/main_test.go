@@ -22,7 +22,7 @@ func TestBundledFixturesLoadAndSmokeSelectionIsReal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) < 10 || len(smoke) != 3 {
+	if len(all) < 11 || len(smoke) != 3 {
 		t.Fatalf("all=%d smoke=%d", len(all), len(smoke))
 	}
 }
@@ -98,6 +98,13 @@ func TestCommandErrorClassifiesAllWriteAndConcernCodes(t *testing.T) {
 	got, ok := commandError(mongo.WriteException{WriteErrors: []mongo.WriteError{{Code: 11000, Message: "duplicate"}, {Code: 121, Message: "validation"}}, WriteConcernError: &mongo.WriteConcernError{Code: 64, Message: "concern"}})
 	if !ok || got.Code != 11000 || strings.Join([]string{strconv.Itoa(int(got.Codes[0])), strconv.Itoa(int(got.Codes[1])), strconv.Itoa(int(got.Codes[2]))}, ",") != "11000,121,64" {
 		t.Fatalf("write causes were lost: %#v, %v", got, ok)
+	}
+}
+
+func TestCommandErrorClassifiesWriteConcernOnly(t *testing.T) {
+	got, ok := commandError(mongo.WriteException{WriteConcernError: &mongo.WriteConcernError{Code: 64, Message: "concern"}})
+	if !ok || got.Code != 64 || len(got.Codes) != 1 || got.Codes[0] != 64 || !got.CommandRejection {
+		t.Fatalf("write concern-only error was not classified: %#v, %v", got, ok)
 	}
 }
 
