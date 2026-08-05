@@ -8,6 +8,7 @@ This benchmark compares persistent database-tier ANN search:
   `quantized_rerank` query modes via explicit demo flags
 - SQLite with the Vectorlite loadable extension, backed by hnswlib/HNSW
 - PostgreSQL with pgvector full-vector HNSW
+- Milvus Standalone full-vector HNSW
 - MongoDB Vector Search HNSW when pointed at Atlas or a local Atlas deployment
 
 `sqlite-vec` is intentionally not used for the ANN comparison. Upstream
@@ -26,7 +27,7 @@ scripts/bench_vector_db_compare.sh
 ```
 
 The default backend set is `treedb,vectorlite`. Add `treedb_column_graph`, the
-TreeDB scalar_u8/RaBitQ quantized aliases, `pgvector`, or `mongodb` to
+TreeDB scalar_u8/RaBitQ quantized aliases, `pgvector`, `milvus`, or `mongodb` to
 `BACKENDS` when those paths or external services are needed.
 
 Useful overrides:
@@ -96,7 +97,7 @@ Backends:
   normalized `ef_search` set when set to `0`).
 - `vectorlite`: runs SQLite+Vectorlite with its persisted HNSW sidecar file.
 - `pgvector`: runs PostgreSQL+pgvector full-vector HNSW. If `PGVECTOR_DSN` is not set, the
-  runner starts a temporary `pgvector/pgvector:pg16` Docker container. The
+  runner starts the digest-pinned PostgreSQL 16 + pgvector 0.8.6 Docker image. The
   harness does not use pgvector `halfvec`, `binary_quantize`, SQL rerank,
   custom byte-code scoring, or custom operator classes; pgvector remains the
   full-vector HNSW anchor. The
@@ -106,6 +107,11 @@ Backends:
   benchmark schema dropped after the run. Insert timing includes client-side
   vector text serialization for COPY; the JSON result reports that preparation
   time separately under the insert phase.
+- `milvus`: runs Milvus Standalone full-vector HNSW. If `MILVUS_URI` is not
+  set, the runner checksum-verifies the pinned upstream Milvus 2.6.20 compose
+  file, replaces every server image with its frozen digest, and removes the
+  containers/network on exit. Server data remains under the run directory for
+  storage accounting.
 - `mongodb`: runs MongoDB Vector Search and requires `MONGODB_VECTOR_URI` to
   point at a deployment that supports `$vectorSearch` and `createSearchIndexes`.
   The runner installs PyMongo with SRV support for Atlas `mongodb+srv://` URIs
@@ -185,6 +191,13 @@ Configuration:
   the runner starts Docker unless `PGVECTOR_DOCKER=false`.
 - `PGVECTOR_DOCKER`, `PGVECTOR_IMAGE`, `PGVECTOR_MAX_CONNECTIONS`: automatic
   pgvector container controls.
+- `MILVUS_URI`: external Milvus endpoint. If empty and `milvus` is enabled,
+  the pinned standalone compose topology is started automatically.
+- `MILVUS_DOCKER`, `MILVUS_COMPOSE_URL`, `MILVUS_COMPOSE_SHA256`,
+  `MILVUS_IMAGE`, `MILVUS_ETCD_IMAGE`, `MILVUS_MINIO_IMAGE`: exact automatic
+  Milvus topology controls.
+- `MILVUS_COLLECTION`, `MILVUS_INDEX`, `MILVUS_ALLOW_DROP_COLLECTION`,
+  `MILVUS_DROP_COLLECTION_AFTER`: benchmark namespace and cleanup controls.
 - `PGVECTOR_SCHEMA`, `PGVECTOR_TABLE`: benchmark schema/table names.
 - `PGVECTOR_ALLOW_DROP_SCHEMA`: pass `--allow-drop-schema` to permit replacing
   an existing disposable schema.
@@ -209,6 +222,7 @@ The runner writes:
 - `treedb_column_graph_rabitq_1bit_quantized_rerank.json`: TreeDB RaBitQ quantized-rerank result when enabled
 - `vectorlite.json`: SQLite+Vectorlite benchmark result
 - `pgvector.json`: PostgreSQL+pgvector full-vector HNSW benchmark result when enabled
+- `milvus.json`: Milvus Standalone full-vector HNSW benchmark result when enabled
 - `mongodb.json`: MongoDB Vector Search benchmark result when enabled
 - `comparison.md`: normalized comparison table
 - TreeDB column_graph search profiles under backend-specific subdirectories of
