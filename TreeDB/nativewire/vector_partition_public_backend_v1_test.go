@@ -130,17 +130,14 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 		t.Fatalf("operations health = %#v, %v", health, err)
 	}
 	topology.mu.Lock()
-	topology.listeners["group-c"], topology.serving["group-c"] = topology.listeners["group-b"], topology.serving["group-b"]
-	delete(topology.listeners, "group-b")
-	delete(topology.serving, "group-b")
+	listeners, serving := topology.listeners, topology.serving
+	topology.listeners, topology.serving = nil, nil
 	topology.mu.Unlock()
-	if health, err := backend.OperationsHealthV1(ctx); err != nil || health.Ready || health.Reason != "topology_unavailable" {
-		t.Fatalf("wrong serving groups health = %#v, %v", health, err)
+	if health, err := backend.OperationsHealthV1(ctx); err != nil || !health.Ready || health.Reason != "ready" {
+		t.Fatalf("coordinator-only health = %#v, %v", health, err)
 	}
 	topology.mu.Lock()
-	topology.listeners["group-b"], topology.serving["group-b"] = topology.listeners["group-c"], topology.serving["group-c"]
-	delete(topology.listeners, "group-c")
-	delete(topology.serving, "group-c")
+	topology.listeners, topology.serving = listeners, serving
 	topology.mu.Unlock()
 	backend.opts.Identity.Source.Checksum++
 	if health, err := backend.OperationsHealthV1(ctx); err != nil || health.Ready || health.Reason != "source_mismatch" {

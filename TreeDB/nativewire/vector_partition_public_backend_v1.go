@@ -198,7 +198,12 @@ func (b *VectorPartitionPublicBackendV1) OperationsHealthV1(ctx context.Context)
 	}
 	requiredGroups := slices.Clone(b.opts.RequiredGroups)
 	slices.Sort(requiredGroups)
-	if !slices.Equal(topology.ShardGroups, requiredGroups) {
+	ownerGroups := make([]raftcluster.GroupID, 0, len(topology.Endpoints))
+	for group := range topology.Endpoints {
+		ownerGroups = append(ownerGroups, group)
+	}
+	slices.Sort(ownerGroups)
+	if !slices.Equal(ownerGroups, requiredGroups) {
 		return public.OperationsHealthV1{Generation: id, Reason: "topology_unavailable"}, nil
 	}
 	requiredAppliedIndex, err := b.opts.ReadFence.LinearizableCatalogMetaAppliedIndexV1(ctx)
