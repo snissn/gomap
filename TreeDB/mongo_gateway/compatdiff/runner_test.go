@@ -219,6 +219,13 @@ func TestCursorReplyNormalizationRetainsInitialAndGetMoreStructure(t *testing.T)
 	if row := Run(context.Background(), "identity", []Fixture{f}, left, droppedGetMore).Fixtures[0]; row.Status != "mismatch" || !strings.Contains(row.Reason, "cursor reply") {
 		t.Fatalf("cursor closure sequence difference was hidden: %+v", row)
 	}
+	openAfterGetMore := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		stillOpen := raw(t, bson.D{{Key: "ok", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "id", Value: int64(999)}, {Key: "ns", Value: "other.c"}, {Key: "nextBatch", Value: bson.A{bson.D{{Key: "_id", Value: "next"}}}}}}})
+		return Observation{Response: otherInitial, CursorReplies: []bson.Raw{stillOpen}}, nil
+	})
+	if row := Run(context.Background(), "identity", []Fixture{f}, left, openAfterGetMore).Fixtures[0]; row.Status != "mismatch" || !strings.Contains(row.Reason, "cursor reply") {
+		t.Fatalf("cursor closure relationship was hidden: %+v", row)
+	}
 }
 
 func TestUnavailableReferenceIsNotCompatibilityFailure(t *testing.T) {

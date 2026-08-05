@@ -257,16 +257,37 @@ func compare(f Fixture, tree, reference Observation) (string, string) {
 	if tree.Error != nil {
 		return "pass", ""
 	}
-	if !sameResponseWithNormalization(tree.Response, reference.Response, f.IgnoreFields, f.NormalizeFields, f.NormalizeResponseEnvelopeOrder, f.NormalizeCursorEnvelopeOrder) {
+	if hasCursorTranscript(tree, reference) {
+		if !sameCursorTranscript(tree, reference, f) {
+			return "mismatch", "cursor reply sequence differs"
+		}
+	} else if !sameResponseWithNormalization(tree.Response, reference.Response, f.IgnoreFields, f.NormalizeFields, f.NormalizeResponseEnvelopeOrder, f.NormalizeCursorEnvelopeOrder) {
 		return "mismatch", "normalized command response differs"
 	}
-	if !sameCursorRepliesWithNormalization(tree.CursorReplies, reference.CursorReplies, f.IgnoreFields, f.NormalizeFields, f.NormalizeResponseEnvelopeOrder, f.NormalizeCursorEnvelopeOrder) {
+	if !hasCursorTranscript(tree, reference) && !sameCursorRepliesWithNormalization(tree.CursorReplies, reference.CursorReplies, f.IgnoreFields, f.NormalizeFields, f.NormalizeResponseEnvelopeOrder, f.NormalizeCursorEnvelopeOrder) {
 		return "mismatch", "cursor reply sequence differs"
 	}
 	if !sameDocumentsWithNormalization(tree.State, reference.State, f.IgnoreStateFields, f.NormalizeFields) {
 		return "mismatch", "post-command state differs"
 	}
 	return "pass", ""
+}
+
+func hasCursorTranscript(tree, reference Observation) bool {
+	return len(tree.CursorReplies) > 0 || len(reference.CursorReplies) > 0 || tree.Response.Lookup("cursor").Type != 0 || reference.Response.Lookup("cursor").Type != 0
+}
+
+func sameCursorTranscript(tree, reference Observation, f Fixture) bool {
+	return fmt.Sprintf("%#v", normalizeCursorTranscript(tree, f)) == fmt.Sprintf("%#v", normalizeCursorTranscript(reference, f))
+}
+
+func normalizeCursorTranscript(observation Observation, f Fixture) []any {
+	tokens := newNormalizationTokens()
+	result := []any{normalizeResponseWithTokens(observation.Response, f.IgnoreFields, f.NormalizeFields, f.NormalizeResponseEnvelopeOrder, f.NormalizeCursorEnvelopeOrder, tokens)}
+	for _, reply := range observation.CursorReplies {
+		result = append(result, normalizeResponseWithTokens(reply, f.IgnoreFields, f.NormalizeFields, f.NormalizeResponseEnvelopeOrder, f.NormalizeCursorEnvelopeOrder, tokens))
+	}
+	return result
 }
 
 func responseOK(raw bson.Raw) bool {
