@@ -21,6 +21,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 	"github.com/tidwall/gjson"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 const documentIndexStateVersion = 2
@@ -2499,6 +2500,16 @@ func encodeIndexScalar(valueType IndexValueType, value any) ([]byte, error) {
 func appendIndexScalar(dst []byte, valueType IndexValueType, value any) ([]byte, []byte, error) {
 	start := len(dst)
 	switch valueType {
+	case IndexValueBSONOrderedV2:
+		raw, ok := value.(bson.RawValue)
+		if !ok {
+			return dst, nil, fmt.Errorf("collections: indexed value for type %q must be bson.RawValue, got %T", valueType, value)
+		}
+		var err error
+		dst, _, err = appendBSONIndexKeyComponentV2(dst, raw)
+		if err != nil {
+			return dst, nil, err
+		}
 	case IndexValueString:
 		v, ok := value.(string)
 		if !ok {
@@ -2737,6 +2748,9 @@ func appendIndexValuePrefixSlice(dst []byte, encodedValue []byte) ([]byte, []byt
 }
 
 func indexKeyDocumentID(valueType IndexValueType, key []byte) ([]byte, error) {
+	if valueType == IndexValueBSONOrderedV2 {
+		return bsonIndexKeyDocumentIDV2(key)
+	}
 	n, err := indexComponentLength(valueType, key)
 	if err != nil {
 		return nil, err

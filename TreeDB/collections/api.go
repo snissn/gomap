@@ -1069,6 +1069,10 @@ const (
 	IndexValueBool   IndexValueType = "bool"
 	IndexValueInt64  IndexValueType = "int64"
 	IndexValueDouble IndexValueType = "double"
+	// IndexValueBSONOrderedV2 identifies the versioned BSON scalar key codec.
+	// It is valid only for BSON collections and intentionally has no legacy
+	// treedbValueType equivalent.
+	IndexValueBSONOrderedV2 IndexValueType = "bson-ordered-v2"
 )
 
 type CollectionOptions struct {
@@ -22072,7 +22076,7 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 
 func normalizeIndexValueType(valueType IndexValueType) (IndexValueType, error) {
 	switch valueType {
-	case IndexValueString, IndexValueBool, IndexValueInt64, IndexValueDouble:
+	case IndexValueString, IndexValueBool, IndexValueInt64, IndexValueDouble, IndexValueBSONOrderedV2:
 		return valueType, nil
 	case "":
 		return "", errors.New("value_type is required")

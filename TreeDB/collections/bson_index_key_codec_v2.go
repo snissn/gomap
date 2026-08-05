@@ -81,6 +81,12 @@ func encodeBSONIndexKeyComponentV2(value bson.RawValue) ([]byte, error) {
 	return out[:len(component):len(component)], nil
 }
 
+// EncodeBSONIndexKeyComponentV2 exposes the frozen v2 scalar key encoding to
+// the Mongo gateway planner without exposing its internal decoder surface.
+func EncodeBSONIndexKeyComponentV2(value bson.RawValue) ([]byte, error) {
+	return encodeBSONIndexKeyComponentV2(value)
+}
+
 // appendBSONIndexKeyComponentV2 appends one ascending, self-delimiting scalar
 // component. Concatenating returned components is safe for compound indexes.
 // The document ID is deliberately appended by bsonIndexEntryKeyV2 afterwards.
