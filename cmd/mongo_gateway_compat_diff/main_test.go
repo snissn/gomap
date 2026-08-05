@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -77,10 +78,18 @@ func TestClientOptionsDoNotInjectCommandMaxTimeMS(t *testing.T) {
 }
 
 func TestReferenceSeedFailureIsReferenceUnavailable(t *testing.T) {
-	err := target{reference: true}.seedError(errors.New("reference disconnected during seed"))
+	err := target{reference: true}.seedError(&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")})
 	var unavailable compatdiff.ReferenceUnavailable
 	if !errors.As(err, &unavailable) {
 		t.Fatalf("reference seed failure was not classified as unavailable: %T %v", err, err)
+	}
+}
+
+func TestReferenceSeedHarnessDeadlineIsNotUnavailable(t *testing.T) {
+	err := target{reference: true}.seedError(context.DeadlineExceeded)
+	var unavailable compatdiff.ReferenceUnavailable
+	if errors.As(err, &unavailable) {
+		t.Fatalf("harness deadline was classified unavailable: %T %v", err, err)
 	}
 }
 

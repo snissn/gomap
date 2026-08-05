@@ -25,6 +25,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/topology"
 )
 
 type diskFixture struct {
@@ -348,27 +349,25 @@ func (t target) executionError(err error) error {
 // MongoDB seed rejection makes the fixture setup invalid; it is not comparison
 // evidence and must not be presented as a retryable missing-reference error.
 func (t target) seedError(err error) error {
-	if !t.reference || mongoSemanticError(err) {
+	if !t.reference || !referenceTransportError(err) {
 		return err
 	}
 	return t.executionError(err)
 }
 
-func mongoSemanticError(err error) bool {
-	var command mongo.CommandError
-	if errors.As(err, &command) {
+func referenceTransportError(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if mongo.IsNetworkError(err) {
 		return true
 	}
-	var write mongo.WriteException
-	if errors.As(err, &write) {
+	var selection topology.ServerSelectionError
+	if errors.As(err, &selection) {
 		return true
 	}
-	var bulk mongo.BulkWriteException
-	if errors.As(err, &bulk) {
-		return true
-	}
-	var concern mongo.WriteConcernError
-	return errors.As(err, &concern)
+	var operation *net.OpError
+	return errors.As(err, &operation)
 }
 
 func commandError(err error) (*compatdiff.Error, bool) {
