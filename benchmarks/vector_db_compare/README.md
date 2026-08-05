@@ -191,13 +191,17 @@ Configuration:
   the runner starts Docker unless `PGVECTOR_DOCKER=false`.
 - `PGVECTOR_DOCKER`, `PGVECTOR_IMAGE`, `PGVECTOR_MAX_CONNECTIONS`: automatic
   pgvector container controls.
-- `MILVUS_URI`: external Milvus endpoint. If empty and `milvus` is enabled,
-  the pinned standalone compose topology is started automatically.
+- `MILVUS_URI`, `MILVUS_TOKEN`: external Milvus endpoint and credential. If
+  `MILVUS_URI` is empty and `milvus` is enabled, the pinned standalone compose
+  topology is started automatically. The token defaults to `root:Milvus`.
 - `MILVUS_DOCKER`, `MILVUS_COMPOSE_URL`, `MILVUS_COMPOSE_SHA256`,
   `MILVUS_IMAGE`, `MILVUS_ETCD_IMAGE`, `MILVUS_MINIO_IMAGE`: exact automatic
   Milvus topology controls.
 - `MILVUS_COLLECTION`, `MILVUS_INDEX`, `MILVUS_ALLOW_DROP_COLLECTION`,
   `MILVUS_DROP_COLLECTION_AFTER`: benchmark namespace and cleanup controls.
+- `MILVUS_STORAGE_DIR`: explicit server-data mount to include in storage
+  accounting for an external Milvus endpoint. Without it, storage is reported
+  as unavailable instead of attributing a local path.
 - `PGVECTOR_SCHEMA`, `PGVECTOR_TABLE`: benchmark schema/table names.
 - `PGVECTOR_ALLOW_DROP_SCHEMA`: pass `--allow-drop-schema` to permit replacing
   an existing disposable schema.

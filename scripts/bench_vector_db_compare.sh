@@ -77,6 +77,7 @@ PGVECTOR_DROP_SCHEMA_AFTER="${PGVECTOR_DROP_SCHEMA_AFTER:-false}"
 PGVECTOR_CONTAINER=""
 
 MILVUS_URI="${MILVUS_URI:-}"
+MILVUS_TOKEN="${MILVUS_TOKEN:-root:Milvus}"
 MILVUS_DOCKER="${MILVUS_DOCKER:-auto}"
 MILVUS_COMPOSE_URL="${MILVUS_COMPOSE_URL:-https://github.com/milvus-io/milvus/releases/download/v2.6.20/milvus-standalone-docker-compose.yml}"
 MILVUS_COMPOSE_SHA256="${MILVUS_COMPOSE_SHA256:-9e0e8187e197ce23d3da3e63c19bc20189782f96bacb97287f8fcee80ba628c3}"
@@ -88,6 +89,10 @@ MILVUS_COLLECTION="${MILVUS_COLLECTION:-gomap_vector_bench_${RANDOM}_$$}"
 MILVUS_INDEX="${MILVUS_INDEX:-embedding_hnsw}"
 MILVUS_ALLOW_DROP_COLLECTION="${MILVUS_ALLOW_DROP_COLLECTION:-false}"
 MILVUS_DROP_COLLECTION_AFTER="${MILVUS_DROP_COLLECTION_AFTER:-false}"
+MILVUS_STORAGE_DIR_EXPLICIT=false
+if [[ -n "${MILVUS_STORAGE_DIR:-}" ]]; then
+	MILVUS_STORAGE_DIR_EXPLICIT=true
+fi
 MILVUS_STORAGE_DIR="${MILVUS_STORAGE_DIR:-$RUN_DIR/milvus-server}"
 MILVUS_COMPOSE_FILE=""
 MILVUS_STARTED=false
@@ -267,7 +272,7 @@ PY
 		exit 1
 	fi
 	MILVUS_URI="http://127.0.0.1:${mapped}"
-	"$VENV/bin/python" - <<'PY' "$MILVUS_URI"
+	"$VENV/bin/python" - <<'PY' "$MILVUS_URI" "$MILVUS_TOKEN"
 import sys
 import time
 from pymilvus import MilvusClient
@@ -275,7 +280,7 @@ from pymilvus import MilvusClient
 last = None
 for _ in range(360):
     try:
-        client = MilvusClient(uri=sys.argv[1], token="root:Milvus")
+        client = MilvusClient(uri=sys.argv[1], token=sys.argv[2])
         client.list_collections()
         client.close()
         raise SystemExit(0)
@@ -636,6 +641,7 @@ if contains_backend milvus; then
 	milvus_args=(
 		--dataset-dir "$RUN_DIR/dataset"
 		--uri "$MILVUS_URI"
+		--token "$MILVUS_TOKEN"
 		--collection "$MILVUS_COLLECTION"
 		--index "$MILVUS_INDEX"
 		--output "$RUN_DIR/milvus.json"
@@ -648,7 +654,7 @@ if contains_backend milvus; then
 		--ef-search "$EF_SEARCH"
 		--min-recall "$EFFECTIVE_MIN_RECALL"
 	)
-	if [[ "$MILVUS_STARTED" == "true" || -d "$MILVUS_STORAGE_DIR" ]]; then
+	if [[ "$MILVUS_STARTED" == "true" || "$MILVUS_STORAGE_DIR_EXPLICIT" == "true" ]]; then
 		milvus_args+=(--storage-dir "$MILVUS_STORAGE_DIR")
 	fi
 	if [[ "$MILVUS_DROP_COLLECTION_AFTER" == "true" ]]; then
