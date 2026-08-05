@@ -91,7 +91,7 @@ func (b *VectorPartitionPublicBackendV1) RegisterVectorPartitionV1(ctx context.C
 			return public.GenerationStatusV1{}, err
 		}
 	}
-	return publicStatusV1(record, false), nil
+	return publicStatusV1(record), nil
 }
 func (b *VectorPartitionPublicBackendV1) GenerationStatusV1(_ context.Context, id public.GenerationIDV1) (public.GenerationStatusV1, error) {
 	if err := b.checkID(id); err != nil {
@@ -101,21 +101,21 @@ func (b *VectorPartitionPublicBackendV1) GenerationStatusV1(_ context.Context, i
 	if !ok {
 		return public.GenerationStatusV1{Generation: id, State: public.GenerationAbsentV1}, nil
 	}
-	return publicStatusV1(r, false), nil
+	return publicStatusV1(r), nil
 }
 func (b *VectorPartitionPublicBackendV1) PrepareVectorPartitionV1(ctx context.Context, id public.GenerationIDV1) (public.GenerationStatusV1, error) {
 	if err := b.checkID(id); err != nil {
 		return public.GenerationStatusV1{}, err
 	}
 	r, err := b.opts.Lifecycle.PrepareV1(ctx, b.opts.Identity)
-	return publicStatusV1(r, false), err
+	return publicStatusV1(r), err
 }
 func (b *VectorPartitionPublicBackendV1) ActivateVectorPartitionV1(ctx context.Context, id public.GenerationIDV1) (public.GenerationStatusV1, error) {
 	if err := b.checkID(id); err != nil {
 		return public.GenerationStatusV1{}, err
 	}
 	r, err := b.opts.Lifecycle.ActivateV1(ctx, b.opts.Identity)
-	return publicStatusV1(r, err == nil && r.State == raftplacement.VectorPartitionLifecycleActiveV1), err
+	return publicStatusV1(r), err
 }
 func (b *VectorPartitionPublicBackendV1) InvalidateVectorPartitionV1(ctx context.Context, id public.GenerationIDV1, reason string) (public.GenerationStatusV1, error) {
 	if err := b.checkID(id); err != nil {
@@ -132,7 +132,7 @@ func (b *VectorPartitionPublicBackendV1) RetireVectorPartitionV1(ctx context.Con
 		return public.GenerationStatusV1{}, err
 	}
 	r, err := b.opts.Lifecycle.RetireV1(ctx, b.opts.Identity)
-	return publicStatusV1(r, false), err
+	return publicStatusV1(r), err
 }
 func (b *VectorPartitionPublicBackendV1) RequestVectorPartitionRebuildV1(ctx context.Context, id public.GenerationIDV1) (public.GenerationStatusV1, error) {
 	if err := b.checkID(id); err != nil {
@@ -160,7 +160,7 @@ func (b *VectorPartitionPublicBackendV1) checkID(id public.GenerationIDV1) error
 	}
 	return nil
 }
-func publicStatusV1(r raftplacement.VectorPartitionLifecycleRecordV1, _ bool) public.GenerationStatusV1 {
+func publicStatusV1(r raftplacement.VectorPartitionLifecycleRecordV1) public.GenerationStatusV1 {
 	return public.GenerationStatusV1{Generation: public.GenerationIDV1{Index: r.Identity.Index.IndexName, Generation: r.Identity.Generation}, State: public.GenerationStateV1(r.State), Active: r.State == raftplacement.VectorPartitionLifecycleActiveV1, Ready: len(r.RequiredGroups) != 0 && len(r.ReadyGroups) == len(r.RequiredGroups), Revision: r.Revision}
 }
 
