@@ -18,6 +18,18 @@ ROOT = SCRIPT.parents[1]
 
 
 class VectorDBCompareScriptTest(unittest.TestCase):
+    def test_external_comparator_defaults_are_exactly_pinned(self) -> None:
+        script = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("PSYCOPG_PACKAGE=\"${PSYCOPG_PACKAGE:-psycopg[binary]==3.3.4}\"", script)
+        self.assertIn("PYMILVUS_PACKAGE=\"${PYMILVUS_PACKAGE:-pymilvus==2.6.16}\"", script)
+        self.assertIn("MILVUS_TOKEN=\"${MILVUS_TOKEN:-root:Milvus}\"", script)
+        self.assertIn('--token "$MILVUS_TOKEN"', script)
+        self.assertIn('"$MILVUS_STORAGE_DIR_EXPLICIT" == "true"', script)
+        self.assertNotIn('|| -d "$MILVUS_STORAGE_DIR"', script)
+        self.assertIn("9e0e8187e197ce23d3da3e63c19bc20189782f96bacb97287f8fcee80ba628c3", script)
+        self.assertIn("milvusdb/milvus:v2.6.20@sha256:e514fced2aa26cf3b94e7de20986fe9e535159fde08f9934d245d0e1a909c18c", script)
+        self.assertIn("pgvector/pgvector:pg16@sha256:84a355869251af1a3379cfc9fa7b4dbf962c03f642a4bb7b339a203925071c43", script)
+
     def run_with_fake_tools(
         self,
         *,

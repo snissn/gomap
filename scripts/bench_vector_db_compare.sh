@@ -62,10 +62,12 @@ TREEDB_VALIDATION_EXACT_SOURCE="${TREEDB_VALIDATION_EXACT_SOURCE:-}"
 TREEDB_SEARCH_PROFILE_DIR="${TREEDB_SEARCH_PROFILE_DIR:-}"
 NUMPY_PACKAGE="${NUMPY_PACKAGE:-numpy==2.0.2}"
 VECTORLITE_PACKAGE="${VECTORLITE_PACKAGE:-vectorlite-py==0.2.0}"
+PSYCOPG_PACKAGE="${PSYCOPG_PACKAGE:-psycopg[binary]==3.3.4}"
+PYMILVUS_PACKAGE="${PYMILVUS_PACKAGE:-pymilvus==2.6.16}"
 
 PGVECTOR_DSN="${PGVECTOR_DSN:-}"
 PGVECTOR_DOCKER="${PGVECTOR_DOCKER:-auto}"
-PGVECTOR_IMAGE="${PGVECTOR_IMAGE:-pgvector/pgvector:pg16}"
+PGVECTOR_IMAGE="${PGVECTOR_IMAGE:-pgvector/pgvector:pg16@sha256:84a355869251af1a3379cfc9fa7b4dbf962c03f642a4bb7b339a203925071c43}"
 PGVECTOR_MAX_CONNECTIONS="${PGVECTOR_MAX_CONNECTIONS:-256}"
 PGVECTOR_CONTAINER_NAME="${PGVECTOR_CONTAINER_NAME:-gomap-pgvector-$RANDOM-$$}"
 PGVECTOR_SCHEMA="${PGVECTOR_SCHEMA:-gomap_vector_bench_${RANDOM}_$$}"
@@ -73,6 +75,27 @@ PGVECTOR_TABLE="${PGVECTOR_TABLE:-documents}"
 PGVECTOR_ALLOW_DROP_SCHEMA="${PGVECTOR_ALLOW_DROP_SCHEMA:-false}"
 PGVECTOR_DROP_SCHEMA_AFTER="${PGVECTOR_DROP_SCHEMA_AFTER:-false}"
 PGVECTOR_CONTAINER=""
+
+MILVUS_URI="${MILVUS_URI:-}"
+MILVUS_TOKEN="${MILVUS_TOKEN:-root:Milvus}"
+MILVUS_DOCKER="${MILVUS_DOCKER:-auto}"
+MILVUS_COMPOSE_URL="${MILVUS_COMPOSE_URL:-https://github.com/milvus-io/milvus/releases/download/v2.6.20/milvus-standalone-docker-compose.yml}"
+MILVUS_COMPOSE_SHA256="${MILVUS_COMPOSE_SHA256:-9e0e8187e197ce23d3da3e63c19bc20189782f96bacb97287f8fcee80ba628c3}"
+MILVUS_IMAGE="${MILVUS_IMAGE:-milvusdb/milvus:v2.6.20@sha256:e514fced2aa26cf3b94e7de20986fe9e535159fde08f9934d245d0e1a909c18c}"
+MILVUS_ETCD_IMAGE="${MILVUS_ETCD_IMAGE:-quay.io/coreos/etcd:v3.5.25@sha256:dc2bdc588d2adc5272204a1fff7f1d89f31e8caacea78fdf509fd409d7162a9d}"
+MILVUS_MINIO_IMAGE="${MILVUS_MINIO_IMAGE:-minio/minio:RELEASE.2024-12-18T13-15-44Z@sha256:34c8e2f52a5984492555427fee07254c80036bdb7079bb91679232abd7a4fa20}"
+MILVUS_PROJECT="${MILVUS_PROJECT:-gomap-milvus-$RANDOM-$$}"
+MILVUS_COLLECTION="${MILVUS_COLLECTION:-gomap_vector_bench_${RANDOM}_$$}"
+MILVUS_INDEX="${MILVUS_INDEX:-embedding_hnsw}"
+MILVUS_ALLOW_DROP_COLLECTION="${MILVUS_ALLOW_DROP_COLLECTION:-false}"
+MILVUS_DROP_COLLECTION_AFTER="${MILVUS_DROP_COLLECTION_AFTER:-false}"
+MILVUS_STORAGE_DIR_EXPLICIT=false
+if [[ -n "${MILVUS_STORAGE_DIR:-}" ]]; then
+	MILVUS_STORAGE_DIR_EXPLICIT=true
+fi
+MILVUS_STORAGE_DIR="${MILVUS_STORAGE_DIR:-$RUN_DIR/milvus-server}"
+MILVUS_COMPOSE_FILE=""
+MILVUS_STARTED=false
 
 MONGODB_VECTOR_URI="${MONGODB_VECTOR_URI:-}"
 MONGODB_VECTOR_DATABASE="${MONGODB_VECTOR_DATABASE:-gomap_vector_bench_${RANDOM}_$$}"
@@ -82,6 +105,9 @@ MONGODB_VECTOR_NUM_CANDIDATES="${MONGODB_VECTOR_NUM_CANDIDATES:-$EF_SEARCH}"
 MONGODB_VECTOR_INDEX_TIMEOUT_SECONDS="${MONGODB_VECTOR_INDEX_TIMEOUT_SECONDS:-300}"
 
 cleanup() {
+	if [[ "$MILVUS_STARTED" == "true" ]]; then
+		DOCKER_VOLUME_DIRECTORY="$MILVUS_STORAGE_DIR" docker compose -p "$MILVUS_PROJECT" -f "$MILVUS_COMPOSE_FILE" down -v --remove-orphans >/dev/null 2>&1 || true
+	fi
 	if [[ -n "$PGVECTOR_CONTAINER" ]]; then
 		docker rm -f "$PGVECTOR_CONTAINER" >/dev/null 2>&1 || true
 	fi
@@ -109,14 +135,14 @@ validate_backends() {
 	for backend in "${raw[@]}"; do
 		backend="${backend//[[:space:]]/}"
 		case "$backend" in
-			treedb|treedb_column_graph|treedb_column_graph_quantized_only|treedb_column_graph_quantized_rerank|treedb_column_graph_scalar_u8_quantized_only|treedb_column_graph_scalar_u8_quantized_rerank|treedb_column_graph_rabitq_1bit_quantized_only|treedb_column_graph_rabitq_1bit_quantized_rerank|vectorlite|pgvector|mongodb)
+			treedb|treedb_column_graph|treedb_column_graph_quantized_only|treedb_column_graph_quantized_rerank|treedb_column_graph_scalar_u8_quantized_only|treedb_column_graph_scalar_u8_quantized_rerank|treedb_column_graph_rabitq_1bit_quantized_only|treedb_column_graph_rabitq_1bit_quantized_rerank|vectorlite|pgvector|milvus|mongodb)
 				;;
 			"")
 				echo "empty backend in BACKENDS=$BACKENDS" >&2
 				exit 1
 				;;
 			*)
-				echo "unknown backend: $backend (known: treedb,treedb_column_graph,treedb_column_graph_quantized_only,treedb_column_graph_quantized_rerank,treedb_column_graph_scalar_u8_quantized_only,treedb_column_graph_scalar_u8_quantized_rerank,treedb_column_graph_rabitq_1bit_quantized_only,treedb_column_graph_rabitq_1bit_quantized_rerank,vectorlite,pgvector,mongodb)" >&2
+				echo "unknown backend: $backend (known: treedb,treedb_column_graph,treedb_column_graph_quantized_only,treedb_column_graph_quantized_rerank,treedb_column_graph_scalar_u8_quantized_only,treedb_column_graph_scalar_u8_quantized_rerank,treedb_column_graph_rabitq_1bit_quantized_only,treedb_column_graph_rabitq_1bit_quantized_rerank,vectorlite,pgvector,milvus,mongodb)" >&2
 				exit 1
 				;;
 		esac
@@ -191,6 +217,77 @@ for _ in range(120):
         last = exc
         time.sleep(0.5)
 raise SystemExit(f"PostgreSQL+pgvector did not become ready: {last}")
+PY
+}
+
+start_milvus_if_needed() {
+	if [[ -n "$MILVUS_URI" ]]; then
+		return
+	fi
+	if [[ "$MILVUS_DOCKER" == "false" ]]; then
+		echo "MILVUS_URI is required when MILVUS_DOCKER=false" >&2
+		exit 1
+	fi
+	if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
+		echo "docker compose is required for automatic Milvus startup; set MILVUS_URI to use an external service" >&2
+		exit 1
+	fi
+	if ! command -v curl >/dev/null 2>&1; then
+		echo "curl is required to fetch the pinned Milvus compose file" >&2
+		exit 1
+	fi
+	mkdir -p "$MILVUS_STORAGE_DIR"
+	local downloaded="$RUN_DIR/milvus-compose.downloaded.yml"
+	MILVUS_COMPOSE_FILE="$RUN_DIR/milvus-compose.pinned.yml"
+	curl -fsSL "$MILVUS_COMPOSE_URL" -o "$downloaded"
+	"$VENV/bin/python" - <<'PY' "$downloaded" "$MILVUS_COMPOSE_SHA256"
+import hashlib
+import pathlib
+import sys
+
+actual = hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest()
+if actual != sys.argv[2]:
+    raise SystemExit(f"Milvus compose SHA-256 {actual} does not match {sys.argv[2]}")
+PY
+	sed \
+		-e '/^[[:space:]]*container_name:/d' \
+		-e "s#quay.io/coreos/etcd:v3.5.25#$MILVUS_ETCD_IMAGE#" \
+		-e "s#minio/minio:RELEASE.2024-12-18T13-15-44Z#$MILVUS_MINIO_IMAGE#" \
+		-e "s#milvusdb/milvus:v2.6.20#$MILVUS_IMAGE#" \
+		-e 's#- "9001:9001"#- "127.0.0.1::9001"#' \
+		-e 's#- "9000:9000"#- "127.0.0.1::9000"#' \
+		-e 's#- "19530:19530"#- "127.0.0.1::19530"#' \
+		-e 's#- "9091:9091"#- "127.0.0.1::9091"#' \
+		"$downloaded" | sed '/^networks:/,$d' >"$MILVUS_COMPOSE_FILE"
+	for image in "$MILVUS_ETCD_IMAGE" "$MILVUS_MINIO_IMAGE" "$MILVUS_IMAGE"; do
+		grep -Fq "image: $image" "$MILVUS_COMPOSE_FILE" || { echo "derived Milvus compose omits pinned image $image" >&2; exit 1; }
+	done
+	echo "starting pinned Milvus Standalone: $MILVUS_IMAGE"
+	MILVUS_STARTED=true
+	DOCKER_VOLUME_DIRECTORY="$MILVUS_STORAGE_DIR" docker compose -p "$MILVUS_PROJECT" -f "$MILVUS_COMPOSE_FILE" up -d
+	local mapped
+	mapped=$(DOCKER_VOLUME_DIRECTORY="$MILVUS_STORAGE_DIR" docker compose -p "$MILVUS_PROJECT" -f "$MILVUS_COMPOSE_FILE" port standalone 19530 | sed -nE 's/.*:([0-9]+)$/\1/p' | head -n 1)
+	if [[ -z "$mapped" ]]; then
+		echo "could not determine mapped Milvus port" >&2
+		exit 1
+	fi
+	MILVUS_URI="http://127.0.0.1:${mapped}"
+	"$VENV/bin/python" - <<'PY' "$MILVUS_URI" "$MILVUS_TOKEN"
+import sys
+import time
+from pymilvus import MilvusClient
+
+last = None
+for _ in range(360):
+    try:
+        client = MilvusClient(uri=sys.argv[1], token=sys.argv[2])
+        client.list_collections()
+        client.close()
+        raise SystemExit(0)
+    except Exception as exc:  # noqa: BLE001
+        last = exc
+        time.sleep(0.5)
+raise SystemExit(f"Milvus Standalone did not become ready: {last}")
 PY
 }
 
@@ -278,7 +375,9 @@ cat >"$RUN_DIR/README.md" <<EOF
   - \`TREEDB_REQUIRE_LEAF_VLOG_BYTES=${TREEDB_REQUIRE_LEAF_VLOG_BYTES:-<unset>}\`
   - \`TREEDB_VALIDATION_EXACT_SOURCE=${TREEDB_VALIDATION_EXACT_SOURCE:-<unset; demo default treedb>}\`
   - \`TREEDB_SEARCH_PROFILE_DIR=${TREEDB_SEARCH_PROFILE_DIR:-<unset>}\`
-- Python packages: \`$NUMPY_PACKAGE\`, \`$VECTORLITE_PACKAGE\`
+- Python packages: \`$NUMPY_PACKAGE\`, \`$VECTORLITE_PACKAGE\`, \`$PSYCOPG_PACKAGE\`, \`$PYMILVUS_PACKAGE\`
+- PostgreSQL+pgvector image: \`$PGVECTOR_IMAGE\`
+- Milvus compose SHA/images: \`$MILVUS_COMPOSE_SHA256\` / \`$MILVUS_IMAGE\` / \`$MILVUS_ETCD_IMAGE\` / \`$MILVUS_MINIO_IMAGE\`
 
 This run compares persistent database-tier ANN search:
 
@@ -291,6 +390,7 @@ This run compares persistent database-tier ANN search:
 - SQLite+Vectorlite HNSW through Python's \`sqlite3\` and the \`vectorlite-py\`
   loadable extension
 - PostgreSQL+pgvector HNSW through a PostgreSQL server
+- Milvus Standalone HNSW through the pinned upstream compose topology
 - MongoDB Vector Search HNSW only when \`MONGODB_VECTOR_URI\` points at Atlas or
   local Atlas Vector Search
 
@@ -313,7 +413,10 @@ if contains_backend vectorlite; then
 	binary_pip_packages+=("$VECTORLITE_PACKAGE")
 fi
 if contains_backend pgvector; then
-	backend_pip_packages+=("psycopg[binary]")
+	backend_pip_packages+=("$PSYCOPG_PACKAGE")
+fi
+if contains_backend milvus; then
+	backend_pip_packages+=("$PYMILVUS_PACKAGE")
 fi
 if contains_backend mongodb; then
 	backend_pip_packages+=("pymongo[srv]")
@@ -530,6 +633,38 @@ if contains_backend pgvector; then
 	fi
 	"$VENV/bin/python" benchmarks/vector_db_compare/pgvector_bench.py "${pgvector_args[@]}" >"$RUN_DIR/pgvector.stdout.json"
 	result_args+=(--result "$RUN_DIR/pgvector.json")
+fi
+
+if contains_backend milvus; then
+	start_milvus_if_needed
+	echo "running Milvus Standalone benchmark"
+	milvus_args=(
+		--dataset-dir "$RUN_DIR/dataset"
+		--uri "$MILVUS_URI"
+		--token "$MILVUS_TOKEN"
+		--collection "$MILVUS_COLLECTION"
+		--index "$MILVUS_INDEX"
+		--output "$RUN_DIR/milvus.json"
+		--queries "$QUERIES"
+		--validate-queries "$VALIDATE_QUERIES"
+		--top-k "$TOP_K"
+		--search-concurrency "$SEARCH_CONCURRENCY"
+		--m "$M"
+		--ef-construction "$EF_CONSTRUCTION"
+		--ef-search "$EF_SEARCH"
+		--min-recall "$EFFECTIVE_MIN_RECALL"
+	)
+	if [[ "$MILVUS_STARTED" == "true" || "$MILVUS_STORAGE_DIR_EXPLICIT" == "true" ]]; then
+		milvus_args+=(--storage-dir "$MILVUS_STORAGE_DIR")
+	fi
+	if [[ "$MILVUS_DROP_COLLECTION_AFTER" == "true" ]]; then
+		milvus_args+=(--drop-collection-after)
+	fi
+	if [[ "$MILVUS_ALLOW_DROP_COLLECTION" == "true" ]]; then
+		milvus_args+=(--allow-drop-collection)
+	fi
+	"$VENV/bin/python" benchmarks/vector_db_compare/milvus_bench.py "${milvus_args[@]}" >"$RUN_DIR/milvus.stdout.json"
+	result_args+=(--result "$RUN_DIR/milvus.json")
 fi
 
 if contains_backend mongodb; then

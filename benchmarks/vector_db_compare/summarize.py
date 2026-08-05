@@ -50,14 +50,18 @@ def storage_bytes(result: dict[str, Any]) -> int:
 
 
 def storage_display(result: dict[str, Any]) -> str:
+    if storage_record(result).get("unavailable_reason"):
+        return "n/a"
     label = bytes_human(storage_bytes(result))
     if storage_record(result).get("total_bytes_excludes_vector_search_index"):
         return f"{label}*"
     return label
 
 
-def bytes_per_doc(result: dict[str, Any]) -> float:
-    return float(storage_record(result)["bytes_per_doc"])
+def bytes_per_doc_display(result: dict[str, Any]) -> str:
+    if storage_record(result).get("unavailable_reason"):
+        return "n/a"
+    return f"{float(storage_record(result)['bytes_per_doc']):.1f}B"
 
 
 def insert_seconds(result: dict[str, Any]) -> float:
@@ -102,6 +106,8 @@ def backend_name(result: dict[str, Any]) -> str:
         return "SQLite+Vectorlite HNSW"
     if backend == "pgvector":
         return "PostgreSQL+pgvector HNSW"
+    if backend == "milvus":
+        return "Milvus Standalone HNSW"
     if backend == "mongodb_vector_search":
         return "MongoDB Vector Search HNSW"
     raise ValueError(f"unknown backend {backend!r}")
@@ -147,7 +153,7 @@ def search_mode(result: dict[str, Any]) -> str:
         return label_quantized_mode(mode or "quantized_only", quantized_codec(result))
     if backend in ("treedb_column_graph_quantized_rerank", "treedb_column_graph_scalar_u8_quantized_rerank", "treedb_column_graph_rabitq_1bit_quantized_rerank"):
         return label_quantized_mode(mode or "quantized_rerank", quantized_codec(result))
-    if backend == "pgvector":
+    if backend in ("pgvector", "milvus"):
         return "full-vector HNSW"
     if backend in ("sqlite_vectorlite", "mongodb_vector_search"):
         return "full-vector HNSW"
@@ -156,7 +162,7 @@ def search_mode(result: dict[str, Any]) -> str:
 
 def search_row_mode(result: dict[str, Any], row: dict[str, Any]) -> str:
     backend = result.get("backend")
-    if backend == "pgvector":
+    if backend in ("pgvector", "milvus"):
         return "full-vector HNSW"
     mode = str(row.get("query_mode") or result.get("query_mode") or "").strip()
     if backend in (None, "", "treedb", "treedb_column_graph") and mode in ("", "exact"):
@@ -192,7 +198,7 @@ def render(results: list[dict[str, Any]]) -> str:
     lines: list[str] = []
     lines.append("# Vector Database Benchmark")
     lines.append("")
-    lines.append("All reported systems use persistent database files or server-side durable storage, close/reopen or reconnect before validation/search, cosine distance, HNSW ANN search, and the same TreeDB-exported vectors and query set. TreeDB quantized rows are explicit TreeDB column_graph query modes with named scalar_u8 or rabitq_1bit score planes; PostgreSQL+pgvector remains a full-vector HNSW anchor.")
+    lines.append("All reported systems use persistent database files or server-side durable storage, close/reopen or reconnect before validation/search, cosine distance, HNSW ANN search, and the same TreeDB-exported vectors and query set. TreeDB quantized rows are explicit TreeDB column_graph query modes with named scalar_u8 or rabitq_1bit score planes; PostgreSQL+pgvector and Milvus remain full-vector HNSW anchors.")
     lines.append("")
     lines.append("## Build, Recall, Storage")
     lines.append("")
@@ -200,7 +206,7 @@ def render(results: list[dict[str, Any]]) -> str:
     lines.append("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for result in results:
         lines.append(
-            "| {backend} | {mode} | {insert:.3f}s | {build:.3f}s | {reopen:.3f}s | {recall:.4f} | {storage} | {per_doc:.1f}B | {index_memory} | {process_rss} |".format(
+            "| {backend} | {mode} | {insert:.3f}s | {build:.3f}s | {reopen:.3f}s | {recall:.4f} | {storage} | {per_doc} | {index_memory} | {process_rss} |".format(
                 backend=backend_name(result),
                 mode=search_mode(result),
                 insert=insert_seconds(result),
@@ -208,7 +214,7 @@ def render(results: list[dict[str, Any]]) -> str:
                 reopen=reopen_seconds(result),
                 recall=recall(result),
                 storage=storage_display(result),
-                per_doc=bytes_per_doc(result),
+                per_doc=bytes_per_doc_display(result),
                 index_memory=index_memory(result),
                 process_rss=process_rss(result),
             )
@@ -319,6 +325,7 @@ def render(results: list[dict[str, Any]]) -> str:
     lines.append("- SQLite+Vectorlite stores the SQLite table and its HNSW index file under the benchmark DB directory; storage includes both.")
     lines.append("- PostgreSQL+pgvector storage uses the benchmark table's `pg_total_relation_size`, including its full-vector HNSW index.")
     lines.append("- PostgreSQL+pgvector is not quantized by this harness: no halfvec, binary quantize, SQL rerank, byte-code scoring, or custom operator class is used.")
+    lines.append("- Milvus storage includes the standalone server, etcd, and MinIO files under the supplied compose data directory.")
     lines.append("- MongoDB is included only when run against a MongoDB Vector Search deployment, such as Atlas or local Atlas with `mongot`; plain `mongod` is not a vector-search comparator.")
     lines.append("- MongoDB storage marked with `*` uses `collStats` collection storage and ordinary index bytes; MongoDB Vector Search index bytes are not exposed by this harness.")
     lines.append("- TreeDB storage uses the post-close, post-index-vacuum retained datastore when reported by `treedb_vector_search_demo`; raw pre-close and pre-vacuum storage fields remain in the JSON.")
