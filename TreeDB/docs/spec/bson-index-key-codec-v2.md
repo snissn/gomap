@@ -1,7 +1,8 @@
 # BSON-Ordered Scalar Index Key Codec v2
 
-Status: staged substrate for issue #4061. Collection-index adoption and migration
-belong to #4062 and later issues. Existing typed-v1 indexes are unchanged.
+Status: adopted for BSON collection single-field scalar indexes by issue #4062.
+Existing typed-v1 indexes are unchanged. Compound, descending, multikey, and
+migration behavior remain outside this version's collection contract.
 
 ## Goals
 
@@ -96,8 +97,9 @@ directions.
 
 ## Durability and compatibility boundary
 
-Golden vectors and reopen tests freeze the byte format. The codec has no
-implicit fallback and no decoder for another generation. Existing typed-v1
-indexes remain readable and writable through their current code. #4062 must
-introduce explicit format selection and migration policy before v2 is used by
-collection indexes.
+Golden vectors and reopen tests freeze the byte format. Collection metadata
+explicitly selects v2; decoders and range-bound builders select that metadata,
+never an entry-byte heuristic. A v2 decoder has no implicit fallback and no
+decoder for another generation. Corrupt/truncated components or ID suffixes,
+or metadata that selects v2 for a non-BSON collection, fail closed. Existing
+typed-v1 indexes remain readable and writable through their current code.

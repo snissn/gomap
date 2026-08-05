@@ -815,6 +815,31 @@ reject older metadata versions instead of migrating them.
 
 ## 3.2 Collection Document Payloads
 
+### 3.2.1 BSON-ordered scalar secondary-index keys (v2)
+
+An index whose persisted metadata selects `bson_ordered_v2` is valid only for a
+BSON collection. Its ordered-root entry key is exactly one frozen BSON v2
+scalar component followed by one explicit BSON v2 document-ID suffix. The
+component is the `0xb2`-marked, self-delimiting scalar encoding defined in
+`bson-index-key-codec-v2.md`; the suffix has its own marker, zero escaping, and
+terminator. It is not a scalar component and does not participate in scalar
+ordering. The suffix makes otherwise equal scalar keys unique per document.
+
+Missing fields and BSON null have distinct scalar components. Numerically equal
+Int32, Int64, Double, and Decimal128 values have the same scalar component.
+Unsupported BSON scalar values fail before a document or index mutation is
+published. Unique indexes consequently treat equal normalized numeric values
+as conflicts, while missing and null follow their distinct-key policy.
+
+The persisted index `value_type` metadata, not a byte prefix or any inference
+from entry bytes, selects both component and document-ID decoding and the range
+bound construction. A v2 decoder never falls back to the legacy typed format,
+and a legacy decoder never attempts v2 bytes. Wrong collection document format,
+unknown value type, malformed/truncated v2 component or suffix, invalid escape,
+or metadata/key mismatch MUST fail closed at create/open/recovery or query time
+before returning a partial index result. Existing typed-v1 index metadata and
+bytes remain on their legacy path.
+
 Collection document payload encodings are defined separately in
 `TreeDB/docs/spec/collections-document-formats.md`. In particular,
 template-v1 collections store compact `TD1D` primary documents and persist the
