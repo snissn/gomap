@@ -62,21 +62,39 @@ func TestStandaloneWriteConcernAcceptedShapes(t *testing.T) {
 	}
 }
 
-func TestParseStandaloneWriteConcernAbsentIsAllocationFree(t *testing.T) {
-	command := mustDocument(t, bson.D{
-		{Key: "insert", Value: "users"},
-		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}}}},
-		{Key: "$db", Value: "app"},
-	})
-	var parseErr error
-	allocs := testing.AllocsPerRun(1000, func() {
-		_, parseErr = parseStandaloneWriteConcern(command)
-	})
-	if parseErr != nil {
-		t.Fatalf("parse absent writeConcern: %v", parseErr)
-	}
-	if allocs != 0 {
-		t.Fatalf("parse absent writeConcern allocations=%v want 0", allocs)
+func TestParseStandaloneWriteConcernDefaultsAreAllocationFree(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		concern any
+	}{
+		{name: "absent"},
+		{name: "empty", concern: bson.D{}},
+		{name: "w one", concern: bson.D{{Key: "w", Value: int32(1)}}},
+		{name: "journal false", concern: bson.D{{Key: "j", Value: false}}},
+		{name: "zero timeout", concern: bson.D{{Key: "wtimeout", Value: int32(0)}}},
+		{name: "combined", concern: bson.D{{Key: "w", Value: int64(1)}, {Key: "j", Value: false}, {Key: "wtimeout", Value: int64(0)}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			commandDocument := bson.D{
+				{Key: "insert", Value: "users"},
+				{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}}}},
+			}
+			if tc.concern != nil {
+				commandDocument = append(commandDocument, bson.E{Key: "writeConcern", Value: tc.concern})
+			}
+			commandDocument = append(commandDocument, bson.E{Key: "$db", Value: "app"})
+			command := mustDocument(t, commandDocument)
+			var parseErr error
+			allocs := testing.AllocsPerRun(1000, func() {
+				_, parseErr = parseStandaloneWriteConcern(command)
+			})
+			if parseErr != nil {
+				t.Fatalf("parse default writeConcern: %v", parseErr)
+			}
+			if allocs != 0 {
+				t.Fatalf("parse default writeConcern allocations=%v want 0", allocs)
+			}
+		})
 	}
 }
 

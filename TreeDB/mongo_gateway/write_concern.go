@@ -13,7 +13,13 @@ import (
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
-var standaloneWriteConcernKey = []byte("writeConcern")
+var (
+	standaloneWriteConcernKey          = []byte("writeConcern")
+	standaloneWriteConcernWKey         = []byte("w")
+	standaloneWriteConcernJournalKey   = []byte("j")
+	standaloneWriteConcernTimeoutKey   = []byte("wtimeout")
+	standaloneWriteConcernTimeoutMSKey = []byte("wtimeoutMS")
+)
 
 type standaloneWriteConcernPolicy uint8
 
@@ -240,39 +246,59 @@ func parseStandaloneWriteConcern(command wire.Document) (standaloneWriteConcern,
 	if value.IsZero() {
 		return concern, nil
 	}
-	raw, ok := value.DocumentOK()
+	contents, ok = rawBSONContainerContents(value)
 	if !ok {
 		return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: "Mongo command field \"writeConcern\" must be a document"}
 	}
-	elements, err := raw.Elements()
-	if err != nil {
-		return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("Mongo command field \"writeConcern\" is malformed: %v", err)}
-	}
-	seen := make(map[string]struct{}, len(elements))
-	for _, element := range elements {
-		key, err := element.KeyErr()
-		if err != nil {
+	var seenW, seenJournal, seenTimeout, seenTimeoutMS bool
+	for len(contents) != 0 {
+		element, next, ok := bsoncore.ReadElement(contents)
+		if !ok {
+			return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: "Mongo command field \"writeConcern\" is malformed"}
+		}
+		if err := element.Validate(); err != nil {
 			return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("Mongo command field \"writeConcern\" is malformed: %v", err)}
 		}
-		if _, ok := seen[key]; ok {
-			return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("Mongo writeConcern field %q is duplicated", key)}
-		}
-		seen[key] = struct{}{}
-		switch key {
-		case "w":
-			if err := parseStandaloneWriteConcernW(element.Value()); err != nil {
+		contents = next
+		switch {
+		case element.CompareKey(standaloneWriteConcernWKey):
+			if seenW {
+				return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: "Mongo writeConcern field \"w\" is duplicated"}
+			}
+			seenW = true
+			rawValue, err := element.ValueErr()
+			if err != nil {
+				return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("Mongo command field \"writeConcern\" is malformed: %v", err)}
+			}
+			if err := parseStandaloneWriteConcernW(bson.RawValue{Type: bson.Type(rawValue.Type), Value: rawValue.Data}); err != nil {
 				return concern, err
 			}
-		case "j":
-			journal, ok := element.Value().BooleanOK()
+		case element.CompareKey(standaloneWriteConcernJournalKey):
+			if seenJournal {
+				return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: "Mongo writeConcern field \"j\" is duplicated"}
+			}
+			seenJournal = true
+			rawValue, err := element.ValueErr()
+			if err != nil {
+				return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("Mongo command field \"writeConcern\" is malformed: %v", err)}
+			}
+			journal, ok := (bson.RawValue{Type: bson.Type(rawValue.Type), Value: rawValue.Data}).BooleanOK()
 			if !ok {
 				return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: "Mongo command field \"writeConcern.j\" must be a boolean"}
 			}
 			if journal {
 				concern.policy = standaloneWriteConcernJournal
 			}
-		case "wtimeout":
-			timeout, ok := strictBSONInt64(element.Value())
+		case element.CompareKey(standaloneWriteConcernTimeoutKey):
+			if seenTimeout {
+				return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: "Mongo writeConcern field \"wtimeout\" is duplicated"}
+			}
+			seenTimeout = true
+			rawValue, err := element.ValueErr()
+			if err != nil {
+				return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("Mongo command field \"writeConcern\" is malformed: %v", err)}
+			}
+			timeout, ok := strictBSONInt64(bson.RawValue{Type: bson.Type(rawValue.Type), Value: rawValue.Data})
 			if !ok {
 				return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: "Mongo command field \"writeConcern.wtimeout\" must be an integer"}
 			}
@@ -282,9 +308,17 @@ func parseStandaloneWriteConcern(command wire.Document) (standaloneWriteConcern,
 			if timeout > 0 {
 				return concern, standaloneWriteConcernParseError{code: commandCodeWriteConcernFailed, codeName: "WriteConcernFailed", message: "Mongo gateway standalone does not support positive wtimeout because the TreeDB sync boundary is not interruptible", timeout: true}
 			}
-		case "wtimeoutMS":
+		case element.CompareKey(standaloneWriteConcernTimeoutMSKey):
+			if seenTimeoutMS {
+				return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: "Mongo writeConcern field \"wtimeoutMS\" is duplicated"}
+			}
+			seenTimeoutMS = true
 			return concern, standaloneWriteConcernParseError{code: commandCodeWriteConcernFailed, codeName: "WriteConcernFailed", message: "Mongo gateway standalone does not support deprecated writeConcern field \"wtimeoutMS\""}
 		default:
+			key, err := element.KeyErr()
+			if err != nil {
+				return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("Mongo command field \"writeConcern\" is malformed: %v", err)}
+			}
 			return concern, standaloneWriteConcernParseError{code: commandCodeWriteConcernFailed, codeName: "WriteConcernFailed", message: fmt.Sprintf("Mongo gateway standalone writeConcern does not support %q", key)}
 		}
 	}
