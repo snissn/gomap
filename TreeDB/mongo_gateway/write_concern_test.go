@@ -586,27 +586,56 @@ func TestStandaloneWriteConcernDurabilityUnavailableReportsStableReason(t *testi
 	}
 }
 
-func TestStandaloneWriteConcernRejectsUnacknowledgedMoreToComeWithoutMutation(t *testing.T) {
-	server, _ := newWriteConcernTestServer(t)
-	command := mustDocument(t, bson.D{
-		{Key: "insert", Value: "users"},
-		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}}}},
-		{Key: "writeConcern", Value: bson.D{{Key: "w", Value: int32(0)}}},
-		{Key: "$db", Value: "app"},
-	})
-	request, err := wire.AppendMsgMessage(nil, 41, 0, wire.MsgFlagMoreToCome, command)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rw := &readWriter{r: strings.NewReader(string(request))}
-	if err := server.ServeOne(rw); err != nil {
-		t.Fatalf("ServeOne: %v", err)
-	}
-	if rw.w.Len() != 0 {
-		t.Fatalf("moreToCome response bytes=%d want 0", rw.w.Len())
-	}
-	if _, err := server.Collections.OpenCollection("app.users"); !errors.Is(err, collections.ErrCollectionNotFound) {
-		t.Fatalf("unacknowledged write collection err=%v, want not found", err)
+func TestStandaloneWriteConcernRejectsMoreToComeWithoutMutation(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		concern any
+	}{
+		{name: "absent"},
+		{name: "w one", concern: bson.D{{Key: "w", Value: int32(1)}}},
+		{name: "w zero", concern: bson.D{{Key: "w", Value: int32(0)}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server, _ := newWriteConcernTestServer(t)
+			commandDocument := bson.D{
+				{Key: "insert", Value: "users"},
+				{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}}}},
+			}
+			if tc.concern != nil {
+				commandDocument = append(commandDocument, bson.E{Key: "writeConcern", Value: tc.concern})
+			}
+			commandDocument = append(commandDocument, bson.E{Key: "$db", Value: "app"})
+			command := mustDocument(t, commandDocument)
+			request, err := wire.AppendMsgMessage(nil, 41, 0, wire.MsgFlagMoreToCome, command)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ping := mustDocument(t, bson.D{{Key: "ping", Value: int32(1)}, {Key: "$db", Value: "admin"}})
+			request, err = wire.AppendMsgMessage(request, 42, 0, 0, ping)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rw := &readWriter{r: strings.NewReader(string(request))}
+			if err := server.ServeOne(rw); err != nil {
+				t.Fatalf("ServeOne moreToCome: %v", err)
+			}
+			if rw.w.Len() != 0 {
+				t.Fatalf("moreToCome response bytes=%d want 0", rw.w.Len())
+			}
+			if _, err := server.Collections.OpenCollection("app.users"); !errors.Is(err, collections.ErrCollectionNotFound) {
+				t.Fatalf("moreToCome write collection err=%v, want not found", err)
+			}
+			stats := server.StandaloneWriteConcernStats()
+			if stats.Requests != 1 || stats.PreMutationRejections != 1 || stats.UnsupportedRejections != 1 || stats.LogicalWrites != 0 {
+				t.Fatalf("moreToCome rejection stats=%+v", stats)
+			}
+			if err := server.ServeOne(rw); err != nil {
+				t.Fatalf("ServeOne ping after rejection: %v", err)
+			}
+			if rw.w.Len() == 0 {
+				t.Fatal("connection did not return ping response after moreToCome rejection")
+			}
+		})
 	}
 }
 

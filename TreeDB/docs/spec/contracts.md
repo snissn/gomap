@@ -494,6 +494,9 @@ Mongo gateway:
   post-mutation failure to close the requested sync boundary reports an
   explicit uncertain `writeConcernError`; clients must apply the ambiguous
   retry guidance above.
+- Standalone OP_MSG writes with `moreToCome` reject before dispatch with no
+  response and no mutation, including crafted absent/default or `{w: 1}`
+  commands as well as the normal `{w: 0}` shape. The connection remains usable.
 - Ordered update/delete commands must document whether earlier items can remain
   applied after a later item error. If partial ordered semantics are intentional,
   responses must report the applied prefix; otherwise validation must complete

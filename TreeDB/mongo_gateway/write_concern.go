@@ -118,6 +118,13 @@ func standaloneWriteCommand(name string) bool {
 	}
 }
 
+func (s *Server) recordStandaloneMoreToComeRejection() {
+	stats := &s.writeConcernStats
+	stats.requests.Add(1)
+	stats.preMutationRejections.Add(1)
+	stats.unsupportedRejections.Add(1)
+}
+
 func (s *Server) standaloneWriteCommandResponse(ctx context.Context, name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (wire.Document, error) {
 	start := time.Now()
 	stats := &s.writeConcernStats

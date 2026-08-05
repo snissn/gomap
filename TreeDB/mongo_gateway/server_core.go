@@ -727,6 +727,13 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 			return nil, retainRequestBody, fmt.Errorf("%w: %s with document sequences", wire.ErrUnsupported, name)
 		}
 	}
+	if msg.Flags&wire.MsgFlagMoreToCome != 0 && standaloneWriteCommand(name) && !s.clusterSubmitterConfigured() {
+		// moreToCome is the wire signal for an unacknowledged OP_MSG write. Reject
+		// the flag itself before dispatch, even when a crafted command omits w:0
+		// or claims w:1, and suppress the response so the connection remains usable.
+		s.recordStandaloneMoreToComeRejection()
+		return nil, retainRequestBody, nil
+	}
 
 	if name == "find" {
 		// The find path builds a raw OP_MSG response directly.
