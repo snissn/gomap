@@ -152,8 +152,8 @@ func vectorPartitionMutationOperationDigestV1(command iwire.CommandID, sections 
 
 func vectorPartitionRelevantMutationCommandV1(command iwire.CommandID) bool {
 	switch command {
-	case iwire.CommandCreateCollection, iwire.CommandDropCollection, iwire.CommandCreateIndex, iwire.CommandDropIndex,
-		iwire.CommandInsertBatch, iwire.CommandReplaceBatch, iwire.CommandDeleteBatch, iwire.CommandUpdateBSONSet:
+	case iwire.CommandCreateCollection, iwire.CommandInsertBatch, iwire.CommandReplaceBatch,
+		iwire.CommandDeleteBatch, iwire.CommandUpdateBSONSet:
 		return true
 	default:
 		return false

@@ -112,6 +112,19 @@ func NewRoutedRaftClusterSubmitter(bridge raftcluster.CommandSubmitterV1, provid
 	}
 }
 
+// NewRoutedRaftClusterSubmitterWithVectorPartitionAdmissionV1 is the sole
+// routed M7 composition: the same embedded submitter owns both the route
+// proof and the shared pre-commit admission/after-apply confirmation hooks.
+// Legacy routed construction remains valid only where the replicated catalog
+// does not require the vector-partition lifecycle feature.
+func NewRoutedRaftClusterSubmitterWithVectorPartitionAdmissionV1(bridge raftcluster.CommandSubmitterV1, provider ClusterRouteProvider, admission VectorPartitionMutationAdmissionProviderV1, managers ...*collections.CollectionManager) (*RoutedRaftClusterSubmitter, error) {
+	base, err := NewRaftClusterSubmitterWithVectorPartitionAdmissionV1(bridge, admission, managers...)
+	if err != nil {
+		return nil, err
+	}
+	return &RoutedRaftClusterSubmitter{RaftClusterSubmitter: base, RouteProvider: provider}, nil
+}
+
 func (s *RoutedRaftClusterSubmitter) ClusterRoute(ctx context.Context, request ClusterRouteRequest) (ClusterRouteTarget, error) {
 	if s == nil || s.RouteProvider == nil {
 		return ClusterRouteTarget{}, protocolError(iwire.ErrReadOnly, "raft cluster route provider is not configured")
