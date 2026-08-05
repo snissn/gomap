@@ -221,7 +221,8 @@ func (t target) Execute(ctx context.Context, fixture compatdiff.Fixture) (compat
 		return compatdiff.Observation{}, t.executionError(err)
 	}
 	observation := compatdiff.Observation{Baseline: baseline}
-	commandCtx := commandContext(ctx, fixture.Command)
+	commandCtx, stopCommand := commandContext(ctx)
+	defer stopCommand()
 	response, err := db.RunCommand(commandCtx, fixture.Command).Raw()
 	if err != nil {
 		if command, ok := commandError(err); ok {
@@ -285,12 +286,13 @@ func clientOptions(uri string) *options.ClientOptions {
 	return options.Client().ApplyURI(uri).SetServerSelectionTimeout(3 * time.Second)
 }
 
-func commandContext(ctx context.Context, command bson.Raw) context.Context {
-	// The driver encodes command-context deadlines as maxTimeMS. Differential
-	// fixtures must reach both servers unchanged, whether or not they explicitly
-	// declare maxTimeMS. Connection and server-selection limits remain on the
-	// client; the caller's run context remains the harness watchdog.
-	return context.WithoutCancel(ctx)
+func commandContext(ctx context.Context) (context.Context, func()) {
+	// A deadline makes the driver append maxTimeMS. Preserve the fixture wire
+	// command by using a cancelable context without a deadline; propagate the
+	// harness watchdog cancellation with AfterFunc.
+	commandCtx, cancel := context.WithCancel(context.Background())
+	stop := context.AfterFunc(ctx, cancel)
+	return commandCtx, func() { stop(); cancel() }
 }
 
 func (t target) open(ctx context.Context) (string, func(), error) {
@@ -330,9 +332,24 @@ func commandError(err error) (*compatdiff.Error, bool) {
 		return &compatdiff.Error{Code: command.Code, Labels: command.Labels, Message: command.Message, CommandRejection: true}, true
 	}
 	var write mongo.WriteException
-	if errors.As(err, &write) && len(write.WriteErrors) > 0 {
-		first := write.WriteErrors[0]
-		return &compatdiff.Error{Code: int32(first.Code), Labels: write.Labels, Message: first.Message, CommandRejection: true}, true
+	if errors.As(err, &write) {
+		codes := make([]int32, 0, len(write.WriteErrors)+1)
+		message := ""
+		for _, item := range write.WriteErrors {
+			codes = append(codes, int32(item.Code))
+			if message == "" {
+				message = item.Message
+			}
+		}
+		if write.WriteConcernError != nil {
+			codes = append(codes, int32(write.WriteConcernError.Code))
+			if message == "" {
+				message = write.WriteConcernError.Message
+			}
+		}
+		if len(codes) > 0 {
+			return &compatdiff.Error{Code: codes[0], Codes: codes, Labels: write.Labels, Message: message, CommandRejection: true}, true
+		}
 	}
 	return nil, false
 }

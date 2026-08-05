@@ -9,5 +9,5 @@
   "collection": "records",
   "smoke": true,
   "seed": [{"_id": "user-1", "score": {"$numberInt": "7"}}],
-  "command": {"count": "records", "query": {}, "maxTimeMS": {"$numberInt": "1"}}
+  "command": {"count": "records", "query": {}, "maxTimeMS": {"$numberInt": "1000"}}
 }

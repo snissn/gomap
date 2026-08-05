@@ -3,6 +3,7 @@ package compatdiff
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -99,6 +100,20 @@ func TestNormalizationAppliesToResponseAndStateWithoutHidingType(t *testing.T) {
 	})
 	if got := Run(context.Background(), "identity", []Fixture{f}, left, wrongType).Fixtures[0].Status; got != "mismatch" {
 		t.Fatalf("normalized field hid type difference: %s", got)
+	}
+}
+
+func TestNormalizationTokensPreserveEqualityRelationshipsAcrossObservation(t *testing.T) {
+	f := fixture()
+	f.NormalizeFields = []string{"generated", "_id"}
+	shared := bson.NewObjectID()
+	observation := Observation{Response: raw(t, bson.D{{Key: "generated", Value: shared}}), Baseline: []bson.Raw{raw(t, bson.D{{Key: "_id", Value: shared}})}, State: []bson.Raw{raw(t, bson.D{{Key: "_id", Value: bson.NewObjectID()}})}}
+	normalized := normalizedObservation(observation, nil, nil, f.NormalizeFields, false, false)
+	if fmt.Sprint(normalized.Response) == fmt.Sprint(normalized.State) {
+		t.Fatal("distinct generated values collapsed to one token")
+	}
+	if !strings.Contains(fmt.Sprint(normalized.Response), "1") || !strings.Contains(fmt.Sprint(normalized.Baseline), "1") {
+		t.Fatalf("shared response/state value did not retain one token: %+v", normalized)
 	}
 }
 

@@ -81,6 +81,7 @@ func (f Fixture) Validate() error {
 
 type Error struct {
 	Code             int32    `json:"code,omitempty"`
+	Codes            []int32  `json:"codes,omitempty"`
 	Labels           []string `json:"labels,omitempty"`
 	Message          string   `json:"message,omitempty"`
 	CommandRejection bool     `json:"command_rejection,omitempty"`
@@ -206,25 +207,26 @@ func statusPriority(status string) int {
 
 func normalizedObservation(observation Observation, ignoredResponse, ignoredState, normalized []string, normalizeResponseEnvelopeOrder, normalizeCursorEnvelopeOrder bool) NormalizedObservation {
 	result := NormalizedObservation{Error: observation.Error}
+	tokens := newNormalizationTokens()
 	if len(observation.Response) > 0 {
-		result.Response = normalizeResponse(observation.Response, ignoredResponse, normalized, normalizeResponseEnvelopeOrder, normalizeCursorEnvelopeOrder)
+		result.Response = normalizeResponseWithTokens(observation.Response, ignoredResponse, normalized, normalizeResponseEnvelopeOrder, normalizeCursorEnvelopeOrder, tokens)
 	}
 	if len(observation.CursorReplies) > 0 {
 		result.CursorReplies = make([]any, len(observation.CursorReplies))
 		for i, reply := range observation.CursorReplies {
-			result.CursorReplies[i] = normalizeResponse(reply, ignoredResponse, normalized, normalizeResponseEnvelopeOrder, normalizeCursorEnvelopeOrder)
+			result.CursorReplies[i] = normalizeResponseWithTokens(reply, ignoredResponse, normalized, normalizeResponseEnvelopeOrder, normalizeCursorEnvelopeOrder, tokens)
 		}
 	}
 	if len(observation.Baseline) > 0 {
 		result.Baseline = make([]any, len(observation.Baseline))
 		for i, doc := range observation.Baseline {
-			result.Baseline[i] = normalizeDocument(doc, "", ignoredState, normalized)
+			result.Baseline[i] = normalizeDocumentWithTokens(doc, "", ignoredState, normalized, tokens)
 		}
 	}
 	if len(observation.State) > 0 {
 		result.State = make([]any, len(observation.State))
 		for i, doc := range observation.State {
-			result.State[i] = normalizeDocument(doc, "", ignoredState, normalized)
+			result.State[i] = normalizeDocumentWithTokens(doc, "", ignoredState, normalized, tokens)
 		}
 	}
 	return result
@@ -244,7 +246,7 @@ func compare(f Fixture, tree, reference Observation) (string, string) {
 		if reference.Error != nil || !responseOK(reference.Response) {
 			return "harness-error", fmt.Sprintf("expected reference execution, got error: %s", describeError(reference.Error))
 		}
-		if !sameDocumentsWithNormalization(tree.Baseline, tree.State, f.IgnoreStateFields, f.NormalizeFields) {
+		if !sameDocuments(tree.Baseline, tree.State, nil) {
 			return "mismatch", "expected-rejection fixture mutated TreeDB state"
 		}
 		return "pass", ""
@@ -277,6 +279,9 @@ func sameError(a, b *Error) bool {
 		return a == b
 	}
 	if a.Code != b.Code {
+		return false
+	}
+	if fmt.Sprint(a.Codes) != fmt.Sprint(b.Codes) {
 		return false
 	}
 	ax, bx := append([]string(nil), a.Labels...), append([]string(nil), b.Labels...)
@@ -321,7 +326,11 @@ func sameResponseWithNormalization(a, b bson.Raw, ignored, normalized []string, 
 // snapshot; fixtures must opt in because the top-level reply layout is transport
 // metadata rather than a query/result ordering contract.
 func normalizeResponse(raw bson.Raw, ignored, normalized []string, normalizeEnvelopeOrder, normalizeCursorEnvelopeOrder bool) any {
-	value := normalizeDocument(raw, "", ignored, normalized)
+	return normalizeResponseWithTokens(raw, ignored, normalized, normalizeEnvelopeOrder, normalizeCursorEnvelopeOrder, newNormalizationTokens())
+}
+
+func normalizeResponseWithTokens(raw bson.Raw, ignored, normalized []string, normalizeEnvelopeOrder, normalizeCursorEnvelopeOrder bool, tokens *normalizationTokens) any {
+	value := normalizeDocumentWithTokens(raw, "", ignored, normalized, tokens)
 	if normalizeEnvelopeOrder {
 		sortPairs(value)
 	}
@@ -371,6 +380,29 @@ func sameDocumentsWithNormalization(a, b []bson.Raw, ignored, normalized []strin
 // normalizeDocument intentionally records BSON type bytes and original element
 // order. It only omits exact, fixture-declared dotted paths.
 func normalizeDocument(doc bson.Raw, prefix string, ignored, normalized []string) []any {
+	return normalizeDocumentWithTokens(doc, prefix, ignored, normalized, newNormalizationTokens())
+}
+
+type normalizationTokens struct {
+	values map[string]int
+	next   int
+}
+
+func newNormalizationTokens() *normalizationTokens {
+	return &normalizationTokens{values: make(map[string]int)}
+}
+
+func (t *normalizationTokens) token(value bson.RawValue) int {
+	key := fmt.Sprintf("%d:%s", value.Type, base64.StdEncoding.EncodeToString(value.Value))
+	if token, ok := t.values[key]; ok {
+		return token
+	}
+	t.next++
+	t.values[key] = t.next
+	return t.next
+}
+
+func normalizeDocumentWithTokens(doc bson.Raw, prefix string, ignored, normalized []string, tokens *normalizationTokens) []any {
 	elements, err := doc.Elements()
 	if err != nil {
 		return []any{[]any{"invalid", base64.StdEncoding.EncodeToString(doc)}}
@@ -385,20 +417,23 @@ func normalizeDocument(doc bson.Raw, prefix string, ignored, normalized []string
 			continue
 		}
 		if contains(normalized, path) {
-			out = append(out, []any{element.Key(), []any{"normalized", byte(element.Value().Type)}})
+			out = append(out, []any{element.Key(), []any{"normalized", byte(element.Value().Type), tokens.token(element.Value())}})
 			continue
 		}
-		out = append(out, []any{element.Key(), normalizeValue(element.Value(), path, ignored, normalized)})
+		out = append(out, []any{element.Key(), normalizeValueWithTokens(element.Value(), path, ignored, normalized, tokens)})
 	}
 	return out
 }
 
 func normalizeValue(value bson.RawValue, path string, ignored, normalized []string) any {
+	return normalizeValueWithTokens(value, path, ignored, normalized, newNormalizationTokens())
+}
+func normalizeValueWithTokens(value bson.RawValue, path string, ignored, normalized []string, tokens *normalizationTokens) any {
 	if doc, ok := value.DocumentOK(); ok {
-		return []any{"document", normalizeDocument(doc, path, ignored, normalized)}
+		return []any{"document", normalizeDocumentWithTokens(doc, path, ignored, normalized, tokens)}
 	}
 	if arr, ok := value.ArrayOK(); ok {
-		return []any{"array", normalizeDocument(bson.Raw(arr), path, ignored, normalized)}
+		return []any{"array", normalizeDocumentWithTokens(bson.Raw(arr), path, ignored, normalized, tokens)}
 	}
 	return []any{byte(value.Type), base64.StdEncoding.EncodeToString(value.Value)}
 }

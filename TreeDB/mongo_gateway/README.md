@@ -85,7 +85,8 @@ row, and `rejected` fixtures must map to a rejected/not-implemented row.
 bundled full set also covers supported read, write, aggregate, distinct, and
 metadata shapes. Post-command state enumerates every collection in the fixture
 database in collection-name order, retaining each collection's natural document
-order and deterministically ordered index metadata. The runner never sorts
+order and deterministic collection/index metadata supported by both targets.
+The runner never sorts
 documents to make a disagreement disappear.
 
 `ignore_fields`, `ignore_state_fields`, and `normalize_fields` are each

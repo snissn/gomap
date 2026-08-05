@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -21,7 +22,7 @@ func TestBundledFixturesLoadAndSmokeSelectionIsReal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) < 8 || len(smoke) != 3 {
+	if len(all) < 10 || len(smoke) != 3 {
 		t.Fatalf("all=%d smoke=%d", len(all), len(smoke))
 	}
 }
@@ -77,8 +78,10 @@ func TestClientOptionsDoNotInjectCommandMaxTimeMS(t *testing.T) {
 func TestCommandContextNeverCarriesHarnessDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1)
 	defer cancel()
-	for _, command := range []bson.Raw{mustRaw(t, bson.D{{Key: "find", Value: "c"}}), mustRaw(t, bson.D{{Key: "count", Value: "c"}, {Key: "maxTimeMS", Value: int32(5)}})} {
-		if _, hasDeadline := commandContext(ctx, command).Deadline(); hasDeadline {
+	for range []bson.Raw{mustRaw(t, bson.D{{Key: "find", Value: "c"}}), mustRaw(t, bson.D{{Key: "count", Value: "c"}, {Key: "maxTimeMS", Value: int32(5)}})} {
+		command, stop := commandContext(ctx)
+		defer stop()
+		if _, hasDeadline := command.Deadline(); hasDeadline {
 			t.Fatal("command context carries harness deadline and can inject maxTimeMS")
 		}
 	}
@@ -88,6 +91,13 @@ func TestCommandErrorClassifiesWriteException(t *testing.T) {
 	got, ok := commandError(mongo.WriteException{WriteErrors: []mongo.WriteError{{Code: 11000, Message: "duplicate key"}}, Labels: []string{"RetryableWriteError"}})
 	if !ok || got.Code != 11000 || !got.CommandRejection || got.Message != "duplicate key" || len(got.Labels) != 1 {
 		t.Fatalf("write exception not classified: %#v, %v", got, ok)
+	}
+}
+
+func TestCommandErrorClassifiesAllWriteAndConcernCodes(t *testing.T) {
+	got, ok := commandError(mongo.WriteException{WriteErrors: []mongo.WriteError{{Code: 11000, Message: "duplicate"}, {Code: 121, Message: "validation"}}, WriteConcernError: &mongo.WriteConcernError{Code: 64, Message: "concern"}})
+	if !ok || got.Code != 11000 || strings.Join([]string{strconv.Itoa(int(got.Codes[0])), strconv.Itoa(int(got.Codes[1])), strconv.Itoa(int(got.Codes[2]))}, ",") != "11000,121,64" {
+		t.Fatalf("write causes were lost: %#v, %v", got, ok)
 	}
 }
 
