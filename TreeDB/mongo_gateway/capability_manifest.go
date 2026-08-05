@@ -109,7 +109,7 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 		{ID: "update.nested-set-unset-inc-and-bounded-array-modifiers-no-numeric-array-index-paths", Category: "update", Feature: "nested $set/$unset/$inc and bounded array modifiers (no numeric array-index paths)", Status: MongoCapabilitySupportedSubset},
 		{ID: "update.replaceone-by-exact-id", Category: "update", Feature: "ReplaceOne by exact _id", Status: MongoCapabilitySupportedSubset},
 		{ID: "index-gap.compound-index", Category: "index gap", Feature: "compound index", Status: MongoCapabilityRejected},
-		{ID: "index-gap.index-without-treedbvaluetype", Category: "index gap", Feature: "index without treedbValueType", Status: MongoCapabilityRejected},
+		{ID: "index.bson-ordered-v2-without-treedbvaluetype", Category: "index", Feature: "BSON v2 index without treedbValueType", Status: MongoCapabilitySupportedSubset},
 		{ID: "read-command.aggregate-match-project-sort-skip-limit-count", Category: "read command", Feature: "aggregate match/project/sort/skip/limit/count", Status: MongoCapabilitySupportedSubset},
 		{ID: "command-gap.serverstatus", Category: "command gap", Feature: "serverStatus", Status: MongoCapabilityNotImplemented},
 		{ID: "command-gap.top", Category: "command gap", Feature: "top", Status: MongoCapabilityNotImplemented},
@@ -166,9 +166,9 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 			CapabilityIDs: []string{
 				"metadata.createindexes-listindexes-and-dropindexes",
 				"index-gap.compound-index",
-				"index-gap.index-without-treedbvaluetype",
+				"index.bson-ordered-v2-without-treedbvaluetype",
 			},
-			Note: "Single-field ascending indexes require treedbValueType; compound and type-free creation remain rejected.",
+			Note: "BSON collections default ordinary single-field ascending indexes to BSON-ordered v2; explicit treedbValueType remains the legacy homogeneous path. Compound and descending indexes remain rejected.",
 		},
 		{
 			ID:            "authentication-authorization",
