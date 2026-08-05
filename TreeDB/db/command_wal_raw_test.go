@@ -256,6 +256,55 @@ func TestSyncCommandWALAppliedPrefixCrashBeforeRootNeutralPublishRecovers(t *tes
 	}
 }
 
+func TestCommandWALReplayDurablePrefixBarrierNeedsOuterLeafLog(t *testing.T) {
+	d := &DB{indexOuterLeavesInValueLog: true}
+	tests := []struct {
+		name    string
+		frames  []commandWALReplayFrame
+		applied uint64
+		want    bool
+	}{
+		{
+			name: "unapplied barrier",
+			frames: []commandWALReplayFrame{{env: commitlog.CommandEnvelope{
+				LSN:           2,
+				Kind:          commitlog.CommandKindDurablePrefixBarrier,
+				PayloadFormat: commitlog.PayloadFormatDurablePrefixBarrierV1,
+			}}},
+			applied: 1,
+			want:    true,
+		},
+		{
+			name: "already applied barrier",
+			frames: []commandWALReplayFrame{{env: commitlog.CommandEnvelope{
+				LSN:           2,
+				Kind:          commitlog.CommandKindDurablePrefixBarrier,
+				PayloadFormat: commitlog.PayloadFormatDurablePrefixBarrierV1,
+			}}},
+			applied: 2,
+		},
+		{
+			name: "non root publishing frame",
+			frames: []commandWALReplayFrame{{env: commitlog.CommandEnvelope{
+				LSN:  2,
+				Kind: commitlog.CommandKind(254),
+			}}},
+			applied: 1,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			needsLog, err := commandWALReplayFramesNeedLogSupport(d, tc.frames, tc.applied)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if needsLog != tc.want {
+				t.Fatalf("needs replay leaf log=%t want %t", needsLog, tc.want)
+			}
+		})
+	}
+}
+
 func TestRawKVPointCommandWALRejectsMaterializedRIDBeforeRevisionAllocation(t *testing.T) {
 	d, err := Open(Options{
 		Dir:                    t.TempDir(),

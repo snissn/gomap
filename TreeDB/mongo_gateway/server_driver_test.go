@@ -586,6 +586,7 @@ func TestServerOfficialGoDriverUnacknowledgedInsertMany(t *testing.T) {
 	client, err := mongo.Connect(options.Client().
 		ApplyURI("mongodb://" + ln.Addr().String()).
 		SetDirect(true).
+		SetMaxPoolSize(1).
 		SetServerSelectionTimeout(time.Second))
 	if err != nil {
 		t.Fatalf("mongo connect: %v", err)
@@ -609,6 +610,10 @@ func TestServerOfficialGoDriverUnacknowledgedInsertMany(t *testing.T) {
 	}
 	if result.Acknowledged {
 		t.Fatal("unacknowledged insert reported Acknowledged=true")
+	}
+	deadline := time.Now().Add(time.Second)
+	for server.StandaloneWriteConcernStats().PreMutationRejections == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
 	}
 
 	var got bson.M

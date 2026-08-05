@@ -108,11 +108,17 @@ type Server struct {
 	firstWriteBeforeWaitHook  func(*collectionFirstWritePending)
 	// filterWriteSelectedHook is test-only coordination between natural-order
 	// selection and the mutation-boundary predicate recheck.
-	filterWriteSelectedHook    func()
-	updateMu                   sync.Mutex
-	updateCoalescers           map[string]*mongoUpdateCoalescer
-	insertMu                   sync.Mutex
-	insertCoalescers           map[string]*mongoInsertCoalescer
+	filterWriteSelectedHook func()
+	updateMu                sync.Mutex
+	updateCoalescers        map[string]*mongoUpdateCoalescer
+	insertMu                sync.Mutex
+	insertCoalescers        map[string]*mongoInsertCoalescer
+	// standaloneWriteBoundaryMu lets ordinary standalone writes overlap while
+	// making a journal request exclusive from dispatch through its durable
+	// boundary. That exclusion prevents a concurrent collection mutation from
+	// holding a domain lock while waiting on the command-WAL publish lock that
+	// the journal boundary owns while draining collection barriers.
+	standaloneWriteBoundaryMu  sync.RWMutex
 	standaloneWriteConcernSync func() (bool, error)
 	writeConcernStats          standaloneWriteConcernStats
 	closed                     atomic.Bool

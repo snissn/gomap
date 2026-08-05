@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -44,11 +45,11 @@ func TestStandaloneWriteConcernAcceptedShapes(t *testing.T) {
 			command := bson.D{
 				{Key: "insert", Value: "users"},
 				{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: tc.name}}}},
-				{Key: "$db", Value: "app"},
 			}
 			if tc.concern != nil {
-				command = append(command[:2], append(bson.D{{Key: "writeConcern", Value: tc.concern}}, command[2:]...)...)
+				command = append(command, bson.E{Key: "writeConcern", Value: tc.concern})
 			}
+			command = append(command, bson.E{Key: "$db", Value: "app"})
 			assertOK(t, serveCommand(t, server, 1, command))
 			if syncs != tc.wantSync {
 				t.Fatalf("sync calls=%d want %d", syncs, tc.wantSync)
@@ -58,6 +59,24 @@ func TestStandaloneWriteConcernAcceptedShapes(t *testing.T) {
 				t.Fatalf("stats=%+v want visible=%d journal=%d", stats, tc.wantVisible, tc.wantJournal)
 			}
 		})
+	}
+}
+
+func TestParseStandaloneWriteConcernAbsentIsAllocationFree(t *testing.T) {
+	command := mustDocument(t, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}}}},
+		{Key: "$db", Value: "app"},
+	})
+	var parseErr error
+	allocs := testing.AllocsPerRun(1000, func() {
+		_, parseErr = parseStandaloneWriteConcern(command)
+	})
+	if parseErr != nil {
+		t.Fatalf("parse absent writeConcern: %v", parseErr)
+	}
+	if allocs != 0 {
+		t.Fatalf("parse absent writeConcern allocations=%v want 0", allocs)
 	}
 }
 
@@ -119,6 +138,314 @@ func TestStandaloneWriteConcernSharedFinalizationCoversEveryWriteCommand(t *test
 	}
 }
 
+func TestStandaloneJournalWriteConcernFinalizesPartialCreateIndexesError(t *testing.T) {
+	server, _ := newWriteConcernTestServer(t)
+	seedWriteConcernDuplicateEmails(t, server, false)
+	before := server.StandaloneWriteConcernStats()
+	syncs := 0
+	server.standaloneWriteConcernSync = func() (bool, error) {
+		syncs++
+		return true, nil
+	}
+	response := serveCommand(t, server, 2, writeConcernPartialCreateIndexesCommand())
+	assertCommandError(t, response, "DuplicateKey")
+	if syncs != 1 {
+		t.Fatalf("partial createIndexes syncs=%d want 1", syncs)
+	}
+	stats := server.StandaloneWriteConcernStats()
+	if stats.JournalAcknowledgements-before.JournalAcknowledgements != 1 ||
+		stats.PhysicalSyncBoundaries-before.PhysicalSyncBoundaries != 1 ||
+		stats.LogicalWrites != before.LogicalWrites {
+		t.Fatalf("partial createIndexes stats=%+v", stats)
+	}
+	collection, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := findIndexDefinition(collection.MetaView().Indexes, "age_1"); !ok {
+		t.Fatal("partial createIndexes did not retain first index")
+	}
+	if !server.standaloneWriteBoundaryMu.TryLock() {
+		t.Fatal("journal command error left the standalone write boundary locked")
+	}
+	server.standaloneWriteBoundaryMu.Unlock()
+}
+
+func TestStandaloneWriteConcernBoundaryConcurrencyPolicy(t *testing.T) {
+	server, _ := newWriteConcernTestServer(t)
+	visible := mustDocument(t, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "visible"}}}},
+		{Key: "$db", Value: "app"},
+	})
+
+	// A second reader can enter while this reader is held, so ordinary visible
+	// acknowledgements retain their pre-writeConcern concurrency.
+	server.standaloneWriteBoundaryMu.RLock()
+	visibleDone := make(chan error, 1)
+	go func() {
+		response, err := server.commandResponse(context.Background(), "insert", visible, nil, 0)
+		if err == nil && !mongoCommandResponseOK(response) {
+			err = fmt.Errorf("visible response: %s", response)
+		}
+		visibleDone <- err
+	}()
+	select {
+	case err := <-visibleDone:
+		if err != nil {
+			server.standaloneWriteBoundaryMu.RUnlock()
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		server.standaloneWriteBoundaryMu.RUnlock()
+		t.Fatal("visible acknowledgement did not overlap an existing standalone reader")
+	}
+	server.standaloneWriteBoundaryMu.RUnlock()
+
+	// The journal sync hook runs while the writer lock is held. No ordinary
+	// standalone write can enter until the mutation and boundary finish.
+	enteredSync := make(chan struct{})
+	releaseSync := make(chan struct{})
+	server.standaloneWriteConcernSync = func() (bool, error) {
+		close(enteredSync)
+		<-releaseSync
+		return true, nil
+	}
+	journal := mustDocument(t, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "journal"}}}},
+		{Key: "writeConcern", Value: bson.D{{Key: "j", Value: true}}},
+		{Key: "$db", Value: "app"},
+	})
+	journalDone := make(chan error, 1)
+	go func() {
+		response, err := server.commandResponse(context.Background(), "insert", journal, nil, 0)
+		if err == nil && !mongoCommandResponseOK(response) {
+			err = fmt.Errorf("journal response: %s", response)
+		}
+		journalDone <- err
+	}()
+	select {
+	case <-enteredSync:
+	case <-time.After(time.Second):
+		t.Fatal("journal command did not reach its sync boundary")
+	}
+	if server.standaloneWriteBoundaryMu.TryRLock() {
+		server.standaloneWriteBoundaryMu.RUnlock()
+		t.Fatal("ordinary reader entered while journal mutation boundary was active")
+	}
+	close(releaseSync)
+	if err := <-journalDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStandaloneWriteConcernBoundaryDoesNotSerializeClusterWrites(t *testing.T) {
+	submitter := &mongoClusterFakeSubmitter{}
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	setMongoClusterTestSubmitter(server, submitter, 47)
+	command := mustDocument(t, bson.D{
+		{Key: "create", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+
+	server.standaloneWriteBoundaryMu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		response, err := server.commandResponse(context.Background(), "create", command, nil, 0)
+		if err == nil && !mongoCommandResponseOK(response) {
+			err = fmt.Errorf("cluster response: %s", response)
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		server.standaloneWriteBoundaryMu.Unlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		server.standaloneWriteBoundaryMu.Unlock()
+		t.Fatal("cluster write waited on the standalone-only mutation boundary")
+	}
+	if calls := submitter.snapshotCalls(); len(calls) != 1 {
+		t.Fatalf("cluster submit calls=%d want 1", len(calls))
+	}
+	if stats := server.StandaloneWriteConcernStats(); stats.Requests != 0 {
+		t.Fatalf("cluster write changed standalone stats: %+v", stats)
+	}
+}
+
+func TestStandaloneWriteConcernBoundaryUnlocksAfterSyncPanic(t *testing.T) {
+	server, _ := newWriteConcernTestServer(t)
+	server.standaloneWriteConcernSync = func() (bool, error) {
+		panic("injected sync panic")
+	}
+	command := mustDocument(t, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}}}},
+		{Key: "writeConcern", Value: bson.D{{Key: "j", Value: true}}},
+		{Key: "$db", Value: "app"},
+	})
+
+	panicked := false
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				panicked = true
+			}
+		}()
+		_, _ = server.commandResponse(context.Background(), "insert", command, nil, 0)
+	}()
+	if !panicked {
+		t.Fatal("injected sync panic did not propagate")
+	}
+	if !server.standaloneWriteBoundaryMu.TryLock() {
+		t.Fatal("sync panic left the standalone write boundary locked")
+	}
+	server.standaloneWriteBoundaryMu.Unlock()
+}
+
+func TestStandaloneJournalWriteConcernPartialErrorCrashReopen(t *testing.T) {
+	if os.Getenv("TREEDB_MONGO_WC_PARTIAL_CRASH_HELPER") == "1" {
+		standalone, err := OpenStandaloneServer(StandaloneOptions{
+			Dir:     os.Getenv("TREEDB_MONGO_WC_PARTIAL_DIR"),
+			Profile: treedb.Profile(os.Getenv("TREEDB_MONGO_WC_PARTIAL_PROFILE")),
+			DefaultCollectionOptions: collections.CollectionOptions{
+				DocumentFormat: collections.DocumentFormatBSON,
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		seedWriteConcernDuplicateEmails(t, standalone.Server, true)
+		response := serveCommand(t, standalone.Server, 2, writeConcernPartialDeleteCommand())
+		assertCommandError(t, response, "BadValue")
+		if !bson.Raw(response).Lookup("writeConcernError").IsZero() {
+			t.Fatalf("successful partial-error sync returned writeConcernError: %s", response)
+		}
+		os.Exit(0)
+	}
+
+	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALRelaxed, treedb.ProfileNoWALFast} {
+		t.Run(string(profile), func(t *testing.T) {
+			dir := t.TempDir()
+			cmd := exec.Command(os.Args[0], "-test.run=^TestStandaloneJournalWriteConcernPartialErrorCrashReopen$")
+			cmd.Env = append(os.Environ(),
+				"TREEDB_MONGO_WC_PARTIAL_CRASH_HELPER=1",
+				"TREEDB_MONGO_WC_PARTIAL_DIR="+dir,
+				"TREEDB_MONGO_WC_PARTIAL_PROFILE="+string(profile),
+			)
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("partial-error crash helper: %v\n%s", err, output)
+			}
+			standalone, err := OpenStandaloneServer(StandaloneOptions{
+				Dir:     dir,
+				Profile: profile,
+				DefaultCollectionOptions: collections.CollectionOptions{
+					DocumentFormat: collections.DocumentFormatBSON,
+				},
+			})
+			if err != nil {
+				t.Fatalf("reopen: %v", err)
+			}
+			defer func() { _ = standalone.Close() }()
+			if got := writeConcernFindDocumentCount(t, standalone.Server, "u1"); got != 0 {
+				t.Fatalf("reopen restored first deleted document count=%d", got)
+			}
+			if got := writeConcernFindDocumentCount(t, standalone.Server, "u2"); got != 1 {
+				t.Fatalf("reopen lost document after failing delete item count=%d", got)
+			}
+		})
+	}
+}
+
+func TestStandaloneJournalWriteConcernPartialErrorSyncFailureIsUncertain(t *testing.T) {
+	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALRelaxed, treedb.ProfileNoWALFast} {
+		t.Run(string(profile), func(t *testing.T) {
+			standalone, err := OpenStandaloneServer(StandaloneOptions{
+				Dir:     t.TempDir(),
+				Profile: profile,
+				DefaultCollectionOptions: collections.CollectionOptions{
+					DocumentFormat: collections.DocumentFormatBSON,
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = standalone.Close() }()
+			seedWriteConcernDuplicateEmails(t, standalone.Server, false)
+			standalone.Server.standaloneWriteConcernSync = func() (bool, error) {
+				return true, errors.New("injected post-sync publication failure")
+			}
+			response := serveCommand(t, standalone.Server, 2, writeConcernPartialDeleteCommand())
+			assertCommandError(t, response, "BadValue")
+			wcError, ok := bson.Raw(response).Lookup("writeConcernError").DocumentOK()
+			if !ok || wcError.Lookup("codeName").StringValue() != "WriteConcernFailed" {
+				t.Fatalf("partial-error response missing writeConcernError: %s", response)
+			}
+			stats := standalone.Server.StandaloneWriteConcernStats()
+			if stats.SyncFailures != 1 || stats.UncertainOutcomes != 1 || stats.PhysicalSyncBoundaries != 1 || stats.JournalAcknowledgements != 0 {
+				t.Fatalf("partial-error uncertainty stats=%+v", stats)
+			}
+			if got := writeConcernFindDocumentCount(t, standalone.Server, "u1"); got != 0 {
+				t.Fatalf("partial-error uncertainty restored first deleted document count=%d", got)
+			}
+		})
+	}
+}
+
+func seedWriteConcernDuplicateEmails(t *testing.T, server *Server, journal bool) {
+	t.Helper()
+	command := bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "same@example.com"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "email", Value: "same@example.com"}},
+		}},
+	}
+	if journal {
+		command = append(command, bson.E{Key: "writeConcern", Value: bson.D{{Key: "j", Value: true}}})
+	}
+	command = append(command, bson.E{Key: "$db", Value: "app"})
+	assertOK(t, serveCommand(t, server, 1, command))
+}
+
+func writeConcernPartialCreateIndexesCommand() bson.D {
+	return bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{{Key: "key", Value: bson.D{{Key: "age", Value: int32(1)}}}, {Key: "name", Value: "age_1"}, {Key: "treedbValueType", Value: "int64"}},
+			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"}, {Key: "unique", Value: true}},
+		}},
+		{Key: "writeConcern", Value: bson.D{{Key: "j", Value: true}}},
+		{Key: "$db", Value: "app"},
+	}
+}
+
+func writeConcernPartialDeleteCommand() bson.D {
+	return bson.D{
+		{Key: "delete", Value: "users"},
+		{Key: "deletes", Value: bson.A{
+			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "limit", Value: int32(1)}},
+			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "limit", Value: int32(2)}},
+		}},
+		{Key: "writeConcern", Value: bson.D{{Key: "j", Value: true}}},
+		{Key: "$db", Value: "app"},
+	}
+}
+
+func writeConcernFindDocumentCount(t *testing.T, server *Server, id string) int {
+	t.Helper()
+	response := serveCommand(t, server, 100, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: id}}},
+		{Key: "$db", Value: "app"},
+	})
+	return len(cursorFirstBatch(t, response))
+}
+
 func prepareWriteConcernDocument(t *testing.T, server *Server) {
 	t.Helper()
 	assertOK(t, serveCommand(t, server, 1, bson.D{
@@ -172,6 +499,9 @@ func TestStandaloneWriteConcernRejectsBeforeCollectionCreation(t *testing.T) {
 			stats := server.StandaloneWriteConcernStats()
 			if stats.PreMutationRejections != 1 {
 				t.Fatalf("stats=%+v want one pre-mutation rejection", stats)
+			}
+			if tc.name == "positive timeout" && (stats.TimeoutRejections != 1 || stats.UnsupportedRejections != 0) {
+				t.Fatalf("timeout stats=%+v want exclusive timeout classification", stats)
 			}
 		})
 	}

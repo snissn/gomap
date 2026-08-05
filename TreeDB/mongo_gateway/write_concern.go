@@ -10,7 +10,10 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
+
+var standaloneWriteConcernKey = []byte("writeConcern")
 
 type standaloneWriteConcernPolicy uint8
 
@@ -124,12 +127,12 @@ func (s *Server) standaloneWriteCommandResponse(ctx context.Context, name string
 		stats.preMutationRejections.Add(1)
 		var parseErr standaloneWriteConcernParseError
 		if errors.As(err, &parseErr) {
-			if parseErr.timeout {
+			switch {
+			case parseErr.timeout:
 				stats.timeoutRejections.Add(1)
-			}
-			if parseErr.code == commandCodeFailedToParse || parseErr.code == commandCodeBadValue {
+			case parseErr.code == commandCodeFailedToParse || parseErr.code == commandCodeBadValue:
 				stats.malformedRejections.Add(1)
-			} else {
+			default:
 				stats.unsupportedRejections.Add(1)
 			}
 			return commandError(parseErr.code, parseErr.codeName, parseErr.message)
@@ -138,42 +141,52 @@ func (s *Server) standaloneWriteCommandResponse(ctx context.Context, name string
 	}
 	if concern.policy == standaloneWriteConcernJournal {
 		stats.journalRequests.Add(1)
+		s.standaloneWriteBoundaryMu.Lock()
+		defer s.standaloneWriteBoundaryMu.Unlock()
 	} else {
 		stats.visibleRequests.Add(1)
+		s.standaloneWriteBoundaryMu.RLock()
+		defer s.standaloneWriteBoundaryMu.RUnlock()
 	}
 
-	response, err := s.dispatchCommandResponse(ctx, name, command, sequences, cursorOwner)
-	if err != nil || !mongoCommandResponseOK(response) {
-		stats.acknowledgementNanos.Add(uint64(time.Since(start)))
-		return response, err
+	response, dispatchErr := s.dispatchCommandResponse(ctx, name, command, sequences, cursorOwner)
+	commandOK := dispatchErr == nil && mongoCommandResponseOK(response)
+	if commandOK {
+		stats.logicalWrites.Add(1)
 	}
-	stats.logicalWrites.Add(1)
 	if concern.policy == standaloneWriteConcernVisible {
-		stats.visibleAcknowledgements.Add(1)
+		if commandOK {
+			stats.visibleAcknowledgements.Add(1)
+		}
 		stats.acknowledgementNanos.Add(uint64(time.Since(start)))
-		return response, nil
+		return response, dispatchErr
 	}
 
+	// A handler can return ok:0 after partially applying a multi-definition DDL
+	// command. Without a mutation outcome signal from every handler, every
+	// accepted journal request conservatively closes the boundary before its
+	// response is returned, including command-error responses.
 	stats.syncAttempts.Add(1)
 	syncStart := time.Now()
-	physicalSync, err := s.syncStandaloneWriteConcern()
+	physicalSync, syncErr := s.syncStandaloneWriteConcern()
 	stats.journalSyncNanos.Add(uint64(time.Since(syncStart)))
 	stats.acknowledgementNanos.Add(uint64(time.Since(start)))
 	if physicalSync {
 		stats.physicalSyncBoundaries.Add(1)
 	}
-	if err == nil {
+	if syncErr == nil {
 		stats.journalAcknowledgements.Add(1)
-		return response, nil
+		return response, dispatchErr
 	}
 	stats.syncFailures.Add(1)
-	if errors.Is(err, backenddb.ErrClosed) {
+	if errors.Is(syncErr, backenddb.ErrClosed) {
 		stats.durabilityUnavailableFailures.Add(1)
 	} else {
 		stats.syncBoundaryFailures.Add(1)
 	}
 	stats.uncertainOutcomes.Add(1)
-	return appendStandaloneWriteConcernError(response, err)
+	enriched, enrichErr := appendStandaloneWriteConcernError(response, syncErr)
+	return enriched, errors.Join(dispatchErr, enrichErr)
 }
 
 func (s *Server) syncStandaloneWriteConcern() (physicalSync bool, err error) {
@@ -191,23 +204,31 @@ func (s *Server) syncStandaloneWriteConcern() (physicalSync bool, err error) {
 
 func parseStandaloneWriteConcern(command wire.Document) (standaloneWriteConcern, error) {
 	concern := standaloneWriteConcern{policy: standaloneWriteConcernVisible}
-	elements, err := bson.Raw(command).Elements()
-	if err != nil {
-		return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("Mongo command document is malformed: %v", err)}
+	contents, ok := rawBSONContainerContents(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: command})
+	if !ok {
+		return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: "Mongo command document is malformed"}
 	}
 	var value bson.RawValue
-	for _, element := range elements {
-		key, err := element.KeyErr()
-		if err != nil {
+	for len(contents) != 0 {
+		element, next, ok := bsoncore.ReadElement(contents)
+		if !ok {
+			return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: "Mongo command document is malformed"}
+		}
+		if err := element.Validate(); err != nil {
 			return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("Mongo command document is malformed: %v", err)}
 		}
-		if key != "writeConcern" {
+		contents = next
+		if !element.CompareKey(standaloneWriteConcernKey) {
 			continue
 		}
 		if !value.IsZero() {
 			return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: "Mongo command field \"writeConcern\" is duplicated"}
 		}
-		value = element.Value()
+		rawValue, err := element.ValueErr()
+		if err != nil {
+			return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("Mongo command document is malformed: %v", err)}
+		}
+		value = bson.RawValue{Type: bson.Type(rawValue.Type), Value: rawValue.Data}
 	}
 	if value.IsZero() {
 		return concern, nil
@@ -216,7 +237,7 @@ func parseStandaloneWriteConcern(command wire.Document) (standaloneWriteConcern,
 	if !ok {
 		return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: "Mongo command field \"writeConcern\" must be a document"}
 	}
-	elements, err = raw.Elements()
+	elements, err := raw.Elements()
 	if err != nil {
 		return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("Mongo command field \"writeConcern\" is malformed: %v", err)}
 	}

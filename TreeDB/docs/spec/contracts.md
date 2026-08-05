@@ -485,8 +485,11 @@ Mongo gateway:
   orders persistent value-log dependencies, syncs a relaxed suffix, and
   publishes its durable-prefix barrier as a root-neutral contiguous applied
   command; an already-durable prefix is reused without another barrier or
-  file sync. This is a local crash/reopen boundary only; it does not imply
-  replica commit, retryability, transactions, or a stronger read concern.
+  file sync. Because existing multi-item and DDL handlers can return a command
+  error after a partial mutation, an accepted `j: true` request closes this
+  boundary even when the handler response is `ok: 0`; the original command
+  error is preserved. This is a local crash/reopen boundary only; it does not
+  imply replica commit, retryability, transactions, or a stronger read concern.
 - Unsupported or malformed standalone concerns reject before mutation. A
   post-mutation failure to close the requested sync boundary reports an
   explicit uncertain `writeConcernError`; clients must apply the ambiguous
