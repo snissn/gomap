@@ -209,12 +209,14 @@ func (b *VectorPartitionPublicBackendV1) OperationsHealthV1(ctx context.Context)
 	}
 	record, ok := b.opts.Lifecycle.Authority.VectorPartitionLifecycleRecordV1(b.opts.Identity)
 	if !ok {
+		for _, status := range b.opts.Lifecycle.Authority.VectorPartitionLifecycleStatusesV1() {
+			if status.Identity.Index == b.opts.Identity.Index && status.Identity.Generation == b.opts.Identity.Generation {
+				return public.OperationsHealthV1{Generation: id, State: public.GenerationStateV1(status.State), Reason: "source_mismatch"}, nil
+			}
+		}
 		return public.OperationsHealthV1{Generation: id, State: public.GenerationAbsentV1, Reason: "generation_absent"}, nil
 	}
 	status := publicStatusV1(record)
-	if record.Identity.Source != b.opts.Identity.Source {
-		return public.OperationsHealthV1{Generation: id, State: status.State, Reason: "source_mismatch"}, nil
-	}
 	if !status.Active || !status.Ready {
 		return public.OperationsHealthV1{Generation: id, State: status.State, Reason: "lifecycle_not_active"}, nil
 	}

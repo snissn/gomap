@@ -129,6 +129,11 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 	if health, err := backend.OperationsHealthV1(ctx); err != nil || !health.Ready || health.Reason != "ready" {
 		t.Fatalf("operations health = %#v, %v", health, err)
 	}
+	backend.opts.Identity.Source.Checksum++
+	if health, err := backend.OperationsHealthV1(ctx); err != nil || health.Ready || health.Reason != "source_mismatch" {
+		t.Fatalf("source mismatch health = %#v, %v", health, err)
+	}
+	backend.opts.Identity.Source.Checksum--
 	backend.opts.ReadFence = &catalogMetaLinearizableAppliedIndexProviderTestV1{err: raftcluster.ErrNotLeader}
 	if health, err := backend.OperationsHealthV1(ctx); !errors.Is(err, raftcluster.ErrNotLeader) || health.Ready || health.Reason != "catalog_unavailable" {
 		t.Fatalf("unfenced operations health = %#v, %v", health, err)
