@@ -81,6 +81,12 @@ func encodeBSONIndexKeyComponentV2(value bson.RawValue) ([]byte, error) {
 	return out[:len(component):len(component)], nil
 }
 
+// EncodeBSONIndexKeyComponentV2 exposes the frozen v2 scalar key encoding to
+// the Mongo gateway planner without exposing its internal decoder surface.
+func EncodeBSONIndexKeyComponentV2(value bson.RawValue) ([]byte, error) {
+	return encodeBSONIndexKeyComponentV2(value)
+}
+
 // appendBSONIndexKeyComponentV2 appends one ascending, self-delimiting scalar
 // component. Concatenating returned components is safe for compound indexes.
 // The document ID is deliberately appended by bsonIndexEntryKeyV2 afterwards.
@@ -949,15 +955,23 @@ func complementBSONIndexBytesV2(values []byte) {
 // bsonIndexEntryKeyV2 appends a self-delimiting document-ID suffix after an
 // exact scalar component. The suffix does not participate in scalar ordering.
 func bsonIndexEntryKeyV2(component, documentID []byte) ([]byte, error) {
+	_, out, err := appendBSONIndexEntryKeyV2(nil, component, documentID)
+	return out, err
+}
+
+// appendBSONIndexEntryKeyV2 appends the frozen v2 entry representation to dst.
+// Keeping the caller-owned arena avoids an intermediate entry allocation in
+// buffered secondary-index writes.
+func appendBSONIndexEntryKeyV2(dst, component, documentID []byte) ([]byte, []byte, error) {
 	n, err := bsonIndexKeyComponentV2Length(component)
 	if err != nil || n != len(component) {
 		if err == nil {
 			err = fmt.Errorf("%w: scalar component has trailing bytes", errBSONIndexKeyV2Malformed)
 		}
-		return nil, err
+		return dst, nil, err
 	}
 	if len(documentID) > bsonIndexKeyComponentV2MaxBytes-3 {
-		return nil, errBSONIndexKeyV2TooLarge
+		return dst, nil, errBSONIndexKeyV2TooLarge
 	}
 	escapedDocumentIDLength := len(documentID)
 	for _, value := range documentID {
@@ -966,20 +980,20 @@ func bsonIndexEntryKeyV2(component, documentID []byte) ([]byte, error) {
 		}
 	}
 	if escapedDocumentIDLength > bsonIndexKeyComponentV2MaxBytes-3 {
-		return nil, errBSONIndexKeyV2TooLarge
+		return dst, nil, errBSONIndexKeyV2TooLarge
 	}
-	out := make([]byte, 0, len(component)+escapedDocumentIDLength+3)
-	out = append(out, component...)
-	out = append(out, bsonIndexKeyDocumentIDSuffixMarkerV2)
+	start := len(dst)
+	dst = append(dst, component...)
+	dst = append(dst, bsonIndexKeyDocumentIDSuffixMarkerV2)
 	for _, value := range documentID {
 		if value == 0 {
-			out = append(out, 0, 0xff)
+			dst = append(dst, 0, 0xff)
 		} else {
-			out = append(out, value)
+			dst = append(dst, value)
 		}
 	}
-	out = append(out, 0, 0)
-	return out, nil
+	dst = append(dst, 0, 0)
+	return dst, dst[start:len(dst):len(dst)], nil
 }
 
 func bsonIndexKeyDocumentIDV2(entry []byte) ([]byte, error) {
@@ -996,8 +1010,32 @@ func bsonIndexKeyDocumentIDV2(entry []byte) ([]byte, error) {
 	if len(entry)-componentLength > bsonIndexKeyComponentV2MaxBytes {
 		return nil, errBSONIndexKeyV2TooLarge
 	}
+	start := componentLength + 1
+	// Document IDs overwhelmingly do not contain NUL. Validate and return the
+	// entry-backed suffix directly in that case; callers consume it before the
+	// iterator advances, so this avoids a per-result allocation on v2 lookups.
+	for index := start; index < len(entry); index++ {
+		if entry[index] != 0 {
+			continue
+		}
+		if index+1 >= len(entry) {
+			return nil, fmt.Errorf("%w: truncated document ID escape", errBSONIndexKeyV2Malformed)
+		}
+		switch entry[index+1] {
+		case 0:
+			if index+2 != len(entry) {
+				return nil, fmt.Errorf("%w: trailing document ID bytes", errBSONIndexKeyV2Malformed)
+			}
+			return entry[start:index], nil
+		case 0xff:
+			// Fall through to the allocating escape decoder below.
+		default:
+			return nil, fmt.Errorf("%w: invalid document ID escape", errBSONIndexKeyV2Malformed)
+		}
+		break
+	}
 	out := make([]byte, 0, len(entry)-componentLength-3)
-	for index := componentLength + 1; index < len(entry); {
+	for index := start; index < len(entry); {
 		value := entry[index]
 		index++
 		if value != 0 {

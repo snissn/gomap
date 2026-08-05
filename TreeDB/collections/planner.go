@@ -21,6 +21,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 	"github.com/tidwall/gjson"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 const documentIndexStateVersion = 2
@@ -1215,7 +1216,7 @@ func (p insertBatchPlanner) directBufferedSecondaryRootPlans(items []insertBatch
 		for i := range items {
 			for _, encoded := range items[i].state.valuesAt(runtimeIdx) {
 				var key []byte
-				secondaryPlan.arena, key, err = appendIndexEntryKey(secondaryPlan.arena, encoded, items[i].id)
+				secondaryPlan.arena, key, err = appendIndexEntryKeyForValueType(secondaryPlan.arena, runtime.def.valueType, encoded, items[i].id)
 				if err != nil {
 					return nil, 0, err
 				}
@@ -1287,7 +1288,7 @@ func (p insertBatchPlanner) singleDirectBufferedSecondaryRootPlans(item *insertB
 		for i, encoded := range values {
 			var key []byte
 			var err error
-			secondaryPlan.arena, key, err = appendIndexEntryKey(secondaryPlan.arena, encoded, item.id)
+			secondaryPlan.arena, key, err = appendIndexEntryKeyForValueType(secondaryPlan.arena, runtime.def.valueType, encoded, item.id)
 			if err != nil {
 				return nil, 0, err
 			}
@@ -1488,7 +1489,7 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 					if valuePos < len(values) {
 						encoded := values[valuePos]
 						valuePos++
-						keyArena, key, err = appendIndexEntryKey(keyArena, encoded, items[idx].id)
+						keyArena, key, err = appendIndexEntryKeyForValueType(keyArena, runtime.def.valueType, encoded, items[idx].id)
 						return key, nil, err
 					}
 					itemPos++
@@ -1515,7 +1516,7 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 			continue
 		}
 
-		if table, ok, err := p.emitGroupedSecondaryRunTable(items, runtimeIdx, runtime.def.name, documentIDOrder, entryCount, keyBytes); err != nil {
+		if table, ok, err := p.emitGroupedSecondaryRunTable(items, runtimeIdx, runtime.def.name, runtime.def.valueType, documentIDOrder, entryCount, keyBytes); err != nil {
 			return err
 		} else if ok {
 			plan.runs = append(plan.runs, collectionRootRun{
@@ -1540,7 +1541,7 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 			idx := orderedItemIndex(documentIDOrder, i)
 			for _, encoded := range items[idx].state.valuesAt(runtimeIdx) {
 				var key []byte
-				keyArena, key, err = appendIndexEntryKey(keyArena, encoded, items[idx].id)
+				keyArena, key, err = appendIndexEntryKeyForValueType(keyArena, runtime.def.valueType, encoded, items[idx].id)
 				if err != nil {
 					return err
 				}
@@ -1582,7 +1583,7 @@ type secondaryValueGroup struct {
 	documentIDs [][]byte
 }
 
-func (p insertBatchPlanner) emitGroupedSecondaryRunTable(items []insertBatchItem, runtimeIdx int, indexName string, documentIDOrder []int, entryCount, keyBytes int) (memtable.Table, bool, error) {
+func (p insertBatchPlanner) emitGroupedSecondaryRunTable(items []insertBatchItem, runtimeIdx int, indexName string, valueType IndexValueType, documentIDOrder []int, entryCount, keyBytes int) (memtable.Table, bool, error) {
 	if entryCount <= 0 {
 		return nil, false, nil
 	}
@@ -1625,7 +1626,7 @@ func (p insertBatchPlanner) emitGroupedSecondaryRunTable(items []insertBatchItem
 			if documentPos < len(group.documentIDs) {
 				documentID := group.documentIDs[documentPos]
 				documentPos++
-				keyArena, key, err = appendIndexEntryKey(keyArena, group.encoded, documentID)
+				keyArena, key, err = appendIndexEntryKeyForValueType(keyArena, valueType, group.encoded, documentID)
 				return key, nil, err
 			}
 			groupPos++
@@ -2499,6 +2500,16 @@ func encodeIndexScalar(valueType IndexValueType, value any) ([]byte, error) {
 func appendIndexScalar(dst []byte, valueType IndexValueType, value any) ([]byte, []byte, error) {
 	start := len(dst)
 	switch valueType {
+	case IndexValueBSONOrderedV2:
+		raw, ok := value.(bson.RawValue)
+		if !ok {
+			return dst, nil, fmt.Errorf("collections: indexed value for type %q must be bson.RawValue, got %T", valueType, value)
+		}
+		var err error
+		dst, _, err = appendBSONIndexKeyComponentV2(dst, raw)
+		if err != nil {
+			return dst, nil, err
+		}
 	case IndexValueString:
 		v, ok := value.(string)
 		if !ok {
@@ -2671,15 +2682,27 @@ func appendIndexEntryKey(dst, encodedValue, documentID []byte) ([]byte, []byte, 
 	return dst, dst[start:len(dst):len(dst)], nil
 }
 
-func setCollectionSecondaryIndexEntry(table memtable.Table, encodedValue, documentID []byte) (int, error) {
+// appendIndexEntryKeyForValueType keeps legacy typed-v1 roots byte-for-byte
+// stable while making BSON v2 roots use their mandatory, self-delimiting ID
+// suffix. Callers must select this from index metadata, never from key bytes.
+func appendIndexEntryKeyForValueType(dst []byte, valueType IndexValueType, encodedValue, documentID []byte) ([]byte, []byte, error) {
+	if valueType != IndexValueBSONOrderedV2 {
+		return appendIndexEntryKey(dst, encodedValue, documentID)
+	}
+	return appendBSONIndexEntryKeyV2(dst, encodedValue, documentID)
+}
+
+func setCollectionSecondaryIndexEntryForValueType(table memtable.Table, valueType IndexValueType, encodedValue, documentID []byte) (int, error) {
 	if table == nil {
 		return 0, nil
 	}
-	if keyParts, ok := table.(memtable.KeyPartsWriter); ok {
-		keyParts.SetInlineNilKeyParts(encodedValue, documentID)
-		return len(encodedValue) + len(documentID), nil
+	if valueType != IndexValueBSONOrderedV2 {
+		if keyParts, ok := table.(memtable.KeyPartsWriter); ok {
+			keyParts.SetInlineNilKeyParts(encodedValue, documentID)
+			return len(encodedValue) + len(documentID), nil
+		}
 	}
-	key, err := indexEntryKey(encodedValue, documentID)
+	_, key, err := appendIndexEntryKeyForValueType(nil, valueType, encodedValue, documentID)
 	if err != nil {
 		return 0, err
 	}
@@ -2687,20 +2710,30 @@ func setCollectionSecondaryIndexEntry(table memtable.Table, encodedValue, docume
 	return len(key), nil
 }
 
-func deleteCollectionSecondaryIndexEntry(table memtable.Table, encodedValue, documentID []byte) (int, error) {
+func setCollectionSecondaryIndexEntry(table memtable.Table, encodedValue, documentID []byte) (int, error) {
+	return setCollectionSecondaryIndexEntryForValueType(table, IndexValueString, encodedValue, documentID)
+}
+
+func deleteCollectionSecondaryIndexEntryForValueType(table memtable.Table, valueType IndexValueType, encodedValue, documentID []byte) (int, error) {
 	if table == nil {
 		return 0, nil
 	}
-	if keyParts, ok := table.(memtable.KeyPartsWriter); ok {
-		keyParts.DeleteKeyParts(encodedValue, documentID)
-		return len(encodedValue) + len(documentID), nil
+	if valueType != IndexValueBSONOrderedV2 {
+		if keyParts, ok := table.(memtable.KeyPartsWriter); ok {
+			keyParts.DeleteKeyParts(encodedValue, documentID)
+			return len(encodedValue) + len(documentID), nil
+		}
 	}
-	key, err := indexEntryKey(encodedValue, documentID)
+	_, key, err := appendIndexEntryKeyForValueType(nil, valueType, encodedValue, documentID)
 	if err != nil {
 		return 0, err
 	}
 	table.DeleteSteal(key)
 	return len(key), nil
+}
+
+func deleteCollectionSecondaryIndexEntry(table memtable.Table, encodedValue, documentID []byte) (int, error) {
+	return deleteCollectionSecondaryIndexEntryForValueType(table, IndexValueString, encodedValue, documentID)
 }
 
 func indexValuePrefix(encodedValue []byte) ([]byte, error) {
@@ -2737,6 +2770,9 @@ func appendIndexValuePrefixSlice(dst []byte, encodedValue []byte) ([]byte, []byt
 }
 
 func indexKeyDocumentID(valueType IndexValueType, key []byte) ([]byte, error) {
+	if valueType == IndexValueBSONOrderedV2 {
+		return bsonIndexKeyDocumentIDV2(key)
+	}
 	n, err := indexComponentLength(valueType, key)
 	if err != nil {
 		return nil, err
@@ -2749,6 +2785,8 @@ func indexKeyDocumentID(valueType IndexValueType, key []byte) ([]byte, error) {
 
 func indexComponentLength(valueType IndexValueType, key []byte) (int, error) {
 	switch valueType {
+	case IndexValueBSONOrderedV2:
+		return bsonIndexKeyComponentV2Length(key)
 	case IndexValueString:
 		for i := 0; i < len(key); i++ {
 			if key[i] != 0x00 {

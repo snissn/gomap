@@ -634,15 +634,15 @@ func mongoCompatibilityMatrixProbes() []mongoCompatibilityMatrixProbe {
 			},
 		},
 		{
-			capabilityID:   "index-gap.index-without-treedbvaluetype",
-			expectedStatus: MongoCapabilityRejected,
+			capabilityID:   "index.bson-ordered-v2-without-treedbvaluetype",
+			expectedStatus: MongoCapabilitySupportedSubset,
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 23, bson.D{
 					{Key: "createIndexes", Value: "users"},
 					{Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}}}},
 					{Key: "$db", Value: "app"},
 				})
-				assertCommandError(t, resp, "BadValue")
+				assertOK(t, resp)
 			},
 		},
 		{

@@ -42,7 +42,7 @@ mongodb://127.0.0.1:27017/?directConnection=true
 <!-- mongo-capability-summary:begin -->
 ## Executable capability summary
 
-Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:7c31d1cd0acfbd510061e535da32db0261f337aef83c63986c2c892624c7461b`
+Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:3bced062c485678a4ea0dd4aae5fe4eef8c36ae63cb1110cef5b6a5bc525118f`
 
 | Surface | Status | Boundary |
 |---|---|---|
@@ -50,7 +50,7 @@ Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:7c31d1cd0acfbd5100
 | Aggregation, count, and distinct | supported subset | Bounded standalone subsets only; unsupported stages, dotted distinct keys, and maxTimeMS reject. |
 | Administrative diagnostics | not implemented | serverStatus, top, and dbStats are not implemented. |
 | Logical sessions | supported subset | Driver-interoperability metadata only; no transaction or causal-session semantics. |
-| Scalar indexes | supported subset | Single-field ascending indexes require treedbValueType; compound and type-free creation remain rejected. |
+| Scalar indexes | supported subset | BSON collections default ordinary single-field ascending indexes to BSON-ordered v2; explicit treedbValueType remains the legacy homogeneous path. Compound and descending indexes remain rejected. |
 | Authentication and authorization | not implemented | The current standalone gateway assumes a trusted local deployment. |
 | Transactions and retryable writes | not implemented | Transaction markers reject and commitTransaction is unavailable. |
 | Replica set and sharding | not implemented | Standalone hello metadata does not advertise replica-set or sharded-server behavior. |

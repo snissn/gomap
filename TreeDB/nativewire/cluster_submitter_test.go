@@ -111,13 +111,14 @@ func (lifecycleRequiredNoAdmissionClusterSubmitter) RequiresVectorPartitionMutat
 }
 
 type recordingRaftCommandSubmitter struct {
-	groupID  raftcluster.GroupID
-	features raftcluster.FeatureSet
-	manager  *collections.CollectionManager
-	status   raftcluster.AdmissionStatus
-	err      error
-	mu       sync.Mutex
-	calls    []recordingRaftCommandSubmitCall
+	groupID       raftcluster.GroupID
+	features      raftcluster.FeatureSet
+	manager       *collections.CollectionManager
+	status        raftcluster.AdmissionStatus
+	err           error
+	preCommitHook func()
+	mu            sync.Mutex
+	calls         []recordingRaftCommandSubmitCall
 }
 
 type fixedResultRaftCommandSubmitter struct {
@@ -146,6 +147,14 @@ func (s *recordingRaftCommandSubmitter) ClusterAdmissionStatus(context.Context) 
 }
 
 func (s *recordingRaftCommandSubmitter) SubmitCommandEntryV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1) (raftcluster.SubmitResultV1, error) {
+	return s.submitCommandEntryV1(ctx, entry, metadata, nil)
+}
+
+func (s *recordingRaftCommandSubmitter) SubmitCommandEntryWithPreCommitV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1, preCommit func(context.Context) error) (raftcluster.SubmitResultV1, error) {
+	return s.submitCommandEntryV1(ctx, entry, metadata, preCommit)
+}
+
+func (s *recordingRaftCommandSubmitter) submitCommandEntryV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1, preCommit func(context.Context) error) (raftcluster.SubmitResultV1, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -157,6 +166,14 @@ func (s *recordingRaftCommandSubmitter) SubmitCommandEntryV1(ctx context.Context
 	decoded, err := raftentry.DecodeCommandEntryV1(entry, raftentry.DecodeOptions{RequestMetadata: metadata})
 	if err != nil {
 		return raftcluster.SubmitResultV1{}, err
+	}
+	if preCommit != nil {
+		if err := preCommit(ctx); err != nil {
+			return raftcluster.SubmitResultV1{}, err
+		}
+		if s.preCommitHook != nil {
+			s.preCommitHook()
+		}
 	}
 	s.mu.Lock()
 	index := uint64(len(s.calls) + 1)
@@ -203,7 +220,6 @@ func (s *recordingRaftCommandSubmitter) SubmitCommandEntryV1(ctx context.Context
 		HasCatalogVersion: true,
 	}, nil
 }
-
 func (s *recordingRaftCommandSubmitter) applyForTest(entry raftentry.CommandEntryV1) (raftentry.ApplyResultV1, error) {
 	switch entry.Decoded.CommandID {
 	case iwire.CommandCreateCollection:
@@ -952,6 +968,136 @@ func TestNewRaftClusterSubmitterWithVectorPartitionAdmissionRequiresConfirmation
 	_, err := NewRaftClusterSubmitterWithVectorPartitionAdmissionV1(nil, &fakeClusterSubmitter{})
 	if err == nil || !strings.Contains(err.Error(), "confirmation provider is required") {
 		t.Fatalf("constructor err=%v want missing confirmation provider", err)
+	}
+}
+
+func TestNewRoutedRaftClusterSubmitterWithVectorPartitionAdmissionInstallsSharedLifecycleV1(t *testing.T) {
+	admission := &confirmingVectorPartitionClusterSubmitterV1{fakeClusterSubmitter: &fakeClusterSubmitter{}}
+	submitter, err := NewRoutedRaftClusterSubmitterWithVectorPartitionAdmissionV1(nil, &staticClusterRouteProvider{}, admission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if submitter.VectorPartitionAdmission != admission {
+		t.Fatal("routed submitter did not retain lifecycle provider")
+	}
+	if required, err := submitter.RequiresVectorPartitionMutationAdmissionV1(context.Background()); err != nil || !required {
+		t.Fatalf("required=%v err=%v", required, err)
+	}
+	if _, err := NewRoutedRaftClusterSubmitterWithVectorPartitionAdmissionV1(nil, &staticClusterRouteProvider{}, &fakeClusterSubmitter{}); err == nil || !strings.Contains(err.Error(), "confirmation provider is required") {
+		t.Fatalf("constructor err=%v", err)
+	}
+}
+
+func TestCatalogRoutedVectorPartitionAdmissionInvalidatesBeforeDataCommitV1(t *testing.T) {
+	ctx := t.Context()
+	authority, metaRaft := newNativewireCatalogMetaAuthorityWithLifecycle(t, true)
+	proof, err := authority.CurrentCatalogProof(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator := raftplacement.VectorPartitionLifecycleCoordinatorV1{Authority: authority, Committer: metaRaft}
+	identity := raftplacement.VectorPartitionLifecycleIdentityV1{
+		Index: raftplacement.VectorPartitionLifecycleIndexIdentityV1{
+			Collection: raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "users"}, CollectionIncarnation: 1,
+			IndexName: "embedding", IndexDefinitionDigest: fmt.Sprintf("%064x", 1), IndexEpoch: 1, CatalogEpoch: proof.Epoch, CatalogDigest: proof.Digest,
+		},
+		Source:     raftplacement.VectorPartitionLifecycleSourceIdentityV1{Generation: 1, Checksum: 2, SchemaHash: 3, RowCount: 4},
+		Generation: 1,
+	}
+	mutationEpoch, err := coordinator.BuildSourceMutationEpochV1(identity.Index.Collection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coordinator.BeginBuildV1(ctx, identity, []raftcluster.GroupID{"group-a"}, 0, mutationEpoch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coordinator.RecordGroupReadyV1(ctx, identity, raftplacement.VectorPartitionLifecycleGroupReadyV1{GroupID: "group-a", AppliedIndex: 1, AssetSetDigest: fmt.Sprintf("%064x", 1)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coordinator.PrepareV1(ctx, identity); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coordinator.ActivateV1(ctx, identity); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mgr := collections.NewCollectionManager(db)
+	group := &recordingRaftCommandSubmitter{groupID: "group-a", manager: mgr}
+	preCommitCalls := 0
+	if _, err := group.SubmitCommandEntryWithPreCommitV1(ctx, []byte("malformed"), raftentry.RequestMetadataV1{}, func(context.Context) error {
+		preCommitCalls++
+		return nil
+	}); err == nil {
+		t.Fatal("malformed data entry reached pre-commit callback")
+	}
+	if preCommitCalls != 0 {
+		t.Fatalf("malformed data entry invoked pre-commit %d times", preCommitCalls)
+	}
+	registry, err := raftcluster.NewGroupSubmitterRegistryV1([]raftcluster.GroupSubmitterV1{{GroupID: "group-a", Submitter: group}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher, err := raftcluster.NewCatalogMetaGroupRoutedSubmitter(registry, authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes, err := NewCatalogMetaClusterRouteProvider(authority, authority.CurrentCatalogProof, metaRaft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission := &CatalogVectorPartitionMutationAdmissionV1{Authority: authority, Coordinator: coordinator}
+	otherCollection := []iwire.Section{
+		{ID: iwire.SectionIdempotencyKey, Bytes: []byte("audit-1")},
+		collectionNameRef("audit"),
+	}
+	if err := admission.AdmitVectorPartitionMutationV1(ctx, iwire.CommandInsertBatch, otherCollection); err != nil {
+		t.Fatalf("admit unrelated collection: %v", err)
+	}
+	if err := admission.ConfirmVectorPartitionMutationV1(ctx, iwire.CommandInsertBatch, otherCollection); err != nil {
+		t.Fatalf("confirm unrelated collection: %v", err)
+	}
+	if record, ok := authority.VectorPartitionLifecycleRecordV1(identity); !ok || record.State != raftplacement.VectorPartitionLifecycleActiveV1 {
+		t.Fatalf("unrelated collection changed active lifecycle record=%+v present=%v", record, ok)
+	}
+	submitter, err := NewRoutedRaftClusterSubmitterWithVectorPartitionAdmissionV1(dispatcher, routes, admission, mgr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	group.preCommitHook = func() {
+		record, ok := authority.VectorPartitionLifecycleRecordV1(identity)
+		if !ok || record.State != raftplacement.VectorPartitionLifecycleInvalidatedV1 || record.MutationConfirmed {
+			t.Fatalf("data pre-commit observed lifecycle record=%+v present=%v; want pending invalidation", record, ok)
+		}
+	}
+	server := NewServer(ServerOptions{Collections: mgr, Backend: db, ClusterSubmitter: submitter})
+	client, _ := servePipe(t, server)
+	if err := client.Hello(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON, [][]byte{[]byte("u1")}, [][]byte{[]byte(`{"embedding":[1,2]}`)}, AckVisible); err != nil {
+		t.Fatal(err)
+	}
+	if calls := group.snapshotCalls(); len(calls) != 1 {
+		t.Fatalf("data commits=%d want 1 after lifecycle invalidation", len(calls))
+	}
+	record, ok := authority.VectorPartitionLifecycleRecordV1(identity)
+	if !ok || record.State != raftplacement.VectorPartitionLifecycleInvalidatedV1 || !record.MutationConfirmed {
+		t.Fatalf("post-commit lifecycle record=%+v present=%v; want confirmed invalidation", record, ok)
+	}
+
+	// A broken lifecycle admission must stop before the routed data bridge sees
+	// another command; a caller cannot bypass the shared pre-commit boundary.
+	admission.Coordinator.Committer = nil
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON, [][]byte{[]byte("u2")}, [][]byte{[]byte(`{"embedding":[3,4]}`)}, AckVisible); err == nil {
+		t.Fatal("mutation succeeded with unavailable lifecycle admission")
+	}
+	if calls := group.snapshotCalls(); len(calls) != 1 {
+		t.Fatalf("failed lifecycle admission committed %d data entries", len(calls)-1)
 	}
 }
 
