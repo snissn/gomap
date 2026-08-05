@@ -100,6 +100,16 @@ func (b *VectorPartitionPublicBackendV1) RegisterVectorPartitionV1(ctx context.C
 		return public.GenerationStatusV1{}, err
 	}
 	for _, group := range b.opts.RequiredGroups {
+		alreadyReady := false
+		for _, ready := range record.ReadyGroups {
+			if ready.GroupID == group {
+				alreadyReady = true
+				break
+			}
+		}
+		if alreadyReady {
+			continue
+		}
 		record, err = b.opts.Lifecycle.BuildAndRecordGroupReadyV1(ctx, b.opts.Builder, i, group)
 		if err != nil {
 			return public.GenerationStatusV1{}, err
