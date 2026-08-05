@@ -2,10 +2,12 @@ package collections
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -134,6 +136,173 @@ func TestCollectionBSONOrderedV2IndexUsesVersionedEntriesAndNumericEquality(t *t
 	}
 	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
 		t.Fatalf("ids=%q want u1", ids)
+	}
+	if matched, err := col.Replace([]byte("u1"), mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "value", Value: int64(7)}, {Key: "note", Value: "same unique value"}})); err != nil || !matched {
+		t.Fatalf("same-document unique update matched=%v err=%v", matched, err)
+	}
+}
+
+func TestCollectionBSONOrderedV2IndexDistinguishesNullFromMissing(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}, Indexes: []IndexDefinition{{Name: "value", Field: "value", ValueType: IndexValueBSONOrderedV2, Unique: true}}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	missing := func(id string) []byte { return mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: id}}) }
+	null := func(id string) []byte {
+		return mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: id}, {Key: "value", Value: nil}})
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("missing-1"), []byte("null-1")}, [][]byte{missing("missing-1"), null("null-1")}); err != nil {
+		t.Fatalf("insert missing/null: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("missing-2")}, [][]byte{missing("missing-2")}); !IsDuplicateKeyError(err) {
+		t.Fatalf("second missing error=%v, want duplicate", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("null-2")}, [][]byte{null("null-2")}); !IsDuplicateKeyError(err) {
+		t.Fatalf("second null error=%v, want duplicate", err)
+	}
+	query := bson.Raw(null("query")).Lookup("value")
+	ids, err := col.FindByIndexValue("value", query)
+	if err != nil {
+		t.Fatalf("find null: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("null-1")) {
+		t.Fatalf("null ids=%q want null-1", ids)
+	}
+	missingIDs, err := col.FindByIndexValue("value", bson.RawValue{})
+	if err != nil {
+		t.Fatalf("find missing: %v", err)
+	}
+	if len(missingIDs) != 1 || !bytes.Equal(missingIDs[0], []byte("missing-1")) {
+		t.Fatalf("missing ids=%q want missing-1", missingIDs)
+	}
+}
+
+func TestCollectionBSONOrderedV2RejectsUnsupportedValuesBeforeMutation(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	unsupportedArray := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "array"}, {Key: "value", Value: bson.A{"unsupported"}}})
+	unsupportedDocument := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "document"}, {Key: "value", Value: bson.D{{Key: "unsupported", Value: true}}}})
+	if _, err := col.InsertBatch([][]byte{[]byte("array"), []byte("document")}, [][]byte{unsupportedArray, unsupportedDocument}); err != nil {
+		t.Fatalf("seed unsupported documents without index: %v", err)
+	}
+	if _, err := col.CreateIndex(IndexDefinition{Name: "value", Field: "value", ValueType: IndexValueBSONOrderedV2}); err == nil {
+		t.Fatal("CreateIndex accepted unsupported BSON array")
+	}
+	if _, ok := findIndex(col.MetaView().Indexes, "value"); ok {
+		t.Fatal("failed backfill published BSON v2 index metadata")
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("ok")}, [][]byte{mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "ok"}, {Key: "value", Value: "ok"}})}); err != nil {
+		t.Fatalf("post-failed-backfill insert: %v", err)
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "indexed", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}, Indexes: []IndexDefinition{{Name: "value", Field: "value", ValueType: IndexValueBSONOrderedV2}}}); err != nil {
+		t.Fatalf("create indexed collection: %v", err)
+	}
+	indexed, err := mgr.OpenCollection("indexed")
+	if err != nil {
+		t.Fatalf("open indexed collection: %v", err)
+	}
+	if _, err := indexed.InsertBatch([][]byte{[]byte("array")}, [][]byte{unsupportedArray}); err == nil {
+		t.Fatal("indexed insert accepted unsupported BSON array")
+	}
+	if got, err := indexed.Get([]byte("array")); err != nil || len(got) != 0 {
+		t.Fatalf("unsupported indexed insert primary read=%x err=%v", got, err)
+	}
+	if _, err := indexed.InsertBatch([][]byte{[]byte("document")}, [][]byte{unsupportedDocument}); err == nil {
+		t.Fatal("indexed insert accepted unsupported BSON document")
+	}
+	if got, err := indexed.Get([]byte("document")); err != nil || len(got) != 0 {
+		t.Fatalf("unsupported document indexed insert primary read=%x err=%v", got, err)
+	}
+}
+
+func TestCollectionBSONOrderedV2MetadataAndEntryCorruptionFailClosed(t *testing.T) {
+	component, err := encodeBSONIndexKeyComponentV2(bson.Raw(mustBSONCollectionDocument(t, bson.D{{Key: "value", Value: "x"}})).Lookup("value"))
+	if err != nil {
+		t.Fatalf("encode component: %v", err)
+	}
+	entry, err := bsonIndexEntryKeyV2(component, []byte("doc\x00id"))
+	if err != nil {
+		t.Fatalf("encode entry: %v", err)
+	}
+	if _, err := indexKeyDocumentID(IndexValueBSONOrderedV2, entry[:len(entry)-1]); err == nil {
+		t.Fatal("truncated v2 entry decoded without metadata-selected v2 decoder")
+	}
+	if got, err := indexKeyDocumentID(IndexValueBSONOrderedV2, entry); err != nil || !bytes.Equal(got, []byte("doc\x00id")) {
+		t.Fatalf("v2 entry document ID=%q err=%v", got, err)
+	}
+
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	bad, err := json.Marshal(collectionMetaDisk{Version: collectionMetaVersion, Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, Indexes: []IndexDefinition{{Name: "value", Field: "value", ValueType: IndexValueBSONOrderedV2}}})
+	if err != nil {
+		t.Fatalf("marshal mismatched metadata: %v", err)
+	}
+	if _, _, err := d.PublishOrderedRootGroupWithSystemBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+		snap := d.AcquireSnapshot()
+		if snap == nil {
+			return nil, backenddb.ErrClosed
+		}
+		defer func() { _ = snap.Close() }()
+		return buildSystemTargetIterator(snap, map[string][]byte{systemCollectionMetaKey("users"): bad})
+	}); err != nil {
+		t.Fatalf("publish mismatched metadata: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if _, err := NewCollectionManager(reopened).OpenCollection("users"); err == nil || !strings.Contains(err.Error(), "requires BSON") {
+		t.Fatalf("reopen mismatched BSON v2 metadata err=%v, want fail-closed format validation", err)
+	}
+}
+
+func TestCollectionBSONOrderedV2MetadataRejectsNonBSONCollections(t *testing.T) {
+	for _, format := range []DocumentFormat{DocumentFormatJSON, DocumentFormatTemplateV1} {
+		t.Run(string(format), func(t *testing.T) {
+			d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatalf("open db: %v", err)
+			}
+			defer func() { _ = d.Close() }()
+			_, err = NewCollectionManager(d).CreateCollection(&CollectionMeta{Name: "users", Options: CollectionOptions{DocumentFormat: format}, Indexes: []IndexDefinition{{Name: "value", Field: "value", ValueType: IndexValueBSONOrderedV2}}})
+			if err == nil {
+				t.Fatalf("CreateCollection accepted BSON v2 index for %q", format)
+			}
+		})
 	}
 }
 

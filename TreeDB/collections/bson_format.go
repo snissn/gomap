@@ -38,6 +38,9 @@ func appendBSONIndexRuntimeState(raw bson.Raw, state orderedDocumentIndexState, 
 	if len(runtime.path) == 1 {
 		value := raw.Lookup(runtime.path[0])
 		if value.IsZero() {
+			if runtime.def.valueType == IndexValueBSONOrderedV2 {
+				return appendBSONIndexValueToState(state, runtimeIdx, runtime, bson.RawValue{}, opts, encoder)
+			}
 			return nil
 		}
 		return appendBSONIndexValueToState(state, runtimeIdx, runtime, value, opts, encoder)
@@ -47,6 +50,9 @@ func appendBSONIndexRuntimeState(raw bson.Raw, state orderedDocumentIndexState, 
 		return err
 	}
 	if !found {
+		if runtime.def.valueType == IndexValueBSONOrderedV2 {
+			return appendBSONIndexValueToState(state, runtimeIdx, runtime, bson.RawValue{}, opts, encoder)
+		}
 		return nil
 	}
 	if fromArray && !runtime.def.multiKey && !opts.allowArrayValuesInIndex {

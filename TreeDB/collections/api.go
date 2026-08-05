@@ -21977,6 +21977,9 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		if err != nil {
 			return CollectionMeta{}, fmt.Errorf("collections: invalid index %q value_type: %w", indexes[i].Name, err)
 		}
+		if valueType == IndexValueBSONOrderedV2 && documentFormat != DocumentFormatBSON {
+			return CollectionMeta{}, fmt.Errorf("collections: index %q BSON v2 key format requires BSON document_format", indexes[i].Name)
+		}
 		indexes[i].ValueType = valueType
 		if _, err := backendRootStoragePolicy(indexes[i].StoragePolicy); err != nil {
 			return CollectionMeta{}, err

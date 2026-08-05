@@ -38,11 +38,27 @@ func TestCreateIndexesDefaultsToBSONOrderedV2WithoutTreeDBValueType(t *testing.T
 		{Key: "filter", Value: bson.D{{Key: "value", Value: int64(7)}}},
 		{Key: "$db", Value: "app"},
 	})), []string{"n1", "n2"})
+	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, server, 4066, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "value", Value: bson.D{{Key: "$in", Value: bson.A{int64(7)}}}}}},
+		{Key: "$db", Value: "app"},
+	})), []string{"n1", "n2"})
+	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, server, 4067, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "$and", Value: bson.A{
+			bson.D{{Key: "value", Value: bson.D{{Key: "$gte", Value: int32(7)}}}},
+			bson.D{{Key: "value", Value: bson.D{{Key: "$lt", Value: int32(8)}}}},
+		}}}},
+		{Key: "$db", Value: "app"},
+	})), []string{"n1", "n2"})
 	indexes := cursorFirstBatch(t, serveCommand(t, server, 4063, bson.D{{Key: "listIndexes", Value: "users"}, {Key: "$db", Value: "app"}}))
 	if got := indexes[1].Lookup("treedbIndexKeyFormat"); got.StringValue() != "bson-ordered-v2" {
 		t.Fatalf("listIndexes format=%q want bson-ordered-v2", got.StringValue())
 	}
 	if got := indexes[1].Lookup("treedbValueType"); !got.IsZero() {
 		t.Fatalf("listIndexes exposed legacy treedbValueType=%q", got.StringValue())
+	}
+	if got, ok := indexes[1].Lookup("treedbIndexKeyVersion").Int32OK(); !ok || got != 2 {
+		t.Fatalf("listIndexes v2 version=%d ok=%v want 2", got, ok)
 	}
 }
