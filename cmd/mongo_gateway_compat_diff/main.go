@@ -223,7 +223,7 @@ func (t target) Execute(ctx context.Context, fixture compatdiff.Fixture) (compat
 			docs[i] = fixture.Seed[i]
 		}
 		if _, err := coll.InsertMany(ctx, docs); err != nil {
-			return compatdiff.Observation{}, t.seedError(err)
+			return compatdiff.Observation{}, t.seedError(ctx, err)
 		}
 	}
 	baseline, err := snapshotDatabase(ctx, db)
@@ -348,15 +348,15 @@ func (t target) executionError(err error) error {
 // seedError preserves only reference infrastructure failures. A deterministic
 // MongoDB seed rejection makes the fixture setup invalid; it is not comparison
 // evidence and must not be presented as a retryable missing-reference error.
-func (t target) seedError(err error) error {
-	if !t.reference || !referenceTransportError(err) {
+func (t target) seedError(ctx context.Context, err error) error {
+	if !t.reference || !referenceTransportError(ctx, err) {
 		return err
 	}
 	return t.executionError(err)
 }
 
-func referenceTransportError(err error) bool {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+func referenceTransportError(ctx context.Context, err error) bool {
+	if ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 		return false
 	}
 	if mongo.IsNetworkError(err) {

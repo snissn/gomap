@@ -13,6 +13,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/compatdiff"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/topology"
 )
 
 func TestBundledFixturesLoadAndSmokeSelectionIsReal(t *testing.T) {
@@ -78,7 +79,7 @@ func TestClientOptionsDoNotInjectCommandMaxTimeMS(t *testing.T) {
 }
 
 func TestReferenceSeedFailureIsReferenceUnavailable(t *testing.T) {
-	err := target{reference: true}.seedError(&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")})
+	err := target{reference: true}.seedError(context.Background(), &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")})
 	var unavailable compatdiff.ReferenceUnavailable
 	if !errors.As(err, &unavailable) {
 		t.Fatalf("reference seed failure was not classified as unavailable: %T %v", err, err)
@@ -86,7 +87,7 @@ func TestReferenceSeedFailureIsReferenceUnavailable(t *testing.T) {
 }
 
 func TestReferenceSeedHarnessDeadlineIsNotUnavailable(t *testing.T) {
-	err := target{reference: true}.seedError(context.DeadlineExceeded)
+	err := target{reference: true}.seedError(context.Background(), context.DeadlineExceeded)
 	var unavailable compatdiff.ReferenceUnavailable
 	if errors.As(err, &unavailable) {
 		t.Fatalf("harness deadline was classified unavailable: %T %v", err, err)
@@ -94,10 +95,28 @@ func TestReferenceSeedHarnessDeadlineIsNotUnavailable(t *testing.T) {
 }
 
 func TestReferenceSemanticSeedFailureIsNotUnavailable(t *testing.T) {
-	err := target{reference: true}.seedError(mongo.WriteException{WriteErrors: []mongo.WriteError{{Code: 11000, Message: "duplicate key"}}})
+	err := target{reference: true}.seedError(context.Background(), mongo.WriteException{WriteErrors: []mongo.WriteError{{Code: 11000, Message: "duplicate key"}}})
 	var unavailable compatdiff.ReferenceUnavailable
 	if errors.As(err, &unavailable) {
 		t.Fatalf("deterministic reference seed error was classified unavailable: %T %v", err, err)
+	}
+}
+
+func TestReferenceSeedServerSelectionDeadlineIsUnavailableWhenHarnessIsLive(t *testing.T) {
+	err := target{reference: true}.seedError(context.Background(), topology.ServerSelectionError{Wrapped: context.DeadlineExceeded})
+	var unavailable compatdiff.ReferenceUnavailable
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("live-harness server selection error was not unavailable: %T %v", err, err)
+	}
+}
+
+func TestReferenceSeedServerSelectionDeadlineIsHarnessErrorWhenHarnessExpired(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := target{reference: true}.seedError(ctx, topology.ServerSelectionError{Wrapped: context.DeadlineExceeded})
+	var unavailable compatdiff.ReferenceUnavailable
+	if errors.As(err, &unavailable) {
+		t.Fatalf("expired harness context was classified unavailable: %T %v", err, err)
 	}
 }
 
