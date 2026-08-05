@@ -292,6 +292,7 @@ def validate_result(plan: dict[str, Any], plan_sha256: str, result: dict[str, An
                 _require(all(isinstance(repetition.get("phases", {}).get(key), int) and not isinstance(repetition["phases"][key], bool) and repetition["phases"][key] >= 0 for key in plan["artifact_contract"]["required_phases"]), f"row {row['id']} lacks phase timing")
                 _require(all(_number(repetition.get("resources", {}).get(key)) and repetition["resources"][key] >= 0 for key in plan["artifact_contract"]["required_resources"]), f"row {row['id']} lacks total-system resources")
                 _require(all(isinstance(repetition["resources"][key], int) and not isinstance(repetition["resources"][key], bool) for key in plan["artifact_contract"]["required_resources"] if key != "cpu_seconds"), f"row {row['id']} has malformed byte resources")
+                _require(repetition["resources"]["swap_bytes"] <= envelope["swap_limit_bytes"], f"row {row['id']} exceeds the swap limit")
                 _require(all(repetition["resources"][key] > 0 for key in ("cpu_seconds", "peak_rss_bytes", "persistent_bytes")), f"row {row['id']} has empty total-system resource observations")
                 cells = repetition.get("searches")
                 _require(isinstance(cells, list), f"row {row['id']} searches are required")

@@ -207,6 +207,11 @@ class SystemQualificationContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "total-system resources"):
             validate_result(self.plan, self.plan_sha256, infinite_resource)
 
+        swapped = self.result()
+        swapped["rows"][0]["corpora"][0]["repetitions"][0]["resources"]["swap_bytes"] = 1
+        with self.assertRaisesRegex(ContractError, "swap limit"):
+            validate_result(self.plan, self.plan_sha256, swapped)
+
         missing_path_proof = self.result()
         missing_path_proof["rows"][0]["corpora"][0]["repetitions"][0]["searches"][0]["counters"] = {
             key: 0 for key in self.plan["artifact_contract"]["tree_db_counters"]
