@@ -27,7 +27,12 @@ type ErrorV1 struct {
 	Err  error
 }
 
-func (e *ErrorV1) Error() string { return "vectorpartition: " + string(e.Code) + ": " + e.Err.Error() }
+func (e *ErrorV1) Error() string {
+	if e.Err == nil {
+		return "vectorpartition: " + string(e.Code)
+	}
+	return "vectorpartition: " + string(e.Code) + ": " + e.Err.Error()
+}
 func (e *ErrorV1) Unwrap() error { return e.Err }
 
 type GenerationIDV1 struct {

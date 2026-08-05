@@ -220,6 +220,12 @@ func hasCodeV1(err error, code ErrorCodeV1) bool {
 	return errors.As(err, &apiErr) && apiErr.Code == code
 }
 
+func TestErrorV1WithoutCause(t *testing.T) {
+	if got := (&ErrorV1{Code: ErrorFailedV1}).Error(); got != "vectorpartition: failed" {
+		t.Fatalf("error = %q", got)
+	}
+}
+
 func validSearchRequestV1(id GenerationIDV1) SearchRequestV1 {
 	return SearchRequestV1{Version: 1, Generation: id, Query: []float32{1}, Metric: MetricCosineV1, TopK: 1, Probes: 1, EfSearch: 1, Consistency: ConsistencyGenerationSnapshotV1, Limits: SearchLimitsV1{RequestBytes: 4, CandidateBytes: 1, ResponseBytes: 1, MergeEntries: 1}}
 }
