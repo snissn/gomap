@@ -74,7 +74,10 @@ func (o *OperationsV1) Status(ctx context.Context) (OperationsHealthV1, error) {
 	o.mu.Unlock()
 	health, err := o.health(ctx)
 	if err != nil {
-		return OperationsHealthV1{Reason: "authority_unavailable"}, &ErrorV1{Code: ErrorUnavailableV1, Err: err}
+		if health.Reason == "" {
+			health.Reason = "authority_unavailable"
+		}
+		return health, classifyErrorV1(ctx, err)
 	}
 	if !health.Ready && health.Reason == "" {
 		health.Reason = "unavailable"

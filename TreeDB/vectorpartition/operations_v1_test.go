@@ -85,6 +85,30 @@ func TestOperationsV1UsesLiveHealthAndDelegatesLifecycleV1(t *testing.T) {
 	}
 }
 
+func TestOperationsV1StatusPreservesCancellationCodesV1(t *testing.T) {
+	service, err := NewServiceV1(&serviceBackendV1{states: map[GenerationIDV1]GenerationStatusV1{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := ConservativeOperationsConfigV1()
+	config.Enabled = true
+	for _, tc := range []struct {
+		err  error
+		code ErrorCodeV1
+	}{{context.Canceled, ErrorCanceledV1}, {context.DeadlineExceeded, ErrorDeadlineExceededV1}} {
+		ops, err := NewOperationsV1(service, config, func(context.Context) (OperationsHealthV1, error) {
+			return OperationsHealthV1{Reason: "catalog_unavailable"}, tc.err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		health, err := ops.Status(t.Context())
+		if health.Ready || health.Reason != "catalog_unavailable" || !errors.Is(err, tc.err) || !hasOperationErrorCodeV1(err, tc.code) {
+			t.Fatalf("want=%v health=%+v err=%v", tc.err, health, err)
+		}
+	}
+}
+
 func TestOperationsV1EveryConfiguredCapStopsBeforeDispatchV1(t *testing.T) {
 	calls := 0
 	backend := &serviceBackendV1{states: map[GenerationIDV1]GenerationStatusV1{}, search: func(_ context.Context, r SearchRequestV1) (SearchResponseV1, error) {
