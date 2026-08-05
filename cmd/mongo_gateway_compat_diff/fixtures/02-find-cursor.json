@@ -1,0 +1,15 @@
+{
+  "schema": "treedb.mongo-gateway.compat-diff.fixture",
+  "version": 1,
+  "id": "find-cursor",
+  "capability_id": "query.indexed-equality-and-range-predicates",
+  "expectation": "supported",
+  "database": "compat",
+  "collection": "records",
+  "smoke": true,
+  "seed": [{"_id": "user-1", "score": {"$numberInt": "7"}}, {"_id": "user-2", "score": {"$numberInt": "8"}}],
+  "normalize_fields": ["cursor.id"],
+  "normalize_cursor_namespace": true,
+  "normalize_cursor_envelope_order": true,
+  "command": {"find": "records", "filter": {"score": {"$gte": {"$numberInt": "7"}}}, "batchSize": {"$numberInt": "1"}}
+}

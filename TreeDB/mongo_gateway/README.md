@@ -69,6 +69,76 @@ The manifest identity is also exposed by `buildInfo` and emitted by benchmark
 reports so stored compatibility evidence can be tied to the exact declared
 surface.
 
+## Differential compatibility fixtures
+
+`cmd/mongo_gateway_compat_diff` compares a deliberately small set of declared
+standalone shapes with a reference MongoDB. It is compatibility evidence for
+those fixtures, not a full MongoDB conformance claim. Fixture files are
+versioned canonical Extended JSON in
+`cmd/mongo_gateway_compat_diff/fixtures`; the runner decodes them to BSON and
+preserves BSON type and field order in emitted observations.
+
+Every fixture capability ID is checked against the consumed executable manifest
+before it runs: `supported` fixtures must map to a supported/support-subset
+row, and `rejected` fixtures must map to a rejected/not-implemented row.
+`--smoke` selects only fixture files explicitly marked `"smoke": true`; the
+bundled full set also covers supported read, write, aggregate, distinct, and
+metadata shapes. Post-command state enumerates every collection in the fixture
+database in collection-name order, retaining each collection's natural document
+order and deterministic collection/index metadata. It is a bounded mutation
+witness, not a claim to snapshot every MongoDB catalog option or view attribute.
+The runner never sorts
+documents to make a disagreement disappear.
+
+`ignore_fields` applies only to command/cursor replies, while
+`ignore_state_fields` applies only to supported-case state comparison; neither
+is applied to the exact pre/post state proof required for a rejected fixture.
+`normalize_fields` replaces only a declared nondeterministic
+value (such as an ObjectID or BSON timestamp) while retaining its BSON type and
+path. `normalize_response_envelope_order` is a separate, explicit opt-in for
+top-level command-reply envelope keys such as `ok` and `n`.
+`normalize_cursor_envelope_order` is a separate opt-in for cursor transport
+keys (`id`, `ns`, `firstBatch`/`nextBatch`), while the initial raw reply and
+every raw `getMore` reply remain attributable. Nested BSON and cursor-document
+order remains significant. `normalize_cursor_namespace` normalizes only the
+database prefix of `cursor.ns`, retaining its collection or `$cmd` suffix.
+Rejected fixtures require an exact TreeDB error code, a successful reference
+command, and unchanged bounded captured state: collections, natural documents,
+and index specifications.
+
+Ordinary package tests do not require Docker or a reference server. To run the
+local smoke suite, use the wrapper, which starts the pinned `mongo:7.0.14`
+image and writes `result.json`, `result.md`, and `result.tsv`:
+
+```sh
+scripts/mongo_gateway_compat_diff.sh --smoke --out /tmp/mongo-gateway-compat-diff
+```
+
+Omit `--smoke` to run the full diagnostic fixture set. Full mode exits 1 for a
+compatibility mismatch and intentionally retains the differing BSON path, type,
+and value in the artifacts; it may expose known gateway gaps. This is evidence,
+not a claim that every declared shape is already identical to MongoDB.
+
+For an externally managed reference, provide its URI explicitly:
+
+```sh
+GOWORK=off go build -o /tmp/mongo_gateway_compat_diff ./cmd/mongo_gateway_compat_diff
+/tmp/mongo_gateway_compat_diff \
+  -reference-uri 'mongodb://127.0.0.1:27017/?directConnection=true' \
+  -out /tmp/mongo-gateway-compat-diff
+```
+
+Artifacts include `result.json`, concise `result.md`/`result.tsv`, the
+capability-manifest identity, pinned reference image,
+observed reference `buildInfo` version/git identity, normalized TreeDB and
+reference responses/state, and per-fixture duration. Fixture-scoped reply
+`ignore_fields` and state `ignore_state_fields` are omitted from their
+respective normalized artifacts. Error messages remain visible for diagnosis, but
+equality compares error code and labels so permitted implementation wording
+does not hide semantic differences. A missing reference exits with status 3
+and a `reference-unavailable` artifact state, distinct from a compatibility
+mismatch (status 1).
+
 Cluster submitter mode does not turn this gateway into a sharded Mongo server.
 For token/ring placement, exact `_id` equality finds are mapped to one catalog
 token but fail closed before local observation because the gateway does not yet
