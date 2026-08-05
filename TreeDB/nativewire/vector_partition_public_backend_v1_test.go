@@ -201,6 +201,7 @@ func TestVectorPartitionPublicBackendSearchesProductionTopologyV1(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	base.DeadlineUnixNano = time.Now().Add(-time.Second).UnixNano()
 	backend := &VectorPartitionPublicBackendV1{opts: VectorPartitionPublicBackendOptionsV1{
 		Topology: topology, RequestBase: base,
 		Identity: raftplacement.VectorPartitionLifecycleIdentityV1{Index: raftplacement.VectorPartitionLifecycleIndexIdentityV1{IndexName: base.IndexName}, Generation: 7},

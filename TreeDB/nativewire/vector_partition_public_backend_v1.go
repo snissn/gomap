@@ -53,6 +53,7 @@ func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionV1(ctx context.Con
 	r := b.opts.RequestBase
 	r.Version, r.Query, r.IndexName, r.Metric, r.TopK, r.PartitionProbes, r.EfSearch, r.Consistency = request.Version, request.Query, request.Generation.Index, VectorPartitionShardSearchMetricV1(request.Metric), request.TopK, request.Probes, request.EfSearch, VectorPartitionShardSearchConsistencyV1(request.Consistency)
 	r.RequestBytesLimit, r.CandidateBytesLimit, r.ResponseBytesLimit, r.MergeEntriesLimit = request.Limits.RequestBytes, request.Limits.CandidateBytes, request.Limits.ResponseBytes, request.Limits.MergeEntries
+	r.DeadlineUnixNano = 0
 	if !request.Deadline.IsZero() {
 		r.DeadlineUnixNano = request.Deadline.UnixNano()
 	}
