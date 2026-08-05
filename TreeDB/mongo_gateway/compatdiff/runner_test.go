@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -297,6 +298,7 @@ func TestUnavailableReferenceIsNotCompatibilityFailure(t *testing.T) {
 	f := fixture()
 	ok := executorFunc(func(context.Context, Fixture) (Observation, error) { return Observation{}, nil })
 	missing := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		time.Sleep(time.Millisecond)
 		return Observation{}, ReferenceUnavailable{Err: errors.New("dial refused")}
 	})
 	result := Run(context.Background(), "identity", []Fixture{f}, ok, missing)
@@ -360,6 +362,7 @@ func TestExpectedRejectionRequiresReferenceExecution(t *testing.T) {
 func TestResultRetainsNormalizedAttributableObservations(t *testing.T) {
 	f := fixture()
 	exec := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		time.Sleep(time.Millisecond)
 		return Observation{Response: raw(t, bson.D{{Key: "n", Value: int32(1)}}), State: []bson.Raw{raw(t, bson.D{{Key: "_id", Value: "a"}})}}, nil
 	})
 	row := Run(context.Background(), "identity", []Fixture{f}, exec, exec).Fixtures[0]
