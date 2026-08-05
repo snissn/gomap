@@ -33,7 +33,8 @@ def _reject_json_constant(value: str) -> None:
 
 
 def _load(path: Path, limit: int = 16 << 20) -> dict[str, Any]:
-    raw = path.read_bytes()
+    with path.open("rb") as stream:
+        raw = stream.read(limit + 1)
     _require(len(raw) <= limit, f"{path} exceeds {limit} bytes")
     value = json.loads(raw, parse_constant=_reject_json_constant)
     _require(isinstance(value, dict), f"{path} must contain an object")
@@ -198,10 +199,11 @@ def matched_recall_buckets(plan: dict[str, Any], result: dict[str, Any]) -> list
                 selected = None
                 for budget in candidates:
                     key = _budget_key(budget)
-                    metrics = [
-                        next(cell["metrics"] for cell in repetition["searches"] if _budget_key(cell["budget"]) == key and cell["concurrency"] == concurrency)
-                        for repetition in corpus["repetitions"]
-                    ]
+                    metrics = []
+                    for repetition in corpus["repetitions"]:
+                        cell = next((value for value in repetition["searches"] if _budget_key(value.get("budget")) == key and value.get("concurrency") == concurrency), None)
+                        _require(isinstance(cell, dict) and isinstance(cell.get("metrics"), dict), f"row {row['id']} corpus {corpus['id']} lacks metrics for budget {key} at concurrency {concurrency}")
+                        metrics.append(cell["metrics"])
                     recall = median(value["recall_at_10"] for value in metrics)
                     if recall >= floor:
                         selected = {

@@ -187,6 +187,12 @@ class SystemQualificationContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "search matrix"):
             validate_result(self.plan, self.plan_sha256, missing_cell)
 
+        reordered = self.result()
+        searches = reordered["rows"][0]["corpora"][0]["repetitions"][0]["searches"]
+        searches[0], searches[1] = searches[1], searches[0]
+        with self.assertRaisesRegex(ContractError, "search matrix order"):
+            validate_result(self.plan, self.plan_sha256, reordered)
+
         bad_metrics = copy.deepcopy(self.result())
         bad_metrics["rows"][0]["corpora"][0]["repetitions"][0]["searches"][0]["metrics"]["p95_nanos"] = 0
         with self.assertRaisesRegex(ContractError, "search metrics"):
@@ -231,8 +237,15 @@ class SystemQualificationContractTest(unittest.TestCase):
             artifact.write_text('{"qps": NaN}', encoding="utf-8")
             with self.assertRaisesRegex(ContractError, "non-finite JSON number"):
                 _load(artifact)
+            with self.assertRaisesRegex(ContractError, "exceeds 1 bytes"):
+                _load(artifact, limit=1)
 
     def test_matched_recall_bucketing_rejects_missing_floor(self) -> None:
+        missing = self.result()
+        missing["rows"][3]["corpora"][0]["repetitions"][0]["searches"].pop(0)
+        with self.assertRaisesRegex(ContractError, "lacks metrics"):
+            matched_recall_buckets(self.plan, missing)
+
         result = self.result()
         milvus = result["rows"][3]
         for corpus in milvus["corpora"]:

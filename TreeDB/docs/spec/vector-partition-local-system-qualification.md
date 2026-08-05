@@ -42,6 +42,7 @@ evidence; #3983 owns that qualification.
 - Sweep the engine-native budgets in the plan. TreeDB retains the accepted
   p1/p2/p4/p8/p16, EF128, c256 ladder and selects p2; Milvus and pgvector use
   the first pinned HNSW budget whose three-run median reaches recall@10 0.90.
+  TreeDB's selected p2 budget must meet the same 0.90 floor.
 - Measure concurrency 1, 8, 32, and the declared 64 saturation row. The three
   repetitions use forward, reverse, and one-position rotated budget order.
 - Preserve unsupported, failed, incomplete, and host-noise-tainted rows. They
