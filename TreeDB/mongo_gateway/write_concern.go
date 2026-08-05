@@ -246,6 +246,9 @@ func parseStandaloneWriteConcern(command wire.Document) (standaloneWriteConcern,
 	if value.IsZero() {
 		return concern, nil
 	}
+	if value.Type != bson.TypeEmbeddedDocument {
+		return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: "Mongo command field \"writeConcern\" must be a document"}
+	}
 	contents, ok = rawBSONContainerContents(value)
 	if !ok {
 		return concern, standaloneWriteConcernParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: "Mongo command field \"writeConcern\" must be a document"}

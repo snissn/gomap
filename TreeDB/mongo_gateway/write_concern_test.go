@@ -490,6 +490,8 @@ func TestStandaloneWriteConcernRejectsBeforeCollectionCreation(t *testing.T) {
 		codeName string
 	}{
 		{name: "not document", concern: "majority", codeName: "FailedToParse"},
+		{name: "empty array", concern: bson.A{}, codeName: "FailedToParse"},
+		{name: "nonempty array", concern: bson.A{bson.D{{Key: "w", Value: int32(1)}}}, codeName: "FailedToParse"},
 		{name: "w zero", concern: bson.D{{Key: "w", Value: int32(0)}}, codeName: "WriteConcernFailed"},
 		{name: "majority", concern: bson.D{{Key: "w", Value: "majority"}}, codeName: "WriteConcernFailed"},
 		{name: "numeric replica count", concern: bson.D{{Key: "w", Value: int32(2)}}, codeName: "WriteConcernFailed"},
