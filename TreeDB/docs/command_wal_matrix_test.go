@@ -291,7 +291,7 @@ func mongoGatewayMutationMatrixEntryPoints(t *testing.T) []string {
 	commands := make(map[string]struct{})
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Name == nil || fn.Name.Name != "commandResponse" || fn.Body == nil {
+		if !ok || fn.Name == nil || fn.Name.Name != "dispatchCommandResponse" || fn.Body == nil {
 			continue
 		}
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
@@ -329,7 +329,7 @@ func mongoGatewayMutationMatrixEntryPoints(t *testing.T) []string {
 		})
 	}
 	if len(commands) == 0 {
-		t.Fatalf("no mongo gateway mutation commands derived from commandResponse")
+		t.Fatalf("no mongo gateway mutation commands derived from dispatchCommandResponse")
 	}
 	out := make([]string, 0, len(commands))
 	for command := range commands {

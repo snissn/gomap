@@ -108,12 +108,14 @@ type Server struct {
 	firstWriteBeforeWaitHook  func(*collectionFirstWritePending)
 	// filterWriteSelectedHook is test-only coordination between natural-order
 	// selection and the mutation-boundary predicate recheck.
-	filterWriteSelectedHook func()
-	updateMu                sync.Mutex
-	updateCoalescers        map[string]*mongoUpdateCoalescer
-	insertMu                sync.Mutex
-	insertCoalescers        map[string]*mongoInsertCoalescer
-	closed                  atomic.Bool
+	filterWriteSelectedHook    func()
+	updateMu                   sync.Mutex
+	updateCoalescers           map[string]*mongoUpdateCoalescer
+	insertMu                   sync.Mutex
+	insertCoalescers           map[string]*mongoInsertCoalescer
+	standaloneWriteConcernSync func() (bool, error)
+	writeConcernStats          standaloneWriteConcernStats
+	closed                     atomic.Bool
 }
 
 type collectionFirstWritePending struct {
@@ -756,6 +758,13 @@ func (s *Server) commandResponse(ctx context.Context, name string, command wire.
 			return doc, err
 		}
 	}
+	if standaloneWriteCommand(name) && !s.clusterSubmitterConfigured() {
+		return s.standaloneWriteCommandResponse(ctx, name, command, sequences, cursorOwner)
+	}
+	return s.dispatchCommandResponse(ctx, name, command, sequences, cursorOwner)
+}
+
+func (s *Server) dispatchCommandResponse(ctx context.Context, name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (wire.Document, error) {
 	switch name {
 	case "hello", "isMaster", "ismaster":
 		return marshalDocument(s.helloResponse(ctx))

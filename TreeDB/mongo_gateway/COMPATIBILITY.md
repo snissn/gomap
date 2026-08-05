@@ -63,6 +63,8 @@ an extra probe outside the manifest.
 | cursor | getMore and killCursors | supported | `cursor.getmore-and-killcursors` |
 | read concern | local/available readConcern maps to local_stale | supported subset | `read-concern.local-available-readconcern-maps-to-local-stale` |
 | read concern gap | majority, linearizable, and snapshot readConcern | rejected | `read-concern-gap.majority-linearizable-and-snapshot-readconcern` |
+| write concern | standalone absent/default, w:1, and journal acknowledgement (#4060) | supported subset | `write-concern.standalone-w1-and-journal` |
+| write concern gap | standalone w:0, replica acknowledgement, and positive wtimeout | rejected | `write-concern-gap.unacknowledged-replica-and-timeout` |
 | crud | updateOne $set by _id | supported subset | `crud.updateone-set-by-id` |
 | crud | delete by _id | supported subset | `crud.delete-by-id` |
 | metadata | listCollections | supported subset | `metadata.listcollections` |
@@ -179,7 +181,7 @@ enabled-path latency claim is made.
 | Command | `hostInfo` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerHandlesHostInfo` | Returns minimal local runtime and OS metadata only. |
 | Command | `buildInfo` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerHandlesBuildInfo` | Returns minimal MongoDB-compatible gateway version/build metadata only. |
 | Command | `ping` | `supported` | `TestMongoCompatibilityMatrix` | None for MVP. |
-| Command | `insert` / `insertMany` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerOfficialGoDriverBasicCRUD` | Standalone writeConcern durability remains minimal. In cluster submitter mode, absent/default and `{w: 1}` request visible ack, `{w: "majority"}` requests Raft-committed proof, and unsupported writeConcern options are rejected before submit. |
+| Command | `insert` / `insertMany` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerOfficialGoDriverBasicCRUD`, `TestStandaloneServerOfficialGoDriverWriteConcernW1AndJournaled` | Standalone absent/default, `{w: 1}`, `j: false`, and `wtimeout: 0` use the configured profile's ordinary acknowledgement boundary. `j: true` closes the explicit TreeDB sync boundary described below. Cluster submitter mode remains authoritative: absent/default and `{w: 1}` request visible ack, `{w: "majority"}` requests Raft-committed proof, and unsupported options reject before submit. |
 | Command | `find` | `supported subset` | `TestMongoCompatibilityMatrix`, find planner tests | Query language is intentionally limited. |
 | Command | `getMore` / `killCursors` | `supported subset` | `TestMongoCompatibilityMatrix`, cursor tests | Server cursor state is in-memory only. |
 | Command option | `readConcern` on `find`, `aggregate`, `count`, `distinct`, `getMore`, `listCollections`, `listDatabases`, and `listIndexes` | `supported subset` / `rejected` | `TestMongoReadConcernAcceptsLocalStaleReadSurfaces`, `TestMongoReadConcernRejectsStrongLevelsBeforeServingData`, `TestMongoAggregateCountDistinctRejectUnsupportedSurface`, `TestMongoCompatibilityMatrix` | Absent/empty, `{level: "local"}`, and `{level: "available"}` are accepted and map to local_stale reads. `majority`, `linearizable`, `snapshot`, cluster-time fields, unknown options, malformed documents, bad `level` types, and duplicate `level` are rejected before serving data. |
@@ -283,7 +285,7 @@ implemented.
 
 | Surface | Status | Current gap |
 |---|---|---|
-| Mongo `writeConcern` | `not implemented` as Mongo semantics | Gateway success currently follows the underlying TreeDB collection API and durability profile. |
+| Mongo `writeConcern` | `supported subset` standalone; cluster submitter contract preserved | Standalone accepts absent/empty, `{w: 1}`, boolean `j`, and `wtimeout: 0`. Ordinary acknowledgement follows the selected profile: `command_wal_durable` already returns after its durable command-frame boundary, while `command_wal_relaxed` and `no_wal_fast` promise only their configured ordinary visible boundary. `j: true` first drains collection publishing, then closes a dependency-complete contiguous applied-prefix boundary for command-WAL profiles or calls `Checkpoint` for `no_wal_fast`. A relaxed suffix orders persistent value-log dependencies, appends and syncs a durable-prefix barrier, and publishes the barrier as a root-neutral applied command; an already-durable prefix is reused without another barrier or file sync. `w: 0`, `w: "majority"`, numeric `w > 1`, tags, positive `wtimeout`, deprecated `wtimeoutMS`, unknown fields, and malformed shapes reject before collection creation or mutation. A `w: 0` OP_MSG with `moreToCome` receives no reply but is still rejected without mutation. Positive timeouts fail closed because the current TreeDB sync boundary is not interruptible. A post-mutation sync failure returns command `ok: 1` with code 64 `writeConcernError`, `TreeDBWriteConcernUncertain`, and explicit mutation/durability uncertainty fields. Diagnostics expose per-concern requests, logical writes, visible/journal acknowledgements, completed physical sync boundaries, acknowledgement/sync nanoseconds, timeout/malformed/unsupported rejections, and classified sync failures. |
 | Mongo `readConcern` | `supported subset` / `rejected` | Absent/empty, `{level: "local"}`, and `{level: "available"}` map to local_stale reads; stronger levels, cluster-time fields, unknown options, malformed documents, and duplicate `level` are rejected before serving data. |
 | Logical sessions | `supported subset` | Advertised for driver compatibility; `lsid` is accepted but does not add causal consistency, retryable-write, or transaction semantics. The gateway presents as standalone and does not advertise a replica-set `setName`. |
 | Multi-document transactions | `not implemented` | Transaction markers are rejected on supported read/write/metadata commands; full support is blocked on TreeDB collection transaction and collection WAL work. |
@@ -305,9 +307,9 @@ implemented.
    and browsing do not depend on it.
 2. Decide whether unsupported filters should always fail closed or allow bounded
    scans behind a feature flag.
-3. Extend explicit `writeConcern` handling beyond the current cluster submitter
-   subset, and add stronger readConcern modes only after a documented TreeDB
-   snapshot/causal-read boundary exists.
+3. Add stronger readConcern modes only after a documented TreeDB
+   snapshot/causal-read boundary exists; durable standalone acknowledgement
+   does not imply a stronger readConcern or replica majority.
 4. Add metadata-fast estimated counts and index-assisted distinct only when the
    collection metadata/index contracts can preserve the documented bounded
    semantics.

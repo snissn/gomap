@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/collections"
-	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -168,11 +167,6 @@ func validateFindAndModifyCommand(command wire.Document) error {
 		return err
 	} else if remove {
 		return errors.New("Mongo gateway findAndModify does not support remove: true")
-	}
-	if ack, err := parseClusterWriteConcern(command, "findAndModify"); err != nil {
-		return mongoWriteConcernFailedError(err.Error())
-	} else if ack != iwire.AckVisible {
-		return mongoWriteConcernFailedError("Mongo gateway findAndModify cannot satisfy writeConcern majority")
 	}
 	return nil
 }

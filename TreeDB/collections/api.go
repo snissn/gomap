@@ -3052,6 +3052,31 @@ func (m *CollectionManager) FlushAll() error {
 	return errors.Join(errs...)
 }
 
+// SyncForStandaloneWriteConcern closes the durable storage boundary used by a
+// standalone Mongo journal acknowledgement. Collection-local buffers are
+// published first. Command-WAL databases then persist a dependency-complete
+// command prefix; WAL-free databases seal a backend root with Checkpoint.
+//
+// This is intentionally stronger than FlushAll, which is only a visibility
+// and draining boundary. physicalSync is false only when a command-WAL prefix
+// was already durable (or no command prefix exists); the WAL-free checkpoint
+// path always performs a physical sync boundary.
+func (m *CollectionManager) SyncForStandaloneWriteConcern() (physicalSync bool, err error) {
+	if m == nil || m.db == nil {
+		return false, backenddb.ErrClosed
+	}
+	if err := m.FlushAll(); err != nil {
+		return false, err
+	}
+	if m.db.CommandWALEnabled() {
+		return m.db.SyncCommandWALAppliedPrefix()
+	}
+	if err := m.db.Checkpoint(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func flushCollectionWriteDomain(db *backenddb.DB, domain *collectionWriteDomain) error {
 	return flushCollectionWriteDomainWithRawPublishState(db, domain, false)
 }

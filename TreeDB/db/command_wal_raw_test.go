@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
@@ -22,6 +25,234 @@ func TestSyncCommandWALDependenciesThroughNoDebtIsAllocationFree(t *testing.T) {
 		}
 	}); allocs != 0 {
 		t.Fatalf("syncCommandWALDependenciesThrough allocations=%v, want 0", allocs)
+	}
+}
+
+func TestSyncCommandWALAppliedPrefixIsContiguousRepeatableAndReopenDurable(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	for i, value := range []string{"one", "two"} {
+		batch := d.NewBatch()
+		if err := batch.Set([]byte("key"), []byte(value)); err != nil {
+			t.Fatalf("Set %d: %v", i, err)
+		}
+		if err := batch.Write(); err != nil {
+			t.Fatalf("Write %d: %v", i, err)
+		}
+		if err := batch.Close(); err != nil {
+			t.Fatalf("Close batch %d: %v", i, err)
+		}
+		before := d.State().AppliedCommandLSN
+		if before == 0 || d.CommandWALNextLSN() != before+1 {
+			t.Fatalf("before sync %d: applied=%d next=%d", i, before, d.CommandWALNextLSN())
+		}
+		physicalSync, err := d.SyncCommandWALAppliedPrefix()
+		if err != nil {
+			t.Fatalf("SyncCommandWALAppliedPrefix %d: %v", i, err)
+		}
+		if !physicalSync {
+			t.Fatalf("SyncCommandWALAppliedPrefix %d physicalSync=false, want true", i)
+		}
+		after := d.State().AppliedCommandLSN
+		if after != before+1 || d.CommandWALNextLSN() != after+1 {
+			t.Fatalf("after sync %d: applied=%d want=%d next=%d", i, after, before+1, d.CommandWALNextLSN())
+		}
+		if durable := d.commandWALDurableLSN.Load(); durable < after {
+			t.Fatalf("after sync %d: durable=%d want >=%d", i, durable, after)
+		}
+		fileSyncs := commandWALTestStatUint64(t, d.Stats(), "treedb.command_wal.file_sync.calls_total")
+		// An already-durable applied prefix needs neither another physical sync
+		// nor an artificial command identity or AppliedCommandLSN advance.
+		physicalSync, err = d.SyncCommandWALAppliedPrefix()
+		if err != nil {
+			t.Fatalf("repeat SyncCommandWALAppliedPrefix %d: %v", i, err)
+		}
+		if physicalSync {
+			t.Fatalf("repeat SyncCommandWALAppliedPrefix %d physicalSync=true, want durable-prefix reuse", i)
+		}
+		if got := d.State().AppliedCommandLSN; got != after || d.CommandWALNextLSN() != after+1 {
+			t.Fatalf("repeat sync %d: applied=%d next=%d want applied=%d next=%d", i, got, d.CommandWALNextLSN(), after, after+1)
+		}
+		if got := commandWALTestStatUint64(t, d.Stats(), "treedb.command_wal.file_sync.calls_total"); got != fileSyncs {
+			t.Fatalf("repeat sync %d: file syncs=%d want unchanged %d", i, got, fileSyncs)
+		}
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	got, err := reopened.Get([]byte("key"))
+	if err != nil {
+		t.Fatalf("Get after reopen: %v", err)
+	}
+	if !bytes.Equal(got, []byte("two")) {
+		t.Fatalf("Get after reopen=%q want %q", got, "two")
+	}
+}
+
+func TestSyncCommandWALAppliedPrefixReusesDurableWriteBoundary(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	batch := d.NewBatch()
+	if err := batch.Set([]byte("key"), []byte("value")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := batch.WriteSync(); err != nil {
+		t.Fatalf("WriteSync: %v", err)
+	}
+	if err := batch.Close(); err != nil {
+		t.Fatalf("Close batch: %v", err)
+	}
+	applied := d.State().AppliedCommandLSN
+	next := d.CommandWALNextLSN()
+	fileSyncs := commandWALTestStatUint64(t, d.Stats(), "treedb.command_wal.file_sync.calls_total")
+	if applied == 0 || d.commandWALDurableLSN.Load() < applied {
+		t.Fatalf("WriteSync did not establish durable applied prefix: applied=%d durable=%d", applied, d.commandWALDurableLSN.Load())
+	}
+	physicalSync, err := d.SyncCommandWALAppliedPrefix()
+	if err != nil {
+		t.Fatalf("SyncCommandWALAppliedPrefix: %v", err)
+	}
+	if physicalSync {
+		t.Fatal("SyncCommandWALAppliedPrefix physicalSync=true after durable WriteSync, want reuse")
+	}
+	if got := d.State().AppliedCommandLSN; got != applied || d.CommandWALNextLSN() != next {
+		t.Fatalf("sync changed durable prefix: applied=%d want=%d next=%d want=%d", got, applied, d.CommandWALNextLSN(), next)
+	}
+	if got := commandWALTestStatUint64(t, d.Stats(), "treedb.command_wal.file_sync.calls_total"); got != fileSyncs {
+		t.Fatalf("sync added file sync: got=%d want=%d", got, fileSyncs)
+	}
+}
+
+func TestSyncCommandWALAppliedPrefixOrdersConcurrentMutations(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	const workers = 4
+	const writesPerWorker = 3
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			<-start
+			for write := 0; write < writesPerWorker; write++ {
+				key := []byte(fmt.Sprintf("worker-%d-write-%d", worker, write))
+				batch := d.NewBatch()
+				if err := batch.Set(key, []byte("value")); err != nil {
+					errs <- err
+					return
+				}
+				if err := batch.Write(); err != nil {
+					_ = batch.Close()
+					errs <- err
+					return
+				}
+				if err := batch.Close(); err != nil {
+					errs <- err
+					return
+				}
+				if _, err := d.SyncCommandWALAppliedPrefix(); err != nil {
+					errs <- err
+					return
+				}
+			}
+		}(worker)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent write/sync: %v", err)
+	}
+	if t.Failed() {
+		_ = d.Close()
+		return
+	}
+	if _, err := d.SyncCommandWALAppliedPrefix(); err != nil {
+		t.Fatalf("final SyncCommandWALAppliedPrefix: %v", err)
+	}
+	applied := d.State().AppliedCommandLSN
+	if next := d.CommandWALNextLSN(); next != applied+1 {
+		t.Fatalf("final command LSNs are non-contiguous: applied=%d next=%d", applied, next)
+	}
+	if durable := d.commandWALDurableLSN.Load(); durable < applied {
+		t.Fatalf("final durable prefix=%d want >=%d", durable, applied)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	for worker := 0; worker < workers; worker++ {
+		for write := 0; write < writesPerWorker; write++ {
+			key := []byte(fmt.Sprintf("worker-%d-write-%d", worker, write))
+			if got, err := reopened.Get(key); err != nil || !bytes.Equal(got, []byte("value")) {
+				t.Fatalf("Get %q after reopen=%q err=%v", key, got, err)
+			}
+		}
+	}
+}
+
+func TestSyncCommandWALAppliedPrefixCrashBeforeRootNeutralPublishRecovers(t *testing.T) {
+	if os.Getenv("TREEDB_SYNC_APPLIED_PREFIX_CRASH_HELPER") == "1" {
+		d, err := Open(Options{Dir: os.Getenv("TREEDB_SYNC_APPLIED_PREFIX_DIR"), CommandWAL: true, DisableBackgroundPrune: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		batch := d.NewBatch()
+		if err := batch.Set([]byte("key"), []byte("value")); err != nil {
+			t.Fatal(err)
+		}
+		if err := batch.Write(); err != nil {
+			t.Fatal(err)
+		}
+		if err := batch.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if got := d.State().AppliedCommandLSN; got != 1 {
+			t.Fatalf("relaxed mutation applied=%d want 1", got)
+		}
+		d.testCommandWALBeforeDurablePublishLockHook = func() { os.Exit(0) }
+		_, _ = d.SyncCommandWALAppliedPrefix()
+		os.Exit(2)
+	}
+
+	dir := t.TempDir()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestSyncCommandWALAppliedPrefixCrashBeforeRootNeutralPublishRecovers$")
+	cmd.Env = append(os.Environ(), "TREEDB_SYNC_APPLIED_PREFIX_CRASH_HELPER=1", "TREEDB_SYNC_APPLIED_PREFIX_DIR="+dir)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("crash helper: %v\n%s", err, output)
+	}
+	reopened, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	got, err := reopened.Get([]byte("key"))
+	if err != nil || !bytes.Equal(got, []byte("value")) {
+		t.Fatalf("Get after crash/reopen=%q err=%v", got, err)
+	}
+	if state := reopened.State(); state.AppliedCommandLSN != 2 || reopened.CommandWALNextLSN() != 3 {
+		t.Fatalf("recovered barrier state: applied=%d next=%d want applied=2 next=3", state.AppliedCommandLSN, reopened.CommandWALNextLSN())
 	}
 }
 

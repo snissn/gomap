@@ -24,7 +24,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
-	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
@@ -371,11 +370,6 @@ func BenchmarkTreeDBGatewayLoadGeneratedIDBSONIndexes2(b *testing.B) {
 
 func BenchmarkTreeDBGatewayLoadObjectIDBSONIndexes2(b *testing.B) {
 	benchmarkTreeDBGatewayLoadWithDocument(b, collections.DocumentFormatBSON, 2, false, benchmarkDocumentWithObjectID)
-}
-
-func BenchmarkTreeDBGatewayLoadUnackBSONIndexes2(b *testing.B) {
-	benchmarkTreeDBGatewayLoadWithDocument(b, collections.DocumentFormatBSON, 2, false, benchmarkDocument,
-		options.Collection().SetWriteConcern(writeconcern.Unacknowledged()))
 }
 
 func BenchmarkTreeDBGatewayLoadRawBSONIndexes2(b *testing.B) {

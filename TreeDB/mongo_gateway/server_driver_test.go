@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -610,20 +611,17 @@ func TestServerOfficialGoDriverUnacknowledgedInsertMany(t *testing.T) {
 		t.Fatal("unacknowledged insert reported Acknowledged=true")
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		var got bson.M
-		err = ackColl.FindOne(opCtx, bson.D{{Key: "_id", Value: "u2"}}).Decode(&got)
-		if err == nil {
-			if got["name"] != "grace" {
-				t.Fatalf("decoded name=%v want grace", got["name"])
-			}
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("find after unacknowledged insert: %v", err)
-		}
-		time.Sleep(10 * time.Millisecond)
+	var got bson.M
+	err = ackColl.FindOne(opCtx, bson.D{{Key: "_id", Value: "u2"}}).Decode(&got)
+	if !errors.Is(err, mongo.ErrNoDocuments) {
+		t.Fatalf("rejected unacknowledged write find err=%v, want no documents", err)
+	}
+	if err := client.Ping(opCtx, nil); err != nil {
+		t.Fatalf("connection after rejected moreToCome write: %v", err)
+	}
+	stats := server.StandaloneWriteConcernStats()
+	if stats.PreMutationRejections != 1 || stats.LogicalWrites != 0 {
+		t.Fatalf("unacknowledged write stats=%+v", stats)
 	}
 
 	cancel()
@@ -635,6 +633,41 @@ func TestServerOfficialGoDriverUnacknowledgedInsertMany(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("server did not stop")
+	}
+}
+
+func TestStandaloneServerOfficialGoDriverWriteConcernW1AndJournaled(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{
+		Dir:     t.TempDir(),
+		Profile: treedb.ProfileCommandWALRelaxed,
+		DefaultCollectionOptions: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatBSON,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open standalone: %v", err)
+	}
+	client, cancel, ln, serveErr := startStandaloneMongoClientForTest(t, standalone)
+	defer stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
+
+	opCtx, opCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer opCancel()
+	db := client.Database("app")
+	w1 := db.Collection("users", options.Collection().SetWriteConcern(writeconcern.W1()))
+	journaled := db.Collection("users", options.Collection().SetWriteConcern(writeconcern.Journaled()))
+	if _, err := w1.InsertOne(opCtx, bson.D{{Key: "_id", Value: "w1"}}); err != nil {
+		t.Fatalf("w:1 insert: %v", err)
+	}
+	if _, err := journaled.InsertOne(opCtx, bson.D{{Key: "_id", Value: "journaled"}, {Key: "payload", Value: strings.Repeat("p", 4096)}}); err != nil {
+		t.Fatalf("journaled insert: %v", err)
+	}
+	stats := standalone.Server.StandaloneWriteConcernStats()
+	if stats.VisibleAcknowledgements != 1 || stats.JournalAcknowledgements != 1 || stats.PhysicalSyncBoundaries != 1 {
+		t.Fatalf("driver writeConcern stats=%+v", stats)
+	}
+	var got bson.M
+	if err := db.Collection("users").FindOne(opCtx, bson.D{{Key: "_id", Value: "journaled"}}).Decode(&got); err != nil {
+		t.Fatalf("find journaled document: %v", err)
 	}
 }
 
