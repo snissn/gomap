@@ -3,6 +3,7 @@ package vectorpartition
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -115,6 +116,40 @@ func TestServiceV1FailsClosedWithoutPartialResults(t *testing.T) {
 	}
 }
 
+func TestServiceV1OwnsRequestAndOrderedResponseV1(t *testing.T) {
+	id := GenerationIDV1{Index: "embedding", Generation: 7}
+	backendNeighbors := []NeighborV1{{ID: "alpha", Score: .9}, {ID: "beta", Score: .9}, {ID: "gamma", Score: .8}}
+	svc, err := NewServiceV1(&serviceBackendV1{states: map[GenerationIDV1]GenerationStatusV1{}, search: func(_ context.Context, request SearchRequestV1) (SearchResponseV1, error) {
+		request.Query[0] = 99
+		return SearchResponseV1{Generation: request.Generation, Neighbors: backendNeighbors}, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := validSearchRequestV1(id)
+	request.TopK = len(backendNeighbors)
+	response, err := svc.Search(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Query[0] != 1 {
+		t.Fatalf("backend mutated caller query: %v", request.Query)
+	}
+	for i, want := range []string{"alpha", "beta", "gamma"} {
+		if response.Neighbors[i].ID != want {
+			t.Fatalf("response order = %+v", response.Neighbors)
+		}
+	}
+	backendNeighbors[0].ID = "backend-mutated"
+	if response.Neighbors[0].ID != "alpha" {
+		t.Fatalf("backend retained response ownership: %+v", response.Neighbors)
+	}
+	response.Neighbors[1].ID = "caller-mutated"
+	if backendNeighbors[1].ID != "beta" {
+		t.Fatalf("caller mutated backend response: %+v", backendNeighbors)
+	}
+}
+
 func TestServiceV1ValidatesCancellationAndDeadlineBeforeBackend(t *testing.T) {
 	id := GenerationIDV1{Index: "embedding", Generation: 7}
 	called := false
@@ -187,4 +222,19 @@ func hasCodeV1(err error, code ErrorCodeV1) bool {
 
 func validSearchRequestV1(id GenerationIDV1) SearchRequestV1 {
 	return SearchRequestV1{Version: 1, Generation: id, Query: []float32{1}, Metric: MetricCosineV1, TopK: 1, Probes: 1, EfSearch: 1, Consistency: ConsistencyGenerationSnapshotV1, Limits: SearchLimitsV1{RequestBytes: 4, CandidateBytes: 1, ResponseBytes: 1, MergeEntries: 1}}
+}
+
+func ExampleServiceV1_Search() {
+	id := GenerationIDV1{Index: "embedding", Generation: 7}
+	backend := &serviceBackendV1{states: map[GenerationIDV1]GenerationStatusV1{}, search: func(_ context.Context, request SearchRequestV1) (SearchResponseV1, error) {
+		return SearchResponseV1{Generation: request.Generation, Neighbors: []NeighborV1{{ID: "alpha", Score: 0.9}}}, nil
+	}}
+	service, _ := NewServiceV1(backend)
+	response, _ := service.Search(context.Background(), SearchRequestV1{
+		Version: 1, Generation: id, Query: []float32{1}, Metric: MetricCosineV1,
+		TopK: 1, Probes: 1, EfSearch: 64, Consistency: ConsistencyGenerationSnapshotV1,
+		Limits: SearchLimitsV1{RequestBytes: 4, CandidateBytes: 1 << 20, ResponseBytes: 1 << 20, MergeEntries: 16},
+	})
+	fmt.Println(response.Neighbors[0].ID)
+	// Output: alpha
 }

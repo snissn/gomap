@@ -3,6 +3,8 @@
 // generation lifecycle contract. Node construction supplies one opaque
 // production backend; ordinary callers never construct transport, Raft, or
 // lifecycle internals.
+//
+// TreeDB is pre-alpha. These APIs may change without compatibility guarantees.
 package vectorpartition
 
 import (

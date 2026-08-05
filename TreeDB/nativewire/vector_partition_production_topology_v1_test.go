@@ -68,15 +68,15 @@ func TestVectorPartitionProductionTopologyRollsBackPartialStartAndRestartsV1(t *
 	}
 }
 
-func newVectorPartitionProductionTopologyTwoGroupTestV1(t *testing.T) (*VectorPartitionProductionTopologyV1, VectorPartitionCoordinatorRequestV1, map[raftcluster.GroupID]*fakeVectorPartitionReadCoordinatorV1) {
+func newVectorPartitionProductionTopologyTwoGroupTestV1(t testing.TB) (*VectorPartitionProductionTopologyV1, VectorPartitionCoordinatorRequestV1, map[raftcluster.GroupID]*fakeVectorPartitionReadCoordinatorV1) {
 	return newVectorPartitionProductionTopologyTwoGroupWithLifecycleTestV1(t, &recordingVectorPartitionReplicatedLifecycleAuthorityV1{})
 }
 
-func newVectorPartitionProductionTopologyTwoGroupWithLifecycleTestV1(t *testing.T, lifecycle VectorPartitionReplicatedLifecycleAuthorityV1) (*VectorPartitionProductionTopologyV1, VectorPartitionCoordinatorRequestV1, map[raftcluster.GroupID]*fakeVectorPartitionReadCoordinatorV1) {
+func newVectorPartitionProductionTopologyTwoGroupWithLifecycleTestV1(t testing.TB, lifecycle VectorPartitionReplicatedLifecycleAuthorityV1) (*VectorPartitionProductionTopologyV1, VectorPartitionCoordinatorRequestV1, map[raftcluster.GroupID]*fakeVectorPartitionReadCoordinatorV1) {
 	return newVectorPartitionProductionTopologyTwoGroupWithLifecycleReadySetTestV1(t, lifecycle, strings.Repeat("b", 64))
 }
 
-func newVectorPartitionProductionTopologyTwoGroupWithLifecycleReadySetTestV1(t *testing.T, lifecycle VectorPartitionReplicatedLifecycleAuthorityV1, readySetDigest string) (*VectorPartitionProductionTopologyV1, VectorPartitionCoordinatorRequestV1, map[raftcluster.GroupID]*fakeVectorPartitionReadCoordinatorV1) {
+func newVectorPartitionProductionTopologyTwoGroupWithLifecycleReadySetTestV1(t testing.TB, lifecycle VectorPartitionReplicatedLifecycleAuthorityV1, readySetDigest string) (*VectorPartitionProductionTopologyV1, VectorPartitionCoordinatorRequestV1, map[raftcluster.GroupID]*fakeVectorPartitionReadCoordinatorV1) {
 	t.Helper()
 	ref := raftplacement.CollectionRefV1{Database: "db", Catalog: "default", Collection: "docs"}
 	groups := []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}, {ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"}}

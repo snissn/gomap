@@ -60,7 +60,12 @@ func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionV1(ctx context.Con
 	if err != nil {
 		return public.SearchResponseV1{}, publicBackendErrorV1(err)
 	}
-	result := public.SearchResponseV1{Generation: request.Generation, Counters: public.SearchCountersV1{Requests: response.Counters.Requests, RPCs: response.Counters.RPCs, Retries: response.Counters.Retries, Redirects: response.Counters.Redirects, Candidates: response.Counters.Candidates, Edges: response.Counters.Edges}, Timing: public.SearchTimingV1{Total: time.Duration(response.Timing.TotalNanos)}}
+	result := public.SearchResponseV1{Generation: request.Generation, Counters: public.SearchCountersV1{
+		SelectedPartitions: response.Counters.SelectedPartitions, SelectedGroups: response.Counters.SelectedGroups,
+		Requests: response.Counters.Requests, RPCs: response.Counters.RPCs, Retries: response.Counters.Retries, Redirects: response.Counters.Redirects,
+		Candidates: response.Counters.Candidates, Edges: response.Counters.Edges,
+		QueryBytes: response.Counters.QueryBytes, RequestBytes: response.Counters.RequestBytes, CandidateBytes: response.Counters.CandidateBytes, ResponseBytes: response.Counters.ResponseBytes,
+	}, Timing: public.SearchTimingV1{Total: time.Duration(response.Timing.TotalNanos)}}
 	result.Neighbors = make([]public.NeighborV1, len(response.Neighbors))
 	for i, n := range response.Neighbors {
 		result.Neighbors[i] = public.NeighborV1{ID: n.ID, Score: n.Score}
