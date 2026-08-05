@@ -92,8 +92,11 @@ documents to make a disagreement disappear.
 fixture-scoped. `normalize_fields` replaces only a declared nondeterministic
 value (such as an ObjectID or BSON timestamp) while retaining its BSON type and
 path. `normalize_response_envelope_order` is a separate, explicit opt-in for
-top-level command-reply envelope keys such as `ok` and `n`; nested BSON and
-cursor-document order remains significant. Rejected fixtures require an exact
+top-level command-reply envelope keys such as `ok` and `n`.
+`normalize_cursor_envelope_order` is a separate opt-in for cursor transport
+keys (`id`, `ns`, `firstBatch`/`nextBatch`), while the initial raw reply and
+every raw `getMore` reply remain attributable. Nested BSON and cursor-document
+order remains significant. Rejected fixtures require an exact
 TreeDB error code, a successful reference command, and an unchanged complete
 TreeDB database snapshot.
 

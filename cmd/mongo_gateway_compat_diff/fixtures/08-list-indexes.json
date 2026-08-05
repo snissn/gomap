@@ -7,6 +7,8 @@
   "database": "compat",
   "collection": "records",
   "smoke": false,
+  "normalize_fields": ["cursor.ns"],
+  "normalize_cursor_envelope_order": true,
   "seed": [{"_id": "user-1", "score": {"$numberInt": "7"}}],
   "command": {"listIndexes": "records", "cursor": {}}
 }

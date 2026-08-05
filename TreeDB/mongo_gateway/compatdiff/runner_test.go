@@ -39,12 +39,24 @@ func TestNormalizePreservesBSONTypeAndOrder(t *testing.T) {
 func TestResponseEnvelopeOrderNormalizationDoesNotHideNestedOrder(t *testing.T) {
 	left := raw(t, bson.D{{Key: "ok", Value: int32(1)}, {Key: "n", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "firstBatch", Value: bson.A{bson.D{{Key: "a", Value: int32(1)}, {Key: "b", Value: int32(2)}}}}}}})
 	topLevelReordered := raw(t, bson.D{{Key: "n", Value: int32(1)}, {Key: "ok", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "firstBatch", Value: bson.A{bson.D{{Key: "a", Value: int32(1)}, {Key: "b", Value: int32(2)}}}}}}})
-	if !sameResponseWithNormalization(left, topLevelReordered, nil, nil, true) {
+	if !sameResponseWithNormalization(left, topLevelReordered, nil, nil, true, false) {
 		t.Fatal("explicit reply-envelope normalization did not accept top-level transport order")
 	}
 	nestedReordered := raw(t, bson.D{{Key: "n", Value: int32(1)}, {Key: "ok", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "firstBatch", Value: bson.A{bson.D{{Key: "b", Value: int32(2)}, {Key: "a", Value: int32(1)}}}}}}})
-	if sameResponseWithNormalization(left, nestedReordered, nil, nil, true) {
+	if sameResponseWithNormalization(left, nestedReordered, nil, nil, true, false) {
 		t.Fatal("reply-envelope normalization hid nested cursor document order")
+	}
+}
+
+func TestCursorEnvelopeOrderNormalizationDoesNotHideBatchDocumentOrder(t *testing.T) {
+	left := raw(t, bson.D{{Key: "cursor", Value: bson.D{{Key: "id", Value: int64(0)}, {Key: "ns", Value: "db.c"}, {Key: "firstBatch", Value: bson.A{bson.D{{Key: "a", Value: int32(1)}, {Key: "b", Value: int32(2)}}}}}}, {Key: "ok", Value: int32(1)}})
+	cursorEnvelopeReordered := raw(t, bson.D{{Key: "cursor", Value: bson.D{{Key: "firstBatch", Value: bson.A{bson.D{{Key: "a", Value: int32(1)}, {Key: "b", Value: int32(2)}}}}, {Key: "ns", Value: "db.c"}, {Key: "id", Value: int64(0)}}}, {Key: "ok", Value: int32(1)}})
+	if !sameResponseWithNormalization(left, cursorEnvelopeReordered, nil, nil, false, true) {
+		t.Fatal("explicit cursor-envelope normalization did not accept cursor transport field order")
+	}
+	batchDocumentReordered := raw(t, bson.D{{Key: "cursor", Value: bson.D{{Key: "firstBatch", Value: bson.A{bson.D{{Key: "b", Value: int32(2)}, {Key: "a", Value: int32(1)}}}}, {Key: "ns", Value: "db.c"}, {Key: "id", Value: int64(0)}}}, {Key: "ok", Value: int32(1)}})
+	if sameResponseWithNormalization(left, batchDocumentReordered, nil, nil, false, true) {
+		t.Fatal("cursor-envelope normalization hid batch-document order")
 	}
 }
 
@@ -161,13 +173,36 @@ func TestDifferencesInCountsErrorsAndCursorContentFail(t *testing.T) {
 		t.Fatalf("error status=%s", got)
 	}
 	cursorBase := executorFunc(func(context.Context, Fixture) (Observation, error) {
-		return Observation{Response: raw(t, bson.D{{Key: "cursor", Value: bson.D{{Key: "firstBatch", Value: bson.A{bson.D{{Key: "_id", Value: "same"}}}}}}})}, nil
+		return Observation{Response: raw(t, bson.D{{Key: "ok", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "id", Value: int64(99)}, {Key: "ns", Value: "db.c"}, {Key: "firstBatch", Value: bson.A{bson.D{{Key: "_id", Value: "same"}}}}}}}), CursorReplies: []bson.Raw{raw(t, bson.D{{Key: "ok", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "id", Value: int64(0)}, {Key: "ns", Value: "db.c"}, {Key: "nextBatch", Value: bson.A{bson.D{{Key: "_id", Value: "later"}}}}}}})}}, nil
 	})
 	cursor := executorFunc(func(context.Context, Fixture) (Observation, error) {
-		return Observation{Response: raw(t, bson.D{{Key: "cursor", Value: bson.D{{Key: "firstBatch", Value: bson.A{bson.D{{Key: "_id", Value: "different"}}}}}}})}, nil
+		return Observation{Response: raw(t, bson.D{{Key: "ok", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "id", Value: int64(99)}, {Key: "ns", Value: "db.c"}, {Key: "firstBatch", Value: bson.A{bson.D{{Key: "_id", Value: "same"}}}}}}}), CursorReplies: []bson.Raw{raw(t, bson.D{{Key: "ok", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "id", Value: int64(0)}, {Key: "ns", Value: "db.c"}, {Key: "nextBatch", Value: bson.A{bson.D{{Key: "_id", Value: "different"}}}}}}})}}, nil
 	})
 	if got := Run(context.Background(), "identity", []Fixture{f}, cursorBase, cursor).Fixtures[0].Status; got != "mismatch" {
 		t.Fatalf("cursor status=%s", got)
+	}
+}
+
+func TestCursorReplyNormalizationRetainsInitialAndGetMoreStructure(t *testing.T) {
+	f := fixture()
+	f.NormalizeFields = []string{"cursor.id", "cursor.ns"}
+	initial := raw(t, bson.D{{Key: "ok", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "id", Value: int64(71)}, {Key: "ns", Value: "db.c"}, {Key: "firstBatch", Value: bson.A{bson.D{{Key: "_id", Value: "first"}}}}}}})
+	next := raw(t, bson.D{{Key: "ok", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "id", Value: int64(0)}, {Key: "ns", Value: "db.c"}, {Key: "nextBatch", Value: bson.A{bson.D{{Key: "_id", Value: "next"}}}}}}})
+	otherInitial := raw(t, bson.D{{Key: "ok", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "id", Value: int64(999)}, {Key: "ns", Value: "other.c"}, {Key: "firstBatch", Value: bson.A{bson.D{{Key: "_id", Value: "first"}}}}}}})
+	otherNext := raw(t, bson.D{{Key: "ok", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "id", Value: int64(0)}, {Key: "ns", Value: "other.c"}, {Key: "nextBatch", Value: bson.A{bson.D{{Key: "_id", Value: "next"}}}}}}})
+	left := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Response: initial, CursorReplies: []bson.Raw{next}}, nil
+	})
+	right := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Response: otherInitial, CursorReplies: []bson.Raw{otherNext}}, nil
+	})
+	row := Run(context.Background(), "identity", []Fixture{f}, left, right).Fixtures[0]
+	if row.Status != "pass" || row.TreeDB.Response == nil || len(row.TreeDB.CursorReplies) != 1 {
+		t.Fatalf("cursor observations were not retained/normalized: %+v", row)
+	}
+	droppedGetMore := executorFunc(func(context.Context, Fixture) (Observation, error) { return Observation{Response: otherInitial}, nil })
+	if row := Run(context.Background(), "identity", []Fixture{f}, left, droppedGetMore).Fixtures[0]; row.Status != "mismatch" || !strings.Contains(row.Reason, "cursor reply") {
+		t.Fatalf("cursor closure sequence difference was hidden: %+v", row)
 	}
 }
 

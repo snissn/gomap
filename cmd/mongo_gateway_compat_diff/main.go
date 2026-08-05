@@ -43,6 +43,7 @@ type diskFixture struct {
 	IgnoreStateFields              []string               `json:"ignore_state_fields"`
 	NormalizeFields                []string               `json:"normalize_fields"`
 	NormalizeResponseEnvelopeOrder bool                   `json:"normalize_response_envelope_order"`
+	NormalizeCursorEnvelopeOrder   bool                   `json:"normalize_cursor_envelope_order"`
 }
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -111,7 +112,7 @@ func loadFixtures(dir string, smokeOnly bool) ([]compatdiff.Fixture, error) {
 		if smokeOnly && !disk.Smoke {
 			continue
 		}
-		fixture := compatdiff.Fixture{Schema: disk.Schema, Version: disk.Version, ID: disk.ID, CapabilityID: disk.CapabilityID, Expectation: disk.Expectation, ExpectedErrorCode: disk.ExpectedErrorCode, Database: disk.Database, Collection: disk.Collection, Smoke: disk.Smoke, IgnoreFields: disk.IgnoreFields, IgnoreStateFields: disk.IgnoreStateFields, NormalizeFields: disk.NormalizeFields, NormalizeResponseEnvelopeOrder: disk.NormalizeResponseEnvelopeOrder}
+		fixture := compatdiff.Fixture{Schema: disk.Schema, Version: disk.Version, ID: disk.ID, CapabilityID: disk.CapabilityID, Expectation: disk.Expectation, ExpectedErrorCode: disk.ExpectedErrorCode, Database: disk.Database, Collection: disk.Collection, Smoke: disk.Smoke, IgnoreFields: disk.IgnoreFields, IgnoreStateFields: disk.IgnoreStateFields, NormalizeFields: disk.NormalizeFields, NormalizeResponseEnvelopeOrder: disk.NormalizeResponseEnvelopeOrder, NormalizeCursorEnvelopeOrder: disk.NormalizeCursorEnvelopeOrder}
 		if fixture.Command, err = extJSON(disk.Command); err != nil {
 			return nil, fmt.Errorf("%s command: %w", path, err)
 		}
@@ -221,37 +222,21 @@ func (t target) Execute(ctx context.Context, fixture compatdiff.Fixture) (compat
 	}
 	observation := compatdiff.Observation{Baseline: baseline}
 	commandCtx := commandContext(ctx, fixture.Command)
-	if isCursorCommand(fixture.Command) {
-		cursor, err := db.RunCommandCursor(commandCtx, fixture.Command)
-		if err != nil {
-			if command, ok := commandError(err); ok {
-				observation.Error = command
-			} else {
-				return compatdiff.Observation{}, t.executionError(err)
-			}
+	response, err := db.RunCommand(commandCtx, fixture.Command).Raw()
+	if err != nil {
+		if command, ok := commandError(err); ok {
+			observation.Error = command
 		} else {
-			var docs bson.A
-			for cursor.Next(ctx) {
-				docs = append(docs, cursor.Current)
-			}
-			if err := cursor.Err(); err != nil {
-				return compatdiff.Observation{}, t.executionError(err)
-			} else {
-				bytes, _ := bson.Marshal(bson.D{{Key: "ok", Value: int32(1)}, {Key: "cursor", Value: bson.D{{Key: "documents", Value: docs}}}})
-				observation.Response = bytes
-			}
-			_ = cursor.Close(ctx)
+			return compatdiff.Observation{}, t.executionError(err)
 		}
 	} else {
-		response, err := db.RunCommand(commandCtx, fixture.Command).Raw()
-		if err != nil {
-			if command, ok := commandError(err); ok {
-				observation.Error = command
-			} else {
+		observation.Response = response
+		if isCursorCommand(fixture.Command) {
+			replies, err := drainCursorReplies(commandCtx, db, fixture.Collection, response)
+			if err != nil {
 				return compatdiff.Observation{}, t.executionError(err)
 			}
-		} else {
-			observation.Response = response
+			observation.CursorReplies = replies
 		}
 	}
 	state, err := snapshotDatabase(ctx, db)
@@ -260,6 +245,38 @@ func (t target) Execute(ctx context.Context, fixture compatdiff.Fixture) (compat
 	}
 	observation.State = state
 	return observation, nil
+}
+
+func drainCursorReplies(ctx context.Context, db *mongo.Database, collection string, initial bson.Raw) ([]bson.Raw, error) {
+	cursor, ok := initial.Lookup("cursor").DocumentOK()
+	if !ok {
+		return nil, nil
+	}
+	id, ok := cursor.Lookup("id").AsInt64OK()
+	if !ok || id == 0 {
+		return nil, nil
+	}
+	const maxGetMoreReplies = 128
+	var replies []bson.Raw
+	for range maxGetMoreReplies {
+		reply, err := db.RunCommand(ctx, bson.D{{Key: "getMore", Value: id}, {Key: "collection", Value: collection}}).Raw()
+		if err != nil {
+			return nil, err
+		}
+		replies = append(replies, reply)
+		cursor, ok = reply.Lookup("cursor").DocumentOK()
+		if !ok {
+			return nil, errors.New("getMore response omitted cursor")
+		}
+		id, ok = cursor.Lookup("id").AsInt64OK()
+		if !ok {
+			return nil, errors.New("getMore response omitted cursor id")
+		}
+		if id == 0 {
+			return replies, nil
+		}
+	}
+	return nil, fmt.Errorf("cursor exceeded %d getMore replies", maxGetMoreReplies)
 }
 
 func clientOptions(uri string) *options.ClientOptions {

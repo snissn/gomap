@@ -48,6 +48,7 @@ type Fixture struct {
 	IgnoreStateFields              []string    `json:"ignore_state_fields,omitempty"`
 	NormalizeFields                []string    `json:"normalize_fields,omitempty"`
 	NormalizeResponseEnvelopeOrder bool        `json:"normalize_response_envelope_order,omitempty"`
+	NormalizeCursorEnvelopeOrder   bool        `json:"normalize_cursor_envelope_order,omitempty"`
 }
 
 func (f Fixture) Validate() error {
@@ -86,10 +87,11 @@ type Error struct {
 }
 
 type Observation struct {
-	Response bson.Raw   `json:"-"`
-	Error    *Error     `json:"error,omitempty"`
-	Baseline []bson.Raw `json:"-"`
-	State    []bson.Raw `json:"-"`
+	Response      bson.Raw   `json:"-"`
+	CursorReplies []bson.Raw `json:"-"`
+	Error         *Error     `json:"error,omitempty"`
+	Baseline      []bson.Raw `json:"-"`
+	State         []bson.Raw `json:"-"`
 }
 
 type Executor interface {
@@ -123,10 +125,11 @@ type FixtureResult struct {
 // hiding BSON type/order evidence. Error messages are recorded but intentionally
 // excluded from equality: fixture semantics compare error code and labels.
 type NormalizedObservation struct {
-	Response any    `json:"response,omitempty"`
-	Error    *Error `json:"error,omitempty"`
-	Baseline []any  `json:"baseline,omitempty"`
-	State    []any  `json:"state,omitempty"`
+	Response      any    `json:"response,omitempty"`
+	CursorReplies []any  `json:"cursor_replies,omitempty"`
+	Error         *Error `json:"error,omitempty"`
+	Baseline      []any  `json:"baseline,omitempty"`
+	State         []any  `json:"state,omitempty"`
 }
 
 type Result struct {
@@ -160,7 +163,7 @@ func Run(ctx context.Context, capabilityIdentity string, fixtures []Fixture, tre
 			result.Fixtures = append(result.Fixtures, row)
 			continue
 		}
-		row.TreeDB = normalizedObservation(treeObs, fixture.IgnoreFields, fixture.IgnoreStateFields, fixture.NormalizeFields, fixture.NormalizeResponseEnvelopeOrder)
+		row.TreeDB = normalizedObservation(treeObs, fixture.IgnoreFields, fixture.IgnoreStateFields, fixture.NormalizeFields, fixture.NormalizeResponseEnvelopeOrder, fixture.NormalizeCursorEnvelopeOrder)
 		refObs, err := reference.Execute(ctx, fixture)
 		if err != nil {
 			var unavailable ReferenceUnavailable
@@ -173,7 +176,7 @@ func Run(ctx context.Context, capabilityIdentity string, fixtures []Fixture, tre
 			result.Fixtures = append(result.Fixtures, row)
 			continue
 		}
-		row.Reference = normalizedObservation(refObs, fixture.IgnoreFields, fixture.IgnoreStateFields, fixture.NormalizeFields, fixture.NormalizeResponseEnvelopeOrder)
+		row.Reference = normalizedObservation(refObs, fixture.IgnoreFields, fixture.IgnoreStateFields, fixture.NormalizeFields, fixture.NormalizeResponseEnvelopeOrder, fixture.NormalizeCursorEnvelopeOrder)
 		row.Status, row.Reason = compare(fixture, treeObs, refObs)
 		row.Duration = time.Since(oneStarted)
 		result.Fixtures = append(result.Fixtures, row)
@@ -201,10 +204,16 @@ func statusPriority(status string) int {
 	}
 }
 
-func normalizedObservation(observation Observation, ignoredResponse, ignoredState, normalized []string, normalizeResponseEnvelopeOrder bool) NormalizedObservation {
+func normalizedObservation(observation Observation, ignoredResponse, ignoredState, normalized []string, normalizeResponseEnvelopeOrder, normalizeCursorEnvelopeOrder bool) NormalizedObservation {
 	result := NormalizedObservation{Error: observation.Error}
 	if len(observation.Response) > 0 {
-		result.Response = normalizeResponse(observation.Response, ignoredResponse, normalized, normalizeResponseEnvelopeOrder)
+		result.Response = normalizeResponse(observation.Response, ignoredResponse, normalized, normalizeResponseEnvelopeOrder, normalizeCursorEnvelopeOrder)
+	}
+	if len(observation.CursorReplies) > 0 {
+		result.CursorReplies = make([]any, len(observation.CursorReplies))
+		for i, reply := range observation.CursorReplies {
+			result.CursorReplies[i] = normalizeResponse(reply, ignoredResponse, normalized, normalizeResponseEnvelopeOrder, normalizeCursorEnvelopeOrder)
+		}
 	}
 	if len(observation.Baseline) > 0 {
 		result.Baseline = make([]any, len(observation.Baseline))
@@ -246,8 +255,11 @@ func compare(f Fixture, tree, reference Observation) (string, string) {
 	if tree.Error != nil {
 		return "pass", ""
 	}
-	if !sameResponseWithNormalization(tree.Response, reference.Response, f.IgnoreFields, f.NormalizeFields, f.NormalizeResponseEnvelopeOrder) {
+	if !sameResponseWithNormalization(tree.Response, reference.Response, f.IgnoreFields, f.NormalizeFields, f.NormalizeResponseEnvelopeOrder, f.NormalizeCursorEnvelopeOrder) {
 		return "mismatch", "normalized command response differs"
+	}
+	if !sameCursorRepliesWithNormalization(tree.CursorReplies, reference.CursorReplies, f.IgnoreFields, f.NormalizeFields, f.NormalizeResponseEnvelopeOrder, f.NormalizeCursorEnvelopeOrder) {
+		return "mismatch", "cursor reply sequence differs"
 	}
 	if !sameDocumentsWithNormalization(tree.State, reference.State, f.IgnoreStateFields, f.NormalizeFields) {
 		return "mismatch", "post-command state differs"
@@ -300,22 +312,48 @@ func sameRawWithNormalization(a, b bson.Raw, ignored, normalized []string) bool 
 	return fmt.Sprintf("%#v", normalizeDocument(a, "", ignored, normalized)) == fmt.Sprintf("%#v", normalizeDocument(b, "", ignored, normalized))
 }
 
-func sameResponseWithNormalization(a, b bson.Raw, ignored, normalized []string, normalizeEnvelopeOrder bool) bool {
-	return fmt.Sprintf("%#v", normalizeResponse(a, ignored, normalized, normalizeEnvelopeOrder)) == fmt.Sprintf("%#v", normalizeResponse(b, ignored, normalized, normalizeEnvelopeOrder))
+func sameResponseWithNormalization(a, b bson.Raw, ignored, normalized []string, normalizeEnvelopeOrder, normalizeCursorEnvelopeOrder bool) bool {
+	return fmt.Sprintf("%#v", normalizeResponse(a, ignored, normalized, normalizeEnvelopeOrder, normalizeCursorEnvelopeOrder)) == fmt.Sprintf("%#v", normalizeResponse(b, ignored, normalized, normalizeEnvelopeOrder, normalizeCursorEnvelopeOrder))
 }
 
 // normalizeResponse can canonicalize only the command reply envelope. BSON
 // order remains significant in every nested document, cursor payload, and state
 // snapshot; fixtures must opt in because the top-level reply layout is transport
 // metadata rather than a query/result ordering contract.
-func normalizeResponse(raw bson.Raw, ignored, normalized []string, normalizeEnvelopeOrder bool) any {
+func normalizeResponse(raw bson.Raw, ignored, normalized []string, normalizeEnvelopeOrder, normalizeCursorEnvelopeOrder bool) any {
 	value := normalizeDocument(raw, "", ignored, normalized)
-	if !normalizeEnvelopeOrder {
-		return value
+	if normalizeEnvelopeOrder {
+		sortPairs(value)
 	}
-	pairs := value
+	if normalizeCursorEnvelopeOrder {
+		for _, item := range value {
+			pair := item.([]any)
+			if pair[0] != "cursor" {
+				continue
+			}
+			cursor, ok := pair[1].([]any)
+			if ok && len(cursor) == 2 && cursor[0] == "document" {
+				sortPairs(cursor[1].([]any))
+			}
+		}
+	}
+	return value
+}
+
+func sortPairs(pairs []any) {
 	sort.SliceStable(pairs, func(i, j int) bool { return pairs[i].([]any)[0].(string) < pairs[j].([]any)[0].(string) })
-	return pairs
+}
+
+func sameCursorRepliesWithNormalization(a, b []bson.Raw, ignored, normalized []string, normalizeEnvelopeOrder, normalizeCursorEnvelopeOrder bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !sameResponseWithNormalization(a[i], b[i], ignored, normalized, normalizeEnvelopeOrder, normalizeCursorEnvelopeOrder) {
+			return false
+		}
+	}
+	return true
 }
 
 func sameDocumentsWithNormalization(a, b []bson.Raw, ignored, normalized []string) bool {
