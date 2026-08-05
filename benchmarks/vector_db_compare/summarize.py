@@ -50,14 +50,18 @@ def storage_bytes(result: dict[str, Any]) -> int:
 
 
 def storage_display(result: dict[str, Any]) -> str:
+    if storage_record(result).get("unavailable_reason"):
+        return "n/a"
     label = bytes_human(storage_bytes(result))
     if storage_record(result).get("total_bytes_excludes_vector_search_index"):
         return f"{label}*"
     return label
 
 
-def bytes_per_doc(result: dict[str, Any]) -> float:
-    return float(storage_record(result)["bytes_per_doc"])
+def bytes_per_doc_display(result: dict[str, Any]) -> str:
+    if storage_record(result).get("unavailable_reason"):
+        return "n/a"
+    return f"{float(storage_record(result)['bytes_per_doc']):.1f}B"
 
 
 def insert_seconds(result: dict[str, Any]) -> float:
@@ -202,7 +206,7 @@ def render(results: list[dict[str, Any]]) -> str:
     lines.append("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for result in results:
         lines.append(
-            "| {backend} | {mode} | {insert:.3f}s | {build:.3f}s | {reopen:.3f}s | {recall:.4f} | {storage} | {per_doc:.1f}B | {index_memory} | {process_rss} |".format(
+            "| {backend} | {mode} | {insert:.3f}s | {build:.3f}s | {reopen:.3f}s | {recall:.4f} | {storage} | {per_doc} | {index_memory} | {process_rss} |".format(
                 backend=backend_name(result),
                 mode=search_mode(result),
                 insert=insert_seconds(result),
@@ -210,7 +214,7 @@ def render(results: list[dict[str, Any]]) -> str:
                 reopen=reopen_seconds(result),
                 recall=recall(result),
                 storage=storage_display(result),
-                per_doc=bytes_per_doc(result),
+                per_doc=bytes_per_doc_display(result),
                 index_memory=index_memory(result),
                 process_rss=process_rss(result),
             )

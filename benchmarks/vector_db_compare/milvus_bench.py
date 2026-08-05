@@ -241,7 +241,8 @@ def benchmark_search(args: argparse.Namespace, queries: np.ndarray, concurrency:
 
 
 def storage_usage(path: Path | None, docs: int) -> dict[str, Any]:
-    files = [] if path is None or not path.exists() else [entry for entry in path.rglob("*") if entry.is_file()]
+    available = path is not None and path.exists()
+    files = [entry for entry in path.rglob("*") if entry.is_file()] if available else []
     total = sum(entry.stat().st_size for entry in files)
     out: dict[str, Any] = {
         "total_bytes": total,
@@ -249,7 +250,7 @@ def storage_usage(path: Path | None, docs: int) -> dict[str, Any]:
         "domains": {"milvus_standalone_system": total},
         "bytes_per_doc": total / docs,
     }
-    if path is None:
+    if not available:
         out["unavailable_reason"] = "server storage directory was not supplied"
     return out
 

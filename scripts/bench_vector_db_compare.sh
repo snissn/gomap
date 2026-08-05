@@ -638,7 +638,6 @@ if contains_backend milvus; then
 		--uri "$MILVUS_URI"
 		--collection "$MILVUS_COLLECTION"
 		--index "$MILVUS_INDEX"
-		--storage-dir "$MILVUS_STORAGE_DIR"
 		--output "$RUN_DIR/milvus.json"
 		--queries "$QUERIES"
 		--validate-queries "$VALIDATE_QUERIES"
@@ -649,6 +648,9 @@ if contains_backend milvus; then
 		--ef-search "$EF_SEARCH"
 		--min-recall "$EFFECTIVE_MIN_RECALL"
 	)
+	if [[ "$MILVUS_STARTED" == "true" || -d "$MILVUS_STORAGE_DIR" ]]; then
+		milvus_args+=(--storage-dir "$MILVUS_STORAGE_DIR")
+	fi
 	if [[ "$MILVUS_DROP_COLLECTION_AFTER" == "true" ]]; then
 		milvus_args+=(--drop-collection-after)
 	fi

@@ -101,6 +101,7 @@ class MilvusBenchTest(unittest.TestCase):
         )
         self.assertEqual(milvus_bench.search_one(client, args, docs[0], 2), [2, 1])
         self.assertEqual(milvus_bench.verify_hnsw_index(client, args)["index_type"], "HNSW")
+        self.assertIn("unavailable_reason", milvus_bench.storage_usage(Path("/does/not/exist"), 2))
 
 
 if __name__ == "__main__":

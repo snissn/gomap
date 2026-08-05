@@ -102,7 +102,7 @@ class SummaryRenderTests(unittest.TestCase):
                 {
                     **result("milvus"),
                     "build": {"seconds": 0.3},
-                    "storage_after_build": {"total_bytes": 12288, "bytes_per_doc": 192, "domains": {}, "files": 3},
+                    "storage_after_build": {"total_bytes": 0, "bytes_per_doc": 0, "domains": {}, "files": 0, "unavailable_reason": "external service"},
                 },
             ]
         )
@@ -113,6 +113,7 @@ class SummaryRenderTests(unittest.TestCase):
         self.assertIn("| TreeDB column-store graph HNSW | rabitq_1bit quantized_rerank |", rendered)
         self.assertIn("| PostgreSQL+pgvector HNSW | full-vector HNSW |", rendered)
         self.assertIn("| Milvus Standalone HNSW | full-vector HNSW |", rendered)
+        self.assertIn("| 0.9500 | n/a | n/a |", rendered)
         self.assertIn("## TreeDB Search Counters", rendered)
         self.assertIn("| TreeDB column-store graph HNSW | scalar_u8 quantized_only | 1 | 32.0 | 40.0 | 5120.0 | 0.0 | 0.0 | 0.0 | 0.0 |", rendered)
         self.assertIn("| TreeDB column-store graph HNSW | rabitq_1bit quantized_rerank | 1 | 32.0 | 40.0 | 5120.0 | 16.0 | 16.0 | 128.0 | 32.0 |", rendered)
