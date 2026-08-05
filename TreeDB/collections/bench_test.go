@@ -1087,7 +1087,7 @@ func BenchmarkCollectionDeleteByID(b *testing.B) {
 }
 
 func BenchmarkCollectionInsertWithSecondaryIndexes(b *testing.B) {
-	_, collection := openBenchmarkCollection(b, "bench_insert_secondary", secondaryIndexes()...)
+	backend, collection := openBenchmarkCollection(b, "bench_insert_secondary", secondaryIndexes()...)
 	ids, docs := benchmarkDocumentBatch(b, 0, b.N, true)
 
 	b.ReportAllocs()
@@ -1097,6 +1097,54 @@ func BenchmarkCollectionInsertWithSecondaryIndexes(b *testing.B) {
 			b.Fatalf("insert with secondary indexes: %v", err)
 		}
 	}
+	b.StopTimer()
+	benchmarkSyncBoundary(b, backend)
+	benchmarkReportTreeDBDiskUsage(b, backend, b.N)
+}
+
+// BenchmarkCollectionInsertWithBSONOrderedV2SecondaryIndexes is the direct
+// BSON-v2 counterpart to BenchmarkCollectionInsertWithSecondaryIndexes. Keep
+// the fixture and two-index shape identical; only the document/index codec
+// differs so same-host comparisons include persisted index-entry bytes.
+func BenchmarkCollectionInsertWithBSONOrderedV2SecondaryIndexes(b *testing.B) {
+	b.Setenv("TREEDB_COLLECTION_DOCUMENT_FORMAT", "bson")
+	indexes := []collections.IndexDefinition{
+		{Name: "email_idx", Field: "email", ValueType: collections.IndexValueBSONOrderedV2, Unique: true},
+		{Name: "city_idx", Field: "city", ValueType: collections.IndexValueBSONOrderedV2},
+	}
+	backend, collection := openBenchmarkCollection(b, "bench_insert_secondary_bson_v2", indexes...)
+	ids, docs := benchmarkDocumentBatch(b, 0, b.N, true)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := collection.Insert(ids[i], docs[i]); err != nil {
+			b.Fatalf("insert with BSON v2 secondary indexes: %v", err)
+		}
+	}
+	b.StopTimer()
+	benchmarkSyncBoundary(b, backend)
+	benchmarkReportTreeDBDiskUsage(b, backend, b.N)
+}
+
+// BenchmarkCollectionInsertWithBSONLegacyTypedSecondaryIndexes is deliberately
+// paired with the BSON-v2 benchmark above: document shape, persistence, and
+// index count are identical, leaving IndexValueType as the only variable.
+func BenchmarkCollectionInsertWithBSONLegacyTypedSecondaryIndexes(b *testing.B) {
+	b.Setenv("TREEDB_COLLECTION_DOCUMENT_FORMAT", "bson")
+	backend, collection := openBenchmarkCollection(b, "bench_insert_secondary_bson_v1", secondaryIndexes()...)
+	ids, docs := benchmarkDocumentBatch(b, 0, b.N, true)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := collection.Insert(ids[i], docs[i]); err != nil {
+			b.Fatalf("insert with BSON legacy typed secondary indexes: %v", err)
+		}
+	}
+	b.StopTimer()
+	benchmarkSyncBoundary(b, backend)
+	benchmarkReportTreeDBDiskUsage(b, backend, b.N)
 }
 
 func BenchmarkCollectionInsertBatchWithSecondaryIndexes(b *testing.B) {
