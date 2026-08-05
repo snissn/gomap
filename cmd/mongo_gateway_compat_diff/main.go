@@ -160,7 +160,7 @@ func (t target) Execute(ctx context.Context, fixture compatdiff.Fixture) (compat
 		return compatdiff.Observation{}, err
 	}
 	defer closeTarget()
-	client, err := mongo.Connect(options.Client().ApplyURI(uri).SetTimeout(20 * time.Second))
+	client, err := mongo.Connect(options.Client().ApplyURI(uri).SetTimeout(20 * time.Second).SetServerSelectionTimeout(3 * time.Second))
 	if err != nil {
 		if t.reference {
 			return compatdiff.Observation{}, compatdiff.ReferenceUnavailable{Err: err}
