@@ -60,6 +60,9 @@ func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionV1(ctx context.Con
 	if err != nil {
 		return public.SearchResponseV1{}, publicBackendErrorV1(err)
 	}
+	if response.PartitionGeneration != request.Generation.Generation {
+		return public.SearchResponseV1{}, &public.ErrorV1{Code: public.ErrorGenerationMismatchV1, Err: errors.New("serving topology returned another generation")}
+	}
 	result := public.SearchResponseV1{Generation: request.Generation, Counters: public.SearchCountersV1{
 		SelectedPartitions: response.Counters.SelectedPartitions, SelectedGroups: response.Counters.SelectedGroups,
 		Requests: response.Counters.Requests, RPCs: response.Counters.RPCs, Retries: response.Counters.Retries, Redirects: response.Counters.Redirects,
@@ -132,8 +135,11 @@ func (b *VectorPartitionPublicBackendV1) InvalidateVectorPartitionV1(ctx context
 	if err := b.checkID(id); err != nil {
 		return public.GenerationStatusV1{}, err
 	}
-	_, err := b.opts.Lifecycle.InvalidateBeforeRelevantMutationV1(ctx, b.opts.Identity.Index, reason)
+	_, err := b.opts.Lifecycle.InvalidateGenerationBeforeRelevantMutationV1(ctx, b.opts.Identity, reason)
 	if err != nil {
+		if errors.Is(err, raftplacement.ErrVectorPartitionLifecycleIdentity) {
+			return public.GenerationStatusV1{}, &public.ErrorV1{Code: public.ErrorGenerationMismatchV1, Err: err}
+		}
 		return public.GenerationStatusV1{}, err
 	}
 	return b.GenerationStatusV1(ctx, id)

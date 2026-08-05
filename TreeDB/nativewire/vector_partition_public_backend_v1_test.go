@@ -145,6 +145,7 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 			t.Fatalf("group %q did not produce post-restart read evidence", group)
 		}
 	}
+	predecessorService, predecessorID := service, id
 	if err := topology.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -161,6 +162,12 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 	}
 	if status, err := service.Activate(ctx, id); err != nil || !status.Active {
 		t.Fatalf("activate successor = %#v, %v", status, err)
+	}
+	if _, err := predecessorService.Invalidate(ctx, predecessorID, "stale mutation"); !hasPublicErrorCodeV1(err, public.ErrorGenerationMismatchV1) {
+		t.Fatalf("stale predecessor invalidation = %v", err)
+	}
+	if status, err := service.Status(ctx, id); err != nil || !status.Active {
+		t.Fatalf("successor after stale invalidation = %#v, %v", status, err)
 	}
 	if previous, ok := harness.LeaderAuthority().VectorPartitionLifecycleRecordV1(identity); !ok || previous.State != raftplacement.VectorPartitionLifecycleRetiredV1 || previous.SupersededByGeneration != successor.Generation {
 		t.Fatalf("predecessor after cutover = %#v, ok=%v", previous, ok)
@@ -216,6 +223,11 @@ func TestVectorPartitionPublicBackendSearchesProductionTopologyV1(t *testing.T) 
 		if read.callCount() == 0 {
 			t.Fatalf("group %q did not produce read evidence", group)
 		}
+	}
+	backend.opts.Identity.Generation++
+	request.Generation.Generation++
+	if response, err := service.Search(context.Background(), request); !hasPublicErrorCodeV1(err, public.ErrorGenerationMismatchV1) || response.Generation != (public.GenerationIDV1{}) || len(response.Neighbors) != 0 {
+		t.Fatalf("stale topology response = %#v, %v", response, err)
 	}
 }
 
