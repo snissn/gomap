@@ -2689,13 +2689,7 @@ func appendIndexEntryKeyForValueType(dst []byte, valueType IndexValueType, encod
 	if valueType != IndexValueBSONOrderedV2 {
 		return appendIndexEntryKey(dst, encodedValue, documentID)
 	}
-	key, err := bsonIndexEntryKeyV2(encodedValue, documentID)
-	if err != nil {
-		return dst, nil, err
-	}
-	start := len(dst)
-	dst = append(dst, key...)
-	return dst, dst[start:len(dst):len(dst)], nil
+	return appendBSONIndexEntryKeyV2(dst, encodedValue, documentID)
 }
 
 func setCollectionSecondaryIndexEntryForValueType(table memtable.Table, valueType IndexValueType, encodedValue, documentID []byte) (int, error) {
