@@ -218,7 +218,8 @@ cap seam. Fanout, request concurrency, retries, and redirects remain bounded by
 the node-owned `VectorPartitionCoordinatorLimitsV1`; the operator boundary does
 not duplicate those construction-time limits.
 
-`OperationsV1.Status` reads live catalog proof, lifecycle record/source
+`OperationsV1.Status` first performs the same fresh meta-Raft linearizable read
+fence as serving, then reads the live catalog proof, lifecycle record/source
 identity, ready groups, and topology state. `ready` is returned only for an
 active, complete generation; `catalog_unavailable`, `catalog_mismatch`,
 `source_mismatch`, `group_assets_unavailable`, `lifecycle_not_active`, and

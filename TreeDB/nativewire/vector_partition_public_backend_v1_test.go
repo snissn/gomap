@@ -92,7 +92,7 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 		}
 		topology, base, reads := newVectorPartitionProductionTopologyTwoGroupWithLifecycleReadySetTestV1(t, servingAuthority, readySetDigest)
 		builder := &publicBackendLifecycleBuilderV1{}
-		backend, err := NewVectorPartitionPublicBackendV1(VectorPartitionPublicBackendOptionsV1{Topology: topology, RequestBase: base, Lifecycle: harness.LifecycleCoordinator(), Identity: boundIdentity, RequiredGroups: requiredGroups, Builder: builder, MutationEpoch: 1, RebuildRequest: func(context.Context) error { return nil }})
+		backend, err := NewVectorPartitionPublicBackendV1(VectorPartitionPublicBackendOptionsV1{Topology: topology, RequestBase: base, Lifecycle: harness.LifecycleCoordinator(), ReadFence: harness.LeaderFence(), Identity: boundIdentity, RequiredGroups: requiredGroups, Builder: builder, MutationEpoch: 1, RebuildRequest: func(context.Context) error { return nil }})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -129,6 +129,11 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 	if health, err := backend.OperationsHealthV1(ctx); err != nil || !health.Ready || health.Reason != "ready" {
 		t.Fatalf("operations health = %#v, %v", health, err)
 	}
+	backend.opts.ReadFence = &catalogMetaLinearizableAppliedIndexProviderTestV1{err: raftcluster.ErrNotLeader}
+	if health, err := backend.OperationsHealthV1(ctx); !errors.Is(err, raftcluster.ErrNotLeader) || health.Ready || health.Reason != "catalog_unavailable" {
+		t.Fatalf("unfenced operations health = %#v, %v", health, err)
+	}
+	backend.opts.ReadFence = harness.LeaderFence()
 	backend.opts.RequiredGroups = []raftcluster.GroupID{"group-a", "group-c"}
 	if health, err := backend.OperationsHealthV1(ctx); err != nil || health.Ready || health.Reason != "group_assets_unavailable" {
 		t.Fatalf("mismatched group health = %#v, %v", health, err)

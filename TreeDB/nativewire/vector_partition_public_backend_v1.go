@@ -20,6 +20,7 @@ type VectorPartitionPublicBackendOptionsV1 struct {
 	Topology       *VectorPartitionProductionTopologyV1
 	RequestBase    VectorPartitionCoordinatorRequestV1
 	Lifecycle      raftplacement.VectorPartitionLifecycleCoordinatorV1
+	ReadFence      CatalogMetaLinearizableAppliedIndexProviderV1
 	Identity       raftplacement.VectorPartitionLifecycleIdentityV1
 	RequiredGroups []raftcluster.GroupID
 	Builder        raftplacement.VectorPartitionLifecycleGroupBuilderV1
@@ -37,8 +38,8 @@ func NewVectorPartitionPublicBackendV1(opts VectorPartitionPublicBackendOptionsV
 	if opts.Topology == nil || opts.Topology.Coordinator() == nil || opts.Identity.Generation == 0 || opts.Identity.Index.IndexName == "" || len(opts.RequiredGroups) == 0 {
 		return nil, errors.New("nativewire: public vector partition backend is incomplete")
 	}
-	if opts.Builder == nil || opts.Lifecycle.Authority == nil || opts.Lifecycle.Committer == nil {
-		return nil, errors.New("nativewire: public vector partition backend requires lifecycle authority and group builder")
+	if opts.Builder == nil || opts.Lifecycle.Authority == nil || opts.Lifecycle.Committer == nil || opts.ReadFence == nil {
+		return nil, errors.New("nativewire: public vector partition backend requires lifecycle authority, linearizable read fence, and group builder")
 	}
 	return &VectorPartitionPublicBackendV1{opts: opts}, nil
 }
@@ -186,7 +187,7 @@ func (b *VectorPartitionPublicBackendV1) VectorPartitionCleanupEligibilityV1(ctx
 // lifecycle authority; it intentionally does not trust a cached frontend
 // label. It is passed directly to vectorpartition.OperationsV1 at node setup.
 func (b *VectorPartitionPublicBackendV1) OperationsHealthV1(ctx context.Context) (public.OperationsHealthV1, error) {
-	if b == nil || b.opts.Topology == nil || b.opts.Lifecycle.Authority == nil {
+	if b == nil || b.opts.Topology == nil || b.opts.Lifecycle.Authority == nil || b.opts.ReadFence == nil {
 		return public.OperationsHealthV1{Reason: "authority_unavailable"}, errors.New("production vector topology or lifecycle authority is unavailable")
 	}
 	id := public.GenerationIDV1{Index: b.opts.Identity.Index.IndexName, Generation: b.opts.Identity.Generation}
@@ -194,10 +195,15 @@ func (b *VectorPartitionPublicBackendV1) OperationsHealthV1(ctx context.Context)
 	if topology.Closed || !topology.Ready {
 		return public.OperationsHealthV1{Generation: id, Reason: "topology_unavailable"}, nil
 	}
-	proof, err := b.opts.Lifecycle.Authority.CurrentCatalogProof(ctx)
+	requiredAppliedIndex, err := b.opts.ReadFence.LinearizableCatalogMetaAppliedIndexV1(ctx)
 	if err != nil {
 		return public.OperationsHealthV1{Generation: id, Reason: "catalog_unavailable"}, err
 	}
+	catalogStatus, ok := b.opts.Lifecycle.Authority.Status()
+	if !ok || requiredAppliedIndex == 0 || catalogStatus.AppliedIndex < requiredAppliedIndex {
+		return public.OperationsHealthV1{Generation: id, Reason: "catalog_unavailable"}, raftplacement.ErrCatalogMetaUnavailable
+	}
+	proof := raftplacement.CatalogProofV1{Epoch: catalogStatus.Epoch, Digest: catalogStatus.Digest}
 	if proof.Epoch != b.opts.Identity.Index.CatalogEpoch || proof.Digest != b.opts.Identity.Index.CatalogDigest {
 		return public.OperationsHealthV1{Generation: id, Reason: "catalog_mismatch"}, nil
 	}
