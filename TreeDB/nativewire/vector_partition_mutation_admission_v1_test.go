@@ -4,7 +4,17 @@ import (
 	"testing"
 
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
+
+func TestVectorPartitionRelevantMutationCommandsMatchAcceptedRaftEntriesV1(t *testing.T) {
+	for _, row := range raftentry.AllCommandRowsV1() {
+		want := row.Decision == raftentry.DecisionAccepted
+		if got := vectorPartitionRelevantMutationCommandV1(row.CommandID); got != want {
+			t.Fatalf("command %s relevant=%v want %v for decision %s", row.CommandName, got, want, row.Decision)
+		}
+	}
+}
 
 func TestVectorPartitionMutationOperationDigestUsesCommandAndIdempotencyV1(t *testing.T) {
 	sections := []iwire.Section{{ID: iwire.SectionIdempotencyKey, Bytes: []byte("request-1")}}
