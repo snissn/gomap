@@ -102,6 +102,9 @@ func TestOperationsV1UsesLiveHealthAndDelegatesLifecycleV1(t *testing.T) {
 	if searches != 0 {
 		t.Fatalf("not-ready search reached backend %d times", searches)
 	}
+	if counters := ops.Counters(); counters.Searches != 1 || counters.Failures != 1 {
+		t.Fatalf("not-ready search counters=%+v", counters)
+	}
 	if inventory, err := ops.Inventory(t.Context(), id); err != nil || len(inventory) != 1 || inventory[0].Generation != id {
 		t.Fatalf("inventory=%+v err=%v", inventory, err)
 	}

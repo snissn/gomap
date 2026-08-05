@@ -93,13 +93,13 @@ func (o *OperationsV1) Search(ctx context.Context, request SearchRequestV1) (Sea
 		return SearchResponseV1{}, err
 	}
 	health, err := o.Status(ctx)
-	if err != nil {
-		return SearchResponseV1{}, err
+	if err == nil && !health.Ready {
+		err = &ErrorV1{Code: ErrorUnavailableV1, Err: errors.New(health.Reason)}
 	}
-	if !health.Ready {
-		return SearchResponseV1{}, &ErrorV1{Code: ErrorUnavailableV1, Err: errors.New(health.Reason)}
+	var response SearchResponseV1
+	if err == nil {
+		response, err = o.service.Search(ctx, request)
 	}
-	response, err := o.service.Search(ctx, request)
 	o.mu.Lock()
 	o.counts.Searches++
 	if err != nil {
