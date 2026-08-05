@@ -62,10 +62,10 @@ func TestExpectedRejectionMutationFails(t *testing.T) {
 	seed := raw(t, bson.D{{Key: "_id", Value: "a"}})
 	f.Seed = []bson.Raw{seed}
 	good := executorFunc(func(context.Context, Fixture) (Observation, error) {
-		return Observation{Error: &Error{Code: 1}, State: []bson.Raw{seed}}, nil
+		return Observation{Error: &Error{Code: 1, CommandRejection: true}, State: []bson.Raw{seed}}, nil
 	})
 	mutated := executorFunc(func(context.Context, Fixture) (Observation, error) {
-		return Observation{Error: &Error{Code: 1}, State: []bson.Raw{raw(t, bson.D{{Key: "_id", Value: "a"}, {Key: "bad", Value: true}})}}, nil
+		return Observation{Error: &Error{Code: 1, CommandRejection: true}, State: []bson.Raw{raw(t, bson.D{{Key: "_id", Value: "a"}, {Key: "bad", Value: true}})}}, nil
 	})
 	result := Run(context.Background(), "identity", []Fixture{f}, mutated, good)
 	if result.Fixtures[0].Status != "mismatch" || !strings.Contains(result.Fixtures[0].Reason, "mutated") {
@@ -134,6 +134,18 @@ func TestUnavailableReferenceIsNotCompatibilityFailure(t *testing.T) {
 func TestReferenceUnavailableWithoutCauseDoesNotPanic(t *testing.T) {
 	if got := (ReferenceUnavailable{}).Error(); got != "reference MongoDB unavailable" {
 		t.Fatalf("error=%q", got)
+	}
+}
+
+func TestExpectedRejectionDoesNotAcceptExecutionFailure(t *testing.T) {
+	f := fixture()
+	f.Expectation = ExpectedRejected
+	exec := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Error: &Error{Message: "connection reset"}}, nil
+	})
+	result := Run(context.Background(), "identity", []Fixture{f}, exec, exec)
+	if result.Fixtures[0].Status != "harness-error" {
+		t.Fatalf("status=%s reason=%q", result.Fixtures[0].Status, result.Fixtures[0].Reason)
 	}
 }
 

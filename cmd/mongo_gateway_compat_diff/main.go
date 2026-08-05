@@ -274,7 +274,7 @@ func (t target) executionError(err error) error {
 func commandError(err error) (*compatdiff.Error, bool) {
 	var command mongo.CommandError
 	if errors.As(err, &command) {
-		return &compatdiff.Error{Code: command.Code, Labels: command.Labels, Message: command.Message}, true
+		return &compatdiff.Error{Code: command.Code, Labels: command.Labels, Message: command.Message, CommandRejection: true}, true
 	}
 	return nil, false
 }

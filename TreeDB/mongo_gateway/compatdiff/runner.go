@@ -70,9 +70,10 @@ func (f Fixture) Validate() error {
 }
 
 type Error struct {
-	Code    int32    `json:"code,omitempty"`
-	Labels  []string `json:"labels,omitempty"`
-	Message string   `json:"message,omitempty"`
+	Code             int32    `json:"code,omitempty"`
+	Labels           []string `json:"labels,omitempty"`
+	Message          string   `json:"message,omitempty"`
+	CommandRejection bool     `json:"command_rejection,omitempty"`
 }
 
 type Observation struct {
@@ -207,6 +208,9 @@ func compare(f Fixture, tree, reference Observation) (string, string) {
 	if f.Expectation == ExpectedRejected {
 		if tree.Error == nil {
 			return "mismatch", "expected TreeDB rejection, got success"
+		}
+		if !tree.Error.CommandRejection {
+			return "harness-error", "expected TreeDB command rejection, got execution failure"
 		}
 		if !sameDocuments(f.Seed, tree.State, nil) {
 			return "mismatch", "expected-rejection fixture mutated TreeDB state"
