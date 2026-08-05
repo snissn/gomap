@@ -1046,6 +1046,21 @@ func stricterUpperIndexBound(valueType collections.IndexValueType, current, next
 
 func compareIndexScalars(valueType collections.IndexValueType, left, right any) (int, error) {
 	switch valueType {
+	case collections.IndexValueBSONOrderedV2:
+		leftRaw, leftOK := left.(bson.RawValue)
+		rightRaw, rightOK := right.(bson.RawValue)
+		if !leftOK || !rightOK {
+			return 0, fmt.Errorf("Mongo gateway internal BSON v2 index bound mismatch")
+		}
+		leftKey, err := collections.EncodeBSONIndexKeyComponentV2(leftRaw)
+		if err != nil {
+			return 0, err
+		}
+		rightKey, err := collections.EncodeBSONIndexKeyComponentV2(rightRaw)
+		if err != nil {
+			return 0, err
+		}
+		return bytes.Compare(leftKey, rightKey), nil
 	case collections.IndexValueString:
 		leftString, leftOK := left.(string)
 		rightString, rightOK := right.(string)
@@ -2183,6 +2198,11 @@ func bsonTypeSortRank(t bson.Type) int {
 
 func indexScalarForBSONValue(value bson.RawValue, valueType collections.IndexValueType) (any, bool) {
 	switch valueType {
+	case collections.IndexValueBSONOrderedV2:
+		if _, err := collections.EncodeBSONIndexKeyComponentV2(value); err != nil {
+			return nil, false
+		}
+		return value, true
 	case collections.IndexValueString:
 		if value.Type != bson.TypeString {
 			return nil, false

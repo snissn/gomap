@@ -162,7 +162,7 @@ func TestEmitGroupedSecondaryRunTableSortsValueGroupsByDocumentID(t *testing.T) 
 	if alreadySorted {
 		t.Fatal("test data should exercise grouped unsorted construction")
 	}
-	table, ok, err := (insertBatchPlanner{collection: "users"}).emitGroupedSecondaryRunTable(items, 0, "city", order, entryCount, keyBytes)
+	table, ok, err := (insertBatchPlanner{collection: "users"}).emitGroupedSecondaryRunTable(items, 0, "city", IndexValueString, order, entryCount, keyBytes)
 	if err != nil {
 		t.Fatalf("grouped secondary run: %v", err)
 	}

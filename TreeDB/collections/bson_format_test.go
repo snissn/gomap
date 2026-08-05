@@ -104,6 +104,39 @@ func TestCollectionBSONFormatStoresNativeBSONAndIndexes(t *testing.T) {
 	}
 }
 
+func TestCollectionBSONOrderedV2IndexUsesVersionedEntriesAndNumericEquality(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}, Indexes: []IndexDefinition{{Name: "value", Field: "value", ValueType: IndexValueBSONOrderedV2, Unique: true}}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	doc := func(id string, value any) []byte {
+		return mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: id}, {Key: "value", Value: value}})
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{doc("u1", int32(7))}); err != nil {
+		t.Fatalf("insert int32: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u2")}, [][]byte{doc("u2", int64(7))}); !IsDuplicateKeyError(err) {
+		t.Fatalf("numeric-equivalent unique insert error=%v, want duplicate", err)
+	}
+	query := bson.Raw(mustBSONCollectionDocument(t, bson.D{{Key: "value", Value: int64(7)}})).Lookup("value")
+	ids, err := col.FindByIndexValue("value", query)
+	if err != nil {
+		t.Fatalf("find numeric-equivalent value: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("ids=%q want u1", ids)
+	}
+}
+
 func TestCollectionBSONFormatRejectsInvalidBSON(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

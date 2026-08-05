@@ -24,6 +24,20 @@ func TestCreateIndexesDefaultsToBSONOrderedV2WithoutTreeDBValueType(t *testing.T
 		{Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "value", Value: int32(1)}}}, {Key: "name", Value: "value_1"}}}},
 		{Key: "$db", Value: "app"},
 	}))
+	assertOK(t, serveCommand(t, server, 4064, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "n1"}, {Key: "value", Value: int32(7)}},
+			bson.D{{Key: "_id", Value: "n2"}, {Key: "value", Value: int64(7)}},
+			bson.D{{Key: "_id", Value: "n3"}, {Key: "value", Value: "seven"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, server, 4065, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "value", Value: int64(7)}}},
+		{Key: "$db", Value: "app"},
+	})), []string{"n1", "n2"})
 	indexes := cursorFirstBatch(t, serveCommand(t, server, 4063, bson.D{{Key: "listIndexes", Value: "users"}, {Key: "$db", Value: "app"}}))
 	if got := indexes[1].Lookup("treedbIndexKeyFormat"); got.StringValue() != "bson-ordered-v2" {
 		t.Fatalf("listIndexes format=%q want bson-ordered-v2", got.StringValue())
