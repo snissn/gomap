@@ -81,7 +81,18 @@ func (b *VectorPartitionPublicBackendV1) RegisterVectorPartitionV1(ctx context.C
 	if registration.SourceGeneration == 0 || registration.SourceChecksum == 0 || registration.SourceSchemaHash == 0 || registration.SourceRowCount == 0 || registration.SourceGeneration != i.Source.Generation || registration.SourceChecksum != i.Source.Checksum || registration.SourceSchemaHash != i.Source.SchemaHash || registration.SourceRowCount != i.Source.RowCount {
 		return public.GenerationStatusV1{}, &public.ErrorV1{Code: public.ErrorGenerationMismatchV1, Err: errors.New("generation source does not match bound topology")}
 	}
-	record, err := b.opts.Lifecycle.BeginBuildV1(ctx, i, b.opts.RequiredGroups, 0, b.opts.MutationEpoch)
+	previousGeneration := uint64(0)
+	if existing, ok := b.opts.Lifecycle.Authority.VectorPartitionLifecycleRecordV1(i); ok {
+		previousGeneration = existing.PreviousActiveGeneration
+	} else {
+		for _, status := range b.opts.Lifecycle.Authority.VectorPartitionLifecycleStatusesV1() {
+			if status.Active && status.Identity.Index == i.Index {
+				previousGeneration = status.Identity.Generation
+				break
+			}
+		}
+	}
+	record, err := b.opts.Lifecycle.BeginBuildV1(ctx, i, b.opts.RequiredGroups, previousGeneration, b.opts.MutationEpoch)
 	if err != nil {
 		return public.GenerationStatusV1{}, err
 	}
