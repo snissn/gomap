@@ -19758,7 +19758,11 @@ func rejectReplaceUniqueConflicts(snap *backenddb.Snapshot, catalog *collectionC
 				if !bytes.HasPrefix(key, prefix) {
 					break
 				}
-				ownerID := key[len(prefix):]
+				ownerID, err := indexKeyDocumentID(runtime.def.valueType, key)
+				if err != nil {
+					_ = it.Close()
+					return err
+				}
 				if !it.IsDeleted() && !bytes.Equal(ownerID, documentID) && !batchReplacements.allows(runtime.def.name, encoded, ownerID) {
 					conflict = true
 					break
@@ -19808,7 +19812,11 @@ func rejectReplaceUniqueConflictsOrdered(snap *backenddb.Snapshot, catalog *coll
 				if !bytes.HasPrefix(key, prefix) {
 					break
 				}
-				ownerID := key[len(prefix):]
+				ownerID, err := indexKeyDocumentID(runtime.def.valueType, key)
+				if err != nil {
+					_ = it.Close()
+					return err
+				}
 				if !it.IsDeleted() && !bytes.Equal(ownerID, update.documentID) && !batchReplacements.allows(runtime.def.name, encoded, ownerID) {
 					conflict = true
 					break

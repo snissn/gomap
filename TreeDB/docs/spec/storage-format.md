@@ -817,7 +817,7 @@ reject older metadata versions instead of migrating them.
 
 ### 3.2.1 BSON-ordered scalar secondary-index keys (v2)
 
-An index whose persisted metadata selects `bson_ordered_v2` is valid only for a
+An index whose persisted metadata selects `bson-ordered-v2` is valid only for a
 BSON collection. Its ordered-root entry key is exactly one frozen BSON v2
 scalar component followed by one explicit BSON v2 document-ID suffix. The
 component is the `0xb2`-marked, self-delimiting scalar encoding defined in

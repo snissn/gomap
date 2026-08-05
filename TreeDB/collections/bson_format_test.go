@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"runtime"
 	"strings"
 	"testing"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -307,15 +310,129 @@ func TestCollectionBSONOrderedV2MetadataRejectsNonBSONCollections(t *testing.T) 
 	}
 }
 
-func TestCollectionBSONOrderedV2CheckpointReopenWithValueLogPointers(t *testing.T) {
+func TestCollectionBSONOrderedV2PersistedMalformedSecondaryEntryFailsClosed(t *testing.T) {
 	dir := t.TempDir()
-	d, err := backenddb.Open(backenddb.Options{Dir: dir, ValueLog: backenddb.ValueLogOptions{PointerThreshold: 1, ForcePointers: true}})
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
 	mgr := NewCollectionManager(d)
-	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}, Indexes: []IndexDefinition{{Name: "value", Field: "value", ValueType: IndexValueBSONOrderedV2}}}); err != nil {
+	index := IndexDefinition{Name: "value", Field: "value", ValueType: IndexValueBSONOrderedV2}
+	meta := &CollectionMeta{Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}, Indexes: []IndexDefinition{index}}
+	if _, err := mgr.CreateCollection(meta); err != nil {
 		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	document := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "value", Value: int32(7)}})
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{document}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("acquire snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	baseCommitSeq := snapshotCommitSeq(snap)
+	baseSystemRoot := snapshotSystemRoot(snap)
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	if catalog == nil {
+		t.Fatal("missing catalog")
+	}
+	rootName := collectionSecondaryRootName("users", "value")
+	baseRoot := catalog.rootID(rootName)
+	policy, err := collectionRootStoragePolicyForDB(d, catalog.meta, rootName)
+	if err != nil {
+		t.Fatalf("secondary root policy: %v", err)
+	}
+	component, err := encodeBSONIndexKeyComponentV2(bson.Raw(document).Lookup("value"))
+	if err != nil {
+		t.Fatalf("encode component: %v", err)
+	}
+	// The component belongs to the public equality range, but lacks the frozen
+	// v2 document-ID suffix terminator. A lookup must fail rather than skip it.
+	malformed := append(append([]byte(nil), component...), bsonIndexKeyDocumentIDSuffixMarkerV2)
+	table := newCollectionRunTable(1)
+	setCollectionRunValue(table, malformed, nil)
+	table.Freeze()
+	defer resetCollectionRunTable(table)
+	if _, _, err := d.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
+		BaseRoot:      baseRoot,
+		Iter:          table.NewIterator(nil, nil),
+		StoragePolicy: policy,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return col.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, []string{rootName}, map[string]uint64{rootName: baseRoot}, rootIDs)
+	}); err != nil {
+		t.Fatalf("publish malformed secondary entry: %v", err)
+	}
+	query := bson.Raw(mustBSONCollectionDocument(t, bson.D{{Key: "value", Value: int64(7)}})).Lookup("value")
+	if _, err := col.FindByIndexValue("value", query); err == nil {
+		t.Fatal("public lookup accepted persisted malformed v2 secondary entry")
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint malformed entry: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close malformed entry db: %v", err)
+	}
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen malformed entry db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection with malformed entry: %v", err)
+	}
+	if _, err := reopenedCol.FindByIndexValue("value", query); err == nil {
+		t.Fatal("reopened public lookup accepted persisted malformed v2 secondary entry")
+	}
+}
+
+func TestCollectionBSONOrderedV2CheckpointReopenWithValueLogPointers(t *testing.T) {
+	runCollectionBSONOrderedV2CheckpointReopenWithValueLogPointers(t, false)
+}
+
+func TestCollectionBSONOrderedV2CheckpointReopenWithValueLogPointersDirect(t *testing.T) {
+	runCollectionBSONOrderedV2CheckpointReopenWithValueLogPointers(t, true)
+}
+
+func runCollectionBSONOrderedV2CheckpointReopenWithValueLogPointers(t *testing.T, disableIndexedWriteMemtables bool) {
+	t.Helper()
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+	opts.IndexOuterLeavesInValueLog = true
+	opts.ValueLog = treedb.ValueLogOptions{PointerThreshold: 1, ForcePointers: true}
+	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if !d.HasValueLogAppender() {
+		t.Fatal("cached backend did not install the value-log leaf appender")
+	}
+	mgr := NewCollectionManager(d)
+	meta := &CollectionMeta{Name: "users", Options: CollectionOptions{
+		DocumentFormat:               DocumentFormatBSON,
+		DisableIndexedWriteMemtables: disableIndexedWriteMemtables,
+	}, Indexes: []IndexDefinition{{Name: "value", Field: "value", ValueType: IndexValueBSONOrderedV2}}}
+	if _, err := mgr.CreateCollection(meta); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	policy, err := collectionRootStoragePolicyForDB(d, *meta, collectionPrimaryRootName(meta.Name))
+	if err != nil {
+		t.Fatalf("primary root storage policy: %v", err)
+	}
+	if policy != backenddb.OrderedRootStorageValueLogLeaves {
+		t.Fatalf("default primary root policy=%v want value-log leaves with cached appender", policy)
 	}
 	col, err := mgr.OpenCollection("users")
 	if err != nil {
@@ -325,17 +442,23 @@ func TestCollectionBSONOrderedV2CheckpointReopenWithValueLogPointers(t *testing.
 	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{document}); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
+	if !disableIndexedWriteMemtables {
+		if err := col.Flush(); err != nil {
+			t.Fatalf("flush: %v", err)
+		}
+	}
+	requireCollectionPrimaryEntryPointer(t, d, "users", []byte("u1"))
 	if err := d.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
-	if err := d.Close(); err != nil {
+	if err := cleanup(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	reopened, err := backenddb.Open(backenddb.Options{Dir: dir, ValueLog: backenddb.ValueLogOptions{PointerThreshold: 1, ForcePointers: true}})
+	reopened, reopenedCleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
 	if err != nil {
 		t.Fatalf("reopen db: %v", err)
 	}
-	defer func() { _ = reopened.Close() }()
+	defer func() { _ = reopenedCleanup() }()
 	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
 	if err != nil {
 		t.Fatalf("open reopened collection: %v", err)
@@ -348,6 +471,7 @@ func TestCollectionBSONOrderedV2CheckpointReopenWithValueLogPointers(t *testing.
 	if got, err := reopenedCol.Get([]byte("u1")); err != nil || !bytes.Equal(got, document) {
 		t.Fatalf("reopened pointer document len=%d err=%v", len(got), err)
 	}
+	requireCollectionPrimaryEntryPointer(t, reopened, "users", []byte("u1"))
 }
 
 func TestCollectionBSONOrderedV2IndexLifecycleSurvivesMaintenance(t *testing.T) {
@@ -366,11 +490,15 @@ func TestCollectionBSONOrderedV2IndexLifecycleSurvivesMaintenance(t *testing.T) 
 	if err != nil {
 		t.Fatalf("open collection: %v", err)
 	}
+	var u1Document []byte
 	for _, row := range []struct {
 		id    string
 		value any
 	}{{"u1", int32(7)}, {"u2", "seven"}} {
 		doc := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: row.id}, {Key: "value", Value: row.value}, {Key: "payload", Value: strings.Repeat(row.id, 256)}})
+		if row.id == "u1" {
+			u1Document = bytes.Clone(doc)
+		}
 		if _, err := col.InsertBatch([][]byte{[]byte(row.id)}, [][]byte{doc}); err != nil {
 			t.Fatalf("insert %s: %v", row.id, err)
 		}
@@ -386,6 +514,20 @@ func TestCollectionBSONOrderedV2IndexLifecycleSurvivesMaintenance(t *testing.T) 
 	}
 	if _, err := d.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{}); err != nil {
 		t.Fatalf("value-log GC: %v", err)
+	}
+	if err := col.Delete([]byte("u2")); err != nil {
+		t.Fatalf("delete v2 indexed document: %v", err)
+	}
+	seven := bson.Raw(mustBSONCollectionDocument(t, bson.D{{Key: "value", Value: "seven"}})).Lookup("value")
+	if got, err := col.FindByIndexValue("value", seven); err != nil || len(got) != 0 {
+		t.Fatalf("post-delete v2 lookup ids=%q err=%v", got, err)
+	}
+	if err := d.VacuumIndexOnline(context.Background()); err != nil {
+		if runtime.GOOS == "windows" && errors.Is(err, backenddb.ErrVacuumUnsupported) {
+			t.Log("online vacuum unsupported on windows; retaining delete/reopen coverage")
+		} else {
+			t.Fatalf("vacuum v2 indexes: %v", err)
+		}
 	}
 	if err := d.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
@@ -407,8 +549,14 @@ func TestCollectionBSONOrderedV2IndexLifecycleSurvivesMaintenance(t *testing.T) 
 	if err != nil || len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
 		t.Fatalf("post-maintenance v2 lookup ids=%q err=%v", ids, err)
 	}
-	if got, err := reopenedCol.Get([]byte("u2")); err != nil || len(got) == 0 {
-		t.Fatalf("post-maintenance pointer document len=%d err=%v", len(got), err)
+	if got, err := reopenedCol.Get([]byte("u2")); err != nil || len(got) != 0 {
+		t.Fatalf("deleted v2 document len=%d err=%v", len(got), err)
+	}
+	if got, err := reopenedCol.Get([]byte("u1")); err != nil || !bytes.Equal(got, u1Document) {
+		t.Fatalf("post-maintenance u1 document len=%d err=%v", len(got), err)
+	}
+	if ids, err := reopenedCol.FindByIndexValue("value", query); err != nil || len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("post-vacuum/reopen v2 lookup ids=%q err=%v", ids, err)
 	}
 }
 

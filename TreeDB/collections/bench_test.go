@@ -1249,9 +1249,15 @@ func BenchmarkCollectionBSONIndexV1V2Operations(b *testing.B) {
 				}
 			})
 			b.Run("storage", func(b *testing.B) {
+				// Storage is a one-fixture probe, not a throughput benchmark. Keep
+				// the timer stopped so -benchtime cannot divide its setup and disk
+				// walk by b.N and report a misleading ns/op.
+				b.StopTimer()
 				backend, col := openBenchmarkCollection(b, "bench_bson_storage", indexes...)
 				seedBenchmarkCollection(b, col, 0, collectionBenchBackfill, true)
 				stats := col.LastInsertStats()
+				b.ReportMetric(0, "ns/op")
+				b.ReportMetric(1, "storage_probe")
 				b.ReportMetric(float64(stats.SecondaryKeyBytes)/float64(collectionBenchBackfill), "index_entry_bytes/doc")
 				b.ReportMetric(float64(stats.SecondaryKeyBytes)/float64(collectionBenchBackfill*len(indexes)), "index_entry_bytes/entry")
 				benchmarkReportTreeDBDiskUsage(b, backend, collectionBenchBackfill)
