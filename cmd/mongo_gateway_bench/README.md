@@ -59,10 +59,10 @@ MongoDB targets. `-client-mode driver-command-raw` also uses `RunCommand`, but
 passes a prebuilt raw BSON insert command to reduce driver-side command encoding
 when `-prebuild-documents` is enabled; its age range-read phase also uses a raw
 `find` command and parses `cursor.firstBatch` as raw BSON instead of decoding
-documents into `bson.M`. `-client-mode driver-unack` uses official-driver
-`InsertMany` with unacknowledged write concern; its sampled load metric is
-client enqueue cost, while the phase waits for the final inserted `_id` to
-become visible before reporting wall ops/sec. `-client-mode raw-wire` is
+documents into `bson.M`. `-client-mode driver-unack` is a MongoDB-target-only
+diagnostic that uses official-driver `InsertMany` with unacknowledged write
+concern. TreeDB configurations reject this mode explicitly because the
+standalone gateway rejects `w:0` before mutation. `-client-mode raw-wire` is
 TreeDB-only and calls the in-process gateway directly with raw OP_MSG document
 sequences. `-client-mode raw-wire-tcp` sends the same raw OP_MSG traffic over
 the gateway's loopback listener, isolating TreeDB gateway network/wire-server
@@ -340,7 +340,7 @@ beside the normal MongoDB Go driver `InsertMany` path:
 
 ```sh
 TREEDB_DOCUMENT_FORMATS="bson" \
-TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire native-wire-tcp native-wire-inproc" \
+TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire native-wire-tcp native-wire-inproc" \
 scripts/mongo_gateway_compare.sh
 ```
 
@@ -349,7 +349,7 @@ mode:
 
 ```sh
 TREEDB_DOCUMENT_FORMATS="bson" \
-TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack" \
+TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw" \
 MONGO_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack" \
 scripts/mongo_gateway_compare.sh
 ```
@@ -454,7 +454,7 @@ Useful overrides:
 
 - `DOCS_LIST="1000 10000 100000"`
 - `INDEXES_LIST="0 1 2"`
-- `TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire native-wire-tcp native-wire-inproc"`
+- `TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire native-wire-tcp native-wire-inproc"` (`driver-unack` is intentionally excluded because TreeDB rejects `w:0` without mutation)
 - `MONGO_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack"`
 - `READS=50000`, `RANGE_READS=5000`, `UPDATES=5000`
 - `DELETES=1000`
@@ -537,8 +537,9 @@ The initial workload phases are:
 - `load_insert_many`: batched document inserts. The exact client call depends
   on `client_mode`: `InsertMany` for `driver` and `driver-find-raw`,
   `RunCommand({insert, documents})` for `driver-command`, `RunCommand` with a
-  prebuilt raw BSON command for `driver-command-raw`, unacknowledged `InsertMany`
-  plus a post-load visibility wait for `driver-unack`, direct
+  prebuilt raw BSON command for `driver-command-raw`, MongoDB-target-only
+  unacknowledged `InsertMany` plus a post-load visibility wait for
+  `driver-unack`, direct
   `Collection.InsertBatch` in the selected storage format for `direct`, and raw
   OP_MSG document sequences for `raw-wire`/`raw-wire-tcp`/
   `raw-wire-tcp-pipeline`. When
@@ -715,7 +716,7 @@ OUT=$(mktemp -d /tmp/gomap_mongo_gateway_profile_XXXXXX)
 MONGO_GATEWAY_PROFILE_BENCH_BATCH_SIZE=10000 \
 GOWORK=off go test ./cmd/mongo_gateway_bench \
   -run '^$' \
-  -bench '^(BenchmarkTreeDBGatewayLoadBSONIndexes2|BenchmarkTreeDBGatewayLoadGeneratedIDBSONIndexes2|BenchmarkTreeDBGatewayLoadObjectIDBSONIndexes2|BenchmarkTreeDBGatewayLoadUnackBSONIndexes2|BenchmarkTreeDBGatewayRunCommandLoadBSONIndexes2|BenchmarkTreeDBGatewayRunRawCommandLoadBSONIndexes2|BenchmarkTreeDBGatewayRawWireLoadBSONIndexes2|BenchmarkTreeDBGatewayRawWireTCPLoadBSONIndexes2|BenchmarkDirectCollectionLoadBSONIndexes2|BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2|BenchmarkDirectCollectionConcurrentUpdateBSONCityIndex1|BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2CityUpdate|BenchmarkDirectCollectionConcurrentUpdateBSONIndexes3CityUpdate|BenchmarkClientBSONBatchEncode)$' \
+  -bench '^(BenchmarkTreeDBGatewayLoadBSONIndexes2|BenchmarkTreeDBGatewayLoadGeneratedIDBSONIndexes2|BenchmarkTreeDBGatewayLoadObjectIDBSONIndexes2|BenchmarkTreeDBGatewayRunCommandLoadBSONIndexes2|BenchmarkTreeDBGatewayRunRawCommandLoadBSONIndexes2|BenchmarkTreeDBGatewayRawWireLoadBSONIndexes2|BenchmarkTreeDBGatewayRawWireTCPLoadBSONIndexes2|BenchmarkDirectCollectionLoadBSONIndexes2|BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2|BenchmarkDirectCollectionConcurrentUpdateBSONCityIndex1|BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2CityUpdate|BenchmarkDirectCollectionConcurrentUpdateBSONIndexes3CityUpdate|BenchmarkClientBSONBatchEncode)$' \
   -benchtime 2000000x \
   -count 1 \
   -timeout 0 \
@@ -736,10 +737,6 @@ The benchmark shapes are intentionally different:
   primary keys. If this remains close to the explicit string `_id` benchmark,
   the cost is the driver's explicit-`_id` bookkeeping rather than string `_id`
   encoding.
-- `BenchmarkTreeDBGatewayLoadUnackBSONIndexes2` uses official-driver
-  `InsertMany` with unacknowledged writes. It measures client enqueue cost, not
-  completed durable load throughput, and is only a diagnostic for response-path
-  overhead.
 - `BenchmarkTreeDBGatewayRunCommandLoadBSONIndexes2` uses the official MongoDB
   Go driver `RunCommand` insert path against the in-process TreeDB gateway,
   bypassing `InsertMany` `_id` extraction while still using the driver transport.

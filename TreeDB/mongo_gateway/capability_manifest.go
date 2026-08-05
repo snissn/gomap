@@ -92,6 +92,8 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 		{ID: "cursor.getmore-and-killcursors", Category: "cursor", Feature: "getMore and killCursors", Status: MongoCapabilitySupported},
 		{ID: "read-concern.local-available-readconcern-maps-to-local-stale", Category: "read concern", Feature: "local/available readConcern maps to local_stale", Status: MongoCapabilitySupportedSubset},
 		{ID: "read-concern-gap.majority-linearizable-and-snapshot-readconcern", Category: "read concern gap", Feature: "majority, linearizable, and snapshot readConcern", Status: MongoCapabilityRejected},
+		{ID: "write-concern.standalone-w1-and-journal", Category: "write concern", Feature: "standalone absent/default, w:1, and journal acknowledgement (#4060)", Status: MongoCapabilitySupportedSubset},
+		{ID: "write-concern-gap.unacknowledged-replica-and-timeout", Category: "write concern gap", Feature: "standalone w:0, replica acknowledgement, and positive wtimeout", Status: MongoCapabilityRejected},
 		{ID: "crud.updateone-set-by-id", Category: "crud", Feature: "updateOne $set by _id", Status: MongoCapabilitySupportedSubset},
 		{ID: "crud.delete-by-id", Category: "crud", Feature: "delete by _id", Status: MongoCapabilitySupportedSubset},
 		{ID: "metadata.listcollections", Category: "metadata", Feature: "listCollections", Status: MongoCapabilitySupportedSubset},
@@ -133,6 +135,15 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 				"crud.delete-by-id",
 			},
 			Note: "Explicit-ID and bounded single-document shapes; broader Mongo semantics remain intentionally limited.",
+		},
+		{
+			ID:    "standalone-write-concern",
+			Label: "Standalone write concern",
+			CapabilityIDs: []string{
+				"write-concern.standalone-w1-and-journal",
+				"write-concern-gap.unacknowledged-replica-and-timeout",
+			},
+			Note: "Absent/default and w:1 use the selected profile's ordinary acknowledgement boundary; j:true closes a real command-WAL or checkpoint sync boundary. Unacknowledged, replica, and interruptible-timeout semantics reject before mutation.",
 		},
 		{
 			ID:    "aggregation-count-distinct",

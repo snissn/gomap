@@ -42,11 +42,12 @@ mongodb://127.0.0.1:27017/?directConnection=true
 <!-- mongo-capability-summary:begin -->
 ## Executable capability summary
 
-Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:3bced062c485678a4ea0dd4aae5fe4eef8c36ae63cb1110cef5b6a5bc525118f`
+Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:6e3ceec9255552ff418ab4286da8067433c11012ac7a16c462822527ba5bb6b0`
 
 | Surface | Status | Boundary |
 |---|---|---|
 | Standalone CRUD | supported subset | Explicit-ID and bounded single-document shapes; broader Mongo semantics remain intentionally limited. |
+| Standalone write concern | supported subset | Absent/default and w:1 use the selected profile's ordinary acknowledgement boundary; j:true closes a real command-WAL or checkpoint sync boundary. Unacknowledged, replica, and interruptible-timeout semantics reject before mutation. |
 | Aggregation, count, and distinct | supported subset | Bounded standalone subsets only; unsupported stages, dotted distinct keys, and maxTimeMS reject. |
 | Administrative diagnostics | not implemented | serverStatus, top, and dbStats are not implemented. |
 | Logical sessions | supported subset | Driver-interoperability metadata only; no transaction or causal-session semantics. |

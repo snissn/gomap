@@ -633,7 +633,7 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.UpdateIndexedField, "update-indexed-field", false, "include the city field in update phases; requires -secondary-indexes >= 2 so the city index exists")
 	fs.BoolVar(&cfg.RangeIndex, "range-index", false, "create an age_1 secondary index for the age range-read phase")
 	fs.IntVar(&cfg.SecondaryIndexes, "secondary-indexes", 2, "secondary indexes to create: 0, 1=email, 2=email+city, 3=email+city+active")
-	fs.StringVar(&cfg.ClientMode, "client-mode", cfg.ClientMode, "benchmark client path: driver, driver-find-raw, driver-command, driver-command-raw, driver-unack, direct, raw-wire, raw-wire-tcp, raw-wire-tcp-pipeline, native-wire-inproc, or native-wire-tcp; direct/raw/native-wire modes are TreeDB-only")
+	fs.StringVar(&cfg.ClientMode, "client-mode", cfg.ClientMode, "benchmark client path: driver, driver-find-raw, driver-command, driver-command-raw, driver-unack, direct, raw-wire, raw-wire-tcp, raw-wire-tcp-pipeline, native-wire-inproc, or native-wire-tcp; driver-unack is MongoDB-only, direct/raw/native-wire modes are TreeDB-only")
 	fs.IntVar(&cfg.RawWireTCPPipelineDepth, "raw-wire-tcp-pipeline-depth", cfg.RawWireTCPPipelineDepth, "number of raw-wire TCP find requests to pipeline on one connection when -client-mode raw-wire-tcp-pipeline")
 	fs.StringVar(&treeDBProfile, "treedb-profile", treeDBProfile, "TreeDB profile for -target treedb: "+treedb.BenchmarkProfileFlagHelp)
 	fs.BoolVar(&cfg.TreeDBCommandWAL, "treedb-command-wal", false, "enable TreeDB command-WAL mode for -target treedb")
@@ -728,6 +728,9 @@ func parseConfig(args []string) (config, error) {
 	cfg.ClientMode = clientMode
 	if cfg.Target != "treedb" && (isRawWireClientMode(cfg.ClientMode) || isNativeWireClientMode(cfg.ClientMode)) {
 		return config{}, fmt.Errorf("client-mode %q is only supported with -target treedb", cfg.ClientMode)
+	}
+	if cfg.Target == "treedb" && cfg.ClientMode == clientModeDriverUnack {
+		return config{}, errors.New("client-mode \"driver-unack\" is not supported with -target treedb: the standalone gateway rejects w:0 before mutation")
 	}
 	if cfg.Target != "treedb" && cfg.ClientMode == clientModeDirect {
 		return config{}, fmt.Errorf("client-mode %q is only supported with -target treedb", cfg.ClientMode)

@@ -433,6 +433,76 @@ func (db *DB) FlushCommandWALBarrierWithResult(sync bool) (CommandWALBarrierResu
 	return result, db.FlushCommandWAL(sync)
 }
 
+// SyncCommandWALAppliedPrefix closes a dependency-complete durable command-WAL
+// prefix and publishes any durable-prefix barrier as a root-neutral applied
+// command. Registered raw-publish barriers run while the append domain is
+// serialized, so every earlier collection frame is reflected in the current
+// roots before the prefix is promoted. A successful return therefore leaves no
+// artificial unapplied barrier LSN for the next writer to trip over.
+//
+// This is the explicit-sync operation for callers that no longer retain the
+// original command intent. Callers that still own an intent should use its
+// normal sync publish path so the mutation and barrier share one coverage
+// range. physicalSync reports whether this call completed the physical sync
+// for a new barrier, even if a later root publication step reports failure; it
+// is false when there is no command prefix or the applied prefix was already
+// durable.
+func (db *DB) SyncCommandWALAppliedPrefix() (physicalSync bool, err error) {
+	if db == nil {
+		return false, ErrClosed
+	}
+	if !db.CommandWALEnabled() {
+		return false, ErrCommandWALUnsupported
+	}
+	if db.readOnly {
+		return false, ErrReadOnly
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return false, err
+	}
+	unlock, err := db.LockCommandWALPublishWithBarriers()
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+
+	state := db.State()
+	if state == nil {
+		return false, ErrClosed
+	}
+	nextLSN := db.CommandWALNextLSN()
+	if nextLSN <= 1 {
+		return false, nil
+	}
+	frontier := nextLSN - 1
+	if frontier != state.AppliedCommandLSN {
+		return false, fmt.Errorf("%w: explicit sync frontier=%d applied=%d", ErrCommandWALAppliedLSNNonContig, frontier, state.AppliedCommandLSN)
+	}
+	if db.commandWALDurableLSN.Load() >= frontier {
+		return false, nil
+	}
+
+	barrier := &commandWALBatchIntent{
+		kind: commitlog.CommandKindDurablePrefixBarrier, scope: commitlog.CommandScopeSystem,
+		payloadFormat: commitlog.PayloadFormatDurablePrefixBarrierV1,
+		statsPath:     commandWALAppendStatsBarrier, statsPathSet: true,
+	}
+	barrierLSN, err := db.appendCommandWALIntent(barrier, true)
+	if err != nil {
+		return false, err
+	}
+	if barrierLSN != frontier+1 {
+		db.poisonCommandWALAfterPostAppendFailure(barrier)
+		return true, fmt.Errorf("%w: durable barrier lsn=%d want=%d", ErrCommandWALAppliedLSNNonContig, barrierLSN, frontier+1)
+	}
+	covered := []CommandWALLSNRange{{First: barrierLSN, Last: barrierLSN}}
+	if err := db.publishCurrentCommandWALRootsTeardownPinned(barrierLSN, covered, true); err != nil {
+		db.poisonCommandWALAfterPostAppendFailure(barrier)
+		return true, err
+	}
+	return true, nil
+}
+
 func (db *DB) appendCommandWALDurablePrefixBarrier() (uint64, error) {
 	return db.appendCommandWALIntent(&commandWALBatchIntent{
 		kind: commitlog.CommandKindDurablePrefixBarrier, scope: commitlog.CommandScopeSystem,

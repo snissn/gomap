@@ -2,6 +2,7 @@ package mongogateway
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -313,6 +314,54 @@ func mongoCompatibilityMatrixProbes() []mongoCompatibilityMatrixProbe {
 						{Key: "$db", Value: "app"},
 					})
 					assertCommandError(t, resp, "BadValue")
+				}
+			},
+		},
+		{
+			capabilityID:   "write-concern.standalone-w1-and-journal",
+			expectedStatus: MongoCapabilitySupportedSubset,
+			probe: func(t *testing.T, server *Server) {
+				syncs := 0
+				server.standaloneWriteConcernSync = func() (bool, error) {
+					syncs++
+					return true, nil
+				}
+				assertOK(t, serveCommand(t, server, 920, bson.D{
+					{Key: "insert", Value: "write-concern"},
+					{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "w1"}}}},
+					{Key: "writeConcern", Value: bson.D{{Key: "w", Value: int32(1)}}},
+					{Key: "$db", Value: "app"},
+				}))
+				assertOK(t, serveCommand(t, server, 921, bson.D{
+					{Key: "insert", Value: "write-concern"},
+					{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "journal"}}}},
+					{Key: "writeConcern", Value: bson.D{{Key: "j", Value: true}}},
+					{Key: "$db", Value: "app"},
+				}))
+				if syncs != 1 {
+					t.Fatalf("journal sync calls=%d want 1", syncs)
+				}
+			},
+		},
+		{
+			capabilityID:   "write-concern-gap.unacknowledged-replica-and-timeout",
+			expectedStatus: MongoCapabilityRejected,
+			probe: func(t *testing.T, server *Server) {
+				for i, concern := range []bson.D{
+					{{Key: "w", Value: int32(0)}},
+					{{Key: "w", Value: "majority"}},
+					{{Key: "wtimeout", Value: int32(1)}},
+				} {
+					response := serveCommand(t, server, int32(930+i), bson.D{
+						{Key: "insert", Value: "write-concern-rejected"},
+						{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: i}}}},
+						{Key: "writeConcern", Value: concern},
+						{Key: "$db", Value: "app"},
+					})
+					assertCommandError(t, response, "WriteConcernFailed")
+				}
+				if _, err := server.Collections.OpenCollection("app.write-concern-rejected"); !errors.Is(err, collections.ErrCollectionNotFound) {
+					t.Fatalf("rejected write concern collection err=%v, want not found", err)
 				}
 			},
 		},

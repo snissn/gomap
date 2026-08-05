@@ -113,7 +113,15 @@ type Server struct {
 	updateCoalescers        map[string]*mongoUpdateCoalescer
 	insertMu                sync.Mutex
 	insertCoalescers        map[string]*mongoInsertCoalescer
-	closed                  atomic.Bool
+	// standaloneWriteBoundaryMu lets ordinary standalone writes overlap while
+	// making a journal request exclusive from dispatch through its durable
+	// boundary. That exclusion prevents a concurrent collection mutation from
+	// holding a domain lock while waiting on the command-WAL publish lock that
+	// the journal boundary owns while draining collection barriers.
+	standaloneWriteBoundaryMu  sync.RWMutex
+	standaloneWriteConcernSync func() (bool, error)
+	writeConcernStats          standaloneWriteConcernStats
+	closed                     atomic.Bool
 }
 
 type collectionFirstWritePending struct {
@@ -719,6 +727,13 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 			return nil, retainRequestBody, fmt.Errorf("%w: %s with document sequences", wire.ErrUnsupported, name)
 		}
 	}
+	if msg.Flags&wire.MsgFlagMoreToCome != 0 && standaloneWriteCommand(name) && !s.clusterSubmitterConfigured() {
+		// moreToCome is the wire signal for an unacknowledged OP_MSG write. Reject
+		// the flag itself before dispatch, even when a crafted command omits w:0
+		// or claims w:1, and suppress the response so the connection remains usable.
+		s.recordStandaloneMoreToComeRejection()
+		return nil, retainRequestBody, nil
+	}
 
 	if name == "find" {
 		// The find path builds a raw OP_MSG response directly.
@@ -756,6 +771,13 @@ func (s *Server) commandResponse(ctx context.Context, name string, command wire.
 			return doc, err
 		}
 	}
+	if standaloneWriteCommand(name) && !s.clusterSubmitterConfigured() {
+		return s.standaloneWriteCommandResponse(ctx, name, command, sequences, cursorOwner)
+	}
+	return s.dispatchCommandResponse(ctx, name, command, sequences, cursorOwner)
+}
+
+func (s *Server) dispatchCommandResponse(ctx context.Context, name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (wire.Document, error) {
 	switch name {
 	case "hello", "isMaster", "ismaster":
 		return marshalDocument(s.helloResponse(ctx))

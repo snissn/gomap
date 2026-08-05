@@ -870,6 +870,9 @@ func TestParseConfigValidation(t *testing.T) {
 	if unackCfg.ClientMode != clientModeDriverUnack {
 		t.Fatalf("ClientMode=%q want %q", unackCfg.ClientMode, clientModeDriverUnack)
 	}
+	if _, err := parseConfig([]string{"-target", "treedb", "-client-mode", "driver-unack"}); err == nil || !strings.Contains(err.Error(), "rejects w:0 before mutation") {
+		t.Fatalf("TreeDB driver-unack error=%v, want explicit fail-closed w:0 rejection", err)
+	}
 	directCfg, err := parseConfig([]string{"-target", "treedb", "-client-mode", "direct", "-treedb-document-format", "bson"})
 	if err != nil {
 		t.Fatalf("parse direct config: %v", err)
@@ -2421,7 +2424,7 @@ func TestTreeDBClientModeSmoke(t *testing.T) {
 	if testing.Short() {
 		t.Skip("client mode smoke benchmark skipped in short mode")
 	}
-	for _, mode := range []string{clientModeDriver, clientModeDriverFindRaw, clientModeDriverCommand, clientModeDriverCommandRaw, clientModeDriverUnack, clientModeDirect, clientModeRawWire, clientModeRawWireTCP, clientModeRawWireTCPPipeline} {
+	for _, mode := range []string{clientModeDriver, clientModeDriverFindRaw, clientModeDriverCommand, clientModeDriverCommandRaw, clientModeDirect, clientModeRawWire, clientModeRawWireTCP, clientModeRawWireTCPPipeline} {
 		t.Run(mode, func(t *testing.T) {
 			opsPerSecond := runTreeDBClientModeSmoke(t, mode)
 			t.Logf("%s load_insert_many ops/sec=%.1f", mode, opsPerSecond)
