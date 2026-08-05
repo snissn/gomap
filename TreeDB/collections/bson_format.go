@@ -38,6 +38,9 @@ func appendBSONIndexRuntimeState(raw bson.Raw, state orderedDocumentIndexState, 
 	if len(runtime.path) == 1 {
 		value := raw.Lookup(runtime.path[0])
 		if value.IsZero() {
+			if runtime.def.valueType == IndexValueBSONOrderedV2 {
+				return appendBSONIndexValueToState(state, runtimeIdx, runtime, bson.RawValue{}, opts, encoder)
+			}
 			return nil
 		}
 		return appendBSONIndexValueToState(state, runtimeIdx, runtime, value, opts, encoder)
@@ -47,6 +50,9 @@ func appendBSONIndexRuntimeState(raw bson.Raw, state orderedDocumentIndexState, 
 		return err
 	}
 	if !found {
+		if runtime.def.valueType == IndexValueBSONOrderedV2 {
+			return appendBSONIndexValueToState(state, runtimeIdx, runtime, bson.RawValue{}, opts, encoder)
+		}
 		return nil
 	}
 	if fromArray && !runtime.def.multiKey && !opts.allowArrayValuesInIndex {
@@ -186,11 +192,17 @@ func bsonLeafIndexValues(value bson.RawValue) ([]bson.RawValue, bool, bool, erro
 }
 
 func appendBSONIndexScalar(dst []byte, valueType IndexValueType, value bson.RawValue) ([]byte, []byte, bool, error) {
-	if value.Type == bson.TypeNull {
+	if value.Type == bson.TypeNull && valueType != IndexValueBSONOrderedV2 {
 		return dst, nil, false, nil
 	}
 	start := len(dst)
 	switch valueType {
+	case IndexValueBSONOrderedV2:
+		out, encoded, err := appendBSONIndexKeyComponentV2(dst, value)
+		if err != nil {
+			return dst, nil, false, err
+		}
+		return out, encoded, true, nil
 	case IndexValueString:
 		out, ok := bsonRawStringBytes(value)
 		if !ok {

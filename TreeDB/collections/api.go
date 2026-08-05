@@ -1069,6 +1069,10 @@ const (
 	IndexValueBool   IndexValueType = "bool"
 	IndexValueInt64  IndexValueType = "int64"
 	IndexValueDouble IndexValueType = "double"
+	// IndexValueBSONOrderedV2 identifies the versioned BSON scalar key codec.
+	// It is valid only for BSON collections and intentionally has no legacy
+	// treedbValueType equivalent.
+	IndexValueBSONOrderedV2 IndexValueType = "bson-ordered-v2"
 )
 
 type CollectionOptions struct {
@@ -15020,7 +15024,7 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 			table := newCollectionRunTable(0)
 			runStats := CollectionUpdateSecondaryRunStats{IndexName: runtime.def.name}
 			for _, encoded := range oldState[runtime.def.name] {
-				keyLen, err := deleteCollectionSecondaryIndexEntry(table, encoded, documentID)
+				keyLen, err := deleteCollectionSecondaryIndexEntryForValueType(table, runtime.def.valueType, encoded, documentID)
 				if err != nil {
 					_ = snap.Close()
 					resetCollectionTables(append(deltaTables, table))
@@ -15036,7 +15040,7 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 				}
 			}
 			for _, encoded := range newState[runtime.def.name] {
-				keyLen, err := setCollectionSecondaryIndexEntry(table, encoded, documentID)
+				keyLen, err := setCollectionSecondaryIndexEntryForValueType(table, runtime.def.valueType, encoded, documentID)
 				if err != nil {
 					_ = snap.Close()
 					resetCollectionTables(append(deltaTables, table))
@@ -15412,7 +15416,7 @@ func buildDirectBufferedSecondaryRootPlans(collectionName string, runtimes []ind
 			for _, encoded := range item.oldState.valuesAt(runtimeIdx) {
 				var key []byte
 				var err error
-				plan.arena, key, err = appendIndexEntryKey(plan.arena, encoded, item.documentID)
+				plan.arena, key, err = appendIndexEntryKeyForValueType(plan.arena, runtime.def.valueType, encoded, item.documentID)
 				if err != nil {
 					return nil, 0, err
 				}
@@ -15421,7 +15425,7 @@ func buildDirectBufferedSecondaryRootPlans(collectionName string, runtimes []ind
 			for _, encoded := range item.newState.valuesAt(runtimeIdx) {
 				var key []byte
 				var err error
-				plan.arena, key, err = appendIndexEntryKey(plan.arena, encoded, item.documentID)
+				plan.arena, key, err = appendIndexEntryKeyForValueType(plan.arena, runtime.def.valueType, encoded, item.documentID)
 				if err != nil {
 					return nil, 0, err
 				}
@@ -17352,7 +17356,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 					runStats.IndexName = runtime.def.name
 				}
 				for _, encoded := range item.oldState.valuesAt(runtimeIdx) {
-					keyLen, err := deleteCollectionSecondaryIndexEntry(table, encoded, item.documentID)
+					keyLen, err := deleteCollectionSecondaryIndexEntryForValueType(table, runtime.def.valueType, encoded, item.documentID)
 					if err != nil {
 						_ = snap.Close()
 						return nil, err
@@ -17367,7 +17371,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 					}
 				}
 				for _, encoded := range item.newState.valuesAt(runtimeIdx) {
-					keyLen, err := setCollectionSecondaryIndexEntry(table, encoded, item.documentID)
+					keyLen, err := setCollectionSecondaryIndexEntryForValueType(table, runtime.def.valueType, encoded, item.documentID)
 					if err != nil {
 						_ = snap.Close()
 						return nil, err
@@ -19271,7 +19275,7 @@ func buildCreateIndexBackfillPlan(
 		}
 
 		for _, encoded := range values {
-			if _, err := setCollectionSecondaryIndexEntry(secondaryTable, encoded, documentID); err != nil {
+			if _, err := setCollectionSecondaryIndexEntryForValueType(secondaryTable, newRuntime.def.valueType, encoded, documentID); err != nil {
 				return nil, err
 			}
 			secondaryCount++
@@ -19717,7 +19721,7 @@ func deleteSecondaryEntriesForDocument(table memtable.Table, runtime indexRuntim
 		return nil
 	}
 	for _, encoded := range values {
-		if _, err := deleteCollectionSecondaryIndexEntry(table, encoded, documentID); err != nil {
+		if _, err := deleteCollectionSecondaryIndexEntryForValueType(table, runtime.def.valueType, encoded, documentID); err != nil {
 			return err
 		}
 	}
@@ -19754,7 +19758,11 @@ func rejectReplaceUniqueConflicts(snap *backenddb.Snapshot, catalog *collectionC
 				if !bytes.HasPrefix(key, prefix) {
 					break
 				}
-				ownerID := key[len(prefix):]
+				ownerID, err := indexKeyDocumentID(runtime.def.valueType, key)
+				if err != nil {
+					_ = it.Close()
+					return err
+				}
 				if !it.IsDeleted() && !bytes.Equal(ownerID, documentID) && !batchReplacements.allows(runtime.def.name, encoded, ownerID) {
 					conflict = true
 					break
@@ -19804,7 +19812,11 @@ func rejectReplaceUniqueConflictsOrdered(snap *backenddb.Snapshot, catalog *coll
 				if !bytes.HasPrefix(key, prefix) {
 					break
 				}
-				ownerID := key[len(prefix):]
+				ownerID, err := indexKeyDocumentID(runtime.def.valueType, key)
+				if err != nil {
+					_ = it.Close()
+					return err
+				}
 				if !it.IsDeleted() && !bytes.Equal(ownerID, update.documentID) && !batchReplacements.allows(runtime.def.name, encoded, ownerID) {
 					conflict = true
 					break
@@ -21973,6 +21985,9 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		if err != nil {
 			return CollectionMeta{}, fmt.Errorf("collections: invalid index %q value_type: %w", indexes[i].Name, err)
 		}
+		if valueType == IndexValueBSONOrderedV2 && documentFormat != DocumentFormatBSON {
+			return CollectionMeta{}, fmt.Errorf("collections: index %q BSON v2 key format requires BSON document_format", indexes[i].Name)
+		}
 		indexes[i].ValueType = valueType
 		if _, err := backendRootStoragePolicy(indexes[i].StoragePolicy); err != nil {
 			return CollectionMeta{}, err
@@ -22072,7 +22087,7 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 
 func normalizeIndexValueType(valueType IndexValueType) (IndexValueType, error) {
 	switch valueType {
-	case IndexValueString, IndexValueBool, IndexValueInt64, IndexValueDouble:
+	case IndexValueString, IndexValueBool, IndexValueInt64, IndexValueDouble, IndexValueBSONOrderedV2:
 		return valueType, nil
 	case "":
 		return "", errors.New("value_type is required")

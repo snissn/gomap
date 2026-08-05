@@ -3397,7 +3397,6 @@ func TestClusterSubmitterRejectsIndexDDLNoLocalMutation(t *testing.T) {
 		{Key: "indexes", Value: bson.A{bson.D{
 			{Key: "key", Value: bson.D{{Key: "name", Value: int32(1)}}},
 			{Key: "name", Value: "name_1"},
-			{Key: "treedbValueType", Value: "string"},
 		}}},
 		{Key: "$db", Value: "app"},
 	}))
@@ -3409,7 +3408,6 @@ func TestClusterSubmitterRejectsIndexDDLNoLocalMutation(t *testing.T) {
 		{Key: "indexes", Value: bson.A{bson.D{
 			{Key: "key", Value: bson.D{{Key: "age", Value: int32(1)}}},
 			{Key: "name", Value: "age_1"},
-			{Key: "treedbValueType", Value: "int64"},
 		}}},
 		{Key: "$db", Value: "app"},
 	})
