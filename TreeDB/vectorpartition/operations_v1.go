@@ -92,6 +92,13 @@ func (o *OperationsV1) Search(ctx context.Context, request SearchRequestV1) (Sea
 	if err := o.admit(ctx, request); err != nil {
 		return SearchResponseV1{}, err
 	}
+	health, err := o.Status(ctx)
+	if err != nil {
+		return SearchResponseV1{}, err
+	}
+	if !health.Ready {
+		return SearchResponseV1{}, &ErrorV1{Code: ErrorUnavailableV1, Err: errors.New(health.Reason)}
+	}
 	response, err := o.service.Search(ctx, request)
 	o.mu.Lock()
 	o.counts.Searches++

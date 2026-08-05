@@ -46,6 +46,13 @@ func TestVectorPartitionOperationsRegistrationDoesNotTransferBackendOwnershipV1(
 	}
 	doc := New(nil)
 	config := vectorpartition.ConservativeOperationsConfigV1()
+	disabled, err := vectorpartition.NewOperationsV1(service, vectorpartition.OperationsConfigV1{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := doc.RegisterVectorPartitionOperationsV1(disabled); err == nil {
+		t.Fatal("registered disabled vector partition operations")
+	}
 	config.Enabled = true
 	operations, err := vectorpartition.NewOperationsV1(service, config, func(context.Context) (vectorpartition.OperationsHealthV1, error) {
 		return vectorpartition.OperationsHealthV1{Ready: true}, nil
@@ -56,11 +63,17 @@ func TestVectorPartitionOperationsRegistrationDoesNotTransferBackendOwnershipV1(
 	if err := doc.RegisterVectorPartitionOperationsV1(operations); err != nil {
 		t.Fatal(err)
 	}
+	if err := doc.RegisterVectorPartitionOperationsV1(operations); err == nil {
+		t.Fatal("registered vector partition operations twice")
+	}
 	if _, err := doc.VectorPartitionOperationsV1(); err != nil {
 		t.Fatal(err)
 	}
 	if err := doc.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := doc.VectorPartitionOperationsV1(); err == nil {
+		t.Fatal("vector partition operations remained published after close")
 	}
 	id := vectorpartition.GenerationIDV1{Index: "embedding", Generation: 1}
 	if _, err := service.Search(context.Background(), vectorpartition.SearchRequestV1{Version: 1, Generation: id, Query: []float32{1}, Metric: vectorpartition.MetricCosineV1, TopK: 1, Probes: 1, EfSearch: 1, Consistency: vectorpartition.ConsistencyGenerationSnapshotV1, Limits: vectorpartition.SearchLimitsV1{RequestBytes: 4, CandidateBytes: 1, ResponseBytes: 1, MergeEntries: 1}}); err != nil {

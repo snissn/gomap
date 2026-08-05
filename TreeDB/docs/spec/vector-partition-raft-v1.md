@@ -218,15 +218,17 @@ cap seam. Fanout, request concurrency, retries, and redirects remain bounded by
 the node-owned `VectorPartitionCoordinatorLimitsV1`; the operator boundary does
 not duplicate those construction-time limits.
 
-`OperationsV1.Status` first performs the same fresh meta-Raft linearizable read
-fence as serving, then reads the live catalog proof, lifecycle record/source
-identity, ready groups, and topology state. `ready` is returned only for an
-active, complete generation; `catalog_unavailable`, `catalog_mismatch`,
-`source_mismatch`, `group_assets_unavailable`, `lifecycle_not_active`, and
-`topology_unavailable` fail closed. Stable counters record disabled calls,
-health checks, searches, the exact rejected request-cap class, selected
-partitions/groups, requests, RPCs, retries, redirects, failures, candidates,
-edges, and query/request/candidate/response bytes. Those values reuse
+`OperationsV1.Status` evaluates production topology and the required serving
+groups first, then performs the same fresh meta-Raft linearizable read fence as
+serving and reads the live catalog proof, lifecycle record/source identity, and
+ready groups. `ready` is returned only for an active, complete generation;
+`authority_unavailable`, `topology_unavailable`, `catalog_unavailable`,
+`catalog_mismatch`, `source_mismatch`, `generation_absent`,
+`lifecycle_not_active`, and `group_assets_unavailable` fail closed. Stable
+counters record disabled calls, health checks, searches, the exact rejected
+request-cap class, selected partitions/groups, requests, RPCs, retries,
+redirects, failures, candidates, edges, and query/request/candidate/response
+bytes. Those values reuse
 coordinator response accounting. Cache hit/miss and
 structured-log sink volume have no public owning snapshot yet and are not
 fabricated by this boundary.

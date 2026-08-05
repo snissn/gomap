@@ -71,7 +71,11 @@ func hasOperationErrorCodeV1(err error, want ErrorCodeV1) bool {
 
 func TestOperationsV1UsesLiveHealthAndDelegatesLifecycleV1(t *testing.T) {
 	id := GenerationIDV1{Index: "embedding", Generation: 1}
-	backend := &serviceBackendV1{states: map[GenerationIDV1]GenerationStatusV1{id: {Generation: id, State: GenerationActiveV1, Active: true, Ready: true}}}
+	searches := 0
+	backend := &serviceBackendV1{states: map[GenerationIDV1]GenerationStatusV1{id: {Generation: id, State: GenerationActiveV1, Active: true, Ready: true}}, search: func(_ context.Context, r SearchRequestV1) (SearchResponseV1, error) {
+		searches++
+		return SearchResponseV1{Generation: r.Generation}, nil
+	}}
 	service, err := NewServiceV1(backend)
 	if err != nil {
 		t.Fatal(err)
@@ -91,6 +95,12 @@ func TestOperationsV1UsesLiveHealthAndDelegatesLifecycleV1(t *testing.T) {
 	available = false
 	if health, err := ops.Status(t.Context()); err != nil || health.Ready {
 		t.Fatalf("live health=%+v err=%v", health, err)
+	}
+	if _, err := ops.Search(t.Context(), operationsRequestV1()); !hasOperationErrorCodeV1(err, ErrorUnavailableV1) {
+		t.Fatalf("not-ready search err=%v", err)
+	}
+	if searches != 0 {
+		t.Fatalf("not-ready search reached backend %d times", searches)
 	}
 	if inventory, err := ops.Inventory(t.Context(), id); err != nil || len(inventory) != 1 || inventory[0].Generation != id {
 		t.Fatalf("inventory=%+v err=%v", inventory, err)
@@ -223,7 +233,9 @@ func TestOperationsV1SnapshotsSearchObservabilityV1(t *testing.T) {
 	}
 	config := ConservativeOperationsConfigV1()
 	config.Enabled = true
-	ops, err := NewOperationsV1(service, config, func(context.Context) (OperationsHealthV1, error) { return OperationsHealthV1{Generation: id}, nil })
+	ops, err := NewOperationsV1(service, config, func(context.Context) (OperationsHealthV1, error) {
+		return OperationsHealthV1{Ready: true, Generation: id}, nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
