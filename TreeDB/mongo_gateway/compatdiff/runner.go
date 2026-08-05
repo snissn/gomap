@@ -221,6 +221,9 @@ func normalizedObservation(observation Observation, ignoredResponse, ignoredStat
 			result.CursorReplies[i] = normalizeResponseWithTokens(reply, ignoredResponse, normalized, normalizeResponseEnvelopeOrder, normalizeCursorEnvelopeOrder, tokens)
 		}
 	}
+	// cursor.ns is wire metadata only. State documents may legitimately contain
+	// a user field with that path, so preserve it verbatim in mutation evidence.
+	tokens.normalizeCursorNamespace = false
 	if len(observation.Baseline) > 0 {
 		result.Baseline = make([]any, len(observation.Baseline))
 		for i, doc := range observation.Baseline {

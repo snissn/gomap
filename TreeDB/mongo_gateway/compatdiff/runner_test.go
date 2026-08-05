@@ -153,6 +153,21 @@ func TestCursorNamespaceNormalizationPreservesSuffixAndCursorError(t *testing.T)
 	}
 }
 
+func TestCursorNamespaceNormalizationDoesNotHidePersistedState(t *testing.T) {
+	f := fixture()
+	f.NormalizeCursorNamespace = true
+	response := raw(t, bson.D{{Key: "ok", Value: int32(1)}})
+	left := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Response: response, State: []bson.Raw{raw(t, bson.D{{Key: "cursor", Value: bson.D{{Key: "ns", Value: "treedb.records"}}}})}}, nil
+	})
+	right := executorFunc(func(context.Context, Fixture) (Observation, error) {
+		return Observation{Response: response, State: []bson.Raw{raw(t, bson.D{{Key: "cursor", Value: bson.D{{Key: "ns", Value: "mongo.records"}}}})}}, nil
+	})
+	if row := Run(context.Background(), "identity", []Fixture{f}, left, right).Fixtures[0]; row.Status != "mismatch" || !strings.Contains(row.Reason, "post-command") {
+		t.Fatalf("cursor namespace normalization hid persisted state: %+v", row)
+	}
+}
+
 func TestExpectedRejectionMutationFails(t *testing.T) {
 	f := fixture()
 	f.Expectation = ExpectedRejected
