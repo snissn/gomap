@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
@@ -193,6 +194,11 @@ func (b *VectorPartitionPublicBackendV1) OperationsHealthV1(ctx context.Context)
 	id := public.GenerationIDV1{Index: b.opts.Identity.Index.IndexName, Generation: b.opts.Identity.Generation}
 	topology := b.opts.Topology.Status()
 	if topology.Closed || !topology.Ready {
+		return public.OperationsHealthV1{Generation: id, Reason: "topology_unavailable"}, nil
+	}
+	requiredGroups := slices.Clone(b.opts.RequiredGroups)
+	slices.Sort(requiredGroups)
+	if !slices.Equal(topology.ShardGroups, requiredGroups) {
 		return public.OperationsHealthV1{Generation: id, Reason: "topology_unavailable"}, nil
 	}
 	requiredAppliedIndex, err := b.opts.ReadFence.LinearizableCatalogMetaAppliedIndexV1(ctx)

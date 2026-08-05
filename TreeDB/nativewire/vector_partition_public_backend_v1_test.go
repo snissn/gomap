@@ -129,6 +129,19 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 	if health, err := backend.OperationsHealthV1(ctx); err != nil || !health.Ready || health.Reason != "ready" {
 		t.Fatalf("operations health = %#v, %v", health, err)
 	}
+	topology.mu.Lock()
+	topology.listeners["group-c"], topology.serving["group-c"] = topology.listeners["group-b"], topology.serving["group-b"]
+	delete(topology.listeners, "group-b")
+	delete(topology.serving, "group-b")
+	topology.mu.Unlock()
+	if health, err := backend.OperationsHealthV1(ctx); err != nil || health.Ready || health.Reason != "topology_unavailable" {
+		t.Fatalf("wrong serving groups health = %#v, %v", health, err)
+	}
+	topology.mu.Lock()
+	topology.listeners["group-b"], topology.serving["group-b"] = topology.listeners["group-c"], topology.serving["group-c"]
+	delete(topology.listeners, "group-c")
+	delete(topology.serving, "group-c")
+	topology.mu.Unlock()
 	backend.opts.Identity.Source.Checksum++
 	if health, err := backend.OperationsHealthV1(ctx); err != nil || health.Ready || health.Reason != "source_mismatch" {
 		t.Fatalf("source mismatch health = %#v, %v", health, err)
@@ -140,7 +153,7 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 	}
 	backend.opts.ReadFence = harness.LeaderFence()
 	backend.opts.RequiredGroups = []raftcluster.GroupID{"group-a", "group-c"}
-	if health, err := backend.OperationsHealthV1(ctx); err != nil || health.Ready || health.Reason != "group_assets_unavailable" {
+	if health, err := backend.OperationsHealthV1(ctx); err != nil || health.Ready || health.Reason != "topology_unavailable" {
 		t.Fatalf("mismatched group health = %#v, %v", health, err)
 	}
 	backend.opts.RequiredGroups = requiredGroups
