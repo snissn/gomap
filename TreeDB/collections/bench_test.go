@@ -1105,7 +1105,10 @@ func BenchmarkCollectionInsertWithSecondaryIndexes(b *testing.B) {
 // BenchmarkCollectionInsertWithBSONOrderedV2SecondaryIndexes is the direct
 // BSON-v2 counterpart to BenchmarkCollectionInsertWithSecondaryIndexes. Keep
 // the fixture and two-index shape identical; only the document/index codec
-// differs so same-host comparisons include persisted index-entry bytes.
+// differs so same-host comparisons include persisted index-entry bytes. The
+// v2 path currently allocates one encoded scalar component and one explicit
+// escaped document-ID-suffix entry per indexed field; benchmark alloc deltas
+// should be read as that deliberate format-boundary cost.
 func BenchmarkCollectionInsertWithBSONOrderedV2SecondaryIndexes(b *testing.B) {
 	b.Setenv("TREEDB_COLLECTION_DOCUMENT_FORMAT", "bson")
 	indexes := []collections.IndexDefinition{

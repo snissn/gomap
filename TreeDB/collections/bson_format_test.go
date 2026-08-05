@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -346,6 +347,68 @@ func TestCollectionBSONOrderedV2CheckpointReopenWithValueLogPointers(t *testing.
 	}
 	if got, err := reopenedCol.Get([]byte("u1")); err != nil || !bytes.Equal(got, document) {
 		t.Fatalf("reopened pointer document len=%d err=%v", len(got), err)
+	}
+}
+
+func TestCollectionBSONOrderedV2IndexLifecycleSurvivesMaintenance(t *testing.T) {
+	dir := t.TempDir()
+	opts := backenddb.Options{Dir: dir, ValueLog: backenddb.ValueLogOptions{PointerThreshold: 1, ForcePointers: true}}
+	d, err := backenddb.Open(opts)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	index := IndexDefinition{Name: "value", Field: "value", ValueType: IndexValueBSONOrderedV2, Unique: true}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}, Indexes: []IndexDefinition{index}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	for _, row := range []struct {
+		id    string
+		value any
+	}{{"u1", int32(7)}, {"u2", "seven"}} {
+		doc := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: row.id}, {Key: "value", Value: row.value}, {Key: "payload", Value: strings.Repeat(row.id, 256)}})
+		if _, err := col.InsertBatch([][]byte{[]byte(row.id)}, [][]byte{doc}); err != nil {
+			t.Fatalf("insert %s: %v", row.id, err)
+		}
+	}
+	if _, err := col.DropIndex("value"); err != nil {
+		t.Fatalf("drop v2 index: %v", err)
+	}
+	if _, err := col.CreateIndex(index); err != nil {
+		t.Fatalf("recreate/backfill v2 index: %v", err)
+	}
+	if _, err := d.ValueLogRewriteOnline(context.Background(), backenddb.ValueLogRewriteOnlineOptions{}); err != nil {
+		t.Fatalf("value-log rewrite: %v", err)
+	}
+	if _, err := d.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{}); err != nil {
+		t.Fatalf("value-log GC: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	reopened, err := backenddb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	query := bson.Raw(mustBSONCollectionDocument(t, bson.D{{Key: "value", Value: int64(7)}})).Lookup("value")
+	ids, err := reopenedCol.FindByIndexValue("value", query)
+	if err != nil || len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("post-maintenance v2 lookup ids=%q err=%v", ids, err)
+	}
+	if got, err := reopenedCol.Get([]byte("u2")); err != nil || len(got) == 0 {
+		t.Fatalf("post-maintenance pointer document len=%d err=%v", len(got), err)
 	}
 }
 
