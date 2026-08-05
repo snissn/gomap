@@ -88,7 +88,7 @@ disagreement disappear.
 
 Ordinary package tests do not require Docker or a reference server. To run the
 local smoke suite, use the wrapper, which starts the pinned `mongo:7.0.14`
-image and writes `result.json` plus `result.md`:
+image and writes `result.json`, `result.md`, and `result.tsv`:
 
 ```sh
 scripts/mongo_gateway_compat_diff.sh --smoke --out /tmp/mongo-gateway-compat-diff
@@ -102,7 +102,8 @@ GOWORK=off go run ./cmd/mongo_gateway_compat_diff \
   -out /tmp/mongo-gateway-compat-diff
 ```
 
-Artifacts include the capability-manifest identity, pinned reference image,
+Artifacts include `result.json`, concise `result.md`/`result.tsv`, the
+capability-manifest identity, pinned reference image,
 observed reference `buildInfo` version/git identity, normalized TreeDB and
 reference responses/state, and per-fixture duration. Only fixture-scoped
 `ignore_fields` are omitted. Error messages remain visible for diagnosis, but

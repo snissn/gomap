@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -307,5 +308,23 @@ func writeArtifacts(out string, result compatdiff.Result) error {
 	for _, row := range result.Fixtures {
 		fmt.Fprintf(&report, "| %s | %s | %s | %s | %s |\n", row.ID, row.CapabilityID, row.Expectation, row.Status, strings.ReplaceAll(row.Reason, "|", "\\|"))
 	}
-	return os.WriteFile(filepath.Join(out, "result.md"), []byte(report.String()), 0o644)
+	if err := os.WriteFile(filepath.Join(out, "result.md"), []byte(report.String()), 0o644); err != nil {
+		return err
+	}
+	var tsv strings.Builder
+	writer := csv.NewWriter(&tsv)
+	writer.Comma = '\t'
+	if err := writer.Write([]string{"id", "capability_id", "expectation", "status", "duration_ns", "reason"}); err != nil {
+		return err
+	}
+	for _, row := range result.Fixtures {
+		if err := writer.Write([]string{row.ID, row.CapabilityID, string(row.Expectation), row.Status, fmt.Sprint(row.Duration), row.Reason}); err != nil {
+			return err
+		}
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(out, "result.tsv"), []byte(tsv.String()), 0o644)
 }

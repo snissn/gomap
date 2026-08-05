@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/mongo_gateway/compatdiff"
 )
 
 func TestBundledFixturesLoadAndSmokeSelectionIsReal(t *testing.T) {
@@ -17,6 +19,19 @@ func TestBundledFixturesLoadAndSmokeSelectionIsReal(t *testing.T) {
 	}
 	if len(all) != 3 || len(smoke) != len(all) {
 		t.Fatalf("all=%d smoke=%d", len(all), len(smoke))
+	}
+}
+
+func TestWriteArtifactsEmitsJSONMarkdownAndTSV(t *testing.T) {
+	dir := t.TempDir()
+	result := compatdiff.Result{Schema: compatdiff.ResultSchema, Version: compatdiff.ResultVersion, Status: "pass", Fixtures: []compatdiff.FixtureResult{{ID: "case", CapabilityID: "wire.ping-command", Expectation: compatdiff.ExpectedSupported, Status: "pass"}}}
+	if err := writeArtifacts(dir, result); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"result.json", "result.md", "result.tsv"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
 	}
 }
 
