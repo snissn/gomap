@@ -119,6 +119,29 @@ func TestOperationsV1StatusPreservesCancellationCodesV1(t *testing.T) {
 			t.Fatalf("want=%v health=%+v err=%v", tc.err, health, err)
 		}
 	}
+	calls := 0
+	ops, err := NewOperationsV1(service, config, func(context.Context) (OperationsHealthV1, error) {
+		calls++
+		return OperationsHealthV1{Ready: true}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	expired, stop := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	defer stop()
+	for _, tc := range []struct {
+		ctx  context.Context
+		code ErrorCodeV1
+	}{{canceled, ErrorCanceledV1}, {expired, ErrorDeadlineExceededV1}} {
+		if health, err := ops.Status(tc.ctx); health.Ready || !hasOperationErrorCodeV1(err, tc.code) {
+			t.Fatalf("health=%+v err=%v", health, err)
+		}
+	}
+	if calls != 0 || ops.Counters().ReadyChecks != 0 {
+		t.Fatalf("health calls=%d ready checks=%d", calls, ops.Counters().ReadyChecks)
+	}
 }
 
 func TestOperationsV1EveryConfiguredCapStopsBeforeDispatchV1(t *testing.T) {

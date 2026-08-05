@@ -69,6 +69,9 @@ func (o *OperationsV1) Status(ctx context.Context) (OperationsHealthV1, error) {
 	if o == nil || !o.config.Enabled {
 		return OperationsHealthV1{Reason: "disabled"}, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return OperationsHealthV1{}, classifyErrorV1(ctx, err)
+	}
 	o.mu.Lock()
 	o.counts.ReadyChecks++
 	o.mu.Unlock()
