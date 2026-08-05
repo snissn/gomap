@@ -102,9 +102,9 @@ keys (`id`, `ns`, `firstBatch`/`nextBatch`), while the initial raw reply and
 every raw `getMore` reply remain attributable. Nested BSON and cursor-document
 order remains significant. `normalize_cursor_namespace` normalizes only the
 database prefix of `cursor.ns`, retaining its collection or `$cmd` suffix.
-Rejected fixtures require an exact
-TreeDB error code, a successful reference command, and an unchanged complete
-TreeDB database snapshot.
+Rejected fixtures require an exact TreeDB error code, a successful reference
+command, and unchanged bounded captured state: collections, natural documents,
+and index specifications.
 
 Ordinary package tests do not require Docker or a reference server. To run the
 local smoke suite, use the wrapper, which starts the pinned `mongo:7.0.14`
@@ -130,8 +130,9 @@ GOWORK=off go run ./cmd/mongo_gateway_compat_diff \
 Artifacts include `result.json`, concise `result.md`/`result.tsv`, the
 capability-manifest identity, pinned reference image,
 observed reference `buildInfo` version/git identity, normalized TreeDB and
-reference responses/state, and per-fixture duration. Only fixture-scoped
-`ignore_fields` are omitted. Error messages remain visible for diagnosis, but
+reference responses/state, and per-fixture duration. Fixture-scoped reply
+`ignore_fields` and state `ignore_state_fields` are omitted from their
+respective normalized artifacts. Error messages remain visible for diagnosis, but
 equality compares error code and labels so permitted implementation wording
 does not hide semantic differences. A missing reference exits with status 3
 and a `reference-unavailable` artifact state, distinct from a compatibility
