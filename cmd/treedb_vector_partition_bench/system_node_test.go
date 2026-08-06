@@ -370,7 +370,7 @@ func TestVectorPartitionSystemBenchPersistsFailedCellV1(t *testing.T) {
 		t.Fatalf("truth output = %q", truthOut.String())
 	}
 	out := filepath.Join(t.TempDir(), "failed.json")
-	topology := writeVectorPartitionSystemTopologyEvidenceTestV1(t, "127.0.0.1:1")
+	topology := writeVectorPartitionSystemTopologyEvidenceTestV1(t, "127.0.0.1:1", dataset)
 	args := []string{"-endpoint", "127.0.0.1:1", "-topology", topology, "-dataset", dataset, "-truth-cache", cache, "-truth-cache-sha256", strings.TrimPrefix(fields[1], "artifact_sha256="), "-probes", "2", "-concurrency", "1", "-out", out, "-top-k", "10", "-ef-search", "128", "-warmup", "0"}
 	runCell := func(context.Context, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int) (vectorPartitionSystemBenchCellV1, error) {
 		return vectorPartitionSystemBenchCellV1{Status: "valid", Budget: map[string]int{"probes": 2}, Concurrency: 1, Metrics: vectorPartitionSystemBenchMetricsV1{Queries: 2}}, context.DeadlineExceeded
@@ -395,7 +395,7 @@ func TestVectorPartitionSystemBenchPersistsFailedCellV1(t *testing.T) {
 }
 
 func TestVectorPartitionSystemBenchRejectsChangedTopologyEvidenceV1(t *testing.T) {
-	path := writeVectorPartitionSystemTopologyEvidenceTestV1(t, "127.0.0.1:19000")
+	path := writeVectorPartitionSystemTopologyEvidenceTestV1(t, "127.0.0.1:19000", filepath.Join(t.TempDir(), "dataset"))
 	if _, err := loadVectorPartitionSystemTopologyEvidenceV1(path, "localhost:19000"); err != nil {
 		t.Fatal(err)
 	}
@@ -414,6 +414,23 @@ func TestVectorPartitionSystemBenchRejectsChangedTopologyEvidenceV1(t *testing.T
 	writeVectorPartitionSystemJSONTestV1(t, path, evidence)
 	if _, err := loadVectorPartitionSystemTopologyEvidenceV1(path, "127.0.0.1:19000"); err == nil || !strings.Contains(err.Error(), "digest mismatch") {
 		t.Fatalf("changed topology digest error = %v", err)
+	}
+}
+
+func TestVectorPartitionSystemBenchRejectsMismatchedTopologyDatasetV1(t *testing.T) {
+	dataset := writeFixtureForTest(t, 10, 2, 2)
+	topology := writeVectorPartitionSystemTopologyEvidenceTestV1(t, "127.0.0.1:1", t.TempDir())
+	called := false
+	runCell := func(context.Context, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int) (vectorPartitionSystemBenchCellV1, error) {
+		called = true
+		return vectorPartitionSystemBenchCellV1{}, nil
+	}
+	args := []string{"-endpoint", "127.0.0.1:1", "-topology", topology, "-dataset", dataset, "-truth-cache", t.TempDir(), "-truth-cache-sha256", strings.Repeat("a", 64), "-probes", "2", "-concurrency", "1", "-out", filepath.Join(t.TempDir(), "result.json")}
+	if err := runVectorPartitionSystemBenchWithCellV1(args, io.Discard, runCell); err == nil || !strings.Contains(err.Error(), "does not match checked topology") {
+		t.Fatalf("mismatched topology dataset error = %v", err)
+	}
+	if called {
+		t.Fatal("benchmark cell ran with a mismatched topology dataset")
 	}
 }
 
@@ -611,7 +628,7 @@ func writeVectorPartitionSystemJSONTestV1(t *testing.T, path string, value any) 
 	}
 }
 
-func writeVectorPartitionSystemTopologyEvidenceTestV1(t *testing.T, endpoint string) string {
+func writeVectorPartitionSystemTopologyEvidenceTestV1(t *testing.T, endpoint, dataset string) string {
 	t.Helper()
 	root := t.TempDir()
 	groups := []string{"group-a", "group-b", "group-c", "group-d"}
@@ -624,7 +641,7 @@ func writeVectorPartitionSystemTopologyEvidenceTestV1(t *testing.T, endpoint str
 	}
 	config := vectorPartitionSystemNodeConfigV1{
 		SchemaVersion: 1, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
-		Topology: "single_daemon_four_group", NodeID: "single", DatasetDirectory: filepath.Join(root, "dataset"),
+		Topology: "single_daemon_four_group", NodeID: "single", DatasetDirectory: dataset,
 		DatabaseDirectory: filepath.Join(root, "database"), StateDirectory: filepath.Join(root, "state"),
 		ReadyPath: filepath.Join(root, "state", "ready.json"), PublicListen: endpoint, LocalGroups: local, Endpoints: endpoints,
 	}

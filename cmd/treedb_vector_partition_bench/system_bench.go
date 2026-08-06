@@ -93,6 +93,18 @@ func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, ru
 	if err != nil {
 		return fmt.Errorf("system-bench topology: %w", err)
 	}
+	canonicalDataset, err := m8CanonicalPathV1(dataset)
+	if err != nil {
+		return fmt.Errorf("system-bench dataset: %w", err)
+	}
+	topologyDataset, err := m8CanonicalPathV1(topology.DatasetDirectory)
+	if err != nil {
+		return fmt.Errorf("system-bench topology dataset: %w", err)
+	}
+	if canonicalDataset != topologyDataset {
+		return errors.New("system-bench dataset does not match checked topology")
+	}
+	dataset = canonicalDataset
 	probes, err := vectorPartitionSystemPositiveListV1(probeText)
 	if err != nil {
 		return fmt.Errorf("system-bench probes: %w", err)
