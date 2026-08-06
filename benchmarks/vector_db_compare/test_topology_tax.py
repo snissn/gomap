@@ -61,6 +61,29 @@ class TopologyTaxTest(unittest.TestCase):
             with self.assertRaisesRegex(ContractError, "percentiles changed"):
                 summarize(single, native)
 
+    def test_recall_below_frozen_floor_rejects(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            single, native = self.files(Path(directory))
+            value = json.loads(native[2].read_text(encoding="utf-8"))
+            value["cells"][0]["metrics"]["recall_at_10"] = .899
+            native[2].write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaisesRegex(ContractError, "below the frozen floor"):
+                summarize(single, native)
+
+    def test_committed_m2_baseline_reduces_from_raw_rows(self) -> None:
+        evidence = Path(__file__).parents[2] / "TreeDB/docs/evidence/vector-partition-local-system-qualification-4019/m2-95c60cbe"
+        single = [evidence / f"runs/single_daemon_four_group/repeat-{repetition}/search.json" for repetition in range(1, 4)]
+        native = [evidence / f"runs/native_four_daemon_four_group/repeat-{repetition}/search.json" for repetition in range(1, 4)]
+        expected = json.loads((evidence / "topology-tax.json").read_text(encoding="utf-8"))
+        result = summarize(single, native)
+        self.assertEqual(result["status"], "valid_baseline")
+        self.assertEqual(result["fixture_truth_identity"], expected["fixture_truth_identity"])
+        self.assertEqual(result["rows"], expected["rows"])
+        self.assertEqual(
+            [{key: entry[key] for key in ("topology", "repetition", "sha256", "topology_identity_sha256")} for entry in result["inputs"]],
+            [{key: entry[key] for key in ("topology", "repetition", "sha256", "topology_identity_sha256")} for entry in expected["inputs"]],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

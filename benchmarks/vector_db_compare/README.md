@@ -40,8 +40,11 @@ python3 benchmarks/vector_db_compare/topology_tax.py \
 The reducer requires the frozen 100k M2 p2/p16, c1/c8, EF128 shape and binds
 each input SHA256, checked topology identity, fixture/truth identity,
 generation, raw latency samples, wall elapsed time, counters, and coordinator
-stage timings. The full five-row comparative qualification remains a separate
-M3 execution of the committed plan.
+stage timings. Every retained cell must meet recall@10 0.90. The first bounded
+baseline is retained under
+`TreeDB/docs/evidence/vector-partition-local-system-qualification-4019/m2-95c60cbe`.
+The full five-row comparative qualification remains a separate M3 execution of
+the committed plan.
 
 The default backend set is `treedb,vectorlite`. Add `treedb_column_graph`, the
 TreeDB scalar_u8/RaBitQ quantized aliases, `pgvector`, `milvus`, or `mongodb` to

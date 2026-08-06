@@ -43,7 +43,7 @@ def validate_run(value: dict[str, Any], topology: str) -> None:
         _require(cell.get("status") == "valid" and not cell.get("error"), "system-bench contains a failed cell")
         metrics, counters, timings = cell.get("metrics"), cell.get("counters"), cell.get("timings")
         _require(isinstance(metrics, dict) and metrics.get("queries") == 1000 and metrics.get("completed_queries") == 1000 and metrics.get("result_count") == 10000 and metrics.get("errors") == 0 and metrics.get("timeouts") == 0, "system-bench metrics are incomplete")
-        _require(isinstance(metrics.get("recall_at_10"), (int, float)) and not isinstance(metrics["recall_at_10"], bool) and math.isfinite(metrics["recall_at_10"]) and 0 <= metrics["recall_at_10"] <= 1, "system-bench recall is invalid")
+        _require(isinstance(metrics.get("recall_at_10"), (int, float)) and not isinstance(metrics["recall_at_10"], bool) and math.isfinite(metrics["recall_at_10"]) and .90 <= metrics["recall_at_10"] <= 1, "system-bench recall is below the frozen floor")
         _require(isinstance(counters, dict) and all(_uint(counters.get(key)) for key in COUNTERS) and all(counters[key] > 0 for key in POSITIVE_COUNTERS), "system-bench counters are invalid")
         _require(isinstance(timings, dict) and all(_uint(timings.get(key)) for key in TIMINGS) and all(timings[key] > 0 for key in POSITIVE_TIMINGS), "system-bench timing attribution is invalid")
         observed_generation = cell.get("generation")

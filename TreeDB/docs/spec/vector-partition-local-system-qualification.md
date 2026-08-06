@@ -1,7 +1,10 @@
 # Vector-partition local-system qualification
 
-Status: pre-alpha M0 contract for issue #4019. No measurements are claimed by
-this document or its frozen plan.
+Status: pre-alpha M0 contract plus a bounded M2 TreeDB topology-tax baseline
+at head `95c60cbef0b0cb824a74a29e9304784e76745d9d`. The full five-row frozen
+plan remains `planned_no_measurement`; the M2 evidence and scoped claims are
+retained under
+`docs/evidence/vector-partition-local-system-qualification-4019/m2-95c60cbe`.
 
 ## Authoritative inputs
 

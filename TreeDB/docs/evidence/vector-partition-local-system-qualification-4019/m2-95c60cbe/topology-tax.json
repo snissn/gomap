@@ -1,0 +1,359 @@
+{
+  "fixture_truth_identity": {
+    "dataset_checksum": "ecc2224f386932e580e4956f2cfa852140d3134625971c3511bc0d5feddf9b95",
+    "truth_artifact_sha256": "0e9bce9465c9e1fa70c7833364e88c332bc831cfc52c628c90085e1c3068763c"
+  },
+  "inputs": [
+    {
+      "path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/single_daemon_four_group/repeat-1/search.json",
+      "repetition": 1,
+      "sha256": "a85c702bacc2fe98ae70bf7bd994e57faa36581a1d6bdfbb1ee001b896bf1605",
+      "topology": "single_daemon_four_group",
+      "topology_identity_sha256": "5af3f24747c9917857f268b77272af0fa14e1899f25cd43f3d624c577b90ef79"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/single_daemon_four_group/repeat-2/search.json",
+      "repetition": 2,
+      "sha256": "787da76fdaa95d7351fb17c89c046d94e0ffd2d168950d9d217fbae9e2394eff",
+      "topology": "single_daemon_four_group",
+      "topology_identity_sha256": "d0aec7796d3d2488e5b851460fe89d70a8efd067c2e580d20b2fe8332f0e6993"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/single_daemon_four_group/repeat-3/search.json",
+      "repetition": 3,
+      "sha256": "84f0da18d253b4d584f194af03040583fa80c5a4d55624b27b66ecec37c2343b",
+      "topology": "single_daemon_four_group",
+      "topology_identity_sha256": "c9f95500813d61d2041505b90fb08b3712065f39080fe7462d17e8b9651ec996"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-1/search.json",
+      "repetition": 1,
+      "sha256": "28e89df2212bcad2e7fc8e0e2c4c1e84181535be83caa568e4e8b9dd9f1163f8",
+      "topology": "native_four_daemon_four_group",
+      "topology_identity_sha256": "bf67330402e4e67ef441fb8ecd55e46e06b03de44b75f613674a5ab129519c5e"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-2/search.json",
+      "repetition": 2,
+      "sha256": "47e8698ac8c3ccf0ac12486edaf47d6babbd962c4fd27350b7bf7000a1d3473f",
+      "topology": "native_four_daemon_four_group",
+      "topology_identity_sha256": "7b49c874e388474edf4084e2ecc0340c35076f01a507946745bb15e84ce65eee"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-3/search.json",
+      "repetition": 3,
+      "sha256": "c6bfb5dced12ee3de21c5b46732e1d5b69e5aac441a238a525722c83f993ba24",
+      "topology": "native_four_daemon_four_group",
+      "topology_identity_sha256": "111cc5a5958553d9c9e9955bdb9b1970329724f5443f5fc85800028fa93590f6"
+    }
+  ],
+  "result_kind": "vector_partition_topology_tax_v1",
+  "rows": [
+    {
+      "concurrency": 1,
+      "native_over_single_p95": 1.6102575530638863,
+      "native_over_single_qps": 0.7540761257292743,
+      "probes": 2,
+      "topologies": {
+        "native_four_daemon_four_group": {
+          "counters_per_query_median": {
+            "candidate_bytes": 243577.792,
+            "candidates": 3805.903,
+            "edges": 8402.652,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 1897.244,
+            "requests": 1.836,
+            "response_bytes": 1246.016,
+            "retries": 0.0,
+            "rpcs": 1.836,
+            "selected_groups": 1.836,
+            "selected_partitions": 2.0
+          },
+          "p95_nanos_median": 50783124,
+          "qps_median": 32.57240110012621,
+          "recall_at_10_median": 0.9809999999999972,
+          "timing_nanos_per_query_median": {
+            "dedupe": 1875.304,
+            "generation_open": 21560972.576,
+            "merge": 4515.421,
+            "network": 501785.054,
+            "placement": 160471.82,
+            "queue": 24037.727,
+            "read_index_apply": 50706.452,
+            "response": 3310.438,
+            "router_open": 1663.107,
+            "router_search": 98188.256,
+            "rpc": 22687870.351,
+            "shard_search": 560312.981,
+            "total": 22429899.707
+          }
+        },
+        "single_daemon_four_group": {
+          "counters_per_query_median": {
+            "candidate_bytes": 243577.792,
+            "candidates": 3805.903,
+            "edges": 8402.652,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 1897.244,
+            "requests": 1.836,
+            "response_bytes": 1246.016,
+            "retries": 0.0,
+            "rpcs": 1.836,
+            "selected_groups": 1.836,
+            "selected_partitions": 2.0
+          },
+          "p95_nanos_median": 31537268,
+          "qps_median": 43.19510986854958,
+          "recall_at_10_median": 0.9809999999999972,
+          "timing_nanos_per_query_median": {
+            "dedupe": 1810.278,
+            "generation_open": 15257779.514,
+            "merge": 4445.286,
+            "network": 481917.54,
+            "placement": 161250.061,
+            "queue": 24173.663,
+            "read_index_apply": 47336.924,
+            "response": 3247.435,
+            "router_open": 1750.314,
+            "router_search": 98532.816,
+            "rpc": 16366599.709,
+            "shard_search": 594278.18,
+            "total": 16444139.169
+          }
+        }
+      }
+    },
+    {
+      "concurrency": 8,
+      "native_over_single_p95": 1.3800646422485183,
+      "native_over_single_qps": 0.711489227148062,
+      "probes": 2,
+      "topologies": {
+        "native_four_daemon_four_group": {
+          "counters_per_query_median": {
+            "candidate_bytes": 243577.792,
+            "candidates": 3805.903,
+            "edges": 8402.652,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 1897.244,
+            "requests": 1.836,
+            "response_bytes": 1246.016,
+            "retries": 0.0,
+            "rpcs": 1.836,
+            "selected_groups": 1.836,
+            "selected_partitions": 2.0
+          },
+          "p95_nanos_median": 147990132,
+          "qps_median": 71.71864482849585,
+          "recall_at_10_median": 0.9809999999999972,
+          "timing_nanos_per_query_median": {
+            "dedupe": 2056.1,
+            "generation_open": 57721827.854,
+            "merge": 4502.283,
+            "network": 522429.969,
+            "placement": 172837.048,
+            "queue": 24928.748,
+            "read_index_apply": 56780.465,
+            "response": 3476.489,
+            "router_open": 1615.557,
+            "router_search": 109518.267,
+            "rpc": 59008115.65,
+            "shard_search": 608950.526,
+            "total": 73785996.174
+          }
+        },
+        "single_daemon_four_group": {
+          "counters_per_query_median": {
+            "candidate_bytes": 243577.792,
+            "candidates": 3805.903,
+            "edges": 8402.652,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 1897.244,
+            "requests": 1.836,
+            "response_bytes": 1246.016,
+            "retries": 0.0,
+            "rpcs": 1.836,
+            "selected_groups": 1.836,
+            "selected_partitions": 2.0
+          },
+          "p95_nanos_median": 107234203,
+          "qps_median": 100.8007459451963,
+          "recall_at_10_median": 0.9809999999999972,
+          "timing_nanos_per_query_median": {
+            "dedupe": 2102.956,
+            "generation_open": 49354845.557,
+            "merge": 4621.727,
+            "network": 519989.966,
+            "placement": 188903.008,
+            "queue": 29319.105,
+            "read_index_apply": 54898.255,
+            "response": 3851.143,
+            "router_open": 1519.88,
+            "router_search": 113303.19,
+            "rpc": 50716751.599,
+            "shard_search": 769510.989,
+            "total": 53695910.711
+          }
+        }
+      }
+    },
+    {
+      "concurrency": 1,
+      "native_over_single_p95": 0.8511396058477428,
+      "native_over_single_qps": 0.9281266471544575,
+      "probes": 16,
+      "topologies": {
+        "native_four_daemon_four_group": {
+          "counters_per_query_median": {
+            "candidate_bytes": 1818206.272,
+            "candidates": 28409.473,
+            "edges": 67624.979,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 4180.0,
+            "requests": 4.0,
+            "response_bytes": 7232.0,
+            "retries": 0.0,
+            "rpcs": 4.0,
+            "selected_groups": 4.0,
+            "selected_partitions": 16.0
+          },
+          "p95_nanos_median": 41976069,
+          "qps_median": 29.488846736821007,
+          "recall_at_10_median": 0.9828999999999971,
+          "timing_nanos_per_query_median": {
+            "dedupe": 4871.769,
+            "generation_open": 65230139.615,
+            "merge": 5147.455,
+            "network": 1360166.042,
+            "placement": 235983.411,
+            "queue": 73628.265,
+            "read_index_apply": 120511.937,
+            "response": 17007.922,
+            "router_open": 1783.213,
+            "router_search": 102191.279,
+            "rpc": 71051674.49,
+            "shard_search": 4397247.355,
+            "total": 27433991.392
+          }
+        },
+        "single_daemon_four_group": {
+          "counters_per_query_median": {
+            "candidate_bytes": 1818206.272,
+            "candidates": 28409.473,
+            "edges": 67624.979,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 4180.0,
+            "requests": 4.0,
+            "response_bytes": 7232.0,
+            "retries": 0.0,
+            "rpcs": 4.0,
+            "selected_groups": 4.0,
+            "selected_partitions": 16.0
+          },
+          "p95_nanos_median": 49317490,
+          "qps_median": 31.77243841369153,
+          "recall_at_10_median": 0.9828999999999971,
+          "timing_nanos_per_query_median": {
+            "dedupe": 5108.961,
+            "generation_open": 51863518.866,
+            "merge": 5871.25,
+            "network": 1273573.975,
+            "placement": 234360.991,
+            "queue": 81304.198,
+            "read_index_apply": 105368.065,
+            "response": 18302.341,
+            "router_open": 1781.712,
+            "router_search": 103103.975,
+            "rpc": 58058658.522,
+            "shard_search": 4773912.829,
+            "total": 24396654.689
+          }
+        }
+      }
+    },
+    {
+      "concurrency": 8,
+      "native_over_single_p95": 1.2691403367086698,
+      "native_over_single_qps": 0.6441223883437609,
+      "probes": 16,
+      "topologies": {
+        "native_four_daemon_four_group": {
+          "counters_per_query_median": {
+            "candidate_bytes": 1818206.272,
+            "candidates": 28409.473,
+            "edges": 67624.979,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 4180.0,
+            "requests": 4.0,
+            "response_bytes": 7232.0,
+            "retries": 0.0,
+            "rpcs": 4.0,
+            "selected_groups": 4.0,
+            "selected_partitions": 16.0
+          },
+          "p95_nanos_median": 243394721,
+          "qps_median": 47.67648773156586,
+          "recall_at_10_median": 0.9828999999999971,
+          "timing_nanos_per_query_median": {
+            "dedupe": 5678.259,
+            "generation_open": 184611846.122,
+            "merge": 5414.12,
+            "network": 1513789.663,
+            "placement": 251668.697,
+            "queue": 128601.457,
+            "read_index_apply": 145586.819,
+            "response": 17784.266,
+            "router_open": 1761.18,
+            "router_search": 121482.426,
+            "rpc": 191026308.736,
+            "shard_search": 4700751.572,
+            "total": 115576894.049
+          }
+        },
+        "single_daemon_four_group": {
+          "counters_per_query_median": {
+            "candidate_bytes": 1818206.272,
+            "candidates": 28409.473,
+            "edges": 67624.979,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 4180.0,
+            "requests": 4.0,
+            "response_bytes": 7232.0,
+            "retries": 0.0,
+            "rpcs": 4.0,
+            "selected_groups": 4.0,
+            "selected_partitions": 16.0
+          },
+          "p95_nanos_median": 191779202,
+          "qps_median": 74.01774661824275,
+          "recall_at_10_median": 0.9828999999999971,
+          "timing_nanos_per_query_median": {
+            "dedupe": 5696.899,
+            "generation_open": 141826969.271,
+            "merge": 6531.513,
+            "network": 1869053.933,
+            "placement": 288289.828,
+            "queue": 270779.644,
+            "read_index_apply": 244316.224,
+            "response": 31068.431,
+            "router_open": 1720.419,
+            "router_search": 137445.128,
+            "rpc": 150679456.641,
+            "shard_search": 7074318.283,
+            "total": 73941467.491
+          }
+        }
+      }
+    }
+  ],
+  "schema_version": 1,
+  "status": "valid_baseline"
+}
