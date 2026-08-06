@@ -50,6 +50,9 @@ the same digest beside that node. Before loading the fixture or running a cell,
 `system-bench` probes every checked shard listener and requires its live group
 and config identity to match that node, binding every serving endpoint to the
 exact checked database/state roots rather than checking only the public node.
+The topology-tax reducer reconstructs each complete node config from the
+checked topology and rejects any node-config digest mismatch before trusting
+those roots.
 
 Launch each native node with its own `TMPDIR` equal to its configured state
 directory. Retain the topology check and each exclusive ready JSON before
@@ -124,7 +127,9 @@ alternate in-container search path.
 - Retain the generation identity and coordinator stage timings for every TreeDB
   cell. Shard timings are summed work and can exceed client wall time when
   groups execute concurrently; client elapsed and raw request durations remain
-  the topology-tax wall-clock evidence.
+  the topology-tax wall-clock evidence. Because the system client assigns
+  query `i` to worker `i % concurrency`, retained elapsed time must cover the
+  largest sum for any one serialized worker lane.
 
 Milvus uses the official v2.6.20 Standalone compose deployment and PyMilvus
 2.6.16. PostgreSQL 16.14 and pgvector 0.8.6 use the repository's existing

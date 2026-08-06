@@ -29,6 +29,27 @@ def _uint(value: Any, *, positive: bool = False) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= (1 if positive else 0)
 
 
+def _go_json_sha256(value: dict[str, Any]) -> str:
+    raw = json.dumps(value, ensure_ascii=False, separators=(",", ":")).replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029").encode()
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _node_config_identity(value: dict[str, Any], node: dict[str, Any]) -> str:
+    config = {
+        "schema_version": 1, "result_kind": "vector_partition_system_node_config_v1", "assembly": "production_public_v1", "topology": value["topology"],
+        "node_id": node["node_id"], "dataset_directory": value["dataset_directory"], "database_directory": node["database_directory"],
+        "state_directory": node["state_directory"],
+    }
+    if "public_listen" in node:
+        config["public_listen"] = node["public_listen"]
+    config.update({
+        "ready_path": node["ready_path"], "local_groups": node["local_groups"],
+        "endpoints": {key: value["endpoints"][key] for key in sorted(value["endpoints"])},
+        "group_applied_indexes": {key: value["group_applied_indexes"][key] for key in sorted(value["group_applied_indexes"])},
+    })
+    return _go_json_sha256(config)
+
+
 def _topology_identity(value: dict[str, Any], topology: str, want_nodes: int) -> tuple[str, list[str]]:
     expected_keys = {"schema_version", "result_kind", "assembly", "topology", "nodes", "dataset_directory", "endpoints", "group_applied_indexes", "public_route", "m8_loopback", "topology_identity_sha256"}
     _require(set(value) == expected_keys and value.get("schema_version") == 1 and value.get("result_kind") == "vector_partition_system_topology_v1" and value.get("assembly") == "production_public_v1" and value.get("topology") == topology and value.get("public_route") == "vectorpartition.OperationsV1.Search" and value.get("m8_loopback") is False, "system-bench topology artifact structure is invalid")
@@ -53,6 +74,7 @@ def _topology_identity(value: dict[str, Any], topology: str, want_nodes: int) ->
         group_ids = {group["group_id"] for group in groups}
         _require(owned_groups.isdisjoint(group_ids), "system-bench topology group ownership is invalid")
         owned_groups.update(group_ids)
+        _require(node["node_config_sha256"] == _node_config_identity(value, node), "system-bench node config identity digest mismatch")
         canonical_node = {key: node[key] for key in ("node_id", "node_config_sha256", "database_directory", "state_directory", "ready_path")}
         if "public_listen" in node:
             _require(isinstance(node["public_listen"], str) and node["public_listen"], "system-bench topology public endpoint is invalid")
@@ -69,8 +91,7 @@ def _topology_identity(value: dict[str, Any], topology: str, want_nodes: int) ->
         "group_applied_indexes": {key: applied[key] for key in sorted(applied)}, "public_route": "vectorpartition.OperationsV1.Search", "m8_loopback": False,
         "topology_identity_sha256": "",
     }
-    raw = json.dumps(canonical, ensure_ascii=False, separators=(",", ":")).replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029").encode()
-    return hashlib.sha256(raw).hexdigest(), database_roots
+    return _go_json_sha256(canonical), database_roots
 
 
 def validate_run(value: dict[str, Any], topology: str) -> None:
@@ -97,7 +118,8 @@ def validate_run(value: dict[str, Any], topology: str) -> None:
         samples, elapsed = cell.get("total_nanos"), cell.get("elapsed_nanos")
         _require(isinstance(samples, list) and len(samples) == 1000 and all(_uint(sample, positive=True) for sample in samples), "system-bench raw samples are invalid")
         workers = cell["concurrency"]
-        _require(_uint(elapsed, positive=True) and elapsed >= max(samples) and elapsed >= (sum(samples) + workers - 1) // workers, "system-bench elapsed time is invalid")
+        worker_elapsed = max(sum(samples[worker::workers]) for worker in range(workers))
+        _require(_uint(elapsed, positive=True) and elapsed >= worker_elapsed, "system-bench elapsed time is invalid")
         _require((metrics.get("p50_nanos"), metrics.get("p95_nanos"), metrics.get("p99_nanos")) == (_percentile(samples, 50), _percentile(samples, 95), _percentile(samples, 99)), "system-bench percentiles changed")
         _require(math.isclose(metrics.get("qps", 0), 1_000_000_000_000 / elapsed, rel_tol=1e-12), "system-bench QPS changed")
 

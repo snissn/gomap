@@ -14,6 +14,22 @@ from topology_tax import summarize
 
 
 class TopologyTaxTest(unittest.TestCase):
+    @staticmethod
+    def node_config_sha256(topology: dict, node: dict) -> str:
+        config = {
+            "schema_version": 1, "result_kind": "vector_partition_system_node_config_v1", "assembly": "production_public_v1", "topology": topology["topology"],
+            "node_id": node["node_id"], "dataset_directory": topology["dataset_directory"], "database_directory": node["database_directory"],
+            "state_directory": node["state_directory"],
+        }
+        if "public_listen" in node:
+            config["public_listen"] = node["public_listen"]
+        config.update({
+            "ready_path": node["ready_path"], "local_groups": node["local_groups"],
+            "endpoints": {key: topology["endpoints"][key] for key in sorted(topology["endpoints"])},
+            "group_applied_indexes": {key: topology["group_applied_indexes"][key] for key in sorted(topology["group_applied_indexes"])},
+        })
+        return hashlib.sha256(json.dumps(config, separators=(",", ":")).encode()).hexdigest()
+
     def run_value(self, topology: str) -> dict:
         cells = []
         for probes in (2, 16):
@@ -43,7 +59,7 @@ class TopologyTaxTest(unittest.TestCase):
                 for node in range(node_count):
                     owned = range(4) if node_count == 1 else (node,)
                     node_value = {
-                        "node_id": f"node-{node}", "node_config_sha256": f"{topology_index * 12 + repetition * 4 + node + 1:064x}",
+                        "node_id": f"node-{node}", "node_config_sha256": "",
                         "database_directory": str(run_root / f"database-{node}"), "state_directory": str(run_root / f"state-{node}"),
                         "ready_path": str(run_root / f"state-{node}/ready.json"),
                     }
@@ -57,6 +73,8 @@ class TopologyTaxTest(unittest.TestCase):
                     "group_applied_indexes": {group: 1 for group in endpoints}, "public_route": "vectorpartition.OperationsV1.Search", "m8_loopback": False,
                     "topology_identity_sha256": "",
                 }
+                for node_value in nodes:
+                    node_value["node_config_sha256"] = self.node_config_sha256(topology_value, node_value)
                 topology_value["topology_identity_sha256"] = hashlib.sha256(json.dumps(topology_value, separators=(",", ":")).encode()).hexdigest()
                 value["topology_identity_sha256"] = topology_value["topology_identity_sha256"]
                 path.write_text(json.dumps(value), encoding="utf-8")
@@ -91,6 +109,7 @@ class TopologyTaxTest(unittest.TestCase):
             first = json.loads(single[0].with_name("topology.json").read_text(encoding="utf-8"))
             repeated = json.loads(single[1].with_name("topology.json").read_text(encoding="utf-8"))
             repeated["nodes"][0]["database_directory"] = first["nodes"][0]["database_directory"]
+            repeated["nodes"][0]["node_config_sha256"] = self.node_config_sha256(repeated, repeated["nodes"][0])
             repeated["topology_identity_sha256"] = ""
             repeated["topology_identity_sha256"] = hashlib.sha256(json.dumps(repeated, separators=(",", ":")).encode()).hexdigest()
             single[1].with_name("topology.json").write_text(json.dumps(repeated), encoding="utf-8")
@@ -109,6 +128,20 @@ class TopologyTaxTest(unittest.TestCase):
             single[1].with_name("topology.json").write_text(json.dumps(topology), encoding="utf-8")
             single[1].write_text(json.dumps(search), encoding="utf-8")
             with self.assertRaisesRegex(ContractError, "identity digest mismatch"):
+                summarize(single, native)
+
+    def test_forged_node_config_roots_reject(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            single, native = self.files(Path(directory))
+            topology = json.loads(single[1].with_name("topology.json").read_text(encoding="utf-8"))
+            search = json.loads(single[1].read_text(encoding="utf-8"))
+            topology["nodes"][0]["database_directory"] += "-forged"
+            topology["topology_identity_sha256"] = ""
+            topology["topology_identity_sha256"] = hashlib.sha256(json.dumps(topology, separators=(",", ":")).encode()).hexdigest()
+            search["topology_identity_sha256"] = topology["topology_identity_sha256"]
+            single[1].with_name("topology.json").write_text(json.dumps(topology), encoding="utf-8")
+            single[1].write_text(json.dumps(search), encoding="utf-8")
+            with self.assertRaisesRegex(ContractError, "node config identity digest mismatch"):
                 summarize(single, native)
 
     def test_changed_generation_or_percentile_rejects(self) -> None:
@@ -134,6 +167,22 @@ class TopologyTaxTest(unittest.TestCase):
             value["cells"][0]["metrics"]["recall_at_10"] = .899
             native[2].write_text(json.dumps(value), encoding="utf-8")
             with self.assertRaisesRegex(ContractError, "below the frozen floor"):
+                summarize(single, native)
+
+    def test_elapsed_shorter_than_serialized_worker_lane_rejects(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            single, native = self.files(Path(directory))
+            value = json.loads(native[2].read_text(encoding="utf-8"))
+            cell = next(cell for cell in value["cells"] if cell["concurrency"] == 8)
+            samples = [100 if index % 8 == 0 else 1 for index in range(1000)]
+            cell["total_nanos"] = samples
+            cell["elapsed_nanos"] = (sum(samples) + 7) // 8
+            cell["metrics"]["qps"] = 1_000_000_000_000 / cell["elapsed_nanos"]
+            cell["metrics"]["p50_nanos"] = 1
+            cell["metrics"]["p95_nanos"] = 100
+            cell["metrics"]["p99_nanos"] = 100
+            native[2].write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaisesRegex(ContractError, "elapsed time is invalid"):
                 summarize(single, native)
 
     def test_committed_m2_baseline_reduces_from_raw_rows(self) -> None:
