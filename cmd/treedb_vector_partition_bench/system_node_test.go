@@ -85,6 +85,25 @@ func TestVectorPartitionSystemServerClosesIdleConnectionV1(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionSystemServerClosesBlockedWriterV1(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+	server := &vectorPartitionOperationsTCPServerV1{idleTimeout: 20 * time.Millisecond}
+	done := make(chan struct{})
+	go func() {
+		server.serve(t.Context(), serverConn)
+		close(done)
+	}()
+	if err := writeVectorPartitionSystemFrameV1(clientConn, vectorPartitionOperationsWireRequestV1{SchemaVersion: 2}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("blocked system response occupied its connection slot")
+	}
+}
+
 func TestVectorPartitionSystemClientPreservesWireTimeoutV1(t *testing.T) {
 	server, client := net.Pipe()
 	defer client.Close()

@@ -37,9 +37,15 @@ type VectorPartitionPublicBackendV1 struct {
 	sequence atomic.Uint64
 }
 
+const vectorPartitionPublicRequestSuffixBytesV1 = 1 + 16
+
 func NewVectorPartitionPublicBackendV1(opts VectorPartitionPublicBackendOptionsV1) (*VectorPartitionPublicBackendV1, error) {
 	if opts.Topology == nil || opts.Topology.Coordinator() == nil || opts.Identity.Generation == 0 || opts.Identity.Index.IndexName == "" || len(opts.RequiredGroups) == 0 || opts.RequestBase.RequestID == "" || opts.RequestBase.CancellationID == "" {
 		return nil, errors.New("nativewire: public vector partition backend is incomplete")
+	}
+	maxIdentityBytes := opts.Topology.Coordinator().limits.MaxIdentityBytes
+	if len(opts.RequestBase.RequestID)+vectorPartitionPublicRequestSuffixBytesV1 > maxIdentityBytes || len(opts.RequestBase.CancellationID)+vectorPartitionPublicRequestSuffixBytesV1 > maxIdentityBytes {
+		return nil, errors.New("nativewire: public vector partition request identity exceeds coordinator limit after suffix")
 	}
 	if opts.Builder == nil || opts.Lifecycle.Authority == nil || opts.Lifecycle.Committer == nil || opts.ReadFence == nil {
 		return nil, errors.New("nativewire: public vector partition backend requires lifecycle authority, linearizable read fence, and group builder")

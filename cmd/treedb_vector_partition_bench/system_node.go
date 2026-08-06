@@ -669,6 +669,9 @@ func (s *vectorPartitionOperationsTCPServerV1) serve(ctx context.Context, conn n
 				response.Error = "unsupported system operation"
 			}
 		}
+		if err := conn.SetWriteDeadline(time.Now().Add(s.idleTimeout)); err != nil {
+			return
+		}
 		if err := writeVectorPartitionSystemFrameV1(conn, response); err != nil {
 			return
 		}

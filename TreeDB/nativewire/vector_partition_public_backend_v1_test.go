@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -113,6 +114,16 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 		return operations, backend, topology, base, reads, builder
 	}
 	operations, backend, topology, base, reads, _ := openService(identity)
+	nearLimit := backend.opts
+	maxIdentityBytes := topology.Coordinator().limits.MaxIdentityBytes
+	nearLimit.RequestBase.RequestID = strings.Repeat("r", maxIdentityBytes-vectorPartitionPublicRequestSuffixBytesV1)
+	if _, err := NewVectorPartitionPublicBackendV1(nearLimit); err != nil {
+		t.Fatalf("exact identity limit = %v", err)
+	}
+	nearLimit.RequestBase.RequestID += "r"
+	if _, err := NewVectorPartitionPublicBackendV1(nearLimit); err == nil || !strings.Contains(err.Error(), "exceeds coordinator limit after suffix") {
+		t.Fatalf("oversized suffixed identity = %v", err)
+	}
 	id := public.GenerationIDV1{Index: base.IndexName, Generation: 7}
 	if _, err := operations.Register(ctx, public.GenerationRegistrationV1{GenerationIDV1: id, SourceGeneration: 11, SourceChecksum: 22, SourceSchemaHash: 33, SourceRowCount: 2}); err != nil {
 		t.Fatal(err)
