@@ -381,7 +381,7 @@ func TestVectorPartitionSystemBenchPersistsFailedCellV1(t *testing.T) {
 	runCell := func(context.Context, string, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int) (vectorPartitionSystemBenchCellV1, error) {
 		return vectorPartitionSystemBenchCellV1{Status: "valid", Budget: map[string]int{"probes": 2}, Concurrency: 1, Metrics: vectorPartitionSystemBenchMetricsV1{Queries: 2}}, context.DeadlineExceeded
 	}
-	if err := runVectorPartitionSystemBenchWithCellV1(args, io.Discard, runCell); !errors.Is(err, context.DeadlineExceeded) {
+	if err := runVectorPartitionSystemBenchWithCellV1(args, io.Discard, runCell, nativewire.ProbeVectorPartitionShardEndpointV1); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("system bench failure = %v", err)
 	}
 	var result vectorPartitionSystemBenchResultV1
@@ -397,6 +397,63 @@ func TestVectorPartitionSystemBenchPersistsFailedCellV1(t *testing.T) {
 	}
 	if result.Topology != "single_daemon_four_group" || result.TopologyIdentitySHA256 == "" {
 		t.Fatalf("retained topology identity = %+v", result)
+	}
+}
+
+func TestVectorPartitionSystemBenchRejectsShardIdentityDriftAroundCellV1(t *testing.T) {
+	dataset, cache := writeFixtureForTest(t, 10, 2, 2), t.TempDir()
+	var truthOut strings.Builder
+	if err := run([]string{"generate-truth-cache", "-dataset", dataset, "-out", cache, "-top-k", "10", "-seed", "1", "-max-vectors", "10", "-max-fixture-bytes", fmt.Sprint(maxFixtureBytes), "-max-exact-truth-visits", "20"}, &truthOut); err != nil {
+		t.Fatal(err)
+	}
+	fields := strings.Fields(truthOut.String())
+	if len(fields) < 2 {
+		t.Fatalf("truth output = %q", truthOut.String())
+	}
+	topologyPath, closeEndpoints := writeVectorPartitionSystemTopologyWithLiveEndpointsTestV1(t, "127.0.0.1:1", dataset)
+	defer closeEndpoints()
+	topology, err := loadVectorPartitionSystemTopologyEvidenceV1(topologyPath, "127.0.0.1:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	drifted, probes := false, 0
+	probe := func(_ context.Context, endpoint string) (nativewire.VectorPartitionShardEndpointIdentityV1, error) {
+		probes++
+		for _, node := range topology.Nodes {
+			for _, group := range node.LocalGroups {
+				if group.Listen == endpoint {
+					identity := node.NodeConfigSHA256
+					if drifted && group.GroupID == "group-a" {
+						identity = strings.Repeat("f", 64)
+					}
+					return nativewire.VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: group.GroupID, InstanceIdentity: identity}, nil
+				}
+			}
+		}
+		return nativewire.VectorPartitionShardEndpointIdentityV1{}, errors.New("unexpected endpoint")
+	}
+	runCell := func(context.Context, string, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int) (vectorPartitionSystemBenchCellV1, error) {
+		drifted = true
+		return vectorPartitionSystemBenchCellV1{Status: "valid", Budget: map[string]int{"probes": 2}, Concurrency: 1}, nil
+	}
+	out := filepath.Join(t.TempDir(), "drifted.json")
+	args := []string{"-endpoint", "127.0.0.1:1", "-topology", topologyPath, "-dataset", dataset, "-truth-cache", cache, "-truth-cache-sha256", strings.TrimPrefix(fields[1], "artifact_sha256="), "-probes", "2", "-concurrency", "1", "-out", out, "-top-k", "10", "-ef-search", "128", "-warmup", "0"}
+	if err := runVectorPartitionSystemBenchWithCellV1(args, io.Discard, runCell, probe); err == nil || !strings.Contains(err.Error(), "live topology after cell") {
+		t.Fatalf("shard identity drift error = %v", err)
+	}
+	if probes != 9 {
+		t.Fatalf("live identity probes = %d, want 9", probes)
+	}
+	var result vectorPartitionSystemBenchResultV1
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Cells) != 1 || result.Cells[0].Status != "failed" {
+		t.Fatalf("retained drift result = %+v", result)
 	}
 }
 
@@ -476,7 +533,7 @@ func TestVectorPartitionSystemBenchRejectsMismatchedTopologyDatasetV1(t *testing
 		return vectorPartitionSystemBenchCellV1{}, nil
 	}
 	args := []string{"-endpoint", "127.0.0.1:1", "-topology", topology, "-dataset", dataset, "-truth-cache", t.TempDir(), "-truth-cache-sha256", strings.Repeat("a", 64), "-probes", "2", "-concurrency", "1", "-out", filepath.Join(t.TempDir(), "result.json")}
-	if err := runVectorPartitionSystemBenchWithCellV1(args, io.Discard, runCell); err == nil || !strings.Contains(err.Error(), "does not match checked topology") {
+	if err := runVectorPartitionSystemBenchWithCellV1(args, io.Discard, runCell, nativewire.ProbeVectorPartitionShardEndpointV1); err == nil || !strings.Contains(err.Error(), "does not match checked topology") {
 		t.Fatalf("mismatched topology dataset error = %v", err)
 	}
 	if called {

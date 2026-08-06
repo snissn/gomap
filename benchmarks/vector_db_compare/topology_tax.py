@@ -29,6 +29,10 @@ def _uint(value: Any, *, positive: bool = False) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= (1 if positive else 0)
 
 
+def _paths_overlap(left: Path, right: Path) -> bool:
+    return left == right or left in right.parents or right in left.parents
+
+
 def _go_json_sha256(value: dict[str, Any]) -> str:
     raw = json.dumps(value, ensure_ascii=False, separators=(",", ":")).replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029").encode()
     return hashlib.sha256(raw).hexdigest()
@@ -82,7 +86,7 @@ def _topology_identity(value: dict[str, Any], topology: str, want_nodes: int) ->
             public_nodes += 1
         canonical_node["local_groups"] = [{"group_id": group["group_id"], "listen": group["listen"]} for group in groups]
         canonical_nodes.append(canonical_node)
-        database_roots.append(node["database_directory"])
+        database_roots.append(str(Path(node["database_directory"]).resolve()))
         node_ids.append(node["node_id"])
     _require(public_nodes == 1 and owned_groups == set(endpoints) and node_ids == sorted(node_ids), "system-bench topology node ordering or ownership is invalid")
     canonical = {
@@ -132,7 +136,7 @@ def summarize(single_paths: list[Path], native_paths: list[Path]) -> dict[str, A
     input_paths: set[Path] = set()
     input_digests: set[str] = set()
     topology_identities: set[str] = set()
-    database_directories: set[str] = set()
+    database_directories: list[Path] = []
     for topology, topology_paths in paths.items():
         runs[topology] = []
         for repetition, path in enumerate(topology_paths, 1):
@@ -147,10 +151,11 @@ def summarize(single_paths: list[Path], native_paths: list[Path]) -> dict[str, A
             topology_artifact = _load(canonical.with_name("topology.json"))
             computed_identity, roots = _topology_identity(topology_artifact, topology, 1 if topology == TOPOLOGIES[0] else 4)
             _require(topology_artifact.get("topology_identity_sha256") == topology_identity == computed_identity, "system-bench topology artifact identity digest mismatch")
-            _require(len(set(roots)) == len(roots), "system-bench topology database roots are invalid")
-            _require(topology_identity not in topology_identities and database_directories.isdisjoint(roots), "topology-tax repetitions must use distinct persistent database roots")
+            canonical_roots = [Path(root) for root in roots]
+            _require(all(not _paths_overlap(root, other) for index, root in enumerate(canonical_roots) for other in canonical_roots[index + 1:]), "system-bench topology database roots are invalid")
+            _require(topology_identity not in topology_identities and all(not _paths_overlap(root, other) for root in canonical_roots for other in database_directories), "topology-tax repetitions must use distinct persistent database roots")
             topology_identities.add(topology_identity)
-            database_directories.update(roots)
+            database_directories.extend(canonical_roots)
             runs[topology].append(value)
             inputs.append({"topology": topology, "repetition": repetition, "path": str(path), "sha256": digest, "topology_identity_sha256": topology_identity})
     identities = {(run["dataset_checksum"], run["truth_artifact_sha256"]) for values in runs.values() for run in values}

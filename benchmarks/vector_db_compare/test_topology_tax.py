@@ -119,6 +119,21 @@ class TopologyTaxTest(unittest.TestCase):
             with self.assertRaisesRegex(ContractError, "distinct persistent database roots"):
                 summarize(single, native)
 
+    def test_nested_persistent_database_root_rejects(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            single, native = self.files(Path(directory))
+            topology = json.loads(native[0].with_name("topology.json").read_text(encoding="utf-8"))
+            topology["nodes"][1]["database_directory"] = str(Path(topology["nodes"][0]["database_directory"]) / "nested")
+            topology["nodes"][1]["node_config_sha256"] = self.node_config_sha256(topology, topology["nodes"][1])
+            topology["topology_identity_sha256"] = ""
+            topology["topology_identity_sha256"] = hashlib.sha256(json.dumps(topology, separators=(",", ":")).encode()).hexdigest()
+            search = json.loads(native[0].read_text(encoding="utf-8"))
+            search["topology_identity_sha256"] = topology["topology_identity_sha256"]
+            native[0].with_name("topology.json").write_text(json.dumps(topology), encoding="utf-8")
+            native[0].write_text(json.dumps(search), encoding="utf-8")
+            with self.assertRaisesRegex(ContractError, "database roots are invalid"):
+                summarize(single, native)
+
     def test_forged_topology_identity_rejects(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             single, native = self.files(Path(directory))

@@ -61,10 +61,10 @@ type vectorPartitionSystemBenchResultV1 struct {
 }
 
 func runVectorPartitionSystemBenchV1(args []string, stdout io.Writer) error {
-	return runVectorPartitionSystemBenchWithCellV1(args, stdout, vectorPartitionSystemBenchCell)
+	return runVectorPartitionSystemBenchWithCellV1(args, stdout, vectorPartitionSystemBenchCell, nativewire.ProbeVectorPartitionShardEndpointV1)
 }
 
-func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, runCell func(context.Context, string, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int) (vectorPartitionSystemBenchCellV1, error)) error {
+func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, runCell func(context.Context, string, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int) (vectorPartitionSystemBenchCellV1, error), probe func(context.Context, string) (nativewire.VectorPartitionShardEndpointIdentityV1, error)) error {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench system-bench", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var endpoint, topologyPath, dataset, truthCache, truthSHA, probeText, concurrencyText, out string
@@ -116,7 +116,7 @@ func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, ru
 	if !m8SHA256V1(publicNodeConfigSHA) {
 		return errors.New("system-bench checked topology public node identity is invalid")
 	}
-	if err := validateVectorPartitionSystemLiveEndpointsV1(context.Background(), topology); err != nil {
+	if err := validateVectorPartitionSystemLiveEndpointsWithProbeV1(context.Background(), topology, probe); err != nil {
 		return fmt.Errorf("system-bench live topology: %w", err)
 	}
 	probes, err := vectorPartitionSystemPositiveListV1(probeText)
@@ -162,7 +162,15 @@ func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, ru
 	defer cancel()
 	for _, probes := range probes {
 		for _, workers := range concurrency {
+			if err := validateVectorPartitionSystemLiveEndpointsWithProbeV1(ctx, topology, probe); err != nil {
+				return fmt.Errorf("system-bench live topology before probes=%d concurrency=%d: %w", probes, workers, err)
+			}
 			cell, runErr := runCell(ctx, endpoint, publicNodeConfigSHA, queries, truth, topK, probes, efSearch, workers, warmup)
+			if runErr == nil {
+				if err := validateVectorPartitionSystemLiveEndpointsWithProbeV1(ctx, topology, probe); err != nil {
+					runErr = fmt.Errorf("live topology after cell: %w", err)
+				}
+			}
 			if runErr != nil {
 				cell.Status = "failed"
 				cell.Error = runErr.Error()
@@ -190,10 +198,6 @@ func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, ru
 	}
 	_, err = fmt.Fprintf(stdout, "result=%s cells=%d\n", out, len(result.Cells))
 	return err
-}
-
-func validateVectorPartitionSystemLiveEndpointsV1(ctx context.Context, topology vectorPartitionSystemTopologyEvidenceV1) error {
-	return validateVectorPartitionSystemLiveEndpointsWithProbeV1(ctx, topology, nativewire.ProbeVectorPartitionShardEndpointV1)
 }
 
 func validateVectorPartitionSystemLiveEndpointsWithProbeV1(ctx context.Context, topology vectorPartitionSystemTopologyEvidenceV1, probe func(context.Context, string) (nativewire.VectorPartitionShardEndpointIdentityV1, error)) error {
