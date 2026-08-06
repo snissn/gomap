@@ -31,27 +31,32 @@ type vectorPartitionSystemBenchMetricsV1 struct {
 }
 
 type vectorPartitionSystemBenchCellV1 struct {
-	Status      string                              `json:"status"`
-	Error       string                              `json:"error,omitempty"`
-	Budget      map[string]int                      `json:"budget"`
-	Concurrency int                                 `json:"concurrency"`
-	Metrics     vectorPartitionSystemBenchMetricsV1 `json:"metrics"`
-	Counters    map[string]uint64                   `json:"counters"`
-	TotalNanos  []uint64                            `json:"total_nanos"`
+	Status       string                              `json:"status"`
+	Error        string                              `json:"error,omitempty"`
+	Budget       map[string]int                      `json:"budget"`
+	Concurrency  int                                 `json:"concurrency"`
+	Generation   public.GenerationIDV1               `json:"generation"`
+	Metrics      vectorPartitionSystemBenchMetricsV1 `json:"metrics"`
+	Counters     map[string]uint64                   `json:"counters"`
+	Timings      map[string]uint64                   `json:"timings"`
+	ElapsedNanos uint64                              `json:"elapsed_nanos"`
+	TotalNanos   []uint64                            `json:"total_nanos"`
 }
 
 type vectorPartitionSystemBenchResultV1 struct {
-	SchemaVersion       int                                `json:"schema_version"`
-	ResultKind          string                             `json:"result_kind"`
-	Endpoint            string                             `json:"endpoint"`
-	DatasetChecksum     string                             `json:"dataset_checksum"`
-	TruthArtifactSHA256 string                             `json:"truth_artifact_sha256"`
-	TopK                int                                `json:"top_k"`
-	EfSearch            int                                `json:"ef_search"`
-	WarmupQueries       int                                `json:"warmup_queries"`
-	StartedAt           time.Time                          `json:"started_at"`
-	CompletedAt         time.Time                          `json:"completed_at"`
-	Cells               []vectorPartitionSystemBenchCellV1 `json:"cells"`
+	SchemaVersion          int                                `json:"schema_version"`
+	ResultKind             string                             `json:"result_kind"`
+	Endpoint               string                             `json:"endpoint"`
+	Topology               string                             `json:"topology"`
+	TopologyIdentitySHA256 string                             `json:"topology_identity_sha256"`
+	DatasetChecksum        string                             `json:"dataset_checksum"`
+	TruthArtifactSHA256    string                             `json:"truth_artifact_sha256"`
+	TopK                   int                                `json:"top_k"`
+	EfSearch               int                                `json:"ef_search"`
+	WarmupQueries          int                                `json:"warmup_queries"`
+	StartedAt              time.Time                          `json:"started_at"`
+	CompletedAt            time.Time                          `json:"completed_at"`
+	Cells                  []vectorPartitionSystemBenchCellV1 `json:"cells"`
 }
 
 func runVectorPartitionSystemBenchV1(args []string, stdout io.Writer) error {
@@ -61,9 +66,10 @@ func runVectorPartitionSystemBenchV1(args []string, stdout io.Writer) error {
 func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, runCell func(context.Context, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int) (vectorPartitionSystemBenchCellV1, error)) error {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench system-bench", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var endpoint, dataset, truthCache, truthSHA, probeText, concurrencyText, out string
+	var endpoint, topologyPath, dataset, truthCache, truthSHA, probeText, concurrencyText, out string
 	var topK, efSearch, warmup int
 	fs.StringVar(&endpoint, "endpoint", "", "production operations TCP endpoint")
+	fs.StringVar(&topologyPath, "topology", "", "checked production topology evidence JSON")
 	fs.StringVar(&dataset, "dataset", "", "fixture manifest directory")
 	fs.StringVar(&truthCache, "truth-cache", "", "trusted truth-cache directory")
 	fs.StringVar(&truthSHA, "truth-cache-sha256", "", "trusted truth-cache artifact SHA256")
@@ -76,8 +82,16 @@ func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, ru
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 || endpoint == "" || dataset == "" || truthCache == "" || truthSHA == "" || probeText == "" || concurrencyText == "" || out == "" || topK != 10 || efSearch < topK || warmup < 0 {
-		return errors.New("system-bench requires bounded endpoint, dataset, truth, probes, concurrency, and output")
+	if fs.NArg() != 0 || endpoint == "" || topologyPath == "" || dataset == "" || truthCache == "" || truthSHA == "" || probeText == "" || concurrencyText == "" || out == "" || topK != 10 || efSearch < topK || warmup < 0 {
+		return errors.New("system-bench requires bounded endpoint, topology, dataset, truth, probes, concurrency, and output")
+	}
+	canonicalTopology, err := m8CanonicalPathV1(topologyPath)
+	if err != nil {
+		return fmt.Errorf("system-bench topology: %w", err)
+	}
+	topology, err := loadVectorPartitionSystemTopologyEvidenceV1(canonicalTopology, endpoint)
+	if err != nil {
+		return fmt.Errorf("system-bench topology: %w", err)
 	}
 	probes, err := vectorPartitionSystemPositiveListV1(probeText)
 	if err != nil {
@@ -117,7 +131,7 @@ func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, ru
 	if err != nil {
 		return fmt.Errorf("system-bench truth: %w", err)
 	}
-	result := vectorPartitionSystemBenchResultV1{SchemaVersion: 1, ResultKind: "vector_partition_system_bench_v1", Endpoint: endpoint, DatasetChecksum: fixture.Checksum, TruthArtifactSHA256: artifactSHA, TopK: topK, EfSearch: efSearch, WarmupQueries: warmup, StartedAt: time.Now().UTC()}
+	result := vectorPartitionSystemBenchResultV1{SchemaVersion: 1, ResultKind: "vector_partition_system_bench_v1", Endpoint: endpoint, Topology: topology.Topology, TopologyIdentitySHA256: topology.TopologyIdentitySHA256, DatasetChecksum: fixture.Checksum, TruthArtifactSHA256: artifactSHA, TopK: topK, EfSearch: efSearch, WarmupQueries: warmup, StartedAt: time.Now().UTC()}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	for _, probes := range probes {
@@ -177,6 +191,7 @@ func vectorPartitionSystemBenchCell(ctx context.Context, endpoint string, querie
 		return cell, errors.New("system-bench status is not ready")
 	}
 	generation := status.Health.Generation
+	cell.Generation = generation
 	request := func(query []float32) public.SearchRequestV1 {
 		return public.SearchRequestV1{
 			Version: 1, Generation: generation, Query: query,
@@ -209,12 +224,16 @@ func vectorPartitionSystemBenchCell(ctx context.Context, endpoint string, querie
 	}
 	var recall float64
 	counters := map[string]uint64{"selected_partitions": 0, "selected_groups": 0, "requests": 0, "rpcs": 0, "retries": 0, "redirects": 0, "candidates": 0, "edges": 0, "query_bytes": 0, "request_bytes": 0, "candidate_bytes": 0, "response_bytes": 0}
+	timings := map[string]uint64{"router_open": 0, "router_search": 0, "placement": 0, "queue": 0, "rpc": 0, "network": 0, "read_index_apply": 0, "generation_open": 0, "shard_search": 0, "response": 0, "dedupe": 0, "merge": 0, "total": 0}
 	for index, outcome := range outcomes {
 		if outcome == nil {
 			return cell, fmt.Errorf("query %d returned no search response", index)
 		}
 		if len(outcome.Neighbors) != topK {
 			return cell, fmt.Errorf("query %d returned %d neighbors, want %d", index, len(outcome.Neighbors), topK)
+		}
+		if outcome.Generation != generation {
+			return cell, fmt.Errorf("query %d returned generation %+v, want %+v", index, outcome.Generation, generation)
 		}
 		got := make([]m8CanonicalResultV1, len(outcome.Neighbors))
 		for i, neighbor := range outcome.Neighbors {
@@ -228,11 +247,17 @@ func vectorPartitionSystemBenchCell(ctx context.Context, endpoint string, querie
 			}
 			counters[key] += value
 		}
+		for key, value := range map[string]time.Duration{"router_open": outcome.Timing.RouterOpen, "router_search": outcome.Timing.RouterSearch, "placement": outcome.Timing.Placement, "queue": outcome.Timing.Queue, "rpc": outcome.Timing.RPC, "network": outcome.Timing.Network, "read_index_apply": outcome.Timing.ReadIndexApply, "generation_open": outcome.Timing.GenerationOpen, "shard_search": outcome.Timing.ShardSearch, "response": outcome.Timing.Response, "dedupe": outcome.Timing.Dedupe, "merge": outcome.Timing.Merge, "total": outcome.Timing.Total} {
+			if value < 0 || math.MaxUint64-timings[key] < uint64(value) {
+				return cell, errors.New("system-bench timing overflow")
+			}
+			timings[key] += uint64(value)
+		}
 	}
 	cell.Metrics.CompletedQueries, cell.Metrics.ResultCount = len(queries), len(queries)*topK
 	cell.Metrics.RecallAt10, cell.Metrics.QPS = recall/float64(len(queries)), float64(len(queries))/elapsed.Seconds()
 	cell.Metrics.P50Nanos, cell.Metrics.P95Nanos, cell.Metrics.P99Nanos = m8PercentileV1(durations, 50), m8PercentileV1(durations, 95), m8PercentileV1(durations, 99)
-	cell.Counters, cell.TotalNanos = counters, durations
+	cell.Counters, cell.Timings, cell.ElapsedNanos, cell.TotalNanos = counters, timings, uint64(elapsed), durations
 	return cell, nil
 }
 

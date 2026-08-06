@@ -67,6 +67,13 @@ class SystemQualificationContractTest(unittest.TestCase):
                                 cell["counters"] = {key: 0 for key in self.plan["artifact_contract"]["tree_db_counters"]}
                                 for key in self.plan["artifact_contract"]["tree_db_positive_counters"]:
                                     cell["counters"][key] = 1
+                                cell["timings"] = {key: 0 for key in self.plan["artifact_contract"]["tree_db_timings"]}
+                                for key in self.plan["artifact_contract"]["tree_db_positive_timings"]:
+                                    cell["timings"][key] = 1
+                                cell["generation"] = {"Index": "embedding_graph", "Generation": 7}
+                                cell["elapsed_nanos"] = 1_000_000_000_000
+                                cell["total_nanos"] = [1, 2, 3] + [3] * 997
+                                cell["metrics"].update({"qps": 1.0, "p50_nanos": 3, "p95_nanos": 3, "p99_nanos": 3})
                             searches.append(cell)
                     repetitions.append(
                         {
@@ -226,6 +233,21 @@ class SystemQualificationContractTest(unittest.TestCase):
         }
         with self.assertRaisesRegex(ContractError, "nonzero TreeDB path proof"):
             validate_result(self.plan, self.plan_sha256, missing_path_proof)
+
+        missing_timing = self.result()
+        missing_timing["rows"][0]["corpora"][0]["repetitions"][0]["searches"][0]["timings"]["shard_search"] = 0
+        with self.assertRaisesRegex(ContractError, "nonzero TreeDB timing attribution"):
+            validate_result(self.plan, self.plan_sha256, missing_timing)
+
+        changed_generation = self.result()
+        changed_generation["rows"][0]["corpora"][0]["repetitions"][0]["searches"][1]["generation"]["Generation"] += 1
+        with self.assertRaisesRegex(ContractError, "changes TreeDB generation identity"):
+            validate_result(self.plan, self.plan_sha256, changed_generation)
+
+        changed_latency = self.result()
+        changed_latency["rows"][0]["corpora"][0]["repetitions"][0]["searches"][0]["metrics"].update({"p50_nanos": 4, "p95_nanos": 4, "p99_nanos": 4})
+        with self.assertRaisesRegex(ContractError, "latency percentiles"):
+            validate_result(self.plan, self.plan_sha256, changed_latency)
 
         shortened = self.result()
         metrics = shortened["rows"][0]["corpora"][0]["repetitions"][0]["searches"][0]["metrics"]

@@ -293,6 +293,54 @@ func validateVectorPartitionSystemTopologyV1(configs []vectorPartitionSystemNode
 	return evidence, nil
 }
 
+func loadVectorPartitionSystemTopologyEvidenceV1(path, endpoint string) (vectorPartitionSystemTopologyEvidenceV1, error) {
+	var evidence vectorPartitionSystemTopologyEvidenceV1
+	raw, err := readBoundedRegularFileV1(path, maxManifestBytes)
+	if err != nil {
+		return evidence, err
+	}
+	if err := json.Unmarshal(raw, &evidence); err != nil {
+		return evidence, fmt.Errorf("topology evidence JSON: %w", err)
+	}
+	if evidence.SchemaVersion != 1 || evidence.ResultKind != vectorPartitionSystemTopologyKindV1 || evidence.Assembly != vectorPartitionSystemAssemblyV1 || evidence.PublicRoute != "vectorpartition.OperationsV1.Search" || evidence.M8Loopback {
+		return evidence, errors.New("topology evidence production identity is invalid")
+	}
+	wantNodes := 4
+	if evidence.Topology == "single_daemon_four_group" {
+		wantNodes = 1
+	} else if evidence.Topology != "native_four_daemon_four_group" && evidence.Topology != "container_four_daemon_four_group" {
+		return evidence, errors.New("topology evidence topology is invalid")
+	}
+	if len(evidence.Nodes) != wantNodes || len(evidence.Endpoints) != 4 {
+		return evidence, errors.New("topology evidence node or group count is invalid")
+	}
+	wantDigest := evidence.TopologyIdentitySHA256
+	evidence.TopologyIdentitySHA256 = ""
+	canonical, err := json.Marshal(evidence)
+	if err != nil {
+		return evidence, err
+	}
+	sum := sha256.Sum256(canonical)
+	evidence.TopologyIdentitySHA256 = hex.EncodeToString(sum[:])
+	if wantDigest != evidence.TopologyIdentitySHA256 {
+		return evidence, errors.New("topology evidence identity digest mismatch")
+	}
+	publicCount := 0
+	for _, node := range evidence.Nodes {
+		if node.PublicListen == "" {
+			continue
+		}
+		publicCount++
+		if !stringsHostPortEquivalentV1(node.PublicListen, endpoint) {
+			return evidence, errors.New("topology evidence public endpoint mismatch")
+		}
+	}
+	if publicCount != 1 {
+		return evidence, errors.New("topology evidence requires exactly one public endpoint")
+	}
+	return evidence, nil
+}
+
 func vectorPartitionSystemNodeConfigSHA256V1(config vectorPartitionSystemNodeConfigV1) (string, error) {
 	raw, err := json.Marshal(config)
 	if err != nil {

@@ -58,7 +58,8 @@ TMPDIR=/absolute/state-a treedb_vector_partition_bench system-node \
   -config /absolute/state-a/node-a.json
 
 treedb_vector_partition_bench system-bench \
-  -endpoint 127.0.0.1:19000 -dataset /absolute/fixture \
+  -endpoint 127.0.0.1:19000 -topology /absolute/evidence/topology.json \
+  -dataset /absolute/fixture \
   -truth-cache /absolute/truth-cache -truth-cache-sha256 <sha256> \
   -probes 1,2,4,8,16 -concurrency 1,8,32,64 -top-k 10 \
   -ef-search 128 -warmup 1000 -out /absolute/evidence/search.json
@@ -114,6 +115,10 @@ alternate in-container search path.
 - Bind the exact source head, clean binary or image identity, topology,
   commands, environment, host, artifact paths, resources, and TreeDB public
   path counters in the machine-readable result.
+- Retain the generation identity and coordinator stage timings for every TreeDB
+  cell. Shard timings are summed work and can exceed client wall time when
+  groups execute concurrently; client elapsed and raw request durations remain
+  the topology-tax wall-clock evidence.
 
 Milvus uses the official v2.6.20 Standalone compose deployment and PyMilvus
 2.6.16. PostgreSQL 16.14 and pgvector 0.8.6 use the repository's existing
