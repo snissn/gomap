@@ -202,7 +202,17 @@ func validateVectorPartitionSystemTopologyV1(configs []vectorPartitionSystemNode
 		return evidence, fmt.Errorf("system topology %q requires %d node configs", first.Topology, wantNodes)
 	}
 	nodes, databases, states := map[string]bool{}, map[string]bool{}, map[string]bool{}
-	readyPaths, listeners, ownedGroups := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	readyPaths, ownedGroups := map[string]bool{}, map[string]bool{}
+	var listeners []string
+	addListener := func(listener string) bool {
+		for _, existing := range listeners {
+			if stringsHostPortEquivalentV1(existing, listener) {
+				return false
+			}
+		}
+		listeners = append(listeners, listener)
+		return true
+	}
 	var persistentRoots []string
 	publicCount := 0
 	for _, config := range configs {
@@ -227,16 +237,15 @@ func validateVectorPartitionSystemTopologyV1(configs []vectorPartitionSystemNode
 		nodes[config.NodeID], databases[config.DatabaseDirectory], states[config.StateDirectory], readyPaths[config.ReadyPath] = true, true, true, true
 		if config.PublicListen != "" {
 			publicCount++
-			if listeners[config.PublicListen] {
+			if !addListener(config.PublicListen) {
 				return evidence, errors.New("system topology listeners must be distinct")
 			}
-			listeners[config.PublicListen] = true
 		}
 		for _, local := range config.LocalGroups {
-			if ownedGroups[local.GroupID] || listeners[local.Listen] || config.Endpoints[local.GroupID] == "" || !stringsHostPortEquivalentV1(config.Endpoints[local.GroupID], local.Listen) {
+			if ownedGroups[local.GroupID] || !addListener(local.Listen) || config.Endpoints[local.GroupID] == "" || !stringsHostPortEquivalentV1(config.Endpoints[local.GroupID], local.Listen) {
 				return evidence, errors.New("system topology group ownership or listener binding is invalid")
 			}
-			ownedGroups[local.GroupID], listeners[local.Listen] = true, true
+			ownedGroups[local.GroupID] = true
 		}
 	}
 	if publicCount != 1 || len(ownedGroups) != len(first.Endpoints) {
@@ -558,7 +567,22 @@ type vectorPartitionOperationsWireResponseV1 struct {
 	SchemaVersion int                        `json:"schema_version"`
 	Health        *public.OperationsHealthV1 `json:"health,omitempty"`
 	Search        *public.SearchResponseV1   `json:"search,omitempty"`
+	ErrorCode     public.ErrorCodeV1         `json:"error_code,omitempty"`
 	Error         string                     `json:"error,omitempty"`
+}
+
+func vectorPartitionOperationsWireErrorCodeV1(err error) public.ErrorCodeV1 {
+	var typed *public.ErrorV1
+	if errors.As(err, &typed) {
+		return typed.Code
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return public.ErrorDeadlineExceededV1
+	}
+	if errors.Is(err, context.Canceled) {
+		return public.ErrorCanceledV1
+	}
+	return public.ErrorFailedV1
 }
 
 type vectorPartitionOperationsTCPServerV1 struct {
@@ -621,14 +645,14 @@ func (s *vectorPartitionOperationsTCPServerV1) serve(ctx context.Context, conn n
 			case "status":
 				health, err := s.operations.Status(ctx)
 				if err != nil {
-					response.Error = err.Error()
+					response.Error, response.ErrorCode = err.Error(), vectorPartitionOperationsWireErrorCodeV1(err)
 				} else {
 					response.Health = &health
 				}
 			case "search":
 				result, err := s.operations.Search(ctx, request.Search)
 				if err != nil {
-					response.Error = err.Error()
+					response.Error, response.ErrorCode = err.Error(), vectorPartitionOperationsWireErrorCodeV1(err)
 				} else {
 					response.Search = &result
 				}
@@ -693,8 +717,18 @@ func (c *vectorPartitionOperationsTCPClientV1) call(request vectorPartitionOpera
 	if err := readVectorPartitionSystemFrameV1(c.r, &response); err != nil {
 		return response, err
 	}
-	if response.SchemaVersion != 1 || response.Error != "" {
-		return response, fmt.Errorf("system operations response: %s", response.Error)
+	if response.SchemaVersion != 1 {
+		return response, fmt.Errorf("system operations response schema %d", response.SchemaVersion)
+	}
+	if response.Error != "" {
+		cause := errors.New(response.Error)
+		switch response.ErrorCode {
+		case public.ErrorDeadlineExceededV1:
+			cause = fmt.Errorf("%w: %s", context.DeadlineExceeded, response.Error)
+		case public.ErrorCanceledV1:
+			cause = fmt.Errorf("%w: %s", context.Canceled, response.Error)
+		}
+		return response, fmt.Errorf("system operations response: %w", &public.ErrorV1{Code: response.ErrorCode, Err: cause})
 	}
 	return response, nil
 }

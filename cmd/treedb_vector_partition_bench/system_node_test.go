@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -81,6 +82,32 @@ func TestVectorPartitionSystemServerClosesIdleConnectionV1(t *testing.T) {
 	var one [1]byte
 	if _, err := conn.Read(one[:]); err == nil {
 		t.Fatal("idle system connection remained open")
+	}
+}
+
+func TestVectorPartitionSystemClientPreservesWireTimeoutV1(t *testing.T) {
+	server, client := net.Pipe()
+	defer client.Close()
+	done := make(chan error, 1)
+	go func() {
+		defer server.Close()
+		var request vectorPartitionOperationsWireRequestV1
+		if err := readVectorPartitionSystemFrameV1(server, &request); err != nil {
+			done <- err
+			return
+		}
+		done <- writeVectorPartitionSystemFrameV1(server, vectorPartitionOperationsWireResponseV1{
+			SchemaVersion: 1, ErrorCode: public.ErrorDeadlineExceededV1, Error: "shard deadline exceeded",
+		})
+	}()
+	wireClient := &vectorPartitionOperationsTCPClientV1{conn: client, r: bufio.NewReader(client)}
+	_, err := wireClient.call(vectorPartitionOperationsWireRequestV1{SchemaVersion: 1, Operation: "search"})
+	var typed *public.ErrorV1
+	if !errors.Is(err, context.DeadlineExceeded) || !errors.As(err, &typed) || typed.Code != public.ErrorDeadlineExceededV1 {
+		t.Fatalf("wire timeout = %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -271,6 +298,11 @@ func TestVectorPartitionSystemTopologyRequiresDistinctProductionRootsV1(t *testi
 	if err := runVectorPartitionSystemCheckTopologyV1([]string{"-configs", strings.Join(configPaths, ","), "-out", out}, io.Discard); err == nil {
 		t.Fatal("topology evidence publication replaced an existing artifact")
 	}
+	configs[0].PublicListen = "0.0.0.0:21001"
+	if _, err := validateVectorPartitionSystemTopologyV1(configs); err == nil || !strings.Contains(err.Error(), "listener") {
+		t.Fatalf("wildcard listener collision error = %v", err)
+	}
+	configs[0].PublicListen = "127.0.0.1:22000"
 	configs[1].DatabaseDirectory = configs[0].DatabaseDirectory
 	if _, err := validateVectorPartitionSystemTopologyV1(configs); err == nil || !strings.Contains(err.Error(), "persistent roots must be distinct") {
 		t.Fatalf("duplicate database root error = %v", err)
