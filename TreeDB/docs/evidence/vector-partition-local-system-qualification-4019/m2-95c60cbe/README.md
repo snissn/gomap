@@ -91,9 +91,11 @@ for later regressions and M3 interpretation, not a release threshold.
 - `m3/` retains the exact build command/time, build report, and schema-v5
   descriptor. `build/` retains the binary SHA and `go version -m` output.
 - `run_m2.py` and `tools/rebind_snapshot/` retain the external runner and
-  snapshot-helper sources. The committed runner includes review-only preflight
-  and failure-cleanup hardening made after measurement; it does not change the
-  commands or retained results. It writes scratch results beneath
+snapshot-helper sources. The committed runner includes review-only preflight
+and failure-cleanup hardening made after measurement; it does not change the
+commands or retained results. The current `system-bench` also fail-closes before
+fixture work unless every shard endpoint reports the node-config digest already
+retained in `topology.json`; the measured hot loop is unchanged. It writes scratch results beneath
   `verified-runs/`; publication copied those files byte-for-byte to the
   committed `runs/` paths bound by `SHA256SUMS`.
 - `tools/rebind_snapshot` is built only inside the scratch root, where its

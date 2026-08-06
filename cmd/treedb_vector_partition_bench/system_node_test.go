@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/nativewire"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
@@ -374,7 +375,8 @@ func TestVectorPartitionSystemBenchPersistsFailedCellV1(t *testing.T) {
 		t.Fatalf("truth output = %q", truthOut.String())
 	}
 	out := filepath.Join(t.TempDir(), "failed.json")
-	topology := writeVectorPartitionSystemTopologyEvidenceTestV1(t, "127.0.0.1:1", dataset)
+	topology, closeEndpoints := writeVectorPartitionSystemTopologyWithLiveEndpointsTestV1(t, "127.0.0.1:1", dataset)
+	defer closeEndpoints()
 	args := []string{"-endpoint", "127.0.0.1:1", "-topology", topology, "-dataset", dataset, "-truth-cache", cache, "-truth-cache-sha256", strings.TrimPrefix(fields[1], "artifact_sha256="), "-probes", "2", "-concurrency", "1", "-out", out, "-top-k", "10", "-ef-search", "128", "-warmup", "0"}
 	runCell := func(context.Context, string, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int) (vectorPartitionSystemBenchCellV1, error) {
 		return vectorPartitionSystemBenchCellV1{Status: "valid", Budget: map[string]int{"probes": 2}, Concurrency: 1, Metrics: vectorPartitionSystemBenchMetricsV1{Queries: 2}}, context.DeadlineExceeded
@@ -418,6 +420,27 @@ func TestVectorPartitionSystemBenchRejectsChangedTopologyEvidenceV1(t *testing.T
 	writeVectorPartitionSystemJSONTestV1(t, path, evidence)
 	if _, err := loadVectorPartitionSystemTopologyEvidenceV1(path, "127.0.0.1:19000"); err == nil || !strings.Contains(err.Error(), "digest mismatch") {
 		t.Fatalf("changed topology digest error = %v", err)
+	}
+}
+
+func TestVectorPartitionSystemBenchRequiresEveryLiveNodeIdentityV1(t *testing.T) {
+	topology := vectorPartitionSystemTopologyEvidenceV1{Nodes: []vectorPartitionSystemTopologyNodeV1{
+		{NodeID: "node-a", NodeConfigSHA256: strings.Repeat("a", 64), LocalGroups: []vectorPartitionSystemLocalGroupV1{{GroupID: "group-a", Listen: "endpoint-a"}}},
+		{NodeID: "node-b", NodeConfigSHA256: strings.Repeat("b", 64), LocalGroups: []vectorPartitionSystemLocalGroupV1{{GroupID: "group-b", Listen: "endpoint-b"}}},
+	}}
+	identities := map[string]nativewire.VectorPartitionShardEndpointIdentityV1{
+		"endpoint-a": {Version: 1, GroupID: "group-a", InstanceIdentity: strings.Repeat("a", 64)},
+		"endpoint-b": {Version: 1, GroupID: "group-b", InstanceIdentity: strings.Repeat("b", 64)},
+	}
+	probe := func(_ context.Context, endpoint string) (nativewire.VectorPartitionShardEndpointIdentityV1, error) {
+		return identities[endpoint], nil
+	}
+	if err := validateVectorPartitionSystemLiveEndpointsWithProbeV1(t.Context(), topology, probe); err != nil {
+		t.Fatal(err)
+	}
+	identities["endpoint-b"] = nativewire.VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: "group-b", InstanceIdentity: strings.Repeat("c", 64)}
+	if err := validateVectorPartitionSystemLiveEndpointsWithProbeV1(t.Context(), topology, probe); err == nil || !strings.Contains(err.Error(), "node-b") || !strings.Contains(err.Error(), "does not match checked topology") {
+		t.Fatalf("mismatched peer identity error = %v", err)
 	}
 }
 
@@ -506,6 +529,21 @@ func TestVectorPartitionSystemNativeFourDaemonProcessLossAndRestartV1(t *testing
 	for _, index := range []int{1, 2, 3, 0} {
 		processes[index] = startVectorPartitionSystemNodeProcessTestV1(t, configs[index], states[index])
 		waitVectorPartitionSystemReadyTestV1(t, ready[index], processes[index])
+	}
+	for index, group := range groups {
+		var config vectorPartitionSystemNodeConfigV1
+		raw, err := os.ReadFile(configs[index])
+		if err != nil || json.Unmarshal(raw, &config) != nil {
+			t.Fatalf("read node config %d: %v", index, err)
+		}
+		configSHA, err := vectorPartitionSystemNodeConfigSHA256V1(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		identity, err := nativewire.ProbeVectorPartitionShardEndpointV1(t.Context(), endpoints[group])
+		if err != nil || identity.GroupID != group || identity.InstanceIdentity != configSHA {
+			t.Fatalf("live endpoint %q identity = %+v, %v", group, identity, err)
+		}
 	}
 	client, err := dialVectorPartitionOperationsV1(t.Context(), publicAddress)
 	if err != nil {
@@ -656,4 +694,52 @@ func writeVectorPartitionSystemTopologyEvidenceTestV1(t *testing.T, endpoint, da
 	path := filepath.Join(root, "topology.json")
 	writeVectorPartitionSystemJSONTestV1(t, path, evidence)
 	return path
+}
+
+func writeVectorPartitionSystemTopologyWithLiveEndpointsTestV1(t *testing.T, endpoint, dataset string) (string, func()) {
+	t.Helper()
+	root := t.TempDir()
+	groups := []string{"group-a", "group-b", "group-c", "group-d"}
+	endpoints := make(map[string]string, len(groups))
+	local := make([]vectorPartitionSystemLocalGroupV1, 0, len(groups))
+	listeners := make([]net.Listener, 0, len(groups))
+	for _, group := range groups {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		listeners = append(listeners, listener)
+		endpoints[group] = listener.Addr().String()
+		local = append(local, vectorPartitionSystemLocalGroupV1{GroupID: group, Listen: listener.Addr().String()})
+	}
+	config := vectorPartitionSystemNodeConfigV1{
+		SchemaVersion: 1, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
+		Topology: "single_daemon_four_group", NodeID: "single", DatasetDirectory: dataset,
+		DatabaseDirectory: filepath.Join(root, "database"), StateDirectory: filepath.Join(root, "state"),
+		ReadyPath: filepath.Join(root, "state", "ready.json"), PublicListen: endpoint, LocalGroups: local, Endpoints: endpoints,
+	}
+	evidence, err := validateVectorPartitionSystemTopologyV1([]vectorPartitionSystemNodeConfigV1{config})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := evidence.Nodes[0].NodeConfigSHA256
+	for index, listener := range listeners {
+		group := groups[index]
+		go func() {
+			for {
+				conn, acceptErr := listener.Accept()
+				if acceptErr != nil {
+					return
+				}
+				go (nativewire.VectorPartitionShardSearchTCPServerV1{EndpointIdentity: nativewire.VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: group, InstanceIdentity: identity}}).ServeConn(context.Background(), conn)
+			}
+		}()
+	}
+	path := filepath.Join(root, "topology.json")
+	writeVectorPartitionSystemJSONTestV1(t, path, evidence)
+	return path, func() {
+		for _, listener := range listeners {
+			_ = listener.Close()
+		}
+	}
 }

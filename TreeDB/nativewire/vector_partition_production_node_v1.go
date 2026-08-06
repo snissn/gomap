@@ -36,6 +36,7 @@ type VectorPartitionProductionNodeOptionsV1 struct {
 	LocalShards         []VectorPartitionProductionNodeShardV1
 	RequestBase         VectorPartitionCoordinatorRequestV1
 	NodeID              string
+	EndpointIdentity    string
 	CoordinatorLimits   VectorPartitionCoordinatorLimitsV1
 	ShardLimits         VectorPartitionShardSearchLimitsV1
 }
@@ -254,7 +255,7 @@ func NewVectorPartitionProductionNodeV1(ctx context.Context, opts VectorPartitio
 		if serviceErr != nil {
 			return nil, serviceErr
 		}
-		shards = append(shards, VectorPartitionProductionShardV1{GroupID: group, Listener: listener, Service: service})
+		shards = append(shards, VectorPartitionProductionShardV1{GroupID: group, Listener: listener, Service: service, EndpointIdentity: opts.EndpointIdentity})
 	}
 	endpoints := make(map[raftcluster.GroupID]string, len(opts.Endpoints))
 	nodeEndpoints := make(map[raftcluster.GroupID]map[raftcluster.NodeID]string, len(opts.Endpoints))

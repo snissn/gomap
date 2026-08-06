@@ -489,15 +489,15 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 		Version: 1, RequestID: "system-public", CancellationID: "system-public-cancel", Metric: nativewire.VectorPartitionShardSearchMetricCosineV1, TopK: 10, PartitionProbes: 2,
 		EfSearch: 128, RouterCandidateBudget: 256, Consistency: nativewire.VectorPartitionShardSearchConsistencySnapshotV1,
 	}
-	node.production, err = nativewire.NewVectorPartitionProductionNodeV1(ctx, nativewire.VectorPartitionProductionNodeOptionsV1{
-		Collection: assets.collection, Manifest: assets.manifest, RouterSource: assets.RouterSource(), AssetSetDigests: assets.assetSetDigests,
-		GroupAppliedIndexes: config.GroupAppliedIndexes, Database: "default", Catalog: "default", Endpoints: config.Endpoints,
-		LocalShards: shards, RequestBase: requestBase, NodeID: config.NodeID,
-	})
+	configSHA, err := vectorPartitionSystemNodeConfigSHA256V1(config)
 	if err != nil {
 		return nil, err
 	}
-	configSHA, err := vectorPartitionSystemNodeConfigSHA256V1(config)
+	node.production, err = nativewire.NewVectorPartitionProductionNodeV1(ctx, nativewire.VectorPartitionProductionNodeOptionsV1{
+		Collection: assets.collection, Manifest: assets.manifest, RouterSource: assets.RouterSource(), AssetSetDigests: assets.assetSetDigests,
+		GroupAppliedIndexes: config.GroupAppliedIndexes, Database: "default", Catalog: "default", Endpoints: config.Endpoints,
+		LocalShards: shards, RequestBase: requestBase, NodeID: config.NodeID, EndpointIdentity: configSHA,
+	})
 	if err != nil {
 		return nil, err
 	}

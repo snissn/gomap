@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/nativewire"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
@@ -115,6 +116,9 @@ func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, ru
 	if !m8SHA256V1(publicNodeConfigSHA) {
 		return errors.New("system-bench checked topology public node identity is invalid")
 	}
+	if err := validateVectorPartitionSystemLiveEndpointsV1(context.Background(), topology); err != nil {
+		return fmt.Errorf("system-bench live topology: %w", err)
+	}
 	probes, err := vectorPartitionSystemPositiveListV1(probeText)
 	if err != nil {
 		return fmt.Errorf("system-bench probes: %w", err)
@@ -186,6 +190,25 @@ func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, ru
 	}
 	_, err = fmt.Fprintf(stdout, "result=%s cells=%d\n", out, len(result.Cells))
 	return err
+}
+
+func validateVectorPartitionSystemLiveEndpointsV1(ctx context.Context, topology vectorPartitionSystemTopologyEvidenceV1) error {
+	return validateVectorPartitionSystemLiveEndpointsWithProbeV1(ctx, topology, nativewire.ProbeVectorPartitionShardEndpointV1)
+}
+
+func validateVectorPartitionSystemLiveEndpointsWithProbeV1(ctx context.Context, topology vectorPartitionSystemTopologyEvidenceV1, probe func(context.Context, string) (nativewire.VectorPartitionShardEndpointIdentityV1, error)) error {
+	for _, node := range topology.Nodes {
+		for _, group := range node.LocalGroups {
+			identity, err := probe(ctx, group.Listen)
+			if err != nil {
+				return fmt.Errorf("node %q group %q: %w", node.NodeID, group.GroupID, err)
+			}
+			if identity.GroupID != group.GroupID || identity.InstanceIdentity != node.NodeConfigSHA256 {
+				return fmt.Errorf("node %q group %q live endpoint identity does not match checked topology", node.NodeID, group.GroupID)
+			}
+		}
+	}
+	return nil
 }
 
 func vectorPartitionSystemBenchCell(ctx context.Context, endpoint, wantNodeConfigSHA string, queries [][]float32, truth [][]m8CanonicalResultV1, topK, probes, efSearch, workers, warmup int) (vectorPartitionSystemBenchCellV1, error) {

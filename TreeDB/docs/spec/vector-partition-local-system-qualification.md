@@ -46,7 +46,10 @@ groups. Each multi-daemon config supplies the same positive
 `group_applied_indexes` map, and its local daemon proves that its production
 Raft applied index has reached the declared floor before readiness. Each ready
 artifact retains `node_config_sha256`; the checked topology evidence carries
-the same digest beside that node, binding readiness to the exact checked set.
+the same digest beside that node. Before loading the fixture or running a cell,
+`system-bench` probes every checked shard listener and requires its live group
+and config identity to match that node, binding every serving endpoint to the
+exact checked database/state roots rather than checking only the public node.
 
 Launch each native node with its own `TMPDIR` equal to its configured state
 directory. Retain the topology check and each exclusive ready JSON before
