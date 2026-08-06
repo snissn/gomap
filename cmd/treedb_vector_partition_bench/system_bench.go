@@ -197,6 +197,19 @@ func validateVectorPartitionSystemLiveEndpointsV1(ctx context.Context, topology 
 }
 
 func validateVectorPartitionSystemLiveEndpointsWithProbeV1(ctx context.Context, topology vectorPartitionSystemTopologyEvidenceV1, probe func(context.Context, string) (nativewire.VectorPartitionShardEndpointIdentityV1, error)) error {
+	ownedGroups := make(map[string]bool, len(topology.Endpoints))
+	for _, node := range topology.Nodes {
+		for _, group := range node.LocalGroups {
+			endpoint, ok := topology.Endpoints[group.GroupID]
+			if !ok || ownedGroups[group.GroupID] || !stringsHostPortEquivalentV1(endpoint, group.Listen) {
+				return errors.New("system-bench checked topology group ownership or listener binding is invalid")
+			}
+			ownedGroups[group.GroupID] = true
+		}
+	}
+	if len(ownedGroups) != len(topology.Endpoints) {
+		return errors.New("system-bench checked topology does not own every endpoint")
+	}
 	for _, node := range topology.Nodes {
 		for _, group := range node.LocalGroups {
 			identity, err := probe(ctx, group.Listen)

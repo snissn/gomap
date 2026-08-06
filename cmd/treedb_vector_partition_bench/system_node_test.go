@@ -425,12 +425,12 @@ func TestVectorPartitionSystemBenchRejectsChangedTopologyEvidenceV1(t *testing.T
 
 func TestVectorPartitionSystemBenchRequiresEveryLiveNodeIdentityV1(t *testing.T) {
 	topology := vectorPartitionSystemTopologyEvidenceV1{Nodes: []vectorPartitionSystemTopologyNodeV1{
-		{NodeID: "node-a", NodeConfigSHA256: strings.Repeat("a", 64), LocalGroups: []vectorPartitionSystemLocalGroupV1{{GroupID: "group-a", Listen: "endpoint-a"}}},
-		{NodeID: "node-b", NodeConfigSHA256: strings.Repeat("b", 64), LocalGroups: []vectorPartitionSystemLocalGroupV1{{GroupID: "group-b", Listen: "endpoint-b"}}},
-	}}
+		{NodeID: "node-a", NodeConfigSHA256: strings.Repeat("a", 64), LocalGroups: []vectorPartitionSystemLocalGroupV1{{GroupID: "group-a", Listen: "127.0.0.1:1"}}},
+		{NodeID: "node-b", NodeConfigSHA256: strings.Repeat("b", 64), LocalGroups: []vectorPartitionSystemLocalGroupV1{{GroupID: "group-b", Listen: "127.0.0.1:2"}}},
+	}, Endpoints: map[string]string{"group-a": "127.0.0.1:1", "group-b": "127.0.0.1:2"}}
 	identities := map[string]nativewire.VectorPartitionShardEndpointIdentityV1{
-		"endpoint-a": {Version: 1, GroupID: "group-a", InstanceIdentity: strings.Repeat("a", 64)},
-		"endpoint-b": {Version: 1, GroupID: "group-b", InstanceIdentity: strings.Repeat("b", 64)},
+		"127.0.0.1:1": {Version: 1, GroupID: "group-a", InstanceIdentity: strings.Repeat("a", 64)},
+		"127.0.0.1:2": {Version: 1, GroupID: "group-b", InstanceIdentity: strings.Repeat("b", 64)},
 	}
 	probe := func(_ context.Context, endpoint string) (nativewire.VectorPartitionShardEndpointIdentityV1, error) {
 		return identities[endpoint], nil
@@ -438,9 +438,32 @@ func TestVectorPartitionSystemBenchRequiresEveryLiveNodeIdentityV1(t *testing.T)
 	if err := validateVectorPartitionSystemLiveEndpointsWithProbeV1(t.Context(), topology, probe); err != nil {
 		t.Fatal(err)
 	}
-	identities["endpoint-b"] = nativewire.VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: "group-b", InstanceIdentity: strings.Repeat("c", 64)}
+	identities["127.0.0.1:2"] = nativewire.VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: "group-b", InstanceIdentity: strings.Repeat("c", 64)}
 	if err := validateVectorPartitionSystemLiveEndpointsWithProbeV1(t.Context(), topology, probe); err == nil || !strings.Contains(err.Error(), "node-b") || !strings.Contains(err.Error(), "does not match checked topology") {
 		t.Fatalf("mismatched peer identity error = %v", err)
+	}
+	identities["127.0.0.1:2"] = nativewire.VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: "group-b", InstanceIdentity: strings.Repeat("b", 64)}
+	for _, test := range []struct {
+		name   string
+		groups []vectorPartitionSystemLocalGroupV1
+	}{
+		{name: "missing", groups: nil},
+		{name: "duplicate", groups: []vectorPartitionSystemLocalGroupV1{{GroupID: "group-a", Listen: "127.0.0.1:1"}}},
+		{name: "wrong_listener", groups: []vectorPartitionSystemLocalGroupV1{{GroupID: "group-b", Listen: "127.0.0.1:1"}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			malformed := topology
+			malformed.Nodes = append([]vectorPartitionSystemTopologyNodeV1(nil), topology.Nodes...)
+			malformed.Nodes[1].LocalGroups = test.groups
+			probes := 0
+			err := validateVectorPartitionSystemLiveEndpointsWithProbeV1(t.Context(), malformed, func(ctx context.Context, endpoint string) (nativewire.VectorPartitionShardEndpointIdentityV1, error) {
+				probes++
+				return probe(ctx, endpoint)
+			})
+			if err == nil || probes != 0 {
+				t.Fatalf("malformed topology error=%v probes=%d", err, probes)
+			}
+		})
 	}
 }
 
