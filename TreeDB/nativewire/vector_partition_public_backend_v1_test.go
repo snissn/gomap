@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -113,6 +114,16 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 		return operations, backend, topology, base, reads, builder
 	}
 	operations, backend, topology, base, reads, _ := openService(identity)
+	nearLimit := backend.opts
+	maxIdentityBytes := topology.Coordinator().limits.MaxIdentityBytes
+	nearLimit.RequestBase.RequestID = strings.Repeat("r", maxIdentityBytes-vectorPartitionPublicRequestSuffixBytesV1)
+	if _, err := NewVectorPartitionPublicBackendV1(nearLimit); err != nil {
+		t.Fatalf("exact identity limit = %v", err)
+	}
+	nearLimit.RequestBase.RequestID += "r"
+	if _, err := NewVectorPartitionPublicBackendV1(nearLimit); err == nil || !strings.Contains(err.Error(), "exceeds coordinator limit after suffix") {
+		t.Fatalf("oversized suffixed identity = %v", err)
+	}
 	id := public.GenerationIDV1{Index: base.IndexName, Generation: 7}
 	if _, err := operations.Register(ctx, public.GenerationRegistrationV1{GenerationIDV1: id, SourceGeneration: 11, SourceChecksum: 22, SourceSchemaHash: 33, SourceRowCount: 2}); err != nil {
 		t.Fatal(err)
@@ -266,7 +277,7 @@ func TestVectorPartitionPublicBackendSearchesProductionTopologyV1(t *testing.T) 
 	if !slices.Equal(response.Neighbors, wantNeighbors) {
 		t.Fatalf("public neighbors = %+v, direct = %+v", response.Neighbors, wantNeighbors)
 	}
-	if want := publicCountersFromCoordinatorTestV1(direct.Counters); response.Counters != want {
+	if want := publicCountersFromCoordinatorTestV1(direct.Counters); !publicCountersMatchWithRequestIdentityV1(response.Counters, want) {
 		t.Fatalf("public counters = %+v, direct = %+v", response.Counters, want)
 	}
 	response.Neighbors[0].ID = "caller-mutated"
@@ -304,7 +315,7 @@ func BenchmarkVectorPartitionPublicServiceOverheadV1(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	if !slices.Equal(viaPublic.Neighbors, publicNeighborsFromCoordinatorTestV1(direct.Neighbors)) || viaPublic.Counters != publicCountersFromCoordinatorTestV1(direct.Counters) {
+	if !slices.Equal(viaPublic.Neighbors, publicNeighborsFromCoordinatorTestV1(direct.Neighbors)) || !publicCountersMatchWithRequestIdentityV1(viaPublic.Counters, publicCountersFromCoordinatorTestV1(direct.Counters)) {
 		b.Fatalf("public/direct parity failed: public=%+v direct=%+v", viaPublic, direct)
 	}
 	if err := parityTopology.Close(); err != nil {
@@ -368,7 +379,7 @@ func BenchmarkVectorPartitionPublicServiceOverheadV1(b *testing.B) {
 		}
 		request := publicSearchRequestTestV1(base)
 		response, err := operations.Search(context.Background(), request)
-		if err != nil || !slices.Equal(response.Neighbors, publicNeighborsFromCoordinatorTestV1(direct.Neighbors)) || response.Counters != publicCountersFromCoordinatorTestV1(direct.Counters) {
+		if err != nil || !slices.Equal(response.Neighbors, publicNeighborsFromCoordinatorTestV1(direct.Neighbors)) || !publicCountersMatchWithRequestIdentityV1(response.Counters, publicCountersFromCoordinatorTestV1(direct.Counters)) {
 			b.Fatalf("operations/direct parity failed: operations=%+v direct=%+v err=%v", response, direct, err)
 		}
 		for i := 0; i < 16; i++ {
@@ -432,4 +443,12 @@ func publicCountersFromCoordinatorTestV1(counters VectorPartitionCoordinatorCoun
 		Candidates: counters.Candidates, Edges: counters.Edges,
 		QueryBytes: counters.QueryBytes, RequestBytes: counters.RequestBytes, CandidateBytes: counters.CandidateBytes, ResponseBytes: counters.ResponseBytes,
 	}
+}
+
+func publicCountersMatchWithRequestIdentityV1(got, want public.SearchCountersV1) bool {
+	if got.RequestBytes < want.RequestBytes {
+		return false
+	}
+	got.RequestBytes = want.RequestBytes
+	return got == want
 }

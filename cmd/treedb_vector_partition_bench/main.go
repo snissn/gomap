@@ -1,6 +1,7 @@
-// treedb_vector_partition_bench is the M0 deterministic oracle and sequential
-// simulation harness. Its partition-local HNSW attribution stage uses real
-// temporary TreeDB column_graph indexes; it does not implement routed Raft.
+// treedb_vector_partition_bench is the pre-alpha deterministic oracle and
+// bounded qualification harness. Its system subcommands use the public
+// OperationsV1 TCP boundary and the production Raft topology; the older M8
+// loopback remains separate and cannot be selected by system-node configs.
 package main
 
 import (
@@ -441,6 +442,18 @@ func benchmarkRuntimeLimits() (int, int64) {
 }
 
 func run(args []string, stdout io.Writer) error {
+	if len(args) > 0 && args[0] == "system-node" {
+		return runVectorPartitionSystemNodeV1(args[1:], stdout)
+	}
+	if len(args) > 0 && args[0] == "system-check-topology" {
+		return runVectorPartitionSystemCheckTopologyV1(args[1:], stdout)
+	}
+	if len(args) > 0 && args[0] == "system-search" {
+		return runVectorPartitionSystemSearchV1(args[1:], stdout)
+	}
+	if len(args) > 0 && args[0] == "system-bench" {
+		return runVectorPartitionSystemBenchV1(args[1:], stdout)
+	}
 	if len(args) > 0 && args[0] == "generate-truth-cache" {
 		return runGenerateTruthCache(args[1:], stdout)
 	}

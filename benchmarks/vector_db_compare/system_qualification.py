@@ -12,7 +12,7 @@ from statistics import median
 from typing import Any
 
 
-FROZEN_PLAN_SEMANTIC_SHA256 = "9afa03cf82f4cfadc00a6e96178b8a634cdb8a5abbdc1a4b745f1a17a7662689"
+FROZEN_PLAN_SEMANTIC_SHA256 = "15e9b88e6be747bd97fe551e6af20096e5d19229682173fda101027cf9eef8d0"
 
 
 class ContractError(ValueError):

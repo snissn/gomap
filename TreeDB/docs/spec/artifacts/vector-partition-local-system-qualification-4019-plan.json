@@ -183,7 +183,7 @@
         "vcs_modified": false,
         "go_version": "go1.26.0",
         "network": "one_fresh_internal_docker_bridge",
-        "volume_policy": "one_fresh_data_volume_per_container"
+        "volume_policy": "one_fresh_host_root_and_unique_in_container_destination_per_container"
       },
       "required_identity_fields": ["binary_sha256", "image_sha256", "source_revision", "vcs_modified", "go_version", "network", "volume_policy", "topology_identity_sha256"],
       "search_budget": "tree_db"

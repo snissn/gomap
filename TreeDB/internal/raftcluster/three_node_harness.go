@@ -6,6 +6,7 @@ package raftcluster
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	hraft "github.com/hashicorp/raft"
+	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
 
@@ -30,7 +32,13 @@ type ThreeNodeHarness struct {
 	root, groupID string
 	nodes         []*threeNodeHarnessNode
 	leader        *threeNodeHarnessNode
+	preferred     NodeID
 	coordinator   *GroupRoutedReadIndexCoordinator
+	leaderMu      sync.Mutex
+}
+
+type threeNodeHarnessPinnedReadCoordinator struct {
+	harness *ThreeNodeHarness
 }
 
 type threeNodeHarnessNode struct {
@@ -156,7 +164,11 @@ func OpenThreeNodeHarnessWithOptions(ctx context.Context, groupID GroupID, opts 
 	if err != nil {
 		return fail(err)
 	}
+	if leader.id != preferred {
+		return fail(fmt.Errorf("initial Raft leader %q does not match preferred %q", leader.id, preferred))
+	}
 	h.leader = leader
+	h.preferred = preferred
 	h.coordinator, err = NewGroupRoutedReadIndexCoordinator([]GroupReadIndexCoordinatorV1{{GroupID: groupID, NodeID: leader.id, ReadIndexProvider: leader.provider, AppliedIndexWaiter: leader.applier}})
 	if err != nil {
 		return fail(err)
@@ -224,7 +236,12 @@ func (h *ThreeNodeHarness) GroupID() GroupID {
 	return GroupID(h.groupID)
 }
 func (h *ThreeNodeHarness) LeaderID() NodeID {
-	if h == nil || h.leader == nil {
+	if h == nil {
+		return ""
+	}
+	h.leaderMu.Lock()
+	defer h.leaderMu.Unlock()
+	if h.leader == nil {
 		return ""
 	}
 	return h.leader.id
@@ -245,7 +262,51 @@ func (h *ThreeNodeHarness) ReadCoordinator() RoutedReadIndexCoordinator {
 	if h == nil {
 		return nil
 	}
-	return h.coordinator
+	return threeNodeHarnessPinnedReadCoordinator{harness: h}
+}
+
+func (c threeNodeHarnessPinnedReadCoordinator) CoordinateRoutedReadIndex(ctx context.Context, target ReadIndexBarrier) (ReadIndexProof, AppliedProgress, error) {
+	if c.harness == nil || c.harness.coordinator == nil {
+		return ReadIndexProof{}, AppliedProgress{}, ErrInvalidSubmitter
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	proof, progress, err := c.harness.coordinator.CoordinateRoutedReadIndex(ctx, target)
+	if !errors.Is(err, ErrNotLeader) {
+		return proof, progress, err
+	}
+	return c.harness.restorePinnedLeaderAndRead(ctx, target)
+}
+
+func (h *ThreeNodeHarness) restorePinnedLeaderAndRead(ctx context.Context, target ReadIndexBarrier) (ReadIndexProof, AppliedProgress, error) {
+	h.leaderMu.Lock()
+	defer h.leaderMu.Unlock()
+	if proof, progress, err := h.coordinator.CoordinateRoutedReadIndex(ctx, target); !errors.Is(err, ErrNotLeader) {
+		return proof, progress, err
+	}
+	var source *threeNodeHarnessNode
+	for _, node := range h.nodes {
+		if node.id != h.preferred && node.transport != nil {
+			source = node
+			break
+		}
+	}
+	if source == nil {
+		return ReadIndexProof{}, AppliedProgress{}, errors.New("three-node Raft harness cannot restore preferred leader")
+	}
+	if err := source.transport.TimeoutNow(hraft.ServerID(h.preferred), hraft.ServerAddress(h.preferred), &hraft.TimeoutNowRequest{RPCHeader: hraft.RPCHeader{ProtocolVersion: hraft.ProtocolVersionMax, ID: []byte(source.id), Addr: []byte(source.id)}}, &hraft.TimeoutNowResponse{}); err != nil {
+		return ReadIndexProof{}, AppliedProgress{}, fmt.Errorf("restore preferred Raft leader %q: %w", h.preferred, err)
+	}
+	leader, err := h.waitLeader(ctx)
+	if err != nil {
+		return ReadIndexProof{}, AppliedProgress{}, err
+	}
+	if leader.id != h.preferred {
+		return ReadIndexProof{}, AppliedProgress{}, fmt.Errorf("restored Raft leader %q does not match preferred %q", leader.id, h.preferred)
+	}
+	h.leader = leader
+	return h.coordinator.CoordinateRoutedReadIndex(ctx, target)
 }
 func (h *ThreeNodeHarness) CommitAndProve(ctx context.Context, entry []byte) (CommitCommandEntryV1Result, error) {
 	if h == nil || h.leader == nil {
@@ -264,6 +325,30 @@ func (h *ThreeNodeHarness) CommitAndProve(ctx context.Context, entry []byte) (Co
 		}
 	}
 	return result, nil
+}
+
+// CommitBenchmarkProofV1 commits one inert, deterministic entry so a bounded
+// integration or benchmark topology can establish production Raft and read
+// evidence without inventing an application command.
+func (h *ThreeNodeHarness) CommitBenchmarkProofV1(ctx context.Context) (CommitCommandEntryV1Result, error) {
+	sections := []iwire.Section{
+		{ID: iwire.SectionCommandHeader, Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: iwire.CommandInsertBatch, Version: 1})},
+		{ID: iwire.SectionIdempotencyKey, Bytes: []byte("three-node-benchmark-proof-v1")},
+		{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, 1)},
+		{ID: iwire.SectionCollectionRef, Bytes: append([]byte{1}, "three_node_benchmark_proof"...)},
+		{ID: iwire.SectionDocumentFormat, Bytes: binary.AppendUvarint(nil, uint64(iwire.DocumentFormatJSON))},
+		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("proof"))},
+		{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, []byte(`{"proof":true}`))},
+	}
+	command, err := iwire.MustV1Registry().ValidateRequestSections(sections)
+	if err != nil {
+		return CommitCommandEntryV1Result{}, err
+	}
+	entry, err := iwire.AppendDeterministicEntry(nil, command)
+	if err != nil {
+		return CommitCommandEntryV1Result{}, err
+	}
+	return h.CommitAndProve(ctx, entry)
 }
 func (h *ThreeNodeHarness) Close() error {
 	if h == nil {
