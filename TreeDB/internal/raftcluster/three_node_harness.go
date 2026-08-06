@@ -6,6 +6,7 @@ package raftcluster
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	hraft "github.com/hashicorp/raft"
+	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
 
@@ -264,6 +266,30 @@ func (h *ThreeNodeHarness) CommitAndProve(ctx context.Context, entry []byte) (Co
 		}
 	}
 	return result, nil
+}
+
+// CommitBenchmarkProofV1 commits one inert, deterministic entry so a bounded
+// integration or benchmark topology can establish production Raft and read
+// evidence without inventing an application command.
+func (h *ThreeNodeHarness) CommitBenchmarkProofV1(ctx context.Context) (CommitCommandEntryV1Result, error) {
+	sections := []iwire.Section{
+		{ID: iwire.SectionCommandHeader, Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: iwire.CommandInsertBatch, Version: 1})},
+		{ID: iwire.SectionIdempotencyKey, Bytes: []byte("three-node-benchmark-proof-v1")},
+		{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, 1)},
+		{ID: iwire.SectionCollectionRef, Bytes: append([]byte{1}, "three_node_benchmark_proof"...)},
+		{ID: iwire.SectionDocumentFormat, Bytes: binary.AppendUvarint(nil, uint64(iwire.DocumentFormatJSON))},
+		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("proof"))},
+		{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, []byte(`{"proof":true}`))},
+	}
+	command, err := iwire.MustV1Registry().ValidateRequestSections(sections)
+	if err != nil {
+		return CommitCommandEntryV1Result{}, err
+	}
+	entry, err := iwire.AppendDeterministicEntry(nil, command)
+	if err != nil {
+		return CommitCommandEntryV1Result{}, err
+	}
+	return h.CommitAndProve(ctx, entry)
 }
 func (h *ThreeNodeHarness) Close() error {
 	if h == nil {

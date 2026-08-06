@@ -1,0 +1,389 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	public "github.com/snissn/gomap/TreeDB/vectorpartition"
+)
+
+func TestVectorPartitionSystemNodeRejectsM8LoopbackAssemblyV1(t *testing.T) {
+	root := t.TempDir()
+	config := vectorPartitionSystemNodeConfigV1{
+		SchemaVersion: 1, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: "m8_loopback", Topology: "single_daemon_four_group", NodeID: "node-0",
+		DatasetDirectory: root, DatabaseDirectory: root, StateDirectory: root, ReadyPath: filepath.Join(root, "ready.json"), PublicListen: "127.0.0.1:1",
+		LocalGroups: []vectorPartitionSystemLocalGroupV1{{GroupID: "group-a", Listen: "127.0.0.1:2"}}, Endpoints: map[string]string{"group-a": "127.0.0.1:2"},
+	}
+	path := filepath.Join(root, "config.json")
+	writeVectorPartitionSystemJSONTestV1(t, path, config)
+	if _, err := loadVectorPartitionSystemNodeConfigV1(path); err == nil || !strings.Contains(err.Error(), "non-production assembly") {
+		t.Fatalf("M8 loopback assembly error = %v", err)
+	}
+}
+
+func TestVectorPartitionSystemNodeProcessHelperV1(t *testing.T) {
+	config := os.Getenv("GOMAP_SYSTEM_NODE_TEST_CONFIG")
+	if config == "" {
+		return
+	}
+	if err := runVectorPartitionSystemNodeV1([]string{"-config", config}, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+}
+
+func TestVectorPartitionSystemNodeSingleDaemonUsesProductionPublicRouteV1(t *testing.T) {
+	requireM8PersistentAssetSupportV1(t)
+	dataset := writeFixtureForTest(t, 64, 8, 8)
+	fixture, err := loadFixture(dataset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vectors, queries64 := fixtureData(fixture)
+	groups := []string{"group-a", "group-b", "group-c", "group-d"}
+	assets, err := newM8ProductionMultiGroupAssetsV1(vectors, groups, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database := assets.dir
+	assets.owned = false
+	if err := assets.Close(); err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(database)
+	state := t.TempDir()
+	t.Setenv("TMPDIR", state)
+	endpoints := make(map[string]string, len(groups))
+	local := make([]vectorPartitionSystemLocalGroupV1, 0, len(groups))
+	for _, group := range groups {
+		address := reserveVectorPartitionSystemTCPAddressTestV1(t)
+		endpoints[group] = address
+		local = append(local, vectorPartitionSystemLocalGroupV1{GroupID: group, Listen: address})
+	}
+	config := vectorPartitionSystemNodeConfigV1{
+		SchemaVersion: 1, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
+		Topology: "single_daemon_four_group", NodeID: "single-0", DatasetDirectory: dataset, DatabaseDirectory: database,
+		StateDirectory: state, PublicListen: "127.0.0.1:0", ReadyPath: filepath.Join(state, "ready.json"), LocalGroups: local, Endpoints: endpoints,
+	}
+	node, err := openVectorPartitionSystemNodeV1(t.Context(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close()
+	if node.ready.PublicRoute != "vectorpartition.OperationsV1.Search" || !node.ready.ProductionTopology || node.ready.M8Loopback || len(node.ready.Groups) != 4 {
+		t.Fatalf("ready evidence = %+v", node.ready)
+	}
+	for _, group := range node.ready.Groups {
+		if !group.ProvesProductionConsensus || group.AppliedIndex == 0 || group.LeaderID == "" {
+			t.Fatalf("group evidence = %+v", group)
+		}
+	}
+	client, err := dialVectorPartitionOperationsV1(t.Context(), node.ready.PublicEndpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	query := make([]float32, len(vectors[0]))
+	for i, value := range vectors[0] {
+		query[i] = float32(value)
+	}
+	response, err := client.call(vectorPartitionOperationsWireRequestV1{SchemaVersion: 1, Operation: "search", Search: public.SearchRequestV1{
+		Version: 1, Generation: public.GenerationIDV1{Index: assets.manifest.IndexName, Generation: assets.manifest.Generation}, Query: query,
+		Metric: public.MetricCosineV1, TopK: 10, Probes: 2, EfSearch: 128, Consistency: public.ConsistencyGenerationSnapshotV1,
+		Limits: public.SearchLimitsV1{RequestBytes: 4 << 20, CandidateBytes: 64 << 20, ResponseBytes: 16 << 20, MergeEntries: 2560}, Deadline: time.Now().Add(30 * time.Second),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Search == nil || len(response.Search.Neighbors) == 0 || len(response.Search.Neighbors) > 10 || response.Search.Counters.SelectedPartitions != 2 || response.Search.Counters.SelectedGroups == 0 || response.Search.Counters.RPCs == 0 || response.Search.Counters.RequestBytes == 0 || response.Search.Counters.ResponseBytes == 0 {
+		t.Fatalf("public production response = %+v", response.Search)
+	}
+	truth, err := m8ExactTruthFixtureV1(vectors, queries64, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queries := make([][]float32, len(queries64))
+	for i := range queries64 {
+		queries[i] = make([]float32, len(queries64[i]))
+		for d := range queries64[i] {
+			queries[i][d] = float32(queries64[i][d])
+		}
+	}
+	cell, err := vectorPartitionSystemBenchCell(t.Context(), node.ready.PublicEndpoint, queries, truth, 4, 4, 128, 2, len(queries))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cell.Status != "valid" || cell.Metrics.CompletedQueries != len(queries) || cell.Metrics.RecallAt10 <= 0 || cell.Counters["selected_partitions"] != uint64(4*len(queries)) || cell.Counters["selected_groups"] == 0 || cell.Counters["query_bytes"] == 0 || cell.Counters["response_bytes"] == 0 || len(cell.TotalNanos) != len(queries) {
+		t.Fatalf("system benchmark cell = %+v", cell)
+	}
+}
+
+func TestVectorPartitionSystemReadyPublicationNoReplaceV1(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ready.json")
+	if err := os.WriteFile(path, []byte("sentinel"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishVectorPartitionSystemNodeReadyV1(path, vectorPartitionSystemNodeReadyV1{SchemaVersion: 1}); err == nil {
+		t.Fatal("ready publication replaced existing evidence")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil || string(raw) != "sentinel" {
+		t.Fatalf("sentinel = %q, %v", raw, err)
+	}
+}
+
+func TestVectorPartitionSystemTopologyRequiresDistinctProductionRootsV1(t *testing.T) {
+	root := t.TempDir()
+	groups := []string{"group-a", "group-b", "group-c", "group-d"}
+	endpoints := map[string]string{}
+	applied := map[string]uint64{}
+	for index, group := range groups {
+		endpoints[group] = fmt.Sprintf("127.0.0.1:%d", 21000+index)
+		applied[group] = 1
+	}
+	configs := make([]vectorPartitionSystemNodeConfigV1, len(groups))
+	for index, group := range groups {
+		configs[index] = vectorPartitionSystemNodeConfigV1{
+			SchemaVersion: 1, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
+			Topology: "native_four_daemon_four_group", NodeID: "node-" + group, DatasetDirectory: filepath.Join(root, "dataset"),
+			DatabaseDirectory: filepath.Join(root, "db-"+group), StateDirectory: filepath.Join(root, "state-"+group),
+			ReadyPath: filepath.Join(root, "state-"+group, "ready.json"), LocalGroups: []vectorPartitionSystemLocalGroupV1{{GroupID: group, Listen: endpoints[group]}},
+			Endpoints: endpoints, GroupAppliedIndexes: applied,
+		}
+	}
+	configs[0].PublicListen = "127.0.0.1:22000"
+	evidence, err := validateVectorPartitionSystemTopologyV1(configs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.TopologyIdentitySHA256 == "" || evidence.PublicRoute != "vectorpartition.OperationsV1.Search" || evidence.M8Loopback || len(evidence.Nodes) != 4 {
+		t.Fatalf("topology evidence = %+v", evidence)
+	}
+	var configPaths []string
+	for index, config := range configs {
+		path := filepath.Join(root, fmt.Sprintf("node-%d.json", index))
+		writeVectorPartitionSystemJSONTestV1(t, path, config)
+		configPaths = append(configPaths, path)
+	}
+	out := filepath.Join(root, "topology.json")
+	if err := runVectorPartitionSystemCheckTopologyV1([]string{"-configs", strings.Join(configPaths, ","), "-out", out}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := os.ReadFile(out); err != nil || !bytes.Contains(raw, []byte(evidence.TopologyIdentitySHA256)) {
+		t.Fatalf("published topology evidence = %q, %v", raw, err)
+	}
+	if err := runVectorPartitionSystemCheckTopologyV1([]string{"-configs", strings.Join(configPaths, ","), "-out", out}, io.Discard); err == nil {
+		t.Fatal("topology evidence publication replaced an existing artifact")
+	}
+	configs[1].DatabaseDirectory = configs[0].DatabaseDirectory
+	if _, err := validateVectorPartitionSystemTopologyV1(configs); err == nil || !strings.Contains(err.Error(), "persistent roots must be distinct") {
+		t.Fatalf("duplicate database root error = %v", err)
+	}
+	configs[1].DatabaseDirectory = filepath.Join(root, "db-group-b")
+	configs[1].StateDirectory = filepath.Join(configs[1].DatabaseDirectory, "state")
+	configs[1].ReadyPath = filepath.Join(configs[1].StateDirectory, "ready.json")
+	if _, err := validateVectorPartitionSystemTopologyV1(configs); err == nil || !strings.Contains(err.Error(), "persistent roots must be disjoint") {
+		t.Fatalf("nested persistent root error = %v", err)
+	}
+	configs[1].StateDirectory = filepath.Join(root, "state-group-b")
+	configs[1].ReadyPath = filepath.Join(configs[1].StateDirectory, "ready.json")
+	configs[1].Assembly = "m8_loopback"
+	if _, err := validateVectorPartitionSystemTopologyV1(configs); err == nil || !strings.Contains(err.Error(), "production identity") {
+		t.Fatalf("M8 topology error = %v", err)
+	}
+}
+
+func TestVectorPartitionSystemNativeFourDaemonProcessLossAndRestartV1(t *testing.T) {
+	requireM8PersistentAssetSupportV1(t)
+	dataset := writeFixtureForTest(t, 64, 8, 8)
+	fixture, err := loadFixture(dataset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vectors, _ := fixtureData(fixture)
+	groups := []string{"group-a", "group-b", "group-c", "group-d"}
+	databases := make([]string, len(groups))
+	var generation uint64
+	for index := range groups {
+		assets, err := newM8ProductionMultiGroupAssetsV1(vectors, groups, 16)
+		if err != nil {
+			t.Fatal(err)
+		}
+		databases[index] = assets.dir
+		if generation == 0 {
+			generation = assets.manifest.Generation
+		} else if assets.manifest.Generation != generation {
+			t.Fatalf("independent M3 generation=%d want %d", assets.manifest.Generation, generation)
+		}
+		assets.owned = false
+		if err := assets.Close(); err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(databases[index])
+	}
+	root := t.TempDir()
+	endpoints := make(map[string]string, len(groups))
+	for _, group := range groups {
+		endpoints[group] = reserveVectorPartitionSystemTCPAddressTestV1(t)
+	}
+	publicAddress := reserveVectorPartitionSystemTCPAddressTestV1(t)
+	applied := map[string]uint64{"group-a": 1, "group-b": 1, "group-c": 1, "group-d": 1}
+	configs := make([]string, len(groups))
+	ready := make([]string, len(groups))
+	states := make([]string, len(groups))
+	for index, group := range groups {
+		states[index] = filepath.Join(root, "state-"+group)
+		ready[index] = filepath.Join(states[index], "ready.json")
+		config := vectorPartitionSystemNodeConfigV1{
+			SchemaVersion: 1, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
+			Topology: "native_four_daemon_four_group", NodeID: "native-" + group, DatasetDirectory: dataset,
+			DatabaseDirectory: databases[index], StateDirectory: states[index], ReadyPath: ready[index],
+			LocalGroups: []vectorPartitionSystemLocalGroupV1{{GroupID: group, Listen: endpoints[group]}}, Endpoints: endpoints,
+			GroupAppliedIndexes: applied,
+		}
+		if index == 0 {
+			config.PublicListen = publicAddress
+		}
+		configs[index] = filepath.Join(states[index], "config.json")
+		if err := os.MkdirAll(states[index], 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeVectorPartitionSystemJSONTestV1(t, configs[index], config)
+	}
+	processes := make([]*vectorPartitionSystemNodeProcessTestV1, len(groups))
+	defer func() {
+		for _, process := range processes {
+			if process != nil {
+				process.stop()
+			}
+		}
+	}()
+	for _, index := range []int{1, 2, 3, 0} {
+		processes[index] = startVectorPartitionSystemNodeProcessTestV1(t, configs[index], states[index])
+		waitVectorPartitionSystemReadyTestV1(t, ready[index], processes[index])
+	}
+	client, err := dialVectorPartitionOperationsV1(t.Context(), publicAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	query := make([]float32, len(vectors[0]))
+	for dimension := range vectors[0] {
+		query[dimension] = float32(vectors[0][dimension])
+	}
+	request := vectorPartitionOperationsWireRequestV1{SchemaVersion: 1, Operation: "search", Search: public.SearchRequestV1{
+		Version: 1, Generation: public.GenerationIDV1{Index: partitionHNSWIndex, Generation: generation}, Query: query,
+		Metric: public.MetricCosineV1, TopK: 4, Probes: 16, EfSearch: 128, Consistency: public.ConsistencyGenerationSnapshotV1,
+		Limits: public.SearchLimitsV1{RequestBytes: 4 << 20, CandidateBytes: 64 << 20, ResponseBytes: 16 << 20, MergeEntries: 1024}, Deadline: time.Now().Add(30 * time.Second),
+	}}
+	if response, err := client.call(request); err != nil || response.Search == nil || len(response.Search.Neighbors) != 4 || response.Search.Counters.SelectedGroups != 4 {
+		t.Fatalf("native four-daemon search = %+v, %v", response.Search, err)
+	}
+	processes[3].stop()
+	processes[3] = nil
+	if response, err := client.call(request); err == nil || response.Search != nil {
+		t.Fatalf("native process loss returned partial result = %+v, %v", response.Search, err)
+	}
+	restartedReady := filepath.Join(states[3], "ready-restarted.json")
+	var restartedConfig vectorPartitionSystemNodeConfigV1
+	raw, err := os.ReadFile(configs[3])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &restartedConfig); err != nil {
+		t.Fatal(err)
+	}
+	restartedConfig.ReadyPath = restartedReady
+	writeVectorPartitionSystemJSONTestV1(t, configs[3], restartedConfig)
+	processes[3] = startVectorPartitionSystemNodeProcessTestV1(t, configs[3], states[3])
+	waitVectorPartitionSystemReadyTestV1(t, restartedReady, processes[3])
+	request.Search.Deadline = time.Now().Add(30 * time.Second)
+	if response, err := client.call(request); err != nil || response.Search == nil || len(response.Search.Neighbors) != 4 {
+		t.Fatalf("native four-daemon search after restart = %+v, %v", response.Search, err)
+	}
+}
+
+type vectorPartitionSystemNodeProcessTestV1 struct {
+	command *exec.Cmd
+	done    chan error
+	stdout  bytes.Buffer
+	stderr  bytes.Buffer
+}
+
+func startVectorPartitionSystemNodeProcessTestV1(t *testing.T, config, state string) *vectorPartitionSystemNodeProcessTestV1 {
+	t.Helper()
+	process := &vectorPartitionSystemNodeProcessTestV1{done: make(chan error, 1)}
+	process.command = exec.Command(os.Args[0], "-test.run=^TestVectorPartitionSystemNodeProcessHelperV1$", "-test.v")
+	process.command.Env = append(os.Environ(), "GOMAP_SYSTEM_NODE_TEST_CONFIG="+config, "TMPDIR="+state)
+	process.command.Stdout, process.command.Stderr = &process.stdout, &process.stderr
+	if err := process.command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	go func() { process.done <- process.command.Wait() }()
+	return process
+}
+
+func (p *vectorPartitionSystemNodeProcessTestV1) stop() {
+	if p == nil || p.command == nil || p.command.Process == nil {
+		return
+	}
+	_ = p.command.Process.Kill()
+	select {
+	case <-p.done:
+	case <-time.After(10 * time.Second):
+	}
+}
+
+func waitVectorPartitionSystemReadyTestV1(t *testing.T, path string, process *vectorPartitionSystemNodeProcessTestV1) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-process.done:
+			process.command = nil
+			t.Fatalf("system node exited before ready at %s: %v\nstdout:\n%s\nstderr:\n%s", path, err, process.stdout.String(), process.stderr.String())
+		default:
+		}
+		if raw, err := os.ReadFile(path); err == nil {
+			var ready vectorPartitionSystemNodeReadyV1
+			if json.Unmarshal(raw, &ready) == nil && ready.ProductionTopology && !ready.M8Loopback {
+				return
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("system node did not become ready at %s", path)
+}
+
+func reserveVectorPartitionSystemTCPAddressTestV1(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return address
+}
+
+func writeVectorPartitionSystemJSONTestV1(t *testing.T, path string, value any) {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}

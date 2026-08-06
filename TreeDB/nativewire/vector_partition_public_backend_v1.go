@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
@@ -32,11 +33,12 @@ type VectorPartitionPublicBackendOptionsV1 struct {
 }
 
 type VectorPartitionPublicBackendV1 struct {
-	opts VectorPartitionPublicBackendOptionsV1
+	opts     VectorPartitionPublicBackendOptionsV1
+	sequence atomic.Uint64
 }
 
 func NewVectorPartitionPublicBackendV1(opts VectorPartitionPublicBackendOptionsV1) (*VectorPartitionPublicBackendV1, error) {
-	if opts.Topology == nil || opts.Topology.Coordinator() == nil || opts.Identity.Generation == 0 || opts.Identity.Index.IndexName == "" || len(opts.RequiredGroups) == 0 {
+	if opts.Topology == nil || opts.Topology.Coordinator() == nil || opts.Identity.Generation == 0 || opts.Identity.Index.IndexName == "" || len(opts.RequiredGroups) == 0 || opts.RequestBase.RequestID == "" || opts.RequestBase.CancellationID == "" {
 		return nil, errors.New("nativewire: public vector partition backend is incomplete")
 	}
 	if opts.Builder == nil || opts.Lifecycle.Authority == nil || opts.Lifecycle.Committer == nil || opts.ReadFence == nil {
@@ -53,6 +55,9 @@ func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionV1(ctx context.Con
 		return public.SearchResponseV1{}, err
 	}
 	r := b.opts.RequestBase
+	sequence := b.sequence.Add(1)
+	r.RequestID = fmt.Sprintf("%s/%016x", r.RequestID, sequence)
+	r.CancellationID = fmt.Sprintf("%s/%016x", r.CancellationID, sequence)
 	r.Version, r.Query, r.IndexName, r.Metric, r.TopK, r.PartitionProbes, r.EfSearch, r.Consistency = request.Version, request.Query, request.Generation.Index, VectorPartitionShardSearchMetricV1(request.Metric), request.TopK, request.Probes, request.EfSearch, VectorPartitionShardSearchConsistencyV1(request.Consistency)
 	r.RequestBytesLimit, r.CandidateBytesLimit, r.ResponseBytesLimit, r.MergeEntriesLimit = request.Limits.RequestBytes, request.Limits.CandidateBytes, request.Limits.ResponseBytes, request.Limits.MergeEntries
 	r.DeadlineUnixNano = 0
