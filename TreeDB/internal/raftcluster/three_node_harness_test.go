@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	hraft "github.com/hashicorp/raft"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
@@ -87,6 +88,40 @@ func TestThreeNodeHarnessPreferredLeadersRotateAcrossGroups(t *testing.T) {
 	}
 	if len(leaders) != 3 {
 		t.Fatalf("leaders=%v want all fixed members", leaders)
+	}
+}
+
+func TestThreeNodeHarnessReadCoordinatorRestoresPreferredLeaderV1(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	harness, err := OpenThreeNodeHarnessWithOptions(ctx, "restored-leader", ThreeNodeHarnessOptions{PreferredLeader: "node-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer harness.Close()
+	if _, err := harness.CommitBenchmarkProofV1(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var source *threeNodeHarnessNode
+	for _, node := range harness.nodes {
+		if node.id == "node-a" {
+			source = node
+			break
+		}
+	}
+	if source == nil {
+		t.Fatal("preferred leader transport is absent")
+	}
+	if err := source.transport.TimeoutNow(hraft.ServerID("node-b"), hraft.ServerAddress("node-b"), &hraft.TimeoutNowRequest{RPCHeader: hraft.RPCHeader{ProtocolVersion: hraft.ProtocolVersionMax, ID: []byte(source.id), Addr: []byte(source.id)}}, &hraft.TimeoutNowResponse{}); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := harness.waitLeader(ctx)
+	if err != nil || changed.id != "node-b" {
+		t.Fatalf("changed leader=%v err=%v", changed, err)
+	}
+	proof, progress, err := harness.ReadCoordinator().CoordinateRoutedReadIndex(ctx, ReadIndexBarrier{NodeID: "node-a", GroupID: harness.GroupID()})
+	if err != nil || proof.NodeID != "node-a" || progress.NodeID != "node-a" || harness.LeaderID() != "node-a" {
+		t.Fatalf("restored read proof=%+v progress=%+v leader=%q err=%v", proof, progress, harness.LeaderID(), err)
 	}
 }
 

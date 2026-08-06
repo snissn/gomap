@@ -32,7 +32,13 @@ type ThreeNodeHarness struct {
 	root, groupID string
 	nodes         []*threeNodeHarnessNode
 	leader        *threeNodeHarnessNode
+	preferred     NodeID
 	coordinator   *GroupRoutedReadIndexCoordinator
+	leaderMu      sync.Mutex
+}
+
+type threeNodeHarnessPinnedReadCoordinator struct {
+	harness *ThreeNodeHarness
 }
 
 type threeNodeHarnessNode struct {
@@ -159,6 +165,7 @@ func OpenThreeNodeHarnessWithOptions(ctx context.Context, groupID GroupID, opts 
 		return fail(err)
 	}
 	h.leader = leader
+	h.preferred = preferred
 	h.coordinator, err = NewGroupRoutedReadIndexCoordinator([]GroupReadIndexCoordinatorV1{{GroupID: groupID, NodeID: leader.id, ReadIndexProvider: leader.provider, AppliedIndexWaiter: leader.applier}})
 	if err != nil {
 		return fail(err)
@@ -226,7 +233,12 @@ func (h *ThreeNodeHarness) GroupID() GroupID {
 	return GroupID(h.groupID)
 }
 func (h *ThreeNodeHarness) LeaderID() NodeID {
-	if h == nil || h.leader == nil {
+	if h == nil {
+		return ""
+	}
+	h.leaderMu.Lock()
+	defer h.leaderMu.Unlock()
+	if h.leader == nil {
 		return ""
 	}
 	return h.leader.id
@@ -247,7 +259,51 @@ func (h *ThreeNodeHarness) ReadCoordinator() RoutedReadIndexCoordinator {
 	if h == nil {
 		return nil
 	}
-	return h.coordinator
+	return threeNodeHarnessPinnedReadCoordinator{harness: h}
+}
+
+func (c threeNodeHarnessPinnedReadCoordinator) CoordinateRoutedReadIndex(ctx context.Context, target ReadIndexBarrier) (ReadIndexProof, AppliedProgress, error) {
+	if c.harness == nil || c.harness.coordinator == nil {
+		return ReadIndexProof{}, AppliedProgress{}, ErrInvalidSubmitter
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	proof, progress, err := c.harness.coordinator.CoordinateRoutedReadIndex(ctx, target)
+	if !errors.Is(err, ErrNotLeader) {
+		return proof, progress, err
+	}
+	return c.harness.restorePinnedLeaderAndRead(ctx, target)
+}
+
+func (h *ThreeNodeHarness) restorePinnedLeaderAndRead(ctx context.Context, target ReadIndexBarrier) (ReadIndexProof, AppliedProgress, error) {
+	h.leaderMu.Lock()
+	defer h.leaderMu.Unlock()
+	if proof, progress, err := h.coordinator.CoordinateRoutedReadIndex(ctx, target); !errors.Is(err, ErrNotLeader) {
+		return proof, progress, err
+	}
+	var source *threeNodeHarnessNode
+	for _, node := range h.nodes {
+		if node.id != h.preferred && node.transport != nil {
+			source = node
+			break
+		}
+	}
+	if source == nil {
+		return ReadIndexProof{}, AppliedProgress{}, errors.New("three-node Raft harness cannot restore preferred leader")
+	}
+	if err := source.transport.TimeoutNow(hraft.ServerID(h.preferred), hraft.ServerAddress(h.preferred), &hraft.TimeoutNowRequest{RPCHeader: hraft.RPCHeader{ProtocolVersion: hraft.ProtocolVersionMax, ID: []byte(source.id), Addr: []byte(source.id)}}, &hraft.TimeoutNowResponse{}); err != nil {
+		return ReadIndexProof{}, AppliedProgress{}, fmt.Errorf("restore preferred Raft leader %q: %w", h.preferred, err)
+	}
+	leader, err := h.waitLeader(ctx)
+	if err != nil {
+		return ReadIndexProof{}, AppliedProgress{}, err
+	}
+	if leader.id != h.preferred {
+		return ReadIndexProof{}, AppliedProgress{}, fmt.Errorf("restored Raft leader %q does not match preferred %q", leader.id, h.preferred)
+	}
+	h.leader = leader
+	return h.coordinator.CoordinateRoutedReadIndex(ctx, target)
 }
 func (h *ThreeNodeHarness) CommitAndProve(ctx context.Context, entry []byte) (CommitCommandEntryV1Result, error) {
 	if h == nil || h.leader == nil {

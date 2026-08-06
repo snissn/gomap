@@ -80,8 +80,11 @@ docker build --network=none \
 
 Create one fresh internal bridge and four fresh persistent roots. Each
 container receives one read-only fixture mount, one distinct read-only retained
-M3 database mount, one distinct writable state mount, `TMPDIR=/state`, one
-local shard listener, and the common container-name endpoint map. Give each
+M3 database mount, and one distinct writable state mount. Both the host source
+and in-container destination are unique per node (for example `/database-a`
+and `/state-a` through `/database-d` and `/state-d`), and each node sets
+`TMPDIR` to its unique configured state destination. This lets the retained
+topology check bind the same distinct paths that each container opens. Give each
 container three CPUs and 6 GiB with swap disabled so the set totals the frozen
 12-CPU/24-GiB envelope. Only the coordinator container publishes the public
 port. Record the image ID/digest, bridge identity, mounts, cgroup limits, ready

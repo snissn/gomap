@@ -248,6 +248,13 @@ func TestVectorPartitionSystemTopologyRequiresDistinctProductionRootsV1(t *testi
 			t.Fatalf("topology node config SHA = %q, want %q, err=%v", node.NodeConfigSHA256, configSHA, err)
 		}
 	}
+	containerConfigs := append([]vectorPartitionSystemNodeConfigV1(nil), configs...)
+	for index := range containerConfigs {
+		containerConfigs[index].Topology = "container_four_daemon_four_group"
+	}
+	if _, err := validateVectorPartitionSystemTopologyV1(containerConfigs); err != nil {
+		t.Fatalf("container topology with unique mount destinations: %v", err)
+	}
 	var configPaths []string
 	for index, config := range configs {
 		path := filepath.Join(root, fmt.Sprintf("node-%d.json", index))
