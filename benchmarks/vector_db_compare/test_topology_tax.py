@@ -33,9 +33,21 @@ class TopologyTaxTest(unittest.TestCase):
         for topology_index, topology in enumerate(("single_daemon_four_group", "native_four_daemon_four_group")):
             for repetition in range(3):
                 value = self.run_value(topology)
-                value["topology_identity_sha256"] = f"{topology_index + repetition + 1:x}" * 64
-                path = root / f"{topology}-{repetition}.json"
+                value["topology_identity_sha256"] = f"{topology_index * 3 + repetition + 1:x}" * 64
+                run_root = root / topology / f"repeat-{repetition + 1}"
+                run_root.mkdir(parents=True)
+                path = run_root / "search.json"
                 path.write_text(json.dumps(value), encoding="utf-8")
+                node_count = 1 if topology_index == 0 else 4
+                topology_value = {
+                    "topology": topology,
+                    "topology_identity_sha256": value["topology_identity_sha256"],
+                    "nodes": [
+                        {"database_directory": str(run_root / f"database-{node}")}
+                        for node in range(node_count)
+                    ],
+                }
+                (run_root / "topology.json").write_text(json.dumps(topology_value), encoding="utf-8")
                 values[topology_index].append(path)
         return values[0], values[1]
 
@@ -58,6 +70,16 @@ class TopologyTaxTest(unittest.TestCase):
             single, native = self.files(Path(directory))
             shutil.copyfile(single[0], single[1])
             with self.assertRaisesRegex(ContractError, "repetition artifacts must be distinct"):
+                summarize(single, native)
+
+    def test_reused_persistent_database_root_rejects(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            single, native = self.files(Path(directory))
+            first = json.loads(single[0].with_name("topology.json").read_text(encoding="utf-8"))
+            repeated = json.loads(single[1].with_name("topology.json").read_text(encoding="utf-8"))
+            repeated["nodes"][0]["database_directory"] = first["nodes"][0]["database_directory"]
+            single[1].with_name("topology.json").write_text(json.dumps(repeated), encoding="utf-8")
+            with self.assertRaisesRegex(ContractError, "distinct persistent database roots"):
                 summarize(single, native)
 
     def test_changed_generation_or_percentile_rejects(self) -> None:

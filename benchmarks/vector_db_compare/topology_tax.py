@@ -65,6 +65,8 @@ def summarize(single_paths: list[Path], native_paths: list[Path]) -> dict[str, A
     inputs: list[dict[str, Any]] = []
     input_paths: set[Path] = set()
     input_digests: set[str] = set()
+    topology_identities: set[str] = set()
+    database_directories: set[str] = set()
     for topology, topology_paths in paths.items():
         runs[topology] = []
         for repetition, path in enumerate(topology_paths, 1):
@@ -75,8 +77,19 @@ def summarize(single_paths: list[Path], native_paths: list[Path]) -> dict[str, A
             input_digests.add(digest)
             value = _load(path)
             validate_run(value, topology)
+            topology_identity = value["topology_identity_sha256"]
+            topology_artifact = _load(canonical.with_name("topology.json"))
+            _require(topology_artifact.get("topology") == topology and topology_artifact.get("topology_identity_sha256") == topology_identity, "system-bench topology artifact mismatch")
+            nodes = topology_artifact.get("nodes")
+            _require(isinstance(nodes, list) and len(nodes) == (1 if topology == TOPOLOGIES[0] else 4), "system-bench topology node set changed")
+            roots = [node.get("database_directory") for node in nodes if isinstance(node, dict)]
+            _require(len(roots) == len(nodes) and all(isinstance(root, str) and root for root in roots), "system-bench topology database roots are invalid")
+            _require(len(set(roots)) == len(roots), "system-bench topology database roots are invalid")
+            _require(topology_identity not in topology_identities and database_directories.isdisjoint(roots), "topology-tax repetitions must use distinct persistent database roots")
+            topology_identities.add(topology_identity)
+            database_directories.update(roots)
             runs[topology].append(value)
-            inputs.append({"topology": topology, "repetition": repetition, "path": str(path), "sha256": digest, "topology_identity_sha256": value["topology_identity_sha256"]})
+            inputs.append({"topology": topology, "repetition": repetition, "path": str(path), "sha256": digest, "topology_identity_sha256": topology_identity})
     identities = {(run["dataset_checksum"], run["truth_artifact_sha256"]) for values in runs.values() for run in values}
     _require(len(identities) == 1, "topology-tax rows do not share fixture and truth identities")
     generations = {json.dumps(cell["generation"], sort_keys=True) for values in runs.values() for run in values for cell in run["cells"]}

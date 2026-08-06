@@ -287,8 +287,8 @@ def validate_result(plan: dict[str, Any], plan_sha256: str, result: dict[str, An
         _require(isinstance(corpus_runs, list) and [value.get("id") for value in corpus_runs] == [value["id"] for value in expected_corpora], f"row {row['id']} lacks both corpora")
         budgets = plan["workload"][contract["search_budget"]]["search_budgets"]
         expected_cells = {(_budget_key(budget), concurrency) for budget in budgets for concurrency in plan["workload"]["concurrency"]}
-        tree_generation = None
         for corpus in corpus_runs:
+            tree_generation = None
             repetitions = corpus.get("repetitions")
             _require(isinstance(repetitions, list) and [value.get("repetition") for value in repetitions] == [1, 2, 3], f"row {row['id']} corpus {corpus['id']} lacks three repetitions")
             for repetition in repetitions:

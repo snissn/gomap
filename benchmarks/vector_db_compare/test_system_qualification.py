@@ -191,6 +191,12 @@ class SystemQualificationContractTest(unittest.TestCase):
             validate_result(self.plan, self.plan_sha256, result, require_complete=True)
 
     def test_search_matrix_and_metrics_fail_closed(self) -> None:
+        corpus_local_generation = self.result()
+        for repetition in corpus_local_generation["rows"][0]["corpora"][1]["repetitions"]:
+            for search in repetition["searches"]:
+                search["generation"]["Generation"] = 8
+        self.assertTrue(validate_result(self.plan, self.plan_sha256, corpus_local_generation, require_complete=True))
+
         missing_cell = self.result()
         missing_cell["rows"][4]["corpora"][0]["repetitions"][0]["searches"].pop()
         with self.assertRaisesRegex(ContractError, "search matrix"):
