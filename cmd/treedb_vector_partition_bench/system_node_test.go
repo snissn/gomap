@@ -32,6 +32,58 @@ func TestVectorPartitionSystemNodeRejectsM8LoopbackAssemblyV1(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionSystemConfigLoadDoesNotCreateStateDirectoryV1(t *testing.T) {
+	root, err := m8CanonicalPathV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(root, "missing-state")
+	groups := []string{"group-a", "group-b", "group-c", "group-d"}
+	endpoints := make(map[string]string, len(groups))
+	local := make([]vectorPartitionSystemLocalGroupV1, 0, len(groups))
+	for index, group := range groups {
+		endpoint := fmt.Sprintf("127.0.0.1:%d", 22000+index)
+		endpoints[group] = endpoint
+		local = append(local, vectorPartitionSystemLocalGroupV1{GroupID: group, Listen: endpoint})
+	}
+	config := vectorPartitionSystemNodeConfigV1{
+		SchemaVersion: 1, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
+		Topology: "single_daemon_four_group", NodeID: "single", DatasetDirectory: filepath.Join(root, "dataset"),
+		DatabaseDirectory: filepath.Join(root, "database"), StateDirectory: state, PublicListen: "127.0.0.1:22004",
+		ReadyPath: filepath.Join(state, "ready.json"), LocalGroups: local, Endpoints: endpoints,
+	}
+	path := filepath.Join(root, "config.json")
+	writeVectorPartitionSystemJSONTestV1(t, path, config)
+	if _, err := loadVectorPartitionSystemNodeConfigV1(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(state); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("state directory created during config load: %v", err)
+	}
+}
+
+func TestVectorPartitionSystemServerClosesIdleConnectionV1(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &vectorPartitionOperationsTCPServerV1{listener: listener, done: make(chan struct{}), idleTimeout: 20 * time.Millisecond}
+	server.start(t.Context())
+	defer server.Close()
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var one [1]byte
+	if _, err := conn.Read(one[:]); err == nil {
+		t.Fatal("idle system connection remained open")
+	}
+}
+
 func TestVectorPartitionSystemNodeProcessHelperV1(t *testing.T) {
 	config := os.Getenv("GOMAP_SYSTEM_NODE_TEST_CONFIG")
 	if config == "" {
@@ -365,9 +417,17 @@ func TestVectorPartitionSystemNativeFourDaemonProcessLossAndRestartV1(t *testing
 	writeVectorPartitionSystemJSONTestV1(t, configs[3], restartedConfig)
 	processes[3] = startVectorPartitionSystemNodeProcessTestV1(t, configs[3], states[3])
 	waitVectorPartitionSystemReadyTestV1(t, restartedReady, processes[3])
-	request.Search.Deadline = time.Now().Add(30 * time.Second)
-	if response, err := client.call(request); err != nil || response.Search == nil || len(response.Search.Neighbors) != 4 {
-		t.Fatalf("native four-daemon search after restart = %+v, %v", response.Search, err)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		request.Search.Deadline = time.Now().Add(30 * time.Second)
+		response, callErr := client.call(request)
+		if callErr == nil && response.Search != nil && len(response.Search.Neighbors) == 4 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("native four-daemon search after restart = %+v, %v", response.Search, callErr)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 

@@ -155,6 +155,13 @@ func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, ru
 func vectorPartitionSystemBenchCell(ctx context.Context, endpoint string, queries [][]float32, truth [][]m8CanonicalResultV1, topK, probes, efSearch, workers, warmup int) (vectorPartitionSystemBenchCellV1, error) {
 	cell := vectorPartitionSystemBenchCellV1{Status: "valid", Budget: map[string]int{"probes": probes}, Concurrency: workers, Metrics: vectorPartitionSystemBenchMetricsV1{Queries: len(queries)}}
 	clients := make([]*vectorPartitionOperationsTCPClientV1, workers)
+	defer func() {
+		for _, client := range clients {
+			if client != nil {
+				_ = client.Close()
+			}
+		}
+	}()
 	for i := range clients {
 		client, err := dialVectorPartitionOperationsV1(ctx, endpoint)
 		if err != nil {
@@ -162,11 +169,6 @@ func vectorPartitionSystemBenchCell(ctx context.Context, endpoint string, querie
 		}
 		clients[i] = client
 	}
-	defer func() {
-		for _, client := range clients {
-			_ = client.Close()
-		}
-	}()
 	status, err := clients[0].call(vectorPartitionOperationsWireRequestV1{SchemaVersion: 1, Operation: "status"})
 	if err != nil {
 		return cell, fmt.Errorf("system-bench status: %w", err)
@@ -208,7 +210,10 @@ func vectorPartitionSystemBenchCell(ctx context.Context, endpoint string, querie
 	var recall float64
 	counters := map[string]uint64{"selected_partitions": 0, "selected_groups": 0, "requests": 0, "rpcs": 0, "retries": 0, "redirects": 0, "candidates": 0, "edges": 0, "query_bytes": 0, "request_bytes": 0, "candidate_bytes": 0, "response_bytes": 0}
 	for index, outcome := range outcomes {
-		if outcome == nil || len(outcome.Neighbors) != topK {
+		if outcome == nil {
+			return cell, fmt.Errorf("query %d returned no search response", index)
+		}
+		if len(outcome.Neighbors) != topK {
 			return cell, fmt.Errorf("query %d returned %d neighbors, want %d", index, len(outcome.Neighbors), topK)
 		}
 		got := make([]m8CanonicalResultV1, len(outcome.Neighbors))

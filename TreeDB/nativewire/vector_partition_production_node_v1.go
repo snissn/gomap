@@ -162,8 +162,11 @@ func NewVectorPartitionProductionNodeV1(ctx context.Context, opts VectorPartitio
 				return nil, proofErr
 			}
 			proof, progress, proofErr := harness.ReadCoordinator().CoordinateRoutedReadIndex(ctx, raftcluster.ReadIndexBarrier{NodeID: harness.LeaderID(), GroupID: group})
-			if proofErr != nil || proof.EvidenceKind != raftcluster.ReadIndexEvidenceProduction || !proof.HasQuorum || progress.Index == 0 {
-				return nil, fmt.Errorf("nativewire: production node group %q lacks production read proof: %v", group, proofErr)
+			if proofErr != nil {
+				return nil, fmt.Errorf("nativewire: production node group %q read proof: %w", group, proofErr)
+			}
+			if proof.EvidenceKind != raftcluster.ReadIndexEvidenceProduction || !proof.HasQuorum || progress.Index == 0 {
+				return nil, fmt.Errorf("nativewire: production node group %q lacks production read proof: kind=%q quorum=%t index=%d", group, proof.EvidenceKind, proof.HasQuorum, progress.Index)
 			}
 			localApplied[group] = progress.Index
 			node.evidence = append(node.evidence, VectorPartitionProductionNodeGroupEvidenceV1{GroupID: string(group), LeaderID: string(harness.LeaderID()), AppliedIndex: progress.Index})

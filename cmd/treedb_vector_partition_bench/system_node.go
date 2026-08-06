@@ -20,6 +20,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -33,6 +34,8 @@ const (
 	vectorPartitionSystemTopologyKindV1   = "vector_partition_system_topology_v1"
 	vectorPartitionSystemAssemblyV1       = "production_public_v1"
 	vectorPartitionSystemWireMaxBytesV1   = 2 << 20
+	vectorPartitionSystemMaxConnectionsV1 = 128
+	vectorPartitionSystemIdleTimeoutV1    = 5 * time.Minute
 )
 
 type vectorPartitionSystemLocalGroupV1 struct {
@@ -362,15 +365,15 @@ func loadVectorPartitionSystemNodeConfigV1(path string) (vectorPartitionSystemNo
 	if config.ReadyPath, pathErr = canonical(config.ReadyPath); pathErr != nil {
 		return config, fmt.Errorf("system node ready path: %w", pathErr)
 	}
-	if err := os.MkdirAll(config.StateDirectory, 0o755); err != nil {
-		return config, err
-	}
 	return config, nil
 }
 
 func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartitionSystemNodeConfigV1) (_ *vectorPartitionSystemNodeV1, err error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := os.MkdirAll(config.StateDirectory, 0o755); err != nil {
+		return nil, err
 	}
 	tempRoot, err := m8CanonicalPathV1(os.TempDir())
 	if err != nil || tempRoot != config.StateDirectory {
@@ -559,12 +562,22 @@ type vectorPartitionOperationsWireResponseV1 struct {
 }
 
 type vectorPartitionOperationsTCPServerV1 struct {
-	operations *public.OperationsV1
-	listener   net.Listener
-	done       chan struct{}
+	operations  *public.OperationsV1
+	listener    net.Listener
+	done        chan struct{}
+	slots       chan struct{}
+	idleTimeout time.Duration
+	connections sync.Map
+	serving     sync.WaitGroup
 }
 
 func (s *vectorPartitionOperationsTCPServerV1) start(ctx context.Context) {
+	if s.slots == nil {
+		s.slots = make(chan struct{}, vectorPartitionSystemMaxConnectionsV1)
+	}
+	if s.idleTimeout <= 0 {
+		s.idleTimeout = vectorPartitionSystemIdleTimeoutV1
+	}
 	go func() {
 		defer close(s.done)
 		for {
@@ -572,7 +585,19 @@ func (s *vectorPartitionOperationsTCPServerV1) start(ctx context.Context) {
 			if err != nil {
 				return
 			}
-			go s.serve(ctx, conn)
+			select {
+			case s.slots <- struct{}{}:
+				s.connections.Store(conn, struct{}{})
+				s.serving.Add(1)
+				go func() {
+					defer s.serving.Done()
+					defer s.connections.Delete(conn)
+					defer func() { <-s.slots }()
+					s.serve(ctx, conn)
+				}()
+			default:
+				_ = conn.Close()
+			}
 		}
 	}()
 }
@@ -581,6 +606,9 @@ func (s *vectorPartitionOperationsTCPServerV1) serve(ctx context.Context, conn n
 	defer conn.Close()
 	reader := bufio.NewReaderSize(conn, 64<<10)
 	for {
+		if err := conn.SetReadDeadline(time.Now().Add(s.idleTimeout)); err != nil {
+			return
+		}
 		var request vectorPartitionOperationsWireRequestV1
 		if err := readVectorPartitionSystemFrameV1(reader, &request); err != nil {
 			return
@@ -624,6 +652,11 @@ func (s *vectorPartitionOperationsTCPServerV1) Close() error {
 	if s.done != nil {
 		<-s.done
 	}
+	s.connections.Range(func(key, _ any) bool {
+		_ = key.(net.Conn).Close()
+		return true
+	})
+	s.serving.Wait()
 	return nil
 }
 
