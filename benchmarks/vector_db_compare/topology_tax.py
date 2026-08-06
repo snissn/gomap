@@ -60,16 +60,23 @@ def validate_run(value: dict[str, Any], topology: str) -> None:
 
 def summarize(single_paths: list[Path], native_paths: list[Path]) -> dict[str, Any]:
     _require(len(single_paths) == len(native_paths) == 3, "topology-tax baseline requires three repetitions per topology")
-    paths = dict(zip(TOPOLOGIES, (single_paths, native_paths)))
+    paths = dict(zip(TOPOLOGIES, (single_paths, native_paths), strict=True))
     runs: dict[str, list[dict[str, Any]]] = {}
     inputs: list[dict[str, Any]] = []
+    input_paths: set[Path] = set()
+    input_digests: set[str] = set()
     for topology, topology_paths in paths.items():
         runs[topology] = []
         for repetition, path in enumerate(topology_paths, 1):
+            canonical = path.resolve(strict=True)
+            digest = _sha256(canonical)
+            _require(canonical not in input_paths and digest not in input_digests, "topology-tax repetition artifacts must be distinct")
+            input_paths.add(canonical)
+            input_digests.add(digest)
             value = _load(path)
             validate_run(value, topology)
             runs[topology].append(value)
-            inputs.append({"topology": topology, "repetition": repetition, "path": str(path), "sha256": _sha256(path), "topology_identity_sha256": value["topology_identity_sha256"]})
+            inputs.append({"topology": topology, "repetition": repetition, "path": str(path), "sha256": digest, "topology_identity_sha256": value["topology_identity_sha256"]})
     identities = {(run["dataset_checksum"], run["truth_artifact_sha256"]) for values in runs.values() for run in values}
     _require(len(identities) == 1, "topology-tax rows do not share fixture and truth identities")
     generations = {json.dumps(cell["generation"], sort_keys=True) for values in runs.values() for run in values for cell in run["cells"]}
@@ -80,10 +87,19 @@ def summarize(single_paths: list[Path], native_paths: list[Path]) -> dict[str, A
             row: dict[str, Any] = {"probes": probes, "concurrency": concurrency, "topologies": {}}
             for topology in TOPOLOGIES:
                 cells = [next(cell for cell in run["cells"] if cell["budget"]["probes"] == probes and cell["concurrency"] == concurrency) for run in runs[topology]]
+                recalls = [cell["metrics"]["recall_at_10"] for cell in cells]
+                qps = [cell["metrics"]["qps"] for cell in cells]
+                p95 = [cell["metrics"]["p95_nanos"] for cell in cells]
                 row["topologies"][topology] = {
-                    "recall_at_10_median": median(cell["metrics"]["recall_at_10"] for cell in cells),
-                    "qps_median": median(cell["metrics"]["qps"] for cell in cells),
-                    "p95_nanos_median": median(cell["metrics"]["p95_nanos"] for cell in cells),
+                    "recall_at_10_min": min(recalls),
+                    "recall_at_10_median": median(recalls),
+                    "recall_at_10_max": max(recalls),
+                    "qps_min": min(qps),
+                    "qps_median": median(qps),
+                    "qps_max": max(qps),
+                    "p95_nanos_min": min(p95),
+                    "p95_nanos_median": median(p95),
+                    "p95_nanos_max": max(p95),
                     "timing_nanos_per_query_median": {key: median(cell["timings"][key] / 1000 for cell in cells) for key in TIMINGS},
                     "counters_per_query_median": {key: median(cell["counters"][key] / 1000 for cell in cells) for key in COUNTERS},
                 }

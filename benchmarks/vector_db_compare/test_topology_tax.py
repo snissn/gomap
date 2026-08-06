@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -32,6 +33,7 @@ class TopologyTaxTest(unittest.TestCase):
         for topology_index, topology in enumerate(("single_daemon_four_group", "native_four_daemon_four_group")):
             for repetition in range(3):
                 value = self.run_value(topology)
+                value["topology_identity_sha256"] = f"{topology_index + repetition + 1:x}" * 64
                 path = root / f"{topology}-{repetition}.json"
                 path.write_text(json.dumps(value), encoding="utf-8")
                 values[topology_index].append(path)
@@ -44,6 +46,19 @@ class TopologyTaxTest(unittest.TestCase):
         self.assertEqual(len(result["inputs"]), 6)
         self.assertEqual(len(result["rows"]), 4)
         self.assertEqual(result["rows"][0]["native_over_single_qps"], 1)
+        self.assertEqual(result["rows"][0]["topologies"]["single_daemon_four_group"]["qps_min"], 1)
+        self.assertEqual(result["rows"][0]["topologies"]["single_daemon_four_group"]["qps_max"], 1)
+
+    def test_reused_repetition_artifacts_reject(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            single, native = self.files(Path(directory))
+            with self.assertRaisesRegex(ContractError, "repetition artifacts must be distinct"):
+                summarize([single[0]] * 3, native)
+        with tempfile.TemporaryDirectory() as directory:
+            single, native = self.files(Path(directory))
+            shutil.copyfile(single[0], single[1])
+            with self.assertRaisesRegex(ContractError, "repetition artifacts must be distinct"):
+                summarize(single, native)
 
     def test_changed_generation_or_percentile_rejects(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

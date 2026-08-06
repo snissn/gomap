@@ -24,6 +24,10 @@ and copied database roots were on the same `/mnt/fast4tb` NVMe filesystem.
 The exact-head M3 graph-overlap asset uses 100,000 vectors, 16 partitions,
 overlap 0.20, source/router caps 100,000/120,000, and seed 4017. It binds the
 pinned KaHIP Python and adapter digests in `m3/vector_partition_variant_v1.json`.
+Its descriptor accurately records that this build exhausted its 20,000
+memberships as deterministic filler (zero useful replicas), so both edge-cut
+counters are zero; this M2 topology-tax baseline makes no graph-cut-benefit
+claim.
 
 ## Method
 
@@ -37,6 +41,9 @@ queries per cell, top-k 10, EF128, and 1,000 warmup queries per cell. The
 reducer requires every cell to complete, recall@10 at least 0.90, exact truth
 and generation identity, coherent raw durations, exact percentile/QPS
 reconstruction, positive stage timing, and zero errors/timeouts.
+The topology config's `group_applied_indexes` are readiness floors. Each
+`ready.json` records the later applied index observed after startup, so those
+values are expected to be equal to or greater than the config floors.
 
 The initial attempt against the older accepted #4027 M3 asset correctly failed
 new resource-identity validation after #4014. The asset was rebuilt once at the
@@ -61,6 +68,12 @@ p2 recall was 0.9810 with 2 selected partitions, 1.836 selected groups/RPCs,
 | p16 c1 | 31.772 | 29.489 | 0.928 | 49.317 | 41.976 | 0.851 |
 | p16 c8 | 74.018 | 47.676 | 0.644 | 191.779 | 243.395 | 1.269 |
 
+`topology-tax.json` retains the minimum and maximum beside every recall, QPS,
+and p95 median; the table stays median-only for readability. Per-shard stage
+timings such as RPC, generation-open, and shard search are summed across the
+selected shards for each query, while `total` is coordinator wall time.
+Consequently, summed stage work may exceed `total` when shards run concurrently.
+
 The topology tax is material at c8 and is not hidden as parity. The retained
 stage evidence attributes most of the delta to generation-open/RPC work. For
 p2 c1, median generation-open time was 15.258 ms/query single versus 21.561
@@ -77,8 +90,15 @@ for later regressions and M3 interpretation, not a release threshold.
 - `inputs/` retains the fixture manifest and canonical truth cache.
 - `m3/` retains the exact build command/time, build report, and schema-v5
   descriptor. `build/` retains the binary SHA and `go version -m` output.
-- `run_m2.py` and `tools/rebind_snapshot/` are the exact external runner and
-  snapshot helper sources used for this baseline.
+- `run_m2.py` and `tools/rebind_snapshot/` retain the external runner and
+  snapshot-helper sources. The committed runner includes review-only preflight
+  and failure-cleanup hardening made after measurement; it does not change the
+  commands or retained results. It writes scratch results beneath
+  `verified-runs/`; publication copied those files byte-for-byte to the
+  committed `runs/` paths bound by `SHA256SUMS`.
+- `tools/rebind_snapshot` is built only inside the scratch root, where its
+  `../../source` replacement resolves to the ordinary checkout staged by the
+  runner. It requires the same Go 1.26 driver recorded in `build/`.
 - `SHA256SUMS` binds every retained file except itself.
 
 Validate the committed evidence from the repository root:

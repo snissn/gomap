@@ -71,7 +71,7 @@ def assert_preflight() -> None:
             comm = (entry / "comm").read_text(encoding="utf-8").strip()
         except (FileNotFoundError, ProcessLookupError, PermissionError):
             continue
-        if comm in ("go", "KaHIP") or comm.endswith(".test") or comm == "treedb_vector_partition_bench.vcs":
+        if comm in ("go", "KaHIP") or comm.endswith(".test") or comm == BINARY.name[:15]:
             raise RuntimeError(f"unexpected live heavy process {entry.name} {comm}")
 
 
@@ -129,7 +129,10 @@ def stop_nodes(ready: list[dict[str, object]], processes: list[subprocess.Popen[
     if not ready:
         for process in processes:
             if process.poll() is None:
-                os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
     for value in ready:
         pid = value.get("pid")
         if isinstance(pid, int):
@@ -192,9 +195,16 @@ def run_one(topology: str, repetition: int) -> None:
         if completed.returncode != 0 or not (run / "search.json").is_file():
             raise RuntimeError(f"system benchmark failed rc={completed.returncode}")
     finally:
-        stop_nodes(ready, processes)
-        for file in files:
-            file.close()  # type: ignore[union-attr]
+        primary_failure = sys.exc_info()[0] is not None
+        try:
+            stop_nodes(ready, processes)
+        except Exception as exc:
+            if not primary_failure:
+                raise
+            print(f"M2 cleanup after primary failure: {exc}", file=sys.stderr, flush=True)
+        finally:
+            for file in files:
+                file.close()  # type: ignore[union-attr]
     print(f"complete topology={topology} repetition={repetition} result={run / 'search.json'}", flush=True)
 
 
