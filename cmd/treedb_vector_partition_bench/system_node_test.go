@@ -235,12 +235,16 @@ func TestVectorPartitionSystemNodeSingleDaemonUsesProductionPublicRouteV1(t *tes
 			queries[i][d] = float32(queries64[i][d])
 		}
 	}
-	cell, err := vectorPartitionSystemBenchCell(t.Context(), node.ready.PublicEndpoint, queries, truth, 4, 4, 128, 2, len(queries))
+	cell, err := vectorPartitionSystemBenchCell(t.Context(), node.ready.PublicEndpoint, configSHA, queries, truth, 4, 4, 128, 2, len(queries))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cell.Status != "valid" || cell.Generation.Index == "" || cell.Generation.Generation == 0 || cell.ElapsedNanos == 0 || cell.Metrics.CompletedQueries != len(queries) || cell.Metrics.RecallAt10 <= 0 || cell.Counters["selected_partitions"] != uint64(4*len(queries)) || cell.Counters["selected_groups"] == 0 || cell.Counters["query_bytes"] == 0 || cell.Counters["response_bytes"] == 0 || cell.Timings["total"] == 0 || cell.Timings["rpc"] == 0 || cell.Timings["read_index_apply"] == 0 || cell.Timings["shard_search"] == 0 || len(cell.TotalNanos) != len(queries) {
 		t.Fatalf("system benchmark cell = %+v", cell)
+	}
+	node.publicServer.nodeConfigSHA256 = strings.Repeat("f", 64)
+	if _, err := vectorPartitionSystemBenchCell(t.Context(), node.ready.PublicEndpoint, configSHA, queries, truth, 4, 4, 128, 2, 0); err == nil || !strings.Contains(err.Error(), "live node config identity does not match checked topology") {
+		t.Fatalf("mismatched live topology error = %v", err)
 	}
 }
 
@@ -372,7 +376,7 @@ func TestVectorPartitionSystemBenchPersistsFailedCellV1(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "failed.json")
 	topology := writeVectorPartitionSystemTopologyEvidenceTestV1(t, "127.0.0.1:1", dataset)
 	args := []string{"-endpoint", "127.0.0.1:1", "-topology", topology, "-dataset", dataset, "-truth-cache", cache, "-truth-cache-sha256", strings.TrimPrefix(fields[1], "artifact_sha256="), "-probes", "2", "-concurrency", "1", "-out", out, "-top-k", "10", "-ef-search", "128", "-warmup", "0"}
-	runCell := func(context.Context, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int) (vectorPartitionSystemBenchCellV1, error) {
+	runCell := func(context.Context, string, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int) (vectorPartitionSystemBenchCellV1, error) {
 		return vectorPartitionSystemBenchCellV1{Status: "valid", Budget: map[string]int{"probes": 2}, Concurrency: 1, Metrics: vectorPartitionSystemBenchMetricsV1{Queries: 2}}, context.DeadlineExceeded
 	}
 	if err := runVectorPartitionSystemBenchWithCellV1(args, io.Discard, runCell); !errors.Is(err, context.DeadlineExceeded) {
@@ -421,7 +425,7 @@ func TestVectorPartitionSystemBenchRejectsMismatchedTopologyDatasetV1(t *testing
 	dataset := writeFixtureForTest(t, 10, 2, 2)
 	topology := writeVectorPartitionSystemTopologyEvidenceTestV1(t, "127.0.0.1:1", t.TempDir())
 	called := false
-	runCell := func(context.Context, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int) (vectorPartitionSystemBenchCellV1, error) {
+	runCell := func(context.Context, string, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int) (vectorPartitionSystemBenchCellV1, error) {
 		called = true
 		return vectorPartitionSystemBenchCellV1{}, nil
 	}

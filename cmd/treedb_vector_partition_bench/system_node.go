@@ -497,6 +497,10 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 	if err != nil {
 		return nil, err
 	}
+	configSHA, err := vectorPartitionSystemNodeConfigSHA256V1(config)
+	if err != nil {
+		return nil, err
+	}
 	publicEndpoint := ""
 	if config.PublicListen != "" {
 		node.publicListener, err = net.Listen("tcp", config.PublicListen)
@@ -513,7 +517,7 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 		if operationsErr != nil {
 			return nil, operationsErr
 		}
-		node.publicServer = &vectorPartitionOperationsTCPServerV1{operations: operations, listener: node.publicListener, done: make(chan struct{})}
+		node.publicServer = &vectorPartitionOperationsTCPServerV1{operations: operations, nodeConfigSHA256: configSHA, listener: node.publicListener, done: make(chan struct{})}
 		node.publicServer.start(ctx)
 		publicEndpoint = node.publicListener.Addr().String()
 	}
@@ -523,10 +527,6 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 		return nil, err
 	}
 	executableSHA, err := m8BenchmarkExecutableSHA256V1(executable)
-	if err != nil {
-		return nil, err
-	}
-	configSHA, err := vectorPartitionSystemNodeConfigSHA256V1(config)
 	if err != nil {
 		return nil, err
 	}
@@ -636,11 +636,12 @@ type vectorPartitionOperationsWireRequestV1 struct {
 }
 
 type vectorPartitionOperationsWireResponseV1 struct {
-	SchemaVersion int                        `json:"schema_version"`
-	Health        *public.OperationsHealthV1 `json:"health,omitempty"`
-	Search        *public.SearchResponseV1   `json:"search,omitempty"`
-	ErrorCode     public.ErrorCodeV1         `json:"error_code,omitempty"`
-	Error         string                     `json:"error,omitempty"`
+	SchemaVersion    int                        `json:"schema_version"`
+	NodeConfigSHA256 string                     `json:"node_config_sha256,omitempty"`
+	Health           *public.OperationsHealthV1 `json:"health,omitempty"`
+	Search           *public.SearchResponseV1   `json:"search,omitempty"`
+	ErrorCode        public.ErrorCodeV1         `json:"error_code,omitempty"`
+	Error            string                     `json:"error,omitempty"`
 }
 
 func vectorPartitionOperationsWireErrorCodeV1(err error) public.ErrorCodeV1 {
@@ -658,13 +659,14 @@ func vectorPartitionOperationsWireErrorCodeV1(err error) public.ErrorCodeV1 {
 }
 
 type vectorPartitionOperationsTCPServerV1 struct {
-	operations  *public.OperationsV1
-	listener    net.Listener
-	done        chan struct{}
-	slots       chan struct{}
-	idleTimeout time.Duration
-	connections sync.Map
-	serving     sync.WaitGroup
+	operations       *public.OperationsV1
+	nodeConfigSHA256 string
+	listener         net.Listener
+	done             chan struct{}
+	slots            chan struct{}
+	idleTimeout      time.Duration
+	connections      sync.Map
+	serving          sync.WaitGroup
 }
 
 func (s *vectorPartitionOperationsTCPServerV1) start(ctx context.Context) {
@@ -720,6 +722,7 @@ func (s *vectorPartitionOperationsTCPServerV1) serve(ctx context.Context, conn n
 					response.Error, response.ErrorCode = err.Error(), vectorPartitionOperationsWireErrorCodeV1(err)
 				} else {
 					response.Health = &health
+					response.NodeConfigSHA256 = s.nodeConfigSHA256
 				}
 			case "search":
 				result, err := s.operations.Search(ctx, request.Search)

@@ -63,7 +63,7 @@ func runVectorPartitionSystemBenchV1(args []string, stdout io.Writer) error {
 	return runVectorPartitionSystemBenchWithCellV1(args, stdout, vectorPartitionSystemBenchCell)
 }
 
-func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, runCell func(context.Context, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int) (vectorPartitionSystemBenchCellV1, error)) error {
+func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, runCell func(context.Context, string, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int) (vectorPartitionSystemBenchCellV1, error)) error {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench system-bench", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var endpoint, topologyPath, dataset, truthCache, truthSHA, probeText, concurrencyText, out string
@@ -105,6 +105,16 @@ func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, ru
 		return errors.New("system-bench dataset does not match checked topology")
 	}
 	dataset = canonicalDataset
+	publicNodeConfigSHA := ""
+	for _, node := range topology.Nodes {
+		if node.PublicListen != "" && stringsHostPortEquivalentV1(node.PublicListen, endpoint) {
+			publicNodeConfigSHA = node.NodeConfigSHA256
+			break
+		}
+	}
+	if !m8SHA256V1(publicNodeConfigSHA) {
+		return errors.New("system-bench checked topology public node identity is invalid")
+	}
 	probes, err := vectorPartitionSystemPositiveListV1(probeText)
 	if err != nil {
 		return fmt.Errorf("system-bench probes: %w", err)
@@ -148,7 +158,7 @@ func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, ru
 	defer cancel()
 	for _, probes := range probes {
 		for _, workers := range concurrency {
-			cell, runErr := runCell(ctx, endpoint, queries, truth, topK, probes, efSearch, workers, warmup)
+			cell, runErr := runCell(ctx, endpoint, publicNodeConfigSHA, queries, truth, topK, probes, efSearch, workers, warmup)
 			if runErr != nil {
 				cell.Status = "failed"
 				cell.Error = runErr.Error()
@@ -178,7 +188,7 @@ func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, ru
 	return err
 }
 
-func vectorPartitionSystemBenchCell(ctx context.Context, endpoint string, queries [][]float32, truth [][]m8CanonicalResultV1, topK, probes, efSearch, workers, warmup int) (vectorPartitionSystemBenchCellV1, error) {
+func vectorPartitionSystemBenchCell(ctx context.Context, endpoint, wantNodeConfigSHA string, queries [][]float32, truth [][]m8CanonicalResultV1, topK, probes, efSearch, workers, warmup int) (vectorPartitionSystemBenchCellV1, error) {
 	cell := vectorPartitionSystemBenchCellV1{Status: "valid", Budget: map[string]int{"probes": probes}, Concurrency: workers, Metrics: vectorPartitionSystemBenchMetricsV1{Queries: len(queries)}}
 	clients := make([]*vectorPartitionOperationsTCPClientV1, workers)
 	defer func() {
@@ -201,6 +211,9 @@ func vectorPartitionSystemBenchCell(ctx context.Context, endpoint string, querie
 	}
 	if status.Health == nil || !status.Health.Ready {
 		return cell, errors.New("system-bench status is not ready")
+	}
+	if status.NodeConfigSHA256 != wantNodeConfigSHA {
+		return cell, errors.New("system-bench live node config identity does not match checked topology")
 	}
 	generation := status.Health.Generation
 	cell.Generation = generation

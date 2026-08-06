@@ -104,7 +104,7 @@ for later regressions and M3 interpretation, not a release threshold.
 Validate the committed evidence from the repository root:
 
 ```sh
-sha256sum -c TreeDB/docs/evidence/vector-partition-local-system-qualification-4019/m2-95c60cbe/SHA256SUMS
+(cd TreeDB/docs/evidence/vector-partition-local-system-qualification-4019/m2-95c60cbe && sha256sum -c SHA256SUMS)
 (cd benchmarks/vector_db_compare && python3 -m unittest test_topology_tax.py)
 ```
 
