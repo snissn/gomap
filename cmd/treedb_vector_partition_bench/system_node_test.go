@@ -321,6 +321,18 @@ func TestVectorPartitionSystemTopologyRequiresDistinctProductionRootsV1(t *testi
 	if _, err := validateVectorPartitionSystemTopologyV1(configs); err == nil || !strings.Contains(err.Error(), "listener") {
 		t.Fatalf("wildcard listener collision error = %v", err)
 	}
+	localhost, err := net.LookupIP("localhost")
+	if err != nil || len(localhost) == 0 {
+		t.Fatalf("resolve localhost = %v, %v", localhost, err)
+	}
+	configs[0].PublicListen = net.JoinHostPort("localhost", "21001")
+	configs[1].LocalGroups[0].Listen = net.JoinHostPort(localhost[0].String(), "21001")
+	endpoints["group-b"] = configs[1].LocalGroups[0].Listen
+	if _, err := validateVectorPartitionSystemTopologyV1(configs); err == nil || !strings.Contains(err.Error(), "listener") {
+		t.Fatalf("resolved listener alias collision error = %v", err)
+	}
+	configs[1].LocalGroups[0].Listen = "127.0.0.1:21001"
+	endpoints["group-b"] = configs[1].LocalGroups[0].Listen
 	configs[0].PublicListen = "127.0.0.1:22000"
 	for _, invalid := range []string{"malformed", "127.0.0.1:0"} {
 		configs[0].PublicListen = invalid

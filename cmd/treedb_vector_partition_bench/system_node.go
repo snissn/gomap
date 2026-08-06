@@ -563,7 +563,22 @@ func stringsHostPortEquivalentV1(configured, actual string) bool {
 	if err != nil || configuredPort != actualPort {
 		return false
 	}
-	return configuredHost == actualHost || configuredHost == "0.0.0.0" || actualHost == "0.0.0.0" || configuredHost == "::" || actualHost == "::"
+	if configuredHost == actualHost || configuredHost == "" || actualHost == "" || configuredHost == "0.0.0.0" || actualHost == "0.0.0.0" || configuredHost == "::" || actualHost == "::" {
+		return true
+	}
+	configuredIPs, configuredErr := net.LookupIP(configuredHost)
+	actualIPs, actualErr := net.LookupIP(actualHost)
+	if configuredErr != nil || actualErr != nil {
+		return false
+	}
+	for _, configuredIP := range configuredIPs {
+		for _, actualIP := range actualIPs {
+			if configuredIP.Equal(actualIP) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type vectorPartitionOperationsWireRequestV1 struct {
