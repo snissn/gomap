@@ -164,6 +164,9 @@ func OpenThreeNodeHarnessWithOptions(ctx context.Context, groupID GroupID, opts 
 	if err != nil {
 		return fail(err)
 	}
+	if leader.id != preferred {
+		return fail(fmt.Errorf("initial Raft leader %q does not match preferred %q", leader.id, preferred))
+	}
 	h.leader = leader
 	h.preferred = preferred
 	h.coordinator, err = NewGroupRoutedReadIndexCoordinator([]GroupReadIndexCoordinatorV1{{GroupID: groupID, NodeID: leader.id, ReadIndexProvider: leader.provider, AppliedIndexWaiter: leader.applier}})
