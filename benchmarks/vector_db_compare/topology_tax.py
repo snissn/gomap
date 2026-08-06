@@ -29,6 +29,50 @@ def _uint(value: Any, *, positive: bool = False) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= (1 if positive else 0)
 
 
+def _topology_identity(value: dict[str, Any], topology: str, want_nodes: int) -> tuple[str, list[str]]:
+    expected_keys = {"schema_version", "result_kind", "assembly", "topology", "nodes", "dataset_directory", "endpoints", "group_applied_indexes", "public_route", "m8_loopback", "topology_identity_sha256"}
+    _require(set(value) == expected_keys and value.get("schema_version") == 1 and value.get("result_kind") == "vector_partition_system_topology_v1" and value.get("assembly") == "production_public_v1" and value.get("topology") == topology and value.get("public_route") == "vectorpartition.OperationsV1.Search" and value.get("m8_loopback") is False, "system-bench topology artifact structure is invalid")
+    endpoints, applied, nodes = value.get("endpoints"), value.get("group_applied_indexes"), value.get("nodes")
+    _require(isinstance(value.get("dataset_directory"), str) and value["dataset_directory"], "system-bench topology dataset directory is invalid")
+    _require(isinstance(endpoints, dict) and len(endpoints) == 4 and all(isinstance(key, str) and key and isinstance(endpoint, str) and endpoint for key, endpoint in endpoints.items()), "system-bench topology endpoints are invalid")
+    _require(isinstance(applied, dict) and set(applied) == set(endpoints) and all(_uint(index, positive=True) for index in applied.values()), "system-bench topology applied indexes are invalid")
+    _require(isinstance(nodes, list) and len(nodes) == want_nodes, "system-bench topology node set changed")
+    canonical_nodes: list[dict[str, Any]] = []
+    database_roots: list[str] = []
+    node_ids: list[str] = []
+    owned_groups: set[str] = set()
+    public_nodes = 0
+    for node in nodes:
+        _require(isinstance(node, dict), "system-bench topology node is invalid")
+        required = {"node_id", "node_config_sha256", "database_directory", "state_directory", "ready_path", "local_groups"}
+        _require(set(node) in (required, required | {"public_listen"}), "system-bench topology node structure is invalid")
+        _require(isinstance(node.get("node_id"), str) and node["node_id"] and _is_sha256(node.get("node_config_sha256")), "system-bench topology node identity is invalid")
+        _require(all(isinstance(node.get(key), str) and node[key] for key in ("database_directory", "state_directory", "ready_path")), "system-bench topology persistent roots are invalid")
+        groups = node.get("local_groups")
+        _require(isinstance(groups, list) and groups and all(isinstance(group, dict) and set(group) == {"group_id", "listen"} and isinstance(group["group_id"], str) and group["group_id"] in endpoints and group["listen"] == endpoints[group["group_id"]] for group in groups), "system-bench topology group ownership is invalid")
+        group_ids = {group["group_id"] for group in groups}
+        _require(owned_groups.isdisjoint(group_ids), "system-bench topology group ownership is invalid")
+        owned_groups.update(group_ids)
+        canonical_node = {key: node[key] for key in ("node_id", "node_config_sha256", "database_directory", "state_directory", "ready_path")}
+        if "public_listen" in node:
+            _require(isinstance(node["public_listen"], str) and node["public_listen"], "system-bench topology public endpoint is invalid")
+            canonical_node["public_listen"] = node["public_listen"]
+            public_nodes += 1
+        canonical_node["local_groups"] = [{"group_id": group["group_id"], "listen": group["listen"]} for group in groups]
+        canonical_nodes.append(canonical_node)
+        database_roots.append(node["database_directory"])
+        node_ids.append(node["node_id"])
+    _require(public_nodes == 1 and owned_groups == set(endpoints) and node_ids == sorted(node_ids), "system-bench topology node ordering or ownership is invalid")
+    canonical = {
+        "schema_version": 1, "result_kind": "vector_partition_system_topology_v1", "assembly": "production_public_v1", "topology": topology,
+        "nodes": canonical_nodes, "dataset_directory": value["dataset_directory"], "endpoints": {key: endpoints[key] for key in sorted(endpoints)},
+        "group_applied_indexes": {key: applied[key] for key in sorted(applied)}, "public_route": "vectorpartition.OperationsV1.Search", "m8_loopback": False,
+        "topology_identity_sha256": "",
+    }
+    raw = json.dumps(canonical, ensure_ascii=False, separators=(",", ":")).replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029").encode()
+    return hashlib.sha256(raw).hexdigest(), database_roots
+
+
 def validate_run(value: dict[str, Any], topology: str) -> None:
     _require(value.get("schema_version") == 1 and value.get("result_kind") == "vector_partition_system_bench_v1", "unexpected system-bench identity")
     _require(value.get("topology") == topology and _is_sha256(value.get("topology_identity_sha256")), "system-bench topology identity mismatch")
@@ -79,11 +123,8 @@ def summarize(single_paths: list[Path], native_paths: list[Path]) -> dict[str, A
             validate_run(value, topology)
             topology_identity = value["topology_identity_sha256"]
             topology_artifact = _load(canonical.with_name("topology.json"))
-            _require(topology_artifact.get("topology") == topology and topology_artifact.get("topology_identity_sha256") == topology_identity, "system-bench topology artifact mismatch")
-            nodes = topology_artifact.get("nodes")
-            _require(isinstance(nodes, list) and len(nodes) == (1 if topology == TOPOLOGIES[0] else 4), "system-bench topology node set changed")
-            roots = [node.get("database_directory") for node in nodes if isinstance(node, dict)]
-            _require(len(roots) == len(nodes) and all(isinstance(root, str) and root for root in roots), "system-bench topology database roots are invalid")
+            computed_identity, roots = _topology_identity(topology_artifact, topology, 1 if topology == TOPOLOGIES[0] else 4)
+            _require(topology_artifact.get("topology_identity_sha256") == topology_identity == computed_identity, "system-bench topology artifact identity digest mismatch")
             _require(len(set(roots)) == len(roots), "system-bench topology database roots are invalid")
             _require(topology_identity not in topology_identities and database_directories.isdisjoint(roots), "topology-tax repetitions must use distinct persistent database roots")
             topology_identities.add(topology_identity)

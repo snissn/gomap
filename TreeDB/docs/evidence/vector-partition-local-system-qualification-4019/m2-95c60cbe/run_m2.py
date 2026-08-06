@@ -126,13 +126,12 @@ def wait_ready(configs: list[Path], processes: list[subprocess.Popen[bytes]]) ->
 
 
 def stop_nodes(ready: list[dict[str, object]], processes: list[subprocess.Popen[bytes]]) -> None:
-    if not ready:
-        for process in processes:
-            if process.poll() is None:
-                try:
-                    os.killpg(process.pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
+    for process in processes:
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
     for value in ready:
         pid = value.get("pid")
         if isinstance(pid, int):

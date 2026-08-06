@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import tempfile
@@ -33,20 +34,32 @@ class TopologyTaxTest(unittest.TestCase):
         for topology_index, topology in enumerate(("single_daemon_four_group", "native_four_daemon_four_group")):
             for repetition in range(3):
                 value = self.run_value(topology)
-                value["topology_identity_sha256"] = f"{topology_index * 3 + repetition + 1:x}" * 64
                 run_root = root / topology / f"repeat-{repetition + 1}"
                 run_root.mkdir(parents=True)
                 path = run_root / "search.json"
-                path.write_text(json.dumps(value), encoding="utf-8")
                 node_count = 1 if topology_index == 0 else 4
+                endpoints = {f"group-{group}": f"127.0.0.1:{10000 + topology_index * 1000 + repetition * 100 + group}" for group in range(4)}
+                nodes = []
+                for node in range(node_count):
+                    owned = range(4) if node_count == 1 else (node,)
+                    node_value = {
+                        "node_id": f"node-{node}", "node_config_sha256": f"{topology_index * 12 + repetition * 4 + node + 1:064x}",
+                        "database_directory": str(run_root / f"database-{node}"), "state_directory": str(run_root / f"state-{node}"),
+                        "ready_path": str(run_root / f"state-{node}/ready.json"),
+                    }
+                    if node == 0:
+                        node_value["public_listen"] = f"127.0.0.1:{20000 + topology_index * 100 + repetition}"
+                    node_value["local_groups"] = [{"group_id": f"group-{group}", "listen": endpoints[f"group-{group}"]} for group in owned]
+                    nodes.append(node_value)
                 topology_value = {
-                    "topology": topology,
-                    "topology_identity_sha256": value["topology_identity_sha256"],
-                    "nodes": [
-                        {"database_directory": str(run_root / f"database-{node}")}
-                        for node in range(node_count)
-                    ],
+                    "schema_version": 1, "result_kind": "vector_partition_system_topology_v1", "assembly": "production_public_v1", "topology": topology,
+                    "nodes": nodes, "dataset_directory": str(root / "dataset"), "endpoints": endpoints,
+                    "group_applied_indexes": {group: 1 for group in endpoints}, "public_route": "vectorpartition.OperationsV1.Search", "m8_loopback": False,
+                    "topology_identity_sha256": "",
                 }
+                topology_value["topology_identity_sha256"] = hashlib.sha256(json.dumps(topology_value, separators=(",", ":")).encode()).hexdigest()
+                value["topology_identity_sha256"] = topology_value["topology_identity_sha256"]
+                path.write_text(json.dumps(value), encoding="utf-8")
                 (run_root / "topology.json").write_text(json.dumps(topology_value), encoding="utf-8")
                 values[topology_index].append(path)
         return values[0], values[1]
@@ -78,8 +91,24 @@ class TopologyTaxTest(unittest.TestCase):
             first = json.loads(single[0].with_name("topology.json").read_text(encoding="utf-8"))
             repeated = json.loads(single[1].with_name("topology.json").read_text(encoding="utf-8"))
             repeated["nodes"][0]["database_directory"] = first["nodes"][0]["database_directory"]
+            repeated["topology_identity_sha256"] = ""
+            repeated["topology_identity_sha256"] = hashlib.sha256(json.dumps(repeated, separators=(",", ":")).encode()).hexdigest()
             single[1].with_name("topology.json").write_text(json.dumps(repeated), encoding="utf-8")
+            search = json.loads(single[1].read_text(encoding="utf-8"))
+            search["topology_identity_sha256"] = repeated["topology_identity_sha256"]
+            single[1].write_text(json.dumps(search), encoding="utf-8")
             with self.assertRaisesRegex(ContractError, "distinct persistent database roots"):
+                summarize(single, native)
+
+    def test_forged_topology_identity_rejects(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            single, native = self.files(Path(directory))
+            topology = json.loads(single[1].with_name("topology.json").read_text(encoding="utf-8"))
+            search = json.loads(single[1].read_text(encoding="utf-8"))
+            topology["topology_identity_sha256"] = search["topology_identity_sha256"] = "f" * 64
+            single[1].with_name("topology.json").write_text(json.dumps(topology), encoding="utf-8")
+            single[1].write_text(json.dumps(search), encoding="utf-8")
+            with self.assertRaisesRegex(ContractError, "identity digest mismatch"):
                 summarize(single, native)
 
     def test_changed_generation_or_percentile_rejects(self) -> None:
