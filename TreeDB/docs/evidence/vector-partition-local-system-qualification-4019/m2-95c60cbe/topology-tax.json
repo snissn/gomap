@@ -1,4 +1,9 @@
 {
+  "execution_identity": {
+    "executable_sha256": "b8d12f98778698ed74db4a905e2bb6b2925840702664beb6fab9e402c4f913d1",
+    "source_revision": "95c60cbef0b0cb824a74a29e9304784e76745d9d",
+    "vcs_modified": false
+  },
   "fixture_truth_identity": {
     "dataset_checksum": "ecc2224f386932e580e4956f2cfa852140d3134625971c3511bc0d5feddf9b95",
     "truth_artifact_sha256": "0e9bce9465c9e1fa70c7833364e88c332bc831cfc52c628c90085e1c3068763c"
@@ -6,6 +11,9 @@
   "inputs": [
     {
       "path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/single_daemon_four_group/repeat-1/search.json",
+      "ready_sha256": {
+        "single": "752306b1913555ace2f7918a38ad5e49223ace9d430e94c67d377bf9da9b19cf"
+      },
       "repetition": 1,
       "sha256": "a85c702bacc2fe98ae70bf7bd994e57faa36581a1d6bdfbb1ee001b896bf1605",
       "topology": "single_daemon_four_group",
@@ -13,6 +21,9 @@
     },
     {
       "path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/single_daemon_four_group/repeat-2/search.json",
+      "ready_sha256": {
+        "single": "1050b4b39053e4f9660301dae2a7a4cf582ea469d4d541f0f6425d0de741d2c7"
+      },
       "repetition": 2,
       "sha256": "787da76fdaa95d7351fb17c89c046d94e0ffd2d168950d9d217fbae9e2394eff",
       "topology": "single_daemon_four_group",
@@ -20,6 +31,9 @@
     },
     {
       "path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/single_daemon_four_group/repeat-3/search.json",
+      "ready_sha256": {
+        "single": "90815b4fddb434b7d7ec20ffe7624483a49f5cf401a6816465a93bffcdf2352f"
+      },
       "repetition": 3,
       "sha256": "84f0da18d253b4d584f194af03040583fa80c5a4d55624b27b66ecec37c2343b",
       "topology": "single_daemon_four_group",
@@ -27,6 +41,12 @@
     },
     {
       "path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-1/search.json",
+      "ready_sha256": {
+        "native-group-a": "bb31379432cb92268b6d20a98925d08671c511adebf4cdc3e74fbffcb73f4fd5",
+        "native-group-b": "00507b3c4a85d06441c880f192f6cae3ad23e0ef118599fe19196365df0d3029",
+        "native-group-c": "c38d5914a8a342f3c28a65b37e25b7463debe2397d24e1c0ae98ff75e5f2c2be",
+        "native-group-d": "3210404a4c3ba2c19aab4301b19db76719537261d71fece70bda31bbd1325f07"
+      },
       "repetition": 1,
       "sha256": "28e89df2212bcad2e7fc8e0e2c4c1e84181535be83caa568e4e8b9dd9f1163f8",
       "topology": "native_four_daemon_four_group",
@@ -34,6 +54,12 @@
     },
     {
       "path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-2/search.json",
+      "ready_sha256": {
+        "native-group-a": "a8457b75b08e65884ca2698076a4bfda48e94a56c38792f15695838a74c2f3bb",
+        "native-group-b": "6a0bd1e6ba6e751f8b5948d3cc18cc8a2f3486cad4df633f4c45e976cdf88e06",
+        "native-group-c": "2731704e8772e0339a655fd2514902ba9fb74d5f9964a83cefb96f64d3f33fdf",
+        "native-group-d": "5ecdc2f84d8998d5aa78c399b7646b95b0129d6dd79a48a668db4aebcbd9611d"
+      },
       "repetition": 2,
       "sha256": "47e8698ac8c3ccf0ac12486edaf47d6babbd962c4fd27350b7bf7000a1d3473f",
       "topology": "native_four_daemon_four_group",
@@ -41,6 +67,12 @@
     },
     {
       "path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-3/search.json",
+      "ready_sha256": {
+        "native-group-a": "35b651cf21a2b18c5e6ee13e6fbc9fcd3a6177d142bfe779d617834c98d152ca",
+        "native-group-b": "cea334da3332f87d00be96909e0e2749096d0649e6a1d0b32981bdf2dfd6077b",
+        "native-group-c": "641eb581dd015ccd7c90932b7904db58746f43b1d9bbd435baae2ec6a059c4f8",
+        "native-group-d": "03dc448a03925e7d1086a35bdb50d92794194b8f64b88e1601bdef20150351cf"
+      },
       "repetition": 3,
       "sha256": "c6bfb5dced12ee3de21c5b46732e1d5b69e5aac441a238a525722c83f993ba24",
       "topology": "native_four_daemon_four_group",

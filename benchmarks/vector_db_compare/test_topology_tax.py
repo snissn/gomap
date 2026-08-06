@@ -15,6 +15,14 @@ from system_qualification import ContractError
 from topology_tax import summarize
 
 
+SOURCE_REVISION = "d" * 40
+EXECUTABLE_SHA256 = "e" * 64
+
+
+def summarize_checked(single: list[Path], native: list[Path]) -> dict:
+    return summarize(single, native, SOURCE_REVISION, EXECUTABLE_SHA256)
+
+
 class TopologyTaxTest(unittest.TestCase):
     def test_retained_runner_preserves_timing_wrapper_after_readiness(self) -> None:
         script = Path(__file__).parents[2] / "TreeDB/docs/evidence/vector-partition-local-system-qualification-4019/m2-95c60cbe/run_m2.py"
@@ -96,12 +104,26 @@ class TopologyTaxTest(unittest.TestCase):
                 value["topology_identity_sha256"] = topology_value["topology_identity_sha256"]
                 path.write_text(json.dumps(value), encoding="utf-8")
                 (run_root / "topology.json").write_text(json.dumps(topology_value), encoding="utf-8")
+                for node_value in nodes:
+                    ready = {
+                        "schema_version": 1, "result_kind": "vector_partition_system_node_ready_v1", "assembly": "production_public_v1", "topology": topology,
+                        "node_id": node_value["node_id"], "pid": 100 + node_count, "public_route": "vectorpartition.OperationsV1.Search", "production_topology": True,
+                        "m8_loopback": False, "database_directory": node_value["database_directory"], "state_directory": node_value["state_directory"],
+                        "source_revision": SOURCE_REVISION, "vcs_modified": False, "executable_sha256": EXECUTABLE_SHA256,
+                        "node_config_sha256": node_value["node_config_sha256"], "lifecycle_state": "active",
+                        "groups": [{"group_id": group["group_id"], "endpoint": group["listen"], "leader_id": "leader", "applied_index": 2, "proves_production_consensus": True} for group in node_value["local_groups"]],
+                    }
+                    if "public_listen" in node_value:
+                        ready["public_endpoint"] = node_value["public_listen"]
+                    ready_path = run_root / Path(node_value["state_directory"]).name / "ready.json"
+                    ready_path.parent.mkdir()
+                    ready_path.write_text(json.dumps(ready), encoding="utf-8")
                 values[topology_index].append(path)
         return values[0], values[1]
 
     def test_three_repetition_summary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            result = summarize(*self.files(Path(directory)))
+            result = summarize_checked(*self.files(Path(directory)))
         self.assertEqual(result["status"], "valid_baseline")
         self.assertEqual(len(result["inputs"]), 6)
         self.assertEqual(len(result["rows"]), 4)
@@ -113,12 +135,12 @@ class TopologyTaxTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             single, native = self.files(Path(directory))
             with self.assertRaisesRegex(ContractError, "repetition artifacts must be distinct"):
-                summarize([single[0]] * 3, native)
+                summarize_checked([single[0]] * 3, native)
         with tempfile.TemporaryDirectory() as directory:
             single, native = self.files(Path(directory))
             shutil.copyfile(single[0], single[1])
             with self.assertRaisesRegex(ContractError, "repetition artifacts must be distinct"):
-                summarize(single, native)
+                summarize_checked(single, native)
 
     def test_reused_persistent_database_root_rejects(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -127,6 +149,11 @@ class TopologyTaxTest(unittest.TestCase):
             repeated = json.loads(single[1].with_name("topology.json").read_text(encoding="utf-8"))
             repeated["nodes"][0]["database_directory"] = first["nodes"][0]["database_directory"]
             repeated["nodes"][0]["node_config_sha256"] = self.node_config_sha256(repeated, repeated["nodes"][0])
+            ready_path = single[1].parent / Path(repeated["nodes"][0]["state_directory"]).name / "ready.json"
+            ready = json.loads(ready_path.read_text(encoding="utf-8"))
+            ready["database_directory"] = repeated["nodes"][0]["database_directory"]
+            ready["node_config_sha256"] = repeated["nodes"][0]["node_config_sha256"]
+            ready_path.write_text(json.dumps(ready), encoding="utf-8")
             repeated["topology_identity_sha256"] = ""
             repeated["topology_identity_sha256"] = hashlib.sha256(json.dumps(repeated, separators=(",", ":")).encode()).hexdigest()
             single[1].with_name("topology.json").write_text(json.dumps(repeated), encoding="utf-8")
@@ -134,7 +161,7 @@ class TopologyTaxTest(unittest.TestCase):
             search["topology_identity_sha256"] = repeated["topology_identity_sha256"]
             single[1].write_text(json.dumps(search), encoding="utf-8")
             with self.assertRaisesRegex(ContractError, "distinct persistent database roots"):
-                summarize(single, native)
+                summarize_checked(single, native)
 
     def test_nested_persistent_database_root_rejects(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -142,6 +169,11 @@ class TopologyTaxTest(unittest.TestCase):
             topology = json.loads(native[0].with_name("topology.json").read_text(encoding="utf-8"))
             topology["nodes"][1]["database_directory"] = str(Path(topology["nodes"][0]["database_directory"]) / "nested")
             topology["nodes"][1]["node_config_sha256"] = self.node_config_sha256(topology, topology["nodes"][1])
+            ready_path = native[0].parent / Path(topology["nodes"][1]["state_directory"]).name / "ready.json"
+            ready = json.loads(ready_path.read_text(encoding="utf-8"))
+            ready["database_directory"] = topology["nodes"][1]["database_directory"]
+            ready["node_config_sha256"] = topology["nodes"][1]["node_config_sha256"]
+            ready_path.write_text(json.dumps(ready), encoding="utf-8")
             topology["topology_identity_sha256"] = ""
             topology["topology_identity_sha256"] = hashlib.sha256(json.dumps(topology, separators=(",", ":")).encode()).hexdigest()
             search = json.loads(native[0].read_text(encoding="utf-8"))
@@ -149,7 +181,7 @@ class TopologyTaxTest(unittest.TestCase):
             native[0].with_name("topology.json").write_text(json.dumps(topology), encoding="utf-8")
             native[0].write_text(json.dumps(search), encoding="utf-8")
             with self.assertRaisesRegex(ContractError, "database roots are invalid"):
-                summarize(single, native)
+                summarize_checked(single, native)
 
     def test_forged_topology_identity_rejects(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -160,7 +192,7 @@ class TopologyTaxTest(unittest.TestCase):
             single[1].with_name("topology.json").write_text(json.dumps(topology), encoding="utf-8")
             single[1].write_text(json.dumps(search), encoding="utf-8")
             with self.assertRaisesRegex(ContractError, "identity digest mismatch"):
-                summarize(single, native)
+                summarize_checked(single, native)
 
     def test_forged_node_config_roots_reject(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -174,7 +206,7 @@ class TopologyTaxTest(unittest.TestCase):
             single[1].with_name("topology.json").write_text(json.dumps(topology), encoding="utf-8")
             single[1].write_text(json.dumps(search), encoding="utf-8")
             with self.assertRaisesRegex(ContractError, "node config identity digest mismatch"):
-                summarize(single, native)
+                summarize_checked(single, native)
 
     def test_changed_generation_or_percentile_rejects(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -183,14 +215,30 @@ class TopologyTaxTest(unittest.TestCase):
             value["cells"][1]["generation"]["Generation"] = 8
             native[2].write_text(json.dumps(value), encoding="utf-8")
             with self.assertRaisesRegex(ContractError, "generation changed"):
-                summarize(single, native)
+                summarize_checked(single, native)
         with tempfile.TemporaryDirectory() as directory:
             single, native = self.files(Path(directory))
             value = json.loads(native[2].read_text(encoding="utf-8"))
             value["cells"][0]["metrics"]["p95_nanos"] = 4
             native[2].write_text(json.dumps(value), encoding="utf-8")
             with self.assertRaisesRegex(ContractError, "percentiles changed"):
-                summarize(single, native)
+                summarize_checked(single, native)
+
+    def test_readiness_provenance_or_node_binding_rejects(self) -> None:
+        for field, value, error in (
+            ("source_revision", "f" * 40, "executable provenance"),
+            ("executable_sha256", "f" * 64, "executable provenance"),
+            ("database_directory", "/forged/database", "node config"),
+        ):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                single, native = self.files(Path(directory))
+                topology = json.loads(native[1].with_name("topology.json").read_text(encoding="utf-8"))
+                ready_path = native[1].parent / Path(topology["nodes"][0]["state_directory"]).name / "ready.json"
+                ready = json.loads(ready_path.read_text(encoding="utf-8"))
+                ready[field] = value
+                ready_path.write_text(json.dumps(ready), encoding="utf-8")
+                with self.assertRaisesRegex(ContractError, error):
+                    summarize_checked(single, native)
 
     def test_recall_below_frozen_floor_rejects(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -199,7 +247,7 @@ class TopologyTaxTest(unittest.TestCase):
             value["cells"][0]["metrics"]["recall_at_10"] = .899
             native[2].write_text(json.dumps(value), encoding="utf-8")
             with self.assertRaisesRegex(ContractError, "below the frozen floor"):
-                summarize(single, native)
+                summarize_checked(single, native)
 
     def test_elapsed_shorter_than_serialized_worker_lane_rejects(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -215,20 +263,21 @@ class TopologyTaxTest(unittest.TestCase):
             cell["metrics"]["p99_nanos"] = 100
             native[2].write_text(json.dumps(value), encoding="utf-8")
             with self.assertRaisesRegex(ContractError, "elapsed time is invalid"):
-                summarize(single, native)
+                summarize_checked(single, native)
 
     def test_committed_m2_baseline_reduces_from_raw_rows(self) -> None:
         evidence = Path(__file__).parents[2] / "TreeDB/docs/evidence/vector-partition-local-system-qualification-4019/m2-95c60cbe"
         single = [evidence / f"runs/single_daemon_four_group/repeat-{repetition}/search.json" for repetition in range(1, 4)]
         native = [evidence / f"runs/native_four_daemon_four_group/repeat-{repetition}/search.json" for repetition in range(1, 4)]
         expected = json.loads((evidence / "topology-tax.json").read_text(encoding="utf-8"))
-        result = summarize(single, native)
+        result = summarize(single, native, "95c60cbef0b0cb824a74a29e9304784e76745d9d", "b8d12f98778698ed74db4a905e2bb6b2925840702664beb6fab9e402c4f913d1")
         self.assertEqual(result["status"], "valid_baseline")
+        self.assertEqual(result["execution_identity"], expected["execution_identity"])
         self.assertEqual(result["fixture_truth_identity"], expected["fixture_truth_identity"])
         self.assertEqual(result["rows"], expected["rows"])
         self.assertEqual(
-            [{key: entry[key] for key in ("topology", "repetition", "sha256", "topology_identity_sha256")} for entry in result["inputs"]],
-            [{key: entry[key] for key in ("topology", "repetition", "sha256", "topology_identity_sha256")} for entry in expected["inputs"]],
+            [{key: entry[key] for key in ("topology", "repetition", "sha256", "topology_identity_sha256", "ready_sha256")} for entry in result["inputs"]],
+            [{key: entry[key] for key in ("topology", "repetition", "sha256", "topology_identity_sha256", "ready_sha256")} for entry in expected["inputs"]],
         )
 
 

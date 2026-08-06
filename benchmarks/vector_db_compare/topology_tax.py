@@ -29,6 +29,10 @@ def _uint(value: Any, *, positive: bool = False) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= (1 if positive else 0)
 
 
+def _git_sha(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 40 and all(character in "0123456789abcdef" for character in value)
+
+
 def _paths_overlap(left: Path, right: Path) -> bool:
     return left == right or left in right.parents or right in left.parents
 
@@ -98,6 +102,55 @@ def _topology_identity(value: dict[str, Any], topology: str, want_nodes: int) ->
     return _go_json_sha256(canonical), database_roots
 
 
+def _ready_identity(topology_path: Path, topology_value: dict[str, Any], node: dict[str, Any], source_revision: str, executable_sha256: str) -> str:
+    recorded = Path(node["ready_path"])
+    _require(recorded.name == "ready.json" and recorded.parent == Path(node["state_directory"]), "system-bench readiness path is invalid")
+    ready_path = topology_path.parent / Path(node["state_directory"]).name / recorded.name
+    _require(ready_path.is_file(), "system-bench readiness artifact is missing")
+    ready_path = ready_path.resolve()
+    ready = _load(ready_path, 1 << 20)
+    required = {
+        "schema_version", "result_kind", "assembly", "topology", "node_id", "pid", "public_route", "production_topology", "m8_loopback",
+        "database_directory", "state_directory", "source_revision", "vcs_modified", "executable_sha256", "node_config_sha256", "lifecycle_state", "groups",
+    }
+    if "public_listen" in node:
+        required.add("public_endpoint")
+    _require(set(ready) == required, "system-bench readiness structure is invalid")
+    _require(
+        ready.get("schema_version") == 1 and ready.get("result_kind") == "vector_partition_system_node_ready_v1" and
+        ready.get("assembly") == "production_public_v1" and ready.get("topology") == topology_value["topology"] and
+        ready.get("node_id") == node["node_id"] and _uint(ready.get("pid"), positive=True),
+        "system-bench readiness identity is invalid",
+    )
+    _require(
+        ready.get("public_route") == "vectorpartition.OperationsV1.Search" and ready.get("production_topology") is True and
+        ready.get("m8_loopback") is False and ready.get("lifecycle_state") == "active",
+        "system-bench readiness production route is invalid",
+    )
+    _require(
+        ready.get("database_directory") == node["database_directory"] and ready.get("state_directory") == node["state_directory"] and
+        ready.get("node_config_sha256") == node["node_config_sha256"],
+        "system-bench readiness node config is invalid",
+    )
+    _require(
+        ready.get("source_revision") == source_revision and ready.get("vcs_modified") is False and ready.get("executable_sha256") == executable_sha256,
+        "system-bench readiness executable provenance is invalid",
+    )
+    _require(ready.get("public_endpoint", "") == node.get("public_listen", ""), "system-bench readiness public endpoint is invalid")
+    groups = ready.get("groups")
+    _require(isinstance(groups, list) and len(groups) == len(node["local_groups"]), "system-bench readiness group set is invalid")
+    for group, configured in zip(groups, node["local_groups"], strict=True):
+        _require(
+            isinstance(group, dict) and set(group) == {"group_id", "endpoint", "leader_id", "applied_index", "proves_production_consensus"} and
+            group.get("group_id") == configured["group_id"] and group.get("endpoint") == configured["listen"] and
+            isinstance(group.get("leader_id"), str) and bool(group["leader_id"]) and
+            _uint(group.get("applied_index"), positive=True) and group["applied_index"] >= topology_value["group_applied_indexes"][group["group_id"]] and
+            group.get("proves_production_consensus") is True,
+            "system-bench readiness group evidence is invalid",
+        )
+    return _sha256(ready_path)
+
+
 def validate_run(value: dict[str, Any], topology: str) -> None:
     _require(value.get("schema_version") == 1 and value.get("result_kind") == "vector_partition_system_bench_v1", "unexpected system-bench identity")
     _require(value.get("topology") == topology and _is_sha256(value.get("topology_identity_sha256")), "system-bench topology identity mismatch")
@@ -128,8 +181,9 @@ def validate_run(value: dict[str, Any], topology: str) -> None:
         _require(math.isclose(metrics.get("qps", 0), 1_000_000_000_000 / elapsed, rel_tol=1e-12), "system-bench QPS changed")
 
 
-def summarize(single_paths: list[Path], native_paths: list[Path]) -> dict[str, Any]:
+def summarize(single_paths: list[Path], native_paths: list[Path], source_revision: str, executable_sha256: str) -> dict[str, Any]:
     _require(len(single_paths) == len(native_paths) == 3, "topology-tax baseline requires three repetitions per topology")
+    _require(_git_sha(source_revision) and _is_sha256(executable_sha256), "topology-tax expected executable provenance is invalid")
     paths = dict(zip(TOPOLOGIES, (single_paths, native_paths), strict=True))
     runs: dict[str, list[dict[str, Any]]] = {}
     inputs: list[dict[str, Any]] = []
@@ -151,13 +205,14 @@ def summarize(single_paths: list[Path], native_paths: list[Path]) -> dict[str, A
             topology_artifact = _load(canonical.with_name("topology.json"))
             computed_identity, roots = _topology_identity(topology_artifact, topology, 1 if topology == TOPOLOGIES[0] else 4)
             _require(topology_artifact.get("topology_identity_sha256") == topology_identity == computed_identity, "system-bench topology artifact identity digest mismatch")
+            ready_digests = {node["node_id"]: _ready_identity(canonical.with_name("topology.json"), topology_artifact, node, source_revision, executable_sha256) for node in topology_artifact["nodes"]}
             canonical_roots = [Path(root) for root in roots]
             _require(all(not _paths_overlap(root, other) for index, root in enumerate(canonical_roots) for other in canonical_roots[index + 1:]), "system-bench topology database roots are invalid")
             _require(topology_identity not in topology_identities and all(not _paths_overlap(root, other) for root in canonical_roots for other in database_directories), "topology-tax repetitions must use distinct persistent database roots")
             topology_identities.add(topology_identity)
             database_directories.extend(canonical_roots)
             runs[topology].append(value)
-            inputs.append({"topology": topology, "repetition": repetition, "path": str(path), "sha256": digest, "topology_identity_sha256": topology_identity})
+            inputs.append({"topology": topology, "repetition": repetition, "path": str(path), "sha256": digest, "topology_identity_sha256": topology_identity, "ready_sha256": ready_digests})
     identities = {(run["dataset_checksum"], run["truth_artifact_sha256"]) for values in runs.values() for run in values}
     _require(len(identities) == 1, "topology-tax rows do not share fixture and truth identities")
     generations = {json.dumps(cell["generation"], sort_keys=True) for values in runs.values() for run in values for cell in run["cells"]}
@@ -189,16 +244,18 @@ def summarize(single_paths: list[Path], native_paths: list[Path]) -> dict[str, A
             row["native_over_single_qps"] = native["qps_median"] / single["qps_median"]
             row["native_over_single_p95"] = native["p95_nanos_median"] / single["p95_nanos_median"]
             rows.append(row)
-    return {"schema_version": 1, "result_kind": "vector_partition_topology_tax_v1", "status": "valid_baseline", "inputs": inputs, "fixture_truth_identity": {"dataset_checksum": next(iter(identities))[0], "truth_artifact_sha256": next(iter(identities))[1]}, "rows": rows}
+    return {"schema_version": 1, "result_kind": "vector_partition_topology_tax_v1", "status": "valid_baseline", "execution_identity": {"source_revision": source_revision, "vcs_modified": False, "executable_sha256": executable_sha256}, "inputs": inputs, "fixture_truth_identity": {"dataset_checksum": next(iter(identities))[0], "truth_artifact_sha256": next(iter(identities))[1]}, "rows": rows}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--single", type=Path, action="append", required=True)
     parser.add_argument("--native", type=Path, action="append", required=True)
+    parser.add_argument("--source-revision", required=True)
+    parser.add_argument("--executable-sha256", required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
-    result = summarize(args.single, args.native)
+    result = summarize(args.single, args.native, args.source_revision, args.executable_sha256)
     with args.out.open("x", encoding="utf-8") as stream:
         json.dump(result, stream, indent=2, sort_keys=True)
         stream.write("\n")

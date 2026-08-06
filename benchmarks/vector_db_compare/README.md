@@ -34,13 +34,18 @@ topologies, then validate and summarize them without discarding raw samples:
 python3 benchmarks/vector_db_compare/topology_tax.py \
   --single single-1.json --single single-2.json --single single-3.json \
   --native native-1.json --native native-2.json --native native-3.json \
+  --source-revision <40-character-lowercase-git-sha> \
+  --executable-sha256 <benchmark-binary-sha256> \
   --out topology-tax.json
 ```
 
 The reducer requires the frozen 100k M2 p2/p16, c1/c8, EF128 shape and binds
 each input SHA256, checked topology identity, fixture/truth identity,
 generation, raw latency samples, wall elapsed time, counters, and coordinator
-stage timings. Every retained cell must meet recall@10 >= 0.90. The first bounded
+stage timings. It also validates every retained node readiness record against
+the expected clean source revision, executable SHA256, node config, persistent
+roots, and production route, and binds those readiness digests into the output.
+Every retained cell must meet recall@10 >= 0.90. The first bounded
 baseline is retained under
 `TreeDB/docs/evidence/vector-partition-local-system-qualification-4019/m2-95c60cbe`.
 The full five-row comparative qualification remains a separate M3 execution of

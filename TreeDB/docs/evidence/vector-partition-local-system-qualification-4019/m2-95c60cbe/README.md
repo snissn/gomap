@@ -86,7 +86,9 @@ for later regressions and M3 interpretation, not a release threshold.
 
 - `topology-tax.json` is the fail-closed reduction; `runs/` retains all six raw
   matrices, checked topology identities, ready artifacts, exact commands, exit
-  status, and resource timings.
+  status, and resource timings. The reduction records the clean source revision
+  and benchmark executable SHA256, validates each ready artifact against that
+  identity and its retained node config/roots, and binds each ready SHA256.
 - `inputs/` retains the fixture manifest and canonical truth cache.
 - `m3/` retains the exact build command/time, build report, and schema-v5
   descriptor. `build/` retains the binary SHA and `go version -m` output.
