@@ -3,17 +3,34 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from system_qualification import ContractError
 from topology_tax import summarize
 
 
 class TopologyTaxTest(unittest.TestCase):
+    def test_retained_runner_preserves_timing_wrapper_after_readiness(self) -> None:
+        script = Path(__file__).parents[2] / "TreeDB/docs/evidence/vector-partition-local-system-qualification-4019/m2-95c60cbe/run_m2.py"
+        spec = importlib.util.spec_from_file_location("m2_retained_runner", script)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        process = mock.Mock(pid=101)
+        process.poll.return_value = None
+        process.wait.return_value = 0
+        with mock.patch.object(module.os, "kill") as kill, mock.patch.object(module.os, "killpg") as killpg:
+            module.stop_nodes([{"pid": 202}], [process])
+        kill.assert_called_once_with(202, module.signal.SIGTERM)
+        killpg.assert_not_called()
+
     @staticmethod
     def node_config_sha256(topology: dict, node: dict) -> str:
         config = {
