@@ -88,7 +88,9 @@ for later regressions and M3 interpretation, not a release threshold.
   matrices, checked topology identities, ready artifacts, exact commands, exit
   status, and resource timings. The reduction records the clean source revision
   and benchmark executable SHA256, validates each ready artifact against that
-  identity and its retained node config/roots, and binds each ready SHA256.
+  identity and its retained node config/roots, and binds each ready SHA256. It
+  also validates and binds each exact `/usr/bin/time` client command, successful
+  exit record, and timing wrapper against the attested executable path.
 - `inputs/` retains the fixture manifest and canonical truth cache.
 - `m3/` retains the exact build command/time, build report, and schema-v5
   descriptor. `build/` retains the binary SHA and `go version -m` output.

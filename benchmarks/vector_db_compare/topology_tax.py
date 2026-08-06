@@ -25,6 +25,14 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _read(path: Path, limit: int) -> bytes:
+    _require(path.is_file(), f"{path.name} is missing")
+    with path.open("rb") as stream:
+        raw = stream.read(limit + 1)
+    _require(len(raw) <= limit, f"{path.name} exceeds {limit} bytes")
+    return raw
+
+
 def _uint(value: Any, *, positive: bool = False) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= (1 if positive else 0)
 
@@ -151,6 +159,32 @@ def _ready_identity(topology_path: Path, topology_value: dict[str, Any], node: d
     return _sha256(ready_path)
 
 
+def _client_attestation(search_path: Path, value: dict[str, Any], topology_value: dict[str, Any], executable_path: str) -> dict[str, str]:
+    command_path, time_path, rc_path = (search_path.with_name(name) for name in ("bench.command.json", "bench.time", "bench.rc"))
+    command = json.loads(_read(command_path, 1 << 20))
+    _require(isinstance(command, list) and all(isinstance(part, str) and part for part in command), "system-bench client command is invalid")
+    _require(len(command) >= 8 and command[:2] == ["/usr/bin/time", "-v"] and command[2] == "-o" and command[4:6] == [executable_path, "system-bench"], "system-bench client executable is invalid")
+    _require(len(command[6:]) % 2 == 0, "system-bench client arguments are invalid")
+    flags = dict(zip(command[6::2], command[7::2], strict=True))
+    expected_flags = {"-endpoint", "-topology", "-dataset", "-truth-cache", "-truth-cache-sha256", "-probes", "-concurrency", "-top-k", "-ef-search", "-warmup", "-out"}
+    _require(set(flags) == expected_flags and len(flags) * 2 == len(command[6:]), "system-bench client arguments are invalid")
+    output = Path(flags["-out"])
+    _require(Path(command[3]) == output.with_name("bench.time") and Path(flags["-topology"]) == output.with_name("topology.json") and output.name == "search.json", "system-bench client output paths are invalid")
+    probes = list(dict.fromkeys(cell["budget"]["probes"] for cell in value["cells"]))
+    concurrency = list(dict.fromkeys(cell["concurrency"] for cell in value["cells"]))
+    _require(
+        flags["-endpoint"] == value.get("endpoint") and flags["-dataset"] == topology_value["dataset_directory"] and
+        flags["-truth-cache"] and flags["-truth-cache-sha256"] == value["truth_artifact_sha256"] and
+        flags["-probes"] == ",".join(map(str, probes)) and flags["-concurrency"] == ",".join(map(str, concurrency)) and
+        flags["-top-k"] == str(value["top_k"]) and flags["-ef-search"] == str(value["ef_search"]) and flags["-warmup"] == str(value["warmup_queries"]),
+        "system-bench client command does not match retained result",
+    )
+    time_raw, rc_raw = _read(time_path, 1 << 20), _read(rc_path, 32)
+    expected_time = ('\tCommand being timed: "' + " ".join(command[4:]) + '"\n').encode()
+    _require(time_raw.startswith(expected_time) and rc_raw == b"0\n", "system-bench client process attestation is invalid")
+    return {"command": _sha256(command_path), "time": _sha256(time_path), "rc": _sha256(rc_path)}
+
+
 def validate_run(value: dict[str, Any], topology: str) -> None:
     _require(value.get("schema_version") == 1 and value.get("result_kind") == "vector_partition_system_bench_v1", "unexpected system-bench identity")
     _require(value.get("topology") == topology and _is_sha256(value.get("topology_identity_sha256")), "system-bench topology identity mismatch")
@@ -181,9 +215,9 @@ def validate_run(value: dict[str, Any], topology: str) -> None:
         _require(math.isclose(metrics.get("qps", 0), 1_000_000_000_000 / elapsed, rel_tol=1e-12), "system-bench QPS changed")
 
 
-def summarize(single_paths: list[Path], native_paths: list[Path], source_revision: str, executable_sha256: str) -> dict[str, Any]:
+def summarize(single_paths: list[Path], native_paths: list[Path], source_revision: str, executable_path: str, executable_sha256: str) -> dict[str, Any]:
     _require(len(single_paths) == len(native_paths) == 3, "topology-tax baseline requires three repetitions per topology")
-    _require(_git_sha(source_revision) and _is_sha256(executable_sha256), "topology-tax expected executable provenance is invalid")
+    _require(_git_sha(source_revision) and Path(executable_path).is_absolute() and _is_sha256(executable_sha256), "topology-tax expected executable provenance is invalid")
     paths = dict(zip(TOPOLOGIES, (single_paths, native_paths), strict=True))
     runs: dict[str, list[dict[str, Any]]] = {}
     inputs: list[dict[str, Any]] = []
@@ -206,13 +240,14 @@ def summarize(single_paths: list[Path], native_paths: list[Path], source_revisio
             computed_identity, roots = _topology_identity(topology_artifact, topology, 1 if topology == TOPOLOGIES[0] else 4)
             _require(topology_artifact.get("topology_identity_sha256") == topology_identity == computed_identity, "system-bench topology artifact identity digest mismatch")
             ready_digests = {node["node_id"]: _ready_identity(canonical.with_name("topology.json"), topology_artifact, node, source_revision, executable_sha256) for node in topology_artifact["nodes"]}
+            client_attestation = _client_attestation(canonical, value, topology_artifact, executable_path)
             canonical_roots = [Path(root) for root in roots]
             _require(all(not _paths_overlap(root, other) for index, root in enumerate(canonical_roots) for other in canonical_roots[index + 1:]), "system-bench topology database roots are invalid")
             _require(topology_identity not in topology_identities and all(not _paths_overlap(root, other) for root in canonical_roots for other in database_directories), "topology-tax repetitions must use distinct persistent database roots")
             topology_identities.add(topology_identity)
             database_directories.extend(canonical_roots)
             runs[topology].append(value)
-            inputs.append({"topology": topology, "repetition": repetition, "path": str(path), "sha256": digest, "topology_identity_sha256": topology_identity, "ready_sha256": ready_digests})
+            inputs.append({"topology": topology, "repetition": repetition, "path": str(path), "sha256": digest, "topology_identity_sha256": topology_identity, "ready_sha256": ready_digests, "client_attestation_sha256": client_attestation})
     identities = {(run["dataset_checksum"], run["truth_artifact_sha256"]) for values in runs.values() for run in values}
     _require(len(identities) == 1, "topology-tax rows do not share fixture and truth identities")
     generations = {json.dumps(cell["generation"], sort_keys=True) for values in runs.values() for run in values for cell in run["cells"]}
@@ -244,7 +279,7 @@ def summarize(single_paths: list[Path], native_paths: list[Path], source_revisio
             row["native_over_single_qps"] = native["qps_median"] / single["qps_median"]
             row["native_over_single_p95"] = native["p95_nanos_median"] / single["p95_nanos_median"]
             rows.append(row)
-    return {"schema_version": 1, "result_kind": "vector_partition_topology_tax_v1", "status": "valid_baseline", "execution_identity": {"source_revision": source_revision, "vcs_modified": False, "executable_sha256": executable_sha256}, "inputs": inputs, "fixture_truth_identity": {"dataset_checksum": next(iter(identities))[0], "truth_artifact_sha256": next(iter(identities))[1]}, "rows": rows}
+    return {"schema_version": 1, "result_kind": "vector_partition_topology_tax_v1", "status": "valid_baseline", "execution_identity": {"source_revision": source_revision, "vcs_modified": False, "executable_path": executable_path, "executable_sha256": executable_sha256}, "inputs": inputs, "fixture_truth_identity": {"dataset_checksum": next(iter(identities))[0], "truth_artifact_sha256": next(iter(identities))[1]}, "rows": rows}
 
 
 def main() -> None:
@@ -252,10 +287,11 @@ def main() -> None:
     parser.add_argument("--single", type=Path, action="append", required=True)
     parser.add_argument("--native", type=Path, action="append", required=True)
     parser.add_argument("--source-revision", required=True)
+    parser.add_argument("--executable-path", required=True)
     parser.add_argument("--executable-sha256", required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
-    result = summarize(args.single, args.native, args.source_revision, args.executable_sha256)
+    result = summarize(args.single, args.native, args.source_revision, args.executable_path, args.executable_sha256)
     with args.out.open("x", encoding="utf-8") as stream:
         json.dump(result, stream, indent=2, sort_keys=True)
         stream.write("\n")

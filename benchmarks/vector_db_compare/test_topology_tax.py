@@ -16,11 +16,12 @@ from topology_tax import summarize
 
 
 SOURCE_REVISION = "d" * 40
+EXECUTABLE_PATH = "/expected/treedb_vector_partition_bench"
 EXECUTABLE_SHA256 = "e" * 64
 
 
 def summarize_checked(single: list[Path], native: list[Path]) -> dict:
-    return summarize(single, native, SOURCE_REVISION, EXECUTABLE_SHA256)
+    return summarize(single, native, SOURCE_REVISION, EXECUTABLE_PATH, EXECUTABLE_SHA256)
 
 
 class TopologyTaxTest(unittest.TestCase):
@@ -102,6 +103,7 @@ class TopologyTaxTest(unittest.TestCase):
                     node_value["node_config_sha256"] = self.node_config_sha256(topology_value, node_value)
                 topology_value["topology_identity_sha256"] = hashlib.sha256(json.dumps(topology_value, separators=(",", ":")).encode()).hexdigest()
                 value["topology_identity_sha256"] = topology_value["topology_identity_sha256"]
+                value["endpoint"] = nodes[0]["public_listen"]
                 path.write_text(json.dumps(value), encoding="utf-8")
                 (run_root / "topology.json").write_text(json.dumps(topology_value), encoding="utf-8")
                 for node_value in nodes:
@@ -118,6 +120,15 @@ class TopologyTaxTest(unittest.TestCase):
                     ready_path = run_root / Path(node_value["state_directory"]).name / "ready.json"
                     ready_path.parent.mkdir()
                     ready_path.write_text(json.dumps(ready), encoding="utf-8")
+                command = [
+                    "/usr/bin/time", "-v", "-o", str(run_root / "bench.time"), EXECUTABLE_PATH, "system-bench",
+                    "-endpoint", value["endpoint"], "-topology", str(run_root / "topology.json"), "-dataset", topology_value["dataset_directory"],
+                    "-truth-cache", "/truth", "-truth-cache-sha256", value["truth_artifact_sha256"], "-probes", "2,16", "-concurrency", "1,8",
+                    "-top-k", "10", "-ef-search", "128", "-warmup", "1000", "-out", str(path),
+                ]
+                (run_root / "bench.command.json").write_text(json.dumps(command), encoding="utf-8")
+                (run_root / "bench.time").write_text('\tCommand being timed: "' + " ".join(command[4:]) + '"\n', encoding="utf-8")
+                (run_root / "bench.rc").write_text("0\n", encoding="utf-8")
                 values[topology_index].append(path)
         return values[0], values[1]
 
@@ -240,6 +251,16 @@ class TopologyTaxTest(unittest.TestCase):
                 with self.assertRaisesRegex(ContractError, error):
                     summarize_checked(single, native)
 
+    def test_client_executable_attestation_rejects(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            single, native = self.files(Path(directory))
+            path = native[1].with_name("bench.command.json")
+            command = json.loads(path.read_text(encoding="utf-8"))
+            command[4] = "/stale/treedb_vector_partition_bench"
+            path.write_text(json.dumps(command), encoding="utf-8")
+            with self.assertRaisesRegex(ContractError, "client executable"):
+                summarize_checked(single, native)
+
     def test_recall_below_frozen_floor_rejects(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             single, native = self.files(Path(directory))
@@ -270,14 +291,14 @@ class TopologyTaxTest(unittest.TestCase):
         single = [evidence / f"runs/single_daemon_four_group/repeat-{repetition}/search.json" for repetition in range(1, 4)]
         native = [evidence / f"runs/native_four_daemon_four_group/repeat-{repetition}/search.json" for repetition in range(1, 4)]
         expected = json.loads((evidence / "topology-tax.json").read_text(encoding="utf-8"))
-        result = summarize(single, native, "95c60cbef0b0cb824a74a29e9304784e76745d9d", "b8d12f98778698ed74db4a905e2bb6b2925840702664beb6fab9e402c4f913d1")
+        result = summarize(single, native, "95c60cbef0b0cb824a74a29e9304784e76745d9d", "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/bin/treedb_vector_partition_bench.vcs", "b8d12f98778698ed74db4a905e2bb6b2925840702664beb6fab9e402c4f913d1")
         self.assertEqual(result["status"], "valid_baseline")
         self.assertEqual(result["execution_identity"], expected["execution_identity"])
         self.assertEqual(result["fixture_truth_identity"], expected["fixture_truth_identity"])
         self.assertEqual(result["rows"], expected["rows"])
         self.assertEqual(
-            [{key: entry[key] for key in ("topology", "repetition", "sha256", "topology_identity_sha256", "ready_sha256")} for entry in result["inputs"]],
-            [{key: entry[key] for key in ("topology", "repetition", "sha256", "topology_identity_sha256", "ready_sha256")} for entry in expected["inputs"]],
+            [{key: entry[key] for key in ("topology", "repetition", "sha256", "topology_identity_sha256", "ready_sha256", "client_attestation_sha256")} for entry in result["inputs"]],
+            [{key: entry[key] for key in ("topology", "repetition", "sha256", "topology_identity_sha256", "ready_sha256", "client_attestation_sha256")} for entry in expected["inputs"]],
         )
 
 

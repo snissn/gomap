@@ -35,6 +35,7 @@ python3 benchmarks/vector_db_compare/topology_tax.py \
   --single single-1.json --single single-2.json --single single-3.json \
   --native native-1.json --native native-2.json --native native-3.json \
   --source-revision <40-character-lowercase-git-sha> \
+  --executable-path <absolute-benchmark-binary-path> \
   --executable-sha256 <benchmark-binary-sha256> \
   --out topology-tax.json
 ```
@@ -44,7 +45,9 @@ each input SHA256, checked topology identity, fixture/truth identity,
 generation, raw latency samples, wall elapsed time, counters, and coordinator
 stage timings. It also validates every retained node readiness record against
 the expected clean source revision, executable SHA256, node config, persistent
-roots, and production route, and binds those readiness digests into the output.
+roots, and production route. It also validates the retained `/usr/bin/time`
+client command, successful exit, and timed executable path. The output binds
+all readiness and client-process attestation digests.
 Every retained cell must meet recall@10 >= 0.90. The first bounded
 baseline is retained under
 `TreeDB/docs/evidence/vector-partition-local-system-qualification-4019/m2-95c60cbe`.
