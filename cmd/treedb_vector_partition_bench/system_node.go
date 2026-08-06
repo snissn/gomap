@@ -19,6 +19,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -204,14 +205,19 @@ func validateVectorPartitionSystemTopologyV1(configs []vectorPartitionSystemNode
 	nodes, databases, states := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	readyPaths, ownedGroups := map[string]bool{}, map[string]bool{}
 	var listeners []string
-	addListener := func(listener string) bool {
+	addListener := func(listener string) error {
+		_, port, err := net.SplitHostPort(listener)
+		value, parseErr := strconv.ParseUint(port, 10, 16)
+		if err != nil || parseErr != nil || value == 0 {
+			return fmt.Errorf("system topology listener %q is invalid", listener)
+		}
 		for _, existing := range listeners {
 			if stringsHostPortEquivalentV1(existing, listener) {
-				return false
+				return errors.New("system topology listeners must be distinct")
 			}
 		}
 		listeners = append(listeners, listener)
-		return true
+		return nil
 	}
 	var persistentRoots []string
 	publicCount := 0
@@ -237,13 +243,16 @@ func validateVectorPartitionSystemTopologyV1(configs []vectorPartitionSystemNode
 		nodes[config.NodeID], databases[config.DatabaseDirectory], states[config.StateDirectory], readyPaths[config.ReadyPath] = true, true, true, true
 		if config.PublicListen != "" {
 			publicCount++
-			if !addListener(config.PublicListen) {
-				return evidence, errors.New("system topology listeners must be distinct")
+			if err := addListener(config.PublicListen); err != nil {
+				return evidence, err
 			}
 		}
 		for _, local := range config.LocalGroups {
-			if ownedGroups[local.GroupID] || !addListener(local.Listen) || config.Endpoints[local.GroupID] == "" || !stringsHostPortEquivalentV1(config.Endpoints[local.GroupID], local.Listen) {
+			if ownedGroups[local.GroupID] || config.Endpoints[local.GroupID] == "" || !stringsHostPortEquivalentV1(config.Endpoints[local.GroupID], local.Listen) {
 				return evidence, errors.New("system topology group ownership or listener binding is invalid")
+			}
+			if err := addListener(local.Listen); err != nil {
+				return evidence, err
 			}
 			ownedGroups[local.GroupID] = true
 		}

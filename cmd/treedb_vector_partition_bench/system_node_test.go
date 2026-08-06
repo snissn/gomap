@@ -303,6 +303,13 @@ func TestVectorPartitionSystemTopologyRequiresDistinctProductionRootsV1(t *testi
 		t.Fatalf("wildcard listener collision error = %v", err)
 	}
 	configs[0].PublicListen = "127.0.0.1:22000"
+	for _, invalid := range []string{"malformed", "127.0.0.1:0"} {
+		configs[0].PublicListen = invalid
+		if _, err := validateVectorPartitionSystemTopologyV1(configs); err == nil || !strings.Contains(err.Error(), "listener") || !strings.Contains(err.Error(), "invalid") {
+			t.Fatalf("invalid listener %q error = %v", invalid, err)
+		}
+	}
+	configs[0].PublicListen = "127.0.0.1:22000"
 	configs[1].DatabaseDirectory = configs[0].DatabaseDirectory
 	if _, err := validateVectorPartitionSystemTopologyV1(configs); err == nil || !strings.Contains(err.Error(), "persistent roots must be distinct") {
 		t.Fatalf("duplicate database root error = %v", err)
