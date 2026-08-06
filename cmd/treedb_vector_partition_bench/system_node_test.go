@@ -142,7 +142,10 @@ func TestVectorPartitionSystemReadyPublicationNoReplaceV1(t *testing.T) {
 }
 
 func TestVectorPartitionSystemTopologyRequiresDistinctProductionRootsV1(t *testing.T) {
-	root := t.TempDir()
+	root, err := m8CanonicalPathV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	groups := []string{"group-a", "group-b", "group-c", "group-d"}
 	endpoints := map[string]string{}
 	applied := map[string]uint64{}
