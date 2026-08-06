@@ -41,7 +41,9 @@ and persistent database roots. A native or container set has four configs and
 one local group per config; the single-daemon set has one config with all four
 groups. Each multi-daemon config supplies the same positive
 `group_applied_indexes` map, and its local daemon proves that its production
-Raft applied index has reached the declared floor before readiness.
+Raft applied index has reached the declared floor before readiness. Each ready
+artifact retains `node_config_sha256`; the checked topology evidence carries
+the same digest beside that node, binding readiness to the exact checked set.
 
 Launch each native node with its own `TMPDIR` equal to its configured state
 directory. Retain the topology check and each exclusive ready JSON before

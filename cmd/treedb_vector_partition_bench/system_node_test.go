@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -43,7 +45,10 @@ func TestVectorPartitionSystemNodeProcessHelperV1(t *testing.T) {
 
 func TestVectorPartitionSystemNodeSingleDaemonUsesProductionPublicRouteV1(t *testing.T) {
 	requireM8PersistentAssetSupportV1(t)
-	dataset := writeFixtureForTest(t, 64, 8, 8)
+	dataset, err := m8CanonicalPathV1(writeFixtureForTest(t, 64, 8, 8))
+	if err != nil {
+		t.Fatal(err)
+	}
 	fixture, err := loadFixture(dataset)
 	if err != nil {
 		t.Fatal(err)
@@ -55,12 +60,19 @@ func TestVectorPartitionSystemNodeSingleDaemonUsesProductionPublicRouteV1(t *tes
 		t.Fatal(err)
 	}
 	database := assets.dir
+	database, err = m8CanonicalPathV1(database)
+	if err != nil {
+		t.Fatal(err)
+	}
 	assets.owned = false
 	if err := assets.Close(); err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(database)
-	state := t.TempDir()
+	state, err := m8CanonicalPathV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("TMPDIR", state)
 	endpoints := make(map[string]string, len(groups))
 	local := make([]vectorPartitionSystemLocalGroupV1, 0, len(groups))
@@ -79,6 +91,13 @@ func TestVectorPartitionSystemNodeSingleDaemonUsesProductionPublicRouteV1(t *tes
 		t.Fatal(err)
 	}
 	defer node.Close()
+	configSHA, err := vectorPartitionSystemNodeConfigSHA256V1(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.ready.NodeConfigSHA256 != configSHA {
+		t.Fatalf("ready node config SHA = %q, want %q", node.ready.NodeConfigSHA256, configSHA)
+	}
 	if node.ready.PublicRoute != "vectorpartition.OperationsV1.Search" || !node.ready.ProductionTopology || node.ready.M8Loopback || len(node.ready.Groups) != 4 {
 		t.Fatalf("ready evidence = %+v", node.ready)
 	}
@@ -171,6 +190,12 @@ func TestVectorPartitionSystemTopologyRequiresDistinctProductionRootsV1(t *testi
 	if evidence.TopologyIdentitySHA256 == "" || evidence.PublicRoute != "vectorpartition.OperationsV1.Search" || evidence.M8Loopback || len(evidence.Nodes) != 4 {
 		t.Fatalf("topology evidence = %+v", evidence)
 	}
+	for index, node := range evidence.Nodes {
+		configSHA, err := vectorPartitionSystemNodeConfigSHA256V1(configs[index])
+		if err != nil || node.NodeConfigSHA256 != configSHA {
+			t.Fatalf("topology node config SHA = %q, want %q, err=%v", node.NodeConfigSHA256, configSHA, err)
+		}
+	}
 	var configPaths []string
 	for index, config := range configs {
 		path := filepath.Join(root, fmt.Sprintf("node-%d.json", index))
@@ -202,6 +227,37 @@ func TestVectorPartitionSystemTopologyRequiresDistinctProductionRootsV1(t *testi
 	configs[1].Assembly = "m8_loopback"
 	if _, err := validateVectorPartitionSystemTopologyV1(configs); err == nil || !strings.Contains(err.Error(), "production identity") {
 		t.Fatalf("M8 topology error = %v", err)
+	}
+}
+
+func TestVectorPartitionSystemBenchPersistsFailedCellV1(t *testing.T) {
+	dataset, cache := writeFixtureForTest(t, 10, 2, 2), t.TempDir()
+	var truthOut strings.Builder
+	if err := run([]string{"generate-truth-cache", "-dataset", dataset, "-out", cache, "-top-k", "10", "-seed", "1", "-max-vectors", "10", "-max-fixture-bytes", fmt.Sprint(maxFixtureBytes), "-max-exact-truth-visits", "20"}, &truthOut); err != nil {
+		t.Fatal(err)
+	}
+	fields := strings.Fields(truthOut.String())
+	if len(fields) < 2 {
+		t.Fatalf("truth output = %q", truthOut.String())
+	}
+	out := filepath.Join(t.TempDir(), "failed.json")
+	args := []string{"-endpoint", "127.0.0.1:1", "-dataset", dataset, "-truth-cache", cache, "-truth-cache-sha256", strings.TrimPrefix(fields[1], "artifact_sha256="), "-probes", "2", "-concurrency", "1", "-out", out, "-top-k", "10", "-ef-search", "128", "-warmup", "0"}
+	runCell := func(context.Context, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int) (vectorPartitionSystemBenchCellV1, error) {
+		return vectorPartitionSystemBenchCellV1{Status: "valid", Budget: map[string]int{"probes": 2}, Concurrency: 1, Metrics: vectorPartitionSystemBenchMetricsV1{Queries: 2}}, context.DeadlineExceeded
+	}
+	if err := runVectorPartitionSystemBenchWithCellV1(args, io.Discard, runCell); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("system bench failure = %v", err)
+	}
+	var result vectorPartitionSystemBenchResultV1
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Cells) != 1 || result.Cells[0].Status != "failed" || result.Cells[0].Error == "" || result.Cells[0].Metrics.Errors != 1 || result.Cells[0].Metrics.Timeouts != 1 || !result.CompletedAt.After(result.StartedAt) {
+		t.Fatalf("retained failed result = %+v", result)
 	}
 }
 

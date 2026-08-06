@@ -32,6 +32,7 @@ type vectorPartitionSystemBenchMetricsV1 struct {
 
 type vectorPartitionSystemBenchCellV1 struct {
 	Status      string                              `json:"status"`
+	Error       string                              `json:"error,omitempty"`
 	Budget      map[string]int                      `json:"budget"`
 	Concurrency int                                 `json:"concurrency"`
 	Metrics     vectorPartitionSystemBenchMetricsV1 `json:"metrics"`
@@ -54,6 +55,10 @@ type vectorPartitionSystemBenchResultV1 struct {
 }
 
 func runVectorPartitionSystemBenchV1(args []string, stdout io.Writer) error {
+	return runVectorPartitionSystemBenchWithCellV1(args, stdout, vectorPartitionSystemBenchCell)
+}
+
+func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, runCell func(context.Context, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int) (vectorPartitionSystemBenchCellV1, error)) error {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench system-bench", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var endpoint, dataset, truthCache, truthSHA, probeText, concurrencyText, out string
@@ -117,9 +122,21 @@ func runVectorPartitionSystemBenchV1(args []string, stdout io.Writer) error {
 	defer cancel()
 	for _, probes := range probes {
 		for _, workers := range concurrency {
-			cell, runErr := vectorPartitionSystemBenchCell(ctx, endpoint, queries, truth, topK, probes, efSearch, workers, warmup)
+			cell, runErr := runCell(ctx, endpoint, queries, truth, topK, probes, efSearch, workers, warmup)
 			if runErr != nil {
-				return fmt.Errorf("system-bench probes=%d concurrency=%d: %w", probes, workers, runErr)
+				cell.Status = "failed"
+				cell.Error = runErr.Error()
+				cell.Metrics.Errors++
+				if errors.Is(runErr, context.DeadlineExceeded) || errors.Is(runErr, os.ErrDeadlineExceeded) {
+					cell.Metrics.Timeouts++
+				}
+				result.Cells = append(result.Cells, cell)
+				result.CompletedAt = time.Now().UTC()
+				writeErr := writeVectorPartitionSystemJSONExclusiveV1(out, result)
+				if writeErr != nil {
+					return errors.Join(fmt.Errorf("system-bench probes=%d concurrency=%d: %w", probes, workers, runErr), fmt.Errorf("retain failed system-bench result: %w", writeErr))
+				}
+				return fmt.Errorf("system-bench probes=%d concurrency=%d failed result retained at %s: %w", probes, workers, out, runErr)
 			}
 			result.Cells = append(result.Cells, cell)
 		}
@@ -136,7 +153,7 @@ func runVectorPartitionSystemBenchV1(args []string, stdout io.Writer) error {
 }
 
 func vectorPartitionSystemBenchCell(ctx context.Context, endpoint string, queries [][]float32, truth [][]m8CanonicalResultV1, topK, probes, efSearch, workers, warmup int) (vectorPartitionSystemBenchCellV1, error) {
-	cell := vectorPartitionSystemBenchCellV1{Status: "valid", Budget: map[string]int{"probes": probes}, Concurrency: workers}
+	cell := vectorPartitionSystemBenchCellV1{Status: "valid", Budget: map[string]int{"probes": probes}, Concurrency: workers, Metrics: vectorPartitionSystemBenchMetricsV1{Queries: len(queries)}}
 	clients := make([]*vectorPartitionOperationsTCPClientV1, workers)
 	for i := range clients {
 		client, err := dialVectorPartitionOperationsV1(ctx, endpoint)
@@ -207,7 +224,9 @@ func vectorPartitionSystemBenchCell(ctx context.Context, endpoint string, querie
 			counters[key] += value
 		}
 	}
-	cell.Metrics = vectorPartitionSystemBenchMetricsV1{Queries: len(queries), CompletedQueries: len(queries), ResultCount: len(queries) * topK, RecallAt10: recall / float64(len(queries)), QPS: float64(len(queries)) / elapsed.Seconds(), P50Nanos: m8PercentileV1(durations, 50), P95Nanos: m8PercentileV1(durations, 95), P99Nanos: m8PercentileV1(durations, 99)}
+	cell.Metrics.CompletedQueries, cell.Metrics.ResultCount = len(queries), len(queries)*topK
+	cell.Metrics.RecallAt10, cell.Metrics.QPS = recall/float64(len(queries)), float64(len(queries))/elapsed.Seconds()
+	cell.Metrics.P50Nanos, cell.Metrics.P95Nanos, cell.Metrics.P99Nanos = m8PercentileV1(durations, 50), m8PercentileV1(durations, 95), m8PercentileV1(durations, 99)
 	cell.Counters, cell.TotalNanos = counters, durations
 	return cell, nil
 }

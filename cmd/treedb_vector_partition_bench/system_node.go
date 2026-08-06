@@ -65,24 +65,24 @@ type vectorPartitionSystemGroupReadyV1 struct {
 }
 
 type vectorPartitionSystemNodeReadyV1 struct {
-	SchemaVersion          int                                 `json:"schema_version"`
-	ResultKind             string                              `json:"result_kind"`
-	Assembly               string                              `json:"assembly"`
-	Topology               string                              `json:"topology"`
-	NodeID                 string                              `json:"node_id"`
-	PID                    int                                 `json:"pid"`
-	PublicEndpoint         string                              `json:"public_endpoint,omitempty"`
-	PublicRoute            string                              `json:"public_route"`
-	ProductionTopology     bool                                `json:"production_topology"`
-	M8Loopback             bool                                `json:"m8_loopback"`
-	DatabaseDirectory      string                              `json:"database_directory"`
-	StateDirectory         string                              `json:"state_directory"`
-	SourceRevision         string                              `json:"source_revision"`
-	VCSModified            bool                                `json:"vcs_modified"`
-	ExecutableSHA256       string                              `json:"executable_sha256"`
-	TopologyIdentitySHA256 string                              `json:"topology_identity_sha256"`
-	LifecycleState         string                              `json:"lifecycle_state"`
-	Groups                 []vectorPartitionSystemGroupReadyV1 `json:"groups"`
+	SchemaVersion      int                                 `json:"schema_version"`
+	ResultKind         string                              `json:"result_kind"`
+	Assembly           string                              `json:"assembly"`
+	Topology           string                              `json:"topology"`
+	NodeID             string                              `json:"node_id"`
+	PID                int                                 `json:"pid"`
+	PublicEndpoint     string                              `json:"public_endpoint,omitempty"`
+	PublicRoute        string                              `json:"public_route"`
+	ProductionTopology bool                                `json:"production_topology"`
+	M8Loopback         bool                                `json:"m8_loopback"`
+	DatabaseDirectory  string                              `json:"database_directory"`
+	StateDirectory     string                              `json:"state_directory"`
+	SourceRevision     string                              `json:"source_revision"`
+	VCSModified        bool                                `json:"vcs_modified"`
+	ExecutableSHA256   string                              `json:"executable_sha256"`
+	NodeConfigSHA256   string                              `json:"node_config_sha256"`
+	LifecycleState     string                              `json:"lifecycle_state"`
+	Groups             []vectorPartitionSystemGroupReadyV1 `json:"groups"`
 }
 
 type vectorPartitionSystemTopologyEvidenceV1 struct {
@@ -101,6 +101,7 @@ type vectorPartitionSystemTopologyEvidenceV1 struct {
 
 type vectorPartitionSystemTopologyNodeV1 struct {
 	NodeID            string                              `json:"node_id"`
+	NodeConfigSHA256  string                              `json:"node_config_sha256"`
 	DatabaseDirectory string                              `json:"database_directory"`
 	StateDirectory    string                              `json:"state_directory"`
 	ReadyPath         string                              `json:"ready_path"`
@@ -244,8 +245,12 @@ func validateVectorPartitionSystemTopologyV1(configs []vectorPartitionSystemNode
 		}
 	}
 	for _, config := range configs {
+		configSHA, err := vectorPartitionSystemNodeConfigSHA256V1(config)
+		if err != nil {
+			return evidence, err
+		}
 		evidence.Nodes = append(evidence.Nodes, vectorPartitionSystemTopologyNodeV1{
-			NodeID: config.NodeID, DatabaseDirectory: config.DatabaseDirectory, StateDirectory: config.StateDirectory,
+			NodeID: config.NodeID, NodeConfigSHA256: configSHA, DatabaseDirectory: config.DatabaseDirectory, StateDirectory: config.StateDirectory,
 			ReadyPath: config.ReadyPath, PublicListen: config.PublicListen, LocalGroups: slices.Clone(config.LocalGroups),
 		})
 	}
@@ -265,6 +270,15 @@ func validateVectorPartitionSystemTopologyV1(configs []vectorPartitionSystemNode
 	sum := sha256.Sum256(raw)
 	evidence.TopologyIdentitySHA256 = hex.EncodeToString(sum[:])
 	return evidence, nil
+}
+
+func vectorPartitionSystemNodeConfigSHA256V1(config vectorPartitionSystemNodeConfigV1) (string, error) {
+	raw, err := json.Marshal(config)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func vectorPartitionSystemPathsOverlapV1(left, right string) bool {
@@ -443,16 +457,15 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 	if err != nil {
 		return nil, err
 	}
-	topologyRaw, err := json.Marshal(config)
+	configSHA, err := vectorPartitionSystemNodeConfigSHA256V1(config)
 	if err != nil {
 		return nil, err
 	}
-	topologySum := sha256.Sum256(topologyRaw)
 	node.ready = vectorPartitionSystemNodeReadyV1{
 		SchemaVersion: 1, ResultKind: vectorPartitionSystemNodeReadyKindV1, Assembly: config.Assembly, Topology: config.Topology, NodeID: config.NodeID,
 		PID: os.Getpid(), PublicEndpoint: publicEndpoint, PublicRoute: "vectorpartition.OperationsV1.Search", ProductionTopology: true, M8Loopback: false,
 		DatabaseDirectory: config.DatabaseDirectory, StateDirectory: config.StateDirectory, SourceRevision: revision, VCSModified: modified,
-		ExecutableSHA256: executableSHA, TopologyIdentitySHA256: hex.EncodeToString(topologySum[:]), LifecycleState: "active",
+		ExecutableSHA256: executableSHA, NodeConfigSHA256: configSHA, LifecycleState: "active",
 	}
 	for _, evidence := range node.production.GroupEvidenceV1() {
 		node.ready.Groups = append(node.ready.Groups, vectorPartitionSystemGroupReadyV1{GroupID: evidence.GroupID, Endpoint: config.Endpoints[evidence.GroupID], LeaderID: evidence.LeaderID, AppliedIndex: evidence.AppliedIndex, ProvesProductionConsensus: true})
