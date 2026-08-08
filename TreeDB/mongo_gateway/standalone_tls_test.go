@@ -331,8 +331,8 @@ func writeTLSMaterial(t testing.TB, expired bool) (string, string, *x509.CertPoo
 }
 
 // BenchmarkStandaloneTransportHandshake compares a fresh official-driver TLS
-// handshake with the loopback plaintext control. Run with -benchmem; reused
-// CRUD remains covered by the driver's pooled connection in the package tests.
+// handshake with the loopback plaintext control. Run with -benchmem; the
+// separate reused FindOne benchmark measures the pooled CRUD read path.
 func BenchmarkStandaloneTransportHandshake(b *testing.B) {
 	for _, tlsEnabled := range []bool{false, true} {
 		name := "plaintext"
