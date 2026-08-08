@@ -324,7 +324,7 @@ func TestMongoMultiUpdateRetainedKeyByteCapStopsBeforeMutation(t *testing.T) {
 }
 
 func TestMongoWriteErrorsResponseIsBoundedBelowWireLimit(t *testing.T) {
-	longError := errors.New(strings.Repeat("x", 512))
+	longError := errors.New(strings.Repeat("界", 512))
 	writeErrors := make([]mongoWriteError, mongoWriteCommandMaxErrorEntries)
 	for i := range writeErrors {
 		writeErrors[i] = mongoWriteError{index: i, err: longError}
@@ -339,6 +339,61 @@ func TestMongoWriteErrorsResponseIsBoundedBelowWireLimit(t *testing.T) {
 	}
 	if len(message) > wire.DefaultMaxMessageLength {
 		t.Fatalf("writeErrors response bytes=%d exceeds wire max=%d", len(message), wire.DefaultMaxMessageLength)
+	}
+}
+
+func TestMongoMultiWriteErrorBudgetTerminalExhaustion(t *testing.T) {
+	for _, ordered := range []bool{true, false} {
+		t.Run(map[bool]string{true: "ordered", false: "unordered"}[ordered], func(t *testing.T) {
+			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			s := NewServer()
+			s.Collections = collections.NewCollectionManager(db)
+			assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "createIndexes", Value: "users"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"}, {Key: "unique", Value: true}}}}, {Key: "$db", Value: "app"}}))
+			assertOK(t, serveCommand(t, s, 2, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "a"}, {Key: "email", Value: "a@example.com"}}, bson.D{{Key: "_id", Value: "b"}, {Key: "email", Value: "b@example.com"}}}}, {Key: "$db", Value: "app"}}))
+			updates := make(bson.A, 0, mongoWriteCommandMaxErrorEntries+1)
+			for range mongoWriteCommandMaxErrorEntries {
+				updates = append(updates, bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "a"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "b@example.com"}}}}}})
+			}
+			updates = append(updates, bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "b"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "later", Value: true}}}}}})
+			response := serveCommand(t, s, 3, bson.D{{Key: "update", Value: "users"}, {Key: "ordered", Value: ordered}, {Key: "updates", Value: updates}, {Key: "$db", Value: "app"}})
+			assertOK(t, response)
+			errs, ok := bson.Raw(response).Lookup("writeErrors").ArrayOK()
+			values, valuesErr := errs.Values()
+			if !ok || valuesErr != nil {
+				t.Fatalf("writeErrors=%s", response)
+			}
+			if ordered {
+				if len(values) != 1 {
+					t.Fatalf("ordered errors=%d want 1", len(values))
+				}
+			} else if len(values) != mongoWriteCommandMaxErrorEntries {
+				t.Fatalf("unordered errors=%d want %d", len(values), mongoWriteCommandMaxErrorEntries)
+			}
+			last := values[len(values)-1].Document()
+			index, _ := last.Lookup("index").Int32OK()
+			wantIndex := int32(0)
+			if !ordered {
+				wantIndex = mongoWriteCommandMaxErrorEntries - 1
+				if !strings.Contains(last.Lookup("errmsg").StringValue(), "budget") {
+					t.Fatalf("terminal error=%s", last)
+				}
+			}
+			if index != wantIndex {
+				t.Fatalf("terminal index=%d want %d", index, wantIndex)
+			}
+			find := serveCommand(t, s, 4, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "b"}}}, {Key: "$db", Value: "app"}})
+			if got := cursorFirstBatch(t, find)[0].Lookup("later"); !got.IsZero() {
+				t.Fatalf("error budget executed later item: %s", got)
+			}
+			message, err := wire.AppendMsgMessage(nil, 4, 0, 0, response)
+			if err != nil || len(message) > wire.DefaultMaxMessageLength {
+				t.Fatalf("bounded response bytes=%d err=%v", len(message), err)
+			}
+		})
 	}
 }
 

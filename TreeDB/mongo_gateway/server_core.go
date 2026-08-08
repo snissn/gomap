@@ -83,6 +83,9 @@ type Server struct {
 	DefaultIndexStoragePolicy collections.RootStoragePolicy
 	ClusterSubmitter          treenativewire.ClusterSubmitter
 	ClusterCatalogVersion     ClusterCatalogVersionProvider
+	// clusterCollectionLookupHook is a test seam for proving routed command
+	// preflight fails before touching the local collection catalog.
+	clusterCollectionLookupHook func()
 	// ClusterIdempotencyNonce scopes generated cluster mutation idempotency
 	// keys to one gateway process epoch. NewServer initializes a random nonce
 	// so sequence-based keys are not reused after restart.

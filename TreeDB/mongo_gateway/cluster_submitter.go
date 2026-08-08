@@ -319,6 +319,9 @@ func (s *Server) clusterCollectionFormat(name string) (collections.DocumentForma
 }
 
 func (s *Server) clusterCollectionExists(name string) (bool, error) {
+	if s != nil && s.clusterCollectionLookupHook != nil {
+		s.clusterCollectionLookupHook()
+	}
 	if s == nil || s.Collections == nil {
 		return true, nil
 	}

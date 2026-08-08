@@ -1287,6 +1287,47 @@ func TestClusterRoutePreflightMongoTokenPlacementRejectsMultiIDWrites(t *testing
 	}
 }
 
+func TestClusterMultiWriteRejectsBeforeLocalLookupOrSubmit(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cmd  bson.D
+	}{
+		{
+			name: "update",
+			cmd: bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{
+				bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "a"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "x", Value: int32(1)}}}}}},
+				bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "b"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "x", Value: int32(2)}}}}}},
+			}}, {Key: "$db", Value: "app"}},
+		},
+		{
+			name: "delete",
+			cmd: bson.D{{Key: "delete", Value: "users"}, {Key: "deletes", Value: bson.A{
+				bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "a"}}}, {Key: "limit", Value: int32(1)}},
+				bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "b"}}}, {Key: "limit", Value: int32(1)}},
+			}}, {Key: "$db", Value: "app"}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server, submitter := newMongoPlacementRouteTestServer(t, raftplacement.PlacementModeRingV1)
+			lookups := 0
+			server.clusterCollectionLookupHook = func() { lookups++ }
+			response := serveCommand(t, server, 336109, tc.cmd)
+			if ok, okOK := bson.Raw(response).Lookup("ok").DoubleOK(); !okOK || ok != 0 {
+				t.Fatalf("multi write unexpectedly accepted: %s", response)
+			}
+			if lookups != 0 {
+				t.Fatalf("local collection lookups=%d want 0", lookups)
+			}
+			if routes := submitter.snapshotRoutes(); len(routes) != 0 {
+				t.Fatalf("route calls=%d want 0", len(routes))
+			}
+			if calls := submitter.snapshotCalls(); len(calls) != 0 {
+				t.Fatalf("submit calls=%d want 0", len(calls))
+			}
+		})
+	}
+}
+
 func TestClusterRoutePreflightMongoShardKeyFindMapsTokenThenFailsClosed(t *testing.T) {
 	for _, mode := range []raftplacement.PlacementModeV1{
 		raftplacement.PlacementModeTokenV1,
