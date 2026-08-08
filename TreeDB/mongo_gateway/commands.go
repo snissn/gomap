@@ -454,7 +454,7 @@ func (c *mongoInsertCoalescer) markStopped() {
 
 func (c *mongoInsertCoalescer) drainRequestsDirect() {
 	for req := range c.requests {
-		req.done <- mongoInsertCoalescerResult{err: runMongoInsertOne(req.col, req.id, req.stored)}
+		runMongoInsertCoalescerSequential([]mongoInsertCoalescerRequest{req})
 	}
 }
 
@@ -1896,8 +1896,7 @@ func (c *mongoUpdateCoalescer) markStopped() {
 
 func (c *mongoUpdateCoalescer) drainRequestsDirect() {
 	for req := range c.requests {
-		matched, modified, err := runMongoUpdateOne(req.col, req.item)
-		req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
+		runMongoUpdateCoalescerSequential([]mongoUpdateCoalescerRequest{req})
 	}
 }
 
