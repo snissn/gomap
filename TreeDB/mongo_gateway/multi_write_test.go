@@ -47,7 +47,8 @@ func TestMongoWriteBudgetRejectsExpiredAndExhaustedWork(t *testing.T) {
 
 func TestMongoWriteBudgetReservesBoundedResponseEnvelope(t *testing.T) {
 	s := NewServer()
-	s.MaxMessageLength = mongoWriteResponseMinimumBytes + mongoWriteErrorResponseReserveBytes
+	// One slot is held back for the terminal indexed exhaustion error.
+	s.MaxMessageLength = mongoWriteResponseMinimumBytes + 2*mongoWriteErrorResponseReserveBytes
 	budget := s.newMongoWriteBudget()
 	if err := budget.ensureMinimumResponse(); err != nil {
 		t.Fatalf("minimum response rejected: %v", err)

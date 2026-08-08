@@ -1096,7 +1096,7 @@ const (
 )
 
 func newMongoWriteBudget(limit int) *mongoWriteBudget {
-	return &mongoWriteBudget{examinedRemaining: limit, targetsRemaining: limit, retainedKeyBytesRemaining: mongoWriteCommandMaxRetainedKeyBytes, errorsRemaining: mongoWriteCommandMaxErrorEntries - 1, responseBytesRemaining: int(wire.DefaultMaxMessageLength) - mongoWriteResponseMinimumBytes, minimumResponseFits: true, deadline: time.Now().Add(mongoWriteCommandMaxDuration)}
+	return &mongoWriteBudget{examinedRemaining: limit, targetsRemaining: limit, retainedKeyBytesRemaining: mongoWriteCommandMaxRetainedKeyBytes, errorsRemaining: mongoWriteCommandMaxErrorEntries - 1, responseBytesRemaining: int(wire.DefaultMaxMessageLength) - mongoWriteResponseMinimumBytes - mongoWriteErrorResponseReserveBytes, minimumResponseFits: true, deadline: time.Now().Add(mongoWriteCommandMaxDuration)}
 }
 
 func (s *Server) newMongoWriteBudget() *mongoWriteBudget {
@@ -1105,8 +1105,8 @@ func (s *Server) newMongoWriteBudget() *mongoWriteBudget {
 	if s != nil && s.mongoWriteRetainedKeyBytesLimit > 0 {
 		budget.retainedKeyBytesRemaining = s.mongoWriteRetainedKeyBytesLimit
 	}
-	budget.minimumResponseFits = int(s.maxMessageLength()) >= mongoWriteResponseMinimumBytes
-	budget.responseBytesRemaining = int(s.maxMessageLength()) - mongoWriteResponseMinimumBytes
+	budget.minimumResponseFits = int(s.maxMessageLength()) >= mongoWriteResponseMinimumBytes+mongoWriteErrorResponseReserveBytes
+	budget.responseBytesRemaining = int(s.maxMessageLength()) - mongoWriteResponseMinimumBytes - mongoWriteErrorResponseReserveBytes
 	if budget.responseBytesRemaining < 0 {
 		budget.responseBytesRemaining = 0
 	}
