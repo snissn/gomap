@@ -85,6 +85,13 @@ func TestStandaloneServerOfficialDriverTLS(t *testing.T) {
 	if err := client.Disconnect(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	deadline := time.Now().Add(time.Second)
+	for metrics := standalone.TransportMetrics(); (metrics.ConnectionsAccepted == 0 || metrics.ConnectionsClosed != metrics.ConnectionsAccepted || metrics.ActiveConnections != 0) && time.Now().Before(deadline); metrics = standalone.TransportMetrics() {
+		time.Sleep(time.Millisecond)
+	}
+	if metrics := standalone.TransportMetrics(); metrics.ConnectionsAccepted == 0 || metrics.ConnectionsClosed != metrics.ConnectionsAccepted || metrics.ActiveConnections != 0 {
+		t.Fatalf("connection metrics after trusted disconnect=%+v", metrics)
+	}
 	cancel()
 	_ = ln.Close()
 	if err := <-serveErr; err != nil {
@@ -126,7 +133,7 @@ func TestStandaloneServerTLSHandshakeTimeoutAndClose(t *testing.T) {
 	}
 	pingCancel()
 	_ = client.Disconnect(context.Background())
-	if metrics := standalone.TransportMetrics(); metrics.HandshakesSucceeded == 0 || metrics.ActiveHandshakes == 0 || metrics.HandshakeTotalNanoseconds == 0 || metrics.HandshakeMaxNanoseconds == 0 {
+	if metrics := standalone.TransportMetrics(); metrics.HandshakesSucceeded == 0 || metrics.ActiveHandshakes == 0 || metrics.HandshakeTotalNanoseconds == 0 || metrics.HandshakeMaxNanoseconds == 0 || metrics.ConnectionsAccepted < 2 || metrics.ActiveConnections < 2 {
 		t.Fatalf("metrics=%+v want succeeded and stalled active handshake", metrics)
 	}
 	started := time.Now()
@@ -136,6 +143,9 @@ func TestStandaloneServerTLSHandshakeTimeoutAndClose(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("Close waited %s for stalled TLS handshake", elapsed)
 	}
+	if metrics := standalone.TransportMetrics(); metrics.ConnectionsClosed != metrics.ConnectionsAccepted || metrics.ActiveConnections != 0 {
+		t.Fatalf("connection metrics after shutdown=%+v", metrics)
+	}
 	select {
 	case err := <-serveErr:
 		if err != nil {
@@ -144,6 +154,104 @@ func TestStandaloneServerTLSHandshakeTimeoutAndClose(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("serve leaked after TLS handshake timeout")
 	}
+}
+
+func TestStandaloneServerRejectsConcurrentListenerWithoutMaskingRemoteStatus(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), AllowInsecureRemote: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- standalone.Serve(ctx, signalAcceptListener{Listener: remote, started: started}) }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("remote listener did not reach Accept")
+	}
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := standalone.ValidateListener(probe); err == nil {
+		t.Fatal("ValidateListener unexpectedly changed an active listener policy")
+	}
+	_ = probe.Close()
+	if got := standalone.TransportStatus(); got.Mode != "plaintext-insecure-remote" || !got.InsecureRemoteOverride {
+		t.Fatalf("ValidateListener masked active remote status: %+v", got)
+	}
+	loopback, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := standalone.Serve(context.Background(), loopback); err == nil {
+		t.Fatal("second listener unexpectedly accepted")
+	}
+	if got := standalone.TransportStatus(); got.Mode != "plaintext-insecure-remote" || !got.InsecureRemoteOverride {
+		t.Fatalf("second listener masked active remote status: %+v", got)
+	}
+	cancel()
+	_ = remote.Close()
+	if err := <-serveErr; err != nil {
+		t.Fatalf("remote serve: %v", err)
+	}
+	if err := standalone.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStandaloneServerPlaintextConnectionMetrics(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- standalone.Serve(ctx, ln) }()
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for metrics := standalone.TransportMetrics(); metrics.ConnectionsClosed == 0 && time.Now().Before(deadline); metrics = standalone.TransportMetrics() {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	_ = ln.Close()
+	if err := <-serveErr; err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	if err := standalone.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if metrics := standalone.TransportMetrics(); metrics.ConnectionsAccepted != 1 || metrics.ConnectionsClosed != 1 || metrics.ActiveConnections != 0 || metrics.HandshakesStarted != 0 {
+		t.Fatalf("plaintext connection metrics=%+v", metrics)
+	}
+}
+
+type signalAcceptListener struct {
+	net.Listener
+	started chan<- struct{}
+}
+
+func (l signalAcceptListener) Accept() (net.Conn, error) {
+	select {
+	case l.started <- struct{}{}:
+	default:
+	}
+	return l.Listener.Accept()
 }
 
 func TestStandaloneTLSStartupValidation(t *testing.T) {
@@ -330,9 +438,10 @@ func writeTLSMaterial(t testing.TB, expired bool) (string, string, *x509.CertPoo
 	return certFile, keyFile, pool
 }
 
-// BenchmarkStandaloneTransportHandshake compares a fresh official-driver TLS
-// handshake with the loopback plaintext control. Run with -benchmem; the
-// separate reused FindOne benchmark measures the pooled CRUD read path.
+// BenchmarkStandaloneTransportHandshake measures fresh official-driver
+// Connect, Ping, and Disconnect lifecycle cost. For TLS it also reports the
+// server-observed handshake duration separately; the reused FindOne benchmark
+// measures the pooled CRUD read path.
 func BenchmarkStandaloneTransportHandshake(b *testing.B) {
 	for _, tlsEnabled := range []bool{false, true} {
 		name := "plaintext"
@@ -360,6 +469,7 @@ func BenchmarkStandaloneTransportHandshake(b *testing.B) {
 			go func() { done <- standalone.Serve(ctx, ln) }()
 			defer func() { cancel(); _ = ln.Close(); <-done }()
 			b.ReportAllocs()
+			before := standalone.TransportMetrics()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				cfg := options.Client().ApplyURI("mongodb://" + ln.Addr().String()).SetDirect(true).SetServerSelectionTimeout(time.Second)
@@ -379,6 +489,14 @@ func BenchmarkStandaloneTransportHandshake(b *testing.B) {
 				}
 			}
 			b.StopTimer()
+			if tlsEnabled {
+				after := standalone.TransportMetrics()
+				handshakes := after.HandshakesSucceeded - before.HandshakesSucceeded
+				if handshakes == 0 {
+					b.Fatal("no successful TLS handshakes observed")
+				}
+				b.ReportMetric(float64(after.HandshakeTotalNanoseconds-before.HandshakeTotalNanoseconds)/float64(handshakes), "server-handshake-ns/op")
+			}
 		})
 	}
 }

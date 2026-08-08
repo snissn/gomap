@@ -36,9 +36,18 @@ type TransportStatus struct {
 	TLSClientCertificateMode string
 }
 
-// TransportMetrics durations are nanoseconds and cover TLS handshakes only.
-type TransportMetrics struct{ HandshakesStarted, HandshakesSucceeded, HandshakesFailed, ActiveHandshakes, HandshakeTotalNanoseconds, HandshakeMaxNanoseconds uint64 }
-type transportMetrics struct{ started, succeeded, failed, active, totalNS, maxNS atomic.Uint64 }
+// TransportMetrics durations are nanoseconds and handshake/connection counts
+// cover TLS listeners only. ActiveConnections includes accepted connections
+// while their handshake is pending.
+type TransportMetrics struct {
+	HandshakesStarted, HandshakesSucceeded, HandshakesFailed, ActiveHandshakes uint64
+	HandshakeTotalNanoseconds, HandshakeMaxNanoseconds                         uint64
+	ConnectionsAccepted, ConnectionsClosed, ActiveConnections                  uint64
+}
+type transportMetrics struct {
+	started, succeeded, failed, active, totalNS, maxNS atomic.Uint64
+	accepted, closed, activeConnections                atomic.Uint64
+}
 
 // StandaloneOptions configures a TreeDB-backed MongoDB gateway process.
 //
@@ -100,6 +109,7 @@ type StandaloneServer struct {
 	serveMu          sync.Mutex
 	serveWG          sync.WaitGroup
 	closing          bool
+	serving          bool
 	transportMu      sync.RWMutex
 	transport        TransportStatus
 	tlsConfig        *tls.Config
@@ -348,22 +358,34 @@ func (s *StandaloneServer) Serve(ctx context.Context, ln net.Listener) error {
 		return errServerClosed
 	}
 	s.serveMu.Lock()
-	if s.closing {
+	closing, serving := s.closing, s.serving
+	if closing || serving {
 		s.serveMu.Unlock()
 		if ln != nil {
 			_ = ln.Close()
 		}
+		if serving {
+			return errors.New("mongo gateway standalone: a listener is already serving")
+		}
 		return errServerClosed
 	}
+	s.serving = true
 	s.serveWG.Add(1)
 	s.serveMu.Unlock()
-	defer s.serveWG.Done()
+	defer func() {
+		s.serveMu.Lock()
+		s.serving = false
+		s.serveMu.Unlock()
+		s.serveWG.Done()
+	}()
 	if err := s.validateListener(ln); err != nil {
 		_ = ln.Close()
 		return err
 	}
 	if s.Options.TLSCertFile != "" {
 		ln = &tlsHandshakeListener{Listener: ln, config: s.tlsConfig.Clone(), timeout: s.Options.TLSHandshakeTimeout, metrics: s.transportMetrics}
+	} else {
+		ln = &countingListener{Listener: ln, metrics: s.transportMetrics}
 	}
 	return s.Server.Serve(ctx, ln)
 }
@@ -431,7 +453,17 @@ func (s *StandaloneServer) TransportMetrics() TransportMetrics {
 		return TransportMetrics{}
 	}
 	m := s.transportMetrics
-	return TransportMetrics{HandshakesStarted: m.started.Load(), HandshakesSucceeded: m.succeeded.Load(), HandshakesFailed: m.failed.Load(), ActiveHandshakes: m.active.Load(), HandshakeTotalNanoseconds: m.totalNS.Load(), HandshakeMaxNanoseconds: m.maxNS.Load()}
+	return TransportMetrics{
+		HandshakesStarted:         m.started.Load(),
+		HandshakesSucceeded:       m.succeeded.Load(),
+		HandshakesFailed:          m.failed.Load(),
+		ActiveHandshakes:          m.active.Load(),
+		HandshakeTotalNanoseconds: m.totalNS.Load(),
+		HandshakeMaxNanoseconds:   m.maxNS.Load(),
+		ConnectionsAccepted:       m.accepted.Load(),
+		ConnectionsClosed:         m.closed.Load(),
+		ActiveConnections:         m.activeConnections.Load(),
+	}
 }
 
 func (s *StandaloneServer) validateListener(ln net.Listener) error {
@@ -459,6 +491,14 @@ func (s *StandaloneServer) ValidateListener(ln net.Listener) error {
 	if s == nil {
 		return errServerClosed
 	}
+	s.serveMu.Lock()
+	defer s.serveMu.Unlock()
+	if s.serving {
+		return errors.New("mongo gateway standalone: a listener is already serving")
+	}
+	// Keep serveMu through publication in validateListener: otherwise a
+	// concurrent Serve could set serving and publish its status between a probe's
+	// check and its status update.
 	return s.validateListener(ln)
 }
 
@@ -519,7 +559,41 @@ func (l *tlsHandshakeListener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &tlsHandshakeConn{Conn: conn, config: l.config, timeout: l.timeout, metrics: l.metrics}, nil
+	return &tlsHandshakeConn{Conn: newCountingConn(conn, l.metrics), config: l.config, timeout: l.timeout, metrics: l.metrics}, nil
+}
+
+type countingListener struct {
+	net.Listener
+	metrics *transportMetrics
+}
+
+func (l *countingListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return newCountingConn(conn, l.metrics), nil
+}
+
+func newCountingConn(conn net.Conn, metrics *transportMetrics) *countingConn {
+	metrics.accepted.Add(1)
+	metrics.activeConnections.Add(1)
+	return &countingConn{Conn: conn, metrics: metrics}
+}
+
+type countingConn struct {
+	net.Conn
+	metrics   *transportMetrics
+	closeOnce sync.Once
+}
+
+func (c *countingConn) Close() error {
+	err := c.Conn.Close()
+	c.closeOnce.Do(func() {
+		c.metrics.activeConnections.Add(^uint64(0))
+		c.metrics.closed.Add(1)
+	})
+	return err
 }
 
 type tlsHandshakeConn struct {
@@ -552,10 +626,13 @@ func (c *tlsHandshakeConn) handshake() error {
 			c.metrics.succeeded.Add(1)
 		} else {
 			c.metrics.failed.Add(1)
-			_ = c.Conn.Close()
+			_ = c.Close()
 		}
 	})
 	return c.handshakeErr
+}
+func (c *tlsHandshakeConn) Close() error {
+	return c.Conn.Close()
 }
 func (c *tlsHandshakeConn) Read(p []byte) (int, error) {
 	if err := c.handshake(); err != nil {
