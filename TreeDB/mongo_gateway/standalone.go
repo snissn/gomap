@@ -431,7 +431,7 @@ func (s *StandaloneServer) TransportMetrics() TransportMetrics {
 		return TransportMetrics{}
 	}
 	m := s.transportMetrics
-	return TransportMetrics{m.started.Load(), m.succeeded.Load(), m.failed.Load(), m.active.Load(), m.totalNS.Load(), m.maxNS.Load()}
+	return TransportMetrics{HandshakesStarted: m.started.Load(), HandshakesSucceeded: m.succeeded.Load(), HandshakesFailed: m.failed.Load(), ActiveHandshakes: m.active.Load(), HandshakeTotalNanoseconds: m.totalNS.Load(), HandshakeMaxNanoseconds: m.maxNS.Load()}
 }
 
 func (s *StandaloneServer) validateListener(ln net.Listener) error {
