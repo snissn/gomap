@@ -366,10 +366,10 @@ func TestStandaloneTLSRejectsExpiredCertificateBeforeMongo(t *testing.T) {
 		t.Fatal("expired certificate unexpectedly connected")
 	}
 	deadline := time.Now().Add(time.Second)
-	for standalone.TransportMetrics().HandshakesFailed == 0 && time.Now().Before(deadline) {
+	for metrics := standalone.TransportMetrics(); (metrics.HandshakesFailed == 0 || metrics.HandshakeTotalNanoseconds == 0 || metrics.ActiveHandshakes != 0 || metrics.ActiveConnections != 0 || metrics.ConnectionsClosed != metrics.ConnectionsAccepted) && time.Now().Before(deadline); metrics = standalone.TransportMetrics() {
 		time.Sleep(time.Millisecond)
 	}
-	if metrics := standalone.TransportMetrics(); metrics.HandshakesFailed == 0 || metrics.HandshakeTotalNanoseconds == 0 {
+	if metrics := standalone.TransportMetrics(); metrics.HandshakesFailed == 0 || metrics.HandshakeTotalNanoseconds == 0 || metrics.ActiveHandshakes != 0 || metrics.ActiveConnections != 0 || metrics.ConnectionsAccepted == 0 || metrics.ConnectionsClosed != metrics.ConnectionsAccepted {
 		t.Fatalf("metrics=%+v", metrics)
 	}
 	cancel()
