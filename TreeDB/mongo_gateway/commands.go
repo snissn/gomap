@@ -87,6 +87,13 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
+	// A BSON multi-document insert takes the native atomic batch granule.  Its
+	// whole target reservation is knowable after parse, before a first-write
+	// collection would be created, so reject an over-cap command without that
+	// otherwise observable catalog side effect.
+	if len(ids) > 1 && format == collections.DocumentFormatBSON && len(ids) > s.maxFindScanDocuments() {
+		return marshalInsertResponseWithWriteErrors(0, []mongoWriteError{{index: 0, err: errors.New("Mongo gateway multi-write command exceeded its retained-target budget")}})
+	}
 	var releaseColdCollection func()
 	defer func() {
 		if releaseColdCollection != nil {
@@ -120,8 +127,11 @@ func (s *Server) runMongoInsertCommand(name string, col *collections.Collection,
 	// safely fall back to the per-item path that supplies Mongo's indexed
 	// ordered/unordered error envelope.
 	if len(ids) > 1 && format == collections.DocumentFormatBSON {
-		if err := budget.checkDeadline(); err != nil {
-			return marshalInsertResponseWithWriteErrors(0, []mongoWriteError{{index: 0, err: err}})
+		if err := budget.reserveTargets(len(ids)); err != nil {
+			if reserveErr := budget.reserveError(); reserveErr == nil {
+				return marshalInsertResponseWithWriteErrors(0, []mongoWriteError{{index: 0, err: err}})
+			}
+			return marshalInsertResponseWithWriteErrors(0, nil)
 		}
 		if _, batchErr := col.InsertBatchValidatedBSON(ids, stored); batchErr == nil {
 			return marshalInsertResponseWithWriteErrors(int32(len(ids)), nil)
@@ -1044,6 +1054,26 @@ func (b *mongoWriteBudget) reserveTarget() error {
 		return errors.New("Mongo gateway multi-write command exceeded its retained-target budget")
 	}
 	b.targetsRemaining--
+	return nil
+}
+
+// reserveTargets reserves an entire non-interruptible mutation granule.  It
+// deliberately checks capacity before decrementing so an over-cap native batch
+// is rejected without consuming budget or applying any prefix.
+func (b *mongoWriteBudget) reserveTargets(count int) error {
+	if b == nil || count == 0 {
+		return nil
+	}
+	if count < 0 {
+		return errors.New("Mongo gateway multi-write command has an invalid target reservation")
+	}
+	if time.Now().After(b.deadline) {
+		return errors.New("Mongo gateway multi-write command exceeded its execution-time budget")
+	}
+	if b.targetsRemaining < count {
+		return errors.New("Mongo gateway multi-write command exceeded its retained-target budget")
+	}
+	b.targetsRemaining -= count
 	return nil
 }
 

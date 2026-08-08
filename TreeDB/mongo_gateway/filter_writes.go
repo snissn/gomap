@@ -134,10 +134,12 @@ func (s *Server) runMongoFilterUpdateOne(col *collections.Collection, update mon
 	return false, false, fmt.Errorf("Mongo gateway filter write exceeded %d predicate-drift retries", mongoFilterWriteMaxAttempts)
 }
 
-// runMongoFilterUpdateMany selects in collection natural order. Each selected
-// key is rechecked by runMongoFilterUpdateOne before its atomic update; this
-// keeps concurrent predicate drift from mutating a document that no longer
-// matches. The shared scan cap is the command's explicit work bound.
+// runMongoFilterUpdateMany selects in collection natural order, then rechecks
+// the original predicate inside each selected key's atomic Update callback.
+// This keeps concurrent predicate drift from mutating a document that no
+// longer matches without rerunning selection (which would change natural-order
+// and target-budget accounting). The shared scan cap is the command's explicit
+// work bound.
 func (s *Server) runMongoFilterUpdateMany(col *collections.Collection, update mongoUpdateItem) (int32, int32, bool, error) {
 	materializer, err := storedDocumentMaterializerForCollection(col)
 	if err != nil {
@@ -182,19 +184,28 @@ func (s *Server) runMongoFilterUpdateMany(col *collections.Collection, update mo
 		return 0, 0, false, fmt.Errorf("Mongo gateway multi update requires a bounded scan and exceeded %d documents", s.maxFindScanDocuments())
 	}
 	var matched, modified int32
+	if s.filterWriteSelectedHook != nil && len(keys) != 0 {
+		s.filterWriteSelectedHook()
+	}
 	for _, key := range keys {
 		if err := update.budget.checkDeadline(); err != nil {
 			return matched, modified, false, err
 		}
 		item := update
-		item.multi, item.exactID, item.key = false, true, key
-		// The key came from the bounded natural-order predicate scan. Apply by
-		// that exact key so each selected document is visited once.
-		matchedOne, modifiedOne, _, err := runMongoUpdateOneWithUpsert(col, item)
+		item.multi, item.exactID, item.key = false, false, key
+		predicateMatched := false
+		_, modifiedOne, err := col.Update(key, func(stored []byte) ([]byte, bool, error) {
+			match, matchErr := mongoStoredDocumentMatchesPlan(col, materializer, stored, update.plan)
+			if matchErr != nil || !match {
+				return nil, false, matchErr
+			}
+			predicateMatched = true
+			return applyMongoUpdateToStoredDocument(col, materializer, item, stored)
+		})
 		if err != nil {
 			return matched, modified, false, err
 		}
-		if matchedOne {
+		if predicateMatched {
 			matched++
 		}
 		if modifiedOne {

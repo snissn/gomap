@@ -1,6 +1,7 @@
 package mongogateway
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -178,6 +179,7 @@ func TestMongoInsertCommandExpiredBudgetStopsBeforeMutation(t *testing.T) {
 	defer db.Close()
 	s := NewServer()
 	s.Collections = collections.NewCollectionManager(db)
+	s.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
 	assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "seed"}}}}, {Key: "$db", Value: "app"}}))
 	col, err := s.Collections.OpenCollection("app.users")
 	if err != nil {
@@ -202,6 +204,80 @@ func TestMongoInsertCommandExpiredBudgetStopsBeforeMutation(t *testing.T) {
 	find := serveCommand(t, s, 2, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "expired"}}}, {Key: "$db", Value: "app"}})
 	if len(cursorFirstBatch(t, find)) != 0 {
 		t.Fatal("expired insert mutated collection")
+	}
+}
+
+func TestMongoInsertCommandNativeBatchReservesWholeTargetGranule(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	s.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "seed"}}}}, {Key: "$db", Value: "app"}}))
+	col, err := s.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepare := func(ids ...string) ([][]byte, [][]byte) {
+		docs := make([]wire.Document, len(ids))
+		for i, id := range ids {
+			docs[i] = mustDocument(t, bson.D{{Key: "_id", Value: id}})
+		}
+		keys, stored, prepareErr := prepareInsertDocuments(docs, collections.DocumentFormatBSON)
+		if prepareErr != nil {
+			t.Fatal(prepareErr)
+		}
+		return keys, stored
+	}
+	keys, stored := prepare("boundary-a", "boundary-b")
+	response, err := s.runMongoInsertCommand("app.users", col, collections.DocumentFormatBSON, keys, stored, true, newMongoWriteBudget(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOK(t, response)
+	assertInt32(t, response, "n", 2)
+	keys, stored = prepare("over-a", "over-b")
+	response, err = s.runMongoInsertCommand("app.users", col, collections.DocumentFormatBSON, keys, stored, true, newMongoWriteBudget(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOK(t, response)
+	assertInt32(t, response, "n", 0)
+	if bson.Raw(response).Lookup("writeErrors").IsZero() {
+		t.Fatalf("over-cap batch omitted indexed error: %s", response)
+	}
+	for _, id := range []string{"over-a", "over-b"} {
+		find := serveCommand(t, s, 2, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: id}}}, {Key: "$db", Value: "app"}})
+		if len(cursorFirstBatch(t, find)) != 0 {
+			t.Fatalf("over-cap native batch mutated %s", id)
+		}
+	}
+}
+
+func TestMongoInsertOverCapRejectsBeforeFirstCollectionCreate(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	s.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	s.MaxFindScanDocuments = 1
+	response := serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "missing"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "over-a"}},
+		bson.D{{Key: "_id", Value: "over-b"}},
+	}}, {Key: "$db", Value: "app"}})
+	assertOK(t, response)
+	assertInt32(t, response, "n", 0)
+	if bson.Raw(response).Lookup("writeErrors").IsZero() {
+		t.Fatalf("over-cap first write omitted indexed error: %s", response)
+	}
+	if _, openErr := s.Collections.OpenCollection("app.missing"); !errors.Is(openErr, collections.ErrCollectionNotFound) {
+		t.Fatalf("over-cap insert created collection: err=%v", openErr)
 	}
 }
 

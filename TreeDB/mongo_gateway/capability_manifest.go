@@ -134,7 +134,7 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 				"crud.updateone-set-by-id",
 				"crud.delete-by-id",
 			},
-			Note: "Explicit-ID and bounded single-document shapes; broader Mongo semantics remain intentionally limited.",
+			Note: "Explicit-ID CRUD plus bounded multi update/delete and ordered or unordered insert/update/delete batches; per-document atomicity only, never a transaction.",
 		},
 		{
 			ID:    "standalone-write-concern",

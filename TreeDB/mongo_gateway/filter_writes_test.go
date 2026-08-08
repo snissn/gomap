@@ -321,3 +321,35 @@ func TestMongoFilterUpsertRejectsBeforeMissingCollectionCreation(t *testing.T) {
 		}
 	}
 }
+
+func TestMongoFilterUpdateManyRechecksPredicateAfterDeterministicDrift(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "active", Value: true}}, bson.D{{Key: "_id", Value: "u2"}, {Key: "active", Value: true}}}}, {Key: "$db", Value: "app"}}))
+	selected, release := make(chan struct{}), make(chan struct{})
+	server.filterWriteSelectedHook = func() { close(selected); <-release }
+	result := make(chan commandResult, 1)
+	go func() {
+		doc, commandErr := serveCommandResult(server, 2, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "active", Value: true}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "picked", Value: true}}}}}, {Key: "multi", Value: true}}}}, {Key: "$db", Value: "app"}})
+		result <- commandResult{doc: doc, err: commandErr}
+	}()
+	awaitMongoFilterWriteSignal(t, selected, "multi filter write selection")
+	assertOK(t, serveCommand(t, server, 3, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "active", Value: false}}}}}}}}, {Key: "$db", Value: "app"}}))
+	close(release)
+	resultValue := <-result
+	if resultValue.err != nil {
+		t.Fatal(resultValue.err)
+	}
+	assertOK(t, resultValue.doc)
+	assertInt32(t, resultValue.doc, "n", 1)
+	find := serveCommand(t, server, 4, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	if !bson.Raw(find).Lookup("cursor").Document().Lookup("firstBatch").Array().Index(0).Document().Lookup("picked").IsZero() {
+		t.Fatalf("predicate-drift multi update mutated u1: %s", find)
+	}
+}
