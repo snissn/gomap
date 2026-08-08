@@ -263,6 +263,7 @@ func TestStandaloneTLSStartupValidation(t *testing.T) {
 	}{
 		{"missing-key", StandaloneOptions{Dir: t.TempDir(), TLSCertFile: certFile}},
 		{"missing-client-ca", StandaloneOptions{Dir: t.TempDir(), TLSCertFile: certFile, TLSKeyFile: keyFile, RequireClientCert: true}},
+		{"client-cert-without-server-tls", StandaloneOptions{Dir: t.TempDir(), TLSCAFile: certFile, RequireClientCert: true}},
 		{"bad-min-version", StandaloneOptions{Dir: t.TempDir(), TLSCertFile: certFile, TLSKeyFile: keyFile, TLSMinVersion: tls.VersionTLS11}},
 		{"mismatched-key", StandaloneOptions{Dir: t.TempDir(), TLSCertFile: otherCert, TLSKeyFile: keyFile}},
 		{"unused-other-key", StandaloneOptions{Dir: t.TempDir(), TLSCertFile: certFile, TLSKeyFile: otherKey}},

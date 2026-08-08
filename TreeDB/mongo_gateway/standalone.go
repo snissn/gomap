@@ -36,9 +36,9 @@ type TransportStatus struct {
 	TLSClientCertificateMode string
 }
 
-// TransportMetrics durations are nanoseconds and handshake/connection counts
-// cover TLS listeners only. ActiveConnections includes accepted connections
-// while their handshake is pending.
+// TransportMetrics durations and handshake counts cover TLS listeners; connection
+// counts cover both plaintext and TLS listeners. ActiveConnections includes
+// accepted connections while their TLS handshake is pending.
 type TransportMetrics struct {
 	HandshakesStarted, HandshakesSucceeded, HandshakesFailed, ActiveHandshakes uint64
 	HandshakeTotalNanoseconds, HandshakeMaxNanoseconds                         uint64
@@ -176,6 +176,9 @@ func NormalizeStandaloneOptions(opts StandaloneOptions) (StandaloneOptions, erro
 	}
 	if opts.RequireClientCert && opts.TLSCAFile == "" {
 		return opts, errors.New("mongo gateway standalone: TLSCAFile is required when RequireClientCert is enabled")
+	}
+	if opts.RequireClientCert && opts.TLSCertFile == "" {
+		return opts, errors.New("mongo gateway standalone: TLSCertFile and TLSKeyFile are required when RequireClientCert is enabled")
 	}
 	if opts.TLSMinVersion == 0 {
 		opts.TLSMinVersion = tls.VersionTLS12
