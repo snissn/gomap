@@ -150,6 +150,8 @@ func (s *Server) runMongoInsertCommand(name string, col *collections.Collection,
 		if err := budget.reserveTarget(); err != nil {
 			if reserveErr := budget.reserveError(); reserveErr == nil {
 				writeErrors = append(writeErrors, mongoWriteError{index: i, err: err})
+			} else {
+				writeErrors = append(writeErrors, mongoWriteError{index: i, err: reserveErr})
 			}
 			break
 		}
@@ -168,6 +170,7 @@ func (s *Server) runMongoInsertCommand(name string, col *collections.Collection,
 			continue
 		}
 		if reserveErr := budget.reserveError(); reserveErr != nil {
+			writeErrors = append(writeErrors, mongoWriteError{index: i, err: reserveErr})
 			break
 		}
 		writeErrors = append(writeErrors, mongoWriteError{index: i, err: err})
@@ -1038,7 +1041,7 @@ const (
 )
 
 func newMongoWriteBudget(limit int) *mongoWriteBudget {
-	return &mongoWriteBudget{examinedRemaining: limit, targetsRemaining: limit, retainedKeyBytesRemaining: mongoWriteCommandMaxRetainedKeyBytes, errorsRemaining: mongoWriteCommandMaxErrorEntries, deadline: time.Now().Add(mongoWriteCommandMaxDuration)}
+	return &mongoWriteBudget{examinedRemaining: limit, targetsRemaining: limit, retainedKeyBytesRemaining: mongoWriteCommandMaxRetainedKeyBytes, errorsRemaining: mongoWriteCommandMaxErrorEntries - 1, deadline: time.Now().Add(mongoWriteCommandMaxDuration)}
 }
 
 func (s *Server) newMongoWriteBudget() *mongoWriteBudget {
@@ -1175,6 +1178,7 @@ func (s *Server) runMongoUpdateCommand(name string, col *collections.Collection,
 			matched += matchedOne
 			modified += modifiedOne
 			if reserveErr := update.budget.reserveError(); reserveErr != nil {
+				writeErrors = append(writeErrors, mongoWriteError{index: update.index, err: reserveErr})
 				return marshalUpdateResponseWithWriteErrors(matched, modified, upserted, writeErrors)
 			}
 			writeErrors = append(writeErrors, mongoWriteError{index: update.index, err: err})
@@ -2234,6 +2238,7 @@ func (s *Server) deleteResponse(ctx context.Context, command wire.Document, sequ
 		if runErr != nil {
 			deleted += count
 			if reserveErr := item.budget.reserveError(); reserveErr != nil {
+				writeErrors = append(writeErrors, mongoWriteError{index: item.index, err: reserveErr})
 				return marshalDeleteResponseWithWriteErrors(deleted, writeErrors)
 			}
 			writeErrors = append(writeErrors, mongoWriteError{index: item.index, err: runErr})
