@@ -51,8 +51,9 @@ default). It never prints key material or raw certificates in startup status.
 Library users can obtain the selected mode and certificate expiry with
 `TransportStatus`, and handshake counts plus cumulative/max nanosecond timing
 with `TransportMetrics`; neither exposes client identities or certificate/key
-contents. These transport facts are recorded in the executable capability
-manifest used by differential and benchmark metadata.
+contents. The executable capability manifest identifies the supported policy;
+each compatibility-differential artifact additionally records its effective
+TreeDB listener mode (the bundled harness is `plaintext-loopback`).
 
 ```sh
 GOWORK=off go run ./TreeDB/mongo_gateway/server.go \

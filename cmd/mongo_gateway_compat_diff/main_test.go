@@ -32,7 +32,7 @@ func TestBundledFixturesLoadAndSmokeSelectionIsReal(t *testing.T) {
 
 func TestWriteArtifactsEmitsJSONMarkdownAndTSV(t *testing.T) {
 	dir := t.TempDir()
-	result := compatdiff.Result{Schema: compatdiff.ResultSchema, Version: compatdiff.ResultVersion, Status: "pass", Fixtures: []compatdiff.FixtureResult{{ID: "case", CapabilityID: "wire.ping-command", Expectation: compatdiff.ExpectedSupported, Status: "pass"}}}
+	result := compatdiff.Result{Schema: compatdiff.ResultSchema, Version: compatdiff.ResultVersion, Status: "pass", TreeDBTransportMode: "plaintext-loopback", Fixtures: []compatdiff.FixtureResult{{ID: "case", CapabilityID: "wire.ping-command", Expectation: compatdiff.ExpectedSupported, Status: "pass"}}}
 	if err := writeArtifacts(dir, result); err != nil {
 		t.Fatal(err)
 	}
@@ -47,6 +47,16 @@ func TestWriteArtifactsEmitsJSONMarkdownAndTSV(t *testing.T) {
 	}
 	if strings.Contains(string(markdown), `\\n`) {
 		t.Fatal("markdown contains literal newline escapes")
+	}
+	if !strings.Contains(string(markdown), "TreeDB transport: `plaintext-loopback`") {
+		t.Fatalf("markdown missing TreeDB transport metadata: %s", markdown)
+	}
+	jsonArtifact, err := os.ReadFile(filepath.Join(dir, "result.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(jsonArtifact), `"treedb_transport_mode": "plaintext-loopback"`) {
+		t.Fatalf("JSON missing TreeDB transport metadata: %s", jsonArtifact)
 	}
 }
 
