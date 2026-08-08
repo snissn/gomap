@@ -1505,6 +1505,9 @@ func runMongoUpdateOneWithUpsert(col *collections.Collection, update mongoUpdate
 		if err != nil || matched || !update.upsert {
 			return matched, modified, false, mongoUpdateErrorWithIndex(update.index, err)
 		}
+		if err := update.budget.checkDeadline(); err != nil {
+			return matched, modified, false, err
+		}
 		return mongoInsertUpsert(col, update)
 	}
 	materializer, err := storedDocumentMaterializerForCollection(col)
@@ -1518,6 +1521,9 @@ func runMongoUpdateOneWithUpsert(col *collections.Collection, update mongoUpdate
 		return applyMongoUpdateToStoredDocument(col, materializer, update, stored)
 	})
 	if err != nil || matched || !update.upsert {
+		return matched, modified, false, err
+	}
+	if err := update.budget.checkDeadline(); err != nil {
 		return matched, modified, false, err
 	}
 	return mongoInsertUpsert(col, update)
