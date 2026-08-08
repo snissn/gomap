@@ -339,7 +339,9 @@ func TestStandaloneJournalWriteConcernPartialErrorCrashReopen(t *testing.T) {
 		}
 		seedWriteConcernDuplicateEmails(t, standalone.Server, true)
 		response := serveCommand(t, standalone.Server, 2, writeConcernPartialDeleteCommand())
-		assertCommandError(t, response, "BadValue")
+		if ok, okOK := bson.Raw(response).Lookup("ok").DoubleOK(); !okOK || ok != 1 {
+			t.Fatalf("partial response=%s", response)
+		}
 		if !bson.Raw(response).Lookup("writeConcernError").IsZero() {
 			t.Fatalf("successful partial-error sync returned writeConcernError: %s", response)
 		}
@@ -369,8 +371,8 @@ func TestStandaloneJournalWriteConcernPartialErrorCrashReopen(t *testing.T) {
 				t.Fatalf("reopen: %v", err)
 			}
 			defer func() { _ = standalone.Close() }()
-			if got := writeConcernFindDocumentCount(t, standalone.Server, "u1"); got != 0 {
-				t.Fatalf("reopen restored first deleted document count=%d", got)
+			if got := writeConcernFindDocumentCount(t, standalone.Server, "u1"); got != 1 {
+				t.Fatalf("reopen lost first updated document count=%d", got)
 			}
 			if got := writeConcernFindDocumentCount(t, standalone.Server, "u2"); got != 1 {
 				t.Fatalf("reopen lost document after failing delete item count=%d", got)
@@ -398,7 +400,9 @@ func TestStandaloneJournalWriteConcernPartialErrorSyncFailureIsUncertain(t *test
 				return true, errors.New("injected post-sync publication failure")
 			}
 			response := serveCommand(t, standalone.Server, 2, writeConcernPartialDeleteCommand())
-			assertCommandError(t, response, "BadValue")
+			if ok, okOK := bson.Raw(response).Lookup("ok").DoubleOK(); !okOK || ok != 1 {
+				t.Fatalf("partial response=%s", response)
+			}
 			wcError, ok := bson.Raw(response).Lookup("writeConcernError").DocumentOK()
 			if !ok || wcError.Lookup("codeName").StringValue() != "WriteConcernFailed" {
 				t.Fatalf("partial-error response missing writeConcernError: %s", response)
@@ -407,8 +411,8 @@ func TestStandaloneJournalWriteConcernPartialErrorSyncFailureIsUncertain(t *test
 			if stats.SyncFailures != 1 || stats.UncertainOutcomes != 1 || stats.PhysicalSyncBoundaries != 1 || stats.JournalAcknowledgements != 0 {
 				t.Fatalf("partial-error uncertainty stats=%+v", stats)
 			}
-			if got := writeConcernFindDocumentCount(t, standalone.Server, "u1"); got != 0 {
-				t.Fatalf("partial-error uncertainty restored first deleted document count=%d", got)
+			if got := writeConcernFindDocumentCount(t, standalone.Server, "u1"); got != 1 {
+				t.Fatalf("partial-error uncertainty lost first updated document count=%d", got)
 			}
 		})
 	}
@@ -419,15 +423,17 @@ func seedWriteConcernDuplicateEmails(t *testing.T, server *Server, journal bool)
 	command := bson.D{
 		{Key: "insert", Value: "users"},
 		{Key: "documents", Value: bson.A{
-			bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "same@example.com"}},
-			bson.D{{Key: "_id", Value: "u2"}, {Key: "email", Value: "same@example.com"}},
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "u1@example.com"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "count", Value: "not-a-number"}},
 		}},
 	}
 	if journal {
 		command = append(command, bson.E{Key: "writeConcern", Value: bson.D{{Key: "j", Value: true}}})
 	}
 	command = append(command, bson.E{Key: "$db", Value: "app"})
-	assertOK(t, serveCommand(t, server, 1, command))
+	if response := serveCommand(t, server, 1, command); bson.Raw(response).Lookup("ok").Double() != 1 {
+		t.Fatalf("seed insert=%s", response)
+	}
 }
 
 func writeConcernPartialCreateIndexesCommand() bson.D {
@@ -444,10 +450,10 @@ func writeConcernPartialCreateIndexesCommand() bson.D {
 
 func writeConcernPartialDeleteCommand() bson.D {
 	return bson.D{
-		{Key: "delete", Value: "users"},
-		{Key: "deletes", Value: bson.A{
-			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "limit", Value: int32(1)}},
-			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "limit", Value: int32(2)}},
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{
+			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}}}}},
+			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "count", Value: int32(1)}}}}}},
 		}},
 		{Key: "writeConcern", Value: bson.D{{Key: "j", Value: true}}},
 		{Key: "$db", Value: "app"},
