@@ -109,10 +109,13 @@ type Server struct {
 	// filterWriteSelectedHook is test-only coordination between natural-order
 	// selection and the mutation-boundary predicate recheck.
 	filterWriteSelectedHook func()
-	updateMu                sync.Mutex
-	updateCoalescers        map[string]*mongoUpdateCoalescer
-	insertMu                sync.Mutex
-	insertCoalescers        map[string]*mongoInsertCoalescer
+	// mongoWriteRetainedKeyBytesLimit is a test-only override of the command
+	// retained-key ceiling; zero uses mongoWriteCommandMaxRetainedKeyBytes.
+	mongoWriteRetainedKeyBytesLimit int
+	updateMu                        sync.Mutex
+	updateCoalescers                map[string]*mongoUpdateCoalescer
+	insertMu                        sync.Mutex
+	insertCoalescers                map[string]*mongoInsertCoalescer
 	// standaloneWriteBoundaryMu lets ordinary standalone writes overlap while
 	// making a journal request exclusive from dispatch through its durable
 	// boundary. That exclusion prevents a concurrent collection mutation from

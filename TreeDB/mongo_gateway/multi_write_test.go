@@ -2,6 +2,7 @@ package mongogateway
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -286,6 +287,58 @@ func TestMongoInsertOverCapRejectsBeforeFirstCollectionCreate(t *testing.T) {
 	}
 	if _, openErr := s.Collections.OpenCollection("app.missing"); !errors.Is(openErr, collections.ErrCollectionNotFound) {
 		t.Fatalf("over-cap insert created collection: err=%v", openErr)
+	}
+}
+
+func TestMongoMultiUpdateRetainedKeyByteCapStopsBeforeMutation(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	s.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	s.MaxFindScanDocuments = 2
+	s.mongoWriteRetainedKeyBytesLimit = 1 // less than one encoded BSON string _id key
+	assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "large-id-a"}, {Key: "active", Value: true}},
+		bson.D{{Key: "_id", Value: "large-id-b"}, {Key: "active", Value: true}},
+	}}, {Key: "$db", Value: "app"}}))
+	response := serveCommand(t, s, 2, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{
+		{Key: "q", Value: bson.D{{Key: "active", Value: true}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "seen", Value: true}}}}},
+		{Key: "multi", Value: true},
+	}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, response)
+	assertInt32(t, response, "n", 0)
+	if bson.Raw(response).Lookup("writeErrors").IsZero() {
+		t.Fatalf("retained-key byte overflow omitted indexed error: %s", response)
+	}
+	find := serveCommand(t, s, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "active", Value: true}}}, {Key: "$db", Value: "app"}})
+	for _, document := range cursorFirstBatch(t, find) {
+		if !document.Lookup("seen").IsZero() {
+			t.Fatalf("retained-key byte overflow mutated selected document")
+		}
+	}
+}
+
+func TestMongoWriteErrorsResponseIsBoundedBelowWireLimit(t *testing.T) {
+	longError := errors.New(strings.Repeat("x", 512))
+	writeErrors := make([]mongoWriteError, mongoWriteCommandMaxErrorEntries)
+	for i := range writeErrors {
+		writeErrors[i] = mongoWriteError{index: i, err: longError}
+	}
+	response, err := marshalInsertResponseWithWriteErrors(0, writeErrors)
+	if err != nil {
+		t.Fatalf("marshal bounded writeErrors: %v", err)
+	}
+	message, err := wire.AppendMsgMessage(nil, 1, 0, 0, response)
+	if err != nil {
+		t.Fatalf("append bounded writeErrors message: %v", err)
+	}
+	if len(message) > wire.DefaultMaxMessageLength {
+		t.Fatalf("writeErrors response bytes=%d exceeds wire max=%d", len(message), wire.DefaultMaxMessageLength)
 	}
 }
 

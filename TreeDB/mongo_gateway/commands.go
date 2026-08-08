@@ -113,7 +113,7 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 			format = actualFormat
 		}
 	}
-	return s.runMongoInsertCommand(name, col, format, ids, stored, ordered, newMongoWriteBudget(s.maxFindScanDocuments()))
+	return s.runMongoInsertCommand(name, col, format, ids, stored, ordered, s.newMongoWriteBudget())
 }
 
 // runMongoInsertCommand applies a fully parsed insert command.  A native
@@ -960,7 +960,7 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 	// mutation.  This is deliberately stricter than the legacy streaming parser:
 	// malformed later specifications never leave a partial command behind.
 	parsed := make([]mongoUpdateItem, len(updates))
-	budget := newMongoWriteBudget(s.maxFindScanDocuments())
+	budget := s.newMongoWriteBudget()
 	for i, update := range updates {
 		item, parseErr := parseMongoUpdateItem(i, update)
 		if parseErr != nil {
@@ -1033,11 +1033,20 @@ type mongoWriteBudget struct {
 const (
 	mongoWriteCommandMaxDuration         = 5 * time.Second
 	mongoWriteCommandMaxRetainedKeyBytes = 16 << 20
+	mongoWriteCommandMaxErrorEntries     = 10_000
 	mongoWriteErrorMessageMaxRunes       = 128
 )
 
 func newMongoWriteBudget(limit int) *mongoWriteBudget {
-	return &mongoWriteBudget{examinedRemaining: limit, targetsRemaining: limit, retainedKeyBytesRemaining: mongoWriteCommandMaxRetainedKeyBytes, errorsRemaining: defaultMaxWriteBatchSize, deadline: time.Now().Add(mongoWriteCommandMaxDuration)}
+	return &mongoWriteBudget{examinedRemaining: limit, targetsRemaining: limit, retainedKeyBytesRemaining: mongoWriteCommandMaxRetainedKeyBytes, errorsRemaining: mongoWriteCommandMaxErrorEntries, deadline: time.Now().Add(mongoWriteCommandMaxDuration)}
+}
+
+func (s *Server) newMongoWriteBudget() *mongoWriteBudget {
+	budget := newMongoWriteBudget(s.maxFindScanDocuments())
+	if s != nil && s.mongoWriteRetainedKeyBytesLimit > 0 {
+		budget.retainedKeyBytesRemaining = s.mongoWriteRetainedKeyBytesLimit
+	}
+	return budget
 }
 func (b *mongoWriteBudget) charge() error {
 	if b == nil {
@@ -2200,7 +2209,7 @@ func (s *Server) deleteResponse(ctx context.Context, command wire.Document, sequ
 	// OP_MSG MaxMessageLength bounds BSON bytes before dispatch; this cap bounds
 	// per-spec result/error bookkeeping independently of command byte size.
 	parsed := make([]mongoDeleteItem, len(deletes))
-	budget := newMongoWriteBudget(s.maxFindScanDocuments())
+	budget := s.newMongoWriteBudget()
 	for i, deleteItem := range deletes {
 		item, parseErr := parseMongoDeleteItem(i, deleteItem)
 		if parseErr != nil {
