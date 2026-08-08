@@ -292,7 +292,7 @@ func TestStandaloneTLSRequiresVerifiedClientCertificate(t *testing.T) {
 	}
 }
 
-func writeTLSMaterial(t *testing.T, expired bool) (string, string, *x509.CertPool) {
+func writeTLSMaterial(t testing.TB, expired bool) (string, string, *x509.CertPool) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -327,4 +327,56 @@ func writeTLSMaterial(t *testing.T, expired bool) (string, string, *x509.CertPoo
 	pool := x509.NewCertPool()
 	pool.AddCert(leaf)
 	return certFile, keyFile, pool
+}
+
+// BenchmarkStandaloneTransportHandshake compares a fresh official-driver TLS
+// handshake with the loopback plaintext control. Run with -benchmem; reused
+// CRUD remains covered by the driver's pooled connection in the package tests.
+func BenchmarkStandaloneTransportHandshake(b *testing.B) {
+	for _, tlsEnabled := range []bool{false, true} {
+		name := "plaintext"
+		if tlsEnabled {
+			name = "tls"
+		}
+		b.Run(name, func(b *testing.B) {
+			certFile, keyFile, pool := writeTLSMaterial(b, false)
+			opts := StandaloneOptions{Dir: b.TempDir()}
+			if tlsEnabled {
+				opts.TLSCertFile, opts.TLSKeyFile = certFile, keyFile
+			}
+			standalone, err := OpenStandaloneServer(opts)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer standalone.Close()
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				b.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- standalone.Serve(ctx, ln) }()
+			defer func() { cancel(); _ = ln.Close(); <-done }()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				cfg := options.Client().ApplyURI("mongodb://" + ln.Addr().String()).SetDirect(true).SetServerSelectionTimeout(time.Second)
+				if tlsEnabled {
+					cfg.SetTLSConfig(&tls.Config{RootCAs: pool, ServerName: "localhost"})
+				}
+				client, err := mongo.Connect(cfg)
+				if err != nil {
+					b.Fatal(err)
+				}
+				pingCtx, pingCancel := context.WithTimeout(context.Background(), 3*time.Second)
+				err = client.Ping(pingCtx, nil)
+				pingCancel()
+				_ = client.Disconnect(context.Background())
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }
