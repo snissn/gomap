@@ -2409,9 +2409,12 @@ func parseMongoDeleteItem(index int, deleteItem wire.Document) (mongoDeleteItem,
 	if err := validateMongoWritePlan(plan); err != nil {
 		return mongoDeleteItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("deletes[%d]: %v", index, err)}
 	}
-	limit, err := optionalInt32Field(deleteItem, "limit")
+	limit, limitSet, err := optionalInt32FieldWithPresence(deleteItem, "limit")
 	if err != nil {
 		return mongoDeleteItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("deletes[%d]: %v", index, err)}
+	}
+	if !limitSet {
+		return mongoDeleteItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("deletes[%d]: Mongo command missing \"limit\"", index)}
 	}
 	if limit != 0 && limit != 1 {
 		return mongoDeleteItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("deletes[%d]: Mongo gateway delete limit must be 0 or 1", index)}
