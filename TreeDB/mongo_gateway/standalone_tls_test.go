@@ -212,6 +212,40 @@ func TestStandaloneTLSRejectsHostnameTrustAndMinimumVersionBeforeMongo(t *testin
 	}
 }
 
+func TestStandaloneTLSRejectsExpiredCertificateBeforeMongo(t *testing.T) {
+	certFile, keyFile, pool := writeTLSMaterial(t, true)
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), TLSCertFile: certFile, TLSKeyFile: keyFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer standalone.Close()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- standalone.Serve(ctx, ln) }()
+	conn, err := tls.Dial("tcp", ln.Addr().String(), &tls.Config{RootCAs: pool, ServerName: "localhost"})
+	if err == nil {
+		_ = conn.Close()
+		t.Fatal("expired certificate unexpectedly connected")
+	}
+	deadline := time.Now().Add(time.Second)
+	for standalone.TransportMetrics().HandshakesFailed == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if metrics := standalone.TransportMetrics(); metrics.HandshakesFailed == 0 || metrics.HandshakeTotalNanoseconds == 0 {
+		t.Fatalf("metrics=%+v", metrics)
+	}
+	cancel()
+	_ = ln.Close()
+	if err := <-serveErr; err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+}
+
 func writeTLSMaterial(t *testing.T, expired bool) (string, string, *x509.CertPool) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
