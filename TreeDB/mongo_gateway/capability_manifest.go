@@ -122,6 +122,7 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 		{ID: "update-subset.findandmodify-exact-id-no-match", Category: "update subset", Feature: "findAndModify exact _id no-match", Status: MongoCapabilitySupportedSubset},
 		{ID: "transaction-gap.transactions-and-retryable-writes", Category: "transaction gap", Feature: "transactions and retryable writes", Status: MongoCapabilityNotImplemented},
 		{ID: "security-gap.authentication-and-authorization", Category: "security gap", Feature: "authentication and authorization", Status: MongoCapabilityNotImplemented},
+		{ID: "security.transport-tls-and-safe-remote-listen", Category: "security", Feature: "TLS transport and safe remote listen (#4057)", Status: MongoCapabilitySupportedSubset},
 		{ID: "cluster-gap.replica-set-and-sharding-advertisement", Category: "cluster gap", Feature: "replica-set and sharding advertisement", Status: MongoCapabilityNotImplemented},
 	},
 	Summaries: []MongoGatewayCapabilitySummary{
@@ -170,6 +171,12 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 			Label:         "Logical sessions",
 			CapabilityIDs: []string{"session.logical-session-handshake-and-endsessions"},
 			Note:          "Driver-interoperability metadata only; no transaction or causal-session semantics.",
+		},
+		{
+			ID:            "transport-security",
+			Label:         "Transport security",
+			CapabilityIDs: []string{"security.transport-tls-and-safe-remote-listen"},
+			Note:          "Loopback plaintext remains available; non-loopback standalone listeners require TLS unless an explicit insecure override is selected. TLS 1.2+ with bounded handshakes is supported; authentication and authorization remain separate gaps.",
 		},
 		{
 			ID:    "scalar-indexes",
