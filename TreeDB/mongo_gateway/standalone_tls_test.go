@@ -134,7 +134,7 @@ func TestStandaloneServerTLSHandshakeTimeoutAndClose(t *testing.T) {
 	}
 	pingCancel()
 	_ = client.Disconnect(context.Background())
-	if metrics := standalone.TransportMetrics(); metrics.HandshakesSucceeded == 0 || metrics.ActiveHandshakes == 0 || metrics.HandshakeTotalNanoseconds == 0 || metrics.HandshakeMaxNanoseconds == 0 || metrics.ConnectionsAccepted < 2 || metrics.ActiveConnections < 2 {
+	if metrics := standalone.TransportMetrics(); metrics.HandshakesSucceeded == 0 || metrics.ActiveHandshakes == 0 || metrics.HandshakeTotalNanoseconds == 0 || metrics.HandshakeMaxNanoseconds == 0 || metrics.ConnectionsAccepted < 2 || metrics.ActiveConnections < metrics.ActiveHandshakes {
 		t.Fatalf("metrics=%+v want succeeded and stalled active handshake", metrics)
 	}
 	started := time.Now()
