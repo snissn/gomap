@@ -386,7 +386,7 @@ func (s *StandaloneServer) Serve(ctx context.Context, ln net.Listener) error {
 		return err
 	}
 	if s.Options.TLSCertFile != "" {
-		ln = &tlsHandshakeListener{Listener: ln, config: s.tlsConfig.Clone(), timeout: s.Options.TLSHandshakeTimeout, metrics: s.transportMetrics}
+		ln = newTLSHandshakeListener(ln, s.tlsConfig.Clone(), s.Options.TLSHandshakeTimeout, s.transportMetrics)
 	} else {
 		ln = &countingListener{Listener: ln, metrics: s.transportMetrics}
 	}
@@ -558,6 +558,20 @@ type tlsHandshakeListener struct {
 	config  *tls.Config
 	timeout time.Duration
 	metrics *transportMetrics
+
+	mu     sync.Mutex
+	closed bool
+	conns  map[*tlsHandshakeConn]struct{}
+}
+
+func newTLSHandshakeListener(ln net.Listener, config *tls.Config, timeout time.Duration, metrics *transportMetrics) *tlsHandshakeListener {
+	return &tlsHandshakeListener{
+		Listener: ln,
+		config:   config,
+		timeout:  timeout,
+		metrics:  metrics,
+		conns:    make(map[*tlsHandshakeConn]struct{}),
+	}
 }
 
 func (l *tlsHandshakeListener) Accept() (net.Conn, error) {
@@ -565,7 +579,42 @@ func (l *tlsHandshakeListener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &tlsHandshakeConn{Conn: newCountingConn(conn, l.metrics), config: l.config, timeout: l.timeout, metrics: l.metrics}, nil
+	tlsConn := &tlsHandshakeConn{Conn: newCountingConn(conn, l.metrics), config: l.config, timeout: l.timeout, metrics: l.metrics}
+	tlsConn.onClose = func() {
+		l.mu.Lock()
+		delete(l.conns, tlsConn)
+		l.mu.Unlock()
+	}
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		_ = tlsConn.Close()
+		return nil, net.ErrClosed
+	}
+	l.conns[tlsConn] = struct{}{}
+	l.mu.Unlock()
+	return tlsConn, nil
+}
+
+// Close also closes accepted TLS connections that may still be entering the
+// generic server's connection registry. This makes shutdown interrupt a
+// pending handshake even during accept/register races.
+func (l *tlsHandshakeListener) Close() error {
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		return l.Listener.Close()
+	}
+	l.closed = true
+	conns := make([]*tlsHandshakeConn, 0, len(l.conns))
+	for conn := range l.conns {
+		conns = append(conns, conn)
+	}
+	l.mu.Unlock()
+	for _, conn := range conns {
+		_ = conn.Close()
+	}
+	return l.Listener.Close()
 }
 
 type countingListener struct {
@@ -608,8 +657,10 @@ type tlsHandshakeConn struct {
 	timeout      time.Duration
 	metrics      *transportMetrics
 	once         sync.Once
+	closeOnce    sync.Once
 	tlsConn      *tls.Conn
 	handshakeErr error
+	onClose      func()
 }
 
 func (c *tlsHandshakeConn) handshake() error {
@@ -638,7 +689,13 @@ func (c *tlsHandshakeConn) handshake() error {
 	return c.handshakeErr
 }
 func (c *tlsHandshakeConn) Close() error {
-	return c.Conn.Close()
+	err := c.Conn.Close()
+	c.closeOnce.Do(func() {
+		if c.onClose != nil {
+			c.onClose()
+		}
+	})
+	return err
 }
 func (c *tlsHandshakeConn) Read(p []byte) (int, error) {
 	if err := c.handshake(); err != nil {
