@@ -87,6 +87,10 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
+	budget := s.newMongoWriteBudget()
+	if err := budget.ensureMinimumResponse(); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
 	// A BSON multi-document insert takes the native atomic batch granule.  Its
 	// whole target reservation is knowable after parse, before a first-write
 	// collection would be created, so reject an over-cap command without that
@@ -113,7 +117,7 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 			format = actualFormat
 		}
 	}
-	return s.runMongoInsertCommand(name, col, format, ids, stored, ordered, s.newMongoWriteBudget())
+	return s.runMongoInsertCommand(name, col, format, ids, stored, ordered, budget)
 }
 
 // runMongoInsertCommand applies a fully parsed insert command.  A native
@@ -1013,6 +1017,9 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 		item.budget = budget
 		parsed[i] = item
 	}
+	if err := budget.ensureMinimumResponse(); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
 
 	col, err := s.openCollectionForMutation(name)
 	missingCollection := errors.Is(err, collections.ErrCollectionNotFound)
@@ -1071,6 +1078,8 @@ type mongoWriteBudget struct {
 	retainedKeyBytesRemaining int
 	errorsRemaining           int
 	deadline                  time.Time
+	responseBytesRemaining    int
+	minimumResponseFits       bool
 }
 
 const (
@@ -1078,10 +1087,16 @@ const (
 	mongoWriteCommandMaxRetainedKeyBytes = 16 << 20
 	mongoWriteCommandMaxErrorEntries     = 10_000
 	mongoWriteErrorMessageMaxRunes       = 128
+	// A write error has a bounded 128-rune message (at most 512 UTF-8 bytes)
+	// plus BSON element framing. Reserve a deliberately conservative amount so
+	// a command never executes more errors than its advertised OP_MSG response
+	// can carry.
+	mongoWriteErrorResponseReserveBytes = 1024
+	mongoWriteResponseMinimumBytes      = 128
 )
 
 func newMongoWriteBudget(limit int) *mongoWriteBudget {
-	return &mongoWriteBudget{examinedRemaining: limit, targetsRemaining: limit, retainedKeyBytesRemaining: mongoWriteCommandMaxRetainedKeyBytes, errorsRemaining: mongoWriteCommandMaxErrorEntries - 1, deadline: time.Now().Add(mongoWriteCommandMaxDuration)}
+	return &mongoWriteBudget{examinedRemaining: limit, targetsRemaining: limit, retainedKeyBytesRemaining: mongoWriteCommandMaxRetainedKeyBytes, errorsRemaining: mongoWriteCommandMaxErrorEntries - 1, responseBytesRemaining: int(wire.DefaultMaxMessageLength) - mongoWriteResponseMinimumBytes, minimumResponseFits: true, deadline: time.Now().Add(mongoWriteCommandMaxDuration)}
 }
 
 func (s *Server) newMongoWriteBudget() *mongoWriteBudget {
@@ -1089,6 +1104,11 @@ func (s *Server) newMongoWriteBudget() *mongoWriteBudget {
 	budget.targetsRemaining = s.maxMongoWriteTargets()
 	if s != nil && s.mongoWriteRetainedKeyBytesLimit > 0 {
 		budget.retainedKeyBytesRemaining = s.mongoWriteRetainedKeyBytesLimit
+	}
+	budget.minimumResponseFits = int(s.maxMessageLength()) >= mongoWriteResponseMinimumBytes
+	budget.responseBytesRemaining = int(s.maxMessageLength()) - mongoWriteResponseMinimumBytes
+	if budget.responseBytesRemaining < 0 {
+		budget.responseBytesRemaining = 0
 	}
 	return budget
 }
@@ -1185,7 +1205,18 @@ func (b *mongoWriteBudget) reserveError() error {
 	if b.errorsRemaining <= 0 {
 		return errors.New("Mongo gateway multi-write command exceeded its write-error budget")
 	}
+	if b.responseBytesRemaining < mongoWriteErrorResponseReserveBytes {
+		return errors.New("Mongo gateway multi-write command exceeded its write-error response budget")
+	}
 	b.errorsRemaining--
+	b.responseBytesRemaining -= mongoWriteErrorResponseReserveBytes
+	return nil
+}
+
+func (b *mongoWriteBudget) ensureMinimumResponse() error {
+	if b != nil && !b.minimumResponseFits {
+		return errors.New("Mongo gateway maxMessageSizeBytes is too small for a multi-write response")
+	}
 	return nil
 }
 
@@ -2021,6 +2052,10 @@ func completeMongoUpdateCoalescerBatchExcept(batch []mongoUpdateCoalescerRequest
 		if i == skip {
 			continue
 		}
+		if err := req.item.budget.checkDeadline(); err != nil {
+			req.done <- mongoUpdateCoalescerResult{err: err}
+			continue
+		}
 		matched, modified, err := runMongoUpdateOne(req.col, req.item)
 		req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
 	}
@@ -2300,6 +2335,9 @@ func (s *Server) deleteResponse(ctx context.Context, command wire.Document, sequ
 		}
 		parsed[i] = item
 		parsed[i].budget = budget
+	}
+	if err := budget.ensureMinimumResponse(); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 
 	col, err := s.openCollectionForMutation(name)
