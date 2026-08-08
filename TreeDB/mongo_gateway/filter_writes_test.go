@@ -157,6 +157,64 @@ func TestMongoFilterWritesSelectOneAcrossUpdateDeleteAndFindAndModify(t *testing
 	}
 }
 
+func TestMongoFilterWriteDeadlineRecheckedAfterSelection(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "active", Value: true}}}}, {Key: "$db", Value: "app"}}))
+	col, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		run  func(*mongoWriteBudget) error
+	}{
+		{
+			name: "update",
+			run: func(budget *mongoWriteBudget) error {
+				item, parseErr := parseMongoUpdateItem(0, mustDocument(t, bson.D{{Key: "q", Value: bson.D{{Key: "active", Value: true}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "seen", Value: true}}}}}}))
+				if parseErr != nil {
+					return parseErr
+				}
+				item.budget = budget
+				_, _, runErr := server.runMongoFilterUpdateOne(col, item)
+				return runErr
+			},
+		},
+		{
+			name: "delete",
+			run: func(budget *mongoWriteBudget) error {
+				item, parseErr := parseMongoDeleteItem(0, mustDocument(t, bson.D{{Key: "q", Value: bson.D{{Key: "active", Value: true}}}, {Key: "limit", Value: int32(1)}}))
+				if parseErr != nil {
+					return parseErr
+				}
+				_, runErr := server.deleteMongoFilterOneWithBudget(col, item.plan, budget)
+				return runErr
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			budget := newMongoWriteBudget(8)
+			server.filterWriteSelectedHook = func() { budget.deadline = time.Now().Add(-time.Second) }
+			if runErr := tc.run(budget); runErr == nil || !strings.Contains(runErr.Error(), "execution-time budget") {
+				t.Fatalf("post-selection deadline error=%v", runErr)
+			}
+			server.filterWriteSelectedHook = nil
+			find := serveCommand(t, server, 2, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+			batch := cursorFirstBatch(t, find)
+			if len(batch) != 1 || !batch[0].Lookup("seen").IsZero() {
+				t.Fatalf("deadline after selection mutated state: %s", find)
+			}
+		})
+	}
+}
+
 func TestMongoFilterUpdateRechecksPredicateAfterDeterministicDrift(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

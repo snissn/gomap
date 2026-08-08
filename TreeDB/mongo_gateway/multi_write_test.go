@@ -91,7 +91,9 @@ func TestMongoMultiWriteUpdateManyDeleteManyAndParseBeforeExecute(t *testing.T) 
 	assertOK(t, response)
 	assertInt32(t, response, "n", 2)
 	assertInt32(t, response, "nModified", 2)
-	response = serveCommand(t, s, 3, bson.D{{Key: "delete", Value: "users"}, {Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "city", Value: "hnl"}}}, {Key: "limit", Value: int32(0)}}}}, {Key: "$db", Value: "app"}})
+	// The delete-command limit is optional. As in MongoDB, an omitted limit
+	// defaults to 0 (delete all matching documents), rather than limit:1.
+	response = serveCommand(t, s, 3, bson.D{{Key: "delete", Value: "users"}, {Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "city", Value: "hnl"}}}}}}, {Key: "$db", Value: "app"}})
 	assertOK(t, response)
 	assertInt32(t, response, "n", 2)
 	response = serveCommand(t, s, 4, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{
@@ -102,6 +104,26 @@ func TestMongoMultiWriteUpdateManyDeleteManyAndParseBeforeExecute(t *testing.T) 
 	find := serveCommand(t, s, 5, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "c"}}}, {Key: "$db", Value: "app"}})
 	if got := cursorFirstBatch(t, find)[0].Lookup("seen"); !got.IsZero() {
 		t.Fatalf("malformed later item mutated prior document: %s", got)
+	}
+}
+
+func TestMongoMultiUpdateReplacementIsRejectedBeforeEarlierMutation(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "a"}}, bson.D{{Key: "_id", Value: "b"}}}}, {Key: "$db", Value: "app"}}))
+	response := serveCommand(t, s, 2, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{
+		bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "a"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "seen", Value: true}}}}}},
+		bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "b"}}}, {Key: "u", Value: bson.D{{Key: "replacement", Value: true}}}, {Key: "multi", Value: true}},
+	}}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, response, "BadValue")
+	find := serveCommand(t, s, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "a"}}}, {Key: "$db", Value: "app"}})
+	if !cursorFirstBatch(t, find)[0].Lookup("seen").IsZero() {
+		t.Fatalf("later multi replacement allowed earlier mutation: %s", find)
 	}
 }
 

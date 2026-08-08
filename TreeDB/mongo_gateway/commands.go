@@ -1391,6 +1391,12 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 		if err != nil {
 			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 		}
+		// MongoDB only permits replacement-style updates for a single target.
+		// Detect this while parsing the full command, so a later invalid item
+		// cannot leave an earlier mutation behind.
+		if multi && mutation.replace != nil {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway multi update does not support replacement-style updates", index)}
+		}
 	}
 	return mongoUpdateItem{
 		index:           index,

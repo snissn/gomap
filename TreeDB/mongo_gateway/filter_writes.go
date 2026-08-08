@@ -121,6 +121,11 @@ func (s *Server) runMongoFilterUpdateOne(col *collections.Collection, update mon
 		if s.filterWriteSelectedHook != nil {
 			s.filterWriteSelectedHook()
 		}
+		// Selection can block in a hook or concurrent writer. Check again at
+		// the boundary immediately before the atomic mutation.
+		if err := update.budget.checkDeadline(); err != nil {
+			return false, false, err
+		}
 		materializer, err := storedDocumentMaterializerForCollection(col)
 		if err != nil {
 			return false, false, err
@@ -301,6 +306,10 @@ func (s *Server) deleteMongoFilterOneWithBudget(col *collections.Collection, pla
 		}
 		if s.filterWriteSelectedHook != nil {
 			s.filterWriteSelectedHook()
+		}
+		// Do not let a selected-key retry mutate after the command deadline.
+		if err := budget.checkDeadline(); err != nil {
+			return false, err
 		}
 		materializer, err := storedDocumentMaterializerForCollection(col)
 		if err != nil {
