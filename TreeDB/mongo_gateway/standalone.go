@@ -382,7 +382,9 @@ func (s *StandaloneServer) Serve(ctx context.Context, ln net.Listener) error {
 		s.serveWG.Done()
 	}()
 	if err := s.validateListener(ln); err != nil {
-		_ = ln.Close()
+		if ln != nil {
+			_ = ln.Close()
+		}
 		return err
 	}
 	if s.Options.TLSCertFile != "" {
