@@ -82,7 +82,21 @@ func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionV1(ctx context.Con
 		Requests: response.Counters.Requests, RPCs: response.Counters.RPCs, Retries: response.Counters.Retries, Redirects: response.Counters.Redirects,
 		Candidates: response.Counters.Candidates, Edges: response.Counters.Edges,
 		QueryBytes: response.Counters.QueryBytes, RequestBytes: response.Counters.RequestBytes, CandidateBytes: response.Counters.CandidateBytes, ResponseBytes: response.Counters.ResponseBytes,
-	}, Timing: public.SearchTimingV1{Total: time.Duration(response.Timing.TotalNanos)}}
+	}, Timing: public.SearchTimingV1{
+		RouterOpen:     time.Duration(response.Timing.RouterOpenNanos),
+		RouterSearch:   time.Duration(response.Timing.RouterSearchNanos),
+		Placement:      time.Duration(response.Timing.PlacementNanos),
+		Queue:          time.Duration(response.Timing.QueueNanos),
+		RPC:            time.Duration(response.Timing.RPCNanos),
+		Network:        time.Duration(response.Timing.NetworkNanos),
+		ReadIndexApply: time.Duration(response.Timing.ReadIndexApplyNanos),
+		GenerationOpen: time.Duration(response.Timing.GenerationOpenNanos),
+		ShardSearch:    time.Duration(response.Timing.ShardSearchNanos),
+		Response:       time.Duration(response.Timing.ResponseNanos),
+		Dedupe:         time.Duration(response.Timing.DedupeNanos),
+		Merge:          time.Duration(response.Timing.MergeNanos),
+		Total:          time.Duration(response.Timing.TotalNanos),
+	}}
 	result.Neighbors = make([]public.NeighborV1, len(response.Neighbors))
 	for i, n := range response.Neighbors {
 		result.Neighbors[i] = public.NeighborV1{ID: n.ID, Score: n.Score}

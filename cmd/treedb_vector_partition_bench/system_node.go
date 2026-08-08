@@ -293,6 +293,54 @@ func validateVectorPartitionSystemTopologyV1(configs []vectorPartitionSystemNode
 	return evidence, nil
 }
 
+func loadVectorPartitionSystemTopologyEvidenceV1(path, endpoint string) (vectorPartitionSystemTopologyEvidenceV1, error) {
+	var evidence vectorPartitionSystemTopologyEvidenceV1
+	raw, err := readBoundedRegularFileV1(path, maxManifestBytes)
+	if err != nil {
+		return evidence, err
+	}
+	if err := json.Unmarshal(raw, &evidence); err != nil {
+		return evidence, fmt.Errorf("topology evidence JSON: %w", err)
+	}
+	if evidence.SchemaVersion != 1 || evidence.ResultKind != vectorPartitionSystemTopologyKindV1 || evidence.Assembly != vectorPartitionSystemAssemblyV1 || evidence.PublicRoute != "vectorpartition.OperationsV1.Search" || evidence.M8Loopback {
+		return evidence, errors.New("topology evidence production identity is invalid")
+	}
+	wantNodes := 4
+	if evidence.Topology == "single_daemon_four_group" {
+		wantNodes = 1
+	} else if evidence.Topology != "native_four_daemon_four_group" && evidence.Topology != "container_four_daemon_four_group" {
+		return evidence, errors.New("topology evidence topology is invalid")
+	}
+	if len(evidence.Nodes) != wantNodes || len(evidence.Endpoints) != 4 {
+		return evidence, errors.New("topology evidence node or group count is invalid")
+	}
+	wantDigest := evidence.TopologyIdentitySHA256
+	evidence.TopologyIdentitySHA256 = ""
+	canonical, err := json.Marshal(evidence)
+	if err != nil {
+		return evidence, err
+	}
+	sum := sha256.Sum256(canonical)
+	evidence.TopologyIdentitySHA256 = hex.EncodeToString(sum[:])
+	if wantDigest != evidence.TopologyIdentitySHA256 {
+		return evidence, errors.New("topology evidence identity digest mismatch")
+	}
+	publicCount := 0
+	for _, node := range evidence.Nodes {
+		if node.PublicListen == "" {
+			continue
+		}
+		publicCount++
+		if !stringsHostPortEquivalentV1(node.PublicListen, endpoint) {
+			return evidence, errors.New("topology evidence public endpoint mismatch")
+		}
+	}
+	if publicCount != 1 {
+		return evidence, errors.New("topology evidence requires exactly one public endpoint")
+	}
+	return evidence, nil
+}
+
 func vectorPartitionSystemNodeConfigSHA256V1(config vectorPartitionSystemNodeConfigV1) (string, error) {
 	raw, err := json.Marshal(config)
 	if err != nil {
@@ -441,10 +489,14 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 		Version: 1, RequestID: "system-public", CancellationID: "system-public-cancel", Metric: nativewire.VectorPartitionShardSearchMetricCosineV1, TopK: 10, PartitionProbes: 2,
 		EfSearch: 128, RouterCandidateBudget: 256, Consistency: nativewire.VectorPartitionShardSearchConsistencySnapshotV1,
 	}
+	configSHA, err := vectorPartitionSystemNodeConfigSHA256V1(config)
+	if err != nil {
+		return nil, err
+	}
 	node.production, err = nativewire.NewVectorPartitionProductionNodeV1(ctx, nativewire.VectorPartitionProductionNodeOptionsV1{
 		Collection: assets.collection, Manifest: assets.manifest, RouterSource: assets.RouterSource(), AssetSetDigests: assets.assetSetDigests,
 		GroupAppliedIndexes: config.GroupAppliedIndexes, Database: "default", Catalog: "default", Endpoints: config.Endpoints,
-		LocalShards: shards, RequestBase: requestBase, NodeID: config.NodeID,
+		LocalShards: shards, RequestBase: requestBase, NodeID: config.NodeID, EndpointIdentity: configSHA,
 	})
 	if err != nil {
 		return nil, err
@@ -465,7 +517,7 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 		if operationsErr != nil {
 			return nil, operationsErr
 		}
-		node.publicServer = &vectorPartitionOperationsTCPServerV1{operations: operations, listener: node.publicListener, done: make(chan struct{})}
+		node.publicServer = &vectorPartitionOperationsTCPServerV1{operations: operations, nodeConfigSHA256: configSHA, listener: node.publicListener, done: make(chan struct{})}
 		node.publicServer.start(ctx)
 		publicEndpoint = node.publicListener.Addr().String()
 	}
@@ -475,10 +527,6 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 		return nil, err
 	}
 	executableSHA, err := m8BenchmarkExecutableSHA256V1(executable)
-	if err != nil {
-		return nil, err
-	}
-	configSHA, err := vectorPartitionSystemNodeConfigSHA256V1(config)
 	if err != nil {
 		return nil, err
 	}
@@ -588,11 +636,12 @@ type vectorPartitionOperationsWireRequestV1 struct {
 }
 
 type vectorPartitionOperationsWireResponseV1 struct {
-	SchemaVersion int                        `json:"schema_version"`
-	Health        *public.OperationsHealthV1 `json:"health,omitempty"`
-	Search        *public.SearchResponseV1   `json:"search,omitempty"`
-	ErrorCode     public.ErrorCodeV1         `json:"error_code,omitempty"`
-	Error         string                     `json:"error,omitempty"`
+	SchemaVersion    int                        `json:"schema_version"`
+	NodeConfigSHA256 string                     `json:"node_config_sha256,omitempty"`
+	Health           *public.OperationsHealthV1 `json:"health,omitempty"`
+	Search           *public.SearchResponseV1   `json:"search,omitempty"`
+	ErrorCode        public.ErrorCodeV1         `json:"error_code,omitempty"`
+	Error            string                     `json:"error,omitempty"`
 }
 
 func vectorPartitionOperationsWireErrorCodeV1(err error) public.ErrorCodeV1 {
@@ -610,13 +659,14 @@ func vectorPartitionOperationsWireErrorCodeV1(err error) public.ErrorCodeV1 {
 }
 
 type vectorPartitionOperationsTCPServerV1 struct {
-	operations  *public.OperationsV1
-	listener    net.Listener
-	done        chan struct{}
-	slots       chan struct{}
-	idleTimeout time.Duration
-	connections sync.Map
-	serving     sync.WaitGroup
+	operations       *public.OperationsV1
+	nodeConfigSHA256 string
+	listener         net.Listener
+	done             chan struct{}
+	slots            chan struct{}
+	idleTimeout      time.Duration
+	connections      sync.Map
+	serving          sync.WaitGroup
 }
 
 func (s *vectorPartitionOperationsTCPServerV1) start(ctx context.Context) {
@@ -672,6 +722,7 @@ func (s *vectorPartitionOperationsTCPServerV1) serve(ctx context.Context, conn n
 					response.Error, response.ErrorCode = err.Error(), vectorPartitionOperationsWireErrorCodeV1(err)
 				} else {
 					response.Health = &health
+					response.NodeConfigSHA256 = s.nodeConfigSHA256
 				}
 			case "search":
 				result, err := s.operations.Search(ctx, request.Search)

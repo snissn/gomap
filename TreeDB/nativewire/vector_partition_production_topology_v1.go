@@ -20,9 +20,10 @@ import (
 )
 
 type VectorPartitionProductionShardV1 struct {
-	GroupID  raftcluster.GroupID
-	Listener net.Listener
-	Service  *VectorPartitionShardSearchServiceV1
+	GroupID          raftcluster.GroupID
+	Listener         net.Listener
+	Service          *VectorPartitionShardSearchServiceV1
+	EndpointIdentity string
 }
 
 type VectorPartitionProductionTopologyOptionsV1 struct {
@@ -53,6 +54,7 @@ type VectorPartitionProductionTopologyV1 struct {
 	listeners   map[raftcluster.GroupID]net.Listener
 	endpoints   map[raftcluster.GroupID]string
 	services    map[raftcluster.GroupID]*VectorPartitionShardSearchServiceV1
+	identities  map[raftcluster.GroupID]string
 	serving     map[raftcluster.GroupID]bool
 	mu          sync.Mutex
 	conns       map[net.Conn]struct{}
@@ -87,7 +89,7 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 	if opts.ShardIdleTimeout == 0 {
 		opts.ShardIdleTimeout = 30 * time.Second
 	}
-	h := &VectorPartitionProductionTopologyV1{listeners: make(map[raftcluster.GroupID]net.Listener), endpoints: make(map[raftcluster.GroupID]string, len(opts.Endpoints)), services: make(map[raftcluster.GroupID]*VectorPartitionShardSearchServiceV1), serving: make(map[raftcluster.GroupID]bool), conns: make(map[net.Conn]struct{})}
+	h := &VectorPartitionProductionTopologyV1{listeners: make(map[raftcluster.GroupID]net.Listener), endpoints: make(map[raftcluster.GroupID]string, len(opts.Endpoints)), services: make(map[raftcluster.GroupID]*VectorPartitionShardSearchServiceV1), identities: make(map[raftcluster.GroupID]string), serving: make(map[raftcluster.GroupID]bool), conns: make(map[net.Conn]struct{})}
 	defer func() {
 		if err != nil {
 			_ = h.Close()
@@ -222,7 +224,7 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 			return nil, fmt.Errorf("nativewire: production vector topology shard groups %q and %q share a listener", owner, shard.GroupID)
 		}
 		localListeners[listenerKey] = shard.GroupID
-		h.listeners[shard.GroupID], h.services[shard.GroupID] = shard.Listener, shard.Service
+		h.listeners[shard.GroupID], h.services[shard.GroupID], h.identities[shard.GroupID] = shard.Listener, shard.Service, shard.EndpointIdentity
 	}
 	maxPoolConnections := coordinatorLimits.MaxConcurrentRequests
 	dispatcher, err := newVectorPartitionShardSearchTCPDispatcherV1(h.endpoints, opts.NodeEndpoints, maxPoolConnections, shardLimits)
@@ -237,12 +239,12 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 	for group, listener := range h.listeners {
 		// Keep accepted sockets bounded without letting one dispatcher pool consume
 		// the whole listener while its keep-alives are idle.
-		h.serve(group, listener, h.services[group], opts.ShardIdleTimeout, coordinatorLimits.MaxRequests, dispatcher.maxRequestFrame, dispatcher.maxResponseFrame)
+		h.serve(group, listener, h.services[group], h.identities[group], opts.ShardIdleTimeout, coordinatorLimits.MaxRequests, dispatcher.maxRequestFrame, dispatcher.maxResponseFrame)
 	}
 	return h, nil
 }
 
-func (h *VectorPartitionProductionTopologyV1) serve(group raftcluster.GroupID, listener net.Listener, service *VectorPartitionShardSearchServiceV1, idleTimeout time.Duration, maxConnections int, maxRequestFrame, maxResponseFrame uint32) {
+func (h *VectorPartitionProductionTopologyV1) serve(group raftcluster.GroupID, listener net.Listener, service *VectorPartitionShardSearchServiceV1, identity string, idleTimeout time.Duration, maxConnections int, maxRequestFrame, maxResponseFrame uint32) {
 	connectionSlots := make(chan struct{}, maxConnections)
 	h.mu.Lock()
 	h.serving[group] = true
@@ -291,7 +293,7 @@ func (h *VectorPartitionProductionTopologyV1) serve(group raftcluster.GroupID, l
 				defer h.wg.Done()
 				defer func() { <-connectionSlots }()
 				defer func() { h.mu.Lock(); delete(h.conns, conn); h.mu.Unlock() }()
-				(VectorPartitionShardSearchTCPServerV1{Service: service, MaxFrame: maxRequestFrame, MaxResponseFrame: maxResponseFrame, InitialTimeout: idleTimeout}).ServeConn(context.Background(), conn)
+				(VectorPartitionShardSearchTCPServerV1{Service: service, EndpointIdentity: VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: string(group), InstanceIdentity: identity}, MaxFrame: maxRequestFrame, MaxResponseFrame: maxResponseFrame, InitialTimeout: idleTimeout}).ServeConn(context.Background(), conn)
 			}()
 		}
 	}()
