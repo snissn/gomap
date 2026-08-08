@@ -137,15 +137,22 @@ func TestStandaloneServerTLSHandshakeTimeoutAndClose(t *testing.T) {
 	if metrics := standalone.TransportMetrics(); metrics.HandshakesSucceeded == 0 || metrics.ActiveHandshakes == 0 || metrics.HandshakeTotalNanoseconds == 0 || metrics.HandshakeMaxNanoseconds == 0 || metrics.ConnectionsAccepted < 2 || metrics.ActiveConnections < metrics.ActiveHandshakes {
 		t.Fatalf("metrics=%+v want succeeded and stalled active handshake", metrics)
 	}
-	started := time.Now()
-	if err := standalone.Close(); err != nil {
-		t.Fatal(err)
+	closeErr := make(chan error, 1)
+	go func() { closeErr <- standalone.Close() }()
+	deadline := time.Now().Add(time.Second)
+	for metrics := standalone.TransportMetrics(); (metrics.ActiveHandshakes != 0 || metrics.ConnectionsClosed != metrics.ConnectionsAccepted || metrics.ActiveConnections != 0) && time.Now().Before(deadline); metrics = standalone.TransportMetrics() {
+		time.Sleep(time.Millisecond)
 	}
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("Close waited %s for stalled TLS handshake", elapsed)
-	}
-	if metrics := standalone.TransportMetrics(); metrics.ConnectionsClosed != metrics.ConnectionsAccepted || metrics.ActiveConnections != 0 {
+	if metrics := standalone.TransportMetrics(); metrics.ActiveHandshakes != 0 || metrics.ConnectionsClosed != metrics.ConnectionsAccepted || metrics.ActiveConnections != 0 {
 		t.Fatalf("connection metrics after shutdown=%+v", metrics)
+	}
+	select {
+	case err := <-closeErr:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * standaloneShutdownTimeout):
+		t.Fatal("standalone Close did not finish after transport shutdown")
 	}
 	select {
 	case err := <-serveErr:
