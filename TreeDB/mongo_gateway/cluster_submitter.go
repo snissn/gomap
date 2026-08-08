@@ -139,6 +139,12 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
+	// Routed collection writes have no cross-token atomicity.  Refuse a batch
+	// before even consulting the local collection cache so it cannot be routed
+	// as a sequence of single-item submissions and leave a prefix committed.
+	if len(updates) != 1 {
+		return mongoClusterMutationCommandError(errors.New("cluster Mongo gateway currently does not support multi-item update commands"))
+	}
 	if err := s.admitClusterMutation(ctx); err != nil {
 		return mongoClusterMutationCommandError(err)
 	}
@@ -167,15 +173,6 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 		}
 		return marshalUpdateResponse(0, 0)
 	}
-	if len(updates) != 1 {
-		route := mongoClusterRouteRequest(db, collection, iwire.CommandUpdateBSONSet, "update_bson_set")
-		if s.clusterRouteProviderConfigured() {
-			route = mongoClusterUpdateBatchRouteRequest(db, collection, updates)
-		}
-		if err := s.preflightClusterRoute(ctx, route); err != nil {
-			return mongoClusterMutationCommandError(err)
-		}
-	}
 	var matched, modified int32
 	for i, update := range updates {
 		item, err := parseMongoUpdateItem(i, update)
@@ -203,7 +200,7 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 }
 
 func clusterUpdateItemAdmission(index int, item mongoUpdateItem) (wire.Document, error) {
-	if item.exactID && item.bsonSetFieldsOK && !mongoBSONSetFieldsNeedNestingValidation(item.bsonSetFields) {
+	if !item.multi && item.exactID && item.bsonSetFieldsOK && !mongoBSONSetFieldsNeedNestingValidation(item.bsonSetFields) {
 		return nil, nil
 	}
 	return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: cluster Mongo gateway currently supports only top-level BSON $set updateOne by _id", index))
@@ -230,6 +227,11 @@ func (s *Server) clusterDeleteResponse(ctx context.Context, command wire.Documen
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
+	// See clusterUpdateResponse: routed batches are deliberately fail-closed
+	// until the cluster protocol owns their all-item outcome and error indices.
+	if len(deletes) != 1 {
+		return mongoClusterMutationCommandError(errors.New("cluster Mongo gateway currently does not support multi-item delete commands"))
+	}
 	if err := s.admitClusterMutation(ctx); err != nil {
 		return mongoClusterMutationCommandError(err)
 	}
@@ -245,15 +247,6 @@ func (s *Server) clusterDeleteResponse(ctx context.Context, command wire.Documen
 			return mongoClusterMutationCommandError(err)
 		}
 		return marshalDeleteResponse(0)
-	}
-	if len(deletes) != 1 {
-		route := mongoClusterRouteRequest(db, collection, iwire.CommandDeleteBatch, "delete_batch")
-		if s.clusterRouteProviderConfigured() {
-			route = mongoClusterDeleteBatchRouteRequest(db, collection, deletes)
-		}
-		if err := s.preflightClusterRoute(ctx, route); err != nil {
-			return mongoClusterMutationCommandError(err)
-		}
 	}
 	ids := make([][]byte, 0, len(deletes))
 	seenIDs := make(map[string]struct{}, len(deletes))

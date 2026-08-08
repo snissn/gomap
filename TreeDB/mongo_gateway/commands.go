@@ -67,6 +67,13 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
+	ordered, _, err := mongoCommandOrdered(command)
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	if len(documents) > defaultMaxWriteBatchSize {
+		return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("Mongo gateway insert exceeds maxWriteBatchSize %d", defaultMaxWriteBatchSize))
+	}
 
 	var col *collections.Collection
 	format := s.DefaultCollectionOptions.DocumentFormat
@@ -99,22 +106,61 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 			format = actualFormat
 		}
 	}
-	if format == collections.DocumentFormatBSON {
-		if len(ids) == 1 {
-			err = s.runMongoInsertCoalesced(name, col, ids[0], stored[0])
-		} else {
-			_, err = col.InsertBatchValidatedBSON(ids, stored)
+	return s.runMongoInsertCommand(name, col, format, ids, stored, ordered, newMongoWriteBudget(s.maxFindScanDocuments()))
+}
+
+// runMongoInsertCommand applies a fully parsed insert command.  A native
+// InsertBatchValidatedBSON call is an intentionally non-interruptible atomic
+// granule: its deadline is checked immediately before entry.  The duplicate
+// fallback is item-at-a-time, so it reserves target capacity and rechecks the
+// deadline before every possible side effect.
+func (s *Server) runMongoInsertCommand(name string, col *collections.Collection, format collections.DocumentFormat, ids, stored [][]byte, ordered bool, budget *mongoWriteBudget) (wire.Document, error) {
+	// Preserve the native batch fast path for the normal success case.  Its
+	// planner rejects duplicate conflicts before publishing, so a duplicate can
+	// safely fall back to the per-item path that supplies Mongo's indexed
+	// ordered/unordered error envelope.
+	if len(ids) > 1 && format == collections.DocumentFormatBSON {
+		if err := budget.checkDeadline(); err != nil {
+			return marshalInsertResponseWithWriteErrors(0, []mongoWriteError{{index: 0, err: err}})
 		}
-	} else {
-		_, err = col.InsertBatch(ids, stored)
+		if _, batchErr := col.InsertBatchValidatedBSON(ids, stored); batchErr == nil {
+			return marshalInsertResponseWithWriteErrors(int32(len(ids)), nil)
+		} else if !collections.IsDuplicateKeyError(batchErr) || errors.Is(batchErr, collections.ErrCommitAmbiguous) {
+			return mongoInsertCommandError(batchErr)
+		}
 	}
-	if err != nil {
-		return mongoInsertCommandError(err)
+	inserted := int32(0)
+	writeErrors := make([]mongoWriteError, 0)
+	for i := range ids {
+		if err := budget.reserveTarget(); err != nil {
+			if reserveErr := budget.reserveError(); reserveErr == nil {
+				writeErrors = append(writeErrors, mongoWriteError{index: i, err: err})
+			}
+			break
+		}
+		var err error
+		if format == collections.DocumentFormatBSON {
+			if len(ids) == 1 {
+				err = s.runMongoInsertCoalesced(name, col, ids[i], stored[i])
+			} else {
+				err = runMongoInsertOne(col, ids[i], stored[i])
+			}
+		} else {
+			_, err = col.InsertBatch(ids[i:i+1], stored[i:i+1])
+		}
+		if err == nil {
+			inserted++
+			continue
+		}
+		if reserveErr := budget.reserveError(); reserveErr != nil {
+			break
+		}
+		writeErrors = append(writeErrors, mongoWriteError{index: i, err: err})
+		if ordered {
+			break
+		}
 	}
-	return marshalDocument(bson.D{
-		{Key: "ok", Value: 1.0},
-		{Key: "n", Value: int32(len(documents))},
-	})
+	return marshalInsertResponseWithWriteErrors(inserted, writeErrors)
 }
 
 func mongoInsertCommandError(err error) (wire.Document, error) {
@@ -885,6 +931,30 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
+	ordered, orderedSet, err := mongoCommandOrdered(command)
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	if len(updates) > defaultMaxWriteBatchSize {
+		return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("Mongo gateway update exceeds maxWriteBatchSize %d", defaultMaxWriteBatchSize))
+	}
+	// The complete BSON command (including this array) has already passed the
+	// OP_MSG MaxMessageLength check before dispatch; this count cap separately
+	// bounds result/error entries and per-spec bookkeeping.
+	// Parse the entire command before opening/creating a collection or applying a
+	// mutation.  This is deliberately stricter than the legacy streaming parser:
+	// malformed later specifications never leave a partial command behind.
+	parsed := make([]mongoUpdateItem, len(updates))
+	budget := newMongoWriteBudget(s.maxFindScanDocuments())
+	for i, update := range updates {
+		item, parseErr := parseMongoUpdateItem(i, update)
+		if parseErr != nil {
+			return mongoUpdateParseCommandError(parseErr)
+		}
+		item.selector = s
+		item.budget = budget
+		parsed[i] = item
+	}
 
 	col, err := s.openCollectionForMutation(name)
 	missingCollection := errors.Is(err, collections.ErrCollectionNotFound)
@@ -897,45 +967,6 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 			releaseColdCollection()
 		}
 	}()
-	parsed := make([]mongoUpdateItem, 0, len(updates))
-	seenKeys := make(map[string]struct{}, len(updates))
-	hasDuplicateKey := false
-	for i, update := range updates {
-		item, err := parseMongoUpdateItem(i, update)
-		if err != nil {
-			parseErr := err
-			if len(parsed) > 0 && missingCollection {
-				hasUpsert := false
-				for _, prior := range parsed {
-					hasUpsert = hasUpsert || prior.upsert
-				}
-				if hasUpsert {
-					if err := s.validateMongoMissingCollectionFirstUpsert(parsed); err != nil {
-						return mongoUpdateWriteCommandError(err)
-					}
-					col, releaseColdCollection, err = s.openOrCreateCollectionForFirstWrite(name)
-					if err != nil {
-						return commandError(commandCodeBadValue, "BadValue", err.Error())
-					}
-					if _, _, _, runErr := runMongoUpdatesSequentialWithUpserts(col, parsed); runErr != nil {
-						return mongoUpdateWriteCommandError(runErr)
-					}
-				}
-			} else if len(parsed) > 0 {
-				if _, _, runErr := runMongoUpdatesSequential(col, parsed); runErr != nil {
-					return mongoUpdateWriteCommandError(runErr)
-				}
-			}
-			return mongoUpdateParseCommandError(parseErr)
-		}
-		keyString := string(item.key)
-		if _, ok := seenKeys[keyString]; ok {
-			hasDuplicateKey = true
-		}
-		item.selector = s
-		seenKeys[keyString] = struct{}{}
-		parsed = append(parsed, item)
-	}
 	if missingCollection {
 		hasUpsert := false
 		for _, item := range parsed {
@@ -952,34 +983,7 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
 	}
-	var matched, modified int32
-	var upserted []mongoUpdateUpserted
-	hasUpsert := false
-	for _, item := range parsed {
-		hasUpsert = hasUpsert || item.upsert
-	}
-	if len(parsed) == 1 && !hasUpsert {
-		var matchedOne, modifiedOne bool
-		matchedOne, modifiedOne, err = s.runMongoUpdateCoalesced(name, col, parsed[0])
-		if matchedOne {
-			matched = 1
-		}
-		if modifiedOne {
-			modified = 1
-		}
-	} else if len(parsed) > 1 && !hasDuplicateKey && !hasUpsert {
-		var batched bool
-		matched, modified, batched, err = runMongoUpdateBatch(col, parsed)
-		if err != nil || !batched {
-			matched, modified, err = runMongoUpdatesSequential(col, parsed)
-		}
-	} else {
-		matched, modified, upserted, err = runMongoUpdatesSequentialWithUpserts(col, parsed)
-	}
-	if err != nil {
-		return mongoUpdateWriteCommandError(err)
-	}
-	return marshalUpdateResponse(matched, modified, upserted)
+	return s.runMongoUpdateCommand(name, col, parsed, ordered, orderedSet)
 }
 
 type mongoUpdateItem struct {
@@ -993,10 +997,150 @@ type mongoUpdateItem struct {
 	pureSet         bool
 	mutation        mongoMutation
 	upsert          bool
+	multi           bool
 	id              bson.RawValue
 	plan            findPlan
 	exactID         bool
 	selector        *Server
+	budget          *mongoWriteBudget
+}
+
+// mongoWriteBudget is local to one command. It prevents a batch of otherwise
+// bounded filter specifications from multiplying the configured scan budget.
+type mongoWriteBudget struct {
+	examinedRemaining int
+	targetsRemaining  int
+	errorsRemaining   int
+	deadline          time.Time
+}
+
+const mongoWriteCommandMaxDuration = 5 * time.Second
+
+func newMongoWriteBudget(limit int) *mongoWriteBudget {
+	return &mongoWriteBudget{examinedRemaining: limit, targetsRemaining: limit, errorsRemaining: defaultMaxWriteBatchSize, deadline: time.Now().Add(mongoWriteCommandMaxDuration)}
+}
+func (b *mongoWriteBudget) charge() error {
+	if b == nil {
+		return nil
+	}
+	if time.Now().After(b.deadline) {
+		return errors.New("Mongo gateway multi-write command exceeded its execution-time budget")
+	}
+	if b.examinedRemaining <= 0 {
+		return errors.New("Mongo gateway multi-write command exceeded its shared document-work budget")
+	}
+	b.examinedRemaining--
+	return nil
+}
+
+func (b *mongoWriteBudget) reserveTarget() error {
+	if b == nil {
+		return nil
+	}
+	if time.Now().After(b.deadline) {
+		return errors.New("Mongo gateway multi-write command exceeded its execution-time budget")
+	}
+	if b.targetsRemaining <= 0 {
+		return errors.New("Mongo gateway multi-write command exceeded its retained-target budget")
+	}
+	b.targetsRemaining--
+	return nil
+}
+
+func (b *mongoWriteBudget) reserveError() error {
+	if b == nil {
+		return nil
+	}
+	if b.errorsRemaining <= 0 {
+		return errors.New("Mongo gateway multi-write command exceeded its write-error budget")
+	}
+	b.errorsRemaining--
+	return nil
+}
+
+func (b *mongoWriteBudget) checkDeadline() error {
+	if b != nil && time.Now().After(b.deadline) {
+		return errors.New("Mongo gateway multi-write command exceeded its execution-time budget")
+	}
+	return nil
+}
+
+type mongoWriteError struct {
+	index int
+	err   error
+}
+
+func mongoCommandOrdered(command wire.Document) (bool, bool, error) {
+	value := bson.Raw(command).Lookup("ordered")
+	if value.IsZero() {
+		return true, false, nil
+	}
+	ordered, ok := value.BooleanOK()
+	if !ok {
+		return false, true, errors.New("Mongo command field \"ordered\" must be a boolean")
+	}
+	return ordered, true, nil
+}
+
+// runMongoUpdateCommand has intentionally per-document atomicity only. A
+// multi-write command is not a transaction: ordered commands stop on the first
+// write error, while unordered commands continue and retain original indices.
+func (s *Server) runMongoUpdateCommand(name string, col *collections.Collection, updates []mongoUpdateItem, ordered, orderedSet bool) (wire.Document, error) {
+	var matched, modified int32
+	upserted := make([]mongoUpdateUpserted, 0)
+	writeErrors := make([]mongoWriteError, 0)
+	for _, update := range updates {
+		matchedOne, modifiedOne, inserted, err := s.runMongoUpdateItem(name, col, update)
+		if err != nil {
+			matched += matchedOne
+			modified += modifiedOne
+			if reserveErr := update.budget.reserveError(); reserveErr != nil {
+				return marshalUpdateResponseWithWriteErrors(matched, modified, upserted, writeErrors)
+			}
+			writeErrors = append(writeErrors, mongoWriteError{index: update.index, err: err})
+			if ordered {
+				break
+			}
+			continue
+		}
+		matched += matchedOne
+		modified += modifiedOne
+		if inserted {
+			upserted = append(upserted, mongoUpdateUpserted{index: update.index, id: update.id})
+		}
+	}
+	return marshalUpdateResponseWithWriteErrors(matched, modified, upserted, writeErrors)
+}
+
+func (s *Server) runMongoUpdateItem(name string, col *collections.Collection, update mongoUpdateItem) (int32, int32, bool, error) {
+	if update.exactID {
+		if err := update.budget.reserveTarget(); err != nil {
+			return 0, 0, false, err
+		}
+	}
+	if !update.multi {
+		if !update.upsert {
+			matched, modified, err := s.runMongoUpdateCoalesced(name, col, update)
+			return boolToInt32(matched), boolToInt32(modified), false, err
+		}
+		matched, modified, inserted, err := runMongoUpdateOneWithUpsert(col, update)
+		return boolToInt32(matched || inserted), boolToInt32(modified), inserted, err
+	}
+	if update.upsert && !update.exactID {
+		return 0, 0, false, errors.New("Mongo gateway multi update upsert requires an exact _id equality filter")
+	}
+	if update.exactID {
+		matched, modified, inserted, err := runMongoUpdateOneWithUpsert(col, update)
+		return boolToInt32(matched || inserted), boolToInt32(modified), inserted, err
+	}
+	return s.runMongoFilterUpdateMany(col, update)
+}
+
+func boolToInt32(value bool) int32 {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 type mongoUpdateParseError struct {
@@ -1033,10 +1177,9 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 		}
 		id, directID = simplePrimaryEqualityFindValue(plan)
 	}
-	if multi, err := optionalBoolField(update, "multi"); err != nil {
+	multi, err := optionalBoolField(update, "multi")
+	if err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
-	} else if multi {
-		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update currently supports updateOne only", index)}
 	}
 	upsert, err := optionalBoolField(update, "upsert")
 	if err != nil {
@@ -1089,6 +1232,7 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 		pureSet:         pureSet,
 		mutation:        mutation,
 		upsert:          upsert,
+		multi:           multi,
 		id:              id,
 		plan:            plan,
 		exactID:         directID,
@@ -1975,6 +2119,25 @@ func (s *Server) deleteResponse(ctx context.Context, command wire.Document, sequ
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
+	ordered, _, err := mongoCommandOrdered(command)
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	if len(deletes) > defaultMaxWriteBatchSize {
+		return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("Mongo gateway delete exceeds maxWriteBatchSize %d", defaultMaxWriteBatchSize))
+	}
+	// OP_MSG MaxMessageLength bounds BSON bytes before dispatch; this cap bounds
+	// per-spec result/error bookkeeping independently of command byte size.
+	parsed := make([]mongoDeleteItem, len(deletes))
+	budget := newMongoWriteBudget(s.maxFindScanDocuments())
+	for i, deleteItem := range deletes {
+		item, parseErr := parseMongoDeleteItem(i, deleteItem)
+		if parseErr != nil {
+			return mongoUpdateParseCommandError(parseErr)
+		}
+		parsed[i] = item
+		parsed[i].budget = budget
+	}
 
 	col, err := s.openCollectionForMutation(name)
 	if err != nil {
@@ -1985,46 +2148,77 @@ func (s *Server) deleteResponse(ctx context.Context, command wire.Document, sequ
 	}
 
 	var deleted int32
-	for i, deleteItem := range deletes {
-		filter, err := requiredDocumentField(deleteItem, "q")
-		if err != nil {
-			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("deletes[%d]: %v", i, err))
-		}
-		plan, err := parseFindPlan(nil, filter)
-		if err != nil {
-			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("deletes[%d]: %v", i, err))
-		}
-		if err := validateMongoWritePlan(plan); err != nil {
-			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("deletes[%d]: %v", i, err))
-		}
-		limit, err := optionalInt32Field(deleteItem, "limit")
-		if err != nil {
-			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("deletes[%d]: %v", i, err))
-		}
-		if limit != 0 && limit != 1 {
-			return commandError(commandCodeBadValue, "BadValue", "Mongo gateway delete limit must be 0 or 1")
-		}
-		var deletedOne bool
-		if id, exactID := simplePrimaryEqualityFindValue(plan); exactID {
-			key, err := encodePrimaryKey(id)
-			if err != nil {
-				return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("deletes[%d]: %v", i, err))
+	writeErrors := make([]mongoWriteError, 0)
+	for _, item := range parsed {
+		count, runErr := s.runMongoDeleteItem(col, item)
+		if runErr != nil {
+			deleted += count
+			if reserveErr := item.budget.reserveError(); reserveErr != nil {
+				return marshalDeleteResponseWithWriteErrors(deleted, writeErrors)
 			}
-			deletedOne, err = col.DeleteDocument(key)
-		} else {
-			if limit != 1 {
-				return commandError(commandCodeBadValue, "BadValue", "Mongo gateway filter delete supports deleteOne only (limit: 1)")
+			writeErrors = append(writeErrors, mongoWriteError{index: item.index, err: runErr})
+			if ordered {
+				break
 			}
-			deletedOne, err = s.deleteMongoFilterOne(col, plan)
+			continue
 		}
-		if err != nil {
-			return commandError(commandCodeBadValue, "BadValue", err.Error())
-		}
-		if deletedOne {
-			deleted++
-		}
+		deleted += count
 	}
-	return marshalDeleteResponse(deleted)
+	return marshalDeleteResponseWithWriteErrors(deleted, writeErrors)
+}
+
+type mongoDeleteItem struct {
+	index   int
+	plan    findPlan
+	limit   int32
+	exactID bool
+	key     []byte
+	budget  *mongoWriteBudget
+}
+
+func parseMongoDeleteItem(index int, deleteItem wire.Document) (mongoDeleteItem, error) {
+	filter, err := requiredDocumentField(deleteItem, "q")
+	if err != nil {
+		return mongoDeleteItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("deletes[%d]: %v", index, err)}
+	}
+	plan, err := parseFindPlan(nil, filter)
+	if err != nil {
+		return mongoDeleteItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("deletes[%d]: %v", index, err)}
+	}
+	if err := validateMongoWritePlan(plan); err != nil {
+		return mongoDeleteItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("deletes[%d]: %v", index, err)}
+	}
+	limit, err := optionalInt32Field(deleteItem, "limit")
+	if err != nil {
+		return mongoDeleteItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("deletes[%d]: %v", index, err)}
+	}
+	if limit != 0 && limit != 1 {
+		return mongoDeleteItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("deletes[%d]: Mongo gateway delete limit must be 0 or 1", index)}
+	}
+	item := mongoDeleteItem{index: index, plan: plan, limit: limit}
+	if id, exact := simplePrimaryEqualityFindValue(plan); exact {
+		key, err := encodePrimaryKey(id)
+		if err != nil {
+			return mongoDeleteItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("deletes[%d]: %v", index, err)}
+		}
+		item.exactID, item.key = true, key
+	}
+	return item, nil
+}
+
+func (s *Server) runMongoDeleteItem(col *collections.Collection, item mongoDeleteItem) (int32, error) {
+	if item.exactID {
+		if err := item.budget.reserveTarget(); err != nil {
+			return 0, err
+		}
+		deleted, err := col.DeleteDocument(item.key)
+		return boolToInt32(deleted), err
+	}
+	if item.limit == 0 {
+		return s.deleteMongoFilterMany(col, item.plan, item.budget)
+	}
+	deleted, err := s.deleteMongoFilterOneWithBudget(col, item.plan, item.budget)
+	return boolToInt32(deleted), err
 }
 
 func (s *Server) listCollectionsResponse(command wire.Document) (wire.Document, error) {
@@ -2671,11 +2865,46 @@ func marshalUpdateResponse(matched, modified int32, upserted ...[]mongoUpdateUps
 	return marshalDocument(response)
 }
 
+func marshalUpdateResponseWithWriteErrors(matched, modified int32, upserted []mongoUpdateUpserted, writeErrors []mongoWriteError) (wire.Document, error) {
+	response := bson.D{{Key: "ok", Value: 1.0}, {Key: "n", Value: matched}, {Key: "nModified", Value: modified}}
+	if len(upserted) != 0 {
+		items := make(bson.A, len(upserted))
+		for i, item := range upserted {
+			items[i] = bson.D{{Key: "index", Value: int32(item.index)}, {Key: "_id", Value: item.id}}
+		}
+		response = append(response, bson.E{Key: "upserted", Value: items})
+	}
+	return marshalWriteErrorsResponse(response, writeErrors)
+}
+
 func marshalDeleteResponse(deleted int32) (wire.Document, error) {
 	return marshalDocument(bson.D{
 		{Key: "ok", Value: 1.0},
 		{Key: "n", Value: deleted},
 	})
+}
+
+func marshalInsertResponseWithWriteErrors(inserted int32, writeErrors []mongoWriteError) (wire.Document, error) {
+	return marshalWriteErrorsResponse(bson.D{{Key: "ok", Value: 1.0}, {Key: "n", Value: inserted}}, writeErrors)
+}
+
+func marshalDeleteResponseWithWriteErrors(deleted int32, writeErrors []mongoWriteError) (wire.Document, error) {
+	return marshalWriteErrorsResponse(bson.D{{Key: "ok", Value: 1.0}, {Key: "n", Value: deleted}}, writeErrors)
+}
+
+func marshalWriteErrorsResponse(response bson.D, writeErrors []mongoWriteError) (wire.Document, error) {
+	if len(writeErrors) != 0 {
+		items := make(bson.A, len(writeErrors))
+		for i, item := range writeErrors {
+			code, codeName := commandCodeBadValue, "BadValue"
+			if collections.IsDuplicateKeyError(item.err) {
+				code, codeName = commandCodeDuplicateKey, "DuplicateKey"
+			}
+			items[i] = bson.D{{Key: "index", Value: int32(item.index)}, {Key: "code", Value: code}, {Key: "codeName", Value: codeName}, {Key: "errmsg", Value: item.err.Error()}}
+		}
+		response = append(response, bson.E{Key: "writeErrors", Value: items})
+	}
+	return marshalDocument(response)
 }
 
 func marshalCursorResponse(db, collection string, firstBatch bson.A) (wire.Document, error) {

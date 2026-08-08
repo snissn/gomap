@@ -577,8 +577,8 @@ func mongoCompatibilityMatrixProbes() []mongoCompatibilityMatrixProbe {
 			},
 		},
 		{
-			capabilityID:   "update-gap.multi-update",
-			expectedStatus: MongoCapabilityRejected,
+			capabilityID:   "update.multi-update-and-batch-ordering",
+			expectedStatus: MongoCapabilitySupportedSubset,
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 20, bson.D{
 					{Key: "update", Value: "users"},
@@ -589,7 +589,8 @@ func mongoCompatibilityMatrixProbes() []mongoCompatibilityMatrixProbe {
 					}}},
 					{Key: "$db", Value: "app"},
 				})
-				assertCommandError(t, resp, "BadValue")
+				assertOK(t, resp)
+				assertInt32(t, resp, "n", 1)
 			},
 		},
 		{

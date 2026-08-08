@@ -42,7 +42,7 @@ mongodb://127.0.0.1:27017/?directConnection=true
 <!-- mongo-capability-summary:begin -->
 ## Executable capability summary
 
-Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:6e3ceec9255552ff418ab4286da8067433c11012ac7a16c462822527ba5bb6b0`
+Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:9e16e35e4f352baab63ef21726c09cbcdebea4a52ac7229a1542182ad594ec94`
 
 | Surface | Status | Boundary |
 |---|---|---|

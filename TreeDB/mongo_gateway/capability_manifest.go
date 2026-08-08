@@ -105,7 +105,7 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 		{ID: "query-gap.dotted-projection", Category: "query gap", Feature: "dotted projection", Status: MongoCapabilityRejected},
 		{ID: "update-subset.natural-order-arbitrary-filter-update-delete-and-findandmodify", Category: "update subset", Feature: "natural-order arbitrary-filter update, delete, and findAndModify", Status: MongoCapabilitySupportedSubset},
 		{ID: "update.exact-id-upsert", Category: "update", Feature: "exact _id upsert", Status: MongoCapabilitySupportedSubset},
-		{ID: "update-gap.multi-update", Category: "update gap", Feature: "multi update", Status: MongoCapabilityRejected},
+		{ID: "update.multi-update-and-batch-ordering", Category: "update", Feature: "bounded multi update and ordered or unordered batch errors", Status: MongoCapabilitySupportedSubset},
 		{ID: "update.inc", Category: "update", Feature: "$inc", Status: MongoCapabilitySupportedSubset},
 		{ID: "update.unset", Category: "update", Feature: "$unset", Status: MongoCapabilitySupportedSubset},
 		{ID: "update.nested-set-unset-inc-and-bounded-array-modifiers-no-numeric-array-index-paths", Category: "update", Feature: "nested $set/$unset/$inc and bounded array modifiers (no numeric array-index paths)", Status: MongoCapabilitySupportedSubset},

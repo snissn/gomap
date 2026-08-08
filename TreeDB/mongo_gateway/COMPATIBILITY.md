@@ -76,7 +76,7 @@ an extra probe outside the manifest.
 | query gap | dotted projection | rejected | `query-gap.dotted-projection` |
 | update subset | natural-order arbitrary-filter update, delete, and findAndModify | supported subset | `update-subset.natural-order-arbitrary-filter-update-delete-and-findandmodify` |
 | update | exact _id upsert | supported subset | `update.exact-id-upsert` |
-| update gap | multi update | rejected | `update-gap.multi-update` |
+| update | bounded multi update and ordered or unordered batch errors | supported subset | `update.multi-update-and-batch-ordering` |
 | update | $inc | supported subset | `update.inc` |
 | update | $unset | supported subset | `update.unset` |
 | update | nested $set/$unset/$inc and bounded array modifiers (no numeric array-index paths) | supported subset | `update.nested-set-unset-inc-and-bounded-array-modifiers-no-numeric-array-index-paths` |
