@@ -1249,6 +1249,11 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 	if !bson.Raw(update).Lookup("arrayFilters").IsZero() {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update does not support arrayFilters", index)}
 	}
+	for _, option := range []string{"collation", "hint"} {
+		if !bson.Raw(update).Lookup(option).IsZero() {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update does not support %s", index, option)}
+		}
+	}
 	filter, err := requiredDocumentField(update, "q")
 	if err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
@@ -2270,6 +2275,11 @@ type mongoDeleteItem struct {
 }
 
 func parseMongoDeleteItem(index int, deleteItem wire.Document) (mongoDeleteItem, error) {
+	for _, option := range []string{"collation", "hint"} {
+		if !bson.Raw(deleteItem).Lookup(option).IsZero() {
+			return mongoDeleteItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("deletes[%d]: Mongo gateway delete does not support %s", index, option)}
+		}
+	}
 	filter, err := requiredDocumentField(deleteItem, "q")
 	if err != nil {
 		return mongoDeleteItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("deletes[%d]: %v", index, err)}

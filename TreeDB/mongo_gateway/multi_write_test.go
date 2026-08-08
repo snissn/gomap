@@ -149,6 +149,31 @@ func TestMongoInsertBatchOrderedAndUnorderedStableIndices(t *testing.T) {
 	}
 }
 
+func TestMongoMultiUpdateDeleteRejectUnsupportedPerItemOptionsBeforeMutation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cmd  bson.D
+	}{
+		{"update collation", bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "changed", Value: true}}}}}, {Key: "multi", Value: true}, {Key: "collation", Value: bson.D{{Key: "locale", Value: "en"}}}}}}, {Key: "$db", Value: "app"}}},
+		{"delete hint", bson.D{{Key: "delete", Value: "users"}, {Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "limit", Value: int32(0)}, {Key: "hint", Value: "_id_"}}}}, {Key: "$db", Value: "app"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			s := NewServer()
+			s.Collections = collections.NewCollectionManager(db)
+			assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}}}}, {Key: "$db", Value: "app"}}))
+			assertCommandError(t, serveCommand(t, s, 2, tc.cmd), "BadValue")
+			if got := len(cursorFirstBatch(t, serveCommand(t, s, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}}))); got != 1 {
+				t.Fatalf("unsupported option mutated document count=%d", got)
+			}
+		})
+	}
+}
+
 func TestMongoInsertBatchSecondaryUniqueConflictRollsBackFastPath(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
