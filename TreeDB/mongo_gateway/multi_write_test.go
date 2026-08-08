@@ -159,7 +159,7 @@ func TestMongoInsertBatchSecondaryUniqueConflictRollsBackFastPath(t *testing.T) 
 	s.Collections = collections.NewCollectionManager(db)
 	assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "createIndexes", Value: "users"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"}, {Key: "unique", Value: true}}}}, {Key: "$db", Value: "app"}}))
 	assertOK(t, serveCommand(t, s, 2, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "seed"}, {Key: "email", Value: "taken@example.com"}}}}, {Key: "$db", Value: "app"}}))
-	s.MaxFindScanDocuments = 2 // exact native-batch boundary; fallback must refund it.
+	s.mongoWriteTargetLimit = 2 // exact native-batch boundary; fallback must refund it.
 	response := serveCommand(t, s, 3, bson.D{{Key: "insert", Value: "users"}, {Key: "ordered", Value: false}, {Key: "documents", Value: bson.A{
 		bson.D{{Key: "_id", Value: "conflict"}, {Key: "email", Value: "taken@example.com"}},
 		bson.D{{Key: "_id", Value: "later"}, {Key: "email", Value: "later@example.com"}},
@@ -275,7 +275,7 @@ func TestMongoInsertOverCapRejectsBeforeFirstCollectionCreate(t *testing.T) {
 	s := NewServer()
 	s.Collections = collections.NewCollectionManager(db)
 	s.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
-	s.MaxFindScanDocuments = 1
+	s.mongoWriteTargetLimit = 1
 	response := serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "missing"}, {Key: "documents", Value: bson.A{
 		bson.D{{Key: "_id", Value: "over-a"}},
 		bson.D{{Key: "_id", Value: "over-b"}},
@@ -406,6 +406,7 @@ func TestMongoMultiWriteSharedScanCapDoesNotResetForSecondSpec(t *testing.T) {
 	s := NewServer()
 	s.Collections = collections.NewCollectionManager(db)
 	s.MaxFindScanDocuments = 1
+	s.mongoWriteTargetLimit = 1
 	assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "a"}, {Key: "city", Value: "hnl"}}, bson.D{{Key: "_id", Value: "b"}, {Key: "city", Value: "sea"}}}}, {Key: "$db", Value: "app"}}))
 	response := serveCommand(t, s, 2, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{
 		bson.D{{Key: "q", Value: bson.D{{Key: "city", Value: "hnl"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "seen", Value: true}}}}}},
@@ -426,6 +427,7 @@ func TestMongoMultiWriteExactIDTargetCapPreservesPartialResult(t *testing.T) {
 	s := NewServer()
 	s.Collections = collections.NewCollectionManager(db)
 	s.MaxFindScanDocuments = 1
+	s.mongoWriteTargetLimit = 1
 	assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "a"}}, bson.D{{Key: "_id", Value: "b"}}}}, {Key: "$db", Value: "app"}}))
 	response := serveCommand(t, s, 2, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{
 		bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "a"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "seen", Value: true}}}}}},
@@ -447,6 +449,7 @@ func TestMongoMultiWriteSparseFilterDoesNotConsumeTargetBudgetForNonmatch(t *tes
 	s := NewServer()
 	s.Collections = collections.NewCollectionManager(db)
 	s.MaxFindScanDocuments = 2
+	s.mongoWriteTargetLimit = 2
 	docs := bson.A{bson.D{{Key: "_id", Value: "a"}, {Key: "city", Value: "sea"}}, bson.D{{Key: "_id", Value: "b"}, {Key: "city", Value: "hnl"}}}
 	assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: docs}, {Key: "$db", Value: "app"}}))
 	first := bson.D{{Key: "q", Value: bson.D{{Key: "city", Value: "hnl"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "seen", Value: true}}}}}, {Key: "multi", Value: true}}

@@ -115,10 +115,14 @@ type Server struct {
 	// mongoWriteRetainedKeyBytesLimit is a test-only override of the command
 	// retained-key ceiling; zero uses mongoWriteCommandMaxRetainedKeyBytes.
 	mongoWriteRetainedKeyBytesLimit int
-	updateMu                        sync.Mutex
-	updateCoalescers                map[string]*mongoUpdateCoalescer
-	insertMu                        sync.Mutex
-	insertCoalescers                map[string]*mongoInsertCoalescer
+	// mongoWriteTargetLimit is a test-only override of the command-wide target
+	// ceiling. It is distinct from MaxFindScanDocuments because inserts and
+	// exact-ID writes do not consume scan work.
+	mongoWriteTargetLimit int
+	updateMu              sync.Mutex
+	updateCoalescers      map[string]*mongoUpdateCoalescer
+	insertMu              sync.Mutex
+	insertCoalescers      map[string]*mongoInsertCoalescer
 	// standaloneWriteBoundaryMu lets ordinary standalone writes overlap while
 	// making a journal request exclusive from dispatch through its durable
 	// boundary. That exclusion prevents a concurrent collection mutation from

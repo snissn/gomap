@@ -91,7 +91,7 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 	// whole target reservation is knowable after parse, before a first-write
 	// collection would be created, so reject an over-cap command without that
 	// otherwise observable catalog side effect.
-	if len(ids) > 1 && format == collections.DocumentFormatBSON && len(ids) > s.maxFindScanDocuments() {
+	if len(ids) > 1 && format == collections.DocumentFormatBSON && len(ids) > s.maxMongoWriteTargets() {
 		return marshalInsertResponseWithWriteErrors(0, []mongoWriteError{{index: 0, err: errors.New("Mongo gateway multi-write command exceeded its retained-target budget")}})
 	}
 	var releaseColdCollection func()
@@ -1046,10 +1046,18 @@ func newMongoWriteBudget(limit int) *mongoWriteBudget {
 
 func (s *Server) newMongoWriteBudget() *mongoWriteBudget {
 	budget := newMongoWriteBudget(s.maxFindScanDocuments())
+	budget.targetsRemaining = s.maxMongoWriteTargets()
 	if s != nil && s.mongoWriteRetainedKeyBytesLimit > 0 {
 		budget.retainedKeyBytesRemaining = s.mongoWriteRetainedKeyBytesLimit
 	}
 	return budget
+}
+
+func (s *Server) maxMongoWriteTargets() int {
+	if s != nil && s.mongoWriteTargetLimit > 0 {
+		return s.mongoWriteTargetLimit
+	}
+	return defaultMaxWriteBatchSize
 }
 func (b *mongoWriteBudget) charge() error {
 	if b == nil {
