@@ -2,11 +2,15 @@ package mongogateway
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -19,6 +23,22 @@ const (
 	DefaultStandaloneAddr           = "127.0.0.1:27017"
 	DefaultStandaloneDocumentFormat = collections.DocumentFormatBSON
 )
+
+const defaultTLSHandshakeTimeout = 10 * time.Second
+
+// TransportStatus describes the listener policy selected for a standalone
+// gateway. It deliberately contains no certificate or key material.
+type TransportStatus struct {
+	Mode                     string
+	InsecureRemoteOverride   bool
+	TLSMinimumVersion        uint16
+	TLSCertificateNotAfter   time.Time
+	TLSClientCertificateMode string
+}
+
+// TransportMetrics durations are nanoseconds and cover TLS handshakes only.
+type TransportMetrics struct{ HandshakesStarted, HandshakesSucceeded, HandshakesFailed, ActiveHandshakes, HandshakeTotalNanoseconds, HandshakeMaxNanoseconds uint64 }
+type transportMetrics struct{ started, succeeded, failed, active, totalNS, maxNS atomic.Uint64 }
 
 // StandaloneOptions configures a TreeDB-backed MongoDB gateway process.
 //
@@ -51,6 +71,19 @@ type StandaloneOptions struct {
 	InsertCoalescingIdleTTL     time.Duration
 	ClusterSubmitter            treenativewire.ClusterSubmitter
 	ClusterCatalogVersion       ClusterCatalogVersionProvider
+
+	// TLSCertFile and TLSKeyFile enable TLS for the standalone listener. They
+	// must be supplied together. TLSCAFile optionally supplies client-CA roots;
+	// RequireClientCert makes a verified client certificate mandatory.
+	TLSCertFile         string
+	TLSKeyFile          string
+	TLSCAFile           string
+	RequireClientCert   bool
+	TLSMinVersion       uint16
+	TLSHandshakeTimeout time.Duration
+	// AllowInsecureRemote permits plaintext only for an explicitly opted-in
+	// non-loopback listener. It is intended for controlled development only.
+	AllowInsecureRemote bool
 }
 
 // StandaloneServer owns the TreeDB backend, collection manager, and MongoDB
@@ -61,12 +94,16 @@ type StandaloneServer struct {
 	Collections *collections.CollectionManager
 	Server      *Server
 
-	cleanup   func() error
-	closeOnce sync.Once
-	closeErr  error
-	serveMu   sync.Mutex
-	serveWG   sync.WaitGroup
-	closing   bool
+	cleanup          func() error
+	closeOnce        sync.Once
+	closeErr         error
+	serveMu          sync.Mutex
+	serveWG          sync.WaitGroup
+	closing          bool
+	transportMu      sync.RWMutex
+	transport        TransportStatus
+	tlsConfig        *tls.Config
+	transportMetrics *transportMetrics
 }
 
 // NormalizeStandaloneOptions applies standalone defaults and validates options.
@@ -124,6 +161,24 @@ func NormalizeStandaloneOptions(opts StandaloneOptions) (StandaloneOptions, erro
 	if opts.ClusterSubmitter != nil && opts.ClusterCatalogVersion == nil {
 		return opts, errors.New("mongo gateway standalone: ClusterCatalogVersion is required when ClusterSubmitter is configured")
 	}
+	if (opts.TLSCertFile == "") != (opts.TLSKeyFile == "") {
+		return opts, errors.New("mongo gateway standalone: TLSCertFile and TLSKeyFile must be supplied together")
+	}
+	if opts.RequireClientCert && opts.TLSCAFile == "" {
+		return opts, errors.New("mongo gateway standalone: TLSCAFile is required when RequireClientCert is enabled")
+	}
+	if opts.TLSMinVersion == 0 {
+		opts.TLSMinVersion = tls.VersionTLS12
+	}
+	if opts.TLSMinVersion != tls.VersionTLS12 && opts.TLSMinVersion != tls.VersionTLS13 {
+		return opts, errors.New("mongo gateway standalone: TLSMinVersion must be TLS 1.2 or TLS 1.3")
+	}
+	if opts.TLSHandshakeTimeout < 0 {
+		return opts, errors.New("mongo gateway standalone: TLSHandshakeTimeout must be >= 0")
+	}
+	if opts.TLSHandshakeTimeout == 0 {
+		opts.TLSHandshakeTimeout = defaultTLSHandshakeTimeout
+	}
 
 	return opts, nil
 }
@@ -170,12 +225,23 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	}
 	server.InsertCoalescingIdleTTL = normalized.InsertCoalescingIdleTTL
 
+	tlsConfig, transport, err := loadStandaloneTLS(normalized)
+	if err != nil {
+		errs := []error{err}
+		if cleanup != nil {
+			errs = append(errs, cleanup())
+		}
+		return nil, errors.Join(errs...)
+	}
 	return &StandaloneServer{
-		Options:     normalized,
-		Backend:     backend,
-		Collections: manager,
-		Server:      server,
-		cleanup:     cleanup,
+		Options:          normalized,
+		Backend:          backend,
+		Collections:      manager,
+		Server:           server,
+		cleanup:          cleanup,
+		transport:        transport,
+		tlsConfig:        tlsConfig,
+		transportMetrics: &transportMetrics{},
 	}, nil
 }
 
@@ -292,6 +358,13 @@ func (s *StandaloneServer) Serve(ctx context.Context, ln net.Listener) error {
 	s.serveWG.Add(1)
 	s.serveMu.Unlock()
 	defer s.serveWG.Done()
+	if err := s.validateListener(ln); err != nil {
+		_ = ln.Close()
+		return err
+	}
+	if s.Options.TLSCertFile != "" {
+		ln = &tlsHandshakeListener{Listener: ln, config: s.tlsConfig.Clone(), timeout: s.Options.TLSHandshakeTimeout, metrics: s.transportMetrics}
+	}
 	return s.Server.Serve(ctx, ln)
 }
 
@@ -341,6 +414,160 @@ func (s *StandaloneServer) Close() error {
 		s.closeErr = errors.Join(errs...)
 	})
 	return s.closeErr
+}
+
+// TransportStatus returns safe listener diagnostics for operator status output.
+func (s *StandaloneServer) TransportStatus() TransportStatus {
+	if s == nil {
+		return TransportStatus{}
+	}
+	s.transportMu.RLock()
+	defer s.transportMu.RUnlock()
+	return s.transport
+}
+
+func (s *StandaloneServer) TransportMetrics() TransportMetrics {
+	if s == nil || s.transportMetrics == nil {
+		return TransportMetrics{}
+	}
+	m := s.transportMetrics
+	return TransportMetrics{m.started.Load(), m.succeeded.Load(), m.failed.Load(), m.active.Load(), m.totalNS.Load(), m.maxNS.Load()}
+}
+
+func (s *StandaloneServer) validateListener(ln net.Listener) error {
+	if ln == nil {
+		return errors.New("mongo gateway standalone: nil listener")
+	}
+	loopback := isLoopbackListener(ln.Addr())
+	if !loopback && s.Options.TLSCertFile == "" && !s.Options.AllowInsecureRemote {
+		return fmt.Errorf("mongo gateway standalone: refusing plaintext non-loopback listener %q; configure TLS or set AllowInsecureRemote", ln.Addr())
+	}
+	s.transportMu.Lock()
+	if s.Options.TLSCertFile != "" {
+		s.transport.Mode, s.transport.InsecureRemoteOverride = "tls", false
+	} else if loopback {
+		s.transport.Mode, s.transport.InsecureRemoteOverride = "plaintext-loopback", false
+	} else {
+		s.transport.Mode, s.transport.InsecureRemoteOverride = "plaintext-insecure-remote", true
+	}
+	s.transportMu.Unlock()
+	return nil
+}
+
+// ValidateListener applies standalone transport policy before announcing startup.
+func (s *StandaloneServer) ValidateListener(ln net.Listener) error {
+	if s == nil {
+		return errServerClosed
+	}
+	return s.validateListener(ln)
+}
+
+func isLoopbackListener(addr net.Addr) bool {
+	tcp, ok := addr.(*net.TCPAddr)
+	return ok && tcp.IP.IsLoopback()
+}
+
+func loadStandaloneTLS(opts StandaloneOptions) (*tls.Config, TransportStatus, error) {
+	status := TransportStatus{Mode: "plaintext-loopback", TLSMinimumVersion: opts.TLSMinVersion}
+	if opts.TLSCertFile == "" {
+		return nil, status, nil
+	}
+	cert, err := tls.LoadX509KeyPair(opts.TLSCertFile, opts.TLSKeyFile)
+	if err != nil {
+		return nil, status, fmt.Errorf("mongo gateway standalone: load TLS certificate: %w", err)
+	}
+	if len(cert.Certificate) == 0 {
+		return nil, status, errors.New("mongo gateway standalone: TLS certificate has no leaf")
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return nil, status, fmt.Errorf("mongo gateway standalone: parse TLS certificate: %w", err)
+	}
+	status.Mode, status.TLSCertificateNotAfter = "tls", leaf.NotAfter
+	if opts.RequireClientCert {
+		status.TLSClientCertificateMode = "require-and-verify"
+	} else {
+		status.TLSClientCertificateMode = "none"
+	}
+	cfg := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: opts.TLSMinVersion}
+	if opts.TLSCAFile != "" {
+		pem, err := os.ReadFile(opts.TLSCAFile)
+		if err != nil {
+			return nil, status, fmt.Errorf("mongo gateway standalone: read TLS CA bundle: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, status, errors.New("mongo gateway standalone: TLS CA bundle contains no certificates")
+		}
+		cfg.ClientCAs = pool
+	}
+	if opts.RequireClientCert {
+		cfg.ClientAuth = tls.RequireAndVerifyClientCert
+	}
+	return cfg, status, nil
+}
+
+type tlsHandshakeListener struct {
+	net.Listener
+	config  *tls.Config
+	timeout time.Duration
+	metrics *transportMetrics
+}
+
+func (l *tlsHandshakeListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &tlsHandshakeConn{Conn: conn, config: l.config, timeout: l.timeout, metrics: l.metrics}, nil
+}
+
+type tlsHandshakeConn struct {
+	net.Conn
+	config       *tls.Config
+	timeout      time.Duration
+	metrics      *transportMetrics
+	once         sync.Once
+	tlsConn      *tls.Conn
+	handshakeErr error
+}
+
+func (c *tlsHandshakeConn) handshake() error {
+	c.once.Do(func() {
+		c.metrics.started.Add(1)
+		c.metrics.active.Add(1)
+		started := time.Now()
+		defer func() {
+			c.metrics.active.Add(^uint64(0))
+			elapsed := uint64(time.Since(started))
+			c.metrics.totalNS.Add(elapsed)
+			for prior := c.metrics.maxNS.Load(); elapsed > prior && !c.metrics.maxNS.CompareAndSwap(prior, elapsed); prior = c.metrics.maxNS.Load() {
+			}
+		}()
+		c.tlsConn = tls.Server(c.Conn, c.config)
+		ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+		c.handshakeErr = c.tlsConn.HandshakeContext(ctx)
+		cancel()
+		if c.handshakeErr == nil {
+			c.metrics.succeeded.Add(1)
+		} else {
+			c.metrics.failed.Add(1)
+			_ = c.Conn.Close()
+		}
+	})
+	return c.handshakeErr
+}
+func (c *tlsHandshakeConn) Read(p []byte) (int, error) {
+	if err := c.handshake(); err != nil {
+		return 0, err
+	}
+	return c.tlsConn.Read(p)
+}
+func (c *tlsHandshakeConn) Write(p []byte) (int, error) {
+	if err := c.handshake(); err != nil {
+		return 0, err
+	}
+	return c.tlsConn.Write(p)
 }
 
 func normalizeStandaloneProfile(profile treedb.Profile) (treedb.Profile, error) {

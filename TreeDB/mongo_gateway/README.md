@@ -39,10 +39,38 @@ with direct/single-server mode when their driver supports it, for example:
 mongodb://127.0.0.1:27017/?directConnection=true
 ```
 
+## Transport policy
+
+Plaintext is deliberately limited to loopback listeners. A standalone listener
+on `0.0.0.0`, `::`, or another non-loopback address must use `-tls-cert-file`
+and `-tls-key-file`, or explicitly select `-allow-insecure-remote`; the latter
+prints a warning and is only appropriate for controlled development networks.
+The gateway accepts TLS 1.2 or 1.3, performs each handshake before processing a
+MongoDB message, and bounds it with `-tls-handshake-timeout` (10 seconds by
+default). It never prints key material or raw certificates in startup status.
+Library users can obtain the selected mode and certificate expiry with
+`TransportStatus`, and handshake counts plus cumulative/max nanosecond timing
+with `TransportMetrics`; neither exposes client identities or certificate/key
+contents. These transport facts are recorded in the executable capability
+manifest used by differential and benchmark metadata.
+
+```sh
+GOWORK=off go run ./TreeDB/mongo_gateway/server.go \
+  -addr 0.0.0.0:27017 -dir /var/lib/treedb-mongo \
+  -tls-cert-file /etc/treedb/tls/server.pem \
+  -tls-key-file /etc/treedb/tls/server-key.pem \
+  -tls-min-version 1.2
+```
+
+Clients should use normal certificate validation, for example a URI with
+`tls=true` plus their trusted CA configured in the driver. Client certificate
+verification is optional and uses `-tls-ca-file -require-client-cert`; it is a
+transport check only, not MongoDB authentication or authorization.
+
 <!-- mongo-capability-summary:begin -->
 ## Executable capability summary
 
-Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:6e3ceec9255552ff418ab4286da8067433c11012ac7a16c462822527ba5bb6b0`
+Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:1f843b6eea242fea6b180ea3e890255c0687bfbd051568a40c8f237f2d74669e`
 
 | Surface | Status | Boundary |
 |---|---|---|
@@ -51,6 +79,7 @@ Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:6e3ceec9255552ff41
 | Aggregation, count, and distinct | supported subset | Bounded standalone subsets only; unsupported stages, dotted distinct keys, and maxTimeMS reject. |
 | Administrative diagnostics | not implemented | serverStatus, top, and dbStats are not implemented. |
 | Logical sessions | supported subset | Driver-interoperability metadata only; no transaction or causal-session semantics. |
+| Transport security | supported subset | Loopback plaintext remains available; non-loopback standalone listeners require TLS unless an explicit insecure override is selected. TLS 1.2+ with bounded handshakes is supported; authentication and authorization remain separate gaps. |
 | Scalar indexes | supported subset | BSON collections default ordinary single-field ascending indexes to BSON-ordered v2; explicit treedbValueType remains the legacy homogeneous path. Compound and descending indexes remain rejected. |
 | Authentication and authorization | not implemented | The current standalone gateway assumes a trusted local deployment. |
 | Transactions and retryable writes | not implemented | Transaction markers reject and commitTransaction is unavailable. |
