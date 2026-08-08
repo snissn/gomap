@@ -12,7 +12,7 @@ from statistics import median
 from typing import Any
 
 
-FROZEN_PLAN_SEMANTIC_SHA256 = "15e9b88e6be747bd97fe551e6af20096e5d19229682173fda101027cf9eef8d0"
+FROZEN_PLAN_SEMANTIC_SHA256 = "67a2cc62199b77ec0d0a64dfb7bef85b3f1ebbb11d102d7c19ea645e694ab132"
 
 
 class ContractError(ValueError):
@@ -63,6 +63,11 @@ def _budget_key(value: Any) -> str:
 
 def _semantic_sha256(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _percentile(values: list[int], percentile: int) -> int:
+    ordered = sorted(values)
+    return ordered[max(0, (len(ordered) * percentile + 99) // 100 - 1)]
 
 
 def validate_plan(plan: dict[str, Any]) -> None:
@@ -139,10 +144,11 @@ def validate_plan(plan: dict[str, Any]) -> None:
     _require(envelope.get("swap_limit_bytes") == 0, "swap must be disabled for measured rows")
     artifact = plan.get("artifact_contract")
     _require(isinstance(artifact, dict) and artifact.get("schema_version") == 1 and artifact.get("result_kind") == "vector_partition_local_system_qualification_v1", "artifact contract is invalid")
-    for key in ("allowed_status", "required_phases", "required_resources", "required_search_metrics", "required_host_fields", "required_provenance_fields", "required_noise_fields", "tree_db_counters", "tree_db_positive_counters"):
+    for key in ("allowed_status", "required_phases", "required_resources", "required_search_metrics", "required_host_fields", "required_provenance_fields", "required_noise_fields", "tree_db_counters", "tree_db_positive_counters", "tree_db_timings", "tree_db_positive_timings"):
         _require(isinstance(artifact.get(key), list) and artifact[key] and len(artifact[key]) == len(set(artifact[key])), f"artifact contract lacks {key}")
     _require(artifact["allowed_status"] == ["valid", "failed", "unsupported", "incomplete"] and artifact.get("complete_status") == "complete", "artifact status contract changed")
     _require(set(artifact["tree_db_positive_counters"]) < set(artifact["tree_db_counters"]), "positive TreeDB counters must be a proper subset")
+    _require(set(artifact["tree_db_positive_timings"]) < set(artifact["tree_db_timings"]), "positive TreeDB timings must be a proper subset")
     _require(_semantic_sha256(plan) == FROZEN_PLAN_SEMANTIC_SHA256, "frozen plan content changed")
 
 
@@ -282,6 +288,7 @@ def validate_result(plan: dict[str, Any], plan_sha256: str, result: dict[str, An
         budgets = plan["workload"][contract["search_budget"]]["search_budgets"]
         expected_cells = {(_budget_key(budget), concurrency) for budget in budgets for concurrency in plan["workload"]["concurrency"]}
         for corpus in corpus_runs:
+            tree_generation = None
             repetitions = corpus.get("repetitions")
             _require(isinstance(repetitions, list) and [value.get("repetition") for value in repetitions] == [1, 2, 3], f"row {row['id']} corpus {corpus['id']} lacks three repetitions")
             for repetition in repetitions:
@@ -309,6 +316,21 @@ def validate_result(plan: dict[str, Any], plan_sha256: str, result: dict[str, An
                         counters = cell.get("counters")
                         _require(isinstance(counters, dict) and all(isinstance(counters.get(key), int) and not isinstance(counters[key], bool) and counters[key] >= 0 for key in plan["artifact_contract"]["tree_db_counters"]), f"row {row['id']} lacks TreeDB path counters")
                         _require(all(counters[key] > 0 for key in plan["artifact_contract"]["tree_db_positive_counters"]), f"row {row['id']} lacks nonzero TreeDB path proof")
+                        timings = cell.get("timings")
+                        _require(isinstance(timings, dict) and all(isinstance(timings.get(key), int) and not isinstance(timings[key], bool) and timings[key] >= 0 for key in plan["artifact_contract"]["tree_db_timings"]), f"row {row['id']} lacks TreeDB timing attribution")
+                        _require(all(timings[key] > 0 for key in plan["artifact_contract"]["tree_db_positive_timings"]), f"row {row['id']} lacks nonzero TreeDB timing attribution")
+                        generation = cell.get("generation")
+                        _require(isinstance(generation, dict) and isinstance(generation.get("Index"), str) and generation["Index"] and isinstance(generation.get("Generation"), int) and not isinstance(generation["Generation"], bool) and generation["Generation"] > 0, f"row {row['id']} lacks TreeDB generation identity")
+                        if tree_generation is None:
+                            tree_generation = generation
+                        _require(generation == tree_generation, f"row {row['id']} changes TreeDB generation identity")
+                        samples = cell.get("total_nanos")
+                        elapsed = cell.get("elapsed_nanos")
+                        metrics = cell["metrics"]
+                        _require(isinstance(samples, list) and len(samples) == metrics["queries"] and all(isinstance(value, int) and not isinstance(value, bool) and value > 0 for value in samples), f"row {row['id']} lacks TreeDB raw timing samples")
+                        _require(isinstance(elapsed, int) and not isinstance(elapsed, bool) and elapsed >= max(samples) and elapsed >= (sum(samples) + cell["concurrency"] - 1) // cell["concurrency"], f"row {row['id']} has invalid TreeDB wall elapsed")
+                        _require((metrics["p50_nanos"], metrics["p95_nanos"], metrics["p99_nanos"]) == (_percentile(samples, 50), _percentile(samples, 95), _percentile(samples, 99)), f"row {row['id']} changes TreeDB latency percentiles")
+                        _require(math.isclose(metrics["qps"], metrics["queries"] * 1_000_000_000 / elapsed, rel_tol=1e-12), f"row {row['id']} changes TreeDB QPS")
 
     tree_identities = [row["identity"] for row in rows if plan_rows[row["id"]]["system"] == "treedb"]
     _require(len({identity["binary_sha256"] for identity in tree_identities}) == 1, "TreeDB rows do not use one benchmark binary")

@@ -77,7 +77,15 @@ type SearchCountersV1 struct {
 	QueryBytes, RequestBytes, CandidateBytes, ResponseBytes uint64
 }
 
-type SearchTimingV1 struct{ Total time.Duration }
+// SearchTimingV1 retains coordinator stage time for system qualification.
+// Per-shard fields are sums and may exceed Total when shards run concurrently.
+type SearchTimingV1 struct {
+	RouterOpen, RouterSearch, Placement time.Duration
+	Queue, RPC, Network                 time.Duration
+	ReadIndexApply, GenerationOpen      time.Duration
+	ShardSearch, Response               time.Duration
+	Dedupe, Merge, Total                time.Duration
+}
 
 type SearchResponseV1 struct {
 	Generation GenerationIDV1
