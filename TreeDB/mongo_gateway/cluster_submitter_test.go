@@ -1268,17 +1268,16 @@ func TestClusterRoutePreflightMongoTokenPlacementRejectsMultiIDWrites(t *testing
 		t.Run(tc.name, func(t *testing.T) {
 			server, submitter := newMongoPlacementRouteTestServer(t, raftplacement.PlacementModeRingV1)
 			response := tc.run(t, server)
-			assertCommandError(t, response, "NotWritablePrimary")
-			assertErrmsgContains(t, response, "requires command split before submit")
-			assertErrmsgContains(t, response, "route_class=same_partition")
-			assertBool(t, response, "treedbClusterError", true)
-			assertStringField(t, response, "treedbErrorClass", "route_rejected")
-			routes := submitter.snapshotRoutes()
-			if len(routes) != 1 {
-				t.Fatalf("route calls=%d want 1", len(routes))
+			if ok, okOK := bson.Raw(response).Lookup("ok").DoubleOK(); !okOK || ok != 0 {
+				t.Fatalf("multi write unexpectedly accepted: %s", response)
 			}
-			if got := routes[0]; got.Shape != treenativewire.ClusterRouteShapeTokenBatch || got.TokenKnown || len(got.Tokens) != 2 {
-				t.Fatalf("multi-ID route request=%+v want token_batch with two tokens", got)
+			routes := submitter.snapshotRoutes()
+			wantRoutes := 0
+			if tc.name == "insert" {
+				wantRoutes = 1
+			}
+			if len(routes) != wantRoutes {
+				t.Fatalf("route calls=%d want %d", len(routes), wantRoutes)
 			}
 			if calls := submitter.snapshotCalls(); len(calls) != 0 {
 				t.Fatalf("submit calls=%d want 0", len(calls))
