@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/nativewire"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
@@ -235,12 +236,16 @@ func TestVectorPartitionSystemNodeSingleDaemonUsesProductionPublicRouteV1(t *tes
 			queries[i][d] = float32(queries64[i][d])
 		}
 	}
-	cell, err := vectorPartitionSystemBenchCell(t.Context(), node.ready.PublicEndpoint, queries, truth, 4, 4, 128, 2, len(queries))
+	cell, err := vectorPartitionSystemBenchCell(t.Context(), node.ready.PublicEndpoint, configSHA, queries, truth, 4, 4, 128, 2, len(queries))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cell.Status != "valid" || cell.Metrics.CompletedQueries != len(queries) || cell.Metrics.RecallAt10 <= 0 || cell.Counters["selected_partitions"] != uint64(4*len(queries)) || cell.Counters["selected_groups"] == 0 || cell.Counters["query_bytes"] == 0 || cell.Counters["response_bytes"] == 0 || len(cell.TotalNanos) != len(queries) {
+	if cell.Status != "valid" || cell.Generation.Index == "" || cell.Generation.Generation == 0 || cell.ElapsedNanos == 0 || cell.Metrics.CompletedQueries != len(queries) || cell.Metrics.RecallAt10 <= 0 || cell.Counters["selected_partitions"] != uint64(4*len(queries)) || cell.Counters["selected_groups"] == 0 || cell.Counters["query_bytes"] == 0 || cell.Counters["response_bytes"] == 0 || cell.Timings["total"] == 0 || cell.Timings["rpc"] == 0 || cell.Timings["read_index_apply"] == 0 || cell.Timings["shard_search"] == 0 || len(cell.TotalNanos) != len(queries) {
 		t.Fatalf("system benchmark cell = %+v", cell)
+	}
+	node.publicServer.nodeConfigSHA256 = strings.Repeat("f", 64)
+	if _, err := vectorPartitionSystemBenchCell(t.Context(), node.ready.PublicEndpoint, configSHA, queries, truth, 4, 4, 128, 2, 0); err == nil || !strings.Contains(err.Error(), "live node config identity does not match checked topology") {
+		t.Fatalf("mismatched live topology error = %v", err)
 	}
 }
 
@@ -370,11 +375,13 @@ func TestVectorPartitionSystemBenchPersistsFailedCellV1(t *testing.T) {
 		t.Fatalf("truth output = %q", truthOut.String())
 	}
 	out := filepath.Join(t.TempDir(), "failed.json")
-	args := []string{"-endpoint", "127.0.0.1:1", "-dataset", dataset, "-truth-cache", cache, "-truth-cache-sha256", strings.TrimPrefix(fields[1], "artifact_sha256="), "-probes", "2", "-concurrency", "1", "-out", out, "-top-k", "10", "-ef-search", "128", "-warmup", "0"}
-	runCell := func(context.Context, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int) (vectorPartitionSystemBenchCellV1, error) {
+	topology, closeEndpoints := writeVectorPartitionSystemTopologyWithLiveEndpointsTestV1(t, "127.0.0.1:1", dataset)
+	defer closeEndpoints()
+	args := []string{"-endpoint", "127.0.0.1:1", "-topology", topology, "-dataset", dataset, "-truth-cache", cache, "-truth-cache-sha256", strings.TrimPrefix(fields[1], "artifact_sha256="), "-probes", "2", "-concurrency", "1", "-out", out, "-top-k", "10", "-ef-search", "128", "-warmup", "0"}
+	runCell := func(context.Context, string, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int) (vectorPartitionSystemBenchCellV1, error) {
 		return vectorPartitionSystemBenchCellV1{Status: "valid", Budget: map[string]int{"probes": 2}, Concurrency: 1, Metrics: vectorPartitionSystemBenchMetricsV1{Queries: 2}}, context.DeadlineExceeded
 	}
-	if err := runVectorPartitionSystemBenchWithCellV1(args, io.Discard, runCell); !errors.Is(err, context.DeadlineExceeded) {
+	if err := runVectorPartitionSystemBenchWithCellV1(args, io.Discard, runCell, nativewire.ProbeVectorPartitionShardEndpointV1); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("system bench failure = %v", err)
 	}
 	var result vectorPartitionSystemBenchResultV1
@@ -387,6 +394,150 @@ func TestVectorPartitionSystemBenchPersistsFailedCellV1(t *testing.T) {
 	}
 	if len(result.Cells) != 1 || result.Cells[0].Status != "failed" || result.Cells[0].Error == "" || result.Cells[0].Metrics.Errors != 1 || result.Cells[0].Metrics.Timeouts != 1 || !result.CompletedAt.After(result.StartedAt) {
 		t.Fatalf("retained failed result = %+v", result)
+	}
+	if result.Topology != "single_daemon_four_group" || result.TopologyIdentitySHA256 == "" {
+		t.Fatalf("retained topology identity = %+v", result)
+	}
+}
+
+func TestVectorPartitionSystemBenchRejectsShardIdentityDriftAroundCellV1(t *testing.T) {
+	dataset, cache := writeFixtureForTest(t, 10, 2, 2), t.TempDir()
+	var truthOut strings.Builder
+	if err := run([]string{"generate-truth-cache", "-dataset", dataset, "-out", cache, "-top-k", "10", "-seed", "1", "-max-vectors", "10", "-max-fixture-bytes", fmt.Sprint(maxFixtureBytes), "-max-exact-truth-visits", "20"}, &truthOut); err != nil {
+		t.Fatal(err)
+	}
+	fields := strings.Fields(truthOut.String())
+	if len(fields) < 2 {
+		t.Fatalf("truth output = %q", truthOut.String())
+	}
+	topologyPath, closeEndpoints := writeVectorPartitionSystemTopologyWithLiveEndpointsTestV1(t, "127.0.0.1:1", dataset)
+	defer closeEndpoints()
+	topology, err := loadVectorPartitionSystemTopologyEvidenceV1(topologyPath, "127.0.0.1:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	drifted, probes := false, 0
+	probe := func(_ context.Context, endpoint string) (nativewire.VectorPartitionShardEndpointIdentityV1, error) {
+		probes++
+		for _, node := range topology.Nodes {
+			for _, group := range node.LocalGroups {
+				if group.Listen == endpoint {
+					identity := node.NodeConfigSHA256
+					if drifted && group.GroupID == "group-a" {
+						identity = strings.Repeat("f", 64)
+					}
+					return nativewire.VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: group.GroupID, InstanceIdentity: identity}, nil
+				}
+			}
+		}
+		return nativewire.VectorPartitionShardEndpointIdentityV1{}, errors.New("unexpected endpoint")
+	}
+	runCell := func(context.Context, string, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int) (vectorPartitionSystemBenchCellV1, error) {
+		drifted = true
+		return vectorPartitionSystemBenchCellV1{Status: "valid", Budget: map[string]int{"probes": 2}, Concurrency: 1}, nil
+	}
+	out := filepath.Join(t.TempDir(), "drifted.json")
+	args := []string{"-endpoint", "127.0.0.1:1", "-topology", topologyPath, "-dataset", dataset, "-truth-cache", cache, "-truth-cache-sha256", strings.TrimPrefix(fields[1], "artifact_sha256="), "-probes", "2", "-concurrency", "1", "-out", out, "-top-k", "10", "-ef-search", "128", "-warmup", "0"}
+	if err := runVectorPartitionSystemBenchWithCellV1(args, io.Discard, runCell, probe); err == nil || !strings.Contains(err.Error(), "live topology after cell") {
+		t.Fatalf("shard identity drift error = %v", err)
+	}
+	if probes != 9 {
+		t.Fatalf("live identity probes = %d, want 9", probes)
+	}
+	var result vectorPartitionSystemBenchResultV1
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Cells) != 1 || result.Cells[0].Status != "failed" {
+		t.Fatalf("retained drift result = %+v", result)
+	}
+}
+
+func TestVectorPartitionSystemBenchRejectsChangedTopologyEvidenceV1(t *testing.T) {
+	path := writeVectorPartitionSystemTopologyEvidenceTestV1(t, "127.0.0.1:19000", filepath.Join(t.TempDir(), "dataset"))
+	if _, err := loadVectorPartitionSystemTopologyEvidenceV1(path, "localhost:19000"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadVectorPartitionSystemTopologyEvidenceV1(path, "127.0.0.1:19001"); err == nil || !strings.Contains(err.Error(), "endpoint mismatch") {
+		t.Fatalf("changed endpoint error = %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evidence vectorPartitionSystemTopologyEvidenceV1
+	if err := json.Unmarshal(raw, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	evidence.DatasetDirectory += "-changed"
+	writeVectorPartitionSystemJSONTestV1(t, path, evidence)
+	if _, err := loadVectorPartitionSystemTopologyEvidenceV1(path, "127.0.0.1:19000"); err == nil || !strings.Contains(err.Error(), "digest mismatch") {
+		t.Fatalf("changed topology digest error = %v", err)
+	}
+}
+
+func TestVectorPartitionSystemBenchRequiresEveryLiveNodeIdentityV1(t *testing.T) {
+	topology := vectorPartitionSystemTopologyEvidenceV1{Nodes: []vectorPartitionSystemTopologyNodeV1{
+		{NodeID: "node-a", NodeConfigSHA256: strings.Repeat("a", 64), LocalGroups: []vectorPartitionSystemLocalGroupV1{{GroupID: "group-a", Listen: "127.0.0.1:1"}}},
+		{NodeID: "node-b", NodeConfigSHA256: strings.Repeat("b", 64), LocalGroups: []vectorPartitionSystemLocalGroupV1{{GroupID: "group-b", Listen: "127.0.0.1:2"}}},
+	}, Endpoints: map[string]string{"group-a": "127.0.0.1:1", "group-b": "127.0.0.1:2"}}
+	identities := map[string]nativewire.VectorPartitionShardEndpointIdentityV1{
+		"127.0.0.1:1": {Version: 1, GroupID: "group-a", InstanceIdentity: strings.Repeat("a", 64)},
+		"127.0.0.1:2": {Version: 1, GroupID: "group-b", InstanceIdentity: strings.Repeat("b", 64)},
+	}
+	probe := func(_ context.Context, endpoint string) (nativewire.VectorPartitionShardEndpointIdentityV1, error) {
+		return identities[endpoint], nil
+	}
+	if err := validateVectorPartitionSystemLiveEndpointsWithProbeV1(t.Context(), topology, probe); err != nil {
+		t.Fatal(err)
+	}
+	identities["127.0.0.1:2"] = nativewire.VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: "group-b", InstanceIdentity: strings.Repeat("c", 64)}
+	if err := validateVectorPartitionSystemLiveEndpointsWithProbeV1(t.Context(), topology, probe); err == nil || !strings.Contains(err.Error(), "node-b") || !strings.Contains(err.Error(), "does not match checked topology") {
+		t.Fatalf("mismatched peer identity error = %v", err)
+	}
+	identities["127.0.0.1:2"] = nativewire.VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: "group-b", InstanceIdentity: strings.Repeat("b", 64)}
+	for _, test := range []struct {
+		name   string
+		groups []vectorPartitionSystemLocalGroupV1
+	}{
+		{name: "missing", groups: nil},
+		{name: "duplicate", groups: []vectorPartitionSystemLocalGroupV1{{GroupID: "group-a", Listen: "127.0.0.1:1"}}},
+		{name: "wrong_listener", groups: []vectorPartitionSystemLocalGroupV1{{GroupID: "group-b", Listen: "127.0.0.1:1"}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			malformed := topology
+			malformed.Nodes = append([]vectorPartitionSystemTopologyNodeV1(nil), topology.Nodes...)
+			malformed.Nodes[1].LocalGroups = test.groups
+			probes := 0
+			err := validateVectorPartitionSystemLiveEndpointsWithProbeV1(t.Context(), malformed, func(ctx context.Context, endpoint string) (nativewire.VectorPartitionShardEndpointIdentityV1, error) {
+				probes++
+				return probe(ctx, endpoint)
+			})
+			if err == nil || probes != 0 {
+				t.Fatalf("malformed topology error=%v probes=%d", err, probes)
+			}
+		})
+	}
+}
+
+func TestVectorPartitionSystemBenchRejectsMismatchedTopologyDatasetV1(t *testing.T) {
+	dataset := writeFixtureForTest(t, 10, 2, 2)
+	topology := writeVectorPartitionSystemTopologyEvidenceTestV1(t, "127.0.0.1:1", t.TempDir())
+	called := false
+	runCell := func(context.Context, string, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int) (vectorPartitionSystemBenchCellV1, error) {
+		called = true
+		return vectorPartitionSystemBenchCellV1{}, nil
+	}
+	args := []string{"-endpoint", "127.0.0.1:1", "-topology", topology, "-dataset", dataset, "-truth-cache", t.TempDir(), "-truth-cache-sha256", strings.Repeat("a", 64), "-probes", "2", "-concurrency", "1", "-out", filepath.Join(t.TempDir(), "result.json")}
+	if err := runVectorPartitionSystemBenchWithCellV1(args, io.Discard, runCell, nativewire.ProbeVectorPartitionShardEndpointV1); err == nil || !strings.Contains(err.Error(), "does not match checked topology") {
+		t.Fatalf("mismatched topology dataset error = %v", err)
+	}
+	if called {
+		t.Fatal("benchmark cell ran with a mismatched topology dataset")
 	}
 }
 
@@ -458,6 +609,21 @@ func TestVectorPartitionSystemNativeFourDaemonProcessLossAndRestartV1(t *testing
 	for _, index := range []int{1, 2, 3, 0} {
 		processes[index] = startVectorPartitionSystemNodeProcessTestV1(t, configs[index], states[index])
 		waitVectorPartitionSystemReadyTestV1(t, ready[index], processes[index])
+	}
+	for index, group := range groups {
+		var config vectorPartitionSystemNodeConfigV1
+		raw, err := os.ReadFile(configs[index])
+		if err != nil || json.Unmarshal(raw, &config) != nil {
+			t.Fatalf("read node config %d: %v", index, err)
+		}
+		configSHA, err := vectorPartitionSystemNodeConfigSHA256V1(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		identity, err := nativewire.ProbeVectorPartitionShardEndpointV1(t.Context(), endpoints[group])
+		if err != nil || identity.GroupID != group || identity.InstanceIdentity != configSHA {
+			t.Fatalf("live endpoint %q identity = %+v, %v", group, identity, err)
+		}
 	}
 	client, err := dialVectorPartitionOperationsV1(t.Context(), publicAddress)
 	if err != nil {
@@ -581,5 +747,79 @@ func writeVectorPartitionSystemJSONTestV1(t *testing.T, path string, value any) 
 	}
 	if err := os.WriteFile(path, raw, 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func writeVectorPartitionSystemTopologyEvidenceTestV1(t *testing.T, endpoint, dataset string) string {
+	t.Helper()
+	root := t.TempDir()
+	groups := []string{"group-a", "group-b", "group-c", "group-d"}
+	endpoints := make(map[string]string, len(groups))
+	local := make([]vectorPartitionSystemLocalGroupV1, 0, len(groups))
+	for index, group := range groups {
+		listen := fmt.Sprintf("127.0.0.1:%d", 21000+index)
+		endpoints[group] = listen
+		local = append(local, vectorPartitionSystemLocalGroupV1{GroupID: group, Listen: listen})
+	}
+	config := vectorPartitionSystemNodeConfigV1{
+		SchemaVersion: 1, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
+		Topology: "single_daemon_four_group", NodeID: "single", DatasetDirectory: dataset,
+		DatabaseDirectory: filepath.Join(root, "database"), StateDirectory: filepath.Join(root, "state"),
+		ReadyPath: filepath.Join(root, "state", "ready.json"), PublicListen: endpoint, LocalGroups: local, Endpoints: endpoints,
+	}
+	evidence, err := validateVectorPartitionSystemTopologyV1([]vectorPartitionSystemNodeConfigV1{config})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "topology.json")
+	writeVectorPartitionSystemJSONTestV1(t, path, evidence)
+	return path
+}
+
+func writeVectorPartitionSystemTopologyWithLiveEndpointsTestV1(t *testing.T, endpoint, dataset string) (string, func()) {
+	t.Helper()
+	root := t.TempDir()
+	groups := []string{"group-a", "group-b", "group-c", "group-d"}
+	endpoints := make(map[string]string, len(groups))
+	local := make([]vectorPartitionSystemLocalGroupV1, 0, len(groups))
+	listeners := make([]net.Listener, 0, len(groups))
+	for _, group := range groups {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		listeners = append(listeners, listener)
+		endpoints[group] = listener.Addr().String()
+		local = append(local, vectorPartitionSystemLocalGroupV1{GroupID: group, Listen: listener.Addr().String()})
+	}
+	config := vectorPartitionSystemNodeConfigV1{
+		SchemaVersion: 1, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
+		Topology: "single_daemon_four_group", NodeID: "single", DatasetDirectory: dataset,
+		DatabaseDirectory: filepath.Join(root, "database"), StateDirectory: filepath.Join(root, "state"),
+		ReadyPath: filepath.Join(root, "state", "ready.json"), PublicListen: endpoint, LocalGroups: local, Endpoints: endpoints,
+	}
+	evidence, err := validateVectorPartitionSystemTopologyV1([]vectorPartitionSystemNodeConfigV1{config})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := evidence.Nodes[0].NodeConfigSHA256
+	for index, listener := range listeners {
+		group := groups[index]
+		go func() {
+			for {
+				conn, acceptErr := listener.Accept()
+				if acceptErr != nil {
+					return
+				}
+				go (nativewire.VectorPartitionShardSearchTCPServerV1{EndpointIdentity: nativewire.VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: group, InstanceIdentity: identity}}).ServeConn(context.Background(), conn)
+			}
+		}()
+	}
+	path := filepath.Join(root, "topology.json")
+	writeVectorPartitionSystemJSONTestV1(t, path, evidence)
+	return path, func() {
+		for _, listener := range listeners {
+			_ = listener.Close()
+		}
 	}
 }

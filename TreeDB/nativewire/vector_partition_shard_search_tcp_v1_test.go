@@ -91,6 +91,27 @@ func TestVectorPartitionShardSearchTCPDispatcherAcceptsNilContextV1(t *testing.T
 	}
 }
 
+func TestVectorPartitionShardEndpointProbeBindsLiveInstanceV1(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			(VectorPartitionShardSearchTCPServerV1{EndpointIdentity: VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: "group-a", InstanceIdentity: "config-sha"}}).ServeConn(context.Background(), conn)
+		}
+	}()
+	identity, err := ProbeVectorPartitionShardEndpointV1(t.Context(), listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.GroupID != "group-a" || identity.InstanceIdentity != "config-sha" {
+		t.Fatalf("endpoint identity = %+v", identity)
+	}
+}
+
 func TestVectorPartitionM8ProductionTopologyOwnsDispatcherV1(t *testing.T) {
 	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": "127.0.0.1:1"})
 	if err != nil {

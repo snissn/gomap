@@ -280,6 +280,9 @@ func TestVectorPartitionPublicBackendSearchesProductionTopologyV1(t *testing.T) 
 	if want := publicCountersFromCoordinatorTestV1(direct.Counters); !publicCountersMatchWithRequestIdentityV1(response.Counters, want) {
 		t.Fatalf("public counters = %+v, direct = %+v", response.Counters, want)
 	}
+	if response.Timing.Total <= 0 || response.Timing.RouterSearch <= 0 || response.Timing.RPC <= 0 || response.Timing.ReadIndexApply <= 0 || response.Timing.ShardSearch <= 0 {
+		t.Fatalf("public timing attribution = %+v", response.Timing)
+	}
 	response.Neighbors[0].ID = "caller-mutated"
 	again, err := service.Search(context.Background(), request)
 	if err != nil || !slices.Equal(again.Neighbors, wantNeighbors) {

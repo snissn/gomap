@@ -1,7 +1,10 @@
 # Vector-partition local-system qualification
 
-Status: pre-alpha M0 contract for issue #4019. No measurements are claimed by
-this document or its frozen plan.
+Status: pre-alpha M0 contract plus a bounded M2 TreeDB topology-tax baseline
+at head `95c60cbef0b0cb824a74a29e9304784e76745d9d`. The full five-row frozen
+plan remains `planned_no_measurement`; the M2 evidence and scoped claims are
+retained under
+`docs/evidence/vector-partition-local-system-qualification-4019/m2-95c60cbe`.
 
 ## Authoritative inputs
 
@@ -43,7 +46,13 @@ groups. Each multi-daemon config supplies the same positive
 `group_applied_indexes` map, and its local daemon proves that its production
 Raft applied index has reached the declared floor before readiness. Each ready
 artifact retains `node_config_sha256`; the checked topology evidence carries
-the same digest beside that node, binding readiness to the exact checked set.
+the same digest beside that node. Before loading the fixture or running a cell,
+`system-bench` probes every checked shard listener and requires its live group
+and config identity to match that node, binding every serving endpoint to the
+exact checked database/state roots rather than checking only the public node.
+The topology-tax reducer reconstructs each complete node config from the
+checked topology and rejects any node-config digest mismatch before trusting
+those roots.
 
 Launch each native node with its own `TMPDIR` equal to its configured state
 directory. Retain the topology check and each exclusive ready JSON before
@@ -58,7 +67,8 @@ TMPDIR=/absolute/state-a treedb_vector_partition_bench system-node \
   -config /absolute/state-a/node-a.json
 
 treedb_vector_partition_bench system-bench \
-  -endpoint 127.0.0.1:19000 -dataset /absolute/fixture \
+  -endpoint 127.0.0.1:19000 -topology /absolute/evidence/topology.json \
+  -dataset /absolute/fixture \
   -truth-cache /absolute/truth-cache -truth-cache-sha256 <sha256> \
   -probes 1,2,4,8,16 -concurrency 1,8,32,64 -top-k 10 \
   -ef-search 128 -warmup 1000 -out /absolute/evidence/search.json
@@ -114,6 +124,12 @@ alternate in-container search path.
 - Bind the exact source head, clean binary or image identity, topology,
   commands, environment, host, artifact paths, resources, and TreeDB public
   path counters in the machine-readable result.
+- Retain the generation identity and coordinator stage timings for every TreeDB
+  cell. Shard timings are summed work and can exceed client wall time when
+  groups execute concurrently; client elapsed and raw request durations remain
+  the topology-tax wall-clock evidence. Because the system client assigns
+  query `i` to worker `i % concurrency`, retained elapsed time must cover the
+  largest sum for any one serialized worker lane.
 
 Milvus uses the official v2.6.20 Standalone compose deployment and PyMilvus
 2.6.16. PostgreSQL 16.14 and pgvector 0.8.6 use the repository's existing

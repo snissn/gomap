@@ -26,6 +26,34 @@ Run:
 scripts/bench_vector_db_compare.sh
 ```
 
+For the bounded #4019 TreeDB topology-tax baseline, retain three checked
+`system-bench` JSON files for both the single-daemon and native four-daemon
+topologies, then validate and summarize them without discarding raw samples:
+
+```sh
+python3 benchmarks/vector_db_compare/topology_tax.py \
+  --single single-1.json --single single-2.json --single single-3.json \
+  --native native-1.json --native native-2.json --native native-3.json \
+  --source-revision <40-character-lowercase-git-sha> \
+  --executable-path <absolute-benchmark-binary-path> \
+  --executable-sha256 <benchmark-binary-sha256> \
+  --out topology-tax.json
+```
+
+The reducer requires the frozen 100k M2 p2/p16, c1/c8, EF128 shape and binds
+each input SHA256, checked topology identity, fixture/truth identity,
+generation, raw latency samples, wall elapsed time, counters, and coordinator
+stage timings. It also validates every retained node readiness record against
+the expected clean source revision, executable SHA256, node config, persistent
+roots, and production route. It also validates the retained `/usr/bin/time`
+client command, successful exit, and timed executable path. The output binds
+all readiness and client-process attestation digests.
+Every retained cell must meet recall@10 >= 0.90. The first bounded
+baseline is retained under
+`TreeDB/docs/evidence/vector-partition-local-system-qualification-4019/m2-95c60cbe`.
+The full five-row comparative qualification remains a separate M3 execution of
+the committed plan.
+
 The default backend set is `treedb,vectorlite`. Add `treedb_column_graph`, the
 TreeDB scalar_u8/RaBitQ quantized aliases, `pgvector`, `milvus`, or `mongodb` to
 `BACKENDS` when those paths or external services are needed.

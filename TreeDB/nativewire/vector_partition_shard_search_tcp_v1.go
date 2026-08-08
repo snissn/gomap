@@ -172,7 +172,7 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) dispatchVectorPartitionShard
 		}
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPRetryableTransportErrorV1(requestCtx, request.TargetGroupID, err)
 	}
-	if frame.Request != nil || (frame.Response == nil) == (frame.Error == nil) {
+	if frame.Request != nil || frame.Probe != nil || frame.ProbeResponse != nil || (frame.Response == nil) == (frame.Error == nil) {
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, errors.New("ambiguous M5 response frame"))
 	}
 	stopCancelIO()
@@ -332,9 +332,22 @@ func vectorPartitionShardSearchTCPReconnectableV1(err error) bool {
 // bounded framing contract used by the dispatcher.
 type VectorPartitionShardSearchTCPServerV1 struct {
 	Service          VectorPartitionShardSearchHandlerV1
+	EndpointIdentity VectorPartitionShardEndpointIdentityV1
 	MaxFrame         uint32
 	MaxResponseFrame uint32
 	InitialTimeout   time.Duration
+}
+
+// VectorPartitionShardEndpointIdentityV1 binds a live shard listener to the
+// retained node configuration that opened it.
+type VectorPartitionShardEndpointIdentityV1 struct {
+	Version          uint32
+	GroupID          string
+	InstanceIdentity string
+}
+
+type vectorPartitionShardEndpointProbeV1 struct {
+	Version uint32
 }
 
 // VectorPartitionShardSearchHandlerV1 is the narrow server dependency needed
@@ -371,7 +384,17 @@ func (s VectorPartitionShardSearchTCPServerV1) ServeConn(ctx context.Context, co
 		if err != nil {
 			return
 		}
-		if frame.Request == nil || frame.Response != nil || frame.Error != nil {
+		if frame.Probe != nil && frame.Request == nil && frame.Response == nil && frame.Error == nil && frame.ProbeResponse == nil {
+			if frame.Probe.Version != 1 || s.EndpointIdentity.Version != 1 || s.EndpointIdentity.GroupID == "" || s.EndpointIdentity.InstanceIdentity == "" {
+				_ = s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, Message: "M5 endpoint identity is unavailable"}}, maxResponseFrame, time.Now().Add(initialTimeout))
+				return
+			}
+			if s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{ProbeResponse: &s.EndpointIdentity}, maxResponseFrame, time.Now().Add(initialTimeout)) != nil {
+				return
+			}
+			continue
+		}
+		if frame.Request == nil || frame.Probe != nil || frame.Response != nil || frame.Error != nil || frame.ProbeResponse != nil {
 			// A peer that sends no frame (or never reads) must not strand this server
 			// goroutine while we try to report the bounded framing failure.
 			_ = conn.SetWriteDeadline(time.Now().Add(initialTimeout))
@@ -412,9 +435,47 @@ func (s VectorPartitionShardSearchTCPServerV1) writeFrame(conn net.Conn, frame v
 }
 
 type vectorPartitionShardSearchTCPFrameV1 struct {
-	Request  *VectorPartitionShardSearchRequestV1  `json:"request,omitempty"`
-	Response *VectorPartitionShardSearchResponseV1 `json:"response,omitempty"`
-	Error    *vectorPartitionShardSearchTCPErrorV1 `json:"error,omitempty"`
+	Request       *VectorPartitionShardSearchRequestV1    `json:"request,omitempty"`
+	Response      *VectorPartitionShardSearchResponseV1   `json:"response,omitempty"`
+	Probe         *vectorPartitionShardEndpointProbeV1    `json:"probe,omitempty"`
+	ProbeResponse *VectorPartitionShardEndpointIdentityV1 `json:"probe_response,omitempty"`
+	Error         *vectorPartitionShardSearchTCPErrorV1   `json:"error,omitempty"`
+}
+
+// ProbeVectorPartitionShardEndpointV1 returns the identity published by the
+// live shard listener without executing a search.
+func ProbeVectorPartitionShardEndpointV1(ctx context.Context, endpoint string) (VectorPartitionShardEndpointIdentityV1, error) {
+	var identity VectorPartitionShardEndpointIdentityV1
+	if endpoint == "" {
+		return identity, errors.New("nativewire: M5 endpoint probe requires an endpoint")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	conn, err := (&net.Dialer{}).DialContext(probeCtx, "tcp", endpoint)
+	if err != nil {
+		return identity, err
+	}
+	defer conn.Close()
+	if err := vectorPartitionShardSearchTCPDeadlineV1(probeCtx, 0, conn); err != nil {
+		return identity, err
+	}
+	if err := writeVectorPartitionShardSearchTCPFrameV1(conn, vectorPartitionShardSearchTCPFrameV1{Probe: &vectorPartitionShardEndpointProbeV1{Version: 1}}, uint32(vectorPartitionShardSearchTCPMinFrameBytesV1)); err != nil {
+		return identity, err
+	}
+	frame, err := readVectorPartitionShardSearchTCPFrameV1(conn, uint32(vectorPartitionShardSearchTCPMinFrameBytesV1))
+	if err != nil {
+		return identity, err
+	}
+	if frame.Error != nil {
+		return identity, frame.Error.toError()
+	}
+	if frame.ProbeResponse == nil || frame.Request != nil || frame.Response != nil || frame.Probe != nil || frame.ProbeResponse.Version != 1 || frame.ProbeResponse.GroupID == "" || frame.ProbeResponse.InstanceIdentity == "" {
+		return identity, errors.New("nativewire: invalid M5 endpoint identity response")
+	}
+	return *frame.ProbeResponse, nil
 }
 
 type vectorPartitionShardSearchTCPErrorV1 struct {
