@@ -90,11 +90,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	fmt.Fprintf(stdout, "TreeDB Mongo gateway listening on mongodb://%s\n", ln.Addr().String())
+	status := standalone.TransportStatus()
+	uri := "mongodb://" + ln.Addr().String() + "/?directConnection=true"
+	if status.Mode == "tls" {
+		uri += "&tls=true"
+	}
+	fmt.Fprintf(stdout, "TreeDB Mongo gateway listening on %s\n", uri)
 	fmt.Fprintf(stdout, "TreeDB dir: %s\n", standalone.Options.Dir)
 	fmt.Fprintf(stdout, "TreeDB profile: %s, collection document format: %s\n",
 		standalone.Options.Profile, standalone.Options.DefaultCollectionOptions.DocumentFormat)
-	status := standalone.TransportStatus()
 	fmt.Fprintf(stdout, "Transport: %s", status.Mode)
 	if status.Mode == "tls" {
 		fmt.Fprintf(stdout, ", minimum TLS %s, certificate expires %s", tlsVersionName(status.TLSMinimumVersion), status.TLSCertificateNotAfter.UTC().Format(time.RFC3339))
