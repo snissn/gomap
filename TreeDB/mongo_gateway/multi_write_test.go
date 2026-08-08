@@ -45,6 +45,15 @@ func TestMongoWriteBudgetRejectsExpiredAndExhaustedWork(t *testing.T) {
 	}
 }
 
+func TestMongoWriteScanLookaheadSaturates(t *testing.T) {
+	if got := mongoWriteScanLookahead(maxInt); got != maxInt {
+		t.Fatalf("max-int lookahead=%d want %d", got, maxInt)
+	}
+	if got := mongoWriteScanLookahead(7); got != 8 {
+		t.Fatalf("lookahead=%d want 8", got)
+	}
+}
+
 func TestMongoWriteBudgetReservesBoundedResponseEnvelope(t *testing.T) {
 	s := NewServer()
 	// One slot is held back for the terminal indexed exhaustion error.

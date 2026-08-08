@@ -51,6 +51,17 @@ func (s *Server) selectMongoFilterWriteKey(col *collections.Collection, plan fin
 	return s.selectMongoFilterWriteKeyWithBudget(col, plan, nil)
 }
 
+// mongoWriteScanLookahead asks the collection scan for one additional record
+// so a command can distinguish its own work cap from a naturally truncated
+// scan. Saturate at maxInt: MaxFindScanDocuments=maxInt is a supported way to
+// make the scan cap effectively unlimited.
+func mongoWriteScanLookahead(remaining int) int {
+	if remaining >= maxInt {
+		return maxInt
+	}
+	return remaining + 1
+}
+
 func (s *Server) selectMongoFilterWriteKeyWithBudget(col *collections.Collection, plan findPlan, budget *mongoWriteBudget) ([]byte, bool, error) {
 	materializer, err := storedDocumentMaterializerForCollection(col)
 	if err != nil {
@@ -59,8 +70,8 @@ func (s *Server) selectMongoFilterWriteKeyWithBudget(col *collections.Collection
 	defer materializer.Close()
 	var key []byte
 	limit := s.maxFindScanDocuments()
-	if budget != nil && budget.examinedRemaining+1 < limit {
-		limit = budget.examinedRemaining + 1
+	if budget != nil && mongoWriteScanLookahead(budget.examinedRemaining) < limit {
+		limit = mongoWriteScanLookahead(budget.examinedRemaining)
 	}
 	truncated, err := col.ScanDocumentsFunc(limit, func(record collections.DocumentRecord) (bool, error) {
 		if err := budget.charge(); err != nil {
@@ -148,8 +159,8 @@ func (s *Server) runMongoFilterUpdateMany(col *collections.Collection, update mo
 	defer materializer.Close()
 	keys := make([][]byte, 0)
 	limit := s.maxFindScanDocuments()
-	if update.budget != nil && update.budget.examinedRemaining+1 < limit {
-		limit = update.budget.examinedRemaining + 1
+	if update.budget != nil && mongoWriteScanLookahead(update.budget.examinedRemaining) < limit {
+		limit = mongoWriteScanLookahead(update.budget.examinedRemaining)
 	}
 	truncated, err := col.ScanDocumentsFunc(limit, func(record collections.DocumentRecord) (bool, error) {
 		if err := update.budget.charge(); err != nil {
@@ -225,8 +236,8 @@ func (s *Server) deleteMongoFilterMany(col *collections.Collection, plan findPla
 	defer materializer.Close()
 	keys := make([][]byte, 0)
 	limit := s.maxFindScanDocuments()
-	if budget != nil && budget.examinedRemaining+1 < limit {
-		limit = budget.examinedRemaining + 1
+	if budget != nil && mongoWriteScanLookahead(budget.examinedRemaining) < limit {
+		limit = mongoWriteScanLookahead(budget.examinedRemaining)
 	}
 	truncated, err := col.ScanDocumentsFunc(limit, func(record collections.DocumentRecord) (bool, error) {
 		if err := budget.charge(); err != nil {
