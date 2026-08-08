@@ -35,6 +35,13 @@ func TestMongoWriteBudgetRejectsExpiredAndExhaustedWork(t *testing.T) {
 	if err := postSelection.checkDeadline(); err == nil {
 		t.Fatal("post-selection deadline accepted mutation")
 	}
+	keyBytes := &mongoWriteBudget{targetsRemaining: 1, retainedKeyBytesRemaining: 1, deadline: time.Now().Add(time.Second)}
+	if err := keyBytes.reserveTargetKey(2); err == nil {
+		t.Fatal("retained-key byte budget accepted oversized key")
+	}
+	if keyBytes.targetsRemaining != 1 || keyBytes.retainedKeyBytesRemaining != 1 {
+		t.Fatalf("failed retained-key reservation consumed capacity: %+v", keyBytes)
+	}
 }
 
 func TestMongoMultiWriteUpdateManyDeleteManyAndParseBeforeExecute(t *testing.T) {

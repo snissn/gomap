@@ -1023,16 +1023,21 @@ type mongoUpdateItem struct {
 // mongoWriteBudget is local to one command. It prevents a batch of otherwise
 // bounded filter specifications from multiplying the configured scan budget.
 type mongoWriteBudget struct {
-	examinedRemaining int
-	targetsRemaining  int
-	errorsRemaining   int
-	deadline          time.Time
+	examinedRemaining         int
+	targetsRemaining          int
+	retainedKeyBytesRemaining int
+	errorsRemaining           int
+	deadline                  time.Time
 }
 
-const mongoWriteCommandMaxDuration = 5 * time.Second
+const (
+	mongoWriteCommandMaxDuration         = 5 * time.Second
+	mongoWriteCommandMaxRetainedKeyBytes = 16 << 20
+	mongoWriteErrorMessageMaxRunes       = 128
+)
 
 func newMongoWriteBudget(limit int) *mongoWriteBudget {
-	return &mongoWriteBudget{examinedRemaining: limit, targetsRemaining: limit, errorsRemaining: defaultMaxWriteBatchSize, deadline: time.Now().Add(mongoWriteCommandMaxDuration)}
+	return &mongoWriteBudget{examinedRemaining: limit, targetsRemaining: limit, retainedKeyBytesRemaining: mongoWriteCommandMaxRetainedKeyBytes, errorsRemaining: defaultMaxWriteBatchSize, deadline: time.Now().Add(mongoWriteCommandMaxDuration)}
 }
 func (b *mongoWriteBudget) charge() error {
 	if b == nil {
@@ -1059,6 +1064,31 @@ func (b *mongoWriteBudget) reserveTarget() error {
 		return errors.New("Mongo gateway multi-write command exceeded its retained-target budget")
 	}
 	b.targetsRemaining--
+	return nil
+}
+
+// reserveTargetKey admits a key retained between the natural-order scan and
+// its later conditional mutation.  Counting targets alone is not enough: BSON
+// _id values can be large, so the retained key bytes have their own command
+// ceiling.
+func (b *mongoWriteBudget) reserveTargetKey(keyBytes int) error {
+	if b == nil {
+		return nil
+	}
+	if keyBytes < 0 {
+		return errors.New("Mongo gateway multi-write command has an invalid retained key size")
+	}
+	if time.Now().After(b.deadline) {
+		return errors.New("Mongo gateway multi-write command exceeded its execution-time budget")
+	}
+	if b.targetsRemaining <= 0 {
+		return errors.New("Mongo gateway multi-write command exceeded its retained-target budget")
+	}
+	if b.retainedKeyBytesRemaining < keyBytes {
+		return errors.New("Mongo gateway multi-write command exceeded its retained-key byte budget")
+	}
+	b.targetsRemaining--
+	b.retainedKeyBytesRemaining -= keyBytes
 	return nil
 }
 
@@ -2941,11 +2971,23 @@ func marshalWriteErrorsResponse(response bson.D, writeErrors []mongoWriteError) 
 			if collections.IsDuplicateKeyError(item.err) {
 				code, codeName = commandCodeDuplicateKey, "DuplicateKey"
 			}
-			items[i] = bson.D{{Key: "index", Value: int32(item.index)}, {Key: "code", Value: code}, {Key: "codeName", Value: codeName}, {Key: "errmsg", Value: item.err.Error()}}
+			items[i] = bson.D{{Key: "index", Value: int32(item.index)}, {Key: "code", Value: code}, {Key: "codeName", Value: codeName}, {Key: "errmsg", Value: boundedMongoWriteErrorMessage(item.err)}}
 		}
 		response = append(response, bson.E{Key: "writeErrors", Value: items})
 	}
 	return marshalDocument(response)
+}
+
+func boundedMongoWriteErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.ToValidUTF8(err.Error(), "?")
+	runes := []rune(message)
+	if len(runes) <= mongoWriteErrorMessageMaxRunes {
+		return message
+	}
+	return string(runes[:mongoWriteErrorMessageMaxRunes]) + "..."
 }
 
 func marshalCursorResponse(db, collection string, firstBatch bson.A) (wire.Document, error) {

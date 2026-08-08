@@ -80,7 +80,7 @@ func (s *Server) selectMongoFilterWriteKeyWithBudget(col *collections.Collection
 		}
 		key, err = encodePrimaryKey(id)
 		if err == nil {
-			err = budget.reserveTarget()
+			err = budget.reserveTargetKey(len(key))
 		}
 		return false, err
 	})
@@ -171,7 +171,7 @@ func (s *Server) runMongoFilterUpdateMany(col *collections.Collection, update mo
 		if err != nil {
 			return false, err
 		}
-		if err := update.budget.reserveTarget(); err != nil {
+		if err := update.budget.reserveTargetKey(len(key)); err != nil {
 			return false, err
 		}
 		keys = append(keys, key)
@@ -194,7 +194,8 @@ func (s *Server) runMongoFilterUpdateMany(col *collections.Collection, update mo
 		item := update
 		item.multi, item.exactID, item.key = false, false, key
 		predicateMatched := false
-		_, modifiedOne, err := col.Update(key, func(stored []byte) ([]byte, bool, error) {
+		matchedOne, modifiedOne, err := col.Update(key, func(stored []byte) ([]byte, bool, error) {
+			resetMongoFilterWriteAttempt(&predicateMatched)
 			match, matchErr := mongoStoredDocumentMatchesPlan(col, materializer, stored, update.plan)
 			if matchErr != nil || !match {
 				return nil, false, matchErr
@@ -205,6 +206,7 @@ func (s *Server) runMongoFilterUpdateMany(col *collections.Collection, update mo
 		if err != nil {
 			return matched, modified, false, err
 		}
+		reconcileMongoFilterWriteOutcome(&predicateMatched, matchedOne)
 		if predicateMatched {
 			matched++
 		}
@@ -246,7 +248,7 @@ func (s *Server) deleteMongoFilterMany(col *collections.Collection, plan findPla
 		if err != nil {
 			return false, err
 		}
-		if err := budget.reserveTarget(); err != nil {
+		if err := budget.reserveTargetKey(len(key)); err != nil {
 			return false, err
 		}
 		keys = append(keys, key)
