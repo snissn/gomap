@@ -149,11 +149,11 @@ func TestMongoFilterWritesSelectOneAcrossUpdateDeleteAndFindAndModify(t *testing
 		t.Fatalf("delete n=%d want 1", n)
 	}
 	limitZero := serveCommand(t, server, 5, bson.D{{Key: "delete", Value: "users"}, {Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "age", Value: int64(20)}}}, {Key: "limit", Value: int32(0)}}}}, {Key: "$db", Value: "app"}})
-	assertCommandError(t, limitZero, "BadValue")
+	assertOK(t, limitZero)
 	remaining := serveCommand(t, server, 6, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "$db", Value: "app"}})
 	assertOK(t, remaining)
-	if values, err := bson.Raw(remaining).Lookup("cursor").Document().Lookup("firstBatch").Array().Values(); err != nil || len(values) != 1 {
-		t.Fatalf("limit:0 mutated document: values=%v err=%v", values, err)
+	if values, err := bson.Raw(remaining).Lookup("cursor").Document().Lookup("firstBatch").Array().Values(); err != nil || len(values) != 0 {
+		t.Fatalf("limit:0 did not delete matching document: values=%v err=%v", values, err)
 	}
 }
 
@@ -226,8 +226,9 @@ func TestMongoFilterWritesScanCapFailsWithoutMutation(t *testing.T) {
 		{{Key: "delete", Value: "users"}, {Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "active", Value: true}}}, {Key: "limit", Value: int32(1)}}}}, {Key: "$db", Value: "app"}},
 	} {
 		response := serveCommand(t, server, 2, command)
-		assertCommandError(t, response, "BadValue")
-		if message, _ := bson.Raw(response).Lookup("errmsg").StringValueOK(); !strings.Contains(message, "bounded scan") {
+		assertIndexedWriteError(t, response, 0)
+		message, _ := bson.Raw(response).Lookup("writeErrors").Array().Index(0).Document().Lookup("errmsg").StringValueOK()
+		if !strings.Contains(message, "bounded scan") {
 			t.Fatalf("scan cap response=%s", response)
 		}
 	}

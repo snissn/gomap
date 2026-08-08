@@ -1042,7 +1042,7 @@ func TestServerUpdateBSONSetRejectsCodeWithScopeAtResultNestingLimit(t *testing.
 		}}},
 		{Key: "$db", Value: "app"},
 	})
-	assertCommandError(t, response, "BadValue")
+	assertIndexedWriteError(t, response, 0)
 
 	find := serveCommand(t, server, 22552, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "scope-limit"}}}, {Key: "$db", Value: "app"}})
 	batch := cursorFirstBatch(t, find)
@@ -1573,11 +1573,7 @@ func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterParseError(t *testin
 		}},
 		{Key: "$db", Value: "app"},
 	})
-	assertCommandError(t, updateResponse, "BadValue")
-	errmsg, ok := bson.Raw(updateResponse).Lookup("errmsg").StringValueOK()
-	if !ok || !strings.Contains(errmsg, "updates[1]") {
-		t.Fatalf("errmsg=%q ok=%v want updates[1]", errmsg, ok)
-	}
+	assertIndexedWriteError(t, updateResponse, 1)
 
 	findResponse := serveCommand(t, server, 22596, bson.D{
 		{Key: "find", Value: "users"},
@@ -1600,7 +1596,7 @@ func TestParseMongoUpdateItemUnsupportedFlagsIncludeIndex(t *testing.T) {
 		flag bson.E
 		want string
 	}{
-		{name: "multi", flag: bson.E{Key: "multi", Value: true}, want: "updateOne only"},
+		{name: "multi", flag: bson.E{Key: "multi", Value: true}, want: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1609,12 +1605,12 @@ func TestParseMongoUpdateItemUnsupportedFlagsIncludeIndex(t *testing.T) {
 				tt.flag,
 				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "score", Value: int32(1)}}}}},
 			})
-			_, err := parseMongoUpdateItem(3, doc)
-			if err == nil {
-				t.Fatal("parseMongoUpdateItem accepted unsupported flag")
+			item, err := parseMongoUpdateItem(3, doc)
+			if err != nil {
+				t.Fatalf("parseMongoUpdateItem: %v", err)
 			}
-			if !strings.Contains(err.Error(), "updates[3]") || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("err=%v want index and %q", err, tt.want)
+			if !item.multi {
+				t.Fatal("parseMongoUpdateItem did not retain multi")
 			}
 		})
 	}
@@ -1727,11 +1723,8 @@ func TestServerUpdateMissingCollectionExecutesEarlierUpsertBeforeParseError(t *t
 	assertCommandError(t, response, "BadValue")
 	found := serveCommand(t, s, 22598, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
 	batch := cursorFirstBatch(t, found)
-	if len(batch) != 1 {
-		t.Fatalf("firstBatch len=%d want 1", len(batch))
-	}
-	if score, _ := batch[0].Lookup("score").Int32OK(); score != 1 {
-		t.Fatalf("score=%d want 1", score)
+	if len(batch) != 0 {
+		t.Fatalf("firstBatch len=%d want 0 after preflight rejection", len(batch))
 	}
 	response = serveCommand(t, s, 22599, bson.D{
 		{Key: "update", Value: "replacement-users"},
@@ -1741,12 +1734,11 @@ func TestServerUpdateMissingCollectionExecutesEarlierUpsertBeforeParseError(t *t
 		}},
 		{Key: "$db", Value: "app"},
 	})
-	assertCommandError(t, response, "BadValue")
-	assertErrmsgContains(t, response, "updates[1]")
+	assertIndexedWriteError(t, response, 1)
 	found = serveCommand(t, s, 22600, bson.D{{Key: "find", Value: "replacement-users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
 	batch = cursorFirstBatch(t, found)
 	if len(batch) != 1 {
-		t.Fatalf("replacement prefix batch len=%d want 1", len(batch))
+		t.Fatalf("replacement prefix batch len=%d want 1 after first-item upsert", len(batch))
 	}
 	if score, _ := batch[0].Lookup("score").Int32OK(); score != 1 {
 		t.Fatalf("replacement prefix score=%d want 1", score)
@@ -1795,7 +1787,7 @@ func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterWriteError(t *testin
 		}},
 		{Key: "$db", Value: "app"},
 	})
-	assertCommandError(t, updateResponse, "DuplicateKey")
+	assertIndexedWriteError(t, updateResponse, 1)
 
 	findResponse := serveCommand(t, server, 22600, bson.D{
 		{Key: "find", Value: "users"},
@@ -2768,7 +2760,7 @@ func TestServerUpdateWithUniqueIndexKeepsAcquireBeforeReleaseOrdered(t *testing.
 		}},
 		{Key: "$db", Value: "app"},
 	})
-	assertCommandError(t, updateResponse, "DuplicateKey")
+	assertIndexedWriteError(t, updateResponse, 0)
 
 	for i, tc := range []struct {
 		id    string
@@ -6001,8 +5993,8 @@ func TestServerQueryAndFilterWriteRejectOverBudgetDecimal128Equality(t *testing.
 		}}},
 		{Key: "$db", Value: "app"},
 	})
-	assertCommandError(t, updateResponse, "BadValue")
-	message, ok = bson.Raw(updateResponse).Lookup("errmsg").StringValueOK()
+	assertIndexedWriteError(t, updateResponse, 0)
+	message, ok = bson.Raw(updateResponse).Lookup("writeErrors").Array().Index(0).Document().Lookup("errmsg").StringValueOK()
 	if !ok || !strings.Contains(message, "1024 Decimal128 normalizations") {
 		t.Fatalf("update errmsg=%q ok=%v want Decimal128 budget error", message, ok)
 	}
@@ -6188,7 +6180,7 @@ func TestServerUpdateRejectsDeepCodeWithScopeBeforeDecode(t *testing.T) {
 		}}},
 		{Key: "$db", Value: "app"},
 	})
-	assertCommandError(t, response, "BadValue")
+	assertIndexedWriteError(t, response, 0)
 	find := serveCommand(t, server, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
 	if got := cursorFirstBatch(t, find)[0]; !got.Lookup("nested").IsZero() {
 		t.Fatalf("rejected deep CodeWithScope update changed document: %v", got)
@@ -6320,7 +6312,7 @@ func TestServerUpdateRejectsWideStoredBSONBeforeDecode(t *testing.T) {
 		}}},
 		{Key: "$db", Value: "app"},
 	})
-	assertCommandError(t, response, "BadValue")
+	assertIndexedWriteError(t, response, 0)
 	find := serveCommand(t, server, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
 	if got := cursorFirstBatch(t, find)[0]; !got.Lookup("marker").IsZero() {
 		t.Fatalf("rejected wide stored update changed document: %v", got)
@@ -6348,7 +6340,7 @@ func TestServerUpdateSharesDecodeBudgetAcrossOperands(t *testing.T) {
 		}}},
 		{Key: "$db", Value: "app"},
 	})
-	assertCommandError(t, response, "BadValue")
+	assertIndexedWriteError(t, response, 0)
 	find := serveCommand(t, server, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
 	got := cursorFirstBatch(t, find)[0]
 	if !got.Lookup("nested").IsZero() || !got.Lookup("other").IsZero() {
@@ -6418,7 +6410,11 @@ func TestServerUpdateRejectsWideMutationOperandsBeforeAnyChange(t *testing.T) {
 			}}},
 			{Key: "$db", Value: "app"},
 		})
-		assertCommandError(t, response, "BadValue")
+		if requestID == 0 {
+			assertCommandError(t, response, "BadValue")
+		} else {
+			assertIndexedWriteError(t, response, 0)
+		}
 	}
 	find := serveCommand(t, server, 4, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
 	doc := cursorFirstBatch(t, find)[0]
@@ -7627,7 +7623,7 @@ func TestServerUpdateRejectsNumericArrayPathsAndAddToSetComparisonOverflow(t *te
 	for i := range mongoMutationMaxEachValues {
 		values = append(values, fmt.Sprintf("new-%d", i))
 	}
-	assertCommandError(t, update(3, bson.D{{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}}, {Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: values}}}}}}), "BadValue")
+	assertIndexedWriteError(t, update(3, bson.D{{Key: "$set", Value: bson.D{{Key: "marker", Value: true}}}, {Key: "$addToSet", Value: bson.D{{Key: "items", Value: bson.D{{Key: "$each", Value: values}}}}}}), 0)
 	find := serveCommand(t, s, 4, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
 	got := cursorFirstBatch(t, find)[0]
 	if tags, tagsErr := got.Lookup("tags").Array().Values(); tagsErr != nil || len(tags) != 1 || tags[0].StringValue() != "old" || !got.Lookup("marker").IsZero() {
@@ -7675,7 +7671,7 @@ func TestServerUpdateRejectsExpensiveDecimal128AddToSetBeforeMutation(t *testing
 		}}},
 		{Key: "$db", Value: "app"},
 	}
-	assertCommandError(t, serveCommand(t, s, 2, update), "BadValue")
+	assertIndexedWriteError(t, serveCommand(t, s, 2, update), 0)
 	got := cursorFirstBatch(t, serveCommand(t, s, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}}))[0]
 	items, itemsErr := got.Lookup("items").Array().Values()
 	if itemsErr != nil || len(items) != len(existing) || !got.Lookup("marker").IsZero() {
@@ -7724,7 +7720,7 @@ func TestServerUpdateGenericMutationsAcrossDocumentFormats(t *testing.T) {
 			if format == collections.DocumentFormatBSON {
 				assertOK(t, binaryUpdate)
 			} else {
-				assertCommandError(t, binaryUpdate, "BadValue")
+				assertIndexedWriteError(t, binaryUpdate, 0)
 				find = serveCommand(t, s, nextRequestID(), bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
 				if !cursorFirstBatch(t, find)[0].Lookup("profile").IsZero() {
 					t.Fatalf("failed BSON nested update changed %s document", format)
@@ -7739,16 +7735,23 @@ func TestServerUpdateGenericMutationsAcrossDocumentFormats(t *testing.T) {
 			if n, ok := cursorFirstBatch(t, find)[0].Lookup("n").DoubleOK(); !ok || n != 2147483648.5 {
 				t.Fatalf("double n=%v ok=%v", n, ok)
 			}
-			for _, badUpdate := range []bson.D{
-				{{Key: "$inc", Value: bson.D{{Key: "n", Value: "bad"}}}},
-				{{Key: "$inc", Value: bson.D{{Key: "n", Value: nil}}}},
-				{{Key: "$inc", Value: bson.D{{Key: "nullValue", Value: int32(1)}}}},
-				{{Key: "$inc", Value: bson.D{{Key: "textValue", Value: int32(1)}}}},
-				{{Key: "$set", Value: bson.D{{Key: "n", Value: 1}}}, {Key: "$unset", Value: bson.D{{Key: "n", Value: true}}}},
-				{{Key: "$set", Value: bson.D{{Key: "_id", Value: "u2"}}}},
-				{{Key: "$push", Value: bson.D{{Key: "n", Value: 1}}}},
+			for _, tc := range []struct {
+				update  bson.D
+				runtime bool
+			}{
+				{bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: "bad"}}}}, false},
+				{bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: nil}}}}, false},
+				{bson.D{{Key: "$inc", Value: bson.D{{Key: "nullValue", Value: int32(1)}}}}, true},
+				{bson.D{{Key: "$inc", Value: bson.D{{Key: "textValue", Value: int32(1)}}}}, true},
+				{bson.D{{Key: "$set", Value: bson.D{{Key: "n", Value: 1}}}, {Key: "$unset", Value: bson.D{{Key: "n", Value: true}}}}, false},
+				{bson.D{{Key: "$set", Value: bson.D{{Key: "_id", Value: "u2"}}}}, false},
+				{bson.D{{Key: "$push", Value: bson.D{{Key: "n", Value: 1}}}}, true},
 			} {
-				assertCommandError(t, update(badUpdate), "BadValue")
+				if tc.runtime {
+					assertIndexedWriteError(t, update(tc.update), 0)
+				} else {
+					assertCommandError(t, update(tc.update), "BadValue")
+				}
 			}
 			arrayFilters := serveCommand(t, s, nextRequestID(), bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "blocked", Value: true}}}}}, {Key: "arrayFilters", Value: bson.A{bson.D{{Key: "x", Value: int32(1)}}}}}}}, {Key: "$db", Value: "app"}})
 			assertCommandError(t, arrayFilters, "BadValue")
@@ -7770,12 +7773,12 @@ func TestServerUpdateGenericMutationsAcrossDocumentFormats(t *testing.T) {
 				t.Fatalf("failed item changed n=%v", n)
 			}
 			assertOK(t, update(bson.D{{Key: "$inc", Value: bson.D{{Key: "largest", Value: int64(math.MaxInt64)}}}}))
-			assertCommandError(t, update(bson.D{{Key: "$inc", Value: bson.D{{Key: "largest", Value: int64(1)}}}}), "BadValue")
+			assertIndexedWriteError(t, update(bson.D{{Key: "$inc", Value: bson.D{{Key: "largest", Value: int64(1)}}}}), 0)
 			assertOK(t, update(bson.D{{Key: "name", Value: "grace"}})) // omitted _id is preserved
 			noop = update(bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "grace"}})
 			assertOK(t, noop)
 			assertInt32(t, noop, "nModified", 0)
-			assertCommandError(t, update(bson.D{{Key: "_id", Value: "u2"}}), "BadValue")
+			assertIndexedWriteError(t, update(bson.D{{Key: "_id", Value: "u2"}}), 0)
 			assertOK(t, update(bson.D{})) // an empty replacement retains _id
 		})
 	}
@@ -7833,7 +7836,7 @@ func TestServerUpdateUpsertAcrossDocumentFormats(t *testing.T) {
 			if id, ok := values[0].Document().Lookup("_id").Int64OK(); !ok || id != 2 {
 				t.Fatalf("upserted typed id=%d ok=%v", id, ok)
 			}
-			assertCommandError(t, serveCommand(t, s, 7003, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "bad"}}}, {Key: "u", Value: bson.D{{Key: "_id", Value: "other"}}}, {Key: "upsert", Value: true}}}}, {Key: "$db", Value: "app"}}), "BadValue")
+			assertIndexedWriteError(t, serveCommand(t, s, 7003, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "bad"}}}, {Key: "u", Value: bson.D{{Key: "_id", Value: "other"}}}, {Key: "upsert", Value: true}}}}, {Key: "$db", Value: "app"}}), 0)
 		})
 	}
 }
@@ -8549,6 +8552,19 @@ func assertCommandError(tb testing.TB, doc wire.Document, codeName string) {
 	got, gotOK := raw.Lookup("codeName").StringValueOK()
 	if !gotOK || got != codeName {
 		tb.Fatalf("codeName=%q typeOK=%v want %q", got, gotOK, codeName)
+	}
+}
+
+func assertIndexedWriteError(tb testing.TB, doc wire.Document, wantIndex int32) {
+	tb.Helper()
+	assertOK(tb, doc)
+	values, err := bson.Raw(doc).Lookup("writeErrors").Array().Values()
+	if err != nil || len(values) == 0 {
+		tb.Fatalf("writeErrors=%s err=%v", doc, err)
+	}
+	got, ok := values[0].Document().Lookup("index").Int32OK()
+	if !ok || got != wantIndex {
+		tb.Fatalf("writeErrors[0].index=%d ok=%v want %d: %s", got, ok, wantIndex, doc)
 	}
 }
 

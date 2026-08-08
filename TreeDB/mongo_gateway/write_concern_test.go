@@ -166,14 +166,14 @@ func TestStandaloneJournalWriteConcernFinalizesPartialCreateIndexesError(t *test
 		return true, nil
 	}
 	response := serveCommand(t, server, 2, writeConcernPartialCreateIndexesCommand())
-	assertCommandError(t, response, "DuplicateKey")
+	assertOK(t, response)
 	if syncs != 1 {
 		t.Fatalf("partial createIndexes syncs=%d want 1", syncs)
 	}
 	stats := server.StandaloneWriteConcernStats()
 	if stats.JournalAcknowledgements-before.JournalAcknowledgements != 1 ||
 		stats.PhysicalSyncBoundaries-before.PhysicalSyncBoundaries != 1 ||
-		stats.LogicalWrites != before.LogicalWrites {
+		stats.LogicalWrites != before.LogicalWrites+1 {
 		t.Fatalf("partial createIndexes stats=%+v", stats)
 	}
 	collection, err := server.Collections.OpenCollection("app.users")

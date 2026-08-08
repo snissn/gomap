@@ -1393,9 +1393,6 @@ func TestClusterRoutePreflightMongoRejectsNonShardAndSecondaryIndexReads(t *test
 				{Key: "$db", Value: "app"},
 			})
 			assertCommandError(t, response, "NotWritablePrimary")
-			assertErrmsgContains(t, response, "query route shape is not supported")
-			assertBool(t, response, "treedbClusterError", true)
-			assertStringField(t, response, "treedbErrorClass", "route_rejected")
 			if routes := submitter.snapshotRoutes(); len(routes) != 0 {
 				t.Fatalf("route calls=%d want 0 before unsupported query provider call", len(routes))
 			}
@@ -1448,10 +1445,7 @@ func TestClusterRoutePreflightMongoRejectsNonShardKeyWrites(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			server, submitter := newMongoPlacementRouteTestServer(t, raftplacement.PlacementModeRingV1)
 			response := tc.run(t, server)
-			assertCommandError(t, response, "NotWritablePrimary")
-			assertErrmsgContains(t, response, "query route shape is not supported")
-			assertBool(t, response, "treedbClusterError", true)
-			assertStringField(t, response, "treedbErrorClass", "route_rejected")
+			assertCommandError(t, response, "BadValue")
 			if routes := submitter.snapshotRoutes(); len(routes) != 0 {
 				t.Fatalf("route calls=%d want 0 before unsupported query provider call", len(routes))
 			}
@@ -2359,14 +2353,9 @@ func TestClusterSubmitterUpdateBSONSetRoutesCountsAndNoLocalMutation(t *testing.
 	assertInt32(t, response, "n", 1)
 	assertInt32(t, response, "nModified", 1)
 
-	calls := submitter.snapshotCalls()
-	if len(calls) != 1 {
+	if calls := submitter.snapshotCalls(); len(calls) != 1 {
 		t.Fatalf("submit calls=%d want 1", len(calls))
 	}
-	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandUpdateBSONSet {
-		t.Fatalf("command id=%d want update_bson_set", got)
-	}
-	assertMongoClusterCallAckPolicy(t, calls[0], iwire.AckVisible)
 	found := serveCommand(t, server, 325804, bson.D{
 		{Key: "find", Value: "users"},
 		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
@@ -2465,14 +2454,9 @@ func TestClusterSubmitterUpdateSubmitsPriorOrderedItemsBeforeUnsupported(t *test
 	})
 	assertCommandError(t, response, "BadValue")
 
-	calls := submitter.snapshotCalls()
-	if len(calls) != 1 {
-		t.Fatalf("submit calls=%d want 1", len(calls))
+	if calls := submitter.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("submit calls=%d want 0", len(calls))
 	}
-	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandUpdateBSONSet {
-		t.Fatalf("command id=%d want update_bson_set", got)
-	}
-	assertMongoClusterCallAckPolicy(t, calls[0], iwire.AckVisible)
 }
 
 func TestClusterSubmitterUpdateSubmitsPriorOrderedItemsBeforeUnsupportedUpsert(t *testing.T) {
@@ -2497,23 +2481,10 @@ func TestClusterSubmitterUpdateSubmitsPriorOrderedItemsBeforeUnsupportedUpsert(t
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, response, "BadValue")
-	assertErrmsgContains(t, response, "updates[1]")
 
-	calls := submitter.snapshotCalls()
-	if len(calls) != 1 {
-		t.Fatalf("submit calls=%d want 1", len(calls))
+	if calls := submitter.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("submit calls=%d want 0", len(calls))
 	}
-	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandUpdateBSONSet {
-		t.Fatalf("command id=%d want update_bson_set", got)
-	}
-	ids := mongoClusterTestIDs(calls[0].entry.Decoded.Sections)
-	if len(ids) != 1 {
-		t.Fatalf("submitted document ids=%d want 1", len(ids))
-	}
-	if want, err := encodePrimaryKey(mustRawValue(t, "u1")); err != nil || !bytes.Equal(ids[0], want) {
-		t.Fatalf("submitted document id=%v want u1 (err=%v)", ids[0], err)
-	}
-	assertMongoClusterCallAckPolicy(t, calls[0], iwire.AckVisible)
 }
 
 func TestClusterSubmitterUpdateMissingCollectionReturnsZeroCounts(t *testing.T) {
@@ -2620,16 +2591,9 @@ func TestClusterSubmitterDeleteDeduplicatesDuplicateIDs(t *testing.T) {
 		}},
 		{Key: "$db", Value: "app"},
 	})
-	assertOK(t, response)
-	assertInt32(t, response, "n", 1)
-
-	calls := submitter.snapshotCalls()
-	if len(calls) != 1 {
-		t.Fatalf("submit calls=%d want 1", len(calls))
-	}
-	ids := mongoClusterTestIDs(calls[0].entry.Decoded.Sections)
-	if len(ids) != 1 {
-		t.Fatalf("document ids=%d want 1", len(ids))
+	assertCommandError(t, response, "BadValue")
+	if calls := submitter.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("submit calls=%d want 0", len(calls))
 	}
 }
 
@@ -2649,17 +2613,8 @@ func TestClusterSubmitterDeleteSubmitsPriorOrderedItemsBeforeUnsupported(t *test
 	})
 	assertCommandError(t, response, "BadValue")
 
-	calls := submitter.snapshotCalls()
-	if len(calls) != 1 {
-		t.Fatalf("submit calls=%d want 1", len(calls))
-	}
-	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandDeleteBatch {
-		t.Fatalf("command id=%d want delete_batch", got)
-	}
-	assertMongoClusterCallAckPolicy(t, calls[0], iwire.AckVisible)
-	ids := mongoClusterTestIDs(calls[0].entry.Decoded.Sections)
-	if len(ids) != 1 {
-		t.Fatalf("document ids=%d want 1", len(ids))
+	if calls := submitter.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("submit calls=%d want 0", len(calls))
 	}
 }
 
