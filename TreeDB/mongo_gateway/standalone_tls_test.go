@@ -378,6 +378,7 @@ func BenchmarkStandaloneTransportHandshake(b *testing.B) {
 					b.Fatal(err)
 				}
 			}
+			b.StopTimer()
 		})
 	}
 }
@@ -436,6 +437,7 @@ func BenchmarkStandaloneTransportReusedFindOne(b *testing.B) {
 					b.Fatal(err)
 				}
 			}
+			b.StopTimer()
 		})
 	}
 }
