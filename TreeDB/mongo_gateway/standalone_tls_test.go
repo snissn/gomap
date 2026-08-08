@@ -246,6 +246,52 @@ func TestStandaloneTLSRejectsExpiredCertificateBeforeMongo(t *testing.T) {
 	}
 }
 
+func TestStandaloneTLSRequiresVerifiedClientCertificate(t *testing.T) {
+	certFile, keyFile, pool := writeTLSMaterial(t, false)
+	clientCert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), TLSCertFile: certFile, TLSKeyFile: keyFile, TLSCAFile: certFile, RequireClientCert: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer standalone.Close()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- standalone.Serve(ctx, ln) }()
+	if conn, err := tls.Dial("tcp", ln.Addr().String(), &tls.Config{RootCAs: pool, ServerName: "localhost"}); err == nil {
+		_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+		var one [1]byte
+		_, readErr := conn.Read(one[:])
+		_ = conn.Close()
+		if readErr == nil {
+			t.Fatal("missing client certificate unexpectedly connected")
+		}
+	}
+	client, err := mongo.Connect(options.Client().ApplyURI("mongodb://" + ln.Addr().String()).SetDirect(true).SetTLSConfig(&tls.Config{RootCAs: pool, Certificates: []tls.Certificate{clientCert}, ServerName: "localhost"}).SetServerSelectionTimeout(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	err = client.Ping(pingCtx, nil)
+	pingCancel()
+	if err != nil {
+		t.Fatalf("verified client certificate ping: %v", err)
+	}
+	_ = client.Disconnect(context.Background())
+	cancel()
+	_ = ln.Close()
+	if err := <-serveErr; err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+}
+
 func writeTLSMaterial(t *testing.T, expired bool) (string, string, *x509.CertPool) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -257,7 +303,7 @@ func writeTLSMaterial(t *testing.T, expired bool) (string, string, *x509.CertPoo
 	if expired {
 		notAfter = now.Add(-time.Hour)
 	}
-	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "localhost"}, NotBefore: now.Add(-time.Hour), NotAfter: notAfter, KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, DNSNames: []string{"localhost"}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "localhost"}, NotBefore: now.Add(-time.Hour), NotAfter: notAfter, KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}, DNSNames: []string{"localhost"}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
 		t.Fatal(err)
