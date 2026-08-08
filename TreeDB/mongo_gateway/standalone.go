@@ -496,6 +496,9 @@ func (s *StandaloneServer) ValidateListener(ln net.Listener) error {
 	}
 	s.serveMu.Lock()
 	defer s.serveMu.Unlock()
+	if s.closing || s.Server == nil || s.Server.isClosed() {
+		return errServerClosed
+	}
 	if s.serving {
 		return errors.New("mongo gateway standalone: a listener is already serving")
 	}

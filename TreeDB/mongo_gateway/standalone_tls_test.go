@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net"
 	"os"
@@ -238,6 +239,28 @@ func TestStandaloneServerPlaintextConnectionMetrics(t *testing.T) {
 	}
 	if metrics := standalone.TransportMetrics(); metrics.ConnectionsAccepted != 1 || metrics.ConnectionsClosed != 1 || metrics.ActiveConnections != 0 || metrics.HandshakesStarted != 0 {
 		t.Fatalf("plaintext connection metrics=%+v", metrics)
+	}
+}
+
+func TestStandaloneServerValidateListenerRejectsClosedServer(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := standalone.TransportStatus()
+	if err := standalone.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	if err := standalone.ValidateListener(ln); !errors.Is(err, errServerClosed) {
+		t.Fatalf("ValidateListener after Close error=%v, want errServerClosed", err)
+	}
+	if got := standalone.TransportStatus(); got != before {
+		t.Fatalf("ValidateListener after Close changed status: before=%+v after=%+v", before, got)
 	}
 }
 
