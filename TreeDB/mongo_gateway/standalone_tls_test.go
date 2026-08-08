@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
@@ -374,6 +375,64 @@ func BenchmarkStandaloneTransportHandshake(b *testing.B) {
 				pingCancel()
 				_ = client.Disconnect(context.Background())
 				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkStandaloneTransportReusedFindOne measures a pooled official-driver
+// request/response after connection setup; listener, database, and client
+// construction are outside the timed region.
+func BenchmarkStandaloneTransportReusedFindOne(b *testing.B) {
+	for _, tlsEnabled := range []bool{false, true} {
+		name := "plaintext"
+		if tlsEnabled {
+			name = "tls"
+		}
+		b.Run(name, func(b *testing.B) {
+			certFile, keyFile, pool := writeTLSMaterial(b, false)
+			opts := StandaloneOptions{Dir: b.TempDir()}
+			if tlsEnabled {
+				opts.TLSCertFile, opts.TLSKeyFile = certFile, keyFile
+			}
+			standalone, err := OpenStandaloneServer(opts)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer standalone.Close()
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				b.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- standalone.Serve(ctx, ln) }()
+			defer func() { cancel(); _ = ln.Close(); <-done }()
+			cfg := options.Client().ApplyURI("mongodb://" + ln.Addr().String()).SetDirect(true)
+			if tlsEnabled {
+				cfg.SetTLSConfig(&tls.Config{RootCAs: pool, ServerName: "localhost"})
+			}
+			client, err := mongo.Connect(cfg)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer client.Disconnect(context.Background())
+			coll := client.Database("bench").Collection("items")
+			if _, err := coll.InsertOne(context.Background(), bson.D{{Key: "_id", Value: "fixture"}, {Key: "n", Value: int32(1)}}); err != nil {
+				b.Fatal(err)
+			}
+			var fixture bson.M
+			if err := coll.FindOne(context.Background(), bson.D{{Key: "_id", Value: "fixture"}}).Decode(&fixture); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				var out bson.M
+				if err := coll.FindOne(context.Background(), bson.D{{Key: "_id", Value: "fixture"}}).Decode(&out); err != nil {
 					b.Fatal(err)
 				}
 			}
