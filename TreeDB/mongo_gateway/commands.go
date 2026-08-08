@@ -158,7 +158,7 @@ func (s *Server) runMongoInsertCommand(name string, col *collections.Collection,
 		var err error
 		if format == collections.DocumentFormatBSON {
 			if len(ids) == 1 {
-				err = s.runMongoInsertCoalesced(name, col, ids[i], stored[i])
+				err = s.runMongoInsertCoalesced(name, col, ids[i], stored[i], budget)
 			} else {
 				err = runMongoInsertOne(col, ids[i], stored[i])
 			}
@@ -168,6 +168,13 @@ func (s *Server) runMongoInsertCommand(name string, col *collections.Collection,
 		if err == nil {
 			inserted++
 			continue
+		}
+		// A collection can report an error after publishing a document (for
+		// example while maintaining an auxiliary index).  That outcome is not a
+		// normal per-item write failure: continuing an unordered command would
+		// make the caller unable to tell which writes may have committed.
+		if errors.Is(err, collections.ErrCommitAmbiguous) {
+			return mongoCommitAmbiguousCommandError(err)
 		}
 		if reserveErr := budget.reserveError(); reserveErr != nil {
 			writeErrors = append(writeErrors, mongoWriteError{index: i, err: reserveErr})
@@ -182,11 +189,18 @@ func (s *Server) runMongoInsertCommand(name string, col *collections.Collection,
 }
 
 func mongoInsertCommandError(err error) (wire.Document, error) {
+	if errors.Is(err, collections.ErrCommitAmbiguous) {
+		return mongoCommitAmbiguousCommandError(err)
+	}
 	code, codeName := commandCodeBadValue, "BadValue"
 	if collections.IsDuplicateKeyError(err) {
 		code, codeName = commandCodeDuplicateKey, "DuplicateKey"
 	}
 	return commandError(code, codeName, err.Error())
+}
+
+func mongoCommitAmbiguousCommandError(err error) (wire.Document, error) {
+	return commandError(commandCodeShutdownInProgress, "ShutdownInProgress", err.Error())
 }
 
 func prepareInsertDocuments(documents []wire.Document, format collections.DocumentFormat) ([][]byte, [][]byte, error) {
@@ -219,17 +233,21 @@ type mongoInsertCoalescer struct {
 }
 
 type mongoInsertCoalescerRequest struct {
-	col    *collections.Collection
-	id     []byte
-	stored []byte
-	done   chan mongoInsertCoalescerResult
+	col      *collections.Collection
+	id       []byte
+	stored   []byte
+	deadline time.Time
+	done     chan mongoInsertCoalescerResult
 }
 
 type mongoInsertCoalescerResult struct {
 	err error
 }
 
-func (s *Server) runMongoInsertCoalesced(name string, col *collections.Collection, id, stored []byte) error {
+func (s *Server) runMongoInsertCoalesced(name string, col *collections.Collection, id, stored []byte, budget *mongoWriteBudget) error {
+	if err := budget.checkDeadline(); err != nil {
+		return err
+	}
 	if col == nil {
 		return runMongoInsertOne(col, id, stored)
 	}
@@ -240,7 +258,10 @@ func (s *Server) runMongoInsertCoalesced(name string, col *collections.Collectio
 	done := make(chan mongoInsertCoalescerResult, 1)
 	// The handler waits for completion before returning, so request-body-backed
 	// BSON remains live while the worker builds and applies the coalesced batch.
-	if !coalescer.enqueue(mongoInsertCoalescerRequest{col: col, id: id, stored: stored, done: done}) {
+	if !coalescer.enqueue(mongoInsertCoalescerRequest{col: col, id: id, stored: stored, deadline: budget.deadline, done: done}) {
+		if err := budget.checkDeadline(); err != nil {
+			return err
+		}
 		return runMongoInsertOne(col, id, stored)
 	}
 	return coalescer.waitForInsertResult(done).err
@@ -522,6 +543,7 @@ drained:
 }
 
 func (c *mongoInsertCoalescer) runBatch(batch []mongoInsertCoalescerRequest) {
+	batch = filterExpiredMongoInsertCoalescerRequests(batch)
 	if len(batch) == 0 {
 		return
 	}
@@ -547,6 +569,20 @@ func (c *mongoInsertCoalescer) runBatch(batch []mongoInsertCoalescerRequest) {
 		return
 	}
 	completeMongoInsertCoalescerBatch(batch, mongoInsertCoalescerResult{})
+}
+
+// A coalescer can wait behind unrelated traffic.  Drop requests whose command
+// deadline elapsed while waiting before the worker enters any mutation granule.
+func filterExpiredMongoInsertCoalescerRequests(batch []mongoInsertCoalescerRequest) []mongoInsertCoalescerRequest {
+	kept := batch[:0]
+	for _, req := range batch {
+		if !req.deadline.IsZero() && time.Now().After(req.deadline) {
+			req.done <- mongoInsertCoalescerResult{err: errors.New("Mongo gateway multi-write command exceeded its execution-time budget")}
+			continue
+		}
+		kept = append(kept, req)
+	}
+	return kept
 }
 
 func completeMongoInsertCoalescerBatch(batch []mongoInsertCoalescerRequest, result mongoInsertCoalescerResult) {
@@ -585,6 +621,10 @@ func mongoInsertCoalescerUsesSingleCollection(batch []mongoInsertCoalescerReques
 
 func runMongoInsertCoalescerSequential(batch []mongoInsertCoalescerRequest) {
 	for _, req := range batch {
+		if !req.deadline.IsZero() && time.Now().After(req.deadline) {
+			req.done <- mongoInsertCoalescerResult{err: errors.New("Mongo gateway multi-write command exceeded its execution-time budget")}
+			continue
+		}
 		req.done <- mongoInsertCoalescerResult{err: runMongoInsertOne(req.col, req.id, req.stored)}
 	}
 }
@@ -1183,6 +1223,9 @@ func (s *Server) runMongoUpdateCommand(name string, col *collections.Collection,
 	for _, update := range updates {
 		matchedOne, modifiedOne, inserted, err := s.runMongoUpdateItem(name, col, update)
 		if err != nil {
+			if errors.Is(err, collections.ErrCommitAmbiguous) {
+				return mongoCommitAmbiguousCommandError(err)
+			}
 			matched += matchedOne
 			modified += modifiedOne
 			if reserveErr := update.budget.reserveError(); reserveErr != nil {
@@ -1630,6 +1673,9 @@ type mongoUpdateCoalescerResult struct {
 }
 
 func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
+	if err := update.budget.checkDeadline(); err != nil {
+		return false, false, err
+	}
 	if !mongoUpdateCanUseBatch(col, update) {
 		return runMongoUpdateOne(col, update)
 	}
@@ -1639,6 +1685,9 @@ func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collectio
 	}
 	done := make(chan mongoUpdateCoalescerResult, 1)
 	if !coalescer.enqueue(mongoUpdateCoalescerRequest{col: col, item: update, done: done}) {
+		if err := update.budget.checkDeadline(); err != nil {
+			return false, false, err
+		}
 		return runMongoUpdateOne(col, update)
 	}
 	result := coalescer.waitForUpdateResult(done)
@@ -1910,6 +1959,7 @@ drained:
 }
 
 func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
+	batch = filterExpiredMongoUpdateCoalescerRequests(batch)
 	if len(batch) == 0 {
 		return
 	}
@@ -1946,6 +1996,18 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 		result := results[i]
 		req.done <- mongoUpdateCoalescerResult{matched: result.Matched, modified: result.Modified}
 	}
+}
+
+func filterExpiredMongoUpdateCoalescerRequests(batch []mongoUpdateCoalescerRequest) []mongoUpdateCoalescerRequest {
+	kept := batch[:0]
+	for _, req := range batch {
+		if err := req.item.budget.checkDeadline(); err != nil {
+			req.done <- mongoUpdateCoalescerResult{err: err}
+			continue
+		}
+		kept = append(kept, req)
+	}
+	return kept
 }
 
 func completeMongoUpdateCoalescerBatch(batch []mongoUpdateCoalescerRequest, result mongoUpdateCoalescerResult) {
@@ -2026,6 +2088,10 @@ func mongoUpdateCoalescerBatchCanUseBatch(batch []mongoUpdateCoalescerRequest) b
 
 func runMongoUpdateCoalescerSequential(batch []mongoUpdateCoalescerRequest) {
 	for _, req := range batch {
+		if err := req.item.budget.checkDeadline(); err != nil {
+			req.done <- mongoUpdateCoalescerResult{err: err}
+			continue
+		}
 		matched, modified, err := runMongoUpdateOne(req.col, req.item)
 		req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
 	}
@@ -2249,6 +2315,9 @@ func (s *Server) deleteResponse(ctx context.Context, command wire.Document, sequ
 	for _, item := range parsed {
 		count, runErr := s.runMongoDeleteItem(col, item)
 		if runErr != nil {
+			if errors.Is(runErr, collections.ErrCommitAmbiguous) {
+				return mongoCommitAmbiguousCommandError(runErr)
+			}
 			deleted += count
 			if reserveErr := item.budget.reserveError(); reserveErr != nil {
 				writeErrors = append(writeErrors, mongoWriteError{index: item.index, err: reserveErr})

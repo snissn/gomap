@@ -762,8 +762,26 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 	if msg.Flags&wire.MsgFlagMoreToCome != 0 {
 		return nil, retainRequestBody, nil
 	}
+	base := len(dst)
 	msgResponse, err := wire.AppendMsgMessage(dst, s.nextID(), h.RequestID, 0, response)
-	return msgResponse, retainRequestBody, err
+	if err != nil || len(msgResponse)-base <= int(s.maxMessageLength()) {
+		return msgResponse, retainRequestBody, err
+	}
+	// Keep every ordinary command response within the same advertised OP_MSG
+	// limit as requests and find batches.  In particular, a bounded input can
+	// otherwise expand into a large writeErrors envelope.
+	tooLarge, marshalErr := commandError(commandCodeBadValue, "BadValue", "Mongo gateway command response exceeds maxMessageSizeBytes")
+	if marshalErr != nil {
+		return nil, retainRequestBody, marshalErr
+	}
+	msgResponse, err = wire.AppendMsgMessage(dst[:base], s.nextID(), h.RequestID, 0, tooLarge)
+	if err != nil {
+		return nil, retainRequestBody, err
+	}
+	if len(msgResponse)-base > int(s.maxMessageLength()) {
+		return nil, retainRequestBody, fmt.Errorf("%w: response length=%d max=%d", wire.ErrMessageTooLarge, len(msgResponse)-base, s.maxMessageLength())
+	}
+	return msgResponse, retainRequestBody, nil
 }
 
 func commandRejectsReadOPMsgFeatures(name string) bool {
