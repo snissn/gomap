@@ -187,7 +187,7 @@ func TestMongoFilterUpdateRechecksPredicateAfterDeterministicDrift(t *testing.T)
 		result <- commandResult{doc: doc, err: err}
 	}()
 	awaitMongoFilterWriteSignal(t, selected, "filter write selection")
-	assertOK(t, serveCommand(t, server, 3, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "active", Value: false}}}}}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 3, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "active", Value: false}}}}}}}}, {Key: "$db", Value: "app"}}))
 	close(release)
 	released = true
 	var resultValue commandResult
@@ -340,7 +340,7 @@ func TestMongoFilterUpdateManyRechecksPredicateAfterDeterministicDrift(t *testin
 		result <- commandResult{doc: doc, err: commandErr}
 	}()
 	awaitMongoFilterWriteSignal(t, selected, "multi filter write selection")
-	assertOK(t, serveCommand(t, server, 3, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "active", Value: false}}}}}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 3, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "active", Value: false}}}}}}}}, {Key: "$db", Value: "app"}}))
 	close(release)
 	resultValue := <-result
 	if resultValue.err != nil {
@@ -348,8 +348,8 @@ func TestMongoFilterUpdateManyRechecksPredicateAfterDeterministicDrift(t *testin
 	}
 	assertOK(t, resultValue.doc)
 	assertInt32(t, resultValue.doc, "n", 1)
-	find := serveCommand(t, server, 4, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	find := serveCommand(t, server, 4, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "$db", Value: "app"}})
 	if !bson.Raw(find).Lookup("cursor").Document().Lookup("firstBatch").Array().Index(0).Document().Lookup("picked").IsZero() {
-		t.Fatalf("predicate-drift multi update mutated u1: %s", find)
+		t.Fatalf("predicate-drift multi update mutated later u2: %s", find)
 	}
 }

@@ -137,6 +137,11 @@ func (s *Server) runMongoInsertCommand(name string, col *collections.Collection,
 			return marshalInsertResponseWithWriteErrors(int32(len(ids)), nil)
 		} else if !collections.IsDuplicateKeyError(batchErr) || errors.Is(batchErr, collections.ErrCommitAmbiguous) {
 			return mongoInsertCommandError(batchErr)
+		} else {
+			// The collection planner proved this duplicate batch did not publish.
+			// Give its atomic-granule reservation back before the indexed fallback
+			// reserves each real item.
+			budget.refundTargets(len(ids))
 		}
 	}
 	inserted := int32(0)
@@ -1075,6 +1080,12 @@ func (b *mongoWriteBudget) reserveTargets(count int) error {
 	}
 	b.targetsRemaining -= count
 	return nil
+}
+
+func (b *mongoWriteBudget) refundTargets(count int) {
+	if b != nil && count > 0 {
+		b.targetsRemaining += count
+	}
 }
 
 func (b *mongoWriteBudget) reserveError() error {
