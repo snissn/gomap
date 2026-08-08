@@ -45,6 +45,25 @@ func TestMongoWriteBudgetRejectsExpiredAndExhaustedWork(t *testing.T) {
 	}
 }
 
+func TestMongoWriteBudgetReservesBoundedResponseEnvelope(t *testing.T) {
+	s := NewServer()
+	s.MaxMessageLength = mongoWriteResponseMinimumBytes + mongoWriteErrorResponseReserveBytes
+	budget := s.newMongoWriteBudget()
+	if err := budget.ensureMinimumResponse(); err != nil {
+		t.Fatalf("minimum response rejected: %v", err)
+	}
+	if err := budget.reserveError(); err != nil {
+		t.Fatalf("first bounded error: %v", err)
+	}
+	if err := budget.reserveError(); err == nil {
+		t.Fatal("second error exceeded configured response envelope")
+	}
+	s.MaxMessageLength = mongoWriteResponseMinimumBytes - 1
+	if err := s.newMongoWriteBudget().ensureMinimumResponse(); err == nil {
+		t.Fatal("too-small response limit accepted mutation-capable command")
+	}
+}
+
 func TestMongoMultiWriteUpdateManyDeleteManyAndParseBeforeExecute(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
