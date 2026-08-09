@@ -116,3 +116,45 @@ func TestServerExactIDBSONSetMaintainsNonLeadingCompoundComponent(t *testing.T) 
 		{Key: "$db", Value: "app"},
 	}), 0)
 }
+
+func TestServerFindFallsBackToScanForCompoundAndExplicitDescendingIndexes(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 40640, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "createdAt", Value: int32(-1)}}}, {Key: "name", Value: "tenant_created"}},
+			bson.D{{Key: "key", Value: bson.D{{Key: "createdAt", Value: int32(-1)}}}, {Key: "name", Value: "created_desc"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 40641, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "tenant", Value: "acme"}, {Key: "createdAt", Value: int32(1)}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "tenant", Value: "acme"}, {Key: "createdAt", Value: int32(2)}},
+			bson.D{{Key: "_id", Value: "u3"}, {Key: "tenant", Value: "other"}, {Key: "createdAt", Value: int32(3)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	// #4063 deliberately does not add compound/descending planner support. The
+	// legacy single-field path must therefore decline these definitions and let
+	// find evaluate its normal collection-scan fallback rather than erroring.
+	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, server, 40642, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "tenant", Value: "acme"}}},
+		{Key: "$db", Value: "app"},
+	})), []string{"u1", "u2"})
+	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, server, 40643, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "createdAt", Value: int32(2)}}},
+		{Key: "$db", Value: "app"},
+	})), []string{"u2"})
+}
