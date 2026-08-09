@@ -5904,11 +5904,23 @@ func validateNativeWireBenchmarkCollection(actual, expected collections.Collecti
 		if !ok {
 			return fmt.Errorf("native-wire benchmark collection %q missing index %q", actual.Name, expectedIndex.Name)
 		}
-		if actualIndex != expectedIndex {
+		if !equalNativeWireBenchmarkIndexDefinition(actualIndex, expectedIndex) {
 			return fmt.Errorf("native-wire benchmark collection %q index %q drifted: got %+v want %+v", actual.Name, expectedIndex.Name, actualIndex, expectedIndex)
 		}
 	}
 	return nil
+}
+
+func equalNativeWireBenchmarkIndexDefinition(actual, expected collections.IndexDefinition) bool {
+	if actual.Name != expected.Name || actual.Field != expected.Field || actual.ValueType != expected.ValueType || actual.Unique != expected.Unique || actual.MultiKey != expected.MultiKey || actual.StoragePolicy != expected.StoragePolicy || len(actual.Components) != len(expected.Components) {
+		return false
+	}
+	for i := range actual.Components {
+		if actual.Components[i] != expected.Components[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func equalNativeWireBenchmarkCollectionOptions(actual, expected collections.CollectionOptions) bool {

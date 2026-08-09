@@ -22397,11 +22397,18 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 	})
 	seen := make(map[string]struct{}, len(indexes))
 	for i := range indexes {
+		hadExplicitComponents := len(indexes[i].Components) != 0
 		components, err := normalizeIndexComponents(indexes[i])
 		if err != nil {
 			return CollectionMeta{}, fmt.Errorf("collections: invalid index %q components: %w", indexes[i].Name, err)
 		}
-		indexes[i].Components = components
+		// Preserve the compact legacy single-field ascending spelling on disk.
+		// Only explicit ordered definitions need the versioned Components slice.
+		if hadExplicitComponents {
+			indexes[i].Components = components
+		} else {
+			indexes[i].Components = nil
+		}
 		indexes[i].Field = components[0].Field
 		if err := ValidateIndexName(indexes[i].Name); err != nil {
 			return CollectionMeta{}, fmt.Errorf("collections: invalid index name %q: %w", indexes[i].Name, err)
