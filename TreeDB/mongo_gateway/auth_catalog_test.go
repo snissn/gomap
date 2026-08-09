@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -193,6 +194,47 @@ func TestAuthCatalogSASLprepAndAtomicDisableRotation(t *testing.T) {
 	}
 	if _, err := catalog.VerifyPassword("admin", "alice", []byte("fresh password")); err != nil {
 		t.Fatalf("re-enable lost fresh verifier: %v", err)
+	}
+}
+
+func TestAuthCatalogBackendScopedMutationLockPreventsLostRotation(t *testing.T) {
+	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	setter, err := NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotator, err := NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := setter.UpsertPassword("admin", "alice", []byte("old password")); err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	setter.beforeSetEnabledWrite = func() { close(entered); <-release }
+	setDone := make(chan error, 1)
+	go func() { setDone <- setter.SetEnabled("admin", "alice", false) }()
+	<-entered
+	rotateDone := make(chan error, 1)
+	go func() { rotateDone <- rotator.UpsertPassword("admin", "alice", []byte("fresh password")) }()
+	select {
+	case err := <-rotateDone:
+		t.Fatalf("second catalog rotation bypassed backend mutation lock: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(release)
+	if err := <-setDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-rotateDone; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rotator.VerifyPassword("admin", "alice", []byte("fresh password")); err != nil {
+		t.Fatalf("fresh verifier was lost or disabled: %v", err)
 	}
 }
 
@@ -542,6 +584,124 @@ func TestSCRAMSHA256EstablishesConnectionIdentityAndGatesCommands(t *testing.T) 
 	if !strings.Contains(bson.Raw(status).String(), "alice") {
 		t.Fatalf("connection status missed identity: %s", bson.Raw(status))
 	}
+}
+
+func TestReleaseOwnerClearsAuthenticationAndCursorsBeforeOwnerReuse(t *testing.T) {
+	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	catalog, err := NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	password := []byte("correct horse battery staple")
+	if err := catalog.UpsertPassword("admin", "alice", password); err != nil {
+		t.Fatal(err)
+	}
+	for _, buffered := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unbuffered", true: "buffered"}[buffered], func(t *testing.T) {
+			server := NewServer()
+			server.AuthenticationEnabled, server.AuthCatalog = true, catalog
+			owner := int64(91)
+			authenticateOwner(t, server, owner, password)
+			cursorID, err := server.openRetainedCursor("app.items", []wire.Document{mustDocument(t, bson.D{{Key: "_id", Value: "cursor"}})}, compiledProjection{}, owner)
+			if err != nil || cursorID == 0 {
+				t.Fatalf("open retained cursor id=%d err=%v", cursorID, err)
+			}
+			var wg sync.WaitGroup
+			for range 8 {
+				wg.Add(1)
+				go func() { defer wg.Done(); server.ReleaseOwner(owner) }()
+			}
+			wg.Wait()
+			if server.authenticated(owner) {
+				t.Fatal("released owner retained authentication identity")
+			}
+			server.cursorMu.Lock()
+			_, cursorStillPresent := server.cursors[cursorID]
+			server.cursorMu.Unlock()
+			if cursorStillPresent {
+				t.Fatal("released owner retained cursor")
+			}
+			response := serveOwnedCommand(t, server, owner, buffered, bson.D{{Key: "find", Value: "items"}, {Key: "$db", Value: "app"}})
+			assertCommandError(t, response, "Unauthorized")
+		})
+	}
+}
+
+func authenticateOwner(t *testing.T, server *Server, owner int64, password []byte) {
+	t.Helper()
+	clientFirstBare := "n=alice,r=owner-reuse-nonce"
+	startRaw := mustDocument(t, bson.D{{Key: "saslStart", Value: 1}, {Key: "mechanism", Value: "SCRAM-SHA-256"}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte("n,," + clientFirstBare)}}, {Key: "$db", Value: "admin"}})
+	start, err := server.commandResponse(context.Background(), "saslStart", startRaw, nil, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	startDoc := bson.Raw(start)
+	conversationID, ok := startDoc.Lookup("conversationId").Int32OK()
+	if !ok || startDoc.Lookup("ok").Double() != 1 {
+		t.Fatalf("saslStart=%s", startDoc)
+	}
+	_, payload, ok := startDoc.Lookup("payload").BinaryOK()
+	if !ok {
+		t.Fatalf("saslStart payload=%s", startDoc)
+	}
+	serverFirst := string(payload)
+	parts, ok := scramFields(serverFirst)
+	if !ok {
+		t.Fatal(serverFirst)
+	}
+	salt, err := base64.StdEncoding.DecodeString(parts["s"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var iterations int
+	if _, err := fmt.Sscanf(parts["i"], "%d", &iterations); err != nil {
+		t.Fatal(err)
+	}
+	salted := pbkdf2.Key(password, salt, iterations, sha256.Size, sha256.New)
+	clientKey := hmacSHA256(salted, []byte("Client Key"))
+	stored := sha256.Sum256(clientKey)
+	withoutProof := "c=biws,r=" + parts["r"]
+	signature := hmacSHA256(stored[:], []byte(clientFirstBare+","+serverFirst+","+withoutProof))
+	proof := make([]byte, len(clientKey))
+	for i := range proof {
+		proof[i] = clientKey[i] ^ signature[i]
+	}
+	continueRaw := mustDocument(t, bson.D{{Key: "saslContinue", Value: 1}, {Key: "conversationId", Value: conversationID}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte(withoutProof + ",p=" + base64.StdEncoding.EncodeToString(proof))}}, {Key: "$db", Value: "admin"}})
+	continued, err := server.commandResponse(context.Background(), "saslContinue", continueRaw, nil, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bson.Raw(continued).Lookup("ok").Double() != 1 {
+		t.Fatalf("saslContinue=%s", bson.Raw(continued))
+	}
+}
+
+func serveOwnedCommand(t *testing.T, server *Server, owner int64, buffered bool, command bson.D) wire.Document {
+	t.Helper()
+	raw := mustDocument(t, command)
+	requestID := int32(931)
+	request, err := wire.AppendMsgMessage(nil, requestID, 0, 0, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rw := &readWriter{r: bytes.NewReader(request)}
+	if buffered {
+		err = server.ServeOneWithOwnerBuffered(rw, owner, &ServeBuffers{})
+	} else {
+		err = server.ServeOneWithOwner(rw, owner)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := readMsgResponseResult(rw.w.Bytes(), requestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
 }
 
 // Exercise the OP_MSG fast find path, cursor commands, write admission, and

@@ -64,13 +64,18 @@ type authCatalogGetAppendStore interface {
 	GetAppend([]byte, []byte) ([]byte, error)
 }
 
-var authCatalogInitLocks struct {
+// authCatalogBackendLocks serializes catalog initialization and mutations for
+// one in-process backend. TreeDB excludes simultaneous multi-process opens for
+// this mode; callers must construct catalogs against the same process-local DB
+// handle.
+var authCatalogBackendLocks struct {
 	sync.Mutex
 	byBackend map[uintptr]*sync.Mutex
 }
 
 type AuthCatalog struct {
 	db              authCatalogStore
+	backendMu       *sync.Mutex
 	mu              sync.Mutex
 	syntheticSecret [sha256.Size]byte
 	// beforeSetEnabledWrite is a test-only interleaving hook. It is called
@@ -82,39 +87,36 @@ func NewAuthCatalog(db authCatalogStore) (*AuthCatalog, error) {
 	if db == nil {
 		return nil, errors.New("mongo gateway auth: nil database")
 	}
-	lock := authCatalogInitLock(db)
+	lock := authCatalogBackendLock(db)
 	lock.Lock()
 	secret, err := loadOrCreateSyntheticSecret(db)
 	lock.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("mongo gateway auth: synthetic verifier secret: %w", err)
 	}
-	return &AuthCatalog{db: db, syntheticSecret: secret}, nil
+	return &AuthCatalog{db: db, backendMu: lock, syntheticSecret: secret}, nil
 }
 
-// authCatalogInitLock serializes first-secret creation for one in-process
-// backend. TreeDB excludes simultaneous multi-process opens for this mode;
-// callers must construct catalogs against the same process-local DB handle.
-func authCatalogInitLock(db authCatalogStore) *sync.Mutex {
+func authCatalogBackendLock(db authCatalogStore) *sync.Mutex {
 	v := reflect.ValueOf(db)
 	if v.Kind() != reflect.Pointer || v.IsNil() {
-		return &authCatalogInitLocksFallback
+		return &authCatalogBackendLocksFallback
 	}
 	key := v.Pointer()
-	authCatalogInitLocks.Lock()
-	defer authCatalogInitLocks.Unlock()
-	if authCatalogInitLocks.byBackend == nil {
-		authCatalogInitLocks.byBackend = make(map[uintptr]*sync.Mutex)
+	authCatalogBackendLocks.Lock()
+	defer authCatalogBackendLocks.Unlock()
+	if authCatalogBackendLocks.byBackend == nil {
+		authCatalogBackendLocks.byBackend = make(map[uintptr]*sync.Mutex)
 	}
-	if lock := authCatalogInitLocks.byBackend[key]; lock != nil {
+	if lock := authCatalogBackendLocks.byBackend[key]; lock != nil {
 		return lock
 	}
 	lock := &sync.Mutex{}
-	authCatalogInitLocks.byBackend[key] = lock
+	authCatalogBackendLocks.byBackend[key] = lock
 	return lock
 }
 
-var authCatalogInitLocksFallback sync.Mutex
+var authCatalogBackendLocksFallback sync.Mutex
 
 func authCatalogKey(authDB, username string) []byte {
 	return []byte("\x00mongo-gateway/auth/v1/" + base64.RawURLEncoding.EncodeToString([]byte(authDB)) + "/" + base64.RawURLEncoding.EncodeToString([]byte(username)))
@@ -201,6 +203,8 @@ func (c *AuthCatalog) UpsertPassword(authDB, username string, password []byte) e
 	if err != nil {
 		return err
 	}
+	c.backendMu.Lock()
+	defer c.backendMu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.db.SetSync(authCatalogKey(authDB, username), raw)
@@ -234,9 +238,9 @@ func (c *AuthCatalog) record(authDB, username string) (AuthUserRecord, error) {
 	if c == nil || !validAuthField(authDB) || !validAuthField(username) {
 		return AuthUserRecord{}, errAuthenticationFailed
 	}
-	c.mu.Lock()
+	c.backendMu.Lock()
 	raw, err := c.db.Get(authCatalogKey(authDB, username))
-	c.mu.Unlock()
+	c.backendMu.Unlock()
 	if err != nil {
 		return AuthUserRecord{}, errAuthenticationFailed
 	}
@@ -264,6 +268,8 @@ func (c *AuthCatalog) SetEnabled(authDB, username string, enabled bool) error {
 	if c == nil || !validAuthField(authDB) || !validAuthField(username) {
 		return errAuthenticationFailed
 	}
+	c.backendMu.Lock()
+	defer c.backendMu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	r, err := c.storedRecordLocked(authDB, username)

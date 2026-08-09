@@ -68,6 +68,15 @@ Clients should use normal certificate validation, for example a URI with
 verification is optional and uses `-tls-ca-file -require-client-cert`; it is a
 transport check only, not MongoDB authentication or authorization.
 
+## In-process connection ownership
+
+`ServeConn` owns its cursor and authentication lifecycle. In-process callers
+that dispatch a long-lived logical connection with `ServeOneWithOwner` or
+`ServeOneWithOwnerBuffered` must call `ReleaseOwner(owner)` when it closes and
+before reusing that owner value; this removes both retained cursors and the
+connection-bound authenticated identity. `ReleaseOwner` is idempotent and safe
+to call concurrently.
+
 <!-- mongo-capability-summary:begin -->
 ## Executable capability summary
 

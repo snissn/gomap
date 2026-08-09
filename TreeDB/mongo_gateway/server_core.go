@@ -355,8 +355,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 	defer s.unregisterConn(conn)
 	defer conn.Close()
 	owner := s.nextConnectionID.Add(1)
-	defer s.killCursorsForOwner(owner)
-	defer s.clearAuthState(owner)
+	defer s.ReleaseOwner(owner)
 	rw := bufferedConnReadWriter{
 		reader: bufio.NewReaderSize(conn, defaultWireReadBufferSize),
 		writer: conn,
@@ -449,11 +448,13 @@ func (rw bufferedConnReadWriter) Write(p []byte) (int, error) {
 // connection owner.
 func (s *Server) ServeOne(rw io.ReadWriter) error {
 	owner := s.nextConnectionID.Add(1)
-	defer s.killCursorsForOwner(owner)
-	defer s.clearAuthState(owner)
+	defer s.ReleaseOwner(owner)
 	return s.ServeOneWithOwner(rw, owner)
 }
 
+// ServeOneWithOwner serves one wire message for a caller-owned logical
+// connection. The caller must call ReleaseOwner when that connection closes
+// and before reusing cursorOwner for another connection.
 func (s *Server) ServeOneWithOwner(rw io.ReadWriter, cursorOwner int64) error {
 	_, _, err := s.serveOneWithOwner(context.Background(), rw, cursorOwner, nil, nil)
 	return err
@@ -471,7 +472,8 @@ type ServeBuffers struct {
 
 // ServeOneWithOwnerBuffered serves one MongoDB wire message with caller-owned
 // reusable buffers. It is intended for in-process dispatchers and benchmarks
-// that need the same buffer reuse behavior as ServeConn.
+// that need the same buffer reuse behavior as ServeConn. The caller must call
+// ReleaseOwner when the logical connection closes or before reusing cursorOwner.
 func (s *Server) ServeOneWithOwnerBuffered(rw io.ReadWriter, cursorOwner int64, buffers *ServeBuffers) error {
 	if buffers == nil {
 		return s.ServeOneWithOwner(rw, cursorOwner)
@@ -480,6 +482,17 @@ func (s *Server) ServeOneWithOwnerBuffered(rw io.ReadWriter, cursorOwner int64, 
 	buffers.readBuf = readBuf
 	buffers.writeBuf = writeBuf
 	return err
+}
+
+// ReleaseOwner closes one caller-owned logical connection. It removes all
+// cursors and authentication state bound to cursorOwner. It is safe to call
+// concurrently and more than once.
+func (s *Server) ReleaseOwner(cursorOwner int64) {
+	if s == nil || cursorOwner == 0 {
+		return
+	}
+	s.killCursorsForOwner(cursorOwner)
+	s.clearAuthState(cursorOwner)
 }
 
 func (s *Server) serveOneWithOwner(ctx context.Context, rw io.ReadWriter, cursorOwner int64, readBuf, writeBuf []byte) ([]byte, []byte, error) {
