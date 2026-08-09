@@ -193,6 +193,16 @@ func TestMongoExplainScanBoundsSummarizeInValuesWithoutLeakingValues(t *testing.
 	if count, ok := bound.Lookup("valueCount").Int32OK(); !ok || count != 2 {
 		t.Fatalf("in valueCount=%d ok=%v", count, ok)
 	}
+	fingerprints := bound.Lookup("valueFingerprints").Array()
+	values, err := fingerprints.Values()
+	if err != nil || len(values) != 2 {
+		t.Fatalf("fingerprints=%s err=%v", fingerprints, err)
+	}
+	left, _ := values[0].StringValueOK()
+	right, _ := values[1].StringValueOK()
+	if left == right || len(left) != 24 {
+		t.Fatalf("fingerprints must distinguish bounded values: %q %q", left, right)
+	}
 	if bson.Raw(bound).Lookup("value").Type != 0 {
 		t.Fatalf("bound leaked filter value: %s", bound)
 	}

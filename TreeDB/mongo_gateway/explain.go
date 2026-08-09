@@ -2,6 +2,8 @@ package mongogateway
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -534,7 +536,11 @@ func explainScanBounds(plan findPlan) bson.A {
 			seen[value.Type] = struct{}{}
 			types = append(types, explainBSONType(value.Type))
 		}
-		bound := bson.D{{Key: "field", Value: pred.field}, {Key: "operator", Value: explainPredicateOperator(pred.op)}, {Key: "valueTypes", Value: types}, {Key: "valueCount", Value: int32(len(pred.values))}}
+		fingerprints := bson.A{}
+		for _, value := range pred.values {
+			fingerprints = append(fingerprints, explainBoundFingerprint(value))
+		}
+		bound := bson.D{{Key: "field", Value: pred.field}, {Key: "operator", Value: explainPredicateOperator(pred.op)}, {Key: "valueTypes", Value: types}, {Key: "valueCount", Value: int32(len(pred.values))}, {Key: "valueFingerprints", Value: fingerprints}}
 		switch pred.op {
 		case findPredicateGT:
 			bound = append(bound, bson.E{Key: "lowerInclusive", Value: false})
@@ -548,6 +554,12 @@ func explainScanBounds(plan findPlan) bson.A {
 		out = append(out, bound)
 	}
 	return out
+}
+
+func explainBoundFingerprint(value bson.RawValue) string {
+	input := append([]byte{byte(value.Type)}, value.Value...)
+	sum := sha256.Sum256(input)
+	return hex.EncodeToString(sum[:12])
 }
 
 func explainBSONType(typ bson.Type) string {
