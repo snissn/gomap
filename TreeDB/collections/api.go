@@ -21180,7 +21180,7 @@ func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, pers
 					}
 				}
 				bufferedIt.Next()
-			} else if cmp > 0 {
+			} else if (!reverse && cmp > 0) || (reverse && cmp < 0) {
 				if !inspect(1) {
 					return true, collectionIndexIteratorError(persistedIt)
 				}

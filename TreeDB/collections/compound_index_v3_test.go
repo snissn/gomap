@@ -82,6 +82,66 @@ func TestCompoundBSONIndexComponentsRejectArraysBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestCompoundBSONUniqueIndexMaintainsReplaceUpdateBatchAndDelete(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}, Indexes: []IndexDefinition{{
+		Name: "tenant_created", Components: []IndexComponent{{Field: "tenant", Direction: IndexDirectionAscending}, {Field: "createdAt", Direction: IndexDirectionDescending}}, ValueType: IndexValueBSONOrderedV2, Unique: true,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := func(id, tenant string, created int32, note string) []byte {
+		raw, marshalErr := bson.Marshal(bson.D{{Key: "_id", Value: id}, {Key: "tenant", Value: tenant}, {Key: "createdAt", Value: created}, {Key: "note", Value: note}})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		return raw
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("a"), []byte("b")}, [][]byte{doc("a", "acme", 1, "seed"), doc("b", "beta", 1, "seed")}); err != nil {
+		t.Fatal(err)
+	}
+	if matched, err := col.Replace([]byte("a"), doc("a", "acme", 2, "replace")); err != nil || !matched {
+		t.Fatalf("Replace matched=%v err=%v", matched, err)
+	}
+	if matched, modified, err := col.Update([]byte("b"), func([]byte) ([]byte, bool, error) {
+		return doc("b", "beta", 2, "update"), true, nil
+	}); err != nil || !matched || !modified {
+		t.Fatalf("Update matched=%v modified=%v err=%v", matched, modified, err)
+	}
+	batchDoc := doc("b", "beta", 2, "batch")
+	results, err := col.UpdateBatch([]UpdateBatchItem{{DocumentID: []byte("b"), Update: func([]byte) ([]byte, bool, error) { return batchDoc, true, nil }}})
+	if err != nil || len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("UpdateBatch results=%+v err=%v", results, err)
+	}
+	if matched, err := col.Replace([]byte("b"), doc("b", "acme", 2, "conflict")); !errors.Is(err, ErrUniqueIndexConflict) || matched {
+		t.Fatalf("unique Replace matched=%v err=%v", matched, err)
+	}
+	if got, err := col.Get([]byte("b")); err != nil || !bytes.Equal(got, batchDoc) {
+		t.Fatalf("unique conflict changed b document=%q err=%v", got, err)
+	}
+	if deleted, err := col.DeleteDocument([]byte("a")); err != nil || !deleted {
+		t.Fatalf("delete a deleted=%v err=%v", deleted, err)
+	}
+	if _, err := col.Insert([]byte("c"), doc("c", "acme", 2, "reused")); err != nil {
+		t.Fatalf("reusing deleted unique compound key: %v", err)
+	}
+	if deleted, err := col.DeleteBatch([][]byte{[]byte("b"), []byte("c")}); err != nil || deleted != 2 {
+		t.Fatalf("DeleteBatch deleted=%d err=%v", deleted, err)
+	}
+	ids, truncated, err := col.FindByCompoundIndexRange("tenant_created", CompoundIndexRangeOptions{Prefix: []bson.RawValue{{Type: bson.TypeString, Value: bsoncoreAppendString("acme")}}, Limit: 1})
+	if err != nil || truncated || len(ids) != 0 {
+		t.Fatalf("deleted compound rows ids=%q truncated=%v err=%v", ids, truncated, err)
+	}
+}
+
 func TestBSONCompoundEntryV2PreservesComponentBoundariesAndTieID(t *testing.T) {
 	a, err := encodeBSONIndexKeyComponentV2(bson.RawValue{Type: bson.TypeString, Value: bsoncoreAppendString("acme")})
 	if err != nil {
@@ -418,6 +478,49 @@ func TestBufferedRootRunsReverseIteratorSeekUsesReverseBounds(t *testing.T) {
 	it.Seek([]byte("a"))
 	if it.Valid() {
 		t.Fatalf("reverse seek below start key=%q want invalid", it.UnsafeKey())
+	}
+}
+
+func TestScanMergedCompoundIndexIDsReverseInterleavesBufferedAndPersisted(t *testing.T) {
+	key := func(value, id string) []byte {
+		t.Helper()
+		component, err := encodeBSONIndexKeyComponentV2(bson.RawValue{Type: bson.TypeString, Value: bsoncoreAppendString(value)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry, err := bsonIndexEntryKeyV2(component, []byte(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return entry
+	}
+	makeTable := func(pairs ...[2]string) memtable.Table {
+		t.Helper()
+		table := newCollectionRunTable(len(pairs))
+		for _, pair := range pairs {
+			setCollectionRunValue(table, key(pair[0], pair[1]), nil)
+		}
+		table.Freeze()
+		return table
+	}
+	// The first comparison is buffered "c" < persisted "d". Reverse merge
+	// must choose persisted d, then alternate the two sources without treating
+	// unequal keys as equal/shadowed.
+	buffered := makeTable([2]string{"c", "c"}, [2]string{"a", "a"})
+	persisted := makeTable([2]string{"d", "d"}, [2]string{"b", "b"})
+	defer resetCollectionRunTable(buffered)
+	defer resetCollectionRunTable(persisted)
+	bufferedIt := buffered.NewReverseIterator(nil, nil)
+	persistedIt := persisted.NewReverseIterator(nil, nil)
+	defer func() { _ = bufferedIt.Close() }()
+	defer func() { _ = persistedIt.Close() }()
+	var got []string
+	truncated, err := scanMergedCollectionIndexIDsReverse(bufferedIt, persistedIt, IndexValueBSONOrderedV2, 4, false, func(id []byte) (bool, error) {
+		got = append(got, string(id))
+		return true, nil
+	})
+	if err != nil || truncated || fmt.Sprint(got) != "[d c b a]" {
+		t.Fatalf("reverse merged ids=%v truncated=%v err=%v", got, truncated, err)
 	}
 }
 
