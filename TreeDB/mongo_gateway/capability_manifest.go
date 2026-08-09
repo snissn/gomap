@@ -186,7 +186,7 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 				"metadata.createindexes-listindexes-and-dropindexes",
 				"index.bson-ordered-v2-without-treedbvaluetype",
 			},
-			Note: "BSON collections support ordered BSON v2 indexes with one through four ascending or descending components; direct collection range scans do not imply planner selection. Explicit treedbValueType remains the legacy homogeneous single-field ascending path. Sparse, partial, TTL, collation, and hidden options reject before catalog mutation.",
+			Note: "BSON collections support ordered BSON v2 indexes with one through four ascending or descending components; direct collection range scans do not imply planner selection. Explicit treedbValueType remains the legacy homogeneous single-field ascending path. Ordered BSON v2 compound and descending definitions reject multikey metadata before catalog mutation; sparse, partial, TTL, collation, and hidden options also reject before catalog mutation.",
 		},
 		{
 			ID:            "authentication-authorization",
