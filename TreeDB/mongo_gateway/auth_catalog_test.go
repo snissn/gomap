@@ -212,3 +212,37 @@ func TestAuthenticationAdmissionCoversWireAndCursorCommandPaths(t *testing.T) {
 	}
 	assertCommandError(t, fastDoc, "Unauthorized")
 }
+
+func TestSCRAMUnknownUserKeepsChallengeShapeThenFailsGenerically(t *testing.T) {
+	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	catalog, _ := NewAuthCatalog(db)
+	if err := catalog.UpsertPassword("admin", "alice", []byte("password")); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer()
+	server.AuthenticationEnabled, server.AuthCatalog = true, catalog
+	var unknownConversationID int32
+	for owner, username := range map[int64]string{1: "alice", 2: "unknown"} {
+		raw, _ := marshalDocument(bson.D{{Key: "saslStart", Value: 1}, {Key: "mechanism", Value: "SCRAM-SHA-256"}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte("n,,n=" + username + ",r=nonce")}}, {Key: "$db", Value: "admin"}})
+		response, err := server.commandResponse(context.Background(), "saslStart", raw, nil, owner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := bson.Raw(response); got.Lookup("ok").Double() != 1 || got.Lookup("done").Boolean() {
+			t.Fatalf("%s saslStart shape=%s", username, got)
+		}
+		if username == "unknown" {
+			unknownConversationID = bson.Raw(response).Lookup("conversationId").Int32()
+		}
+	}
+	invalid, _ := marshalDocument(bson.D{{Key: "saslContinue", Value: 1}, {Key: "conversationId", Value: unknownConversationID}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte("c=biws,r=nonce,p=AAAA")}}, {Key: "$db", Value: "admin"}})
+	response, err := server.commandResponse(context.Background(), "saslContinue", invalid, nil, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCommandError(t, response, "AuthenticationFailed")
+}

@@ -19,6 +19,7 @@ type scramConversation struct {
 	user                         AuthUser
 	record                       AuthUserRecord
 	clientFirstBare, serverFirst string
+	valid                        bool
 }
 type authConnectionState struct {
 	user          *AuthUser
@@ -104,9 +105,11 @@ func (s *Server) saslStartResponse(command wire.Document, owner int64) (wire.Doc
 		return authFailure()
 	}
 	record, err := s.AuthCatalog.record(authDB, username)
-	if err != nil {
-		s.authFailures.Add(1)
-		return authFailure()
+	valid := err == nil
+	if !valid {
+		// Preserve the saslStart shape for unknown/disabled/corrupt records so
+		// username existence is not exposed before proof verification.
+		record = newSCRAMRecord(authDB, username, []byte("mongo-gateway-invalid-user-verifier"), []byte("mongo-gateway-invalid-salt-32-byte"), defaultSCRAMIterations)
 	}
 	random := make([]byte, 18)
 	if _, err := rand.Read(random); err != nil {
@@ -120,7 +123,7 @@ func (s *Server) saslStartResponse(command wire.Document, owner int64) (wire.Doc
 	if id == 0 {
 		id = s.nextSASLConversation.Add(1)
 	}
-	state.conversations[id] = scramConversation{id: id, user: AuthUser{Username: username, AuthDB: authDB}, record: record, clientFirstBare: bare, serverFirst: serverFirst}
+	state.conversations[id] = scramConversation{id: id, user: AuthUser{Username: username, AuthDB: authDB}, record: record, clientFirstBare: bare, serverFirst: serverFirst, valid: valid}
 	s.authMu.Unlock()
 	return marshalDocument(bson.D{{Key: "conversationId", Value: id}, {Key: "done", Value: false}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte(serverFirst)}}, {Key: "ok", Value: 1.0}})
 }
@@ -170,7 +173,7 @@ func (s *Server) saslContinueResponse(command wire.Document, owner int64) (wire.
 		clientKey[i] = proof[i] ^ clientSignature[i]
 	}
 	stored := sha256.Sum256(clientKey)
-	if subtle.ConstantTimeCompare(stored[:], conversation.record.StoredKey) != 1 {
+	if !conversation.valid || subtle.ConstantTimeCompare(stored[:], conversation.record.StoredKey) != 1 {
 		s.authFailures.Add(1)
 		return authFailure()
 	}
