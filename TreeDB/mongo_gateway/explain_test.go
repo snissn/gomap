@@ -150,6 +150,20 @@ func TestMongoExplainExecutionStatsPreservesBoundedScanRejectionContext(t *testi
 	}
 }
 
+func TestMongoExplainIndexedRangeOverflowRejectsRatherThanPrefix(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	server.MaxFindScanDocuments = 2
+	resp := serveCommand(t, server, 102, bson.D{
+		{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(0)}}}}}}},
+		{Key: "verbosity", Value: "executionStats"}, {Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, resp, "BadValue")
+	stats := bson.Raw(resp).Lookup("executionStats").Document()
+	if got, ok := stats.Lookup("rejectionReason").StringValueOK(); !ok || got != "scan_cap_exceeded" {
+		t.Fatalf("range overflow rejection=%q ok=%v want scan_cap_exceeded", got, ok)
+	}
+}
+
 func TestExplainExecutionRejectionClassifiesOnlyScanCapSentinel(t *testing.T) {
 	if got := explainExecutionRejectionReason(errors.New("bounded scan and candidate set exceeded in unrelated adapter")); got != "execution_rejected" {
 		t.Fatalf("text-only rejection=%q want execution_rejected", got)

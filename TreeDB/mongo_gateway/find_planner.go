@@ -1265,6 +1265,9 @@ func documentsForIndexedRange(col *collections.Collection, materializer *collect
 		}
 		out = append(out, doc)
 		if maxDocuments > 0 && len(out) > maxDocuments {
+			if allowOverflow {
+				return out, len(out), nil
+			}
 			return out[:maxDocuments], len(out), nil
 		}
 	}
