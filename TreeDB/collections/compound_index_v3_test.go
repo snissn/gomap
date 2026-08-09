@@ -255,7 +255,8 @@ func TestSingleDescendingBSONIndexMaintainsUniqueState(t *testing.T) {
 	if _, err := col.InsertBatch([][]byte{[]byte("b")}, [][]byte{doc("b")}); !errors.Is(err, ErrUniqueIndexConflict) {
 		t.Fatalf("descending duplicate error=%v want unique conflict", err)
 	}
-	if _, _, err := col.FindByIndexRange("created_desc", IndexRangeOptions{Lower: IndexRangeBound{Value: int32(3), Inclusive: true}, Upper: IndexRangeBound{Value: int32(3), Inclusive: true}}); err == nil {
+	value := bson.Raw(doc("query")).Lookup("createdAt")
+	if _, _, err := col.FindByIndexRange("created_desc", IndexRangeOptions{Lower: IndexRangeBound{Value: value, Inclusive: true}, Upper: IndexRangeBound{Value: value, Inclusive: true}}); err == nil {
 		t.Fatal("legacy range silently accepted descending BSON v2 index")
 	}
 }
@@ -489,6 +490,9 @@ func TestCompoundIndexPointerCheckpointReopenAndRecreate(t *testing.T) {
 	}
 	if _, err := db.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{}); err != nil {
 		t.Fatalf("compound ValueLogGC: %v", err)
+	}
+	if err := db.VacuumIndexOnline(context.Background()); err != nil {
+		t.Fatalf("compound VacuumIndexOnline: %v", err)
 	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatal(err)

@@ -8299,6 +8299,10 @@ func newBufferedRootRunsReverseIteratorWithDeleted(runs []memtable.Table, start,
 }
 
 func newBufferedRootRunsIteratorWithDeletedDirection(runs []memtable.Table, start, end []byte, includeDeleted, reverse bool) iterator.UnsafeIterator {
+	return newBufferedRootRunsIteratorWithDeletedDirectionWorkCap(runs, start, end, includeDeleted, reverse, 0)
+}
+
+func newBufferedRootRunsIteratorWithDeletedDirectionWorkCap(runs []memtable.Table, start, end []byte, includeDeleted, reverse bool, maxInspected int) iterator.UnsafeIterator {
 	if len(runs) == 1 && includeDeleted && runs[0] != nil {
 		if reverse {
 			return runs[0].NewReverseIterator(start, end)
@@ -8329,7 +8333,7 @@ func newBufferedRootRunsIteratorWithDeletedDirection(runs []memtable.Table, star
 			lenHint:  lenHint,
 		})
 	}
-	return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirection(sources, start, end, includeDeleted, stableUnsafeSlices, reverse)
+	return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCap(sources, start, end, includeDeleted, stableUnsafeSlices, reverse, maxInspected)
 }
 
 func newBufferedRootRunIteratorSourcesIteratorWithDeleted(sources []bufferedRootRunIteratorSource, start, end []byte, includeDeleted, stableUnsafeSlices bool) iterator.UnsafeIterator {
@@ -20351,7 +20355,11 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 		return nil, false, nil
 	}
 	workCap := compoundIndexRangeInspectedCap(opts.Limit)
-	bufferedTable, err := bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end, workCap)
+	// Charge physical overlay sources before their dedupe/merge. When both
+	// live-buffer and persisted sources exist, split the cap conservatively so
+	// their combined physical work cannot exceed the documented bound.
+	bufferedBudget := workCap / 2
+	bufferedTable, err := bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end, bufferedBudget)
 	if err != nil {
 		if errors.Is(err, errCollectionIndexScanWorkCap) {
 			// Do not materialize an unbounded live-buffer interval merely to
@@ -20362,6 +20370,8 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 	}
 	if bufferedTable != nil {
 		defer resetCollectionRunTable(bufferedTable)
+	} else {
+		bufferedBudget = 0
 	}
 	var bufferedIt iterator.UnsafeIterator
 	if bufferedTable != nil {
@@ -20373,10 +20383,11 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 		defer func() { _ = bufferedIt.Close() }()
 	}
 	var persistedIt iterator.UnsafeIterator
+	persistedBudget := workCap - bufferedBudget
 	if opts.Desc {
-		persistedIt, err = collectionReverseIteratorAtCatalogRootWithWorkCap(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true, workCap)
+		persistedIt, err = collectionReverseIteratorAtCatalogRootWithWorkCap(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true, persistedBudget)
 	} else {
-		persistedIt, err = collectionIteratorAtCatalogRootWithWorkCap(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true, workCap)
+		persistedIt, err = collectionIteratorAtCatalogRootWithWorkCap(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true, persistedBudget)
 	}
 	if err != nil {
 		return nil, false, err
@@ -20385,7 +20396,7 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 		defer func() { _ = persistedIt.Close() }()
 	}
 	ids := make([][]byte, 0)
-	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, persistedIt, idx.ValueType, opts.Limit, opts.Desc, workCap, scanMergedCollectionIndexIDOptions{
+	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, persistedIt, idx.ValueType, opts.Limit, opts.Desc, 0, scanMergedCollectionIndexIDOptions{
 		CloneDocumentID:  true,
 		DedupeDocumentID: shouldDedupeIndexDocumentIDs(idx, catalog.meta.Options),
 	}, func(id []byte) (bool, error) {
@@ -20522,9 +20533,6 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 	idx, ok := findIndex(catalog.meta.Indexes, indexName)
 	if !ok {
 		return false, false, nil
-	}
-	if idx.ValueType == IndexValueBSONOrderedV2 && (len(idx.Components) > 1 || (len(idx.Components) == 1 && idx.Components[0].Direction == IndexDirectionDescending)) {
-		return false, false, errors.New("collections: compound or descending BSON v2 indexes require FindByCompoundIndexRange")
 	}
 	start, end, empty, err := indexRangeScanBounds(idx.ValueType, opts)
 	if err != nil {
@@ -20696,6 +20704,9 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 	if !ok {
 		return false, false, nil
 	}
+	if idx.ValueType == IndexValueBSONOrderedV2 && (len(idx.Components) > 1 || (len(idx.Components) == 1 && idx.Components[0].Direction == IndexDirectionDescending)) {
+		return false, false, errors.New("collections: compound or descending BSON v2 indexes require FindByCompoundIndexRange")
+	}
 	start, end, empty, err := indexRangeScanBounds(idx.ValueType, opts)
 	if err != nil {
 		return false, true, err
@@ -20849,7 +20860,7 @@ func bufferedIndexRangeTableLocked(domain *collectionWriteDomain, collectionName
 		return nil, nil
 	}
 	table := newCollectionRunTable(0)
-	it := newBufferedRootRunsIteratorWithDeleted(runs, start, end, true)
+	it := newBufferedRootRunsIteratorWithDeletedDirectionWorkCap(runs, start, end, true, false, maxEntries)
 	defer func() { _ = it.Close() }()
 	inspected := 0
 	for it.Valid() {
