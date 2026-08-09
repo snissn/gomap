@@ -71,7 +71,7 @@ transport check only, not MongoDB authentication or authorization.
 <!-- mongo-capability-summary:begin -->
 ## Executable capability summary
 
-Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:1f843b6eea242fea6b180ea3e890255c0687bfbd051568a40c8f237f2d74669e`
+Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:d7fe73cc8e3c42d1cd7d0dbbd6350a1edcaf5e7deea1c5a92726f14dc8ead4ac`
 
 | Surface | Status | Boundary |
 |---|---|---|
