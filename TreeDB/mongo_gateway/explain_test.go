@@ -77,6 +77,7 @@ func TestMongoExplainRejectsWritesAndUnsupportedVerbosity(t *testing.T) {
 	for _, command := range []bson.D{
 		{{Key: "explain", Value: bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "write"}}}}, {Key: "$db", Value: "app"}}}, {Key: "$db", Value: "app"}},
 		{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "$db", Value: "app"}}}, {Key: "verbosity", Value: "allPlansExecution"}, {Key: "$db", Value: "app"}},
+		{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "$db", Value: "app"}}}, {Key: "verbosity", Value: ""}, {Key: "$db", Value: "app"}},
 	} {
 		assertCommandError(t, serveCommand(t, server, 101, command), "BadValue")
 	}
@@ -480,8 +481,12 @@ func TestMongoExplainAdaptiveMultiIndexPlanDoesNotClaimAnUnexecutedWinner(t *tes
 	command = append(command, bson.E{Key: "verbosity", Value: "executionStats"})
 	executed := serveCommand(t, server, 106, command)
 	assertOK(t, executed)
-	if got, ok := bson.Raw(executed).Lookup("queryPlanner").Document().Lookup("winningPlan").Document().Lookup("stage").StringValueOK(); ok && got == "adaptive_candidate_selection" {
+	executedPlanner := bson.Raw(executed).Lookup("queryPlanner").Document()
+	if got, ok := executedPlanner.Lookup("winningPlan").Document().Lookup("stage").StringValueOK(); ok && got == "adaptive_candidate_selection" {
 		t.Fatalf("executionStats must report actual executor winner: %s", executed)
+	}
+	if !executedPlanner.Lookup("candidatePlans").IsZero() {
+		t.Fatalf("candidatePlans must be omitted once execution resolves the adaptive winner: %s", executed)
 	}
 }
 

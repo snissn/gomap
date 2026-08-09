@@ -110,7 +110,7 @@ func explainVerbosity(command wire.Document) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !present || value == "" {
+	if !present {
 		return "queryPlanner", nil
 	}
 	if value != "queryPlanner" && value != "executionStats" {
@@ -435,6 +435,10 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 			}
 			planner[1].Value = winning
 		}
+		if stats.stage != "adaptive_candidate_selection" {
+			planner = explainPlannerWithoutCandidatePlans(planner)
+		}
+		response[0].Value = planner
 		response = append(response, bson.E{Key: "executionStats", Value: bson.D{
 			{Key: "nReturned", Value: stats.documentsReturned},
 			// This includes adaptive planner probes; it is deliberately a
@@ -448,6 +452,15 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 	}
 	response = append(response, bson.E{Key: "ok", Value: 1.0})
 	return marshalDocument(response)
+}
+
+func explainPlannerWithoutCandidatePlans(planner bson.D) bson.D {
+	for i := range planner {
+		if planner[i].Key == "candidatePlans" {
+			return append(planner[:i:i], planner[i+1:]...)
+		}
+	}
+	return planner
 }
 
 func explainPlannerSelection(col *collections.Collection, plan findPlan) findPlannerSelection {
