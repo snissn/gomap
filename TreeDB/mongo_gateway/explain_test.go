@@ -168,6 +168,34 @@ func TestMongoExplainFindRangeResidualAndSortVocabulary(t *testing.T) {
 	if got, ok := planner.Lookup("sort").DocumentOK(); !ok || got.Lookup("satisfied").Boolean() {
 		t.Fatalf("sort=%s want unsatisfied public sort descriptor", got)
 	}
+	bounds := planner.Lookup("scanBounds").Array()
+	values, err := bounds.Values()
+	if err != nil || len(values) != 2 {
+		t.Fatalf("scanBounds=%s err=%v", bounds, err)
+	}
+	rangeBound := values[0].Document()
+	if count, ok := rangeBound.Lookup("valueCount").Int32OK(); !ok || count != 1 {
+		t.Fatalf("range valueCount=%d ok=%v", count, ok)
+	}
+	if inclusive, ok := rangeBound.Lookup("lowerInclusive").BooleanOK(); !ok || !inclusive {
+		t.Fatalf("range lowerInclusive=%v ok=%v", inclusive, ok)
+	}
+}
+
+func TestMongoExplainScanBoundsSummarizeInValuesWithoutLeakingValues(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	resp := serveCommand(t, server, 108, bson.D{
+		{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "city", Value: bson.D{{Key: "$in", Value: bson.A{"hnl", "sea"}}}}}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, resp)
+	bound := bson.Raw(resp).Lookup("queryPlanner").Document().Lookup("scanBounds").Array().Index(0).Document()
+	if count, ok := bound.Lookup("valueCount").Int32OK(); !ok || count != 2 {
+		t.Fatalf("in valueCount=%d ok=%v", count, ok)
+	}
+	if bson.Raw(bound).Lookup("value").Type != 0 {
+		t.Fatalf("bound leaked filter value: %s", bound)
+	}
 }
 
 func TestMongoExplainReadCommandAdapters(t *testing.T) {

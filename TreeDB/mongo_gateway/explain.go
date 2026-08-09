@@ -525,9 +525,48 @@ func explainRejectedIndexes(col *collections.Collection, plan findPlan) bson.A {
 func explainScanBounds(plan findPlan) bson.A {
 	out := bson.A{}
 	for _, pred := range plan.predicates {
-		out = append(out, bson.D{{Key: "field", Value: pred.field}, {Key: "operator", Value: explainPredicateOperator(pred.op)}})
+		types := bson.A{}
+		seen := map[bson.Type]struct{}{}
+		for _, value := range pred.values {
+			if _, ok := seen[value.Type]; ok {
+				continue
+			}
+			seen[value.Type] = struct{}{}
+			types = append(types, explainBSONType(value.Type))
+		}
+		bound := bson.D{{Key: "field", Value: pred.field}, {Key: "operator", Value: explainPredicateOperator(pred.op)}, {Key: "valueTypes", Value: types}, {Key: "valueCount", Value: int32(len(pred.values))}}
+		switch pred.op {
+		case findPredicateGT:
+			bound = append(bound, bson.E{Key: "lowerInclusive", Value: false})
+		case findPredicateGTE:
+			bound = append(bound, bson.E{Key: "lowerInclusive", Value: true})
+		case findPredicateLT:
+			bound = append(bound, bson.E{Key: "upperInclusive", Value: false})
+		case findPredicateLTE:
+			bound = append(bound, bson.E{Key: "upperInclusive", Value: true})
+		}
+		out = append(out, bound)
 	}
 	return out
+}
+
+func explainBSONType(typ bson.Type) string {
+	switch typ {
+	case bson.TypeString:
+		return "string"
+	case bson.TypeInt32:
+		return "int32"
+	case bson.TypeInt64:
+		return "int64"
+	case bson.TypeDouble:
+		return "double"
+	case bson.TypeBoolean:
+		return "bool"
+	case bson.TypeNull:
+		return "null"
+	default:
+		return "other"
+	}
 }
 
 func explainPredicateOperator(op findPredicateOp) string {
