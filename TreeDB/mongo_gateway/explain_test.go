@@ -2,9 +2,12 @@ package mongogateway
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
+	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -134,8 +137,67 @@ func TestMongoExplainExecutionStatsPreservesBoundedScanRejectionContext(t *testi
 	if got, ok := stats.Lookup("rejectionReason").StringValueOK(); !ok || got != "scan_cap_exceeded" {
 		t.Fatalf("rejectionReason=%q ok=%v want scan_cap_exceeded", got, ok)
 	}
+	if got, ok := stats.Lookup("truncated").BooleanOK(); !ok || !got {
+		t.Fatalf("truncated=%v ok=%v want true", got, ok)
+	}
 	if _, ok := bson.Raw(resp).Lookup("queryPlanner").DocumentOK(); !ok {
 		t.Fatalf("queryPlanner missing from rejected explain: %s", resp)
+	}
+}
+
+func TestExplainExecutionRejectionClassifiesOnlyScanCapSentinel(t *testing.T) {
+	if got := explainExecutionRejectionReason(errors.New("bounded scan and candidate set exceeded in unrelated adapter")); got != "execution_rejected" {
+		t.Fatalf("text-only rejection=%q want execution_rejected", got)
+	}
+	if got := explainExecutionRejectionReason(fmt.Errorf("wrapped: %w", errMongoFindScanCapExceeded)); got != "scan_cap_exceeded" {
+		t.Fatalf("sentinel rejection=%q want scan_cap_exceeded", got)
+	}
+}
+
+func TestMongoExplainNullPredicateDoesNotAdvertiseSecondaryIndex(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	resp := serveCommand(t, server, 102, bson.D{
+		{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "city", Value: nil}}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, resp)
+	planner := bson.Raw(resp).Lookup("queryPlanner").Document()
+	winning := planner.Lookup("winningPlan").Document()
+	if got, ok := winning.Lookup("stage").StringValueOK(); !ok || got != "bounded_scan" {
+		t.Fatalf("null predicate plan=%q ok=%v want bounded_scan", got, ok)
+	}
+	items, err := planner.Lookup("usableIndexes").Array().Values()
+	if err != nil {
+		t.Fatalf("usableIndexes values: %v", err)
+	}
+	for _, item := range items {
+		if item.Document().Lookup("indexName").StringValue() == "city_1" {
+			t.Fatalf("null predicate advertised city index: %s", planner)
+		}
+	}
+}
+
+func TestServerRejectsExplainOPMsgFeatures(t *testing.T) {
+	command := mustDocument(t, bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}}}, {Key: "$db", Value: "app"}})
+	for _, tc := range []struct {
+		name  string
+		build func() ([]byte, error)
+	}{
+		{name: "moreToCome", build: func() ([]byte, error) { return wire.AppendMsgMessage(nil, 102, 0, wire.MsgFlagMoreToCome, command) }},
+		{name: "documentSequences", build: func() ([]byte, error) {
+			return wire.AppendMsgMessageWithSequences(nil, 102, 0, 0, command, []wire.DocumentSequence{{Identifier: "ignored", Documents: []wire.Document{mustDocument(t, bson.D{{Key: "x", Value: int32(1)}})}}})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request, err := tc.build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			rw := &readWriter{r: bytes.NewReader(request)}
+			if err := NewServer().ServeOne(rw); !errors.Is(err, wire.ErrUnsupported) || rw.w.Len() != 0 {
+				t.Fatalf("ServeOne err=%v responseBytes=%d want ErrUnsupported/0", err, rw.w.Len())
+			}
+		})
 	}
 }
 

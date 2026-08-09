@@ -679,7 +679,7 @@ func commandAuthorizationTarget(name string, command wire.Document) (authorizati
 			return target, err
 		}
 		if !supportedExplainReadCommand(innerName) {
-			return target, fmt.Errorf("Mongo gateway explain supports bounded standalone read commands only")
+			return target, errors.New("Mongo gateway explain supports bounded standalone read commands only")
 		}
 		if bson.Raw(inner).Lookup("$db").IsZero() {
 			db, err := commandStringBytes(command, "$db")

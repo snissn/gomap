@@ -138,7 +138,7 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 				"crud.delete-by-id",
 				"crud.bounded-multi-write-and-batch-ordering",
 			},
-			Note: "Explicit-ID CRUD plus bounded multi update/delete and ordered or unordered insert/update/delete batches; a positive maxTimeMS shortens the shared five-second command deadline; per-document atomicity only, never a transaction.",
+			Note: "Explicit-ID CRUD plus bounded multi-update/delete and ordered or unordered insert/update/delete batches; a positive maxTimeMS shortens the shared five-second command deadline; per-document atomicity only, never a transaction.",
 		},
 		{
 			ID:    "standalone-write-concern",

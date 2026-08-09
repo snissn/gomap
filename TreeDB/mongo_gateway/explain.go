@@ -80,6 +80,9 @@ func (s *Server) explainResponse(ctx context.Context, command wire.Document, cur
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
+	if !supportedExplainReadCommand(name) {
+		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway explain supports bounded standalone find, count, distinct, and aggregate reads only")
+	}
 	switch name {
 	case "find":
 		return s.explainFindResponse(ctx, inner, outerDB, verbosity, cursorOwner)
@@ -90,7 +93,7 @@ func (s *Server) explainResponse(ctx context.Context, command wire.Document, cur
 	case "aggregate":
 		return s.explainAggregateResponse(ctx, inner, outerDB, verbosity)
 	default:
-		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway explain supports bounded standalone find, count, distinct, and aggregate reads only")
+		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway explain command is not dispatched")
 	}
 }
 
@@ -462,9 +465,8 @@ func explainCandidatePlans(col *collections.Collection, plan findPlan) bson.A {
 }
 
 func explainExecutionRejectionReason(err error) string {
-	message := err.Error()
 	switch {
-	case strings.Contains(message, "bounded scan"), strings.Contains(message, "candidate set exceeded"):
+	case errors.Is(err, errMongoFindScanCapExceeded):
 		return "scan_cap_exceeded"
 	default:
 		return "execution_rejected"

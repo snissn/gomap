@@ -360,6 +360,24 @@ func TestAuthorizationEverySupportedCommandHasExplicitPrivilege(t *testing.T) {
 	}
 }
 
+func TestAuthorizationExplainInheritsOuterDatabaseAndRejectsInnerWrites(t *testing.T) {
+	inherited := mustDocument(t, bson.D{
+		{Key: "explain", Value: bson.D{{Key: "find", Value: "items"}}},
+		{Key: "$db", Value: "app"},
+	})
+	target, err := commandAuthorizationTarget("explain", inherited)
+	if err != nil || target.privilege != authorizationRead || string(target.databaseRaw) != "app" || string(target.collectionRaw) != "items" {
+		t.Fatalf("inherited explain target=%+v err=%v", target, err)
+	}
+	write := mustDocument(t, bson.D{
+		{Key: "explain", Value: bson.D{{Key: "insert", Value: "items"}, {Key: "documents", Value: bson.A{}}}},
+		{Key: "$db", Value: "app"},
+	})
+	if _, err := commandAuthorizationTarget("explain", write); err == nil {
+		t.Fatal("inner write was accepted for explain authorization")
+	}
+}
+
 func TestAuthorizationBuiltInRoleSeparation(t *testing.T) {
 	targets := []authorizationTarget{
 		{privilege: authorizationRead, database: "app", collection: "items"},

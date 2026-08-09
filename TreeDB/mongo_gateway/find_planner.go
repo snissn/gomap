@@ -17,6 +17,10 @@ import (
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
+// errMongoFindScanCapExceeded identifies bounded planner work exhaustion.
+// Explain relies on the error identity, never the client-facing text.
+var errMongoFindScanCapExceeded = errors.New("mongo gateway find scan cap exceeded")
+
 type findPredicateOp uint8
 
 const (
@@ -304,7 +308,7 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, materialize
 			for range records {
 				plan.recordCandidate()
 			}
-			return nil, fmt.Errorf("Mongo gateway find requires a bounded scan and exceeded %d documents", maxDocuments)
+			return nil, fmt.Errorf("%w: Mongo gateway find requires a bounded scan and exceeded %d documents", errMongoFindScanCapExceeded, maxDocuments)
 		}
 		out := make([]wire.Document, 0, len(records))
 		for _, record := range records {
@@ -334,11 +338,6 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, materialize
 	}
 	if docs, indexedStage, indexedName, ok, err := s.bestIndexedCandidateDocuments(col, materializer, meta, plan, maxDocuments); ok || err != nil {
 		if err != nil {
-			if primarySet {
-				plan.recordWinner("primary_lookup", "")
-				docs, limitErr := s.limitCandidateDocuments(primaryDocs)
-				return docs, limitErr
-			}
 			return nil, err
 		}
 		if !primarySet || len(docs) < len(primaryDocs) {
@@ -360,7 +359,7 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, materialize
 		for range records {
 			plan.recordCandidate()
 		}
-		return nil, fmt.Errorf("Mongo gateway find requires a bounded scan and exceeded %d documents", maxDocuments)
+		return nil, fmt.Errorf("%w: Mongo gateway find requires a bounded scan and exceeded %d documents", errMongoFindScanCapExceeded, maxDocuments)
 	}
 	plan.recordWinner("bounded_scan", "")
 	out := make([]wire.Document, 0, len(records))
@@ -432,7 +431,7 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, material
 		return nil, true, err
 	}
 	if truncated {
-		return nil, true, fmt.Errorf("Mongo gateway find requires a bounded scan and exceeded %d documents", maxDocuments)
+		return nil, true, fmt.Errorf("%w: Mongo gateway find requires a bounded scan and exceeded %d documents", errMongoFindScanCapExceeded, maxDocuments)
 	}
 	plan.recordWinner("bounded_scan", "")
 	return docs, true, nil
@@ -772,7 +771,7 @@ func (s *Server) limitCandidateDocuments(docs []wire.Document) ([]wire.Document,
 	// This bound limits planner work and memory before predicate filtering,
 	// sorting, projection, and skip/limit pagination are applied.
 	if len(docs) > s.maxFindScanDocuments() {
-		return nil, fmt.Errorf("Mongo gateway find candidate set exceeded %d documents", s.maxFindScanDocuments())
+		return nil, fmt.Errorf("%w: Mongo gateway find candidate set exceeded %d documents", errMongoFindScanCapExceeded, s.maxFindScanDocuments())
 	}
 	return docs, nil
 }

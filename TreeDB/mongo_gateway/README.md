@@ -81,11 +81,11 @@ call concurrently.
 <!-- mongo-capability-summary:begin -->
 ## Executable capability summary
 
-Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:53e9c18745d83432acf82e5976a5e3018b31e04f91818bc33c3bc2ae234a0f21`
+Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:c201c2fff25fa46fccf9bae44ead3e80858ac5b365c1088401feac6a2127f144`
 
 | Surface | Status | Boundary |
 |---|---|---|
-| Standalone CRUD | supported subset | Explicit-ID CRUD plus bounded multi update/delete and ordered or unordered insert/update/delete batches; a positive maxTimeMS shortens the shared five-second command deadline; per-document atomicity only, never a transaction. |
+| Standalone CRUD | supported subset | Explicit-ID CRUD plus bounded multi-update/delete and ordered or unordered insert/update/delete batches; a positive maxTimeMS shortens the shared five-second command deadline; per-document atomicity only, never a transaction. |
 | Standalone write concern | supported subset | Absent/default and w:1 use the selected profile's ordinary acknowledgement boundary; j:true closes a real command-WAL or checkpoint sync boundary. Unacknowledged, replica, and interruptible-timeout semantics reject before mutation. |
 | Aggregation, count, and distinct | supported subset | Bounded standalone subsets only. Explain reports stable primary, secondary, bounded-scan, and adaptive_candidate_selection vocabulary for find, count, distinct, and aggregate pipelines whose planner prefix is match/skip/limit; later match or sort stages reject rather than being misreported as find-plan work. Writes, routed reads, and unsupported verbosity reject. |
 | Administrative diagnostics | not implemented | serverStatus, top, and dbStats are not implemented. |
@@ -170,6 +170,13 @@ those fixtures, not a full MongoDB conformance claim. Fixture files are
 versioned canonical Extended JSON in
 `cmd/mongo_gateway_compat_diff/fixtures`; the runner decodes them to BSON and
 preserves BSON type and field order in emitted observations.
+
+The explain fixture proves the cross-target wire invariant that a nested
+`explain`/`find` command over the seeded collection is accepted and returns a
+successful command envelope. It deliberately ignores `queryPlanner`: MongoDB's
+planner document is implementation-specific and the gateway publishes its own
+stable vocabulary, which is specified and tested by the gateway contract tests
+rather than claimed as MongoDB planner parity.
 
 The version-1 fixture contract is intentionally unauthenticated: it has one
 shared seed/command flow and no per-target authentication bootstrap. Therefore
