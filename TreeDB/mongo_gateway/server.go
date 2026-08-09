@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -43,6 +44,13 @@ type cliConfig struct {
 	insertCoalescingBatch    int
 	insertCoalescingBatchSet bool
 	insertCoalescingIdleTTL  time.Duration
+	tlsCertFile              string
+	tlsKeyFile               string
+	tlsCAFile                string
+	requireClientCert        bool
+	tlsMinVersion            string
+	tlsHandshakeTimeout      time.Duration
+	allowInsecureRemote      bool
 }
 
 func main() {
@@ -64,7 +72,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "mongo gateway server: listen on %s: %v\n", cfg.addr, err)
 		return 1
 	}
-
 	standalone, err := mongogateway.OpenStandaloneServer(standaloneOptions(cfg))
 	if err != nil {
 		fmt.Fprintf(stderr, "mongo gateway server: configure standalone: %v\n", err)
@@ -73,14 +80,33 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		return 1
 	}
+	if err := standalone.ValidateListener(ln); err != nil {
+		fmt.Fprintf(stderr, "mongo gateway server: transport policy: %v\n", err)
+		_ = ln.Close()
+		_ = standalone.Close()
+		return 1
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	fmt.Fprintf(stdout, "TreeDB Mongo gateway listening on mongodb://%s\n", ln.Addr().String())
+	status := standalone.TransportStatus()
+	uri := "mongodb://" + ln.Addr().String() + "/?directConnection=true"
+	if status.Mode == "tls" {
+		uri += "&tls=true"
+	}
+	fmt.Fprintf(stdout, "TreeDB Mongo gateway listening on %s\n", uri)
 	fmt.Fprintf(stdout, "TreeDB dir: %s\n", standalone.Options.Dir)
 	fmt.Fprintf(stdout, "TreeDB profile: %s, collection document format: %s\n",
 		standalone.Options.Profile, standalone.Options.DefaultCollectionOptions.DocumentFormat)
+	fmt.Fprintf(stdout, "Transport: %s", status.Mode)
+	if status.Mode == "tls" {
+		fmt.Fprintf(stdout, ", minimum TLS %s, certificate expires %s", tlsVersionName(status.TLSMinimumVersion), status.TLSCertificateNotAfter.UTC().Format(time.RFC3339))
+	}
+	fmt.Fprintln(stdout)
+	if status.InsecureRemoteOverride {
+		fmt.Fprintln(stderr, "WARNING: plaintext remote listener explicitly enabled by -allow-insecure-remote")
+	}
 
 	serveErr := standalone.Serve(ctx, ln)
 	closeErr := standalone.Close()
@@ -111,6 +137,7 @@ func parseFlags(args []string, stderr io.Writer) (cliConfig, error) {
 		updateCoalescingIdleTTL: 30 * time.Second,
 		insertCoalescingBatch:   256,
 		insertCoalescingIdleTTL: 30 * time.Second,
+		tlsMinVersion:           "1.2",
 	}
 	fs := flag.NewFlagSet("treedb-mongo-gateway", flag.ContinueOnError)
 	fs.SetOutput(flagSetOutput(args, stderr))
@@ -132,6 +159,13 @@ func parseFlags(args []string, stderr io.Writer) (cliConfig, error) {
 	fs.DurationVar(&cfg.insertCoalescingDelay, "insert-coalescing-delay", cfg.insertCoalescingDelay, "maximum delay for same-collection single-document BSON insert coalescing; 0 coalesces only queued work, negative disables")
 	fs.IntVar(&cfg.insertCoalescingBatch, "insert-coalescing-batch", cfg.insertCoalescingBatch, "maximum same-collection single-document BSON inserts in one coalesced batch")
 	fs.DurationVar(&cfg.insertCoalescingIdleTTL, "insert-coalescing-idle-ttl", cfg.insertCoalescingIdleTTL, "idle TTL for insert coalescers; 0 uses gateway default, negative disables idle removal")
+	fs.StringVar(&cfg.tlsCertFile, "tls-cert-file", "", "PEM server certificate; requires -tls-key-file")
+	fs.StringVar(&cfg.tlsKeyFile, "tls-key-file", "", "PEM server private key; requires -tls-cert-file")
+	fs.StringVar(&cfg.tlsCAFile, "tls-ca-file", "", "optional PEM client CA bundle")
+	fs.BoolVar(&cfg.requireClientCert, "require-client-cert", false, "require and verify a TLS client certificate using -tls-ca-file")
+	fs.StringVar(&cfg.tlsMinVersion, "tls-min-version", cfg.tlsMinVersion, "minimum TLS version: 1.2 or 1.3")
+	fs.DurationVar(&cfg.tlsHandshakeTimeout, "tls-handshake-timeout", 0, "TLS handshake timeout; 0 uses 10s")
+	fs.BoolVar(&cfg.allowInsecureRemote, "allow-insecure-remote", false, "allow plaintext non-loopback listen (unsafe; emits warning)")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
@@ -168,6 +202,9 @@ func parseFlags(args []string, stderr io.Writer) (cliConfig, error) {
 	}
 	if cfg.insertCoalescingBatch < 0 {
 		return cfg, errors.New("-insert-coalescing-batch must be >= 0")
+	}
+	if _, err := tlsVersionFromFlag(cfg.tlsMinVersion); err != nil {
+		return cfg, err
 	}
 	return cfg, nil
 }
@@ -215,7 +252,35 @@ func standaloneOptions(cfg cliConfig) mongogateway.StandaloneOptions {
 		InsertCoalescingMaxBatchSet: cfg.insertCoalescingBatchSet,
 		InsertCoalescingMaxBatch:    insertCoalescingBatch,
 		InsertCoalescingIdleTTL:     cfg.insertCoalescingIdleTTL,
+		TLSCertFile:                 cfg.tlsCertFile,
+		TLSKeyFile:                  cfg.tlsKeyFile,
+		TLSCAFile:                   cfg.tlsCAFile,
+		RequireClientCert:           cfg.requireClientCert,
+		TLSMinVersion:               mustTLSVersionFromFlag(cfg.tlsMinVersion),
+		TLSHandshakeTimeout:         cfg.tlsHandshakeTimeout,
+		AllowInsecureRemote:         cfg.allowInsecureRemote,
 	}
+}
+
+func tlsVersionFromFlag(value string) (uint16, error) {
+	switch strings.TrimSpace(value) {
+	case "1.2", "tls1.2", "TLS1.2":
+		return tls.VersionTLS12, nil
+	case "1.3", "tls1.3", "TLS1.3":
+		return tls.VersionTLS13, nil
+	default:
+		return 0, fmt.Errorf("-tls-min-version must be 1.2 or 1.3, got %q", value)
+	}
+}
+func mustTLSVersionFromFlag(value string) uint16 {
+	version, _ := tlsVersionFromFlag(value)
+	return version
+}
+func tlsVersionName(version uint16) string {
+	if version == tls.VersionTLS13 {
+		return "1.3"
+	}
+	return "1.2"
 }
 
 func rootStoragePolicyFromFlag(value string) collections.RootStoragePolicy {
