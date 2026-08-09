@@ -80,6 +80,8 @@ func TestStandaloneServerOfficialGoDriverExplainReadPlans(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	var response bson.Raw
+	// The official driver converts a deadline to maxTimeMS, which this
+	// deliberately fail-closed explain surface rejects.
 	err = db.RunCommand(context.Background(), bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "a"}}}}}, {Key: "verbosity", Value: "executionStats"}}).Decode(&response)
 	if err != nil {
 		t.Fatalf("driver explain: %v", err)

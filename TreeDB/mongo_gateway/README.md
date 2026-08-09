@@ -177,6 +177,10 @@ and `executionTimeMillis`. A capped execution returns the same planner plus
 execution errors retain the planner with `truncated: false` and a stable
 rejection reason. These gateway-owned counters are not MongoDB
 `totalDocsExamined` metrics and include bounded adaptive candidate work.
+When `winningPlan.stage` is `adaptive_candidate_selection`, `candidatePlans`
+is additionally present: each entry has gateway-owned `stage`, `indexName`,
+and `field` values for an executable candidate probe. It is omitted for all
+other planner stages.
 
 ## Differential compatibility fixtures
 

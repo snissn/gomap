@@ -92,7 +92,10 @@ func TestMongoExplainRejectsUnsupportedOptionAndQueryWithoutMutation(t *testing.
 	rejected := serveCommand(t, server, 101, bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "$where", Value: "true"}}}}}, {Key: "$db", Value: "app"}})
 	assertCommandError(t, rejected, "BadValue")
 	planner, ok := bson.Raw(rejected).Lookup("queryPlanner").DocumentOK()
-	if !ok || planner.Lookup("winningPlan").Document().Lookup("stage").String() == "" {
+	if !ok {
+		t.Fatalf("rejected planner missing: %s", rejected)
+	}
+	if stage, stageOK := planner.Lookup("winningPlan").Document().Lookup("stage").StringValueOK(); !stageOK || stage != "unsupported_route" {
 		t.Fatalf("rejected planner missing: %s", rejected)
 	}
 	after := serveCommand(t, server, 101, bson.D{{Key: "count", Value: "users"}, {Key: "$db", Value: "app"}})
@@ -190,7 +193,7 @@ func TestMongoExplainNullPredicateDoesNotAdvertiseSecondaryIndex(t *testing.T) {
 		t.Fatalf("usableIndexes values: %v", err)
 	}
 	for _, item := range items {
-		if item.Document().Lookup("indexName").StringValue() == "city_1" {
+		if item.Document().Lookup("name").StringValue() == "city_1" {
 			t.Fatalf("null predicate advertised city index: %s", planner)
 		}
 	}

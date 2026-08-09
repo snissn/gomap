@@ -149,41 +149,6 @@ func selectFindPlannerSelection(meta collections.CollectionMeta, plan findPlan) 
 	return findPlannerSelection{stage: "bounded_scan"}
 }
 
-func usableFindIndexes(meta collections.CollectionMeta, plan findPlan) []collections.IndexDefinition {
-	if len(plan.orBranches) != 0 {
-		return nil
-	}
-	usable := make([]collections.IndexDefinition, 0)
-	for _, idx := range meta.Indexes {
-		for _, pred := range plan.predicates {
-			if idx.Field != pred.field || predicateContainsNull(pred) {
-				continue
-			}
-			if isRangePredicate(pred.op) {
-				if _, ok, _, err := indexRangeOptionsForPredicates(plan.predicates, idx); err != nil || !ok {
-					continue
-				}
-			} else if pred.op == findPredicateEq || pred.op == findPredicateIn {
-				compatible := true
-				for _, value := range pred.values {
-					if _, ok := indexScalarForBSONValue(value, idx.ValueType); !ok {
-						compatible = false
-						break
-					}
-				}
-				if !compatible {
-					continue
-				}
-			} else {
-				continue
-			}
-			usable = append(usable, idx)
-			break
-		}
-	}
-	return usable
-}
-
 func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error) {
 	predicates, orBranches, err := parseFindFilter(filter)
 	if err != nil {
