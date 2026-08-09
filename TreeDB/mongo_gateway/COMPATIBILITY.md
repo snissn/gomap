@@ -190,7 +190,7 @@ enabled-path latency claim is made.
 | Command | `delete` / `deleteOne` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, CRUD tests | Exact `_id` accepts legacy limit `0` or `1`; supported non-`_id` filters require `limit: 1`, select natural order, and recheck before deletion. |
 | Command | `listCollections` | `supported subset` standalone; `rejected` in routed cluster mode | `TestMongoCompatibilityMatrix`, metadata tests, `TestMongoRoutedMetadataReadsFailClosedBeforeLocalCatalogObservation` | Minimal filtering and response fields; routed mode has no authoritative catalog binding. |
 | Command | `create` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerCreateCollectionCommand` | Creates a plain TreeDB collection catalog entry; existing collections are treated as idempotent no-op success with a response note instead of MongoDB `NamespaceExists`; capped collections and other MongoDB collection options are rejected. |
-| Command | `createIndexes` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | Single-field ascending indexes only, with `treedbValueType`. |
+| Command | `createIndexes` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | Ordered BSON scalar v2 accepts one through four ascending/descending key components without `treedbValueType`; the explicit `treedbValueType` path remains single-field ascending. No Mongo find planner selection. |
 | Command | `listIndexes` | `supported subset` standalone; `rejected` in routed cluster mode | `TestMongoCompatibilityMatrix`, metadata tests, `TestMongoRoutedMetadataReadsFailClosedBeforeLocalCatalogObservation` | Emits TreeDB-specific `treedbValueType` only when local metadata is authoritative. |
 | Command | `dropIndexes` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | No broad collection/database DDL surface. |
 | Command | `aggregate` | `supported subset` standalone; `rejected` in cluster mode | `TestMongoCompatibilityMatrix`, `TestMongoReadCommandsAggregateCountDistinct`, `TestStandaloneServerOfficialGoDriverAggregateCountDistinct` | Ordered `$match`, top-level inclusion/exclusion `$project`, one-field top-level `$sort`, `$skip`, `$limit`, and `$count` stages are supported with bounded materialization and normal cursors. The exact `$group`/`$sum: 1` shape emitted by the pinned Go driver's `CountDocuments` is also supported. Expressions, other `$group` shapes, write/output stages, `maxTimeMS`, and other options fail closed. |
@@ -265,7 +265,7 @@ implemented.
 | Auto-generated `_id` | `supported subset` | insert tests | Generated ObjectId is gateway-local. |
 | Native BSON collection storage | `supported subset` | `TestMongoCompatibilityMatrix`, BSON storage tests | Preferred current gateway storage path. |
 | JSON / template-v1 bridge storage | `supported subset` | update/materializer tests | Some BSON types are rejected before JSON bridge storage. |
-| BSON string, bool, int32/int64, double, null, ObjectId | `supported` | CRUD/find tests | Indexing requires declared `treedbValueType`. |
+| BSON string, bool, int32/int64, double, null, ObjectId | `supported` | CRUD/find tests | Ordered BSON scalar v2 indexing accepts supported scalar values without `treedbValueType`; legacy homogeneous indexes require it. |
 | Arrays and nested documents | `supported subset` | document validation and dotted predicate tests | No multikey index compatibility claim. |
 | Binary and other non-JSON BSON types | `supported subset` in native BSON mode | `TestMongoCompatibilityMatrix` covers binary insert in BSON mode | JSON/template bridge rejects unsupported BSON types. |
 | Decimal128, date, timestamp, regex, code | `not implemented` / storage-format dependent | Unsupported bridge types reject; native BSON may store unindexed bytes | No query/index compatibility claim. |
@@ -280,7 +280,7 @@ implemented.
 | Supported `treedbValueType` values | `supported subset` | metadata tests | `string`, `bool`, `int64`, `double`. |
 | Ordered BSON scalar v2 compound index (one through four components) | `supported subset` standalone; token/ring reads and all token/ring writes are rejected | `TestCreateAndListCompoundDescendingBSONIndex`, `TestMongoCompatibilityMatrix` | Direct collection scans only; Mongo find planner does not select it until #4065. Arrays/multikey metadata reject. |
 | Ordered BSON scalar v2 descending index | `supported subset` standalone; token/ring reads and all token/ring writes are rejected | `TestCreateAndListCompoundDescendingBSONIndex`, `TestMongoCompatibilityMatrix` | Direct collection scans only; Mongo find planner does not select it until #4065. Hashed, text, wildcard, and geospatial indexes remain unavailable. |
-| Automatic type inference for indexes | `rejected` | `TestMongoCompatibilityMatrix` covers missing `treedbValueType` | Type must be declared explicitly. |
+| Automatic legacy scalar type inference for indexes | `rejected` | `TestMongoCompatibilityMatrix` covers missing `treedbValueType` on the legacy path | Ordered BSON scalar v2 is the default BSON index format; legacy homogeneous types must be declared explicitly. |
 
 ## Durability And Transactions
 

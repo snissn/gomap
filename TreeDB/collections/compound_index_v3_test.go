@@ -526,6 +526,63 @@ func TestCompoundIndexRangeCapsInspectedTombstoneEntries(t *testing.T) {
 	}
 }
 
+func TestCompoundBSONIndexPersistedOverlayConstructorWorkCapReturnsTruncated(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}, Indexes: []IndexDefinition{{
+		Name: "tenant_created", Components: []IndexComponent{{Field: "tenant", Direction: IndexDirectionAscending}, {Field: "createdAt", Direction: IndexDirectionDescending}}, ValueType: IndexValueBSONOrderedV2,
+	}}}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("acquire snapshot")
+	}
+	catalog, err := col.catalogForSnapshot(snap)
+	if err != nil {
+		_ = snap.Close()
+		t.Fatal(err)
+	}
+	_ = snap.Close()
+	// Constructor-time fanout rejects before opening roots, so synthetic IDs
+	// exercise the public truncation contract without unbounded storage setup.
+	injected := *catalog
+	injected.rootOverlays = make(map[string][]uint64, len(catalog.rootOverlays)+1)
+	for name, ids := range catalog.rootOverlays {
+		injected.rootOverlays[name] = append([]uint64(nil), ids...)
+	}
+	rootName := collectionSecondaryRootName("events", "tenant_created")
+	injected.rootOverlays[rootName] = make([]uint64, compoundIndexRangeInspectedCap(1)+1)
+	for i := range injected.rootOverlays[rootName] {
+		injected.rootOverlays[rootName][i] = uint64(i + 1)
+	}
+	current := db.AcquireSnapshot()
+	if current == nil {
+		t.Fatal("acquire current snapshot")
+	}
+	col.catalogMu.Lock()
+	col.catalog = &injected
+	col.catalogSystemRoot = snapshotSystemRoot(current)
+	col.catalogCommitSeq = snapshotCommitSeq(current)
+	col.catalogMu.Unlock()
+	_ = current.Close()
+	prefix := []bson.RawValue{{Type: bson.TypeString, Value: bsoncoreAppendString("acme")}}
+	for _, desc := range []bool{false, true} {
+		ids, truncated, err := col.FindByCompoundIndexRange("tenant_created", CompoundIndexRangeOptions{Prefix: prefix, Limit: 1, Desc: desc})
+		if err != nil || !truncated || len(ids) != 0 {
+			t.Fatalf("desc=%v ids=%q truncated=%v err=%v want empty,true,nil", desc, ids, truncated, err)
+		}
+	}
+}
+
 func TestCompoundIndexPointerCheckpointReopenAndRecreate(t *testing.T) {
 	dir := t.TempDir()
 	opts := backenddb.Options{Dir: dir, ValueLog: backenddb.ValueLogOptions{PointerThreshold: 1, ForcePointers: true}}
