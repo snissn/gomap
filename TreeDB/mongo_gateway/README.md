@@ -162,6 +162,22 @@ database rebuild or explicit offline repair rather than online migration.
 `AuthorizationMetrics` reports only low-cardinality allowed/denied totals; it
 does not expose secrets or query/document payloads.
 
+## Explain contract
+
+`queryPlanner` is selector-only and always reports `namespace`, `winningPlan`
+(`stage`, optional `indexName`, `residualFilter`, and `inMemorySort` when
+applicable), `usableIndexes`, `rejectedIndexes`, `scanBounds`, `sort`,
+`maxScanDocuments`, and `cursorWork`. Scan bounds use field/operator/type,
+cardinality, inclusivity, and fixed privacy-safe value fingerprints; literal
+filter values and TreeDB storage addresses are never returned. `executionStats`
+adds `nReturned`, gateway-owned `candidateDocumentsExamined`,
+`candidateDocumentsMaterialized`, `cursorDocumentsMaterialized`, `scanCap`,
+and `executionTimeMillis`. A capped execution returns the same planner plus
+`truncated: true` and `rejectionReason: scan_cap_exceeded`; other fail-closed
+execution errors retain the planner with `truncated: false` and a stable
+rejection reason. These gateway-owned counters are not MongoDB
+`totalDocsExamined` metrics and include bounded adaptive candidate work.
+
 ## Differential compatibility fixtures
 
 `cmd/mongo_gateway_compat_diff` compares a deliberately small set of declared

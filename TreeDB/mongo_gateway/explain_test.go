@@ -177,6 +177,34 @@ func TestMongoExplainNullPredicateDoesNotAdvertiseSecondaryIndex(t *testing.T) {
 	}
 }
 
+func TestMongoExplainResidualsAndCursorOptionsMatchReadAdmission(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	for _, tc := range []struct {
+		name string
+		cmd  bson.D
+		want bool
+	}{
+		{name: "bounded scan predicate", cmd: bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "active", Value: true}}}}}, {Key: "$db", Value: "app"}}, want: true},
+		{name: "two sided indexed range", cmd: bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(36)}, {Key: "$lt", Value: int64(43)}}}}}}}, {Key: "$db", Value: "app"}}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := serveCommand(t, server, 104, tc.cmd)
+			assertOK(t, resp)
+			got, ok := bson.Raw(resp).Lookup("queryPlanner").Document().Lookup("winningPlan").Document().Lookup("residualFilter").BooleanOK()
+			if !ok || got != tc.want {
+				t.Fatalf("residualFilter=%v ok=%v want %v: %s", got, ok, tc.want, resp)
+			}
+		})
+	}
+	for _, cmd := range []bson.D{
+		{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "batchSize", Value: "bad"}}}, {Key: "$db", Value: "app"}},
+		{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "singleBatch", Value: "bad"}}}, {Key: "$db", Value: "app"}},
+		{{Key: "explain", Value: bson.D{{Key: "aggregate", Value: "users"}, {Key: "pipeline", Value: bson.A{}}, {Key: "cursor", Value: bson.D{{Key: "batchSize", Value: int32(-1)}}}}}, {Key: "$db", Value: "app"}},
+	} {
+		assertCommandError(t, serveCommand(t, server, 104, cmd), "BadValue")
+	}
+}
+
 func TestServerRejectsExplainOPMsgFeatures(t *testing.T) {
 	command := mustDocument(t, bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}}}, {Key: "$db", Value: "app"}})
 	for _, tc := range []struct {

@@ -62,8 +62,9 @@ type findResultSet struct {
 // by explain queryPlanner and by executionStats before any document is opened.
 // It intentionally contains gateway vocabulary only, never storage topology.
 type findPlannerSelection struct {
-	stage     string
-	indexName string
+	stage      string
+	indexName  string
+	indexField string
 }
 
 func selectFindPlannerSelection(meta collections.CollectionMeta, plan findPlan) findPlannerSelection {
@@ -73,20 +74,45 @@ func selectFindPlannerSelection(meta collections.CollectionMeta, plan findPlan) 
 	if _, ok := primaryCandidatePredicate(plan.predicates); ok {
 		return findPlannerSelection{stage: "primary_lookup"}
 	}
+	if usable := usableFindIndexes(meta, plan); len(usable) != 0 {
+		return findPlannerSelection{stage: indexedFindStage(plan, usable[0]), indexName: usable[0].Name, indexField: usable[0].Field}
+	}
+	return findPlannerSelection{stage: "bounded_scan"}
+}
+
+func usableFindIndexes(meta collections.CollectionMeta, plan findPlan) []collections.IndexDefinition {
+	if len(plan.orBranches) != 0 {
+		return nil
+	}
+	usable := make([]collections.IndexDefinition, 0)
 	for _, idx := range meta.Indexes {
 		for _, pred := range plan.predicates {
-			if pred.field != idx.Field {
+			if idx.Field != pred.field || predicateContainsNull(pred) {
 				continue
 			}
 			if isRangePredicate(pred.op) {
-				return findPlannerSelection{stage: "secondary_range_lookup", indexName: idx.Name}
+				if _, ok, _, err := indexRangeOptionsForPredicates(plan.predicates, idx); err != nil || !ok {
+					continue
+				}
+			} else if pred.op == findPredicateEq || pred.op == findPredicateIn {
+				compatible := true
+				for _, value := range pred.values {
+					if _, ok := indexScalarForBSONValue(value, idx.ValueType); !ok {
+						compatible = false
+						break
+					}
+				}
+				if !compatible {
+					continue
+				}
+			} else {
+				continue
 			}
-			if pred.op == findPredicateEq || pred.op == findPredicateIn {
-				return findPlannerSelection{stage: "secondary_equality_lookup", indexName: idx.Name}
-			}
+			usable = append(usable, idx)
+			break
 		}
 	}
-	return findPlannerSelection{stage: "bounded_scan"}
+	return usable
 }
 
 func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error) {
@@ -147,7 +173,6 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 		if err != nil {
 			return findResultSet{}, err
 		}
-		plan.recordCandidates(len(docs))
 		plan.recordReturned(len(docs))
 		return findResultSet{docs: docs, projection: plan.projection}, nil
 	}
@@ -259,7 +284,8 @@ func (s *Server) findPureIndexedRangeLimitDocuments(col *collections.Collection,
 		return nil, true, nil
 	}
 	candidateLimit := candidateLimitWithOverflowSlot(limit)
-	docs, err := documentsForIndexedRange(col, materializer, idx, opts, candidateLimit, limit, false)
+	docs, candidates, err := documentsForIndexedRange(col, materializer, idx, opts, candidateLimit, limit, false)
+	plan.recordCandidates(candidates)
 	plan.recordWinner("secondary_range_lookup", idx.Name)
 	return docs, true, err
 }
@@ -951,7 +977,7 @@ func documentsForIndexedFieldPredicates(col *collections.Collection, materialize
 	if limit, ok := indexedRangeCandidateLimit(plan, idx, maxDocuments); ok {
 		candidateLimit = limit
 	}
-	docs, err := documentsForIndexedRange(col, materializer, idx, opts, candidateLimit, maxDocuments, true)
+	docs, _, err := documentsForIndexedRange(col, materializer, idx, opts, candidateLimit, maxDocuments, true)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1215,14 +1241,14 @@ func compareFloat64IndexValues(left, right float64) int {
 	}
 }
 
-func documentsForIndexedRange(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, idx collections.IndexDefinition, opts collections.IndexRangeOptions, candidateLimit, maxDocuments int, allowOverflow bool) ([]wire.Document, error) {
+func documentsForIndexedRange(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, idx collections.IndexDefinition, opts collections.IndexRangeOptions, candidateLimit, maxDocuments int, allowOverflow bool) ([]wire.Document, int, error) {
 	if candidateLimit <= 0 {
 		candidateLimit = candidateLimitWithOverflowSlot(maxDocuments)
 	}
 	opts.Limit = candidateLimit
 	records, _, err := col.FindDocumentsByIndexRange(idx.Name, opts)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	out := make([]wire.Document, 0, len(records))
 	for _, record := range records {
@@ -1231,17 +1257,14 @@ func documentsForIndexedRange(col *collections.Collection, materializer *collect
 		}
 		doc, err := storedDocumentToBSON(col, materializer, record.Document)
 		if err != nil {
-			return nil, err
+			return nil, len(out), err
 		}
 		out = append(out, doc)
-		if maxDocuments > 0 && len(out) >= maxDocuments {
-			if allowOverflow && len(out) == maxDocuments {
-				continue
-			}
-			return out, nil
+		if maxDocuments > 0 && len(out) > maxDocuments {
+			return out[:maxDocuments], len(out), nil
 		}
 	}
-	return out, nil
+	return out, len(out), nil
 }
 
 func parseFindPredicates(filter wire.Document) ([]findPredicate, error) {

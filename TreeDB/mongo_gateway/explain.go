@@ -177,6 +177,9 @@ func (s *Server) explainFindResponse(ctx context.Context, command wire.Document,
 	if err != nil {
 		return explainPlannerRejected(db, collection, "unsupported_query", err.Error())
 	}
+	if err := validateFindCommandOptions(command, filter); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
 	// This is deliberately before collection opening, matching find's routed
 	// preflight boundary: cluster mode must not observe a local collection.
 	if err := s.preflightClusterFindRoute(ctx, db, collection, plan); err != nil {
@@ -298,6 +301,10 @@ func (s *Server) explainAggregateResponse(ctx context.Context, command wire.Docu
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	} else if err := validateAggregateCursor(cursor); err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	} else if batchSize, set, err := optionalInt32FieldWithPresence(cursor, "batchSize"); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	} else if _, err := normalizeBatchSize(int(batchSize), set, defaultCursorBatchSize); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	stages, err := parseAggregateStages(pipeline)
 	if err != nil {
@@ -363,7 +370,7 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 	if !missing {
 		selection = explainPlannerSelection(col, plan)
 	}
-	winning := bson.D{{Key: "stage", Value: selection.stage}, {Key: "residualFilter", Value: len(plan.predicates) > 1 || len(plan.orBranches) != 0}}
+	winning := bson.D{{Key: "stage", Value: selection.stage}, {Key: "residualFilter", Value: findPlanHasResidualFilter(plan, selection)}}
 	if selection.indexName != "" {
 		winning = append(winning, bson.E{Key: "indexName", Value: selection.indexName})
 	}
@@ -408,7 +415,7 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 		// but its final winner is reported from that shared execution path.
 		winning[0].Value = stats.stage
 		if stats.stage != selection.stage || stats.indexName != selection.indexName {
-			winning = bson.D{{Key: "stage", Value: stats.stage}, {Key: "residualFilter", Value: len(plan.predicates) > 1 || len(plan.orBranches) != 0}}
+			winning = bson.D{{Key: "stage", Value: stats.stage}, {Key: "residualFilter", Value: findPlanHasResidualFilter(plan, findPlannerSelection{stage: stats.stage, indexName: stats.indexName, indexField: selection.indexField})}}
 			if stats.indexName != "" {
 				winning = append(winning, bson.E{Key: "indexName", Value: stats.indexName})
 			}
@@ -450,6 +457,21 @@ func explainPlannerSelection(col *collections.Collection, plan findPlan) findPla
 	return selectFindPlannerSelection(col.MetaView(), plan)
 }
 
+func findPlanHasResidualFilter(plan findPlan, selection findPlannerSelection) bool {
+	if len(plan.orBranches) != 0 || selection.stage == "bounded_scan" || selection.stage == "adaptive_candidate_selection" {
+		return len(plan.predicates) != 0 || len(plan.orBranches) != 0
+	}
+	if selection.stage == "primary_lookup" {
+		return len(plan.predicates) != 1
+	}
+	for _, pred := range plan.predicates {
+		if pred.field != selection.indexField {
+			return true
+		}
+	}
+	return false
+}
+
 func explainCandidatePlans(col *collections.Collection, plan findPlan) bson.A {
 	if col == nil {
 		return bson.A{}
@@ -478,34 +500,8 @@ func explainUsableIndexes(col *collections.Collection, plan findPlan) bson.A {
 		return bson.A{}
 	}
 	out := bson.A{}
-	for _, idx := range col.MetaView().Indexes {
-		for _, pred := range plan.predicates {
-			if idx.Field != pred.field || (pred.op != findPredicateEq && pred.op != findPredicateIn && !isRangePredicate(pred.op)) {
-				continue
-			}
-			if predicateContainsNull(pred) {
-				continue
-			}
-			if isRangePredicate(pred.op) {
-				_, ok, _, err := indexRangeOptionsForPredicates(plan.predicates, idx)
-				if err != nil || !ok {
-					continue
-				}
-			} else {
-				compatible := true
-				for _, value := range pred.values {
-					if _, ok := indexScalarForBSONValue(value, idx.ValueType); !ok {
-						compatible = false
-						break
-					}
-				}
-				if !compatible {
-					continue
-				}
-			}
-			out = append(out, bson.D{{Key: "name", Value: idx.Name}, {Key: "field", Value: idx.Field}, {Key: "kind", Value: indexedFindStage(plan, idx)}})
-			break
-		}
+	for _, idx := range usableFindIndexes(col.MetaView(), plan) {
+		out = append(out, bson.D{{Key: "name", Value: idx.Name}, {Key: "field", Value: idx.Field}, {Key: "kind", Value: indexedFindStage(plan, idx)}})
 	}
 	return out
 }
