@@ -1284,7 +1284,18 @@ func (s *Server) runMongoUpdateCommand(name string, col *collections.Collection,
 	// has already completed all state-independent validation, so the atomic
 	// collection result preserves the command's per-item counts. All other
 	// shapes retain the indexed-error sequential path below.
-	if len(updates) > 1 && mongoUpdateItemsCanUseBatch(col, updates) {
+	batchable := len(updates) > 1 && mongoUpdateItemsCanUseBatch(col, updates)
+	if batchable {
+		seen := make(map[string]struct{}, len(updates))
+		for _, update := range updates {
+			if _, duplicate := seen[string(update.key)]; duplicate {
+				batchable = false
+				break
+			}
+			seen[string(update.key)] = struct{}{}
+		}
+	}
+	if batchable {
 		budget := updates[0].budget
 		if err := budget.reserveTargets(len(updates)); err == nil {
 			results, batched, batchErr := runMongoUpdateBatchResults(col, updates)
