@@ -93,6 +93,9 @@ type StandaloneOptions struct {
 	// AllowInsecureRemote permits plaintext only for an explicitly opted-in
 	// non-loopback listener. It is intended for controlled development only.
 	AllowInsecureRemote bool
+	// AuthenticationEnabled enables SCRAM-SHA-256 connection authentication.
+	// Call Server.AuthCatalog.UpsertPassword before serving to bootstrap users.
+	AuthenticationEnabled bool
 }
 
 // StandaloneServer owns the TreeDB backend, collection manager, and MongoDB
@@ -220,6 +223,18 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	server.DefaultIndexStoragePolicy = normalized.DefaultIndexStoragePolicy
 	server.ClusterSubmitter = normalized.ClusterSubmitter
 	server.ClusterCatalogVersion = normalized.ClusterCatalogVersion
+	server.AuthenticationEnabled = normalized.AuthenticationEnabled
+	if normalized.AuthenticationEnabled {
+		catalog, err := NewAuthCatalog(backend)
+		if err != nil {
+			errs := []error{err}
+			if cleanup != nil {
+				errs = append(errs, cleanup())
+			}
+			return nil, errors.Join(errs...)
+		}
+		server.AuthCatalog = catalog
+	}
 	if normalized.MaxMessageLength > 0 {
 		server.MaxMessageLength = normalized.MaxMessageLength
 	}
@@ -476,6 +491,9 @@ func (s *StandaloneServer) validateListener(ln net.Listener) error {
 		return errors.New("mongo gateway standalone: nil listener")
 	}
 	loopback := isLoopbackListener(ln.Addr())
+	if s.Options.AuthenticationEnabled && !loopback && s.Options.TLSCertFile == "" {
+		return fmt.Errorf("mongo gateway standalone: refusing password authentication on plaintext non-loopback listener %q; configure TLS", ln.Addr())
+	}
 	if !loopback && s.Options.TLSCertFile == "" && !s.Options.AllowInsecureRemote {
 		return fmt.Errorf("mongo gateway standalone: refusing plaintext non-loopback listener %q; configure TLS or set AllowInsecureRemote", ln.Addr())
 	}

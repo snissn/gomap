@@ -92,7 +92,7 @@ an extra probe outside the manifest.
 | read command gap | maxTimeMS on aggregate/count/distinct | rejected | `read-command-gap.maxtimems-on-aggregate-count-distinct` |
 | update subset | findAndModify exact _id no-match | supported subset | `update-subset.findandmodify-exact-id-no-match` |
 | transaction gap | transactions and retryable writes | not implemented | `transaction-gap.transactions-and-retryable-writes` |
-| security gap | authentication and authorization | not implemented | `security-gap.authentication-and-authorization` |
+| security | SCRAM-SHA-256 authentication | supported subset | `security.authentication-scram-sha-256` |
 | security | TLS transport and safe remote listen (#4057) | supported subset | `security.transport-tls-and-safe-remote-listen` |
 | cluster gap | replica-set and sharding advertisement | not implemented | `cluster-gap.replica-set-and-sharding-advertisement` |
 <!-- mongo-compatibility-matrix:end -->
@@ -178,7 +178,7 @@ enabled-path latency claim is made.
 | Wire | `OP_MSG` document sequence for inserts | `supported` | `TestServerInsertAndFindByID` | Document sequences are only accepted where the command supports them. |
 | Wire | `OP_COMPRESSED` | `rejected` | `TestServerRejectsCompressedMessages` | Compression negotiation is not implemented. |
 | Command | `hello` / `isMaster` | `supported subset` | `TestMongoCompatibilityMatrix`, official-driver tests | Minimal server metadata only. |
-| Command | `connectionStatus` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerHandlesConnectionStatus` | Returns unauthenticated `authInfo` users, roles, and privileges; no auth or authorization support. |
+| Command | `connectionStatus` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestSCRAMSHA256EstablishesConnectionIdentityAndGatesCommands` | Returns the authenticated connection identity when SCRAM is enabled; unauthenticated calls return an empty `authInfo` projection. Per-command authorization remains unavailable. |
 | Command | `hostInfo` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerHandlesHostInfo` | Returns minimal local runtime and OS metadata only. |
 | Command | `buildInfo` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerHandlesBuildInfo` | Returns minimal MongoDB-compatible gateway version/build metadata only. |
 | Command | `ping` | `supported` | `TestMongoCompatibilityMatrix` | None for MVP. |
@@ -204,7 +204,7 @@ enabled-path latency claim is made.
 | Command | logical sessions / `endSessions` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerOfficialGoDriverLogicalSession` | Advertises `logicalSessionTimeoutMinutes` and accepts `endSessions`; session IDs are accepted for driver compatibility only. |
 | Command | transactions / retryable writes | `not implemented` | `TestMongoCompatibilityMatrix` rejects transaction and retryable-write markers on supported commands and covers `commitTransaction` absence | Depends on local transaction/WAL/idempotency roadmap. |
 | Command | cluster-mode `hello` primary advertisement | `supported subset` | `TestClusterHelloReflectsAdmissionWritablePrimary` | Uses cluster admission status to avoid advertising writable primary on followers or unavailable admission. |
-| Command | auth / authorization | `not implemented` | Command falls through to `CommandNotFound` | Out of MVP scope. |
+| Command | SCRAM-SHA-256 authentication / authorization | `supported subset` / `not implemented` | `TestSCRAMSHA256EstablishesConnectionIdentityAndGatesCommands`, official-driver SCRAM tests | SCRAM establishes a connection identity from durable verifier-only records; per-command authorization remains out of scope. |
 
 ## Desktop Client Check
 

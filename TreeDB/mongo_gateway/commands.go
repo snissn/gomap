@@ -628,6 +628,16 @@ func (s *Server) findMsgResponse(ctx context.Context, command wire.Document, req
 }
 
 func (s *Server) findMsgResponseInto(ctx context.Context, dst []byte, command wire.Document, requestID, responseTo int32, cursorOwner int64) ([]byte, error) {
+	// handleMsgInto performs admission before selecting this optimized encoder.
+	// Keep the check here too so a future direct caller cannot turn this helper
+	// into a wire-level authentication bypass.
+	if s.authenticationRequired() && !s.authenticated(cursorOwner) {
+		doc, err := commandError(13, "Unauthorized", "Authentication required")
+		if err != nil {
+			return nil, err
+		}
+		return wire.AppendMsgMessage(dst, requestID, responseTo, 0, doc)
+	}
 	payload, err := s.findResponsePayload(ctx, command, cursorOwner)
 	if err != nil {
 		return nil, err
