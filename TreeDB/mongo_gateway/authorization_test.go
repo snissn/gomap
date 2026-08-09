@@ -318,6 +318,12 @@ func TestAuthorizationListFilteringRevocationAndLastAdmin(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertCommandError(t, serveAuthorizationCommand(t, server, 2, 12, bson.D{{Key: "find", Value: "visible"}, {Key: "$db", Value: "app"}}), "Unauthorized")
+	if err := catalog.SetEnabled("admin", "root", false); err == nil {
+		t.Fatal("last server administrator disable succeeded")
+	}
+	if _, err := catalog.VerifyPassword("admin", "root", []byte("root password")); err != nil {
+		t.Fatal("denied last-admin disable changed verifier state")
+	}
 	if err := catalog.SetUserRoles("admin", "root", nil); err == nil {
 		t.Fatal("last server administrator demotion succeeded")
 	}
