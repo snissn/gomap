@@ -6422,22 +6422,34 @@ func dedupeIdenticalVectorIndexDefinitions(defs []collections.VectorIndexDefinit
 
 func sameIndexDefinition(left, right collections.IndexDefinition) bool {
 	if left.Name != right.Name ||
-		left.Field != right.Field ||
 		left.ValueType != right.ValueType ||
 		left.Unique != right.Unique ||
 		left.MultiKey != right.MultiKey ||
 		left.StoragePolicy != right.StoragePolicy {
 		return false
 	}
-	if len(left.Components) != len(right.Components) {
+	leftComponents := indexDefinitionComponents(left)
+	rightComponents := indexDefinitionComponents(right)
+	if len(leftComponents) != len(rightComponents) {
 		return false
 	}
-	for i := range left.Components {
-		if left.Components[i] != right.Components[i] {
+	for i := range leftComponents {
+		if leftComponents[i] != rightComponents[i] {
 			return false
 		}
 	}
 	return true
+}
+
+// indexDefinitionComponents normalizes the legacy single-field spelling for
+// comparisons at the gateway boundary. Collection metadata stores the
+// canonical component form, but a repeated createIndexes command can still
+// present either representation while a catalog is being upgraded.
+func indexDefinitionComponents(def collections.IndexDefinition) []collections.IndexComponent {
+	if len(def.Components) != 0 {
+		return def.Components
+	}
+	return []collections.IndexComponent{{Field: def.Field, Direction: collections.IndexDirectionAscending}}
 }
 
 func sameVectorIndexDefinition(left, right collections.VectorIndexDefinition) bool {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -274,6 +275,57 @@ func TestCompoundReverseScanPersistsOverlayTombstonesAcrossReopen(t *testing.T) 
 		t.Fatal(err)
 	}
 	assertReverse(col)
+}
+
+func TestCompoundIndexRangeCapsInspectedTombstoneEntries(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON, BufferedIndexedOverlayRoots: true, BufferedIndexedWriteMaxDocuments: 128, BufferedIndexedWriteMaxRootRuns: 1, DisableBufferedIndexedAsyncFlush: true}, Indexes: []IndexDefinition{{
+		Name: "tenant_created", Components: []IndexComponent{{Field: "tenant", Direction: IndexDirectionAscending}, {Field: "createdAt", Direction: IndexDirectionDescending}}, ValueType: IndexValueBSONOrderedV2,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const rows = compoundIndexRangeInspectedMultiplier + 1
+	ids := make([][]byte, rows)
+	docs := make([][]byte, rows)
+	for i := range ids {
+		id := fmt.Sprintf("%03d", i)
+		ids[i] = []byte(id)
+		docs[i], err = bson.Marshal(bson.D{{Key: "_id", Value: id}, {Key: "tenant", Value: "acme"}, {Key: "createdAt", Value: int32(i)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatal(err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.CompactRootOverlays(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := col.DeleteBatch(ids); err != nil || deleted != rows {
+		t.Fatalf("DeleteBatch deleted=%d err=%v want %d", deleted, err, rows)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	prefix := []bson.RawValue{{Type: bson.TypeString, Value: bsoncoreAppendString("acme")}}
+	for _, desc := range []bool{false, true} {
+		got, truncated, err := col.FindByCompoundIndexRange("tenant_created", CompoundIndexRangeOptions{Prefix: prefix, Limit: 1, Desc: desc})
+		if err != nil || !truncated || len(got) != 0 {
+			t.Fatalf("desc=%v ids=%q truncated=%v err=%v; want cap after %d inspected tombstones", desc, got, truncated, err, compoundIndexRangeInspectedMultiplier)
+		}
+	}
 }
 
 func TestCompoundIndexPointerCheckpointReopenAndRecreate(t *testing.T) {

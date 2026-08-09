@@ -97,6 +97,13 @@ including after a descending scalar component. The complement rule ends at the
 scalar component boundary, and document-ID decoding is identical in both sort
 directions.
 
+The direct collection compound-range primitive requires a positive result
+limit. In addition to emitting at most that many document IDs, it examines at
+most `limit * 64` physical entries while merging buffered and persisted overlay
+runs. Tombstones and shadowed duplicate entries count against this bound; when
+either bound is reached the primitive returns `truncated=true`. It is not a
+query-planner capability.
+
 ## Durability and compatibility boundary
 
 Golden vectors and reopen tests freeze the byte format. Collection metadata
