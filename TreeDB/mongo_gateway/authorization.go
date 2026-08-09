@@ -669,6 +669,31 @@ func commandStringBytes(doc wire.Document, key string) ([]byte, error) {
 
 func commandAuthorizationTarget(name string, command wire.Document) (authorizationTarget, error) {
 	target := authorizationTarget{}
+	if name == "explain" {
+		inner, err := requiredDocumentField(command, "explain")
+		if err != nil {
+			return target, err
+		}
+		innerName, err := mongoCommandName(inner)
+		if err != nil {
+			return target, err
+		}
+		if !supportedExplainReadCommand(innerName) {
+			return target, errors.New("Mongo gateway explain supports bounded standalone read commands only")
+		}
+		if bson.Raw(inner).Lookup("$db").IsZero() {
+			db, err := commandStringBytes(command, "$db")
+			if err != nil {
+				return target, err
+			}
+			collection, err := commandStringBytes(inner, innerName)
+			if err != nil {
+				return target, err
+			}
+			return authorizationTarget{privilege: authorizationRead, databaseRaw: db, collectionRaw: collection}, nil
+		}
+		return commandAuthorizationTarget(innerName, inner)
+	}
 	switch name {
 	case "hello", "isMaster", "ismaster", "saslStart", "saslContinue", "connectionStatus", "buildInfo", "ping", "endSessions":
 		target.privilege = authorizationPublic
