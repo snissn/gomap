@@ -311,11 +311,6 @@ func (c *AuthCatalog) SetUserRoles(authDB, username string, roles []AuthRoleGran
 	return c.publishAuthorizationRecordLocked(record)
 }
 
-func authRolesInRecord(record authAuthorizationRecord, authDB, username string) ([]AuthRoleGrant, int) {
-	assignment, index := authIdentityInRecord(record, authDB, username)
-	return assignment.Roles, index
-}
-
 func authIdentityInRecord(record authAuthorizationRecord, authDB, username string) (authRoleAssignment, int) {
 	for i := range record.Users {
 		if record.Users[i].AuthDB == authDB && record.Users[i].Username == username {
@@ -405,7 +400,11 @@ func (c *AuthCatalog) createUser(actor AuthUser, authDB, username string, passwo
 	if actorIndex < 0 || actorAssignment.Incarnation != actor.Incarnation || !canManageUserGrants(actorAssignment.Roles, authDB, roles) {
 		return errUserManagementUnauthorized
 	}
-	if _, index := authRolesInRecord(record, authDB, username); index >= 0 {
+	targetAssignment, targetIndex := authIdentityInRecord(record, authDB, username)
+	if targetIndex >= 0 {
+		if !canManageUserGrants(actorAssignment.Roles, authDB, targetAssignment.Roles) {
+			return errUserManagementUnauthorized
+		}
 		return errAuthUserExists
 	}
 	if len(record.Users) >= maxAuthorizationUsers {
@@ -413,6 +412,11 @@ func (c *AuthCatalog) createUser(actor AuthUser, authDB, username string, passwo
 	}
 	raw, lookupErr := getAuthCatalogValue(c.db, authCatalogKey(authDB, username))
 	if lookupErr == nil && len(raw) != 0 {
+		// An orphan verifier has no trustworthy grant anchor. Only serverAdmin,
+		// which can manage every valid current grant, may observe the duplicate.
+		if !hasServerAdmin(actorAssignment.Roles) {
+			return errUserManagementUnauthorized
+		}
 		return errAuthUserExists
 	} else if lookupErr != nil && !errors.Is(lookupErr, treedb.ErrKeyNotFound) {
 		return errAuthenticationFailed
@@ -450,15 +454,6 @@ func (c *AuthCatalog) updateUser(actor AuthUser, authDB, username string, passwo
 	defer c.backend.mu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, err := getAuthCatalogValue(c.db, authCatalogKey(authDB, username)); errors.Is(err, treedb.ErrKeyNotFound) {
-		return errAuthUserNotFound
-	} else if err != nil {
-		return errAuthenticationFailed
-	}
-	stored, err := c.storedRecordLocked(authDB, username)
-	if err != nil {
-		return err
-	}
 	record, err := c.loadAuthorizationRecordLocked()
 	if err != nil {
 		return errAuthenticationFailed
@@ -466,8 +461,24 @@ func (c *AuthCatalog) updateUser(actor AuthUser, authDB, username string, passwo
 	actorAssignment, actorIndex := authIdentityInRecord(record, actor.AuthDB, actor.Username)
 	targetAssignment, targetIndex := authIdentityInRecord(record, authDB, username)
 	currentRoles := targetAssignment.Roles
-	if actorIndex < 0 || actorAssignment.Incarnation != actor.Incarnation || targetIndex < 0 || targetAssignment.Incarnation != stored.Incarnation || !canManageUserGrants(actorAssignment.Roles, authDB, currentRoles) || (updateRoles && !canManageUserGrants(actorAssignment.Roles, authDB, roles)) {
+	if actorIndex < 0 || actorAssignment.Incarnation != actor.Incarnation {
 		return errUserManagementUnauthorized
+	}
+	if targetIndex < 0 {
+		// A missing assignment is indistinguishable from an existing identity
+		// whose current grants this actor cannot manage. Only serverAdmin covers
+		// every possible valid current grant and may receive UserNotFound.
+		if !hasServerAdmin(actorAssignment.Roles) {
+			return errUserManagementUnauthorized
+		}
+		return errAuthUserNotFound
+	}
+	if !canManageUserGrants(actorAssignment.Roles, authDB, currentRoles) || (updateRoles && !canManageUserGrants(actorAssignment.Roles, authDB, roles)) {
+		return errUserManagementUnauthorized
+	}
+	stored, err := c.storedRecordLocked(authDB, username)
+	if err != nil || targetAssignment.Incarnation != stored.Incarnation {
+		return errAuthenticationFailed
 	}
 	if updateRoles && targetIndex >= 0 && stored.Enabled && hasServerAdmin(currentRoles) && !hasServerAdmin(roles) && c.usableServerAdminsLocked(record) == 1 {
 		return errCannotDemoteLastServerAdministrator
@@ -500,15 +511,6 @@ func (c *AuthCatalog) dropUser(actor AuthUser, authDB, username string) error {
 	defer c.backend.mu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, err := getAuthCatalogValue(c.db, authCatalogKey(authDB, username)); errors.Is(err, treedb.ErrKeyNotFound) {
-		return errAuthUserNotFound
-	} else if err != nil {
-		return errAuthenticationFailed
-	}
-	stored, err := c.storedRecordLocked(authDB, username)
-	if err != nil {
-		return err
-	}
 	record, err := c.loadAuthorizationRecordLocked()
 	if err != nil {
 		return errAuthenticationFailed
@@ -516,8 +518,21 @@ func (c *AuthCatalog) dropUser(actor AuthUser, authDB, username string) error {
 	actorAssignment, actorIndex := authIdentityInRecord(record, actor.AuthDB, actor.Username)
 	targetAssignment, targetIndex := authIdentityInRecord(record, authDB, username)
 	currentRoles := targetAssignment.Roles
-	if actorIndex < 0 || actorAssignment.Incarnation != actor.Incarnation || targetIndex < 0 || targetAssignment.Incarnation != stored.Incarnation || !canManageUserGrants(actorAssignment.Roles, authDB, currentRoles) {
+	if actorIndex < 0 || actorAssignment.Incarnation != actor.Incarnation {
 		return errUserManagementUnauthorized
+	}
+	if targetIndex < 0 {
+		if !hasServerAdmin(actorAssignment.Roles) {
+			return errUserManagementUnauthorized
+		}
+		return errAuthUserNotFound
+	}
+	if !canManageUserGrants(actorAssignment.Roles, authDB, currentRoles) {
+		return errUserManagementUnauthorized
+	}
+	stored, err := c.storedRecordLocked(authDB, username)
+	if err != nil || targetAssignment.Incarnation != stored.Incarnation {
+		return errAuthenticationFailed
 	}
 	if targetIndex >= 0 && stored.Enabled && hasServerAdmin(currentRoles) && c.usableServerAdminsLocked(record) == 1 {
 		return errCannotDropLastServerAdministrator

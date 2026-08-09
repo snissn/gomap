@@ -100,6 +100,18 @@ func serveAuthorizationCommand(t *testing.T, server *Server, owner int64, reques
 	return response
 }
 
+func assertAuthorizationErrorsIndistinguishable(t *testing.T, operation string, missing, protected wire.Document) {
+	t.Helper()
+	missingRaw, protectedRaw := bson.Raw(missing), bson.Raw(protected)
+	missingName, _ := missingRaw.Lookup("codeName").StringValueOK()
+	protectedName, _ := protectedRaw.Lookup("codeName").StringValueOK()
+	missingMessage, _ := missingRaw.Lookup("errmsg").StringValueOK()
+	protectedMessage, _ := protectedRaw.Lookup("errmsg").StringValueOK()
+	if missingName != "Unauthorized" || protectedName != missingName || protectedMessage != missingMessage {
+		t.Fatalf("%s leaked target existence: missing=%s protected=%s", operation, missingRaw, protectedRaw)
+	}
+}
+
 func TestAuthorizationRoleMatrixAndPreMutationDenial(t *testing.T) {
 	server, catalog := newAuthorizationTestServer(t)
 	if err := catalog.UpsertPassword("admin", "root", []byte("root password")); err != nil {
@@ -689,12 +701,137 @@ func TestAuthorizationUserManagementScopesMalformedRolesAndUnknownCommands(t *te
 
 	setAuthorizationTestUser(server, 3, "admin", "database-admin")
 	assertOK(t, serveAuthorizationCommand(t, server, 3, 47, bson.D{{Key: "createUser", Value: "empty-db-user"}, {Key: "pwd", Value: "password"}, {Key: "roles", Value: bson.A{}}, {Key: "$db", Value: "app"}}))
+	assertCommandError(t, serveAuthorizationCommand(t, server, 3, 471, bson.D{{Key: "updateUser", Value: "missing"}, {Key: "pwd", Value: "password"}, {Key: "$db", Value: "app"}}), "Unauthorized")
+	assertCommandError(t, serveAuthorizationCommand(t, server, 3, 472, bson.D{{Key: "dropUser", Value: "missing"}, {Key: "$db", Value: "app"}}), "Unauthorized")
+	assertCommandError(t, serveAuthorizationCommand(t, server, 3, 473, bson.D{{Key: "createUser", Value: "other-user"}, {Key: "pwd", Value: "password"}, {Key: "roles", Value: bson.A{"read"}}, {Key: "$db", Value: "app"}}), "DuplicateKey")
 	setAuthorizationTestUser(server, 4, "admin", "server-user-admin")
 	assertOK(t, serveAuthorizationCommand(t, server, 4, 48, bson.D{{Key: "createUser", Value: "server-reader"}, {Key: "pwd", Value: "password"}, {Key: "roles", Value: bson.A{bson.D{{Key: "role", Value: "read"}, {Key: "db", Value: ""}}}}, {Key: "$db", Value: "app"}}))
 	assertCommandError(t, serveAuthorizationCommand(t, server, 4, 49, bson.D{{Key: "createUser", Value: "forbidden-admin"}, {Key: "pwd", Value: "password"}, {Key: "roles", Value: bson.A{"serverAdmin"}}, {Key: "$db", Value: "app"}}), "Unauthorized")
 
 	setAuthorizationTestUser(server, 1, "admin", "root")
 	assertCommandError(t, serveAuthorizationCommand(t, server, 1, 50, bson.D{{Key: "futureMutation", Value: 1}, {Key: "$db", Value: "app"}}), "Unauthorized")
+}
+
+func TestAuthorizationCollectionUserAdminCannotObserveOutOfScopeUserExistence(t *testing.T) {
+	server, catalog := newAuthorizationTestServer(t)
+	for _, user := range []struct {
+		authDB   string
+		username string
+		password string
+	}{
+		{authDB: "admin", username: "root", password: "root password"},
+		{authDB: "app", username: "collection-admin", password: "manager password"},
+		{authDB: "app", username: "other-user", password: "other password"},
+	} {
+		if err := catalog.UpsertPassword(user.authDB, user.username, []byte(user.password)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := catalog.SetUserRoles("app", "collection-admin", []AuthRoleGrant{{Role: AuthRoleUserAdmin, Database: "app", Collection: "items"}}); err != nil {
+		t.Fatal(err)
+	}
+	otherRoles := []AuthRoleGrant{{Role: AuthRoleRead, Database: "app", Collection: "other"}}
+	if err := catalog.SetUserRoles("app", "other-user", otherRoles); err != nil {
+		t.Fatal(err)
+	}
+	orphan, err := prepareSCRAMRecord("app", "orphan", []byte("orphan password"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := setAuthCatalogValueSync(catalog.db, authCatalogKey("app", "orphan"), orphan); err != nil {
+		t.Fatal(err)
+	}
+	setAuthorizationTestUser(server, 2, "app", "collection-admin")
+
+	assertAuthorizationErrorsIndistinguishable(t, "updateUser",
+		serveAuthorizationCommand(t, server, 2, 51, bson.D{{Key: "updateUser", Value: "missing"}, {Key: "pwd", Value: "new password"}, {Key: "$db", Value: "app"}}),
+		serveAuthorizationCommand(t, server, 2, 52, bson.D{{Key: "updateUser", Value: "other-user"}, {Key: "pwd", Value: "new password"}, {Key: "$db", Value: "app"}}),
+	)
+	assertAuthorizationErrorsIndistinguishable(t, "dropUser",
+		serveAuthorizationCommand(t, server, 2, 53, bson.D{{Key: "dropUser", Value: "missing"}, {Key: "$db", Value: "app"}}),
+		serveAuthorizationCommand(t, server, 2, 54, bson.D{{Key: "dropUser", Value: "other-user"}, {Key: "$db", Value: "app"}}),
+	)
+	manageableRoles := bson.A{bson.D{{Key: "role", Value: "read"}, {Key: "db", Value: "app"}, {Key: "collection", Value: "items"}}}
+	assertCommandError(t, serveAuthorizationCommand(t, server, 2, 55, bson.D{{Key: "createUser", Value: "other-user"}, {Key: "pwd", Value: "replacement password"}, {Key: "roles", Value: manageableRoles}, {Key: "$db", Value: "app"}}), "Unauthorized")
+	assertCommandError(t, serveAuthorizationCommand(t, server, 2, 56, bson.D{{Key: "createUser", Value: "orphan"}, {Key: "pwd", Value: "replacement password"}, {Key: "roles", Value: manageableRoles}, {Key: "$db", Value: "app"}}), "Unauthorized")
+
+	if _, err := catalog.VerifyPassword("app", "other-user", []byte("other password")); err != nil {
+		t.Fatal("denied operations changed the existing password")
+	}
+	if _, err := catalog.VerifyPassword("app", "other-user", []byte("new password")); err == nil {
+		t.Fatal("denied update installed the requested password")
+	}
+	if roles, err := catalog.UserRoles("app", "other-user"); err != nil || !reflect.DeepEqual(roles, otherRoles) {
+		t.Fatalf("denied operations changed roles=%v err=%v", roles, err)
+	}
+	if !catalog.userExists("app", "orphan") || catalog.userExists("app", "missing") {
+		t.Fatalf("denied operations changed orphan=%v missing=%v", catalog.userExists("app", "orphan"), catalog.userExists("app", "missing"))
+	}
+}
+
+func TestAuthorizationNarrowUserAdminsCannotObserveProtectedUserExistence(t *testing.T) {
+	server, catalog := newAuthorizationTestServer(t)
+	for _, user := range []struct {
+		authDB   string
+		username string
+	}{
+		{authDB: "admin", username: "root"},
+		{authDB: "admin", username: "database-admin"},
+		{authDB: "admin", username: "server-user-admin"},
+		{authDB: "app", username: "cross-database-user"},
+	} {
+		if err := catalog.UpsertPassword(user.authDB, user.username, []byte(user.username+" password")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := catalog.SetUserRoles("admin", "database-admin", []AuthRoleGrant{{Role: AuthRoleUserAdmin, Database: "app"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.SetUserRoles("admin", "server-user-admin", []AuthRoleGrant{{Role: AuthRoleUserAdmin}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.SetUserRoles("app", "cross-database-user", []AuthRoleGrant{{Role: AuthRoleRead, Database: "payroll"}}); err != nil {
+		t.Fatal(err)
+	}
+	orphan, err := prepareSCRAMRecord("app", "orphan", []byte("orphan password"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := setAuthCatalogValueSync(catalog.db, authCatalogKey("app", "orphan"), orphan); err != nil {
+		t.Fatal(err)
+	}
+
+	setAuthorizationTestUser(server, 2, "admin", "database-admin")
+	assertAuthorizationErrorsIndistinguishable(t, "database updateUser",
+		serveAuthorizationCommand(t, server, 2, 61, bson.D{{Key: "updateUser", Value: "missing"}, {Key: "pwd", Value: "password"}, {Key: "$db", Value: "app"}}),
+		serveAuthorizationCommand(t, server, 2, 62, bson.D{{Key: "updateUser", Value: "cross-database-user"}, {Key: "pwd", Value: "password"}, {Key: "$db", Value: "app"}}),
+	)
+	assertAuthorizationErrorsIndistinguishable(t, "database dropUser",
+		serveAuthorizationCommand(t, server, 2, 63, bson.D{{Key: "dropUser", Value: "missing"}, {Key: "$db", Value: "app"}}),
+		serveAuthorizationCommand(t, server, 2, 64, bson.D{{Key: "dropUser", Value: "cross-database-user"}, {Key: "$db", Value: "app"}}),
+	)
+	assertCommandError(t, serveAuthorizationCommand(t, server, 2, 65, bson.D{{Key: "createUser", Value: "orphan"}, {Key: "pwd", Value: "replacement"}, {Key: "roles", Value: bson.A{"read"}}, {Key: "$db", Value: "app"}}), "Unauthorized")
+
+	setAuthorizationTestUser(server, 3, "admin", "server-user-admin")
+	assertAuthorizationErrorsIndistinguishable(t, "server userAdmin updateUser",
+		serveAuthorizationCommand(t, server, 3, 66, bson.D{{Key: "updateUser", Value: "missing"}, {Key: "pwd", Value: "password"}, {Key: "$db", Value: "admin"}}),
+		serveAuthorizationCommand(t, server, 3, 67, bson.D{{Key: "updateUser", Value: "root"}, {Key: "pwd", Value: "password"}, {Key: "$db", Value: "admin"}}),
+	)
+	assertAuthorizationErrorsIndistinguishable(t, "server userAdmin dropUser",
+		serveAuthorizationCommand(t, server, 3, 68, bson.D{{Key: "dropUser", Value: "missing"}, {Key: "$db", Value: "admin"}}),
+		serveAuthorizationCommand(t, server, 3, 69, bson.D{{Key: "dropUser", Value: "root"}, {Key: "$db", Value: "admin"}}),
+	)
+
+	setAuthorizationTestUser(server, 1, "admin", "root")
+	assertCommandError(t, serveAuthorizationCommand(t, server, 1, 70, bson.D{{Key: "updateUser", Value: "missing"}, {Key: "pwd", Value: "password"}, {Key: "$db", Value: "app"}}), "UserNotFound")
+	assertCommandError(t, serveAuthorizationCommand(t, server, 1, 71, bson.D{{Key: "dropUser", Value: "missing"}, {Key: "$db", Value: "app"}}), "UserNotFound")
+	assertCommandError(t, serveAuthorizationCommand(t, server, 1, 72, bson.D{{Key: "createUser", Value: "orphan"}, {Key: "pwd", Value: "replacement"}, {Key: "roles", Value: bson.A{"read"}}, {Key: "$db", Value: "app"}}), "DuplicateKey")
+	if _, err := catalog.VerifyPassword("app", "cross-database-user", []byte("cross-database-user password")); err != nil {
+		t.Fatal("denied operations changed the protected cross-database user")
+	}
+	if _, err := catalog.VerifyPassword("admin", "root", []byte("root password")); err != nil {
+		t.Fatal("denied operations changed the protected server administrator")
+	}
 }
 
 func TestAuthorizationCreateUserRoleWriteFailureLeavesNoPrivileges(t *testing.T) {

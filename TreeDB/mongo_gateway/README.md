@@ -127,6 +127,11 @@ collection; empty grant sets require database scope. A server-scoped
 `userAdmin` may grant non-administrator server roles, but only `serverAdmin`
 may grant `serverAdmin`. Every user mutation rechecks the actor and target's
 current/requested grants while holding the same backend catalog lock.
+Missing and protected out-of-scope `updateUser`/`dropUser` targets return the
+same generic denial to every narrower `userAdmin`; only `serverAdmin`, which can
+manage every valid current grant, receives explicit user-not-found results for
+an unknown identity. Out-of-scope identities do not expose duplicate-user
+results, and an orphan-verifier collision is visible only to `serverAdmin`.
 
 Authorization runs before collection/index lookup, route resolution, cursor
 creation, or mutation. Catalog lists are filtered, retained cursors are bound
