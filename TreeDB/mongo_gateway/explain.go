@@ -401,10 +401,14 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 				return commandErrorWithFields(commandCodeBadValue, "BadValue", execErr.Error(), bson.D{
 					{Key: "queryPlanner", Value: planner},
 					{Key: "executionStats", Value: bson.D{
+						{Key: "nReturned", Value: int64(0)},
+						{Key: "candidateDocumentsExamined", Value: stats.candidatesExamined},
 						{Key: "truncated", Value: reason == "scan_cap_exceeded"},
 						{Key: "rejectionReason", Value: reason},
 						{Key: "candidateDocumentsMaterialized", Value: stats.candidatesMaterialized},
+						{Key: "cursorDocumentsMaterialized", Value: int64(0)},
 						{Key: "scanCap", Value: int64(s.maxFindScanDocuments())},
+						{Key: "executionTimeMillis", Value: time.Since(start).Milliseconds()},
 					}},
 				})
 			} else {
@@ -443,18 +447,33 @@ func explainPlannerSelection(col *collections.Collection, plan findPlan) findPla
 	if len(plan.orBranches) != 0 {
 		return findPlannerSelection{stage: "bounded_scan"}
 	}
-	candidates := 0
-	if _, ok := primaryCandidatePredicate(plan.predicates); ok {
-		candidates++
-	}
-	candidates += len(explainUsableIndexes(col, plan))
-	if candidates > 1 {
+	candidatePlans := explainCandidatePlans(col, plan)
+	if len(candidatePlans) > 1 {
 		return findPlannerSelection{stage: "adaptive_candidate_selection"}
 	}
-	if candidates == 0 {
+	if len(candidatePlans) == 0 {
 		return findPlannerSelection{stage: "bounded_scan"}
 	}
 	return selectFindPlannerSelection(col.MetaView(), plan)
+}
+
+func explainIndexProbeStages(plan findPlan, idx collections.IndexDefinition) []string {
+	equality, ranges := false, false
+	for _, pred := range plan.predicates {
+		if pred.field != idx.Field {
+			continue
+		}
+		equality = equality || pred.op == findPredicateEq || pred.op == findPredicateIn
+		ranges = ranges || isRangePredicate(pred.op)
+	}
+	out := make([]string, 0, 2)
+	if equality {
+		out = append(out, "secondary_equality_lookup")
+	}
+	if ranges {
+		out = append(out, "secondary_range_lookup")
+	}
+	return out
 }
 
 func findPlanHasResidualFilter(plan findPlan, selection findPlannerSelection) bool {
@@ -480,8 +499,10 @@ func explainCandidatePlans(col *collections.Collection, plan findPlan) bson.A {
 	if _, ok := primaryCandidatePredicate(plan.predicates); ok {
 		out = append(out, bson.D{{Key: "stage", Value: "primary_lookup"}})
 	}
-	for _, item := range explainUsableIndexes(col, plan) {
-		out = append(out, item)
+	for _, idx := range usableFindIndexes(col.MetaView(), plan) {
+		for _, stage := range explainIndexProbeStages(plan, idx) {
+			out = append(out, bson.D{{Key: "stage", Value: stage}, {Key: "indexName", Value: idx.Name}, {Key: "field", Value: idx.Field}})
+		}
 	}
 	return out
 }

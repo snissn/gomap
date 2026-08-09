@@ -140,6 +140,11 @@ func TestMongoExplainExecutionStatsPreservesBoundedScanRejectionContext(t *testi
 	if got, ok := stats.Lookup("truncated").BooleanOK(); !ok || !got {
 		t.Fatalf("truncated=%v ok=%v want true", got, ok)
 	}
+	for _, field := range []string{"nReturned", "candidateDocumentsExamined", "candidateDocumentsMaterialized", "cursorDocumentsMaterialized", "executionTimeMillis", "scanCap"} {
+		if _, ok := stats.Lookup(field).Int64OK(); !ok {
+			t.Fatalf("rejected executionStats missing integer %q: %s", field, stats)
+		}
+	}
 	if _, ok := bson.Raw(resp).Lookup("queryPlanner").DocumentOK(); !ok {
 		t.Fatalf("queryPlanner missing from rejected explain: %s", resp)
 	}
@@ -207,17 +212,31 @@ func TestMongoExplainResidualsAndCursorOptionsMatchReadAdmission(t *testing.T) {
 
 func TestMongoExplainSameIndexProbeAccountingAndWinnerStage(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
-	resp := serveCommand(t, server, 105, bson.D{
+	command := bson.D{
 		{Key: "explain", Value: bson.D{
 			{Key: "find", Value: "users"},
 			{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$in", Value: bson.A{int64(36), int64(37), int64(42)}}, {Key: "$lt", Value: int64(37)}}}}},
 		}},
-		{Key: "verbosity", Value: "executionStats"}, {Key: "$db", Value: "app"},
-	})
+		{Key: "$db", Value: "app"},
+	}
+	plannerOnly := serveCommand(t, server, 105, command)
+	assertOK(t, plannerOnly)
+	plannerWinning := bson.Raw(plannerOnly).Lookup("queryPlanner").Document().Lookup("winningPlan").Document()
+	if got, ok := plannerWinning.Lookup("stage").StringValueOK(); !ok || got != "adaptive_candidate_selection" {
+		t.Fatalf("queryPlanner stage=%q ok=%v want adaptive_candidate_selection: %s", got, ok, plannerOnly)
+	}
+	if residual, ok := plannerWinning.Lookup("residualFilter").BooleanOK(); !ok || !residual {
+		t.Fatalf("queryPlanner residual=%v ok=%v want true", residual, ok)
+	}
+	command = append(command, bson.E{Key: "verbosity", Value: "executionStats"})
+	resp := serveCommand(t, server, 105, command)
 	assertOK(t, resp)
 	winning := bson.Raw(resp).Lookup("queryPlanner").Document().Lookup("winningPlan").Document()
 	if got, ok := winning.Lookup("stage").StringValueOK(); !ok || got != "secondary_range_lookup" {
 		t.Fatalf("winner stage=%q ok=%v want secondary_range_lookup: %s", got, ok, resp)
+	}
+	if residual, ok := winning.Lookup("residualFilter").BooleanOK(); !ok || !residual {
+		t.Fatalf("execution winner residual=%v ok=%v want true", residual, ok)
 	}
 	stats := bson.Raw(resp).Lookup("executionStats").Document()
 	if got, ok := stats.Lookup("candidateDocumentsMaterialized").Int64OK(); !ok || got < 4 {
