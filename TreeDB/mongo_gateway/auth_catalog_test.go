@@ -158,13 +158,78 @@ func TestAuthenticationEnabledWithoutCatalogFailsClosed(t *testing.T) {
 }
 
 func TestSyntheticSCRAMVerifierIsServerAndUserScoped(t *testing.T) {
-	a, b := NewServer(), NewServer()
-	a1, a2, b1 := a.syntheticSCRAMRecord("admin", "missing"), a.syntheticSCRAMRecord("admin", "other"), b.syntheticSCRAMRecord("admin", "missing")
-	if bytes.Equal(a1.Salt, a2.Salt) || bytes.Equal(a1.Salt, b1.Salt) {
-		t.Fatal("synthetic verifier salt is not server/user scoped")
+	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	catalog, err := NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a1, err := catalog.syntheticSCRAMRecord("admin", "missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a2, err := catalog.syntheticSCRAMRecord("admin", "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(a1.Salt, a2.Salt) {
+		t.Fatal("synthetic verifier salt is not user scoped")
 	}
 	if a1.Iterations != defaultSCRAMIterations || len(a1.StoredKey) != sha256.Size || len(a1.ServerKey) != sha256.Size {
 		t.Fatalf("bad synthetic record: %+v", a1)
+	}
+}
+
+func TestAuthCatalogSyntheticVerifierSecretSurvivesReopenAndFailsClosedOnCorruption(t *testing.T) {
+	dir := t.TempDir()
+	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := catalog.syntheticSCRAMRecord("admin", "missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := catalog.syntheticSCRAMRecord("admin", "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(first.Salt, other.Salt) {
+		t.Fatal("synthetic salts do not differentiate identities")
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err = NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := catalog.syntheticSCRAMRecord("admin", "missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first.Salt, reopened.Salt) || !bytes.Equal(first.StoredKey, reopened.StoredKey) || !bytes.Equal(first.ServerKey, reopened.ServerKey) {
+		t.Fatal("synthetic verifier changed across catalog reopen")
+	}
+	if err := db.SetSync(authCatalogSyntheticSecretKey(), []byte(`{"version":1,"secret":"bad"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewAuthCatalog(db); err == nil {
+		t.Fatal("corrupt synthetic secret opened fail-open")
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

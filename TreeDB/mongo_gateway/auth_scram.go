@@ -114,7 +114,10 @@ func (s *Server) saslStartResponse(command wire.Document, owner int64) (wire.Doc
 	if !valid {
 		// Preserve the saslStart shape for unknown/disabled/corrupt records so
 		// username existence is not exposed before proof verification.
-		record = s.syntheticSCRAMRecord(authDB, username)
+		record, err = s.AuthCatalog.syntheticSCRAMRecord(authDB, username)
+		if err != nil {
+			return authFailure()
+		}
 	}
 	random := make([]byte, 18)
 	if _, err := rand.Read(random); err != nil {
@@ -209,14 +212,6 @@ func boolToInt(v bool) int {
 		return 1
 	}
 	return 0
-}
-
-func (s *Server) syntheticSCRAMRecord(authDB, username string) AuthUserRecord {
-	context := []byte(authDB + "\x00" + username)
-	salt := hmacSHA256(s.authSyntheticKey[:], append([]byte("scram-synthetic-salt\x00"), context...))
-	stored := hmacSHA256(s.authSyntheticKey[:], append([]byte("scram-synthetic-stored\x00"), context...))
-	server := hmacSHA256(s.authSyntheticKey[:], append([]byte("scram-synthetic-server\x00"), context...))
-	return AuthUserRecord{Version: authCatalogVersion, Username: username, AuthDB: authDB, Salt: salt, Iterations: defaultSCRAMIterations, StoredKey: stored, ServerKey: server, Enabled: false}
 }
 
 func (s *Server) expireSCRAMConversationsLocked(state *authConnectionState, now time.Time) {

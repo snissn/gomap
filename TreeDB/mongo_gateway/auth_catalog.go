@@ -17,6 +17,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/xdg-go/stringprep"
 	"golang.org/x/crypto/pbkdf2"
 )
@@ -59,8 +60,9 @@ type authCatalogStore interface {
 	SetSync([]byte, []byte) error
 }
 type AuthCatalog struct {
-	db authCatalogStore
-	mu sync.Mutex
+	db              authCatalogStore
+	mu              sync.Mutex
+	syntheticSecret [sha256.Size]byte
 	// beforeSetEnabledWrite is a test-only interleaving hook. It is called
 	// while mu is held so a rotation cannot race a stale record write.
 	beforeSetEnabledWrite func()
@@ -70,11 +72,62 @@ func NewAuthCatalog(db authCatalogStore) (*AuthCatalog, error) {
 	if db == nil {
 		return nil, errors.New("mongo gateway auth: nil database")
 	}
-	return &AuthCatalog{db: db}, nil
+	secret, err := loadOrCreateSyntheticSecret(db)
+	if err != nil {
+		return nil, fmt.Errorf("mongo gateway auth: synthetic verifier secret: %w", err)
+	}
+	return &AuthCatalog{db: db, syntheticSecret: secret}, nil
 }
 
 func authCatalogKey(authDB, username string) []byte {
 	return []byte("\x00mongo-gateway/auth/v1/" + base64.RawURLEncoding.EncodeToString([]byte(authDB)) + "/" + base64.RawURLEncoding.EncodeToString([]byte(username)))
+}
+
+func authCatalogSyntheticSecretKey() []byte {
+	return []byte("\x00mongo-gateway/auth/v1/synthetic-secret")
+}
+
+type authCatalogSyntheticSecretRecord struct {
+	Version int    `json:"version"`
+	Secret  []byte `json:"secret"`
+}
+
+func loadOrCreateSyntheticSecret(db authCatalogStore) ([sha256.Size]byte, error) {
+	var secret [sha256.Size]byte
+	raw, err := db.Get(authCatalogSyntheticSecretKey())
+	if err == nil && len(raw) != 0 {
+		return decodeSyntheticSecret(raw)
+	}
+	if err != nil && !errors.Is(err, treedb.ErrKeyNotFound) {
+		return secret, errAuthenticationFailed
+	}
+	if _, err := rand.Read(secret[:]); err != nil {
+		return secret, err
+	}
+	raw, err = json.Marshal(authCatalogSyntheticSecretRecord{Version: authCatalogVersion, Secret: secret[:]})
+	if err != nil {
+		return secret, err
+	}
+	if err := db.SetSync(authCatalogSyntheticSecretKey(), raw); err != nil {
+		return secret, err
+	}
+	// Read back the durable value: a catalog never operates with a merely
+	// in-memory fallback secret, and a later reopen observes this exact value.
+	raw, err = db.Get(authCatalogSyntheticSecretKey())
+	if err != nil {
+		return secret, errAuthenticationFailed
+	}
+	return decodeSyntheticSecret(raw)
+}
+
+func decodeSyntheticSecret(raw []byte) ([sha256.Size]byte, error) {
+	var secret [sha256.Size]byte
+	var record authCatalogSyntheticSecretRecord
+	if json.Unmarshal(raw, &record) != nil || record.Version != authCatalogVersion || len(record.Secret) != len(secret) {
+		return secret, errAuthenticationFailed
+	}
+	copy(secret[:], record.Secret)
+	return secret, nil
 }
 
 func validAuthField(value string) bool {
@@ -120,6 +173,17 @@ func hmacSHA256(key, data []byte) []byte {
 	h := hmac.New(sha256.New, key)
 	_, _ = h.Write(data)
 	return h.Sum(nil)
+}
+
+func (c *AuthCatalog) syntheticSCRAMRecord(authDB, username string) (AuthUserRecord, error) {
+	if c == nil || !validAuthField(authDB) || !validAuthField(username) {
+		return AuthUserRecord{}, errAuthenticationFailed
+	}
+	context := []byte(authDB + "\x00" + username)
+	salt := hmacSHA256(c.syntheticSecret[:], append([]byte("scram-synthetic-salt\x00"), context...))
+	stored := hmacSHA256(c.syntheticSecret[:], append([]byte("scram-synthetic-stored\x00"), context...))
+	server := hmacSHA256(c.syntheticSecret[:], append([]byte("scram-synthetic-server\x00"), context...))
+	return AuthUserRecord{Version: authCatalogVersion, Username: username, AuthDB: authDB, Salt: salt, Iterations: defaultSCRAMIterations, StoredKey: stored, ServerKey: server, Enabled: false}, nil
 }
 
 func (c *AuthCatalog) record(authDB, username string) (AuthUserRecord, error) {
