@@ -17,11 +17,70 @@ import (
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"golang.org/x/crypto/pbkdf2"
 )
+
+type failingAuthCatalogPointerBatch struct {
+	batchpkg.Interface
+	writeErr error
+	ptr      page.ValuePtr
+	closed   bool
+}
+
+func (b *failingAuthCatalogPointerBatch) SetPointer(_ []byte, ptr page.ValuePtr) error {
+	b.ptr = ptr
+	return nil
+}
+
+func (b *failingAuthCatalogPointerBatch) WriteSync() error { return b.writeErr }
+
+func (b *failingAuthCatalogPointerBatch) Close() error {
+	b.closed = true
+	return nil
+}
+
+type failingAuthCatalogLargeValueStore struct {
+	ptr      page.ValuePtr
+	batch    *failingAuthCatalogPointerBatch
+	released []page.ValuePtr
+}
+
+func (s *failingAuthCatalogLargeValueStore) Get([]byte) ([]byte, error) {
+	return nil, treedb.ErrKeyNotFound
+}
+func (s *failingAuthCatalogLargeValueStore) SetSync([]byte, []byte) error {
+	return batchpkg.ErrValueTooLarge
+}
+func (s *failingAuthCatalogLargeValueStore) AppendValueLogValues([][]byte) ([]page.ValuePtr, error) {
+	return []page.ValuePtr{s.ptr}, nil
+}
+func (s *failingAuthCatalogLargeValueStore) ReleaseValueLogValues(ptrs []page.ValuePtr) {
+	s.released = append(s.released, ptrs...)
+}
+func (s *failingAuthCatalogLargeValueStore) NewBatch() batchpkg.Interface { return s.batch }
+
+func TestSetAuthCatalogValueSyncReleasesAbandonedPersistentValueLogPointer(t *testing.T) {
+	writeErr := errors.New("injected early publication failure")
+	ptr := page.ValuePtr{FileID: page.ValueLogFileID(7), Offset: 11, Length: 17}
+	batch := &failingAuthCatalogPointerBatch{writeErr: writeErr}
+	store := &failingAuthCatalogLargeValueStore{ptr: ptr, batch: batch}
+
+	err := setAuthCatalogValueSync(store, []byte("catalog"), []byte("large authorization record"))
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("setAuthCatalogValueSync err=%v want %v", err, writeErr)
+	}
+	if batch.ptr != ptr || !batch.closed {
+		t.Fatalf("pointer publication ptr=%+v closed=%v want ptr=%+v closed=true", batch.ptr, batch.closed, ptr)
+	}
+	if !reflect.DeepEqual(store.released, []page.ValuePtr{ptr}) {
+		t.Fatalf("released pointers=%v want exactly [%v]", store.released, ptr)
+	}
+}
 
 func TestAuthCatalogForcedPersistentValueLogReopenAndCorruptionFailClosed(t *testing.T) {
 	dir := t.TempDir()
@@ -283,7 +342,7 @@ func TestAuthCatalogLegacyAndMismatchedIncarnationsFailClosed(t *testing.T) {
 				if _, rolesErr := reopened.effectiveRolesForUser(identity); rolesErr == nil {
 					t.Fatal("mismatched verifier and grant incarnations authorized")
 				}
-				if upsertErr := reopened.UpsertPassword("admin", "candidate", []byte("candidate password")); upsertErr == nil || !strings.Contains(upsertErr.Error(), "offline repair required") {
+				if upsertErr := reopened.UpsertPassword("admin", "candidate", []byte("candidate password")); !errors.Is(upsertErr, errNoUsableServerAdministrator) {
 					t.Fatalf("mismatched catalog bootstrap err=%v want offline repair requirement", upsertErr)
 				}
 				return
@@ -422,7 +481,7 @@ func TestAuthCatalogBootstrapRefusesUnusableNonemptyAdministratorCatalog(t *test
 		t.Fatal(err)
 	}
 	err = catalog.UpsertPassword("admin", "candidate", []byte("candidate password"))
-	if err == nil || !strings.Contains(err.Error(), "offline repair required") {
+	if !errors.Is(err, errNoUsableServerAdministrator) {
 		t.Fatalf("UpsertPassword err=%v want offline repair requirement", err)
 	}
 	if catalog.userExists("admin", "candidate") {

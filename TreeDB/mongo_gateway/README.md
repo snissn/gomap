@@ -148,7 +148,7 @@ publishing roles: if the second durable write fails, the old credential is
 invalid while the new credential retains the old grants. These multi-record
 operations are fail-closed but not rollback-atomic. Growing versioned verifier
 and grant records use TreeDB's persistent ValueLog with durable pointer
-publication; it is neither an ephemeral WAL nor legacy slab storage. A failed
+publication; it is independent of the redo WAL. A failed
 or ambiguous grant publication invalidates the immutable authorization
 snapshot so the next protected command reloads durable state or denies closed.
 The version-2 verifier and grant payloads require a nonzero account incarnation;

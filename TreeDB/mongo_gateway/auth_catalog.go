@@ -46,6 +46,7 @@ var (
 	errCannotDropLastServerAdministrator    = errors.New("mongo gateway authorization: cannot drop the last enabled server administrator")
 	errCannotDemoteLastServerAdministrator  = errors.New("mongo gateway authorization: cannot demote the last enabled server administrator")
 	errUserManagementUnauthorized           = errors.New("mongo gateway authorization: user management not authorized")
+	errNoUsableServerAdministrator          = errors.New("mongo gateway authorization: no usable server administrator; offline repair required")
 )
 
 // AuthUser is a safe identity projection. It deliberately contains no
@@ -237,20 +238,21 @@ func setAuthCatalogValueSync(db authCatalogStore, key, value []byte) error {
 	if appendErr != nil {
 		return appendErr
 	}
+	// The DB publication path consumes this pin after it owns the pointer. A
+	// guarded release is then a no-op; on every early/error path it abandons the
+	// pointer so ValueLog GC is not blocked indefinitely.
+	defer largeStore.ReleaseValueLogValues(ptrs)
 	if len(ptrs) != 1 {
-		largeStore.ReleaseValueLogValues(ptrs)
 		return errors.New("mongo gateway auth: value-log append returned an invalid pointer count")
 	}
 	rawBatch := largeStore.NewBatch()
 	batch, ok := rawBatch.(authCatalogPointerBatch)
 	if !ok {
 		_ = rawBatch.Close()
-		largeStore.ReleaseValueLogValues(ptrs)
 		return errors.New("mongo gateway auth: backend does not support persistent value-log pointers")
 	}
 	if err := batch.SetPointer(key, ptrs[0]); err != nil {
 		_ = batch.Close()
-		largeStore.ReleaseValueLogValues(ptrs)
 		return err
 	}
 	writeErr := batch.WriteSync()

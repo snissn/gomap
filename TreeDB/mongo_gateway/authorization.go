@@ -573,7 +573,7 @@ func (c *AuthCatalog) ensureBootstrapAdminLocked(record *authAuthorizationRecord
 	// not recover a non-empty catalog whose administrator records became
 	// unusable; that requires offline repair rather than privilege escalation.
 	if len(record.Users) != 0 {
-		return false, errors.New("mongo gateway authorization: no usable server administrator; offline repair required")
+		return false, errNoUsableServerAdministrator
 	}
 	if len(record.Users) >= maxAuthorizationUsers {
 		return false, errors.New("mongo gateway authorization: user limit exceeded")
