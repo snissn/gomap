@@ -46,11 +46,43 @@ type findPlan struct {
 	skip       int32
 	limit      int32
 	projection compiledProjection
+	stats      *findExecutionStats
 }
 
 type findResultSet struct {
 	docs       []wire.Document
 	projection compiledProjection
+}
+
+// findPlannerSelection is the metadata-only half of find planning. It is used
+// by explain queryPlanner and by executionStats before any document is opened.
+// It intentionally contains gateway vocabulary only, never storage topology.
+type findPlannerSelection struct {
+	stage     string
+	indexName string
+}
+
+func selectFindPlannerSelection(meta collections.CollectionMeta, plan findPlan) findPlannerSelection {
+	if len(plan.orBranches) != 0 {
+		return findPlannerSelection{stage: "bounded_scan"}
+	}
+	if _, ok := primaryCandidatePredicate(plan.predicates); ok {
+		return findPlannerSelection{stage: "primary_lookup"}
+	}
+	for _, idx := range meta.Indexes {
+		for _, pred := range plan.predicates {
+			if pred.field != idx.Field {
+				continue
+			}
+			if isRangePredicate(pred.op) {
+				return findPlannerSelection{stage: "secondary_range_lookup", indexName: idx.Name}
+			}
+			if pred.op == findPredicateEq || pred.op == findPredicateIn {
+				return findPlannerSelection{stage: "secondary_equality_lookup", indexName: idx.Name}
+			}
+		}
+	}
+	return findPlannerSelection{stage: "bounded_scan"}
 }
 
 func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error) {
@@ -85,6 +117,11 @@ func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error
 }
 
 func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findResultSet, error) {
+	// Keep executionStats and queryPlanner on the same metadata-only selector.
+	// The executor may refine this to its actual winner after bounded candidate
+	// work, which is then recorded below.
+	selection := selectFindPlannerSelection(col.MetaView(), plan)
+	plan.recordWinner(selection.stage, selection.indexName)
 	materializer, err := storedDocumentMaterializerForCollection(col)
 	if err != nil {
 		return findResultSet{}, err
@@ -99,12 +136,15 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 		if err != nil {
 			return findResultSet{}, err
 		}
+		plan.recordReturned(len(docs))
 		return findResultSet{docs: docs, projection: plan.projection}, nil
 	}
 	if docs, ok, err := s.findPureIndexedRangeLimitDocuments(col, materializer, plan); ok || err != nil {
 		if err != nil {
 			return findResultSet{}, err
 		}
+		plan.recordCandidates(len(docs))
+		plan.recordReturned(len(docs))
 		return findResultSet{docs: docs, projection: plan.projection}, nil
 	}
 	docs, err := s.findCandidateDocuments(col, materializer, plan)
@@ -146,6 +186,7 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 	if len(docs) > 0 {
 		docs = append([]wire.Document(nil), docs...)
 	}
+	plan.recordReturned(len(docs))
 	return findResultSet{docs: docs, projection: plan.projection}, nil
 }
 
@@ -210,10 +251,12 @@ func (s *Server) findPureIndexedRangeLimitDocuments(col *collections.Collection,
 		return nil, ok, err
 	}
 	if empty || limit == 0 {
+		plan.recordWinner("secondary_range_lookup", idx.Name)
 		return nil, true, nil
 	}
 	candidateLimit := candidateLimitWithOverflowSlot(limit)
 	docs, err := documentsForIndexedRange(col, materializer, idx, opts, candidateLimit, limit, false)
+	plan.recordWinner("secondary_range_lookup", idx.Name)
 	return docs, true, err
 }
 
@@ -252,6 +295,7 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, materialize
 	meta := col.MetaView()
 	maxDocuments := s.maxFindScanDocuments()
 	if len(plan.orBranches) != 0 {
+		plan.recordWinner("bounded_scan", "")
 		records, truncated, err := col.ScanDocuments(maxDocuments)
 		if err != nil {
 			return nil, err
@@ -267,6 +311,7 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, materialize
 			}
 			out = append(out, doc)
 		}
+		plan.recordCandidates(len(out))
 		return out, nil
 	}
 	var primaryDocs []wire.Document
@@ -279,20 +324,30 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, materialize
 		}
 		primaryDocs = docs
 		primarySet = true
+		// Primary candidates are materialized while comparing this path with
+		// usable secondary indexes, so they are actual planner work even if a
+		// secondary path eventually wins.
+		plan.recordCandidates(len(docs))
 	}
-	if docs, ok, err := s.bestIndexedCandidateDocuments(col, materializer, meta, plan, maxDocuments); ok || err != nil {
+	if docs, indexedStage, indexedName, ok, err := s.bestIndexedCandidateDocuments(col, materializer, meta, plan, maxDocuments); ok || err != nil {
 		if err != nil {
 			if primarySet {
-				return s.limitCandidateDocuments(primaryDocs)
+				plan.recordWinner("primary_lookup", "")
+				docs, limitErr := s.limitCandidateDocuments(primaryDocs)
+				return docs, limitErr
 			}
 			return nil, err
 		}
 		if !primarySet || len(docs) < len(primaryDocs) {
-			return s.limitCandidateDocuments(docs)
+			plan.recordWinner(indexedStage, indexedName)
+			docs, limitErr := s.limitCandidateDocuments(docs)
+			return docs, limitErr
 		}
 	}
 	if primarySet {
-		return s.limitCandidateDocuments(primaryDocs)
+		plan.recordWinner("primary_lookup", "")
+		docs, limitErr := s.limitCandidateDocuments(primaryDocs)
+		return docs, limitErr
 	}
 	records, truncated, err := col.ScanDocuments(maxDocuments)
 	if err != nil {
@@ -301,6 +356,7 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, materialize
 	if truncated {
 		return nil, fmt.Errorf("Mongo gateway find requires a bounded scan and exceeded %d documents", maxDocuments)
 	}
+	plan.recordWinner("bounded_scan", "")
 	out := make([]wire.Document, 0, len(records))
 	for _, record := range records {
 		doc, err := storedDocumentToBSON(col, materializer, record.Document)
@@ -309,6 +365,7 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, materialize
 		}
 		out = append(out, doc)
 	}
+	plan.recordCandidates(len(out))
 	return out, nil
 }
 
@@ -320,6 +377,7 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, material
 	docs := make([]wire.Document, 0)
 	matched := 0
 	truncated, err := col.ScanDocumentsFunc(maxDocuments, func(record collections.DocumentRecord) (bool, error) {
+		plan.recordCandidate()
 		var match, ok bool
 		var err error
 		if len(plan.orBranches) == 0 {
@@ -368,6 +426,7 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, material
 	if truncated {
 		return nil, true, fmt.Errorf("Mongo gateway find requires a bounded scan and exceeded %d documents", maxDocuments)
 	}
+	plan.recordWinner("bounded_scan", "")
 	return docs, true, nil
 }
 
@@ -710,23 +769,43 @@ func (s *Server) limitCandidateDocuments(docs []wire.Document) ([]wire.Document,
 	return docs, nil
 }
 
-func (s *Server) bestIndexedCandidateDocuments(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, meta collections.CollectionMeta, plan findPlan, maxDocuments int) ([]wire.Document, bool, error) {
+func (s *Server) bestIndexedCandidateDocuments(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, meta collections.CollectionMeta, plan findPlan, maxDocuments int) ([]wire.Document, string, string, bool, error) {
 	var best []wire.Document
+	bestStage, bestName := "", ""
 	bestSet := false
 	for _, idx := range meta.Indexes {
 		docs, ok, err := documentsForIndexedFieldPredicates(col, materializer, plan, idx, maxDocuments)
 		if err != nil {
-			return nil, false, err
+			return nil, "", "", false, err
 		}
 		if !ok {
 			continue
 		}
+		// The selector has materialized every usable index candidate to make
+		// its choice. Account for all of that work, not merely the winner.
+		plan.recordCandidates(len(docs))
 		if !bestSet || len(docs) < len(best) {
 			best = docs
+			bestStage, bestName = indexedFindStage(plan, idx), idx.Name
 			bestSet = true
 		}
 	}
-	return best, bestSet, nil
+	return best, bestStage, bestName, bestSet, nil
+}
+
+func indexedFindStage(plan findPlan, idx collections.IndexDefinition) string {
+	for _, pred := range plan.predicates {
+		if pred.field != idx.Field {
+			continue
+		}
+		if isRangePredicate(pred.op) {
+			return "secondary_range_lookup"
+		}
+		if pred.op == findPredicateEq || pred.op == findPredicateIn {
+			return "secondary_equality_lookup"
+		}
+	}
+	return "secondary_equality_lookup"
 }
 
 func primaryCandidatePredicate(predicates []findPredicate) (findPredicate, bool) {

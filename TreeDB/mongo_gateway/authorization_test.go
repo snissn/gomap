@@ -315,6 +315,7 @@ func TestAuthorizationEverySupportedCommandHasExplicitPrivilege(t *testing.T) {
 		"aggregate":        authorizationRead,
 		"count":            authorizationRead,
 		"distinct":         authorizationRead,
+		"explain":          authorizationRead,
 		"getMore":          authorizationRead,
 		"killCursors":      authorizationRead,
 		"listIndexes":      authorizationMetadataRead,
@@ -345,6 +346,9 @@ func TestAuthorizationEverySupportedCommandHasExplicitPrivilege(t *testing.T) {
 			value = int64(1)
 		}
 		doc := bson.D{{Key: name, Value: value}, {Key: "collection", Value: "items"}, {Key: "$db", Value: "app"}}
+		if name == "explain" {
+			doc = bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "items"}, {Key: "$db", Value: "app"}}}, {Key: "$db", Value: "app"}}
+		}
 		target, err := commandAuthorizationTarget(name, mustDocument(t, doc))
 		if err != nil || target.privilege != want {
 			t.Fatalf("%s target=%+v want=%v err=%v", name, target, want, err)
