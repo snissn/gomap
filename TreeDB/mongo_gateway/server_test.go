@@ -1284,6 +1284,33 @@ func TestServerUpdateBatchesDistinctIDs(t *testing.T) {
 	}
 }
 
+func TestServerUpdateBatchVectorMaintenanceIsCommitAmbiguous(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	s.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	index := bson.D{{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}}, {Key: "name", Value: "embedding_vector"}, {Key: "treedbIndexType", Value: "vector"}, {Key: "treedbVector", Value: bson.D{{Key: "dimensions", Value: int32(2)}, {Key: "metric", Value: "cosine"}, {Key: "m", Value: int32(16)}, {Key: "efConstruction", Value: int32(128)}, {Key: "efSearch", Value: int32(64)}, {Key: "encoding", Value: "float32"}}}}
+	assertOK(t, serveCommand(t, s, 2290, bson.D{{Key: "createIndexes", Value: "users"}, {Key: "indexes", Value: bson.A{index}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, s, 2291, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "embedding", Value: bson.A{1.0, 2.0}}}, bson.D{{Key: "_id", Value: "u2"}, {Key: "embedding", Value: bson.A{1.0, 2.0}}}}}, {Key: "$db", Value: "app"}}))
+	updates := bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "embedding", Value: bson.A{1.0, 2.0, 3.0}}}}}}}, bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "embedding", Value: bson.A{1.0, 2.0, 3.0}}}}}}}}
+	response := serveCommand(t, s, 2292, bson.D{{Key: "update", Value: "users"}, {Key: "ordered", Value: false}, {Key: "updates", Value: updates}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, response, "ShutdownInProgress")
+	if !bson.Raw(response).Lookup("writeErrors").IsZero() {
+		t.Fatalf("ambiguous batch returned indexed errors: %s", response)
+	}
+	for _, id := range []string{"u1", "u2"} {
+		find := serveCommand(t, s, 2293, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: id}}}, {Key: "$db", Value: "app"}})
+		values, _ := cursorFirstBatch(t, find)[0].Lookup("embedding").Array().Values()
+		if len(values) != 3 {
+			t.Fatalf("%s vector len=%d", id, len(values))
+		}
+	}
+}
+
 func TestServerUpdateBatchTemplateV1UpdatesDistinctIDs(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
