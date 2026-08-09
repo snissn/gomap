@@ -321,6 +321,82 @@ func TestMongoMissingCollectionAdmissionReplaysExactIDTargetBudget(t *testing.T)
 	}
 }
 
+func TestMongoUnorderedNativeBSONInsertPlanningErrorContinues(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	s.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "createIndexes", Value: "users"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"}}}}, {Key: "$db", Value: "app"}}))
+	tooLarge := strings.Repeat("x", 2<<20)
+	response := serveCommand(t, s, 2, bson.D{{Key: "insert", Value: "users"}, {Key: "ordered", Value: false}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "oversized"}, {Key: "email", Value: tooLarge}},
+		bson.D{{Key: "_id", Value: "later"}, {Key: "email", Value: "later@example.com"}},
+	}}, {Key: "$db", Value: "app"}})
+	assertIndexedWriteError(t, response, 0)
+	assertInt32(t, response, "n", 1)
+	assertMongoDocumentAbsent(t, s, "users", "oversized")
+	assertMongoDocumentPresent(t, s, "users", "later")
+}
+
+func TestMongoUnorderedNativeBSONUpdatePlanningErrorContinues(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	s.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "createIndexes", Value: "users"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, s, 2, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "u1@example.com"}},
+		bson.D{{Key: "_id", Value: "u2"}, {Key: "email", Value: "u2@example.com"}},
+	}}, {Key: "$db", Value: "app"}}))
+	response := serveCommand(t, s, 3, bson.D{{Key: "update", Value: "users"}, {Key: "ordered", Value: false}, {Key: "updates", Value: bson.A{
+		// The string secondary index rejects this stored-document-dependent
+		// value type during native batch planning. It is a valid update command,
+		// so unordered execution must fall back to indexed per-item handling.
+		bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: int32(42)}}}}}},
+		bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "updated@example.com"}}}}}},
+	}}, {Key: "$db", Value: "app"}})
+	assertIndexedWriteError(t, response, 0)
+	assertInt32(t, response, "n", 1)
+	assertMongoDocumentFieldString(t, s, "users", "u1", "email", "u1@example.com")
+	assertMongoDocumentFieldString(t, s, "users", "u2", "email", "updated@example.com")
+}
+
+func assertMongoDocumentAbsent(t *testing.T, s *Server, collection, id string) {
+	t.Helper()
+	response := serveCommand(t, s, 100, bson.D{{Key: "find", Value: collection}, {Key: "filter", Value: bson.D{{Key: "_id", Value: id}}}, {Key: "$db", Value: "app"}})
+	if batch := cursorFirstBatch(t, response); len(batch) != 0 {
+		t.Fatalf("%s/%s unexpectedly exists: %s", collection, id, response)
+	}
+}
+
+func assertMongoDocumentPresent(t *testing.T, s *Server, collection, id string) {
+	t.Helper()
+	response := serveCommand(t, s, 100, bson.D{{Key: "find", Value: collection}, {Key: "filter", Value: bson.D{{Key: "_id", Value: id}}}, {Key: "$db", Value: "app"}})
+	if batch := cursorFirstBatch(t, response); len(batch) != 1 {
+		t.Fatalf("%s/%s not found: %s", collection, id, response)
+	}
+}
+
+func assertMongoDocumentFieldString(t *testing.T, s *Server, collection, id, field, want string) {
+	t.Helper()
+	response := serveCommand(t, s, 100, bson.D{{Key: "find", Value: collection}, {Key: "filter", Value: bson.D{{Key: "_id", Value: id}}}, {Key: "$db", Value: "app"}})
+	batch := cursorFirstBatch(t, response)
+	if len(batch) != 1 {
+		t.Fatalf("%s/%s not found: %s", collection, id, response)
+	}
+	if got, ok := batch[0].Lookup(field).StringValueOK(); !ok || got != want {
+		t.Fatalf("%s/%s %s=%q ok=%v want %q", collection, id, field, got, ok, want)
+	}
+}
+
 func TestMongoInsertMinimumResponseEnvelopeRetainsTerminalError(t *testing.T) {
 	// At the minimum accepted envelope there is no ordinary error reservation
 	// left, but a pre-mutation runtime rejection must still be observable.

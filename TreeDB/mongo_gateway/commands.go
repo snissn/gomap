@@ -155,12 +155,13 @@ func (s *Server) runMongoInsertCommand(name string, col *collections.Collection,
 		}
 		if _, batchErr := col.InsertBatchValidatedBSON(ids, stored); batchErr == nil {
 			return marshalInsertResponseWithWriteErrors(int32(len(ids)), nil)
-		} else if !collections.IsDuplicateKeyError(batchErr) || errors.Is(batchErr, collections.ErrCommitAmbiguous) {
+		} else if errors.Is(batchErr, collections.ErrCommitAmbiguous) {
 			return mongoInsertCommandError(batchErr)
 		} else {
-			// The collection planner proved this duplicate batch did not publish.
-			// Give its atomic-granule reservation back before the indexed fallback
-			// reserves each real item.
+			// A non-ambiguous native batch failure is pre-publication. This includes
+			// duplicate conflicts and item/planning failures (for example an
+			// oversized secondary-index key). Give the atomic reservation back and
+			// preserve Mongo's indexed ordered/unordered semantics per item.
 			budget.refundTargets(len(ids))
 		}
 	}
@@ -1465,7 +1466,10 @@ func (s *Server) runMongoUpdateCommand(name string, col *collections.Collection,
 				if errors.Is(batchErr, collections.ErrCommitAmbiguous) {
 					return mongoCommitAmbiguousCommandError(batchErr)
 				}
-				return mongoUpdateWriteCommandError(batchErr)
+				// UpdateBatchItemError and other planner failures are known to have
+				// occurred before publication. Fall back to the indexed sequential
+				// path so unordered commands can continue at later original indices.
+				batched = false
 			}
 			if batched {
 				var matched, modified int32
