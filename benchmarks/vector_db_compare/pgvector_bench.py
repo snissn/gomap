@@ -15,7 +15,7 @@ from typing import Any
 import numpy as np
 import psycopg
 
-from common import load_vectors, max_rss_bytes, parse_ints, percentile, phase
+from common import load_exact_truth, load_vectors, max_rss_bytes, parse_ints, parse_ordered_ints, percentile, phase
 
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -196,19 +196,11 @@ def search_one(conn: psycopg.Connection, args: argparse.Namespace, query: str, t
     return [int(row[0]) for row in rows]
 
 
-def exact_topk(docs: np.ndarray, query: np.ndarray, top_k: int) -> set[int]:
-    scores = docs @ query
-    idx = np.argpartition(-scores, top_k - 1)[:top_k]
-    idx = idx[np.argsort(-scores[idx])]
-    return {int(i) + 1 for i in idx}
-
-
 def validate_recall(
     conn: psycopg.Connection,
     args: argparse.Namespace,
-    docs: np.ndarray,
     query_literals: list[str],
-    queries: np.ndarray,
+    truth: list[set[int]],
     top_k: int,
     validate_queries: int,
     min_recall: float,
@@ -217,9 +209,9 @@ def validate_recall(
     exact_total = 0
     ann_total = 0
     overlap = 0
-    count = min(validate_queries, len(queries))
+    count = min(validate_queries, len(query_literals), len(truth))
     for i in range(count):
-        exact = exact_topk(docs, queries[i], top_k)
+        exact = truth[i]
         ann = set(search_one(conn, args, query_literals[i], top_k))
         exact_total += len(exact)
         ann_total += len(ann)
@@ -349,6 +341,8 @@ def main() -> None:
     parser.add_argument("--m", type=int, default=16)
     parser.add_argument("--ef-construction", type=int, default=128)
     parser.add_argument("--ef-search", type=int, default=128)
+    parser.add_argument("--ef-search-budgets", default="")
+    parser.add_argument("--warmup", type=int, default=0)
     parser.add_argument("--min-recall", type=float, default=0.95)
     args = parser.parse_args()
     args.created_schema = False
@@ -365,17 +359,32 @@ def main() -> None:
         all_queries = load_vectors(dataset_dir / manifest["query_vectors_file"], manifest["queries"], manifest["dimensions"])
         queries = all_queries[: min(args.queries, len(all_queries))]
         query_literals = [vector_literal(query) for query in queries]
+        truth = load_exact_truth(dataset_dir, manifest)
+        if args.top_k != manifest["top_k"] or args.validate_queries > len(truth):
+            parser.error("--top-k and --validate-queries must fit the manifest-bound exact truth")
         concurrency = parse_ints(args.search_concurrency)
+        budgets = parse_ordered_ints(args.ef_search_budgets) if args.ef_search_budgets else [args.ef_search]
+        if args.warmup < 0 or args.warmup > len(query_literals):
+            parser.error("--warmup must be between zero and the available query count")
 
         phases, postgres_info = build_database(args, manifest, docs)
         conn, reopen = reopen_database(args)
         search_plan = verify_hnsw_search_plan(conn, args, query_literals[0]) if query_literals else {"verified_hnsw_index": False, "reason": "no queries"}
-        validation = validate_recall(conn, args, docs, query_literals, queries, args.top_k, args.validate_queries, args.min_recall)
         storage = storage_usage(conn, args, manifest["docs"])
-        conn.close()
-
         levels = sorted({1, *concurrency})
-        search_benchmarks = [benchmark_search(args, query_literals, level) for level in levels]
+        budget_searches = []
+        for budget in budgets:
+            args.ef_search = budget
+            configure_search_session(conn, args)
+            validation = validate_recall(conn, args, query_literals, truth, args.top_k, args.validate_queries, args.min_recall)
+            search_benchmarks = []
+            for level in levels:
+                if args.warmup:
+                    benchmark_search(args, query_literals[: args.warmup], level)
+                search_benchmarks.append(benchmark_search(args, query_literals, level))
+            budget_searches.append({"ef_search": budget, "validation": validation, "search_benchmarks": search_benchmarks})
+        conn.close()
+        first = budget_searches[0]
 
         result = {
             "backend": "pgvector",
@@ -392,15 +401,18 @@ def main() -> None:
             "top_k": args.top_k,
             "m": args.m,
             "ef_construction": args.ef_construction,
-            "ef_search": args.ef_search,
+            "ef_search": first["ef_search"],
+            "ef_search_budgets": budgets,
+            "warmup_queries_per_cell": args.warmup,
             "insert": phases["insert"],
             "build": phases["build"],
             "create_total": phases["create_total"],
             "reopen_load": reopen,
             "search_plan": search_plan,
-            "validation": validation,
-            "search": search_benchmarks[0],
-            "search_benchmarks": search_benchmarks,
+            "validation": first["validation"],
+            "search": first["search_benchmarks"][0],
+            "search_benchmarks": first["search_benchmarks"],
+            "budget_searches": budget_searches,
             "storage_after_build": storage,
             "memory": {"max_rss_bytes": max_rss_bytes()},
         }

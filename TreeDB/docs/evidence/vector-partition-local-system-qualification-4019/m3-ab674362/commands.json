@@ -1,0 +1,18 @@
+{
+  "raw_evidence_sha256": "1681a86606e2d9d2238475e3d8badd7aa7a32e4aed7a7065040bea990650ea56",
+  "runners": [
+    {
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/run_m3_treedb.py",
+      "sha256": "1831177a99e0576d2ca4169cd4eb438ab19d35bd80e499ebb66a9a7a080aca4d"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/run_m3_container.py",
+      "sha256": "45e8936f6df65a1092cd7c2dfab96f56365234737ba89d36d604bf1fd21fb065"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/run_m3_external.py",
+      "sha256": "ed7875712ba73e11731e164a258ec9af9570287a5b2020bc1c393f7b0be4a2b0"
+    }
+  ],
+  "source_head_sha": "ab674362838365e68297a49816872012d273039f"
+}

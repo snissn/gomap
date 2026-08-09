@@ -454,6 +454,9 @@ func run(args []string, stdout io.Writer) error {
 	if len(args) > 0 && args[0] == "system-bench" {
 		return runVectorPartitionSystemBenchV1(args[1:], stdout)
 	}
+	if len(args) > 0 && args[0] == "system-export-dataset" {
+		return runVectorPartitionSystemExportDatasetV1(args[1:], stdout)
+	}
 	if len(args) > 0 && args[0] == "generate-truth-cache" {
 		return runGenerateTruthCache(args[1:], stdout)
 	}

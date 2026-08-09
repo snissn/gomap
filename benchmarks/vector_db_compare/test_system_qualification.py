@@ -79,6 +79,7 @@ class SystemQualificationContractTest(unittest.TestCase):
                         {
                             "repetition": repetition,
                             "status": "valid",
+                            "input_identity": copy.deepcopy(corpus),
                             "noise": {"valid": True, "load_1": 0.1, "load_5": 0.1, "load_15": 0.1},
                             "warmup_queries_per_cell": 1000,
                             "budget_order": ordered_budgets,
@@ -87,6 +88,11 @@ class SystemQualificationContractTest(unittest.TestCase):
                             "searches": searches,
                         }
                     )
+                    if contract["id"] == "treedb_container_multi_daemon":
+                        repetitions[-1]["resources"]["container_allocations"] = [
+                            {"cpuset_cpus": cpus, "memory_bytes": 6 * 1024**3, "memory_swap_bytes": 6 * 1024**3, "pids_limit": 768}
+                            for cpus in ("0-2", "3-5", "6-8", "9-11")
+                        ]
                 corpus_runs.append({"id": corpus["id"], "repetitions": repetitions})
             rows.append({"id": contract["id"], "status": "valid", "boundary": copy.deepcopy(contract["boundary"]), "identity": identity, "corpora": corpus_runs})
         return {
@@ -175,6 +181,16 @@ class SystemQualificationContractTest(unittest.TestCase):
         reused_topology["rows"][4]["identity"]["topology_identity_sha256"] = reused_topology["rows"][0]["identity"]["topology_identity_sha256"]
         with self.assertRaisesRegex(ContractError, "topology identities"):
             validate_result(self.plan, self.plan_sha256, reused_topology)
+
+        wrong_input = self.result()
+        wrong_input["rows"][3]["corpora"][0]["repetitions"][0]["input_identity"]["fixture_checksum"] = "f" * 64
+        with self.assertRaisesRegex(ContractError, "accepted corpus"):
+            validate_result(self.plan, self.plan_sha256, wrong_input)
+
+        wrong_allocation = self.result()
+        wrong_allocation["rows"][2]["corpora"][0]["repetitions"][0]["resources"]["container_allocations"][0]["cpuset_cpus"] = "0-11"
+        with self.assertRaisesRegex(ContractError, "resource allocation"):
+            validate_result(self.plan, self.plan_sha256, wrong_allocation)
 
     def test_incomplete_row_is_preserved_but_cannot_qualify(self) -> None:
         result = self.result()

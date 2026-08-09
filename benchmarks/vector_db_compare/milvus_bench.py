@@ -14,7 +14,7 @@ from typing import Any
 
 import numpy as np
 
-from common import load_vectors, max_rss_bytes, parse_ints, percentile, phase
+from common import load_exact_truth, load_vectors, max_rss_bytes, parse_ints, parse_ordered_ints, percentile, phase
 
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -61,12 +61,6 @@ def search_one(client: Any, args: argparse.Namespace, query: np.ndarray, top_k: 
     if len(set(ids)) != top_k:
         raise RuntimeError("Milvus returned duplicate document IDs")
     return ids
-
-
-def exact_topk(docs: np.ndarray, query: np.ndarray, top_k: int) -> set[int]:
-    scores = docs @ query
-    indices = np.argpartition(-scores, top_k - 1)[:top_k]
-    return {int(i) + 1 for i in indices}
 
 
 def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.ndarray, data_type: Any) -> tuple[dict[str, Any], Any]:
@@ -146,15 +140,15 @@ def reopen_database(args: argparse.Namespace, expected_docs: int) -> tuple[Any, 
 def validate_recall(
     client: Any,
     args: argparse.Namespace,
-    docs: np.ndarray,
     queries: np.ndarray,
+    truth: list[set[int]],
 ) -> dict[str, Any]:
     started = time.perf_counter()
     exact_total = 0
     overlap = 0
-    count = min(args.validate_queries, len(queries))
+    count = min(args.validate_queries, len(queries), len(truth))
     for i in range(count):
-        exact = exact_topk(docs, queries[i], args.top_k)
+        exact = truth[i]
         ann = set(search_one(client, args, queries[i], args.top_k))
         exact_total += len(exact)
         overlap += len(exact & ann)
@@ -282,6 +276,8 @@ def main() -> None:
     parser.add_argument("--m", type=int, default=16)
     parser.add_argument("--ef-construction", type=int, default=128)
     parser.add_argument("--ef-search", type=int, default=128)
+    parser.add_argument("--ef-search-budgets", default="")
+    parser.add_argument("--warmup", type=int, default=0)
     parser.add_argument("--min-recall", type=float, default=0.95)
     args = parser.parse_args()
     args.created_collection = False
@@ -304,17 +300,34 @@ def main() -> None:
     docs = load_vectors(dataset_dir / manifest["document_vectors_file"], manifest["docs"], manifest["dimensions"])
     all_queries = load_vectors(dataset_dir / manifest["query_vectors_file"], manifest["queries"], manifest["dimensions"])
     queries = all_queries[: min(args.queries, len(all_queries))]
-    parse_ints(args.search_concurrency)
+    truth = load_exact_truth(dataset_dir, manifest)
+    if args.top_k != manifest["top_k"] or args.validate_queries > len(truth):
+        parser.error("--top-k and --validate-queries must fit the manifest-bound exact truth")
+    concurrency = parse_ints(args.search_concurrency)
+    budgets = parse_ordered_ints(args.ef_search_budgets) if args.ef_search_budgets else [args.ef_search]
+    if args.warmup < 0 or args.warmup > len(queries):
+        parser.error("--warmup must be between zero and the available query count")
 
     try:
         phases, _ = build_database(args, manifest, docs, DataType)
         client, reopen, index_description = reopen_database(args, manifest["docs"])
         search_plan = {"verified_hnsw_index": True, **index_description}
-        validation = validate_recall(client, args, docs, queries)
         server_version = client.get_server_version()
         client.close()
-        levels = sorted({1, *parse_ints(args.search_concurrency)})
-        search_benchmarks = [benchmark_search(args, queries, level) for level in levels]
+        levels = sorted({1, *concurrency})
+        budget_searches = []
+        for budget in budgets:
+            args.ef_search = budget
+            client = new_client(args)
+            validation = validate_recall(client, args, queries, truth)
+            client.close()
+            search_benchmarks = []
+            for level in levels:
+                if args.warmup:
+                    benchmark_search(args, queries[: args.warmup], level)
+                search_benchmarks.append(benchmark_search(args, queries, level))
+            budget_searches.append({"ef": budget, "validation": validation, "search_benchmarks": search_benchmarks})
+        first = budget_searches[0]
         result = {
             "backend": "milvus",
             "engine": "milvus_standalone",
@@ -329,15 +342,18 @@ def main() -> None:
             "top_k": args.top_k,
             "m": args.m,
             "ef_construction": args.ef_construction,
-            "ef_search": args.ef_search,
+            "ef_search": first["ef"],
+            "ef_search_budgets": budgets,
+            "warmup_queries_per_cell": args.warmup,
             "insert": phases["insert"],
             "build": phases["build"],
             "create_total": phases["create_total"],
             "reopen_load": reopen,
             "search_plan": search_plan,
-            "validation": validation,
-            "search": search_benchmarks[0],
-            "search_benchmarks": search_benchmarks,
+            "validation": first["validation"],
+            "search": first["search_benchmarks"][0],
+            "search_benchmarks": first["search_benchmarks"],
+            "budget_searches": budget_searches,
             "storage_after_build": storage_usage(Path(args.storage_dir) if args.storage_dir else None, manifest["docs"]),
             "memory": {"max_rss_bytes": max_rss_bytes()},
         }
