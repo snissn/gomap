@@ -328,6 +328,56 @@ func TestFindByCompoundIndexRangeHonorsDirectionsBoundsAndTieIDs(t *testing.T) {
 	assertIDs(got, "b", "e", "c")
 }
 
+func TestCompoundBSONIndexUpdateBSONSetTracksNonLeadingComponent(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON, BufferedIndexedWrites: true}, Indexes: []IndexDefinition{{
+		Name: "tenant_created", Components: []IndexComponent{{Field: "tenant", Direction: IndexDirectionAscending}, {Field: "createdAt", Direction: IndexDirectionDescending}}, ValueType: IndexValueBSONOrderedV2, Unique: true,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := func(id string, created int32) []byte {
+		raw, marshalErr := bson.Marshal(bson.D{{Key: "_id", Value: id}, {Key: "tenant", Value: "acme"}, {Key: "createdAt", Value: created}})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		return raw
+	}
+	if _, err := col.Insert([]byte("u1"), doc("u1", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{Key: "createdAt", Value: mustBSONRawValue(t, int32(2))}})
+	if err != nil || !matched || !modified {
+		t.Fatalf("UpdateBSONSet matched=%v modified=%v err=%v want true true nil", matched, modified, err)
+	}
+	stringRaw := bson.RawValue{Type: bson.TypeString, Value: bsoncoreAppendString("acme")}
+	intRaw := func(value int32) bson.RawValue {
+		return bson.RawValue{Type: bson.TypeInt32, Value: []byte{byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24)}}
+	}
+	oldIDs, truncated, err := col.FindByCompoundIndexRange("tenant_created", CompoundIndexRangeOptions{Prefix: []bson.RawValue{stringRaw}, Lower: IndexRangeBound{Value: intRaw(1), Inclusive: true}, Upper: IndexRangeBound{Value: intRaw(1), Inclusive: true}, Limit: 2})
+	if err != nil || truncated || len(oldIDs) != 0 {
+		t.Fatalf("old component scan ids=%q truncated=%v err=%v want empty,false,nil", oldIDs, truncated, err)
+	}
+	newIDs, truncated, err := col.FindByCompoundIndexRange("tenant_created", CompoundIndexRangeOptions{Prefix: []bson.RawValue{stringRaw}, Lower: IndexRangeBound{Value: intRaw(2), Inclusive: true}, Upper: IndexRangeBound{Value: intRaw(2), Inclusive: true}, Limit: 2})
+	if err != nil || truncated || len(newIDs) != 1 || !bytes.Equal(newIDs[0], []byte("u1")) {
+		t.Fatalf("new component scan ids=%q truncated=%v err=%v want [u1],false,nil", newIDs, truncated, err)
+	}
+	if _, err := col.Insert([]byte("u2"), doc("u2", 2)); !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("new compound key duplicate err=%v want unique conflict", err)
+	}
+}
+
 func TestCompoundReverseScanPersistsOverlayTombstonesAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
 	db, err := backenddb.Open(backenddb.Options{Dir: dir})

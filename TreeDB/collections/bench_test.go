@@ -1324,13 +1324,27 @@ func BenchmarkCollectionBSONCompoundIndexComponents(b *testing.B) {
 			})
 			b.Run("scan", func(b *testing.B) {
 				_, col := openBenchmarkCollection(b, "compound_scan", index)
+				scanDocument := func(id string, i int) []byte {
+					fields := bson.D{{Key: "_id", Value: id}, {Key: "k0", Value: "prefix"}}
+					for j := 1; j < componentCount; j++ {
+						fields = append(fields, bson.E{Key: fmt.Sprintf("k%d", j), Value: fmt.Sprintf("v%03d", (i+j)%64)})
+					}
+					raw, err := bson.Marshal(fields)
+					if err != nil {
+						b.Fatal(err)
+					}
+					return raw
+				}
 				for i := 0; i < 64; i++ {
 					id := fmt.Sprintf("%08d", i)
-					if _, err := col.Insert([]byte(id), document(id, i)); err != nil {
+					if _, err := col.Insert([]byte(id), scanDocument(id, i)); err != nil {
 						b.Fatal(err)
 					}
 				}
-				prefix := bson.Raw(document("00000000", 0)).Lookup("k0")
+				prefix := bson.Raw(scanDocument("00000000", 0)).Lookup("k0")
+				if ids, truncated, err := col.FindByCompoundIndexRange("compound", collections.CompoundIndexRangeOptions{Prefix: []bson.RawValue{prefix}, Limit: 64}); err != nil || truncated || len(ids) != 64 {
+					b.Fatalf("scan fixture ids=%d truncated=%v err=%v want 64,false,nil", len(ids), truncated, err)
+				}
 				b.ReportAllocs()
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
@@ -1341,15 +1355,35 @@ func BenchmarkCollectionBSONCompoundIndexComponents(b *testing.B) {
 			})
 			b.Run("prefix_range_mixed_direction", func(b *testing.B) {
 				_, col := openBenchmarkCollection(b, "compound_prefix_range", index)
+				scanDocument := func(id string, i int) []byte {
+					fields := bson.D{{Key: "_id", Value: id}, {Key: "k0", Value: "prefix"}}
+					for j := 1; j < componentCount; j++ {
+						fields = append(fields, bson.E{Key: fmt.Sprintf("k%d", j), Value: fmt.Sprintf("v%03d", (i+j)%64)})
+					}
+					raw, err := bson.Marshal(fields)
+					if err != nil {
+						b.Fatal(err)
+					}
+					return raw
+				}
 				for i := 0; i < 64; i++ {
 					id := fmt.Sprintf("%08d", i)
-					if _, err := col.Insert([]byte(id), document(id, i)); err != nil {
+					if _, err := col.Insert([]byte(id), scanDocument(id, i)); err != nil {
 						b.Fatal(err)
 					}
 				}
-				first := bson.Raw(document("00000000", 0))
+				first := bson.Raw(scanDocument("00000000", 0))
 				prefix := first.Lookup("k0")
-				lower := first.Lookup("k1")
+				lower := bson.Raw(scanDocument("00000000", 16)).Lookup("k1")
+				upper := bson.Raw(scanDocument("00000000", 47)).Lookup("k1")
+				if componentCount > 1 {
+					for _, reverse := range []bool{false, true} {
+						ids, truncated, err := col.FindByCompoundIndexRange("compound", collections.CompoundIndexRangeOptions{Prefix: []bson.RawValue{prefix}, Lower: collections.IndexRangeBound{Value: lower, Inclusive: true}, Upper: collections.IndexRangeBound{Value: upper, Inclusive: true}, Limit: 64, Desc: reverse})
+						if err != nil || truncated || len(ids) != 32 {
+							b.Fatalf("prefix range fixture reverse=%v ids=%d truncated=%v err=%v want 32,false,nil", reverse, len(ids), truncated, err)
+						}
+					}
+				}
 				b.ReportAllocs()
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
@@ -1362,7 +1396,8 @@ func BenchmarkCollectionBSONCompoundIndexComponents(b *testing.B) {
 					}
 				}
 			})
-			b.Run("checkpoint", func(b *testing.B) {
+			b.Run("checkpoint_after_write", func(b *testing.B) {
+				b.Setenv("TREEDB_COLLECTION_BUFFERED_INDEXED_WRITES", "false")
 				backend, col := openBenchmarkCollection(b, "compound_checkpoint", index)
 				for i := 0; i < 64; i++ {
 					id := fmt.Sprintf("%08d", i)
@@ -1370,15 +1405,19 @@ func BenchmarkCollectionBSONCompoundIndexComponents(b *testing.B) {
 						b.Fatal(err)
 					}
 				}
-				if err := backend.Checkpoint(); err != nil {
-					b.Fatal(err)
-				}
 				b.ReportAllocs()
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
+					b.StopTimer()
+					id := fmt.Sprintf("checkpoint-%08d", i)
+					if _, err := col.Insert([]byte(id), document(id, 64+i)); err != nil {
+						b.Fatal(err)
+					}
+					b.StartTimer()
 					if err := backend.Checkpoint(); err != nil {
 						b.Fatal(err)
 					}
+					b.StopTimer()
 				}
 			})
 			b.Run("reopen", func(b *testing.B) {

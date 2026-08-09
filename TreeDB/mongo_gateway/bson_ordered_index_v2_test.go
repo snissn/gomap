@@ -62,3 +62,57 @@ func TestCreateIndexesDefaultsToBSONOrderedV2WithoutTreeDBValueType(t *testing.T
 		t.Fatalf("listIndexes v2 version=%d ok=%v want 2", got, ok)
 	}
 }
+
+func TestServerExactIDBSONSetMaintainsNonLeadingCompoundComponent(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 40630, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "createdAt", Value: int32(-1)}}}, {Key: "name", Value: "tenant_created"}, {Key: "unique", Value: true}}}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 40631, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "tenant", Value: "acme"}, {Key: "createdAt", Value: int32(1)}}}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 40632, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "createdAt", Value: int32(2)}}}}}}}},
+		{Key: "$db", Value: "app"},
+	}))
+	col, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	queryRaw, err := bson.Marshal(bson.D{{Key: "tenant", Value: "acme"}, {Key: "createdAt", Value: int32(1)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := bson.Raw(queryRaw).Lookup("tenant")
+	old := bson.Raw(queryRaw).Lookup("createdAt")
+	oldIDs, truncated, err := col.FindByCompoundIndexRange("tenant_created", collections.CompoundIndexRangeOptions{Prefix: []bson.RawValue{prefix}, Lower: collections.IndexRangeBound{Value: old, Inclusive: true}, Upper: collections.IndexRangeBound{Value: old, Inclusive: true}, Limit: 2})
+	if err != nil || truncated || len(oldIDs) != 0 {
+		t.Fatalf("old key ids=%d truncated=%v err=%v want 0,false,nil", len(oldIDs), truncated, err)
+	}
+	queryRaw, err = bson.Marshal(bson.D{{Key: "tenant", Value: "acme"}, {Key: "createdAt", Value: int32(2)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newValue := bson.Raw(queryRaw).Lookup("createdAt")
+	newIDs, truncated, err := col.FindByCompoundIndexRange("tenant_created", collections.CompoundIndexRangeOptions{Prefix: []bson.RawValue{prefix}, Lower: collections.IndexRangeBound{Value: newValue, Inclusive: true}, Upper: collections.IndexRangeBound{Value: newValue, Inclusive: true}, Limit: 2})
+	if err != nil || truncated || len(newIDs) != 1 {
+		t.Fatalf("new key ids=%d truncated=%v err=%v want 1,false,nil", len(newIDs), truncated, err)
+	}
+	assertIndexedWriteError(t, serveCommand(t, server, 40633, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u2"}, {Key: "tenant", Value: "acme"}, {Key: "createdAt", Value: int32(2)}}}},
+		{Key: "$db", Value: "app"},
+	}), 0)
+}

@@ -696,11 +696,15 @@ func (u bsonSetUpdate) affectedIndexMask(runtimes []indexRuntime, opts collectio
 	}
 	var mask uint64
 	for runtimeIdx, runtime := range runtimes {
-		if len(runtime.path) == 0 {
-			continue
+		paths := runtime.componentPaths
+		if len(paths) == 0 {
+			paths = [][]string{runtime.path}
 		}
-		if u.fieldIndex(runtime.path[0]) >= 0 {
-			mask |= uint64(1) << uint(runtimeIdx)
+		for _, path := range paths {
+			if len(path) != 0 && u.fieldIndex(path[0]) >= 0 {
+				mask |= uint64(1) << uint(runtimeIdx)
+				break
+			}
 		}
 	}
 	return mask, true
