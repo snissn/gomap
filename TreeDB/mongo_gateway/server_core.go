@@ -792,7 +792,7 @@ func (s *Server) commandResponse(ctx context.Context, name string, command wire.
 func (s *Server) dispatchCommandResponse(ctx context.Context, name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (wire.Document, error) {
 	switch name {
 	case "hello", "isMaster", "ismaster":
-		return marshalDocument(s.helloResponse(ctx))
+		return marshalDocument(s.helloResponse(ctx, command))
 	case "buildInfo":
 		return marshalDocument(buildInfoResponse())
 	case "connectionStatus":
@@ -853,7 +853,7 @@ func commandRejectsTransactionMarkers(name string) bool {
 	}
 }
 
-func (s *Server) helloResponse(ctx context.Context) bson.D {
+func (s *Server) helloResponse(ctx context.Context, command wire.Document) bson.D {
 	writablePrimary := true
 	if s != nil && s.clusterSubmitterConfigured() {
 		writablePrimary = false
@@ -862,7 +862,16 @@ func (s *Server) helloResponse(ctx context.Context) bson.D {
 			writablePrimary = err == nil && status.Leader && !status.Unavailable
 		}
 	}
-	return helloResponse(s.maxMessageLength(), writablePrimary)
+	response := helloResponse(s.maxMessageLength(), writablePrimary)
+	// MongoDB drivers request this field as "<authDB>.<username>" while
+	// selecting a default authenticator. Advertise only the implemented
+	// mechanism and only when authentication is configured.
+	if s.authenticationRequired() && s.AuthCatalog != nil {
+		if _, ok := bson.Raw(command).Lookup("saslSupportedMechs").StringValueOK(); ok {
+			response = append(response, bson.E{Key: "saslSupportedMechs", Value: bson.A{"SCRAM-SHA-256"}})
+		}
+	}
+	return response
 }
 
 func helloResponse(maxMessageLength int32, writablePrimary bool) bson.D {

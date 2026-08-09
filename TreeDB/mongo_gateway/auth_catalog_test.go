@@ -89,6 +89,60 @@ func TestAuthCatalogRejectsCorruptOrOversizedRecords(t *testing.T) {
 	}
 }
 
+func TestAuthCatalogRejectsInvalidUTF8IdentitiesBeforePersistence(t *testing.T) {
+	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	catalog, err := NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := string([]byte{0xff})
+	if err := catalog.UpsertPassword("admin", bad, []byte("password")); err == nil {
+		t.Fatal("invalid UTF-8 username persisted")
+	}
+	if err := catalog.UpsertPassword(bad, "alice", []byte("password")); err == nil {
+		t.Fatal("invalid UTF-8 auth DB persisted")
+	}
+	server := NewServer()
+	server.AuthenticationEnabled, server.AuthCatalog = true, catalog
+	payload := append([]byte("n,,n="), []byte(bad)...)
+	payload = append(payload, []byte(",r=nonce")...)
+	response := serveCommand(t, server, 77, bson.D{{Key: "saslStart", Value: 1}, {Key: "mechanism", Value: "SCRAM-SHA-256"}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: payload}}, {Key: "$db", Value: "admin"}})
+	assertCommandError(t, response, "AuthenticationFailed")
+}
+
+func TestHelloAdvertisesOnlySCRAMSHA256WhenRequested(t *testing.T) {
+	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	catalog, err := NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer()
+	server.AuthenticationEnabled, server.AuthCatalog = true, catalog
+	requested := serveCommand(t, server, 78, bson.D{{Key: "hello", Value: 1}, {Key: "saslSupportedMechs", Value: "admin.alice"}, {Key: "$db", Value: "admin"}})
+	mechs := bson.Raw(requested).Lookup("saslSupportedMechs").Array()
+	values, err := mechs.Values()
+	if err != nil || len(values) != 1 {
+		t.Fatalf("mechanisms=%s err=%v", bson.Raw(requested), err)
+	}
+	if got, ok := values[0].StringValueOK(); !ok || got != "SCRAM-SHA-256" {
+		t.Fatalf("mechanisms=%s", bson.Raw(requested))
+	}
+	plain := serveCommand(t, server, 79, bson.D{{Key: "hello", Value: 1}, {Key: "$db", Value: "admin"}})
+	if bson.Raw(plain).Lookup("saslSupportedMechs").Type != 0 {
+		t.Fatalf("unrequested mechanisms advertised: %s", bson.Raw(plain))
+	}
+	unsupported := serveCommand(t, server, 80, bson.D{{Key: "saslStart", Value: 1}, {Key: "mechanism", Value: "SCRAM-SHA-1"}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte("n,,n=alice,r=nonce")}}, {Key: "$db", Value: "admin"}})
+	assertCommandError(t, unsupported, "AuthenticationFailed")
+}
+
 func TestAuthCatalogSASLprepAndAtomicDisableRotation(t *testing.T) {
 	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
 	if err != nil {

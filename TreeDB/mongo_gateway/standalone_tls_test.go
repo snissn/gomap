@@ -139,7 +139,7 @@ func TestStandaloneServerOfficialDriverSCRAMSHA256(t *testing.T) {
 	defer cancel()
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- standalone.Serve(ctx, ln) }()
-	client, err := mongo.Connect(options.Client().ApplyURI("mongodb://" + ln.Addr().String()).SetDirect(true).SetAuth(options.Credential{Username: "alice", Password: "correct horse battery staple", AuthSource: "admin", AuthMechanism: "SCRAM-SHA-256"}).SetServerSelectionTimeout(time.Second))
+	client, err := mongo.Connect(options.Client().ApplyURI("mongodb://" + ln.Addr().String()).SetDirect(true).SetAuth(options.Credential{Username: "alice", Password: "correct horse battery staple", AuthSource: "admin"}).SetServerSelectionTimeout(time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}

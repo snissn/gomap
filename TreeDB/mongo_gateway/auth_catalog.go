@@ -175,7 +175,7 @@ func decodeSyntheticSecret(raw []byte) ([sha256.Size]byte, error) {
 }
 
 func validAuthField(value string) bool {
-	return value != "" && len(value) <= maxAuthNameBytes && !strings.ContainsRune(value, 0)
+	return value != "" && len(value) <= maxAuthNameBytes && utf8.ValidString(value) && !strings.ContainsRune(value, 0)
 }
 
 func validateAuthRecord(r AuthUserRecord) error {

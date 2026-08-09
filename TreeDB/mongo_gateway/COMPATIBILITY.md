@@ -204,7 +204,7 @@ enabled-path latency claim is made.
 | Command | logical sessions / `endSessions` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerOfficialGoDriverLogicalSession` | Advertises `logicalSessionTimeoutMinutes` and accepts `endSessions`; session IDs are accepted for driver compatibility only. |
 | Command | transactions / retryable writes | `not implemented` | `TestMongoCompatibilityMatrix` rejects transaction and retryable-write markers on supported commands and covers `commitTransaction` absence | Depends on local transaction/WAL/idempotency roadmap. |
 | Command | cluster-mode `hello` primary advertisement | `supported subset` | `TestClusterHelloReflectsAdmissionWritablePrimary` | Uses cluster admission status to avoid advertising writable primary on followers or unavailable admission. |
-| Command | auth / authorization | `not implemented` | Command falls through to `CommandNotFound` | Out of MVP scope. |
+| Command | SCRAM-SHA-256 authentication / authorization | `supported subset` / `not implemented` | `TestSCRAMSHA256EstablishesConnectionIdentityAndGatesCommands`, official-driver SCRAM tests | SCRAM establishes a connection identity from durable verifier-only records; per-command authorization remains out of scope. |
 
 ## Desktop Client Check
 
