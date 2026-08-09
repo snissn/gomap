@@ -121,7 +121,8 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 		{ID: "read-command-gap.maxtimems-on-aggregate-count-distinct", Category: "read command gap", Feature: "maxTimeMS on aggregate/count/distinct", Status: MongoCapabilityRejected},
 		{ID: "update-subset.findandmodify-exact-id-no-match", Category: "update subset", Feature: "findAndModify exact _id no-match", Status: MongoCapabilitySupportedSubset},
 		{ID: "transaction-gap.transactions-and-retryable-writes", Category: "transaction gap", Feature: "transactions and retryable writes", Status: MongoCapabilityNotImplemented},
-		{ID: "security-gap.authentication-and-authorization", Category: "security gap", Feature: "authentication and authorization", Status: MongoCapabilityNotImplemented},
+		{ID: "security.authentication-scram-sha-256", Category: "security", Feature: "SCRAM-SHA-256 authentication", Status: MongoCapabilitySupportedSubset},
+		{ID: "security.transport-tls-and-safe-remote-listen", Category: "security", Feature: "TLS transport and safe remote listen (#4057)", Status: MongoCapabilitySupportedSubset},
 		{ID: "cluster-gap.replica-set-and-sharding-advertisement", Category: "cluster gap", Feature: "replica-set and sharding advertisement", Status: MongoCapabilityNotImplemented},
 	},
 	Summaries: []MongoGatewayCapabilitySummary{
@@ -172,6 +173,12 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 			Note:          "Driver-interoperability metadata only; no transaction or causal-session semantics.",
 		},
 		{
+			ID:            "transport-security",
+			Label:         "Transport security",
+			CapabilityIDs: []string{"security.transport-tls-and-safe-remote-listen"},
+			Note:          "Loopback plaintext remains available; non-loopback standalone listeners require TLS unless an explicit insecure override is selected. Password authentication refuses plaintext non-loopback listeners. TLS 1.2+ with bounded handshakes is supported.",
+		},
+		{
 			ID:    "scalar-indexes",
 			Label: "Scalar indexes",
 			CapabilityIDs: []string{
@@ -184,8 +191,8 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 		{
 			ID:            "authentication-authorization",
 			Label:         "Authentication and authorization",
-			CapabilityIDs: []string{"security-gap.authentication-and-authorization"},
-			Note:          "The current standalone gateway assumes a trusted local deployment.",
+			CapabilityIDs: []string{"security.authentication-scram-sha-256"},
+			Note:          "Standalone SCRAM-SHA-256 establishes a connection identity from durable verifier-only records; connectionStatus exposes that authenticated identity. Per-command authorization, SCRAM-SHA-1, and external identity providers remain unavailable.",
 		},
 		{
 			ID:            "transactions-retryable-writes",
