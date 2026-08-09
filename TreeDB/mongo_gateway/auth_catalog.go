@@ -16,6 +16,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -60,6 +61,9 @@ type authCatalogStore interface {
 	Get([]byte) ([]byte, error)
 	SetSync([]byte, []byte) error
 }
+type authCatalogDeleteStore interface {
+	DeleteSync([]byte) error
+}
 type authCatalogGetAppendStore interface {
 	GetAppend([]byte, []byte) ([]byte, error)
 }
@@ -70,14 +74,20 @@ type authCatalogGetAppendStore interface {
 // handle.
 var authCatalogBackendLocks struct {
 	sync.Mutex
-	byBackend map[uintptr]*sync.Mutex
+	byBackend map[uintptr]*authCatalogBackendState
+}
+
+type authCatalogBackendState struct {
+	mu                   sync.Mutex
+	authorizationVersion atomic.Uint64
 }
 
 type AuthCatalog struct {
 	db              authCatalogStore
-	backendMu       *sync.Mutex
+	backend         *authCatalogBackendState
 	mu              sync.Mutex
 	syntheticSecret [sha256.Size]byte
+	authorization   atomic.Pointer[authAuthorizationSnapshot]
 	// beforeSetEnabledWrite is a test-only interleaving hook. It is called
 	// while mu is held so a rotation cannot race a stale record write.
 	beforeSetEnabledWrite func()
@@ -87,17 +97,32 @@ func NewAuthCatalog(db authCatalogStore) (*AuthCatalog, error) {
 	if db == nil {
 		return nil, errors.New("mongo gateway auth: nil database")
 	}
-	lock := authCatalogBackendLock(db)
-	lock.Lock()
+	backend := authCatalogBackendLock(db)
+	backend.mu.Lock()
 	secret, err := loadOrCreateSyntheticSecret(db)
-	lock.Unlock()
-	if err != nil {
-		return nil, fmt.Errorf("mongo gateway auth: synthetic verifier secret: %w", err)
+	if err == nil {
+		var raw []byte
+		raw, err = getAuthCatalogValue(db, authAuthorizationCatalogKey())
+		if errors.Is(err, treedb.ErrKeyNotFound) {
+			err = nil
+		} else if err == nil {
+			_, err = decodeAuthorizationRecord(raw)
+		}
 	}
-	return &AuthCatalog{db: db, backendMu: lock, syntheticSecret: secret}, nil
+	backend.mu.Unlock()
+	if err != nil {
+		return nil, fmt.Errorf("mongo gateway auth: catalog initialization: %w", err)
+	}
+	catalog := &AuthCatalog{db: db, backend: backend, syntheticSecret: secret}
+	if snapshot, snapshotErr := catalog.authorizationSnapshot(); snapshotErr != nil {
+		return nil, fmt.Errorf("mongo gateway auth: authorization catalog: %w", snapshotErr)
+	} else {
+		catalog.authorization.Store(snapshot)
+	}
+	return catalog, nil
 }
 
-func authCatalogBackendLock(db authCatalogStore) *sync.Mutex {
+func authCatalogBackendLock(db authCatalogStore) *authCatalogBackendState {
 	v := reflect.ValueOf(db)
 	if v.Kind() != reflect.Pointer || v.IsNil() {
 		return &authCatalogBackendLocksFallback
@@ -106,17 +131,17 @@ func authCatalogBackendLock(db authCatalogStore) *sync.Mutex {
 	authCatalogBackendLocks.Lock()
 	defer authCatalogBackendLocks.Unlock()
 	if authCatalogBackendLocks.byBackend == nil {
-		authCatalogBackendLocks.byBackend = make(map[uintptr]*sync.Mutex)
+		authCatalogBackendLocks.byBackend = make(map[uintptr]*authCatalogBackendState)
 	}
 	if lock := authCatalogBackendLocks.byBackend[key]; lock != nil {
 		return lock
 	}
-	lock := &sync.Mutex{}
+	lock := &authCatalogBackendState{}
 	authCatalogBackendLocks.byBackend[key] = lock
 	return lock
 }
 
-var authCatalogBackendLocksFallback sync.Mutex
+var authCatalogBackendLocksFallback authCatalogBackendState
 
 func authCatalogKey(authDB, username string) []byte {
 	return []byte("\x00mongo-gateway/auth/v1/" + base64.RawURLEncoding.EncodeToString([]byte(authDB)) + "/" + base64.RawURLEncoding.EncodeToString([]byte(username)))
@@ -203,11 +228,25 @@ func (c *AuthCatalog) UpsertPassword(authDB, username string, password []byte) e
 	if err != nil {
 		return err
 	}
-	c.backendMu.Lock()
-	defer c.backendMu.Unlock()
+	c.backend.mu.Lock()
+	defer c.backend.mu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.db.SetSync(authCatalogKey(authDB, username), raw)
+	if err := c.db.SetSync(authCatalogKey(authDB, username), raw); err != nil {
+		return err
+	}
+	authorization, err := c.loadAuthorizationRecordLocked()
+	if err != nil {
+		return errAuthenticationFailed
+	}
+	added, err := c.ensureBootstrapAdminLocked(&authorization, authDB, username)
+	if err != nil {
+		return err
+	}
+	if added {
+		return c.publishAuthorizationRecordLocked(authorization)
+	}
+	return nil
 }
 
 func newSCRAMRecord(authDB, username string, password, salt []byte, iterations int) AuthUserRecord {
@@ -240,9 +279,9 @@ func (c *AuthCatalog) record(authDB, username string) (AuthUserRecord, error) {
 	if c == nil || !validAuthField(authDB) || !validAuthField(username) {
 		return AuthUserRecord{}, errAuthenticationFailed
 	}
-	c.backendMu.Lock()
+	c.backend.mu.Lock()
 	raw, err := c.db.Get(authCatalogKey(authDB, username))
-	c.backendMu.Unlock()
+	c.backend.mu.Unlock()
 	if err != nil {
 		return AuthUserRecord{}, errAuthenticationFailed
 	}
@@ -265,18 +304,39 @@ func (c *AuthCatalog) storedRecordLocked(authDB, username string) (AuthUserRecor
 	return r, nil
 }
 
+func (c *AuthCatalog) userExists(authDB, username string) bool {
+	if c == nil || !validAuthField(authDB) || !validAuthField(username) {
+		return false
+	}
+	c.backend.mu.Lock()
+	defer c.backend.mu.Unlock()
+	_, err := c.storedRecordLocked(authDB, username)
+	return err == nil
+}
+
 // SetEnabled atomically replaces the stored record with a changed enabled bit.
 func (c *AuthCatalog) SetEnabled(authDB, username string, enabled bool) error {
 	if c == nil || !validAuthField(authDB) || !validAuthField(username) {
 		return errAuthenticationFailed
 	}
-	c.backendMu.Lock()
-	defer c.backendMu.Unlock()
+	c.backend.mu.Lock()
+	defer c.backend.mu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	r, err := c.storedRecordLocked(authDB, username)
 	if err != nil {
 		return err
+	}
+	if !enabled && r.Enabled {
+		authorization, authErr := c.loadAuthorizationRecordLocked()
+		if authErr != nil {
+			return errAuthenticationFailed
+		}
+		for _, assignment := range authorization.Users {
+			if assignment.AuthDB == authDB && assignment.Username == username && hasServerAdmin(assignment.Roles) && c.usableServerAdminsLocked(authorization) == 1 {
+				return errors.New("mongo gateway authorization: cannot disable the last enabled server administrator")
+			}
+		}
 	}
 	r.Enabled = enabled
 	if c.beforeSetEnabledWrite != nil {
@@ -287,6 +347,47 @@ func (c *AuthCatalog) SetEnabled(authDB, username string, enabled bool) error {
 		return err
 	}
 	return c.db.SetSync(authCatalogKey(authDB, username), raw)
+}
+
+// DropUser durably removes one verifier and its role assignment. It refuses
+// to remove the last enabled server administrator.
+func (c *AuthCatalog) DropUser(authDB, username string) error {
+	if c == nil || !validAuthField(authDB) || !validAuthField(username) {
+		return errAuthenticationFailed
+	}
+	deleteStore, ok := c.db.(authCatalogDeleteStore)
+	if !ok {
+		return errors.New("mongo gateway auth: backend does not support durable user deletion")
+	}
+	c.backend.mu.Lock()
+	defer c.backend.mu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	stored, err := c.storedRecordLocked(authDB, username)
+	if err != nil {
+		return err
+	}
+	record, err := c.loadAuthorizationRecordLocked()
+	if err != nil {
+		return errAuthenticationFailed
+	}
+	index := -1
+	for i := range record.Users {
+		if record.Users[i].AuthDB == authDB && record.Users[i].Username == username {
+			index = i
+			break
+		}
+	}
+	if index >= 0 && stored.Enabled && hasServerAdmin(record.Users[index].Roles) && c.usableServerAdminsLocked(record) == 1 {
+		return errors.New("mongo gateway authorization: cannot drop the last enabled server administrator")
+	}
+	if index >= 0 {
+		record.Users = append(record.Users[:index], record.Users[index+1:]...)
+		if err := c.publishAuthorizationRecordLocked(record); err != nil {
+			return err
+		}
+	}
+	return deleteStore.DeleteSync(authCatalogKey(authDB, username))
 }
 
 // VerifyPassword is used by tests and bootstrap tooling. Wire authentication

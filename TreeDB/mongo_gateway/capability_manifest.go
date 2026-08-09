@@ -122,6 +122,7 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 		{ID: "update-subset.findandmodify-exact-id-no-match", Category: "update subset", Feature: "findAndModify exact _id no-match", Status: MongoCapabilitySupportedSubset},
 		{ID: "transaction-gap.transactions-and-retryable-writes", Category: "transaction gap", Feature: "transactions and retryable writes", Status: MongoCapabilityNotImplemented},
 		{ID: "security.authentication-scram-sha-256", Category: "security", Feature: "SCRAM-SHA-256 authentication", Status: MongoCapabilitySupportedSubset},
+		{ID: "security.authorization-built-in-roles", Category: "security", Feature: "durable built-in role authorization (#4059)", Status: MongoCapabilitySupportedSubset},
 		{ID: "security.transport-tls-and-safe-remote-listen", Category: "security", Feature: "TLS transport and safe remote listen (#4057)", Status: MongoCapabilitySupportedSubset},
 		{ID: "cluster-gap.replica-set-and-sharding-advertisement", Category: "cluster gap", Feature: "replica-set and sharding advertisement", Status: MongoCapabilityNotImplemented},
 	},
@@ -191,8 +192,8 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 		{
 			ID:            "authentication-authorization",
 			Label:         "Authentication and authorization",
-			CapabilityIDs: []string{"security.authentication-scram-sha-256"},
-			Note:          "Standalone SCRAM-SHA-256 establishes a connection identity from durable verifier-only records; connectionStatus exposes that authenticated identity. Per-command authorization, SCRAM-SHA-1, and external identity providers remain unavailable.",
+			CapabilityIDs: []string{"security.authentication-scram-sha-256", "security.authorization-built-in-roles"},
+			Note:          "Standalone SCRAM-SHA-256 identities use durable read, readWrite, dbAdmin, userAdmin, and serverAdmin grants with pre-execution command checks, filtered catalog visibility, principal-bound cursors, and last-admin safeguards. Cluster/routed protected commands fail closed without authoritative resource binding; SCRAM-SHA-1 and external identity providers remain unavailable.",
 		},
 		{
 			ID:            "transactions-retryable-writes",

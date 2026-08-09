@@ -49,14 +49,17 @@ func (s *Server) authenticated(owner int64) bool {
 	return ok && state.(*authConnectionState).user.Load() != nil
 }
 func (s *Server) authUser(owner int64) *AuthUser {
+	u := s.authUserSnapshot(owner)
+	if u == nil {
+		return nil
+	}
+	copy := *u
+	return &copy
+}
+func (s *Server) authUserSnapshot(owner int64) *AuthUser {
 	state, ok := s.authConnections.Load(owner)
 	if ok {
-		u := state.(*authConnectionState).user.Load()
-		if u == nil {
-			return nil
-		}
-		copy := *u
-		return &copy
+		return state.(*authConnectionState).user.Load()
 	}
 	return nil
 }

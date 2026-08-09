@@ -131,6 +131,8 @@ type Server struct {
 	authConnections            sync.Map // map[int64]*authConnectionState
 	nextSASLConversation       atomic.Int32
 	authFailures               atomic.Uint64
+	authorizationAllowed       atomic.Uint64
+	authorizationDenied        atomic.Uint64
 	// beforeSCRAMIdentityStore is test-only coordination for owner release.
 	beforeSCRAMIdentityStore func()
 	closed                   atomic.Bool
@@ -150,6 +152,7 @@ type collectionFirstWriteRegistry struct {
 type serverCursor struct {
 	ns         string
 	owner      int64
+	principal  AuthUser
 	docs       []wire.Document
 	projection compiledProjection
 	pos        int
@@ -804,6 +807,11 @@ func (s *Server) commandResponse(ctx context.Context, name string, command wire.
 	if s.authenticationRequired() && !s.authenticated(cursorOwner) && !authUnauthenticatedCommand(name) {
 		return commandError(13, "Unauthorized", "Authentication required")
 	}
+	if s.authenticationRequired() {
+		if _, response, err, allowed := s.authorizeCommand(name, command, cursorOwner); !allowed {
+			return response, err
+		}
+	}
 	if commandRejectsTransactionMarkers(name) {
 		if doc, rejected, err := rejectTransactionalCommand(command, name); rejected {
 			return doc, err
@@ -856,15 +864,17 @@ func (s *Server) dispatchCommandResponse(ctx context.Context, name string, comma
 	case "delete":
 		return s.deleteResponse(ctx, command, sequences)
 	case "listCollections":
-		return s.listCollectionsResponse(command)
+		return s.listCollectionsResponse(command, cursorOwner)
 	case "listDatabases":
-		return s.listDatabasesResponse(command)
+		return s.listDatabasesResponse(command, cursorOwner)
 	case "createIndexes":
 		return s.createIndexesResponse(command)
 	case "listIndexes":
 		return s.listIndexesResponse(command)
 	case "dropIndexes":
 		return s.dropIndexesResponse(command)
+	case "createUser", "updateUser", "dropUser", "usersInfo":
+		return s.userManagementResponse(name, command, cursorOwner)
 	default:
 		return commandError(59, "CommandNotFound", "unsupported MongoDB gateway command: "+name)
 	}
@@ -950,9 +960,20 @@ func connectionStatusResponse() bson.D {
 }
 
 func (s *Server) connectionStatusResponse(owner int64) bson.D {
-	return connectionStatusResponseForUser(s.authUser(owner))
+	user := s.authUser(owner)
+	if user == nil || s.AuthCatalog == nil {
+		return connectionStatusResponseForUser(user)
+	}
+	roles, err := s.AuthCatalog.UserRoles(user.AuthDB, user.Username)
+	if err != nil {
+		return connectionStatusResponseForUser(user)
+	}
+	return connectionStatusResponseForUserAndRoles(user, roles)
 }
 func connectionStatusResponseForUser(user *AuthUser) bson.D {
+	return connectionStatusResponseForUserAndRoles(user, nil)
+}
+func connectionStatusResponseForUserAndRoles(user *AuthUser, roles []AuthRoleGrant) bson.D {
 	users := bson.A{}
 	if user != nil {
 		users = append(users, bson.D{{Key: "user", Value: user.Username}, {Key: "db", Value: user.AuthDB}})
@@ -960,8 +981,8 @@ func connectionStatusResponseForUser(user *AuthUser) bson.D {
 	return bson.D{
 		{Key: "authInfo", Value: bson.D{
 			{Key: "authenticatedUsers", Value: users},
-			{Key: "authenticatedUserRoles", Value: bson.A{}},
-			{Key: "authenticatedUserPrivileges", Value: bson.A{}},
+			{Key: "authenticatedUserRoles", Value: authRoleDocuments(roles)},
+			{Key: "authenticatedUserPrivileges", Value: authPrivilegeDocuments(roles)},
 		}},
 		{Key: "ok", Value: 1.0},
 	}

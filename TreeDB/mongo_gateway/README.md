@@ -81,7 +81,7 @@ call concurrently.
 <!-- mongo-capability-summary:begin -->
 ## Executable capability summary
 
-Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:0f40bb79daa24a03be9d721d1909f5f9ea1475b2d0c669793ef64dd1a778d939`
+Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:caf3842ce126fc048ead62e77e71a525c1fe33b09b0551333e0eb8f11e917745`
 
 | Surface | Status | Boundary |
 |---|---|---|
@@ -92,7 +92,7 @@ Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:0f40bb79daa24a03be
 | Logical sessions | supported subset | Driver-interoperability metadata only; no transaction or causal-session semantics. |
 | Transport security | supported subset | Loopback plaintext remains available; non-loopback standalone listeners require TLS unless an explicit insecure override is selected. Password authentication refuses plaintext non-loopback listeners. TLS 1.2+ with bounded handshakes is supported. |
 | Scalar indexes | supported subset | BSON collections default ordinary single-field ascending indexes to BSON-ordered v2; explicit treedbValueType remains the legacy homogeneous path. Compound and descending indexes remain rejected. |
-| Authentication and authorization | supported subset | Standalone SCRAM-SHA-256 establishes a connection identity from durable verifier-only records; connectionStatus exposes that authenticated identity. Per-command authorization, SCRAM-SHA-1, and external identity providers remain unavailable. |
+| Authentication and authorization | supported subset | Standalone SCRAM-SHA-256 identities use durable read, readWrite, dbAdmin, userAdmin, and serverAdmin grants with pre-execution command checks, filtered catalog visibility, principal-bound cursors, and last-admin safeguards. Cluster/routed protected commands fail closed without authoritative resource binding; SCRAM-SHA-1 and external identity providers remain unavailable. |
 | Transactions and retryable writes | not implemented | Transaction markers reject and commitTransaction is unavailable. |
 | Replica set and sharding | not implemented | Standalone hello metadata does not advertise replica-set or sharded-server behavior. |
 <!-- mongo-capability-summary:end -->
@@ -110,6 +110,30 @@ The manifest identity is also exposed by `buildInfo` and emitted by benchmark
 reports so stored compatibility evidence can be tied to the exact declared
 surface.
 
+## Standalone authorization policy
+
+Enabling authentication also enables fail-closed per-command authorization.
+The first verifier created in an empty catalog is the bootstrap
+`serverAdmin`; subsequent users receive no privileges until durable grants are
+assigned. The built-in roles are deliberately bounded: `read` permits data
+reads, `readWrite` adds mutations, `dbAdmin` owns collection/index metadata and
+DDL, `userAdmin` owns user management within its scope, and `serverAdmin` owns
+the full standalone server. Grants may be server-, database-, or
+collection-scoped. Database-scoped user administrators cannot grant
+server-scoped roles or modify server administrators.
+
+Authorization runs before collection/index lookup, route resolution, cursor
+creation, or mutation. Catalog lists are filtered, retained cursors are bound
+to the authenticated principal that created them, and grant revocation is
+observed at the next command boundary. Verifier disable or rotation applies to
+subsequent authentication attempts; an already authenticated connection keeps
+its identity until that connection closes. The catalog rejects malformed
+durable records on reopen and prevents disabling, demoting, or dropping the
+last enabled server administrator. Routed/cluster protected commands reject
+when the gateway lacks an authoritative resource binding.
+`AuthorizationMetrics` reports only low-cardinality allowed/denied totals; it
+does not expose secrets or query/document payloads.
+
 ## Differential compatibility fixtures
 
 `cmd/mongo_gateway_compat_diff` compares a deliberately small set of declared
@@ -118,6 +142,17 @@ those fixtures, not a full MongoDB conformance claim. Fixture files are
 versioned canonical Extended JSON in
 `cmd/mongo_gateway_compat_diff/fixtures`; the runner decodes them to BSON and
 preserves BSON type and field order in emitted observations.
+
+The version-1 fixture contract is intentionally unauthenticated: it has one
+shared seed/command flow and no per-target authentication bootstrap. Therefore
+it does not claim differential evidence for SCRAM identities or authorization
+policy. Adding an unauthenticated authorization fixture would be misleading,
+while enabling authentication only on one target would turn setup differences
+into false compatibility results. Authorization compatibility is instead
+covered by the executable capability-matrix probe, official-driver tests, and
+the role, mutation-boundary, list-filtering, cursor-ownership, persistence, and
+cluster fail-closed package tests. A future authenticated differential contract
+must bootstrap equivalent users and grants independently on both targets.
 
 Every fixture capability ID is checked against the consumed executable manifest
 before it runs: `supported` fixtures must map to a supported/support-subset

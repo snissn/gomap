@@ -18,6 +18,16 @@ import (
 	"golang.org/x/crypto/pbkdf2"
 )
 
+func addBackupAuthAdministrator(t *testing.T, catalog *AuthCatalog) {
+	t.Helper()
+	if err := catalog.UpsertPassword("admin", "backup-admin", []byte("backup administrator password")); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.SetUserRoles("admin", "backup-admin", []AuthRoleGrant{{Role: AuthRoleServerAdmin}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAuthCatalogDurableVerifierRotationAndDisable(t *testing.T) {
 	dir := t.TempDir()
 	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir))
@@ -31,6 +41,7 @@ func TestAuthCatalogDurableVerifierRotationAndDisable(t *testing.T) {
 	if err := catalog.UpsertPassword("admin", "alice", []byte("correct horse battery staple")); err != nil {
 		t.Fatal(err)
 	}
+	addBackupAuthAdministrator(t, catalog)
 	raw, err := db.Get(authCatalogKey("admin", "alice"))
 	if err != nil {
 		t.Fatal(err)
@@ -157,6 +168,7 @@ func TestAuthCatalogSASLprepAndAtomicDisableRotation(t *testing.T) {
 	if err := catalog.UpsertPassword("admin", "alice", []byte("p\u00e4ss\u00a0word")); err != nil {
 		t.Fatal(err)
 	}
+	addBackupAuthAdministrator(t, catalog)
 	if _, err := catalog.VerifyPassword("admin", "alice", []byte("p\u00e4ss word")); err != nil {
 		t.Fatalf("SASLprep equivalent rejected: %v", err)
 	}
@@ -215,6 +227,7 @@ func TestAuthCatalogBackendScopedMutationLockPreventsLostRotation(t *testing.T) 
 	if err := setter.UpsertPassword("admin", "alice", []byte("old password")); err != nil {
 		t.Fatal(err)
 	}
+	addBackupAuthAdministrator(t, setter)
 	entered, release := make(chan struct{}), make(chan struct{})
 	setter.beforeSetEnabledWrite = func() { close(entered); <-release }
 	setDone := make(chan error, 1)
