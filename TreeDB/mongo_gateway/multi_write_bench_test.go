@@ -2,9 +2,11 @@ package mongogateway
 
 import (
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -52,11 +54,11 @@ func BenchmarkMongoDeleteManyCommandBatchSizes(b *testing.B) {
 }
 
 func benchmarkMongoInsertCommandShape(b *testing.B, batchSize int, batched bool) {
-	db, err := backenddb.Open(backenddb.Options{Dir: b.TempDir()})
+	db, cleanup, err := openMongoWriteBenchmarkBackend(b)
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = cleanup() }()
 	s := NewServer()
 	s.Collections = collections.NewCollectionManager(db)
 	commands := make([]bson.D, 0, b.N)
@@ -70,6 +72,8 @@ func benchmarkMongoInsertCommandShape(b *testing.B, batchSize int, batched bool)
 		}
 	}
 	b.ReportAllocs()
+	beforeBackend := db.Stats()
+	beforeCollections := s.Collections.Stats()
 	b.ResetTimer()
 	started := time.Now()
 	for i, command := range commands {
@@ -81,7 +85,9 @@ func benchmarkMongoInsertCommandShape(b *testing.B, batchSize int, batched bool)
 	elapsed := time.Since(started)
 	b.StopTimer()
 	b.ReportMetric(float64(elapsed.Nanoseconds())/float64(b.N*batchSize), "ns/doc")
+	b.ReportMetric(float64(b.N*batchSize)*float64(time.Second)/float64(elapsed), "docs/s")
 	b.ReportMetric(float64(batchSize), "docs/op")
+	reportMongoWriteBenchmarkAccounting(b, db, s.Collections, beforeBackend, beforeCollections, b.N*batchSize)
 }
 
 // benchmarkMongoFilterWriteShape uses a multi:true/limit:0 natural-order
@@ -89,11 +95,11 @@ func benchmarkMongoInsertCommandShape(b *testing.B, batchSize int, batched bool)
 // repeated-single side. Documents and BSON command shapes are made before the
 // timer starts, leaving only gateway/storage write work in the measurement.
 func benchmarkMongoFilterWriteShape(b *testing.B, batchSize int, deleting, batched bool) {
-	db, err := backenddb.Open(backenddb.Options{Dir: b.TempDir()})
+	db, cleanup, err := openMongoWriteBenchmarkBackend(b)
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = cleanup() }()
 	s := NewServer()
 	s.Collections = collections.NewCollectionManager(db)
 	seed := make(bson.A, 0, b.N*batchSize)
@@ -114,6 +120,8 @@ func benchmarkMongoFilterWriteShape(b *testing.B, batchSize int, deleting, batch
 		}
 	}
 	b.ReportAllocs()
+	beforeBackend := db.Stats()
+	beforeCollections := s.Collections.Stats()
 	b.ResetTimer()
 	started := time.Now()
 	for i, command := range commands {
@@ -128,14 +136,15 @@ func benchmarkMongoFilterWriteShape(b *testing.B, batchSize int, deleting, batch
 	b.ReportMetric(float64(elapsed.Nanoseconds())/float64(docs), "ns/doc")
 	b.ReportMetric(float64(docs)*float64(time.Second)/float64(elapsed), "docs/s")
 	b.ReportMetric(float64(batchSize), "docs/op")
+	reportMongoWriteBenchmarkAccounting(b, db, s.Collections, beforeBackend, beforeCollections, docs)
 }
 
 func benchmarkMongoExactUpdateShape(b *testing.B, batchSize int, batched bool) {
-	db, err := backenddb.Open(backenddb.Options{Dir: b.TempDir()})
+	db, cleanup, err := openMongoWriteBenchmarkBackend(b)
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = cleanup() }()
 	s := NewServer()
 	s.Collections = collections.NewCollectionManager(db)
 	seed := make(bson.A, 0, b.N*batchSize)
@@ -160,6 +169,8 @@ func benchmarkMongoExactUpdateShape(b *testing.B, batchSize int, batched bool) {
 		}
 	}
 	b.ReportAllocs()
+	beforeBackend := db.Stats()
+	beforeCollections := s.Collections.Stats()
 	b.ResetTimer()
 	started := time.Now()
 	for i, command := range commands {
@@ -174,6 +185,47 @@ func benchmarkMongoExactUpdateShape(b *testing.B, batchSize int, batched bool) {
 	b.ReportMetric(float64(elapsed.Nanoseconds())/float64(docs), "ns/doc")
 	b.ReportMetric(float64(docs)*float64(time.Second)/float64(elapsed), "docs/s")
 	b.ReportMetric(float64(batchSize), "docs/op")
+	reportMongoWriteBenchmarkAccounting(b, db, s.Collections, beforeBackend, beforeCollections, docs)
+}
+
+// openMongoWriteBenchmarkBackend makes the command-WAL byte counter visible to
+// every shape. Fixture construction and the initial seed are outside the timer;
+// each reported counter is a delta over the timed command loop only.
+func openMongoWriteBenchmarkBackend(b *testing.B) (*backenddb.DB, func() error, error) {
+	b.Helper()
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, b.TempDir())
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.MaxWALBytes = -1
+	opts.DisableBackgroundPrune = true
+	return treedb.OpenBackend(opts)
+}
+
+func reportMongoWriteBenchmarkAccounting(b *testing.B, db *backenddb.DB, manager *collections.CollectionManager, beforeBackend, beforeCollections map[string]string, documents int) {
+	b.Helper()
+	if documents <= 0 {
+		b.Fatal("benchmark documents must be positive")
+	}
+	afterBackend := db.Stats()
+	afterCollections := manager.Stats()
+	denominator := float64(documents)
+	b.ReportMetric(float64(mongoWriteBenchmarkStat(b, afterBackend, "treedb.command_wal.write.bytes_total")-mongoWriteBenchmarkStat(b, beforeBackend, "treedb.command_wal.write.bytes_total"))/denominator, "wal_bytes/doc")
+	b.ReportMetric(float64(mongoWriteBenchmarkStat(b, afterCollections, "treedb.collections.write_domain.indexed_stage.root_runs_total")-mongoWriteBenchmarkStat(b, beforeCollections, "treedb.collections.write_domain.indexed_stage.root_runs_total"))/denominator, "indexed_stage_root_runs/doc")
+	b.ReportMetric(float64(mongoWriteBenchmarkStat(b, afterCollections, "treedb.collections.write_domain.indexed_flush.root_runs_total")-mongoWriteBenchmarkStat(b, beforeCollections, "treedb.collections.write_domain.indexed_flush.root_runs_total"))/denominator, "indexed_flush_root_runs/doc")
+	b.ReportMetric(float64(mongoWriteBenchmarkStat(b, afterCollections, "treedb.collections.write_domain.indexed_flush.roots_total")-mongoWriteBenchmarkStat(b, beforeCollections, "treedb.collections.write_domain.indexed_flush.roots_total"))/denominator, "indexed_flush_roots/doc")
+}
+
+func mongoWriteBenchmarkStat(b *testing.B, stats map[string]string, key string) uint64 {
+	b.Helper()
+	value, ok := stats[key]
+	if !ok {
+		b.Fatalf("benchmark stat %q unavailable", key)
+	}
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		b.Fatalf("parse benchmark stat %q=%q: %v", key, value, err)
+	}
+	return parsed
 }
 
 func benchmarkMongoFilterCommand(op, first, count int, deleting, multi bool) bson.D {

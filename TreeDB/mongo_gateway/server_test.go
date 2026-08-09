@@ -1284,6 +1284,46 @@ func TestServerUpdateBatchesDistinctIDs(t *testing.T) {
 	}
 }
 
+// A repeated exact ID must remain on the sequential path: each statement
+// observes the prior statement's result, so the second $set matches but is a
+// no-op.  This is deliberately BSON (not TemplateV1) because the native BSON
+// batch path is the optimization guarded by mongoUpdateItemsCanUseBatch.
+func TestServerUpdateBatchDuplicateBSONIDRemainsSequential(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 2280, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(0)}}}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	update := bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "score", Value: int32(1)}}}}}}
+	response := serveCommand(t, server, 2281, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{update, update}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, response)
+	assertInt32(t, response, "n", 2)
+	assertInt32(t, response, "nModified", 1)
+	find := serveCommand(t, server, 2282, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+	batch := cursorFirstBatch(t, find)
+	if len(batch) != 1 {
+		t.Fatalf("find firstBatch len=%d want 1", len(batch))
+	}
+	got, ok := batch[0].Lookup("score").Int32OK()
+	if !ok || got != 1 {
+		t.Fatalf("score=%d typeOK=%v want 1", got, ok)
+	}
+}
+
 func TestServerUpdateBatchVectorMaintenanceIsCommitAmbiguous(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -1299,6 +1339,10 @@ func TestServerUpdateBatchVectorMaintenanceIsCommitAmbiguous(t *testing.T) {
 	updates := bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "embedding", Value: bson.A{1.0, 2.0, 3.0}}}}}}}, bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "embedding", Value: bson.A{1.0, 2.0, 3.0}}}}}}}}
 	response := serveCommand(t, s, 2292, bson.D{{Key: "update", Value: "users"}, {Key: "ordered", Value: false}, {Key: "updates", Value: updates}, {Key: "$db", Value: "app"}})
 	assertCommandError(t, response, "ShutdownInProgress")
+	assertInt32(t, response, "code", 91)
+	if raw := bson.Raw(response); !raw.Lookup("n").IsZero() || !raw.Lookup("nModified").IsZero() {
+		t.Fatalf("ambiguous batch leaked success counts: %s", response)
+	}
 	if !bson.Raw(response).Lookup("writeErrors").IsZero() {
 		t.Fatalf("ambiguous batch returned indexed errors: %s", response)
 	}
