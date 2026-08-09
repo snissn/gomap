@@ -32,7 +32,7 @@ import (
 )
 
 const (
-	collectionMetaVersion        = 5
+	collectionMetaVersion        = 6
 	maxCollectionMutationRetries = 64
 	// Bound stale buffered-read replans so a writer under constant buffered
 	// pressure eventually falls back to a publish boundary or outer retry.
@@ -1075,6 +1075,20 @@ const (
 	IndexValueBSONOrderedV2 IndexValueType = "bson-ordered-v2"
 )
 
+// IndexDirection is the bytewise order of one BSON scalar index component.
+type IndexDirection int8
+
+const (
+	IndexDirectionAscending  IndexDirection = 1
+	IndexDirectionDescending IndexDirection = -1
+)
+
+// IndexComponent is one ordered path in a scalar compound index.
+type IndexComponent struct {
+	Field     string         `json:"field"`
+	Direction IndexDirection `json:"direction"`
+}
+
 type CollectionOptions struct {
 	AllowArrayValuesInIndex bool           `json:"allow_array_values_in_index,omitempty"`
 	DocumentFormat          DocumentFormat `json:"document_format,omitempty"`
@@ -1143,6 +1157,9 @@ type IndexDefinition struct {
 	Unique        bool              `json:"unique,omitempty"`
 	MultiKey      bool              `json:"multi_key,omitempty"`
 	StoragePolicy RootStoragePolicy `json:"storage_policy,omitempty"`
+	// Components persists the ordered BSON v2 definition. Field remains the
+	// compatibility spelling for legacy callers and is normalized to component 0.
+	Components []IndexComponent `json:"components,omitempty"`
 }
 
 // VectorIndexDefinition declares a document vector field as an ANN-capable
@@ -8017,6 +8034,9 @@ func bufferedUniqueIndexValueRun(batchIndex memtable.Table, valueType IndexValue
 }
 
 func indexEntryValuePrefix(key []byte, valueType IndexValueType) ([]byte, error) {
+	if valueType == IndexValueBSONOrderedV2 {
+		return bsonIndexKeyValuePrefixV2(key)
+	}
 	n, err := indexComponentLength(valueType, key)
 	if err != nil {
 		return nil, err
@@ -18845,7 +18865,7 @@ func collectionMetaIndexSchemasEqual(left, right CollectionMeta) bool {
 		return false
 	}
 	for i := range left.Indexes {
-		if left.Indexes[i] != right.Indexes[i] {
+		if !indexDefinitionValuesEqual(left.Indexes[i], right.Indexes[i]) {
 			return false
 		}
 	}
@@ -20157,6 +20177,20 @@ type IndexRangeOptions struct {
 	Desc  bool
 }
 
+// CompoundIndexRangeOptions describes a direct BSON v2 index scan. Prefix
+// supplies equality values for the leading components; Lower and Upper bound
+// at most the immediately following component. Bounds are expressed in the
+// component's logical BSON order, while results follow the index definition
+// unless Desc is set. This is an explicit collection primitive: it does not
+// participate in query planning.
+type CompoundIndexRangeOptions struct {
+	Prefix []bson.RawValue
+	Lower  IndexRangeBound
+	Upper  IndexRangeBound
+	Limit  int
+	Desc   bool
+}
+
 const defaultIndexRangeResultCap = 16
 
 // FindByIndexValue returns document IDs whose named secondary index equals
@@ -20203,6 +20237,94 @@ func (c *Collection) FindByIndexRange(indexName string, opts IndexRangeOptions) 
 		out = make([][]byte, 0)
 	}
 	return out, truncated, nil
+}
+
+// FindByCompoundIndexRange returns document IDs in compound-index order. It
+// supports BSON v2 indexes with an equality prefix and one optional range
+// suffix; field extraction and planner selection remain outside this API.
+func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundIndexRangeOptions) ([][]byte, bool, error) {
+	if c == nil {
+		return nil, false, errCollectionNil
+	}
+	if err := ValidateIndexName(indexName); err != nil {
+		return nil, false, err
+	}
+	if opts.Limit < 0 {
+		return nil, false, errors.New("collections: compound index range limit cannot be negative")
+	}
+	if err := c.flushBufferedNoIndex(); err != nil {
+		return nil, false, err
+	}
+	domain := c.writeDomain
+	if domain != nil {
+		domain.mu.RLock()
+		defer domain.mu.RUnlock()
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, false, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshotWithWriteDomainLocked(snap)
+	if err != nil {
+		return nil, false, err
+	}
+	if catalog == nil {
+		return nil, false, errCollectionNotFound
+	}
+	idx, ok := findIndex(catalog.meta.Indexes, indexName)
+	if !ok {
+		return nil, false, nil
+	}
+	start, end, empty, err := compoundIndexRangeScanBounds(idx, opts)
+	if err != nil {
+		return nil, false, err
+	}
+	if empty {
+		return nil, false, nil
+	}
+	bufferedTable, err := bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
+	if err != nil {
+		return nil, false, err
+	}
+	if bufferedTable != nil {
+		defer resetCollectionRunTable(bufferedTable)
+	}
+	var bufferedIt iterator.UnsafeIterator
+	if bufferedTable != nil {
+		bufferedIt = bufferedTable.NewIterator(start, end)
+		defer func() { _ = bufferedIt.Close() }()
+	}
+	persistedIt, err := collectionIteratorAtCatalogRoot(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true)
+	if err != nil {
+		return nil, false, err
+	}
+	if persistedIt != nil {
+		defer func() { _ = persistedIt.Close() }()
+	}
+	// Reverse merge support is not available for overlay stacks, so collect the
+	// bounded interval once and reverse only its owned result slice.
+	ids := make([][]byte, 0)
+	_, err = scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, 0, shouldDedupeIndexDocumentIDs(idx, catalog.meta.Options), func(id []byte) (bool, error) {
+		ids = append(ids, id)
+		return true, nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if opts.Desc {
+		for left, right := 0, len(ids)-1; left < right; left, right = left+1, right-1 {
+			ids[left], ids[right] = ids[right], ids[left]
+		}
+	}
+	truncated := opts.Limit > 0 && len(ids) > opts.Limit
+	if truncated {
+		ids = ids[:opts.Limit]
+	}
+	if len(ids) == 0 {
+		return nil, false, nil
+	}
+	return ids, truncated, nil
 }
 
 // FindDocumentsByIndexRange returns primary documents whose named secondary
@@ -20720,6 +20842,101 @@ func indexRangeScanBounds(valueType IndexValueType, opts IndexRangeOptions) ([]b
 		return nil, nil, true, nil
 	}
 	return start, end, false, nil
+}
+
+func compoundIndexRangeScanBounds(idx IndexDefinition, opts CompoundIndexRangeOptions) ([]byte, []byte, bool, error) {
+	if idx.ValueType != IndexValueBSONOrderedV2 {
+		return nil, nil, false, errors.New("collections: compound index range requires BSON v2 key format")
+	}
+	components := idx.Components
+	if len(components) == 0 {
+		components = []IndexComponent{{Field: idx.Field, Direction: IndexDirectionAscending}}
+	}
+	if len(opts.Prefix) > len(components) {
+		return nil, nil, false, errors.New("collections: compound index equality prefix exceeds component count")
+	}
+	prefix := make([]byte, 0)
+	for i, value := range opts.Prefix {
+		encoded, err := encodeBSONIndexComponentInDirection(value, components[i].Direction)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		prefix = append(prefix, encoded...)
+	}
+	lowerBounded := !opts.Lower.Unbounded && opts.Lower.Value != nil
+	upperBounded := !opts.Upper.Unbounded && opts.Upper.Value != nil
+	if len(opts.Prefix) == len(components) && (lowerBounded || upperBounded) {
+		return nil, nil, false, errors.New("collections: compound index range has no suffix component after a full equality prefix")
+	}
+	prefixEndValue := prefixEnd(prefix)
+	if prefixEndValue == nil && len(prefix) != 0 {
+		return nil, nil, true, nil
+	}
+	if len(opts.Prefix) == len(components) {
+		return prefix, prefixEndValue, false, nil
+	}
+	var lowerEncoded, upperEncoded []byte
+	var err error
+	if lowerBounded {
+		value, ok := opts.Lower.Value.(bson.RawValue)
+		if !ok {
+			return nil, nil, false, fmt.Errorf("collections: compound lower bound must be bson.RawValue, got %T", opts.Lower.Value)
+		}
+		lowerEncoded, err = encodeBSONIndexComponentInDirection(value, components[len(opts.Prefix)].Direction)
+		if err != nil {
+			return nil, nil, false, err
+		}
+	}
+	if upperBounded {
+		value, ok := opts.Upper.Value.(bson.RawValue)
+		if !ok {
+			return nil, nil, false, fmt.Errorf("collections: compound upper bound must be bson.RawValue, got %T", opts.Upper.Value)
+		}
+		upperEncoded, err = encodeBSONIndexComponentInDirection(value, components[len(opts.Prefix)].Direction)
+		if err != nil {
+			return nil, nil, false, err
+		}
+	}
+	start, end := bytes.Clone(prefix), prefixEndValue
+	// The encoded descending component reverses physical ordering, so exchange
+	// logical lower/upper bounds before applying ordinary lexicographic bounds.
+	if components[len(opts.Prefix)].Direction == IndexDirectionDescending {
+		lowerEncoded, upperEncoded = upperEncoded, lowerEncoded
+		lowerBounded, upperBounded = upperBounded, lowerBounded
+		lowerInclusive, upperInclusive := opts.Upper.Inclusive, opts.Lower.Inclusive
+		opts.Lower.Inclusive, opts.Upper.Inclusive = lowerInclusive, upperInclusive
+	}
+	if lowerBounded {
+		candidate := append(append([]byte(nil), prefix...), lowerEncoded...)
+		if opts.Lower.Inclusive {
+			start = candidate
+		} else if start = prefixEnd(candidate); start == nil {
+			return nil, nil, true, nil
+		}
+	}
+	if upperBounded {
+		candidate := append(append([]byte(nil), prefix...), upperEncoded...)
+		if opts.Upper.Inclusive {
+			end = prefixEnd(candidate)
+		} else {
+			end = candidate
+		}
+	}
+	if start != nil && end != nil && bytes.Compare(start, end) >= 0 {
+		return nil, nil, true, nil
+	}
+	return start, end, false, nil
+}
+
+func encodeBSONIndexComponentInDirection(value bson.RawValue, direction IndexDirection) ([]byte, error) {
+	encoded, err := encodeBSONIndexKeyComponentV2(value)
+	if err != nil {
+		return nil, err
+	}
+	if direction == IndexDirectionDescending {
+		return descendingBSONIndexKeyComponentV2(encoded)
+	}
+	return encoded, nil
 }
 
 func encodedDoubleComponentIsNaN(encoded []byte) bool {
@@ -21994,12 +22211,18 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 	} else {
 		meta.Options.DocumentFormat = documentFormat
 	}
-	indexes := append([]IndexDefinition(nil), meta.Indexes...)
+	indexes := copyIndexDefinitions(meta.Indexes)
 	sort.SliceStable(indexes, func(i, j int) bool {
 		return indexes[i].Name < indexes[j].Name
 	})
 	seen := make(map[string]struct{}, len(indexes))
 	for i := range indexes {
+		components, err := normalizeIndexComponents(indexes[i])
+		if err != nil {
+			return CollectionMeta{}, fmt.Errorf("collections: invalid index %q components: %w", indexes[i].Name, err)
+		}
+		indexes[i].Components = components
+		indexes[i].Field = components[0].Field
 		if err := ValidateIndexName(indexes[i].Name); err != nil {
 			return CollectionMeta{}, fmt.Errorf("collections: invalid index name %q: %w", indexes[i].Name, err)
 		}
@@ -22012,6 +22235,9 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		}
 		if valueType == IndexValueBSONOrderedV2 && documentFormat != DocumentFormatBSON {
 			return CollectionMeta{}, fmt.Errorf("collections: index %q BSON v2 key format requires BSON document_format", indexes[i].Name)
+		}
+		if valueType != IndexValueBSONOrderedV2 && (len(components) != 1 || components[0].Direction != IndexDirectionAscending) {
+			return CollectionMeta{}, fmt.Errorf("collections: index %q compound or descending components require BSON v2 key format", indexes[i].Name)
 		}
 		indexes[i].ValueType = valueType
 		if _, err := backendRootStoragePolicy(indexes[i].StoragePolicy); err != nil {
@@ -22108,6 +22334,35 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
 	}
 	return meta, nil
+}
+
+const maxCompoundIndexComponents = 4
+
+func normalizeIndexComponents(def IndexDefinition) ([]IndexComponent, error) {
+	components := append([]IndexComponent(nil), def.Components...)
+	if len(components) == 0 {
+		components = []IndexComponent{{Field: def.Field, Direction: IndexDirectionAscending}}
+	}
+	if len(components) == 0 || len(components) > maxCompoundIndexComponents {
+		return nil, fmt.Errorf("component count must be in [1,%d]", maxCompoundIndexComponents)
+	}
+	seen := make(map[string]struct{}, len(components))
+	for i := range components {
+		if err := ValidateIndexPath(components[i].Field); err != nil {
+			return nil, fmt.Errorf("component[%d] field: %w", i, err)
+		}
+		if components[i].Direction != IndexDirectionAscending && components[i].Direction != IndexDirectionDescending {
+			return nil, fmt.Errorf("component[%d] direction must be 1 or -1", i)
+		}
+		if _, ok := seen[components[i].Field]; ok {
+			return nil, fmt.Errorf("duplicate component field %q", components[i].Field)
+		}
+		seen[components[i].Field] = struct{}{}
+	}
+	if def.Field != "" && def.Field != components[0].Field {
+		return nil, fmt.Errorf("field %q disagrees with first component %q", def.Field, components[0].Field)
+	}
+	return components, nil
 }
 
 func normalizeIndexValueType(valueType IndexValueType) (IndexValueType, error) {
@@ -22271,10 +22526,18 @@ func (m CollectionMeta) copy() *CollectionMeta {
 	return &CollectionMeta{
 		Name:          m.Name,
 		Options:       copyCollectionOptions(m.Options),
-		Indexes:       append([]IndexDefinition(nil), m.Indexes...),
+		Indexes:       copyIndexDefinitions(m.Indexes),
 		VectorIndexes: copyVectorIndexDefinitions(m.VectorIndexes),
 		TextIndexes:   copyTextIndexDefinitions(m.TextIndexes),
 	}
+}
+
+func copyIndexDefinitions(in []IndexDefinition) []IndexDefinition {
+	out := append([]IndexDefinition(nil), in...)
+	for i := range out {
+		out[i].Components = append([]IndexComponent(nil), out[i].Components...)
+	}
+	return out
 }
 
 func copyVectorIndexDefinitions(in []VectorIndexDefinition) []VectorIndexDefinition {
@@ -22324,7 +22587,7 @@ func collectionMetaValuesEqual(a, b CollectionMeta) bool {
 		return false
 	}
 	for i := range a.Indexes {
-		if a.Indexes[i] != b.Indexes[i] {
+		if !indexDefinitionValuesEqual(a.Indexes[i], b.Indexes[i]) {
 			return false
 		}
 	}
@@ -22335,6 +22598,18 @@ func collectionMetaValuesEqual(a, b CollectionMeta) bool {
 	}
 	for i := range a.TextIndexes {
 		if !textIndexDefinitionValuesEqual(a.TextIndexes[i], b.TextIndexes[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func indexDefinitionValuesEqual(a, b IndexDefinition) bool {
+	if a.Name != b.Name || a.Field != b.Field || a.ValueType != b.ValueType || a.Unique != b.Unique || a.MultiKey != b.MultiKey || a.StoragePolicy != b.StoragePolicy || len(a.Components) != len(b.Components) {
+		return false
+	}
+	for i := range a.Components {
+		if a.Components[i] != b.Components[i] {
 			return false
 		}
 	}
@@ -22395,7 +22670,7 @@ func addVectorIndexToCollectionMeta(meta CollectionMeta, def VectorIndexDefiniti
 	candidate := CollectionMeta{
 		Name:          meta.Name,
 		Options:       meta.Options,
-		Indexes:       append([]IndexDefinition(nil), meta.Indexes...),
+		Indexes:       copyIndexDefinitions(meta.Indexes),
 		VectorIndexes: append(append([]VectorIndexDefinition(nil), meta.VectorIndexes...), def),
 		TextIndexes:   copyTextIndexDefinitions(meta.TextIndexes),
 	}
@@ -22426,7 +22701,7 @@ func addIndexToCollectionMeta(meta CollectionMeta, def IndexDefinition) (Collect
 	candidate := CollectionMeta{
 		Name:          meta.Name,
 		Options:       meta.Options,
-		Indexes:       append(append([]IndexDefinition(nil), meta.Indexes...), def),
+		Indexes:       append(copyIndexDefinitions(meta.Indexes), def),
 		VectorIndexes: append([]VectorIndexDefinition(nil), meta.VectorIndexes...),
 		TextIndexes:   copyTextIndexDefinitions(meta.TextIndexes),
 	}
@@ -22465,6 +22740,7 @@ func plannerIndexes(indexes []IndexDefinition) []indexDefinition {
 			unique:        idx.Unique,
 			multiKey:      idx.MultiKey,
 			storagePolicy: policy,
+			components:    append([]IndexComponent(nil), idx.Components...),
 		}
 	}
 	return out

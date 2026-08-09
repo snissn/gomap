@@ -6009,14 +6009,14 @@ func parseCreateIndexDefinition(doc wire.Document) (createIndexDefinition, error
 	if err != nil {
 		return createIndexDefinition{}, err
 	}
-	if len(elements) != 1 {
-		return createIndexDefinition{}, errors.New("Mongo gateway createIndexes currently supports single-field indexes only")
+	if len(elements) == 0 || len(elements) > 4 {
+		return createIndexDefinition{}, errors.New("Mongo gateway createIndexes supports between one and four scalar key components")
 	}
 	field, err := elements[0].KeyErr()
 	if err != nil {
 		return createIndexDefinition{}, err
 	}
-	if field == "_id" {
+	if len(elements) == 1 && field == "_id" {
 		return createIndexDefinition{}, errors.New("Mongo gateway cannot create the built-in _id index")
 	}
 	name, namePresent, err := optionalStringFieldWithPresence(doc, "name")
@@ -6031,6 +6031,9 @@ func parseCreateIndexDefinition(doc wire.Document) (createIndexDefinition, error
 		return createIndexDefinition{}, err
 	}
 	if indexTypePresent {
+		if len(elements) != 1 {
+			return createIndexDefinition{}, errors.New("Mongo gateway vector indexes require exactly one key component")
+		}
 		if indexType != treeDBIndexTypeVector {
 			return createIndexDefinition{}, fmt.Errorf("Mongo gateway createIndexes index %q on field %q has unsupported %s %q", indexNameOrDefault(name, namePresent, field, ""), field, treeDBIndexTypeField, indexType)
 		}
@@ -6040,11 +6043,20 @@ func parseCreateIndexDefinition(doc wire.Document) (createIndexDefinition, error
 	if isVectorIndexKey(elements[0].Value()) || !bson.Raw(doc).Lookup(treeDBVectorOptionsField).IsZero() {
 		return createIndexDefinition{}, fmt.Errorf("Mongo gateway createIndexes vector index on field %q requires %s %q", field, treeDBIndexTypeField, treeDBIndexTypeVector)
 	}
-	if !isAscendingIndexKey(elements[0].Value()) {
-		return createIndexDefinition{}, errors.New("Mongo gateway createIndexes currently supports ascending indexes only")
+	components := make([]collections.IndexComponent, 0, len(elements))
+	for _, element := range elements {
+		componentField, err := element.KeyErr()
+		if err != nil {
+			return createIndexDefinition{}, err
+		}
+		direction, ok := mongoIndexDirection(element.Value())
+		if !ok {
+			return createIndexDefinition{}, fmt.Errorf("Mongo gateway createIndexes index key %q must be 1 or -1", componentField)
+		}
+		components = append(components, collections.IndexComponent{Field: componentField, Direction: direction})
 	}
 	if !namePresent {
-		name = field + "_1"
+		name = mongoIndexDefaultName(components)
 	}
 	unique, err := optionalBoolField(doc, "unique")
 	if err != nil {
@@ -6055,7 +6067,10 @@ func parseCreateIndexDefinition(doc wire.Document) (createIndexDefinition, error
 		return createIndexDefinition{}, err
 	}
 	if !valueTypePresent {
-		return createIndexDefinition{scalarDef: collections.IndexDefinition{Name: name, Field: field, ValueType: collections.IndexValueBSONOrderedV2, Unique: unique}}, nil
+		return createIndexDefinition{scalarDef: collections.IndexDefinition{Name: name, Field: field, Components: components, ValueType: collections.IndexValueBSONOrderedV2, Unique: unique}}, nil
+	}
+	if len(components) != 1 || components[0].Direction != collections.IndexDirectionAscending {
+		return createIndexDefinition{}, errors.New("Mongo gateway createIndexes treedbValueType indexes require exactly one ascending key component")
 	}
 	valueType := collections.IndexValueType(valueTypeRaw)
 	switch valueType {
@@ -6183,6 +6198,30 @@ func isAscendingIndexKey(value bson.RawValue) bool {
 	return false
 }
 
+func mongoIndexDirection(value bson.RawValue) (collections.IndexDirection, bool) {
+	if isAscendingIndexKey(value) {
+		return collections.IndexDirectionAscending, true
+	}
+	if v, ok := value.Int32OK(); ok && v == -1 {
+		return collections.IndexDirectionDescending, true
+	}
+	if v, ok := value.Int64OK(); ok && v == -1 {
+		return collections.IndexDirectionDescending, true
+	}
+	if v, ok := value.DoubleOK(); ok && v == -1 {
+		return collections.IndexDirectionDescending, true
+	}
+	return 0, false
+}
+
+func mongoIndexDefaultName(components []collections.IndexComponent) string {
+	parts := make([]string, 0, len(components))
+	for _, component := range components {
+		parts = append(parts, component.Field+map[collections.IndexDirection]string{collections.IndexDirectionAscending: "_1", collections.IndexDirectionDescending: "_-1"}[component.Direction])
+	}
+	return strings.Join(parts, "_")
+}
+
 func isVectorIndexKey(value bson.RawValue) bool {
 	key, ok := value.StringValueOK()
 	return ok && key == treeDBIndexTypeVector
@@ -6298,9 +6337,17 @@ func mongoIndexDocuments(meta collections.CollectionMeta) bson.A {
 		{Key: "name", Value: "_id_"},
 	}}
 	for _, idx := range meta.Indexes {
+		components := idx.Components
+		if len(components) == 0 {
+			components = []collections.IndexComponent{{Field: idx.Field, Direction: collections.IndexDirectionAscending}}
+		}
+		key := make(bson.D, 0, len(components))
+		for _, component := range components {
+			key = append(key, bson.E{Key: component.Field, Value: int32(component.Direction)})
+		}
 		doc := bson.D{
 			{Key: "v", Value: int32(2)},
-			{Key: "key", Value: bson.D{{Key: idx.Field, Value: int32(1)}}},
+			{Key: "key", Value: key},
 			{Key: "name", Value: idx.Name},
 		}
 		if idx.ValueType == collections.IndexValueBSONOrderedV2 {
@@ -6374,12 +6421,23 @@ func dedupeIdenticalVectorIndexDefinitions(defs []collections.VectorIndexDefinit
 }
 
 func sameIndexDefinition(left, right collections.IndexDefinition) bool {
-	return left.Name == right.Name &&
-		left.Field == right.Field &&
-		left.ValueType == right.ValueType &&
-		left.Unique == right.Unique &&
-		left.MultiKey == right.MultiKey &&
-		left.StoragePolicy == right.StoragePolicy
+	if left.Name != right.Name ||
+		left.Field != right.Field ||
+		left.ValueType != right.ValueType ||
+		left.Unique != right.Unique ||
+		left.MultiKey != right.MultiKey ||
+		left.StoragePolicy != right.StoragePolicy {
+		return false
+	}
+	if len(left.Components) != len(right.Components) {
+		return false
+	}
+	for i := range left.Components {
+		if left.Components[i] != right.Components[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func sameVectorIndexDefinition(left, right collections.VectorIndexDefinition) bool {

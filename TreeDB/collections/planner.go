@@ -72,6 +72,7 @@ type indexDefinition struct {
 	unique        bool
 	multiKey      bool
 	storagePolicy backenddb.OrderedRootStoragePolicy
+	components    []IndexComponent
 }
 
 type insertBatchPlanner struct {
@@ -153,6 +154,7 @@ type insertBatchItem struct {
 type indexRuntime struct {
 	def               indexDefinition
 	path              []string
+	componentPaths    [][]string
 	secondaryRootName string
 }
 
@@ -621,10 +623,19 @@ func (p insertBatchPlanner) indexRuntimes() ([]indexRuntime, error) {
 		runtimes[i] = indexRuntime{
 			def:               idx,
 			path:              splitIndexPath(idx.field),
+			componentPaths:    indexComponentPaths(idx.components),
 			secondaryRootName: secondaryRootName,
 		}
 	}
 	return runtimes, nil
+}
+
+func indexComponentPaths(components []IndexComponent) [][]string {
+	paths := make([][]string, len(components))
+	for i := range components {
+		paths[i] = splitIndexPath(components[i].Field)
+	}
+	return paths
 }
 
 func (p insertBatchPlanner) planIndexStateAndUniqueProbes(items []insertBatchItem, runtimes []indexRuntime) ([]uniqueProbeCandidate, error) {

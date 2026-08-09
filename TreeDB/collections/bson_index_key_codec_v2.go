@@ -963,11 +963,7 @@ func bsonIndexEntryKeyV2(component, documentID []byte) ([]byte, error) {
 // Keeping the caller-owned arena avoids an intermediate entry allocation in
 // buffered secondary-index writes.
 func appendBSONIndexEntryKeyV2(dst, component, documentID []byte) ([]byte, []byte, error) {
-	n, err := bsonIndexKeyComponentV2Length(component)
-	if err != nil || n != len(component) {
-		if err == nil {
-			err = fmt.Errorf("%w: scalar component has trailing bytes", errBSONIndexKeyV2Malformed)
-		}
+	if err := validateBSONIndexKeyComponentsV2(component); err != nil {
 		return dst, nil, err
 	}
 	if len(documentID) > bsonIndexKeyComponentV2MaxBytes-3 {
@@ -996,13 +992,24 @@ func appendBSONIndexEntryKeyV2(dst, component, documentID []byte) ([]byte, []byt
 	return dst, dst[start:len(dst):len(dst)], nil
 }
 
+func validateBSONIndexKeyComponentsV2(components []byte) error {
+	if len(components) == 0 {
+		return fmt.Errorf("%w: no scalar component", errBSONIndexKeyV2Malformed)
+	}
+	for offset := 0; offset < len(components); {
+		n, err := bsonIndexKeyComponentV2Length(components[offset:])
+		if err != nil {
+			return err
+		}
+		offset += n
+	}
+	return nil
+}
+
 func bsonIndexKeyDocumentIDV2(entry []byte) ([]byte, error) {
-	componentLength, err := bsonIndexKeyComponentV2Length(entry)
+	componentLength, err := bsonIndexKeyValuePrefixLengthV2(entry)
 	if err != nil {
 		return nil, err
-	}
-	if componentLength >= len(entry) || entry[componentLength] != bsonIndexKeyDocumentIDSuffixMarkerV2 {
-		return nil, fmt.Errorf("%w: missing document ID suffix", errBSONIndexKeyV2Malformed)
 	}
 	if len(entry)-componentLength < 3 {
 		return nil, fmt.Errorf("%w: truncated document ID suffix", errBSONIndexKeyV2Malformed)
@@ -1066,4 +1073,27 @@ func bsonIndexKeyDocumentIDV2(entry []byte) ([]byte, error) {
 		}
 	}
 	return nil, fmt.Errorf("%w: unterminated document ID suffix", errBSONIndexKeyV2Malformed)
+}
+
+func bsonIndexKeyValuePrefixV2(entry []byte) ([]byte, error) {
+	n, err := bsonIndexKeyValuePrefixLengthV2(entry)
+	if err != nil {
+		return nil, err
+	}
+	return entry[:n], nil
+}
+
+func bsonIndexKeyValuePrefixLengthV2(entry []byte) (int, error) {
+	componentLength := 0
+	for componentLength < len(entry) && entry[componentLength] != bsonIndexKeyDocumentIDSuffixMarkerV2 {
+		n, err := bsonIndexKeyComponentV2Length(entry[componentLength:])
+		if err != nil {
+			return 0, err
+		}
+		componentLength += n
+	}
+	if componentLength == 0 || componentLength >= len(entry) || entry[componentLength] != bsonIndexKeyDocumentIDSuffixMarkerV2 {
+		return 0, fmt.Errorf("%w: missing document ID suffix", errBSONIndexKeyV2Malformed)
+	}
+	return componentLength, nil
 }
