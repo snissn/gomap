@@ -8303,7 +8303,10 @@ func newBufferedRootRunsIteratorWithDeletedDirection(runs []memtable.Table, star
 }
 
 func newBufferedRootRunsIteratorWithDeletedDirectionWorkCap(runs []memtable.Table, start, end []byte, includeDeleted, reverse bool, maxInspected int) iterator.UnsafeIterator {
-	if len(runs) == 1 && includeDeleted && runs[0] != nil {
+	if maxInspected > 0 && len(runs) > maxInspected {
+		return &bufferedRootRunsIterator{firstErr: errCollectionIndexScanWorkCap, workCapped: true}
+	}
+	if maxInspected == 0 && len(runs) == 1 && includeDeleted && runs[0] != nil {
 		if reverse {
 			return runs[0].NewReverseIterator(start, end)
 		}
@@ -8345,6 +8348,19 @@ func newBufferedRootRunIteratorSourcesIteratorWithDeletedDirection(sources []buf
 }
 
 func newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCap(sources []bufferedRootRunIteratorSource, start, end []byte, includeDeleted, stableUnsafeSlices, reverse bool, maxInspected int) iterator.UnsafeIterator {
+	// Source construction is physical work too: a direct bounded scan must not
+	// open an unbounded stack of overlay roots before the capped merge gets a
+	// chance to reject it. A source has an initially-positioned physical entry,
+	// so the same budget is a safe upper bound for both source initialization
+	// and subsequently inspected entries.
+	if maxInspected > 0 && len(sources) > maxInspected {
+		for _, source := range sources {
+			if source.iter != nil {
+				_ = source.iter.Close()
+			}
+		}
+		return &bufferedRootRunsIterator{firstErr: errCollectionIndexScanWorkCap, workCapped: true}
+	}
 	it := &bufferedRootRunsIterator{
 		iters:              make([]iterator.UnsafeIterator, 0, len(sources)),
 		heap:               bufferedRootRunHeap{items: make([]bufferedRootRunHeapItem, 0, len(sources)), reverse: reverse},
@@ -8562,8 +8578,11 @@ func (it *bufferedRootRunsIterator) advance() {
 
 func (it *bufferedRootRunsIterator) advanceItem(item bufferedRootRunHeapItem) {
 	source := it.iters[item.idx]
+	if !it.inspect(1) {
+		return
+	}
 	source.Next()
-	if source.Valid() && it.inspect(1) {
+	if source.Valid() {
 		item.key = source.UnsafeKey()
 		it.heap.push(item)
 	} else if err := source.Error(); err != nil && it.firstErr == nil {
@@ -8573,10 +8592,10 @@ func (it *bufferedRootRunsIterator) advanceItem(item bufferedRootRunHeapItem) {
 
 func (it *bufferedRootRunsIterator) advanceCurrentItemDirect(item bufferedRootRunHeapItem) bool {
 	source := it.iters[item.idx]
-	source.Next()
-	if source.Valid() && !it.inspect(1) {
+	if !it.inspect(1) {
 		return false
 	}
+	source.Next()
 	if !source.Valid() {
 		if err := source.Error(); err != nil && it.firstErr == nil {
 			it.firstErr = err
@@ -22032,6 +22051,9 @@ func collectionIteratorAtCatalogRootWithWorkCap(snap *backenddb.Snapshot, catalo
 	if len(rootIDs) == 0 {
 		return nil, nil
 	}
+	if maxInspected > 0 && len(rootIDs) > maxInspected {
+		return nil, errCollectionIndexScanWorkCap
+	}
 	sources := make([]bufferedRootRunIteratorSource, 0, len(rootIDs))
 	for i, rootID := range rootIDs {
 		if rootID == 0 {
@@ -22082,8 +22104,12 @@ func collectionReverseIteratorAtCatalogRootWithWorkCap(snap *backenddb.Snapshot,
 		}
 		return it, err
 	}
-	sources := make([]bufferedRootRunIteratorSource, 0, len(catalog.rootStack(rootName)))
-	for i, rootID := range catalog.rootStack(rootName) {
+	rootIDs := catalog.rootStack(rootName)
+	if maxInspected > 0 && len(rootIDs) > maxInspected {
+		return nil, errCollectionIndexScanWorkCap
+	}
+	sources := make([]bufferedRootRunIteratorSource, 0, len(rootIDs))
+	for i, rootID := range rootIDs {
 		if rootID == 0 {
 			continue
 		}

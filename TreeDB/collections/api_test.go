@@ -6127,6 +6127,75 @@ func TestBufferedRootRunsIteratorSingleRunIncludesTombstones(t *testing.T) {
 	}
 }
 
+func TestBufferedRootRunsIteratorWorkCapBoundsRawSingleRootForwardAndReverse(t *testing.T) {
+	// A catalog root without overlays is deliberately wrapped in this iterator
+	// for direct compound scans. Keep this lower-level fixture non-vacuous: it
+	// has more physical records than the cap, rather than relying on a compacted
+	// collection where historical tombstones have already been discarded.
+	table := newCollectionRunTable(65)
+	defer resetCollectionRunTable(table)
+	for i := 0; i < 65; i++ {
+		key := []byte(fmt.Sprintf("%03d", i))
+		if i%2 == 0 {
+			table.DeleteSteal(key)
+		} else {
+			setCollectionRunValue(table, key, []byte("live"))
+		}
+	}
+	table.Freeze()
+	for _, reverse := range []bool{false, true} {
+		t.Run(map[bool]string{false: "forward", true: "reverse"}[reverse], func(t *testing.T) {
+			var source iterator.UnsafeIterator
+			if reverse {
+				source = table.NewReverseIterator(nil, nil)
+			} else {
+				source = table.NewIterator(nil, nil)
+			}
+			it := newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCap(
+				[]bufferedRootRunIteratorSource{{iter: source}}, nil, nil, true, false, reverse, 64,
+			)
+			defer func() { _ = it.Close() }()
+			count := 0
+			for it.Valid() {
+				count++
+				it.Next()
+			}
+			if count != 64 {
+				t.Fatalf("physical entries returned=%d want 64", count)
+			}
+			if !errors.Is(it.Error(), errCollectionIndexScanWorkCap) {
+				t.Fatalf("iterator error=%v want work cap", it.Error())
+			}
+		})
+	}
+}
+
+func TestBufferedRootRunsIteratorWorkCapRejectsOverlaySourceFanout(t *testing.T) {
+	// The capped compositor must reject before opening/seeking an arbitrary
+	// number of overlay roots. Each table has one physical entry; a 64-entry
+	// budget therefore cannot admit 65 sources.
+	tables := make([]memtable.Table, 65)
+	for i := range tables {
+		table := newCollectionRunTable(1)
+		setCollectionRunValue(table, []byte(fmt.Sprintf("%03d", i)), []byte("value"))
+		table.Freeze()
+		tables[i] = table
+	}
+	defer resetCollectionTables(tables)
+	for _, reverse := range []bool{false, true} {
+		t.Run(map[bool]string{false: "forward", true: "reverse"}[reverse], func(t *testing.T) {
+			it := newBufferedRootRunsIteratorWithDeletedDirectionWorkCap(tables, nil, nil, true, reverse, 64)
+			defer func() { _ = it.Close() }()
+			if it.Valid() {
+				t.Fatalf("iterator valid despite source fanout above cap")
+			}
+			if !errors.Is(it.Error(), errCollectionIndexScanWorkCap) {
+				t.Fatalf("iterator error=%v want work cap", it.Error())
+			}
+		})
+	}
+}
+
 func TestBufferedRootRunsIteratorMultiRunIncludesNewestTombstone(t *testing.T) {
 	older := newCollectionRunTable(2)
 	setCollectionRunValue(older, []byte("a"), []byte("older"))

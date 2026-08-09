@@ -450,9 +450,11 @@ func benchmarkReportTreeDBDiskUsage(b *testing.B, backend *backenddb.DB, docs in
 	if !benchmarkBoolEnv(b, "TREEDB_COLLECTION_REPORT_DISK_USAGE", true) {
 		return
 	}
+	checkpointStart := time.Now()
 	if err := backend.Checkpoint(); err != nil {
 		b.Fatalf("checkpoint before TreeDB disk usage stats: %v", err)
 	}
+	b.ReportMetric(float64(time.Since(checkpointStart).Nanoseconds()), "checkpoint_ns/op")
 	totalBytes, err := benchmarkTreeDBDiskUsageBytes(backend)
 	if err != nil {
 		b.Fatalf("TreeDB disk usage stats: %v", err)
@@ -1356,6 +1358,69 @@ func BenchmarkCollectionBSONCompoundIndexComponents(b *testing.B) {
 							b.Fatal(err)
 						}
 					} else if _, _, err := col.FindByCompoundIndexRange("compound", collections.CompoundIndexRangeOptions{Prefix: []bson.RawValue{prefix}, Lower: collections.IndexRangeBound{Value: lower, Inclusive: true}, Limit: 64, Desc: i%2 == 1}); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+			b.Run("checkpoint", func(b *testing.B) {
+				backend, col := openBenchmarkCollection(b, "compound_checkpoint", index)
+				for i := 0; i < 64; i++ {
+					id := fmt.Sprintf("%08d", i)
+					if _, err := col.Insert([]byte(id), document(id, i)); err != nil {
+						b.Fatal(err)
+					}
+				}
+				if err := backend.Checkpoint(); err != nil {
+					b.Fatal(err)
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if err := backend.Checkpoint(); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+			b.Run("reopen", func(b *testing.B) {
+				// The timed section contains only close/open/catalog recovery and a
+				// direct read. Fixture creation and the initial durable checkpoint are
+				// outside it, making this usable as a reopen durability profile.
+				dir := b.TempDir()
+				backend, cleanup := openBenchmarkBackend(b, dir)
+				defer func() {
+					if err := cleanup(); err != nil {
+						b.Errorf("close compound reopen backend: %v", err)
+					}
+				}()
+				mgr := collections.NewCollectionManager(backend)
+				if _, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "compound_reopen", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON, BufferedIndexedWrites: true}, Indexes: []collections.IndexDefinition{index}}); err != nil {
+					b.Fatal(err)
+				}
+				col, err := mgr.OpenCollection("compound_reopen")
+				if err != nil {
+					b.Fatal(err)
+				}
+				for i := 0; i < 64; i++ {
+					id := fmt.Sprintf("%08d", i)
+					if _, err := col.Insert([]byte(id), document(id, i)); err != nil {
+						b.Fatal(err)
+					}
+				}
+				if err := backend.Checkpoint(); err != nil {
+					b.Fatal(err)
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if err := cleanup(); err != nil {
+						b.Fatal(err)
+					}
+					backend, cleanup = openBenchmarkBackend(b, dir)
+					col, err = collections.NewCollectionManager(backend).OpenCollection("compound_reopen")
+					if err != nil {
+						b.Fatal(err)
+					}
+					if _, err := col.Get([]byte("00000000")); err != nil {
 						b.Fatal(err)
 					}
 				}
