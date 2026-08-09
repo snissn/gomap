@@ -81,7 +81,7 @@ call concurrently.
 <!-- mongo-capability-summary:begin -->
 ## Executable capability summary
 
-Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:893414bcada831ef3a066f86d462788e43ddbfad7639b48b89b683746548d080`
+Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:3a66668069e31f4ebbc6932260dbab77405fe679d484e19e27391c706e478f8a`
 
 | Surface | Status | Boundary |
 |---|---|---|
@@ -92,7 +92,7 @@ Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:893414bcada831ef3a
 | Logical sessions | supported subset | Driver-interoperability metadata only; no transaction or causal-session semantics. |
 | Transport security | supported subset | Loopback plaintext remains available; non-loopback standalone listeners require TLS unless an explicit insecure override is selected. Password authentication refuses plaintext non-loopback listeners. TLS 1.2+ with bounded handshakes is supported. |
 | Scalar indexes | supported subset | BSON collections default ordinary single-field ascending indexes to BSON-ordered v2; explicit treedbValueType remains the legacy homogeneous path. Compound and descending indexes remain rejected. |
-| Authentication and authorization | supported subset | Standalone SCRAM-SHA-256 identities use durable read, readWrite, dbAdmin, userAdmin, and serverAdmin grants with pre-execution command checks, filtered catalog visibility, principal-bound cursors, and last-admin safeguards. Cluster/routed protected commands fail closed without authoritative resource binding; SCRAM-SHA-1 and external identity providers remain unavailable. |
+| Authentication and authorization | supported subset | Standalone SCRAM-SHA-256 identities use versioned durable read, readWrite, dbAdmin, userAdmin, and serverAdmin grants, spilling growing records to TreeDB's persistent ValueLog, with pre-execution command checks, filtered catalog visibility, principal-bound cursors, and last-admin safeguards. Cluster/routed protected commands fail closed without authoritative resource binding; SCRAM-SHA-1 and external identity providers remain unavailable. |
 | Transactions and retryable writes | not implemented | Transaction markers reject and commitTransaction is unavailable. |
 | Replica set and sharding | not implemented | Standalone hello metadata does not advertise replica-set or sharded-server behavior. |
 <!-- mongo-capability-summary:end -->
@@ -115,13 +115,18 @@ surface.
 Enabling authentication also enables fail-closed per-command authorization.
 The first verifier created in an empty catalog is the bootstrap
 `serverAdmin`; subsequent users receive no privileges until durable grants are
-assigned. The built-in roles are deliberately bounded: `read` permits data
+assigned. A non-empty catalog with no usable administrator does not
+auto-escalate a new verifier; trusted tooling reports that offline repair is
+required. The built-in roles are deliberately bounded: `read` permits data
 reads, `readWrite` adds mutations, `dbAdmin` owns collection/index metadata and
 DDL, `userAdmin` owns user management within its scope, and `serverAdmin` owns
 the full standalone server. Grants may be server-, database-, or
-collection-scoped. Database-scoped user administrators cannot grant
-server-scoped roles or manage users whose current or requested grants extend
-outside the administrator's scope.
+collection-scoped. A collection-scoped `userAdmin` may manage and observe only
+identities whose non-empty current and requested grants stay inside that
+collection; empty grant sets require database scope. A server-scoped
+`userAdmin` may grant non-administrator server roles, but only `serverAdmin`
+may grant `serverAdmin`. Every user mutation rechecks the actor and target's
+current/requested grants while holding the same backend catalog lock.
 
 Authorization runs before collection/index lookup, route resolution, cursor
 creation, or mutation. Catalog lists are filtered, retained cursors are bound
@@ -132,6 +137,17 @@ its identity until that connection closes. The catalog rejects malformed
 durable records on reopen and prevents disabling, demoting, or dropping the
 last enabled server administrator. Routed/cluster protected commands reject
 when the gateway lacks an authoritative resource binding.
+User-management commands reject transaction markers, standalone `w:0`, and
+OP_MSG `moreToCome` before durable mutation. Wire `createUser` publishes the
+requested verifier and exact roles under one catalog lock and never invokes
+trusted bootstrap escalation. A mixed `updateUser` rotates the verifier before
+publishing roles: if the second durable write fails, the old credential is
+invalid while the new credential retains the old grants. These multi-record
+operations are fail-closed but not rollback-atomic. Growing versioned verifier
+and grant records use TreeDB's persistent ValueLog with durable pointer
+publication; it is neither an ephemeral WAL nor legacy slab storage. A failed
+or ambiguous grant publication invalidates the immutable authorization
+snapshot so the next protected command reloads durable state or denies closed.
 `AuthorizationMetrics` reports only low-cardinality allowed/denied totals; it
 does not expose secrets or query/document payloads.
 

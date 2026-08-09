@@ -5,8 +5,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -14,9 +18,124 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
+	"github.com/snissn/gomap/TreeDB/node"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"golang.org/x/crypto/pbkdf2"
 )
+
+func TestAuthCatalogForcedPersistentValueLogReopenAndCorruptionFailClosed(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+
+	db, cleanup, err := treedb.OpenBackend(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.UpsertPassword("admin", "root", []byte("root password")); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.UpsertPassword("app", "reader", []byte("reader password")); err != nil {
+		t.Fatal(err)
+	}
+	wantRoles := []AuthRoleGrant{{Role: AuthRoleRead, Database: "app", Collection: "items"}}
+	if err := catalog.SetUserRoles("app", "reader", wantRoles); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := db.AcquireSnapshot()
+	entry, err := snapshot.GetEntry(authAuthorizationCatalogKey())
+	snapshot.Close()
+	if err != nil || entry.Flags&node.FlagPointer == 0 {
+		t.Fatalf("authorization catalog entry pointer=%+v err=%v", entry.ValuePtr, err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, cleanup, err = treedb.OpenBackend(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err = NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.VerifyPassword("app", "reader", []byte("reader password")); err != nil {
+		t.Fatalf("forced-pointer verifier after reopen: %v", err)
+	}
+	if roles, err := catalog.UserRoles("app", "reader"); err != nil || !reflect.DeepEqual(roles, wantRoles) {
+		t.Fatalf("forced-pointer roles after reopen=%v err=%v", roles, err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatal(err)
+	}
+
+	var segments []string
+	err = filepath.Walk(dir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !info.IsDir() && filepath.Base(filepath.Dir(path)) == "value_vlog" && strings.HasPrefix(info.Name(), "value-l") && strings.HasSuffix(info.Name(), ".log") {
+			segments = append(segments, path)
+		}
+		return nil
+	})
+	if err != nil || len(segments) == 0 {
+		t.Fatalf("persistent ValueLog segments=%v err=%v", segments, err)
+	}
+	for _, segment := range segments {
+		if err := os.Truncate(segment, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db, cleanup, err = treedb.OpenBackend(opts)
+	if err != nil {
+		return // Refusing to open corrupted persistent ValueLog state is fail closed.
+	}
+	defer cleanup()
+	if catalog, err = NewAuthCatalog(db); err == nil {
+		t.Fatal("corrupted persistent ValueLog authorization state was accepted")
+	}
+}
+
+func TestAuthCatalogBootstrapRefusesUnusableNonemptyAdministratorCatalog(t *testing.T) {
+	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	record := authAuthorizationRecord{Version: authAuthorizationVersion, Users: []authRoleAssignment{{
+		Username: "missing-verifier",
+		AuthDB:   "admin",
+		Roles:    []AuthRoleGrant{{Role: AuthRoleServerAdmin}},
+	}}}
+	raw, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetSync(authAuthorizationCatalogKey(), raw); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = catalog.UpsertPassword("admin", "candidate", []byte("candidate password"))
+	if err == nil || !strings.Contains(err.Error(), "offline repair required") {
+		t.Fatalf("UpsertPassword err=%v want offline repair requirement", err)
+	}
+	if catalog.userExists("admin", "candidate") {
+		t.Fatal("recovery attempt created a credential in a nonempty unusable administrator catalog")
+	}
+	if roles, err := catalog.UserRoles("admin", "candidate"); err != nil || len(roles) != 0 {
+		t.Fatalf("recovery attempt roles=%v err=%v", roles, err)
+	}
+}
 
 func addBackupAuthAdministrator(t *testing.T, catalog *AuthCatalog) {
 	t.Helper()

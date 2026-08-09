@@ -181,7 +181,12 @@ func (c *AuthCatalog) publishAuthorizationRecordLocked(record authAuthorizationR
 	if err != nil {
 		return err
 	}
-	if err := c.db.SetSync(authAuthorizationCatalogKey(), raw); err != nil {
+	if err := setAuthCatalogValueSync(c.db, authAuthorizationCatalogKey(), raw); err != nil {
+		// A storage error may be an uncertain publication outcome. Invalidate the
+		// immutable hot-path snapshot so no previously broader grant survives an
+		// ambiguous durable revoke; the next command must reload or deny closed.
+		c.backend.authorizationVersion.Add(1)
+		c.authorization.Store(nil)
 		return err
 	}
 	version := c.backend.authorizationVersion.Add(1)
@@ -263,7 +268,7 @@ func (c *AuthCatalog) SetUserRoles(authDB, username string, roles []AuthRoleGran
 		}
 	}
 	if index >= 0 && stored.Enabled && hasServerAdmin(record.Users[index].Roles) && !hasServerAdmin(roles) && c.usableServerAdminsLocked(record) == 1 {
-		return errors.New("mongo gateway authorization: cannot demote the last enabled server administrator")
+		return errCannotDemoteLastServerAdministrator
 	}
 	if index < 0 {
 		if len(record.Users) >= maxAuthorizationUsers {
@@ -274,6 +279,218 @@ func (c *AuthCatalog) SetUserRoles(authDB, username string, roles []AuthRoleGran
 		record.Users[index].Roles = roles
 	}
 	return c.publishAuthorizationRecordLocked(record)
+}
+
+func authRolesInRecord(record authAuthorizationRecord, authDB, username string) ([]AuthRoleGrant, int) {
+	for i := range record.Users {
+		if record.Users[i].AuthDB == authDB && record.Users[i].Username == username {
+			return record.Users[i].Roles, i
+		}
+	}
+	return nil, -1
+}
+
+// canManageUserGrants is the complete built-in userAdmin scope policy. The
+// account's auth database must be covered independently of its grants. An
+// empty grant set has no collection anchor and therefore requires database- or
+// server-scoped userAdmin. serverAdmin grants remain reserved to serverAdmin.
+func canManageUserGrants(actorRoles []AuthRoleGrant, commandDB string, grants []AuthRoleGrant) bool {
+	for _, role := range actorRoles {
+		if role.Role == AuthRoleServerAdmin {
+			return true
+		}
+	}
+	commandDBCovered := false
+	emptyGrantSetCovered := false
+	for _, role := range actorRoles {
+		if role.Role != AuthRoleUserAdmin || (role.Database != "" && role.Database != commandDB) {
+			continue
+		}
+		commandDBCovered = true
+		if role.Collection == "" {
+			emptyGrantSetCovered = true
+		}
+	}
+	if !commandDBCovered {
+		return false
+	}
+	if len(grants) == 0 {
+		return emptyGrantSetCovered
+	}
+	for _, grant := range grants {
+		if grant.Role == AuthRoleServerAdmin {
+			return false
+		}
+		allowed := false
+		for _, role := range actorRoles {
+			if role.Role != AuthRoleUserAdmin {
+				continue
+			}
+			if grant.Database == "" {
+				allowed = role.Database == ""
+			} else {
+				allowed = roleScopeMatches(role, grant.Database, grant.Collection)
+			}
+			if allowed {
+				break
+			}
+		}
+		if !allowed {
+			return false
+		}
+	}
+	return true
+}
+
+// createUser applies a wire createUser request under the catalog's backend
+// lock. It intentionally bypasses UpsertPassword's trusted-tooling bootstrap:
+// an explicit network role set must never transiently acquire serverAdmin.
+func (c *AuthCatalog) createUser(actor AuthUser, authDB, username string, password []byte, roles []AuthRoleGrant) error {
+	prepared, err := prepareSCRAMRecord(authDB, username, password)
+	if err != nil {
+		return err
+	}
+	roles, err = canonicalAuthRoles(roles)
+	if c == nil || err != nil {
+		return errAuthenticationFailed
+	}
+	c.backend.mu.Lock()
+	defer c.backend.mu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	record, err := c.loadAuthorizationRecordLocked()
+	if err != nil {
+		return errAuthenticationFailed
+	}
+	actorRoles, _ := authRolesInRecord(record, actor.AuthDB, actor.Username)
+	if !canManageUserGrants(actorRoles, authDB, roles) {
+		return errUserManagementUnauthorized
+	}
+	if _, index := authRolesInRecord(record, authDB, username); index >= 0 {
+		return errAuthUserExists
+	}
+	if len(record.Users) >= maxAuthorizationUsers {
+		return errors.New("mongo gateway authorization: user limit exceeded")
+	}
+	raw, lookupErr := getAuthCatalogValue(c.db, authCatalogKey(authDB, username))
+	if lookupErr == nil && len(raw) != 0 {
+		return errAuthUserExists
+	} else if lookupErr != nil && !errors.Is(lookupErr, treedb.ErrKeyNotFound) {
+		return errAuthenticationFailed
+	}
+	if err := setAuthCatalogValueSync(c.db, authCatalogKey(authDB, username), prepared); err != nil {
+		return err
+	}
+	record.Users = append(record.Users, authRoleAssignment{Username: username, AuthDB: authDB, Roles: roles})
+	return c.publishAuthorizationRecordLocked(record)
+}
+
+// updateUser preflights current and requested grants under the same backend
+// lock as its durable writes. For a mixed update the verifier is written first;
+// if the role write then fails, the old credential is invalid and the new
+// credential retains the old grants.
+func (c *AuthCatalog) updateUser(actor AuthUser, authDB, username string, password []byte, updatePassword bool, roles []AuthRoleGrant, updateRoles bool) error {
+	var prepared []byte
+	var err error
+	if updatePassword {
+		prepared, err = prepareSCRAMRecord(authDB, username, password)
+		if err != nil {
+			return err
+		}
+	}
+	if updateRoles {
+		roles, err = canonicalAuthRoles(roles)
+		if err != nil {
+			return errAuthenticationFailed
+		}
+	}
+	if c == nil || !validAuthField(authDB) || !validAuthField(username) {
+		return errAuthenticationFailed
+	}
+	c.backend.mu.Lock()
+	defer c.backend.mu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, err := getAuthCatalogValue(c.db, authCatalogKey(authDB, username)); errors.Is(err, treedb.ErrKeyNotFound) {
+		return errAuthUserNotFound
+	} else if err != nil {
+		return errAuthenticationFailed
+	}
+	stored, err := c.storedRecordLocked(authDB, username)
+	if err != nil {
+		return err
+	}
+	record, err := c.loadAuthorizationRecordLocked()
+	if err != nil {
+		return errAuthenticationFailed
+	}
+	actorRoles, _ := authRolesInRecord(record, actor.AuthDB, actor.Username)
+	currentRoles, targetIndex := authRolesInRecord(record, authDB, username)
+	if !canManageUserGrants(actorRoles, authDB, currentRoles) || (updateRoles && !canManageUserGrants(actorRoles, authDB, roles)) {
+		return errUserManagementUnauthorized
+	}
+	if updateRoles && targetIndex >= 0 && stored.Enabled && hasServerAdmin(currentRoles) && !hasServerAdmin(roles) && c.usableServerAdminsLocked(record) == 1 {
+		return errCannotDemoteLastServerAdministrator
+	}
+	if updatePassword {
+		if err := setAuthCatalogValueSync(c.db, authCatalogKey(authDB, username), prepared); err != nil {
+			return err
+		}
+	}
+	if !updateRoles {
+		return nil
+	}
+	if targetIndex < 0 {
+		if len(record.Users) >= maxAuthorizationUsers {
+			return errors.New("mongo gateway authorization: user limit exceeded")
+		}
+		record.Users = append(record.Users, authRoleAssignment{Username: username, AuthDB: authDB, Roles: roles})
+	} else {
+		record.Users[targetIndex].Roles = roles
+	}
+	return c.publishAuthorizationRecordLocked(record)
+}
+
+func (c *AuthCatalog) dropUser(actor AuthUser, authDB, username string) error {
+	if c == nil || !validAuthField(authDB) || !validAuthField(username) {
+		return errAuthenticationFailed
+	}
+	deleteStore, ok := c.db.(authCatalogDeleteStore)
+	if !ok {
+		return errors.New("mongo gateway auth: backend does not support durable user deletion")
+	}
+	c.backend.mu.Lock()
+	defer c.backend.mu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, err := getAuthCatalogValue(c.db, authCatalogKey(authDB, username)); errors.Is(err, treedb.ErrKeyNotFound) {
+		return errAuthUserNotFound
+	} else if err != nil {
+		return errAuthenticationFailed
+	}
+	stored, err := c.storedRecordLocked(authDB, username)
+	if err != nil {
+		return err
+	}
+	record, err := c.loadAuthorizationRecordLocked()
+	if err != nil {
+		return errAuthenticationFailed
+	}
+	actorRoles, _ := authRolesInRecord(record, actor.AuthDB, actor.Username)
+	currentRoles, targetIndex := authRolesInRecord(record, authDB, username)
+	if !canManageUserGrants(actorRoles, authDB, currentRoles) {
+		return errUserManagementUnauthorized
+	}
+	if targetIndex >= 0 && stored.Enabled && hasServerAdmin(currentRoles) && c.usableServerAdminsLocked(record) == 1 {
+		return errCannotDropLastServerAdministrator
+	}
+	if targetIndex >= 0 {
+		record.Users = append(record.Users[:targetIndex], record.Users[targetIndex+1:]...)
+		if err := c.publishAuthorizationRecordLocked(record); err != nil {
+			return err
+		}
+	}
+	return deleteStore.DeleteSync(authCatalogKey(authDB, username))
 }
 
 func hasServerAdmin(roles []AuthRoleGrant) bool {
@@ -300,22 +517,27 @@ func (c *AuthCatalog) usableServerAdminsLocked(record authAuthorizationRecord) i
 }
 
 func (c *AuthCatalog) ensureBootstrapAdminLocked(record *authAuthorizationRecord, authDB, username string) (bool, error) {
-	hasAdmin := false
-	for _, assignment := range record.Users {
-		if hasServerAdmin(assignment.Roles) {
-			hasAdmin = true
-		}
-		if assignment.AuthDB == authDB && assignment.Username == username {
+	_, targetIndex := authRolesInRecord(*record, authDB, username)
+	if c.usableServerAdminsLocked(*record) > 0 {
+		if targetIndex >= 0 {
 			return false, nil
 		}
+		if len(record.Users) >= maxAuthorizationUsers {
+			return false, errors.New("mongo gateway authorization: user limit exceeded")
+		}
+		record.Users = append(record.Users, authRoleAssignment{Username: username, AuthDB: authDB, Roles: []AuthRoleGrant{}})
+		return true, nil
+	}
+	// Trusted bootstrap may create the first usable administrator, but it does
+	// not recover a non-empty catalog whose administrator records became
+	// unusable; that requires offline repair rather than privilege escalation.
+	if len(record.Users) != 0 {
+		return false, errors.New("mongo gateway authorization: no usable server administrator; offline repair required")
 	}
 	if len(record.Users) >= maxAuthorizationUsers {
 		return false, errors.New("mongo gateway authorization: user limit exceeded")
 	}
-	assignment := authRoleAssignment{Username: username, AuthDB: authDB, Roles: []AuthRoleGrant{}}
-	if !hasAdmin {
-		assignment.Roles = []AuthRoleGrant{{Role: AuthRoleServerAdmin}}
-	}
+	assignment := authRoleAssignment{Username: username, AuthDB: authDB, Roles: []AuthRoleGrant{{Role: AuthRoleServerAdmin}}}
 	record.Users = append(record.Users, assignment)
 	return true, nil
 }
@@ -347,7 +569,8 @@ func (c *AuthCatalog) authorizationUsers() ([]authRoleAssignment, error) {
 type authorizationPrivilege uint8
 
 const (
-	authorizationPublic authorizationPrivilege = iota
+	authorizationUnsupported authorizationPrivilege = iota
+	authorizationPublic
 	authorizationRead
 	authorizationMetadataRead
 	authorizationWrite
@@ -391,6 +614,7 @@ func commandAuthorizationTarget(name string, command wire.Document) (authorizati
 	target := authorizationTarget{}
 	switch name {
 	case "hello", "isMaster", "ismaster", "saslStart", "saslContinue", "connectionStatus", "buildInfo", "ping", "endSessions":
+		target.privilege = authorizationPublic
 		return target, nil
 	case "hostInfo":
 		target.privilege = authorizationServerAdmin
@@ -469,11 +693,17 @@ func roleScopeMatchesTarget(grant AuthRoleGrant, target authorizationTarget) boo
 }
 
 func roleAllows(grant AuthRoleGrant, target authorizationTarget) bool {
+	if target.privilege == authorizationUnsupported {
+		return false
+	}
 	if grant.Role == AuthRoleServerAdmin {
 		return true
 	}
 	if target.privilege == authorizationServerAdmin {
 		return false
+	}
+	if target.privilege == authorizationUserAdmin {
+		return grant.Role == AuthRoleUserAdmin && (grant.Database == "" || resourceNameMatches(grant.Database, target.databaseRaw, target.database))
 	}
 	if target.privilege == authorizationListCollections || target.privilege == authorizationListDatabases {
 		targetHasDatabase := target.databaseRaw != nil || target.database != ""
@@ -590,7 +820,11 @@ func authPrivilegeDocuments(roles []AuthRoleGrant) bson.A {
 }
 
 func parseAuthRoleGrants(command wire.Document, commandDB string) ([]AuthRoleGrant, error) {
-	values, err := bson.Raw(command).Lookup("roles").Array().Values()
+	array, ok := bson.Raw(command).Lookup("roles").ArrayOK()
+	if !ok {
+		return nil, errors.New("roles must be an array")
+	}
+	values, err := array.Values()
 	if err != nil {
 		return nil, errors.New("roles must be an array")
 	}
@@ -633,7 +867,7 @@ func parseAuthRoleGrants(command wire.Document, commandDB string) ([]AuthRoleGra
 	return canonicalAuthRoles(roles)
 }
 
-func (s *Server) principalCanManageGrants(owner int64, grants []AuthRoleGrant) bool {
+func (s *Server) principalCanManageGrants(owner int64, commandDB string, grants []AuthRoleGrant) bool {
 	user := s.authUserSnapshot(owner)
 	if user == nil || s.AuthCatalog == nil {
 		return false
@@ -642,37 +876,21 @@ func (s *Server) principalCanManageGrants(owner int64, grants []AuthRoleGrant) b
 	if err != nil {
 		return false
 	}
-	for _, role := range roles {
-		if role.Role == AuthRoleServerAdmin {
-			return true
-		}
-	}
-	for _, grant := range grants {
-		allowed := false
-		if grant.Role == AuthRoleServerAdmin || grant.Database == "" {
-			return false
-		}
-		for _, role := range roles {
-			if role.Role == AuthRoleUserAdmin && roleScopeMatches(role, grant.Database, grant.Collection) {
-				allowed = true
-				break
-			}
-		}
-		if !allowed {
-			return false
-		}
-	}
-	return true
+	return canManageUserGrants(roles, commandDB, grants)
 }
 
 func (s *Server) principalCanManageTarget(owner int64, authDB, username string) bool {
 	targetRoles, err := s.AuthCatalog.effectiveRoles(authDB, username)
-	return err == nil && s.principalCanManageGrants(owner, targetRoles)
+	return err == nil && s.principalCanManageGrants(owner, authDB, targetRoles)
 }
 
 func (s *Server) userManagementResponse(name string, command wire.Document, owner int64) (wire.Document, error) {
 	if s.AuthCatalog == nil {
 		return commandError(13, "Unauthorized", "authorization catalog unavailable")
+	}
+	actor := s.authUserSnapshot(owner)
+	if actor == nil {
+		return commandError(13, "Unauthorized", "Authentication required")
 	}
 	database, err := commandString(command, "$db")
 	if err != nil {
@@ -692,16 +910,16 @@ func (s *Server) userManagementResponse(name string, command wire.Document, owne
 		if err != nil {
 			return commandError(2, "BadValue", err.Error())
 		}
-		if !s.principalCanManageGrants(owner, roles) {
+		if !s.principalCanManageGrants(owner, database, roles) {
 			return commandError(13, "Unauthorized", "not authorized to grant requested roles")
 		}
-		if s.AuthCatalog.userExists(database, username) {
-			return commandError(51003, "DuplicateKey", "user already exists")
-		}
-		if err := s.AuthCatalog.UpsertPassword(database, username, []byte(password)); err != nil {
-			return commandError(1, "InternalError", err.Error())
-		}
-		if err := s.AuthCatalog.SetUserRoles(database, username, roles); err != nil {
+		if err := s.AuthCatalog.createUser(*actor, database, username, []byte(password), roles); err != nil {
+			if errors.Is(err, errAuthUserExists) {
+				return commandError(51003, "DuplicateKey", "user already exists")
+			}
+			if errors.Is(err, errUserManagementUnauthorized) {
+				return commandError(13, "Unauthorized", err.Error())
+			}
 			return commandError(1, "InternalError", err.Error())
 		}
 		return marshalDocument(bson.D{{Key: "ok", Value: 1.0}})
@@ -710,12 +928,6 @@ func (s *Server) userManagementResponse(name string, command wire.Document, owne
 		username, err := commandString(command, name)
 		if err != nil {
 			return commandError(9, "FailedToParse", err.Error())
-		}
-		if !s.AuthCatalog.userExists(database, username) {
-			return commandError(11, "UserNotFound", "user not found")
-		}
-		if !s.principalCanManageTarget(owner, database, username) {
-			return commandError(13, "Unauthorized", "not authorized to update server administrator")
 		}
 		raw := bson.Raw(command)
 		passwordValue := raw.Lookup("pwd")
@@ -729,7 +941,7 @@ func (s *Server) userManagementResponse(name string, command wire.Document, owne
 			if err != nil {
 				return commandError(2, "BadValue", err.Error())
 			}
-			if !s.principalCanManageGrants(owner, roles) {
+			if !s.principalCanManageGrants(owner, database, roles) {
 				return commandError(13, "Unauthorized", "not authorized to grant requested roles")
 			}
 		}
@@ -741,15 +953,13 @@ func (s *Server) userManagementResponse(name string, command wire.Document, owne
 				return commandError(9, "FailedToParse", "updateUser pwd must be a string")
 			}
 		}
-		// Apply the role policy boundary before verifier mutation so a denied
-		// last-admin demotion cannot partially rotate the password.
-		if !rolesValue.IsZero() {
-			if err := s.AuthCatalog.SetUserRoles(database, username, roles); err != nil {
+		if err := s.AuthCatalog.updateUser(*actor, database, username, []byte(password), !passwordValue.IsZero(), roles, !rolesValue.IsZero()); err != nil {
+			switch {
+			case errors.Is(err, errAuthUserNotFound):
+				return commandError(11, "UserNotFound", "user not found")
+			case errors.Is(err, errUserManagementUnauthorized), errors.Is(err, errCannotDemoteLastServerAdministrator):
 				return commandError(13, "Unauthorized", err.Error())
-			}
-		}
-		if !passwordValue.IsZero() {
-			if err := s.AuthCatalog.UpsertPassword(database, username, []byte(password)); err != nil {
+			default:
 				return commandError(1, "InternalError", err.Error())
 			}
 		}
@@ -760,11 +970,15 @@ func (s *Server) userManagementResponse(name string, command wire.Document, owne
 		if err != nil {
 			return commandError(9, "FailedToParse", err.Error())
 		}
-		if !s.principalCanManageTarget(owner, database, username) {
-			return commandError(13, "Unauthorized", "not authorized to drop server administrator")
-		}
-		if err := s.AuthCatalog.DropUser(database, username); err != nil {
-			return commandError(13, "Unauthorized", err.Error())
+		if err := s.AuthCatalog.dropUser(*actor, database, username); err != nil {
+			switch {
+			case errors.Is(err, errAuthUserNotFound):
+				return commandError(11, "UserNotFound", "user not found")
+			case errors.Is(err, errUserManagementUnauthorized), errors.Is(err, errCannotDropLastServerAdministrator):
+				return commandError(13, "Unauthorized", err.Error())
+			default:
+				return commandError(1, "InternalError", err.Error())
+			}
 		}
 		return marshalDocument(bson.D{{Key: "ok", Value: 1.0}})
 
@@ -783,6 +997,9 @@ func (s *Server) userManagementResponse(name string, command wire.Document, owne
 		result := make(bson.A, 0, len(users))
 		for _, user := range users {
 			if user.AuthDB != database || (requestedByName && user.Username != requested) {
+				continue
+			}
+			if !s.principalCanManageGrants(owner, database, user.Roles) {
 				continue
 			}
 			result = append(result, bson.D{

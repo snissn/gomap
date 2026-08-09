@@ -66,18 +66,26 @@ func BenchmarkAuthorizationAdmission(b *testing.B) {
 		{name: "metadata", command: mustDocument(b, bson.D{{Key: "listCollections", Value: 1}, {Key: "$db", Value: "app"}})},
 	}
 	for _, tc := range commands {
-		commandName, _ := bsonDocumentCommandName(tc.command)
+		commandName, ok := bsonDocumentCommandName(tc.command)
+		if !ok {
+			b.Fatalf("%s command name unavailable", tc.name)
+		}
 		for _, mode := range []struct {
 			name   string
 			server *Server
 			owner  int64
+			want   bool
 		}{
-			{name: "plain", server: plain},
-			{name: "allowed", server: allowed, owner: 1},
-			{name: "denied", server: denied, owner: 2},
+			{name: "plain", server: plain, want: true},
+			{name: "allowed", server: allowed, owner: 1, want: true},
+			{name: "denied", server: denied, owner: 2, want: false},
 		} {
 			b.Run(tc.name+"/"+mode.name, func(b *testing.B) {
+				if got := authorizationAdmissionForBenchmark(mode.server, commandName, tc.command, mode.owner); got != mode.want {
+					b.Fatalf("admission=%v want %v", got, mode.want)
+				}
 				b.ReportAllocs()
+				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
 					authorizationBenchmarkAllowed = authorizationAdmissionForBenchmark(mode.server, commandName, tc.command, mode.owner)
 				}
@@ -89,6 +97,9 @@ func BenchmarkAuthorizationAdmission(b *testing.B) {
 func TestAuthorizationAllowedCheckIsAllocationFree(t *testing.T) {
 	_, allowed, _ := newAuthorizationBenchmarkServers(t)
 	command := mustDocument(t, bson.D{{Key: "find", Value: "items"}, {Key: "$db", Value: "app"}})
+	if !authorizationAdmissionForBenchmark(allowed, "find", command, 1) {
+		t.Fatal("allocation check fixture denied the allowed command")
+	}
 	if got := testing.AllocsPerRun(1000, func() {
 		authorizationBenchmarkAllowed = authorizationAdmissionForBenchmark(allowed, "find", command, 1)
 	}); got != 0 {

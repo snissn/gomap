@@ -875,7 +875,24 @@ func (s *Server) commandResponse(ctx context.Context, name string, command wire.
 	return s.dispatchCommandResponse(ctx, name, command, sequences, cursorOwner)
 }
 
+// mongoGatewaySupportedCommands is the dispatcher admission registry. Keeping
+// this gate separate from the handler switch makes a newly added switch case
+// unavailable until it is also added to the executable authorization matrix.
+var mongoGatewaySupportedCommands = map[string]struct{}{
+	"aggregate": {}, "buildInfo": {}, "connectionStatus": {}, "count": {},
+	"create": {}, "createIndexes": {}, "createUser": {}, "delete": {},
+	"distinct": {}, "dropIndexes": {}, "dropUser": {}, "endSessions": {},
+	"find": {}, "findAndModify": {}, "getMore": {}, "hello": {},
+	"hostInfo": {}, "insert": {}, "isMaster": {}, "ismaster": {},
+	"killCursors": {}, "listCollections": {}, "listDatabases": {}, "listIndexes": {},
+	"ping": {}, "saslContinue": {}, "saslStart": {}, "update": {}, "updateUser": {},
+	"usersInfo": {},
+}
+
 func (s *Server) dispatchCommandResponse(ctx context.Context, name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (wire.Document, error) {
+	if _, supported := mongoGatewaySupportedCommands[name]; !supported {
+		return commandError(59, "CommandNotFound", "unsupported MongoDB gateway command: "+name)
+	}
 	switch name {
 	case "hello", "isMaster", "ismaster":
 		return marshalDocument(s.helloResponse(ctx, command))
@@ -934,7 +951,7 @@ func (s *Server) dispatchCommandResponse(ctx context.Context, name string, comma
 
 func commandRejectsTransactionMarkers(name string) bool {
 	switch name {
-	case "aggregate", "count", "create", "createIndexes", "delete", "distinct", "dropIndexes", "find", "findAndModify", "getMore", "insert", "killCursors", "listCollections", "listDatabases", "listIndexes", "update":
+	case "aggregate", "count", "create", "createIndexes", "createUser", "delete", "distinct", "dropIndexes", "dropUser", "find", "findAndModify", "getMore", "insert", "killCursors", "listCollections", "listDatabases", "listIndexes", "update", "updateUser", "usersInfo":
 		return true
 	default:
 		return false

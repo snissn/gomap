@@ -20,6 +20,8 @@ import (
 	"unicode/utf8"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/xdg-go/stringprep"
 	"golang.org/x/crypto/pbkdf2"
 )
@@ -35,6 +37,15 @@ const (
 )
 
 var errAuthenticationFailed = errors.New("authentication failed")
+
+var (
+	errAuthUserExists                       = errors.New("mongo gateway auth: user already exists")
+	errAuthUserNotFound                     = errors.New("mongo gateway auth: user not found")
+	errCannotDisableLastServerAdministrator = errors.New("mongo gateway authorization: cannot disable the last enabled server administrator")
+	errCannotDropLastServerAdministrator    = errors.New("mongo gateway authorization: cannot drop the last enabled server administrator")
+	errCannotDemoteLastServerAdministrator  = errors.New("mongo gateway authorization: cannot demote the last enabled server administrator")
+	errUserManagementUnauthorized           = errors.New("mongo gateway authorization: user management not authorized")
+)
 
 // AuthUser is a safe identity projection. It deliberately contains no
 // verifier material and may be retained on a connection after authentication.
@@ -67,6 +78,16 @@ type authCatalogDeleteStore interface {
 type authCatalogGetAppendStore interface {
 	GetAppend([]byte, []byte) ([]byte, error)
 }
+type authCatalogLargeValueStore interface {
+	authCatalogStore
+	AppendValueLogValues([][]byte) ([]page.ValuePtr, error)
+	ReleaseValueLogValues([]page.ValuePtr)
+	NewBatch() batchpkg.Interface
+}
+type authCatalogPointerBatch interface {
+	batchpkg.Interface
+	SetPointer([]byte, page.ValuePtr) error
+}
 
 // authCatalogBackendLocks serializes catalog initialization and mutations for
 // one in-process backend. TreeDB excludes simultaneous multi-process opens for
@@ -98,26 +119,28 @@ func NewAuthCatalog(db authCatalogStore) (*AuthCatalog, error) {
 		return nil, errors.New("mongo gateway auth: nil database")
 	}
 	backend := authCatalogBackendLock(db)
-	backend.mu.Lock()
-	secret, err := loadOrCreateSyntheticSecret(db)
-	if err == nil {
-		var raw []byte
-		raw, err = getAuthCatalogValue(db, authAuthorizationCatalogKey())
+	secret, err := func() ([sha256.Size]byte, error) {
+		backend.mu.Lock()
+		defer backend.mu.Unlock()
+		secret, err := loadOrCreateSyntheticSecret(db)
+		if err != nil {
+			return secret, err
+		}
+		raw, err := getAuthCatalogValue(db, authAuthorizationCatalogKey())
 		if errors.Is(err, treedb.ErrKeyNotFound) {
-			err = nil
-		} else if err == nil {
+			return secret, nil
+		}
+		if err == nil {
 			_, err = decodeAuthorizationRecord(raw)
 		}
-	}
-	backend.mu.Unlock()
+		return secret, err
+	}()
 	if err != nil {
 		return nil, fmt.Errorf("mongo gateway auth: catalog initialization: %w", err)
 	}
 	catalog := &AuthCatalog{db: db, backend: backend, syntheticSecret: secret}
-	if snapshot, snapshotErr := catalog.authorizationSnapshot(); snapshotErr != nil {
+	if _, snapshotErr := catalog.authorizationSnapshot(); snapshotErr != nil {
 		return nil, fmt.Errorf("mongo gateway auth: authorization catalog: %w", snapshotErr)
-	} else {
-		catalog.authorization.Store(snapshot)
 	}
 	return catalog, nil
 }
@@ -172,7 +195,7 @@ func loadOrCreateSyntheticSecret(db authCatalogStore) ([sha256.Size]byte, error)
 	if err != nil {
 		return secret, err
 	}
-	if err := db.SetSync(authCatalogSyntheticSecretKey(), raw); err != nil {
+	if err := setAuthCatalogValueSync(db, authCatalogSyntheticSecretKey(), raw); err != nil {
 		return secret, err
 	}
 	// Read back the durable value: a catalog never operates with a merely
@@ -189,6 +212,44 @@ func getAuthCatalogValue(db authCatalogStore, key []byte) ([]byte, error) {
 		return appendStore.GetAppend(key, nil)
 	}
 	return db.Get(key)
+}
+
+// setAuthCatalogValueSync keeps growing catalog values in TreeDB's persistent
+// value log once they exceed the index's inline threshold. The durable index
+// publication owns dependency ordering and releases the appender's pending GC
+// pin after the pointer becomes reachable.
+func setAuthCatalogValueSync(db authCatalogStore, key, value []byte) error {
+	err := db.SetSync(key, value)
+	if !errors.Is(err, batchpkg.ErrValueTooLarge) {
+		return err
+	}
+	largeStore, ok := db.(authCatalogLargeValueStore)
+	if !ok {
+		return err
+	}
+	ptrs, appendErr := largeStore.AppendValueLogValues([][]byte{value})
+	if appendErr != nil {
+		return appendErr
+	}
+	if len(ptrs) != 1 {
+		largeStore.ReleaseValueLogValues(ptrs)
+		return errors.New("mongo gateway auth: value-log append returned an invalid pointer count")
+	}
+	rawBatch := largeStore.NewBatch()
+	batch, ok := rawBatch.(authCatalogPointerBatch)
+	if !ok {
+		_ = rawBatch.Close()
+		largeStore.ReleaseValueLogValues(ptrs)
+		return errors.New("mongo gateway auth: backend does not support persistent value-log pointers")
+	}
+	if err := batch.SetPointer(key, ptrs[0]); err != nil {
+		_ = batch.Close()
+		largeStore.ReleaseValueLogValues(ptrs)
+		return err
+	}
+	writeErr := batch.WriteSync()
+	closeErr := batch.Close()
+	return errors.Join(writeErr, closeErr)
 }
 
 func decodeSyntheticSecret(raw []byte) ([sha256.Size]byte, error) {
@@ -215,26 +276,14 @@ func validateAuthRecord(r AuthUserRecord) error {
 // UpsertPassword creates or rotates a verifier. The password bytes are used
 // only for derivation and are not kept by this API or its persisted record.
 func (c *AuthCatalog) UpsertPassword(authDB, username string, password []byte) error {
-	prepared, err := saslprepPassword(password)
-	if c == nil || !validAuthField(authDB) || !validAuthField(username) || err != nil {
+	raw, err := prepareSCRAMRecord(authDB, username, password)
+	if c == nil || err != nil {
 		return errAuthenticationFailed
-	}
-	salt := make([]byte, 32)
-	if _, err := rand.Read(salt); err != nil {
-		return fmt.Errorf("mongo gateway auth: random salt: %w", err)
-	}
-	r := newSCRAMRecord(authDB, username, prepared, salt, defaultSCRAMIterations)
-	raw, err := json.Marshal(r)
-	if err != nil {
-		return err
 	}
 	c.backend.mu.Lock()
 	defer c.backend.mu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := c.db.SetSync(authCatalogKey(authDB, username), raw); err != nil {
-		return err
-	}
 	authorization, err := c.loadAuthorizationRecordLocked()
 	if err != nil {
 		return errAuthenticationFailed
@@ -243,10 +292,30 @@ func (c *AuthCatalog) UpsertPassword(authDB, username string, password []byte) e
 	if err != nil {
 		return err
 	}
+	if err := setAuthCatalogValueSync(c.db, authCatalogKey(authDB, username), raw); err != nil {
+		return err
+	}
 	if added {
 		return c.publishAuthorizationRecordLocked(authorization)
 	}
 	return nil
+}
+
+func prepareSCRAMRecord(authDB, username string, password []byte) ([]byte, error) {
+	prepared, err := saslprepPassword(password)
+	if !validAuthField(authDB) || !validAuthField(username) || err != nil {
+		return nil, errAuthenticationFailed
+	}
+	salt := make([]byte, 32)
+	if _, err := rand.Read(salt); err != nil {
+		return nil, fmt.Errorf("mongo gateway auth: random salt: %w", err)
+	}
+	r := newSCRAMRecord(authDB, username, prepared, salt, defaultSCRAMIterations)
+	raw, err := json.Marshal(r)
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
 func newSCRAMRecord(authDB, username string, password, salt []byte, iterations int) AuthUserRecord {
@@ -334,7 +403,7 @@ func (c *AuthCatalog) SetEnabled(authDB, username string, enabled bool) error {
 		}
 		for _, assignment := range authorization.Users {
 			if assignment.AuthDB == authDB && assignment.Username == username && hasServerAdmin(assignment.Roles) && c.usableServerAdminsLocked(authorization) == 1 {
-				return errors.New("mongo gateway authorization: cannot disable the last enabled server administrator")
+				return errCannotDisableLastServerAdministrator
 			}
 		}
 	}
@@ -346,7 +415,7 @@ func (c *AuthCatalog) SetEnabled(authDB, username string, enabled bool) error {
 	if err != nil {
 		return err
 	}
-	return c.db.SetSync(authCatalogKey(authDB, username), raw)
+	return setAuthCatalogValueSync(c.db, authCatalogKey(authDB, username), raw)
 }
 
 // DropUser durably removes one verifier and its role assignment. It refuses
@@ -379,7 +448,7 @@ func (c *AuthCatalog) DropUser(authDB, username string) error {
 		}
 	}
 	if index >= 0 && stored.Enabled && hasServerAdmin(record.Users[index].Roles) && c.usableServerAdminsLocked(record) == 1 {
-		return errors.New("mongo gateway authorization: cannot drop the last enabled server administrator")
+		return errCannotDropLastServerAdministrator
 	}
 	if index >= 0 {
 		record.Users = append(record.Users[:index], record.Users[index+1:]...)

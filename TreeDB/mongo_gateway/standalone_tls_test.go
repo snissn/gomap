@@ -191,20 +191,24 @@ func TestStandaloneServerOfficialDriverAuthorizationRoleBoundary(t *testing.T) {
 	}
 	root := connect("root", "root password")
 	reader := connect("reader", "reader password")
+	opCtx, opCancel := context.WithCancel(ctx)
+	opTimer := time.AfterFunc(10*time.Second, opCancel)
+	defer opTimer.Stop()
+	defer opCancel()
 	collection := root.Database("app").Collection("items")
-	if _, err := collection.InsertOne(ctx, bson.D{{Key: "_id", Value: "visible"}}); err != nil {
+	if _, err := collection.InsertOne(opCtx, bson.D{{Key: "_id", Value: "visible"}}); err != nil {
 		t.Fatal(err)
 	}
 	var found bson.M
-	if err := reader.Database("app").Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: "visible"}}).Decode(&found); err != nil {
+	if err := reader.Database("app").Collection("items").FindOne(opCtx, bson.D{{Key: "_id", Value: "visible"}}).Decode(&found); err != nil {
 		t.Fatalf("read role find: %v", err)
 	}
-	_, err = reader.Database("app").Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: "denied"}})
+	_, err = reader.Database("app").Collection("items").InsertOne(opCtx, bson.D{{Key: "_id", Value: "denied"}})
 	var commandErr mongo.CommandError
 	if !errors.As(err, &commandErr) || commandErr.Code != 13 {
 		t.Fatalf("read role insert error=%v want Unauthorized code 13", err)
 	}
-	count, err := collection.CountDocuments(ctx, bson.D{})
+	count, err := collection.CountDocuments(opCtx, bson.D{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2809,7 +2809,7 @@ func (s *Server) runMongoDeleteItem(col *collections.Collection, item mongoDelet
 	return boolToInt32(deleted), err
 }
 
-func (s *Server) listCollectionsResponse(command wire.Document, cursorOwner ...int64) (wire.Document, error) {
+func (s *Server) listCollectionsResponse(command wire.Document, cursorOwner int64) (wire.Document, error) {
 	if doc, rejected, err := rejectUnsupportedReadConcern(command); rejected {
 		return doc, err
 	}
@@ -2844,10 +2844,6 @@ func (s *Server) listCollectionsResponse(command wire.Document, cursorOwner ...i
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	prefix := db + "."
-	owner := int64(0)
-	if len(cursorOwner) > 0 {
-		owner = cursorOwner[0]
-	}
 	firstBatch := bson.A{}
 	for _, meta := range metas {
 		collectionName, ok := strings.CutPrefix(meta.Name, prefix)
@@ -2857,7 +2853,7 @@ func (s *Server) listCollectionsResponse(command wire.Document, cursorOwner ...i
 		if nameFilter != "" && collectionName != nameFilter {
 			continue
 		}
-		if s.authenticationRequired() && !s.authorizedResource(owner, db, collectionName, authorizationMetadataRead) {
+		if s.authenticationRequired() && !s.authorizedResource(cursorOwner, db, collectionName, authorizationMetadataRead) {
 			continue
 		}
 		firstBatch = append(firstBatch, mongoCollectionDocument(collectionName, nameOnly))
@@ -2865,7 +2861,7 @@ func (s *Server) listCollectionsResponse(command wire.Document, cursorOwner ...i
 	return marshalCursorResponse(db, "$cmd.listCollections", firstBatch)
 }
 
-func (s *Server) listDatabasesResponse(command wire.Document, cursorOwner ...int64) (wire.Document, error) {
+func (s *Server) listDatabasesResponse(command wire.Document, cursorOwner int64) (wire.Document, error) {
 	if doc, rejected, err := rejectUnsupportedReadConcern(command); rejected {
 		return doc, err
 	}
@@ -2889,10 +2885,6 @@ func (s *Server) listDatabasesResponse(command wire.Document, cursorOwner ...int
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	names := make(map[string]struct{})
-	owner := int64(0)
-	if len(cursorOwner) > 0 {
-		owner = cursorOwner[0]
-	}
 	for _, meta := range metas {
 		db, _, ok := strings.Cut(meta.Name, ".")
 		if !ok || db == "" {
@@ -2901,7 +2893,7 @@ func (s *Server) listDatabasesResponse(command wire.Document, cursorOwner ...int
 		if nameFilter != "" && db != nameFilter {
 			continue
 		}
-		if s.authenticationRequired() && !s.authorizedResource(owner, db, "", authorizationListDatabases) {
+		if s.authenticationRequired() && !s.authorizedResource(cursorOwner, db, "", authorizationListDatabases) {
 			continue
 		}
 		names[db] = struct{}{}

@@ -3,7 +3,9 @@ package mongogateway
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -13,9 +15,44 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+type failNextAuthCatalogSetStore struct {
+	authCatalogStore
+	mu      sync.Mutex
+	failKey string
+}
+
+func (s *failNextAuthCatalogSetStore) SetSync(key, value []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if string(key) == s.failKey {
+		s.failKey = ""
+		return fmt.Errorf("injected durable write failure for %q", key)
+	}
+	return s.authCatalogStore.SetSync(key, value)
+}
+
 func newAuthorizationTestServer(t *testing.T) (*Server, *AuthCatalog) {
 	t.Helper()
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	catalog, err := NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer()
+	server.AuthenticationEnabled = true
+	server.AuthCatalog = catalog
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions.DocumentFormat = collections.DocumentFormatBSON
+	return server, catalog
+}
+
+func newAuthorizationPersistentValueLogTestServer(t *testing.T) (*Server, *AuthCatalog) {
+	t.Helper()
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), CommandWAL: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,37 +183,46 @@ func TestAuthorizationMultiWriteAdmissionPrecedesMutation(t *testing.T) {
 }
 
 func TestAuthorizationEverySupportedCommandHasExplicitPrivilege(t *testing.T) {
-	public := []string{"hello", "isMaster", "ismaster", "buildInfo", "connectionStatus", "saslStart", "saslContinue", "endSessions", "ping"}
-	for _, name := range public {
-		target, err := commandAuthorizationTarget(name, mustDocument(t, bson.D{{Key: name, Value: 1}}))
-		if err != nil || target.privilege != authorizationPublic {
-			t.Fatalf("%s target=%+v err=%v", name, target, err)
-		}
-	}
 	cases := map[string]authorizationPrivilege{
-		"hostInfo":        authorizationServerAdmin,
-		"find":            authorizationRead,
-		"aggregate":       authorizationRead,
-		"count":           authorizationRead,
-		"distinct":        authorizationRead,
-		"getMore":         authorizationRead,
-		"killCursors":     authorizationRead,
-		"listIndexes":     authorizationMetadataRead,
-		"insert":          authorizationWrite,
-		"update":          authorizationWrite,
-		"delete":          authorizationWrite,
-		"findAndModify":   authorizationWrite,
-		"create":          authorizationDBAdmin,
-		"createIndexes":   authorizationDBAdmin,
-		"dropIndexes":     authorizationDBAdmin,
-		"listCollections": authorizationListCollections,
-		"listDatabases":   authorizationListDatabases,
-		"createUser":      authorizationUserAdmin,
-		"updateUser":      authorizationUserAdmin,
-		"dropUser":        authorizationUserAdmin,
-		"usersInfo":       authorizationUserAdmin,
+		"hello":            authorizationPublic,
+		"isMaster":         authorizationPublic,
+		"ismaster":         authorizationPublic,
+		"buildInfo":        authorizationPublic,
+		"connectionStatus": authorizationPublic,
+		"saslStart":        authorizationPublic,
+		"saslContinue":     authorizationPublic,
+		"endSessions":      authorizationPublic,
+		"ping":             authorizationPublic,
+		"hostInfo":         authorizationServerAdmin,
+		"find":             authorizationRead,
+		"aggregate":        authorizationRead,
+		"count":            authorizationRead,
+		"distinct":         authorizationRead,
+		"getMore":          authorizationRead,
+		"killCursors":      authorizationRead,
+		"listIndexes":      authorizationMetadataRead,
+		"insert":           authorizationWrite,
+		"update":           authorizationWrite,
+		"delete":           authorizationWrite,
+		"findAndModify":    authorizationWrite,
+		"create":           authorizationDBAdmin,
+		"createIndexes":    authorizationDBAdmin,
+		"dropIndexes":      authorizationDBAdmin,
+		"listCollections":  authorizationListCollections,
+		"listDatabases":    authorizationListDatabases,
+		"createUser":       authorizationUserAdmin,
+		"updateUser":       authorizationUserAdmin,
+		"dropUser":         authorizationUserAdmin,
+		"usersInfo":        authorizationUserAdmin,
 	}
-	for name, want := range cases {
+	if len(cases) != len(mongoGatewaySupportedCommands) {
+		t.Fatalf("authorization cases=%d dispatched commands=%d", len(cases), len(mongoGatewaySupportedCommands))
+	}
+	for name := range mongoGatewaySupportedCommands {
+		want, ok := cases[name]
+		if !ok {
+			t.Fatalf("dispatched command %q has no explicit authorization expectation", name)
+		}
 		value := any("items")
 		if name == "getMore" {
 			value = int64(1)
@@ -187,6 +233,10 @@ func TestAuthorizationEverySupportedCommandHasExplicitPrivilege(t *testing.T) {
 			t.Fatalf("%s target=%+v want=%v err=%v", name, target, want, err)
 		}
 	}
+	target, err := commandAuthorizationTarget("futureMutation", mustDocument(t, bson.D{{Key: "futureMutation", Value: 1}, {Key: "$db", Value: "app"}}))
+	if err != nil || target.privilege != authorizationUnsupported {
+		t.Fatalf("unknown command target=%+v err=%v", target, err)
+	}
 }
 
 func TestAuthorizationBuiltInRoleSeparation(t *testing.T) {
@@ -196,16 +246,19 @@ func TestAuthorizationBuiltInRoleSeparation(t *testing.T) {
 		{privilege: authorizationDBAdmin, database: "app", collection: "items"},
 		{privilege: authorizationUserAdmin, database: "app"},
 		{privilege: authorizationServerAdmin},
+		{privilege: authorizationMetadataRead, database: "app", collection: "items"},
+		{privilege: authorizationListCollections, database: "app"},
+		{privilege: authorizationListDatabases},
 	}
 	cases := []struct {
 		role AuthRole
 		want []bool
 	}{
-		{role: AuthRoleRead, want: []bool{true, false, false, false, false}},
-		{role: AuthRoleReadWrite, want: []bool{true, true, false, false, false}},
-		{role: AuthRoleDBAdmin, want: []bool{false, false, true, false, false}},
-		{role: AuthRoleUserAdmin, want: []bool{false, false, false, true, false}},
-		{role: AuthRoleServerAdmin, want: []bool{true, true, true, true, true}},
+		{role: AuthRoleRead, want: []bool{true, false, false, false, false, true, true, true}},
+		{role: AuthRoleReadWrite, want: []bool{true, true, false, false, false, true, true, true}},
+		{role: AuthRoleDBAdmin, want: []bool{false, false, true, false, false, true, true, true}},
+		{role: AuthRoleUserAdmin, want: []bool{false, false, false, true, false, false, false, true}},
+		{role: AuthRoleServerAdmin, want: []bool{true, true, true, true, true, true, true, true}},
 	}
 	for _, tc := range cases {
 		grant := AuthRoleGrant{Role: tc.role, Database: "app"}
@@ -318,14 +371,14 @@ func TestAuthorizationListFilteringRevocationAndLastAdmin(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertCommandError(t, serveAuthorizationCommand(t, server, 2, 12, bson.D{{Key: "find", Value: "visible"}, {Key: "$db", Value: "app"}}), "Unauthorized")
-	if err := catalog.SetEnabled("admin", "root", false); err == nil {
-		t.Fatal("last server administrator disable succeeded")
+	if err := catalog.SetEnabled("admin", "root", false); !errors.Is(err, errCannotDisableLastServerAdministrator) {
+		t.Fatalf("last server administrator disable error=%v", err)
 	}
 	if _, err := catalog.VerifyPassword("admin", "root", []byte("root password")); err != nil {
 		t.Fatal("denied last-admin disable changed verifier state")
 	}
-	if err := catalog.SetUserRoles("admin", "root", nil); err == nil {
-		t.Fatal("last server administrator demotion succeeded")
+	if err := catalog.SetUserRoles("admin", "root", nil); !errors.Is(err, errCannotDemoteLastServerAdministrator) {
+		t.Fatalf("last server administrator demotion error=%v", err)
 	}
 }
 
@@ -362,6 +415,272 @@ func TestAuthorizationUserManagementAndRoleBoundary(t *testing.T) {
 		t.Fatal("denied last-admin demotion changed password")
 	}
 	assertCommandError(t, serveAuthorizationCommand(t, server, 1, 28, bson.D{{Key: "dropUser", Value: "root"}, {Key: "$db", Value: "admin"}}), "Unauthorized")
+}
+
+func TestAuthorizationMixedUserUpdateRoleWriteFailureCannotElevateOldCredential(t *testing.T) {
+	server, catalog := newAuthorizationTestServer(t)
+	if err := catalog.UpsertPassword("admin", "root", []byte("root password")); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.UpsertPassword("app", "alice", []byte("old password")); err != nil {
+		t.Fatal(err)
+	}
+	oldRoles := []AuthRoleGrant{{Role: AuthRoleRead, Database: "app", Collection: "items"}}
+	if err := catalog.SetUserRoles("app", "alice", oldRoles); err != nil {
+		t.Fatal(err)
+	}
+	setAuthorizationTestUser(server, 1, "admin", "root")
+	catalog.db = &failNextAuthCatalogSetStore{authCatalogStore: catalog.db, failKey: string(authAuthorizationCatalogKey())}
+
+	assertCommandError(t, serveAuthorizationCommand(t, server, 1, 29, bson.D{
+		{Key: "updateUser", Value: "alice"},
+		{Key: "pwd", Value: "new password"},
+		{Key: "roles", Value: bson.A{"readWrite"}},
+		{Key: "$db", Value: "app"},
+	}), "InternalError")
+	if _, err := catalog.VerifyPassword("app", "alice", []byte("old password")); err == nil {
+		t.Fatal("old credential survived failed mixed update")
+	}
+	if _, err := catalog.VerifyPassword("app", "alice", []byte("new password")); err != nil {
+		t.Fatalf("new credential unavailable after verifier-first partial update: %v", err)
+	}
+	roles, err := catalog.UserRoles("app", "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(roles, oldRoles) {
+		t.Fatalf("failed mixed update changed roles: got %#v want %#v", roles, oldRoles)
+	}
+	setAuthorizationTestUser(server, 2, "app", "alice")
+	assertCommandError(t, serveAuthorizationCommand(t, server, 2, 30, bson.D{
+		{Key: "insert", Value: "items"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "forbidden"}}}},
+		{Key: "$db", Value: "app"},
+	}), "Unauthorized")
+}
+
+func TestAuthorizationUserManagementAdmissionPrecedesDurableMutation(t *testing.T) {
+	server, catalog := newAuthorizationTestServer(t)
+	if err := catalog.UpsertPassword("admin", "root", []byte("root password")); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.UpsertPassword("app", "alice", []byte("old password")); err != nil {
+		t.Fatal(err)
+	}
+	setAuthorizationTestUser(server, 1, "admin", "root")
+
+	transaction := bson.D{{Key: "txnNumber", Value: int64(1)}, {Key: "startTransaction", Value: true}, {Key: "autocommit", Value: false}}
+	create := append(bson.D{{Key: "createUser", Value: "transactional"}, {Key: "pwd", Value: "password"}, {Key: "roles", Value: bson.A{"read"}}}, transaction...)
+	create = append(create, bson.E{Key: "$db", Value: "app"})
+	assertCommandError(t, serveAuthorizationCommand(t, server, 1, 31, create), "BadValue")
+	if catalog.userExists("app", "transactional") {
+		t.Fatal("transaction-marked createUser persisted a verifier")
+	}
+
+	assertCommandError(t, serveAuthorizationCommand(t, server, 1, 32, bson.D{
+		{Key: "updateUser", Value: "alice"}, {Key: "pwd", Value: "new password"},
+		{Key: "txnNumber", Value: int64(2)}, {Key: "$db", Value: "app"},
+	}), "BadValue")
+	if _, err := catalog.VerifyPassword("app", "alice", []byte("old password")); err != nil {
+		t.Fatal("transaction-marked updateUser changed the verifier")
+	}
+	assertCommandError(t, serveAuthorizationCommand(t, server, 1, 33, bson.D{
+		{Key: "dropUser", Value: "alice"}, {Key: "txnNumber", Value: int64(3)}, {Key: "$db", Value: "app"},
+	}), "BadValue")
+	if !catalog.userExists("app", "alice") {
+		t.Fatal("transaction-marked dropUser removed the verifier")
+	}
+	assertCommandError(t, serveAuthorizationCommand(t, server, 1, 34, bson.D{
+		{Key: "usersInfo", Value: int32(1)}, {Key: "txnNumber", Value: int64(4)}, {Key: "$db", Value: "app"},
+	}), "BadValue")
+
+	assertCommandError(t, serveAuthorizationCommand(t, server, 1, 35, bson.D{
+		{Key: "createUser", Value: "unacknowledged"}, {Key: "pwd", Value: "password"}, {Key: "roles", Value: bson.A{"read"}},
+		{Key: "writeConcern", Value: bson.D{{Key: "w", Value: int32(0)}}}, {Key: "$db", Value: "app"},
+	}), "WriteConcernFailed")
+	if catalog.userExists("app", "unacknowledged") {
+		t.Fatal("w:0 createUser persisted a verifier")
+	}
+	assertCommandError(t, serveAuthorizationCommand(t, server, 1, 36, bson.D{
+		{Key: "updateUser", Value: "alice"}, {Key: "pwd", Value: "new password"},
+		{Key: "writeConcern", Value: bson.D{{Key: "w", Value: int32(0)}}}, {Key: "$db", Value: "app"},
+	}), "WriteConcernFailed")
+	if _, err := catalog.VerifyPassword("app", "alice", []byte("old password")); err != nil {
+		t.Fatal("w:0 updateUser changed the verifier")
+	}
+	assertCommandError(t, serveAuthorizationCommand(t, server, 1, 37, bson.D{
+		{Key: "dropUser", Value: "alice"}, {Key: "writeConcern", Value: bson.D{{Key: "w", Value: int32(0)}}}, {Key: "$db", Value: "app"},
+	}), "WriteConcernFailed")
+	if !catalog.userExists("app", "alice") {
+		t.Fatal("w:0 dropUser removed the verifier")
+	}
+
+	moreToCome := mustDocument(t, bson.D{{Key: "createUser", Value: "more-to-come"}, {Key: "pwd", Value: "password"}, {Key: "roles", Value: bson.A{"read"}}, {Key: "$db", Value: "app"}})
+	request, err := wire.AppendMsgMessage(nil, 38, 0, wire.MsgFlagMoreToCome, moreToCome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rw := &readWriter{r: bytes.NewReader(request)}
+	if err := server.ServeOneWithOwner(rw, 1); err != nil {
+		t.Fatal(err)
+	}
+	if rw.w.Len() != 0 || catalog.userExists("app", "more-to-come") {
+		t.Fatalf("moreToCome response=%d userExists=%v", rw.w.Len(), catalog.userExists("app", "more-to-come"))
+	}
+}
+
+func TestAuthorizationUserManagementScopesMalformedRolesAndUnknownCommands(t *testing.T) {
+	server, catalog := newAuthorizationPersistentValueLogTestServer(t)
+	for _, username := range []string{"root", "collection-admin", "database-admin", "server-user-admin"} {
+		if err := catalog.UpsertPassword("admin", username, []byte(username+" password")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, username := range []string{"items-user", "other-user"} {
+		if err := catalog.UpsertPassword("app", username, []byte(username+" password")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := catalog.SetUserRoles("admin", "collection-admin", []AuthRoleGrant{{Role: AuthRoleUserAdmin, Database: "app", Collection: "items"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.SetUserRoles("admin", "database-admin", []AuthRoleGrant{{Role: AuthRoleUserAdmin, Database: "app"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.SetUserRoles("admin", "server-user-admin", []AuthRoleGrant{{Role: AuthRoleUserAdmin}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.SetUserRoles("app", "items-user", []AuthRoleGrant{{Role: AuthRoleRead, Database: "app", Collection: "items"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.SetUserRoles("app", "other-user", []AuthRoleGrant{{Role: AuthRoleRead, Database: "app", Collection: "other"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	setAuthorizationTestUser(server, 2, "admin", "collection-admin")
+	assertOK(t, serveAuthorizationCommand(t, server, 2, 40, bson.D{{Key: "createUser", Value: "collection-reader"}, {Key: "pwd", Value: "password"}, {Key: "roles", Value: bson.A{bson.D{{Key: "role", Value: "read"}, {Key: "db", Value: "app"}, {Key: "collection", Value: "items"}}}}, {Key: "$db", Value: "app"}}))
+	assertCommandError(t, serveAuthorizationCommand(t, server, 2, 41, bson.D{{Key: "createUser", Value: "other-reader"}, {Key: "pwd", Value: "password"}, {Key: "roles", Value: bson.A{bson.D{{Key: "role", Value: "read"}, {Key: "db", Value: "app"}, {Key: "collection", Value: "other"}}}}, {Key: "$db", Value: "app"}}), "Unauthorized")
+	assertCommandError(t, serveAuthorizationCommand(t, server, 2, 42, bson.D{{Key: "createUser", Value: "empty"}, {Key: "pwd", Value: "password"}, {Key: "roles", Value: bson.A{}}, {Key: "$db", Value: "app"}}), "Unauthorized")
+	assertCommandError(t, serveAuthorizationCommand(t, server, 2, 43, bson.D{{Key: "createUser", Value: "cross-db"}, {Key: "pwd", Value: "password"}, {Key: "roles", Value: bson.A{}}, {Key: "$db", Value: "payroll"}}), "Unauthorized")
+	assertCommandError(t, serveAuthorizationCommand(t, server, 2, 44, bson.D{{Key: "createUser", Value: "malformed"}, {Key: "pwd", Value: "password"}, {Key: "roles", Value: "read"}, {Key: "$db", Value: "app"}}), "BadValue")
+
+	info := serveAuthorizationCommand(t, server, 2, 45, bson.D{{Key: "usersInfo", Value: int32(1)}, {Key: "$db", Value: "app"}})
+	assertOK(t, info)
+	values, err := bson.Raw(info).Lookup("users").Array().Values()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range values {
+		if value.Document().Lookup("user").StringValue() == "other-user" {
+			t.Fatal("collection-scoped usersInfo exposed an out-of-scope identity")
+		}
+	}
+	named := serveAuthorizationCommand(t, server, 2, 46, bson.D{{Key: "usersInfo", Value: "other-user"}, {Key: "$db", Value: "app"}})
+	assertOK(t, named)
+	values, err = bson.Raw(named).Lookup("users").Array().Values()
+	if err != nil || len(values) != 0 {
+		t.Fatalf("named out-of-scope usersInfo=%v err=%v", values, err)
+	}
+
+	setAuthorizationTestUser(server, 3, "admin", "database-admin")
+	assertOK(t, serveAuthorizationCommand(t, server, 3, 47, bson.D{{Key: "createUser", Value: "empty-db-user"}, {Key: "pwd", Value: "password"}, {Key: "roles", Value: bson.A{}}, {Key: "$db", Value: "app"}}))
+	setAuthorizationTestUser(server, 4, "admin", "server-user-admin")
+	assertOK(t, serveAuthorizationCommand(t, server, 4, 48, bson.D{{Key: "createUser", Value: "server-reader"}, {Key: "pwd", Value: "password"}, {Key: "roles", Value: bson.A{bson.D{{Key: "role", Value: "read"}, {Key: "db", Value: ""}}}}, {Key: "$db", Value: "app"}}))
+	assertCommandError(t, serveAuthorizationCommand(t, server, 4, 49, bson.D{{Key: "createUser", Value: "forbidden-admin"}, {Key: "pwd", Value: "password"}, {Key: "roles", Value: bson.A{"serverAdmin"}}, {Key: "$db", Value: "app"}}), "Unauthorized")
+
+	setAuthorizationTestUser(server, 1, "admin", "root")
+	assertCommandError(t, serveAuthorizationCommand(t, server, 1, 50, bson.D{{Key: "futureMutation", Value: 1}, {Key: "$db", Value: "app"}}), "Unauthorized")
+}
+
+func TestAuthorizationCreateUserRoleWriteFailureLeavesNoPrivileges(t *testing.T) {
+	server, catalog := newAuthorizationTestServer(t)
+	if err := catalog.UpsertPassword("admin", "root", []byte("root password")); err != nil {
+		t.Fatal(err)
+	}
+	setAuthorizationTestUser(server, 1, "admin", "root")
+	catalog.db = &failNextAuthCatalogSetStore{authCatalogStore: catalog.db, failKey: string(authAuthorizationCatalogKey())}
+	if catalog.userExists("app", "partial") {
+		t.Fatal("partial user exists before createUser")
+	}
+	response := serveAuthorizationCommand(t, server, 1, 51, bson.D{{Key: "createUser", Value: "partial"}, {Key: "pwd", Value: "password"}, {Key: "roles", Value: bson.A{"readWrite"}}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, response, "InternalError")
+	if _, err := catalog.VerifyPassword("app", "partial", []byte("password")); err != nil {
+		t.Fatalf("partial create verifier unavailable: %v", err)
+	}
+	roles, err := catalog.UserRoles("app", "partial")
+	if err != nil || len(roles) != 0 {
+		t.Fatalf("partial create roles=%v err=%v", roles, err)
+	}
+}
+
+func TestAuthorizationConcurrentDuplicateCreateCannotMixPasswordAndRoles(t *testing.T) {
+	server, catalog := newAuthorizationTestServer(t)
+	if err := catalog.UpsertPassword("admin", "root", []byte("root password")); err != nil {
+		t.Fatal(err)
+	}
+	setAuthorizationTestUser(server, 1, "admin", "root")
+	type createAttempt struct {
+		password string
+		roles    []AuthRoleGrant
+		command  wire.Document
+	}
+	attempts := []createAttempt{
+		{
+			password: "first password",
+			roles:    []AuthRoleGrant{{Role: AuthRoleRead, Database: "app", Collection: "items"}},
+			command:  mustDocument(t, bson.D{{Key: "createUser", Value: "racer"}, {Key: "pwd", Value: "first password"}, {Key: "roles", Value: bson.A{bson.D{{Key: "role", Value: "read"}, {Key: "db", Value: "app"}, {Key: "collection", Value: "items"}}}}, {Key: "$db", Value: "app"}}),
+		},
+		{
+			password: "second password",
+			roles:    []AuthRoleGrant{{Role: AuthRoleReadWrite, Database: "app", Collection: "items"}},
+			command:  mustDocument(t, bson.D{{Key: "createUser", Value: "racer"}, {Key: "pwd", Value: "second password"}, {Key: "roles", Value: bson.A{bson.D{{Key: "role", Value: "readWrite"}, {Key: "db", Value: "app"}, {Key: "collection", Value: "items"}}}}, {Key: "$db", Value: "app"}}),
+		},
+	}
+	type createResult struct {
+		index    int
+		response wire.Document
+		err      error
+	}
+	start := make(chan struct{})
+	results := make(chan createResult, len(attempts))
+	for i := range attempts {
+		go func(index int) {
+			<-start
+			response, err := server.commandResponse(context.Background(), "createUser", attempts[index].command, nil, 1)
+			results <- createResult{index: index, response: response, err: err}
+		}(i)
+	}
+	close(start)
+	winner := -1
+	for range attempts {
+		result := <-results
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if mongoCommandResponseOK(result.response) {
+			if winner >= 0 {
+				t.Fatal("both concurrent createUser requests succeeded")
+			}
+			winner = result.index
+			continue
+		}
+		if got, _ := bson.Raw(result.response).Lookup("codeName").StringValueOK(); got != "DuplicateKey" {
+			t.Fatalf("losing createUser response=%s", bson.Raw(result.response))
+		}
+	}
+	if winner < 0 {
+		t.Fatal("neither concurrent createUser request succeeded")
+	}
+	for i := range attempts {
+		_, err := catalog.VerifyPassword("app", "racer", []byte(attempts[i].password))
+		if (err == nil) != (i == winner) {
+			t.Fatalf("password attempt %d accepted=%v winner=%d", i, err == nil, winner)
+		}
+	}
+	roles, err := catalog.UserRoles("app", "racer")
+	if err != nil || !reflect.DeepEqual(roles, attempts[winner].roles) {
+		t.Fatalf("concurrent create roles=%v err=%v want %v", roles, err, attempts[winner].roles)
+	}
 }
 
 func TestAuthorizationUserAdminCannotEscalateOrTakeOverCrossScopeUser(t *testing.T) {
@@ -471,6 +790,10 @@ func TestAuthorizationConcurrentGrantCacheCoherence(t *testing.T) {
 	close(errs)
 	for err := range errs {
 		t.Fatal(err)
+	}
+	roles, err := second.UserRoles("admin", "worker")
+	if err != nil || len(roles) != 1 || roles[0].Role != AuthRoleReadWrite {
+		t.Fatalf("second catalog did not observe final write roles=%v err=%v", roles, err)
 	}
 }
 

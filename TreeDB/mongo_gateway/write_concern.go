@@ -117,7 +117,7 @@ func (s *Server) StandaloneWriteConcernStats() StandaloneWriteConcernStats {
 
 func standaloneWriteCommand(name string) bool {
 	switch name {
-	case "create", "createIndexes", "delete", "dropIndexes", "findAndModify", "insert", "update":
+	case "create", "createIndexes", "createUser", "delete", "dropIndexes", "dropUser", "findAndModify", "insert", "update", "updateUser":
 		return true
 	default:
 		return false
