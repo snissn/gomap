@@ -165,4 +165,10 @@ func TestServerFindFallsBackToScanForCompoundAndExplicitDescendingIndexes(t *tes
 		{Key: "limit", Value: int32(1)},
 		{Key: "$db", Value: "app"},
 	})), []string{"u2"})
+	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, server, 40645, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "tenant", Value: bson.D{{Key: "$gte", Value: "acme"}}}}},
+		{Key: "limit", Value: int32(1)},
+		{Key: "$db", Value: "app"},
+	})), []string{"u1"})
 }
