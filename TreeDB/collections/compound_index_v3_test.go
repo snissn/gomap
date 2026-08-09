@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -54,6 +55,31 @@ func TestCompoundBSONIndexMetadataAndMutationContract(t *testing.T) {
 	}
 	if _, err := col.InsertBatch([][]byte{[]byte("c")}, [][]byte{doc("a", "acme", 3)}); !errors.Is(err, ErrUniqueIndexConflict) {
 		t.Fatalf("duplicate compound key error=%v want unique conflict", err)
+	}
+}
+
+func TestCompoundBSONIndexRejectsMultiKeyDefinitionBeforeCatalogMutation(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	mgr := NewCollectionManager(db)
+	_, err = mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+		Indexes: []IndexDefinition{{
+			Name:       "tenant_created",
+			Components: []IndexComponent{{Field: "tenant", Direction: IndexDirectionAscending}, {Field: "createdAt", Direction: IndexDirectionDescending}},
+			ValueType:  IndexValueBSONOrderedV2,
+			MultiKey:   true,
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "do not support multikey") {
+		t.Fatalf("CreateCollection compound multikey err=%v want rejection", err)
+	}
+	if _, err := mgr.OpenCollection("events"); err == nil {
+		t.Fatal("compound multikey rejection published collection metadata")
 	}
 }
 

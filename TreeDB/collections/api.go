@@ -22469,6 +22469,11 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		if valueType != IndexValueBSONOrderedV2 && (len(components) != 1 || components[0].Direction != IndexDirectionAscending) {
 			return CollectionMeta{}, fmt.Errorf("collections: index %q compound or descending components require BSON v2 key format", indexes[i].Name)
 		}
+		if len(components) > 1 && indexes[i].MultiKey {
+			// Ordered compound indexes deliberately fail closed on array
+			// extraction; do not publish a multikey contract they cannot honor.
+			return CollectionMeta{}, fmt.Errorf("collections: index %q compound components do not support multikey", indexes[i].Name)
+		}
 		indexes[i].ValueType = valueType
 		if _, err := backendRootStoragePolicy(indexes[i].StoragePolicy); err != nil {
 			return CollectionMeta{}, err
