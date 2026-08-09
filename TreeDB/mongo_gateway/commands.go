@@ -1756,6 +1756,12 @@ func runMongoUpdateOneWithUpsert(col *collections.Collection, update mongoUpdate
 	if materializer != nil {
 		defer func() { _ = materializer.Close() }()
 	}
+	// Materializer setup can acquire a snapshot and refresh buffered template
+	// state. Recheck immediately before the non-interruptible collection update
+	// so a short command deadline cannot publish after that setup work.
+	if err := update.budget.checkDeadline(); err != nil {
+		return false, false, false, err
+	}
 	matched, modified, err := col.Update(update.key, func(stored []byte) ([]byte, bool, error) {
 		return applyMongoUpdateToStoredDocument(col, materializer, update, stored)
 	})
