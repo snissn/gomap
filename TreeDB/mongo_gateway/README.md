@@ -81,11 +81,11 @@ call concurrently.
 <!-- mongo-capability-summary:begin -->
 ## Executable capability summary
 
-Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:0f40bb79daa24a03be9d721d1909f5f9ea1475b2d0c669793ef64dd1a778d939`
+Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:6461104f941c50958a0baa2a9e58649859fd64aa01b41a2ee41b7c66a65dd4da`
 
 | Surface | Status | Boundary |
 |---|---|---|
-| Standalone CRUD | supported subset | Explicit-ID and bounded single-document shapes; broader Mongo semantics remain intentionally limited. |
+| Standalone CRUD | supported subset | Explicit-ID CRUD plus bounded multi update/delete and ordered or unordered insert/update/delete batches; a positive maxTimeMS shortens the shared five-second command deadline; per-document atomicity only, never a transaction. |
 | Standalone write concern | supported subset | Absent/default and w:1 use the selected profile's ordinary acknowledgement boundary; j:true closes a real command-WAL or checkpoint sync boundary. Unacknowledged, replica, and interruptible-timeout semantics reject before mutation. |
 | Aggregation, count, and distinct | supported subset | Bounded standalone subsets only; unsupported stages, dotted distinct keys, and maxTimeMS reject. |
 | Administrative diagnostics | not implemented | serverStatus, top, and dbStats are not implemented. |

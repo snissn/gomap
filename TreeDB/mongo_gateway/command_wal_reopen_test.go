@@ -282,6 +282,91 @@ func TestMongoMutationCommandWALValueLogPointersReopen(t *testing.T) {
 	}
 }
 
+// A command can durably apply a prefix before a later item hits a normal write
+// error.  That prefix is observable in the ok:1 reply and must survive a
+// checkpoint/close/reopen even when every document is stored through the
+// persistent value log.
+func TestMongoMultiUpdatePartialWriteErrorCommandWALValueLogPointersReopen(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+	opts.ValueLog.PointerThreshold = 1
+	backend, closeBackend, err := treedb.OpenBackend(opts)
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(backend)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "createIndexes", Value: "users"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"}, {Key: "unique", Value: true}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 2, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "a"}, {Key: "email", Value: "a@example.com"}, {Key: "payload", Value: string(make([]byte, 256))}},
+		bson.D{{Key: "_id", Value: "b"}, {Key: "email", Value: "b@example.com"}, {Key: "payload", Value: string(make([]byte, 256))}},
+	}}, {Key: "$db", Value: "app"}}))
+	response := serveCommand(t, server, 3, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{
+		bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "a"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "state", Value: "committed"}}}}}},
+		bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "b"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "a@example.com"}}}}}},
+	}}, {Key: "$db", Value: "app"}})
+	assertOK(t, response)
+	assertInt32(t, response, "n", 1)
+	assertInt32(t, response, "nModified", 1)
+	writeErrors, ok := bson.Raw(response).Lookup("writeErrors").ArrayOK()
+	values, valuesErr := writeErrors.Values()
+	if !ok || valuesErr != nil || len(values) != 1 {
+		t.Fatalf("partial update writeErrors=%s", response)
+	}
+	if index, indexOK := values[0].Document().Lookup("index").Int32OK(); !indexOK || index != 1 {
+		t.Fatalf("partial update writeErrors index=%d ok=%v, want 1", index, indexOK)
+	}
+	if err := server.Collections.FlushAll(); err != nil {
+		_ = closeBackend()
+		t.Fatalf("flush collections: %v", err)
+	}
+	if err := backend.Checkpoint(); err != nil {
+		_ = closeBackend()
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := closeBackend(); err != nil {
+		t.Fatalf("close backend: %v", err)
+	}
+
+	reopened, closeReopened, err := treedb.OpenBackend(opts)
+	if err != nil {
+		t.Fatalf("reopen backend: %v", err)
+	}
+	defer func() { _ = closeReopened() }()
+	collection, err := collections.NewCollectionManager(reopened).OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection after reopen: %v", err)
+	}
+	for _, want := range []struct{ id, state, email string }{
+		{id: "a", state: "committed", email: "a@example.com"},
+		{id: "b", state: "", email: "b@example.com"},
+	} {
+		key, _, keyErr := prepareInsertDocument(mustDocument(t, bson.D{{Key: "_id", Value: want.id}}), collections.DocumentFormatBSON)
+		if keyErr != nil {
+			t.Fatalf("prepare %s key: %v", want.id, keyErr)
+		}
+		stored, getErr := collection.Get(key)
+		if getErr != nil || stored == nil {
+			t.Fatalf("get %s after reopen: stored=%v err=%v", want.id, stored, getErr)
+		}
+		raw := bson.Raw(stored)
+		if email, emailOK := raw.Lookup("email").StringValueOK(); !emailOK || email != want.email {
+			t.Fatalf("%s email=%q ok=%v, want %q", want.id, email, emailOK, want.email)
+		}
+		if want.state == "" {
+			if !raw.Lookup("state").IsZero() {
+				t.Fatalf("failed update became durable for %s: %s", want.id, raw)
+			}
+		} else if state, stateOK := raw.Lookup("state").StringValueOK(); !stateOK || state != want.state {
+			t.Fatalf("%s state=%q ok=%v, want %q", want.id, state, stateOK, want.state)
+		}
+		if payload, payloadOK := raw.Lookup("payload").StringValueOK(); !payloadOK || len(payload) != 256 {
+			t.Fatalf("%s persistent value-log payload len=%d ok=%v", want.id, len(payload), payloadOK)
+		}
+	}
+}
+
 func TestFindAndModifyCommandWALValueLogPointersReopen(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)

@@ -48,13 +48,35 @@ func validateMongoWritePlan(plan findPlan) error {
 }
 
 func (s *Server) selectMongoFilterWriteKey(col *collections.Collection, plan findPlan) ([]byte, bool, error) {
+	return s.selectMongoFilterWriteKeyWithBudget(col, plan, nil)
+}
+
+// mongoWriteScanLookahead asks the collection scan for one additional record
+// so a command can distinguish its own work cap from a naturally truncated
+// scan. Saturate at maxInt: MaxFindScanDocuments=maxInt is a supported way to
+// make the scan cap effectively unlimited.
+func mongoWriteScanLookahead(remaining int) int {
+	if remaining >= maxInt {
+		return maxInt
+	}
+	return remaining + 1
+}
+
+func (s *Server) selectMongoFilterWriteKeyWithBudget(col *collections.Collection, plan findPlan, budget *mongoWriteBudget) ([]byte, bool, error) {
 	materializer, err := storedDocumentMaterializerForCollection(col)
 	if err != nil {
 		return nil, false, err
 	}
 	defer materializer.Close()
 	var key []byte
-	truncated, err := col.ScanDocumentsFunc(s.maxFindScanDocuments(), func(record collections.DocumentRecord) (bool, error) {
+	limit := s.maxFindScanDocuments()
+	if budget != nil && mongoWriteScanLookahead(budget.examinedRemaining) < limit {
+		limit = mongoWriteScanLookahead(budget.examinedRemaining)
+	}
+	truncated, err := col.ScanDocumentsFunc(limit, func(record collections.DocumentRecord) (bool, error) {
+		if err := budget.charge(); err != nil {
+			return false, err
+		}
 		doc, err := storedDocumentToBSON(col, materializer, record.Document)
 		if err != nil {
 			return false, err
@@ -68,6 +90,9 @@ func (s *Server) selectMongoFilterWriteKey(col *collections.Collection, plan fin
 			return false, errors.New("Mongo gateway selected document has no _id")
 		}
 		key, err = encodePrimaryKey(id)
+		if err == nil {
+			err = budget.reserveTargetKey(len(key))
+		}
 		return false, err
 	})
 	if err != nil {
@@ -89,15 +114,29 @@ func mongoStoredDocumentMatchesPlan(col *collections.Collection, materializer *c
 
 func (s *Server) runMongoFilterUpdateOne(col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
 	for attempt := 0; attempt < mongoFilterWriteMaxAttempts; attempt++ {
-		key, found, err := s.selectMongoFilterWriteKey(col, update.plan)
+		key, found, err := s.selectMongoFilterWriteKeyWithBudget(col, update.plan, update.budget)
 		if err != nil || !found {
 			return false, false, err
 		}
 		if s.filterWriteSelectedHook != nil {
 			s.filterWriteSelectedHook()
 		}
+		// Selection can block in a hook or concurrent writer. Check again at
+		// the boundary immediately before the atomic mutation.
+		if err := update.budget.checkDeadline(); err != nil {
+			return false, false, err
+		}
 		materializer, err := storedDocumentMaterializerForCollection(col)
 		if err != nil {
+			return false, false, err
+		}
+		if s.filterWriteAfterMaterializerHook != nil {
+			s.filterWriteAfterMaterializerHook()
+		}
+		// Template materializer setup can acquire or refresh a snapshot. Recheck
+		// after that work and immediately before the atomic conditional update.
+		if err := update.budget.checkDeadline(); err != nil {
+			_ = materializer.Close()
 			return false, false, err
 		}
 		predicateMatched := false
@@ -120,17 +159,181 @@ func (s *Server) runMongoFilterUpdateOne(col *collections.Collection, update mon
 	return false, false, fmt.Errorf("Mongo gateway filter write exceeded %d predicate-drift retries", mongoFilterWriteMaxAttempts)
 }
 
+// runMongoFilterUpdateMany selects in collection natural order, then rechecks
+// the original predicate inside each selected key's atomic Update callback.
+// This keeps concurrent predicate drift from mutating a document that no
+// longer matches without rerunning selection (which would change natural-order
+// and target-budget accounting). The shared scan cap is the command's explicit
+// work bound.
+func (s *Server) runMongoFilterUpdateMany(col *collections.Collection, update mongoUpdateItem) (int32, int32, bool, error) {
+	materializer, err := storedDocumentMaterializerForCollection(col)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	defer materializer.Close()
+	keys := make([][]byte, 0)
+	limit := s.maxFindScanDocuments()
+	if update.budget != nil && mongoWriteScanLookahead(update.budget.examinedRemaining) < limit {
+		limit = mongoWriteScanLookahead(update.budget.examinedRemaining)
+	}
+	truncated, err := col.ScanDocumentsFunc(limit, func(record collections.DocumentRecord) (bool, error) {
+		if err := update.budget.charge(); err != nil {
+			return false, err
+		}
+		doc, err := storedDocumentToBSON(col, materializer, record.Document)
+		if err != nil {
+			return false, err
+		}
+		match, err := documentMatchesPlan(doc, update.plan)
+		if err != nil || !match {
+			return err == nil, err
+		}
+		id := bson.Raw(doc).Lookup("_id")
+		if id.IsZero() {
+			return false, errors.New("Mongo gateway selected document has no _id")
+		}
+		key, err := encodePrimaryKey(id)
+		if err != nil {
+			return false, err
+		}
+		if err := update.budget.reserveTargetKey(len(key)); err != nil {
+			return false, err
+		}
+		keys = append(keys, key)
+		return true, nil
+	})
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if truncated {
+		return 0, 0, false, fmt.Errorf("Mongo gateway multi update requires a bounded scan and exceeded %d documents", s.maxFindScanDocuments())
+	}
+	var matched, modified int32
+	if s.filterWriteSelectedHook != nil && len(keys) != 0 {
+		s.filterWriteSelectedHook()
+	}
+	for _, key := range keys {
+		if err := update.budget.checkDeadline(); err != nil {
+			return matched, modified, false, err
+		}
+		item := update
+		item.multi, item.exactID, item.key = false, false, key
+		predicateMatched := false
+		matchedOne, modifiedOne, err := col.Update(key, func(stored []byte) ([]byte, bool, error) {
+			resetMongoFilterWriteAttempt(&predicateMatched)
+			match, matchErr := mongoStoredDocumentMatchesPlan(col, materializer, stored, update.plan)
+			if matchErr != nil || !match {
+				return nil, false, matchErr
+			}
+			predicateMatched = true
+			return applyMongoUpdateToStoredDocument(col, materializer, item, stored)
+		})
+		if err != nil {
+			return matched, modified, false, err
+		}
+		reconcileMongoFilterWriteOutcome(&predicateMatched, matchedOne)
+		if predicateMatched {
+			matched++
+		}
+		if modifiedOne {
+			modified++
+		}
+	}
+	return matched, modified, false, nil
+}
+
+func (s *Server) deleteMongoFilterMany(col *collections.Collection, plan findPlan, budget *mongoWriteBudget) (int32, error) {
+	materializer, err := storedDocumentMaterializerForCollection(col)
+	if err != nil {
+		return 0, err
+	}
+	defer materializer.Close()
+	keys := make([][]byte, 0)
+	limit := s.maxFindScanDocuments()
+	if budget != nil && mongoWriteScanLookahead(budget.examinedRemaining) < limit {
+		limit = mongoWriteScanLookahead(budget.examinedRemaining)
+	}
+	truncated, err := col.ScanDocumentsFunc(limit, func(record collections.DocumentRecord) (bool, error) {
+		if err := budget.charge(); err != nil {
+			return false, err
+		}
+		doc, err := storedDocumentToBSON(col, materializer, record.Document)
+		if err != nil {
+			return false, err
+		}
+		match, err := documentMatchesPlan(doc, plan)
+		if err != nil || !match {
+			return err == nil, err
+		}
+		id := bson.Raw(doc).Lookup("_id")
+		if id.IsZero() {
+			return false, errors.New("Mongo gateway selected document has no _id")
+		}
+		key, err := encodePrimaryKey(id)
+		if err != nil {
+			return false, err
+		}
+		if err := budget.reserveTargetKey(len(key)); err != nil {
+			return false, err
+		}
+		keys = append(keys, key)
+		return true, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	if truncated {
+		return 0, fmt.Errorf("Mongo gateway multi delete requires a bounded scan and exceeded %d documents", s.maxFindScanDocuments())
+	}
+	var deleted int32
+	if s.filterWriteSelectedHook != nil && len(keys) != 0 {
+		s.filterWriteSelectedHook()
+	}
+	for _, key := range keys {
+		if err := budget.checkDeadline(); err != nil {
+			return deleted, err
+		}
+		matched, err := col.DeleteDocumentIf(key, func(stored []byte) (bool, error) {
+			return mongoStoredDocumentMatchesPlan(col, materializer, stored, plan)
+		})
+		if err != nil {
+			return deleted, err
+		}
+		if matched {
+			deleted++
+		}
+	}
+	return deleted, nil
+}
+
 func (s *Server) deleteMongoFilterOne(col *collections.Collection, plan findPlan) (bool, error) {
+	return s.deleteMongoFilterOneWithBudget(col, plan, nil)
+}
+
+func (s *Server) deleteMongoFilterOneWithBudget(col *collections.Collection, plan findPlan, budget *mongoWriteBudget) (bool, error) {
 	for attempt := 0; attempt < mongoFilterWriteMaxAttempts; attempt++ {
-		key, found, err := s.selectMongoFilterWriteKey(col, plan)
+		key, found, err := s.selectMongoFilterWriteKeyWithBudget(col, plan, budget)
 		if err != nil || !found {
 			return false, err
 		}
 		if s.filterWriteSelectedHook != nil {
 			s.filterWriteSelectedHook()
 		}
+		// Do not let a selected-key retry mutate after the command deadline.
+		if err := budget.checkDeadline(); err != nil {
+			return false, err
+		}
 		materializer, err := storedDocumentMaterializerForCollection(col)
 		if err != nil {
+			return false, err
+		}
+		if s.filterWriteAfterMaterializerHook != nil {
+			s.filterWriteAfterMaterializerHook()
+		}
+		// See update-one: snapshot/materializer setup itself is interruptible
+		// work and must not let the following DeleteDocumentIf enter expired.
+		if err := budget.checkDeadline(); err != nil {
+			_ = materializer.Close()
 			return false, err
 		}
 		predicateMatched := false
