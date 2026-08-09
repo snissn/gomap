@@ -254,6 +254,34 @@ func TestAuthenticationEnabledWithoutCatalogFailsClosed(t *testing.T) {
 	assertCommandError(t, start, "AuthenticationFailed")
 }
 
+func TestSASLStartRejectsMandatoryExtensionAndCountsFailures(t *testing.T) {
+	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	catalog, err := NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer()
+	server.AuthenticationEnabled, server.AuthCatalog = true, catalog
+	for _, payload := range []string{"n,,n=alice,r=nonce,m=unsupported", "n,,n=alice,r=nonce"} {
+		mechanism := "SCRAM-SHA-256"
+		if payload == "n,,n=alice,r=nonce" {
+			mechanism = "SCRAM-SHA-1"
+		}
+		response, err := server.commandResponse(context.Background(), "saslStart", mustDocument(t, bson.D{{Key: "saslStart", Value: 1}, {Key: "mechanism", Value: mechanism}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte(payload)}}, {Key: "$db", Value: "admin"}}), nil, 53)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertCommandError(t, response, "AuthenticationFailed")
+	}
+	if got := server.authFailures.Load(); got != 2 {
+		t.Fatalf("auth failures=%d want 2", got)
+	}
+}
+
 func TestSyntheticSCRAMVerifierIsServerAndUserScoped(t *testing.T) {
 	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
 	if err != nil {
@@ -578,12 +606,46 @@ func TestSCRAMSHA256EstablishesConnectionIdentityAndGatesCommands(t *testing.T) 
 	if got := bson.Raw(continued); got.Lookup("done").Boolean() != true || got.Lookup("ok").Double() != 1 {
 		t.Fatalf("continue=%s", got)
 	}
+	_, serverSignature, ok := bson.Raw(continued).Lookup("payload").BinaryOK()
+	if !ok || string(serverSignature) != "v="+base64.StdEncoding.EncodeToString(hmacSHA256(hmacSHA256(salted, []byte("Server Key")), []byte(authMessage))) {
+		t.Fatalf("server signature=%q", serverSignature)
+	}
 	status, err := server.commandResponse(context.Background(), "connectionStatus", mustDocument(t, bson.D{{Key: "connectionStatus", Value: 1}, {Key: "$db", Value: "admin"}}), nil, owner)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(bson.Raw(status).String(), "alice") {
 		t.Fatalf("connection status missed identity: %s", bson.Raw(status))
+	}
+}
+
+func TestSCRAMCompletionDoesNotAuthenticateReusedOwner(t *testing.T) {
+	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	catalog, err := NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	password := []byte("correct horse battery staple")
+	if err := catalog.UpsertPassword("admin", "alice", password); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer()
+	server.AuthenticationEnabled, server.AuthCatalog = true, catalog
+	entered, release := make(chan struct{}), make(chan struct{})
+	server.beforeSCRAMIdentityStore = func() { close(entered); <-release }
+	done := make(chan struct{})
+	go func() { authenticateOwner(t, server, 92, password); close(done) }()
+	<-entered
+	server.ReleaseOwner(92)
+	newState := server.authState(92)
+	close(release)
+	<-done
+	if newState.user.Load() != nil || server.authenticated(92) {
+		t.Fatal("old SCRAM completion authenticated the replacement owner state")
 	}
 }
 
@@ -679,8 +741,12 @@ func TestServeOneWithOwnerRejectsZeroBeforeAuthenticationOrCursorDispatch(t *tes
 }
 
 func authenticateOwner(t *testing.T, server *Server, owner int64, password []byte) {
+	authenticateUser(t, server, owner, "alice", password)
+}
+
+func authenticateUser(t *testing.T, server *Server, owner int64, username string, password []byte) {
 	t.Helper()
-	clientFirstBare := "n=alice,r=owner-reuse-nonce"
+	clientFirstBare := "n=" + username + ",r=owner-reuse-nonce"
 	startRaw := mustDocument(t, bson.D{{Key: "saslStart", Value: 1}, {Key: "mechanism", Value: "SCRAM-SHA-256"}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte("n,," + clientFirstBare)}}, {Key: "$db", Value: "admin"}})
 	start, err := server.commandResponse(context.Background(), "saslStart", startRaw, nil, owner)
 	if err != nil {

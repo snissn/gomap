@@ -865,6 +865,13 @@ func mongoCompatibilityMatrixProbes() []mongoCompatibilityMatrixProbe {
 					{Key: "$db", Value: "app"},
 				})
 				assertCommandError(t, find, "Unauthorized")
+				authenticateUser(t, server, 1, "matrix", []byte("correct horse battery staple"))
+				find = serveCommand(t, server, 32, bson.D{
+					{Key: "find", Value: "users"},
+					{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+					{Key: "$db", Value: "app"},
+				})
+				assertOK(t, find)
 			},
 		},
 		{

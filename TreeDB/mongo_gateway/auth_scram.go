@@ -76,38 +76,45 @@ func authFailure() (wire.Document, error) {
 	return commandError(18, "AuthenticationFailed", "Authentication failed")
 }
 
+func (s *Server) authFailureCounted() (wire.Document, error) {
+	if s != nil {
+		s.authFailures.Add(1)
+	}
+	return authFailure()
+}
+
 func (s *Server) saslStartResponse(command wire.Document, owner int64) (wire.Document, error) {
 	if !s.authenticationRequired() {
 		return commandError(59, "CommandNotFound", "authentication is not enabled")
 	}
 	if s.AuthCatalog == nil {
-		return authFailure()
+		return s.authFailureCounted()
 	}
 	raw := bson.Raw(command)
 	mechanism, ok := raw.Lookup("mechanism").StringValueOK()
 	if !ok || mechanism != "SCRAM-SHA-256" {
-		return authFailure()
+		return s.authFailureCounted()
 	}
 	_, payload, ok := raw.Lookup("payload").BinaryOK()
 	if !ok || len(payload) == 0 || len(payload) > maxSCRAMPayloadBytes {
-		return authFailure()
+		return s.authFailureCounted()
 	}
 	message := string(payload)
 	if !strings.HasPrefix(message, "n,,") {
-		return authFailure()
+		return s.authFailureCounted()
 	}
 	bare := strings.TrimPrefix(message, "n,,")
 	fields, ok := scramFields(bare)
-	if !ok || fields["n"] == "" || fields["r"] == "" || len(fields["r"]) > maxAuthNameBytes {
-		return authFailure()
+	if !ok || fields["m"] != "" || fields["n"] == "" || fields["r"] == "" || len(fields["r"]) > maxAuthNameBytes {
+		return s.authFailureCounted()
 	}
 	username, ok := scramUnescape(fields["n"])
 	if !ok {
-		return authFailure()
+		return s.authFailureCounted()
 	}
 	authDB, ok := raw.Lookup("$db").StringValueOK()
 	if !ok {
-		return authFailure()
+		return s.authFailureCounted()
 	}
 	record, err := s.AuthCatalog.record(authDB, username)
 	valid := err == nil
@@ -116,12 +123,12 @@ func (s *Server) saslStartResponse(command wire.Document, owner int64) (wire.Doc
 		// username existence is not exposed before proof verification.
 		record, err = s.AuthCatalog.syntheticSCRAMRecord(authDB, username)
 		if err != nil {
-			return authFailure()
+			return s.authFailureCounted()
 		}
 	}
 	random := make([]byte, 18)
 	if _, err := rand.Read(random); err != nil {
-		return authFailure()
+		return s.authFailureCounted()
 	}
 	nonce := fields["r"] + base64.RawStdEncoding.EncodeToString(random)
 	serverFirst := fmt.Sprintf("r=%s,s=%s,i=%d", nonce, base64.StdEncoding.EncodeToString(record.Salt), record.Iterations)
@@ -130,8 +137,7 @@ func (s *Server) saslStartResponse(command wire.Document, owner int64) (wire.Doc
 	s.expireSCRAMConversationsLocked(state, time.Now())
 	if len(state.conversations) >= maxSCRAMConversationsPerConnection {
 		state.mu.Unlock()
-		s.authFailures.Add(1)
-		return authFailure()
+		return s.authFailureCounted()
 	}
 	id := s.nextSASLConversation.Add(1)
 	if id == 0 {
@@ -146,11 +152,11 @@ func (s *Server) saslContinueResponse(command wire.Document, owner int64) (wire.
 	raw := bson.Raw(command)
 	id, ok := raw.Lookup("conversationId").Int32OK()
 	if !ok {
-		return authFailure()
+		return s.authFailureCounted()
 	}
 	_, payload, ok := raw.Lookup("payload").BinaryOK()
 	if !ok || len(payload) == 0 || len(payload) > maxSCRAMPayloadBytes {
-		return authFailure()
+		return s.authFailureCounted()
 	}
 	value, exists := s.authConnections.Load(owner)
 	var state *authConnectionState
@@ -168,24 +174,21 @@ func (s *Server) saslContinueResponse(command wire.Document, owner int64) (wire.
 		state.mu.Unlock()
 	}
 	if !ok {
-		return authFailure()
+		return s.authFailureCounted()
 	}
 	message := string(payload)
 	fields, parsed := scramFields(message)
 	proofB64 := fields["p"]
 	if !parsed || proofB64 == "" || fields["c"] != "biws" {
-		s.authFailures.Add(1)
-		return authFailure()
+		return s.authFailureCounted()
 	}
 	withoutProof := strings.TrimSuffix(message, ",p="+proofB64)
 	if withoutProof == message || fields["r"] == "" || fields["r"] != conversation.serverNonce {
-		s.authFailures.Add(1)
-		return authFailure()
+		return s.authFailureCounted()
 	}
 	proof, err := base64.StdEncoding.DecodeString(proofB64)
 	if err != nil || len(proof) != 32 {
-		s.authFailures.Add(1)
-		return authFailure()
+		return s.authFailureCounted()
 	}
 	authMessage := conversation.clientFirstBare + "," + conversation.serverFirst + "," + withoutProof
 	clientSignature := hmacSHA256(conversation.record.StoredKey, []byte(authMessage))
@@ -196,14 +199,17 @@ func (s *Server) saslContinueResponse(command wire.Document, owner int64) (wire.
 	stored := sha256.Sum256(clientKey)
 	proofValid := subtle.ConstantTimeCompare(stored[:], conversation.record.StoredKey)
 	if subtle.ConstantTimeSelect(boolToInt(conversation.valid), proofValid, 0) != 1 {
-		s.authFailures.Add(1)
-		return authFailure()
+		return s.authFailureCounted()
 	}
 	serverSignature := hmacSHA256(conversation.record.ServerKey, []byte(authMessage))
 	user := conversation.user
-	if value, ok := s.authConnections.Load(owner); ok {
-		value.(*authConnectionState).user.Store(&user)
+	if s.beforeSCRAMIdentityStore != nil {
+		s.beforeSCRAMIdentityStore()
 	}
+	// Complete against the exact state which owned the consumed conversation.
+	// ReleaseOwner may have removed it and a reused owner ID may now point at a
+	// different state; never reload by owner here.
+	state.user.Store(&user)
 	return marshalDocument(bson.D{{Key: "conversationId", Value: id}, {Key: "done", Value: true}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte("v=" + base64.StdEncoding.EncodeToString(serverSignature))}}, {Key: "ok", Value: 1.0}})
 }
 

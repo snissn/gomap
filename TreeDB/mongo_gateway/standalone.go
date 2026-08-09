@@ -227,8 +227,11 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	if normalized.AuthenticationEnabled {
 		catalog, err := NewAuthCatalog(backend)
 		if err != nil {
-			_ = cleanup()
-			return nil, err
+			errs := []error{err}
+			if cleanup != nil {
+				errs = append(errs, cleanup())
+			}
+			return nil, errors.Join(errs...)
 		}
 		server.AuthCatalog = catalog
 	}

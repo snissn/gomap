@@ -787,7 +787,7 @@ func BenchmarkStandaloneSCRAMSHA256ReusedFindOne(b *testing.B) {
 	done := make(chan error, 1)
 	go func() { done <- standalone.Serve(ctx, ln) }()
 	defer func() { cancel(); _ = ln.Close(); <-done }()
-	client, err := mongo.Connect(options.Client().ApplyURI("mongodb://" + ln.Addr().String()).SetDirect(true).SetAuth(options.Credential{Username: "bench", Password: "correct horse battery staple", AuthSource: "admin", AuthMechanism: "SCRAM-SHA-256"}))
+	client, err := mongo.Connect(options.Client().ApplyURI("mongodb://" + ln.Addr().String()).SetDirect(true).SetServerSelectionTimeout(3 * time.Second).SetAuth(options.Credential{Username: "bench", Password: "correct horse battery staple", AuthSource: "admin", AuthMechanism: "SCRAM-SHA-256"}))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -835,7 +835,7 @@ func BenchmarkStandaloneAuthVsPlaintextReusedFindOne(b *testing.B) {
 			done := make(chan error, 1)
 			go func() { done <- standalone.Serve(ctx, ln) }()
 			defer func() { cancel(); _ = ln.Close(); <-done }()
-			cfg := options.Client().ApplyURI("mongodb://" + ln.Addr().String()).SetDirect(true)
+			cfg := options.Client().ApplyURI("mongodb://" + ln.Addr().String()).SetDirect(true).SetServerSelectionTimeout(3 * time.Second)
 			if authenticationEnabled {
 				cfg.SetAuth(options.Credential{Username: "bench", Password: "correct horse battery staple", AuthSource: "admin", AuthMechanism: "SCRAM-SHA-256"})
 			}
@@ -844,7 +844,10 @@ func BenchmarkStandaloneAuthVsPlaintextReusedFindOne(b *testing.B) {
 				b.Fatal(err)
 			}
 			defer client.Disconnect(context.Background())
-			if err := client.Ping(context.Background(), nil); err != nil {
+			pingCtx, pingCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			err = client.Ping(pingCtx, nil)
+			pingCancel()
+			if err != nil {
 				b.Fatal(err)
 			}
 			coll := client.Database("bench").Collection("items")

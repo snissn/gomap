@@ -131,7 +131,9 @@ type Server struct {
 	authConnections            sync.Map // map[int64]*authConnectionState
 	nextSASLConversation       atomic.Int32
 	authFailures               atomic.Uint64
-	closed                     atomic.Bool
+	// beforeSCRAMIdentityStore is test-only coordination for owner release.
+	beforeSCRAMIdentityStore func()
+	closed                   atomic.Bool
 }
 
 type collectionFirstWritePending struct {

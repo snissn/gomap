@@ -231,6 +231,8 @@ func (c *AuthCatalog) syntheticSCRAMRecord(authDB, username string) (AuthUserRec
 	salt := hmacSHA256(c.syntheticSecret[:], append([]byte("scram-synthetic-salt\x00"), context...))
 	stored := hmacSHA256(c.syntheticSecret[:], append([]byte("scram-synthetic-stored\x00"), context...))
 	server := hmacSHA256(c.syntheticSecret[:], append([]byte("scram-synthetic-server\x00"), context...))
+	// Keep this equal to the real-user default in UpsertPassword: a divergent
+	// server-first iteration count would expose invalid identities.
 	return AuthUserRecord{Version: authCatalogVersion, Username: username, AuthDB: authDB, Salt: salt, Iterations: defaultSCRAMIterations, StoredKey: stored, ServerKey: server, Enabled: false}, nil
 }
 

@@ -108,6 +108,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if status.InsecureRemoteOverride {
 		fmt.Fprintln(stderr, "WARNING: plaintext remote listener explicitly enabled by -allow-insecure-remote")
 	}
+	if cfg.authenticationEnabled {
+		fmt.Fprintln(stdout, "Authentication: SCRAM-SHA-256 required; bootstrap users with Server.AuthCatalog.UpsertPassword before clients connect")
+	}
 
 	serveErr := standalone.Serve(ctx, ln)
 	closeErr := standalone.Close()
