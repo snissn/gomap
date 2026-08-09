@@ -16,7 +16,6 @@ import (
 	"strings"
 	"sync"
 
-	treedb "github.com/snissn/gomap/TreeDB"
 	"golang.org/x/crypto/pbkdf2"
 )
 
@@ -53,12 +52,16 @@ type AuthUserRecord struct {
 // private to the gateway and all writes use SetSync so rotation and bootstrap
 // acknowledgement never claim persistence before the selected profile's
 // durable boundary.
+type authCatalogStore interface {
+	Get([]byte) ([]byte, error)
+	SetSync([]byte, []byte) error
+}
 type AuthCatalog struct {
-	db *treedb.DB
+	db authCatalogStore
 	mu sync.RWMutex
 }
 
-func NewAuthCatalog(db *treedb.DB) (*AuthCatalog, error) {
+func NewAuthCatalog(db authCatalogStore) (*AuthCatalog, error) {
 	if db == nil {
 		return nil, errors.New("mongo gateway auth: nil database")
 	}
@@ -130,9 +133,23 @@ func (c *AuthCatalog) record(authDB, username string) (AuthUserRecord, error) {
 	return r, nil
 }
 
+func (c *AuthCatalog) storedRecord(authDB, username string) (AuthUserRecord, error) {
+	if c == nil || !validAuthField(authDB) || !validAuthField(username) {
+		return AuthUserRecord{}, errAuthenticationFailed
+	}
+	c.mu.RLock()
+	raw, err := c.db.Get(authCatalogKey(authDB, username))
+	c.mu.RUnlock()
+	var r AuthUserRecord
+	if err != nil || json.Unmarshal(raw, &r) != nil || validateAuthRecord(r) != nil || r.Username != username || r.AuthDB != authDB {
+		return AuthUserRecord{}, errAuthenticationFailed
+	}
+	return r, nil
+}
+
 // SetEnabled atomically replaces the stored record with a changed enabled bit.
 func (c *AuthCatalog) SetEnabled(authDB, username string, enabled bool) error {
-	r, err := c.record(authDB, username)
+	r, err := c.storedRecord(authDB, username)
 	if err != nil {
 		return err
 	}

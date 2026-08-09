@@ -106,6 +106,40 @@ func TestStandaloneServerOfficialDriverTLS(t *testing.T) {
 	}
 }
 
+func TestStandaloneServerOfficialDriverSCRAMSHA256(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), AuthenticationEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer standalone.Close()
+	if err := standalone.Server.AuthCatalog.UpsertPassword("admin", "alice", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- standalone.Serve(ctx, ln) }()
+	client, err := mongo.Connect(options.Client().ApplyURI("mongodb://" + ln.Addr().String()).SetDirect(true).SetAuth(options.Credential{Username: "alice", Password: "correct horse battery staple", AuthSource: "admin", AuthMechanism: "SCRAM-SHA-256"}).SetServerSelectionTimeout(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Disconnect(context.Background())
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer pingCancel()
+	if err := client.Ping(pingCtx, nil); err != nil {
+		t.Fatalf("SCRAM driver ping: %v", err)
+	}
+	cancel()
+	_ = ln.Close()
+	if err := <-serveErr; err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+}
+
 func TestStandaloneServerTLSHandshakeTimeoutAndClose(t *testing.T) {
 	certFile, keyFile, pool := writeTLSMaterial(t, false)
 	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), TLSCertFile: certFile, TLSKeyFile: keyFile, TLSHandshakeTimeout: 5 * time.Second})

@@ -2,9 +2,16 @@ package mongogateway
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"fmt"
+	"strings"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"golang.org/x/crypto/pbkdf2"
 )
 
 func TestAuthCatalogDurableVerifierRotationAndDisable(t *testing.T) {
@@ -77,5 +84,79 @@ func TestAuthCatalogRejectsCorruptOrOversizedRecords(t *testing.T) {
 	}
 	if err := catalog.UpsertPassword("admin", "huge", make([]byte, maxAuthPasswordBytes+1)); err == nil {
 		t.Fatal("oversized password accepted")
+	}
+}
+
+func TestSCRAMSHA256EstablishesConnectionIdentityAndGatesCommands(t *testing.T) {
+	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	catalog, _ := NewAuthCatalog(db)
+	password := []byte("correct horse battery staple")
+	if err := catalog.UpsertPassword("admin", "alice", password); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer()
+	server.AuthenticationEnabled, server.AuthCatalog = true, catalog
+	owner := int64(99)
+	denied, err := server.commandResponse(context.Background(), "find", mustDocument(t, bson.D{{Key: "find", Value: "users"}, {Key: "$db", Value: "app"}}), nil, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bson.Raw(denied).Lookup("code").Int32() != 13 {
+		t.Fatalf("unauthenticated find=%s", bson.Raw(denied))
+	}
+	clientFirstBare := "n=alice,r=clientnonce"
+	startRaw, _ := marshalDocument(bson.D{{Key: "saslStart", Value: 1}, {Key: "mechanism", Value: "SCRAM-SHA-256"}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte("n,," + clientFirstBare)}}, {Key: "$db", Value: "admin"}})
+	start, err := server.commandResponse(context.Background(), "saslStart", startRaw, nil, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	startDoc := bson.Raw(start)
+	if startDoc.Lookup("ok").Double() != 1 {
+		t.Fatalf("start=%s", startDoc)
+	}
+	id := startDoc.Lookup("conversationId").Int32()
+	_, serverFirstBytes := startDoc.Lookup("payload").Binary()
+	serverFirst := string(serverFirstBytes)
+	parts, ok := scramFields(serverFirst)
+	if !ok {
+		t.Fatal(serverFirst)
+	}
+	salt, err := base64.StdEncoding.DecodeString(parts["s"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	_, err = fmt.Sscanf(parts["i"], "%d", &count)
+	if err != nil {
+		t.Fatal(err)
+	}
+	salted := pbkdf2.Key(password, salt, count, sha256.Size, sha256.New)
+	clientKey := hmacSHA256(salted, []byte("Client Key"))
+	stored := sha256.Sum256(clientKey)
+	withoutProof := "c=biws,r=" + parts["r"]
+	authMessage := clientFirstBare + "," + serverFirst + "," + withoutProof
+	signature := hmacSHA256(stored[:], []byte(authMessage))
+	proof := make([]byte, len(clientKey))
+	for i := range proof {
+		proof[i] = clientKey[i] ^ signature[i]
+	}
+	continueRaw, _ := marshalDocument(bson.D{{Key: "saslContinue", Value: 1}, {Key: "conversationId", Value: id}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte(withoutProof + ",p=" + base64.StdEncoding.EncodeToString(proof))}}, {Key: "$db", Value: "admin"}})
+	continued, err := server.commandResponse(context.Background(), "saslContinue", continueRaw, nil, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bson.Raw(continued); got.Lookup("done").Boolean() != true || got.Lookup("ok").Double() != 1 {
+		t.Fatalf("continue=%s", got)
+	}
+	status, err := server.commandResponse(context.Background(), "connectionStatus", mustDocument(t, bson.D{{Key: "connectionStatus", Value: 1}, {Key: "$db", Value: "admin"}}), nil, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(bson.Raw(status).String(), "alice") {
+		t.Fatalf("connection status missed identity: %s", bson.Raw(status))
 	}
 }

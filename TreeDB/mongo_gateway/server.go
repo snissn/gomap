@@ -51,6 +51,7 @@ type cliConfig struct {
 	tlsMinVersion            string
 	tlsHandshakeTimeout      time.Duration
 	allowInsecureRemote      bool
+	authenticationEnabled    bool
 }
 
 func main() {
@@ -166,6 +167,7 @@ func parseFlags(args []string, stderr io.Writer) (cliConfig, error) {
 	fs.StringVar(&cfg.tlsMinVersion, "tls-min-version", cfg.tlsMinVersion, "minimum TLS version: 1.2 or 1.3")
 	fs.DurationVar(&cfg.tlsHandshakeTimeout, "tls-handshake-timeout", 0, "TLS handshake timeout; 0 uses 10s")
 	fs.BoolVar(&cfg.allowInsecureRemote, "allow-insecure-remote", false, "allow plaintext non-loopback listen (unsafe; emits warning)")
+	fs.BoolVar(&cfg.authenticationEnabled, "authentication", false, "enable SCRAM-SHA-256 authentication (bootstrap users through the library API before serving)")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
@@ -259,6 +261,7 @@ func standaloneOptions(cfg cliConfig) mongogateway.StandaloneOptions {
 		TLSMinVersion:               mustTLSVersionFromFlag(cfg.tlsMinVersion),
 		TLSHandshakeTimeout:         cfg.tlsHandshakeTimeout,
 		AllowInsecureRemote:         cfg.allowInsecureRemote,
+		AuthenticationEnabled:       cfg.authenticationEnabled,
 	}
 }
 

@@ -87,6 +87,10 @@ type Server struct {
 	// keys to one gateway process epoch. NewServer initializes a random nonce
 	// so sequence-based keys are not reused after restart.
 	ClusterIdempotencyNonce string
+	// AuthenticationEnabled gates ordinary commands until one SCRAM identity
+	// has been established for this connection. Authorization remains #4059.
+	AuthenticationEnabled bool
+	AuthCatalog           *AuthCatalog
 
 	nextResponseID            atomic.Int32
 	nextConnectionID          atomic.Int64
@@ -121,6 +125,10 @@ type Server struct {
 	standaloneWriteBoundaryMu  sync.RWMutex
 	standaloneWriteConcernSync func() (bool, error)
 	writeConcernStats          standaloneWriteConcernStats
+	authMu                     sync.Mutex
+	authConnections            map[int64]*authConnectionState
+	nextSASLConversation       atomic.Int32
+	authFailures               atomic.Uint64
 	closed                     atomic.Bool
 }
 
@@ -349,6 +357,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 	defer conn.Close()
 	owner := s.nextConnectionID.Add(1)
 	defer s.killCursorsForOwner(owner)
+	defer s.clearAuthState(owner)
 	rw := bufferedConnReadWriter{
 		reader: bufio.NewReaderSize(conn, defaultWireReadBufferSize),
 		writer: conn,
@@ -766,6 +775,9 @@ func commandRejectsReadOPMsgFeatures(name string) bool {
 }
 
 func (s *Server) commandResponse(ctx context.Context, name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (wire.Document, error) {
+	if s.authenticationRequired() && !s.authenticated(cursorOwner) && !authUnauthenticatedCommand(name) {
+		return commandError(13, "Unauthorized", "Authentication required")
+	}
 	if commandRejectsTransactionMarkers(name) {
 		if doc, rejected, err := rejectTransactionalCommand(command, name); rejected {
 			return doc, err
@@ -784,7 +796,11 @@ func (s *Server) dispatchCommandResponse(ctx context.Context, name string, comma
 	case "buildInfo":
 		return marshalDocument(buildInfoResponse())
 	case "connectionStatus":
-		return marshalDocument(connectionStatusResponse())
+		return marshalDocument(s.connectionStatusResponse(cursorOwner))
+	case "saslStart":
+		return s.saslStartResponse(command, cursorOwner)
+	case "saslContinue":
+		return s.saslContinueResponse(command, cursorOwner)
 	case "create":
 		return s.createCollectionResponse(ctx, command)
 	case "endSessions":
@@ -895,9 +911,20 @@ func buildInfoResponse() bson.D {
 }
 
 func connectionStatusResponse() bson.D {
+	return connectionStatusResponseForUser(nil)
+}
+
+func (s *Server) connectionStatusResponse(owner int64) bson.D {
+	return connectionStatusResponseForUser(s.authUser(owner))
+}
+func connectionStatusResponseForUser(user *AuthUser) bson.D {
+	users := bson.A{}
+	if user != nil {
+		users = append(users, bson.D{{Key: "user", Value: user.Username}, {Key: "db", Value: user.AuthDB}})
+	}
 	return bson.D{
 		{Key: "authInfo", Value: bson.D{
-			{Key: "authenticatedUsers", Value: bson.A{}},
+			{Key: "authenticatedUsers", Value: users},
 			{Key: "authenticatedUserRoles", Value: bson.A{}},
 			{Key: "authenticatedUserPrivileges", Value: bson.A{}},
 		}},
