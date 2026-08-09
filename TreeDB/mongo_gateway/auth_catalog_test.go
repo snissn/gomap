@@ -233,6 +233,85 @@ func TestAuthCatalogSyntheticVerifierSecretSurvivesReopenAndFailsClosedOnCorrupt
 	}
 }
 
+func TestAuthCatalogSyntheticSecretRejectsEveryPresentMalformedValue(t *testing.T) {
+	for _, raw := range [][]byte{nil, []byte("null"), []byte(`{"version":2,"secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}`), []byte(`{"version":1,"secret":"AQI="}`)} {
+		db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.SetSync(authCatalogSyntheticSecretKey(), raw); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := NewAuthCatalog(db); err == nil {
+			t.Fatalf("accepted malformed synthetic secret %q", raw)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestAuthCatalogConcurrentConstructorsConvergeOnSyntheticSecret(t *testing.T) {
+	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	const constructors = 24
+	catalogs := make(chan *AuthCatalog, constructors)
+	errs := make(chan error, constructors)
+	for range constructors {
+		go func() {
+			c, err := NewAuthCatalog(db)
+			if err != nil {
+				errs <- err
+				return
+			}
+			catalogs <- c
+		}()
+	}
+	var first []byte
+	for range constructors {
+		select {
+		case err := <-errs:
+			t.Fatal(err)
+		case c := <-catalogs:
+			r, err := c.syntheticSCRAMRecord("admin", "same")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if first == nil {
+				first = r.Salt
+			} else if !bytes.Equal(first, r.Salt) {
+				t.Fatal("concurrent catalogs diverged")
+			}
+		}
+	}
+}
+
+func TestSCRAMPayloadWrongTypesFailClosedOverWire(t *testing.T) {
+	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	catalog, err := NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer()
+	server.AuthenticationEnabled, server.AuthCatalog = true, catalog
+	for _, payload := range []any{"not-binary", bson.D{{Key: "x", Value: 1}}, nil} {
+		response := serveCommand(t, server, 100, bson.D{{Key: "saslStart", Value: 1}, {Key: "mechanism", Value: "SCRAM-SHA-256"}, {Key: "payload", Value: payload}, {Key: "$db", Value: "admin"}})
+		assertCommandError(t, response, "AuthenticationFailed")
+		if got := serveCommand(t, server, 101, bson.D{{Key: "hello", Value: 1}, {Key: "$db", Value: "admin"}}); bson.Raw(got).Lookup("ok").Double() != 1 {
+			t.Fatalf("connection became unusable: %s", bson.Raw(got))
+		}
+	}
+	response := serveCommand(t, server, 102, bson.D{{Key: "saslContinue", Value: 1}, {Key: "conversationId", Value: 1}, {Key: "payload", Value: "not-binary"}, {Key: "$db", Value: "admin"}})
+	assertCommandError(t, response, "AuthenticationFailed")
+}
+
 func TestSCRAMClientFinalNonceMustMatchExactly(t *testing.T) {
 	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
 	if err != nil {

@@ -71,7 +71,7 @@ transport check only, not MongoDB authentication or authorization.
 <!-- mongo-capability-summary:begin -->
 ## Executable capability summary
 
-Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:74f666cad3c1939b3ecab5935cb220a94809943c710936ad52e827a4c34d0346`
+Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:0f40bb79daa24a03be9d721d1909f5f9ea1475b2d0c669793ef64dd1a778d939`
 
 | Surface | Status | Boundary |
 |---|---|---|
@@ -82,7 +82,7 @@ Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:74f666cad3c1939b3e
 | Logical sessions | supported subset | Driver-interoperability metadata only; no transaction or causal-session semantics. |
 | Transport security | supported subset | Loopback plaintext remains available; non-loopback standalone listeners require TLS unless an explicit insecure override is selected. Password authentication refuses plaintext non-loopback listeners. TLS 1.2+ with bounded handshakes is supported. |
 | Scalar indexes | supported subset | BSON collections default ordinary single-field ascending indexes to BSON-ordered v2; explicit treedbValueType remains the legacy homogeneous path. Compound and descending indexes remain rejected. |
-| Authentication and authorization | supported subset | Standalone SCRAM-SHA-256 establishes a connection identity from durable verifier-only records. Per-command authorization, SCRAM-SHA-1, and external identity providers remain unavailable. |
+| Authentication and authorization | supported subset | Standalone SCRAM-SHA-256 establishes a connection identity from durable verifier-only records; connectionStatus exposes that authenticated identity. Per-command authorization, SCRAM-SHA-1, and external identity providers remain unavailable. |
 | Transactions and retryable writes | not implemented | Transaction markers reject and commitTransaction is unavailable. |
 | Replica set and sharding | not implemented | Standalone hello metadata does not advertise replica-set or sharded-server behavior. |
 <!-- mongo-capability-summary:end -->

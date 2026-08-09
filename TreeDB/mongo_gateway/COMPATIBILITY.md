@@ -178,7 +178,7 @@ enabled-path latency claim is made.
 | Wire | `OP_MSG` document sequence for inserts | `supported` | `TestServerInsertAndFindByID` | Document sequences are only accepted where the command supports them. |
 | Wire | `OP_COMPRESSED` | `rejected` | `TestServerRejectsCompressedMessages` | Compression negotiation is not implemented. |
 | Command | `hello` / `isMaster` | `supported subset` | `TestMongoCompatibilityMatrix`, official-driver tests | Minimal server metadata only. |
-| Command | `connectionStatus` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerHandlesConnectionStatus` | Returns unauthenticated `authInfo` users, roles, and privileges; no auth or authorization support. |
+| Command | `connectionStatus` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestSCRAMSHA256EstablishesConnectionIdentityAndGatesCommands` | Returns the authenticated connection identity when SCRAM is enabled; unauthenticated calls return an empty `authInfo` projection. Per-command authorization remains unavailable. |
 | Command | `hostInfo` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerHandlesHostInfo` | Returns minimal local runtime and OS metadata only. |
 | Command | `buildInfo` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerHandlesBuildInfo` | Returns minimal MongoDB-compatible gateway version/build metadata only. |
 | Command | `ping` | `supported` | `TestMongoCompatibilityMatrix` | None for MVP. |

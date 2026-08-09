@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -59,6 +60,15 @@ type authCatalogStore interface {
 	Get([]byte) ([]byte, error)
 	SetSync([]byte, []byte) error
 }
+type authCatalogGetAppendStore interface {
+	GetAppend([]byte, []byte) ([]byte, error)
+}
+
+var authCatalogInitLocks struct {
+	sync.Mutex
+	byBackend map[uintptr]*sync.Mutex
+}
+
 type AuthCatalog struct {
 	db              authCatalogStore
 	mu              sync.Mutex
@@ -72,12 +82,39 @@ func NewAuthCatalog(db authCatalogStore) (*AuthCatalog, error) {
 	if db == nil {
 		return nil, errors.New("mongo gateway auth: nil database")
 	}
+	lock := authCatalogInitLock(db)
+	lock.Lock()
 	secret, err := loadOrCreateSyntheticSecret(db)
+	lock.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("mongo gateway auth: synthetic verifier secret: %w", err)
 	}
 	return &AuthCatalog{db: db, syntheticSecret: secret}, nil
 }
+
+// authCatalogInitLock serializes first-secret creation for one in-process
+// backend. TreeDB excludes simultaneous multi-process opens for this mode;
+// callers must construct catalogs against the same process-local DB handle.
+func authCatalogInitLock(db authCatalogStore) *sync.Mutex {
+	v := reflect.ValueOf(db)
+	if v.Kind() != reflect.Pointer || v.IsNil() {
+		return &authCatalogInitLocksFallback
+	}
+	key := v.Pointer()
+	authCatalogInitLocks.Lock()
+	defer authCatalogInitLocks.Unlock()
+	if authCatalogInitLocks.byBackend == nil {
+		authCatalogInitLocks.byBackend = make(map[uintptr]*sync.Mutex)
+	}
+	if lock := authCatalogInitLocks.byBackend[key]; lock != nil {
+		return lock
+	}
+	lock := &sync.Mutex{}
+	authCatalogInitLocks.byBackend[key] = lock
+	return lock
+}
+
+var authCatalogInitLocksFallback sync.Mutex
 
 func authCatalogKey(authDB, username string) []byte {
 	return []byte("\x00mongo-gateway/auth/v1/" + base64.RawURLEncoding.EncodeToString([]byte(authDB)) + "/" + base64.RawURLEncoding.EncodeToString([]byte(username)))
@@ -94,8 +131,8 @@ type authCatalogSyntheticSecretRecord struct {
 
 func loadOrCreateSyntheticSecret(db authCatalogStore) ([sha256.Size]byte, error) {
 	var secret [sha256.Size]byte
-	raw, err := db.Get(authCatalogSyntheticSecretKey())
-	if err == nil && len(raw) != 0 {
+	raw, err := getAuthCatalogValue(db, authCatalogSyntheticSecretKey())
+	if err == nil {
 		return decodeSyntheticSecret(raw)
 	}
 	if err != nil && !errors.Is(err, treedb.ErrKeyNotFound) {
@@ -113,11 +150,18 @@ func loadOrCreateSyntheticSecret(db authCatalogStore) ([sha256.Size]byte, error)
 	}
 	// Read back the durable value: a catalog never operates with a merely
 	// in-memory fallback secret, and a later reopen observes this exact value.
-	raw, err = db.Get(authCatalogSyntheticSecretKey())
+	raw, err = getAuthCatalogValue(db, authCatalogSyntheticSecretKey())
 	if err != nil {
 		return secret, errAuthenticationFailed
 	}
 	return decodeSyntheticSecret(raw)
+}
+
+func getAuthCatalogValue(db authCatalogStore, key []byte) ([]byte, error) {
+	if appendStore, ok := db.(authCatalogGetAppendStore); ok {
+		return appendStore.GetAppend(key, nil)
+	}
+	return db.Get(key)
 }
 
 func decodeSyntheticSecret(raw []byte) ([sha256.Size]byte, error) {

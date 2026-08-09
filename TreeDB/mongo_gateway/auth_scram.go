@@ -88,8 +88,8 @@ func (s *Server) saslStartResponse(command wire.Document, owner int64) (wire.Doc
 	if !ok || mechanism != "SCRAM-SHA-256" {
 		return authFailure()
 	}
-	_, payload := raw.Lookup("payload").Binary()
-	if len(payload) == 0 || len(payload) > maxSCRAMPayloadBytes {
+	_, payload, ok := raw.Lookup("payload").BinaryOK()
+	if !ok || len(payload) == 0 || len(payload) > maxSCRAMPayloadBytes {
 		return authFailure()
 	}
 	message := string(payload)
@@ -148,8 +148,8 @@ func (s *Server) saslContinueResponse(command wire.Document, owner int64) (wire.
 	if !ok {
 		return authFailure()
 	}
-	_, payload := raw.Lookup("payload").Binary()
-	if len(payload) == 0 || len(payload) > maxSCRAMPayloadBytes {
+	_, payload, ok := raw.Lookup("payload").BinaryOK()
+	if !ok || len(payload) == 0 || len(payload) > maxSCRAMPayloadBytes {
 		return authFailure()
 	}
 	value, exists := s.authConnections.Load(owner)

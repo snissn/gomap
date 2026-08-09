@@ -192,7 +192,7 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 			ID:            "authentication-authorization",
 			Label:         "Authentication and authorization",
 			CapabilityIDs: []string{"security.authentication-scram-sha-256"},
-			Note:          "Standalone SCRAM-SHA-256 establishes a connection identity from durable verifier-only records. Per-command authorization, SCRAM-SHA-1, and external identity providers remain unavailable.",
+			Note:          "Standalone SCRAM-SHA-256 establishes a connection identity from durable verifier-only records; connectionStatus exposes that authenticated identity. Per-command authorization, SCRAM-SHA-1, and external identity providers remain unavailable.",
 		},
 		{
 			ID:            "transactions-retryable-writes",
