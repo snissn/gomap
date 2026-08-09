@@ -59,27 +59,25 @@ func TestCompoundBSONIndexMetadataAndMutationContract(t *testing.T) {
 }
 
 func TestCompoundBSONIndexRejectsMultiKeyDefinitionBeforeCatalogMutation(t *testing.T) {
-	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = db.Close() }()
-	mgr := NewCollectionManager(db)
-	_, err = mgr.CreateCollection(&CollectionMeta{
-		Name:    "events",
-		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
-		Indexes: []IndexDefinition{{
-			Name:       "tenant_created",
-			Components: []IndexComponent{{Field: "tenant", Direction: IndexDirectionAscending}, {Field: "createdAt", Direction: IndexDirectionDescending}},
-			ValueType:  IndexValueBSONOrderedV2,
-			MultiKey:   true,
-		}},
-	})
-	if err == nil || !strings.Contains(err.Error(), "do not support multikey") {
-		t.Fatalf("CreateCollection compound multikey err=%v want rejection", err)
-	}
-	if _, err := mgr.OpenCollection("events"); err == nil {
-		t.Fatal("compound multikey rejection published collection metadata")
+	for _, def := range []IndexDefinition{
+		{Name: "tenant_created", Components: []IndexComponent{{Field: "tenant", Direction: IndexDirectionAscending}, {Field: "createdAt", Direction: IndexDirectionDescending}}, ValueType: IndexValueBSONOrderedV2, MultiKey: true},
+		{Name: "created_desc", Components: []IndexComponent{{Field: "createdAt", Direction: IndexDirectionDescending}}, ValueType: IndexValueBSONOrderedV2, MultiKey: true},
+	} {
+		t.Run(def.Name, func(t *testing.T) {
+			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = db.Close() }()
+			mgr := NewCollectionManager(db)
+			_, err = mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}, Indexes: []IndexDefinition{def}})
+			if err == nil || !strings.Contains(err.Error(), "do not support multikey") {
+				t.Fatalf("CreateCollection ordered BSON v2 multikey err=%v want rejection", err)
+			}
+			if _, err := mgr.OpenCollection("events"); err == nil {
+				t.Fatal("ordered BSON v2 multikey rejection published collection metadata")
+			}
+		})
 	}
 }
 
