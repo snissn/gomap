@@ -84,6 +84,8 @@ func TestMongoExplainRejectsUnsupportedOptionAndQueryWithoutMutation(t *testing.
 	assertOK(t, before)
 	maxTime := serveCommand(t, server, 101, bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}}}, {Key: "maxTimeMS", Value: int32(1)}, {Key: "$db", Value: "app"}})
 	assertCommandError(t, maxTime, "BadValue")
+	hint := serveCommand(t, server, 101, bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "hint", Value: "city_1"}}}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, hint, "BadValue")
 	rejected := serveCommand(t, server, 101, bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "$where", Value: "true"}}}}}, {Key: "$db", Value: "app"}})
 	assertCommandError(t, rejected, "BadValue")
 	planner, ok := bson.Raw(rejected).Lookup("queryPlanner").DocumentOK()
