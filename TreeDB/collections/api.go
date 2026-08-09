@@ -8391,7 +8391,7 @@ func (it *bufferedRootRunsIterator) Seek(key []byte) {
 	if it == nil || it.closed {
 		return
 	}
-	if it.start != nil && bytes.Compare(key, it.start) < 0 {
+	if !it.reverse && it.start != nil && bytes.Compare(key, it.start) < 0 {
 		key = it.start
 	}
 	it.heap.items = it.heap.items[:0]

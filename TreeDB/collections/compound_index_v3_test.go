@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -273,6 +274,99 @@ func TestCompoundReverseScanPersistsOverlayTombstonesAcrossReopen(t *testing.T) 
 		t.Fatal(err)
 	}
 	assertReverse(col)
+}
+
+func TestCompoundIndexPointerCheckpointReopenAndRecreate(t *testing.T) {
+	dir := t.TempDir()
+	opts := backenddb.Options{Dir: dir, ValueLog: backenddb.ValueLogOptions{PointerThreshold: 1, ForcePointers: true}}
+	db, err := backenddb.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr := NewCollectionManager(db)
+	index := IndexDefinition{Name: "tenant_created", Components: []IndexComponent{{Field: "tenant", Direction: IndexDirectionAscending}, {Field: "createdAt", Direction: IndexDirectionDescending}}, ValueType: IndexValueBSONOrderedV2, Unique: true}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}, Indexes: []IndexDefinition{index}}); err != nil {
+		t.Fatal(err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []struct {
+		id      string
+		created int32
+	}{{"a", 1}, {"b", 2}} {
+		doc, err := bson.Marshal(bson.D{{Key: "_id", Value: row.id}, {Key: "tenant", Value: "acme"}, {Key: "createdAt", Value: row.created}, {Key: "payload", Value: string(bytes.Repeat([]byte(row.id), 2048))}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := col.Insert([]byte(row.id), doc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = backenddb.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	col, err = NewCollectionManager(db).OpenCollection("events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertIDs := func() {
+		t.Helper()
+		ids, truncated, err := col.FindByCompoundIndexRange("tenant_created", CompoundIndexRangeOptions{Prefix: []bson.RawValue{{Type: bson.TypeString, Value: bsoncoreAppendString("acme")}}, Limit: 2})
+		if err != nil || truncated || len(ids) != 2 || string(ids[0]) != "b" || string(ids[1]) != "a" {
+			t.Fatalf("compound pointer scan ids=%q truncated=%v err=%v", ids, truncated, err)
+		}
+	}
+	assertIDs()
+	if _, err := col.DropIndex("tenant_created"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.CreateIndex(index); err != nil {
+		t.Fatal(err)
+	}
+	assertIDs()
+}
+
+func TestBufferedRootRunsReverseIteratorSeekUsesReverseBounds(t *testing.T) {
+	makeRun := func(keys ...string) memtable.Table {
+		t.Helper()
+		table := newCollectionRunTable(len(keys))
+		for _, key := range keys {
+			setCollectionRunValue(table, []byte(key), nil)
+		}
+		table.Freeze()
+		return table
+	}
+	first := makeRun("b", "d")
+	second := makeRun("c", "e")
+	defer resetCollectionRunTable(first)
+	defer resetCollectionRunTable(second)
+	it := newBufferedRootRunsReverseIteratorWithDeleted([]memtable.Table{first, second}, []byte("b"), []byte("f"), true)
+	defer func() { _ = it.Close() }()
+	assertKey := func(want string) {
+		t.Helper()
+		if !it.Valid() || string(it.UnsafeKey()) != want {
+			t.Fatalf("reverse iterator key=%q valid=%v want %q", it.UnsafeKey(), it.Valid(), want)
+		}
+	}
+	assertKey("e")
+	it.Seek([]byte("d"))
+	assertKey("d")
+	it.Seek([]byte("z"))
+	assertKey("e")
+	it.Seek([]byte("a"))
+	if it.Valid() {
+		t.Fatalf("reverse seek below start key=%q want invalid", it.UnsafeKey())
+	}
 }
 
 func TestBSONCompoundDescendingEntryFailsClosedWhenCorrupt(t *testing.T) {
