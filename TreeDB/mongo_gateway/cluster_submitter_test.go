@@ -2594,6 +2594,18 @@ func TestClusterSubmitterDeleteRequiresLimitBeforeSubmit(t *testing.T) {
 	}
 }
 
+func TestClusterSubmitterDeleteRejectsMultiLimitBeforeSubmit(t *testing.T) {
+	submitter := &mongoClusterFakeSubmitter{}
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	setMongoClusterTestSubmitter(server, submitter, 9)
+	response := serveCommand(t, server, 325807, bson.D{{Key: "delete", Value: "users"}, {Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "limit", Value: int32(0)}}}}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, response, "BadValue")
+	if calls := submitter.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("limit:0 submitted %d cluster mutations", len(calls))
+	}
+}
+
 func TestClusterSubmitterDeleteDeduplicatesDuplicateIDs(t *testing.T) {
 	submitter := &mongoClusterFakeSubmitter{}
 	server := NewServer()

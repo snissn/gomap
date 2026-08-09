@@ -234,10 +234,12 @@ func (s *Server) clusterDeleteResponse(ctx context.Context, command wire.Documen
 	}
 	// Keep raw-command validation aligned with standalone before any cluster
 	// admission, catalog lookup, routing, or submit side effect.
-	if _, limitSet, err := optionalInt32FieldWithPresence(deletes[0], "limit"); err != nil {
+	if limit, limitSet, err := optionalInt32FieldWithPresence(deletes[0], "limit"); err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("deletes[0]: %v", err))
 	} else if !limitSet {
 		return commandError(commandCodeFailedToParse, "FailedToParse", "deletes[0]: Mongo command missing \"limit\"")
+	} else if limit != 1 {
+		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway cluster delete requires limit: 1")
 	}
 	if err := s.admitClusterMutation(ctx); err != nil {
 		return mongoClusterMutationCommandError(err)
@@ -286,7 +288,7 @@ func (s *Server) clusterDeleteResponse(ctx context.Context, command wire.Documen
 			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("deletes[%d]: %v", i, err))
 		} else if !limitSet {
 			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("deletes[%d]: Mongo command missing \"limit\"", i))
-		} else if limit != 0 && limit != 1 {
+		} else if limit != 1 {
 			if submitErr := submitPendingBeforeError(); submitErr != nil {
 				return mongoClusterMutationCommandError(submitErr)
 			}
@@ -704,7 +706,7 @@ func mongoClusterDeleteBatchRouteRequest(db, collection string, deletes []wire.D
 		if err != nil {
 			return mongoClusterQueryRouteRequest(db, collection, iwire.CommandDeleteBatch, "delete_batch")
 		}
-		if limit, limitSet, err := optionalInt32FieldWithPresence(deleteItem, "limit"); err != nil || !limitSet || (limit != 0 && limit != 1) {
+		if limit, limitSet, err := optionalInt32FieldWithPresence(deleteItem, "limit"); err != nil || !limitSet || limit != 1 {
 			return mongoClusterRouteRequest(db, collection, iwire.CommandDeleteBatch, "delete_batch")
 		}
 		key, err := encodePrimaryKey(id)

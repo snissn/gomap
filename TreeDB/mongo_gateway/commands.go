@@ -1300,6 +1300,9 @@ func (s *Server) runMongoUpdateCommand(name string, col *collections.Collection,
 		if err := budget.reserveTargets(len(updates)); err == nil {
 			results, batched, batchErr := runMongoUpdateBatchResults(col, updates)
 			if batchErr != nil {
+				if errors.Is(batchErr, collections.ErrCommitAmbiguous) {
+					return mongoCommitAmbiguousCommandError(batchErr)
+				}
 				return mongoUpdateWriteCommandError(batchErr)
 			}
 			if batched {
