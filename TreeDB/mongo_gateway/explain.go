@@ -408,7 +408,9 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 		}
 		response = append(response, bson.E{Key: "executionStats", Value: bson.D{
 			{Key: "nReturned", Value: stats.documentsReturned},
-			{Key: "totalDocsExamined", Value: stats.candidatesExamined},
+			// This includes adaptive planner probes; it is deliberately a
+			// gateway-owned counter, not MongoDB's winner-plan-only metric.
+			{Key: "candidateDocumentsExamined", Value: stats.candidatesExamined},
 			{Key: "candidateDocumentsMaterialized", Value: stats.candidatesMaterialized},
 			{Key: "cursorDocumentsMaterialized", Value: int64(0)},
 			{Key: "scanCap", Value: int64(s.maxFindScanDocuments())},

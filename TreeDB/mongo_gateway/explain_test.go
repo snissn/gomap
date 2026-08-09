@@ -57,8 +57,8 @@ func TestMongoExplainFindPlannerAndExecutionStats(t *testing.T) {
 				if got, ok := stats.Lookup("nReturned").Int64OK(); !ok || got != 2 {
 					t.Fatalf("nReturned=%d ok=%v want 2", got, ok)
 				}
-				if got, ok := stats.Lookup("totalDocsExamined").Int64OK(); !ok || got < 2 {
-					t.Fatalf("totalDocsExamined=%d ok=%v want >=2", got, ok)
+				if got, ok := stats.Lookup("candidateDocumentsExamined").Int64OK(); !ok || got < 2 {
+					t.Fatalf("candidateDocumentsExamined=%d ok=%v want >=2", got, ok)
 				}
 				if got, ok := stats.Lookup("candidateDocumentsMaterialized").Int64OK(); !ok || got < 2 {
 					t.Fatalf("candidateDocumentsMaterialized=%d ok=%v want >=2", got, ok)
@@ -112,7 +112,7 @@ func TestMongoExplainCountersSeparateExaminedFromMaterializedAndPlannerDoesNotEx
 	statsResponse := serveCommand(t, server, 111, command)
 	assertOK(t, statsResponse)
 	stats := bson.Raw(statsResponse).Lookup("executionStats").Document()
-	examined, _ := stats.Lookup("totalDocsExamined").Int64OK()
+	examined, _ := stats.Lookup("candidateDocumentsExamined").Int64OK()
 	materialized, _ := stats.Lookup("candidateDocumentsMaterialized").Int64OK()
 	if examined <= materialized {
 		t.Fatalf("examined=%d materialized=%d want rejected stored predicate work", examined, materialized)

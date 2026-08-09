@@ -89,6 +89,10 @@ func TestStandaloneServerOfficialGoDriverExplainReadPlans(t *testing.T) {
 	if !ok || !stageOK || stage != "primary_lookup" {
 		t.Fatalf("explain response=%s", response)
 	}
+	stats, ok := response.Lookup("executionStats").DocumentOK()
+	if returned, returnedOK := stats.Lookup("nReturned").Int64OK(); !ok || !returnedOK || returned != 1 {
+		t.Fatalf("explain executionStats=%s", response)
+	}
 }
 
 func TestStandaloneServerOfficialGoDriverBoundedMultiWrites(t *testing.T) {
