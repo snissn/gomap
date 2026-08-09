@@ -123,7 +123,7 @@ func decodeAuthorizationRecord(raw []byte) (authAuthorizationRecord, error) {
 	var record authAuthorizationRecord
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&record) != nil || decoder.Decode(&struct{}{}) != io.EOF || record.Version != authAuthorizationVersion || len(record.Users) > maxAuthorizationUsers {
+	if decoder.Decode(&record) != nil || decoder.Decode(&struct{}{}) != io.EOF || record.Version != authAuthorizationVersion || len(record.Users) == 0 || len(record.Users) > maxAuthorizationUsers {
 		return authAuthorizationRecord{}, errAuthenticationFailed
 	}
 	seen := make(map[string]struct{}, len(record.Users))

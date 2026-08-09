@@ -103,6 +103,66 @@ func TestAuthCatalogForcedPersistentValueLogReopenAndCorruptionFailClosed(t *tes
 	}
 }
 
+func TestAuthCatalogPersistedEmptyAuthorizationRecordsFailClosed(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"missing_users": []byte(`{"version":1}`),
+		"null_users":    []byte(`{"version":1,"users":null}`),
+		"empty_users":   []byte(`{"version":1,"users":[]}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+			db, err := treedb.Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.SetSync(authAuthorizationCatalogKey(), raw); err != nil {
+				t.Fatal(err)
+			}
+			if catalog, err := NewAuthCatalog(db); err == nil || catalog != nil {
+				t.Fatalf("persisted empty authorization record accepted: catalog=%v err=%v", catalog, err)
+			}
+			if verifier, err := getAuthCatalogValue(db, authCatalogKey("admin", "bootstrap")); !errors.Is(err, treedb.ErrKeyNotFound) || len(verifier) != 0 {
+				t.Fatalf("failed constructor created bootstrap verifier=%q err=%v", verifier, err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			db, err = treedb.Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if catalog, err := NewAuthCatalog(db); err == nil || catalog != nil {
+				t.Fatalf("reopened persisted empty authorization record accepted: catalog=%v err=%v", catalog, err)
+			}
+			if verifier, err := getAuthCatalogValue(db, authCatalogKey("admin", "bootstrap")); !errors.Is(err, treedb.ErrKeyNotFound) || len(verifier) != 0 {
+				t.Fatalf("reopened failed constructor created bootstrap verifier=%q err=%v", verifier, err)
+			}
+		})
+	}
+}
+
+func TestAuthCatalogMissingAuthorizationRecordIsBootstrapState(t *testing.T) {
+	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	catalog, err := NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.UpsertPassword("admin", "bootstrap", []byte("bootstrap password")); err != nil {
+		t.Fatal(err)
+	}
+	roles, err := catalog.UserRoles("admin", "bootstrap")
+	if err != nil || !reflect.DeepEqual(roles, []AuthRoleGrant{{Role: AuthRoleServerAdmin}}) {
+		t.Fatalf("missing-key bootstrap roles=%v err=%v", roles, err)
+	}
+}
+
 func TestAuthCatalogBootstrapRefusesUnusableNonemptyAdministratorCatalog(t *testing.T) {
 	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
 	if err != nil {
