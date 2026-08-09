@@ -391,6 +391,7 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, material
 		}
 		var doc wire.Document
 		if !ok || len(plan.orBranches) > 0 {
+			plan.recordMaterialized()
 			doc, err = storedDocumentToBSON(col, materializer, record.Document)
 			if err != nil {
 				return false, err
@@ -408,6 +409,7 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, material
 			return true, nil
 		}
 		if ok && len(plan.orBranches) == 0 {
+			plan.recordMaterialized()
 			doc, err = storedDocumentToBSON(col, materializer, record.Document)
 			if err != nil {
 				return false, err

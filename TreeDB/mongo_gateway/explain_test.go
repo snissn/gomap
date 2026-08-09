@@ -1,6 +1,7 @@
 package mongogateway
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
@@ -74,6 +75,45 @@ func TestMongoExplainRejectsWritesAndUnsupportedVerbosity(t *testing.T) {
 		{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "$db", Value: "app"}}}, {Key: "verbosity", Value: "allPlansExecution"}, {Key: "$db", Value: "app"}},
 	} {
 		assertCommandError(t, serveCommand(t, server, 101, command), "BadValue")
+	}
+}
+
+func TestMongoExplainRejectsUnsupportedOptionAndQueryWithoutMutation(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	before := serveCommand(t, server, 101, bson.D{{Key: "count", Value: "users"}, {Key: "$db", Value: "app"}})
+	assertOK(t, before)
+	maxTime := serveCommand(t, server, 101, bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}}}, {Key: "maxTimeMS", Value: int32(1)}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, maxTime, "BadValue")
+	rejected := serveCommand(t, server, 101, bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "$where", Value: "true"}}}}}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, rejected, "BadValue")
+	planner, ok := bson.Raw(rejected).Lookup("queryPlanner").DocumentOK()
+	if !ok || planner.Lookup("winningPlan").Document().Lookup("stage").String() == "" {
+		t.Fatalf("rejected planner missing: %s", rejected)
+	}
+	after := serveCommand(t, server, 101, bson.D{{Key: "count", Value: "users"}, {Key: "$db", Value: "app"}})
+	assertOK(t, after)
+	if !bytes.Equal(before, after) {
+		t.Fatalf("explain changed count response: before=%s after=%s", before, after)
+	}
+}
+
+func TestMongoExplainCountersSeparateExaminedFromMaterializedAndPlannerDoesNotExecute(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	server.MaxFindScanDocuments = 1
+	command := bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "active", Value: true}}}}}, {Key: "$db", Value: "app"}}
+	planner := serveCommand(t, server, 110, command)
+	assertOK(t, planner)
+	command = append(command, bson.E{Key: "verbosity", Value: "executionStats"})
+	assertCommandError(t, serveCommand(t, server, 110, command), "BadValue")
+
+	server.MaxFindScanDocuments = 10
+	statsResponse := serveCommand(t, server, 111, command)
+	assertOK(t, statsResponse)
+	stats := bson.Raw(statsResponse).Lookup("executionStats").Document()
+	examined, _ := stats.Lookup("totalDocsExamined").Int64OK()
+	materialized, _ := stats.Lookup("candidateDocumentsMaterialized").Int64OK()
+	if examined <= materialized {
+		t.Fatalf("examined=%d materialized=%d want rejected stored predicate work", examined, materialized)
 	}
 }
 

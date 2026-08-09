@@ -14,10 +14,11 @@ import (
 )
 
 type findExecutionStats struct {
-	candidatesExamined int64
-	documentsReturned  int64
-	stage              string
-	indexName          string
+	candidatesExamined     int64
+	candidatesMaterialized int64
+	documentsReturned      int64
+	stage                  string
+	indexName              string
 }
 
 func (p findPlan) recordWinner(stage, indexName string) {
@@ -36,6 +37,13 @@ func (p findPlan) recordCandidate() {
 func (p findPlan) recordCandidates(n int) {
 	if p.stats != nil {
 		p.stats.candidatesExamined += int64(n)
+		p.stats.candidatesMaterialized += int64(n)
+	}
+}
+
+func (p findPlan) recordMaterialized() {
+	if p.stats != nil {
+		p.stats.candidatesMaterialized++
 	}
 }
 
@@ -50,7 +58,7 @@ func (p findPlan) recordReturned(n int) {
 // roots, addresses, or ValueLog pointers.
 func (s *Server) explainResponse(ctx context.Context, command wire.Document, cursorOwner int64) (wire.Document, error) {
 	if err := validateMongoReadCommandFields(command, "explain", map[string]struct{}{
-		"explain": {}, "verbosity": {}, "maxTimeMS": {},
+		"explain": {}, "verbosity": {},
 	}); err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
@@ -146,7 +154,7 @@ func (s *Server) explainFindResponse(ctx context.Context, command wire.Document,
 	}
 	plan, err := parseFindPlan(command, filter)
 	if err != nil {
-		return commandError(commandCodeBadValue, "BadValue", err.Error())
+		return explainPlannerRejected(db, collection, "unsupported_query", err.Error())
 	}
 	// This is deliberately before collection opening, matching find's routed
 	// preflight boundary: cluster mode must not observe a local collection.
@@ -162,6 +170,15 @@ func (s *Server) explainFindResponse(ctx context.Context, command wire.Document,
 		result, err := s.executeFind(col, plan)
 		return int64(len(result.docs)), err
 	})
+}
+
+func explainPlannerRejected(db, collection, reason, message string) (wire.Document, error) {
+	return commandErrorWithFields(commandCodeBadValue, "BadValue", message, bson.D{{Key: "queryPlanner", Value: bson.D{
+		{Key: "namespace", Value: db + "." + collection},
+		{Key: "winningPlan", Value: bson.D{{Key: "stage", Value: "unsupported_route"}}},
+		{Key: "rejectionReason", Value: reason},
+		{Key: "cursorWork", Value: "none"},
+	}}})
 }
 
 func (s *Server) explainCountResponse(ctx context.Context, command wire.Document, outerDB, verbosity string) (wire.Document, error) {
@@ -346,7 +363,7 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 					{Key: "executionStats", Value: bson.D{
 						{Key: "truncated", Value: reason == "scan_cap_exceeded"},
 						{Key: "rejectionReason", Value: reason},
-						{Key: "candidateDocumentsMaterialized", Value: stats.candidatesExamined},
+						{Key: "candidateDocumentsMaterialized", Value: stats.candidatesMaterialized},
 						{Key: "scanCap", Value: int64(s.maxFindScanDocuments())},
 					}},
 				})
@@ -370,7 +387,7 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 		response = append(response, bson.E{Key: "executionStats", Value: bson.D{
 			{Key: "nReturned", Value: stats.documentsReturned},
 			{Key: "totalDocsExamined", Value: stats.candidatesExamined},
-			{Key: "candidateDocumentsMaterialized", Value: stats.candidatesExamined},
+			{Key: "candidateDocumentsMaterialized", Value: stats.candidatesMaterialized},
 			{Key: "cursorDocumentsMaterialized", Value: int64(0)},
 			{Key: "scanCap", Value: int64(s.maxFindScanDocuments())},
 			{Key: "executionTimeMillis", Value: time.Since(start).Milliseconds()},
