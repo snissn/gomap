@@ -807,7 +807,7 @@ func (s *Server) bestIndexedCandidateDocuments(col *collections.Collection, mate
 	bestStage, bestName := "", ""
 	bestSet := false
 	for _, idx := range meta.Indexes {
-		docs, ok, err := documentsForIndexedFieldPredicates(col, materializer, plan, idx, maxDocuments)
+		docs, stage, ok, work, err := documentsForIndexedFieldPredicates(col, materializer, plan, idx, maxDocuments)
 		if err != nil {
 			return nil, "", "", false, err
 		}
@@ -816,10 +816,10 @@ func (s *Server) bestIndexedCandidateDocuments(col *collections.Collection, mate
 		}
 		// The selector has materialized every usable index candidate to make
 		// its choice. Account for all of that work, not merely the winner.
-		plan.recordCandidates(len(docs))
+		plan.recordCandidates(work)
 		if !bestSet || len(docs) < len(best) {
 			best = docs
-			bestStage, bestName = indexedFindStage(plan, idx), idx.Name
+			bestStage, bestName = stage, idx.Name
 			bestSet = true
 		}
 	}
@@ -936,12 +936,16 @@ func documentsForIndexedPredicate(col *collections.Collection, materializer *col
 	return out, nil
 }
 
-func documentsForIndexedFieldPredicates(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan, idx collections.IndexDefinition, maxDocuments int) ([]wire.Document, bool, error) {
+func documentsForIndexedFieldPredicates(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan, idx collections.IndexDefinition, maxDocuments int) ([]wire.Document, string, bool, int, error) {
 	var best []wire.Document
+	bestStage := ""
+	work := 0
 	bestSet := false
-	consider := func(docs []wire.Document) {
+	consider := func(docs []wire.Document, stage string, examined int) {
+		work += examined
 		if !bestSet || len(docs) < len(best) {
 			best = docs
+			bestStage = stage
 			bestSet = true
 		}
 	}
@@ -958,31 +962,31 @@ func documentsForIndexedFieldPredicates(col *collections.Collection, materialize
 		}
 		docs, err := documentsForIndexedPredicate(col, materializer, pred, idx, maxDocuments, candidateLimit)
 		if err != nil {
-			return nil, false, err
+			return nil, "", false, work, err
 		}
-		consider(docs)
+		consider(docs, "secondary_equality_lookup", len(docs))
 	}
 	opts, ok, empty, err := indexRangeOptionsForPredicates(plan.predicates, idx)
 	if err != nil || !ok {
 		if bestSet {
-			return best, true, err
+			return best, bestStage, true, work, err
 		}
-		return nil, false, err
+		return nil, "", false, work, err
 	}
 	if empty {
-		consider(nil)
-		return best, true, nil
+		consider(nil, "secondary_range_lookup", 0)
+		return best, bestStage, true, work, nil
 	}
 	candidateLimit := candidateLimitWithOverflowSlot(maxDocuments)
 	if limit, ok := indexedRangeCandidateLimit(plan, idx, maxDocuments); ok {
 		candidateLimit = limit
 	}
-	docs, _, err := documentsForIndexedRange(col, materializer, idx, opts, candidateLimit, maxDocuments, true)
+	docs, examined, err := documentsForIndexedRange(col, materializer, idx, opts, candidateLimit, maxDocuments, true)
 	if err != nil {
-		return nil, false, err
+		return nil, "", false, work, err
 	}
-	consider(docs)
-	return best, bestSet, nil
+	consider(docs, "secondary_range_lookup", examined)
+	return best, bestStage, bestSet, work, nil
 }
 
 func indexedEqualityCandidateLimit(plan findPlan, idx collections.IndexDefinition, maxDocuments int) (int, bool) {

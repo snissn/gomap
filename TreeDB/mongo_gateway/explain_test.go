@@ -205,6 +205,26 @@ func TestMongoExplainResidualsAndCursorOptionsMatchReadAdmission(t *testing.T) {
 	}
 }
 
+func TestMongoExplainSameIndexProbeAccountingAndWinnerStage(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	resp := serveCommand(t, server, 105, bson.D{
+		{Key: "explain", Value: bson.D{
+			{Key: "find", Value: "users"},
+			{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$in", Value: bson.A{int64(36), int64(37), int64(42)}}, {Key: "$lt", Value: int64(37)}}}}},
+		}},
+		{Key: "verbosity", Value: "executionStats"}, {Key: "$db", Value: "app"},
+	})
+	assertOK(t, resp)
+	winning := bson.Raw(resp).Lookup("queryPlanner").Document().Lookup("winningPlan").Document()
+	if got, ok := winning.Lookup("stage").StringValueOK(); !ok || got != "secondary_range_lookup" {
+		t.Fatalf("winner stage=%q ok=%v want secondary_range_lookup: %s", got, ok, resp)
+	}
+	stats := bson.Raw(resp).Lookup("executionStats").Document()
+	if got, ok := stats.Lookup("candidateDocumentsMaterialized").Int64OK(); !ok || got < 4 {
+		t.Fatalf("materialized=%d ok=%v want all equality/range probes", got, ok)
+	}
+}
+
 func TestServerRejectsExplainOPMsgFeatures(t *testing.T) {
 	command := mustDocument(t, bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}}}, {Key: "$db", Value: "app"}})
 	for _, tc := range []struct {
