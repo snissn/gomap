@@ -46,7 +46,10 @@ const (
 	maxCoalescedWireResponses      = 64
 )
 
-var errServerClosed = errors.New("mongo gateway server is closed")
+var (
+	errServerClosed       = errors.New("mongo gateway server is closed")
+	errInvalidCursorOwner = errors.New("mongo gateway cursor owner must be nonzero")
+)
 
 type ClusterCatalogVersionProvider func(context.Context) (uint64, error)
 
@@ -90,6 +93,10 @@ type Server struct {
 	// keys to one gateway process epoch. NewServer initializes a random nonce
 	// so sequence-based keys are not reused after restart.
 	ClusterIdempotencyNonce string
+	// AuthenticationEnabled gates ordinary commands until one SCRAM identity
+	// has been established for this connection. Authorization remains #4059.
+	AuthenticationEnabled bool
+	AuthCatalog           *AuthCatalog
 
 	nextResponseID            atomic.Int32
 	nextConnectionID          atomic.Int64
@@ -134,7 +141,12 @@ type Server struct {
 	standaloneWriteBoundaryMu  sync.RWMutex
 	standaloneWriteConcernSync func() (bool, error)
 	writeConcernStats          standaloneWriteConcernStats
-	closed                     atomic.Bool
+	authConnections            sync.Map // map[int64]*authConnectionState
+	nextSASLConversation       atomic.Int32
+	authFailures               atomic.Uint64
+	// beforeSCRAMIdentityStore is test-only coordination for owner release.
+	beforeSCRAMIdentityStore func()
+	closed                   atomic.Bool
 }
 
 type collectionFirstWritePending struct {
@@ -361,7 +373,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 	defer s.unregisterConn(conn)
 	defer conn.Close()
 	owner := s.nextConnectionID.Add(1)
-	defer s.killCursorsForOwner(owner)
+	defer s.ReleaseOwner(owner)
 	rw := bufferedConnReadWriter{
 		reader: bufio.NewReaderSize(conn, defaultWireReadBufferSize),
 		writer: conn,
@@ -454,11 +466,18 @@ func (rw bufferedConnReadWriter) Write(p []byte) (int, error) {
 // connection owner.
 func (s *Server) ServeOne(rw io.ReadWriter) error {
 	owner := s.nextConnectionID.Add(1)
-	defer s.killCursorsForOwner(owner)
+	defer s.ReleaseOwner(owner)
 	return s.ServeOneWithOwner(rw, owner)
 }
 
+// ServeOneWithOwner serves one wire message for a caller-owned logical
+// connection. cursorOwner must be nonzero. The caller must call ReleaseOwner
+// when that connection closes and before reusing cursorOwner for another
+// connection.
 func (s *Server) ServeOneWithOwner(rw io.ReadWriter, cursorOwner int64) error {
+	if cursorOwner == 0 {
+		return errInvalidCursorOwner
+	}
 	_, _, err := s.serveOneWithOwner(context.Background(), rw, cursorOwner, nil, nil)
 	return err
 }
@@ -475,8 +494,13 @@ type ServeBuffers struct {
 
 // ServeOneWithOwnerBuffered serves one MongoDB wire message with caller-owned
 // reusable buffers. It is intended for in-process dispatchers and benchmarks
-// that need the same buffer reuse behavior as ServeConn.
+// that need the same buffer reuse behavior as ServeConn. The caller must call
+// ReleaseOwner when the logical connection closes or before reusing cursorOwner.
+// cursorOwner must be nonzero.
 func (s *Server) ServeOneWithOwnerBuffered(rw io.ReadWriter, cursorOwner int64, buffers *ServeBuffers) error {
+	if cursorOwner == 0 {
+		return errInvalidCursorOwner
+	}
 	if buffers == nil {
 		return s.ServeOneWithOwner(rw, cursorOwner)
 	}
@@ -484,6 +508,17 @@ func (s *Server) ServeOneWithOwnerBuffered(rw io.ReadWriter, cursorOwner int64, 
 	buffers.readBuf = readBuf
 	buffers.writeBuf = writeBuf
 	return err
+}
+
+// ReleaseOwner closes one caller-owned logical connection. It removes all
+// cursors and authentication state bound to cursorOwner. It is safe to call
+// concurrently and more than once.
+func (s *Server) ReleaseOwner(cursorOwner int64) {
+	if s == nil || cursorOwner == 0 {
+		return
+	}
+	s.killCursorsForOwner(cursorOwner)
+	s.clearAuthState(cursorOwner)
 }
 
 func (s *Server) serveOneWithOwner(ctx context.Context, rw io.ReadWriter, cursorOwner int64, readBuf, writeBuf []byte) ([]byte, []byte, error) {
@@ -797,6 +832,9 @@ func commandRejectsReadOPMsgFeatures(name string) bool {
 }
 
 func (s *Server) commandResponse(ctx context.Context, name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (wire.Document, error) {
+	if s.authenticationRequired() && !s.authenticated(cursorOwner) && !authUnauthenticatedCommand(name) {
+		return commandError(13, "Unauthorized", "Authentication required")
+	}
 	if commandRejectsTransactionMarkers(name) {
 		if doc, rejected, err := rejectTransactionalCommand(command, name); rejected {
 			return doc, err
@@ -811,11 +849,15 @@ func (s *Server) commandResponse(ctx context.Context, name string, command wire.
 func (s *Server) dispatchCommandResponse(ctx context.Context, name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (wire.Document, error) {
 	switch name {
 	case "hello", "isMaster", "ismaster":
-		return marshalDocument(s.helloResponse(ctx))
+		return marshalDocument(s.helloResponse(ctx, command))
 	case "buildInfo":
 		return marshalDocument(buildInfoResponse())
 	case "connectionStatus":
-		return marshalDocument(connectionStatusResponse())
+		return marshalDocument(s.connectionStatusResponse(cursorOwner))
+	case "saslStart":
+		return s.saslStartResponse(command, cursorOwner)
+	case "saslContinue":
+		return s.saslContinueResponse(command, cursorOwner)
 	case "create":
 		return s.createCollectionResponse(ctx, command)
 	case "endSessions":
@@ -868,7 +910,7 @@ func commandRejectsTransactionMarkers(name string) bool {
 	}
 }
 
-func (s *Server) helloResponse(ctx context.Context) bson.D {
+func (s *Server) helloResponse(ctx context.Context, command wire.Document) bson.D {
 	writablePrimary := true
 	if s != nil && s.clusterSubmitterConfigured() {
 		writablePrimary = false
@@ -877,7 +919,16 @@ func (s *Server) helloResponse(ctx context.Context) bson.D {
 			writablePrimary = err == nil && status.Leader && !status.Unavailable
 		}
 	}
-	return helloResponse(s.maxMessageLength(), writablePrimary)
+	response := helloResponse(s.maxMessageLength(), writablePrimary)
+	// MongoDB drivers request this field as "<authDB>.<username>" while
+	// selecting a default authenticator. Advertise only the implemented
+	// mechanism and only when authentication is configured.
+	if s.authenticationRequired() && s.AuthCatalog != nil {
+		if _, ok := bson.Raw(command).Lookup("saslSupportedMechs").StringValueOK(); ok {
+			response = append(response, bson.E{Key: "saslSupportedMechs", Value: bson.A{"SCRAM-SHA-256"}})
+		}
+	}
+	return response
 }
 
 func helloResponse(maxMessageLength int32, writablePrimary bool) bson.D {
@@ -926,9 +977,20 @@ func buildInfoResponse() bson.D {
 }
 
 func connectionStatusResponse() bson.D {
+	return connectionStatusResponseForUser(nil)
+}
+
+func (s *Server) connectionStatusResponse(owner int64) bson.D {
+	return connectionStatusResponseForUser(s.authUser(owner))
+}
+func connectionStatusResponseForUser(user *AuthUser) bson.D {
+	users := bson.A{}
+	if user != nil {
+		users = append(users, bson.D{{Key: "user", Value: user.Username}, {Key: "db", Value: user.AuthDB}})
+	}
 	return bson.D{
 		{Key: "authInfo", Value: bson.D{
-			{Key: "authenticatedUsers", Value: bson.A{}},
+			{Key: "authenticatedUsers", Value: users},
 			{Key: "authenticatedUserRoles", Value: bson.A{}},
 			{Key: "authenticatedUserPrivileges", Value: bson.A{}},
 		}},

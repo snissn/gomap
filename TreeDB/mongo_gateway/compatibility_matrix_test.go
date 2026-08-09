@@ -847,21 +847,32 @@ func mongoCompatibilityMatrixProbes() []mongoCompatibilityMatrixProbe {
 			},
 		},
 		{
-			capabilityID:   "security-gap.authentication-and-authorization",
-			expectedStatus: MongoCapabilityNotImplemented,
+			capabilityID:   "security.authentication-scram-sha-256",
+			expectedStatus: MongoCapabilitySupportedSubset,
 			probe: func(t *testing.T, server *Server) {
+				server.AuthenticationEnabled = true
+				if err := server.AuthCatalog.UpsertPassword("admin", "matrix", []byte("correct horse battery staple")); err != nil {
+					t.Fatal(err)
+				}
 				assertCommandError(t, serveCommand(t, server, 31, bson.D{
 					{Key: "saslStart", Value: int32(1)},
 					{Key: "mechanism", Value: "SCRAM-SHA-256"},
 					{Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte("n,,")}},
 					{Key: "$db", Value: "admin"},
-				}), "CommandNotFound")
+				}), "AuthenticationFailed")
 				find := serveCommand(t, server, 32, bson.D{
 					{Key: "find", Value: "users"},
 					{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
 					{Key: "$db", Value: "app"},
 				})
-				assertBatchIDs(t, cursorFirstBatch(t, find), []string{"u1"})
+				assertCommandError(t, find, "Unauthorized")
+				authenticateUser(t, server, 1, "matrix", []byte("correct horse battery staple"))
+				find = serveCommand(t, server, 32, bson.D{
+					{Key: "find", Value: "users"},
+					{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+					{Key: "$db", Value: "app"},
+				})
+				assertOK(t, find)
 			},
 		},
 		{
@@ -889,6 +900,10 @@ func newMongoCompatibilityMatrixServer(tb testing.TB) *Server {
 	tb.Cleanup(func() { _ = db.Close() })
 
 	server := NewServer()
+	server.AuthCatalog, err = NewAuthCatalog(db)
+	if err != nil {
+		tb.Fatalf("new auth catalog: %v", err)
+	}
 	server.Collections = collections.NewCollectionManager(db)
 	server.DefaultCollectionOptions = collections.CollectionOptions{
 		DocumentFormat: collections.DocumentFormatBSON,

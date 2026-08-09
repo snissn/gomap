@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -60,6 +61,21 @@ func TestStandaloneServerInsecureRemoteOverrideStatus(t *testing.T) {
 	}
 }
 
+func TestStandaloneServerRejectsPlaintextRemotePasswordAuthentication(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), AuthenticationEnabled: true, AllowInsecureRemote: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer standalone.Close()
+	ln, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := standalone.Serve(context.Background(), ln); err == nil {
+		t.Fatal("plaintext remote password authentication unexpectedly accepted")
+	}
+}
+
 func TestStandaloneServerOfficialDriverTLS(t *testing.T) {
 	certFile, keyFile, pool := writeTLSMaterial(t, false)
 	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), TLSCertFile: certFile, TLSKeyFile: keyFile})
@@ -103,6 +119,187 @@ func TestStandaloneServerOfficialDriverTLS(t *testing.T) {
 	}
 	if got := standalone.TransportStatus(); got.Mode != "tls" || got.TLSCertificateNotAfter.IsZero() {
 		t.Fatalf("status=%+v", got)
+	}
+}
+
+func TestStandaloneServerOfficialDriverSCRAMSHA256(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), AuthenticationEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer standalone.Close()
+	if err := standalone.Server.AuthCatalog.UpsertPassword("admin", "alice", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- standalone.Serve(ctx, ln) }()
+	client, err := mongo.Connect(options.Client().ApplyURI("mongodb://" + ln.Addr().String()).SetDirect(true).SetAuth(options.Credential{Username: "alice", Password: "correct horse battery staple", AuthSource: "admin"}).SetServerSelectionTimeout(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Disconnect(context.Background())
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer pingCancel()
+	if err := client.Ping(pingCtx, nil); err != nil {
+		t.Fatalf("SCRAM driver ping: %v", err)
+	}
+	cancel()
+	_ = ln.Close()
+	if err := <-serveErr; err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+}
+
+func TestStandaloneServerOfficialDriverSCRAMSHA256SASLprepUnicode(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), AuthenticationEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer standalone.Close()
+	// U+00A0 is mapped to ordinary space by SASLprep. This proves the stored
+	// verifier is compatible with the official driver's SCRAM implementation.
+	if err := standalone.Server.AuthCatalog.UpsertPassword("admin", "unicode", []byte("p\u00e4ss\u00a0word")); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- standalone.Serve(ctx, ln) }()
+	client, err := mongo.Connect(options.Client().ApplyURI("mongodb://" + ln.Addr().String()).SetDirect(true).SetAuth(options.Credential{Username: "unicode", Password: "p\u00e4ss\u00a0word", AuthSource: "admin", AuthMechanism: "SCRAM-SHA-256"}).SetServerSelectionTimeout(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Disconnect(context.Background())
+	pingCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	if err := client.Ping(pingCtx, nil); err != nil {
+		t.Fatalf("Unicode SCRAM driver ping: %v", err)
+	}
+	cancel()
+	_ = ln.Close()
+	if err := <-serveErr; err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+}
+
+func TestStandaloneServerOfficialDriverSCRAMFailureRotationAndReconnect(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), AuthenticationEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer standalone.Close()
+	catalog := standalone.Server.AuthCatalog
+	if err := catalog.UpsertPassword("admin", "alice", []byte("first password")); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- standalone.Serve(ctx, ln) }()
+	ping := func(password, authDB string) error {
+		client, err := mongo.Connect(options.Client().ApplyURI("mongodb://" + ln.Addr().String()).SetDirect(true).SetAuth(options.Credential{Username: "alice", Password: password, AuthSource: authDB, AuthMechanism: "SCRAM-SHA-256"}).SetServerSelectionTimeout(time.Second))
+		if err != nil {
+			return err
+		}
+		defer client.Disconnect(context.Background())
+		pingCtx, stop := context.WithTimeout(context.Background(), 3*time.Second)
+		defer stop()
+		return client.Ping(pingCtx, nil)
+	}
+	if err := ping("wrong password", "admin"); err == nil {
+		t.Fatal("official driver accepted wrong password")
+	}
+	if err := ping("first password", "other"); err == nil {
+		t.Fatal("official driver accepted wrong auth DB")
+	}
+	if err := catalog.SetEnabled("admin", "alice", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := ping("first password", "admin"); err == nil {
+		t.Fatal("official driver authenticated disabled user")
+	}
+	if err := catalog.UpsertPassword("admin", "alice", []byte("second password")); err != nil {
+		t.Fatal(err)
+	}
+	if err := ping("first password", "admin"); err == nil {
+		t.Fatal("official driver accepted rotated password")
+	}
+	if err := ping("second password", "admin"); err != nil {
+		t.Fatalf("official driver reconnect after rotation: %v", err)
+	}
+	cancel()
+	_ = ln.Close()
+	if err := <-serveErr; err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+}
+
+func TestStandaloneServerSCRAMCatalogReopenAndConcurrentAuthentication(t *testing.T) {
+	dir := t.TempDir()
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: dir, AuthenticationEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := standalone.Server.AuthCatalog.UpsertPassword("admin", "alice", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	if err := standalone.Close(); err != nil {
+		t.Fatal(err)
+	}
+	standalone, err = OpenStandaloneServer(StandaloneOptions{Dir: dir, AuthenticationEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer standalone.Close()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	served := make(chan error, 1)
+	go func() { served <- standalone.Serve(ctx, ln) }()
+	var wg sync.WaitGroup
+	errs := make(chan error, 12)
+	for range 12 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			client, err := mongo.Connect(options.Client().ApplyURI("mongodb://" + ln.Addr().String()).SetDirect(true).SetAuth(options.Credential{Username: "alice", Password: "correct horse battery staple", AuthSource: "admin", AuthMechanism: "SCRAM-SHA-256"}).SetServerSelectionTimeout(3 * time.Second))
+			if err == nil {
+				pingCtx, stop := context.WithTimeout(context.Background(), 3*time.Second)
+				err = client.Ping(pingCtx, nil)
+				stop()
+				_ = client.Disconnect(context.Background())
+			}
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent SCRAM authentication: %v", err)
+		}
+	}
+	cancel()
+	_ = ln.Close()
+	if err := <-served; err != nil {
+		t.Fatalf("serve: %v", err)
 	}
 }
 
@@ -527,6 +724,147 @@ func BenchmarkStandaloneTransportHandshake(b *testing.B) {
 					b.Fatal("no successful TLS handshakes observed")
 				}
 				b.ReportMetric(float64(after.HandshakeTotalNanoseconds-before.HandshakeTotalNanoseconds)/float64(handshakes), "server-handshake-ns/op")
+			}
+		})
+	}
+}
+
+// BenchmarkStandaloneSCRAMSHA256Handshake measures the fresh official-driver
+// password-authentication boundary. Reused CRUD is intentionally excluded: it
+// must not re-run PBKDF2 after the connection identity is established.
+func BenchmarkStandaloneSCRAMSHA256Handshake(b *testing.B) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: b.TempDir(), AuthenticationEnabled: true})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer standalone.Close()
+	if err := standalone.Server.AuthCatalog.UpsertPassword("admin", "bench", []byte("correct horse battery staple")); err != nil {
+		b.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- standalone.Serve(ctx, ln) }()
+	defer func() { cancel(); _ = ln.Close(); <-done }()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		client, err := mongo.Connect(options.Client().ApplyURI("mongodb://" + ln.Addr().String()).SetDirect(true).SetAuth(options.Credential{Username: "bench", Password: "correct horse battery staple", AuthSource: "admin", AuthMechanism: "SCRAM-SHA-256"}).SetServerSelectionTimeout(time.Second))
+		if err != nil {
+			b.Fatal(err)
+		}
+		pingCtx, pingCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		err = client.Ping(pingCtx, nil)
+		pingCancel()
+		_ = client.Disconnect(context.Background())
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkStandaloneSCRAMSHA256ReusedFindOne is the steady-state companion:
+// client setup and its one SCRAM exchange finish before timing begins.
+func BenchmarkStandaloneSCRAMSHA256ReusedFindOne(b *testing.B) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: b.TempDir(), AuthenticationEnabled: true})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer standalone.Close()
+	if err := standalone.Server.AuthCatalog.UpsertPassword("admin", "bench", []byte("correct horse battery staple")); err != nil {
+		b.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- standalone.Serve(ctx, ln) }()
+	defer func() { cancel(); _ = ln.Close(); <-done }()
+	client, err := mongo.Connect(options.Client().ApplyURI("mongodb://" + ln.Addr().String()).SetDirect(true).SetServerSelectionTimeout(3 * time.Second).SetAuth(options.Credential{Username: "bench", Password: "correct horse battery staple", AuthSource: "admin", AuthMechanism: "SCRAM-SHA-256"}))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer client.Disconnect(context.Background())
+	coll := client.Database("bench").Collection("items")
+	if _, err := coll.InsertOne(context.Background(), bson.D{{Key: "_id", Value: "fixture"}}); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var out bson.M
+		if err := coll.FindOne(context.Background(), bson.D{{Key: "_id", Value: "fixture"}}).Decode(&out); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkStandaloneAuthVsPlaintextReusedFindOne compares the same pooled
+// official-driver FindOne shape. Connection setup and, for SCRAM, the initial
+// authentication exchange finish before the timer starts.
+func BenchmarkStandaloneAuthVsPlaintextReusedFindOne(b *testing.B) {
+	for _, authenticationEnabled := range []bool{false, true} {
+		name := "plaintext"
+		if authenticationEnabled {
+			name = "scram"
+		}
+		b.Run(name, func(b *testing.B) {
+			standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: b.TempDir(), AuthenticationEnabled: authenticationEnabled})
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer standalone.Close()
+			if authenticationEnabled {
+				if err := standalone.Server.AuthCatalog.UpsertPassword("admin", "bench", []byte("correct horse battery staple")); err != nil {
+					b.Fatal(err)
+				}
+			}
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				b.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- standalone.Serve(ctx, ln) }()
+			defer func() { cancel(); _ = ln.Close(); <-done }()
+			cfg := options.Client().ApplyURI("mongodb://" + ln.Addr().String()).SetDirect(true).SetServerSelectionTimeout(3 * time.Second)
+			if authenticationEnabled {
+				cfg.SetAuth(options.Credential{Username: "bench", Password: "correct horse battery staple", AuthSource: "admin", AuthMechanism: "SCRAM-SHA-256"})
+			}
+			client, err := mongo.Connect(cfg)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer client.Disconnect(context.Background())
+			pingCtx, pingCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			err = client.Ping(pingCtx, nil)
+			pingCancel()
+			if err != nil {
+				b.Fatal(err)
+			}
+			coll := client.Database("bench").Collection("items")
+			if _, err := coll.InsertOne(context.Background(), bson.D{{Key: "_id", Value: "fixture"}}); err != nil {
+				b.Fatal(err)
+			}
+			var fixture bson.M
+			if err := coll.FindOne(context.Background(), bson.D{{Key: "_id", Value: "fixture"}}).Decode(&fixture); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				var out bson.M
+				if err := coll.FindOne(context.Background(), bson.D{{Key: "_id", Value: "fixture"}}).Decode(&out); err != nil {
+					b.Fatal(err)
+				}
 			}
 		})
 	}
