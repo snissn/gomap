@@ -108,6 +108,12 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 		}
 	}()
 	if col == nil {
+		if s.mongoWriteBeforeFirstCreateHook != nil {
+			s.mongoWriteBeforeFirstCreateHook(budget)
+		}
+		if err := budget.checkDeadline(); err != nil {
+			return mongoInsertPreMutationWriteErrorResponse(budget, 0, err)
+		}
 		col, releaseColdCollection, err = s.openOrCreateCollectionForFirstWrite(name)
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
@@ -206,6 +212,42 @@ func (s *Server) runMongoInsertCommand(name string, col *collections.Collection,
 		}
 	}
 	return marshalInsertResponseWithWriteErrors(inserted, writeErrors)
+}
+
+// mongoInsertPreMutationWriteErrorResponse reports an indexed runtime stop
+// discovered after full parsing but before a missing namespace is created.
+// The terminal response reservation is retained even at the smallest valid
+// envelope, so a deadline never becomes a misleading successful n:0 result.
+func mongoInsertPreMutationWriteErrorResponse(budget *mongoWriteBudget, index int, runErr error) (wire.Document, error) {
+	if reserveErr := budget.reserveError(); reserveErr == nil {
+		return marshalInsertResponseWithWriteErrors(0, []mongoWriteError{{index: index, err: runErr}})
+	}
+	if terminalErr := budget.reserveTerminalError(); terminalErr != nil {
+		return nil, terminalErr
+	}
+	return marshalInsertResponseWithWriteErrors(0, []mongoWriteError{{index: index, err: runErr}})
+}
+
+// mongoUpdatePreMutationWriteErrorsResponse is the update counterpart used
+// for a runtime deadline discovered after full parse/admission but before
+// first catalog creation. Missing-collection preview errors have not consumed
+// the real budget yet, so reserve them in stable order before adding the
+// terminal deadline error. This preserves unordered outcomes without a
+// catalog side effect.
+func mongoUpdatePreMutationWriteErrorsResponse(budget *mongoWriteBudget, previewErrors []mongoWriteError, index int, runErr error) (wire.Document, error) {
+	writeErrors := make([]mongoWriteError, 0, len(previewErrors)+1)
+	for _, writeErr := range append(previewErrors, mongoWriteError{index: index, err: runErr}) {
+		if reserveErr := budget.reserveError(); reserveErr == nil {
+			writeErrors = append(writeErrors, writeErr)
+			continue
+		}
+		if terminalErr := budget.reserveTerminalError(); terminalErr != nil {
+			return nil, terminalErr
+		}
+		writeErrors = append(writeErrors, writeErr)
+		break
+	}
+	return marshalUpdateResponseWithWriteErrors(0, 0, nil, writeErrors)
 }
 
 func mongoInsertCommandError(err error) (wire.Document, error) {
@@ -1059,6 +1101,9 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 		if !hasUpsert {
 			return marshalUpdateResponse(0, 0, nil)
 		}
+		// Preserve the established full-command validation for the first upsert;
+		// the candidate-specific validation in the admission preview below is
+		// additionally required for unordered commands that skip it.
 		if err := s.validateMongoMissingCollectionFirstUpsert(parsed); err != nil {
 			return mongoUpdateWriteCommandError(err)
 		}
@@ -1068,12 +1113,18 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 		// an oversized earlier upsert must not hide a later admissible upsert; the
 		// normal command loop records the same indexed errors after the collection
 		// is opened. The preview never consumes the real budget.
-		create, writeErrors, err := mongoMissingCollectionFirstUpsertResponseAdmission(parsed, budget, ordered)
+		createIndex, create, writeErrors, err := s.mongoMissingCollectionFirstUpsertResponseAdmission(parsed, budget, ordered)
 		if err != nil {
 			return nil, err
 		}
 		if !create {
 			return marshalUpdateResponseWithWriteErrors(0, 0, nil, writeErrors)
+		}
+		if s.mongoWriteBeforeFirstCreateHook != nil {
+			s.mongoWriteBeforeFirstCreateHook(budget)
+		}
+		if err := budget.checkDeadline(); err != nil {
+			return mongoUpdatePreMutationWriteErrorsResponse(budget, writeErrors, createIndex, err)
 		}
 		col, releaseColdCollection, err = s.openOrCreateCollectionForFirstWrite(name)
 		if err != nil {
@@ -1112,6 +1163,9 @@ type mongoWriteBudget struct {
 	deadline                  time.Time
 	responseBytesRemaining    int
 	minimumResponseFits       bool
+	// beforeUpsertInsertHook is test-only coordination between successful
+	// response admission and the non-interruptible document publication.
+	beforeUpsertInsertHook func()
 }
 
 const (
@@ -1717,6 +1771,13 @@ func mongoInsertUpsert(col *collections.Collection, update mongoUpdateItem) (boo
 	if err != nil {
 		return false, false, false, err
 	}
+	if update.budget != nil && update.budget.beforeUpsertInsertHook != nil {
+		update.budget.beforeUpsertInsertHook()
+	}
+	if err := update.budget.checkDeadline(); err != nil {
+		update.budget.refundResponseBytes(responseReservation)
+		return false, false, false, err
+	}
 	if _, err := col.Insert(key, stored); err != nil {
 		update.budget.refundResponseBytes(responseReservation)
 		return false, false, false, err
@@ -1724,23 +1785,29 @@ func mongoInsertUpsert(col *collections.Collection, update mongoUpdateItem) (boo
 	return false, false, true, nil
 }
 
+func (s *Server) validateMongoMissingCollectionUpsert(update mongoUpdateItem) error {
+	doc, err := mongoUpsertDocument(update)
+	if err != nil {
+		return mongoUpdateErrorWithIndex(update.index, err)
+	}
+	key, _, err := prepareInsertDocument(doc, s.DefaultCollectionOptions.DocumentFormat)
+	if err != nil {
+		return mongoUpdateErrorWithIndex(update.index, err)
+	}
+	if !bytes.Equal(key, update.key) {
+		return mongoUpdateErrorWithIndex(update.index, errors.New("Mongo gateway update cannot modify _id"))
+	}
+	return nil
+}
+
+// validateMongoMissingCollectionFirstUpsert remains the single-item helper
+// used by findAndModify. Multi-update admission validates the actual selected
+// candidate below because unordered response admission may skip earlier items.
 func (s *Server) validateMongoMissingCollectionFirstUpsert(updates []mongoUpdateItem) error {
 	for _, update := range updates {
-		if !update.upsert {
-			continue
+		if update.upsert {
+			return s.validateMongoMissingCollectionUpsert(update)
 		}
-		doc, err := mongoUpsertDocument(update)
-		if err != nil {
-			return mongoUpdateErrorWithIndex(update.index, err)
-		}
-		key, _, err := prepareInsertDocument(doc, s.DefaultCollectionOptions.DocumentFormat)
-		if err != nil {
-			return mongoUpdateErrorWithIndex(update.index, err)
-		}
-		if !bytes.Equal(key, update.key) {
-			return mongoUpdateErrorWithIndex(update.index, errors.New("Mongo gateway update cannot modify _id"))
-		}
-		return nil
 	}
 	return nil
 }
@@ -1751,7 +1818,7 @@ func (s *Server) validateMongoMissingCollectionFirstUpsert(updates []mongoUpdate
 // later consumes the same reservations and preserves indexed ordered/unordered
 // behavior. If no upsert can be admitted, its complete bounded response is
 // returned without creating a catalog entry.
-func mongoMissingCollectionFirstUpsertResponseAdmission(updates []mongoUpdateItem, budget *mongoWriteBudget, ordered bool) (bool, []mongoWriteError, error) {
+func (s *Server) mongoMissingCollectionFirstUpsertResponseAdmission(updates []mongoUpdateItem, budget *mongoWriteBudget, ordered bool) (int, bool, []mongoWriteError, error) {
 	preview := *budget
 	writeErrors := make([]mongoWriteError, 0)
 	for _, update := range updates {
@@ -1759,21 +1826,39 @@ func mongoMissingCollectionFirstUpsertResponseAdmission(updates []mongoUpdateIte
 			continue
 		}
 		if _, err := preview.upsertResponseBytesAvailable(mongoUpdateUpserted{index: update.index, id: update.id}); err == nil {
-			return true, nil, nil
+			// Validate exactly the upsert that would cause a first-write catalog
+			// creation. An unordered oversized earlier item can be skipped, so
+			// validating only the first upsert would otherwise create an empty
+			// collection for a later semantically invalid candidate.
+			if validateErr := s.validateMongoMissingCollectionUpsert(update); validateErr == nil {
+				return update.index, true, writeErrors, nil
+			} else if reserveErr := preview.reserveError(); reserveErr != nil {
+				if terminalErr := preview.reserveTerminalError(); terminalErr != nil {
+					return -1, false, nil, terminalErr
+				}
+				writeErrors = append(writeErrors, mongoWriteError{index: update.index, err: reserveErr})
+				return -1, false, writeErrors, nil
+			} else {
+				writeErrors = append(writeErrors, mongoWriteError{index: update.index, err: validateErr})
+				if ordered {
+					return -1, false, writeErrors, nil
+				}
+				continue
+			}
 		} else if reserveErr := preview.reserveError(); reserveErr != nil {
 			if terminalErr := preview.reserveTerminalError(); terminalErr != nil {
-				return false, nil, terminalErr
+				return -1, false, nil, terminalErr
 			}
 			writeErrors = append(writeErrors, mongoWriteError{index: update.index, err: reserveErr})
-			return false, writeErrors, nil
+			return -1, false, writeErrors, nil
 		} else {
 			writeErrors = append(writeErrors, mongoWriteError{index: update.index, err: err})
 			if ordered {
-				return false, writeErrors, nil
+				return -1, false, writeErrors, nil
 			}
 		}
 	}
-	return false, writeErrors, nil
+	return -1, false, writeErrors, nil
 }
 
 func mongoUpsertDocument(update mongoUpdateItem) (wire.Document, error) {

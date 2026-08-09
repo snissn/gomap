@@ -154,6 +154,111 @@ func TestMongoMultiWriteMaxTimeMSBoundsCommandDeadline(t *testing.T) {
 	}
 }
 
+func TestMongoMissingCollectionWriteDeadlineStopsBeforeCatalogCreate(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	// This seam is immediately before the missing-namespace first-write path.
+	// It makes expiry after parse/admission deterministic without relying on
+	// scheduler timing or a slow catalog implementation.
+	s.mongoWriteBeforeFirstCreateHook = func(budget *mongoWriteBudget) {
+		budget.deadline = time.Now().Add(-time.Second)
+	}
+	insert := serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "insert_missing"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "i1"}}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, insert)
+	assertInt32(t, insert, "n", 0)
+	assertIndexedWriteError(t, insert, 0)
+	if _, err := s.Collections.OpenCollection("app.insert_missing"); !errors.Is(err, collections.ErrCollectionNotFound) {
+		t.Fatalf("expired insert created catalog entry: %v", err)
+	}
+	update := serveCommand(t, s, 2, bson.D{{Key: "update", Value: "update_missing"}, {Key: "updates", Value: bson.A{bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "value", Value: true}}}}},
+		{Key: "upsert", Value: true},
+	}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, update)
+	assertInt32(t, update, "n", 0)
+	assertInt32(t, update, "nModified", 0)
+	assertIndexedWriteError(t, update, 0)
+	if _, err := s.Collections.OpenCollection("app.update_missing"); !errors.Is(err, collections.ErrCollectionNotFound) {
+		t.Fatalf("expired update upsert created catalog entry: %v", err)
+	}
+}
+
+func TestMongoInsertUpsertDeadlineAfterResponseAdmissionRefundsWithoutPublication(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	col, err := s.openOrCreateCollection("app.users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "late"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "value", Value: true}}}}},
+		{Key: "upsert", Value: true},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget := s.newMongoWriteBudget()
+	before := budget.responseBytesRemaining
+	budget.beforeUpsertInsertHook = func() { budget.deadline = time.Now().Add(-time.Second) }
+	item.budget = budget
+	matched, modified, inserted, runErr := mongoInsertUpsert(col, item)
+	if runErr == nil || matched || modified || inserted {
+		t.Fatalf("late upsert outcome matched=%v modified=%v inserted=%v err=%v", matched, modified, inserted, runErr)
+	}
+	if budget.responseBytesRemaining != before {
+		t.Fatalf("late upsert response reservation leaked: got %d want %d", budget.responseBytesRemaining, before)
+	}
+	if stored, err := col.Get(item.key); err != nil || stored != nil {
+		t.Fatalf("late upsert published after deadline: stored=%v err=%v", stored, err)
+	}
+}
+
+func TestMongoMissingCollectionUnorderedInvalidAdmittedUpsertDoesNotCreateCatalog(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	largeID := strings.Repeat("x", 3*mongoWriteErrorResponseReserveBytes)
+	smallID := bson.RawValue{Type: bson.TypeString, Value: bsoncore.AppendString(nil, "small")}
+	smallBytes, err := mongoUpdateUpsertResponseBytes(mongoUpdateUpserted{index: 1, id: smallID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The first valid upsert cannot fit its successful response. The second
+	// response can fit, but its replacement changes _id and must be validated
+	// before a missing-collection first-write catalog entry is created.
+	s.MaxMessageLength = int32(mongoWriteResponseMinimumBytes + 3*mongoWriteErrorResponseReserveBytes + smallBytes + 64)
+	large := bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: largeID}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "value", Value: "large"}}}}}, {Key: "upsert", Value: true}}
+	invalid := bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "small"}}}, {Key: "u", Value: bson.D{{Key: "_id", Value: "different"}, {Key: "value", Value: "small"}}}, {Key: "upsert", Value: true}}
+	response := serveCommand(t, s, 1, bson.D{{Key: "update", Value: "missing"}, {Key: "ordered", Value: false}, {Key: "updates", Value: bson.A{large, invalid}}, {Key: "$db", Value: "app"}})
+	assertOK(t, response)
+	assertInt32(t, response, "n", 0)
+	assertInt32(t, response, "nModified", 0)
+	errs, ok := bson.Raw(response).Lookup("writeErrors").ArrayOK()
+	values, valuesErr := errs.Values()
+	if !ok || valuesErr != nil || len(values) != 2 || values[0].Document().Lookup("index").Int32() != 0 || values[1].Document().Lookup("index").Int32() != 1 {
+		t.Fatalf("unordered invalid admission writeErrors=%s", response)
+	}
+	if _, err := s.Collections.OpenCollection("app.missing"); !errors.Is(err, collections.ErrCollectionNotFound) {
+		t.Fatalf("invalid admitted upsert created catalog entry: %v", err)
+	}
+}
+
 func TestMongoInsertMinimumResponseEnvelopeRetainsTerminalError(t *testing.T) {
 	// At the minimum accepted envelope there is no ordinary error reservation
 	// left, but a pre-mutation runtime rejection must still be observable.
