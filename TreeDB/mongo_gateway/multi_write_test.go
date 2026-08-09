@@ -121,6 +121,28 @@ func TestMongoUpdateUpsertMinimumResponseEnvelopeRejectsBeforeMutation(t *testin
 	}
 }
 
+func TestMongoUpdateUpsertMinimumResponseEnvelopeRejectsBeforeMissingCollectionCreate(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	// There is room only for the terminal indexed error, not a successful
+	// upserted entry. The rejection must happen before the missing collection is
+	// opened or created, not merely before the document itself is inserted.
+	s.MaxMessageLength = mongoWriteResponseMinimumBytes + mongoWriteErrorResponseReserveBytes
+	response := serveCommand(t, s, 1, bson.D{{Key: "update", Value: "missing"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "upsert"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "value", Value: true}}}}}, {Key: "upsert", Value: true}}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, response)
+	assertInt32(t, response, "n", 0)
+	assertInt32(t, response, "nModified", 0)
+	assertIndexedWriteError(t, response, 0)
+	if _, err := s.Collections.OpenCollection("app.missing"); !errors.Is(err, collections.ErrCollectionNotFound) {
+		t.Fatalf("response-budget rejected missing-collection upsert created catalog entry: %v", err)
+	}
+}
+
 func TestMongoUpdateUpsertResponseBudgetPreservesUpsertAndLaterError(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

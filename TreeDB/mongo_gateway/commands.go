@@ -1056,6 +1056,14 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 		if err := s.validateMongoMissingCollectionFirstUpsert(parsed); err != nil {
 			return mongoUpdateWriteCommandError(err)
 		}
+		// A successful first upsert creates this collection.  Prove that its
+		// observable upserted entry can fit before opening the catalog: otherwise
+		// a response-budget rejection would leave an empty collection behind.
+		// This is admission only; mongoInsertUpsert reserves the exact bytes again
+		// immediately before publication and refunds them on a failed insert.
+		if index, err := mongoMissingCollectionFirstUpsertResponseAdmission(parsed, budget); err != nil {
+			return mongoUpdatePreMutationWriteErrorResponse(budget, index, err)
+		}
 		col, releaseColdCollection, err = s.openOrCreateCollectionForFirstWrite(name)
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
@@ -1234,6 +1242,22 @@ func (b *mongoWriteBudget) reserveUpsertResponse(item mongoUpdateUpserted) (int,
 	if b == nil {
 		return 0, nil
 	}
+	bytes, err := b.upsertResponseBytesAvailable(item)
+	if err != nil {
+		return 0, err
+	}
+	b.responseBytesRemaining -= bytes
+	return bytes, nil
+}
+
+// upsertResponseBytesAvailable checks the exact successful-upsert response
+// entry without consuming it. Missing-collection writes use this before
+// opening the catalog; the side-effecting insert still reserves the same
+// amount immediately before publication.
+func (b *mongoWriteBudget) upsertResponseBytesAvailable(item mongoUpdateUpserted) (int, error) {
+	if b == nil {
+		return 0, nil
+	}
 	bytes, err := mongoUpdateUpsertResponseBytes(item)
 	if err != nil {
 		return 0, err
@@ -1241,7 +1265,6 @@ func (b *mongoWriteBudget) reserveUpsertResponse(item mongoUpdateUpserted) (int,
 	if b.responseBytesRemaining < bytes {
 		return 0, errors.New("Mongo gateway multi-write command exceeded its upsert response budget")
 	}
-	b.responseBytesRemaining -= bytes
 	return bytes, nil
 }
 
@@ -1685,6 +1708,29 @@ func (s *Server) validateMongoMissingCollectionFirstUpsert(updates []mongoUpdate
 		return nil
 	}
 	return nil
+}
+
+// mongoMissingCollectionFirstUpsertResponseAdmission identifies the first
+// upsert that would create an otherwise missing collection and checks its
+// successful response entry before the catalog is mutated.
+func mongoMissingCollectionFirstUpsertResponseAdmission(updates []mongoUpdateItem, budget *mongoWriteBudget) (int, error) {
+	for _, update := range updates {
+		if update.upsert {
+			_, err := budget.upsertResponseBytesAvailable(mongoUpdateUpserted{index: update.index, id: update.id})
+			return update.index, err
+		}
+	}
+	return 0, nil
+}
+
+func mongoUpdatePreMutationWriteErrorResponse(budget *mongoWriteBudget, index int, err error) (wire.Document, error) {
+	if reserveErr := budget.reserveError(); reserveErr != nil {
+		if terminalErr := budget.reserveTerminalError(); terminalErr != nil {
+			return nil, terminalErr
+		}
+		err = reserveErr
+	}
+	return marshalUpdateResponseWithWriteErrors(0, 0, nil, []mongoWriteError{{index: index, err: err}})
 }
 
 func mongoUpsertDocument(update mongoUpdateItem) (wire.Document, error) {
