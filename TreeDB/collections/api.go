@@ -8176,49 +8176,55 @@ type bufferedRootRunHeapItem struct {
 	key      []byte
 }
 
-type bufferedRootRunHeap []bufferedRootRunHeapItem
-
-func (h bufferedRootRunHeap) Len() int { return len(h) }
-
-func (h bufferedRootRunHeap) Less(i, j int) bool {
-	if cmp := bytes.Compare(h[i].key, h[j].key); cmp != 0 {
-		return cmp < 0
-	}
-	return h[i].priority < h[j].priority
+type bufferedRootRunHeap struct {
+	items   []bufferedRootRunHeapItem
+	reverse bool
 }
 
-func (h bufferedRootRunHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+func (h bufferedRootRunHeap) Len() int { return len(h.items) }
+
+func (h bufferedRootRunHeap) Less(i, j int) bool {
+	if cmp := bytes.Compare(h.items[i].key, h.items[j].key); cmp != 0 {
+		if h.reverse {
+			return cmp > 0
+		}
+		return cmp < 0
+	}
+	return h.items[i].priority < h.items[j].priority
+}
+
+func (h bufferedRootRunHeap) Swap(i, j int) { h.items[i], h.items[j] = h.items[j], h.items[i] }
 
 func (h *bufferedRootRunHeap) push(item bufferedRootRunHeapItem) {
-	*h = append(*h, item)
-	h.up(len(*h) - 1)
+	h.items = append(h.items, item)
+	h.up(len(h.items) - 1)
 }
 
 func (h *bufferedRootRunHeap) init() {
-	n := len(*h)
+	n := len(h.items)
 	for i := n/2 - 1; i >= 0; i-- {
 		h.down(i, n)
 	}
 }
 
 func (h *bufferedRootRunHeap) pop() bufferedRootRunHeapItem {
-	old := *h
+	old := h.items
 	n := len(old)
 	if n == 0 {
 		return bufferedRootRunHeapItem{}
 	}
-	old.Swap(0, n-1)
+	h.Swap(0, n-1)
 	h.down(0, n-1)
 	item := old[n-1]
-	*h = old[:n-1]
+	h.items = old[:n-1]
 	return item
 }
 
 func (h bufferedRootRunHeap) peek() *bufferedRootRunHeapItem {
-	if len(h) == 0 {
+	if len(h.items) == 0 {
 		return nil
 	}
-	return &h[0]
+	return &h.items[0]
 }
 
 func (h *bufferedRootRunHeap) up(j int) {
@@ -8261,6 +8267,7 @@ type bufferedRootRunsIterator struct {
 	hasCur             bool
 	valid              bool
 	includeDeleted     bool
+	reverse            bool
 	stableUnsafeSlices bool
 	lenHint            int
 	start              []byte
@@ -8280,7 +8287,18 @@ func newBufferedRootRunsIterator(runs []memtable.Table, start, end []byte) itera
 }
 
 func newBufferedRootRunsIteratorWithDeleted(runs []memtable.Table, start, end []byte, includeDeleted bool) iterator.UnsafeIterator {
+	return newBufferedRootRunsIteratorWithDeletedDirection(runs, start, end, includeDeleted, false)
+}
+
+func newBufferedRootRunsReverseIteratorWithDeleted(runs []memtable.Table, start, end []byte, includeDeleted bool) iterator.UnsafeIterator {
+	return newBufferedRootRunsIteratorWithDeletedDirection(runs, start, end, includeDeleted, true)
+}
+
+func newBufferedRootRunsIteratorWithDeletedDirection(runs []memtable.Table, start, end []byte, includeDeleted, reverse bool) iterator.UnsafeIterator {
 	if len(runs) == 1 && includeDeleted && runs[0] != nil {
+		if reverse {
+			return runs[0].NewReverseIterator(start, end)
+		}
 		return runs[0].NewIterator(start, end)
 	}
 	sources := make([]bufferedRootRunIteratorSource, 0, len(runs))
@@ -8297,19 +8315,29 @@ func newBufferedRootRunsIteratorWithDeleted(runs []memtable.Table, start, end []
 			lenHint = run.Len()
 		}
 		sources = append(sources, bufferedRootRunIteratorSource{
-			iter:     run.NewIterator(start, end),
+			iter: func() iterator.UnsafeIterator {
+				if reverse {
+					return run.NewReverseIterator(start, end)
+				}
+				return run.NewIterator(start, end)
+			}(),
 			priority: len(runs) - 1 - i,
 			lenHint:  lenHint,
 		})
 	}
-	return newBufferedRootRunIteratorSourcesIteratorWithDeleted(sources, start, end, includeDeleted, stableUnsafeSlices)
+	return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirection(sources, start, end, includeDeleted, stableUnsafeSlices, reverse)
 }
 
 func newBufferedRootRunIteratorSourcesIteratorWithDeleted(sources []bufferedRootRunIteratorSource, start, end []byte, includeDeleted, stableUnsafeSlices bool) iterator.UnsafeIterator {
+	return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirection(sources, start, end, includeDeleted, stableUnsafeSlices, false)
+}
+
+func newBufferedRootRunIteratorSourcesIteratorWithDeletedDirection(sources []bufferedRootRunIteratorSource, start, end []byte, includeDeleted, stableUnsafeSlices, reverse bool) iterator.UnsafeIterator {
 	it := &bufferedRootRunsIterator{
 		iters:              make([]iterator.UnsafeIterator, 0, len(sources)),
-		heap:               make(bufferedRootRunHeap, 0, len(sources)),
+		heap:               bufferedRootRunHeap{items: make([]bufferedRootRunHeapItem, 0, len(sources)), reverse: reverse},
 		includeDeleted:     includeDeleted,
+		reverse:            reverse,
 		stableUnsafeSlices: stableUnsafeSlices,
 		start:              start,
 		end:                end,
@@ -8330,7 +8358,7 @@ func newBufferedRootRunIteratorSourcesIteratorWithDeleted(sources []bufferedRoot
 		it.iters = append(it.iters, source.iter)
 		it.priorities = append(it.priorities, source.priority)
 		if source.iter.Valid() {
-			it.heap = append(it.heap, bufferedRootRunHeapItem{
+			it.heap.items = append(it.heap.items, bufferedRootRunHeapItem{
 				idx:      idx,
 				priority: source.priority,
 				key:      source.iter.UnsafeKey(),
@@ -8366,7 +8394,7 @@ func (it *bufferedRootRunsIterator) Seek(key []byte) {
 	if it.start != nil && bytes.Compare(key, it.start) < 0 {
 		key = it.start
 	}
-	it.heap = it.heap[:0]
+	it.heap.items = it.heap.items[:0]
 	it.valid = false
 	it.hasCur = false
 	for idx, source := range it.iters {
@@ -8462,7 +8490,7 @@ func (it *bufferedRootRunsIterator) Close() error {
 	}
 	it.valid = false
 	it.hasCur = false
-	it.heap = nil
+	it.heap.items = nil
 	if firstErr != nil {
 		it.firstErr = firstErr
 	}
@@ -8497,7 +8525,7 @@ func (it *bufferedRootRunsIterator) advance() {
 	for it.heap.Len() > 0 {
 		top := it.heap.pop()
 		key := top.key
-		if it.end != nil && bytes.Compare(key, it.end) >= 0 {
+		if !it.reverse && it.end != nil && bytes.Compare(key, it.end) >= 0 {
 			return
 		}
 		for it.heap.Len() > 0 {
@@ -8540,7 +8568,7 @@ func (it *bufferedRootRunsIterator) advanceCurrentItemDirect(item bufferedRootRu
 		return false
 	}
 	item.key = source.UnsafeKey()
-	if it.end != nil && bytes.Compare(item.key, it.end) >= 0 {
+	if !it.reverse && it.end != nil && bytes.Compare(item.key, it.end) >= 0 {
 		return false
 	}
 	if !it.includeDeleted && source.IsDeleted() {
@@ -8548,7 +8576,7 @@ func (it *bufferedRootRunsIterator) advanceCurrentItemDirect(item bufferedRootRu
 		return false
 	}
 	next := it.heap.peek()
-	if next == nil || bytes.Compare(item.key, next.key) < 0 {
+	if next == nil || (!it.reverse && bytes.Compare(item.key, next.key) < 0) || (it.reverse && bytes.Compare(item.key, next.key) > 0) {
 		it.cur = item
 		it.hasCur = true
 		it.valid = true
@@ -21927,18 +21955,38 @@ func collectionReverseIteratorAtCatalogRoot(snap *backenddb.Snapshot, catalog *c
 	if snap == nil {
 		return nil, backenddb.ErrClosed
 	}
-	if len(catalog.overlayRootIDs(rootName)) != 0 {
-		return nil, errors.New("collections: reverse compound index scan requires a compacted index root")
+	if len(catalog.overlayRootIDs(rootName)) == 0 {
+		rootID := catalog.rootID(rootName)
+		if rootID == 0 {
+			return nil, nil
+		}
+		it, err := snap.ReverseIteratorAtRootWithOptions(rootID, start, end, backenddb.IteratorOptions{IncludeTombstones: includeDeleted})
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			return nil, nil
+		}
+		return it, err
 	}
-	rootID := catalog.rootID(rootName)
-	if rootID == 0 {
+	sources := make([]bufferedRootRunIteratorSource, 0, len(catalog.rootStack(rootName)))
+	for i, rootID := range catalog.rootStack(rootName) {
+		if rootID == 0 {
+			continue
+		}
+		it, err := snap.ReverseIteratorAtRootWithOptions(rootID, start, end, backenddb.IteratorOptions{IncludeTombstones: true})
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			continue
+		}
+		if err != nil {
+			for _, source := range sources {
+				_ = source.iter.Close()
+			}
+			return nil, err
+		}
+		sources = append(sources, bufferedRootRunIteratorSource{iter: it, priority: i})
+	}
+	if len(sources) == 0 {
 		return nil, nil
 	}
-	it, err := snap.ReverseIteratorAtRootWithOptions(rootID, start, end, backenddb.IteratorOptions{IncludeTombstones: includeDeleted})
-	if errors.Is(err, tree.ErrKeyNotFound) {
-		return nil, nil
-	}
-	return it, err
+	return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirection(sources, start, end, includeDeleted, false, true), nil
 }
 
 func (c *collectionCatalog) copy() *collectionCatalog {
