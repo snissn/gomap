@@ -471,6 +471,7 @@ func findPlanHasResidualFilter(plan findPlan, selection findPlannerSelection) bo
 	if selection.stage == "primary_lookup" {
 		return len(plan.predicates) != 1
 	}
+	equalityPredicates := 0
 	for _, pred := range plan.predicates {
 		if pred.field != selection.indexField {
 			return true
@@ -484,6 +485,15 @@ func findPlanHasResidualFilter(plan findPlan, selection findPlannerSelection) bo
 		if selection.stage == "secondary_range_lookup" && (pred.op == findPredicateEq || pred.op == findPredicateIn) {
 			return true
 		}
+		if selection.stage == "secondary_equality_lookup" && (pred.op == findPredicateEq || pred.op == findPredicateIn) {
+			equalityPredicates++
+		}
+	}
+	// The executor probes same-kind equality/$in predicates independently and
+	// chooses one candidate set. Every additional predicate is therefore
+	// filtered after materialization rather than covered by the winning probe.
+	if selection.stage == "secondary_equality_lookup" && equalityPredicates != 1 {
+		return true
 	}
 	return false
 }

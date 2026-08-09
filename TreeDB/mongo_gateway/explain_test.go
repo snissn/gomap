@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
@@ -167,6 +168,30 @@ func TestMongoExplainIndexedRangeOverflowRejectsRatherThanPrefix(t *testing.T) {
 	}
 }
 
+func TestMongoExplainKnownEmptyNaNRangeAvoidsBoundedScan(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	server.MaxFindScanDocuments = 1
+	command := bson.D{
+		{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gt", Value: math.NaN()}}}}}}},
+		{Key: "$db", Value: "app"},
+	}
+	planner := serveCommand(t, server, 102, command)
+	assertOK(t, planner)
+	if got := bson.Raw(planner).Lookup("queryPlanner").Document().Lookup("winningPlan").Document().Lookup("stage").StringValue(); got != "secondary_range_lookup" {
+		t.Fatalf("queryPlanner stage=%q want secondary_range_lookup: %s", got, planner)
+	}
+	command = append(command, bson.E{Key: "verbosity", Value: "executionStats"})
+	statsResponse := serveCommand(t, server, 102, command)
+	assertOK(t, statsResponse)
+	stats := bson.Raw(statsResponse).Lookup("executionStats").Document()
+	if got, ok := stats.Lookup("nReturned").Int64OK(); !ok || got != 0 {
+		t.Fatalf("nReturned=%d ok=%v want 0: %s", got, ok, statsResponse)
+	}
+	if got, ok := stats.Lookup("candidateDocumentsExamined").Int64OK(); !ok || got != 0 {
+		t.Fatalf("candidateDocumentsExamined=%d ok=%v want 0: %s", got, ok, statsResponse)
+	}
+}
+
 func TestExplainExecutionRejectionClassifiesOnlyScanCapSentinel(t *testing.T) {
 	if got := explainExecutionRejectionReason(errors.New("bounded scan and candidate set exceeded in unrelated adapter")); got != "execution_rejected" {
 		t.Fatalf("text-only rejection=%q want execution_rejected", got)
@@ -208,6 +233,7 @@ func TestMongoExplainResidualsAndCursorOptionsMatchReadAdmission(t *testing.T) {
 	}{
 		{name: "bounded scan predicate", cmd: bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "active", Value: true}}}}}, {Key: "$db", Value: "app"}}, want: true},
 		{name: "two sided indexed range", cmd: bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(36)}, {Key: "$lt", Value: int64(43)}}}}}}}, {Key: "$db", Value: "app"}}, want: false},
+		{name: "multiple same kind predicates", cmd: bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "$and", Value: bson.A{bson.D{{Key: "age", Value: int64(36)}}, bson.D{{Key: "age", Value: int64(37)}}}}}}}}, {Key: "$db", Value: "app"}}, want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resp := serveCommand(t, server, 104, tc.cmd)
@@ -215,6 +241,13 @@ func TestMongoExplainResidualsAndCursorOptionsMatchReadAdmission(t *testing.T) {
 			got, ok := bson.Raw(resp).Lookup("queryPlanner").Document().Lookup("winningPlan").Document().Lookup("residualFilter").BooleanOK()
 			if !ok || got != tc.want {
 				t.Fatalf("residualFilter=%v ok=%v want %v: %s", got, ok, tc.want, resp)
+			}
+			execution := append(append(bson.D(nil), tc.cmd...), bson.E{Key: "verbosity", Value: "executionStats"})
+			stats := serveCommand(t, server, 104, execution)
+			assertOK(t, stats)
+			got, ok = bson.Raw(stats).Lookup("queryPlanner").Document().Lookup("winningPlan").Document().Lookup("residualFilter").BooleanOK()
+			if !ok || got != tc.want {
+				t.Fatalf("execution residualFilter=%v ok=%v want %v: %s", got, ok, tc.want, stats)
 			}
 		})
 	}

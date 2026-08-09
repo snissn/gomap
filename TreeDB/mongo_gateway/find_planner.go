@@ -111,27 +111,10 @@ func findIndexProbesForIndex(plan findPlan, idx collections.IndexDefinition) []f
 }
 
 func indexedRangeProbeEligible(predicates []findPredicate, idx collections.IndexDefinition) bool {
-	found := false
-	for _, pred := range predicates {
-		if pred.field != idx.Field || !isRangePredicate(pred.op) {
-			continue
-		}
-		found = true
-		if len(pred.values) != 1 || rawValueIsNaN(pred.values[0]) {
-			return false
-		}
-		if _, ok := indexScalarForBSONValue(pred.values[0], idx.ValueType); !ok {
-			// Fractional numeric comparisons cannot be represented by an int64
-			// index and must fall back to filtering; other disjoint BSON types
-			// retain the executor's deterministic empty range result.
-			if unindexedRangePredicateShouldScan(pred.values[0], idx.ValueType) {
-				return false
-			}
-		}
-	}
-	if !found {
-		return false
-	}
+	// indexRangeOptionsForPredicates is also the executor's source of truth.
+	// A known-empty range (NaN, a disjoint scalar, or contradictory bounds)
+	// remains an executable zero-work path; it must not fall through to a
+	// bounded collection scan merely because no index lookup is needed.
 	_, ok, _, err := indexRangeOptionsForPredicates(predicates, idx)
 	return err == nil && ok
 }
