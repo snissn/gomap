@@ -88,6 +88,7 @@ an extra probe outside the manifest.
 | command gap | dbStats | not implemented | `command-gap.dbstats` |
 | read command | count filter/skip/limit | supported subset | `read-command.count-filter-skip-limit` |
 | read command | distinct top-level field with filter | supported subset | `read-command.distinct-top-level-field-with-filter` |
+| read command | explain queryPlanner and executionStats for bounded standalone read plans | supported subset | `read-command.explain-bounded-read-plans` |
 | read command gap | maxTimeMS on aggregate/count/distinct | rejected | `read-command-gap.maxtimems-on-aggregate-count-distinct` |
 | update subset | findAndModify exact _id no-match | supported subset | `update-subset.findandmodify-exact-id-no-match` |
 | transaction gap | transactions and retryable writes | not implemented | `transaction-gap.transactions-and-retryable-writes` |

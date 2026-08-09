@@ -117,6 +117,7 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 		{ID: "command-gap.dbstats", Category: "command gap", Feature: "dbStats", Status: MongoCapabilityNotImplemented},
 		{ID: "read-command.count-filter-skip-limit", Category: "read command", Feature: "count filter/skip/limit", Status: MongoCapabilitySupportedSubset},
 		{ID: "read-command.distinct-top-level-field-with-filter", Category: "read command", Feature: "distinct top-level field with filter", Status: MongoCapabilitySupportedSubset},
+		{ID: "read-command.explain-bounded-read-plans", Category: "read command", Feature: "explain queryPlanner and executionStats for bounded standalone read plans", Status: MongoCapabilitySupportedSubset},
 		{ID: "read-command-gap.maxtimems-on-aggregate-count-distinct", Category: "read command gap", Feature: "maxTimeMS on aggregate/count/distinct", Status: MongoCapabilityRejected},
 		{ID: "update-subset.findandmodify-exact-id-no-match", Category: "update subset", Feature: "findAndModify exact _id no-match", Status: MongoCapabilitySupportedSubset},
 		{ID: "transaction-gap.transactions-and-retryable-writes", Category: "transaction gap", Feature: "transactions and retryable writes", Status: MongoCapabilityNotImplemented},
@@ -136,7 +137,7 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 				"crud.delete-by-id",
 				"crud.bounded-multi-write-and-batch-ordering",
 			},
-			Note: "Explicit-ID CRUD plus bounded multi update/delete and ordered or unordered insert/update/delete batches; a positive maxTimeMS shortens the shared five-second command deadline; per-document atomicity only, never a transaction.",
+			Note: "Explicit-ID CRUD plus bounded multi-update/delete and ordered or unordered insert/update/delete batches; a positive maxTimeMS shortens the shared five-second command deadline; per-document atomicity only, never a transaction.",
 		},
 		{
 			ID:    "standalone-write-concern",
@@ -154,8 +155,9 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 				"read-command.aggregate-match-project-sort-skip-limit-count",
 				"read-command.count-filter-skip-limit",
 				"read-command.distinct-top-level-field-with-filter",
+				"read-command.explain-bounded-read-plans",
 			},
-			Note: "Bounded standalone subsets only; unsupported stages, dotted distinct keys, and maxTimeMS reject.",
+			Note: "Bounded standalone subsets only. Explain reports stable primary, secondary, bounded-scan, and adaptive_candidate_selection vocabulary for find, count, distinct, and aggregate pipelines whose planner prefix is match/skip/limit; later match or sort stages reject rather than being misreported as find-plan work. Writes, routed reads, and unsupported verbosity reject.",
 		},
 		{
 			ID:    "administrative-diagnostics",

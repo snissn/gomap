@@ -171,4 +171,24 @@ func TestServerFindFallsBackToScanForCompoundAndExplicitDescendingIndexes(t *tes
 		{Key: "limit", Value: int32(1)},
 		{Key: "$db", Value: "app"},
 	})), []string{"u1"})
+	// Explain shares the executor's probe eligibility. It must describe the
+	// same bounded-scan fallback rather than advertising a #4065-only index
+	// path for either ordered-v2 definition.
+	for _, tc := range []struct {
+		requestID int32
+		filter    bson.D
+	}{
+		{requestID: 40646, filter: bson.D{{Key: "tenant", Value: "acme"}}},
+		{requestID: 40647, filter: bson.D{{Key: "createdAt", Value: int32(2)}}},
+	} {
+		resp := serveCommand(t, server, tc.requestID, bson.D{
+			{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: tc.filter}}},
+			{Key: "$db", Value: "app"},
+		})
+		assertOK(t, resp)
+		stage, ok := bson.Raw(resp).Lookup("queryPlanner").Document().Lookup("winningPlan").Document().Lookup("stage").StringValueOK()
+		if !ok || stage != "bounded_scan" {
+			t.Fatalf("explain stage=%q ok=%v want bounded_scan: %s", stage, ok, resp)
+		}
+	}
 }

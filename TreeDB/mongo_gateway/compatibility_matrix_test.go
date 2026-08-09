@@ -799,6 +799,28 @@ func mongoCompatibilityMatrixProbes() []mongoCompatibilityMatrixProbe {
 			},
 		},
 		{
+			capabilityID:   "read-command.explain-bounded-read-plans",
+			expectedStatus: MongoCapabilitySupportedSubset,
+			probe: func(t *testing.T, server *Server) {
+				resp := serveCommand(t, server, 922, bson.D{
+					{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}}},
+					{Key: "verbosity", Value: "executionStats"}, {Key: "$db", Value: "app"},
+				})
+				assertOK(t, resp)
+				planner, ok := resp.Lookup("queryPlanner").DocumentOK()
+				if !ok {
+					t.Fatalf("explain queryPlanner missing: %s", resp)
+				}
+				winning, ok := planner.Lookup("winningPlan").DocumentOK()
+				if stage, ok := winning.Lookup("stage").StringValueOK(); !ok || stage != "primary_lookup" {
+					t.Fatalf("explain stage=%q ok=%v want primary_lookup", stage, ok)
+				}
+				if _, ok := resp.Lookup("executionStats").DocumentOK(); !ok {
+					t.Fatalf("explain executionStats missing: %s", resp)
+				}
+			},
+		},
+		{
 			capabilityID:   "read-command-gap.maxtimems-on-aggregate-count-distinct",
 			expectedStatus: MongoCapabilityRejected,
 			probe: func(t *testing.T, server *Server) {

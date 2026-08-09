@@ -848,7 +848,7 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 
 func commandRejectsReadOPMsgFeatures(name string) bool {
 	switch name {
-	case "aggregate", "count", "distinct", "find":
+	case "aggregate", "count", "distinct", "explain", "find":
 		return true
 	default:
 		return false
@@ -881,7 +881,7 @@ func (s *Server) commandResponse(ctx context.Context, name string, command wire.
 var mongoGatewaySupportedCommands = map[string]struct{}{
 	"aggregate": {}, "buildInfo": {}, "connectionStatus": {}, "count": {},
 	"create": {}, "createIndexes": {}, "createUser": {}, "delete": {},
-	"distinct": {}, "dropIndexes": {}, "dropUser": {}, "endSessions": {},
+	"distinct": {}, "dropIndexes": {}, "dropUser": {}, "endSessions": {}, "explain": {},
 	"find": {}, "findAndModify": {}, "getMore": {}, "hello": {},
 	"hostInfo": {}, "insert": {}, "isMaster": {}, "ismaster": {},
 	"killCursors": {}, "listCollections": {}, "listDatabases": {}, "listIndexes": {},
@@ -916,6 +916,8 @@ func (s *Server) dispatchCommandResponse(ctx context.Context, name string, comma
 		return s.insertResponse(ctx, command, sequences)
 	case "find":
 		return s.findResponse(ctx, command, cursorOwner)
+	case "explain":
+		return s.explainResponse(ctx, command, cursorOwner)
 	case "aggregate":
 		return s.aggregateResponse(ctx, command, cursorOwner)
 	case "count":

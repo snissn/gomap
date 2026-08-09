@@ -1,0 +1,14 @@
+{
+  "schema": "treedb.mongo-gateway.compat-diff.fixture",
+  "version": 1,
+  "id": "explain-query-planner",
+  "capability_id": "read-command.explain-bounded-read-plans",
+  "expectation": "supported",
+  "database": "compat",
+  "collection": "records",
+  "smoke": false,
+  "seed": [{"_id":"a","score":{"$numberInt":"1"}}, {"_id":"b","score":{"$numberInt":"2"}}],
+  "ignore_fields": ["queryPlanner"],
+  "normalize_response_envelope_order": true,
+  "command": {"explain":{"find":"records","filter":{"score":{"$gte":{"$numberInt":"1"}}}}}
+}

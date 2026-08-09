@@ -110,6 +110,16 @@ func TestCommandWALSupportMatrixCoversMongoMutationHandlers(t *testing.T) {
 	}
 }
 
+func TestCommandWALSupportMatrixCoversMongoReadOnlyCommands(t *testing.T) {
+	matrix := loadCommandWALSupportMatrix(t)
+	for _, command := range []string{"explain"} {
+		entry := requireMatrixEntry(t, matrix, "mongo_gateway", command)
+		if entry.Status != "read-only" || entry.Command != "none" {
+			t.Fatalf("%s entry=%+v, want read-only/none", command, entry)
+		}
+	}
+}
+
 func TestCommandWALSupportMatrixCoversNativeWireMutationCommands(t *testing.T) {
 	matrix := loadCommandWALSupportMatrix(t)
 	registry := iwire.MustV1Registry()
@@ -274,6 +284,7 @@ func mongoGatewayMutationMatrixEntryPoints(t *testing.T) []string {
 		"count":            {},
 		"distinct":         {},
 		"endSessions":      {},
+		"explain":          {},
 		"find":             {},
 		"getMore":          {},
 		"getParameter":     {},

@@ -66,6 +66,37 @@ func TestStandaloneServerOfficialGoDriverBSONSetBinaryUpsert(t *testing.T) {
 	}
 }
 
+func TestStandaloneServerOfficialGoDriverExplainReadPlans(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), Profile: treedb.ProfileCommandWALDurable, DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}})
+	if err != nil {
+		t.Fatalf("open standalone: %v", err)
+	}
+	client, cancel, ln, serveErr := startStandaloneMongoClientForTest(t, standalone)
+	defer stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelCtx()
+	db := client.Database("app")
+	if _, err := db.Collection("users").InsertMany(ctx, []any{bson.D{{Key: "_id", Value: "a"}, {Key: "city", Value: "hnl"}}, bson.D{{Key: "_id", Value: "b"}, {Key: "city", Value: "sea"}}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	var response bson.Raw
+	// The official driver converts a deadline to maxTimeMS, which this
+	// deliberately fail-closed explain surface rejects.
+	err = db.RunCommand(context.Background(), bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "a"}}}}}, {Key: "verbosity", Value: "executionStats"}}).Decode(&response)
+	if err != nil {
+		t.Fatalf("driver explain: %v", err)
+	}
+	planner, ok := response.Lookup("queryPlanner").DocumentOK()
+	stage, stageOK := planner.Lookup("winningPlan").Document().Lookup("stage").StringValueOK()
+	if !ok || !stageOK || stage != "primary_lookup" {
+		t.Fatalf("explain response=%s", response)
+	}
+	stats, ok := response.Lookup("executionStats").DocumentOK()
+	if returned, returnedOK := stats.Lookup("nReturned").Int64OK(); !ok || !returnedOK || returned != 1 {
+		t.Fatalf("explain executionStats=%s", response)
+	}
+}
+
 func TestStandaloneServerOfficialGoDriverBoundedMultiWrites(t *testing.T) {
 	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), Profile: treedb.ProfileCommandWALDurable, DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}})
 	if err != nil {

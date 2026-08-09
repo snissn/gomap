@@ -81,13 +81,13 @@ call concurrently.
 <!-- mongo-capability-summary:begin -->
 ## Executable capability summary
 
-Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:89fb26c603a0ecf4a74882a25587a344d181a743923dc27bc7d0d768cafdf5ca`
+Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:f17a5fe3b52ee0e783410966e54033eab0a72c6e095020b7a62dc1f2aa28a294`
 
 | Surface | Status | Boundary |
 |---|---|---|
-| Standalone CRUD | supported subset | Explicit-ID CRUD plus bounded multi update/delete and ordered or unordered insert/update/delete batches; a positive maxTimeMS shortens the shared five-second command deadline; per-document atomicity only, never a transaction. |
+| Standalone CRUD | supported subset | Explicit-ID CRUD plus bounded multi-update/delete and ordered or unordered insert/update/delete batches; a positive maxTimeMS shortens the shared five-second command deadline; per-document atomicity only, never a transaction. |
 | Standalone write concern | supported subset | Absent/default and w:1 use the selected profile's ordinary acknowledgement boundary; j:true closes a real command-WAL or checkpoint sync boundary. Unacknowledged, replica, and interruptible-timeout semantics reject before mutation. |
-| Aggregation, count, and distinct | supported subset | Bounded standalone subsets only; unsupported stages, dotted distinct keys, and maxTimeMS reject. |
+| Aggregation, count, and distinct | supported subset | Bounded standalone subsets only. Explain reports stable primary, secondary, bounded-scan, and adaptive_candidate_selection vocabulary for find, count, distinct, and aggregate pipelines whose planner prefix is match/skip/limit; later match or sort stages reject rather than being misreported as find-plan work. Writes, routed reads, and unsupported verbosity reject. |
 | Administrative diagnostics | not implemented | serverStatus, top, and dbStats are not implemented. |
 | Logical sessions | supported subset | Driver-interoperability metadata only; no transaction or causal-session semantics. |
 | Transport security | supported subset | Loopback plaintext remains available; non-loopback standalone listeners require TLS unless an explicit insecure override is selected. Password authentication refuses plaintext non-loopback listeners. TLS 1.2+ with bounded handshakes is supported. |
@@ -162,6 +162,26 @@ database rebuild or explicit offline repair rather than online migration.
 `AuthorizationMetrics` reports only low-cardinality allowed/denied totals; it
 does not expose secrets or query/document payloads.
 
+## Explain contract
+
+`queryPlanner` is selector-only and always reports `namespace`, `winningPlan`
+(`stage`, optional `indexName`, `residualFilter`, and `inMemorySort` when
+applicable), `usableIndexes`, `rejectedIndexes`, `scanBounds`, `sort`,
+`maxScanDocuments`, and `cursorWork`. Scan bounds use field/operator/type,
+cardinality, inclusivity, and fixed privacy-safe value fingerprints; literal
+filter values and TreeDB storage addresses are never returned. `executionStats`
+adds `nReturned`, gateway-owned `candidateDocumentsExamined`,
+`candidateDocumentsMaterialized`, `cursorDocumentsMaterialized`, `scanCap`,
+and `executionTimeMillis`. A capped execution returns the same planner plus
+`truncated: true` and `rejectionReason: scan_cap_exceeded`; other fail-closed
+execution errors retain the planner with `truncated: false` and a stable
+rejection reason. These gateway-owned counters are not MongoDB
+`totalDocsExamined` metrics and include bounded adaptive candidate work.
+When `winningPlan.stage` is `adaptive_candidate_selection`, `candidatePlans`
+is additionally present: each entry has gateway-owned `stage`, `indexName`,
+and `field` values for an executable candidate probe. It is omitted for all
+other planner stages.
+
 ## Differential compatibility fixtures
 
 `cmd/mongo_gateway_compat_diff` compares a deliberately small set of declared
@@ -170,6 +190,13 @@ those fixtures, not a full MongoDB conformance claim. Fixture files are
 versioned canonical Extended JSON in
 `cmd/mongo_gateway_compat_diff/fixtures`; the runner decodes them to BSON and
 preserves BSON type and field order in emitted observations.
+
+The explain fixture proves the cross-target wire invariant that a nested
+`explain`/`find` command over the seeded collection is accepted and returns a
+successful command envelope. It deliberately ignores `queryPlanner`: MongoDB's
+planner document is implementation-specific and the gateway publishes its own
+stable vocabulary, which is specified and tested by the gateway contract tests
+rather than claimed as MongoDB planner parity.
 
 The version-1 fixture contract is intentionally unauthenticated: it has one
 shared seed/command flow and no per-target authentication bootstrap. Therefore
