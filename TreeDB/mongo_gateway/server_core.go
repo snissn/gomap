@@ -808,7 +808,20 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 	// Keep every ordinary command response within the same advertised OP_MSG
 	// limit as requests and find batches.  In particular, a bounded input can
 	// otherwise expand into a large writeErrors envelope.
-	tooLarge, marshalErr := commandError(commandCodeBadValue, "BadValue", "Mongo gateway command response exceeds maxMessageSizeBytes")
+	tooLargeCode, tooLargeName := commandCodeBadValue, "BadValue"
+	tooLargeMessage := "Mongo gateway command response exceeds maxMessageSizeBytes"
+	if name == "findAndModify" {
+		// Exact-ID findAndModify pre-admits its deterministic response image
+		// before mutation. A concurrent filter selection can still make an
+		// already-published image overflow, so never rewrite that outcome as a
+		// retry-safe BadValue/no-op response.
+		tooLargeCode, tooLargeName = commandCodeShutdownInProgress, "ShutdownInProgress"
+		// This stays within the gateway's 128-byte minimum response envelope
+		// when encoded as OP_MSG. A client must not treat it as a retry-safe
+		// BadValue/no-op after a findAndModify outcome may have published.
+		tooLargeMessage = "findAndModify outcome uncertain"
+	}
+	tooLarge, marshalErr := commandError(tooLargeCode, tooLargeName, tooLargeMessage)
 	if marshalErr != nil {
 		return nil, retainRequestBody, marshalErr
 	}

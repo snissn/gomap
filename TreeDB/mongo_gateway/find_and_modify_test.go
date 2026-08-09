@@ -3,11 +3,13 @@ package mongogateway
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -44,6 +46,93 @@ func TestFindAndModifyReturnsAtomicBeforeAndAfterImages(t *testing.T) {
 	}
 	if !value.Lookup("n").IsZero() {
 		t.Fatalf("projection retained n")
+	}
+}
+
+func TestFindAndModifyOversizedExactResponseRejectsBeforeMutation(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "n", Value: int32(0)}, {Key: "payload", Value: strings.Repeat("x", 1024)}}}}, {Key: "$db", Value: "app"}}))
+	// The gateway insert is locally buffered. Publish it before checkpointing so
+	// this is the persisted-document/reduced-cap restart shape, not a pending
+	// write-buffer artifact.
+	col, err := server.openCollectionForMutation("app.users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate a gateway restart with a smaller advertised message cap after the
+	// large document already exists. The default findAndModify image is too
+	// large, but the non-idempotent $inc must not publish before that is known.
+	server.MaxMessageLength = 512
+	item, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.preflightFindAndModifyExactResponse(col, item, false, false, compiledProjection{}); err == nil {
+		t.Fatal("preflight accepted oversized before-image")
+	}
+	overflow := serveCommand(t, server, 2, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, overflow, "BadValue")
+	msg, err := wire.AppendMsgMessage(nil, 1, 0, 0, overflow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msg) > int(server.MaxMessageLength) {
+		t.Fatalf("overflow response bytes=%d exceeds max=%d", len(msg), server.MaxMessageLength)
+	}
+	// The known pre-mutation error stays representable at the smallest
+	// configured command response envelope. The residual code-91 fallback for
+	// a concurrent/non-exact race is also deliberately small enough to send
+	// rather than silently turning the connection close into a retry hazard.
+	server.MaxMessageLength = mongoWriteResponseMinimumBytes
+	minimum := serveCommand(t, server, 3, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, minimum, "BadValue")
+	minimumMsg, err := wire.AppendMsgMessage(nil, 1, 0, 0, minimum)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(minimumMsg) > mongoWriteResponseMinimumBytes {
+		t.Fatalf("minimum rejection bytes=%d exceeds min=%d", len(minimumMsg), mongoWriteResponseMinimumBytes)
+	}
+	uncertain, err := commandError(commandCodeShutdownInProgress, "ShutdownInProgress", "findAndModify outcome uncertain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	uncertainMsg, err := wire.AppendMsgMessage(nil, 1, 0, 0, uncertain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(uncertainMsg) > mongoWriteResponseMinimumBytes {
+		t.Fatalf("uncertain fallback bytes=%d exceeds min=%d", len(uncertainMsg), mongoWriteResponseMinimumBytes)
+	}
+
+	// Retrying after the cap increases observes n=0 and commits exactly once;
+	// the rejected first attempt did not leave an ambiguous published mutation.
+	server.MaxMessageLength = wire.DefaultMaxMessageLength
+	retry := serveCommand(t, server, 4, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, retry)
+	if got, ok := bson.Raw(retry).Lookup("value").Document().Lookup("n").Int32OK(); !ok || got != 0 {
+		t.Fatalf("retry before-image n=%d ok=%v want 0", got, ok)
+	}
+	stored, err := col.Get(item.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := bson.Raw(stored).Lookup("n").Int32OK(); !ok || got != 1 {
+		t.Fatalf("stored n=%d ok=%v want 1", got, ok)
 	}
 }
 

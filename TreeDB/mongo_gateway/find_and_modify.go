@@ -86,10 +86,16 @@ func (s *Server) findAndModifyResponse(ctx context.Context, command wire.Documen
 		if err := s.validateMongoMissingCollectionFirstUpsert([]mongoUpdateItem{item}); err != nil {
 			return mongoUpdateWriteCommandError(err)
 		}
+		if err := s.preflightFindAndModifyExactResponse(nil, item, true, newImage, projection); err != nil {
+			return mongoUpdateWriteCommandError(err)
+		}
 		col, releaseColdCollection, err = s.openOrCreateCollectionForFirstWrite(name)
 	}
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	if err := s.preflightFindAndModifyExactResponse(col, item, upsert, newImage, projection); err != nil {
+		return mongoUpdateWriteCommandError(err)
 	}
 	before, after, matched, err := findAndModifyExisting(col, item)
 	if err != nil {
@@ -129,6 +135,119 @@ func (s *Server) findAndModifyResponse(ctx context.Context, command wire.Documen
 		before = after
 	}
 	return marshalFindAndModifyResponse(before, true, false, bson.RawValue{}, projection)
+}
+
+// preflightFindAndModifyExactResponse rejects an exact-ID mutation before
+// publication when the deterministic response image cannot fit the advertised
+// OP_MSG limit.  Retrying an $inc after the generic response-size fallback
+// would otherwise be unsafe: the write may already have committed while the
+// client only sees an unrelated ok:0 response.
+//
+// Filter selectors retain their existing execution path because their chosen
+// natural-order document can change concurrently.  A response overflow there
+// is still handled as an honest command-level transport boundary rather than
+// being represented as a successful no-op.
+func (s *Server) preflightFindAndModifyExactResponse(col *collections.Collection, item mongoUpdateItem, upsert, newImage bool, projection compiledProjection) error {
+	if !item.exactID {
+		return nil
+	}
+	var before wire.Document
+	if col != nil {
+		materializer, err := storedDocumentMaterializerForCollection(col)
+		if err != nil {
+			return err
+		}
+		if materializer != nil {
+			defer func() { _ = materializer.Close() }()
+		}
+		// Use the same conditional-read primitive as the mutation path rather
+		// than Get: buffered BSON collection writes are visible to Update before
+		// they are visible through a point snapshot. The callback returns
+		// changed=false, so this is only an exact-key observation.
+		matched, _, err := col.Update(item.key, func(stored []byte) ([]byte, bool, error) {
+			before = nil // callbacks may be retried or skipped by Collection.Update.
+			raw, err := storedDocumentToBSON(col, materializer, stored)
+			if err != nil {
+				return nil, false, err
+			}
+			before = bytes.Clone(raw)
+			return nil, false, nil
+		})
+		if err != nil {
+			return err
+		}
+		if !matched {
+			before = nil
+		}
+	}
+
+	updatedExisting := before != nil
+	upserted := false
+	value := before
+	if !updatedExisting && upsert {
+		doc, err := mongoUpsertDocument(item)
+		if err != nil {
+			return err
+		}
+		before = doc
+		upserted = true
+		if newImage {
+			value = doc
+		} else {
+			value = nil
+		}
+	} else if updatedExisting && newImage {
+		after, err := findAndModifyUpdatedImage(col, item, before)
+		if err != nil {
+			return err
+		}
+		value = after
+	}
+
+	response, err := marshalFindAndModifyResponse(value, updatedExisting, upserted, func() bson.RawValue {
+		if upserted {
+			return item.id
+		}
+		return bson.RawValue{}
+	}(), projection)
+	if err != nil {
+		return err
+	}
+	msg, err := wire.AppendMsgMessage(nil, 1, 0, 0, response)
+	if err != nil {
+		return err
+	}
+	if len(msg) > int(s.maxMessageLength()) {
+		// Keep the known pre-mutation rejection representable at the gateway's
+		// minimum response envelope as well.
+		return errors.New("findAndModify response too large")
+	}
+	return nil
+}
+
+func findAndModifyUpdatedImage(col *collections.Collection, item mongoUpdateItem, before wire.Document) (wire.Document, error) {
+	var (
+		updated wire.Document
+		err     error
+	)
+	if item.pureSet && normalizedMongoUpdateDocumentFormat(col) == collections.DocumentFormatBSON && item.bsonSetFieldsOK {
+		updated, _, err = applyBSONSetUpdate(before, item.bsonSetFields)
+	} else if item.pureSet {
+		updated, _, err = applySetUpdate(before, item.updateDoc)
+	} else {
+		updated, _, err = applyMongoMutation(before, item.mutation)
+	}
+	if err != nil {
+		return nil, err
+	}
+	updatedKey, _, err := prepareInsertDocument(updated, col.MetaView().Options.DocumentFormat)
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(updatedKey, item.key) {
+		return nil, errors.New("Mongo gateway update cannot modify _id")
+	}
+	return updated, nil
 }
 
 func findAndModifyAfterInsertConflict(col *collections.Collection, item mongoUpdateItem, newImage bool, projection compiledProjection) (wire.Document, error) {

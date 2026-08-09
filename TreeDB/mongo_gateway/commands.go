@@ -1180,6 +1180,9 @@ type mongoWriteBudget struct {
 	// beforeUpsertInsertHook is test-only coordination between successful
 	// response admission and the non-interruptible document publication.
 	beforeUpsertInsertHook func()
+	// beforeNativeUpdateBatchHook is test-only coordination after native batch
+	// planning/materialization and immediately before its atomic publication.
+	beforeNativeUpdateBatchHook func()
 }
 
 const (
@@ -1956,6 +1959,14 @@ func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpda
 				Fields:     update.bsonSetFields,
 			}
 		}
+		if len(updates) > 0 && updates[0].budget != nil && updates[0].budget.beforeNativeUpdateBatchHook != nil {
+			updates[0].budget.beforeNativeUpdateBatchHook()
+		}
+		if len(updates) > 0 && updates[0].budget != nil {
+			if err := updates[0].budget.checkDeadline(); err != nil {
+				return nil, false, err
+			}
+		}
 		return col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges(items)
 	}
 	materializer, err := storedDocumentMaterializerForCollection(col)
@@ -1973,6 +1984,14 @@ func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpda
 			Update: func(stored []byte) ([]byte, bool, error) {
 				return applyMongoUpdateToStoredDocument(col, materializer, update, stored)
 			},
+		}
+	}
+	if len(updates) > 0 && updates[0].budget != nil && updates[0].budget.beforeNativeUpdateBatchHook != nil {
+		updates[0].budget.beforeNativeUpdateBatchHook()
+	}
+	if len(updates) > 0 && updates[0].budget != nil {
+		if err := updates[0].budget.checkDeadline(); err != nil {
+			return nil, false, err
 		}
 	}
 	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges(items)
