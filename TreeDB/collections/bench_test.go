@@ -1280,6 +1280,9 @@ func BenchmarkCollectionBSONCompoundIndexComponents(b *testing.B) {
 			for i := range components {
 				components[i] = collections.IndexComponent{Field: fmt.Sprintf("k%d", i), Direction: collections.IndexDirectionAscending}
 			}
+			if componentCount > 1 {
+				components[1].Direction = collections.IndexDirectionDescending
+			}
 			index := collections.IndexDefinition{Name: "compound", Components: components, ValueType: collections.IndexValueBSONOrderedV2}
 			document := func(id string, i int) []byte {
 				fields := bson.D{{Key: "_id", Value: id}}
@@ -1334,9 +1337,32 @@ func BenchmarkCollectionBSONCompoundIndexComponents(b *testing.B) {
 					}
 				}
 			})
+			b.Run("prefix_range_mixed_direction", func(b *testing.B) {
+				_, col := openBenchmarkCollection(b, "compound_prefix_range", index)
+				for i := 0; i < 64; i++ {
+					id := fmt.Sprintf("%08d", i)
+					if _, err := col.Insert([]byte(id), document(id, i)); err != nil {
+						b.Fatal(err)
+					}
+				}
+				first := bson.Raw(document("00000000", 0))
+				prefix := first.Lookup("k0")
+				lower := first.Lookup("k1")
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if componentCount == 1 {
+						if _, _, err := col.FindByCompoundIndexRange("compound", collections.CompoundIndexRangeOptions{Prefix: []bson.RawValue{prefix}, Limit: 64, Desc: i%2 == 1}); err != nil {
+							b.Fatal(err)
+						}
+					} else if _, _, err := col.FindByCompoundIndexRange("compound", collections.CompoundIndexRangeOptions{Prefix: []bson.RawValue{prefix}, Lower: collections.IndexRangeBound{Value: lower, Inclusive: true}, Limit: 64, Desc: i%2 == 1}); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
 			b.Run("storage", func(b *testing.B) {
 				b.StopTimer()
-				_, col := openBenchmarkCollection(b, "compound_storage", index)
+				backend, col := openBenchmarkCollection(b, "compound_storage", index)
 				ids := make([][]byte, collectionBenchBackfill)
 				docs := make([][]byte, collectionBenchBackfill)
 				for i := 0; i < collectionBenchBackfill; i++ {
@@ -1351,6 +1377,7 @@ func BenchmarkCollectionBSONCompoundIndexComponents(b *testing.B) {
 				b.ReportMetric(0, "ns/op")
 				b.ReportMetric(1, "storage_probe")
 				b.ReportMetric(float64(stats.SecondaryKeyBytes)/float64(collectionBenchBackfill), "index_entry_bytes/doc")
+				benchmarkReportTreeDBDiskUsage(b, backend, collectionBenchBackfill)
 			})
 		})
 	}
