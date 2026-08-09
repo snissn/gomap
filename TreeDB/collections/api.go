@@ -22023,6 +22023,9 @@ func collectionIteratorAtCatalogRootWithWorkCap(snap *backenddb.Snapshot, catalo
 		if errors.Is(err, tree.ErrKeyNotFound) {
 			return nil, nil
 		}
+		if err == nil && it != nil && maxInspected > 0 {
+			return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCap([]bufferedRootRunIteratorSource{{iter: it}}, start, end, includeDeleted, false, false, maxInspected), nil
+		}
 		return it, err
 	}
 	rootIDs := catalog.rootStack(rootName)
@@ -22073,6 +22076,9 @@ func collectionReverseIteratorAtCatalogRootWithWorkCap(snap *backenddb.Snapshot,
 		it, err := snap.ReverseIteratorAtRootWithOptions(rootID, start, end, backenddb.IteratorOptions{IncludeTombstones: includeDeleted})
 		if errors.Is(err, tree.ErrKeyNotFound) {
 			return nil, nil
+		}
+		if err == nil && it != nil && maxInspected > 0 {
+			return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCap([]bufferedRootRunIteratorSource{{iter: it}}, start, end, includeDeleted, false, true, maxInspected), nil
 		}
 		return it, err
 	}
