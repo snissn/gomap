@@ -1279,6 +1279,29 @@ func mongoCommandOrdered(command wire.Document) (bool, bool, error) {
 // multi-write command is not a transaction: ordered commands stop on the first
 // write error, while unordered commands continue and retain original indices.
 func (s *Server) runMongoUpdateCommand(name string, col *collections.Collection, updates []mongoUpdateItem, ordered, orderedSet bool) (wire.Document, error) {
+	// Restore the command-local native batch only for BSON $set exact-id
+	// updates. This subset cannot hit a secondary-unique runtime conflict and
+	// has already completed all state-independent validation, so the atomic
+	// collection result preserves the command's per-item counts. All other
+	// shapes retain the indexed-error sequential path below.
+	if len(updates) > 1 && mongoUpdateItemsCanUseBatch(col, updates) {
+		budget := updates[0].budget
+		if err := budget.reserveTargets(len(updates)); err == nil {
+			results, batched, batchErr := runMongoUpdateBatchResults(col, updates)
+			if batchErr != nil {
+				return mongoUpdateWriteCommandError(batchErr)
+			}
+			if batched {
+				var matched, modified int32
+				for _, result := range results {
+					matched += boolToInt32(result.Matched)
+					modified += boolToInt32(result.Modified)
+				}
+				return marshalUpdateResponseWithWriteErrors(matched, modified, nil, nil)
+			}
+			budget.refundTargets(len(updates))
+		}
+	}
 	var matched, modified int32
 	upserted := make([]mongoUpdateUpserted, 0)
 	writeErrors := make([]mongoWriteError, 0)
