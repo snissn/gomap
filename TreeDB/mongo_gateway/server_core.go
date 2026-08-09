@@ -745,7 +745,7 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 		return nil, retainRequestBody, nil
 	}
 
-	if name == "find" {
+	if name == "find" && (!s.authenticationRequired() || s.authenticated(cursorOwner)) {
 		// The find path builds a raw OP_MSG response directly.
 		responseID := s.nextID()
 		response, err := s.findMsgResponseInto(ctx, dst, msg.Body, responseID, h.RequestID, cursorOwner)
