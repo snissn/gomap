@@ -2591,12 +2591,28 @@ func mongoUpdateSetFieldsTouchSecondaryUniqueIndexMeta(meta collections.Collecti
 	if update.setFields == nil {
 		return true
 	}
+	updatedTopLevel := make(map[string]struct{}, len(update.setFields))
+	for field := range update.setFields {
+		topLevel, _, _ := strings.Cut(field, ".")
+		updatedTopLevel[topLevel] = struct{}{}
+	}
 	for _, idx := range meta.Indexes {
 		if !idx.Unique {
 			continue
 		}
-		if _, ok := update.setFields[idx.Field]; ok {
-			return true
+		if len(idx.Components) == 0 {
+			// Legacy indexes keep their compact Field-only metadata.
+			topLevel, _, _ := strings.Cut(idx.Field, ".")
+			if _, ok := updatedTopLevel[topLevel]; ok {
+				return true
+			}
+			continue
+		}
+		for _, component := range idx.Components {
+			topLevel, _, _ := strings.Cut(component.Field, ".")
+			if _, ok := updatedTopLevel[topLevel]; ok {
+				return true
+			}
 		}
 	}
 	return false

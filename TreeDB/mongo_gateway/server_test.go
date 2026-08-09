@@ -2450,6 +2450,71 @@ func TestServerUpdateCoalescedSkipsCoalescerForSecondaryUniqueIndex(t *testing.T
 	}
 }
 
+func TestServerUpdateCoalescedSkipsBatchForNonLeadingCompoundUniqueComponent(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	defer func() { _ = server.Close() }()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	// A batch-eligible update would wait for this coalescing delay. Keep the
+	// command budget much smaller to prove the non-leading unique component is
+	// excluded before batch planning.
+	server.UpdateCoalescingMaxDelay = time.Second
+	server.UpdateCoalescingMaxBatch = 2
+	assertOK(t, serveCommand(t, server, 2272, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "email", Value: int32(1)}}}, {Key: "name", Value: "tenant_email_1"}, {Key: "unique", Value: true}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 2273, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "tenant", Value: "acme"}, {Key: "email", Value: "a@example.com"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	col, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	update, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "b@example.com"}}}}},
+	}))
+	if err != nil {
+		t.Fatalf("parse update: %v", err)
+	}
+	update.budget = newMongoWriteBudget(1)
+	deadline := time.Now().Add(500 * time.Millisecond)
+	update.budget.deadline = deadline
+	if mongoUpdateCanUseBatch(col, update) {
+		t.Fatal("non-leading compound unique component was admitted to native update batch")
+	}
+	matched, modified, err := server.runMongoUpdateCoalesced("app.users", col, update)
+	if err != nil {
+		t.Fatalf("runMongoUpdateCoalesced: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("matched=%v modified=%v want true,true", matched, modified)
+	}
+	if time.Now().After(deadline) {
+		t.Fatal("non-leading compound unique update waited for batch planning past its command deadline")
+	}
+	server.updateMu.Lock()
+	_, cached := server.updateCoalescers["app.users"]
+	server.updateMu.Unlock()
+	if cached {
+		t.Fatal("non-leading compound unique update created a coalescer")
+	}
+}
+
 func TestServerUpdateCoalescedSkipsCoalescerForUnrecognizedUpdateShape(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
