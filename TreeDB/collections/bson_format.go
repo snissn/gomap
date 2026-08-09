@@ -198,7 +198,10 @@ func bsonDescendantIndexValues(value bson.RawValue, path []string) ([]bson.RawVa
 		return nil, false, false, err
 	}
 	var out []bson.RawValue
-	fromArray := false
+	// Traversing an intermediate array is multikey even when no child matches
+	// the remaining dotted path. Reporting it as missing would silently encode
+	// a compound missing component instead of rejecting the unsupported shape.
+	fromArray := true
 	for _, item := range values {
 		doc, ok := item.DocumentOK()
 		if !ok {
@@ -210,7 +213,6 @@ func bsonDescendantIndexValues(value bson.RawValue, path []string) ([]bson.RawVa
 		}
 		if found {
 			out = append(out, itemValues...)
-			fromArray = true
 		}
 	}
 	return out, len(out) > 0, fromArray, nil

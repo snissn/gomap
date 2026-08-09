@@ -110,7 +110,6 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 		{ID: "update.unset", Category: "update", Feature: "$unset", Status: MongoCapabilitySupportedSubset},
 		{ID: "update.nested-set-unset-inc-and-bounded-array-modifiers-no-numeric-array-index-paths", Category: "update", Feature: "nested $set/$unset/$inc and bounded array modifiers (no numeric array-index paths)", Status: MongoCapabilitySupportedSubset},
 		{ID: "update.replaceone-by-exact-id", Category: "update", Feature: "ReplaceOne by exact _id", Status: MongoCapabilitySupportedSubset},
-		{ID: "index-gap.compound-index", Category: "index gap", Feature: "compound index", Status: MongoCapabilityRejected},
 		{ID: "index.bson-ordered-v2-without-treedbvaluetype", Category: "index", Feature: "BSON v2 index without treedbValueType", Status: MongoCapabilitySupportedSubset},
 		{ID: "read-command.aggregate-match-project-sort-skip-limit-count", Category: "read command", Feature: "aggregate match/project/sort/skip/limit/count", Status: MongoCapabilitySupportedSubset},
 		{ID: "command-gap.serverstatus", Category: "command gap", Feature: "serverStatus", Status: MongoCapabilityNotImplemented},
@@ -185,10 +184,9 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 			Label: "Scalar indexes",
 			CapabilityIDs: []string{
 				"metadata.createindexes-listindexes-and-dropindexes",
-				"index-gap.compound-index",
 				"index.bson-ordered-v2-without-treedbvaluetype",
 			},
-			Note: "BSON collections default ordinary single-field ascending indexes to BSON-ordered v2; explicit treedbValueType remains the legacy homogeneous path. Compound and descending indexes remain rejected.",
+			Note: "BSON collections support ordered BSON v2 indexes with one through four ascending or descending components; direct collection range scans do not imply planner selection. Explicit treedbValueType remains the legacy homogeneous single-field ascending path. Sparse, partial, TTL, collation, and hidden options reject before catalog mutation.",
 		},
 		{
 			ID:            "authentication-authorization",

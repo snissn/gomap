@@ -6001,6 +6001,14 @@ type createIndexDefinition struct {
 }
 
 func parseCreateIndexDefinition(doc wire.Document) (createIndexDefinition, error) {
+	// These options alter index membership, TTL behaviour, comparison, or
+	// visibility. Accepting then ignoring any of them would silently create a
+	// different index, so reject them before the catalog can be mutated.
+	for _, option := range []string{"sparse", "partialFilterExpression", "expireAfterSeconds", "collation", "hidden"} {
+		if !bson.Raw(doc).Lookup(option).IsZero() {
+			return createIndexDefinition{}, fmt.Errorf("Mongo gateway createIndexes does not support option %q", option)
+		}
+	}
 	keyDoc, err := requiredDocumentField(doc, "key")
 	if err != nil {
 		return createIndexDefinition{}, err

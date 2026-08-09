@@ -1355,6 +1355,30 @@ func TestServerUpdateBatchVectorMaintenanceIsCommitAmbiguous(t *testing.T) {
 	}
 }
 
+func TestServerCreateIndexesRejectsUnsupportedOptionsBeforeCatalogMutation(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	s.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	for _, option := range []bson.E{
+		{Key: "sparse", Value: true},
+		{Key: "partialFilterExpression", Value: bson.D{{Key: "score", Value: bson.D{{Key: "$gt", Value: 0}}}}},
+		{Key: "expireAfterSeconds", Value: int32(60)},
+		{Key: "collation", Value: bson.D{{Key: "locale", Value: "en"}}},
+		{Key: "hidden", Value: true},
+	} {
+		index := bson.D{{Key: "key", Value: bson.D{{Key: "score", Value: int32(1)}}}, {Key: "name", Value: "score_1"}, option}
+		assertCommandError(t, serveCommand(t, s, 2400, bson.D{{Key: "createIndexes", Value: "users"}, {Key: "indexes", Value: bson.A{index}}, {Key: "$db", Value: "app"}}), "BadValue")
+		if _, err := s.Collections.OpenCollection("app.users"); !errors.Is(err, collections.ErrCollectionNotFound) {
+			t.Fatalf("option %q mutated catalog, open err=%v", option.Key, err)
+		}
+	}
+}
+
 func TestServerUpdateBatchTemplateV1UpdatesDistinctIDs(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

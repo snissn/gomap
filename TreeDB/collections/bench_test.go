@@ -1266,6 +1266,96 @@ func BenchmarkCollectionBSONIndexV1V2Operations(b *testing.B) {
 	}
 }
 
+// BenchmarkCollectionBSONCompoundIndexComponents is the #4063 qualification
+// harness. It keeps the BSON document, database policy, and indexed field
+// cardinality fixed while varying only the ordered component count. The
+// storage subcase is a probe (not throughput); its reported secondary bytes
+// are the durable index-key amplification per inserted document.
+func BenchmarkCollectionBSONCompoundIndexComponents(b *testing.B) {
+	for _, componentCount := range []int{1, 2, 3, 4} {
+		componentCount := componentCount
+		b.Run(fmt.Sprintf("components_%d", componentCount), func(b *testing.B) {
+			b.Setenv("TREEDB_COLLECTION_DOCUMENT_FORMAT", "bson")
+			components := make([]collections.IndexComponent, componentCount)
+			for i := range components {
+				components[i] = collections.IndexComponent{Field: fmt.Sprintf("k%d", i), Direction: collections.IndexDirectionAscending}
+			}
+			index := collections.IndexDefinition{Name: "compound", Components: components, ValueType: collections.IndexValueBSONOrderedV2}
+			document := func(id string, i int) []byte {
+				fields := bson.D{{Key: "_id", Value: id}}
+				for j := 0; j < componentCount; j++ {
+					fields = append(fields, bson.E{Key: fmt.Sprintf("k%d", j), Value: fmt.Sprintf("v%03d", (i+j)%64)})
+				}
+				raw, err := bson.Marshal(fields)
+				if err != nil {
+					b.Fatal(err)
+				}
+				return raw
+			}
+			b.Run("build", func(b *testing.B) {
+				_, col := openBenchmarkCollection(b, "compound_build", index)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					id := fmt.Sprintf("%08d", i)
+					if _, err := col.Insert([]byte(id), document(id, i)); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+			b.Run("mutate", func(b *testing.B) {
+				_, col := openBenchmarkCollection(b, "compound_mutate", index)
+				id := []byte("00000000")
+				if _, err := col.Insert(id, document(string(id), 0)); err != nil {
+					b.Fatal(err)
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if _, err := col.Replace(id, document(string(id), i+1)); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+			b.Run("scan", func(b *testing.B) {
+				_, col := openBenchmarkCollection(b, "compound_scan", index)
+				for i := 0; i < 64; i++ {
+					id := fmt.Sprintf("%08d", i)
+					if _, err := col.Insert([]byte(id), document(id, i)); err != nil {
+						b.Fatal(err)
+					}
+				}
+				prefix := bson.Raw(document("00000000", 0)).Lookup("k0")
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if _, _, err := col.FindByCompoundIndexRange("compound", collections.CompoundIndexRangeOptions{Prefix: []bson.RawValue{prefix}, Limit: 64}); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+			b.Run("storage", func(b *testing.B) {
+				b.StopTimer()
+				_, col := openBenchmarkCollection(b, "compound_storage", index)
+				ids := make([][]byte, collectionBenchBackfill)
+				docs := make([][]byte, collectionBenchBackfill)
+				for i := 0; i < collectionBenchBackfill; i++ {
+					id := fmt.Sprintf("%08d", i)
+					ids[i] = []byte(id)
+					docs[i] = document(id, i)
+				}
+				if _, err := col.InsertBatch(ids, docs); err != nil {
+					b.Fatal(err)
+				}
+				stats := col.LastInsertStats()
+				b.ReportMetric(0, "ns/op")
+				b.ReportMetric(1, "storage_probe")
+				b.ReportMetric(float64(stats.SecondaryKeyBytes)/float64(collectionBenchBackfill), "index_entry_bytes/doc")
+			})
+		})
+	}
+}
+
 func BenchmarkCollectionInsertBatchWithSecondaryIndexes(b *testing.B) {
 	backend, collection := openBenchmarkCollection(b, "bench_insert_batch_secondary", secondaryIndexes()...)
 	targetBatchSize := benchmarkBatchSize(b)

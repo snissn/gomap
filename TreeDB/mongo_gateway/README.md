@@ -81,7 +81,7 @@ call concurrently.
 <!-- mongo-capability-summary:begin -->
 ## Executable capability summary
 
-Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:4a5d672697c2dcfde988c98c615a2d8eac05350932fd9e41d2746015c27b305a`
+Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:c9d36e52d33bce54f193868287188da93ade3d1546c63901802d18fd9b814384`
 
 | Surface | Status | Boundary |
 |---|---|---|
@@ -91,7 +91,7 @@ Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:4a5d672697c2dcfde9
 | Administrative diagnostics | not implemented | serverStatus, top, and dbStats are not implemented. |
 | Logical sessions | supported subset | Driver-interoperability metadata only; no transaction or causal-session semantics. |
 | Transport security | supported subset | Loopback plaintext remains available; non-loopback standalone listeners require TLS unless an explicit insecure override is selected. Password authentication refuses plaintext non-loopback listeners. TLS 1.2+ with bounded handshakes is supported. |
-| Scalar indexes | supported subset | BSON collections default ordinary single-field ascending indexes to BSON-ordered v2; explicit treedbValueType remains the legacy homogeneous path. Compound and descending indexes remain rejected. |
+| Scalar indexes | supported subset | BSON collections support ordered BSON v2 indexes with one through four ascending or descending components; direct collection range scans do not imply planner selection. Explicit treedbValueType remains the legacy homogeneous single-field ascending path. Sparse, partial, TTL, collation, and hidden options reject before catalog mutation. |
 | Authentication and authorization | supported subset | Standalone SCRAM-SHA-256 identities use versioned durable account incarnations plus read, readWrite, dbAdmin, userAdmin, and serverAdmin grants, spilling growing records to TreeDB's persistent ValueLog, with pre-execution command checks, filtered catalog visibility, incarnation-bound sessions and cursors, and last-admin safeguards. Drop/recreate revokes the prior incarnation while password rotation preserves it. Cluster/routed protected commands fail closed without authoritative resource binding; SCRAM-SHA-1 and external identity providers remain unavailable. |
 | Transactions and retryable writes | not implemented | Transaction markers reject and commitTransaction is unavailable. |
 | Replica set and sharding | not implemented | Standalone hello metadata does not advertise replica-set or sharded-server behavior. |

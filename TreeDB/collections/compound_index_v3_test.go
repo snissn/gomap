@@ -49,6 +49,9 @@ func TestCompoundBSONIndexMetadataAndMutationContract(t *testing.T) {
 	if _, err := col.InsertBatch([][]byte{[]byte("b")}, [][]byte{doc("b", "acme", 3)}); err != nil {
 		t.Fatalf("distinct compound key should insert: %v", err)
 	}
+	if _, err := col.FindByIndexValue("tenant_created_id", "acme"); err == nil {
+		t.Fatal("legacy single-field lookup silently accepted compound index")
+	}
 	if _, err := col.InsertBatch([][]byte{[]byte("c")}, [][]byte{doc("a", "acme", 3)}); !errors.Is(err, ErrUniqueIndexConflict) {
 		t.Fatalf("duplicate compound key error=%v want unique conflict", err)
 	}
@@ -79,6 +82,19 @@ func TestCompoundBSONIndexComponentsRejectArraysBeforeMutation(t *testing.T) {
 	}
 	if got, err := col.Get([]byte("bad")); err != nil || got != nil {
 		t.Fatalf("array component insert mutated primary collection: document=%q err=%v", got, err)
+	}
+	intermediateArray, err := bson.Marshal(bson.D{{Key: "_id", Value: "intermediate-array"}, {Key: "tenant", Value: "acme"}, {Key: "createdAt", Value: int32(1)}, {Key: "profile", Value: bson.A{bson.D{{Key: "other", Value: "value"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.CreateIndex(IndexDefinition{Name: "tenant_profile", Components: []IndexComponent{{Field: "tenant", Direction: 1}, {Field: "profile.name", Direction: 1}}, ValueType: IndexValueBSONOrderedV2}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.Insert([]byte("intermediate-array"), intermediateArray); err == nil {
+		t.Fatal("nonmatching intermediate array silently encoded a missing compound component")
+	}
+	if got, err := col.Get([]byte("intermediate-array")); err != nil || got != nil {
+		t.Fatalf("intermediate array insert mutated primary collection: document=%q err=%v", got, err)
 	}
 	oversized, err := bson.Marshal(bson.D{{Key: "_id", Value: "oversized"}, {Key: "tenant", Value: string(bytes.Repeat([]byte{'x'}, (1<<20)+1))}, {Key: "createdAt", Value: int32(1)}})
 	if err != nil {
@@ -238,6 +254,9 @@ func TestSingleDescendingBSONIndexMaintainsUniqueState(t *testing.T) {
 	}
 	if _, err := col.InsertBatch([][]byte{[]byte("b")}, [][]byte{doc("b")}); !errors.Is(err, ErrUniqueIndexConflict) {
 		t.Fatalf("descending duplicate error=%v want unique conflict", err)
+	}
+	if _, _, err := col.FindByIndexRange("created_desc", IndexRangeOptions{Lower: IndexRangeBound{Value: int32(3), Inclusive: true}, Upper: IndexRangeBound{Value: int32(3), Inclusive: true}}); err == nil {
+		t.Fatal("legacy range silently accepted descending BSON v2 index")
 	}
 }
 
@@ -422,9 +441,6 @@ func TestCompoundIndexRangeCapsInspectedTombstoneEntries(t *testing.T) {
 	if deleted, err := col.DeleteBatch(ids); err != nil || deleted != rows {
 		t.Fatalf("DeleteBatch deleted=%d err=%v want %d", deleted, err, rows)
 	}
-	if err := col.Flush(); err != nil {
-		t.Fatal(err)
-	}
 	prefix := []bson.RawValue{{Type: bson.TypeString, Value: bsoncoreAppendString("acme")}}
 	for _, desc := range []bool{false, true} {
 		got, truncated, err := col.FindByCompoundIndexRange("tenant_created", CompoundIndexRangeOptions{Prefix: prefix, Limit: 1, Desc: desc})
@@ -461,6 +477,18 @@ func TestCompoundIndexPointerCheckpointReopenAndRecreate(t *testing.T) {
 		if _, err := col.Insert([]byte(row.id), doc); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	// Exercise the persistent ValueLog lifecycle against compound-secondary
+	// pointers before the reopen assertion below. The index values and BSON
+	// documents are forced through pointers by the options above.
+	if _, err := db.ValueLogRewriteOnline(context.Background(), backenddb.ValueLogRewriteOnlineOptions{BatchSize: 16, SyncEachBatch: true}); err != nil {
+		t.Fatalf("compound ValueLogRewriteOnline: %v", err)
+	}
+	if _, err := db.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{}); err != nil {
+		t.Fatalf("compound ValueLogGC: %v", err)
 	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatal(err)

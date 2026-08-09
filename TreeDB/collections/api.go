@@ -20350,8 +20350,14 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 	if empty {
 		return nil, false, nil
 	}
-	bufferedTable, err := bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
+	workCap := compoundIndexRangeInspectedCap(opts.Limit)
+	bufferedTable, err := bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end, workCap)
 	if err != nil {
+		if errors.Is(err, errCollectionIndexScanWorkCap) {
+			// Do not materialize an unbounded live-buffer interval merely to
+			// discover tombstones. Returning no partial ordering is fail-closed.
+			return nil, true, nil
+		}
 		return nil, false, err
 	}
 	if bufferedTable != nil {
@@ -20367,7 +20373,6 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 		defer func() { _ = bufferedIt.Close() }()
 	}
 	var persistedIt iterator.UnsafeIterator
-	workCap := compoundIndexRangeInspectedCap(opts.Limit)
 	if opts.Desc {
 		persistedIt, err = collectionReverseIteratorAtCatalogRootWithWorkCap(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true, workCap)
 	} else {
@@ -20518,6 +20523,9 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 	if !ok {
 		return false, false, nil
 	}
+	if idx.ValueType == IndexValueBSONOrderedV2 && (len(idx.Components) > 1 || (len(idx.Components) == 1 && idx.Components[0].Direction == IndexDirectionDescending)) {
+		return false, false, errors.New("collections: compound or descending BSON v2 indexes require FindByCompoundIndexRange")
+	}
 	start, end, empty, err := indexRangeScanBounds(idx.ValueType, opts)
 	if err != nil {
 		return false, false, err
@@ -20536,7 +20544,7 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 		// that satisfy opts.Limit and still need to hide persisted index rows.
 		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, false, exactPrefix, 0)
 	} else {
-		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
+		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end, 0)
 	}
 	if err != nil {
 		return false, false, err
@@ -20707,7 +20715,7 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 		// satisfy opts.Limit and still need to hide persisted index rows.
 		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, false, exactPrefix, 0)
 	} else {
-		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
+		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end, 0)
 	}
 	if err != nil {
 		return false, true, err
@@ -20826,7 +20834,7 @@ func bufferedIndexPrefixTableLocked(domain *collectionWriteDomain, collectionNam
 // and may be reset by a concurrent flush as soon as domain.mu is released, so
 // callers must materialize an owned table before merging with the persisted
 // snapshot iterator.
-func bufferedIndexRangeTableLocked(domain *collectionWriteDomain, collectionName, indexName string, start, end []byte) (memtable.Table, error) {
+func bufferedIndexRangeTableLocked(domain *collectionWriteDomain, collectionName, indexName string, start, end []byte, maxEntries int) (memtable.Table, error) {
 	if domain == nil {
 		return nil, nil
 	}
@@ -20843,7 +20851,13 @@ func bufferedIndexRangeTableLocked(domain *collectionWriteDomain, collectionName
 	table := newCollectionRunTable(0)
 	it := newBufferedRootRunsIteratorWithDeleted(runs, start, end, true)
 	defer func() { _ = it.Close() }()
+	inspected := 0
 	for it.Valid() {
+		if maxEntries > 0 && inspected >= maxEntries {
+			resetCollectionRunTable(table)
+			return nil, errCollectionIndexScanWorkCap
+		}
+		inspected++
 		key := bytes.Clone(it.UnsafeKey())
 		if it.IsDeleted() {
 			table.DeleteSteal(key)
