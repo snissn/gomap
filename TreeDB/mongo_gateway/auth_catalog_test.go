@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -631,6 +632,52 @@ func TestReleaseOwnerClearsAuthenticationAndCursorsBeforeOwnerReuse(t *testing.T
 	}
 }
 
+func TestServeOneWithOwnerRejectsZeroBeforeAuthenticationOrCursorDispatch(t *testing.T) {
+	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	catalog, err := NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.UpsertPassword("admin", "alice", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	for _, buffered := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unbuffered", true: "buffered"}[buffered], func(t *testing.T) {
+			server := NewServer()
+			server.AuthenticationEnabled, server.AuthCatalog = true, catalog
+			for _, command := range []bson.D{
+				{{Key: "saslStart", Value: 1}, {Key: "mechanism", Value: "SCRAM-SHA-256"}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte("n,,n=alice,r=zero-owner-nonce")}}, {Key: "$db", Value: "admin"}},
+				{{Key: "find", Value: "items"}, {Key: "batchSize", Value: 1}, {Key: "$db", Value: "app"}},
+			} {
+				err, readBytes := serveOwnedCommandError(t, server, 0, buffered, command)
+				if !errors.Is(err, errInvalidCursorOwner) {
+					t.Fatalf("owner-zero command error=%v want %v", err, errInvalidCursorOwner)
+				}
+				if readBytes != 0 {
+					t.Fatalf("owner-zero command consumed %d bytes before rejection", readBytes)
+				}
+			}
+			if _, ok := server.authConnections.Load(0); ok || server.authenticated(0) {
+				t.Fatal("owner zero retained authentication state")
+			}
+			server.cursorMu.Lock()
+			cursorCount := len(server.cursors)
+			server.cursorMu.Unlock()
+			if cursorCount != 0 {
+				t.Fatalf("owner zero retained %d cursor(s)", cursorCount)
+			}
+			server.ReleaseOwner(0)
+			if err, _ := serveOwnedCommandError(t, server, 0, buffered, bson.D{{Key: "find", Value: "items"}, {Key: "$db", Value: "app"}}); !errors.Is(err, errInvalidCursorOwner) {
+				t.Fatalf("reused owner zero error=%v want %v", err, errInvalidCursorOwner)
+			}
+		})
+	}
+}
+
 func authenticateOwner(t *testing.T, server *Server, owner int64, password []byte) {
 	t.Helper()
 	clientFirstBare := "n=alice,r=owner-reuse-nonce"
@@ -702,6 +749,21 @@ func serveOwnedCommand(t *testing.T, server *Server, owner int64, buffered bool,
 		t.Fatal(err)
 	}
 	return response
+}
+
+func serveOwnedCommandError(t *testing.T, server *Server, owner int64, buffered bool, command bson.D) (error, int) {
+	t.Helper()
+	raw := mustDocument(t, command)
+	request, err := wire.AppendMsgMessage(nil, 932, 0, 0, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := bytes.NewReader(request)
+	rw := &readWriter{r: reader}
+	if buffered {
+		return server.ServeOneWithOwnerBuffered(rw, owner, &ServeBuffers{}), len(request) - reader.Len()
+	}
+	return server.ServeOneWithOwner(rw, owner), len(request) - reader.Len()
 }
 
 // Exercise the OP_MSG fast find path, cursor commands, write admission, and

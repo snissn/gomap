@@ -46,7 +46,10 @@ const (
 	maxCoalescedWireResponses      = 64
 )
 
-var errServerClosed = errors.New("mongo gateway server is closed")
+var (
+	errServerClosed       = errors.New("mongo gateway server is closed")
+	errInvalidCursorOwner = errors.New("mongo gateway cursor owner must be nonzero")
+)
 
 type ClusterCatalogVersionProvider func(context.Context) (uint64, error)
 
@@ -453,9 +456,13 @@ func (s *Server) ServeOne(rw io.ReadWriter) error {
 }
 
 // ServeOneWithOwner serves one wire message for a caller-owned logical
-// connection. The caller must call ReleaseOwner when that connection closes
-// and before reusing cursorOwner for another connection.
+// connection. cursorOwner must be nonzero. The caller must call ReleaseOwner
+// when that connection closes and before reusing cursorOwner for another
+// connection.
 func (s *Server) ServeOneWithOwner(rw io.ReadWriter, cursorOwner int64) error {
+	if cursorOwner == 0 {
+		return errInvalidCursorOwner
+	}
 	_, _, err := s.serveOneWithOwner(context.Background(), rw, cursorOwner, nil, nil)
 	return err
 }
@@ -474,7 +481,11 @@ type ServeBuffers struct {
 // reusable buffers. It is intended for in-process dispatchers and benchmarks
 // that need the same buffer reuse behavior as ServeConn. The caller must call
 // ReleaseOwner when the logical connection closes or before reusing cursorOwner.
+// cursorOwner must be nonzero.
 func (s *Server) ServeOneWithOwnerBuffered(rw io.ReadWriter, cursorOwner int64, buffers *ServeBuffers) error {
+	if cursorOwner == 0 {
+		return errInvalidCursorOwner
+	}
 	if buffers == nil {
 		return s.ServeOneWithOwner(rw, cursorOwner)
 	}

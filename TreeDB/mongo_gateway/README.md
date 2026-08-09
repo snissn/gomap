@@ -74,8 +74,9 @@ transport check only, not MongoDB authentication or authorization.
 that dispatch a long-lived logical connection with `ServeOneWithOwner` or
 `ServeOneWithOwnerBuffered` must call `ReleaseOwner(owner)` when it closes and
 before reusing that owner value; this removes both retained cursors and the
-connection-bound authenticated identity. `ReleaseOwner` is idempotent and safe
-to call concurrently.
+connection-bound authenticated identity. Owner values must be nonzero;
+`ReleaseOwner(0)` is a harmless no-op. `ReleaseOwner` is idempotent and safe to
+call concurrently.
 
 <!-- mongo-capability-summary:begin -->
 ## Executable capability summary
