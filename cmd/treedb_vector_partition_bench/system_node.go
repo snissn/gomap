@@ -589,9 +589,7 @@ func vectorPartitionSystemProcessRuntimeStatsV1() nativewire.VectorPartitionProc
 		SampleUnixNano: uint64(time.Now().UnixNano()), HeapAllocBytes: memory.HeapAlloc, HeapObjects: memory.HeapObjects,
 		TotalAllocBytes: memory.TotalAlloc, Mallocs: memory.Mallocs, Frees: memory.Frees, NumGC: uint64(memory.NumGC), PauseTotalNanos: memory.PauseTotalNs, Goroutines: uint64(runtime.NumGoroutine()),
 	}
-	if raw, err := os.ReadFile("/proc/self/schedstat"); err == nil {
-		_, _ = fmt.Sscan(string(raw), &stats.CPUTimeNanos, &stats.RunQueueDelayNanos, &stats.Timeslices)
-	}
+	stats.CPUTimeNanos, stats.RunQueueDelayNanos, stats.Timeslices, stats.VoluntaryContextSwitches, stats.NonvoluntaryContextSwitches = vectorPartitionSystemKernelRuntimeStatsV1()
 	if raw, err := os.ReadFile("/proc/self/status"); err == nil {
 		for _, line := range strings.Split(string(raw), "\n") {
 			fields := strings.Fields(line)
@@ -607,10 +605,6 @@ func vectorPartitionSystemProcessRuntimeStatsV1() nativewire.VectorPartitionProc
 				stats.RSSBytes = value * 1024
 			case "VmHWM:":
 				stats.PeakRSSBytes = value * 1024
-			case "voluntary_ctxt_switches:":
-				stats.VoluntaryContextSwitches = value
-			case "nonvoluntary_ctxt_switches:":
-				stats.NonvoluntaryContextSwitches = value
 			}
 		}
 	}
