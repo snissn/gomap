@@ -158,7 +158,7 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 				"read-command.distinct-top-level-field-with-filter",
 				"read-command.explain-bounded-read-plans",
 			},
-			Note: "Bounded standalone subsets only. Explain reports stable primary, secondary, and bounded-scan vocabulary for find, count, distinct, and aggregate pipelines whose planner prefix is match/skip/limit; later match or sort stages reject rather than being misreported as find-plan work. Writes, routed reads, and unsupported verbosity reject.",
+			Note: "Bounded standalone subsets only. Explain reports stable primary, secondary, bounded-scan, and adaptive_candidate_selection vocabulary for find, count, distinct, and aggregate pipelines whose planner prefix is match/skip/limit; later match or sort stages reject rather than being misreported as find-plan work. Writes, routed reads, and unsupported verbosity reject.",
 		},
 		{
 			ID:    "administrative-diagnostics",

@@ -418,6 +418,9 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 }
 
 func explainPlannerSelection(col *collections.Collection, plan findPlan) findPlannerSelection {
+	if len(plan.orBranches) != 0 {
+		return findPlannerSelection{stage: "bounded_scan"}
+	}
 	candidates := 0
 	if _, ok := primaryCandidatePredicate(plan.predicates); ok {
 		candidates++

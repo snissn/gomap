@@ -301,6 +301,9 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, materialize
 			return nil, err
 		}
 		if truncated {
+			for range records {
+				plan.recordCandidate()
+			}
 			return nil, fmt.Errorf("Mongo gateway find requires a bounded scan and exceeded %d documents", maxDocuments)
 		}
 		out := make([]wire.Document, 0, len(records))
@@ -354,6 +357,9 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, materialize
 		return nil, err
 	}
 	if truncated {
+		for range records {
+			plan.recordCandidate()
+		}
 		return nil, fmt.Errorf("Mongo gateway find requires a bounded scan and exceeded %d documents", maxDocuments)
 	}
 	plan.recordWinner("bounded_scan", "")
