@@ -78,6 +78,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	result := compatdiff.Run(ctx, mongogateway.MongoGatewayCapabilityIdentity(), fixtures, tree, reference)
 	result.ReferenceImage = *referenceImage
 	result.ReferenceServerIdentity = referenceIdentity
+	// target.open deliberately binds the TreeDB server to 127.0.0.1, so the
+	// differential artifact makes its plaintext-loopback transport explicit.
+	result.TreeDBTransportMode = "plaintext-loopback"
 	if err := writeArtifacts(*outDir, result); err != nil {
 		fmt.Fprintln(stderr, "write artifacts:", err)
 		return 2
@@ -498,7 +501,7 @@ func writeArtifacts(out string, result compatdiff.Result) error {
 		return err
 	}
 	var report strings.Builder
-	fmt.Fprintf(&report, "# TreeDB Mongo gateway differential result\n\nStatus: **%s**  \nCapability identity: `%s`  \nReference image: `%s`  \nReference server identity: `%s`  \nRuntime: %s\n\nError messages are recorded for diagnosis but equality deliberately compares error code and labels; BSON response/state evidence preserves type and field order.\n\n| Fixture | Capability | Expectation | Status | Reason |\n|---|---|---|---|---|\n", result.Status, result.CapabilityIdentity, result.ReferenceImage, result.ReferenceServerIdentity, result.Duration)
+	fmt.Fprintf(&report, "# TreeDB Mongo gateway differential result\n\nStatus: **%s**  \nCapability identity: `%s`  \nTreeDB transport: `%s`  \nReference image: `%s`  \nReference server identity: `%s`  \nRuntime: %s\n\nError messages are recorded for diagnosis but equality deliberately compares error code and labels; BSON response/state evidence preserves type and field order.\n\n| Fixture | Capability | Expectation | Status | Reason |\n|---|---|---|---|---|\n", result.Status, result.CapabilityIdentity, result.TreeDBTransportMode, result.ReferenceImage, result.ReferenceServerIdentity, result.Duration)
 	for _, row := range result.Fixtures {
 		fmt.Fprintf(&report, "| %s | %s | %s | %s | %s |\n", row.ID, row.CapabilityID, row.Expectation, row.Status, strings.ReplaceAll(row.Reason, "|", "\\|"))
 	}

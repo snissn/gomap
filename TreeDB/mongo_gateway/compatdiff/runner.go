@@ -137,15 +137,19 @@ type NormalizedObservation struct {
 }
 
 type Result struct {
-	Schema                  string          `json:"schema"`
-	Version                 int             `json:"version"`
-	CapabilityIdentity      string          `json:"capability_identity"`
-	ReferenceImage          string          `json:"reference_image"`
-	ReferenceServerIdentity string          `json:"reference_server_identity,omitempty"`
-	StartedAt               time.Time       `json:"started_at"`
-	Duration                time.Duration   `json:"duration_ns"`
-	Status                  string          `json:"status"`
-	Fixtures                []FixtureResult `json:"fixtures"`
+	Schema                  string `json:"schema"`
+	Version                 int    `json:"version"`
+	CapabilityIdentity      string `json:"capability_identity"`
+	ReferenceImage          string `json:"reference_image"`
+	ReferenceServerIdentity string `json:"reference_server_identity,omitempty"`
+	// TreeDBTransportMode records the effective listener mode of the TreeDB
+	// target for this artifact. It is environment evidence, not a capability
+	// claim, so callers set it when they own the listener lifecycle.
+	TreeDBTransportMode string          `json:"treedb_transport_mode,omitempty"`
+	StartedAt           time.Time       `json:"started_at"`
+	Duration            time.Duration   `json:"duration_ns"`
+	Status              string          `json:"status"`
+	Fixtures            []FixtureResult `json:"fixtures"`
 }
 
 func Run(ctx context.Context, capabilityIdentity string, fixtures []Fixture, tree, reference Executor) Result {

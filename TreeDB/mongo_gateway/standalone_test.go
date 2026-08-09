@@ -1085,3 +1085,14 @@ func TestStandaloneServerServeNilReturnsClosed(t *testing.T) {
 		t.Fatalf("nil standalone Serve err=%v want errServerClosed", err)
 	}
 }
+
+func TestStandaloneServerServeNilReturnsValidationError(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = standalone.Close() }()
+	if err := standalone.Serve(context.Background(), nil); err == nil {
+		t.Fatal("Serve(nil) succeeded")
+	}
+}

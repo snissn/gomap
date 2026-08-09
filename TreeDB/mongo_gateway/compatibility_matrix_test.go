@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"testing"
 
@@ -85,6 +86,18 @@ func validateMongoCompatibilityProbes(manifest MongoGatewayCapabilityManifest, p
 
 func mongoCompatibilityMatrixProbes() []mongoCompatibilityMatrixProbe {
 	return []mongoCompatibilityMatrixProbe{
+		{
+			capabilityID:   "security.transport-tls-and-safe-remote-listen",
+			expectedStatus: MongoCapabilitySupportedSubset,
+			probe: func(t *testing.T, _ *Server) {
+				if !isLoopbackListener(&net.TCPAddr{IP: net.ParseIP("127.0.0.1")}) {
+					t.Fatal("loopback listener classification failed")
+				}
+				if isLoopbackListener(&net.TCPAddr{IP: net.IPv4zero}) {
+					t.Fatal("wildcard listener classified as loopback")
+				}
+			},
+		},
 		{
 			capabilityID:   "wire.hello-command",
 			expectedStatus: MongoCapabilitySupported,

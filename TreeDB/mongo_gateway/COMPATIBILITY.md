@@ -93,6 +93,7 @@ an extra probe outside the manifest.
 | update subset | findAndModify exact _id no-match | supported subset | `update-subset.findandmodify-exact-id-no-match` |
 | transaction gap | transactions and retryable writes | not implemented | `transaction-gap.transactions-and-retryable-writes` |
 | security gap | authentication and authorization | not implemented | `security-gap.authentication-and-authorization` |
+| security | TLS transport and safe remote listen (#4057) | supported subset | `security.transport-tls-and-safe-remote-listen` |
 | cluster gap | replica-set and sharding advertisement | not implemented | `cluster-gap.replica-set-and-sharding-advertisement` |
 <!-- mongo-compatibility-matrix:end -->
 
