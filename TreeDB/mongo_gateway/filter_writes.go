@@ -277,6 +277,9 @@ func (s *Server) deleteMongoFilterMany(col *collections.Collection, plan findPla
 		return 0, fmt.Errorf("Mongo gateway multi delete requires a bounded scan and exceeded %d documents", s.maxFindScanDocuments())
 	}
 	var deleted int32
+	if s.filterWriteSelectedHook != nil && len(keys) != 0 {
+		s.filterWriteSelectedHook()
+	}
 	for _, key := range keys {
 		if err := budget.checkDeadline(); err != nil {
 			return deleted, err

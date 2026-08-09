@@ -74,6 +74,13 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 	if len(documents) > defaultMaxWriteBatchSize {
 		return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("Mongo gateway insert exceeds maxWriteBatchSize %d", defaultMaxWriteBatchSize))
 	}
+	budget, err := s.newMongoWriteBudgetForCommand(ctx, command)
+	if err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	if err := budget.ensureMinimumResponse(); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
 
 	var col *collections.Collection
 	format := s.DefaultCollectionOptions.DocumentFormat
@@ -85,10 +92,6 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 	}
 	ids, stored, err := prepareInsertDocuments(documents, format)
 	if err != nil {
-		return commandError(commandCodeBadValue, "BadValue", err.Error())
-	}
-	budget := s.newMongoWriteBudget()
-	if err := budget.ensureMinimumResponse(); err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	// A BSON multi-document insert takes the native atomic batch granule.  Its
@@ -1020,7 +1023,10 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 	// mutation.  This is deliberately stricter than the legacy streaming parser:
 	// malformed later specifications never leave a partial command behind.
 	parsed := make([]mongoUpdateItem, len(updates))
-	budget := s.newMongoWriteBudget()
+	budget, err := s.newMongoWriteBudgetForCommand(ctx, command)
+	if err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
 	for i, update := range updates {
 		item, parseErr := parseMongoUpdateItem(i, update)
 		if parseErr != nil {
@@ -1137,6 +1143,30 @@ func (s *Server) newMongoWriteBudget() *mongoWriteBudget {
 		budget.responseBytesRemaining = 0
 	}
 	return budget
+}
+
+// newMongoWriteBudgetForCommand applies the gateway ceiling together with a
+// valid client maxTimeMS and any caller context deadline.  Atomic collection
+// calls remain non-interruptible granules, but every selector and mutation
+// boundary observes this shared deadline before it enters the granule.
+func (s *Server) newMongoWriteBudgetForCommand(ctx context.Context, command wire.Document) (*mongoWriteBudget, error) {
+	budget := s.newMongoWriteBudget()
+	maxTimeMS, present, err := optionalPositiveIntFieldWithPresence(command, "maxTimeMS")
+	if err != nil {
+		return nil, err
+	}
+	if present {
+		deadline := time.Now().Add(time.Duration(maxTimeMS) * time.Millisecond)
+		if deadline.Before(budget.deadline) {
+			budget.deadline = deadline
+		}
+	}
+	if ctx != nil {
+		if deadline, ok := ctx.Deadline(); ok && deadline.Before(budget.deadline) {
+			budget.deadline = deadline
+		}
+	}
+	return budget, nil
 }
 
 func (s *Server) maxMongoWriteTargets() int {
@@ -2510,7 +2540,10 @@ func (s *Server) deleteResponse(ctx context.Context, command wire.Document, sequ
 	// OP_MSG MaxMessageLength bounds BSON bytes before dispatch; this cap bounds
 	// per-spec result/error bookkeeping independently of command byte size.
 	parsed := make([]mongoDeleteItem, len(deletes))
-	budget := s.newMongoWriteBudget()
+	budget, err := s.newMongoWriteBudgetForCommand(ctx, command)
+	if err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
 	for i, deleteItem := range deletes {
 		item, parseErr := parseMongoDeleteItem(i, deleteItem)
 		if parseErr != nil {

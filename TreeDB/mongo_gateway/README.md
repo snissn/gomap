@@ -71,11 +71,11 @@ transport check only, not MongoDB authentication or authorization.
 <!-- mongo-capability-summary:begin -->
 ## Executable capability summary
 
-Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:d7fe73cc8e3c42d1cd7d0dbbd6350a1edcaf5e7deea1c5a92726f14dc8ead4ac`
+Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:463305a520ae8bab1c89efdcbeeae7ed56ebcee0fd961f7594494abac29c1301`
 
 | Surface | Status | Boundary |
 |---|---|---|
-| Standalone CRUD | supported subset | Explicit-ID CRUD plus bounded multi update/delete and ordered or unordered insert/update/delete batches; per-document atomicity only, never a transaction. |
+| Standalone CRUD | supported subset | Explicit-ID CRUD plus bounded multi update/delete and ordered or unordered insert/update/delete batches; a positive maxTimeMS shortens the shared five-second command deadline; per-document atomicity only, never a transaction. |
 | Standalone write concern | supported subset | Absent/default and w:1 use the selected profile's ordinary acknowledgement boundary; j:true closes a real command-WAL or checkpoint sync boundary. Unacknowledged, replica, and interruptible-timeout semantics reject before mutation. |
 | Aggregation, count, and distinct | supported subset | Bounded standalone subsets only; unsupported stages, dotted distinct keys, and maxTimeMS reject. |
 | Administrative diagnostics | not implemented | serverStatus, top, and dbStats are not implemented. |

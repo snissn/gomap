@@ -1,6 +1,7 @@
 package mongogateway
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -72,6 +73,84 @@ func TestMongoWriteBudgetReservesBoundedResponseEnvelope(t *testing.T) {
 	s.MaxMessageLength = mongoWriteResponseMinimumBytes - 1
 	if err := s.newMongoWriteBudget().ensureMinimumResponse(); err == nil {
 		t.Fatal("too-small response limit accepted mutation-capable command")
+	}
+}
+
+func TestMongoMultiWriteMaxTimeMSBoundsCommandDeadline(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "u1"}, {Key: "active", Value: true}},
+		bson.D{{Key: "_id", Value: "u2"}, {Key: "active", Value: true}},
+	}}, {Key: "$db", Value: "app"}}))
+	// The hook runs after natural-order selection and before the checked atomic
+	// mutation boundary. A short accepted maxTimeMS must become an indexed item
+	// failure rather than silently using the gateway's five-second ceiling.
+	s.filterWriteSelectedHook = func() { time.Sleep(10 * time.Millisecond) }
+	update := serveCommand(t, s, 2, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{
+		{Key: "q", Value: bson.D{{Key: "active", Value: true}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "seen", Value: true}}}}},
+		{Key: "multi", Value: true},
+	}}}, {Key: "maxTimeMS", Value: int32(1)}, {Key: "$db", Value: "app"}})
+	assertOK(t, update)
+	assertInt32(t, update, "n", 0)
+	assertInt32(t, update, "nModified", 0)
+	assertIndexedWriteError(t, update, 0)
+	deleteResponse := serveCommand(t, s, 3, bson.D{{Key: "delete", Value: "users"}, {Key: "deletes", Value: bson.A{bson.D{
+		{Key: "q", Value: bson.D{{Key: "active", Value: true}}},
+		{Key: "limit", Value: int32(0)},
+	}}}, {Key: "maxTimeMS", Value: int32(1)}, {Key: "$db", Value: "app"}})
+	s.filterWriteSelectedHook = nil
+	assertOK(t, deleteResponse)
+	assertInt32(t, deleteResponse, "n", 0)
+	assertIndexedWriteError(t, deleteResponse, 0)
+	col, err := s.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open users: %v", err)
+	}
+	for _, id := range []string{"u1", "u2"} {
+		key, err := encodePrimaryKey(bson.RawValue{Type: bson.TypeString, Value: bsoncore.AppendString(nil, id)})
+		if err != nil {
+			t.Fatalf("encode %s: %v", id, err)
+		}
+		stored, err := col.Get(key)
+		if err != nil || stored == nil {
+			t.Fatalf("maxTimeMS mutation changed/deleted %s: stored=%v err=%v", id, stored, err)
+		}
+	}
+	start := time.Now()
+	defaultBudget, err := s.newMongoWriteBudgetForCommand(context.Background(), mustDocument(t, bson.D{{Key: "update", Value: "users"}}))
+	if err != nil {
+		t.Fatalf("default deadline: %v", err)
+	}
+	if remaining := defaultBudget.deadline.Sub(start); remaining < 4*time.Second || remaining > mongoWriteCommandMaxDuration+time.Second {
+		t.Fatalf("default deadline remaining=%s want five-second ceiling", remaining)
+	}
+	shortBudget, err := s.newMongoWriteBudgetForCommand(context.Background(), mustDocument(t, bson.D{{Key: "update", Value: "users"}, {Key: "maxTimeMS", Value: int32(10)}}))
+	if err != nil {
+		t.Fatalf("short maxTimeMS deadline: %v", err)
+	}
+	if remaining := time.Until(shortBudget.deadline); remaining <= 0 || remaining > 200*time.Millisecond {
+		t.Fatalf("short maxTimeMS deadline remaining=%s want <=200ms", remaining)
+	}
+	longBudget, err := s.newMongoWriteBudgetForCommand(context.Background(), mustDocument(t, bson.D{{Key: "update", Value: "users"}, {Key: "maxTimeMS", Value: int64(10_000)}}))
+	if err != nil {
+		t.Fatalf("long maxTimeMS deadline: %v", err)
+	}
+	if remaining := time.Until(longBudget.deadline); remaining < 4*time.Second || remaining > mongoWriteCommandMaxDuration+time.Second {
+		t.Fatalf("long maxTimeMS deadline remaining=%s want five-second ceiling", remaining)
+	}
+	for _, value := range []any{int32(0), int32(-1), "1", 1.5} {
+		response := serveCommand(t, s, 10, bson.D{{Key: "update", Value: "missing"}, {Key: "updates", Value: bson.A{}}, {Key: "maxTimeMS", Value: value}, {Key: "$db", Value: "app"}})
+		assertCommandError(t, response, "BadValue")
+		if _, err := s.Collections.OpenCollection("app.missing"); !errors.Is(err, collections.ErrCollectionNotFound) {
+			t.Fatalf("invalid maxTimeMS=%v opened missing collection: %v", value, err)
+		}
 	}
 }
 
