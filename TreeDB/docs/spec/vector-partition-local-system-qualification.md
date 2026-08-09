@@ -1,9 +1,10 @@
 # Vector-partition local-system qualification
 
-Status: pre-alpha M0 contract plus a bounded M2 TreeDB topology-tax baseline
-at head `95c60cbef0b0cb824a74a29e9304784e76745d9d`. The full five-row frozen
-plan remains `planned_no_measurement`; the M2 evidence and scoped claims are
-retained under
+Status: pre-alpha qualification complete at head
+`ab674362838365e68297a49816872012d273039f`. The five-row, two-corpus,
+three-repetition result and compact report are retained under
+`docs/evidence/vector-partition-local-system-qualification-4019/m3-ab674362`.
+The earlier bounded M2 TreeDB-only baseline remains under
 `docs/evidence/vector-partition-local-system-qualification-4019/m2-95c60cbe`.
 
 ## Authoritative inputs
