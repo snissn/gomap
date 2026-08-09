@@ -678,9 +678,7 @@ func commandAuthorizationTarget(name string, command wire.Document) (authorizati
 		if err != nil {
 			return target, err
 		}
-		switch innerName {
-		case "find", "aggregate", "count", "distinct":
-		default:
+		if !supportedExplainReadCommand(innerName) {
 			return target, fmt.Errorf("Mongo gateway explain supports bounded standalone read commands only")
 		}
 		if bson.Raw(inner).Lookup("$db").IsZero() {

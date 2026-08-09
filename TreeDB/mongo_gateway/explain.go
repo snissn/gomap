@@ -94,6 +94,14 @@ func (s *Server) explainResponse(ctx context.Context, command wire.Document, cur
 	}
 }
 
+func supportedExplainReadCommand(name string) bool {
+	switch name {
+	case "find", "count", "distinct", "aggregate":
+		return true
+	}
+	return false
+}
+
 func explainVerbosity(command wire.Document) (string, error) {
 	value, present, err := optionalStringFieldWithPresence(command, "verbosity")
 	if err != nil {
