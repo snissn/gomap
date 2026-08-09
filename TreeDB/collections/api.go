@@ -20556,6 +20556,9 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 	if !ok {
 		return false, false, nil
 	}
+	if orderedBSONIndexRequiresCompoundRangeAPI(idx) {
+		return false, false, errors.New("collections: compound or descending BSON v2 indexes require FindByCompoundIndexRange")
+	}
 	start, end, empty, err := indexRangeScanBounds(idx.ValueType, opts)
 	if err != nil {
 		return false, false, err
@@ -20683,6 +20686,15 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 	})
 }
 
+// orderedBSONIndexRequiresCompoundRangeAPI reports whether the ordered BSON v2
+// definition needs direction-aware component bounds. The legacy scalar range
+// APIs intentionally do not provide those bounds; callers must use
+// FindByCompoundIndexRange instead.
+func orderedBSONIndexRequiresCompoundRangeAPI(idx IndexDefinition) bool {
+	return idx.ValueType == IndexValueBSONOrderedV2 &&
+		(len(idx.Components) > 1 || (len(idx.Components) == 1 && idx.Components[0].Direction == IndexDirectionDescending))
+}
+
 func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn func(id []byte) (bool, error)) (bool, bool, error) {
 	if c == nil {
 		return false, false, errCollectionNil
@@ -20726,7 +20738,7 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 	if !ok {
 		return false, false, nil
 	}
-	if idx.ValueType == IndexValueBSONOrderedV2 && (len(idx.Components) > 1 || (len(idx.Components) == 1 && idx.Components[0].Direction == IndexDirectionDescending)) {
+	if orderedBSONIndexRequiresCompoundRangeAPI(idx) {
 		return false, false, errors.New("collections: compound or descending BSON v2 indexes require FindByCompoundIndexRange")
 	}
 	start, end, empty, err := indexRangeScanBounds(idx.ValueType, opts)

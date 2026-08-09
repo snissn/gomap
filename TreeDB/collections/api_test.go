@@ -18227,6 +18227,67 @@ func TestCollectionFindDocumentsByIndexRangeTypedInt64(t *testing.T) {
 	}
 }
 
+func TestCollectionDocumentIndexRangeRejectsOrderedBSONV2Indexes(t *testing.T) {
+	valueDocument, err := bson.Marshal(bson.D{{Key: "createdAt", Value: int32(7)}})
+	if err != nil {
+		t.Fatalf("marshal valid BSON range value: %v", err)
+	}
+	value := bson.Raw(valueDocument).Lookup("createdAt")
+	opts := IndexRangeOptions{
+		Lower: IndexRangeBound{Value: value, Inclusive: true},
+		Upper: IndexRangeBound{Value: value, Inclusive: true},
+		Limit: 1,
+	}
+	for _, index := range []IndexDefinition{
+		{
+			Name:       "created_desc",
+			ValueType:  IndexValueBSONOrderedV2,
+			Components: []IndexComponent{{Field: "createdAt", Direction: IndexDirectionDescending}},
+		},
+		{
+			Name:      "tenant_created",
+			ValueType: IndexValueBSONOrderedV2,
+			Components: []IndexComponent{
+				{Field: "tenant", Direction: IndexDirectionAscending},
+				{Field: "createdAt", Direction: IndexDirectionDescending},
+			},
+		},
+	} {
+		t.Run(index.Name, func(t *testing.T) {
+			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = db.Close() }()
+			mgr := NewCollectionManager(db)
+			if _, err := mgr.CreateCollection(&CollectionMeta{
+				Name:    "events",
+				Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+				Indexes: []IndexDefinition{index},
+			}); err != nil {
+				t.Fatalf("CreateCollection: %v", err)
+			}
+			col, err := mgr.OpenCollection("events")
+			if err != nil {
+				t.Fatalf("OpenCollection: %v", err)
+			}
+
+			records, truncated, err := col.FindDocumentsByIndexRange(index.Name, opts)
+			if err == nil || !strings.Contains(err.Error(), "require FindByCompoundIndexRange") || records != nil || truncated {
+				t.Fatalf("FindDocumentsByIndexRange records=%v truncated=%v err=%v want ordered BSON v2 rejection", records, truncated, err)
+			}
+			called := false
+			truncated, err = col.ScanBorrowedDocumentsByIndexRange(index.Name, opts, func(BorrowedDocumentRecord) (bool, error) {
+				called = true
+				return true, nil
+			})
+			if err == nil || !strings.Contains(err.Error(), "require FindByCompoundIndexRange") || called || truncated {
+				t.Fatalf("ScanBorrowedDocumentsByIndexRange called=%v truncated=%v err=%v want ordered BSON v2 rejection", called, truncated, err)
+			}
+		})
+	}
+}
+
 func TestCollectionScanBorrowedDocumentsByIndexRangeContracts(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
