@@ -508,6 +508,9 @@ func TestCompoundIndexPointerCheckpointReopenAndRecreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Keep the directory unlockable even when a maintenance assertion fails.
+	// This matters on Windows, where TempDir cleanup cannot remove an open DB.
+	defer func() { _ = db.Close() }()
 	mgr := NewCollectionManager(db)
 	index := IndexDefinition{Name: "tenant_created", Components: []IndexComponent{{Field: "tenant", Direction: IndexDirectionAscending}, {Field: "createdAt", Direction: IndexDirectionDescending}}, ValueType: IndexValueBSONOrderedV2, Unique: true}
 	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}, Indexes: []IndexDefinition{index}}); err != nil {
@@ -541,8 +544,12 @@ func TestCompoundIndexPointerCheckpointReopenAndRecreate(t *testing.T) {
 	if _, err := db.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{}); err != nil {
 		t.Fatalf("compound ValueLogGC: %v", err)
 	}
-	if err := db.VacuumIndexOnline(context.Background()); err != nil {
+	if err := db.VacuumIndexOnline(context.Background()); err != nil && !errors.Is(err, backenddb.ErrVacuumUnsupported) {
 		t.Fatalf("compound VacuumIndexOnline: %v", err)
+	} else if errors.Is(err, backenddb.ErrVacuumUnsupported) {
+		// Windows cannot atomically swap the mapped index file. Keep rewrite/GC
+		// and reopen coverage there; supported platforms still exercise vacuum.
+		t.Log("compound VacuumIndexOnline unsupported on this platform")
 	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatal(err)
@@ -554,7 +561,6 @@ func TestCompoundIndexPointerCheckpointReopenAndRecreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = db.Close() }()
 	col, err = NewCollectionManager(db).OpenCollection("events")
 	if err != nil {
 		t.Fatal(err)
