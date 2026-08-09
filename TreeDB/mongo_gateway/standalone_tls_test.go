@@ -156,6 +156,72 @@ func TestStandaloneServerOfficialDriverSCRAMSHA256(t *testing.T) {
 	}
 }
 
+func TestStandaloneServerOfficialDriverAuthorizationRoleBoundary(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), AuthenticationEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer standalone.Close()
+	catalog := standalone.Server.AuthCatalog
+	if err := catalog.UpsertPassword("admin", "root", []byte("root password")); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.UpsertPassword("admin", "reader", []byte("reader password")); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.SetUserRoles("admin", "reader", []AuthRoleGrant{{Role: AuthRoleRead, Database: "app", Collection: "items"}}); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- standalone.Serve(ctx, ln) }()
+	connect := func(username, password string) *mongo.Client {
+		t.Helper()
+		client, err := mongo.Connect(options.Client().ApplyURI("mongodb://" + ln.Addr().String()).SetDirect(true).SetAuth(options.Credential{Username: username, Password: password, AuthSource: "admin", AuthMechanism: "SCRAM-SHA-256"}).SetServerSelectionTimeout(time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = client.Disconnect(context.Background()) })
+		return client
+	}
+	root := connect("root", "root password")
+	reader := connect("reader", "reader password")
+	opCtx, opCancel := context.WithCancel(ctx)
+	opTimer := time.AfterFunc(10*time.Second, opCancel)
+	defer opTimer.Stop()
+	defer opCancel()
+	collection := root.Database("app").Collection("items")
+	if _, err := collection.InsertOne(opCtx, bson.D{{Key: "_id", Value: "visible"}}); err != nil {
+		t.Fatal(err)
+	}
+	var found bson.M
+	if err := reader.Database("app").Collection("items").FindOne(opCtx, bson.D{{Key: "_id", Value: "visible"}}).Decode(&found); err != nil {
+		t.Fatalf("read role find: %v", err)
+	}
+	_, err = reader.Database("app").Collection("items").InsertOne(opCtx, bson.D{{Key: "_id", Value: "denied"}})
+	var commandErr mongo.CommandError
+	if !errors.As(err, &commandErr) || commandErr.Code != 13 {
+		t.Fatalf("read role insert error=%v want Unauthorized code 13", err)
+	}
+	count, err := collection.CountDocuments(opCtx, bson.D{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("documents after denied insert=%d want 1", count)
+	}
+	cancel()
+	_ = ln.Close()
+	if err := <-serveErr; err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+}
+
 func TestStandaloneServerOfficialDriverSCRAMSHA256SASLprepUnicode(t *testing.T) {
 	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), AuthenticationEnabled: true})
 	if err != nil {
@@ -202,6 +268,7 @@ func TestStandaloneServerOfficialDriverSCRAMFailureRotationAndReconnect(t *testi
 	if err := catalog.UpsertPassword("admin", "alice", []byte("first password")); err != nil {
 		t.Fatal(err)
 	}
+	addBackupAuthAdministrator(t, catalog)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

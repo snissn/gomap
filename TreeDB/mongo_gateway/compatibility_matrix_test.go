@@ -892,6 +892,25 @@ func mongoCompatibilityMatrixProbes() []mongoCompatibilityMatrixProbe {
 			},
 		},
 		{
+			capabilityID:   "security.authorization-built-in-roles",
+			expectedStatus: MongoCapabilitySupportedSubset,
+			probe: func(t *testing.T, server *Server) {
+				if err := server.AuthCatalog.UpsertPassword("admin", "root", []byte("root password")); err != nil {
+					t.Fatal(err)
+				}
+				if err := server.AuthCatalog.UpsertPassword("admin", "reader", []byte("reader password")); err != nil {
+					t.Fatal(err)
+				}
+				if err := server.AuthCatalog.SetUserRoles("admin", "reader", []AuthRoleGrant{{Role: AuthRoleRead, Database: "app", Collection: "users"}}); err != nil {
+					t.Fatal(err)
+				}
+				server.AuthenticationEnabled = true
+				authenticateUser(t, server, 1, "reader", []byte("reader password"))
+				assertOK(t, serveCommand(t, server, 34, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{}}, {Key: "$db", Value: "app"}}))
+				assertCommandError(t, serveCommand(t, server, 35, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "denied"}}}}, {Key: "$db", Value: "app"}}), "Unauthorized")
+			},
+		},
+		{
 			capabilityID:   "cluster-gap.replica-set-and-sharding-advertisement",
 			expectedStatus: MongoCapabilityNotImplemented,
 			probe: func(t *testing.T, server *Server) {

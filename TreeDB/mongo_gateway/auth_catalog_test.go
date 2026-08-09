@@ -5,18 +5,502 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"golang.org/x/crypto/pbkdf2"
 )
+
+type failingAuthCatalogPointerBatch struct {
+	batchpkg.Interface
+	writeErr error
+	ptr      page.ValuePtr
+	closed   bool
+}
+
+func (b *failingAuthCatalogPointerBatch) SetPointer(_ []byte, ptr page.ValuePtr) error {
+	b.ptr = ptr
+	return nil
+}
+
+func (b *failingAuthCatalogPointerBatch) WriteSync() error { return b.writeErr }
+
+func (b *failingAuthCatalogPointerBatch) Close() error {
+	b.closed = true
+	return nil
+}
+
+type failingAuthCatalogLargeValueStore struct {
+	ptr      page.ValuePtr
+	batch    *failingAuthCatalogPointerBatch
+	released []page.ValuePtr
+}
+
+func (s *failingAuthCatalogLargeValueStore) Get([]byte) ([]byte, error) {
+	return nil, treedb.ErrKeyNotFound
+}
+func (s *failingAuthCatalogLargeValueStore) SetSync([]byte, []byte) error {
+	return batchpkg.ErrValueTooLarge
+}
+func (s *failingAuthCatalogLargeValueStore) AppendValueLogValues([][]byte) ([]page.ValuePtr, error) {
+	return []page.ValuePtr{s.ptr}, nil
+}
+func (s *failingAuthCatalogLargeValueStore) ReleaseValueLogValues(ptrs []page.ValuePtr) {
+	s.released = append(s.released, ptrs...)
+}
+func (s *failingAuthCatalogLargeValueStore) NewBatch() batchpkg.Interface { return s.batch }
+
+func TestSetAuthCatalogValueSyncReleasesAbandonedPersistentValueLogPointer(t *testing.T) {
+	writeErr := errors.New("injected early publication failure")
+	ptr := page.ValuePtr{FileID: page.ValueLogFileID(7), Offset: 11, Length: 17}
+	batch := &failingAuthCatalogPointerBatch{writeErr: writeErr}
+	store := &failingAuthCatalogLargeValueStore{ptr: ptr, batch: batch}
+
+	err := setAuthCatalogValueSync(store, []byte("catalog"), []byte("large authorization record"))
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("setAuthCatalogValueSync err=%v want %v", err, writeErr)
+	}
+	if batch.ptr != ptr || !batch.closed {
+		t.Fatalf("pointer publication ptr=%+v closed=%v want ptr=%+v closed=true", batch.ptr, batch.closed, ptr)
+	}
+	if !reflect.DeepEqual(store.released, []page.ValuePtr{ptr}) {
+		t.Fatalf("released pointers=%v want exactly [%v]", store.released, ptr)
+	}
+}
+
+func TestAuthCatalogForcedPersistentValueLogReopenAndCorruptionFailClosed(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+
+	db, cleanup, err := treedb.OpenBackend(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.UpsertPassword("admin", "root", []byte("root password")); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.UpsertPassword("app", "reader", []byte("reader password")); err != nil {
+		t.Fatal(err)
+	}
+	wantRoles := []AuthRoleGrant{{Role: AuthRoleRead, Database: "app", Collection: "items"}}
+	if err := catalog.SetUserRoles("app", "reader", wantRoles); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := db.AcquireSnapshot()
+	entry, err := snapshot.GetEntry(authAuthorizationCatalogKey())
+	snapshot.Close()
+	if err != nil || entry.Flags&node.FlagPointer == 0 {
+		t.Fatalf("authorization catalog entry pointer=%+v err=%v", entry.ValuePtr, err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, cleanup, err = treedb.OpenBackend(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err = NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.VerifyPassword("app", "reader", []byte("reader password")); err != nil {
+		t.Fatalf("forced-pointer verifier after reopen: %v", err)
+	}
+	if roles, err := catalog.UserRoles("app", "reader"); err != nil || !reflect.DeepEqual(roles, wantRoles) {
+		t.Fatalf("forced-pointer roles after reopen=%v err=%v", roles, err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatal(err)
+	}
+
+	var segments []string
+	err = filepath.Walk(dir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !info.IsDir() && filepath.Base(filepath.Dir(path)) == "value_vlog" && strings.HasPrefix(info.Name(), "value-l") && strings.HasSuffix(info.Name(), ".log") {
+			segments = append(segments, path)
+		}
+		return nil
+	})
+	if err != nil || len(segments) == 0 {
+		t.Fatalf("persistent ValueLog segments=%v err=%v", segments, err)
+	}
+	for _, segment := range segments {
+		if err := os.Truncate(segment, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db, cleanup, err = treedb.OpenBackend(opts)
+	if err != nil {
+		return // Refusing to open corrupted persistent ValueLog state is fail closed.
+	}
+	defer cleanup()
+	if catalog, err = NewAuthCatalog(db); err == nil {
+		t.Fatal("corrupted persistent ValueLog authorization state was accepted")
+	}
+}
+
+func TestAuthCatalogPersistedEmptyAuthorizationRecordsFailClosed(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"legacy_missing_users": []byte(`{"version":1}`),
+		"missing_users":        []byte(`{"version":2}`),
+		"null_users":           []byte(`{"version":2,"users":null}`),
+		"empty_users":          []byte(`{"version":2,"users":[]}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+			db, err := treedb.Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.SetSync(authAuthorizationCatalogKey(), raw); err != nil {
+				t.Fatal(err)
+			}
+			if catalog, err := NewAuthCatalog(db); err == nil || catalog != nil {
+				t.Fatalf("persisted empty authorization record accepted: catalog=%v err=%v", catalog, err)
+			}
+			if verifier, err := getAuthCatalogValue(db, authCatalogKey("admin", "bootstrap")); !errors.Is(err, treedb.ErrKeyNotFound) || len(verifier) != 0 {
+				t.Fatalf("failed constructor created bootstrap verifier=%q err=%v", verifier, err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			db, err = treedb.Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if catalog, err := NewAuthCatalog(db); err == nil || catalog != nil {
+				t.Fatalf("reopened persisted empty authorization record accepted: catalog=%v err=%v", catalog, err)
+			}
+			if verifier, err := getAuthCatalogValue(db, authCatalogKey("admin", "bootstrap")); !errors.Is(err, treedb.ErrKeyNotFound) || len(verifier) != 0 {
+				t.Fatalf("reopened failed constructor created bootstrap verifier=%q err=%v", verifier, err)
+			}
+		})
+	}
+}
+
+func TestAuthCatalogLegacyAndMismatchedIncarnationsFailClosed(t *testing.T) {
+	for name, mutate := range map[string]func(*AuthCatalog, *treedb.DB) error{
+		"legacy_verifier": func(catalog *AuthCatalog, db *treedb.DB) error {
+			raw, err := db.Get(authCatalogKey("admin", "root"))
+			if err != nil {
+				return err
+			}
+			var record AuthUserRecord
+			if err := json.Unmarshal(raw, &record); err != nil {
+				return err
+			}
+			record.Version = 1
+			raw, err = json.Marshal(record)
+			if err != nil {
+				return err
+			}
+			return db.SetSync(authCatalogKey("admin", "root"), raw)
+		},
+		"missing_verifier_incarnation": func(catalog *AuthCatalog, db *treedb.DB) error {
+			raw, err := db.Get(authCatalogKey("admin", "root"))
+			if err != nil {
+				return err
+			}
+			var record AuthUserRecord
+			if err := json.Unmarshal(raw, &record); err != nil {
+				return err
+			}
+			record.Incarnation = 0
+			raw, err = json.Marshal(record)
+			if err != nil {
+				return err
+			}
+			return db.SetSync(authCatalogKey("admin", "root"), raw)
+		},
+		"legacy_authorization": func(catalog *AuthCatalog, db *treedb.DB) error {
+			raw, err := db.Get(authAuthorizationCatalogKey())
+			if err != nil {
+				return err
+			}
+			var record authAuthorizationRecord
+			if err := json.Unmarshal(raw, &record); err != nil {
+				return err
+			}
+			record.Version = 1
+			raw, err = json.Marshal(record)
+			if err != nil {
+				return err
+			}
+			return db.SetSync(authAuthorizationCatalogKey(), raw)
+		},
+		"missing_authorization_incarnation": func(catalog *AuthCatalog, db *treedb.DB) error {
+			raw, err := db.Get(authAuthorizationCatalogKey())
+			if err != nil {
+				return err
+			}
+			var record authAuthorizationRecord
+			if err := json.Unmarshal(raw, &record); err != nil {
+				return err
+			}
+			for i := range record.Users {
+				record.Users[i].Incarnation = 0
+			}
+			raw, err = json.Marshal(record)
+			if err != nil {
+				return err
+			}
+			return db.SetSync(authAuthorizationCatalogKey(), raw)
+		},
+		"mismatched_incarnation": func(catalog *AuthCatalog, db *treedb.DB) error {
+			raw, err := db.Get(authAuthorizationCatalogKey())
+			if err != nil {
+				return err
+			}
+			var record authAuthorizationRecord
+			if err := json.Unmarshal(raw, &record); err != nil {
+				return err
+			}
+			record.Users[0].Incarnation++
+			if record.Users[0].Incarnation == 0 {
+				record.Users[0].Incarnation = 1
+			}
+			raw, err = json.Marshal(record)
+			if err != nil {
+				return err
+			}
+			return db.SetSync(authAuthorizationCatalogKey(), raw)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+			db, err := treedb.Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			catalog, err := NewAuthCatalog(db)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := catalog.UpsertPassword("admin", "root", []byte("root password")); err != nil {
+				t.Fatal(err)
+			}
+			if err := mutate(catalog, db); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			db, err = treedb.Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			reopened, err := NewAuthCatalog(db)
+			if name == "legacy_verifier" || name == "missing_verifier_incarnation" {
+				if err != nil {
+					t.Fatalf("unrelated catalog construction failed: %v", err)
+				}
+				if _, verifyErr := reopened.VerifyPassword("admin", "root", []byte("root password")); verifyErr == nil {
+					t.Fatal("legacy verifier authenticated")
+				}
+				if upsertErr := reopened.UpsertPassword("admin", "root", []byte("replacement password")); upsertErr == nil {
+					t.Fatal("trusted upsert silently replaced a legacy verifier")
+				}
+				return
+			}
+			if name == "mismatched_incarnation" {
+				if err != nil {
+					t.Fatalf("valid but mismatched records should open for offline repair: %v", err)
+				}
+				identity, verifyErr := reopened.VerifyPassword("admin", "root", []byte("root password"))
+				if verifyErr != nil {
+					t.Fatal(verifyErr)
+				}
+				if _, rolesErr := reopened.effectiveRolesForUser(identity); rolesErr == nil {
+					t.Fatal("mismatched verifier and grant incarnations authorized")
+				}
+				if upsertErr := reopened.UpsertPassword("admin", "candidate", []byte("candidate password")); !errors.Is(upsertErr, errNoUsableServerAdministrator) {
+					t.Fatalf("mismatched catalog bootstrap err=%v want offline repair requirement", upsertErr)
+				}
+				return
+			}
+			if err == nil || reopened != nil {
+				t.Fatalf("legacy catalog opened: catalog=%v err=%v", reopened, err)
+			}
+		})
+	}
+}
+
+func TestAuthCatalogMissingAuthorizationRecordIsBootstrapState(t *testing.T) {
+	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	catalog, err := NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.UpsertPassword("admin", "bootstrap", []byte("bootstrap password")); err != nil {
+		t.Fatal(err)
+	}
+	roles, err := catalog.UserRoles("admin", "bootstrap")
+	if err != nil || !reflect.DeepEqual(roles, []AuthRoleGrant{{Role: AuthRoleServerAdmin}}) {
+		t.Fatalf("missing-key bootstrap roles=%v err=%v", roles, err)
+	}
+}
+
+func TestAuthCatalogUserIncarnationPersistsAcrossReopenAndRotation(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.UpsertPassword("admin", "root", []byte("root password")); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.UpsertPassword("admin", "worker", []byte("worker password")); err != nil {
+		t.Fatal(err)
+	}
+	before, err := catalog.VerifyPassword("admin", "worker", []byte("worker password"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = treedb.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err = NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterReopen, err := catalog.VerifyPassword("admin", "worker", []byte("worker password"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterReopen != before {
+		t.Fatalf("reopen changed identity: before=%+v after=%+v", before, afterReopen)
+	}
+	if err := catalog.UpsertPassword("admin", "worker", []byte("rotated password")); err != nil {
+		t.Fatal(err)
+	}
+	afterRotation, err := catalog.VerifyPassword("admin", "worker", []byte("rotated password"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterRotation != before {
+		t.Fatalf("password rotation changed identity: before=%+v after=%+v", before, afterRotation)
+	}
+	if err := catalog.DropUser("admin", "worker"); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.UpsertPassword("admin", "worker", []byte("recreated password")); err != nil {
+		t.Fatal(err)
+	}
+	afterRecreate, err := catalog.VerifyPassword("admin", "worker", []byte("recreated password"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterRecreate == before {
+		t.Fatalf("account recreation reused identity: before=%+v after=%+v", before, afterRecreate)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = treedb.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	catalog, err = NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterRecreateReopen, err := catalog.VerifyPassword("admin", "worker", []byte("recreated password"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterRecreateReopen != afterRecreate {
+		t.Fatalf("reopen changed recreated identity: before=%+v after=%+v", afterRecreate, afterRecreateReopen)
+	}
+}
+
+func TestAuthCatalogBootstrapRefusesUnusableNonemptyAdministratorCatalog(t *testing.T) {
+	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	record := authAuthorizationRecord{Version: authAuthorizationVersion, Users: []authRoleAssignment{{
+		Username:    "missing-verifier",
+		AuthDB:      "admin",
+		Incarnation: 1,
+		Roles:       []AuthRoleGrant{{Role: AuthRoleServerAdmin}},
+	}}}
+	raw, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetSync(authAuthorizationCatalogKey(), raw); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := NewAuthCatalog(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = catalog.UpsertPassword("admin", "candidate", []byte("candidate password"))
+	if !errors.Is(err, errNoUsableServerAdministrator) {
+		t.Fatalf("UpsertPassword err=%v want offline repair requirement", err)
+	}
+	if catalog.userExists("admin", "candidate") {
+		t.Fatal("recovery attempt created a credential in a nonempty unusable administrator catalog")
+	}
+	if roles, err := catalog.UserRoles("admin", "candidate"); err != nil || len(roles) != 0 {
+		t.Fatalf("recovery attempt roles=%v err=%v", roles, err)
+	}
+}
+
+func addBackupAuthAdministrator(t *testing.T, catalog *AuthCatalog) {
+	t.Helper()
+	if err := catalog.UpsertPassword("admin", "backup-admin", []byte("backup administrator password")); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.SetUserRoles("admin", "backup-admin", []AuthRoleGrant{{Role: AuthRoleServerAdmin}}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestAuthCatalogDurableVerifierRotationAndDisable(t *testing.T) {
 	dir := t.TempDir()
@@ -31,6 +515,7 @@ func TestAuthCatalogDurableVerifierRotationAndDisable(t *testing.T) {
 	if err := catalog.UpsertPassword("admin", "alice", []byte("correct horse battery staple")); err != nil {
 		t.Fatal(err)
 	}
+	addBackupAuthAdministrator(t, catalog)
 	raw, err := db.Get(authCatalogKey("admin", "alice"))
 	if err != nil {
 		t.Fatal(err)
@@ -157,6 +642,7 @@ func TestAuthCatalogSASLprepAndAtomicDisableRotation(t *testing.T) {
 	if err := catalog.UpsertPassword("admin", "alice", []byte("p\u00e4ss\u00a0word")); err != nil {
 		t.Fatal(err)
 	}
+	addBackupAuthAdministrator(t, catalog)
 	if _, err := catalog.VerifyPassword("admin", "alice", []byte("p\u00e4ss word")); err != nil {
 		t.Fatalf("SASLprep equivalent rejected: %v", err)
 	}
@@ -215,6 +701,7 @@ func TestAuthCatalogBackendScopedMutationLockPreventsLostRotation(t *testing.T) 
 	if err := setter.UpsertPassword("admin", "alice", []byte("old password")); err != nil {
 		t.Fatal(err)
 	}
+	addBackupAuthAdministrator(t, setter)
 	entered, release := make(chan struct{}), make(chan struct{})
 	setter.beforeSetEnabledWrite = func() { close(entered); <-release }
 	setDone := make(chan error, 1)
@@ -359,7 +846,7 @@ func TestAuthCatalogSyntheticVerifierSecretSurvivesReopenAndFailsClosedOnCorrupt
 }
 
 func TestAuthCatalogSyntheticSecretRejectsEveryPresentMalformedValue(t *testing.T) {
-	for _, raw := range [][]byte{nil, []byte("null"), []byte(`{"version":2,"secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}`), []byte(`{"version":1,"secret":"AQI="}`)} {
+	for _, raw := range [][]byte{nil, []byte("null"), []byte(`{"version":3,"secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}`), []byte(`{"version":1,"secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}`), []byte(`{"version":2,"secret":"AQI="}`)} {
 		db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
 		if err != nil {
 			t.Fatal(err)

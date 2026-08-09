@@ -227,6 +227,50 @@ interrupted unlink. A writable open reconciles it before exposing segments; a
 read-only open never mutates it and reports `ErrRecoveryRequired`. Because
 TreeDB is pre-alpha, this protocol has no compatibility migration scaffold.
 
+### Mongo gateway authorization raw-KV records
+
+When the standalone Mongo gateway authentication feature is used, it owns the
+following reserved raw-KV keys. The `v1` component is the key-namespace version;
+the current JSON payload version is independently `2`:
+
+- `\x00mongo-gateway/auth/v1/synthetic-secret` stores the process-independent
+  SCRAM synthetic-user secret;
+- `\x00mongo-gateway/auth/v1/<auth-db>/<username>` stores one SCRAM verifier,
+  where both identity components are unpadded base64url encodings of their
+  UTF-8 bytes; and
+- `\x00mongo-gateway/authorization/v1/catalog` stores the complete standalone
+  role-assignment catalog.
+
+The synthetic-secret record is JSON with integer `version` and base64 `secret`
+fields. Version 2 requires exactly 32 decoded secret bytes. A version-2 verifier
+record has `version`, `username`, `auth_db`, base64 `salt`, `iterations`, base64
+`stored_key`, base64 `server_key`, `enabled`, and nonzero unsigned
+`incarnation` fields. The stored and server keys are 32 decoded bytes, and the
+incarnation changes on account drop/recreate but not password rotation.
+
+The version-2 authorization record is JSON with `version` and a nonempty
+`users` array. Each user entry has `username`, `auth_db`, nonzero unsigned `id`
+(the verifier incarnation), and a `roles` array. Each role grant contains
+`role`, plus optional `database` and `collection`; a collection requires its
+database, and `serverAdmin` has server scope only. User entries and grants are
+stored in canonical identity/role order with no duplicates. The catalog is
+bounded to 4,096 users and 64 grants per user.
+
+Only a missing authorization-catalog key denotes the pristine bootstrap state.
+A persisted empty/null/malformed catalog, an unsupported payload version, or a
+verifier/assignment incarnation mismatch fails closed. Version-1 verifier and
+authorization payloads are deliberately not migrated; this pre-alpha format
+requires rebuild or explicit offline repair.
+
+Writes use the selected profile's synchronous raw-KV durability boundary.
+Records too large for the inline index threshold are stored in TreeDB's
+persistent ValueLog and the raw-KV entry stores the durable `ValuePtr`; the
+ValueLog is not a WAL or temporary side store. Verifier and authorization
+records remain separate durable writes, so user-management operations are
+fail-closed but not rollback-atomic. A grant snapshot is published only after
+the authorization record succeeds; ambiguous publication invalidates the
+snapshot, and abandoned appended pointers release their pending GC pins.
+
 ## 1.1 Opt-in external-version MVCC key subspace
 
 Issue [#3670](https://github.com/snissn/gomap/issues/3670) defines a pre-alpha,

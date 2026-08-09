@@ -45,20 +45,31 @@ func (s *Server) clearAuthState(owner int64) {
 	s.authConnections.Delete(owner)
 }
 func (s *Server) authenticated(owner int64) bool {
-	state, ok := s.authConnections.Load(owner)
-	return ok && state.(*authConnectionState).user.Load() != nil
+	return s.authUserSnapshot(owner) != nil
 }
 func (s *Server) authUser(owner int64) *AuthUser {
-	state, ok := s.authConnections.Load(owner)
-	if ok {
-		u := state.(*authConnectionState).user.Load()
-		if u == nil {
-			return nil
-		}
-		copy := *u
-		return &copy
+	u := s.authUserSnapshot(owner)
+	if u == nil {
+		return nil
 	}
-	return nil
+	copy := *u
+	return &copy
+}
+func (s *Server) authUserSnapshot(owner int64) *AuthUser {
+	state, ok := s.authConnections.Load(owner)
+	if !ok {
+		return nil
+	}
+	connection := state.(*authConnectionState)
+	user := connection.user.Load()
+	if user == nil {
+		return nil
+	}
+	if s.AuthCatalog == nil || !s.AuthCatalog.identityActive(*user) {
+		connection.user.CompareAndSwap(user, nil)
+		return nil
+	}
+	return user
 }
 func (s *Server) authenticationRequired() bool {
 	return s != nil && s.AuthenticationEnabled
@@ -143,7 +154,7 @@ func (s *Server) saslStartResponse(command wire.Document, owner int64) (wire.Doc
 	if id == 0 {
 		id = s.nextSASLConversation.Add(1)
 	}
-	state.conversations[id] = scramConversation{id: id, user: AuthUser{Username: username, AuthDB: authDB}, record: record, clientFirstBare: bare, serverFirst: serverFirst, serverNonce: nonce, issuedAt: time.Now(), valid: valid}
+	state.conversations[id] = scramConversation{id: id, user: AuthUser{Username: username, AuthDB: authDB, Incarnation: record.Incarnation}, record: record, clientFirstBare: bare, serverFirst: serverFirst, serverNonce: nonce, issuedAt: time.Now(), valid: valid}
 	state.mu.Unlock()
 	return marshalDocument(bson.D{{Key: "conversationId", Value: id}, {Key: "done", Value: false}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte(serverFirst)}}, {Key: "ok", Value: 1.0}})
 }

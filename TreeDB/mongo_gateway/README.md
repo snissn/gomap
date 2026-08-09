@@ -81,7 +81,7 @@ call concurrently.
 <!-- mongo-capability-summary:begin -->
 ## Executable capability summary
 
-Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:6461104f941c50958a0baa2a9e58649859fd64aa01b41a2ee41b7c66a65dd4da`
+Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:8168e843e2295ebce7b63afe15e436320b11d113cfb364a83bbe3592d653826d`
 
 | Surface | Status | Boundary |
 |---|---|---|
@@ -92,7 +92,7 @@ Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:6461104f941c50958a
 | Logical sessions | supported subset | Driver-interoperability metadata only; no transaction or causal-session semantics. |
 | Transport security | supported subset | Loopback plaintext remains available; non-loopback standalone listeners require TLS unless an explicit insecure override is selected. Password authentication refuses plaintext non-loopback listeners. TLS 1.2+ with bounded handshakes is supported. |
 | Scalar indexes | supported subset | BSON collections default ordinary single-field ascending indexes to BSON-ordered v2; explicit treedbValueType remains the legacy homogeneous path. Compound and descending indexes remain rejected. |
-| Authentication and authorization | supported subset | Standalone SCRAM-SHA-256 establishes a connection identity from durable verifier-only records; connectionStatus exposes that authenticated identity. Per-command authorization, SCRAM-SHA-1, and external identity providers remain unavailable. |
+| Authentication and authorization | supported subset | Standalone SCRAM-SHA-256 identities use versioned durable account incarnations plus read, readWrite, dbAdmin, userAdmin, and serverAdmin grants, spilling growing records to TreeDB's persistent ValueLog, with pre-execution command checks, filtered catalog visibility, incarnation-bound sessions and cursors, and last-admin safeguards. Drop/recreate revokes the prior incarnation while password rotation preserves it. Cluster/routed protected commands fail closed without authoritative resource binding; SCRAM-SHA-1 and external identity providers remain unavailable. |
 | Transactions and retryable writes | not implemented | Transaction markers reject and commitTransaction is unavailable. |
 | Replica set and sharding | not implemented | Standalone hello metadata does not advertise replica-set or sharded-server behavior. |
 <!-- mongo-capability-summary:end -->
@@ -110,6 +110,58 @@ The manifest identity is also exposed by `buildInfo` and emitted by benchmark
 reports so stored compatibility evidence can be tied to the exact declared
 surface.
 
+## Standalone authorization policy
+
+Enabling authentication also enables fail-closed per-command authorization.
+The first verifier created in an empty catalog is the bootstrap
+`serverAdmin`; subsequent users receive no privileges until durable grants are
+assigned. A non-empty catalog with no usable administrator does not
+auto-escalate a new verifier; trusted tooling reports that offline repair is
+required. The built-in roles are deliberately bounded: `read` permits data
+reads, `readWrite` adds mutations, `dbAdmin` owns collection/index metadata and
+DDL, `userAdmin` owns user management within its scope, and `serverAdmin` owns
+the full standalone server. Grants may be server-, database-, or
+collection-scoped. A collection-scoped `userAdmin` may manage and observe only
+identities whose non-empty current and requested grants stay inside that
+collection; empty grant sets require database scope. A server-scoped
+`userAdmin` may grant non-administrator server roles, but only `serverAdmin`
+may grant `serverAdmin`. Every user mutation rechecks the actor and target's
+current/requested grants while holding the same backend catalog lock.
+Missing and protected out-of-scope `updateUser`/`dropUser` targets return the
+same generic denial to every narrower `userAdmin`; only `serverAdmin`, which can
+manage every valid current grant, receives explicit user-not-found results for
+an unknown identity. Out-of-scope identities do not expose duplicate-user
+results, and an orphan-verifier collision is visible only to `serverAdmin`.
+
+Authorization runs before collection/index lookup, route resolution, cursor
+creation, or mutation. Catalog lists are filtered, retained cursors are bound
+to the durable account incarnation that created them, and grant revocation is
+observed at the next command boundary. Dropping and recreating the same
+`(authDB, username)` generates a new incarnation, revokes stale authenticated
+connections, and prevents a new login from resuming an old cursor. Password
+rotation preserves the incarnation, so already authenticated connections keep
+their identity; verifier disable applies to subsequent authentication attempts.
+The catalog rejects malformed
+durable records on reopen and prevents disabling, demoting, or dropping the
+last enabled server administrator. Routed/cluster protected commands reject
+when the gateway lacks an authoritative resource binding.
+User-management commands reject transaction markers, standalone `w:0`, and
+OP_MSG `moreToCome` before durable mutation. Wire `createUser` publishes the
+requested verifier and exact roles under one catalog lock and never invokes
+trusted bootstrap escalation. A mixed `updateUser` rotates the verifier before
+publishing roles: if the second durable write fails, the old credential is
+invalid while the new credential retains the old grants. These multi-record
+operations are fail-closed but not rollback-atomic. Growing versioned verifier
+and grant records use TreeDB's persistent ValueLog with durable pointer
+publication; it is independent of the redo WAL. A failed
+or ambiguous grant publication invalidates the immutable authorization
+snapshot so the next protected command reloads durable state or denies closed.
+The version-2 verifier and grant payloads require a nonzero account incarnation;
+legacy version-1 records fail closed and, in this pre-alpha format, require a
+database rebuild or explicit offline repair rather than online migration.
+`AuthorizationMetrics` reports only low-cardinality allowed/denied totals; it
+does not expose secrets or query/document payloads.
+
 ## Differential compatibility fixtures
 
 `cmd/mongo_gateway_compat_diff` compares a deliberately small set of declared
@@ -118,6 +170,17 @@ those fixtures, not a full MongoDB conformance claim. Fixture files are
 versioned canonical Extended JSON in
 `cmd/mongo_gateway_compat_diff/fixtures`; the runner decodes them to BSON and
 preserves BSON type and field order in emitted observations.
+
+The version-1 fixture contract is intentionally unauthenticated: it has one
+shared seed/command flow and no per-target authentication bootstrap. Therefore
+it does not claim differential evidence for SCRAM identities or authorization
+policy. Adding an unauthenticated authorization fixture would be misleading,
+while enabling authentication only on one target would turn setup differences
+into false compatibility results. Authorization compatibility is instead
+covered by the executable capability-matrix probe, official-driver tests, and
+the role, mutation-boundary, list-filtering, cursor-ownership, persistence, and
+cluster fail-closed package tests. A future authenticated differential contract
+must bootstrap equivalent users and grants independently on both targets.
 
 Every fixture capability ID is checked against the consumed executable manifest
 before it runs: `supported` fixtures must map to a supported/support-subset

@@ -805,6 +805,14 @@ func (s *Server) findMsgResponseInto(ctx context.Context, dst []byte, command wi
 		}
 		return wire.AppendMsgMessage(dst, requestID, responseTo, 0, doc)
 	}
+	if s.authenticationRequired() {
+		if _, doc, err, allowed := s.authorizeCommand("find", command, cursorOwner); !allowed {
+			if err != nil {
+				return nil, err
+			}
+			return wire.AppendMsgMessage(dst, requestID, responseTo, 0, doc)
+		}
+	}
 	payload, err := s.findResponsePayload(ctx, command, cursorOwner)
 	if err != nil {
 		return nil, err
@@ -2801,7 +2809,7 @@ func (s *Server) runMongoDeleteItem(col *collections.Collection, item mongoDelet
 	return boolToInt32(deleted), err
 }
 
-func (s *Server) listCollectionsResponse(command wire.Document) (wire.Document, error) {
+func (s *Server) listCollectionsResponse(command wire.Document, cursorOwner int64) (wire.Document, error) {
 	if doc, rejected, err := rejectUnsupportedReadConcern(command); rejected {
 		return doc, err
 	}
@@ -2845,12 +2853,15 @@ func (s *Server) listCollectionsResponse(command wire.Document) (wire.Document, 
 		if nameFilter != "" && collectionName != nameFilter {
 			continue
 		}
+		if s.authenticationRequired() && !s.authorizedResource(cursorOwner, db, collectionName, authorizationMetadataRead) {
+			continue
+		}
 		firstBatch = append(firstBatch, mongoCollectionDocument(collectionName, nameOnly))
 	}
 	return marshalCursorResponse(db, "$cmd.listCollections", firstBatch)
 }
 
-func (s *Server) listDatabasesResponse(command wire.Document) (wire.Document, error) {
+func (s *Server) listDatabasesResponse(command wire.Document, cursorOwner int64) (wire.Document, error) {
 	if doc, rejected, err := rejectUnsupportedReadConcern(command); rejected {
 		return doc, err
 	}
@@ -2880,6 +2891,9 @@ func (s *Server) listDatabasesResponse(command wire.Document) (wire.Document, er
 			continue
 		}
 		if nameFilter != "" && db != nameFilter {
+			continue
+		}
+		if s.authenticationRequired() && !s.authorizedResource(cursorOwner, db, "", authorizationListDatabases) {
 			continue
 		}
 		names[db] = struct{}{}
@@ -3943,7 +3957,11 @@ func (s *Server) openRetainedCursor(ns string, docs []wire.Document, projection 
 	if len(s.cursors) >= s.maxOpenCursors() {
 		return 0, errors.New("Mongo gateway cursor limit exceeded")
 	}
-	s.addCursorLocked(cursorID, &serverCursor{ns: ns, owner: owner, docs: docs, projection: projection, pos: 0, lastUsed: now})
+	principal := AuthUser{}
+	if user := s.authUser(owner); user != nil {
+		principal = *user
+	}
+	s.addCursorLocked(cursorID, &serverCursor{ns: ns, owner: owner, principal: principal, docs: docs, projection: projection, pos: 0, lastUsed: now})
 	return cursorID, nil
 }
 
@@ -3962,7 +3980,8 @@ func (s *Server) getMore(cursorID int64, ns string, owner int64, batchSize int, 
 		s.cursorMu.Lock()
 		s.reapExpiredCursorsLocked(time.Now())
 		cursor := s.cursors[cursorID]
-		if cursor == nil || cursor.ns != ns || cursor.owner != owner {
+		principal := s.authUser(owner)
+		if cursor == nil || cursor.ns != ns || cursor.owner != owner || !cursorPrincipalMatches(cursor, principal) {
 			s.cursorMu.Unlock()
 			return 0, nil, false, nil
 		}
@@ -3988,7 +4007,7 @@ func (s *Server) getMore(cursorID int64, ns string, owner int64, batchSize int, 
 
 		s.cursorMu.Lock()
 		current := s.cursors[cursorID]
-		if current == nil || current != cursor || current.ns != ns || current.owner != owner {
+		if current == nil || current != cursor || current.ns != ns || current.owner != owner || !cursorPrincipalMatches(current, s.authUser(owner)) {
 			s.cursorMu.Unlock()
 			return 0, nil, false, nil
 		}
@@ -4029,7 +4048,7 @@ func (s *Server) killCursors(ns string, owner int64, cursorIDs []int64) ([]int64
 	notFound := make([]int64, 0)
 	for _, cursorID := range cursorIDs {
 		cursor := s.cursors[cursorID]
-		if cursor == nil || cursor.ns != ns || cursor.owner != owner {
+		if cursor == nil || cursor.ns != ns || cursor.owner != owner || !cursorPrincipalMatches(cursor, s.authUser(owner)) {
 			notFound = append(notFound, cursorID)
 			continue
 		}
@@ -4037,6 +4056,16 @@ func (s *Server) killCursors(ns string, owner int64, cursorIDs []int64) ([]int64
 		killed = append(killed, cursorID)
 	}
 	return killed, notFound
+}
+
+func cursorPrincipalMatches(cursor *serverCursor, principal *AuthUser) bool {
+	if cursor == nil {
+		return false
+	}
+	if cursor.principal == (AuthUser{}) {
+		return principal == nil
+	}
+	return principal != nil && cursor.principal == *principal
 }
 
 func (s *Server) reapExpiredCursors() {
