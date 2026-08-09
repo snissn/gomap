@@ -130,6 +130,12 @@ func (s *Server) runMongoFilterUpdateOne(col *collections.Collection, update mon
 		if err != nil {
 			return false, false, err
 		}
+		// Template materializer setup can acquire or refresh a snapshot. Recheck
+		// after that work and immediately before the atomic conditional update.
+		if err := update.budget.checkDeadline(); err != nil {
+			_ = materializer.Close()
+			return false, false, err
+		}
 		predicateMatched := false
 		matched, modified, err := col.Update(key, func(stored []byte) ([]byte, bool, error) {
 			resetMongoFilterWriteAttempt(&predicateMatched)
@@ -316,6 +322,12 @@ func (s *Server) deleteMongoFilterOneWithBudget(col *collections.Collection, pla
 		}
 		materializer, err := storedDocumentMaterializerForCollection(col)
 		if err != nil {
+			return false, err
+		}
+		// See update-one: snapshot/materializer setup itself is interruptible
+		// work and must not let the following DeleteDocumentIf enter expired.
+		if err := budget.checkDeadline(); err != nil {
+			_ = materializer.Close()
 			return false, err
 		}
 		predicateMatched := false

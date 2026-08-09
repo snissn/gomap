@@ -185,7 +185,6 @@ func (s *Server) preflightFindAndModifyExactResponse(col *collections.Collection
 		if err != nil {
 			return err
 		}
-		before = doc
 		upserted = true
 		if newImage {
 			value = doc
@@ -209,11 +208,10 @@ func (s *Server) preflightFindAndModifyExactResponse(col *collections.Collection
 	if err != nil {
 		return err
 	}
-	msg, err := wire.AppendMsgMessage(nil, 1, 0, 0, response)
-	if err != nil {
-		return err
-	}
-	if len(msg) > int(s.maxMessageLength()) {
+	// OP_MSG is a fixed 16-byte header, four flag bytes, one kind-0 section
+	// discriminator, and the already validated BSON response. Avoid allocating
+	// a potentially huge temporary message merely to reject it by size.
+	if wire.HeaderLen+4+1+len(response) > int(s.maxMessageLength()) {
 		// Keep the known pre-mutation rejection representable at the gateway's
 		// minimum response envelope as well.
 		return errors.New("findAndModify response too large")
