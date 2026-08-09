@@ -67,6 +67,20 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
+	ordered, _, err := mongoCommandOrdered(command)
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	if len(documents) > defaultMaxWriteBatchSize {
+		return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("Mongo gateway insert exceeds maxWriteBatchSize %d", defaultMaxWriteBatchSize))
+	}
+	budget, err := s.newMongoWriteBudgetForCommand(ctx, command)
+	if err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	if err := budget.ensureMinimumResponse(); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
 
 	var col *collections.Collection
 	format := s.DefaultCollectionOptions.DocumentFormat
@@ -80,6 +94,13 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
+	// A BSON multi-document insert takes the native atomic batch granule.  Its
+	// whole target reservation is knowable after parse, before a first-write
+	// collection would be created, so reject an over-cap command without that
+	// otherwise observable catalog side effect.
+	if len(ids) > 1 && format == collections.DocumentFormatBSON && len(ids) > s.maxMongoWriteTargets() {
+		return marshalInsertResponseWithWriteErrors(0, []mongoWriteError{{index: 0, err: errors.New("Mongo gateway multi-write command exceeded its retained-target budget")}})
+	}
 	var releaseColdCollection func()
 	defer func() {
 		if releaseColdCollection != nil {
@@ -87,6 +108,12 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 		}
 	}()
 	if col == nil {
+		if s.mongoWriteBeforeFirstCreateHook != nil {
+			s.mongoWriteBeforeFirstCreateHook(budget)
+		}
+		if err := budget.checkDeadline(); err != nil {
+			return mongoInsertPreMutationWriteErrorResponse(budget, 0, err)
+		}
 		col, releaseColdCollection, err = s.openOrCreateCollectionForFirstWrite(name)
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
@@ -99,30 +126,144 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 			format = actualFormat
 		}
 	}
-	if format == collections.DocumentFormatBSON {
-		if len(ids) == 1 {
-			err = s.runMongoInsertCoalesced(name, col, ids[0], stored[0])
-		} else {
-			_, err = col.InsertBatchValidatedBSON(ids, stored)
+	return s.runMongoInsertCommand(name, col, format, ids, stored, ordered, budget)
+}
+
+// runMongoInsertCommand applies a fully parsed insert command.  A native
+// InsertBatchValidatedBSON call is an intentionally non-interruptible atomic
+// granule: its deadline is checked immediately before entry.  The duplicate
+// fallback is item-at-a-time, so it reserves target capacity and rechecks the
+// deadline before every possible side effect.
+func (s *Server) runMongoInsertCommand(name string, col *collections.Collection, format collections.DocumentFormat, ids, stored [][]byte, ordered bool, budget *mongoWriteBudget) (wire.Document, error) {
+	// Preserve the native batch fast path for the normal success case.  Its
+	// planner rejects duplicate conflicts before publishing, so a duplicate can
+	// safely fall back to the per-item path that supplies Mongo's indexed
+	// ordered/unordered error envelope.
+	if len(ids) > 1 && format == collections.DocumentFormatBSON {
+		if err := budget.reserveTargets(len(ids)); err != nil {
+			if reserveErr := budget.reserveError(); reserveErr == nil {
+				return marshalInsertResponseWithWriteErrors(0, []mongoWriteError{{index: 0, err: err}})
+			}
+			// ensureMinimumResponse reserves this terminal slot before any
+			// mutation is admitted. Never turn a runtime rejection into a
+			// successful-looking n:0 response merely because ordinary error
+			// capacity has already been exhausted.
+			if reserveErr := budget.reserveTerminalError(); reserveErr != nil {
+				return nil, reserveErr
+			}
+			return marshalInsertResponseWithWriteErrors(0, []mongoWriteError{{index: 0, err: err}})
 		}
-	} else {
-		_, err = col.InsertBatch(ids, stored)
+		if _, batchErr := col.InsertBatchValidatedBSON(ids, stored); batchErr == nil {
+			return marshalInsertResponseWithWriteErrors(int32(len(ids)), nil)
+		} else if errors.Is(batchErr, collections.ErrCommitAmbiguous) {
+			return mongoInsertCommandError(batchErr)
+		} else {
+			// A non-ambiguous native batch failure is pre-publication. This includes
+			// duplicate conflicts and item/planning failures (for example an
+			// oversized secondary-index key). Give the atomic reservation back and
+			// preserve Mongo's indexed ordered/unordered semantics per item.
+			budget.refundTargets(len(ids))
+		}
 	}
-	if err != nil {
-		return mongoInsertCommandError(err)
+	inserted := int32(0)
+	writeErrors := make([]mongoWriteError, 0)
+	for i := range ids {
+		if err := budget.reserveTarget(); err != nil {
+			if reserveErr := budget.reserveError(); reserveErr == nil {
+				writeErrors = append(writeErrors, mongoWriteError{index: i, err: err})
+			} else {
+				if terminalErr := budget.reserveTerminalError(); terminalErr != nil {
+					return nil, terminalErr
+				}
+				writeErrors = append(writeErrors, mongoWriteError{index: i, err: err})
+			}
+			break
+		}
+		var err error
+		if format == collections.DocumentFormatBSON {
+			if len(ids) == 1 {
+				err = s.runMongoInsertCoalesced(name, col, ids[i], stored[i], budget)
+			} else {
+				err = runMongoInsertOne(col, ids[i], stored[i])
+			}
+		} else {
+			_, err = col.InsertBatch(ids[i:i+1], stored[i:i+1])
+		}
+		if err == nil {
+			inserted++
+			continue
+		}
+		// A collection can report an error after publishing a document (for
+		// example while maintaining an auxiliary index).  That outcome is not a
+		// normal per-item write failure: continuing an unordered command would
+		// make the caller unable to tell which writes may have committed.
+		if errors.Is(err, collections.ErrCommitAmbiguous) {
+			return mongoCommitAmbiguousCommandError(err)
+		}
+		if reserveErr := budget.reserveError(); reserveErr != nil {
+			if terminalErr := budget.reserveTerminalError(); terminalErr != nil {
+				return nil, terminalErr
+			}
+			writeErrors = append(writeErrors, mongoWriteError{index: i, err: reserveErr})
+			break
+		}
+		writeErrors = append(writeErrors, mongoWriteError{index: i, err: err})
+		if ordered {
+			break
+		}
 	}
-	return marshalDocument(bson.D{
-		{Key: "ok", Value: 1.0},
-		{Key: "n", Value: int32(len(documents))},
-	})
+	return marshalInsertResponseWithWriteErrors(inserted, writeErrors)
+}
+
+// mongoInsertPreMutationWriteErrorResponse reports an indexed runtime stop
+// discovered after full parsing but before a missing namespace is created.
+// The terminal response reservation is retained even at the smallest valid
+// envelope, so a deadline never becomes a misleading successful n:0 result.
+func mongoInsertPreMutationWriteErrorResponse(budget *mongoWriteBudget, index int, runErr error) (wire.Document, error) {
+	if reserveErr := budget.reserveError(); reserveErr == nil {
+		return marshalInsertResponseWithWriteErrors(0, []mongoWriteError{{index: index, err: runErr}})
+	}
+	if terminalErr := budget.reserveTerminalError(); terminalErr != nil {
+		return nil, terminalErr
+	}
+	return marshalInsertResponseWithWriteErrors(0, []mongoWriteError{{index: index, err: runErr}})
+}
+
+// mongoUpdatePreMutationWriteErrorsResponse is the update counterpart used
+// for a runtime deadline discovered after full parse/admission but before
+// first catalog creation. Missing-collection preview errors have not consumed
+// the real budget yet, so reserve them in stable order before adding the
+// terminal deadline error. This preserves unordered outcomes without a
+// catalog side effect.
+func mongoUpdatePreMutationWriteErrorsResponse(budget *mongoWriteBudget, previewErrors []mongoWriteError, index int, runErr error) (wire.Document, error) {
+	writeErrors := make([]mongoWriteError, 0, len(previewErrors)+1)
+	for _, writeErr := range append(previewErrors, mongoWriteError{index: index, err: runErr}) {
+		if reserveErr := budget.reserveError(); reserveErr == nil {
+			writeErrors = append(writeErrors, writeErr)
+			continue
+		}
+		if terminalErr := budget.reserveTerminalError(); terminalErr != nil {
+			return nil, terminalErr
+		}
+		writeErrors = append(writeErrors, writeErr)
+		break
+	}
+	return marshalUpdateResponseWithWriteErrors(0, 0, nil, writeErrors)
 }
 
 func mongoInsertCommandError(err error) (wire.Document, error) {
+	if errors.Is(err, collections.ErrCommitAmbiguous) {
+		return mongoCommitAmbiguousCommandError(err)
+	}
 	code, codeName := commandCodeBadValue, "BadValue"
 	if collections.IsDuplicateKeyError(err) {
 		code, codeName = commandCodeDuplicateKey, "DuplicateKey"
 	}
 	return commandError(code, codeName, err.Error())
+}
+
+func mongoCommitAmbiguousCommandError(err error) (wire.Document, error) {
+	return commandError(commandCodeShutdownInProgress, "ShutdownInProgress", err.Error())
 }
 
 func prepareInsertDocuments(documents []wire.Document, format collections.DocumentFormat) ([][]byte, [][]byte, error) {
@@ -155,17 +296,21 @@ type mongoInsertCoalescer struct {
 }
 
 type mongoInsertCoalescerRequest struct {
-	col    *collections.Collection
-	id     []byte
-	stored []byte
-	done   chan mongoInsertCoalescerResult
+	col      *collections.Collection
+	id       []byte
+	stored   []byte
+	deadline time.Time
+	done     chan mongoInsertCoalescerResult
 }
 
 type mongoInsertCoalescerResult struct {
 	err error
 }
 
-func (s *Server) runMongoInsertCoalesced(name string, col *collections.Collection, id, stored []byte) error {
+func (s *Server) runMongoInsertCoalesced(name string, col *collections.Collection, id, stored []byte, budget *mongoWriteBudget) error {
+	if err := budget.checkDeadline(); err != nil {
+		return err
+	}
 	if col == nil {
 		return runMongoInsertOne(col, id, stored)
 	}
@@ -176,7 +321,10 @@ func (s *Server) runMongoInsertCoalesced(name string, col *collections.Collectio
 	done := make(chan mongoInsertCoalescerResult, 1)
 	// The handler waits for completion before returning, so request-body-backed
 	// BSON remains live while the worker builds and applies the coalesced batch.
-	if !coalescer.enqueue(mongoInsertCoalescerRequest{col: col, id: id, stored: stored, done: done}) {
+	if !coalescer.enqueue(mongoInsertCoalescerRequest{col: col, id: id, stored: stored, deadline: budget.deadline, done: done}) {
+		if err := budget.checkDeadline(); err != nil {
+			return err
+		}
 		return runMongoInsertOne(col, id, stored)
 	}
 	return coalescer.waitForInsertResult(done).err
@@ -365,7 +513,7 @@ func (c *mongoInsertCoalescer) markStopped() {
 
 func (c *mongoInsertCoalescer) drainRequestsDirect() {
 	for req := range c.requests {
-		req.done <- mongoInsertCoalescerResult{err: runMongoInsertOne(req.col, req.id, req.stored)}
+		runMongoInsertCoalescerSequential([]mongoInsertCoalescerRequest{req})
 	}
 }
 
@@ -458,6 +606,7 @@ drained:
 }
 
 func (c *mongoInsertCoalescer) runBatch(batch []mongoInsertCoalescerRequest) {
+	batch = filterExpiredMongoInsertCoalescerRequests(batch)
 	if len(batch) == 0 {
 		return
 	}
@@ -483,6 +632,20 @@ func (c *mongoInsertCoalescer) runBatch(batch []mongoInsertCoalescerRequest) {
 		return
 	}
 	completeMongoInsertCoalescerBatch(batch, mongoInsertCoalescerResult{})
+}
+
+// A coalescer can wait behind unrelated traffic.  Drop requests whose command
+// deadline elapsed while waiting before the worker enters any mutation granule.
+func filterExpiredMongoInsertCoalescerRequests(batch []mongoInsertCoalescerRequest) []mongoInsertCoalescerRequest {
+	kept := batch[:0]
+	for _, req := range batch {
+		if !req.deadline.IsZero() && time.Now().After(req.deadline) {
+			req.done <- mongoInsertCoalescerResult{err: errors.New("Mongo gateway multi-write command exceeded its execution-time budget")}
+			continue
+		}
+		kept = append(kept, req)
+	}
+	return kept
 }
 
 func completeMongoInsertCoalescerBatch(batch []mongoInsertCoalescerRequest, result mongoInsertCoalescerResult) {
@@ -521,6 +684,10 @@ func mongoInsertCoalescerUsesSingleCollection(batch []mongoInsertCoalescerReques
 
 func runMongoInsertCoalescerSequential(batch []mongoInsertCoalescerRequest) {
 	for _, req := range batch {
+		if !req.deadline.IsZero() && time.Now().After(req.deadline) {
+			req.done <- mongoInsertCoalescerResult{err: errors.New("Mongo gateway multi-write command exceeded its execution-time budget")}
+			continue
+		}
 		req.done <- mongoInsertCoalescerResult{err: runMongoInsertOne(req.col, req.id, req.stored)}
 	}
 }
@@ -903,6 +1070,36 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
+	ordered, _, err := mongoCommandOrdered(command)
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	if len(updates) > defaultMaxWriteBatchSize {
+		return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("Mongo gateway update exceeds maxWriteBatchSize %d", defaultMaxWriteBatchSize))
+	}
+	// The complete BSON command (including this array) has already passed the
+	// OP_MSG MaxMessageLength check before dispatch; this count cap separately
+	// bounds result/error entries and per-spec bookkeeping.
+	// Parse the entire command before opening/creating a collection or applying a
+	// mutation.  This is deliberately stricter than the legacy streaming parser:
+	// malformed later specifications never leave a partial command behind.
+	parsed := make([]mongoUpdateItem, len(updates))
+	budget, err := s.newMongoWriteBudgetForCommand(ctx, command)
+	if err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	for i, update := range updates {
+		item, parseErr := parseMongoUpdateItem(i, update)
+		if parseErr != nil {
+			return mongoUpdateParseCommandError(parseErr)
+		}
+		item.selector = s
+		item.budget = budget
+		parsed[i] = item
+	}
+	if err := budget.ensureMinimumResponse(); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
 
 	col, err := s.openCollectionForMutation(name)
 	missingCollection := errors.Is(err, collections.ErrCollectionNotFound)
@@ -915,45 +1112,6 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 			releaseColdCollection()
 		}
 	}()
-	parsed := make([]mongoUpdateItem, 0, len(updates))
-	seenKeys := make(map[string]struct{}, len(updates))
-	hasDuplicateKey := false
-	for i, update := range updates {
-		item, err := parseMongoUpdateItem(i, update)
-		if err != nil {
-			parseErr := err
-			if len(parsed) > 0 && missingCollection {
-				hasUpsert := false
-				for _, prior := range parsed {
-					hasUpsert = hasUpsert || prior.upsert
-				}
-				if hasUpsert {
-					if err := s.validateMongoMissingCollectionFirstUpsert(parsed); err != nil {
-						return mongoUpdateWriteCommandError(err)
-					}
-					col, releaseColdCollection, err = s.openOrCreateCollectionForFirstWrite(name)
-					if err != nil {
-						return commandError(commandCodeBadValue, "BadValue", err.Error())
-					}
-					if _, _, _, runErr := runMongoUpdatesSequentialWithUpserts(col, parsed); runErr != nil {
-						return mongoUpdateWriteCommandError(runErr)
-					}
-				}
-			} else if len(parsed) > 0 {
-				if _, _, runErr := runMongoUpdatesSequential(col, parsed); runErr != nil {
-					return mongoUpdateWriteCommandError(runErr)
-				}
-			}
-			return mongoUpdateParseCommandError(parseErr)
-		}
-		keyString := string(item.key)
-		if _, ok := seenKeys[keyString]; ok {
-			hasDuplicateKey = true
-		}
-		item.selector = s
-		seenKeys[keyString] = struct{}{}
-		parsed = append(parsed, item)
-	}
 	if missingCollection {
 		hasUpsert := false
 		for _, item := range parsed {
@@ -962,42 +1120,40 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 		if !hasUpsert {
 			return marshalUpdateResponse(0, 0, nil)
 		}
-		if err := s.validateMongoMissingCollectionFirstUpsert(parsed); err != nil {
-			return mongoUpdateWriteCommandError(err)
+		// Ordered missing-collection upserts retain the established preflight
+		// rejection contract. Unordered commands instead validate every actual
+		// candidate in the preview below so an indexed runtime error can continue
+		// to a later valid upsert without creating an empty collection.
+		if ordered {
+			if err := s.validateMongoMissingCollectionFirstUpsert(parsed); err != nil {
+				return mongoUpdateWriteCommandError(err)
+			}
+		}
+		// A successful first upsert creates this collection. Preview response
+		// admission before opening the catalog: otherwise a response-budget
+		// rejection would leave an empty collection behind. For unordered writes,
+		// an oversized earlier upsert must not hide a later admissible upsert; the
+		// normal command loop records the same indexed errors after the collection
+		// is opened. The preview never consumes the real budget.
+		createIndex, create, writeErrors, err := s.mongoMissingCollectionFirstUpsertResponseAdmission(parsed, budget, ordered)
+		if err != nil {
+			return nil, err
+		}
+		if !create {
+			return marshalUpdateResponseWithWriteErrors(0, 0, nil, writeErrors)
+		}
+		if s.mongoWriteBeforeFirstCreateHook != nil {
+			s.mongoWriteBeforeFirstCreateHook(budget)
+		}
+		if err := budget.checkDeadline(); err != nil {
+			return mongoUpdatePreMutationWriteErrorsResponse(budget, writeErrors, createIndex, err)
 		}
 		col, releaseColdCollection, err = s.openOrCreateCollectionForFirstWrite(name)
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
 	}
-	var matched, modified int32
-	var upserted []mongoUpdateUpserted
-	hasUpsert := false
-	for _, item := range parsed {
-		hasUpsert = hasUpsert || item.upsert
-	}
-	if len(parsed) == 1 && !hasUpsert {
-		var matchedOne, modifiedOne bool
-		matchedOne, modifiedOne, err = s.runMongoUpdateCoalesced(name, col, parsed[0])
-		if matchedOne {
-			matched = 1
-		}
-		if modifiedOne {
-			modified = 1
-		}
-	} else if len(parsed) > 1 && !hasDuplicateKey && !hasUpsert {
-		var batched bool
-		matched, modified, batched, err = runMongoUpdateBatch(col, parsed)
-		if err != nil || !batched {
-			matched, modified, err = runMongoUpdatesSequential(col, parsed)
-		}
-	} else {
-		matched, modified, upserted, err = runMongoUpdatesSequentialWithUpserts(col, parsed)
-	}
-	if err != nil {
-		return mongoUpdateWriteCommandError(err)
-	}
-	return marshalUpdateResponse(matched, modified, upserted)
+	return s.runMongoUpdateCommand(name, col, parsed, ordered)
 }
 
 type mongoUpdateItem struct {
@@ -1011,10 +1167,394 @@ type mongoUpdateItem struct {
 	pureSet         bool
 	mutation        mongoMutation
 	upsert          bool
+	multi           bool
 	id              bson.RawValue
 	plan            findPlan
 	exactID         bool
 	selector        *Server
+	budget          *mongoWriteBudget
+}
+
+// mongoWriteBudget is local to one command. It prevents a batch of otherwise
+// bounded filter specifications from multiplying the configured scan budget.
+type mongoWriteBudget struct {
+	examinedRemaining         int
+	targetsRemaining          int
+	retainedKeyBytesRemaining int
+	errorsRemaining           int
+	deadline                  time.Time
+	responseBytesRemaining    int
+	minimumResponseFits       bool
+	// beforeUpsertInsertHook is test-only coordination between successful
+	// response admission and the non-interruptible document publication.
+	beforeUpsertInsertHook func()
+	// beforeNativeUpdateBatchHook is test-only coordination after native batch
+	// planning/materialization and immediately before its atomic publication.
+	beforeNativeUpdateBatchHook func()
+}
+
+const (
+	mongoWriteCommandMaxDuration         = 5 * time.Second
+	mongoWriteCommandMaxRetainedKeyBytes = 16 << 20
+	mongoWriteCommandMaxErrorEntries     = 10_000
+	mongoWriteErrorMessageMaxRunes       = 128
+	// A write error has a bounded 128-rune message (at most 512 UTF-8 bytes)
+	// plus BSON element framing. Reserve a deliberately conservative amount so
+	// a command never executes more errors than its advertised OP_MSG response
+	// can carry.
+	mongoWriteErrorResponseReserveBytes = 1024
+	mongoWriteResponseMinimumBytes      = 128
+)
+
+func newMongoWriteBudget(limit int) *mongoWriteBudget {
+	return &mongoWriteBudget{examinedRemaining: limit, targetsRemaining: limit, retainedKeyBytesRemaining: mongoWriteCommandMaxRetainedKeyBytes, errorsRemaining: mongoWriteCommandMaxErrorEntries - 1, responseBytesRemaining: int(wire.DefaultMaxMessageLength) - mongoWriteResponseMinimumBytes - mongoWriteErrorResponseReserveBytes, minimumResponseFits: true, deadline: time.Now().Add(mongoWriteCommandMaxDuration)}
+}
+
+func (s *Server) newMongoWriteBudget() *mongoWriteBudget {
+	budget := newMongoWriteBudget(s.maxFindScanDocuments())
+	budget.targetsRemaining = s.maxMongoWriteTargets()
+	if s != nil && s.mongoWriteRetainedKeyBytesLimit > 0 {
+		budget.retainedKeyBytesRemaining = s.mongoWriteRetainedKeyBytesLimit
+	}
+	budget.minimumResponseFits = int(s.maxMessageLength()) >= mongoWriteResponseMinimumBytes+mongoWriteErrorResponseReserveBytes
+	budget.responseBytesRemaining = int(s.maxMessageLength()) - mongoWriteResponseMinimumBytes - mongoWriteErrorResponseReserveBytes
+	if budget.responseBytesRemaining < 0 {
+		budget.responseBytesRemaining = 0
+	}
+	return budget
+}
+
+// newMongoWriteBudgetForCommand applies the gateway ceiling together with a
+// valid client maxTimeMS and any caller context deadline.  Atomic collection
+// calls remain non-interruptible granules, but every selector and mutation
+// boundary observes this shared deadline before it enters the granule.
+func (s *Server) newMongoWriteBudgetForCommand(ctx context.Context, command wire.Document) (*mongoWriteBudget, error) {
+	budget := s.newMongoWriteBudget()
+	maxTimeMS, present, err := optionalPositiveIntFieldWithPresence(command, "maxTimeMS")
+	if err != nil {
+		return nil, err
+	}
+	if present {
+		deadline := time.Now().Add(time.Duration(maxTimeMS) * time.Millisecond)
+		if deadline.Before(budget.deadline) {
+			budget.deadline = deadline
+		}
+	}
+	if ctx != nil {
+		if deadline, ok := ctx.Deadline(); ok && deadline.Before(budget.deadline) {
+			budget.deadline = deadline
+		}
+	}
+	return budget, nil
+}
+
+func (s *Server) maxMongoWriteTargets() int {
+	if s != nil && s.mongoWriteTargetLimit > 0 {
+		return s.mongoWriteTargetLimit
+	}
+	return defaultMaxWriteBatchSize
+}
+func (b *mongoWriteBudget) charge() error {
+	if b == nil {
+		return nil
+	}
+	if time.Now().After(b.deadline) {
+		return errors.New("Mongo gateway multi-write command exceeded its execution-time budget")
+	}
+	if b.examinedRemaining <= 0 {
+		return errors.New("Mongo gateway multi-write command exceeded its shared document-work budget")
+	}
+	b.examinedRemaining--
+	return nil
+}
+
+func (b *mongoWriteBudget) reserveTarget() error {
+	if b == nil {
+		return nil
+	}
+	if time.Now().After(b.deadline) {
+		return errors.New("Mongo gateway multi-write command exceeded its execution-time budget")
+	}
+	if b.targetsRemaining <= 0 {
+		return errors.New("Mongo gateway multi-write command exceeded its retained-target budget")
+	}
+	b.targetsRemaining--
+	return nil
+}
+
+// reserveTargetKey admits a key retained between the natural-order scan and
+// its later conditional mutation.  Counting targets alone is not enough: BSON
+// _id values can be large, so the retained key bytes have their own command
+// ceiling.
+func (b *mongoWriteBudget) reserveTargetKey(keyBytes int) error {
+	if b == nil {
+		return nil
+	}
+	if keyBytes < 0 {
+		return errors.New("Mongo gateway multi-write command has an invalid retained key size")
+	}
+	if time.Now().After(b.deadline) {
+		return errors.New("Mongo gateway multi-write command exceeded its execution-time budget")
+	}
+	if b.targetsRemaining <= 0 {
+		return errors.New("Mongo gateway multi-write command exceeded its retained-target budget")
+	}
+	if b.retainedKeyBytesRemaining < keyBytes {
+		return errors.New("Mongo gateway multi-write command exceeded its retained-key byte budget")
+	}
+	b.targetsRemaining--
+	b.retainedKeyBytesRemaining -= keyBytes
+	return nil
+}
+
+// reserveTargets reserves an entire non-interruptible mutation granule.  It
+// deliberately checks capacity before decrementing so an over-cap native batch
+// is rejected without consuming budget or applying any prefix.
+func (b *mongoWriteBudget) reserveTargets(count int) error {
+	if b == nil || count == 0 {
+		return nil
+	}
+	if count < 0 {
+		return errors.New("Mongo gateway multi-write command has an invalid target reservation")
+	}
+	if time.Now().After(b.deadline) {
+		return errors.New("Mongo gateway multi-write command exceeded its execution-time budget")
+	}
+	if b.targetsRemaining < count {
+		return errors.New("Mongo gateway multi-write command exceeded its retained-target budget")
+	}
+	b.targetsRemaining -= count
+	return nil
+}
+
+func (b *mongoWriteBudget) refundTargets(count int) {
+	if b != nil && count > 0 {
+		b.targetsRemaining += count
+	}
+}
+
+func (b *mongoWriteBudget) reserveError() error {
+	if b == nil {
+		return nil
+	}
+	if b.errorsRemaining <= 0 {
+		return errors.New("Mongo gateway multi-write command exceeded its write-error budget")
+	}
+	if b.responseBytesRemaining < mongoWriteErrorResponseReserveBytes {
+		return errors.New("Mongo gateway multi-write command exceeded its write-error response budget")
+	}
+	b.errorsRemaining--
+	b.responseBytesRemaining -= mongoWriteErrorResponseReserveBytes
+	return nil
+}
+
+// reserveUpsertResponse admits the exact BSON entry that a successful upsert
+// adds to the command response.  It runs before Insert: unlike write errors,
+// an upsert is a successful side effect and cannot honestly be discarded after
+// publication merely because the response envelope has filled up.
+func (b *mongoWriteBudget) reserveUpsertResponse(item mongoUpdateUpserted) (int, error) {
+	if b == nil {
+		return 0, nil
+	}
+	bytes, err := b.upsertResponseBytesAvailable(item)
+	if err != nil {
+		return 0, err
+	}
+	b.responseBytesRemaining -= bytes
+	return bytes, nil
+}
+
+// upsertResponseBytesAvailable checks the exact successful-upsert response
+// entry without consuming it. Missing-collection writes use this before
+// opening the catalog; the side-effecting insert still reserves the same
+// amount immediately before publication.
+func (b *mongoWriteBudget) upsertResponseBytesAvailable(item mongoUpdateUpserted) (int, error) {
+	if b == nil {
+		return 0, nil
+	}
+	bytes, err := mongoUpdateUpsertResponseBytes(item)
+	if err != nil {
+		return 0, err
+	}
+	if b.responseBytesRemaining < bytes {
+		return 0, errors.New("Mongo gateway multi-write command exceeded its upsert response budget")
+	}
+	return bytes, nil
+}
+
+func mongoUpdateUpsertResponseBytes(item mongoUpdateUpserted) (int, error) {
+	entry, err := bson.Marshal(bson.D{{Key: "index", Value: int32(item.index)}, {Key: "_id", Value: item.id}})
+	if err != nil {
+		return 0, fmt.Errorf("Mongo gateway cannot size upsert response entry: %w", err)
+	}
+	// Account for the array element type/key and the upserted field/array
+	// framing. The fixed allowance deliberately exceeds the decimal array-key
+	// and BSON container overhead at the supported write batch size.
+	const responseFramingReserve = 64
+	return len(entry) + responseFramingReserve, nil
+}
+
+func (b *mongoWriteBudget) refundResponseBytes(bytes int) {
+	if b != nil && bytes > 0 {
+		b.responseBytesRemaining += bytes
+	}
+}
+
+// reserveTerminalError consumes the response slot held back by
+// ensureMinimumResponse. It is used only when execution has already stopped:
+// the final indexed error must remain observable even at the minimum accepted
+// response envelope.
+func (b *mongoWriteBudget) reserveTerminalError() error {
+	if b == nil {
+		return nil
+	}
+	if !b.minimumResponseFits {
+		return errors.New("Mongo gateway maxMessageSizeBytes is too small for a multi-write response")
+	}
+	if b.errorsRemaining < 0 {
+		return errors.New("Mongo gateway multi-write command terminal write-error slot is already consumed")
+	}
+	b.errorsRemaining = -1
+	return nil
+}
+
+func (b *mongoWriteBudget) ensureMinimumResponse() error {
+	if b != nil && !b.minimumResponseFits {
+		return errors.New("Mongo gateway maxMessageSizeBytes is too small for a multi-write response")
+	}
+	return nil
+}
+
+func (b *mongoWriteBudget) checkDeadline() error {
+	if b != nil && time.Now().After(b.deadline) {
+		return errors.New("Mongo gateway multi-write command exceeded its execution-time budget")
+	}
+	return nil
+}
+
+type mongoWriteError struct {
+	index int
+	err   error
+}
+
+func mongoCommandOrdered(command wire.Document) (bool, bool, error) {
+	value := bson.Raw(command).Lookup("ordered")
+	if value.IsZero() {
+		return true, false, nil
+	}
+	ordered, ok := value.BooleanOK()
+	if !ok {
+		return false, true, errors.New("Mongo command field \"ordered\" must be a boolean")
+	}
+	return ordered, true, nil
+}
+
+// runMongoUpdateCommand has intentionally per-document atomicity only. A
+// multi-write command is not a transaction: ordered commands stop on the first
+// write error, while unordered commands continue and retain original indices.
+func (s *Server) runMongoUpdateCommand(name string, col *collections.Collection, updates []mongoUpdateItem, ordered bool) (wire.Document, error) {
+	// Restore the command-local native batch only for BSON $set exact-id
+	// updates. This subset cannot hit a secondary-unique runtime conflict and
+	// has already completed all state-independent validation, so the atomic
+	// collection result preserves the command's per-item counts. All other
+	// shapes retain the indexed-error sequential path below.
+	batchable := len(updates) > 1 && mongoUpdateItemsCanUseBatch(col, updates)
+	if batchable {
+		seen := make(map[string]struct{}, len(updates))
+		for _, update := range updates {
+			if _, duplicate := seen[string(update.key)]; duplicate {
+				batchable = false
+				break
+			}
+			seen[string(update.key)] = struct{}{}
+		}
+	}
+	if batchable {
+		budget := updates[0].budget
+		if err := budget.reserveTargets(len(updates)); err == nil {
+			results, batched, batchErr := runMongoUpdateBatchResults(col, updates)
+			if batchErr != nil {
+				if errors.Is(batchErr, collections.ErrCommitAmbiguous) {
+					return mongoCommitAmbiguousCommandError(batchErr)
+				}
+				// UpdateBatchItemError and other planner failures are known to have
+				// occurred before publication. Fall back to the indexed sequential
+				// path so unordered commands can continue at later original indices.
+				batched = false
+			}
+			if batched {
+				var matched, modified int32
+				for _, result := range results {
+					matched += boolToInt32(result.Matched)
+					modified += boolToInt32(result.Modified)
+				}
+				return marshalUpdateResponseWithWriteErrors(matched, modified, nil, nil)
+			}
+			budget.refundTargets(len(updates))
+		}
+	}
+	var matched, modified int32
+	upserted := make([]mongoUpdateUpserted, 0)
+	writeErrors := make([]mongoWriteError, 0)
+	for _, update := range updates {
+		matchedOne, modifiedOne, inserted, err := s.runMongoUpdateItem(name, col, update)
+		if err != nil {
+			if errors.Is(err, collections.ErrCommitAmbiguous) {
+				return mongoCommitAmbiguousCommandError(err)
+			}
+			matched += matchedOne
+			modified += modifiedOne
+			if reserveErr := update.budget.reserveError(); reserveErr != nil {
+				if terminalErr := update.budget.reserveTerminalError(); terminalErr != nil {
+					return nil, terminalErr
+				}
+				writeErrors = append(writeErrors, mongoWriteError{index: update.index, err: reserveErr})
+				return marshalUpdateResponseWithWriteErrors(matched, modified, upserted, writeErrors)
+			}
+			writeErrors = append(writeErrors, mongoWriteError{index: update.index, err: err})
+			if ordered {
+				break
+			}
+			continue
+		}
+		matched += matchedOne
+		modified += modifiedOne
+		if inserted {
+			upserted = append(upserted, mongoUpdateUpserted{index: update.index, id: update.id})
+		}
+	}
+	return marshalUpdateResponseWithWriteErrors(matched, modified, upserted, writeErrors)
+}
+
+func (s *Server) runMongoUpdateItem(name string, col *collections.Collection, update mongoUpdateItem) (int32, int32, bool, error) {
+	if update.exactID {
+		if err := update.budget.reserveTarget(); err != nil {
+			return 0, 0, false, err
+		}
+	}
+	if !update.multi {
+		if !update.upsert {
+			matched, modified, err := s.runMongoUpdateCoalesced(name, col, update)
+			return boolToInt32(matched), boolToInt32(modified), false, err
+		}
+		matched, modified, inserted, err := runMongoUpdateOneWithUpsert(col, update)
+		return boolToInt32(matched || inserted), boolToInt32(modified), inserted, err
+	}
+	if update.upsert && !update.exactID {
+		return 0, 0, false, errors.New("Mongo gateway multi update upsert requires an exact _id equality filter")
+	}
+	if update.exactID {
+		matched, modified, inserted, err := runMongoUpdateOneWithUpsert(col, update)
+		return boolToInt32(matched || inserted), boolToInt32(modified), inserted, err
+	}
+	return s.runMongoFilterUpdateMany(col, update)
+}
+
+func boolToInt32(value bool) int32 {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 type mongoUpdateParseError struct {
@@ -1030,6 +1570,11 @@ func (e mongoUpdateParseError) Error() string {
 func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, error) {
 	if !bson.Raw(update).Lookup("arrayFilters").IsZero() {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update does not support arrayFilters", index)}
+	}
+	for _, option := range []string{"collation", "hint"} {
+		if !bson.Raw(update).Lookup(option).IsZero() {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update does not support %s", index, option)}
+		}
 	}
 	filter, err := requiredDocumentField(update, "q")
 	if err != nil {
@@ -1051,10 +1596,9 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 		}
 		id, directID = simplePrimaryEqualityFindValue(plan)
 	}
-	if multi, err := optionalBoolField(update, "multi"); err != nil {
+	multi, err := optionalBoolField(update, "multi")
+	if err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
-	} else if multi {
-		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update currently supports updateOne only", index)}
 	}
 	upsert, err := optionalBoolField(update, "upsert")
 	if err != nil {
@@ -1095,6 +1639,12 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 		if err != nil {
 			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 		}
+		// MongoDB only permits replacement-style updates for a single target.
+		// Detect this while parsing the full command, so a later invalid item
+		// cannot leave an earlier mutation behind.
+		if multi && mutation.replace != nil {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway multi update does not support replacement-style updates", index)}
+		}
 	}
 	return mongoUpdateItem{
 		index:           index,
@@ -1107,6 +1657,7 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 		pureSet:         pureSet,
 		mutation:        mutation,
 		upsert:          upsert,
+		multi:           multi,
 		id:              id,
 		plan:            plan,
 		exactID:         directID,
@@ -1208,6 +1759,9 @@ func runMongoUpdateOneWithUpsert(col *collections.Collection, update mongoUpdate
 		if err != nil || matched || !update.upsert {
 			return matched, modified, false, mongoUpdateErrorWithIndex(update.index, err)
 		}
+		if err := update.budget.checkDeadline(); err != nil {
+			return matched, modified, false, err
+		}
 		return mongoInsertUpsert(col, update)
 	}
 	materializer, err := storedDocumentMaterializerForCollection(col)
@@ -1217,10 +1771,19 @@ func runMongoUpdateOneWithUpsert(col *collections.Collection, update mongoUpdate
 	if materializer != nil {
 		defer func() { _ = materializer.Close() }()
 	}
+	// Materializer setup can acquire a snapshot and refresh buffered template
+	// state. Recheck immediately before the non-interruptible collection update
+	// so a short command deadline cannot publish after that setup work.
+	if err := update.budget.checkDeadline(); err != nil {
+		return false, false, false, err
+	}
 	matched, modified, err := col.Update(update.key, func(stored []byte) ([]byte, bool, error) {
 		return applyMongoUpdateToStoredDocument(col, materializer, update, stored)
 	})
 	if err != nil || matched || !update.upsert {
+		return matched, modified, false, err
+	}
+	if err := update.budget.checkDeadline(); err != nil {
 		return matched, modified, false, err
 	}
 	return mongoInsertUpsert(col, update)
@@ -1238,31 +1801,119 @@ func mongoInsertUpsert(col *collections.Collection, update mongoUpdateItem) (boo
 	if !bytes.Equal(key, update.key) {
 		return false, false, false, errors.New("Mongo gateway update cannot modify _id")
 	}
+	responseReservation, err := update.budget.reserveUpsertResponse(mongoUpdateUpserted{index: update.index, id: update.id})
+	if err != nil {
+		return false, false, false, err
+	}
+	if update.budget != nil && update.budget.beforeUpsertInsertHook != nil {
+		update.budget.beforeUpsertInsertHook()
+	}
+	if err := update.budget.checkDeadline(); err != nil {
+		update.budget.refundResponseBytes(responseReservation)
+		return false, false, false, err
+	}
 	if _, err := col.Insert(key, stored); err != nil {
+		update.budget.refundResponseBytes(responseReservation)
 		return false, false, false, err
 	}
 	return false, false, true, nil
 }
 
+func (s *Server) validateMongoMissingCollectionUpsert(update mongoUpdateItem) error {
+	doc, err := mongoUpsertDocument(update)
+	if err != nil {
+		return mongoUpdateErrorWithIndex(update.index, err)
+	}
+	key, _, err := prepareInsertDocument(doc, s.DefaultCollectionOptions.DocumentFormat)
+	if err != nil {
+		return mongoUpdateErrorWithIndex(update.index, err)
+	}
+	if !bytes.Equal(key, update.key) {
+		return mongoUpdateErrorWithIndex(update.index, errors.New("Mongo gateway update cannot modify _id"))
+	}
+	return nil
+}
+
+// validateMongoMissingCollectionFirstUpsert remains the single-item helper
+// used by findAndModify. Multi-update admission validates the actual selected
+// candidate below because unordered response admission may skip earlier items.
 func (s *Server) validateMongoMissingCollectionFirstUpsert(updates []mongoUpdateItem) error {
 	for _, update := range updates {
+		if update.upsert {
+			return s.validateMongoMissingCollectionUpsert(update)
+		}
+	}
+	return nil
+}
+
+// mongoMissingCollectionFirstUpsertResponseAdmission previews upsert response
+// entries until one can create an otherwise missing collection. The copied
+// budget makes this pre-catalog check side-effect free; runMongoUpdateCommand
+// later consumes the same reservations and preserves indexed ordered/unordered
+// behavior. If no upsert can be admitted, its complete bounded response is
+// returned without creating a catalog entry.
+func (s *Server) mongoMissingCollectionFirstUpsertResponseAdmission(updates []mongoUpdateItem, budget *mongoWriteBudget, ordered bool) (int, bool, []mongoWriteError, error) {
+	preview := *budget
+	writeErrors := make([]mongoWriteError, 0)
+	for _, update := range updates {
+		// Replay exact-ID target admission in command order. The actual command
+		// reserves one target before each exact-ID update, including a no-match
+		// non-upsert. Without this, a later upsert could appear admissible,
+		// create the catalog, then fail after an earlier item consumes the last
+		// target reservation.
+		if update.exactID {
+			if targetErr := preview.reserveTarget(); targetErr != nil {
+				if reserveErr := preview.reserveError(); reserveErr != nil {
+					if terminalErr := preview.reserveTerminalError(); terminalErr != nil {
+						return -1, false, nil, terminalErr
+					}
+					writeErrors = append(writeErrors, mongoWriteError{index: update.index, err: reserveErr})
+					return -1, false, writeErrors, nil
+				}
+				writeErrors = append(writeErrors, mongoWriteError{index: update.index, err: targetErr})
+				if ordered {
+					return -1, false, writeErrors, nil
+				}
+				continue
+			}
+		}
 		if !update.upsert {
 			continue
 		}
-		doc, err := mongoUpsertDocument(update)
-		if err != nil {
-			return mongoUpdateErrorWithIndex(update.index, err)
+		if _, err := preview.upsertResponseBytesAvailable(mongoUpdateUpserted{index: update.index, id: update.id}); err == nil {
+			// Validate exactly the upsert that would cause a first-write catalog
+			// creation. An unordered oversized earlier item can be skipped, so
+			// validating only the first upsert would otherwise create an empty
+			// collection for a later semantically invalid candidate.
+			if validateErr := s.validateMongoMissingCollectionUpsert(update); validateErr == nil {
+				return update.index, true, writeErrors, nil
+			} else if reserveErr := preview.reserveError(); reserveErr != nil {
+				if terminalErr := preview.reserveTerminalError(); terminalErr != nil {
+					return -1, false, nil, terminalErr
+				}
+				writeErrors = append(writeErrors, mongoWriteError{index: update.index, err: reserveErr})
+				return -1, false, writeErrors, nil
+			} else {
+				writeErrors = append(writeErrors, mongoWriteError{index: update.index, err: validateErr})
+				if ordered {
+					return -1, false, writeErrors, nil
+				}
+				continue
+			}
+		} else if reserveErr := preview.reserveError(); reserveErr != nil {
+			if terminalErr := preview.reserveTerminalError(); terminalErr != nil {
+				return -1, false, nil, terminalErr
+			}
+			writeErrors = append(writeErrors, mongoWriteError{index: update.index, err: reserveErr})
+			return -1, false, writeErrors, nil
+		} else {
+			writeErrors = append(writeErrors, mongoWriteError{index: update.index, err: err})
+			if ordered {
+				return -1, false, writeErrors, nil
+			}
 		}
-		key, _, err := prepareInsertDocument(doc, s.DefaultCollectionOptions.DocumentFormat)
-		if err != nil {
-			return mongoUpdateErrorWithIndex(update.index, err)
-		}
-		if !bytes.Equal(key, update.key) {
-			return mongoUpdateErrorWithIndex(update.index, errors.New("Mongo gateway update cannot modify _id"))
-		}
-		return nil
 	}
-	return nil
+	return -1, false, writeErrors, nil
 }
 
 func mongoUpsertDocument(update mongoUpdateItem) (wire.Document, error) {
@@ -1316,6 +1967,14 @@ func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpda
 				Fields:     update.bsonSetFields,
 			}
 		}
+		if len(updates) > 0 && updates[0].budget != nil && updates[0].budget.beforeNativeUpdateBatchHook != nil {
+			updates[0].budget.beforeNativeUpdateBatchHook()
+		}
+		if len(updates) > 0 && updates[0].budget != nil {
+			if err := updates[0].budget.checkDeadline(); err != nil {
+				return nil, false, err
+			}
+		}
 		return col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges(items)
 	}
 	materializer, err := storedDocumentMaterializerForCollection(col)
@@ -1333,6 +1992,14 @@ func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpda
 			Update: func(stored []byte) ([]byte, bool, error) {
 				return applyMongoUpdateToStoredDocument(col, materializer, update, stored)
 			},
+		}
+	}
+	if len(updates) > 0 && updates[0].budget != nil && updates[0].budget.beforeNativeUpdateBatchHook != nil {
+		updates[0].budget.beforeNativeUpdateBatchHook()
+	}
+	if len(updates) > 0 && updates[0].budget != nil {
+		if err := updates[0].budget.checkDeadline(); err != nil {
+			return nil, false, err
 		}
 	}
 	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges(items)
@@ -1407,6 +2074,9 @@ type mongoUpdateCoalescerResult struct {
 }
 
 func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
+	if err := update.budget.checkDeadline(); err != nil {
+		return false, false, err
+	}
 	if !mongoUpdateCanUseBatch(col, update) {
 		return runMongoUpdateOne(col, update)
 	}
@@ -1416,6 +2086,9 @@ func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collectio
 	}
 	done := make(chan mongoUpdateCoalescerResult, 1)
 	if !coalescer.enqueue(mongoUpdateCoalescerRequest{col: col, item: update, done: done}) {
+		if err := update.budget.checkDeadline(); err != nil {
+			return false, false, err
+		}
 		return runMongoUpdateOne(col, update)
 	}
 	result := coalescer.waitForUpdateResult(done)
@@ -1593,8 +2266,7 @@ func (c *mongoUpdateCoalescer) markStopped() {
 
 func (c *mongoUpdateCoalescer) drainRequestsDirect() {
 	for req := range c.requests {
-		matched, modified, err := runMongoUpdateOne(req.col, req.item)
-		req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
+		runMongoUpdateCoalescerSequential([]mongoUpdateCoalescerRequest{req})
 	}
 }
 
@@ -1687,6 +2359,7 @@ drained:
 }
 
 func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
+	batch = filterExpiredMongoUpdateCoalescerRequests(batch)
 	if len(batch) == 0 {
 		return
 	}
@@ -1725,6 +2398,18 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 	}
 }
 
+func filterExpiredMongoUpdateCoalescerRequests(batch []mongoUpdateCoalescerRequest) []mongoUpdateCoalescerRequest {
+	kept := batch[:0]
+	for _, req := range batch {
+		if err := req.item.budget.checkDeadline(); err != nil {
+			req.done <- mongoUpdateCoalescerResult{err: err}
+			continue
+		}
+		kept = append(kept, req)
+	}
+	return kept
+}
+
 func completeMongoUpdateCoalescerBatch(batch []mongoUpdateCoalescerRequest, result mongoUpdateCoalescerResult) {
 	for _, req := range batch {
 		req.done <- result
@@ -1734,6 +2419,10 @@ func completeMongoUpdateCoalescerBatch(batch []mongoUpdateCoalescerRequest, resu
 func completeMongoUpdateCoalescerBatchExcept(batch []mongoUpdateCoalescerRequest, skip int) {
 	for i, req := range batch {
 		if i == skip {
+			continue
+		}
+		if err := req.item.budget.checkDeadline(); err != nil {
+			req.done <- mongoUpdateCoalescerResult{err: err}
 			continue
 		}
 		matched, modified, err := runMongoUpdateOne(req.col, req.item)
@@ -1803,6 +2492,10 @@ func mongoUpdateCoalescerBatchCanUseBatch(batch []mongoUpdateCoalescerRequest) b
 
 func runMongoUpdateCoalescerSequential(batch []mongoUpdateCoalescerRequest) {
 	for _, req := range batch {
+		if err := req.item.budget.checkDeadline(); err != nil {
+			req.done <- mongoUpdateCoalescerResult{err: err}
+			continue
+		}
 		matched, modified, err := runMongoUpdateOne(req.col, req.item)
 		req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
 	}
@@ -1993,6 +2686,31 @@ func (s *Server) deleteResponse(ctx context.Context, command wire.Document, sequ
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
+	ordered, _, err := mongoCommandOrdered(command)
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	if len(deletes) > defaultMaxWriteBatchSize {
+		return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("Mongo gateway delete exceeds maxWriteBatchSize %d", defaultMaxWriteBatchSize))
+	}
+	// OP_MSG MaxMessageLength bounds BSON bytes before dispatch; this cap bounds
+	// per-spec result/error bookkeeping independently of command byte size.
+	parsed := make([]mongoDeleteItem, len(deletes))
+	budget, err := s.newMongoWriteBudgetForCommand(ctx, command)
+	if err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	for i, deleteItem := range deletes {
+		item, parseErr := parseMongoDeleteItem(i, deleteItem)
+		if parseErr != nil {
+			return mongoUpdateParseCommandError(parseErr)
+		}
+		parsed[i] = item
+		parsed[i].budget = budget
+	}
+	if err := budget.ensureMinimumResponse(); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
 
 	col, err := s.openCollectionForMutation(name)
 	if err != nil {
@@ -2003,46 +2721,92 @@ func (s *Server) deleteResponse(ctx context.Context, command wire.Document, sequ
 	}
 
 	var deleted int32
-	for i, deleteItem := range deletes {
-		filter, err := requiredDocumentField(deleteItem, "q")
-		if err != nil {
-			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("deletes[%d]: %v", i, err))
-		}
-		plan, err := parseFindPlan(nil, filter)
-		if err != nil {
-			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("deletes[%d]: %v", i, err))
-		}
-		if err := validateMongoWritePlan(plan); err != nil {
-			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("deletes[%d]: %v", i, err))
-		}
-		limit, err := optionalInt32Field(deleteItem, "limit")
-		if err != nil {
-			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("deletes[%d]: %v", i, err))
-		}
-		if limit != 0 && limit != 1 {
-			return commandError(commandCodeBadValue, "BadValue", "Mongo gateway delete limit must be 0 or 1")
-		}
-		var deletedOne bool
-		if id, exactID := simplePrimaryEqualityFindValue(plan); exactID {
-			key, err := encodePrimaryKey(id)
-			if err != nil {
-				return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("deletes[%d]: %v", i, err))
+	writeErrors := make([]mongoWriteError, 0)
+	for _, item := range parsed {
+		count, runErr := s.runMongoDeleteItem(col, item)
+		if runErr != nil {
+			if errors.Is(runErr, collections.ErrCommitAmbiguous) {
+				return mongoCommitAmbiguousCommandError(runErr)
 			}
-			deletedOne, err = col.DeleteDocument(key)
-		} else {
-			if limit != 1 {
-				return commandError(commandCodeBadValue, "BadValue", "Mongo gateway filter delete supports deleteOne only (limit: 1)")
+			deleted += count
+			if reserveErr := item.budget.reserveError(); reserveErr != nil {
+				if terminalErr := item.budget.reserveTerminalError(); terminalErr != nil {
+					return nil, terminalErr
+				}
+				writeErrors = append(writeErrors, mongoWriteError{index: item.index, err: reserveErr})
+				return marshalDeleteResponseWithWriteErrors(deleted, writeErrors)
 			}
-			deletedOne, err = s.deleteMongoFilterOne(col, plan)
+			writeErrors = append(writeErrors, mongoWriteError{index: item.index, err: runErr})
+			if ordered {
+				break
+			}
+			continue
 		}
-		if err != nil {
-			return commandError(commandCodeBadValue, "BadValue", err.Error())
-		}
-		if deletedOne {
-			deleted++
+		deleted += count
+	}
+	return marshalDeleteResponseWithWriteErrors(deleted, writeErrors)
+}
+
+type mongoDeleteItem struct {
+	index   int
+	plan    findPlan
+	limit   int32
+	exactID bool
+	key     []byte
+	budget  *mongoWriteBudget
+}
+
+func parseMongoDeleteItem(index int, deleteItem wire.Document) (mongoDeleteItem, error) {
+	for _, option := range []string{"collation", "hint"} {
+		if !bson.Raw(deleteItem).Lookup(option).IsZero() {
+			return mongoDeleteItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("deletes[%d]: Mongo gateway delete does not support %s", index, option)}
 		}
 	}
-	return marshalDeleteResponse(deleted)
+	filter, err := requiredDocumentField(deleteItem, "q")
+	if err != nil {
+		return mongoDeleteItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("deletes[%d]: %v", index, err)}
+	}
+	plan, err := parseFindPlan(nil, filter)
+	if err != nil {
+		return mongoDeleteItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("deletes[%d]: %v", index, err)}
+	}
+	if err := validateMongoWritePlan(plan); err != nil {
+		return mongoDeleteItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("deletes[%d]: %v", index, err)}
+	}
+	limit, limitSet, err := optionalInt32FieldWithPresence(deleteItem, "limit")
+	if err != nil {
+		return mongoDeleteItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("deletes[%d]: %v", index, err)}
+	}
+	if !limitSet {
+		return mongoDeleteItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("deletes[%d]: Mongo command missing \"limit\"", index)}
+	}
+	if limit != 0 && limit != 1 {
+		return mongoDeleteItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("deletes[%d]: Mongo gateway delete limit must be 0 or 1", index)}
+	}
+	item := mongoDeleteItem{index: index, plan: plan, limit: limit}
+	if id, exact := simplePrimaryEqualityFindValue(plan); exact {
+		key, err := encodePrimaryKey(id)
+		if err != nil {
+			return mongoDeleteItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("deletes[%d]: %v", index, err)}
+		}
+		item.exactID, item.key = true, key
+	}
+	return item, nil
+}
+
+func (s *Server) runMongoDeleteItem(col *collections.Collection, item mongoDeleteItem) (int32, error) {
+	if item.exactID {
+		if err := item.budget.reserveTarget(); err != nil {
+			return 0, err
+		}
+		deleted, err := col.DeleteDocument(item.key)
+		return boolToInt32(deleted), err
+	}
+	if item.limit == 0 {
+		return s.deleteMongoFilterMany(col, item.plan, item.budget)
+	}
+	deleted, err := s.deleteMongoFilterOneWithBudget(col, item.plan, item.budget)
+	return boolToInt32(deleted), err
 }
 
 func (s *Server) listCollectionsResponse(command wire.Document, cursorOwner ...int64) (wire.Document, error) {
@@ -2703,11 +3467,58 @@ func marshalUpdateResponse(matched, modified int32, upserted ...[]mongoUpdateUps
 	return marshalDocument(response)
 }
 
+func marshalUpdateResponseWithWriteErrors(matched, modified int32, upserted []mongoUpdateUpserted, writeErrors []mongoWriteError) (wire.Document, error) {
+	response := bson.D{{Key: "ok", Value: 1.0}, {Key: "n", Value: matched}, {Key: "nModified", Value: modified}}
+	if len(upserted) != 0 {
+		items := make(bson.A, len(upserted))
+		for i, item := range upserted {
+			items[i] = bson.D{{Key: "index", Value: int32(item.index)}, {Key: "_id", Value: item.id}}
+		}
+		response = append(response, bson.E{Key: "upserted", Value: items})
+	}
+	return marshalWriteErrorsResponse(response, writeErrors)
+}
+
 func marshalDeleteResponse(deleted int32) (wire.Document, error) {
 	return marshalDocument(bson.D{
 		{Key: "ok", Value: 1.0},
 		{Key: "n", Value: deleted},
 	})
+}
+
+func marshalInsertResponseWithWriteErrors(inserted int32, writeErrors []mongoWriteError) (wire.Document, error) {
+	return marshalWriteErrorsResponse(bson.D{{Key: "ok", Value: 1.0}, {Key: "n", Value: inserted}}, writeErrors)
+}
+
+func marshalDeleteResponseWithWriteErrors(deleted int32, writeErrors []mongoWriteError) (wire.Document, error) {
+	return marshalWriteErrorsResponse(bson.D{{Key: "ok", Value: 1.0}, {Key: "n", Value: deleted}}, writeErrors)
+}
+
+func marshalWriteErrorsResponse(response bson.D, writeErrors []mongoWriteError) (wire.Document, error) {
+	if len(writeErrors) != 0 {
+		items := make(bson.A, len(writeErrors))
+		for i, item := range writeErrors {
+			code, codeName := commandCodeBadValue, "BadValue"
+			if collections.IsDuplicateKeyError(item.err) {
+				code, codeName = commandCodeDuplicateKey, "DuplicateKey"
+			}
+			items[i] = bson.D{{Key: "index", Value: int32(item.index)}, {Key: "code", Value: code}, {Key: "codeName", Value: codeName}, {Key: "errmsg", Value: boundedMongoWriteErrorMessage(item.err)}}
+		}
+		response = append(response, bson.E{Key: "writeErrors", Value: items})
+	}
+	return marshalDocument(response)
+}
+
+func boundedMongoWriteErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.ToValidUTF8(err.Error(), "?")
+	runes := []rune(message)
+	if len(runes) <= mongoWriteErrorMessageMaxRunes {
+		return message
+	}
+	return string(runes[:mongoWriteErrorMessageMaxRunes]) + "..."
 }
 
 func marshalCursorResponse(db, collection string, firstBatch bson.A) (wire.Document, error) {

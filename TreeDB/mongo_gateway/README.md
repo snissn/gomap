@@ -81,11 +81,11 @@ call concurrently.
 <!-- mongo-capability-summary:begin -->
 ## Executable capability summary
 
-Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:caf3842ce126fc048ead62e77e71a525c1fe33b09b0551333e0eb8f11e917745`
+Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:893414bcada831ef3a066f86d462788e43ddbfad7639b48b89b683746548d080`
 
 | Surface | Status | Boundary |
 |---|---|---|
-| Standalone CRUD | supported subset | Explicit-ID and bounded single-document shapes; broader Mongo semantics remain intentionally limited. |
+| Standalone CRUD | supported subset | Explicit-ID CRUD plus bounded multi update/delete and ordered or unordered insert/update/delete batches; a positive maxTimeMS shortens the shared five-second command deadline; per-document atomicity only, never a transaction. |
 | Standalone write concern | supported subset | Absent/default and w:1 use the selected profile's ordinary acknowledgement boundary; j:true closes a real command-WAL or checkpoint sync boundary. Unacknowledged, replica, and interruptible-timeout semantics reject before mutation. |
 | Aggregation, count, and distinct | supported subset | Bounded standalone subsets only; unsupported stages, dotted distinct keys, and maxTimeMS reject. |
 | Administrative diagnostics | not implemented | serverStatus, top, and dbStats are not implemented. |
@@ -120,7 +120,8 @@ reads, `readWrite` adds mutations, `dbAdmin` owns collection/index metadata and
 DDL, `userAdmin` owns user management within its scope, and `serverAdmin` owns
 the full standalone server. Grants may be server-, database-, or
 collection-scoped. Database-scoped user administrators cannot grant
-server-scoped roles or modify server administrators.
+server-scoped roles or manage users whose current or requested grants extend
+outside the administrator's scope.
 
 Authorization runs before collection/index lookup, route resolution, cursor
 creation, or mutation. Catalog lists are filtered, retained cursors are bound

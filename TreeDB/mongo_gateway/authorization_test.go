@@ -83,6 +83,68 @@ func TestAuthorizationRoleMatrixAndPreMutationDenial(t *testing.T) {
 	}
 }
 
+func TestAuthorizationMultiWriteAdmissionPrecedesMutation(t *testing.T) {
+	server, catalog := newAuthorizationTestServer(t)
+	for _, username := range []string{"root", "reader", "writer"} {
+		if err := catalog.UpsertPassword("admin", username, []byte(username+" password")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := catalog.SetUserRoles("admin", "reader", []AuthRoleGrant{{Role: AuthRoleRead, Database: "app", Collection: "items"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.SetUserRoles("admin", "writer", []AuthRoleGrant{{Role: AuthRoleReadWrite, Database: "app", Collection: "items"}}); err != nil {
+		t.Fatal(err)
+	}
+	setAuthorizationTestUser(server, 1, "admin", "root")
+	setAuthorizationTestUser(server, 2, "admin", "reader")
+	setAuthorizationTestUser(server, 3, "admin", "writer")
+
+	assertOK(t, serveAuthorizationCommand(t, server, 1, 10, bson.D{{Key: "insert", Value: "items"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "one"}, {Key: "active", Value: true}},
+		bson.D{{Key: "_id", Value: "two"}, {Key: "active", Value: true}},
+	}}, {Key: "$db", Value: "app"}}))
+	update := bson.D{{Key: "update", Value: "items"}, {Key: "updates", Value: bson.A{bson.D{
+		{Key: "q", Value: bson.D{{Key: "active", Value: true}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "active", Value: false}}}}},
+		{Key: "multi", Value: true},
+	}}}, {Key: "$db", Value: "app"}}
+	deniedDeleteMany := bson.D{{Key: "delete", Value: "items"}, {Key: "deletes", Value: bson.A{bson.D{
+		{Key: "q", Value: bson.D{{Key: "active", Value: true}}},
+		{Key: "limit", Value: int32(0)},
+	}}}, {Key: "$db", Value: "app"}}
+	allowedDeleteMany := bson.D{{Key: "delete", Value: "items"}, {Key: "deletes", Value: bson.A{bson.D{
+		{Key: "q", Value: bson.D{{Key: "active", Value: false}}},
+		{Key: "limit", Value: int32(0)},
+	}}}, {Key: "$db", Value: "app"}}
+
+	assertCommandError(t, serveAuthorizationCommand(t, server, 2, 11, update), "Unauthorized")
+	active := serveAuthorizationCommand(t, server, 1, 12, bson.D{{Key: "count", Value: "items"}, {Key: "query", Value: bson.D{{Key: "active", Value: true}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, active)
+	if n := bson.Raw(active).Lookup("n").Int64(); n != 2 {
+		t.Fatalf("active count after denied multi update=%d want 2", n)
+	}
+	assertCommandError(t, serveAuthorizationCommand(t, server, 2, 13, deniedDeleteMany), "Unauthorized")
+	active = serveAuthorizationCommand(t, server, 1, 14, bson.D{{Key: "count", Value: "items"}, {Key: "query", Value: bson.D{{Key: "active", Value: true}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, active)
+	if n := bson.Raw(active).Lookup("n").Int64(); n != 2 {
+		t.Fatalf("active count after denied multi delete=%d want 2", n)
+	}
+
+	allowedUpdate := serveAuthorizationCommand(t, server, 3, 15, update)
+	assertOK(t, allowedUpdate)
+	assertInt32(t, allowedUpdate, "n", 2)
+	assertInt32(t, allowedUpdate, "nModified", 2)
+	allowedDelete := serveAuthorizationCommand(t, server, 3, 16, allowedDeleteMany)
+	assertOK(t, allowedDelete)
+	assertInt32(t, allowedDelete, "n", 2)
+	remaining := serveAuthorizationCommand(t, server, 1, 17, bson.D{{Key: "count", Value: "items"}, {Key: "$db", Value: "app"}})
+	assertOK(t, remaining)
+	if n := bson.Raw(remaining).Lookup("n").Int64(); n != 0 {
+		t.Fatalf("count after allowed multi delete=%d want 0", n)
+	}
+}
+
 func TestAuthorizationEverySupportedCommandHasExplicitPrivilege(t *testing.T) {
 	public := []string{"hello", "isMaster", "ismaster", "buildInfo", "connectionStatus", "saslStart", "saslContinue", "endSessions", "ping"}
 	for _, name := range public {
@@ -296,14 +358,17 @@ func TestAuthorizationUserManagementAndRoleBoundary(t *testing.T) {
 	assertCommandError(t, serveAuthorizationCommand(t, server, 1, 28, bson.D{{Key: "dropUser", Value: "root"}, {Key: "$db", Value: "admin"}}), "Unauthorized")
 }
 
-func TestAuthorizationUserAdminCannotEscalatePrivileges(t *testing.T) {
+func TestAuthorizationUserAdminCannotEscalateOrTakeOverCrossScopeUser(t *testing.T) {
 	server, catalog := newAuthorizationTestServer(t)
-	for _, username := range []string{"root", "manager"} {
+	for _, username := range []string{"root", "manager", "cross-scope"} {
 		if err := catalog.UpsertPassword("admin", username, []byte(username+" password")); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if err := catalog.SetUserRoles("admin", "manager", []AuthRoleGrant{{Role: AuthRoleUserAdmin, Database: "admin"}, {Role: AuthRoleUserAdmin, Database: "app"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.SetUserRoles("admin", "cross-scope", []AuthRoleGrant{{Role: AuthRoleReadWrite, Database: "other"}}); err != nil {
 		t.Fatal(err)
 	}
 	setAuthorizationTestUser(server, 2, "admin", "manager")
@@ -315,6 +380,14 @@ func TestAuthorizationUserAdminCannotEscalatePrivileges(t *testing.T) {
 	assertCommandError(t, serveAuthorizationCommand(t, server, 2, 30, bson.D{{Key: "updateUser", Value: "root"}, {Key: "pwd", Value: "stolen password"}, {Key: "$db", Value: "admin"}}), "Unauthorized")
 	if _, err := catalog.VerifyPassword("admin", "root", []byte("root password")); err != nil {
 		t.Fatal("denied server administrator update changed verifier")
+	}
+	assertCommandError(t, serveAuthorizationCommand(t, server, 2, 31, bson.D{{Key: "updateUser", Value: "cross-scope"}, {Key: "pwd", Value: "stolen password"}, {Key: "$db", Value: "admin"}}), "Unauthorized")
+	if _, err := catalog.VerifyPassword("admin", "cross-scope", []byte("cross-scope password")); err != nil {
+		t.Fatal("denied cross-scope update changed verifier")
+	}
+	assertCommandError(t, serveAuthorizationCommand(t, server, 2, 32, bson.D{{Key: "dropUser", Value: "cross-scope"}, {Key: "$db", Value: "admin"}}), "Unauthorized")
+	if !catalog.userExists("admin", "cross-scope") {
+		t.Fatal("denied cross-scope drop removed verifier")
 	}
 }
 

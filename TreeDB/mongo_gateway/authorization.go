@@ -667,15 +667,7 @@ func (s *Server) principalCanManageGrants(owner int64, grants []AuthRoleGrant) b
 
 func (s *Server) principalCanManageTarget(owner int64, authDB, username string) bool {
 	targetRoles, err := s.AuthCatalog.effectiveRoles(authDB, username)
-	if err != nil || !hasServerAdmin(targetRoles) {
-		return true
-	}
-	user := s.authUserSnapshot(owner)
-	if user == nil {
-		return false
-	}
-	roles, err := s.AuthCatalog.effectiveRoles(user.AuthDB, user.Username)
-	return err == nil && hasServerAdmin(roles)
+	return err == nil && s.principalCanManageGrants(owner, targetRoles)
 }
 
 func (s *Server) userManagementResponse(name string, command wire.Document, owner int64) (wire.Document, error) {

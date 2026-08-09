@@ -86,12 +86,15 @@ func (s *Server) findAndModifyResponse(ctx context.Context, command wire.Documen
 		if err := s.validateMongoMissingCollectionFirstUpsert([]mongoUpdateItem{item}); err != nil {
 			return mongoUpdateWriteCommandError(err)
 		}
+		if err := preflightFindAndModifyUpsertResponse(item, newImage, projection, s.maxMessageLength()); err != nil {
+			return mongoUpdateWriteCommandError(err)
+		}
 		col, releaseColdCollection, err = s.openOrCreateCollectionForFirstWrite(name)
 	}
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	before, after, matched, err := findAndModifyExisting(col, item)
+	before, after, matched, err := s.findAndModifyExisting(col, item, newImage, projection)
 	if err != nil {
 		return mongoUpdateWriteCommandError(err)
 	}
@@ -107,11 +110,22 @@ func (s *Server) findAndModifyResponse(ctx context.Context, command wire.Documen
 		if !bytes.Equal(key, item.key) {
 			return mongoUpdateWriteCommandError(errors.New("Mongo gateway update cannot modify _id"))
 		}
+		if err := validateFindAndModifyResponse(func() wire.Document {
+			if newImage {
+				return doc
+			}
+			return nil
+		}(), false, true, item.id, projection, s.maxMessageLength()); err != nil {
+			return mongoUpdateWriteCommandError(err)
+		}
+		if s.findAndModifyBeforeUpsertInsertHook != nil {
+			s.findAndModifyBeforeUpsertInsertHook()
+		}
 		if _, err := col.Insert(key, stored); err != nil {
 			if !errors.Is(err, collections.ErrDocumentExists) {
 				return mongoUpdateWriteCommandError(err)
 			}
-			response, err := findAndModifyAfterInsertConflict(col, item, newImage, projection)
+			response, err := s.findAndModifyAfterInsertConflict(col, item, newImage, projection)
 			if err != nil {
 				return mongoUpdateWriteCommandError(err)
 			}
@@ -131,8 +145,65 @@ func (s *Server) findAndModifyResponse(ctx context.Context, command wire.Documen
 	return marshalFindAndModifyResponse(before, true, false, bson.RawValue{}, projection)
 }
 
-func findAndModifyAfterInsertConflict(col *collections.Collection, item mongoUpdateItem, newImage bool, projection compiledProjection) (wire.Document, error) {
-	before, after, matched, err := findAndModifyExisting(col, item)
+// preflightFindAndModifyUpsertResponse is the only response admission that
+// may run before catalog creation: an absent exact-ID upsert's response image
+// is deterministic from the already parsed command. Existing-document images
+// are admitted inside Collection.Update so the checked image and publication
+// share one atomic callback.
+func preflightFindAndModifyUpsertResponse(item mongoUpdateItem, newImage bool, projection compiledProjection, maxMessageLength int32) error {
+	doc, err := mongoUpsertDocument(item)
+	if err != nil {
+		return err
+	}
+	if !newImage {
+		doc = nil
+	}
+	return validateFindAndModifyResponse(doc, false, true, item.id, projection, maxMessageLength)
+}
+
+func validateFindAndModifyResponse(value wire.Document, updatedExisting, upserted bool, id bson.RawValue, projection compiledProjection, maxMessageLength int32) error {
+	response, err := marshalFindAndModifyResponse(value, updatedExisting, upserted, id, projection)
+	if err != nil {
+		return err
+	}
+	// OP_MSG is a fixed 16-byte header, four flag bytes, one kind-0 section
+	// discriminator, and the already validated BSON response. Avoid allocating
+	// a potentially huge temporary message merely to reject it by size.
+	if wire.HeaderLen+4+1+len(response) > int(maxMessageLength) {
+		// Keep the known pre-mutation rejection representable at the gateway's
+		// minimum response envelope as well.
+		return errors.New("findAndModify response too large")
+	}
+	return nil
+}
+
+func findAndModifyUpdatedImage(col *collections.Collection, item mongoUpdateItem, before wire.Document) (wire.Document, error) {
+	var (
+		updated wire.Document
+		err     error
+	)
+	if item.pureSet && normalizedMongoUpdateDocumentFormat(col) == collections.DocumentFormatBSON && item.bsonSetFieldsOK {
+		updated, _, err = applyBSONSetUpdate(before, item.bsonSetFields)
+	} else if item.pureSet {
+		updated, _, err = applySetUpdate(before, item.updateDoc)
+	} else {
+		updated, _, err = applyMongoMutation(before, item.mutation)
+	}
+	if err != nil {
+		return nil, err
+	}
+	updatedKey, _, err := prepareInsertDocument(updated, col.MetaView().Options.DocumentFormat)
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(updatedKey, item.key) {
+		return nil, errors.New("Mongo gateway update cannot modify _id")
+	}
+	return updated, nil
+}
+
+func (s *Server) findAndModifyAfterInsertConflict(col *collections.Collection, item mongoUpdateItem, newImage bool, projection compiledProjection) (wire.Document, error) {
+	before, after, matched, err := s.findAndModifyExisting(col, item, newImage, projection)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +242,7 @@ func validateFindAndModifyCommand(command wire.Document) error {
 	return nil
 }
 
-func findAndModifyExisting(col *collections.Collection, item mongoUpdateItem) (before, after wire.Document, matched bool, err error) {
+func (s *Server) findAndModifyExisting(col *collections.Collection, item mongoUpdateItem, newImage bool, projection compiledProjection) (before, after wire.Document, matched bool, err error) {
 	if !item.exactID {
 		if item.selector == nil {
 			return nil, nil, false, errors.New("Mongo gateway filter findAndModify has no selector")
@@ -211,6 +282,19 @@ func findAndModifyExisting(col *collections.Collection, item mongoUpdateItem) (b
 			return nil, false, errors.New("Mongo gateway update cannot modify _id")
 		}
 		after = bytes.Clone(updated)
+		value := before
+		if newImage {
+			value = after
+		}
+		if s.findAndModifyExactAdmissionHook != nil {
+			s.findAndModifyExactAdmissionHook()
+		}
+		// This runs in the same conditional mutation callback as the actual
+		// materialization. A concurrent larger before/after image therefore
+		// fails before changed=true can publish a document or command-WAL root.
+		if err := validateFindAndModifyResponse(value, true, false, bson.RawValue{}, projection, s.maxMessageLength()); err != nil {
+			return nil, false, err
+		}
 		if !changed {
 			return nil, false, nil
 		}

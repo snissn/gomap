@@ -12,6 +12,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
 const mongoFilterWriteTestTimeout = 5 * time.Second
@@ -149,11 +150,141 @@ func TestMongoFilterWritesSelectOneAcrossUpdateDeleteAndFindAndModify(t *testing
 		t.Fatalf("delete n=%d want 1", n)
 	}
 	limitZero := serveCommand(t, server, 5, bson.D{{Key: "delete", Value: "users"}, {Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "age", Value: int64(20)}}}, {Key: "limit", Value: int32(0)}}}}, {Key: "$db", Value: "app"}})
-	assertCommandError(t, limitZero, "BadValue")
+	assertOK(t, limitZero)
 	remaining := serveCommand(t, server, 6, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "$db", Value: "app"}})
 	assertOK(t, remaining)
-	if values, err := bson.Raw(remaining).Lookup("cursor").Document().Lookup("firstBatch").Array().Values(); err != nil || len(values) != 1 {
-		t.Fatalf("limit:0 mutated document: values=%v err=%v", values, err)
+	if values, err := bson.Raw(remaining).Lookup("cursor").Document().Lookup("firstBatch").Array().Values(); err != nil || len(values) != 0 {
+		t.Fatalf("limit:0 did not delete matching document: values=%v err=%v", values, err)
+	}
+}
+
+func TestMongoFilterWriteDeadlineRecheckedAfterSelection(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "active", Value: true}}}}, {Key: "$db", Value: "app"}}))
+	col, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		run  func(*mongoWriteBudget) error
+	}{
+		{
+			name: "update",
+			run: func(budget *mongoWriteBudget) error {
+				item, parseErr := parseMongoUpdateItem(0, mustDocument(t, bson.D{{Key: "q", Value: bson.D{{Key: "active", Value: true}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "seen", Value: true}}}}}}))
+				if parseErr != nil {
+					return parseErr
+				}
+				item.budget = budget
+				_, _, runErr := server.runMongoFilterUpdateOne(col, item)
+				return runErr
+			},
+		},
+		{
+			name: "delete",
+			run: func(budget *mongoWriteBudget) error {
+				item, parseErr := parseMongoDeleteItem(0, mustDocument(t, bson.D{{Key: "q", Value: bson.D{{Key: "active", Value: true}}}, {Key: "limit", Value: int32(1)}}))
+				if parseErr != nil {
+					return parseErr
+				}
+				_, runErr := server.deleteMongoFilterOneWithBudget(col, item.plan, budget)
+				return runErr
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			budget := newMongoWriteBudget(8)
+			server.filterWriteSelectedHook = func() { budget.deadline = time.Now().Add(-time.Second) }
+			if runErr := tc.run(budget); runErr == nil || !strings.Contains(runErr.Error(), "execution-time budget") {
+				t.Fatalf("post-selection deadline error=%v", runErr)
+			}
+			server.filterWriteSelectedHook = nil
+			find := serveCommand(t, server, 2, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}})
+			batch := cursorFirstBatch(t, find)
+			if len(batch) != 1 || !batch[0].Lookup("seen").IsZero() {
+				t.Fatalf("deadline after selection mutated state: %s", find)
+			}
+		})
+	}
+}
+
+func TestMongoFilterWriteDeadlineRecheckedAfterMaterializer(t *testing.T) {
+	for _, format := range []collections.DocumentFormat{collections.DocumentFormatTemplateV1} {
+		t.Run("template-v1", func(t *testing.T) {
+			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			server := NewServer()
+			server.Collections = collections.NewCollectionManager(db)
+			server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: format}
+			assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "active", Value: true}}}}, {Key: "$db", Value: "app"}}))
+			col, err := server.Collections.OpenCollection("app.users")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tc := range []struct {
+				name string
+				run  func(*mongoWriteBudget) error
+			}{
+				{"update", func(budget *mongoWriteBudget) error {
+					item, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{{Key: "q", Value: bson.D{{Key: "active", Value: true}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "seen", Value: true}}}}}}))
+					if err != nil {
+						return err
+					}
+					item.budget = budget
+					_, _, err = server.runMongoFilterUpdateOne(col, item)
+					return err
+				}},
+				{"delete", func(budget *mongoWriteBudget) error {
+					item, err := parseMongoDeleteItem(0, mustDocument(t, bson.D{{Key: "q", Value: bson.D{{Key: "active", Value: true}}}, {Key: "limit", Value: int32(1)}}))
+					if err != nil {
+						return err
+					}
+					_, err = server.deleteMongoFilterOneWithBudget(col, item.plan, budget)
+					return err
+				}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					budget := newMongoWriteBudget(8)
+					server.filterWriteAfterMaterializerHook = func() { budget.deadline = time.Now().Add(-time.Second) }
+					err := tc.run(budget)
+					server.filterWriteAfterMaterializerHook = nil
+					if err == nil || !strings.Contains(err.Error(), "execution-time budget") {
+						t.Fatalf("after-materializer deadline error=%v", err)
+					}
+					key, err := encodePrimaryKey(bson.RawValue{Type: bson.TypeString, Value: bsoncore.AppendString(nil, "u1")})
+					if err != nil {
+						t.Fatal(err)
+					}
+					stored, err := col.Get(key)
+					if err != nil || stored == nil {
+						t.Fatalf("post-materializer deadline changed state stored=%v err=%v", stored, err)
+					}
+					materializer, err := storedDocumentMaterializerForCollection(col)
+					if err != nil {
+						t.Fatal(err)
+					}
+					raw, err := storedDocumentToBSON(col, materializer, stored)
+					_ = materializer.Close()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !bson.Raw(raw).Lookup("seen").IsZero() {
+						t.Fatalf("post-materializer deadline updated document: %s", raw)
+					}
+				})
+			}
+		})
 	}
 }
 
@@ -226,8 +357,9 @@ func TestMongoFilterWritesScanCapFailsWithoutMutation(t *testing.T) {
 		{{Key: "delete", Value: "users"}, {Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "active", Value: true}}}, {Key: "limit", Value: int32(1)}}}}, {Key: "$db", Value: "app"}},
 	} {
 		response := serveCommand(t, server, 2, command)
-		assertCommandError(t, response, "BadValue")
-		if message, _ := bson.Raw(response).Lookup("errmsg").StringValueOK(); !strings.Contains(message, "bounded scan") {
+		assertIndexedWriteError(t, response, 0)
+		message, _ := bson.Raw(response).Lookup("writeErrors").Array().Index(0).Document().Lookup("errmsg").StringValueOK()
+		if !strings.Contains(message, "bounded scan") {
 			t.Fatalf("scan cap response=%s", response)
 		}
 	}
@@ -319,5 +451,37 @@ func TestMongoFilterUpsertRejectsBeforeMissingCollectionCreation(t *testing.T) {
 		if _, err := server.Collections.OpenCollection(name); err == nil {
 			t.Fatalf("non-exact upsert created %s", name)
 		}
+	}
+}
+
+func TestMongoFilterUpdateManyRechecksPredicateAfterDeterministicDrift(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "active", Value: true}}, bson.D{{Key: "_id", Value: "u2"}, {Key: "active", Value: true}}}}, {Key: "$db", Value: "app"}}))
+	selected, release := make(chan struct{}), make(chan struct{})
+	server.filterWriteSelectedHook = func() { close(selected); <-release }
+	result := make(chan commandResult, 1)
+	go func() {
+		doc, commandErr := serveCommandResult(server, 2, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "active", Value: true}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "picked", Value: true}}}}}, {Key: "multi", Value: true}}}}, {Key: "$db", Value: "app"}})
+		result <- commandResult{doc: doc, err: commandErr}
+	}()
+	awaitMongoFilterWriteSignal(t, selected, "multi filter write selection")
+	assertOK(t, serveCommand(t, server, 3, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "active", Value: false}}}}}}}}, {Key: "$db", Value: "app"}}))
+	close(release)
+	resultValue := <-result
+	if resultValue.err != nil {
+		t.Fatal(resultValue.err)
+	}
+	assertOK(t, resultValue.doc)
+	assertInt32(t, resultValue.doc, "n", 1)
+	find := serveCommand(t, server, 4, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "$db", Value: "app"}})
+	if !bson.Raw(find).Lookup("cursor").Document().Lookup("firstBatch").Array().Index(0).Document().Lookup("picked").IsZero() {
+		t.Fatalf("predicate-drift multi update mutated later u2: %s", find)
 	}
 }

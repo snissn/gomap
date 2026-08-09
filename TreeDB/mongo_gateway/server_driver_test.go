@@ -66,6 +66,40 @@ func TestStandaloneServerOfficialGoDriverBSONSetBinaryUpsert(t *testing.T) {
 	}
 }
 
+func TestStandaloneServerOfficialGoDriverBoundedMultiWrites(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), Profile: treedb.ProfileCommandWALDurable, DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}})
+	if err != nil {
+		t.Fatalf("open standalone: %v", err)
+	}
+	client, cancel, ln, serveErr := startStandaloneMongoClientForTest(t, standalone)
+	defer stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelCtx()
+	coll := client.Database("app").Collection("users")
+	if _, err := coll.InsertMany(ctx, []any{
+		bson.D{{Key: "_id", Value: "a"}, {Key: "city", Value: "hnl"}},
+		bson.D{{Key: "_id", Value: "b"}, {Key: "city", Value: "hnl"}},
+		bson.D{{Key: "_id", Value: "c"}, {Key: "city", Value: "sea"}},
+	}); err != nil {
+		t.Fatalf("seed InsertMany: %v", err)
+	}
+	updated, err := coll.UpdateMany(ctx, bson.D{{Key: "city", Value: "hnl"}}, bson.D{{Key: "$set", Value: bson.D{{Key: "seen", Value: true}}}})
+	if err != nil || updated.MatchedCount != 2 || updated.ModifiedCount != 2 {
+		t.Fatalf("UpdateMany result=%+v err=%v, want matched/modified 2/2", updated, err)
+	}
+	deleted, err := coll.DeleteMany(ctx, bson.D{{Key: "city", Value: "sea"}})
+	if err != nil || deleted.DeletedCount != 1 {
+		t.Fatalf("DeleteMany result=%+v err=%v, want 1", deleted, err)
+	}
+	bulk, err := coll.BulkWrite(ctx, []mongo.WriteModel{
+		mongo.NewUpdateOneModel().SetFilter(bson.D{{Key: "_id", Value: "a"}}).SetUpdate(bson.D{{Key: "$set", Value: bson.D{{Key: "bulk", Value: int32(1)}}}}),
+		mongo.NewUpdateOneModel().SetFilter(bson.D{{Key: "_id", Value: "b"}}).SetUpdate(bson.D{{Key: "$set", Value: bson.D{{Key: "bulk", Value: int32(2)}}}}),
+	})
+	if err != nil || bulk.MatchedCount != 2 || bulk.ModifiedCount != 2 {
+		t.Fatalf("BulkWrite update result=%+v err=%v, want matched/modified 2/2", bulk, err)
+	}
+}
+
 func TestStandaloneServerOfficialGoDriverFindOneAndModify(t *testing.T) {
 	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), Profile: treedb.ProfileCommandWALDurable, DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}})
 	if err != nil {

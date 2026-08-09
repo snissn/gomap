@@ -86,6 +86,9 @@ type Server struct {
 	DefaultIndexStoragePolicy collections.RootStoragePolicy
 	ClusterSubmitter          treenativewire.ClusterSubmitter
 	ClusterCatalogVersion     ClusterCatalogVersionProvider
+	// clusterCollectionLookupHook is a test seam for proving routed command
+	// preflight fails before touching the local collection catalog.
+	clusterCollectionLookupHook func()
 	// ClusterIdempotencyNonce scopes generated cluster mutation idempotency
 	// keys to one gateway process epoch. NewServer initializes a random nonce
 	// so sequence-based keys are not reused after restart.
@@ -116,10 +119,28 @@ type Server struct {
 	// filterWriteSelectedHook is test-only coordination between natural-order
 	// selection and the mutation-boundary predicate recheck.
 	filterWriteSelectedHook func()
-	updateMu                sync.Mutex
-	updateCoalescers        map[string]*mongoUpdateCoalescer
-	insertMu                sync.Mutex
-	insertCoalescers        map[string]*mongoInsertCoalescer
+	// filterWriteAfterMaterializerHook is test-only coordination immediately
+	// after a conditional filter-write materializer is acquired and before its
+	// deadline-checked mutation boundary.
+	filterWriteAfterMaterializerHook func()
+	// findAndModifyExactAdmissionHook and findAndModifyBeforeUpsertInsertHook
+	// are test-only race seams for exact-image response admission.
+	findAndModifyExactAdmissionHook     func()
+	findAndModifyBeforeUpsertInsertHook func()
+	// mongoWriteRetainedKeyBytesLimit is a test-only override of the command
+	// retained-key ceiling; zero uses mongoWriteCommandMaxRetainedKeyBytes.
+	mongoWriteRetainedKeyBytesLimit int
+	// mongoWriteTargetLimit is a test-only override of the command-wide target
+	// ceiling. It is distinct from MaxFindScanDocuments because inserts and
+	// exact-ID writes do not consume scan work.
+	mongoWriteTargetLimit int
+	// mongoWriteBeforeFirstCreateHook is a test-only seam between command
+	// preparation/admission and a missing-namespace catalog creation.
+	mongoWriteBeforeFirstCreateHook func(*mongoWriteBudget)
+	updateMu                        sync.Mutex
+	updateCoalescers                map[string]*mongoUpdateCoalescer
+	insertMu                        sync.Mutex
+	insertCoalescers                map[string]*mongoInsertCoalescer
 	// standaloneWriteBoundaryMu lets ordinary standalone writes overlap while
 	// making a journal request exclusive from dispatch through its durable
 	// boundary. That exclusion prevents a concurrent collection mutation from
@@ -790,8 +811,39 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 	if msg.Flags&wire.MsgFlagMoreToCome != 0 {
 		return nil, retainRequestBody, nil
 	}
+	base := len(dst)
 	msgResponse, err := wire.AppendMsgMessage(dst, s.nextID(), h.RequestID, 0, response)
-	return msgResponse, retainRequestBody, err
+	if err != nil || len(msgResponse)-base <= int(s.maxMessageLength()) {
+		return msgResponse, retainRequestBody, err
+	}
+	// Keep every ordinary command response within the same advertised OP_MSG
+	// limit as requests and find batches.  In particular, a bounded input can
+	// otherwise expand into a large writeErrors envelope.
+	tooLargeCode, tooLargeName := commandCodeBadValue, "BadValue"
+	tooLargeMessage := "Mongo gateway command response exceeds maxMessageSizeBytes"
+	if name == "findAndModify" {
+		// Exact-ID findAndModify pre-admits its deterministic response image
+		// before mutation. A concurrent filter selection can still make an
+		// already-published image overflow, so never rewrite that outcome as a
+		// retry-safe BadValue/no-op response.
+		tooLargeCode, tooLargeName = commandCodeShutdownInProgress, "ShutdownInProgress"
+		// This stays within the gateway's 128-byte minimum response envelope
+		// when encoded as OP_MSG. A client must not treat it as a retry-safe
+		// BadValue/no-op after a findAndModify outcome may have published.
+		tooLargeMessage = "findAndModify outcome uncertain"
+	}
+	tooLarge, marshalErr := commandError(tooLargeCode, tooLargeName, tooLargeMessage)
+	if marshalErr != nil {
+		return nil, retainRequestBody, marshalErr
+	}
+	msgResponse, err = wire.AppendMsgMessage(dst[:base], s.nextID(), h.RequestID, 0, tooLarge)
+	if err != nil {
+		return nil, retainRequestBody, err
+	}
+	if len(msgResponse)-base > int(s.maxMessageLength()) {
+		return nil, retainRequestBody, fmt.Errorf("%w: response length=%d max=%d", wire.ErrMessageTooLarge, len(msgResponse)-base, s.maxMessageLength())
+	}
+	return msgResponse, retainRequestBody, nil
 }
 
 func commandRejectsReadOPMsgFeatures(name string) bool {
