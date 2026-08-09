@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
@@ -15,7 +16,7 @@ import (
 )
 
 const (
-	authAuthorizationVersion = 1
+	authAuthorizationVersion = 2
 	maxAuthorizationUsers    = 4096
 	maxRolesPerUser          = 64
 )
@@ -41,9 +42,10 @@ type AuthRoleGrant struct {
 }
 
 type authRoleAssignment struct {
-	Username string          `json:"username"`
-	AuthDB   string          `json:"auth_db"`
-	Roles    []AuthRoleGrant `json:"roles"`
+	Username    string          `json:"username"`
+	AuthDB      string          `json:"auth_db"`
+	Incarnation uint64          `json:"id"`
+	Roles       []AuthRoleGrant `json:"roles"`
 }
 
 type authAuthorizationRecord struct {
@@ -53,7 +55,12 @@ type authAuthorizationRecord struct {
 
 type authAuthorizationSnapshot struct {
 	version uint64
-	users   map[string]map[string][]AuthRoleGrant
+	users   map[string]map[string]authAuthorizationIdentity
+}
+
+type authAuthorizationIdentity struct {
+	incarnation uint64
+	roles       []AuthRoleGrant
 }
 
 type AuthorizationMetrics struct {
@@ -129,7 +136,7 @@ func decodeAuthorizationRecord(raw []byte) (authAuthorizationRecord, error) {
 	seen := make(map[string]struct{}, len(record.Users))
 	for i := range record.Users {
 		user := &record.Users[i]
-		if !validAuthField(user.Username) || !validAuthField(user.AuthDB) {
+		if !validAuthField(user.Username) || !validAuthField(user.AuthDB) || !validAuthIncarnation(user.Incarnation) {
 			return authAuthorizationRecord{}, errAuthenticationFailed
 		}
 		key := authIdentityKey(user.AuthDB, user.Username)
@@ -158,14 +165,14 @@ func (c *AuthCatalog) loadAuthorizationRecordLocked() (authAuthorizationRecord, 
 }
 
 func authorizationSnapshot(record authAuthorizationRecord, version uint64) *authAuthorizationSnapshot {
-	users := make(map[string]map[string][]AuthRoleGrant)
+	users := make(map[string]map[string]authAuthorizationIdentity)
 	for _, user := range record.Users {
 		byName := users[user.AuthDB]
 		if byName == nil {
-			byName = make(map[string][]AuthRoleGrant)
+			byName = make(map[string]authAuthorizationIdentity)
 			users[user.AuthDB] = byName
 		}
-		byName[user.Username] = append([]AuthRoleGrant(nil), user.Roles...)
+		byName[user.Username] = authAuthorizationIdentity{incarnation: user.Incarnation, roles: append([]AuthRoleGrant(nil), user.Roles...)}
 	}
 	return &authAuthorizationSnapshot{version: version, users: users}
 }
@@ -236,11 +243,31 @@ func (c *AuthCatalog) effectiveRoles(authDB, username string) ([]AuthRoleGrant, 
 	if err != nil {
 		return nil, err
 	}
-	roles, ok := snapshot.users[authDB][username]
+	identity, ok := snapshot.users[authDB][username]
 	if !ok {
 		return nil, nil
 	}
-	return roles, nil
+	return identity.roles, nil
+}
+
+func (c *AuthCatalog) effectiveRolesForUser(user AuthUser) ([]AuthRoleGrant, error) {
+	if !validAuthField(user.AuthDB) || !validAuthField(user.Username) || !validAuthIncarnation(user.Incarnation) {
+		return nil, errAuthenticationFailed
+	}
+	snapshot, err := c.authorizationSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	identity, ok := snapshot.users[user.AuthDB][user.Username]
+	if !ok || identity.incarnation != user.Incarnation {
+		return nil, errAuthenticationFailed
+	}
+	return identity.roles, nil
+}
+
+func (c *AuthCatalog) identityActive(user AuthUser) bool {
+	_, err := c.effectiveRolesForUser(user)
+	return err == nil
 }
 
 // SetUserRoles durably replaces one user's grants. It refuses to demote the
@@ -274,20 +301,28 @@ func (c *AuthCatalog) SetUserRoles(authDB, username string, roles []AuthRoleGran
 		if len(record.Users) >= maxAuthorizationUsers {
 			return errors.New("mongo gateway authorization: user limit exceeded")
 		}
-		record.Users = append(record.Users, authRoleAssignment{Username: username, AuthDB: authDB, Roles: roles})
+		record.Users = append(record.Users, authRoleAssignment{Username: username, AuthDB: authDB, Incarnation: stored.Incarnation, Roles: roles})
 	} else {
+		if record.Users[index].Incarnation != stored.Incarnation {
+			return errAuthenticationFailed
+		}
 		record.Users[index].Roles = roles
 	}
 	return c.publishAuthorizationRecordLocked(record)
 }
 
 func authRolesInRecord(record authAuthorizationRecord, authDB, username string) ([]AuthRoleGrant, int) {
+	assignment, index := authIdentityInRecord(record, authDB, username)
+	return assignment.Roles, index
+}
+
+func authIdentityInRecord(record authAuthorizationRecord, authDB, username string) (authRoleAssignment, int) {
 	for i := range record.Users {
 		if record.Users[i].AuthDB == authDB && record.Users[i].Username == username {
-			return record.Users[i].Roles, i
+			return record.Users[i], i
 		}
 	}
-	return nil, -1
+	return authRoleAssignment{}, -1
 }
 
 // canManageUserGrants is the complete built-in userAdmin scope policy. The
@@ -362,8 +397,12 @@ func (c *AuthCatalog) createUser(actor AuthUser, authDB, username string, passwo
 	if err != nil {
 		return errAuthenticationFailed
 	}
-	actorRoles, _ := authRolesInRecord(record, actor.AuthDB, actor.Username)
-	if !canManageUserGrants(actorRoles, authDB, roles) {
+	var preparedRecord AuthUserRecord
+	if json.Unmarshal(prepared, &preparedRecord) != nil || validateAuthRecord(preparedRecord) != nil {
+		return errAuthenticationFailed
+	}
+	actorAssignment, actorIndex := authIdentityInRecord(record, actor.AuthDB, actor.Username)
+	if actorIndex < 0 || actorAssignment.Incarnation != actor.Incarnation || !canManageUserGrants(actorAssignment.Roles, authDB, roles) {
 		return errUserManagementUnauthorized
 	}
 	if _, index := authRolesInRecord(record, authDB, username); index >= 0 {
@@ -381,7 +420,7 @@ func (c *AuthCatalog) createUser(actor AuthUser, authDB, username string, passwo
 	if err := setAuthCatalogValueSync(c.db, authCatalogKey(authDB, username), prepared); err != nil {
 		return err
 	}
-	record.Users = append(record.Users, authRoleAssignment{Username: username, AuthDB: authDB, Roles: roles})
+	record.Users = append(record.Users, authRoleAssignment{Username: username, AuthDB: authDB, Incarnation: preparedRecord.Incarnation, Roles: roles})
 	return c.publishAuthorizationRecordLocked(record)
 }
 
@@ -424,15 +463,20 @@ func (c *AuthCatalog) updateUser(actor AuthUser, authDB, username string, passwo
 	if err != nil {
 		return errAuthenticationFailed
 	}
-	actorRoles, _ := authRolesInRecord(record, actor.AuthDB, actor.Username)
-	currentRoles, targetIndex := authRolesInRecord(record, authDB, username)
-	if !canManageUserGrants(actorRoles, authDB, currentRoles) || (updateRoles && !canManageUserGrants(actorRoles, authDB, roles)) {
+	actorAssignment, actorIndex := authIdentityInRecord(record, actor.AuthDB, actor.Username)
+	targetAssignment, targetIndex := authIdentityInRecord(record, authDB, username)
+	currentRoles := targetAssignment.Roles
+	if actorIndex < 0 || actorAssignment.Incarnation != actor.Incarnation || targetIndex < 0 || targetAssignment.Incarnation != stored.Incarnation || !canManageUserGrants(actorAssignment.Roles, authDB, currentRoles) || (updateRoles && !canManageUserGrants(actorAssignment.Roles, authDB, roles)) {
 		return errUserManagementUnauthorized
 	}
 	if updateRoles && targetIndex >= 0 && stored.Enabled && hasServerAdmin(currentRoles) && !hasServerAdmin(roles) && c.usableServerAdminsLocked(record) == 1 {
 		return errCannotDemoteLastServerAdministrator
 	}
 	if updatePassword {
+		prepared, err = bindPreparedSCRAMRecord(prepared, stored.Incarnation)
+		if err != nil {
+			return err
+		}
 		if err := setAuthCatalogValueSync(c.db, authCatalogKey(authDB, username), prepared); err != nil {
 			return err
 		}
@@ -440,14 +484,7 @@ func (c *AuthCatalog) updateUser(actor AuthUser, authDB, username string, passwo
 	if !updateRoles {
 		return nil
 	}
-	if targetIndex < 0 {
-		if len(record.Users) >= maxAuthorizationUsers {
-			return errors.New("mongo gateway authorization: user limit exceeded")
-		}
-		record.Users = append(record.Users, authRoleAssignment{Username: username, AuthDB: authDB, Roles: roles})
-	} else {
-		record.Users[targetIndex].Roles = roles
-	}
+	record.Users[targetIndex].Roles = roles
 	return c.publishAuthorizationRecordLocked(record)
 }
 
@@ -476,9 +513,10 @@ func (c *AuthCatalog) dropUser(actor AuthUser, authDB, username string) error {
 	if err != nil {
 		return errAuthenticationFailed
 	}
-	actorRoles, _ := authRolesInRecord(record, actor.AuthDB, actor.Username)
-	currentRoles, targetIndex := authRolesInRecord(record, authDB, username)
-	if !canManageUserGrants(actorRoles, authDB, currentRoles) {
+	actorAssignment, actorIndex := authIdentityInRecord(record, actor.AuthDB, actor.Username)
+	targetAssignment, targetIndex := authIdentityInRecord(record, authDB, username)
+	currentRoles := targetAssignment.Roles
+	if actorIndex < 0 || actorAssignment.Incarnation != actor.Incarnation || targetIndex < 0 || targetAssignment.Incarnation != stored.Incarnation || !canManageUserGrants(actorAssignment.Roles, authDB, currentRoles) {
 		return errUserManagementUnauthorized
 	}
 	if targetIndex >= 0 && stored.Enabled && hasServerAdmin(currentRoles) && c.usableServerAdminsLocked(record) == 1 {
@@ -509,15 +547,18 @@ func (c *AuthCatalog) usableServerAdminsLocked(record authAuthorizationRecord) i
 			continue
 		}
 		stored, err := c.storedRecordLocked(assignment.AuthDB, assignment.Username)
-		if err == nil && stored.Enabled {
+		if err == nil && stored.Enabled && stored.Incarnation == assignment.Incarnation {
 			count++
 		}
 	}
 	return count
 }
 
-func (c *AuthCatalog) ensureBootstrapAdminLocked(record *authAuthorizationRecord, authDB, username string) (bool, error) {
-	_, targetIndex := authRolesInRecord(*record, authDB, username)
+func (c *AuthCatalog) ensureBootstrapAdminLocked(record *authAuthorizationRecord, authDB, username string, incarnation uint64) (bool, error) {
+	target, targetIndex := authIdentityInRecord(*record, authDB, username)
+	if !validAuthIncarnation(incarnation) || (targetIndex >= 0 && target.Incarnation != incarnation) {
+		return false, errAuthenticationFailed
+	}
 	if c.usableServerAdminsLocked(*record) > 0 {
 		if targetIndex >= 0 {
 			return false, nil
@@ -525,7 +566,7 @@ func (c *AuthCatalog) ensureBootstrapAdminLocked(record *authAuthorizationRecord
 		if len(record.Users) >= maxAuthorizationUsers {
 			return false, errors.New("mongo gateway authorization: user limit exceeded")
 		}
-		record.Users = append(record.Users, authRoleAssignment{Username: username, AuthDB: authDB, Roles: []AuthRoleGrant{}})
+		record.Users = append(record.Users, authRoleAssignment{Username: username, AuthDB: authDB, Incarnation: incarnation, Roles: []AuthRoleGrant{}})
 		return true, nil
 	}
 	// Trusted bootstrap may create the first usable administrator, but it does
@@ -537,7 +578,7 @@ func (c *AuthCatalog) ensureBootstrapAdminLocked(record *authAuthorizationRecord
 	if len(record.Users) >= maxAuthorizationUsers {
 		return false, errors.New("mongo gateway authorization: user limit exceeded")
 	}
-	assignment := authRoleAssignment{Username: username, AuthDB: authDB, Roles: []AuthRoleGrant{{Role: AuthRoleServerAdmin}}}
+	assignment := authRoleAssignment{Username: username, AuthDB: authDB, Incarnation: incarnation, Roles: []AuthRoleGrant{{Role: AuthRoleServerAdmin}}}
 	record.Users = append(record.Users, assignment)
 	return true, nil
 }
@@ -549,11 +590,12 @@ func (c *AuthCatalog) authorizationUsers() ([]authRoleAssignment, error) {
 	}
 	users := make([]authRoleAssignment, 0)
 	for authDB, byName := range snapshot.users {
-		for username, roles := range byName {
+		for username, identity := range byName {
 			users = append(users, authRoleAssignment{
-				AuthDB:   authDB,
-				Username: username,
-				Roles:    append([]AuthRoleGrant(nil), roles...),
+				AuthDB:      authDB,
+				Username:    username,
+				Incarnation: identity.incarnation,
+				Roles:       append([]AuthRoleGrant(nil), identity.roles...),
 			})
 		}
 	}
@@ -750,7 +792,7 @@ func (s *Server) authorizeCommand(name string, command wire.Document, owner int6
 		doc, commandErr := commandError(13, "Unauthorized", "Authentication required")
 		return target, doc, commandErr, false
 	}
-	roles, err := s.AuthCatalog.effectiveRoles(user.AuthDB, user.Username)
+	roles, err := s.AuthCatalog.effectiveRolesForUser(*user)
 	if err == nil {
 		for _, role := range roles {
 			if roleAllows(role, target) {
@@ -775,7 +817,7 @@ func (s *Server) authorizedResource(owner int64, database, collection string, pr
 	if user == nil {
 		return false
 	}
-	roles, err := s.AuthCatalog.effectiveRoles(user.AuthDB, user.Username)
+	roles, err := s.AuthCatalog.effectiveRolesForUser(*user)
 	if err != nil {
 		return false
 	}
@@ -872,7 +914,7 @@ func (s *Server) principalCanManageGrants(owner int64, commandDB string, grants 
 	if user == nil || s.AuthCatalog == nil {
 		return false
 	}
-	roles, err := s.AuthCatalog.effectiveRoles(user.AuthDB, user.Username)
+	roles, err := s.AuthCatalog.effectiveRolesForUser(*user)
 	if err != nil {
 		return false
 	}
@@ -1004,7 +1046,7 @@ func (s *Server) userManagementResponse(name string, command wire.Document, owne
 			}
 			result = append(result, bson.D{
 				{Key: "_id", Value: user.AuthDB + "." + user.Username},
-				{Key: "userId", Value: user.AuthDB + "\x00" + user.Username},
+				{Key: "userId", Value: strconv.FormatUint(user.Incarnation, 16)},
 				{Key: "user", Value: user.Username},
 				{Key: "db", Value: user.AuthDB},
 				{Key: "roles", Value: authRoleDocuments(user.Roles)},

@@ -194,7 +194,7 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 			ID:            "authentication-authorization",
 			Label:         "Authentication and authorization",
 			CapabilityIDs: []string{"security.authentication-scram-sha-256", "security.authorization-built-in-roles"},
-			Note:          "Standalone SCRAM-SHA-256 identities use versioned durable read, readWrite, dbAdmin, userAdmin, and serverAdmin grants, spilling growing records to TreeDB's persistent ValueLog, with pre-execution command checks, filtered catalog visibility, principal-bound cursors, and last-admin safeguards. Cluster/routed protected commands fail closed without authoritative resource binding; SCRAM-SHA-1 and external identity providers remain unavailable.",
+			Note:          "Standalone SCRAM-SHA-256 identities use versioned durable account incarnations plus read, readWrite, dbAdmin, userAdmin, and serverAdmin grants, spilling growing records to TreeDB's persistent ValueLog, with pre-execution command checks, filtered catalog visibility, incarnation-bound sessions and cursors, and last-admin safeguards. Drop/recreate revokes the prior incarnation while password rotation preserves it. Cluster/routed protected commands fail closed without authoritative resource binding; SCRAM-SHA-1 and external identity providers remain unavailable.",
 		},
 		{
 			ID:            "transactions-retryable-writes",

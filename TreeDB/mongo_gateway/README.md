@@ -81,7 +81,7 @@ call concurrently.
 <!-- mongo-capability-summary:begin -->
 ## Executable capability summary
 
-Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:3a66668069e31f4ebbc6932260dbab77405fe679d484e19e27391c706e478f8a`
+Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:8168e843e2295ebce7b63afe15e436320b11d113cfb364a83bbe3592d653826d`
 
 | Surface | Status | Boundary |
 |---|---|---|
@@ -92,7 +92,7 @@ Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:3a66668069e31f4ebb
 | Logical sessions | supported subset | Driver-interoperability metadata only; no transaction or causal-session semantics. |
 | Transport security | supported subset | Loopback plaintext remains available; non-loopback standalone listeners require TLS unless an explicit insecure override is selected. Password authentication refuses plaintext non-loopback listeners. TLS 1.2+ with bounded handshakes is supported. |
 | Scalar indexes | supported subset | BSON collections default ordinary single-field ascending indexes to BSON-ordered v2; explicit treedbValueType remains the legacy homogeneous path. Compound and descending indexes remain rejected. |
-| Authentication and authorization | supported subset | Standalone SCRAM-SHA-256 identities use versioned durable read, readWrite, dbAdmin, userAdmin, and serverAdmin grants, spilling growing records to TreeDB's persistent ValueLog, with pre-execution command checks, filtered catalog visibility, principal-bound cursors, and last-admin safeguards. Cluster/routed protected commands fail closed without authoritative resource binding; SCRAM-SHA-1 and external identity providers remain unavailable. |
+| Authentication and authorization | supported subset | Standalone SCRAM-SHA-256 identities use versioned durable account incarnations plus read, readWrite, dbAdmin, userAdmin, and serverAdmin grants, spilling growing records to TreeDB's persistent ValueLog, with pre-execution command checks, filtered catalog visibility, incarnation-bound sessions and cursors, and last-admin safeguards. Drop/recreate revokes the prior incarnation while password rotation preserves it. Cluster/routed protected commands fail closed without authoritative resource binding; SCRAM-SHA-1 and external identity providers remain unavailable. |
 | Transactions and retryable writes | not implemented | Transaction markers reject and commitTransaction is unavailable. |
 | Replica set and sharding | not implemented | Standalone hello metadata does not advertise replica-set or sharded-server behavior. |
 <!-- mongo-capability-summary:end -->
@@ -130,10 +130,13 @@ current/requested grants while holding the same backend catalog lock.
 
 Authorization runs before collection/index lookup, route resolution, cursor
 creation, or mutation. Catalog lists are filtered, retained cursors are bound
-to the authenticated principal that created them, and grant revocation is
-observed at the next command boundary. Verifier disable or rotation applies to
-subsequent authentication attempts; an already authenticated connection keeps
-its identity until that connection closes. The catalog rejects malformed
+to the durable account incarnation that created them, and grant revocation is
+observed at the next command boundary. Dropping and recreating the same
+`(authDB, username)` generates a new incarnation, revokes stale authenticated
+connections, and prevents a new login from resuming an old cursor. Password
+rotation preserves the incarnation, so already authenticated connections keep
+their identity; verifier disable applies to subsequent authentication attempts.
+The catalog rejects malformed
 durable records on reopen and prevents disabling, demoting, or dropping the
 last enabled server administrator. Routed/cluster protected commands reject
 when the gateway lacks an authoritative resource binding.
@@ -148,6 +151,9 @@ and grant records use TreeDB's persistent ValueLog with durable pointer
 publication; it is neither an ephemeral WAL nor legacy slab storage. A failed
 or ambiguous grant publication invalidates the immutable authorization
 snapshot so the next protected command reloads durable state or denies closed.
+The version-2 verifier and grant payloads require a nonzero account incarnation;
+legacy version-1 records fail closed and, in this pre-alpha format, require a
+database rebuild or explicit offline repair rather than online migration.
 `AuthorizationMetrics` reports only low-cardinality allowed/denied totals; it
 does not expose secrets or query/document payloads.
 

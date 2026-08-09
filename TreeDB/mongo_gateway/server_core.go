@@ -1033,9 +1033,9 @@ func (s *Server) connectionStatusResponse(owner int64) bson.D {
 	if user == nil || s.AuthCatalog == nil {
 		return connectionStatusResponseForUser(user)
 	}
-	roles, err := s.AuthCatalog.UserRoles(user.AuthDB, user.Username)
+	roles, err := s.AuthCatalog.effectiveRolesForUser(*user)
 	if err != nil {
-		return connectionStatusResponseForUser(user)
+		return connectionStatusResponseForUser(nil)
 	}
 	return connectionStatusResponseForUserAndRoles(user, roles)
 }

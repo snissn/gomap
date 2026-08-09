@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -70,7 +71,11 @@ func newAuthorizationPersistentValueLogTestServer(t *testing.T) (*Server, *AuthC
 }
 
 func setAuthorizationTestUser(server *Server, owner int64, authDB, username string) {
-	user := AuthUser{AuthDB: authDB, Username: username}
+	record, err := server.AuthCatalog.record(authDB, username)
+	if err != nil {
+		panic(err)
+	}
+	user := AuthUser{AuthDB: authDB, Username: username, Incarnation: record.Incarnation}
 	server.authState(owner).user.Store(&user)
 }
 
@@ -117,6 +122,106 @@ func TestAuthorizationRoleMatrixAndPreMutationDenial(t *testing.T) {
 	assertOK(t, got)
 	if n := bson.Raw(got).Lookup("n").Int64(); n != 1 {
 		t.Fatalf("count after denied insert=%d want 1", n)
+	}
+}
+
+func TestAuthorizationDropRecreateRevokesStaleConnectionAndCursor(t *testing.T) {
+	server, catalog := newAuthorizationTestServer(t)
+	if err := catalog.UpsertPassword("admin", "root", []byte("root password")); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.UpsertPassword("admin", "reader", []byte("old reader password")); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.SetUserRoles("admin", "reader", []AuthRoleGrant{{Role: AuthRoleRead, Database: "app", Collection: "items"}}); err != nil {
+		t.Fatal(err)
+	}
+	authenticateUser(t, server, 1, "root", []byte("root password"))
+	authenticateUser(t, server, 2, "reader", []byte("old reader password"))
+	assertOK(t, serveAuthorizationCommand(t, server, 1, 60, bson.D{{Key: "insert", Value: "items"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "first"}},
+		bson.D{{Key: "_id", Value: "second"}},
+	}}, {Key: "$db", Value: "app"}}))
+	find := serveAuthorizationCommand(t, server, 2, 61, bson.D{{Key: "find", Value: "items"}, {Key: "filter", Value: bson.D{}}, {Key: "batchSize", Value: int32(1)}, {Key: "$db", Value: "app"}})
+	assertOK(t, find)
+	cursorID := bson.Raw(find).Lookup("cursor").Document().Lookup("id").Int64()
+	if cursorID == 0 {
+		t.Fatal("find did not retain a cursor")
+	}
+
+	assertOK(t, serveAuthorizationCommand(t, server, 1, 62, bson.D{{Key: "dropUser", Value: "reader"}, {Key: "$db", Value: "admin"}}))
+	assertOK(t, serveAuthorizationCommand(t, server, 1, 63, bson.D{{Key: "createUser", Value: "reader"}, {Key: "pwd", Value: "new reader password"}, {Key: "roles", Value: bson.A{
+		bson.D{{Key: "role", Value: "readWrite"}, {Key: "db", Value: "app"}, {Key: "collection", Value: "items"}},
+	}}, {Key: "$db", Value: "admin"}}))
+
+	assertCommandError(t, serveAuthorizationCommand(t, server, 2, 64, bson.D{{Key: "insert", Value: "items"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "stale"}}}}, {Key: "$db", Value: "app"}}), "Unauthorized")
+	if server.authenticated(2) {
+		t.Fatal("stale connection remained authenticated after account recreation")
+	}
+	authenticateUser(t, server, 2, "reader", []byte("new reader password"))
+	assertOK(t, serveAuthorizationCommand(t, server, 2, 65, bson.D{{Key: "insert", Value: "items"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "fresh"}}}}, {Key: "$db", Value: "app"}}))
+	getMore := serveAuthorizationCommand(t, server, 2, 66, bson.D{{Key: "getMore", Value: cursorID}, {Key: "collection", Value: "items"}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, getMore, "CursorNotFound")
+
+	assertOK(t, serveAuthorizationCommand(t, server, 1, 67, bson.D{{Key: "updateUser", Value: "reader"}, {Key: "pwd", Value: "rotated reader password"}, {Key: "$db", Value: "admin"}}))
+	assertOK(t, serveAuthorizationCommand(t, server, 2, 68, bson.D{{Key: "insert", Value: "items"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "after-rotation"}}}}, {Key: "$db", Value: "app"}}))
+}
+
+func TestAuthorizationDropRecreateRaceNeverElevatesStalePrincipal(t *testing.T) {
+	server, catalog := newAuthorizationTestServer(t)
+	if err := catalog.UpsertPassword("admin", "root", []byte("root password")); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.UpsertPassword("admin", "worker", []byte("old worker password")); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.SetUserRoles("admin", "worker", []AuthRoleGrant{{Role: AuthRoleRead, Database: "app", Collection: "items"}}); err != nil {
+		t.Fatal(err)
+	}
+	root, err := catalog.VerifyPassword("admin", "root", []byte("root password"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	setAuthorizationTestUser(server, 2, "admin", "worker")
+	command := mustDocument(t, bson.D{{Key: "insert", Value: "items"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "stale"}}}}, {Key: "$db", Value: "app"}})
+
+	var stop atomic.Bool
+	var staleAllowed atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for !stop.Load() {
+			_, _, _, allowed := server.authorizeCommand("insert", command, 2)
+			if allowed {
+				staleAllowed.Store(true)
+				return
+			}
+		}
+	}()
+	if err := catalog.dropUser(root, "admin", "worker"); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.createUser(root, "admin", "worker", []byte("new worker password"), []AuthRoleGrant{{Role: AuthRoleReadWrite, Database: "app", Collection: "items"}}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 1000 && !staleAllowed.Load(); i++ {
+		_, _, _, allowed := server.authorizeCommand("insert", command, 2)
+		if allowed {
+			staleAllowed.Store(true)
+		}
+	}
+	stop.Store(true)
+	<-done
+	if staleAllowed.Load() {
+		t.Fatal("stale principal inherited recreated account's elevated grant")
+	}
+	fresh, err := catalog.VerifyPassword("admin", "worker", []byte("new worker password"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.authState(3).user.Store(&fresh)
+	if _, _, _, allowed := server.authorizeCommand("insert", command, 3); !allowed {
+		t.Fatal("fresh recreated principal did not receive requested grant")
 	}
 }
 

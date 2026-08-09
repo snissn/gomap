@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,7 +28,7 @@ import (
 )
 
 const (
-	authCatalogVersion     = 1
+	authCatalogVersion     = 2
 	defaultSCRAMIterations = 15000
 	minSCRAMIterations     = 4096
 	maxSCRAMIterations     = 200000
@@ -49,19 +50,24 @@ var (
 
 // AuthUser is a safe identity projection. It deliberately contains no
 // verifier material and may be retained on a connection after authentication.
-type AuthUser struct{ Username, AuthDB string }
+type AuthUser struct {
+	Username    string
+	AuthDB      string
+	Incarnation uint64
+}
 
 // AuthUserRecord is persisted as a versioned, verifier-only record. Never add
 // a password (or a reversible equivalent) to this type.
 type AuthUserRecord struct {
-	Version    int    `json:"version"`
-	Username   string `json:"username"`
-	AuthDB     string `json:"auth_db"`
-	Salt       []byte `json:"salt"`
-	Iterations int    `json:"iterations"`
-	StoredKey  []byte `json:"stored_key"`
-	ServerKey  []byte `json:"server_key"`
-	Enabled    bool   `json:"enabled"`
+	Version     int    `json:"version"`
+	Username    string `json:"username"`
+	AuthDB      string `json:"auth_db"`
+	Salt        []byte `json:"salt"`
+	Iterations  int    `json:"iterations"`
+	StoredKey   []byte `json:"stored_key"`
+	ServerKey   []byte `json:"server_key"`
+	Enabled     bool   `json:"enabled"`
+	Incarnation uint64 `json:"incarnation"`
 }
 
 // AuthCatalog stores records in TreeDB's durable raw KV space. The prefix is
@@ -267,10 +273,26 @@ func validAuthField(value string) bool {
 }
 
 func validateAuthRecord(r AuthUserRecord) error {
-	if r.Version != authCatalogVersion || !validAuthField(r.Username) || !validAuthField(r.AuthDB) || r.Iterations < minSCRAMIterations || r.Iterations > maxSCRAMIterations || len(r.Salt) < 16 || len(r.Salt) > maxSCRAMSaltBytes || len(r.StoredKey) != sha256.Size || len(r.ServerKey) != sha256.Size {
+	if r.Version != authCatalogVersion || !validAuthField(r.Username) || !validAuthField(r.AuthDB) || !validAuthIncarnation(r.Incarnation) || r.Iterations < minSCRAMIterations || r.Iterations > maxSCRAMIterations || len(r.Salt) < 16 || len(r.Salt) > maxSCRAMSaltBytes || len(r.StoredKey) != sha256.Size || len(r.ServerKey) != sha256.Size {
 		return errAuthenticationFailed
 	}
 	return nil
+}
+
+func validAuthIncarnation(incarnation uint64) bool {
+	return incarnation != 0
+}
+
+func newAuthIncarnation() (uint64, error) {
+	var raw [8]byte
+	for {
+		if _, err := rand.Read(raw[:]); err != nil {
+			return 0, fmt.Errorf("mongo gateway auth: random incarnation: %w", err)
+		}
+		if incarnation := binary.LittleEndian.Uint64(raw[:]); incarnation != 0 {
+			return incarnation, nil
+		}
+	}
 }
 
 // UpsertPassword creates or rotates a verifier. The password bytes are used
@@ -284,11 +306,27 @@ func (c *AuthCatalog) UpsertPassword(authDB, username string, password []byte) e
 	defer c.backend.mu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	var prepared AuthUserRecord
+	if json.Unmarshal(raw, &prepared) != nil || validateAuthRecord(prepared) != nil {
+		return errAuthenticationFailed
+	}
+	if stored, storedErr := c.storedRecordLocked(authDB, username); storedErr == nil {
+		raw, err = bindPreparedSCRAMRecord(raw, stored.Incarnation)
+		if err != nil {
+			return err
+		}
+		prepared.Incarnation = stored.Incarnation
+	} else {
+		_, lookupErr := getAuthCatalogValue(c.db, authCatalogKey(authDB, username))
+		if !errors.Is(lookupErr, treedb.ErrKeyNotFound) {
+			return errAuthenticationFailed
+		}
+	}
 	authorization, err := c.loadAuthorizationRecordLocked()
 	if err != nil {
 		return errAuthenticationFailed
 	}
-	added, err := c.ensureBootstrapAdminLocked(&authorization, authDB, username)
+	added, err := c.ensureBootstrapAdminLocked(&authorization, authDB, username, prepared.Incarnation)
 	if err != nil {
 		return err
 	}
@@ -310,7 +348,11 @@ func prepareSCRAMRecord(authDB, username string, password []byte) ([]byte, error
 	if _, err := rand.Read(salt); err != nil {
 		return nil, fmt.Errorf("mongo gateway auth: random salt: %w", err)
 	}
-	r := newSCRAMRecord(authDB, username, prepared, salt, defaultSCRAMIterations)
+	incarnation, err := newAuthIncarnation()
+	if err != nil {
+		return nil, err
+	}
+	r := newSCRAMRecord(authDB, username, prepared, salt, defaultSCRAMIterations, incarnation)
 	raw, err := json.Marshal(r)
 	if err != nil {
 		return nil, err
@@ -318,11 +360,20 @@ func prepareSCRAMRecord(authDB, username string, password []byte) ([]byte, error
 	return raw, nil
 }
 
-func newSCRAMRecord(authDB, username string, password, salt []byte, iterations int) AuthUserRecord {
+func newSCRAMRecord(authDB, username string, password, salt []byte, iterations int, incarnation uint64) AuthUserRecord {
 	salted := pbkdf2.Key(password, salt, iterations, sha256.Size, sha256.New)
 	clientKey := hmacSHA256(salted, []byte("Client Key"))
 	stored := sha256.Sum256(clientKey)
-	return AuthUserRecord{Version: authCatalogVersion, Username: username, AuthDB: authDB, Salt: append([]byte(nil), salt...), Iterations: iterations, StoredKey: stored[:], ServerKey: hmacSHA256(salted, []byte("Server Key")), Enabled: true}
+	return AuthUserRecord{Version: authCatalogVersion, Username: username, AuthDB: authDB, Salt: append([]byte(nil), salt...), Iterations: iterations, StoredKey: stored[:], ServerKey: hmacSHA256(salted, []byte("Server Key")), Enabled: true, Incarnation: incarnation}
+}
+
+func bindPreparedSCRAMRecord(raw []byte, incarnation uint64) ([]byte, error) {
+	var record AuthUserRecord
+	if json.Unmarshal(raw, &record) != nil || !validAuthIncarnation(incarnation) {
+		return nil, errAuthenticationFailed
+	}
+	record.Incarnation = incarnation
+	return json.Marshal(record)
 }
 
 func hmacSHA256(key, data []byte) []byte {
@@ -341,7 +392,11 @@ func (c *AuthCatalog) syntheticSCRAMRecord(authDB, username string) (AuthUserRec
 	server := hmacSHA256(c.syntheticSecret[:], append([]byte("scram-synthetic-server\x00"), context...))
 	// Keep this equal to the real-user default in UpsertPassword: a divergent
 	// server-first iteration count would expose invalid identities.
-	return AuthUserRecord{Version: authCatalogVersion, Username: username, AuthDB: authDB, Salt: salt, Iterations: defaultSCRAMIterations, StoredKey: stored, ServerKey: server, Enabled: false}, nil
+	incarnation := binary.LittleEndian.Uint64(hmacSHA256(c.syntheticSecret[:], append([]byte("scram-synthetic-incarnation\x00"), context...))[:8])
+	if incarnation == 0 {
+		incarnation = 1
+	}
+	return AuthUserRecord{Version: authCatalogVersion, Username: username, AuthDB: authDB, Salt: salt, Iterations: defaultSCRAMIterations, StoredKey: stored, ServerKey: server, Enabled: false, Incarnation: incarnation}, nil
 }
 
 func (c *AuthCatalog) record(authDB, username string) (AuthUserRecord, error) {
@@ -468,11 +523,11 @@ func (c *AuthCatalog) VerifyPassword(authDB, username string, password []byte) (
 	if err != nil || prepErr != nil {
 		return AuthUser{}, errAuthenticationFailed
 	}
-	trial := newSCRAMRecord(authDB, username, prepared, r.Salt, r.Iterations)
+	trial := newSCRAMRecord(authDB, username, prepared, r.Salt, r.Iterations, r.Incarnation)
 	if subtle.ConstantTimeCompare(trial.StoredKey, r.StoredKey) != 1 {
 		return AuthUser{}, errAuthenticationFailed
 	}
-	return AuthUser{Username: username, AuthDB: authDB}, nil
+	return AuthUser{Username: username, AuthDB: authDB, Incarnation: r.Incarnation}, nil
 }
 
 func saslprepPassword(password []byte) ([]byte, error) {
