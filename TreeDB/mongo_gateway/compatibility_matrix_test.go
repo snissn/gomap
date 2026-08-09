@@ -590,20 +590,36 @@ func mongoCompatibilityMatrixProbes() []mongoCompatibilityMatrixProbe {
 			},
 		},
 		{
-			capabilityID:   "update.multi-update-and-batch-ordering",
+			capabilityID:   "crud.bounded-multi-write-and-batch-ordering",
 			expectedStatus: MongoCapabilitySupportedSubset,
 			probe: func(t *testing.T, server *Server) {
+				// Prove the advertised multi-match subset rather than just accepting
+				// multi:true on a one-document exact-id query.
 				resp := serveCommand(t, server, 20, bson.D{
 					{Key: "update", Value: "users"},
 					{Key: "updates", Value: bson.A{bson.D{
-						{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
-						{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "sea"}}}}},
+						{Key: "q", Value: bson.D{{Key: "city", Value: "hnl"}}},
+						{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "multiProbe", Value: true}}}}},
 						{Key: "multi", Value: true},
 					}}},
 					{Key: "$db", Value: "app"},
 				})
 				assertOK(t, resp)
-				assertInt32(t, resp, "n", 1)
+				assertInt32(t, resp, "n", 2)
+
+				ordered := serveCommand(t, server, 201, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{
+					bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "city", Value: int32(1)}}}}}},
+					bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "orderedLater", Value: true}}}}}},
+				}}, {Key: "$db", Value: "app"}})
+				assertIndexedWriteError(t, ordered, 0)
+				assertInt32(t, ordered, "n", 0)
+
+				unordered := serveCommand(t, server, 202, bson.D{{Key: "update", Value: "users"}, {Key: "ordered", Value: false}, {Key: "updates", Value: bson.A{
+					bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "city", Value: int32(1)}}}}}},
+					bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "unorderedLater", Value: true}}}}}},
+				}}, {Key: "$db", Value: "app"}})
+				assertIndexedWriteError(t, unordered, 0)
+				assertInt32(t, unordered, "n", 1)
 			},
 		},
 		{

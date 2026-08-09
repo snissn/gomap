@@ -299,6 +299,28 @@ func TestMongoMissingCollectionUnorderedInvalidUpsertContinuesToValidUpsert(t *t
 	}
 }
 
+func TestMongoMissingCollectionAdmissionReplaysExactIDTargetBudget(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	s.mongoWriteTargetLimit = 1
+	response := serveCommand(t, s, 1, bson.D{{Key: "update", Value: "missing"}, {Key: "ordered", Value: false}, {Key: "updates", Value: bson.A{
+		bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "no-match"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "value", Value: 1}}}}}},
+		bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "upsert"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "value", Value: 2}}}}}, {Key: "upsert", Value: true}},
+	}}, {Key: "$db", Value: "app"}})
+	assertOK(t, response)
+	assertInt32(t, response, "n", 0)
+	assertInt32(t, response, "nModified", 0)
+	assertIndexedWriteError(t, response, 1)
+	if _, err := s.Collections.OpenCollection("app.missing"); !errors.Is(err, collections.ErrCollectionNotFound) {
+		t.Fatalf("target-budget rejected creator made catalog entry: %v", err)
+	}
+}
+
 func TestMongoInsertMinimumResponseEnvelopeRetainsTerminalError(t *testing.T) {
 	// At the minimum accepted envelope there is no ordinary error reservation
 	// left, but a pre-mutation runtime rejection must still be observable.

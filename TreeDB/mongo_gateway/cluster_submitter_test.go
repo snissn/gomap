@@ -1215,11 +1215,13 @@ func TestClusterRoutePreflightMongoCollectionPlacementAcceptsMultiIDBatch(t *tes
 
 func TestClusterRoutePreflightMongoTokenPlacementRejectsMultiIDWrites(t *testing.T) {
 	tests := []struct {
-		name string
-		run  func(testing.TB, *Server) wire.Document
+		name       string
+		wantRoutes int
+		run        func(testing.TB, *Server) wire.Document
 	}{
 		{
-			name: "insert",
+			name:       "insert",
+			wantRoutes: 1,
 			run: func(tb testing.TB, server *Server) wire.Document {
 				return serveCommand(tb, server, 336104, bson.D{
 					{Key: "insert", Value: "users"},
@@ -1272,12 +1274,8 @@ func TestClusterRoutePreflightMongoTokenPlacementRejectsMultiIDWrites(t *testing
 				t.Fatalf("multi write unexpectedly accepted: %s", response)
 			}
 			routes := submitter.snapshotRoutes()
-			wantRoutes := 0
-			if tc.name == "insert" {
-				wantRoutes = 1
-			}
-			if len(routes) != wantRoutes {
-				t.Fatalf("route calls=%d want %d", len(routes), wantRoutes)
+			if len(routes) != tc.wantRoutes {
+				t.Fatalf("route calls=%d want %d", len(routes), tc.wantRoutes)
 			}
 			if calls := submitter.snapshotCalls(); len(calls) != 0 {
 				t.Fatalf("submit calls=%d want 0", len(calls))

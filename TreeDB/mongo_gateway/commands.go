@@ -1061,7 +1061,7 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
-	ordered, orderedSet, err := mongoCommandOrdered(command)
+	ordered, _, err := mongoCommandOrdered(command)
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
@@ -1144,7 +1144,7 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
 	}
-	return s.runMongoUpdateCommand(name, col, parsed, ordered, orderedSet)
+	return s.runMongoUpdateCommand(name, col, parsed, ordered)
 }
 
 type mongoUpdateItem struct {
@@ -1440,7 +1440,7 @@ func mongoCommandOrdered(command wire.Document) (bool, bool, error) {
 // runMongoUpdateCommand has intentionally per-document atomicity only. A
 // multi-write command is not a transaction: ordered commands stop on the first
 // write error, while unordered commands continue and retain original indices.
-func (s *Server) runMongoUpdateCommand(name string, col *collections.Collection, updates []mongoUpdateItem, ordered, orderedSet bool) (wire.Document, error) {
+func (s *Server) runMongoUpdateCommand(name string, col *collections.Collection, updates []mongoUpdateItem, ordered bool) (wire.Document, error) {
 	// Restore the command-local native batch only for BSON $set exact-id
 	// updates. This subset cannot hit a secondary-unique runtime conflict and
 	// has already completed all state-independent validation, so the atomic
@@ -1835,6 +1835,27 @@ func (s *Server) mongoMissingCollectionFirstUpsertResponseAdmission(updates []mo
 	preview := *budget
 	writeErrors := make([]mongoWriteError, 0)
 	for _, update := range updates {
+		// Replay exact-ID target admission in command order. The actual command
+		// reserves one target before each exact-ID update, including a no-match
+		// non-upsert. Without this, a later upsert could appear admissible,
+		// create the catalog, then fail after an earlier item consumes the last
+		// target reservation.
+		if update.exactID {
+			if targetErr := preview.reserveTarget(); targetErr != nil {
+				if reserveErr := preview.reserveError(); reserveErr != nil {
+					if terminalErr := preview.reserveTerminalError(); terminalErr != nil {
+						return -1, false, nil, terminalErr
+					}
+					writeErrors = append(writeErrors, mongoWriteError{index: update.index, err: reserveErr})
+					return -1, false, writeErrors, nil
+				}
+				writeErrors = append(writeErrors, mongoWriteError{index: update.index, err: targetErr})
+				if ordered {
+					return -1, false, writeErrors, nil
+				}
+				continue
+			}
+		}
 		if !update.upsert {
 			continue
 		}

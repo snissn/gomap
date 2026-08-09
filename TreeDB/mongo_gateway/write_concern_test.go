@@ -166,14 +166,10 @@ func TestStandaloneJournalWriteConcernFinalizesPartialCreateIndexesError(t *test
 		return true, nil
 	}
 	response := serveCommand(t, server, 2, writeConcernPartialCreateIndexesCommand())
-	assertOK(t, response)
-	if syncs != 1 {
-		t.Fatalf("partial createIndexes syncs=%d want 1", syncs)
-	}
+	assertCommandError(t, response, "DuplicateKey")
 	stats := server.StandaloneWriteConcernStats()
-	if stats.JournalAcknowledgements-before.JournalAcknowledgements != 1 ||
-		stats.PhysicalSyncBoundaries-before.PhysicalSyncBoundaries != 1 ||
-		stats.LogicalWrites != before.LogicalWrites+1 {
+	if syncs != 1 || stats.JournalAcknowledgements != before.JournalAcknowledgements+1 ||
+		stats.PhysicalSyncBoundaries != before.PhysicalSyncBoundaries+1 || stats.LogicalWrites != before.LogicalWrites {
 		t.Fatalf("partial createIndexes stats=%+v", stats)
 	}
 	collection, err := server.Collections.OpenCollection("app.users")
@@ -182,6 +178,9 @@ func TestStandaloneJournalWriteConcernFinalizesPartialCreateIndexesError(t *test
 	}
 	if _, ok := findIndexDefinition(collection.MetaView().Indexes, "age_1"); !ok {
 		t.Fatal("partial createIndexes did not retain first index")
+	}
+	if _, ok := findIndexDefinition(collection.MetaView().Indexes, "email_1"); ok {
+		t.Fatal("duplicate-key createIndexes unexpectedly retained failing index")
 	}
 	if !server.standaloneWriteBoundaryMu.TryLock() {
 		t.Fatal("journal command error left the standalone write boundary locked")
@@ -338,7 +337,7 @@ func TestStandaloneJournalWriteConcernPartialErrorCrashReopen(t *testing.T) {
 			t.Fatal(err)
 		}
 		seedWriteConcernDuplicateEmails(t, standalone.Server, true)
-		response := serveCommand(t, standalone.Server, 2, writeConcernPartialDeleteCommand())
+		response := serveCommand(t, standalone.Server, 2, writeConcernPartialUpdateCommand())
 		if ok, okOK := bson.Raw(response).Lookup("ok").DoubleOK(); !okOK || ok != 1 {
 			t.Fatalf("partial response=%s", response)
 		}
@@ -371,11 +370,11 @@ func TestStandaloneJournalWriteConcernPartialErrorCrashReopen(t *testing.T) {
 				t.Fatalf("reopen: %v", err)
 			}
 			defer func() { _ = standalone.Close() }()
-			if got := writeConcernFindDocumentCount(t, standalone.Server, "u1"); got != 1 {
-				t.Fatalf("reopen lost first updated document count=%d", got)
+			if !writeConcernMarker(t, standalone.Server, "u1") {
+				t.Fatal("reopen lost marker after first partial update")
 			}
-			if got := writeConcernFindDocumentCount(t, standalone.Server, "u2"); got != 1 {
-				t.Fatalf("reopen lost document after failing delete item count=%d", got)
+			if writeConcernMarker(t, standalone.Server, "u2") {
+				t.Fatal("reopen applied marker after failing update item")
 			}
 		})
 	}
@@ -399,7 +398,7 @@ func TestStandaloneJournalWriteConcernPartialErrorSyncFailureIsUncertain(t *test
 			standalone.Server.standaloneWriteConcernSync = func() (bool, error) {
 				return true, errors.New("injected post-sync publication failure")
 			}
-			response := serveCommand(t, standalone.Server, 2, writeConcernPartialDeleteCommand())
+			response := serveCommand(t, standalone.Server, 2, writeConcernPartialUpdateCommand())
 			if ok, okOK := bson.Raw(response).Lookup("ok").DoubleOK(); !okOK || ok != 1 {
 				t.Fatalf("partial response=%s", response)
 			}
@@ -411,8 +410,8 @@ func TestStandaloneJournalWriteConcernPartialErrorSyncFailureIsUncertain(t *test
 			if stats.SyncFailures != 1 || stats.UncertainOutcomes != 1 || stats.PhysicalSyncBoundaries != 1 || stats.JournalAcknowledgements != 0 {
 				t.Fatalf("partial-error uncertainty stats=%+v", stats)
 			}
-			if got := writeConcernFindDocumentCount(t, standalone.Server, "u1"); got != 1 {
-				t.Fatalf("partial-error uncertainty lost first updated document count=%d", got)
+			if !writeConcernMarker(t, standalone.Server, "u1") {
+				t.Fatal("partial-error uncertainty lost first update marker")
 			}
 		})
 	}
@@ -424,7 +423,7 @@ func seedWriteConcernDuplicateEmails(t *testing.T, server *Server, journal bool)
 		{Key: "insert", Value: "users"},
 		{Key: "documents", Value: bson.A{
 			bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "u1@example.com"}},
-			bson.D{{Key: "_id", Value: "u2"}, {Key: "count", Value: "not-a-number"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "email", Value: "u1@example.com"}, {Key: "count", Value: "not-a-number"}},
 		}},
 	}
 	if journal {
@@ -448,7 +447,7 @@ func writeConcernPartialCreateIndexesCommand() bson.D {
 	}
 }
 
-func writeConcernPartialDeleteCommand() bson.D {
+func writeConcernPartialUpdateCommand() bson.D {
 	return bson.D{
 		{Key: "update", Value: "users"},
 		{Key: "updates", Value: bson.A{
@@ -468,6 +467,17 @@ func writeConcernFindDocumentCount(t *testing.T, server *Server, id string) int 
 		{Key: "$db", Value: "app"},
 	})
 	return len(cursorFirstBatch(t, response))
+}
+
+func writeConcernMarker(t *testing.T, server *Server, id string) bool {
+	t.Helper()
+	response := serveCommand(t, server, 100, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: id}}}, {Key: "$db", Value: "app"}})
+	docs := cursorFirstBatch(t, response)
+	if len(docs) != 1 {
+		return false
+	}
+	marker, ok := docs[0].Lookup("marker").BooleanOK()
+	return ok && marker
 }
 
 func prepareWriteConcernDocument(t *testing.T, server *Server) {

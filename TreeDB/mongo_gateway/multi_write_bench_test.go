@@ -9,6 +9,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -78,9 +79,11 @@ func benchmarkMongoInsertCommandShape(b *testing.B, batchSize int, batched bool)
 	started := time.Now()
 	for i, command := range commands {
 		response := serveCommand(b, s, int32(i+1), command)
-		if ok, okOK := bson.Raw(response).Lookup("ok").DoubleOK(); !okOK || ok != 1 {
-			b.Fatalf("insert response=%s", response)
+		want := int32(1)
+		if batched {
+			want = int32(batchSize)
 		}
+		assertMongoBenchmarkWriteResponse(b, response, want, "insert")
 	}
 	elapsed := time.Since(started)
 	b.StopTimer()
@@ -108,7 +111,7 @@ func benchmarkMongoFilterWriteShape(b *testing.B, batchSize int, deleting, batch
 			seed = append(seed, bson.D{{Key: "_id", Value: fmt.Sprintf("filter-%d-%d", op, item)}, {Key: "group", Value: fmt.Sprintf("g-%d", op)}, {Key: "seen", Value: false}})
 		}
 	}
-	assertOK(b, serveCommand(b, s, 1, bson.D{{Key: "insert", Value: "bench"}, {Key: "documents", Value: seed}, {Key: "$db", Value: "app"}}))
+	assertMongoBenchmarkWriteResponse(b, serveCommand(b, s, 1, bson.D{{Key: "insert", Value: "bench"}, {Key: "documents", Value: seed}, {Key: "$db", Value: "app"}}), int32(len(seed)), "filter seed")
 	commands := make([]bson.D, 0, b.N)
 	for op := 0; op < b.N; op++ {
 		if batched {
@@ -126,9 +129,11 @@ func benchmarkMongoFilterWriteShape(b *testing.B, batchSize int, deleting, batch
 	started := time.Now()
 	for i, command := range commands {
 		response := serveCommand(b, s, int32(i+2), command)
-		if ok, okOK := bson.Raw(response).Lookup("ok").DoubleOK(); !okOK || ok != 1 {
-			b.Fatalf("filter-write response=%s", response)
+		want := int32(1)
+		if batched {
+			want = int32(batchSize)
 		}
+		assertMongoBenchmarkWriteResponse(b, response, want, "filter write")
 	}
 	elapsed := time.Since(started)
 	b.StopTimer()
@@ -153,7 +158,7 @@ func benchmarkMongoExactUpdateShape(b *testing.B, batchSize int, batched bool) {
 			seed = append(seed, bson.D{{Key: "_id", Value: fmt.Sprintf("exact-%d-%d", op, item)}, {Key: "seen", Value: false}})
 		}
 	}
-	assertOK(b, serveCommand(b, s, 1, bson.D{{Key: "insert", Value: "bench"}, {Key: "documents", Value: seed}, {Key: "$db", Value: "app"}}))
+	assertMongoBenchmarkWriteResponse(b, serveCommand(b, s, 1, bson.D{{Key: "insert", Value: "bench"}, {Key: "documents", Value: seed}, {Key: "$db", Value: "app"}}), int32(len(seed)), "exact update seed")
 	commands := make([]bson.D, 0, b.N)
 	for op := 0; op < b.N; op++ {
 		if batched {
@@ -175,9 +180,11 @@ func benchmarkMongoExactUpdateShape(b *testing.B, batchSize int, batched bool) {
 	started := time.Now()
 	for i, command := range commands {
 		response := serveCommand(b, s, int32(i+2), command)
-		if ok, yes := bson.Raw(response).Lookup("ok").DoubleOK(); !yes || ok != 1 {
-			b.Fatalf("update response=%s", response)
+		want := int32(1)
+		if batched {
+			want = int32(batchSize)
 		}
+		assertMongoBenchmarkWriteResponse(b, response, want, "exact update")
 	}
 	elapsed := time.Since(started)
 	b.StopTimer()
@@ -186,6 +193,18 @@ func benchmarkMongoExactUpdateShape(b *testing.B, batchSize int, batched bool) {
 	b.ReportMetric(float64(docs)*float64(time.Second)/float64(elapsed), "docs/s")
 	b.ReportMetric(float64(batchSize), "docs/op")
 	reportMongoWriteBenchmarkAccounting(b, db, s.Collections, beforeBackend, beforeCollections, docs)
+}
+
+// assertMongoBenchmarkWriteResponse keeps timing-loop samples meaningful: a
+// command that merely returns ok:1 with an indexed error is not a successful
+// batch/single execution and must not enter the performance comparison.
+func assertMongoBenchmarkWriteResponse(b testing.TB, response wire.Document, wantN int32, operation string) {
+	b.Helper()
+	assertOK(b, response)
+	assertInt32(b, response, "n", wantN)
+	if !bson.Raw(response).Lookup("writeErrors").IsZero() {
+		b.Fatalf("%s response has writeErrors: %s", operation, response)
+	}
 }
 
 // openMongoWriteBenchmarkBackend makes the command-WAL byte counter visible to
@@ -210,9 +229,23 @@ func reportMongoWriteBenchmarkAccounting(b *testing.B, db *backenddb.DB, manager
 	afterCollections := manager.Stats()
 	denominator := float64(documents)
 	b.ReportMetric(float64(mongoWriteBenchmarkStat(b, afterBackend, "treedb.command_wal.write.bytes_total")-mongoWriteBenchmarkStat(b, beforeBackend, "treedb.command_wal.write.bytes_total"))/denominator, "wal_bytes/doc")
-	b.ReportMetric(float64(mongoWriteBenchmarkStat(b, afterCollections, "treedb.collections.write_domain.indexed_stage.root_runs_total")-mongoWriteBenchmarkStat(b, beforeCollections, "treedb.collections.write_domain.indexed_stage.root_runs_total"))/denominator, "indexed_stage_root_runs/doc")
-	b.ReportMetric(float64(mongoWriteBenchmarkStat(b, afterCollections, "treedb.collections.write_domain.indexed_flush.root_runs_total")-mongoWriteBenchmarkStat(b, beforeCollections, "treedb.collections.write_domain.indexed_flush.root_runs_total"))/denominator, "indexed_flush_root_runs/doc")
-	b.ReportMetric(float64(mongoWriteBenchmarkStat(b, afterCollections, "treedb.collections.write_domain.indexed_flush.roots_total")-mongoWriteBenchmarkStat(b, beforeCollections, "treedb.collections.write_domain.indexed_flush.roots_total"))/denominator, "indexed_flush_roots/doc")
+	// Native BSON insert has no indexed write-domain counters. Report each root
+	// counter only when the backend exposes it rather than treating unavailable
+	// accounting as a measured zero.
+	for _, counter := range []struct {
+		key    string
+		metric string
+	}{
+		{"treedb.collections.write_domain.indexed_stage.root_runs_total", "indexed_stage_root_runs/doc"},
+		{"treedb.collections.write_domain.indexed_flush.root_runs_total", "indexed_flush_root_runs/doc"},
+		{"treedb.collections.write_domain.indexed_flush.roots_total", "indexed_flush_roots/doc"},
+	} {
+		after, afterOK := mongoWriteBenchmarkStatOK(afterCollections, counter.key)
+		before, beforeOK := mongoWriteBenchmarkStatOK(beforeCollections, counter.key)
+		if afterOK && beforeOK {
+			b.ReportMetric(float64(after-before)/denominator, counter.metric)
+		}
+	}
 }
 
 func mongoWriteBenchmarkStat(b *testing.B, stats map[string]string, key string) uint64 {
@@ -226,6 +259,15 @@ func mongoWriteBenchmarkStat(b *testing.B, stats map[string]string, key string) 
 		b.Fatalf("parse benchmark stat %q=%q: %v", key, value, err)
 	}
 	return parsed
+}
+
+func mongoWriteBenchmarkStatOK(stats map[string]string, key string) (uint64, bool) {
+	value, ok := stats[key]
+	if !ok {
+		return 0, false
+	}
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	return parsed, err == nil
 }
 
 func benchmarkMongoFilterCommand(op, first, count int, deleting, multi bool) bson.D {
