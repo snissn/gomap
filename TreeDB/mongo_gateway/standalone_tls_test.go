@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -151,6 +152,61 @@ func TestStandaloneServerOfficialDriverSCRAMSHA256(t *testing.T) {
 	cancel()
 	_ = ln.Close()
 	if err := <-serveErr; err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+}
+
+func TestStandaloneServerSCRAMCatalogReopenAndConcurrentAuthentication(t *testing.T) {
+	dir := t.TempDir()
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: dir, AuthenticationEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := standalone.Server.AuthCatalog.UpsertPassword("admin", "alice", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	if err := standalone.Close(); err != nil {
+		t.Fatal(err)
+	}
+	standalone, err = OpenStandaloneServer(StandaloneOptions{Dir: dir, AuthenticationEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer standalone.Close()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	served := make(chan error, 1)
+	go func() { served <- standalone.Serve(ctx, ln) }()
+	var wg sync.WaitGroup
+	errs := make(chan error, 12)
+	for range 12 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			client, err := mongo.Connect(options.Client().ApplyURI("mongodb://" + ln.Addr().String()).SetDirect(true).SetAuth(options.Credential{Username: "alice", Password: "correct horse battery staple", AuthSource: "admin", AuthMechanism: "SCRAM-SHA-256"}).SetServerSelectionTimeout(3 * time.Second))
+			if err == nil {
+				pingCtx, stop := context.WithTimeout(context.Background(), 3*time.Second)
+				err = client.Ping(pingCtx, nil)
+				stop()
+				_ = client.Disconnect(context.Background())
+			}
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent SCRAM authentication: %v", err)
+		}
+	}
+	cancel()
+	_ = ln.Close()
+	if err := <-served; err != nil {
 		t.Fatalf("serve: %v", err)
 	}
 }
