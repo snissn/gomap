@@ -92,7 +92,7 @@ an extra probe outside the manifest.
 | read command gap | maxTimeMS on aggregate/count/distinct | rejected | `read-command-gap.maxtimems-on-aggregate-count-distinct` |
 | update subset | findAndModify exact _id no-match | supported subset | `update-subset.findandmodify-exact-id-no-match` |
 | transaction gap | transactions and retryable writes | not implemented | `transaction-gap.transactions-and-retryable-writes` |
-| security gap | authentication and authorization | not implemented | `security-gap.authentication-and-authorization` |
+| security | SCRAM-SHA-256 authentication | supported subset | `security.authentication-scram-sha-256` |
 | security | TLS transport and safe remote listen (#4057) | supported subset | `security.transport-tls-and-safe-remote-listen` |
 | cluster gap | replica-set and sharding advertisement | not implemented | `cluster-gap.replica-set-and-sharding-advertisement` |
 <!-- mongo-compatibility-matrix:end -->

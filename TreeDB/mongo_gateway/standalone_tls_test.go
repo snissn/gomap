@@ -60,6 +60,21 @@ func TestStandaloneServerInsecureRemoteOverrideStatus(t *testing.T) {
 	}
 }
 
+func TestStandaloneServerRejectsPlaintextRemotePasswordAuthentication(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), AuthenticationEnabled: true, AllowInsecureRemote: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer standalone.Close()
+	ln, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := standalone.Serve(context.Background(), ln); err == nil {
+		t.Fatal("plaintext remote password authentication unexpectedly accepted")
+	}
+}
+
 func TestStandaloneServerOfficialDriverTLS(t *testing.T) {
 	certFile, keyFile, pool := writeTLSMaterial(t, false)
 	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), TLSCertFile: certFile, TLSKeyFile: keyFile})
@@ -563,6 +578,83 @@ func BenchmarkStandaloneTransportHandshake(b *testing.B) {
 				b.ReportMetric(float64(after.HandshakeTotalNanoseconds-before.HandshakeTotalNanoseconds)/float64(handshakes), "server-handshake-ns/op")
 			}
 		})
+	}
+}
+
+// BenchmarkStandaloneSCRAMSHA256Handshake measures the fresh official-driver
+// password-authentication boundary. Reused CRUD is intentionally excluded: it
+// must not re-run PBKDF2 after the connection identity is established.
+func BenchmarkStandaloneSCRAMSHA256Handshake(b *testing.B) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: b.TempDir(), AuthenticationEnabled: true})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer standalone.Close()
+	if err := standalone.Server.AuthCatalog.UpsertPassword("admin", "bench", []byte("correct horse battery staple")); err != nil {
+		b.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- standalone.Serve(ctx, ln) }()
+	defer func() { cancel(); _ = ln.Close(); <-done }()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		client, err := mongo.Connect(options.Client().ApplyURI("mongodb://" + ln.Addr().String()).SetDirect(true).SetAuth(options.Credential{Username: "bench", Password: "correct horse battery staple", AuthSource: "admin", AuthMechanism: "SCRAM-SHA-256"}).SetServerSelectionTimeout(time.Second))
+		if err != nil {
+			b.Fatal(err)
+		}
+		pingCtx, pingCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		err = client.Ping(pingCtx, nil)
+		pingCancel()
+		_ = client.Disconnect(context.Background())
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkStandaloneSCRAMSHA256ReusedFindOne is the steady-state companion:
+// client setup and its one SCRAM exchange finish before timing begins.
+func BenchmarkStandaloneSCRAMSHA256ReusedFindOne(b *testing.B) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: b.TempDir(), AuthenticationEnabled: true})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer standalone.Close()
+	if err := standalone.Server.AuthCatalog.UpsertPassword("admin", "bench", []byte("correct horse battery staple")); err != nil {
+		b.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- standalone.Serve(ctx, ln) }()
+	defer func() { cancel(); _ = ln.Close(); <-done }()
+	client, err := mongo.Connect(options.Client().ApplyURI("mongodb://" + ln.Addr().String()).SetDirect(true).SetAuth(options.Credential{Username: "bench", Password: "correct horse battery staple", AuthSource: "admin", AuthMechanism: "SCRAM-SHA-256"}))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer client.Disconnect(context.Background())
+	coll := client.Database("bench").Collection("items")
+	if _, err := coll.InsertOne(context.Background(), bson.D{{Key: "_id", Value: "fixture"}}); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var out bson.M
+		if err := coll.FindOne(context.Background(), bson.D{{Key: "_id", Value: "fixture"}}).Decode(&out); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 

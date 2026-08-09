@@ -451,6 +451,7 @@ func (rw bufferedConnReadWriter) Write(p []byte) (int, error) {
 func (s *Server) ServeOne(rw io.ReadWriter) error {
 	owner := s.nextConnectionID.Add(1)
 	defer s.killCursorsForOwner(owner)
+	defer s.clearAuthState(owner)
 	return s.ServeOneWithOwner(rw, owner)
 }
 
