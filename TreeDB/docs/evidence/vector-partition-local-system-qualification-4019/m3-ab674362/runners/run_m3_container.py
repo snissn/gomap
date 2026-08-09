@@ -16,6 +16,7 @@ import run_m3_treedb as common
 
 IMAGE = "gomap-4019-m3-system:ab674362"
 IPS = ("172.30.19.10", "172.30.19.11", "172.30.19.12", "172.30.19.13")
+CPUSETS = ("0-2", "3-5", "6-8", "9-11")
 GROUP_PORT = 47100
 PUBLIC_PORT = 47101
 
@@ -48,9 +49,12 @@ def wait_ready(configs: list[Path], names: list[str]) -> list[dict[str, object]]
 def container_resources(names: list[str]) -> dict[str, object]:
     cpu_usec = peak = swap = 0
     ids: list[str] = []
+    allocations: list[dict[str, object]] = []
     for name in names:
         inspect = json.loads(docker("inspect", name, capture=True).stdout)[0]
         ids.append(inspect["Id"])
+        host = inspect["HostConfig"]
+        allocations.append({"cpuset_cpus": host["CpusetCpus"], "memory_bytes": host["Memory"], "memory_swap_bytes": host["MemorySwap"], "pids_limit": host["PidsLimit"]})
         pid = int(inspect["State"]["Pid"])
         relative = Path((Path(f"/proc/{pid}/cgroup").read_text(encoding="utf-8").strip().split("::", 1)[1]).lstrip("/"))
         group = Path("/sys/fs/cgroup") / relative
@@ -58,7 +62,7 @@ def container_resources(names: list[str]) -> dict[str, object]:
         cpu_usec += int(cpu["usage_usec"])
         peak += int((group / "memory.peak").read_text(encoding="utf-8"))
         swap += int((group / "memory.swap.peak").read_text(encoding="utf-8"))
-    return {"container_ids": ids, "cpu_seconds": cpu_usec / 1_000_000, "peak_rss_bytes": peak, "swap_bytes": swap}
+    return {"container_ids": ids, "allocations": allocations, "cpu_seconds": cpu_usec / 1_000_000, "peak_rss_bytes": peak, "swap_bytes": swap}
 
 
 def run_one(corpus_id: str, repetition: int) -> None:
@@ -87,13 +91,13 @@ def run_one(corpus_id: str, repetition: int) -> None:
     ready: list[dict[str, object]] = []
     resources: dict[str, object] = {}
     try:
-        for index, (config, name, ip) in enumerate(zip(configs, names, IPS)):
+        for index, (config, name, ip, cpuset) in enumerate(zip(configs, names, IPS, CPUSETS)):
             config_value = json.loads(config.read_text(encoding="utf-8"))
             state = config.parent
             database = Path(config_value["database_directory"])
             command = [
                 "run", "-d", "--name", name, "--network", network, "--ip", ip,
-                "--memory", "5g", "--memory-swap", "5g", "--pids-limit", "768", "--cpuset-cpus", "0-11",
+                "--memory", "6g", "--memory-swap", "6g", "--pids-limit", "768", "--cpuset-cpus", cpuset,
                 "-e", f"TMPDIR={state}",
                 "-v", f"{state}:{state}:rw", "-v", f"{database}:{database}:rw",
                 "-v", f"{corpus['dataset']}:{corpus['dataset']}:ro",

@@ -66,6 +66,9 @@ func runVectorPartitionSystemExportDatasetV1(args []string, stdout io.Writer) er
 		return err
 	}
 	vectors, queries := fixtureData(fixture)
+	if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
+		return errors.New("fixture checksum does not match generated vector/query/truth stream")
+	}
 	truthPath := m8TruthCacheArtifactPathV1(truthCache, m8TruthCacheIdentityV1(fixture, topK))
 	truth, artifactSHA, err := m8ReadTruthCacheV1(truthPath, fixture, len(queries), topK, uint64(fixture.Vectors), truthSHA)
 	if err != nil {

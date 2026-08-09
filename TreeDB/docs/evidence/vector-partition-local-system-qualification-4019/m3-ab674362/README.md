@@ -18,12 +18,12 @@ recall@10 0.90. QPS and p95 are medians over three repetitions.
 | --- | --- | ---: | ---: | ---: | ---: |
 | TreeDB single daemon | 100k | .9810 | 42.62 / 32.44 | 99.08 / 123.27 | 154.44 / 265.28 |
 | TreeDB native four daemon | 100k | .9810 | 42.03 / 30.18 | 72.02 / 145.60 | 100.30 / 479.37 |
-| TreeDB container four daemon | 100k | .9810 | 40.94 / 38.20 | 48.78 / 269.76 | 110.53 / 393.20 |
+| TreeDB container four daemon | 100k | .9810 | 41.93 / 32.02 | 65.55 / 216.12 | 142.72 / 318.88 |
 | Milvus Standalone | 100k | .9180 | 440.64 / 2.92 | 1804.74 / 6.64 | 1827.74 / 30.10 |
 | PostgreSQL + pgvector | 100k | .9285 | 987.82 / 1.36 | 4741.45 / 2.66 | 4034.15 / 14.89 |
 | TreeDB single daemon | 250k | .9247 | 43.37 / 30.76 | 100.97 / 110.65 | 143.87 / 370.20 |
 | TreeDB native four daemon | 250k | .9247 | 22.16 / 71.02 | 39.08 / 281.09 | 60.51 / 694.11 |
-| TreeDB container four daemon | 250k | .9247 | 31.33 / 49.95 | 73.59 / 142.78 | 109.91 / 383.01 |
+| TreeDB container four daemon | 250k | .9247 | 40.06 / 39.95 | 75.48 / 168.45 | 126.40 / 432.70 |
 | Milvus Standalone | 250k | .9328 | 404.41 / 2.97 | 1708.19 / 6.79 | 1324.61 / 43.59 |
 | PostgreSQL + pgvector | 250k | .9269 | 294.19 / 4.85 | 1559.22 / 7.41 | 1595.27 / 39.92 |
 
@@ -33,6 +33,9 @@ container rows show a material topology tax, strongest for 250k and concurrent
 queries. Retained stage timings attribute it mainly to generation-open and RPC
 time rather than local HNSW search or payload bytes. This is a guardrail and
 diagnosis, not a parity claim.
+
+Each container daemon was constrained to a distinct three-CPU set and 6 GiB of
+memory with swap disabled; the retained runner evidence binds those allocations.
 
 External ranking is observational: all rows ran serially on one shared host,
 and the TreeDB multi-daemon rows are same-host TCP or container-bridge tests,

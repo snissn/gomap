@@ -258,6 +258,7 @@ def validate_result(plan: dict[str, Any], plan_sha256: str, result: dict[str, An
 
     expected_corpora = [{key: corpus[key] for key in ("id", "fixture_checksum", "manifest_sha256", "truth_identity", "truth_artifact_sha256", "truth_sha256")} for corpus in plan["accepted_inputs"]["corpora"]]
     corpus_contracts = {corpus["id"]: corpus for corpus in plan["accepted_inputs"]["corpora"]}
+    accepted_corpus_identities = {corpus["id"]: corpus for corpus in expected_corpora}
     _require(result.get("corpora") == expected_corpora, "result changes accepted corpus/query/truth identity")
 
     plan_rows = {row["id"]: row for row in plan["rows"]}
@@ -294,6 +295,7 @@ def validate_result(plan: dict[str, Any], plan_sha256: str, result: dict[str, An
             for repetition in repetitions:
                 noise = repetition.get("noise")
                 _require(repetition.get("status") == "valid" and isinstance(noise, dict) and noise.get("valid") is True, f"row {row['id']} has invalid or tainted repetition")
+                _require(repetition.get("input_identity") == accepted_corpus_identities[corpus["id"]], f"row {row['id']} repetition does not bind its accepted corpus")
                 _require(all(_number(noise.get(key)) and noise[key] >= 0 for key in plan["artifact_contract"]["required_noise_fields"] if key != "valid"), f"row {row['id']} lacks host-load observations")
                 _require(repetition.get("warmup_queries_per_cell") == plan["workload"]["warmup_queries_per_cell"], f"row {row['id']} changes warmup count")
                 ordered_budgets = _ordered_budgets(plan, contract["search_budget"], repetition["repetition"])
@@ -303,6 +305,9 @@ def validate_result(plan: dict[str, Any], plan_sha256: str, result: dict[str, An
                 _require(all(isinstance(repetition["resources"][key], int) and not isinstance(repetition["resources"][key], bool) for key in plan["artifact_contract"]["required_resources"] if key != "cpu_seconds"), f"row {row['id']} has malformed byte resources")
                 _require(repetition["resources"]["swap_bytes"] <= envelope["swap_limit_bytes"], f"row {row['id']} exceeds the swap limit")
                 _require(all(repetition["resources"][key] > 0 for key in ("cpu_seconds", "peak_rss_bytes", "persistent_bytes")), f"row {row['id']} has empty total-system resource observations")
+                if row["id"] == "treedb_container_multi_daemon":
+                    expected_allocations = [{"cpuset_cpus": cpus, "memory_bytes": 6 * 1024**3, "memory_swap_bytes": 6 * 1024**3, "pids_limit": 768} for cpus in ("0-2", "3-5", "6-8", "9-11")]
+                    _require(repetition["resources"].get("container_allocations") == expected_allocations, "container row changes its per-daemon resource allocation")
                 cells = repetition.get("searches")
                 _require(isinstance(cells, list), f"row {row['id']} searches are required")
                 actual_cells = {(_budget_key(value.get("budget")), value.get("concurrency")) for value in cells}

@@ -2,69 +2,344 @@
   "artifact_root": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362",
   "files": [
     {
-      "bytes": 403412,
+      "bytes": 51200000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/documents.f32",
+      "sha256": "5af3c1037a2881ee93209d9cf3d435edf99c871d1a985c1aebc6435dcda18ec3"
+    },
+    {
+      "bytes": 51200000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/documents.f32",
+      "sha256": "5af3c1037a2881ee93209d9cf3d435edf99c871d1a985c1aebc6435dcda18ec3"
+    },
+    {
+      "bytes": 51200000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/documents.f32",
+      "sha256": "5af3c1037a2881ee93209d9cf3d435edf99c871d1a985c1aebc6435dcda18ec3"
+    },
+    {
+      "bytes": 51200000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/documents.f32",
+      "sha256": "5af3c1037a2881ee93209d9cf3d435edf99c871d1a985c1aebc6435dcda18ec3"
+    },
+    {
+      "bytes": 51200000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/documents.f32",
+      "sha256": "5af3c1037a2881ee93209d9cf3d435edf99c871d1a985c1aebc6435dcda18ec3"
+    },
+    {
+      "bytes": 51200000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/documents.f32",
+      "sha256": "5af3c1037a2881ee93209d9cf3d435edf99c871d1a985c1aebc6435dcda18ec3"
+    },
+    {
+      "bytes": 175000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/exact_truth.jsonl",
+      "sha256": "9b97cd89037165d4bde8a29c0ab23750031c23314f7f989925335ba226e7e3da"
+    },
+    {
+      "bytes": 175000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/exact_truth.jsonl",
+      "sha256": "9b97cd89037165d4bde8a29c0ab23750031c23314f7f989925335ba226e7e3da"
+    },
+    {
+      "bytes": 175000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/exact_truth.jsonl",
+      "sha256": "9b97cd89037165d4bde8a29c0ab23750031c23314f7f989925335ba226e7e3da"
+    },
+    {
+      "bytes": 175000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/exact_truth.jsonl",
+      "sha256": "9b97cd89037165d4bde8a29c0ab23750031c23314f7f989925335ba226e7e3da"
+    },
+    {
+      "bytes": 175000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/exact_truth.jsonl",
+      "sha256": "9b97cd89037165d4bde8a29c0ab23750031c23314f7f989925335ba226e7e3da"
+    },
+    {
+      "bytes": 175000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/exact_truth.jsonl",
+      "sha256": "9b97cd89037165d4bde8a29c0ab23750031c23314f7f989925335ba226e7e3da"
+    },
+    {
+      "bytes": 1223,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/manifest.json",
+      "sha256": "e302bf1b9a5a3e5d6c3a4fed8fa8cbd8e39a5ff2a287ef681221187a9be3d5fd"
+    },
+    {
+      "bytes": 1223,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/manifest.json",
+      "sha256": "e302bf1b9a5a3e5d6c3a4fed8fa8cbd8e39a5ff2a287ef681221187a9be3d5fd"
+    },
+    {
+      "bytes": 1223,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/manifest.json",
+      "sha256": "e302bf1b9a5a3e5d6c3a4fed8fa8cbd8e39a5ff2a287ef681221187a9be3d5fd"
+    },
+    {
+      "bytes": 1223,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/manifest.json",
+      "sha256": "e302bf1b9a5a3e5d6c3a4fed8fa8cbd8e39a5ff2a287ef681221187a9be3d5fd"
+    },
+    {
+      "bytes": 1223,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/manifest.json",
+      "sha256": "e302bf1b9a5a3e5d6c3a4fed8fa8cbd8e39a5ff2a287ef681221187a9be3d5fd"
+    },
+    {
+      "bytes": 1223,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/manifest.json",
+      "sha256": "e302bf1b9a5a3e5d6c3a4fed8fa8cbd8e39a5ff2a287ef681221187a9be3d5fd"
+    },
+    {
+      "bytes": 512000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/queries.f32",
+      "sha256": "0775baa2558b32a2c6c190088913d2c4fdba0b3337d4b1caa51354455fd082b5"
+    },
+    {
+      "bytes": 512000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/queries.f32",
+      "sha256": "0775baa2558b32a2c6c190088913d2c4fdba0b3337d4b1caa51354455fd082b5"
+    },
+    {
+      "bytes": 512000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/queries.f32",
+      "sha256": "0775baa2558b32a2c6c190088913d2c4fdba0b3337d4b1caa51354455fd082b5"
+    },
+    {
+      "bytes": 512000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/queries.f32",
+      "sha256": "0775baa2558b32a2c6c190088913d2c4fdba0b3337d4b1caa51354455fd082b5"
+    },
+    {
+      "bytes": 512000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/queries.f32",
+      "sha256": "0775baa2558b32a2c6c190088913d2c4fdba0b3337d4b1caa51354455fd082b5"
+    },
+    {
+      "bytes": 512000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/100k/queries.f32",
+      "sha256": "0775baa2558b32a2c6c190088913d2c4fdba0b3337d4b1caa51354455fd082b5"
+    },
+    {
+      "bytes": 128000000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/documents.f32",
+      "sha256": "800ba583e96bca2bfb7f7a756d615bc08cbc98ca71ba1e87cdd2519f70191b2d"
+    },
+    {
+      "bytes": 128000000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/documents.f32",
+      "sha256": "800ba583e96bca2bfb7f7a756d615bc08cbc98ca71ba1e87cdd2519f70191b2d"
+    },
+    {
+      "bytes": 128000000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/documents.f32",
+      "sha256": "800ba583e96bca2bfb7f7a756d615bc08cbc98ca71ba1e87cdd2519f70191b2d"
+    },
+    {
+      "bytes": 128000000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/documents.f32",
+      "sha256": "800ba583e96bca2bfb7f7a756d615bc08cbc98ca71ba1e87cdd2519f70191b2d"
+    },
+    {
+      "bytes": 128000000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/documents.f32",
+      "sha256": "800ba583e96bca2bfb7f7a756d615bc08cbc98ca71ba1e87cdd2519f70191b2d"
+    },
+    {
+      "bytes": 128000000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/documents.f32",
+      "sha256": "800ba583e96bca2bfb7f7a756d615bc08cbc98ca71ba1e87cdd2519f70191b2d"
+    },
+    {
+      "bytes": 175000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/exact_truth.jsonl",
+      "sha256": "0a5ec1d5e24ad9d0a8f5610dc5ebfab7ea4a5a1731a49938fa95392d2a166256"
+    },
+    {
+      "bytes": 175000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/exact_truth.jsonl",
+      "sha256": "0a5ec1d5e24ad9d0a8f5610dc5ebfab7ea4a5a1731a49938fa95392d2a166256"
+    },
+    {
+      "bytes": 175000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/exact_truth.jsonl",
+      "sha256": "0a5ec1d5e24ad9d0a8f5610dc5ebfab7ea4a5a1731a49938fa95392d2a166256"
+    },
+    {
+      "bytes": 175000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/exact_truth.jsonl",
+      "sha256": "0a5ec1d5e24ad9d0a8f5610dc5ebfab7ea4a5a1731a49938fa95392d2a166256"
+    },
+    {
+      "bytes": 175000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/exact_truth.jsonl",
+      "sha256": "0a5ec1d5e24ad9d0a8f5610dc5ebfab7ea4a5a1731a49938fa95392d2a166256"
+    },
+    {
+      "bytes": 175000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/exact_truth.jsonl",
+      "sha256": "0a5ec1d5e24ad9d0a8f5610dc5ebfab7ea4a5a1731a49938fa95392d2a166256"
+    },
+    {
+      "bytes": 1224,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/manifest.json",
+      "sha256": "911b9ac40f57db639156a4afbb68a87c4df4e7371539cc2e577cfd292314289d"
+    },
+    {
+      "bytes": 1224,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/manifest.json",
+      "sha256": "911b9ac40f57db639156a4afbb68a87c4df4e7371539cc2e577cfd292314289d"
+    },
+    {
+      "bytes": 1224,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/manifest.json",
+      "sha256": "911b9ac40f57db639156a4afbb68a87c4df4e7371539cc2e577cfd292314289d"
+    },
+    {
+      "bytes": 1224,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/manifest.json",
+      "sha256": "911b9ac40f57db639156a4afbb68a87c4df4e7371539cc2e577cfd292314289d"
+    },
+    {
+      "bytes": 1224,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/manifest.json",
+      "sha256": "911b9ac40f57db639156a4afbb68a87c4df4e7371539cc2e577cfd292314289d"
+    },
+    {
+      "bytes": 1224,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/manifest.json",
+      "sha256": "911b9ac40f57db639156a4afbb68a87c4df4e7371539cc2e577cfd292314289d"
+    },
+    {
+      "bytes": 512000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/queries.f32",
+      "sha256": "7a3744ea6025f5444caeead2bef5869a4a4114430e4215befb9371f833498005"
+    },
+    {
+      "bytes": 512000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/queries.f32",
+      "sha256": "7a3744ea6025f5444caeead2bef5869a4a4114430e4215befb9371f833498005"
+    },
+    {
+      "bytes": 512000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/queries.f32",
+      "sha256": "7a3744ea6025f5444caeead2bef5869a4a4114430e4215befb9371f833498005"
+    },
+    {
+      "bytes": 512000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/queries.f32",
+      "sha256": "7a3744ea6025f5444caeead2bef5869a4a4114430e4215befb9371f833498005"
+    },
+    {
+      "bytes": 512000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/queries.f32",
+      "sha256": "7a3744ea6025f5444caeead2bef5869a4a4114430e4215befb9371f833498005"
+    },
+    {
+      "bytes": 512000,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/datasets/250k/queries.f32",
+      "sha256": "7a3744ea6025f5444caeead2bef5869a4a4114430e4215befb9371f833498005"
+    },
+    {
+      "bytes": 802,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/container_four_daemon_four_group/100k/repeat-1/client/bench.command.json",
+      "sha256": "5ce7ce35b94c8f16b5504b1a5b0ee8759453804b5b13e07d98378eaebd2a5a39"
+    },
+    {
+      "bytes": 402453,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/container_four_daemon_four_group/100k/repeat-1/client/search.json",
-      "sha256": "846b99f71f0bc60557a6039d53fc289a973b6e2bf3a0381cb7d159193a409116"
+      "sha256": "34a3b8c50d757b4b62b814265d9a030a0fca77db29a91eee373d0cc0e75e2cc3"
     },
     {
-      "bytes": 1049,
+      "bytes": 1677,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/container_four_daemon_four_group/100k/repeat-1/runner.json",
-      "sha256": "32ac0e507eab5c35c54cb9cf9c3ca66760f1a4601efdbbc1671ec93558706cf8"
+      "sha256": "f61345aac83398213d39f123ae852a26ccac0fd008c3e54350fdc82c75b45d4f"
     },
     {
-      "bytes": 1049,
+      "bytes": 1677,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/container_four_daemon_four_group/100k/repeat-1/runner.json",
-      "sha256": "32ac0e507eab5c35c54cb9cf9c3ca66760f1a4601efdbbc1671ec93558706cf8"
+      "sha256": "f61345aac83398213d39f123ae852a26ccac0fd008c3e54350fdc82c75b45d4f"
     },
     {
-      "bytes": 404263,
+      "bytes": 802,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/container_four_daemon_four_group/100k/repeat-2/client/bench.command.json",
+      "sha256": "a347a6595a63ce5cb9ba1609ed4e7218828374c3d04c1b10f26937410555efcc"
+    },
+    {
+      "bytes": 402393,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/container_four_daemon_four_group/100k/repeat-2/client/search.json",
-      "sha256": "1bfcf943c83e177e3a90df3861608b6c7e76357316dd0a64aa4ae6e463106b22"
+      "sha256": "02fbdd633eb295a0793252df4ab93c5cb1db7e92e942994081f3d77db29cc6cf"
     },
     {
-      "bytes": 1050,
+      "bytes": 1677,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/container_four_daemon_four_group/100k/repeat-2/runner.json",
-      "sha256": "0c461fec1b61eade7a3650c1533a9f8ac1a64b8a66f81e3d8182ee4b001e53d6"
+      "sha256": "64e1f5f94d083b3737b64d6cfee1fc989a255eb06f06a4e83970b6d17c505bf9"
     },
     {
-      "bytes": 403641,
+      "bytes": 802,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/container_four_daemon_four_group/100k/repeat-3/client/bench.command.json",
+      "sha256": "c53e1e58448f53d047e25284c6af199323ea595d63d0de72acfca5514c5a1bcb"
+    },
+    {
+      "bytes": 403725,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/container_four_daemon_four_group/100k/repeat-3/client/search.json",
-      "sha256": "275026175c643b16cb4bcabd7325e347f72b6e56bf84ac3233e8c870828b364b"
+      "sha256": "7b860ef948060c6359d6b3b0c0472e3911fe2950375b58d03d06ee0b084be9bf"
     },
     {
-      "bytes": 1049,
+      "bytes": 1676,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/container_four_daemon_four_group/100k/repeat-3/runner.json",
-      "sha256": "ddb1ad1fe0a8fa7cc1a9f643d8484ef3161176c532134a1d0534de6c50c1dfd2"
+      "sha256": "17081a15617ec5fd4ee1a54d28b16b8db3fa51cfff80231afaa95ca78151f4fa"
     },
     {
-      "bytes": 403520,
+      "bytes": 802,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/container_four_daemon_four_group/250k/repeat-1/client/bench.command.json",
+      "sha256": "f625bc672f1b25201cb4468f1b6dcf75ed30835e9d4e2f7be342739551be6e56"
+    },
+    {
+      "bytes": 402771,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/container_four_daemon_four_group/250k/repeat-1/client/search.json",
-      "sha256": "7321fe58ed5d302da1ec36c9f97545c2663a1737764389442dafd713473aacf8"
+      "sha256": "41ee1a017c97f209e46e6f1cd3bd76519fcb6dc848ede9b81eeca5a6b80fb0af"
     },
     {
-      "bytes": 1049,
+      "bytes": 1677,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/container_four_daemon_four_group/250k/repeat-1/runner.json",
-      "sha256": "f7389eeed1b53c68d92294f2e8041ddc54f6719a28d069f265b21b55d237dd8a"
+      "sha256": "e27258c21bc820a78b53ba984760b4fb343fef2f53699079a256e57996265d7b"
     },
     {
-      "bytes": 403259,
+      "bytes": 802,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/container_four_daemon_four_group/250k/repeat-2/client/bench.command.json",
+      "sha256": "cf2ccf0b6c2d02c0b17e980d604db91423ebdc43649bcee16c3c2f04d1b913e1"
+    },
+    {
+      "bytes": 402060,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/container_four_daemon_four_group/250k/repeat-2/client/search.json",
-      "sha256": "e2aac7710b1b3a688d4559308ba28b5a9b2c873058c1918fd6a1f2490eccedc2"
+      "sha256": "1c701f7bd6da9628788d88b37a19d9c3257f3dc27842dda671743f3c2025f5cb"
     },
     {
-      "bytes": 1048,
+      "bytes": 1677,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/container_four_daemon_four_group/250k/repeat-2/runner.json",
-      "sha256": "4d076e4c5ca0ad73469a6a062fbe61b146a65fdcc024160f78b9f9ce4b7cfe62"
+      "sha256": "3c62dc33953a31308663fc4423abb1a88c6d3710cc759a9d06033eb9ff478593"
     },
     {
-      "bytes": 404256,
+      "bytes": 802,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/container_four_daemon_four_group/250k/repeat-3/client/bench.command.json",
+      "sha256": "746d5647364e9298daecfa37d6cb21a3be50fdd56b251bb105353f745b8f3f1e"
+    },
+    {
+      "bytes": 402565,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/container_four_daemon_four_group/250k/repeat-3/client/search.json",
-      "sha256": "8a579cbf9b76cd49331db0f4c37933611ab25e6a33765a5fb491e374ded91afa"
+      "sha256": "d50605c4dada9e6c807f7b975d16091da56bedc89a28e91ca7633fb8dc5af7ac"
     },
     {
-      "bytes": 1050,
+      "bytes": 1677,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/container_four_daemon_four_group/250k/repeat-3/runner.json",
-      "sha256": "a161ae61d62ce52cc9e461d7abdbfe1eebee8371f51eb35e6efdb79fd5d951d9"
+      "sha256": "867e58719122fda661652a92ac5835b51eb4ffb5baab25bff79e0ecee754cc82"
+    },
+    {
+      "bytes": 1226,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/milvus_standalone/100k/repeat-1/adapter.command.json",
+      "sha256": "f572c9a6a9307bede8f1dc75096a0fe60554cff2f7eb9d5cece779882a600c6c"
     },
     {
       "bytes": 1492,
@@ -87,6 +362,11 @@
       "sha256": "062f8b09be169577adeeb44cab276ad9b0ad7932c935aa33990551405f81d488"
     },
     {
+      "bytes": 1226,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/milvus_standalone/100k/repeat-2/adapter.command.json",
+      "sha256": "acb366eb41285a3c416fd2b511c7ea48c06bbe4be203273c2ee27f32379ed73b"
+    },
+    {
       "bytes": 1493,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/milvus_standalone/100k/repeat-2/adapter.time",
       "sha256": "6f350d616e63ff993884bc6f74c64fc72c61984693e09106d432724302aa8f89"
@@ -105,6 +385,11 @@
       "bytes": 2409,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/milvus_standalone/100k/repeat-2/service.json",
       "sha256": "cd930ba1074d5ac86906b9a882d308d14941df23dabe7f985a00c30161a81af4"
+    },
+    {
+      "bytes": 1226,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/milvus_standalone/100k/repeat-3/adapter.command.json",
+      "sha256": "df7fe4076670ef5f68245e7b2099c142a7e6151936d503d1885ffb54ec31e33d"
     },
     {
       "bytes": 1496,
@@ -127,6 +412,11 @@
       "sha256": "3c3ccd50751ea868ab13d04e30bb054e8727bcf04492124f0566ee88817f0ed5"
     },
     {
+      "bytes": 1226,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/milvus_standalone/250k/repeat-1/adapter.command.json",
+      "sha256": "540524489b3582e2d1aaa183483e407d79d42cad2d201ddc667f60e0eb84198e"
+    },
+    {
       "bytes": 1498,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/milvus_standalone/250k/repeat-1/adapter.time",
       "sha256": "a5f5e68047dc2e45f9a578466fe269aa802b750e31661e619223975a06c0fc56"
@@ -145,6 +435,11 @@
       "bytes": 2412,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/milvus_standalone/250k/repeat-1/service.json",
       "sha256": "74a3f4ebba0fb21fddce72b1c50c63887ce1cec82e32886915331fb2a0896e9e"
+    },
+    {
+      "bytes": 1226,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/milvus_standalone/250k/repeat-2/adapter.command.json",
+      "sha256": "83276e2580ac8095b82c81e1804ea0f1e87a3a305a5047ce2dafe3265218d26f"
     },
     {
       "bytes": 1496,
@@ -167,6 +462,11 @@
       "sha256": "d6f57204f4f77cec728cec149394f07f1b15f4cfe116ffc40160381829fc78de"
     },
     {
+      "bytes": 1226,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/milvus_standalone/250k/repeat-3/adapter.command.json",
+      "sha256": "c4cb4703f16e617cd2db297c7a995cea39231324ca49b205f32ff1df9622dbf9"
+    },
+    {
       "bytes": 1497,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/milvus_standalone/250k/repeat-3/adapter.time",
       "sha256": "e8d7bcaa746f5b01447416656cdedb6cffd7c72b2d575e126578fcac3311f695"
@@ -187,6 +487,11 @@
       "sha256": "cfcfeb0d63dd0cfe0caa351323450e5e69b198e22df7e159116055121adce598"
     },
     {
+      "bytes": 933,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/native_four_daemon_four_group/100k/repeat-1/bench.command.json",
+      "sha256": "c41c7f955ea967df5317512bf84db6002a5ce2139161635a3621109db184d6a1"
+    },
+    {
       "bytes": 715,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/native_four_daemon_four_group/100k/repeat-1/runner.json",
       "sha256": "9083a8aa46e90ee0c8de81b253cdd7769f5afd7ff33d9c8fe349186be8a37832"
@@ -195,6 +500,11 @@
       "bytes": 403727,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/native_four_daemon_four_group/100k/repeat-1/search.json",
       "sha256": "73a670fd4a0f46296ed3133467ef876ff55b324e83d364db0b7a14549d514558"
+    },
+    {
+      "bytes": 933,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/native_four_daemon_four_group/100k/repeat-2/bench.command.json",
+      "sha256": "d2005b553ee48d8e8640874f822e370e83517e932b6065288dd094332f594aa2"
     },
     {
       "bytes": 715,
@@ -207,6 +517,11 @@
       "sha256": "337e857223218faf55efaaf596abbddccac4af63abbbe31c705d62097e164441"
     },
     {
+      "bytes": 933,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/native_four_daemon_four_group/100k/repeat-3/bench.command.json",
+      "sha256": "05c3b55321361395fd6e08d7fab3324aaa9491a53e0c7a1a2218b3d5749fa8f4"
+    },
+    {
       "bytes": 715,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/native_four_daemon_four_group/100k/repeat-3/runner.json",
       "sha256": "4dd5008e88c3813bdb943f9421efc58176787c4654f627c1c529cbae83de9f7e"
@@ -215,6 +530,11 @@
       "bytes": 403340,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/native_four_daemon_four_group/100k/repeat-3/search.json",
       "sha256": "cf13d9d4363323e2d259aa396238786df9f6ee8be5f63e3473061ac23b0e1f09"
+    },
+    {
+      "bytes": 933,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/native_four_daemon_four_group/250k/repeat-1/bench.command.json",
+      "sha256": "b17a0d0d5e1b6e84c5123810a695ba0ea85456a0c6dd18459f4f5de590bcdaa4"
     },
     {
       "bytes": 715,
@@ -227,6 +547,11 @@
       "sha256": "db3dba1246884fd9546c9f5f6060c80585f551df5387a40382247e9517873d3f"
     },
     {
+      "bytes": 933,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/native_four_daemon_four_group/250k/repeat-2/bench.command.json",
+      "sha256": "86cfed2ad81a2bedf3ce918e465d688289bc5a91730dc2c6d3405883173899eb"
+    },
+    {
       "bytes": 715,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/native_four_daemon_four_group/250k/repeat-2/runner.json",
       "sha256": "fb22001b3543dcecce51983b1546f81575dd4b376fc1eb7f8ca957dcb2959056"
@@ -237,6 +562,11 @@
       "sha256": "922d6447012459e9426e5b977e83f094ea0c6fe2dec030474f5f5db7c274e52b"
     },
     {
+      "bytes": 933,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/native_four_daemon_four_group/250k/repeat-3/bench.command.json",
+      "sha256": "96123a0d88c3c87630c5708e69c5a938ef89bdb0f02d0a52328c8b50345e7dd8"
+    },
+    {
       "bytes": 715,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/native_four_daemon_four_group/250k/repeat-3/runner.json",
       "sha256": "1a2c7926438034f641993c6404aa45da97f35268144edba268f3a0d0b4ad04a2"
@@ -245,6 +575,11 @@
       "bytes": 406973,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/native_four_daemon_four_group/250k/repeat-3/search.json",
       "sha256": "a33b3175cfa4503c58c7e5a75f1ae27e2efaeff243ea9424b357a8e4e96de815"
+    },
+    {
+      "bytes": 1103,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/pgvector/100k/repeat-1/adapter.command.json",
+      "sha256": "618fd435b8c191fe2075de910e78d67aa2cdf8200f483c4ee9b42455d5bb8956"
     },
     {
       "bytes": 1402,
@@ -267,6 +602,11 @@
       "sha256": "b51ed37b5fcb0fece28db5ef346f58e9d0cfda5b5e0c24cd337139f2a7256778"
     },
     {
+      "bytes": 1103,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/pgvector/100k/repeat-2/adapter.command.json",
+      "sha256": "53f9647ad54ebe78e3315a0bd7acb1f7e88c740e8814b4194677508a1bb7a42a"
+    },
+    {
       "bytes": 1397,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/pgvector/100k/repeat-2/adapter.time",
       "sha256": "c59c45a22e27937b509f33854f236924fe3afa08f12535871a5f250afceb7814"
@@ -285,6 +625,11 @@
       "bytes": 1009,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/pgvector/100k/repeat-2/service.json",
       "sha256": "5f1295eb1fd7ce9a38db64099a024bc56bddf085effcfe51e69c89ec9a5d4bab"
+    },
+    {
+      "bytes": 1103,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/pgvector/100k/repeat-3/adapter.command.json",
+      "sha256": "b77c4e9f19c8381a407d226368cf73ee99ceb2a2b6674bfeba950f74ad10d0bd"
     },
     {
       "bytes": 1397,
@@ -307,6 +652,11 @@
       "sha256": "22985fdddde2db83136d78df4fbf6bd6ff4e87d430cfced5b16a49aac556db13"
     },
     {
+      "bytes": 1103,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/pgvector/250k/repeat-1/adapter.command.json",
+      "sha256": "876b5fde6593ad5aced583029b5d127b2054c1f558e6e14d608c655eddd99719"
+    },
+    {
       "bytes": 1402,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/pgvector/250k/repeat-1/adapter.time",
       "sha256": "a303cb2aab3c5e7c38f6f8bf1d250701a55b85f1c14e8b5f1009125ac3c88868"
@@ -325,6 +675,11 @@
       "bytes": 1011,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/pgvector/250k/repeat-1/service.json",
       "sha256": "56926a28d7939d303b6c4635efef8333ca3ee502d465c93b51356dc673036f51"
+    },
+    {
+      "bytes": 1103,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/pgvector/250k/repeat-2/adapter.command.json",
+      "sha256": "efe7e3cc2c83b0ec68596f673b798c2e9c14737f241939a183e0bfb9cb9a1120"
     },
     {
       "bytes": 1401,
@@ -347,6 +702,11 @@
       "sha256": "a72a2951311fd8c6c612578082e2f77635211161be91e586ddb32187218de704"
     },
     {
+      "bytes": 1103,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/pgvector/250k/repeat-3/adapter.command.json",
+      "sha256": "178562a01ee50896018e4f9c55dd45a64c97142f3d6377c7e535d9caac2a9377"
+    },
+    {
       "bytes": 1402,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/pgvector/250k/repeat-3/adapter.time",
       "sha256": "697837b95d109ff6335bfd2d9f62bb253bfea1adab43ef57fd01ab34a6833610"
@@ -367,6 +727,11 @@
       "sha256": "4f5856b77998686b59dc18949663f328bee838c86370d84b74ca0a0e2ec344b3"
     },
     {
+      "bytes": 918,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/single_daemon_four_group/100k/repeat-1/bench.command.json",
+      "sha256": "0c08b21d8830b3e63ecb220106a30c3e591330f61030545deecef8da2780bdb3"
+    },
+    {
       "bytes": 713,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/single_daemon_four_group/100k/repeat-1/runner.json",
       "sha256": "d57c63bf54812551464c9d0f6f0638aa8d6901c3a83c2ffc0c0121f4cc66f1d2"
@@ -375,6 +740,11 @@
       "bytes": 401481,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/single_daemon_four_group/100k/repeat-1/search.json",
       "sha256": "dff537dc7a012a3730eab6bac6d7efdc7570143faa3843c6715c3767b20ccb40"
+    },
+    {
+      "bytes": 918,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/single_daemon_four_group/100k/repeat-2/bench.command.json",
+      "sha256": "5187e8d833040b8a66108790ef1817e15b67261b2c3c188d3f565c864b693dbe"
     },
     {
       "bytes": 713,
@@ -387,6 +757,11 @@
       "sha256": "0e69dc0f1d914d7e6698c1ea28ce5278234bb4963f25b426cadd9db050330add"
     },
     {
+      "bytes": 918,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/single_daemon_four_group/100k/repeat-3/bench.command.json",
+      "sha256": "f8d3cc1ea8f8cc7a9314ef81a8b5ae9bdd37dc6430e4b0b5711eda98a9657a94"
+    },
+    {
       "bytes": 712,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/single_daemon_four_group/100k/repeat-3/runner.json",
       "sha256": "59d5b34307de457bf9f358f930386bc4a56b834182c3738b298edfef95736c6a"
@@ -395,6 +770,11 @@
       "bytes": 400824,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/single_daemon_four_group/100k/repeat-3/search.json",
       "sha256": "b3a42ba1b713bb72132624e859f72f24ba1ffa983cd699c0da41d29ee234460f"
+    },
+    {
+      "bytes": 918,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/single_daemon_four_group/250k/repeat-1/bench.command.json",
+      "sha256": "944ffde754fca5519b109b3c033a3c0e58d417c5bfb43974941aa9bbea59f322"
     },
     {
       "bytes": 715,
@@ -407,6 +787,11 @@
       "sha256": "34ac101b1da9e3e3e7e65e0ecb9092f99e7ceec61983b898c2ace14ecb64f512"
     },
     {
+      "bytes": 918,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/single_daemon_four_group/250k/repeat-2/bench.command.json",
+      "sha256": "bb392e16f97c725761c3a49e833be370d4c04dd2b75554760894b694b477d33a"
+    },
+    {
       "bytes": 715,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/single_daemon_four_group/250k/repeat-2/runner.json",
       "sha256": "2f15c6a690eca42fbe79f9097bac611424cc1314e9860faf273f8b32d1c4a2a9"
@@ -417,6 +802,11 @@
       "sha256": "1b4d2c1c42a3da876e9f6e1ae23204467744278ef01dbd472dc6a5b0c09aefb6"
     },
     {
+      "bytes": 918,
+      "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/single_daemon_four_group/250k/repeat-3/bench.command.json",
+      "sha256": "b3819adab55b8d8e63f5a03aebc1160f644ef8447cd53d9ec51e61cc96db160a"
+    },
+    {
       "bytes": 715,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/single_daemon_four_group/250k/repeat-3/runner.json",
       "sha256": "c97e402cd5dccd07e4c6a6772694eba02c422905c4c91685ce8f0259f02be15d"
@@ -425,6 +815,186 @@
       "bytes": 400708,
       "path": "/mnt/fast4tb/gomap-4019-m3-system-matrix-ab674362/verified-runs/single_daemon_four_group/250k/repeat-3/search.json",
       "sha256": "ca1e93367fc050ae17db95b08a75f892bdb672d09f6ffbfd3f091410ecf507c2"
+    },
+    {
+      "bytes": 359,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/100k/dataset/fixture_manifest.json",
+      "sha256": "2548153084bd8a1c4dad91cd26033c870ab6e8fc9a354326f910e5d876e8919f"
+    },
+    {
+      "bytes": 359,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/100k/dataset/fixture_manifest.json",
+      "sha256": "2548153084bd8a1c4dad91cd26033c870ab6e8fc9a354326f910e5d876e8919f"
+    },
+    {
+      "bytes": 359,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/100k/dataset/fixture_manifest.json",
+      "sha256": "2548153084bd8a1c4dad91cd26033c870ab6e8fc9a354326f910e5d876e8919f"
+    },
+    {
+      "bytes": 359,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/100k/dataset/fixture_manifest.json",
+      "sha256": "2548153084bd8a1c4dad91cd26033c870ab6e8fc9a354326f910e5d876e8919f"
+    },
+    {
+      "bytes": 359,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/100k/dataset/fixture_manifest.json",
+      "sha256": "2548153084bd8a1c4dad91cd26033c870ab6e8fc9a354326f910e5d876e8919f"
+    },
+    {
+      "bytes": 359,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/100k/dataset/fixture_manifest.json",
+      "sha256": "2548153084bd8a1c4dad91cd26033c870ab6e8fc9a354326f910e5d876e8919f"
+    },
+    {
+      "bytes": 359,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/100k/dataset/fixture_manifest.json",
+      "sha256": "2548153084bd8a1c4dad91cd26033c870ab6e8fc9a354326f910e5d876e8919f"
+    },
+    {
+      "bytes": 359,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/100k/dataset/fixture_manifest.json",
+      "sha256": "2548153084bd8a1c4dad91cd26033c870ab6e8fc9a354326f910e5d876e8919f"
+    },
+    {
+      "bytes": 359,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/100k/dataset/fixture_manifest.json",
+      "sha256": "2548153084bd8a1c4dad91cd26033c870ab6e8fc9a354326f910e5d876e8919f"
+    },
+    {
+      "bytes": 385806,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/100k/truth-cache/m8_canonical_truth_accdb76c693e2da99333b9327efc0e3d83ba630b25a8ba2b6820f5a6f6e38937.json",
+      "sha256": "0e9bce9465c9e1fa70c7833364e88c332bc831cfc52c628c90085e1c3068763c"
+    },
+    {
+      "bytes": 385806,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/100k/truth-cache/m8_canonical_truth_accdb76c693e2da99333b9327efc0e3d83ba630b25a8ba2b6820f5a6f6e38937.json",
+      "sha256": "0e9bce9465c9e1fa70c7833364e88c332bc831cfc52c628c90085e1c3068763c"
+    },
+    {
+      "bytes": 385806,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/100k/truth-cache/m8_canonical_truth_accdb76c693e2da99333b9327efc0e3d83ba630b25a8ba2b6820f5a6f6e38937.json",
+      "sha256": "0e9bce9465c9e1fa70c7833364e88c332bc831cfc52c628c90085e1c3068763c"
+    },
+    {
+      "bytes": 385806,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/100k/truth-cache/m8_canonical_truth_accdb76c693e2da99333b9327efc0e3d83ba630b25a8ba2b6820f5a6f6e38937.json",
+      "sha256": "0e9bce9465c9e1fa70c7833364e88c332bc831cfc52c628c90085e1c3068763c"
+    },
+    {
+      "bytes": 385806,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/100k/truth-cache/m8_canonical_truth_accdb76c693e2da99333b9327efc0e3d83ba630b25a8ba2b6820f5a6f6e38937.json",
+      "sha256": "0e9bce9465c9e1fa70c7833364e88c332bc831cfc52c628c90085e1c3068763c"
+    },
+    {
+      "bytes": 385806,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/100k/truth-cache/m8_canonical_truth_accdb76c693e2da99333b9327efc0e3d83ba630b25a8ba2b6820f5a6f6e38937.json",
+      "sha256": "0e9bce9465c9e1fa70c7833364e88c332bc831cfc52c628c90085e1c3068763c"
+    },
+    {
+      "bytes": 385806,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/100k/truth-cache/m8_canonical_truth_accdb76c693e2da99333b9327efc0e3d83ba630b25a8ba2b6820f5a6f6e38937.json",
+      "sha256": "0e9bce9465c9e1fa70c7833364e88c332bc831cfc52c628c90085e1c3068763c"
+    },
+    {
+      "bytes": 385806,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/100k/truth-cache/m8_canonical_truth_accdb76c693e2da99333b9327efc0e3d83ba630b25a8ba2b6820f5a6f6e38937.json",
+      "sha256": "0e9bce9465c9e1fa70c7833364e88c332bc831cfc52c628c90085e1c3068763c"
+    },
+    {
+      "bytes": 385806,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/100k/truth-cache/m8_canonical_truth_accdb76c693e2da99333b9327efc0e3d83ba630b25a8ba2b6820f5a6f6e38937.json",
+      "sha256": "0e9bce9465c9e1fa70c7833364e88c332bc831cfc52c628c90085e1c3068763c"
+    },
+    {
+      "bytes": 377,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/dataset/fixture_manifest.json",
+      "sha256": "14194cca83e94d776baf78897e423ba505d51b342cc189845e6b271945502025"
+    },
+    {
+      "bytes": 377,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/dataset/fixture_manifest.json",
+      "sha256": "14194cca83e94d776baf78897e423ba505d51b342cc189845e6b271945502025"
+    },
+    {
+      "bytes": 377,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/dataset/fixture_manifest.json",
+      "sha256": "14194cca83e94d776baf78897e423ba505d51b342cc189845e6b271945502025"
+    },
+    {
+      "bytes": 377,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/dataset/fixture_manifest.json",
+      "sha256": "14194cca83e94d776baf78897e423ba505d51b342cc189845e6b271945502025"
+    },
+    {
+      "bytes": 377,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/dataset/fixture_manifest.json",
+      "sha256": "14194cca83e94d776baf78897e423ba505d51b342cc189845e6b271945502025"
+    },
+    {
+      "bytes": 377,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/dataset/fixture_manifest.json",
+      "sha256": "14194cca83e94d776baf78897e423ba505d51b342cc189845e6b271945502025"
+    },
+    {
+      "bytes": 377,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/dataset/fixture_manifest.json",
+      "sha256": "14194cca83e94d776baf78897e423ba505d51b342cc189845e6b271945502025"
+    },
+    {
+      "bytes": 377,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/dataset/fixture_manifest.json",
+      "sha256": "14194cca83e94d776baf78897e423ba505d51b342cc189845e6b271945502025"
+    },
+    {
+      "bytes": 377,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/dataset/fixture_manifest.json",
+      "sha256": "14194cca83e94d776baf78897e423ba505d51b342cc189845e6b271945502025"
+    },
+    {
+      "bytes": 385786,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/truth-cache/m8_canonical_truth_f1fab20b88cd3dcdd6e95a284400983230b1432b36bd4d73e321e251159795ab.json",
+      "sha256": "5a518c1cb8182edc685ab692dc17a6974655572f426a4b97c10482fd1643f04e"
+    },
+    {
+      "bytes": 385786,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/truth-cache/m8_canonical_truth_f1fab20b88cd3dcdd6e95a284400983230b1432b36bd4d73e321e251159795ab.json",
+      "sha256": "5a518c1cb8182edc685ab692dc17a6974655572f426a4b97c10482fd1643f04e"
+    },
+    {
+      "bytes": 385786,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/truth-cache/m8_canonical_truth_f1fab20b88cd3dcdd6e95a284400983230b1432b36bd4d73e321e251159795ab.json",
+      "sha256": "5a518c1cb8182edc685ab692dc17a6974655572f426a4b97c10482fd1643f04e"
+    },
+    {
+      "bytes": 385786,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/truth-cache/m8_canonical_truth_f1fab20b88cd3dcdd6e95a284400983230b1432b36bd4d73e321e251159795ab.json",
+      "sha256": "5a518c1cb8182edc685ab692dc17a6974655572f426a4b97c10482fd1643f04e"
+    },
+    {
+      "bytes": 385786,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/truth-cache/m8_canonical_truth_f1fab20b88cd3dcdd6e95a284400983230b1432b36bd4d73e321e251159795ab.json",
+      "sha256": "5a518c1cb8182edc685ab692dc17a6974655572f426a4b97c10482fd1643f04e"
+    },
+    {
+      "bytes": 385786,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/truth-cache/m8_canonical_truth_f1fab20b88cd3dcdd6e95a284400983230b1432b36bd4d73e321e251159795ab.json",
+      "sha256": "5a518c1cb8182edc685ab692dc17a6974655572f426a4b97c10482fd1643f04e"
+    },
+    {
+      "bytes": 385786,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/truth-cache/m8_canonical_truth_f1fab20b88cd3dcdd6e95a284400983230b1432b36bd4d73e321e251159795ab.json",
+      "sha256": "5a518c1cb8182edc685ab692dc17a6974655572f426a4b97c10482fd1643f04e"
+    },
+    {
+      "bytes": 385786,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/truth-cache/m8_canonical_truth_f1fab20b88cd3dcdd6e95a284400983230b1432b36bd4d73e321e251159795ab.json",
+      "sha256": "5a518c1cb8182edc685ab692dc17a6974655572f426a4b97c10482fd1643f04e"
+    },
+    {
+      "bytes": 385786,
+      "path": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/truth-cache/m8_canonical_truth_f1fab20b88cd3dcdd6e95a284400983230b1432b36bd4d73e321e251159795ab.json",
+      "sha256": "5a518c1cb8182edc685ab692dc17a6974655572f426a4b97c10482fd1643f04e"
     }
   ]
 }

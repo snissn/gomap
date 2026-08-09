@@ -16,7 +16,7 @@ import (
 
 func TestVectorPartitionSystemExportDatasetV1(t *testing.T) {
 	dataset, cache := filepath.Join(t.TempDir(), "dataset"), t.TempDir()
-	if err := run([]string{"generate-fixture", "-out", dataset, "-vectors", "12", "-queries", "2", "-dimensions", "3", "-seed", "7"}, io.Discard); err != nil {
+	if err := run([]string{"generate-fixture", "-out", dataset, "-vectors", "12", "-queries", "2", "-dimensions", "5", "-seed", "7"}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	var truthOut strings.Builder
@@ -40,7 +40,7 @@ func TestVectorPartitionSystemExportDatasetV1(t *testing.T) {
 	if err := json.Unmarshal(raw, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Docs != 12 || manifest.Queries != 2 || manifest.Dimensions != 3 || manifest.ExactTruthQueries != 2 || manifest.TruthArtifactSHA256 != truthSHA {
+	if manifest.Docs != 12 || manifest.Queries != 2 || manifest.Dimensions != 5 || manifest.ExactTruthQueries != 2 || manifest.TruthArtifactSHA256 != truthSHA {
 		t.Fatalf("manifest=%+v", manifest)
 	}
 	for _, name := range []string{"documents.f32", "queries.f32", "exact_truth.jsonl"} {
@@ -81,5 +81,25 @@ func TestVectorPartitionSystemExportDatasetV1(t *testing.T) {
 	}
 	if err := run([]string{"system-export-dataset", "-dataset", dataset, "-truth-cache", cache, "-truth-cache-sha256", truthSHA, "-out", out}, io.Discard); err == nil {
 		t.Fatal("overwrote existing export")
+	}
+	manifestPath := filepath.Join(dataset, "fixture_manifest.json")
+	var changed map[string]any
+	raw, err = os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &changed); err != nil {
+		t.Fatal(err)
+	}
+	changed["seed"] = float64(8)
+	raw, err = json.Marshal(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"system-export-dataset", "-dataset", dataset, "-truth-cache", cache, "-truth-cache-sha256", truthSHA, "-out", filepath.Join(t.TempDir(), "changed-export")}, io.Discard); err == nil {
+		t.Fatal("exported regenerated data with a stale fixture checksum")
 	}
 }

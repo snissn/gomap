@@ -23,6 +23,11 @@ TREE_ROWS = {
     "treedb_container_multi_daemon": "container_four_daemon_four_group",
 }
 EXTERNAL_ROWS = {"milvus_standalone": "milvus_standalone", "postgres_pgvector": "pgvector"}
+CORPUS_IDENTITY_KEYS = ("id", "fixture_checksum", "manifest_sha256", "truth_identity", "truth_artifact_sha256", "truth_sha256")
+CONTAINER_ALLOCATIONS = [
+    {"cpuset_cpus": cpus, "memory_bytes": 6 * 1024**3, "memory_swap_bytes": 6 * 1024**3, "pids_limit": 768}
+    for cpus in ("0-2", "3-5", "6-8", "9-11")
+]
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -33,9 +38,71 @@ def semantic_sha(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def checked_json(path: Path, inventory: list[dict[str, Any]]) -> dict[str, Any]:
-    inventory.append({"path": str(path), "bytes": path.stat().st_size, "sha256": _sha256(path)})
-    return _load(path)
+def checked_bytes(path: Path, inventory: list[dict[str, Any]]) -> bytes:
+    raw = path.read_bytes()
+    inventory.append({"path": str(path), "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()})
+    return raw
+
+
+def checked_json(path: Path, inventory: list[dict[str, Any]]) -> Any:
+    return json.loads(checked_bytes(path, inventory))
+
+
+def command_flag(command: list[str], name: str) -> str:
+    if command.count(name) != 1:
+        raise ValueError(f"command must contain exactly one {name}")
+    index = command.index(name)
+    if index + 1 == len(command) or not isinstance(command[index + 1], str):
+        raise ValueError(f"command has no value for {name}")
+    return command[index + 1]
+
+
+def tree_input_identity(search: dict[str, Any], command_path: Path, expected: dict[str, Any], inventory: list[dict[str, Any]]) -> dict[str, Any]:
+    command = checked_json(command_path, inventory)
+    if not isinstance(command, list) or not all(isinstance(value, str) for value in command):
+        raise ValueError(f"malformed benchmark command {command_path}")
+    manifest_path = Path(command_flag(command, "-dataset")) / "fixture_manifest.json"
+    manifest_raw = checked_bytes(manifest_path, inventory)
+    manifest = json.loads(manifest_raw)
+    truth_path = Path(command_flag(command, "-truth-cache")) / f"m8_canonical_truth_{expected['truth_identity']}.json"
+    truth_raw = checked_bytes(truth_path, inventory)
+    truth = json.loads(truth_raw)
+    actual = {
+        "id": expected["id"],
+        "fixture_checksum": search.get("dataset_checksum"),
+        "manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
+        "truth_identity": truth.get("identity"),
+        "truth_artifact_sha256": hashlib.sha256(truth_raw).hexdigest(),
+        "truth_sha256": truth.get("truth_sha256"),
+    }
+    if manifest.get("checksum") != actual["fixture_checksum"] or truth.get("dataset_checksum") != actual["fixture_checksum"] or search.get("truth_artifact_sha256") != actual["truth_artifact_sha256"] or command_flag(command, "-truth-cache-sha256") != actual["truth_artifact_sha256"] or actual != expected:
+        raise ValueError(f"TreeDB run does not bind accepted corpus {expected['id']}")
+    return actual
+
+
+def external_input_identity(search: dict[str, Any], command_path: Path, expected: dict[str, Any], inventory: list[dict[str, Any]]) -> dict[str, Any]:
+    command = checked_json(command_path, inventory)
+    if not isinstance(command, list) or not all(isinstance(value, str) for value in command):
+        raise ValueError(f"malformed adapter command {command_path}")
+    dataset = Path(command_flag(command, "--dataset-dir"))
+    if dataset.resolve() != Path(search.get("dataset_dir", "")).resolve():
+        raise ValueError("adapter command and result use different datasets")
+    manifest = checked_json(dataset / "manifest.json", inventory)
+    actual = {
+        "id": expected["id"],
+        "fixture_checksum": manifest.get("fixture_checksum"),
+        "manifest_sha256": expected["manifest_sha256"],
+        "truth_identity": manifest.get("truth_identity"),
+        "truth_artifact_sha256": manifest.get("truth_artifact_sha256"),
+        "truth_sha256": manifest.get("truth_sha256"),
+    }
+    for name, contract in manifest.get("files", {}).items():
+        raw = checked_bytes(dataset / name, inventory)
+        if contract != {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}:
+            raise ValueError(f"exported dataset file {name} does not match its manifest")
+    if actual != expected:
+        raise ValueError(f"external run does not bind accepted corpus {expected['id']}")
+    return actual
 
 
 def time_fields(path: Path, inventory: list[dict[str, Any]]) -> tuple[float, int]:
@@ -75,15 +142,21 @@ def tree_search_path(root: Path, topology: str, corpus: str, repetition: int) ->
     return base / ("client/search.json" if topology.startswith("container") else "search.json")
 
 
-def tree_repetition(root: Path, topology: str, corpus: str, repetition: int, samples: list[dict[str, Any]], inventory: list[dict[str, Any]]) -> tuple[dict[str, Any], str]:
+def tree_repetition(root: Path, topology: str, corpus: str, repetition: int, expected: dict[str, Any], samples: list[dict[str, Any]], inventory: list[dict[str, Any]]) -> tuple[dict[str, Any], str]:
     search_path = tree_search_path(root, topology, corpus, repetition)
     base = search_path.parent.parent if topology.startswith("container") else search_path.parent
     search = checked_json(search_path, inventory)
     runner = checked_json(base / "runner.json", inventory)
     resources = {key: runner["resources"][key] for key in ("cpu_seconds", "peak_rss_bytes", "persistent_bytes", "temporary_bytes", "network_rx_bytes", "network_tx_bytes", "swap_bytes")}
+    input_identity = tree_input_identity(search, search_path.parent / "bench.command.json", expected, inventory)
+    if topology.startswith("container"):
+        resources["container_allocations"] = runner["resources"].get("allocations")
+        if resources["container_allocations"] != CONTAINER_ALLOCATIONS:
+            raise ValueError("container run does not enforce four disjoint 3-CPU/6-GiB allocations")
     return {
         "repetition": repetition,
         "status": "valid",
+        "input_identity": input_identity,
         "noise": nearest_load(samples, search["started_at"]),
         "warmup_queries_per_cell": search["warmup_queries"],
         "budget_order": [cell["budget"] for cell in search["cells"][::4]],
@@ -93,7 +166,7 @@ def tree_repetition(root: Path, topology: str, corpus: str, repetition: int, sam
     }, search["topology_identity_sha256"]
 
 
-def external_repetition(root: Path, backend: str, corpus: str, repetition: int, inventory: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
+def external_repetition(root: Path, backend: str, corpus: str, repetition: int, expected: dict[str, Any], inventory: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
     base = root / "verified-runs" / backend / corpus / f"repeat-{repetition}"
     search = checked_json(base / "search.json", inventory)
     service = checked_json(base / "service.json", inventory)
@@ -139,6 +212,7 @@ def external_repetition(root: Path, backend: str, corpus: str, repetition: int, 
     return {
         "repetition": repetition,
         "status": "valid",
+        "input_identity": external_input_identity(search, base / "adapter.command.json", expected, inventory),
         "noise": {"valid": True, "load_1": load[0], "load_5": load[1], "load_15": load[2]},
         "warmup_queries_per_cell": search["warmup_queries_per_cell"],
         "budget_order": [{key: budget[key]} for budget in search["budget_searches"]],
@@ -168,7 +242,7 @@ def main() -> None:
     plan = _load(args.plan)
     inventory: list[dict[str, Any]] = []
     samples = historical_load(args.sysstat, args.out / "sysstat-load.json")
-    corpora = [{key: value[key] for key in ("id", "fixture_checksum", "manifest_sha256", "truth_identity", "truth_artifact_sha256", "truth_sha256")} for value in plan["accepted_inputs"]["corpora"]]
+    corpora = [{key: value[key] for key in CORPUS_IDENTITY_KEYS} for value in plan["accepted_inputs"]["corpora"]]
     corpus_dirs = {"embedding_mixture_100k": "100k", "embedding_mixture_250k": "250k"}
     contracts = {row["id"]: row for row in plan["rows"]}
     rows = []
@@ -179,7 +253,7 @@ def main() -> None:
         for corpus in corpora:
             repetitions = []
             for repetition in (1, 2, 3):
-                value, topology_id = tree_repetition(args.root, topology, corpus_dirs[corpus["id"]], repetition, samples, inventory)
+                value, topology_id = tree_repetition(args.root, topology, corpus_dirs[corpus["id"]], repetition, corpus, samples, inventory)
                 repetitions.append(value)
                 topology_ids.append(topology_id)
             runs.append({"id": corpus["id"], "repetitions": repetitions})
@@ -199,7 +273,7 @@ def main() -> None:
         for corpus in corpora:
             repetitions = []
             for repetition in (1, 2, 3):
-                value, service = external_repetition(args.root, backend, corpus_dirs[corpus["id"]], repetition, inventory)
+                value, service = external_repetition(args.root, backend, corpus_dirs[corpus["id"]], repetition, corpus, inventory)
                 repetitions.append(value)
                 service_identities.append(service)
             runs.append({"id": corpus["id"], "repetitions": repetitions})
