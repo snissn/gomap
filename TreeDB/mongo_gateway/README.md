@@ -81,13 +81,13 @@ call concurrently.
 <!-- mongo-capability-summary:begin -->
 ## Executable capability summary
 
-Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:45d294fcb8b78bb483bd2193ecf0a4a0531d27404530b7b6d382c7e15bf2546e`
+Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:d119d74aeedd1357c4ff6eeabd3d078e287de18958d06b37bc339add2993845a`
 
 | Surface | Status | Boundary |
 |---|---|---|
 | Standalone CRUD | supported subset | Explicit-ID CRUD plus bounded multi update/delete and ordered or unordered insert/update/delete batches; a positive maxTimeMS shortens the shared five-second command deadline; per-document atomicity only, never a transaction. |
 | Standalone write concern | supported subset | Absent/default and w:1 use the selected profile's ordinary acknowledgement boundary; j:true closes a real command-WAL or checkpoint sync boundary. Unacknowledged, replica, and interruptible-timeout semantics reject before mutation. |
-| Aggregation, count, and distinct | supported subset | Bounded standalone subsets only. Explain reports stable primary, secondary, and bounded-scan vocabulary for find, count, distinct, and aggregate pipeline reads; writes, routed reads, and unsupported verbosity reject. |
+| Aggregation, count, and distinct | supported subset | Bounded standalone subsets only. Explain reports stable primary, secondary, and bounded-scan vocabulary for find, count, distinct, and aggregate pipelines whose planner prefix is match/skip/limit; later match or sort stages reject rather than being misreported as find-plan work. Writes, routed reads, and unsupported verbosity reject. |
 | Administrative diagnostics | not implemented | serverStatus, top, and dbStats are not implemented. |
 | Logical sessions | supported subset | Driver-interoperability metadata only; no transaction or causal-session semantics. |
 | Transport security | supported subset | Loopback plaintext remains available; non-loopback standalone listeners require TLS unless an explicit insecure override is selected. Password authentication refuses plaintext non-loopback listeners. TLS 1.2+ with bounded handshakes is supported. |

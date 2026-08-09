@@ -193,6 +193,19 @@ func TestMongoExplainReadCommandAdapters(t *testing.T) {
 	}
 }
 
+func TestMongoExplainAggregateRejectsUnrepresentablePipelineSort(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	resp := serveCommand(t, server, 107, bson.D{{Key: "explain", Value: bson.D{{Key: "aggregate", Value: "users"}, {Key: "pipeline", Value: bson.A{bson.D{{Key: "$sort", Value: bson.D{{Key: "name", Value: int32(1)}}}}}}, {Key: "cursor", Value: bson.D{}}}}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, resp, "BadValue")
+	planner, ok := bson.Raw(resp).Lookup("queryPlanner").DocumentOK()
+	if !ok {
+		t.Fatalf("rejected aggregate must retain planner context: %s", resp)
+	}
+	if reason, ok := planner.Lookup("rejectionReason").StringValueOK(); !ok || reason != "unsupported_aggregate_pipeline" {
+		t.Fatalf("rejection reason=%q ok=%v", reason, ok)
+	}
+}
+
 func TestMongoExplainAdaptiveMultiIndexPlanDoesNotClaimAnUnexecutedWinner(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	command := bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "city", Value: "hnl"}, {Key: "age", Value: bson.D{{Key: "$gte", Value: int32(20)}}}}}}}, {Key: "$db", Value: "app"}}
@@ -221,7 +234,7 @@ func TestMongoExplainClusterRejectsBeforeLocalCollectionObservation(t *testing.T
 		{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "$db", Value: "app"}}},
 		{Key: "$db", Value: "app"},
 	})
-	assertCommandError(t, resp, "NotWritablePrimary")
+	assertCommandError(t, resp, "BadValue")
 	if lookups != 0 {
 		t.Fatalf("local collection lookups=%d want 0", lookups)
 	}

@@ -304,6 +304,15 @@ func (s *Server) explainAggregateResponse(ctx context.Context, command wire.Docu
 		consumed++
 	}
 	remaining := append([]aggregateStage(nil), stages[consumed:]...)
+	// The shared find vocabulary can truthfully describe only the initial
+	// match/skip/limit prefix. A later match or sort would add pipeline work
+	// that is not a find-plan property, so fail closed instead of claiming the
+	// find sort is satisfied or hiding in-memory work.
+	for _, stage := range remaining {
+		if stage.name == "$match" || stage.name == "$sort" {
+			return explainPlannerRejected(db, collection, "unsupported_aggregate_pipeline", "Mongo gateway explain requires aggregate $match and $sort stages in the initial planner prefix")
+		}
+	}
 	return s.explainCollectionRead(ctx, db, collection, plan, verbosity, func(col *collections.Collection, plan findPlan) (int64, error) {
 		result, err := s.executeFind(col, plan)
 		if err != nil {
