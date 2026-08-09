@@ -259,6 +259,46 @@ func TestMongoMissingCollectionUnorderedInvalidAdmittedUpsertDoesNotCreateCatalo
 	}
 }
 
+func TestMongoMissingCollectionUnorderedInvalidUpsertContinuesToValidUpsert(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	invalid := bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "bad"}}}, {Key: "u", Value: bson.D{{Key: "_id", Value: "different"}, {Key: "value", Value: "bad"}}}, {Key: "upsert", Value: true}}
+	valid := bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "good"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "value", Value: "good"}}}}}, {Key: "upsert", Value: true}}
+	response := serveCommand(t, s, 1, bson.D{{Key: "update", Value: "missing"}, {Key: "ordered", Value: false}, {Key: "updates", Value: bson.A{invalid, valid}}, {Key: "$db", Value: "app"}})
+	assertOK(t, response)
+	assertInt32(t, response, "n", 1)
+	assertInt32(t, response, "nModified", 0)
+	assertIndexedWriteError(t, response, 0)
+	upserted, ok := bson.Raw(response).Lookup("upserted").ArrayOK()
+	values, valuesErr := upserted.Values()
+	if !ok || valuesErr != nil || len(values) != 1 || values[0].Document().Lookup("index").Int32() != 1 {
+		t.Fatalf("unordered valid successor upserted=%s", response)
+	}
+	col, err := s.Collections.OpenCollection("app.missing")
+	if err != nil {
+		t.Fatalf("open valid successor collection: %v", err)
+	}
+	goodKey, err := encodePrimaryKey(bson.RawValue{Type: bson.TypeString, Value: bsoncore.AppendString(nil, "good")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	badKey, err := encodePrimaryKey(bson.RawValue{Type: bson.TypeString, Value: bsoncore.AppendString(nil, "bad")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored, err := col.Get(goodKey); err != nil || stored == nil {
+		t.Fatalf("valid successor not published: stored=%v err=%v", stored, err)
+	}
+	if stored, err := col.Get(badKey); err != nil || stored != nil {
+		t.Fatalf("invalid predecessor published: stored=%v err=%v", stored, err)
+	}
+}
+
 func TestMongoInsertMinimumResponseEnvelopeRetainsTerminalError(t *testing.T) {
 	// At the minimum accepted envelope there is no ordinary error reservation
 	// left, but a pre-mutation runtime rejection must still be observable.

@@ -1111,11 +1111,14 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 		if !hasUpsert {
 			return marshalUpdateResponse(0, 0, nil)
 		}
-		// Preserve the established full-command validation for the first upsert;
-		// the candidate-specific validation in the admission preview below is
-		// additionally required for unordered commands that skip it.
-		if err := s.validateMongoMissingCollectionFirstUpsert(parsed); err != nil {
-			return mongoUpdateWriteCommandError(err)
+		// Ordered missing-collection upserts retain the established preflight
+		// rejection contract. Unordered commands instead validate every actual
+		// candidate in the preview below so an indexed runtime error can continue
+		// to a later valid upsert without creating an empty collection.
+		if ordered {
+			if err := s.validateMongoMissingCollectionFirstUpsert(parsed); err != nil {
+				return mongoUpdateWriteCommandError(err)
+			}
 		}
 		// A successful first upsert creates this collection. Preview response
 		// admission before opening the catalog: otherwise a response-budget
