@@ -54,6 +54,8 @@ func NewVectorPartitionPublicBackendV1(opts VectorPartitionPublicBackendOptionsV
 }
 
 func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionV1(ctx context.Context, request public.SearchRequestV1) (public.SearchResponseV1, error) {
+	adapterStarted := time.Now()
+	started := adapterStarted
 	if b == nil || b.opts.Topology.Status().Closed {
 		return public.SearchResponseV1{}, errors.New("production topology is unavailable")
 	}
@@ -70,6 +72,7 @@ func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionV1(ctx context.Con
 	if !request.Deadline.IsZero() {
 		r.DeadlineUnixNano = request.Deadline.UnixNano()
 	}
+	adapterNanos := time.Since(adapterStarted)
 	response, err := b.opts.Topology.Coordinator().Search(ctx, r)
 	if err != nil {
 		return public.SearchResponseV1{}, publicBackendErrorV1(err)
@@ -77,30 +80,36 @@ func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionV1(ctx context.Con
 	if response.PartitionGeneration != request.Generation.Generation {
 		return public.SearchResponseV1{}, &public.ErrorV1{Code: public.ErrorGenerationMismatchV1, Err: errors.New("serving topology returned another generation")}
 	}
+	adapterStarted = time.Now()
 	result := public.SearchResponseV1{Generation: request.Generation, Counters: public.SearchCountersV1{
 		SelectedPartitions: response.Counters.SelectedPartitions, SelectedGroups: response.Counters.SelectedGroups,
 		Requests: response.Counters.Requests, RPCs: response.Counters.RPCs, Retries: response.Counters.Retries, Redirects: response.Counters.Redirects,
 		Candidates: response.Counters.Candidates, Edges: response.Counters.Edges,
 		QueryBytes: response.Counters.QueryBytes, RequestBytes: response.Counters.RequestBytes, CandidateBytes: response.Counters.CandidateBytes, ResponseBytes: response.Counters.ResponseBytes,
 	}, Timing: public.SearchTimingV1{
-		RouterOpen:     time.Duration(response.Timing.RouterOpenNanos),
-		RouterSearch:   time.Duration(response.Timing.RouterSearchNanos),
-		Placement:      time.Duration(response.Timing.PlacementNanos),
-		Queue:          time.Duration(response.Timing.QueueNanos),
-		RPC:            time.Duration(response.Timing.RPCNanos),
-		Network:        time.Duration(response.Timing.NetworkNanos),
-		ReadIndexApply: time.Duration(response.Timing.ReadIndexApplyNanos),
-		GenerationOpen: time.Duration(response.Timing.GenerationOpenNanos),
-		ShardSearch:    time.Duration(response.Timing.ShardSearchNanos),
-		Response:       time.Duration(response.Timing.ResponseNanos),
-		Dedupe:         time.Duration(response.Timing.DedupeNanos),
-		Merge:          time.Duration(response.Timing.MergeNanos),
-		Total:          time.Duration(response.Timing.TotalNanos),
+		PublicAdapter:        adapterNanos,
+		RouterOpen:           time.Duration(response.Timing.RouterOpenNanos),
+		RouterSearch:         time.Duration(response.Timing.RouterSearchNanos),
+		Placement:            time.Duration(response.Timing.PlacementNanos),
+		CoordinatorLifecycle: time.Duration(response.Timing.LifecycleNanos),
+		Dispatch:             time.Duration(response.Timing.DispatchNanos),
+		Queue:                time.Duration(response.Timing.QueueNanos),
+		RPC:                  time.Duration(response.Timing.RPCNanos),
+		Network:              time.Duration(response.Timing.NetworkNanos),
+		ReadIndexApply:       time.Duration(response.Timing.ReadIndexApplyNanos),
+		GenerationOpen:       time.Duration(response.Timing.GenerationOpenNanos),
+		ShardSearch:          time.Duration(response.Timing.ShardSearchNanos),
+		Response:             time.Duration(response.Timing.ResponseNanos),
+		Dedupe:               time.Duration(response.Timing.DedupeNanos),
+		Merge:                time.Duration(response.Timing.MergeNanos),
+		CoordinatorTotal:     time.Duration(response.Timing.TotalNanos),
 	}}
 	result.Neighbors = make([]public.NeighborV1, len(response.Neighbors))
 	for i, n := range response.Neighbors {
 		result.Neighbors[i] = public.NeighborV1{ID: n.ID, Score: n.Score}
 	}
+	result.Timing.PublicAdapter += time.Since(adapterStarted)
+	result.Timing.Total = time.Since(started)
 	return result, nil
 }
 
@@ -231,7 +240,9 @@ func (b *VectorPartitionPublicBackendV1) OperationsHealthV1(ctx context.Context)
 	if !slices.Equal(ownerGroups, requiredGroups) {
 		return public.OperationsHealthV1{Generation: id, Reason: "topology_unavailable"}, nil
 	}
-	requiredAppliedIndex, err := b.opts.ReadFence.LinearizableCatalogMetaAppliedIndexV1(ctx)
+	requiredAppliedIndex, err := b.opts.ReadFence.LinearizableCatalogMetaAppliedIndexV1(
+		raftcluster.WithCatalogMetaReadSourceV1(ctx, raftcluster.CatalogMetaReadSourceOperationsHealthV1),
+	)
 	if err != nil {
 		return public.OperationsHealthV1{Generation: id, Reason: "catalog_unavailable"}, err
 	}

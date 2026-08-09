@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	hraft "github.com/hashicorp/raft"
@@ -80,6 +81,127 @@ type CatalogMetaRaftProviderV1 struct {
 	owned        []io.Closer
 	applyTimeout time.Duration
 	mutationMu   sync.Mutex
+	readStats    catalogMetaLinearizableReadStatsV1
+}
+
+type CatalogMetaReadSourceV1 string
+
+const (
+	CatalogMetaReadSourceUnknownV1              CatalogMetaReadSourceV1 = "unknown"
+	CatalogMetaReadSourceOperationsHealthV1     CatalogMetaReadSourceV1 = "operations_health"
+	CatalogMetaReadSourceCoordinatorLifecycleV1 CatalogMetaReadSourceV1 = "coordinator_lifecycle"
+	CatalogMetaReadSourceShardLifecycleV1       CatalogMetaReadSourceV1 = "shard_lifecycle"
+)
+
+type CatalogMetaLinearizableReadStageStatsV1 struct {
+	Reads             uint64 `json:"reads"`
+	Successes         uint64 `json:"successes"`
+	Failures          uint64 `json:"failures"`
+	VerifyLeaderCalls uint64 `json:"verify_leader_calls"`
+	LogBarriers       uint64 `json:"log_barriers"`
+	TotalNanos        uint64 `json:"total_nanos"`
+	AdmissionNanos    uint64 `json:"admission_nanos"`
+	VerifyLeaderNanos uint64 `json:"verify_leader_nanos"`
+	BarrierNanos      uint64 `json:"barrier_nanos"`
+	AppliedReadNanos  uint64 `json:"applied_read_nanos"`
+}
+
+type CatalogMetaLinearizableReadStatsV1 struct {
+	Total                CatalogMetaLinearizableReadStageStatsV1 `json:"total"`
+	OperationsHealth     CatalogMetaLinearizableReadStageStatsV1 `json:"operations_health"`
+	CoordinatorLifecycle CatalogMetaLinearizableReadStageStatsV1 `json:"coordinator_lifecycle"`
+	ShardLifecycle       CatalogMetaLinearizableReadStageStatsV1 `json:"shard_lifecycle"`
+	Unknown              CatalogMetaLinearizableReadStageStatsV1 `json:"unknown"`
+	LastTerm             uint64                                  `json:"last_term"`
+	LastCatalogApplied   uint64                                  `json:"last_catalog_applied_index"`
+	LastRaftApplied      uint64                                  `json:"last_raft_applied_index"`
+	LastRaftLog          uint64                                  `json:"last_raft_log_index"`
+}
+
+type catalogMetaLinearizableReadStageStatsV1 struct {
+	reads, successes, failures, verifyLeaderCalls, logBarriers atomic.Uint64
+	totalNanos, admissionNanos, verifyLeaderNanos              atomic.Uint64
+	barrierNanos, appliedReadNanos                             atomic.Uint64
+}
+
+type catalogMetaLinearizableReadStatsV1 struct {
+	total, operationsHealth, coordinatorLifecycle, shardLifecycle, unknown catalogMetaLinearizableReadStageStatsV1
+	lastTerm, lastCatalogApplied, lastRaftApplied, lastRaftLog             atomic.Uint64
+}
+
+type catalogMetaReadSourceContextKeyV1 struct{}
+
+func WithCatalogMetaReadSourceV1(ctx context.Context, source CatalogMetaReadSourceV1) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, catalogMetaReadSourceContextKeyV1{}, source)
+}
+
+func catalogMetaReadSourceV1(ctx context.Context) CatalogMetaReadSourceV1 {
+	if ctx != nil {
+		if source, ok := ctx.Value(catalogMetaReadSourceContextKeyV1{}).(CatalogMetaReadSourceV1); ok {
+			return source
+		}
+	}
+	return CatalogMetaReadSourceUnknownV1
+}
+
+func (s *catalogMetaLinearizableReadStatsV1) source(source CatalogMetaReadSourceV1) *catalogMetaLinearizableReadStageStatsV1 {
+	switch source {
+	case CatalogMetaReadSourceOperationsHealthV1:
+		return &s.operationsHealth
+	case CatalogMetaReadSourceCoordinatorLifecycleV1:
+		return &s.coordinatorLifecycle
+	case CatalogMetaReadSourceShardLifecycleV1:
+		return &s.shardLifecycle
+	default:
+		return &s.unknown
+	}
+}
+
+func (s *catalogMetaLinearizableReadStatsV1) begin(source CatalogMetaReadSourceV1) (*catalogMetaLinearizableReadStageStatsV1, time.Time) {
+	s.total.reads.Add(1)
+	stage := s.source(source)
+	stage.reads.Add(1)
+	return stage, time.Now()
+}
+
+func (s *catalogMetaLinearizableReadStatsV1) finish(stage *catalogMetaLinearizableReadStageStatsV1, started time.Time, success bool) {
+	nanos := uint64(time.Since(started))
+	s.total.totalNanos.Add(nanos)
+	stage.totalNanos.Add(nanos)
+	if success {
+		s.total.successes.Add(1)
+		stage.successes.Add(1)
+		return
+	}
+	s.total.failures.Add(1)
+	stage.failures.Add(1)
+}
+
+func catalogMetaLinearizableReadStageSnapshotV1(s *catalogMetaLinearizableReadStageStatsV1) CatalogMetaLinearizableReadStageStatsV1 {
+	return CatalogMetaLinearizableReadStageStatsV1{
+		Reads: s.reads.Load(), Successes: s.successes.Load(), Failures: s.failures.Load(),
+		VerifyLeaderCalls: s.verifyLeaderCalls.Load(), LogBarriers: s.logBarriers.Load(),
+		TotalNanos: s.totalNanos.Load(), AdmissionNanos: s.admissionNanos.Load(),
+		VerifyLeaderNanos: s.verifyLeaderNanos.Load(), BarrierNanos: s.barrierNanos.Load(), AppliedReadNanos: s.appliedReadNanos.Load(),
+	}
+}
+
+func (p *CatalogMetaRaftProviderV1) CatalogMetaLinearizableReadStatsV1() CatalogMetaLinearizableReadStatsV1 {
+	if p == nil {
+		return CatalogMetaLinearizableReadStatsV1{}
+	}
+	return CatalogMetaLinearizableReadStatsV1{
+		Total:                catalogMetaLinearizableReadStageSnapshotV1(&p.readStats.total),
+		OperationsHealth:     catalogMetaLinearizableReadStageSnapshotV1(&p.readStats.operationsHealth),
+		CoordinatorLifecycle: catalogMetaLinearizableReadStageSnapshotV1(&p.readStats.coordinatorLifecycle),
+		ShardLifecycle:       catalogMetaLinearizableReadStageSnapshotV1(&p.readStats.shardLifecycle),
+		Unknown:              catalogMetaLinearizableReadStageSnapshotV1(&p.readStats.unknown),
+		LastTerm:             p.readStats.lastTerm.Load(), LastCatalogApplied: p.readStats.lastCatalogApplied.Load(),
+		LastRaftApplied: p.readStats.lastRaftApplied.Load(), LastRaftLog: p.readStats.lastRaftLog.Load(),
+	}
 }
 
 func (p *CatalogMetaRaftProviderV1) Config() ResolvedConfig {
@@ -191,7 +313,15 @@ func (p *CatalogMetaRaftProviderV1) LinearizableCatalogMetaAppliedIndexV1(ctx co
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
+	stage, started := p.readStats.begin(catalogMetaReadSourceV1(ctx))
+	success := false
+	defer func() { p.readStats.finish(stage, started, success) }()
+
+	admissionStarted := time.Now()
 	status, err := p.ClusterAdmissionStatus(ctx)
+	admissionNanos := uint64(time.Since(admissionStarted))
+	p.readStats.total.admissionNanos.Add(admissionNanos)
+	stage.admissionNanos.Add(admissionNanos)
 	if err != nil {
 		return 0, err
 	}
@@ -201,12 +331,34 @@ func (p *CatalogMetaRaftProviderV1) LinearizableCatalogMetaAppliedIndexV1(ctx co
 	if !status.Leader {
 		return 0, ErrNotLeader
 	}
-	if err := waitHashicorpRaftFuture(ctx, p.raft.VerifyLeader()); err != nil {
-		return 0, mapCatalogMetaLinearizableReadErrorV1(err)
+	verifyStarted := time.Now()
+	p.readStats.total.verifyLeaderCalls.Add(1)
+	stage.verifyLeaderCalls.Add(1)
+	verifyErr := waitHashicorpRaftFuture(ctx, p.raft.VerifyLeader())
+	verifyNanos := uint64(time.Since(verifyStarted))
+	p.readStats.total.verifyLeaderNanos.Add(verifyNanos)
+	stage.verifyLeaderNanos.Add(verifyNanos)
+	if verifyErr != nil {
+		return 0, mapCatalogMetaLinearizableReadErrorV1(verifyErr)
 	}
-	if err := waitHashicorpRaftFuture(ctx, p.raft.Barrier(p.applyTimeout)); err != nil {
-		return 0, mapCatalogMetaLinearizableReadErrorV1(err)
+
+	barrierStarted := time.Now()
+	p.readStats.total.logBarriers.Add(1)
+	stage.logBarriers.Add(1)
+	barrierErr := waitHashicorpRaftFuture(ctx, p.raft.Barrier(p.applyTimeout))
+	barrierNanos := uint64(time.Since(barrierStarted))
+	p.readStats.total.barrierNanos.Add(barrierNanos)
+	stage.barrierNanos.Add(barrierNanos)
+	if barrierErr != nil {
+		return 0, mapCatalogMetaLinearizableReadErrorV1(barrierErr)
 	}
+
+	appliedStarted := time.Now()
+	defer func() {
+		appliedNanos := uint64(time.Since(appliedStarted))
+		p.readStats.total.appliedReadNanos.Add(appliedNanos)
+		stage.appliedReadNanos.Add(appliedNanos)
+	}()
 	status, err = p.ClusterAdmissionStatus(ctx)
 	if err != nil {
 		return 0, err
@@ -222,6 +374,11 @@ func (p *CatalogMetaRaftProviderV1) LinearizableCatalogMetaAppliedIndexV1(ctx co
 	if !ok {
 		return 0, ErrHashicorpRaftUnavailable
 	}
+	p.readStats.lastTerm.Store(p.raft.CurrentTerm())
+	p.readStats.lastCatalogApplied.Store(applied)
+	p.readStats.lastRaftApplied.Store(p.raft.AppliedIndex())
+	p.readStats.lastRaftLog.Store(p.raft.LastIndex())
+	success = true
 	return applied, nil
 }
 

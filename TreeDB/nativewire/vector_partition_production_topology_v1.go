@@ -20,10 +20,11 @@ import (
 )
 
 type VectorPartitionProductionShardV1 struct {
-	GroupID          raftcluster.GroupID
-	Listener         net.Listener
-	Service          *VectorPartitionShardSearchServiceV1
-	EndpointIdentity string
+	GroupID                  raftcluster.GroupID
+	Listener                 net.Listener
+	Service                  *VectorPartitionShardSearchServiceV1
+	EndpointIdentity         string
+	EndpointIdentityProvider func() VectorPartitionShardEndpointIdentityV1
 }
 
 type VectorPartitionProductionTopologyOptionsV1 struct {
@@ -49,19 +50,20 @@ type VectorPartitionProductionTopologyStatusV1 struct {
 // VectorPartitionProductionTopologyV1 owns only listeners and the coordinator.
 // Callers retain ownership of Raft, catalog, lifecycle, and local asset sources.
 type VectorPartitionProductionTopologyV1 struct {
-	coordinator *VectorPartitionCoordinatorV1
-	dispatcher  *VectorPartitionShardSearchTCPDispatcherV1
-	listeners   map[raftcluster.GroupID]net.Listener
-	endpoints   map[raftcluster.GroupID]string
-	services    map[raftcluster.GroupID]*VectorPartitionShardSearchServiceV1
-	identities  map[raftcluster.GroupID]string
-	serving     map[raftcluster.GroupID]bool
-	mu          sync.Mutex
-	conns       map[net.Conn]struct{}
-	wg          sync.WaitGroup
-	closed      bool
-	closeOnce   sync.Once
-	closeErr    error
+	coordinator       *VectorPartitionCoordinatorV1
+	dispatcher        *VectorPartitionShardSearchTCPDispatcherV1
+	listeners         map[raftcluster.GroupID]net.Listener
+	endpoints         map[raftcluster.GroupID]string
+	services          map[raftcluster.GroupID]*VectorPartitionShardSearchServiceV1
+	identities        map[raftcluster.GroupID]string
+	identityProviders map[raftcluster.GroupID]func() VectorPartitionShardEndpointIdentityV1
+	serving           map[raftcluster.GroupID]bool
+	mu                sync.Mutex
+	conns             map[net.Conn]struct{}
+	wg                sync.WaitGroup
+	closed            bool
+	closeOnce         sync.Once
+	closeErr          error
 }
 
 func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopologyOptionsV1) (_ *VectorPartitionProductionTopologyV1, err error) {
@@ -89,7 +91,7 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 	if opts.ShardIdleTimeout == 0 {
 		opts.ShardIdleTimeout = 30 * time.Second
 	}
-	h := &VectorPartitionProductionTopologyV1{listeners: make(map[raftcluster.GroupID]net.Listener), endpoints: make(map[raftcluster.GroupID]string, len(opts.Endpoints)), services: make(map[raftcluster.GroupID]*VectorPartitionShardSearchServiceV1), identities: make(map[raftcluster.GroupID]string), serving: make(map[raftcluster.GroupID]bool), conns: make(map[net.Conn]struct{})}
+	h := &VectorPartitionProductionTopologyV1{listeners: make(map[raftcluster.GroupID]net.Listener), endpoints: make(map[raftcluster.GroupID]string, len(opts.Endpoints)), services: make(map[raftcluster.GroupID]*VectorPartitionShardSearchServiceV1), identities: make(map[raftcluster.GroupID]string), identityProviders: make(map[raftcluster.GroupID]func() VectorPartitionShardEndpointIdentityV1), serving: make(map[raftcluster.GroupID]bool), conns: make(map[net.Conn]struct{})}
 	defer func() {
 		if err != nil {
 			_ = h.Close()
@@ -224,7 +226,7 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 			return nil, fmt.Errorf("nativewire: production vector topology shard groups %q and %q share a listener", owner, shard.GroupID)
 		}
 		localListeners[listenerKey] = shard.GroupID
-		h.listeners[shard.GroupID], h.services[shard.GroupID], h.identities[shard.GroupID] = shard.Listener, shard.Service, shard.EndpointIdentity
+		h.listeners[shard.GroupID], h.services[shard.GroupID], h.identities[shard.GroupID], h.identityProviders[shard.GroupID] = shard.Listener, shard.Service, shard.EndpointIdentity, shard.EndpointIdentityProvider
 	}
 	maxPoolConnections := coordinatorLimits.MaxConcurrentRequests
 	dispatcher, err := newVectorPartitionShardSearchTCPDispatcherV1(h.endpoints, opts.NodeEndpoints, maxPoolConnections, shardLimits)
@@ -293,7 +295,7 @@ func (h *VectorPartitionProductionTopologyV1) serve(group raftcluster.GroupID, l
 				defer h.wg.Done()
 				defer func() { <-connectionSlots }()
 				defer func() { h.mu.Lock(); delete(h.conns, conn); h.mu.Unlock() }()
-				(VectorPartitionShardSearchTCPServerV1{Service: service, EndpointIdentity: VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: string(group), InstanceIdentity: identity}, MaxFrame: maxRequestFrame, MaxResponseFrame: maxResponseFrame, InitialTimeout: idleTimeout}).ServeConn(context.Background(), conn)
+				(VectorPartitionShardSearchTCPServerV1{Service: service, EndpointIdentity: VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: string(group), InstanceIdentity: identity}, EndpointIdentityProvider: h.identityProviders[group], MaxFrame: maxRequestFrame, MaxResponseFrame: maxResponseFrame, InitialTimeout: idleTimeout}).ServeConn(context.Background(), conn)
 			}()
 		}
 	}()

@@ -47,6 +47,8 @@ class TopologyTaxTest(unittest.TestCase):
             "node_id": node["node_id"], "dataset_directory": topology["dataset_directory"], "database_directory": node["database_directory"],
             "state_directory": node["state_directory"],
         }
+        if "profile_directory" in node:
+            config["profile_directory"] = node["profile_directory"]
         if "public_listen" in node:
             config["public_listen"] = node["public_listen"]
         config.update({

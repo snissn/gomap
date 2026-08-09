@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 )
 
 // OperationsConfigV1 is explicit and default-off. Every bound is checked
@@ -89,16 +90,32 @@ func (o *OperationsV1) Status(ctx context.Context) (OperationsHealthV1, error) {
 }
 
 func (o *OperationsV1) Search(ctx context.Context, request SearchRequestV1) (SearchResponseV1, error) {
+	started := time.Now()
+	admissionStarted := time.Now()
 	if err := o.admit(ctx, request); err != nil {
 		return SearchResponseV1{}, err
 	}
+	admissionElapsed := time.Since(admissionStarted)
+	healthStarted := time.Now()
 	health, err := o.Status(ctx)
+	healthElapsed := time.Since(healthStarted)
 	if err == nil && !health.Ready {
 		err = &ErrorV1{Code: ErrorUnavailableV1, Err: errors.New(health.Reason)}
 	}
 	var response SearchResponseV1
 	if err == nil {
+		serviceStarted := time.Now()
 		response, err = o.service.Search(ctx, request)
+		serviceElapsed := time.Since(serviceStarted)
+		if err == nil {
+			response.Timing.Admission = admissionElapsed
+			response.Timing.OperationsHealth = healthElapsed
+			nested := response.Timing.PublicAdapter + response.Timing.CoordinatorTotal
+			if serviceElapsed >= nested {
+				response.Timing.ServiceAdapter = serviceElapsed - nested
+			}
+			response.Timing.Total = time.Since(started)
+		}
 	}
 	o.mu.Lock()
 	o.counts.Searches++

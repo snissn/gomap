@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"slices"
 	"sort"
@@ -55,6 +56,7 @@ type vectorPartitionSystemNodeConfigV1 struct {
 	StateDirectory      string                              `json:"state_directory"`
 	PublicListen        string                              `json:"public_listen,omitempty"`
 	ReadyPath           string                              `json:"ready_path"`
+	ProfileDirectory    string                              `json:"profile_directory,omitempty"`
 	LocalGroups         []vectorPartitionSystemLocalGroupV1 `json:"local_groups"`
 	Endpoints           map[string]string                   `json:"endpoints"`
 	GroupAppliedIndexes map[string]uint64                   `json:"group_applied_indexes,omitempty"`
@@ -85,6 +87,11 @@ type vectorPartitionSystemNodeReadyV1 struct {
 	VCSModified        bool                                `json:"vcs_modified"`
 	ExecutableSHA256   string                              `json:"executable_sha256"`
 	NodeConfigSHA256   string                              `json:"node_config_sha256"`
+	LogicalCPUs        int                                 `json:"logical_cpus"`
+	GOMAXPROCS         int                                 `json:"gomaxprocs"`
+	GoMemoryLimit      int64                               `json:"go_memory_limit"`
+	EffectiveCPUSet    string                              `json:"effective_cpu_set,omitempty"`
+	ProfileDirectory   string                              `json:"profile_directory,omitempty"`
 	LifecycleState     string                              `json:"lifecycle_state"`
 	Groups             []vectorPartitionSystemGroupReadyV1 `json:"groups"`
 }
@@ -109,6 +116,7 @@ type vectorPartitionSystemTopologyNodeV1 struct {
 	DatabaseDirectory string                              `json:"database_directory"`
 	StateDirectory    string                              `json:"state_directory"`
 	ReadyPath         string                              `json:"ready_path"`
+	ProfileDirectory  string                              `json:"profile_directory,omitempty"`
 	PublicListen      string                              `json:"public_listen,omitempty"`
 	LocalGroups       []vectorPartitionSystemLocalGroupV1 `json:"local_groups"`
 }
@@ -122,7 +130,7 @@ type vectorPartitionSystemNodeV1 struct {
 	ready          vectorPartitionSystemNodeReadyV1
 }
 
-func runVectorPartitionSystemNodeV1(args []string, stdout io.Writer) error {
+func runVectorPartitionSystemNodeV1(args []string, stdout io.Writer) (runErr error) {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench system-node", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var configPath string
@@ -144,9 +152,18 @@ func runVectorPartitionSystemNodeV1(args []string, stdout io.Writer) error {
 		return err
 	}
 	defer node.Close()
+	profileCapture, err := startM8ProfileCaptureV1(config.ProfileDirectory)
+	if err != nil {
+		return err
+	}
+	profilePublished := false
+	defer func() {
+		runErr = errors.Join(runErr, m8FinishDirectProfileCaptureV1(profileCapture, profilePublished))
+	}()
 	if err := publishVectorPartitionSystemNodeReadyV1(config.ReadyPath, node.ready); err != nil {
 		return err
 	}
+	profilePublished = true
 	if _, err := fmt.Fprintf(stdout, "ready=%s public=%s topology=%s node=%s\n", config.ReadyPath, node.ready.PublicEndpoint, config.Topology, config.NodeID); err != nil {
 		return err
 	}
@@ -272,7 +289,7 @@ func validateVectorPartitionSystemTopologyV1(configs []vectorPartitionSystemNode
 		}
 		evidence.Nodes = append(evidence.Nodes, vectorPartitionSystemTopologyNodeV1{
 			NodeID: config.NodeID, NodeConfigSHA256: configSHA, DatabaseDirectory: config.DatabaseDirectory, StateDirectory: config.StateDirectory,
-			ReadyPath: config.ReadyPath, PublicListen: config.PublicListen, LocalGroups: slices.Clone(config.LocalGroups),
+			ReadyPath: config.ReadyPath, ProfileDirectory: config.ProfileDirectory, PublicListen: config.PublicListen, LocalGroups: slices.Clone(config.LocalGroups),
 		})
 	}
 	sort.Slice(evidence.Nodes, func(i, j int) bool { return evidence.Nodes[i].NodeID < evidence.Nodes[j].NodeID })
@@ -431,6 +448,14 @@ func loadVectorPartitionSystemNodeConfigV1(path string) (vectorPartitionSystemNo
 	if config.ReadyPath, pathErr = canonical(config.ReadyPath); pathErr != nil {
 		return config, fmt.Errorf("system node ready path: %w", pathErr)
 	}
+	if config.ProfileDirectory != "" {
+		if config.ProfileDirectory, pathErr = canonical(config.ProfileDirectory); pathErr != nil {
+			return config, fmt.Errorf("system node profile directory: %w", pathErr)
+		}
+		if config.ProfileDirectory == config.StateDirectory || !vectorPartitionSystemPathContainsV1(config.StateDirectory, config.ProfileDirectory) {
+			return config, errors.New("system node profile directory must be inside its state directory")
+		}
+	}
 	return config, nil
 }
 
@@ -496,7 +521,7 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 	node.production, err = nativewire.NewVectorPartitionProductionNodeV1(ctx, nativewire.VectorPartitionProductionNodeOptionsV1{
 		Collection: assets.collection, Manifest: assets.manifest, RouterSource: assets.RouterSource(), AssetSetDigests: assets.assetSetDigests,
 		GroupAppliedIndexes: config.GroupAppliedIndexes, Database: "default", Catalog: "default", Endpoints: config.Endpoints,
-		LocalShards: shards, RequestBase: requestBase, NodeID: config.NodeID, EndpointIdentity: configSHA,
+		LocalShards: shards, RequestBase: requestBase, NodeID: config.NodeID, EndpointIdentity: configSHA, RuntimeStats: vectorPartitionSystemProcessRuntimeStatsV1,
 	})
 	if err != nil {
 		return nil, err
@@ -534,12 +559,62 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 		SchemaVersion: 1, ResultKind: vectorPartitionSystemNodeReadyKindV1, Assembly: config.Assembly, Topology: config.Topology, NodeID: config.NodeID,
 		PID: os.Getpid(), PublicEndpoint: publicEndpoint, PublicRoute: "vectorpartition.OperationsV1.Search", ProductionTopology: true, M8Loopback: false,
 		DatabaseDirectory: config.DatabaseDirectory, StateDirectory: config.StateDirectory, SourceRevision: revision, VCSModified: modified,
-		ExecutableSHA256: executableSHA, NodeConfigSHA256: configSHA, LifecycleState: "active",
+		ExecutableSHA256: executableSHA, NodeConfigSHA256: configSHA,
+		LogicalCPUs: runtime.NumCPU(), GOMAXPROCS: runtime.GOMAXPROCS(0), GoMemoryLimit: debug.SetMemoryLimit(-1), EffectiveCPUSet: vectorPartitionSystemEffectiveCPUSetV1(), ProfileDirectory: config.ProfileDirectory,
+		LifecycleState: "active",
 	}
 	for _, evidence := range node.production.GroupEvidenceV1() {
 		node.ready.Groups = append(node.ready.Groups, vectorPartitionSystemGroupReadyV1{GroupID: evidence.GroupID, Endpoint: config.Endpoints[evidence.GroupID], LeaderID: evidence.LeaderID, AppliedIndex: evidence.AppliedIndex, ProvesProductionConsensus: true})
 	}
 	return node, nil
+}
+
+func vectorPartitionSystemEffectiveCPUSetV1() string {
+	raw, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if value, ok := strings.CutPrefix(line, "Cpus_allowed_list:"); ok {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func vectorPartitionSystemProcessRuntimeStatsV1() nativewire.VectorPartitionProcessRuntimeStatsV1 {
+	var memory runtime.MemStats
+	runtime.ReadMemStats(&memory)
+	stats := nativewire.VectorPartitionProcessRuntimeStatsV1{
+		SampleUnixNano: uint64(time.Now().UnixNano()), HeapAllocBytes: memory.HeapAlloc, HeapObjects: memory.HeapObjects,
+		TotalAllocBytes: memory.TotalAlloc, Mallocs: memory.Mallocs, Frees: memory.Frees, NumGC: uint64(memory.NumGC), PauseTotalNanos: memory.PauseTotalNs, Goroutines: uint64(runtime.NumGoroutine()),
+	}
+	if raw, err := os.ReadFile("/proc/self/schedstat"); err == nil {
+		_, _ = fmt.Sscan(string(raw), &stats.CPUTimeNanos, &stats.RunQueueDelayNanos, &stats.Timeslices)
+	}
+	if raw, err := os.ReadFile("/proc/self/status"); err == nil {
+		for _, line := range strings.Split(string(raw), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 2 {
+				continue
+			}
+			value, err := strconv.ParseUint(fields[1], 10, 64)
+			if err != nil {
+				continue
+			}
+			switch fields[0] {
+			case "VmRSS:":
+				stats.RSSBytes = value * 1024
+			case "VmHWM:":
+				stats.PeakRSSBytes = value * 1024
+			case "voluntary_ctxt_switches:":
+				stats.VoluntaryContextSwitches = value
+			case "nonvoluntary_ctxt_switches:":
+				stats.NonvoluntaryContextSwitches = value
+			}
+		}
+	}
+	return stats
 }
 
 func (n *vectorPartitionSystemNodeV1) Close() error {
@@ -767,6 +842,11 @@ type vectorPartitionOperationsTCPClientV1 struct {
 	r    *bufio.Reader
 }
 
+type vectorPartitionSystemFrameTimingV1 struct {
+	EncodeNanos, WriteNanos, ReadNanos, DecodeNanos, TotalNanos uint64
+	RequestBytes, ResponseBytes                                 uint64
+}
+
 func dialVectorPartitionOperationsV1(ctx context.Context, endpoint string) (*vectorPartitionOperationsTCPClientV1, error) {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
@@ -781,22 +861,32 @@ func dialVectorPartitionOperationsV1(ctx context.Context, endpoint string) (*vec
 }
 
 func (c *vectorPartitionOperationsTCPClientV1) call(request vectorPartitionOperationsWireRequestV1) (vectorPartitionOperationsWireResponseV1, error) {
-	var response vectorPartitionOperationsWireResponseV1
+	response, _, err := c.callWithTiming(request)
+	return response, err
+}
+
+func (c *vectorPartitionOperationsTCPClientV1) callWithTiming(request vectorPartitionOperationsWireRequestV1) (response vectorPartitionOperationsWireResponseV1, timing vectorPartitionSystemFrameTimingV1, err error) {
+	started := time.Now()
+	defer func() { timing.TotalNanos = uint64(time.Since(started)) }()
 	deadline := time.Now().Add(30 * time.Second)
 	if !request.Search.Deadline.IsZero() && request.Search.Deadline.Before(deadline) {
 		deadline = request.Search.Deadline
 	}
 	if err := c.conn.SetDeadline(deadline); err != nil {
-		return response, err
+		return response, timing, err
 	}
-	if err := writeVectorPartitionSystemFrameV1(c.conn, request); err != nil {
-		return response, err
+	encodeNanos, writeNanos, requestBytes, err := writeVectorPartitionSystemFrameMeasuredV1(c.conn, request)
+	timing.EncodeNanos, timing.WriteNanos, timing.RequestBytes = encodeNanos, writeNanos, requestBytes
+	if err != nil {
+		return response, timing, err
 	}
-	if err := readVectorPartitionSystemFrameV1(c.r, &response); err != nil {
-		return response, err
+	readNanos, decodeNanos, responseBytes, err := readVectorPartitionSystemFrameMeasuredV1(c.r, &response)
+	timing.ReadNanos, timing.DecodeNanos, timing.ResponseBytes = readNanos, decodeNanos, responseBytes
+	if err != nil {
+		return response, timing, err
 	}
 	if response.SchemaVersion != 1 {
-		return response, fmt.Errorf("system operations response schema %d", response.SchemaVersion)
+		return response, timing, fmt.Errorf("system operations response schema %d", response.SchemaVersion)
 	}
 	if response.Error != "" {
 		cause := errors.New(response.Error)
@@ -806,9 +896,9 @@ func (c *vectorPartitionOperationsTCPClientV1) call(request vectorPartitionOpera
 		case public.ErrorCanceledV1:
 			cause = fmt.Errorf("%w: %s", context.Canceled, response.Error)
 		}
-		return response, fmt.Errorf("system operations response: %w", &public.ErrorV1{Code: response.ErrorCode, Err: cause})
+		return response, timing, fmt.Errorf("system operations response: %w", &public.ErrorV1{Code: response.ErrorCode, Err: cause})
 	}
-	return response, nil
+	return response, timing, nil
 }
 
 func (c *vectorPartitionOperationsTCPClientV1) Close() error {
@@ -819,39 +909,71 @@ func (c *vectorPartitionOperationsTCPClientV1) Close() error {
 }
 
 func writeVectorPartitionSystemFrameV1(w io.Writer, value any) error {
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
-	if len(raw) == 0 || len(raw) > vectorPartitionSystemWireMaxBytesV1 {
-		return errors.New("system operations frame exceeds bound")
-	}
-	var header [4]byte
-	binary.BigEndian.PutUint32(header[:], uint32(len(raw)))
-	if _, err := w.Write(header[:]); err != nil {
-		return err
-	}
-	_, err = w.Write(raw)
+	_, _, _, err := writeVectorPartitionSystemFrameMeasuredV1(w, value)
 	return err
 }
 
+func writeVectorPartitionSystemFrameMeasuredV1(w io.Writer, value any) (encodeNanos, writeNanos, bytes uint64, err error) {
+	started := time.Now()
+	raw, err := json.Marshal(value)
+	encodeNanos = uint64(time.Since(started))
+	if err != nil {
+		return encodeNanos, 0, 0, err
+	}
+	if len(raw) == 0 || len(raw) > vectorPartitionSystemWireMaxBytesV1 {
+		return encodeNanos, 0, 0, errors.New("system operations frame exceeds bound")
+	}
+	var header [4]byte
+	binary.BigEndian.PutUint32(header[:], uint32(len(raw)))
+	started = time.Now()
+	if err := vectorPartitionSystemWriteAllV1(w, header[:]); err != nil {
+		return encodeNanos, uint64(time.Since(started)), 0, err
+	}
+	if err := vectorPartitionSystemWriteAllV1(w, raw); err != nil {
+		return encodeNanos, uint64(time.Since(started)), 0, err
+	}
+	return encodeNanos, uint64(time.Since(started)), uint64(len(raw) + len(header)), nil
+}
+
+func vectorPartitionSystemWriteAllV1(w io.Writer, raw []byte) error {
+	for len(raw) > 0 {
+		n, err := w.Write(raw)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		raw = raw[n:]
+	}
+	return nil
+}
+
 func readVectorPartitionSystemFrameV1(r io.Reader, value any) error {
+	_, _, _, err := readVectorPartitionSystemFrameMeasuredV1(r, value)
+	return err
+}
+
+func readVectorPartitionSystemFrameMeasuredV1(r io.Reader, value any) (readNanos, decodeNanos, bytes uint64, err error) {
+	started := time.Now()
 	var header [4]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
-		return err
+		return uint64(time.Since(started)), 0, 0, err
 	}
 	size := binary.BigEndian.Uint32(header[:])
 	if size == 0 || size > vectorPartitionSystemWireMaxBytesV1 {
-		return errors.New("system operations frame exceeds bound")
+		return uint64(time.Since(started)), 0, 0, errors.New("system operations frame exceeds bound")
 	}
 	raw := make([]byte, size)
 	if _, err := io.ReadFull(r, raw); err != nil {
-		return err
+		return uint64(time.Since(started)), 0, 0, err
 	}
+	readNanos = uint64(time.Since(started))
+	started = time.Now()
 	if err := json.Unmarshal(raw, value); err != nil {
-		return err
+		return readNanos, uint64(time.Since(started)), 0, err
 	}
-	return nil
+	return readNanos, uint64(time.Since(started)), uint64(size) + uint64(len(header)), nil
 }
 
 func runVectorPartitionSystemSearchV1(args []string, stdout io.Writer) error {

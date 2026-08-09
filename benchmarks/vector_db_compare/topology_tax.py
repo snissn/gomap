@@ -56,6 +56,8 @@ def _node_config_identity(value: dict[str, Any], node: dict[str, Any]) -> str:
         "node_id": node["node_id"], "dataset_directory": value["dataset_directory"], "database_directory": node["database_directory"],
         "state_directory": node["state_directory"],
     }
+    if "profile_directory" in node:
+        config["profile_directory"] = node["profile_directory"]
     if "public_listen" in node:
         config["public_listen"] = node["public_listen"]
     config.update({
@@ -82,7 +84,8 @@ def _topology_identity(value: dict[str, Any], topology: str, want_nodes: int) ->
     for node in nodes:
         _require(isinstance(node, dict), "system-bench topology node is invalid")
         required = {"node_id", "node_config_sha256", "database_directory", "state_directory", "ready_path", "local_groups"}
-        _require(set(node) in (required, required | {"public_listen"}), "system-bench topology node structure is invalid")
+        optional = {"public_listen", "profile_directory"}
+        _require(required <= set(node) <= required | optional, "system-bench topology node structure is invalid")
         _require(isinstance(node.get("node_id"), str) and node["node_id"] and _is_sha256(node.get("node_config_sha256")), "system-bench topology node identity is invalid")
         _require(all(isinstance(node.get(key), str) and node[key] for key in ("database_directory", "state_directory", "ready_path")), "system-bench topology persistent roots are invalid")
         groups = node.get("local_groups")
@@ -92,6 +95,9 @@ def _topology_identity(value: dict[str, Any], topology: str, want_nodes: int) ->
         owned_groups.update(group_ids)
         _require(node["node_config_sha256"] == _node_config_identity(value, node), "system-bench node config identity digest mismatch")
         canonical_node = {key: node[key] for key in ("node_id", "node_config_sha256", "database_directory", "state_directory", "ready_path")}
+        if "profile_directory" in node:
+            _require(isinstance(node["profile_directory"], str) and node["profile_directory"], "system-bench topology profile directory is invalid")
+            canonical_node["profile_directory"] = node["profile_directory"]
         if "public_listen" in node:
             _require(isinstance(node["public_listen"], str) and node["public_listen"], "system-bench topology public endpoint is invalid")
             canonical_node["public_listen"] = node["public_listen"]
@@ -121,9 +127,12 @@ def _ready_identity(topology_path: Path, topology_value: dict[str, Any], node: d
         "schema_version", "result_kind", "assembly", "topology", "node_id", "pid", "public_route", "production_topology", "m8_loopback",
         "database_directory", "state_directory", "source_revision", "vcs_modified", "executable_sha256", "node_config_sha256", "lifecycle_state", "groups",
     }
+    runtime = {"logical_cpus", "gomaxprocs", "go_memory_limit", "effective_cpu_set"}
     if "public_listen" in node:
         required.add("public_endpoint")
-    _require(set(ready) == required, "system-bench readiness structure is invalid")
+    if "profile_directory" in node:
+        required.add("profile_directory")
+    _require(set(ready) in (required, required | runtime), "system-bench readiness structure is invalid")
     _require(
         ready.get("schema_version") == 1 and ready.get("result_kind") == "vector_partition_system_node_ready_v1" and
         ready.get("assembly") == "production_public_v1" and ready.get("topology") == topology_value["topology"] and
@@ -145,6 +154,9 @@ def _ready_identity(topology_path: Path, topology_value: dict[str, Any], node: d
         "system-bench readiness executable provenance is invalid",
     )
     _require(ready.get("public_endpoint", "") == node.get("public_listen", ""), "system-bench readiness public endpoint is invalid")
+    _require(ready.get("profile_directory", "") == node.get("profile_directory", ""), "system-bench readiness profile directory is invalid")
+    if runtime <= set(ready):
+        _require(_uint(ready["logical_cpus"], positive=True) and _uint(ready["gomaxprocs"], positive=True) and isinstance(ready["go_memory_limit"], int) and ready["go_memory_limit"] > 0 and isinstance(ready["effective_cpu_set"], str), "system-bench readiness runtime budget is invalid")
     groups = ready.get("groups")
     _require(isinstance(groups, list) and len(groups) == len(node["local_groups"]), "system-bench readiness group set is invalid")
     for group, configured in zip(groups, node["local_groups"], strict=True):

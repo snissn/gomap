@@ -37,6 +37,7 @@ type VectorPartitionProductionNodeOptionsV1 struct {
 	RequestBase         VectorPartitionCoordinatorRequestV1
 	NodeID              string
 	EndpointIdentity    string
+	RuntimeStats        func() VectorPartitionProcessRuntimeStatsV1
 	CoordinatorLimits   VectorPartitionCoordinatorLimitsV1
 	ShardLimits         VectorPartitionShardSearchLimitsV1
 }
@@ -242,6 +243,7 @@ func NewVectorPartitionProductionNodeV1(ctx context.Context, opts VectorPartitio
 	pinnedManifest := vectorPartitionProductionNodePinnedManifestV1(opts.Manifest)
 	shards := make([]VectorPartitionProductionShardV1, 0, len(local))
 	for group, listener := range local {
+		group := group
 		source, sourceErr := NewCollectionVectorPartitionGenerationSourceForReplicatedLifecycleV1(opts.Collection, placement.Collection, replicated)
 		if sourceErr != nil {
 			return nil, sourceErr
@@ -255,7 +257,20 @@ func NewVectorPartitionProductionNodeV1(ctx context.Context, opts VectorPartitio
 		if serviceErr != nil {
 			return nil, serviceErr
 		}
-		shards = append(shards, VectorPartitionProductionShardV1{GroupID: group, Listener: listener, Service: service, EndpointIdentity: opts.EndpointIdentity})
+		shards = append(shards, VectorPartitionProductionShardV1{
+			GroupID: group, Listener: listener, Service: service, EndpointIdentity: opts.EndpointIdentity,
+			EndpointIdentityProvider: func() VectorPartitionShardEndpointIdentityV1 {
+				var runtimeStats VectorPartitionProcessRuntimeStatsV1
+				if opts.RuntimeStats != nil {
+					runtimeStats = opts.RuntimeStats()
+				}
+				return VectorPartitionShardEndpointIdentityV1{
+					Version: 1, GroupID: string(group), InstanceIdentity: opts.EndpointIdentity,
+					CatalogMetaReadStats: node.meta.LeaderFence().CatalogMetaLinearizableReadStatsV1(),
+					ProcessRuntimeStats:  runtimeStats,
+				}
+			},
+		})
 	}
 	endpoints := make(map[raftcluster.GroupID]string, len(opts.Endpoints))
 	nodeEndpoints := make(map[raftcluster.GroupID]map[raftcluster.NodeID]string, len(opts.Endpoints))
