@@ -270,6 +270,15 @@ func TestMongoExplainProbeCandidatesUseExecutableEligibility(t *testing.T) {
 	if got := bson.Raw(incompatibleRange).Lookup("queryPlanner").Document().Lookup("winningPlan").Document().Lookup("stage").StringValue(); got != "secondary_equality_lookup" {
 		t.Fatalf("incompatible range execution stage=%q want equality", got)
 	}
+	mixedNull := serveCommand(t, server, 106, bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$in", Value: bson.A{nil, int64(36)}}, {Key: "$lt", Value: int64(43)}}}}}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, mixedNull)
+	mixedPlanner := bson.Raw(mixedNull).Lookup("queryPlanner").Document()
+	if got := mixedPlanner.Lookup("winningPlan").Document().Lookup("stage").StringValue(); got != "secondary_range_lookup" {
+		t.Fatalf("null equality candidate stage=%q want range only: %s", got, mixedNull)
+	}
+	if got := mixedPlanner.Lookup("usableIndexes").Array().Index(0).Document().Lookup("kind").StringValue(); got != "secondary_range_lookup" {
+		t.Fatalf("null equality usable kind=%q want range only: %s", got, mixedNull)
+	}
 	assertOK(t, serveCommand(t, server, 106, bson.D{{Key: "createIndexes", Value: "users"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "age", Value: int32(1)}}}, {Key: "name", Value: "age_second"}, {Key: "treedbValueType", Value: "int64"}}}}, {Key: "$db", Value: "app"}}))
 	command := bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(36)}}}}}}}, {Key: "$db", Value: "app"}}
 	planner := serveCommand(t, server, 106, command)
