@@ -1226,6 +1226,43 @@ func (b *mongoWriteBudget) reserveError() error {
 	return nil
 }
 
+// reserveUpsertResponse admits the exact BSON entry that a successful upsert
+// adds to the command response.  It runs before Insert: unlike write errors,
+// an upsert is a successful side effect and cannot honestly be discarded after
+// publication merely because the response envelope has filled up.
+func (b *mongoWriteBudget) reserveUpsertResponse(item mongoUpdateUpserted) (int, error) {
+	if b == nil {
+		return 0, nil
+	}
+	bytes, err := mongoUpdateUpsertResponseBytes(item)
+	if err != nil {
+		return 0, err
+	}
+	if b.responseBytesRemaining < bytes {
+		return 0, errors.New("Mongo gateway multi-write command exceeded its upsert response budget")
+	}
+	b.responseBytesRemaining -= bytes
+	return bytes, nil
+}
+
+func mongoUpdateUpsertResponseBytes(item mongoUpdateUpserted) (int, error) {
+	entry, err := bson.Marshal(bson.D{{Key: "index", Value: int32(item.index)}, {Key: "_id", Value: item.id}})
+	if err != nil {
+		return 0, fmt.Errorf("Mongo gateway cannot size upsert response entry: %w", err)
+	}
+	// Account for the array element type/key and the upserted field/array
+	// framing. The fixed allowance deliberately exceeds the decimal array-key
+	// and BSON container overhead at the supported write batch size.
+	const responseFramingReserve = 64
+	return len(entry) + responseFramingReserve, nil
+}
+
+func (b *mongoWriteBudget) refundResponseBytes(bytes int) {
+	if b != nil && bytes > 0 {
+		b.responseBytesRemaining += bytes
+	}
+}
+
 // reserveTerminalError consumes the response slot held back by
 // ensureMinimumResponse. It is used only when execution has already stopped:
 // the final indexed error must remain observable even at the minimum accepted
@@ -1618,7 +1655,12 @@ func mongoInsertUpsert(col *collections.Collection, update mongoUpdateItem) (boo
 	if !bytes.Equal(key, update.key) {
 		return false, false, false, errors.New("Mongo gateway update cannot modify _id")
 	}
+	responseReservation, err := update.budget.reserveUpsertResponse(mongoUpdateUpserted{index: update.index, id: update.id})
+	if err != nil {
+		return false, false, false, err
+	}
 	if _, err := col.Insert(key, stored); err != nil {
+		update.budget.refundResponseBytes(responseReservation)
 		return false, false, false, err
 	}
 	return false, false, true, nil

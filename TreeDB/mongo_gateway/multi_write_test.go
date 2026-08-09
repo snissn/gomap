@@ -10,6 +10,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
 func TestMongoWriteBudgetRejectsExpiredAndExhaustedWork(t *testing.T) {
@@ -93,6 +94,65 @@ func TestMongoInsertMinimumResponseEnvelopeRetainsTerminalError(t *testing.T) {
 	}
 	if index, indexOK := values[0].Document().Lookup("index").Int32OK(); !indexOK || index != 0 {
 		t.Fatalf("minimum-envelope error index=%d ok=%v", index, indexOK)
+	}
+}
+
+func TestMongoUpdateUpsertMinimumResponseEnvelopeRejectsBeforeMutation(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	// The terminal write-error slot exactly fits, but there is no capacity for
+	// a successful upserted entry.  The upsert must not publish and then force
+	// the transport to hide its outcome with an oversized response.
+	s.MaxMessageLength = mongoWriteResponseMinimumBytes + mongoWriteErrorResponseReserveBytes
+	assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "seed"}}}}, {Key: "$db", Value: "app"}}))
+	response := serveCommand(t, s, 2, bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "upsert"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "value", Value: true}}}}}, {Key: "upsert", Value: true}}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, response)
+	assertInt32(t, response, "n", 0)
+	assertInt32(t, response, "nModified", 0)
+	assertIndexedWriteError(t, response, 0)
+	find := serveCommand(t, s, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "upsert"}}}, {Key: "$db", Value: "app"}})
+	if batch := cursorFirstBatch(t, find); len(batch) != 0 {
+		t.Fatalf("response-budget rejected upsert published %d documents", len(batch))
+	}
+}
+
+func TestMongoUpdateUpsertResponseBudgetPreservesUpsertAndLaterError(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	upsertID := bson.RawValue{Type: bson.TypeString, Value: bsoncore.AppendString(nil, "upsert")}
+	upsertBytes, err := mongoUpdateUpsertResponseBytes(mongoUpdateUpserted{index: 0, id: upsertID})
+	if err != nil {
+		t.Fatalf("size upsert response: %v", err)
+	}
+	// One successful upsert plus one ordinary indexed error, in addition to
+	// the terminal slot, must fit and retain both observable outcomes.
+	s.MaxMessageLength = int32(mongoWriteResponseMinimumBytes + 2*mongoWriteErrorResponseReserveBytes + upsertBytes)
+	assertOK(t, serveCommand(t, s, 10, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "bad"}, {Key: "count", Value: "not-a-number"}}}}, {Key: "$db", Value: "app"}}))
+	upsert := bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "upsert"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "value", Value: true}}}}}, {Key: "upsert", Value: true}}
+	runtimeFailure := bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "bad"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "count", Value: int32(1)}}}}}}
+	response := serveCommand(t, s, 11, bson.D{{Key: "update", Value: "users"}, {Key: "ordered", Value: false}, {Key: "updates", Value: bson.A{upsert, runtimeFailure}}, {Key: "$db", Value: "app"}})
+	assertOK(t, response)
+	assertInt32(t, response, "n", 1)
+	assertInt32(t, response, "nModified", 0)
+	upserted, ok := bson.Raw(response).Lookup("upserted").ArrayOK()
+	values, valuesErr := upserted.Values()
+	if !ok || valuesErr != nil || len(values) != 1 || values[0].Document().Lookup("index").Int32() != 0 {
+		t.Fatalf("upserted=%s", response)
+	}
+	assertIndexedWriteError(t, response, 1)
+	message, err := wire.AppendMsgMessage(nil, 11, 0, 0, response)
+	if err != nil || len(message) > int(s.maxMessageLength()) {
+		t.Fatalf("mixed upsert response bytes=%d max=%d err=%v", len(message), s.maxMessageLength(), err)
 	}
 }
 
