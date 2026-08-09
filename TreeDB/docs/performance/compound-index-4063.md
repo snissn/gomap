@@ -40,3 +40,22 @@ The stable storage counter rises by eight bytes for each added scalar component
 in this fixed fixture (16, 24, 32, 40). Timing variance is expected at this
 small repetition count; retain the raw command and rerun with a larger
 `-benchtime` before making throughput comparisons across hosts or revisions.
+
+## Profile capture
+
+At exact head `a8e712786b7a54b14f67e945972639a27dd37bca`, a longer one-repeat
+capture used:
+
+```sh
+GOWORK=off GOCACHE=/tmp/gomap-4063-go-cache \
+  go test ./TreeDB/collections -run '^$' \
+  -bench '^BenchmarkCollectionBSONCompoundIndexComponents$' -benchtime=100x \
+  -count=1 -cpuprofile=/tmp/gomap-4063-compound-index.cpu.pprof \
+  -memprofile=/tmp/gomap-4063-compound-index.mem.pprof
+```
+
+The local profile artifacts are `/tmp/gomap-4063-compound-index.cpu.pprof` and
+`/tmp/gomap-4063-compound-index.mem.pprof`. The 100x capture reported,
+respectively for 1/2/3/4 components: build 17,892/26,290/17,200/24,737 ns/op;
+mutation 408,599/340,597/347,793/380,270 ns/op; equality-prefix scan
+4,558/3,307/4,238/3,312 ns/op; and secondary key bytes/doc 16/24/32/40.
