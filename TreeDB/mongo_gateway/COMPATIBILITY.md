@@ -71,7 +71,7 @@ an extra probe outside the manifest.
 | metadata | listDatabases | supported subset | `metadata.listdatabases` |
 | metadata | create collection | supported subset | `metadata.create-collection` |
 | session | logical session handshake and endSessions | supported subset | `session.logical-session-handshake-and-endsessions` |
-| metadata | createIndexes, listIndexes, and dropIndexes | supported subset | `metadata.createindexes-listindexes-and-dropindexes` |
+| metadata | createIndexes, listIndexes, and dropIndexes (ordered BSON scalar v2: one to four components, asc/desc; no planner selection) | supported subset | `metadata.createindexes-listindexes-and-dropindexes` |
 | document | native BSON storage mode | supported subset | `document.native-bson-storage-mode` |
 | query gap | dotted projection | rejected | `query-gap.dotted-projection` |
 | update subset | natural-order arbitrary-filter update, delete, and findAndModify | supported subset | `update-subset.natural-order-arbitrary-filter-update-delete-and-findandmodify` |

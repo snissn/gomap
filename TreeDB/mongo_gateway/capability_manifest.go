@@ -100,7 +100,7 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 		{ID: "metadata.listdatabases", Category: "metadata", Feature: "listDatabases", Status: MongoCapabilitySupportedSubset},
 		{ID: "metadata.create-collection", Category: "metadata", Feature: "create collection", Status: MongoCapabilitySupportedSubset},
 		{ID: "session.logical-session-handshake-and-endsessions", Category: "session", Feature: "logical session handshake and endSessions", Status: MongoCapabilitySupportedSubset},
-		{ID: "metadata.createindexes-listindexes-and-dropindexes", Category: "metadata", Feature: "createIndexes, listIndexes, and dropIndexes", Status: MongoCapabilitySupportedSubset},
+		{ID: "metadata.createindexes-listindexes-and-dropindexes", Category: "metadata", Feature: "createIndexes, listIndexes, and dropIndexes (ordered BSON scalar v2: one to four components, asc/desc; no planner selection)", Status: MongoCapabilitySupportedSubset},
 		{ID: "document.native-bson-storage-mode", Category: "document", Feature: "native BSON storage mode", Status: MongoCapabilitySupportedSubset},
 		{ID: "query-gap.dotted-projection", Category: "query gap", Feature: "dotted projection", Status: MongoCapabilityRejected},
 		{ID: "update-subset.natural-order-arbitrary-filter-update-delete-and-findandmodify", Category: "update subset", Feature: "natural-order arbitrary-filter update, delete, and findAndModify", Status: MongoCapabilitySupportedSubset},

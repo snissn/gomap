@@ -498,7 +498,20 @@ func mongoCompatibilityMatrixProbes() []mongoCompatibilityMatrixProbe {
 			probe: func(t *testing.T, server *Server) {
 				list := serveCommand(t, server, 14, bson.D{{Key: "listIndexes", Value: "users"}, {Key: "$db", Value: "app"}})
 				assertIndexNameSet(t, cursorFirstBatch(t, list), []string{"_id_", "city_1", "age_1", "score_1"})
+				create := serveCommand(t, server, 141, bson.D{
+					{Key: "createIndexes", Value: "users"},
+					{Key: "indexes", Value: bson.A{bson.D{
+						{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}, {Key: "age", Value: int32(-1)}}},
+						{Key: "name", Value: "city_1_age_-1"},
+					}}},
+					{Key: "$db", Value: "app"},
+				})
+				assertOK(t, create)
+				list = serveCommand(t, server, 142, bson.D{{Key: "listIndexes", Value: "users"}, {Key: "$db", Value: "app"}})
+				assertIndexNameSet(t, cursorFirstBatch(t, list), []string{"_id_", "city_1", "age_1", "score_1", "city_1_age_-1"})
 				drop := serveCommand(t, server, 15, bson.D{{Key: "dropIndexes", Value: "users"}, {Key: "index", Value: "score_1"}, {Key: "$db", Value: "app"}})
+				assertOK(t, drop)
+				drop = serveCommand(t, server, 151, bson.D{{Key: "dropIndexes", Value: "users"}, {Key: "index", Value: "city_1_age_-1"}, {Key: "$db", Value: "app"}})
 				assertOK(t, drop)
 			},
 		},
