@@ -160,24 +160,20 @@ func (s *Server) preflightFindAndModifyExactResponse(col *collections.Collection
 		if materializer != nil {
 			defer func() { _ = materializer.Close() }()
 		}
-		// Use the same conditional-read primitive as the mutation path rather
-		// than Get: buffered BSON collection writes are visible to Update before
-		// they are visible through a point snapshot. The callback returns
-		// changed=false, so this is only an exact-key observation.
-		matched, _, err := col.Update(item.key, func(stored []byte) ([]byte, bool, error) {
-			before = nil // callbacks may be retried or skipped by Collection.Update.
-			raw, err := storedDocumentToBSON(col, materializer, stored)
-			if err != nil {
-				return nil, false, err
-			}
-			before = bytes.Clone(raw)
-			return nil, false, nil
-		})
+		// Get observes both the collection-local buffered write domain and the
+		// persisted snapshot without creating a no-op collection command. In a
+		// command-WAL profile, using Update(... changed=false) here would still
+		// publish an otherwise invisible command boundary.
+		stored, err := col.Get(item.key)
 		if err != nil {
 			return err
 		}
-		if !matched {
-			before = nil
+		if stored != nil {
+			before, err = storedDocumentToBSON(col, materializer, stored)
+			if err != nil {
+				return err
+			}
+			before = bytes.Clone(before)
 		}
 	}
 

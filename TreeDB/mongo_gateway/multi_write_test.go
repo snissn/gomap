@@ -370,49 +370,53 @@ func TestMongoUnorderedNativeBSONUpdatePlanningErrorContinues(t *testing.T) {
 }
 
 func TestMongoNativeUpdateBatchRechecksDeadlineBeforePublication(t *testing.T) {
-	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
+	for _, format := range []collections.DocumentFormat{collections.DocumentFormatBSON, collections.DocumentFormatTemplateV1} {
+		t.Run(string(format), func(t *testing.T) {
+			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			s := NewServer()
+			s.Collections = collections.NewCollectionManager(db)
+			s.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: format}
+			assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{
+				bson.D{{Key: "_id", Value: "u1"}, {Key: "v", Value: int32(0)}},
+				bson.D{{Key: "_id", Value: "u2"}, {Key: "v", Value: int32(0)}},
+			}}, {Key: "$db", Value: "app"}}))
+			col, err := s.Collections.OpenCollection("app.users")
+			if err != nil {
+				t.Fatal(err)
+			}
+			parse := func(index int, id string) mongoUpdateItem {
+				t.Helper()
+				item, err := parseMongoUpdateItem(index, mustDocument(t, bson.D{
+					{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
+					{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(1)}}}}},
+				}))
+				if err != nil {
+					t.Fatal(err)
+				}
+				return item
+			}
+			budget := newMongoWriteBudget(2)
+			budget.beforeNativeUpdateBatchHook = func() { budget.deadline = time.Now().Add(-time.Second) }
+			updates := []mongoUpdateItem{parse(0, "u1"), parse(1, "u2")}
+			for i := range updates {
+				updates[i].budget = budget
+			}
+			response, err := s.runMongoUpdateCommand("app.users", col, updates, false)
+			if err != nil {
+				t.Fatalf("run update command: %v", err)
+			}
+			assertOK(t, response)
+			assertInt32(t, response, "n", 0)
+			assertInt32(t, response, "nModified", 0)
+			assertIndexedWriteError(t, response, 0)
+			assertMongoDocumentFieldInt32(t, s, "users", "u1", "v", 0)
+			assertMongoDocumentFieldInt32(t, s, "users", "u2", "v", 0)
+		})
 	}
-	defer db.Close()
-	s := NewServer()
-	s.Collections = collections.NewCollectionManager(db)
-	s.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
-	assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{
-		bson.D{{Key: "_id", Value: "u1"}, {Key: "v", Value: int32(0)}},
-		bson.D{{Key: "_id", Value: "u2"}, {Key: "v", Value: int32(0)}},
-	}}, {Key: "$db", Value: "app"}}))
-	col, err := s.Collections.OpenCollection("app.users")
-	if err != nil {
-		t.Fatal(err)
-	}
-	parse := func(index int, id string) mongoUpdateItem {
-		t.Helper()
-		item, err := parseMongoUpdateItem(index, mustDocument(t, bson.D{
-			{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
-			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(1)}}}}},
-		}))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return item
-	}
-	budget := newMongoWriteBudget(2)
-	budget.beforeNativeUpdateBatchHook = func() { budget.deadline = time.Now().Add(-time.Second) }
-	updates := []mongoUpdateItem{parse(0, "u1"), parse(1, "u2")}
-	for i := range updates {
-		updates[i].budget = budget
-	}
-	response, err := s.runMongoUpdateCommand("app.users", col, updates, false)
-	if err != nil {
-		t.Fatalf("run update command: %v", err)
-	}
-	assertOK(t, response)
-	assertInt32(t, response, "n", 0)
-	assertInt32(t, response, "nModified", 0)
-	assertIndexedWriteError(t, response, 0)
-	assertMongoDocumentFieldInt32(t, s, "users", "u1", "v", 0)
-	assertMongoDocumentFieldInt32(t, s, "users", "u2", "v", 0)
 }
 
 func assertMongoDocumentAbsent(t *testing.T, s *Server, collection, id string) {
