@@ -1,8 +1,10 @@
 # BSON-Ordered Scalar Index Key Codec v2
 
-Status: adopted for BSON collection single-field scalar indexes by issue #4062.
-Existing typed-v1 indexes are unchanged. Compound, descending, multikey, and
-migration behavior remain outside this version's collection contract.
+Status: adopted for BSON collection scalar indexes by issues #4062 and #4063.
+Existing typed-v1 indexes are unchanged. Metadata version 6 admits one through
+four ordered scalar components, each ascending or descending; arrays in a
+compound component fail closed. Pre-alpha format evolution rejects older
+metadata versions rather than providing migration scaffolding.
 
 ## Goals
 
@@ -87,7 +89,7 @@ component is self-delimiting, ascending or descending components can be
 concatenated without field separators.
 
 `bsonIndexEntryKeyV2` appends a separately marked, zero-escaped, terminated
-document-ID suffix after an exact scalar component. The suffix provides stable
+document-ID suffix after one or more exact scalar components. The suffix provides stable
 per-document uniqueness without becoming part of scalar ordering. Its encoded
 form has its own 1 MiB bound, enforced before escape expansion is appended.
 The suffix marker, escaped bytes, and terminator always remain uncomplemented,

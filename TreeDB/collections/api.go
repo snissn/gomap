@@ -20249,8 +20249,8 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 	if err := ValidateIndexName(indexName); err != nil {
 		return nil, false, err
 	}
-	if opts.Limit < 0 {
-		return nil, false, errors.New("collections: compound index range limit cannot be negative")
+	if opts.Limit <= 0 {
+		return nil, false, errors.New("collections: compound index range limit must be positive")
 	}
 	if err := c.flushBufferedNoIndex(); err != nil {
 		return nil, false, err
@@ -20292,34 +20292,38 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 	}
 	var bufferedIt iterator.UnsafeIterator
 	if bufferedTable != nil {
-		bufferedIt = bufferedTable.NewIterator(start, end)
+		if opts.Desc {
+			bufferedIt = bufferedTable.NewReverseIterator(start, end)
+		} else {
+			bufferedIt = bufferedTable.NewIterator(start, end)
+		}
 		defer func() { _ = bufferedIt.Close() }()
 	}
-	persistedIt, err := collectionIteratorAtCatalogRoot(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true)
+	var persistedIt iterator.UnsafeIterator
+	if opts.Desc {
+		persistedIt, err = collectionReverseIteratorAtCatalogRoot(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true)
+	} else {
+		persistedIt, err = collectionIteratorAtCatalogRoot(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true)
+	}
 	if err != nil {
 		return nil, false, err
 	}
 	if persistedIt != nil {
 		defer func() { _ = persistedIt.Close() }()
 	}
-	// Reverse merge support is not available for overlay stacks, so collect the
-	// bounded interval once and reverse only its owned result slice.
 	ids := make([][]byte, 0)
-	_, err = scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, 0, shouldDedupeIndexDocumentIDs(idx, catalog.meta.Options), func(id []byte) (bool, error) {
+	var scan func(iterator.UnsafeIterator, iterator.UnsafeIterator, IndexValueType, int, bool, func([]byte) (bool, error)) (bool, error)
+	if opts.Desc {
+		scan = scanMergedCollectionIndexIDsReverse
+	} else {
+		scan = scanMergedCollectionIndexIDs
+	}
+	truncated, err := scan(bufferedIt, persistedIt, idx.ValueType, opts.Limit, shouldDedupeIndexDocumentIDs(idx, catalog.meta.Options), func(id []byte) (bool, error) {
 		ids = append(ids, id)
 		return true, nil
 	})
 	if err != nil {
 		return nil, false, err
-	}
-	if opts.Desc {
-		for left, right := 0, len(ids)-1; left < right; left, right = left+1, right-1 {
-			ids[left], ids[right] = ids[right], ids[left]
-		}
-	}
-	truncated := opts.Limit > 0 && len(ids) > opts.Limit
-	if truncated {
-		ids = ids[:opts.Limit]
 	}
 	if len(ids) == 0 {
 		return nil, false, nil
@@ -20944,7 +20948,14 @@ func encodedDoubleComponentIsNaN(encoded []byte) bool {
 }
 
 func scanMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, dedupeDocumentIDs bool, fn func([]byte) (bool, error)) (bool, error) {
-	return scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt, valueType, maxResults, scanMergedCollectionIndexIDOptions{
+	return scanMergedCollectionIndexIDsWithOptionsAndDirection(bufferedIt, persistedIt, valueType, maxResults, false, scanMergedCollectionIndexIDOptions{
+		CloneDocumentID:  true,
+		DedupeDocumentID: dedupeDocumentIDs,
+	}, fn)
+}
+
+func scanMergedCollectionIndexIDsReverse(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, dedupeDocumentIDs bool, fn func([]byte) (bool, error)) (bool, error) {
+	return scanMergedCollectionIndexIDsWithOptionsAndDirection(bufferedIt, persistedIt, valueType, maxResults, true, scanMergedCollectionIndexIDOptions{
 		CloneDocumentID:  true,
 		DedupeDocumentID: dedupeDocumentIDs,
 	}, fn)
@@ -20966,6 +20977,10 @@ type scanMergedCollectionIndexIDOptions struct {
 }
 
 func scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, opts scanMergedCollectionIndexIDOptions, fn func([]byte) (bool, error)) (bool, error) {
+	return scanMergedCollectionIndexIDsWithOptionsAndDirection(bufferedIt, persistedIt, valueType, maxResults, false, opts, fn)
+}
+
+func scanMergedCollectionIndexIDsWithOptionsAndDirection(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, reverse bool, opts scanMergedCollectionIndexIDOptions, fn func([]byte) (bool, error)) (bool, error) {
 	if maxResults < 0 {
 		return false, errors.New("collections: max index results cannot be negative")
 	}
@@ -21058,7 +21073,7 @@ func scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt iterator.Un
 			bufferedIt.Next()
 		default:
 			cmp := bytes.Compare(bufferedKey, persistedKey)
-			if cmp < 0 {
+			if (!reverse && cmp < 0) || (reverse && cmp > 0) {
 				if !bufferedIt.IsDeleted() {
 					cont, truncated, err := emit(bufferedKey)
 					if err != nil || truncated || !cont {
@@ -21906,6 +21921,24 @@ func collectionIteratorAtCatalogRoot(snap *backenddb.Snapshot, catalog *collecti
 		return nil, nil
 	}
 	return newBufferedRootRunIteratorSourcesIteratorWithDeleted(sources, start, end, includeDeleted, false), nil
+}
+
+func collectionReverseIteratorAtCatalogRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, start, end []byte, includeDeleted bool) (iterator.UnsafeIterator, error) {
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	if len(catalog.overlayRootIDs(rootName)) != 0 {
+		return nil, errors.New("collections: reverse compound index scan requires a compacted index root")
+	}
+	rootID := catalog.rootID(rootName)
+	if rootID == 0 {
+		return nil, nil
+	}
+	it, err := snap.ReverseIteratorAtRootWithOptions(rootID, start, end, backenddb.IteratorOptions{IncludeTombstones: includeDeleted})
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return nil, nil
+	}
+	return it, err
 }
 
 func (c *collectionCatalog) copy() *collectionCatalog {
