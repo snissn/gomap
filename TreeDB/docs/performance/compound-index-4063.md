@@ -6,8 +6,8 @@ benchmark or imply query-planner selection, hints, or sort semantics.
 ## Reproducible capture
 
 - Base: `be80a3ff55ef2255afe21a77bf00fb1f61ba65c6`
-- Source: `fc480cf6ff19bed5c3bf7d675580b764a6382757` plus the pending
-  non-leading `$set` mask and nontrivial range-fixture repairs in this branch.
+- Source: `2800886a4e262c551dd27033b6e90ff0d6b2aa92` (non-leading `$set`
+  maintenance and the nontrivial range-fixture repair included).
 - Host: Apple M3, darwin/arm64, Go test process reporting `-8` logical CPUs.
 - Fixture: BSON documents, 64-value indexed-field cardinality, 64 seeded scan
   documents, and 1,024 storage documents. Components two through four have a
