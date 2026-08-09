@@ -848,7 +848,7 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 
 func commandRejectsReadOPMsgFeatures(name string) bool {
 	switch name {
-	case "aggregate", "count", "distinct", "find":
+	case "aggregate", "count", "distinct", "explain", "find":
 		return true
 	default:
 		return false

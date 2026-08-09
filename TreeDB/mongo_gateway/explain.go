@@ -136,6 +136,14 @@ func (s *Server) explainFindResponse(ctx context.Context, command wire.Document,
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 	}
+	if s.clusterSubmitterConfigured() {
+		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway explain is disabled in cluster mode until routed reads are supported")
+	}
+	if err := validateMongoReadCommandFields(command, "find", map[string]struct{}{
+		"find": {}, "filter": {}, "projection": {}, "sort": {}, "skip": {}, "limit": {}, "batchSize": {}, "singleBatch": {}, "readConcern": {},
+	}); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
 	collection, err := commandString(command, "find")
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
@@ -307,6 +315,9 @@ func (s *Server) explainAggregateResponse(ctx context.Context, command wire.Docu
 }
 
 func (s *Server) explainCollectionRead(ctx context.Context, db, collection string, plan findPlan, verbosity string, execute func(*collections.Collection, findPlan) (int64, error)) (wire.Document, error) {
+	if s.clusterSubmitterConfigured() {
+		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway explain is disabled in cluster mode until routed reads are supported")
+	}
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 	}
@@ -328,7 +339,7 @@ func (s *Server) explainCollectionRead(ctx context.Context, db, collection strin
 func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, db, collection string, plan findPlan, verbosity string, execute func(findPlan) (int64, error)) (wire.Document, error) {
 	selection := findPlannerSelection{stage: "bounded_scan"}
 	if !missing {
-		selection = explainPlannerSelection(col.MetaView(), plan)
+		selection = explainPlannerSelection(col, plan)
 	}
 	winning := bson.D{{Key: "stage", Value: selection.stage}, {Key: "residualFilter", Value: len(plan.predicates) > 1 || len(plan.orBranches) != 0}}
 	if selection.indexName != "" {
@@ -397,23 +408,19 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 	return marshalDocument(response)
 }
 
-func explainPlannerSelection(meta collections.CollectionMeta, plan findPlan) findPlannerSelection {
+func explainPlannerSelection(col *collections.Collection, plan findPlan) findPlannerSelection {
 	candidates := 0
 	if _, ok := primaryCandidatePredicate(plan.predicates); ok {
 		candidates++
 	}
-	for _, idx := range meta.Indexes {
-		for _, pred := range plan.predicates {
-			if idx.Field == pred.field && (pred.op == findPredicateEq || pred.op == findPredicateIn || isRangePredicate(pred.op)) {
-				candidates++
-				break
-			}
-		}
-	}
+	candidates += len(explainUsableIndexes(col, plan))
 	if candidates > 1 {
 		return findPlannerSelection{stage: "adaptive_candidate_selection"}
 	}
-	return selectFindPlannerSelection(meta, plan)
+	if candidates == 0 {
+		return findPlannerSelection{stage: "bounded_scan"}
+	}
+	return selectFindPlannerSelection(col.MetaView(), plan)
 }
 
 func explainCandidatePlans(col *collections.Collection, plan findPlan) bson.A {
@@ -449,6 +456,26 @@ func explainUsableIndexes(col *collections.Collection, plan findPlan) bson.A {
 		for _, pred := range plan.predicates {
 			if idx.Field != pred.field || (pred.op != findPredicateEq && pred.op != findPredicateIn && !isRangePredicate(pred.op)) {
 				continue
+			}
+			if predicateContainsNull(pred) {
+				continue
+			}
+			if isRangePredicate(pred.op) {
+				_, ok, _, err := indexRangeOptionsForPredicates(plan.predicates, idx)
+				if err != nil || !ok {
+					continue
+				}
+			} else {
+				compatible := true
+				for _, value := range pred.values {
+					if _, ok := indexScalarForBSONValue(value, idx.ValueType); !ok {
+						compatible = false
+						break
+					}
+				}
+				if !compatible {
+					continue
+				}
 			}
 			out = append(out, bson.D{{Key: "name", Value: idx.Name}, {Key: "field", Value: idx.Field}, {Key: "kind", Value: indexedFindStage(plan, idx)}})
 			break
