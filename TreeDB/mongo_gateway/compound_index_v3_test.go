@@ -45,4 +45,8 @@ func TestCreateAndListCompoundDescendingBSONIndex(t *testing.T) {
 			t.Fatalf("component[%d]=%s:%d want %s:%d", i, field, got, want[i].field, want[i].dir)
 		}
 	}
+	unique, ok := indexes[1].Lookup("unique").BooleanOK()
+	if !ok || !unique {
+		t.Fatalf("listIndexes unique=%v ok=%v want true", unique, ok)
+	}
 }

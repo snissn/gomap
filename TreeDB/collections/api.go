@@ -20409,6 +20409,9 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 		persistedIt, err = collectionIteratorAtCatalogRootWithWorkCap(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true, persistedBudget)
 	}
 	if err != nil {
+		if errors.Is(err, errCollectionIndexScanWorkCap) {
+			return nil, true, nil
+		}
 		return nil, false, err
 	}
 	if persistedIt != nil {

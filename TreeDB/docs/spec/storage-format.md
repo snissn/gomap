@@ -862,9 +862,11 @@ reject older metadata versions instead of migrating them.
 ### 3.2.1 BSON-ordered scalar secondary-index keys (v2)
 
 An index whose persisted metadata selects `bson-ordered-v2` is valid only for a
-BSON collection. Metadata version 6 stores an ordered, non-empty `components`
+BSON collection. Metadata version 6 stores an optional ordered `components`
 list of one through four `{field,direction}` members; direction is exactly `1`
-or `-1`. A field-only legacy definition normalizes to one ascending component.
+or `-1`. An explicit ordered definition persists `components`. A field-only
+legacy definition omits `components` on disk and a decoder treats it as one
+ascending component named by `field`.
 Its ordered-root entry key is the concatenation of those frozen BSON v2 scalar
 components followed by one explicit BSON v2 document-ID suffix. The components
 are the self-delimiting `0xb2` ascending or `0x4d` descending encodings defined

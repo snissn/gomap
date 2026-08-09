@@ -278,8 +278,8 @@ implemented.
 | Single-field ascending secondary index | `supported subset` standalone; token/ring reads and all token/ring writes are rejected | `TestMongoCompatibilityMatrix`, `TestClusterRoutePreflightMongoRejectsNonShardAndSecondaryIndexReads`, token/ring mutation policy tests | Cluster mode has no owner-bound shard-local index metadata or scatter policy. |
 | Unique single-field secondary index | `supported subset` standalone; token/ring reads and all token/ring writes are rejected | metadata/update tests, token/ring mutation policy tests, `TestClusterSubmitterRejectsIndexDDLNoLocalMutation` | Global unique coordination and owner-bound index metadata are not implemented. |
 | Supported `treedbValueType` values | `supported subset` | metadata tests | `string`, `bool`, `int64`, `double`. |
-| Compound index | `rejected` | `TestMongoCompatibilityMatrix` | Needs collection index design work. |
-| Descending, hashed, text, wildcard, geospatial indexes | `rejected` / `not implemented` | Invalid index commands reject or command absent | Out of MVP scope. |
+| Ordered BSON scalar v2 compound index (one through four components) | `supported subset` standalone; token/ring reads and all token/ring writes are rejected | `TestCreateAndListCompoundDescendingBSONIndex`, `TestMongoCompatibilityMatrix` | Direct collection scans only; Mongo find planner does not select it until #4065. Arrays/multikey metadata reject. |
+| Ordered BSON scalar v2 descending index | `supported subset` standalone; token/ring reads and all token/ring writes are rejected | `TestCreateAndListCompoundDescendingBSONIndex`, `TestMongoCompatibilityMatrix` | Direct collection scans only; Mongo find planner does not select it until #4065. Hashed, text, wildcard, and geospatial indexes remain unavailable. |
 | Automatic type inference for indexes | `rejected` | `TestMongoCompatibilityMatrix` covers missing `treedbValueType` | Type must be declared explicitly. |
 
 ## Durability And Transactions

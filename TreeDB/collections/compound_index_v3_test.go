@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strings"
@@ -706,5 +707,16 @@ func TestBSONCompoundDescendingEntryFailsClosedWhenCorrupt(t *testing.T) {
 }
 
 func bsoncoreAppendString(value string) []byte {
-	return append(append([]byte{byte(len(value) + 1), 0, 0, 0}, value...), 0)
+	var header [4]byte
+	binary.LittleEndian.PutUint32(header[:], uint32(len(value)+1))
+	return append(append(header[:], value...), 0)
+}
+
+func TestBSONCoreAppendStringUsesFullLength(t *testing.T) {
+	want := strings.Repeat("x", 300)
+	raw := bson.RawValue{Type: bson.TypeString, Value: bsoncoreAppendString(want)}
+	got, ok := raw.StringValueOK()
+	if !ok || got != want {
+		t.Fatalf("long BSON string=%q ok=%v", got, ok)
+	}
 }
