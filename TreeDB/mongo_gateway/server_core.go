@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -125,8 +126,8 @@ type Server struct {
 	standaloneWriteBoundaryMu  sync.RWMutex
 	standaloneWriteConcernSync func() (bool, error)
 	writeConcernStats          standaloneWriteConcernStats
-	authMu                     sync.Mutex
-	authConnections            map[int64]*authConnectionState
+	authConnections            sync.Map // map[int64]*authConnectionState
+	authSyntheticKey           [32]byte
 	nextSASLConversation       atomic.Int32
 	authFailures               atomic.Uint64
 	closed                     atomic.Bool
@@ -162,6 +163,12 @@ func NewServer() *Server {
 		InsertCoalescingMaxBatch: defaultInsertCoalescingBatch,
 		InsertCoalescingIdleTTL:  defaultInsertCoalescingIdleTTL,
 		ClusterIdempotencyNonce:  newClusterIdempotencyNonce(),
+	}
+	if _, err := rand.Read(s.authSyntheticKey[:]); err != nil {
+		// This key is only a per-process synthetic-verifier discriminator. Keep
+		// the fallback process-local and unpredictable enough to avoid reviving
+		// a public, fixed invalid-user salt if the system RNG is unavailable.
+		s.authSyntheticKey = sha256.Sum256([]byte(fmt.Sprintf("%d-%d", time.Now().UnixNano(), clusterIdempotencyNonceFallback.Add(1))))
 	}
 	s.nextResponseID.Store(0)
 	return s
@@ -745,7 +752,7 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 		return nil, retainRequestBody, nil
 	}
 
-	if name == "find" && (!s.authenticationRequired() || s.authenticated(cursorOwner)) {
+	if name == "find" {
 		// The find path builds a raw OP_MSG response directly.
 		responseID := s.nextID()
 		response, err := s.findMsgResponseInto(ctx, dst, msg.Body, responseID, h.RequestID, cursorOwner)

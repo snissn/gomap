@@ -7,59 +7,61 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-const maxSCRAMPayloadBytes = 16 << 10
+const (
+	maxSCRAMPayloadBytes               = 16 << 10
+	maxSCRAMConversationsPerConnection = 8
+	maxSCRAMConversationAge            = 30 * time.Second
+)
 
 type scramConversation struct {
 	id                           int32
 	user                         AuthUser
 	record                       AuthUserRecord
 	clientFirstBare, serverFirst string
+	serverNonce                  string
+	issuedAt                     time.Time
 	valid                        bool
 }
 type authConnectionState struct {
-	user          *AuthUser
+	user          atomic.Pointer[AuthUser]
+	mu            sync.Mutex
 	conversations map[int32]scramConversation
 }
 
 func (s *Server) authState(owner int64) *authConnectionState {
-	s.authMu.Lock()
-	defer s.authMu.Unlock()
-	if s.authConnections == nil {
-		s.authConnections = make(map[int64]*authConnectionState)
-	}
-	state := s.authConnections[owner]
-	if state == nil {
-		state = &authConnectionState{conversations: make(map[int32]scramConversation)}
-		s.authConnections[owner] = state
-	}
-	return state
+	state := &authConnectionState{conversations: make(map[int32]scramConversation)}
+	actual, _ := s.authConnections.LoadOrStore(owner, state)
+	return actual.(*authConnectionState)
 }
 func (s *Server) clearAuthState(owner int64) {
-	s.authMu.Lock()
-	delete(s.authConnections, owner)
-	s.authMu.Unlock()
+	s.authConnections.Delete(owner)
 }
 func (s *Server) authenticated(owner int64) bool {
-	s.authMu.Lock()
-	defer s.authMu.Unlock()
-	return s.authConnections[owner] != nil && s.authConnections[owner].user != nil
+	state, ok := s.authConnections.Load(owner)
+	return ok && state.(*authConnectionState).user.Load() != nil
 }
 func (s *Server) authUser(owner int64) *AuthUser {
-	s.authMu.Lock()
-	defer s.authMu.Unlock()
-	if u := s.authConnections[owner]; u != nil && u.user != nil {
-		copy := *u.user
+	state, ok := s.authConnections.Load(owner)
+	if ok {
+		u := state.(*authConnectionState).user.Load()
+		if u == nil {
+			return nil
+		}
+		copy := *u
 		return &copy
 	}
 	return nil
 }
 func (s *Server) authenticationRequired() bool {
-	return s != nil && s.AuthenticationEnabled && s.AuthCatalog != nil
+	return s != nil && s.AuthenticationEnabled
 }
 
 func authUnauthenticatedCommand(name string) bool {
@@ -77,6 +79,9 @@ func authFailure() (wire.Document, error) {
 func (s *Server) saslStartResponse(command wire.Document, owner int64) (wire.Document, error) {
 	if !s.authenticationRequired() {
 		return commandError(59, "CommandNotFound", "authentication is not enabled")
+	}
+	if s.AuthCatalog == nil {
+		return authFailure()
 	}
 	raw := bson.Raw(command)
 	mechanism, ok := raw.Lookup("mechanism").StringValueOK()
@@ -109,7 +114,7 @@ func (s *Server) saslStartResponse(command wire.Document, owner int64) (wire.Doc
 	if !valid {
 		// Preserve the saslStart shape for unknown/disabled/corrupt records so
 		// username existence is not exposed before proof verification.
-		record = newSCRAMRecord(authDB, username, []byte("mongo-gateway-invalid-user-verifier"), []byte("mongo-gateway-invalid-salt-32-byte"), defaultSCRAMIterations)
+		record = s.syntheticSCRAMRecord(authDB, username)
 	}
 	random := make([]byte, 18)
 	if _, err := rand.Read(random); err != nil {
@@ -118,13 +123,19 @@ func (s *Server) saslStartResponse(command wire.Document, owner int64) (wire.Doc
 	nonce := fields["r"] + base64.RawStdEncoding.EncodeToString(random)
 	serverFirst := fmt.Sprintf("r=%s,s=%s,i=%d", nonce, base64.StdEncoding.EncodeToString(record.Salt), record.Iterations)
 	state := s.authState(owner)
-	s.authMu.Lock()
+	state.mu.Lock()
+	s.expireSCRAMConversationsLocked(state, time.Now())
+	if len(state.conversations) >= maxSCRAMConversationsPerConnection {
+		state.mu.Unlock()
+		s.authFailures.Add(1)
+		return authFailure()
+	}
 	id := s.nextSASLConversation.Add(1)
 	if id == 0 {
 		id = s.nextSASLConversation.Add(1)
 	}
-	state.conversations[id] = scramConversation{id: id, user: AuthUser{Username: username, AuthDB: authDB}, record: record, clientFirstBare: bare, serverFirst: serverFirst, valid: valid}
-	s.authMu.Unlock()
+	state.conversations[id] = scramConversation{id: id, user: AuthUser{Username: username, AuthDB: authDB}, record: record, clientFirstBare: bare, serverFirst: serverFirst, serverNonce: nonce, issuedAt: time.Now(), valid: valid}
+	state.mu.Unlock()
 	return marshalDocument(bson.D{{Key: "conversationId", Value: id}, {Key: "done", Value: false}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte(serverFirst)}}, {Key: "ok", Value: 1.0}})
 }
 
@@ -138,14 +149,21 @@ func (s *Server) saslContinueResponse(command wire.Document, owner int64) (wire.
 	if len(payload) == 0 || len(payload) > maxSCRAMPayloadBytes {
 		return authFailure()
 	}
-	s.authMu.Lock()
-	state := s.authConnections[owner]
+	value, exists := s.authConnections.Load(owner)
+	var state *authConnectionState
+	if exists {
+		state = value.(*authConnectionState)
+		state.mu.Lock()
+	}
 	var conversation scramConversation
 	if state != nil {
+		s.expireSCRAMConversationsLocked(state, time.Now())
 		conversation, ok = state.conversations[id]
 		delete(state.conversations, id)
 	}
-	s.authMu.Unlock()
+	if state != nil {
+		state.mu.Unlock()
+	}
 	if !ok {
 		return authFailure()
 	}
@@ -157,7 +175,7 @@ func (s *Server) saslContinueResponse(command wire.Document, owner int64) (wire.
 		return authFailure()
 	}
 	withoutProof := strings.TrimSuffix(message, ",p="+proofB64)
-	if withoutProof == message || fields["r"] == "" || !strings.HasPrefix(fields["r"], strings.Split(conversation.serverFirst, ",")[0][2:]) {
+	if withoutProof == message || fields["r"] == "" || fields["r"] != conversation.serverNonce {
 		s.authFailures.Add(1)
 		return authFailure()
 	}
@@ -173,18 +191,40 @@ func (s *Server) saslContinueResponse(command wire.Document, owner int64) (wire.
 		clientKey[i] = proof[i] ^ clientSignature[i]
 	}
 	stored := sha256.Sum256(clientKey)
-	if !conversation.valid || subtle.ConstantTimeCompare(stored[:], conversation.record.StoredKey) != 1 {
+	proofValid := subtle.ConstantTimeCompare(stored[:], conversation.record.StoredKey)
+	if subtle.ConstantTimeSelect(boolToInt(conversation.valid), proofValid, 0) != 1 {
 		s.authFailures.Add(1)
 		return authFailure()
 	}
 	serverSignature := hmacSHA256(conversation.record.ServerKey, []byte(authMessage))
 	user := conversation.user
-	s.authMu.Lock()
-	if state := s.authConnections[owner]; state != nil {
-		state.user = &user
+	if value, ok := s.authConnections.Load(owner); ok {
+		value.(*authConnectionState).user.Store(&user)
 	}
-	s.authMu.Unlock()
 	return marshalDocument(bson.D{{Key: "conversationId", Value: id}, {Key: "done", Value: true}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte("v=" + base64.StdEncoding.EncodeToString(serverSignature))}}, {Key: "ok", Value: 1.0}})
+}
+
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+func (s *Server) syntheticSCRAMRecord(authDB, username string) AuthUserRecord {
+	context := []byte(authDB + "\x00" + username)
+	salt := hmacSHA256(s.authSyntheticKey[:], append([]byte("scram-synthetic-salt\x00"), context...))
+	stored := hmacSHA256(s.authSyntheticKey[:], append([]byte("scram-synthetic-stored\x00"), context...))
+	server := hmacSHA256(s.authSyntheticKey[:], append([]byte("scram-synthetic-server\x00"), context...))
+	return AuthUserRecord{Version: authCatalogVersion, Username: username, AuthDB: authDB, Salt: salt, Iterations: defaultSCRAMIterations, StoredKey: stored, ServerKey: server, Enabled: false}
+}
+
+func (s *Server) expireSCRAMConversationsLocked(state *authConnectionState, now time.Time) {
+	for id, conversation := range state.conversations {
+		if now.Sub(conversation.issuedAt) > maxSCRAMConversationAge {
+			delete(state.conversations, id)
+		}
+	}
 }
 
 func scramFields(input string) (map[string]string, bool) {

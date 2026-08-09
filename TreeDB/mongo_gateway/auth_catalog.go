@@ -15,7 +15,9 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
+	"github.com/xdg-go/stringprep"
 	"golang.org/x/crypto/pbkdf2"
 )
 
@@ -58,7 +60,10 @@ type authCatalogStore interface {
 }
 type AuthCatalog struct {
 	db authCatalogStore
-	mu sync.RWMutex
+	mu sync.Mutex
+	// beforeSetEnabledWrite is a test-only interleaving hook. It is called
+	// while mu is held so a rotation cannot race a stale record write.
+	beforeSetEnabledWrite func()
 }
 
 func NewAuthCatalog(db authCatalogStore) (*AuthCatalog, error) {
@@ -86,14 +91,15 @@ func validateAuthRecord(r AuthUserRecord) error {
 // UpsertPassword creates or rotates a verifier. The password bytes are used
 // only for derivation and are not kept by this API or its persisted record.
 func (c *AuthCatalog) UpsertPassword(authDB, username string, password []byte) error {
-	if c == nil || !validAuthField(authDB) || !validAuthField(username) || len(password) == 0 || len(password) > maxAuthPasswordBytes {
+	prepared, err := saslprepPassword(password)
+	if c == nil || !validAuthField(authDB) || !validAuthField(username) || err != nil {
 		return errAuthenticationFailed
 	}
 	salt := make([]byte, 32)
 	if _, err := rand.Read(salt); err != nil {
 		return fmt.Errorf("mongo gateway auth: random salt: %w", err)
 	}
-	r := newSCRAMRecord(authDB, username, password, salt, defaultSCRAMIterations)
+	r := newSCRAMRecord(authDB, username, prepared, salt, defaultSCRAMIterations)
 	raw, err := json.Marshal(r)
 	if err != nil {
 		return err
@@ -120,9 +126,9 @@ func (c *AuthCatalog) record(authDB, username string) (AuthUserRecord, error) {
 	if c == nil || !validAuthField(authDB) || !validAuthField(username) {
 		return AuthUserRecord{}, errAuthenticationFailed
 	}
-	c.mu.RLock()
+	c.mu.Lock()
 	raw, err := c.db.Get(authCatalogKey(authDB, username))
-	c.mu.RUnlock()
+	c.mu.Unlock()
 	if err != nil {
 		return AuthUserRecord{}, errAuthenticationFailed
 	}
@@ -133,13 +139,11 @@ func (c *AuthCatalog) record(authDB, username string) (AuthUserRecord, error) {
 	return r, nil
 }
 
-func (c *AuthCatalog) storedRecord(authDB, username string) (AuthUserRecord, error) {
+func (c *AuthCatalog) storedRecordLocked(authDB, username string) (AuthUserRecord, error) {
 	if c == nil || !validAuthField(authDB) || !validAuthField(username) {
 		return AuthUserRecord{}, errAuthenticationFailed
 	}
-	c.mu.RLock()
 	raw, err := c.db.Get(authCatalogKey(authDB, username))
-	c.mu.RUnlock()
 	var r AuthUserRecord
 	if err != nil || json.Unmarshal(raw, &r) != nil || validateAuthRecord(r) != nil || r.Username != username || r.AuthDB != authDB {
 		return AuthUserRecord{}, errAuthenticationFailed
@@ -149,17 +153,23 @@ func (c *AuthCatalog) storedRecord(authDB, username string) (AuthUserRecord, err
 
 // SetEnabled atomically replaces the stored record with a changed enabled bit.
 func (c *AuthCatalog) SetEnabled(authDB, username string, enabled bool) error {
-	r, err := c.storedRecord(authDB, username)
+	if c == nil || !validAuthField(authDB) || !validAuthField(username) {
+		return errAuthenticationFailed
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	r, err := c.storedRecordLocked(authDB, username)
 	if err != nil {
 		return err
 	}
 	r.Enabled = enabled
+	if c.beforeSetEnabledWrite != nil {
+		c.beforeSetEnabledWrite()
+	}
 	raw, err := json.Marshal(r)
 	if err != nil {
 		return err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	return c.db.SetSync(authCatalogKey(authDB, username), raw)
 }
 
@@ -168,12 +178,24 @@ func (c *AuthCatalog) SetEnabled(authDB, username string, enabled bool) error {
 // steady-state CRUD.
 func (c *AuthCatalog) VerifyPassword(authDB, username string, password []byte) (AuthUser, error) {
 	r, err := c.record(authDB, username)
-	if err != nil || len(password) == 0 || len(password) > maxAuthPasswordBytes {
+	prepared, prepErr := saslprepPassword(password)
+	if err != nil || prepErr != nil {
 		return AuthUser{}, errAuthenticationFailed
 	}
-	trial := newSCRAMRecord(authDB, username, password, r.Salt, r.Iterations)
+	trial := newSCRAMRecord(authDB, username, prepared, r.Salt, r.Iterations)
 	if subtle.ConstantTimeCompare(trial.StoredKey, r.StoredKey) != 1 {
 		return AuthUser{}, errAuthenticationFailed
 	}
 	return AuthUser{Username: username, AuthDB: authDB}, nil
+}
+
+func saslprepPassword(password []byte) ([]byte, error) {
+	if len(password) == 0 || len(password) > maxAuthPasswordBytes || !utf8.Valid(password) {
+		return nil, errAuthenticationFailed
+	}
+	prepared, err := stringprep.SASLprep.Prepare(string(password))
+	if err != nil || len(prepared) == 0 || len(prepared) > maxAuthPasswordBytes {
+		return nil, errAuthenticationFailed
+	}
+	return []byte(prepared), nil
 }

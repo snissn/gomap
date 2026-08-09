@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
@@ -86,6 +87,189 @@ func TestAuthCatalogRejectsCorruptOrOversizedRecords(t *testing.T) {
 	if err := catalog.UpsertPassword("admin", "huge", make([]byte, maxAuthPasswordBytes+1)); err == nil {
 		t.Fatal("oversized password accepted")
 	}
+}
+
+func TestAuthCatalogSASLprepAndAtomicDisableRotation(t *testing.T) {
+	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	catalog, _ := NewAuthCatalog(db)
+	// SASLprep maps non-ASCII space, which is what the official driver applies
+	// before producing its SCRAM proof.
+	if err := catalog.UpsertPassword("admin", "alice", []byte("p\u00e4ss\u00a0word")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.VerifyPassword("admin", "alice", []byte("p\u00e4ss word")); err != nil {
+		t.Fatalf("SASLprep equivalent rejected: %v", err)
+	}
+	if err := catalog.UpsertPassword("admin", "bad", []byte("bad\x00password")); err == nil {
+		t.Fatal("prohibited password accepted")
+	}
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	catalog.beforeSetEnabledWrite = func() { close(entered); <-release }
+	setDone := make(chan error, 1)
+	go func() { setDone <- catalog.SetEnabled("admin", "alice", false) }()
+	<-entered
+	rotateDone := make(chan error, 1)
+	go func() { rotateDone <- catalog.UpsertPassword("admin", "alice", []byte("fresh password")) }()
+	select {
+	case err := <-rotateDone:
+		t.Fatalf("rotation bypassed SetEnabled atomic section: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(release)
+	if err := <-setDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-rotateDone; err != nil {
+		t.Fatal(err)
+	}
+	catalog.beforeSetEnabledWrite = nil
+	if _, err := catalog.VerifyPassword("admin", "alice", []byte("fresh password")); err != nil {
+		t.Fatalf("rotation lost or left disabled: %v", err)
+	}
+	if err := catalog.SetEnabled("admin", "alice", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.SetEnabled("admin", "alice", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.VerifyPassword("admin", "alice", []byte("fresh password")); err != nil {
+		t.Fatalf("re-enable lost fresh verifier: %v", err)
+	}
+}
+
+func TestAuthenticationEnabledWithoutCatalogFailsClosed(t *testing.T) {
+	server := NewServer()
+	server.AuthenticationEnabled = true
+	denied, err := server.commandResponse(context.Background(), "find", mustDocument(t, bson.D{{Key: "find", Value: "items"}, {Key: "$db", Value: "app"}}), nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCommandError(t, denied, "Unauthorized")
+	start, err := server.commandResponse(context.Background(), "saslStart", mustDocument(t, bson.D{{Key: "saslStart", Value: 1}, {Key: "mechanism", Value: "SCRAM-SHA-256"}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte("n,,n=alice,r=nonce")}}, {Key: "$db", Value: "admin"}}), nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCommandError(t, start, "AuthenticationFailed")
+}
+
+func TestSyntheticSCRAMVerifierIsServerAndUserScoped(t *testing.T) {
+	a, b := NewServer(), NewServer()
+	a1, a2, b1 := a.syntheticSCRAMRecord("admin", "missing"), a.syntheticSCRAMRecord("admin", "other"), b.syntheticSCRAMRecord("admin", "missing")
+	if bytes.Equal(a1.Salt, a2.Salt) || bytes.Equal(a1.Salt, b1.Salt) {
+		t.Fatal("synthetic verifier salt is not server/user scoped")
+	}
+	if a1.Iterations != defaultSCRAMIterations || len(a1.StoredKey) != sha256.Size || len(a1.ServerKey) != sha256.Size {
+		t.Fatalf("bad synthetic record: %+v", a1)
+	}
+}
+
+func TestSCRAMClientFinalNonceMustMatchExactly(t *testing.T) {
+	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	catalog, _ := NewAuthCatalog(db)
+	password := []byte("correct password")
+	if err := catalog.UpsertPassword("admin", "alice", password); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer()
+	server.AuthenticationEnabled, server.AuthCatalog = true, catalog
+	bare := "n=alice,r=clientnonce"
+	startRaw := mustDocument(t, bson.D{{Key: "saslStart", Value: 1}, {Key: "mechanism", Value: "SCRAM-SHA-256"}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte("n,," + bare)}}, {Key: "$db", Value: "admin"}})
+	started, err := server.commandResponse(context.Background(), "saslStart", startRaw, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := bson.Raw(started)
+	id := start.Lookup("conversationId").Int32()
+	_, payload := start.Lookup("payload").Binary()
+	serverFirst := string(payload)
+	fields, ok := scramFields(serverFirst)
+	if !ok {
+		t.Fatal(serverFirst)
+	}
+	salt, err := base64.StdEncoding.DecodeString(fields["s"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var iterations int
+	if _, err := fmt.Sscanf(fields["i"], "%d", &iterations); err != nil {
+		t.Fatal(err)
+	}
+	salted := pbkdf2.Key(password, salt, iterations, sha256.Size, sha256.New)
+	clientKey := hmacSHA256(salted, []byte("Client Key"))
+	stored := sha256.Sum256(clientKey)
+	// This proof is otherwise valid for the altered final message. A prefix
+	// check would accept it; SCRAM requires the server nonce verbatim.
+	withoutProof := "c=biws,r=" + fields["r"] + "suffix"
+	signature := hmacSHA256(stored[:], []byte(bare+","+serverFirst+","+withoutProof))
+	proof := make([]byte, len(clientKey))
+	for i := range proof {
+		proof[i] = clientKey[i] ^ signature[i]
+	}
+	continueRaw := mustDocument(t, bson.D{{Key: "saslContinue", Value: 1}, {Key: "conversationId", Value: id}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte(withoutProof + ",p=" + base64.StdEncoding.EncodeToString(proof))}}, {Key: "$db", Value: "admin"}})
+	response, err := server.commandResponse(context.Background(), "saslContinue", continueRaw, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCommandError(t, response, "AuthenticationFailed")
+}
+
+func TestSCRAMConversationCapExpiryAndReplayFailClosed(t *testing.T) {
+	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	catalog, _ := NewAuthCatalog(db)
+	server := NewServer()
+	server.AuthenticationEnabled, server.AuthCatalog = true, catalog
+	owner := int64(44)
+	start := func(nonce string) bson.Raw {
+		raw := mustDocument(t, bson.D{{Key: "saslStart", Value: 1}, {Key: "mechanism", Value: "SCRAM-SHA-256"}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte("n,,n=missing,r=" + nonce)}}, {Key: "$db", Value: "admin"}})
+		response, err := server.commandResponse(context.Background(), "saslStart", raw, nil, owner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return bson.Raw(response)
+	}
+	for i := 0; i < maxSCRAMConversationsPerConnection; i++ {
+		if got := start(fmt.Sprintf("n%d", i)); got.Lookup("ok").Double() != 1 {
+			t.Fatalf("start %d: %s", i, got)
+		}
+	}
+	assertCommandError(t, start("overflow"), "AuthenticationFailed")
+	value, ok := server.authConnections.Load(owner)
+	if !ok {
+		t.Fatal("missing auth connection state")
+	}
+	state := value.(*authConnectionState)
+	state.mu.Lock()
+	for id, c := range state.conversations {
+		c.issuedAt = time.Now().Add(-maxSCRAMConversationAge - time.Second)
+		state.conversations[id] = c
+	}
+	state.mu.Unlock()
+	first := start("after-expiry")
+	id := first.Lookup("conversationId").Int32()
+	bad := mustDocument(t, bson.D{{Key: "saslContinue", Value: 1}, {Key: "conversationId", Value: id}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte("c=biws,r=wrong,p=" + base64.StdEncoding.EncodeToString(make([]byte, 32)))}}, {Key: "$db", Value: "admin"}})
+	response, err := server.commandResponse(context.Background(), "saslContinue", bad, nil, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCommandError(t, response, "AuthenticationFailed")
+	replayed, err := server.commandResponse(context.Background(), "saslContinue", bad, nil, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCommandError(t, replayed, "AuthenticationFailed")
 }
 
 func TestSCRAMSHA256EstablishesConnectionIdentityAndGatesCommands(t *testing.T) {
@@ -223,10 +407,19 @@ func TestSCRAMUnknownUserKeepsChallengeShapeThenFailsGenerically(t *testing.T) {
 	if err := catalog.UpsertPassword("admin", "alice", []byte("password")); err != nil {
 		t.Fatal(err)
 	}
+	if err := catalog.UpsertPassword("admin", "disabled", []byte("password")); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.SetEnabled("admin", "disabled", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetSync(authCatalogKey("admin", "corrupt"), []byte(`{bad`)); err != nil {
+		t.Fatal(err)
+	}
 	server := NewServer()
 	server.AuthenticationEnabled, server.AuthCatalog = true, catalog
 	var unknownConversationID int32
-	for owner, username := range map[int64]string{1: "alice", 2: "unknown"} {
+	for owner, username := range map[int64]string{1: "alice", 2: "unknown", 3: "disabled", 4: "corrupt"} {
 		raw, _ := marshalDocument(bson.D{{Key: "saslStart", Value: 1}, {Key: "mechanism", Value: "SCRAM-SHA-256"}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte("n,,n=" + username + ",r=nonce")}}, {Key: "$db", Value: "admin"}})
 		response, err := server.commandResponse(context.Background(), "saslStart", raw, nil, owner)
 		if err != nil {
