@@ -119,6 +119,14 @@ type Server struct {
 	// filterWriteSelectedHook is test-only coordination between natural-order
 	// selection and the mutation-boundary predicate recheck.
 	filterWriteSelectedHook func()
+	// filterWriteAfterMaterializerHook is test-only coordination immediately
+	// after a conditional filter-write materializer is acquired and before its
+	// deadline-checked mutation boundary.
+	filterWriteAfterMaterializerHook func()
+	// findAndModifyExactAdmissionHook and findAndModifyBeforeUpsertInsertHook
+	// are test-only race seams for exact-image response admission.
+	findAndModifyExactAdmissionHook     func()
+	findAndModifyBeforeUpsertInsertHook func()
 	// mongoWriteRetainedKeyBytesLimit is a test-only override of the command
 	// retained-key ceiling; zero uses mongoWriteCommandMaxRetainedKeyBytes.
 	mongoWriteRetainedKeyBytesLimit int

@@ -12,6 +12,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
 const mongoFilterWriteTestTimeout = 5 * time.Second
@@ -210,6 +211,78 @@ func TestMongoFilterWriteDeadlineRecheckedAfterSelection(t *testing.T) {
 			batch := cursorFirstBatch(t, find)
 			if len(batch) != 1 || !batch[0].Lookup("seen").IsZero() {
 				t.Fatalf("deadline after selection mutated state: %s", find)
+			}
+		})
+	}
+}
+
+func TestMongoFilterWriteDeadlineRecheckedAfterMaterializer(t *testing.T) {
+	for _, format := range []collections.DocumentFormat{collections.DocumentFormatTemplateV1} {
+		t.Run("template-v1", func(t *testing.T) {
+			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			server := NewServer()
+			server.Collections = collections.NewCollectionManager(db)
+			server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: format}
+			assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "active", Value: true}}}}, {Key: "$db", Value: "app"}}))
+			col, err := server.Collections.OpenCollection("app.users")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tc := range []struct {
+				name string
+				run  func(*mongoWriteBudget) error
+			}{
+				{"update", func(budget *mongoWriteBudget) error {
+					item, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{{Key: "q", Value: bson.D{{Key: "active", Value: true}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "seen", Value: true}}}}}}))
+					if err != nil {
+						return err
+					}
+					item.budget = budget
+					_, _, err = server.runMongoFilterUpdateOne(col, item)
+					return err
+				}},
+				{"delete", func(budget *mongoWriteBudget) error {
+					item, err := parseMongoDeleteItem(0, mustDocument(t, bson.D{{Key: "q", Value: bson.D{{Key: "active", Value: true}}}, {Key: "limit", Value: int32(1)}}))
+					if err != nil {
+						return err
+					}
+					_, err = server.deleteMongoFilterOneWithBudget(col, item.plan, budget)
+					return err
+				}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					budget := newMongoWriteBudget(8)
+					server.filterWriteAfterMaterializerHook = func() { budget.deadline = time.Now().Add(-time.Second) }
+					err := tc.run(budget)
+					server.filterWriteAfterMaterializerHook = nil
+					if err == nil || !strings.Contains(err.Error(), "execution-time budget") {
+						t.Fatalf("after-materializer deadline error=%v", err)
+					}
+					key, err := encodePrimaryKey(bson.RawValue{Type: bson.TypeString, Value: bsoncore.AppendString(nil, "u1")})
+					if err != nil {
+						t.Fatal(err)
+					}
+					stored, err := col.Get(key)
+					if err != nil || stored == nil {
+						t.Fatalf("post-materializer deadline changed state stored=%v err=%v", stored, err)
+					}
+					materializer, err := storedDocumentMaterializerForCollection(col)
+					if err != nil {
+						t.Fatal(err)
+					}
+					raw, err := storedDocumentToBSON(col, materializer, stored)
+					_ = materializer.Close()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !bson.Raw(raw).Lookup("seen").IsZero() {
+						t.Fatalf("post-materializer deadline updated document: %s", raw)
+					}
+				})
 			}
 		})
 	}

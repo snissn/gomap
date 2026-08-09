@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -79,13 +80,6 @@ func TestFindAndModifyOversizedExactResponseRejectsBeforeMutation(t *testing.T) 
 	// large document already exists. The default findAndModify image is too
 	// large, but the non-idempotent $inc must not publish before that is known.
 	server.MaxMessageLength = 512
-	item, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := server.preflightFindAndModifyExactResponse(col, item, false, false, compiledProjection{}); err == nil {
-		t.Fatal("preflight accepted oversized before-image")
-	}
 	overflow := serveCommand(t, server, 2, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "$db", Value: "app"}})
 	assertCommandError(t, overflow, "BadValue")
 	msg, err := wire.AppendMsgMessage(nil, 1, 0, 0, overflow)
@@ -129,7 +123,11 @@ func TestFindAndModifyOversizedExactResponseRejectsBeforeMutation(t *testing.T) 
 	if got, ok := bson.Raw(retry).Lookup("value").Document().Lookup("n").Int32OK(); !ok || got != 0 {
 		t.Fatalf("retry before-image n=%d ok=%v want 0", got, ok)
 	}
-	stored, err := col.Get(item.key)
+	key, _, err := prepareInsertDocument(mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}), collections.DocumentFormatBSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := col.Get(key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,6 +150,19 @@ func TestFindAndModifyOverflowPreflightDoesNotPublishCommandWAL(t *testing.T) {
 	defer standalone.Close()
 	server := standalone.Server
 	assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "n", Value: int32(0)}, {Key: "payload", Value: strings.Repeat("x", 1024)}}}}, {Key: "$db", Value: "app"}}))
+	// Opening an existing collection is itself a command-WAL catalog operation.
+	// Do that normal cache admission before recording the rejected FAM baseline;
+	// the assertion below is specifically about FAM response admission.
+	if _, err := server.openCollectionForMutation("app.users"); err != nil {
+		t.Fatal(err)
+	}
+	col, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatal(err)
+	}
 	beforeState := standalone.Backend.State()
 	beforeFrames := standalone.Backend.Stats()["treedb.command_wal.frames"]
 	server.MaxMessageLength = 512
@@ -168,12 +179,11 @@ func TestFindAndModifyOverflowPreflightDoesNotPublishCommandWAL(t *testing.T) {
 	server.MaxMessageLength = wire.DefaultMaxMessageLength
 	assertOK(t, serveCommand(t, server, 3, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "$db", Value: "app"}}))
 	afterSuccess := standalone.Backend.State()
-	// This profile's accepted standalone mutation has its collection update and
-	// one final durable command boundary. The important invariant is that the
-	// rejected preflight above contributes neither frame nor root work; the
-	// successful attempt contributes exactly the normal two-frame path.
-	if afterSuccess.AppliedCommandLSN != beforeState.AppliedCommandLSN+2 {
-		t.Fatalf("successful exact findAndModify AppliedCommandLSN=%d want %d", afterSuccess.AppliedCommandLSN, beforeState.AppliedCommandLSN+2)
+	// With the seed flushed before the baseline, one accepted exact FAM adds
+	// exactly its real command boundary. The rejected callback admission above
+	// contributes neither a collection frame nor root work.
+	if afterSuccess.AppliedCommandLSN != beforeState.AppliedCommandLSN+1 {
+		t.Fatalf("successful exact findAndModify AppliedCommandLSN=%d want %d", afterSuccess.AppliedCommandLSN, beforeState.AppliedCommandLSN+1)
 	}
 }
 
@@ -264,6 +274,94 @@ func TestFindAndModifyNonExactOversizeOutcomeIsUncertainAfterPublication(t *test
 	}
 	if got, ok := bson.Raw(stored).Lookup("n").Int32OK(); !ok || got != 1 {
 		t.Fatalf("uncertain response did not publish n=%d ok=%v", got, ok)
+	}
+}
+
+func TestFindAndModifyExactAdmissionUsesActualConcurrentImage(t *testing.T) {
+	for _, newImage := range []bool{false, true} {
+		t.Run(fmt.Sprintf("new=%t", newImage), func(t *testing.T) {
+			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			s := NewServer()
+			s.Collections = collections.NewCollectionManager(db)
+			s.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+			assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "n", Value: int32(0)}}}}, {Key: "$db", Value: "app"}}))
+			col, err := s.Collections.OpenCollection("app.users")
+			if err != nil {
+				t.Fatal(err)
+			}
+			key, _, err := prepareInsertDocument(mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}), collections.DocumentFormatBSON)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.MaxMessageLength = 512
+			var once atomic.Bool
+			s.findAndModifyExactAdmissionHook = func() {
+				if !once.CompareAndSwap(false, true) {
+					return
+				}
+				large := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "n", Value: int32(0)}, {Key: "payload", Value: strings.Repeat("x", 1024)}})
+				_, _, err := col.Update(key, func([]byte) ([]byte, bool, error) { return large, true, nil })
+				if err != nil {
+					t.Errorf("concurrent image update: %v", err)
+				}
+			}
+			response := serveCommand(t, s, 2, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "new", Value: newImage}, {Key: "$db", Value: "app"}})
+			assertCommandError(t, response, "BadValue")
+			stored, err := col.Get(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n, ok := bson.Raw(stored).Lookup("n").Int32OK(); !ok || n != 0 {
+				t.Fatalf("oversized concurrent image applied FAM n=%d ok=%v", n, ok)
+			}
+		})
+	}
+}
+
+func TestFindAndModifyUpsertConflictAdmitsActualExistingImage(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	s.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	if _, err := s.Collections.CreateCollection(&collections.CollectionMeta{Name: "app.users", Options: s.DefaultCollectionOptions}); err != nil {
+		t.Fatal(err)
+	}
+	col, err := s.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _, err := prepareInsertDocument(mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}), collections.DocumentFormatBSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.MaxMessageLength = 512
+	s.findAndModifyBeforeUpsertInsertHook = func() {
+		large := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "n", Value: int32(0)}, {Key: "payload", Value: strings.Repeat("x", 1024)}})
+		_, stored, err := prepareInsertDocument(large, collections.DocumentFormatBSON)
+		if err != nil {
+			t.Errorf("prepare: %v", err)
+			return
+		}
+		if _, err := col.Insert(key, stored); err != nil {
+			t.Errorf("concurrent insert: %v", err)
+		}
+	}
+	response := serveCommand(t, s, 1, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "upsert", Value: true}, {Key: "new", Value: true}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, response, "BadValue")
+	stored, err := col.Get(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, ok := bson.Raw(stored).Lookup("n").Int32OK(); !ok || n != 0 {
+		t.Fatalf("conflict retry applied FAM n=%d ok=%v", n, ok)
 	}
 }
 
@@ -418,7 +516,7 @@ func TestFindAndModifyInsertConflictAppliesToExistingDocument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := findAndModifyAfterInsertConflict(collection, item, false, compiledProjection{})
+	response, err := server.findAndModifyAfterInsertConflict(collection, item, false, compiledProjection{})
 	if err != nil {
 		t.Fatal(err)
 	}
