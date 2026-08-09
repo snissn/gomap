@@ -258,6 +258,37 @@ func TestMongoExplainSameIndexProbeAccountingAndWinnerStage(t *testing.T) {
 	}
 }
 
+func TestMongoExplainProbeCandidatesUseExecutableEligibility(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	incompatibleRange := serveCommand(t, server, 106, bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$in", Value: bson.A{int64(36)}}, {Key: "$gt", Value: 36.5}}}}}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, incompatibleRange)
+	if got := bson.Raw(incompatibleRange).Lookup("queryPlanner").Document().Lookup("winningPlan").Document().Lookup("stage").StringValue(); got != "secondary_equality_lookup" {
+		t.Fatalf("incompatible range stage=%q want equality", got)
+	}
+	incompatibleRange = serveCommand(t, server, 106, bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$in", Value: bson.A{int64(36)}}, {Key: "$gt", Value: 36.5}}}}}}}, {Key: "verbosity", Value: "executionStats"}, {Key: "$db", Value: "app"}})
+	assertOK(t, incompatibleRange)
+	if got := bson.Raw(incompatibleRange).Lookup("queryPlanner").Document().Lookup("winningPlan").Document().Lookup("stage").StringValue(); got != "secondary_equality_lookup" {
+		t.Fatalf("incompatible range execution stage=%q want equality", got)
+	}
+	assertOK(t, serveCommand(t, server, 106, bson.D{{Key: "createIndexes", Value: "users"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "age", Value: int32(1)}}}, {Key: "name", Value: "age_second"}, {Key: "treedbValueType", Value: "int64"}}}}, {Key: "$db", Value: "app"}}))
+	command := bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(36)}}}}}}}, {Key: "$db", Value: "app"}}
+	planner := serveCommand(t, server, 106, command)
+	assertOK(t, planner)
+	if got := bson.Raw(planner).Lookup("queryPlanner").Document().Lookup("winningPlan").Document().Lookup("stage").StringValue(); got != "adaptive_candidate_selection" {
+		t.Fatalf("duplicate range planner stage=%q want adaptive", got)
+	}
+	command = append(command, bson.E{Key: "verbosity", Value: "executionStats"})
+	stats := serveCommand(t, server, 106, command)
+	assertOK(t, stats)
+	winning := bson.Raw(stats).Lookup("queryPlanner").Document().Lookup("winningPlan").Document()
+	if got := winning.Lookup("stage").StringValue(); got != "secondary_range_lookup" {
+		t.Fatalf("duplicate range winner=%q want range", got)
+	}
+	if residual, ok := winning.Lookup("residualFilter").BooleanOK(); !ok || residual {
+		t.Fatalf("duplicate range residual=%v ok=%v want false", residual, ok)
+	}
+}
+
 func TestServerRejectsExplainOPMsgFeatures(t *testing.T) {
 	command := mustDocument(t, bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}}}, {Key: "$db", Value: "app"}})
 	for _, tc := range []struct {

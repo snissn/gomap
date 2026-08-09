@@ -67,6 +67,75 @@ type findPlannerSelection struct {
 	indexField string
 }
 
+type findIndexProbe struct {
+	idx   collections.IndexDefinition
+	stage string
+}
+
+// findIndexProbes is the shared eligibility vocabulary for explain and the
+// indexed executor: each entry is a concrete equality or range probe that can
+// actually be issued for this index/value type combination.
+func findIndexProbes(meta collections.CollectionMeta, plan findPlan) []findIndexProbe {
+	if len(plan.orBranches) != 0 {
+		return nil
+	}
+	probes := make([]findIndexProbe, 0)
+	for _, idx := range meta.Indexes {
+		probes = append(probes, findIndexProbesForIndex(plan, idx)...)
+	}
+	return probes
+}
+
+// findIndexProbesForIndex identifies the probe paths the executor can issue
+// for one index. Keep this stricter than a generic bounded scan: a lossy
+// numeric coercion must not be presented as an indexed range probe.
+func findIndexProbesForIndex(plan findPlan, idx collections.IndexDefinition) []findIndexProbe {
+	if len(plan.orBranches) != 0 {
+		return nil
+	}
+	probes := make([]findIndexProbe, 0, 2)
+	for _, pred := range plan.predicates {
+		if pred.field != idx.Field || predicateContainsNull(pred) || (pred.op != findPredicateEq && pred.op != findPredicateIn) {
+			continue
+		}
+		// Equality probes retain the executor's existing empty-result behavior
+		// for an incompatible scalar (for example 37.5 against int64). They
+		// are still a deterministic candidate path, unlike a lossy range.
+		probes = append(probes, findIndexProbe{idx: idx, stage: "secondary_equality_lookup"})
+		break
+	}
+	if indexedRangeProbeEligible(plan.predicates, idx) {
+		probes = append(probes, findIndexProbe{idx: idx, stage: "secondary_range_lookup"})
+	}
+	return probes
+}
+
+func indexedRangeProbeEligible(predicates []findPredicate, idx collections.IndexDefinition) bool {
+	found := false
+	for _, pred := range predicates {
+		if pred.field != idx.Field || !isRangePredicate(pred.op) {
+			continue
+		}
+		found = true
+		if len(pred.values) != 1 || rawValueIsNaN(pred.values[0]) {
+			return false
+		}
+		if _, ok := indexScalarForBSONValue(pred.values[0], idx.ValueType); !ok {
+			// Fractional numeric comparisons cannot be represented by an int64
+			// index and must fall back to filtering; other disjoint BSON types
+			// retain the executor's deterministic empty range result.
+			if unindexedRangePredicateShouldScan(pred.values[0], idx.ValueType) {
+				return false
+			}
+		}
+	}
+	if !found {
+		return false
+	}
+	_, ok, _, err := indexRangeOptionsForPredicates(predicates, idx)
+	return err == nil && ok
+}
+
 func selectFindPlannerSelection(meta collections.CollectionMeta, plan findPlan) findPlannerSelection {
 	if len(plan.orBranches) != 0 {
 		return findPlannerSelection{stage: "bounded_scan"}
@@ -74,8 +143,8 @@ func selectFindPlannerSelection(meta collections.CollectionMeta, plan findPlan) 
 	if _, ok := primaryCandidatePredicate(plan.predicates); ok {
 		return findPlannerSelection{stage: "primary_lookup"}
 	}
-	if usable := usableFindIndexes(meta, plan); len(usable) != 0 {
-		return findPlannerSelection{stage: indexedFindStage(plan, usable[0]), indexName: usable[0].Name, indexField: usable[0].Field}
+	if probes := findIndexProbes(meta, plan); len(probes) != 0 {
+		return findPlannerSelection{stage: probes[0].stage, indexName: probes[0].idx.Name, indexField: probes[0].idx.Field}
 	}
 	return findPlannerSelection{stage: "bounded_scan"}
 }
@@ -147,11 +216,13 @@ func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error
 }
 
 func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findResultSet, error) {
-	// Keep executionStats and queryPlanner on the same metadata-only selector.
-	// The executor may refine this to its actual winner after bounded candidate
-	// work, which is then recorded below.
-	selection := selectFindPlannerSelection(col.MetaView(), plan)
-	plan.recordWinner(selection.stage, selection.indexName)
+	// Selection metadata is diagnostic-only. Avoid allocating probe descriptors
+	// on the ordinary find path; executionStats receives the same selector and
+	// may later refine it to the materialized winner.
+	if plan.stats != nil {
+		selection := selectFindPlannerSelection(col.MetaView(), plan)
+		plan.recordWinner(selection.stage, selection.indexName)
+	}
 	materializer, err := storedDocumentMaterializerForCollection(col)
 	if err != nil {
 		return findResultSet{}, err
@@ -401,6 +472,75 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, materialize
 }
 
 func (s *Server) findUnsortedScanDocuments(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan) ([]wire.Document, bool, error) {
+	if plan.stats == nil {
+		return s.findUnsortedScanDocumentsWithoutStats(col, materializer, plan)
+	}
+	return s.findUnsortedScanDocumentsWithStats(col, materializer, plan)
+}
+
+// findUnsortedScanDocumentsWithoutStats is deliberately separate from explain
+// accounting. Ordinary find requests must not branch on nil diagnostics for
+// every scanned record.
+func (s *Server) findUnsortedScanDocumentsWithoutStats(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan) ([]wire.Document, bool, error) {
+	if plan.sort.field != "" || (len(plan.orBranches) == 0 && findPlanHasDirectCandidate(col.MetaView(), plan.predicates)) {
+		return nil, false, nil
+	}
+	maxDocuments := s.maxFindScanDocuments()
+	docs := make([]wire.Document, 0)
+	matched := 0
+	truncated, err := col.ScanDocumentsFunc(maxDocuments, func(record collections.DocumentRecord) (bool, error) {
+		var match, ok bool
+		var err error
+		if len(plan.orBranches) == 0 {
+			match, ok, err = storedDocumentMatchesPredicatesForCollection(col, record.Document, plan.predicates)
+			if err != nil {
+				return false, err
+			}
+			if ok && !match {
+				return true, nil
+			}
+		}
+		var doc wire.Document
+		if !ok || len(plan.orBranches) > 0 {
+			doc, err = storedDocumentToBSON(col, materializer, record.Document)
+			if err != nil {
+				return false, err
+			}
+			match, err = documentMatchesPlan(doc, plan)
+			if err != nil {
+				return false, err
+			}
+		}
+		if !match {
+			return true, nil
+		}
+		if matched < int(plan.skip) {
+			matched++
+			return true, nil
+		}
+		if ok && len(plan.orBranches) == 0 {
+			doc, err = storedDocumentToBSON(col, materializer, record.Document)
+			if err != nil {
+				return false, err
+			}
+		}
+		docs = append(docs, doc)
+		matched++
+		if plan.limit > 0 && len(docs) >= int(plan.limit) {
+			return false, nil
+		}
+		return true, nil
+	})
+	if err != nil {
+		return nil, true, err
+	}
+	if truncated {
+		return nil, true, fmt.Errorf("%w: Mongo gateway find requires a bounded scan and exceeded %d documents", errMongoFindScanCapExceeded, maxDocuments)
+	}
+	return docs, true, nil
+}
+
+func (s *Server) findUnsortedScanDocumentsWithStats(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan) ([]wire.Document, bool, error) {
 	if plan.sort.field != "" || (len(plan.orBranches) == 0 && findPlanHasDirectCandidate(col.MetaView(), plan.predicates)) {
 		return nil, false, nil
 	}
@@ -949,6 +1089,11 @@ func documentsForIndexedFieldPredicates(col *collections.Collection, materialize
 			bestSet = true
 		}
 	}
+	probes := findIndexProbesForIndex(plan, idx)
+	hasRange := false
+	for _, probe := range probes {
+		hasRange = hasRange || probe.stage == "secondary_range_lookup"
+	}
 	for _, pred := range plan.predicates {
 		if pred.field != idx.Field || (pred.op != findPredicateEq && pred.op != findPredicateIn) {
 			continue
@@ -965,6 +1110,9 @@ func documentsForIndexedFieldPredicates(col *collections.Collection, materialize
 			return nil, "", false, work, err
 		}
 		consider(docs, "secondary_equality_lookup", len(docs))
+	}
+	if !hasRange {
+		return best, bestStage, bestSet, work, nil
 	}
 	opts, ok, empty, err := indexRangeOptionsForPredicates(plan.predicates, idx)
 	if err != nil || !ok {

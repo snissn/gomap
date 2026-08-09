@@ -419,7 +419,14 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 		// but its final winner is reported from that shared execution path.
 		winning[0].Value = stats.stage
 		if stats.stage != selection.stage || stats.indexName != selection.indexName {
-			winning = bson.D{{Key: "stage", Value: stats.stage}, {Key: "residualFilter", Value: findPlanHasResidualFilter(plan, findPlannerSelection{stage: stats.stage, indexName: stats.indexName, indexField: selection.indexField})}}
+			actual := findPlannerSelection{stage: stats.stage, indexName: stats.indexName, indexField: selection.indexField}
+			for _, idx := range col.MetaView().Indexes {
+				if idx.Name == stats.indexName {
+					actual.indexField = idx.Field
+					break
+				}
+			}
+			winning = bson.D{{Key: "stage", Value: stats.stage}, {Key: "residualFilter", Value: findPlanHasResidualFilter(plan, actual)}}
 			if stats.indexName != "" {
 				winning = append(winning, bson.E{Key: "indexName", Value: stats.indexName})
 			}
@@ -457,25 +464,6 @@ func explainPlannerSelection(col *collections.Collection, plan findPlan) findPla
 	return selectFindPlannerSelection(col.MetaView(), plan)
 }
 
-func explainIndexProbeStages(plan findPlan, idx collections.IndexDefinition) []string {
-	equality, ranges := false, false
-	for _, pred := range plan.predicates {
-		if pred.field != idx.Field {
-			continue
-		}
-		equality = equality || pred.op == findPredicateEq || pred.op == findPredicateIn
-		ranges = ranges || isRangePredicate(pred.op)
-	}
-	out := make([]string, 0, 2)
-	if equality {
-		out = append(out, "secondary_equality_lookup")
-	}
-	if ranges {
-		out = append(out, "secondary_range_lookup")
-	}
-	return out
-}
-
 func findPlanHasResidualFilter(plan findPlan, selection findPlannerSelection) bool {
 	if len(plan.orBranches) != 0 || selection.stage == "bounded_scan" || selection.stage == "adaptive_candidate_selection" {
 		return len(plan.predicates) != 0 || len(plan.orBranches) != 0
@@ -485,6 +473,15 @@ func findPlanHasResidualFilter(plan findPlan, selection findPlannerSelection) bo
 	}
 	for _, pred := range plan.predicates {
 		if pred.field != selection.indexField {
+			return true
+		}
+		// A concrete probe only covers predicates of its own kind. For
+		// example, choosing a range probe still leaves an equality/$in
+		// predicate on that field to be filtered after materialization.
+		if selection.stage == "secondary_equality_lookup" && isRangePredicate(pred.op) {
+			return true
+		}
+		if selection.stage == "secondary_range_lookup" && (pred.op == findPredicateEq || pred.op == findPredicateIn) {
 			return true
 		}
 	}
@@ -499,10 +496,8 @@ func explainCandidatePlans(col *collections.Collection, plan findPlan) bson.A {
 	if _, ok := primaryCandidatePredicate(plan.predicates); ok {
 		out = append(out, bson.D{{Key: "stage", Value: "primary_lookup"}})
 	}
-	for _, idx := range usableFindIndexes(col.MetaView(), plan) {
-		for _, stage := range explainIndexProbeStages(plan, idx) {
-			out = append(out, bson.D{{Key: "stage", Value: stage}, {Key: "indexName", Value: idx.Name}, {Key: "field", Value: idx.Field}})
-		}
+	for _, probe := range findIndexProbes(col.MetaView(), plan) {
+		out = append(out, bson.D{{Key: "stage", Value: probe.stage}, {Key: "indexName", Value: probe.idx.Name}, {Key: "field", Value: probe.idx.Field}})
 	}
 	return out
 }
@@ -521,8 +516,13 @@ func explainUsableIndexes(col *collections.Collection, plan findPlan) bson.A {
 		return bson.A{}
 	}
 	out := bson.A{}
-	for _, idx := range usableFindIndexes(col.MetaView(), plan) {
-		out = append(out, bson.D{{Key: "name", Value: idx.Name}, {Key: "field", Value: idx.Field}, {Key: "kind", Value: indexedFindStage(plan, idx)}})
+	seen := make(map[string]struct{})
+	for _, probe := range findIndexProbes(col.MetaView(), plan) {
+		if _, ok := seen[probe.idx.Name]; ok {
+			continue
+		}
+		seen[probe.idx.Name] = struct{}{}
+		out = append(out, bson.D{{Key: "name", Value: probe.idx.Name}, {Key: "field", Value: probe.idx.Field}, {Key: "kind", Value: probe.stage}})
 	}
 	return out
 }
