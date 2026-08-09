@@ -34,6 +34,16 @@ func BenchmarkMongoUpdateManyCommandBatchSizes(b *testing.B) {
 	}
 }
 
+// BenchmarkMongoUpdateCommandBatchSizes measures the BulkWrite-style exact-id
+// shape separately from UpdateMany: one update command containing N operator
+// updates versus N single-update commands.
+func BenchmarkMongoUpdateCommandBatchSizes(b *testing.B) {
+	for _, size := range []int{1, 10, 100, 1000} {
+		b.Run(fmt.Sprintf("batch_%d", size), func(b *testing.B) { benchmarkMongoExactUpdateShape(b, size, true) })
+		b.Run(fmt.Sprintf("singles_%d", size), func(b *testing.B) { benchmarkMongoExactUpdateShape(b, size, false) })
+	}
+}
+
 func BenchmarkMongoDeleteManyCommandBatchSizes(b *testing.B) {
 	for _, size := range []int{1, 10, 100, 1000} {
 		b.Run(fmt.Sprintf("many_%d", size), func(b *testing.B) { benchmarkMongoFilterWriteShape(b, size, true, true) })
@@ -110,6 +120,52 @@ func benchmarkMongoFilterWriteShape(b *testing.B, batchSize int, deleting, batch
 		response := serveCommand(b, s, int32(i+2), command)
 		if ok, okOK := bson.Raw(response).Lookup("ok").DoubleOK(); !okOK || ok != 1 {
 			b.Fatalf("filter-write response=%s", response)
+		}
+	}
+	elapsed := time.Since(started)
+	b.StopTimer()
+	docs := b.N * batchSize
+	b.ReportMetric(float64(elapsed.Nanoseconds())/float64(docs), "ns/doc")
+	b.ReportMetric(float64(docs)*float64(time.Second)/float64(elapsed), "docs/s")
+	b.ReportMetric(float64(batchSize), "docs/op")
+}
+
+func benchmarkMongoExactUpdateShape(b *testing.B, batchSize int, batched bool) {
+	db, err := backenddb.Open(backenddb.Options{Dir: b.TempDir()})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	seed := make(bson.A, 0, b.N*batchSize)
+	for op := 0; op < b.N; op++ {
+		for item := 0; item < batchSize; item++ {
+			seed = append(seed, bson.D{{Key: "_id", Value: fmt.Sprintf("exact-%d-%d", op, item)}, {Key: "seen", Value: false}})
+		}
+	}
+	assertOK(b, serveCommand(b, s, 1, bson.D{{Key: "insert", Value: "bench"}, {Key: "documents", Value: seed}, {Key: "$db", Value: "app"}}))
+	commands := make([]bson.D, 0, b.N)
+	for op := 0; op < b.N; op++ {
+		if batched {
+			updates := make(bson.A, 0, batchSize)
+			for item := 0; item < batchSize; item++ {
+				updates = append(updates, bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: fmt.Sprintf("exact-%d-%d", op, item)}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "seen", Value: true}}}}}})
+			}
+			commands = append(commands, bson.D{{Key: "update", Value: "bench"}, {Key: "updates", Value: updates}, {Key: "$db", Value: "app"}})
+			continue
+		}
+		for item := 0; item < batchSize; item++ {
+			commands = append(commands, bson.D{{Key: "update", Value: "bench"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: fmt.Sprintf("exact-%d-%d", op, item)}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "seen", Value: true}}}}}}}}, {Key: "$db", Value: "app"}})
+		}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	started := time.Now()
+	for i, command := range commands {
+		response := serveCommand(b, s, int32(i+2), command)
+		if ok, yes := bson.Raw(response).Lookup("ok").DoubleOK(); !yes || ok != 1 {
+			b.Fatalf("update response=%s", response)
 		}
 	}
 	elapsed := time.Since(started)
