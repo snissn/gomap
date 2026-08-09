@@ -2577,6 +2577,23 @@ func TestClusterSubmitterDeleteRoutesCommandEntry(t *testing.T) {
 	assertMongoClusterCallAckPolicy(t, calls[0], iwire.AckVisible)
 }
 
+func TestClusterSubmitterDeleteRequiresLimitBeforeSubmit(t *testing.T) {
+	submitter := &mongoClusterFakeSubmitter{}
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	setMongoClusterTestSubmitter(server, submitter, 9)
+
+	response := serveCommand(t, server, 325806, bson.D{
+		{Key: "delete", Value: "users"},
+		{Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "FailedToParse")
+	if calls := submitter.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("missing limit submitted %d cluster mutations", len(calls))
+	}
+}
+
 func TestClusterSubmitterDeleteDeduplicatesDuplicateIDs(t *testing.T) {
 	submitter := &mongoClusterFakeSubmitter{}
 	server := NewServer()

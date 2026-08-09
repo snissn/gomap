@@ -74,6 +74,28 @@ func TestMongoWriteBudgetReservesBoundedResponseEnvelope(t *testing.T) {
 	}
 }
 
+func TestMongoInsertMinimumResponseEnvelopeRetainsTerminalError(t *testing.T) {
+	// At the minimum accepted envelope there is no ordinary error reservation
+	// left, but a pre-mutation runtime rejection must still be observable.
+	budget := newMongoWriteBudget(0)
+	budget.targetsRemaining = 0
+	budget.responseBytesRemaining = 0
+	response, err := (&Server{}).runMongoInsertCommand("app.users", nil, collections.DocumentFormatBSON, [][]byte{{1}, {2}}, [][]byte{{1}, {2}}, true, budget)
+	if err != nil {
+		t.Fatalf("minimum-envelope insert: %v", err)
+	}
+	assertOK(t, response)
+	assertInt32(t, response, "n", 0)
+	errs, ok := bson.Raw(response).Lookup("writeErrors").ArrayOK()
+	values, valuesErr := errs.Values()
+	if !ok || valuesErr != nil || len(values) != 1 {
+		t.Fatalf("minimum-envelope writeErrors=%s", response)
+	}
+	if index, indexOK := values[0].Document().Lookup("index").Int32OK(); !indexOK || index != 0 {
+		t.Fatalf("minimum-envelope error index=%d ok=%v", index, indexOK)
+	}
+}
+
 func TestMongoMultiWriteUpdateManyDeleteManyAndParseBeforeExecute(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

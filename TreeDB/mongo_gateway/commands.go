@@ -135,7 +135,14 @@ func (s *Server) runMongoInsertCommand(name string, col *collections.Collection,
 			if reserveErr := budget.reserveError(); reserveErr == nil {
 				return marshalInsertResponseWithWriteErrors(0, []mongoWriteError{{index: 0, err: err}})
 			}
-			return marshalInsertResponseWithWriteErrors(0, nil)
+			// ensureMinimumResponse reserves this terminal slot before any
+			// mutation is admitted. Never turn a runtime rejection into a
+			// successful-looking n:0 response merely because ordinary error
+			// capacity has already been exhausted.
+			if reserveErr := budget.reserveTerminalError(); reserveErr != nil {
+				return nil, reserveErr
+			}
+			return marshalInsertResponseWithWriteErrors(0, []mongoWriteError{{index: 0, err: err}})
 		}
 		if _, batchErr := col.InsertBatchValidatedBSON(ids, stored); batchErr == nil {
 			return marshalInsertResponseWithWriteErrors(int32(len(ids)), nil)
@@ -155,7 +162,10 @@ func (s *Server) runMongoInsertCommand(name string, col *collections.Collection,
 			if reserveErr := budget.reserveError(); reserveErr == nil {
 				writeErrors = append(writeErrors, mongoWriteError{index: i, err: err})
 			} else {
-				writeErrors = append(writeErrors, mongoWriteError{index: i, err: reserveErr})
+				if terminalErr := budget.reserveTerminalError(); terminalErr != nil {
+					return nil, terminalErr
+				}
+				writeErrors = append(writeErrors, mongoWriteError{index: i, err: err})
 			}
 			break
 		}
@@ -181,6 +191,9 @@ func (s *Server) runMongoInsertCommand(name string, col *collections.Collection,
 			return mongoCommitAmbiguousCommandError(err)
 		}
 		if reserveErr := budget.reserveError(); reserveErr != nil {
+			if terminalErr := budget.reserveTerminalError(); terminalErr != nil {
+				return nil, terminalErr
+			}
 			writeErrors = append(writeErrors, mongoWriteError{index: i, err: reserveErr})
 			break
 		}
@@ -1213,6 +1226,24 @@ func (b *mongoWriteBudget) reserveError() error {
 	return nil
 }
 
+// reserveTerminalError consumes the response slot held back by
+// ensureMinimumResponse. It is used only when execution has already stopped:
+// the final indexed error must remain observable even at the minimum accepted
+// response envelope.
+func (b *mongoWriteBudget) reserveTerminalError() error {
+	if b == nil {
+		return nil
+	}
+	if !b.minimumResponseFits {
+		return errors.New("Mongo gateway maxMessageSizeBytes is too small for a multi-write response")
+	}
+	if b.errorsRemaining < 0 {
+		return errors.New("Mongo gateway multi-write command terminal write-error slot is already consumed")
+	}
+	b.errorsRemaining = -1
+	return nil
+}
+
 func (b *mongoWriteBudget) ensureMinimumResponse() error {
 	if b != nil && !b.minimumResponseFits {
 		return errors.New("Mongo gateway maxMessageSizeBytes is too small for a multi-write response")
@@ -1260,6 +1291,9 @@ func (s *Server) runMongoUpdateCommand(name string, col *collections.Collection,
 			matched += matchedOne
 			modified += modifiedOne
 			if reserveErr := update.budget.reserveError(); reserveErr != nil {
+				if terminalErr := update.budget.reserveTerminalError(); terminalErr != nil {
+					return nil, terminalErr
+				}
 				writeErrors = append(writeErrors, mongoWriteError{index: update.index, err: reserveErr})
 				return marshalUpdateResponseWithWriteErrors(matched, modified, upserted, writeErrors)
 			}
@@ -2369,6 +2403,9 @@ func (s *Server) deleteResponse(ctx context.Context, command wire.Document, sequ
 			}
 			deleted += count
 			if reserveErr := item.budget.reserveError(); reserveErr != nil {
+				if terminalErr := item.budget.reserveTerminalError(); terminalErr != nil {
+					return nil, terminalErr
+				}
 				writeErrors = append(writeErrors, mongoWriteError{index: item.index, err: reserveErr})
 				return marshalDeleteResponseWithWriteErrors(deleted, writeErrors)
 			}
