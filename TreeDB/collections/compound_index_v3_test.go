@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"testing"
 
@@ -197,6 +198,81 @@ func TestFindByCompoundIndexRangeHonorsDirectionsBoundsAndTieIDs(t *testing.T) {
 		t.Fatalf("range scan err=%v truncated=%v", err, truncated)
 	}
 	assertIDs(got, "b", "e", "c")
+}
+
+func TestCompoundReverseScanPersistsOverlayTombstonesAcrossReopen(t *testing.T) {
+	dir := t.TempDir()
+	db, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr := NewCollectionManager(db)
+	meta := &CollectionMeta{Name: "events", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON, BufferedIndexedOverlayRoots: true, BufferedIndexedWriteMaxDocuments: 1, BufferedIndexedWriteMaxRootRuns: 1, DisableBufferedIndexedAsyncFlush: true}, Indexes: []IndexDefinition{{
+		Name: "tenant_created", Components: []IndexComponent{{Field: "tenant", Direction: IndexDirectionAscending}, {Field: "createdAt", Direction: IndexDirectionDescending}}, ValueType: IndexValueBSONOrderedV2,
+	}}}
+	if _, err := mgr.CreateCollection(meta); err != nil {
+		t.Fatal(err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	insert := func(id string, created int32) {
+		t.Helper()
+		doc, err := bson.Marshal(bson.D{{Key: "_id", Value: id}, {Key: "tenant", Value: "acme"}, {Key: "createdAt", Value: created}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := col.Insert([]byte(id), doc); err != nil {
+			t.Fatal(err)
+		}
+		if err := col.Flush(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert("a", 1)
+	insert("b", 3)
+	insert("c", 2)
+	if _, err := col.CompactRootOverlays(context.Background()); err != nil {
+		t.Fatalf("compact persisted insert overlays: %v", err)
+	}
+	if deleted, err := col.DeleteDocument([]byte("c")); err != nil || !deleted {
+		t.Fatalf("delete c deleted=%v err=%v", deleted, err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	stringRaw := bson.RawValue{Type: bson.TypeString, Value: bsoncoreAppendString("acme")}
+	assertReverse := func(collection *Collection) {
+		t.Helper()
+		ids, truncated, err := collection.FindByCompoundIndexRange("tenant_created", CompoundIndexRangeOptions{Prefix: []bson.RawValue{stringRaw}, Desc: true, Limit: 4})
+		if err != nil || truncated {
+			t.Fatalf("reverse scan ids=%q truncated=%v err=%v", ids, truncated, err)
+		}
+		want := []string{"a", "b"}
+		if len(ids) != len(want) {
+			t.Fatalf("reverse ids=%q want %q", ids, want)
+		}
+		for i := range want {
+			if string(ids[i]) != want[i] {
+				t.Fatalf("reverse ids=%q want %q", ids, want)
+			}
+		}
+	}
+	assertReverse(col)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	col, err = NewCollectionManager(db).OpenCollection("events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertReverse(col)
 }
 
 func TestBSONCompoundDescendingEntryFailsClosedWhenCorrupt(t *testing.T) {
