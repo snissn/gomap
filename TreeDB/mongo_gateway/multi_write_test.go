@@ -143,6 +143,51 @@ func TestMongoUpdateUpsertMinimumResponseEnvelopeRejectsBeforeMissingCollectionC
 	}
 }
 
+func TestMongoUpdateUpsertMissingCollectionResponseAdmissionContinuesUnordered(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewServer()
+	s.Collections = collections.NewCollectionManager(db)
+	largeID := strings.Repeat("x", 2*mongoWriteErrorResponseReserveBytes)
+	smallID := bson.RawValue{Type: bson.TypeString, Value: bsoncore.AppendString(nil, "small")}
+	smallBytes, err := mongoUpdateUpsertResponseBytes(mongoUpdateUpserted{index: 1, id: smallID})
+	if err != nil {
+		t.Fatalf("size small upsert response: %v", err)
+	}
+	// The command has room for its terminal indexed error, one ordinary error,
+	// and the second upserted entry, but not the first large entry. Unordered
+	// processing must record index 0 then create the collection for index 1.
+	// Keep a small wire-command allowance in addition to the response budget;
+	// the large selector is present in the request but not in the result.
+	s.MaxMessageLength = int32(mongoWriteResponseMinimumBytes + 2*mongoWriteErrorResponseReserveBytes + smallBytes + 64)
+	large := bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: largeID}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "value", Value: "large"}}}}}, {Key: "upsert", Value: true}}
+	small := bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "small"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "value", Value: "small"}}}}}, {Key: "upsert", Value: true}}
+	response := serveCommand(t, s, 1, bson.D{{Key: "update", Value: "missing"}, {Key: "ordered", Value: false}, {Key: "updates", Value: bson.A{large, small}}, {Key: "$db", Value: "app"}})
+	assertOK(t, response)
+	assertInt32(t, response, "n", 1)
+	assertInt32(t, response, "nModified", 0)
+	assertIndexedWriteError(t, response, 0)
+	upserted, ok := bson.Raw(response).Lookup("upserted").ArrayOK()
+	values, valuesErr := upserted.Values()
+	if !ok || valuesErr != nil || len(values) != 1 || values[0].Document().Lookup("index").Int32() != 1 {
+		t.Fatalf("unordered missing-collection upserted=%s", response)
+	}
+	col, err := s.Collections.OpenCollection("app.missing")
+	if err != nil {
+		t.Fatalf("open admitted collection: %v", err)
+	}
+	key, err := encodePrimaryKey(smallID)
+	if err != nil {
+		t.Fatalf("encode admitted id: %v", err)
+	}
+	if stored, err := col.Get(key); err != nil || stored == nil {
+		t.Fatalf("unordered admission did not publish later upsert: stored=%v err=%v", stored, err)
+	}
+}
+
 func TestMongoUpdateUpsertResponseBudgetPreservesUpsertAndLaterError(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

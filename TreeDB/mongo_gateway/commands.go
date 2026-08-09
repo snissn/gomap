@@ -1056,13 +1056,18 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 		if err := s.validateMongoMissingCollectionFirstUpsert(parsed); err != nil {
 			return mongoUpdateWriteCommandError(err)
 		}
-		// A successful first upsert creates this collection.  Prove that its
-		// observable upserted entry can fit before opening the catalog: otherwise
-		// a response-budget rejection would leave an empty collection behind.
-		// This is admission only; mongoInsertUpsert reserves the exact bytes again
-		// immediately before publication and refunds them on a failed insert.
-		if index, err := mongoMissingCollectionFirstUpsertResponseAdmission(parsed, budget); err != nil {
-			return mongoUpdatePreMutationWriteErrorResponse(budget, index, err)
+		// A successful first upsert creates this collection. Preview response
+		// admission before opening the catalog: otherwise a response-budget
+		// rejection would leave an empty collection behind. For unordered writes,
+		// an oversized earlier upsert must not hide a later admissible upsert; the
+		// normal command loop records the same indexed errors after the collection
+		// is opened. The preview never consumes the real budget.
+		create, writeErrors, err := mongoMissingCollectionFirstUpsertResponseAdmission(parsed, budget, ordered)
+		if err != nil {
+			return nil, err
+		}
+		if !create {
+			return marshalUpdateResponseWithWriteErrors(0, 0, nil, writeErrors)
 		}
 		col, releaseColdCollection, err = s.openOrCreateCollectionForFirstWrite(name)
 		if err != nil {
@@ -1710,27 +1715,35 @@ func (s *Server) validateMongoMissingCollectionFirstUpsert(updates []mongoUpdate
 	return nil
 }
 
-// mongoMissingCollectionFirstUpsertResponseAdmission identifies the first
-// upsert that would create an otherwise missing collection and checks its
-// successful response entry before the catalog is mutated.
-func mongoMissingCollectionFirstUpsertResponseAdmission(updates []mongoUpdateItem, budget *mongoWriteBudget) (int, error) {
+// mongoMissingCollectionFirstUpsertResponseAdmission previews upsert response
+// entries until one can create an otherwise missing collection. The copied
+// budget makes this pre-catalog check side-effect free; runMongoUpdateCommand
+// later consumes the same reservations and preserves indexed ordered/unordered
+// behavior. If no upsert can be admitted, its complete bounded response is
+// returned without creating a catalog entry.
+func mongoMissingCollectionFirstUpsertResponseAdmission(updates []mongoUpdateItem, budget *mongoWriteBudget, ordered bool) (bool, []mongoWriteError, error) {
+	preview := *budget
+	writeErrors := make([]mongoWriteError, 0)
 	for _, update := range updates {
-		if update.upsert {
-			_, err := budget.upsertResponseBytesAvailable(mongoUpdateUpserted{index: update.index, id: update.id})
-			return update.index, err
+		if !update.upsert {
+			continue
+		}
+		if _, err := preview.upsertResponseBytesAvailable(mongoUpdateUpserted{index: update.index, id: update.id}); err == nil {
+			return true, nil, nil
+		} else if reserveErr := preview.reserveError(); reserveErr != nil {
+			if terminalErr := preview.reserveTerminalError(); terminalErr != nil {
+				return false, nil, terminalErr
+			}
+			writeErrors = append(writeErrors, mongoWriteError{index: update.index, err: reserveErr})
+			return false, writeErrors, nil
+		} else {
+			writeErrors = append(writeErrors, mongoWriteError{index: update.index, err: err})
+			if ordered {
+				return false, writeErrors, nil
+			}
 		}
 	}
-	return 0, nil
-}
-
-func mongoUpdatePreMutationWriteErrorResponse(budget *mongoWriteBudget, index int, err error) (wire.Document, error) {
-	if reserveErr := budget.reserveError(); reserveErr != nil {
-		if terminalErr := budget.reserveTerminalError(); terminalErr != nil {
-			return nil, terminalErr
-		}
-		err = reserveErr
-	}
-	return marshalUpdateResponseWithWriteErrors(0, 0, nil, []mongoWriteError{{index: index, err: err}})
+	return false, writeErrors, nil
 }
 
 func mongoUpsertDocument(update mongoUpdateItem) (wire.Document, error) {
