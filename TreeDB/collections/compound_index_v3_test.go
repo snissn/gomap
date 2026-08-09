@@ -80,6 +80,52 @@ func TestCompoundBSONIndexComponentsRejectArraysBeforeMutation(t *testing.T) {
 	if got, err := col.Get([]byte("bad")); err != nil || got != nil {
 		t.Fatalf("array component insert mutated primary collection: document=%q err=%v", got, err)
 	}
+	oversized, err := bson.Marshal(bson.D{{Key: "_id", Value: "oversized"}, {Key: "tenant", Value: string(bytes.Repeat([]byte{'x'}, (1<<20)+1))}, {Key: "createdAt", Value: int32(1)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.Insert([]byte("oversized"), oversized); err == nil {
+		t.Fatal("oversized compound component insert succeeded")
+	}
+	if got, err := col.Get([]byte("oversized")); err != nil || got != nil {
+		t.Fatalf("oversized component insert mutated primary collection: document=%q err=%v", got, err)
+	}
+}
+
+func TestCompoundBSONIndexExtractsDottedMissingNullAndNumericComponents(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}, Indexes: []IndexDefinition{{
+		Name: "kind_tenant", Components: []IndexComponent{{Field: "kind", Direction: IndexDirectionAscending}, {Field: "profile.tenant", Direction: IndexDirectionAscending}}, ValueType: IndexValueBSONOrderedV2,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := func(id string, tenant any, present bool) []byte {
+		fields := bson.D{{Key: "_id", Value: id}, {Key: "kind", Value: "event"}}
+		if present {
+			fields = append(fields, bson.E{Key: "profile", Value: bson.D{{Key: "tenant", Value: tenant}}})
+		}
+		raw, marshalErr := bson.Marshal(fields)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		return raw
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("d")}, [][]byte{doc("a", nil, false), doc("b", nil, true), doc("c", int32(2), true), doc("d", int64(2), true)}); err != nil {
+		t.Fatal(err)
+	}
+	ids, truncated, err := col.FindByCompoundIndexRange("kind_tenant", CompoundIndexRangeOptions{Prefix: []bson.RawValue{{Type: bson.TypeString, Value: bsoncoreAppendString("event")}}, Limit: 4})
+	if err != nil || truncated || fmt.Sprint(ids) != "[[97] [98] [99] [100]]" {
+		t.Fatalf("dotted component order ids=%q truncated=%v err=%v", ids, truncated, err)
+	}
 }
 
 func TestCompoundBSONUniqueIndexMaintainsReplaceUpdateBatchAndDelete(t *testing.T) {
