@@ -1391,7 +1391,7 @@ func BenchmarkCollectionBSONCompoundIndexComponents(b *testing.B) {
 						if _, _, err := col.FindByCompoundIndexRange("compound", collections.CompoundIndexRangeOptions{Prefix: []bson.RawValue{prefix}, Limit: 64, Desc: i%2 == 1}); err != nil {
 							b.Fatal(err)
 						}
-					} else if _, _, err := col.FindByCompoundIndexRange("compound", collections.CompoundIndexRangeOptions{Prefix: []bson.RawValue{prefix}, Lower: collections.IndexRangeBound{Value: lower, Inclusive: true}, Limit: 64, Desc: i%2 == 1}); err != nil {
+					} else if _, _, err := col.FindByCompoundIndexRange("compound", collections.CompoundIndexRangeOptions{Prefix: []bson.RawValue{prefix}, Lower: collections.IndexRangeBound{Value: lower, Inclusive: true}, Upper: collections.IndexRangeBound{Value: upper, Inclusive: true}, Limit: 64, Desc: i%2 == 1}); err != nil {
 						b.Fatal(err)
 					}
 				}

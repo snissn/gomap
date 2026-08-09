@@ -37,17 +37,17 @@ one-component row is the equivalent single-field baseline.
 
 | Components | Build ns/op; B/op; allocs/op | Mutate ns/op; B/op; allocs/op | Exact prefix ns/op; B/op; allocs/op | Prefix range/mixed direction ns/op; B/op; allocs/op | Checkpoint-after-write ns/op; B/op; allocs/op | Reopen ns/op; B/op; allocs/op |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 baseline | 22,997; 4,716; 59 | 1,046,440; 274,229; 656 | 23,635; 13,482; 151 | 23,613; 14,067; 153 | 18,496,437; 190,136; 482 | 20,179,548; 45,097,224; 2,175 |
-| 2 | 31,677; 5,096; 65 | 617,162; 278,860; 663 | 28,208; 14,008; 152 | 23,252; 13,568; 127 | 16,797,060; 191,697; 483 | 20,406,373; 45,093,871; 2,175 |
-| 3 | 28,073; 5,242; 70 | 735,158; 269,061; 667 | 16,998; 15,032; 152 | 24,248; 14,320; 127 | 16,599,390; 190,737; 482 | 17,389,578; 45,138,101; 2,188 |
-| 4 | 27,728; 5,706; 75 | 696,212; 266,409; 674 | 21,690; 15,032; 152 | 13,778; 14,320; 127 | 16,218,357; 195,352; 495 | 11,257,077; 45,142,102; 2,189 |
+| 1 baseline | 27,642; 4,716; 59 | 682,305; 278,439; 655 | 25,172; 13,482; 151 | 23,528; 14,067; 153 | 15,603,856; 190,095; 482 | 12,832,965; 45,098,826; 2,175 |
+| 2 | 20,782; 5,082; 65 | 581,787; 283,619; 663 | 18,108; 14,008; 152 | 15,028; 11,296; 102 | 16,513,203; 190,521; 482 | 13,506,843; 45,095,102; 2,173 |
+| 3 | 11,897; 5,242; 70 | 674,423; 279,054; 670 | 14,700; 15,032; 152 | 8,655; 11,808; 102 | 16,156,738; 190,410; 481 | 14,067,723; 45,135,909; 2,186 |
+| 4 | 22,830; 5,704; 75 | 777,870; 266,020; 674 | 26,772; 15,032; 152 | 17,587; 11,808; 102 | 16,754,328; 192,340; 482 | 14,068,580; 45,142,511; 2,191 |
 
 | Components | Secondary bytes/doc | Total durable bytes | Total bytes/doc | Amplification vs 1-component | Rewrite ns | GC ns | Vacuum ns |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 baseline | 16 | 4,250,023 | 4,150 | 1.000x | 16,000 | 271,334 | 25,836,500 |
-| 2 | 24 | 4,263,376 | 4,163 | 1.003x | 13,750 | 504,458 | 24,259,917 |
-| 3 | 32 | 4,276,723 | 4,176 | 1.006x | 10,500 | 252,208 | 18,409,083 |
-| 4 | 40 | 4,290,070 | 4,190 | 1.009x | 10,375 | 151,917 | 21,497,916 |
+| 1 baseline | 16 | 4,250,023 | 4,150 | 1.000x | 8,750 | 116,500 | 21,804,750 |
+| 2 | 24 | 4,263,376 | 4,163 | 1.003x | 10,584 | 153,500 | 21,472,000 |
+| 3 | 32 | 4,276,723 | 4,176 | 1.006x | 11,917 | 186,916 | 25,844,709 |
+| 4 | 40 | 4,290,070 | 4,190 | 1.009x | 10,917 | 181,042 | 23,696,083 |
 
 The maintenance probes issued `ValueLogRewriteOnline`, `ValueLogGC`,
 `VacuumIndexOnline`, and a checkpoint after each durable maintenance boundary.
@@ -63,7 +63,7 @@ The following profile selects only the 4-component prefix-range/mixed-direction
 row and runs 100,000 timed calls so fixture setup is not the dominant sample.
 
 ```sh
-PROFILE_DIR=/tmp/gomap-4063-compound-profile-20260809b
+PROFILE_DIR=/tmp/gomap-4063-compound-profile-20260809c
 GOWORK=off GOCACHE=/tmp/gomap-4063-go-cache \
   go test ./TreeDB/collections -run '^$' \
   -bench '^BenchmarkCollectionBSONCompoundIndexComponents/components_4/prefix_range_mixed_direction$' \
@@ -72,16 +72,14 @@ GOWORK=off GOCACHE=/tmp/gomap-4063-go-cache \
   -memprofile="$PROFILE_DIR/prefix-range.mem.pprof"
 ```
 
-It reported 11,625 ns/op, 14,321 B/op, and 127 allocs/op. SHA-256:
+It reported 8,888 ns/op, 11,809 B/op, and 102 allocs/op. SHA-256:
 
-- `prefix-range.cpu.pprof`: `4ab698038eeeb36ab98b75ac990ae36291a004ea0981cf4fdf49fb70b93387db`
-- `prefix-range.mem.pprof`: `6afde0c91f5a57946317db1cc1613099ef72b553bf1b50181b32e629c7ce6165`
+- `prefix-range.cpu.pprof`: `03aa6f63b2e378aeff394bae99b495f0213327323a9d5a4b1f293edef395c74a`
+- `prefix-range.mem.pprof`: `64ea90126e41964b37ad38c5562639bb4384a2fdc08c53afda808e16dea23bfa`
 
-`go tool pprof -top` sampled 1.18s CPU. The highest application-level CPU
-entries visible in the top sample were BSON string/component-length parsing;
-the allocation profile was led by the buffered freeze-sort iterator copy path
-(40.57% flat allocation), direct result cloning (22.90%), and `bytes.Clone`
-(17.13%).
+`go tool pprof -top` sampled 940ms CPU. The highest application-level CPU
+entries visible in the top sample were BSON component/string-length parsing;
+the profile also records ordinary runtime copy and memory-management costs.
 Profiles remain local `/tmp` artifacts identified by the hashes above. These
 numbers are a reproducible local characterization, not a cross-host throughput
 claim.
