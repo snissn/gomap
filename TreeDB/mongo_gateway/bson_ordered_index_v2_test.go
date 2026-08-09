@@ -157,4 +157,12 @@ func TestServerFindFallsBackToScanForCompoundAndExplicitDescendingIndexes(t *tes
 		{Key: "filter", Value: bson.D{{Key: "createdAt", Value: int32(2)}}},
 		{Key: "$db", Value: "app"},
 	})), []string{"u2"})
+	// This shape would otherwise enter pureIndexedRangeLimitPlan before the
+	// general candidate planner, so it must receive the same fallback.
+	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, server, 40644, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "createdAt", Value: bson.D{{Key: "$gte", Value: int32(2)}}}}},
+		{Key: "limit", Value: int32(1)},
+		{Key: "$db", Value: "app"},
+	})), []string{"u2"})
 }
