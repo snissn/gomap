@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"golang.org/x/crypto/pbkdf2"
 )
@@ -159,4 +160,55 @@ func TestSCRAMSHA256EstablishesConnectionIdentityAndGatesCommands(t *testing.T) 
 	if !strings.Contains(bson.Raw(status).String(), "alice") {
 		t.Fatalf("connection status missed identity: %s", bson.Raw(status))
 	}
+}
+
+// Exercise the OP_MSG fast find path, cursor commands, write admission, and
+// legacy OP_QUERY through the wire server rather than commandResponse alone.
+func TestAuthenticationAdmissionCoversWireAndCursorCommandPaths(t *testing.T) {
+	db, err := treedb.Open(treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	catalog, _ := NewAuthCatalog(db)
+	server := NewServer()
+	server.AuthenticationEnabled, server.AuthCatalog = true, catalog
+	for requestID, doc := range map[int32]bson.D{
+		1: {{Key: "find", Value: "items"}, {Key: "$db", Value: "app"}},
+		2: {{Key: "getMore", Value: int64(42)}, {Key: "collection", Value: "items"}, {Key: "$db", Value: "app"}},
+		3: {{Key: "killCursors", Value: "items"}, {Key: "cursors", Value: bson.A{int64(42)}}, {Key: "$db", Value: "app"}},
+		4: {{Key: "insert", Value: "items"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "x"}}}}, {Key: "$db", Value: "app"}},
+	} {
+		assertCommandError(t, serveCommand(t, server, requestID, doc), "Unauthorized")
+	}
+	query, err := wire.AppendQueryMessage(nil, 9, 0, 0, "admin.$cmd", 0, -1, mustDocument(t, bson.D{{Key: "find", Value: "items"}, {Key: "$db", Value: "app"}}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rw := &readWriter{r: bytes.NewReader(query)}
+	if err := server.ServeOneWithOwner(rw, 71); err != nil {
+		t.Fatal(err)
+	}
+	_, body, err := wire.ReadMessage(bytes.NewReader(rw.w.Bytes()), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply, err := wire.ParseReply(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reply.Documents) != 1 {
+		t.Fatalf("reply documents=%d", len(reply.Documents))
+	}
+	assertCommandError(t, reply.Documents[0], "Unauthorized")
+	findRaw := mustDocument(t, bson.D{{Key: "find", Value: "items"}, {Key: "$db", Value: "app"}})
+	fastResponse, err := server.findMsgResponse(context.Background(), findRaw, 11, 10, 72)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fastDoc, err := readMsgResponseResult(fastResponse, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCommandError(t, fastDoc, "Unauthorized")
 }
