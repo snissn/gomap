@@ -43,6 +43,17 @@ func compoundIndexPlans(meta collections.CollectionMeta, plan findPlan) []compou
 		if plan.hint.present && !findHintMatchesIndex(plan.hint, idx) {
 			continue
 		}
+		// BSON-v2 array expansion has index-entry semantics, not Mongo document
+		// sort semantics: a scalar array produces several physical keys and an
+		// empty array produces none.  A direct index walk therefore cannot prove
+		// a complete, stable document order before skip/limit.  Keep the public
+		// #4063 direct primitive available, but never select an array-capable
+		// index automatically.  A strict hint consequently fails before opening
+		// an index iterator rather than observing a partial ordering.
+		if idx.ValueType == collections.IndexValueBSONOrderedV2 &&
+			(idx.MultiKey || meta.Options.AllowArrayValuesInIndex) {
+			continue
+		}
 		candidate, ok := buildCompoundIndexPlan(idx, plan)
 		if ok {
 			out = append(out, candidate)

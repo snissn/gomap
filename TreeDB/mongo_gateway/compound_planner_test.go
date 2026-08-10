@@ -1105,6 +1105,73 @@ func TestMongoCompoundPlanStableSortUsesBSONIDTieOrder(t *testing.T) {
 	assertBatchIDs(t, cursorFirstBatch(t, response), []string{"aa"})
 }
 
+func TestMongoCompoundPlannerFailsClosedForArrayCapableBSONV2Indexes(t *testing.T) {
+	// A BSON-v2 multikey index records array elements, while Mongo's visible
+	// sort is a document operation (and empty arrays have no index entry).
+	// The planner must therefore use the bounded document fallback, not apply
+	// skip/limit to the physical index order.
+	newServer := func(t *testing.T, multiKey, allowArrays bool) *Server {
+		t.Helper()
+		server := newMongoCompatibilityMatrixServer(t)
+		meta := &collections.CollectionMeta{
+			Name: "app.events",
+			Options: collections.CollectionOptions{
+				DocumentFormat:          collections.DocumentFormatBSON,
+				AllowArrayValuesInIndex: allowArrays,
+			},
+			Indexes: []collections.IndexDefinition{{
+				Name:      "score_1",
+				Field:     "score",
+				ValueType: collections.IndexValueBSONOrderedV2,
+				MultiKey:  multiKey,
+			}},
+		}
+		if !multiKey && !allowArrays {
+			meta.Indexes = nil // bounded fallback baseline with identical documents.
+		}
+		if _, err := server.Collections.CreateCollection(meta); err != nil {
+			t.Fatalf("create events collection: %v", err)
+		}
+		assertOK(t, serveCommand(t, server, 40652801, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "array"}, {Key: "tenant", Value: "t"}, {Key: "score", Value: bson.A{int32(2), int32(9)}}},
+			bson.D{{Key: "_id", Value: "empty"}, {Key: "tenant", Value: "t"}, {Key: "score", Value: bson.A{}}},
+			bson.D{{Key: "_id", Value: "scalar"}, {Key: "tenant", Value: "t"}, {Key: "score", Value: int32(4)}},
+		}}, {Key: "$db", Value: "app"}}))
+		return server
+	}
+
+	for _, tc := range []struct {
+		name        string
+		multiKey    bool
+		allowArrays bool
+	}{
+		{name: "multikey", multiKey: true},
+		{name: "collection_option", allowArrays: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			indexed := newServer(t, tc.multiKey, tc.allowArrays)
+			baseline := newServer(t, false, false)
+			for _, direction := range []int32{1, -1} {
+				command := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "sort", Value: bson.D{{Key: "score", Value: direction}}}, {Key: "limit", Value: int32(1)}, {Key: "$db", Value: "app"}}
+				got := serveCommand(t, indexed, 40652802+direction, command)
+				want := serveCommand(t, baseline, 40652804+direction, command)
+				assertOK(t, got)
+				assertOK(t, want)
+				if gotIDs, wantIDs := cursorFirstBatch(t, got), cursorFirstBatch(t, want); !bytes.Equal(gotIDs[0], wantIDs[0]) {
+					t.Fatalf("direction=%d indexed fallback result differs from bounded scan: got=%s want=%s", direction, gotIDs[0], wantIDs[0])
+				}
+				explain := serveCommand(t, indexed, 40652806+direction, bson.D{{Key: "explain", Value: command}, {Key: "verbosity", Value: "queryPlanner"}, {Key: "$db", Value: "app"}})
+				assertOK(t, explain)
+				if stage := bson.Raw(explain).Lookup("queryPlanner").Document().Lookup("winningPlan").Document().Lookup("stage").StringValue(); stage == "compound_index_scan" {
+					t.Fatalf("direction=%d selected array-capable compound index: %s", direction, explain)
+				}
+			}
+			strict := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "sort", Value: bson.D{{Key: "score", Value: int32(1)}}}, {Key: "hint", Value: "score_1"}, {Key: "$db", Value: "app"}}
+			assertCommandError(t, serveCommand(t, indexed, 40652810, strict), "BadValue")
+		})
+	}
+}
+
 func TestMongoCompoundPlanSortWithUnfixedTrailingComponentFallsBack(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	assertOK(t, serveCommand(t, server, 40652649, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "x", Value: int32(1)}, {Key: "y", Value: int32(1)}}}, {Key: "name", Value: "tenant_x_y"}}}}, {Key: "$db", Value: "app"}}))
