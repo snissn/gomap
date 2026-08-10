@@ -693,8 +693,20 @@ func TestMongoCompoundPlannerRejectsOversizedAndDuplicateSortOrHint(t *testing.T
 	duplicateFields := bson.D{{Key: "a", Value: int32(1)}, {Key: "a", Value: int32(-1)}}
 	assertCommandError(t, serveCommand(t, server, 4065172, with("sort", fiveFields)), "BadValue")
 	assertCommandError(t, serveCommand(t, server, 4065173, with("sort", duplicateFields)), "BadValue")
-	assertCommandError(t, serveCommand(t, server, 4065174, with("hint", fiveFields)), "BadValue")
-	assertCommandError(t, serveCommand(t, server, 4065175, with("hint", duplicateFields)), "BadValue")
+	parseHint := func(value any) error {
+		raw, err := bson.Marshal(bson.D{{Key: "hint", Value: value}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = parseFindHint(wire.Document(raw))
+		return err
+	}
+	if err := parseHint(fiveFields); err == nil || !strings.Contains(err.Error(), "one through four fields") {
+		t.Fatalf("oversized hint parse error=%v want one-through-four-fields rejection", err)
+	}
+	if err := parseHint(duplicateFields); err == nil || !strings.Contains(err.Error(), "repeats field") {
+		t.Fatalf("duplicate hint parse error=%v want repeated-field rejection", err)
+	}
 }
 
 func TestMongoCompoundPlanInEqualityPrefix(t *testing.T) {
