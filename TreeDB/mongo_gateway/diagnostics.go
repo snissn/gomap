@@ -72,12 +72,8 @@ func (s *Server) noteDiagnosticCommand(name string, command wire.Document, elaps
 }
 
 func diagnosticCommandAdmitted(name string) bool {
-	switch name {
-	case "hello", "isMaster", "ismaster", "buildInfo", "connectionStatus", "serverStatus", "dbStats", "collStats", "top", "saslStart", "saslContinue", "create", "endSessions", "hostInfo", "ping", "insert", "find", "explain", "aggregate", "count", "distinct", "findAndModify", "getMore", "killCursors", "update", "delete", "listCollections", "listDatabases", "createIndexes", "listIndexes", "dropIndexes", "createUser", "updateUser", "dropUser", "usersInfo":
-		return true
-	default:
-		return false
-	}
+	_, admitted := mongoGatewaySupportedCommands[name]
+	return admitted
 }
 
 func diagnosticCommandNamespace(name string, command wire.Document) string {
