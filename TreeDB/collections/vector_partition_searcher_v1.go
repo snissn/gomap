@@ -1121,6 +1121,15 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithMetrics(query []float32, topK
 // an in-flight native traversal may call this method in a goroutine: Close
 // defers the persistent generation-pin release until the search pin exits.
 func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context, query []float32, opts VectorPartitionSearchOptionsV1) ([]VectorPartitionSearchResultV1, VectorPartitionSearchMetricsV1, error) {
+	return s.searchWithOptionsV1(ctx, query, opts, nil)
+}
+
+// vectorPartitionSearchAttributionV1 reserves the offline-only shared body;
+// ordinary searches always pass nil.
+type vectorPartitionSearchAttributionV1 struct{}
+
+func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context, query []float32, opts VectorPartitionSearchOptionsV1, attribution *vectorPartitionSearchAttributionV1) ([]VectorPartitionSearchResultV1, VectorPartitionSearchMetricsV1, error) {
+	_ = attribution
 	if ctx == nil {
 		ctx = context.Background()
 	}
