@@ -31,6 +31,9 @@ const (
 	findPredicateGTE
 	findPredicateLT
 	findPredicateLTE
+	findPredicateNE
+	findPredicateNIN
+	findPredicateExists
 )
 
 type findPredicate struct {
@@ -39,6 +42,9 @@ type findPredicate struct {
 	values                  []bson.RawValue
 	compoundCanonicalValues []bson.RawValue
 	compoundCanonicalized   bool
+	// negate is used only for field-level $not.  It deliberately remains a
+	// residual predicate: no complement/index-union claim is safe here.
+	negate bool
 }
 
 type findSort struct {
@@ -765,6 +771,12 @@ func (s *Server) findUnsortedScanDocumentsWithStats(col *collections.Collection,
 func storedDocumentMatchesPredicates(stored []byte, predicates []findPredicate) (bool, bool, error) {
 	remainingDecimal128Normalizations := mongoQueryMaxDecimal128Normalizations
 	for _, pred := range predicates {
+		// The JSON bridge fast path cannot soundly distinguish missing from null
+		// for these operators. Fall back to BSON materialization rather than
+		// risking a false match or rejection.
+		if pred.negate || pred.op == findPredicateNE || pred.op == findPredicateNIN || pred.op == findPredicateExists {
+			return false, false, nil
+		}
 		if isRangePredicate(pred.op) {
 			match, ok, err := storedDocumentMatchesInt64RangePredicate(stored, pred)
 			if err != nil {
@@ -1755,7 +1767,7 @@ func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, er
 			}
 			opValue := elem.Value()
 			switch op {
-			case "$in":
+			case "$in", "$nin":
 				array, ok := opValue.ArrayOK()
 				if !ok {
 					return nil, fmt.Errorf("Mongo gateway find field %q $in must be an array", field)
@@ -1764,7 +1776,37 @@ func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, er
 				if err != nil {
 					return nil, err
 				}
-				out = append(out, findPredicate{field: field, op: findPredicateIn, values: values})
+				kind := findPredicateIn
+				if op == "$nin" {
+					kind = findPredicateNIN
+				}
+				out = append(out, findPredicate{field: field, op: kind, values: values})
+			case "$ne":
+				out = append(out, findPredicate{field: field, op: findPredicateNE, values: []bson.RawValue{opValue}})
+			case "$exists":
+				exists, ok := opValue.BooleanOK()
+				if !ok {
+					return nil, fmt.Errorf("Mongo gateway find field %q $exists must be boolean", field)
+				}
+				valueType, raw, err := bson.MarshalValue(exists)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, findPredicate{field: field, op: findPredicateExists, values: []bson.RawValue{{Type: valueType, Value: raw}}})
+			case "$not":
+				notDoc, ok := opValue.DocumentOK()
+				if !ok {
+					return nil, fmt.Errorf("Mongo gateway find field %q $not must be an operator document", field)
+				}
+				inner, err := parseFieldPredicate(field, bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: notDoc})
+				if err != nil || len(inner) != 1 {
+					if err != nil {
+						return nil, err
+					}
+					return nil, fmt.Errorf("Mongo gateway find field %q $not requires one supported operator", field)
+				}
+				inner[0].negate = true
+				out = append(out, inner[0])
 			case "$gt", "$gte", "$lt", "$lte":
 				out = append(out, findPredicate{field: field, op: rangeOperator(op), values: []bson.RawValue{opValue}})
 			default:
@@ -1828,7 +1870,7 @@ func documentMatchesPredicatesWithBudget(doc wire.Document, predicates []findPre
 			return false, err
 		}
 		if !ok {
-			if missingValueMatchesPredicate(pred) {
+			if missingValueMatchesPredicate(pred) != pred.negate {
 				continue
 			}
 			return false, nil
@@ -1844,7 +1886,7 @@ func documentMatchesPredicatesWithBudget(doc wire.Document, predicates []findPre
 				break
 			}
 		}
-		if !matched {
+		if matched == pred.negate {
 			return false, nil
 		}
 	}
@@ -1873,6 +1915,11 @@ func missingValueMatchesPredicate(pred findPredicate) bool {
 	switch pred.op {
 	case findPredicateEq, findPredicateIn:
 		return predicateContainsNull(pred)
+	case findPredicateNE, findPredicateNIN:
+		return true
+	case findPredicateExists:
+		exists, _ := pred.values[0].BooleanOK()
+		return !exists
 	default:
 		return false
 	}
@@ -1911,6 +1958,23 @@ func valueMatchesPredicateWithBudget(value bson.RawValue, pred findPredicate, re
 			}
 		}
 		return false, nil
+	case findPredicateNE:
+		equal, err := rawValuesEqualModeBudget(value, pred.values[0], false, remainingDecimal128Normalizations)
+		return !equal, err
+	case findPredicateNIN:
+		for _, candidate := range pred.values {
+			equal, err := rawValuesEqualModeBudget(value, candidate, false, remainingDecimal128Normalizations)
+			if err != nil {
+				return false, err
+			}
+			if equal {
+				return false, nil
+			}
+		}
+		return true, nil
+	case findPredicateExists:
+		exists, _ := pred.values[0].BooleanOK()
+		return exists, nil
 	case findPredicateGT, findPredicateGTE, findPredicateLT, findPredicateLTE:
 		if rawValueIsNaN(value) || rawValueIsNaN(pred.values[0]) {
 			return false, nil
@@ -1967,7 +2031,7 @@ func parseFindSortDocument(sortDoc wire.Document) (findSort, error) {
 		if err != nil {
 			return findSort{}, err
 		}
-		if field == "" || strings.HasPrefix(field, "$") || strings.Contains(field, ".") {
+		if field == "" || strings.HasPrefix(field, "$") {
 			return findSort{}, errors.New("Mongo gateway find sort field must be a supported document field")
 		}
 		if _, duplicate := seen[field]; duplicate {
