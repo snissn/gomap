@@ -92,6 +92,9 @@ type Server struct {
 	// compoundIndexPlanScanHook is a test seam for proving a non-streaming
 	// compound plan is walked exactly once by its eventual executor.
 	compoundIndexPlanScanHook func()
+	// compoundCursorBatchHook is a test seam for proving a cursor serializes
+	// deferred compound batch materialization before it advances its position.
+	compoundCursorBatchHook func()
 	// ClusterIdempotencyNonce scopes generated cluster mutation idempotency
 	// keys to one gateway process epoch. NewServer initializes a random nonce
 	// so sequence-based keys are not reused after restart.
@@ -185,6 +188,9 @@ type serverCursor struct {
 	compoundPlan       *findPlan
 	// cursorMu guards compoundIDs, compoundPlan, materializedBytes, and pos.
 	// Every getMore reader/writer must hold it while observing cursor progress.
+	// compoundBatchMu serializes deferred BSON materialization for this cursor;
+	// it is never acquired while cursorMu is held.
+	compoundBatchMu   sync.Mutex
 	materializedBytes int
 	projection        compiledProjection
 	pos               int

@@ -4082,6 +4082,9 @@ func (s *Server) openCompoundIDCursor(ns string, col *collections.Collection, id
 }
 
 func (s *Server) compoundCursorBatch(col *collections.Collection, ids [][]byte, plan *findPlan, projection compiledProjection, start, maxDocs, committedMaterialized int) (bson.A, int, int, error) {
+	if s.compoundCursorBatchHook != nil {
+		s.compoundCursorBatchHook()
+	}
 	if col == nil {
 		return nil, 0, 0, errors.New("mongo gateway compound cursor has no collection")
 	}
@@ -4164,13 +4167,26 @@ func (s *Server) getMore(cursorID int64, ns string, owner int64, batchSize int, 
 			s.cursorMu.Unlock()
 			return 0, nil, false, nil
 		}
-		startPos := cursor.pos
 		if cursor.compoundCollection != nil {
-			committedMaterialized := cursor.materializedBytes
-			compoundCollection := cursor.compoundCollection
-			compoundIDs := cursor.compoundIDs
-			compoundPlan := cursor.compoundPlan
-			projection := cursor.projection
+			s.cursorMu.Unlock()
+			// Do not allow concurrent getMore requests to decode the same IDs while
+			// they race optimistically to commit cursor.pos. This per-cursor lock is
+			// deliberately acquired after cursorMu so the winner can still publish
+			// progress without a lock-order cycle.
+			cursor.compoundBatchMu.Lock()
+			s.cursorMu.Lock()
+			current := s.cursors[cursorID]
+			if current == nil || current != cursor || current.ns != ns || current.owner != owner || !cursorPrincipalMatches(current, s.authUser(owner)) {
+				s.cursorMu.Unlock()
+				cursor.compoundBatchMu.Unlock()
+				return 0, nil, false, nil
+			}
+			startPos := current.pos
+			committedMaterialized := current.materializedBytes
+			compoundCollection := current.compoundCollection
+			compoundIDs := current.compoundIDs
+			compoundPlan := current.compoundPlan
+			projection := current.projection
 			effectiveBatchSize := batchSize
 			if !explicitBatchSize {
 				effectiveBatchSize = defaultBatchSize
@@ -4183,17 +4199,15 @@ func (s *Server) getMore(cursorID int64, ns string, owner int64, batchSize int, 
 					s.deleteCursorLocked(cursorID)
 				}
 				s.cursorMu.Unlock()
+				cursor.compoundBatchMu.Unlock()
 				return 0, nil, false, err
 			}
 			s.cursorMu.Lock()
-			current := s.cursors[cursorID]
+			current = s.cursors[cursorID]
 			if current == nil || current != cursor || current.ns != ns || current.owner != owner || !cursorPrincipalMatches(current, s.authUser(owner)) {
 				s.cursorMu.Unlock()
+				cursor.compoundBatchMu.Unlock()
 				return 0, nil, false, nil
-			}
-			if current.pos != startPos {
-				s.cursorMu.Unlock()
-				continue
 			}
 			current.pos += consumed
 			current.materializedBytes += materialized
@@ -4201,11 +4215,14 @@ func (s *Server) getMore(cursorID int64, ns string, owner int64, batchSize int, 
 			if current.pos >= len(current.compoundIDs) {
 				s.deleteCursorLocked(cursorID)
 				s.cursorMu.Unlock()
+				cursor.compoundBatchMu.Unlock()
 				return 0, batch, true, nil
 			}
 			s.cursorMu.Unlock()
+			cursor.compoundBatchMu.Unlock()
 			return cursorID, batch, true, nil
 		}
+		startPos := cursor.pos
 		remaining := cursor.docs[startPos:]
 		projection := cursor.projection
 		effectiveBatchSize := batchSize

@@ -6,6 +6,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
@@ -551,6 +552,80 @@ func TestMongoCompoundPlannerCursorStreamsIDsAcrossGetMore(t *testing.T) {
 		t.Fatalf("final cursor id=%d want 0", got)
 	}
 	assertCommandError(t, serveCommand(t, server, 406510, bson.D{{Key: "getMore", Value: cursorID}, {Key: "collection", Value: "events"}, {Key: "$db", Value: "app"}}), "CursorNotFound")
+}
+
+func TestMongoCompoundPlannerCursorSerializesConcurrentGetMoreMaterialization(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 4065101, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "created", Value: int32(-1)}}}, {Key: "name", Value: "tenant_created"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 4065102, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(3)}},
+		bson.D{{Key: "_id", Value: "b"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(2)}},
+		bson.D{{Key: "_id", Value: "c"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(1)}},
+	}}, {Key: "$db", Value: "app"}}))
+	first := serveCommand(t, server, 4065103, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "sort", Value: bson.D{{Key: "created", Value: int32(-1)}}}, {Key: "batchSize", Value: int32(1)}, {Key: "$db", Value: "app"}})
+	assertBatchIDs(t, cursorFirstBatch(t, first), []string{"a"})
+	cursorID := cursorIDFromResponse(t, first)
+	if cursorID == 0 {
+		t.Fatal("cursor id=0 want resumable compound cursor")
+	}
+
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	server.compoundCursorBatchHook = func() {
+		started <- struct{}{}
+		<-release
+	}
+	type result struct {
+		batch bson.A
+		ok    bool
+		err   error
+	}
+	results := make(chan result, 2)
+	get := func() {
+		_, batch, ok, err := server.getMore(cursorID, "app.events", 1, 1, true, defaultCursorBatchSize)
+		results <- result{batch: batch, ok: ok, err: err}
+	}
+	go get()
+	<-started
+	go get()
+	select {
+	case <-started:
+		t.Fatal("concurrent getMore began duplicate compound materialization")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	firstResult, secondResult := <-results, <-results
+	for _, got := range []result{firstResult, secondResult} {
+		if got.err != nil || !got.ok {
+			t.Fatalf("getMore result ok=%v err=%v", got.ok, got.err)
+		}
+	}
+	seen := make(map[string]struct{})
+	for _, got := range []result{firstResult, secondResult} {
+		for _, value := range got.batch {
+			raw, ok := value.(bson.Raw)
+			if !ok {
+				t.Fatalf("compound batch value type %T", value)
+			}
+			id, ok := raw.Lookup("_id").StringValueOK()
+			if !ok {
+				t.Fatalf("compound batch missing string _id: %v", raw)
+			}
+			if _, duplicate := seen[id]; duplicate {
+				t.Fatalf("concurrent getMore duplicated ID %q", id)
+			}
+			seen[id] = struct{}{}
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatalf("concurrent getMore emitted IDs=%v want b,c", seen)
+	}
+	if _, ok := seen["b"]; !ok {
+		t.Fatalf("concurrent getMore missing b: %v", seen)
+	}
+	if _, ok := seen["c"]; !ok {
+		t.Fatalf("concurrent getMore missing c: %v", seen)
+	}
 }
 
 func TestMongoCompoundPlannerCursorMaterializationCapFailsBeforeCursorPublication(t *testing.T) {
