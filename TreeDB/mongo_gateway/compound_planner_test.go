@@ -1,10 +1,39 @@
 package mongogateway
 
 import (
+	"fmt"
 	"testing"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+// BenchmarkMongoCompoundPlannerCursor is the reproducible local shape used by
+// #4065: an equality prefix, descending range/order and several getMore
+// batches.  Setup is outside the timer; the reported allocations cover only
+// planned cursor execution and BSON batch materialization.
+func BenchmarkMongoCompoundPlannerCursor(b *testing.B) {
+	server := newMongoCompatibilityMatrixServer(b)
+	assertOK(b, serveCommand(b, server, 406590, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "score", Value: int32(-1)}}}, {Key: "name", Value: "tenant_score"}}}}, {Key: "$db", Value: "app"}}))
+	docs := make(bson.A, 0, 128)
+	for i := 0; i < cap(docs); i++ {
+		docs = append(docs, bson.D{{Key: "_id", Value: fmt.Sprintf("%03d", i)}, {Key: "tenant", Value: "t"}, {Key: "score", Value: int32(i)}, {Key: "payload", Value: "benchmark"}})
+	}
+	assertOK(b, serveCommand(b, server, 406591, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: docs}, {Key: "$db", Value: "app"}}))
+	command := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "sort", Value: bson.D{{Key: "score", Value: int32(-1)}}}, {Key: "skip", Value: int64(16)}, {Key: "limit", Value: int64(32)}, {Key: "batchSize", Value: int32(8)}, {Key: "$db", Value: "app"}}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		response := serveCommand(b, server, int32(406600+i), command)
+		if got := len(cursorFirstBatch(b, response)); got != 8 {
+			b.Fatalf("first batch=%d want 8", got)
+		}
+		cursorID := cursorIDFromResponse(b, response)
+		for cursorID != 0 {
+			next := serveCommand(b, server, int32(506600+i), bson.D{{Key: "getMore", Value: cursorID}, {Key: "collection", Value: "events"}, {Key: "batchSize", Value: int32(8)}, {Key: "$db", Value: "app"}})
+			cursorID = cursorIDFromResponse(b, next)
+		}
+	}
+}
 
 // TestMongoCompoundPlanEqualityPrefixRangeAndSort is the first #4065 contract
 // test.  The legacy planner intentionally declines this BSON-v2 definition;
