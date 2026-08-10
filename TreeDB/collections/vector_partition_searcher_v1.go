@@ -115,29 +115,7 @@ func CompareVectorPartitionLocalGraphPacksV1(native, final *VectorPartitionLocal
 	if len(np.AdjacencyLayers) != len(fp.AdjacencyLayers) {
 		return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
 	}
-	validateL0 := func(pack *columnHNSWSearchPackPreparedView) bool {
-		if len(pack.AdjacencyLayers) == 0 {
-			return false
-		}
-		layer := pack.AdjacencyLayers[0]
-		if len(layer.Offsets) != pack.Header.Rows+1 || layer.Offsets[0] != 0 || layer.Offsets[len(layer.Offsets)-1] != uint64(len(layer.Neighbors)) {
-			return false
-		}
-		for row := 0; row < pack.Header.Rows; row++ {
-			if layer.Offsets[row+1] < layer.Offsets[row] || layer.Offsets[row+1] > uint64(len(layer.Neighbors)) {
-				return false
-			}
-			seen := map[uint32]bool{}
-			for _, neighbor := range layer.Neighbors[layer.Offsets[row]:layer.Offsets[row+1]] {
-				if int(neighbor) >= pack.Header.Rows || int(neighbor) == row || seen[neighbor] {
-					return false
-				}
-				seen[neighbor] = true
-			}
-		}
-		return true
-	}
-	if !validateL0(np) || !validateL0(fp) {
+	if !validVectorPartitionLocalGraphL0V1(np.Header.Rows, np.AdjacencyLayers[0]) || !validVectorPartitionLocalGraphL0V1(fp.Header.Rows, fp.AdjacencyLayers[0]) {
 		return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
 	}
 	for layer := 1; layer < len(np.AdjacencyLayers); layer++ {
@@ -246,6 +224,25 @@ func CompareVectorPartitionLocalGraphPacksV1(native, final *VectorPartitionLocal
 		out.Rows[i] = row
 	}
 	return out, nil
+}
+
+func validVectorPartitionLocalGraphL0V1(rows int, layer columnHNSWSearchPackPreparedLayer) bool {
+	if rows < 1 || len(layer.Offsets) != rows+1 || layer.Offsets[0] != 0 || layer.Offsets[len(layer.Offsets)-1] != uint64(len(layer.Neighbors)) {
+		return false
+	}
+	for row := 0; row < rows; row++ {
+		if layer.Offsets[row+1] < layer.Offsets[row] || layer.Offsets[row+1] > uint64(len(layer.Neighbors)) {
+			return false
+		}
+		seen := map[uint32]bool{}
+		for _, neighbor := range layer.Neighbors[layer.Offsets[row]:layer.Offsets[row+1]] {
+			if int(neighbor) >= rows || int(neighbor) == row || seen[neighbor] {
+				return false
+			}
+			seen[neighbor] = true
+		}
+	}
+	return true
 }
 
 // CanonicalVectorPartitionCosineScorerV1 retains one normalized query so a

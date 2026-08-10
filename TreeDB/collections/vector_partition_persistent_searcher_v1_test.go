@@ -232,6 +232,15 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 	}
 }
 
+func TestValidVectorPartitionLocalGraphL0V1RejectsFutureOffset(t *testing.T) {
+	if !validVectorPartitionLocalGraphL0V1(3, columnHNSWSearchPackPreparedLayer{Offsets: []uint64{0, 1, 2, 2}, Neighbors: []uint32{2, 0}}) {
+		t.Fatal("valid L0 rejected")
+	}
+	if validVectorPartitionLocalGraphL0V1(3, columnHNSWSearchPackPreparedLayer{Offsets: []uint64{0, 1, 3, 2}, Neighbors: []uint32{2, 0}}) {
+		t.Fatal("decreasing future offset accepted")
+	}
+}
+
 func TestVectorPartitionPersistentLocalSearcherReopenCorruptionAndPinsV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	dir, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
