@@ -291,7 +291,9 @@ the coordinator and shards. Those stages require an exact snapshot identity
 and applied-index floor but perform no additional catalog or data-group
 consensus and no request-side asset opens. Forged, expired, wrong-generation,
 or invalidated capabilities fail closed; a request pinned before invalidation
-may drain. #4096 owns this strict proof propagation. #4098 owns separate
+may drain. The background serving-proof refresh remains quorum-backed and
+no-log, but is retained as separate work rather than charged to a request.
+#4096 owns this strict proof propagation. #4098 owns separate
 explicit relaxed and pinned-session shapes; it does not weaken this strict
 default or accept caller-authored authority.
 

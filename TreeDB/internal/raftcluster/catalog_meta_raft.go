@@ -92,6 +92,7 @@ const (
 	CatalogMetaReadSourceUnknownV1              CatalogMetaReadSourceV1 = "unknown"
 	CatalogMetaReadSourceOperationsHealthV1     CatalogMetaReadSourceV1 = "operations_health"
 	CatalogMetaReadSourceStrictSearchV1         CatalogMetaReadSourceV1 = "strict_search"
+	CatalogMetaReadSourceServingRefreshV1       CatalogMetaReadSourceV1 = "serving_refresh"
 	CatalogMetaReadSourceCoordinatorLifecycleV1 CatalogMetaReadSourceV1 = "coordinator_lifecycle"
 	CatalogMetaReadSourceShardLifecycleV1       CatalogMetaReadSourceV1 = "shard_lifecycle"
 )
@@ -139,6 +140,7 @@ type CatalogMetaLinearizableReadStatsV1 struct {
 	Total                CatalogMetaLinearizableReadStageStatsV1 `json:"total"`
 	OperationsHealth     CatalogMetaLinearizableReadStageStatsV1 `json:"operations_health"`
 	StrictSearch         CatalogMetaLinearizableReadStageStatsV1 `json:"strict_search"`
+	ServingRefresh       CatalogMetaLinearizableReadStageStatsV1 `json:"serving_refresh"`
 	CoordinatorLifecycle CatalogMetaLinearizableReadStageStatsV1 `json:"coordinator_lifecycle"`
 	ShardLifecycle       CatalogMetaLinearizableReadStageStatsV1 `json:"shard_lifecycle"`
 	Unknown              CatalogMetaLinearizableReadStageStatsV1 `json:"unknown"`
@@ -155,8 +157,8 @@ type catalogMetaLinearizableReadStageStatsV1 struct {
 }
 
 type catalogMetaLinearizableReadStatsV1 struct {
-	total, operationsHealth, strictSearch, coordinatorLifecycle, shardLifecycle, unknown catalogMetaLinearizableReadStageStatsV1
-	lastTerm, lastCatalogApplied, lastRaftApplied, lastRaftLog                           atomic.Uint64
+	total, operationsHealth, strictSearch, servingRefresh, coordinatorLifecycle, shardLifecycle, unknown catalogMetaLinearizableReadStageStatsV1
+	lastTerm, lastCatalogApplied, lastRaftApplied, lastRaftLog                                           atomic.Uint64
 }
 
 type catalogMetaReadSourceContextKeyV1 struct{}
@@ -183,6 +185,8 @@ func (s *catalogMetaLinearizableReadStatsV1) source(source CatalogMetaReadSource
 		return &s.operationsHealth
 	case CatalogMetaReadSourceStrictSearchV1:
 		return &s.strictSearch
+	case CatalogMetaReadSourceServingRefreshV1:
+		return &s.servingRefresh
 	case CatalogMetaReadSourceCoordinatorLifecycleV1:
 		return &s.coordinatorLifecycle
 	case CatalogMetaReadSourceShardLifecycleV1:
@@ -229,6 +233,7 @@ func (p *CatalogMetaRaftProviderV1) CatalogMetaLinearizableReadStatsV1() Catalog
 		Total:                catalogMetaLinearizableReadStageSnapshotV1(&p.readStats.total),
 		OperationsHealth:     catalogMetaLinearizableReadStageSnapshotV1(&p.readStats.operationsHealth),
 		StrictSearch:         catalogMetaLinearizableReadStageSnapshotV1(&p.readStats.strictSearch),
+		ServingRefresh:       catalogMetaLinearizableReadStageSnapshotV1(&p.readStats.servingRefresh),
 		CoordinatorLifecycle: catalogMetaLinearizableReadStageSnapshotV1(&p.readStats.coordinatorLifecycle),
 		ShardLifecycle:       catalogMetaLinearizableReadStageSnapshotV1(&p.readStats.shardLifecycle),
 		Unknown:              catalogMetaLinearizableReadStageSnapshotV1(&p.readStats.unknown),

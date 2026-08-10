@@ -516,7 +516,7 @@ func (p *VectorPartitionServingSnapshotPublisherV1) RefreshProofV1(ctx context.C
 	}
 	placement := p.opts.Coordinator.placement
 	fresh, err := p.opts.Authority.captureVectorPartitionServingAuthorityV1(
-		raftcluster.WithCatalogMetaReadSourceV1(ctx, raftcluster.CatalogMetaReadSourceUnknownV1),
+		raftcluster.WithCatalogMetaReadSourceV1(ctx, raftcluster.CatalogMetaReadSourceServingRefreshV1),
 		placement.Collection, placement.IndexName, placement.PartitionGeneration, placement.IndexDefinitionDigest,
 		placement.SourceGeneration, placement.SourceChecksum, placement.SourceSchemaHash, placement.SourceRowCount,
 	)

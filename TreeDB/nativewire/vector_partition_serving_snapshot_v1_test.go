@@ -360,7 +360,7 @@ func TestVectorPartitionServingSnapshotPublicationPinsAndDrainsV1(t *testing.T) 
 		t.Fatal(err)
 	}
 	after := fixture.harness.LeaderFence().CatalogMetaLinearizableReadStatsV1()
-	if after.LastRaftLog != before.LastRaftLog || after.Total.LogBarriers != 0 || after.Total.NoLogProofs <= before.Total.NoLogProofs {
+	if after.LastRaftLog != before.LastRaftLog || after.Total.LogBarriers != 0 || after.Total.NoLogProofs-before.Total.NoLogProofs != 1 || after.ServingRefresh.Reads-before.ServingRefresh.Reads != 1 {
 		t.Fatalf("proof refresh stats before=%+v after=%+v", before, after)
 	}
 	if err := fixture.publisher.PublishV1(t.Context()); err != nil {

@@ -15,9 +15,16 @@ class StrictProofTest(unittest.TestCase):
             }
 
         total = {name: stage(0) for name in ("operations_health", "coordinator_lifecycle", "shard_lifecycle", "unknown")}
-        total.update({"total": stage(1000), "strict_search": stage(1000)})
+        total.update({"total": stage(1002), "strict_search": stage(1000), "serving_refresh": stage(2)})
+        for value in total.values():
+            value["total_nanos"] = value["reads"] * 10
         self.assertEqual(_proof_projection({"catalog_reads": {"total": total}})["strict_search.reads"], 1000)
         total["coordinator_lifecycle"] = stage(1)
+        total["coordinator_lifecycle"]["total_nanos"] = 10
+        with self.assertRaisesRegex(ContractError, "totals"):
+            _proof_projection({"catalog_reads": {"total": total}})
+        total["total"] = stage(1003)
+        total["total"]["total_nanos"] = 10030
         with self.assertRaisesRegex(ContractError, "duplicate"):
             _proof_projection({"catalog_reads": {"total": total}})
 

@@ -51,11 +51,16 @@ def validate_result(path: Path) -> None:
         counters = cell.get("counters", {})
         catalog = cell.get("catalog_reads", {}).get("total", {})
         total, strict = catalog.get("total", {}), catalog.get("strict_search", {})
+        refresh = catalog.get("serving_refresh", {})
         queries = cell["metrics"]["completed_queries"]
         if counters.get("snapshot_pins") != queries or any(counters.get(key) != 0 for key in ("read_proofs", "generation_pins", "partition_opens")):
             raise RuntimeError("strict request performed duplicate proof or request-side asset work")
-        if total.get("reads") != queries or total.get("no_log_proofs") != queries or total.get("log_barriers") != 0 or strict.get("reads") != queries:
+        if strict.get("reads") != queries or total.get("reads") != queries + refresh.get("reads", -queries):
             raise RuntimeError("strict request did not retain exactly one no-log ingress proof")
+        for stage in ("total", "operations_health", "strict_search", "serving_refresh", "coordinator_lifecycle", "shard_lifecycle", "unknown"):
+            value = catalog.get(stage, {})
+            if value.get("reads") != value.get("successes") or value.get("reads") != value.get("verify_leader_calls") or value.get("reads") != value.get("no_log_proofs") or value.get("failures") != 0 or value.get("log_barriers") != 0:
+                raise RuntimeError("strict proof or background refresh was not successful and no-log")
         if any(catalog.get(stage, {}).get("reads") != 0 for stage in ("operations_health", "coordinator_lifecycle", "shard_lifecycle", "unknown")):
             raise RuntimeError("strict request retained a duplicate catalog proof")
 

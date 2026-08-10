@@ -15,7 +15,7 @@ from system_qualification import _is_sha256, _require
 
 
 STRICT_COUNTERS = ("snapshot_pins", "read_proofs", "generation_pins", "partition_opens")
-PROOF_STAGES = ("total", "operations_health", "strict_search", "coordinator_lifecycle", "shard_lifecycle", "unknown")
+PROOF_STAGES = ("total", "operations_health", "strict_search", "serving_refresh", "coordinator_lifecycle", "shard_lifecycle", "unknown")
 PROFILE_NAMES = {"allocs_baseline.pprof", "cpu.pprof", "trace.out", "heap.pprof", "allocs.pprof", "block.pprof", "mutex.pprof"}
 ORIGINAL_DISTRIBUTION = base._distribution
 
@@ -30,16 +30,22 @@ def _proof_projection(cell: dict[str, Any]) -> dict[str, int]:
         for key in base.PROOF_COUNTS:
             _require(base._uint(value.get(key)), "strict catalog proof count is invalid")
             out[f"{stage}.{key}"] = value[key]
+        _require(base._uint(value.get("total_nanos")), "strict catalog proof timing is invalid")
+        out[f"{stage}.total_nanos"] = value["total_nanos"]
         _require(value["reads"] == value["successes"] == value["verify_leader_calls"] == value["no_log_proofs"], "strict catalog proof counts disagree")
         _require(value["failures"] == value["log_barriers"] == 0, "strict catalog proof failed or appended a log entry")
-    _require(out["total.reads"] == out["strict_search.reads"] == 1000, "strict search must retain one ingress proof per query")
+    for key in (*base.PROOF_COUNTS, "total_nanos"):
+        _require(out[f"total.{key}"] == sum(out[f"{stage}.{key}"] for stage in PROOF_STAGES[1:]), "strict catalog proof totals do not match attributed stages")
     _require(all(out[f"{stage}.reads"] == 0 for stage in ("operations_health", "coordinator_lifecycle", "shard_lifecycle", "unknown")), "strict search retained duplicate catalog proofs")
+    _require(out["strict_search.reads"] == 1000 and out["total.reads"] == 1000 + out["serving_refresh.reads"], "strict search must retain one ingress proof per query and account for background refresh")
     return out
 
 
 def _distribution(cells: list[dict[str, Any]]) -> dict[str, Any]:
     result = ORIGINAL_DISTRIBUTION(cells)
-    result["catalog_work_nanos_per_query_median"] = median(cell["_proof_projection"]["total.total_nanos"] / 1000 for cell in cells)
+    result["catalog_work_nanos_per_query_median"] = median(cell["_proof_projection"]["strict_search.total_nanos"] / 1000 for cell in cells)
+    result["serving_refresh_reads_median"] = median(cell["_proof_projection"]["serving_refresh.reads"] for cell in cells)
+    result["serving_refresh_nanos_median"] = median(cell["_proof_projection"]["serving_refresh.total_nanos"] for cell in cells)
     result["request_work_median"] = {key: median(cell["counters"][key] for cell in cells) for key in STRICT_COUNTERS}
     return result
 
@@ -95,7 +101,7 @@ def summarize(root: Path) -> dict[str, Any]:
     result["execution_identity"]["capability_key_sha256"] = provenance["capability_key_sha256"]
     result["baseline_identity"] = {"onramp_4090_sha256": base._sha256(onramp_path), "runtime_ownership_4091_sha256": base._sha256(ownership_path)}
     result["comparisons"] = comparisons
-    result["invariants"].update({"snapshot_pins_per_cell": 1000, "strict_proofs_per_cell": 1000, "data_group_proofs_per_cell": 0, "request_generation_pins_per_cell": 0, "request_partition_opens_per_cell": 0, "minimum_qps_improvement_over_4091": .05, "maximum_p95_ratio_over_4091": 1.05, "minimum_catalog_lifecycle_work_reduction_over_4090": .90})
+    result["invariants"].update({"snapshot_pins_per_cell": 1000, "strict_proofs_per_cell": 1000, "background_serving_refresh_separately_attributed": True, "data_group_proofs_per_cell": 0, "request_generation_pins_per_cell": 0, "request_partition_opens_per_cell": 0, "minimum_qps_improvement_over_4091": .05, "maximum_p95_ratio_over_4091": 1.05, "minimum_catalog_lifecycle_work_reduction_over_4090": .90})
     result["claim_boundary"] = "#4096 keeps ordinary Search strict while propagating one server-authenticated ingress proof over one immutable serving snapshot. It does not add relaxed/pinned APIs, change routing/index/search/topology, or replace the existing bounded framed JSON wire codec."
     return result
 

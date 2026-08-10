@@ -424,15 +424,16 @@ func vectorPartitionSystemCatalogReadDeltaV1(before, after map[string]vectorPart
 			return result, nil, errors.New("system-bench catalog read statistics overflow")
 		}
 		if !vectorPartitionSystemRuntimeMonotonicV1(beforeNode.Runtime, afterNode.Runtime) {
-			return result, nil, errors.New("system-bench process runtime statistics are non-monotonic")
+			return result, nil, fmt.Errorf("system-bench process runtime statistics are non-monotonic: identity=%s before=%+v after=%+v", identity, beforeNode.Runtime, afterNode.Runtime)
 		}
 		result.Nodes = append(result.Nodes, vectorPartitionSystemCatalogReadNodeV1{NodeConfigSHA256: identity, Before: beforeNode.Catalog, After: afterNode.Catalog, Delta: delta})
 		runtimeStats = append(runtimeStats, vectorPartitionSystemRuntimeNodeV1{NodeConfigSHA256: identity, Before: beforeNode.Runtime, After: afterNode.Runtime})
 	}
-	if result.Total.Total.Reads != queries || result.Total.StrictSearch.Reads != queries || result.Total.OperationsHealth.Reads != 0 || result.Total.CoordinatorLifecycle.Reads != 0 || result.Total.ShardLifecycle.Reads != 0 || result.Total.Unknown.Reads != 0 {
-		return result, nil, errors.New("system-bench catalog proof counts do not match measured search work")
+	wantTotal, ok := vectorPartitionSystemAddUint64V1(queries, result.Total.ServingRefresh.Reads)
+	if !ok || result.Total.Total.Reads != wantTotal || result.Total.StrictSearch.Reads != queries || result.Total.OperationsHealth.Reads != 0 || result.Total.CoordinatorLifecycle.Reads != 0 || result.Total.ShardLifecycle.Reads != 0 || result.Total.Unknown.Reads != 0 {
+		return result, nil, fmt.Errorf("system-bench catalog proof counts do not match measured search work: total=%d strict=%d refresh=%d health=%d coordinator=%d shard=%d unknown=%d want=%d", result.Total.Total.Reads, result.Total.StrictSearch.Reads, result.Total.ServingRefresh.Reads, result.Total.OperationsHealth.Reads, result.Total.CoordinatorLifecycle.Reads, result.Total.ShardLifecycle.Reads, result.Total.Unknown.Reads, queries)
 	}
-	sources := []nativewire.VectorPartitionCatalogMetaLinearizableReadStageStatsV1{result.Total.OperationsHealth, result.Total.StrictSearch, result.Total.CoordinatorLifecycle, result.Total.ShardLifecycle, result.Total.Unknown}
+	sources := []nativewire.VectorPartitionCatalogMetaLinearizableReadStageStatsV1{result.Total.OperationsHealth, result.Total.StrictSearch, result.Total.ServingRefresh, result.Total.CoordinatorLifecycle, result.Total.ShardLifecycle, result.Total.Unknown}
 	var summed nativewire.VectorPartitionCatalogMetaLinearizableReadStageStatsV1
 	for _, source := range sources {
 		exclusive, ok := vectorPartitionSystemAddUint64V1(source.AdmissionNanos, source.VerifyLeaderNanos)
@@ -481,6 +482,9 @@ func vectorPartitionSystemCatalogReadStatsSubtractV1(after, before nativewire.Ve
 	if out.StrictSearch, ok = vectorPartitionSystemCatalogReadStageSubtractV1(after.StrictSearch, before.StrictSearch); !ok {
 		return out, false
 	}
+	if out.ServingRefresh, ok = vectorPartitionSystemCatalogReadStageSubtractV1(after.ServingRefresh, before.ServingRefresh); !ok {
+		return out, false
+	}
 	if out.CoordinatorLifecycle, ok = vectorPartitionSystemCatalogReadStageSubtractV1(after.CoordinatorLifecycle, before.CoordinatorLifecycle); !ok {
 		return out, false
 	}
@@ -511,7 +515,7 @@ func vectorPartitionSystemCatalogReadStageSubtractV1(after, before nativewire.Ve
 }
 
 func vectorPartitionSystemCatalogReadStatsAddV1(total *nativewire.VectorPartitionCatalogMetaLinearizableReadStatsV1, value nativewire.VectorPartitionCatalogMetaLinearizableReadStatsV1) bool {
-	if total == nil || !vectorPartitionSystemCatalogReadStageAddV1(&total.Total, value.Total) || !vectorPartitionSystemCatalogReadStageAddV1(&total.OperationsHealth, value.OperationsHealth) || !vectorPartitionSystemCatalogReadStageAddV1(&total.StrictSearch, value.StrictSearch) || !vectorPartitionSystemCatalogReadStageAddV1(&total.CoordinatorLifecycle, value.CoordinatorLifecycle) || !vectorPartitionSystemCatalogReadStageAddV1(&total.ShardLifecycle, value.ShardLifecycle) || !vectorPartitionSystemCatalogReadStageAddV1(&total.Unknown, value.Unknown) {
+	if total == nil || !vectorPartitionSystemCatalogReadStageAddV1(&total.Total, value.Total) || !vectorPartitionSystemCatalogReadStageAddV1(&total.OperationsHealth, value.OperationsHealth) || !vectorPartitionSystemCatalogReadStageAddV1(&total.StrictSearch, value.StrictSearch) || !vectorPartitionSystemCatalogReadStageAddV1(&total.ServingRefresh, value.ServingRefresh) || !vectorPartitionSystemCatalogReadStageAddV1(&total.CoordinatorLifecycle, value.CoordinatorLifecycle) || !vectorPartitionSystemCatalogReadStageAddV1(&total.ShardLifecycle, value.ShardLifecycle) || !vectorPartitionSystemCatalogReadStageAddV1(&total.Unknown, value.Unknown) {
 		return false
 	}
 	total.LastTerm = max(total.LastTerm, value.LastTerm)
