@@ -54,6 +54,17 @@ func TestColumnHNSWSearchPackRoundTrip2312(t *testing.T) {
 }
 
 func TestColumnHNSWSearchPackAuxiliaryNavigationV3(t *testing.T) {
+	v2 := testColumnHNSWSearchPackInput2312()
+	v2.MembershipDigest[0] = 1
+	v2Raw, err := encodeColumnHNSWSearchPack(v2)
+	if err != nil || hnswPackU16(v2Raw, columnHNSWSearchPackHeaderVersionOffset) != columnHNSWSearchPackVersionV2 {
+		t.Fatalf("digest-only v2 encode err=%v version=%d", err, hnswPackU16(v2Raw, columnHNSWSearchPackHeaderVersionOffset))
+	}
+	v2Pack, err := decodeColumnHNSWSearchPack(v2Raw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: v2.BaseIdentity, ExpectedMembershipDigest: v2.MembershipDigest})
+	if err != nil || v2Pack.Header.HasAuxiliaryNavigation || len(v2Pack.AuxiliaryNavigation.Offsets) != 0 || len(v2Pack.AuxiliaryNavigation.Neighbors) != 0 {
+		t.Fatalf("digest-only v2 decode err=%v auxiliary=%+v", err, v2Pack.AuxiliaryNavigation)
+	}
+
 	connected := testColumnHNSWSearchPackInput2312()
 	connected.MembershipDigest[0] = 1
 	connected.HasAuxiliaryNavigation = true
@@ -88,6 +99,32 @@ func TestColumnHNSWSearchPackAuxiliaryNavigationV3(t *testing.T) {
 	}
 	if err := view.Close(); err != nil {
 		t.Fatalf("close v3 view: %v", err)
+	}
+	path := t.TempDir() + "/v3-pack.tca"
+	fileRaw := append(make([]byte, int(columnHNSWSearchPackVectorSectionAlignment)), raw...)
+	if err := os.WriteFile(path, fileRaw, 0o600); err != nil {
+		t.Fatalf("WriteFile v3: %v", err)
+	}
+	manager := mappedresource.NewManager()
+	key := testColumnHNSWSearchPackMappedResourceKey2314(int64(columnHNSWSearchPackVectorSectionAlignment), int64(len(raw)), page.Checksum(raw))
+	handle, err := manager.AcquireFileRange(key, testColumnHNSWSearchPackScope2314(), path, mappedresource.AcquireOptions{Reason: "mapped v3 test", PreferMapped: true, AllowHeapCopy: true, ValidationMode: mappedresource.ValidationVerify, ResourcePath: path})
+	if err != nil {
+		t.Fatalf("AcquireFileRange v3: %v", err)
+	}
+	mappedView, err := newColumnHNSWSearchPackPreparedViewFromHandle(manager, handle, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity, ExpectedMembershipDigest: input.MembershipDigest})
+	if err != nil {
+		_ = handle.Release()
+		t.Fatalf("new mapped v3 prepared view: %v", err)
+	}
+	if !reflect.DeepEqual(mappedView.AuxiliaryNavigation, columnHNSWSearchPackPreparedLayer{Offsets: input.AuxiliaryNavigation.Offsets, Neighbors: input.AuxiliaryNavigation.Neighbors}) {
+		_ = mappedView.Close()
+		t.Fatalf("mapped v3 prepared auxiliary=%+v", mappedView.AuxiliaryNavigation)
+	}
+	if err := mappedView.Close(); err != nil {
+		t.Fatalf("close mapped v3 view: %v", err)
+	}
+	if manager.Stats().ActiveHandles != 0 {
+		t.Fatalf("mapped v3 manager stats after close=%+v", manager.Stats())
 	}
 	for _, raw := range [][]byte{
 		testColumnHNSWSearchPackMutateSectionPayload2312(raw, columnHNSWSearchPackSectionAuxiliaryOffsets, 0, func(payload []byte) { binary.LittleEndian.PutUint64(payload[8:], 0) }),
@@ -590,12 +627,8 @@ func TestColumnHNSWSearchPackPreparedValidationObservesContext2314(t *testing.T)
 }
 
 func TestColumnHNSWSearchPackPreparedViewMappedFile2314(t *testing.T) {
-	input := testColumnHNSWSearchPackAuxiliaryInput4106()
-	raw, err := encodeColumnHNSWSearchPack(input)
-	if err != nil {
-		t.Fatalf("encode v3: %v", err)
-	}
-	base := input.BaseIdentity
+	raw := testColumnHNSWSearchPackRaw2312(t)
+	base := testColumnHNSWSearchPackInput2312().BaseIdentity
 	path := t.TempDir() + "/pack.tca"
 	fileRaw := append(make([]byte, int(columnHNSWSearchPackVectorSectionAlignment)), raw...)
 	if err := os.WriteFile(path, fileRaw, 0o600); err != nil {
