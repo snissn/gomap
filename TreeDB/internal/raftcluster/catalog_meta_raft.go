@@ -76,10 +76,12 @@ type CatalogMetaRaftProviderOptionsV1 struct {
 type CatalogMetaRaftProviderV1 struct {
 	cluster      ResolvedConfig
 	raft         *hraft.Raft
+	logStore     hraft.LogStore
 	state        CatalogMetaCommittedStateV1
 	snapshots    hraft.SnapshotStore
 	owned        []io.Closer
 	applyTimeout time.Duration
+	proofLease   time.Duration
 	mutationMu   sync.Mutex
 	readStats    catalogMetaLinearizableReadStatsV1
 }
@@ -93,16 +95,42 @@ const (
 	CatalogMetaReadSourceShardLifecycleV1       CatalogMetaReadSourceV1 = "shard_lifecycle"
 )
 
+// CatalogMetaReadProofV1 is the local no-log proof that the meta leader
+// observed a current-term quorum and applied the committed prefix before
+// reading the catalog state. The monotonic lease is intentionally process
+// local; #4096 owns authenticated cross-process propagation.
+type CatalogMetaReadProofV1 struct {
+	NodeID               NodeID  `json:"node_id"`
+	GroupID              GroupID `json:"group_id"`
+	LeaderTerm           uint64  `json:"leader_term"`
+	CommitIndex          uint64  `json:"commit_index"`
+	RaftAppliedIndex     uint64  `json:"raft_applied_index"`
+	CatalogAppliedIndex  uint64  `json:"catalog_applied_index"`
+	IssuedAtUnixNano     int64   `json:"issued_at_unix_nano"`
+	ValidThroughUnixNano int64   `json:"valid_through_unix_nano"`
+	QuorumVerified       bool    `json:"quorum_verified"`
+	validThrough         time.Time
+}
+
+// ValidThroughV1 returns the provider-owned lease deadline, including its
+// process-local monotonic clock reading.
+func (p CatalogMetaReadProofV1) ValidThroughV1() time.Time {
+	return p.validThrough
+}
+
 type CatalogMetaLinearizableReadStageStatsV1 struct {
 	Reads             uint64 `json:"reads"`
 	Successes         uint64 `json:"successes"`
 	Failures          uint64 `json:"failures"`
 	VerifyLeaderCalls uint64 `json:"verify_leader_calls"`
 	LogBarriers       uint64 `json:"log_barriers"`
+	NoLogProofs       uint64 `json:"no_log_proofs"`
 	TotalNanos        uint64 `json:"total_nanos"`
 	AdmissionNanos    uint64 `json:"admission_nanos"`
 	VerifyLeaderNanos uint64 `json:"verify_leader_nanos"`
 	BarrierNanos      uint64 `json:"barrier_nanos"`
+	CurrentTermNanos  uint64 `json:"current_term_nanos"`
+	RaftApplyNanos    uint64 `json:"raft_apply_nanos"`
 	AppliedReadNanos  uint64 `json:"applied_read_nanos"`
 }
 
@@ -119,9 +147,9 @@ type CatalogMetaLinearizableReadStatsV1 struct {
 }
 
 type catalogMetaLinearizableReadStageStatsV1 struct {
-	reads, successes, failures, verifyLeaderCalls, logBarriers atomic.Uint64
-	totalNanos, admissionNanos, verifyLeaderNanos              atomic.Uint64
-	barrierNanos, appliedReadNanos                             atomic.Uint64
+	reads, successes, failures, verifyLeaderCalls, logBarriers, noLogProofs atomic.Uint64
+	totalNanos, admissionNanos, verifyLeaderNanos                           atomic.Uint64
+	barrierNanos, currentTermNanos, raftApplyNanos, appliedReadNanos        atomic.Uint64
 }
 
 type catalogMetaLinearizableReadStatsV1 struct {
@@ -183,9 +211,9 @@ func (s *catalogMetaLinearizableReadStatsV1) finish(stage *catalogMetaLinearizab
 func catalogMetaLinearizableReadStageSnapshotV1(s *catalogMetaLinearizableReadStageStatsV1) CatalogMetaLinearizableReadStageStatsV1 {
 	return CatalogMetaLinearizableReadStageStatsV1{
 		Reads: s.reads.Load(), Successes: s.successes.Load(), Failures: s.failures.Load(),
-		VerifyLeaderCalls: s.verifyLeaderCalls.Load(), LogBarriers: s.logBarriers.Load(),
+		VerifyLeaderCalls: s.verifyLeaderCalls.Load(), LogBarriers: s.logBarriers.Load(), NoLogProofs: s.noLogProofs.Load(),
 		TotalNanos: s.totalNanos.Load(), AdmissionNanos: s.admissionNanos.Load(),
-		VerifyLeaderNanos: s.verifyLeaderNanos.Load(), BarrierNanos: s.barrierNanos.Load(), AppliedReadNanos: s.appliedReadNanos.Load(),
+		VerifyLeaderNanos: s.verifyLeaderNanos.Load(), BarrierNanos: s.barrierNanos.Load(), CurrentTermNanos: s.currentTermNanos.Load(), RaftApplyNanos: s.raftApplyNanos.Load(), AppliedReadNanos: s.appliedReadNanos.Load(),
 	}
 }
 
@@ -258,10 +286,12 @@ func OpenCatalogMetaRaftProviderV1(opts CatalogMetaRaftProviderOptionsV1) (*Cata
 	return &CatalogMetaRaftProviderV1{
 		cluster:      cluster,
 		raft:         r,
+		logStore:     stores.log,
 		state:        opts.State,
 		snapshots:    stores.snapshots,
 		owned:        stores.owned,
 		applyTimeout: timeout,
+		proofLease:   conf.LeaderLeaseTimeout / 2,
 	}, nil
 }
 
@@ -298,20 +328,18 @@ func (p *CatalogMetaRaftProviderV1) ClusterAdmissionStatus(ctx context.Context) 
 	return UnavailableAdmission("catalog meta leader unavailable"), nil
 }
 
-// LinearizableCatalogMetaAppliedIndexV1 verifies current leadership with the
-// voter quorum, waits for all prior committed FSM work locally, then returns
-// the catalog command index installed in that applied view. Followers fail
-// closed; a cross-node caller must route this operation to the meta leader and
-// arrange local catch-up before using the returned index.
-func (p *CatalogMetaRaftProviderV1) LinearizableCatalogMetaAppliedIndexV1(ctx context.Context) (uint64, error) {
+// LinearizableCatalogMetaReadProofV1 verifies current leadership with the voter
+// quorum, waits for the current-term committed prefix to apply locally, and
+// returns the exact catalog view without appending a Raft log entry.
+func (p *CatalogMetaRaftProviderV1) LinearizableCatalogMetaReadProofV1(ctx context.Context) (CatalogMetaReadProofV1, error) {
 	if p == nil || p.raft == nil || p.state == nil {
-		return 0, ErrInvalidHashicorpRaftProvider
+		return CatalogMetaReadProofV1{}, ErrInvalidHashicorpRaftProvider
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return 0, err
+		return CatalogMetaReadProofV1{}, err
 	}
 	stage, started := p.readStats.begin(catalogMetaReadSourceV1(ctx))
 	success := false
@@ -323,13 +351,17 @@ func (p *CatalogMetaRaftProviderV1) LinearizableCatalogMetaAppliedIndexV1(ctx co
 	p.readStats.total.admissionNanos.Add(admissionNanos)
 	stage.admissionNanos.Add(admissionNanos)
 	if err != nil {
-		return 0, err
+		return CatalogMetaReadProofV1{}, err
 	}
 	if status.Unavailable {
-		return 0, ErrHashicorpRaftUnavailable
+		return CatalogMetaReadProofV1{}, ErrHashicorpRaftUnavailable
 	}
 	if !status.Leader {
-		return 0, ErrNotLeader
+		return CatalogMetaReadProofV1{}, ErrNotLeader
+	}
+	verifiedTerm := p.raft.CurrentTerm()
+	if verifiedTerm == 0 {
+		return CatalogMetaReadProofV1{}, ErrReadBarrierNotSatisfied
 	}
 	verifyStarted := time.Now()
 	p.readStats.total.verifyLeaderCalls.Add(1)
@@ -339,18 +371,32 @@ func (p *CatalogMetaRaftProviderV1) LinearizableCatalogMetaAppliedIndexV1(ctx co
 	p.readStats.total.verifyLeaderNanos.Add(verifyNanos)
 	stage.verifyLeaderNanos.Add(verifyNanos)
 	if verifyErr != nil {
-		return 0, mapCatalogMetaLinearizableReadErrorV1(verifyErr)
+		return CatalogMetaReadProofV1{}, mapCatalogMetaLinearizableReadErrorV1(verifyErr)
+	}
+	verifiedAt := time.Now()
+	if err := p.requireCatalogMetaReadLeaderTermV1(verifiedTerm); err != nil {
+		return CatalogMetaReadProofV1{}, err
 	}
 
-	barrierStarted := time.Now()
-	p.readStats.total.logBarriers.Add(1)
-	stage.logBarriers.Add(1)
-	barrierErr := waitHashicorpRaftFuture(ctx, p.raft.Barrier(p.applyTimeout))
-	barrierNanos := uint64(time.Since(barrierStarted))
-	p.readStats.total.barrierNanos.Add(barrierNanos)
-	stage.barrierNanos.Add(barrierNanos)
-	if barrierErr != nil {
-		return 0, mapCatalogMetaLinearizableReadErrorV1(barrierErr)
+	currentTermStarted := time.Now()
+	term, commitIndex, err := waitHashicorpCurrentTermCommitV1(ctx, p.raft, p.logStore, p.applyTimeout, p.requireCatalogMetaReadLeaderV1)
+	currentTermNanos := uint64(time.Since(currentTermStarted))
+	p.readStats.total.currentTermNanos.Add(currentTermNanos)
+	stage.currentTermNanos.Add(currentTermNanos)
+	if err != nil {
+		return CatalogMetaReadProofV1{}, mapCatalogMetaLinearizableReadErrorV1(err)
+	}
+	if term != verifiedTerm {
+		return CatalogMetaReadProofV1{}, errors.Join(ErrReadBarrierNotSatisfied, fmt.Errorf("catalog leader term changed during quorum proof"))
+	}
+
+	raftApplyStarted := time.Now()
+	err = p.waitCatalogMetaRaftAppliedV1(ctx, term, commitIndex)
+	raftApplyNanos := uint64(time.Since(raftApplyStarted))
+	p.readStats.total.raftApplyNanos.Add(raftApplyNanos)
+	stage.raftApplyNanos.Add(raftApplyNanos)
+	if err != nil {
+		return CatalogMetaReadProofV1{}, err
 	}
 
 	appliedStarted := time.Now()
@@ -359,27 +405,122 @@ func (p *CatalogMetaRaftProviderV1) LinearizableCatalogMetaAppliedIndexV1(ctx co
 		p.readStats.total.appliedReadNanos.Add(appliedNanos)
 		stage.appliedReadNanos.Add(appliedNanos)
 	}()
-	status, err = p.ClusterAdmissionStatus(ctx)
-	if err != nil {
-		return 0, err
-	}
-	if !status.Leader {
-		return 0, ErrNotLeader
+	if err := p.requireCatalogMetaReadLeaderTermV1(term); err != nil {
+		return CatalogMetaReadProofV1{}, err
 	}
 	appliedState, ok := p.state.(CatalogMetaAppliedStateV1)
 	if !ok {
-		return 0, errors.Join(ErrInvalidHashicorpRaftProvider, fmt.Errorf("catalog state does not expose applied index"))
+		return CatalogMetaReadProofV1{}, errors.Join(ErrInvalidHashicorpRaftProvider, fmt.Errorf("catalog state does not expose applied index"))
 	}
 	applied, ok := appliedState.CatalogMetaAppliedIndexV1()
 	if !ok {
-		return 0, ErrHashicorpRaftUnavailable
+		return CatalogMetaReadProofV1{}, ErrHashicorpRaftUnavailable
 	}
-	p.readStats.lastTerm.Store(p.raft.CurrentTerm())
+	if err := p.requireCatalogMetaReadLeaderTermV1(term); err != nil {
+		return CatalogMetaReadProofV1{}, err
+	}
+	validThrough := verifiedAt.Add(p.proofLease)
+	if !time.Now().Before(validThrough) {
+		return CatalogMetaReadProofV1{}, errors.Join(ErrReadBarrierNotSatisfied, fmt.Errorf("catalog read proof lease expired during capture"))
+	}
+	proof := CatalogMetaReadProofV1{
+		NodeID: p.cluster.NodeID, GroupID: p.cluster.GroupID,
+		LeaderTerm: term, CommitIndex: commitIndex, RaftAppliedIndex: p.raft.AppliedIndex(), CatalogAppliedIndex: applied,
+		IssuedAtUnixNano: verifiedAt.UnixNano(), ValidThroughUnixNano: validThrough.UnixNano(), QuorumVerified: true,
+		validThrough: validThrough,
+	}
+	p.readStats.total.noLogProofs.Add(1)
+	stage.noLogProofs.Add(1)
+	p.readStats.lastTerm.Store(term)
 	p.readStats.lastCatalogApplied.Store(applied)
-	p.readStats.lastRaftApplied.Store(p.raft.AppliedIndex())
+	p.readStats.lastRaftApplied.Store(proof.RaftAppliedIndex)
 	p.readStats.lastRaftLog.Store(p.raft.LastIndex())
 	success = true
-	return applied, nil
+	return proof, nil
+}
+
+// LinearizableCatalogMetaAppliedIndexV1 preserves the existing caller contract
+// while using the no-log proof path.
+func (p *CatalogMetaRaftProviderV1) LinearizableCatalogMetaAppliedIndexV1(ctx context.Context) (uint64, error) {
+	proof, err := p.LinearizableCatalogMetaReadProofV1(ctx)
+	return proof.CatalogAppliedIndex, err
+}
+
+// ValidateCatalogMetaReadProofLeaseV1 validates a proof using only local
+// in-memory Raft/catalog state. It performs no network or log I/O.
+func (p *CatalogMetaRaftProviderV1) ValidateCatalogMetaReadProofLeaseV1(proof CatalogMetaReadProofV1) error {
+	if p == nil || p.raft == nil || p.state == nil || proof.validThrough.IsZero() || !proof.QuorumVerified ||
+		proof.NodeID != p.cluster.NodeID || proof.GroupID != p.cluster.GroupID || proof.LeaderTerm == 0 ||
+		proof.CommitIndex == 0 || proof.RaftAppliedIndex < proof.CommitIndex || proof.CatalogAppliedIndex == 0 {
+		return ErrReadBarrierNotSatisfied
+	}
+	if !time.Now().Before(proof.validThrough) {
+		return errors.Join(ErrReadBarrierNotSatisfied, fmt.Errorf("catalog read proof lease expired"))
+	}
+	if err := p.requireCatalogMetaReadLeaderTermV1(proof.LeaderTerm); err != nil {
+		return err
+	}
+	if p.raft.AppliedIndex() < proof.CommitIndex {
+		return errors.Join(ErrReadBarrierNotSatisfied, fmt.Errorf("catalog raft applied index is behind proof"))
+	}
+	appliedState, ok := p.state.(CatalogMetaAppliedStateV1)
+	if !ok {
+		return errors.Join(ErrInvalidHashicorpRaftProvider, fmt.Errorf("catalog state does not expose applied index"))
+	}
+	applied, ok := appliedState.CatalogMetaAppliedIndexV1()
+	if !ok || applied != proof.CatalogAppliedIndex {
+		return errors.Join(ErrReadBarrierNotSatisfied, fmt.Errorf("catalog applied identity changed"))
+	}
+	return nil
+}
+
+func (p *CatalogMetaRaftProviderV1) requireCatalogMetaReadLeaderV1() error {
+	if p == nil || p.raft == nil {
+		return ErrInvalidHashicorpRaftProvider
+	}
+	if state := p.raft.State(); state != hraft.Leader {
+		if state == hraft.Shutdown {
+			return ErrHashicorpRaftUnavailable
+		}
+		return ErrNotLeader
+	}
+	return nil
+}
+
+func (p *CatalogMetaRaftProviderV1) requireCatalogMetaReadLeaderTermV1(term uint64) error {
+	if err := p.requireCatalogMetaReadLeaderV1(); err != nil {
+		return err
+	}
+	if got := p.raft.CurrentTerm(); got != term {
+		return errors.Join(ErrReadBarrierNotSatisfied, fmt.Errorf("catalog leader term changed from %d to %d", term, got))
+	}
+	return nil
+}
+
+func (p *CatalogMetaRaftProviderV1) waitCatalogMetaRaftAppliedV1(ctx context.Context, term, minIndex uint64) error {
+	timeout := p.applyTimeout
+	if timeout <= 0 {
+		timeout = hashicorpRaftDefaultApplyTimeout
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	poll := time.NewTicker(hashicorpRaftReadIndexInitialPoll)
+	defer poll.Stop()
+	for {
+		if err := p.requireCatalogMetaReadLeaderTermV1(term); err != nil {
+			return err
+		}
+		if p.raft.AppliedIndex() >= minIndex {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return errors.Join(ErrReadBarrierNotSatisfied, fmt.Errorf("catalog raft applied index %d is behind commit %d", p.raft.AppliedIndex(), minIndex))
+		case <-poll.C:
+		}
+	}
 }
 
 func mapCatalogMetaLinearizableReadErrorV1(err error) error {

@@ -670,6 +670,7 @@ func pinnedVectorPartitionManifestV1(m collections.VectorPartitionManifestV1) Ve
 		Collection:            m.Collection,
 		IndexName:             m.IndexName,
 		IndexDefinitionDigest: m.IndexDefinitionDigest,
+		IntegrityDigest:       m.IntegrityDigest,
 		SourceGeneration:      m.SourceGeneration,
 		SourceChecksum:        m.SourceChecksum,
 		SourceSchemaHash:      m.SourceSchemaHash,

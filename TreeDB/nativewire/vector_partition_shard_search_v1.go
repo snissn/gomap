@@ -235,12 +235,12 @@ func MeasureVectorPartitionShardSearchResponseBytesV1(partials []VectorPartition
 // generation source so warm requests never clone a potentially 1M-row
 // manifest.
 type VectorPartitionPinnedManifestV1 struct {
-	State, Collection, IndexName, IndexDefinitionDigest                string
-	SourceGeneration, SourceChecksum, SourceSchemaHash, SourceRowCount uint64
-	Generation, RouterGeneration                                       uint64
-	ReadySetDigest                                                     string
-	PartitionCount                                                     uint32
-	Placements                                                         []collections.VectorPartitionPlacementV1
+	State, Collection, IndexName, IndexDefinitionDigest, IntegrityDigest string
+	SourceGeneration, SourceChecksum, SourceSchemaHash, SourceRowCount   uint64
+	Generation, RouterGeneration                                         uint64
+	ReadySetDigest                                                       string
+	PartitionCount                                                       uint32
+	Placements                                                           []collections.VectorPartitionPlacementV1
 }
 
 // VectorPartitionPartitionSearchLeaseV1 gives one request a searcher without
