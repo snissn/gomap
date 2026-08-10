@@ -38,6 +38,7 @@ type VectorPartitionServingSnapshotPublisherOptionsV1 struct {
 // identity, but it never mutates the identity or its assets.
 type VectorPartitionServingSnapshotIdentityV1 struct {
 	SnapshotDigest             string                                               `json:"snapshot_digest"`
+	ServingIdentityDigest      string                                               `json:"serving_identity_digest"`
 	Lifecycle                  raftplacement.VectorPartitionLifecycleIdentityV1     `json:"lifecycle"`
 	CatalogEpoch               uint64                                               `json:"catalog_epoch"`
 	CatalogDigest              string                                               `json:"catalog_digest"`
@@ -60,13 +61,14 @@ type VectorPartitionServingSnapshotIdentityV1 struct {
 }
 
 type VectorPartitionServingSnapshotPublisherStatsV1 struct {
-	Builds, BuildFailures                      uint64
-	Publications, Replacements, Invalidations  uint64
-	ProofRefreshes, ProofRefreshFailures       uint64
-	Acquisitions, AcquisitionRejections        uint64
-	Releases, SnapshotCloses                   uint64
-	RouterPins, GenerationPins, PartitionOpens uint64
-	CurrentPins, CurrentSnapshots              uint64
+	Builds, BuildFailures                         uint64
+	Publications, Replacements, Invalidations     uint64
+	ProofRefreshes, ProofRefreshFailures          uint64
+	Acquisitions, AcquisitionRejections           uint64
+	StrictAcquisitions, StrictAcquisitionFailures uint64
+	Releases, SnapshotCloses                      uint64
+	RouterPins, GenerationPins, PartitionOpens    uint64
+	CurrentPins, CurrentSnapshots                 uint64
 }
 
 type vectorPartitionServingSnapshotV1 struct {
@@ -103,6 +105,7 @@ type VectorPartitionServingSnapshotPublisherV1 struct {
 type VectorPartitionServingSnapshotLeaseV1 struct {
 	publisher *VectorPartitionServingSnapshotPublisherV1
 	snapshot  *vectorPartitionServingSnapshotV1
+	proof     vectorPartitionServingAuthorityProofV1
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -310,6 +313,10 @@ func (p *VectorPartitionServingSnapshotPublisherV1) buildSnapshotV1(ctx context.
 		IndexedThrough: p.opts.IndexedThrough, PublishedAtUnixNano: publishedAt.UnixNano(),
 		ReadyGroups: slices.Clone(after.authority.Record.ReadyGroups), LocalGroups: slices.Clone(localGroups),
 	}
+	identity.ServingIdentityDigest, err = vectorPartitionServingIdentityDigestV1(identity)
+	if err != nil {
+		return fail(err)
+	}
 	identity.SnapshotDigest, err = vectorPartitionServingSnapshotDigestV1(identity)
 	if err != nil {
 		return fail(err)
@@ -373,6 +380,28 @@ func vectorPartitionServingSnapshotDigestV1(identity VectorPartitionServingSnaps
 	return hex.EncodeToString(sum[:]), nil
 }
 
+// vectorPartitionServingIdentityDigestV1 is common across processes serving
+// the same immutable generation. Process-local proof, publication, and asset
+// ownership fields are authenticated separately by the strict capability.
+func vectorPartitionServingIdentityDigestV1(identity VectorPartitionServingSnapshotIdentityV1) (string, error) {
+	identity.SnapshotDigest = ""
+	identity.ServingIdentityDigest = ""
+	identity.CatalogAppliedIndex = 0
+	identity.CatalogCommitIndex = 0
+	identity.CatalogRaftAppliedIndex = 0
+	identity.ProofNodeID = ""
+	identity.ProofGroupID = ""
+	identity.ProofLeaderTerm = 0
+	identity.PublishedAtUnixNano = 0
+	identity.LocalGroups = nil
+	raw, err := json.Marshal(identity)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
+}
+
 func (p *VectorPartitionServingSnapshotPublisherV1) AcquireV1() (*VectorPartitionServingSnapshotLeaseV1, error) {
 	if p == nil {
 		return nil, ErrVectorPartitionShardSearchAssetsUnavailable
@@ -390,7 +419,51 @@ func (p *VectorPartitionServingSnapshotPublisherV1) AcquireV1() (*VectorPartitio
 	p.current.refs++
 	p.stats.Acquisitions++
 	p.stats.CurrentPins++
-	return &VectorPartitionServingSnapshotLeaseV1{publisher: p, snapshot: p.current}, nil
+	return &VectorPartitionServingSnapshotLeaseV1{publisher: p, snapshot: p.current, proof: p.current.proof}, nil
+}
+
+// AcquireStrictV1 pins the current immutable assets, then obtains exactly one
+// fresh current-term catalog proof for this request. It never rebuilds or
+// reopens router, generation, or partition assets.
+func (p *VectorPartitionServingSnapshotPublisherV1) AcquireStrictV1(ctx context.Context) (*VectorPartitionServingSnapshotLeaseV1, error) {
+	if p == nil {
+		return nil, ErrVectorPartitionShardSearchAssetsUnavailable
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	p.mu.Lock()
+	if p.closed || p.current == nil {
+		p.stats.StrictAcquisitionFailures++
+		p.mu.Unlock()
+		return nil, ErrVectorPartitionShardSearchAssetsUnavailable
+	}
+	snapshot := p.current
+	snapshot.refs++
+	p.stats.Acquisitions++
+	p.stats.CurrentPins++
+	p.mu.Unlock()
+	lease := &VectorPartitionServingSnapshotLeaseV1{publisher: p, snapshot: snapshot}
+	placement := p.opts.Coordinator.placement
+	fresh, err := p.opts.Authority.captureVectorPartitionServingAuthorityV1(
+		raftcluster.WithCatalogMetaReadSourceV1(ctx, raftcluster.CatalogMetaReadSourceStrictSearchV1),
+		placement.Collection, placement.IndexName, placement.PartitionGeneration, placement.IndexDefinitionDigest,
+		placement.SourceGeneration, placement.SourceChecksum, placement.SourceSchemaHash, placement.SourceRowCount,
+	)
+	if err == nil {
+		err = p.installProofV1(snapshot, fresh, nil)
+	}
+	if err != nil {
+		p.mu.Lock()
+		p.stats.StrictAcquisitionFailures++
+		p.mu.Unlock()
+		return nil, errors.Join(err, lease.Close())
+	}
+	lease.proof = fresh
+	p.mu.Lock()
+	p.stats.StrictAcquisitions++
+	p.mu.Unlock()
+	return lease, nil
 }
 
 func (l *VectorPartitionServingSnapshotLeaseV1) IdentityV1() VectorPartitionServingSnapshotIdentityV1 {
@@ -443,7 +516,7 @@ func (p *VectorPartitionServingSnapshotPublisherV1) RefreshProofV1(ctx context.C
 	}
 	placement := p.opts.Coordinator.placement
 	fresh, err := p.opts.Authority.captureVectorPartitionServingAuthorityV1(
-		raftcluster.WithCatalogMetaReadSourceV1(ctx, raftcluster.CatalogMetaReadSourceUnknownV1),
+		raftcluster.WithCatalogMetaReadSourceV1(ctx, raftcluster.CatalogMetaReadSourceServingRefreshV1),
 		placement.Collection, placement.IndexName, placement.PartitionGeneration, placement.IndexDefinitionDigest,
 		placement.SourceGeneration, placement.SourceChecksum, placement.SourceSchemaHash, placement.SourceRowCount,
 	)

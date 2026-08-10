@@ -1096,6 +1096,9 @@ func startM8ProfileCaptureV1(dir string) (*m8ProfileCaptureV1, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve M8 profiles directory: %w", err)
 	}
+	if err := os.MkdirAll(canonicalDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create M8 profiles directory: %w", err)
+	}
 	capture := &m8ProfileCaptureV1{dir: canonicalDir}
 	baseline := filepath.Join(canonicalDir, "allocs_baseline.pprof")
 	if err := writeM8RuntimeProfileExclusiveV1("allocs", baseline); err != nil {

@@ -16,6 +16,7 @@ type vectorPartitionServingSnapshotFixtureV1 struct {
 	harness     *raftplacement.CatalogMetaLifecycleHarnessV1
 	lifecycle   raftplacement.VectorPartitionLifecycleCoordinatorV1
 	identity    raftplacement.VectorPartitionLifecycleIdentityV1
+	catalog     raftplacement.ResolvedCatalogV1
 	coordinator *VectorPartitionCoordinatorV1
 	authority   *LinearizableCatalogVectorPartitionLifecycleAuthorityV1
 	publisher   *VectorPartitionServingSnapshotPublisherV1
@@ -171,7 +172,7 @@ func newVectorPartitionServingSnapshotFixtureV1(tb testing.TB) *vectorPartitionS
 		tb.Fatal(err)
 	}
 	fixture := &vectorPartitionServingSnapshotFixtureV1{
-		harness: harness, lifecycle: lifecycle, identity: identity, coordinator: coordinator,
+		harness: harness, lifecycle: lifecycle, identity: identity, catalog: catalog, coordinator: coordinator,
 		authority: authority, publisher: publisher, router: router, sources: sources,
 	}
 	tb.Cleanup(func() {
@@ -180,6 +181,29 @@ func newVectorPartitionServingSnapshotFixtureV1(tb testing.TB) *vectorPartitionS
 		_ = fixture.harness.Close()
 	})
 	return fixture
+}
+
+func TestVectorPartitionProductionTopologyInitialSnapshotPublicationHonorsContextV1(t *testing.T) {
+	fixture := newVectorPartitionServingSnapshotFixtureV1(t)
+	sources := make(map[raftcluster.GroupID]VectorPartitionGenerationSourceV1, len(fixture.sources))
+	for group, source := range fixture.sources {
+		sources[group] = source
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := NewVectorPartitionProductionTopologyV1(VectorPartitionProductionTopologyOptionsV1{
+		ConstructionContext: ctx, Catalog: fixture.catalog, Placement: fixture.coordinator.placement,
+		RouterSource: fixture.coordinator.routerSource, ReplicatedLifecycle: fixture.authority,
+		Endpoints: map[raftcluster.GroupID]string{"group-a": "127.0.0.1:1", "group-b": "127.0.0.1:2"},
+		ServingSnapshot: &VectorPartitionServingSnapshotPublisherOptionsV1{
+			Authority: fixture.authority, GenerationSources: sources,
+			TopologyDigest: strings.Repeat("e", 64), AuthorizationOverlayDigest: strings.Repeat("f", 64), IndexedThrough: 11,
+		},
+		StrictCapabilityKey: []byte(strings.Repeat("k", 32)),
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("initial publication error=%v, want canceled", err)
+	}
 }
 
 func TestVectorPartitionServingSnapshotPublicationRejectsAssetSetMismatchV1(t *testing.T) {
@@ -274,6 +298,38 @@ func TestVectorPartitionServingSnapshotProofRefreshRetriesWithinRemainingLeaseV1
 	}
 }
 
+func TestVectorPartitionServingSnapshotStrictAcquireUsesOneProofAndDrainsV1(t *testing.T) {
+	fixture := newVectorPartitionServingSnapshotFixtureV1(t)
+	if err := fixture.publisher.PublishV1(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	before := fixture.harness.LeaderFence().CatalogMetaLinearizableReadStatsV1()
+	lease, err := fixture.publisher.AcquireStrictV1(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := fixture.harness.LeaderFence().CatalogMetaLinearizableReadStatsV1()
+	if after.StrictSearch.Reads-before.StrictSearch.Reads != 1 || after.Total.Reads-before.Total.Reads != 1 || after.Total.LogBarriers != before.Total.LogBarriers || after.Total.NoLogProofs-before.Total.NoLogProofs != 1 {
+		t.Fatalf("strict proof stats before=%+v after=%+v", before, after)
+	}
+	if err := fixture.publisher.InvalidateV1(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.publisher.AcquireStrictV1(t.Context()); err == nil {
+		t.Fatal("invalidated snapshot admitted a strict request")
+	}
+	if lease.IdentityV1().ServingIdentityDigest == "" {
+		t.Fatal("in-flight strict pin did not retain its serving identity")
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stats := fixture.publisher.StatsV1()
+	if stats.StrictAcquisitions != 1 || stats.StrictAcquisitionFailures != 1 || stats.CurrentPins != 0 {
+		t.Fatalf("strict acquisition stats=%+v", stats)
+	}
+}
+
 func TestVectorPartitionServingSnapshotReplacementIdentityAdvancesV1(t *testing.T) {
 	previous := &vectorPartitionServingSnapshotV1{identity: VectorPartitionServingSnapshotIdentityV1{PublishedAtUnixNano: 7}}
 	next := &vectorPartitionServingSnapshotV1{identity: previous.identity}
@@ -328,7 +384,7 @@ func TestVectorPartitionServingSnapshotPublicationPinsAndDrainsV1(t *testing.T) 
 		t.Fatal(err)
 	}
 	after := fixture.harness.LeaderFence().CatalogMetaLinearizableReadStatsV1()
-	if after.LastRaftLog != before.LastRaftLog || after.Total.LogBarriers != 0 || after.Total.NoLogProofs <= before.Total.NoLogProofs {
+	if after.LastRaftLog != before.LastRaftLog || after.Total.LogBarriers != 0 || after.Total.NoLogProofs-before.Total.NoLogProofs != 1 || after.ServingRefresh.Reads-before.ServingRefresh.Reads != 1 {
 		t.Fatalf("proof refresh stats before=%+v after=%+v", before, after)
 	}
 	if err := fixture.publisher.PublishV1(t.Context()); err != nil {

@@ -6,6 +6,7 @@ package nativewire
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net"
@@ -28,6 +29,7 @@ type VectorPartitionProductionShardV1 struct {
 }
 
 type VectorPartitionProductionTopologyOptionsV1 struct {
+	ConstructionContext context.Context
 	Catalog             raftplacement.ResolvedCatalogV1
 	Placement           raftplacement.VectorPartitionPlacementRecordV1
 	RouterSource        VectorPartitionCoordinatorRouterSourceV1
@@ -38,6 +40,8 @@ type VectorPartitionProductionTopologyOptionsV1 struct {
 	CoordinatorLimits   VectorPartitionCoordinatorLimitsV1
 	ShardLimits         VectorPartitionShardSearchLimitsV1
 	ShardIdleTimeout    time.Duration
+	ServingSnapshot     *VectorPartitionServingSnapshotPublisherOptionsV1
+	StrictCapabilityKey []byte
 }
 
 type VectorPartitionProductionTopologyStatusV1 struct {
@@ -51,6 +55,8 @@ type VectorPartitionProductionTopologyStatusV1 struct {
 // Callers retain ownership of Raft, catalog, lifecycle, and local asset sources.
 type VectorPartitionProductionTopologyV1 struct {
 	coordinator       *VectorPartitionCoordinatorV1
+	servingSnapshot   *VectorPartitionServingSnapshotPublisherV1
+	strictKey         []byte
 	dispatcher        *VectorPartitionShardSearchTCPDispatcherV1
 	listeners         map[raftcluster.GroupID]net.Listener
 	endpoints         map[raftcluster.GroupID]string
@@ -238,6 +244,32 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 	if err != nil {
 		return nil, err
 	}
+	if opts.ServingSnapshot != nil || len(opts.StrictCapabilityKey) != 0 {
+		if opts.ServingSnapshot == nil || len(opts.StrictCapabilityKey) != sha256.Size {
+			return nil, errors.New("nativewire: production vector topology strict serving options are incomplete")
+		}
+		snapshotOpts := *opts.ServingSnapshot
+		snapshotOpts.Coordinator = h.coordinator
+		h.servingSnapshot, err = NewVectorPartitionServingSnapshotPublisherV1(snapshotOpts)
+		if err != nil {
+			return nil, err
+		}
+		constructionContext := opts.ConstructionContext
+		if constructionContext == nil {
+			constructionContext = context.Background()
+		}
+		publishContext, cancel := context.WithTimeout(constructionContext, coordinatorLimits.MaxWallClock)
+		defer cancel()
+		if err = h.servingSnapshot.PublishV1(publishContext); err != nil {
+			return nil, err
+		}
+		h.strictKey = slices.Clone(opts.StrictCapabilityKey)
+		for _, service := range h.services {
+			if err = service.bindServingSnapshotV1(h.servingSnapshot, h.strictKey); err != nil {
+				return nil, err
+			}
+		}
+	}
 	for group, listener := range h.listeners {
 		// Keep accepted sockets bounded without letting one dispatcher pool consume
 		// the whole listener while its keep-alives are idle.
@@ -306,6 +338,39 @@ func (h *VectorPartitionProductionTopologyV1) Coordinator() *VectorPartitionCoor
 		return nil
 	}
 	return h.coordinator
+}
+
+func (h *VectorPartitionProductionTopologyV1) searchStrictV1(ctx context.Context, request VectorPartitionCoordinatorRequestV1) (VectorPartitionCoordinatorResponseV1, error) {
+	if h == nil || h.coordinator == nil {
+		return VectorPartitionCoordinatorResponseV1{}, ErrVectorPartitionCoordinatorUnavailable
+	}
+	if h.servingSnapshot == nil {
+		return h.coordinator.Search(ctx, request)
+	}
+	snapshot, err := h.servingSnapshot.AcquireStrictV1(ctx)
+	if err != nil {
+		return VectorPartitionCoordinatorResponseV1{}, err
+	}
+	defer snapshot.Close()
+	response, err := h.coordinator.searchStrictV1(ctx, request, snapshot, h.strictKey)
+	if err == nil {
+		response.Counters.SnapshotPins = 1
+	}
+	return response, err
+}
+
+func (h *VectorPartitionProductionTopologyV1) InvalidateServingSnapshotV1() error {
+	if h == nil || h.servingSnapshot == nil {
+		return nil
+	}
+	return h.servingSnapshot.InvalidateV1()
+}
+
+func (h *VectorPartitionProductionTopologyV1) PublishServingSnapshotV1(ctx context.Context) error {
+	if h == nil || h.servingSnapshot == nil {
+		return nil
+	}
+	return h.servingSnapshot.PublishV1(ctx)
 }
 
 func (h *VectorPartitionProductionTopologyV1) Status() VectorPartitionProductionTopologyStatusV1 {
@@ -539,6 +604,9 @@ func (h *VectorPartitionProductionTopologyV1) Close() error {
 		h.wg.Wait()
 		if h.dispatcher != nil {
 			errs = append(errs, h.dispatcher.Close())
+		}
+		if h.servingSnapshot != nil {
+			errs = append(errs, h.servingSnapshot.Close())
 		}
 		if h.coordinator != nil {
 			errs = append(errs, h.coordinator.Close())

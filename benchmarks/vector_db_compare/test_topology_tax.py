@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from system_qualification import ContractError
-from topology_tax import _listener_matches, summarize
+from topology_tax import _listener_matches, _topology_identity, summarize
 
 
 SOURCE_REVISION = "d" * 40
@@ -52,12 +52,15 @@ class TopologyTaxTest(unittest.TestCase):
             "node_id": node["node_id"], "dataset_directory": topology["dataset_directory"], "database_directory": node["database_directory"],
             "state_directory": node["state_directory"],
         }
-        if "profile_directory" in node:
-            config["profile_directory"] = node["profile_directory"]
+        if "capability_key_path" in node:
+            config["capability_key_path"] = node["capability_key_path"]
         if "public_listen" in node:
             config["public_listen"] = node["public_listen"]
+        config["ready_path"] = node["ready_path"]
+        if "profile_directory" in node:
+            config["profile_directory"] = node["profile_directory"]
         config.update({
-            "ready_path": node["ready_path"], "local_groups": node["local_groups"],
+            "local_groups": node["local_groups"],
             "endpoints": {key: topology["endpoints"][key] for key in sorted(topology["endpoints"])},
             "group_applied_indexes": {key: topology["group_applied_indexes"][key] for key in sorted(topology["group_applied_indexes"])},
         })
@@ -158,6 +161,20 @@ class TopologyTaxTest(unittest.TestCase):
         self.assertEqual(result["rows"][0]["native_over_single_qps"], 1)
         self.assertEqual(result["rows"][0]["topologies"]["single_daemon_four_group"]["qps_min"], 1)
         self.assertEqual(result["rows"][0]["topologies"]["single_daemon_four_group"]["qps_max"], 1)
+
+    def test_capability_key_path_is_bound_to_topology_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            single, _ = self.files(Path(directory))
+            topology = json.loads(single[0].with_name("topology.json").read_text(encoding="utf-8"))
+            topology["nodes"][0]["capability_key_path"] = "/strict/capability.key"
+            topology["nodes"][0]["node_config_sha256"] = self.node_config_sha256(topology, topology["nodes"][0])
+            topology["topology_identity_sha256"] = ""
+            computed, _ = _topology_identity(topology, "single_daemon_four_group", 1)
+            topology["topology_identity_sha256"] = computed
+            self.assertEqual(computed, topology["topology_identity_sha256"])
+            topology["nodes"][0]["capability_key_path"] += ".forged"
+            with self.assertRaisesRegex(ContractError, "node config identity digest mismatch"):
+                _topology_identity(topology, "single_daemon_four_group", 1)
 
     def test_reused_repetition_artifacts_reject(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

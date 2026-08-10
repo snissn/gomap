@@ -7,6 +7,7 @@ package nativewire
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -27,6 +28,11 @@ const (
 	vectorPartitionShardSearchResponseEnvelopeBytesV1 uint64 = 256
 	vectorPartitionShardSearchPartialEnvelopeBytesV1  uint64 = 128
 	vectorPartitionDuplicateLinearThresholdV1                = 16
+)
+
+const (
+	vectorPartitionShardSearchProofReadIndexV1      = "read_index"
+	vectorPartitionShardSearchProofStrictSnapshotV1 = "immutable_snapshot_capability"
 )
 
 type VectorPartitionShardSearchMetricV1 string
@@ -162,6 +168,8 @@ type VectorPartitionShardSearchRequestV1 struct {
 	RequestBytesLimit   uint64
 	CandidateBytesLimit uint64
 	ResponseBytesLimit  uint64
+
+	StrictCapability *vectorPartitionStrictSearchCapabilityV1
 }
 
 type VectorPartitionShardSearchNeighborV1 struct {
@@ -181,11 +189,14 @@ type VectorPartitionShardSearchPartialV1 struct {
 }
 
 type VectorPartitionShardSearchProofV1 struct {
+	Kind                                                               string
 	ServingNode, LeaderNode                                            raftcluster.NodeID
 	GroupID                                                            raftcluster.GroupID
 	ReadySetDigest                                                     string
+	ServingIdentityDigest                                              string
 	ReadTerm, ReadIndex                                                uint64
 	AppliedTerm, AppliedIndex                                          uint64
+	CatalogAppliedIndex, GroupAppliedIndex                             uint64
 	SourceGeneration, SourceChecksum, SourceSchemaHash, SourceRowCount uint64
 	PartitionGeneration, RouterGeneration                              uint64
 }
@@ -196,15 +207,15 @@ type VectorPartitionShardSearchTimingV1 struct {
 }
 
 type VectorPartitionShardSearchResponseV1 struct {
-	Version       uint32
-	RequestID     string
-	Proof         VectorPartitionShardSearchProofV1
-	Partials      []VectorPartitionShardSearchPartialV1
-	Partitions    uint64
-	Candidates    uint64
-	Edges         uint64
-	ResponseBytes uint64
-	Timing        VectorPartitionShardSearchTimingV1
+	Version                                                uint32
+	RequestID                                              string
+	Proof                                                  VectorPartitionShardSearchProofV1
+	Partials                                               []VectorPartitionShardSearchPartialV1
+	Partitions, ReadProofs, GenerationPins, PartitionOpens uint64
+	Candidates                                             uint64
+	Edges                                                  uint64
+	ResponseBytes                                          uint64
+	Timing                                                 VectorPartitionShardSearchTimingV1
 }
 
 // MeasureVectorPartitionShardSearchResponseBytesV1 applies the M5 v1 logical
@@ -317,11 +328,22 @@ type VectorPartitionShardSearchServiceV1 struct {
 	limits           VectorPartitionShardSearchLimitsV1
 	route            vectorPartitionShardSearchRouteV1
 	stats            vectorPartitionShardSearchStatsAccumulatorV1
+	servingSnapshot  *VectorPartitionServingSnapshotPublisherV1
+	strictKey        []byte
 
 	// Narrow package-test seams for cancellation and timing at the response boundary.
 	testBeforePartialMaterialization func()
 	testBeforeResponseCopy           func()
 	testSearchPartition              func(context.Context, *collections.VectorPartitionLocalSearcherV1, []float32, collections.VectorPartitionSearchOptionsV1) ([]collections.VectorPartitionSearchResultV1, collections.VectorPartitionSearchMetricsV1, error)
+}
+
+func (s *VectorPartitionShardSearchServiceV1) bindServingSnapshotV1(publisher *VectorPartitionServingSnapshotPublisherV1, key []byte) error {
+	if s == nil || publisher == nil || len(key) != sha256.Size || s.servingSnapshot != nil {
+		return ErrVectorPartitionShardSearchInvalidRequest
+	}
+	s.servingSnapshot = publisher
+	s.strictKey = slices.Clone(key)
+	return nil
 }
 
 func NewVectorPartitionShardSearchServiceV1(opts VectorPartitionShardSearchServiceOptionsV1) (*VectorPartitionShardSearchServiceV1, error) {
@@ -430,42 +452,82 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 		return response, s.wrapError(err, groupID)
 	}
 
-	readStarted := time.Now()
-	proof, progress, err := s.readCoordinator.CoordinateRoutedReadIndex(ctx, raftcluster.ReadIndexBarrier{
-		NodeID:  request.TargetNodeID,
-		GroupID: groupID,
-	})
-	response.Timing.ReadIndexApplyNanos = elapsedNanosV1(readStarted)
-	if err != nil {
-		return response, s.wrapErrorWithHint(err, groupID, leaderHint)
-	}
-	target := raftcluster.ReadIndexBarrier{NodeID: request.TargetNodeID, GroupID: groupID}
-	if err := target.Check(proof); err != nil {
-		return response, s.wrapErrorWithHint(err, groupID, leaderHint)
-	}
-	if err := proof.AppliedIndexBarrier().Check(progress); err != nil {
-		return response, s.wrapErrorWithHint(err, groupID, leaderHint)
-	}
-	if proof.NodeID != s.localNodeID || proof.GroupID != s.localGroup || progress.NodeID != s.localNodeID || progress.GroupID != s.localGroup {
-		return response, s.wrapErrorWithHint(fmt.Errorf("%w: proof served by node=%q group=%q applied_node=%q applied_group=%q", ErrVectorPartitionShardSearchRouteMismatch, proof.NodeID, proof.GroupID, progress.NodeID, progress.GroupID), groupID, leaderHint)
-	}
-	s.stats.readProof()
-
 	openStarted := time.Now()
-	pinned, err := s.generationSource.PinVectorPartitionGenerationV1(ctx, request.IndexName, request.PartitionGeneration)
-	if err != nil {
-		response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
-		return response, s.wrapError(err, groupID)
+	var proof raftcluster.ReadIndexProof
+	var progress raftcluster.AppliedProgress
+	var pinned VectorPartitionPinnedGenerationV1
+	var strictSnapshot *VectorPartitionServingSnapshotLeaseV1
+	ownedAssets := true
+	if s.servingSnapshot != nil {
+		if err := validateVectorPartitionStrictSearchCapabilityV1(request, s.strictKey); err != nil {
+			return response, s.wrapError(fmt.Errorf("%w: strict capability: %v", ErrVectorPartitionShardSearchGenerationMismatch, err), groupID)
+		}
+		strictSnapshot, err = s.servingSnapshot.AcquireV1()
+		if err != nil {
+			return response, s.wrapError(fmt.Errorf("%w: strict serving snapshot: %v", ErrVectorPartitionShardSearchGenerationMismatch, err), groupID)
+		}
+		defer func() {
+			if closeErr := strictSnapshot.Close(); closeErr != nil && resultErr == nil {
+				resultErr = s.wrapError(closeErr, groupID)
+			}
+		}()
+		identity := strictSnapshot.IdentityV1()
+		capability := request.StrictCapability
+		if identity.ServingIdentityDigest != capability.ServingIdentityDigest || identity.CatalogEpoch != capability.CatalogEpoch ||
+			identity.CatalogDigest != capability.CatalogDigest || identity.CatalogAppliedIndex < capability.CatalogAppliedIndex {
+			return response, s.wrapError(fmt.Errorf("%w: strict serving identity", ErrVectorPartitionShardSearchGenerationMismatch), groupID)
+		}
+		groupReady := uint64(0)
+		for _, ready := range identity.ReadyGroups {
+			if ready.GroupID == groupID {
+				groupReady = ready.AppliedIndex
+				break
+			}
+		}
+		if groupReady < capability.GroupAppliedIndex {
+			return response, s.wrapError(fmt.Errorf("%w: strict group applied index", ErrVectorPartitionShardSearchGenerationMismatch), groupID)
+		}
+		pinned = strictSnapshot.snapshot.generations[groupID]
+		ownedAssets = false
+	} else {
+		if request.StrictCapability != nil {
+			return response, s.wrapError(ErrVectorPartitionShardSearchGenerationMismatch, groupID)
+		}
+		readStarted := time.Now()
+		proof, progress, err = s.readCoordinator.CoordinateRoutedReadIndex(ctx, raftcluster.ReadIndexBarrier{NodeID: request.TargetNodeID, GroupID: groupID})
+		response.Timing.ReadIndexApplyNanos = elapsedNanosV1(readStarted)
+		if err != nil {
+			return response, s.wrapErrorWithHint(err, groupID, leaderHint)
+		}
+		target := raftcluster.ReadIndexBarrier{NodeID: request.TargetNodeID, GroupID: groupID}
+		if err := target.Check(proof); err != nil {
+			return response, s.wrapErrorWithHint(err, groupID, leaderHint)
+		}
+		if err := proof.AppliedIndexBarrier().Check(progress); err != nil {
+			return response, s.wrapErrorWithHint(err, groupID, leaderHint)
+		}
+		if proof.NodeID != s.localNodeID || proof.GroupID != s.localGroup || progress.NodeID != s.localNodeID || progress.GroupID != s.localGroup {
+			return response, s.wrapErrorWithHint(fmt.Errorf("%w: proof served by node=%q group=%q applied_node=%q applied_group=%q", ErrVectorPartitionShardSearchRouteMismatch, proof.NodeID, proof.GroupID, progress.NodeID, progress.GroupID), groupID, leaderHint)
+		}
+		s.stats.readProof()
+		response.ReadProofs = 1
+		pinned, err = s.generationSource.PinVectorPartitionGenerationV1(ctx, request.IndexName, request.PartitionGeneration)
+		if err != nil {
+			return response, s.wrapError(err, groupID)
+		}
+		if pinned == nil {
+			return response, s.wrapError(fmt.Errorf("%w: nil generation lease", ErrVectorPartitionShardSearchAssetsUnavailable), groupID)
+		}
+		response.GenerationPins = 1
+		defer func() {
+			if closeErr := pinned.Close(); closeErr != nil && resultErr == nil {
+				resultErr = s.wrapError(fmt.Errorf("%w: close generation pin: %v", ErrVectorPartitionShardSearchAssetsUnavailable, closeErr), groupID)
+			}
+		}()
 	}
 	if pinned == nil {
-		response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
-		return response, s.wrapError(fmt.Errorf("%w: nil generation lease", ErrVectorPartitionShardSearchAssetsUnavailable), groupID)
+		return response, s.wrapError(ErrVectorPartitionShardSearchAssetsUnavailable, groupID)
 	}
-	defer func() {
-		if closeErr := pinned.Close(); closeErr != nil && resultErr == nil {
-			resultErr = s.wrapError(fmt.Errorf("%w: close generation pin: %v", ErrVectorPartitionShardSearchAssetsUnavailable, closeErr), groupID)
-		}
-	}()
 	var manifest VectorPartitionPinnedManifestV1
 	if view, ok := pinned.(vectorPartitionPinnedManifestViewV1); ok {
 		manifest = view.immutableManifestViewV1()
@@ -480,6 +542,9 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 	searchers := make([]*VectorPartitionPartitionSearchLeaseV1, 0, len(request.PartitionIDs))
 	var openedCandidateBytes uint64
 	defer func() {
+		if !ownedAssets {
+			return
+		}
 		for i := len(searchers) - 1; i >= 0; i-- {
 			if closeErr := searchers[i].Close(); closeErr != nil && resultErr == nil {
 				resultErr = s.wrapError(fmt.Errorf("%w: close partition %d: %v", ErrVectorPartitionShardSearchAssetsUnavailable, request.PartitionIDs[i], closeErr), groupID)
@@ -491,7 +556,16 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 			response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
 			return response, s.wrapError(err, groupID)
 		}
-		lease, openErr := pinned.OpenPartition(ctx, partitionID)
+		var lease *VectorPartitionPartitionSearchLeaseV1
+		var openErr error
+		if ownedAssets {
+			lease, openErr = pinned.OpenPartition(ctx, partitionID)
+			if openErr == nil {
+				response.PartitionOpens++
+			}
+		} else {
+			lease = strictSnapshot.snapshot.partitions[groupID][partitionID]
+		}
 		if openErr != nil {
 			response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
 			if errors.Is(openErr, context.Canceled) || errors.Is(openErr, context.DeadlineExceeded) {
@@ -500,7 +574,7 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 			return response, s.wrapError(fmt.Errorf("%w: partition %d: %w", ErrVectorPartitionShardSearchAssetsUnavailable, partitionID, openErr), groupID)
 		}
 		if lease == nil || lease.Searcher == nil {
-			if lease != nil {
+			if lease != nil && ownedAssets {
 				_ = lease.Close()
 			}
 			response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
@@ -513,18 +587,24 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 			MaxStableIDBytes: s.limits.MaxStableIDBytes,
 		})
 		if status.Generation != request.PartitionGeneration || status.PartitionID != partitionID || status.Retired {
-			_ = lease.Close()
+			if ownedAssets {
+				_ = lease.Close()
+			}
 			response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
 			return response, s.wrapError(fmt.Errorf("%w: opened partition %d generation=%d retired=%t", ErrVectorPartitionShardSearchGenerationMismatch, status.PartitionID, status.Generation, status.Retired), groupID)
 		}
 		if status.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 &&
 			status.SearchRoute != collections.VectorPartitionSearchRouteExactFP32ScanV1 {
-			_ = lease.Close()
+			if ownedAssets {
+				_ = lease.Close()
+			}
 			response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
 			return response, s.wrapError(fmt.Errorf("%w: partition %d unknown search route %q", ErrVectorPartitionShardSearchAssetsUnavailable, partitionID, status.SearchRoute), groupID)
 		}
 		if scratchErr != nil {
-			_ = lease.Close()
+			if ownedAssets {
+				_ = lease.Close()
+			}
 			response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
 			return response, s.wrapError(fmt.Errorf("%w: partition %d scratch bound: %v", ErrVectorPartitionShardSearchAssetsUnavailable, partitionID, scratchErr), groupID)
 		}
@@ -540,12 +620,16 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 			openedCandidateBytes, ok = addUint64V1(openedCandidateBytes, partitionCandidateBytes)
 		}
 		if !ok || openedCandidateBytes > request.CandidateBytesLimit || openedCandidateBytes > s.limits.MaxCandidateBytes {
-			_ = lease.Close()
+			if ownedAssets {
+				_ = lease.Close()
+			}
 			response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
 			return response, s.wrapError(fmt.Errorf("%w: opened candidate ceiling", ErrVectorPartitionShardSearchInvalidRequest), groupID)
 		}
 		searchers = append(searchers, lease)
-		s.stats.open(status, lease.CacheHit)
+		if ownedAssets {
+			s.stats.open(status, lease.CacheHit)
+		}
 	}
 	response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
 
@@ -629,25 +713,31 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 	if err != nil {
 		return response, s.wrapError(err, groupID)
 	}
+	responseProof := VectorPartitionShardSearchProofV1{
+		Kind:        vectorPartitionShardSearchProofReadIndexV1,
+		ServingNode: proof.NodeID, LeaderNode: proof.NodeID, GroupID: proof.GroupID,
+		ReadySetDigest: request.ReadySetDigest,
+		ReadTerm:       proof.Term, ReadIndex: proof.Index, AppliedTerm: progress.Term, AppliedIndex: progress.Index,
+		SourceGeneration: request.SourceGeneration, SourceChecksum: request.SourceChecksum,
+		SourceSchemaHash: request.SourceSchemaHash, SourceRowCount: request.SourceRowCount,
+		PartitionGeneration: request.PartitionGeneration, RouterGeneration: request.RouterGeneration,
+	}
+	if strictSnapshot != nil {
+		capability := request.StrictCapability
+		responseProof = VectorPartitionShardSearchProofV1{
+			Kind:        vectorPartitionShardSearchProofStrictSnapshotV1,
+			ServingNode: s.localNodeID, GroupID: groupID, ReadySetDigest: request.ReadySetDigest,
+			ServingIdentityDigest: capability.ServingIdentityDigest,
+			CatalogAppliedIndex:   capability.CatalogAppliedIndex, GroupAppliedIndex: capability.GroupAppliedIndex,
+			SourceGeneration: request.SourceGeneration, SourceChecksum: request.SourceChecksum,
+			SourceSchemaHash: request.SourceSchemaHash, SourceRowCount: request.SourceRowCount,
+			PartitionGeneration: request.PartitionGeneration, RouterGeneration: request.RouterGeneration,
+		}
+	}
 	response = VectorPartitionShardSearchResponseV1{
-		Version:   VectorPartitionShardSearchVersionV1,
-		RequestID: request.RequestID,
-		Proof: VectorPartitionShardSearchProofV1{
-			ServingNode:         proof.NodeID,
-			LeaderNode:          proof.NodeID,
-			GroupID:             proof.GroupID,
-			ReadySetDigest:      request.ReadySetDigest,
-			ReadTerm:            proof.Term,
-			ReadIndex:           proof.Index,
-			AppliedTerm:         progress.Term,
-			AppliedIndex:        progress.Index,
-			SourceGeneration:    request.SourceGeneration,
-			SourceChecksum:      request.SourceChecksum,
-			SourceSchemaHash:    request.SourceSchemaHash,
-			SourceRowCount:      request.SourceRowCount,
-			PartitionGeneration: request.PartitionGeneration,
-			RouterGeneration:    request.RouterGeneration,
-		},
+		Version:       VectorPartitionShardSearchVersionV1,
+		RequestID:     request.RequestID,
+		Proof:         responseProof,
 		Partials:      partials,
 		Partitions:    uint64(len(partials)),
 		Candidates:    totalCandidates,
@@ -777,7 +867,12 @@ func (s *VectorPartitionShardSearchServiceV1) validateRequest(r VectorPartitionS
 			return fmt.Errorf("%w: request byte overflow", ErrVectorPartitionShardSearchInvalidRequest)
 		}
 	}
-	if r.RequestBytesLimit == 0 || r.RequestBytesLimit > l.MaxRequestBytes || requestBytes > r.RequestBytesLimit {
+	capabilityBytes, capabilityErr := vectorPartitionStrictSearchCapabilityBytesV1(r.StrictCapability)
+	if capabilityErr != nil {
+		return capabilityErr
+	}
+	requestBytes, ok = addUint64V1(requestBytes, capabilityBytes)
+	if !ok || r.RequestBytesLimit == 0 || r.RequestBytesLimit > l.MaxRequestBytes || requestBytes > r.RequestBytesLimit {
 		return fmt.Errorf("%w: request bytes=%d limit=%d", ErrVectorPartitionShardSearchInvalidRequest, requestBytes, r.RequestBytesLimit)
 	}
 	candidateBytes, ok := mulUint64V1(uint64(len(r.PartitionIDs)), uint64(r.EfSearch))

@@ -1912,7 +1912,7 @@ func TestM8UnsupportedOverlapSkipsMeasuredAndAttributionWorkV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.QueryRequests != 4 || plan.MeasuredQueryRequests != 0 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 0 || plan.RetainedCoordinatorCells != 0 || plan.RetainedCoordinatorResults != 0 || plan.CurrentCellOutcomes != 2 || plan.CurrentCellOutcomeBytes != 1380 || plan.CurrentQueryConversionBytes != 64 || plan.RetainedAttributionMatrices != 0 || plan.RetainedAttributionResults != 0 || plan.RetainedAttributionBytes != 0 || plan.AttributionMergeScratchResults != 0 || plan.AttributionMergeScratchBytes != 0 {
+	if plan.QueryRequests != 4 || plan.MeasuredQueryRequests != 0 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 0 || plan.RetainedCoordinatorCells != 0 || plan.RetainedCoordinatorResults != 0 || plan.CurrentCellOutcomes != 2 || plan.CurrentCellOutcomeBytes != 1444 || plan.CurrentQueryConversionBytes != 64 || plan.RetainedAttributionMatrices != 0 || plan.RetainedAttributionResults != 0 || plan.RetainedAttributionBytes != 0 || plan.AttributionMergeScratchResults != 0 || plan.AttributionMergeScratchBytes != 0 {
 		t.Fatalf("unsupported-only M8 work plan=%+v", plan)
 	}
 }
@@ -2689,6 +2689,17 @@ func TestM8ProfileCaptureWritesRequiredRuntimeArtifactsV1(t *testing.T) {
 	}
 	if again, err := capture.Stop(); err != nil || fmt.Sprint(again) != fmt.Sprint(paths) {
 		t.Fatalf("idempotent stop paths=%v err=%v", again, err)
+	}
+}
+
+func TestM8ProfileCaptureCreatesDirectoryV1(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "profiles")
+	capture, err := startM8ProfileCaptureV1(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m8FinishDirectProfileCaptureV1(capture, false); err != nil {
+		t.Fatal(err)
 	}
 }
 
