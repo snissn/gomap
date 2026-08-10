@@ -115,6 +115,31 @@ func CompareVectorPartitionLocalGraphPacksV1(native, final *VectorPartitionLocal
 	if len(np.AdjacencyLayers) != len(fp.AdjacencyLayers) {
 		return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
 	}
+	validateL0 := func(pack *columnHNSWSearchPackPreparedView) bool {
+		if len(pack.AdjacencyLayers) == 0 {
+			return false
+		}
+		layer := pack.AdjacencyLayers[0]
+		if len(layer.Offsets) != pack.Header.Rows+1 || layer.Offsets[0] != 0 || layer.Offsets[len(layer.Offsets)-1] != uint64(len(layer.Neighbors)) {
+			return false
+		}
+		for row := 0; row < pack.Header.Rows; row++ {
+			if layer.Offsets[row+1] < layer.Offsets[row] || layer.Offsets[row+1] > uint64(len(layer.Neighbors)) {
+				return false
+			}
+			seen := map[uint32]bool{}
+			for _, neighbor := range layer.Neighbors[layer.Offsets[row]:layer.Offsets[row+1]] {
+				if int(neighbor) >= pack.Header.Rows || int(neighbor) == row || seen[neighbor] {
+					return false
+				}
+				seen[neighbor] = true
+			}
+		}
+		return true
+	}
+	if !validateL0(np) || !validateL0(fp) {
+		return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+	}
 	for layer := 1; layer < len(np.AdjacencyLayers); layer++ {
 		if !slices.Equal(np.AdjacencyLayers[layer].Offsets, fp.AdjacencyLayers[layer].Offsets) || !slices.Equal(np.AdjacencyLayers[layer].Neighbors, fp.AdjacencyLayers[layer].Neighbors) {
 			return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
@@ -135,24 +160,8 @@ func CompareVectorPartitionLocalGraphPacksV1(native, final *VectorPartitionLocal
 			return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
 		}
 		a, b := np.AdjacencyLayers[0], fp.AdjacencyLayers[0]
-		if len(a.Offsets) != np.Header.Rows+1 || len(b.Offsets) != np.Header.Rows+1 || a.Offsets[i+1] < a.Offsets[i] || b.Offsets[i+1] < b.Offsets[i] || a.Offsets[i+1] > uint64(len(a.Neighbors)) || b.Offsets[i+1] > uint64(len(b.Neighbors)) {
-			return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
-		}
 		nn := a.Neighbors[a.Offsets[i]:a.Offsets[i+1]]
 		fn := b.Neighbors[b.Offsets[i]:b.Offsets[i+1]]
-		check := func(edges []uint32) bool {
-			seen := map[uint32]bool{}
-			for _, x := range edges {
-				if int(x) >= np.Header.Rows || int(x) == i || seen[x] {
-					return false
-				}
-				seen[x] = true
-			}
-			return true
-		}
-		if !check(nn) || !check(fn) {
-			return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
-		}
 		tree, treeErr := vectorPartitionLocalNavigationEdgesV1(i, np.Header.Rows, limit)
 		if treeErr != nil {
 			return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
