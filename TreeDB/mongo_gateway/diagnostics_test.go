@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -94,6 +95,32 @@ func TestDiagnosticsCommandsBoundedStandaloneShape(t *testing.T) {
 		t.Fatalf("top app.users.total.count missing or non-int64: %s", total)
 	}
 	assertCommandError(t, serveCommand(t, server, 6105, bson.D{{Key: "dbStats", Value: int32(1)}, {Key: "scale", Value: int32(1)}, {Key: "$db", Value: "app"}}), "FailedToParse")
+}
+
+func TestDiagnosticsCountsTextIndexes(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	col, err := server.openCollectionCached("app.users")
+	if err != nil {
+		t.Fatalf("open users: %v", err)
+	}
+	if _, _, err := col.CreateTextIndex(collections.TextIndexDefinition{
+		Name:   "body_text",
+		Fields: []collections.TextIndexField{{Field: "body"}},
+	}); err != nil {
+		t.Fatalf("create text index: %v", err)
+	}
+
+	dbStats := serveCommand(t, server, 6110, bson.D{{Key: "dbStats", Value: int32(1)}, {Key: "$db", Value: "app"}})
+	assertOK(t, dbStats)
+	if got, ok := dbStats.Lookup("indexes").Int64OK(); !ok || got != 5 {
+		t.Fatalf("dbStats indexes=%d ok=%v want 5 with primary, three scalar, and one text index: %s", got, ok, dbStats)
+	}
+
+	collStats := serveCommand(t, server, 6111, bson.D{{Key: "collStats", Value: "users"}, {Key: "$db", Value: "app"}})
+	assertOK(t, collStats)
+	if got, ok := collStats.Lookup("nindexes").Int64OK(); !ok || got != 5 {
+		t.Fatalf("collStats nindexes=%d ok=%v want 5 with primary, three scalar, and one text index: %s", got, ok, collStats)
+	}
 }
 
 func TestDiagnosticsRejectRoutedBeforeLocalObservation(t *testing.T) {

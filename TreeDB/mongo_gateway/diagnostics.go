@@ -247,7 +247,7 @@ func (s *Server) dbStatsResponse(command wire.Document, cursorOwner int64) (wire
 		objects += count
 		remainingDocuments -= int(count)
 		remainingPhysical -= inspected
-		indexes += int64(1 + len(meta.Indexes) + len(meta.VectorIndexes))
+		indexes += diagnosticIndexCount(meta)
 	}
 	return marshalDocument(bson.D{{Key: "db", Value: db}, {Key: "collections", Value: int64(len(metas))}, {Key: "objects", Value: objects}, {Key: "indexes", Value: indexes}, {Key: "ok", Value: 1.0}})
 }
@@ -289,7 +289,7 @@ func (s *Server) collStatsResponse(command wire.Document, cursorOwner int64) (wi
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	meta := col.MetaView()
-	return marshalDocument(bson.D{{Key: "ns", Value: name}, {Key: "count", Value: count}, {Key: "nindexes", Value: int64(1 + len(meta.Indexes) + len(meta.VectorIndexes))}, {Key: "ok", Value: 1.0}})
+	return marshalDocument(bson.D{{Key: "ns", Value: name}, {Key: "count", Value: count}, {Key: "nindexes", Value: diagnosticIndexCount(meta)}, {Key: "ok", Value: 1.0}})
 }
 
 func (s *Server) topResponse(command wire.Document) (wire.Document, error) {
@@ -409,6 +409,12 @@ func (s *Server) diagnosticCollectionCount(name string) (int64, error) {
 		return 0, errors.New("Mongo gateway diagnostics document count exceeds bounded scan limit")
 	}
 	return count, nil
+}
+
+// diagnosticIndexCount reports every authoritative collection index definition
+// exposed by CollectionMeta, including the implicit primary index.
+func diagnosticIndexCount(meta collections.CollectionMeta) int64 {
+	return int64(1 + len(meta.Indexes) + len(meta.VectorIndexes) + len(meta.TextIndexes))
 }
 
 func (s *Server) diagnosticCollectionCountWithin(name string, maxDocuments, maxPhysical int) (count int64, inspected int, truncated bool, err error) {
