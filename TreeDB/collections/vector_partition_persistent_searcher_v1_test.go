@@ -216,6 +216,14 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 	if comparison.NativeReciprocalEdges == 0 || comparison.FinalReciprocalEdges == 0 {
 		t.Fatalf("reciprocity native=%d final=%d", comparison.NativeReciprocalEdges, comparison.FinalReciprocalEdges)
 	}
+	if comparison.EntryOrdinal != 0 || comparison.NativeDistances.Count == 0 || comparison.FinalDistances.Count == 0 || comparison.NativeDistances.Count != comparison.Native.EdgesByLayer[0] || comparison.FinalDistances.Count != comparison.Final.EdgesByLayer[0] {
+		t.Fatalf("comparison summary=%+v", comparison)
+	}
+	for _, summary := range []VectorPartitionLocalGraphDistanceDistributionV1{comparison.NativeDistances, comparison.FinalDistances} {
+		if math.IsNaN(summary.Mean) || math.IsInf(summary.Mean, 0) || summary.Min > summary.P50 || summary.P50 > summary.P95 || summary.P95 > summary.P99 || summary.P99 > summary.Max || summary.Mean < summary.Min || summary.Mean > summary.Max {
+			t.Fatalf("distance summary=%+v", summary)
+		}
+	}
 	found := false
 	for _, row := range comparison.Rows {
 		for _, edge := range row.DisplacedEdges {
