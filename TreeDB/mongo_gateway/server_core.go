@@ -163,6 +163,7 @@ type Server struct {
 	diagnosticsStartedAt       time.Time
 	diagnosticsMu              sync.Mutex
 	diagnosticsCommands        map[string]mongoCommandDiagnostic
+	diagnosticsNamespaces      map[string]mongoNamespaceDiagnostic
 	// beforeSCRAMIdentityStore is test-only coordination for owner release.
 	beforeSCRAMIdentityStore func()
 	closed                   atomic.Bool
@@ -212,6 +213,7 @@ func NewServer() *Server {
 		ClusterIdempotencyNonce:  newClusterIdempotencyNonce(),
 		diagnosticsStartedAt:     time.Now(),
 		diagnosticsCommands:      make(map[string]mongoCommandDiagnostic),
+		diagnosticsNamespaces:    make(map[string]mongoNamespaceDiagnostic),
 	}
 	s.nextResponseID.Store(0)
 	return s
@@ -879,7 +881,9 @@ func commandRejectsReadOPMsgFeatures(name string) bool {
 
 func (s *Server) commandResponse(ctx context.Context, name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (response wire.Document, err error) {
 	started := time.Now()
-	defer func() { s.noteDiagnosticCommand(name, time.Since(started), err != nil || !commandResponseOK(response)) }()
+	defer func() {
+		s.noteDiagnosticCommand(name, command, time.Since(started), err != nil || !commandResponseOK(response))
+	}()
 	if s.authenticationRequired() && !s.authenticated(cursorOwner) && !authUnauthenticatedCommand(name) {
 		return commandError(13, "Unauthorized", "Authentication required")
 	}

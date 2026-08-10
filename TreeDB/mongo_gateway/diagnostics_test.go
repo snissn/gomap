@@ -46,7 +46,7 @@ func TestDiagnosticsCommandsBoundedStandaloneShape(t *testing.T) {
 	top := serveCommand(t, server, 6104, bson.D{{Key: "top", Value: int32(1)}, {Key: "$db", Value: "admin"}})
 	assertOK(t, top)
 	totals, ok := top.Lookup("totals").DocumentOK()
-	if !ok || totals.Lookup("global").Type == 0 {
-		t.Fatalf("top totals missing global aggregate: %s", top)
+	if !ok || totals.Lookup("app.users").Type == 0 {
+		t.Fatalf("top totals missing app.users command aggregate: %s", top)
 	}
 }

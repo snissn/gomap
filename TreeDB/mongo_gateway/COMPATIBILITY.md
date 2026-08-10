@@ -88,9 +88,9 @@ bridge-only regex/code limitations.
 | update | ReplaceOne by exact _id | supported subset | `update.replaceone-by-exact-id` |
 | index | BSON v2 index without treedbValueType | supported subset | `index.bson-ordered-v2-without-treedbvaluetype` |
 | read command | aggregate match/project/sort/skip/limit/count | supported subset | `read-command.aggregate-match-project-sort-skip-limit-count` |
-| command gap | serverStatus | not implemented | `command-gap.serverstatus` |
-| command gap | top | not implemented | `command-gap.top` |
-| command gap | dbStats | not implemented | `command-gap.dbstats` |
+| diagnostics | bounded standalone serverStatus | supported subset | `diagnostics.serverstatus` |
+| diagnostics | namespace-scoped top command counters | supported subset | `diagnostics.top` |
+| diagnostics | bounded standalone dbStats and collStats | supported subset | `diagnostics.dbstats-and-collstats` |
 | read command | count filter/skip/limit | supported subset | `read-command.count-filter-skip-limit` |
 | read command | distinct top-level field with filter | supported subset | `read-command.distinct-top-level-field-with-filter` |
 | read command | explain queryPlanner and executionStats for bounded standalone read plans | supported subset | `read-command.explain-bounded-read-plans` |

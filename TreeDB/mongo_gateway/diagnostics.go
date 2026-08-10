@@ -21,6 +21,12 @@ type mongoCommandDiagnostic struct {
 	LatencyNanos int64
 }
 
+type mongoNamespaceDiagnostic struct {
+	Count        int64
+	Errors       int64
+	LatencyNanos int64
+}
+
 func commandResponseOK(response wire.Document) bool {
 	if response == nil {
 		return false
@@ -29,7 +35,7 @@ func commandResponseOK(response wire.Document) bool {
 	return valid && ok == 1
 }
 
-func (s *Server) noteDiagnosticCommand(name string, elapsed time.Duration, failed bool) {
+func (s *Server) noteDiagnosticCommand(name string, command wire.Document, elapsed time.Duration, failed bool) {
 	if s == nil {
 		return
 	}
@@ -44,12 +50,36 @@ func (s *Server) noteDiagnosticCommand(name string, elapsed time.Duration, faile
 		metric.Errors++
 	}
 	s.diagnosticsCommands[name] = metric
+	if namespace := diagnosticCommandNamespace(name, command); namespace != "" {
+		ns := s.diagnosticsNamespaces[namespace]
+		ns.Count++
+		ns.LatencyNanos += elapsed.Nanoseconds()
+		if failed {
+			ns.Errors++
+		}
+		s.diagnosticsNamespaces[namespace] = ns
+	}
 	s.diagnosticsMu.Unlock()
 }
 
-func (s *Server) diagnosticsSnapshot() (uptime int64, commands map[string]mongoCommandDiagnostic) {
+func diagnosticCommandNamespace(name string, command wire.Document) string {
+	if name == "top" || name == "serverStatus" || name == "dbStats" || name == "listDatabases" || name == "ping" || name == "hello" || name == "isMaster" || name == "ismaster" {
+		return ""
+	}
+	db, ok := bson.Raw(command).Lookup("$db").StringValueOK()
+	if !ok || db == "" {
+		return ""
+	}
+	collection, ok := bson.Raw(command).Lookup(name).StringValueOK()
+	if !ok || collection == "" {
+		return ""
+	}
+	return db + "." + collection
+}
+
+func (s *Server) diagnosticsSnapshot() (uptime int64, commands map[string]mongoCommandDiagnostic, namespaces map[string]mongoNamespaceDiagnostic) {
 	if s == nil {
-		return 0, nil
+		return 0, nil, nil
 	}
 	if !s.diagnosticsStartedAt.IsZero() {
 		uptime = int64(time.Since(s.diagnosticsStartedAt).Seconds())
@@ -59,8 +89,12 @@ func (s *Server) diagnosticsSnapshot() (uptime int64, commands map[string]mongoC
 	for name, metric := range s.diagnosticsCommands {
 		commands[name] = metric
 	}
+	namespaces = make(map[string]mongoNamespaceDiagnostic, len(s.diagnosticsNamespaces))
+	for name, metric := range s.diagnosticsNamespaces {
+		namespaces[name] = metric
+	}
 	s.diagnosticsMu.Unlock()
-	return uptime, commands
+	return uptime, commands, namespaces
 }
 
 func (s *Server) serverStatusResponse(command wire.Document) (wire.Document, error) {
@@ -70,7 +104,7 @@ func (s *Server) serverStatusResponse(command wire.Document) (wire.Document, err
 	if doc, err, rejected := s.rejectClusterRoutedLocalMetadataRead("serverStatus"); rejected {
 		return doc, err
 	}
-	uptime, commands := s.diagnosticsSnapshot()
+	uptime, commands, _ := s.diagnosticsSnapshot()
 	var currentConns int64
 	if s != nil {
 		s.connMu.Lock()
@@ -92,7 +126,7 @@ func (s *Server) serverStatusResponse(command wire.Document) (wire.Document, err
 		{Key: "process", Value: "treedb-mongo-gateway"},
 		{Key: "uptime", Value: uptime},
 		{Key: "localTime", Value: time.Now().UTC()},
-		{Key: "connections", Value: bson.D{{Key: "current", Value: currentConns}, {Key: "available", Value: int64(0)}}},
+		{Key: "connections", Value: bson.D{{Key: "current", Value: currentConns}}},
 		{Key: "cursors", Value: bson.D{{Key: "open", Value: s.cursorCount.Load()}}},
 		{Key: "opcounters", Value: commandDoc},
 		{Key: "ok", Value: 1.0},
@@ -126,7 +160,7 @@ func (s *Server) dbStatsResponse(command wire.Document, cursorOwner int64) (wire
 		objects += count
 		indexes += int64(1 + len(meta.Indexes) + len(meta.VectorIndexes))
 	}
-	return marshalDocument(bson.D{{Key: "db", Value: db}, {Key: "collections", Value: int64(len(metas))}, {Key: "views", Value: int64(0)}, {Key: "objects", Value: objects}, {Key: "indexes", Value: indexes}, {Key: "ok", Value: 1.0}})
+	return marshalDocument(bson.D{{Key: "db", Value: db}, {Key: "collections", Value: int64(len(metas))}, {Key: "objects", Value: objects}, {Key: "indexes", Value: indexes}, {Key: "ok", Value: 1.0}})
 }
 
 func (s *Server) collStatsResponse(command wire.Document, cursorOwner int64) (wire.Document, error) {
@@ -173,22 +207,30 @@ func (s *Server) topResponse(command wire.Document) (wire.Document, error) {
 	if doc, err, rejected := s.rejectClusterRoutedLocalMetadataRead("top"); rejected {
 		return doc, err
 	}
-	_, commands := s.diagnosticsSnapshot()
-	var count, errors int64
-	for _, metric := range commands {
-		count += metric.Count
-		errors += metric.Errors
+	_, _, namespaces := s.diagnosticsSnapshot()
+	totals := make(bson.D, 0, len(namespaces))
+	names := make([]string, 0, len(namespaces))
+	for namespace := range namespaces {
+		names = append(names, namespace)
 	}
-	return marshalDocument(bson.D{{Key: "totals", Value: bson.D{{Key: "global", Value: bson.D{{Key: "commands", Value: count}, {Key: "errors", Value: errors}}}}}, {Key: "ok", Value: 1.0}})
+	sort.Strings(names)
+	for _, namespace := range names {
+		metric := namespaces[namespace]
+		totals = append(totals, bson.E{Key: namespace, Value: bson.D{{Key: "count", Value: metric.Count}, {Key: "errors", Value: metric.Errors}, {Key: "latencyMicros", Value: metric.LatencyNanos / 1000}}})
+	}
+	return marshalDocument(bson.D{{Key: "totals", Value: totals}, {Key: "ok", Value: 1.0}})
 }
 
 func (s *Server) diagnosticMetas(db string, cursorOwner int64) ([]collections.CollectionMeta, error) {
 	if s == nil || s.Collections == nil {
 		return nil, errors.New("Mongo gateway collection manager is not configured")
 	}
-	all, err := s.Collections.ListCollections()
+	all, truncated, err := s.Collections.ListCollectionsBounded(s.maxFindScanDocuments())
 	if err != nil {
 		return nil, err
+	}
+	if truncated {
+		return nil, errors.New("Mongo gateway diagnostics collection enumeration exceeds bounded limit")
 	}
 	prefix := db + "."
 	metas := make([]collections.CollectionMeta, 0)

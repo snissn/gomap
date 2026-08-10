@@ -3681,28 +3681,36 @@ func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Co
 }
 
 func (m *CollectionManager) ListCollections() ([]CollectionMeta, error) {
+	out, _, err := m.ListCollectionsBounded(0)
+	return out, err
+}
+
+// ListCollectionsBounded returns catalog metadata in deterministic order and
+// stops before materializing more than maxCollections live entries when that
+// limit is positive. Callers can use the truncation result to fail closed.
+func (m *CollectionManager) ListCollectionsBounded(maxCollections int) ([]CollectionMeta, bool, error) {
 	if m == nil {
-		return nil, errCollectionManagerNil
+		return nil, false, errCollectionManagerNil
 	}
 	if m.db == nil {
-		return nil, errCollectionDBNil
+		return nil, false, errCollectionDBNil
 	}
 	snap := m.db.AcquireSnapshot()
 	if snap == nil {
-		return nil, backenddb.ErrClosed
+		return nil, false, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
 	state, ok := snap.StateToken()
 	if !ok || state.SystemRootPageID == 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 	prefix := []byte(systemCollectionMetaPrefix)
 	it, err := snap.IteratorAtRoot(state.SystemRootPageID, prefix, prefixEnd(prefix))
 	if errors.Is(err, tree.ErrKeyNotFound) {
-		return nil, nil
+		return nil, false, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer func() { _ = it.Close() }()
 
@@ -3713,21 +3721,24 @@ func (m *CollectionManager) ListCollections() ([]CollectionMeta, error) {
 			break
 		}
 		if !it.IsDeleted() {
+			if maxCollections > 0 && len(out) >= maxCollections {
+				return out, true, nil
+			}
 			meta, err := decodeCollectionMeta(it.ValueCopy(nil))
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			out = append(out, meta)
 		}
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Name < out[j].Name
 	})
-	return out, nil
+	return out, false, nil
 }
 
 func (c *Collection) Name() string {
